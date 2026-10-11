@@ -21,6 +21,7 @@
 - Added post-processing chains: named, ordered model steps in `CHAINS.yml` (user and project) that rewrite composer text before it is sent. Alt+C sends one prompt through the active chain; `/chaining on|off|use|status|configure` manages automatic mode, the active chain, and a fullscreen editor. Steps without a model use the new Prose role, which falls back to the configured `smol` role.
 ### Fixed
 
+- The Live Submit Silence (ms) setting (`live.submitSilenceMs`) now appears in the settings panel with preset choices; numeric settings without declared options are hidden by design, and this one had none.
 - Tool shells retain the host terminal type and expose a private launcher-environment file for restoring editors and credential helpers before starting tmux or sibling TUIs ([#236](https://github.com/PsychedelicShayna/neopi/issues/236)).
 - Control socket chunk-sequence failures release their reserved memory, `keys` rejects more than 4 KiB before injecting any input, stale registry entries are pruned after PID reuse, and control `app.clear` cannot trigger a Ctrl-C shutdown. (#171)
 - Control sessions list TUI-only slash commands, explicitly reject unavailable subagent-bus reads, and exempt pane-exit actions before the control connection closes. Large model catalogs remain intact through protocol-v2 chunked frames. (#171)

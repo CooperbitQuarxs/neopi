@@ -80,5 +80,14 @@ export const cfgLiveSubmitSilenceMs = register({
 		group: "Services",
 		label: "Live Submit Silence (ms)",
 		description: "Silence after the last composer write before a trailing submit or force-delegate keyword runs",
+		options: [
+			{ value: "0", label: "Immediately" },
+			{ value: "500", label: "500 ms" },
+			{ value: "1000", label: "1000 ms" },
+			{ value: "2000", label: "2000 ms (default)" },
+			{ value: "3000", label: "3000 ms" },
+			{ value: "5000", label: "5000 ms" },
+			{ value: "10000", label: "10000 ms" },
+		],
 	},
 });
