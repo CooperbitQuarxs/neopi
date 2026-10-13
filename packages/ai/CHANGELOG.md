@@ -2,10 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed the nightly lint failure in the Switch admin event stream by declaring its subscription once at initialization, preserving replay and cleanup behavior ([#271](https://github.com/PsychedelicShayna/neopi/issues/271)).
-
 ## [18.10.3] - 2026-10-12
 
 ### Breaking Changes
