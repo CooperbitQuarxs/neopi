@@ -63,7 +63,7 @@ The session persona is selected per session id. `AgentSession` applies it while 
 
 ### Loadouts
 
-`/loadout` lists loadouts; picking one applies it, and "Turn loadout off" restores the configured models. `/loadout set|off|list|show|status` do the same from the command line. `AgentSession.applyRuntimeModelLoadout` swaps model roles, retry fallback chains, and task-agent model overrides as one volatile overlay, and only while the session is idle.
+`/loadout` lists loadouts; picking one applies it, and "Turn loadout off" restores the configured models. `/loadout set|use|off|list|show|status` do the same from the composer; `use <name>` is an alias for `set <name>`. The normal command catalogue includes its description and icon, and argument completion offers subcommands and loadout names. Accepting `set` or `use` waits for the required name before submitting. `AgentSession.applyRuntimeModelLoadout` swaps model roles, retry fallback chains, and task-agent model overrides as one volatile overlay, and only while the session is idle.
 
 ### REPL mode
 

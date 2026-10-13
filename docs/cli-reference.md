@@ -327,3 +327,28 @@ Run `omp <command> --help` for each command's own flags and examples.
 > `packages/coding-agent/src/cli-commands.ts`.
 
 `__complete` is an internal, hidden subcommand used by shell completion scripts.
+
+## Shell completions
+
+Generate completions from the executable's command metadata:
+
+```bash
+# Bash
+eval "$(npi completions bash)"
+
+# Zsh (after compinit)
+eval "$(npi completions zsh)"
+```
+
+For Fish, write the script to its completion directory:
+
+```fish
+npi completions fish > ~/.config/fish/completions/npi.fish
+```
+
+Public command aliases, nested subcommands, flags, and finite argument choices
+follow the same registrations used for execution and help. For example,
+`npi chronicle <TAB>` offers `backfill`, `index`, and `recall`;
+`npi chronicle index --<TAB>` offers that child's flags, including `--rebuild`
+and `--dry-run`. Hidden commands remain hidden. TUI-only commands such as
+`/chain` belong to the composer catalogue, not executable shell completions.

@@ -23,6 +23,7 @@ const PERSONA_DEFS: SubcommandDef[] = PERSONA_SUBCOMMANDS.map(item => ({ ...item
 const LIVE_PERSONA_DEFS = PERSONA_DEFS.filter(item => item.name !== "live");
 const LOADOUT_DEFS: SubcommandDef[] = [
 	{ name: "set", description: "Apply a loadout", usage: "<name>" },
+	{ name: "use", description: "Apply a loadout (alias for set)", usage: "<name>" },
 	{ name: "off", description: "Restore the configured models" },
 	{ name: "list", description: "List loadouts; * marks the active one" },
 	{ name: "show", description: "Print a loadout definition", usage: "<name>" },
@@ -107,7 +108,7 @@ function personaInlineHint(argumentText: string): string | null {
 	return lead ? livePersonaSubcommandHint(argumentText.slice(lead.length)) : personaSubcommandHint(argumentText);
 }
 
-const LOADOUT_USAGE = "Usage: /loadout [set <name>|off|list|show <name>|status]";
+const LOADOUT_USAGE = "Usage: /loadout [set <name>|use <name>|off|list|show <name>|status]";
 const REPL_USAGE = "Usage: /repl [agent|js|py|bash]";
 const KERNEL_USAGE = "Usage: /kernel [status|reset <py|js>|interrupt]";
 
@@ -251,10 +252,10 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "loadout",
 		icon: "swap",
 		description: "Switch runtime model loadouts (model roles, fallback chains, task-agent models)",
-		acpInputHint: "[set <name>|off|list|show <name>|status]",
+		acpInputHint: "[set <name>|use <name>|off|list|show <name>|status]",
 		subcommands: LOADOUT_DEFS,
 		getTuiArgumentCompletions: prefix =>
-			subcommandThenNameCompletions(prefix, "", LOADOUT_DEFS, new Set(["set", "show"]), async () =>
+			subcommandThenNameCompletions(prefix, "", LOADOUT_DEFS, new Set(["set", "use", "show"]), async () =>
 				(await loadoutFeature().data()).items.map(item => ({
 					name: item.name,
 					description: item.loadout.mainModel,

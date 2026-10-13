@@ -1,6 +1,11 @@
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { tinyModelsHelp as commandHelp } from "../cli/command-help";
-import { runTinyModelsCommand, type TinyModelsAction, type TinyModelsCommandArgs } from "../cli/tiny-models-cli";
+import {
+	runTinyModelsCommand,
+	TINY_MODEL_CHOICES,
+	type TinyModelsAction,
+	type TinyModelsCommandArgs,
+} from "../cli/tiny-models-cli";
 
 const ACTIONS: TinyModelsAction[] = ["download", "list"];
 
@@ -15,6 +20,7 @@ export default class TinyModels extends Command {
 		model: Args.string({
 			description: "Model key (`smollm` = word completion), or all",
 			required: false,
+			suggestions: TINY_MODEL_CHOICES,
 		}),
 	};
 

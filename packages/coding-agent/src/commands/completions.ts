@@ -27,7 +27,7 @@ export async function generateLiveCompletion(shell: Shell): Promise<string> {
 	}
 
 	const config: CliConfig = { bin: APP_NAME, version: VERSION, commands: map };
-	return generateCompletion(shell, buildSpec(config, ROOT_COMMAND, aliasMap));
+	return generateCompletion(shell, await buildSpec(config, ROOT_COMMAND, aliasMap));
 }
 
 export default class Completions extends Command {
@@ -54,7 +54,13 @@ export default class Completions extends Command {
 			return;
 		}
 
-		await Bun.write(Bun.stdout, await generateLiveCompletion(shell));
+		const script = await generateLiveCompletion(shell);
+		const { promise, resolve, reject } = Promise.withResolvers<void>();
+		process.stdout.write(script, error => {
+			if (error) reject(error);
+			else resolve();
+		});
+		await promise;
 		await postmortem.quit(0);
 	}
 }
