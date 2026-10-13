@@ -44,6 +44,7 @@ import { disambiguateDisplayLabels, sanitizeCarriageReturns } from "@oh-my-pi/pi
 import { setExtensionTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { launchTerminal } from "../../subprocess/terminal-launch";
+import { controlAnswerToAskResult } from "./ask-control-answer";
 
 const MAX_WIDGET_LINES = 10;
 
@@ -119,6 +120,7 @@ export class ExtensionUiController {
 		kind: string;
 		title: string;
 		schema?: unknown;
+		convert?: (value: unknown) => unknown;
 	};
 	#extensionTerminalInputUnsubscribers = new Set<() => void>();
 	#composerShapeDisposers: Array<() => void> = [];
@@ -694,7 +696,12 @@ export class ExtensionUiController {
 		questions: ExtensionAskDialogQuestion[],
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<ExtensionAskDialogResult | undefined> {
-		this.#nextDialog = { family: "ask", kind: "ask", title: "Ask" };
+		this.#nextDialog = {
+			family: "ask",
+			kind: "ask",
+			title: "Ask",
+			convert: value => controlAnswerToAskResult(questions, value),
+		};
 		return this.#presentDialog<ExtensionAskDialogResult>(dialogOptions?.signal, settle => {
 			let promptEditor: HookEditorComponent | undefined;
 			let promptResolve: ((value: AskDialogPromptValue | undefined) => void) | undefined;
@@ -1388,9 +1395,12 @@ export class ExtensionUiController {
 			kind: string;
 			title: string;
 			schema?: unknown;
+			convert?: (value: unknown) => unknown;
 		},
 	): Promise<T | undefined> {
 		const { promise, resolve, reject } = Promise.withResolvers<T | undefined>();
+		const described = meta ?? this.#nextDialog;
+		this.#nextDialog = undefined;
 		let settled = false;
 		let started = false;
 		let hide: (() => void) | undefined;
@@ -1428,8 +1438,6 @@ export class ExtensionUiController {
 			started = true;
 			this.#dialogActive = true;
 			const registry = dialogRegistry();
-			const described = meta ?? this.#nextDialog;
-			this.#nextDialog = undefined;
 			const opened = described
 				? registry?.open({
 						family: described.family,
@@ -1438,7 +1446,13 @@ export class ExtensionUiController {
 						schema: described.schema,
 						openedBy: actor ? "control" : "extension",
 						answer: value => {
-							settle(value as T);
+							if (value === "cancel") {
+								settle(undefined);
+								return true;
+							}
+							const converted = described.convert ? described.convert(value) : value;
+							if (described.convert && converted === undefined) return false;
+							settle(converted as T);
 							return true;
 						},
 						cancel: () => settle(undefined),
