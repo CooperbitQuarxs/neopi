@@ -2580,9 +2580,7 @@ async function driveSessionToResult(
 			for (;;) {
 				try {
 					if (restore) {
-						await awaitAbortable(
-							session.withRunOwner(options.runToken, () => session.restoreInterruptedTurn()),
-						);
+						await awaitAbortable(session.withRunOwner(options.runToken, () => session.restoreInterruptedTurn()));
 					} else await dispatchPrompt(task, { attribution: "agent", solutionSpace }, "initial prompt");
 					break;
 				} catch (error) {

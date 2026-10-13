@@ -205,7 +205,9 @@ describe("task.batch schema gating", () => {
 		mockDiscovery();
 
 		// The fork defaults task.structured on; the gate is exercised by turning it off.
-		const flat = await TaskTool.create(createSession({ settings: { "task.batch": false, "task.structured": false } }));
+		const flat = await TaskTool.create(
+			createSession({ settings: { "task.batch": false, "task.structured": false } }),
+		);
 		expect(getSchemaProperties(flat).outputSchema).toBeUndefined();
 		expect(getSchemaProperties(flat).schemaMode).toBeUndefined();
 		expect(flat.description).not.toContain("outputSchema");
