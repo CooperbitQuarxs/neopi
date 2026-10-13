@@ -79,7 +79,15 @@ import { DEFAULT_STT_MODEL_KEY, STT_MODELS } from "../../stt/models";
 import { refreshAgentDiscovery } from "../../task";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { OTHER_OPTION } from "../../tools/ask";
-import { DEFAULT_TTS_VOICE, TTS_LOCAL_MODELS, TTS_LOCAL_VOICE_OPTIONS } from "../../tts/models";
+import {
+	DEFAULT_TTS_SPEED,
+	DEFAULT_TTS_VOICE,
+	TTS_LOCAL_MODELS,
+	TTS_LOCAL_VOICE_OPTIONS,
+	TTS_SPEED_MAX,
+	TTS_SPEED_MIN,
+	TTS_SPEED_OPTIONS,
+} from "../../tts/models";
 import { canonicalizeMessage } from "@oh-my-pi/pi-tui/chat/thinking-display";
 import { createAcpClientBridge } from "./acp-client-bridge";
 import {
@@ -256,17 +264,22 @@ function buildAcpSpeechModelsCatalog(): Record<string, unknown> {
 	const defaultSpeechModel = localSelector(TTS_LOCAL_MODELS[0].key);
 	const defaultDictationModel = localSelector(DEFAULT_STT_MODEL_KEY);
 	const voices = TTS_LOCAL_VOICE_OPTIONS.map(({ value, label }) => ({ value, label }));
+	// Speed settings are numeric, so presets are advertised as numbers clients can write back as-is.
+	const speeds = TTS_SPEED_OPTIONS.map(({ value, label }) => ({ value: Number(value), label }));
 	return {
 		settings: {
 			speechToTextModel: "modelRoles.dictation",
 			textToSpeechModel: "modelRoles.speech",
 			textToSpeechVoice: "tts.localVoice",
 			speechVoice: "speech.voice",
+			textToSpeechSpeed: "tts.localSpeed",
+			speechSpeed: "speech.speed",
 		},
 		defaults: {
 			speechToTextModel: defaultDictationModel,
 			textToSpeechModel: defaultSpeechModel,
 			voice: DEFAULT_TTS_VOICE,
+			speed: DEFAULT_TTS_SPEED,
 		},
 		speechToText: {
 			setting: "modelRoles.dictation",
@@ -281,8 +294,12 @@ function buildAcpSpeechModelsCatalog(): Record<string, unknown> {
 			modelSetting: "modelRoles.speech",
 			voiceSetting: "tts.localVoice",
 			speechVoiceSetting: "speech.voice",
+			speedSetting: "tts.localSpeed",
+			speechSpeedSetting: "speech.speed",
 			defaultModel: defaultSpeechModel,
 			defaultVoice: DEFAULT_TTS_VOICE,
+			defaultSpeed: DEFAULT_TTS_SPEED,
+			speedRange: { min: TTS_SPEED_MIN, max: TTS_SPEED_MAX },
 			models: TTS_LOCAL_MODELS.map(({ key, label, description, voices: modelVoices }): AcpSpeechTtsModelOption => ({
 				value: localSelector(key),
 				label,
@@ -290,6 +307,7 @@ function buildAcpSpeechModelsCatalog(): Record<string, unknown> {
 				voices: modelVoices.map(({ id, label: voiceLabel }) => ({ value: id, label: voiceLabel })),
 			})),
 			voices,
+			speeds,
 		},
 	};
 }
@@ -431,6 +449,7 @@ export function createAcpExtensionUiContext(
 ): ExtensionUIContext {
 	const supportsForm = clientCapabilities?.elicitation?.form != null;
 	return {
+		supportsEditor: false,
 		select: async (title, options, dialogOptions) => {
 			if (!supportsForm) return undefined;
 			const value = await elicitFromAcpClient(
@@ -982,7 +1001,16 @@ export class AcpAgent implements Agent {
 					},
 				});
 			},
-			notifyConfigChanged: async () => {
+			notifyConfigChanged: async options => {
+				// Mirrors `setSessionConfigOption`: once the session-lifetime
+				// subscription is installed, `model_changed`/`thinking_level_changed`
+				// already reach `#handleLifetimeEvent`, which pushes the
+				// `config_option_update`. Pushing again here would make clients
+				// redraw their config UI twice for a single change.
+				if (options?.handledBySessionEvent && record.lifetimeUnsubscribe !== undefined) {
+					await this.#waitForPromptEventHandlers(record);
+					return;
+				}
 				await this.#pushConfigOptionUpdate(record);
 			},
 		});
@@ -1351,14 +1379,20 @@ export class AcpAgent implements Agent {
 		if (event.type !== "thinking_level_changed" && event.type !== "model_changed") {
 			return;
 		}
+		// Config delivery is part of command completion, even though the
+		// subscription lives beyond an individual prompt turn.
+		const delivery = this.#pushConfigOptionUpdate(record);
+		record.promptEventHandlers.add(delivery);
 		try {
-			await this.#pushConfigOptionUpdate(record);
+			await delivery;
 		} catch (error) {
 			logger.warn("Failed to push config_option_update after a lifetime event", {
 				sessionId: record.session.sessionId,
 				eventType: event.type,
 				error,
 			});
+		} finally {
+			record.promptEventHandlers.delete(delivery);
 		}
 	}
 

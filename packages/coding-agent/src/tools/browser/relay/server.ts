@@ -14,6 +14,7 @@
  * user's logged-in browser.
  */
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
+import { VERSION } from "@oh-my-pi/pi-utils/dirs";
 import { RelayBridge } from "./bridge";
 
 /** Options for {@link startRelayServer}. */
@@ -28,11 +29,17 @@ export interface RelayServerOptions {
 
 /** Body of the 503 `/json/version` answer while no extension is connected. */
 export interface RelayUnavailableInfo {
+	/** Version of the OMP binary serving this relay. */
+	ompRelayVersion: string;
 	error: string;
 	/** An extension completed the hello handshake at least once in this server's lifetime. */
 	extensionSeen: boolean;
 	/** Milliseconds this server has been listening. */
 	uptimeMs: number;
+	/** Downstream CDP clients connected to this relay. */
+	ompRelayCdpClients: number;
+	/** Milliseconds since the last connected extension went away; absent if none has connected yet. */
+	disconnectedMs?: number;
 }
 
 /** A running relay server. */
@@ -110,10 +117,14 @@ export function startRelayServer(opts: RelayServerOptions): RelayServer {
 			if (req.method !== "GET") return new Response("Method not allowed", { status: 405 });
 			if (path === "/json/version") {
 				if (!bridge.ready) {
+					const disconnectedMs = bridge.extensionGoneForMs;
 					const info: RelayUnavailableInfo = {
+						ompRelayVersion: VERSION,
 						error: "relay extension is not connected",
 						extensionSeen: bridge.extensionSeen,
 						uptimeMs: Date.now() - startedAt,
+						ompRelayCdpClients: bridge.cdpClientCount,
+						...(disconnectedMs === null ? {} : { disconnectedMs }),
 					};
 					return Response.json(info, { status: 503 });
 				}

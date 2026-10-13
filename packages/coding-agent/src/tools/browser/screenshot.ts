@@ -3,7 +3,7 @@ import { inflateSync } from "node:zlib";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { ElementHandle, ElementScreenshotOptions, Page } from "puppeteer-core";
-import type { ImageResizeOptions } from "../../utils/image-resize";
+import type { ImageResizeOptions, ScreenshotArea } from "../../utils/image-resize";
 import { encodeRawPng } from "../../utils/png-encode";
 import type { SessionSnapshot } from "./tab-protocol";
 
@@ -112,6 +112,12 @@ interface AnnotationDocument {
 export function screenshotScope(opts: ScreenshotOptions): string {
 	if (opts.selector) return `selector:${opts.selector}`;
 	return opts.fullPage ? "fullPage" : "page";
+}
+
+/** The CSS pixel space a page, full-page, or selector capture maps to. */
+export function screenshotArea(opts: ScreenshotOptions): ScreenshotArea {
+	if (opts.selector) return "element";
+	return opts.fullPage ? "page" : "viewport";
 }
 
 /** Validate and normalize a changed-pixel ratio threshold. */

@@ -136,6 +136,7 @@ export * from "./ida";
 export * from "./essential-tools";
 export * from "./eval";
 export * from "./eval-backends";
+export * from "./file-mutation-queue";
 export * from "./file-write-fallback";
 export * from "./gh";
 export * from "./glob";
@@ -360,6 +361,8 @@ export interface ToolSession {
 	getMnemopiSessionState?: () => MnemopiSessionState | undefined;
 	/** Agent identity used for IRC routing. Returns the registry id (e.g. "Main", "AuthLoader"). */
 	getAgentId?: () => string | null;
+	/** Parent cache identity for sibling sharing, only when the parent model opts in. */
+	getPromptCacheKey?: () => string | undefined;
 	/** Look up a registered tool by name (used by the eval js backend's tool bridge). */
 	getToolByName?: (name: string) => AgentTool | undefined;
 	/** Look up an enabled tool through the eval bridge's normal permission pipeline. */
@@ -386,10 +389,11 @@ export interface ToolSession {
 	xdev?: XdevState;
 	/**
 	 * Set when this session's `write` tool was granted only as the `xd://`
-	 * transport: `write xd://<tool>` dispatches mounted devices, but filesystem
-	 * writes are rejected. Granted by {@link createTools} to sessions whose
-	 * explicit tool list includes `read` but omits `write`, so xd:// mounting
-	 * can engage without expanding the write contract.
+	 * transport: `write xd://<tool>` dispatches mounted devices and `local://`
+	 * scratch stays writable, but other filesystem writes are rejected. Granted
+	 * by {@link createTools} to sessions whose explicit tool list includes `read`
+	 * but omits `write`, so xd:// mounting can engage without granting
+	 * working-tree writes.
 	 */
 	deviceOnlyWrite?: boolean;
 	/**
@@ -904,9 +908,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	// the intended restriction, and enough to overflow narrow provider context
 	// windows on MCP-heavy sessions. Grant a device-only `write` instead:
 	// `write xd://<tool>` dispatches mounted devices while filesystem writes
-	// stay rejected (enforced by WriteTool via `session.deviceOnlyWrite`). No
-	// capability is expanded: without mounting, those tools were already
-	// presented — and callable — top-level.
+	// outside the local:// session scratch stay rejected (enforced by WriteTool
+	// via `session.deviceOnlyWrite`). Mounted tools gain no capability: without
+	// mounting, they were already presented — and callable — top-level.
 	if (
 		xdevRequested &&
 		requestedTools !== undefined &&
