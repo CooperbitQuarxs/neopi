@@ -14,7 +14,7 @@
  * — see `commands/complete.ts`. The flag→source mapping below is the only manual
  * knob and is keyed by flag name so it stays stable as flags are added.
  */
-import type { ArgDescriptor, CliConfig, CommandMetadata, FlagDescriptor } from "@oh-my-pi/pi-utils/cli";
+import type { ArgDescriptor, CliConfig, CommandCtor, CommandMetadata, FlagDescriptor } from "@oh-my-pi/pi-utils/cli";
 import { BUILTIN_TOOL_NAMES } from "../tools/builtin-names";
 
 export type Shell = "bash" | "zsh" | "fish";
@@ -45,6 +45,7 @@ export interface CompletionArg {
 	name: string;
 	description: string;
 	value: ValueSource;
+	multiple?: boolean;
 }
 
 export interface CompletionCommand {
@@ -53,6 +54,7 @@ export interface CompletionCommand {
 	description: string;
 	flags: CompletionFlag[];
 	args: CompletionArg[];
+	children: CompletionCommand[];
 }
 
 export interface CompletionSpec {
@@ -85,6 +87,7 @@ function flagValue(name: string, desc: FlagDescriptor): ValueSource {
 
 function argValue(desc: ArgDescriptor): ValueSource {
 	if (desc.options && desc.options.length > 0) return { kind: "enum", values: desc.options };
+	if (desc.suggestions?.length) return { kind: "enum", values: desc.suggestions };
 	return { kind: "file" };
 }
 
@@ -109,7 +112,7 @@ function buildArgs(command: CommandMetadata): CompletionArg[] {
 	const args = command.args ?? {};
 	for (const name in args) {
 		const desc = args[name];
-		out.push({ name, description: desc.description ?? "", value: argValue(desc) });
+		out.push({ name, description: desc.description ?? "", value: argValue(desc), multiple: desc.multiple });
 	}
 	return out;
 }
@@ -122,31 +125,44 @@ function buildArgs(command: CommandMetadata): CompletionArg[] {
  * @param aliasMap  Canonical-name → aliases (merged from the registration table
  *                  and the command class's static `aliases`).
  */
-export function buildSpec(
+export async function buildSpec(
 	config: CliConfig,
 	rootName: string,
 	aliasMap: Map<string, readonly string[]>,
-): CompletionSpec {
+): Promise<CompletionSpec> {
 	const commands: CompletionCommand[] = [];
 	let root: CompletionSpec["root"] = { flags: [], args: [] };
 	for (const [name, Cmd] of config.commands) {
-		const flags = buildFlags(Cmd);
-		const args = buildArgs(Cmd);
 		if (name === rootName) {
-			root = { flags, args };
+			root = { flags: buildFlags(Cmd), args: buildArgs(Cmd) };
 			continue;
 		}
 		if (Cmd.hidden) continue;
-		commands.push({
-			name,
-			aliases: aliasMap.get(name) ?? [],
-			description: Cmd.description ?? "",
-			flags,
-			args,
-		});
+		commands.push(await buildCommand(name, Cmd, aliasMap.get(name) ?? []));
 	}
 	commands.sort((a, b) => a.name.localeCompare(b.name));
 	return { bin: config.bin, root, commands };
+}
+
+async function buildCommand(
+	name: string,
+	command: CommandCtor,
+	aliases: readonly string[],
+): Promise<CompletionCommand> {
+	const children: CompletionCommand[] = [];
+	for (const [childName, load] of Object.entries(command.subcommands ?? {})) {
+		const child = await load();
+		if (!child.hidden) children.push(await buildCommand(childName, child, child.aliases ?? []));
+	}
+	children.sort((a, b) => a.name.localeCompare(b.name));
+	return {
+		name,
+		aliases,
+		description: command.description ?? "",
+		flags: buildFlags(command),
+		args: buildArgs(command),
+		children,
+	};
 }
 
 // --- Shared helpers -----------------------------------------------------------
@@ -159,6 +175,56 @@ function takesValue(v: ValueSource): boolean {
 /** All token forms (`name` + aliases) under which a subcommand can be invoked. */
 function commandTokens(c: CompletionCommand): string[] {
 	return [c.name, ...c.aliases];
+}
+
+interface CompletionScope {
+	id: string;
+	flags: CompletionFlag[];
+	args: CompletionArg[];
+	children: { command: CompletionCommand; id: string }[];
+}
+
+/** Flatten the registration tree once, retaining each child's exact parent. */
+function completionScopes(spec: CompletionSpec): CompletionScope[] {
+	const scopes: CompletionScope[] = [];
+	function visit(flags: CompletionFlag[], args: CompletionArg[], children: CompletionCommand[]): string {
+		const id = String(scopes.length);
+		const help: CompletionFlag = {
+			name: "help",
+			char: "h",
+			description: "Show help",
+			value: { kind: "flag" },
+			repeatable: false,
+		};
+		const implicit = [help];
+		if (id === "0") {
+			implicit.push({
+				name: "version",
+				char: "v",
+				description: "Show version",
+				value: { kind: "flag" },
+				repeatable: false,
+			});
+		}
+		const scope: CompletionScope = {
+			id,
+			flags: [...flags, ...implicit.filter(flag => !flags.some(f => f.name === flag.name))],
+			args,
+			children: [],
+		};
+		scopes.push(scope);
+		scope.children = children.map(command => ({
+			command,
+			id: visit(command.flags, command.args, command.children),
+		}));
+		return id;
+	}
+	visit(spec.root.flags, spec.root.args, spec.commands);
+	return scopes;
+}
+
+function flagTokens(flag: CompletionFlag): string[] {
+	return [`--${flag.name}`, ...(flag.char ? [`-${flag.char}`] : [])];
 }
 
 export function generateCompletion(shell: Shell, spec: CompletionSpec): string {
@@ -242,71 +308,147 @@ function generateBash(spec: CompletionSpec): string {
 }`);
 	parts.push("");
 
-	// Root handler: top-level flags + subcommand names.
-	const subTokens = spec.commands.flatMap(commandTokens).sort();
-	parts.push(`_npi_root() {
-	case "$prev" in
-${bashFlagCase(bin, spec.root.flags)}
+	const scopes = completionScopes(spec);
+	for (const scope of scopes) {
+		const childWords = scope.children.flatMap(child => commandTokens(child.command));
+		const firstValue = scope.args[0]?.value;
+		const positionalWords = [...new Set([...childWords, ...(firstValue?.kind === "enum" ? firstValue.values : [])])];
+		const argCases = scope.args.map(
+			(arg, index) => `\t\t${arg.multiple ? `${index}|*` : index}) ${bashValueBranch(bin, arg.value)} ;;`,
+		);
+		parts.push(`_npi_scope_${scope.id}() {
+	case "$pending" in
+${bashFlagCase(bin, scope.flags)}
 	esac
-	if [[ "$cur" == -* ]]; then
-		COMPREPLY=( $(compgen -W "${bashFlagWords(spec.root.flags)}" -- "$cur") )
-	else
-		COMPREPLY=( $(compgen -W "${bashWords(subTokens)} ${bashFlagWords(spec.root.flags)}" -- "$cur") )
+	if [[ "$cur" == -* && "$endopts" == 0 ]]; then
+		COMPREPLY=( $(compgen -W "${bashFlagWords(scope.flags)}" -- "$cur") )
+		return
 	fi
-}`);
-	parts.push("");
-
-	// Per-subcommand handlers.
-	for (const c of spec.commands) {
-		const argEnum = c.args.find(a => a.value.kind === "enum");
-		const argWords = argEnum && argEnum.value.kind === "enum" ? bashWords(argEnum.value.values) : "";
-		const fileArg = c.args.some(a => a.value.kind === "file");
-		const elseBranch = argWords
-			? `COMPREPLY=( $(compgen -W "${argWords}" -- "$cur") )`
-			: fileArg
-				? `COMPREPLY=( $(compgen -f -- "$cur") ); compopt -o filenames`
-				: ":";
-		parts.push(`_npi_cmd_${bashFn(c.name)}() {
-	case "$prev" in
-${bashFlagCase(bin, c.flags)}
+	if [[ "$position" == 0 && "$endopts" == 0 && -n "${bashWords(childWords)}" ]]; then
+		COMPREPLY=( $(compgen -W "${bashWords(positionalWords)}" -- "$cur") )
+		return
+	fi
+	case "$position" in
+${argCases.join("\n")}
 	esac
-	if [[ "$cur" == -* ]]; then
-		COMPREPLY=( $(compgen -W "${bashFlagWords(c.flags)}" -- "$cur") )
-	else
-		${elseBranch}
-	fi
 }`);
-		parts.push("");
 	}
-
-	// Dispatcher.
-	const dispatch: string[] = [];
-	for (const c of spec.commands) {
-		dispatch.push(`\t\t${commandTokens(c).join("|")})\n\t\t\t_npi_cmd_${bashFn(c.name)}\n\t\t\t;;`);
-	}
-	parts.push(`_npi() {
-	local cur prev cmd i
-	cur="\${COMP_WORDS[COMP_CWORD]}"
-	prev="\${COMP_WORDS[COMP_CWORD-1]}"
-	cmd=""
-	for (( i=1; i < COMP_CWORD; i++ )); do
-		case "\${COMP_WORDS[i]}" in
-			-*) ;;
-			*) cmd="\${COMP_WORDS[i]}"; break ;;
+	const shortCases = scopes.flatMap(scope =>
+		scope.flags
+			.filter(f => f.char)
+			.map(
+				f =>
+					`\t\t${scope.id}:${f.char}) ${
+						takesValue(f.value)
+							? `pending="-${f.char}"; attached="\${token:j+1}"; short_prefix="\${token:0:j+1}"; return`
+							: ":"
+					} ;;`,
+			),
+	);
+	parts.push(`_npi_short_value() {
+	local token="$1" j char
+	pending=""; attached=""; short_prefix=""
+	for (( j=1; j < \${#token}; j++ )); do
+		char="\${token:j:1}"
+		case "$scope:$char" in
+${shortCases.join("\n")}
+			*) return ;;
 		esac
 	done
-	case "$cmd" in
-${dispatch.join("\n")}
-		*) _npi_root ;;
-	esac
+}`);
+	const valueCases = scopes.flatMap(scope =>
+		scope.flags
+			.filter(f => takesValue(f.value))
+			.map(
+				f =>
+					`\t\t${flagTokens(f)
+						.map(token => `${scope.id}:${token}`)
+						.join("|")}) pending="$token"; continue ;;`,
+			),
+	);
+	const childCases = scopes.flatMap(scope =>
+		scope.children.map(
+			child =>
+				`\t\t${commandTokens(child.command)
+					.map(token => `${scope.id}:${token}`)
+					.join("|")}) scope=${child.id}; position=0; continue ;;`,
+		),
+	);
+	parts.push(`_npi() {
+	local cur pending="" scope=0 position=0 endopts=0 token i prefix=""
+	local fragment previous="" remaining gap joined offset=0 cword attached="" short_prefix="" replacement=""
+	local -a words=()
+	COMPREPLY=()
+	# Readline splits = and : into COMP_WORDS fragments. Rejoin adjacent
+	# fragments, but retain where Readline's current replacement word begins.
+	remaining="\${COMP_LINE:0:\${COMP_POINT:-\${#COMP_LINE}}}"
+	for (( i=0; i <= COMP_CWORD; i++ )); do
+		fragment="\${COMP_WORDS[i]}"; gap=""
+		if [[ -n "$COMP_LINE" && -n "$fragment" ]]; then
+			gap="\${remaining%%"$fragment"*}"
+			remaining="\${remaining#*"$fragment"}"
+		fi
+		joined=0
+		if (( \${#words[@]} )) && [[ -n "$fragment" && -z "$gap" ]]; then
+			if [[ "$fragment" == =* || "$fragment" == :* || "$previous" == *= || "$previous" == *: ]]; then
+				joined=1
+			fi
+		fi
+		if (( joined )); then
+			offset="\${#words[\${#words[@]}-1]}"
+			words[\${#words[@]}-1]+="$fragment"
+			# Readline inserts after an equals-only current fragment, retaining =.
+			if (( i == COMP_CWORD )) && [[ "$fragment" == = ]]; then offset=$((offset + 1)); fi
+		else
+			offset=0
+			words+=( "$fragment" )
+		fi
+		previous="$fragment"
+	done
+	cword=$((\${#words[@]} - 1))
+	cur="\${words[cword]}"
+	replacement="\${cur:0:offset}"
+	for (( i=1; i < cword; i++ )); do
+		token="\${words[i]}"
+		if [[ -n "$pending" ]]; then pending=""; continue; fi
+		if [[ "$endopts" == 0 ]]; then
+			if [[ "$token" == -- ]]; then endopts=1; continue; fi
+			case "$scope:$token" in
+${valueCases.join("\n")}
+			esac
+			if [[ "$token" == -?* && "$token" != --* ]]; then
+				_npi_short_value "$token"
+				if [[ -n "$attached" ]]; then pending=""; fi
+				continue
+			fi
+			if [[ "$token" == -* ]]; then continue; fi
+			if [[ "$position" == 0 ]]; then
+				case "$scope:$token" in
+${childCases.join("\n")}
+				esac
+			fi
+		fi
+		position=$((position + 1))
+	done
+	if [[ "$endopts" == 0 && -z "$pending" ]]; then
+		if [[ "$cur" == --*=* ]]; then
+			pending="\${cur%%=*}"; prefix="$pending="; cur="\${cur#*=}"
+		elif [[ "$cur" == -?* && "$cur" != --* ]]; then
+			_npi_short_value "$cur"
+			if [[ -n "$pending" ]]; then prefix="$short_prefix"; cur="$attached"; fi
+		fi
+	fi
+	_npi_scope_$scope
+	for (( i=0; i < \${#COMPREPLY[@]}; i++ )); do
+		COMPREPLY[i]="$prefix\${COMPREPLY[i]}"
+		if [[ -n "$replacement" && "\${COMPREPLY[i]}" == "$replacement"* ]]; then
+			COMPREPLY[i]="\${COMPREPLY[i]#"$replacement"}"
+		fi
+	done
 }
 complete -F _npi ${bin}`);
 	parts.push("");
 	return `${parts.join("\n")}\n`;
-}
-
-function bashFn(name: string): string {
-	return name.replace(/[^A-Za-z0-9]/g, "_");
 }
 
 // --- zsh ----------------------------------------------------------------------
@@ -345,19 +487,16 @@ function zshAction(v: ValueSource): string {
 
 function zshFlagSpec(f: CompletionFlag): string {
 	const body = `[${zshDesc(f.description)}]${zshAction(f.value)}`;
-	if (f.char && f.repeatable) return `'*'{-${f.char},--${f.name}}'${body}'`;
-	if (f.char) return `'(-${f.char} --${f.name})'{-${f.char},--${f.name}}'${body}'`;
-	if (f.repeatable) return `'*--${f.name}${body}'`;
-	return `'--${f.name}${body}'`;
+	const prefix = f.repeatable ? "*" : f.char ? `(-${f.char} --${f.name})` : "";
+	const long = `'${prefix}--${f.name}${takesValue(f.value) ? "=" : ""}${body}'`;
+	if (!f.char) return long;
+	const short = `'${prefix}-${f.char}${takesValue(f.value) ? "+" : ""}${body}'`;
+	return `${short} ${long}`;
 }
 
 function zshArgSpec(f: CompletionArg): string {
-	switch (f.value.kind) {
-		case "enum":
-			return `':${f.name}:(${f.value.values.join(" ")})'`;
-		default:
-			return `':${f.name}:_files'`;
-	}
+	const action = zshAction(f.value).replace(/^:[^:]*:/, "");
+	return `'${f.multiple ? "*" : ""}:${f.name}:${action}'`;
 }
 
 function generateZsh(spec: CompletionSpec): string {
@@ -365,7 +504,8 @@ function generateZsh(spec: CompletionSpec): string {
 	// The `:value:_npi_tools` action references this helper; bake its candidates
 	// from the spec's `list` flag so the generator stays a pure function of its
 	// input (bash/fish read `v.values` inline for the same reason).
-	const listFlag = [...spec.root.flags, ...spec.commands.flatMap(c => c.flags)].find(f => f.value.kind === "list");
+	const scopes = completionScopes(spec);
+	const listFlag = scopes.flatMap(scope => scope.flags).find(f => f.value.kind === "list");
 	const toolNames = listFlag?.value.kind === "list" ? listFlag.value.values.join(" ") : "";
 	const parts: string[] = [];
 	parts.push(`#compdef ${bin}`);
@@ -398,52 +538,103 @@ _npi_models_list() {
 }
 _npi_tools() { _values -s , 'tools' ${toolNames} }`);
 	parts.push("");
-
-	// Subcommand description table.
-	const cmdRows = spec.commands.map(c => `\t\t'${c.name}:${zshDesc(c.description)}'`).join("\n");
-	parts.push(`_npi_commands() {
-	local -a commands
-	commands=(
-${cmdRows}
-	)
-	_describe -t commands 'command' commands
+	const pendingCases = scopes.flatMap(scope =>
+		scope.flags
+			.filter(f => takesValue(f.value))
+			.map(
+				f =>
+					`\t\t\t${flagTokens(f)
+						.map(token => `${scope.id}:${token}`)
+						.join("|")}) pending=1; continue ;;`,
+			),
+	);
+	const shortCases = scopes.flatMap(scope =>
+		scope.flags
+			.filter(f => f.char)
+			.map(
+				f =>
+					`\t\t\t\t${scope.id}:${f.char}) ${takesValue(f.value) ? `(( j == \${#token} )) && pending=1; break` : ":"} ;;`,
+			),
+	);
+	parts.push(`_npi_terminated() {
+	local scope="$1" token char pending=0 i j
+	for ((i=2; i<CURRENT; i++)); do
+		token="$words[i]"
+		if (( pending )); then pending=0; continue; fi
+		[[ "$token" == -- ]] && return 0
+		case "$scope:$token" in
+${pendingCases.join("\n")}
+		esac
+		[[ "$token" == --* ]] && continue
+		if [[ "$token" == -?* ]]; then
+			for ((j=2; j<=\${#token}; j++)); do
+				char="$token[j]"
+				case "$scope:$char" in
+${shortCases.join("\n")}
+					*) break ;;
+				esac
+			done
+			continue
+		fi
+		return 1
+	done
+	return 1
 }`);
 	parts.push("");
 
-	// Per-subcommand argument functions.
-	for (const c of spec.commands) {
-		const specs = ["'(-h --help)'{-h,--help}'[Show help]'", ...c.flags.map(zshFlagSpec), ...c.args.map(zshArgSpec)];
-		parts.push(`_npi_cmd_${bashFn(c.name)}() {
-	_arguments -s \\
-		${specs.join(" \\\n\t\t")}
+	for (const scope of scopes) {
+		const rows = scope.children.flatMap(({ command }) =>
+			commandTokens(command).map(token => `\t\t'${token}:${zshDesc(command.description)}'`),
+		);
+		if (scope.children.length && scope.args[0]?.value.kind === "enum") {
+			const registered = new Set(scope.children.flatMap(child => commandTokens(child.command)));
+			for (const value of scope.args[0].value.values) {
+				if (!registered.has(value)) rows.push(`\t\t'${value}:${zshDesc(scope.args[0].description)}'`);
+			}
+		}
+		if (rows.length) {
+			parts.push(`_npi_children_${scope.id}() {
+	local -a commands
+	commands=(
+${rows.join("\n")}
+	)
+	_describe -t commands 'command' commands
 }`);
-		parts.push("");
-	}
-
-	// Top-level dispatch.
-	const aliasArms = spec.commands
-		.map(c => `\t\t\t${commandTokens(c).join("|")}) _npi_cmd_${bashFn(c.name)} ;;`)
-		.join("\n");
-	const rootSpecs = [
-		"'(-h --help)'{-h,--help}'[Show help]'",
-		"'(-v --version)'{-v,--version}'[Show version]'",
-		...spec.root.flags.map(zshFlagSpec),
-		"'1: :_npi_commands'",
-		"'*::arg:->args'",
-	];
-	parts.push(`_npi() {
+		}
+		const specs = [
+			...scope.flags.map(zshFlagSpec),
+			...(scope.children.length
+				? [`'1:command:_npi_children_${scope.id}'`, "'*::arg:->args'"]
+				: scope.args.map(zshArgSpec)),
+		];
+		const arms = scope.children.map(
+			child => `\t\t${commandTokens(child.command).join("|")}) _npi_scope_${child.id} ;;`,
+		);
+		parts.push(`_npi_scope_${scope.id}() {
 	local curcontext="$curcontext" state line
 	typeset -A opt_args
-	_arguments -C -s \\
-		${rootSpecs.join(" \\\n\t\t")}
-	case $state in
-		args)
-			case $line[1] in
-${aliasArms}
-			esac
-			;;
-	esac
-}
+	${
+		scope.children.length
+			? `if _npi_terminated ${scope.id}; then
+		${scope.args.length ? `_arguments -s -S ${scope.args.map(zshArgSpec).join(" ")}\n\t\t` : ""}return
+	fi`
+			: ""
+	}
+	_arguments -C -s -S \\
+		${specs.join(" \\\n\t\t")}
+	${
+		scope.children.length
+			? `if [[ "$state" == args ]]; then
+		case "$line[1]" in
+${arms.join("\n")}
+		${scope.args.length > 1 ? `*) _arguments -s -S ${scope.args.slice(1).map(zshArgSpec).join(" ")} ;;` : ""}
+		esac
+	fi`
+			: ""
+	}
+}`);
+	}
+	parts.push(`_npi() { _npi_scope_0 "$@"; }
 # Works both ways: autoloaded from $fpath (file named _npi) or eval'd from a
 # startup file. When autoloaded, funcstack[1] is _npi and we invoke it; when
 # sourced/eval'd we register it with compdef instead.
@@ -501,52 +692,158 @@ function generateFish(spec: CompletionSpec): string {
 	lines.push(`# fish completion for ${bin} — generated by \`${bin} completions fish\``);
 	lines.push("");
 
-	const allTokens = spec.commands.flatMap(commandTokens);
-	lines.push(`function __fish_npi_no_subcommand`);
-	lines.push(`\tfor i in (commandline -opc)`);
-	lines.push(`\t\tif contains -- $i ${allTokens.join(" ")}`);
-	lines.push(`\t\t\treturn 1`);
-	lines.push(`\t\tend`);
-	lines.push(`\tend`);
-	lines.push(`\treturn 0`);
-	lines.push(`end`);
-	lines.push("");
-
-	const rootCond = "__fish_npi_no_subcommand";
-
-	// Subcommand names.
-	for (const c of spec.commands) {
-		for (const token of commandTokens(c)) {
-			lines.push(`complete -c ${bin} -f -n '${rootCond}' -a '${token}' -d '${fishDesc(c.description)}'`);
-		}
-	}
-	lines.push("");
-
-	// Top-level flags.
-	for (const f of spec.root.flags) {
-		lines.push(fishFlagLine(bin, rootCond, f));
-	}
-	lines.push("");
-
-	// Per-subcommand flags and positional args.
-	for (const c of spec.commands) {
-		const cond = `__fish_seen_subcommand_from ${commandTokens(c).join(" ")}`;
-		for (const f of c.flags) {
-			lines.push(fishFlagLine(bin, cond, f));
-		}
-		// Positionals: fish conditions can't gate on position, so emit enum
-		// candidates (if any) and otherwise a single file completion — never both,
-		// and never duplicated across multiple file-typed positionals.
-		const enumArgs = c.args.filter(a => a.value.kind === "enum");
-		if (enumArgs.length > 0) {
-			for (const a of enumArgs) {
-				if (a.value.kind !== "enum") continue;
+	const scopes = completionScopes(spec);
+	const shortCases = scopes.flatMap(scope =>
+		scope.flags
+			.filter(f => f.char)
+			.map(
+				f =>
+					`\t\t\tcase ${scope.id}:${f.char}\n\t\t\t\t${
+						takesValue(f.value)
+							? `printf '%s\\n' -${f.char} (string sub -s 1 -l $index -- $token) (string sub -s (math $index + 1) -- $token)\n\t\t\t\treturn`
+							: "true"
+					}`,
+			),
+	);
+	lines.push(`function __fish_npi_short_value
+	set -l scope $argv[1]
+	set -l token $argv[2]
+	string match -q -- '-*' "$token"; and test (string length -- "$token") -gt 1; or return
+	string match -q -- '--*' "$token"; and return
+	set -l index 2
+	while test $index -le (string length -- $token)
+		set -l char (string sub -s $index -l 1 -- $token)
+		switch "$scope:$char"
+${shortCases.join("\n")}
+			case '*'
+				return
+		end
+		set index (math $index + 1)
+	end
+end`);
+	const values = scopes.flatMap(scope =>
+		scope.flags
+			.filter(f => takesValue(f.value))
+			.map(
+				f =>
+					`\t\t\t\tcase ${flagTokens(f)
+						.map(token => `${scope.id}:${token}`)
+						.join(" ")}
+\t\t\t\t\tset pending $token
+\t\t\t\t\tcontinue`,
+			),
+	);
+	const children = scopes.flatMap(scope =>
+		scope.children.map(
+			child =>
+				`\t\t\t\t\tcase ${commandTokens(child.command)
+					.map(token => `${scope.id}:${token}`)
+					.join(" ")}
+\t\t\t\t\t\tset scope ${child.id}
+\t\t\t\t\t\tset position 0
+\t\t\t\t\t\tcontinue`,
+		),
+	);
+	lines.push(`function __fish_npi_context
+	set -l scope 0
+	set -l position 0
+	set -l pending none
+	set -l endopts 0
+	set -l tokens (commandline -opc)
+	for token in $tokens[2..-1]
+		if test "$pending" != none
+			set pending none
+			continue
+		end
+		if test $endopts = 0
+			if test "$token" = --
+				set endopts 1
+				continue
+			end
+			switch "$scope:$token"
+${values.join("\n")}
+			end
+			if string match -q -- '-*' "$token"; and test (string length -- "$token") -gt 1; and not string match -q -- '--*' "$token"
+				set -l short (__fish_npi_short_value $scope "$token")
+				if test (count $short) -ge 2; and test "$short[2]" = "$token"
+					set pending $short[1]
+				end
+				continue
+			end
+			if string match -q -- '-*' "$token"
+				continue
+			end
+			if test $position = 0
+				switch "$scope:$token"
+${children.join("\n")}
+				end
+			end
+		end
+		set position (math $position + 1)
+	end
+	printf '%s\\n' $scope $position "$pending" $endopts
+end
+function __fish_npi_scope
+	set -l context (__fish_npi_context)
+	test "$context[1]" = "$argv[1]"; and test "$context[4]" = 0
+end
+function __fish_npi_arg
+	set -l context (__fish_npi_context)
+	test "$context[1]" = "$argv[1]"; or return 1
+	test "$context[3]" = none; or return 1
+	string match -q -- '-*' (commandline -ct); and test "$context[4]" = 0; and return 1
+	if test "$argv[3]" = multiple
+		test "$context[2]" -ge "$argv[2]"
+	else
+		test "$context[2]" = "$argv[2]"
+	end
+end`);
+	lines.push(`function __fish_npi_attached
+	set -l context (__fish_npi_context)
+	test "$context[1]" = "$argv[1]"; and test "$context[3]" = none; and test "$context[4]" = 0; or return 1
+	set -l short (__fish_npi_short_value $context[1] (commandline -ct))
+	test (count $short) -ge 2; and test "$short[1]" = "$argv[2]"
+end
+function __fish_npi_attached_values
+	set -l context (__fish_npi_context)
+	set -l short (__fish_npi_short_value $context[1] (commandline -ct))
+	set -l partial ""
+	if test (count $short) -ge 3
+		set partial $short[3]
+	end
+	for value in $argv
+		if string match -q -- "$partial*" "$value"
+			printf '%s\\n' "$short[2]$value"
+		end
+	end
+end`);
+	lines.push(`complete -c ${bin} -f`);
+	for (const scope of scopes) {
+		const cond = `__fish_npi_scope ${scope.id}`;
+		for (const flag of scope.flags) {
+			lines.push(fishFlagLine(bin, cond, flag));
+			if (flag.char && flag.value.kind === "enum") {
 				lines.push(
-					`complete -c ${bin} -f -n '${cond}' -a '${a.value.values.join(" ")}' -d '${fishDesc(a.description)}'`,
+					`complete -c ${bin} -f -n '__fish_npi_attached ${scope.id} -${flag.char}' -a '(__fish_npi_attached_values ${flag.value.values.join(" ")})'`,
 				);
 			}
-		} else if (c.args.some(a => a.value.kind === "file")) {
-			lines.push(`complete -c ${bin} -F -n '${cond}'`);
+		}
+		for (const child of scope.children) {
+			for (const token of commandTokens(child.command)) {
+				lines.push(
+					`complete -c ${bin} -f -n '__fish_npi_arg ${scope.id} 0 single; and ${cond}' -a '${token}' -d '${fishDesc(child.command.description)}'`,
+				);
+			}
+		}
+		for (const [index, arg] of scope.args.entries()) {
+			const argCond = `__fish_npi_arg ${scope.id} ${index} ${arg.multiple ? "multiple" : "single"}`;
+			if (arg.value.kind === "enum") {
+				lines.push(
+					`complete -c ${bin} -f -n '${argCond}' -a '${arg.value.values.join(" ")}' -d '${fishDesc(arg.description)}'`,
+				);
+			} else if (arg.value.kind === "file") {
+				lines.push(`complete -c ${bin} -F -n '${argCond}'`);
+			}
 		}
 	}
 	lines.push("");

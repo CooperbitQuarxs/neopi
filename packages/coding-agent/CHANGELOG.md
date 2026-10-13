@@ -21,6 +21,7 @@
 - Added post-processing chains: named, ordered model steps in `CHAINS.yml` (user and project) that rewrite composer text before it is sent. Alt+C sends one prompt through the active chain; `/chaining on|off|use|status|configure` manages automatic mode, the active chain, and a fullscreen editor. Steps without a model use the new Prose role, which falls back to the configured `smol` role.
 ### Fixed
 
+- Fixed Bash, Fish, and Zsh discovery of public CLI aliases, nested subcommands, child flags, and finite argument choices from executable metadata, including Bash word-break fragments, grouped short-option values, and scope-local `--` boundaries. Large piped completion scripts drain before exit, and native `/loadout use <name>` completion now exposes the existing alias without submitting before its name ([#228](https://github.com/PsychedelicShayna/neopi/issues/228)).
 - Fixed control-socket ask answers crashing instead of returning selected options or custom text; invalid answers now leave the dialog open ([#281](https://github.com/PsychedelicShayna/neopi/issues/281)).
 - The Live Submit Silence (ms) setting (`live.submitSilenceMs`) now appears in the settings panel with preset choices; numeric settings without declared options are hidden by design, and this one had none.
 - Tool shells retain the host terminal type and expose a private launcher-environment file for restoring editors and credential helpers before starting tmux or sibling TUIs ([#236](https://github.com/PsychedelicShayna/neopi/issues/236)).

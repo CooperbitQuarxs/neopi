@@ -6,7 +6,7 @@ import { MODEL_KINDS, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { modelsHelp as commandHelp } from "../cli/command-help";
-import { resolveModelsArgs, runModelsCommand } from "../cli/models-cli";
+import { MODEL_ACTIONS, resolveModelsArgs, runModelsCommand } from "../cli/models-cli";
 
 const MODEL_KIND_OPTIONS: readonly (ModelKind | "all")[] = [...MODEL_KINDS, "all"];
 
@@ -16,6 +16,7 @@ export default class Models extends Command {
 		action: Args.string({
 			description: "ls (default) | find | refresh | <provider>",
 			required: false,
+			suggestions: Object.keys(MODEL_ACTIONS),
 		}),
 		pattern: Args.string({
 			description: "Filter/search substring, or provider name (required for find)",
