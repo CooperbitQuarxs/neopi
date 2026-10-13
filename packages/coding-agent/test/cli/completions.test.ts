@@ -53,7 +53,7 @@ async function fixture(): Promise<CompletionSpec> {
 								flags: {
 									rebuild: { kind: "boolean" },
 									"dry-run": { kind: "boolean", char: "n" },
-									format: { kind: "string", options: ["text", "json"] },
+									format: { kind: "string", char: "f", options: ["text", "json"] },
 								},
 								args: {
 									action: { kind: "string", options: ["all", "recent"] },
@@ -215,6 +215,40 @@ for (const shell of ["bash", "fish", "zsh"] as const) {
 			expect(modelNamedCommand).toContain("group");
 			expect(modelNamedCommand).not.toContain("index");
 		});
+
+		it("consumes grouped short-option values without advancing the positional", async () => {
+			const script = generateCompletion(shell, await fixture());
+			expect(candidates(shell, script, ["npi", "group", "index", "-nf", "j"])).toContain("json");
+			expect(candidates(shell, script, ["npi", "group", "index", "-nf", "json", ""])).toEqual(
+				expect.arrayContaining(["all", "recent"]),
+			);
+			const attached = candidates(shell, script, ["npi", "group", "index", "-nfjson", "recent", ""]);
+			expect(attached).toContain("fast");
+			expect(attached).toContain("full");
+			expect(attached).not.toContain("recent");
+		});
+
+		it("does not discover child commands after the scope's options terminator", async () => {
+			const script = generateCompletion(shell, await fixture());
+			const parent = candidates(shell, script, ["npi", "group", "--", ""]);
+			expect(parent).not.toContain("index");
+			expect(parent).not.toContain("ix");
+			const nested = candidates(shell, script, ["npi", "group", "nested", "--", ""]);
+			expect(nested).not.toContain("leaf");
+		});
+
+		if (shell === "bash") {
+			it("handles equals fragments captured from real Bash Readline", async () => {
+				const script = generateCompletion(shell, await fixture());
+				expect(candidates(shell, script, ["npi", "group", "index", "--format", "=", "json", ""])).toEqual(
+					expect.arrayContaining(["all", "recent"]),
+				);
+				expect(candidates(shell, script, ["npi", "group", "index", "--format", "="])).toEqual(
+					expect.arrayContaining(["text", "json"]),
+				);
+				expect(candidates(shell, script, ["npi", "group", "index", "--format", "=", "j"])).toEqual(["json"]);
+			});
+		}
 
 		it("preserves top-level dynamic model/session and finite flag completions", async () => {
 			const script = generateCompletion(shell, await fixture());

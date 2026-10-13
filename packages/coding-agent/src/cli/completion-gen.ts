@@ -333,6 +333,29 @@ ${argCases.join("\n")}
 	esac
 }`);
 	}
+	const shortCases = scopes.flatMap(scope =>
+		scope.flags
+			.filter(f => f.char)
+			.map(
+				f =>
+					`\t\t${scope.id}:${f.char}) ${
+						takesValue(f.value)
+							? `pending="-${f.char}"; attached="\${token:j+1}"; short_prefix="\${token:0:j+1}"; return`
+							: ":"
+					} ;;`,
+			),
+	);
+	parts.push(`_npi_short_value() {
+	local token="$1" j char
+	pending=""; attached=""; short_prefix=""
+	for (( j=1; j < \${#token}; j++ )); do
+		char="\${token:j:1}"
+		case "$scope:$char" in
+${shortCases.join("\n")}
+			*) return ;;
+		esac
+	done
+}`);
 	const valueCases = scopes.flatMap(scope =>
 		scope.flags
 			.filter(f => takesValue(f.value))
@@ -353,16 +376,51 @@ ${argCases.join("\n")}
 	);
 	parts.push(`_npi() {
 	local cur pending="" scope=0 position=0 endopts=0 token i prefix=""
+	local fragment previous="" remaining gap joined offset=0 cword attached="" short_prefix="" replacement=""
+	local -a words=()
 	COMPREPLY=()
-	cur="\${COMP_WORDS[COMP_CWORD]}"
-	for (( i=1; i < COMP_CWORD; i++ )); do
-		token="\${COMP_WORDS[i]}"
+	# Readline splits = and : into COMP_WORDS fragments. Rejoin adjacent
+	# fragments, but retain where Readline's current replacement word begins.
+	remaining="\${COMP_LINE:0:\${COMP_POINT:-\${#COMP_LINE}}}"
+	for (( i=0; i <= COMP_CWORD; i++ )); do
+		fragment="\${COMP_WORDS[i]}"; gap=""
+		if [[ -n "$COMP_LINE" && -n "$fragment" ]]; then
+			gap="\${remaining%%"$fragment"*}"
+			remaining="\${remaining#*"$fragment"}"
+		fi
+		joined=0
+		if (( \${#words[@]} )) && [[ -n "$fragment" && -z "$gap" ]]; then
+			if [[ "$fragment" == =* || "$fragment" == :* || "$previous" == *= || "$previous" == *: ]]; then
+				joined=1
+			fi
+		fi
+		if (( joined )); then
+			offset="\${#words[\${#words[@]}-1]}"
+			words[\${#words[@]}-1]+="$fragment"
+			# Readline inserts after an equals-only current fragment, retaining =.
+			if (( i == COMP_CWORD )) && [[ "$fragment" == = ]]; then offset=$((offset + 1)); fi
+		else
+			offset=0
+			words+=( "$fragment" )
+		fi
+		previous="$fragment"
+	done
+	cword=$((\${#words[@]} - 1))
+	cur="\${words[cword]}"
+	replacement="\${cur:0:offset}"
+	for (( i=1; i < cword; i++ )); do
+		token="\${words[i]}"
 		if [[ -n "$pending" ]]; then pending=""; continue; fi
 		if [[ "$endopts" == 0 ]]; then
 			if [[ "$token" == -- ]]; then endopts=1; continue; fi
 			case "$scope:$token" in
 ${valueCases.join("\n")}
 			esac
+			if [[ "$token" == -?* && "$token" != --* ]]; then
+				_npi_short_value "$token"
+				if [[ -n "$attached" ]]; then pending=""; fi
+				continue
+			fi
 			if [[ "$token" == -* ]]; then continue; fi
 			if [[ "$position" == 0 ]]; then
 				case "$scope:$token" in
@@ -372,13 +430,21 @@ ${childCases.join("\n")}
 		fi
 		position=$((position + 1))
 	done
-	if [[ "$endopts" == 0 && "$cur" == --*=* ]]; then
-		pending="\${cur%%=*}"; prefix="$pending="; cur="\${cur#*=}"
+	if [[ "$endopts" == 0 && -z "$pending" ]]; then
+		if [[ "$cur" == --*=* ]]; then
+			pending="\${cur%%=*}"; prefix="$pending="; cur="\${cur#*=}"
+		elif [[ "$cur" == -?* && "$cur" != --* ]]; then
+			_npi_short_value "$cur"
+			if [[ -n "$pending" ]]; then prefix="$short_prefix"; cur="$attached"; fi
+		fi
 	fi
 	_npi_scope_$scope
-	if [[ -n "$prefix" ]]; then
-		for (( i=0; i < \${#COMPREPLY[@]}; i++ )); do COMPREPLY[i]="$prefix\${COMPREPLY[i]}"; done
-	fi
+	for (( i=0; i < \${#COMPREPLY[@]}; i++ )); do
+		COMPREPLY[i]="$prefix\${COMPREPLY[i]}"
+		if [[ -n "$replacement" && "\${COMPREPLY[i]}" == "$replacement"* ]]; then
+			COMPREPLY[i]="\${COMPREPLY[i]#"$replacement"}"
+		fi
+	done
 }
 complete -F _npi ${bin}`);
 	parts.push("");
@@ -472,6 +538,49 @@ _npi_models_list() {
 }
 _npi_tools() { _values -s , 'tools' ${toolNames} }`);
 	parts.push("");
+	const pendingCases = scopes.flatMap(scope =>
+		scope.flags
+			.filter(f => takesValue(f.value))
+			.map(
+				f =>
+					`\t\t\t${flagTokens(f)
+						.map(token => `${scope.id}:${token}`)
+						.join("|")}) pending=1; continue ;;`,
+			),
+	);
+	const shortCases = scopes.flatMap(scope =>
+		scope.flags
+			.filter(f => f.char)
+			.map(
+				f =>
+					`\t\t\t\t${scope.id}:${f.char}) ${takesValue(f.value) ? `(( j == \${#token} )) && pending=1; break` : ":"} ;;`,
+			),
+	);
+	parts.push(`_npi_terminated() {
+	local scope="$1" token char pending=0 i j
+	for ((i=2; i<CURRENT; i++)); do
+		token="$words[i]"
+		if (( pending )); then pending=0; continue; fi
+		[[ "$token" == -- ]] && return 0
+		case "$scope:$token" in
+${pendingCases.join("\n")}
+		esac
+		[[ "$token" == --* ]] && continue
+		if [[ "$token" == -?* ]]; then
+			for ((j=2; j<=\${#token}; j++)); do
+				char="$token[j]"
+				case "$scope:$char" in
+${shortCases.join("\n")}
+					*) break ;;
+				esac
+			done
+			continue
+		fi
+		return 1
+	done
+	return 1
+}`);
+	parts.push("");
 
 	for (const scope of scopes) {
 		const rows = scope.children.flatMap(({ command }) =>
@@ -504,6 +613,13 @@ ${rows.join("\n")}
 		parts.push(`_npi_scope_${scope.id}() {
 	local curcontext="$curcontext" state line
 	typeset -A opt_args
+	${
+		scope.children.length
+			? `if _npi_terminated ${scope.id}; then
+		${scope.args.length ? `_arguments -s -S ${scope.args.map(zshArgSpec).join(" ")}\n\t\t` : ""}return
+	fi`
+			: ""
+	}
 	_arguments -C -s -S \\
 		${specs.join(" \\\n\t\t")}
 	${
@@ -577,6 +693,34 @@ function generateFish(spec: CompletionSpec): string {
 	lines.push("");
 
 	const scopes = completionScopes(spec);
+	const shortCases = scopes.flatMap(scope =>
+		scope.flags
+			.filter(f => f.char)
+			.map(
+				f =>
+					`\t\t\tcase ${scope.id}:${f.char}\n\t\t\t\t${
+						takesValue(f.value)
+							? `printf '%s\\n' -${f.char} (string sub -s 1 -l $index -- $token) (string sub -s (math $index + 1) -- $token)\n\t\t\t\treturn`
+							: "true"
+					}`,
+			),
+	);
+	lines.push(`function __fish_npi_short_value
+	set -l scope $argv[1]
+	set -l token $argv[2]
+	string match -q -- '-*' "$token"; and test (string length -- "$token") -gt 1; or return
+	string match -q -- '--*' "$token"; and return
+	set -l index 2
+	while test $index -le (string length -- $token)
+		set -l char (string sub -s $index -l 1 -- $token)
+		switch "$scope:$char"
+${shortCases.join("\n")}
+			case '*'
+				return
+		end
+		set index (math $index + 1)
+	end
+end`);
 	const values = scopes.flatMap(scope =>
 		scope.flags
 			.filter(f => takesValue(f.value))
@@ -619,6 +763,13 @@ function generateFish(spec: CompletionSpec): string {
 			switch "$scope:$token"
 ${values.join("\n")}
 			end
+			if string match -q -- '-*' "$token"; and test (string length -- "$token") -gt 1; and not string match -q -- '--*' "$token"
+				set -l short (__fish_npi_short_value $scope "$token")
+				if test (count $short) -ge 2; and test "$short[2]" = "$token"
+					set pending $short[1]
+				end
+				continue
+			end
 			if string match -q -- '-*' "$token"
 				continue
 			end
@@ -647,10 +798,36 @@ function __fish_npi_arg
 		test "$context[2]" = "$argv[2]"
 	end
 end`);
+	lines.push(`function __fish_npi_attached
+	set -l context (__fish_npi_context)
+	test "$context[1]" = "$argv[1]"; and test "$context[3]" = none; and test "$context[4]" = 0; or return 1
+	set -l short (__fish_npi_short_value $context[1] (commandline -ct))
+	test (count $short) -ge 2; and test "$short[1]" = "$argv[2]"
+end
+function __fish_npi_attached_values
+	set -l context (__fish_npi_context)
+	set -l short (__fish_npi_short_value $context[1] (commandline -ct))
+	set -l partial ""
+	if test (count $short) -ge 3
+		set partial $short[3]
+	end
+	for value in $argv
+		if string match -q -- "$partial*" "$value"
+			printf '%s\\n' "$short[2]$value"
+		end
+	end
+end`);
 	lines.push(`complete -c ${bin} -f`);
 	for (const scope of scopes) {
 		const cond = `__fish_npi_scope ${scope.id}`;
-		for (const flag of scope.flags) lines.push(fishFlagLine(bin, cond, flag));
+		for (const flag of scope.flags) {
+			lines.push(fishFlagLine(bin, cond, flag));
+			if (flag.char && flag.value.kind === "enum") {
+				lines.push(
+					`complete -c ${bin} -f -n '__fish_npi_attached ${scope.id} -${flag.char}' -a '(__fish_npi_attached_values ${flag.value.values.join(" ")})'`,
+				);
+			}
+		}
 		for (const child of scope.children) {
 			for (const token of commandTokens(child.command)) {
 				lines.push(
