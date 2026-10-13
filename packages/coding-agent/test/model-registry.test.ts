@@ -2920,6 +2920,71 @@ describe("ModelRegistry", () => {
 			expect(windowOf(registry, "luna-proxy", "luna-extended-no-price")).toBe(272_000);
 		});
 
+		for (const projection of ["identity", "rename", "synthesize"] as const) {
+			test(`OAuth ${projection} projections preserve source capacity without stamping synthesized rows`, async () => {
+				writeRawModelsJson(
+					Object.fromEntries(
+						["luna-proxy", "unrelated-proxy"].map(provider => [
+							provider,
+							{
+								baseUrl: "https://example.com/v1",
+								api: "openai-responses",
+								auth: "none",
+								models: [{ id: "luna", contextWindow: 272_000, maxContextWindow: 872_000 }],
+							},
+						]),
+					),
+				);
+				await authStorage.credentials.set("luna-proxy", {
+					type: "oauth",
+					access: "access-token",
+					refresh: "refresh-token",
+					expires: Date.now() + 60_000,
+				});
+				const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+					settings: Settings.isolated({ extendedContext: true }),
+				});
+				registry.registerProvider(
+					"luna-proxy",
+					{
+						baseUrl: "https://example.com/v1",
+						api: "openai-responses",
+						models: [{ id: "luna", contextWindow: 272_000, maxContextWindow: 872_000 }],
+						headers: { "X-Parent": "parent" },
+						oauth: {
+							name: "Luna OAuth",
+							login: async () => ({ access: "a", refresh: "r", expires: Date.now() + 60_000 }),
+							refreshToken: async credentials => credentials,
+							getApiKey: credentials => credentials.access,
+							modifyModels: models => {
+								const row = models.find(model => model.provider === "luna-proxy" && model.id === "luna");
+								if (!row) throw new Error("Missing modifier source");
+								if (projection === "rename") {
+									row.id = "renamed-luna";
+									row.headers = { "X-Projection": "renamed" };
+									return models.toReversed();
+								}
+								if (projection === "synthesize") {
+									return [{ ...row, id: "new-luna", contextWindow: 400_000 }, ...models.toReversed()];
+								}
+								return models;
+							},
+						},
+					},
+					"ext://standard-capacity",
+				);
+				await registry.refresh("offline");
+				const id = projection === "rename" ? "renamed-luna" : "luna";
+				expect(registry.find("luna-proxy", id)?.contextWindow).toBe(872_000);
+				expect(windowOf(registry, "luna-proxy", id)).toBe(272_000);
+				expect(registry.find("unrelated-proxy", "luna")?.contextWindow).toBe(872_000);
+				expect(windowOf(registry, "unrelated-proxy", "luna")).toBe(272_000);
+				if (projection === "synthesize") {
+					expect(windowOf(registry, "luna-proxy", "new-luna")).toBe(400_000);
+				}
+			});
+		}
+
 		test("smaller effective overrides and paid tiers constrain the baseline, but subscription statistics do not", () => {
 			writeRawModelsJson({
 				"openai-codex": { modelOverrides: { "gpt-5.6-luna": { contextWindow: 96_000 } } },

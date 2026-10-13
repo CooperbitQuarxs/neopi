@@ -1133,6 +1133,7 @@ export class ModelRegistry {
 					projected.map(({ resolveHeaders: _resolveHeaders, ...model }) => model),
 				);
 				for (let index = 0; index < snapshot.length; index++) {
+					this.#carryStandardWindow(projected[index], snapshot[index]);
 					if (projected[index].resolveHeaders) snapshot[index].resolveHeaders = projected[index].resolveHeaders;
 				}
 				// A hook owns its provider's rows and may synthesize them outright
@@ -1154,16 +1155,20 @@ export class ModelRegistry {
 									resolveHeaders: createConfigHeaderResolver([model.resolveHeaders, model.headers]),
 								}
 							: model;
+					this.#carryStandardWindow(model as Model<Api>, withHeaders as Model<Api>);
 					if (withHeaders.provider !== providerName) return withHeaders as Model<Api>;
 					// `identity` exists only on built rows. Without it the hook
 					// authored a spec, where `compat` already is the sparse
 					// override `toModelSpec` would drop while reading the absent
 					// `compatConfig`; built rows keep resolving from that field
 					// instead of feeding the resolved view back in as an override.
-					return buildModel(
-						withHeaders.identity === undefined
-							? (withHeaders as ModelSpec<Api>)
-							: toModelSpec(withHeaders as Model<Api>),
+					return this.#carryStandardWindow(
+						model as Model<Api>,
+						buildModel(
+							withHeaders.identity === undefined
+								? (withHeaders as ModelSpec<Api>)
+								: toModelSpec(withHeaders as Model<Api>),
+						),
 					);
 				});
 			} catch (error) {
