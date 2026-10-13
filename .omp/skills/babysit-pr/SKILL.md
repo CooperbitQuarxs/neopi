@@ -285,12 +285,14 @@ REPLY_ID=$(gh api --method POST \
 
 ## 7. Wait for the round
 
-Poll step 1 about every 2 minutes. Stop waiting on a bot after about 20
-minutes. A Codex round is complete when its latest response has
-`failed: false` and both `passes` entries read `Completed` on the head
-commit's short SHA. If the latest response has `failed: true`, request the
-round once more. If the bot stays silent, report that to the owner. When a
-round brings new findings, go back to step 3.
+Poll step 1 about every 2 minutes. A Codex round is complete when its latest
+response has `failed: false` and both `passes` entries read `Completed` on the
+head commit's short SHA. If the latest response has `failed: true`, request
+the round once more. After three rounds with unresolved findings, or forty-five
+minutes of bot silence, follow the workspace policy: stop calling the bot,
+review locally with a sub-agent, fix, request review once more; if findings
+remain, label `review-stalled`, post a summary, and stop. When a round brings
+new findings, go back to step 3.
 
 ## 8. Merge
 

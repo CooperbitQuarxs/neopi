@@ -22,4 +22,4 @@ Review upstream changes to every fork integration point, including files Git mer
 
 Keep open PRs separate until their contracts have been compared with the new upstream behavior. If upstream replaces part of a PR, retain the remaining requirement and adapt its tests; do not infer redundancy from similar changelog wording. Report the recommended merge order and unresolved behavior decisions before promoting an integration that depends on those decisions.
 
-Validate both upstream regressions and fork contracts at the affected boundaries. Record source changes, failed or unavailable checks, and actual test results separately. Apply the binary installation rules in AGENTS.md only when reaching the authorized installation stage.
+Validate both upstream regressions and fork contracts at the affected boundaries. Record source changes, failed or unavailable checks, and actual test results separately. Apply the binary installation rules in AGENTS.md when reaching the installation stage.

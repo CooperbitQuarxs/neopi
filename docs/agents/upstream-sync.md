@@ -103,7 +103,7 @@ Complete the merge with a signed merge commit:
 
 ```sh
 git commit -S/home/shayna/.ssh/id_ed25519_github_signing_agents.pub \
-  -m "Merge upstream $TAG into neopi" \
+  -m "Merge upstream $TAG into nightly" \
   -m "Integrate the release with the per-file resolution ledger in docs/updates/." \
   -m "Co-authored-by: <actual executing model identity and address>"
 git verify-commit HEAD
