@@ -1136,6 +1136,7 @@ export class ModelRegistry {
 					this.#carryStandardWindow(projected[index], snapshot[index]);
 					if (projected[index].resolveHeaders) snapshot[index].resolveHeaders = projected[index].resolveHeaders;
 				}
+				const sourcesByKey = new Map(snapshot.map(model => [contextWindowKey(model), model]));
 				// A hook owns its provider's rows and may synthesize them outright
 				// (a credential-scoped catalog replacing the registered bootstrap)
 				// or respell the ones it was handed. Extensions author `ModelSpec`s
@@ -1147,6 +1148,10 @@ export class ModelRegistry {
 				// Rows of other providers pass through untouched; rebuilding a
 				// full catalog on every projection costs more than it can fix.
 				projected = modifyModels(snapshot, credential).map(model => {
+					if (!this.#standardWindows.has(model as Model<Api>)) {
+						const source = sourcesByKey.get(contextWindowKey(model));
+						if (source) this.#carryStandardWindow(source, model as Model<Api>);
+					}
 					const withHeaders =
 						model.resolveHeaders && model.headers
 							? {

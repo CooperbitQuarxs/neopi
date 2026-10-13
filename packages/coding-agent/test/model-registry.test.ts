@@ -2920,7 +2920,7 @@ describe("ModelRegistry", () => {
 			expect(windowOf(registry, "luna-proxy", "luna-extended-no-price")).toBe(272_000);
 		});
 
-		for (const projection of ["identity", "rename", "synthesize"] as const) {
+		for (const projection of ["identity", "shallow-copy", "rename", "synthesize"] as const) {
 			test(`OAuth ${projection} projections preserve source capacity without stamping synthesized rows`, async () => {
 				writeRawModelsJson(
 					Object.fromEntries(
@@ -2949,7 +2949,17 @@ describe("ModelRegistry", () => {
 					{
 						baseUrl: "https://example.com/v1",
 						api: "openai-responses",
-						models: [{ id: "luna", contextWindow: 272_000, maxContextWindow: 872_000 }],
+						models: [
+							{
+								id: "luna",
+								name: "Luna",
+								contextWindow: 272_000,
+								maxTokens: 16_384,
+								reasoning: false,
+								input: ["text"],
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							},
+						],
 						headers: { "X-Parent": "parent" },
 						oauth: {
 							name: "Luna OAuth",
@@ -2959,6 +2969,9 @@ describe("ModelRegistry", () => {
 							modifyModels: models => {
 								const row = models.find(model => model.provider === "luna-proxy" && model.id === "luna");
 								if (!row) throw new Error("Missing modifier source");
+								if (projection === "shallow-copy") {
+									return models.toReversed().map(model => ({ ...model }));
+								}
 								if (projection === "rename") {
 									row.id = "renamed-luna";
 									row.headers = { "X-Projection": "renamed" };
