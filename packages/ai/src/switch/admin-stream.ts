@@ -21,7 +21,6 @@ export function adminEventsStream(
 	authentication: () => AdminAuthentication,
 ): Response {
 	let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
-	let subscription: ReturnType<SwitchStore["subscribe"]> | undefined;
 	let heartbeat: ReturnType<typeof setInterval> | undefined;
 	let drain: ReturnType<typeof setInterval> | undefined;
 	const queue: StoredChange[] = [];
@@ -68,7 +67,7 @@ export function adminEventsStream(
 		queue.push(change);
 		flush();
 	};
-	subscription = store.subscribe(cursor, onLive);
+	const subscription = store.subscribe(cursor, onLive);
 	const highWater = subscription.highWater;
 	const initial = subscription;
 	const stream = new ReadableStream<Uint8Array>({
