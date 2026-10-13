@@ -28,6 +28,7 @@ import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import * as imageBudget from "@oh-my-pi/pi-coding-agent/session/provider-image-budget";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { encodeRawPng } from "@oh-my-pi/pi-coding-agent/utils/png-encode";
 import { MIXTURE_TRACE_MESSAGE_TYPE, type MixtureTraceDetails } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import {
@@ -1245,7 +1246,8 @@ describe("provider context for members", () => {
 		const session = await mixtureSession(definition);
 		const image: ImageContent = {
 			type: "image",
-			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+			// Image billing is dimension-based; a 1×1 PNG now fits this window.
+			data: Buffer.from(encodeRawPng(new Uint8Array(1024 * 1024 * 3), 1024, 1024, 3)).toString("base64"),
 			mimeType: "image/png",
 		};
 		await session.prompt("describe", { images: [image] });

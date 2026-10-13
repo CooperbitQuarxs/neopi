@@ -114,7 +114,12 @@ describe("AgentSession Chronicler identity boundaries", () => {
 	function appendDecision(target: SessionManager, text: string): string[] {
 		return [
 			target.appendMessage({ role: "user", content: text, timestamp: Date.now() }),
-			target.appendMessage(createAssistantMessage(`Decided: ${text}`)),
+			target.appendMessage({
+				...createAssistantMessage(`Decided: ${text}`),
+				provider: primaryModel.provider,
+				model: primaryModel.id,
+				api: primaryModel.api,
+			}),
 		];
 	}
 

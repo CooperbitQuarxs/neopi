@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, setSystemTime, vi } from "bun:test";
 import { type Component, type RenderScheduler, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
+import { BtwHistoryPanel } from "@oh-my-pi/pi-tui/overlays/btw-history-panel";
+import type { BtwHistoryRecord } from "@oh-my-pi/pi-tui/overlays/btw-history";
+import { Input } from "@oh-my-pi/pi-tui/components/input";
+import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
+import { SPACE_HOLD_MECHANICAL_RUN, SPACE_HOLD_RELEASE_MS } from "@oh-my-pi/pi-tui/space-hold";
+import { getEditorTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
 
 class BlockingDoubleInterruptComponent implements Component {
 	interruptsHandled = 0;
@@ -134,6 +140,50 @@ describe("TUI input priority", () => {
 			await drainNextTick();
 
 			expect(terminal.getViewport().map(row => row.trimEnd())).toContain("selected:1");
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("keeps printable PTT keys visible to raw input listeners while the hold still records", async () => {
+		await initTheme();
+		vi.useFakeTimers();
+		setSystemTime(new Date(1_000));
+		const terminal = new VirtualTerminal(40, 8);
+		const tui = new TUI(terminal, undefined, { renderScheduler: fakeTimerScheduler() });
+		const editor = new CustomEditor(getEditorTheme());
+		const events: string[] = [];
+		editor.spaceHold.handler = {
+			enabled: () => true,
+			onStart: () => events.push("start"),
+			onEnd: () => events.push("end"),
+		};
+		tui.addChild(editor);
+		tui.setFocus(editor);
+		const observed: string[] = [];
+		tui.addInputListener(data => {
+			observed.push(data);
+			return undefined;
+		});
+
+		try {
+			tui.start();
+			await drainNextTick();
+			vi.advanceTimersByTime(40);
+			terminal.sendInput("a");
+			vi.advanceTimersByTime(200);
+			terminal.sendInput(" ");
+			vi.advanceTimersByTime(200);
+			terminal.sendInput("b");
+			expect(observed).toEqual(["a", " ", "b"]);
+			expect(editor.getText()).toBe("a b");
+
+			for (let i = 0; i < SPACE_HOLD_MECHANICAL_RUN + 2; i++) {
+				vi.advanceTimersByTime(30);
+				terminal.sendInput(" ");
+			}
+			expect(events).toEqual(["start"]);
+			expect(editor.getText()).toBe("a b");
 		} finally {
 			tui.stop();
 		}

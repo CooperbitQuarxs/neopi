@@ -108,8 +108,14 @@ export type AgentSessionEvent =
 	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState }
 	/** Live chat-mode change: `mode` is `off` outside chat mode; `include` is comma-joined. */
 	| { type: "chat_mode_changed"; mode: ChatModeSetting; include: string }
-	// Coalesced snapshot of displayable steering/follow-up queue on mutation.
-	| { type: "queue_update"; steering: string[]; followUp: string[] };
+	// Coalesced snapshot of the displayable steering/follow-up queue: emitted
+	// whenever it differs from the last `queue_update` (enqueue, dequeue on
+	// delivery, remove, clear/restore, live-steering adoption/withdrawal, or
+	// session switch), never on a no-op mutation. Mirrors
+	// `AgentSession.getQueuedMessages()`; `liveSteered` counts the leading
+	// `steering` entries already sent into the streaming response, which
+	// `remove_queued_message` cannot reach.
+	| { type: "queue_update"; steering: string[]; followUp: string[]; liveSteered: number };
 
 /** Listener function for agent session events. */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;

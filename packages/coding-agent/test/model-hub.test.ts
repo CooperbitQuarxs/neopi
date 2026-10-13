@@ -22,7 +22,7 @@ import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme"
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
-import { cfgCycleOrder } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { cfgCycleOrder, cfgModelPresets } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { HubEffortSelection } from "@oh-my-pi/pi-tui/overlays/model-hub";
@@ -192,6 +192,7 @@ function createHub(options: {
 			onDefineMixture: options.callbacks?.onDefineMixture,
 			onCycleOrderChange: options.callbacks?.onCycleOrderChange,
 			onSavePreset: options.callbacks?.onSavePreset,
+			onSwitchPreset: options.callbacks?.onSwitchPreset,
 			onFallbackChainChange: options.callbacks?.onFallbackChainChange ?? onFallbackChainChange,
 			onEffortRulesChange:
 				options.callbacks?.onEffortRulesChange ?? (rules => cfgEffortRules.override(settings, rules)),
@@ -209,6 +210,8 @@ const LEFT = "\x1b[D";
 const ALT_RIGHT = "\x1b[1;3C";
 /** What macOS terminals (ghostty, Terminal.app, iTerm) emit for Option+→. */
 const OPTION_RIGHT_MAC = "\x1bf";
+const CTRL_LEFT = "\x1b[1;5D";
+const CTRL_RIGHT = "\x1b[1;5C";
 const ESC = "\x1b";
 
 describe("ModelHub", () => {
@@ -303,6 +306,26 @@ describe("ModelHub", () => {
 		hub.handleInput(ESC);
 		expect(onCancel).toHaveBeenCalledTimes(1);
 	});
+	describe("responsive layout", () => {
+		test("keeps model scopes and names visible at phone-sized widths", () => {
+			const { hub } = createHub({ models: [makeModel("test", "phone-model")] });
+			const lines = hub.render(36).map(line => stripVTControlCharacters(line));
+
+			expect(lines.some(line => line.includes("Models"))).toBe(true);
+			expect(lines.some(line => line.includes("All models"))).toBe(true);
+			expect(lines.some(line => line.includes("test/ph"))).toBe(true);
+		});
+
+		test("shrinks a wide provider sidebar so model rows stay readable", () => {
+			const { hub } = createHub({ models: [makeModel("github-copilot-enterprise", "phone-model")] });
+			const lines = hub.render(36).map(line => stripVTControlCharacters(line));
+
+			expect(lines[0]).toStartWith("╭─ Models ───────────┬");
+			// Body row (not the sidebar's "● github-…" entry) keeps the provider-qualified name.
+			expect(lines.some(line => /│ {2,}github-/.test(line))).toBe(true);
+		});
+	});
+
 	describe("role chips and roles view", () => {
 		test("separates chat and kind roles and filters role tabs", () => {
 			const chat = makeModel("test", "chat-model");
@@ -749,8 +772,7 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			expect(normalize(hub.render(220))).toContain("Assigning reviewer");
 
-			hub.handleInput("\n"); // sidebar → model list
-			hub.handleInput("\n"); // pick the sole model for the new role
+			hub.handleInput("\n"); // focus already on the model rows: pick the sole model
 			hub.handleInput("\n"); // Confirm staged effort.
 			expect(onAssign).toHaveBeenCalledTimes(1);
 			const call = onAssign.mock.calls[0];
@@ -789,6 +811,70 @@ describe("ModelHub", () => {
 
 			bareHub.handleInput("s");
 			expect(footerLine(bareHub.render(220))).not.toContain("Preset name:");
+		});
+
+		test("ctrl+←/→ switch between saved model presets from the Roles view", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const c = makeModel("test", "model-c");
+			const settings = Settings.isolated({ modelRoles: { default: "test/model-a" } });
+			cfgModelPresets.setEntry(settings, "alpha", { modelRoles: { default: "test/model-a" } });
+			cfgModelPresets.setEntry(settings, "beta", { modelRoles: { default: "test/model-b" } });
+			cfgModelPresets.setEntry(settings, "gamma", { modelRoles: { default: "test/model-c" } });
+			// Mirror the controller: applying a preset writes its roles; "beta" is refused and writes nothing.
+			const onSwitchPreset = vi.fn((name: string) => {
+				if (name === "beta") return;
+				settings.setModelRole("default", name === "alpha" ? "test/model-a" : "test/model-c");
+			});
+			const { hub } = createHub({ models: [a, b, c], scoped: true, settings, callbacks: { onSwitchPreset } });
+
+			hub.handleInput(UP); // All models → Roles
+			expect(normalize(hub.render(220))).toContain("Preset: alpha");
+
+			hub.handleInput(CTRL_RIGHT); // alpha → beta (refused: nothing written)
+			expect(onSwitchPreset).toHaveBeenLastCalledWith("beta");
+			expect(normalize(hub.render(220))).toContain("Preset: alpha");
+
+			hub.handleInput(CTRL_RIGHT); // steps past the refused preset
+			expect(onSwitchPreset).toHaveBeenLastCalledWith("gamma");
+			expect(normalize(hub.render(220))).toContain("Preset: gamma");
+			expect(settings.getModelRole("default")).toBe("test/model-c");
+
+			hub.handleInput(CTRL_RIGHT); // wraps to the first preset
+			expect(onSwitchPreset).toHaveBeenLastCalledWith("alpha");
+			expect(normalize(hub.render(220))).toContain("Preset: alpha");
+
+			hub.handleInput(CTRL_LEFT); // wraps back to the last preset
+			expect(onSwitchPreset).toHaveBeenLastCalledWith("gamma");
+
+			// p/P are the fork's paste keys on the role rows; presets switch only on ctrl+←/→,
+			// and outside the Roles view the keys never switch presets.
+			hub.handleInput("\n"); // dive into the rows
+			hub.handleInput("p");
+			hub.handleInput("P");
+			expect(onSwitchPreset).toHaveBeenCalledTimes(4);
+			hub.handleInput(LEFT); // back to the sidebar
+			hub.handleInput(DOWN); // Roles → All models
+			hub.handleInput(CTRL_RIGHT);
+			expect(onSwitchPreset).toHaveBeenCalledTimes(4);
+		});
+
+		test("picking a role lands the arrows on the model rows, keeping the assignment flow", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const { hub, onAssign } = createHub({ models: [a, b], scoped: true });
+
+			hub.handleInput(UP); // All models → Roles
+			hub.handleInput("\n"); // dive into the rows
+			hub.handleInput("\n"); // DEFAULT row → selector-choice strip
+			hub.handleInput("\n"); // "pick model…" → assign mode
+			expect(normalize(hub.render(220))).toContain("Assigning DEFAULT");
+
+			hub.handleInput(DOWN); // moves through the models, not the sidebar
+			hub.handleInput("\n");
+			expect(onAssign).toHaveBeenCalledTimes(1);
+			expect(onAssign.mock.calls[0]?.[1]).toBe("default");
+			expect(onAssign.mock.calls[0]?.[3]).toBe("test/model-b");
 		});
 	});
 
@@ -1265,8 +1351,7 @@ describe("ModelHub", () => {
 			expect(footerLine(hub.render(220))).toContain("pick model");
 			expect(footerLine(hub.render(220))).toContain("pattern");
 			hub.handleInput("\n"); // exact model picker
-			hub.handleInput("\n"); // sidebar → model list
-			hub.handleInput("\n"); // model → effort choices
+			hub.handleInput("\n"); // focus already on the model rows: model → effort choices
 			hub.handleInput("\n"); // Inherit
 			expect(onFallbackChainChange).toHaveBeenCalledWith("default", ["test/model-a"], {
 				selector: "test/model-a",

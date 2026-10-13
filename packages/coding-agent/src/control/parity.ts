@@ -69,6 +69,18 @@ export const RPC_COMMAND_TYPES = [
 	"login",
 	"predict_word",
 	"predict_word_feedback",
+	"abort_and_restore_queue",
+	"fork",
+	"goal",
+	"btw",
+	"btw_cancel",
+	"get_btw_history",
+	"live_start",
+	"live_stop",
+	"live_mute",
+	"set_slow_mode",
+	"get_logout_accounts",
+	"logout",
 ] as const satisfies readonly RpcCommand["type"][];
 
 type MissingRpcCommand = Exclude<RpcCommand["type"], (typeof RPC_COMMAND_TYPES)[number]>;

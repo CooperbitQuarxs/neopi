@@ -865,7 +865,7 @@ describe("SessionChronicler capture runtime", () => {
 		const batches = await waitForBatches(root, 3);
 		await shutdown(harness);
 		// Exercise the actual private tools through the provider's request converter.
-		const codex = getBundledModel<"openai-codex-responses">("openai-codex", "gpt-5.5");
+		const codex = getBundledModel<"openai-codex-responses">("openai-codex", "gpt-6.1-sol");
 		if (!codex || codex.api !== "openai-codex-responses") throw new Error("Expected a bundled Codex model");
 		const wireTools = convertOpenAICodexResponsesTools(passes[1]!.agent.state.tools, codex);
 		expect(wireTools).toHaveLength(3);

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -80,6 +81,9 @@ async function withTempConfigRoot<T>(run: () => Promise<T>): Promise<T> {
 		} else {
 			setAgentDir(originalAgentDir);
 		}
+		// The model registry opened the shared `<configRoot>/agent/models.db` cache while the
+		// temp root was active; release it so Windows can delete the root.
+		closeModelCache();
 		configRoot.remove();
 	}
 }
