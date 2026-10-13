@@ -1,6 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import { type Component, Container, isFocusable, type OverlayOptions, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { Settings } from "../../../src/config/settings";
+import { DialogRegistry, dialogRegistry, setDialogRegistry } from "../../../src/control/dialogs";
+import { AskTool } from "../../../src/tools/ask";
+import type { ToolSession } from "../../../src/tools";
 import type { ExtensionAskDialogQuestion, ExtensionUIContext } from "../../../src/extensibility/extensions";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
@@ -93,6 +98,113 @@ function makeHarness() {
 		},
 	};
 }
+
+describe("ExtensionUiController control ask answers", () => {
+	const questions: ExtensionAskDialogQuestion[] = [
+		{
+			id: "choice",
+			question: "Choose an answer?",
+			options: [{ label: "Alpha" }, { label: "Beta" }],
+			recommended: 0,
+		},
+	];
+
+	it.each([
+		[{ index: 0 }, ["Alpha"], undefined],
+		[JSON.parse('"A custom answer"'), [], "A custom answer"],
+	])("returns an ask tool result for control answer %j", async (answer, selectedOptions, customInput) => {
+		const previous = dialogRegistry();
+		const registry = new DialogRegistry();
+		setDialogRegistry(registry);
+		try {
+			const harness = makeHarness();
+			const tool = new AskTool({
+				cwd: "/tmp",
+				hasUI: true,
+				canPromptUser: true,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+				settings: Settings.isolated(),
+			} as ToolSession);
+			const context = {
+				hasUI: true,
+				ui: { askDialog: harness.controller.showAskDialog.bind(harness.controller) },
+				abort: vi.fn(),
+			} as unknown as AgentToolContext;
+			const pending = tool.execute("control-ask", { questions }, undefined, undefined, context);
+			const dialog = registry.list()[0];
+			expect(dialog?.family).toBe("ask");
+			expect(registry.answer(dialog!.dialogId, { index: 99 })).toEqual({
+				settled: false,
+				error: "dialog rejected that answer",
+			});
+			expect(registry.answer(dialog!.dialogId, answer)).toEqual({ settled: true });
+			const result = await pending;
+			expect(result.details).toMatchObject({
+				question: questions[0].question,
+				options: ["Alpha", "Beta"],
+				multi: false,
+				selectedOptions,
+			});
+			expect(result.details?.customInput).toBe(customInput);
+			expect(context.abort).not.toHaveBeenCalled();
+		} finally {
+			setDialogRegistry(previous);
+		}
+	});
+
+	it("retains each queued ask's question mapping and registry entry", async () => {
+		const previous = dialogRegistry();
+		const registry = new DialogRegistry();
+		setDialogRegistry(registry);
+		try {
+			const harness = makeHarness();
+			const first = harness.controller.showAskDialog(questions);
+			const nextQuestions = [
+				{ id: "one", question: "First?", options: [{ label: "One" }] },
+				{ id: "two", question: "Second?", options: [{ label: "Two" }] },
+			];
+			const next = harness.controller.showAskDialog(nextQuestions);
+			expect(registry.answer(registry.list()[0].dialogId, { index: 0 })).toEqual({ settled: true });
+			expect(await first).toMatchObject({
+				kind: "submit",
+				results: [{ id: "choice", selectedOptions: ["Alpha"] }],
+			});
+			expect(registry.answer(registry.list()[0].dialogId, { one: 0, two: "custom" })).toEqual({ settled: true });
+			expect(await next).toEqual({
+				kind: "submit",
+				results: [
+					{ id: "one", question: "First?", options: ["One"], multi: false, selectedOptions: ["One"] },
+					{
+						id: "two",
+						question: "Second?",
+						options: ["Two"],
+						multi: false,
+						selectedOptions: [],
+						customInput: "custom",
+					},
+				],
+			});
+		} finally {
+			setDialogRegistry(previous);
+		}
+	});
+
+	it.each(["cancel", null])("cancels without fabricating an ask result for %j", async answer => {
+		const previous = dialogRegistry();
+		const registry = new DialogRegistry();
+		setDialogRegistry(registry);
+		try {
+			const harness = makeHarness();
+			const pending = harness.controller.showAskDialog(questions);
+			expect(registry.answer(registry.list()[0].dialogId, answer)).toEqual({ settled: true });
+			expect(await pending).toBeUndefined();
+			expect(harness.editorContainer.children).toEqual([harness.editor]);
+		} finally {
+			setDialogRegistry(previous);
+		}
+	});
+});
 
 describe("ExtensionUiController Ask dialog input", () => {
 	const questions: ExtensionAskDialogQuestion[] = [
