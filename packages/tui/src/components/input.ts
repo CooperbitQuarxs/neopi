@@ -134,6 +134,11 @@ export class Input implements Component, Focusable {
 		return this.#useTerminalCursor;
 	}
 
+	/** The fork's Space-hold gesture is handled inside {@link handleInput}; nothing is pre-claimed. */
+	capturesInput(_data: string): boolean {
+		return false;
+	}
+
 	/**
 	 * Apply one key: the editor's text bindings (motion, deletion, kill ring,
 	 * undo), pastes and printable text. Returns whether the key was the
@@ -284,9 +289,10 @@ export class Input implements Component, Focusable {
 		this.#handlePaste(text);
 	}
 
-	/** Terminal-side selection edits on the `input` node (see {@link applyHostEdit}). */
+	/** Terminal-side selection edits and undo on the `input` node (see {@link applyHostEdit}). */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type === "edit") this.applyHostEdit(event);
+		else if (event.type === "undo") this.#undo();
 	}
 
 	/**
@@ -582,6 +588,7 @@ export class Input implements Component, Focusable {
 		const props: TspInputProps = {
 			text: value,
 			cursor,
+			sendable: false,
 			prompt: prompt || undefined,
 			placeholder: this.placeholder,
 		};

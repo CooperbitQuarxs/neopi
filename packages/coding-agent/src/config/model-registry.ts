@@ -1,11 +1,13 @@
 import * as path from "node:path";
 import type { ApiKeyResolver, FetchImpl, ResolvedApiKey, UsageProvider } from "@oh-my-pi/pi-ai";
-import type { AuthApiKeyOptions } from "@oh-my-pi/pi-ai/auth-storage";
+import { type AuthApiKeyOptions, oauthAccountKey } from "@oh-my-pi/pi-ai/auth-storage";
 import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { registerOAuthProvider, unregisterOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import { setCodexAttestationProvider } from "@oh-my-pi/pi-ai/providers/openai-codex-attestation";
 import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
+import { getEnvApiKey } from "@oh-my-pi/pi-ai/env-api-key";
+import { OAuthRefreshUnavailableError } from "@oh-my-pi/pi-ai/error";
 import type {
 	Api,
 	Context,
@@ -44,10 +46,12 @@ import {
 	resolveOllamaModelCacheProviderId,
 } from "@oh-my-pi/pi-catalog/provider-models";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
-import { modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
+import { apiServesKind, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
+import { isOfficialCodexApiUrl } from "@oh-my-pi/pi-catalog/wire/codex";
 import { getAgentDir, isBunTestRuntime, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
+import { redactUrlForLog } from "../mcp/json-rpc";
 import type { AuthStorage } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import type { ConfigError, ConfigFile } from "./config-file";
@@ -97,6 +101,7 @@ import {
 	resolveProviderBaseUrl,
 	type ProviderOverride,
 	providersWithAuthoritativeProjectCatalog,
+	unservedOverrideKind,
 } from "./model-patch";
 import {
 	BUILT_IN_DISCOVERY_CACHE_TTL_MS,
@@ -110,7 +115,7 @@ import {
 	kNoAuth,
 	type ProviderDiscoveryState,
 	RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS,
-	resolveCodexDiscoveryAccounts,
+	resolveOAuthDiscoveryAccounts,
 	SPECIAL_MODEL_MANAGER_PROVIDER_IDS,
 	STARTUP_MODEL_CACHE_PROVIDER_IDS,
 	withModelDiscoveryTimeout,
@@ -124,12 +129,22 @@ export {
 	type ProviderDiscoveryStatus,
 } from "./model-provider-discovery";
 
-import { ModelsConfigFile, type ProviderValidationModel, validateProviderConfiguration } from "./models-config";
+import {
+	getUnknownCompatKeys,
+	ModelsConfigFile,
+	type ProviderValidationModel,
+	validateProviderConfiguration,
+} from "./models-config";
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
 import { type Settings, settings } from "./settings";
 
 import { cfgDisabledProviders } from "./model-settings";
-import { cfgExtendedContext } from "../session/context-settings";
+import {
+	cfgCompactionModelThresholds,
+	cfgCompactionModelThresholdsEnabled,
+	cfgExtendedContext,
+} from "../session/context-settings";
+import { matchModelCompactionThreshold } from "./compaction-threshold";
 
 // DeviceCheck attestation (`x-oai-attestation`) for ChatGPT-OAuth Codex
 // requests; the pi-ai provider resolves it just-in-time per request.
@@ -137,6 +152,8 @@ setCodexAttestationProvider(generateCodexAttestation);
 
 /** One built-in discovery pass rewriting more payload rows than this is debug-logged. */
 const MODEL_CACHE_REWRITE_LOG_THRESHOLD = 5;
+/** `scheme://user:pass@` in free text (e.g. a fetch error echoing the request URL). */
+const URL_USERINFO_RE = /([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi;
 const BUILT_IN_MODEL_MANAGER_PROVIDER_IDS: Readonly<Record<string, true>> = Object.freeze(
 	Object.fromEntries(
 		[...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId), ...SPECIAL_MODEL_MANAGER_PROVIDER_IDS].map(
@@ -218,6 +235,39 @@ function isExtendedContextEnabledFromSettings(settingsInstance?: Settings): bool
 	}
 }
 
+/** The `compaction.modelThresholds` map in force, or undefined when it is switched off or unreadable. */
+function getModelCompactionPointsFromSettings(settingsInstance?: Settings): unknown {
+	try {
+		const scope = settingsInstance ?? settings;
+		return cfgCompactionModelThresholdsEnabled.get(scope) ? cfgCompactionModelThresholds.get(scope) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Whether `model`'s `compaction.modelThresholds` token entry needs more than
+ * `window`. A base entry stands in for the window, so it needs a larger one
+ * once it exceeds `window`; a fixed trigger (`"f90000"`) needs room above it,
+ * so it does at `window` already. Such an entry opts that model into its
+ * extended window. Percentage entries scale with the window and never opt in.
+ */
+function compactionPointReaches(points: unknown, model: Model<Api>, window: number): boolean {
+	const threshold = matchModelCompactionThreshold(points, model)?.threshold;
+	if (!threshold || threshold.thresholdTokens <= 0) return false;
+	return threshold.fixed ? threshold.thresholdTokens >= window : threshold.thresholdTokens > window;
+}
+
+function contextWindowKey(model: { provider: string; id: string }): string {
+	return `${model.provider}\u0000${model.id}`;
+}
+
+/** The context window a model runs with by default, and the larger one extended context opts it into. */
+export interface ContextWindowTiers {
+	standard: number;
+	extended: number;
+}
+
 /** Rows of a registry layer owned by `providerFilter`, or the whole layer when unfiltered. */
 function selectProviderModels<T extends { provider: string }>(models: T[], providerFilter?: ReadonlySet<string>): T[] {
 	return providerFilter ? models.filter(model => providerFilter.has(model.provider)) : models;
@@ -267,66 +317,7 @@ export class ModelRegistry {
 	#catalogMetrics = new CatalogMetricsIndex();
 	#internedStaticModels: Map<string, Model<Api>> = new Map();
 	#providerLookupSnapshots: Map<string, Model<Api>[]> = new Map();
-	#fullKindSnapshotSource: Model<Api>[] | undefined;
-	#fullKindSnapshots: Partial<Record<ModelKind, Model<Api>[]>> = {};
-	/** Raw window provenance follows the model that supplied the effective window, not its transport. */
-	#standardWindows = new WeakMap<Model<Api>, number>();
-	#validWindow(value: number | null | undefined): number | undefined {
-		return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-	}
-	#captureWindow(model: Model<Api>): Model<Api> {
-		const window = this.#validWindow(model.contextWindow);
-		if (window !== undefined) {
-			const priced = model.contextWindowAuthoritative
-				? undefined
-				: this.#validWindow(model.cost.longContext?.inputThreshold);
-			this.#standardWindows.set(model, Math.min(window, priced ?? window));
-		}
-		return model;
-	}
-	#captureCachedWindow(model: Model<Api>): Model<Api> {
-		// A materialized cached maximum cannot independently verify its original window.
-		return resolveMaxContextWindow(model) === undefined ? this.#captureWindow(model) : model;
-	}
-	#carryWindow(source: Model<Api>, result: Model<Api>): Model<Api> {
-		const window = this.#standardWindows.get(source);
-		if (window !== undefined) this.#standardWindows.set(result, window);
-		return result;
-	}
-
-	/** Standard, pre-extension capacity of this row, conservatively bounded by effective and paid limits. */
-	standardContextWindow(model: Model<Api>, fallbackWindow: number): number {
-		let window = this.#standardWindows.get(model) ?? this.#validWindow(fallbackWindow) ?? 128_000;
-		const effective = this.#validWindow(model.contextWindow);
-		if (effective !== undefined) window = Math.min(window, effective);
-		if (!model.contextWindowAuthoritative) {
-			const billedThreshold = this.#validWindow(model.cost.longContext?.inputThreshold);
-			if (billedThreshold !== undefined) window = Math.min(window, billedThreshold);
-		}
-		return window;
-	}
-	#collapseWithWindows(models: Model<Api>[]): Model<Api>[] {
-		const collapsed = collapseBuiltVariants(models);
-		if (collapsed.length === models.length && collapsed.every((model, index) => model === models[index])) {
-			return collapsed;
-		}
-		const inputRefs = new Set(models);
-		const rebuilt = collapsed.filter(model => !inputRefs.has(model));
-		if (rebuilt.length === 0) return collapsed;
-		const byKey = new Map<string, Model<Api>>(models.map(model => [`${model.provider}\u0000${model.id}`, model]));
-		for (const result of rebuilt) {
-			const sourceIds = new Set([
-				result.id,
-				result.requestModelId,
-				...Object.values(result.thinking?.effortRouting ?? {}),
-			]);
-			const source = [...sourceIds]
-				.map(id => (id === undefined ? undefined : byKey.get(`${result.provider}\u0000${id}`)))
-				.find(model => model?.contextWindow === result.contextWindow);
-			if (source) this.#carryWindow(source, result);
-		}
-		return collapsed;
-	}
+	#fullKindSnapshots = new WeakMap<Model<Api>[], Partial<Record<ModelKind, Model<Api>[]>>>();
 	#customProviderApiKeys: Map<string, string> = new Map();
 	// Every command-backed (`!cmd`) config value a provider carries — apiKey plus
 	// provider/model-override header values — keyed by provider. The 401 auth
@@ -339,10 +330,23 @@ export class ModelRegistry {
 	// implicit local set; registration adds them immediately as well.
 	#runtimeKeylessProviders: Set<string> = new Set();
 	#discoverableProviders: DiscoveryProviderConfig[] = [];
+	/**
+	 * Local providers registered without a models.yml entry (ollama, llama.cpp,
+	 * lm-studio, apple). Their models sort after every other provider's, so a
+	 * bare id the user also defined in models.yml resolves to the configured one.
+	 */
+	#implicitLocalProviders: Set<string> = new Set();
+	/** Implicit local provider → env var that set its discovery endpoint. */
+	#implicitProviderEndpointEnv: Map<string, string> = new Map();
 	#customModelOverlays: CustomModelOverlay[] = [];
 	#providerOverrides: Map<string, ProviderOverride> = new Map();
 	#modelOverrides: Map<string, Map<string, ModelOverride>> = new Map();
+	// `provider/id:kind` of modelOverrides kinds already reported as unserved, so
+	// every rebuild does not log the same ignored override again.
+	#warnedUnservedOverrideKinds: Set<string> = new Set();
 	#configError: ConfigError | undefined = undefined;
+	#warnedCompatKeys = new Set<string>();
+	#configWarnings: string[] = [];
 	#modelsConfigFile: ConfigFile<ModelsConfig>;
 	#lastStaticLoadMtime: number | null = null;
 	#registeredProviderSources: Set<string> = new Set();
@@ -360,6 +364,15 @@ export class ModelRegistry {
 		Map<ModelRefreshStrategy, Promise<ConfiguredModelDiscoveryResult>>
 	> = new Map();
 	#policyReapply?: Promise<void>;
+	// Window tiers of models whose extended window is larger: per row as the
+	// hardcoded policies produced it (custom overlays replacing that row never
+	// inherit them), and per `contextWindowKey` as composition finalized them.
+	#policyWindowTiers = new WeakMap<Model<Api>, ContextWindowTiers>();
+	#windowTiers = new Map<string, ContextWindowTiers>();
+	/** Verified standard capacity belongs to a published row, not just its provider/id. */
+	#standardWindows = new WeakMap<Model<Api>, number>();
+	// A catalog row refitted to the other tier by `fitContextWindow`; a row has only one other tier.
+	#refittedRows = new WeakMap<Model<Api>, Model<Api>>();
 	#lastDiscoveryWarnings: Map<string, string> = new Map();
 	// Runtime extension model overlays — persist across refresh() cycles so that
 	// models registered by extensions survive the model selector's offline reload.
@@ -396,14 +409,39 @@ export class ModelRegistry {
 		this.#catalogMetrics.add(models);
 	}
 
-	#withCatalogMetrics(models: Model<Api>[]): Model<Api>[] {
-		const result = applyCatalogMetrics(models, this.#catalogMetrics);
-		if (result !== models) {
-			for (let i = 0; i < result.length; i++) {
-				if (result[i] !== models[i]) this.#carryWindow(models[i], result[i]);
+	/** Final pass over every published model list: catalog metrics, then implicit local providers last. */
+	#finalizeModels(models: Model<Api>[]): Model<Api>[] {
+		const finalized = this.#orderImplicitProvidersLast(applyCatalogMetrics(models, this.#catalogMetrics));
+		for (const model of finalized) {
+			const standard = this.#windowTiers.get(contextWindowKey(model))?.standard ?? model.contextWindow;
+			if (typeof standard === "number" && Number.isSafeInteger(standard) && standard > 0) {
+				this.#standardWindows.set(model, standard);
 			}
 		}
-		return result;
+		return finalized;
+	}
+
+	/**
+	 * Stable-partition implicit local provider models after all others. Model
+	 * resolution breaks ties between equally ranked candidates by list order, so
+	 * this keeps an auto-discovered endpoint (e.g. `OLLAMA_BASE_URL`) from
+	 * shadowing a same-named model the user configured explicitly.
+	 */
+	#orderImplicitProvidersLast(models: Model<Api>[]): Model<Api>[] {
+		const implicit = this.#implicitLocalProviders;
+		if (implicit.size === 0) return models;
+		let sawImplicit = false;
+		for (const model of models) {
+			if (implicit.has(model.provider)) {
+				sawImplicit = true;
+			} else if (sawImplicit) {
+				const explicit: Model<Api>[] = [];
+				const deferred: Model<Api>[] = [];
+				for (const candidate of models) (implicit.has(candidate.provider) ? deferred : explicit).push(candidate);
+				return explicit.concat(deferred);
+			}
+		}
+		return models;
 	}
 
 	/**
@@ -825,7 +863,7 @@ export class ModelRegistry {
 		}
 		const unprojected = resolveProviderModelReference(current.provider, current.id, this.#unprojectedModels);
 		if (unprojected) {
-			const patchedBase = this.#carryWindow(unprojected, applyModelPatch(unprojected, patch, "merge"));
+			const patchedBase = applyModelPatch(unprojected, patch, "merge");
 			this.#unprojectedModels = this.#unprojectedModels.map(candidate =>
 				candidate.provider === unprojected.provider && candidate.id === unprojected.id ? patchedBase : candidate,
 			);
@@ -837,10 +875,12 @@ export class ModelRegistry {
 					candidate.provider === base.provider && candidate.id === base.id ? patchedResolved : candidate,
 				);
 			}
-			this.#models = this.#withCatalogMetrics(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
+			this.#models = this.#finalizeModels(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
 			return resolveProviderModelReference(current.provider, current.id, this.#models) ?? patchedBase;
 		}
-		const patched = this.#carryWindow(current, applyModelPatch(current, patch, "merge"));
+		const patched = applyModelPatch(current, patch, "merge");
+		const standard = this.#standardWindows.get(current);
+		if (standard !== undefined) this.#standardWindows.set(patched, standard);
 		this.#models = this.#models.map(candidate =>
 			candidate.provider === current.provider && candidate.id === current.id ? patched : candidate,
 		);
@@ -964,6 +1004,17 @@ export class ModelRegistry {
 		return this.#configError;
 	}
 
+	/**
+	 * Drain non-fatal diagnostics: models.yml key problems (once per key path)
+	 * and discovery failures of env-redirected built-in providers (once per
+	 * distinct error).
+	 */
+	drainConfigWarnings(): string[] {
+		const warnings = this.#configWarnings;
+		this.#configWarnings = [];
+		return warnings;
+	}
+
 	#loadModels() {
 		this.#resetStaticComposition();
 		// Load custom config first (to know which providers to override).
@@ -1003,7 +1054,6 @@ export class ModelRegistry {
 		this.#unprojectedModels = [];
 		this.#baseModels = [];
 		this.#hasFullSnapshot = false;
-		this.#standardWindows = new WeakMap();
 		this.#cachedStandardModelsByProvider.clear();
 		this.#pendingStandardCacheProviders.clear();
 		this.#cachedAuthoritativeProviders.clear();
@@ -1087,7 +1137,6 @@ export class ModelRegistry {
 				// reader crashes, or an identity left over from a different id.
 				// Rows of other providers pass through untouched; rebuilding a
 				// full catalog on every projection costs more than it can fix.
-				const originals = new Map(projected.map(model => [`${model.provider}\u0000${model.id}`, model]));
 				projected = modifyModels(snapshot, credential).map(model => {
 					const withHeaders =
 						model.resolveHeaders && model.headers
@@ -1097,24 +1146,17 @@ export class ModelRegistry {
 									resolveHeaders: createConfigHeaderResolver([model.resolveHeaders, model.headers]),
 								}
 							: model;
-					if (withHeaders.provider !== providerName) {
-						const original = originals.get(`${withHeaders.provider}\u0000${withHeaders.id}`);
-						return original
-							? this.#carryWindow(original, withHeaders as Model<Api>)
-							: (withHeaders as Model<Api>);
-					}
+					if (withHeaders.provider !== providerName) return withHeaders as Model<Api>;
 					// `identity` exists only on built rows. Without it the hook
 					// authored a spec, where `compat` already is the sparse
 					// override `toModelSpec` would drop while reading the absent
 					// `compatConfig`; built rows keep resolving from that field
 					// instead of feeding the resolved view back in as an override.
-					const rebuilt = buildModel(
+					return buildModel(
 						withHeaders.identity === undefined
 							? (withHeaders as ModelSpec<Api>)
 							: toModelSpec(withHeaders as Model<Api>),
 					);
-					const original = originals.get(`${rebuilt.provider}\u0000${rebuilt.id}`);
-					return original ? this.#carryWindow(original, rebuilt) : rebuilt;
 				});
 			} catch (error) {
 				this.#warnModelModifierFailure(providerName, error instanceof Error ? error.message : String(error));
@@ -1186,7 +1228,7 @@ export class ModelRegistry {
 			withConfigModels,
 			selectProviderModels(this.#runtimeModelOverlays, providerFilter),
 		);
-		const withModelOverrides = this.#applyModelOverrides(this.#collapseWithWindows(combined), this.#modelOverrides);
+		const withModelOverrides = this.#applyModelOverrides(collapseBuiltVariants(combined), this.#modelOverrides);
 		const withProviderBedrock = this.#applyProviderBedrockOverrides(withModelOverrides);
 		return this.#applyDiscoveryPolicies(this.#applyRuntimeProviderOverrides(withProviderBedrock));
 	}
@@ -1197,7 +1239,7 @@ export class ModelRegistry {
 		const projectFullCatalog = providerFilter !== undefined && this.#runtimeModelModifiers.size > 0;
 		const compositionFilter = projectFullCatalog ? undefined : providerFilter;
 		const unprojected = this.#projectBaseModels(this.#composeBaseModels(compositionFilter), compositionFilter);
-		const projected = this.#withCatalogMetrics(this.#applyRuntimeModelModifiers(unprojected));
+		const projected = this.#finalizeModels(this.#applyRuntimeModelModifiers(unprojected));
 		const selected = projectFullCatalog ? projected.filter(model => providerFilter.has(model.provider)) : projected;
 		return this.#internStaticModels(selected);
 	}
@@ -1207,7 +1249,7 @@ export class ModelRegistry {
 			this.#baseModels = this.#composeBaseModels();
 			this.#unprojectedModels = this.#projectBaseModels(this.#baseModels);
 			this.#models = this.#internStaticModels(
-				this.#withCatalogMetrics(this.#applyRuntimeModelModifiers(this.#unprojectedModels)),
+				this.#finalizeModels(this.#applyRuntimeModelModifiers(this.#unprojectedModels)),
 			);
 			this.#hasFullSnapshot = true;
 			this.#providerLookupSnapshots.clear();
@@ -1224,16 +1266,12 @@ export class ModelRegistry {
 			const providerOverride = overrides.get(provider);
 
 			return models.map(m => {
-				this.#captureWindow(m);
 				if (!providerOverride) return m;
 				const withTransportOverride = this.#applyProviderTransportOverride(toModelSpec(m), providerOverride);
-				return this.#carryWindow(
-					m,
-					buildModel({
-						...withTransportOverride,
-						compat: mergeCompat(m.compatConfig, providerOverride.compat),
-					} as ModelSpec<Api>),
-				);
+				return buildModel({
+					...withTransportOverride,
+					compat: mergeCompat(m.compatConfig, providerOverride.compat),
+				} as ModelSpec<Api>);
 			});
 		});
 	}
@@ -1241,15 +1279,25 @@ export class ModelRegistry {
 	#mergeResolvedModels(baseModels: Model<Api>[], replacementModels: Model<Api>[]): Model<Api>[] {
 		return mergeByModelKey(baseModels, replacementModels, (existing, replacementModel) => {
 			if (!existing) return replacementModel;
+			const contextWindow = replacementModel.contextWindow ?? existing.contextWindow;
+			const maxTokens = replacementModel.maxTokens ?? existing.maxTokens;
+			const omitMaxOutputTokens = replacementModel.omitMaxOutputTokens ?? existing.omitMaxOutputTokens;
 			const supportsTools = replacementModel.supportsTools ?? existing.supportsTools;
-			const windowSource = replacementModel.contextWindow == null ? existing : replacementModel;
-			return this.#carryWindow(windowSource, {
+			if (
+				contextWindow === replacementModel.contextWindow &&
+				maxTokens === replacementModel.maxTokens &&
+				omitMaxOutputTokens === replacementModel.omitMaxOutputTokens &&
+				supportsTools === replacementModel.supportsTools
+			) {
+				return replacementModel;
+			}
+			return {
 				...replacementModel,
-				contextWindow: replacementModel.contextWindow ?? existing.contextWindow,
-				maxTokens: replacementModel.maxTokens ?? existing.maxTokens,
-				omitMaxOutputTokens: replacementModel.omitMaxOutputTokens ?? existing.omitMaxOutputTokens,
+				contextWindow,
+				maxTokens,
+				omitMaxOutputTokens,
 				...(supportsTools !== undefined ? { supportsTools } : {}),
-			});
+			};
 		});
 	}
 
@@ -1271,22 +1319,23 @@ export class ModelRegistry {
 						"replace",
 					)
 				: finalizeCustomModel(customModel, { useDefaults: true });
-			if (customModel.contextWindow !== undefined) {
-				this.#captureWindow(model);
-			} else if (existingModel) {
-				this.#carryWindow(existingModel, model);
-			}
 			const override = this.#providerOverrides.get(model.provider);
-			// Reapply only the transport; it cannot change the chosen window.
-			return override?.transport
-				? this.#carryWindow(
-						model,
-						this.#applyProviderTransportOverride(model, {
-							baseUrl: override.baseUrl,
-							transport: override.transport,
-						}),
-					)
+			// Custom composition already resolved headers and metadata. Reapply only
+			// the provider transport and its gateway URL, without rebuilding the model.
+			const merged = override?.transport
+				? this.#applyProviderTransportOverride(model, {
+						baseUrl: override.baseUrl,
+						transport: override.transport,
+					})
 				: model;
+			// An overlay that authors no window keeps the bundled row's window, so it
+			// keeps that row's policy tiers too; one that authors a window owns its own.
+			const inheritedTiers =
+				existingModel && customModel.contextWindow === undefined && customModel.maxContextWindow === undefined
+					? this.#policyWindowTiers.get(existingModel)
+					: undefined;
+			if (inheritedTiers) this.#policyWindowTiers.set(merged, inheritedTiers);
+			return merged;
 		});
 	}
 
@@ -1365,7 +1414,6 @@ export class ModelRegistry {
 			const bundledById = bundledModels
 				? new Map(bundledModels.map(bundledModel => [bundledModel.id, bundledModel]))
 				: undefined;
-			let standardBundledById: Map<string, Model<Api>> | undefined;
 			const models: Model<Api>[] = [];
 			for (const cachedModel of cache.models) {
 				// Shared catalog rows can be projected under another provider id.
@@ -1376,26 +1424,6 @@ export class ModelRegistry {
 						? cachedModel
 						: buildModel({ ...toModelSpec(cachedModel), provider: providerId });
 				if (additiveCacheStaticMismatch && bundledById?.has(model.id)) continue;
-				// A materialized cache window may already be extended. Only an independent
-				// bundled row can verify its original capacity; never rebuild the cache row.
-				const maximum = resolveMaxContextWindow(model);
-				if (maximum !== undefined && this.#validWindow(model.contextWindow) !== undefined) {
-					if (!standardBundledById && getBundledProviders().some(provider => provider === providerId)) {
-						standardBundledById =
-							bundledById ??
-							new Map(
-								(getBundledModels(providerId as Parameters<typeof getBundledModels>[0]) as Model<Api>[]).map(
-									bundled => [bundled.id, bundled],
-								),
-							);
-					}
-					const bundled = standardBundledById?.get(model.id);
-					const bundledWindow = bundled && this.#standardWindows.get(this.#captureWindow(bundled));
-					if (bundledWindow !== undefined)
-						this.#standardWindows.set(model, Math.min(bundledWindow, model.contextWindow!));
-				} else {
-					this.#captureWindow(model);
-				}
 				if (!omittedHeaderIds.has(model.id)) {
 					models.push(model);
 					continue;
@@ -1413,19 +1441,16 @@ export class ModelRegistry {
 							(model.requestModelId ? bundledById?.get(model.requestModelId) : undefined))
 				)?.headers;
 				if (!bundledHeaders) continue;
-				models.push(this.#carryWindow(model, { ...model, headers: bundledHeaders }));
+				models.push({ ...model, headers: bundledHeaders });
 			}
 			const providerOverride = this.#providerOverrides.get(providerId);
 			const withCompat = providerOverride
 				? models.map(model => {
 						const spec = this.#applyProviderTransportOverride(toModelSpec(model), providerOverride);
-						return this.#carryWindow(
-							model,
-							buildModel({
-								...spec,
-								compat: mergeCompat(model.compatConfig, providerOverride.compat),
-							}),
-						);
+						return buildModel({
+							...spec,
+							compat: mergeCompat(model.compatConfig, providerOverride.compat),
+						});
 					})
 				: models;
 			const resolved = this.#applyProviderModelOverrides(providerId, withCompat);
@@ -1531,10 +1556,8 @@ export class ModelRegistry {
 					: cache.models.filter(model => !omittedHeaderIds.has(model.id));
 			const providerOverride = this.#providerOverrides.get(providerConfig.provider);
 			const restoredCacheModels = providerOverride
-				? usableCacheModels.map(model =>
-						this.#applyProviderTransportOverrideToModel(this.#captureCachedWindow(model), providerOverride),
-					)
-				: usableCacheModels.map(model => this.#captureCachedWindow(model));
+				? usableCacheModels.map(model => this.#applyProviderTransportOverrideToModel(model, providerOverride))
+				: usableCacheModels;
 			const models = this.#applyProviderModelOverrides(
 				providerConfig.provider,
 				this.#normalizeDiscoverableModels(
@@ -1563,10 +1586,7 @@ export class ModelRegistry {
 	#applyProviderCompat(compat: ModelSpec<Api>["compat"] | undefined, models: Model<Api>[]): Model<Api>[] {
 		if (!compat) return models;
 		return models.map(model =>
-			this.#carryWindow(
-				model,
-				buildModel({ ...model, compat: mergeCompat(model.compatConfig, compat) } as ModelSpec<Api>),
-			),
+			buildModel({ ...model, compat: mergeCompat(model.compatConfig, compat) } as ModelSpec<Api>),
 		);
 	}
 
@@ -1576,26 +1596,20 @@ export class ModelRegistry {
 			providerConfig.discovery.type === "llama.cpp" ||
 			providerConfig.discovery.type === "lm-studio"
 				? models.map(model =>
-						this.#carryWindow(
-							model,
-							buildModel({ ...model, imageInputDecoder: "stb", compat: model.compatConfig } as ModelSpec<Api>),
-						),
+						buildModel({ ...model, imageInputDecoder: "stb", compat: model.compatConfig } as ModelSpec<Api>),
 					)
 				: models;
 
 		const withRemoteCompaction = providerConfig.remoteCompaction
 			? withDecoderMetadata.map(model =>
-					this.#carryWindow(
-						model,
-						buildModel({
-							...model,
-							remoteCompaction: mergeProviderRemoteCompactionConfig(
-								model.remoteCompaction,
-								providerConfig.remoteCompaction,
-							),
-							compat: model.compatConfig,
-						} as ModelSpec<Api>),
-					),
+					buildModel({
+						...model,
+						remoteCompaction: mergeProviderRemoteCompactionConfig(
+							model.remoteCompaction,
+							providerConfig.remoteCompaction,
+						),
+						compat: model.compatConfig,
+					} as ModelSpec<Api>),
 				)
 			: withDecoderMetadata;
 
@@ -1607,41 +1621,46 @@ export class ModelRegistry {
 		return withRemoteCompaction.map(model => {
 			const normalized =
 				model.api === "openai-completions"
-					? this.#carryWindow(
-							model,
-							buildModel({
-								...model,
-								api: "openai-responses" as const,
-								compat: model.compatConfig,
-							} as ModelSpec<Api>),
-						)
+					? buildModel({
+							...model,
+							api: "openai-responses" as const,
+							compat: model.compatConfig,
+						} as ModelSpec<Api>)
 					: model;
 			if (contextLengthOverride === undefined) {
 				return normalized;
 			}
-			return this.#carryWindow(normalized, {
+			return {
 				...normalized,
 				contextWindow: contextLengthOverride,
 				maxTokens: Math.min(contextLengthOverride, DISCOVERY_DEFAULT_MAX_TOKENS),
-			});
+			};
 		});
 	}
 
 	#addImplicitDiscoverableProviders(configuredProviders: Set<string>): void {
 		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
+		this.#implicitLocalProviders.clear();
+		this.#implicitProviderEndpointEnv.clear();
 		for (const provider of ["local", "web"]) {
 			if (!disabledProviders.has(provider)) this.#keylessProviders.add(provider);
 		}
-		const hasOllamaEndpointOverride = Boolean(Bun.env.OLLAMA_BASE_URL?.trim() || Bun.env.OLLAMA_HOST?.trim());
+		const ollamaEndpointEnv = Bun.env.OLLAMA_BASE_URL?.trim()
+			? "OLLAMA_BASE_URL"
+			: Bun.env.OLLAMA_HOST?.trim()
+				? "OLLAMA_HOST"
+				: undefined;
 		if (!configuredProviders.has("ollama") && !disabledProviders.has("ollama")) {
 			this.#discoverableProviders.push({
 				provider: "ollama",
 				api: "openai-responses",
 				baseUrl: getImplicitOllamaBaseUrl(),
 				discovery: { type: "ollama" },
-				optional: !hasOllamaEndpointOverride,
+				optional: ollamaEndpointEnv === undefined,
 			});
 			this.#keylessProviders.add("ollama");
+			this.#implicitLocalProviders.add("ollama");
+			if (ollamaEndpointEnv) this.#implicitProviderEndpointEnv.set("ollama", ollamaEndpointEnv);
 		}
 		if (!configuredProviders.has("llama.cpp") && !disabledProviders.has("llama.cpp")) {
 			this.#discoverableProviders.push({
@@ -1655,6 +1674,8 @@ export class ModelRegistry {
 			if (this.authStorage.keys.source("llama.cpp") === undefined) {
 				this.#keylessProviders.add("llama.cpp");
 			}
+			this.#implicitLocalProviders.add("llama.cpp");
+			if (Bun.env.LLAMA_CPP_BASE_URL) this.#implicitProviderEndpointEnv.set("llama.cpp", "LLAMA_CPP_BASE_URL");
 		}
 		if (
 			process.platform === "darwin" &&
@@ -1670,6 +1691,7 @@ export class ModelRegistry {
 				optional: true,
 			});
 			this.#keylessProviders.add("apple");
+			this.#implicitLocalProviders.add("apple");
 		}
 		if (!configuredProviders.has("lm-studio") && !disabledProviders.has("lm-studio")) {
 			this.#discoverableProviders.push({
@@ -1680,6 +1702,8 @@ export class ModelRegistry {
 				optional: !Bun.env.LM_STUDIO_BASE_URL,
 			});
 			this.#keylessProviders.add("lm-studio");
+			this.#implicitLocalProviders.add("lm-studio");
+			if (Bun.env.LM_STUDIO_BASE_URL) this.#implicitProviderEndpointEnv.set("lm-studio", "LM_STUDIO_BASE_URL");
 		}
 	}
 
@@ -1725,6 +1749,14 @@ export class ModelRegistry {
 				configuredProviders: new Set(),
 				found: false,
 			};
+		}
+
+		for (const keyPath of getUnknownCompatKeys(value)) {
+			if (this.#warnedCompatKeys.has(keyPath)) continue;
+			this.#warnedCompatKeys.add(keyPath);
+			this.#configWarnings.push(
+				`Unknown compat key in ${this.#modelsConfigFile.path()}: ${keyPath} (configuration still loaded).`,
+			);
 		}
 
 		const overrides = new Map<string, ProviderOverride>();
@@ -1889,19 +1921,13 @@ export class ModelRegistry {
 		for (const provider of builtInDiscovery.authoritativeProviders) touchedProviders.add(provider);
 		const referenceModels = this.#composeDiscoveryReferenceModels(touchedProviders);
 		const discoveredModels = this.#applyHardcodedModelPolicies(
-			discovered.map(model => {
-				// Provider discovery owns its supplied window; the merge only changes
-				// transport and capabilities. Preserve raw provenance across that build.
-				if (!this.#standardWindows.has(model)) this.#captureCachedWindow(model);
-				return this.#carryWindow(
+			discovered.map(model =>
+				mergeDiscoveredModel(
 					model,
-					mergeDiscoveredModel(
-						model,
-						resolveProviderModelReference(model.provider, model.id, referenceModels),
-						this.#providerOverrides.get(model.provider),
-					),
-				);
-			}),
+					resolveProviderModelReference(model.provider, model.id, referenceModels),
+					this.#providerOverrides.get(model.provider),
+				),
+			),
 		);
 		const authoritativeProviders = providersWithAuthoritativeProjectCatalog(discoveredModels);
 		for (const provider of builtInDiscovery.authoritativeProviders) {
@@ -1946,7 +1972,7 @@ export class ModelRegistry {
 		}
 		this.#baseModels = this.#mergeResolvedModels(baseModels, discoveredModels);
 		this.#unprojectedModels = this.#projectBaseModels(this.#baseModels);
-		this.#models = this.#withCatalogMetrics(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
+		this.#models = this.#finalizeModels(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
 	}
 
 	/**
@@ -2039,20 +2065,14 @@ export class ModelRegistry {
 		const providerId = providerConfig.provider;
 		let discoveryError: string | undefined;
 		let discoveryAuthRejected = false;
-		const verifiedDiscoveredWindows = new Map<string, number>();
 		const fetchDynamicModels = async (): Promise<readonly ModelSpec<Api>[] | null> => {
 			try {
 				const resolvedHeaders = await resolveConfigHeaders(providerConfig.headers);
 				const requestConfig = { ...providerConfig, headers: resolvedHeaders };
-				const rawModels = await discoverModelsByProviderType(requestConfig, this.#discoveryContext());
-				for (const model of rawModels) {
-					const window = this.#validWindow(model.contextWindow);
-					const maximum = resolveMaxContextWindow(model);
-					if (window !== undefined && (maximum === undefined || window < maximum)) {
-						verifiedDiscoveredWindows.set(model.id, window);
-					}
-				}
-				const models = this.#applyProviderModelOverrides(providerId, rawModels);
+				const models = this.#applyProviderModelOverrides(
+					providerId,
+					await discoverModelsByProviderType(requestConfig, this.#discoveryContext()),
+				);
 				this.#lastDiscoveryWarnings.delete(providerId);
 				return models.map(toModelSpec);
 			} catch (error) {
@@ -2113,15 +2133,7 @@ export class ModelRegistry {
 				providerId,
 				this.#normalizeDiscoverableModels(
 					providerConfig,
-					this.#applyProviderCompat(
-						providerConfig.compat,
-						result.models.map(model => {
-							const window = verifiedDiscoveredWindows.get(model.id);
-							if (window !== undefined) this.#standardWindows.set(model, window);
-							else this.#captureCachedWindow(model);
-							return model;
-						}),
-					),
+					this.#applyProviderCompat(providerConfig.compat, result.models),
 				),
 			),
 			replaceRuntimeModels: result.source === "provider",
@@ -2154,11 +2166,24 @@ export class ModelRegistry {
 			return;
 		}
 		this.#lastDiscoveryWarnings.set(providerConfig.provider, error);
+		const { baseUrl } = providerConfig;
+		const url = baseUrl && redactUrlForLog(baseUrl);
 		logger.warn("model discovery failed for provider", {
 			provider: providerConfig.provider,
-			url: providerConfig.baseUrl,
+			url,
 			error,
 		});
+		// An env var silently redirected a built-in provider the user never
+		// configured; a log line alone leaves its failures untraceable.
+		const endpointEnv = this.#implicitProviderEndpointEnv.get(providerConfig.provider);
+		if (endpointEnv && baseUrl && url) {
+			const provider = providerConfig.provider;
+			// The endpoint env var may embed `user:pass@`, and fetch errors can echo it.
+			const detail = error.replaceAll(baseUrl, url).replace(URL_USERINFO_RE, "$1").replace(/\s+/g, " ").trim();
+			this.#configWarnings.push(
+				`Built-in ${provider} provider: model discovery at ${url} (from ${endpointEnv}) failed. Fix or unset ${endpointEnv}, or add "${provider}" to disabledProviders. Error: ${detail}`,
+			);
+		}
 	}
 
 	async #discoverBuiltInProviderModels(
@@ -2273,24 +2298,33 @@ export class ModelRegistry {
 	): Promise<ModelManagerOptions<Api>[]> {
 		const specialProviderDescriptors: Array<{
 			providerId: string;
-			authoritative: boolean;
 			resolveKey: (value: string | undefined) => string | undefined;
 			createOptions: (key: string, raw: string | undefined) => ModelManagerOptions<Api>;
 		}> = [
 			{
 				providerId: "google-antigravity",
-				authoritative: false,
 				resolveKey: extractGoogleOAuthToken,
 				createOptions: oauthToken =>
 					googleAntigravityModelManagerOptions({
-						oauthToken,
+						resolveAccounts: async () => {
+							const accounts = await resolveOAuthDiscoveryAccounts(
+								this.authStorage,
+								"google-antigravity",
+								oauthToken,
+							);
+							return (
+								accounts?.map(account => ({
+									accessToken: account.accessToken,
+									accountKey: oauthAccountKey(account),
+								})) ?? null
+							);
+						},
 						endpoint: this.#descriptorBaseUrl("google-antigravity"),
 						fetch: this.#fetch,
 					}),
 			},
 			{
 				providerId: "google-gemini-cli",
-				authoritative: false,
 				resolveKey: extractGoogleOAuthToken,
 				createOptions: (oauthToken, raw) =>
 					googleGeminiCliModelManagerOptions({
@@ -2302,13 +2336,34 @@ export class ModelRegistry {
 			},
 			{
 				providerId: "openai-codex",
-				authoritative: true,
 				resolveKey: value => value,
-				createOptions: accessToken =>
-					openaiCodexModelManagerOptions({
-						resolveAccounts: () => resolveCodexDiscoveryAccounts(this.authStorage, accessToken),
+				createOptions: accessToken => {
+					// A custom endpoint (models.yml `baseUrl`) receives only a configured,
+					// runtime, or command key. Official credentials (stored ChatGPT OAuth or
+					// the provider env token) keep discovering against chatgpt.com, as on a
+					// relay setup chat still works with them. The check looks at the token
+					// actually being sent: a runtime provider's command key is only a
+					// fallback behind a live OAuth token, which `peek` returns first.
+					const configuredBaseUrl = this.#descriptorBaseUrl("openai-codex");
+					const officialCredential =
+						accessToken === getEnvApiKey("openai-codex") ||
+						getOAuthCredentialsForProvider(this.authStorage, "openai-codex").some(
+							credential => credential.access === accessToken,
+						);
+					if (officialCredential || isOfficialCodexApiUrl(configuredBaseUrl)) {
+						return openaiCodexModelManagerOptions({
+							baseUrl: officialCredential ? undefined : configuredBaseUrl,
+							resolveAccounts: () =>
+								resolveOAuthDiscoveryAccounts(this.authStorage, "openai-codex", accessToken),
+							fetch: this.#fetch,
+						});
+					}
+					return openaiCodexModelManagerOptions({
+						baseUrl: configuredBaseUrl,
+						resolveAccounts: async () => [{ accessToken }],
 						fetch: this.#fetch,
-					}),
+					});
+				},
 			},
 		];
 		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
@@ -2340,7 +2395,7 @@ export class ModelRegistry {
 					descriptor.providerId,
 					strategy,
 					descriptor.providerId,
-					descriptor.authoritative,
+					AUTHORITATIVE_RUNTIME_CATALOG_PROVIDERS.has(descriptor.providerId),
 				),
 			),
 		);
@@ -2513,12 +2568,15 @@ export class ModelRegistry {
 		const providers = new Map(this.#discoverableProviders.map(config => [config.provider, config.discovery.type]));
 		return models.map(model => {
 			const providerType = providers.get(model.provider);
+			if (providerType === "litellm" && model.providerType !== providerType) {
+				return buildDiscoveredModel(toModelSpec(model), providerType);
+			}
 			if (providerType !== "llama.cpp") return model;
 			const spec = toModelSpec(model);
 			if (!model.transport) {
 				spec.baseUrl = ensureLlamaCppV1BaseUrl(normalizeLlamaCppBaseUrl(model.baseUrl));
 			}
-			return this.#carryWindow(model, buildDiscoveredModel(spec, providerType));
+			return buildDiscoveredModel(spec, providerType);
 		});
 	}
 
@@ -2579,7 +2637,7 @@ export class ModelRegistry {
 			"baseUrl" | "baseUrlApis" | "headers" | "authHeader" | "apiKey" | "remoteCompaction" | "transport"
 		>,
 	): Model<Api> {
-		return this.#carryWindow(model, buildModel(this.#applyProviderTransportOverride(toModelSpec(model), override)));
+		return buildModel(this.#applyProviderTransportOverride(toModelSpec(model), override));
 	}
 
 	#applyProviderBedrockOverrides(models: Model<Api>[]): Model<Api>[] {
@@ -2596,7 +2654,7 @@ export class ModelRegistry {
 			) {
 				return model;
 			}
-			return this.#carryWindow(model, buildModel({ ...toModelSpec(model), ...bedrockFields } as ModelSpec<Api>));
+			return buildModel({ ...toModelSpec(model), ...bedrockFields } as ModelSpec<Api>);
 		});
 	}
 
@@ -2634,7 +2692,12 @@ export class ModelRegistry {
 				}
 			}
 		}
-		if (overrides.size === 0 && customWindows.size === 0) return models;
+		if (overrides.size === 0 && customWindows.size === 0) {
+			for (const model of models) this.#recordWindowTiers(model, this.#policyWindowTiers.get(model));
+			return models;
+		}
+		const extendedContext = isExtendedContextEnabledFromSettings(this.#settings);
+		const compactionPoints = getModelCompactionPointsFromSettings(this.#settings);
 		let liveKeys: Set<string> | null = null;
 		const hasLiveModel = (provider: string, id: string) => {
 			liveKeys ??= new Set(models.map(m => `${m.provider}\u0000${m.id}`));
@@ -2650,21 +2713,118 @@ export class ModelRegistry {
 			// override remains fixed; an unrelated override preserves the custom pair.
 			const maximum =
 				override?.maxContextWindow ??
-				(override?.contextWindow === undefined
-					? customWindows.get(`${model.provider}\u0000${model.id}`)
-					: undefined);
-			return this.#applyConfiguredExtendedWindow(overridden, maximum, model);
+				(override?.contextWindow === undefined ? customWindows.get(contextWindowKey(model)) : undefined);
+			if (override?.contextWindow === undefined && maximum === undefined) {
+				this.#recordWindowTiers(model, this.#policyWindowTiers.get(model));
+				return overridden;
+			}
+			return this.#applyConfiguredExtendedWindow(overridden, maximum, model, {
+				pinned: override?.contextWindow !== undefined,
+				extendedContext,
+				compactionPoints,
+			});
 		});
 	}
 
-	#applyConfiguredExtendedWindow(model: Model<Api>, maximum: number | undefined, baseline: Model<Api>): Model<Api> {
-		if (maximum === undefined || !isExtendedContextEnabledFromSettings(this.#settings)) return model;
-		const standard = model.contextWindow;
-		if (standard === null || maximum <= standard) return model;
-		const window = clampsContextOverride(baseline) ? clampCodexContextWindow(baseline, maximum) : maximum;
-		return window === standard
-			? model
-			: this.#carryWindow(model, applyModelOverride(model, { contextWindow: window }));
+	#recordWindowTiers(model: Model<Api>, tiers: ContextWindowTiers | undefined): void {
+		if (tiers) this.#windowTiers.set(contextWindowKey(model), tiers);
+		else this.#windowTiers.delete(contextWindowKey(model));
+	}
+
+	/**
+	 * Finalizes the window of a row carrying an explicit `contextWindow` override
+	 * (`pinned`: the policy tiers no longer apply) and/or a configured maximum,
+	 * which extends from the policy's standard window when extended context is
+	 * on or the model's compaction point reaches past that window. Policy tiers
+	 * apply only to the row the hardcoded policies produced (`baseline`); a
+	 * custom overlay replacing it never went through them.
+	 */
+	#applyConfiguredExtendedWindow(
+		model: Model<Api>,
+		maximum: number | undefined,
+		baseline: Model<Api>,
+		options: { pinned: boolean; extendedContext: boolean; compactionPoints: unknown },
+	): Model<Api> {
+		const current = model.contextWindow;
+		const policy = options.pinned ? undefined : this.#policyWindowTiers.get(baseline);
+		const standard = policy?.standard ?? current;
+		if (current === null || standard === null) {
+			this.#recordWindowTiers(baseline, undefined);
+			return model;
+		}
+		const window =
+			maximum === undefined
+				? undefined
+				: clampsContextOverride(baseline)
+					? clampCodexContextWindow(baseline, maximum)
+					: maximum;
+		// The window an opt-in actually runs with: the policy's extended row
+		// (already applied upstream when opted in), widened by the configured maximum.
+		const extended = Math.max(policy?.extended ?? current, window ?? 0);
+		this.#recordWindowTiers(baseline, extended > standard ? { standard, extended } : undefined);
+		if (window === undefined || window <= current) return model;
+		if (!options.extendedContext && !compactionPointReaches(options.compactionPoints, baseline, standard)) {
+			return model;
+		}
+		return applyModelOverride(model, { contextWindow: window });
+	}
+
+	/**
+	 * Standard and extended windows of `model` when opting it into extended
+	 * context (globally, or through a compaction point past its standard window)
+	 * widens it; undefined when no larger window exists or an explicit
+	 * `contextWindow` override pins it.
+	 */
+	contextWindowTiers(model: { provider: string; id: string }): ContextWindowTiers | undefined {
+		// Tiers are recorded as the provider's rows compose; compose them first.
+		this.#modelsForProviderLookup(model.provider);
+		return this.#windowTiers.get(contextWindowKey(model));
+	}
+
+	/**
+	 * Standard, pre-extension capacity of this verified row, conservatively
+	 * bounded by its effective and paid limits. Unverified materialized copies
+	 * use `fallbackWindow`, never a same-ID catalog row's capacity. Live ingest
+	 * routes its classifier within this window rather than an extended one.
+	 */
+	standardContextWindow(model: Model<Api>, fallbackWindow: number): number {
+		const valid = (value: number | null | undefined): number | undefined =>
+			typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+		const effective = valid(model.contextWindow);
+		let window = this.#standardWindows.get(model) ?? valid(fallbackWindow) ?? 128_000;
+		if (effective !== undefined) window = Math.min(window, effective);
+		if (!model.contextWindowAuthoritative) {
+			const billedThreshold = valid(model.cost.longContext?.inputThreshold);
+			if (billedThreshold !== undefined) window = Math.min(window, billedThreshold);
+		}
+		return window;
+	}
+
+	/**
+	 * `model` with the tier `scope`'s own settings select: extended when its
+	 * `extendedContext` is on or its `compaction.modelThresholds` entry for the
+	 * model reaches past the standard window, else standard. Catalog rows follow
+	 * the registry's settings; a session whose settings differ (a subagent with a
+	 * `task.agentCompactionThresholdOverrides` entry runs with model entries off)
+	 * adopts rows through this so it never inherits another scope's opt-in.
+	 * Returns `model` itself when it already has that window.
+	 */
+	fitContextWindow(model: Model<Api>, scope: Settings): Model<Api> {
+		const tiers = this.contextWindowTiers(model);
+		if (!tiers || (model.contextWindow !== tiers.standard && model.contextWindow !== tiers.extended)) return model;
+		const window =
+			isExtendedContextEnabledFromSettings(scope) ||
+			compactionPointReaches(getModelCompactionPointsFromSettings(scope), model, tiers.standard)
+				? tiers.extended
+				: tiers.standard;
+		if (model.contextWindow === window) return model;
+		const cached = this.#refittedRows.get(model);
+		if (cached?.contextWindow === window) return cached;
+		const refitted = applyModelOverride(model, { contextWindow: window });
+		const standard = this.#standardWindows.get(model);
+		if (standard !== undefined) this.#standardWindows.set(refitted, standard);
+		this.#refittedRows.set(model, refitted);
+		return refitted;
 	}
 
 	/**
@@ -2677,7 +2837,8 @@ export class ModelRegistry {
 	 * both, so the clamp must hold on both.
 	 */
 	#applyModelOverrideWithClamp(model: Model<Api>, override: ModelOverride): Model<Api> {
-		const overridden = this.#carryWindow(model, applyModelOverride(model, override));
+		this.#warnUnservedOverrideKind(model, override);
+		const overridden = applyModelOverride(model, override);
 		if (
 			override.contextWindow === undefined ||
 			overridden.contextWindow === null ||
@@ -2687,33 +2848,82 @@ export class ModelRegistry {
 		}
 		const clamped = clampCodexContextWindow(model, overridden.contextWindow);
 		if (clamped === overridden.contextWindow) return overridden;
-		return this.#carryWindow(model, applyModelOverride(overridden, { contextWindow: clamped }));
+		return applyModelOverride(overridden, { contextWindow: clamped });
+	}
+
+	/** Logs, once per model and kind, a `modelOverrides` kind that `applyModelOverride` ignores. */
+	#warnUnservedOverrideKind(model: Model<Api>, override: ModelOverride): void {
+		const unservedKind = unservedOverrideKind(model, override);
+		if (unservedKind === undefined) return;
+		const warningKey = `${model.provider}/${model.id}:${unservedKind}`;
+		if (this.#warnedUnservedOverrideKinds.has(warningKey)) return;
+		this.#warnedUnservedOverrideKinds.add(warningKey);
+		logger.warn("modelOverrides kind ignored: the model's api does not serve it", {
+			provider: model.provider,
+			model: model.id,
+			kind: unservedKind,
+			api: override.api ?? model.api,
+		});
 	}
 
 	#applyHardcodedModelPolicies(models: Model<Api>[]): Model<Api>[] {
 		const extendedContext = isExtendedContextEnabledFromSettings(this.#settings);
-		return models.map(raw => {
-			let model = raw;
+		const compactionPoints = getModelCompactionPointsFromSettings(this.#settings);
+		return models.map(model => {
+			let tiers: ContextWindowTiers | undefined;
 			// Hosts whose context window is authoritative (subscription limits that
 			// carry public price tiers only as estimates) skip every inferred
 			// window policy.
-			if (!model.contextWindowAuthoritative) model = this.#applyContextWindowPolicies(model, extendedContext);
+			if (!model.contextWindowAuthoritative) {
+				({ model, tiers } = this.#applyContextWindowPolicies(model, extendedContext, compactionPoints));
+			}
 			if (model.provider === "ollama-cloud" && model.omitMaxOutputTokens !== true) {
 				model = applyModelOverride(model, { omitMaxOutputTokens: true });
 			}
-			return this.#carryWindow(raw, model);
+			if (tiers) this.#policyWindowTiers.set(model, tiers);
+			return model;
 		});
 	}
 
-	#applyContextWindowPolicies(model: Model<Api>, extendedContext: boolean): Model<Api> {
+	/**
+	 * Resolves both window tiers and picks one: extended when the setting is on
+	 * or the model's own compaction point reaches past its standard window
+	 * (an explicit per-model opt-in, confirmed in the model hub). `tiers` is
+	 * absent when no larger window exists.
+	 */
+	#applyContextWindowPolicies(
+		model: Model<Api>,
+		extendedContext: boolean,
+		compactionPoints: unknown,
+	): { model: Model<Api>; tiers?: ContextWindowTiers } {
+		// Without a maximum or a long-context tier both resolutions are identical.
+		if (resolveMaxContextWindow(model) === undefined && model.cost.longContext?.inputThreshold === undefined) {
+			return { model: this.#resolveContextWindowPolicies(model, false) };
+		}
+		const standard = this.#resolveContextWindowPolicies(model, false);
+		const extended = this.#resolveContextWindowPolicies(model, true);
+		const standardWindow = standard.contextWindow;
+		const extendedWindow = extended.contextWindow;
+		if (standardWindow === null || extendedWindow === null || extendedWindow <= standardWindow) {
+			return { model: extendedContext ? extended : standard };
+		}
+		const optedIn = extendedContext || compactionPointReaches(compactionPoints, model, standardWindow);
+		return {
+			model: optedIn ? extended : standard,
+			tiers: { standard: standardWindow, extended: extendedWindow },
+		};
+	}
+
+	#resolveContextWindowPolicies(model: Model<Api>, extendedContext: boolean): Model<Api> {
 		const maximum = resolveMaxContextWindow(model);
 		if (maximum !== undefined && model.contextWindow !== null) {
-			// The raw descriptor remains authoritative for the effective extended
-			// window. Captured standard/pricing provenance is used only when
-			// extended context is off and by the classifier.
-			const standardWindow = this.#standardWindows.get(model) ?? model.contextWindow;
+			// Only extended-window models need a fresh policy baseline: a
+			// materialized cache row may carry an earlier applied window.
+			// Preserve valid standard capacity when an advertised maximum is
+			// smaller, without retaining an obsolete extended window.
+			const standardWindow = buildModel(toModelSpec(model)).contextWindow ?? model.contextWindow;
 			if (extendedContext) {
-				const window = Math.max(model.contextWindow, maximum);
+				const window = Math.max(standardWindow, maximum);
 				if (window !== model.contextWindow) {
 					model = applyModelOverride(model, { contextWindow: window });
 				}
@@ -2739,6 +2949,7 @@ export class ModelRegistry {
 		if (!overrides) {
 			return applyModelOverride(model, { contextWindow: 1_000_000 });
 		}
+		this.#warnUnservedOverrideKind(model, overrides);
 		return applyModelOverride(model, {
 			contextWindow: overrides.contextWindow ?? 1_000_000,
 			...overrides,
@@ -2799,14 +3010,15 @@ export class ModelRegistry {
 	getAll(kind: ModelKind | "all" = "chat"): Model<Api>[] {
 		const models = this.#ensureFullSnapshot();
 		if (kind === "all") return models;
-		if (this.#fullKindSnapshotSource !== models) {
-			this.#fullKindSnapshotSource = models;
-			this.#fullKindSnapshots = {};
+		let snapshots = this.#fullKindSnapshots.get(models);
+		if (!snapshots) {
+			snapshots = {};
+			this.#fullKindSnapshots.set(models, snapshots);
 		}
-		const cached = this.#fullKindSnapshots[kind];
+		const cached = snapshots[kind];
 		if (cached) return cached;
 		const filtered = models.filter(model => modelKind(model) === kind);
-		this.#fullKindSnapshots[kind] = filtered;
+		snapshots[kind] = filtered;
 		return filtered;
 	}
 
@@ -3095,20 +3307,35 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Resolve a provider's request credential or the no-auth sentinel.
+	 * Resolve a provider's credential or the no-auth sentinel, for availability
+	 * checks. A transient OAuth refresh failure resolves `undefined` (like
+	 * `authStorage.keys.get`); request paths use
+	 * {@link getApiKeyWithCredentialForProvider}, which surfaces it.
 	 *
-	 * `options.forceRefresh` powers step (b) of the auth-retry policy — it
-	 * re-mints the session-sticky OAuth token even when the cached copy still
-	 * looks valid. `options.signal` is threaded into any broker-bound refresh.
+	 * `options.forceRefresh` re-mints the session-sticky OAuth token even when
+	 * the cached copy still looks valid. `options.signal` is threaded into any
+	 * broker-bound refresh.
 	 */
 	async getApiKeyForProvider(
 		provider: string,
 		sessionId?: string,
 		options?: AuthApiKeyOptions,
 	): Promise<string | undefined> {
-		return (await this.getApiKeyWithCredentialForProvider(provider, sessionId, options))?.apiKey;
+		try {
+			return (await this.getApiKeyWithCredentialForProvider(provider, sessionId, options))?.apiKey;
+		} catch (error) {
+			if (error instanceof OAuthRefreshUnavailableError) return undefined;
+			throw error;
+		}
 	}
 
+	/**
+	 * Resolve a provider's request credential or the no-auth sentinel.
+	 *
+	 * `options.forceRefresh` powers step (b) of the auth-retry policy. Rejects
+	 * with `OAuthRefreshUnavailableError` (transient, retryable) when OAuth
+	 * refresh failed with a retryable error and nothing else can serve.
+	 */
 	async getApiKeyWithCredentialForProvider(
 		provider: string,
 		sessionId?: string,
@@ -3396,7 +3623,7 @@ export class ModelRegistry {
 			this.#baseModels = this.#baseModels.filter(model => model.provider !== providerName);
 			const nextModels = this.#unprojectedModels.filter(model => model.provider !== providerName);
 			for (const overlay of newOverlays) {
-				nextModels.push(this.#captureWindow(finalizeCustomModel(overlay, { useDefaults: true })));
+				nextModels.push(finalizeCustomModel(overlay, { useDefaults: true }));
 			}
 			const runtimeTransportOverride = this.#runtimeProviderOverrides.get(providerName);
 			const nextModelsWithTransport = runtimeTransportOverride
@@ -3407,7 +3634,7 @@ export class ModelRegistry {
 				: nextModels;
 			this.#unprojectedModels = this.#applyProviderBedrockOverrides(nextModelsWithTransport);
 
-			this.#models = this.#withCatalogMetrics(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
+			this.#models = this.#finalizeModels(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
 			this.#invalidateProviderModelCache(providerName);
 			if (!config.fetchDynamicModels) return;
 		}
@@ -3449,7 +3676,18 @@ export class ModelRegistry {
 							config.remoteCompaction,
 							modelDef as CustomModelDefinitionLike,
 						);
-						if (overlay) results.push(finalizeCustomModel(overlay, { useDefaults: true }));
+						if (!overlay) continue;
+						// Static registrations fail validation on this mismatch; a live row is dropped instead.
+						if (overlay.kind !== undefined && !apiServesKind(overlay.api, overlay.kind)) {
+							logger.warn("fetchDynamicModels row dropped: its api does not serve its kind", {
+								provider: providerName,
+								model: overlay.id,
+								kind: overlay.kind,
+								api: overlay.api,
+							});
+							continue;
+						}
+						results.push(finalizeCustomModel(overlay, { useDefaults: true }));
 					}
 					return results.map(toModelSpec);
 				},
@@ -3487,7 +3725,7 @@ export class ModelRegistry {
 						return this.#applyProviderTransportOverrideToModel(model, transportOverride);
 					}),
 				);
-				this.#models = this.#withCatalogMetrics(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
+				this.#models = this.#finalizeModels(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
 			}
 			this.#invalidateProviderModelCache(providerName);
 		}
@@ -3576,6 +3814,7 @@ export interface ProviderConfigInput {
 		id: string;
 		name: string;
 		api?: Api;
+		kind?: ModelKind;
 		baseUrl?: string;
 		reasoning: boolean;
 		thinking?: ThinkingConfig;

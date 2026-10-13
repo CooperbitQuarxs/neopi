@@ -777,16 +777,14 @@ export class SwitchStore {
 		)
 			throw new SwitchError(400, "invalid_cursor", "History cursor does not match these filters");
 		const rows = this.#database.page(table, filters, limit + 1, boundary);
-		const items = rows
-			.slice(0, limit)
-			.map(row =>
-				table === "decisions"
-					? {
-							...(row as Decision),
-							attempts: this.#database.attemptsForDecision(row.id).map(attempt => this.#attemptView(attempt)),
-						}
-					: row,
-			);
+		const items = rows.slice(0, limit).map(row =>
+			table === "decisions"
+				? {
+						...(row as Decision),
+						attempts: this.#database.attemptsForDecision(row.id).map(attempt => this.#attemptView(attempt)),
+					}
+				: row,
+		);
 		const last = items.at(-1);
 		return {
 			items,

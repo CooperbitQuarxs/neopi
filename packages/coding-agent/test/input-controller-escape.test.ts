@@ -169,7 +169,6 @@ function createContext(): {
 			abortEval,
 			clearQueue,
 			getQueuedMessages,
-			maybeStartTitleGeneration: vi.fn(),
 			prompt,
 			subscribe: vi.fn((listener: (event: { type: string }) => void) => {
 				sessionListeners.push(listener);
@@ -232,6 +231,7 @@ function createContext(): {
 		hasActiveOmfg,
 		handleCleanseEscape,
 		hasActiveCleanse,
+		dismissCommandReport: vi.fn(() => false),
 		showTreeSelector: vi.fn(),
 		showUserMessageSelector: vi.fn(),
 		showSessionSelector: vi.fn(),
