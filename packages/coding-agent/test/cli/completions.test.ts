@@ -2,8 +2,12 @@ import { afterAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildSpec, type CompletionSpec, generateCompletion, type Shell } from "@oh-my-pi/pi-coding-agent/cli/completion-gen";
-import { generateLiveCompletion } from "@oh-my-pi/pi-coding-agent/commands/completions";
+import {
+	buildSpec,
+	type CompletionSpec,
+	generateCompletion,
+	type Shell,
+} from "@oh-my-pi/pi-coding-agent/cli/completion-gen";
 import { commands } from "@oh-my-pi/pi-coding-agent/cli-commands";
 import type { CliConfig, CommandCtor } from "@oh-my-pi/pi-utils/cli";
 
@@ -21,26 +25,51 @@ function command(metadata: Partial<CommandCtor>): CommandCtor {
 
 async function fixture(): Promise<CompletionSpec> {
 	const config: CliConfig = {
-		bin: "npi", version: "0", commands: new Map([
-			["launch", command({ hidden: true, flags: {
-				model: { kind: "string" }, models: { kind: "string" },
-				resume: { kind: "string", char: "r" },
-				thinking: { kind: "string", options: ["low", "high"] },
-				tools: { kind: "string" }, print: { kind: "boolean", char: "p" },
-			} })],
-			["group", command({ description: "Public group", subcommands: {
-				index: async () => command({ aliases: ["ix"], flags: {
-					rebuild: { kind: "boolean" }, "dry-run": { kind: "boolean", char: "n" },
-					format: { kind: "string", options: ["text", "json"] },
-				}, args: {
-					action: { kind: "string", options: ["all", "recent"] },
-					mode: { kind: "string", options: ["fast", "full"] },
-				} }),
-				nested: async () => command({ subcommands: {
-					leaf: async () => command({ flags: { only: { kind: "boolean" } } }),
-				} }),
-				internal: async () => command({ hidden: true, aliases: ["secret"] }),
-			} })],
+		bin: "npi",
+		version: "0",
+		commands: new Map([
+			[
+				"launch",
+				command({
+					hidden: true,
+					flags: {
+						model: { kind: "string" },
+						models: { kind: "string" },
+						resume: { kind: "string", char: "r" },
+						thinking: { kind: "string", options: ["low", "high"] },
+						tools: { kind: "string" },
+						print: { kind: "boolean", char: "p" },
+					},
+				}),
+			],
+			[
+				"group",
+				command({
+					description: "Public group",
+					subcommands: {
+						index: async () =>
+							command({
+								aliases: ["ix"],
+								flags: {
+									rebuild: { kind: "boolean" },
+									"dry-run": { kind: "boolean", char: "n" },
+									format: { kind: "string", options: ["text", "json"] },
+								},
+								args: {
+									action: { kind: "string", options: ["all", "recent"] },
+									mode: { kind: "string", options: ["fast", "full"] },
+								},
+							}),
+						nested: async () =>
+							command({
+								subcommands: {
+									leaf: async () => command({ flags: { only: { kind: "boolean" } } }),
+								},
+							}),
+						internal: async () => command({ hidden: true, aliases: ["secret"] }),
+					},
+				}),
+			],
 			["__complete", command({ hidden: true })],
 		]),
 	};
@@ -54,22 +83,32 @@ function candidates(shell: Shell, script: string, words: string[]): string[] {
 	const completion = path.join(dir, `completion.${shell}`);
 	fs.writeFileSync(completion, script);
 	// Dynamic completion uses an executable, since `command npi` bypasses functions.
-	fs.writeFileSync(path.join(dir, "npi"), `#!/bin/sh
+	fs.writeFileSync(
+		path.join(dir, "npi"),
+		`#!/bin/sh
 case "$2" in
  models) printf 'catalog/model\\tModel\\ngroup\\tA model named like a command\\n' ;;
  sessions) printf 'session-123\\tSession\\n' ;;
 esac
-`, { mode: 0o755 });
+`,
+		{ mode: 0o755 },
+	);
 	const line = words.join(" ");
 	let invocation: string[];
 	if (shell === "bash") {
-		invocation = ["bash", "--noprofile", "--norc", "-c", `set -e
+		invocation = [
+			"bash",
+			"--noprofile",
+			"--norc",
+			"-c",
+			`set -e
 source ${quote(completion)}
 COMP_WORDS=(${words.map(quote).join(" ")})
 COMP_CWORD=${words.length - 1}
 _npi
 printf '%s\\n' "\${COMPREPLY[@]}"
-`];
+`,
+		];
 	} else if (shell === "fish") {
 		invocation = ["fish", "--no-config", "-c", `source ${quote(completion)}; complete -C ${quote(line)}`];
 	} else {
@@ -77,7 +116,9 @@ printf '%s\\n' "\${COMPREPLY[@]}"
 		const done = path.join(dir, "done");
 		const ready = path.join(dir, "ready");
 		const harness = path.join(dir, "harness.zsh");
-		fs.writeFileSync(harness, `autoload -Uz compinit; compinit -D -u
+		fs.writeFileSync(
+			harness,
+			`autoload -Uz compinit; compinit -D -u
 source ${quote(completion)}
 compadd() {
  local -a matches
@@ -92,8 +133,13 @@ zle -C npi-capture complete-word _npi_capture
 bindkey '^X' npi-capture
 unsetopt BEEP
 print ready > ${quote(ready)}
-`);
-		invocation = ["zsh", "-f", "-c", `zmodload zsh/zpty
+`,
+		);
+		invocation = [
+			"zsh",
+			"-f",
+			"-c",
+			`zmodload zsh/zpty
 zmodload zsh/zselect
 zpty -b completion zsh -f
 zpty -w completion ${quote(`source ${quote(harness)}`)}
@@ -104,13 +150,24 @@ for ((i=0; i<250; i++)); do [[ -f ${quote(done)} ]] && break; zselect -t 1; done
 zpty -d completion
 [[ -f ${quote(done)} ]] || exit 3
 [[ ! -f ${quote(output)} ]] || cat ${quote(output)}
-`];
+`,
+		];
 	}
 	const result = Bun.spawnSync(invocation, {
-		cwd: dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, TERM: "xterm" }, timeout: 10_000,
+		cwd: dir,
+		env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, TERM: "xterm" },
+		timeout: 10_000,
 	});
 	expect(result.exitCode, result.stderr.toString()).toBe(0);
-	return [...new Set(result.stdout.toString().split("\n").map(row => row.split("\t")[0]).filter(Boolean))];
+	return [
+		...new Set(
+			result.stdout
+				.toString()
+				.split("\n")
+				.map(row => row.split("\t")[0])
+				.filter(Boolean),
+		),
+	];
 }
 
 for (const shell of ["bash", "fish", "zsh"] as const) {
@@ -140,8 +197,12 @@ for (const shell of ["bash", "fish", "zsh"] as const) {
 
 		it("uses the selected positional and flag value rather than matching arbitrary tokens", async () => {
 			const script = generateCompletion(shell, await fixture());
-			expect(candidates(shell, script, ["npi", "group", "index", "--format", ""])).toEqual(expect.arrayContaining(["text", "json"]));
-			expect(candidates(shell, script, ["npi", "group", "index", "--format=json", ""])).toEqual(expect.arrayContaining(["all", "recent"]));
+			expect(candidates(shell, script, ["npi", "group", "index", "--format", ""])).toEqual(
+				expect.arrayContaining(["text", "json"]),
+			);
+			expect(candidates(shell, script, ["npi", "group", "index", "--format=json", ""])).toEqual(
+				expect.arrayContaining(["all", "recent"]),
+			);
 			const second = candidates(shell, script, ["npi", "group", "index", "--format", "json", "recent", ""]);
 			expect(second).toContain("fast");
 			expect(second).toContain("full");
@@ -163,7 +224,16 @@ for (const shell of ["bash", "fish", "zsh"] as const) {
 		});
 
 		it("covers the live public registry and Chronicle's child-specific surface", async () => {
-			const script = await generateLiveCompletion(shell);
+			const generated = Bun.spawnSync(
+				[process.execPath, path.resolve(import.meta.dir, "../../src/cli.ts"), "completions", shell],
+				{
+					cwd: path.resolve(import.meta.dir, "../.."),
+					env: { ...process.env, PI_CODING_AGENT_DIR: path.join(temporary, "agent") },
+					timeout: 30_000,
+				},
+			);
+			expect(generated.exitCode, generated.stderr.toString()).toBe(0);
+			const script = generated.stdout.toString();
 			const root = candidates(shell, script, ["npi", ""]);
 			for (const entry of commands) {
 				const Cmd = await entry.load();
@@ -175,15 +245,23 @@ for (const shell of ["bash", "fish", "zsh"] as const) {
 				for (const alias of entry.aliases ?? []) expect(root).toContain(alias);
 			}
 			expect(root).not.toContain("chain");
-			expect(candidates(shell, script, ["npi", "chronicle", ""])).toEqual(expect.arrayContaining(["backfill", "index", "recall"]));
+			expect(candidates(shell, script, ["npi", "chronicle", ""])).toEqual(
+				expect.arrayContaining(["backfill", "index", "recall"]),
+			);
 			const indexFlags = candidates(shell, script, ["npi", "chronicle", "index", "--"]);
 			expect(indexFlags).toContain("--rebuild");
 			expect(indexFlags).toContain("--dry-run");
 			expect(indexFlags).not.toContain("--project");
 			expect(candidates(shell, script, ["npi", "plugins", ""])).toContain("install");
-			expect(candidates(shell, script, ["npi", "plugins", "marketplace", ""])).toEqual(expect.arrayContaining(["add", "remove", "rm", "update", "list"]));
-			expect(candidates(shell, script, ["npi", "plugin", "config", ""])).toEqual(expect.arrayContaining(["list", "get", "set", "delete", "validate"]));
-			expect(candidates(shell, script, ["npi", "models", ""])).toEqual(expect.arrayContaining(["ls", "list", "find", "refresh"]));
+			expect(candidates(shell, script, ["npi", "plugins", "marketplace", ""])).toEqual(
+				expect.arrayContaining(["add", "remove", "rm", "update", "list"]),
+			);
+			expect(candidates(shell, script, ["npi", "plugin", "config", ""])).toEqual(
+				expect.arrayContaining(["list", "get", "set", "delete", "validate"]),
+			);
+			expect(candidates(shell, script, ["npi", "models", ""])).toEqual(
+				expect.arrayContaining(["ls", "list", "find", "refresh"]),
+			);
 			expect(candidates(shell, script, ["npi", "ctl", "target", ""])).toContain("dialog-answer");
 		}, 30_000);
 	});

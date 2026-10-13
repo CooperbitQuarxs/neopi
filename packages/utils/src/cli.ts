@@ -350,7 +350,8 @@ function formatUsageArgs(Cmd: CommandCtor): string {
 export function commandUsageLine(bin: string, id: string, Cmd: CommandCtor): string {
 	const hasFlags = Object.keys(Cmd.flags ?? {}).length > 0;
 	const childNames = Object.keys(Cmd.subcommands ?? {});
-	const subcommands = childNames.length && Object.keys(Cmd.args ?? {}).length === 0 ? ` <${childNames.join("|")}>` : "";
+	const subcommands =
+		childNames.length && Object.keys(Cmd.args ?? {}).length === 0 ? ` <${childNames.join("|")}>` : "";
 	return `$ ${bin} ${id}${subcommands}${formatUsageArgs(Cmd)}${hasFlags ? " [FLAGS]" : ""}`;
 }
 

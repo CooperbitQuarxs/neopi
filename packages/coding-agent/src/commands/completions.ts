@@ -54,7 +54,13 @@ export default class Completions extends Command {
 			return;
 		}
 
-		await Bun.write(Bun.stdout, await generateLiveCompletion(shell));
+		const script = await generateLiveCompletion(shell);
+		await new Promise<void>((resolve, reject) => {
+			process.stdout.write(script, error => {
+				if (error) reject(error);
+				else resolve();
+			});
+		});
 		await postmortem.quit(0);
 	}
 }

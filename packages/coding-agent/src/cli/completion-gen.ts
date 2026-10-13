@@ -190,20 +190,32 @@ function completionScopes(spec: CompletionSpec): CompletionScope[] {
 	function visit(flags: CompletionFlag[], args: CompletionArg[], children: CompletionCommand[]): string {
 		const id = String(scopes.length);
 		const help: CompletionFlag = {
-			name: "help", char: "h", description: "Show help", value: { kind: "flag" }, repeatable: false,
+			name: "help",
+			char: "h",
+			description: "Show help",
+			value: { kind: "flag" },
+			repeatable: false,
 		};
 		const implicit = [help];
 		if (id === "0") {
 			implicit.push({
-				name: "version", char: "v", description: "Show version", value: { kind: "flag" }, repeatable: false,
+				name: "version",
+				char: "v",
+				description: "Show version",
+				value: { kind: "flag" },
+				repeatable: false,
 			});
 		}
 		const scope: CompletionScope = {
-			id, flags: [...flags, ...implicit.filter(flag => !flags.some(f => f.name === flag.name))], args, children: [],
+			id,
+			flags: [...flags, ...implicit.filter(flag => !flags.some(f => f.name === flag.name))],
+			args,
+			children: [],
 		};
 		scopes.push(scope);
 		scope.children = children.map(command => ({
-			command, id: visit(command.flags, command.args, command.children),
+			command,
+			id: visit(command.flags, command.args, command.children),
 		}));
 		return id;
 	}
@@ -300,11 +312,9 @@ function generateBash(spec: CompletionSpec): string {
 	for (const scope of scopes) {
 		const childWords = scope.children.flatMap(child => commandTokens(child.command));
 		const firstValue = scope.args[0]?.value;
-		const positionalWords = [...new Set([
-			...childWords, ...(firstValue?.kind === "enum" ? firstValue.values : []),
-		])];
-		const argCases = scope.args.map((arg, index) =>
-			`\t\t${arg.multiple ? `${index}|*` : index}) ${bashValueBranch(bin, arg.value)} ;;`,
+		const positionalWords = [...new Set([...childWords, ...(firstValue?.kind === "enum" ? firstValue.values : [])])];
+		const argCases = scope.args.map(
+			(arg, index) => `\t\t${arg.multiple ? `${index}|*` : index}) ${bashValueBranch(bin, arg.value)} ;;`,
 		);
 		parts.push(`_npi_scope_${scope.id}() {
 	case "$pending" in
@@ -323,12 +333,24 @@ ${argCases.join("\n")}
 	esac
 }`);
 	}
-	const valueCases = scopes.flatMap(scope => scope.flags.filter(f => takesValue(f.value)).map(f =>
-		`\t\t${flagTokens(f).map(token => `${scope.id}:${token}`).join("|")}) pending="$token"; continue ;;`,
-	));
-	const childCases = scopes.flatMap(scope => scope.children.map(child =>
-		`\t\t${commandTokens(child.command).map(token => `${scope.id}:${token}`).join("|")}) scope=${child.id}; position=0; continue ;;`,
-	));
+	const valueCases = scopes.flatMap(scope =>
+		scope.flags
+			.filter(f => takesValue(f.value))
+			.map(
+				f =>
+					`\t\t${flagTokens(f)
+						.map(token => `${scope.id}:${token}`)
+						.join("|")}) pending="$token"; continue ;;`,
+			),
+	);
+	const childCases = scopes.flatMap(scope =>
+		scope.children.map(
+			child =>
+				`\t\t${commandTokens(child.command)
+					.map(token => `${scope.id}:${token}`)
+					.join("|")}) scope=${child.id}; position=0; continue ;;`,
+		),
+	);
 	parts.push(`_npi() {
 	local cur pending="" scope=0 position=0 endopts=0 token i prefix=""
 	COMPREPLY=()
@@ -362,7 +384,6 @@ complete -F _npi ${bin}`);
 	parts.push("");
 	return `${parts.join("\n")}\n`;
 }
-
 
 // --- zsh ----------------------------------------------------------------------
 
@@ -477,20 +498,24 @@ ${rows.join("\n")}
 				? [`'1:command:_npi_children_${scope.id}'`, "'*::arg:->args'"]
 				: scope.args.map(zshArgSpec)),
 		];
-		const arms = scope.children.map(child =>
-			`\t\t${commandTokens(child.command).join("|")}) _npi_scope_${child.id} ;;`,
+		const arms = scope.children.map(
+			child => `\t\t${commandTokens(child.command).join("|")}) _npi_scope_${child.id} ;;`,
 		);
 		parts.push(`_npi_scope_${scope.id}() {
 	local curcontext="$curcontext" state line
 	typeset -A opt_args
 	_arguments -C -s -S \\
 		${specs.join(" \\\n\t\t")}
-	${scope.children.length ? `if [[ "$state" == args ]]; then
+	${
+		scope.children.length
+			? `if [[ "$state" == args ]]; then
 		case "$line[1]" in
 ${arms.join("\n")}
 		${scope.args.length > 1 ? `*) _arguments -s -S ${scope.args.slice(1).map(zshArgSpec).join(" ")} ;;` : ""}
 		esac
-	fi` : ""}
+	fi`
+			: ""
+	}
 }`);
 	}
 	parts.push(`_npi() { _npi_scope_0 "$@"; }
@@ -552,17 +577,29 @@ function generateFish(spec: CompletionSpec): string {
 	lines.push("");
 
 	const scopes = completionScopes(spec);
-	const values = scopes.flatMap(scope => scope.flags.filter(f => takesValue(f.value)).map(f =>
-		`\t\t\t\tcase ${flagTokens(f).map(token => `${scope.id}:${token}`).join(" ")}
+	const values = scopes.flatMap(scope =>
+		scope.flags
+			.filter(f => takesValue(f.value))
+			.map(
+				f =>
+					`\t\t\t\tcase ${flagTokens(f)
+						.map(token => `${scope.id}:${token}`)
+						.join(" ")}
 \t\t\t\t\tset pending $token
 \t\t\t\t\tcontinue`,
-	));
-	const children = scopes.flatMap(scope => scope.children.map(child =>
-		`\t\t\t\t\tcase ${commandTokens(child.command).map(token => `${scope.id}:${token}`).join(" ")}
+			),
+	);
+	const children = scopes.flatMap(scope =>
+		scope.children.map(
+			child =>
+				`\t\t\t\t\tcase ${commandTokens(child.command)
+					.map(token => `${scope.id}:${token}`)
+					.join(" ")}
 \t\t\t\t\t\tset scope ${child.id}
 \t\t\t\t\t\tset position 0
 \t\t\t\t\t\tcontinue`,
-	));
+		),
+	);
 	lines.push(`function __fish_npi_context
 	set -l scope 0
 	set -l position 0
@@ -616,13 +653,17 @@ end`);
 		for (const flag of scope.flags) lines.push(fishFlagLine(bin, cond, flag));
 		for (const child of scope.children) {
 			for (const token of commandTokens(child.command)) {
-				lines.push(`complete -c ${bin} -f -n '__fish_npi_arg ${scope.id} 0 single; and ${cond}' -a '${token}' -d '${fishDesc(child.command.description)}'`);
+				lines.push(
+					`complete -c ${bin} -f -n '__fish_npi_arg ${scope.id} 0 single; and ${cond}' -a '${token}' -d '${fishDesc(child.command.description)}'`,
+				);
 			}
 		}
 		for (const [index, arg] of scope.args.entries()) {
 			const argCond = `__fish_npi_arg ${scope.id} ${index} ${arg.multiple ? "multiple" : "single"}`;
 			if (arg.value.kind === "enum") {
-				lines.push(`complete -c ${bin} -f -n '${argCond}' -a '${arg.value.values.join(" ")}' -d '${fishDesc(arg.description)}'`);
+				lines.push(
+					`complete -c ${bin} -f -n '${argCond}' -a '${arg.value.values.join(" ")}' -d '${fishDesc(arg.description)}'`,
+				);
 			} else if (arg.value.kind === "file") {
 				lines.push(`complete -c ${bin} -F -n '${argCond}'`);
 			}
