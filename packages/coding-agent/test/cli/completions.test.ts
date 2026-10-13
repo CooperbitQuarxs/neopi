@@ -1,264 +1,190 @@
-import { describe, expect, it } from "bun:test";
+import { afterAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildSpec, type CompletionSpec, generateCompletion } from "@oh-my-pi/pi-coding-agent/cli/completion-gen";
+import { buildSpec, type CompletionSpec, generateCompletion, type Shell } from "@oh-my-pi/pi-coding-agent/cli/completion-gen";
 import { generateLiveCompletion } from "@oh-my-pi/pi-coding-agent/commands/completions";
+import { commands } from "@oh-my-pi/pi-coding-agent/cli-commands";
 import type { CliConfig, CommandCtor } from "@oh-my-pi/pi-utils/cli";
 
-// A compact synthetic spec exercising every value-source kind and an aliased
-// subcommand. The generators are pure functions of this shape, so pinning their
-// output here defends the exact bytes each shell parses without booting the CLI.
-const spec: CompletionSpec = {
-	bin: "npi",
-	root: {
-		flags: [
-			{ name: "model", description: "Model to use", value: { kind: "models", multiple: false }, repeatable: false },
-			{ name: "models", description: "Model list", value: { kind: "models", multiple: true }, repeatable: false },
-			{
-				name: "thinking",
-				description: "Effort",
-				value: { kind: "enum", values: ["low", "high"] },
-				repeatable: false,
-			},
-			{ name: "tools", description: "Tools", value: { kind: "list", values: ["read", "bash"] }, repeatable: false },
-			{ name: "resume", char: "r", description: "Resume", value: { kind: "sessions" }, repeatable: false },
-			{ name: "print", char: "p", description: "Print", value: { kind: "flag" }, repeatable: false },
-			{ name: "extension", char: "e", description: "Ext", value: { kind: "file" }, repeatable: true },
-			{ name: "session-dir", description: "Dir", value: { kind: "dir" }, repeatable: false },
-		],
-		args: [],
-	},
-	commands: [
-		{
-			name: "commit",
-			aliases: [],
-			description: "Commit",
-			flags: [{ name: "push", description: "Push", value: { kind: "flag" }, repeatable: false }],
-			args: [],
-		},
-		{
-			name: "worktree",
-			aliases: ["wt"],
-			description: "Worktrees",
-			flags: [],
-			args: [{ name: "action", description: "Action", value: { kind: "enum", values: ["list", "clear"] } }],
-		},
-	],
-};
+const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "npi-completions-"));
+afterAll(() => fs.rmSync(temporary, { recursive: true, force: true }));
+let sequence = 0;
 
-describe("generateCompletion — bash", () => {
-	const out = generateCompletion("bash", spec);
+function quote(value: string): string {
+	return `'${value.replaceAll("'", "'\\''")}'`;
+}
 
-	it("registers the dispatcher and resolves alias arms to the canonical handler", () => {
-		expect(out).toContain("complete -F _npi npi");
-		expect(out).toContain("_npi_cmd_commit");
-		// worktree + its alias dispatch to the same function
-		expect(out).toContain("worktree|wt)");
-	});
+function command(metadata: Partial<CommandCtor>): CommandCtor {
+	return metadata as CommandCtor;
+}
 
-	it("completes enum, dynamic, and comma-list flag values by previous flag", () => {
-		expect(out).toContain('--thinking)\n\t\t\tCOMPREPLY=( $(compgen -W "low high"');
-		expect(out).toContain('--model)\n\t\t\tCOMPREPLY=( $(compgen -W "$(command npi __complete models -- "$cur"');
-		expect(out).toContain("--resume|-r)");
-		expect(out).toContain("command npi __complete sessions");
-		// static comma list routes through the comma-aware helper
-		expect(out).toContain('--tools)\n\t\t\t_npi_comma "read bash"');
-		// multiple-value models flag also uses the comma helper
-		expect(out).toContain("--models)\n\t\t\t_npi_comma");
-	});
+async function fixture(): Promise<CompletionSpec> {
+	const config: CliConfig = {
+		bin: "npi", version: "0", commands: new Map([
+			["launch", command({ hidden: true, flags: {
+				model: { kind: "string" }, models: { kind: "string" },
+				resume: { kind: "string", char: "r" },
+				thinking: { kind: "string", options: ["low", "high"] },
+				tools: { kind: "string" }, print: { kind: "boolean", char: "p" },
+			} })],
+			["group", command({ description: "Public group", subcommands: {
+				index: async () => command({ aliases: ["ix"], flags: {
+					rebuild: { kind: "boolean" }, "dry-run": { kind: "boolean", char: "n" },
+					format: { kind: "string", options: ["text", "json"] },
+				}, args: {
+					action: { kind: "string", options: ["all", "recent"] },
+					mode: { kind: "string", options: ["fast", "full"] },
+				} }),
+				nested: async () => command({ subcommands: {
+					leaf: async () => command({ flags: { only: { kind: "boolean" } } }),
+				} }),
+				internal: async () => command({ hidden: true, aliases: ["secret"] }),
+			} })],
+			["__complete", command({ hidden: true })],
+		]),
+	};
+	return buildSpec(config, "launch", new Map([["group", ["g"]]]));
+}
 
-	it("offers subcommand names and root flags at the top level", () => {
-		expect(out).toMatch(/compgen -W "commit worktree wt [^"]*--model/);
-	});
-
-	it("completes a subcommand's positional enum and its own flags", () => {
-		expect(out).toContain("_npi_cmd_worktree()");
-		expect(out).toContain('compgen -W "list clear"');
-		expect(out).toContain("_npi_cmd_commit()");
-		expect(out).toContain('compgen -W "--push"');
-	});
-});
-
-const hasZsh = (() => {
-	try {
-		return Bun.spawnSync(["zsh", "--version"]).exitCode === 0;
-	} catch {
-		return false;
+/** Invoke each shell's real completion API, including Zsh's completion widget. */
+function candidates(shell: Shell, script: string, words: string[]): string[] {
+	const dir = path.join(temporary, String(sequence++));
+	fs.mkdirSync(dir);
+	const completion = path.join(dir, `completion.${shell}`);
+	fs.writeFileSync(completion, script);
+	// Dynamic completion uses an executable, since `command npi` bypasses functions.
+	fs.writeFileSync(path.join(dir, "npi"), `#!/bin/sh
+case "$2" in
+ models) printf 'catalog/model\\tModel\\ngroup\\tA model named like a command\\n' ;;
+ sessions) printf 'session-123\\tSession\\n' ;;
+esac
+`, { mode: 0o755 });
+	const line = words.join(" ");
+	let invocation: string[];
+	if (shell === "bash") {
+		invocation = ["bash", "--noprofile", "--norc", "-c", `set -e
+source ${quote(completion)}
+COMP_WORDS=(${words.map(quote).join(" ")})
+COMP_CWORD=${words.length - 1}
+_npi
+printf '%s\\n' "\${COMPREPLY[@]}"
+`];
+	} else if (shell === "fish") {
+		invocation = ["fish", "--no-config", "-c", `source ${quote(completion)}; complete -C ${quote(line)}`];
+	} else {
+		const output = path.join(dir, "candidates");
+		const done = path.join(dir, "done");
+		const ready = path.join(dir, "ready");
+		const harness = path.join(dir, "harness.zsh");
+		fs.writeFileSync(harness, `autoload -Uz compinit; compinit -D -u
+source ${quote(completion)}
+compadd() {
+ local -a matches
+ builtin compadd -A matches "$@"
+ print -rl -- $matches >> ${quote(output)}
+}
+_npi_capture() {
+ _main_complete
+ print done > ${quote(done)}
+}
+zle -C npi-capture complete-word _npi_capture
+bindkey '^X' npi-capture
+unsetopt BEEP
+print ready > ${quote(ready)}
+`);
+		invocation = ["zsh", "-f", "-c", `zmodload zsh/zpty
+zmodload zsh/zselect
+zpty -b completion zsh -f
+zpty -w completion ${quote(`source ${quote(harness)}`)}
+for ((i=0; i<250; i++)); do [[ -f ${quote(ready)} ]] && break; zselect -t 1; done
+if [[ ! -f ${quote(ready)} ]]; then zpty -d completion; exit 2; fi
+zpty -w -n completion ${quote(line)}$'\\x18'
+for ((i=0; i<250; i++)); do [[ -f ${quote(done)} ]] && break; zselect -t 1; done
+zpty -d completion
+[[ -f ${quote(done)} ]] || exit 3
+[[ ! -f ${quote(output)} ]] || cat ${quote(output)}
+`];
 	}
-})();
-
-describe.skipIf(!hasZsh)("zsh action helper under _arguments' calling convention", () => {
-	it("reads the completion kind past the compadd options zsh prepends", () => {
-		const script = generateCompletion("zsh", spec);
-		const start = script.indexOf("_npi_call() {");
-		expect(start).toBeGreaterThanOrEqual(0);
-		const fn = script.slice(start, script.indexOf("\n}\n", start) + 3);
-
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-zsh-action-"));
-		try {
-			// `command npi` bypasses shell functions, so the stub must be an
-			// executable on PATH.
-			const bin = path.join(dir, "npi");
-			fs.writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${dir}/argv.log"\n`, { mode: 0o755 });
-			fs.writeFileSync(
-				path.join(dir, "harness.zsh"),
-				// _describe only exists inside a completion context.
-				`_describe() { :; }\n${fn}\n_npi_call -n -J -default- sessions\n`,
-			);
-
-			const result = Bun.spawnSync(["zsh", "-f", path.join(dir, "harness.zsh")], {
-				cwd: dir,
-				env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
-			});
-			expect(result.exitCode).toBe(0);
-
-			const argv = fs.existsSync(path.join(dir, "argv.log"))
-				? fs.readFileSync(path.join(dir, "argv.log"), "utf8")
-				: "";
-			// zsh calls the action as `fn <compadd options> <expl> <kind>`.
-			// Both valueless flags (-n) and option/value pairs (-J -default-) can
-			// precede the kind. Before the fix the stub saw `__complete -n -- `.
-			expect(argv).toContain("__complete sessions --");
-			expect(argv).not.toContain("__complete -n");
-		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
-		}
+	const result = Bun.spawnSync(invocation, {
+		cwd: dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, TERM: "xterm" }, timeout: 10_000,
 	});
-});
+	expect(result.exitCode, result.stderr.toString()).toBe(0);
+	return [...new Set(result.stdout.toString().split("\n").map(row => row.split("\t")[0]).filter(Boolean))];
+}
 
-describe("generateCompletion — zsh", () => {
-	const out = generateCompletion("zsh", spec);
+for (const shell of ["bash", "fish", "zsh"] as const) {
+	describe.skipIf(!Bun.which(shell))(`${shell} completion candidates`, () => {
+		it("walks groups and aliases without leaking hidden commands or sibling flags", async () => {
+			const script = generateCompletion(shell, await fixture());
+			const root = candidates(shell, script, ["npi", ""]);
+			expect(root).toContain("group");
+			expect(root).toContain("g");
+			expect(root).not.toContain("launch");
+			expect(root).not.toContain("__complete");
+			expect(candidates(shell, script, ["npi", "--"])).toContain("--version");
+			const children = candidates(shell, script, ["npi", "g", ""]);
+			expect(children).toContain("index");
+			expect(children).toContain("ix");
+			expect(children).toContain("nested");
+			expect(children).not.toContain("internal");
+			expect(children).not.toContain("secret");
+			const flags = candidates(shell, script, ["npi", "g", "ix", "--"]);
+			expect(flags).toContain("--rebuild");
+			expect(flags).toContain("--dry-run");
+			expect(flags).not.toContain("--model");
+			expect(flags).not.toContain("--only");
+			expect(flags).not.toContain("--version");
+			expect(candidates(shell, script, ["npi", "group", "nested", "leaf", "--"])).toContain("--only");
+		});
 
-	it("emits the compdef header and dual-mode (autoload + eval) tail", () => {
-		expect(out.startsWith("#compdef npi")).toBe(true);
-		expect(out).toContain('if [ "$funcstack[1]" = "_npi" ]; then');
-		expect(out).toContain("compdef _npi npi");
+		it("uses the selected positional and flag value rather than matching arbitrary tokens", async () => {
+			const script = generateCompletion(shell, await fixture());
+			expect(candidates(shell, script, ["npi", "group", "index", "--format", ""])).toEqual(expect.arrayContaining(["text", "json"]));
+			expect(candidates(shell, script, ["npi", "group", "index", "--format=json", ""])).toEqual(expect.arrayContaining(["all", "recent"]));
+			const second = candidates(shell, script, ["npi", "group", "index", "--format", "json", "recent", ""]);
+			expect(second).toContain("fast");
+			expect(second).toContain("full");
+			expect(second).not.toContain("recent");
+			expect(second).not.toContain("index");
+			const afterEnd = candidates(shell, script, ["npi", "group", "index", "--", ""]);
+			expect(afterEnd).toContain("all");
+			expect(afterEnd).not.toContain("--rebuild");
+			const modelNamedCommand = candidates(shell, script, ["npi", "--model", "group", ""]);
+			expect(modelNamedCommand).toContain("group");
+			expect(modelNamedCommand).not.toContain("index");
+		});
+
+		it("preserves top-level dynamic model/session and finite flag completions", async () => {
+			const script = generateCompletion(shell, await fixture());
+			expect(candidates(shell, script, ["npi", "--model", "catalog/"])).toContain("catalog/model");
+			expect(candidates(shell, script, ["npi", "-r", "session-"])).toContain("session-123");
+			expect(candidates(shell, script, ["npi", "--thinking", "h"])).toContain("high");
+		});
+
+		it("covers the live public registry and Chronicle's child-specific surface", async () => {
+			const script = await generateLiveCompletion(shell);
+			const root = candidates(shell, script, ["npi", ""]);
+			for (const entry of commands) {
+				const Cmd = await entry.load();
+				if (Cmd.hidden || entry.name === "launch") {
+					expect(root).not.toContain(entry.name);
+					continue;
+				}
+				expect(root).toContain(entry.name);
+				for (const alias of entry.aliases ?? []) expect(root).toContain(alias);
+			}
+			expect(root).not.toContain("chain");
+			expect(candidates(shell, script, ["npi", "chronicle", ""])).toEqual(expect.arrayContaining(["backfill", "index", "recall"]));
+			const indexFlags = candidates(shell, script, ["npi", "chronicle", "index", "--"]);
+			expect(indexFlags).toContain("--rebuild");
+			expect(indexFlags).toContain("--dry-run");
+			expect(indexFlags).not.toContain("--project");
+			expect(candidates(shell, script, ["npi", "plugins", ""])).toContain("install");
+			expect(candidates(shell, script, ["npi", "plugins", "marketplace", ""])).toEqual(expect.arrayContaining(["add", "remove", "rm", "update", "list"]));
+			expect(candidates(shell, script, ["npi", "plugin", "config", ""])).toEqual(expect.arrayContaining(["list", "get", "set", "delete", "validate"]));
+			expect(candidates(shell, script, ["npi", "models", ""])).toEqual(expect.arrayContaining(["ls", "list", "find", "refresh"]));
+			expect(candidates(shell, script, ["npi", "ctl", "target", ""])).toContain("dialog-answer");
+		}, 30_000);
 	});
-
-	it("maps value sources to the right _arguments actions", () => {
-		expect(out).toContain("'--model[Model to use]:model:_npi_call models'");
-		expect(out).toContain("'--models[Model list]:models:_npi_models_list'");
-		expect(out).toContain("'--thinking[Effort]:value:(low high)'");
-		expect(out).toContain("'--tools[Tools]:value:_npi_tools'");
-		expect(out).toContain("'(-r --resume)'{-r,--resume}'[Resume]:session:_npi_call sessions'");
-		expect(out).toContain("'--session-dir[Dir]:dir:_files -/'");
-		// repeatable short+long flag uses the `*{...}` form
-		expect(out).toContain("'*'{-e,--extension}'[Ext]:file:_files'");
-		// the static tool list helper is baked
-		expect(out).toContain("_npi_tools() { _values -s , 'tools' read bash }");
-	});
-
-	it("dispatches aliased subcommands and completes positional enums", () => {
-		expect(out).toContain("worktree|wt) _npi_cmd_worktree ;;");
-		expect(out).toContain("':action:(list clear)'");
-	});
-});
-
-describe("generateCompletion — fish", () => {
-	const out = generateCompletion("fish", spec);
-
-	it("declares the no-subcommand predicate over every command token", () => {
-		expect(out).toContain("function __fish_npi_no_subcommand");
-		expect(out).toContain("if contains -- $i commit worktree wt");
-	});
-
-	it("renders subcommand names, including aliases, with descriptions", () => {
-		expect(out).toContain("-a 'commit' -d 'Commit'");
-		expect(out).toContain("-a 'wt' -d 'Worktrees'");
-	});
-
-	it("maps value sources to fish completion args", () => {
-		expect(out).toContain("-l model -d 'Model to use' -x -a '(command npi __complete models -- (commandline -ct))'");
-		expect(out).toContain("-l thinking -d 'Effort' -x -a 'low high'");
-		expect(out).toContain("-l tools -d 'Tools' -x -a 'read bash'");
-		expect(out).toContain("-s r -l resume -d 'Resume' -x -a '(command npi __complete sessions");
-		// a bare boolean flag takes no value
-		expect(out).toContain("-s p -l print -d 'Print'");
-		expect(out).not.toContain("-l print -d 'Print' -x");
-	});
-
-	it("gates a positional enum on its subcommand", () => {
-		expect(out).toContain("-n '__fish_seen_subcommand_from worktree wt' -a 'list clear'");
-	});
-});
-
-describe("buildSpec", () => {
-	function fakeCmd(props: Partial<CommandCtor>): CommandCtor {
-		return props as unknown as CommandCtor;
-	}
-
-	it("lifts the root command's flags and excludes root + hidden from subcommands", () => {
-		const config: CliConfig = {
-			bin: "npi",
-			version: "0",
-			commands: new Map<string, CommandCtor>([
-				["launch", fakeCmd({ hidden: true, flags: { model: { kind: "string" } }, args: {} })],
-				["__complete", fakeCmd({ hidden: true, flags: {}, args: {} })],
-				["config", fakeCmd({ description: "Cfg", flags: { json: { kind: "boolean" } }, args: {} })],
-			]),
-		};
-		const result = buildSpec(config, "launch", new Map([["config", ["c"]]]));
-
-		expect(result.root.flags.map(f => f.name)).toContain("model");
-		// hidden (__complete) and the root entry (launch) are both dropped
-		expect(result.commands.map(c => c.name)).toEqual(["config"]);
-		expect(result.commands[0]?.aliases).toEqual(["c"]);
-	});
-
-	it("classifies flag value sources from descriptor metadata", () => {
-		const config: CliConfig = {
-			bin: "npi",
-			version: "0",
-			commands: new Map<string, CommandCtor>([
-				[
-					"launch",
-					fakeCmd({
-						hidden: true,
-						flags: {
-							model: { kind: "string" },
-							thinking: { kind: "string", options: ["low", "high"] },
-							"no-tools": { kind: "boolean" },
-							"session-dir": { kind: "string" },
-						},
-						args: {},
-					}),
-				],
-			]),
-		};
-		const root = buildSpec(config, "launch", new Map()).root;
-		const byName = new Map(root.flags.map(f => [f.name, f.value.kind]));
-		expect(byName.get("model")).toBe("models");
-		expect(byName.get("thinking")).toBe("enum");
-		expect(byName.get("no-tools")).toBe("flag");
-		expect(byName.get("session-dir")).toBe("dir");
-	});
-});
-
-describe("live completion surface", () => {
-	it("generates a zsh script reflecting the registered commands and flags", async () => {
-		const stdout = await generateLiveCompletion("zsh");
-
-		// Real top-level flags from launch's static `flags` table. Flags with a
-		// short char render as `{-r,--resume}`, so only assert the bracket form for
-		// the long-only ones and check the char-paired form separately.
-		for (const flag of ["--model", "--thinking", "--mode", "--approval-mode", "--tools", "--no-tools"]) {
-			expect(stdout).toContain(`${flag}[`);
-		}
-		expect(stdout).toContain("{-r,--resume}");
-		// Real enum option sets flow through unchanged.
-		expect(stdout).toContain(":value:(off minimal low medium high xhigh max auto)");
-		expect(stdout).toContain(":value:(always-ask write yolo)");
-		// Real subcommands present; dynamic callbacks wired.
-		expect(stdout).toContain("_npi_cmd_commit");
-		expect(stdout).toContain("'completions:");
-		// zsh routes single-value dynamic flags through the _npi_call action, which
-		// itself shells out to `npi __complete $kind`.
-		expect(stdout).toContain("_npi_call models");
-		expect(stdout).toContain("_npi_call sessions");
-		expect(stdout).toContain("command npi __complete $kind");
-		// Hidden/default commands must NOT surface as completable subcommands.
-		expect(stdout).not.toContain("_npi_cmd_launch");
-		expect(stdout).not.toContain("_npi_cmd___complete");
-	}, 30_000);
-});
+}

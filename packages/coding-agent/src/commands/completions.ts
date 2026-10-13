@@ -27,7 +27,7 @@ export async function generateLiveCompletion(shell: Shell): Promise<string> {
 	}
 
 	const config: CliConfig = { bin: APP_NAME, version: VERSION, commands: map };
-	return generateCompletion(shell, buildSpec(config, ROOT_COMMAND, aliasMap));
+	return generateCompletion(shell, await buildSpec(config, ROOT_COMMAND, aliasMap));
 }
 
 export default class Completions extends Command {
