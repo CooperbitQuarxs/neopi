@@ -26,63 +26,48 @@ gh issue list --state open --search "created:>=${CUTOFF_DATE}" --json number,tit
 
 ### 2. Candidates
 
-Skip issues older than cutoff or labeled `triaged`. Of the rest, skip only if all applicable requirements hold:
-- Exactly one primary: `bug`|`enhancement`|`question`|`proposal`|`documentation`|`invalid`|`duplicate`.
-- `bug` → exactly one `prio:*`.
-- Applicable functional scope → at least one: `agent`|`tool`|`tui`|`cli`|`prompting`|`sdk`|`auth`|`setup`|`ux`|`providers`.
-- Provider-specific → matching `provider:*`; platform-specific → matching `platform:*`.
+Label vocabulary is the fork's, defined in `docs/policy/README.md` › Labels (source of truth; triage-label meanings in `docs/agents/triage-labels.md`). NEVER create labels.
+
+Skip issues older than cutoff. Of the rest, skip only if all hold:
+- Exactly one type: `bug`|`enhancement`|`documentation`|`question`|`duplicate`|`invalid`.
+- Exactly one `priority: p0`…`priority: p3`.
+- Exactly one definitive triage state: `needs-info`|`ready-for-agent`|`ready-for-human`|`wontfix`. An issue still carrying `needs-triage`, or carrying two states, is never complete.
 
 ### 3. Classification
 
-For every candidate, read title, body, and all comments; comments may contain critical context. Labels below; primary exactly one, priority exactly one only for `bug`, functional all applicable. Provider/platform labels require explicit issue evidence.
+For every candidate, read title, body, and all comments; comments may contain critical context.
 
-**Primary**
+**Type** (exactly one)
 - `bug`: broken existing behavior—crash, error, regression, "doesn't work".
 - `enhancement`: feature request/improvement to existing behavior.
 - `question`: how-to, clarification, usage question.
-- `proposal`: design/process proposal needing maintainer decision.
 - `documentation`: missing, incorrect, outdated docs.
 - `invalid`: spam, off-topic, not actionable.
 - `duplicate`: clear duplicate; reference original in a comment.
 
-**Bug priority**
-- `prio:p0`: critical blocker, data loss/security breakage, unusable workflow.
-- `prio:p1`: high impact, common workflow broken, fix soon.
-- `prio:p2`: medium impact, workaround exists, not blocking most users.
-- `prio:p3`: low impact, edge case/minor issue.
+**Priority** (exactly one)
+- `priority: p0`: critical blocker, data loss/security breakage, unusable workflow.
+- `priority: p1`: high impact, common workflow broken, fix soon.
+- `priority: p2`: medium impact, workaround exists, not blocking most users.
+- `priority: p3`: low impact, edge case/minor issue.
 
-**Functional**
-- `agent`: planning/execution loops, orchestration, runtime behavior.
-- `tool`: contracts/behavior, call protocol, integration errors.
-- `tui`: terminal UI rendering/layout/input/view state.
-- `cli`: commands, args/flags, routing.
-- `prompting`: system prompts/templates/assembly behavior.
-- `sdk`: SDK/extension integration APIs/surfaces.
-- `auth`: login, credentials, API keys, token/account management.
-- `setup`: installation/bootstrap/environment setup.
-- `ux`: non-rendering workflow/ergonomics/usability improvements.
-- `providers`: generic provider-related behavior.
+**Effort** (when estimable): `effort: tiny`|`effort: small`|`effort: medium`|`effort: large`|`effort: very large`.
 
-**Providers** — specific provider explicitly involved only:
-`provider:anthropic`, `provider:bedrock`, `provider:brave`, `provider:cerebras`, `provider:cloudflare`, `provider:codex`, `provider:copilot`, `provider:cursor`, `provider:exa`, `provider:gemini`, `provider:gitlab`, `provider:groq`, `provider:huggingface`, `provider:jina`, `provider:kimi`, `provider:litellm`, `provider:minimax`, `provider:mistral`, `provider:moonshot`, `provider:nanogpt`, `provider:novita`, `provider:nvidia`, `provider:openai`, `provider:opencode`, `provider:openrouter`, `provider:perplexity`, `provider:qianfan`, `provider:qwen`, `provider:synthetic`, `provider:together`, `provider:venice`, `provider:vercel`, `provider:xai`, `provider:xiaomi`, `provider:zai`.
-
-**Platforms** — only if material to reproduction/root cause:
-- `platform:linux`: Linux-specific behavior, distro/toolchain difference, Linux-only reproduction.
-- `platform:macos`: macOS-specific, including Homebrew/Darwin-specific.
-- `platform:windows`: native Windows, including PowerShell/cmd/Win32 specifics.
-- `platform:wsl`: WSL-specific; do not also apply linux/windows unless separately confirmed.
-
-**Meta** — manual judgment only:
-- `good first issue`: well-scoped, self-contained, suitable for new contributors.
-- `help wanted`: maintainers want community help.
+**Triage state** (exactly one; meanings in `docs/agents/triage-labels.md`)
+- `needs-triage`: unclassified, maintainer must evaluate.
+- `needs-info`: waiting on reporter.
+- `ready-for-agent`: fully specified, an agent can implement it.
+- `ready-for-human`: needs human work or a decision.
 - `wontfix`: intentional behavior or explicitly out of scope.
+
+**Other** — only with explicit evidence: `baseline`, `upstream-sync`, `hotfix`, `entangled`, `downstream`, `rpc`, `t3c-npi`, `npi-deck`, `codex-review`, `sentinel-review-requested`.
 
 ### 4. Apply
 
-Apply chosen labels; NEVER remove existing labels. Provider/platform labels require explicit evidence from body/comments.
+Apply chosen labels. Remove `needs-triage` when a definitive state replaces it, and remove any conflicting triage-state label so exactly one remains. NEVER remove other labels.
 
 ```bash
-gh issue edit <number> --add-label "bug,prio:p1,tool,providers,provider:openai"
+gh issue edit <number> --add-label "bug,priority: p1,effort: small,ready-for-agent"
 ```
 
 ### 5. Summary
@@ -94,9 +79,9 @@ After all issues, print:
 
 |#|Title|Added Labels|Skipped|
 |---|---|---|---|
-|42|Tool call stalls after retry|bug, prio:p1, agent, tool||
-|38|Add provider fallback routing|proposal, providers, provider:exa||
-|35|How to configure API key rotation|question, auth, providers, provider:minimax||
+|42|Tool call stalls after retry|bug, priority: p1, effort: small, ready-for-agent||
+|38|Add provider fallback routing|enhancement, priority: p2, effort: medium, ready-for-human||
+|35|How to configure API key rotation|question, needs-info||
 |30|Existing labels complete||Already labeled|
 ```
 
@@ -104,8 +89,6 @@ Then: `Processed: X | Labeled: Y | Skipped: Z`
 
 ## Rules
 
-- `platform:*`: only explicit platform-specific or platform-bound reproduced behavior.
-- `providers`/`provider:*`: only explicit provider scope. Named provider → both `providers` and matching `provider:*`.
-- WSL → `platform:wsl`, not `platform:linux`/`platform:windows` unless separately confirmed.
+- Only labels from `docs/policy/README.md` › Labels; no `prio:*`, `provider:*`, `platform:*`, or `area:*`.
 - Automated triage: do not apply `good first issue` or `help wanted`; maintainer judgment required.
 - Sparse body → classify from all comments; do not skip before reading them.

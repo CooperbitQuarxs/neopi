@@ -1,6 +1,6 @@
 # Fix Issues Command
 
-Diagnose, reproduce, then fix reproducible open GitHub issues in parallel: one clean worktree/issue; symlink build artifacts to avoid rebuilds.
+Diagnose, reproduce, then fix reproducible open GitHub issues in parallel: one clean worktree/issue; symlink build artifacts to avoid rebuilds. Commits, branches, PRs, and merging follow `~/repos/AGENTS.md`.
 
 ## Arguments
 
@@ -21,7 +21,7 @@ Parse `$ARGUMENTS`.
 
   User qualifiers verbatim in `query`; add `is:open` unless present. Time window (`3d`, `2w`, `12h`, ISO date; see `github` docs) → `since`. `dateField` defaults `created`; set `"updated"` only for explicitly requested recently-touched issues.
 
-Print resolved set before fan-out for scope confirmation.
+Print resolved set before fan-out.
 
 ## 2. Parallel subagents
 
@@ -36,7 +36,7 @@ Each subagent MUST:
 
 ### b. Diagnose/reproduce
 
-MUST reproduce in current cwd on `main`, before any worktree.
+MUST reproduce in current cwd on `nightly`, before any worktree.
 
 1. Read relevant checkout source; state concrete 1–2-sentence failure hypothesis.
 2. Under affected package, create focused `repro-issue-<N>-<slug>.test.ts` (or `.rs`, etc.): unique, greppable, deletable.
@@ -55,11 +55,11 @@ MAIN="$(git rev-parse --show-toplevel)"
 ENC="$(printf '%s' "$MAIN" | sed 's|[/\\:]|-|g')"
 WT="$HOME/.omp/wt/${ENC}/fix-issue-<N>"
 
-git -C "$MAIN" fetch origin main
-git -C "$MAIN" worktree add -B "fix/issue-<N>" "$WT" origin/main
+git -C "$MAIN" fetch origin nightly
+git -C "$MAIN" worktree add -B "fix/issue-<N>" "$WT" origin/nightly
 ```
 
-Branch: `fix/issue-<N>`; `fix/issue-<N>-<slug>` for multiple fixes. Worktree path follows `pr_checkout` convention.
+Branch: `fix/issue-<N>`; `fix/issue-<N>-<slug>` for multiple fixes. Worktree path follows `pr_checkout` convention; the workspace policy's `<repo-parent>/<repo>-wt-<slug>` layout is equally valid.
 
 ### d. Symlink artifacts
 
@@ -91,18 +91,21 @@ MUST NOT symlink whole `packages/natives/native/`: shadows tracked source.
 
 ### f. Commit
 
-One logical conventional commit with `Fixes #<N>`:
+One logical conventional commit with `Fixes #<N>`, signed and trailered per `~/repos/AGENTS.md`:
 
 ```bash
 git add -A
-git commit -m "fix(<scope>): <one-line summary>
+git commit -S"$HOME/.ssh/id_ed25519_github_signing_agents.pub" -m "fix(<scope>): <one-line summary>
 
-<short body explaining root cause and the fix>
+<short body explaining root cause and the fix, and the repro test run>
 
-Fixes #<N>."
+Fixes #<N>.
+
+Model: <provider>/<model-id>
+Co-authored-by: <Model Name> <noreply@<provider-domain>>"
 ```
 
-Do NOT push; human pushes/opens PR.
+Then push the topic branch and open the PR into `nightly` per `~/repos/AGENTS.md`; the Assignee babysits it with `babysit-pr`.
 
 ### g. Report
 
@@ -125,12 +128,12 @@ After all subagents, print:
 |---|-------|--------|----------------|
 ```
 
-Group worktree paths by status, `fixed` first, for batch `cd`/push.
+Group worktree paths by status, `fixed` first.
 
 ## Rules
 
-MUST: reproduce on current-cwd `main` before worktree; parallel one-issue subagents; check existing PR first and divert reasonable ones to `review-prs`; symlink `target`, `node_modules`, native `*.node` before worktree builds/tests; conventional commits with body `Fixes #<N>`.
+MUST: reproduce on current-cwd `nightly` before worktree; parallel one-issue subagents; check existing PR first and divert reasonable ones to `review-prs`; symlink `target`, `node_modules`, native `*.node` before worktree builds/tests; conventional commits with body `Fixes #<N>`.
 
-MUST NOT: symlink entire `packages/natives/native/`; push, open PRs, or comment on issues; ship stubs, product-code mocks, or `TODO: implement` placeholders; expand beyond reported bug into adjacent code smells.
+MUST NOT: symlink entire `packages/natives/native/`; comment on issues or PRs other than per `~/repos/AGENTS.md`; ship stubs, product-code mocks, or `TODO: implement` placeholders; expand beyond reported bug into adjacent code smells.
 
 Failed repro → delete temporary cwd test before yielding; leave original checkout clean.
