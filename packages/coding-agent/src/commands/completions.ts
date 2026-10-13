@@ -55,12 +55,12 @@ export default class Completions extends Command {
 		}
 
 		const script = await generateLiveCompletion(shell);
-		await new Promise<void>((resolve, reject) => {
-			process.stdout.write(script, error => {
-				if (error) reject(error);
-				else resolve();
-			});
+		const { promise, resolve, reject } = Promise.withResolvers<void>();
+		process.stdout.write(script, error => {
+			if (error) reject(error);
+			else resolve();
 		});
+		await promise;
 		await postmortem.quit(0);
 	}
 }
