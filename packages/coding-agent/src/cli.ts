@@ -43,13 +43,15 @@ import {
 	DAEMON_BROKER_WORKER_ARG,
 	IDA_HOST_WORKER_ARG,
 	LSP_MUX_WORKER_ARG,
+	MNEMOPI_EMBED_SERVER_WORKER_ARG,
+	PARENT_WATCHDOG_WORKER_ARG,
 	STATS_ACTIVITY_WORKER_ARG,
 	TERMINAL_OUTPUT_WORKER_ARG,
 	TEXT_PREDICT_WORKER_ARG,
 } from "./cli/worker-selectors";
 import type * as JsProcessEntry from "./eval/js/process-entry";
 import type { WorkerInbound as JsWorkerInbound, WorkerOutbound as JsWorkerOutbound } from "./eval/js/worker-protocol";
-import { watchParentProcess } from "./utils/parent-watchdog";
+import { startParentWatchdog } from "./subprocess/parent-watchdog";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
@@ -279,6 +281,11 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		await runIpcSubprocessWorker(startMnemopiEmbedWorker);
 		return true;
 	}
+	if (arg === MNEMOPI_EMBED_SERVER_WORKER_ARG) {
+		const { startMnemopiEmbedServerFromEnvironment } = await import("./mnemopi/embed-server");
+		await startMnemopiEmbedServerFromEnvironment();
+		return true;
+	}
 	if (arg === STATS_ACTIVITY_WORKER_ARG) {
 		const { startStatsActivityWorker } = await import("./stats/activity-worker");
 		await runIpcSubprocessWorker(startStatsActivityWorker);
@@ -289,6 +296,12 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		if (parentPort) installWorkerInbox(parentPort);
 		// This selector is the isolation boundary; a static import would evaluate xterm in normal CLI startup.
 		await import("./launch/terminal-output-worker");
+		return true;
+	}
+	if (arg === PARENT_WATCHDOG_WORKER_ARG) {
+		const parentPort = getWorkerParentPort();
+		if (parentPort) installWorkerInbox(parentPort);
+		await import("./subprocess/parent-watchdog-worker");
 		return true;
 	}
 	if (arg === DAEMON_BROKER_WORKER_ARG) {
@@ -328,7 +341,8 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
  * finalizer segfaults Bun on shutdown (issue #1606); the parent `SIGKILL`s the
  * child so that finalizer never runs in either process. This wires `process`
  * IPC to the worker's typed transport, keeps the event loop alive while the
- * worker is idle, and hard-kills the process on parent `disconnect`.
+ * worker is idle, and hard-kills the process on parent `disconnect` or — via
+ * the off-main-thread {@link startParentWatchdog} — parent exit.
  */
 async function runIpcSubprocessWorker<In, Out>(
 	start: (transport: {
@@ -399,11 +413,12 @@ async function runIpcSubprocessWorker<In, Out>(
 			};
 		},
 	});
-	// The IPC `disconnect` below is the immediate parent-death signal. The poll
-	// watchdog backs it up (reparenting, or a parent that died while another
-	// process still holds the channel) without loading the native addon into
-	// the CLI bootstrap graph.
-	const parentWatchdog = watchParentProcess({ onParentExit: () => shutdown() });
+	const initialParentPid = process.ppid;
+	if (process.platform === "win32" && initialParentPid <= 0) {
+		shutdown();
+	} else if (initialParentPid > 0) {
+		startParentWatchdog(initialParentPid);
+	}
 	const keepalive = setInterval(() => {}, 2 ** 30);
 	// Parent went away (crashed, SIGKILL, etc.) — commit suicide so we don't
 	// linger as an orphan. SIGKILL via `process.kill` keeps us symmetrical with
@@ -413,7 +428,6 @@ async function runIpcSubprocessWorker<In, Out>(
 		await shuttingDown;
 	} finally {
 		clearInterval(keepalive);
-		parentWatchdog.stop();
 	}
 	process.kill(process.pid, "SIGKILL");
 }

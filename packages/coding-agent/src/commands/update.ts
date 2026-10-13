@@ -20,12 +20,7 @@ export default class Update extends Command {
 		stable: Flags.boolean({ description: "Switch back to the stable channel", default: false }),
 	};
 
-	static examples = [
-		`${APP_NAME} update`,
-		`${APP_NAME} update --check`,
-		`${APP_NAME} update --canary`,
-		`# If GitHub rate-limits release metadata, set GITHUB_TOKEN or GH_TOKEN\n  GITHUB_TOKEN=... ${APP_NAME} update`,
-	];
+	static examples = [`${APP_NAME} update`, `${APP_NAME} update --check`, `${APP_NAME} update --canary`];
 
 	async run(): Promise<void> {
 		const { flags } = await this.parse(Update);

@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { Input } from "@oh-my-pi/pi-tui/components/input";
+import { SPACE_HOLD_MECHANICAL_RUN } from "@oh-my-pi/pi-tui/space-hold";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import {
 	resetHangulCompatibilityJamoWidthForTests,

@@ -42,6 +42,7 @@ export default class AuthGateway extends Command {
 
 	static examples = [
 		`# Boot the gateway against the configured broker\n  ${APP_NAME} auth-gateway serve`,
+		`# Serve the same routes as JSON lines on stdin/stdout with your own credentials\n  echo '{"id":1,"path":"/v1/chat/completions","body":{"model":"@smol","messages":[{"role":"user","content":"hi"}]}}' | ${APP_NAME} auth-gateway stdio`,
 		`# Boot on a non-default port\n  ${APP_NAME} auth-gateway serve --bind=127.0.0.1:4000`,
 		`# Trust client IP headers from a trusted reverse proxy\n  ${APP_NAME} auth-gateway serve --trust-proxy-headers`,
 		`# Print the gateway bearer token (creates one on first run)\n  ${APP_NAME} auth-gateway token`,

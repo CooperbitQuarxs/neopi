@@ -50,6 +50,7 @@ import {
 } from "../session/retry-fallback-chains";
 import {
 	AUTO_THINKING,
+	type ConfiguredThinkingLevel,
 	concreteThinkingLevel,
 	shouldDisableReasoning,
 	toReasoningEffort,
@@ -217,9 +218,8 @@ function appendFallbackCandidates(
 	expanded: Set<string>,
 	out: CompletionCandidate[],
 ): void {
-	// The expansion outcome follows the inherited effort for bare entries,
-	// so qualify the visit: the root call has no parent and keeps the bare
-	// selector key, while nested calls fold in the inherited effort.
+	// Explicit primary effort seeds root inheritance; nested calls fold in
+	// each candidate's inherited effort.
 	const visit = parent ? `${selector}|${parent.disableReasoning ? "off" : (parent.reasoning ?? "inherit")}` : selector;
 	if (expanded.has(visit)) return;
 	expanded.add(visit);
@@ -322,7 +322,6 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 	];
 	const retry = cfgRetry.get(session.settings);
 	if (!retry.enabled || !retry.modelFallback) return candidates;
-
 	appendFallbackCandidates(
 		{
 			context: {

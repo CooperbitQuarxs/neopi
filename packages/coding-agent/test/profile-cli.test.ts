@@ -186,6 +186,8 @@ describe("global --profile flag", () => {
 				...process.env,
 				HOME: home,
 				NPI_TEST_ALLOWED_STORAGE_ROOT: root,
+				// os.homedir() reads USERPROFILE on Windows, HOME elsewhere.
+				USERPROFILE: home,
 				PI_CONFIG_DIR: configDir,
 				PI_NO_TITLE: "1",
 				NO_COLOR: "1",
@@ -240,6 +242,7 @@ describe("global --profile flag", () => {
 				...process.env,
 				HOME: home,
 				NPI_TEST_ALLOWED_STORAGE_ROOT: root,
+				USERPROFILE: home,
 				PI_CONFIG_DIR: ".omp-profile-cli-env-bad",
 				OMP_PROFILE: "..",
 				NO_COLOR: "1",

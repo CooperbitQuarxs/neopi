@@ -385,7 +385,8 @@ describe("workspace-scoped rosters on a shared registry", () => {
 		const onCwdChange = async (cwd: string) => {
 			await source.rebindMixturesForCwd(cwd, true);
 			if (cwd === targetDir && failTarget) {
-				vi.spyOn(fixture.registry, "getAvailable").mockImplementationOnce(() => {
+				// Session restoration now looks up saved selectors directly instead of listing available models.
+				vi.spyOn(fixture.registry, "find").mockImplementationOnce(() => {
 					throw failure;
 				});
 			}
