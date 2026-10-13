@@ -409,15 +409,23 @@ export class ModelRegistry {
 		this.#catalogMetrics.add(models);
 	}
 
+	/** Carries the winning descriptor's verified capacity across row projections. */
+	#carryStandardWindow(source: Model<Api>, projected: Model<Api>): Model<Api> {
+		const standard =
+			this.#standardWindows.get(source) ?? this.#policyWindowTiers.get(source)?.standard ?? source.contextWindow;
+		if (typeof standard === "number" && Number.isSafeInteger(standard) && standard > 0) {
+			this.#standardWindows.set(projected, standard);
+		}
+		return projected;
+	}
+
 	/** Final pass over every published model list: catalog metrics, then implicit local providers last. */
 	#finalizeModels(models: Model<Api>[]): Model<Api>[] {
-		const finalized = this.#orderImplicitProvidersLast(applyCatalogMetrics(models, this.#catalogMetrics));
-		for (const model of finalized) {
-			const standard = this.#windowTiers.get(contextWindowKey(model))?.standard ?? model.contextWindow;
-			if (typeof standard === "number" && Number.isSafeInteger(standard) && standard > 0) {
-				this.#standardWindows.set(model, standard);
-			}
+		const measured = applyCatalogMetrics(models, this.#catalogMetrics);
+		for (let index = 0; index < measured.length; index++) {
+			this.#carryStandardWindow(models[index], measured[index]);
 		}
+		const finalized = this.#orderImplicitProvidersLast(measured);
 		return finalized;
 	}
 
@@ -2569,14 +2577,14 @@ export class ModelRegistry {
 		return models.map(model => {
 			const providerType = providers.get(model.provider);
 			if (providerType === "litellm" && model.providerType !== providerType) {
-				return buildDiscoveredModel(toModelSpec(model), providerType);
+				return this.#carryStandardWindow(model, buildDiscoveredModel(toModelSpec(model), providerType));
 			}
 			if (providerType !== "llama.cpp") return model;
 			const spec = toModelSpec(model);
 			if (!model.transport) {
 				spec.baseUrl = ensureLlamaCppV1BaseUrl(normalizeLlamaCppBaseUrl(model.baseUrl));
 			}
-			return buildDiscoveredModel(spec, providerType);
+			return this.#carryStandardWindow(model, buildDiscoveredModel(spec, providerType));
 		});
 	}
 
@@ -2637,7 +2645,10 @@ export class ModelRegistry {
 			"baseUrl" | "baseUrlApis" | "headers" | "authHeader" | "apiKey" | "remoteCompaction" | "transport"
 		>,
 	): Model<Api> {
-		return buildModel(this.#applyProviderTransportOverride(toModelSpec(model), override));
+		return this.#carryStandardWindow(
+			model,
+			buildModel(this.#applyProviderTransportOverride(toModelSpec(model), override)),
+		);
 	}
 
 	#applyProviderBedrockOverrides(models: Model<Api>[]): Model<Api>[] {
@@ -2654,7 +2665,10 @@ export class ModelRegistry {
 			) {
 				return model;
 			}
-			return buildModel({ ...toModelSpec(model), ...bedrockFields } as ModelSpec<Api>);
+			return this.#carryStandardWindow(
+				model,
+				buildModel({ ...toModelSpec(model), ...bedrockFields } as ModelSpec<Api>),
+			);
 		});
 	}
 
@@ -2708,6 +2722,7 @@ export class ModelRegistry {
 			const override = providerOverrides
 				? resolveModelOverrideWithAliases(providerOverrides, model, hasLiveModel)
 				: undefined;
+			this.#carryStandardWindow(model, model);
 			const overridden = override ? this.#applyModelOverrideWithClamp(model, override) : model;
 			// Resolve configuration before selecting a window. A context-only
 			// override remains fixed; an unrelated override preserves the custom pair.
@@ -2766,7 +2781,7 @@ export class ModelRegistry {
 		if (!options.extendedContext && !compactionPointReaches(options.compactionPoints, baseline, standard)) {
 			return model;
 		}
-		return applyModelOverride(model, { contextWindow: window });
+		return this.#carryStandardWindow(model, applyModelOverride(model, { contextWindow: window }));
 	}
 
 	/**
@@ -2838,7 +2853,7 @@ export class ModelRegistry {
 	 */
 	#applyModelOverrideWithClamp(model: Model<Api>, override: ModelOverride): Model<Api> {
 		this.#warnUnservedOverrideKind(model, override);
-		const overridden = applyModelOverride(model, override);
+		const overridden = this.#carryStandardWindow(model, applyModelOverride(model, override));
 		if (
 			override.contextWindow === undefined ||
 			overridden.contextWindow === null ||
@@ -2848,7 +2863,7 @@ export class ModelRegistry {
 		}
 		const clamped = clampCodexContextWindow(model, overridden.contextWindow);
 		if (clamped === overridden.contextWindow) return overridden;
-		return applyModelOverride(overridden, { contextWindow: clamped });
+		return this.#carryStandardWindow(overridden, applyModelOverride(overridden, { contextWindow: clamped }));
 	}
 
 	/** Logs, once per model and kind, a `modelOverrides` kind that `applyModelOverride` ignores. */

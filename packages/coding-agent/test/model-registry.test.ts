@@ -2900,6 +2900,26 @@ describe("ModelRegistry", () => {
 			expect(windowOf(registry, "luna-proxy", "luna-extended-no-price")).toBe(272_000);
 		});
 
+		test("a widened unpriced override preserves the declared standard capacity without retaining tiers", () => {
+			writeRawModelsJson({
+				"luna-proxy": {
+					baseUrl: "https://example.com/v1",
+					api: "openai-responses",
+					auth: "none",
+					models: [{ id: "luna-extended-no-price", contextWindow: 272_000, maxContextWindow: 872_000 }],
+					modelOverrides: { "luna-extended-no-price": { contextWindow: 600_000 } },
+				},
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+				settings: Settings.isolated({ extendedContext: true }),
+			});
+			const luna = registry.find("luna-proxy", "luna-extended-no-price");
+			expect(luna?.contextWindow).toBe(600_000);
+			expect(luna?.cost.longContext).toBeUndefined();
+			expect(registry.contextWindowTiers({ provider: "luna-proxy", id: "luna-extended-no-price" })).toBeUndefined();
+			expect(windowOf(registry, "luna-proxy", "luna-extended-no-price")).toBe(272_000);
+		});
+
 		test("smaller effective overrides and paid tiers constrain the baseline, but subscription statistics do not", () => {
 			writeRawModelsJson({
 				"openai-codex": { modelOverrides: { "gpt-5.6-luna": { contextWindow: 96_000 } } },
