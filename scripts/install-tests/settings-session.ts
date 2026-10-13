@@ -86,6 +86,8 @@ export default function (api) {
 						cwd: fixture.cwd, agentDir: fixture.agentDir,
 						overrides: {
 							"async.enabled": false, "task.batch": false,
+							// The fixture never calls yield; unstructured children return the reply verbatim.
+							"task.structured": false,
 							"task.isolation.enabled": false, "task.enableLsp": false,
 							"modelRoles": { default: "fixture/fallback", tiny: "fixture/tiny" },
 						},

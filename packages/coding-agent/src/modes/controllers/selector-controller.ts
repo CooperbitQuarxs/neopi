@@ -1077,7 +1077,8 @@ export class SelectorController {
 		const taskOverride = cfgTaskAgentModelOverrides.get(this.ctx.settings).task;
 		const taskSelector = (Array.isArray(taskOverride) ? taskOverride[0] : taskOverride) ?? currentSelector;
 		let closed = false;
-		let closeTracked: (() => void) | undefined;
+		// Set once the picker is mounted and tracked; `done` may run before that.
+		let closeTracked: (() => void) | undefined = undefined;
 		const done = () => {
 			if (closed) return;
 			closed = true;
