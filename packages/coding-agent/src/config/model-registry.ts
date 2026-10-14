@@ -262,6 +262,16 @@ function contextWindowKey(model: { provider: string; id: string }): string {
 	return `${model.provider}\u0000${model.id}`;
 }
 
+/**
+ * Provenance a `modifyModels` input row carries into the shallow copies a hook
+ * makes from it. An own enumerable symbol key is what `{ ...row }` copies and
+ * what `structuredClone`, `JSON.stringify` and `Object.keys` ignore, so a copy
+ * with a new provider/id still names its source row; the registry strips it
+ * from every returned row before publishing.
+ */
+const MODIFIER_SOURCE: unique symbol = Symbol("modelModifierSource");
+type ModifierRow = Model<Api> & { [MODIFIER_SOURCE]?: Model<Api> };
+
 /** The context window a model runs with by default, and the larger one extended context opts it into. */
 export interface ContextWindowTiers {
 	standard: number;
@@ -1134,6 +1144,7 @@ export class ModelRegistry {
 				);
 				for (let index = 0; index < snapshot.length; index++) {
 					this.#carryStandardWindow(projected[index], snapshot[index]);
+					(snapshot[index] as ModifierRow)[MODIFIER_SOURCE] = snapshot[index];
 					if (projected[index].resolveHeaders) snapshot[index].resolveHeaders = projected[index].resolveHeaders;
 				}
 				const sourcesByKey = new Map(snapshot.map(model => [contextWindowKey(model), model]));
@@ -1147,11 +1158,8 @@ export class ModelRegistry {
 				// reader crashes, or an identity left over from a different id.
 				// Rows of other providers pass through untouched; rebuilding a
 				// full catalog on every projection costs more than it can fix.
-				projected = modifyModels(snapshot, credential).map(model => {
-					if (!this.#standardWindows.has(model as Model<Api>)) {
-						const source = sourcesByKey.get(contextWindowKey(model));
-						if (source) this.#carryStandardWindow(source, model as Model<Api>);
-					}
+				projected = modifyModels(snapshot, credential).map(returned => {
+					const model = this.#claimModifierRow(returned, sourcesByKey);
 					const withHeaders =
 						model.resolveHeaders && model.headers
 							? {
@@ -1160,7 +1168,7 @@ export class ModelRegistry {
 									resolveHeaders: createConfigHeaderResolver([model.resolveHeaders, model.headers]),
 								}
 							: model;
-					this.#carryStandardWindow(model as Model<Api>, withHeaders as Model<Api>);
+					this.#carryStandardWindow(model, withHeaders as Model<Api>);
 					if (withHeaders.provider !== providerName) return withHeaders as Model<Api>;
 					// `identity` exists only on built rows. Without it the hook
 					// authored a spec, where `compat` already is the sparse
@@ -1168,7 +1176,7 @@ export class ModelRegistry {
 					// `compatConfig`; built rows keep resolving from that field
 					// instead of feeding the resolved view back in as an override.
 					return this.#carryStandardWindow(
-						model as Model<Api>,
+						model,
 						buildModel(
 							withHeaders.identity === undefined
 								? (withHeaders as ModelSpec<Api>)
@@ -1181,6 +1189,25 @@ export class ModelRegistry {
 			}
 		}
 		return projected;
+	}
+
+	/**
+	 * Resolves the verified capacity of a row a modifier returned and strips the
+	 * provenance it carried in. A snapshot row keeps its stamp even when renamed
+	 * in place; an unstamped row inherits from the snapshot row of the same
+	 * provider/id, else from the row it was spread from so long as the hook left
+	 * that row's `contextWindow` alone. A copy whose capacity the hook rewrote
+	 * declares a fresh capacity, exactly like a synthesized spec, because the
+	 * registry cannot tell a widened standard tier from an extended one.
+	 */
+	#claimModifierRow(row: ModifierRow, sourcesByKey: ReadonlyMap<string, Model<Api>>): Model<Api> {
+		const origin = row[MODIFIER_SOURCE];
+		if (origin !== undefined) delete row[MODIFIER_SOURCE];
+		if (this.#standardWindows.has(row)) return row;
+		const source =
+			sourcesByKey.get(contextWindowKey(row)) ?? (origin?.contextWindow === row.contextWindow ? origin : undefined);
+		if (source) this.#carryStandardWindow(source, row);
+		return row;
 	}
 
 	/**
