@@ -262,6 +262,16 @@ function contextWindowKey(model: { provider: string; id: string }): string {
 	return `${model.provider}\u0000${model.id}`;
 }
 
+/**
+ * Provenance a `modifyModels` input row carries into the shallow copies a hook
+ * makes from it. An own enumerable symbol key is what `{ ...row }` copies and
+ * what `structuredClone`, `JSON.stringify` and `Object.keys` ignore, so a copy
+ * with a new provider/id still names its source row; the registry strips it
+ * from every returned row before publishing.
+ */
+const MODIFIER_SOURCE: unique symbol = Symbol("modelModifierSource");
+type ModifierRow = Model<Api> & { [MODIFIER_SOURCE]?: Model<Api> };
+
 /** The context window a model runs with by default, and the larger one extended context opts it into. */
 export interface ContextWindowTiers {
 	standard: number;
@@ -409,15 +419,23 @@ export class ModelRegistry {
 		this.#catalogMetrics.add(models);
 	}
 
+	/** Carries the winning descriptor's verified capacity across row projections. */
+	#carryStandardWindow(source: Model<Api>, projected: Model<Api>): Model<Api> {
+		const standard =
+			this.#standardWindows.get(source) ?? this.#policyWindowTiers.get(source)?.standard ?? source.contextWindow;
+		if (typeof standard === "number" && Number.isSafeInteger(standard) && standard > 0) {
+			this.#standardWindows.set(projected, standard);
+		}
+		return projected;
+	}
+
 	/** Final pass over every published model list: catalog metrics, then implicit local providers last. */
 	#finalizeModels(models: Model<Api>[]): Model<Api>[] {
-		const finalized = this.#orderImplicitProvidersLast(applyCatalogMetrics(models, this.#catalogMetrics));
-		for (const model of finalized) {
-			const standard = this.#windowTiers.get(contextWindowKey(model))?.standard ?? model.contextWindow;
-			if (typeof standard === "number" && Number.isSafeInteger(standard) && standard > 0) {
-				this.#standardWindows.set(model, standard);
-			}
+		const measured = applyCatalogMetrics(models, this.#catalogMetrics);
+		for (let index = 0; index < measured.length; index++) {
+			this.#carryStandardWindow(models[index], measured[index]);
 		}
+		const finalized = this.#orderImplicitProvidersLast(measured);
 		return finalized;
 	}
 
@@ -1125,8 +1143,11 @@ export class ModelRegistry {
 					projected.map(({ resolveHeaders: _resolveHeaders, ...model }) => model),
 				);
 				for (let index = 0; index < snapshot.length; index++) {
+					this.#carryStandardWindow(projected[index], snapshot[index]);
+					(snapshot[index] as ModifierRow)[MODIFIER_SOURCE] = snapshot[index];
 					if (projected[index].resolveHeaders) snapshot[index].resolveHeaders = projected[index].resolveHeaders;
 				}
+				const sourcesByKey = new Map(snapshot.map(model => [contextWindowKey(model), model]));
 				// A hook owns its provider's rows and may synthesize them outright
 				// (a credential-scoped catalog replacing the registered bootstrap)
 				// or respell the ones it was handed. Extensions author `ModelSpec`s
@@ -1137,7 +1158,8 @@ export class ModelRegistry {
 				// reader crashes, or an identity left over from a different id.
 				// Rows of other providers pass through untouched; rebuilding a
 				// full catalog on every projection costs more than it can fix.
-				projected = modifyModels(snapshot, credential).map(model => {
+				projected = modifyModels(snapshot, credential).map(returned => {
+					const model = this.#claimModifierRow(returned, sourcesByKey);
 					const withHeaders =
 						model.resolveHeaders && model.headers
 							? {
@@ -1146,16 +1168,20 @@ export class ModelRegistry {
 									resolveHeaders: createConfigHeaderResolver([model.resolveHeaders, model.headers]),
 								}
 							: model;
+					this.#carryStandardWindow(model, withHeaders as Model<Api>);
 					if (withHeaders.provider !== providerName) return withHeaders as Model<Api>;
 					// `identity` exists only on built rows. Without it the hook
 					// authored a spec, where `compat` already is the sparse
 					// override `toModelSpec` would drop while reading the absent
 					// `compatConfig`; built rows keep resolving from that field
 					// instead of feeding the resolved view back in as an override.
-					return buildModel(
-						withHeaders.identity === undefined
-							? (withHeaders as ModelSpec<Api>)
-							: toModelSpec(withHeaders as Model<Api>),
+					return this.#carryStandardWindow(
+						model,
+						buildModel(
+							withHeaders.identity === undefined
+								? (withHeaders as ModelSpec<Api>)
+								: toModelSpec(withHeaders as Model<Api>),
+						),
 					);
 				});
 			} catch (error) {
@@ -1163,6 +1189,25 @@ export class ModelRegistry {
 			}
 		}
 		return projected;
+	}
+
+	/**
+	 * Resolves the verified capacity of a row a modifier returned and strips the
+	 * provenance it carried in. A snapshot row keeps its stamp even when renamed
+	 * in place; an unstamped row inherits from the snapshot row of the same
+	 * provider/id, else from the row it was spread from so long as the hook left
+	 * that row's `contextWindow` alone. A copy whose capacity the hook rewrote
+	 * declares a fresh capacity, exactly like a synthesized spec, because the
+	 * registry cannot tell a widened standard tier from an extended one.
+	 */
+	#claimModifierRow(row: ModifierRow, sourcesByKey: ReadonlyMap<string, Model<Api>>): Model<Api> {
+		const origin = row[MODIFIER_SOURCE];
+		if (origin !== undefined) delete row[MODIFIER_SOURCE];
+		if (this.#standardWindows.has(row)) return row;
+		const source =
+			sourcesByKey.get(contextWindowKey(row)) ?? (origin?.contextWindow === row.contextWindow ? origin : undefined);
+		if (source) this.#carryStandardWindow(source, row);
+		return row;
 	}
 
 	/**
@@ -2569,14 +2614,14 @@ export class ModelRegistry {
 		return models.map(model => {
 			const providerType = providers.get(model.provider);
 			if (providerType === "litellm" && model.providerType !== providerType) {
-				return buildDiscoveredModel(toModelSpec(model), providerType);
+				return this.#carryStandardWindow(model, buildDiscoveredModel(toModelSpec(model), providerType));
 			}
 			if (providerType !== "llama.cpp") return model;
 			const spec = toModelSpec(model);
 			if (!model.transport) {
 				spec.baseUrl = ensureLlamaCppV1BaseUrl(normalizeLlamaCppBaseUrl(model.baseUrl));
 			}
-			return buildDiscoveredModel(spec, providerType);
+			return this.#carryStandardWindow(model, buildDiscoveredModel(spec, providerType));
 		});
 	}
 
@@ -2637,7 +2682,10 @@ export class ModelRegistry {
 			"baseUrl" | "baseUrlApis" | "headers" | "authHeader" | "apiKey" | "remoteCompaction" | "transport"
 		>,
 	): Model<Api> {
-		return buildModel(this.#applyProviderTransportOverride(toModelSpec(model), override));
+		return this.#carryStandardWindow(
+			model,
+			buildModel(this.#applyProviderTransportOverride(toModelSpec(model), override)),
+		);
 	}
 
 	#applyProviderBedrockOverrides(models: Model<Api>[]): Model<Api>[] {
@@ -2654,7 +2702,10 @@ export class ModelRegistry {
 			) {
 				return model;
 			}
-			return buildModel({ ...toModelSpec(model), ...bedrockFields } as ModelSpec<Api>);
+			return this.#carryStandardWindow(
+				model,
+				buildModel({ ...toModelSpec(model), ...bedrockFields } as ModelSpec<Api>),
+			);
 		});
 	}
 
@@ -2708,6 +2759,7 @@ export class ModelRegistry {
 			const override = providerOverrides
 				? resolveModelOverrideWithAliases(providerOverrides, model, hasLiveModel)
 				: undefined;
+			this.#carryStandardWindow(model, model);
 			const overridden = override ? this.#applyModelOverrideWithClamp(model, override) : model;
 			// Resolve configuration before selecting a window. A context-only
 			// override remains fixed; an unrelated override preserves the custom pair.
@@ -2766,7 +2818,7 @@ export class ModelRegistry {
 		if (!options.extendedContext && !compactionPointReaches(options.compactionPoints, baseline, standard)) {
 			return model;
 		}
-		return applyModelOverride(model, { contextWindow: window });
+		return this.#carryStandardWindow(model, applyModelOverride(model, { contextWindow: window }));
 	}
 
 	/**
@@ -2838,7 +2890,7 @@ export class ModelRegistry {
 	 */
 	#applyModelOverrideWithClamp(model: Model<Api>, override: ModelOverride): Model<Api> {
 		this.#warnUnservedOverrideKind(model, override);
-		const overridden = applyModelOverride(model, override);
+		const overridden = this.#carryStandardWindow(model, applyModelOverride(model, override));
 		if (
 			override.contextWindow === undefined ||
 			overridden.contextWindow === null ||
@@ -2848,7 +2900,7 @@ export class ModelRegistry {
 		}
 		const clamped = clampCodexContextWindow(model, overridden.contextWindow);
 		if (clamped === overridden.contextWindow) return overridden;
-		return applyModelOverride(overridden, { contextWindow: clamped });
+		return this.#carryStandardWindow(overridden, applyModelOverride(overridden, { contextWindow: clamped }));
 	}
 
 	/** Logs, once per model and kind, a `modelOverrides` kind that `applyModelOverride` ignores. */

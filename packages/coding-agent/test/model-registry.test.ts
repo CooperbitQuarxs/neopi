@@ -2900,6 +2900,188 @@ describe("ModelRegistry", () => {
 			expect(windowOf(registry, "luna-proxy", "luna-extended-no-price")).toBe(272_000);
 		});
 
+		test("a widened unpriced override preserves the declared standard capacity without retaining tiers", () => {
+			writeRawModelsJson({
+				"luna-proxy": {
+					baseUrl: "https://example.com/v1",
+					api: "openai-responses",
+					auth: "none",
+					models: [{ id: "luna-extended-no-price", contextWindow: 272_000, maxContextWindow: 872_000 }],
+					modelOverrides: { "luna-extended-no-price": { contextWindow: 600_000 } },
+				},
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+				settings: Settings.isolated({ extendedContext: true }),
+			});
+			const luna = registry.find("luna-proxy", "luna-extended-no-price");
+			expect(luna?.contextWindow).toBe(600_000);
+			expect(luna?.cost.longContext).toBeUndefined();
+			expect(registry.contextWindowTiers({ provider: "luna-proxy", id: "luna-extended-no-price" })).toBeUndefined();
+			expect(windowOf(registry, "luna-proxy", "luna-extended-no-price")).toBe(272_000);
+		});
+
+		for (const projection of ["identity", "shallow-copy", "rename", "synthesize"] as const) {
+			test(`OAuth ${projection} projections preserve source capacity without stamping synthesized rows`, async () => {
+				writeRawModelsJson(
+					Object.fromEntries(
+						["luna-proxy", "unrelated-proxy"].map(provider => [
+							provider,
+							{
+								baseUrl: "https://example.com/v1",
+								api: "openai-responses",
+								auth: "none",
+								models: [{ id: "luna", contextWindow: 272_000, maxContextWindow: 872_000 }],
+							},
+						]),
+					),
+				);
+				await authStorage.credentials.set("luna-proxy", {
+					type: "oauth",
+					access: "access-token",
+					refresh: "refresh-token",
+					expires: Date.now() + 60_000,
+				});
+				const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+					settings: Settings.isolated({ extendedContext: true }),
+				});
+				registry.registerProvider(
+					"luna-proxy",
+					{
+						baseUrl: "https://example.com/v1",
+						api: "openai-responses",
+						models: [
+							{
+								id: "luna",
+								name: "Luna",
+								contextWindow: 272_000,
+								maxTokens: 16_384,
+								reasoning: false,
+								input: ["text"],
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							},
+						],
+						headers: { "X-Parent": "parent" },
+						oauth: {
+							name: "Luna OAuth",
+							login: async () => ({ access: "a", refresh: "r", expires: Date.now() + 60_000 }),
+							refreshToken: async credentials => credentials,
+							getApiKey: credentials => credentials.access,
+							modifyModels: models => {
+								const row = models.find(model => model.provider === "luna-proxy" && model.id === "luna");
+								if (!row) throw new Error("Missing modifier source");
+								if (projection === "shallow-copy") {
+									return models.toReversed().map(model => ({ ...model }));
+								}
+								if (projection === "rename") {
+									row.id = "renamed-luna";
+									row.headers = { "X-Projection": "renamed" };
+									return models.toReversed();
+								}
+								if (projection === "synthesize") {
+									return [{ ...row, id: "new-luna", contextWindow: 400_000 }, ...models.toReversed()];
+								}
+								return models;
+							},
+						},
+					},
+					"ext://standard-capacity",
+				);
+				await registry.refresh("offline");
+				const id = projection === "rename" ? "renamed-luna" : "luna";
+				expect(registry.find("luna-proxy", id)?.contextWindow).toBe(872_000);
+				expect(windowOf(registry, "luna-proxy", id)).toBe(272_000);
+				expect(registry.find("unrelated-proxy", "luna")?.contextWindow).toBe(872_000);
+				expect(windowOf(registry, "unrelated-proxy", "luna")).toBe(272_000);
+				if (projection === "synthesize") {
+					expect(windowOf(registry, "luna-proxy", "new-luna")).toBe(400_000);
+				}
+			});
+		}
+
+		// The supported projection pattern spreads a row into a fresh object
+		// with a new id, so the copy is neither the stamped snapshot row nor a
+		// known provider/id key: provenance must survive the copy itself.
+		const renameCopy = (model: Model) => ({ ...model, id: `${model.id}-renamed` });
+		const copyProjections: Record<string, (models: Model[]) => Model[]> = {
+			"copy-rename": models => models.map(renameCopy),
+			"copy-rename-reorder": models => models.toReversed().map(renameCopy),
+			"copy-rename-reorder-drop": models =>
+				models
+					.filter(model => model.provider !== "unrelated-proxy")
+					.toReversed()
+					.map(renameCopy),
+		};
+		for (const [projection, modifyModels] of Object.entries(copyProjections)) {
+			test(`OAuth ${projection} projections preserve source capacity through immutable renames`, async () => {
+				writeRawModelsJson(
+					Object.fromEntries(
+						["luna-proxy", "unrelated-proxy"].map(provider => [
+							provider,
+							{
+								baseUrl: "https://example.com/v1",
+								api: "openai-responses",
+								auth: "none",
+								models: [{ id: "luna", contextWindow: 272_000, maxContextWindow: 872_000 }],
+							},
+						]),
+					),
+				);
+				await authStorage.credentials.set("luna-proxy", {
+					type: "oauth",
+					access: "access-token",
+					refresh: "refresh-token",
+					expires: Date.now() + 60_000,
+				});
+				const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+					settings: Settings.isolated({ extendedContext: true }),
+				});
+				registry.registerProvider(
+					"luna-proxy",
+					{
+						baseUrl: "https://example.com/v1",
+						api: "openai-responses",
+						models: [
+							{
+								id: "luna",
+								name: "Luna",
+								contextWindow: 272_000,
+								maxTokens: 16_384,
+								reasoning: false,
+								input: ["text"],
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							},
+						],
+						oauth: {
+							name: "Luna OAuth",
+							login: async () => ({ access: "a", refresh: "r", expires: Date.now() + 60_000 }),
+							refreshToken: async credentials => credentials,
+							getApiKey: credentials => credentials.access,
+							modifyModels,
+						},
+					},
+					"ext://standard-capacity",
+				);
+				await registry.refresh("offline");
+				const renamed = registry.find("luna-proxy", "luna-renamed");
+				if (!renamed) throw new Error("Missing renamed Luna");
+				expect(registry.find("luna-proxy", "luna")).toBeUndefined();
+				expect(renamed.contextWindow).toBe(872_000);
+				expect(windowOf(registry, "luna-proxy", "luna-renamed")).toBe(272_000);
+				// Provenance is registry bookkeeping, not a published model field.
+				expect(Object.getOwnPropertySymbols(renamed)).toEqual([]);
+				if (projection === "copy-rename-reorder-drop") {
+					expect(registry.find("unrelated-proxy", "luna")).toBeUndefined();
+					expect(registry.find("unrelated-proxy", "luna-renamed")).toBeUndefined();
+					return;
+				}
+				const unrelated = registry.find("unrelated-proxy", "luna-renamed");
+				if (!unrelated) throw new Error("Missing renamed unrelated Luna");
+				expect(unrelated.contextWindow).toBe(872_000);
+				expect(windowOf(registry, "unrelated-proxy", "luna-renamed")).toBe(272_000);
+				expect(Object.getOwnPropertySymbols(unrelated)).toEqual([]);
+			});
+		}
+
 		test("smaller effective overrides and paid tiers constrain the baseline, but subscription statistics do not", () => {
 			writeRawModelsJson({
 				"openai-codex": { modelOverrides: { "gpt-5.6-luna": { contextWindow: 96_000 } } },
