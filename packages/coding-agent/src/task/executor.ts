@@ -470,6 +470,8 @@ export interface ExecutorOptions {
 	/** Extension routing note for the chosen model; surfaced as `resolvedModelRoute`. */
 	/** Raw per-invocation selector; only this selector's suffix is caller-explicit. */
 	callerModelSelector?: string | string[];
+	/** Explicit level from a `<agent-name>:<effort>` selector; outranks `callerModelSelector`'s suffix. */
+	callerThinkingLevel?: ConfiguredThinkingLevel;
 	modelRoute?: string;
 	/**
 	 * Active model selector of the parent session, used as an auth-aware fallback
@@ -4623,13 +4625,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					: Array.isArray(callerModelSelector)
 						? callerModelSelector
 						: [callerModelSelector];
-			const callerLevel = callerSelectors
-				.map(selector =>
-					extractExplicitThinkingSelector(selector, undefined, {
-						isLiteralModelId: (provider, id) => registryHasLiteralModel(modelRegistry, provider, id),
-					}),
-				)
-				.find(level => level !== undefined);
+			const callerLevel =
+				options.callerThinkingLevel ??
+				callerSelectors
+					.map(selector =>
+						extractExplicitThinkingSelector(selector, undefined, {
+							isLiteralModelId: (provider, id) => registryHasLiteralModel(modelRegistry, provider, id),
+						}),
+					)
+					.find(level => level !== undefined);
 			const role = modelRole ?? resolveExplicitModelRole(callerModelSelector, settings);
 			const savedRoleSelection = role ? settings.getRoleEffortSelection(role) : undefined;
 			const replacementEffort =

@@ -105,6 +105,8 @@ Landed 23 Aug 2026 in `e4fadf1299` and `7039de1ad4`.
 
 An unregistered `agent` value shaped like `provider/model[:effort]` or `@role[:effort]` crews the generic task agent. Registered agent names take precedence. Invalid selectors fail during preflight.
 
+A registered agent name may carry an effort suffix: `scout:high` runs the `scout` agent, with its own prompt, tools, restrictions and model, at `high` effort. An exact registered name wins first, so a name that itself contains `:` keeps working. The suffix is a caller-explicit level, like a model selector's; an effort the agent's model cannot honor fails preflight and names that model. The same grammar applies to task, eval `agent()` and `workpool()` ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
+
 ## Binary and update
 
 NeoPi builds `packages/coding-agent/dist/npi` and installs only as `npi`. Exact argv `npi update` launches the fork-specific interactive update request from `packages/coding-agent/src/prompts/npi-update.md`; extra update flags retain ordinary updater behavior.

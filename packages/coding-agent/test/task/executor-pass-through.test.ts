@@ -569,6 +569,30 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		const forwarded = spy.mock.calls[0]?.[0];
 		expect(forwarded?.thinkingLevel).toBe(ThinkingLevel.Low);
 	});
+
+	it("applies a named-agent selector's effort over the agent's role suffix and default", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const settings = Settings.isolated();
+		settings.setModelRole("task", `${model.provider}/${model.id}:high`);
+		const session = yieldEmittingSession();
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const result = await runSubprocess({
+			...baseOptions,
+			agent: { ...baseAgent, model: ["@task"] },
+			id: "subagent-named-effort",
+			settings,
+			modelRegistry: createModelRegistry(model),
+			thinkingLevel: ThinkingLevel.Low,
+			callerThinkingLevel: ThinkingLevel.Medium,
+		});
+
+		expect(result.exitCode).toBe(0);
+		// `scout:medium` is the caller's explicit choice: it outranks both the
+		// role's saved `:high` suffix and the agent definition's default.
+		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe(ThinkingLevel.Medium);
+	});
 	it("resolves a regex model override including its effort suffix ahead of a glob fallback", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallback = getBundledModel("anthropic", "claude-opus-4-5");

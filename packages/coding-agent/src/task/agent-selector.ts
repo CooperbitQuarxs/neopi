@@ -62,6 +62,43 @@ export function isAgentModelSelector(value: string): boolean {
 }
 
 /**
+ * Split `<agent-name>:<effort>` into a registered-agent base and an explicit
+ * thinking level. Returns undefined for model selectors (`/`, `@`) and values
+ * without a recognized effort suffix. Callers MUST try the exact full value
+ * as a registered name first, and only use this split when that lookup misses.
+ */
+export function splitNamedAgentSelector(value: string): { base: string; level: ConfiguredThinkingLevel } | undefined {
+	if (value.includes("/") || value.startsWith("@")) return undefined;
+	return parseSelectorSuffix(value);
+}
+
+/**
+ * Reject an explicit `<agent-name>:<effort>` level that the agent's own resolved
+ * model cannot honor. The error names the agent and its model, never a model
+ * fuzzy-matched from the agent name. Unresolvable patterns defer to the executor.
+ */
+export function validateNamedAgentEffort(
+	selector: string,
+	agentName: string,
+	level: ConfiguredThinkingLevel,
+	modelPatterns: readonly string[],
+	modelRegistry: AgentSelectorModelRegistry | undefined,
+	settings: Settings,
+): void {
+	if (!modelRegistry || modelPatterns.length === 0) return;
+	if (modelRegistry.getAvailable().length === 0) return;
+	const resolved = resolveModelOverride([...modelPatterns], modelRegistry, settings);
+	if (!resolved.model) return;
+	const concrete = concreteThinkingLevel(level);
+	if (concrete === undefined || concrete === ThinkingLevel.Off) return;
+	const effort = toReasoningEffort(concrete);
+	if (effort === undefined || getSupportedEfforts(resolved.model).includes(effort)) return;
+	throw new AgentSelectorError(
+		`Unsupported effort ":${concrete}" in agent selector "${selector}": agent "${agentName}" runs ${formatModelString(resolved.model)}. ${supportedEffortsText(resolved.model)}`,
+	);
+}
+
+/**
  * Validate a selector-shaped `agent` value against the live model catalog.
  *
  * Resolution reuses the session model-pattern grammar (`resolveModelOverride`),
