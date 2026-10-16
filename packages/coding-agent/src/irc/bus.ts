@@ -189,6 +189,15 @@ export class IrcBus {
 			this.#enqueue(message);
 			return { to: message.to, outcome: "queued" };
 		}
+		// The operator reads IRC on her UI, not in a session: the history entry is
+		// the record and a card on her root's transcript the notification, so it
+		// arrives without waiting on any model's turn. A message from that root's
+		// own model already shows as its hub tool call.
+		if (ref.kind === "operator") {
+			const root = ircRelayRoot(this.#registry, ref.id);
+			if (root && message.from !== root.id) this.#showOnUi(root, message);
+			return { to: message.to, outcome: "injected" };
+		}
 		// Advisor refs are observability-only transcripts, never messageable peers.
 		if (ref.kind === "advisor") {
 			return {
@@ -420,8 +429,13 @@ export class IrcBus {
 		if (!ircRelayToMainTranscript()) return;
 		const root = ircRelayRoot(this.#registry, message.from);
 		if (!root || message.to === root.id || message.from === root.id) return;
-		const mainSession = root.session;
-		if (!mainSession) return;
+		this.#showOnUi(root, message);
+	}
+
+	/** Display-only `irc:relay` card for `message` on `root`'s UI; never persisted. */
+	#showOnUi(root: AgentRef, message: IrcMessage): void {
+		const session = root.session;
+		if (!session) return;
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:relay",
@@ -432,7 +446,7 @@ export class IrcBus {
 			timestamp: message.ts,
 		};
 		try {
-			mainSession.emitIrcRelayObservation(record);
+			session.emitIrcRelayObservation(record);
 		} catch (error) {
 			// Display-only forwarding must never affect delivery semantics.
 			logger.debug("IrcBus: main UI relay failed", { to: message.to, error: String(error) });

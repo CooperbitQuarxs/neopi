@@ -13,11 +13,12 @@ export const DEFAULT_IRC_OPERATOR_HANDLE = "Operator";
 
 /**
  * Register `handle` as the operator under `rootId`. Returns the unregister, or
- * undefined when another participant already holds that id (the operator then
- * stays unaddressable rather than shadowing an agent).
+ * undefined when another participant already holds that id or the id is the
+ * broadcast address `all` (the operator then stays unaddressable rather than
+ * shadowing anyone).
  */
 export function registerIrcOperator(registry: AgentRegistry, handle: string, rootId: string): (() => void) | undefined {
-	if (registry.get(handle)) {
+	if (handle === "all" || registry.get(handle)) {
 		logger.warn("IRC operator handle is taken; the operator is not addressable", { handle });
 		return undefined;
 	}
