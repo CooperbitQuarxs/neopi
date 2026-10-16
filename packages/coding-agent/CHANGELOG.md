@@ -19,8 +19,10 @@
 - Added the `retry.waitForUsageReset` setting: when a provider reports usage-limit exhaustion with a reset time (5-hour or weekly quota windows on any provider), the session sleeps until the reset instead of failing fast past `retry.maxDelayMs`.
 - Added `tui.titleSpinner` (`braille` | `dots` | `line`, default `braille`) to pick the terminal-title working-state spinner glyphs alongside the existing `tui.titleState` on/off toggle.
 - Added post-processing chains: named, ordered model steps in `CHAINS.yml` (user and project) that rewrite composer text before it is sent. Alt+C sends one prompt through the active chain; `/chaining on|off|use|status|configure` manages automatic mode, the active chain, and a fullscreen editor. Steps without a model use the new Prose role, which falls back to the configured `smol` role.
+- Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- A registered agent name with an effort suffix, such as `scout:high`, now runs that agent with its own prompt, tools and model at that effort instead of fuzzy-matching an unrelated model ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 - Live ingest classifier budgets retain a custom model's verified standard capacity when a context-window override widens its effective window.
 - Fixed Bash, Fish, and Zsh discovery of public CLI aliases, nested subcommands, child flags, and finite argument choices from executable metadata, including Bash word-break fragments, grouped short-option values, and scope-local `--` boundaries. Large piped completion scripts drain before exit, and native `/loadout use <name>` completion now exposes the existing alias without submitting before its name ([#228](https://github.com/PsychedelicShayna/neopi/issues/228)).
 - Fixed control-socket ask answers crashing instead of returning selected options or custom text; invalid answers now leave the dialog open ([#281](https://github.com/PsychedelicShayna/neopi/issues/281)).
