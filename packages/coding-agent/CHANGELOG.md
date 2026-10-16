@@ -17,6 +17,7 @@
   system with encrypted storage, resumable phases, a bounded profile, and
   explicit tmpfs persistence.
 - Added the `retry.waitForUsageReset` setting: when a provider reports usage-limit exhaustion with a reset time (5-hour or weekly quota windows on any provider), the session sleeps until the reset instead of failing fast past `retry.maxDelayMs`.
+- Control-socket `hello`, `get_status`, and `state` snapshots now include the session's RPC state (`state` with `target: "view"` reports the focused subagent), and the subagent commands (`get_subagents`, `set_subagent_subscription`, transcripts, cancel, steer) now work over control in TUI panes ([#189](https://github.com/PsychedelicShayna/neopi/issues/189)).
 - Added `tui.titleSpinner` (`braille` | `dots` | `line`, default `braille`) to pick the terminal-title working-state spinner glyphs alongside the existing `tui.titleState` on/off toggle.
 - Added post-processing chains: named, ordered model steps in `CHAINS.yml` (user and project) that rewrite composer text before it is sent. Alt+C sends one prompt through the active chain; `/chaining on|off|use|status|configure` manages automatic mode, the active chain, and a fullscreen editor. Steps without a model use the new Prose role, which falls back to the configured `smol` role.
 ### Fixed

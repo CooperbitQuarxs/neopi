@@ -64,11 +64,8 @@ if (state?.model?.provider !== "fake") throw new Error("pane is not on the fake 
 /** Documented refusals: the command routed and answered with its specified code or error. */
 const refusal: Record<string, RegExp> = {
 	set_approval_handler: /approval_owner_only/,
-	set_subagent_subscription: /Subagent event bus is unavailable/i,
-	get_subagents: /subagent_bus_unavailable/,
-	get_subagent_messages: /Subagent event bus is unavailable/i,
-	cancel_subagent: /Subagent event bus is unavailable/i,
-	steer_subagent: /Subagent event bus is unavailable/i,
+	get_subagent_messages: /Unknown subagent or session file unavailable: parity-none/,
+	steer_subagent: /Subagent not running: parity-none/,
 	set_ask_dialog: /Ask-dialog negotiation is unavailable on this transport/,
 	compact: /Nothing to compact/i,
 	handoff: /Nothing to hand off/i,

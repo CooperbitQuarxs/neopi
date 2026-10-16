@@ -2736,6 +2736,7 @@ export async function runRootCommand(
 			const controlHost = await startControlHost({
 				session,
 				role: controlRole,
+				subagentEventBus,
 				enabled: parsedArgs.noControlSocket !== true && cfgControlEnabled.get(settingsInstance) === true,
 			});
 			if (controlHost && controlRole !== "tui") controlHost.markReady();

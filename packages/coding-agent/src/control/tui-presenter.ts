@@ -42,6 +42,8 @@ export interface TuiControlSurface {
 	runAction(id: string): boolean;
 	rewind(entryId: string, prefillDraft: boolean): Promise<RewindOutcome>;
 	notify(text: string): void;
+	/** The focused subagent and its session; undefined while the root session is shown. */
+	viewTarget(): { agentId: string; session: AgentSession } | undefined;
 }
 
 /** Attach the presenter, the dialog registry, and the approval arbiter. */
@@ -132,6 +134,7 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 		focusRevision: () => host.revisions.focus,
 		dialogRevision: () => host.revisions.dialogs,
 		notify: text => surface.notify(text),
+		viewTarget: () => surface.viewTarget(),
 	};
 	host.presenter = presenter;
 	host.markReady();
