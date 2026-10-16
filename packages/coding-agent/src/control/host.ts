@@ -61,6 +61,11 @@ export interface ControlHostOptions {
 	tmuxPane?: string | null;
 	/** Subagent observability bus behind `get_subagents` and subagent event streaming. */
 	subagentEventBus?: EventBus;
+	/**
+	 * `--model` selector the process launched with (absent with `--provider`).
+	 * A role selector seeds `activeRole` in snapshots, as it does for RPC `get_state`.
+	 */
+	launchModel?: string;
 }
 
 /** Field that failed an optimistic revision check, if any. */
@@ -162,7 +167,7 @@ export class ControlHost {
 
 	constructor(options: ControlHostOptions) {
 		this.#options = options;
-		this.roles = new RpcRoles(options.session);
+		this.roles = new RpcRoles(options.session, options.launchModel);
 		this.promptResults = new RpcPromptResults(options.session, () => {});
 		hosts.set(options.session, this);
 	}
