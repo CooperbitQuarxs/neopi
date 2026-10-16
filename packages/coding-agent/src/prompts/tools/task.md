@@ -10,7 +10,7 @@ Use most specific agent.{{#if scoutAvailable}} Read-only research MUST use `scou
 Shared edits need one integration owner{{#if ircEnabled}}; siblings coordinate via `write agent://<id>`{{/if}}. Set interfaces in {{#if batchEnabled}}`context`{{else}}the task{{/if}}. Every task MUST skip build/lint/tests/formatters mid-flight; run once afterward.
 
 # Inputs
-`agent`: agent type, optionally with an effort suffix (`scout:high` keeps scout's prompt, tools and model at that effort), or a direct model selector `provider/model[:effort]` / `@role[:effort]` (efforts: minimal|low|medium|high|xhigh|max|auto) crewing the generic task agent with exactly that model; registered agent names win; invalid selectors fail loudly.
+`agent`: agent type, optionally with an effort suffix (`<agent>:high` keeps that agent's prompt, tools and model at that effort), or a direct model selector `provider/model[:effort]` / `@role[:effort]` (efforts: minimal|low|medium|high|xhigh|max|auto) crewing the generic task agent with exactly that model; registered agent names win; invalid selectors fail loudly.
 `name`: CamelCase ≤32, auto-generated if omitted; address agent by name.{{#if structured}} `outputSchema` overrides agent/session schemas.{{/if}}
 `solutionSpace`: describe how open-ended the child's problem is: whether the fix or design is given, or which causes or designs remain open. Volume of work does not widen it; NEVER mention sibling agents or coordination. (`one fix: rename, names given`; `one fix: slice end in paginate`; `single-flight cache load; races easy to miss`; `several retry API shapes; error classes to choose`; `deadlock cause open, no repro`)
 {{#if evalToolsEnabled}}`tools`: eval-defined, run in your kernel.
