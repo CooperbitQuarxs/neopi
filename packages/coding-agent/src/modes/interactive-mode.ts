@@ -2611,6 +2611,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				runAction: id => this.#inputController.runAppAction(id),
 				rewind: (entryId, prefillDraft) => this.#selectorController.rewindToEntry(entryId, { prefillDraft }),
 				notify: text => this.showStatus(text),
+				viewTarget: () => {
+					const agentId = this.focusedAgentId;
+					return agentId ? { agentId, session: this.viewSession } : undefined;
+				},
 			});
 			if (controlHost.presenter) {
 				const bindings = this.keybindings;

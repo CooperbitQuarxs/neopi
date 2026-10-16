@@ -17,7 +17,6 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { MessageOrigin, Model } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { $env, getAgentDir, isRecord, logger, Snowflake, toError } from "@oh-my-pi/pi-utils";
@@ -62,7 +61,6 @@ import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpe
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import type { EventBus } from "../../utils/event-bus";
 import { selectRpcEntries } from "./rpc-compat";
-import { calculateTokensPerSecond } from "../../utils/token-rate";
 import {
 	formatPersistenceDurabilityFailure,
 	formatPersistenceFailure,
@@ -87,8 +85,14 @@ import { RpcRoles } from "./rpc-roles";
 import { setRpcChatMode } from "./rpc-chat-mode";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
 import { sessionLeaseErrorCode } from "./rpc-session-lease";
-import { isRpcSessionSettled, RpcSessionSettleWatcher, watchedScheduledTurnProbe } from "./rpc-session-settle";
-import { RpcSubagentRegistry, readRpcSubagentTranscript, resolveOwnedLiveSubagent } from "./rpc-subagents";
+import { RpcSessionSettleWatcher, watchedScheduledTurnProbe } from "./rpc-session-settle";
+import { buildRpcSessionState } from "./rpc-session-state";
+import {
+	type RpcSubagentBus,
+	RpcSubagentRegistry,
+	readRpcSubagentTranscript,
+	resolveOwnedLiveSubagent,
+} from "./rpc-subagents";
 import { getRpcUsage, RpcUsageUnavailableError } from "./rpc-usage";
 import { isRpcApprovalHandler, isRpcToolApprovalResponse, RpcToolApprovalBridge } from "./rpc-tool-approval";
 import type {
@@ -110,7 +114,6 @@ import type {
 	RpcReadyFrame,
 	RpcRemoveQueuedMessageResult,
 	RpcResponse,
-	RpcSessionState,
 	RpcSubagentSubscriptionLevel,
 	RpcToolApprovalResponse,
 } from "./rpc-types";
@@ -1448,7 +1451,7 @@ export interface RpcCommandHandlerContext {
 	onPromptError: (id: string | undefined, command: string) => (promptError: Error) => void;
 	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
 	trackBackground: (task: () => Promise<void>) => void;
-	subagentRegistry: RpcSubagentRegistry | undefined;
+	subagentRegistry: RpcSubagentBus | undefined;
 	planMode: RpcPlanModeController;
 	settleWatcher: RpcSessionSettleWatcher;
 	rpcRoles: RpcRoles;
@@ -1812,51 +1815,12 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			case "get_state": {
 				// A goal exit triggered by the last turn restores tools asynchronously; report after it.
 				await goalController?.settled();
-				const queuedMessages = session.getQueuedMessages();
-				const state: RpcSessionState = {
-					model: session.model,
-					thinkingLevel: session.thinkingLevel,
-					isStreaming: session.isStreaming,
-					isCompacting: session.isCompacting,
-					steeringMode: session.steeringMode,
-					followUpMode: session.followUpMode,
-					interruptMode: session.interruptMode,
-					sessionFile: session.sessionFile,
-					sessionId: session.sessionId,
-					sessionName: session.sessionName,
-					chronicler: session.chroniclerHealth,
-					autoCompactionEnabled: session.autoCompactionEnabled,
-					queuedMessageCount: session.queuedMessageCount,
-					queuedMessages: {
-						steering: [...queuedMessages.steering],
-						followUp: [...queuedMessages.followUp],
-						liveSteered: queuedMessages.liveSteered,
-					},
-					hasPendingAsyncWork: session.hasPendingAsyncWork(),
-					// A scheduled goal continuation will start a turn: not settled.
-					isSettled: isRpcSessionSettled(session, goalTurnScheduled),
-					todoPhases: session.getTodoPhases(),
-					fastModeEnabled: session.isFastModeEnabled(),
-					tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),
-					fastModeActive: session.isFastModeActive(),
-					slowModeSupported: session.isSlowModeSupported(),
-					slowModeEnabled: session.isSlowModeEnabled(),
-					slowModeScope: session.getSlowModeScope(),
-					usageLimit: session.getUsageLimitState(),
-					messageCount: session.messages.length,
-					systemPrompt: session.systemPrompt,
-					dumpTools: session.agent.state.tools.map(tool => ({
-						name: tool.name,
-						description: tool.description,
-						parameters: toolWireSchema(tool),
-						examples: tool.examples,
-					})),
-					contextUsage: session.getContextUsage(),
+				const state = buildRpcSessionState(session, {
 					activeRole: rpcRoles.activeRole(),
-					chatMode: session.chatMode?.mode ?? "off",
-					...planMode.state,
-					goal: session.getGoalModeState() ?? null,
-				};
+					// A scheduled goal continuation will start a turn: not settled.
+					scheduledTurn: goalTurnScheduled,
+					includeDump: true,
+				});
 				return success(id, "get_state", state);
 			}
 

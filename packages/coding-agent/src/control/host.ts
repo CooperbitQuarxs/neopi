@@ -14,7 +14,7 @@ import { readSetting, unsetSetting, writeSetting } from "./settings-adapter";
 import { RpcPromptResults } from "../modes/rpc/rpc-prompt-results";
 import { RpcRoles } from "../modes/rpc/rpc-roles";
 import { RPC_CAPABILITIES } from "../modes/rpc/rpc-capabilities";
-import type { RpcCommand } from "../modes/rpc/rpc-types";
+import type { RpcCommand, RpcSubagentSubscriptionLevel } from "../modes/rpc/rpc-types";
 import type { AgentSession } from "../session/agent-session";
 import { AgentRegistry } from "../registry/agent-registry";
 import { executeSend } from "../irc/messaging";
@@ -29,6 +29,9 @@ import { ControlServer, type ControlConnection } from "./server";
 import { APPROVAL_GATED_SETTINGS, cfgControlApprovals, cfgControlSecretInput } from "./settings";
 import { RpcPlanModeController } from "../modes/rpc/rpc-plan-mode";
 import { RpcSessionSettleWatcher } from "../modes/rpc/rpc-session-settle";
+import { buildRpcSessionState } from "../modes/rpc/rpc-session-state";
+import { type RpcSubagentBus, RpcSubagentRegistry } from "../modes/rpc/rpc-subagents";
+import type { EventBus } from "../utils/event-bus";
 import { RpcSessionEventForwarder } from "../modes/rpc/rpc-session-events";
 import { RpcHostToolBridge } from "../modes/rpc/host-tools";
 import type { RpcPendingExtensionRequests } from "../modes/rpc/rpc-mode";
@@ -56,6 +59,8 @@ export interface ControlHostOptions {
 	/** Registry directory override (tests). */
 	dir?: string;
 	tmuxPane?: string | null;
+	/** Subagent observability bus behind `get_subagents` and subagent event streaming. */
+	subagentEventBus?: EventBus;
 }
 
 /** Field that failed an optimistic revision check, if any. */
@@ -134,6 +139,10 @@ export class ControlHost {
 	#approvalUiOpen = false;
 	#planMode: RpcPlanModeController | undefined;
 	#settleWatcher: RpcSessionSettleWatcher | undefined;
+	/** Shared subagent roster, so a fresh connection sees subagents started before it opened. */
+	#subagents: RpcSubagentRegistry | undefined;
+	/** Per-connection `set_subagent_subscription` level; absent means `off`. */
+	readonly #subagentLevels = new Map<ControlConnection, RpcSubagentSubscriptionLevel>();
 	readonly #extensionTracker = new RpcExtensionUserMessageTracker();
 	#runOwnerSeq = 0;
 	#revisions: Revisions = {
@@ -190,6 +199,14 @@ export class ControlHost {
 	async start(): Promise<void> {
 		liveHosts.add(this);
 		const session = this.#options.session;
+		const subagentEventBus = this.#options.subagentEventBus;
+		if (subagentEventBus && !this.#subagents) {
+			this.#subagents = new RpcSubagentRegistry(subagentEventBus, frame => {
+				for (const [connection, level] of this.#subagentLevels) {
+					if (level === "events" || frame.type !== "subagent_event") connection.write(frame);
+				}
+			});
+		}
 		this.#seenSessionId = session.sessionId;
 		this.#identityKey = this.#currentIdentityKey();
 		const connectionHost = {
@@ -215,6 +232,7 @@ export class ControlHost {
 				this.#handlers.delete(connection);
 				this.#forwarders.delete(connection);
 				this.#closeBridges(connection);
+				this.#setSubagentLevel(connection, "off");
 			},
 		};
 		const server = new ControlServer({ metadata: { instanceId: this.instanceId }, host: connectionHost });
@@ -279,7 +297,12 @@ export class ControlHost {
 		});
 	}
 
-	snapshot(): ControlSnapshot {
+	/**
+	 * Host snapshot. `session` is the root session's RPC state, or, for `"view"`,
+	 * the state of the subagent the pane is focused on (root when none is).
+	 * Dump fields are omitted so the snapshot stays one frame.
+	 */
+	snapshot(target: "root" | "view" = "root"): ControlSnapshot {
 		const session = this.#options.session;
 		const presenter = this.presenter;
 		return {
@@ -293,7 +316,7 @@ export class ControlHost {
 			tmux: { pane: this.#options.tmuxPane ?? process.env.TMUX_PANE ?? null, session: null, window: null },
 			cwd: session.sessionManager.getCwd(),
 			title: session.sessionName ?? null,
-			session: null,
+			...this.#snapshotSession(target),
 			busy: {
 				streaming: session.isStreaming,
 				compacting: session.isCompacting,
@@ -306,16 +329,16 @@ export class ControlHost {
 				? {
 						focus: null,
 						overlays: 0,
-						focusedAgent: null,
+						focusedAgent: presenter.viewTarget?.()?.agentId ?? null,
 						liveDestination: null,
 						replMode: null,
 						draftLength: presenter.draft().text.length,
 					}
 				: null,
 			modes: {
-				plan: false,
+				plan: session.getPlanModeState()?.enabled === true,
 				chat: session.chatMode?.mode ?? "off",
-				goal: false,
+				goal: session.getGoalModeState()?.enabled === true,
 				vibe: false,
 				live: false,
 				repl: false,
@@ -326,6 +349,41 @@ export class ControlHost {
 			hosts: [{ kind: this.#options.role, canPresent: presenter !== undefined, canApprove: true }],
 			approvals: { controlAllowed: cfgControlApprovals.get(session.settings) === true, pending: 0 },
 			exemptions: [...CONTROL_EXEMPTIONS],
+		};
+	}
+
+	#snapshotSession(target: "root" | "view"): Pick<ControlSnapshot, "session" | "root"> {
+		const root = this.#options.session;
+		const viewed = target === "view" ? this.presenter?.viewTarget?.() : undefined;
+		if (viewed) {
+			return {
+				session: buildRpcSessionState(viewed.session, { includeDump: false }),
+				root: { sessionId: root.sessionId, generation: this.#revisions.generation },
+			};
+		}
+		return { session: buildRpcSessionState(root, { activeRole: this.roles.activeRole(), includeDump: false }) };
+	}
+
+	/** Record a connection's subagent subscription and run the shared registry at the widest one. */
+	#setSubagentLevel(connection: ControlConnection, level: RpcSubagentSubscriptionLevel): void {
+		if (level === "off") this.#subagentLevels.delete(connection);
+		else this.#subagentLevels.set(connection, level);
+		const levels = new Set(this.#subagentLevels.values());
+		this.#subagents?.setSubscriptionLevel(
+			levels.has("events") ? "events" : levels.has("progress") ? "progress" : "off",
+		);
+	}
+
+	/** This connection's view of the shared subagent registry, or undefined without a bus. */
+	#subagentBusFor(connection: ControlConnection): RpcSubagentBus | undefined {
+		const registry = this.#subagents;
+		if (!registry) return undefined;
+		return {
+			clear: () => registry.clear(),
+			getSubagents: () => registry.getSubagents(),
+			resolveSessionFile: selector => registry.resolveSessionFile(selector),
+			setSubscriptionLevel: level => this.#setSubagentLevel(connection, level),
+			getSubscriptionLevel: () => this.#subagentLevels.get(connection) ?? "off",
 		};
 	}
 
@@ -340,6 +398,9 @@ export class ControlHost {
 		AgentRegistry.global().unregister(this.#mailboxId());
 		await this.publication?.close();
 		hosts.delete(this.#options.session);
+		this.#subagentLevels.clear();
+		this.#subagents?.dispose();
+		this.#subagents = undefined;
 	}
 
 	async #dispatch(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
@@ -493,7 +554,7 @@ export class ControlHost {
 			onPromptError: (id, command) => promptError => output(error(id, command, promptError.message)),
 			extensionUserMessageTracker: this.#extensionTracker,
 			trackBackground: () => {},
-			subagentRegistry: undefined,
+			subagentRegistry: this.#subagentBusFor(connection),
 			planMode,
 			settleWatcher,
 			rpcRoles: this.roles,
@@ -559,7 +620,10 @@ export class ControlHost {
 		switch (type) {
 			case "get_status":
 			case "state":
-				this.#reply(connection, frame, { success: true, data: this.snapshot() });
+				this.#reply(connection, frame, {
+					success: true,
+					data: this.snapshot(frame.target === "view" ? "view" : "root"),
+				});
 				return;
 			case "subscribe":
 				this.#subscribed.add(connection);

@@ -278,6 +278,15 @@ export class RpcSubagentRegistry {
 	}
 }
 
+/**
+ * The registry surface an RPC command handler drives. A control host serves each
+ * connection a view over one shared registry, with its own subscription level.
+ */
+export type RpcSubagentBus = Pick<
+	RpcSubagentRegistry,
+	"clear" | "getSubagents" | "getSubscriptionLevel" | "resolveSessionFile" | "setSubscriptionLevel"
+>;
+
 /** A running subagent from this session's roster, bound to its live registry ref. */
 export interface RpcOwnedSubagent {
 	ref: AgentRef;

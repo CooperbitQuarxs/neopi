@@ -99,6 +99,16 @@ interface OwnedPlanMode {
 	model: PlanModelSwitch | undefined;
 }
 
+/** `get_state` fields: the session mode and, in plan mode, its details. */
+export function rpcPlanModeState(session: Pick<AgentSession, "getPlanModeState">): {
+	mode: RpcMode;
+	planMode?: RpcPlanModeInfo;
+} {
+	const state = session.getPlanModeState();
+	if (!state?.enabled) return { mode: "default" };
+	return { mode: "plan", planMode: { planFilePath: state.planFilePath, workflow: state.workflow ?? "parallel" } };
+}
+
 /** Owns plan mode for one RPC session. */
 export class RpcPlanModeController {
 	readonly #session: AgentSession;
@@ -130,9 +140,7 @@ export class RpcPlanModeController {
 
 	/** `get_state` fields: the session mode and, in plan mode, its details. */
 	get state(): { mode: RpcMode; planMode?: RpcPlanModeInfo } {
-		const state = this.#session.getPlanModeState();
-		if (!state?.enabled) return { mode: "default" };
-		return { mode: "plan", planMode: { planFilePath: state.planFilePath, workflow: state.workflow ?? "parallel" } };
+		return rpcPlanModeState(this.#session);
 	}
 
 	/**
