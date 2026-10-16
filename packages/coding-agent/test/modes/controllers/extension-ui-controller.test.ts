@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import { type Component, Container, isFocusable, type OverlayOptions, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
@@ -45,6 +46,7 @@ function makeHarness() {
 		isHidden: vi.fn(() => false),
 	};
 	const showOverlay = vi.fn(() => fakeHandle);
+	const runAppAction = vi.fn((_id: string) => true);
 	let uiContext: ExtensionUIContext | undefined;
 	const ctx = {
 		editor,
@@ -67,6 +69,7 @@ function makeHarness() {
 		addAutocompleteProvider,
 		syncComposerShape: vi.fn(),
 		showStatus: vi.fn(),
+		runAppAction,
 	} as unknown as InteractiveModeContext;
 
 	const controller = new ExtensionUiController(ctx);
@@ -80,6 +83,7 @@ function makeHarness() {
 		setFocus,
 		showOverlay,
 		fakeHandle,
+		runAppAction,
 		controller,
 		inputController: (readText: () => Promise<string>) =>
 			new InputController(ctx, { readImage: async () => null, readText }),
@@ -527,6 +531,58 @@ describe("ExtensionUiController editor UI", () => {
 		expect(harness.editorContainer.children).toEqual([ask, harness.editor]);
 		ask?.handleInput?.("!");
 		expect(harness.editor.getText()).toBe("half typed prompt!");
+	});
+
+	describe("composer stays usable under an ask (#303)", () => {
+		const questions: ExtensionAskDialogQuestion[] = [
+			{ id: "confirm", question: "Continue?", options: [{ label: "Yes" }, { label: "No" }] },
+		];
+
+		it("routes speech keys past the question and lets a dictated draft be sent while it stays open", async () => {
+			const harness = makeHarness();
+			const sent: string[] = [];
+			harness.editor.onSubmit = text => {
+				sent.push(text);
+				harness.editor.setText("");
+			};
+			const pending = harness.controller.showAskDialog(questions);
+			const ask = harness.editorContainer.children[0];
+			expect(ask).toBeInstanceOf(AskDialogComponent);
+			// Even over an empty prompt the composer stays mounted, so a transcript has somewhere visible to land.
+			expect(harness.editorContainer.children).toEqual([ask, harness.editor]);
+
+			ask?.handleInput?.("\x00"); // Ctrl+Space
+			expect(harness.runAppAction).toHaveBeenCalledWith("app.stt.toggle");
+
+			// The recording's transcript lands in the composer; the draft then owns typing and Enter sends it.
+			harness.editor.setText("dictated words");
+			ask?.handleInput?.("!");
+			ask?.handleInput?.("\r");
+			expect(sent).toEqual(["dictated words!"]);
+			expect(harness.editorContainer.children).toEqual([ask, harness.editor]);
+
+			// The question is still open and answerable.
+			ask?.handleInput?.("\n");
+			expect((await pending)?.kind).toBe("submit");
+		});
+
+		it("hands typing to the composer while the question is hidden, and Enter on an empty composer shows it again", async () => {
+			const harness = makeHarness();
+			const pending = harness.controller.showAskDialog(questions);
+			const ask = harness.editorContainer.children[0] as AskDialogComponent;
+
+			ask.handleInput("\x1bh"); // Alt+H hides
+			expect(stripVTControlCharacters(ask.render(120).join("\n"))).toContain("type to write a message");
+			ask.handleInput("h");
+			ask.handleInput("i");
+			expect(harness.editor.getText()).toBe("hi");
+
+			harness.editor.setText("");
+			ask.handleInput("\n");
+			expect(stripVTControlCharacters(ask.render(120).join("\n"))).toContain("Continue?");
+			ask.handleInput("\n");
+			expect((await pending)?.kind).toBe("submit");
+		});
 	});
 
 	it("bridges addAutocompleteProvider factories to the interactive mode context (#4919)", async () => {

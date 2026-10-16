@@ -160,6 +160,12 @@ interface AskDialogOptions {
 	onTimeout?: () => void;
 	tui?: TUI;
 	inputGuard?: AskDialogInputGuard;
+	/**
+	 * Keys that act outside the dialog while it holds focus (speech-to-text,
+	 * dictation). Returns true when it handled `keyData`; the dialog then
+	 * ignores the key.
+	 */
+	passthrough?(keyData: string): boolean;
 }
 
 interface QuestionState {
@@ -682,6 +688,7 @@ export class AskDialogComponent implements Component {
 		// closed/prompt guards, matching HookSelector/HookInput semantics.
 		this.#countdown?.reset();
 		this.#native = undefined;
+		if (this.options.passthrough?.(keyData)) return;
 		if (matchesSelectCancel(keyData)) {
 			this.#finishCancel();
 			return;
@@ -703,8 +710,13 @@ export class AskDialogComponent implements Component {
 			return;
 		}
 		if (this.#hidden) {
+			// Hidden, the question waits and the composer takes the typing; Enter on
+			// an empty composer brings the question back.
 			if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 				this.#setHidden(false);
+			} else if (inputGuard) {
+				inputGuard.handleInput(keyData);
+				this.#requestRender();
 			}
 			return;
 		}
@@ -1179,6 +1191,7 @@ export class AskDialogComponent implements Component {
 		const show = blocked ? hideKey : hideKey ? `${hideKey}/${enter}` : enter;
 		const hints: string[] = [];
 		if (blocked && inputGuard) hints.push(inputGuard.hint);
+		else if (inputGuard) hints.push("type to write a message");
 		if (show) hints.push(`${show} show`);
 		hints.push(`${editorKey("tui.select.cancel")} cancel`);
 		const hint = theme.fg("dim", ` · ${hints.join(" · ")}`);
