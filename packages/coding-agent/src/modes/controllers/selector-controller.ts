@@ -134,7 +134,7 @@ import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-o
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-tui/overlays/agent-hub";
 import { createAgentHubRuntime } from "../agent-hub-runtime";
 import { AgentRegistry } from "../../registry/agent-registry";
-import { IrcBus, ircHistorySessionFile } from "../../irc/bus";
+import { IrcBus, ircHistorySessionId } from "../../irc/bus";
 import { cfgIrcViewerEnabled } from "../../irc/settings";
 import { IrcViewerComponent } from "@oh-my-pi/pi-tui/overlays/irc-viewer";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
@@ -2933,7 +2933,7 @@ export class SelectorController {
 			source: {
 				entries: () => {
 					const root = registry.rootForSession(this.ctx.session);
-					return bus.history(root ? { rootId: root.id, sessionFile: ircHistorySessionFile(root) } : undefined);
+					return bus.history(root ? { rootId: root.id, sessionId: ircHistorySessionId(root) } : undefined);
 				},
 				subscribe: listener => bus.onHistory(listener),
 			},
