@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
@@ -1106,5 +1107,49 @@ describe("agent model selectors", () => {
 		const policy = await resolveEffectiveSubagentPolicy(request({ session: roleSession, agent: "@smol:low" }));
 		expect(policy.agentName).toBe("task");
 		expect(policy.modelRole).toBe("smol");
+	});
+
+	it("keeps a registered agent when its name carries an effort suffix", async () => {
+		const scout: AgentDefinition = { ...AGENT, name: "scout", tools: ["read", "grep"], model: ["openai/gpt-4o"] };
+		mockAgents(scout, TASK_AGENT);
+		for (const invocationKind of ["task", "eval"] satisfies StructuredSubagentRequest["invocationKind"][]) {
+			const policy = await resolveEffectiveSubagentPolicy(
+				request({ session: withRegistry(session()), agent: "scout:high", invocationKind }),
+			);
+			expect(policy.agentName).toBe("scout");
+			expect(policy.effectiveAgent.tools).toEqual(["read", "grep"]);
+			expect(policy.effectiveAgent.systemPrompt).toBe(AGENT.systemPrompt);
+			expect(policy.modelOverride).toEqual(["openai/gpt-4o"]);
+			expect(policy.callerThinkingLevel).toBe(ThinkingLevel.High);
+		}
+	});
+
+	it("rejects a named-agent effort its model cannot honor, naming that model", async () => {
+		const scout: AgentDefinition = { ...AGENT, name: "scout", model: ["openai/gpt-4o"] };
+		mockAgents(scout, TASK_AGENT);
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: withRegistry(session()), agent: "scout:max" })),
+		).rejects.toThrow(
+			'Unsupported effort ":max" in agent selector "scout:max": agent "scout" runs openai/gpt-4o. openai/gpt-4o supports: minimal, low, medium, high',
+		);
+	});
+
+	it("prefers an exact registered name containing a selector-shaped suffix", async () => {
+		const literal: AgentDefinition = { ...AGENT, name: "scout:high", model: ["kimi-code/k3"] };
+		const scout: AgentDefinition = { ...AGENT, name: "scout", model: ["openai/gpt-4o"] };
+		mockAgents(literal, scout, TASK_AGENT);
+		const policy = await resolveEffectiveSubagentPolicy(
+			request({ session: withRegistry(session()), agent: "scout:high" }),
+		);
+		expect(policy.agentName).toBe("scout:high");
+		expect(policy.modelOverride).toEqual(["kimi-code/k3"]);
+		expect(policy.callerThinkingLevel).toBeUndefined();
+	});
+
+	it("does not fall back to model matching when an agent-name suffix base is unknown", async () => {
+		mockAgents();
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: withRegistry(session()), agent: "gpt-4o:high" })),
+		).resolves.toMatchObject({ agentName: "task", modelOverride: ["gpt-4o:high"] });
 	});
 });

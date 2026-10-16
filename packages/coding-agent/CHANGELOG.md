@@ -19,8 +19,10 @@
 - Added the `retry.waitForUsageReset` setting: when a provider reports usage-limit exhaustion with a reset time (5-hour or weekly quota windows on any provider), the session sleeps until the reset instead of failing fast past `retry.maxDelayMs`.
 - Added `tui.titleSpinner` (`braille` | `dots` | `line`, default `braille`) to pick the terminal-title working-state spinner glyphs alongside the existing `tui.titleState` on/off toggle.
 - Added post-processing chains: named, ordered model steps in `CHAINS.yml` (user and project) that rewrite composer text before it is sent. Alt+C sends one prompt through the active chain; `/chaining on|off|use|status|configure` manages automatic mode, the active chain, and a fullscreen editor. Steps without a model use the new Prose role, which falls back to the configured `smol` role.
+- Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- A registered agent name with an effort suffix, such as `scout:high`, now runs that agent with its own prompt, tools and model at that effort instead of fuzzy-matching an unrelated model ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 - The agent no longer treats a smoke run as mandatory before finishing any non-trivial work; the base and project prompts drop that rule and its critical reinforcement ([#307](https://github.com/PsychedelicShayna/neopi/issues/307)).
 - Saying "parallel" or "parallelize" no longer forces the agent to spawn subagents; it can run concurrent processes, requests, or tool calls directly ([#304](https://github.com/PsychedelicShayna/neopi/issues/304)).
 - Subagent prompts no longer end with "keep going until this ticket is closed", which discouraged reporting a genuine blocker ([#310](https://github.com/PsychedelicShayna/neopi/issues/310)).

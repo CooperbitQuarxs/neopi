@@ -28,12 +28,18 @@ import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.m
 import isolationRecoveryHintTemplate from "../prompts/tools/isolation-recovery-hint.md" with { type: "text" };
 import salvagedChildHintTemplate from "../prompts/tools/salvaged-child-hint.md" with { type: "text" };
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
-import type { TaskEffort } from "@oh-my-pi/pi-tui/thinking";
+import type { ConfiguredThinkingLevel, TaskEffort } from "@oh-my-pi/pi-tui/thinking";
 import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../irc/messaging";
 import { buildOutputValidator } from "../tools/output-schema-validator";
 import { trackLateCleanup } from "../utils/late-cleanup";
-import { AgentSelectorError, isAgentModelSelector, validateAgentModelSelector } from "./agent-selector";
+import {
+	AgentSelectorError,
+	isAgentModelSelector,
+	splitNamedAgentSelector,
+	validateAgentModelSelector,
+	validateNamedAgentEffort,
+} from "./agent-selector";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
 import { type ExecutorOptions, runSubprocess } from "./executor";
 import { assertExternalHarnessCapabilities } from "./external-harness";
@@ -170,6 +176,8 @@ export interface EffectiveSubagentPolicy {
 	modelRole?: string;
 	/** Raw caller selector before role expansion, distinct from saved agent defaults. */
 	callerModelSelector?: string | string[];
+	/** Explicit level from a `<agent-name>:<effort>` selector; caller-origin, like a model selector suffix. */
+	callerThinkingLevel?: ConfiguredThinkingLevel;
 	/** Extension routing note explaining a `before_subagent_spawn` model replacement. */
 	modelRoute?: string;
 	/** Exact-name `task.agentServiceTierOverrides` entry for this agent, applied after model resolution. */
@@ -362,8 +370,17 @@ export async function resolveEffectiveSubagentPolicy(
 	let agent = getAgent(agents, selector);
 	/** Model selector routed into the request-model channel for the generic task agent. */
 	let selectorModel: string | undefined;
+	/** Explicit effort from `<agent-name>:<effort>` when the base, not the full value, is registered. */
+	let callerThinkingLevel: ConfiguredThinkingLevel | undefined;
+	const named = agent ? undefined : splitNamedAgentSelector(selector);
+	const namedAgent = named ? getAgent(agents, named.base) : undefined;
 	if (agent && selectorShaped) {
 		assertDepthAndSpawnAllowed(request, selector);
+	} else if (named && namedAgent) {
+		agentName = named.base;
+		agent = namedAgent;
+		callerThinkingLevel = named.level;
+		assertDepthAndSpawnAllowed(request, agentName);
 	} else if (!agent && selectorShaped) {
 		try {
 			validateAgentModelSelector(selector, request.session.modelRegistry, request.session.settings);
@@ -444,6 +461,24 @@ export async function resolveEffectiveSubagentPolicy(
 	// from different sources: the expansion below discards the alias, and the
 	// child's inherited retry-fallback chain is keyed off the role.
 	const { patterns: modelOverride, role: modelRole } = resolveAgentModelSelection(modelResolution);
+	if (callerThinkingLevel !== undefined) {
+		const effortPatterns = modelOverride ?? (parentActiveModelPattern ? [parentActiveModelPattern] : []);
+		try {
+			validateNamedAgentEffort(
+				selector,
+				agentName,
+				callerThinkingLevel,
+				effortPatterns,
+				request.session.modelRegistry,
+				request.session.settings,
+			);
+		} catch (error) {
+			if (error instanceof AgentSelectorError) {
+				throw new StructuredSubagentError("preflight", error.message, { cause: error });
+			}
+			throw error;
+		}
+	}
 	const isolationEnabled = cfgTaskIsolationEnabled.get(request.session.settings);
 	const isIsolated = request.isolation?.requested === true;
 	if (isIsolated && !isolationEnabled) {
@@ -459,6 +494,7 @@ export async function resolveEffectiveSubagentPolicy(
 		effectiveAgent,
 		modelOverride,
 		callerModelSelector: selectorModel ?? request.model,
+		callerThinkingLevel,
 		modelRole,
 		serviceTierOverride,
 		compactionThresholdOverride,
@@ -596,6 +632,7 @@ function buildExecutorOptions(
 		modelOverride: policy.modelOverride,
 		modelRole: policy.modelRole,
 		callerModelSelector: policy.callerModelSelector,
+		callerThinkingLevel: policy.callerThinkingLevel,
 		modelRoute: policy.modelRoute,
 		serviceTierOverride: policy.serviceTierOverride,
 		compactionThresholdOverride: policy.compactionThresholdOverride,
