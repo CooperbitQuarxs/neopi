@@ -29,7 +29,7 @@ import { ControlServer, type ControlConnection } from "./server";
 import { APPROVAL_GATED_SETTINGS, cfgControlApprovals, cfgControlSecretInput } from "./settings";
 import { RpcPlanModeController } from "../modes/rpc/rpc-plan-mode";
 import { RpcSessionSettleWatcher } from "../modes/rpc/rpc-session-settle";
-import { buildRpcSessionState } from "../modes/rpc/rpc-session-state";
+import { buildRpcSessionState, CONTROL_QUEUE_LIMIT } from "../modes/rpc/rpc-session-state";
 import { type RpcSubagentBus, RpcSubagentRegistry } from "../modes/rpc/rpc-subagents";
 import type { EventBus } from "../utils/event-bus";
 import { RpcSessionEventForwarder } from "../modes/rpc/rpc-session-events";
@@ -357,11 +357,17 @@ export class ControlHost {
 		const viewed = target === "view" ? this.presenter?.viewTarget?.() : undefined;
 		if (viewed) {
 			return {
-				session: buildRpcSessionState(viewed.session, { includeDump: false }),
+				session: buildRpcSessionState(viewed.session, { includeDump: false, queueLimit: CONTROL_QUEUE_LIMIT }),
 				root: { sessionId: root.sessionId, generation: this.#revisions.generation },
 			};
 		}
-		return { session: buildRpcSessionState(root, { activeRole: this.roles.activeRole(), includeDump: false }) };
+		return {
+			session: buildRpcSessionState(root, {
+				activeRole: this.roles.activeRole(),
+				includeDump: false,
+				queueLimit: CONTROL_QUEUE_LIMIT,
+			}),
+		};
 	}
 
 	/** Record a connection's subagent subscription and run the shared registry at the widest one. */
