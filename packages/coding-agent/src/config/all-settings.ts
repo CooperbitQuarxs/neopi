@@ -26,6 +26,7 @@ import * as execSettings from "../exec/settings";
 import * as launchSettings from "../launch/settings";
 import * as evalSettings from "../eval/settings";
 import * as taskSettings from "../task/settings";
+import * as ircSettings from "../irc/settings";
 import * as planModeSettings from "../plan-mode/settings";
 import * as goalsSettings from "../goals/settings";
 import * as titleSettings from "../utils/title-settings";
@@ -73,6 +74,7 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	launchSettings,
 	evalSettings,
 	taskSettings,
+	ircSettings,
 	planModeSettings,
 	goalsSettings,
 	titleSettings,

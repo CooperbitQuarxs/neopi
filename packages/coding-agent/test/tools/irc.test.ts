@@ -2,6 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
+import { executeSend } from "@oh-my-pi/pi-coding-agent/irc/messaging";
+import { registerIrcOperator } from "@oh-my-pi/pi-coding-agent/irc/operator";
+import {
+	DEFAULT_IRC_HISTORY_MAX_ENTRIES,
+	setIrcHistoryMaxEntries,
+	setIrcRelayToMainTranscript,
+} from "@oh-my-pi/pi-coding-agent/irc/policy";
 import { type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -488,6 +495,236 @@ describe("IRC", () => {
 			expect(receipt).toEqual({ to: "0-Parked", outcome: "failed", error: "revive exploded" });
 			// Failed revival never enqueues: the message is lost, not buffered.
 			expect(bus.take("0-Parked")).toBeUndefined();
+		});
+
+		describe("operator history", () => {
+			afterEach(() => {
+				setIrcHistoryMaxEntries(DEFAULT_IRC_HISTORY_MAX_ENTRIES);
+				setIrcRelayToMainTranscript(true);
+			});
+
+			/** A main root whose conversation is `file()`. */
+			function registerMain(id: string, file: () => string | undefined): FakeSession {
+				const main = makeFakeSession();
+				Object.assign(main.session, { sessionManager: { getSessionFile: file } });
+				registry.register({ id, displayName: "main", kind: "main", session: main.session });
+				return main;
+			}
+
+			it("records every delivery attempt in order, failures and waiter hand-offs included", async () => {
+				registerMain("Main", () => "/s/one.jsonl");
+				const sub = makeFakeSession();
+				registry.register({
+					id: "0-Sub",
+					displayName: "task",
+					kind: "sub",
+					parentId: "Main",
+					session: sub.session,
+				});
+				const peer = makeFakeSession();
+				registry.register({
+					id: "0-Peer",
+					displayName: "task",
+					kind: "sub",
+					parentId: "Main",
+					session: peer.session,
+				});
+
+				await bus.send({ from: "0-Sub", to: "0-Peer", body: "live" });
+				const waited = bus.wait("0-Peer", {}, 1_000);
+				await bus.send({ from: "0-Sub", to: "0-Peer", body: "consumed by wait" });
+				await waited;
+				await bus.send({ from: "0-Sub", to: "0-Nobody", body: "lost" });
+
+				const history = bus.history();
+				expect(history.map(entry => [entry.message.body, entry.outcome])).toEqual([
+					["live", "injected"],
+					["consumed by wait", "injected"],
+					["lost", "failed"],
+				]);
+				expect(history[2]?.error).toContain('Unknown agent "0-Nobody"');
+				// Observability only: the failed send buffers nothing for anyone.
+				expect(bus.unreadCount("0-Nobody")).toBe(0);
+				expect(bus.unreadCount("0-Peer")).toBe(0);
+			});
+
+			it("scopes history to the root that observes the sender and to its current conversation", async () => {
+				let file = "/s/one.jsonl";
+				registerMain("Main", () => file);
+				registerMain("Other", () => "/s/other.jsonl");
+				const sub = makeFakeSession();
+				registry.register({
+					id: "0-Sub",
+					displayName: "task",
+					kind: "sub",
+					parentId: "Main",
+					session: sub.session,
+				});
+				const foreign = makeFakeSession();
+				registry.register({
+					id: "1-Sub",
+					displayName: "task",
+					kind: "sub",
+					parentId: "Other",
+					session: foreign.session,
+				});
+
+				await bus.send({ from: "0-Sub", to: "Main", body: "first conversation" });
+				await bus.send({ from: "1-Sub", to: "Other", body: "another root" });
+				file = "/s/two.jsonl";
+				await bus.send({ from: "0-Sub", to: "Main", body: "second conversation" });
+
+				const bodies = (sessionFile: string) =>
+					bus.history({ rootId: "Main", sessionFile }).map(entry => entry.message.body);
+				expect(bodies("/s/one.jsonl")).toEqual(["first conversation"]);
+				expect(bodies("/s/two.jsonl")).toEqual(["second conversation"]);
+				expect(bus.history({ rootId: "Other", sessionFile: "/s/other.jsonl" })).toHaveLength(1);
+			});
+
+			it("drops the oldest entries beyond the configured size", async () => {
+				const sub = makeFakeSession();
+				registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
+				setIrcHistoryMaxEntries(3);
+				for (let i = 0; i < 5; i++) await bus.send({ from: "0-Main", to: "0-Sub", body: `msg-${i}` });
+				expect(bus.history().map(entry => entry.message.body)).toEqual(["msg-2", "msg-3", "msg-4"]);
+			});
+
+			it("keeps logging peer traffic when transcript relay cards are turned off", async () => {
+				const main = registerMain("Main", () => undefined);
+				const a = makeFakeSession();
+				registry.register({ id: "0-A", displayName: "task", kind: "sub", parentId: "Main", session: a.session });
+				const b = makeFakeSession();
+				registry.register({ id: "0-B", displayName: "task", kind: "sub", parentId: "Main", session: b.session });
+				setIrcRelayToMainTranscript(false);
+
+				await bus.send({ from: "0-A", to: "0-B", body: "sibling note" });
+
+				expect(main.relayed).toHaveLength(0);
+				expect(b.delivered.map(msg => msg.body)).toEqual(["sibling note"]);
+				expect(bus.history().map(entry => entry.message.body)).toEqual(["sibling note"]);
+			});
+
+			it("logs one broadcast entry per recipient and notifies listeners per entry", async () => {
+				registerMain("Main", () => undefined);
+				for (const id of ["0-A", "0-B", "0-C"]) {
+					registry.register({
+						id,
+						displayName: "task",
+						kind: "sub",
+						parentId: "Main",
+						session: makeFakeSession().session,
+					});
+				}
+				let notified = 0;
+				const stop = bus.onHistory(() => {
+					notified += 1;
+				});
+
+				await executeSend({ registry, senderId: "0-A" }, { to: "all", message: "everyone" });
+				await executeSend({ registry, senderId: "0-A" }, { to: "0-B", message: "just you" });
+				stop();
+				await bus.send({ from: "0-A", to: "0-C", body: "after unsubscribe" });
+
+				const legs = bus.history().filter(entry => entry.message.body === "everyone");
+				expect(legs.map(entry => entry.message.to).sort()).toEqual(["0-B", "0-C", "Main"]);
+				expect(legs.every(entry => entry.broadcast)).toBe(true);
+				expect(bus.history().find(entry => entry.message.body === "just you")?.broadcast).toBe(false);
+				expect(notified).toBe(4);
+			});
+		});
+
+		describe("operator participant", () => {
+			afterEach(() => {
+				setIrcRelayToMainTranscript(true);
+			});
+
+			function setup() {
+				const main = makeFakeSession();
+				registry.register({ id: "Main", displayName: "main", kind: "main", session: main.session });
+				const sub = makeFakeSession();
+				registry.register({
+					id: "0-Sub",
+					displayName: "task",
+					kind: "sub",
+					parentId: "Main",
+					session: sub.session,
+				});
+				const release = registerIrcOperator(registry, "Captain", "Main");
+				return { main, sub, release };
+			}
+
+			it("receives agent messages on her UI without involving the main model", async () => {
+				const { main } = setup();
+				setIrcRelayToMainTranscript(false);
+
+				const receipt = await bus.send({ from: "0-Sub", to: "Captain", body: "need a decision" });
+
+				expect(receipt).toEqual({ to: "Captain", outcome: "injected" });
+				expect(main.delivered).toHaveLength(0);
+				// Addressed to her: shown even with peer relay cards turned off.
+				expect(main.relayed.map(record => record.details)).toEqual([
+					{ from: "0-Sub", to: "Captain", body: "need a decision" },
+				]);
+				expect(bus.history().map(entry => [entry.message.from, entry.message.to, entry.outcome])).toEqual([
+					["0-Sub", "Captain", "injected"],
+				]);
+				expect(bus.unreadCount("Captain")).toBe(0);
+			});
+
+			it("does not echo the main model's own message to her as a second card", async () => {
+				const { main } = setup();
+				await bus.send({ from: "Main", to: "Captain", body: "from the composer model" });
+				expect(main.relayed).toHaveLength(0);
+				expect(bus.history()).toHaveLength(1);
+			});
+
+			it("sends as herself, never as Main, with the reply id kept", async () => {
+				const { sub } = setup();
+				const result = await executeSend(
+					{ registry, senderId: "Captain" },
+					{ to: "0-Sub", message: "go ahead", replyTo: "42" },
+				);
+				expect(result.isError).toBeFalsy();
+				expect(sub.delivered.map(msg => [msg.from, msg.body, msg.replyTo])).toEqual([
+					["Captain", "go ahead", "42"],
+				]);
+				expect(bus.history()[0]?.message.from).toBe("Captain");
+			});
+
+			it("is a broadcast recipient only while registered", async () => {
+				const { release } = setup();
+				const peer = makeFakeSession();
+				registry.register({
+					id: "0-Peer",
+					displayName: "task",
+					kind: "sub",
+					parentId: "Main",
+					session: peer.session,
+				});
+
+				await executeSend({ registry, senderId: "0-Sub" }, { to: "all", message: "first" });
+				release?.();
+				await executeSend({ registry, senderId: "0-Sub" }, { to: "all", message: "second" });
+
+				const recipients = (body: string) =>
+					bus
+						.history()
+						.filter(entry => entry.message.body === body)
+						.map(entry => entry.message.to)
+						.sort();
+				expect(recipients("first")).toEqual(["0-Peer", "Captain", "Main"]);
+				expect(recipients("second")).toEqual(["0-Peer", "Main"]);
+				expect((await bus.send({ from: "0-Sub", to: "Captain", body: "gone" })).outcome).toBe("failed");
+			});
+
+			it("refuses a handle that is taken or is the broadcast address", () => {
+				const { release } = setup();
+				expect(release).toBeDefined();
+				expect(registerIrcOperator(registry, "0-Sub", "Main")).toBeUndefined();
+				expect(registerIrcOperator(registry, "all", "Main")).toBeUndefined();
+				expect(registry.get("0-Sub")?.kind).toBe("sub");
+				expect(registry.get("all")).toBeUndefined();
+			});
 		});
 	});
 

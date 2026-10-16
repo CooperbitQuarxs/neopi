@@ -743,6 +743,9 @@ export class InputController {
 		for (const key of hubKeys) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showAgentHub());
 		}
+		for (const key of this.ctx.keybindings.getKeys("app.irc.viewer")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showIrcViewer());
+		}
 
 		// Double-tap left arrow on an empty editor: opens the agent hub from the
 		// main session, or returns the focused subagent view to the main session.
@@ -883,6 +886,9 @@ export class InputController {
 			case "app.agents.hub":
 			case "app.session.observe":
 				void this.ctx.showAgentHub();
+				return true;
+			case "app.irc.viewer":
+				this.ctx.showIrcViewer();
 				return true;
 			case "app.history.search":
 				void this.ctx.showHistorySearch();
