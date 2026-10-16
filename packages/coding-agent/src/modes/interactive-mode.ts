@@ -8229,6 +8229,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#inputController.handleCtrlC();
 	}
 
+	runAppAction(id: string): boolean {
+		return this.#inputController.runAppAction(id);
+	}
+
 	handleCtrlD(): void {
 		this.#inputController.handleCtrlD();
 	}

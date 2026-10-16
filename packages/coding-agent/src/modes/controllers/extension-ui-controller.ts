@@ -1,5 +1,5 @@
 import type { Component, OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
-import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
+import { Container, getKeybindings, Spacer, Text } from "@oh-my-pi/pi-tui";
 import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-wire";
 import type { CollabHost } from "../../collab/host";
 import { formatKeyHint, formatKeyHints, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
@@ -47,6 +47,8 @@ import { launchTerminal } from "../../subprocess/terminal-launch";
 import { controlAnswerToAskResult } from "./ask-control-answer";
 
 const MAX_WIDGET_LINES = 10;
+/** App actions an open ask dialog lets through to the session: speech input into the composer. */
+const ASK_PASSTHROUGH_ACTIONS = ["app.stt.toggle", "app.dictation.toggle"] as const;
 
 /**
  * Footer hint for a guest-rendered ask selector. The guest's selector handles
@@ -707,19 +709,27 @@ export class ExtensionUiController {
 			let promptResolve: ((value: AskDialogPromptValue | undefined) => void) | undefined;
 			let closed = false;
 			const draftEditor = this.ctx.editor;
-			const inputGuard =
-				draftEditor.getText().length > 0
-					? {
-							isBlocked: () => draftEditor.getText().length > 0,
-							handleInput: (keyData: string) => draftEditor.handleDraftEdit(keyData),
-							hint: "Finish or clear the current prompt to answer",
-							// Show the draft's insertion cursor while it owns input; drop it
-							// once the draft clears and the ask controls take over.
-							syncPresentation: () => {
-								draftEditor.focused = draftEditor.getText().length > 0;
-							},
-						}
-					: undefined;
+			// The composer stays mounted beneath the question and keeps its draft:
+			// a non-empty draft owns typing until it is sent or cleared, and hiding
+			// the question hands typing to it (issue #303).
+			const inputGuard = {
+				isBlocked: () => draftEditor.getText().length > 0,
+				handleInput: (keyData: string) => draftEditor.handleDraftEdit(keyData),
+				hint: "Finish or clear the current prompt to answer",
+				// Show the draft's insertion cursor while it owns input; drop it
+				// once the draft clears and the ask controls take over.
+				syncPresentation: () => {
+					draftEditor.focused = draftEditor.getText().length > 0;
+				},
+			};
+			// Speech input must start, stop and deliver into the composer while a
+			// question is up, or a running recording could only end by cancelling it.
+			const passthrough = (keyData: string): boolean => {
+				for (const action of ASK_PASSTHROUGH_ACTIONS) {
+					if (getKeybindings().matches(keyData, action)) return this.ctx.runAppAction(action);
+				}
+				return false;
+			};
 
 			const restoreAskDialog = (): void => {
 				if (closed || !askDialog) return;
@@ -729,7 +739,7 @@ export class ExtensionUiController {
 				// initial presentation: the guard re-blocks whenever the draft is
 				// non-empty (e.g. a failed submit restored its text while a nested
 				// prompt was open), and routed input must land on a visible surface.
-				if (inputGuard) this.ctx.editorContainer.addChild(this.ctx.editor);
+				this.ctx.editorContainer.addChild(this.ctx.editor);
 				this.ctx.ui.setFocus(askDialog);
 				this.ctx.ui.requestRender();
 			};
@@ -805,11 +815,12 @@ export class ExtensionUiController {
 					onTimeout: dialogOptions?.onTimeout,
 					tui: this.ctx.ui,
 					inputGuard,
+					passthrough,
 				},
 			);
 			this.ctx.editorContainer.clear();
 			this.ctx.editorContainer.addChild(askDialog);
-			if (inputGuard) this.ctx.editorContainer.addChild(this.ctx.editor);
+			this.ctx.editorContainer.addChild(this.ctx.editor);
 			this.ctx.ui.setFocus(askDialog);
 			this.ctx.ui.requestRender();
 

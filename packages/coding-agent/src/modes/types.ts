@@ -573,6 +573,8 @@ export interface InteractiveModeContext {
 
 	// Input handling
 	handleCtrlC(): void;
+	/** Run the app action bound to `id` as its key would; false when `id` is not an app action. */
+	runAppAction(id: string): boolean;
 	handleCtrlD(): void;
 	handleCtrlZ(): void;
 	/** Re-query terminal appearance for an explicit display reset, then immediately replay the display. */
