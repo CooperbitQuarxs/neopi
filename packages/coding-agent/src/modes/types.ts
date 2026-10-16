@@ -157,6 +157,8 @@ export interface InteractiveModeContext {
 	readonly focusedAgentId: string | undefined;
 	/** The operator's IRC id (issue #31), undefined when she is not a registered participant. */
 	readonly ircOperatorId: string | undefined;
+	/** Send an IRC message as the operator (to a peer id or `all`); resolves with the delivery summary. */
+	sendAsIrcOperator(to: string, message: string, replyTo?: string): Promise<{ text: string; isError: boolean }>;
 	/** Focus the main view on an agent's live session (delegates to SessionFocusController.focusAgent). */
 	focusAgentSession(id: string): Promise<void>;
 	/** Focus the focused agent's parent session, falling back to main (delegates to focusParent). */

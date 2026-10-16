@@ -31,6 +31,10 @@ export interface IrcViewerOptions {
 	readonly rows: () => number;
 	readonly onClose: () => void;
 	readonly requestRender: () => void;
+	/** The operator's IRC id: replying to her own message answers its recipient. */
+	readonly operatorId?: string;
+	/** Sends as the operator; with it, `r` replies to the selected message. Resolves with the delivery summary. */
+	readonly reply?: (to: string, message: string, replyTo: string) => Promise<{ text: string; isError: boolean }>;
 }
 
 /** `HH:MM:SS` in local time. */
@@ -59,6 +63,11 @@ export class IrcViewerComponent implements Component {
 	/** List rows the last frame had room for. */
 	#listRows = 1;
 	readonly #expanded = new Set<string>();
+	/** The reply being written, and to whom. */
+	#compose: { to: string; replyTo: string } | undefined;
+	readonly #draft = filterInput();
+	/** Outcome of the last reply, shown in the status row until the next key. */
+	#notice: { text: string; isError: boolean } | undefined;
 
 	constructor(options: IrcViewerOptions) {
 		this.#options = options;
@@ -154,18 +163,24 @@ export class IrcViewerComponent implements Component {
 		const broadcasts = all.filter(entry => entry.broadcast).length;
 		const counts = `${all.length} ${all.length === 1 ? "message" : "messages"} · ${broadcasts} broadcast · ${participants} ${participants === 1 ? "participant" : "participants"}`;
 		const query = this.#filter.getValue();
-		const status = this.#filterEditing
-			? theme.fg("accent", `filter: ${filterText(this.#filter)}`)
-			: query
-				? `${theme.fg("accent", `filter: ${query}`)}${theme.fg("dim", `  ${visible.length} shown · ${counts}`)}`
-				: theme.fg("dim", counts);
+		const status = this.#compose
+			? theme.fg("accent", `reply to ${sanitizeDisplaySingleLine(this.#compose.to)}: ${filterText(this.#draft)}`)
+			: this.#notice
+				? theme.fg(this.#notice.isError ? "error" : "success", sanitizeDisplaySingleLine(this.#notice.text))
+				: this.#filterEditing
+					? theme.fg("accent", `filter: ${filterText(this.#filter)}`)
+					: query
+						? `${theme.fg("accent", `filter: ${query}`)}${theme.fg("dim", `  ${visible.length} shown · ${counts}`)}`
+						: theme.fg("dim", counts);
 
-		const hints = this.#filterEditing
-			? "enter apply · esc clear"
-			: `↑↓ select · enter expand · / filter · end follow · ${[
-					"esc",
-					...this.#options.viewerKeys.map(key => formatKeyHint(key)),
-				].join("/")} close`;
+		const hints = this.#compose
+			? "enter send · esc cancel"
+			: this.#filterEditing
+				? "enter apply · esc clear"
+				: `↑↓ select · enter expand${this.#options.reply ? " · r reply" : ""} · / filter · end follow · ${[
+						"esc",
+						...this.#options.viewerKeys.map(key => formatKeyHint(key)),
+					].join("/")} close`;
 
 		const frame = [
 			topBorder(width, "IRC"),
@@ -209,6 +224,43 @@ export class IrcViewerComponent implements Component {
 		this.#options.requestRender();
 	}
 
+	#startReply(): void {
+		const entry = this.#visible()[this.#selected];
+		if (!entry || !this.#options.reply) return;
+		const { message } = entry;
+		const to = message.from === this.#options.operatorId ? message.to : message.from;
+		this.#compose = { to, replyTo: message.id };
+		this.#draft.setValue("");
+		this.#options.requestRender();
+	}
+
+	#handleComposeInput(data: string): void {
+		const compose = this.#compose;
+		const reply = this.#options.reply;
+		if (!compose || !reply) return;
+		if (matchesKey(data, "escape")) {
+			this.#compose = undefined;
+		} else if (matchesKey(data, "enter") || data === "\r" || data === "\n") {
+			const body = this.#draft.getValue().trim();
+			if (!body) return;
+			this.#compose = undefined;
+			this.#follow = true;
+			void reply(compose.to, body, compose.replyTo).then(
+				result => {
+					this.#notice = result;
+					this.#options.requestRender();
+				},
+				(error: unknown) => {
+					this.#notice = { text: error instanceof Error ? error.message : String(error), isError: true };
+					this.#options.requestRender();
+				},
+			);
+		} else if (!this.#draft.handleInput(data)) {
+			return;
+		}
+		this.#options.requestRender();
+	}
+
 	handleInput(data: string): void {
 		if (
 			routeSgrMouseInput(data, event => {
@@ -219,6 +271,11 @@ export class IrcViewerComponent implements Component {
 		) {
 			return;
 		}
+		if (this.#compose) {
+			this.#handleComposeInput(data);
+			return;
+		}
+		this.#notice = undefined;
 		if (this.#filterEditing) {
 			this.#handleFilterInput(data);
 			return;
@@ -230,6 +287,10 @@ export class IrcViewerComponent implements Component {
 		if (data === "/") {
 			this.#filterEditing = true;
 			this.#options.requestRender();
+			return;
+		}
+		if (data === "r" && this.#options.reply) {
+			this.#startReply();
 			return;
 		}
 		if (matchesKey(data, "enter") || this.#options.expandKeys.some(key => matchesKey(data, key))) {

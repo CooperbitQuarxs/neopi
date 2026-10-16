@@ -131,6 +131,8 @@ import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compa
 import type { AgentHubRegistry } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { DEFAULT_IRC_OPERATOR_HANDLE, registerIrcOperator } from "../irc/operator";
+import { cfgIrcOperatorHandle } from "../irc/settings";
+import { executeSend } from "../irc/messaging";
 import { registerPersistedSubagents } from "../registry/persisted-agents";
 import type { AgentMetrics } from "@oh-my-pi/pi-tui/overlays/agent-hub-projection";
 import { sumSubagentTreeCost } from "./agent-hub-runtime";
@@ -1665,6 +1667,24 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** The operator's IRC id, or undefined when she is not a registered participant. */
 	get ircOperatorId(): string | undefined {
 		return this.#ircOperatorId;
+	}
+	/**
+	 * Send an IRC message as the operator: to a peer id or `all`, optionally as a
+	 * reply. Resolves with the delivery summary the hub tool would report.
+	 */
+	async sendAsIrcOperator(to: string, message: string, replyTo?: string): Promise<{ text: string; isError: boolean }> {
+		const operatorId = this.#ircOperatorId;
+		if (!operatorId) return { text: "You are not an IRC participant in this session.", isError: true };
+		const result = await executeSend(
+			{
+				registry: AgentRegistry.global(),
+				senderId: operatorId,
+				sessionFileHint: this.sessionManager.getSessionFile(),
+			},
+			{ to, message, replyTo },
+		);
+		const text = result.content.map(part => (part.type === "text" ? part.text : "")).join("");
+		return { text, isError: result.isError === true };
 	}
 	get sessionName(): string | undefined {
 		return this.session.sessionName;
@@ -6875,7 +6895,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const registry = AgentRegistry.global();
 		const root = registry.rootForSession(this.session);
 		if (!root) return;
-		const handle = DEFAULT_IRC_OPERATOR_HANDLE;
+		const handle = cfgIrcOperatorHandle.get(this.settings).trim() || DEFAULT_IRC_OPERATOR_HANDLE;
 		this.#releaseIrcOperator = registerIrcOperator(registry, handle, root.id);
 		this.#ircOperatorId = this.#releaseIrcOperator ? handle : undefined;
 	}

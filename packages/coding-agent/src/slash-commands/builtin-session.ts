@@ -595,6 +595,30 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "irc",
+		icon: "agents",
+		description: "Open the IRC viewer, or message an agent (or all) as yourself",
+		inlineHint: "[<agent>|all <message>]",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const args = command.args.trim();
+			clearSubmittedText(runtime);
+			if (!args) {
+				runtime.ctx.showIrcViewer();
+				return;
+			}
+			const split = args.search(/\s/);
+			const message = split === -1 ? "" : args.slice(split + 1).trim();
+			if (!message) {
+				runtime.ctx.showStatus("Usage: /irc [<agent>|all <message>]");
+				return;
+			}
+			const result = await runtime.ctx.sendAsIrcOperator(args.slice(0, split), message);
+			if (result.isError) runtime.ctx.showWarning(result.text);
+			else runtime.ctx.showStatus(result.text);
+		},
+	},
+	{
 		name: "branch",
 		aliases: ["rewind"],
 		icon: "branch",

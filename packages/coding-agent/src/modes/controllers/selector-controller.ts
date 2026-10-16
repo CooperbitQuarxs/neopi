@@ -2942,6 +2942,10 @@ export class SelectorController {
 			rows: () => this.ctx.ui.terminal?.rows || process.stdout.rows || 40,
 			onClose: done,
 			requestRender: () => this.ctx.ui.requestRender(),
+			operatorId: this.ctx.ircOperatorId,
+			reply: this.ctx.ircOperatorId
+				? (to, message, replyTo) => this.ctx.sendAsIrcOperator(to, message, replyTo)
+				: undefined,
 		});
 		const menu = this.#claimMenu("irc-viewer");
 		this.#mountMenu(menu, viewer, () => this.#showFullscreenMenu(viewer));
