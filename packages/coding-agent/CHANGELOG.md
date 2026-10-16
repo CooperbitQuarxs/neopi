@@ -21,6 +21,7 @@
 - Added post-processing chains: named, ordered model steps in `CHAINS.yml` (user and project) that rewrite composer text before it is sent. Alt+C sends one prompt through the active chain; `/chaining on|off|use|status|configure` manages automatic mode, the active chain, and a fullscreen editor. Steps without a model use the new Prose role, which falls back to the configured `smol` role.
 ### Fixed
 
+- The agent no longer treats a smoke run as mandatory before finishing any non-trivial work; the base and project prompts drop that rule and its critical reinforcement ([#307](https://github.com/PsychedelicShayna/neopi/issues/307)).
 - Saying "parallel" or "parallelize" no longer forces the agent to spawn subagents; it can run concurrent processes, requests, or tool calls directly ([#304](https://github.com/PsychedelicShayna/neopi/issues/304)).
 - Subagent prompts no longer end with "keep going until this ticket is closed", which discouraged reporting a genuine blocker ([#310](https://github.com/PsychedelicShayna/neopi/issues/310)).
 - Live ingest classifier budgets retain a custom model's verified standard capacity when a context-window override widens its effective window.
