@@ -22,6 +22,7 @@
 ### Fixed
 
 - The agent no longer treats a smoke run as mandatory before finishing any non-trivial work; the base and project prompts drop that rule and its critical reinforcement ([#307](https://github.com/PsychedelicShayna/neopi/issues/307)).
+- Saying "parallel" or "parallelize" no longer forces the agent to spawn subagents; it can run concurrent processes, requests, or tool calls directly ([#304](https://github.com/PsychedelicShayna/neopi/issues/304)).
 - Live ingest classifier budgets retain a custom model's verified standard capacity when a context-window override widens its effective window.
 - Fixed Bash, Fish, and Zsh discovery of public CLI aliases, nested subcommands, child flags, and finite argument choices from executable metadata, including Bash word-break fragments, grouped short-option values, and scope-local `--` boundaries. Large piped completion scripts drain before exit, and native `/loadout use <name>` completion now exposes the existing alias without submitting before its name ([#228](https://github.com/PsychedelicShayna/neopi/issues/228)).
 - Fixed control-socket ask answers crashing instead of returning selected options or custom text; invalid answers now leave the dialog open ([#281](https://github.com/PsychedelicShayna/neopi/issues/281)).
