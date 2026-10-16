@@ -130,6 +130,7 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
 import type { AgentHubRegistry } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { DEFAULT_IRC_OPERATOR_HANDLE, registerIrcOperator } from "../irc/operator";
 import { registerPersistedSubagents } from "../registry/persisted-agents";
 import type { AgentMetrics } from "@oh-my-pi/pi-tui/overlays/agent-hub-projection";
 import { sumSubagentTreeCost } from "./agent-hub-runtime";
@@ -1661,6 +1662,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	get focusedAgentId(): string | undefined {
 		return this.#focusController.focusedAgentId;
 	}
+	/** The operator's IRC id, or undefined when she is not a registered participant. */
+	get ircOperatorId(): string | undefined {
+		return this.#ircOperatorId;
+	}
 	get sessionName(): string | undefined {
 		return this.session.sessionName;
 	}
@@ -1746,6 +1751,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	#micCursor: MicCursor | undefined;
 	#resizeHandler?: () => void;
 	#observerRegistry: SessionObserverRegistry;
+	/** The operator's IRC id while she is registered as a participant (issue #31). */
+	#ircOperatorId: string | undefined;
+	#releaseIrcOperator: (() => void) | undefined;
 	/** Click override for the pinned jump-list density; undefined follows `display.pinnedAgents`. */
 	#pinnedHudOverride: boolean | undefined;
 	#eventBus?: EventBus;
@@ -2291,6 +2299,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#observerRegistry.subscribeToEventBus(this.#eventBus, this.#subagentEventBus ?? this.#eventBus);
 		}
 		this.#observerRegistry.setMainSession(this.sessionManager.getSessionFile() ?? undefined);
+		this.#registerIrcOperator();
 		this.syncRunningSubagentBadge();
 		this.#observerRegistry.onChange(kind => {
 			this.#scheduleObserverUiSync(kind);
@@ -6851,7 +6860,24 @@ export class InteractiveMode implements InteractiveModeContext {
 		// scrollback at the docked chat width it was painted at, and the undock
 		// itself refreshes no history, so a quit leaves scrollback as painted.
 		this.#sidePanelController.dispose();
+		this.#releaseIrcOperator?.();
+		this.#releaseIrcOperator = undefined;
+		this.#ircOperatorId = undefined;
 		this.isInitialized = false;
+	}
+
+	/**
+	 * Make the person at this UI an IRC participant under this session's root,
+	 * so agents can address her without waiting on the composer's model.
+	 */
+	#registerIrcOperator(): void {
+		if (this.collabGuest || this.#releaseIrcOperator) return;
+		const registry = AgentRegistry.global();
+		const root = registry.rootForSession(this.session);
+		if (!root) return;
+		const handle = DEFAULT_IRC_OPERATOR_HANDLE;
+		this.#releaseIrcOperator = registerIrcOperator(registry, handle, root.id);
+		this.#ircOperatorId = this.#releaseIrcOperator ? handle : undefined;
 	}
 
 	async shutdown(): Promise<void> {
