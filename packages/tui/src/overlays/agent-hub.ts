@@ -1548,8 +1548,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#refreshRows(): void {
 		const selectedId = this.#rows[this.#selectedRow]?.id;
 		// Roots are not roster rows: the main session is the view itself, and any
-		// other top-level session hosted in-process is a separate root.
-		const refs = this.#registry.list().filter(ref => ref.id !== MAIN_AGENT_ID && ref.kind !== "main");
+		// other top-level session hosted in-process is a separate root. Nor is the
+		// operator: that is the person looking at the hub.
+		const refs = this.#registry
+			.list()
+			.filter(ref => ref.id !== MAIN_AGENT_ID && ref.kind !== "main" && ref.kind !== "operator");
 		this.#observedById = new Map();
 		for (const session of this.#observers.getSessions()) this.#observedById.set(session.id, session);
 		// Capture the status+recency ranking once so keyboard navigation does

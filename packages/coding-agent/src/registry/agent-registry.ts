@@ -22,8 +22,11 @@ export type { AgentStatus, AgentMetricsSummary };
  * - `advisor`: a passive review transcript persisted like a subagent for usage
  *   attribution and Agent Hub observability, but never a peer — hidden from
  *   agent-facing rosters (`proc://`, `history://`) and not messageable/revivable.
+ * - `mailbox`: a session-less control-socket inbox (`npi ctl`); messageable, not a peer.
+ * - `operator`: the human at this process's UI as an IRC participant (issue #31);
+ *   session-less, listed as a peer, and messageable like any agent.
  */
-export type AgentKind = "main" | "sub" | "advisor" | "mailbox";
+export type AgentKind = "main" | "sub" | "advisor" | "mailbox" | "operator";
 
 /**
  * Run lifecycle milestones, stamped as they happen and scoped to the CURRENT
@@ -355,7 +358,8 @@ export class AgentRegistry {
 
 	/**
 	 * Returns every alive agent (running | idle) except the caller. Advisor refs
-	 * are observability-only transcripts, never peers, so they are excluded.
+	 * are observability-only transcripts, never peers, so they are excluded, as
+	 * are control mailboxes. The operator is a peer like any agent.
 	 * Flat namespace: every other agent is visible.
 	 */
 	listVisibleTo(id: string): AgentRef[] {

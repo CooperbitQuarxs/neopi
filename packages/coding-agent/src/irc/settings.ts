@@ -2,11 +2,26 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  *
- * Every key here is operator observability. Agent authorization (who may message or
- * overhear whom) stays addressed-only and has no settings.
+ * Every key here concerns the operator: what she sees and the id she takes part under.
+ * Agent authorization (who may message or overhear whom) stays addressed-only and has
+ * no settings.
  */
 import { effect, register } from "../config/registry";
+import { DEFAULT_IRC_OPERATOR_HANDLE } from "./operator";
 import { DEFAULT_IRC_HISTORY_MAX_ENTRIES, setIrcHistoryMaxEntries, setIrcRelayToMainTranscript } from "./policy";
+
+export const cfgIrcOperatorHandle = register({
+	id: "irc.operator.handle",
+	type: "string",
+	default: DEFAULT_IRC_OPERATOR_HANDLE,
+	ui: {
+		tab: "tasks",
+		group: "Messaging",
+		label: "IRC Operator Handle",
+		description:
+			"Your IRC id: agents message you at it, and what you send from /irc or the IRC viewer comes from it. Takes effect the next time npi starts",
+	},
+});
 
 export const cfgIrcViewerEnabled = register({
 	id: "irc.operator.viewerEnabled",

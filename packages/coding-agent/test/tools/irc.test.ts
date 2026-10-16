@@ -3,6 +3,7 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { executeSend } from "@oh-my-pi/pi-coding-agent/irc/messaging";
+import { registerIrcOperator } from "@oh-my-pi/pi-coding-agent/irc/operator";
 import {
 	DEFAULT_IRC_HISTORY_MAX_ENTRIES,
 	setIrcHistoryMaxEntries,
@@ -629,6 +630,100 @@ describe("IRC", () => {
 				expect(legs.every(entry => entry.broadcast)).toBe(true);
 				expect(bus.history().find(entry => entry.message.body === "just you")?.broadcast).toBe(false);
 				expect(notified).toBe(4);
+			});
+		});
+
+		describe("operator participant", () => {
+			afterEach(() => {
+				setIrcRelayToMainTranscript(true);
+			});
+
+			function setup() {
+				const main = makeFakeSession();
+				registry.register({ id: "Main", displayName: "main", kind: "main", session: main.session });
+				const sub = makeFakeSession();
+				registry.register({
+					id: "0-Sub",
+					displayName: "task",
+					kind: "sub",
+					parentId: "Main",
+					session: sub.session,
+				});
+				const release = registerIrcOperator(registry, "Captain", "Main");
+				return { main, sub, release };
+			}
+
+			it("receives agent messages on her UI without involving the main model", async () => {
+				const { main } = setup();
+				setIrcRelayToMainTranscript(false);
+
+				const receipt = await bus.send({ from: "0-Sub", to: "Captain", body: "need a decision" });
+
+				expect(receipt).toEqual({ to: "Captain", outcome: "injected" });
+				expect(main.delivered).toHaveLength(0);
+				// Addressed to her: shown even with peer relay cards turned off.
+				expect(main.relayed.map(record => record.details)).toEqual([
+					{ from: "0-Sub", to: "Captain", body: "need a decision" },
+				]);
+				expect(bus.history().map(entry => [entry.message.from, entry.message.to, entry.outcome])).toEqual([
+					["0-Sub", "Captain", "injected"],
+				]);
+				expect(bus.unreadCount("Captain")).toBe(0);
+			});
+
+			it("does not echo the main model's own message to her as a second card", async () => {
+				const { main } = setup();
+				await bus.send({ from: "Main", to: "Captain", body: "from the composer model" });
+				expect(main.relayed).toHaveLength(0);
+				expect(bus.history()).toHaveLength(1);
+			});
+
+			it("sends as herself, never as Main, with the reply id kept", async () => {
+				const { sub } = setup();
+				const result = await executeSend(
+					{ registry, senderId: "Captain" },
+					{ to: "0-Sub", message: "go ahead", replyTo: "42" },
+				);
+				expect(result.isError).toBeFalsy();
+				expect(sub.delivered.map(msg => [msg.from, msg.body, msg.replyTo])).toEqual([
+					["Captain", "go ahead", "42"],
+				]);
+				expect(bus.history()[0]?.message.from).toBe("Captain");
+			});
+
+			it("is a broadcast recipient only while registered", async () => {
+				const { release } = setup();
+				const peer = makeFakeSession();
+				registry.register({
+					id: "0-Peer",
+					displayName: "task",
+					kind: "sub",
+					parentId: "Main",
+					session: peer.session,
+				});
+
+				await executeSend({ registry, senderId: "0-Sub" }, { to: "all", message: "first" });
+				release?.();
+				await executeSend({ registry, senderId: "0-Sub" }, { to: "all", message: "second" });
+
+				const recipients = (body: string) =>
+					bus
+						.history()
+						.filter(entry => entry.message.body === body)
+						.map(entry => entry.message.to)
+						.sort();
+				expect(recipients("first")).toEqual(["0-Peer", "Captain", "Main"]);
+				expect(recipients("second")).toEqual(["0-Peer", "Main"]);
+				expect((await bus.send({ from: "0-Sub", to: "Captain", body: "gone" })).outcome).toBe("failed");
+			});
+
+			it("refuses a handle that is taken or is the broadcast address", () => {
+				const { release } = setup();
+				expect(release).toBeDefined();
+				expect(registerIrcOperator(registry, "0-Sub", "Main")).toBeUndefined();
+				expect(registerIrcOperator(registry, "all", "Main")).toBeUndefined();
+				expect(registry.get("0-Sub")?.kind).toBe("sub");
+				expect(registry.get("all")).toBeUndefined();
 			});
 		});
 	});

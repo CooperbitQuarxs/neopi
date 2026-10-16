@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { beforeAll, describe, expect, it } from "bun:test";
-import { IrcViewerComponent } from "@oh-my-pi/pi-tui/overlays/irc-viewer";
+import { IrcViewerComponent, type IrcViewerOptions } from "@oh-my-pi/pi-tui/overlays/irc-viewer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { IrcLogEntry, IrcLogSource } from "@oh-my-pi/pi-tui/tools/irc";
 
@@ -19,7 +19,7 @@ function entry(from: string, to: string, body: string, extra: Partial<IrcLogEntr
 	};
 }
 
-function mount(initial: IrcLogEntry[], rows = 30) {
+function mount(initial: IrcLogEntry[], rows = 30, extra: Partial<IrcViewerOptions> = {}) {
 	const entries = [...initial];
 	const listeners = new Set<() => void>();
 	let renders = 0;
@@ -42,6 +42,7 @@ function mount(initial: IrcLogEntry[], rows = 30) {
 		requestRender: () => {
 			renders += 1;
 		},
+		...extra,
 	});
 	return {
 		viewer,
@@ -144,5 +145,49 @@ describe("IrcViewerComponent", () => {
 		expect(view.listenerCount()).toBe(1);
 		view.viewer.dispose();
 		expect(view.listenerCount()).toBe(0);
+	});
+
+	describe("replying as the operator", () => {
+		function withReply(initial: IrcLogEntry[]) {
+			const sent: [string, string, string][] = [];
+			const view = mount(initial, 30, {
+				operatorId: "Captain",
+				reply: async (to, message, replyTo) => {
+					sent.push([to, message, replyTo]);
+					return { text: `Delivered to ${to}.`, isError: false };
+				},
+			});
+			return { view, sent };
+		}
+
+		it("answers the selected message's sender with its id as the reply target", async () => {
+			const question = entry("0-Alpha", "Captain", "which branch?");
+			const { view, sent } = withReply([question]);
+			view.viewer.handleInput("r");
+			expect(view.screen().join("\n")).toContain("reply to 0-Alpha:");
+			view.type("nightly");
+			view.viewer.handleInput("\r");
+			await Bun.sleep(0);
+			expect(sent).toEqual([["0-Alpha", "nightly", question.message.id]]);
+			expect(view.screen().join("\n")).toContain("Delivered to 0-Alpha.");
+		});
+
+		it("answers the recipient when the selected message is her own", () => {
+			const { view } = withReply([entry("Captain", "0-Beta", "status?")]);
+			view.viewer.handleInput("r");
+			expect(view.screen().join("\n")).toContain("reply to 0-Beta:");
+		});
+
+		it("sends nothing on Esc, and keeps r inert without a reply sink", () => {
+			const { view, sent } = withReply([entry("0-Alpha", "Captain", "ping")]);
+			view.viewer.handleInput("r");
+			view.type("draft");
+			view.viewer.handleInput("\x1b");
+			expect(sent).toEqual([]);
+			expect(view.closed()).toBe(0);
+			const plain = mount([entry("0-Alpha", "0-Beta", "ping")]);
+			plain.viewer.handleInput("r");
+			expect(plain.screen().join("\n")).not.toContain("reply to");
+		});
 	});
 });
