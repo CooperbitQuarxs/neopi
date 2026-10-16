@@ -4,6 +4,7 @@
  * {@link addAssistantUsage}, so every surface counts the same way.
  */
 import type { Usage } from "@oh-my-pi/pi-ai";
+import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 
 /** Timing of an agent's most recent completed request. */
 export interface AgentRequestTiming {
@@ -80,4 +81,17 @@ export function agentUsageFromMessages(messages: ReadonlyArray<{ role: string } 
 		if (message.role === "assistant") addAssistantUsage(usage, message);
 	}
 	return usage;
+}
+
+/** One-line token split and last-request timing, e.g. `in 12K · out 4.5K · reasoning 2K · ttft 820ms · 45 tok/s`. */
+export function formatAgentUsageBreakdown(usage: AgentUsage): string {
+	const parts = [`in ${formatNumber(usage.input)}`, `out ${formatNumber(usage.output)}`];
+	if (usage.reasoning > 0) parts.push(`reasoning ${formatNumber(usage.reasoning)}`);
+	if (usage.cacheRead > 0 || usage.cacheWrite > 0) {
+		parts.push(`cache ${formatNumber(usage.cacheRead)} read / ${formatNumber(usage.cacheWrite)} write`);
+	}
+	const last = usage.last;
+	if (last?.ttftMs !== undefined) parts.push(`ttft ${formatDuration(last.ttftMs)}`);
+	if (last?.outputTokensPerSecond !== undefined) parts.push(`${Math.round(last.outputTokensPerSecond)} tok/s`);
+	return parts.join(" · ");
 }

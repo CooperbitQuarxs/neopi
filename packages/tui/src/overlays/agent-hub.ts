@@ -81,6 +81,7 @@ import {
 	treeMetadataIndent,
 } from "./agent-hub-renderer";
 import { sanitizeDisplaySingleLine } from "./extensions/display-text";
+import { formatAgentUsageBreakdown } from "../tools/agent-usage";
 import { AgentTranscriptViewer, type AgentTranscriptSource } from "./agent-transcript-viewer";
 import type { AgentRoleDisplay } from "./agent-hub-renderer";
 import { fuzzyMatch } from "../fuzzy";
@@ -1359,6 +1360,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				),
 			);
 		}
+		if (metrics?.agentUsage) {
+			out.push(
+				node("text", { spans: [span(formatAgentUsageBreakdown(metrics.agentUsage), "dim")] }, undefined, "usage"),
+			);
+		}
 		const recent = this.#activity.recent(ref.id, NATIVE_RECENT_ACTIVITY);
 		out.push(
 			node(
@@ -2104,6 +2110,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			if (metrics.contextTokens !== undefined && metrics.contextWindow) {
 				add(contextGauge(metrics.contextTokens, metrics.contextWindow));
 			}
+			if (metrics.agentUsage) addWrapped(theme.fg("dim", formatAgentUsageBreakdown(metrics.agentUsage)), 3);
 		} else {
 			add(theme.fg("dim", "usage —"));
 		}
