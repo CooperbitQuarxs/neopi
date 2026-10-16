@@ -68,7 +68,9 @@ export async function executeSend(
 	const suppressRelay = isBroadcast && relayRootId !== undefined && targets.includes(relayRootId);
 	const bus = IrcBus.global();
 	const receipts = await Promise.all(
-		targets.map(target => bus.send({ from: senderId, to: target, body: message }, { suppressRelay })),
+		targets.map(target =>
+			bus.send({ from: senderId, to: target, body: message }, { suppressRelay, broadcast: isBroadcast }),
+		),
 	);
 	const delivered = receipts.filter(receipt => receipt.outcome !== "failed");
 	let text: string;

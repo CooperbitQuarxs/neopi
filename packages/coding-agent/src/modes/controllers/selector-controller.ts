@@ -134,6 +134,9 @@ import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-o
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-tui/overlays/agent-hub";
 import { createAgentHubRuntime } from "../agent-hub-runtime";
 import { AgentRegistry } from "../../registry/agent-registry";
+import { IrcBus, ircHistorySessionFile } from "../../irc/bus";
+import { cfgIrcViewerEnabled } from "../../irc/settings";
+import { IrcViewerComponent } from "@oh-my-pi/pi-tui/overlays/irc-viewer";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
 import { ExtensionDashboard } from "@oh-my-pi/pi-tui/overlays/extensions/extension-dashboard";
@@ -219,7 +222,14 @@ function loadProviderAuthUi(): ProviderAuthUiModules {
 }
 
 /** Menus that open at most once: a repeat request focuses the open one. */
-type MenuKind = "settings" | "model-picker" | "model-hub" | "agents-dashboard" | "agent-hub" | "usage-dashboard";
+type MenuKind =
+	| "settings"
+	| "model-picker"
+	| "model-hub"
+	| "agents-dashboard"
+	| "agent-hub"
+	| "irc-viewer"
+	| "usage-dashboard";
 
 /** An open menu: registered when the request runs, filled once its component mounts. */
 interface OpenMenu {
@@ -2898,5 +2908,42 @@ export class SelectorController {
 		} else {
 			showReadyHub();
 		}
+	}
+
+	/**
+	 * The operator's IRC history for this UI's root and conversation (issue #1).
+	 * Agents gain nothing from it: it reads the bus's operator-only log.
+	 */
+	showIrcViewer(): void {
+		if (this.#focusOpenMenu("irc-viewer")) return;
+		if (!cfgIrcViewerEnabled.get(this.ctx.settings)) {
+			this.ctx.showStatus("The IRC viewer is disabled (irc.operator.viewerEnabled).");
+			return;
+		}
+		const bus = IrcBus.global();
+		const registry = AgentRegistry.global();
+		const done = () => {
+			viewer.dispose();
+			menu.handle?.hide();
+			this.#releaseMenu("irc-viewer", menu);
+			this.focusActiveEditorArea();
+			this.ctx.ui.requestRender();
+		};
+		const viewer = new IrcViewerComponent({
+			source: {
+				entries: () => {
+					const root = registry.rootForSession(this.ctx.session);
+					return bus.history(root ? { rootId: root.id, sessionFile: ircHistorySessionFile(root) } : undefined);
+				},
+				subscribe: listener => bus.onHistory(listener),
+			},
+			viewerKeys: this.ctx.keybindings.getKeys("app.irc.viewer"),
+			expandKeys: this.ctx.keybindings.getKeys("app.tools.expand"),
+			rows: () => this.ctx.ui.terminal?.rows || process.stdout.rows || 40,
+			onClose: done,
+			requestRender: () => this.ctx.ui.requestRender(),
+		});
+		const menu = this.#claimMenu("irc-viewer");
+		this.#mountMenu(menu, viewer, () => this.#showFullscreenMenu(viewer));
 	}
 }

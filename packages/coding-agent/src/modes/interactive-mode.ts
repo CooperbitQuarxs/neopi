@@ -7998,6 +7998,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#selectorController.showAgentHub(this.#observerRegistry, options);
 	}
 
+	showIrcViewer(): void {
+		this.#selectorController.showIrcViewer();
+	}
+
 	resetObserverRegistry(): void {
 		this.#observerRegistry.resetSessions();
 		this.#observerRegistry.setMainSession(this.sessionManager.getSessionFile() ?? undefined);
