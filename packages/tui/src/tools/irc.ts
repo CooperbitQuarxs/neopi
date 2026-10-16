@@ -29,5 +29,27 @@ export interface IrcDeliveryReceipt {
 	outcome: "injected" | "woken" | "revived" | "queued" | "failed";
 	error?: string;
 }
+
+/**
+ * One delivery attempt in the operator's IRC history: a concrete message (a
+ * broadcast contributes one entry per recipient) and how it reached, or failed
+ * to reach, that recipient.
+ */
+export interface IrcLogEntry {
+	readonly message: IrcMessage;
+	readonly outcome: IrcDeliveryReceipt["outcome"];
+	readonly error?: string;
+	/** One leg of a `to: "all"` fan-out. */
+	readonly broadcast: boolean;
+}
+
+/** Read side of the IRC history a viewer renders: a snapshot plus change notifications. */
+export interface IrcLogSource {
+	/** Entries in send order, oldest first. */
+	entries(): readonly IrcLogEntry[];
+	/** Calls `listener` after each new entry; returns the unsubscribe. */
+	subscribe(listener: () => void): () => void;
+}
+
 /** Status ordering for peer rosters in child prompts. */
 export const LIST_STATUS_ORDER: Record<string, number> = { running: 0, idle: 1, parked: 2 };
