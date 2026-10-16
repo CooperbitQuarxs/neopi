@@ -101,6 +101,7 @@ function makeSession(opts: SessionOptions = {}): ToolSession {
 		getAvailable: () => available,
 		find: (provider: string, id: string) => available.find(model => model.provider === provider && model.id === id),
 		getApiKey: async () => (opts.apiKey === undefined ? "test-key" : opts.apiKey),
+		hasConfiguredAuth: () => opts.apiKey !== null,
 		resolver: () => async () => (opts.apiKey === undefined ? "test-key" : opts.apiKey),
 	} as unknown as ModelRegistry;
 	return {
@@ -652,6 +653,48 @@ describe("runEvalCompletion", () => {
 		const opts = spy.mock.calls[0]?.[2] as { reasoning?: unknown; disableReasoning?: unknown };
 		expect(opts.reasoning).toBe(Effort.Max);
 		expect(opts.disableReasoning).toBe(false);
+	});
+
+	it("accepts an explicit provider/model:effort selector", async () => {
+		const model = makeReasoningModel("picked");
+		const session = makeSession({ available: [SMOL, DEFAULT, model] });
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
+
+		const result = await runEvalCompletionAndWait({ prompt: "q", model: "p/picked:high" }, { session });
+
+		expect((spy.mock.calls[0]?.[0] as Model<Api>).id).toBe("picked");
+		expect((spy.mock.calls[0]?.[2] as { reasoning?: unknown }).reasoning).toBe(Effort.High);
+		expect(result.details).toMatchObject({ model: "p/picked", selector: "p/picked:high" });
+		expect(result.details.tier).toBeUndefined();
+	});
+
+	it("accepts a custom @role:effort selector", async () => {
+		const model = makeReasoningModel("reviewer");
+		const session = makeSession({ available: [SMOL, DEFAULT, model] });
+		session.settings.setModelRole("review", "p/reviewer");
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
+
+		await runEvalCompletionAndWait({ prompt: "q", model: "@review:low" }, { session });
+
+		expect((spy.mock.calls[0]?.[0] as Model<Api>).id).toBe("reviewer");
+		expect((spy.mock.calls[0]?.[2] as { reasoning?: unknown }).reasoning).toBe(Effort.Low);
+	});
+
+	it("rejects unknown models and unsupported efforts before any request", async () => {
+		const model = makeReasoningModel("bounded", [Effort.Low, Effort.Medium, Effort.High]);
+		const session = makeSession({ available: [SMOL, DEFAULT, model] });
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
+
+		await expect(runEvalCompletionAndWait({ prompt: "q", model: "p/zonk-9000" }, { session })).rejects.toThrow(
+			'Unknown model "p/zonk-9000" in model selector "p/zonk-9000"',
+		);
+		await expect(runEvalCompletionAndWait({ prompt: "q", model: "p/bounded:max" }, { session })).rejects.toThrow(
+			'Unsupported effort ":max" in model selector "p/bounded:max"',
+		);
+		await expect(runEvalCompletionAndWait({ prompt: "q", model: "@nosuchrole" }, { session })).rejects.toThrow(
+			'Unknown model role "@nosuchrole"',
+		);
+		expect(spy).not.toHaveBeenCalled();
 	});
 
 	it("clamps an explicit :max selector to the model's highest supported effort", async () => {

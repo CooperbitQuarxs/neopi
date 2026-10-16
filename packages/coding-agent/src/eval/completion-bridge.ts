@@ -38,6 +38,7 @@ import {
 } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
+import { AgentSelectorError, parseSelectorSuffix, validateAgentModelSelector } from "../task/agent-selector";
 import { Semaphore } from "../task/parallel";
 import type { ToolSession } from "../tools";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
@@ -68,6 +69,10 @@ const STRUCTURED_TOOL_NAME = "respond";
 
 type CompletionTier = "smol" | "default" | "slow";
 
+function isCompletionTier(value: string): value is CompletionTier {
+	return value === "smol" || value === "default" || value === "slow";
+}
+
 const TIER_TO_PATTERN: Record<CompletionTier, string> = {
 	smol: "@smol",
 	default: "@default",
@@ -76,7 +81,7 @@ const TIER_TO_PATTERN: Record<CompletionTier, string> = {
 
 const completionArgsSchema = type({
 	prompt: "string>0",
-	"model?": "'smol'|'default'|'slow'",
+	"model?": "string>0",
 	"system?": "string",
 	"schema?": { "[string]": "unknown" },
 });
@@ -92,7 +97,7 @@ export interface EvalCompletionResult {
 	text: string;
 	/** Structured payload; when present the cell receives it in place of `text`. */
 	data?: unknown;
-	details: { model: string; tier?: CompletionTier; structured: boolean; notices?: string[] };
+	details: { model: string; tier?: CompletionTier; selector?: string; structured: boolean; notices?: string[] };
 }
 
 /** Handle returned immediately after an eval completion starts. */
@@ -346,6 +351,75 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 }
 
 /**
+ * Resolve an explicit `provider/model[:effort]` or `@role[:effort]` selector to
+ * its primary candidate plus configured retry-fallback candidates. Validation is
+ * loud and runs before any request: unknown models or roles, unsupported
+ * efforts, and missing credentials throw. A suffix on the selector itself is a
+ * caller-explicit effort; otherwise a role's saved effort selection applies.
+ */
+function resolveSelectorCandidates(selector: string, session: ToolSession): CompletionCandidate[] {
+	const modelRegistry = session.modelRegistry;
+	if (!modelRegistry) return [];
+	try {
+		validateAgentModelSelector(selector, modelRegistry, session.settings);
+	} catch (error) {
+		if (error instanceof AgentSelectorError) {
+			throw new ToolError(`completion() ${error.message.replace("agent selector", "model selector")}`);
+		}
+		throw error;
+	}
+	const resolved = resolveModelOverride([selector], modelRegistry, session.settings);
+	if (!resolved.model) return [];
+	const suffix = parseSelectorSuffix(selector);
+	const base = suffix?.base ?? selector;
+	const role = base.startsWith("@") ? base.slice(1) : undefined;
+	const explicitLevel = suffix?.level;
+	const roleSelection =
+		role && explicitLevel === undefined ? session.settings.getRoleEffortSelection(role) : undefined;
+	const level = explicitLevel ?? resolved.thinkingLevel;
+	const selection: EffortSelection | undefined =
+		roleSelection && roleSelection.mode !== "inherit"
+			? roleSelection
+			: level === AUTO_THINKING
+				? { mode: "auto" }
+				: level !== undefined
+					? { mode: "fixed", level }
+					: undefined;
+	const candidates: CompletionCandidate[] = [
+		{
+			selector,
+			model: resolved.model,
+			...reasoningForCandidate("default", resolved.model, concreteThinkingLevel(level)),
+			selection,
+			origin: explicitLevel !== undefined ? "caller" : role ? "role" : "default",
+		},
+	];
+	const retry = cfgRetry.get(session.settings);
+	if (!retry.enabled || !retry.modelFallback) return candidates;
+	appendFallbackCandidates(
+		{
+			context: {
+				chains: getRetryFallbackChains(session.settings),
+				getModelRole: (name: string) => session.settings.getModelRole(name),
+				modelLookup: modelRegistry,
+			},
+			modelRegistry,
+			settings: session.settings,
+			tier: "default",
+			disabledProviders: new Set(cfgDisabledProviders.get(session.settings)),
+		},
+		selector,
+		resolved.model,
+		candidates[0],
+		role,
+		new Set([`${candidateIdentity(resolved.model, candidates[0])}|${candidates[0].selection?.mode ?? "inherit"}`]),
+		new Set(),
+		candidates,
+	);
+	return candidates;
+}
+
+/**
  * Choose the reasoning effort for a tier. Only `slow` opts into thinking, and
  * only on reasoning-capable models — guarding against `requireSupportedEffort`
  * throwing downstream on models that cannot reason. Clamps to the highest
@@ -360,7 +434,7 @@ function reasoningForTier(tier: CompletionTier, model: Model<Api>): Effort | und
 
 async function executeCompletion(
 	prompt: string,
-	finalTier: CompletionTier,
+	label: { tier?: CompletionTier; selector?: string },
 	system: string | undefined,
 	schema: Record<string, unknown> | undefined,
 	candidates: CompletionCandidate[],
@@ -528,7 +602,7 @@ async function executeCompletion(
 		text: resultText,
 		details: {
 			model: formatModelString(model),
-			tier: finalTier,
+			...label,
 			structured: Boolean(schema),
 			...(notices.length ? { notices } : {}),
 		},
@@ -544,17 +618,29 @@ export async function runEvalCompletion(
 	if (parsed instanceof type.errors) {
 		throw new ToolError(`completion() received invalid arguments: ${parsed.summary}`);
 	}
-	const { prompt, model: modelTier, system, schema } = parsed;
-	const finalTier: CompletionTier = modelTier ?? "default";
-	const candidates = resolveTierCandidates(finalTier, options.session);
+	const { prompt, model: requested = "default", system, schema } = parsed;
+	const tier = isCompletionTier(requested) ? requested : undefined;
+	const candidates = tier
+		? resolveTierCandidates(tier, options.session)
+		: resolveSelectorCandidates(requested, options.session);
 	if (candidates.length === 0) {
 		throw new ToolError(
-			`completion() could not resolve a model for the "${finalTier}" tier. Configure modelRoles.${finalTier === "default" ? "default" : finalTier} or ensure a provider is available.`,
+			tier
+				? `completion() could not resolve a model for the "${tier}" tier. Configure modelRoles.${tier} or ensure a provider is available.`
+				: `completion() could not resolve model selector "${requested}". Use "smol", "default", "slow", provider/model[:effort], or @role[:effort].`,
 		);
 	}
 
 	return retainCompletionHandle("cmp", options, signal =>
-		executeCompletion(prompt, finalTier, system, schema, candidates, options.session, signal),
+		executeCompletion(
+			prompt,
+			tier ? { tier } : { selector: requested },
+			system,
+			schema,
+			candidates,
+			options.session,
+			signal,
+		),
 	);
 }
 

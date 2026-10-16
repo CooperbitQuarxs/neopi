@@ -43,7 +43,7 @@ export class AgentSelectorError extends Error {}
  * Split a trailing `:<effort>` suffix off a selector when the token parses as
  * a configured thinking level (concrete levels, `max`, or `auto`).
  */
-function parseSelectorSuffix(value: string): { base: string; level: ConfiguredThinkingLevel } | undefined {
+export function parseSelectorSuffix(value: string): { base: string; level: ConfiguredThinkingLevel } | undefined {
 	const colonIdx = value.lastIndexOf(":");
 	if (colonIdx <= 0 || colonIdx === value.length - 1) return undefined;
 	const level = parseConfiguredThinkingLevel(value.slice(colonIdx + 1));
