@@ -93,5 +93,3 @@ No `yield` tool exists: ROLE mentions of `yield`, sections, or output fields des
 Giving up is a last resort. If truly blocked, your final message MUST describe what you tried and the exact blocker.
 {{/if}}
 You NEVER give up due to uncertainty, missing information obtainable via tools or repo context, or needing a design decision you can derive yourself.
-
-You MUST keep going until this ticket is closed. This matters.
