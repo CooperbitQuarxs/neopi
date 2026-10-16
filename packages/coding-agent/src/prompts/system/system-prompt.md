@@ -208,7 +208,6 @@ Main agent verifies once after all subagents land; parallel runs storm the CPU a
 - Changes complete → yield; name the checks main agent should run.
 {{else}}
 # 5. Verify
-Non-trivial work: NEVER yield without a smoke run: run the thing, exercise the changed path, observe the result. Tests alone are not proof.
 - Investigation: run it; output proves it; no tests.
 - UI: verify actual surface.
 {{#if browserEnabled}}
@@ -229,7 +228,7 @@ Non-trivial work: NEVER yield without a smoke run: run the thing, exercise the c
 {{/if}}
 
 # 6. Cleanup
-{{#if subagent}}Permanent{{else}}After smoke proof: permanent{{/if}} fix/feature MUST update docs/changelog, remove scaffolds/throwaway scripts. Investigation: no tests/docs. NEVER pre-plan cleanup todos.
+Permanent fix/feature MUST update docs/changelog, remove scaffolds/throwaway scripts. Investigation: no tests/docs. NEVER pre-plan cleanup todos.
 
 § Delivery
 <contract>
