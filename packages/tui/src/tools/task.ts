@@ -3,6 +3,7 @@ import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ThemeColor } from "../theme/theme";
 import type { ConfiguredThinkingLevel } from "../render/render-utils";
 import type { ToolRenderer } from "./renderer";
+import type { AgentUsage } from "./agent-usage";
 /**
  * TUI rendering for task tool.
  *
@@ -2355,6 +2356,11 @@ export interface AgentProgress {
 	contextWindow?: number;
 	/** Cumulative billing cost in USD, accumulated incrementally from message_end events. */
 	cost: number;
+	/**
+	 * Per-bucket token usage, cost, and last-request timing, in the record shape
+	 * advisors and Agent Hub rows share. Absent on progress persisted before it existed.
+	 */
+	agentUsage?: AgentUsage;
 	durationMs: number;
 	modelOverride?: string | string[];
 	/** Explicit pre-expansion model role alias selected for this run. */

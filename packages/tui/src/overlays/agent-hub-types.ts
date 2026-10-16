@@ -1,5 +1,6 @@
 import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
+import type { AgentUsage } from "../tools/agent-usage";
 
 /** Identity of the ambient main session in the agent roster. */
 export const MAIN_AGENT_ID = "Main";
@@ -15,6 +16,8 @@ export interface AgentMetricsSummary {
 	durationKind?: "active" | "span" | "unknown";
 	contextTokens?: number;
 	contextWindow?: number;
+	/** Per-bucket tokens, cost, and last-request timing; the record subagent progress and advisors share. */
+	agentUsage?: AgentUsage;
 }
 /** Live session data and actions used by the agent hub. */
 export interface AgentHubSession {

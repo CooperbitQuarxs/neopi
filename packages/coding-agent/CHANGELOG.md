@@ -16,6 +16,7 @@
 - Added `npi flash` to build and install an attested x86-64 baseline portable
   system with encrypted storage, resumable phases, a bounded profile, and
   explicit tmpfs persistence.
+- Subagent progress, advisor stats, and Agent Hub rows now share one usage record with input/output/reasoning/cache tokens, cost, and the last request's time to first token and output rate; the Agent Hub inspector shows the split (refs [#19](https://github.com/PsychedelicShayna/neopi/issues/19)).
 - Added the `retry.waitForUsageReset` setting: when a provider reports usage-limit exhaustion with a reset time (5-hour or weekly quota windows on any provider), the session sleeps until the reset instead of failing fast past `retry.maxDelayMs`.
 - Control-socket `hello`, `get_status`, and `state` snapshots now include the session's RPC state (`state` with `target: "view"` reports the focused subagent), and the subagent commands (`get_subagents`, `set_subagent_subscription`, transcripts, cancel, steer) now work over control in TUI panes ([#189](https://github.com/PsychedelicShayna/neopi/issues/189)).
 - Added `tui.titleSpinner` (`braille` | `dots` | `line`, default `braille`) to pick the terminal-title working-state spinner glyphs alongside the existing `tui.titleState` on/off toggle.

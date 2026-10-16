@@ -1,5 +1,6 @@
 import type { AgentMetricsSummary, AgentRecordLike, AgentStatus } from "./agent-hub-types";
 import { MAIN_AGENT_ID } from "./agent-hub-types";
+import { addAssistantUsage, emptyAgentUsage } from "../tools/agent-usage";
 import type { ObservableSession } from "./session-observer-registry";
 
 export type AgentMetrics = AgentMetricsSummary;
@@ -119,6 +120,7 @@ export function progressMetrics(observed: ObservableSession | undefined): AgentM
 			typeof progress.contextWindow === "number" && Number.isFinite(progress.contextWindow)
 				? progress.contextWindow
 				: undefined,
+		agentUsage: progress.agentUsage,
 	};
 }
 
@@ -169,12 +171,14 @@ function readSessionMetrics(
 		let requests = 0;
 		let tools = 0;
 		let cost = 0;
+		const usage = emptyAgentUsage();
 		for (const message of messages) {
 			if (message.role !== "assistant") continue;
 			requests++;
 			tokens += message.usage.input + message.usage.output + message.usage.cacheWrite;
 			tools += message.content.filter(content => content.type === "toolCall").length;
 			cost += message.usage.cost.total;
+			addAssistantUsage(usage, message);
 		}
 		return {
 			tokens,
@@ -185,6 +189,7 @@ function readSessionMetrics(
 			durationKind: "unknown",
 			contextTokens: stats.contextUsage?.tokens,
 			contextWindow: stats.contextUsage?.contextWindow,
+			agentUsage: usage,
 		};
 	} catch {
 		// Render-only doubles and sessions being torn down may not expose a
