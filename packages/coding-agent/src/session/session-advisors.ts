@@ -94,6 +94,7 @@ import type { Settings } from "../config/settings";
 import { CursorExecHandlers, type CursorMcpResourceAdapter } from "../cursor";
 import { bridgeToolMap } from "../cursor-bridge-tools";
 import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
+import { type AgentUsage, agentUsageFromMessages, emptyAgentUsage } from "@oh-my-pi/pi-tui/tools/agent-usage";
 import type { PlanModeState } from "../plan-mode/state";
 import type { ChatMode } from "../chat/chat-mode";
 import { renderChatAdvisorPrompt } from "../chat/chat-system-prompt";
@@ -307,6 +308,8 @@ export interface PerAdvisorStat {
 	contextTokens: number;
 	tokens: AdvisorStats["tokens"];
 	cost: number;
+	/** The per-agent usage record subagents and Agent Hub rows share; `cost` is the advisor's cost ledger. */
+	agentUsage: AgentUsage;
 	messages: AdvisorStats["messages"];
 	sessionId?: string;
 }
@@ -3022,6 +3025,7 @@ export class SessionAdvisors {
 					contextTokens: 0,
 					tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 					cost: this.#advisorCosts.get(slug) ?? 0,
+					agentUsage: { ...emptyAgentUsage(), cost: this.#advisorCosts.get(slug) ?? 0 },
 					messages: { user: 0, assistant: 0, total: 0 },
 				});
 			}
@@ -3075,26 +3079,12 @@ export class SessionAdvisors {
 		const model = advisor.agent.state.model;
 		const messages = advisor.agent.state.messages;
 		const contextTokens = this.#estimateAdvisorContextTokens(advisor);
-		let input = 0;
-		let output = 0;
-		let reasoning = 0;
-		let cacheRead = 0;
-		let cacheWrite = 0;
-		let totalTokens = 0;
+		const usage = { ...agentUsageFromMessages(messages), cost: this.#advisorCosts.get(advisor.slug) ?? 0 };
 		let user = 0;
 		let assistant = 0;
 		for (const message of messages) {
 			if (message.role === "user") user++;
-			if (message.role === "assistant") {
-				assistant++;
-				const assistantMsg = message as AssistantMessage;
-				input += assistantMsg.usage.input;
-				output += assistantMsg.usage.output;
-				reasoning += assistantMsg.usage.reasoningTokens ?? 0;
-				cacheRead += assistantMsg.usage.cacheRead;
-				cacheWrite += assistantMsg.usage.cacheWrite;
-				totalTokens += assistantMsg.usage.totalTokens;
-			}
+			if (message.role === "assistant") assistant++;
 		}
 		return {
 			name: advisor.name,
@@ -3106,8 +3096,16 @@ export class SessionAdvisors {
 			model,
 			contextWindow: model.contextWindow ?? 0,
 			contextTokens,
-			tokens: { input, output, reasoning, cacheRead, cacheWrite, total: totalTokens },
-			cost: this.#advisorCosts.get(advisor.slug) ?? 0,
+			tokens: {
+				input: usage.input,
+				output: usage.output,
+				reasoning: usage.reasoning,
+				cacheRead: usage.cacheRead,
+				cacheWrite: usage.cacheWrite,
+				total: usage.total,
+			},
+			cost: usage.cost,
+			agentUsage: usage,
 			messages: { user, assistant, total: messages.length },
 			sessionId: advisor.agent.sessionId,
 		};

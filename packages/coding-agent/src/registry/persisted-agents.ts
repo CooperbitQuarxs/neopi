@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
+import { type AssistantUsageSource, addAssistantUsage, emptyAgentUsage } from "@oh-my-pi/pi-tui/tools/agent-usage";
 import { ADVISOR_TRANSCRIPT_FILENAME, isAdvisorTranscriptName } from "../advisor/transcript-recorder";
 import { resolveExplicitModelRole } from "../config/model-resolver";
 import { assistantTurnProducedOutput } from "../session/messages";
@@ -108,6 +109,8 @@ interface AssistantMetrics {
 	 * same verdict the session reached while running it.
 	 */
 	served: boolean;
+	/** Raw usage and timing, for the shared per-agent usage record. */
+	usageSource: AssistantUsageSource;
 }
 
 function assistantMetrics(message: Record<string, unknown>): AssistantMetrics {
@@ -122,6 +125,11 @@ function assistantMetrics(message: Record<string, unknown>): AssistantMetrics {
 		cost: finiteNumber(cost?.total),
 		contextTokens: finiteNumber(usage.totalTokens) || undefined,
 		resolvedModel: provider && model ? `${provider}/${model}` : undefined,
+		usageSource: {
+			usage: usage as AssistantUsageSource["usage"],
+			ttft: typeof message.ttft === "number" ? message.ttft : undefined,
+			duration: typeof message.duration === "number" ? message.duration : undefined,
+		},
 		served: assistantTurnProducedOutput({
 			stopReason: message.stopReason,
 			content,
@@ -234,6 +242,8 @@ async function readPersistedAgentHistory(
 	let servedModel: string | undefined;
 	let latestModelChange: { model: string; resolvedModelIsFallback: boolean } | undefined;
 	const visited = new Set<string>();
+	/** Assistant turns on the active branch, newest first (the walk runs leaf → root). */
+	const branchAssistants: AssistantMetrics[] = [];
 	for (let id = leafId; id && !visited.has(id); id = parents.get(id)) {
 		visited.add(id);
 		const modelChange = modelChangeById.get(id);
@@ -260,6 +270,7 @@ async function readPersistedAgentHistory(
 		if (servedModel === undefined && assistant.served && assistant.resolvedModel) {
 			servedModel = assistant.resolvedModel;
 		}
+		branchAssistants.push(assistant);
 		metrics.requests++;
 		metrics.tokens += assistant.tokens;
 		metrics.tools += assistant.tools;
@@ -275,6 +286,12 @@ async function readPersistedAgentHistory(
 		resolvedModelIsFallback = servedModel !== undefined ? false : latestModelChange?.resolvedModelIsFallback;
 	}
 	if (contextTokens !== undefined) metrics.contextTokens = contextTokens;
+	const usage = emptyAgentUsage();
+	// Oldest first, so `last` ends on the newest request.
+	for (let index = branchAssistants.length - 1; index >= 0; index--) {
+		addAssistantUsage(usage, branchAssistants[index]!.usageSource);
+	}
+	metrics.agentUsage = usage;
 	return {
 		directCost,
 		...(metrics.requests > 0 ? { metrics } : {}),

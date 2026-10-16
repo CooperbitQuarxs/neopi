@@ -145,6 +145,7 @@ import {
 } from "@oh-my-pi/pi-tui/tools/task";
 import { yieldSectionShapes } from "./yield-assembly";
 import { assembleYieldResult } from "@oh-my-pi/pi-tui/tools/task-yield-assembly";
+import { type AssistantUsageSource, addAssistantUsage, emptyAgentUsage } from "@oh-my-pi/pi-tui/tools/agent-usage";
 import {
 	cfgTaskPrewalk,
 	cfgTaskAgentPrewalk,
@@ -1389,6 +1390,8 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		resetRecentOutput();
 	};
 
+	/** Accumulator behind `progress.agentUsage`, the usage record advisors and Agent Hub rows share. */
+	const runUsage = emptyAgentUsage();
 	const progress: AgentProgress = {
 		index,
 		id,
@@ -1405,6 +1408,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		requests: 0,
 		tokens: 0,
 		cost: 0,
+		agentUsage: emptyAgentUsage(),
 		durationMs: 0,
 		modelOverride: args.modelOverride,
 		modelRole: args.modelRole,
@@ -2138,6 +2142,13 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 					if (role === "assistant") {
 						const costRecord = isRecord(messageUsage.cost) ? messageUsage.cost : undefined;
 						hasUsage = true;
+						// Snapshots are shallow copies of `progress`, so replace rather than mutate.
+						addAssistantUsage(runUsage, {
+							usage: messageUsage as AssistantUsageSource["usage"],
+							ttft: isRecord(event.message) ? getNumberField(event.message, "ttft") : undefined,
+							duration: isRecord(event.message) ? getNumberField(event.message, "duration") : undefined,
+						});
+						progress.agentUsage = { ...runUsage };
 						accumulatedUsage.input += getNumberField(messageUsage, "input") ?? 0;
 						accumulatedUsage.output += getNumberField(messageUsage, "output") ?? 0;
 						accumulatedUsage.cacheRead += getNumberField(messageUsage, "cacheRead") ?? 0;
