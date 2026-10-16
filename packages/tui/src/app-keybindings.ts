@@ -51,6 +51,7 @@ interface AppKeybindings {
 	"app.clipboard.copyLine": true;
 	"app.clipboard.copyPrompt": true;
 	"app.agents.hub": true;
+	"app.irc.viewer": true;
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
@@ -229,6 +230,10 @@ export const KEYBINDINGS = {
 	"app.agents.hub": {
 		defaultKeys: "alt+a",
 		description: "Open the agent hub",
+	},
+	"app.irc.viewer": {
+		defaultKeys: "alt+i",
+		description: "Open the IRC communications viewer",
 	},
 	"app.session.observe": {
 		defaultKeys: "ctrl+s",

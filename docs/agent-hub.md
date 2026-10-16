@@ -105,6 +105,27 @@ Advisor transcript files (`__advisor*.jsonl`) appear as `advisor`-kind rows unde
 
 Collab does not replicate advisor rows or serve their transcripts to guests; the host also rejects advisor chat, revive, and kill requests by id.
 
+## IRC viewer
+
+`Alt+I` (`app.irc.viewer`) opens a fullscreen history of the agent-to-agent messages in this session. The live IRC cards in the main transcript retire after a few seconds and only four show at once; the viewer keeps every message.
+
+Each row shows the time, sender `➤` recipient, and the message body. Broadcasts appear as one row per recipient, marked `broadcast`. Replies are marked `reply`, wake-turn relays `relay`, and failed deliveries show the error. Long bodies are collapsed to two lines.
+
+| Key | Action |
+| --- | --- |
+| `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End`, wheel | Select a message; `End` follows new traffic again |
+| `Enter` or the tool-expand key | Expand or collapse the selected message |
+| `/` | Filter by participant (sender or recipient); `Enter` applies, `Esc` clears |
+| `Esc` or `Alt+I` | Close |
+
+The history belongs to this UI's root session and its current conversation: `/new` or resuming another session shows that conversation's messages. It lives in memory and is lost when the process exits. Settings:
+
+- `irc.operator.viewerEnabled` (default `true`) lets the key open the viewer.
+- `irc.operator.relayToMainTranscript` (default `true`) controls the live cards in the main transcript; the viewer keeps messages either way.
+- `irc.history.maxEntries` (default `1000`) caps the history per process; the oldest messages drop first.
+
+The viewer is for the operator only. Agents still receive only messages addressed to them, and no tool exposes this history to them.
+
 ## Related surfaces
 
 Agent Hub is the human-facing live session view. Adjacent commands and internal URLs serve narrower purposes:

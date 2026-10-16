@@ -94,15 +94,15 @@ import { hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { CLOSE_ACTION, picker, pickerQuery } from "../native/picker";
 import { Input } from "../components/input";
 
-/** A chrome-less search field: the hub draws its own prompt. */
-function filterInput(): Input {
+/** A chrome-less search field: the overlay draws its own prompt. */
+export function filterInput(): Input {
 	const input = new Input();
 	input.prompt = "";
 	return input;
 }
 
 /** The field's text with its caret drawn, sized to the value (no trailing padding). */
-function filterText(input: Input): string {
+export function filterText(input: Input): string {
 	return input.render(visibleWidth(input.getValue()) + 1)[0] ?? "";
 }
 
