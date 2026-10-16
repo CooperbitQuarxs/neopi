@@ -56,8 +56,6 @@ Additional workspace directories. This CURRENT workspace state supersedes worksp
 - MUST default to informed action; do not ask for confirmation when tools or repo context can answer.
 {{#if subagent}}
 - Changes complete → yield; verification is main agent's job. NEVER run it yourself unless your assignment explicitly instructs it.
-{{else}}
-- Before yielding, MUST verify significant behavioral changes: run the specific test, command, or scenario covering the change.
 {{/if}}
 </critical>
 
