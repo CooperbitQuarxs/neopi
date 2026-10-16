@@ -29,7 +29,7 @@ import { ControlServer, type ControlConnection } from "./server";
 import { APPROVAL_GATED_SETTINGS, cfgControlApprovals, cfgControlSecretInput } from "./settings";
 import { RpcPlanModeController } from "../modes/rpc/rpc-plan-mode";
 import { RpcSessionSettleWatcher } from "../modes/rpc/rpc-session-settle";
-import { buildRpcSessionState, CONTROL_QUEUE_LIMIT } from "../modes/rpc/rpc-session-state";
+import { buildRpcSessionState, CONTROL_QUEUE_LIMIT, copyQueue } from "../modes/rpc/rpc-session-state";
 import { type RpcSubagentBus, RpcSubagentRegistry } from "../modes/rpc/rpc-subagents";
 import type { EventBus } from "../utils/event-bus";
 import { RpcSessionEventForwarder } from "../modes/rpc/rpc-session-events";
@@ -277,7 +277,17 @@ export class ControlHost {
 			if (event.type === "model_changed") {
 				this.#revisions.model = session.model ? `${session.model.provider}/${session.model.id}` : null;
 			}
-			for (const forwarder of this.#forwarders.values()) forwarder.forward(event);
+			if (this.#forwarders.size === 0) return;
+			// Same cap as the snapshots: a queue past the frame limit would replace the update with an error.
+			const forwarded =
+				event.type === "queue_update"
+					? {
+							...event,
+							steering: copyQueue(event.steering, CONTROL_QUEUE_LIMIT),
+							followUp: copyQueue(event.followUp, CONTROL_QUEUE_LIMIT),
+						}
+					: event;
+			for (const forwarder of this.#forwarders.values()) forwarder.forward(forwarded);
 		});
 	}
 
