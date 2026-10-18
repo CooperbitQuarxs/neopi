@@ -309,7 +309,13 @@ export type ControlOnlyCommand =
 			serviceId?: string;
 	  })
 	| (ControlBase & { type: "unserve"; serviceId: string })
-	| (ControlBase & { type: "todo_set"; phases: TodoPhase[] });
+	| (ControlBase & { type: "todo_set"; phases: TodoPhase[] })
+	/** Full connections only: mint a monitor capability for one subagent or advisor of this root. */
+	| (ControlBase & { type: "monitor_grant"; agentId: string })
+	/** Monitor connections only (authenticated with `hello.monitor.capability`). */
+	| (ControlBase & { type: "monitor_subscribe" })
+	| (ControlBase & { type: "monitor_transcript"; fromByte: number })
+	| (ControlBase & { type: "monitor_chat"; text: string });
 
 export type ControlOnlyCommandType = ControlOnlyCommand["type"];
 
