@@ -70,20 +70,14 @@ export type ExtensionAskDialogResult = ExtensionAskDialogSubmitResult | Extensio
 import { disambiguateDisplayLabels, expandKeyHint, sanitizeCarriageReturns } from "../render/render-utils";
 import { getTabBarTheme } from "../chrome/shared";
 import { getMarkdownTheme, highlightCode, theme } from "../theme/theme";
-import {
-	matchesAppToolsExpand,
-	matchesSelectCancel,
-	matchesSelectDown,
-	matchesSelectPageDown,
-	matchesSelectPageUp,
-	matchesSelectUp,
-} from "../keybinding-matchers";
+import { matchesAppToolsExpand, matchesSelectCancel } from "../keybinding-matchers";
+import { extractPrintableText } from "../keys";
+import { MenuKeyReader, menuScrollBy, type MenuNavAction } from "../components/menu-navigation";
 import { optionMarker } from "../tools/ask";
 import { CountdownTimer } from "../chrome/countdown-timer";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { formatKeyHint, formatKeyHints, formatTooltipKey } from "../app-keybindings";
 import { OverlayPanel, PanelDivider, PanelRows } from "../chrome/overlay-box";
-import { handleTabSwitchKey } from "../chrome/selector-helpers";
 import { col, node, span, text } from "../native/describe";
 import {
 	type DescribeContext,
@@ -179,6 +173,13 @@ interface QuestionState {
 	scrollOffset: number;
 	manualScroll: boolean;
 	timedOut: boolean;
+}
+
+interface QuestionLayout {
+	state: QuestionState;
+	starts: readonly number[];
+	totalRows: number;
+	rows: number;
 }
 
 type QuestionRowKind = "option" | "other";
@@ -568,6 +569,15 @@ export class AskDialogComponent implements Component {
 	#submitScrollOffset = 0;
 	#bodyRows = MIN_BODY_ROWS;
 	#questionCanPage = false;
+	#keys = new MenuKeyReader();
+	#questionLayout: QuestionLayout | undefined;
+	#submitView: ScrollView | undefined;
+	#submitLayoutDirty = true;
+	#scrollSequence = 0;
+	#nativeScroll: {
+		target: "options" | "preview" | "review";
+		request: NonNullable<NativeNode["scroll"]>;
+	} | undefined;
 	#remainingSeconds: number | undefined;
 	#countdown: CountdownTimer | undefined;
 	#promptActive = false;
@@ -645,6 +655,8 @@ export class AskDialogComponent implements Component {
 
 	invalidate(): void {
 		this.#native = undefined;
+		this.#questionLayout = undefined;
+		this.#submitLayoutDirty = true;
 		this.#stableHeight = undefined;
 		this.#previewCache.clear();
 		this.#overflowLayouts = new WeakMap();
@@ -656,6 +668,7 @@ export class AskDialogComponent implements Component {
 		this.#closed = true;
 		this.#countdown?.dispose();
 		this.#stopRingTick();
+		this.#submitView?.dispose();
 		this.#panel.dispose();
 	}
 	/**
@@ -664,6 +677,7 @@ export class AskDialogComponent implements Component {
 	 * expand transcript tools.
 	 */
 	toggleQuestionExpansion(): boolean {
+		this.#keys.reset();
 		if (!this.#canToggleExpansion()) return false;
 		this.#expanded = !this.#expanded;
 		this.invalidate();
@@ -688,7 +702,19 @@ export class AskDialogComponent implements Component {
 		// closed/prompt guards, matching HookSelector/HookInput semantics.
 		this.#countdown?.reset();
 		this.#native = undefined;
-		if (this.options.passthrough?.(keyData)) return;
+		const inputGuard = this.options.inputGuard;
+		// A proxied draft owns printable text even when a menu action was
+		// rebound to that character. Its host retains ordinary editing.
+		if (inputGuard && (inputGuard.isBlocked() || this.#hidden) && extractPrintableText(keyData) !== undefined) {
+			this.#keys.reset();
+			inputGuard.handleInput(keyData);
+			this.#requestRender();
+			return;
+		}
+		if (this.options.passthrough?.(keyData)) {
+			this.#keys.reset();
+			return;
+		}
 		if (matchesSelectCancel(keyData)) {
 			this.#finishCancel();
 			return;
@@ -703,13 +729,14 @@ export class AskDialogComponent implements Component {
 			this.toggleQuestionExpansion();
 			return;
 		}
-		const inputGuard = this.options.inputGuard;
 		if (inputGuard?.isBlocked()) {
+			this.#keys.reset();
 			inputGuard.handleInput(keyData);
 			this.#requestRender();
 			return;
 		}
 		if (this.#hidden) {
+			this.#keys.reset();
 			// Hidden, the question waits and the composer takes the typing; Enter on
 			// an empty composer brings the question back.
 			if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
@@ -720,15 +747,18 @@ export class AskDialogComponent implements Component {
 			}
 			return;
 		}
-		if (this.#hasSubmitTab() && handleTabSwitchKey(keyData, direction => this.#switchTab(direction))) {
-			this.#requestRender();
+		const action = this.#keys.read(keyData);
+		if (action === "pending") return;
+		if (action && (action.kind === "context" || action.kind === "horizontal")) {
+			if (this.#hasSubmitTab()) {
+				this.#switchTab(action.delta);
+				this.#requestRender();
+			}
 			return;
 		}
 		if (this.#isSubmitTab()) {
-			this.#handleSubmitTabInput(keyData);
-			return;
-		}
-		this.#handleQuestionInput(keyData);
+			if (action) this.#handleSubmitTabInput(action);
+		} else this.#handleQuestionInput(keyData, action);
 	}
 
 	render(width: number): readonly string[] {
@@ -780,6 +810,13 @@ export class AskDialogComponent implements Component {
 	 * countdown, Hide, then Note, Skip and the primary Submit/Next).
 	 */
 	describe(cx: DescribeContext): NativeNode {
+		const contentWidth = Math.max(1, cx.cols - 4);
+		if (contentWidth !== this.#contentWidth) {
+			this.#contentWidth = contentWidth;
+			this.#questionLayout = undefined;
+			this.#submitLayoutDirty = true;
+			this.#native = undefined;
+		}
 		const inputGuard = this.options.inputGuard;
 		// Same draft-cursor mirroring as render(): the proxied draft describes itself next to this dialog.
 		inputGuard?.syncPresentation?.();
@@ -826,7 +863,7 @@ export class AskDialogComponent implements Component {
 						items,
 						active,
 						role: "omp.ask.questions",
-						title: "Next question  tab · Previous  shift+tab",
+						title: "Next question  l · tab · Ctrl+N · Previous  h · shift+tab · Ctrl+P",
 						actions: { click: "select" },
 					},
 					undefined,
@@ -937,18 +974,24 @@ export class AskDialogComponent implements Component {
 		});
 		// Keyed per question: a click aimed at one question's list never lands on the next after it advances.
 		children.push(
-			node(
-				"list",
-				{ selected: rows[state.cursorIndex]?.key ?? null, role: "omp.ask.options" },
-				items,
-				`q${this.#currentQuestionIndex()}`,
-			),
+			{
+				...node(
+					"list",
+					{ selected: rows[state.cursorIndex]?.key ?? null, role: "omp.ask.options" },
+					items,
+					`q${this.#currentQuestionIndex()}`,
+				),
+				scroll: this.#nativeScroll?.target === "options" ? this.#nativeScroll.request : undefined,
+			},
 		);
 		const highlighted = rows[state.cursorIndex];
 		const option = highlighted?.kind === "option" ? question.options[highlighted.optionIndex ?? -1] : undefined;
 		if (option?.preview?.trim()) {
 			children.push(
-				node("md", { text: replaceTabs(option.preview), role: "omp.ask.preview" }, undefined, "preview"),
+				{
+					...node("md", { text: replaceTabs(option.preview), role: "omp.ask.preview" }, undefined, "preview"),
+					scroll: this.#nativeScroll?.target === "preview" ? this.#nativeScroll.request : undefined,
+				},
 			);
 		}
 	}
@@ -971,7 +1014,10 @@ export class AskDialogComponent implements Component {
 			if (!question || !state) continue;
 			answers.push({ k: questionTabName(question, index), v: describeAnswer(question, state) });
 		}
-		children.push(node("kv", { items: answers, role: "omp.ask.answers" }, undefined, "answers"));
+		children.push({
+			...node("kv", { items: answers, role: "omp.ask.answers" }, undefined, "answers"),
+			scroll: this.#nativeScroll?.target === "review" ? this.#nativeScroll.request : undefined,
+		});
 	}
 
 	/**
@@ -1054,7 +1100,8 @@ export class AskDialogComponent implements Component {
 			if (!Number.isInteger(index) || index < 0 || index > this.#submitTabIndex()) return;
 			this.#countdown?.reset();
 			this.#activeTabIndex = index;
-			this.#submitScrollOffset = 0;
+			this.#keys.reset();
+			this.#nativeScroll = undefined;
 			this.#requestRender();
 			return;
 		}
@@ -1069,6 +1116,8 @@ export class AskDialogComponent implements Component {
 		this.#countdown?.reset();
 		state.cursorIndex = index;
 		state.manualScroll = false;
+		this.#keys.reset();
+		this.#nativeScroll = undefined;
 		const toggles = event.type === "select" && question.multi === true && rowItem.kind === "option";
 		this.#commitRow(question, state, rowItem, !toggles);
 		this.#requestRender();
@@ -1176,6 +1225,8 @@ export class AskDialogComponent implements Component {
 
 	#setHidden(hidden: boolean): void {
 		if (this.#hidden === hidden) return;
+		this.#keys.reset();
+		this.#nativeScroll = undefined;
 		this.#hidden = hidden;
 		this.#countdown?.reset();
 		this.#requestRender();
@@ -1205,9 +1256,8 @@ export class AskDialogComponent implements Component {
 	}
 
 	#hasSubmitTab(): boolean {
-		// Multi questions confirm on the Submit tab (Enter toggles, never
-		// submits), so any multi question forces the tab even when there is
-		// only one question.
+		// Multi-choice and multi-question dialogs offer an optional Review tab;
+		// ordinary Enter still advances or submits the current answer.
 		return this.#questions.length > 1 || this.#questions.some(question => question.multi);
 	}
 
@@ -1273,12 +1323,12 @@ export class AskDialogComponent implements Component {
 		const hideKey = editorKey("app.ask.hide");
 		const cancel = `${editorKey("tui.select.cancel")} cancel${hideKey ? ` · ${hideKey} hide` : ""}`;
 		const enter = formatKeyHint("enter");
-		const upDown = editorKeys("tui.select.up", "tui.select.down");
+		const upDown = `j/k, ${editorKeys("tui.select.up", "tui.select.down")}`;
 		const inputGuard = this.options.inputGuard;
 		if (inputGuard?.isBlocked()) return `${inputGuard.hint}${this.#expandHint()} · ${cancel}`;
 		if (this.#isSubmitTab()) {
 			const scroll = indicator ? ` ${indicator} scroll ·` : "";
-			return `${enter} submit · ${upDown} scroll ·${scroll} ${cancel}`;
+			return `${enter} submit · ${cancel} · ${upDown}, Ctrl+E/Y scroll ·${scroll} PgUp/Dn page · gg/G bounds`;
 		}
 		const question = this.#questions[this.#currentQuestionIndex()];
 		// Enter advances in multi-question dialogs and submits single-question ones.
@@ -1286,11 +1336,11 @@ export class AskDialogComponent implements Component {
 		const action = question?.multi
 			? `${formatKeyHint("space")} toggle · ${enter} ${enterAction}`
 			: `${enter} select · ${formatKeyHint("n")} note`;
-		const tabs = this.#hasSubmitTab() ? ` · ${formatKeyHints(["tab", "left", "right"])} question` : "";
+		const tabs = this.#hasSubmitTab() ? ` · h/l, ${formatKeyHints(["tab", "left", "right"])} question` : "";
 		const expand = this.#expandHint();
 		if (this.#questionCanPage && indicator) {
 			const pageKeys = editorKeys("tui.select.pageUp", "tui.select.pageDown");
-			return `${action} · ${upDown}${tabs} · ${cancel}${expand} · ${pageKeys} ${indicator}`;
+			return `${action} · ${upDown}${tabs} · ${cancel}${expand} · ${pageKeys} ${indicator} · Ctrl+E/Y scroll`;
 		}
 		const scroll = indicator ? ` ${indicator} scroll ·` : "";
 		return `${action} · ${upDown} move${tabs} ·${scroll} ${cancel}${expand}`;
@@ -1315,47 +1365,84 @@ export class AskDialogComponent implements Component {
 		return { question, state };
 	}
 
-	#handleQuestionInput(keyData: string): void {
+	#ensureQuestionLayout(state: QuestionState): QuestionLayout {
+		if (this.#questionLayout?.state !== state) this.render(this.#contentWidth + 4);
+		const layout = this.#questionLayout;
+		if (!layout) throw new Error("Ask question layout is unavailable");
+		state.scrollOffset = this.#scrollOffsetForCursor(
+			state.scrollOffset,
+			layout.starts[state.cursorIndex] ?? 0,
+			layout.starts[state.cursorIndex + 1] ?? layout.totalRows,
+			layout.rows,
+			layout.totalRows,
+			state.manualScroll,
+		);
+		return layout;
+	}
+
+	#queueNativeScroll(action: MenuNavAction, target: "options" | "preview" | "review"): void {
+		const by = menuScrollBy(action);
+		if (by) this.#nativeScroll = { target, request: { by, n: ++this.#scrollSequence } };
+	}
+
+	#handleQuestionInput(keyData: string, action: MenuNavAction | undefined): void {
 		const active = this.#activeQuestionState();
 		if (!active) return;
 		const { question, state } = active;
 		const rows = this.#questionRows(question);
-		if (matchesSelectPageUp(keyData)) {
-			state.scrollOffset = Math.max(0, state.scrollOffset - Math.max(1, this.#bodyRows - 1));
-			state.manualScroll = true;
+		if (action?.kind === "scroll" || action?.kind === "page" || action?.kind === "halfPage") {
+			const layout = this.#ensureQuestionLayout(state);
+			const cursorStart = layout.starts[state.cursorIndex] ?? 0;
+			const cursorEnd = layout.starts[state.cursorIndex + 1] ?? layout.totalRows;
+			const nativeTarget = question.options[rows[state.cursorIndex]?.optionIndex ?? -1]?.preview?.trim()
+				? "preview" : "options";
+			if (action.kind === "scroll") {
+				state.scrollOffset = clamp(state.scrollOffset + action.delta, 0, Math.max(0, layout.totalRows - layout.rows));
+				state.manualScroll = true;
+				this.#queueNativeScroll(action, nativeTarget);
+			} else if (action.kind === "page" && cursorEnd - cursorStart > layout.rows) {
+				// Preserve page-reading of an oversized inline preview. Row and
+				// half-page motions still choose other answers; Ctrl+E/Y is free.
+				state.scrollOffset = clamp(
+					state.scrollOffset + action.delta * Math.max(1, layout.rows - 1),
+					cursorStart, cursorEnd - layout.rows,
+				);
+				state.manualScroll = true;
+				this.#queueNativeScroll(action, nativeTarget);
+			} else {
+				let visible = 0;
+				const end = state.scrollOffset + layout.rows;
+				for (let index = 0; index < layout.starts.length; index++) {
+					if ((layout.starts[index] ?? 0) >= end) break;
+					if ((layout.starts[index + 1] ?? layout.totalRows) > state.scrollOffset) visible++;
+				}
+				const step = action.kind === "halfPage" ? Math.max(1, Math.floor(visible / 2)) : Math.max(1, visible);
+				state.cursorIndex = clamp(state.cursorIndex + action.delta * step, 0, Math.max(0, rows.length - 1));
+				state.manualScroll = false;
+				this.#nativeScroll = undefined;
+			}
 			this.#requestRender();
 			return;
 		}
-		if (matchesSelectPageDown(keyData)) {
-			state.scrollOffset += Math.max(1, this.#bodyRows - 1);
-			state.manualScroll = true;
-			this.#requestRender();
-			return;
-		}
-		if (matchesSelectUp(keyData)) {
-			state.cursorIndex = clamp(state.cursorIndex - 1, 0, Math.max(0, rows.length - 1));
+		if (action?.kind === "move" || action?.kind === "boundary") {
+			state.cursorIndex = action.kind === "move"
+				? clamp(state.cursorIndex + action.delta, 0, Math.max(0, rows.length - 1))
+				: action.edge === "first" ? 0 : Math.max(0, rows.length - 1);
 			state.manualScroll = false;
-			this.#requestRender();
-			return;
-		}
-		if (matchesSelectDown(keyData)) {
-			state.cursorIndex = clamp(state.cursorIndex + 1, 0, Math.max(0, rows.length - 1));
-			state.manualScroll = false;
+			this.#nativeScroll = undefined;
 			this.#requestRender();
 			return;
 		}
 		const rowItem = rows[state.cursorIndex];
 		if (!rowItem) return;
-		if (keyData === "n" || keyData === "N") {
-			if (rowItem.kind === "option" || rowItem.kind === "other") {
-				void this.#promptForNote(question, state, rowItem);
-			}
+		if (!action && (keyData === "n" || keyData === "N")) {
+			if (rowItem.kind === "option" || rowItem.kind === "other") void this.#promptForNote(question, state, rowItem);
 			return;
 		}
-		const isEnter = matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n";
-		const isSpace = matchesKey(keyData, "space") || keyData === " ";
-		if (!isEnter && !(question.multi && isSpace)) return;
-		this.#commitRow(question, state, rowItem, isEnter);
+		if (action?.kind === "confirm") this.#commitRow(question, state, rowItem, true);
+		else if (action?.kind === "toggle" && question.multi && rowItem.kind === "option") {
+			this.#commitRow(question, state, rowItem, false);
+		}
 	}
 
 	/** Enter (`isEnter`) or multi-select Space on a row: toggle, select, or prompt for its answer. */
@@ -1365,6 +1452,7 @@ export class AskDialogComponent implements Component {
 		rowItem: QuestionRow,
 		isEnter: boolean,
 	): void {
+		this.#submitLayoutDirty = true;
 		if (rowItem.kind === "other") {
 			void this.#promptForCustomInput(question, state, rowItem);
 			return;
@@ -1396,29 +1484,28 @@ export class AskDialogComponent implements Component {
 		this.#advanceAfterQuestion();
 	}
 
-	#handleSubmitTabInput(keyData: string): void {
-		if (matchesSelectUp(keyData)) {
-			this.#submitScrollOffset = Math.max(0, this.#submitScrollOffset - 1);
-			this.#requestRender();
+	#handleSubmitTabInput(action: MenuNavAction): void {
+		if (action.kind === "confirm") {
+			this.#finishSubmit();
 			return;
 		}
-		if (matchesSelectDown(keyData)) {
-			// Clamped against the rendered line count in #renderSubmitBody.
-			this.#submitScrollOffset += 1;
-			this.#requestRender();
-			return;
-		}
-		const isEnter = matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n";
-		if (isEnter) this.#finishSubmit();
+		if (this.#submitLayoutDirty) this.render(this.#contentWidth + 4);
+		if (!this.#submitView?.handleMenuAction(action)) return;
+		this.#submitScrollOffset = this.#submitView.getScrollOffset();
+		this.#queueNativeScroll(action, "review");
+		this.#requestRender();
 	}
 
 	#switchTab(direction: 1 | -1): void {
 		const tabCount = this.#questions.length + 1;
 		this.#activeTabIndex = (this.#activeTabIndex + direction + tabCount) % tabCount;
-		this.#submitScrollOffset = 0;
+		this.#keys.reset();
+		this.#nativeScroll = undefined;
 	}
 
 	#advanceAfterQuestion(): void {
+		this.#keys.reset();
+		this.#nativeScroll = undefined;
 		const current = this.#currentQuestionIndex();
 		if (this.#questions.length === 1) {
 			this.#finishSubmit();
@@ -1448,6 +1535,7 @@ export class AskDialogComponent implements Component {
 		rowItem: QuestionRow,
 	): Promise<void> {
 		this.#promptActive = true;
+		this.#keys.reset();
 		try {
 			const prefill =
 				state.customInput === undefined ? undefined : { text: state.customInput, images: state.customInputImages };
@@ -1475,6 +1563,8 @@ export class AskDialogComponent implements Component {
 			}
 		} finally {
 			this.#promptActive = false;
+			this.#questionLayout = undefined;
+			this.#submitLayoutDirty = true;
 			this.#runDeferredTimeout();
 			this.#requestRender();
 		}
@@ -1486,6 +1576,7 @@ export class AskDialogComponent implements Component {
 		rowItem: QuestionRow,
 	): Promise<void> {
 		this.#promptActive = true;
+		this.#keys.reset();
 		try {
 			const isReedit = state.noteRowKey === rowItem.key;
 			const prefill =
@@ -1501,6 +1592,8 @@ export class AskDialogComponent implements Component {
 			state.noteRowKey = rowItem.key;
 		} finally {
 			this.#promptActive = false;
+			this.#questionLayout = undefined;
+			this.#submitLayoutDirty = true;
 			this.#runDeferredTimeout();
 			this.#requestRender();
 		}
@@ -1569,6 +1662,7 @@ export class AskDialogComponent implements Component {
 			allLines.length,
 			state.manualScroll,
 		);
+		this.#questionLayout = { state, starts: lineStartByRow, totalRows: allLines.length, rows };
 		const scrollView = new ScrollView(allLines, {
 			height: rows,
 			scrollbar: "auto",
@@ -1613,14 +1707,22 @@ export class AskDialogComponent implements Component {
 		}
 		allLines.push("");
 		allLines.push(theme.fg("accent", `${theme.nav.cursor} ${SUBMIT_OPTION}`));
-		this.#submitScrollOffset = clamp(this.#submitScrollOffset, 0, Math.max(0, allLines.length - rows));
-		const scrollView = new ScrollView(allLines, {
-			height: rows,
-			scrollbar: "auto",
-			theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
-		});
+		let scrollView = this.#submitView;
+		if (!scrollView) {
+			scrollView = new ScrollView(allLines, {
+				height: rows,
+				scrollbar: "auto",
+				theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+			});
+			this.#submitView = scrollView;
+		} else {
+			scrollView.setHeight(rows);
+			scrollView.setLines(allLines);
+		}
 		scrollView.setScrollOffset(this.#submitScrollOffset);
 		const rendered = scrollView.render(width);
+		this.#submitScrollOffset = scrollView.getScrollOffset();
+		this.#submitLayoutDirty = false;
 		const lines = [...rendered];
 		while (lines.length < rows) lines.push("");
 		return {
@@ -1641,11 +1743,8 @@ export class AskDialogComponent implements Component {
 		const maxOffset = Math.max(0, totalRows - rows);
 		if (maxOffset === 0) return 0;
 		let nextOffset = clamp(currentOffset, 0, maxOffset);
-		const cursorRows = cursorEnd - cursorStart;
-		if (manualScroll && cursorRows > rows) {
-			// A page must not expose another option while Enter still targets this one.
-			nextOffset = clamp(nextOffset, cursorStart, cursorEnd - rows);
-		} else if (cursorStart < nextOffset || cursorEnd > nextOffset + rows) {
+		if (!manualScroll && (cursorStart < nextOffset || cursorEnd > nextOffset + rows)) {
+			const cursorRows = cursorEnd - cursorStart;
 			nextOffset = cursorRows <= rows ? cursorEnd - rows : cursorStart;
 		}
 		return clamp(nextOffset, 0, maxOffset);
