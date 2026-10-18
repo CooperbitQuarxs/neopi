@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserved developer-message roles in OpenAI Chat Completions and Responses requests when the configured provider supports them ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
+
 ## [18.10.3] - 2026-10-12
 
 ### Breaking Changes

@@ -2187,7 +2187,10 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 					? msg.content.toWellFormed()
 					: undefined;
 			messages.push({
-				role: "user",
+				role:
+					msg.role === "developer" && (options.model.compat as OpenAICompatPolicyCompat).supportsDeveloperRole
+						? "developer"
+						: "user",
 				content:
 					developerText !== undefined
 						? escapeControlTokens
