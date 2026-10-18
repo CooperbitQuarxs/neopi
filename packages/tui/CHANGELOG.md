@@ -11,6 +11,7 @@
 - The copy browser gains shared paging, independent viewport scrolling, nested block history, and stable selection restoration without replaying copy or link actions ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Nested settings filters expose their real focus to parent menus, and decoded navigation has one `gg` prefix owner across settings layers ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Annotation and plan review share Vim navigation across files, Contents, source, and existing notes; viewport scrolling leaves the annotation cursor in place, and Shift-arrow keys retain plan model-tier adjustment while `h`/`l` switch panes ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Native short-list pickers show focused or retained search text, repaint when field focus changes, and return to the list before their Close action dismisses the menu ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Search setup and login providers with `/`, page or jump through accounts, and scroll the view without moving the selected provider ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Menu history preserves focused filter text and caret position, and `Ctrl-N`/`Ctrl-P` switch menu contexts alongside Tab/Shift-Tab ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Logout and usage-reset pickers support search, paging, and history without replaying destructive confirmations ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).

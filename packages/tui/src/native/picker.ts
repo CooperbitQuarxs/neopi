@@ -193,7 +193,7 @@ export interface SelectPickerOptions {
 	readonly subtitle?: string;
 	readonly icon?: string;
 	readonly noun?: string;
-	/** Show omp's filter text as the search field (lists that filter as you type). */
+	/** Keep the filter visible even when it is empty and not focused. */
 	readonly searchable?: boolean;
 	/** Per-item extras (a thinking-level dot, a swatch mark, a budget fact). */
 	readonly decorate?: (item: SelectItem) => Partial<Omit<TspPickerItem, "id">> | undefined;
@@ -207,7 +207,7 @@ export interface SelectPickerOptions {
 /**
  * Picker props for a {@link SelectList}: its filtered items in order, the
  * selection, the pending-confirmation strip, and `Select ⏎` / `Close esc`.
- * Memoize on {@link SelectList.pickerView}'s parts: the builder allocates.
+ * Memoize on {@link SelectList.pickerView}'s parts and filter focus: the builder allocates.
  */
 export function selectListPicker(list: SelectList, o: SelectPickerOptions): TspPickerProps {
 	const view = list.pickerView();
@@ -227,12 +227,15 @@ export function selectListPicker(list: SelectList, o: SelectPickerOptions): TspP
 		size: "md",
 		layout: "rows",
 		preview: "none",
-		...(o.searchable ? { query: view.query, cursor: view.cursor } : { query: null }),
+		...(o.searchable || list.filterFocused || view.query ? { query: view.query, cursor: view.cursor } : { query: null }),
 		items,
 		selected: view.selected,
 		...(o.current ? { current: o.current } : {}),
 		...(o.columns ? { columns: o.columns } : {}),
-		actions: [pickerAction("confirm", o.confirm ?? "Select", "enter", { primary: true }), CLOSE_ACTION],
+		actions: [
+			pickerAction("confirm", o.confirm ?? "Select", "enter", { primary: true }),
+			{ ...CLOSE_ACTION, label: list.filterFocused ? "Back to list" : "Close" },
+		],
 		confirm:
 			pending?.confirmation !== undefined ? { text: pending.confirmation, act: "confirm", label: "Confirm" } : null,
 	};
@@ -241,7 +244,8 @@ export function selectListPicker(list: SelectList, o: SelectPickerOptions): TspP
 /**
  * Routes a picker event to a {@link SelectList}: a row click selects (and
  * previews, through `onSelectionChange`), a second click or `confirm`
- * activates, `close`/`cancel` cancels. Returns whether it handled the event.
+ * activates; `close`/`cancel` leaves a focused filter before canceling the list.
+ * Returns whether it handled the event.
  */
 export function routeSelectListPicker(list: SelectList, event: NativeUiEvent, key = ""): boolean {
 	const ev = pickerEvent(event, key);
@@ -249,7 +253,8 @@ export function routeSelectListPicker(list: SelectList, event: NativeUiEvent, ke
 	const view = list.pickerView();
 	if (ev.kind === "action") {
 		if (ev.act === "close" || ev.act === "cancel") {
-			list.onCancel?.();
+			if (list.filterFocused) list.handleInput("\x1b");
+			else list.onCancel?.();
 			return true;
 		}
 		if (ev.act === "confirm" && view.selected !== null) {
@@ -273,7 +278,7 @@ export function routeSelectListPicker(list: SelectList, event: NativeUiEvent, ke
 /**
  * A {@link SelectList} described as a picker, memoized: the node is rebuilt
  * only when the list's filtered items, selection, pending confirmation or
- * query change (or {@link invalidate} is called after `options` inputs move).
+ * query/focus change (or {@link invalidate} is called after `options` inputs move).
  */
 export class SelectListSheet {
 	readonly list: SelectList;
@@ -285,6 +290,7 @@ export class SelectListSheet {
 				readonly pending: string | null;
 				readonly query: string;
 				readonly cursor: number;
+				readonly focused: boolean;
 				readonly node: NativeNode;
 		  }
 		| undefined;
@@ -316,13 +322,14 @@ export class SelectListSheet {
 			memo.selected === view.selected &&
 			memo.pending === view.pending &&
 			memo.query === view.query &&
-			memo.cursor === view.cursor
+			memo.cursor === view.cursor &&
+			memo.focused === this.list.filterFocused
 		) {
 			return memo.node;
 		}
 		const props = selectListPicker(this.list, this.#options());
 		const result = this.#docked ? dockedPicker(props) : picker(props);
-		this.#memo = { ...view, node: result };
+		this.#memo = { ...view, focused: this.list.filterFocused, node: result };
 		return result;
 	}
 
