@@ -8118,6 +8118,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#selectorController.showUsageDashboard(reports);
 	}
 
+	navigateMenuHistory(direction: -1 | 1): boolean {
+		return this.#selectorController.navigateMenuHistory(direction);
+	}
+
 	showAdvisorConfigure(): void {
 		this.#selectorController.showAdvisorConfigure();
 	}

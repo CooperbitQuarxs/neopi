@@ -7,7 +7,7 @@
 - Added `/statusline` to toggle, reorder, and move widgets between groups, including provider usage bars, with live composer previews and save or discard ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
 - Added a movable `context_bar` status-line widget that fills the remaining width in every composer ([#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
 - Added per-provider usage-bar status-line widgets (`usage:<provider>:<window>[:<tier>]`) showing each reported quota window's percent and age ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
-- Picker navigation accepts `h/j/k/l` as arrows in normal mode; `i` opens filter editing, where letters stay literal. Escape leaves the filter, then closes the picker on the next press (#35).
+- Lists open in normal navigation: `j`/`k` move, `gg`/`G` jump to first/last, `Ctrl-d`/`Ctrl-u` move half a page, `Ctrl-e`/`Ctrl-y` scroll the view without moving the selection, and `/` focuses the search field, where every key types literally until Esc returns to the list ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 
 ### Fixed
 

@@ -34,7 +34,9 @@ app.history.search: []
 | `app.model.select`           | `Alt+M`                                                               | Open the model selector and set roles                                                                                                                                                |
 | `app.plan.toggle`            | `Alt+Shift+P`                                                         | Toggle plan mode                                                                                                                                                                     |
 | `app.history.search`         | `Ctrl+R`                                                              | Search prompt history                                                                                                                                                                |
-| `app.tools.expand`           | `Ctrl+O`                                                              | Toggle tool-output expansion                                                                                                                                                         |
+| `app.navigation.back`        | `Ctrl+O`                                                              | Return to the previously visited menu (with its state) or the conversation; see [Menu navigation](#menu-navigation)                                                                 |
+| `app.navigation.forward`     | `Ctrl+I`, `Alt+O`                                                     | Go forward in the menu history. `Ctrl+I` arrives distinct from `Tab` only under the Kitty keyboard protocol or xterm modifyOtherKeys; `Alt+O` works everywhere                       |
+| `app.tools.expand`           | `Alt+E`                                                               | Toggle tool-output expansion                                                                                                                                                         |
 | `app.tools.toggleVisibility` | `Ctrl+Shift+O`                                                        | Show or hide tool activity                                                                                                                                                           |
 | `app.ask.hide`               | `Alt+H`                                                               | Hide a pending `ask` question to one line (the Hide button in Tern); the same key, `Enter`, or Show brings it back                                                                   |
 | `app.thinking.toggle`        | `Ctrl+T`                                                              | Toggle thinking-block visibility                                                                                                                                                     |
@@ -62,6 +64,25 @@ app.history.search: []
 | `app.tree.nextBranch`        | Unbound                                                               | Jump to the next visible branch in `/tree` ([details](./tree.md))                                                                                                                    |
 
 `Ctrl+G` opens `$VISUAL` / `$EDITOR` with the currently painted terminal viewport above `<!-- omp:message starts here -->`. The visible conversation and status are reference only: saving sends just the text below that marker back to the composer. Keep the marker intact; removing it leaves the original draft unchanged.
+
+## Menu navigation
+
+Menus, pickers, and overlays open in normal navigation; arrows, PageUp/PageDown, Home/End, Enter, and Esc keep working beside the Vim keys.
+
+| Keys | Action |
+| --- | --- |
+| `j` / `k` | Next / previous row |
+| `h` / `l` | Surface-dependent: switch pane, collapse/expand, reorder, or adjust a value (the hint line names it) |
+| `Ctrl+D` / `Ctrl+U` (`tui.select.halfPageDown` / `halfPageUp`) | Half page down / up; PageDown / PageUp move a full page |
+| `gg` / `G` (also `tui.select.first` / `last`: Home / End) | First / last row |
+| `Ctrl+E` / `Ctrl+Y` (`tui.select.scrollDown` / `scrollUp`) | Scroll the view one line; the selection stays put until the next motion |
+| `Space` (`tui.select.toggle`) | Toggle a checkbox, or activate the row without leaving the list |
+| `Tab` / `Shift+Tab` (`tui.select.nextContext` / `prevContext`) | Next / previous tab, section, or focus region |
+| `/` (`tui.select.search`) | Focus the search or filter field |
+
+While a search, rename, or form field has focus, every printable key (including `h`, `j`, `k`, `l`, `g`, `/`, Space) types literally and the field keeps its editing keys; Esc returns focus to the list without closing the menu, and a second Esc closes it.
+
+`Ctrl+O` and `Ctrl+I` walk a timeline of visited views: every opened menu and every return to the conversation is an entry. Esc out of `/statusline`, press `Ctrl+O`, and `/statusline` reopens where you left it; `Ctrl+I` returns to the conversation. Opening a menu from an older position adds it at the newest end without dropping the newer entries, and `Ctrl+O` from that new menu first returns to where you opened it: after `Ctrl+O` from `/statusline` back to the conversation and opening `/model`, `Ctrl+O` returns to the conversation, `Ctrl+I` to `/statusline`, and `Ctrl+I` again to `/model`.
 
 ## Recover a cleared prompt
 
