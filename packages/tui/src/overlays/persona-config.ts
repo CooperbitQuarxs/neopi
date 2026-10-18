@@ -336,18 +336,23 @@ export class PersonaConfigOverlayComponent implements Component {
 	}
 
 	#applyPreviewMotion(action: MenuNavAction): boolean {
+		if (action.kind !== "move" && action.kind !== "scroll" && action.kind !== "halfPage" &&
+			action.kind !== "page" && action.kind !== "boundary") return false;
+		if (this.#previewLayoutDirty) {
+			const total = this.#previewContent(this.#previewWidthLast).length;
+			const rows = this.#bodyRowsLast;
+			const contentRows = rows > 1 && total > rows ? rows - 1 : rows;
+			this.#previewRowsLast = Math.max(1, contentRows);
+			this.#previewMaxScroll = Math.max(0, total - contentRows);
+			this.#previewLayoutDirty = false;
+		}
 		let next = this.#previewScroll;
 		switch (action.kind) {
 			case "move":
 			case "scroll": next += action.delta; break;
 			case "halfPage": next += action.delta * Math.max(1, Math.floor(this.#previewRowsLast / 2)); break;
 			case "page": next += action.delta * this.#previewRowsLast; break;
-			case "boundary": next = action.edge === "first" ? 0 : Number.POSITIVE_INFINITY; break;
-			default: return false;
-		}
-		if (this.#previewLayoutDirty) {
-			this.#previewMaxScroll = Math.max(0, this.#previewContent(this.#previewWidthLast).length - this.#previewRowsLast);
-			this.#previewLayoutDirty = false;
+			case "boundary": next = action.edge === "first" ? 0 : this.#previewMaxScroll; break;
 		}
 		this.#previewScroll = Math.max(0, Math.min(this.#previewMaxScroll, next));
 		this.#cb.requestRender();
@@ -382,19 +387,20 @@ export class PersonaConfigOverlayComponent implements Component {
 
 	#previewWindow(bodyWidth: number, rows: number): string[] {
 		const lines = this.#previewContent(bodyWidth);
+		// Overflow status owns a row; never overwrite a content line at the end.
+		const contentRows = rows > 1 && lines.length > rows ? rows - 1 : rows;
 		this.#previewWidthLast = bodyWidth;
 		this.#previewLayoutDirty = false;
-		const maxScroll = Math.max(0, lines.length - rows);
-		this.#previewRowsLast = Math.max(1, rows);
+		this.#previewRowsLast = Math.max(1, contentRows);
+		const maxScroll = Math.max(0, lines.length - contentRows);
 		this.#previewMaxScroll = maxScroll;
 		const start = Math.min(this.#previewScroll, maxScroll);
 		this.#previewScroll = start;
-		const window = lines.slice(start, start + rows);
-		if (lines.length > rows) {
-			window[rows - 1] =
-				start + rows < lines.length
-					? theme.fg("dim", `  ↓ ${lines.length - rows - start} more`)
-					: theme.fg("dim", "  (end)");
+		const window = lines.slice(start, start + contentRows);
+		if (contentRows < rows) {
+			window.push(start + contentRows < lines.length
+				? theme.fg("dim", `  ↓ ${lines.length - contentRows - start} more`)
+				: theme.fg("dim", "  (end)"));
 		}
 		return window;
 	}

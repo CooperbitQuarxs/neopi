@@ -264,7 +264,7 @@ describe("PersonaConfigOverlayComponent", () => {
 			entry("alpha", { content: Array.from({ length: 140 }, (_, index) => `Preview line ${index}`).join("\n") }),
 			entry("beta"),
 		] });
-		const bodyRows = frame().split("\n").length - 4;
+		const contentRows = frame().split("\n").length - 5;
 		const list = overlay.navigationSnapshot().content;
 		const visits: string[] = [];
 		overlay.onNavigationVisit = page => visits.push(page);
@@ -275,9 +275,9 @@ describe("PersonaConfigOverlayComponent", () => {
 		press("k", "\x19");
 		expect(overlay.navigationSnapshot().previewScroll).toBe(0);
 		press("\x04");
-		expect(overlay.navigationSnapshot().previewScroll).toBe(Math.max(1, Math.floor(bodyRows / 2)));
+		expect(overlay.navigationSnapshot().previewScroll).toBe(Math.max(1, Math.floor(contentRows / 2)));
 		press("\x1b[6~");
-		expect(overlay.navigationSnapshot().previewScroll).toBe(Math.max(1, Math.floor(bodyRows / 2)) + bodyRows);
+		expect(overlay.navigationSnapshot().previewScroll).toBe(Math.max(1, Math.floor(contentRows / 2)) + contentRows);
 		press("\x1b[5~", "\x15");
 		expect(overlay.navigationSnapshot().previewScroll).toBe(0);
 		press("G");
@@ -385,4 +385,55 @@ describe("PersonaConfigOverlayComponent", () => {
 		press(DELETE);
 		expect(overlay.navigationSnapshot().doc.entries.map(item => item.name)).toEqual(["beta"]);
 	});
+
+	for (const scenario of [
+		{ rows: 1, lines: 40, overflows: true },
+		{ rows: 24, lines: 40, overflows: true },
+		{ rows: 14, lines: 4, overflows: false },
+	]) {
+		it(`keeps the final preview content readable at G/End with ${scenario.rows} terminal rows`, () => {
+			const originalRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+			Object.defineProperty(process.stdout, "rows", { configurable: true, value: scenario.rows });
+			try {
+				const marker = "PERSONA-LAST-CONTENT";
+				const { overlay, press } = makeOverlay({ entries: [entry("reader", {
+					content: Array.from({ length: scenario.lines }, (_, index) =>
+						index === scenario.lines - 1 ? marker : `Preview line ${index}`).join("\n"),
+				})] });
+				const initial = overlay.render(100);
+				expect(initial).toHaveLength(Math.max(14, scenario.rows));
+				const contentRows = initial.length - 4 - (scenario.overflows ? 1 : 0);
+				const selected = overlay.navigationSnapshot().content;
+				const visits: string[] = [];
+				overlay.onNavigationVisit = page => visits.push(page);
+				press("l", "\x04");
+				expect(overlay.navigationSnapshot().previewScroll).toBe(scenario.overflows ? Math.max(1, Math.floor(contentRows / 2)) : 0);
+				press("G");
+				const end = overlay.navigationSnapshot().previewScroll;
+				const lastContent = (): string => {
+					const frame = overlay.render(100);
+					return Bun.stripANSI(frame[frame.length - (scenario.overflows ? 5 : 4)] ?? "");
+				};
+				expect(lastContent()).toContain(marker);
+				if (scenario.overflows) {
+					expect(end).toBeGreaterThan(0);
+					press("\x19");
+					expect(lastContent()).not.toContain(marker);
+					press("\x05");
+					expect(lastContent()).toContain(marker);
+				} else expect(Bun.stripANSI(overlay.render(100).join("\n"))).not.toContain("(end)");
+				press("\x1b[5~");
+				expect(overlay.navigationSnapshot().previewScroll).toBe(Math.max(0, end - contentRows));
+				press("\x1b[6~");
+				expect(lastContent()).toContain(marker);
+				press("\x1b[H", "\x1b[F");
+				expect(lastContent()).toContain(marker);
+				expect(overlay.navigationSnapshot().content).toEqual(selected);
+				expect(visits).toEqual([]);
+			} finally {
+				if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
+				else Reflect.deleteProperty(process.stdout, "rows");
+			}
+		});
+	}
 });

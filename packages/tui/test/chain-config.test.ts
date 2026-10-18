@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { TUI } from "../src/index";
 import {
 	type ChainConfigCallbacks,
@@ -7,6 +7,9 @@ import {
 } from "../src/overlays/chain-config";
 import type { ChainConfigScope, ChainsConfigDoc } from "../src/overlays/chain-types";
 import { getThemeByName, setThemeInstance } from "../src/theme";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { KeybindingsManager } from "../src/app-keybindings";
+import { setKeybindings } from "../src/keybindings";
 
 const deps: ChainConfigDeps = {
 	getAvailableModels: () => [],
@@ -44,11 +47,11 @@ interface Harness {
 	retype: (text: string) => void;
 }
 
-function makeOverlay(doc: ChainsConfigDoc, overrides?: Partial<ChainConfigCallbacks>): Harness {
+function makeOverlay(doc: ChainsConfigDoc, overrides?: Partial<ChainConfigCallbacks>, dependencyOverrides: Partial<ChainConfigDeps> = {}): Harness {
 	const saved: ChainsConfigDoc[] = [];
 	const notices: string[] = [];
 	const loaded: ChainConfigScope[] = [];
-	const overlay = new ChainConfigOverlayComponent({} as unknown as TUI, deps, "project", doc, {
+	const overlay = new ChainConfigOverlayComponent({} as unknown as TUI, { ...deps, ...dependencyOverrides }, "project", doc, {
 		loadDoc: async scope => {
 			loaded.push(scope);
 			return { chains: [] };
@@ -85,6 +88,9 @@ function addStep(harness: Harness, stepRows: number, name: string, prompt: strin
 	press(prompt, CTRL_Q); // hook editor submit
 	press(ESC); // step detail → chain detail
 }
+
+beforeEach(() => setKeybindings(KeybindingsManager.inMemory()));
+afterEach(() => setKeybindings(KeybindingsManager.inMemory()));
 
 describe("ChainConfigOverlayComponent", () => {
 	beforeAll(async () => {
@@ -323,11 +329,11 @@ describe("ChainConfigOverlayComponent", () => {
 		] });
 		const visits: string[] = [];
 		overlay.onNavigationVisit = page => { visits.push(page); };
-		press("/", "hjkl", ESC, "l");
+		press("/", "hjkl", ESC, ENTER);
 		expect(overlay.navigationSnapshot().context.screen).toBe("chain");
 		press("h");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ filter: "hjkl", selectedValue: "chain:0" });
-		press("l", "/", "first", ESC, "l");
+		press(ENTER, "/", "first", ESC, "l");
 		expect(overlay.navigationSnapshot().context.screen).toBe("step");
 		const snapshot = overlay.navigationSnapshot();
 		const restored = makeOverlay({ chains: [] });
@@ -341,7 +347,7 @@ describe("ChainConfigOverlayComponent", () => {
 
 	it("round-trips an unsubmitted multiline step draft and ignores Space on Delete", () => {
 		const { overlay, press, saved } = makeOverlay({ chains: [{ name: "chain", steps: [{ name: "step", prompt: "text" }] }] });
-		press("l", DOWN, DOWN, "l", "G", "k", " ");
+		press(ENTER, DOWN, DOWN, "l", "G", "k", " ");
 		expect(overlay.navigationSnapshot().doc.chains[0]?.steps).toHaveLength(1);
 		press("k", "l", " draft hjkl");
 		const snapshot = overlay.navigationSnapshot();
@@ -364,4 +370,264 @@ describe("ChainConfigOverlayComponent", () => {
 		press("g", "g");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "chain:0" });
 	});
+
+	it("switches root preview contexts without visits and keeps preview motions off the chain cursor", () => {
+		const { overlay, press } = makeOverlay({ chains: [{
+			name: "alpha", description: Array.from({ length: 140 }, (_, index) => `Preview line ${index}`).join("\n"),
+			steps: [{ name: "step", prompt: "text" }],
+		}] });
+		const contentRows = overlay.render(100).length - 5;
+		const list = overlay.navigationSnapshot().content;
+		const visits: string[] = [];
+		overlay.onNavigationVisit = page => visits.push(page);
+		press("l", "j", "\x05");
+		expect(overlay.navigationSnapshot()).toMatchObject({ context: { screen: "list" }, previewFocused: true, previewScroll: 2 });
+		expect(overlay.navigationSnapshot().content).toEqual(list);
+		expect(overlay.render(100).join("\n")).toContain("Preview");
+		press("k", "\x19");
+		expect(overlay.navigationSnapshot().previewScroll).toBe(0);
+		press("\x04");
+		expect(overlay.navigationSnapshot().previewScroll).toBe(Math.max(1, Math.floor(contentRows / 2)));
+		press("\x1b[6~");
+		expect(overlay.navigationSnapshot().previewScroll).toBe(Math.max(1, Math.floor(contentRows / 2)) + contentRows);
+		press("\x1b[5~", "\x15");
+		expect(overlay.navigationSnapshot().previewScroll).toBe(0);
+		press("G");
+		const end = overlay.navigationSnapshot().previewScroll;
+		expect(end).toBeGreaterThan(0);
+		press("j");
+		expect(overlay.navigationSnapshot().previewScroll).toBe(end);
+		press("g", "g");
+		expect(overlay.navigationSnapshot().previewScroll).toBe(0);
+		press("\x1b[F");
+		expect(overlay.navigationSnapshot().previewScroll).toBe(end);
+		press(HOME);
+		expect(overlay.navigationSnapshot().previewScroll).toBe(0);
+		for (const [key, focused] of [
+			["h", false], ["\t", true], ["\x10", false], ["\x0e", true],
+			["\x1b[Z", false], ["\x1b[C", true], ["\x1b[D", false],
+		] as const) {
+			press(key);
+			expect(overlay.navigationSnapshot().previewFocused).toBe(focused);
+		}
+		expect(visits).toEqual([]);
+		press("l", ENTER);
+		expect(overlay.navigationSnapshot().context.screen).toBe("chain");
+		expect(visits).toEqual(["chain:0:new"]);
+	});
+
+	it("preserves preview focus and offset when backing out and restoring silently", () => {
+		const { overlay, press } = makeOverlay({ chains: [{
+			name: "alpha", description: "Long preview\n".repeat(120), steps: [{ name: "step", prompt: "text" }],
+		}] });
+		overlay.render(100);
+		press("l", "G");
+		const snapshot = overlay.navigationSnapshot();
+		press(ENTER, "h");
+		expect(overlay.navigationSnapshot()).toMatchObject({ previewFocused: true, previewScroll: snapshot.previewScroll });
+		expect(overlay.navigationSnapshot().content).toEqual(snapshot.content);
+		const restored = makeOverlay({ chains: [] });
+		restored.overlay.restoreNavigation(snapshot);
+		expect(restored.overlay.navigationSnapshot()).toEqual(snapshot);
+		restored.press("/");
+		expect(restored.overlay.navigationSnapshot()).toMatchObject({ previewFocused: false, content: { filterFocused: true } });
+	});
+
+	it("resets parent gg on pane, search, mouse and restore transitions", () => {
+		const { overlay, press } = makeOverlay({ chains: Array.from({ length: 80 }, (_, index) => ({
+			name: `chain-${index}`, steps: [{ name: "step", prompt: "text" }],
+		})) });
+		overlay.render(100);
+		press("G", "g", "l", "h", "g");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "close" });
+		press("g");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "chain:0" });
+		press("G", "g", "/", ESC, "g");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "close" });
+		press("g");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "chain:0" });
+		press("G", "g", "\x1b[<35;90;2M", "g");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "close" });
+		const snapshot = overlay.navigationSnapshot();
+		overlay.restoreNavigation(snapshot);
+		press("g");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "close" });
+		press("g");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "chain:0" });
+	});
+
+	it("delegates decoded model-browser motions once and keeps model filters literal", () => {
+		const models = Array.from({ length: 30 }, (_, index) => buildModel({
+			id: `model-${String(index).padStart(2, "0")}`, name: `Model ${String(index).padStart(2, "0")}`,
+			provider: "test", api: "ollama-chat", baseUrl: "https://example.test", reasoning: false,
+			input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128_000, maxTokens: 1024,
+		}));
+		const { overlay, press } = makeOverlay({ chains: [{ name: "chain", steps: [{ name: "step", prompt: "text" }] }] },
+			undefined, { getAvailableModels: () => models });
+		press(ENTER, DOWN, DOWN, ENTER, DOWN, ENTER);
+		overlay.render(100);
+		const selectedModel = (): string | undefined =>
+			(overlay.navigationSnapshot().content as { selected?: string }).selected;
+		press("G", "g", "l", "g");
+		expect(selectedModel()).toMatch(/model-29$/);
+		press("g");
+		expect(selectedModel()).toMatch(/model-00$/);
+		press("\x05");
+		expect(selectedModel()).toMatch(/model-00$/);
+		press("/", "hjklgG /");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ query: "hjklgG /", filterFocused: true });
+		press(ESC);
+		expect(overlay.navigationSnapshot().context.screen).toBe("model");
+		press("h");
+		expect(overlay.navigationSnapshot().context.screen).toBe("step");
+	});
+
+	it("keeps direct Input text literal under remapped menu actions and honors explicit exits", () => {
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.select.cancel": ["escape", "j"], "tui.input.submit": ["enter", "k"],
+			"tui.editor.deleteCharBackward": ["backspace", "h"], "tui.editor.deleteCharForward": ["delete", "/"],
+			"tui.select.nextContext": ["tab", "g"], "tui.select.prevContext": ["shift+tab", "l"],
+		}));
+		const { overlay, press, saved } = makeOverlay({ chains: [{ name: "alpha", steps: [{ name: "step", prompt: "text" }] }] });
+		press(ENTER, ENTER, "\x15");
+		for (const character of "hjklggG / ") press(character);
+		expect(overlay.navigationSnapshot()).toMatchObject({ context: { screen: "chainName" }, content: { value: "hjklggG / " } });
+		expect(saved).toEqual([]);
+		press(ESC, ENTER, "\x15", "hjkl", ENTER);
+		expect(overlay.navigationSnapshot()).toMatchObject({ context: { screen: "chain" }, doc: { chains: [{ name: "hjkl" }] } });
+	});
+
+	it("adjusts thinking with h/l but types those characters in its focused filter", () => {
+		const { overlay, press } = makeOverlay({ chains: [{ name: "chain", steps: [{ name: "step", prompt: "text" }] }] });
+		const original = overlay.navigationSnapshot();
+		overlay.restoreNavigation({
+			...original,
+			context: { screen: "thinking", chainIndex: 0, stepIndex: 0, thinking: { selector: "test/model", efforts: ["low", "high"] } },
+			content: { selectedValue: "", filter: "", filterFocused: false, filterCursor: 0, viewportTop: undefined },
+		});
+		press("l");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "low" });
+		press("l");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "high" });
+		press("h");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "low" });
+		press("/", "hl");
+		expect(overlay.navigationSnapshot()).toMatchObject({ context: { screen: "thinking" }, content: { filter: "hl", filterFocused: true } });
+	});
+
+	it("keeps a silently restored tool cursor on the tool it toggles", () => {
+		const { overlay, press } = makeOverlay({ chains: [{ name: "chain", steps: [{ name: "step", prompt: "text", tools: ["read"] }] }] });
+		press(ENTER, DOWN, DOWN, ENTER, DOWN, DOWN, ENTER, DOWN);
+		const snapshot = overlay.navigationSnapshot();
+		expect(snapshot.content).toMatchObject({ selectedValue: "grep" });
+		const restored = makeOverlay({ chains: [] });
+		restored.overlay.restoreNavigation(snapshot);
+		restored.press(" ");
+		expect(restored.overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "grep" });
+		expect(restored.overlay.navigationSnapshot().context.tools).toEqual(["read", "grep"]);
+		restored.press(ESC);
+		expect(restored.overlay.navigationSnapshot().doc.chains[0]?.steps[0]?.tools).toEqual(["read", "grep"]);
+	});
+
+	for (const target of ["chain", "step"] as const) {
+		it(`captures the pre-delete ${target} before changing pages and ignores destructive Space/l`, () => {
+			const { overlay, press } = makeOverlay({ chains: [
+				{ name: "alpha", steps: [{ name: "first", prompt: "text" }, { name: "second", prompt: "text" }] },
+				{ name: "beta", steps: [{ name: "other", prompt: "text" }] },
+			] });
+			const visits: { page: string; previous: unknown }[] = [];
+			overlay.onNavigationVisit = (page, previous) => visits.push({ page, previous });
+			press(ENTER);
+			if (target === "step") press(DOWN, DOWN, ENTER);
+			press("G", "k", " ", "l");
+			expect(overlay.navigationSnapshot().context.screen).toBe(target);
+			expect(overlay.navigationSnapshot().doc.chains).toHaveLength(2);
+			expect(overlay.navigationSnapshot().doc.chains[0]?.steps).toHaveLength(2);
+			press(ENTER);
+			const previous = visits.at(-1)?.previous;
+			expect(previous).toMatchObject({ context: { screen: target, chainIndex: 0 }, content: { selectedValue: "delete" } });
+			const count = visits.length;
+			overlay.restoreNavigation(previous);
+			expect(overlay.navigationSnapshot().doc.chains.map(chain => chain.name)).toEqual(["alpha", "beta"]);
+			expect(overlay.navigationSnapshot().doc.chains[0]?.steps.map(step => step.name)).toEqual(["first", "second"]);
+			expect(visits).toHaveLength(count);
+		});
+	}
+
+	it("does not reset a model or discard dirty edits with Space", () => {
+		let closed = 0;
+		const { overlay, press } = makeOverlay({ chains: [{
+			name: "chain", steps: [{ name: "step", prompt: "text", model: "test/model:high" }],
+		}] }, { close: () => { closed++; } });
+		press(ENTER, DOWN, DOWN, ENTER, "/", "Reset model", ESC, " ", "l");
+		expect(overlay.navigationSnapshot().doc.chains[0]?.steps[0]?.model).toBe("test/model:high");
+		press(ENTER);
+		expect(overlay.navigationSnapshot().doc.chains[0]?.steps[0]?.model).toBeUndefined();
+		press(ESC, ESC, "G", " ");
+		expect(closed).toBe(0);
+		press(ENTER);
+		expect(closed).toBe(1);
+	});
+
+	it("cancels inline deletion on the first g rather than confirming it on a later Delete", () => {
+		const { overlay, press } = makeOverlay({ chains: [
+			{ name: "alpha", steps: [{ name: "step", prompt: "text" }] }, { name: "beta", steps: [{ name: "step", prompt: "text" }] },
+		] });
+		press(DELETE, "g", DELETE);
+		expect(overlay.navigationSnapshot().doc.chains).toHaveLength(2);
+		press(DELETE);
+		expect(overlay.navigationSnapshot().doc.chains.map(chain => chain.name)).toEqual(["beta"]);
+	});
+
+	for (const scenario of [
+		{ rows: 1, descriptionLines: 40, overflows: true },
+		{ rows: 24, descriptionLines: 40, overflows: true },
+		{ rows: 14, descriptionLines: 3, overflows: false },
+	]) {
+		it(`keeps the final chain preview content readable at G/End with ${scenario.rows} terminal rows`, () => {
+			const originalRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+			Object.defineProperty(process.stdout, "rows", { configurable: true, value: scenario.rows });
+			try {
+				const marker = "CHAIN-LAST-CONTENT";
+				const { overlay, press } = makeOverlay({ chains: [{
+					name: "reader",
+					description: Array.from({ length: scenario.descriptionLines }, (_, index) => `Preview line ${index}`).join("\n"),
+					steps: [{ name: "step", prompt: marker }],
+				}] });
+				const initial = overlay.render(100);
+				expect(initial).toHaveLength(Math.max(14, scenario.rows));
+				const contentRows = initial.length - 4 - (scenario.overflows ? 1 : 0);
+				const selected = overlay.navigationSnapshot().content;
+				const visits: string[] = [];
+				overlay.onNavigationVisit = page => visits.push(page);
+				press("l", "\x04");
+				expect(overlay.navigationSnapshot().previewScroll).toBe(scenario.overflows ? Math.max(1, Math.floor(contentRows / 2)) : 0);
+				press("G");
+				const end = overlay.navigationSnapshot().previewScroll;
+				const lastContent = (): string => {
+					const frame = overlay.render(100);
+					return Bun.stripANSI(frame[frame.length - (scenario.overflows ? 5 : 4)] ?? "");
+				};
+				expect(lastContent()).toContain(marker);
+				if (scenario.overflows) {
+					expect(end).toBeGreaterThan(0);
+					press("\x19");
+					expect(lastContent()).not.toContain(marker);
+					press("\x05");
+					expect(lastContent()).toContain(marker);
+				} else expect(Bun.stripANSI(overlay.render(100).join("\n"))).not.toContain("(end)");
+				press("\x1b[5~");
+				expect(overlay.navigationSnapshot().previewScroll).toBe(Math.max(0, end - contentRows));
+				press("\x1b[6~");
+				expect(lastContent()).toContain(marker);
+				press(HOME, "\x1b[F");
+				expect(lastContent()).toContain(marker);
+				expect(overlay.navigationSnapshot().content).toEqual(selected);
+				expect(visits).toEqual([]);
+			} finally {
+				if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
+				else Reflect.deleteProperty(process.stdout, "rows");
+			}
+		});
+	}
 });
