@@ -123,7 +123,7 @@ describe("AgentTranscriptViewer native esc", () => {
 				fs: { openSync: missing, closeSync: missing, readSync: missing, readFileSync: missing, statSync: missing },
 				parseEntries: () => [],
 			},
-			registry: { get: () => ({ id: "a1", kind: "task", status: "running" }) },
+			registry: { get: () => ({ id: "a1", kind: "task", status: "running" }), onChange: () => () => {} },
 			lifecycle: () => ({}),
 			ui: { terminal: { rows: 40, columns: 100 }, requestRender: () => {} },
 			cwd: "/",
