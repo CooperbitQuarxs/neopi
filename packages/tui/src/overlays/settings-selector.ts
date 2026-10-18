@@ -3,9 +3,7 @@ import type { Effort } from "@oh-my-pi/pi-ai";
 import {
 	type Component,
 	Container,
-	extractPrintableText,
 	FuzzyCorpus,
-	getKeybindings,
 	getSettingItemFilterText,
 	type ImageBudget,
 	Input,
@@ -63,6 +61,7 @@ import { col, node, span, text } from "../native/describe";
 import { actionHint, hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { styledSpans } from "../native/spans";
 import { sameItems } from "../native/memo";
+import { MenuKeyReader, MenuSearchField, isMenuHistoryParticipant } from "../components/menu-navigation";
 import type { KeyName } from "../key-hint-format";
 
 /** The native page id of the plugins tab. */
@@ -272,7 +271,7 @@ class MultiSelectSubmenu extends Container {
 						: theme.fg("accent", " ● ");
 			return { value: option.value, label: `${mark} ${option.label}`, description: option.description };
 		});
-		this.#selectList = new SelectList(items, Math.min(items.length, 12), getSelectListTheme());
+		this.#selectList = new SelectList(items, Math.min(items.length, 12), getSelectListTheme(), { search: "always" });
 		this.#selectList.setSelectedIndex(this.#cursor);
 		this.#selectList.onSelect = item => this.#toggle(item.value);
 		this.#selectList.onSelectionChange = item => {
@@ -281,7 +280,7 @@ class MultiSelectSubmenu extends Container {
 		this.#selectList.onCancel = this.#onClose;
 		const back = `${editorKey("tui.select.cancel")} to go back`;
 		const hint = this.#ordered
-			? `  Click to toggle · drag selected items to reorder · ${formatKeyHints(["left", "right"])} move · 1-9 place · ${back}`
+			? `  Click to toggle · drag selected items to reorder · h/l move · 1-9 place · / search · ${back}`
 			: `  Click/${editorKey("tui.select.confirm")}/${formatKeyHint("space")} to toggle · ${back}`;
 		this.#field = new FormField(this.#selectList, {
 			theme: formTheme,
@@ -387,13 +386,17 @@ class MultiSelectSubmenu extends Container {
 	}
 
 	handleInput(data: string): void {
+		if (this.#selectList.filterFocused) {
+			this.#selectList.handleInput(data);
+			return;
+		}
 		const current = this.#options[this.#cursor]?.value;
 		if (data === " " && current !== undefined) {
 			this.#toggle(current);
 			return;
 		}
-		if (this.#ordered && current !== undefined && (data === "\x1b[D" || data === "\x1b[C")) {
-			this.#move(current, data === "\x1b[D" ? -1 : 1);
+		if (this.#ordered && current !== undefined && (matchesKey(data, "h") || matchesKey(data, "l") || matchesKey(data, "left") || matchesKey(data, "right"))) {
+			this.#move(current, matchesKey(data, "h") || matchesKey(data, "left") ? -1 : 1);
 			return;
 		}
 		if (this.#ordered && current !== undefined && data.length === 1 && data >= "1" && data <= "9") {
@@ -401,6 +404,20 @@ class MultiSelectSubmenu extends Container {
 			return;
 		}
 		this.#selectList.handleInput(data);
+	}
+
+	get filterFocused(): boolean { return this.#selectList.filterFocused; }
+
+	navigationSnapshot(): unknown {
+		return { list: this.#selectList.navigationSnapshot(), value: [...this.#value] };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as { list?: unknown; value?: string[] };
+		if (Array.isArray(state.value)) this.#value = state.value.filter(value => this.#options.some(option => option.value === value));
+		this.#rebuild();
+		this.#selectList.restoreNavigation(state.list);
 	}
 }
 
@@ -411,6 +428,9 @@ class ProviderLimitsSubmenu extends Container {
 	readonly #onChange: (value: Record<string, number>) => void;
 	readonly #onCancel: () => void;
 	readonly #requestRender: (() => void) | undefined;
+	#editingProvider: string | undefined;
+	#restoringNavigation = false;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	constructor(
 		settings: SettingsHost,
@@ -434,6 +454,9 @@ class ProviderLimitsSubmenu extends Container {
 	}
 
 	#showProviderList(): void {
+		const previous = this.navigationSnapshot();
+		const changedPage = this.#editingProvider !== undefined;
+		this.#editingProvider = undefined;
 		this.clear();
 
 		const limits = this.#settings.normalizeProviderLimits(this.#settings.get("providers.maxInFlightRequests"));
@@ -473,9 +496,12 @@ class ProviderLimitsSubmenu extends Container {
 			requestRender: this.#requestRender,
 		});
 		this.addChild(this.#listField);
+		if (changedPage && !this.#restoringNavigation) this.onNavigationVisit?.("", previous);
 	}
 
 	#showProviderEditor(provider: string): void {
+		const previous = this.navigationSnapshot();
+		this.#editingProvider = provider;
 		const limits = this.#settings.normalizeProviderLimits(this.#settings.get("providers.maxInFlightRequests"));
 		this.clear();
 		this.#listField = undefined;
@@ -517,6 +543,7 @@ class ProviderLimitsSubmenu extends Container {
 				requestRender: this.#requestRender,
 			}),
 		);
+		if (!this.#restoringNavigation) this.onNavigationVisit?.(provider, previous);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
@@ -529,6 +556,28 @@ class ProviderLimitsSubmenu extends Container {
 			return;
 		}
 		this.children[0]?.handleInput?.(data);
+	}
+
+	get filterFocused(): boolean {
+		const child = this.children[0];
+		return child instanceof FormField ? child.filterFocused : false;
+	}
+
+	navigationSnapshot(): unknown {
+		const child = this.children[0];
+		return { provider: this.#editingProvider, content: isMenuHistoryParticipant(child) ? child.navigationSnapshot() : undefined };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as { provider?: string; content?: unknown };
+		this.#restoringNavigation = true;
+		try {
+			if (state.provider !== undefined) this.#showProviderEditor(state.provider);
+			else this.#showProviderList();
+			const child = this.children[0];
+			if (isMenuHistoryParticipant(child)) child.restoreNavigation(state.content);
+		} finally { this.#restoringNavigation = false; }
 	}
 }
 
@@ -626,7 +675,7 @@ export class SettingsSelectorComponent implements Component {
 	#preSearchTabId: SettingTab | "plugins" = "appearance";
 	#searchQuery = "";
 	/** Single-line editor backing the search banner (cursor, word ops, paste). */
-	#searchInput = new Input();
+	readonly #search = new MenuSearchField();
 	#searchMatchCount = 0;
 	/** First matching item id per tab id, for Tab-key jumps while searching. */
 	#searchFirstMatch = new Map<string, string>();
@@ -637,6 +686,9 @@ export class SettingsSelectorComponent implements Component {
 	 */
 	#searchCorpora: { tab: SettingTab; corpus: FuzzyCorpus<SettingItem> }[] | null = null;
 	#textInputActive = false;
+	#restoringNavigation = false;
+	readonly #menuKeys = new MenuKeyReader();
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	#hasSectionJump = false;
 	// Frame geometry from the last render, for mouse hit-testing (the
 	// fullscreen overlay paints from screen row 0, so mouse rows map 1:1).
@@ -686,6 +738,7 @@ export class SettingsSelectorComponent implements Component {
 		this.#searchList = null;
 		this.#pluginComponent = null;
 		build();
+		this.#wireNavigation();
 	}
 
 	#switchToTab(tabId: SettingTab | "plugins"): void {
@@ -703,9 +756,11 @@ export class SettingsSelectorComponent implements Component {
 		const confirm = editorKey("tui.select.confirm");
 		const cancel = editorKey("tui.select.cancel");
 		const tab = formatKeyHint("tab");
-		const switchTabs = `${formatKeyHints(["left", "right"])} to switch tabs`;
+		const switchTabs = "h/l switch tabs";
 		if (this.#searchList) {
-			return `${confirm} to change · ${tab} to jump tabs · ${cancel} to exit search`;
+			return this.#search.focused
+				? `${confirm} to change · ${tab} to jump tabs · ${cancel} back to list`
+				: `j/k select · / search · ${tab} jump tabs · ${cancel} close`;
 		}
 		if (this.#currentTabId === "plugins") {
 			return `${tab} to switch tabs · ${cancel} to close`;
@@ -714,7 +769,7 @@ export class SettingsSelectorComponent implements Component {
 			return `${editorKeys("tui.select.up", "tui.select.down")} to jump sections · ${tab}/${confirm} to settings · ${switchTabs} · ${cancel} to close`;
 		}
 		const nav = this.#hasSectionJump ? `${tab} to jump sections · ${switchTabs}` : `${tab} to switch tabs`;
-		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · Type to search · ${cancel} to close`;
+		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · / search · ${cancel} to close`;
 	}
 
 	/** Single-line search banner: accent icon, editable query with live cursor, right-aligned match count. */
@@ -725,7 +780,7 @@ export class SettingsSelectorComponent implements Component {
 		const prefix = ` ${theme.fg("accent", icon)} `;
 		// The input pads itself to exactly this width and keeps the cursor in view.
 		const inputWidth = Math.max(4, width - visibleWidth(prefix) - rightWidth - 1);
-		const inputLine = this.#searchInput.render(inputWidth)[0] ?? "";
+		const inputLine = this.#search.render(inputWidth, { muted: text => theme.fg("muted", text) });
 		const count = theme.fg(this.#searchMatchCount > 0 ? "dim" : "warning", countText);
 		return truncateToWidth(`${prefix}${theme.bold(inputLine)} ${count} `, width);
 	}
@@ -883,7 +938,7 @@ export class SettingsSelectorComponent implements Component {
 			page: searching ? this.#preSearchTabId : this.#currentTabId,
 			lead: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
 			query: searching ? this.#searchQuery : undefined,
-			cursor: searching ? this.#searchInput.getCursor() : undefined,
+			cursor: searching ? this.#search.input.getCursor() : undefined,
 			sections,
 			focus,
 			editing,
@@ -1142,17 +1197,17 @@ export class SettingsSelectorComponent implements Component {
 
 		if (searching) {
 			const count = this.#searchMatchCount;
-			if (memo.search?.input !== this.#searchInput || memo.search.count !== count) {
+			if (memo.search?.input !== this.#search.input || memo.search.count !== count) {
 				const countText = count === 1 ? "1 match" : `${count} matches`;
 				memo.search = {
-					input: this.#searchInput,
+					input: this.#search.input,
 					count,
 					node: node(
 						"row",
 						{ gap: "xs", align: "center", role: "omp.settings.search" },
 						[
 							text([span(theme.symbol("icon.search"), "accent")]),
-							col([this.#searchInput], { grow: 1 }),
+							col([this.#search.input], { grow: 1 }),
 							text([span(countText, count > 0 ? "dim" : "warning")], { wrap: "none" }),
 						],
 						"search",
@@ -1290,9 +1345,8 @@ export class SettingsSelectorComponent implements Component {
 	#startSearch(initialQuery: string): void {
 		this.#preSearchTabId = this.#currentTabId;
 		this.#searchCorpora = null;
-		this.#searchInput = new Input();
-		this.#searchInput.prompt = "";
-		this.#searchInput.setValue(initialQuery);
+		this.#search.input.setValue(initialQuery);
+		this.#search.focused = true;
 		const list = new SettingsList(
 			[],
 			10,
@@ -1321,10 +1375,6 @@ export class SettingsSelectorComponent implements Component {
 	 */
 	#setSearchQuery(query: string): void {
 		if (!this.#searchList) return;
-		if (query.length === 0) {
-			this.#endSearch(false);
-			return;
-		}
 		this.#searchQuery = query;
 		this.#changedCounts.clear();
 
@@ -1922,6 +1972,14 @@ export class SettingsSelectorComponent implements Component {
 		}
 
 		const activeList = this.#searchList ?? this.#currentList;
+		if (this.#pluginComponent?.filterFocused) {
+			this.#pluginComponent.handleInput(data);
+			return;
+		}
+		if (activeList?.filterFocused) {
+			activeList.handleInput(data);
+			return;
+		}
 
 		// An open submenu owns input entirely — Tab/arrows/typing belong to it.
 		if (activeList?.hasOpenSubmenu()) {
@@ -1929,48 +1987,41 @@ export class SettingsSelectorComponent implements Component {
 			return;
 		}
 
-		if (this.#searchList) {
+		if (this.#searchList && this.#search.focused) {
 			this.#handleSearchModeInput(data, this.#searchList);
 			return;
 		}
 
-		// Tab toggles keyboard focus between section headings and setting rows
-		// (fast section hopping); tabs without sections keep Tab switching tabs.
-		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
-			if (this.#currentList?.hasSectionFocusTargets()) {
-				this.#currentList.toggleSectionFocus();
+		const action = this.#menuKeys.read(data);
+		if (action !== undefined && action !== "pending") {
+			if (action.kind === "context") {
+				if (this.#currentList?.hasSectionFocusTargets()) this.#currentList.toggleSectionFocus();
+				else this.#tabBar.handleInput(data);
 				return;
 			}
-			this.#tabBar.handleInput(data);
-			return;
-		}
-		if (matchesKey(data, "left") || matchesKey(data, "right")) {
-			this.#tabBar.handleInput(data);
-			return;
-		}
-
-		// Printable characters start a search across every settings tab. The
-		// plugins tab keeps its own local filtering instead.
-		if (this.#currentTabId !== "plugins") {
-			const printable = extractPrintableText(data);
-			if (printable !== undefined && printable.trim().length > 0) {
-				this.#startSearch(printable);
+			if (action.kind === "horizontal") {
+				if (this.#pluginComponent) this.#pluginComponent.handleInput(data);
+				else this.#tabBar.handleInput(data);
+				return;
+			}
+			if (action.kind === "search" && this.#currentTabId !== "plugins") {
+				if (this.#searchList) this.#search.focused = true;
+				else this.#startSearch(this.#searchQuery);
 				return;
 			}
 		}
 
-		if (this.#currentList) {
-			this.#currentList.handleInput(data);
+		if (activeList) {
+			activeList.handleInput(data);
 		} else if (this.#pluginComponent) {
 			this.#pluginComponent.handleInput(data);
 		}
 	}
 
 	#handleSearchModeInput(data: string, list: SettingsList): void {
-		const kb = getKeybindings();
-		if (kb.matches(data, "tui.select.cancel")) {
-			// Exit search, landing on the tab of the selected result.
-			this.#endSearch(true);
+		const field = this.#search.handleInput(data);
+		if (field !== "pass") {
+			if (this.#search.value !== this.#searchQuery) this.#setSearchQuery(this.#search.value);
 			return;
 		}
 		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
@@ -1978,22 +2029,66 @@ export class SettingsSelectorComponent implements Component {
 			this.#tabBar.handleInput(data);
 			return;
 		}
-		// Selection, paging, and activation stay with the result list.
-		if (
-			kb.matches(data, "tui.select.up") ||
-			kb.matches(data, "tui.select.down") ||
-			kb.matches(data, "tui.select.pageUp") ||
-			kb.matches(data, "tui.select.pageDown") ||
-			kb.matches(data, "tui.select.confirm") ||
-			data === "\n"
-		) {
-			list.handleInput(data);
-			return;
+		list.handleInput(data);
+	}
+
+	get blocksMenuHistory(): boolean {
+		const list = this.#searchList ?? this.#currentList;
+		const submenuId = list?.openSubmenu?.id;
+		return list?.blocksMenuHistory === true
+			|| this.#pluginComponent?.blocksMenuHistory === true
+			|| (submenuId !== undefined && getSettingDef(this.#context.settings.entries, submenuId)?.credential === true);
+	}
+
+	navigationSnapshot(): unknown {
+		const list = this.#searchList ?? this.#currentList;
+		let listSnapshot = list?.navigationSnapshot();
+		const submenuId = list?.openSubmenu?.id;
+		if (submenuId && getSettingDef(this.#context.settings.entries, submenuId)?.credential && typeof listSnapshot === "object" && listSnapshot !== null) {
+			listSnapshot = { ...listSnapshot, submenu: undefined };
 		}
-		// Everything else edits the query like a regular single-line editor:
-		// cursor movement, word ops, kill ring, undo, paste.
-		this.#searchInput.handleInput(data);
-		const value = this.#searchInput.getValue();
-		if (value !== this.#searchQuery) this.#setSearchQuery(value);
+		return {
+			tab: this.#currentTabId,
+			preSearchTab: this.#preSearchTabId,
+			searching: this.#searchList !== null,
+			query: this.#searchQuery,
+			searchFocused: this.#search.focused,
+			searchCursor: this.#search.input.getCursor(),
+			list: listSnapshot,
+			plugin: isMenuHistoryParticipant(this.#pluginComponent) ? this.#pluginComponent.navigationSnapshot() : undefined,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as { tab?: string; preSearchTab?: string; searching?: boolean; query?: string; searchFocused?: boolean; searchCursor?: number; list?: unknown; plugin?: unknown };
+		if (!this.#tabs.some(tab => tab.id === state.tab)) return;
+		this.#restoringNavigation = true;
+		try {
+			const tab = state.tab as SettingTab | "plugins";
+			this.#tabs = getSettingsTabs();
+			this.#tabBar.setTabs(this.#tabs, tab);
+			this.#switchToTab(tab);
+			if (state.searching) {
+				this.#startSearch(state.query ?? "");
+				if (typeof state.preSearchTab === "string") this.#preSearchTabId = state.preSearchTab as SettingTab | "plugins";
+				this.#search.focused = state.searchFocused === true;
+				if (typeof state.searchCursor === "number") this.#search.input.setCursor(state.searchCursor);
+			}
+			(this.#searchList ?? this.#currentList)?.restoreNavigation(state.list);
+			if (isMenuHistoryParticipant(this.#pluginComponent)) this.#pluginComponent.restoreNavigation(state.plugin);
+		} finally {
+			this.#restoringNavigation = false;
+		}
+	}
+
+	#wireNavigation(): void {
+		const list = this.#searchList ?? this.#currentList;
+		if (list) list.onNavigationVisit = (page, previousList) => {
+			if (!this.#restoringNavigation) this.onNavigationVisit?.(`${this.#currentTabId}${page ? `:${page}` : ""}`, { ...(this.navigationSnapshot() as object), list: previousList });
+		};
+		if (isMenuHistoryParticipant(this.#pluginComponent)) this.#pluginComponent.onNavigationVisit = (page, previousPlugin) => {
+			if (!this.#restoringNavigation) this.onNavigationVisit?.(`plugins${page ? `:${page}` : ""}`, { ...(this.navigationSnapshot() as object), plugin: previousPlugin });
+		};
 	}
 }

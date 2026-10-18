@@ -236,7 +236,7 @@ describe("SelectList", () => {
 		expect(selectedValue).toBe("run");
 	});
 
-	it("filters only after i, keeps hjkl literal in insert mode, and Esc then closes", () => {
+	it("focuses the filter only through /, types hjkl and / literally there, and Esc returns to the list", () => {
 		const items = [
 			{ value: "ollama", label: "Ollama" },
 			{ value: "kagi", label: "Kagi" },
@@ -251,18 +251,19 @@ describe("SelectList", () => {
 		expect(list.getSelectedItem()?.value).toBe("kagi");
 		list.handleInput("k");
 		expect(list.getSelectedItem()?.value).toBe("ollama");
+		// `i` is not a mode switch: outside the filter it is an unbound key.
 		list.handleInput("i");
-		list.handleInput("o");
-		list.handleInput("g");
-		for (const key of "hjkl") list.handleInput(key);
-		expect(list.debugState().filterText).toBe("oghjkl");
+		expect(list.debugState().filterText).toBe("");
+		list.handleInput("/");
+		for (const key of "og/hjkl") list.handleInput(key);
+		expect(list.debugState().filterText).toBe("og/hjkl");
 		list.handleInput("\x1b");
 		expect(cancelled).toBe(0);
-		expect(list.debugState().filterText).toBe("oghjkl");
+		expect(list.debugState()).toMatchObject({ filterText: "og/hjkl", filterFocused: false });
 		list.handleInput("\x1b");
 		expect(cancelled).toBe(1);
 		list.setFilter("");
-		list.handleInput("i");
+		list.handleInput("/");
 		list.handleInput("o");
 		list.handleInput("g");
 
@@ -271,6 +272,101 @@ describe("SelectList", () => {
 		expect(rendered).not.toContain("Ollama");
 		expect(rendered).toContain("Search: og");
 		expect(list.getSelectedItem()?.value).toBe("opencode-go");
+	});
+
+	it("scrolls the view with Ctrl-e/Ctrl-y without moving the selection, and a motion brings it back", () => {
+		const items = Array.from({ length: 10 }, (_, i) => ({ value: `v${i}`, label: `Item ${i}` }));
+		const list = new SelectList(items, 3, testTheme, { search: "never" });
+		const visible = () =>
+			list
+				.render(40)
+				.map(line => line.match(/Item \d/)?.[0])
+				.filter(Boolean);
+		expect(visible()).toEqual(["Item 0", "Item 1", "Item 2"]);
+
+		list.handleInput("\x05"); // Ctrl-e
+		list.handleInput("\x05");
+		expect(visible()).toEqual(["Item 2", "Item 3", "Item 4"]);
+		expect(list.getSelectedItem()?.value).toBe("v0");
+		list.handleInput("\x19"); // Ctrl-y
+		expect(visible()).toEqual(["Item 1", "Item 2", "Item 3"]);
+		expect(list.getSelectedItem()?.value).toBe("v0");
+
+		list.handleInput("j");
+		expect(list.getSelectedItem()?.value).toBe("v1");
+		expect(visible()).toEqual(["Item 1", "Item 2", "Item 3"]);
+		for (let i = 0; i < 20; i++) list.handleInput("\x05");
+		expect(visible()).toEqual(["Item 7", "Item 8", "Item 9"]);
+	});
+
+	it("jumps with gg/G, moves by half page with Ctrl-d/Ctrl-u, and lets any other key cancel a pending g", () => {
+		const items = Array.from({ length: 10 }, (_, i) => ({ value: `v${i}`, label: `Item ${i}` }));
+		const list = new SelectList(items, 4, testTheme, { search: "never" });
+		list.render(40);
+		list.handleInput("G");
+		expect(list.getSelectedItem()?.value).toBe("v9");
+		list.handleInput("g");
+		list.handleInput("k"); // cancels the prefix and moves up on its own
+		expect(list.getSelectedItem()?.value).toBe("v8");
+		list.handleInput("g");
+		list.handleInput("g");
+		expect(list.getSelectedItem()?.value).toBe("v0");
+		list.render(40);
+		list.handleInput("\x04"); // Ctrl-d: half of the four visible rows
+		expect(list.getSelectedItem()?.value).toBe("v2");
+		list.handleInput("\x15"); // Ctrl-u
+		expect(list.getSelectedItem()?.value).toBe("v0");
+	});
+
+	it("restores selection, filter, and scroll from a navigation snapshot", () => {
+		const items = Array.from({ length: 10 }, (_, i) => ({ value: `v${i}`, label: `Item ${i}` }));
+		const list = new SelectList(items, 3, testTheme, { search: "always" });
+		list.render(40);
+		list.handleInput("j");
+		list.handleInput("\x05");
+		list.render(40);
+		const state = list.navigationState();
+		expect(state).toEqual({
+			selectedValue: "v1",
+			filter: "",
+			viewportTop: 1,
+			filterFocused: false,
+			filterCursor: 0,
+		});
+
+		const reopened = new SelectList(items, 3, testTheme, { search: "always" });
+		reopened.restoreNavigationState(state);
+		reopened.render(40);
+		expect(reopened.navigationState()).toEqual(state);
+	});
+
+	it("shows an empty focused search field even when every row fits", () => {
+		const list = new SelectList([{ value: "a", label: "Alpha" }], 5, testTheme, { search: "always" });
+		list.handleInput("/");
+		expect(list.render(80).join("\n")).toContain("Esc back to list");
+		list.handleInput("\x1b");
+		expect(list.render(80).join("\n")).not.toContain("Esc back to list");
+	});
+
+	it("restores literal filter focus and caret without activating the saved row", () => {
+		const items = [{ value: "a", label: "alpha" }];
+		const list = new SelectList(items, 3, testTheme, { search: "always" });
+		list.handleInput("/");
+		list.handleInput("aa");
+		list.handleInput("\x1b[D");
+		const reopened = new SelectList(items, 3, testTheme, { search: "always" });
+		let activated = false;
+		reopened.onSelect = () => {
+			activated = true;
+		};
+		reopened.restoreNavigation(list.navigationSnapshot());
+		expect(reopened.filterFocused).toBe(true);
+		reopened.handleInput("lph");
+		expect(reopened.navigationState().filter).toBe("alpha");
+		expect(activated).toBe(false);
+		reopened.handleInput("\x1b");
+		expect(reopened.filterFocused).toBe(false);
+		expect(reopened.getSelectedItem()?.value).toBe("a");
 	});
 
 	it("keeps printable keys inert when the list does not overflow", () => {

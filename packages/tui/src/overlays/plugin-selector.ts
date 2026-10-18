@@ -72,7 +72,7 @@ export class PluginSelectorComponent extends OverlayPanel {
 			});
 		}
 
-		this.#selectList = new SelectList(items, Math.min(items.length, 20), getSelectListTheme());
+		this.#selectList = new SelectList(items, Math.min(items.length, 20), getSelectListTheme(), { search: "always" });
 
 		this.#selectList.onSelect = item => {
 			const [name, marketplace, scope] = splitPluginId(item.value);
@@ -115,6 +115,14 @@ export class PluginSelectorComponent extends OverlayPanel {
 
 	getSelectList(): SelectList {
 		return this.#selectList;
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationState();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		this.#selectList.restoreNavigation(snapshot);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {

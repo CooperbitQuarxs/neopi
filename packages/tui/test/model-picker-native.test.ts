@@ -3,7 +3,7 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { TspPickerGroup, TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
-import { ModelHubComponent, type ModelHubRegistry, type ModelHubSource } from "../src/overlays/model-hub";
+import { ModelHubComponent, type HubEffortRule, type ModelHubRegistry, type ModelHubSource } from "../src/overlays/model-hub";
 import { ModelPickerComponent } from "../src/overlays/model-picker";
 import { initTheme } from "../src/theme";
 import type { TUI } from "../src/tui";
@@ -153,6 +153,7 @@ test("the model hub describes a data-first picker when the terminal has the kind
 	expect(p.scopes?.map(scope => [scope.id, scope.count, scope.group])).toEqual([
 		["roles", 2, undefined],
 		["all", 5, undefined],
+		["effort", 0, undefined],
 		["provider:anthropic", 2, "Providers"],
 		["provider:demo", 1, "Providers"],
 		["provider:openai", 2, "Providers"],
@@ -196,7 +197,7 @@ test("Factory Droid rows carry the base credit rate and a credit-only model is n
 
 test("typing changes the order, hits, counts and head total but never the catalogue", () => {
 	const hub = openHub({ assign: [], cancel: 0 });
-	hub.handleInput("i");
+	hub.handleInput("/");
 	for (const ch of "sonnet") hub.handleInput(ch);
 	const after = props(hub.describe(withPicker));
 	expect(after.query).toBe("sonnet");
@@ -291,14 +292,15 @@ test("pointer events drive the hub through the same paths as its keys", () => {
 	// The head's total counts the rows Tern counts as shown (fallbacks, chains, "New …" rows), so All reads no "N of M".
 	expect(p.total).toBe(p.order?.filter(entry => typeof entry === "string").length);
 
-	// Esc ladder: close leaves the hub only when nothing else is open.
+	// Esc leaves search without clearing it; explicit Clear search does that.
 	act("scope", "all");
-	hub.handleInput("i");
+	hub.handleInput("/");
 	hub.handleInput("x");
-	hub.handleInput("\x1b");
 	act("close");
-	expect(props(hub.describe(withPicker)).query).toBe("");
+	expect(props(hub.describe(withPicker)).query).toBe("x");
 	expect(calls.cancel).toBe(0);
+	act("clear");
+	expect(props(hub.describe(withPicker)).query).toBe("");
 	act("close");
 	expect(calls.cancel).toBe(1);
 });
@@ -398,4 +400,255 @@ test("shows a non-default service tier's own speed aggregate", () => {
 	expect(speed("anthropic/claude-opus-5")).toBe("40");
 	// Only a tier aggregate exists: show it rather than nothing.
 	expect(speed("openai/gpt-5.6-mini")).toBe("90 priority");
+});
+
+test("quick picker keeps literal search separate from navigation and restores its target", () => {
+	const picked: string[] = [];
+	const picker = new ModelPickerComponent(
+		ui,
+		source({}, []),
+		{ ...registry(MODELS), refreshIfStale: async () => false },
+		MODELS.map(entry => ({ model: entry })),
+		{
+			onPick: (_model, selector) => picked.push(`session:${selector}`),
+			onPickTask: (_model, selector) => picked.push(`task:${selector}`),
+			onCancel: () => {},
+		},
+		{ currentSelector: "demo/demo", taskSelector: "openai/gpt-5.6", taskModeKeys: ["alt+p"] },
+	);
+	picker.handleInput("i");
+	expect(props(picker.describe(withPicker)).query).toBe("");
+	picker.handleInput("G");
+	const selected = props(picker.describe(withPicker)).selected;
+	picker.handleInput("\x05");
+	expect(props(picker.describe(withPicker)).selected).toBe(selected);
+	picker.handleInput("/");
+	for (const key of "hjklg/ ") picker.handleInput(key);
+	expect(props(picker.describe(withPicker)).query).toBe("hjklg/ ");
+	picker.handleInput("\x1b");
+	picker.handleNativeEvent({ type: "action", key: "", act: "clear", mods: [] });
+	const session = picker.navigationSnapshot();
+	picker.handleInput("\t");
+	expect(props(picker.describe(withPicker)).title).toBe("Switch task model");
+	const task = picker.navigationSnapshot();
+	picker.restoreNavigation(session);
+	expect(props(picker.describe(withPicker)).title).toBe("Switch model");
+	picker.restoreNavigation(task);
+	expect(picker.navigationSnapshot()).toEqual(task);
+	picker.handleInput(" ");
+	expect(picked).toEqual(["task:openai/gpt-5.6"]);
+});
+
+test("native model hub exposes effort rules above providers and navigates its editor", () => {
+	const hub = openHub({ assign: [], cancel: 0 });
+	const scopes = props(hub.describe(withPicker)).scopes?.map(scope => scope.id) ?? [];
+	expect(scopes.indexOf("effort")).toBeLessThan(scopes.indexOf("provider:anthropic"));
+	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "effort", mods: [] });
+	expect(props(hub.describe(withPicker)).order).toEqual(["effort:0", "effort:1"]);
+	hub.handleInput("l");
+	hub.handleInput("G");
+	expect(props(hub.describe(withPicker)).selected).toBe("effort:1");
+	hub.handleInput(" ");
+	for (const key of "re:demo/.*") hub.handleInput(key);
+	const draft = hub.navigationSnapshot();
+	expect(draft.strip?.kind).toBe("pattern");
+	hub.handleInput("\r");
+	expect(hub.navigationSnapshot().strip?.kind).toBe("effortLevels");
+	hub.handleInput("\x1b");
+	let pattern = hub.navigationSnapshot().strip;
+	if (pattern?.kind !== "pattern") throw new Error("expected parent pattern editor");
+	expect(pattern.input.getValue()).toBe("re:demo/.*");
+	hub.handleInput("\x1b"); // Field focus leaves before the page.
+	pattern = hub.navigationSnapshot().strip;
+	if (pattern?.kind !== "pattern") throw new Error("expected defocused pattern editor");
+	expect(pattern.input.focused).toBe(false);
+	hub.handleInput("/");
+	pattern = hub.navigationSnapshot().strip;
+	if (pattern?.kind !== "pattern") throw new Error("expected refocused pattern editor");
+	expect(pattern.input.focused).toBe(true);
+	expect(pattern.input.getValue()).toBe("re:demo/.*");
+	hub.handleInput("\x1b");
+	hub.handleInput("\x1b");
+	expect(hub.navigationSnapshot().strip).toBeNull();
+	expect(hub.navigationSnapshot().entry).toBe("effort");
+	hub.restoreNavigation(draft);
+	pattern = hub.navigationSnapshot().strip;
+	if (pattern?.kind !== "pattern") throw new Error("expected restored pattern editor");
+	expect(pattern.input.getValue()).toBe("re:demo/.*");
+});
+
+test("hub context switches do not create visits; nested selectors and effort choices do", () => {
+	const calls = { assign: [] as string[], cancel: 0 };
+	const hub = openHub(calls);
+	const visits: string[] = [];
+	hub.onNavigationVisit = page => { visits.push(page); };
+	hub.handleInput("k"); // All → Roles is a context, not a nested page.
+	hub.handleInput("l");
+	const parent = hub.navigationSnapshot();
+	expect(visits).toEqual([]);
+	hub.handleInput(" ");
+	expect(visits).toHaveLength(1);
+	let strip = hub.navigationSnapshot().strip;
+	if (strip?.kind !== "selectorChoice") throw new Error("expected selector choice");
+	expect(strip.index).toBe(0);
+	hub.handleInput("j");
+	strip = hub.navigationSnapshot().strip;
+	if (strip?.kind !== "selectorChoice") throw new Error("expected selector choice");
+	expect(strip.index).toBe(1);
+	expect(visits).toHaveLength(1);
+	hub.handleInput("h"); // Leave chips without committing, switch to scopes.
+	expect(hub.navigationSnapshot().strip).toBeNull();
+	expect(hub.navigationSnapshot().focus).toBe("scope");
+	expect(visits.at(-1)).toBe("");
+	expect(calls.assign).toEqual([]);
+	hub.restoreNavigation(parent);
+	const visitCount = visits.length;
+	hub.handleInput("\r");
+	hub.handleInput(" "); // Exact-model selector, then model assignment.
+	expect(hub.navigationSnapshot().assigning?.kind).toBe("role");
+	hub.handleNativeEvent({ type: "activate", key: "", item: "openai/gpt-5.6" });
+	strip = hub.navigationSnapshot().strip;
+	if (strip?.kind !== "thinking") throw new Error("expected effort chooser");
+	hub.handleInput("g");
+	hub.handleInput("g");
+	hub.handleInput("l");
+	strip = hub.navigationSnapshot().strip;
+	if (strip?.kind !== "thinking") throw new Error("expected effort chooser");
+	expect(strip.index).toBe(1);
+	expect(hub.navigationSnapshot().focus).toBe("list");
+	hub.handleInput("h");
+	strip = hub.navigationSnapshot().strip;
+	if (strip?.kind !== "thinking") throw new Error("expected effort chooser");
+	expect(strip.index).toBe(0);
+	expect(calls.assign).toEqual([]);
+	expect(visits.length).toBeGreaterThan(visitCount);
+	hub.handleInput("\x1b");
+	expect(hub.navigationSnapshot().assigning?.kind).toBe("role");
+	hub.handleInput("\x1b");
+	expect(hub.navigationSnapshot().strip?.kind).toBe("selectorChoice");
+	hub.handleInput("\x1b");
+	expect(hub.navigationSnapshot().strip).toBeNull();
+	expect(hub.navigationSnapshot().assigning).toBeNull();
+	expect(calls.cancel).toBe(0);
+	hub.handleInput("\x1b");
+	expect(calls.cancel).toBe(1);
+});
+
+test("root-role yank preserves the existing single-model paste contract", () => {
+	const chains: Record<string, string[]> = { default: ["openai/gpt-5.6"] };
+	const hub = new ModelHubComponent(
+		ui,
+		{ ...source({ default: "demo/demo" }, []), fallbackChains: chains },
+		registry(MODELS),
+		MODELS.map(entry => ({ model: entry })),
+		{
+			onAssign: () => {},
+			onUnassign: () => {},
+			onCancel: () => {},
+			onFallbackChainChange: (role, chain) => { chains[role] = chain; },
+		},
+	);
+	hubs.push(hub);
+	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "roles", mods: [] });
+	hub.handleInput("y");
+	hub.handleNativeEvent({ type: "select", key: "", item: "role:smol" });
+	hub.handleInput("p");
+	expect(chains.smol).toEqual(["demo/demo"]);
+});
+
+test("effort rules share paging, jumps and independent viewport scrolling", () => {
+	const rules = Array.from({ length: 50 }, (_, index) => ({ selector: `demo/model-${index}`, allowed: [] }));
+	const hub = new ModelHubComponent(
+		ui,
+		{ ...source({}, []), effortRules: rules },
+		registry(MODELS),
+		MODELS.map(entry => ({ model: entry })),
+		{ onAssign: () => {}, onUnassign: () => {}, onCancel: () => {} },
+	);
+	hubs.push(hub);
+	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "effort", mods: [] });
+	hub.render(120);
+	hub.handleInput("\x04");
+	const half = hub.navigationSnapshot().effortIndex;
+	expect(half).toBeGreaterThan(0);
+	hub.handleInput("\x1b[6~");
+	expect(hub.navigationSnapshot().effortIndex).toBeGreaterThan(half);
+	hub.handleInput("G");
+	expect(hub.navigationSnapshot().effortIndex).toBe(51);
+	hub.handleInput("j");
+	expect(hub.navigationSnapshot().effortIndex).toBe(51);
+	hub.handleInput("g");
+	hub.handleInput("g");
+	hub.render(120);
+	const first = hub.navigationSnapshot();
+	hub.handleInput("\x05");
+	hub.render(120);
+	expect(hub.navigationSnapshot().effortIndex).toBe(first.effortIndex);
+	expect(hub.navigationSnapshot().effortTop).toBe((first.effortTop ?? 0) + 1);
+	hub.handleInput("\x19");
+	hub.render(120);
+	expect(hub.navigationSnapshot().effortTop).toBe(first.effortTop);
+});
+
+test("Roles and model scopes keep separate queries while switching panes", () => {
+	const hub = openHub({ assign: [], cancel: 0 });
+	hub.handleInput("/");
+	for (const key of "sonnet") hub.handleInput(key);
+	hub.handleInput("\x1b");
+	hub.handleInput("h");
+	hub.handleInput("g");
+	hub.handleInput("g");
+	expect(props(hub.describe(withPicker)).scope).toBe("roles");
+	hub.handleInput("l");
+	hub.handleInput("/");
+	for (const key of "default") hub.handleInput(key);
+	hub.handleInput("\x1b");
+	expect(props(hub.describe(withPicker)).query).toBe("default");
+	hub.handleInput("h");
+	hub.handleInput("j");
+	expect(props(hub.describe(withPicker)).scope).toBe("all");
+	expect(props(hub.describe(withPicker)).query).toBe("sonnet");
+});
+
+test("effort rule search stays in section and destructive actions target the filtered source row", () => {
+	let rules: HubEffortRule[] = [
+		{ selector: "demo/first", allowed: [] },
+		{ selector: "demo/needle", allowed: [] },
+	];
+	const hub = new ModelHubComponent(
+		ui,
+		{ ...source({}, []), get effortRules() { return rules; } },
+		registry(MODELS),
+		MODELS.map(entry => ({ model: entry })),
+		{
+			onAssign: () => {},
+			onUnassign: () => {},
+			onCancel: () => {},
+			onEffortRulesChange: next => { rules = next; },
+		},
+	);
+	hubs.push(hub);
+	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "effort", mods: [] });
+	hub.handleInput("/");
+	for (const key of "needle") hub.handleInput(key);
+	let p = props(hub.describe(withPicker));
+	expect(p.scope).toBe("effort");
+	expect(p.query).toBe("needle");
+	expect(p.order).toEqual(["effort:1"]);
+	expect(p.selected).toBe("effort:1");
+	hub.handleInput("\x1b");
+	const filtered = hub.navigationSnapshot();
+	rules = rules.toReversed();
+	hub.restoreNavigation(filtered);
+	expect(props(hub.describe(withPicker)).selected).toBe("effort:0");
+	hub.handleInput("x");
+	expect(rules.map(rule => rule.selector)).toEqual(["demo/first"]);
+	p = props(hub.describe(withPicker));
+	expect(p.order).toEqual([]);
+	expect(p.selected).toBeNull();
+	hub.restoreNavigation(filtered);
+	expect(rules.map(rule => rule.selector)).toEqual(["demo/first"]);
+	expect(props(hub.describe(withPicker)).query).toBe("needle");
+	hub.handleNativeEvent({ type: "action", key: "", act: "clear", mods: [] });
+	expect(props(hub.describe(withPicker)).order).toContain("effort:0");
 });

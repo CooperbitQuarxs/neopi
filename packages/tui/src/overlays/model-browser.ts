@@ -14,9 +14,8 @@ import { getModelPricingStatus, modelsAreEqual } from "@oh-my-pi/pi-catalog/mode
 import { modelKind, type ModelKind, type ModelPricingStatus } from "@oh-my-pi/pi-catalog/types";
 import type { Component } from "../tui";
 import { FuzzyCorpus, fuzzyRank } from "../fuzzy";
-import { Input } from "../components/input";
 import { ScrollView } from "../components/scroll-view";
-import { matchesKey } from "../keys";
+import { extractPrintableText } from "../keys";
 import type { SgrMouseEvent } from "../mouse";
 import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
 import { formatNumber, sanitizeText } from "@oh-my-pi/pi-utils";
@@ -28,15 +27,8 @@ import {
 } from "../thinking";
 import { thinkingLevelGlyph } from "../render/render-utils";
 import { type Theme, type ThemeColor, theme } from "../theme/theme";
-import {
-	matchesSelectCancel,
-	matchesSelectDown,
-	matchesSelectPageDown,
-	matchesSelectPageUp,
-	matchesSelectUp,
-} from "../keybinding-matchers";
 import { MenuSelection } from "../components/menu-selection";
-import { clampScrollOffset, scrollOffsetForRow } from "../components/scroll-viewport";
+import { applyMenuMotion, MenuKeyReader, type MenuNavAction, MenuSearchField, MenuViewport } from "../components/menu-navigation";
 import type {
 	TspPickerColumn,
 	TspPickerGroup,
@@ -947,6 +939,14 @@ export interface ModelBrowserOptions {
 	emptyText?: () => string | undefined;
 }
 
+export interface ModelBrowserNavigation {
+	query: string;
+	cursor: number;
+	filterFocused: boolean;
+	selected: string | undefined;
+	top: number | undefined;
+}
+
 /** Rendered rows before the list window: search row + blank. */
 const LIST_ROW_START = 2;
 /** Rendered rows after the list window: blank + two detail rows. */
@@ -998,7 +998,10 @@ interface MetricCells {
  */
 export class ModelBrowser implements Component {
 	#settings: ModelBrowserSource;
-	#searchInput = new Input();
+	#search = new MenuSearchField();
+	#keys = new MenuKeyReader();
+	#viewport = new MenuViewport();
+	#rowHeights: { items: readonly ModelBrowserItem[]; rows: number[] } | undefined;
 	#menu = new MenuSelection<ModelBrowserItem>([], {
 		getKey: item => item.selector,
 		getSearchText: modelSearchText,
@@ -1087,7 +1090,7 @@ export class ModelBrowser implements Component {
 	onActivate?: (item: ModelBrowserItem) => void;
 	onSelectionChange?: (item: ModelBrowserItem | undefined) => void;
 	onQueryChange?: (query: string) => void;
-	/** Cancel key with an empty query (a non-empty query is cleared first). */
+	/** Cancel from list navigation; leaving the filter retains its query. */
 	onCancel?: () => void;
 
 	constructor(settings: ModelBrowserSource, options: ModelBrowserOptions = {}) {
@@ -1166,17 +1169,49 @@ export class ModelBrowser implements Component {
 	}
 
 	get query(): string {
-		return this.#searchInput.getValue();
+		return this.#search.value;
 	}
 
 	/** Caret into {@link query} (UTF-16 offset), for native picker `cursor`. */
 	get cursor(): number {
-		return this.#searchInput.getCursor();
+		return this.#search.cursor;
 	}
 
 	setQuery(query: string): void {
-		this.#searchInput.setValue(query);
+		this.#search.setValue(query);
 		this.#applyQuery("reset-changed-prefix");
+	}
+
+	get filterFocused(): boolean {
+		return this.#search.focused;
+	}
+
+	focusFilter(focused = true): void {
+		this.#search.focused = focused;
+		this.#keys.reset();
+	}
+
+	navigationSnapshot(): ModelBrowserNavigation {
+		return {
+			query: this.query,
+			cursor: this.cursor,
+			filterFocused: this.#search.focused,
+			selected: this.getSelected()?.selector,
+			top: this.#viewport.top,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as Partial<ModelBrowserNavigation>;
+		if (typeof state.query !== "string") return;
+		this.#search.restoreNavigation({ value: state.query, cursor: state.cursor, focused: state.filterFocused });
+		this.#applyQuery("reset-changed-prefix");
+		this.onQueryChange?.(state.query);
+		if (typeof state.selected === "string") this.#menu.setSelectedKey(state.selected);
+		this.#viewport.setTop(typeof state.top === "number" ? state.top : undefined);
+		this.#keys.reset();
+		this.#layoutWindow();
 	}
 
 	getSelected(): ModelBrowserItem | undefined {
@@ -1251,20 +1286,17 @@ export class ModelBrowser implements Component {
 		return contextWindow > 0 && this.#currentContextTokens > contextWindow;
 	}
 
-	/** Clamp a window start into `[0, total - maxVisible]`. */
-	#clampWindowStart(start: number): number {
-		return clampScrollOffset(start, this.#menu.visibleItems.length, this.#maxVisible);
+	#layoutWindow(): void {
+		const items = this.#menu.visibleItems;
+		if (this.#rowHeights?.items !== items) this.#rowHeights = { items, rows: items.map(() => 1) };
+		const window = this.#viewport.layout(this.#rowHeights.rows, this.#menu.selectedIndex, this.#maxVisible);
+		this.#windowStart = window.startIndex;
+		this.#windowCount = window.endIndex - window.startIndex;
 	}
 
-	/** Scroll just enough to keep the selected row inside the window. */
 	#ensureSelectedVisible(): void {
-		this.#windowStart = scrollOffsetForRow(
-			this.#windowStart,
-			this.#menu.selectedIndex,
-			this.#menu.visibleItems.length,
-			this.#maxVisible,
-			"nearest",
-		);
+		this.#viewport.reveal();
+		this.#layoutWindow();
 	}
 
 	/**
@@ -1334,7 +1366,7 @@ export class ModelBrowser implements Component {
 	}
 
 	#applyQuery(selection: "clamp" | "reset-changed-prefix" = "clamp"): void {
-		const query = this.#searchInput.getValue();
+		const query = this.#search.value;
 		const previousItems = this.#menu.visibleItems;
 		const previousSelectedIndex = this.#menu.selectedIndex;
 		const previousSelected = previousItems[previousSelectedIndex];
@@ -1364,59 +1396,49 @@ export class ModelBrowser implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (matchesSelectCancel(data)) {
-			this.handleCancel();
-			return;
-		}
-		if (matchesSelectUp(data)) {
-			this.moveSelection(-1);
-			return;
-		}
-		if (matchesSelectDown(data)) {
-			this.moveSelection(1);
-			return;
-		}
-		if (matchesSelectPageUp(data)) {
-			this.moveSelection(-this.#maxVisible, { wrap: false });
-			return;
-		}
-		if (matchesSelectPageDown(data)) {
-			this.moveSelection(this.#maxVisible, { wrap: false });
-			return;
-		}
-		if (matchesKey(data, "home")) {
-			this.moveSelection(-this.#menu.visibleItems.length, { wrap: false });
-			return;
-		}
-		if (matchesKey(data, "end")) {
-			this.moveSelection(this.#menu.visibleItems.length, { wrap: false });
-			return;
-		}
-		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-			const selected = this.getSelected();
-			if (selected && !this.#isDisabled(selected)) {
-				this.onActivate?.(selected);
+		if (this.#search.focused) {
+			const before = this.query;
+			const result = this.#search.handleInput(data);
+			if (this.query !== before) {
+				this.#applyQuery("reset-changed-prefix");
+				this.onQueryChange?.(this.query);
 			}
+			if (result !== "pass" || extractPrintableText(data) !== undefined) return;
+		}
+		const action = this.#keys.read(data);
+		if (!action || action === "pending") return;
+		this.handleNavigation(action);
+	}
+
+	/** Hosts with their own pane routing share these intents without translating keys. */
+	handleNavigation(action: MenuNavAction): void {
+		this.#layoutWindow();
+		const motion = applyMenuMotion(action, this.#menu, this.#viewport);
+		if (motion.handled) {
+			this.#layoutWindow();
+			if (motion.selectionChanged) this.onSelectionChange?.(this.getSelected());
 			return;
 		}
-		// Everything else edits the query like a regular single-line editor.
-		const before = this.#searchInput.getValue();
-		this.#searchInput.handleInput(data);
-		const after = this.#searchInput.getValue();
-		if (after !== before) {
-			this.#applyQuery("reset-changed-prefix");
-			this.onQueryChange?.(after);
+		switch (action.kind) {
+			case "search":
+				this.focusFilter();
+				break;
+			case "cancel":
+				this.handleCancel();
+				break;
+			case "confirm":
+			case "toggle": {
+				this.focusFilter(false);
+				const selected = this.getSelected();
+				if (selected && !this.#isDisabled(selected)) this.onActivate?.(selected);
+				break;
+			}
 		}
 	}
 
-	/** Cancel-key ladder: clear a non-empty query first, then bubble to the host. */
 	handleCancel(): void {
-		if (this.#searchInput.getValue().length > 0) {
-			this.setQuery("");
-			this.onQueryChange?.("");
-			return;
-		}
-		this.onCancel?.();
+		if (this.#search.focused) this.focusFilter(false);
+		else this.onCancel?.();
 	}
 
 	/**
@@ -1426,7 +1448,9 @@ export class ModelBrowser implements Component {
 	routeMouse(event: SgrMouseEvent, line: number): void {
 		if (event.wheel !== null) {
 			// Wheel pans the window; it never moves the selection and never wraps.
-			this.#windowStart = this.#clampWindowStart(this.#windowStart + event.wheel);
+			this.#layoutWindow();
+			this.#viewport.scroll(event.wheel);
+			this.#layoutWindow();
 			this.#hoveredIndex = this.#hoverIndexAt(line);
 			return;
 		}
@@ -1652,19 +1676,13 @@ export class ModelBrowser implements Component {
 	render(width: number): string[] {
 		const lines: string[] = [];
 
-		const searchIcon = theme.fg("accent", theme.symbol("icon.search"));
-		const inputWidth = Math.max(4, width - visibleWidth(theme.symbol("icon.search")) - 2);
-		lines.push(` ${searchIcon} ${this.#searchInput.render(inputWidth)[0] ?? ""}`);
+		lines.push(this.#search.render(width, { muted: value => theme.fg("muted", value) }));
 		lines.push("");
 
 		const total = this.#menu.visibleItems.length;
-		// The window is persistent state: wheel scrolling panned it, keyboard
-		// navigation snapped it to the selection. Re-clamp here because items
-		// or maxVisible may have changed since.
-		this.#windowStart = this.#clampWindowStart(this.#windowStart);
+		this.#layoutWindow();
 		const startIndex = this.#windowStart;
-		const endIndex = Math.min(startIndex + this.#maxVisible, total);
-		this.#windowCount = Math.max(0, endIndex - startIndex);
+		const endIndex = startIndex + this.#windowCount;
 
 		if (total === 0) {
 			const message =
@@ -1759,7 +1777,7 @@ export class ModelBrowser implements Component {
 	 * scrolls), and the selection's facts and role chips.
 	 */
 	describe(): NativeNode {
-		this.#nativeSearch ??= row([text([span(theme.symbol("icon.search"), "accent")]), this.#searchInput], {
+		this.#nativeSearch ??= row([text([span(theme.symbol("icon.search"), "muted")]), this.#search.input], {
 			gap: "sm",
 			align: "center",
 		});

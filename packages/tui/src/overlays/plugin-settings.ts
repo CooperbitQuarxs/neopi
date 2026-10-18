@@ -29,6 +29,7 @@ import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "..
 import { col, node, span, text } from "../native/describe";
 import type { TspPrefsControl, TspPrefsSection } from "@oh-my-pi/pi-wire";
 import { actionHint, hintsRow, overlayCard } from "../native/overlay";
+import { MenuKeyReader, isMenuHistoryParticipant } from "../components/menu-navigation";
 
 const PLUGIN_SETTINGS_ROLE = "omp.overlay.plugin-settings";
 /** A plugin row's control on the native settings page: open the plugin's settings. */
@@ -297,6 +298,7 @@ function findEntryByValue(entries: ReadonlyArray<PluginListEntry>, value: string
 export class PluginListComponent extends OverlayPanel {
 	readonly #selectList: SelectList;
 	#native: NativeNode | undefined;
+	readonly #keys = new MenuKeyReader();
 
 	constructor(
 		private readonly entries: ReadonlyArray<PluginListEntry>,
@@ -332,6 +334,7 @@ export class PluginListComponent extends OverlayPanel {
 		// SelectList default primary column (32 chars). Widen the bound so the
 		// id remains readable; the description gets whatever width is left.
 		this.#selectList = new SelectList(items, Math.min(items.length, 8), getSelectListTheme(), {
+			search: "always",
 			minPrimaryColumnWidth: 24,
 			maxPrimaryColumnWidth: 64,
 		});
@@ -351,7 +354,7 @@ export class PluginListComponent extends OverlayPanel {
 			new Text(
 				theme.fg(
 					"dim",
-					`${editorKey("tui.select.confirm")} to configure · ${editorKey("tui.select.cancel")} to go back`,
+					`${editorKey("tui.select.confirm")}/l configure · h parent · / search · Esc close`,
 				),
 				0,
 				0,
@@ -470,8 +473,20 @@ export class PluginListComponent extends OverlayPanel {
 	}
 
 	handleInput(data: string): void {
+		if (!this.#selectList.filterFocused) {
+			const action = this.#keys.read(data);
+			if (action !== undefined && action !== "pending" && action.kind === "horizontal") {
+				const item = this.#selectList.getSelectedItem();
+				if (action.delta === 1 && item) this.#selectList.onSelect?.(item);
+				return;
+			}
+		}
 		this.#selectList.handleInput(data);
 	}
+
+	get filterFocused(): boolean { return this.#selectList.filterFocused; }
+	navigationSnapshot(): unknown { return this.#selectList.navigationSnapshot(); }
+	restoreNavigation(snapshot: unknown): void { this.#selectList.restoreNavigation(snapshot); }
 }
 
 // =============================================================================
@@ -495,6 +510,8 @@ export interface PluginDetailCallbacks {
  */
 export class PluginDetailComponent extends OverlayPanel {
 	#settingsList!: SettingsFormField;
+	#pendingNavigation: unknown;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	constructor(
 		private plugin: InstalledPlugin,
@@ -588,6 +605,11 @@ export class PluginDetailComponent extends OverlayPanel {
 			},
 			onCancel: this.callbacks.onBack,
 		});
+		this.#settingsList.settingsList.onNavigationVisit = (page, previousSnapshot) => this.onNavigationVisit?.(page, previousSnapshot);
+		if (this.#pendingNavigation !== undefined) {
+			this.#settingsList.restoreNavigation(this.#pendingNavigation);
+			this.#pendingNavigation = undefined;
+		}
 
 		this.addChild(this.#settingsList);
 	}
@@ -595,6 +617,20 @@ export class PluginDetailComponent extends OverlayPanel {
 	handleInput(data: string): void {
 		if (!this.#settingsList) return;
 		this.#settingsList.handleInput(data);
+	}
+
+	get filterFocused(): boolean { return this.#settingsList?.filterFocused ?? false; }
+	get blocksMenuHistory(): boolean { return this.#settingsList?.blocksMenuHistory ?? false; }
+	navigationSnapshot(): unknown { return this.#settingsList?.navigationSnapshot() ?? this.#pendingNavigation; }
+	restoreNavigation(snapshot: unknown): void {
+		if (this.#settingsList) this.#settingsList.restoreNavigation(snapshot);
+		else this.#pendingNavigation = snapshot;
+	}
+	navigateParent(): boolean { return this.#settingsList?.settingsList.navigateParent() ?? false; }
+	navigateChild(): void {
+		const list = this.#settingsList?.settingsList;
+		const item = list?.getSelectedItem();
+		if (item?.submenu) list?.openSubmenuFor(item.id);
 	}
 
 	/** This plugin's settings as a native page section. */
@@ -631,6 +667,9 @@ export interface MarketplacePluginDetailCallbacks {
  */
 export class MarketplacePluginDetailComponent extends OverlayPanel {
 	#settingsList!: SettingsFormField;
+	#pendingNavigation: unknown;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
+	#configLoaded = false;
 
 	constructor(
 		private plugin: InstalledPluginSummary,
@@ -668,6 +707,8 @@ export class MarketplacePluginDetailComponent extends OverlayPanel {
 	}
 
 	#render(runtimePlugin: InstalledPlugin | undefined, configItems: SettingItem[]): void {
+		const previousNavigation = this.#pendingNavigation ?? this.#settingsList?.navigationSnapshot();
+		this.#configLoaded = runtimePlugin !== undefined;
 		this.clear();
 
 		const plugin = this.plugin;
@@ -726,12 +767,31 @@ export class MarketplacePluginDetailComponent extends OverlayPanel {
 			},
 			onCancel: this.callbacks.onBack,
 		});
+		this.#settingsList.settingsList.onNavigationVisit = (page, previousSnapshot) => this.onNavigationVisit?.(page, previousSnapshot);
+		if (previousNavigation !== undefined) {
+			this.#settingsList.restoreNavigation(previousNavigation);
+			this.#pendingNavigation = this.#configLoaded ? undefined : previousNavigation;
+		}
 
 		this.addChild(this.#settingsList);
 	}
 
 	handleInput(data: string): void {
 		this.#settingsList.handleInput(data);
+	}
+
+	get filterFocused(): boolean { return this.#settingsList?.filterFocused ?? false; }
+	get blocksMenuHistory(): boolean { return this.#settingsList?.blocksMenuHistory ?? false; }
+	navigationSnapshot(): unknown { return this.#pendingNavigation ?? this.#settingsList?.navigationSnapshot(); }
+	restoreNavigation(snapshot: unknown): void {
+		this.#settingsList?.restoreNavigation(snapshot);
+		this.#pendingNavigation = this.#configLoaded ? undefined : snapshot;
+	}
+	navigateParent(): boolean { return this.#settingsList?.settingsList.navigateParent() ?? false; }
+	navigateChild(): void {
+		const list = this.#settingsList?.settingsList;
+		const item = list?.getSelectedItem();
+		if (item?.submenu) list?.openSubmenuFor(item.id);
 	}
 
 	/** This plugin's settings as a native page section, with its install facts as the lead. */
@@ -781,6 +841,11 @@ class ConfigFieldPanel extends OverlayPanel {
 	handleInput(data: string): void {
 		this.#field.handleInput(data);
 	}
+
+	get filterFocused(): boolean { return this.#field.filterFocused; }
+	get blocksMenuHistory(): boolean { return this.#field.blocksMenuHistory; }
+	navigationSnapshot(): unknown { return this.#field.navigationSnapshot(); }
+	restoreNavigation(snapshot: unknown): void { this.#field.restoreNavigation(snapshot); }
 
 	pasteText(text: string): void {
 		this.#field.pasteText(text);
@@ -871,12 +936,15 @@ export class PluginSettingsComponent extends Container {
 	readonly #host: PluginSettingsHost;
 	#manager: PluginSettingsManager;
 	#viewComponent: (Component & InputHandler) | null = null;
-	// oxlint-disable-next-line no-unused-private-class-members -- state tracking for view management
 	#currentView: "list" | "npm-detail" | "marketplace-detail" = "list";
-	// oxlint-disable-next-line no-unused-private-class-members -- state tracking for view management
 	#currentPlugin: InstalledPlugin | null = null;
-	// oxlint-disable-next-line no-unused-private-class-members -- state tracking for view management
 	#currentMarketplacePlugin: InstalledPluginSummary | null = null;
+	#entries: readonly PluginListEntry[] = [];
+	#pendingNavigation: unknown;
+	#listNavigation: unknown;
+	#restoringNavigation = false;
+	readonly #keys = new MenuKeyReader();
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	constructor(
 		host: PluginSettingsHost,
@@ -889,10 +957,13 @@ export class PluginSettingsComponent extends Container {
 	}
 
 	async #showPluginList(): Promise<void> {
+		const changedPage = this.#currentView !== "list";
+		const previous = this.navigationSnapshot();
 		this.#currentView = "list";
 		this.#currentPlugin = null;
 		this.#currentMarketplacePlugin = null;
 		this.clear();
+		this.#viewComponent = null;
 
 		// Surface registry failures without taking the whole tab down — either
 		// registry can fail to load (corrupt JSON, missing project root) and the
@@ -921,14 +992,21 @@ export class PluginSettingsComponent extends Container {
 			...npmPlugins.map((plugin): PluginListEntry => ({ kind: "npm", plugin })),
 			...marketplacePlugins.map((plugin): PluginListEntry => ({ kind: "marketplace", plugin })),
 		];
+		this.#entries = entries;
 
 		this.#viewComponent = new PluginListComponent(entries, {
 			onNpmSelect: plugin => this.#showPluginDetail(plugin),
 			onMarketplaceSelect: plugin => this.#showMarketplaceDetail(plugin),
 			onCancel: () => this.callbacks.onClose(),
 		});
+		if (isMenuHistoryParticipant(this.#viewComponent)) this.#viewComponent.restoreNavigation(this.#listNavigation);
 
 		this.addChild(this.#viewComponent);
+		if (this.#pendingNavigation !== undefined) {
+			const pending = this.#pendingNavigation;
+			this.#pendingNavigation = undefined;
+			this.restoreNavigation(pending);
+		} else if (changedPage && !this.#restoringNavigation) this.onNavigationVisit?.("", previous);
 
 		// The list mounts after the first frame (npm + marketplace listing is
 		// async and this method runs fire-and-forget), so ask for a repaint —
@@ -963,6 +1041,8 @@ export class PluginSettingsComponent extends Container {
 	}
 
 	#showPluginDetail(plugin: InstalledPlugin): void {
+		const previous = this.navigationSnapshot();
+		if (this.#currentView === "list" && isMenuHistoryParticipant(this.#viewComponent)) this.#listNavigation = this.#viewComponent.navigationSnapshot();
 		this.#currentView = "npm-detail";
 		this.#currentPlugin = plugin;
 		this.#currentMarketplacePlugin = null;
@@ -992,9 +1072,13 @@ export class PluginSettingsComponent extends Container {
 		});
 
 		this.addChild(this.#viewComponent);
+		this.#wireNavigation();
+		if (!this.#restoringNavigation) this.onNavigationVisit?.(`npm:${plugin.name}`, previous);
 	}
 
 	#showMarketplaceDetail(plugin: InstalledPluginSummary): void {
+		const previous = this.navigationSnapshot();
+		if (this.#currentView === "list" && isMenuHistoryParticipant(this.#viewComponent)) this.#listNavigation = this.#viewComponent.navigationSnapshot();
 		this.#currentView = "marketplace-detail";
 		this.#currentPlugin = null;
 		this.#currentMarketplacePlugin = plugin;
@@ -1025,9 +1109,33 @@ export class PluginSettingsComponent extends Container {
 		});
 
 		this.addChild(this.#viewComponent);
+		this.#wireNavigation();
+		if (!this.#restoringNavigation) this.onNavigationVisit?.(`marketplace:${plugin.id}:${plugin.scope}`, previous);
 	}
 
 	handleInput(data: string): void {
+		const view = this.#viewComponent;
+		const textFocused = view instanceof PluginListComponent || view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent
+			? view.filterFocused : false;
+		if (!textFocused) {
+			const action = this.#keys.read(data);
+			if (action !== undefined && action !== "pending") {
+				if (action.kind === "cancel") {
+					if (this.#currentView === "list") this.callbacks.onClose();
+					else if (!((view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent) && view.navigateParent())) void this.#showPluginList();
+					return;
+				}
+				if (action.kind === "horizontal" && action.delta === -1 && this.#currentView !== "list") {
+					if ((view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent) && view.navigateParent()) return;
+					void this.#showPluginList();
+					return;
+				}
+				if (action.kind === "horizontal" && action.delta === 1 && (view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent)) {
+					view.navigateChild();
+					return;
+				}
+			}
+		}
 		if (!this.#viewComponent) {
 			// The list view mounts asynchronously (npm + marketplace listing).
 			// Until it does — or if listing rejected and no view ever mounted —
@@ -1039,5 +1147,55 @@ export class PluginSettingsComponent extends Container {
 			return;
 		}
 		this.#viewComponent.handleInput(data);
+	}
+
+	get filterFocused(): boolean {
+		const view = this.#viewComponent;
+		return view instanceof PluginListComponent || view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent
+			? view.filterFocused : false;
+	}
+
+	get blocksMenuHistory(): boolean {
+		return isMenuHistoryParticipant(this.#viewComponent) && this.#viewComponent.blocksMenuHistory === true;
+	}
+
+	navigationSnapshot(): unknown {
+		return {
+			view: this.#currentView,
+			plugin: this.#currentPlugin?.name,
+			marketplace: this.#currentMarketplacePlugin ? { id: this.#currentMarketplacePlugin.id, scope: this.#currentMarketplacePlugin.scope } : undefined,
+			list: this.#listNavigation,
+			content: isMenuHistoryParticipant(this.#viewComponent) ? this.#viewComponent.navigationSnapshot() : undefined,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		if (!this.#viewComponent) { this.#pendingNavigation = snapshot; return; }
+		const state = snapshot as { view?: string; plugin?: string; marketplace?: { id: string; scope: string }; content?: unknown; list?: unknown };
+		this.#listNavigation = state.list;
+		this.#restoringNavigation = true;
+		try {
+			if (state.view === "npm-detail") {
+				const entry = this.#entries.find(entry => entry.kind === "npm" && entry.plugin.name === state.plugin);
+				if (entry?.kind === "npm") this.#showPluginDetail(entry.plugin);
+			} else if (state.view === "marketplace-detail") {
+				const entry = this.#entries.find(entry => entry.kind === "marketplace" && entry.plugin.id === state.marketplace?.id && entry.plugin.scope === state.marketplace.scope);
+				if (entry?.kind === "marketplace") this.#showMarketplaceDetail(entry.plugin);
+			} else if (this.#currentView !== "list") {
+				this.#pendingNavigation = snapshot;
+				void this.#showPluginList();
+				return;
+			}
+			if (isMenuHistoryParticipant(this.#viewComponent)) this.#viewComponent.restoreNavigation(state.content);
+		} finally { this.#restoringNavigation = false; }
+	}
+
+	#wireNavigation(): void {
+		if (!isMenuHistoryParticipant(this.#viewComponent)) return;
+		this.#viewComponent.onNavigationVisit = (page, previousContent) => {
+			const previous = { ...(this.navigationSnapshot() as object), content: previousContent };
+			if (!this.#restoringNavigation) this.onNavigationVisit?.(`${this.#currentView}:${page}`, previous);
+		};
 	}
 }

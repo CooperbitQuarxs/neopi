@@ -1,9 +1,7 @@
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
-import { Input } from "./input";
-import { getMenuWindow, MenuSelection } from "./menu-selection";
+import { MenuSelection } from "./menu-selection";
+import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport } from "./menu-navigation";
 import { getKeybindings } from "../keybindings";
-import { extractPrintableText, matchesKey } from "../keys";
-import { pickerNavigationKey } from "../keybinding-matchers";
 import { type MouseRoutable, routeSelectListMouse, type SgrMouseEvent } from "../mouse";
 import { col, node, span } from "../native/describe";
 import { sameItems, sameProps } from "../native/memo";
@@ -104,7 +102,7 @@ export interface SelectListLayoutOptions {
 	minPrimaryColumnWidth?: number;
 	maxPrimaryColumnWidth?: number;
 	truncatePrimary?: (context: SelectListTruncatePrimaryContext) => string;
-	/** Enable type-to-filter search when the item count exceeds maxVisible. Defaults to true. */
+	/** Allow `/` to focus the filter when the item count exceeds maxVisible. Defaults to true. */
 	overflowSearch?: boolean;
 	/** Search activation policy. `overflowSearch` remains authoritative when this is omitted. */
 	search?: "overflow" | "always" | "never";
@@ -135,6 +133,15 @@ export interface SelectListLayoutOptions {
 	 * ellipsized. Only meaningful with `wrapDescription`.
 	 */
 	maxDescriptionRows?: number;
+}
+
+/** What {@link SelectList.navigationState} captures for menu history and drafts. */
+export interface SelectListNavigationState {
+	selectedValue: string | undefined;
+	filter: string;
+	viewportTop: number | undefined;
+	filterFocused?: boolean;
+	filterCursor?: number;
 }
 
 type SelectItemLayout =
@@ -177,9 +184,10 @@ export class SelectList implements Component, MouseRoutable {
 	#nativeRoot?: { list: NativeNode; status: string; node: NativeNode };
 	/** Typed text marked at the start of native item labels (an autocomplete popup's query). */
 	#nativeMark: string | undefined;
-	/** The type-to-filter field; its value is pushed into the selection's query. */
-	readonly #search = new Input();
-	#filterEditing = false;
+	/** The filter field; its value is pushed into the selection's query. Focused only through `/`. */
+	readonly #search = new MenuSearchField();
+	readonly #keys = new MenuKeyReader();
+	readonly #viewport = new MenuViewport();
 
 	onSelect?: (item: SelectItem) => void;
 	onCancel?: () => void;
@@ -199,7 +207,6 @@ export class SelectList implements Component, MouseRoutable {
 			requiresConfirmation: item => item.confirmation !== undefined,
 			filter: layout.filterItems,
 		});
-		this.#search.prompt = "";
 	}
 	/** Return item, selection, and filter state for debug inspection. */
 	debugState(): Record<string, unknown> {
@@ -213,7 +220,56 @@ export class SelectList implements Component, MouseRoutable {
 			filterText: this.#selection.query,
 			pendingItemId: this.#selection.pendingKey ?? null,
 			maxVisible: this.#maxVisible,
+			filterFocused: this.#search.focused,
+			viewportTop: this.#viewport.top ?? null,
 		};
+	}
+
+	/** Hosts route focused filter input before their own printable shortcuts. */
+	get filterFocused(): boolean {
+		return this.#search.focused;
+	}
+
+	/** Selection, filter, and scroll position, for menu history and drafts to restore. */
+	navigationState(): SelectListNavigationState {
+		return {
+			selectedValue: this.#selection.selectedKey,
+			filter: this.#selection.query,
+			viewportTop: this.#viewport.top,
+			filterFocused: this.#search.focused,
+			filterCursor: this.#search.cursor,
+		};
+	}
+
+	/** Reapply selection, field focus/caret, and viewport without activating a row. */
+	restoreNavigationState(state: SelectListNavigationState): void {
+		this.#search.focused = state.filterFocused === true;
+		this.#keys.reset();
+		this.#search.setValue(state.filter);
+		if (state.filterCursor !== undefined) this.#search.input.setCursor(state.filterCursor);
+		this.#setFilter(this.#search.value, false);
+		if (state.selectedValue !== undefined) this.#selection.setSelectedKey(state.selectedValue);
+		this.#viewport.setTop(state.viewportTop);
+	}
+
+	navigationSnapshot(): SelectListNavigationState {
+		return this.navigationState();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as Partial<SelectListNavigationState>;
+		if (typeof state.filter !== "string") return;
+		if (state.selectedValue !== undefined && typeof state.selectedValue !== "string") return;
+		if (state.viewportTop !== undefined && (typeof state.viewportTop !== "number" || !Number.isFinite(state.viewportTop)))
+			return;
+		this.restoreNavigationState({
+			filter: state.filter,
+			selectedValue: state.selectedValue,
+			viewportTop: state.viewportTop,
+			filterFocused: state.filterFocused === true,
+			filterCursor: typeof state.filterCursor === "number" ? state.filterCursor : undefined,
+		});
 	}
 
 	/** Refit the visible row budget (hosts clamp the list to available height). */
@@ -224,21 +280,24 @@ export class SelectList implements Component, MouseRoutable {
 	/** Replace the filter text (caret to end) and refilter. */
 	setFilter(filter: string): void {
 		this.#search.setValue(filter);
-		this.#setFilter(this.#search.getValue(), true);
+		this.#setFilter(this.#search.value, true);
 	}
 
 	/** Replace controlled items while retaining the selected value when possible. */
 	setItems(items: readonly SelectItem[]): void {
-		if (this.#selection.setItems(items)) this.#notifySelectionChange();
+		if (this.#selection.setItems(items)) {
+			this.#viewport.reveal();
+			this.#notifySelectionChange();
+		}
 	}
 
 	setSelectedIndex(index: number): void {
-		this.#selection.setSelectedIndex(index);
+		if (this.#selection.setSelectedIndex(index)) this.#viewport.reveal();
 	}
 
 	/** Select a visible item by its stable value. */
 	setSelectedValue(value: string): void {
-		this.#selection.setSelectedKey(value);
+		if (this.#selection.setSelectedKey(value)) this.#viewport.reveal();
 	}
 
 	getFilter(): string {
@@ -261,7 +320,7 @@ export class SelectList implements Component, MouseRoutable {
 			selected: this.#selection.selectedKey ?? null,
 			pending: this.#selection.pendingKey ?? null,
 			query: this.#selection.query,
-			cursor: this.#search.getCursor(),
+			cursor: this.#search.cursor,
 		};
 	}
 
@@ -277,7 +336,10 @@ export class SelectList implements Component, MouseRoutable {
 
 	/** Move the selection one step for a wheel notch. */
 	handleWheel(delta: -1 | 1): void {
-		if (this.#selection.move(delta)) this.#notifySelectionChange();
+		if (this.#selection.move(delta)) {
+			this.#viewport.reveal();
+			this.#notifySelectionChange();
+		}
 	}
 
 	/** Mouse click: select the item under the pointer and request activation. */
@@ -432,14 +494,13 @@ export class SelectList implements Component, MouseRoutable {
 						: 1;
 		}
 
-		const window = getMenuWindow(rowCounts, this.#selection.selectedIndex, visualBudget);
+		const window = this.#viewport.layout(rowCounts, this.#selection.selectedIndex, visualBudget);
 		const overflow = window.totalRows > visualBudget;
 		showSearchStatus = this.#shouldRenderSearchStatus();
 		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
 
-		// Pick a window centered on the selected item that fits in visualBudget
-		// rows. Falls through to the original item-count window when every row
-		// count is 1.
+		// The viewport keeps its own top: motions reveal the selection with the
+		// least scrolling, and Ctrl-e/Ctrl-y move the view without moving it.
 		const { startIndex, endIndex, rowOffset } = window;
 
 		// Render visible items. Cap rows at the budget so a single item that
@@ -489,50 +550,64 @@ export class SelectList implements Component, MouseRoutable {
 	}
 
 	handleInput(rawData: string): void {
-		const kb = getKeybindings();
-		if (this.#filterEditing) {
-			if (kb.matches(rawData, "tui.select.cancel")) {
-				this.#filterEditing = false;
+		if (this.#search.focused) {
+			this.#handleFilterInput(rawData);
+			return;
+		}
+		const action = this.#keys.read(rawData);
+		if (action === undefined || action === "pending") return;
+		switch (action.kind) {
+			case "search":
+				if (this.#canEditSearch()) this.#search.focused = true;
 				return;
-			}
-			if (this.#handleSearchInput(rawData)) return;
-			if (extractPrintableText(rawData) !== undefined) return;
-		} else {
-			if (this.#canEditSearch() && matchesKey(rawData, "i")) {
-				this.#filterEditing = true;
-				return;
-			}
-			if (kb.matches(rawData, "tui.select.cancel")) {
+			case "cancel":
 				if (!this.#selection.cancelConfirmation()) this.onCancel?.();
 				return;
-			}
-			if (
-				pickerNavigationKey(rawData) === rawData &&
-				(extractPrintableText(rawData) !== undefined || matchesKey(rawData, "backspace"))
-			)
+			case "confirm":
+			case "toggle":
+				// A plain list has no checkbox, so Space is the soft Enter.
+				this.#activateSelected();
 				return;
+			case "horizontal":
+			case "context":
+				// One pane, no tabs: hosts with either handle these before the list.
+				return;
+			default: {
+				const result = applyMenuMotion(action, this.#selection, this.#viewport, {
+					wrap: this.layout.wrapNavigation !== false,
+				});
+				if (result.selectionChanged) this.#notifySelectionChange();
+			}
 		}
-		const keyData = this.#filterEditing ? rawData : pickerNavigationKey(rawData);
-		const wrap = this.layout.wrapNavigation !== false;
-		if (this.#selection.visibleItems.length === 0) return;
+	}
+
+	/**
+	 * Keys while the filter holds focus: text and its editing keys go to the
+	 * field, Esc hands focus back to the list (keeping the query), and the
+	 * non-text keys (arrows, PageUp/PageDown, Enter) still drive the list.
+	 */
+	#handleFilterInput(rawData: string): void {
+		const before = this.#search.value;
+		const result = this.#search.handleInput(rawData);
+		if (result !== "pass") {
+			if (this.#search.value !== before) this.#setFilter(this.#search.value, true);
+			return;
+		}
+		const kb = getKeybindings();
+		if (kb.matches(rawData, "tui.select.confirm") || rawData === "\n") {
+			this.#activateSelected();
+			return;
+		}
 		let selectionChanged = false;
-		if (kb.matches(keyData, "tui.select.up")) {
-			selectionChanged = this.#selection.move(-1, wrap);
-		} else if (kb.matches(keyData, "tui.select.down")) {
-			selectionChanged = this.#selection.move(1, wrap);
-		} else if (kb.matches(keyData, "tui.select.pageUp")) {
-			selectionChanged = this.#selection.move(-this.#maxVisible);
-		} else if (kb.matches(keyData, "tui.select.pageDown")) {
-			selectionChanged = this.#selection.move(this.#maxVisible);
-		} else if (matchesKey(keyData, "home")) {
-			selectionChanged = this.#selection.moveToBoundary("first");
-		} else if (matchesKey(keyData, "end")) {
-			selectionChanged = this.#selection.moveToBoundary("last");
-		} else if (kb.matches(keyData, "tui.select.confirm") || keyData === "\n") {
-			if (this.#selection.visibleItems.length > 0) this.#activateSelected();
-		} else {
-			this.#handleSearchInput(keyData);
-		}
+		const wrap = this.layout.wrapNavigation !== false;
+		if (kb.matches(rawData, "tui.select.up")) selectionChanged = this.#selection.move(-1, wrap);
+		else if (kb.matches(rawData, "tui.select.down")) selectionChanged = this.#selection.move(1, wrap);
+		else if (kb.matches(rawData, "tui.select.pageUp"))
+			selectionChanged = this.#selection.move(-this.#viewport.visibleItems);
+		else if (kb.matches(rawData, "tui.select.pageDown"))
+			selectionChanged = this.#selection.move(this.#viewport.visibleItems);
+		else return;
+		this.#viewport.reveal();
 		if (selectionChanged) this.#notifySelectionChange();
 	}
 
@@ -732,18 +807,9 @@ export class SelectList implements Component, MouseRoutable {
 		if (
 			this.layout.statusText === undefined &&
 			this.#selection.pendingKey === undefined &&
-			this.#selection.query.length > 0
+			(this.#search.focused || this.#selection.query.length > 0)
 		) {
-			const label = truncateToWidth("  Search: ", avail, Ellipsis.Omit);
-			const fieldWidth = avail - visibleWidth(label);
-			const styled = this.theme.scrollInfo(label);
-			if (fieldWidth <= 0) return styled;
-			return (
-				styled +
-				(this.#filterEditing
-					? this.#search.render(fieldWidth)[0].trimEnd()
-					: truncateToWidth(this.#selection.query, fieldWidth))
-			);
+			return `  ${this.#search.render(avail, { muted: this.theme.scrollInfo })}`;
 		}
 		return this.theme.scrollInfo(truncateToWidth(this.#statusText(), avail, Ellipsis.Omit));
 	}
@@ -765,17 +831,18 @@ export class SelectList implements Component, MouseRoutable {
 			? (custom ?? "")
 			: (pendingItem?.confirmation ??
 					(query
-						? `  Search: ${query}${this.#filterEditing ? " (INSERT · Esc normal)" : ""}`
+						? `  Search: ${query}${this.#search.focused ? " · Esc back to list" : " · / edit"}`
 						: this.#canEditSearch()
-							? this.#filterEditing
-								? "  INSERT · Esc normal"
-								: "  i filter · hjkl navigate"
+							? this.#search.focused
+								? "  Search: type to narrow · Esc back to list"
+								: "  / search"
 							: ""));
 	}
 
 	#shouldRenderSearchStatus(): boolean {
 		const policy = this.layout.search ?? (this.layout.overflowSearch === false ? "never" : "overflow");
 		return (
+			this.#search.focused ||
 			this.#selection.pendingKey !== undefined ||
 			this.layout.statusText !== undefined ||
 			(policy !== "never" && this.#selection.query.length > 0) ||
@@ -786,22 +853,6 @@ export class SelectList implements Component, MouseRoutable {
 	#canEditSearch(): boolean {
 		const policy = this.layout.search ?? (this.layout.overflowSearch === false ? "never" : "overflow");
 		return policy === "always" || (policy === "overflow" && this.#selection.items.length > this.#maxVisible);
-	}
-
-	#handleSearchInput(keyData: string): boolean {
-		if (!this.#canEditSearch()) return false;
-
-		const before = this.#search.getValue();
-		if (before.length === 0) {
-			if (getKeybindings().matches(keyData, "tui.editor.deleteCharBackward")) return false;
-			const printableText = extractPrintableText(keyData);
-			if (printableText !== undefined && printableText.trim().length === 0) return false;
-		}
-
-		const consumed = this.#search.handleInput(keyData);
-		const after = this.#search.getValue();
-		if (after !== before) this.#setFilter(after, true);
-		return consumed;
 	}
 
 	#setFilter(filter: string, notify: boolean): void {
@@ -816,6 +867,7 @@ export class SelectList implements Component, MouseRoutable {
 		} else {
 			changed = this.#selection.setQuery(filter);
 		}
+		this.#viewport.reveal();
 		if (notify && changed) this.#notifySelectionChange();
 	}
 

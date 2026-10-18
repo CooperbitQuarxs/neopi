@@ -269,6 +269,7 @@ export class InputController {
 	#btwCopyListenerInstalled = false;
 	#globalEditorActionsListenerInstalled = false;
 	#expandToolsListenerInstalled = false;
+	#menuHistoryListenerInstalled = false;
 	#inlineMouseListenerInstalled = false;
 
 	/** Click-candidate id the hover band currently tracks; repaint only on change. */
@@ -408,13 +409,6 @@ export class InputController {
 				}
 				if (this.ctx.keybindings.matches(data, "app.tools.toggleVisibility")) {
 					if (this.ctx.ui.hasOverlay()) return undefined;
-					const focused = this.ctx.ui.getFocused();
-					if (
-						focused instanceof TreeSelectorComponent &&
-						(matchesKey(data, "shift+ctrl+o") || matchesKey(data, "ctrl+shift+o"))
-					) {
-						return undefined;
-					}
 					this.toggleToolActivityVisibility();
 					return { consume: true };
 				}
@@ -433,18 +427,14 @@ export class InputController {
 		}
 		if (!this.#expandToolsListenerInstalled) {
 			this.#expandToolsListenerInstalled = true;
-			// `app.tools.expand` (Ctrl+O) toggles the transcript's tool-output
+			// `app.tools.expand` (Alt+E by default) toggles the transcript's tool-output
 			// preview. It must fire regardless of focus so a truncated edit stays
 			// expandable while an approval prompt / select dialog holds keyboard
-			// focus (#7837). Defers when the main transcript is not the active
-			// surface (a fullscreen/anchored overlay — agent hub, transcript
-			// viewer, log viewer, model picker) or when the focused component
-			// rebinds Ctrl+O for its own use (the tree selector's filter cycle).
+			// focus (#7837). Defers while a fullscreen or anchored overlay owns
+			// its own transcript/tool expansion.
 			this.ctx.ui.addInputListener(data => {
 				if (!this.ctx.keybindings.matches(data, "app.tools.expand")) return undefined;
 				if (this.ctx.ui.hasOverlay()) return undefined;
-				if (this.ctx.ui.getFocused() instanceof TreeSelectorComponent && matchesKey(data, "ctrl+o"))
-					return undefined;
 				const focused = this.ctx.ui.getFocused();
 				// A truncated ask question lives in the editor slot, not chat
 				// transcript, so expand it in-place instead of (or before)
@@ -453,6 +443,23 @@ export class InputController {
 					return { consume: true };
 				}
 				this.toggleToolOutputExpansion();
+				return { consume: true };
+			});
+		}
+		if (!this.#menuHistoryListenerInstalled) {
+			this.#menuHistoryListenerInstalled = true;
+			// Ctrl-O / Ctrl-I (Alt-O where the terminal sends Tab for Ctrl-I) walk
+			// the menu history from any surface, menus and conversation alike, so
+			// they run before the focused component. The keys are consumed even at
+			// either end of the timeline: they never fall through to a component.
+			this.ctx.ui.addInputListener(data => {
+				const direction = this.ctx.keybindings.matches(data, "app.navigation.back")
+					? -1
+					: this.ctx.keybindings.matches(data, "app.navigation.forward")
+						? 1
+						: 0;
+				if (direction === 0) return undefined;
+				this.ctx.navigateMenuHistory(direction);
 				return { consume: true };
 			});
 		}

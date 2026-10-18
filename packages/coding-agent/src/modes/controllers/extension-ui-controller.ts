@@ -1220,6 +1220,7 @@ export class ExtensionUiController {
 		let editorReplaced = false;
 
 		const cleanup = () => {
+			if (component) this.ctx.hookCustomComponents.delete(component);
 			component?.dispose?.();
 			overlayHandle?.hide();
 			overlayHandle = undefined;
@@ -1258,6 +1259,7 @@ export class ExtensionUiController {
 					return;
 				}
 				component = c;
+				this.ctx.hookCustomComponents.add(component);
 				if (options?.overlay) {
 					const overlayOptions =
 						typeof options.overlayOptions === "function" ? options.overlayOptions() : options.overlayOptions;

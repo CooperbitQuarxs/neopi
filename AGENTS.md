@@ -276,6 +276,26 @@ logger.debug("LSP fallback triggered", { reason });
 
 Logs go to `~/.omp/logs/npi.YYYY-MM-DD.log` with automatic rotation. Standalone CLI commands that exit without entering the TUI MAY use `console.*` or process streams for intentional user-facing output. Keep structured stdout clean. This exception is semantic, not filename-based; shared code must use `logger` or an explicit output sink.
 
+## Menu Navigation
+
+Every menu, picker, overlay, and list surface opens in normal navigation. Keys resolve through `MenuKeyReader` and the viewport through `MenuViewport` (`packages/tui/src/components/menu-navigation.ts`); `SelectList` is the reference consumer. Arrows, PageUp/PageDown, Home/End, Enter, and Esc keep working beside the Vim keys.
+
+| Keys | Meaning in normal navigation |
+| --- | --- |
+| `j`/`k` | Next/previous row. |
+| `h`/`l` | Context-dependent: switch pane, collapse/expand, reorder, or adjust a value (effort). Pick one meaning per surface and show it in the hint line. |
+| `Ctrl-d`/`Ctrl-u` | Half page down/up. PageDown/PageUp: full page. |
+| `gg`/`G` | First/last row. |
+| `Ctrl-e`/`Ctrl-y` | Scroll the view one line; the selection stays where it is. |
+| `Space` | Toggle a checkbox, or soft-activate (preview without closing). |
+| `Tab`/`Shift-Tab` | Next/previous context: tab, section, or focus region. |
+| `/` | Focus the surface's filter or search field. |
+| `Ctrl-o`/`Ctrl-i` | Back/forward through the menu history (`Alt-o` is the forward fallback where the terminal sends Tab for `Ctrl-i`). |
+
+Text input is the exception. While a filter, search, rename, or form field holds focus, printable keys (hjkl, `g`, `/`, Space) type literally and the field keeps its editing keys (`Ctrl-e`/`Ctrl-u`/`Ctrl-y`); Esc returns focus to the list without closing the surface. Filters take focus only through `/` (or a surface-specific field key shown in the hints), never through an `i`/insert mode, and Esc from focused text is not called Vim normal mode. A true multi-line editor MAY offer full modal editing; the composer keeps its ordinary bindings and is out of scope.
+
+Before binding a single printable key on a menu surface, check the table: a surface action that collides with a navigation key moves to another key rather than shadowing navigation. Leave a key unbound where its meaning would be nonsensical for that surface instead of forcing parity, and record the decision in the issue's menu inventory. Opening a single-instance menu goes through `SelectorController`'s menu registry so the menu history can return to it with its state.
+
 ## TUI Sanitization
 
 All text displayed in tool renderers must be sanitized. Raw content (file contents, error messages, tool output) breaks terminal rendering: tabs → visual holes, long lines → overflow, paths → leak home directory.

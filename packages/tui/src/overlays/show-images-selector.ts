@@ -21,7 +21,7 @@ export class ShowImagesSelectorComponent extends OverlayPanel {
 		];
 
 		// Create selector
-		this.#selectList = new SelectList(items, 5, getSelectListTheme());
+		this.#selectList = new SelectList(items, 5, getSelectListTheme(), { search: "always" });
 
 		// Preselect current value
 		this.#selectList.setSelectedIndex(currentValue ? 0 : 1);
@@ -54,6 +54,14 @@ export class ShowImagesSelectorComponent extends OverlayPanel {
 
 	getSelectList(): SelectList {
 		return this.#selectList;
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationState();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		this.#selectList.restoreNavigation(snapshot);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {

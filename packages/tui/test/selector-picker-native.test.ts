@@ -237,6 +237,7 @@ describe("oauth selector picker", () => {
 		expect(row?.detail).toBe("Signed in · login");
 		expect(first.items?.find(item => item.id !== signedIn)?.dot).toBe("muted");
 		expect(first.query).toBe("");
+		selector.handleInput("/");
 		selector.handleInput(providers[1]!.name.slice(0, 3));
 		const typed = sheet(selector.describe(pickerCx)).props;
 		expect(typed.items).toBe(first.items);
@@ -255,5 +256,36 @@ describe("oauth selector picker", () => {
 		selector.handleNativeEvent(at("activate", target));
 		selector.handleNativeEvent(act("close"));
 		expect(log).toEqual([target, "cancel"]);
+	});
+
+	it("moves and scrolls independently, restores search, and never activates with Space", () => {
+		const picked: string[] = [];
+		let closed = false;
+		const selector = new OAuthSelectorComponent(
+			"login",
+			auth,
+			id => picked.push(id),
+			() => { closed = true; },
+		);
+		selector.handleInput("G");
+		const last = sheet(selector.describe(pickerCx)).props.selected;
+		selector.handleInput("g");
+		selector.handleInput("g");
+		const first = sheet(selector.describe(pickerCx)).props.selected;
+		expect(first).not.toBe(last);
+		selector.handleInput("\x05");
+		expect(sheet(selector.describe(pickerCx)).props.selected).toBe(first);
+		selector.handleInput(" ");
+		expect(picked).toEqual([]);
+		selector.handleInput("/");
+		selector.handleInput("hjkl /");
+		selector.handleInput("\x1b");
+		expect(closed).toBe(false);
+		const snapshot = selector.navigationSnapshot();
+		const restored = new OAuthSelectorComponent("login", auth, () => {}, () => {});
+		restored.restoreNavigation(snapshot);
+		expect(restored.navigationSnapshot()).toEqual(snapshot);
+		selector.handleInput("\x1b");
+		expect(closed).toBe(true);
 	});
 });

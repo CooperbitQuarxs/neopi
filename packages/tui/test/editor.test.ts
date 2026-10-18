@@ -23,6 +23,22 @@ describe("Editor component", () => {
 		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
 	});
 
+	it("restores a menu-hosted draft caret and viewport without submitting", () => {
+		const editor = new Editor(defaultEditorTheme);
+		let submitted = false;
+		editor.onSubmit = () => { submitted = true; };
+		editor.setState({ text: "first\nsecond\nthird\nfourth", cursor: { line: 2, col: 2 }, scrollTop: 1 });
+		const saved = editor.getState();
+		editor.setText("different");
+		editor.setState(saved);
+		expect(editor.getState()).toEqual(saved);
+		editor.handleInput("X");
+		expect(editor.getText()).toBe("first\nsecond\nthXird\nfourth");
+		expect(submitted).toBe(false);
+		editor.setState({ text: "a👩‍💻z", cursor: { line: 0, col: 4 }, scrollTop: 0 });
+		expect(editor.getCursor()).toEqual({ line: 0, col: 1 });
+	});
+
 	describe("Word delete keybindings", () => {
 		it("honors a keybindings.yml remap of deleteWordBackward in the multi-line editor", () => {
 			setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.editor.deleteWordBackward": "alt+g" }));

@@ -171,7 +171,7 @@ class ThemeSceneController implements SetupSceneController {
 
 	handleInput(data: string): void {
 		const quickIndex = data >= "1" && data <= "9" ? Number(data) - 1 : -1;
-		if (quickIndex >= 0) {
+		if (!this.#selectList.filterFocused && quickIndex >= 0) {
 			this.#selectList.setSelectedIndex(quickIndex);
 			this.#previewByIndex(quickIndex);
 			return;

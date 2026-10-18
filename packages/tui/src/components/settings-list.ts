@@ -1,8 +1,7 @@
 import { formatKeyHint } from "../app-keybindings";
-import { editorKey, editorKeys } from "../chrome/keybinding-hints";
+import { editorKey } from "../chrome/keybinding-hints";
 import { fuzzyFilter } from "../fuzzy";
 import { getKeybindings } from "../keybindings";
-import { extractPrintableText } from "../keys";
 import type { MouseRoutable, SgrMouseEvent } from "../mouse";
 import type { TspPrefsControl, TspPrefsRow, TspPrefsSection, TspProps, TspSpan } from "@oh-my-pi/pi-wire";
 import { col, node, span } from "../native/describe";
@@ -14,6 +13,7 @@ import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth, wrapText
 import { ScrollView } from "./scroll-view";
 import { FormField, type FormFieldOptions, type FormFieldTheme, SelectFormField, TextFormField } from "./form";
 import { MenuSelection } from "./menu-selection";
+import { applyMenuMotion, isMenuHistoryParticipant, MenuKeyReader, MenuSearchField, MenuViewport } from "./menu-navigation";
 
 function sanitizeSingleLine(text: string): string {
 	return replaceTabs(text)
@@ -136,9 +136,8 @@ export interface SettingsListOptions {
 	 */
 	layout?: "auto" | "flat";
 	/**
-	 * When false, printable input is ignored (no internal type-to-filter) and
-	 * the search status line is never rendered. Use when a parent component
-	 * owns the query. Default true.
+	 * When false, the parent owns search. Otherwise `/` focuses the internal
+	 * field; ordinary printable keys never start filtering from the list.
 	 */
 	typeToSearch?: boolean;
 	/** Text shown when the list has no items at all. */
@@ -151,6 +150,17 @@ export interface SettingsListOptions {
 	hint?: string;
 	/** Fixed split-sidebar width (columns incl. indent+gap); default derives from section names. */
 	sidebarWidth?: number;
+}
+
+export interface SettingsListNavigationState {
+	selectedId: string | undefined;
+	filter: string;
+	filterFocused: boolean;
+	filterCursor: number;
+	sectionFocused: boolean;
+	viewportTop: number | undefined;
+	submenuId: string | null;
+	submenu: unknown;
 }
 
 /** Searchable text for a setting item: label, id, value, description, warning, and cycle values. */
@@ -171,6 +181,7 @@ export function getSettingItemFilterText(item: SettingItem): string {
 export class SettingsList implements Component {
 	#items: readonly SettingItem[] = [];
 	#filteredItems: readonly SettingItem[] = [];
+	#rowCounts: readonly number[] = [];
 	#selection: MenuSelection<SettingItem>;
 	#theme: SettingsListTheme;
 	#selectedIndex = 0;
@@ -181,6 +192,12 @@ export class SettingsList implements Component {
 	#filterQuery = "";
 	#sectionFocus = false;
 	#lastNotifiedSelectionId: string | undefined;
+	readonly #keys = new MenuKeyReader();
+	readonly #viewport = new MenuViewport();
+	readonly #search = new MenuSearchField();
+	#restoring = false;
+
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	/** Fired when the selected item changes (navigation, filtering, or setItems). */
 	onSelectionChange?: (item: SettingItem | undefined) => void;
@@ -235,12 +252,68 @@ export class SettingsList implements Component {
 			filterText: this.#filterQuery,
 			sectionFocused: this.#sectionFocus,
 			submenuOpen: this.#submenuComponent !== null,
+			filterFocused: this.#search.focused,
+			viewportTop: this.#viewport.top,
 		};
 	}
 
 	/** Expose the active submenu to the debug tree walker. */
 	get debugChildren(): readonly Component[] {
 		return this.#submenuComponent ? [this.#submenuComponent] : [];
+	}
+	/** Safe view and nested-editor state; persisted setting values remain host-owned. */
+	navigationSnapshot(): SettingsListNavigationState {
+		return {
+			selectedId: this.#selection.selectedKey,
+			filter: this.#filterQuery,
+			filterFocused: this.#search.focused,
+			filterCursor: this.#search.cursor,
+			sectionFocused: this.#sectionFocus,
+			viewportTop: this.#viewport.top,
+			submenuId: this.#submenuItemId,
+			submenu: isMenuHistoryParticipant(this.#submenuComponent)
+				? this.#submenuComponent.navigationSnapshot()
+				: undefined,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as {
+			selectedId?: string;
+			filter?: string;
+			filterFocused?: boolean;
+			filterCursor?: number;
+			sectionFocused?: boolean;
+			viewportTop?: number;
+			submenuId?: string;
+			submenu?: unknown;
+		};
+		this.#restoring = true;
+		try {
+			this.#submenuComponent = null;
+			this.#submenuItemId = null;
+			this.#keys.reset();
+			this.#setFilter(typeof state.filter === "string" ? state.filter : "");
+			if (typeof state.selectedId === "string") this.#selection.setSelectedKey(state.selectedId);
+			this.#syncSelectionState();
+			this.#sectionFocus = state.sectionFocused === true && this.hasSectionFocusTargets();
+			this.#search.restoreNavigation({
+				value: this.#filterQuery,
+				focused: state.filterFocused === true && this.#options.typeToSearch !== false,
+				cursor: state.filterCursor,
+			});
+			if (typeof state.submenuId === "string" && this.selectItem(state.submenuId)) {
+				this.#activateItem();
+				if (isMenuHistoryParticipant(this.#submenuComponent)) {
+					this.#submenuComponent.restoreNavigation(state.submenu);
+				}
+			}
+			this.#viewport.setTop(typeof state.viewportTop === "number" ? state.viewportTop : undefined);
+			this.#notifySelection();
+		} finally {
+			this.#restoring = false;
+		}
 	}
 
 	/** The currently selected item, or undefined when empty or on a heading. */
@@ -256,6 +329,7 @@ export class SettingsList implements Component {
 		this.#selection.setSelectedKey(id);
 		this.#sectionFocus = false;
 		this.#syncSelectionState();
+		this.#viewport.reveal();
 		this.#notifySelection();
 		return true;
 	}
@@ -283,6 +357,26 @@ export class SettingsList implements Component {
 	/** True while an item submenu owns input. */
 	hasOpenSubmenu(): boolean {
 		return this.#submenuComponent !== null;
+	}
+
+	/** Focused text gets first refusal before a host interprets tab or pane keys. */
+	get filterFocused(): boolean {
+		if (this.#submenuComponent instanceof FormField) return this.#submenuComponent.filterFocused;
+		if (this.#submenuComponent && "filterFocused" in this.#submenuComponent) {
+			return this.#submenuComponent.filterFocused === true;
+		}
+		return this.#search.focused;
+	}
+
+	get blocksMenuHistory(): boolean {
+		return isMenuHistoryParticipant(this.#submenuComponent) && this.#submenuComponent.blocksMenuHistory === true;
+	}
+
+	/** Leave a nested editor without submitting it; history retains its safe draft. */
+	navigateParent(): boolean {
+		if (!this.#submenuComponent) return false;
+		this.#closeSubmenu();
+		return true;
 	}
 
 	/** The open submenu and the row that opened it, if any. */
@@ -501,6 +595,8 @@ export class SettingsList implements Component {
 	#setFilter(filter: string): void {
 		if (filter.trim()) this.#sectionFocus = false;
 		this.#selection.setQuery(filter, false);
+		this.#search.setValue(filter);
+		this.#viewport.reveal();
 		this.#syncSelectionState();
 		this.#notifySelection();
 	}
@@ -509,6 +605,7 @@ export class SettingsList implements Component {
 	#moveSelection(delta: -1 | 1, wrap = true): void {
 		if (!this.#selection.move(delta, wrap)) return;
 		this.#syncSelectionState();
+		this.#viewport.reveal();
 		this.#notifySelection();
 	}
 
@@ -516,11 +613,15 @@ export class SettingsList implements Component {
 		this.#items = this.#selection.items;
 		this.#filteredItems = this.#selection.visibleItems;
 		this.#filterQuery = this.#selection.query;
+		if (this.#rowCounts.length !== this.#filteredItems.length) {
+			this.#rowCounts = this.#filteredItems.map(() => 1);
+		}
 		this.#selectedIndex = Math.max(0, this.#selection.selectedIndex);
 	}
 
 	#setSelectedIndex(index: number): void {
 		this.#selection.setSelectedIndex(index);
+		this.#viewport.reveal();
 		this.#syncSelectionState();
 	}
 
@@ -572,34 +673,26 @@ export class SettingsList implements Component {
 	}
 
 	#renderSearchStatus(width: number): string {
-		const query = sanitizeSingleLine(this.#filterQuery);
-		const statusText = query ? `  Search: ${query}` : "  Type to search";
-		return this.#theme.hint(truncateToWidth(statusText, width, Ellipsis.Omit));
+		return this.#search.render(width, { muted: this.#theme.hint });
 	}
 
 	#shouldRenderSearchStatus(): boolean {
 		if (this.#options.typeToSearch === false) return false;
-		return this.#items.length > this.#maxVisible || this.#filterQuery.length > 0;
+		return this.#search.focused || this.#items.length > this.#maxVisible || this.#filterQuery.length > 0;
 	}
 
 	#handleSearchInput(data: string): boolean {
-		if (this.#options.typeToSearch === false) return false;
-		if (this.#items.length === 0) return false;
-
-		const kb = getKeybindings();
-		if (kb.matches(data, "tui.editor.deleteCharBackward")) {
-			if (this.#filterQuery.length === 0) return false;
-			const chars = [...this.#filterQuery];
-			chars.pop();
-			this.#setFilter(chars.join(""));
-			return true;
+		const before = this.#search.value;
+		const result = this.#search.handleInput(data);
+		if (result === "exited") this.#keys.reset();
+		if (result === "pass") return false;
+		if (this.#search.value !== before) {
+			if (this.#search.value.trim()) this.#sectionFocus = false;
+			this.#selection.setQuery(this.#search.value, false);
+			this.#viewport.reveal();
+			this.#syncSelectionState();
+			this.#notifySelection();
 		}
-
-		const printableText = extractPrintableText(data);
-		if (printableText === undefined) return false;
-		if (this.#filterQuery.length === 0 && printableText.trim().length === 0) return false;
-
-		this.#setFilter(this.#filterQuery + printableText);
 		return true;
 	}
 
@@ -738,14 +831,8 @@ export class SettingsList implements Component {
 	}
 
 	#hintText(): string {
-		const jumpHint =
-			this.#sections().length >= 2
-				? `${editorKeys("tui.select.pageUp", "tui.select.pageDown")} to jump sections · `
-				: "";
-		return (
-			this.#options.hint ??
-			`${editorKey("tui.select.confirm")}/${formatKeyHint("space")} to change · ${jumpHint}Type to search · ${editorKey("tui.select.cancel")} to cancel`
-		);
+		return this.#options.hint ??
+			`${editorKey("tui.select.confirm")} edit · ${formatKeyHint("space")} cycle · j/k rows · Ctrl-u/d half page · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Tab sections · / search · ${editorKey("tui.select.cancel")} close`;
 	}
 
 	/** Warning glyph suffix for a row that carries a risk note, or "" when none applies. */
@@ -828,9 +915,8 @@ export class SettingsList implements Component {
 			lines.push(...splitLines);
 		} else {
 			const viewportHeight = Math.min(this.#maxVisible, this.#filteredItems.length);
-			const startIndex = Math.max(
-				0,
-				Math.min(this.#selectedIndex - Math.floor(viewportHeight / 2), this.#filteredItems.length - viewportHeight),
+			const { startIndex } = this.#viewport.layout(
+				this.#rowCounts, this.#selectedIndex, viewportHeight,
 			);
 			const labelWidths = this.#filteredItems
 				.filter(item => !item.heading)
@@ -946,9 +1032,8 @@ export class SettingsList implements Component {
 		// section's heading row belongs to its dim-exempt range.
 		const activeStart = active.name ? active.firstItemIndex - 1 : active.firstItemIndex;
 		const viewportHeight = Math.min(this.#maxVisible, this.#filteredItems.length);
-		const startRow = Math.max(
-			0,
-			Math.min(this.#selectedIndex - Math.floor(viewportHeight / 2), this.#filteredItems.length - viewportHeight),
+		const { startIndex: startRow } = this.#viewport.layout(
+			this.#rowCounts, this.#selectedIndex, viewportHeight,
 		);
 		// Label column width spans all items so the layout stays stable across sections.
 		const labelWidths = this.#filteredItems
@@ -999,56 +1084,61 @@ export class SettingsList implements Component {
 	}
 
 	handleInput(data: string): void {
-		// If submenu is active, delegate all input to it
-		// The submenu's onCancel (triggered by escape) will call done() which closes it
+		// Text fields and nested filters retain literal input and their first
+		// Escape. Escape from a nested menu returns to the settings list.
 		if (this.#submenuComponent) {
+			if (!this.filterFocused && getKeybindings().matches(data, "tui.select.cancel")) {
+				this.#closeSubmenu();
+				return;
+			}
 			this.#submenuComponent.handleInput?.(data);
 			return;
 		}
+		if (this.#viewport.top === undefined) this.#viewport.layout(this.#rowCounts, this.#selectedIndex, this.#maxVisible);
 
-		// Main list input handling
-		const kb = getKeybindings();
-		if (kb.matches(data, "tui.select.cancel")) {
-			if (this.#filterQuery.length > 0) {
-				this.clearSearch();
-				return;
+		if (this.#handleSearchInput(data)) return;
+		const action = this.#keys.read(data);
+		if (action === undefined || action === "pending") return;
+		if (action.kind === "search") {
+			if (this.#options.typeToSearch !== false) {
+				this.#search.focused = true;
 			}
-			if (this.#sectionFocus) {
-				this.#sectionFocus = false;
-				return;
-			}
+			return;
+		}
+		if (action.kind === "cancel") {
 			this.#onCancel();
 			return;
 		}
-
-		if (this.#handleSearchInput(data)) {
+		if (action.kind === "context") {
+			this.toggleSectionFocus();
 			return;
 		}
-
-		if (this.#filteredItems.length === 0) return;
-
-		if (kb.matches(data, "tui.select.up")) {
-			if (this.#sectionFocus) this.#jumpSection(-1);
-			else this.#moveSelection(-1);
-		} else if (kb.matches(data, "tui.select.down")) {
-			if (this.#sectionFocus) this.#jumpSection(1);
-			else this.#moveSelection(1);
-		} else if (kb.matches(data, "tui.select.pageDown")) {
-			this.#jumpSection(1);
-		} else if (kb.matches(data, "tui.select.pageUp")) {
-			this.#jumpSection(-1);
-		} else if (kb.matches(data, "tui.select.confirm") || data === " " || data === "\n") {
-			// Confirm on a focused heading drops into its first setting.
+		if (action.kind === "move" && this.#sectionFocus) {
+			this.#jumpSection(action.delta);
+			return;
+		}
+		const motion = applyMenuMotion(action, this.#selection, this.#viewport, { wrap: true });
+		if (motion.handled) {
+			if (motion.selectionChanged) {
+				this.#syncSelectionState();
+				this.#notifySelection();
+			}
+			return;
+		}
+		if (action.kind === "confirm" || action.kind === "toggle") {
 			if (this.#sectionFocus) this.#sectionFocus = false;
-			else this.#activateItem();
+			else if (action.kind === "confirm" || this.getSelectedItem()?.values?.length) {
+				this.#activateItem(action.kind === "confirm");
+			}
 		}
 	}
 
-	#activateItem(): void {
+	#activateItem(openSubmenu = true): void {
 		const item = this.#filteredItems[this.#selectedIndex];
 		if (!item || item.heading) return;
 
-		if (item.submenu) {
+		if (item.submenu && openSubmenu) {
+			const previousSnapshot = this.navigationSnapshot();
 			// Open submenu, passing current value so it can pre-select correctly
 			this.#submenuItemId = item.id;
 			this.#submenuComponent = item.submenu(item.currentValue, (selectedValue?: string) => {
@@ -1058,6 +1148,14 @@ export class SettingsList implements Component {
 				}
 				this.#closeSubmenu();
 			});
+			if (isMenuHistoryParticipant(this.#submenuComponent)) {
+				this.#submenuComponent.onNavigationVisit = (page, previousSubmenu) => {
+					if (this.#restoring) return;
+					const previous = { ...this.navigationSnapshot(), submenu: previousSubmenu };
+					this.onNavigationVisit?.(page ? `${item.id}:${page}` : item.id, previous);
+				};
+			}
+			if (!this.#restoring) this.onNavigationVisit?.(item.id, previousSnapshot);
 		} else if (item.values && item.values.length > 0) {
 			// Cycle through values
 			const currentIndex = item.values.indexOf(item.currentValue);
@@ -1069,6 +1167,7 @@ export class SettingsList implements Component {
 	}
 
 	#closeSubmenu(): void {
+		const previousSnapshot = this.navigationSnapshot();
 		this.#submenuComponent = null;
 		// Restore selection to the item that opened the submenu. Resolve by id:
 		// onChange handlers may have called setItems while the submenu was open,
@@ -1083,6 +1182,7 @@ export class SettingsList implements Component {
 			}
 			this.#notifySelection();
 		}
+		if (!this.#restoring) this.onNavigationVisit?.("", previousSnapshot);
 	}
 }
 

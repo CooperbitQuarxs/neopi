@@ -19,7 +19,8 @@
  * whole file (press twice to confirm), `w` wraps, `b` cycles
  * whitespace handling (exact → ignore whitespace → ignore
  * formatting/import-only changes), `c` jumps to the commit form, `r`
- * refreshes. In the sidebar tree `←`/`→` collapse/expand directories,
+ * refreshes. h/l and arrows choose the left diff/right changes pane;
+ * Alt+←/→ fold directories or pan long diff lines.
  * `enter` opens the selected file in the diff pane, `space` stages or
  * unstages the selected row, and `delete` discards it — on a directory,
  * every file underneath it.
@@ -29,12 +30,13 @@ import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { formatKeyHint, formatKeyHints, formatTooltipKey } from "../../app-keybindings";
 import { SplitPane } from "../../components/layout/split-pane";
 import { Stack } from "../../components/layout/stack";
+import { MenuKeyReader } from "../../components/menu-navigation";
 import { matchesKey } from "../../keys";
 import { ProcessTerminal } from "../../terminal";
 import { routeSgrMouseInput } from "../../mouse";
 import { col, compact, keyed, node, row, span, stableKey, text } from "../../native/describe";
 import { Memo } from "../../native/memo";
-import type { DescribeContext, NativeNode, NativeUiEvent } from "../../native/node";
+import type { DescribeContext, NativeNode, NativeScroll, NativeUiEvent } from "../../native/node";
 import { actionButton } from "../../native/overlay";
 import { type Component, type OverlayHandle, TUI } from "../../tui";
 import { truncateToWidth, visibleWidth } from "../../utils";
@@ -153,7 +155,7 @@ function chip(label: string, active: boolean): string {
 	return softPill(text, { active });
 }
 
-class GitTuiComponent implements Component {
+export class GitTuiComponent implements Component {
 	readonly #ui: TUI;
 	readonly #model: GitTuiModel;
 	readonly #host: GitTuiHost;
@@ -187,9 +189,17 @@ class GitTuiComponent implements Component {
 	#pendingHunkEdge: "last" | null = null;
 	#disposed = false;
 	#help: OverlayHandle | null = null;
+	#helpComponent: GitHelpSheet | undefined;
 	readonly #nativeBar = new Memo();
 	readonly #nativeBody = new Memo();
 	readonly #nativeRoot = new Memo();
+	readonly #keys = new MenuKeyReader();
+	#navigationReady = false;
+	#pendingNavigation: unknown;
+	#pendingPaneNavigation: unknown;
+	#restoringNavigation = false;
+	#nativeScroll: NativeScroll | undefined;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	constructor(ui: TUI, host: GitTuiHost) {
 		this.#ui = ui;
@@ -223,6 +233,12 @@ class GitTuiComponent implements Component {
 
 	async run(): Promise<void> {
 		await this.#refresh(true);
+		this.#navigationReady = true;
+		if (this.#pendingNavigation !== undefined) {
+			const pending = this.#pendingNavigation;
+			this.#pendingNavigation = undefined;
+			this.restoreNavigation(pending);
+		}
 		this.#refreshTimer = setInterval(() => void this.#refresh(false), REFRESH_MS);
 		return this.#done.promise;
 	}
@@ -238,6 +254,53 @@ class GitTuiComponent implements Component {
 		this.#help?.hide();
 		this.#sidebar.dispose();
 		this.#stack.dispose();
+	}
+
+	get blocksMenuHistory(): boolean {
+		return this.#busy;
+	}
+
+	leaveMenu(): void {
+		this.#done.resolve();
+	}
+
+	navigationSnapshot(): unknown {
+		return {
+			focus: this.#focus, filePath: this.#currentFile?.path, fileArea: this.#currentFile?.area,
+			whitespace: this.#whitespace, sidebar: this.#sidebar.navigationSnapshot(),
+			pane: this.#pane.navigationSnapshot(), help: this.#help !== null,
+			helpView: this.#helpComponent?.navigationSnapshot(),
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		if (!this.#navigationReady) {
+			this.#pendingNavigation = snapshot;
+			return;
+		}
+		const state = snapshot as {
+			focus?: Focus; filePath?: string; fileArea?: string; whitespace?: WhitespaceMode;
+			sidebar?: unknown; pane?: unknown; help?: boolean; helpView?: unknown;
+		};
+		this.#restoringNavigation = true;
+		try {
+			if (state.whitespace === "off" || state.whitespace === "whitespace" || state.whitespace === "formatting") {
+				this.#whitespace = state.whitespace;
+			}
+			this.#sidebar.restoreNavigation(state.sidebar);
+			const file = [...this.#model.unstaged, ...this.#model.staged, ...(this.#model.headCommit?.files ?? [])]
+				.find(candidate => candidate.path === state.filePath && candidate.area === state.fileArea);
+			this.#pendingPaneNavigation = state.pane;
+			if (file) this.#showFile(file);
+			else this.#pane.restoreNavigation(state.pane);
+			if (state.focus === "diff" || state.focus === "sidebar") this.#setFocus(state.focus);
+			if ((state.help === true) !== (this.#help !== null)) this.#toggleHelp();
+			this.#helpComponent?.restoreNavigation(state.helpView);
+			this.#keys.reset();
+		} finally {
+			this.#restoringNavigation = false;
+		}
 	}
 
 	// ── data ───────────────────────────────────────────────────────────────
@@ -359,6 +422,10 @@ class GitTuiComponent implements Component {
 						: this.#pane.highlightAsync(abort.signal, () => this.#ui.requestRender()),
 				)
 				.catch(() => undefined);
+		}
+		if (this.#pendingPaneNavigation !== undefined) {
+			this.#pane.restoreNavigation(this.#pendingPaneNavigation);
+			this.#pendingPaneNavigation = undefined;
 		}
 		this.#ui.requestRender();
 	}
@@ -619,8 +686,26 @@ class GitTuiComponent implements Component {
 			return;
 		}
 		if (this.#handleMouse(data)) return;
-		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
+		if (this.#sidebar.search.focused && this.#sidebar.handleSearchInput(data)) return;
+		if (this.#focus === "sidebar" && this.#sidebar.editing && !this.#sidebar.search.focused &&
+			!matchesKey(data, "escape") && !matchesKey(data, "tab") && !matchesKey(data, "shift+tab")) {
+			this.#sidebar.handleInput(data);
+			return;
+		}
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (action?.kind === "context") {
 			this.#setFocus(this.#focus === "diff" ? "sidebar" : "diff");
+			return;
+		}
+		if (action?.kind === "horizontal") {
+			this.#setFocus(action.delta < 0 ? "diff" : "sidebar");
+			return;
+		}
+		if (action?.kind === "search") {
+			this.#setFocus("sidebar");
+			this.#sidebar.search.focused = true;
+			this.#ui.requestRender();
 			return;
 		}
 		if (matchesKey(data, "escape")) {
@@ -666,17 +751,25 @@ class GitTuiComponent implements Component {
 			}
 		}
 		if (this.#focus === "diff") {
+			if (action?.kind === "move" || action?.kind === "scroll" || action?.kind === "page" || action?.kind === "boundary") {
+				const by = action.kind === "boundary"
+					? action.edge === "first" ? "start" : "end"
+					: action.kind === "page"
+						? action.delta < 0 ? "page-up" : "page-down"
+						: action.delta < 0 ? "line-up" : "line-down";
+				this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
+			}
 			if (matchesKey(data, "shift+up")) this.#pane.moveCursor(-1, true);
 			else if (matchesKey(data, "shift+down")) this.#pane.moveCursor(1, true);
-			else if (matchesKey(data, "up") || data === "k") this.#pane.moveCursor(-1, false);
-			else if (matchesKey(data, "down") || data === "j") this.#pane.moveCursor(1, false);
-			else if (matchesKey(data, "pageUp")) this.#pane.moveCursor(-Math.max(1, this.#contentHeight - 2), false);
-			else if (matchesKey(data, "pageDown")) this.#pane.moveCursor(Math.max(1, this.#contentHeight - 2), false);
-			else if (matchesKey(data, "left") || data === "h") this.#pane.scrollLeftBy(-8);
-			else if (matchesKey(data, "right") || data === "l") this.#pane.scrollLeftBy(8);
-			else if (matchesKey(data, "home") || data === "g") this.#pane.cursorToEdge("start");
-			else if (matchesKey(data, "end") || data === "G") this.#pane.cursorToEdge("end");
-			else if (matchesKey(data, "enter")) return this.#jumpHunkOrFile(1);
+			else if (action?.kind === "move") this.#pane.moveCursor(action.delta, false);
+			else if (action?.kind === "halfPage" || action?.kind === "page") this.#pane.moveCursor(
+				action.delta * Math.max(1, Math.floor(this.#contentHeight / (action.kind === "halfPage" ? 2 : 1))), false,
+			);
+			else if (action?.kind === "scroll") this.#pane.scrollBy(action.delta);
+			else if (action?.kind === "boundary") this.#pane.cursorToEdge(action.edge === "first" ? "start" : "end");
+			else if (matchesKey(data, "alt+left")) this.#pane.scrollLeftBy(-8);
+			else if (matchesKey(data, "alt+right")) this.#pane.scrollLeftBy(8);
+			else if (action?.kind === "confirm") return this.#jumpHunkOrFile(1);
 			else if (matchesKey(data, "space")) {
 				// Hunk-view rows do not map back to document rows, so Space acts on the focused hunk there.
 				const target = this.#pane.patchTarget;
@@ -708,7 +801,7 @@ class GitTuiComponent implements Component {
 			this.#ui.requestRender();
 			return;
 		}
-		this.#sidebar.handleInput(data);
+		this.#sidebar.handleInput(data, action);
 	}
 
 	#handleMouse(data: string): boolean {
@@ -798,8 +891,8 @@ class GitTuiComponent implements Component {
 			theme.fg(
 				"dim",
 				this.#focus === "diff"
-					? `${formatKeyHints(["alt+down", "alt+up"])} hunk · ${formatKeyHints(["]", "["])} file · ${formatKeyHints(["shift+up", "shift+down"])} select · ${formatKeyHints(["s", "u"])} stage · ${formatKeyHints(["x", "delete"])} discard · ${formatKeyHint("v")} view · ${formatKeyHint("c")} commit · ${formatKeyHint("?")} keys · ${formatKeyHint("q")} quit`
-					: `${formatKeyHints(["up", "down"])} move · ${formatKeyHints(["left", "right"])} fold · ${formatKeyHint("space")} stage · ${formatKeyHint("delete")} discard · ${formatKeyHint("enter")} open · ${formatKeyHints(["alt+down", "alt+up"])} hunk · ${formatKeyHint("c")} commit · ${formatKeyHint("t")} tree · ${formatKeyHint("?")} keys · ${formatKeyHint("q")} quit`,
+					? `j/k rows · h/l panes · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Alt-←/→ pan · Space stage · / search · ? keys · q quit`
+					: `j/k rows · h/l panes · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Alt-←/→ fold · Space stage · / search · ? keys · q quit`,
 			);
 		const free = width - row.width - right.width - 1;
 		const middleText = free > visibleWidth(middle) + 4 ? middle : truncateToWidth(middle, Math.max(0, free - 4));
@@ -888,15 +981,20 @@ class GitTuiComponent implements Component {
 
 	/** `?`: the keyboard shortcuts sheet over the app. */
 	#toggleHelp(): void {
+		const previous = this.navigationSnapshot();
 		if (this.#help) {
 			this.#help.hide();
 			this.#help = null;
+			this.#helpComponent = undefined;
+			if (!this.#restoringNavigation) this.onNavigationVisit?.("", previous);
 			return;
 		}
-		const sheet = new GitHelpSheet(() => this.#toggleHelp());
+		const sheet = new GitHelpSheet(() => this.#toggleHelp(), () => this.#toggleHelp());
+		this.#helpComponent = sheet;
 		this.#help = this.#ui.showOverlay(sheet, { anchor: "center", width: "80%", maxHeight: "90%" });
 		this.#ui.setFocus(sheet);
 		this.#ui.requestRender();
+		if (!this.#restoringNavigation) this.onNavigationVisit?.("help", previous);
 	}
 
 	// ── native ─────────────────────────────────────────────────────────────
@@ -931,6 +1029,7 @@ class GitTuiComponent implements Component {
 				this.#currentFile,
 				this.#pane.emptyMessage,
 				cx.supports("media"),
+				this.#nativeScroll,
 			],
 			() => this.#describeBody(cx),
 		);
@@ -1092,7 +1191,7 @@ class GitTuiComponent implements Component {
 		const doc = this.#pane.doc;
 		const file = this.#currentFile;
 		if (doc && this.#pane.state === "ready") {
-			return node(
+			return { ...node(
 				"diff",
 				{
 					text: unifiedDiff(doc, this.#pane.mode === "file"),
@@ -1102,7 +1201,7 @@ class GitTuiComponent implements Component {
 				},
 				undefined,
 				"diff",
-			);
+			), scroll: this.#nativeScroll };
 		}
 		const contents = this.#contents;
 		if (this.#pane.state === "asset" && file && contents?.kind === "asset") {
@@ -1263,24 +1362,29 @@ function assetText(asset: AssetFileContents["old"]): TspSpan[] {
  * Mount the git TUI as a fullscreen overlay on an existing TUI (the `/git`
  * slash command). Resolves when the user closes it; the caller restores focus.
  */
-export async function showGitOverlay(ui: TUI, host: GitTuiHost): Promise<void> {
+export async function showGitOverlay(
+	ui: TUI,
+	host: GitTuiHost,
+	onMount?: (component: GitTuiComponent, mount: () => OverlayHandle) => void,
+): Promise<void> {
 	const component = new GitTuiComponent(ui, host);
-	const overlay = ui.showOverlay(component, {
-		anchor: "top-left",
-		width: "100%",
-		maxHeight: "100%",
-		margin: 0,
-		fullscreen: true,
-		mouseTracking: true,
-	});
-	ui.setFocus(component);
-	ui.requestRender();
+	let overlay: OverlayHandle | undefined;
+	const mount = (): OverlayHandle => {
+		overlay = ui.showOverlay(component, {
+			anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0,
+			fullscreen: true, mouseTracking: true,
+		});
+		ui.setFocus(component);
+		ui.requestRender();
+		return overlay;
+	};
+	if (onMount) onMount(component, mount);
+	else mount();
 	try {
 		await component.run();
 	} finally {
 		component.dispose();
-		// overlay.hide() restores focus to the pre-overlay component.
-		overlay.hide();
+		overlay?.hide();
 	}
 }
 

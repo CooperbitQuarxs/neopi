@@ -490,6 +490,7 @@ export class BtwController {
 
 	#showHistory(store: BtwHistoryStore): BtwHistoryPanel {
 		if (this.#historyOverlay && this.#historyPanel) {
+			this.ctx.openMenu("btw-history", () => this.#showHistory(store));
 			this.#refreshHistory();
 			return this.#historyPanel;
 		}
@@ -523,15 +524,30 @@ export class BtwController {
 			// Tern has no inline panel: Esc puts the sheet away, `x` cancels.
 			escapeHides: this.ctx.ui.nativeRendering,
 		});
-		this.#historyPanel = panel;
-		this.#historyOverlay = this.ctx.ui.showOverlay(panel, {
-			anchor: "bottom-center",
-			width: "100%",
-			maxHeight: "100%",
-			margin: 0,
-			fullscreen: true,
+		const menu = this.ctx.openMenu("btw-history", () => this.#showHistory(store));
+		if (!menu) return panel;
+		menu.mount(panel, () => {
+			this.#historyPanel = panel;
+			const handle = this.ctx.ui.showOverlay(panel, {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+				fullscreen: true,
+			});
+			const hide = handle.hide.bind(handle);
+			handle.hide = () => {
+				menu.close();
+				if (this.#historyOverlay === handle) {
+					this.#historyOverlay = undefined;
+					this.#historyPanel = undefined;
+				}
+				hide();
+			};
+			this.#historyOverlay = handle;
+			this.ctx.ui.setFocus(panel);
+			return handle;
 		});
-		this.ctx.ui.setFocus(panel);
 		this.ctx.ui.requestRender();
 		return panel;
 	}

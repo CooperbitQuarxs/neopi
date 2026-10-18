@@ -30,6 +30,7 @@ export class ThemeSelectorComponent extends OverlayPanel {
 	#selectList: SelectList;
 	#sheet: SelectListSheet;
 	#onPreview: (themeName: string) => void;
+	readonly #initialTheme: string;
 
 	constructor(
 		currentTheme: string,
@@ -40,6 +41,7 @@ export class ThemeSelectorComponent extends OverlayPanel {
 	) {
 		super("Theme", "omp.overlay.theme");
 		this.#onPreview = onPreview;
+		this.#initialTheme = currentTheme;
 
 		// Create select items from provided themes
 		const themeItems: SelectItem[] = themes.map(name => ({
@@ -49,7 +51,7 @@ export class ThemeSelectorComponent extends OverlayPanel {
 		}));
 
 		// Create selector
-		this.#selectList = new SelectList(themeItems, 10, getSelectListTheme());
+		this.#selectList = new SelectList(themeItems, 10, getSelectListTheme(), { search: "always" });
 
 		// Preselect current theme
 		const currentIndex = themes.indexOf(currentTheme);
@@ -89,6 +91,20 @@ export class ThemeSelectorComponent extends OverlayPanel {
 
 	getSelectList(): SelectList {
 		return this.#selectList;
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationState();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		this.#selectList.restoreNavigation(snapshot);
+		const selected = this.#selectList.getSelectedItem();
+		if (selected) this.#onPreview(selected.value);
+	}
+
+	leaveMenu(): void {
+		this.#onPreview(this.#initialTheme);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {

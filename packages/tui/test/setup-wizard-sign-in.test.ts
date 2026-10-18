@@ -22,9 +22,9 @@ afterEach(() => {
 });
 
 function selectAnthropic(tab: SignInScene): void {
-	tab.handleInput("i"); // The provider picker starts in navigation mode.
+	tab.handleInput("/"); // Focus the provider filter explicitly.
 	for (const char of "anthropic") tab.handleInput(char);
-	tab.handleInput("\x1b"); // Keep the filtered selection and leave insert mode.
+	tab.handleInput("\x1b"); // Keep the filtered selection and return to the provider list.
 	tab.handleInput("\n");
 }
 
@@ -273,7 +273,7 @@ describe("fullscreen setup sign-in cursor", () => {
 				const afterDissolve = performance.now() + 1000;
 				vi.spyOn(performance, "now").mockReturnValue(afterDissolve);
 				await scheduler.settle(terminal);
-				terminal.sendInput("i"); // INSERT filter mode; printable keys are hjkl commands otherwise
+				terminal.sendInput("/"); // Printable text belongs to the explicitly focused filter.
 				for (const char of "anthropic") terminal.sendInput(char);
 				terminal.sendInput("\r");
 				await scheduler.settle(terminal);

@@ -1769,7 +1769,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 				this.#showDetail(index, "systemPrompt");
 			},
 			() => this.#showDetail(index, "systemPrompt"),
-			{ externalEditor: this.#deps.externalEditor },
+			{ externalEditor: this.#deps.externalEditor, menuHistory: true },
 		);
 		this.#setScreen("systemPrompt", editor, "");
 	}
@@ -1796,7 +1796,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 				if (shared) this.#showList();
 				else this.#showDetail(index);
 			},
-			{ externalEditor: this.#deps.externalEditor },
+			{ externalEditor: this.#deps.externalEditor, menuHistory: true },
 		);
 		this.#setScreen("instructions", editor, "");
 	}
