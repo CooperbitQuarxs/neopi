@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { APP_NAME, removeWithRetries, VERSION } from "@oh-my-pi/pi-utils";
-import { currentBuildHost } from "../../src/cli/build-service";
+import { buildServiceUrl, currentBuildHost } from "../../src/cli/build-service";
 import { fixedNpmRegistry } from "../../src/cli/npm-registry";
 import { getLatestRelease, runUpdateCommand } from "../../src/cli/update-cli";
 import { cfgUpdateChannel } from "../../src/modes/settings";
@@ -15,14 +15,11 @@ type FetchInit = RequestInit | BunFetchRequestInit;
 
 describe("runUpdateCommand version source", () => {
 	const previousPath = process.env.PATH;
-	const previousBuildUrl = process.env.PI_BUILD_URL;
 	const dirs: string[] = [];
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		process.env.PATH = previousPath;
-		if (previousBuildUrl === undefined) delete process.env.PI_BUILD_URL;
-		else process.env.PI_BUILD_URL = previousBuildUrl;
 		await Promise.all(dirs.splice(0).map(dir => removeWithRetries(dir)));
 	});
 
@@ -68,14 +65,13 @@ describe("runUpdateCommand version source", () => {
 
 	it("checks npm, with a timeout, when no standalone binary is on PATH", async () => {
 		await isolatePath();
-		process.env.PI_BUILD_URL = "https://build.test";
 		quiet();
 		const requests = stubFetch(() => Response.json({ version: "999.0.0" }));
 
 		await runUpdateCommand({ force: false, check: true });
 
 		expect(requests.length).toBeGreaterThan(0);
-		expect(requests.some(request => request.url.startsWith("https://build.test/"))).toBe(false);
+		expect(requests.some(request => request.url.startsWith(`${buildServiceUrl()}/`))).toBe(false);
 		for (const request of requests) expect(request.signal).toBeInstanceOf(AbortSignal);
 	});
 
@@ -88,8 +84,7 @@ describe("runUpdateCommand version source", () => {
 			await fs.chmod(npiPath, 0o755);
 			const next = `#!/bin/sh\necho ${APP_NAME}/999.0.0\n`;
 			const { target, fileName } = await currentBuildHost();
-			process.env.PI_BUILD_URL = "https://build.test";
-			const check = `https://build.test/api/products/omp/latest/${target}?channel=stable&from_version=${VERSION}`;
+			const check = `${buildServiceUrl()}/api/products/omp/latest/${target}?channel=stable&from_version=${VERSION}`;
 			const { logs } = quiet();
 			const requests = stubFetch(url => {
 				if (url === check) {
@@ -108,6 +103,7 @@ describe("runUpdateCommand version source", () => {
 			expect(requests.map(request => request.url)).toEqual([check, "https://r2.test/npi"]);
 			expect(await Bun.file(npiPath).text()).toBe(next);
 			expect(logs.some(line => line.includes("Updated to 999.0.0"))).toBe(true);
+			expect(logs.some(line => line.includes(`Build source: ${buildServiceUrl()}`))).toBe(true);
 		},
 	);
 });

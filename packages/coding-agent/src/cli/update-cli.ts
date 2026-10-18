@@ -32,7 +32,14 @@ import {
 	unsupportedProxyMessage,
 	withTimeoutSignal,
 } from "../utils/fetch-timeout";
-import { type BuildAnswer, type BuildPatch, type Fetch, fetchBuild, type UpdateChannel } from "./build-service";
+import {
+	type BuildAnswer,
+	type BuildPatch,
+	buildServiceUrl,
+	type Fetch,
+	fetchBuild,
+	type UpdateChannel,
+} from "./build-service";
 import {
 	DEFAULT_NPM_REGISTRY,
 	loadNpmRegistryResolver,
@@ -2109,6 +2116,7 @@ async function runBinaryUpdate(
 	targetError: unknown,
 	request: UpdateRequest,
 ): Promise<void> {
+	console.log(chalk.dim(`Build source: ${buildServiceUrl()}`));
 	let build: BuildAnswer;
 	try {
 		const fromVersion = target ? await installedBuildVersion(target.path) : VERSION;

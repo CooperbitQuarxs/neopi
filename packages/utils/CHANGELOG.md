@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added launch/user-only environment lookup for settings that must not accept project dotenv overrides ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
+
 ## [18.10.0] - 2026-10-12
 
 ### Added

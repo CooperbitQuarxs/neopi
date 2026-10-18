@@ -301,6 +301,15 @@ for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
 refreshDirsFromEnv();
 
 /**
+ * Read from the launch environment or the user dotenv snapshots, excluding
+ * values merged from the project dotenv. Preserve user values even when a
+ * project value masked them in Bun.env.
+ */
+export function getTrustedEnv(name: string): string | undefined {
+	return originalProcessEnv[name] ?? agentEnv[name] ?? piEnv[name] ?? homeEnv[name];
+}
+
+/**
  * Intentional re-export of Bun.env.
  *
  * All users should import this env module (import { $env } from "@oh-my-pi/pi-utils")
