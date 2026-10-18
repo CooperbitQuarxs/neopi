@@ -318,8 +318,18 @@ refreshDirsFromEnv();
  * a project value masked them in Bun.env.
  */
 export function getTrustedEnv(name: string): string | undefined {
+	let launchValue = originalProcessEnv[name];
+	if (launchValue === undefined && process.platform === "win32") {
+		const foldedName = name.toUpperCase();
+		for (const key in originalProcessEnv) {
+			if (key.toUpperCase() === foldedName) {
+				launchValue = originalProcessEnv[key];
+				break;
+			}
+		}
+	}
 	return (
-		originalProcessEnv[name]?.trim() ||
+		launchValue?.trim() ||
 		trustedAgentEnv[name]?.trim() ||
 		trustedPiEnv[name]?.trim() ||
 		trustedHomeEnv[name]?.trim() ||

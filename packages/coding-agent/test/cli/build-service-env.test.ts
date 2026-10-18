@@ -6,6 +6,8 @@ import * as path from "node:path";
 async function requestBuildOrigin(
 	options: {
 		inherited?: string;
+		inheritedName?: string;
+		platform?: NodeJS.Platform;
 		user?: string;
 		redirectAgent?: boolean;
 		redirectConfig?: boolean;
@@ -51,6 +53,9 @@ async function requestBuildOrigin(
 	const servicePath = path.resolve(import.meta.dir, "../../src/cli/build-service.ts");
 	const script = [
 		`import { fetchBuild } from ${JSON.stringify(servicePath)};`,
+		...(options.platform
+			? [`Object.defineProperty(process, "platform", { value: ${JSON.stringify(options.platform)} });`]
+			: []),
 		"let origin;",
 		"await fetchBuild({ channel: 'stable' }, {",
 		"  host: { target: 'linux-x86_64', fileName: 'npi-linux-x64' },",
@@ -95,7 +100,9 @@ async function requestBuildOrigin(
 					: options.profile && !options.cliProfile
 						? { OMP_PROFILE: options.profile }
 						: {}),
-				...(options.inherited === undefined ? {} : { PI_BUILD_URL: options.inherited }),
+				...(options.inherited === undefined
+					? {}
+					: { [options.inheritedName ?? "PI_BUILD_URL"]: options.inherited }),
 			},
 			stdout: "pipe",
 			stderr: "pipe",
@@ -120,6 +127,31 @@ describe("build origin trust", () => {
 		expect(await requestBuildOrigin({ inherited: "https://launch.example/", user: "https://user.example" })).toBe(
 			"https://launch.example",
 		);
+	});
+
+	it.each(["pi_build_url", "Pi_BuIlD_Url"])(
+		"honors case-insensitive Windows launch keys (%s)",
+		async inheritedName => {
+			expect(
+				await requestBuildOrigin({
+					inherited: "https://launch.example",
+					inheritedName,
+					platform: "win32",
+					user: "https://user.example",
+				}),
+			).toBe("https://launch.example");
+		},
+	);
+
+	it("keeps POSIX launch keys case-sensitive", async () => {
+		expect(
+			await requestBuildOrigin({
+				inherited: "https://launch.example",
+				inheritedName: "pi_build_url",
+				platform: "linux",
+				user: "https://user.example",
+			}),
+		).toBe("https://user.example");
 	});
 
 	it("honors user configuration even when the project shadows its key", async () => {
