@@ -261,12 +261,29 @@ describe("chronicle recall", () => {
 			},
 		});
 		const release = Promise.withResolvers<void>();
+		const progressRelease = Promise.withResolvers<void>();
+		const firstProgress = Promise.withResolvers<{ jobId: string; text: string }>();
+		let heldProgress = false;
 		const originalRegister = manager.register.bind(manager);
 		spyOn(manager, "register").mockImplementation((type, label, run, options) =>
-			originalRegister(type, label, async context => {
-				await release.promise;
-				return run(context);
-			}, options),
+			originalRegister(
+				type,
+				label,
+				async context => {
+					await release.promise;
+					return run({
+						...context,
+						reportProgress: async (text, details) => {
+							await context.reportProgress(text, details);
+							if (heldProgress) return;
+							heldProgress = true;
+							firstProgress.resolve({ jobId: context.jobId, text });
+							await progressRelease.promise;
+						},
+					});
+				},
+				options,
+			),
 		);
 		manager.registerDeliverySink("OwnerA", (jobId, text) => {
 			ownerDeliveries.push({ jobId, text });
@@ -326,6 +343,18 @@ describe("chronicle recall", () => {
 			});
 
 			release.resolve();
+			const progress = await Promise.race([
+				firstProgress.promise,
+				Bun.sleep(2_000).then(() => undefined),
+			]);
+			expect(progress).toBeDefined();
+			if (!progress) throw new Error("expected Chronicle progress");
+			const progressResource = await proc.resolve(parseInternalUrl(`proc://${progress.jobId}`), { session });
+			expect(progressResource.content).toContain(progress.text);
+			await expect(
+				proc.resolve(parseInternalUrl(`proc://${progress.jobId}`), { session: otherOwnerSession }),
+			).rejects.toThrow("not found");
+			progressRelease.resolve();
 			await manager.waitForAll();
 			await manager.drainDeliveries({ timeoutMs: 2_000 });
 
@@ -339,6 +368,7 @@ describe("chronicle recall", () => {
 			expect(ownerDeliveries.find(delivery => delivery.jobId === billingId)?.text).not.toContain(written.atomIds[0]!);
 		} finally {
 			release.resolve();
+			progressRelease.resolve();
 			await manager.dispose();
 		}
 	});
