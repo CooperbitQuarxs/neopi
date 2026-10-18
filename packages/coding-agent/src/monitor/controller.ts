@@ -17,6 +17,8 @@ import { cfgMonitorIncludeAdvisors, cfgMonitorMaxPanesPerWindow } from "./settin
 import { TmuxMonitorError, TmuxMonitorManager, type TmuxMonitorStatus } from "./tmux-manager";
 
 const managers = new WeakMap<AgentSession, TmuxMonitorManager>();
+/** A start in progress: a manager is not `running` until its tmux session exists. */
+const starting = new WeakMap<AgentSession, Promise<TmuxMonitorStatus>>();
 
 /** The monitor manager running for `session`, if any. */
 export function agentMonitorFor(session: AgentSession): TmuxMonitorManager | undefined {
@@ -25,9 +27,18 @@ export function agentMonitorFor(session: AgentSession): TmuxMonitorManager | und
 }
 
 /** Start the monitor for `session` (idempotent). Throws a user-displayable error when it cannot run. */
-export async function startAgentMonitor(session: AgentSession, settings: Settings): Promise<TmuxMonitorStatus> {
+export function startAgentMonitor(session: AgentSession, settings: Settings): Promise<TmuxMonitorStatus> {
 	const existing = agentMonitorFor(session);
-	if (existing) return existing.status();
+	if (existing) return Promise.resolve(existing.status());
+	// Auto-start and a manual `/monitor on` can overlap; both get the one start.
+	const pending = starting.get(session);
+	if (pending) return pending;
+	const start = startNow(session, settings).finally(() => starting.delete(session));
+	starting.set(session, start);
+	return start;
+}
+
+async function startNow(session: AgentSession, settings: Settings): Promise<TmuxMonitorStatus> {
 	const host = controlHostFor(session);
 	if (!host?.publication) {
 		throw new TmuxMonitorError("the tmux monitor needs the control socket (control.enabled)");
@@ -70,14 +81,15 @@ export async function startAgentMonitor(session: AgentSession, settings: Setting
 		});
 		return status;
 	} catch (error) {
-		managers.delete(session);
+		if (managers.get(session) === manager) managers.delete(session);
 		await manager.stop().catch(() => {});
 		throw error;
 	}
 }
 
-/** Stop the monitor for `session`. Returns false when none was running. */
+/** Stop the monitor for `session`, after any start in progress. Returns false when none was running. */
 export async function stopAgentMonitor(session: AgentSession): Promise<boolean> {
+	await starting.get(session)?.catch(() => {});
 	const manager = agentMonitorFor(session);
 	if (!manager) return false;
 	managers.delete(session);
