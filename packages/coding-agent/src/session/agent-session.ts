@@ -7869,6 +7869,8 @@ export class AgentSession implements SettingsScope {
 				attribution: promptAttribution,
 				entryId: options?.entryId,
 				origin: options?.origin,
+				synthetic: options?.synthetic,
+				userInitiated: options?.userInitiated,
 				prependMessages: keywordNotices,
 				rawText: typedText,
 				onPromptAdmitted: options?.onPromptAdmitted,
@@ -7949,6 +7951,8 @@ export class AgentSession implements SettingsScope {
 				attribution: promptAttribution,
 				entryId: options?.entryId,
 				origin: options?.origin,
+				synthetic: options?.synthetic,
+				userInitiated: options?.userInitiated,
 				prependMessages: keywordNotices,
 				rawText: typedText,
 				preprocessed: {
@@ -8840,10 +8844,8 @@ export class AgentSession implements SettingsScope {
 			});
 			return;
 		}
-		// Synthetic branch: agent-initiated hidden developer message. Bypass
-		// #queueUserMessage (which clears advisor auto-resume suppression and
-		// enqueues as a user-role message) and place the developer message
-		// directly on the follow-up queue.
+		// Agent-initiated synthetic follow-ups keep their existing hidden delivery
+		// path without re-enabling advisor auto-resume.
 		const normalizedImages = await this.#normalizeImagesForModel(images);
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
 		if (normalizedImages?.length) {
@@ -8904,6 +8906,9 @@ export class AgentSession implements SettingsScope {
 			/** Reserved entry id and control-socket provenance of the user message. */
 			entryId?: string;
 			origin?: MessageOrigin;
+			/** Preserve developer-role prompts through the existing operator queues. */
+			synthetic?: boolean;
+			userInitiated?: boolean;
 			prependMessages?: readonly CustomMessage[];
 			/** Original submitted text before prompt transformations, for queue removal. */
 			rawText?: string;
@@ -8922,7 +8927,7 @@ export class AgentSession implements SettingsScope {
 			promptGeneration?: number;
 		},
 	): Promise<boolean> {
-		const attribution = options?.attribution ?? "user";
+		const attribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
 		const timestamp = options?.timestamp;
 		const rawText = options?.rawText ?? text;
 		const preprocessed = options?.preprocessed;
@@ -8939,7 +8944,9 @@ export class AgentSession implements SettingsScope {
 		// user-driven (folds into context via #resumeStrandedIrcAsides's post-interrupt
 		// branch) until the next deliberate steer/follow-up/prompt, matching the
 		// sendCustomMessage aside path (queueAside), which never touches this flag.
-		if (mode !== "aside") this.#advisors.autoResumeSuppressed = false;
+		if (mode !== "aside" && (options?.userInitiated ?? !options?.synthetic)) {
+			this.#advisors.autoResumeSuppressed = false;
+		}
 		// The pre-dispatch re-check in prompt() arrives with normalization and the
 		// vision description already done — reuse them instead of paying a second
 		// vision-model request for the same attachment.
@@ -8964,18 +8971,30 @@ export class AgentSession implements SettingsScope {
 		if (options?.promptGeneration !== undefined && this.#promptGeneration !== options.promptGeneration) {
 			return false;
 		}
+		const message: AgentMessage = reserved(
+			options?.synthetic
+				? {
+						role: "developer",
+						content,
+						attribution,
+						timestamp: timestamp ?? Date.now(),
+						synthetic: true,
+						userInitiated: options.userInitiated === true ? true : undefined,
+					}
+				: {
+						role: "user",
+						content,
+						attribution,
+						timestamp: timestamp ?? Date.now(),
+						...(mode === "steer" ? { steering: true } : {}),
+					},
+		);
+		this.#queuedMessageRawText.set(message, rawText);
 		if (mode === "aside") {
 			if (await this.#sessionGenerationChanged(sessionGeneration)) return false;
 			const records: AgentMessage[] = [...prependMessages, ...attachmentSourceNotices];
 			if (imageDescriptionNotice) records.push(imageDescriptionNotice);
-			const userMessage: AgentMessage = reserved({
-				role: "user",
-				content,
-				attribution,
-				timestamp: timestamp ?? Date.now(),
-			});
-			this.#queuedMessageRawText.set(userMessage, rawText);
-			records.push(userMessage);
+			records.push(message);
 			this.#irc.queueAside(records);
 			options?.onPromptAdmitted?.();
 			// The awaits above (image normalization / vision description) can span the run's
@@ -8991,27 +9010,12 @@ export class AgentSession implements SettingsScope {
 			for (const notice of prependMessages) this.agent.followUp(notice);
 			for (const notice of attachmentSourceNotices) this.agent.followUp(notice);
 			if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
-			const userMessage: AgentMessage = reserved({
-				role: "user",
-				content,
-				attribution,
-				timestamp: timestamp ?? Date.now(),
-			});
-			this.#queuedMessageRawText.set(userMessage, rawText);
-			this.agent.followUp(userMessage);
+			this.agent.followUp(message);
 		} else {
 			for (const notice of prependMessages) this.agent.steer(notice);
 			for (const notice of attachmentSourceNotices) this.agent.steer(notice);
 			if (imageDescriptionNotice) this.agent.steer(imageDescriptionNotice);
-			const userMessage: AgentMessage = reserved({
-				role: "user",
-				content,
-				steering: true,
-				attribution,
-				timestamp: timestamp ?? Date.now(),
-			});
-			this.#queuedMessageRawText.set(userMessage, rawText);
-			this.agent.steer(userMessage);
+			this.agent.steer(message);
 		}
 		options?.onPromptAdmitted?.();
 		this.#scheduleIdleQueueDrain();

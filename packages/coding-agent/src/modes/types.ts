@@ -3,7 +3,7 @@ import type { PersonaScope } from "../neopi/persona-config";
 import type { ReplMode, ReplTarget } from "../neopi/repl";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, MessageAttribution, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
 import type { Component, Container, EditorTheme, KeyId, Loader, TUI } from "@oh-my-pi/pi-tui";
 import type { TspText } from "@oh-my-pi/pi-wire";
 import type { StatusNotice } from "@oh-my-pi/pi-tui/chrome/status-notice";
@@ -69,15 +69,16 @@ export type SubmittedUserInput = {
 	images?: ImageContent[];
 	imageLinks?: (string | undefined)[];
 	customType?: string;
-	/** Route through `session.prompt(text, { synthetic: true })` so the text lands
-	 *  as a hidden agent-authored `developer` message rather than a visible user
-	 *  turn. Used by the `c`/`.` continue shortcut. */
+	/** Route through `session.prompt(text, { synthetic: true })` as a hidden
+	 *  developer message. Used by continue shortcuts and operator notices. */
 	synthetic?: boolean;
 	/** Marks this submission as a deliberate user resume (set by the `.`/`c`
 	 *  continue shortcut, which is also `synthetic`). Forwarded to
 	 *  `session.prompt({ userInitiated })` so it clears advisor auto-resume
 	 *  suppression even though it is synthetic. */
 	userInitiated?: boolean;
+	/** Explicit initiator attribution for operator-authored developer messages. */
+	attribution?: MessageAttribution;
 	display?: boolean;
 	/** Queue intent if the session is (or becomes) busy when this submission is
 	 *  dispatched: "steer" (interrupt the active turn) or "followUp" (process after

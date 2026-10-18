@@ -1202,9 +1202,13 @@ export class InputController {
 			this.#armedBareCommand = undefined;
 			const armedBareCommand =
 				armed && armed.sessionId === this.ctx.sessionManager.getSessionId() ? armed.text : undefined;
-			text = this.#compactDraftImages(text.trim());
+			// Operator notices are literal payloads, not prose to rewrite or image-chip text.
+			const literalNotice = parseSlashCommand(text.trimStart())?.name === "notice";
+			text = literalNotice ? text.trimStart() : this.#compactDraftImages(text.trim());
 			const hasPendingImages = this.ctx.editor.pendingImages.length > 0;
-			if ((!isSettingsInitialized() || cfgEmojiAutocomplete.get(settings)) && text) text = expandEmoticons(text);
+			if (!literalNotice && (!isSettingsInitialized() || cfgEmojiAutocomplete.get(settings)) && text) {
+				text = expandEmoticons(text);
+			}
 			const warnedSlashText = this.#unknownSlashWarned;
 			this.#unknownSlashWarned = undefined;
 
@@ -1288,7 +1292,7 @@ export class InputController {
 			let hasInputImages = (inputImages?.length ?? 0) > 0;
 			const submittedImages = inputImages;
 
-			if (runner?.hasHandlers("input")) {
+			if (!literalNotice && runner?.hasHandlers("input")) {
 				const input = await this.#runInputHandlers(text, inputImages, inputImageLinks);
 				if (!input) {
 					// The handler consumed the submission. The editor text was reset
@@ -2417,7 +2421,13 @@ export class InputController {
 
 	/** Send editor text as a follow-up message (queued behind current stream). */
 	async handleFollowUp(): Promise<void> {
-		let text = this.#compactDraftImages(this.ctx.editor.getExpandedText().trim());
+		const draft = this.ctx.editor.getExpandedText();
+		if (parseSlashCommand(draft.trimStart())?.name === "notice") {
+			// A notice is an operator command, independent of the prose follow-up chord.
+			await this.ctx.editor.onSubmit?.(draft);
+			return;
+		}
+		let text = this.#compactDraftImages(draft.trim());
 		let images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
 		let imageLinks =
 			images && this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;

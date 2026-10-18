@@ -1,7 +1,8 @@
 /**
- * NeoPi operator commands: `/persona`, `/loadout`, `/repl`, `/kernel`.
+ * NeoPi operator commands: `/notice`, `/persona`, `/loadout`, `/repl`, `/kernel`.
  */
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import type { InteractiveModeContext } from "../modes/types";
 import { type LoadoutHost, loadoutFeature } from "../neopi/loadout";
 import {
@@ -14,10 +15,15 @@ import {
 	sessionPersonaHost,
 } from "../neopi/persona-config";
 import { parseReplTarget, REPL_TARGETS, type ReplTarget, replTargetLabel } from "../neopi/repl";
+import noticeTemplate from "../prompts/system/operator-notice.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { buildArgumentCompletions, buildSubcommandInlineHint, ghostHint } from "./builtin-completions";
+import { clearSubmittedText } from "./helpers/draft";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import type { SlashCommandSpec, SubcommandDef, TuiSlashCommandRuntime } from "./types";
+
+// Compile the static wrapper without prompt.format(), which would rewrite payload whitespace.
+const renderNotice = prompt.compile(noticeTemplate.trimEnd());
 
 const PERSONA_DEFS: SubcommandDef[] = PERSONA_SUBCOMMANDS.map(item => ({ ...item }));
 const LIVE_PERSONA_DEFS = PERSONA_DEFS.filter(item => item.name !== "live");
@@ -208,6 +214,44 @@ function kernelStatus(session: AgentSession): string {
 }
 
 export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
+	{
+		name: "notice",
+		icon: "prompt",
+		description: "Send an operator-authored system notice to this session",
+		inlineHint: "<text>",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const { ctx } = runtime;
+			// Discard only the command and its separator; all remaining text is literal.
+			const text = command.text.slice(command.name.length + 2);
+			clearSubmittedText(runtime);
+			if (!text.trim()) {
+				ctx.showStatus("Usage: /notice <text>");
+				return;
+			}
+			const notice = renderNotice({ text });
+			const options = {
+				synthetic: true,
+				userInitiated: true,
+				attribution: "user" as const,
+				expandPromptTemplates: false,
+				streamingBehavior: "steer" as const,
+			};
+			ctx.editor.clearSubmittedDraft();
+			if (ctx.onInputCallback && !ctx.session.isStreaming) {
+				ctx.onInputCallback({ text: notice, ...options, cancelled: false, started: true });
+				return;
+			}
+			try {
+				await ctx.session.prompt(notice, options);
+			} catch (error) {
+				ctx.editor.setCollapsedText(command.text);
+				ctx.showError(errorMessage(error));
+			}
+			ctx.updatePendingMessagesDisplay();
+			ctx.ui.requestRender();
+		},
+	},
 	{
 		name: "persona",
 		icon: "prompt",

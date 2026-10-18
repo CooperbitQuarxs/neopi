@@ -48,6 +48,7 @@ Introduced as extensions on 11 Aug 2026 and made built-in commands on 28 Sep 202
 | `/persona live` | `neopi-live-personas.json` |
 | `/loadout` | `neopi-loadout.json` |
 | `/repl`, `/kernel` | none (per TUI session) |
+| `/notice <text>` | current session transcript |
 
 Each store is schema-v1 JSON written atomically with a `.bak` of the previous file. A missing `neopi-*` file falls back to the pre-rename `omomp-*` file.
 
@@ -72,6 +73,13 @@ The session persona is selected per session id. `AgentSession` applies it while 
 In REPL mode, Enter inserts a newline so multi-line code is written as in an editor; with Vim mode on, Normal-mode Enter moves down a line. `Ctrl+Q` or `Ctrl+Enter` (`app.repl.execute`, the follow-up chords) runs the whole buffer in the kernel. A one-line draft starting with `/` still submits on Enter, so `/repl agent` and other commands work from REPL mode. JavaScript and Python cells use the built-in eval kernels; Bash cells use the bash executor. The status line shows the target and keys.
 
 `/kernel` shows which kernels are running, `/kernel reset <py|js>` starts the next cell in a fresh kernel, and `/kernel interrupt` cancels running cells.
+
+### Operator notices
+
+`/notice <text>` sends a hidden, operator-authored developer-role message to the foreground main session, wrapped in `<system-notice>` tags. It starts a turn when idle and uses the normal steering queue while the agent is busy. The developer role and operator attribution survive transcript persistence and replay.
+
+Text after the command separator is literal: multiline content, whitespace, shell characters, model mentions, and template expressions are not expanded. `/notice` without non-whitespace text shows `Usage: /notice <text>` without starting a turn. The command is host-only during collaboration, does not target focused subagents or broadcast, and is not an agent tool.
+
 
 ## Iris live voice
 
