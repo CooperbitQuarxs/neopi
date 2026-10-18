@@ -157,7 +157,7 @@ export interface ArrayDefinition<T = unknown> extends DefinitionBase {
 	 * segment"). Writes naming an unknown entry are rejected; configured values that already contain
 	 * one load unchanged with a single warning per entry, so a retired id never breaks startup.
 	 */
-	items?: { values: readonly string[]; label: string };
+	items?: { values: readonly string[]; accepts?: (value: string) => boolean; label: string };
 	ui?: UiArray;
 }
 
@@ -704,7 +704,7 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 		if (!items || !Array.isArray(value)) return [];
 		const unknown = new Set<string>();
 		for (const entry of value) {
-			if (!items.values.includes(entry))
+			if (!items.values.includes(entry) && !(typeof entry === "string" && items.accepts?.(entry)))
 				unknown.add(typeof entry === "string" ? JSON.stringify(entry) : String(entry));
 		}
 		return [...unknown];

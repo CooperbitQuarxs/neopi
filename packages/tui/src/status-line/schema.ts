@@ -31,12 +31,33 @@ export const STATUS_LINE_SEGMENT_IDS = [
 ] as const;
 
 /** One identifier from the supported status-line segment catalog. */
-export type StatusLineSegmentId = (typeof STATUS_LINE_SEGMENT_IDS)[number];
+export type BuiltinStatusLineSegmentId = (typeof STATUS_LINE_SEGMENT_IDS)[number];
+export type UsageBarSegmentId = `usage:${string}`;
+export type StatusLineSegmentId = BuiltinStatusLineSegmentId | UsageBarSegmentId;
+
+export interface UsageBarSelector {
+	provider: string;
+	windowId: string;
+	tier?: string;
+}
+
+export function parseUsageBarSegmentId(id: string): UsageBarSelector | undefined {
+	const parts = id.split(":");
+	if (parts[0] !== "usage" || (parts.length !== 3 && parts.length !== 4)) return undefined;
+	if (parts.some(part => part.trim().length === 0)) return undefined;
+	const provider = parts[1]!;
+	const windowId = parts[2]!;
+	return parts.length === 4 ? { provider, windowId, tier: parts[3]! } : { provider, windowId };
+}
+
+export function isStatusLineSegmentId(value: string): value is StatusLineSegmentId {
+	return STATUS_LINE_SEGMENT_IDS.some(id => id === value) || parseUsageBarSegmentId(value) !== undefined;
+}
 
 /** Baseline segments used when Custom is selected without segment overrides. */
 export const CUSTOM_STATUS_LINE_DEFAULTS: {
-	readonly left: StatusLineSegmentId[];
-	readonly right: StatusLineSegmentId[];
+	readonly left: BuiltinStatusLineSegmentId[];
+	readonly right: BuiltinStatusLineSegmentId[];
 } = {
 	left: ["vim", "model", "live", "mode", "path", "git", "pr"],
 	right: ["session_name", "token_total", "cost", "context_pct"],

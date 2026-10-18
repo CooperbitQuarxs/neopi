@@ -2,6 +2,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getTimeBasedPricingPeriod } from "@oh-my-pi/pi-catalog/models";
+import { resolveUsedFraction } from "@oh-my-pi/pi-ai/usage";
 import { SPINNER_ADVANCE_MS, TERMINAL } from "../index";
 import {
 	formatDuration,
@@ -29,6 +30,7 @@ import { node, span } from "../native/describe";
 import { thinkingLevelToken } from "../theme/theme-class";
 import type { StatusLineSession } from "./host";
 import type { RenderedSegment, SegmentContext, SegmentView, StatusLineSegment, StatusLineSegmentId } from "./types";
+import { type BuiltinStatusLineSegmentId, parseUsageBarSegmentId, type UsageBarSelector } from "./schema";
 
 export type { SegmentContext } from "./types";
 
@@ -1173,6 +1175,82 @@ function pickUsageColor(percent: number): "muted" | "warning" | "error" {
 	return "muted";
 }
 
+function usageBarWindowLabel(windowId: string): string {
+	switch (windowId) {
+		case "7d":
+		case "1w":
+			return "wk";
+		case "1d":
+		case "24h":
+		case "daily":
+			return "day";
+		case "monthly":
+		case "1mo":
+		case "30d":
+			return "mo";
+		default:
+			return sanitizeStatusText(windowId);
+	}
+}
+
+function usageBarContent(
+	bar: UsageBarSelector,
+	ctx: SegmentContext,
+): {
+	label: string;
+	value: string;
+	color: ThemeColor;
+	age?: string;
+} {
+	const window = usageBarWindowLabel(bar.windowId);
+	const tier = bar.tier?.trim().toLowerCase();
+	const provider =
+		bar.provider === "anthropic"
+			? "AN"
+			: bar.provider === "openai-codex"
+				? "OA"
+				: truncateToWidth(sanitizeStatusText(bar.provider), TRUNCATE_LENGTHS.SHORT);
+	const tierLabel = tier ? sanitizeStatusText(tier[0]!.toUpperCase() + tier.slice(1)) : undefined;
+	const label = tierLabel ? (window === "wk" ? tierLabel : `${tierLabel} ${window}`) : `${provider} ${window}`;
+	if (!ctx.usageReports) return { label, value: "…", color: "dim" };
+	for (const report of ctx.usageReports.reports) {
+		if (report.provider !== bar.provider) continue;
+		for (const limit of report.limits) {
+			if (
+				limit.scope.windowId !== bar.windowId ||
+				(limit.scope.tier?.trim().toLowerCase() || undefined) !== tier ||
+				ctx.usageLimitMatchesActiveAccount?.(report, limit) === false
+			)
+				continue;
+			const fraction = resolveUsedFraction(limit);
+			if (fraction === undefined || !Number.isFinite(fraction)) return { label, value: "n/a", color: "dim" };
+			const percent = Math.round(fraction * 100);
+			const elapsed = Math.max(0, (ctx.now?.getTime() ?? Date.now()) - report.fetchedAt);
+			const age = elapsed < 60_000 ? "now" : formatDuration(Math.floor(elapsed / 60_000) * 60_000);
+			return { label, value: `${percent}%`, color: pickUsageColor(percent), age };
+		}
+	}
+	return { label, value: "n/a", color: "dim" };
+}
+
+function renderUsageBar(bar: UsageBarSelector, ctx: SegmentContext): RenderedSegment {
+	const { label, value, color, age } = usageBarContent(bar, ctx);
+	const content =
+		age === undefined
+			? theme.fg("dim", `${label} ${value}`)
+			: `${label} ${theme.fg(color, value)} ${theme.fg("dim", age)}`;
+	return { content, visible: true };
+}
+
+function describeUsageBar(bar: UsageBarSelector, ctx: SegmentContext): SegmentView {
+	const { label, value, color, age } = usageBarContent(bar, ctx);
+	return segView(
+		age === undefined
+			? [span(`${label} ${value}`, "dim")]
+			: [span(`${label} `), span(value, color), span(` ${age}`, "dim")],
+	);
+}
+
 /**
  * One quota window (`5h`, `1d`, `7d`, `mo`). The integer policy (round vs
  * floor) and the reset unit (minutes vs hours) stay explicit at each call site:
@@ -1319,7 +1397,7 @@ const usageSegment: StatusLineSegment = {
 // Segment Registry
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
+export const SEGMENTS: Record<BuiltinStatusLineSegmentId, StatusLineSegment> = {
 	pi: piSegment,
 	status: statusSegment,
 	model: modelSegment,
@@ -1351,7 +1429,9 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 };
 
 export function renderSegment(id: StatusLineSegmentId, ctx: SegmentContext): RenderedSegment {
-	const segment = SEGMENTS[id];
+	const bar = parseUsageBarSegmentId(id);
+	if (bar) return renderUsageBar(bar, ctx);
+	const segment = SEGMENTS[id as BuiltinStatusLineSegmentId];
 	if (!segment) {
 		return { content: "", visible: false };
 	}
@@ -1360,7 +1440,8 @@ export function renderSegment(id: StatusLineSegmentId, ctx: SegmentContext): Ren
 
 /** Native description of one segment; null when it is hidden or unknown. */
 export function describeSegment(id: StatusLineSegmentId, ctx: SegmentContext): SegmentView | null {
-	return SEGMENTS[id]?.describe(ctx) ?? null;
+	const bar = parseUsageBarSegmentId(id);
+	return bar ? describeUsageBar(bar, ctx) : (SEGMENTS[id as BuiltinStatusLineSegmentId]?.describe(ctx) ?? null);
 }
 
-export const ALL_SEGMENT_IDS: StatusLineSegmentId[] = Object.keys(SEGMENTS) as StatusLineSegmentId[];
+export const ALL_SEGMENT_IDS: BuiltinStatusLineSegmentId[] = Object.keys(SEGMENTS) as BuiltinStatusLineSegmentId[];
