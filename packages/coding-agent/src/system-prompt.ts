@@ -8,16 +8,7 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ToolExample, TSchema } from "@oh-my-pi/pi-ai";
 import { renderToolInventory } from "@oh-my-pi/pi-ai/dialect";
 import type { DelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
-import {
-	$env,
-	getAgentDir,
-	getProjectDir,
-	hasFsCode,
-	isEnoent,
-	logger,
-	prompt,
-	relativePathWithinRoot,
-} from "@oh-my-pi/pi-utils";
+import { $env, getAgentDir, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { findConfigFile } from "./config";
@@ -382,13 +373,13 @@ export async function loadProjectContextFiles(
 	const items = ancestorRoot
 		? [
 				...cwdItems,
-				// Only directories strictly above the source root: the root and everything below it
-				// are the copy's own files, and user-level files already came from the cwd walk.
+				// Only scopes strictly above the source root (discovered depth > 0, which also covers
+				// config-directory files such as `<ancestor>/.github/copilot-instructions.md`): the root
+				// and everything below it are the copy's own files, and user-level files already came
+				// from the cwd walk.
 				...ancestorItems.filter(
 					item =>
-						item.level === "project" &&
-						relativePathWithinRoot(path.dirname(item.path), ancestorRoot) !== null &&
-						!cwdItems.some(own => own.path === item.path),
+						item.level === "project" && (item.depth ?? 0) > 0 && !cwdItems.some(own => own.path === item.path),
 				),
 			]
 		: cwdItems;
