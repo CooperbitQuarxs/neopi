@@ -535,4 +535,25 @@ describe("monitor chat revival ownership", () => {
 		expect(fixture.service.authenticate(fresh.capability)).toBeUndefined();
 		expect(() => fixture.service.grant(fixture.sub.id)).toThrow("unknown agent");
 	});
+
+	test("at the grant cap the oldest unconnected grant makes room; connected ones survive", () => {
+		const fixture = serviceFixture(async () => {
+			throw new Error("must not revive");
+		});
+		fixture.service.attach(fixture.connection, fixture.grant);
+		const minted = [fixture.capability];
+		for (;;) {
+			try {
+				minted.push(fixture.service.grant(fixture.sub.id).capability);
+			} catch (error) {
+				throw new Error(`minting stopped after ${minted.length} grants: ${String(error)}`);
+			}
+			// The first unconnected grant is the second minted; once it is evicted the cap was hit.
+			if (!fixture.service.authenticate(minted[1] ?? "")) break;
+			if (minted.length > 1_000) throw new Error("grants were never evicted");
+		}
+		expect(fixture.service.authenticate(fixture.capability)).toBe(fixture.grant);
+		expect(fixture.service.authenticate(minted[2] ?? "")).toBeDefined();
+		expect(fixture.service.authenticate(minted.at(-1) ?? "")).toBeDefined();
+	});
 });

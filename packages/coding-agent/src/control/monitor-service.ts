@@ -233,6 +233,9 @@ export class ControlMonitorService {
 			throw new MonitorRequestError("unknown_agent", `unknown agent ${agentId}`);
 		}
 		this.#pruneGrants();
+		// `npi monitor attach --agent` mints a grant per run and nothing revokes it when the pane
+		// exits: at the cap, the oldest grant with no open connection makes room.
+		if (this.#grants.size >= MAX_GRANTS) this.#evictIdleGrant();
 		if (this.#grants.size >= MAX_GRANTS) {
 			throw new MonitorRequestError("invalid_value", `too many monitor grants (${MAX_GRANTS})`);
 		}
@@ -398,6 +401,17 @@ export class ControlMonitorService {
 			} catch {
 				this.#grants.delete(key);
 			}
+		}
+	}
+
+	/** Revoke the oldest grant no connection is using (grants keep insertion order). */
+	#evictIdleGrant(): void {
+		const inUse = new Set(this.#connections.values());
+		for (const [key, grant] of this.#grants) {
+			if (inUse.has(grant)) continue;
+			this.#grants.delete(key);
+			grant.revoked = true;
+			return;
 		}
 	}
 
