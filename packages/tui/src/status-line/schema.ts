@@ -16,6 +16,7 @@ export const STATUS_LINE_SEGMENT_IDS = [
 	"cost",
 	"context_pct",
 	"context_total",
+	"context_bar",
 	"time_spent",
 	"time",
 	"session",

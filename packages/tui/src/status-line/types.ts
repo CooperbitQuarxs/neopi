@@ -57,9 +57,9 @@ export interface StatusLineSettings {
 	/** Replace the model-segment icon with the thinking-level glyph and drop the
 	 *  " · <level>" suffix, so the thinking level reads as a single compact icon. */
 	compactThinkingLevel?: boolean;
-	/** How the gap line between the left and right groups reacts to context
-	 *  usage. `embedded` moves configured context segments into the annotated
-	 *  gauge as percentage and window labels. Box composer only. */
+	/** How the context gauge reacts to usage. `embedded` moves configured context
+	 * segments into the annotated gauge as percentage and window labels.
+	 * Applies to the box/band gap and to explicit context_bar widgets. */
 	contextLine?: ContextLineMode;
 }
 

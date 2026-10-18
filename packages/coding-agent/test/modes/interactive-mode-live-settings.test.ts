@@ -69,7 +69,7 @@ describe("InteractiveMode live settings", () => {
 		cfgHideThinkingBlock.set(session.settings, true);
 		await Promise.resolve();
 
-		const effective = mode.statusLine.getEffectiveSettingsForTest();
+		const effective = mode.statusLine.getEffectiveSettings();
 		expect(effective.leftSegments).toEqual(["time", "model"]);
 		expect(effective.contextLine).toBe("off");
 		expect(mode.hideThinkingBlock).toBe(true);

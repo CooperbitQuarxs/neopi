@@ -1,4 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { logger } from "@oh-my-pi/pi-utils";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import type { Component, OverlayHandle, OverlayOptions, TUI } from "@oh-my-pi/pi-tui";
@@ -6,6 +10,15 @@ import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import * as activityClient from "@oh-my-pi/pi-coding-agent/stats/activity-client";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
+import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import {
+	cfgComposerShape,
+	cfgStatusLinePreset,
+	cfgStatusLineLeftSegments,
+	cfgStatusLineRightSegments,
+} from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { createStartupStatusLine } from "@oh-my-pi/pi-tui/status-line/startup";
+import { StatusLineConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/status-line-config";
 
 /** The overlay members of `ui` the single-instance guard reads and drives. */
 interface OverlayUi {
@@ -74,6 +87,151 @@ describe("single-instance menus", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+	});
+
+	it("opens /statusline and saves its draft through isolated Settings", async () => {
+		const isolated = Settings.isolated();
+		cfgComposerShape.set(isolated, "band");
+		cfgStatusLinePreset.set(isolated, "custom");
+		cfgStatusLineLeftSegments.set(isolated, ["model", "context_bar"]);
+		cfgStatusLineRightSegments.set(isolated, ["time"]);
+		const statusLine = createStartupStatusLine({
+			settings: { preset: "custom", leftSegments: ["model", "context_bar"], rightSegments: ["time"] },
+			gitEnabled: false,
+			autoThinking: false,
+			fastMode: false,
+			usingSubscription: false,
+			autoCompactEnabled: false,
+			compactionBoundaries: null,
+		});
+		const { ui, shown } = overlayUi();
+		const syncComposerShape = vi.fn<(shape?: string) => void>();
+		const ctx = createInteractiveModeContext({ settings: isolated, statusLine, ui, syncComposerShape });
+		const controller = new SelectorController(ctx);
+		ctx.showStatusLineConfigure = () => controller.showStatusLineConfigure();
+		try {
+			expect(await executeBuiltinSlashCommand("/statusline", { ctx })).toBe(true);
+			expect(shown[0]).toBeInstanceOf(StatusLineConfigOverlayComponent);
+			controller.showStatusLineConfigure();
+			expect(shown).toHaveLength(1);
+			shown[0]!.handleInput?.("\r"); // band → box
+			shown[0]!.handleInput?.("\x1b[B");
+			shown[0]!.handleInput?.("\t"); // model → right
+			expect(syncComposerShape).toHaveBeenLastCalledWith("box");
+			shown[0]!.handleInput?.("\x13"); // Ctrl+S
+			await Bun.sleep(0);
+			expect(cfgStatusLinePreset.get(isolated)).toBe("custom");
+			expect(cfgStatusLineLeftSegments.get(isolated)).toEqual(["context_bar"]);
+			expect(cfgStatusLineRightSegments.get(isolated)).toEqual(["time", "model"]);
+			expect(cfgComposerShape.get(isolated)).toBe("box");
+			expect(ui.overlayStack).toHaveLength(0);
+		} finally {
+			statusLine.dispose();
+		}
+	});
+
+	it.each([true, false])(
+		"rolls back a rejected layout save without persisting its draft (configured: %s)",
+		async configured => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "npi-statusline-rollback-"));
+			const isolated = await Settings.loadIsolated({ agentDir: dir, cwd: dir });
+			const handles = [
+				cfgStatusLineLeftSegments,
+				cfgStatusLineRightSegments,
+				cfgStatusLinePreset,
+				cfgComposerShape,
+			] as const;
+			if (configured) {
+				cfgStatusLineLeftSegments.set(isolated, ["time"]);
+				cfgStatusLineRightSegments.set(isolated, ["model"]);
+				cfgStatusLinePreset.set(isolated, "minimal");
+				cfgComposerShape.set(isolated, "rail");
+			}
+			await isolated.flush();
+			const before = handles.map(handle => handle.get(isolated));
+			const statusLine = createStartupStatusLine({
+				settings: { preset: "custom", leftSegments: ["model"], rightSegments: ["time"] },
+				gitEnabled: false,
+				autoThinking: false,
+				fastMode: false,
+				usingSubscription: false,
+				autoCompactEnabled: false,
+				compactionBoundaries: null,
+			});
+			const { ui, shown } = overlayUi();
+			const failed = Promise.withResolvers<void>();
+			const ctx = createInteractiveModeContext({
+				settings: isolated,
+				statusLine,
+				ui,
+				syncComposerShape: () => {},
+				showStatus: message => {
+					if (message.startsWith("Could not save status-line layout:")) failed.resolve();
+				},
+			});
+			const controller = new SelectorController(ctx);
+			const flush = spyOn(isolated, "flush").mockRejectedValueOnce(new Error("save failed"));
+			// A second I/O failure must leave only rollback values queued for a later retry.
+			if (!configured) flush.mockRejectedValueOnce(new Error("rollback flush failed"));
+			const warning = spyOn(logger, "warn").mockImplementation(() => {});
+			try {
+				controller.showStatusLineConfigure();
+				shown[0]!.handleInput?.("\r");
+				shown[0]!.handleInput?.("\x1b[B");
+				shown[0]!.handleInput?.("\t");
+				shown[0]!.handleInput?.("s");
+				await failed.promise;
+				expect(handles.map(handle => handle.get(isolated))).toEqual(before);
+				expect(handles.map(handle => isolated.isConfigured(handle))).toEqual(handles.map(() => configured));
+				expect(ui.overlayStack).toHaveLength(1);
+				expect(flush).toHaveBeenCalledTimes(2);
+				expect(warning).toHaveBeenCalledTimes(configured ? 0 : 1);
+				shown[0]!.handleInput?.("\x1b");
+				expect(ui.overlayStack).toHaveLength(0);
+				flush.mockRestore();
+				await isolated.flush();
+				const reloaded = await Settings.loadReadOnly({ agentDir: dir, cwd: dir });
+				expect(handles.map(handle => handle.get(reloaded))).toEqual(before);
+				expect(handles.map(handle => reloaded.isConfigured(handle))).toEqual(handles.map(() => configured));
+			} finally {
+				flush.mockRestore();
+				statusLine.dispose();
+				await isolated.flush();
+				await fs.rm(dir, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it("restores the real status-line preview and composer without persisting on cancel", () => {
+		const isolated = Settings.isolated({ "composer.shape": "band" });
+		const statusLine = createStartupStatusLine({
+			settings: { preset: "custom", leftSegments: ["model"], rightSegments: ["time"] },
+			gitEnabled: false,
+			autoThinking: false,
+			fastMode: false,
+			usingSubscription: false,
+			autoCompactEnabled: false,
+			compactionBoundaries: null,
+		});
+		const original = statusLine.getEffectiveSettings();
+		const { ui, shown } = overlayUi();
+		const syncComposerShape = vi.fn<(shape?: string) => void>();
+		const ctx = createInteractiveModeContext({ settings: isolated, statusLine, ui, syncComposerShape });
+		const controller = new SelectorController(ctx);
+		try {
+			controller.showStatusLineConfigure();
+			shown[0]!.handleInput?.("\r");
+			shown[0]!.handleInput?.("\x1b[B");
+			shown[0]!.handleInput?.(" ");
+			expect(statusLine.getEffectiveSettings().leftSegments).toEqual([]);
+			shown[0]!.handleInput?.("\x1b");
+			expect(statusLine.getEffectiveSettings()).toEqual(original);
+			expect(syncComposerShape).toHaveBeenLastCalledWith("band");
+			expect(cfgComposerShape.get(isolated)).toBe("band");
+			expect(cfgStatusLinePreset.get(isolated)).toBe("default");
+		} finally {
+			statusLine.dispose();
+		}
 	});
 
 	// Regression: a second /settings (typed while theme discovery was pending, or

@@ -1193,15 +1193,8 @@ function usageBarWindowLabel(windowId: string): string {
 	}
 }
 
-function usageBarContent(
-	bar: UsageBarSelector,
-	ctx: SegmentContext,
-): {
-	label: string;
-	value: string;
-	color: ThemeColor;
-	age?: string;
-} {
+/** Shared label for a quota widget in both the bar and its configurator. */
+export function usageBarLabel(bar: UsageBarSelector): string {
 	const window = usageBarWindowLabel(bar.windowId);
 	const tier = bar.tier?.trim().toLowerCase();
 	const provider =
@@ -1211,7 +1204,20 @@ function usageBarContent(
 				? "OA"
 				: truncateToWidth(sanitizeStatusText(bar.provider), TRUNCATE_LENGTHS.SHORT);
 	const tierLabel = tier ? sanitizeStatusText(tier[0]!.toUpperCase() + tier.slice(1)) : undefined;
-	const label = tierLabel ? (window === "wk" ? tierLabel : `${tierLabel} ${window}`) : `${provider} ${window}`;
+	return tierLabel ? (window === "wk" ? tierLabel : `${tierLabel} ${window}`) : `${provider} ${window}`;
+}
+
+function usageBarContent(
+	bar: UsageBarSelector,
+	ctx: SegmentContext,
+): {
+	label: string;
+	value: string;
+	color: ThemeColor;
+	age?: string;
+} {
+	const tier = bar.tier?.trim().toLowerCase();
+	const label = usageBarLabel(bar);
 	if (!ctx.usageReports) return { label, value: "…", color: "dim" };
 	for (const report of ctx.usageReports.reports) {
 		if (report.provider !== bar.provider) continue;
@@ -1414,6 +1420,13 @@ export const SEGMENTS: Record<BuiltinStatusLineSegmentId, StatusLineSegment> = {
 	cost: costSegment,
 	context_pct: contextPctSegment,
 	context_total: contextTotalSegment,
+	// Flexible ANSI layout is owned by StatusLineComponent; the native composer
+	// already has its own context meter and must not describe a second one.
+	context_bar: {
+		id: "context_bar",
+		render: () => ({ content: "", visible: false }),
+		describe: () => null,
+	},
 	time_spent: timeSpentSegment,
 	time: timeSegment,
 	session: sessionSegment,

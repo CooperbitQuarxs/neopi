@@ -144,7 +144,7 @@ export interface InteractiveModeContext {
 	hookWidgetContainerAbove: Container;
 	hookWidgetContainerBelow: Container;
 	statusLine: StatusLineComponent;
-	syncComposerShape(): void;
+	syncComposerShape(previewShape?: string): void;
 
 	// Session access
 	session: AgentSession;
@@ -536,6 +536,7 @@ export interface InteractiveModeContext {
 	showUsageDashboard(reports: UsageReport[]): void;
 	showAdvisorConfigure(): void;
 	showChainConfigure(): void;
+	showStatusLineConfigure(): void;
 	/** Edit, save, apply, and activate mixtures in the fullscreen graph configurator. */
 	showMixtureConfigure(name?: string): void;
 	/** Fullscreen persona editor: main system-prompt personas or live-voice personas. */

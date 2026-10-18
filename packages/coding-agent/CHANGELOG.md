@@ -8,6 +8,7 @@
 
 ### Added
 
+- Added `/statusline` to arrange builtin and provider-usage widgets and choose a composer with live previews, plus a flexible `context_bar` widget for every composer ([#227](https://github.com/PsychedelicShayna/neopi/issues/227), [#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
 - Added per-provider usage-bar status-line widgets (`usage:<provider>:<window>[:<tier>]`) showing each reported quota window's percent and age ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
 - Added an IRC communications viewer (`Alt+I`) that keeps every agent-to-agent message in the session, including broadcasts and failed deliveries, after the transcript's live cards have retired; the `irc.operator.relayToMainTranscript` setting can turn those cards off ([#1](https://github.com/PsychedelicShayna/neopi/issues/1)).
 - Added an IRC identity for the operator (`Operator`, or `irc.operator.handle`): agents can message you directly without waiting on the main model, and `/irc <agent>|all <message>` or `r` in the IRC viewer sends as you ([#31](https://github.com/PsychedelicShayna/neopi/issues/31)).
@@ -27,6 +28,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- A failed `/statusline` save restores the prior settings, so cancelling cannot later persist the discarded layout.
 - An open `ask` question no longer locks the composer: speech-to-text and dictation keys work while it is up, and with the question hidden (`Alt+H`) you can type and send a message or slash command while the question stays pending ([#303](https://github.com/PsychedelicShayna/neopi/issues/303)).
 - A registered agent name with an effort suffix, such as `scout:high`, now runs that agent with its own prompt, tools and model at that effort instead of fuzzy-matching an unrelated model ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 - The agent no longer treats a smoke run as mandatory before finishing any non-trivial work; the base and project prompts drop that rule and its critical reinforcement ([#307](https://github.com/PsychedelicShayna/neopi/issues/307)).
