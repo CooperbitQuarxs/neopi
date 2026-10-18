@@ -1202,11 +1202,12 @@ export class InputController {
 			this.#armedBareCommand = undefined;
 			const armedBareCommand =
 				armed && armed.sessionId === this.ctx.sessionManager.getSessionId() ? armed.text : undefined;
-			// Operator notices are literal payloads, not prose to rewrite or image-chip text.
-			const literalNotice = parseSlashCommand(text.trimStart())?.name === "notice";
-			text = literalNotice ? text.trimStart() : this.#compactDraftImages(text.trim());
+			// Notices and deferred input stay literal until their own submission is interpreted.
+			const commandName = parseSlashCommand(text.trimStart())?.name;
+			const literalInput = commandName === "notice" || commandName === "defer";
+			text = literalInput ? text.trimStart() : this.#compactDraftImages(text.trim());
 			const hasPendingImages = this.ctx.editor.pendingImages.length > 0;
-			if (!literalNotice && (!isSettingsInitialized() || cfgEmojiAutocomplete.get(settings)) && text) {
+			if (!literalInput && (!isSettingsInitialized() || cfgEmojiAutocomplete.get(settings)) && text) {
 				text = expandEmoticons(text);
 			}
 			const warnedSlashText = this.#unknownSlashWarned;
@@ -1292,7 +1293,7 @@ export class InputController {
 			let hasInputImages = (inputImages?.length ?? 0) > 0;
 			const submittedImages = inputImages;
 
-			if (!literalNotice && runner?.hasHandlers("input")) {
+			if (!literalInput && runner?.hasHandlers("input")) {
 				const input = await this.#runInputHandlers(text, inputImages, inputImageLinks);
 				if (!input) {
 					// The handler consumed the submission. The editor text was reset

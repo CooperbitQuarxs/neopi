@@ -2,8 +2,10 @@
  * NeoPi operator commands: `/notice`, `/persona`, `/loadout`, `/repl`, `/kernel`.
  */
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import { runWithDetachedDraft } from "@oh-my-pi/pi-tui/draft-scope";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import type { InteractiveModeContext } from "../modes/types";
+import { deferredSubmissionsFor, DEFER_USAGE, parseDeferredInput } from "../neopi/defer";
 import { type LoadoutHost, loadoutFeature } from "../neopi/loadout";
 import {
 	PERSONA_SUBCOMMANDS,
@@ -214,6 +216,40 @@ function kernelStatus(session: AgentSession): string {
 }
 
 export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
+	{
+		name: "defer",
+		icon: "prompt",
+		description: "Submit composer input after a delay, or cancel a deferred submission",
+		inlineHint: "<duration> <input> | cancel <id|all>",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const { ctx } = runtime;
+			clearSubmittedText(runtime);
+			const schedules = deferredSubmissionsFor(ctx.session);
+			const cancellation = /^cancel\s+(\d+|all)$/.exec(command.args);
+			if (cancellation) {
+				const count = schedules.cancel(cancellation[1] === "all" ? undefined : Number(cancellation[1]));
+				ctx.showStatus(`Cancelled ${count} deferred submission${count === 1 ? "" : "s"}.`);
+				return;
+			}
+			const parsed = parseDeferredInput(command.text.slice(command.name.length + 2).trimStart());
+			if (!parsed) {
+				ctx.showError(DEFER_USAGE);
+				return;
+			}
+			const id = schedules.schedule(
+				parsed.delayMs,
+				async () => {
+					await runWithDetachedDraft(async () => {
+						ctx.editor.setText(parsed.input);
+						await ctx.editor.onSubmit?.(parsed.input);
+					});
+				},
+				error => ctx.showError(`Deferred submission failed: ${errorMessage(error)}`),
+			);
+			ctx.showStatus(`Deferred submission ${id} scheduled. Cancel with /defer cancel ${id}.`);
+		},
+	},
 	{
 		name: "notice",
 		icon: "prompt",
