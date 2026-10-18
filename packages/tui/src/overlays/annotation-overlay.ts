@@ -16,6 +16,9 @@ import { wrapLiteralLine } from "../utils";
 import { editorKey } from "../chrome/keybinding-hints";
 import { formatKeyHint, formatKeyHints, type KeybindingsManager } from "../app-keybindings";
 import type { Keybinding } from "../keybindings";
+import { extractPrintableText } from "../keys";
+import { MenuSelection } from "../components/menu-selection";
+import { applyMenuMotion, MenuKeyReader, menuScrollBy, type MenuNavAction, MenuViewport } from "../components/menu-navigation";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { type Theme } from "../theme/theme";
 import type {
@@ -42,7 +45,7 @@ import { appExternalEditorKey, matchesAppExternalEditor } from "../keybinding-ma
 import type { KeyName } from "../key-hint-format";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { col, item, keyed, node, row as rowNode, span, text } from "../native/describe";
-import { leafKey, type NativeChild, type NativeNode, type NativeUiEvent } from "../native/node";
+import { leafKey, type NativeChild, type NativeNode, type NativeScroll, type NativeUiEvent } from "../native/node";
 import { actionButton, hintsRow, itemIndex, type NativeHint, selectList } from "../native/overlay";
 
 function fit(text: string, width: number): string {
@@ -215,6 +218,17 @@ export class AnnotationOverlay implements Focusable {
 	focused = false;
 	#scrollView: ScrollView;
 	#editor: Editor;
+	readonly #keys: MenuKeyReader;
+	readonly #fileMenu: MenuSelection<ReviewDiffFile>;
+	readonly #fileViewport = new MenuViewport();
+	readonly #fileRows: number[];
+	readonly #actionMenu: MenuSelection<string>;
+	readonly #actionViewport = new MenuViewport();
+	readonly #actionRows: number[];
+	readonly #chooserMenu = new MenuSelection<number>([], { getKey: String, getSearchText: () => "" });
+	readonly #chooserViewport = new MenuViewport();
+	#chooserRows: number[] = [];
+	#bodyNativeScroll: NativeScroll | undefined;
 	#focus: FocusRegion = "files";
 	#fileIndex = 0;
 	#sourceIndex = 0;
@@ -237,6 +251,7 @@ export class AnnotationOverlay implements Focusable {
 	#textSource: TextReviewSource | undefined;
 	#textLines: readonly string[] = [];
 	#viewportDriven = false;
+	#viewportDetached = false;
 	/** Last viewport move went toward the end, so a viewport resting at its maximum offset selects the last visible row. */
 	#viewportTowardEnd = false;
 	#renderedRowBySource: readonly number[] = [];
@@ -283,6 +298,7 @@ export class AnnotationOverlay implements Focusable {
 		this.#tui = tui;
 		this.#theme = theme;
 		this.#keybindings = keybindings;
+		this.#keys = new MenuKeyReader(keybindings);
 		if (isTextSource(filesOrSource)) {
 			this.#files = [];
 			this.#actions = TEXT_REVIEW_ACTIONS;
@@ -296,6 +312,14 @@ export class AnnotationOverlay implements Focusable {
 			this.#mode = modeOrCallbacks as string;
 			this.#callbacks = maybeCallbacks!;
 		}
+		this.#fileMenu = new MenuSelection(this.#files, { getKey: file => `${file.path}:${file.occurrence}`, getSearchText: displayFileLabel });
+		this.#fileRows = this.#files.map(() => 1);
+		this.#actionMenu = new MenuSelection(this.#actions, {
+			getKey: action => action,
+			getSearchText: action => action,
+			isDisabled: action => this.#actionDisabled(this.#actions.indexOf(action)),
+		});
+		this.#actionRows = this.#actions.map(() => 1);
 		const symbols = {
 			cursor: theme.nav.cursor,
 			inputCursor: theme.nav.cursor,
@@ -388,6 +412,7 @@ export class AnnotationOverlay implements Focusable {
 		this.#textSourceEdited = true;
 		this.#textLines = splitTextLines(text);
 		this.#viewportDriven = false;
+		this.#viewportDetached = false;
 		this.#sourceIndex = Math.min(this.#sourceIndex, Math.max(0, this.#textLines.length - 1));
 		let dropped = 0;
 		const kept: CommittedTextAnnotation[] = [];
@@ -427,6 +452,10 @@ export class AnnotationOverlay implements Focusable {
 			return;
 		}
 		if (this.#annotating) {
+			if (extractPrintableText(data) !== undefined) {
+				this.#editor.handleInput(data);
+				return;
+			}
 			if (matchesAppExternalEditor(data)) {
 				void this.#openAnnotationEditor();
 				return;
@@ -438,11 +467,24 @@ export class AnnotationOverlay implements Focusable {
 			this.#editor.handleInput(data);
 			return;
 		}
-		if (this.#keybindings.matches(data, "tui.select.cancel")) {
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (action?.kind === "cancel") {
 			this.#escape();
 			return;
 		}
-		if (this.#callbacks.onExternalEditor && matchesAppExternalEditor(data)) {
+		if (action?.kind === "context") {
+			this.#cycleFocus(action.delta);
+			return;
+		}
+		if (action?.kind === "horizontal") {
+			const regions: FocusRegion[] = this.#sidebarShown ? ["files", "diff", "actions"] : ["diff", "actions"];
+			const index = Math.max(0, regions.indexOf(this.#focus));
+			this.#focus = regions[Math.max(0, Math.min(regions.length - 1, index + action.delta))]!;
+			this.#keys.reset();
+			return;
+		}
+		if (!action && this.#callbacks.onExternalEditor && matchesAppExternalEditor(data)) {
 			void this.#openSourceEditor();
 			return;
 		}
@@ -466,17 +508,9 @@ export class AnnotationOverlay implements Focusable {
 			this.#editCurrentAnnotation();
 			return;
 		}
-		if (matchesKey(data, "tab") || data === "\t") {
-			this.#cycleFocus(1);
-			return;
-		}
-		if (matchesKey(data, "shift+tab") || data === "\x1b[Z") {
-			this.#cycleFocus(-1);
-			return;
-		}
-		if (this.#focus === "files") this.#handleFiles(data);
-		else if (this.#focus === "diff") this.#handleDiff(data);
-		else this.#handleActions(data);
+		if (this.#focus === "files") this.#handleFiles(action, data);
+		else if (this.#focus === "diff") this.#handleDiff(action, data);
+		else this.#handleActions(action);
 	}
 
 	/** Primary key bound to `action` in this overlay's keybindings, formatted for footer hints. */
@@ -497,6 +531,7 @@ export class AnnotationOverlay implements Focusable {
 
 	/** Esc, by state: leave the note chooser, drop the note draft, else close the review. */
 	#escape(): void {
+		this.#keys.reset();
 		if (this.#annotationChooser) this.#annotationChooser = undefined;
 		else if (this.#annotating) this.#cancelAnnotation();
 		else this.#finish(undefined);
@@ -507,118 +542,73 @@ export class AnnotationOverlay implements Focusable {
 		const current = regions.indexOf(this.#focus);
 		const index = current < 0 ? regions.length - 1 : current;
 		this.#focus = regions[(index + direction + regions.length) % regions.length]!;
+		this.#keys.reset();
 	}
 
-	#handleFiles(data: string): void {
+	#handleFiles(action: MenuNavAction | undefined, data: string): void {
 		if (data === "a") {
 			this.#startAnnotation("file");
 			return;
 		}
-		if (this.#keybindings.matches(data, "tui.select.up") || matchesKey(data, "k")) {
-			this.#selectFile(Math.max(0, this.#fileIndex - 1));
-			return;
-		}
-		if (this.#keybindings.matches(data, "tui.select.down") || matchesKey(data, "j")) {
-			this.#selectFile(Math.min(this.#files.length - 1, this.#fileIndex + 1));
-			return;
-		}
-		if (matchesKey(data, "right") || matchesKey(data, "l") || this.#keybindings.matches(data, "tui.select.confirm")) {
-			this.#focus = "diff";
-		}
+		if (!action) return;
+		this.#fileViewport.layout(this.#fileRows, this.#fileIndex, this.#fileViewport.visibleItems);
+		const motion = applyMenuMotion(action, this.#fileMenu, this.#fileViewport);
+		if (motion.handled) {
+			if (motion.selectionChanged) this.#selectFile(this.#fileMenu.selectedIndex);
+		} else if (action.kind === "confirm" || action.kind === "toggle") this.#focus = "diff";
 	}
 
-	#handleDiff(data: string): void {
+	#handleDiff(action: MenuNavAction | undefined, data: string): void {
 		if (data === "a") {
 			this.#startAnnotation("line");
 			return;
 		}
-		if (matchesKey(data, "left") || matchesKey(data, "h")) {
-			if (this.#sidebarShown) this.#focus = "files";
-			return;
-		}
-		if (matchesKey(data, "right") || matchesKey(data, "l") || this.#keybindings.matches(data, "tui.select.confirm")) {
+		if (action?.kind === "confirm") {
 			this.#focus = "actions";
 			return;
 		}
-		if (matchesKey(data, "shift+up")) {
-			this.#moveSourceCursor(-5);
+		if (matchesKey(data, "shift+up") || matchesKey(data, "shift+down")) {
+			this.#moveSourceCursor(matchesKey(data, "shift+up") ? -5 : 5);
 			return;
 		}
-		if (matchesKey(data, "shift+down")) {
-			this.#moveSourceCursor(5);
-			return;
-		}
-		if (this.#keybindings.matches(data, "tui.select.up") || matchesKey(data, "k")) {
-			this.#moveSourceCursor(-1);
-			return;
-		}
-		if (this.#keybindings.matches(data, "tui.select.down") || matchesKey(data, "j")) {
-			this.#moveSourceCursor(1);
-			return;
-		}
-		if (this.#keybindings.matches(data, "tui.select.pageUp")) {
+		if (!action) return;
+		if (action.kind === "move") this.#moveSourceCursor(action.delta);
+		else if (action.kind === "scroll") {
+			this.#scrollView.handleMenuAction(action);
+			this.#viewportDetached = true;
+			this.#viewportDriven = false;
+		} else if (action.kind === "halfPage" || action.kind === "page") {
+			this.#viewportDetached = false;
 			if (this.#tui.nativeRendering && !this.#textSource) {
-				this.#moveSourceCursor(-Math.max(1, this.#bodyHeight - 1));
+				const step = action.kind === "halfPage" ? Math.max(1, Math.floor(this.#bodyHeight / 2)) : Math.max(1, this.#bodyHeight - 1);
+				this.#moveSourceCursor(action.delta * step);
 			} else {
-				this.#scrollView.page(-1);
+				this.#scrollView.handleMenuAction(action);
 				this.#viewportDriven = true;
-				this.#viewportTowardEnd = false;
+				this.#viewportTowardEnd = action.delta > 0;
 				this.#syncCursorToViewport();
 			}
-			return;
-		}
-		if (this.#keybindings.matches(data, "tui.select.pageDown")) {
-			if (this.#tui.nativeRendering && !this.#textSource) {
-				this.#moveSourceCursor(Math.max(1, this.#bodyHeight - 1));
-			} else {
-				this.#scrollView.page(1);
+		} else if (action.kind === "boundary") {
+			this.#viewportDetached = false;
+			this.#sourceIndex = action.edge === "first" ? 0 : Math.max(0, (this.#textSource ? this.#textLines.length : this.#currentSourceRows().length) - 1);
+			if (this.#textSource || this.#tui.nativeRendering) this.#viewportDriven = false;
+			else {
+				this.#scrollView.handleMenuAction(action);
 				this.#viewportDriven = true;
-				this.#viewportTowardEnd = true;
-				this.#syncCursorToViewport();
-			}
-			return;
-		}
-		if (data === "g" || matchesKey(data, "home")) {
-			this.#sourceIndex = 0;
-			if (this.#textSource || this.#tui.nativeRendering) {
-				this.#viewportDriven = false;
-			} else {
-				this.#scrollView.scrollToTop();
-				this.#viewportDriven = true;
-				this.#viewportTowardEnd = false;
-			}
-		} else if (data === "G" || matchesKey(data, "end")) {
-			this.#sourceIndex = Math.max(
-				0,
-				(this.#textSource ? this.#textLines.length : this.#currentSourceRows().length) - 1,
-			);
-			if (this.#textSource || this.#tui.nativeRendering) {
-				this.#viewportDriven = false;
-			} else {
-				this.#scrollView.scrollToBottom();
-				this.#viewportDriven = true;
-				this.#viewportTowardEnd = true;
+				this.#viewportTowardEnd = action.edge === "last";
 			}
 		}
+		const by = action.kind === "scroll" || (this.#textSource && action.kind === "page") ? menuScrollBy(action) : undefined;
+		if (by) this.#bodyNativeScroll = { by, n: (this.#bodyNativeScroll?.n ?? 0) + 1 };
 	}
 
-	#handleActions(data: string): void {
-		const actionCount = this.#actions.length;
-		if (actionCount === 0) return;
-		const hasAnnotations = this.#textSource ? this.#textAnnotations.length > 0 : this.#annotations.length > 0;
-		if (this.#keybindings.matches(data, "tui.select.up") || matchesKey(data, "k")) {
-			this.#actionIndex = this.#textSource ? (this.#actionIndex - 1 + actionCount) % actionCount : 0;
-			return;
-		}
-		if (this.#keybindings.matches(data, "tui.select.down") || matchesKey(data, "j")) {
-			if (this.#textSource) {
-				this.#actionIndex = (this.#actionIndex + 1) % actionCount;
-			} else if (hasAnnotations) {
-				this.#actionIndex = Math.min(actionCount - 1, this.#actionIndex + 1);
-			}
-			return;
-		}
-		if (this.#keybindings.matches(data, "tui.select.confirm")) this.#confirmAction();
+	#handleActions(action: MenuNavAction | undefined): void {
+		if (!action) return;
+		this.#actionMenu.setSelectedIndex(this.#actionIndex);
+		this.#actionViewport.layout(this.#actionRows, this.#actionIndex, Math.max(1, this.#actions.length));
+		const motion = applyMenuMotion(action, this.#actionMenu, this.#actionViewport);
+		if (motion.handled) this.#actionIndex = this.#actionMenu.selectedIndex;
+		else if (action.kind === "confirm") this.#confirmAction();
 	}
 
 	#actionDisabled(index: number): boolean {
@@ -645,6 +635,9 @@ export class AnnotationOverlay implements Focusable {
 	#selectFile(index: number): void {
 		if (this.#files.length === 0) return;
 		this.#fileIndex = Math.max(0, Math.min(this.#files.length - 1, index));
+		this.#fileMenu.setSelectedIndex(this.#fileIndex);
+		this.#fileViewport.reveal();
+		this.#bodyNativeScroll = undefined;
 		this.#resetSourceCursor();
 		this.#scrollView.scrollToTop();
 	}
@@ -657,6 +650,7 @@ export class AnnotationOverlay implements Focusable {
 	#resetSourceCursor(): void {
 		this.#sourceIndex = 0;
 		this.#viewportDriven = false;
+		this.#viewportDetached = false;
 	}
 
 	#currentFile(): ReviewDiffFile | undefined {
@@ -689,6 +683,7 @@ export class AnnotationOverlay implements Focusable {
 		if (rowCount === 0) return;
 		this.#sourceIndex = Math.max(0, Math.min(rowCount - 1, this.#sourceIndex + delta));
 		this.#viewportDriven = false;
+		this.#viewportDetached = false;
 	}
 
 	#startAnnotation(scope: AnnotationScope, existingIndex?: number): void {
@@ -709,6 +704,7 @@ export class AnnotationOverlay implements Focusable {
 		this.#annotationScope = scope === "file" ? "file" : "line";
 		this.#editingAnnotationIndex = existingIndex;
 		this.#annotating = true;
+		this.#keys.reset();
 		this.#editor.setText(existing?.annotation.note ?? "");
 	}
 
@@ -718,6 +714,7 @@ export class AnnotationOverlay implements Focusable {
 		this.#annotationScope = scope;
 		this.#editingAnnotationIndex = existingIndex;
 		this.#annotating = true;
+		this.#keys.reset();
 		this.#editor.setText(existing?.annotation.note ?? "");
 	}
 
@@ -725,6 +722,7 @@ export class AnnotationOverlay implements Focusable {
 		this.#annotating = false;
 		this.#editingAnnotationIndex = undefined;
 		this.#editor.setText("");
+		this.#keys.reset();
 	}
 
 	#commitAnnotation(value: string): void {
@@ -871,29 +869,33 @@ export class AnnotationOverlay implements Focusable {
 			entries,
 			selected: 0,
 		};
+		this.#chooserMenu.setItems(entries.map((_entry, index) => index));
+		this.#chooserMenu.setSelectedIndex(0);
+		this.#chooserRows = entries.map(() => 1);
+		this.#chooserViewport.setTop(0);
+		this.#keys.reset();
 	}
 
 	#handleAnnotationChooser(data: string): void {
 		const chooser = this.#annotationChooser;
 		if (!chooser) return;
-		if (this.#keybindings.matches(data, "tui.select.cancel")) {
-			this.#annotationChooser = undefined;
+		const action = this.#keys.read(data);
+		if (!action || action === "pending") return;
+		if (action.kind === "cancel") {
+			this.#escape();
 			return;
 		}
-		if (this.#keybindings.matches(data, "tui.select.up") || matchesKey(data, "up") || matchesKey(data, "k")) {
-			chooser.selected = (chooser.selected - 1 + chooser.entries.length) % chooser.entries.length;
-			return;
-		}
-		if (this.#keybindings.matches(data, "tui.select.down") || matchesKey(data, "down") || matchesKey(data, "j")) {
-			chooser.selected = (chooser.selected + 1) % chooser.entries.length;
-			return;
-		}
-		if (this.#keybindings.matches(data, "tui.select.confirm")) this.#openChosenAnnotation(chooser);
+		this.#chooserMenu.setSelectedIndex(chooser.selected);
+		this.#chooserViewport.layout(this.#chooserRows, chooser.selected, this.#chooserViewport.visibleItems);
+		const motion = applyMenuMotion(action, this.#chooserMenu, this.#chooserViewport);
+		if (motion.handled) chooser.selected = this.#chooserMenu.selectedIndex;
+		else if (action.kind === "confirm" || action.kind === "toggle") this.#openChosenAnnotation(chooser);
 	}
 
 	#openChosenAnnotation(chooser: AnnotationChooser): void {
 		const index = chooser.entries[chooser.selected];
 		this.#annotationChooser = undefined;
+		this.#keys.reset();
 		if (index === undefined) return;
 		if (chooser.kind === "text") {
 			const entry = this.#textAnnotations[index];
@@ -1165,18 +1167,13 @@ export class AnnotationOverlay implements Focusable {
 		if (!chooser || maxRows <= 0) return [];
 		const availableRows = Number.isFinite(maxRows) ? Math.max(0, Math.floor(maxRows)) : Number.POSITIVE_INFINITY;
 		if (availableRows === 1) {
-			const index = chooser.entries[chooser.selected];
+			const start = this.#chooserViewport.layout(this.#chooserRows, chooser.selected, 1).startIndex;
+			const index = chooser.entries[start];
 			if (index === undefined) return [];
-			return [this.#renderAnnotationChooserEntry(chooser, index, chooser.selected, width)];
+			return [this.#renderAnnotationChooserEntry(chooser, index, start, width)];
 		}
 		const optionLimit = Number.isFinite(availableRows) ? Math.max(1, availableRows - 2) : chooser.entries.length;
-		const start =
-			optionLimit >= chooser.entries.length
-				? 0
-				: Math.max(
-						0,
-						Math.min(chooser.selected - Math.floor(optionLimit / 2), chooser.entries.length - optionLimit),
-					);
+		const start = this.#chooserViewport.layout(this.#chooserRows, chooser.selected, Math.max(1, optionLimit)).startIndex;
 		const options = chooser.entries
 			.slice(start, start + optionLimit)
 			.map((index, windowIndex) => this.#renderAnnotationChooserEntry(chooser, index, start + windowIndex, width));
@@ -1275,14 +1272,15 @@ export class AnnotationOverlay implements Focusable {
 			this.#focus === "files"
 				? `${upDown} file · ${confirm} diff · ${formatKeyHints(["a", "shift+a"])} file note · ${editNote}`
 				: this.#focus === "diff"
-					? `${upDown} line · ${formatKeyHint("shift")} faster · ${this.#key("tui.select.pageUp")}/${this.#key("tui.select.pageDown")} · ${formatKeyHints(["g", "shift+g"])} ends · ${formatKeyHint("a")} line note · ${formatKeyHint("shift+a")} ${this.#textSource ? "text" : "file"} note · ${editNote}`
+					? `j/k line · Shift faster · gg/G ends · Ctrl-u/d half · Ctrl-e/y view · ${formatKeyHint("a")} line note · ${formatKeyHint("shift+a")} ${this.#textSource ? "text" : "file"} note · ${editNote}`
 					: `${upDown} select · ${confirm} confirm`;
 		const editorHint = this.#callbacks.onExternalEditor ? ` · ${formatKeyHint(appExternalEditorKey())} editor` : "";
-		return `${focusHelp} · ${formatKeyHint("u")} undo · ${formatKeyHint("tab")} regions${editorHint} · ${this.#key("tui.select.cancel")} cancel`;
+		return `${focusHelp} · h/l panes · ${formatKeyHint("u")} undo · ${formatKeyHint("tab")} regions${editorHint} · ${this.#key("tui.select.cancel")} cancel`;
 	}
 
 	#ensureCursorVisible(renderedRowBySource: readonly number[]): boolean {
 		this.#renderedRowBySource = renderedRowBySource;
+		if (this.#viewportDetached) return false;
 		if (this.#viewportDriven) {
 			const sourceIndex = this.#sourceIndex;
 			if (!this.#annotating && !this.#annotationChooser) this.#syncCursorToViewport();
@@ -1307,7 +1305,7 @@ export class AnnotationOverlay implements Focusable {
 	}
 
 	#sidebarStart(rows: number): number {
-		return Math.max(0, Math.min(this.#fileIndex - Math.floor(rows / 2), Math.max(0, this.#files.length - rows)));
+		return this.#fileViewport.layout(this.#fileRows, this.#fileIndex, Math.max(1, rows)).startIndex;
 	}
 
 	#renderSidebarBadge(file: ReviewDiffFile, count: number): string {
@@ -1416,6 +1414,7 @@ export class AnnotationOverlay implements Focusable {
 		// Page size for PgUp/PgDn, matching the rendered body height.
 		const terminalHeight = this.#tui.terminal.rows;
 		this.#bodyHeight = Math.max(MIN_BODY_ROWS, terminalHeight - (this.#actions.length + 8));
+		this.#fileViewport.layout(this.#fileRows, this.#fileIndex, this.#bodyHeight);
 		this.#editor.setMaxHeight(Math.max(1, Math.min(MAX_ANNOTATION_EDITOR_ROWS, terminalHeight - 12)));
 		this.#editor.focused = this.focused && this.#annotating;
 		const body = this.#describeBodyItems();
@@ -1426,6 +1425,7 @@ export class AnnotationOverlay implements Focusable {
 			this.#sourceIndex,
 			this.#actionIndex,
 			this.#bodyHeight,
+			this.#bodyNativeScroll?.n ?? 0,
 			this.#annotating ? `annotating:${this.#annotationScope}:${this.#editingAnnotationIndex}` : "",
 			chooser ? `chooser:${chooser.selected}:${chooser.entries.join()}` : "",
 		].join("|");
@@ -1442,7 +1442,7 @@ export class AnnotationOverlay implements Focusable {
 			tone: this.#focus === "diff" && !editing ? "accent" : undefined,
 		});
 		const pane: NativeChild[] = [this.#describePaneHead()];
-		pane.push(lines);
+		pane.push({ ...lines, scroll: this.#bodyNativeScroll });
 		const composer = this.#describeComposer();
 		if (composer) pane.push(composer);
 		const main = node("col", { role: "omp.review.pane", grow: 1, min: { w: 0 } }, pane, "pane");
@@ -1462,6 +1462,7 @@ export class AnnotationOverlay implements Focusable {
 
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (this.#finished || this.#externalOperation) return;
+		this.#keys.reset();
 		if (event.type === "action") {
 			if (event.act === "close") {
 				this.#escape();
@@ -1506,6 +1507,7 @@ export class AnnotationOverlay implements Focusable {
 				this.#focus = "diff";
 				this.#sourceIndex = index;
 				this.#viewportDriven = false;
+				this.#viewportDetached = false;
 				// Double-clicking a line opens its note, like `a`.
 				if (activate) this.#startAnnotation("line");
 				return;
@@ -1871,6 +1873,7 @@ export class AnnotationOverlay implements Focusable {
 				this.#hint("tui.select.confirm", "open"),
 				key("a", "file note"),
 				undo,
+				key(["h", "l"], "panes"),
 				key("tab", "pane"),
 			];
 		}
@@ -1881,10 +1884,12 @@ export class AnnotationOverlay implements Focusable {
 				key("shift+a", this.#textSource ? "note on all" : "file note"),
 				this.#annotationCandidates().length > 0 ? key("e", "edit note") : undefined,
 				undo,
+				{ keys: [], label: "gg/G ends · Ctrl-u/d half · Ctrl-e/y view" },
+				key(["h", "l"], "panes"),
 				key("tab", this.#textSource ? "actions" : "pane"),
 			];
 		}
-		return [upDown("choose"), this.#hint("tui.select.confirm", "run"), key("tab", "pane")];
+		return [upDown("choose"), this.#hint("tui.select.confirm", "run"), key(["h", "l"], "panes"), key("tab", "pane")];
 	}
 
 	/** Keycap hint for the primary keys this overlay's keybindings bind to `actions`. */

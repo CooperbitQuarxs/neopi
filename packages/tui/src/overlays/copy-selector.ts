@@ -32,13 +32,7 @@ import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { highlightCode, type ThemeColor, theme } from "../theme/theme";
 import { commandFromToolCall, extractBlocks, extractLinks } from "./copy-targets";
-import {
-	matchesAppToolsExpand,
-	matchesSelectCancel,
-	matchesSelectDown,
-	matchesSelectUp,
-	pickerNavigationKey,
-} from "../keybinding-matchers";
+import { matchesAppToolsExpand } from "../keybinding-matchers";
 import { ChatTranscriptBuilder } from "../chat/chat-transcript-builder";
 import { TranscriptBrowser, type TranscriptBrowserFrame } from "../chat/transcript-browser";
 import {
@@ -49,9 +43,10 @@ import {
 	outlineRows,
 } from "../chat/transcript-outline";
 import { code, compact, md, node, row, span, text } from "../native/describe";
-import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionHint, hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent } from "../native/picker";
+import { MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
 
 /** Key of the leading list item that replays the history older than the startup tail. */
 const EARLIER_TURNS_KEY = "earlier";
@@ -352,6 +347,16 @@ export class CopySelectorComponent implements Component {
 	#blockCache = new Map<string, CopyBlock[]>();
 	/** Click targets of the last render, keyed by composed-column line index. */
 	#controls = new Map<number, ControlRegion[]>();
+	readonly #keys = new MenuKeyReader();
+	#nativeScroll: NativeScroll | undefined;
+	#width = 0;
+	#pageStarts: number[] = [];
+	#pageEnds: number[] = [];
+	#geometryTargets: OutlineTarget[] | undefined;
+	#geometryBlocks: CopyBlock[] | undefined;
+	#geometrySelected = -1;
+	#geometryBlockSelected = -1;
+	#geometryExpanded = false;
 
 	/** Whole branch; the picker may currently replay only its tail. */
 	#entries: TranscriptEntry[];
@@ -368,6 +373,7 @@ export class CopySelectorComponent implements Component {
 	#pickerItems = new TimelineItems();
 	/** Last described picker and the state it was built from. */
 	#picker: { memo: string; targets: OutlineTarget[]; blocks: CopyBlock[] | undefined; node: NativeNode } | undefined;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	constructor(
 		entries: TranscriptEntry[],
@@ -382,6 +388,95 @@ export class CopySelectorComponent implements Component {
 			getHeight: () => this.deps.ui.terminal?.rows || process.stdout.rows || 40,
 			frame: context => this.#frame(context.contentWidth),
 		});
+	}
+
+	navigationSnapshot(): unknown {
+		return {
+			selected: this.#targets[this.#selected]?.turnId, descended: this.#blocks !== undefined,
+			blockSelected: this.#blockSelected, expanded: this.#expanded, truncated: this.#truncated,
+			viewport: this.#browser.navigationSnapshot(),
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { selected?: string; descended?: boolean; blockSelected?: number; expanded?: boolean; truncated?: boolean; viewport?: unknown };
+		if (typeof state.expanded === "boolean") this.#expanded = state.expanded;
+		if (typeof state.truncated === "boolean" && state.truncated !== this.#truncated) {
+			const entries = state.truncated ? recentTranscriptEntries(this.#entries) : this.#entries;
+			const previous = this.#builder;
+			this.#builder = this.#replay(entries);
+			previous.dispose();
+			this.#truncated = entries.length < this.#entries.length;
+		} else this.#builder.setExpanded(this.#expanded);
+		const index = this.#targets.findIndex(target => target.turnId === state.selected);
+		if (index >= 0) this.#selected = index;
+		const target = this.#targets[this.#selected];
+		this.#blocks = state.descended && target ? this.#blocksFor(target) : undefined;
+		this.#blockSelected = this.#blocks ? Math.max(0, Math.min(this.#blocks.length - 1, Math.trunc(state.blockSelected ?? 0))) : 0;
+		this.#visible = undefined;
+		this.#geometryTargets = undefined;
+		this.#nativeScroll = undefined;
+		this.#native = undefined;
+		this.#picker = undefined;
+		this.#keys.reset();
+		this.#browser.restoreNavigation(state.viewport);
+	}
+
+	leaveMenu(): void { this.#keys.reset(); }
+
+	#ensureGeometry(): void {
+		if (!this.#browser.bodyHeight || this.#geometryTargets !== this.#targets ||
+			this.#geometryBlocks !== this.#blocks || this.#geometrySelected !== this.#selected ||
+			this.#geometryBlockSelected !== this.#blockSelected || this.#geometryExpanded !== this.#expanded) {
+			this.render(this.#width || this.deps.ui.terminal?.columns || process.stdout.columns || 80);
+		}
+	}
+
+	#pageSize(): number {
+		this.#ensureGeometry();
+		const top = this.#browser.scrollOffset;
+		const bottom = top + this.#browser.bodyHeight;
+		let first = 0;
+		let end = this.#pageEnds.length;
+		while (first < end) {
+			const middle = (first + end) >>> 1;
+			if (this.#pageEnds[middle]! <= top) first = middle + 1;
+			else end = middle;
+		}
+		let count = 0;
+		for (let index = first; index < this.#pageStarts.length && this.#pageStarts[index]! < bottom; index++) {
+			if (this.#pageEnds[index]! > this.#pageStarts[index]! && (this.#blocks || this.#visible?.[index] !== false)) count++;
+		}
+		return Math.max(1, count);
+	}
+
+	#recordTargetGeometry(rows: readonly (readonly string[])[]): void {
+		this.#pageStarts.length = this.#targets.length;
+		this.#pageEnds.length = this.#targets.length;
+		let child = 0;
+		let offset = 0;
+		for (let index = 0; index < this.#targets.length; index++) {
+			const target = this.#targets[index]!;
+			while (child < target.start) offset += rows[child++]?.length ?? 0;
+			this.#pageStarts[index] = offset;
+			while (child < target.end) offset += rows[child++]?.length ?? 0;
+			if (index === this.#selected && this.#visible?.[index] !== false) offset += 2;
+			this.#pageEnds[index] = offset;
+		}
+	}
+
+	#boundary(edge: "first" | "last"): void {
+		if (!this.#blocks && edge === "first" && this.#truncated) this.#loadFullHistory(false);
+		this.#ensureGeometry();
+		if (this.#blocks) this.#blockSelected = edge === "first" ? 0 : this.#blocks.length - 1;
+		else {
+			const direction = edge === "first" ? 1 : -1;
+			let index = edge === "first" ? 0 : this.#targets.length - 1;
+			while (index >= 0 && index < this.#targets.length && this.#visible?.[index] === false) index += direction;
+			if (index >= 0 && index < this.#targets.length) this.#selected = index;
+		}
+		this.deps.requestRender();
 	}
 
 	/** Build a transcript for `entries` and adopt its targets. */
@@ -407,7 +502,7 @@ export class CopySelectorComponent implements Component {
 	 * Replay the whole branch, keeping the outline on the same turn. Pays the
 	 * full replay cost once, only when the user asks for older history.
 	 */
-	#loadFullHistory(): void {
+	#loadFullHistory(requestRender = true): void {
 		if (!this.#truncated) return;
 		const selectedId = this.#targets[this.#selected]?.turnId;
 		const previous = this.#builder;
@@ -419,7 +514,7 @@ export class CopySelectorComponent implements Component {
 		this.#selected = restored >= 0 ? restored : Math.max(0, this.#targets.length - 1);
 		this.#blocks = undefined;
 		this.#blockSelected = 0;
-		this.deps.requestRender();
+		if (requestRender) this.deps.requestRender();
 	}
 
 	/** Number of copyable transcript items; hosts skip mounting when zero. */
@@ -434,6 +529,7 @@ export class CopySelectorComponent implements Component {
 	}
 
 	dispose(): void {
+		this.leaveMenu();
 		this.#builder.dispose();
 	}
 
@@ -449,13 +545,10 @@ export class CopySelectorComponent implements Component {
 	// Input
 	// ========================================================================
 
-	handleInput(rawData: string): void {
-		const data = pickerNavigationKey(rawData);
+	handleInput(data: string): void {
 		if (data.startsWith("\x1b[<")) {
 			routeSgrMouseInput(data, event => {
 				if (event.wheel !== null) {
-					// A wheel notch at either end moves nothing: repainting it
-					// anyway makes the frame twitch under a fast wheel.
 					if (this.#browser.scroll(event.wheel * 3)) this.deps.requestRender();
 					return true;
 				}
@@ -464,48 +557,42 @@ export class CopySelectorComponent implements Component {
 			});
 			return;
 		}
-		if (matchesSelectCancel(data) || matchesKey(data, "escape")) {
-			this.#escape();
-			return;
-		}
 		if (matchesAppToolsExpand(data)) {
 			this.#expanded = !this.#expanded;
 			this.#builder.setExpanded(this.#expanded);
 			this.deps.requestRender();
 			return;
 		}
-		if (matchesSelectUp(data)) {
-			this.#moveVertical(-1);
+		if ((data === "a" || data === "A") && !this.#blocks) { this.#loadFullHistory(); return; }
+		if (data === "o" || data === "O") { this.#openSelectedBlock(); return; }
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (!action) {
+			// Preserve the existing Shift-Arrow fast reader motions.
+			if (this.#browser.handleScrollKey(data)) this.deps.requestRender();
 			return;
 		}
-		if (matchesSelectDown(data)) {
-			this.#moveVertical(1);
-			return;
-		}
-		if (matchesKey(data, "right")) {
-			this.#descend();
-			return;
-		}
-		if (matchesKey(data, "left")) {
-			if (this.#blocks) this.#ascend();
-			return;
-		}
-		if ((data === "a" || data === "A") && !this.#blocks) {
-			this.#loadFullHistory();
-			return;
-		}
-		if (data === "o" || data === "O") {
-			this.#openSelectedBlock();
-			return;
-		}
-		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-			this.#pickOutlined();
-			return;
-		}
-		// Page/home/end/shift+arrow scrolling without moving the selection.
-		if (this.#browser.handleScrollKey(data)) {
+		if (action.kind === "cancel") this.#escape();
+		else if (action.kind === "horizontal") {
+			if (action.delta > 0) this.#descend();
+			else if (this.#blocks) this.#ascend();
+		} else if (action.kind === "context") {
+			// Context traversal is not a nested history visit.
+			if (this.#blocks) this.#ascend(false);
+			else this.#descend(false);
+		} else if (action.kind === "move") this.#moveVertical(action.delta);
+		else if (action.kind === "halfPage" || action.kind === "page") {
+			const page = this.#pageSize();
+			this.#moveVertical(action.delta * Math.max(1, Math.floor(page / (action.kind === "halfPage" ? 2 : 1))));
+		} else if (action.kind === "boundary") this.#boundary(action.edge);
+		else if (action.kind === "confirm" || action.kind === "toggle") this.#pickOutlined();
+		else if (action.kind === "scroll") {
+			this.#browser.handleMenuAction(action);
+			const by = menuScrollBy(action);
+			if (by) this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
 			this.deps.requestRender();
 		}
+		// No search or marking exists on this surface; slash is unbound.
 	}
 
 	/** Esc: leave the block view, else close. */
@@ -515,14 +602,17 @@ export class CopySelectorComponent implements Component {
 	}
 
 	/** Right: replace the outlined turn with its inner blocks. */
-	#descend(): void {
+	#descend(recordVisit = true): void {
 		if (this.#blocks) return;
 		const target = this.#targets[this.#selected];
 		if (!target) return;
 		const blocks = this.#blocksFor(target);
 		if (blocks.length === 0) return;
+		const previous = recordVisit && this.onNavigationVisit ? this.navigationSnapshot() : undefined;
 		this.#blocks = blocks;
 		this.#blockSelected = 0;
+		this.#nativeScroll = undefined;
+		if (recordVisit) this.onNavigationVisit?.(`blocks:${target.turnId}`, previous);
 		this.deps.requestRender();
 	}
 
@@ -544,9 +634,13 @@ export class CopySelectorComponent implements Component {
 		if (block?.href && this.deps.onOpen) this.deps.onOpen(block.href, block.label);
 	}
 
-	#ascend(): void {
+	#ascend(recordVisit = true): void {
+		if (!this.#blocks) return;
+		const previous = recordVisit && this.onNavigationVisit ? this.navigationSnapshot() : undefined;
 		this.#blocks = undefined;
 		this.#blockSelected = 0;
+		this.#nativeScroll = undefined;
+		if (recordVisit) this.onNavigationVisit?.("", previous);
 		this.deps.requestRender();
 	}
 
@@ -570,29 +664,31 @@ export class CopySelectorComponent implements Component {
 		this.deps.onPick(block.content, block.label, { entry: block.entry, block });
 	}
 
-	#moveVertical(delta: -1 | 1): void {
+	#moveVertical(delta: number): void {
 		if (this.#blocks) {
-			const next = this.#blockSelected + delta;
-			if (next >= 0 && next < this.#blocks.length) {
+			const next = Math.max(0, Math.min(this.#blocks.length - 1, this.#blockSelected + delta));
+			if (next !== this.#blockSelected) {
 				this.#blockSelected = next;
 				this.deps.requestRender();
 			}
 			return;
 		}
-		let index = this.#selected + delta;
-		while (index >= 0 && index < this.#targets.length) {
-			if (this.#visible?.[index] !== false) {
-				this.#selected = index;
-				this.deps.requestRender();
-				return;
+		const direction = delta < 0 ? -1 : 1;
+		let changed = false;
+		for (let step = 0; step < Math.abs(delta); step++) {
+			let index = this.#selected + direction;
+			while (index >= 0 && index < this.#targets.length && this.#visible?.[index] === false) index += direction;
+			if (index < 0 && this.#truncated) {
+				this.#loadFullHistory(false);
+				changed = true;
+				index = this.#selected + direction;
+				while (index >= 0 && this.#visible?.[index] === false) index += direction;
 			}
-			index += delta;
+			if (index < 0 || index >= this.#targets.length) break;
+			this.#selected = index;
+			changed = true;
 		}
-		// Stepping above the replayed tail continues into the earlier history.
-		if (delta < 0 && this.#truncated) {
-			this.#loadFullHistory();
-			this.#moveVertical(delta);
-		}
+		if (changed) this.deps.requestRender();
 	}
 
 	// ========================================================================
@@ -668,10 +764,12 @@ export class CopySelectorComponent implements Component {
 		}
 		const index = this.#targets.findIndex(target => target.turnId === event.item);
 		if (index < 0) return;
+		const previous = this.#blocks && this.onNavigationVisit ? this.navigationSnapshot() : undefined;
 		if (index !== this.#selected || this.#blocks) {
 			this.#selected = index;
 			this.#blocks = undefined;
 			this.#blockSelected = 0;
+			if (previous) this.onNavigationVisit?.("", previous);
 			this.deps.requestRender();
 		}
 		if (event.kind === "activate") this.#pickOutlined();
@@ -762,7 +860,7 @@ export class CopySelectorComponent implements Component {
 	}
 
 	#describeCard(): NativeNode {
-		const memo = `${this.#selected}|${this.#blockSelected}|${this.#truncated}`;
+		const memo = `${this.#selected}|${this.#blockSelected}|${this.#truncated}|${this.#nativeScroll?.n ?? 0}`;
 		const cached = this.#native;
 		if (cached?.memo === memo && cached.targets === this.#targets && cached.blocks === this.#blocks) {
 			return cached.node;
@@ -777,7 +875,7 @@ export class CopySelectorComponent implements Component {
 			const block = this.#blocks[this.#blockSelected];
 			children.push(
 				row([text([span("‹ back", "accent")], { actions: { click: "back" } })], { gap: "md" }),
-				node(
+				{ ...node(
 					"list",
 					{ selected: String(this.#blockSelected), empty: "No blocks" },
 					this.#blocks.map((item, index) => {
@@ -790,7 +888,7 @@ export class CopySelectorComponent implements Component {
 						);
 					}),
 					"blocks",
-				),
+				), scroll: this.#nativeScroll },
 			);
 			if (block) children.push(this.#blockPreview(block, action));
 			hints = [
@@ -802,12 +900,12 @@ export class CopySelectorComponent implements Component {
 		} else {
 			const blocks = target ? this.#blocksFor(target) : [];
 			children.push(
-				node(
+				{ ...node(
 					"list",
 					{ selected: target?.turnId ?? null, virtual: true, max: 0.5, empty: "Nothing to copy" },
 					this.#transcriptItems(),
 					"list",
-				),
+				), scroll: this.#nativeScroll },
 			);
 			if (target) {
 				const item = targetCopy(target, blocks);
@@ -829,6 +927,14 @@ export class CopySelectorComponent implements Component {
 				cancel,
 			];
 		}
+		hints.push(
+			{ keys: ["ctrl+u", "ctrl+d"], label: "half page" },
+			{ keys: ["pageUp", "pageDown"], label: "page" },
+			{ keys: ["g", "shift+g"], label: "gg/G bounds" },
+			{ keys: ["ctrl+e", "ctrl+y"], label: "view" },
+			{ keys: ["tab", "shift+tab"], label: "context" },
+			{ keys: ["space"], label: action },
+		);
 		children.push(hintsRow(hints));
 		const head: TspText = this.deps.title ?? [
 			span(`${theme.cmd.copy} `),
@@ -869,6 +975,7 @@ export class CopySelectorComponent implements Component {
 	// ========================================================================
 
 	render(width: number): readonly string[] {
+		this.#width = width;
 		return this.#browser.render(width);
 	}
 
@@ -905,6 +1012,7 @@ export class CopySelectorComponent implements Component {
 				selEnd: stack.selEnd >= 0 ? before.lines.length + stack.selEnd : -1,
 			};
 		} else {
+			this.#recordTargetGeometry(prepared.childRows);
 			// The caption on the outline advertises Right's descent into blocks.
 			composed = this.#browser.composeOutline({
 				children,
@@ -921,16 +1029,20 @@ export class CopySelectorComponent implements Component {
 				},
 			}).column;
 		}
+		this.#geometryTargets = this.#targets;
+		this.#geometryBlocks = this.#blocks;
+		this.#geometrySelected = this.#selected;
+		this.#geometryBlockSelected = this.#blockSelected;
+		this.#geometryExpanded = this.#expanded;
 
 		const selectedBlock = this.#blocks?.[this.#blockSelected];
 		const openHint = selectedBlock?.href && this.deps.onOpen ? `  ${formatKeyHint("o")} open` : "";
 		const action = this.deps.actionLabel ?? "copy";
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
-		const enter = formatKeyHint("enter");
 		const cancel = editorKey("tui.select.cancel");
 		const hint = this.#blocks
-			? `${this.#blockSelected + 1}/${this.#blocks.length}  j/k or ${upDown} block  h/${formatKeyHint("left")}/${cancel} back  ${enter} ${action}${openHint}  click ${theme.cmd.copy}/${theme.cmd.share}`
-			: `${this.#targets.length > 0 ? `${this.#selected + 1}/${this.#targets.length}  ` : ""}j/k or ${upDown} step  ${blocks.length > 0 ? `l/${formatKeyHint("right")} blocks  ` : ""}${enter} ${action}  ${this.#truncated ? `${formatKeyHint("a")} earlier turns  ` : ""}${expandKeyHint()} expand  ${cancel} close`;
+			? `${this.#blockSelected + 1}/${this.#blocks.length} · j/k ${upDown} block · h/Left/Esc back · Enter/Space ${action}${openHint}`
+			: `${this.#targets.length > 0 ? `${this.#selected + 1}/${this.#targets.length} · ` : ""}j/k ${upDown} step · ${blocks.length > 0 ? "l/Right blocks · " : ""}Enter/Space ${action} · ${this.#truncated ? "a earlier turns · " : ""}${expandKeyHint()} expand · ${cancel} close`;
 		const anchorId = target
 			? this.#blocks
 				? `copy:${target.turnId}:block:${this.#blockSelected}`
@@ -949,7 +1061,7 @@ export class CopySelectorComponent implements Component {
 						? { id: anchorId, start: composed.selStart, end: composed.selEnd }
 						: undefined,
 			},
-			footer: [theme.fg("dim", hint)],
+			footer: [theme.fg("dim", `${hint} · Ctrl-u/d half · PgUp/Dn · gg/G · Ctrl-e/y view · Tab context`)],
 		};
 	}
 
@@ -965,7 +1077,10 @@ export class CopySelectorComponent implements Component {
 		const lines: string[] = [];
 		let selStart = -1;
 		let selEnd = -1;
+		this.#pageStarts.length = blocks.length;
+		this.#pageEnds.length = blocks.length;
 		for (let index = 0; index < blocks.length; index++) {
+			this.#pageStarts[index] = lineOffset + lines.length;
 			const block = blocks[index]!;
 			const { rows, lineCount } = previews[index]!;
 			const selected = index === this.#blockSelected;
@@ -1005,6 +1120,7 @@ export class CopySelectorComponent implements Component {
 				lines.push(`  ${caption}`);
 				for (const row of rows) lines.push(row ? `  ${row}` : row);
 			}
+			this.#pageEnds[index] = lineOffset + lines.length;
 		}
 		lines.push("");
 		return { lines, selStart, selEnd };

@@ -283,6 +283,12 @@ export class HistorySearchComponent extends OverlayPanel {
 		this.#cancelPendingSearch();
 	}
 
+	#escape(): void {
+		if (this.#search.focused) this.#search.focused = false;
+		else this.#onCancel();
+		this.#keys.reset();
+	}
+
 	/**
 	 * Repaint hook for debounced result updates. Once set, query edits search
 	 * storage after a {@link SEARCH_DEBOUNCE_MS} quiet period instead of on
@@ -320,7 +326,7 @@ export class HistorySearchComponent extends OverlayPanel {
 			return;
 		}
 		if (action.kind === "cancel") {
-			this.#onCancel();
+			this.#escape();
 			return;
 		}
 		if (action.kind === "confirm" || action.kind === "toggle") {
@@ -429,14 +435,14 @@ export class HistorySearchComponent extends OverlayPanel {
 			empty: "No history yet",
 			actions: [
 				pickerAction("insert", "Insert", "enter", { primary: true }),
-				pickerAction("close", "Close", boundKeys("app.interrupt", ["escape"])[0] ?? "escape", { end: true }),
+				pickerAction("close", this.#search.focused ? "Back to list" : "Close", boundKeys("app.interrupt", ["escape"])[0] ?? "escape", { end: true }),
 			],
 		});
 	}
 
 	/**
 	 * Picker: a row click highlights, a second click or `Insert` inserts it
-	 * (Enter), `Close` cancels (Esc), `Clear search` empties the query.
+	 * (Enter), `Back to list` leaves the query, `Close` cancels, `Clear search` empties the query.
 	 * List: picking a result does what highlighting it and pressing Enter does.
 	 * A row picked while a debounced search is pending belongs to the previous
 	 * query: results are refreshed first and the pick only lands if that entry
@@ -446,7 +452,7 @@ export class HistorySearchComponent extends OverlayPanel {
 		const ev = pickerEvent(event, PICKER_KEY);
 		if (ev) {
 			if (ev.kind === "action") {
-				if (ev.act === "close") this.#onCancel();
+				if (ev.act === "close") this.#escape();
 				else if (ev.act === "insert") this.handleInput("\r");
 				else if (ev.act === "clear") {
 					this.#searchInput.setValue("");

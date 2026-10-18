@@ -16,14 +16,7 @@ export const TREE_FILTER_MODES = ["default", "no-tools", "user-only", "labeled-o
 /** Session-tree display filter. */
 export type TreeFilterMode = (typeof TREE_FILTER_MODES)[number];
 import { theme } from "../theme/theme";
-import {
-	matchesAppInterrupt,
-	matchesSelectDown,
-	matchesSelectPageDown,
-	matchesSelectPageUp,
-	matchesSelectUp,
-	pickerNavigationKey,
-} from "../keybinding-matchers";
+import { matchesAppInterrupt } from "../keybinding-matchers";
 import { isUserRequestEntry, type TranscriptEntryLike } from "../chat/transcript-entry";
 
 /** Fields consumed when displaying persisted entries in the session tree. */
@@ -62,15 +55,20 @@ import { getKeybindings } from "../keybindings";
 import type { TspPickerItem, TspPickerProps, TspSpan, TspText } from "@oh-my-pi/pi-wire";
 import type { ThemeColor } from "../theme/schema";
 import { col, keyed, node, span, text } from "../native/describe";
-import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionHint, hintsRow, overlayCard } from "../native/overlay";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent, pickerQuery } from "../native/picker";
 import { plainText } from "../native/spans";
 import type { OutlineTarget } from "../chat/transcript-outline";
 import { collectBlocks, targetCopy, turnPreview } from "./copy-selector";
+import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, menuScrollBy, type MenuViewportPosition } from "../components/menu-navigation";
 
 /** Filter mode for tree display */
 type FilterMode = TreeFilterMode;
+
+const FILTER_MODE_KEYS = [
+	["alt+d", "default"], ["alt+t", "no-tools"], ["alt+u", "user-only"], ["alt+l", "labeled-only"], ["alt+a", "all"],
+] as const;
 
 /**
  * Tree list component with selection and ASCII art visualization
@@ -209,8 +207,26 @@ class TreeList implements Component {
 	#parentById: Map<string, string | null> = new Map();
 	#filterMode: FilterMode;
 	/** The search field; its value is the fuzzy query. */
-	readonly searchInput = new Input();
-	#filterEditing = false;
+	readonly #search = new MenuSearchField();
+	readonly searchInput = this.#search.input;
+	readonly #keys = new MenuKeyReader();
+	readonly #viewport = new MenuViewport();
+	readonly #collapsed = new Set<string>();
+	#viewportRows: readonly TreeRow<TreeSelectorNode, string>[] | undefined;
+	#rowCounts: number[] = [];
+	#nativeScroll: NativeScroll | undefined;
+	readonly #motionTarget = {
+		move: (delta: number, wrap = false): boolean => {
+			const previous = this.#tree.selectionIndex;
+			this.#tree.moveSelection(delta, wrap);
+			return this.#tree.selectionIndex !== previous;
+		},
+		moveToBoundary: (edge: "first" | "last"): boolean => {
+			const previous = this.#tree.selectionIndex;
+			this.#tree.setSelectionIndex(edge === "first" ? 0 : this.#tree.rows.length - 1);
+			return this.#tree.selectionIndex !== previous;
+		},
+	};
 	#toolCallMap: Map<string, ToolCallInfo> = new Map();
 	#multipleRoots = false;
 	#activePathIds: Set<string> = new Set();
@@ -231,6 +247,8 @@ class TreeList implements Component {
 				selected: string | undefined;
 				query: string;
 				filterMode: FilterMode;
+				focused: boolean;
+				scroll: NativeScroll | undefined;
 				node: NativeNode;
 		  }
 		| undefined;
@@ -258,7 +276,6 @@ class TreeList implements Component {
 		initialSelectedId?: string,
 	) {
 		this.#filterMode = initialFilterMode;
-		this.searchInput.prompt = `${theme.fg("muted", "Search:")} `;
 		this.searchInput.placeholder = "Type to search";
 		this.#multipleRoots = tree.length > 1;
 		this.#indexSession(tree);
@@ -266,6 +283,7 @@ class TreeList implements Component {
 			roots: this.#roots,
 			getKey: node => node.entry.id,
 			getChildren: node => this.#orderedChildren(node),
+			isExpanded: node => !this.#collapsed.has(node.entry.id),
 			getChildDepth: (_node, row, children) =>
 				children.length > 1 || (this.#multipleRoots && row.parentKey === undefined) ? row.depth + 1 : row.depth,
 			compactSameDepthAncestors: true,
@@ -292,6 +310,77 @@ class TreeList implements Component {
 		} else {
 			this.#tree.setSelectedKey(targetId);
 		}
+	}
+
+	get filterFocused(): boolean { return this.#search.focused; }
+
+	renderSearch(width: number): string {
+		return this.#search.render(width, { muted: text => theme.fg("dim", text) });
+	}
+
+	navigationSnapshot(): unknown {
+		return {
+			search: this.#search.navigationSnapshot(), filterMode: this.#filterMode,
+			selected: this.#tree.selectedKey, collapsed: [...this.#collapsed], top: this.#viewport.top,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { search?: unknown; filterMode?: string; selected?: string; collapsed?: string[]; top?: MenuViewportPosition | number };
+		this.#search.restoreNavigation(state.search);
+		const mode = TREE_FILTER_MODES.find(mode => mode === state.filterMode);
+		if (mode) this.#filterMode = mode;
+		this.#collapsed.clear();
+		for (const id of state.collapsed ?? []) if (this.#nodeById.has(id)) this.#collapsed.add(id);
+		this.#tree.invalidate();
+		this.#applyFilter();
+		this.#tree.setSelectedKey(state.selected);
+		this.#viewport.setTop(state.top);
+		this.#nativeScroll = undefined;
+		this.#keys.reset();
+	}
+
+	leaveMenu(): void { this.#keys.reset(); }
+
+	#prepareViewport(): ReturnType<MenuViewport["layout"]> {
+		const rows = this.#tree.rows;
+		if (this.#viewportRows !== rows) {
+			this.#viewportRows = rows;
+			this.#rowCounts = rows.map(() => 1);
+		}
+		return this.#viewport.layout(this.#rowCounts, this.#tree.selectionIndex, this.maxVisibleLines);
+	}
+
+	#collapseOrParent(): void {
+		const selected = this.#tree.selectedItem;
+		if (!selected) return;
+		const id = selected.entry.id;
+		if (selected.children.length > 0 && !this.#collapsed.has(id)) {
+			this.#collapsed.add(id);
+			this.#tree.invalidate();
+		} else {
+			const parent = this.#parentById.get(id);
+			if (parent) this.#tree.setSelectedKey(parent);
+		}
+		this.#viewport.reveal();
+	}
+
+	#expand(): void {
+		const selected = this.#tree.selectedItem;
+		if (selected && this.#collapsed.delete(selected.entry.id)) {
+			this.#tree.invalidate();
+			this.#viewport.reveal();
+		}
+	}
+
+	toggleExpanded(): void {
+		const selected = this.#tree.selectedItem;
+		if (!selected || selected.children.length === 0) return;
+		const id = selected.entry.id;
+		if (!this.#collapsed.delete(id)) this.#collapsed.add(id);
+		this.#tree.invalidate();
+		this.#viewport.reveal();
 	}
 
 	/**
@@ -478,6 +567,7 @@ class TreeList implements Component {
 		// TreeView retains the nearest visible selection (including an anchor
 		// through empty filter results) when the predicate is replaced.
 		this.#tree.setFilter(this.#buildFilter());
+		this.#viewport.reveal();
 	}
 
 	/** Visible-row predicate combining the assistant-text rule, filter mode, and fuzzy query. */
@@ -681,6 +771,7 @@ class TreeList implements Component {
 	/** Native filter tab: switch to that mode, like its alt+key shortcut. */
 	setFilterMode(mode: string): void {
 		const next = TREE_FILTER_MODES.find(m => m === mode);
+		this.#search.focused = false;
 		if (next === undefined || next === this.#filterMode) return;
 		this.#filterMode = next;
 		this.#applyFilter();
@@ -690,6 +781,9 @@ class TreeList implements Component {
 	activateEntry(entryId: string): void {
 		if (!this.#tree.rows.some(row => row.key === entryId)) return;
 		this.#tree.setSelectedKey(entryId);
+		this.#search.focused = false;
+		this.#keys.reset();
+		this.#viewport.reveal();
 		const selected = this.#tree.selectedItem;
 		if (selected && this.onSelect) this.onSelect(selected.entry.id, { summarize: false });
 	}
@@ -697,6 +791,9 @@ class TreeList implements Component {
 	/** Native row click: highlight the entry without switching. */
 	selectEntry(entryId: string): void {
 		if (this.#tree.rows.some(row => row.key === entryId)) this.#tree.setSelectedKey(entryId);
+		this.#search.focused = false;
+		this.#keys.reset();
+		this.#viewport.reveal();
 	}
 
 	/**
@@ -715,7 +812,7 @@ class TreeList implements Component {
 			this.#pickerItems = {
 				rows: allRows,
 				labels: this.#labelVersion,
-				items: allRows.map(row => this.#pickerItem(row, branchPoints.has(row.key))),
+				items: allRows.map(row => this.#pickerItem(row, branchPoints.has(row.key) || row.item.children.length > 1 || this.#collapsed.has(row.key))),
 			};
 		}
 		const rows = this.#tree.rows;
@@ -756,7 +853,7 @@ class TreeList implements Component {
 			depth: row.depth,
 			node: kind,
 			...(role ? { role } : {}),
-			...(open ? { open: true } : {}),
+			...(open ? { open: !this.#collapsed.has(row.key) } : {}),
 			...(item.label ? { badges: [{ text: plainText(item.label), tone: "warning" as const }] } : {}),
 			...(this.#activePathIds.has(row.key) ? { dot: "accent" as const } : {}),
 		};
@@ -818,17 +915,19 @@ class TreeList implements Component {
 			memo?.items === items.items &&
 			memo.selected === selected &&
 			memo.query === query &&
-			memo.filterMode === this.#filterMode
+			memo.filterMode === this.#filterMode &&
+			memo.focused === this.#search.focused &&
+			memo.scroll === this.#nativeScroll
 		) {
 			return memo.node;
 		}
-		const list = node(
+		const list = { ...node(
 			"list",
 			{ selected: selected ?? null, filter: query || undefined, empty: this.#emptyText(), virtual: true },
 			items.items,
 			"list",
-		);
-		this.#listNative = { items: items.items, selected, query, filterMode: this.#filterMode, node: list };
+		), scroll: this.#nativeScroll };
+		this.#listNative = { items: items.items, selected, query, filterMode: this.#filterMode, focused: this.#search.focused, scroll: this.#nativeScroll, node: list };
 		return list;
 	}
 
@@ -839,9 +938,7 @@ class TreeList implements Component {
 		const query = this.getSearchQuery();
 		if (query.length > 0) {
 			return [
-				span(`No entries match search "${query}". Press `, "muted"),
-				span("backspace", "key"),
-				span(" to clear the search", "muted"),
+				span(`No entries match search "${query}". Edit the search to change results.`, "muted"),
 			];
 		}
 		const filterLabel = this.#getFilterLabel().trim() || "[default]";
@@ -914,7 +1011,7 @@ class TreeList implements Component {
 			} else if (this.getSearchQuery().length > 0) {
 				lines.push(truncateToWidth(theme.fg("muted", `No entries match search "${this.getSearchQuery()}"`), width));
 				lines.push(
-					truncateToWidth(theme.fg("muted", `Press ${formatKeyHint("backspace")} to clear the search`), width),
+					truncateToWidth(theme.fg("muted", "Edit the search to change results."), width),
 				);
 				lines.push(truncateToWidth(theme.fg("muted", `(0/${totalCount})${this.#getFilterLabel()}`), width));
 			} else {
@@ -939,9 +1036,9 @@ class TreeList implements Component {
 			return lines;
 		}
 
-		// Hierarchy, selection-centered windowing, and the scrollbar all live
-		// in TreeView; the gutter/row builders below only shape its lines.
-		lines.push(...this.#tree.render(width));
+		// TreeView shapes the hierarchy/gutters; the menu owns the independent
+		// logical window. Each session-tree entry renders exactly one line.
+		lines.push(...this.#tree.renderWithState(width, this.#prepareViewport()).lines);
 
 		const filterLabel = this.#getFilterLabel();
 		if (filterLabel) {
@@ -956,8 +1053,9 @@ class TreeList implements Component {
 		// Active path marker - shown right before the entry text
 		const isOnActivePath = this.#activePathIds.has(node.entry.id);
 		const pathMarker = isOnActivePath ? theme.fg("accent", `${theme.md.bullet} `) : "";
+		const collapsed = this.#collapsed.has(node.entry.id) ? theme.fg("muted", "[+] ") : "";
 		const label = node.label ? theme.fg("warning", `[${node.label}] `) : "";
-		return `${pathMarker}${label}${this.#getEntryDisplayText(node, selected)}`;
+		return `${pathMarker}${collapsed}${label}${this.#getEntryDisplayText(node, selected)}`;
 	}
 
 	/**
@@ -1275,8 +1373,9 @@ class TreeList implements Component {
 
 	/** Escape exits filter editing first, then closes the picker. */
 	escape(): void {
-		if (this.#filterEditing) this.#filterEditing = false;
+		if (this.#search.focused) this.#search.focused = false;
 		else this.onCancel?.();
+		this.#keys.reset();
 	}
 
 	clearSearch(): void {
@@ -1284,8 +1383,9 @@ class TreeList implements Component {
 		this.#applyFilter();
 	}
 
-	/** Ctrl+O / Shift+Ctrl+O: default → no-tools → user-only → labeled-only → all → default. */
+	/** Tab/Shift-Tab and Ctrl-N/P cycle the display modes without a history visit. */
 	cycleFilter(delta: 1 | -1): void {
+		this.#search.focused = false;
 		const modes = TREE_FILTER_MODES;
 		const currentIndex = modes.indexOf(this.#filterMode);
 		this.#filterMode = modes[(currentIndex + delta + modes.length) % modes.length];
@@ -1295,90 +1395,59 @@ class TreeList implements Component {
 	/** e: edit the selected entry's label (L is a Vim right motion). */
 	editLabel(): void {
 		const selected = this.#tree.selectedItem;
+		this.#search.focused = false;
+		this.#keys.reset();
 		if (selected && this.onLabelEdit) this.onLabelEdit(selected.entry.id, selected.label);
 	}
 
-	handleInput(rawData: string): void {
-		if (this.#filterEditing) {
-			if (matchesAppInterrupt(rawData)) {
-				this.#filterEditing = false;
-				return;
-			}
-			const before = this.getSearchQuery();
-			if (this.searchInput.handleInput(rawData)) {
-				if (this.getSearchQuery() !== before) this.#applyFilter();
-				return;
-			}
-		} else if (matchesKey(rawData, "i")) {
-			this.#filterEditing = true;
+	handleInput(data: string): void {
+		const before = this.getSearchQuery();
+		const field = this.#search.handleInput(data);
+		if (field !== "pass") {
+			this.#keys.reset();
+			if (this.getSearchQuery() !== before) this.#applyFilter();
 			return;
 		}
-		const keyData = this.#filterEditing ? rawData : pickerNavigationKey(rawData);
-		if (matchesSelectUp(keyData)) {
-			this.#tree.moveSelection(-1, true);
-		} else if (matchesSelectDown(keyData)) {
-			this.#tree.moveSelection(1, true);
-		} else if (matchesKey(keyData, "alt+up")) {
-			this.#tree.moveSelectionWhere(
-				node =>
-					node.entry.type === "message" &&
-					(node.entry.message.role === "user" || node.entry.message.role === "assistant"),
-				-1,
-			);
-		} else if (matchesKey(keyData, "alt+down")) {
-			this.#tree.moveSelectionWhere(
-				node =>
-					node.entry.type === "message" &&
-					(node.entry.message.role === "user" || node.entry.message.role === "assistant"),
-				1,
-			);
-		} else if (getKeybindings().matches(keyData, "app.tree.previousBranch")) {
-			this.#moveBranch(-1);
-		} else if (getKeybindings().matches(keyData, "app.tree.nextBranch")) {
-			this.#moveBranch(1);
-		} else if (matchesKey(keyData, "home")) {
-			this.#tree.setSelectionIndex(0);
-		} else if (matchesKey(keyData, "end")) {
-			this.#tree.setSelectionIndex(this.#tree.rows.length - 1);
-		} else if (matchesSelectPageUp(keyData) || matchesKey(keyData, "left")) {
-			this.#tree.moveSelection(-this.maxVisibleLines);
-		} else if (matchesSelectPageDown(keyData) || matchesKey(keyData, "right")) {
-			this.#tree.moveSelection(this.maxVisibleLines);
-		} else if (
-			matchesKey(keyData, "shift+enter") ||
-			matchesKey(keyData, "shift+return") ||
-			keyData === "\n" || // Shift+Enter delivered as bare LF (iTerm2 legacy mapping) — matches the composer (issue #8821)
-			keyData === "\x1b[13;2~" // Shift+Enter legacy CSI ~ form — also accepted by the composer (editor.ts:1466)
-		) {
-			// Summarize-and-switch: fork with a branch summary without the extra prompt.
+		if (matchesKey(data, "alt+up") || matchesKey(data, "alt+down")) {
+			this.#tree.moveSelectionWhere(node => node.entry.type === "message" &&
+				(node.entry.message.role === "user" || node.entry.message.role === "assistant"),
+				matchesKey(data, "alt+up") ? -1 : 1);
+			this.#viewport.reveal();
+			return;
+		}
+		if (getKeybindings().matches(data, "app.tree.previousBranch") || getKeybindings().matches(data, "app.tree.nextBranch")) {
+			this.#moveBranch(getKeybindings().matches(data, "app.tree.previousBranch") ? -1 : 1);
+			this.#viewport.reveal();
+			return;
+		}
+		// Preserve the composer's existing legacy LF/Shift-Enter summary path.
+		if (matchesKey(data, "shift+enter") || matchesKey(data, "shift+return") ||
+			data === "\n" || data === "\x1b[13;2~") {
 			this.confirm(true);
-		} else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return")) {
-			this.confirm(false);
-		} else if (matchesAppInterrupt(keyData)) {
-			this.escape();
-		} else if (matchesKey(keyData, "ctrl+c")) {
-			this.onCancel?.();
-		} else if (matchesKey(keyData, "shift+ctrl+o") || matchesKey(keyData, "ctrl+shift+o")) {
-			this.cycleFilter(-1);
-		} else if (matchesKey(keyData, "ctrl+o")) {
-			this.cycleFilter(1);
-		} else if (matchesKey(keyData, "alt+d")) {
-			this.#filterMode = "default";
-			this.#applyFilter();
-		} else if (matchesKey(keyData, "alt+t")) {
-			this.#filterMode = "no-tools";
-			this.#applyFilter();
-		} else if (matchesKey(keyData, "alt+u")) {
-			this.#filterMode = "user-only";
-			this.#applyFilter();
-		} else if (matchesKey(keyData, "alt+l")) {
-			this.#filterMode = "labeled-only";
-			this.#applyFilter();
-		} else if (matchesKey(keyData, "alt+a")) {
-			this.#filterMode = "all";
-			this.#applyFilter();
-		} else if (matchesKey(keyData, "e") && !this.getSearchQuery()) {
-			this.editLabel();
+			return;
+		}
+		for (const [key, mode] of FILTER_MODE_KEYS) {
+			if (matchesKey(data, key)) { this.setFilterMode(mode); return; }
+		}
+		if (matchesKey(data, "e")) { this.editLabel(); return; }
+		if (matchesKey(data, "ctrl+c")) { this.onCancel?.(); return; }
+		const action = this.#keys.read(data);
+		if (!action || action === "pending") return;
+		if (action.kind === "search") this.#search.focused = true;
+		else if (action.kind === "cancel") this.escape();
+		else if (action.kind === "context") this.cycleFilter(action.delta);
+		else if (action.kind === "horizontal") {
+			if (action.delta < 0) this.#collapseOrParent();
+			else this.#expand();
+		} else if (action.kind === "toggle") this.toggleExpanded();
+		else if (action.kind === "confirm") this.confirm(false);
+		else {
+			this.#prepareViewport();
+			applyMenuMotion(action, this.#motionTarget, this.#viewport, { wrap: true });
+			if (action.kind === "scroll") {
+				const by = menuScrollBy(action);
+				if (by) this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
+			}
 		}
 	}
 }
@@ -1390,7 +1459,7 @@ class SearchLine implements Component {
 	invalidate(): void {}
 
 	render(width: number): readonly string[] {
-		return this.treeList.searchInput.render(width);
+		return [this.treeList.renderSearch(width)];
 	}
 
 	handleInput(_keyData: string): void {}
@@ -1410,9 +1479,22 @@ class LabelInput implements Component {
 		currentLabel: string | undefined,
 	) {
 		this.#input = new Input();
+		this.#input.focused = true;
+		this.#input.onEscape = () => this.onCancel?.();
 		if (currentLabel) {
 			this.#input.setValue(currentLabel);
 		}
+	}
+
+	navigationSnapshot(): unknown {
+		return { entryId: this.entryId, value: this.#input.getValue(), cursor: this.#input.getCursor() };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { value?: string; cursor?: number };
+		if (typeof state.value === "string") this.#input.setValue(state.value);
+		if (typeof state.cursor === "number") this.#input.setCursor(state.cursor);
 	}
 
 	invalidate(): void {}
@@ -1424,7 +1506,7 @@ class LabelInput implements Component {
 			this.#input,
 			hintsRow([
 				{ keys: ["enter"], label: "save" },
-				{ keys: [boundKeys("app.interrupt", ["escape"])[0] ?? "escape"], label: "cancel" },
+				{ keys: [boundKeys("app.interrupt", ["escape"])[0] ?? "escape"], label: "back (keep draft)" },
 			]),
 		]);
 		return this.#native;
@@ -1451,7 +1533,7 @@ class LabelInput implements Component {
 		lines.push(truncateToWidth(theme.fg("muted", "Label (empty to remove):"), width));
 		lines.push(...this.#input.render(width));
 		const cancel = interruptKey();
-		lines.push(truncateToWidth(theme.fg("dim", `${formatKeyHint("enter")}: save  ${cancel}: cancel`), width));
+		lines.push(truncateToWidth(theme.fg("dim", `${formatKeyHint("enter")}: save  ${cancel}: back (keep draft)`), width));
 		return lines;
 	}
 
@@ -1474,6 +1556,9 @@ export class TreeSelectorComponent extends OverlayPanel {
 	#labelInput: LabelInput | null = null;
 	#labelInputContainer: Container;
 	#treeContainer: Container;
+	readonly #labelDrafts = new Map<string, unknown>();
+	#emptyTimer: NodeJS.Timeout | undefined;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	#nativeMemo:
 		| {
 				content: NativeChild;
@@ -1488,6 +1573,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 				view: TreePickerView;
 				preview: readonly NativeChild[];
 				label: LabelInput | null;
+				focused: boolean;
 				node: NativeNode;
 		  }
 		| undefined;
@@ -1535,13 +1621,13 @@ export class TreeSelectorComponent extends OverlayPanel {
 						`${formatKeyHint("enter")}: switch.`,
 						`${formatKeyHints(["alt+up", "alt+down"])}: previous/next turn.`,
 						...(branchKeys ? [`${branchKeys}: previous/next branch.`] : []),
-						`${editorKeys("tui.select.pageUp", "tui.select.pageDown")} (${formatKeyHints(["left", "right"])}): page.`,
-						`${formatKeyHints(["home", "end"])}: first/last item.`,
+						"j/k ↑↓ · Ctrl-u/d half · PgUp/Dn page · gg/G/Home/End bounds · Ctrl-e/y view.",
+						"h/← collapse or parent · l/→ expand · Space toggle.",
 						`${formatKeyHint("shift+enter")}: summarize & switch.`,
 						`${formatKeyHint("e")}: label.`,
-						`${formatKeyHint("ctrl+o")}: filter.`,
+						"Tab/Shift-Tab or Ctrl-n/p: filter mode.",
 						`${formatKeyHints(["alt+d", "alt+t", "alt+u", "alt+l", "alt+a"])}: filter.`,
-						"hjkl navigate · i filter (Esc normal, Esc close)",
+						"/ search · Esc field/list/close",
 					].join(" "),
 				),
 				0,
@@ -1556,8 +1642,42 @@ export class TreeSelectorComponent extends OverlayPanel {
 		this.addChild(new Spacer(1));
 
 		if (tree.length === 0) {
-			setTimeout(() => onCancel(), 100);
+			this.#emptyTimer = setTimeout(() => { this.#emptyTimer = undefined; onCancel(); }, 100);
 		}
+	}
+
+	get filterFocused(): boolean { return this.#labelInput !== null || this.#treeList.filterFocused; }
+
+	navigationSnapshot(): unknown {
+		return { tree: this.#treeList.navigationSnapshot(), label: this.#labelInput?.navigationSnapshot(), drafts: [...this.#labelDrafts] };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { tree?: unknown; label?: { entryId?: string }; drafts?: Array<[string, unknown]> };
+		this.leaveMenu();
+		this.#hideLabelInput(false);
+		this.#labelDrafts.clear();
+		for (const [id, draft] of state.drafts ?? []) this.#labelDrafts.set(id, draft);
+		this.#treeList.restoreNavigation(state.tree);
+		if (state.label?.entryId && this.#treeList.getSelectedNode()?.entry.id === state.label.entryId) {
+			const label = this.#showLabelInput(state.label.entryId, undefined, false);
+			label.restoreNavigation(state.label);
+		}
+		this.#nativeMemo = undefined;
+		this.#pickerMemo = undefined;
+	}
+
+	leaveMenu(): void {
+		clearTimeout(this.#emptyTimer);
+		this.#emptyTimer = undefined;
+		this.#treeList.leaveMenu();
+	}
+
+	override dispose(): void {
+		this.leaveMenu();
+		if (this.#labelInput) this.#treeList.dispose();
+		super.dispose();
 	}
 
 	override describe(cx: DescribeContext): NativeNode {
@@ -1582,7 +1702,8 @@ export class TreeSelectorComponent extends OverlayPanel {
 			memo.view.selected === view.selected &&
 			memo.view.query === view.query &&
 			memo.view.cursor === view.cursor &&
-			memo.view.filterMode === view.filterMode
+			memo.view.filterMode === view.filterMode &&
+			memo.focused === this.filterFocused
 		) {
 			return memo.node;
 		}
@@ -1608,18 +1729,19 @@ export class TreeSelectorComponent extends OverlayPanel {
 			actions: label
 				? [
 						pickerAction("label-save", "Save label", "enter", { primary: true }),
-						{ ...CLOSE_ACTION, label: "Cancel" },
+						{ ...CLOSE_ACTION, label: "Back (keep draft)" },
 					]
 				: [
 						pickerAction("switch", "Switch", "enter", { primary: true }),
 						pickerAction("summarize", "Summarize & switch", "shift+enter"),
 						pickerAction("label", "Label", "e"),
-						pickerAction("filter", "Filter", "ctrl+o"),
-						CLOSE_ACTION,
+						pickerAction("expand", "Expand/collapse", "space"),
+						pickerAction("filter", "Next filter", "tab"),
+						{ ...CLOSE_ACTION, label: this.#treeList.filterFocused ? "Back to list" : "Close" },
 					],
 		};
 		const result = col([keyed(picker(props, preview), "picker")]);
-		this.#pickerMemo = { view, preview, label, node: result };
+		this.#pickerMemo = { view, preview, label, focused: this.filterFocused, node: result };
 		return result;
 	}
 
@@ -1649,7 +1771,10 @@ export class TreeSelectorComponent extends OverlayPanel {
 				list.confirm(true);
 				return;
 			case "label":
-				if (!list.getSearchQuery()) list.editLabel();
+				list.editLabel();
+				return;
+			case "expand":
+				list.toggleExpanded();
 				return;
 			case "filter":
 				list.cycleFilter(1);
@@ -1696,7 +1821,10 @@ export class TreeSelectorComponent extends OverlayPanel {
 				{ keys: ["home", "end"], label: "first/last" },
 				{ keys: ["shift+enter"], label: "summarize & switch" },
 				{ keys: ["e"], label: "label" },
-				{ keys: ["ctrl+o"], label: "filter" },
+				{ keys: ["h", "l", "left", "right"], label: "collapse/parent · expand" },
+				{ keys: ["space"], label: "toggle expansion" },
+				{ keys: ["tab", "shift+tab"], label: "filter mode" },
+				{ keys: ["/"], label: "search" },
 			]),
 		];
 		const result = overlayCard("omp.overlay.tree", "Session Tree", children);
@@ -1719,25 +1847,37 @@ export class TreeSelectorComponent extends OverlayPanel {
 		if (event.key === "list" && !this.#labelInput) this.#treeList.activateEntry(event.item);
 	}
 
-	#showLabelInput(entryId: string, currentLabel: string | undefined): void {
-		this.#labelInput = new LabelInput(entryId, currentLabel);
-		this.#labelInput.onSubmit = (id, label) => {
+	#showLabelInput(entryId: string, currentLabel: string | undefined, recordVisit = true): LabelInput {
+		const previous = recordVisit && this.onNavigationVisit ? this.navigationSnapshot() : undefined;
+		const input = new LabelInput(entryId, currentLabel);
+		const draft = this.#labelDrafts.get(entryId);
+		if (draft) input.restoreNavigation(draft);
+		this.#labelInput = input;
+		input.onSubmit = (id, label) => {
+			this.#labelDrafts.delete(id);
 			this.#treeList.updateNodeLabel(id, label);
 			this.onLabelChangeCallback?.(id, label);
 			this.#hideLabelInput();
 		};
-		this.#labelInput.onCancel = () => this.#hideLabelInput();
-
+		input.onCancel = () => {
+			this.#labelDrafts.set(entryId, input.navigationSnapshot());
+			this.#hideLabelInput();
+		};
 		this.#treeContainer.clear();
 		this.#labelInputContainer.clear();
-		this.#labelInputContainer.addChild(this.#labelInput);
+		this.#labelInputContainer.addChild(input);
+		if (recordVisit) this.onNavigationVisit?.(`label:${entryId}`, previous);
+		return input;
 	}
 
-	#hideLabelInput(): void {
+	#hideLabelInput(recordVisit = true): void {
+		if (!this.#labelInput) return;
+		const previous = recordVisit && this.onNavigationVisit ? this.navigationSnapshot() : undefined;
 		this.#labelInput = null;
 		this.#labelInputContainer.clear();
 		this.#treeContainer.clear();
 		this.#treeContainer.addChild(this.#treeList);
+		if (recordVisit) this.onNavigationVisit?.("", previous);
 	}
 
 	handleInput(keyData: string): void {

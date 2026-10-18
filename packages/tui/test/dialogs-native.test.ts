@@ -257,7 +257,7 @@ describe("dialogs under a native surface", () => {
 		expect(viaKey).toHaveBeenCalledTimes(1);
 	});
 
-	it("plan review: ←/→ walk the horizontal decision bar, Shift+←/→ step the model slider, ↑ leaves it", () => {
+	it("plan review: j/k select decisions, h/l switch panes and Shift-arrows adjust the model", () => {
 		const onPick = vi.fn();
 		const onChange = vi.fn();
 		const overlay = new PlanReviewOverlay(
@@ -270,17 +270,17 @@ describe("dialogs under a native surface", () => {
 		);
 		setNativeRendering(true);
 		try {
-			// → → ← lands on the middle option; Shift+→ then Shift+← round-trips the slider.
-			overlay.handleInput(RIGHT);
-			overlay.handleInput(RIGHT);
-			overlay.handleInput(LEFT);
+			// j/Down/k lands on the middle option; Shift-arrows round-trip the model.
+			overlay.handleInput("j");
+			overlay.handleInput(DOWN);
+			overlay.handleInput("k");
 			overlay.handleInput(SHIFT_RIGHT);
 			overlay.handleInput(SHIFT_LEFT);
-			// ↓ has nothing below the bar: the selection stays put.
-			overlay.handleInput(DOWN);
-			// ↑ hands focus to the body, where Enter returns to the bar instead of confirming.
-			overlay.handleInput(UP);
+			// h hands focus to the body; Enter returns to the decisions without approving.
+			overlay.handleInput("h");
 			overlay.handleInput(ENTER);
+			expect(onPick).not.toHaveBeenCalled();
+			overlay.handleInput(" ");
 			expect(onPick).not.toHaveBeenCalled();
 			overlay.handleInput(ENTER);
 		} finally {

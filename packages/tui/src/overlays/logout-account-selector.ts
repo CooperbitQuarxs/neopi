@@ -182,7 +182,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 				current: this.#accounts.filter(account => account.active).map(account => String(account.credentialId)),
 				selected: this.#menu.selectedKey ?? null,
 				empty: "No stored accounts to log out",
-				actions: [pickerAction("confirm", "Sign out", "enter", { primary: true, danger: true }), CLOSE_ACTION],
+				actions: [pickerAction("confirm", "Sign out", "enter", { primary: true, danger: true }), { ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" }],
 			});
 			return this.#pickerRoot;
 		}
@@ -224,7 +224,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		const ev = pickerEvent(event, PICKER_KEY);
 		if (ev?.kind === "action") {
 			if (ev.act === "confirm") this.#confirmSelection();
-			else if (ev.act === "close" || ev.act === "cancel") this.#onCancelCallback();
+			else if (ev.act === "close" || ev.act === "cancel") this.handleInput("\x1b");
 			return;
 		}
 		if (ev?.kind === "select") {

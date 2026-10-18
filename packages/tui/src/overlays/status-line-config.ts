@@ -2,6 +2,8 @@ import type { UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { bottomBorder, dividerSplit, PanelRows, row, topBorderSplit } from "../chrome/overlay-box";
 import { sanitizeStatusText } from "../chrome/shared";
 import { Input } from "../components/input";
+import { MenuKeyReader, MenuSearchField, MenuViewport } from "../components/menu-navigation";
+import type { MenuWindow } from "../components/menu-selection";
 import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
 import { type Component, getKeybindings, matchesKey, routeSgrMouseInput, truncateToWidth } from "../index";
@@ -291,14 +293,15 @@ export class StatusLineConfigOverlayComponent implements Component {
 	#right: StatusLineWidgetRow[];
 	#templates: Record<string, string>;
 	#selected: string;
-	#top: number;
+	readonly #viewport = new MenuViewport();
+	#viewportRows: number[] = [];
+	readonly #reader = new MenuKeyReader();
 	#focus: StatusLineEditorFocus;
-	readonly #search = new Input();
+	readonly #search = new MenuSearchField();
 	readonly #template = new Input();
 	#prompt: "exit" | "reset" | undefined;
 	/** Latest editor message; host statuses render behind the fullscreen editor, so the footer repeats it until the next key. */
 	#notice: { text: string; warning: boolean } | undefined;
-	#pendingG = false;
 	#applying = false;
 	#closed = false;
 	#leavePending = false;
@@ -352,9 +355,8 @@ export class StatusLineConfigOverlayComponent implements Component {
 		}
 		this.#addCatalogRows();
 		this.#selected = draft?.selected ?? COMPOSER_ROW;
-		this.#top = draft?.top ?? 0;
+		this.#viewport.setTop(draft?.top ?? 0);
 		this.#focus = draft?.focus ?? "list";
-		this.#search.prompt = "";
 		this.#search.setValue(draft?.query ?? "");
 		this.#template.prompt = "";
 		if (!this.#keys().includes(this.#selected)) this.#selected = COMPOSER_ROW;
@@ -415,9 +417,9 @@ export class StatusLineConfigOverlayComponent implements Component {
 			right: this.#right.map(row => ({ ...row })),
 			usageTemplates: { ...this.#templates },
 			selected: this.#selected,
-			top: this.#top,
+			top: this.#viewport.top?.item ?? 0,
 			focus: this.#focus,
-			query: this.#search.getValue(),
+			query: this.#search.value,
 		};
 	}
 
@@ -473,7 +475,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 	// ── List model ────────────────────────────────────────────────────────
 
 	#matches(row: StatusLineWidgetRow): boolean {
-		const query = this.#search.getValue().trim().toLowerCase();
+		const query = this.#search.value.trim().toLowerCase();
 		if (!query) return true;
 		return row.id.toLowerCase().includes(query) || segmentLabel(row.id).toLowerCase().includes(query);
 	}
@@ -501,18 +503,14 @@ export class StatusLineConfigOverlayComponent implements Component {
 		return lines.findIndex(line => "key" in line && line.key === key);
 	}
 
-	/** Scroll just enough to show the selected row. */
-	#reveal(): void {
-		const lines = this.#lines();
-		const index = Math.max(0, this.#lineIndex(this.#selected, lines));
-		const rows = Math.max(1, this.#listRows);
-		if (index < this.#top) this.#top = index;
-		else if (index >= this.#top + rows) this.#top = index - rows + 1;
-		this.#clampTop(lines.length);
-	}
-
-	#clampTop(lineCount = this.#lines().length): void {
-		this.#top = Math.max(0, Math.min(this.#top, lineCount - Math.max(1, this.#listRows)));
+	/** Physical one-line rows include headers and blanks; selection skips them separately. */
+	#window(lines = this.#lines()): MenuWindow {
+		if (this.#viewportRows.length !== lines.length) this.#viewportRows = lines.map(() => 1);
+		return this.#viewport.layout(
+			this.#viewportRows,
+			Math.max(0, this.#lineIndex(this.#selected, lines)),
+			Math.max(1, this.#listRows),
+		);
 	}
 
 	#select(key: string): void {
@@ -520,7 +518,8 @@ export class StatusLineConfigOverlayComponent implements Component {
 		if (this.#focus === "template" && !parseUsageBarSegmentId(key)) this.#focus = "list";
 		this.#syncFocusFlags();
 		this.#syncTemplateField();
-		this.#reveal();
+		this.#viewport.reveal();
+		this.#window();
 		this.#moved();
 	}
 
@@ -540,8 +539,9 @@ export class StatusLineConfigOverlayComponent implements Component {
 
 	/** Scroll the view by `delta` lines; the selection stays where it is. */
 	#scroll(delta: number): void {
-		this.#top += delta;
-		this.#clampTop();
+		this.#window();
+		this.#viewport.scroll(delta);
+		this.#window();
 		this.#moved();
 	}
 
@@ -581,7 +581,8 @@ export class StatusLineConfigOverlayComponent implements Component {
 		} else if (side === "left" && direction === 1) this.#right.unshift(...rows.splice(index, 1));
 		else if (side === "right" && direction === -1) this.#left.push(...rows.splice(index, 1));
 		else return;
-		this.#reveal();
+		this.#viewport.reveal();
+		this.#window();
 		this.#edited();
 	}
 
@@ -617,7 +618,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 		if (this.#focus === "template" && focus !== "template") this.#syncTemplateField();
 		this.#focus = focus;
 		this.#syncFocusFlags();
-		this.#pendingG = false;
+		this.#reader.reset();
 		this.#moved();
 	}
 
@@ -722,55 +723,68 @@ export class StatusLineConfigOverlayComponent implements Component {
 		if (this.#closed || this.#applying) return;
 		this.#notice = undefined;
 		if (data.startsWith("\x1b[<")) {
-			this.#pendingG = false;
+			this.#reader.reset();
 			this.#handleMouse(data);
 			return;
 		}
-		const kb = getKeybindings();
-		const char = extractPrintableText(data);
 		if (this.#prompt) {
-			this.#handlePrompt(data, char);
+			this.#reader.reset();
+			this.#handlePrompt(data, extractPrintableText(data));
 			return;
 		}
 		if (this.#focus === "template") {
+			this.#reader.reset();
 			this.#handleTemplateInput(data);
 			return;
 		}
 		if (this.#focus === "search") {
+			this.#reader.reset();
 			this.#handleSearchInput(data);
 			return;
 		}
-		const pendingG = this.#pendingG;
-		this.#pendingG = false;
-		if (char === "g") {
-			if (pendingG) this.#boundary("first");
-			else this.#pendingG = true;
-			return;
+		const action = this.#reader.read(data);
+		if (action === "pending") return;
+		switch (action?.kind) {
+			case "cancel":
+				this.#requestClose();
+				return;
+			case "move":
+				this.#moveSelection(action.delta);
+				return;
+			case "horizontal":
+				this.#reorder(action.delta);
+				return;
+			case "halfPage":
+				this.#moveSelection(action.delta * Math.max(1, Math.floor(this.#listRows / 2)));
+				return;
+			case "page":
+				this.#moveSelection(action.delta * Math.max(1, this.#listRows));
+				return;
+			case "boundary":
+				this.#boundary(action.edge);
+				return;
+			case "scroll":
+				this.#scroll(action.delta);
+				return;
+			case "toggle":
+			case "confirm":
+				this.#toggle();
+				return;
+			case "context":
+				if (parseUsageBarSegmentId(this.#selected)) {
+					this.#syncTemplateField();
+					this.#setFocus("template");
+				} else this.#notify("Tab edits the text template of a usage widget; select one first.");
+				return;
+			case "search":
+				this.#setFocus("search");
+				return;
 		}
-		if (kb.matches(data, "tui.select.cancel")) this.#requestClose();
-		else if (char === "j" || kb.matches(data, "tui.select.down")) this.#moveSelection(1);
-		else if (char === "k" || kb.matches(data, "tui.select.up")) this.#moveSelection(-1);
-		else if (char === "h" || char === "[" || matchesKey(data, "left") || matchesKey(data, "alt+up"))
-			this.#reorder(-1);
-		else if (char === "l" || char === "]" || matchesKey(data, "right") || matchesKey(data, "alt+down"))
-			this.#reorder(1);
-		else if (matchesKey(data, "ctrl+d")) this.#moveSelection(Math.max(1, Math.floor(this.#listRows / 2)));
-		else if (matchesKey(data, "ctrl+u")) this.#moveSelection(-Math.max(1, Math.floor(this.#listRows / 2)));
-		else if (kb.matches(data, "tui.select.pageDown")) this.#moveSelection(Math.max(1, this.#listRows));
-		else if (kb.matches(data, "tui.select.pageUp")) this.#moveSelection(-Math.max(1, this.#listRows));
-		else if (char === "G" || matchesKey(data, "end")) this.#boundary("last");
-		else if (matchesKey(data, "home")) this.#boundary("first");
-		else if (matchesKey(data, "ctrl+e")) this.#scroll(1);
-		else if (matchesKey(data, "ctrl+y")) this.#scroll(-1);
-		else if (char === " " || kb.matches(data, "tui.select.confirm")) this.#toggle();
+		const char = extractPrintableText(data);
+		if (char === "[" || matchesKey(data, "alt+up")) this.#reorder(-1);
+		else if (char === "]" || matchesKey(data, "alt+down")) this.#reorder(1);
 		else if (char === "<") this.#cycleComposer(-1);
 		else if (char === ">") this.#cycleComposer(1);
-		else if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
-			if (parseUsageBarSegmentId(this.#selected)) {
-				this.#syncTemplateField();
-				this.#setFocus("template");
-			} else this.#notify("Tab edits the text template of a usage widget; select one first.");
-		} else if (char === "/") this.#setFocus("search");
 		else if (char === "s" || matchesKey(data, "ctrl+s")) void this.#apply(false);
 		else if (char === "R") this.#requestReset();
 	}
@@ -811,7 +825,9 @@ export class StatusLineConfigOverlayComponent implements Component {
 			return;
 		}
 		const before = this.#template.getValue();
-		if (!this.#template.handleInput(data)) return;
+		const printable = extractPrintableText(data);
+		if (printable !== undefined) this.#template.insertText(printable);
+		else if (!this.#template.handleInput(data)) return;
 		const value = limitUsageBarTemplate(this.#template.getValue());
 		if (this.#template.getValue() !== value) this.#template.setValue(value);
 		if (value !== before) this.#setTemplate(this.#selected, value);
@@ -819,7 +835,6 @@ export class StatusLineConfigOverlayComponent implements Component {
 	}
 
 	#handleSearchInput(data: string): void {
-		const kb = getKeybindings();
 		if (
 			matchesKey(data, "escape") ||
 			matchesKey(data, "enter") ||
@@ -829,33 +844,31 @@ export class StatusLineConfigOverlayComponent implements Component {
 			this.#setFocus("list");
 			return;
 		}
-		if (kb.matches(data, "tui.select.down")) {
-			this.#moveSelection(1);
+		const before = this.#search.value;
+		const result = this.#search.handleInput(data);
+		if (result === "exited") {
+			this.#setFocus("list");
 			return;
 		}
-		if (kb.matches(data, "tui.select.up")) {
-			this.#moveSelection(-1);
+		if (result === "pass") {
+			const kb = getKeybindings();
+			if (kb.matches(data, "tui.select.down")) this.#moveSelection(1);
+			else if (kb.matches(data, "tui.select.up")) this.#moveSelection(-1);
 			return;
 		}
-		const before = this.#search.getValue();
-		if (!this.#search.handleInput(data)) return;
-		const query = sanitizeDisplaySingleLine(this.#search.getValue());
-		if (query !== this.#search.getValue()) this.#search.setValue(query);
+		const query = sanitizeDisplaySingleLine(this.#search.value);
+		if (query !== this.#search.value) this.#search.setValue(query);
 		if (query === before) {
 			this.#cb.requestRender();
 			return;
 		}
-		// A new filter lands on a match, not the always-visible composer/reset rows.
-		if (
-			!this.#keys().includes(this.#selected) ||
-			(query.trim() && (this.#selected === COMPOSER_ROW || this.#selected === RESET_ROW))
-		) {
-			const first = this.#lines().find(line => line.kind === "widget");
-			this.#selected = first && "key" in first ? first.key : COMPOSER_ROW;
-			this.#syncTemplateField();
-		}
-		this.#top = 0;
-		this.#reveal();
+		// A changed filter always lands on its first widget match, never Composer/Reset.
+		const first = this.#lines().find(line => line.kind === "widget");
+		this.#selected = first && "key" in first ? first.key : COMPOSER_ROW;
+		this.#syncTemplateField();
+		this.#viewport.setTop(0);
+		this.#viewport.reveal();
+		this.#window();
 		this.#moved();
 	}
 
@@ -869,7 +882,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 				return true;
 			}
 			if (!event.leftClick || this.#prompt) return true;
-			const line = this.#lines()[this.#top + pane.line];
+			const line = this.#lines()[(this.#viewport.top?.item ?? 0) + pane.line];
 			if (!line || !("key" in line)) return true;
 			if (this.#focus !== "list") this.#setFocus("list");
 			if (line.key === this.#selected) this.#toggle();
@@ -913,8 +926,8 @@ export class StatusLineConfigOverlayComponent implements Component {
 	#renderList(width: number, height: number): string[] {
 		this.#listRows = Math.max(1, height);
 		const lines = this.#lines();
-		this.#clampTop(lines.length);
-		return lines.slice(this.#top, this.#top + this.#listRows).map(line => this.#renderLine(line, width));
+		const view = this.#window(lines);
+		return lines.slice(view.startIndex, view.endIndex).map(line => this.#renderLine(line, width));
 	}
 
 	#details(width: number): string[] {
@@ -954,9 +967,9 @@ export class StatusLineConfigOverlayComponent implements Component {
 				),
 			);
 		}
-		if (this.#focus === "search" || this.#search.getValue()) {
+		if (this.#focus === "search" || this.#search.value) {
 			lines.push("", theme.fg(this.#focus === "search" ? "accent" : "muted", "Search"));
-			lines.push(...this.#search.render(Math.max(1, width)));
+			lines.push(...this.#search.input.render(Math.max(1, width)));
 		}
 		lines.push(
 			"",
@@ -973,7 +986,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 		if (this.#prompt === "reset") return RESET_HINTS;
 		if (this.#focus === "template") return TEMPLATE_HINTS;
 		if (this.#focus === "search") return SEARCH_HINTS;
-		const query = sanitizeStatusText(this.#search.getValue());
+		const query = sanitizeStatusText(this.#search.value);
 		return query ? `filter "${query}" · ${LIST_HINTS}` : LIST_HINTS;
 	}
 

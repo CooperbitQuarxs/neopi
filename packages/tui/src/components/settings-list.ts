@@ -13,7 +13,7 @@ import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth, wrapText
 import { ScrollView } from "./scroll-view";
 import { FormField, type FormFieldOptions, type FormFieldTheme, SelectFormField, TextFormField } from "./form";
 import { MenuSelection } from "./menu-selection";
-import { applyMenuMotion, isMenuHistoryParticipant, MenuKeyReader, MenuSearchField, MenuViewport, type MenuViewportPosition } from "./menu-navigation";
+import { applyMenuMotion, isMenuHistoryParticipant, MenuKeyReader, MenuSearchField, MenuViewport, type MenuNavAction, type MenuViewportPosition } from "./menu-navigation";
 
 function sanitizeSingleLine(text: string): string {
 	return replaceTabs(text)
@@ -1094,11 +1094,17 @@ export class SettingsList implements Component {
 			this.#submenuComponent.handleInput?.(data);
 			return;
 		}
-		if (this.#viewport.top === undefined) this.#viewport.layout(this.#rowCounts, this.#selectedIndex, this.#maxVisible);
 
 		if (this.#handleSearchInput(data)) return;
 		const action = this.#keys.read(data);
 		if (action === undefined || action === "pending") return;
+		this.handleNavigation(action);
+	}
+
+	/** Apply a host-decoded root action; focused fields and open submenus receive raw input first. */
+	handleNavigation(action: MenuNavAction): void {
+		this.#keys.reset();
+		if (this.#viewport.top === undefined) this.#viewport.layout(this.#rowCounts, this.#selectedIndex, this.#maxVisible);
 		if (action.kind === "search") {
 			if (this.#options.typeToSearch !== false) {
 				this.#search.focused = true;
@@ -1230,5 +1236,9 @@ export class SettingsFormField extends FormField {
 			spaceAfterControl: options.spaceAfterControl,
 		});
 		this.settingsList = settingsList;
+	}
+
+	override get filterFocused(): boolean {
+		return this.settingsList.filterFocused;
 	}
 }

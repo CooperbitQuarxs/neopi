@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { SelectList, type SelectListTheme } from "@oh-my-pi/pi-tui/components/select-list";
+import { MenuKeyReader } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import type { SgrMouseEvent } from "@oh-my-pi/pi-tui/mouse";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
@@ -59,6 +60,53 @@ describe("SelectList", () => {
 
 	afterEach(() => {
 		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
+	});
+
+	it("lets a parent own gg prefixes while applying decoded list actions", () => {
+		const list = new SelectList(["a", "b", "c"].map(value => ({ value, label: value })), 3, testTheme);
+		const parent = new MenuKeyReader();
+		const send = (data: string) => {
+			const action = parent.read(data);
+			if (action && action !== "pending" && action.kind !== "horizontal") list.handleNavigation(action);
+		};
+		send("G");
+		send("g");
+		send("h"); // Consumed by the parent; cancels only its own pending prefix.
+		send("g");
+		expect(list.getSelectedItem()?.value).toBe("c");
+		send("g");
+		expect(list.getSelectedItem()?.value).toBe("a");
+
+		list.handleNavigation({ kind: "boundary", edge: "last" });
+		list.handleInput("g");
+		list.handleNavigation({ kind: "move", delta: -1 });
+		list.handleInput("g");
+		expect(list.getSelectedItem()?.value).toBe("b");
+		list.handleInput("g");
+		expect(list.getSelectedItem()?.value).toBe("a");
+	});
+
+	it("disables Space activation without retaining a pending navigation prefix", () => {
+		const selected: string[] = [];
+		const list = new SelectList(["a", "b"].map(value => ({ value, label: value })), 2, testTheme, {
+			search: "always",
+			activateOnSpace: false,
+		});
+		list.onSelect = item => selected.push(item.value);
+		list.handleInput("G");
+		list.handleInput("g");
+		list.handleNavigation({ kind: "toggle" });
+		list.handleInput("g");
+		expect(list.getSelectedItem()?.value).toBe("b");
+		list.handleInput("g");
+		expect(list.getSelectedItem()?.value).toBe("a");
+		expect(selected).toEqual([]);
+		list.handleNavigation({ kind: "confirm" });
+		expect(selected).toEqual(["a"]);
+		list.handleInput("/");
+		list.handleInput(" ");
+		expect(list.navigationState().filter).toBe(" ");
+		expect(selected).toEqual(["a"]);
 	});
 
 	it("re-sanitizes a reused item object whose label changed", () => {

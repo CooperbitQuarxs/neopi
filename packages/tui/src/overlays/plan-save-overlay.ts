@@ -1,11 +1,10 @@
 import { type Component, CURSOR_MARKER, type Focusable, Input, truncateToWidth, visibleWidth } from "../index";
 import { theme } from "../theme/theme";
 import { OverlayPanel, PanelRows } from "../chrome/overlay-box";
-import { editorKey } from "../chrome/keybinding-hints";
 import { col, keyed, span, text } from "../native/describe";
 import type { NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton } from "../native/overlay";
-import { getKeybindings } from "../keybindings";
+import { extractPrintableText, matchesKey } from "../keys";
 
 /** A confirmed destination chosen from {@link PlanSaveOverlay}. */
 export interface PlanSaveOverlayResult {
@@ -49,7 +48,11 @@ export class PlanSaveOverlay implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
-		this.#input.handleInput(data);
+		const printable = extractPrintableText(data);
+		if (printable !== undefined) this.#input.insertText(printable);
+		else if (matchesKey(data, "escape")) this.#input.onEscape?.();
+		else if (matchesKey(data, "enter") || data === "\n") this.#input.onSubmit?.(this.#input.getValue());
+		else this.#input.handleInput(data);
 	}
 
 	/** Routes enhanced clipboard pastes into the path input. */
@@ -65,7 +68,7 @@ export class PlanSaveOverlay implements Component, Focusable {
 	render(width: number): readonly string[] {
 		const innerWidth = Math.max(0, width - 4);
 		this.#input.focused = this.#focused;
-		const hint = `${editorKey("tui.input.submit")} save and quit · ${editorKey("tui.select.cancel")} cancel`;
+		const hint = "Enter save and quit · Esc cancel";
 		this.#body.setLines([this.#renderInput(innerWidth), theme.fg("dim", hint)]);
 		return this.#panel.render(width);
 	}
@@ -76,10 +79,7 @@ export class PlanSaveOverlay implements Component, Focusable {
 	describe(): NativeNode {
 		this.#input.focused = this.#focused;
 		const showDefault = this.#input.getValue().length === 0;
-		const bindings = getKeybindings();
-		const submitKey = bindings.getKeys("tui.input.submit")[0];
-		const cancelKey = bindings.getKeys("tui.select.cancel")[0];
-		const sig = `${showDefault}|${this.#suggestedPath}|${submitKey}|${cancelKey}`;
+		const sig = `${showDefault}|${this.#suggestedPath}`;
 		if (this.#nativeRoot && sig === this.#nativeSig) return this.#nativeRoot;
 		const children: NativeChild[] = [this.#input];
 		if (showDefault) {
@@ -93,8 +93,8 @@ export class PlanSaveOverlay implements Component, Focusable {
 		children.push(
 			actionBar([
 				null,
-				actionButton("Cancel", "cancel", cancelKey ? { keys: cancelKey } : {}),
-				actionButton("Save and quit", "save", { tone: "accent", ...(submitKey ? { keys: submitKey } : {}) }),
+				actionButton("Cancel", "cancel", { keys: "escape" }),
+				actionButton("Save and quit", "save", { tone: "accent", keys: "enter" }),
 			]),
 		);
 		this.#nativeSig = sig;

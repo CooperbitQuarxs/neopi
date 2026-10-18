@@ -283,6 +283,8 @@ interface MenuVisitState {
 interface OpenMenu {
 	kind: MenuKind;
 	location: MenuLocation;
+	/** A history snapshot owned by this request while its component is still loading. */
+	restoreSnapshot?: unknown;
 	component?: Component;
 	handle?: OverlayHandle;
 	/** Shows `component` as a new overlay and focuses it; also raises a covered menu. */
@@ -311,7 +313,7 @@ export class SelectorController {
 	#navigatingHistory = false;
 	/** Raising a covered external host replaces its handle, not its history lifetime. */
 	#remountingMenu: OpenMenu | undefined;
-	/** Snapshot to hand to the `kind` menu as soon as its history reopen mounts it. */
+	/** Snapshot handed to the next matching history reopen when it claims its menu. */
 	#pendingRestore: { kind: MenuKind; location: MenuLocation; snapshot: unknown } | undefined;
 
 	constructor(private ctx: InteractiveModeContext) {}
@@ -361,6 +363,7 @@ export class SelectorController {
 			this.#snapshotOpenMenus();
 			this.#menuHistory.visit(open.location, this.#menuState(open));
 		}
+		this.#retirePendingMenus(open);
 		if (open.component && open.mount && this.#isCovered(open.component)) {
 			this.#remountingMenu = open;
 			try {
@@ -385,8 +388,10 @@ export class SelectorController {
 
 	/** Mount `component` as `menu`'s overlay through `mount`, which also raises it later. */
 	#mountMenu(menu: OpenMenu, component: Component, mount: () => OverlayHandle): void {
-		if (this.#openMenus.get(menu.kind) !== menu) {
+		if (this.#openMenus.get(menu.kind) !== menu || this.#menuHistory.current.location !== menu.location) {
+			if (this.#openMenus.get(menu.kind) === menu) this.#openMenus.delete(menu.kind);
 			if (isMenuHistoryLeaver(component)) component.leaveMenu();
+			component.dispose?.();
 			return;
 		}
 		menu.component = component;
@@ -404,13 +409,11 @@ export class SelectorController {
 				this.#menuHistory.visit(menu.location, this.#menuState(menu));
 			};
 		}
-		const restore = this.#pendingRestore;
-		if (restore && this.#openMenus.get(restore.kind) === menu) {
-			this.#pendingRestore = undefined;
-			if (restore.snapshot !== undefined && isMenuHistoryParticipant(component)) {
-				component.restoreNavigation(restore.snapshot);
-				this.ctx.ui.requestRender();
-			}
+		const snapshot = menu.restoreSnapshot;
+		menu.restoreSnapshot = undefined;
+		if (snapshot !== undefined && isMenuHistoryParticipant(component)) {
+			component.restoreNavigation(snapshot);
+			this.ctx.ui.requestRender();
 		}
 	}
 
@@ -419,11 +422,16 @@ export class SelectorController {
 	 * or fails to open. `reopen` repeats this request when menu history returns.
 	 */
 	#claimMenu(kind: MenuKind, reopen: () => void): OpenMenu {
-		const restore = this.#pendingRestore?.kind === kind ? this.#pendingRestore : undefined;
+		const restore =
+			this.#pendingRestore?.kind === kind && this.#pendingRestore.location === this.#menuHistory.current.location
+				? this.#pendingRestore
+				: undefined;
+		this.#pendingRestore = undefined;
 		if (!this.#navigatingHistory && !restore) this.#snapshotOpenMenus();
-		const menu: OpenMenu = { kind, location: restore?.location ?? kind, reopen };
+		const menu: OpenMenu = { kind, location: restore?.location ?? kind, reopen, restoreSnapshot: restore?.snapshot };
 		this.#openMenus.set(kind, menu);
 		if (!this.#navigatingHistory && !restore) this.#menuHistory.visit(kind, { kind, reopen });
+		this.#retirePendingMenus(menu);
 		return menu;
 	}
 
@@ -431,12 +439,19 @@ export class SelectorController {
 		return {
 			kind: menu.kind,
 			reopen: menu.reopen,
-			snapshot: isMenuHistoryParticipant(menu.component) ? menu.component.navigationSnapshot() : undefined,
+			snapshot: isMenuHistoryParticipant(menu.component) ? menu.component.navigationSnapshot() : menu.restoreSnapshot,
 		};
 	}
 
 	#snapshotOpenMenus(): void {
 		for (const menu of this.#openMenus.values()) this.#menuHistory.recordState(menu.location, this.#menuState(menu));
+	}
+
+	/** A later visit supersedes requests that have not mounted a view yet. */
+	#retirePendingMenus(current: OpenMenu): void {
+		for (const [kind, menu] of this.#openMenus) {
+			if (menu !== current && !menu.component) this.#openMenus.delete(kind);
+		}
 	}
 
 	#releaseMenu(kind: MenuKind, menu: OpenMenu): void {
@@ -483,6 +498,7 @@ export class SelectorController {
 		this.#navigatingHistory = true;
 		try {
 			this.#snapshotOpenMenus();
+			this.#pendingRestore = undefined;
 			const currentKind = this.#menuHistory.current.state?.kind;
 			const target = direction < 0 ? this.#menuHistory.back() : this.#menuHistory.forward();
 			const targetKind = target?.state?.kind;
@@ -562,6 +578,14 @@ export class SelectorController {
 	): void {
 		if (history && this.#focusOpenMenu(history.kind)) return;
 		const menu = history ? this.#claimMenu(history.kind, history.reopen) : undefined;
+		this.#showInlineSelector(create, menu);
+	}
+
+	#showInlineSelector(
+		create: (done: () => void) => { component: Component; focus: Component },
+		menu?: OpenMenu,
+	): void {
+		if (menu && this.#openMenus.get(menu.kind) !== menu) return;
 		const previousChildren = [...this.ctx.editorContainer.children];
 		const previousFocus = this.ctx.ui.getFocused();
 		let hidden = false;
@@ -757,6 +781,7 @@ export class SelectorController {
 
 	showAdvisorConfigure(): void {
 		if (this.#focusOpenMenu("advisor-config")) return;
+		const menu = this.#claimMenu("advisor-config", () => this.showAdvisorConfigure());
 		const cwd = this.ctx.sessionManager.getCwd();
 		const agentDir = getAgentDir() ?? getProjectDir();
 		const initialScope: AdvisorConfigScope = "project";
@@ -771,13 +796,12 @@ export class SelectorController {
 			}
 			const dirs = { projectDir, agentDir };
 			const initialDoc = await loadWatchdogConfigFile(await resolveAdvisorConfigEditPath(initialScope, dirs));
+			if (this.#openMenus.get(menu.kind) !== menu) return;
 			if (initialDoc.warnings?.length) {
 				this.ctx.showWarning(`WATCHDOG.yml: ${sanitizeDisplayWarnings(initialDoc.warnings).join("; ")}`);
 			}
 			// Fullscreen editor on the alternate screen (the /settings idiom): the
 			// overlay holds the alt buffer + mouse tracking; the transcript stays put.
-			if (this.#focusOpenMenu("advisor-config")) return;
-			const menu = this.#claimMenu("advisor-config", () => this.showAdvisorConfigure());
 			const done = () => {
 				this.#releaseMenu(menu.kind, menu);
 				menu.handle?.hide();
@@ -870,7 +894,11 @@ export class SelectorController {
 				},
 			});
 			this.#mountMenu(menu, overlay, () => this.#showFullscreenMenu(overlay));
-		})();
+		})().catch(error => {
+			if (this.#openMenus.get(menu.kind) !== menu) return;
+			this.#releaseMenu(menu.kind, menu);
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+		});
 	}
 
 	showStatusLineConfigure(): void {
@@ -1002,6 +1030,7 @@ export class SelectorController {
 
 	showChainConfigure(): void {
 		if (this.#focusOpenMenu("chain-config")) return;
+		const menu = this.#claimMenu("chain-config", () => this.showChainConfigure());
 		const cwd = this.ctx.sessionManager.getCwd();
 		const agentDir = getAgentDir() ?? getProjectDir();
 		const initialScope: ChainConfigScope = "project";
@@ -1015,11 +1044,10 @@ export class SelectorController {
 			}
 			const dirs = { projectDir, agentDir };
 			const initialDoc = await loadChainsConfigFile(chainsConfigFilePath(initialScope, dirs));
+			if (this.#openMenus.get(menu.kind) !== menu) return;
 			if (initialDoc.warnings?.length) {
 				this.ctx.showWarning(`CHAINS.yml: ${sanitizeDisplayWarnings(initialDoc.warnings).join("; ")}`);
 			}
-			if (this.#focusOpenMenu("chain-config")) return;
-			const menu = this.#claimMenu("chain-config", () => this.showChainConfigure());
 			const done = () => {
 				this.#releaseMenu(menu.kind, menu);
 				menu.handle?.hide();
@@ -1063,11 +1091,16 @@ export class SelectorController {
 				warn: message => this.ctx.showWarning(message),
 			});
 			this.#mountMenu(menu, overlay, () => this.#showFullscreenMenu(overlay));
-		})();
+		})().catch(error => {
+			if (this.#openMenus.get(menu.kind) !== menu) return;
+			this.#releaseMenu(menu.kind, menu);
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+		});
 	}
 
 	showMixtureConfigure(name?: string, returnToModelHub = false): void {
 		if (this.#focusOpenMenu("mixture-config")) return;
+		const menu = this.#claimMenu("mixture-config", () => this.showMixtureConfigure(name, returnToModelHub));
 		const cwd = this.ctx.sessionManager.getCwd();
 		const agentDir = this.ctx.session.getMixtureAgentDir() ?? getAgentDir() ?? getProjectDir();
 		void (async () => {
@@ -1089,6 +1122,7 @@ export class SelectorController {
 				return snapshot.doc;
 			};
 			const initialDoc = await readScope(initialScope);
+			if (this.#openMenus.get(menu.kind) !== menu) return;
 			const registration = {
 				cwd,
 				agentDir,
@@ -1105,8 +1139,6 @@ export class SelectorController {
 				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
 				activeName: () => (this.ctx.session.model?.api === "mixture" ? this.ctx.session.model.id : undefined),
 			};
-			if (this.#focusOpenMenu("mixture-config")) return;
-			const menu = this.#claimMenu("mixture-config", () => this.showMixtureConfigure(name, returnToModelHub));
 			const overlay = new MixtureConfigOverlayComponent(
 				this.ctx.ui,
 				deps,
@@ -1160,11 +1192,16 @@ export class SelectorController {
 				name,
 			);
 			this.#mountMenu(menu, overlay, () => this.#showFullscreenMenu(overlay));
-		})().catch(error => this.ctx.showError(error instanceof Error ? error.message : String(error)));
+		})().catch(error => {
+			if (this.#openMenus.get(menu.kind) !== menu) return;
+			this.#releaseMenu(menu.kind, menu);
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+		});
 	}
 
 	showPersonaConfigure(scope: PersonaScope): void {
 		if (this.#focusOpenMenu("persona-config")) return;
+		const menu = this.#claimMenu("persona-config", () => this.showPersonaConfigure(scope));
 		void (async () => {
 			const host = sessionPersonaHost(this.ctx.session, {
 				setStatus: (key, text) => this.ctx.setHookStatus(key, text),
@@ -1174,11 +1211,12 @@ export class SelectorController {
 			try {
 				doc = await loadPersonaConfigDoc(scope, host.sessionId);
 			} catch (error) {
+				if (this.#openMenus.get(menu.kind) !== menu) return;
+				this.#releaseMenu(menu.kind, menu);
 				this.ctx.showError(error instanceof Error ? error.message : String(error));
 				return;
 			}
-			if (this.#focusOpenMenu("persona-config")) return;
-			const menu = this.#claimMenu("persona-config", () => this.showPersonaConfigure(scope));
+			if (this.#openMenus.get(menu.kind) !== menu) return;
 			const done = () => {
 				this.#releaseMenu(menu.kind, menu);
 				menu.handle?.hide();
@@ -1244,6 +1282,7 @@ export class SelectorController {
 	 */
 	async showExtensionsDashboard(): Promise<void> {
 		if (this.#focusOpenMenu("extensions-dashboard")) return;
+		const menu = this.#claimMenu("extensions-dashboard", () => void this.showExtensionsDashboard());
 		const dashboard = await ExtensionDashboard.create({
 			runtime: createExtensionDashboardRuntime({
 				cwd: getProjectDir(),
@@ -1259,12 +1298,10 @@ export class SelectorController {
 				getLiveTool: name => liveToolRecordFromSession(this.ctx.session, name),
 				listLiveTools: () => listLiveToolRecords(this.ctx.session),
 			},
+		}).catch(error => {
+			this.#releaseMenu(menu.kind, menu);
+			throw error;
 		});
-		if (this.#focusOpenMenu("extensions-dashboard")) {
-			dashboard.dispose();
-			return;
-		}
-		const menu = this.#claimMenu("extensions-dashboard", () => void this.showExtensionsDashboard());
 		dashboard.onClose = () => {
 			this.#releaseMenu(menu.kind, menu);
 			dashboard.dispose();
@@ -1859,6 +1896,16 @@ export class SelectorController {
 	}
 
 	async showPluginSelector(mode: "install" | "uninstall" = "install"): Promise<void> {
+		if (this.#focusOpenMenu("plugin-selector")) return;
+		const menu = this.#claimMenu("plugin-selector", () => void this.showPluginSelector(mode));
+		try {
+			await this.#loadPluginSelector(mode, menu);
+		} finally {
+			if (!menu.component) this.#releaseMenu(menu.kind, menu);
+		}
+	}
+
+	async #loadPluginSelector(mode: "install" | "uninstall", menu: OpenMenu): Promise<void> {
 		const mgr = new MarketplaceManager({
 			marketplacesRegistryPath: getMarketplacesRegistryPath(),
 			installedRegistryPath: getInstalledPluginsRegistryPath(),
@@ -1869,6 +1916,7 @@ export class SelectorController {
 		});
 
 		const [marketplaces, installed] = await Promise.all([mgr.listMarketplaces(), mgr.listInstalledPlugins()]);
+		if (this.#openMenus.get(menu.kind) !== menu) return;
 		const installedIds = new Set(installed.map(p => p.id));
 
 		if (mode === "uninstall") {
@@ -1884,8 +1932,8 @@ export class SelectorController {
 					scope: p.scope,
 				};
 			});
-			this.showSelector(done => {
-				const selector = new PluginSelectorComponent(marketplaces.length, items, new Set(), {
+			this.#showInlineSelector(done => {
+				const selector = new PluginSelectorComponent(mode, marketplaces.length, items, new Set(), {
 					onSelect: async (name, marketplace, scope) => {
 						done();
 						const pluginId = `${name}@${marketplace}`;
@@ -1905,7 +1953,7 @@ export class SelectorController {
 					},
 				});
 				return { component: selector, focus: selector.getSelectList() };
-			}, { kind: "plugin-selector", reopen: () => void this.showPluginSelector(mode) });
+			}, menu);
 			return;
 		}
 
@@ -1916,13 +1964,14 @@ export class SelectorController {
 		}> = [];
 		for (const mkt of marketplaces) {
 			const plugins = await mgr.listAvailablePlugins(mkt.name);
+			if (this.#openMenus.get(menu.kind) !== menu) return;
 			for (const plugin of plugins) {
 				allPlugins.push({ plugin, marketplace: mkt.name });
 			}
 		}
 
-		this.showSelector(done => {
-			const selector = new PluginSelectorComponent(marketplaces.length, allPlugins, installedIds, {
+		this.#showInlineSelector(done => {
+			const selector = new PluginSelectorComponent(mode, marketplaces.length, allPlugins, installedIds, {
 				onSelect: async (name, marketplace) => {
 					done();
 					this.ctx.showStatus(`Installing ${name} from ${marketplace}...`);
@@ -1942,7 +1991,7 @@ export class SelectorController {
 				},
 			});
 			return { component: selector, focus: selector.getSelectList() };
-		}, { kind: "plugin-selector", reopen: () => void this.showPluginSelector(mode) });
+		}, menu);
 	}
 
 	showUserMessageSelector(): void {
@@ -2395,6 +2444,7 @@ export class SelectorController {
 
 	async showSessionSelector(source?: ForeignSessionSource): Promise<void> {
 		if (this.#focusOpenMenu("session-selector")) return;
+		const menu = this.#claimMenu("session-selector", () => void this.showSessionSelector(source));
 		let sessions: SessionInfo[];
 		let onSelectSession: (session: SessionInfo) => Promise<boolean>;
 		let selectorOptions: SessionSelectorOptions<SessionInfo>;
@@ -2406,12 +2456,16 @@ export class SelectorController {
 			try {
 				foreignSessions = await store.list();
 			} catch (error) {
+				if (this.#openMenus.get(menu.kind) !== menu) return;
+				this.#releaseMenu(menu.kind, menu);
 				this.ctx.showError(
 					`Failed to list ${sourceName} sessions: ${error instanceof Error ? error.message : String(error)}`,
 				);
 				return;
 			}
+			if (this.#openMenus.get(menu.kind) !== menu) return;
 			if (foreignSessions.length === 0) {
+				this.#releaseMenu(menu.kind, menu);
 				this.ctx.showWarning(`No ${sourceName} sessions found`);
 				return;
 			}
@@ -2446,7 +2500,10 @@ export class SelectorController {
 			const [loadedSessions, pinnedIds] = await Promise.all([
 				SessionManager.listForPicker(this.ctx.sessionManager.getCwd(), this.ctx.sessionManager.getSessionDir()),
 				loadPinnedSessionIds(),
-			]);
+			]).catch(error => {
+				this.#releaseMenu(menu.kind, menu);
+				throw error;
+			});
 			sessions = loadedSessions;
 			const historyStorage = this.ctx.historyStorage;
 			const historyMatcher = historyStorage
@@ -2478,8 +2535,7 @@ export class SelectorController {
 			};
 		}
 
-		if (this.#focusOpenMenu("session-selector")) return;
-		const menu = this.#claimMenu("session-selector", () => void this.showSessionSelector(source));
+		if (this.#openMenus.get(menu.kind) !== menu) return;
 		// Keep the fullscreen picker on the alternate buffer while a selected
 		// session is loaded and its transcript is rebuilt.
 		const done = () => {
@@ -2895,19 +2951,25 @@ export class SelectorController {
 	}
 
 	async #showOAuthLogoutAccountSelector(providerId: string): Promise<void> {
+		if (this.#focusOpenMenu("logout-account-selector")) return;
+		const menu = this.#claimMenu("logout-account-selector", () => void this.#showOAuthLogoutAccountSelector(providerId));
 		const authStorage = this.ctx.session.modelRegistry.authStorage;
 		let accounts: LogoutAccount[];
 		try {
 			accounts = await listLogoutAccounts(authStorage, providerId, this.ctx.session.sessionId);
 		} catch (error: unknown) {
+			if (this.#openMenus.get(menu.kind) !== menu) return;
+			this.#releaseMenu(menu.kind, menu);
 			this.ctx.showError(
 				`Could not load stored credentials: ${error instanceof Error ? error.message : String(error)}`,
 			);
 			return;
 		}
+		if (this.#openMenus.get(menu.kind) !== menu) return;
 		const { getOAuthProviders, LogoutAccountSelectorComponent } = loadProviderAuthUi();
 		const provider = getOAuthProviders().find(candidate => candidate.id === providerId);
 		if (accounts.length === 0) {
+			this.#releaseMenu(menu.kind, menu);
 			const source = authStorage.keys.describe(
 				provider?.storeCredentialsAs ?? providerId,
 				this.ctx.session.sessionId,
@@ -2917,7 +2979,7 @@ export class SelectorController {
 			return;
 		}
 
-		this.showSelector(done => {
+		this.#showInlineSelector(done => {
 			const selector = new LogoutAccountSelectorComponent(
 				provider?.name ?? providerId,
 				accounts,
@@ -2931,7 +2993,7 @@ export class SelectorController {
 				},
 			);
 			return { component: selector, focus: selector };
-		}, { kind: "logout-account-selector", reopen: () => void this.#showOAuthLogoutAccountSelector(providerId) });
+		}, menu);
 	}
 
 	async showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
@@ -2994,22 +3056,28 @@ export class SelectorController {
 	}
 
 	async showSessionPinSelector(): Promise<void> {
+		if (this.#focusOpenMenu("session-account-selector")) return;
 		const session = this.ctx.session;
 		if (session.isStreaming) {
 			this.ctx.showStatus("Cannot pin an account while the session is streaming.");
 			return;
 		}
+		const menu = this.#claimMenu("session-account-selector", () => void this.showSessionPinSelector());
 		this.ctx.showStatus("Loading provider accounts…", { dim: true });
 		let accountList: SessionOAuthAccountList | undefined;
 		try {
 			accountList = await session.listCurrentProviderOAuthAccounts();
 		} catch (error) {
+			if (this.#openMenus.get(menu.kind) !== menu) return;
+			this.#releaseMenu(menu.kind, menu);
 			this.ctx.showError(
 				`Could not load provider accounts: ${error instanceof Error ? error.message : String(error)}`,
 			);
 			return;
 		}
+		if (this.#openMenus.get(menu.kind) !== menu) return;
 		if (!accountList) {
+			this.#releaseMenu(menu.kind, menu);
 			this.ctx.showStatus("Select a model before pinning a provider account.");
 			return;
 		}
@@ -3018,6 +3086,7 @@ export class SelectorController {
 		const providerName = provider?.name ?? accountList.provider;
 		const accounts = toSessionPinAccounts(accountList.accounts);
 		if (accounts.length === 0) {
+			this.#releaseMenu(menu.kind, menu);
 			const source = session.modelRegistry.authStorage.keys.describe(accountList.provider, session.sessionId);
 			this.ctx.showStatus(
 				source
@@ -3027,7 +3096,7 @@ export class SelectorController {
 			return;
 		}
 
-		this.showSelector(done => {
+		this.#showInlineSelector(done => {
 			const selector = new SessionAccountSelectorComponent(
 				providerName,
 				accounts,
@@ -3047,16 +3116,20 @@ export class SelectorController {
 				},
 			);
 			return { component: selector, focus: selector };
-		}, { kind: "session-account-selector", reopen: () => void this.showSessionPinSelector() });
+		}, menu);
 	}
 
 	async showResetUsageSelector(): Promise<void> {
+		if (this.#focusOpenMenu("reset-usage-selector")) return;
+		const menu = this.#claimMenu("reset-usage-selector", () => void this.showResetUsageSelector());
 		const session = this.ctx.session;
 		this.ctx.showStatus("Checking saved rate-limit resets…", { dim: true });
 		let statuses: ResetCreditAccountStatus[];
 		try {
 			statuses = await session.listResetCredits();
 		} catch (error) {
+			if (this.#openMenus.get(menu.kind) !== menu) return;
+			this.#releaseMenu(menu.kind, menu);
 			this.ctx.showError(
 				sanitizeText(
 					`Could not load saved resets: ${error instanceof Error ? error.message : String(error)}`.replace(
@@ -3067,12 +3140,15 @@ export class SelectorController {
 			);
 			return;
 		}
+		if (this.#openMenus.get(menu.kind) !== menu) return;
 		const accounts = toResetUsageAccounts(statuses);
 		if (accounts.length === 0) {
+			this.#releaseMenu(menu.kind, menu);
 			this.ctx.showStatus("No provider accounts found. Use /login to add one.");
 			return;
 		}
 		if (!accounts.some(account => account.availableCount > 0)) {
+			this.#releaseMenu(menu.kind, menu);
 			this.ctx.showStatus(
 				accounts.some(account => account.error)
 					? "No saved resets available — some accounts couldn't be reached (try /login)."
@@ -3080,7 +3156,7 @@ export class SelectorController {
 			);
 			return;
 		}
-		this.showSelector(done => {
+		this.#showInlineSelector(done => {
 			const selector = new ResetUsageSelectorComponent(
 				accounts,
 				account => {
@@ -3093,7 +3169,7 @@ export class SelectorController {
 				},
 			);
 			return { component: selector, focus: selector };
-		}, { kind: "reset-usage-selector", reopen: () => void this.showResetUsageSelector() });
+		}, menu);
 	}
 
 	async #redeemReset(account: ResetUsageAccount): Promise<void> {
@@ -3127,11 +3203,16 @@ export class SelectorController {
 	}
 
 	async showDebugSelector(): Promise<void> {
-		const { DebugSelectorComponent } = await import("../../debug");
-		this.showSelector(done => {
+		if (this.#focusOpenMenu("debug-selector")) return;
+		const menu = this.#claimMenu("debug-selector", () => void this.showDebugSelector());
+		const { DebugSelectorComponent } = await import("../../debug").catch(error => {
+			this.#releaseMenu(menu.kind, menu);
+			throw error;
+		});
+		this.#showInlineSelector(done => {
 			const selector = new DebugSelectorComponent(this.ctx, done);
 			return { component: selector, focus: selector };
-		}, { kind: "debug-selector", reopen: () => void this.showDebugSelector() });
+		}, menu);
 	}
 
 	showThinkingSelector(): void {
@@ -3165,6 +3246,7 @@ export class SelectorController {
 			return true;
 		};
 		if (reuseOpenHub()) return;
+		const requestedFrom = this.#menuHistory.current;
 		const hubKeys = [
 			...this.ctx.keybindings.getKeys("app.agents.hub"),
 			...this.ctx.keybindings.getKeys("app.session.observe"),
@@ -3219,6 +3301,10 @@ export class SelectorController {
 
 		const showReadyHub = () => {
 			if (closed) return;
+			if (this.#menuHistory.current !== requestedFrom) {
+				done();
+				return;
+			}
 			// The double-← gesture stays inert when neither live nor persisted
 			// subagents are available, so wait for discovery before making the gate.
 			if (options?.requireContent && hub.isEmpty) {

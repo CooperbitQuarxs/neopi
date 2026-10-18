@@ -119,11 +119,12 @@ describe("IrcViewerComponent", () => {
 		expect(screen).toContain("delta to alpha");
 		expect(screen).not.toContain("gamma to delta");
 		expect(screen).toContain("filter: alpha");
-		// Esc while editing clears the filter rather than closing the viewer.
+		// Esc leaves the literal field without discarding the active query.
 		view.viewer.handleInput("/");
 		view.viewer.handleInput("\x1b");
 		expect(view.closed()).toBe(0);
-		expect(view.screen().join("\n")).toContain("gamma to delta");
+		expect(view.screen().join("\n")).not.toContain("gamma to delta");
+		expect(view.viewer.navigationSnapshot().filter).toMatchObject({ value: "alpha", focused: false });
 	});
 
 	it("collapses long bodies and expands the selected message on Enter", () => {
@@ -145,6 +146,135 @@ describe("IrcViewerComponent", () => {
 		expect(view.listenerCount()).toBe(1);
 		view.viewer.dispose();
 		expect(view.listenerCount()).toBe(0);
+	});
+
+	it("shares normal motions while visual-line scroll leaves message selection unchanged", () => {
+		const messages = Array.from({ length: 40 }, (_, index) => entry("Alpha", "Beta", `note ${index}`));
+		const view = mount(messages, 20);
+		view.screen();
+		view.viewer.handleInput("g");
+		view.viewer.handleInput("g");
+		view.screen();
+		expect(view.viewer.navigationSnapshot().selected).toBe(messages[0]!.message.id);
+		view.viewer.handleInput("j");
+		view.screen();
+		const selected = view.viewer.navigationSnapshot().selected;
+		const top = view.viewer.navigationSnapshot().top;
+		view.viewer.handleInput("\x05");
+		view.screen();
+		expect(view.viewer.navigationSnapshot().selected).toBe(selected);
+		expect(view.viewer.navigationSnapshot().top).toBe(top + 1);
+		view.viewer.handleInput("\x19");
+		view.screen();
+		expect(view.viewer.navigationSnapshot().top).toBe(top);
+		view.viewer.handleInput("\x04");
+		expect(view.viewer.navigationSnapshot().selectedIndex).toBeGreaterThan(1);
+		view.viewer.handleInput("\x15");
+		expect(view.viewer.navigationSnapshot().selectedIndex).toBe(1);
+		view.viewer.handleInput("\x1b[6~");
+		expect(view.viewer.navigationSnapshot().selectedIndex).toBeGreaterThan(2);
+		view.viewer.handleInput("\x1b[5~");
+		expect(view.viewer.navigationSnapshot().selectedIndex).toBe(1);
+		view.viewer.handleInput("G");
+		expect(view.viewer.navigationSnapshot().selected).toBe(messages[39]!.message.id);
+		expect(view.viewer.navigationSnapshot().follow).toBe(true);
+		view.viewer.handleInput(" ");
+		expect(view.viewer.navigationSnapshot().expanded).toContain(messages[39]!.message.id);
+		view.viewer.dispose();
+	});
+
+	it("restores stable messages, visual scroll and literal search caret without recording a visit", () => {
+		const messages = Array.from({ length: 20 }, (_, index) => entry("jkl / hg", "Main", `note ${index}`));
+		const view = mount(messages, 20);
+		view.screen();
+		view.type("/jkl / hg");
+		view.viewer.handleInput("\x1b[D");
+		const field = view.viewer.navigationSnapshot().filter;
+		expect(field.value).toBe("jkl / hg");
+		expect(field.cursor).toBe(field.value.length - 1);
+		view.viewer.handleInput("\x1b");
+		view.viewer.handleInput("g");
+		view.viewer.handleInput("g");
+		view.viewer.handleInput("j");
+		view.screen();
+		view.viewer.handleInput("\x05");
+		view.screen();
+		const saved = view.viewer.navigationSnapshot();
+		const restored = mount([messages[1]!, messages[0]!, ...messages.slice(2)], 20);
+		const visits: string[] = [];
+		restored.viewer.onNavigationVisit = page => visits.push(page);
+		restored.viewer.restoreNavigation(saved);
+		restored.screen();
+		expect(restored.viewer.navigationSnapshot()).toMatchObject({
+			selected: messages[1]!.message.id,
+			selectedIndex: 0,
+			top: saved.top,
+			follow: false,
+			filter: { ...field, focused: false },
+		});
+		expect(visits).toEqual([]);
+		view.viewer.dispose();
+		restored.viewer.dispose();
+	});
+
+	it("keeps reply draft, recipient, caret and editor focus through silent history restoration", () => {
+		const message = entry("Alpha", "Captain", "question");
+		const sent: string[] = [];
+		const view = mount([message], 20, {
+			reply: async (_to, body) => {
+				sent.push(body);
+				return { text: "sent", isError: false };
+			},
+		});
+		const visits: { page: string; before: unknown }[] = [];
+		view.viewer.onNavigationVisit = (page, before) => visits.push({ page, before });
+		view.type("rj/k h l G /");
+		view.viewer.handleInput("\x1b[D");
+		const saved = view.viewer.navigationSnapshot();
+		expect(saved.compose).toEqual({ to: "Alpha", replyTo: message.message.id });
+		expect(saved.draft).toMatchObject({ value: "j/k h l G /", focused: true, cursor: 10 });
+		expect(visits).toEqual([]);
+		view.viewer.handleInput("\t");
+		expect(view.viewer.navigationSnapshot().draft.focused).toBe(false);
+		view.viewer.handleInput("\t");
+		expect(view.viewer.navigationSnapshot().draft.focused).toBe(true);
+		view.viewer.restoreNavigation(saved);
+		expect(view.viewer.navigationSnapshot()).toEqual(saved);
+		expect(visits).toEqual([]);
+		expect(sent).toEqual([]);
+		view.viewer.handleInput("\x1b");
+		expect(view.viewer.navigationSnapshot().compose).toBeDefined();
+		expect(view.viewer.navigationSnapshot().draft.focused).toBe(false);
+		view.viewer.handleInput("\x1b");
+		expect(view.viewer.navigationSnapshot().compose).toBeUndefined();
+		expect(view.viewer.navigationSnapshot().draft).toEqual({ ...saved.draft, focused: false });
+		expect(visits).toEqual([]);
+		expect(view.closed()).toBe(0);
+		expect(sent).toEqual([]);
+		view.viewer.dispose();
+	});
+
+	it("blocks history only while an explicitly sent reply is in flight", async () => {
+		const delivery = Promise.withResolvers<{ text: string; isError: boolean }>();
+		let sends = 0;
+		const view = mount([entry("Alpha", "Captain", "ping")], 20, {
+			reply: () => {
+				sends++;
+				return delivery.promise;
+			},
+		});
+		view.type("rdraft");
+		const saved = view.viewer.navigationSnapshot();
+		view.viewer.restoreNavigation(saved);
+		expect(sends).toBe(0);
+		expect(view.viewer.blocksMenuHistory).toBe(false);
+		view.viewer.handleInput("\r");
+		expect(sends).toBe(1);
+		expect(view.viewer.blocksMenuHistory).toBe(true);
+		delivery.resolve({ text: "sent", isError: false });
+		await Bun.sleep(0);
+		expect(view.viewer.blocksMenuHistory).toBe(false);
+		view.viewer.dispose();
 	});
 
 	describe("replying as the operator", () => {

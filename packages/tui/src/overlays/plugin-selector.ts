@@ -2,7 +2,7 @@
  * Interactive marketplace plugin selector.
  *
  * Shows available plugins from all configured marketplaces in a SelectList.
- * Selecting a plugin triggers installation. Esc cancels.
+ * Enter installs or uninstalls the selected plugin. Space never uninstalls. Esc cancels.
  */
 import { type SelectItem, SelectList, type SgrMouseEvent } from "../index";
 import { getSelectListTheme } from "../theme/theme";
@@ -29,6 +29,7 @@ export class PluginSelectorComponent extends OverlayPanel {
 	#sheet: SelectListSheet;
 
 	constructor(
+		mode: "install" | "uninstall",
 		marketplaceCount: number,
 		plugins: PluginItem[],
 		installedIds: Set<string>,
@@ -72,7 +73,10 @@ export class PluginSelectorComponent extends OverlayPanel {
 			});
 		}
 
-		this.#selectList = new SelectList(items, Math.min(items.length, 20), getSelectListTheme(), { search: "always" });
+		this.#selectList = new SelectList(items, Math.min(items.length, 20), getSelectListTheme(), {
+			search: "always",
+			activateOnSpace: mode !== "uninstall",
+		});
 
 		this.#selectList.onSelect = item => {
 			const [name, marketplace, scope] = splitPluginId(item.value);
@@ -90,7 +94,7 @@ export class PluginSelectorComponent extends OverlayPanel {
 			title: "Plugins",
 			icon: "plus",
 			noun: "plugins",
-			confirm: "Install",
+			confirm: mode === "uninstall" ? "Uninstall" : "Install",
 			decorate: item => {
 				const [name] = splitPluginId(item.value);
 				if (!name) return undefined;

@@ -88,7 +88,7 @@ describe("SessionSelectorComponent current session marker", () => {
 				currentSessionPath: live.path,
 			},
 		);
-		selector.handleInput("i");
+		selector.handleInput("/");
 		for (const ch of "alpha") selector.handleInput(ch);
 		const rendered = stripAnsi(selector.render(120).join("\n"));
 		const cursor = theme.nav.cursor;
@@ -134,7 +134,7 @@ describe("SessionSelectorComponent current session marker", () => {
 				currentSessionPath: live.path,
 			},
 		);
-		selector.handleInput("i");
+		selector.handleInput("/");
 		for (const ch of "alpha") selector.handleInput(ch);
 		selector.handleInput("\x1b[B");
 		selector.getSessionList().removeSession(bravo.path);
@@ -155,7 +155,7 @@ describe("SessionSelectorComponent current session marker", () => {
 				currentSessionPath: older.path,
 			},
 		);
-		selector.handleInput("i");
+		selector.handleInput("/");
 		selector.handleInput("x");
 		selector.handleInput("\x7f");
 		const rendered = stripAnsi(selector.render(120).join("\n"));
@@ -226,7 +226,7 @@ describe("SessionSelectorComponent delete keys", () => {
 
 	it("never deletes a session with Backspace, even on an empty filter", () => {
 		const { selector, dialogOpen } = makeSelector();
-		selector.handleInput("i");
+		selector.handleInput("/");
 		for (const ch of "al") selector.handleInput(ch);
 		for (let i = 0; i < 6; i++) {
 			vi.advanceTimersByTime(REPEAT_GAP_MS);
@@ -239,7 +239,7 @@ describe("SessionSelectorComponent delete keys", () => {
 
 	it("does not roll a held Delete that empties the filter into a session delete", () => {
 		const { selector, dialogOpen } = makeSelector();
-		selector.handleInput("i");
+		selector.handleInput("/");
 		for (const ch of "alp") selector.handleInput(ch);
 		selector.handleInput("\x1b[H"); // Home: forward-delete from the start
 		// Held Delete: three chars erased, then auto-repeat keeps arriving on the empty filter.
@@ -249,6 +249,10 @@ describe("SessionSelectorComponent delete keys", () => {
 		}
 		expect(dialogOpen()).toBe(false);
 		// Released, then a fresh Delete press: now it asks to delete the session.
+		vi.advanceTimersByTime(SESSION_DELETE_REARM_MS);
+		selector.handleInput(DELETE);
+		expect(dialogOpen()).toBe(false); // Even a fresh Delete belongs to the focused field.
+		selector.handleInput("\x1b");
 		vi.advanceTimersByTime(SESSION_DELETE_REARM_MS);
 		selector.handleInput(DELETE);
 		expect(dialogOpen()).toBe(true);

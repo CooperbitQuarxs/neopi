@@ -11,14 +11,19 @@ import { formatKeyHint } from "../../app-keybindings";
 import { node, span, stableKey } from "../../native/describe";
 import type { NativeNode } from "../../native/node";
 import { pickerFuzzyHits, pickerQuery } from "../../native/picker";
-import { matchesKey } from "../../keys";
 import { padding, truncateToWidth, visibleWidth } from "../../utils";
 import { theme } from "../../theme";
-import { matchesSelectDown, matchesSelectUp } from "../../keybinding-matchers";
 import { contentRowWidth, renderScrollableList } from "../../chrome/selector-helpers";
-import { Input } from "../../components/input";
-import { MenuSelection } from "../../components/menu-selection";
-import { scrollOffsetForRow, viewportRange } from "../../components/scroll-viewport";
+import { MenuSelection, type MenuWindow } from "../../components/menu-selection";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	type MenuNavAction,
+	type MenuSearchState,
+	MenuViewport,
+	type MenuViewportPosition,
+} from "../../components/menu-navigation";
 import { sanitizeDisplayLine } from "./display-text";
 import {
 	formatExtensionListHint,
@@ -125,9 +130,19 @@ const MCP_HEALTH_TONE: Record<MCPConnectionHealth, TspTone> = {
 	inactive: "warning",
 };
 
+export interface ExtensionListNavigation {
+	search: MenuSearchState;
+	selected: string | undefined;
+	top: MenuViewportPosition | undefined;
+}
+
 export class ExtensionList implements Component {
 	#menu: MenuSelection<ListItem>;
 	#scrollOffset = 0;
+	readonly #keys = new MenuKeyReader();
+	readonly #viewport = new MenuViewport();
+	#rowItems: readonly ListItem[] | undefined;
+	#rowCounts: number[] = [];
 	#focused = false;
 	#masterSwitchProvider: string | null = null;
 	#maxVisible: number;
@@ -141,7 +156,7 @@ export class ExtensionList implements Component {
 	#extensions: Extension[];
 	readonly #callbacks: ExtensionListCallbacks;
 	/** Search field; its value is pushed into the menu query whenever it changes. */
-	readonly #search = new Input();
+	readonly #search = new MenuSearchField();
 
 	constructor(extensions: Extension[], callbacks: ExtensionListCallbacks = {}, maxVisible?: number) {
 		this.#extensions = extensions;
@@ -150,7 +165,6 @@ export class ExtensionList implements Component {
 		this.#mcpSource = callbacks.mcpSource;
 		this.#toolSource = callbacks.toolSource;
 		this.#maxVisible = maxVisible ?? DEFAULT_MAX_VISIBLE;
-		this.#search.prompt = "";
 		this.#menu = new MenuSelection<ListItem>(this.#buildListItems(""), {
 			getKey: getListItemKey,
 			getSearchText: getListItemSearchText,
@@ -165,9 +179,7 @@ export class ExtensionList implements Component {
 
 	setExtensions(extensions: Extension[]): void {
 		this.#extensions = extensions;
-		const keepIndex = this.#menu.selectedIndex;
 		this.#menu.setItems(this.#buildListItems(""));
-		this.#menu.setSelectedIndex(keepIndex);
 		this.#syncScroll();
 	}
 
@@ -195,12 +207,42 @@ export class ExtensionList implements Component {
 
 	/** The search field's text and caret for a native `picker` head. */
 	nativeQuery(): Pick<TspProps<"picker">, "query" | "cursor"> {
-		return pickerQuery(this.#search);
+		return pickerQuery(this.#search.input);
 	}
 
 	resetSelection(): void {
 		this.#menu.moveToBoundary("first");
-		this.#scrollOffset = 0;
+		this.#viewport.setTop(0);
+		this.#syncScroll();
+		this.#notifySelectionChange();
+	}
+
+	get filterFocused(): boolean {
+		return this.#search.focused;
+	}
+
+	focusFilter(focused = true): void {
+		this.#search.focused = focused;
+		this.#keys.reset();
+	}
+
+	navigationSnapshot(): ExtensionListNavigation {
+		return {
+			search: this.#search.navigationSnapshot(),
+			selected: this.#menu.selectedKey,
+			top: this.#viewport.top ? { ...this.#viewport.top } : undefined,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as Partial<ExtensionListNavigation>;
+		this.#search.restoreNavigation(state.search);
+		this.#menu.setQuery(this.#search.value, false);
+		if (typeof state.selected === "string") this.#menu.setSelectedKey(state.selected);
+		this.#viewport.setTop(state.top);
+		this.#syncScroll();
+		this.#keys.reset();
 		this.#notifySelectionChange();
 	}
 
@@ -217,9 +259,10 @@ export class ExtensionList implements Component {
 
 	/** Replace the search text (caret to end) and refilter. */
 	setSearchQuery(query: string): void {
-		if (this.#search.getValue() !== query) this.#search.setValue(query);
+		if (this.#search.value !== query) this.#search.setValue(query);
 		this.#menu.setQuery(query, false);
-		this.#scrollOffset = 0;
+		this.#viewport.setTop(0);
+		this.#syncScroll();
 		this.#notifySelectionChange();
 	}
 
@@ -234,19 +277,10 @@ export class ExtensionList implements Component {
 		const lines: string[] = [];
 		this.#visibleCount = 0;
 
-		// Search bar
-		const searchPrefix = theme.fg("muted", "Search: ");
-		const query = this.#search.getValue();
-		if (this.#focused) {
-			const fieldWidth = Math.max(1, width - visibleWidth(searchPrefix));
-			const [field = ""] = this.#search.render(Math.min(fieldWidth, visibleWidth(query) + 1));
-			lines.push(searchPrefix + field);
-		} else {
-			lines.push(searchPrefix + (query || theme.fg("dim", "type to filter")));
-		}
-		lines.push("");
+		lines.push(this.#search.render(width, { muted: text => theme.fg("muted", text) }), "");
 
 		const items = this.#menu.visibleItems;
+		const view = this.#syncScroll();
 		if (items.length === 0) {
 			lines.push(theme.fg("muted", "  No extensions found for this provider."));
 			return lines;
@@ -258,8 +292,7 @@ export class ExtensionList implements Component {
 			this.#callbacks.getProviders?.().find(provider => provider.id === this.#masterSwitchProvider)?.enabled ===
 				false;
 
-		// Calculate visible range (one fixed row per item)
-		const { start: startIdx, end: endIdx } = viewportRange(items.length, this.#maxVisible, this.#scrollOffset);
+		const { startIndex: startIdx, endIndex: endIdx } = view;
 
 		// Reserve the rightmost column for the scrollbar when overflowing
 		const rowWidth = contentRowWidth(width, items.length, this.#maxVisible);
@@ -290,8 +323,8 @@ export class ExtensionList implements Component {
 		lines.push(
 			...renderScrollableList(rows, {
 				width,
-				totalRows: items.length,
-				scrollOffset: this.#scrollOffset,
+				totalRows: view.totalRows,
+				scrollOffset: view.rowOffset,
 			}),
 		);
 
@@ -396,11 +429,12 @@ export class ExtensionList implements Component {
 	 * whether the id named a visible row.
 	 */
 	pickNative(id: string, activate: boolean): boolean {
+		this.focusFilter(false);
 		const index = this.#menu.visibleItems.findIndex(item => nativeItemId(item) === id);
 		if (index < 0) return false;
 		if (index !== this.#menu.selectedIndex) {
 			this.#menu.setSelectedIndex(index);
-			this.#syncScroll();
+			this.#syncScroll(true);
 			this.#notifySelectionChange();
 		}
 		if (activate) this.activateSelected();
@@ -811,15 +845,17 @@ export class ExtensionList implements Component {
 		}
 	}
 
-	/** Keep the selection inside the one-row fixed viewport. */
-	#syncScroll(): void {
-		this.#scrollOffset = scrollOffsetForRow(
-			this.#scrollOffset,
-			this.#menu.selectedIndex,
-			this.#menu.visibleItems.length,
-			this.#maxVisible,
-			"nearest",
-		);
+	/** Layout is independent of selection unless an explicit motion requests reveal. */
+	#syncScroll(reveal = false): MenuWindow {
+		const items = this.#menu.visibleItems;
+		if (items !== this.#rowItems) {
+			this.#rowItems = items;
+			this.#rowCounts = items.map(() => 1);
+		}
+		if (reveal) this.#viewport.reveal();
+		const view = this.#viewport.layout(this.#rowCounts, this.#menu.selectedIndex, this.#maxVisible);
+		this.#scrollOffset = view.rowOffset;
+		return view;
 	}
 
 	/** Toggle the selected item, or flip the provider master switch when on it (Space/Enter). */
@@ -865,64 +901,51 @@ export class ExtensionList implements Component {
 
 	/** Wheel notch: move the selection (and the inspector) one row. */
 	handleWheel(delta: -1 | 1): void {
-		if (delta < 0) this.#moveSelectionUp();
-		else this.#moveSelectionDown();
+		this.handleNavigation({ kind: "move", delta });
 	}
 
 	/** Click: select the row under the pointer, or activate it when already selected. */
 	handleClick(line: number): void {
 		const index = this.hitTest(line);
 		if (index === null) return;
+		this.focusFilter(false);
 		if (index === this.#menu.selectedIndex) {
 			this.activateSelected();
 			return;
 		}
 		this.#menu.setSelectedIndex(index);
+		this.#syncScroll(true);
 		this.#notifySelectionChange();
 	}
 
+	/** Hosts route literal field input before their own pane/tab/action reader. */
+	handleFilterInput(data: string): boolean {
+		if (!this.#search.focused) return false;
+		const before = this.#search.value;
+		const result = this.#search.handleInput(data);
+		if (result === "pass") return false;
+		if (before !== this.#search.value) this.setSearchQuery(this.#search.value);
+		this.#keys.reset();
+		return true;
+	}
+
 	handleInput(data: string): void {
-		// Navigation (arrow keys / configurable tui.select.up/down). Bare j/k are
-		// intentionally NOT navigation here: the search filter is always active, so
-		// those letters must reach the query (e.g. searching for "jira"/"json").
-		if (matchesSelectUp(data)) {
-			this.#moveSelectionUp();
-			return;
-		}
+		if (this.handleFilterInput(data)) return;
+		const action = this.#keys.read(data);
+		if (action && action !== "pending") this.handleNavigation(action);
+	}
 
-		if (matchesSelectDown(data)) {
-			this.#moveSelectionDown();
-			return;
-		}
-
-		// Space or Enter: activate the selected row (toggle item / master switch)
-		if (data === " " || matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+	handleNavigation(action: MenuNavAction): void {
+		this.#syncScroll();
+		const motion = applyMenuMotion(action, this.#menu, this.#viewport);
+		if (motion.handled) {
+			this.#syncScroll();
+			if (motion.selectionChanged) this.#notifySelectionChange();
+		} else if (action.kind === "search") this.focusFilter();
+		else if (action.kind === "cancel") this.focusFilter(false);
+		else if (action.kind === "confirm" || action.kind === "toggle") {
+			this.focusFilter(false);
 			this.activateSelected();
-			return;
-		}
-
-		// Everything else edits the search field; refilter only when the text changed.
-		const before = this.#search.getValue();
-		this.#search.handleInput(data);
-		const after = this.#search.getValue();
-		if (after !== before) {
-			this.#menu.setQuery(after, false);
-			this.#scrollOffset = 0;
-			this.#notifySelectionChange();
-		}
-	}
-
-	#moveSelectionUp(): void {
-		if (this.#menu.move(-1, false)) {
-			this.#syncScroll();
-			this.#notifySelectionChange();
-		}
-	}
-
-	#moveSelectionDown(): void {
-		if (this.#menu.move(1, false)) {
-			this.#syncScroll();
-			this.#notifySelectionChange();
 		}
 	}
 

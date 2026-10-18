@@ -71,6 +71,50 @@ describe("theme selector picker", () => {
 		selector.handleNativeEvent(act("close"));
 		expect(log).toEqual(["preview:nord", "select:nord", "cancel"]);
 	});
+
+});
+
+describe("short-list native picker search", () => {
+	function make() {
+		const log: string[] = [];
+		const selector = new ThinkingSelectorComponent(
+			"low" as never,
+			["low", "high"] as never,
+			() => log.push("select"),
+			() => log.push("cancel"),
+		);
+		return { selector, log };
+	}
+
+	it("shows a short-list filter and leaves it before native close cancels", () => {
+		const { selector, log } = make();
+		const initial = selector.describe(pickerCx);
+		expect(sheet(initial).props.query).toBeNull();
+		selector.handleInput("/");
+		const focused = selector.describe(pickerCx);
+		expect(focused).not.toBe(initial);
+		expect(sheet(focused).props.query).toBe("");
+		expect(sheet(focused).props.actions?.at(-1)?.label).toBe("Back to list");
+		selector.handleInput("h");
+		selector.handleNativeEvent(act("close"));
+		expect(sheet(selector.describe(pickerCx)).props.query).toBe("h");
+		expect(sheet(selector.describe(pickerCx)).props.actions?.at(-1)?.label).toBe("Close");
+		expect(log).not.toContain("cancel");
+		selector.handleNativeEvent(act("close"));
+		expect(log).toContain("cancel");
+	});
+
+	it("invalidates the native sheet when an empty filter loses focus", () => {
+		const { selector, log } = make();
+		selector.handleInput("/");
+		const focused = selector.describe(pickerCx);
+		selector.handleNativeEvent(act("cancel"));
+		const normal = selector.describe(pickerCx);
+		expect(normal).not.toBe(focused);
+		expect(sheet(normal).props.query).toBeNull();
+		expect(sheet(normal).props.actions?.at(-1)?.label).toBe("Close");
+		expect(log).not.toContain("cancel");
+	});
 });
 
 describe("thinking selector picker", () => {
