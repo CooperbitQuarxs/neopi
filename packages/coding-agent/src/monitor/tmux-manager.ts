@@ -128,8 +128,6 @@ export class TmuxMonitorManager {
 		if (!this.#environment().TMUX) {
 			throw new TmuxMonitorError("the tmux monitor needs this session to run inside tmux");
 		}
-		await fs.mkdir(this.#options.capabilityDir, { recursive: true, mode: 0o700 });
-		await fs.chmod(this.#options.capabilityDir, 0o700);
 		const base = `npi-monitor-${this.#options.instanceId.slice(0, 8)}`;
 		// A pane the user added keeps an earlier monitor session (and its name) alive after `/monitor off`.
 		let name = base;
@@ -151,6 +149,9 @@ export class TmuxMonitorManager {
 		if (!sessionId?.startsWith("$") || !windowId?.startsWith("@") || !paneId?.startsWith("%")) {
 			throw new TmuxMonitorError("tmux did not report the monitor session it created");
 		}
+		// After the session exists, so a failed start leaves no directory behind.
+		await fs.mkdir(this.#options.capabilityDir, { recursive: true, mode: 0o700 });
+		await fs.chmod(this.#options.capabilityDir, 0o700);
 		this.#sessionName = name;
 		this.#sessionId = sessionId;
 		this.#placeholder = { paneId, windowId };
