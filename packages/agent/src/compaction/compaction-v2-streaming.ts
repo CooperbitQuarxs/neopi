@@ -79,6 +79,8 @@ export interface CompactionV2Request {
 	input: unknown[];
 	/** Serialized user-written turns to keep next to the compaction item; defaults to `input`. */
 	retainedUserItems: unknown[];
+	/** True only when the host supplied authorship-filtered retention candidates. */
+	retainedUserItemsAreAuthored?: boolean;
 	retainedMessageBudget: number;
 	sessionId?: string;
 	promptCacheKey?: string;
@@ -234,6 +236,7 @@ export function buildCompactionV2RequestFromBody(
 		body: { ...body, model: resolveCompactionV2Model(model), input },
 		input,
 		retainedUserItems: options?.retainedUserItems ?? input,
+		retainedUserItemsAreAuthored: options?.retainedUserItems !== undefined,
 		retainedMessageBudget: resolveCompactionV2RetainedMessageBudget(options?.retainedMessageBudget),
 		sessionId: options?.sessionId,
 		promptCacheKey: options?.promptCacheKey,
@@ -553,6 +556,7 @@ function finishCompactionV2Collection(
 		request.retainedUserItems,
 		compactionItem,
 		request.retainedMessageBudget,
+		request.retainedUserItemsAreAuthored,
 	);
 	return {
 		compactionItem,
@@ -684,9 +688,11 @@ export function buildCompactionV2ReplacementHistory(
 	input: unknown[],
 	compactionItem: Record<string, unknown>,
 	retainedMessageBudget = V2_RETAINED_MESSAGE_TOKEN_BUDGET,
+	allowAuthoredDeveloperMessages = false,
 ): { replacementHistory: Array<Record<string, unknown>>; retainedImageCount: number } {
 	const retained = input.filter(
-		(item): item is Record<string, unknown> => isRecord(item) && isRetainedUserMessageForCompactionV2(item),
+		(item): item is Record<string, unknown> =>
+			isRecord(item) && isRetainedUserMessageForCompactionV2(item, allowAuthoredDeveloperMessages),
 	);
 	const replacementHistory = truncateRetainedMessagesForCompactionV2(
 		retained,
@@ -697,11 +703,18 @@ export function buildCompactionV2ReplacementHistory(
 	return { replacementHistory, retainedImageCount };
 }
 
-function isRetainedUserMessageForCompactionV2(item: Record<string, unknown>): boolean {
+function isRetainedUserMessageForCompactionV2(
+	item: Record<string, unknown>,
+	allowAuthoredDeveloperMessages: boolean,
+): boolean {
 	// Responses input messages may omit `type`: omp serializes turns as
 	// `{ role, content }`, which the API reads as `type: "message"`.
 	const isMessage = item.type === "message" || (item.type === undefined && typeof item.role === "string");
-	return isMessage && item.role === "user" && !isContextualUserMessage(item);
+	return (
+		isMessage &&
+		(item.role === "user" || (allowAuthoredDeveloperMessages && item.role === "developer")) &&
+		!isContextualUserMessage(item)
+	);
 }
 
 function isContextualUserMessage(item: Record<string, unknown>): boolean {
