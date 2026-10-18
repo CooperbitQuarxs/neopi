@@ -458,6 +458,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		const result = await runSubprocess({
 			...opts.baseOptions,
 			worktree: isolationDir,
+			worktreeRepoRoot: opts.context.repoRoot,
 			preloadedExtensionPaths: undefined,
 			preloadedPreparedExtensions: undefined,
 			preloadedCustomToolPaths: undefined,
