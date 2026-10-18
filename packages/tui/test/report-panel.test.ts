@@ -195,6 +195,30 @@ describe("ReportPanel in text mode", () => {
 		panel.handleInput("\x1b");
 		expect(closed).toBe(1);
 	});
+
+	it("uses Vim viewer motions and restores its independent viewport", () => {
+		const panel = new ReportPanel({
+			title: "Report", body: new Text(Array.from({ length: 40 }, (_, i) => `Entry ${i}`).join("\n"), 0, 0),
+			closeKey: "Esc", onClose: () => {}, maxRows: () => 15,
+		});
+		panel.render(80);
+		panel.handleInput("j");
+		panel.handleInput("\x04");
+		const saved = panel.navigationSnapshot();
+		expect((saved as { scrollOffset: number }).scrollOffset).toBe(6);
+		panel.handleInput("G");
+		panel.handleInput("g");
+		expect((panel.navigationSnapshot() as { scrollOffset: number }).scrollOffset).toBe(30);
+		panel.handleInput("g");
+		expect((panel.navigationSnapshot() as { scrollOffset: number }).scrollOffset).toBe(0);
+		panel.restoreNavigation(saved);
+		expect(panel.render(80).join("\n")).toContain("Entry 6");
+		const native = panel.describe().c?.[0];
+		panel.handleInput("\x05");
+		const scrolled = panel.describe().c?.[0];
+		expect(native && "scroll" in native ? native.scroll : undefined).toBeUndefined();
+		expect(scrolled && "scroll" in scrolled ? scrolled.scroll?.by : undefined).toBe("line-down");
+	});
 });
 
 describe("ReportPanel natively", () => {

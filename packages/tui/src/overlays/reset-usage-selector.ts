@@ -4,7 +4,7 @@ import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
 import { theme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport } from "../components/menu-navigation";
+import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuViewportPosition } from "../components/menu-navigation";
 import { formatUsageResetWindow } from "./usage-display";
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
@@ -236,7 +236,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 
 	restoreNavigation(snapshot: unknown): void {
 		if (typeof snapshot !== "object" || snapshot === null) return;
-		const state = snapshot as { selectedKey?: string; search?: unknown; viewportTop?: number };
+		const state = snapshot as { selectedKey?: string; search?: unknown; viewportTop?: MenuViewportPosition | number };
 		this.#search.restoreNavigation(state.search);
 		this.#menu.cancelConfirmation();
 		this.#menu.setQuery(this.#search.value);

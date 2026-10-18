@@ -229,7 +229,7 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 		editorContainer: new Container(),
 		pendingMessagesContainer: new Container(),
 		todoContainer: new Container(),
-		editor: { getText: () => "", setText: vi.fn(), onEscape: undefined },
+		editor: { getText: () => "", setText: vi.fn(), onEscape: undefined, isAutocompleteActive: () => false },
 		statusLine: {
 			invalidate: vi.fn(),
 			markActivityStart: vi.fn(),
