@@ -13,6 +13,7 @@
 - Logout and usage-reset pickers support search, paging, and history without replaying destructive confirmations ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Small settings and account pickers preserve selection, search, and scroll position when reopened ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Menu search fields share literal editing, consistent muted hints, and restorable caret/focus state across custom pickers ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Model lists use `/` search, Vim paging and jumps, and independent viewport scrolling while preserving search and selection through menu history ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
 
 ### Fixed
 
