@@ -2,7 +2,7 @@ import { Container, ScrollView, TruncatedText } from "../index";
 import { theme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport } from "../components/menu-navigation";
+import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuViewportPosition } from "../components/menu-navigation";
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { node, span } from "../native/describe";
@@ -124,7 +124,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 
 	restoreNavigation(snapshot: unknown): void {
 		if (typeof snapshot !== "object" || snapshot === null) return;
-		const state = snapshot as { selectedKey?: string; search?: unknown; viewportTop?: number };
+		const state = snapshot as { selectedKey?: string; search?: unknown; viewportTop?: MenuViewportPosition | number };
 		this.#search.restoreNavigation(state.search);
 		this.#menu.setQuery(this.#search.value);
 		if (state.selectedKey !== undefined) this.#menu.setSelectedKey(state.selectedKey);

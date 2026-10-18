@@ -650,7 +650,7 @@ describe("SettingsList", () => {
 		list.handleInput("\x05");
 		list.render(60);
 		expect(list.getSelectedItem()?.id).toBe("row-0");
-		expect(list.debugState().viewportTop).toBe(1);
+		expect(list.debugState().viewportTop).toEqual({ item: 1, lineOffset: 0 });
 		const saved = list.navigationSnapshot();
 		list.handleInput("G");
 		list.restoreNavigation(saved);
@@ -679,6 +679,10 @@ describe("SettingsList", () => {
 		expect(list.getSearchQuery()).toBe("hjklgG /");
 		list.handleInput("\x1b");
 		expect(list.debugState().filterFocused).toBe(false);
+		list.handleInput("/");
+		list.handleInput("\t");
+		expect(list.debugState().filterFocused).toBe(false);
+		expect(list.getSearchQuery()).toBe("hjklgG /");
 	});
 
 	it("records nested editor visits and restores safe drafts without replaying changes", () => {

@@ -13,7 +13,7 @@ import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth, wrapText
 import { ScrollView } from "./scroll-view";
 import { FormField, type FormFieldOptions, type FormFieldTheme, SelectFormField, TextFormField } from "./form";
 import { MenuSelection } from "./menu-selection";
-import { applyMenuMotion, isMenuHistoryParticipant, MenuKeyReader, MenuSearchField, MenuViewport } from "./menu-navigation";
+import { applyMenuMotion, isMenuHistoryParticipant, MenuKeyReader, MenuSearchField, MenuViewport, type MenuViewportPosition } from "./menu-navigation";
 
 function sanitizeSingleLine(text: string): string {
 	return replaceTabs(text)
@@ -158,7 +158,7 @@ export interface SettingsListNavigationState {
 	filterFocused: boolean;
 	filterCursor: number;
 	sectionFocused: boolean;
-	viewportTop: number | undefined;
+	viewportTop: MenuViewportPosition | number | undefined;
 	submenuId: string | null;
 	submenu: unknown;
 }
@@ -285,7 +285,7 @@ export class SettingsList implements Component {
 			filterFocused?: boolean;
 			filterCursor?: number;
 			sectionFocused?: boolean;
-			viewportTop?: number;
+			viewportTop?: MenuViewportPosition | number;
 			submenuId?: string;
 			submenu?: unknown;
 		};
@@ -309,7 +309,7 @@ export class SettingsList implements Component {
 					this.#submenuComponent.restoreNavigation(state.submenu);
 				}
 			}
-			this.#viewport.setTop(typeof state.viewportTop === "number" ? state.viewportTop : undefined);
+			this.#viewport.setTop(state.viewportTop);
 			this.#notifySelection();
 		} finally {
 			this.#restoring = false;
@@ -1110,6 +1110,7 @@ export class SettingsList implements Component {
 			return;
 		}
 		if (action.kind === "context") {
+			this.#search.focused = false;
 			this.toggleSectionFocus();
 			return;
 		}

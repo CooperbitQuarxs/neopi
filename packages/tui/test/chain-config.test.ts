@@ -358,7 +358,7 @@ describe("ChainConfigOverlayComponent", () => {
 		overlay.render(100);
 		press("\x05");
 		const snapshot = overlay.navigationSnapshot();
-		expect(snapshot.content).toMatchObject({ selectedValue: "chain:0", viewportTop: 1 });
+		expect(snapshot.content).toMatchObject({ selectedValue: "chain:0", viewportTop: { item: 1, lineOffset: 0 } });
 		press("G");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "close" });
 		press("g", "g");

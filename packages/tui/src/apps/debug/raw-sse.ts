@@ -1,7 +1,7 @@
 import type { TspScrollBy } from "@oh-my-pi/pi-wire";
 import type { Component } from "../../tui";
 import { matchesKey } from "../../keys";
-import { MenuKeyReader } from "../../components/menu-navigation";
+import { MenuKeyReader, menuScrollBy } from "../../components/menu-navigation";
 import { col, compact, keyed, node, row, span, text } from "../../native/describe";
 import { Memo } from "../../native/memo";
 import type { NativeNode, NativeScreen, NativeScroll, NativeUiEvent } from "../../native/node";
@@ -179,12 +179,9 @@ export class RawSseViewerComponent implements Component {
 
 		const action = this.#keys.read(keyData);
 		if (!action || action === "pending") return;
-		if (action.kind === "move" || action.kind === "scroll") {
-			this.#scroll(action.delta < 0 ? "line-up" : "line-down");
-		} else if (action.kind === "page") {
-			this.#scroll(action.delta < 0 ? "page-up" : "page-down");
-		} else if (action.kind === "boundary") {
-			this.#scroll(action.edge === "first" ? "start" : "end");
+		const by = menuScrollBy(action);
+		if (by) {
+			this.#scroll(by);
 		} else if (action.kind === "halfPage") {
 			// The native ANSI stream supports line/page/bounds only. Keep the
 			// row renderer's exact half page; never substitute a native full page.

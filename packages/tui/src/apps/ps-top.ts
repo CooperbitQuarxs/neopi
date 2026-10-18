@@ -9,7 +9,7 @@
 import * as path from "node:path";
 import { KeyValueList, type KeyValueRow } from "../components/key-value-list";
 import { ScrollView } from "../components/scroll-view";
-import { MenuKeyReader, MenuSearchField } from "../components/menu-navigation";
+import { MenuKeyReader, MenuSearchField, menuScrollBy } from "../components/menu-navigation";
 import { renderTableRow, type TableColumn } from "../components/table";
 import { fuzzyFilter } from "../fuzzy";
 import { matchesKey } from "../keys";
@@ -210,6 +210,8 @@ export class PsTopComponent implements Component {
 	async #openInfo(): Promise<void> {
 		const entry = this.#flat[this.#selected];
 		if (!entry) return;
+		this.#search.focused = false;
+		this.#keys.reset();
 		this.#stopLogsPoll();
 		this.#view = "info";
 		this.#nativeScroll = undefined;
@@ -228,6 +230,8 @@ export class PsTopComponent implements Component {
 	#openLogs(): void {
 		const entry = this.#flat[this.#selected];
 		if (!entry) return;
+		this.#search.focused = false;
+		this.#keys.reset();
 		this.#view = "logs";
 		this.#viewRequest++;
 		this.#nativeScroll = undefined;
@@ -286,13 +290,8 @@ export class PsTopComponent implements Component {
 		}
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
-		if (action?.kind === "move" || action?.kind === "scroll" || action?.kind === "page" || action?.kind === "boundary") {
-			const by = action.kind === "boundary"
-				? action.edge === "first" ? "start" : "end"
-				: action.kind === "page" ? action.delta < 0 ? "page-up" : "page-down"
-					: action.delta < 0 ? "line-up" : "line-down";
-			this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
-		}
+		const by = action && menuScrollBy(action);
+		if (by) this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
 		if (action?.kind === "search") {
 			if (this.#view !== "table") this.#closeView();
 			this.#search.focused = true;
@@ -305,6 +304,7 @@ export class PsTopComponent implements Component {
 			return;
 		}
 		if (action?.kind === "context" || action?.kind === "horizontal") {
+			this.#search.focused = false;
 			const views: PsTopView[] = ["table", "info", "logs"];
 			const next = views[(views.indexOf(this.#view) + action.delta + views.length) % views.length];
 			this.#stopLogsPoll();
@@ -372,6 +372,8 @@ export class PsTopComponent implements Component {
 		this.#selected = index;
 		this.#selectedKey = flatKey(this.#flat[index]);
 		this.#killConfirm = undefined;
+		this.#search.focused = false;
+		this.#keys.reset();
 		if (event.type === "activate") void this.#openInfo();
 		else this.#ui.requestRender();
 	}
