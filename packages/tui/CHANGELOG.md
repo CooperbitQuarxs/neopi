@@ -17,6 +17,11 @@
 - Shared tabs and transcript viewers support consistent Vim navigation and restore their context and viewport without moving selected content ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Persona configuration preserves safe text drafts and nested page state while using explicit search and consistent menu navigation ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Debug logs use `/` for literal search and `o` for older entries, and preserve selection, expansion, and the viewport separately in menu history ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Navigate Git panes with `h`/`l`, search paths with `/`, and retain viewports and unsent commit drafts in menu history ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Page, search, and switch process-monitor views with consistent menu keys; open logs with `o` ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Use Vim scrolling and menu-history viewport restoration in raw provider streams ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Use shared viewer motions in experiment dashboards and the hotkeys reference ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Keep numeric text literal in focused setup filters, and return nested menu pages to their parent with Escape ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 
 ### Fixed
 

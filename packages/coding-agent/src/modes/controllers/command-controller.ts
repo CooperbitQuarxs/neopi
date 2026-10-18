@@ -251,21 +251,29 @@ export class CommandController {
 			onClose: () => this.#closeReportSheet(),
 			maxRows: () => (fullScreen ? terminal.rows : this.ctx.commandReportRows()),
 		});
-		if (isNativeRendering()) {
+		const native = isNativeRendering();
+		if (native || report.heightAt(terminal.columns) > inline) {
+			fullScreen = !native;
 			report.holdFocus();
-			this.#reportSheet = this.ctx.ui.showOverlay(report, { anchor: "center", width: "90%", maxHeight: "90%" });
-			this.ctx.ui.setFocus(report);
-		} else if (report.heightAt(terminal.columns) > inline) {
-			fullScreen = true;
-			report.holdFocus();
-			this.#reportSheet = this.ctx.ui.showOverlay(report, {
-				anchor: "bottom-center",
-				width: "100%",
-				maxHeight: "100%",
-				margin: 0,
-				fullscreen: true,
+			const menu = this.ctx.openMenu("report-panel", () => this.showCommandReport(options));
+			if (!menu) return;
+			menu.mount(report, () => {
+				const handle = this.ctx.ui.showOverlay(
+					report,
+					native
+						? { anchor: "center", width: "90%", maxHeight: "90%" }
+						: { anchor: "bottom-center", width: "100%", maxHeight: "100%", margin: 0, fullscreen: true },
+				);
+				const hide = handle.hide.bind(handle);
+				handle.hide = () => {
+					menu.close();
+					if (this.#reportSheet === handle) this.#reportSheet = undefined;
+					hide();
+				};
+				this.#reportSheet = handle;
+				this.ctx.ui.setFocus(report);
+				return handle;
 			});
-			this.ctx.ui.setFocus(report);
 		} else {
 			this.ctx.reportContainer.addChild(report);
 		}
@@ -902,14 +910,25 @@ export class CommandController {
 	handleHotkeysCommand(): void {
 		const bindings = { keybindings: this.ctx.keybindings };
 		if (isNativeRendering()) {
+			const menu = this.ctx.openMenu("hotkeys", () => this.handleHotkeysCommand());
+			if (!menu) return;
+			let handle: OverlayHandle | undefined;
 			// A native terminal gets a dismissable sheet with keycaps instead of a markdown table.
-			const sheet = new HotkeysSheetComponent(bindings, () => {
-				handle.hide();
-				this.ctx.ui.setFocus(this.ctx.editorContainer.children[0] ?? this.ctx.editor);
-				this.ctx.ui.requestRender();
+			const sheet = new HotkeysSheetComponent(
+				bindings,
+				() => {
+					if (!menu.close()) return;
+					handle?.hide();
+					this.ctx.ui.setFocus(this.ctx.editorContainer.children[0] ?? this.ctx.editor);
+					this.ctx.ui.requestRender();
+				},
+				() => this.ctx.ui.terminal.rows,
+			);
+			menu.mount(sheet, () => {
+				handle = this.ctx.ui.showOverlay(sheet, { anchor: "center", width: "90%", maxHeight: "90%" });
+				this.ctx.ui.setFocus(sheet);
+				return handle;
 			});
-			const handle = this.ctx.ui.showOverlay(sheet, { anchor: "center", width: "90%", maxHeight: "90%" });
-			this.ctx.ui.setFocus(sheet);
 			this.ctx.ui.requestRender();
 			return;
 		}

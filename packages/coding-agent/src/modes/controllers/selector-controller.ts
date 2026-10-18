@@ -289,7 +289,8 @@ interface OpenMenu {
 /** Lifecycle seam for menus owned by a command or another UI controller. */
 export interface MenuHost {
 	mount(component: Component, mount: () => OverlayHandle): void;
-	close(): void;
+	/** False when history already left this menu, so delayed cleanup must not steal focus. */
+	close(): boolean;
 }
 
 export class SelectorController {
@@ -314,7 +315,11 @@ export class SelectorController {
 		const menu = this.#claimMenu(kind, reopen);
 		return {
 			mount: (component, mount) => this.#mountMenu(menu, component, mount),
-			close: () => this.#releaseMenu(kind, menu),
+			close: () => {
+				if (this.#openMenus.get(kind) !== menu) return false;
+				this.#releaseMenu(kind, menu);
+				return true;
+			},
 		};
 	}
 	/**
@@ -1206,13 +1211,19 @@ export class SelectorController {
 	 * to the editor when the user closes it.
 	 */
 	async showGitTui(revision?: string): Promise<void> {
+		const menu = this.openMenu("git", () => void this.showGitTui(revision));
+		if (!menu) return;
 		try {
-			await showGitOverlay(this.ctx.ui, { cwd: getProjectDir(), revision });
+			await showGitOverlay(this.ctx.ui, { cwd: getProjectDir(), revision }, (component, mount) => {
+				menu.mount(component, mount);
+			});
 		} catch (error) {
 			this.ctx.showStatus(error instanceof Error ? error.message : String(error));
 		}
-		this.focusActiveEditorArea();
-		this.ctx.ui.requestRender();
+		if (menu.close()) {
+			this.focusActiveEditorArea();
+			this.ctx.ui.requestRender();
+		}
 	}
 
 	/**

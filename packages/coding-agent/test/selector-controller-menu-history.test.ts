@@ -124,6 +124,51 @@ describe("controller menu timeline", () => {
 		expect(h.focused()).toBe(h.menus.get("chain-config")!);
 	});
 
+	it("records Escape to a parent page without closing the registered menu", () => {
+		const h = harness();
+		h.open("settings");
+		const menu = h.menus.get("settings")!;
+		menu.handleInput("j");
+		menu.handleInput("\r");
+		menu.handleInput("j");
+		menu.handleInput("\x1b");
+		expect(menu.navigationSnapshot().submenuId).toBeNull();
+		expect(h.overlayStack).toHaveLength(1);
+		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
+		expect(menu.navigationSnapshot().submenuId).toBe("nested");
+		expect((menu.openSubmenu?.component as SettingsList).getSelectedItem()?.id).toBe("b");
+	});
+
+	it("does not let delayed external-menu cleanup steal history focus", () => {
+		const h = harness();
+		h.open("settings");
+		const host = h.controller.openMenu("git", () => {});
+		expect(host).toBeDefined();
+		let leaves = 0;
+		const external = {
+			render: () => [],
+			invalidate: () => {},
+			navigationSnapshot: () => ({ draft: "safe unsent text" }),
+			restoreNavigation: () => {},
+			leaveMenu: () => { leaves++; },
+		};
+		host!.mount(external, () => h.showOverlay(external));
+		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
+		expect(leaves).toBe(1);
+		expect(host!.close()).toBe(false);
+		expect(h.focused()).toBe(h.menus.get("settings"));
+		expect(h.overlayStack).toHaveLength(1);
+	});
+
+	it("does not treat an editor-slot prompt as an overlay history blocker", () => {
+		const h = harness();
+		h.open("settings");
+		h.ctx.ui.setFocus(h.ctx.editor);
+		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
+		expect(h.status).toEqual([]);
+		expect(h.overlayStack).toHaveLength(0);
+	});
+
 	it("keeps an unregistered blocking overlay mounted without changing history", () => {
 		const h = harness();
 		h.open("settings");

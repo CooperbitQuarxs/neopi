@@ -1,4 +1,5 @@
 import type { SidePanelController } from "./controllers/side-panel-controller";
+import type { MenuHost, MenuKind } from "./controllers/selector-controller";
 import type { PersonaScope } from "../neopi/persona-config";
 import type { ReplMode, ReplTarget } from "../neopi/repl";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -531,6 +532,8 @@ export interface InteractiveModeContext {
 	applyCwdChange(newCwd: string, options?: { deferMixtureCommit?: boolean }): Promise<boolean>;
 
 	// Selector handling
+	/** Register a command-owned menu with the shared history and single-instance lifecycle. */
+	openMenu(kind: MenuKind, reopen: () => void): MenuHost | undefined;
 	showSettingsSelector(): void;
 	/** Open the fullscreen `/usage` dashboard overlay for the given reports. */
 	showUsageDashboard(reports: UsageReport[]): void;

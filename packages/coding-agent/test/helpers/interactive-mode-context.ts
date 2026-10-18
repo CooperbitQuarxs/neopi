@@ -220,6 +220,10 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 	const ctx = {
 		ui,
 		chatContainer,
+		openMenu: () => ({
+			mount: (_component, show) => { show(); },
+			close: () => true,
+		}),
 		statusContainer: new Container(),
 		editorContainer: new Container(),
 		pendingMessagesContainer: new Container(),
