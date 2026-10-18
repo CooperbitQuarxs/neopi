@@ -693,15 +693,15 @@ export class SelectorController {
 			saveDraft: next => {
 				const previous = this.#statusLineDraft;
 				const state =
-					previous?.path === store.path
-						? previous
-						: { path: store.path, draft: next, writing: Promise.resolve() };
+					previous?.path === store.path ? previous : { path: store.path, draft: next, writing: Promise.resolve() };
 				state.draft = next;
 				this.#statusLineDraft = state;
-				const writing = state.writing.catch(() => {}).then(() => {
-					// A newer snapshot supersedes this write, including after close/reopen.
-					if (state.draft === next) return store.write(next);
-				});
+				const writing = state.writing
+					.catch(() => {})
+					.then(() => {
+						// A newer snapshot supersedes this write, including after close/reopen.
+						if (state.draft === next) return store.write(next);
+					});
 				state.writing = writing;
 				return writing;
 			},

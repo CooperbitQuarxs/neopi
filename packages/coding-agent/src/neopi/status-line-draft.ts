@@ -6,10 +6,7 @@
 import * as fs from "node:fs";
 import * as nodePath from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import {
-	parseStatusLineEditorDraft,
-	type StatusLineEditorDraft,
-} from "@oh-my-pi/pi-tui/overlays/status-line-config";
+import { parseStatusLineEditorDraft, type StatusLineEditorDraft } from "@oh-my-pi/pi-tui/overlays/status-line-config";
 import type { StatusLineSegmentOptions } from "@oh-my-pi/pi-tui/status-line/types";
 import { JsonStateStore } from "./json-state";
 

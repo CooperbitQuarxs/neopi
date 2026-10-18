@@ -15,7 +15,6 @@ beforeAll(async () => {
 	await initTheme();
 });
 
-const DOWN = "\x1b[B";
 const ESC = "\x1b";
 const CTRL_E = "\x05";
 const CTRL_Y = "\x19";
@@ -130,10 +129,11 @@ describe("status-line editor list", () => {
 		draft = await h.draft();
 		expect(draft.top).toBe(2);
 		expect(draft.selected).toBe("composer");
-		h.press("j");
+		// Model is list line 2 (composer, "Left side", model); motion scrolls back just enough to show it.
+		h.press(CTRL_E, CTRL_E, "j");
 		draft = await h.draft();
 		expect(draft.selected).toBe("model");
-		expect(draft.top).toBe(1);
+		expect(draft.top).toBe(2);
 	});
 
 	it("jumps with gg/G and pages by half a view with Ctrl-d/Ctrl-u", async () => {

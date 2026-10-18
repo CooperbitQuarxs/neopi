@@ -152,10 +152,7 @@ describe("provider usage-bar rendering", () => {
 
 	it("limits source width without cutting a surrogate pair", () => {
 		for (const [template, expected] of [
-			[
-				"x".repeat(USAGE_BAR_TEMPLATE_MAX_LENGTH - 1) + "\u{20000}",
-				"x".repeat(USAGE_BAR_TEMPLATE_MAX_LENGTH - 1),
-			],
+			["x".repeat(USAGE_BAR_TEMPLATE_MAX_LENGTH - 1) + "\u{20000}", "x".repeat(USAGE_BAR_TEMPLATE_MAX_LENGTH - 1)],
 			[
 				"x".repeat(USAGE_BAR_TEMPLATE_MAX_LENGTH - 2) + "\u{20000}Z",
 				"x".repeat(USAGE_BAR_TEMPLATE_MAX_LENGTH - 2) + "\u{20000}",
@@ -190,11 +187,7 @@ describe("provider usage-bar rendering", () => {
 		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", ctx).content)).toBe("10% 2m");
 		templates["usage:anthropic:5h"] = "used {percent}";
 		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", ctx).content)).toBe("used 10%");
-		expect(parseUsageBarTemplate("{percent} {age}")).toEqual([
-			{ token: "percent" },
-			{ text: " " },
-			{ token: "age" },
-		]);
+		expect(parseUsageBarTemplate("{percent} {age}")).toEqual([{ token: "percent" }, { text: " " }, { token: "age" }]);
 	});
 
 	it("hides empty templates consistently instead of emitting an empty native segment", () => {

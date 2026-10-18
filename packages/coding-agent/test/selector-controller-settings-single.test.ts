@@ -219,8 +219,9 @@ describe("single-instance menus", () => {
 				const reloaded = await Settings.loadReadOnly({ agentDir: dir, cwd: dir });
 				expect(handles.map(handle => handle.get(reloaded))).toEqual(before);
 				expect(handles.map(handle => reloaded.isConfigured(handle))).toEqual(handles.map(() => configured));
-				const draft = await waitForDraft(statusLineDraftPath(dir), saved => saved.composerShape === "box");
+				const draft = await waitForDraft(statusLineDraftPath(dir), saved => saved.right[0]?.id === "model");
 				expect(draft.right.map(row => row.id).slice(0, 2)).toEqual(["model", "time"]);
+				expect(draft.composerShape).not.toBe(configured ? "rail" : "band");
 			} finally {
 				flush.mockRestore();
 				statusLine.dispose();
@@ -277,7 +278,10 @@ describe("single-instance menus", () => {
 			new SelectorController(firstCtx).showStatusLineConfigure();
 			const typed = "{percent} used".split("");
 			press(first.shown[0]!, DOWN, "\t", ...Array.from({ length: 30 }, () => "\x7f"), ...typed, "\r", ESC, "n");
-			await waitForDraft(statusLineDraftPath(dir), saved => saved.usageTemplates["usage:anthropic:5h"] !== undefined);
+			await waitForDraft(
+				statusLineDraftPath(dir),
+				saved => saved.usageTemplates["usage:anthropic:5h"] !== undefined,
+			);
 		} finally {
 			firstLine.dispose();
 		}

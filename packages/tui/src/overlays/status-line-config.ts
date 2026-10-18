@@ -632,7 +632,10 @@ export class StatusLineConfigOverlayComponent implements Component {
 	#reset(): void {
 		this.#base = copyLayout(this.#active);
 		this.#composerShape = this.#active.composerShape;
-		({ left: this.#left, right: this.#right } = rowsForLayout(this.#active, { left: this.#left, right: this.#right }));
+		({ left: this.#left, right: this.#right } = rowsForLayout(this.#active, {
+			left: this.#left,
+			right: this.#right,
+		}));
 		this.#templates = { ...this.#active.usageTemplates };
 		this.#addCatalogRows();
 		this.#syncTemplateField();
@@ -764,7 +767,8 @@ export class StatusLineConfigOverlayComponent implements Component {
 
 	#handlePrompt(data: string, char: string | undefined): void {
 		const prompt = this.#prompt;
-		const yes = char === "y" || char === "Y" || (prompt === "exit" && getKeybindings().matches(data, "tui.select.confirm"));
+		const yes =
+			char === "y" || char === "Y" || (prompt === "exit" && getKeybindings().matches(data, "tui.select.confirm"));
 		const no = char === "n" || char === "N";
 		if (prompt === "exit") {
 			if (yes) {
@@ -884,7 +888,10 @@ export class StatusLineConfigOverlayComponent implements Component {
 			case "widget": {
 				const { id, enabled } = line.row;
 				const templated = this.#templates[id] !== undefined ? " ✎" : "";
-				return style(`[${enabled ? "x" : " "}] ${segmentLabel(id)} · ${sanitizeStatusText(id)}${templated}`, !enabled);
+				return style(
+					`[${enabled ? "x" : " "}] ${segmentLabel(id)} · ${sanitizeStatusText(id)}${templated}`,
+					!enabled,
+				);
 			}
 			case "blank":
 				return "";
@@ -932,7 +939,9 @@ export class StatusLineConfigOverlayComponent implements Component {
 			);
 		} else {
 			lines.push(
-				...wrap(sanitizeStatusText(SEGMENT_DESCRIPTIONS[id as BuiltinStatusLineSegmentId] ?? "Status-line widget.")),
+				...wrap(
+					sanitizeStatusText(SEGMENT_DESCRIPTIONS[id as BuiltinStatusLineSegmentId] ?? "Status-line widget."),
+				),
 			);
 		}
 		if (this.#focus === "search" || this.#search.getValue()) {
@@ -962,11 +971,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 		this.#bodyRows = Math.max(3, (process.stdout.rows || 40) - 4);
 		this.#split.setHeight(this.#bodyRows);
 		const leftWidth = this.#split.measure(width).left?.width ?? 0;
-		const state = this.#draftError
-			? " · draft not saved"
-			: this.#pending
-				? " · unapplied draft"
-				: "";
+		const state = this.#draftError ? " · draft not saved" : this.#pending ? " · unapplied draft" : "";
 		this.#titleRow.setLines([topBorderSplit(width, `Status-line configuration${state}`, leftWidth)]);
 		this.#divider.setLines([dividerSplit(width, leftWidth)]);
 		const hints = this.#hints();
