@@ -48,7 +48,7 @@ function matchesParticipant(entry: IrcLogEntry, query: string): boolean {
 	return entry.message.from.toLowerCase().includes(needle) || entry.message.to.toLowerCase().includes(needle);
 }
 
-export interface IrcViewerPageNavigation {
+export interface IrcViewerNavigation {
 	selected: string | undefined;
 	selectedIndex: number;
 	top: number;
@@ -57,10 +57,6 @@ export interface IrcViewerPageNavigation {
 	filter: MenuSearchState;
 	draft: MenuSearchState;
 	compose: { to: string; replyTo: string } | undefined;
-}
-
-export interface IrcViewerNavigation extends IrcViewerPageNavigation {
-	parent: IrcViewerPageNavigation | undefined;
 }
 
 export class IrcViewerComponent implements Component {
@@ -82,7 +78,6 @@ export class IrcViewerComponent implements Component {
 	readonly #expanded = new Set<string>();
 	/** The reply being written, and to whom. */
 	#compose: { to: string; replyTo: string } | undefined;
-	#replyParent: IrcViewerPageNavigation | undefined;
 	readonly #draft = new MenuSearchField();
 	#sending = false;
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
@@ -114,7 +109,6 @@ export class IrcViewerComponent implements Component {
 			filter: this.#filter.navigationSnapshot(),
 			draft: this.#draft.navigationSnapshot(),
 			compose: this.#compose ? { ...this.#compose } : undefined,
-			parent: this.#replyParent ? structuredClone(this.#replyParent) : undefined,
 		};
 	}
 
@@ -131,7 +125,6 @@ export class IrcViewerComponent implements Component {
 		this.#expanded.clear();
 		for (const id of state.expanded ?? []) this.#expanded.add(id);
 		this.#compose = state.compose && this.#options.reply ? { ...state.compose } : undefined;
-		this.#replyParent = this.#compose && state.parent ? structuredClone(state.parent) : undefined;
 		if (!this.#compose) this.#draft.focused = false;
 		this.#revealSelection = false;
 		this.#keys.reset();
@@ -254,7 +247,7 @@ export class IrcViewerComponent implements Component {
 			: this.#compose
 				? this.#draft.focused
 					? "enter send · Tab view · esc leave field"
-					: "j/k select · Tab edit reply · esc back"
+					: "j/k select · Tab edit reply · esc cancel reply"
 				: `j/k select · enter/space expand${this.#options.reply ? " · r reply" : ""} · / filter · G follow · ${[
 						"esc",
 						...this.#options.viewerKeys.map(key => formatKeyHint(key)),
@@ -308,8 +301,6 @@ export class IrcViewerComponent implements Component {
 	#startReply(): void {
 		const entry = this.#visible()[this.#selected];
 		if (!entry || !this.#options.reply) return;
-		const previous = this.navigationSnapshot();
-		this.#replyParent = previous;
 		const { message } = entry;
 		const to = message.from === this.#options.operatorId ? message.to : message.from;
 		this.#compose = { to, replyTo: message.id };
@@ -318,21 +309,13 @@ export class IrcViewerComponent implements Component {
 		this.#draft.focused = true;
 		this.#keys.reset();
 		this.#options.requestRender();
-		this.onNavigationVisit?.("reply", previous);
 	}
 
 	#leaveReply(): void {
-		const previous = this.navigationSnapshot();
-		const parent = this.#replyParent;
-		if (parent) this.restoreNavigation(parent);
-		else {
-			this.#compose = undefined;
-			this.#replyParent = undefined;
-			this.#draft.focused = false;
-			this.#keys.reset();
-			this.#options.requestRender();
-		}
-		this.onNavigationVisit?.("", previous);
+		this.#compose = undefined;
+		this.#draft.focused = false;
+		this.#keys.reset();
+		this.#options.requestRender();
 	}
 
 	#handleComposeInput(data: string): boolean {
