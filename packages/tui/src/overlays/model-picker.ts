@@ -286,12 +286,15 @@ export class ModelPickerComponent implements Component {
 			}
 		}
 		if (this.#filterEditing) {
-			if (matchesSelectCancel(data)) this.#filterEditing = false;
-			else this.#browser.handleInput(data);
+			if (matchesSelectCancel(data)) {
+				this.#filterEditing = false;
+				this.#browser.focusFilter(false);
+			} else this.#browser.handleInput(data);
 			return;
 		}
 		if (data === "i") {
 			this.#filterEditing = true;
+			this.#browser.focusFilter();
 			return;
 		}
 		if (matchesSelectCancel(data)) {

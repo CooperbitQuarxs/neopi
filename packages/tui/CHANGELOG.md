@@ -22,6 +22,7 @@
 - Ask dialogs share choice navigation and independent reading scroll without Space submitting; oversized selected previews retain their existing PageUp/PageDown reading behavior ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Focused menu editors and reply fields keep printable shortcut aliases literal while preserving character-jump commands and BTW's existing Space-hold dictation gestures ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Single-line form fields retain physical Enter/Esc submission and cancellation when configured shortcut aliases are printable text ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Model hub and quick-picker filter focus stays synchronized with the shared model browser ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Search setup and login providers with `/`, page or jump through accounts, and scroll the view without moving the selected provider ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Menu history preserves focused filter text and caret position, and `Ctrl-N`/`Ctrl-P` switch menu contexts alongside Tab/Shift-Tab ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Logout and usage-reset pickers support search, paging, and history without replaying destructive confirmations ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).

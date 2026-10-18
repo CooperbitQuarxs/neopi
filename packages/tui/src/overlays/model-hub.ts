@@ -676,6 +676,7 @@ export class ModelHubComponent implements Component {
 		});
 		this.#browser.onActivate = item => {
 			this.#filterEditing = false;
+			this.#browser.focusFilter(false);
 			this.#activateItem(item);
 		};
 		this.#browser.onCancel = () => this.#callbacks.onCancel();
@@ -2494,6 +2495,7 @@ export class ModelHubComponent implements Component {
 		if (this.#filterEditing) {
 			if (matchesSelectCancel(rawData)) {
 				this.#filterEditing = false;
+				this.#browser.focusFilter(false);
 				return;
 			}
 			// The query filters model rows, so editing it from a non-browser view (Roles) lands on All models.
@@ -2504,6 +2506,7 @@ export class ModelHubComponent implements Component {
 		}
 		if (matchesKey(rawData, "i")) {
 			this.#filterEditing = true;
+			this.#browser.focusFilter();
 			this.#focus = "list";
 			if (!this.#isBrowserView(this.#activeEntry())) this.#setActiveEntry("all");
 			return;
@@ -2594,6 +2597,7 @@ export class ModelHubComponent implements Component {
 				this.#focus = "list";
 				// The search stays live: later keys keep editing it (INSERT filter mode).
 				this.#filterEditing = true;
+				this.#browser.focusFilter();
 				this.#browser.handleInput(data);
 				return;
 			}
