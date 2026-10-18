@@ -283,3 +283,45 @@ it("connects the viewer to pushed live text and releases its subscription on dis
 	listener?.({ assistant: assistant([{ type: "text", text: "IGNORED_AFTER_DISPOSE" }]), tools: [] });
 	expect(Bun.stripANSI(viewer.render(120).join("\n"))).not.toContain("IGNORED_AFTER_DISPOSE");
 });
+
+it("drops the message input once a long-lived viewer's agent is aborted", () => {
+	const listeners = new Set<() => void>();
+	const ref: AgentRecordLike = {
+		id: "owner/worker",
+		displayName: "worker",
+		kind: "sub",
+		status: "parked",
+		session: null,
+		sessionFile: null,
+		createdAt: 0,
+		lastActivity: 0,
+	};
+	let record = ref;
+	const viewer = new AgentTranscriptViewer({
+		agentId: ref.id,
+		transcript: { fs, parseEntries: () => [] },
+		registry: {
+			list: () => [record],
+			get: id => (id === record.id ? record : undefined),
+			onChange: listener => {
+				listeners.add(listener);
+				return () => listeners.delete(listener);
+			},
+		},
+		remote: { chat() {}, kill() {}, revive() {}, readTranscript: async () => ({ text: "", newSize: 0 }) },
+		ui: new TUI(new VirtualTerminal(120, 40)),
+		cwd: "/tmp",
+		expandKeys: [],
+		hubKeys: [],
+		requestRender() {},
+		onClose() {},
+		onHubClose() {},
+	});
+	viewers.push(viewer);
+	expect(Bun.stripANSI(viewer.render(120).join("\n"))).toContain(":send");
+	record = { ...ref, status: "aborted" };
+	for (const listener of listeners) listener();
+	expect(Bun.stripANSI(viewer.render(120).join("\n"))).not.toContain(":send");
+	viewer.dispose();
+	expect(listeners.size).toBe(0);
+});

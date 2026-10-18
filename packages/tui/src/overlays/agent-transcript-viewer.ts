@@ -213,6 +213,7 @@ export class AgentTranscriptViewer implements Component {
 	readonly #deps: AgentTranscriptViewerDeps;
 
 	#liveUnsubscribe: (() => void) | undefined;
+	readonly #registryUnsubscribe: () => void;
 
 	constructor(deps: AgentTranscriptViewerDeps) {
 		this.#deps = deps;
@@ -251,6 +252,13 @@ export class AgentTranscriptViewer implements Component {
 			this.#nativeCache = undefined;
 			this.#deps.requestRender();
 		});
+		// A long-lived viewer (a tmux monitor pane) loses its input once the agent turns read-only.
+		this.#registryUnsubscribe = deps.registry.onChange(() => {
+			if (this.#disposed || !this.#editor || this.#sendable) return;
+			this.#editor = undefined;
+			this.#nativeCache = undefined;
+			this.#deps.requestRender();
+		});
 	}
 
 	/** Advisor and aborted-agent transcripts are read-only. */
@@ -273,6 +281,7 @@ export class AgentTranscriptViewer implements Component {
 		this.#remoteToken++;
 		try {
 			this.#liveUnsubscribe?.();
+			this.#registryUnsubscribe();
 		} finally {
 			this.#liveUnsubscribe = undefined;
 			this.#builder.dispose();
