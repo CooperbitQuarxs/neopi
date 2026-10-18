@@ -2,7 +2,7 @@
  * Interactive marketplace plugin selector.
  *
  * Shows available plugins from all configured marketplaces in a SelectList.
- * Selecting a plugin triggers installation. Esc cancels.
+ * Enter installs or uninstalls the selected plugin. Space never uninstalls. Esc cancels.
  */
 import { type SelectItem, SelectList, type SgrMouseEvent } from "../index";
 import { getSelectListTheme } from "../theme/theme";
@@ -11,6 +11,7 @@ import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-r
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { SelectListSheet } from "../native/picker";
 import type { TspPickerItem } from "@oh-my-pi/pi-wire";
+import { matchesKey } from "../keys";
 
 export interface PluginSelectorCallbacks {
 	onSelect: (pluginName: string, marketplace: string, scope?: "user" | "project") => void;
@@ -29,6 +30,7 @@ export class PluginSelectorComponent extends OverlayPanel {
 	#sheet: SelectListSheet;
 
 	constructor(
+		mode: "install" | "uninstall",
 		marketplaceCount: number,
 		plugins: PluginItem[],
 		installedIds: Set<string>,
@@ -73,6 +75,13 @@ export class PluginSelectorComponent extends OverlayPanel {
 		}
 
 		this.#selectList = new SelectList(items, Math.min(items.length, 20), getSelectListTheme(), { search: "always" });
+		if (mode === "uninstall") {
+			const handleInput = this.#selectList.handleInput.bind(this.#selectList);
+			this.#selectList.handleInput = data => {
+				if (!this.#selectList.filterFocused && matchesKey(data, "space")) return;
+				handleInput(data);
+			};
+		}
 
 		this.#selectList.onSelect = item => {
 			const [name, marketplace, scope] = splitPluginId(item.value);
@@ -90,7 +99,7 @@ export class PluginSelectorComponent extends OverlayPanel {
 			title: "Plugins",
 			icon: "plus",
 			noun: "plugins",
-			confirm: "Install",
+			confirm: mode === "uninstall" ? "Uninstall" : "Install",
 			decorate: item => {
 				const [name] = splitPluginId(item.value);
 				if (!name) return undefined;

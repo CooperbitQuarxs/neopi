@@ -1933,7 +1933,7 @@ export class SelectorController {
 				};
 			});
 			this.#showInlineSelector(done => {
-				const selector = new PluginSelectorComponent(marketplaces.length, items, new Set(), {
+				const selector = new PluginSelectorComponent(mode, marketplaces.length, items, new Set(), {
 					onSelect: async (name, marketplace, scope) => {
 						done();
 						const pluginId = `${name}@${marketplace}`;
@@ -1971,7 +1971,7 @@ export class SelectorController {
 		}
 
 		this.#showInlineSelector(done => {
-			const selector = new PluginSelectorComponent(marketplaces.length, allPlugins, installedIds, {
+			const selector = new PluginSelectorComponent(mode, marketplaces.length, allPlugins, installedIds, {
 				onSelect: async (name, marketplace) => {
 					done();
 					this.ctx.showStatus(`Installing ${name} from ${marketplace}...`);

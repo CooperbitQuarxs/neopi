@@ -16,6 +16,7 @@
 - Advisor menus retain per-page searches, pending tool choices and safe text drafts across history without losing file baselines; preview motion and native/ANSI field focus follow shared navigation ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Focused menu fields keep printable remapped shortcuts literal without changing normal typing undo groups; explicit Enter/Esc still finish or leave literal form and save-path fields ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Status-line configuration uses shared navigation, search and viewport handling while preserving widget ordering, synchronous draft persistence, template focus, and apply/leave behavior ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Plugin uninstall requires explicit Enter or native confirmation rather than Space, while spaces remain literal in its search field ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Search setup and login providers with `/`, page or jump through accounts, and scroll the view without moving the selected provider ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Menu history preserves focused filter text and caret position, and `Ctrl-N`/`Ctrl-P` switch menu contexts alongside Tab/Shift-Tab ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Logout and usage-reset pickers support search, paging, and history without replaying destructive confirmations ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).

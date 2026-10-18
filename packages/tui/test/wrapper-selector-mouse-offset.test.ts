@@ -85,6 +85,7 @@ describe("inline-picker wrapper routeMouse offset", () => {
 	it("PluginSelectorComponent ignores the border row and selects the first plugin below it", () => {
 		let selectedName: string | undefined;
 		const component = new PluginSelectorComponent(
+			"install",
 			1,
 			[{ plugin: { name: "alpha", description: "first" }, marketplace: "shop" }],
 			new Set<string>(),
