@@ -31,6 +31,7 @@ import { bottomBorder, divider, dividerSplit, PanelRows, row, topBorder, topBord
 import { isLayoutMouseRoutable } from "../components/layout/geometry";
 import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
+import { MenuKeyReader, isMenuHistoryParticipant } from "../components/menu-navigation";
 
 export type PersonaConfigVariant = "persona" | "live";
 export type PersonaConfigMode = "replace" | "prepend" | "append" | "literal-substitute";
@@ -128,6 +129,20 @@ function wrap(text: string, width: number): string[] {
 
 type Screen = "list" | "detail" | "sources" | "name" | "content" | "path" | "literal" | "mode";
 
+interface PersonaNavigationContext {
+	screen: Screen;
+	entryIndex?: number;
+	creation?: { content: string; from?: string; sourceIndex?: number };
+}
+
+interface PersonaNavigationSnapshot {
+	context: PersonaNavigationContext;
+	doc: PersonaConfigDoc;
+	dirty: boolean;
+	previewScroll: number;
+	content: unknown;
+}
+
 export class PersonaConfigOverlayComponent implements Component {
 	#tui: TUI;
 	#deps: PersonaConfigDeps;
@@ -141,15 +156,22 @@ export class PersonaConfigOverlayComponent implements Component {
 
 	#screen: Screen = "list";
 	#entryIndex: number | undefined;
-	#active: Component = new SelectList([], 1, getSelectListTheme());
+	#active: Component = new SelectList([], 1, getSelectListTheme(), { search: "always" });
 	#footerHint = "";
 	/** One-shot message (save result, validation error) shown until the next screen change. */
 	#footerNote: { text: string; tone: "success" | "warning" } | undefined;
 	#previewScroll = 0;
+	readonly #keys = new MenuKeyReader();
+	#navigationContext: PersonaNavigationContext = { screen: "list" };
+	#creation: PersonaNavigationContext["creation"];
+	#restoringNavigation = false;
+	#saving = 0;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	#bodyRowsLast = 3;
 	#renderActivePane = (width: number, height: number | undefined): readonly string[] => {
 		const rows = Math.max(0, Math.floor(height ?? this.#bodyRowsLast));
+		if (this.#active instanceof SelectList) this.#active.setMaxVisible(Math.max(1, rows - 1));
 		const lines = [...this.#active.render(width)];
 		while (lines.length < rows) lines.push("");
 		return lines.slice(0, rows);
@@ -230,6 +252,24 @@ export class PersonaConfigOverlayComponent implements Component {
 		if (data.startsWith("\x1b[<")) {
 			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
 			return;
+		}
+		if (this.#active instanceof SelectList && !this.#active.filterFocused) {
+			const action = this.#keys.read(data);
+			if (action !== undefined && action !== "pending") {
+				if (action.kind === "cancel") { this.#requestClose(); return; }
+				if (action.kind === "horizontal") {
+					const index = this.#navigationContext.entryIndex;
+					if (action.delta === -1 && this.#screen !== "list") {
+						if (this.#screen === "detail" || index === undefined) this.#showList(index === undefined ? undefined : `entry:${index}`);
+						else this.#showDetail(index);
+					} else if (action.delta === 1) {
+						const item = this.#active.getSelectedItem();
+						const navigable = item && (this.#screen === "list" ? /^entry:/.test(item.value) : this.#screen === "detail" && ["name", "mode", "path", "literal", "content", "view", "sources"].includes(item.value));
+						if (navigable && item) this.#active.onSelect?.(item);
+					}
+					return;
+				}
+			}
 		}
 		this.#active.handleInput?.(data);
 	}
@@ -332,11 +372,16 @@ export class PersonaConfigOverlayComponent implements Component {
 	// ───────────────────────────── helpers ───────────────────────────
 
 	#setScreen(screen: Screen, active: Component, footerHint: string): void {
+		const context: PersonaNavigationContext = { screen, entryIndex: this.#entryIndex, creation: this.#creation };
+		const changed = screen !== this.#navigationContext.screen || context.entryIndex !== this.#navigationContext.entryIndex;
+		const previous = changed && !this.#restoringNavigation ? this.navigationSnapshot() : undefined;
 		this.#screen = screen;
 		this.#active = active;
-		this.#footerHint = footerHint;
+		this.#footerHint = active instanceof SelectList ? `${footerHint.replace(/Esc back/g, "Esc close")} · h parent / l open · / search` : footerHint;
 		this.#footerNote = undefined;
 		this.#previewScroll = 0;
+		this.#navigationContext = context;
+		if (previous !== undefined) this.onNavigationVisit?.(screen === "list" ? "" : `${screen}:${context.entryIndex ?? "new"}`, previous);
 		this.#cb.requestRender();
 	}
 
@@ -404,6 +449,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#flash(`Not saved — ${problem}`);
 			return;
 		}
+		this.#saving++;
 		void this.#cb.save(this.#doc).then(
 			message => {
 				for (const entry of this.#doc.entries) if (!entry.builtin) entry.originalName = entry.name;
@@ -412,13 +458,14 @@ export class PersonaConfigOverlayComponent implements Component {
 				this.#flash(message, "success");
 			},
 			err => this.#flash(`Not saved — ${err instanceof Error ? err.message : String(err)}`),
-		);
+		).finally(() => { this.#saving--; });
 	}
 
 	// ───────────────────────────── list ──────────────────────────────
 
 	#showList(selectedValue?: string): void {
 		this.#entryIndex = undefined;
+		this.#creation = undefined;
 		const items: SelectItem[] = this.#doc.entries.map((entry, index) => ({
 			value: `entry:${index}`,
 			label:
@@ -431,7 +478,7 @@ export class PersonaConfigOverlayComponent implements Component {
 		items.push({ value: "save", label: "Save & apply" });
 		items.push({ value: "close", label: "Close" });
 
-		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme());
+		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		if (selectedValue)
 			list.setSelectedIndex(
 				Math.max(
@@ -441,6 +488,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			);
 		const handleInput = list.handleInput.bind(list);
 		list.handleInput = data => {
+			if (list.filterFocused) { handleInput(data); return; }
 			if (!matchesKey(data, "escape")) this.#closeArmed = false;
 			const selected = list.getSelectedItem()?.value ?? "";
 			const match = /^entry:(\d+)$/.exec(selected);
@@ -538,6 +586,8 @@ export class PersonaConfigOverlayComponent implements Component {
 	}
 
 	#showNewEntryEditor(content = this.#deps.newEntryContent ?? "", from?: string, sourceIndex?: number): void {
+		this.#entryIndex = undefined;
+		this.#creation = { content, from, sourceIndex };
 		const sourceEntry = sourceIndex === undefined ? undefined : this.#doc.entries[sourceIndex];
 		const fresh = sourceEntry ? undefined : this.#deps.newEntrySources?.();
 		const input = new Input();
@@ -579,6 +629,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			return;
 		}
 		this.#entryIndex = index;
+		this.#creation = undefined;
 		const items: SelectItem[] = [];
 		if (entry.builtin) {
 			items.push(
@@ -631,7 +682,7 @@ export class PersonaConfigOverlayComponent implements Component {
 				{ value: "back", label: "Back" },
 			);
 		}
-		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme());
+		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		if (selectedField)
 			list.setSelectedIndex(
 				Math.max(
@@ -641,6 +692,8 @@ export class PersonaConfigOverlayComponent implements Component {
 			);
 		const handleInput = list.handleInput.bind(list);
 		list.handleInput = data => {
+			if (list.filterFocused) { handleInput(data); return; }
+			if (matchesKey(data, "space") && list.getSelectedItem()?.value === "delete") return;
 			if (matchesKey(data, "space")) {
 				// Space flips on/off rows; on any other row it is Enter.
 				const value = list.getSelectedItem()?.value;
@@ -766,7 +819,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			};
 		});
 		items.push({ value: "back", label: "Back" });
-		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme());
+		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		if (selectedKey) {
 			list.setSelectedIndex(
 				Math.max(
@@ -794,6 +847,7 @@ export class PersonaConfigOverlayComponent implements Component {
 		};
 		const handleInput = list.handleInput.bind(list);
 		list.handleInput = data => {
+			if (list.filterFocused) { handleInput(data); return; }
 			if (matchesKey(data, "space")) {
 				const key = list.getSelectedItem()?.value;
 				if (key) select(key);
@@ -855,7 +909,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			label: mode,
 			description: MODE_DESCRIPTIONS[mode],
 		}));
-		const list = new SelectList(items, items.length, getSelectListTheme());
+		const list = new SelectList(items, items.length, getSelectListTheme(), { search: "always" });
 		list.setSelectedIndex(Math.max(0, PERSONA_CONFIG_MODES.indexOf(entry.mode)));
 		list.onSelect = item => {
 			entry.mode = item.value as PersonaConfigMode;
@@ -883,8 +937,67 @@ export class PersonaConfigOverlayComponent implements Component {
 				this.#showDetail(index, field);
 			},
 			() => this.#showDetail(index, field),
-			{ externalEditor: this.#deps.externalEditor },
+			{ externalEditor: this.#deps.externalEditor, menuHistory: true },
 		);
 		this.#setScreen("content", editor, "");
+	}
+
+	get blocksMenuHistory(): boolean {
+		return this.#saving > 0 || (isMenuHistoryParticipant(this.#active) && this.#active.blocksMenuHistory === true);
+	}
+
+	navigationSnapshot(): PersonaNavigationSnapshot {
+		return {
+			context: structuredClone(this.#navigationContext),
+			doc: structuredClone(this.#doc),
+			dirty: this.#dirty,
+			previewScroll: this.#previewScroll,
+			content: this.#active instanceof Input
+				? { value: this.#active.getValue(), cursor: this.#active.getCursor() }
+				: isMenuHistoryParticipant(this.#active) ? this.#active.navigationSnapshot() : undefined,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as PersonaNavigationSnapshot;
+		if (!state.context || !state.doc || !Array.isArray(state.doc.entries)) return;
+		this.#restoringNavigation = true;
+		try {
+			this.#doc = structuredClone(state.doc);
+			this.#dirty = state.dirty;
+			this.#pendingDelete = null;
+			this.#closeArmed = false;
+			this.#entryIndex = state.context.entryIndex;
+			this.#creation = state.context.creation;
+			const index = state.context.entryIndex;
+			switch (state.context.screen) {
+				case "detail": if (index !== undefined) this.#showDetail(index); else this.#showList(); break;
+				case "sources": if (index !== undefined) this.#showSources(index); else this.#showList(); break;
+				case "name":
+					if (index !== undefined) this.#showNameEditor(index);
+					else this.#showNewEntryEditor(state.context.creation?.content, state.context.creation?.from, state.context.creation?.sourceIndex);
+					break;
+				case "mode": if (index !== undefined) this.#showModePicker(index); else this.#showList(); break;
+				case "path":
+				case "literal":
+					if (index !== undefined) this.#showFieldEditor(index, state.context.screen, state.context.screen === "path" ? "Path relative to the agent directory" : "Literal text in the system prompt to replace");
+					else this.#showList();
+					break;
+				case "content": if (index !== undefined) this.#showContentEditor(index, this.#doc.entries[index]?.builtin); else this.#showList(); break;
+				default: this.#showList();
+			}
+			if (this.#active instanceof Input && typeof state.content === "object" && state.content !== null) {
+				const field = state.content as { value?: string; cursor?: number };
+				if (typeof field.value === "string") this.#active.setValue(field.value);
+				if (typeof field.cursor === "number") this.#active.setCursor(field.cursor);
+			} else if (isMenuHistoryParticipant(this.#active)) this.#active.restoreNavigation(state.content);
+			this.#previewScroll = state.previewScroll;
+		} finally { this.#restoringNavigation = false; }
+	}
+
+	leaveMenu(): void {
+		this.#pendingDelete = null;
+		this.#closeArmed = false;
 	}
 }

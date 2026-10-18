@@ -167,7 +167,7 @@ describe("PersonaConfigOverlayComponent", () => {
 		press(SPACE, "s");
 		await Bun.sleep(0);
 		expect(saved.at(-1)?.entries[0]?.sources?.[1]?.value).toBe("1");
-		press(ESC);
+		press("h");
 		expect(frame()).toContain("Context sources");
 	});
 
@@ -199,7 +199,7 @@ describe("PersonaConfigOverlayComponent", () => {
 			sourcesRaw: { nested: { value: 1 } },
 		});
 		const cloned = makeOverlay({ entries: [builtin] }, "live");
-		cloned.press(ENTER, DOWN, DOWN, ENTER, SPACE, ESC, DOWN, ENTER, ENTER);
+		cloned.press(ENTER, DOWN, DOWN, ENTER, SPACE, "h", DOWN, ENTER, ENTER);
 		cloned.press(DOWN, DOWN, DOWN, ENTER, SPACE, "s");
 		await Bun.sleep(0);
 		const saved = cloned.saved.at(-1);
@@ -207,5 +207,47 @@ describe("PersonaConfigOverlayComponent", () => {
 		expect(saved?.entries[1]?.sources?.[0]?.value).toBe(false);
 		expect(saved?.entries[0]?.sources).not.toBe(saved?.entries[1]?.sources);
 		expect(saved?.entries[0]?.sourcesRaw).not.toBe(saved?.entries[1]?.sourcesRaw);
+	});
+
+	it("keeps search literal, visits nested pages, and restores a safe field draft", () => {
+		const { overlay, press, saved } = makeOverlay({ entries: [entry("hjkl"), entry("beta")] });
+		const visits: { page: string; previous: unknown }[] = [];
+		overlay.onNavigationVisit = (page, previous) => { visits.push({ page, previous }); };
+		press("/", "hjkl", ESC, "l");
+		expect(visits.at(-1)?.page).toBe("detail:0");
+		const detail = overlay.navigationSnapshot();
+		press("l", "\x15", "draft hjkl");
+		const draft = overlay.navigationSnapshot();
+		expect(draft.context.screen).toBe("name");
+		const restored = makeOverlay({ entries: [entry("other")] });
+		restored.overlay.restoreNavigation(draft);
+		expect(restored.overlay.navigationSnapshot()).toEqual(draft);
+		restored.press(ENTER, "s");
+		expect(saved).toEqual([]);
+		overlay.restoreNavigation(detail);
+		expect(overlay.navigationSnapshot()).toEqual(detail);
+		const count = visits.length;
+		overlay.restoreNavigation(detail);
+		expect(visits).toHaveLength(count);
+	});
+
+	it("uses h for parent, closes nested lists with Esc, and keeps Space off Delete", () => {
+		const nested = makeOverlay({ entries: [entry("alpha")] });
+		nested.press("l", "G", "k", SPACE);
+		expect(nested.overlay.navigationSnapshot().doc.entries).toHaveLength(1);
+		nested.press("h");
+		expect(nested.overlay.navigationSnapshot().context.screen).toBe("list");
+		nested.press("l", ESC);
+		expect(nested.isClosed()).toBe(true);
+	});
+	it("preserves a registered multiline prompt draft without submitting it", () => {
+		const original = makeOverlay({ entries: [entry("alpha")] });
+		original.press("l", "/", "Content", ESC, ENTER, " draft hjkl");
+		const snapshot = original.overlay.navigationSnapshot();
+		expect(snapshot.context.screen).toBe("content");
+		const restored = makeOverlay({ entries: [entry("beta")] });
+		restored.overlay.restoreNavigation(snapshot);
+		expect(restored.overlay.navigationSnapshot()).toEqual(snapshot);
+		expect(restored.saved).toEqual([]);
 	});
 });

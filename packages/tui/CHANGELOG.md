@@ -15,6 +15,7 @@
 - Menu search fields share literal editing, consistent muted hints, and restorable caret/focus state across custom pickers ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Settings and plugin configuration support explicit search, shared navigation, and nested menu history that preserves safe unsaved editor drafts ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Shared tabs and transcript viewers support consistent Vim navigation and restore their context and viewport without moving selected content ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Persona configuration preserves safe text drafts and nested page state while using explicit search and consistent menu navigation ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 
 ### Fixed
 

@@ -879,7 +879,7 @@ export class ChainConfigOverlayComponent implements Component {
 				this.#showStep(chainIndex, stepIndex, "prompt");
 			},
 			() => this.#showStep(chainIndex, stepIndex, "prompt"),
-			{ externalEditor: this.#deps.externalEditor },
+			{ externalEditor: this.#deps.externalEditor, menuHistory: true },
 		);
 		this.#setScreen("prompt", editor, "");
 	}
@@ -900,7 +900,7 @@ export class ChainConfigOverlayComponent implements Component {
 				this.#showStep(chainIndex, stepIndex, "systemPrompt");
 			},
 			() => this.#showStep(chainIndex, stepIndex, "systemPrompt"),
-			{ externalEditor: this.#deps.externalEditor },
+			{ externalEditor: this.#deps.externalEditor, menuHistory: true },
 		);
 		this.#setScreen("systemPrompt", editor, "");
 	}
