@@ -40,6 +40,7 @@
 - Tree navigation adds contextual collapse/expand, `/` search, filter tabs, restorable label drafts, and independent scrolling; `Ctrl-O` belongs to menu history ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Custom-hosted menu navigation respects its supplied keybinding registry without changing other menus' global bindings ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - `/agents` preserves search, pane and choice context, embedded model selection, and unsent creation drafts without applying chip choices or replaying generation on history restore ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Plan-save path entry keeps printable navigation letters, slashes, and spaces literal even when submit keys are remapped; only explicit save confirms the one-shot dialog ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Added per-widget text templates for usage bars (`{label}`, `{percent}`, `{age}`), editable in `/statusline` with Tab ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 
 ### Changed

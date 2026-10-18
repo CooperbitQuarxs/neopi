@@ -6,6 +6,7 @@ import { col, keyed, span, text } from "../native/describe";
 import type { NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton } from "../native/overlay";
 import { getKeybindings } from "../keybindings";
+import { extractPrintableText } from "../keys";
 
 /** A confirmed destination chosen from {@link PlanSaveOverlay}. */
 export interface PlanSaveOverlayResult {
@@ -49,7 +50,9 @@ export class PlanSaveOverlay implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
-		this.#input.handleInput(data);
+		const printable = extractPrintableText(data);
+		if (printable !== undefined) this.#input.pasteText(printable);
+		else this.#input.handleInput(data);
 	}
 
 	/** Routes enhanced clipboard pastes into the path input. */
