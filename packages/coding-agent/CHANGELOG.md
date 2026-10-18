@@ -55,6 +55,7 @@
 
 ### Changed
 
+- `/statusline` autosaves an unapplied draft to `neopi-statusline-draft.json` and restores it on reopen or restart; `s` applies usage-bar templates, widgets, and composer without closing, and Escape asks before applying ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 - Fork extensions now use NeoPi names and migrate existing persona, loadout, REPL, and live-persona state on first read.
 - Use `npi update` for the fork's PR-based update workflow and `npi flash` for portable builds.
 - The Dictation model role supports xAI alongside the independent Ctrl+Space whole-recording path.
