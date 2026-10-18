@@ -34,6 +34,7 @@ import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with
 import { type LiveDelegationDelivery, LiveSessionController } from "../src/live/controller";
 import type { LiveServerEvent } from "../src/live/protocol";
 import { LIVE_DELEGATION_MESSAGE_TYPE } from "../src/session/messages";
+import { buildLiveDelegationMessage } from "../src/live/delegation-note";
 
 const COLLAB_PROMPT_TYPE = "collab-prompt";
 const IMAGE_SOURCE_PATH = "/tmp/private-project/screenshot.png";
@@ -145,6 +146,72 @@ describe("AgentSession queued steer delivery", () => {
 		};
 		return promise;
 	}
+
+	it.each(["steer", "followUp"] as const)(
+		"restores queued vocal %s text on Esc without voice-agent prose",
+		async mode => {
+			const { session } = await createSession([{ content: ["active answer"], delayMs: 1_000 }]);
+			const streaming = Promise.withResolvers<void>();
+			const unsubscribe = session.subscribe(event => {
+				if (event.type === "message_start" && event.message.role === "assistant") streaming.resolve();
+			});
+			const run = session.prompt("existing task").catch(() => {});
+			try {
+				await withTimeout(streaming.promise, 2_000, "Active response did not start");
+				const { content, details } = buildLiveDelegationMessage(
+					"canonical operator request",
+					"Iris routing prose",
+					true,
+				);
+				const delivery = session.sendCustomMessageWithReceipt(
+					{ customType: LIVE_DELEGATION_MESSAGE_TYPE, content, details, display: true, attribution: "agent" },
+					{ triggerTurn: true, deliverAs: mode, steeringInterruptMode: "wait" },
+				);
+				void delivery.completed.catch(() => {});
+				await delivery.accepted;
+				expect(session.getQueuedMessages()[mode === "steer" ? "steering" : "followUp"]).toEqual([
+					"canonical operator request",
+				]);
+				const restored = session.clearQueue({ forInterrupt: true });
+				await session.abort({ reason: USER_INTERRUPT_LABEL });
+				expect(restored[mode === "steer" ? "steering" : "followUp"]).toEqual([
+					{ text: "canonical operator request", images: undefined },
+				]);
+				expect(session.agent.hasQueuedMessages()).toBe(false);
+			} finally {
+				unsubscribe();
+				await session.abort({ reason: USER_INTERRUPT_LABEL });
+				await run;
+			}
+		},
+	);
+
+	it("dequeues only canonical operator speech and leaves voice-only provenance unrestorable", async () => {
+		const { session } = await createSession([]);
+		const operator = buildLiveDelegationMessage("spoken request", "Iris routing prose", true);
+		const note = buildLiveDelegationMessage("", "Iris question", true);
+		session.agent.followUp({
+			role: "custom",
+			customType: LIVE_DELEGATION_MESSAGE_TYPE,
+			...operator,
+			display: true,
+			attribution: "agent",
+			timestamp: 1,
+		});
+		session.agent.followUp({
+			role: "custom",
+			customType: LIVE_DELEGATION_MESSAGE_TYPE,
+			...note,
+			display: true,
+			attribution: "agent",
+			timestamp: 2,
+		});
+		expect(session.agent.peekFollowUpQueue()[0]).toMatchObject({ attribution: "agent" });
+		expect(session.getQueuedMessages().followUp).toEqual(["spoken request"]);
+		expect(session.popLastQueuedMessage()).toEqual({ text: "spoken request", images: undefined });
+		expect(session.popLastQueuedMessage()).toBeUndefined();
+		expect(session.clearQueue({ forInterrupt: true })).toEqual({ steering: [], followUp: [] });
+	});
 
 	it.each(["steer", "followUp"] as const)(
 		"delivers a live %s once without aborting the active tool or reasoning turn",
