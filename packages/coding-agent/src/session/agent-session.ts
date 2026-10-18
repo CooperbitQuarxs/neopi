@@ -441,6 +441,7 @@ import {
 	type AdvisorCatchupOptions,
 	type AdvisorStats,
 	type AdvisorStatusOverviewEntry,
+	type LiveAdvisor,
 	SessionAdvisors,
 	type SessionAdvisorsHost,
 } from "./session-advisors";
@@ -486,7 +487,7 @@ import { YieldQueue } from "./yield-queue";
 
 export * from "./agent-session-events";
 export * from "./agent-session-types";
-export type { AdvisorStats, AdvisorStatusOverviewEntry, PerAdvisorStat } from "./session-advisors";
+export type { AdvisorStats, AdvisorStatusOverviewEntry, LiveAdvisor, PerAdvisorStat } from "./session-advisors";
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
 /** Assistant thinking+reply words a deferred auto-title waits for before retitling from context. */
@@ -14531,6 +14532,16 @@ export class AgentSession implements SettingsScope {
 	 */
 	getAdvisorAgent(): Agent | undefined {
 		return this.#advisors.getAdvisorAgent();
+	}
+
+	/** Advisors whose runtimes are live now (agent + transcript file), in roster order. */
+	liveAdvisors(): LiveAdvisor[] {
+		return this.#advisors.liveAdvisors();
+	}
+
+	/** Notified after advisor runtimes start, stop, or rebuild. */
+	onLiveAdvisorsChange(listener: () => void): () => void {
+		return this.#advisors.onLiveAdvisorsChange(listener);
 	}
 
 	/** WATCHDOG.yml problems from startup discovery; shown by the UI once it is ready. */

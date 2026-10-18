@@ -178,6 +178,7 @@ import type { MnemopiSessionState } from "./mnemopi/state";
 import mcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
+import { trackLiveAdvisors } from "./registry/live-advisors";
 import {
 	type AgentKind,
 	type AgentRef,
@@ -5502,6 +5503,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			throw new Error(`Agent "${resolvedAgentId}" was replaced during session initialization.`);
 		}
 		hasRegistered = true;
+		// Advisor refs follow the advisor runtimes (running/idle/parked), not just disk discovery.
+		const stopAdvisorTracking = trackLiveAdvisors({ registry: agentRegistry, ownerId: resolvedAgentId, session });
 		// MCP notification bridge cleanup — assigned when the bridge is wired below,
 		// invoked from the dispose wrapper AND registered as a postmortem so both
 		// explicit-dispose (SDK embedders that reuse the process across sessions) and
@@ -5557,6 +5560,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						}
 					}
 					unregisterUnlessParked();
+					stopAdvisorTracking();
 					unsubscribeCredentialDisabled();
 					unbindSessionEffects?.();
 					restoreProviderToggles?.();
