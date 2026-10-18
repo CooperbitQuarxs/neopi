@@ -100,6 +100,83 @@ describe("PersonaConfigOverlayComponent", () => {
 		expect(isClosed()).toBe(true);
 	});
 
+	it.each(["replace", "prepend", "append", "literal-substitute"] as const)(
+		"clones a file-backed %s persona without changing its definition",
+		async mode => {
+			const original = entry("alpha", {
+				mode,
+				sourceKind: "file",
+				content: "",
+				path: "personas/alpha.md",
+				literal: "replace this",
+				inheritToTasks: true,
+			});
+			const { press, saved } = makeOverlay({ entries: [original] });
+			press(ENTER, DOWN, DOWN, DOWN, DOWN, DOWN);
+			if (mode === "literal-substitute") press(DOWN);
+			press(DOWN, ENTER, ENTER, "s");
+			await Bun.sleep(0);
+			expect(saved.at(-1)?.entries[1]).toEqual({
+				...original,
+				name: "alpha-copy",
+				originalName: undefined,
+				sources: undefined,
+				sourcesRaw: undefined,
+			});
+		},
+	);
+
+	it("locks editing and closing until an asynchronous save completes", async () => {
+		const pending = Promise.withResolvers<string>();
+		const doc: PersonaConfigDoc = { entries: [entry("alpha")] };
+		let saves = 0;
+		let closed = false;
+		const overlay = new PersonaConfigOverlayComponent({} as TUI, { variant: "persona" }, doc, {
+			save: () => {
+				saves++;
+				return pending.promise;
+			},
+			close: () => {
+				closed = true;
+			},
+			requestRender: () => {},
+		});
+		overlay.handleInput(SPACE);
+		overlay.handleInput("s");
+		for (const key of [SPACE, DELETE, DELETE, ENTER, "s", ESC, ESC]) overlay.handleInput(key);
+		expect(doc.entries).toHaveLength(1);
+		expect(doc.active).toBe("alpha");
+		expect(closed).toBe(false);
+		expect(saves).toBe(1);
+		pending.resolve("saved");
+		await Bun.sleep(0);
+		overlay.handleInput(SPACE);
+		overlay.handleInput(ESC);
+		expect(closed).toBe(false);
+		expect(overlay.render(100).join("\n")).toContain("Unsaved changes");
+	});
+
+	it.each(["persona", "live"] as const)("renders terminal-safe %s preview fields", variant => {
+		const { frame, press } = makeOverlay(
+			{
+				entries: [entry("alpha", { content: "before\tafter", mode: "literal-substitute", literal: "old\ttext" })],
+			},
+			variant,
+		);
+		expect(frame()).not.toContain("\t");
+		press(ENTER);
+		expect(frame()).not.toContain("\t");
+		const file = makeOverlay(
+			{
+				entries: [entry("alpha", { sourceKind: "file", path: "folder\tname/persona.md" })],
+			},
+			variant,
+		);
+		expect(file.frame()).not.toContain("\t");
+		file.press(ENTER);
+		expect(file.frame()).not.toContain("\t");
+	});
+
 	it("keeps the live built-in default immutable but cloneable", async () => {
 		const builtin = entry("default", { builtin: true, originalName: undefined, content: "bundled" });
 		const { press, saved } = makeOverlay({ entries: [builtin] }, "live");
