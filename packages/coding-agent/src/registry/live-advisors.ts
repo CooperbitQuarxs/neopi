@@ -38,6 +38,33 @@ export interface LiveAdvisorTrackerOptions {
 	session: Pick<AgentSession, "liveAdvisors" | "onLiveAdvisorsChange">;
 }
 
+function unregisterOwned(registry: AgentRegistry, owned: Map<string, AgentRef>): void {
+	for (const [id, ref] of owned) registry.unregister(id, ref);
+	owned.clear();
+}
+
+/**
+ * Unregister `owned` once `owner` is no longer the ref under `ownerId`. This listener stays on
+ * the registry while the owner is parked, after its session is disposed, so it lives outside
+ * {@link trackLiveAdvisors}: a closure there would keep that scope, and with it the session,
+ * reachable. `tracker.stop` is the only link back and is cleared when tracking stops.
+ */
+function unregisterOnOwnerExit(
+	registry: AgentRegistry,
+	ownerId: string,
+	owner: AgentRef,
+	owned: Map<string, AgentRef>,
+	tracker: { stop?: () => void },
+): () => void {
+	const unsubscribe = registry.onChange(event => {
+		if (event.ref.id !== ownerId || registry.get(ownerId) === owner) return;
+		tracker.stop?.();
+		unregisterOwned(registry, owned);
+		unsubscribe();
+	});
+	return unsubscribe;
+}
+
 /** Mirror `session`'s advisor runtimes into `registry`; the returned stop runs at the owner's dispose. */
 export function trackLiveAdvisors(options: LiveAdvisorTrackerOptions): () => void {
 	const { registry, ownerId, session } = options;
@@ -55,16 +82,12 @@ export function trackLiveAdvisors(options: LiveAdvisorTrackerOptions): () => voi
 	let stopped = false;
 	let unsubscribeChanges = () => {};
 	let unsubscribeOwner = () => {};
+	const tracker: { stop?: () => void } = {};
 
 	const forget = (id: string, entry: TrackedAdvisor): void => {
 		entry.unsubscribe();
 		tracked.delete(id);
 		if (directory.get(id) === entry.agent) directory.delete(id);
-	};
-
-	const removeOwned = (): void => {
-		for (const [id, ref] of owned) registry.unregister(id, ref);
-		owned.clear();
 	};
 
 	const sync = (): void => {
@@ -132,22 +155,19 @@ export function trackLiveAdvisors(options: LiveAdvisorTrackerOptions): () => voi
 	const stop = (): void => {
 		if (stopped) return;
 		stopped = true;
+		tracker.stop = undefined;
 		unsubscribeChanges();
 		for (const [id, entry] of [...tracked]) {
 			forget(id, entry);
 			registry.setStatus(id, "parked", entry.ref);
 		}
 		if (registry.get(ownerId) !== owner) {
-			removeOwned();
+			unregisterOwned(registry, owned);
 			unsubscribeOwner();
 		}
 	};
-	unsubscribeOwner = registry.onChange(event => {
-		if (event.ref.id !== ownerId || registry.get(ownerId) === owner) return;
-		stop();
-		removeOwned();
-		unsubscribeOwner();
-	});
+	unsubscribeOwner = unregisterOnOwnerExit(registry, ownerId, owner, owned, tracker);
+	tracker.stop = stop;
 	sync();
 	unsubscribeChanges = session.onLiveAdvisorsChange(sync);
 	return stop;
