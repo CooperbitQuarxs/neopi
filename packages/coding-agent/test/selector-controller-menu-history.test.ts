@@ -160,6 +160,34 @@ describe("controller menu timeline", () => {
 		expect(h.overlayStack).toHaveLength(1);
 	});
 
+	it("keeps an external host registered when its covered handle is raised", () => {
+		const h = harness();
+		const closed: boolean[] = [];
+		const external: Component = { render: () => [] };
+		const open = () => {
+			const host = h.controller.openMenu("jobs-panel", open);
+			if (!host) return;
+			host.mount(external, () => {
+				const handle = h.showOverlay(external);
+				const hide = handle.hide.bind(handle);
+				handle.hide = () => {
+					closed.push(host.close());
+					hide();
+				};
+				return handle;
+			});
+		};
+		open();
+		h.open("settings");
+		open();
+		open();
+		expect(closed).toEqual([false]);
+		expect(h.shown).toHaveLength(3);
+		expect(h.overlayStack).toHaveLength(2);
+		expect(h.focused()).toBe(external);
+		expect(h.controller.openMenu("jobs-panel", open)).toBeUndefined();
+	});
+
 	it("does not treat an editor-slot prompt as an overlay history blocker", () => {
 		const h = harness();
 		h.open("settings");

@@ -309,6 +309,8 @@ export class SelectorController {
 	#menuHistory = new MenuHistory<MenuLocation, MenuVisitState>("conversation");
 	/** True while history itself opens and closes menus, which are then not new visits. */
 	#navigatingHistory = false;
+	/** Raising a covered external host replaces its handle, not its history lifetime. */
+	#remountingMenu: OpenMenu | undefined;
 	/** Snapshot to hand to the `kind` menu as soon as its history reopen mounts it. */
 	#pendingRestore: { kind: MenuKind; location: MenuLocation; snapshot: unknown } | undefined;
 
@@ -320,7 +322,7 @@ export class SelectorController {
 		return {
 			mount: (component, mount) => this.#mountMenu(menu, component, mount),
 			close: () => {
-				if (this.#openMenus.get(kind) !== menu) return false;
+				if (this.#openMenus.get(kind) !== menu || this.#remountingMenu === menu) return false;
 				this.#releaseMenu(kind, menu);
 				return true;
 			},
@@ -360,8 +362,13 @@ export class SelectorController {
 			this.#menuHistory.visit(open.location, this.#menuState(open));
 		}
 		if (open.component && open.mount && this.#isCovered(open.component)) {
-			open.handle?.hide();
-			open.handle = open.mount();
+			this.#remountingMenu = open;
+			try {
+				open.handle?.hide();
+				open.handle = open.mount();
+			} finally {
+				this.#remountingMenu = undefined;
+			}
 		} else if (open.component) {
 			this.ctx.ui.setFocus(open.component);
 		}
