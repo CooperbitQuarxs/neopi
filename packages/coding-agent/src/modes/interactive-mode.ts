@@ -301,6 +301,7 @@ import { SelectorController } from "./controllers/selector-controller";
 import { SessionFocusController } from "./controllers/session-focus-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TanCommandController } from "./controllers/tan-command-controller";
+import { IssueCommandController } from "./controllers/issue-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
 import { imageReferenceHyperlink } from "@oh-my-pi/pi-tui/prompt/image-references";
 import { describeLoopCondition, evaluateLoopCondition, type LoopConditionVerdict } from "./loop-condition";
@@ -1612,6 +1613,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #codexResetFireworksController: CodexResetFireworksController;
 	readonly #btwController: BtwController;
 	readonly #tanCommandController: TanCommandController;
+	readonly #issueCommandController: IssueCommandController;
 	readonly #omfgController: OmfgController;
 	readonly #cleanseController: CleanseCommandController;
 	readonly #commandController: CommandController;
@@ -2032,6 +2034,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#uiHelpers = new UiHelpers(this);
 		this.#btwController = new BtwController(this);
 		this.#tanCommandController = new TanCommandController(this);
+		this.#issueCommandController = new IssueCommandController(this);
 		this.#omfgController = new OmfgController(this);
 		this.#cleanseController = new CleanseCommandController(this);
 		this.#extensionUiController = new ExtensionUiController(this);
@@ -8292,6 +8295,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleTanCommand(work: string): Promise<void> {
 		return this.#tanCommandController.start(work);
+	}
+
+	handleIssueCommand(prose: string): Promise<void> {
+		return this.#issueCommandController.start(prose);
 	}
 
 	hasActiveBtw(): boolean {
