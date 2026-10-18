@@ -3,6 +3,7 @@ import { KeybindingsManager } from "../src/app-keybindings";
 import { MoveOverlay, type MoveOverlayResult } from "../src/overlays/move-overlay";
 import { AnnotationOverlay } from "../src/overlays/annotation-overlay";
 import { AgentTranscriptViewer, type AgentTranscriptViewerDeps } from "../src/overlays/agent-transcript-viewer";
+import { getKeybindings, setKeybindings } from "../src/keybindings";
 import { BtwHistoryPanel } from "../src/overlays/btw-history-panel";
 import type { BtwHistoryRecord } from "../src/overlays/btw-history";
 import { CodexResetFireworksController } from "../src/overlays/codex-reset-fireworks";
@@ -111,6 +112,7 @@ describe("AnnotationOverlay native esc", () => {
 describe("AgentTranscriptViewer native esc", () => {
 	it("leaves a focused message field without discarding its draft, then returns to the hub", () => {
 		const onClose = vi.fn();
+		const previous = getKeybindings();
 		const missing = (): never => {
 			throw Object.assign(new Error("missing"), { code: "ENOENT" });
 		};
@@ -136,9 +138,19 @@ describe("AgentTranscriptViewer native esc", () => {
 			viewer.handleInput("i");
 			expect(viewer.navigationSnapshot()).toMatchObject({ focus: "view", editor: { text: "" } });
 			viewer.handleInput("\t");
-			viewer.handleInput("hjkl / draft");
+			setKeybindings(KeybindingsManager.inMemory({
+				"tui.select.cancel": ["escape", "h"],
+				"tui.select.nextContext": ["tab", "j"],
+				"tui.select.prevContext": ["shift+tab", "k"],
+				"tui.editor.submit": "l",
+				"tui.editor.jumpForward": "ctrl+]",
+			}));
+			for (const key of "hjkl / draft") viewer.handleInput(key);
+			viewer.handleInput("\x01");
+			viewer.handleInput("\x1d");
+			viewer.handleInput("j");
 			const draft = viewer.navigationSnapshot();
-			expect(draft).toMatchObject({ focus: "editor", editor: { text: "hjkl / draft" } });
+			expect(draft).toMatchObject({ focus: "editor", editor: { text: "hjkl / draft", cursor: { line: 0, col: 1 } } });
 			const restored = new AgentTranscriptViewer(deps);
 			try {
 				restored.restoreNavigation(draft);
@@ -150,6 +162,7 @@ describe("AgentTranscriptViewer native esc", () => {
 			viewer.handleNativeEvent(CLOSE_CLICK);
 			expect(onClose).toHaveBeenCalledTimes(1);
 		} finally {
+			setKeybindings(previous);
 			viewer.dispose();
 		}
 	});

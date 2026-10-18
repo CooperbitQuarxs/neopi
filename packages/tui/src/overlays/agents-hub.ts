@@ -35,6 +35,7 @@ import { shortenPath } from "../render/render-utils";
 import { sanitizeDisplaySingleLine } from "./extensions/display-text";
 import { getEditorTheme, theme } from "../theme";
 import { matchesAppFollowUp, matchesSelectCancel } from "../keybinding-matchers";
+import { extractPrintableText } from "../keys";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
 import { boundKeys, editorKey } from "../chrome/keybinding-hints";
 import {
@@ -968,6 +969,18 @@ export class AgentsHubComponent implements Component {
 					this.#requestRender();
 				});
 			} else if (!action && data.toLowerCase() === "r") void this.#generateAgentFromDescription(this.#createDescription);
+			return;
+		}
+		const editor = this.#createInput;
+		if (editor?.isJumpPending) {
+			editor.handleInput(data);
+			this.#createDescription = editor.getExpandedText();
+			return;
+		}
+		const text = extractPrintableText(data);
+		if (text !== undefined && editor) {
+			editor.typeCharacter(text);
+			this.#createDescription = editor.getExpandedText();
 			return;
 		}
 		if (matchesSelectCancel(data)) {

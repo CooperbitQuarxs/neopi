@@ -1,9 +1,19 @@
-import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { BtwHistoryPanel } from "../src/overlays/btw-history-panel";
 import type { BtwHistoryRecord } from "../src/overlays/btw-history";
 import { initTheme } from "../src/theme/theme";
+import type { Input } from "../src/components/input";
+import { KeybindingsManager } from "../src/app-keybindings";
+import { setKeybindings } from "../src/keybindings";
+import { SPACE_HOLD_MECHANICAL_RUN, SPACE_HOLD_RELEASE_MS, type SpaceHoldHandler } from "../src/space-hold";
 
 beforeAll(async () => { await initTheme(); });
+beforeEach(() => setKeybindings(KeybindingsManager.inMemory()));
+afterEach(() => {
+	setKeybindings(KeybindingsManager.inMemory());
+	vi.useRealTimers();
+	vi.restoreAllMocks();
+});
 
 const records: BtwHistoryRecord[] = Array.from({ length: 40 }, (_, i) => ({
 	id: `question-${i}`, leafId: null, question: `Question ${i}`,
@@ -11,10 +21,13 @@ const records: BtwHistoryRecord[] = Array.from({ length: 40 }, (_, i) => ({
 	status: "complete", createdAt: i, updatedAt: i,
 }));
 
-function create(options: { onFollowUp?: (record: BtwHistoryRecord, question: string, signal: AbortSignal) => Promise<boolean> } = {}) {
+function create(options: {
+	onFollowUp?: (record: BtwHistoryRecord, question: string, signal: AbortSignal) => Promise<boolean>;
+	spaceHold?: (input: Input) => SpaceHoldHandler;
+} = {}) {
 	return new BtwHistoryPanel({ records, onClose: () => {}, onCopy: () => {}, onCancel: () => {},
 		canFollowUp: () => true, onFollowUp: options.onFollowUp ?? (async () => true),
-		requestRender: () => {}, getHeight: () => 24 });
+		spaceHold: options.spaceHold, requestRender: () => {}, getHeight: () => 24 });
 }
 
 function state(panel: BtwHistoryPanel) {
@@ -113,6 +126,82 @@ describe("BTW menu navigation and safe history", () => {
 			await accepted.promise;
 			expect(panel.blocksMenuHistory).toBe(false);
 			expect(state(panel).composer?.value).toBe("safe question");
+		} finally { panel.dispose(); }
+	});
+
+	it("keeps remapped printable menu actions literal in follow-up drafts", async () => {
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.select.cancel": ["escape", "j"],
+			"tui.input.submit": ["enter", "k"],
+			"tui.editor.deleteCharBackward": ["backspace", "h"],
+			"tui.editor.deleteCharForward": ["delete", "/"],
+			"tui.select.nextContext": ["tab", "g"],
+			"tui.select.prevContext": ["shift+tab", "l"],
+		}));
+		const accepted = Promise.withResolvers<boolean>();
+		const onFollowUp = vi.fn(() => accepted.promise);
+		const panel = create({ onFollowUp });
+		try {
+			panel.openFollowUp("question-0");
+			for (const character of "hjklggG / ") panel.handleInput(character);
+			expect(state(panel).composer?.value).toBe("hjklggG / ");
+			expect(onFollowUp).not.toHaveBeenCalled();
+			panel.handleInput("\r");
+			expect(onFollowUp).toHaveBeenCalledTimes(1);
+			accepted.resolve(false);
+			await accepted.promise;
+			panel.handleInput("\x1b");
+			expect(state(panel).composer).toBeUndefined();
+			panel.openFollowUp("question-0");
+			expect(state(panel).composer?.value).toBe("hjklggG / ");
+		} finally { panel.dispose(); }
+	});
+
+	it("preserves sustained Space, Backspace latching, and non-space release while typing literal actions", () => {
+		vi.useFakeTimers();
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.select.cancel": ["escape", "j"],
+			"tui.input.submit": ["enter", "k"],
+		}));
+		const events: string[] = [];
+		const onFollowUp = vi.fn(async () => false);
+		const panel = create({
+			onFollowUp,
+			spaceHold: () => ({
+				enabled: () => true,
+				onStart: () => events.push("start"),
+				onEnd: () => events.push("end"),
+				onLatch: () => events.push("latch"),
+			}),
+		});
+		const hold = (): void => {
+			for (let index = 0; index < SPACE_HOLD_MECHANICAL_RUN + 2; index++) {
+				vi.advanceTimersByTime(30);
+				panel.handleInput(" ");
+			}
+		};
+		try {
+			panel.openFollowUp("question-0");
+			panel.handleInput("h"); panel.handleInput("i");
+			hold();
+			expect(state(panel).composer?.value).toBe("hi");
+			expect(events).toEqual(["start"]);
+			panel.handleInput("\x7f");
+			expect(events).toEqual(["start", "latch"]);
+			vi.advanceTimersByTime(SPACE_HOLD_RELEASE_MS * 4);
+			panel.handleInput("j");
+			expect(state(panel).composer?.value).toBe("hij");
+			expect(events).toEqual(["start", "latch"]);
+			panel.handleInput(" ");
+			expect(state(panel).composer?.value).toBe("hij");
+			expect(events).toEqual(["start", "latch", "end"]);
+			hold();
+			panel.handleInput("k");
+			expect(state(panel).composer?.value).toBe("hijk");
+			expect(events).toEqual(["start", "latch", "end", "start", "end"]);
+			expect(onFollowUp).not.toHaveBeenCalled();
+			panel.handleInput("\x7f");
+			expect(state(panel).composer?.value).toBe("hij");
 		} finally { panel.dispose(); }
 	});
 });

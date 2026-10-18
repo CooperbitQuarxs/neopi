@@ -12,6 +12,8 @@ import { AgentsHubComponent, type AgentsHubDeps, type HubAgent, parseGeneratedAg
 import { initTheme } from "../src/theme";
 import type { TUI } from "../src/index";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
+import { KeybindingsManager } from "../src/app-keybindings";
+import { getKeybindings, setKeybindings } from "../src/keybindings";
 
 const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const OVERRIDE_KEYS = {
@@ -581,6 +583,42 @@ describe("AgentsHub navigation history", () => {
 			expect(saveCalls).toBe(0);
 		} finally { hub.dispose(); restored.hub.dispose(); }
 	});
+	test("description typing owns printable shortcut remaps and pending character-jump targets", async () => {
+		let generations = 0;
+		let saves = 0;
+		const { hub } = await createHub(new TestSettings(), {
+			generateAgent: async () => { generations++; return ""; },
+			saveAgent: async () => { saves++; return ""; },
+		});
+		const previous = getKeybindings();
+		try {
+			hub.handleInput("G");
+			hub.handleInput("\r");
+			setKeybindings(KeybindingsManager.inMemory({
+				"tui.select.cancel": ["escape", "h"],
+				"app.message.followUp": ["ctrl+q", "j"],
+				"tui.editor.deleteCharBackward": "k",
+				"tui.editor.submit": "l",
+				"tui.editor.jumpForward": "ctrl+]",
+			}));
+			for (const key of "hjkl /") hub.handleInput(key);
+			expect(hub.navigationSnapshot().create).toMatchObject({ description: "hjkl /", editor: { text: "hjkl /" } });
+			hub.handleInput("\x01");
+			hub.handleInput("\x1d");
+			hub.handleInput("j");
+			expect(hub.navigationSnapshot().create).toMatchObject({
+				description: "hjkl /", editor: { text: "hjkl /", cursor: { line: 0, col: 1 } },
+			});
+			expect(generations).toBe(0);
+			expect(saves).toBe(0);
+			hub.handleInput("\x1b");
+			expect(hub.navigationSnapshot().create).toBeUndefined();
+		} finally {
+			setKeybindings(previous);
+			hub.dispose();
+		}
+	});
+
 
 	test("only explicit generation and save run requests; pending operations block history", async () => {
 		const generation = Promise.withResolvers<string>();

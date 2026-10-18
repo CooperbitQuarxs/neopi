@@ -37,6 +37,7 @@ import { actionBar, actionButton } from "../native/overlay";
 import { plainText } from "../native/spans";
 import { sanitizeCarriageReturns } from "../render/render-utils";
 import type { EditorNavigationState } from "../components/editor";
+import { extractPrintableText } from "../keys";
 
 /** Root role of the native sheet. */
 const ROLE = "omp.overlay.hook-editor";
@@ -319,6 +320,15 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 				}
 			}
 			if (paste.remaining.length > 0) this.handleInput(paste.remaining);
+			return;
+		}
+		if (this.#editor.isJumpPending) {
+			this.#editor.handleInput(keyData);
+			return;
+		}
+		const text = extractPrintableText(keyData);
+		if (text !== undefined) {
+			this.#editor.typeCharacter(text);
 			return;
 		}
 		if (this.#promptStyle) {
