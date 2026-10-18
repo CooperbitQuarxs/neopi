@@ -141,6 +141,28 @@ afterEach(() => {
 });
 
 describe("Composer side panel: history and geometry", () => {
+	it("keeps the visible suffix of a settled block when newer content retires its head", async () => {
+		const h = await setup();
+		try {
+			const labels = Array.from({ length: 27 }, (_, index) => `E${String(index).padStart(2, "0")}: settled`);
+			h.composer.setSidePanel(h.panel, RIGHT);
+			h.transcript.addChild(new Text(labels.slice(0, 10).join("\n"), 0, 0));
+			h.transcript.addChild(new Text(labels.slice(10, 26).join("\n"), 0, 0));
+			h.composer.ui.requestRender();
+			await h.scheduler.advance(h.term, 160);
+			expect(h.viewport()[0]?.slice(0, 81).trimEnd()).toBe(labels[4]);
+			expectLedgerOnce(h, 25);
+
+			h.transcript.addChild(new Text(labels[26]!, 0, 0));
+			h.composer.ui.requestRender();
+			await h.scheduler.advance(h.term, 160);
+			expect(h.viewport().slice(0, 4).map(row => row.slice(0, 81).trimEnd())).toEqual(labels.slice(6, 10));
+			expectLedgerOnce(h, 26);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
 	it("keeps a rebuilt committed ledger visible above a short docked live tail", async () => {
 		const h = await setup();
 		try {
