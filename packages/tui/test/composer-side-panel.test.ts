@@ -111,6 +111,27 @@ function labelCounts(rows: readonly string[]): Map<string, number> {
 	return counts;
 }
 
+/** Reconstructed history is committed before the short current turn is mounted. */
+function rebuildLedger(h: Harness): void {
+	h.transcript.clear();
+	for (let index = 0; index < 30; index++) h.transcript.addChild(new Text(ledgerLine(index), 0, 0));
+	commitLedger(h);
+	h.transcript.addChild(new Text(ledgerLine(30), 0, 0));
+}
+
+function commitLedger(h: Harness): void {
+	for (;;) {
+		const batch = h.transcript.peekFlushBatch(120);
+		if (!batch) break;
+		h.transcript.acknowledgeFinalizedBatch(batch.id);
+	}
+}
+
+function expectLedgerOnce(h: Harness, end = 30): void {
+	const labels = entryRows([...h.history(), ...h.viewport()]).map(row => row.slice(0, 4));
+	expect(labels).toEqual(Array.from({ length: end + 1 }, (_, index) => `E${String(index).padStart(2, "0")}:`));
+}
+
 beforeAll(async () => {
 	await initTheme();
 });
@@ -120,6 +141,66 @@ afterEach(() => {
 });
 
 describe("Composer side panel: history and geometry", () => {
+	it("keeps a rebuilt committed ledger visible above a short docked live tail", async () => {
+		const h = await setup();
+		try {
+			rebuildLedger(h);
+			h.composer.setSidePanel(h.panel, RIGHT);
+			h.composer.ui.resetDisplay();
+			await h.settle();
+			expect(entryRows(h.viewport()).length).toBeGreaterThan(1);
+			expect(h.viewport().some(row => row.startsWith("E29:"))).toBe(true);
+			const counts = labelCounts([...h.history(), ...h.viewport()]);
+			for (let index = 0; index <= 30; index++) expect(counts.get(`E${String(index).padStart(2, "0")}:`)).toBe(1);
+			for (const row of h.history()) expect(Bun.stringWidth(row)).toBeLessThanOrEqual(81);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
+	for (const action of ["dock after replay", "growth", "quit", "undock", "second replay"] as const) {
+		it(`preserves the held ledger exactly once through ${action}`, async () => {
+			const h = await setup();
+			try {
+				rebuildLedger(h);
+				if (action !== "dock after replay") h.composer.setSidePanel(h.panel, RIGHT);
+				h.composer.ui.resetDisplay();
+				await h.settle();
+				if (action === "dock after replay") {
+					h.composer.setSidePanel(h.panel, RIGHT);
+					await h.settle();
+				}
+				expect(h.viewport().some(row => row.startsWith("E29:"))).toBe(true);
+				expectLedgerOnce(h);
+				if (action === "growth") {
+					for (let index = 31; index < 60; index++) {
+						h.transcript.addChild(new Text(ledgerLine(index), 0, 0));
+						h.composer.ui.requestRender();
+						await h.scheduler.advance(h.term, 160);
+						expectLedgerOnce(h, index);
+					}
+					expect(h.history().some(row => row.startsWith("E29:"))).toBe(true);
+				} else if (action === "quit") {
+					h.composer.stop();
+					await h.settle();
+					expectLedgerOnce(h);
+				} else if (action === "undock") {
+					h.composer.setSidePanel(undefined, undefined, { refreshHistory: false });
+					h.composer.ui.requestRender();
+					await h.settle();
+					expectLedgerOnce(h);
+				} else if (action === "second replay") {
+					h.composer.ui.resetDisplay();
+					await h.settle();
+					expectLedgerOnce(h);
+					expect(h.viewport().some(row => row.startsWith("E29:"))).toBe(true);
+				}
+			} finally {
+				h.composer.stop();
+			}
+		});
+	}
+
 	it("retires transcript rows at the painted chat width", async () => {
 		const h = await setup({ entries: 4 });
 		try {
@@ -589,6 +670,30 @@ describe("Composer side panel: inline images", () => {
 		terminal.imageProtocol = originalProtocol;
 		terminal.id = originalId;
 		setKittyGraphics(originalGraphics);
+	});
+
+	it("holds only the text fallback of a replayed image above the live tail", async () => {
+		const h = await setup();
+		try {
+			rebuildLedger(h);
+			h.transcript.addChild(new ImageBlock(h.composer.ui.imageBudget, "held", 4));
+			commitLedger(h);
+			h.transcript.addChild(new Text("LIVE TAIL", 0, 0));
+			h.composer.setSidePanel(h.panel, RIGHT);
+			h.writes.length = 0;
+			h.composer.ui.resetDisplay();
+			await h.settle();
+			expect(h.viewport().some(row => row.includes("image/png"))).toBe(true);
+			expect(h.history().some(row => row.includes("image/png"))).toBe(false);
+			expect(
+				kittyCommands(h.writes.join("")).some(
+					command => command.a === "p" || command.a === "t" || command.a === "T",
+				),
+			).toBe(false);
+			expect(h.writes.join("")).not.toContain("\x1bPq");
+		} finally {
+			h.composer.stop();
+		}
 	});
 
 	function idOf(h: Harness, key: string): number {

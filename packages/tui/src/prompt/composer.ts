@@ -21,7 +21,7 @@ import {
 	type TUIOptions,
 	type ViewportSize,
 } from "../tui";
-import { wrapLiteralLine } from "../utils";
+import { truncateToWidth, wrapLiteralLine } from "../utils";
 import type { NativeChild, NativeSurface, NativeSurfaceProvider } from "../native/node";
 import { sameItems } from "../native/memo";
 import { postmortem } from "@oh-my-pi/pi-utils";
@@ -259,6 +259,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				kind: "append" | "replay";
 				source:
 					| "header"
+					| "held"
 					| {
 							transcript: TranscriptContainer;
 							transcriptId?: number;
@@ -271,6 +272,10 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#historyReplayRequested = false;
 	#headerReplayPending = false;
 	#historyFlush = false;
+	/** Replay rows owned by the docked screen rather than native scrollback. */
+	#heldReplayRows: readonly string[] = [];
+	#pendingHeldReplay: { id: number; rows: readonly string[] } | undefined;
+	#releaseHeldReplay = false;
 	// The welcome header retires to terminal history exactly once, after the
 	// intro settles; until then it renders as mutable viewport chrome.
 	#headerRetired = false;
@@ -333,6 +338,19 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const plan = this.#composeChatColumn(width, rows);
 		this.#lastChatPlan = plan;
 		const padTop = Math.max(0, rows - plan.viewport.length);
+		let held = this.#heldReplayRows;
+		if (plan.history?.kind === "replay" && !this.#historyFlush) {
+			const count = Math.min(padTop, plan.history.rows.length);
+			const split = plan.history.rows.length - count;
+			held = plan.history.rows.slice(split);
+			this.#pendingHeldReplay = { id: plan.history.id, rows: held };
+			this.#lastChatPlan = { ...plan, history: { ...plan.history, rows: plan.history.rows.slice(0, split) } };
+		} else if (this.#offeredHistory?.source === "held") {
+			held = [];
+		} else if (held.length > padTop) {
+			this.#releaseHeldReplay = true;
+			this.ui.requestRender();
+		}
 		if (padTop === 0) return plan.viewport;
 		// Click spans index viewport rows; the pad moves every painted row down.
 		this.#lastClickSpans = this.#lastClickSpans.map(span => ({
@@ -340,7 +358,12 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			end: span.end + padTop,
 			candidates: span.candidates,
 		}));
-		return [...blankRows(padTop), ...plan.viewport];
+		const visibleHeld = held.slice(Math.max(0, held.length - padTop));
+		return [
+			...blankRows(padTop - visibleHeld.length),
+			...visibleHeld.map(row => truncateToWidth(row, width)),
+			...plan.viewport,
+		];
 	};
 
 	constructor(options: ComposerOptions = {}) {
@@ -416,6 +439,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	/** Compose the bounded mutable viewport and the next ordered history append. */
 	renderFrame(viewport: ViewportSize): TerminalFramePlan {
 		if (!this.#started || this.#stopped) return { viewport: [] };
+		this.#pendingHeldReplay = undefined;
 		const width = Math.max(1, viewport.columns);
 		const rows = Math.max(0, viewport.rows);
 		if (this.#resizeRetiredHeaderStart !== undefined) {
@@ -531,7 +555,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				? undefined
 				: this.ui.getFilledHistoryRows();
 		const topPadding =
-			filledHistoryRows === undefined
+			this.#docked || filledHistoryRows === undefined
 				? 0
 				: Math.max(0, rows - Math.min(rows, filledHistoryRows + (history?.rows.length ?? 0)) - mutable.length);
 		if (topPadding > 0) mutable.unshift(...Array<string>(topPadding).fill(""));
@@ -783,6 +807,9 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		if (offered.source === "header") {
 			this.#headerRetired = true;
 			this.#retiredHeaderRows = offered.rows;
+		} else if (offered.source === "held") {
+			this.#heldReplayRows = [];
+			this.#releaseHeldReplay = false;
 		} else {
 			if (offered.source.transcriptId !== undefined) {
 				offered.source.transcript.acknowledgeFinalizedBatch(offered.source.transcriptId);
@@ -792,9 +819,13 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				if (offered.source.headerRows !== undefined) this.#retiredHeaderRows = offered.source.headerRows;
 			}
 		}
+		if (this.#pendingHeldReplay?.id === id) {
+			this.#heldReplayRows = this.#pendingHeldReplay.rows;
+			this.#pendingHeldReplay = undefined;
+		}
 		this.#offeredHistory = undefined;
 		if (this.#historyReplayRequested) this.#startHistoryReplay();
-		if (offered.kind === "replay") {
+		if (offered.kind === "replay" || offered.source === "held") {
 			this.ui.requestRender();
 		}
 	}
@@ -859,6 +890,9 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	}
 
 	#startHistoryReplay(): void {
+		this.#heldReplayRows = [];
+		this.#pendingHeldReplay = undefined;
+		this.#releaseHeldReplay = false;
 		this.#headerReplayPending = this.#headerRetired && (this.#retiredHeaderRows?.length ?? 0) > 0;
 		this.#historyReplayRequested = false;
 		for (const child of this.#runtimeChildren) {
@@ -880,6 +914,15 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				rows: this.#offeredHistory.rows,
 				kind: this.#offeredHistory.kind,
 			};
+		}
+		if (this.#heldReplayRows.length > 0 && (!this.#docked || this.#historyFlush || this.#releaseHeldReplay)) {
+			this.#offeredHistory = {
+				id: this.#nextHistoryId++,
+				rows: this.#heldReplayRows,
+				kind: "append",
+				source: "held",
+			};
+			return this.#offeredHistory;
 		}
 		if (this.#headerReplayPending) {
 			const transcriptReplay = transcript.peekReplayBatch(width);
@@ -936,6 +979,15 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			? transcript.peekFlushBatch(width)
 			: transcript.peekFinalizedBatch(width, Math.max(0, rows - chromeRows));
 		if (batch === undefined) return undefined;
+		if (batch.kind !== "replay" && this.#heldReplayRows.length > 0) {
+			this.#offeredHistory = {
+				id: this.#nextHistoryId++,
+				rows: this.#heldReplayRows,
+				kind: "append",
+				source: "held",
+			};
+			return this.#offeredHistory;
+		}
 		this.#offeredHistory = {
 			id: this.#nextHistoryId++,
 			rows: batch.rows,
@@ -952,6 +1004,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#rerenderOfferedHistory(width: number): void {
 		const offered = this.#offeredHistory;
 		if (offered === undefined) return;
+		if (offered.source === "held") return;
 		if (offered.source === "header") {
 			const rows = this.#header.render(width);
 			offered.rows = rows.length > 0 ? [...rows, ""] : [];
@@ -1118,6 +1171,14 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	/** Mount or replace session-aware root children while preserving the header and status hosts. */
 	setRuntimeChildren(children: readonly Component[], options: RuntimeChildrenOptions = {}): void {
 		if (this.#stopped) return;
+		if (
+			children.find(child => child instanceof TranscriptContainer) !==
+			this.#runtimeChildren.find(child => child instanceof TranscriptContainer)
+		) {
+			this.#heldReplayRows = [];
+			this.#pendingHeldReplay = undefined;
+			this.#releaseHeldReplay = false;
+		}
 		this.#chromeFloor = undefined;
 		this.#nativeDock = options.nativeDock;
 		this.ui.removeChild(this.#statusHost);
