@@ -38,7 +38,11 @@ import { reset as resetCapabilities } from "../../capability";
 import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { type ChainConfigDeps, ChainConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/chain-config";
 import type { ChainConfigScope } from "@oh-my-pi/pi-tui/overlays/chain-types";
-import { StatusLineConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/status-line-config";
+import {
+	StatusLineConfigOverlayComponent,
+	type StatusLineEditorDraft,
+} from "@oh-my-pi/pi-tui/overlays/status-line-config";
+import { StatusLineDraftStore, statusLineDraftPath, withUsageTemplates } from "../../neopi/status-line-draft";
 import { renderComposerShapePreview } from "@oh-my-pi/pi-tui/overlays/composer-shape-preview";
 import { chainsConfigFilePath, discoverChains, loadChainsConfigFile, saveChainsConfigFile } from "../../chains/config";
 import { discoverMixtures, mixturesConfigFilePath } from "../../moa/config";
@@ -255,6 +259,9 @@ export class SelectorController {
 	#openMenus = new Map<MenuKind, OpenMenu>();
 
 	constructor(private ctx: InteractiveModeContext) {}
+	/** Latest /statusline draft this process wrote, so a reopen never races its own pending write. */
+	#statusLineDraft: { path: string; draft: StatusLineEditorDraft } | undefined;
+
 	/**
 	 * Mount a primary fullscreen menu through the one polished modal path shared
 	 * by Settings, Model Hub, and Agent Hub.
@@ -651,58 +658,84 @@ export class SelectorController {
 
 	showStatusLineConfigure(): void {
 		if (this.#focusOpenMenu("status-line-config")) return;
-		const original = this.ctx.statusLine.getEffectiveSettings();
-		const originalShape = cfgComposerShape.get(this.ctx.settings);
-		const overlay = new StatusLineConfigOverlayComponent({
-			load: () => ({
-				composerShape: originalShape,
-				leftSegments: original.leftSegments,
-				rightSegments: original.rightSegments,
-			}),
-			usageReports: this.ctx.statusLine.getUsageReports(),
-			preview: draft => {
-				const shape = draft?.composerShape ?? originalShape;
-				this.ctx.statusLine.updateSettings(
-					draft
-						? {
-								...original,
-								preset: "custom",
-								leftSegments: draft.leftSegments,
-								rightSegments: draft.rightSegments,
-							}
-						: original,
+		const settings = this.ctx.settings;
+		const store = new StatusLineDraftStore(statusLineDraftPath(settings.getAgentDir()));
+		let draft: StatusLineEditorDraft | undefined;
+		const cached = this.#statusLineDraft;
+		if (cached?.path === store.path) draft = cached.draft;
+		else {
+			try {
+				draft = store.readSync() ?? undefined;
+			} catch (error) {
+				// The next autosave keeps the unreadable file as `<path>.bak` before replacing it.
+				this.ctx.showWarning(
+					`Ignored the unreadable status-line draft ${shortenPath(store.path)}: ${sanitizeText(String(error))}`,
 				);
-				this.ctx.syncComposerShape(shape);
+			}
+		}
+		// Live settings to restore when the editor leaves without applying; an apply moves it forward.
+		let restore = this.ctx.statusLine.getEffectiveSettings();
+		const overlay = new StatusLineConfigOverlayComponent({
+			active: () => ({
+				composerShape: cfgComposerShape.get(settings),
+				leftSegments: restore.leftSegments,
+				rightSegments: restore.rightSegments,
+				usageTemplates: { ...restore.segmentOptions.usageBars?.templates },
+			}),
+			draft,
+			saveDraft: async next => {
+				this.#statusLineDraft = { path: store.path, draft: next };
+				await store.write(next);
+			},
+			usageReports: this.ctx.statusLine.getUsageReports(),
+			preview: layout => {
+				this.ctx.statusLine.updateSettings(
+					layout
+						? {
+								...restore,
+								preset: "custom",
+								leftSegments: layout.leftSegments,
+								rightSegments: layout.rightSegments,
+								segmentOptions: withUsageTemplates(restore.segmentOptions, layout.usageTemplates),
+							}
+						: restore,
+				);
+				this.ctx.syncComposerShape(layout?.composerShape ?? cfgComposerShape.get(settings));
 				this.ctx.ui.requestRender();
 			},
 			renderPreview: (shape, width) => renderComposerShapePreview(shape, width, this.ctx.statusLine),
-			save: async draft => {
-				// Save writes the global layer, not the resolved preset or project/runtime
+			apply: async layout => {
+				// Apply writes the global layer, not the resolved preset or project/runtime
 				// overrides. Capture that same layer so absent keys remain absent.
-				const global = this.ctx.settings.getGlobalSettings();
+				const global = settings.getGlobalSettings();
 				const statusLine = global.statusLine as StatusLineSettings | undefined;
 				const composer = global.composer as { shape?: string } | undefined;
 				const previous: readonly (readonly [AnySetting, unknown])[] = [
 					[cfgStatusLineLeftSegments, statusLine?.leftSegments],
 					[cfgStatusLineRightSegments, statusLine?.rightSegments],
 					[cfgStatusLinePreset, statusLine?.preset],
+					[cfgStatusLineSegmentOptions, statusLine?.segmentOptions],
 					[cfgComposerShape, composer?.shape],
 				];
+				const segmentOptions = withUsageTemplates(statusLine?.segmentOptions, layout.usageTemplates);
 				try {
-					cfgStatusLineLeftSegments.set(this.ctx.settings, draft.leftSegments);
-					cfgStatusLineRightSegments.set(this.ctx.settings, draft.rightSegments);
-					cfgStatusLinePreset.set(this.ctx.settings, "custom");
-					cfgComposerShape.set(this.ctx.settings, draft.composerShape);
-					await this.ctx.settings.flush();
+					cfgStatusLineLeftSegments.set(settings, layout.leftSegments);
+					cfgStatusLineRightSegments.set(settings, layout.rightSegments);
+					cfgStatusLinePreset.set(settings, "custom");
+					if (statusLine?.segmentOptions !== undefined || Object.keys(segmentOptions).length > 0) {
+						cfgStatusLineSegmentOptions.set(settings, segmentOptions as Record<string, unknown>);
+					}
+					cfgComposerShape.set(settings, layout.composerShape);
+					await settings.flush();
 				} catch (error) {
-					// Supersede the queued draft before retrying disk I/O; even if this
+					// Supersede the queued layout before retrying disk I/O; even if this
 					// flush also fails, later Settings retries contain only the originals.
 					for (const [setting, value] of previous) {
-						if (value === undefined || value === null) setting.unset(this.ctx.settings);
-						else setting.set(this.ctx.settings, value);
+						if (value === undefined || value === null) setting.unset(settings);
+						else setting.set(settings, value);
 					}
 					try {
-						await this.ctx.settings.flush();
+						await settings.flush();
 					} catch (rollbackError) {
 						logger.warn("Status-line configuration rollback could not be flushed", {
 							error: String(rollbackError),
@@ -710,6 +743,13 @@ export class SelectorController {
 					}
 					throw error;
 				}
+				restore = {
+					...restore,
+					preset: "custom",
+					leftSegments: [...layout.leftSegments],
+					rightSegments: [...layout.rightSegments],
+					segmentOptions: withUsageTemplates(restore.segmentOptions, layout.usageTemplates),
+				};
 			},
 			close: () => {
 				menu.handle?.hide();
