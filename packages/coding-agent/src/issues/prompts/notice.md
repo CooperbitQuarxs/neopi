@@ -28,6 +28,9 @@ Drafted amendment:
 
 {{owner.draft}}
 {{/if}}
+{{#if declined}}
+**/issue {{requestId}}** not filed: {{declined}}
+{{/if}}
 {{#if failed}}
 **/issue {{requestId}}** failed; nothing was filed{{#if agentId}} (transcript: `{{agentId}}` in the Agent Hub){{/if}}: {{failed}}
 {{/if}}

@@ -63,7 +63,13 @@ describe("runIssueFiling", () => {
 
 		vi.spyOn(sessionListing, "listRecentProjects").mockResolvedValue([]);
 		const createArgs: string[][] = [];
-		vi.spyOn(github, "json").mockImplementation((async (_cwd: string, args: string[]) => {
+		// The real runner hands `signal` to Bun.spawn; anything but an AbortSignal fails there,
+		// which is how a mis-ordered tool execute signature surfaced in the running TUI.
+		const requireSignal = (signal: unknown) => {
+			if (signal !== undefined && !(signal instanceof AbortSignal)) throw new Error("gh received a non-AbortSignal");
+		};
+		vi.spyOn(github, "json").mockImplementation((async (_cwd: string, args: string[], signal?: unknown) => {
+			requireSignal(signal);
 			const command = args.slice(0, 2).join(" ");
 			if (command === "repo list") {
 				return [
@@ -97,7 +103,8 @@ describe("runIssueFiling", () => {
 			}
 			throw new Error(`unexpected gh json call: ${args.join(" ")}`);
 		}) as typeof github.json);
-		vi.spyOn(github, "run").mockImplementation(async (_cwd, args) => {
+		vi.spyOn(github, "run").mockImplementation(async (_cwd, args, signal) => {
+			requireSignal(signal);
 			if (args[0] === "issue" && args[1] === "create") {
 				createArgs.push(args);
 				return { exitCode: 0, stdout: ISSUE_URL, stderr: "" };
@@ -212,6 +219,7 @@ describe("runIssueFiling", () => {
 					"find",
 					"glob",
 					"grep",
+					"issue_decline",
 					"issue_existing_owner",
 					"issue_labels",
 					"issue_publish",

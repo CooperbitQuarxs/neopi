@@ -34,6 +34,7 @@ import targetSystemPrompt from "./prompts/target-system.md" with { type: "text" 
 import { collectIssueTargetInventory, type IssueTargetInventory } from "./target-inventory";
 import {
 	createIssueAuthorTools,
+	createIssueDeclineTool,
 	createIssueTargetTool,
 	type IssueFilingOutcome,
 	type IssueTargetSelection,
@@ -97,8 +98,10 @@ export function renderIssueNotice(requestId: string, prose: string, notice: Issu
 		case "outcome":
 			if (notice.outcome.kind === "published") {
 				context.published = { ...notice.outcome.issue, labels: notice.outcome.issue.labels.join(", ") };
-			} else {
+			} else if (notice.outcome.kind === "existing-owner") {
 				context.owner = notice.outcome.owner;
+			} else {
+				context.declined = notice.outcome.reason;
 			}
 			break;
 	}
@@ -274,13 +277,20 @@ export async function runIssueFiling(
 	// Phase 1: choose the tracker.
 	const targetAgentId = `IssueTarget-${request.requestId}`;
 	let selection: IssueTargetSelection | undefined;
+	let declined: string | undefined;
 	const targetSession = await createIssueAgent(request, {
 		agentId: targetAgentId,
 		displayName: "issue target",
 		cwd: request.cwd,
 		settings: await issueAgentSettings(request.settings, request.cwd),
-		tools: [createIssueTargetTool({ inventory, onSelect: value => (selection = value) })],
-		toolNames: ["issue_target"],
+		tools: [
+			createIssueTargetTool({ inventory, onSelect: value => (selection = value) }),
+			createIssueDeclineTool({
+				onDecline: reason => (declined = reason),
+				blocked: () => (selection ? "A target was already selected; it cannot be declined here." : undefined),
+			}),
+		],
+		toolNames: ["issue_target", "issue_decline"],
 		systemPrompt: [targetSystemPrompt.trim()],
 		discoverContext: false,
 	});
@@ -299,13 +309,19 @@ export async function runIssueFiling(
 				repositories: describeInventory(inventory),
 				warnings: inventory.warnings,
 			}),
-			done: () => selection !== undefined,
+			done: () => selection !== undefined || declined !== undefined,
 			signal,
 			notify,
 			reportProgress: ctx.reportProgress,
 		});
 	} finally {
 		await retire(registry, targetSession, targetAgentId, signal.aborted);
+	}
+	// A decline that landed first wins over a contradictory selection in the same tool batch.
+	if (declined !== undefined) {
+		const outcome: IssueFilingOutcome = { kind: "declined", reason: declined };
+		await notify({ kind: "outcome", outcome });
+		return renderIssueNotice(request.requestId, request.prose, { kind: "outcome", outcome });
 	}
 	const target = selection;
 	if (!target) throw new Error("No tracker was selected.");
@@ -333,6 +349,7 @@ export async function runIssueFiling(
 			"issue_view",
 			"issue_publish",
 			"issue_existing_owner",
+			"issue_decline",
 		],
 		appendSystemPrompt: prompt.render(authorSystemTemplate, {
 			repo: target.candidate.repo,

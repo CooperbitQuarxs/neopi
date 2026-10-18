@@ -29,9 +29,11 @@ function statusLine(notice: IssueNotice): string {
 		case "failed":
 			return `/issue failed: ${notice.error}`;
 		case "outcome":
-			return notice.outcome.kind === "published"
-				? `/issue filed ${notice.outcome.issue.url}`
-				: `/issue not filed: ${notice.outcome.owner.url} already owns it`;
+			if (notice.outcome.kind === "published") return `/issue filed ${notice.outcome.issue.url}`;
+			if (notice.outcome.kind === "existing-owner") {
+				return `/issue not filed: ${notice.outcome.owner.url} already owns it`;
+			}
+			return `/issue not filed: ${notice.outcome.reason}`;
 	}
 }
 

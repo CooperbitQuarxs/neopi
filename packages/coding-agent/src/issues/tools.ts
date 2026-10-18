@@ -6,9 +6,10 @@
  */
 import { type } from "@oh-my-pi/omptype";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import type { ToolDefinition } from "../extensibility/extensions";
+import type { CustomTool } from "../extensibility/custom-tools/types";
 import { githubRepoSlugEquals } from "../tools/gh-common";
 import { github } from "../utils/github";
+import declineDescription from "./prompts/tool-decline.md" with { type: "text" };
 import existingOwnerDescription from "./prompts/tool-existing-owner.md" with { type: "text" };
 import labelsDescription from "./prompts/tool-labels.md" with { type: "text" };
 import publishDescription from "./prompts/tool-publish.md" with { type: "text" };
@@ -66,7 +67,44 @@ export interface ExistingIssueOwner {
 /** How one `/issue` request ended. */
 export type IssueFilingOutcome =
 	| { kind: "published"; issue: PublishedIssue }
-	| { kind: "existing-owner"; owner: ExistingIssueOwner };
+	| { kind: "existing-owner"; owner: ExistingIssueOwner }
+	| { kind: "declined"; reason: string };
+
+const declineSchema = type({
+	reason: type("string > 0").describe("why nothing is filed, in terms the operator recognizes"),
+	"+": "reject",
+});
+
+/**
+ * `issue_decline`: end the request without filing. `blocked` returns why the
+ * request can no longer be declined (an outcome or publication already holds).
+ */
+export function createIssueDeclineTool(options: {
+	onDecline: (reason: string) => void;
+	blocked?: () => string | undefined;
+}): CustomTool {
+	let declined = false;
+	return {
+		name: "issue_decline",
+		label: "Decline filing",
+		description: declineDescription.trim(),
+		parameters: declineSchema,
+		approval: "read",
+		strict: true,
+		loadMode: "essential",
+		execute: async (_toolCallId, rawParams) => {
+			const params = declineSchema(rawParams);
+			if (params instanceof type.errors)
+				throw new Error(`issue_decline received invalid arguments: ${params.summary}`);
+			if (declined) return textResult("Already declined; end your turn.");
+			const blocked = options.blocked?.();
+			if (blocked) throw new Error(blocked);
+			declined = true;
+			options.onDecline(params.reason);
+			return textResult("Declined; nothing was filed. End your turn.");
+		},
+	};
+}
 
 interface GhLabelRow {
 	name: string;
@@ -142,7 +180,7 @@ const targetSchema = type({
 export function createIssueTargetTool(options: {
 	inventory: IssueTargetInventory;
 	onSelect: (selection: IssueTargetSelection) => void;
-}): ToolDefinition {
+}): CustomTool {
 	let selected: IssueTargetSelection | undefined;
 	// Read through a function: a parallel call may select across an await.
 	const priorSelection = (repo: string) => {
@@ -161,7 +199,7 @@ export function createIssueTargetTool(options: {
 		approval: "read",
 		strict: true,
 		loadMode: "essential",
-		execute: async (_toolCallId, rawParams, signal) => {
+		execute: async (_toolCallId, rawParams, _onUpdate, _ctx, signal) => {
 			const params = targetSchema(rawParams);
 			if (params instanceof type.errors)
 				throw new Error(`issue_target received invalid arguments: ${params.summary}`);
@@ -232,11 +270,14 @@ export interface IssueAuthorToolOptions {
  * error is reconciled against the operator's own issues created since the
  * request started before anything is retried.
  */
-export function createIssueAuthorTools(options: IssueAuthorToolOptions): ToolDefinition[] {
+export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomTool[] {
 	const { repo, checkout } = options;
 	const cwd = checkout.path;
 	let outcome: IssueFilingOutcome | undefined;
 	let publication: Promise<PublishedIssue> | undefined;
+	// Set synchronously when issue_existing_owner starts, before it awaits, so a
+	// publish in the same parallel tool batch cannot also file.
+	let ownerClaim: Promise<GhIssueRow> | undefined;
 
 	const listLabels = (signal: AbortSignal | undefined) =>
 		github.json<GhLabelRow[]>(
@@ -246,12 +287,21 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): ToolDef
 			{ repoProvided: true },
 		);
 
+	/** GitHub stores bodies with normalized line endings and trims trailing whitespace. */
+	const normalizeBody = (value: string | undefined) => (value ?? "").replace(/\r\n/g, "\n").trim();
+
 	const viewIssue = (ref: string, signal: AbortSignal | undefined) =>
 		github.json<GhIssueRow>(cwd, ["issue", "view", ref, "--repo", repo, "--json", ISSUE_VIEW_FIELDS], signal, {
 			repoProvided: true,
 		});
 
-	const findOwnCreated = async (title: string, signal: AbortSignal | undefined): Promise<GhIssueRow | undefined> => {
+	/**
+	 * After a create whose outcome is unknown, find the issue it may have made:
+	 * the operator's own, created since the request started, with this exact
+	 * title and body. Never consulted before a create, so an unrelated
+	 * same-title issue cannot stand in for the requested publication.
+	 */
+	const findUncertainCreate = async (title: string, body: string): Promise<GhIssueRow | undefined> => {
 		const rows = await github.json<GhIssueRow[]>(
 			cwd,
 			[
@@ -266,14 +316,18 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): ToolDef
 				"--limit",
 				String(OWN_RECENT_LIMIT),
 				"--json",
-				ISSUE_ROW_FIELDS,
+				`${ISSUE_ROW_FIELDS},body`,
 			],
-			signal,
+			undefined,
 			{ repoProvided: true },
 		);
 		// One minute of slack absorbs clock skew between this host and GitHub.
 		const since = options.startedAt - 60_000;
-		return rows.find(row => row.title === title && Date.parse(row.createdAt ?? "") >= since);
+		const expectedBody = normalizeBody(body);
+		return rows.find(
+			row =>
+				row.title === title && normalizeBody(row.body) === expectedBody && Date.parse(row.createdAt ?? "") >= since,
+		);
 	};
 
 	const toPublished = (row: GhIssueRow): PublishedIssue => ({
@@ -297,8 +351,6 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): ToolDef
 		if (!(await verifyIssueCheckout(checkout, repo, signal))) {
 			throw new Error(`Checkout ${cwd} no longer has a remote for ${repo}; nothing was published.`);
 		}
-		const prior = await findOwnCreated(params.title, signal);
-		if (prior) return toPublished(await viewIssue(String(prior.number), signal));
 
 		await using bodyDir = await TempDir.create("@npi-issue-body-");
 		const bodyFile = bodyDir.join("body.md");
@@ -322,7 +374,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): ToolDef
 		// (timeout, dropped connection, cancellation mid-request): adopt that
 		// issue instead of filing twice. Unbound from the caller's signal so a
 		// cancellation cannot hide an issue that already exists.
-		const reconciled = await findOwnCreated(params.title, undefined);
+		const reconciled = await findUncertainCreate(params.title, params.body);
 		if (reconciled) return toPublished(await viewIssue(String(reconciled.number), undefined));
 		if (createError) throw createError;
 		throw new Error(`gh issue create failed: ${created?.stderr || created?.stdout || "no output"}`);
@@ -342,7 +394,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): ToolDef
 			approval: "read",
 			strict: true,
 			loadMode: "essential",
-			execute: async (_toolCallId, _params, signal) => {
+			execute: async (_toolCallId, _params, _onUpdate, _ctx, signal) => {
 				const labels = await listLabels(signal);
 				const lines = labels.map(label => `- ${label.name}${label.description ? ` — ${label.description}` : ""}`);
 				return textResult(lines.length > 0 ? lines.join("\n") : "The tracker has no labels.");
@@ -356,7 +408,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): ToolDef
 			approval: "read",
 			strict: true,
 			loadMode: "essential",
-			execute: async (_toolCallId, _params, signal) => {
+			execute: async (_toolCallId, _params, _onUpdate, _ctx, signal) => {
 				const rows = await github.json<{ number: number }[]>(
 					cwd,
 					[
@@ -391,7 +443,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): ToolDef
 			approval: "read",
 			strict: true,
 			loadMode: "essential",
-			execute: async (_toolCallId, rawParams, signal) => {
+			execute: async (_toolCallId, rawParams, _onUpdate, _ctx, signal) => {
 				const params = searchSchema(rawParams);
 				if (params instanceof type.errors)
 					throw new Error(`issue_search received invalid arguments: ${params.summary}`);
@@ -425,7 +477,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): ToolDef
 			approval: "read",
 			strict: true,
 			loadMode: "essential",
-			execute: async (_toolCallId, rawParams, signal) => {
+			execute: async (_toolCallId, rawParams, _onUpdate, _ctx, signal) => {
 				const params = viewSchema(rawParams);
 				if (params instanceof type.errors)
 					throw new Error(`issue_view received invalid arguments: ${params.summary}`);
@@ -440,13 +492,14 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): ToolDef
 			approval: "write",
 			strict: true,
 			loadMode: "essential",
-			execute: async (_toolCallId, rawParams, signal) => {
+			execute: async (_toolCallId, rawParams, _onUpdate, _ctx, signal) => {
 				const params = publishSchema(rawParams);
 				if (params instanceof type.errors)
 					throw new Error(`issue_publish received invalid arguments: ${params.summary}`);
-				if (outcome?.kind === "existing-owner") {
-					throw new Error(`Already reported #${outcome.owner.number} as the owner; nothing more may be filed.`);
+				if (outcome && outcome.kind !== "published") {
+					throw new Error("This request already ended without filing; nothing may be published.");
 				}
+				if (ownerClaim) throw new Error("An existing owner is being recorded; nothing may be published.");
 				if (!publication) {
 					const attempt = publishOnce(params, signal);
 					publication = attempt;
@@ -477,13 +530,22 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): ToolDef
 			approval: "read",
 			strict: true,
 			loadMode: "essential",
-			execute: async (_toolCallId, rawParams, signal) => {
+			execute: async (_toolCallId, rawParams, _onUpdate, _ctx, signal) => {
 				const params = existingOwnerSchema(rawParams);
 				if (params instanceof type.errors) {
 					throw new Error(`issue_existing_owner received invalid arguments: ${params.summary}`);
 				}
-				if (outcome || publication) throw new Error("This request already has an outcome.");
-				const owner = await viewIssue(String(params.number), signal);
+				if (outcome || publication || ownerClaim) throw new Error("This request already has an outcome.");
+				const claim = viewIssue(String(params.number), signal);
+				ownerClaim = claim;
+				let owner: GhIssueRow;
+				try {
+					owner = await claim;
+				} catch (error) {
+					// An owner that could not be read records nothing; the request stays open.
+					ownerClaim = undefined;
+					throw error;
+				}
 				settle({
 					kind: "existing-owner",
 					owner: {
@@ -498,5 +560,12 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): ToolDef
 				return textResult(`Recorded #${owner.number} as the owner. Nothing was posted; end your turn.`);
 			},
 		},
+		createIssueDeclineTool({
+			onDecline: reason => settle({ kind: "declined", reason }),
+			blocked: () =>
+				outcome || publication || ownerClaim
+					? "This request already has an outcome; it cannot be declined."
+					: undefined,
+		}),
 	];
 }

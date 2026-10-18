@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import type { ToolDefinition } from "../../src/extensibility/extensions";
+import type { CustomTool } from "../../src/extensibility/custom-tools/types";
 import * as targetInventory from "../../src/issues/target-inventory";
 import {
 	createIssueAuthorTools,
@@ -50,20 +50,26 @@ function inventory(...repositories: targetInventory.IssueRepoCandidate[]): targe
 	return { foreground: { cwd: CHECKOUT.path, repoRoot: CHECKOUT.path, repo: REPO }, repositories, warnings: [] };
 }
 
-function invoke(tool: ToolDefinition, params: Record<string, unknown>): Promise<AgentToolResult<unknown>> {
-	return tool.execute("issue-tool-test", params, undefined, undefined, {} as never);
+function invoke(tool: CustomTool, params: Record<string, unknown>): Promise<AgentToolResult<unknown>> {
+	return tool.execute("issue-tool-test", params, undefined, {} as never, undefined);
 }
 
 function author() {
 	const outcomes: IssueFilingOutcome[] = [];
 	const onOutcome = vi.fn((outcome: IssueFilingOutcome) => outcomes.push(outcome));
 	const tools = createIssueAuthorTools({ repo: REPO, checkout: CHECKOUT, startedAt: STARTED_AT, onOutcome });
-	const named = (name: string): ToolDefinition => {
+	const named = (name: string): CustomTool => {
 		const tool = tools.find(entry => entry.name === name);
 		if (!tool) throw new Error(`Missing issue tool: ${name}`);
 		return tool;
 	};
-	return { publish: named("issue_publish"), existingOwner: named("issue_existing_owner"), outcomes, onOutcome };
+	return {
+		publish: named("issue_publish"),
+		existingOwner: named("issue_existing_owner"),
+		decline: named("issue_decline"),
+		outcomes,
+		onOutcome,
+	};
 }
 
 function publishParams(): Record<string, unknown> {
@@ -94,7 +100,7 @@ const ownIssueListArgs = [
 	"--limit",
 	"30",
 	"--json",
-	"number,title,url,state,createdAt,labels",
+	"number,title,url,state,createdAt,labels,body",
 ];
 
 afterEach(() => {
@@ -203,10 +209,7 @@ describe("issue_publish", () => {
 
 	it("pins creation to the target, sends body-file and labels, and reports the recorded issue", async () => {
 		const { json, run, verify } = spyDependencies();
-		json
-			.mockResolvedValueOnce(LABELS.map(name => ({ name })))
-			.mockResolvedValueOnce([])
-			.mockResolvedValueOnce(ACTUAL_ISSUE);
+		json.mockResolvedValueOnce(LABELS.map(name => ({ name }))).mockResolvedValueOnce(ACTUAL_ISSUE);
 		run.mockImplementation(async (_cwd, args) => {
 			const bodyFile = args[args.indexOf("--body-file") + 1];
 			expect(await Bun.file(bodyFile).text()).toBe(BODY);
@@ -260,10 +263,7 @@ describe("issue_publish", () => {
 
 	it("shares one creation and one outcome across concurrent and repeated publish calls", async () => {
 		const { json, run } = spyDependencies();
-		json
-			.mockResolvedValueOnce(LABELS.map(name => ({ name })))
-			.mockResolvedValueOnce([])
-			.mockResolvedValueOnce(ACTUAL_ISSUE);
+		json.mockResolvedValueOnce(LABELS.map(name => ({ name }))).mockResolvedValueOnce(ACTUAL_ISSUE);
 		const entered = Promise.withResolvers<void>();
 		const creation = Promise.withResolvers<GhCommandResult>();
 		run.mockImplementation(() => {
@@ -292,11 +292,12 @@ describe("issue_publish", () => {
 			const adopted = { ...ACTUAL_ISSUE, title: TITLE };
 			json
 				.mockResolvedValueOnce(LABELS.map(name => ({ name })))
-				.mockResolvedValueOnce([])
 				.mockResolvedValueOnce([
-					{ ...adopted, number: 1, createdAt: "2026-10-17T12:00:00Z" },
-					{ ...adopted, number: 2, title: "another request" },
-					adopted,
+					{ ...adopted, body: BODY, number: 1, createdAt: "2026-10-17T12:00:00Z" },
+					{ ...adopted, body: BODY, number: 2, title: "another request" },
+					// Same title and time but a different body: an unrelated filing, never adopted.
+					{ ...adopted, body: "Someone else's report.", number: 3 },
+					{ ...adopted, body: BODY.replace(/\n/g, "\r\n") },
 				])
 				.mockResolvedValueOnce(adopted);
 			if (failure === "thrown error") run.mockRejectedValueOnce(new Error("connection dropped after sending"));
@@ -307,7 +308,7 @@ describe("issue_publish", () => {
 
 			expect(run).toHaveBeenCalledTimes(1);
 			const lookups = json.mock.calls.filter(([, args]) => args[0] === "issue" && args[1] === "list");
-			expect(lookups).toHaveLength(2);
+			expect(lookups).toHaveLength(1);
 			for (const call of lookups) {
 				expect(call).toEqual([CHECKOUT.path, ownIssueListArgs, undefined, { repoProvided: true }]);
 			}
@@ -335,9 +336,7 @@ describe("issue_publish", () => {
 		json
 			.mockResolvedValueOnce(LABELS.map(name => ({ name })))
 			.mockResolvedValueOnce([])
-			.mockResolvedValueOnce([])
 			.mockResolvedValueOnce(LABELS.map(name => ({ name })))
-			.mockResolvedValueOnce([])
 			.mockResolvedValueOnce(ACTUAL_ISSUE);
 		run.mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "request rejected" }).mockResolvedValueOnce({
 			exitCode: 0,
@@ -350,6 +349,72 @@ describe("issue_publish", () => {
 		expect(outcomes).toEqual([]);
 		await invoke(publish, publishParams());
 		expect(run).toHaveBeenCalledTimes(2);
+		expect(outcomes).toEqual([actualPublished]);
+	});
+
+	it("never adopts a same-title issue before creating", async () => {
+		const { json, run } = spyDependencies();
+		json.mockResolvedValueOnce(LABELS.map(name => ({ name }))).mockResolvedValueOnce(ACTUAL_ISSUE);
+		run.mockResolvedValueOnce({ exitCode: 0, stdout: ACTUAL_ISSUE.url, stderr: "" });
+		const { publish } = author();
+		await invoke(publish, publishParams());
+
+		expect(run).toHaveBeenCalledTimes(1);
+		expect(json.mock.calls.some(([, args]) => args.includes("@me"))).toBe(false);
+	});
+});
+
+describe("terminal outcomes", () => {
+	it("refuses a publish issued alongside an existing-owner report", async () => {
+		const { json, run } = spyDependencies();
+		const ownerRead = Promise.withResolvers<unknown>();
+		json.mockImplementationOnce(() => ownerRead.promise as never);
+		const { existingOwner, publish, outcomes } = author();
+		// One parallel tool batch: the owner report starts first and is still reading.
+		const owner = invoke(existingOwner, { number: ACTUAL_ISSUE.number, reason: "owns it", draft: "draft" });
+		const publishing = invoke(publish, publishParams());
+		ownerRead.resolve(ACTUAL_ISSUE);
+		const [ownerResult, publishResult] = await Promise.allSettled([owner, publishing]);
+
+		expect(ownerResult.status).toBe("fulfilled");
+		expect(publishResult.status).toBe("rejected");
+		expect(run).not.toHaveBeenCalled();
+		expect(outcomes.map(outcome => outcome.kind)).toEqual(["existing-owner"]);
+	});
+
+	it("refuses an existing-owner report issued alongside a publish", async () => {
+		const { json, run } = spyDependencies();
+		json.mockResolvedValueOnce(LABELS.map(name => ({ name }))).mockResolvedValueOnce(ACTUAL_ISSUE);
+		run.mockResolvedValueOnce({ exitCode: 0, stdout: ACTUAL_ISSUE.url, stderr: "" });
+		const { existingOwner, publish, outcomes } = author();
+		const publishing = invoke(publish, publishParams());
+		const owner = invoke(existingOwner, { number: ACTUAL_ISSUE.number, reason: "owns it", draft: "draft" });
+		const [publishResult, ownerResult] = await Promise.allSettled([publishing, owner]);
+
+		expect(publishResult.status).toBe("fulfilled");
+		expect(ownerResult.status).toBe("rejected");
+		expect(outcomes).toEqual([actualPublished]);
+	});
+
+	it("declines without filing and then refuses publication", async () => {
+		const { json, run } = spyDependencies();
+		const { decline, publish, outcomes } = author();
+		await invoke(decline, { reason: "the operator said not to file" });
+
+		expect(outcomes).toEqual([{ kind: "declined", reason: "the operator said not to file" }]);
+		await expect(invoke(publish, publishParams())).rejects.toThrow("ended without filing");
+		expect(json).not.toHaveBeenCalled();
+		expect(run).not.toHaveBeenCalled();
+	});
+
+	it("refuses to decline after publication", async () => {
+		const { json, run } = spyDependencies();
+		json.mockResolvedValueOnce(LABELS.map(name => ({ name }))).mockResolvedValueOnce(ACTUAL_ISSUE);
+		run.mockResolvedValueOnce({ exitCode: 0, stdout: ACTUAL_ISSUE.url, stderr: "" });
+		const { decline, publish, outcomes } = author();
+		await invoke(publish, publishParams());
+
+		await expect(invoke(decline, { reason: "changed mind" })).rejects.toThrow("already has an outcome");
 		expect(outcomes).toEqual([actualPublished]);
 	});
 });
@@ -379,7 +444,7 @@ describe("issue_existing_owner", () => {
 		expect(json).toHaveBeenCalledTimes(1);
 		expect(json.mock.calls[0]?.[1].slice(0, 3)).toEqual(["issue", "view", String(ACTUAL_ISSUE.number)]);
 		expect(run).not.toHaveBeenCalled();
-		await expect(invoke(publish, publishParams())).rejects.toThrow("nothing more may be filed");
+		await expect(invoke(publish, publishParams())).rejects.toThrow("ended without filing");
 		expect(json).toHaveBeenCalledTimes(1);
 		expect(run).not.toHaveBeenCalled();
 	});
