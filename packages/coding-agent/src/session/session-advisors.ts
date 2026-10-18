@@ -1585,11 +1585,12 @@ export class SessionAdvisors {
 			});
 
 			const advisorAgentFacade: AdvisorAgent = {
-				prompt: async input => {
+				prompt: async (input, signal) => {
 					let quarantined: string | undefined;
 					advisorLoopGuard.reset();
 					advisorLoopGuardStopped = false;
 					try {
+						signal?.throwIfAborted();
 						quarantinedAdvisorOutput = undefined;
 						// Multi-message input (candidate 4) must serialize deterministically
 						// for quarantine source text; reuse the session history formatter
@@ -1619,6 +1620,8 @@ export class SessionAdvisors {
 										settings: this.#host.settings,
 										registry: this.#host.modelRegistry,
 										model,
+										sessionId: advisorProviderSessionId,
+										signal,
 										sessionManager: this.#host.sessionManager,
 										allowedEfforts: candidates,
 										onEffortDisclosure: message => this.#host.emitNotice("warning", message, "effort-policy"),
@@ -1626,6 +1629,7 @@ export class SessionAdvisors {
 									},
 								);
 							} catch {
+								signal?.throwIfAborted();
 								// A failed classifier must not fail the advisor's review.
 							}
 							if (!effort || (candidates && !candidates.includes(effort))) {
@@ -1641,6 +1645,7 @@ export class SessionAdvisors {
 							advisorAgent.setDisableReasoning(shouldDisableReasoning(next));
 							advisorRef.thinkingLevel = next;
 						}
+						signal?.throwIfAborted();
 						// Agent.prompt's overloads accept string OR AgentMessage[] but not
 						// the union, so narrow first; both branches intentionally identical.
 						if (Array.isArray(input)) await advisorAgent.prompt(input);

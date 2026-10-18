@@ -26,7 +26,7 @@ import { fingerprintMessage } from "./message-fingerprint";
  * this field after every prompt to detect a failed turn.
  */
 export interface AdvisorAgent {
-	prompt(input: string | AgentMessage[]): Promise<void>;
+	prompt(input: string | AgentMessage[], signal?: AbortSignal): Promise<void>;
 	abort(reason?: unknown): void;
 	reset(): void;
 	/**
@@ -1382,7 +1382,7 @@ export class AdvisorRuntime {
 					// tested), so the advisor sees identical context.
 					const splitMessages = this.#formatRawDeltaMessageChunks(preparedMessages, wip, batchIncludeThinking);
 					const promptInput: string | AgentMessage[] = splitMessages ?? batch();
-					const prompt = this.agent.prompt(promptInput);
+					const prompt = this.agent.prompt(promptInput, iterationAbort.signal);
 					this.#promptInFlight = prompt;
 					try {
 						await prompt;
