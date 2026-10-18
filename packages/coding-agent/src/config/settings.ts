@@ -4201,6 +4201,29 @@ export class Settings {
 						});
 					}
 				}
+				// A newer paired edit can have one half absorbed by this write while
+				// the other remains dirty. Keep the satisfied half as a no-op mutation
+				// so the next save still validates both records against the same file.
+				for (const role of this.#pairedGlobalFallbackMutations) {
+					const paths = [cfgRetryFallbackChains, cfgFallbackEffortSelections].map(setting => [
+						...setting.segments,
+						role,
+					]);
+					if (paths.every(segments => !this.#modified.has(JSON.stringify(segments)))) {
+						this.#pairedGlobalFallbackMutations.delete(role);
+						continue;
+					}
+					for (const segments of paths) {
+						const modKey = JSON.stringify(segments);
+						if (this.#modified.has(modKey)) continue;
+						writtenGeneration ??= this.#readYamlGeneration(configPath);
+						this.#modified.set(modKey, segments);
+						this.#modifiedPathMutations.set(modKey, {
+							generation: writtenGeneration,
+							baseValue: structuredClone(getByPath(current, segments)),
+						});
+					}
+				}
 				this.#adoptSavedGlobal(current, configPath);
 				// These pending roles were included in this write. Remove each
 				// only if no newer local change arrived while the write was in flight.
