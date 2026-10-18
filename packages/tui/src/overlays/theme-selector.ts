@@ -4,6 +4,7 @@ import { OverlayPanel } from "../chrome/overlay-box";
 import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-routing";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { type SelectPickerOptions, SelectListSheet } from "../native/picker";
+import type { SelectListNavigationState } from "../components/select-list";
 
 /**
  * Picker options for a theme list (this selector and the settings theme
@@ -30,6 +31,7 @@ export class ThemeSelectorComponent extends OverlayPanel {
 	#selectList: SelectList;
 	#sheet: SelectListSheet;
 	#onPreview: (themeName: string) => void;
+	readonly #initialTheme: string;
 
 	constructor(
 		currentTheme: string,
@@ -40,6 +42,7 @@ export class ThemeSelectorComponent extends OverlayPanel {
 	) {
 		super("Theme", "omp.overlay.theme");
 		this.#onPreview = onPreview;
+		this.#initialTheme = currentTheme;
 
 		// Create select items from provided themes
 		const themeItems: SelectItem[] = themes.map(name => ({
@@ -49,7 +52,7 @@ export class ThemeSelectorComponent extends OverlayPanel {
 		}));
 
 		// Create selector
-		this.#selectList = new SelectList(themeItems, 10, getSelectListTheme());
+		this.#selectList = new SelectList(themeItems, 10, getSelectListTheme(), { search: "always" });
 
 		// Preselect current theme
 		const currentIndex = themes.indexOf(currentTheme);
@@ -89,6 +92,21 @@ export class ThemeSelectorComponent extends OverlayPanel {
 
 	getSelectList(): SelectList {
 		return this.#selectList;
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationState();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null || !("filter" in snapshot) || typeof snapshot.filter !== "string") return;
+		this.#selectList.restoreNavigationState(snapshot as SelectListNavigationState);
+		const selected = this.#selectList.getSelectedItem();
+		if (selected) this.#onPreview(selected.value);
+	}
+
+	leaveMenu(): void {
+		this.#onPreview(this.#initialTheme);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {

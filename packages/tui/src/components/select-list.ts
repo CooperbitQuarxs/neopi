@@ -1,9 +1,7 @@
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
-import { Input } from "./input";
 import { MenuSelection } from "./menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuViewport } from "./menu-navigation";
+import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport } from "./menu-navigation";
 import { getKeybindings } from "../keybindings";
-import { extractPrintableText } from "../keys";
 import { type MouseRoutable, routeSelectListMouse, type SgrMouseEvent } from "../mouse";
 import { col, node, span } from "../native/describe";
 import { sameItems, sameProps } from "../native/memo";
@@ -187,8 +185,7 @@ export class SelectList implements Component, MouseRoutable {
 	/** Typed text marked at the start of native item labels (an autocomplete popup's query). */
 	#nativeMark: string | undefined;
 	/** The filter field; its value is pushed into the selection's query. Focused only through `/`. */
-	readonly #search = new Input();
-	#filterEditing = false;
+	readonly #search = new MenuSearchField();
 	readonly #keys = new MenuKeyReader();
 	readonly #viewport = new MenuViewport();
 
@@ -210,7 +207,6 @@ export class SelectList implements Component, MouseRoutable {
 			requiresConfirmation: item => item.confirmation !== undefined,
 			filter: layout.filterItems,
 		});
-		this.#search.prompt = "";
 	}
 	/** Return item, selection, and filter state for debug inspection. */
 	debugState(): Record<string, unknown> {
@@ -224,14 +220,14 @@ export class SelectList implements Component, MouseRoutable {
 			filterText: this.#selection.query,
 			pendingItemId: this.#selection.pendingKey ?? null,
 			maxVisible: this.#maxVisible,
-			filterFocused: this.#filterEditing,
+			filterFocused: this.#search.focused,
 			viewportTop: this.#viewport.top ?? null,
 		};
 	}
 
 	/** Hosts route focused filter input before their own printable shortcuts. */
 	get filterFocused(): boolean {
-		return this.#filterEditing;
+		return this.#search.focused;
 	}
 
 	/** Selection, filter, and scroll position, for menu history and drafts to restore. */
@@ -240,18 +236,18 @@ export class SelectList implements Component, MouseRoutable {
 			selectedValue: this.#selection.selectedKey,
 			filter: this.#selection.query,
 			viewportTop: this.#viewport.top,
-			filterFocused: this.#filterEditing,
-			filterCursor: this.#search.getCursor(),
+			filterFocused: this.#search.focused,
+			filterCursor: this.#search.cursor,
 		};
 	}
 
 	/** Reapply selection, field focus/caret, and viewport without activating a row. */
 	restoreNavigationState(state: SelectListNavigationState): void {
-		this.#filterEditing = state.filterFocused === true;
+		this.#search.focused = state.filterFocused === true;
 		this.#keys.reset();
 		this.#search.setValue(state.filter);
-		if (state.filterCursor !== undefined) this.#search.setCursor(state.filterCursor);
-		this.#setFilter(this.#search.getValue(), false);
+		if (state.filterCursor !== undefined) this.#search.input.setCursor(state.filterCursor);
+		this.#setFilter(this.#search.value, false);
 		if (state.selectedValue !== undefined) this.#selection.setSelectedKey(state.selectedValue);
 		this.#viewport.setTop(state.viewportTop);
 	}
@@ -284,7 +280,7 @@ export class SelectList implements Component, MouseRoutable {
 	/** Replace the filter text (caret to end) and refilter. */
 	setFilter(filter: string): void {
 		this.#search.setValue(filter);
-		this.#setFilter(this.#search.getValue(), true);
+		this.#setFilter(this.#search.value, true);
 	}
 
 	/** Replace controlled items while retaining the selected value when possible. */
@@ -324,7 +320,7 @@ export class SelectList implements Component, MouseRoutable {
 			selected: this.#selection.selectedKey ?? null,
 			pending: this.#selection.pendingKey ?? null,
 			query: this.#selection.query,
-			cursor: this.#search.getCursor(),
+			cursor: this.#search.cursor,
 		};
 	}
 
@@ -554,7 +550,7 @@ export class SelectList implements Component, MouseRoutable {
 	}
 
 	handleInput(rawData: string): void {
-		if (this.#filterEditing) {
+		if (this.#search.focused) {
 			this.#handleFilterInput(rawData);
 			return;
 		}
@@ -562,7 +558,7 @@ export class SelectList implements Component, MouseRoutable {
 		if (action === undefined || action === "pending") return;
 		switch (action.kind) {
 			case "search":
-				if (this.#canEditSearch()) this.#filterEditing = true;
+				if (this.#canEditSearch()) this.#search.focused = true;
 				return;
 			case "cancel":
 				if (!this.#selection.cancelConfirmation()) this.onCancel?.();
@@ -591,11 +587,13 @@ export class SelectList implements Component, MouseRoutable {
 	 * non-text keys (arrows, PageUp/PageDown, Enter) still drive the list.
 	 */
 	#handleFilterInput(rawData: string): void {
-		const kb = getKeybindings();
-		if (kb.matches(rawData, "tui.select.cancel")) {
-			this.#filterEditing = false;
+		const before = this.#search.value;
+		const result = this.#search.handleInput(rawData);
+		if (result !== "pass") {
+			if (this.#search.value !== before) this.#setFilter(this.#search.value, true);
 			return;
 		}
+		const kb = getKeybindings();
 		if (kb.matches(rawData, "tui.select.confirm") || rawData === "\n") {
 			this.#activateSelected();
 			return;
@@ -608,10 +606,7 @@ export class SelectList implements Component, MouseRoutable {
 			selectionChanged = this.#selection.move(-this.#viewport.visibleItems);
 		else if (kb.matches(rawData, "tui.select.pageDown"))
 			selectionChanged = this.#selection.move(this.#viewport.visibleItems);
-		else {
-			this.#handleSearchInput(rawData);
-			return;
-		}
+		else return;
 		this.#viewport.reveal();
 		if (selectionChanged) this.#notifySelectionChange();
 	}
@@ -812,18 +807,9 @@ export class SelectList implements Component, MouseRoutable {
 		if (
 			this.layout.statusText === undefined &&
 			this.#selection.pendingKey === undefined &&
-			this.#selection.query.length > 0
+			(this.#search.focused || this.#selection.query.length > 0)
 		) {
-			const label = truncateToWidth("  Search: ", avail, Ellipsis.Omit);
-			const fieldWidth = avail - visibleWidth(label);
-			const styled = this.theme.scrollInfo(label);
-			if (fieldWidth <= 0) return styled;
-			return (
-				styled +
-				(this.#filterEditing
-					? this.#search.render(fieldWidth)[0].trimEnd()
-					: truncateToWidth(this.#selection.query, fieldWidth))
-			);
+			return `  ${this.#search.render(avail, { muted: this.theme.scrollInfo })}`;
 		}
 		return this.theme.scrollInfo(truncateToWidth(this.#statusText(), avail, Ellipsis.Omit));
 	}
@@ -845,9 +831,9 @@ export class SelectList implements Component, MouseRoutable {
 			? (custom ?? "")
 			: (pendingItem?.confirmation ??
 					(query
-						? `  Search: ${query}${this.#filterEditing ? " · Esc back to list" : " · / edit"}`
+						? `  Search: ${query}${this.#search.focused ? " · Esc back to list" : " · / edit"}`
 						: this.#canEditSearch()
-							? this.#filterEditing
+							? this.#search.focused
 								? "  Search: type to narrow · Esc back to list"
 								: "  / search"
 							: ""));
@@ -866,22 +852,6 @@ export class SelectList implements Component, MouseRoutable {
 	#canEditSearch(): boolean {
 		const policy = this.layout.search ?? (this.layout.overflowSearch === false ? "never" : "overflow");
 		return policy === "always" || (policy === "overflow" && this.#selection.items.length > this.#maxVisible);
-	}
-
-	#handleSearchInput(keyData: string): boolean {
-		if (!this.#canEditSearch()) return false;
-
-		const before = this.#search.getValue();
-		if (before.length === 0) {
-			if (getKeybindings().matches(keyData, "tui.editor.deleteCharBackward")) return false;
-			const printableText = extractPrintableText(keyData);
-			if (printableText !== undefined && printableText.trim().length === 0) return false;
-		}
-
-		const consumed = this.#search.handleInput(keyData);
-		const after = this.#search.getValue();
-		if (after !== before) this.#setFilter(after, true);
-		return consumed;
 	}
 
 	#setFilter(filter: string, notify: boolean): void {

@@ -1,9 +1,10 @@
-import { Container, matchesKey, ScrollView, TruncatedText } from "../index";
+import { Container, ScrollView, TruncatedText } from "../index";
 import { theme } from "../theme/theme";
-import { matchesSelectCancel, matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
+import { matchesSelectCancel } from "../keybinding-matchers";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
-import { centeredViewportRange } from "../components/scroll-viewport";
+import { applyMenuMotion, MenuKeyReader, MenuViewport } from "../components/menu-navigation";
+import { Input } from "../components/input";
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { node, span } from "../native/describe";
@@ -27,6 +28,10 @@ export interface LogoutAccount {
 export class LogoutAccountSelectorComponent extends OverlayPanel {
 	#listContainer: Container;
 	#menu: MenuSelection<LogoutAccount>;
+	readonly #keys = new MenuKeyReader();
+	readonly #viewport = new MenuViewport();
+	readonly #search = new Input();
+	#filterFocused = false;
 	#onSelectCallback: (account: LogoutAccount) => void;
 	#onCancelCallback: () => void;
 	#nativeItems: readonly NativeNode[] | undefined;
@@ -71,7 +76,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		const items = this.#menu.visibleItems;
 		const total = items.length;
 		const maxVisible = LOGOUT_SELECTOR_MAX_VISIBLE;
-		const { start: startIndex, end: endIndex } = centeredViewportRange(this.#menu.selectedIndex, total, maxVisible);
+		const { startIndex, endIndex } = this.#viewport.layout(items.map(() => 1), this.#menu.selectedIndex, maxVisible);
 
 		const rows: string[] = [];
 		for (let i = startIndex; i < endIndex; i++) {
@@ -100,12 +105,15 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		if (total === 0) {
 			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", "No stored accounts to log out"), 0, 0));
 		}
+		if (this.#filterFocused || this.#menu.query) {
+			this.#listContainer.addChild(new TruncatedText(`Search: ${this.#filterFocused ? (this.#search.render(40)[0] ?? "") : this.#menu.query} · Esc back to list`, 0, 0));
+		}
 
 		this.#listContainer.addChild(
 			new TruncatedText(
 				theme.fg(
 					"muted",
-					`j/k or ${editorKeys("tui.select.up", "tui.select.down")} select · ${formatKeyHint("enter")} log out account · ${editorKey("tui.select.cancel")} cancel`,
+					`j/k or ${editorKeys("tui.select.up", "tui.select.down")} select · / search · ${formatKeyHint("enter")} log out account · ${editorKey("tui.select.cancel")} cancel`,
 				),
 				0,
 				0,
@@ -113,28 +121,46 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		);
 	}
 
-	handleInput(rawData: string): void {
-		const keyData = pickerNavigationKey(rawData);
-		if (matchesSelectCancel(keyData)) {
-			this.#onCancelCallback();
-			return;
-		}
+	navigationSnapshot(): unknown {
+		return { selectedKey: this.#menu.selectedKey, query: this.#menu.query, viewportTop: this.#viewport.top };
+	}
 
-		if (matchesSelectUp(keyData)) {
-			this.#menu.move(-1, true);
-			this.#updateList();
-		} else if (matchesSelectDown(keyData)) {
-			this.#menu.move(1, true);
-			this.#updateList();
-		} else if (matchesKey(keyData, "pageUp")) {
-			this.#menu.move(-LOGOUT_SELECTOR_MAX_VISIBLE, false);
-			this.#updateList();
-		} else if (matchesKey(keyData, "pageDown")) {
-			this.#menu.move(LOGOUT_SELECTOR_MAX_VISIBLE, false);
-			this.#updateList();
-		} else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-			this.#confirmSelection();
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as { selectedKey?: string; query?: string; viewportTop?: number };
+		if (typeof state.query !== "string") return;
+		this.#filterFocused = false;
+		this.#search.setValue(state.query);
+		this.#menu.setQuery(state.query);
+		if (state.selectedKey !== undefined) this.#menu.setSelectedKey(state.selectedKey);
+		this.#viewport.setTop(state.viewportTop);
+		this.#nativeItems = undefined;
+		this.#updateList();
+	}
+
+	handleInput(data: string): void {
+		if (this.#filterFocused) {
+			if (matchesSelectCancel(data)) {
+				this.#filterFocused = false;
+				this.#updateList();
+				return;
+			}
+			if (this.#search.handleInput(data)) {
+				this.#menu.setQuery(this.#search.getValue());
+				this.#viewport.reveal();
+				this.#nativeItems = undefined;
+				this.#updateList();
+				return;
+			}
 		}
+		const action = this.#keys.read(data);
+		if (action === undefined || action === "pending") return;
+		if (applyMenuMotion(action, this.#menu, this.#viewport, { wrap: true }).handled) this.#updateList();
+		else if (action.kind === "search") {
+			this.#filterFocused = true;
+			this.#updateList();
+		} else if (action.kind === "cancel") this.#onCancelCallback();
+		else if (action.kind === "confirm") this.#confirmSelection();
 	}
 
 	#confirmSelection(): void {
@@ -153,7 +179,8 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 				size: "md",
 				layout: "cards",
 				preview: "none",
-				query: null,
+				query: this.#menu.query,
+				order: this.#menu.visibleItems.map(account => String(account.credentialId)),
 				items: (this.#pickerItems ??= this.#accounts.map(account => ({
 					id: String(account.credentialId),
 					label: account.label,
@@ -210,12 +237,14 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		}
 		if (ev?.kind === "select") {
 			this.#menu.setSelectedKey(ev.item);
+			this.#viewport.reveal();
 			this.#updateList();
 			return;
 		}
 		if ((event.type !== "select" && event.type !== "activate") || (event.key !== "list" && ev?.kind !== "activate"))
 			return;
 		this.#menu.setSelectedKey(event.item);
+		this.#viewport.reveal();
 		if (this.#menu.selectedKey !== event.item) return;
 		this.#updateList();
 		this.#confirmSelection();

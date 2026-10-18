@@ -1,6 +1,8 @@
 import { getKeybindings } from "../keybindings";
 import { matchesKey } from "../keys";
 import { getMenuWindow, type MenuWindow } from "./menu-selection";
+import { Input } from "./input";
+import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
 
 /**
  * A normal-navigation intent resolved from one key. Hosts apply motions with
@@ -84,6 +86,98 @@ export class MenuKeyReader {
 		if (kb.matches(data, "tui.select.nextContext")) return { kind: "context", delta: 1 };
 		if (kb.matches(data, "tui.select.search")) return { kind: "search" };
 		return undefined;
+	}
+}
+
+export interface MenuSearchState {
+	value: string;
+	focused: boolean;
+	cursor: number;
+}
+
+export interface MenuSearchTheme {
+	muted(text: string): string;
+}
+
+/**
+ * A menu's literal search field. Hosts route focused input here before menu
+ * shortcuts, refilter on "edited", and delegate "pass" to list navigation.
+ * "edited" also covers caret-only editing so hosts repaint the field.
+ */
+export class MenuSearchField {
+	readonly #input = new Input();
+
+	constructor(value = "", focused = false) {
+		this.#input.prompt = "";
+		this.#input.setValue(value);
+		this.#input.focused = focused;
+	}
+
+	/** Native picker bindings reuse the existing Input query/cursor transport. */
+	get input(): Input {
+		return this.#input;
+	}
+
+	get focused(): boolean {
+		return this.#input.focused;
+	}
+
+	set focused(value: boolean) {
+		this.#input.focused = value;
+	}
+
+	get value(): string {
+		return this.#input.getValue();
+	}
+
+	get cursor(): number {
+		return this.#input.getCursor();
+	}
+
+	setValue(value: string): void {
+		this.#input.setValue(value);
+	}
+
+	handleInput(data: string): "edited" | "exited" | "pass" {
+		if (!this.focused) return "pass";
+		const kb = getKeybindings();
+		if (kb.matches(data, "tui.select.cancel")) {
+			this.focused = false;
+			return "exited";
+		}
+		if (
+			kb.matches(data, "tui.select.up") ||
+			kb.matches(data, "tui.select.down") ||
+			kb.matches(data, "tui.select.pageUp") ||
+			kb.matches(data, "tui.select.pageDown") ||
+			kb.matches(data, "tui.select.confirm") ||
+			data === "\n"
+		) return "pass";
+		return this.#input.handleInput(data) ? "edited" : "pass";
+	}
+
+	render(width: number, theme: MenuSearchTheme): string {
+		const columns = Math.max(0, Math.trunc(width));
+		const prefix = "Search: ";
+		const hint = this.focused ? " · Esc back to list" : " · / search";
+		const fieldWidth = Math.max(0, columns - visibleWidth(prefix) - visibleWidth(hint));
+		const value = this.focused
+			? (this.#input.render(fieldWidth)[0] ?? "")
+			: truncateToWidth(replaceTabs(this.value), fieldWidth);
+		return theme.muted(truncateToWidth(`${prefix}${replaceTabs(value)}${hint}`, columns));
+	}
+
+	navigationSnapshot(): MenuSearchState {
+		return { value: this.value, focused: this.focused, cursor: this.cursor };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as Partial<MenuSearchState>;
+		if (typeof state.value !== "string") return;
+		this.setValue(state.value);
+		if (typeof state.cursor === "number") this.#input.setCursor(state.cursor);
+		this.focused = state.focused === true;
 	}
 }
 
@@ -259,6 +353,8 @@ export interface MenuHistoryParticipant {
 	navigationSnapshot(): unknown;
 	restoreNavigation(snapshot: unknown): void;
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
+	/** True only during an in-flight operation or credential prompt, not a pending second-press confirmation. */
+	readonly blocksMenuHistory?: boolean;
 }
 
 export function isMenuHistoryParticipant(value: unknown): value is MenuHistoryParticipant {

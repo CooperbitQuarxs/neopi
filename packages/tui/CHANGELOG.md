@@ -10,6 +10,9 @@
 - Lists open in normal navigation: `j`/`k` move, `gg`/`G` jump to first/last, `Ctrl-d`/`Ctrl-u` move half a page, `Ctrl-e`/`Ctrl-y` scroll the view without moving the selection, and `/` focuses the search field, where every key types literally until Esc returns to the list ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Search setup and login providers with `/`, page or jump through accounts, and scroll the view without moving the selected provider ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Menu history preserves focused filter text and caret position, and `Ctrl-N`/`Ctrl-P` switch menu contexts alongside Tab/Shift-Tab ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Logout and usage-reset pickers support search, paging, and history without replaying destructive confirmations ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Small settings and account pickers preserve selection, search, and scroll position when reopened ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Menu search fields share literal editing, consistent muted hints, and restorable caret/focus state across custom pickers ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 
 ### Fixed
 

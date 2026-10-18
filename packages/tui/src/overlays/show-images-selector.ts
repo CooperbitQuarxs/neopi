@@ -4,6 +4,7 @@ import { OverlayPanel } from "../chrome/overlay-box";
 import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-routing";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { SelectListSheet } from "../native/picker";
+import type { SelectListNavigationState } from "../components/select-list";
 
 /**
  * Component that renders a show images selector with borders
@@ -21,7 +22,7 @@ export class ShowImagesSelectorComponent extends OverlayPanel {
 		];
 
 		// Create selector
-		this.#selectList = new SelectList(items, 5, getSelectListTheme());
+		this.#selectList = new SelectList(items, 5, getSelectListTheme(), { search: "always" });
 
 		// Preselect current value
 		this.#selectList.setSelectedIndex(currentValue ? 0 : 1);
@@ -54,6 +55,15 @@ export class ShowImagesSelectorComponent extends OverlayPanel {
 
 	getSelectList(): SelectList {
 		return this.#selectList;
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationState();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null || !("filter" in snapshot) || typeof snapshot.filter !== "string") return;
+		this.#selectList.restoreNavigationState(snapshot as SelectListNavigationState);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
