@@ -188,13 +188,22 @@ describe("controller menu timeline", () => {
 		expect(h.controller.openMenu("jobs-panel", open)).toBeUndefined();
 	});
 
-	it("does not treat an editor-slot prompt as an overlay history blocker", () => {
+	it("keeps an editor-slot prompt mounted and focuses it on return to conversation", () => {
 		const h = harness();
+		const prompt: Component = { render: () => ["Pending credential wizard"] };
+		h.ctx.editorContainer.addChild(prompt);
+		h.ctx.ui.setFocus(prompt);
 		h.open("settings");
-		h.ctx.ui.setFocus(h.ctx.editor);
 		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
 		expect(h.status).toEqual([]);
 		expect(h.overlayStack).toHaveLength(0);
+		expect(h.ctx.editorContainer.children).toEqual([prompt]);
+		expect(h.focused()).toBe(prompt);
+		expect(h.controller.navigateMenuHistory(1)).toBe(true);
+		expect(h.focused()).toBe(h.menus.get("settings"));
+		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
+		expect(h.focused()).toBe(prompt);
+		expect(h.ctx.editorContainer.children).toEqual([prompt]);
 	});
 
 	it("ignores history silently while the composer completion popup is active", async () => {
