@@ -3,20 +3,15 @@ import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth/types";
 import {
 	Container,
-	extractPrintableText,
-	matchesKey,
 	ScrollView,
 	type SgrMouseEvent,
 	Spacer,
 	TruncatedText,
-	visibleWidth,
 } from "../index";
 import { theme } from "../theme/theme";
-import { matchesSelectCancel } from "../keybinding-matchers";
 import { OverlayPanel } from "../chrome/overlay-box";
-import { Input } from "../components/input";
 import { MenuSelection } from "../components/menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuViewport } from "../components/menu-navigation";
+import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport } from "../components/menu-navigation";
 import type { TspPickerItem, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { node, span, text } from "../native/describe";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
@@ -55,20 +50,20 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	#listView: ScrollView | undefined;
 	#menu: MenuSelection<OAuthProviderInfo>;
 	/** The provider search field; its value drives `#menu`'s query. */
-	#search = Object.assign(new Input(), { prompt: "" });
+	readonly #search = new MenuSearchField();
 	#hoveredIndex: number | null = null;
 	/** First provider index of the visible ScrollView window (last #updateList). */
 	#scrollStart = 0;
 	#visibleCount = 0;
 	/** Visible list window, shrunk by {@link setMaxHeight} on short screens. */
 	#maxVisible = OAUTH_SELECTOR_MAX_VISIBLE;
-	#filterEditing = false;
 	readonly #navigationKeys = new MenuKeyReader();
 	readonly #viewport = new MenuViewport();
 	#mode: "login" | "logout";
 	#authStorage: OAuthSelectorAuthSource;
 	#onSelectCallback: (providerId: string) => void;
 	#onCancelCallback: () => void;
+	#cancelLabel: string;
 	#statusMessage: string | undefined;
 	#validateAuthCallback?: (providerId: string) => Promise<boolean>;
 	#requestRenderCallback?: () => void;
@@ -92,6 +87,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			disabledProviders?: readonly string[];
 			validateAuth?: (providerId: string) => Promise<boolean>;
 			requestRender?: () => void;
+			cancelLabel?: string;
 		},
 	) {
 		super(mode === "login" ? "Select provider to login" : "Select provider to logout", "omp.overlay.oauth");
@@ -99,6 +95,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		this.#authStorage = authStorage;
 		this.#onSelectCallback = onSelect;
 		this.#onCancelCallback = onCancel;
+		this.#cancelLabel = options?.cancelLabel ?? "close";
 		this.#validateAuthCallback = options?.validateAuth;
 		this.#requestRenderCallback = options?.requestRender;
 		this.#menu = new MenuSelection<OAuthProviderInfo>([], {
@@ -275,14 +272,9 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	}
 
 	#renderStatusLine(_total: number): string {
-		const query = this.#menu.query.trim();
-		if (!query)
-			return theme.fg("muted", this.#filterEditing ? "Search · Esc back to list" : "j/k select · / search · Enter choose · Esc close");
-		const width = visibleWidth(this.#search.getValue()) + 1;
-		return (
-			theme.fg("muted", "Search: ") +
-			(this.#filterEditing ? (this.#search.render(width)[0] ?? "") : this.#menu.query)
-		);
+		if (!this.#search.focused && !this.#search.value)
+			return theme.fg("muted", `j/k select · / search · Enter choose · Esc ${this.#cancelLabel}`);
+		return this.#search.render(72, { muted: text => theme.fg("muted", text) });
 	}
 
 	#getProviderSearchText(provider: OAuthProviderInfo): string {
@@ -300,27 +292,12 @@ export class OAuthSelectorComponent extends OverlayPanel {
 
 	/** Applies the search field's value to the filter; clears any stale status. */
 	#syncSearchQuery(): void {
-		this.#menu.setQuery(this.#search.getValue(), false);
+		this.#menu.setQuery(this.#search.value, false);
 		this.#viewport.reveal();
 		this.#statusMessage = undefined;
 		this.#updateList();
 	}
 
-	/** Feeds keys the selector does not bind to the search field. Backspace on an empty query and a leading space bubble. */
-	#handleSearchInput(keyData: string): boolean {
-		if (!this.#isSearchEnabled()) return false;
-		const before = this.#search.getValue();
-		if (before.length === 0) {
-			if (matchesKey(keyData, "backspace")) return false;
-			const printableText = extractPrintableText(keyData);
-			if (printableText !== undefined && printableText.trim().length === 0) return false;
-		}
-		const cursorBefore = this.#search.getCursor();
-		if (!this.#search.handleInput(keyData)) return false;
-		if (this.#search.getValue() !== before) this.#syncSearchQuery();
-		else if (this.#search.getCursor() !== cursorBefore) this.#updateList();
-		return true;
-	}
 
 	#updateList(): void {
 		this.#nativeRoot = undefined;
@@ -399,17 +376,15 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		return rows;
 	}
 	navigationSnapshot(): unknown {
-		return { selectedKey: this.#menu.selectedKey, query: this.#menu.query, viewportTop: this.#viewport.top };
+		return { selectedKey: this.#menu.selectedKey, search: this.#search.navigationSnapshot(), viewportTop: this.#viewport.top };
 	}
 
 	restoreNavigation(snapshot: unknown): void {
 		if (typeof snapshot !== "object" || snapshot === null) return;
-		const state = snapshot as { selectedKey?: string; query?: string; viewportTop?: number };
-		if (typeof state.query !== "string") return;
-		this.#filterEditing = false;
+		const state = snapshot as { selectedKey?: string; search?: unknown; viewportTop?: number };
 		this.#navigationKeys.reset();
-		this.#search.setValue(state.query);
-		this.#menu.setQuery(state.query, false);
+		this.#search.restoreNavigation(state.search);
+		this.#menu.setQuery(this.#search.value, false);
 		if (typeof state.selectedKey === "string") this.#menu.setSelectedKey(state.selectedKey);
 		this.#viewport.setTop(state.viewportTop);
 		this.#updateList();
@@ -420,14 +395,12 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	}
 
 	handleInput(data: string): void {
-		if (this.#filterEditing) {
-			if (matchesSelectCancel(data)) {
-				this.#filterEditing = false;
-				this.#updateList();
-				return;
-			}
-			if (this.#handleSearchInput(data)) return;
-			if (extractPrintableText(data) !== undefined) return;
+		const before = this.#search.value;
+		const field = this.#search.handleInput(data);
+		if (field !== "pass") {
+			if (this.#search.value !== before) this.#syncSearchQuery();
+			else this.#updateList();
+			return;
 		}
 		const action = this.#navigationKeys.read(data);
 		if (action === undefined || action === "pending") return;
@@ -438,7 +411,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		}
 		switch (action.kind) {
 			case "search":
-				this.#filterEditing = true;
+				this.#search.focused = true;
 				this.#navigationKeys.reset();
 				this.#updateList();
 				break;
@@ -529,7 +502,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		this.#pickerItems ??= all.map(provider => this.#pickerItem(provider));
 		const query = this.#menu.query;
 		const login = this.#mode === "login";
-		const search = this.#shouldRenderSearchStatus() ? pickerQuery(this.#search) : pickerQuery(null);
+		const search = this.#shouldRenderSearchStatus() ? pickerQuery(this.#search.input) : pickerQuery(null);
 		this.#pickerRoot = dockedPicker({
 			title: login ? "Sign in" : "Sign out",
 			subtitle: login ? "Pick a provider" : "Remove stored credentials",
@@ -584,7 +557,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			children.push(
 				node(
 					"input",
-					{ text: this.#search.getValue(), cursor: this.#search.getCursor(), placeholder: "Type to search" },
+					{ text: this.#search.value, cursor: this.#search.cursor, placeholder: "Type to search" },
 					undefined,
 					"search",
 				),

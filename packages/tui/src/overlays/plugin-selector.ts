@@ -11,7 +11,6 @@ import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-r
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { SelectListSheet } from "../native/picker";
 import type { TspPickerItem } from "@oh-my-pi/pi-wire";
-import type { SelectListNavigationState } from "../components/select-list";
 
 export interface PluginSelectorCallbacks {
 	onSelect: (pluginName: string, marketplace: string, scope?: "user" | "project") => void;
@@ -123,8 +122,7 @@ export class PluginSelectorComponent extends OverlayPanel {
 	}
 
 	restoreNavigation(snapshot: unknown): void {
-		if (typeof snapshot !== "object" || snapshot === null || !("filter" in snapshot) || typeof snapshot.filter !== "string") return;
-		this.#selectList.restoreNavigationState(snapshot as SelectListNavigationState);
+		this.#selectList.restoreNavigation(snapshot);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {

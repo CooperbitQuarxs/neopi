@@ -318,7 +318,11 @@ export class SignInScene implements SetupSceneController {
 				void this.#login(providerId);
 			},
 			() => this.#host.finish("skipped"),
-			{ requestRender: () => this.#host.requestRender(), disabledProviders: this.#host.ctx.disabledProviders },
+			{
+				requestRender: () => this.#host.requestRender(),
+				disabledProviders: this.#host.ctx.disabledProviders,
+				cancelLabel: "skip",
+			},
 		);
 	}
 

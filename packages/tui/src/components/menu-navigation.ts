@@ -1,5 +1,5 @@
 import { getKeybindings } from "../keybindings";
-import { matchesKey } from "../keys";
+import { extractPrintableText, matchesKey } from "../keys";
 import { getMenuWindow, type MenuWindow } from "./menu-selection";
 import { Input } from "./input";
 import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
@@ -140,6 +140,10 @@ export class MenuSearchField {
 
 	handleInput(data: string): "edited" | "exited" | "pass" {
 		if (!this.focused) return "pass";
+		if (extractPrintableText(data) !== undefined) {
+			this.#input.handleInput(data);
+			return "edited";
+		}
 		const kb = getKeybindings();
 		if (kb.matches(data, "tui.select.cancel")) {
 			this.focused = false;

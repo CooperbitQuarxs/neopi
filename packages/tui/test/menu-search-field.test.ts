@@ -1,9 +1,27 @@
 import { describe, expect, it } from "bun:test";
 import { MenuSearchField } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 
 const theme = { muted: (text: string) => text };
 
 describe("literal menu search fields", () => {
+	it("keeps printable remapped menu keys literal while the field is focused", () => {
+		const previous = getKeybindings();
+		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, {
+			"tui.select.up": "k",
+			"tui.select.cancel": "x",
+			"tui.select.confirm": "l",
+		}));
+		try {
+			const field = new MenuSearchField("", true);
+			for (const key of ["k", "x", "l"]) expect(field.handleInput(key)).toBe("edited");
+			expect(field.value).toBe("kxl");
+			expect(field.focused).toBe(true);
+		} finally {
+			setKeybindings(previous);
+		}
+	});
+
 	it("takes literal text only while focused and retains it after Escape", () => {
 		const field = new MenuSearchField();
 		expect(field.handleInput("j")).toBe("pass");

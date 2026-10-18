@@ -742,7 +742,6 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	#switchToTab(tabId: SettingTab | "plugins"): void {
-		const previous = this.navigationSnapshot();
 		this.#currentTabId = tabId;
 		this.#setContent(() => {
 			if (tabId === "plugins") {
@@ -751,7 +750,6 @@ export class SettingsSelectorComponent implements Component {
 				this.#showSettingsTab(tabId);
 			}
 		});
-		if (!this.#restoringNavigation) this.onNavigationVisit?.(tabId, previous);
 	}
 
 	#footerHintText(): string {
