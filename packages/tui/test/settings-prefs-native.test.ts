@@ -303,6 +303,7 @@ describe("settings as a native prefs page", () => {
 
 	it("searches across pages, grouping results by page and section, and a page click leaves the search", () => {
 		const { selector } = harness();
+		selector.handleInput("/");
 		selector.handleInput("t");
 		selector.handleInput("h");
 		const { props } = prefs(selector);
@@ -322,5 +323,38 @@ describe("settings as a native prefs page", () => {
 		expect(prefs(selector).props.focus).toBe("display.colorBlind");
 		send(selector, { type: "select", key: "", item: "display.risky" });
 		expect(prefs(selector).props.focus).toBe("display.risky");
+	});
+
+	it("keeps global-search text literal and restores its focus and selection", () => {
+		const { selector } = harness();
+		selector.handleInput("j");
+		expect(prefs(selector).props.query).toBeUndefined();
+		selector.handleInput("/");
+		selector.handleInput("theme");
+		selector.handleInput("\x1b");
+		expect(prefs(selector).props.query).toBe("theme");
+		const snapshot = selector.navigationSnapshot();
+		const restored = harness().selector;
+		restored.restoreNavigation(snapshot);
+		expect(prefs(restored).props.query).toBe("theme");
+		expect(prefs(restored).props.focus).toBe(prefs(selector).props.focus);
+		expect(restored.navigationSnapshot()).toEqual(snapshot);
+		restored.handleInput("/");
+		restored.handleInput(" hjkl");
+		expect(prefs(restored).props.query).toBe("theme hjkl");
+	});
+
+	it("reports nested settings pages and restores them without a fresh visit", () => {
+		const { selector } = harness();
+		const visits: string[] = [];
+		selector.onNavigationVisit = page => { visits.push(page); };
+		send(selector, { type: "action", key: "", act: "page", value: "context", mods: [] });
+		send(selector, { type: "action", key: "", act: "edit", value: "compaction.thresholdPercent", mods: [] });
+		const snapshot = selector.navigationSnapshot();
+		expect(visits.some(page => page.includes("compaction.thresholdPercent"))).toBe(true);
+		const count = visits.length;
+		selector.restoreNavigation(snapshot);
+		expect(visits).toHaveLength(count);
+		expect(selector.navigationSnapshot()).toEqual(snapshot);
 	});
 });

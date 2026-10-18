@@ -10,11 +10,13 @@
  * lines and forwards key/mouse input. Every rendered frame records a hit
  * target per row so mouse clicks resolve against what is actually visible.
  */
-import { Editor } from "../../components/editor";
+import { Editor, type EditorNavigationState } from "../../components/editor";
 import { FormField, type FormFieldTheme, TextFormField } from "../../components/form";
 import { Image, type ImageBudget } from "../../components/image";
 import { MenuSelection } from "../../components/menu-selection";
 import { ScrollView } from "../../components/scroll-view";
+import { MenuKeyReader, MenuSearchField, type MenuNavAction } from "../../components/menu-navigation";
+import { fuzzyFilter } from "../../fuzzy";
 import { TreeView } from "../../components/tree-view";
 import { matchesKey } from "../../keys";
 import { col, compact, item, keyed, list, node, row, span, stableKey, text } from "../../native/describe";
@@ -380,6 +382,7 @@ export class Sidebar {
 			files: readonly ChangedFile[];
 			style: "path" | "tree";
 			treeVersion: number;
+			query: string;
 			entries: SidebarFileEntry[];
 			rows: Row[];
 		}
@@ -393,6 +396,7 @@ export class Sidebar {
 				headFiles: readonly ChangedFile[] | undefined;
 				style: "path" | "tree";
 				treeVersion: number;
+				query: string;
 		  }
 		| undefined;
 	/** Tree depth per target key (file/dir rows only); parent-jump for `←`. */
@@ -407,6 +411,8 @@ export class Sidebar {
 	#visibleRows: (Row | undefined)[] = [];
 	#lastWidth = 40;
 	#lastHeight = 24;
+	readonly #keys = new MenuKeyReader();
+	readonly search = new MenuSearchField();
 	#avatarImage: { email: string; image: Image } | undefined;
 
 	constructor(options: {
@@ -512,25 +518,30 @@ export class Sidebar {
 	/** Section entries in display order: tree dirs + files, or flat files. */
 	#fileEntries(files: readonly ChangedFile[], section: string): SidebarFileEntry[] {
 		const cached = this.#fileEntryCache.get(section);
-		if (cached?.files === files && cached.style === this.viewStyle && cached.treeVersion === this.#treeVersion) {
+		if (cached?.files === files && cached.style === this.viewStyle && cached.treeVersion === this.#treeVersion &&
+			cached.query === this.search.value) {
 			return cached.entries;
 		}
 
+		const visibleFiles = this.search.value.trim()
+			? fuzzyFilter(files, this.search.value, file => file.path)
+			: files;
 		let entries: SidebarFileEntry[];
 		if (this.viewStyle === "path") {
-			entries = files.map(file => ({ target: { kind: "file", file } as const, file }));
+			entries = visibleFiles.map(file => ({ target: { kind: "file", file } as const, file }));
 		} else {
 			let fileTree = this.#fileTrees.get(section);
 			if (!fileTree) {
 				fileTree = new GitFileTree(section, this.#collapsed);
 				this.#fileTrees.set(section, fileTree);
 			}
-			entries = fileTree.entries(files, this.#treeVersion);
+			entries = fileTree.entries(visibleFiles, this.#treeVersion);
 		}
 		this.#fileEntryCache.set(section, {
 			files,
 			style: this.viewStyle,
 			treeVersion: this.#treeVersion,
+			query: this.search.value,
 			entries,
 			rows: entries.map(entry => ({ entry, target: entry.target })),
 		});
@@ -546,7 +557,7 @@ export class Sidebar {
 			snapshot.staged === this.#model.staged &&
 			snapshot.headFiles === headFiles &&
 			snapshot.style === this.viewStyle &&
-			snapshot.treeVersion === this.#treeVersion
+			snapshot.treeVersion === this.#treeVersion && snapshot.query === this.search.value
 		) {
 			return;
 		}
@@ -587,7 +598,66 @@ export class Sidebar {
 			headFiles,
 			style: this.viewStyle,
 			treeVersion: this.#treeVersion,
+			query: this.search.value,
 		};
+	}
+
+	navigationSnapshot(): unknown {
+		return {
+			selected: this.#selection.selectedKey, collapsed: [...this.#collapsed],
+			collapsedSections: [...this.#collapsedSections], viewStyle: this.viewStyle,
+			viewport: this.#scrollView.navigationSnapshot(), search: this.search.navigationSnapshot(),
+			summary: this.summary.navigationSnapshot(), description: this.description.getState(),
+			aiPrompt: this.#aiPromptOpen,
+			aiInput: this.aiInput.navigationSnapshot(), amend: this.amend,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as {
+			selected?: string; collapsed?: string[]; collapsedSections?: SectionTarget["area"][];
+			viewStyle?: "path" | "tree"; viewport?: unknown; search?: unknown;
+			summary?: unknown; description?: EditorNavigationState;
+			aiPrompt?: boolean; aiInput?: unknown; amend?: boolean;
+		};
+		this.#collapsed.clear();
+		for (const key of state.collapsed ?? []) if (typeof key === "string") this.#collapsed.add(key);
+		this.#collapsedSections.clear();
+		for (const key of state.collapsedSections ?? []) {
+			if (key === "staged" || key === "unstaged") this.#collapsedSections.add(key);
+		}
+		if (state.viewStyle === "path" || state.viewStyle === "tree") this.viewStyle = state.viewStyle;
+		this.search.restoreNavigation(state.search);
+		this.summary.restoreNavigation(state.summary);
+		this.aiInput.restoreNavigation(state.aiInput);
+		if (typeof state.description?.text === "string" && state.description.cursor) {
+			this.description.setState(state.description);
+		}
+		this.#aiPromptOpen = state.aiPrompt === true;
+		this.amend = state.amend === true;
+		this.#treeVersion++;
+		this.#rebuildTargets();
+		if (typeof state.selected === "string") this.#selection.setSelectedKey(state.selected);
+		this.setFocused(this.focused);
+		this.#followSelection = false;
+		this.#scrollView.restoreNavigation(state.viewport);
+		this.#keys.reset();
+	}
+
+	/** Search is a separate field; commit form controls keep their literal keys. */
+	handleSearchInput(data: string): boolean {
+		const before = this.search.value;
+		const result = this.search.handleInput(data);
+		if (result === "pass") return false;
+		if (result === "exited") this.#keys.reset();
+		if (this.search.value !== before) {
+			this.#treeVersion++;
+			this.#rebuildTargets();
+			this.#followSelection = true;
+		}
+		this.#requestRender();
+		return true;
 	}
 
 	#select(target: Target): void {
@@ -869,7 +939,7 @@ export class Sidebar {
 		this.#requestRender();
 	}
 
-	handleInput(data: string): void {
+	handleInput(data: string, menuAction?: MenuNavAction): void {
 		this.#rebuildTargets();
 		const target = this.selected;
 
@@ -904,19 +974,28 @@ export class Sidebar {
 			}
 		}
 
-		if (matchesKey(data, "up") || data === "k") this.#moveSelection(-1);
-		else if (matchesKey(data, "down") || data === "j") this.#moveSelection(1);
-		else if (matchesKey(data, "left") || data === "h") this.#collapseOrParent();
-		else if (matchesKey(data, "right") || data === "l") this.#expandOrOpen();
-		else if (matchesKey(data, "home") || data === "g") this.#moveSelection(-this.#selection.items.length);
-		else if (matchesKey(data, "end") || data === "G") this.#moveSelection(this.#selection.items.length);
-		else if (matchesKey(data, "pageUp")) this.#moveSelection(-Math.max(1, this.#lastHeight - 4));
-		else if (matchesKey(data, "pageDown")) this.#moveSelection(Math.max(1, this.#lastHeight - 4));
-		else if (matchesKey(data, "enter") && target) {
+		const action = menuAction ?? this.#keys.read(data);
+		if (action === "pending") return;
+		if (matchesKey(data, "alt+left")) return this.#collapseOrParent();
+		if (matchesKey(data, "alt+right")) return this.#expandOrOpen();
+		if (action?.kind === "move") this.#moveSelection(action.delta);
+		else if (action?.kind === "boundary") {
+			this.#moveSelection((action.edge === "first" ? -1 : 1) * this.#selection.items.length);
+		} else if (action?.kind === "halfPage" || action?.kind === "page") {
+			this.#moveSelection(action.delta * Math.max(1, Math.floor(
+				(this.#lastHeight - 4) / (action.kind === "halfPage" ? 2 : 1),
+			)));
+		} else if (action?.kind === "scroll") {
+			this.#scrollView.scroll(action.delta);
+			this.#requestRender();
+		} else if (action?.kind === "search") {
+			this.search.focused = true;
+			this.#requestRender();
+		} else if (action?.kind === "confirm" && target) {
 			// Enter opens a file (focus the diff); space/s/u do the staging.
 			if (target.kind === "file") this.#onFocusDiff();
 			else this.#activate(target);
-		} else if (data === " " && (target?.kind === "file" || target?.kind === "dir" || target?.kind === "section")) {
+		} else if (action?.kind === "toggle" && (target?.kind === "file" || target?.kind === "dir" || target?.kind === "section")) {
 			// Space stages/unstages the row — folders and section headers act on every file underneath.
 			// Enter/click toggle dir/section collapse; ←/→ fold explicitly.
 			const action = this.#stageActionFor(target);
@@ -955,8 +1034,10 @@ export class Sidebar {
 		const summaryInput = editing === "summary" ? this.summary.input.describe(cx) : undefined;
 		const aiInput = editing === "stage-ai-input" ? this.aiInput.input.describe(cx) : undefined;
 		const descriptionEditor = editing === "description" ? editorNode(this.description.describe(cx)) : undefined;
+		const search = this.search.input.describe(cx);
 		return this.#nativeMemo.get(
 			[
+				search,
 				this.#model.clean,
 				this.#model.unstaged,
 				this.#model.staged,
@@ -994,6 +1075,7 @@ export class Sidebar {
 							),
 							this.#describeCommit(on, summaryInput, descriptionEditor),
 						];
+				children.unshift(keyed(col([text([span("Search files", "muted")]), search], { gap: "xs" }), "search"));
 				return col(children, { role: "omp.app.git.side" });
 			},
 		);
@@ -1438,6 +1520,7 @@ export class Sidebar {
 			rows.push(...this.#fileListRows(width, isSelected));
 			pinned = this.#commitFormRows(width, isSelected);
 		}
+		rows.unshift({ text: this.search.render(width, { muted: text => theme.fg("dim", text) }) });
 
 		const listHeight = Math.max(1, height - pinned.length);
 		this.#scrollView.setHeight(listHeight);

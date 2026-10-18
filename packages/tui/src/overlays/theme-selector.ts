@@ -4,7 +4,6 @@ import { OverlayPanel } from "../chrome/overlay-box";
 import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-routing";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { type SelectPickerOptions, SelectListSheet } from "../native/picker";
-import type { SelectListNavigationState } from "../components/select-list";
 
 /**
  * Picker options for a theme list (this selector and the settings theme
@@ -99,8 +98,7 @@ export class ThemeSelectorComponent extends OverlayPanel {
 	}
 
 	restoreNavigation(snapshot: unknown): void {
-		if (typeof snapshot !== "object" || snapshot === null || !("filter" in snapshot) || typeof snapshot.filter !== "string") return;
-		this.#selectList.restoreNavigationState(snapshot as SelectListNavigationState);
+		this.#selectList.restoreNavigation(snapshot);
 		const selected = this.#selectList.getSelectedItem();
 		if (selected) this.#onPreview(selected.value);
 	}

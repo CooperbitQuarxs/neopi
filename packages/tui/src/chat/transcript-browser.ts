@@ -123,6 +123,17 @@ export class TranscriptBrowser implements Component {
 		this.#scrollView.invalidate();
 	}
 
+	navigationSnapshot(): unknown {
+		return { viewport: this.#scrollView.navigationSnapshot(), followBottom: this.#followBottom };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { viewport?: unknown; followBottom?: boolean };
+		this.#scrollView.restoreNavigation(state.viewport);
+		if (typeof state.followBottom === "boolean") this.#followBottom = state.followBottom;
+	}
+
 	/** Prompt-zone-safe rendered rows for outline composition at `columnWidth`. */
 	renderOutlineRows(children: readonly Component[], columnWidth: number): Array<readonly string[]> {
 		return this.#rowCache.rows(children, Math.max(10, columnWidth - 4));

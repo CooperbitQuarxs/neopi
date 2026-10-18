@@ -1,12 +1,12 @@
 import type { TspPickerGroup, TspPickerItem, TspTone } from "@oh-my-pi/pi-wire";
-import { formatKeyHint, formatKeyHints } from "../../app-keybindings";
+import { formatKeyHint } from "../../app-keybindings";
 import type { Component } from "../../tui";
 import { code } from "../../native/describe";
 import { Memo } from "../../native/memo";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../../native/node";
 import { CLOSE_ACTION, picker, pickerAction, pickerEvent, pickerHits, pickerQuery } from "../../native/picker";
 import { matchesKey } from "../../keys";
-import { Input } from "../../components/input";
+import { MenuKeyReader, MenuSearchField } from "../../components/menu-navigation";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../../mouse";
 import { padding, truncateToWidth, visibleWidth } from "../../utils";
 import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
@@ -205,6 +205,36 @@ export class DebugLogViewerModel {
 		this.#visibleLogIndices = [];
 		this.#selectableRowIndices = [];
 		this.#rebuildRows();
+	}
+
+	navigationSnapshot(): unknown {
+		return {
+			filter: this.#filterQuery, processFilter: this.#processFilterEnabled,
+			cursor: this.#getCursorToken(), anchor: this.#getAnchorLogIndex(),
+			expanded: [...this.#expandedLogIndices], loadedStart: this.#loadedStartIndex,
+			logCount: this.logCount,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as {
+			filter?: string; processFilter?: boolean; cursor?: CursorToken; anchor?: number;
+			expanded?: number[]; loadedStart?: number; logCount?: number;
+		};
+		const offset = typeof state.logCount === "number" ? this.logCount - state.logCount : 0;
+		if (typeof state.filter === "string") this.#filterQuery = state.filter;
+		if (typeof state.processFilter === "boolean") this.#processFilterEnabled = state.processFilter;
+		if (typeof state.loadedStart === "number") this.#loadedStartIndex = Math.max(0, state.loadedStart + offset);
+		if (Array.isArray(state.expanded)) {
+			this.#expandedLogIndices = new Set(state.expanded
+				.filter(index => Number.isInteger(index) && index + offset >= 0 && index + offset < this.logCount)
+				.map(index => index + offset));
+		}
+		const cursor = state.cursor?.kind === "log"
+			? { kind: "log" as const, logIndex: state.cursor.logIndex + offset }
+			: state.cursor?.kind === "load-older" ? state.cursor : undefined;
+		this.#rebuildRows(cursor, typeof state.anchor === "number" ? state.anchor + offset : undefined);
 	}
 
 	get logCount(): number {
@@ -643,7 +673,8 @@ interface DebugLogViewerComponentOptions {
 export class DebugLogViewerComponent implements Component {
 	#model: DebugLogViewerModel;
 	/** Filter field; its value is pushed into the model whenever it changes. */
-	readonly #filter = new Input();
+	readonly #search = new MenuSearchField();
+	readonly #filter = this.#search.input;
 	#terminalRows: number;
 	#onExit: () => void;
 	#onStatus?: (message: string) => void;
@@ -662,6 +693,7 @@ export class DebugLogViewerComponent implements Component {
 	#rowCache = new Map<number, CachedLogRow>();
 	#rowCacheGeneration = 0;
 	#rowCacheThemeEpoch = -1;
+	readonly #keys = new MenuKeyReader();
 
 	constructor(options: DebugLogViewerComponentOptions) {
 		this.#deps = options.deps;
@@ -687,113 +719,91 @@ export class DebugLogViewerComponent implements Component {
 		});
 	}
 
+	navigationSnapshot(): unknown {
+		return {
+			model: this.#model.navigationSnapshot(), viewport: this.#frame.navigationSnapshot(),
+			filterFocused: this.#search.focused, filterCursor: this.#search.cursor,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { model?: unknown; viewport?: unknown; filterFocused?: boolean; filterCursor?: number };
+		this.#model.restoreNavigation(state.model);
+		this.#filter.setValue(this.#model.filterQuery);
+		if (typeof state.filterCursor === "number") this.#filter.setCursor(state.filterCursor);
+		this.#search.focused = state.filterFocused === true;
+		this.#frame.restoreNavigation(state.viewport);
+		this.#keys.reset();
+	}
+
 	handleInput(keyData: string): void {
-		if (routeSgrMouseInput(keyData, event => this.#handleMouse(event))) {
+		if (routeSgrMouseInput(keyData, event => this.#handleMouse(event))) return;
+		const before = this.#search.value;
+		const search = this.#search.handleInput(keyData);
+		if (search !== "pass") {
+			if (search === "exited") this.#keys.reset();
+			if (this.#search.value !== before) this.#model.setFilterQuery(this.#search.value);
 			return;
 		}
-
-		if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc")) {
-			this.#onExit();
-			return;
-		}
-
-		if (matchesKey(keyData, "ctrl+c")) {
-			this.#copySelected();
-			return;
-		}
-
+		if (matchesKey(keyData, "ctrl+c")) return this.#copySelected();
 		if (matchesKey(keyData, "ctrl+p")) {
-			this.#statusMessage = undefined;
 			this.#model.toggleProcessFilter();
 			return;
 		}
-
 		if (matchesKey(keyData, "ctrl+a")) {
-			this.#statusMessage = undefined;
 			this.#model.selectAllVisible();
 			return;
 		}
-
-		if (matchesKey(keyData, "ctrl+o")) {
-			this.#statusMessage = undefined;
-			void this.#handleLoadOlder(this.#frame.getBodyHeight() + 1);
-			return;
-		}
-
-		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return")) {
-			if (this.#model.cursorRowKind === "load-older") {
-				this.#statusMessage = undefined;
-				void this.#handleLoadOlder();
-			}
-			return;
-		}
-
 		if (matchesKey(keyData, "shift+up")) {
-			this.#statusMessage = undefined;
 			void this.#handleMoveUp(true);
 			return;
 		}
-
-		if (matchesKey(keyData, "shift+down")) {
-			this.#statusMessage = undefined;
-			this.#model.moveCursor(1, true);
-			return;
-		}
-
-		if (matchesKey(keyData, "up")) {
-			this.#statusMessage = undefined;
-			void this.#handleMoveUp(false);
-			return;
-		}
-
-		if (matchesKey(keyData, "down")) {
-			this.#statusMessage = undefined;
-			this.#model.moveCursor(1, false);
-			return;
-		}
-
-		// Page and end keys jump the cursor; the frame (or the native list)
-		// keeps it in view.
-		const jump = matchesKey(keyData, "pageUp")
-			? -this.#frame.getBodyHeight()
-			: matchesKey(keyData, "pageDown")
-				? this.#frame.getBodyHeight()
-				: matchesKey(keyData, "home")
-					? -this.#model.rows.length
-					: matchesKey(keyData, "end")
-						? this.#model.rows.length
-						: 0;
-		if (jump !== 0) {
-			this.#statusMessage = undefined;
-			this.#model.moveCursor(jump, false);
-			this.#onUpdate?.();
-			return;
-		}
-
-		if (matchesKey(keyData, "right")) {
-			this.#statusMessage = undefined;
-			if (this.#model.cursorRowKind === "load-older") {
-				void this.#handleLoadOlder();
-				return;
+		if (matchesKey(keyData, "shift+down")) return this.#model.moveCursor(1, true);
+		const action = this.#keys.read(keyData);
+		if (action === "pending") return;
+		this.#statusMessage = undefined;
+		if (action) {
+			switch (action.kind) {
+				case "cancel": return this.#onExit();
+				case "search":
+					this.#filter.focused = true;
+					return;
+				case "move":
+					if (action.delta < 0) void this.#handleMoveUp(false);
+					else this.#model.moveCursor(1, false);
+					return;
+				case "halfPage":
+				case "page":
+					this.#model.moveCursor(action.delta * Math.max(1, Math.floor(
+						this.#frame.getBodyHeight() / (action.kind === "halfPage" ? 2 : 1),
+					)), false);
+					return;
+				case "boundary":
+					this.#model.moveCursor((action.edge === "first" ? -1 : 1) * this.#model.rows.length, false);
+					return;
+				case "scroll":
+					this.#frame.scroll(action.delta);
+					return;
+				case "horizontal":
+					if (action.delta < 0) this.#model.collapseSelected();
+					else this.#model.expandSelected();
+					return;
+				case "toggle": {
+					const index = this.#model.cursorLogIndex;
+					if (index !== undefined) {
+						if (this.#model.isExpanded(index)) this.#model.collapseSelected();
+						else this.#model.expandSelected();
+					}
+					return;
+				}
+				case "confirm":
+					if (this.#model.cursorRowKind === "load-older") void this.#handleLoadOlder();
+					return;
+				default: return;
 			}
-			this.#model.expandSelected();
-			return;
 		}
-
-		if (matchesKey(keyData, "left")) {
-			this.#statusMessage = undefined;
-			this.#model.collapseSelected();
-			return;
-		}
-
-		// Everything else edits the filter field; refilter only when the text changed.
-		const before = this.#filter.getValue();
-		this.#filter.handleInput(keyData);
-		const after = this.#filter.getValue();
-		if (after !== before) {
-			this.#statusMessage = undefined;
-			this.#model.setFilterQuery(after);
-		}
+		if (keyData === "o") void this.#handleLoadOlder(this.#frame.getBodyHeight() + 1);
 	}
 
 	#handleMouse(event: SgrMouseEvent): boolean {
@@ -944,7 +954,7 @@ export class DebugLogViewerComponent implements Component {
 							pickerAction("copy", "Copy", "ctrl+c", { primary: true }),
 							pickerAction("all", "Select all", "ctrl+a"),
 							pickerAction("pid", "This process", "ctrl+p", { on: model.isProcessFilterEnabled() }),
-							pickerAction("older", "Load older", "ctrl+o", {
+							pickerAction("older", "Load older", "o", {
 								disabled: model.canLoadOlder()
 									? undefined
 									: model.historyLimitReached
@@ -1032,7 +1042,7 @@ export class DebugLogViewerComponent implements Component {
 		}
 		this.#bodyLineToRowIndex = mapping;
 		return {
-			header: [this.#summaryText(), this.#filterText()],
+			header: [this.#summaryText(), this.#filterText(context.contentWidth)],
 			body: anchor ? { lines, anchor } : { lines },
 			footer: [this.#statusText(), theme.fg("dim", this.#controlsText())],
 		};
@@ -1046,24 +1056,22 @@ export class DebugLogViewerComponent implements Component {
 	}
 
 	#controlsText(): string {
-		return `${formatKeyHint("escape")} close · ${formatKeyHint("ctrl+c")} copy · ${formatKeyHints(["up", "down"])}/wheel move · ${formatKeyHints(["pageUp", "pageDown"])} page · ${formatKeyHints(["home", "end"])} first/last · click toggle · ${formatKeyHints(["shift+up", "shift+down"])} select · ${formatKeyHints(["left", "right"])} collapse/expand · ${formatKeyHint("ctrl+a")} all · ${formatKeyHint("ctrl+o")} older · ${formatKeyHint("ctrl+p")} pid`;
+		return `Esc close · Ctrl-c copy · j/k rows · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · h/l collapse/expand · Space toggle · Shift-↑/↓ select · Ctrl-a all · o older · Ctrl-p pid · / search`;
 	}
 
-	#filterText(): string {
-		const value = this.#filter.getValue();
-		const [field = ""] = this.#filter.render(visibleWidth(value) + 1);
-		const query = value.length === 0 ? field + theme.fg("muted", "type to filter") : theme.fg("accent", field);
+	#filterText(width: number): string {
+		const query = this.#search.render(Math.max(0, width - 12), { muted: text => theme.fg("muted", text) });
 		const pidStatus = this.#model.isProcessFilterEnabled()
 			? theme.fg("success", "pid on")
 			: theme.fg("muted", "pid off");
 		const loading = this.#loadingOlder ? `  ${theme.fg("warning", "loading older…")}` : "";
-		return `${theme.fg("muted", "filter")} ${query}  ${pidStatus}${loading}`;
+		return `${query}  ${pidStatus}${loading}`;
 	}
 
 	#statusText(): string {
 		return this.#statusMessage
 			? theme.fg("success", this.#statusMessage)
-			: theme.fg("dim", `${formatKeyHint("enter")} loads older when highlighted; printable keys update filter`);
+			: theme.fg("dim", this.#search.focused ? "Esc back to list" : "Enter loads older when highlighted · / search");
 	}
 
 	async #handleLoadOlder(additionalCount: number = LOAD_OLDER_CHUNK): Promise<void> {

@@ -41,6 +41,8 @@ export interface StatusLineSegmentOptions {
 	path?: { abbreviate?: boolean; maxLength?: number; stripWorkPrefix?: boolean };
 	git?: { showBranch?: boolean; showStaged?: boolean; showUnstaged?: boolean; showUntracked?: boolean };
 	time?: { format?: "12h" | "24h"; showSeconds?: boolean };
+	/** Per-widget text templates for `usage:<provider>:<window>[:<tier>]` bars, keyed by segment id. */
+	usageBars?: { templates?: Record<string, string> };
 }
 
 export interface StatusLineSettings {

@@ -4,7 +4,6 @@ import { OverlayPanel } from "../chrome/overlay-box";
 import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-routing";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { SelectListSheet } from "../native/picker";
-import type { SelectListNavigationState } from "../components/select-list";
 
 /**
  * Component that renders a queue mode selector with borders
@@ -83,8 +82,7 @@ export class QueueModeSelectorComponent extends OverlayPanel {
 	}
 
 	restoreNavigation(snapshot: unknown): void {
-		if (typeof snapshot !== "object" || snapshot === null || !("filter" in snapshot) || typeof snapshot.filter !== "string") return;
-		this.#selectList.restoreNavigationState(snapshot as SelectListNavigationState);
+		this.#selectList.restoreNavigation(snapshot);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {

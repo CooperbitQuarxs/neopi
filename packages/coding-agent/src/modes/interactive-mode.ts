@@ -297,7 +297,7 @@ import {
 } from "./controllers/live-command-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { OmfgController } from "./controllers/omfg-controller";
-import { SelectorController } from "./controllers/selector-controller";
+import { type MenuHost, type MenuKind, SelectorController } from "./controllers/selector-controller";
 import { SessionFocusController } from "./controllers/session-focus-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TanCommandController } from "./controllers/tan-command-controller";
@@ -1527,6 +1527,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	hookSelector: HookSelectorComponent | undefined = undefined;
 	hookInput: HookInputComponent | undefined = undefined;
 	hookEditor: HookEditorComponent | undefined = undefined;
+	readonly hookCustomComponents = new Set<Component>();
 	lastStatus: StatusNotice | undefined = undefined;
 	fileSlashCommands: Set<string> = new Set();
 	slashCommandNames: ReadonlySet<string> = new Set();
@@ -7277,13 +7278,24 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 	showSessionInfo(info: string, context?: ContextUsage): void {
-		this.#hideSessionInfo();
+		const menu = this.openMenu("session-info", () => this.showSessionInfo(info, context));
+		if (!menu) return;
 		const overlay = new SessionInfoOverlay(this.ui, info, () => this.#hideSessionInfo(), context);
-		this.#sessionInfoOverlayHandle = this.ui.showOverlay(overlay, {
-			anchor: "bottom-center",
-			width: "100%",
-			maxHeight: "100%",
-			margin: 0,
+		menu.mount(overlay, () => {
+			const handle = this.ui.showOverlay(overlay, {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+			});
+			const hide = handle.hide.bind(handle);
+			handle.hide = () => {
+				menu.close();
+				if (this.#sessionInfoOverlayHandle === handle) this.#sessionInfoOverlayHandle = undefined;
+				hide();
+			};
+			this.#sessionInfoOverlayHandle = handle;
+			return handle;
 		});
 		this.ui.setFocus(overlay);
 		this.ui.requestRender();
@@ -7295,11 +7307,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * leaves no deferred command preview above the editor.
 	 */
 	showJobsSheet(): void {
-		if (this.#jobsSheetHandle) return;
 		if (!this.session.getAsyncJobSnapshot()) {
 			this.showWarning("Async background jobs are unavailable in this session.");
 			return;
 		}
+		const menu = this.openMenu("jobs-panel", () => this.showJobsSheet());
+		if (!menu) return;
 		const sheet = new JobsSheet({
 			load: () => this.session.getAsyncJobSnapshot({ recentLimit: 5 }) ?? { running: [], recent: [] },
 			inspect: id => this.session.inspectAsyncJob(id),
@@ -7309,8 +7322,23 @@ export class InteractiveMode implements InteractiveModeContext {
 			},
 			close: () => this.#hideJobsSheet(),
 		});
-		this.#jobsSheetHandle = this.ui.showOverlay(sheet, { anchor: "center", width: "90%", maxHeight: "90%" });
-		this.#jobsSheetTimer = setInterval(() => this.ui.requestRender(), JOBS_SHEET_REFRESH_MS);
+		menu.mount(sheet, () => {
+			const handle = this.ui.showOverlay(sheet, { anchor: "center", width: "90%", maxHeight: "90%" });
+			const hide = handle.hide.bind(handle);
+			handle.hide = () => {
+				menu.close();
+				if (this.#jobsSheetHandle === handle) {
+					this.#jobsSheetHandle = undefined;
+					clearInterval(this.#jobsSheetTimer);
+					this.#jobsSheetTimer = undefined;
+				}
+				hide();
+			};
+			this.#jobsSheetHandle = handle;
+			clearInterval(this.#jobsSheetTimer);
+			this.#jobsSheetTimer = setInterval(() => this.ui.requestRender(), JOBS_SHEET_REFRESH_MS);
+			return handle;
+		});
 		this.ui.setFocus(sheet);
 		this.ui.requestRender();
 	}
@@ -8110,6 +8138,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	// Selector handling
+	openMenu(kind: MenuKind, reopen: () => void): MenuHost | undefined {
+		return this.#selectorController.openMenu(kind, reopen);
+	}
+
 	showSettingsSelector(): void {
 		this.#selectorController.showSettingsSelector();
 	}

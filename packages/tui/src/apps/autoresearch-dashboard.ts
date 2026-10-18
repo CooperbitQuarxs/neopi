@@ -1,7 +1,8 @@
-import { formatKeyHint, formatKeyHints } from "../app-keybindings";
+import { formatKeyHint } from "../app-keybindings";
 import { matchesKey } from "../keys";
 import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
 import { ScrollView } from "../components/scroll-view";
+import { MenuKeyReader } from "../components/menu-navigation";
 import { renderTableRow, type TableCell, type TableColumn } from "../components/table";
 import { Text } from "../components/text";
 import type { Component } from "../tui";
@@ -151,6 +152,8 @@ export function createDashboardController(): DashboardController {
 					/** Natively the terminal scrolls the sheet body: bumped per scroll key. */
 					let scroll: NativeScroll | undefined;
 					const native = new Memo();
+					const keys = new MenuKeyReader();
+					let pendingNavigation: unknown;
 					return {
 						/** A glass sheet titled by the experiment; what it is follows, muted. */
 						get nativeOverlay() {
@@ -196,6 +199,10 @@ export function createDashboardController(): DashboardController {
 							});
 							scrollView.setLines(body);
 							scrollView.setHeight(viewportRows);
+							if (pendingNavigation !== undefined) {
+								scrollView.restoreNavigation(pendingNavigation);
+								pendingNavigation = undefined;
+							}
 							return [header, ...scrollView.render(width), renderOverlayFooter(width, theme)];
 						},
 						/** The Close button runs Esc's path. */
@@ -207,28 +214,30 @@ export function createDashboardController(): DashboardController {
 								done(undefined);
 								return;
 							}
+							const action = keys.read(data);
+							if (!action || action === "pending") return;
+							scrollView?.handleMenuAction(action);
 							let by: TspScrollBy | undefined;
-							if (matchesKey(data, "up") || matchesKey(data, "k")) {
-								by = "line-up";
-								scrollView?.scroll(-1);
-							} else if (matchesKey(data, "down") || matchesKey(data, "j")) {
-								by = "line-down";
-								scrollView?.scroll(1);
-							} else if (matchesKey(data, "pageUp")) {
-								by = "page-up";
-								scrollView?.page(-1);
-							} else if (matchesKey(data, "pageDown")) {
-								by = "page-down";
-								scrollView?.page(1);
-							} else if (data === "g") {
-								by = "start";
-								scrollView?.scrollToTop();
-							} else if (data === "G") {
-								by = "end";
-								scrollView?.scrollToBottom();
+							if (action.kind === "move" || action.kind === "scroll") {
+								by = action.delta < 0 ? "line-up" : "line-down";
+							} else if (action.kind === "page") {
+								by = action.delta < 0 ? "page-up" : "page-down";
+							} else if (action.kind === "boundary") {
+								by = action.edge === "first" ? "start" : "end";
 							}
 							if (by) scroll = { by, n: (scroll?.n ?? 0) + 1 };
 							tui.requestRender();
+						},
+						navigationSnapshot(): unknown {
+							return scrollView?.navigationSnapshot() ?? pendingNavigation;
+						},
+						restoreNavigation(snapshot: unknown): void {
+							keys.reset();
+							if (scrollView) scrollView.restoreNavigation(snapshot);
+							else pendingNavigation = snapshot;
+						},
+						leaveMenu(): void {
+							done(undefined);
 						},
 						invalidate(): void {},
 						dispose(): void {
@@ -1252,7 +1261,7 @@ function renderOverlayRunningLine(
 function renderOverlayFooter(width: number, theme: Theme): string {
 	const hint = theme.fg(
 		"dim",
-		` ${formatKeyHints(["up", "down"])} ${formatKeyHints(["j", "k"])} ${formatKeyHint("pageUp")} ${formatKeyHint("pageDown")} ${formatKeyHint("g")} ${formatKeyHint("shift+g")} ${formatKeyHint("escape")} `,
+		" j/k scroll · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Esc close ",
 	);
 	const fill = Math.max(0, width - visibleWidth(hint));
 	return theme.fg("borderMuted", "-".repeat(fill)) + hint;

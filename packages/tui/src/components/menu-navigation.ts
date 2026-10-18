@@ -1,5 +1,6 @@
+import type { TspScrollBy } from "@oh-my-pi/pi-wire";
 import { getKeybindings } from "../keybindings";
-import { matchesKey } from "../keys";
+import { extractPrintableText, matchesKey } from "../keys";
 import { getMenuWindow, type MenuWindow } from "./menu-selection";
 import { Input } from "./input";
 import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
@@ -32,6 +33,21 @@ export type MenuNavAction =
 	| { kind: "context"; delta: -1 | 1 }
 	/** `/`: focus the surface's filter or search field. */
 	| { kind: "search" };
+
+/** Native scroll requests supported by the current wire protocol; half pages have no equivalent. */
+export function menuScrollBy(action: MenuNavAction): TspScrollBy | undefined {
+	switch (action.kind) {
+		case "move":
+		case "scroll":
+			return action.delta < 0 ? "line-up" : "line-down";
+		case "page":
+			return action.delta < 0 ? "page-up" : "page-down";
+		case "boundary":
+			return action.edge === "first" ? "start" : "end";
+		default:
+			return undefined;
+	}
+}
 
 /**
  * Resolves raw input into {@link MenuNavAction}s for a surface in normal
@@ -140,6 +156,10 @@ export class MenuSearchField {
 
 	handleInput(data: string): "edited" | "exited" | "pass" {
 		if (!this.focused) return "pass";
+		if (extractPrintableText(data) !== undefined) {
+			this.#input.handleInput(data);
+			return "edited";
+		}
 		const kb = getKeybindings();
 		if (kb.matches(data, "tui.select.cancel")) {
 			this.focused = false;

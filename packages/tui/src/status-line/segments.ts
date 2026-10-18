@@ -19,6 +19,7 @@ import { summarizeLoopCondition } from "./loop";
 import { formatMetric } from "../components/metric";
 import { formatBillingSummary } from "./metrics";
 import { sanitizeStatusText } from "../chrome/shared";
+import { sanitizeDisplaySingleLine } from "../overlays/extensions/display-text";
 import {
 	formatContextUsage,
 	getContextUsageLevel,
@@ -1239,22 +1240,134 @@ function usageBarContent(
 	return { label, value: "n/a", color: "dim" };
 }
 
-function renderUsageBar(bar: UsageBarSelector, ctx: SegmentContext): RenderedSegment {
-	const { label, value, color, age } = usageBarContent(bar, ctx);
-	const content =
-		age === undefined
-			? theme.fg("dim", `${label} ${value}`)
-			: `${label} ${theme.fg(color, value)} ${theme.fg("dim", age)}`;
-	return { content, visible: true };
+/** Placeholders a usage-bar template may contain; all other text renders literally. */
+export const USAGE_BAR_TEMPLATE_TOKENS = ["label", "percent", "age"] as const;
+export type UsageBarTemplateToken = (typeof USAGE_BAR_TEMPLATE_TOKENS)[number];
+/** Reproduces the bar's built-in text: `AN 5h 10% 2m`. */
+export const DEFAULT_USAGE_BAR_TEMPLATE = "{label} {percent} {age}";
+/** Templates are status-bar text; cap the source's terminal width without splitting Unicode. */
+export const USAGE_BAR_TEMPLATE_MAX_LENGTH = 80;
+
+/** Bound safe single-line editor text while preserving spaces needed for typing. */
+export function limitUsageBarTemplate(template: string): string {
+	return truncateToWidth(sanitizeDisplaySingleLine(template), USAGE_BAR_TEMPLATE_MAX_LENGTH, "");
 }
 
-function describeUsageBar(bar: UsageBarSelector, ctx: SegmentContext): SegmentView {
+export type UsageBarTemplatePart = { readonly text: string } | { readonly token: UsageBarTemplateToken };
+
+const usageBarTemplateCache = new Map<string, readonly UsageBarTemplatePart[]>();
+const USAGE_BAR_TEMPLATE_CACHE_LIMIT = 64;
+
+function isUsageBarTemplateToken(name: string): name is UsageBarTemplateToken {
+	return USAGE_BAR_TEMPLATE_TOKENS.some(token => token === name);
+}
+
+/**
+ * Split a usage-bar template into literal text and `{label}`/`{percent}`/`{age}`
+ * placeholders. `{{` and `}}` produce literal braces; unknown or unclosed
+ * placeholders stay literal. No expressions are evaluated. Control and escape
+ * sequences are stripped before width limiting, so a cut cannot expose part
+ * of one; literal spacing inside the template is kept.
+ */
+export function parseUsageBarTemplate(template: string): readonly UsageBarTemplatePart[] {
+	const cached = usageBarTemplateCache.get(template);
+	if (cached) return cached;
+	const source = limitUsageBarTemplate(template);
+	const parts: UsageBarTemplatePart[] = [];
+	let text = "";
+	for (let index = 0; index < source.length; index++) {
+		const char = source[index]!;
+		if ((char === "{" || char === "}") && source[index + 1] === char) {
+			text += char;
+			index++;
+			continue;
+		}
+		if (char === "{") {
+			const end = source.indexOf("}", index + 1);
+			const name = end > index ? source.slice(index + 1, end) : "";
+			if (isUsageBarTemplateToken(name)) {
+				if (text) parts.push({ text });
+				text = "";
+				parts.push({ token: name });
+				index = end;
+				continue;
+			}
+			text += source.slice(index, end === -1 ? source.length : end + 1);
+			index = end === -1 ? source.length : end;
+			continue;
+		}
+		text += char;
+	}
+	if (text) parts.push({ text });
+	// Editing must not retain every historical template for the session's lifetime.
+	if (usageBarTemplateCache.size >= USAGE_BAR_TEMPLATE_CACHE_LIMIT) usageBarTemplateCache.clear();
+	usageBarTemplateCache.set(template, parts);
+	return parts;
+}
+
+/**
+ * The bar's text as colored pieces. A missing age (no report yet, or no
+ * percentage) drops the whitespace that only separated it, and the whole bar
+ * dims, exactly as the built-in layout does.
+ */
+function usageBarPieces(
+	id: string,
+	bar: UsageBarSelector,
+	ctx: SegmentContext,
+): { text: string; color?: ThemeColor }[] {
 	const { label, value, color, age } = usageBarContent(bar, ctx);
-	return segView(
-		age === undefined
-			? [span(`${label} ${value}`, "dim")]
-			: [span(`${label} `), span(value, color), span(` ${age}`, "dim")],
-	);
+	const stale = age === undefined;
+	const pieces: { text: string; color?: ThemeColor }[] = [];
+	// `statusLine.segmentOptions` is a free-form record; anything but a string falls back to the default.
+	const configured: unknown = ctx.options.usageBars?.templates?.[id];
+	const template = typeof configured === "string" ? configured : DEFAULT_USAGE_BAR_TEMPLATE;
+	for (const part of parseUsageBarTemplate(template)) {
+		let text: string;
+		let pieceColor: ThemeColor | undefined;
+		if ("text" in part) {
+			text = part.text;
+		} else {
+			switch (part.token) {
+				case "label":
+					text = label;
+					break;
+				case "percent":
+					text = value;
+					pieceColor = color;
+					break;
+				case "age":
+					text = age ?? "";
+					pieceColor = "dim";
+					break;
+			}
+		}
+		// Substitution can bring two space runs together, or leave one at an edge.
+		const previous = pieces.at(-1);
+		if (!previous) text = text.trimStart();
+		else if (previous.text.endsWith(" ")) text = text.replace(/^ +/, "");
+		if (!text) continue;
+		if (stale) pieceColor = "dim";
+		if (previous && previous.color === pieceColor) previous.text += text;
+		else pieces.push({ text, color: pieceColor });
+	}
+	const last = pieces.at(-1);
+	if (last) {
+		last.text = last.text.trimEnd();
+		if (!last.text) pieces.pop();
+	}
+	return pieces;
+}
+
+function renderUsageBar(id: string, bar: UsageBarSelector, ctx: SegmentContext): RenderedSegment {
+	const content = usageBarPieces(id, bar, ctx)
+		.map(piece => (piece.color ? theme.fg(piece.color, piece.text) : piece.text))
+		.join("");
+	return { content, visible: content.length > 0 };
+}
+
+function describeUsageBar(id: string, bar: UsageBarSelector, ctx: SegmentContext): SegmentView | null {
+	const pieces = usageBarPieces(id, bar, ctx);
+	return pieces.length > 0 ? segView(pieces.map(piece => span(piece.text, piece.color))) : null;
 }
 
 /**
@@ -1443,7 +1556,7 @@ export const SEGMENTS: Record<BuiltinStatusLineSegmentId, StatusLineSegment> = {
 
 export function renderSegment(id: StatusLineSegmentId, ctx: SegmentContext): RenderedSegment {
 	const bar = parseUsageBarSegmentId(id);
-	if (bar) return renderUsageBar(bar, ctx);
+	if (bar) return renderUsageBar(id, bar, ctx);
 	const segment = SEGMENTS[id as BuiltinStatusLineSegmentId];
 	if (!segment) {
 		return { content: "", visible: false };
@@ -1454,7 +1567,7 @@ export function renderSegment(id: StatusLineSegmentId, ctx: SegmentContext): Ren
 /** Native description of one segment; null when it is hidden or unknown. */
 export function describeSegment(id: StatusLineSegmentId, ctx: SegmentContext): SegmentView | null {
 	const bar = parseUsageBarSegmentId(id);
-	return bar ? describeUsageBar(bar, ctx) : (SEGMENTS[id as BuiltinStatusLineSegmentId]?.describe(ctx) ?? null);
+	return bar ? describeUsageBar(id, bar, ctx) : (SEGMENTS[id as BuiltinStatusLineSegmentId]?.describe(ctx) ?? null);
 }
 
 export const ALL_SEGMENT_IDS: BuiltinStatusLineSegmentId[] = Object.keys(SEGMENTS) as BuiltinStatusLineSegmentId[];

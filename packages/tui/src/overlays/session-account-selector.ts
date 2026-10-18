@@ -4,7 +4,6 @@ import { OverlayPanel } from "../chrome/overlay-box";
 import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-routing";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { SelectListSheet } from "../native/picker";
-import type { SelectListNavigationState } from "../components/select-list";
 
 const ACCOUNT_SELECTOR_MAX_VISIBLE = 10;
 
@@ -104,8 +103,7 @@ export class SessionAccountSelectorComponent extends OverlayPanel {
 	}
 
 	restoreNavigation(snapshot: unknown): void {
-		if (typeof snapshot !== "object" || snapshot === null || !("filter" in snapshot) || typeof snapshot.filter !== "string") return;
-		this.#selectList.restoreNavigationState(snapshot as SelectListNavigationState);
+		this.#selectList.restoreNavigation(snapshot);
 	}
 
 	/** Route mouse selection through the title rows into the account list. */

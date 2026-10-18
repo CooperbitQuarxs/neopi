@@ -95,6 +95,47 @@ describe("ps-top native", () => {
 			component.dispose();
 		}
 	});
+
+	it("shares row motions, view-only scroll and slash filtering without stealing literal input", async () => {
+		const described: string[] = [];
+		const tui = new TUI(new VirtualTerminal(90, 24));
+		let rendered = Promise.withResolvers<void>();
+		const renderSpy = spyOn(tui, "requestRender").mockImplementation(() => rendered.resolve());
+		const component = new PsTopComponent(tui, { all: false }, fakeHost(described));
+		const running = component.run();
+		await rendered.promise;
+		await Promise.resolve();
+		try {
+			const list = () => nodes([component.describe()]).find(n => n.k === "list");
+			const initial = list()?.p;
+			component.render(90);
+			component.handleInput("\x05");
+			component.render(90);
+			expect(list()?.p).toEqual(initial);
+			component.handleInput("G");
+			const last = list()?.p;
+			expect(last).not.toEqual(initial);
+			component.handleInput("g");
+			expect(list()?.p).toEqual(last);
+			component.handleInput("g");
+			expect(list()?.p).toEqual(initial);
+			component.handleInput("/");
+			for (const key of "web") component.handleInput(key);
+			component.handleInput("\x1b");
+			expect(nodes(list()?.c).filter(n => n.k === "item")).toHaveLength(1);
+			rendered = Promise.withResolvers<void>();
+			component.handleInput(" ");
+			await rendered.promise;
+			expect(described).toEqual(["web"]);
+			component.handleInput("h"); // Info → process table, rather than a text shortcut.
+			expect(list()).toBeDefined();
+			component.handleInput("\x1b");
+			await running;
+		} finally {
+			component.dispose();
+			renderSpy.mockRestore();
+		}
+	});
 });
 
 describe("git native", () => {

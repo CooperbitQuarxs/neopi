@@ -2,21 +2,22 @@
  * Interactive alt-screen monitor for `npi ps` (btop idiom): a live process
  * table over every selected broker scope with in-place actions.
  *
- * Keys — table: `↑/↓`/`j/k` select, `enter`/`i` info, `l` logs, `s` stop,
+ * Keys — table: j/k select, Enter/i info, o logs, s stop,
  * `x` kill, `r` restart, `a` toggle all scopes, `q`/`esc`/`ctrl+c` quit.
  * Sub-views (info, logs): `esc`/`q` back.
  */
 import * as path from "node:path";
-import { formatKeyHint, formatKeyHints } from "../app-keybindings";
 import { KeyValueList, type KeyValueRow } from "../components/key-value-list";
 import { ScrollView } from "../components/scroll-view";
+import { MenuKeyReader, MenuSearchField } from "../components/menu-navigation";
 import { renderTableRow, type TableColumn } from "../components/table";
+import { fuzzyFilter } from "../fuzzy";
 import { matchesKey } from "../keys";
 import { ProcessTerminal } from "../terminal";
 import { type Component, TUI } from "../tui";
 import type { TspSpan, TspText, TspTone } from "@oh-my-pi/pi-wire";
 import { col, compact, elapsed, keyed, node, row, span, stableKey, text } from "../native/describe";
-import type { NativeNode, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton } from "../native/overlay";
 import { Memo } from "../native/memo";
 import { truncateToWidth } from "../utils";
@@ -80,6 +81,7 @@ export class PsTopComponent implements Component {
 	readonly #host: PsTopHost;
 	#all: boolean;
 	#reports: PsScopeReport[] = [];
+	#sourceReports: PsScopeReport[] = [];
 	#flat: FlatRow[] = [];
 	#selected = 0;
 	/** `runtimeDir\u0000name` of the selection, kept stable across refreshes. */
@@ -98,6 +100,11 @@ export class PsTopComponent implements Component {
 	#lastRefresh = 0;
 	#status = "";
 	#statusText = "";
+	readonly #keys = new MenuKeyReader();
+	readonly #search = new MenuSearchField();
+	#filteredQuery = "";
+	#nativeScroll: NativeScroll | undefined;
+	#viewRequest = 0;
 	#statusTone: PsStatusTone = "muted";
 	#statusAt = 0;
 	#logsError: string | undefined;
@@ -138,10 +145,9 @@ export class PsTopComponent implements Component {
 		try {
 			const reports = await this.#host.collectReports(this.#all, this.#target);
 			if (this.#disposed) return;
-			this.#reports = reports;
-			this.#flat = reports.flatMap(report => report.daemons.map(row => ({ scope: report.scope, row })));
+			this.#sourceReports = reports;
+			this.#applyFilter();
 			this.#lastRefresh = Date.now();
-			this.#restoreSelection();
 			this.#ui.requestRender();
 		} catch (error) {
 			this.#setStatus("error", error instanceof Error ? error.message : String(error));
@@ -160,6 +166,18 @@ export class PsTopComponent implements Component {
 		}
 		this.#selected = Math.max(0, Math.min(this.#selected, this.#flat.length - 1));
 		this.#selectedKey = this.#flat[this.#selected] ? flatKey(this.#flat[this.#selected]) : undefined;
+	}
+
+	#applyFilter(): void {
+		this.#filteredQuery = this.#search.value;
+		this.#reports = this.#search.value.trim()
+			? this.#sourceReports.map(report => ({
+				...report,
+				daemons: fuzzyFilter(report.daemons, this.#search.value, row => tableCells(row).join(" ")),
+			}))
+			: this.#sourceReports;
+		this.#flat = this.#reports.flatMap(report => report.daemons.map(row => ({ scope: report.scope, row })));
+		this.#restoreSelection();
 	}
 
 	#setStatus(tone: PsStatusTone, text: string): void {
@@ -192,9 +210,15 @@ export class PsTopComponent implements Component {
 	async #openInfo(): Promise<void> {
 		const entry = this.#flat[this.#selected];
 		if (!entry) return;
+		this.#stopLogsPoll();
+		this.#view = "info";
+		this.#nativeScroll = undefined;
+		this.#info = undefined;
+		const request = ++this.#viewRequest;
 		try {
-			this.#info = await this.#host.describe(entry.scope, entry.row.snapshot.name);
-			this.#view = "info";
+			const info = await this.#host.describe(entry.scope, entry.row.snapshot.name);
+			if (this.#disposed || request !== this.#viewRequest || this.#view !== "info") return;
+			this.#info = info;
 			this.#ui.requestRender();
 		} catch (error) {
 			this.#setStatus("error", error instanceof Error ? error.message : String(error));
@@ -205,6 +229,8 @@ export class PsTopComponent implements Component {
 		const entry = this.#flat[this.#selected];
 		if (!entry) return;
 		this.#view = "logs";
+		this.#viewRequest++;
+		this.#nativeScroll = undefined;
 		this.#logsLines = [];
 		this.#logsState = "";
 		this.#logsError = undefined;
@@ -239,6 +265,8 @@ export class PsTopComponent implements Component {
 	#closeView(): void {
 		this.#stopLogsPoll();
 		this.#view = "table";
+		this.#viewRequest++;
+		this.#nativeScroll = undefined;
 		this.#info = undefined;
 		this.#ui.requestRender();
 	}
@@ -246,23 +274,62 @@ export class PsTopComponent implements Component {
 	// -- input -----------------------------------------------------------------
 
 	handleInput(data: string): void {
+		const before = this.#search.value;
+		if (this.#search.handleInput(data) !== "pass") {
+			if (this.#search.value !== before) this.#applyFilter();
+			this.#ui.requestRender();
+			return;
+		}
 		if (matchesKey(data, "ctrl+c")) {
 			this.#done.resolve();
 			return;
 		}
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (action?.kind === "move" || action?.kind === "scroll" || action?.kind === "page" || action?.kind === "boundary") {
+			const by = action.kind === "boundary"
+				? action.edge === "first" ? "start" : "end"
+				: action.kind === "page" ? action.delta < 0 ? "page-up" : "page-down"
+					: action.delta < 0 ? "line-up" : "line-down";
+			this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
+		}
+		if (action?.kind === "search") {
+			if (this.#view !== "table") this.#closeView();
+			this.#search.focused = true;
+			this.#ui.requestRender();
+			return;
+		}
+		if (action?.kind === "cancel" || data === "q") {
+			if (this.#view !== "table") this.#closeView();
+			else this.#done.resolve();
+			return;
+		}
+		if (action?.kind === "context" || action?.kind === "horizontal") {
+			const views: PsTopView[] = ["table", "info", "logs"];
+			const next = views[(views.indexOf(this.#view) + action.delta + views.length) % views.length];
+			this.#stopLogsPoll();
+			if (next === "info") void this.#openInfo();
+			else if (next === "logs") this.#openLogs();
+			else this.#closeView();
+			return;
+		}
 		if (this.#view !== "table") {
-			if (matchesKey(data, "escape") || data === "q") this.#closeView();
+			const view = this.#view === "info" ? this.#infoView : this.#logsView;
+			if (action && view.handleMenuAction(action)) this.#ui.requestRender();
 			return;
 		}
-		if (matchesKey(data, "escape") || data === "q") {
-			this.#done.resolve();
-			return;
-		}
-		if (matchesKey(data, "up") || data === "k") this.#moveSelection(-1);
-		else if (matchesKey(data, "down") || data === "j") this.#moveSelection(1);
+		if (action?.kind === "move") this.#moveSelection(action.delta);
+		else if (action?.kind === "halfPage" || action?.kind === "page") {
+			const page = Math.max(1, this.#ui.terminal.rows - 5);
+			this.#moveSelection(action.delta * Math.max(1, Math.floor(page / (action.kind === "halfPage" ? 2 : 1))));
+		} else if (action?.kind === "boundary") {
+			this.#moveSelection((action.edge === "first" ? -1 : 1) * this.#flat.length);
+		} else if (action?.kind === "scroll") {
+			this.#tableView.scroll(action.delta);
+			this.#ui.requestRender();
+		} else if (action?.kind === "confirm" || action?.kind === "toggle" || data === "i") void this.#openInfo();
 		else if (data === "a") this.#toggleAll();
-		else if (matchesKey(data, "enter") || data === "i") void this.#openInfo();
-		else if (data === "l") this.#openLogs();
+		else if (data === "o") this.#openLogs();
 		else if (data === "s") void this.#act("stop");
 		else if (data === "x") void this.#act("kill");
 		else if (data === "r") void this.#act("restart");
@@ -348,8 +415,10 @@ export class PsTopComponent implements Component {
 	 * selectable process list, the transient status, and an action bar that
 	 * mirrors the keys. Info and logs replace the list.
 	 */
-	describe(): NativeNode {
+	describe(cx?: DescribeContext): NativeNode {
+		if (this.#filteredQuery !== this.#search.value) this.#applyFilter();
 		const statusVisible = Date.now() - this.#statusAt < STATUS_TTL_MS;
+		const search = cx ? this.#search.input.describe(cx) : text(this.#search.value);
 		return this.#native.get(
 			[
 				this.#view,
@@ -365,6 +434,8 @@ export class PsTopComponent implements Component {
 				this.#statusText,
 				this.#statusTone,
 				this.#killConfirm,
+				search,
+				this.#nativeScroll,
 			],
 			() => {
 				const body =
@@ -376,7 +447,8 @@ export class PsTopComponent implements Component {
 				return col(
 					compact([
 						this.#describeHead(),
-						body,
+						this.#view === "table" && search,
+						{ ...body, scroll: this.#nativeScroll },
 						statusVisible &&
 							this.#statusText !== "" &&
 							keyed(
@@ -519,7 +591,7 @@ export class PsTopComponent implements Component {
 		if (!entry) return actionBar([null, actionButton("Quit", "quit", { keys: "q" })]);
 		return actionBar([
 			actionButton("Info", "info", { keys: "enter", tone: "accent" }),
-			actionButton("Logs", "logs", { keys: "l" }),
+			actionButton("Logs", "logs", { keys: "o" }),
 			actionButton("Restart", "restart", { keys: "r" }),
 			actionButton("Stop", "stop", { keys: "s" }),
 			actionButton("Kill", "kill", { keys: "x", tone: "error", title: "Kill the process (asks first)" }),
@@ -652,8 +724,9 @@ export class PsTopComponent implements Component {
 		const header = this.#header(width, scopesLabel);
 		const footer = this.#footer(
 			width,
-			`${formatKeyHints(["up", "down"])} select · ${formatKeyHint("enter")} info · ${formatKeyHint("l")} logs · ${formatKeyHint("s")} stop · ${formatKeyHint("x")} kill · ${formatKeyHint("r")} restart · ${formatKeyHint("a")} all scopes · ${formatKeyHint("q")} quit`,
+			`j/k rows · h/l or Tab views · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Space/Enter info · o logs · s stop · x kill · r restart · a scopes · / search · q quit`,
 		);
+		footer.unshift(this.#search.render(width, { muted: chalk.dim }));
 		const bodyHeight = height - 1 - footer.length;
 
 		const cells = this.#flat.map(entry => tableCells(entry.row));
@@ -706,7 +779,9 @@ export class PsTopComponent implements Component {
 		});
 		this.#tableView.setLines(display);
 		this.#tableView.setHeight(bodyHeight);
-		this.#tableView.setActiveRow(selectedLine >= 0 ? selectedLine : undefined);
+		this.#tableView.revealRange(selectedLine >= 0
+			? { id: this.#selectedKey ?? "", start: selectedLine, end: selectedLine + 1 }
+			: undefined, width);
 
 		const lines = [header, ...this.#tableView.render(width)];
 		while (lines.length < height - footer.length) lines.push("");
@@ -717,7 +792,7 @@ export class PsTopComponent implements Component {
 	#renderInfo(width: number, height: number): string[] {
 		const info = this.#info;
 		const header = this.#header(width, "process info");
-		const footer = this.#footer(width, `${formatKeyHint("escape")} back · ${formatKeyHint("q")} back`);
+		const footer = this.#footer(width, `j/k scroll · h/l or Tab views · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Esc back · q back`);
 		const body = [""];
 		if (info) {
 			const daemon = info.daemon;
@@ -752,7 +827,7 @@ export class PsTopComponent implements Component {
 		);
 		const footer = this.#footer(
 			width,
-			`${formatKeyHint("escape")} back · ${formatKeyHint("q")} back · view refreshes live`,
+			`j/k scroll · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · h/l or Tab views · Esc back · q back · live refresh`,
 		);
 		const bodyHeight = height - 1 - footer.length;
 		this.#logsView.setLines(this.#logsLines.map(line => ` ${line}`));

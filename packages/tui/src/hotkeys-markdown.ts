@@ -1,11 +1,13 @@
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { type AppKeybinding, formatKeyHint, type KeybindingsManager, keyHintPlatform } from "./app-keybindings";
 import { Markdown } from "./components/markdown";
+import { MenuKeyReader, menuScrollBy } from "./components/menu-navigation";
+import { ScrollView } from "./components/scroll-view";
 import { matchesSelectCancel } from "./keybinding-matchers";
 import type { KeyName } from "./key-hint-format";
 import { canonicalKeyId } from "./keybindings";
-import { col, node, span } from "./native/describe";
-import type { NativeNode, NativeUiEvent } from "./native/node";
+import { col, node, span, text } from "./native/describe";
+import type { NativeNode, NativeScroll, NativeUiEvent } from "./native/node";
 import { actionBar, actionButton } from "./native/overlay";
 import { getMarkdownTheme } from "./theme/theme";
 import type { Component } from "./tui";
@@ -229,8 +231,15 @@ export class HotkeysSheetComponent implements Component {
 	readonly #onClose: () => void;
 	#native: NativeNode | undefined;
 	#markdown: Markdown | undefined;
+	readonly #keys = new MenuKeyReader();
+	readonly #viewport = new ScrollView([], { height: 1 });
+	#nativeScroll: NativeScroll | undefined;
 
-	constructor(bindings: HotkeysMarkdownBindings, onClose: () => void) {
+	constructor(
+		bindings: HotkeysMarkdownBindings,
+		onClose: () => void,
+		private readonly getHeight: () => number = () => 24,
+	) {
 		this.#bindings = bindings;
 		this.#onClose = onClose;
 	}
@@ -258,23 +267,50 @@ export class HotkeysSheetComponent implements Component {
 			),
 		);
 		const close = actionButton("Close", "close", { keys: "escape" });
-		this.#native = col([...sections, actionBar([null, close])], { gap: "lg" });
+		this.#native = {
+			...col([
+				...sections,
+				actionBar([text("j/k scroll · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll", "dim"), close]),
+			], { gap: "lg" }),
+			scroll: this.#nativeScroll,
+		};
 		return this.#native;
 	}
 
 	/** The markdown reference, for a terminal that falls back to rows. */
 	render(width: number): readonly string[] {
 		this.#markdown ??= new Markdown(buildHotkeysMarkdown(this.#bindings), 1, 1, getMarkdownTheme());
-		return this.#markdown.render(width);
+		this.#viewport.setHeight(Math.max(1, this.getHeight() - 4));
+		this.#viewport.setLines(this.#markdown.render(Math.max(1, width - 1)));
+		return this.#viewport.render(width);
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#viewport.navigationSnapshot();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		this.#viewport.restoreNavigation(snapshot);
+		this.#keys.reset();
 	}
 
 	invalidate(): void {
 		this.#native = undefined;
 		this.#markdown = undefined;
+		this.#viewport.invalidate();
 	}
 
 	handleInput(data: string): void {
-		if (matchesSelectCancel(data)) this.#onClose();
+		if (matchesSelectCancel(data)) {
+			this.#onClose();
+			return;
+		}
+		const action = this.#keys.read(data);
+		if (!action || action === "pending" || !this.#viewport.handleMenuAction(action)) return;
+		const by = menuScrollBy(action);
+		if (!by) return;
+		this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
+		if (this.#native) this.#native = { ...this.#native, scroll: this.#nativeScroll };
 	}
 
 	/** Close runs what Esc runs. */

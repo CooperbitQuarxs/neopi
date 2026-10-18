@@ -842,6 +842,7 @@ export class SelectList implements Component, MouseRoutable {
 	#shouldRenderSearchStatus(): boolean {
 		const policy = this.layout.search ?? (this.layout.overflowSearch === false ? "never" : "overflow");
 		return (
+			this.#search.focused ||
 			this.#selection.pendingKey !== undefined ||
 			this.layout.statusText !== undefined ||
 			(policy !== "never" && this.#selection.query.length > 0) ||

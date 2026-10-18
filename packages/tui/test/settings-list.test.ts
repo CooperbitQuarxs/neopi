@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { SettingsList, type SettingsListTheme } from "@oh-my-pi/pi-tui/components/settings-list";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
+import { TextFormField } from "@oh-my-pi/pi-tui/components/form";
 
 const testTheme: SettingsListTheme = {
 	label: (text: string) => text,
@@ -164,7 +165,7 @@ describe("SettingsList", () => {
 		expect(list.render(40)[0]).toBe("→ Advisor Sync Backlog  1");
 	});
 
-	it("filters settings with printable search text", () => {
+	it("filters settings only after slash focuses search", () => {
 		const list = new SettingsList(
 			[
 				{ id: "mode", label: "Mode", currentValue: "off", values: ["off", "on"] },
@@ -183,6 +184,9 @@ describe("SettingsList", () => {
 		);
 
 		list.handleInput("b");
+		expect(list.hasSearchQuery()).toBe(false);
+		list.handleInput("/");
+		list.handleInput("b");
 
 		const output = list.render(80).join("\n");
 		expect(output).toContain("Search: b");
@@ -191,7 +195,7 @@ describe("SettingsList", () => {
 		expect(output).not.toContain("Mode");
 	});
 
-	it("clears active search on Escape before canceling", () => {
+	it("leaves search on Escape without clearing its query before canceling", () => {
 		let cancelCount = 0;
 		const list = new SettingsList(
 			[
@@ -206,11 +210,12 @@ describe("SettingsList", () => {
 			},
 		);
 
+		list.handleInput("/");
 		list.handleInput("b");
 		expect(list.hasSearchQuery()).toBe(true);
 
 		list.handleInput("\x1b");
-		expect(list.hasSearchQuery()).toBe(false);
+		expect(list.getSearchQuery()).toBe("b");
 		expect(cancelCount).toBe(0);
 
 		list.handleInput("\x1b");
@@ -269,6 +274,7 @@ describe("SettingsList", () => {
 		);
 
 		// "group" fuzzy-matches the heading label but headings are not searchable
+		list.handleInput("/");
 		for (const ch of "group") list.handleInput(ch);
 
 		const output = list.render(80).join("\n");
@@ -287,31 +293,20 @@ describe("SettingsList", () => {
 		];
 	}
 
-	it("jumps between sections with PgDn/PgUp, wrapping at the ends", () => {
-		const changes: Array<[string, string]> = [];
-		const list = new SettingsList(
-			sectionedItems(),
-			10,
-			testTheme,
-			(id, value) => {
-				changes.push([id, value]);
-			},
-			() => {},
-		);
-
-		// PgDn from Alpha jumps to the first item of Group B
+	it("pages through sectioned rows instead of wrapping whole sections", () => {
+		const list = new SettingsList(sectionedItems(), 3, testTheme, () => {}, () => {});
+		list.render(80);
 		list.handleInput("\x1b[6~");
-		list.handleInput("\n");
-		expect(changes).toEqual([["beta", "on"]]);
-
-		// PgUp twice wraps from Group A to Group C
+		expect(list.getSelectedItem()?.id).toBe("gamma");
 		list.handleInput("\x1b[5~");
-		list.handleInput("\x1b[5~");
-		list.handleInput("\n");
-		expect(changes).toEqual([
-			["beta", "on"],
-			["gamma", "on"],
-		]);
+		expect(list.getSelectedItem()?.id).toBe("alpha");
+		list.handleInput("\x15");
+		expect(list.getSelectedItem()?.id).toBe("alpha");
+		list.handleInput("G");
+		expect(list.getSelectedItem()?.id).toBe("gamma");
+		list.handleInput("g");
+		list.handleInput("g");
+		expect(list.getSelectedItem()?.id).toBe("alpha");
 	});
 
 	it("renders a section sidebar at wide widths with the whole list in the pane", () => {
@@ -360,7 +355,7 @@ describe("SettingsList", () => {
 		expect(flat).not.toContain("[dim-heading]");
 	});
 
-	it("section focus routes arrows to section jumps, Enter drops into items, Esc exits without cancelling", () => {
+	it("section focus routes rows to section jumps, Enter returns to rows, and Esc closes", () => {
 		const changes: Array<[string, string]> = [];
 		let cancelled = 0;
 		const list = new SettingsList(
@@ -391,11 +386,10 @@ describe("SettingsList", () => {
 		list.handleInput("\n");
 		expect(changes).toEqual([["beta", "on"]]);
 
-		// Esc exits section focus instead of cancelling the list.
+		// Esc closes the menu, even when its section list owns focus.
 		list.toggleSectionFocus();
 		list.handleInput("\x1b");
-		expect(list.sectionFocused).toBe(false);
-		expect(cancelled).toBe(0);
+		expect(cancelled).toBe(1);
 	});
 
 	it("section focus cannot engage without sections and drops when a filter removes them", () => {
@@ -417,6 +411,7 @@ describe("SettingsList", () => {
 			() => {},
 		);
 		list.toggleSectionFocus();
+		list.handleInput("/");
 		for (const ch of "alpha") list.handleInput(ch);
 		expect(list.sectionFocused).toBe(false);
 	});
@@ -644,5 +639,73 @@ describe("SettingsList", () => {
 
 		expect(list.routeSubmenuMouse({ leftClick: true } as never, 2, 7)).toBe(true);
 		expect(routed).toEqual([[2, 7, true]]);
+	});
+
+	it("scrolls the view without moving selection and restores its off-screen cursor", () => {
+		const items = Array.from({ length: 16 }, (_, index) => ({
+			id: `row-${index}`, label: `Row ${index}`, currentValue: "off", values: ["off", "on"],
+		}));
+		const list = new SettingsList(items, 4, testTheme, () => {}, () => {});
+		list.render(60);
+		list.handleInput("\x05");
+		list.render(60);
+		expect(list.getSelectedItem()?.id).toBe("row-0");
+		expect(list.debugState().viewportTop).toBe(1);
+		const saved = list.navigationSnapshot();
+		list.handleInput("G");
+		list.restoreNavigation(saved);
+		expect(list.getSelectedItem()?.id).toBe("row-0");
+		expect(list.render(60).slice(0, 4).join("\n")).not.toContain("Row 0");
+		list.handleInput("j");
+		expect(list.getSelectedItem()?.id).toBe("row-1");
+		list.handleInput("\x04");
+		expect(list.getSelectedItem()?.id).toBe("row-3");
+	});
+
+	it("keeps focused search literal and preserves its caret across history", () => {
+		const list = new SettingsList(
+			[{ id: "literal", label: "hjklgG /", currentValue: "" }], 4, testTheme, () => {}, () => {},
+		);
+		list.handleInput("/");
+		for (const key of "hjklgG /") list.handleInput(key);
+		expect(list.getSearchQuery()).toBe("hjklgG /");
+		list.handleInput("\x01");
+		const saved = list.navigationSnapshot();
+		list.clearSearch();
+		list.restoreNavigation(saved);
+		list.handleInput("X");
+		expect(list.getSearchQuery()).toBe("XhjklgG /");
+		list.handleInput("\x15");
+		expect(list.getSearchQuery()).toBe("hjklgG /");
+		list.handleInput("\x1b");
+		expect(list.debugState().filterFocused).toBe(false);
+	});
+
+	it("records nested editor visits and restores safe drafts without replaying changes", () => {
+		const visits: Array<{ page: string; previous: unknown }> = [];
+		let changes = 0;
+		const list = new SettingsList([{
+			id: "name", label: "Name", currentValue: "active",
+			submenu: (initialValue, done) => new TextFormField({
+				theme: { label: text => text, description: text => text, error: text => text, hint: text => text },
+				initialValue, onSubmit: value => done(value), onCancel: () => done(),
+			}),
+		}], 4, testTheme, () => changes++, () => {});
+		list.onNavigationVisit = (page, previous) => visits.push({ page, previous });
+		list.handleInput(" ");
+		expect(list.hasOpenSubmenu()).toBe(false);
+		list.handleInput("\n");
+		expect(visits.map(visit => visit.page)).toEqual(["name"]);
+		list.handleInput(" draft");
+		const draft = list.navigationSnapshot();
+		list.restoreNavigation(visits[0]!.previous);
+		expect(list.hasOpenSubmenu()).toBe(false);
+		list.restoreNavigation(draft);
+		expect(list.hasOpenSubmenu()).toBe(true);
+		expect(visits).toHaveLength(1);
+		list.handleInput("\n");
+		expect(list.getSelectedItem()?.currentValue).toBe("active draft");
+		expect(changes).toBe(1);
+		expect(visits.map(visit => visit.page)).toEqual(["name", ""]);
 	});
 });

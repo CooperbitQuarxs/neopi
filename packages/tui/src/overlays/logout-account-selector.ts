@@ -1,10 +1,8 @@
 import { Container, ScrollView, TruncatedText } from "../index";
 import { theme } from "../theme/theme";
-import { matchesSelectCancel } from "../keybinding-matchers";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuViewport } from "../components/menu-navigation";
-import { Input } from "../components/input";
+import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport } from "../components/menu-navigation";
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { node, span } from "../native/describe";
@@ -30,8 +28,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 	#menu: MenuSelection<LogoutAccount>;
 	readonly #keys = new MenuKeyReader();
 	readonly #viewport = new MenuViewport();
-	readonly #search = new Input();
-	#filterFocused = false;
+	readonly #search = new MenuSearchField();
 	#onSelectCallback: (account: LogoutAccount) => void;
 	#onCancelCallback: () => void;
 	#nativeItems: readonly NativeNode[] | undefined;
@@ -105,8 +102,8 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		if (total === 0) {
 			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", "No stored accounts to log out"), 0, 0));
 		}
-		if (this.#filterFocused || this.#menu.query) {
-			this.#listContainer.addChild(new TruncatedText(`Search: ${this.#filterFocused ? (this.#search.render(40)[0] ?? "") : this.#menu.query} · Esc back to list`, 0, 0));
+		if (this.#search.focused || this.#menu.query) {
+			this.#listContainer.addChild(new TruncatedText(this.#search.render(72, { muted: text => theme.fg("muted", text) }), 0, 0));
 		}
 
 		this.#listContainer.addChild(
@@ -122,16 +119,14 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 	}
 
 	navigationSnapshot(): unknown {
-		return { selectedKey: this.#menu.selectedKey, query: this.#menu.query, viewportTop: this.#viewport.top };
+		return { selectedKey: this.#menu.selectedKey, search: this.#search.navigationSnapshot(), viewportTop: this.#viewport.top };
 	}
 
 	restoreNavigation(snapshot: unknown): void {
 		if (typeof snapshot !== "object" || snapshot === null) return;
-		const state = snapshot as { selectedKey?: string; query?: string; viewportTop?: number };
-		if (typeof state.query !== "string") return;
-		this.#filterFocused = false;
-		this.#search.setValue(state.query);
-		this.#menu.setQuery(state.query);
+		const state = snapshot as { selectedKey?: string; search?: unknown; viewportTop?: number };
+		this.#search.restoreNavigation(state.search);
+		this.#menu.setQuery(this.#search.value);
 		if (state.selectedKey !== undefined) this.#menu.setSelectedKey(state.selectedKey);
 		this.#viewport.setTop(state.viewportTop);
 		this.#nativeItems = undefined;
@@ -139,25 +134,22 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 	}
 
 	handleInput(data: string): void {
-		if (this.#filterFocused) {
-			if (matchesSelectCancel(data)) {
-				this.#filterFocused = false;
-				this.#updateList();
-				return;
-			}
-			if (this.#search.handleInput(data)) {
-				this.#menu.setQuery(this.#search.getValue());
+		const before = this.#search.value;
+		const field = this.#search.handleInput(data);
+		if (field !== "pass") {
+			if (this.#search.value !== before) {
+				this.#menu.setQuery(this.#search.value);
 				this.#viewport.reveal();
 				this.#nativeItems = undefined;
-				this.#updateList();
-				return;
 			}
+			this.#updateList();
+			return;
 		}
 		const action = this.#keys.read(data);
 		if (action === undefined || action === "pending") return;
 		if (applyMenuMotion(action, this.#menu, this.#viewport, { wrap: true }).handled) this.#updateList();
 		else if (action.kind === "search") {
-			this.#filterFocused = true;
+			this.#search.focused = true;
 			this.#updateList();
 		} else if (action.kind === "cancel") this.#onCancelCallback();
 		else if (action.kind === "confirm") this.#confirmSelection();
