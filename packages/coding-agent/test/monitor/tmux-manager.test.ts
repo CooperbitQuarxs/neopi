@@ -87,7 +87,7 @@ async function fixture(maxPanesPerWindow = 2) {
 		(await tmux(["list-panes", "-a", "-F", "#{session_name} #{window_id} #{pane_id} #{@npi_agent}"])).stdout
 			.trim()
 			.split("\n");
-	return { monitor, create, tmux, panes };
+	return { monitor, create, tmux, panes, root };
 }
 
 it.skipIf(!tmuxPath)("tiles agent panes, overflows windows, and removes only the pane of a removed agent", async () => {
@@ -157,4 +157,14 @@ it.skipIf(!tmuxPath)("does not reopen a pane the user closed, and stop leaves us
 	const again = create();
 	cleanups.push(() => again.stop());
 	expect((await again.start()).sessionName).toBe("npi-monitor-01234567-2");
+});
+
+it.skipIf(!tmuxPath)("a start that fails after creating its tmux session removes that session", async () => {
+	const { create, panes, root } = await fixture();
+	// mkdir of the capability directory fails: a file already has its name.
+	await fsp.writeFile(path.join(root, "caps"), "");
+	const manager = create();
+	cleanups.push(() => manager.stop());
+	await expect(manager.start()).rejects.toThrow();
+	expect((await panes()).filter(line => line.startsWith("npi-monitor-"))).toEqual([]);
 });

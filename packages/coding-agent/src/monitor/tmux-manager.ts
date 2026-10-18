@@ -149,9 +149,15 @@ export class TmuxMonitorManager {
 		if (!sessionId?.startsWith("$") || !windowId?.startsWith("@") || !paneId?.startsWith("%")) {
 			throw new TmuxMonitorError("tmux did not report the monitor session it created");
 		}
-		// After the session exists, so a failed start leaves no directory behind.
-		await fs.mkdir(this.#options.capabilityDir, { recursive: true, mode: 0o700 });
-		await fs.chmod(this.#options.capabilityDir, 0o700);
+		// After the session exists, so a failed start leaves no directory behind. Until `#running`
+		// is set, stop() does nothing, so a failure here removes the session's only pane itself.
+		try {
+			await fs.mkdir(this.#options.capabilityDir, { recursive: true, mode: 0o700 });
+			await fs.chmod(this.#options.capabilityDir, 0o700);
+		} catch (error) {
+			await this.#tmux(["kill-pane", "-t", paneId]).catch(() => {});
+			throw error;
+		}
 		this.#sessionName = name;
 		this.#sessionId = sessionId;
 		this.#placeholder = { paneId, windowId };
