@@ -274,7 +274,8 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#historyFlush = false;
 	/** Replay rows owned by the docked screen rather than native scrollback. */
 	#heldReplayRows: readonly string[] = [];
-	#pendingHeldReplay: { id: number; rows: readonly string[] } | undefined;
+	#heldReplayWidth: number | undefined;
+	#pendingHeldReplay: { id: number; rows: readonly string[]; width: number } | undefined;
 	#releaseHeldCount = 0;
 	// The welcome header retires to terminal history exactly once, after the
 	// intro settles; until then it renders as mutable viewport chrome.
@@ -343,7 +344,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			const count = Math.min(padTop, plan.history.rows.length);
 			const split = plan.history.rows.length - count;
 			held = plan.history.rows.slice(split);
-			this.#pendingHeldReplay = { id: plan.history.id, rows: held };
+			this.#pendingHeldReplay = { id: plan.history.id, rows: held, width };
 			this.#lastChatPlan = { ...plan, history: { ...plan.history, rows: plan.history.rows.slice(0, split) } };
 		} else if (this.#offeredHistory?.source === "held") {
 			held = held.slice(this.#offeredHistory.rows.length);
@@ -809,6 +810,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			this.#retiredHeaderRows = offered.rows;
 		} else if (offered.source === "held") {
 			this.#heldReplayRows = this.#heldReplayRows.slice(offered.rows.length);
+			if (this.#heldReplayRows.length === 0) this.#heldReplayWidth = undefined;
 			this.#releaseHeldCount = 0;
 		} else {
 			if (offered.source.transcriptId !== undefined) {
@@ -821,6 +823,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		}
 		if (this.#pendingHeldReplay?.id === id) {
 			this.#heldReplayRows = this.#pendingHeldReplay.rows;
+			this.#heldReplayWidth = this.#pendingHeldReplay.width;
 			this.#pendingHeldReplay = undefined;
 		}
 		this.#offeredHistory = undefined;
@@ -891,6 +894,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 
 	#startHistoryReplay(): void {
 		this.#heldReplayRows = [];
+		this.#heldReplayWidth = undefined;
 		this.#pendingHeldReplay = undefined;
 		this.#releaseHeldCount = 0;
 		this.#headerReplayPending = this.#headerRetired && (this.#retiredHeaderRows?.length ?? 0) > 0;
@@ -915,7 +919,10 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				kind: this.#offeredHistory.kind,
 			};
 		}
-		const releaseCount = !this.#docked || this.#historyFlush ? this.#heldReplayRows.length : this.#releaseHeldCount;
+		const releaseCount =
+			!this.#docked || this.#historyFlush || this.#heldReplayWidth !== width
+				? this.#heldReplayRows.length
+				: this.#releaseHeldCount;
 		if (releaseCount > 0) {
 			this.#offeredHistory = {
 				id: this.#nextHistoryId++,
@@ -1177,6 +1184,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			this.#runtimeChildren.find(child => child instanceof TranscriptContainer)
 		) {
 			this.#heldReplayRows = [];
+			this.#heldReplayWidth = undefined;
 			this.#pendingHeldReplay = undefined;
 			this.#releaseHeldCount = 0;
 		}

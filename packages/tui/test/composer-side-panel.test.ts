@@ -168,6 +168,30 @@ describe("Composer side panel: history and geometry", () => {
 		}
 	});
 
+	it("preserves all held cells when a preserve-mode dock changes chat width", async () => {
+		const h = await setup({ mode: "preserve" });
+		try {
+			rebuildLedger(h);
+			h.composer.setSidePanel(h.panel, RIGHT);
+			h.composer.ui.resetDisplay();
+			await h.scheduler.advance(h.term, 160);
+			const heldRow = h
+				.viewport()
+				.find(row => row.startsWith("E29:"))!
+				.slice(0, 81);
+			expect(heldRow.length).toBe(81);
+			expect(h.history()).not.toContain(heldRow);
+
+			h.composer.setSidePanel(h.panel, { ...RIGHT, width: { ratio: 0.4, min: 32, max: 48 } });
+			await h.scheduler.advance(h.term, 160);
+			expect(h.composer.sidePanelGeometry()?.chatRect.width).toBe(69);
+			expect(h.history()).toContain(heldRow);
+			expectLedgerOnce(h);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
 	it("keeps a rebuilt committed ledger visible above a short docked live tail", async () => {
 		const h = await setup();
 		try {
