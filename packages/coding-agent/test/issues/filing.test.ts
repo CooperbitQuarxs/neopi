@@ -214,21 +214,22 @@ describe("runIssueFiling", () => {
 			// The target agent sees no project policy; the author runs under the checkout's own AGENTS.md.
 			expect(systemText(targetMock.calls[0].context)).not.toContain(POLICY_MARKER);
 			expect(systemText(authorMock.calls[0].context)).toContain(POLICY_MARKER);
-			expect(authorMock.calls[0].context.tools?.map(tool => tool.name).sort()).toEqual(
-				[
-					"find",
-					"glob",
-					"grep",
-					"issue_decline",
-					"issue_existing_owner",
-					"issue_labels",
-					"issue_publish",
-					"issue_samples",
-					"issue_search",
-					"issue_view",
-					"read",
-				].sort(),
-			);
+			// Filing-only surface: the issue tools plus read-only file tools. `find` is
+			// environment-gated (isFindEnabled), so it may be absent; nothing else may appear.
+			const authorTools = authorMock.calls[0].context.tools?.map(tool => tool.name) ?? [];
+			expect(authorTools.filter(name => name.startsWith("issue_")).sort()).toEqual([
+				"issue_decline",
+				"issue_existing_owner",
+				"issue_labels",
+				"issue_publish",
+				"issue_samples",
+				"issue_search",
+				"issue_view",
+			]);
+			expect(authorTools).toEqual(expect.arrayContaining(["read", "grep", "glob"]));
+			expect(
+				authorTools.filter(name => !name.startsWith("issue_") && !["read", "grep", "glob", "find"].includes(name)),
+			).toEqual([]);
 		} finally {
 			for (const id of [targetId, authorId]) AgentRegistry.global().unregister(id);
 			await manager.dispose();
