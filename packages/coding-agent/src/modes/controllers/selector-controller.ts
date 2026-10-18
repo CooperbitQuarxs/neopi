@@ -261,6 +261,8 @@ export class SelectorController {
 	constructor(private ctx: InteractiveModeContext) {}
 	/** Latest draft plus a cross-reopen write chain: memory updates immediately, disk writes never overlap. */
 	#statusLineDraft: { path: string; draft: StatusLineEditorDraft; writing: Promise<void> } | undefined;
+	/** True while a /statusline apply is writing settings, so a history reopen cannot seed from its preview. */
+	#statusLineApplying = false;
 
 	/**
 	 * Mount a primary fullscreen menu through the one polished modal path shared
@@ -658,6 +660,11 @@ export class SelectorController {
 
 	showStatusLineConfigure(): void {
 		if (this.#focusOpenMenu("status-line-config")) return;
+		// An editor that menu history left mid-apply still owns the live preview until the apply settles.
+		if (this.#statusLineApplying) {
+			this.ctx.showStatus("Still applying the status-line layout; reopen /statusline in a moment.");
+			return;
+		}
 		const settings = this.ctx.settings;
 		const store = new StatusLineDraftStore(statusLineDraftPath(settings.getAgentDir()));
 		let draft: StatusLineEditorDraft | undefined;
@@ -729,6 +736,7 @@ export class SelectorController {
 					[cfgComposerShape, composer?.shape],
 				];
 				const segmentOptions = withUsageTemplates(statusLine?.segmentOptions, layout.usageTemplates);
+				this.#statusLineApplying = true;
 				try {
 					cfgStatusLineLeftSegments.set(settings, layout.leftSegments);
 					cfgStatusLineRightSegments.set(settings, layout.rightSegments);
@@ -753,6 +761,8 @@ export class SelectorController {
 						});
 					}
 					throw error;
+				} finally {
+					this.#statusLineApplying = false;
 				}
 				restore = {
 					...restore,
