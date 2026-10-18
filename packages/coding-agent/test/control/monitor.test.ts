@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
+import * as net from "node:net";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
@@ -25,12 +26,22 @@ import { AgentSession } from "../../src/session/agent-session";
 import { SessionManager } from "../../src/session/session-manager";
 import { transcriptEntryTooLargeError } from "../../src/session/transcript-slice";
 import { createAssistantMessage, createInMemoryAuthStorage } from "../helpers/agent-session-setup";
+import { MonitorAttachConnection } from "../../src/monitor/attach";
 
 const cleanups: Array<() => void | Promise<void>> = [];
 
 afterEach(async () => {
+	vi.restoreAllMocks();
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
+
+async function until(condition: () => boolean, what: string): Promise<void> {
+	const deadline = Date.now() + 5_000;
+	while (!condition()) {
+		if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+		await Bun.sleep(10);
+	}
+}
 
 interface HostFixture {
 	host: ControlHost;
@@ -39,6 +50,8 @@ interface HostFixture {
 	sub: AgentRef;
 	advisor: AgentRef;
 	child: AgentSession;
+	/** Control registry directory the host publishes into. */
+	dir: string;
 	connect(capability?: string, probe?: boolean): Promise<ControlClient>;
 }
 
@@ -119,6 +132,7 @@ async function hostFixture(): Promise<HostFixture> {
 		sub,
 		advisor,
 		child,
+		dir: temp.path(),
 		async connect(capability?: string, probe = false) {
 			const publication = host.publication;
 			if (!publication) throw new Error("monitor test host did not publish");
@@ -289,6 +303,45 @@ describe("monitor capability socket boundary", () => {
 		const fixture = await hostFixture();
 		await expect(fixture.connect("0".repeat(64))).rejects.toMatchObject({ code: "unauthorized" });
 	});
+
+	for (const end of ["revoke", "owner exit"] as const) {
+		test(`an attach pane reconnects after its socket drops, then ends on ${end}`, async () => {
+			const fixture = await hostFixture();
+			const sockets: net.Socket[] = [];
+			const createConnection = net.createConnection;
+			vi.spyOn(net, "createConnection").mockImplementation(((...args: Parameters<typeof net.createConnection>) => {
+				const socket = createConnection(...args);
+				sockets.push(socket);
+				return socket;
+			}) as typeof net.createConnection);
+			const publication = fixture.host.publication;
+			if (!publication) throw new Error("monitor test host did not publish");
+			const info = fixture.host.monitor.grant(fixture.sub.id);
+			const connection = new MonitorAttachConnection({
+				metadata: publication.metadata(),
+				capability: info.capability,
+				registryDir: fixture.dir,
+			});
+			cleanups.push(() => connection.dispose());
+			await connection.start();
+			expect(connection.state).toBe("live");
+			const states: string[] = [];
+			connection.onChange(() => states.push(connection.state));
+
+			sockets.at(-1)?.destroy();
+			await until(() => states.includes("reconnecting") && connection.state === "live", "reconnect");
+			expect(sockets).toHaveLength(2);
+			expect((await connection.readTranscript(0))?.text).toBe("only-the-granted-sub\n");
+
+			if (end === "revoke") fixture.host.monitor.revoke(info.capability);
+			else await fixture.host.close();
+			await until(() => connection.state === "ended", "end");
+			expect(connection.endReason).toBe(
+				end === "revoke" ? "monitor access was revoked" : "the owner session exited",
+			);
+			expect(sockets).toHaveLength(2);
+		});
+	}
 
 	test("advisor capabilities cannot chat or redirect chat to a subagent", async () => {
 		const fixture = await hostFixture();
