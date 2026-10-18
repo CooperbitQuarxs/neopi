@@ -1803,6 +1803,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showAgentHub();
 			return undefined;
 		}
+		// A collab guest cannot focus the host's agents locally; the hub views them through the host.
+		if (this.collabGuest) {
+			this.showAgentHub();
+			return undefined;
+		}
 		if (id === this.focusedAgentId) {
 			this.invalidatePendingFocus();
 			return undefined;
