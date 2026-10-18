@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { TUI } from "../src/index";
+import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "../src/keybindings";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../src/native/node";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import {
@@ -471,6 +472,30 @@ describe("advisor menu navigation and history", () => {
 			expect(restored.events).toEqual([]);
 		} finally { h.overlay.dispose(); restored.overlay.dispose(); }
 	});
+	it("keeps printable remapped cancel, submit, and edit keys literal in the name field", () => {
+		const h = make({ advisors: [{ name: "Reviewer" }] });
+		const previous = getKeybindings();
+		try {
+			h.overlay.handleInput("\r");
+			h.overlay.handleInput("l");
+			setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, {
+				"tui.select.cancel": ["escape", "h"],
+				"tui.input.submit": ["enter", "j"],
+				"tui.editor.deleteCharBackward": "l",
+			}));
+			for (const key of ["h", "j", "k", "l", "/", " "]) h.overlay.handleInput(key);
+			expect(h.overlay.navigationSnapshot()).toMatchObject({
+				context: { screen: "name" }, content: { value: "Reviewerhjkl/ " },
+			});
+			expect(h.events).toEqual([]);
+			h.overlay.handleInput("\x1b");
+			expect(h.overlay.navigationSnapshot().context.screen).toBe("detail");
+		} finally {
+			setKeybindings(previous);
+			h.overlay.dispose();
+		}
+	});
+
 
 	it("restores a multiline safe prompt draft without saving or applying it", () => {
 		const h = make({ advisors: [{ name: "Reviewer", systemPrompt: "" }] });

@@ -64,6 +64,7 @@ import {
 import { getThinkingLevelMetadata, parseThinkingLevel } from "../thinking";
 import { isMenuHistoryParticipant, MenuKeyReader, type MenuNavAction } from "../components/menu-navigation";
 import type { SelectListNavigationState } from "../components/select-list";
+import { extractPrintableText } from "../keys";
 
 export const ADVISOR_REVIEW_MODES = ["turn", "agent-end"] as const;
 export const ADVISOR_SYNC_BACKLOG_MODES = ["off", "1", "3", "5", "strict"] as const;
@@ -1108,7 +1109,13 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const active = this.#active;
 		const textFocused = active instanceof Input || active instanceof HookEditorComponent
 			|| ("filterFocused" in active && active.filterFocused === true);
-		if (textFocused) { this.#keys.reset(); active.handleInput?.(data); return; }
+		if (textFocused) {
+			this.#keys.reset();
+			const text = active instanceof Input ? extractPrintableText(data) : undefined;
+			if (text !== undefined && active instanceof Input) active.insertText(text);
+			else active.handleInput?.(data);
+			return;
+		}
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
 		if (action?.kind === "horizontal") {
