@@ -1528,7 +1528,7 @@ export class ModelHubComponent implements Component {
 	#openRoleStrip(item: ModelBrowserItem): void {
 		const chips: StripChip[] = [];
 		const scopedStorage = this.#settings.modelRoleStorage === "project";
-		const scopes: readonly ModelRoleSelectionScope[] = scopedStorage ? ["project", "global"] : ["global"];
+		const scopes: readonly ModelRoleSelectionScope[] = scopedStorage ? ["global", "project"] : ["global"];
 		for (const role of this.#visibleRoleIds()) {
 			const info = this.#settings.getRoleInfo(role);
 			if (!info.accepts(item.model)) continue;
@@ -1577,8 +1577,8 @@ export class ModelHubComponent implements Component {
 
 	#openScopeStrip(item: ModelBrowserItem, role: string, returnToRoles: boolean): void {
 		const chips: StripChip[] = [
-			{ label: "project", styled: theme.fg("accent", "project"), action: "scope", scope: "project" },
-			{ label: "global", styled: theme.fg("muted", "global"), action: "scope", scope: "global" },
+			{ label: "global", styled: theme.fg("accent", "global"), action: "scope", scope: "global" },
+			{ label: "project", styled: theme.fg("muted", "project"), action: "scope", scope: "project" },
 		];
 		this.#strip = { kind: "scope", item, role, chips, index: 0, returnToRoles };
 	}
@@ -4850,7 +4850,7 @@ export class ModelHubComponent implements Component {
 					: [span(chip.label, color)];
 			}
 			case "scope":
-				return [span(chip.label, chip.scope === "project" ? "accent" : "muted")];
+				return [span(chip.label, chip.scope === "global" ? "accent" : "muted")];
 			case "thinking": {
 				const glyph = chip.thinkingLevel === undefined ? "" : thinkingLevelGlyph(chip.thinkingLevel, theme);
 				return glyph ? [span(glyph, "accent"), span(` ${chip.label}`)] : [span(chip.label)];
