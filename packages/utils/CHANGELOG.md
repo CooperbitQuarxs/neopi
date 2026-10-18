@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added launch/user-only environment lookup that honors case-insensitive Windows launch keys, skips blank values, and ignores project dotenv overrides of values, user directories, and profiles ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
+- Added launch/user-only environment lookup that honors case-insensitive Windows keys in user values and directories, skips blank values, and ignores project dotenv overrides of values, user directories, and profiles ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
 
 ## [18.10.0] - 2026-10-12
 

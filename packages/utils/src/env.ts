@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseEnv } from "node:util";
 import { getAgentDir, getConfigRootDir, getProjectDir, getUserEnvPaths, refreshDirsFromEnv } from "./dirs";
-import { launchEnvValues, startupCwd, startupProcessEnv } from "./launch-env";
+import { getEnvValue, launchEnvValues, startupCwd, startupProcessEnv } from "./launch-env";
 
 export * from "./worker-host";
 
@@ -318,21 +318,11 @@ refreshDirsFromEnv();
  * a project value masked them in Bun.env.
  */
 export function getTrustedEnv(name: string): string | undefined {
-	let launchValue = originalProcessEnv[name];
-	if (launchValue === undefined && process.platform === "win32") {
-		const foldedName = name.toUpperCase();
-		for (const key in originalProcessEnv) {
-			if (key.toUpperCase() === foldedName) {
-				launchValue = originalProcessEnv[key];
-				break;
-			}
-		}
-	}
 	return (
-		launchValue?.trim() ||
-		trustedAgentEnv[name]?.trim() ||
-		trustedPiEnv[name]?.trim() ||
-		trustedHomeEnv[name]?.trim() ||
+		getEnvValue(originalProcessEnv, name)?.trim() ||
+		getEnvValue(trustedAgentEnv, name)?.trim() ||
+		getEnvValue(trustedPiEnv, name)?.trim() ||
+		getEnvValue(trustedHomeEnv, name)?.trim() ||
 		undefined
 	);
 }

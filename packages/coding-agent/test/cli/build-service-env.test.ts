@@ -9,6 +9,8 @@ async function requestBuildOrigin(
 		inheritedName?: string;
 		platform?: NodeJS.Platform;
 		user?: string;
+		userName?: string;
+		userLocation?: "home" | "root" | "agent";
 		redirectAgent?: boolean;
 		redirectConfig?: boolean;
 		profile?: string;
@@ -48,7 +50,8 @@ async function requestBuildOrigin(
 		await Bun.write(path.join(config, ".env"), `PI_BUILD_URL=${options.rootUser}\n`);
 	}
 	if (options.user !== undefined) {
-		await Bun.write(path.join(agent, ".env"), `PI_BUILD_URL=${options.user}\n`);
+		const userDir = options.userLocation === "home" ? home : options.userLocation === "root" ? config : agent;
+		await Bun.write(path.join(userDir, ".env"), `${options.userName ?? "PI_BUILD_URL"}=${options.user}\n`);
 	}
 	const servicePath = path.resolve(import.meta.dir, "../../src/cli/build-service.ts");
 	const script = [
@@ -156,6 +159,26 @@ describe("build origin trust", () => {
 
 	it("honors user configuration even when the project shadows its key", async () => {
 		expect(await requestBuildOrigin({ user: "https://user.example/" })).toBe("https://user.example");
+	});
+
+	it.each(["home", "root", "agent"] as const)(
+		"honors case-insensitive Windows keys in trusted %s dotenv",
+		async userLocation => {
+			expect(
+				await requestBuildOrigin({
+					platform: "win32",
+					user: "https://user.example",
+					userName: "pI_bUiLd_Url",
+					userLocation,
+				}),
+			).toBe("https://user.example");
+		},
+	);
+
+	it("keeps POSIX trusted dotenv keys case-sensitive", async () => {
+		expect(
+			await requestBuildOrigin({ platform: "linux", user: "https://user.example", userName: "pi_build_url" }),
+		).toBe("https://build.stencil.so");
 	});
 
 	it.each(["", "   "])("uses user configuration when the inherited origin is blank (%j)", async inherited => {

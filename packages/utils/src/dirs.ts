@@ -17,6 +17,7 @@ import * as path from "node:path";
 import type * as NativePath from "@oh-my-pi/pi-natives/path";
 import { engines, version } from "../package.json" with { type: "json" };
 import { isEexist, isEnoent, isEnotdir } from "./fs-error";
+import { getEnvValue } from "./launch-env";
 
 /** Executable name used in CLI output and launch commands. */
 export const APP_NAME: string = "npi";
@@ -98,7 +99,7 @@ export function resolveProfileEnv(omp: string | undefined, pi: string | undefine
 }
 
 function getProfileFromEnv(env: Readonly<NodeJS.ProcessEnv> = process.env): string | undefined {
-	return resolveProfileEnv(env.OMP_PROFILE, env.PI_PROFILE);
+	return resolveProfileEnv(getEnvValue(env, "OMP_PROFILE"), getEnvValue(env, "PI_PROFILE"));
 }
 
 /**
@@ -133,7 +134,7 @@ function getProfileConfigRoot(
 
 function readPiProfileFromEnvSafe(env: Readonly<NodeJS.ProcessEnv> = process.env): string | undefined {
 	try {
-		return normalizeProfileName(env.PI_PROFILE);
+		return normalizeProfileName(getEnvValue(env, "PI_PROFILE"));
 	} catch {
 		return undefined;
 	}
@@ -713,14 +714,20 @@ export function getUserEnvPaths(env: Readonly<NodeJS.ProcessEnv>): {
 	configRoot: string;
 	agentDir: string;
 } {
-	const home = (process.platform === "win32" ? env.USERPROFILE : env.HOME) || os.userInfo().homedir;
-	const configDir = env.PI_CONFIG_DIR || CONFIG_DIR_NAME;
+	const home = getEnvValue(env, process.platform === "win32" ? "USERPROFILE" : "HOME") || os.userInfo().homedir;
+	const configDir = getEnvValue(env, "PI_CONFIG_DIR") || CONFIG_DIR_NAME;
 	const launchProfile = readProfileFromEnvSafe(env);
 	const profile = profileSelectedExplicitly ? activeProfile : launchProfile;
 	const configRoot = getProfileConfigRoot(profile, home, configDir);
 	const override =
 		agentDirSelectedExplicitly ??
-		resolvePreProfileAgentDir(launchProfile, env.PI_CODING_AGENT_DIR, readPiProfileFromEnvSafe(env), home, configDir);
+		resolvePreProfileAgentDir(
+			launchProfile,
+			getEnvValue(env, "PI_CODING_AGENT_DIR"),
+			readPiProfileFromEnvSafe(env),
+			home,
+			configDir,
+		);
 	return {
 		home,
 		configRoot,
