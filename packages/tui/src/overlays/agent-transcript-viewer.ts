@@ -31,7 +31,7 @@ import type { ObservableSession, SessionObserverRegistry } from "./session-obser
 import { getEditorTheme, theme } from "../theme/theme";
 import { matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
 import type { AgentHubRemote } from "./agent-hub";
-import { ChatTranscriptBuilder } from "../chat/chat-transcript-builder";
+import { ChatTranscriptBuilder, type TranscriptLiveState } from "../chat/chat-transcript-builder";
 import {
 	TranscriptBrowser,
 	type TranscriptBrowserFrame,
@@ -89,6 +89,16 @@ export interface AgentTranscriptViewerDeps {
 	onClose: () => void;
 	/** Close this viewer AND the hub (hub-toggle keys). */
 	onHubClose: () => void;
+	/**
+	 * Pushed owner state that is not persisted yet (streaming assistant text,
+	 * running tool progress). Without it the viewer shows persisted entries only.
+	 */
+	live?: AgentTranscriptLiveFeed;
+}
+
+/** Source of {@link TranscriptLiveState} snapshots; `undefined` clears the live tail. */
+export interface AgentTranscriptLiveFeed {
+	subscribe(listener: (state: TranscriptLiveState | undefined) => void): () => void;
 }
 
 /** How often to re-stat a file-backed transcript for growth (advisor/live tail). */
@@ -202,6 +212,8 @@ export class AgentTranscriptViewer implements Component {
 
 	readonly #deps: AgentTranscriptViewerDeps;
 
+	#liveUnsubscribe: (() => void) | undefined;
+
 	constructor(deps: AgentTranscriptViewerDeps) {
 		this.#deps = deps;
 		this.#initialEntryId = deps.initialEntryId;
@@ -233,6 +245,12 @@ export class AgentTranscriptViewer implements Component {
 		this.#refresh(false);
 		this.#pollTimer = setInterval(() => this.#refresh(true), POLL_MS);
 		this.#pollTimer.unref?.();
+		this.#liveUnsubscribe = deps.live?.subscribe(state => {
+			if (this.#disposed) return;
+			this.#builder.setLive(state);
+			this.#nativeCache = undefined;
+			this.#deps.requestRender();
+		});
 	}
 
 	/** Advisor and aborted-agent transcripts are read-only. */
@@ -253,7 +271,12 @@ export class AgentTranscriptViewer implements Component {
 		this.#disposed = true;
 		this.#stopPolling();
 		this.#remoteToken++;
-		this.#builder.dispose();
+		try {
+			this.#liveUnsubscribe?.();
+		} finally {
+			this.#liveUnsubscribe = undefined;
+			this.#builder.dispose();
+		}
 	}
 
 	#stopPolling(): void {
@@ -617,7 +640,13 @@ export class AgentTranscriptViewer implements Component {
 		this.#notice = undefined;
 		const id = this.#deps.agentId;
 		if (this.#deps.remote) {
-			this.#deps.remote.chat(id, trimmed);
+			const sent = this.#deps.remote.chat(id, trimmed);
+			if (sent instanceof Promise)
+				sent.catch((error: unknown) => {
+				if (this.#disposed) return;
+				this.#notice = error instanceof Error ? error.message : String(error);
+				this.#deps.requestRender();
+			});
 			this.#deps.requestRender();
 			return;
 		}
@@ -710,7 +739,7 @@ export class AgentTranscriptViewer implements Component {
 		children.push(node("row", { gap: "md", align: "center" }, top, "top"));
 		children.push(
 			placeholder === undefined
-				? node("col", { grow: 1 }, [this.#builder.container], "transcript")
+				? node("col", { grow: 1 }, [this.#builder.container, this.#builder.liveContainer], "transcript")
 				: node("text", { spans: [span(placeholder, "dim")], wrap: "word" }, undefined, "placeholder"),
 		);
 		if (notice) {
@@ -799,7 +828,7 @@ export class AgentTranscriptViewer implements Component {
 
 		const contentLines = this.#builder.isEmpty
 			? [` ${theme.fg("dim", this.#placeholder(Math.max(10, contentWidth - 1)))}`]
-			: this.#builder.container.render(contentWidth);
+			: [...this.#builder.container.render(contentWidth), ...this.#builder.liveContainer.render(contentWidth)];
 		let anchor: ScrollRangeAnchor | undefined;
 		if (this.#initialEntryId) {
 			const targetRow = this.#builder.rowForEntry(this.#initialEntryId);
