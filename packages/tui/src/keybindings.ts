@@ -38,6 +38,18 @@ export interface Keybindings {
 	"tui.select.down": true;
 	"tui.select.pageUp": true;
 	"tui.select.pageDown": true;
+	"tui.select.halfPageUp": true;
+	"tui.select.halfPageDown": true;
+	"tui.select.scrollUp": true;
+	"tui.select.scrollDown": true;
+	"tui.select.first": true;
+	"tui.select.last": true;
+	"tui.select.left": true;
+	"tui.select.right": true;
+	"tui.select.toggle": true;
+	"tui.select.nextContext": true;
+	"tui.select.prevContext": true;
+	"tui.select.search": true;
 	"tui.select.confirm": true;
 	"tui.select.cancel": true;
 }
@@ -134,6 +146,21 @@ export const TUI_KEYBINDINGS = {
 		defaultKeys: "pageDown",
 		description: "Selection page down",
 	},
+	"tui.select.halfPageUp": { defaultKeys: "ctrl+u", description: "Selection half page up" },
+	"tui.select.halfPageDown": { defaultKeys: "ctrl+d", description: "Selection half page down" },
+	"tui.select.scrollUp": { defaultKeys: "ctrl+y", description: "Scroll list view up without moving the selection" },
+	"tui.select.scrollDown": {
+		defaultKeys: "ctrl+e",
+		description: "Scroll list view down without moving the selection",
+	},
+	"tui.select.first": { defaultKeys: "home", description: "Select first item (also gg)" },
+	"tui.select.last": { defaultKeys: "end", description: "Select last item (also G)" },
+	"tui.select.left": { defaultKeys: "left", description: "Selection left: pane, collapse, or adjust (also h)" },
+	"tui.select.right": { defaultKeys: "right", description: "Selection right: pane, expand, or adjust (also l)" },
+	"tui.select.toggle": { defaultKeys: "space", description: "Toggle or soft-activate the selection" },
+	"tui.select.nextContext": { defaultKeys: "tab", description: "Next tab, section, or focus region" },
+	"tui.select.prevContext": { defaultKeys: "shift+tab", description: "Previous tab, section, or focus region" },
+	"tui.select.search": { defaultKeys: "/", description: "Focus the filter or search field" },
 	"tui.select.confirm": { defaultKeys: "enter", description: "Confirm selection" },
 	"tui.select.cancel": {
 		defaultKeys: ["escape", "ctrl+c"],
