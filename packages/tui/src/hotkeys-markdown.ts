@@ -1,7 +1,7 @@
-import type { TspScrollBy, TspSpan } from "@oh-my-pi/pi-wire";
+import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { type AppKeybinding, formatKeyHint, type KeybindingsManager, keyHintPlatform } from "./app-keybindings";
 import { Markdown } from "./components/markdown";
-import { MenuKeyReader } from "./components/menu-navigation";
+import { MenuKeyReader, menuScrollBy } from "./components/menu-navigation";
 import { ScrollView } from "./components/scroll-view";
 import { matchesSelectCancel } from "./keybinding-matchers";
 import type { KeyName } from "./key-hint-format";
@@ -307,22 +307,8 @@ export class HotkeysSheetComponent implements Component {
 		}
 		const action = this.#keys.read(data);
 		if (!action || action === "pending" || !this.#viewport.handleMenuAction(action)) return;
-		let by: TspScrollBy;
-		switch (action.kind) {
-			case "move":
-			case "scroll":
-				by = action.delta < 0 ? "line-up" : "line-down";
-				break;
-			case "page":
-				by = action.delta < 0 ? "page-up" : "page-down";
-				break;
-			case "boundary":
-				by = action.edge === "first" ? "start" : "end";
-				break;
-			default:
-				// Native scrolling has no half-page or absolute viewport operation.
-				return;
-		}
+		const by = menuScrollBy(action);
+		if (!by) return;
 		this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
 		if (this.#native) this.#native = { ...this.#native, scroll: this.#nativeScroll };
 	}
