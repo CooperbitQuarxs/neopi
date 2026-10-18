@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn, vi } from 
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { getAgentDir, logger } from "@oh-my-pi/pi-utils";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import type { Component, OverlayHandle, OverlayOptions, TUI } from "@oh-my-pi/pi-tui";
@@ -16,9 +16,48 @@ import {
 	cfgStatusLinePreset,
 	cfgStatusLineLeftSegments,
 	cfgStatusLineRightSegments,
+	cfgStatusLineSegmentOptions,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { statusLineDraftPath, StatusLineDraftStore } from "@oh-my-pi/pi-coding-agent/neopi/status-line-draft";
 import { createStartupStatusLine } from "@oh-my-pi/pi-tui/status-line/startup";
-import { StatusLineConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/status-line-config";
+import type { StatusLineSegmentId } from "@oh-my-pi/pi-tui/status-line/types";
+import {
+	StatusLineConfigOverlayComponent,
+	type StatusLineEditorDraft,
+} from "@oh-my-pi/pi-tui/overlays/status-line-config";
+
+const DOWN = "\x1b[B";
+const ESC = "\x1b";
+
+function press(component: Component, ...keys: string[]): void {
+	for (const key of keys) component.handleInput?.(key);
+}
+
+function startupStatusLine(leftSegments: StatusLineSegmentId[], rightSegments: StatusLineSegmentId[]) {
+	return createStartupStatusLine({
+		settings: { preset: "custom", leftSegments, rightSegments },
+		gitEnabled: false,
+		autoThinking: false,
+		fastMode: false,
+		usingSubscription: false,
+		autoCompactEnabled: false,
+		compactionBoundaries: null,
+	});
+}
+
+/** The draft file once autosave has written a state matching `ready`. */
+async function waitForDraft(
+	draftPath: string,
+	ready: (draft: StatusLineEditorDraft) => boolean,
+): Promise<StatusLineEditorDraft> {
+	const store = new StatusLineDraftStore(draftPath);
+	for (let attempt = 0; attempt < 200; attempt++) {
+		const draft = await store.read();
+		if (draft && ready(draft)) return draft;
+		await Bun.sleep(5);
+	}
+	throw new Error(`No matching status-line draft at ${draftPath}`);
+}
 
 /** The overlay members of `ui` the single-instance guard reads and drives. */
 interface OverlayUi {
@@ -85,25 +124,21 @@ describe("single-instance menus", () => {
 		resetSettingsForTest();
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
+		// In-memory Settings share the suite's guarded agent dir; never leak a draft into the next test.
+		const draftPath = statusLineDraftPath(getAgentDir());
+		await fs.rm(draftPath, { force: true });
+		await fs.rm(`${draftPath}.bak`, { force: true });
 	});
 
-	it("opens /statusline and saves its draft through isolated Settings", async () => {
+	it("opens /statusline, applies without closing, and closes on Esc once nothing is pending", async () => {
 		const isolated = Settings.isolated();
 		cfgComposerShape.set(isolated, "band");
 		cfgStatusLinePreset.set(isolated, "custom");
 		cfgStatusLineLeftSegments.set(isolated, ["model", "context_bar"]);
 		cfgStatusLineRightSegments.set(isolated, ["time"]);
-		const statusLine = createStartupStatusLine({
-			settings: { preset: "custom", leftSegments: ["model", "context_bar"], rightSegments: ["time"] },
-			gitEnabled: false,
-			autoThinking: false,
-			fastMode: false,
-			usingSubscription: false,
-			autoCompactEnabled: false,
-			compactionBoundaries: null,
-		});
+		const statusLine = startupStatusLine(["model", "context_bar"], ["time"]);
 		const { ui, shown } = overlayUi();
 		const syncComposerShape = vi.fn<(shape?: string) => void>();
 		const ctx = createInteractiveModeContext({ settings: isolated, statusLine, ui, syncComposerShape });
@@ -114,16 +149,16 @@ describe("single-instance menus", () => {
 			expect(shown[0]).toBeInstanceOf(StatusLineConfigOverlayComponent);
 			controller.showStatusLineConfigure();
 			expect(shown).toHaveLength(1);
-			shown[0]!.handleInput?.("\r"); // band → box
-			shown[0]!.handleInput?.("\x1b[B");
-			shown[0]!.handleInput?.("\t"); // model → right
+			press(shown[0]!, "\r", DOWN, "l", "l"); // band → box; model past the context bar into the right side
 			expect(syncComposerShape).toHaveBeenLastCalledWith("box");
-			shown[0]!.handleInput?.("\x13"); // Ctrl+S
+			press(shown[0]!, "\x13"); // Ctrl+S
 			await Bun.sleep(0);
 			expect(cfgStatusLinePreset.get(isolated)).toBe("custom");
 			expect(cfgStatusLineLeftSegments.get(isolated)).toEqual(["context_bar"]);
-			expect(cfgStatusLineRightSegments.get(isolated)).toEqual(["time", "model"]);
+			expect(cfgStatusLineRightSegments.get(isolated)).toEqual(["model", "time"]);
 			expect(cfgComposerShape.get(isolated)).toBe("box");
+			expect(ui.overlayStack).toHaveLength(1);
+			press(shown[0]!, ESC);
 			expect(ui.overlayStack).toHaveLength(0);
 		} finally {
 			statusLine.dispose();
@@ -131,7 +166,7 @@ describe("single-instance menus", () => {
 	});
 
 	it.each([true, false])(
-		"rolls back a rejected layout save without persisting its draft (configured: %s)",
+		"rolls back a rejected apply and keeps the draft on disk (configured: %s)",
 		async configured => {
 			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "npi-statusline-rollback-"));
 			const isolated = await Settings.loadIsolated({ agentDir: dir, cwd: dir });
@@ -139,25 +174,19 @@ describe("single-instance menus", () => {
 				cfgStatusLineLeftSegments,
 				cfgStatusLineRightSegments,
 				cfgStatusLinePreset,
+				cfgStatusLineSegmentOptions,
 				cfgComposerShape,
 			] as const;
 			if (configured) {
 				cfgStatusLineLeftSegments.set(isolated, ["time"]);
 				cfgStatusLineRightSegments.set(isolated, ["model"]);
 				cfgStatusLinePreset.set(isolated, "minimal");
+				cfgStatusLineSegmentOptions.set(isolated, { path: { maxLength: 7 } });
 				cfgComposerShape.set(isolated, "rail");
 			}
 			await isolated.flush();
 			const before = handles.map(handle => handle.get(isolated));
-			const statusLine = createStartupStatusLine({
-				settings: { preset: "custom", leftSegments: ["model"], rightSegments: ["time"] },
-				gitEnabled: false,
-				autoThinking: false,
-				fastMode: false,
-				usingSubscription: false,
-				autoCompactEnabled: false,
-				compactionBoundaries: null,
-			});
+			const statusLine = startupStatusLine(["model"], ["time"]);
 			const { ui, shown } = overlayUi();
 			const failed = Promise.withResolvers<void>();
 			const ctx = createInteractiveModeContext({
@@ -166,7 +195,7 @@ describe("single-instance menus", () => {
 				ui,
 				syncComposerShape: () => {},
 				showStatus: message => {
-					if (message.startsWith("Could not save status-line layout:")) failed.resolve();
+					if (message.startsWith("Could not apply the status-line layout")) failed.resolve();
 				},
 			});
 			const controller = new SelectorController(ctx);
@@ -176,23 +205,22 @@ describe("single-instance menus", () => {
 			const warning = spyOn(logger, "warn").mockImplementation(() => {});
 			try {
 				controller.showStatusLineConfigure();
-				shown[0]!.handleInput?.("\r");
-				shown[0]!.handleInput?.("\x1b[B");
-				shown[0]!.handleInput?.("\t");
-				shown[0]!.handleInput?.("s");
+				press(shown[0]!, "\r", DOWN, "l", "s");
 				await failed.promise;
 				expect(handles.map(handle => handle.get(isolated))).toEqual(before);
 				expect(handles.map(handle => isolated.isConfigured(handle))).toEqual(handles.map(() => configured));
 				expect(ui.overlayStack).toHaveLength(1);
 				expect(flush).toHaveBeenCalledTimes(2);
 				expect(warning).toHaveBeenCalledTimes(configured ? 0 : 1);
-				shown[0]!.handleInput?.("\x1b");
+				press(shown[0]!, ESC, "n");
 				expect(ui.overlayStack).toHaveLength(0);
 				flush.mockRestore();
 				await isolated.flush();
 				const reloaded = await Settings.loadReadOnly({ agentDir: dir, cwd: dir });
 				expect(handles.map(handle => handle.get(reloaded))).toEqual(before);
 				expect(handles.map(handle => reloaded.isConfigured(handle))).toEqual(handles.map(() => configured));
+				const draft = await waitForDraft(statusLineDraftPath(dir), saved => saved.composerShape === "box");
+				expect(draft.right.map(row => row.id).slice(0, 2)).toEqual(["model", "time"]);
 			} finally {
 				flush.mockRestore();
 				statusLine.dispose();
@@ -202,17 +230,9 @@ describe("single-instance menus", () => {
 		},
 	);
 
-	it("restores the real status-line preview and composer without persisting on cancel", () => {
+	it("declining to apply restores the real status line and composer and keeps the draft", async () => {
 		const isolated = Settings.isolated({ "composer.shape": "band" });
-		const statusLine = createStartupStatusLine({
-			settings: { preset: "custom", leftSegments: ["model"], rightSegments: ["time"] },
-			gitEnabled: false,
-			autoThinking: false,
-			fastMode: false,
-			usingSubscription: false,
-			autoCompactEnabled: false,
-			compactionBoundaries: null,
-		});
+		const statusLine = startupStatusLine(["model"], ["time"]);
 		const original = statusLine.getEffectiveSettings();
 		const { ui, shown } = overlayUi();
 		const syncComposerShape = vi.fn<(shape?: string) => void>();
@@ -220,17 +240,74 @@ describe("single-instance menus", () => {
 		const controller = new SelectorController(ctx);
 		try {
 			controller.showStatusLineConfigure();
-			shown[0]!.handleInput?.("\r");
-			shown[0]!.handleInput?.("\x1b[B");
-			shown[0]!.handleInput?.(" ");
+			press(shown[0]!, "\r", DOWN, " ");
 			expect(statusLine.getEffectiveSettings().leftSegments).toEqual([]);
-			shown[0]!.handleInput?.("\x1b");
+			press(shown[0]!, ESC);
+			expect(ui.overlayStack).toHaveLength(1); // the apply prompt is open
+			press(shown[0]!, "n");
+			expect(ui.overlayStack).toHaveLength(0);
 			expect(statusLine.getEffectiveSettings()).toEqual(original);
 			expect(syncComposerShape).toHaveBeenLastCalledWith("band");
 			expect(cfgComposerShape.get(isolated)).toBe("band");
 			expect(cfgStatusLinePreset.get(isolated)).toBe("default");
+			const draft = await waitForDraft(statusLineDraftPath(getAgentDir()), saved => saved.composerShape === "box");
+			expect(draft.left).toContainEqual({ id: "model", enabled: false });
 		} finally {
 			statusLine.dispose();
+		}
+	});
+
+	it("restores the draft after a restart and applies usage templates beside other segment options", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "npi-statusline-draft-"));
+		const isolated = await Settings.loadIsolated({ agentDir: dir, cwd: dir });
+		cfgStatusLinePreset.set(isolated, "custom");
+		cfgStatusLineLeftSegments.set(isolated, ["usage:anthropic:5h"]);
+		cfgStatusLineRightSegments.set(isolated, ["time"]);
+		cfgStatusLineSegmentOptions.set(isolated, { path: { maxLength: 7 } });
+		await isolated.flush();
+		const firstLine = startupStatusLine(["usage:anthropic:5h"], ["time"]);
+		const first = overlayUi();
+		const firstCtx = createInteractiveModeContext({
+			settings: isolated,
+			statusLine: firstLine,
+			ui: first.ui,
+			syncComposerShape: () => {},
+		});
+		try {
+			new SelectorController(firstCtx).showStatusLineConfigure();
+			const typed = "{percent} used".split("");
+			press(first.shown[0]!, DOWN, "\t", ...Array.from({ length: 30 }, () => "\x7f"), ...typed, "\r", ESC, "n");
+			await waitForDraft(statusLineDraftPath(dir), saved => saved.usageTemplates["usage:anthropic:5h"] !== undefined);
+		} finally {
+			firstLine.dispose();
+		}
+
+		// A new controller, as after a restart, has no in-memory draft and reads the file.
+		const secondLine = startupStatusLine(["usage:anthropic:5h"], ["time"]);
+		const second = overlayUi();
+		const secondCtx = createInteractiveModeContext({
+			settings: isolated,
+			statusLine: secondLine,
+			ui: second.ui,
+			syncComposerShape: () => {},
+		});
+		try {
+			new SelectorController(secondCtx).showStatusLineConfigure();
+			expect(secondLine.getEffectiveSettings().segmentOptions.usageBars?.templates).toEqual({
+				"usage:anthropic:5h": "{percent} used",
+			});
+			press(second.shown[0]!, "s");
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			expect(cfgStatusLineSegmentOptions.get(isolated)).toEqual({
+				path: { maxLength: 7 },
+				usageBars: { templates: { "usage:anthropic:5h": "{percent} used" } },
+			});
+			expect(second.ui.overlayStack).toHaveLength(1);
+		} finally {
+			secondLine.dispose();
+			await isolated.flush();
+			await fs.rm(dir, { recursive: true, force: true });
 		}
 	});
 
