@@ -156,7 +156,12 @@ describe("Composer side panel: history and geometry", () => {
 			h.transcript.addChild(new Text(labels[26]!, 0, 0));
 			h.composer.ui.requestRender();
 			await h.scheduler.advance(h.term, 160);
-			expect(h.viewport().slice(0, 4).map(row => row.slice(0, 81).trimEnd())).toEqual(labels.slice(6, 10));
+			expect(
+				h
+					.viewport()
+					.slice(0, 4)
+					.map(row => row.slice(0, 81).trimEnd()),
+			).toEqual(labels.slice(6, 10));
 			expectLedgerOnce(h, 26);
 		} finally {
 			h.composer.stop();
