@@ -1239,22 +1239,103 @@ function usageBarContent(
 	return { label, value: "n/a", color: "dim" };
 }
 
-function renderUsageBar(bar: UsageBarSelector, ctx: SegmentContext): RenderedSegment {
+/** Placeholders a usage-bar template may contain; all other text renders literally. */
+export const USAGE_BAR_TEMPLATE_TOKENS = ["label", "percent", "age"] as const;
+export type UsageBarTemplateToken = (typeof USAGE_BAR_TEMPLATE_TOKENS)[number];
+/** Reproduces the bar's built-in text: `AN 5h 10% 2m`. */
+export const DEFAULT_USAGE_BAR_TEMPLATE = "{label} {percent} {age}";
+/** Templates are status-bar text; longer input is cut rather than wrapped. */
+export const USAGE_BAR_TEMPLATE_MAX_LENGTH = 80;
+
+export type UsageBarTemplatePart = { readonly text: string } | { readonly token: UsageBarTemplateToken };
+
+function isUsageBarTemplateToken(name: string): name is UsageBarTemplateToken {
+	return USAGE_BAR_TEMPLATE_TOKENS.some(token => token === name);
+}
+
+/**
+ * Split a usage-bar template into literal text and `{label}`/`{percent}`/`{age}`
+ * placeholders. `{{` and `}}` produce literal braces and an unknown `{name}`
+ * stays literal, so a template can only ever place the three values; it never
+ * evaluates anything. Control characters and newlines are stripped first.
+ */
+export function parseUsageBarTemplate(template: string): UsageBarTemplatePart[] {
+	const source = sanitizeStatusText(template).slice(0, USAGE_BAR_TEMPLATE_MAX_LENGTH);
+	const parts: UsageBarTemplatePart[] = [];
+	let text = "";
+	for (let index = 0; index < source.length; index++) {
+		const char = source[index]!;
+		if ((char === "{" || char === "}") && source[index + 1] === char) {
+			text += char;
+			index++;
+			continue;
+		}
+		if (char === "{") {
+			const end = source.indexOf("}", index + 1);
+			const name = end > index ? source.slice(index + 1, end) : "";
+			if (isUsageBarTemplateToken(name)) {
+				if (text) parts.push({ text });
+				text = "";
+				parts.push({ token: name });
+				index = end;
+				continue;
+			}
+		}
+		text += char;
+	}
+	if (text) parts.push({ text });
+	return parts;
+}
+
+/**
+ * The bar's text as colored pieces. A missing age (no report yet, or no
+ * percentage) drops the whitespace that only separated it, and the whole bar
+ * dims, exactly as the built-in layout does.
+ */
+function usageBarPieces(
+	id: string,
+	bar: UsageBarSelector,
+	ctx: SegmentContext,
+): { text: string; color?: ThemeColor }[] {
 	const { label, value, color, age } = usageBarContent(bar, ctx);
-	const content =
-		age === undefined
-			? theme.fg("dim", `${label} ${value}`)
-			: `${label} ${theme.fg(color, value)} ${theme.fg("dim", age)}`;
+	const stale = age === undefined;
+	const values: Record<UsageBarTemplateToken, string> = { label, percent: value, age: age ?? "" };
+	const tokenColor: Record<UsageBarTemplateToken, ThemeColor | undefined> = {
+		label: undefined,
+		percent: color,
+		age: "dim",
+	};
+	const pieces: { text: string; color?: ThemeColor }[] = [];
+	const template = ctx.options.usageBars?.templates?.[id] ?? DEFAULT_USAGE_BAR_TEMPLATE;
+	for (const part of parseUsageBarTemplate(template)) {
+		if ("text" in part) {
+			pieces.push({ text: part.text });
+			continue;
+		}
+		const text = values[part.token];
+		if (text) pieces.push({ text, color: tokenColor[part.token] });
+		else {
+			const previous = pieces.at(-1);
+			if (previous && previous.color === undefined) previous.text = previous.text.trimEnd();
+		}
+	}
+	const first = pieces[0];
+	if (first) first.text = first.text.trimStart();
+	const last = pieces.at(-1);
+	if (last) last.text = last.text.trimEnd();
+	const visible = pieces.filter(piece => piece.text.length > 0);
+	return stale ? [{ text: visible.map(piece => piece.text).join(""), color: "dim" }] : visible;
+}
+
+function renderUsageBar(id: string, bar: UsageBarSelector, ctx: SegmentContext): RenderedSegment {
+	const content = usageBarPieces(id, bar, ctx)
+		.map(piece => (piece.color ? theme.fg(piece.color, piece.text) : piece.text))
+		.join("");
 	return { content, visible: true };
 }
 
-function describeUsageBar(bar: UsageBarSelector, ctx: SegmentContext): SegmentView {
-	const { label, value, color, age } = usageBarContent(bar, ctx);
-	return segView(
-		age === undefined
-			? [span(`${label} ${value}`, "dim")]
-			: [span(`${label} `), span(value, color), span(` ${age}`, "dim")],
-	);
+function describeUsageBar(id: string, bar: UsageBarSelector, ctx: SegmentContext): SegmentView {
+	return segView(usageBarPieces(id, bar, ctx).map(piece => span(piece.text, piece.color)));
 }
 
 /**
@@ -1443,7 +1524,7 @@ export const SEGMENTS: Record<BuiltinStatusLineSegmentId, StatusLineSegment> = {
 
 export function renderSegment(id: StatusLineSegmentId, ctx: SegmentContext): RenderedSegment {
 	const bar = parseUsageBarSegmentId(id);
-	if (bar) return renderUsageBar(bar, ctx);
+	if (bar) return renderUsageBar(id, bar, ctx);
 	const segment = SEGMENTS[id as BuiltinStatusLineSegmentId];
 	if (!segment) {
 		return { content: "", visible: false };
@@ -1454,7 +1535,7 @@ export function renderSegment(id: StatusLineSegmentId, ctx: SegmentContext): Ren
 /** Native description of one segment; null when it is hidden or unknown. */
 export function describeSegment(id: StatusLineSegmentId, ctx: SegmentContext): SegmentView | null {
 	const bar = parseUsageBarSegmentId(id);
-	return bar ? describeUsageBar(bar, ctx) : (SEGMENTS[id as BuiltinStatusLineSegmentId]?.describe(ctx) ?? null);
+	return bar ? describeUsageBar(id, bar, ctx) : (SEGMENTS[id as BuiltinStatusLineSegmentId]?.describe(ctx) ?? null);
 }
 
 export const ALL_SEGMENT_IDS: BuiltinStatusLineSegmentId[] = Object.keys(SEGMENTS) as BuiltinStatusLineSegmentId[];

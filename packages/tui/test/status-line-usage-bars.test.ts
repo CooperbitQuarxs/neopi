@@ -48,8 +48,15 @@ const reports: UsageReport[] = [
 	},
 ];
 
-function context(usageReports: { reports: readonly UsageReport[] } | null): SegmentContext {
-	return { usageReports, now: new Date(now), options: {} } as unknown as SegmentContext;
+function context(
+	usageReports: { reports: readonly UsageReport[] } | null,
+	templates?: Record<string, string>,
+): SegmentContext {
+	return {
+		usageReports,
+		now: new Date(now),
+		options: templates ? { usageBars: { templates } } : {},
+	} as unknown as SegmentContext;
 }
 
 describe("provider usage-bar rendering", () => {
@@ -75,6 +82,33 @@ describe("provider usage-bar rendering", () => {
 		expect(renderSegment("usage:anthropic:5h", context(null)).visible).toBe(true);
 		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", context({ reports: [] })).content)).toBe("AN 5h n/a");
 		expect(Bun.stripANSI(renderSegment("usage:kimi-code:5h", context({ reports })).content)).toBe("kimi-code 5h n/a");
+	});
+
+	it("places each bar's values inside its own template, terminal and native alike", () => {
+		const ctx = context({ reports }, { "usage:anthropic:5h": "Claude {label}: {percent} used ({age} ago)" });
+		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", ctx).content)).toBe("Claude AN 5h: 10% used (2m ago)");
+		expect(
+			describeSegment("usage:anthropic:5h", ctx)
+				?.spans.map(part => part.t)
+				.join(""),
+		).toBe("Claude AN 5h: 10% used (2m ago)");
+		// A sibling bar without its own template keeps the built-in text.
+		expect(Bun.stripANSI(renderSegment("usage:anthropic:7d", ctx).content)).toBe("AN wk 10% 2m");
+	});
+
+	it("treats templates as text: escaped braces, unknown names, and no terminal controls", () => {
+		const literal = context({ reports }, { "usage:anthropic:5h": "{{x}} {percent} {constructor} {age" });
+		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", literal).content)).toBe("{x} 10% {constructor} {age");
+		const hostile = context({ reports }, { "usage:anthropic:5h": "{percent}\n\x1b]0;title\x07\x1b[31mX" });
+		const content = renderSegment("usage:anthropic:5h", hostile).content;
+		expect(content).not.toContain("\n");
+		expect(content).not.toContain("\x1b]");
+		expect(content).not.toContain("\x1b[31m");
+	});
+
+	it("drops the separator of a missing age so placeholders stay tidy", () => {
+		const ctx = context(null, { "usage:anthropic:5h": "{label} {percent} {age} left" });
+		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", ctx).content)).toBe("AN 5h … left");
 	});
 });
 
