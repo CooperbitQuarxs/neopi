@@ -109,9 +109,11 @@ export function stripGitRepoLocationEnv(
 }
 
 const projectEnvNamesLoadedByOmp = new Set<string>();
+// Without a pre-dotenv snapshot, a project-defined name cannot confer launch
+// authority, even when Bun expansion made its value differ from the file text.
 const originalProcessEnv: Record<string, string> = launchEnvValues
 	? filterProcessEnv(Object.fromEntries(launchEnvValues))
-	: filterChildShellEnvInternal(startupProcessEnv!, startupCwd);
+	: filterChildShellEnvInternal(startupProcessEnv!, startupCwd, undefined, true);
 // Interactive restoration must not pin Git to the launcher's checkout either.
 stripGitRepoLocationEnv(originalProcessEnv);
 Object.freeze(originalProcessEnv);
@@ -141,6 +143,7 @@ function filterChildShellEnvInternal(
 	env: Record<string, string | undefined>,
 	cwd: string,
 	onDotenvValue?: (value: string) => void,
+	excludeUnprovenProjectNames = false,
 ): Record<string, string> {
 	const runtimeLaunchEnvValues = env === Bun.env || env === process.env ? launchEnvValues : undefined;
 	const result = filterProcessEnv(env);
@@ -151,6 +154,26 @@ function filterChildShellEnvInternal(
 	const localEnv = parseEnvFile(path.join(cwd, ".env.local"));
 	const modeLocalEnv = parseEnvFile(path.join(cwd, `${nodeEnvName}.local`));
 	const launchEnv = { ...projectEnv, ...modeEnv, ...localEnv, ...modeLocalEnv };
+	if (excludeUnprovenProjectNames) {
+		// NODE_ENV may itself have been autoloaded after Bun selected development.
+		// Trust only name provenance here, not a reimplementation of Bun expansion.
+		const defaultModeEnv =
+			nodeEnvName === ".env.development" ? undefined : parseEnvFile(path.join(cwd, ".env.development"));
+		const defaultModeLocalEnv =
+			nodeEnvName === ".env.development" ? undefined : parseEnvFile(path.join(cwd, ".env.development.local"));
+		for (const key in result) {
+			if (
+				getEnvValue(launchEnv, key) !== undefined ||
+				(defaultModeEnv && getEnvValue(defaultModeEnv, key) !== undefined) ||
+				(defaultModeLocalEnv && getEnvValue(defaultModeLocalEnv, key) !== undefined)
+			) {
+				onDotenvValue?.(result[key]!);
+				delete result[key];
+			}
+		}
+		stripGitRepoLocationEnv(result);
+		return result;
+	}
 	const expandedLaunchEnv = {
 		...expandDotenvValues(projectEnv, result),
 		...expandDotenvValues(modeEnv, result),
@@ -316,6 +339,10 @@ refreshDirsFromEnv();
  * Read the first non-blank, trimmed value from the launch environment or user
  * dotenv snapshots, excluding project dotenv. Preserve user values even when
  * a project value masked them in Bun.env.
+ *
+ * Without a pre-dotenv launch snapshot, project-defined names are excluded even
+ * when a real inherited value differs. Use --no-env-file or user dotenv to keep
+ * that override authoritative in runtimes without launch provenance.
  */
 export function getTrustedEnv(name: string): string | undefined {
 	return (

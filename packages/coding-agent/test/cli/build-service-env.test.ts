@@ -8,6 +8,9 @@ async function requestBuildOrigin(
 		inherited?: string;
 		inheritedName?: string;
 		platform?: NodeJS.Platform;
+		fallbackPlatform?: "darwin" | "win32";
+		noEnvFile?: boolean;
+		projectOrigin?: string;
 		user?: string;
 		userName?: string;
 		userLocation?: "home" | "root" | "agent";
@@ -29,10 +32,11 @@ async function requestBuildOrigin(
 			: path.join(home, ".omp");
 	const agent = path.join(config, "agent");
 	await fs.mkdir(agent, { recursive: true });
-	const autoload = options.redirectAgent || options.redirectConfig || options.projectProfile;
+	const autoload =
+		options.fallbackPlatform || options.redirectAgent || options.redirectConfig || options.projectProfile;
 	await Bun.write(
 		path.join(project, ".env"),
-		`PI_BUILD_URL=https://evil.example\n${options.redirectAgent ? "PI_CODING_AGENT_DIR=./controlled\n" : ""}${options.redirectConfig ? "PI_CONFIG_DIR=../project/controlled\n" : ""}${options.projectProfile ? `OMP_PROFILE=${options.projectProfile}\n` : ""}`,
+		`PI_BUILD_URL=${options.projectOrigin ?? "https://evil.example"}\n${options.redirectAgent ? "PI_CODING_AGENT_DIR=./controlled\n" : ""}${options.redirectConfig ? "PI_CONFIG_DIR=../project/controlled\n" : ""}${options.projectProfile ? `OMP_PROFILE=${options.projectProfile}\n` : ""}`,
 	);
 	if (autoload) {
 		await Bun.write(path.join(project, "controlled", ".env"), "PI_BUILD_URL=https://evil.example\n");
@@ -72,6 +76,26 @@ async function requestBuildOrigin(
 		"console.log(origin);",
 	].join("\n");
 	const preload: string[] = [];
+	if (options.fallbackPlatform) {
+		const beforeCapture = root.join("before-launch-capture.ts");
+		const afterCapture = root.join("after-launch-capture.ts");
+		await Bun.write(
+			beforeCapture,
+			`Object.defineProperty(process, "platform", { value: ${JSON.stringify(options.fallbackPlatform)} });\n`,
+		);
+		await Bun.write(
+			afterCapture,
+			`Object.defineProperty(process, "platform", { value: ${JSON.stringify(process.platform)} });\n`,
+		);
+		preload.push(
+			"--preload",
+			beforeCapture,
+			"--preload",
+			path.resolve(import.meta.dir, "../../../utils/src/launch-env.ts"),
+			"--preload",
+			afterCapture,
+		);
+	}
 	if (options.cliProfile || options.projectProfile) {
 		const bootstrap = root.join("profile-bootstrap.ts");
 		await Bun.write(
@@ -82,7 +106,14 @@ async function requestBuildOrigin(
 		preload.push("--preload", bootstrap);
 	}
 	const child = Bun.spawn(
-		[process.execPath, ...(autoload ? [] : ["--no-env-file"]), ...preload, "--no-install", "--eval", script],
+		[
+			process.execPath,
+			...((options.noEnvFile ?? !autoload) ? ["--no-env-file"] : []),
+			...preload,
+			"--no-install",
+			"--eval",
+			script,
+		],
 		{
 			cwd: project,
 			env: {
@@ -184,6 +215,44 @@ describe("build origin trust", () => {
 	it.each(["", "   "])("uses user configuration when the inherited origin is blank (%j)", async inherited => {
 		expect(await requestBuildOrigin({ inherited, user: "https://user.example/" })).toBe("https://user.example");
 	});
+
+	it.each(["darwin", "win32"] as const)(
+		"rejects an expanded project origin without launch provenance (%s)",
+		async fallbackPlatform => {
+			expect(
+				await requestBuildOrigin({
+					fallbackPlatform,
+					projectOrigin: "${NPI_ORIGIN_UNSET:-https://evil.example}",
+				}),
+			).toBe("https://build.stencil.so");
+		},
+	);
+
+	it.each(["darwin", "win32"] as const)(
+		"retains launch overrides with no-env-file provenance (%s)",
+		async fallbackPlatform => {
+			expect(
+				await requestBuildOrigin({
+					fallbackPlatform,
+					noEnvFile: true,
+					inherited: "https://launch.example",
+				}),
+			).toBe("https://launch.example");
+		},
+	);
+
+	it.each(["darwin", "win32"] as const)(
+		"excludes an unprovable same-key launch override without provenance (%s)",
+		async fallbackPlatform => {
+			expect(
+				await requestBuildOrigin({
+					fallbackPlatform,
+					inherited: "https://launch.example",
+					user: "https://user.example",
+				}),
+			).toBe("https://user.example");
+		},
+	);
 
 	it("rejects an agent dotenv selected by project autoload", async () => {
 		expect(await requestBuildOrigin({ redirectAgent: true })).toBe("https://build.stencil.so");
