@@ -4,6 +4,7 @@
 
 ### Added
 
+- The side panel reports right-clicks, clicks on empty panel space, and the pointer leaving it, so hosts can cycle views and drop row hover ([#342](https://github.com/PsychedelicShayna/neopi/issues/342)).
 - Added `/statusline` to toggle, reorder, and move widgets between groups, including provider usage bars, with live composer previews and save or discard ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
 - Added a movable `context_bar` status-line widget that fills the remaining width in every composer ([#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
 - Added per-provider usage-bar status-line widgets (`usage:<provider>:<window>[:<tier>]`) showing each reported quota window's percent and age ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
