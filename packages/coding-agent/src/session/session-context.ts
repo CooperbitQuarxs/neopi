@@ -634,7 +634,7 @@ export function buildSessionContext(
 
 		// Display transcript: emit the summary at the chronological compaction
 		// point (after kept messages, before post-compaction) so it stays in
-		// the live region where Ctrl+O can expand it. Reset tracking fires
+		// the live region where the expansion action can reveal it. Reset tracking fires
 		// here so the first post-compaction assistant turn — not a kept
 		// pre-compaction one — is marked as a cache miss.
 		if (options?.transcript) handleEntryResetTracking(compaction);

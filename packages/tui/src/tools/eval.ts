@@ -591,7 +591,7 @@ function formatCellOutputLines(
 	// at the box's inner content width. Bound the collapsed tail by VISUAL rows
 	// at that width so a long-line tail can't wrap into more rows than budgeted
 	// and scroll its mutating preview above the live-region window — the
-	// duplicate "ctrl+o to expand" scrollback spray. The caller appends its own
+	// duplicate expansion-hint scrollback spray. The caller appends its own
 	// exact hidden-count row, so the pane marker stays off here.
 	const innerWidth = outputBlockContentWidth(width);
 
@@ -877,7 +877,7 @@ export const evalToolRenderer = {
 								width,
 								// Viewport-sized tail window following the newest streamed code
 								// line; renderResult keeps the same cap so the cell never snaps
-								// open on completion. Only ctrl+o uncaps.
+								// open on completion. Only the expansion action uncaps.
 								codeTail: true,
 								codeMaxLines: windowRows,
 								expanded: options.expanded,
@@ -1020,7 +1020,7 @@ export const evalToolRenderer = {
 									output: outputLines.length > 0 ? outputLines.join("\n") : undefined,
 									outputMaxLines: outputLines.length,
 									// Same viewport-sized tail window as the pending preview so the
-									// cell never snaps open on completion; only ctrl+o uncaps.
+									// cell never snaps open on completion; only the expansion action uncaps.
 									// `output` keeps its own preview cap from above.
 									codeTail: true,
 									codeMaxLines: windowRows,

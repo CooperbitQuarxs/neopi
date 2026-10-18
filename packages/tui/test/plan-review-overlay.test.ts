@@ -181,6 +181,78 @@ describe("PlanReviewOverlay", () => {
 		expect(onCancel).toHaveBeenCalledTimes(1);
 	});
 
+	it("types printable submit, delete, cancel and external-editor bindings literally", () => {
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.input.submit": ["j", "enter"],
+			"tui.editor.deleteCharBackward": "k",
+			"tui.select.cancel": "g",
+			"app.editor.external": "h",
+		}));
+		const onPick = vi.fn();
+		const onCancel = vi.fn();
+		const onAnnotationExternalEditor = vi.fn();
+		let notes: string[] = [];
+		const overlay = new PlanReviewOverlay("# Plan\n\n## Part\n\nbody", { options: APPROVAL_OPTIONS }, {
+			onPick,
+			onCancel,
+			onAnnotationExternalEditor,
+			onAnnotationStateChange: state => { notes = state.annotations.map(annotation => annotation.note); },
+		});
+		render(overlay);
+		overlay.handleInput(TAB);
+		overlay.handleInput("a");
+		const literal = "j/k h l gg G / note";
+		for (const char of literal) overlay.handleInput(char);
+		overlay.handleInput("\x1b[107u");
+		expect(notes).toEqual([]);
+		expect(onPick).not.toHaveBeenCalled();
+		expect(onCancel).not.toHaveBeenCalled();
+		expect(onAnnotationExternalEditor).not.toHaveBeenCalled();
+		overlay.handleInput(ENTER);
+		expect(notes).toEqual([`${literal}k`]);
+	});
+
+	it("keeps annotation word typing in one undo unit", () => {
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.select.cancel": "ctrl+g",
+			"tui.editor.undo": "ctrl+z",
+		}));
+		let notes: string[] = [];
+		const overlay = new PlanReviewOverlay("# Plan\n\n## Part\n\nbody", { options: APPROVAL_OPTIONS }, {
+			onPick: vi.fn(),
+			onCancel: vi.fn(),
+			onAnnotationStateChange: state => { notes = state.annotations.map(annotation => annotation.note); },
+		});
+		render(overlay);
+		overlay.handleInput(TAB);
+		overlay.handleInput("a");
+		for (const char of "discard") overlay.handleInput(char);
+		overlay.handleInput("\x1a");
+		for (const char of "kept") overlay.handleInput(char);
+		overlay.handleInput(ENTER);
+		expect(notes).toEqual(["kept"]);
+	});
+
+	it("forwards a pending character-jump target before printable submit bindings", () => {
+		setKeybindings(KeybindingsManager.inMemory({ "tui.input.submit": ["j", "enter"] }));
+		let notes: string[] = [];
+		const overlay = new PlanReviewOverlay("# Plan\n\n## Part\n\nbody", { options: APPROVAL_OPTIONS }, {
+			onPick: vi.fn(),
+			onCancel: vi.fn(),
+			onAnnotationStateChange: state => { notes = state.annotations.map(annotation => annotation.note); },
+		});
+		render(overlay);
+		overlay.handleInput(TAB);
+		overlay.handleInput("a");
+		for (const char of "alpha j omega") overlay.handleInput(char);
+		overlay.handleInput("\x01"); // line start
+		overlay.handleInput("\x1d"); // jump forward
+		overlay.handleInput("\x1b[106u"); // jump target, not a submission or insertion
+		overlay.handleInput("X");
+		overlay.handleInput(ENTER);
+		expect(notes).toEqual(["alpha Xj omega"]);
+	});
+
 	it("renders the plan body, prompt, options and footer inside one outlined box", () => {
 		const overlay = new PlanReviewOverlay(
 			"# My Plan\n\nstep one then step two",

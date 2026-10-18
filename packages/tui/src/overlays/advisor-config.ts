@@ -416,6 +416,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 	#scopeLoadRevision = 0;
 	#previewFocused = false;
 	#previewRowsLast = 1;
+	#previewWidthLast = 1;
+	#previewLayoutDirty = true;
 	#previewMaxScroll = 0;
 	readonly #listStates = new Map<string, AdvisorListState>();
 	#previousNavigationSnapshot: AdvisorNavigationSnapshot | undefined;
@@ -448,7 +450,6 @@ export class AdvisorConfigOverlayComponent implements Component {
 	};
 	#renderPreviewPane = (width: number, height: number | undefined): readonly string[] => {
 		const rows = Math.max(0, Math.floor(height ?? this.#bodyRowsLast));
-		this.#previewRowsLast = Math.max(1, rows);
 		const lines = [...this.#previewWindow(width, rows)];
 		while (lines.length < rows) lines.push("");
 		return lines.slice(0, rows);
@@ -1149,6 +1150,16 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#applyPreviewMotion(action: MenuNavAction): boolean {
+		if (action.kind !== "move" && action.kind !== "scroll" && action.kind !== "halfPage" &&
+			action.kind !== "page" && action.kind !== "boundary") return false;
+		if (this.#previewLayoutDirty) {
+			const total = this.#previewContent(this.#previewWidthLast).length;
+			const rows = this.#bodyRowsLast;
+			const contentRows = rows > 1 && total > rows ? rows - 1 : rows;
+			this.#previewRowsLast = Math.max(1, contentRows);
+			this.#previewMaxScroll = Math.max(0, total - contentRows);
+			this.#previewLayoutDirty = false;
+		}
 		let next = this.#previewScroll;
 		switch (action.kind) {
 			case "move":
@@ -1156,7 +1167,6 @@ export class AdvisorConfigOverlayComponent implements Component {
 			case "halfPage": next += action.delta * Math.max(1, Math.floor(this.#previewRowsLast / 2)); break;
 			case "page": next += action.delta * this.#previewRowsLast; break;
 			case "boundary": next = action.edge === "first" ? 0 : this.#previewMaxScroll; break;
-			default: return false;
 		}
 		this.#previewScroll = Math.max(0, Math.min(this.#previewMaxScroll, next));
 		this.#cb.requestRender();
@@ -1194,17 +1204,20 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	#previewWindow(bodyWidth: number, rows: number): string[] {
 		const lines = this.#previewContent(bodyWidth);
-		const maxScroll = Math.max(0, lines.length - rows);
+		// Overflow status owns a row; never overwrite a content line at the end.
+		const contentRows = rows > 1 && lines.length > rows ? rows - 1 : rows;
+		this.#previewWidthLast = bodyWidth;
+		this.#previewLayoutDirty = false;
+		this.#previewRowsLast = Math.max(1, contentRows);
+		const maxScroll = Math.max(0, lines.length - contentRows);
 		this.#previewMaxScroll = maxScroll;
 		const start = Math.min(this.#previewScroll, maxScroll);
 		this.#previewScroll = start;
-		const window = lines.slice(start, start + rows);
-		if (lines.length > rows) {
-			const marker =
-				start + rows < lines.length
-					? theme.fg("dim", `  ↓ ${lines.length - rows - start} more`)
-					: theme.fg("dim", "  (end)");
-			window[rows - 1] = marker;
+		const window = lines.slice(start, start + contentRows);
+		if (contentRows < rows) {
+			window.push(start + contentRows < lines.length
+				? theme.fg("dim", `  ↓ ${lines.length - contentRows - start} more`)
+				: theme.fg("dim", "  (end)"));
 		}
 		return window;
 	}
@@ -1325,6 +1338,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#footerHint = active instanceof SelectList ? `${footerHint} · ${navigation} · / search` : footerHint;
 		this.#previewScroll = saved?.previewScroll ?? 0;
 		this.#previewFocused = screen === "list" && saved?.previewFocused === true;
+		this.#previewLayoutDirty = true;
 		this.#navigationContext = context;
 		this.#navigationScope = this.#scope;
 		this.#keys.reset();
@@ -1396,6 +1410,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		if (selectedValue) list.setSelectedIndex(items.findIndex(item => item.value === selectedValue));
 		list.onSelectionChange = () => {
 			this.#previewScroll = 0;
+			this.#previewLayoutDirty = true;
 			this.#cb.requestRender();
 		};
 		// Row selections (Enter, click, Space on an action row) return to the top

@@ -51,8 +51,8 @@ describe("form menu history", () => {
 
 	it("types printable cancel, submit, delete and context bindings literally", () => {
 		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": ["escape", "j", "space"],
-			"tui.input.submit": ["enter", "k"],
+			"tui.select.cancel": ["j", "space"],
+			"tui.input.submit": ["k"],
 			"tui.editor.deleteCharBackward": ["backspace", "h"],
 			"tui.editor.deleteCharForward": ["delete", "/"],
 			"tui.select.nextContext": ["tab", "g"],
@@ -75,6 +75,28 @@ describe("form menu history", () => {
 		form.handleInput("\r");
 		expect(submitted).toBe(1);
 		form.handleInput("\x1b");
+		expect(cancelled).toBe(1);
+	});
+
+	it("keeps physical submit and cancel on standalone literal text fields", () => {
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.select.cancel": ["j"],
+			"tui.input.submit": ["k"],
+		}));
+		const submitted: string[] = [];
+		let cancelled = 0;
+		const text = new TextFormField({
+			theme,
+			onSubmit: value => { submitted.push(value); },
+			onCancel: () => { cancelled++; },
+		});
+		text.handleInput("j");
+		text.handleInput("k");
+		expect(submitted).toEqual([]);
+		expect(cancelled).toBe(0);
+		text.handleInput("\r");
+		expect(submitted).toEqual(["jk"]);
+		text.handleInput("\x1b");
 		expect(cancelled).toBe(1);
 	});
 

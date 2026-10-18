@@ -21,6 +21,7 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import {
 	type Component,
+	extractPrintableText,
 	Input,
 	matchesKey,
 	routeSgrMouseInput,
@@ -39,7 +40,7 @@ import { isLayoutMouseRoutable } from "../components/layout/geometry";
 import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
 import type { ChainConfig, ChainConfigScope, ChainsConfigDoc, ChainStep } from "./chain-types";
-import { MenuKeyReader, isMenuHistoryParticipant } from "../components/menu-navigation";
+import { MenuKeyReader, isMenuHistoryParticipant, type MenuNavAction } from "../components/menu-navigation";
 import type { SelectListNavigationState } from "../components/select-list";
 
 /** Host callbacks: all disk + live-runtime effects flow through these. */
@@ -120,6 +121,7 @@ interface ChainNavigationContext {
 interface ChainListState {
 	navigation: SelectListNavigationState;
 	previewScroll: number;
+	previewFocused: boolean;
 }
 
 interface ChainNavigationSnapshot {
@@ -128,6 +130,7 @@ interface ChainNavigationSnapshot {
 	doc: ChainsConfigDoc;
 	dirty: boolean;
 	previewScroll: number;
+	previewFocused: boolean;
 	lists: [string, ChainListState][];
 	content: unknown;
 }
@@ -155,6 +158,12 @@ export class ChainConfigOverlayComponent implements Component {
 	#active: Component = new SelectList([], 1, getSelectListTheme(), { search: "always" });
 	#footerHint = "";
 	#previewScroll = 0;
+	#previewFocused = false;
+	#previewRowsLast = 1;
+	#previewWidthLast = 1;
+	#previewLayoutDirty = true;
+	#previewMaxScroll = 0;
+	#previousNavigationSnapshot: ChainNavigationSnapshot | undefined;
 	readonly #keys = new MenuKeyReader();
 	#chainIndex: number | undefined;
 	#stepIndex: number | undefined;
@@ -231,7 +240,7 @@ export class ChainConfigOverlayComponent implements Component {
 		const height = Math.max(14, process.stdout.rows || 40);
 		const bodyRows = Math.max(3, height - 4);
 		this.#bodyRowsLast = bodyRows;
-		const title = `Chain configuration · ${this.#scope}${this.#dirty ? "  ● unsaved" : ""}`;
+		const title = `Chain configuration · ${this.#scope}${this.#dirty ? "  ● unsaved" : ""}${this.#screen === "list" && this.#previewFocused ? " · Preview" : ""}`;
 		this.#split.setNarrowPane(this.#screen === "list" ? undefined : "left");
 		this.#split.setSplitAt(this.#screen === "list" ? 0 : Number.MAX_SAFE_INTEGER);
 		this.#split.setHeight(bodyRows);
@@ -250,38 +259,91 @@ export class ChainConfigOverlayComponent implements Component {
 
 	handleInput(data: string): void {
 		if (data.startsWith("\x1b[<")) {
+			this.#keys.reset();
 			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
 			return;
 		}
-		const textFocused = this.#active instanceof Input || this.#active instanceof HookEditorComponent
-			|| ("filterFocused" in this.#active && this.#active.filterFocused === true);
-		if (!textFocused) {
-			const action = this.#keys.read(data);
-			if (action !== undefined && action !== "pending" && action.kind === "horizontal") {
-				const chainIndex = this.#navigationContext.chainIndex;
-				const stepIndex = this.#navigationContext.stepIndex;
-				if (this.#screen === "thinking" && this.#active instanceof SelectList && this.#thinking) {
-					const value = this.#active.getSelectedItem()?.value ?? "";
-					const index = value === "" ? 0 : this.#thinking.efforts.indexOf(value) + 1;
-					const next = Math.max(0, Math.min(this.#thinking.efforts.length, index + action.delta));
-					this.#active.setSelectedValue(next === 0 ? "" : this.#thinking.efforts[next - 1]!);
-				} else if (action.delta === -1 && this.#screen !== "list") {
-					if (this.#active instanceof SelectList) this.#active.onCancel?.();
-					else if (chainIndex !== undefined && stepIndex !== undefined) this.#showStep(chainIndex, stepIndex);
-				} else if (action.delta === 1 && this.#active instanceof SelectList) {
-					const item = this.#active.getSelectedItem();
-					const navigable = item && (
-						(this.#screen === "list" && /^chain:/.test(item.value))
-						|| (this.#screen === "chain" && (/^step:/.test(item.value) || ["name", "description"].includes(item.value)))
-						|| (this.#screen === "step" && ["name", "model", "tools", "systemPrompt", "prompt"].includes(item.value))
-					);
-					if (navigable && item) this.#active.onSelect?.(item);
-				}
+		let active = this.#active;
+		if (active instanceof Input || active instanceof HookEditorComponent ||
+			("filterFocused" in active && active.filterFocused === true)) {
+			this.#keys.reset();
+			const printable = active instanceof Input ? extractPrintableText(data) : undefined;
+			if (active instanceof Input && printable !== undefined) active.insertText(printable);
+			else active.handleInput?.(data);
+			return;
+		}
+		let cancelledDelete = false;
+		if (this.#screen === "list" && this.#pendingDeleteChain !== null &&
+			!matchesKey(data, "delete") && !matchesKey(data, "backspace")) {
+			const selected = active instanceof SelectList ? active.getSelectedItem()?.value : undefined;
+			this.#pendingDeleteChain = null;
+			this.#showList(selected);
+			active = this.#active;
+			cancelledDelete = true;
+		}
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (cancelledDelete && action?.kind === "cancel") return;
+		if (action?.kind === "horizontal") {
+			if (this.#screen === "list") this.#previewFocused = action.delta > 0;
+			else if (this.#screen === "thinking" && active instanceof SelectList && this.#thinking) {
+				const value = active.getSelectedItem()?.value ?? "";
+				const index = value === "" ? 0 : this.#thinking.efforts.indexOf(value) + 1;
+				const next = Math.max(0, Math.min(this.#thinking.efforts.length, index + action.delta));
+				active.setSelectedValue(next === 0 ? "" : this.#thinking.efforts[next - 1]!);
+			} else if (action.delta < 0) {
+				if (active instanceof SelectList) active.onCancel?.();
+				else if (active instanceof ModelBrowser) active.handleCancel();
+			} else if (active instanceof SelectList) {
+				const item = active.getSelectedItem();
+				const navigable = item && (
+					(this.#screen === "chain" && (/^step:/.test(item.value) || ["name", "description"].includes(item.value))) ||
+					(this.#screen === "step" && ["name", "model", "tools", "systemPrompt", "prompt"].includes(item.value))
+				);
+				if (navigable && item) active.onSelect?.(item);
+			}
+			this.#cb.requestRender();
+			return;
+		}
+		if (this.#screen === "list") {
+			if (action?.kind === "context") {
+				this.#previewFocused = !this.#previewFocused;
+				this.#cb.requestRender();
 				return;
 			}
-			if (action !== undefined && action !== "pending" && action.kind === "toggle" && this.#active instanceof SelectList && this.#active.getSelectedItem()?.value === "delete") return;
+			if (action?.kind === "search") this.#previewFocused = false;
+			if (this.#previewFocused && action && this.#applyPreviewMotion(action)) return;
 		}
-		this.#active.handleInput?.(data);
+		if (action?.kind === "toggle" && active instanceof SelectList) {
+			const value = active.getSelectedItem()?.value ?? "";
+			if (["delete", "resetModel"].includes(value) || (this.#screen === "list" && this.#dirty && value === "close")) return;
+		}
+		if (action && (active instanceof SelectList || active instanceof ModelBrowser)) active.handleNavigation(action);
+		else active.handleInput?.(data);
+	}
+
+	#applyPreviewMotion(action: MenuNavAction): boolean {
+		if (action.kind !== "move" && action.kind !== "scroll" && action.kind !== "halfPage" &&
+			action.kind !== "page" && action.kind !== "boundary") return false;
+		if (this.#previewLayoutDirty) {
+			const total = this.#previewContent(this.#previewWidthLast).length;
+			const rows = this.#bodyRowsLast;
+			const contentRows = rows > 1 && total > rows ? rows - 1 : rows;
+			this.#previewRowsLast = Math.max(1, contentRows);
+			this.#previewMaxScroll = Math.max(0, total - contentRows);
+			this.#previewLayoutDirty = false;
+		}
+		let next = this.#previewScroll;
+		switch (action.kind) {
+			case "move":
+			case "scroll": next += action.delta; break;
+			case "halfPage": next += action.delta * Math.max(1, Math.floor(this.#previewRowsLast / 2)); break;
+			case "page": next += action.delta * this.#previewRowsLast; break;
+			case "boundary": next = action.edge === "first" ? 0 : this.#previewMaxScroll; break;
+		}
+		this.#previewScroll = Math.max(0, Math.min(this.#previewMaxScroll, next));
+		this.#cb.requestRender();
+		return true;
 	}
 
 	/** Forward enhanced-paste transports into the multiline prompt editor. */
@@ -293,16 +355,15 @@ export class ChainConfigOverlayComponent implements Component {
 		const hit = this.#frame.locate(event.row, event.col);
 		if (hit && hit.index === 1) {
 			const pane = this.#split.locate(hit.line, hit.col);
-			// Right pane of the split (the preview) only scrolls; the left pane
-			// routes into the active list/component at pane-local coordinates.
+			// Pointer focus follows a click or wheel, never passive hover.
 			if (pane?.pane === "right") {
-				if (event.wheel !== null) {
-					this.#previewScroll = Math.max(0, this.#previewScroll + event.wheel);
-					this.#cb.requestRender();
-				}
+				if (event.leftClick || event.wheel !== null) this.#previewFocused = true;
+				if (event.wheel !== null) this.#applyPreviewMotion({ kind: "scroll", delta: event.wheel });
+				else if (event.leftClick) this.#cb.requestRender();
 				return true;
 			}
 			if (pane?.pane === "left" && isLayoutMouseRoutable(this.#active)) {
+				if (event.leftClick || event.wheel !== null) this.#previewFocused = false;
 				this.#active.routeMouse(event, pane.line, pane.col);
 				return true;
 			}
@@ -315,15 +376,20 @@ export class ChainConfigOverlayComponent implements Component {
 
 	#previewWindow(bodyWidth: number, rows: number): string[] {
 		const lines = this.#previewContent(bodyWidth);
-		const maxScroll = Math.max(0, lines.length - rows);
+		// Overflow status owns a row; never overwrite a content line at the end.
+		const contentRows = rows > 1 && lines.length > rows ? rows - 1 : rows;
+		this.#previewWidthLast = bodyWidth;
+		this.#previewLayoutDirty = false;
+		this.#previewRowsLast = Math.max(1, contentRows);
+		const maxScroll = Math.max(0, lines.length - contentRows);
+		this.#previewMaxScroll = maxScroll;
 		const start = Math.min(this.#previewScroll, maxScroll);
-		const window = lines.slice(start, start + rows);
-		if (lines.length > rows) {
-			const marker =
-				start + rows < lines.length
-					? theme.fg("dim", `  ↓ ${lines.length - rows - start} more`)
-					: theme.fg("dim", "  (end)");
-			window[rows - 1] = marker;
+		this.#previewScroll = start;
+		const window = lines.slice(start, start + contentRows);
+		if (contentRows < rows) {
+			window.push(start + contentRows < lines.length
+				? theme.fg("dim", `  ↓ ${lines.length - contentRows - start} more`)
+				: theme.fg("dim", "  (end)"));
 		}
 		return window;
 	}
@@ -388,18 +454,24 @@ export class ChainConfigOverlayComponent implements Component {
 		const changed = screen !== this.#navigationContext.screen || context.chainIndex !== this.#navigationContext.chainIndex || context.stepIndex !== this.#navigationContext.stepIndex;
 		if (!this.#restoringNavigation && this.#active instanceof SelectList) this.#listStates.set(
 			this.#pageKey(this.#navigationContext, this.#navigationScope),
-			{ navigation: this.#active.navigationSnapshot(), previewScroll: this.#previewScroll },
+			{ navigation: this.#active.navigationSnapshot(), previewScroll: this.#previewScroll, previewFocused: this.#previewFocused },
 		);
-		const previous = changed && !this.#restoringNavigation ? this.navigationSnapshot() : undefined;
+		const previous = changed && !this.#restoringNavigation
+			? this.#previousNavigationSnapshot ?? this.navigationSnapshot() : undefined;
+		this.#previousNavigationSnapshot = undefined;
 		const savedList = this.#listStates.get(this.#pageKey(context, this.#scope));
 		if (savedList && active instanceof SelectList) {
 			active.restoreNavigation(changed ? savedList.navigation : { ...savedList.navigation, selectedValue: active.getSelectedItem()?.value });
 		}
 		this.#screen = screen;
 		this.#active = active;
-		const navigationHint = screen === "thinking" ? "h/l effort" : screen === "list" ? "l open" : "h parent / l open";
-		this.#footerHint = active instanceof SelectList ? `${footerHint} · ${navigationHint} · / search` : footerHint;
+		const navigationHint = screen === "thinking" ? "h/l effort" : screen === "list" ? "h/l, Tab panes" : "h parent / l open";
+		this.#footerHint = active instanceof SelectList ? `${navigationHint} · ${footerHint} · / search` : footerHint;
 		this.#previewScroll = savedList?.previewScroll ?? 0;
+		this.#previewFocused = screen === "list" && savedList?.previewFocused === true;
+		this.#previewLayoutDirty = true;
+		this.#keys.reset();
+		if (changed) this.#pendingDeleteChain = null;
 		this.#navigationContext = context;
 		this.#navigationScope = this.#scope;
 		if (previous !== undefined) this.onNavigationVisit?.(screen === "list" ? "" : `${screen}:${context.chainIndex ?? "new"}:${context.stepIndex ?? "new"}`, previous);
@@ -470,17 +542,11 @@ export class ChainConfigOverlayComponent implements Component {
 				this.#onDeleteChain(Number(match[1]));
 				return;
 			}
-			if (this.#pendingDeleteChain !== null) {
-				// Any other key abandons the pending removal; Esc only does that.
-				this.#pendingDeleteChain = null;
-				this.#showList(selected);
-				if (!matchesKey(data, "escape")) this.#active.handleInput?.(data);
-				return;
-			}
 			handleInput(data);
 		};
 		list.onSelectionChange = () => {
 			this.#previewScroll = 0;
+			this.#previewLayoutDirty = true;
 			this.#cb.requestRender();
 		};
 		list.onSelect = item =>
@@ -493,7 +559,7 @@ export class ChainConfigOverlayComponent implements Component {
 			list,
 			this.#pendingDeleteChain !== null
 				? "Delete again to confirm removal · any other key cancels"
-				: "↑↓ move · Enter / click select · Delete removes a chain · scroll preview on the right · Esc close",
+				: "j/k move · Enter/Space edit · Del×2 removes · Esc close",
 		);
 	}
 
@@ -673,6 +739,7 @@ export class ChainConfigOverlayComponent implements Component {
 				this.#showNewStepEditor(index);
 				return;
 			case "delete":
+				this.#previousNavigationSnapshot = this.navigationSnapshot();
 				this.#doc.chains.splice(index, 1);
 				this.#dirty = true;
 				this.#showList();
@@ -847,6 +914,7 @@ export class ChainConfigOverlayComponent implements Component {
 				this.#showPromptEditor(chainIndex, stepIndex);
 				return;
 			case "delete": {
+				this.#previousNavigationSnapshot = this.navigationSnapshot();
 				const chain = this.#doc.chains[chainIndex];
 				chain?.steps.splice(stepIndex, 1);
 				this.#dirty = true;
@@ -906,7 +974,7 @@ export class ChainConfigOverlayComponent implements Component {
 			}
 		};
 		picker.onCancel = () => this.#showStep(chainIndex, stepIndex, "model");
-		this.#setScreen("model", picker, "Type to search · Enter / click twice picks · Esc back");
+		this.#setScreen("model", picker, "/ search · Enter / click twice picks · h / Esc back");
 	}
 
 	#setStepModel(chainIndex: number, stepIndex: number, selector: string | undefined): void {
@@ -943,10 +1011,7 @@ export class ChainConfigOverlayComponent implements Component {
 		items.push({ value: "__done", label: "Done" });
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		list.setSelectedIndex(cursor);
-		let cursorIndex = cursor;
-		list.onSelectionChange = item => {
-			cursorIndex = items.findIndex(i => i.value === item.value);
-		};
+		list.onSelectionChange = () => this.#cb.requestRender();
 		const commit = (): void => {
 			const step = this.#step(chainIndex, stepIndex);
 			if (step) {
@@ -962,7 +1027,7 @@ export class ChainConfigOverlayComponent implements Component {
 			}
 			if (selected.has(item.value)) selected.delete(item.value);
 			else selected.add(item.value);
-			this.#showToolsEditor(chainIndex, stepIndex, selected, cursorIndex);
+			this.#showToolsEditor(chainIndex, stepIndex, selected, items.findIndex(candidate => candidate.value === item.value));
 		};
 		list.onCancel = commit;
 		this.#setScreen("tools", list, "Enter / click toggle · select Done or Esc to apply (empty = no tools)");
@@ -1021,6 +1086,7 @@ export class ChainConfigOverlayComponent implements Component {
 			doc: structuredClone(this.#doc),
 			dirty: this.#dirty,
 			previewScroll: this.#previewScroll,
+			previewFocused: this.#previewFocused,
 			lists: structuredClone([...this.#listStates]),
 			content: this.#active instanceof Input
 				? { value: this.#active.getValue(), cursor: this.#active.getCursor() }
@@ -1033,6 +1099,7 @@ export class ChainConfigOverlayComponent implements Component {
 		const state = snapshot as ChainNavigationSnapshot;
 		if (!state.context || !state.doc || !Array.isArray(state.doc.chains)) return;
 		this.#restoringNavigation = true;
+		this.#keys.reset();
 		try {
 			this.#doc = structuredClone(state.doc);
 			this.#listStates.clear();
@@ -1074,8 +1141,12 @@ export class ChainConfigOverlayComponent implements Component {
 				if (typeof field.cursor === "number") this.#active.setCursor(field.cursor);
 			} else if (isMenuHistoryParticipant(this.#active)) this.#active.restoreNavigation(state.content);
 			this.#previewScroll = state.previewScroll;
+			this.#previewFocused = state.context.screen === "list" && state.previewFocused === true;
 		} finally { this.#restoringNavigation = false; }
 	}
 
-	leaveMenu(): void { this.#pendingDeleteChain = null; }
+	leaveMenu(): void {
+		this.#keys.reset();
+		this.#pendingDeleteChain = null;
+	}
 }

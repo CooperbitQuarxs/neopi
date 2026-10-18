@@ -18,7 +18,7 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import type { Component, TUI } from "../tui";
 import { Editor, type EditorNavigationState } from "../components/editor";
-import { matchesKey } from "../keys";
+import { extractPrintableText, matchesKey } from "../keys";
 import { routeSgrMouseInput } from "../mouse";
 import { formatDuration, formatNumber, logger } from "@oh-my-pi/pi-utils";
 import { formatKeyHint, type KeyId } from "../app-keybindings";
@@ -561,9 +561,15 @@ export class AgentTranscriptViewer implements Component {
 			return;
 		}
 		if (this.#focus === "editor" && this.#editor) {
-			const kb = getKeybindings();
-			if (kb.matches(data, "tui.select.cancel") || kb.matches(data, "tui.select.nextContext") || kb.matches(data, "tui.select.prevContext")) this.#setFocus("view");
-			else this.#editor.handleInput(data);
+			this.#keys.reset();
+			const text = extractPrintableText(data);
+			if (this.#editor.isJumpPending) this.#editor.handleInput(data);
+			else if (text !== undefined) this.#editor.typeCharacter(text);
+			else {
+				const kb = getKeybindings();
+				if (kb.matches(data, "tui.select.cancel") || kb.matches(data, "tui.select.nextContext") || kb.matches(data, "tui.select.prevContext")) this.#setFocus("view");
+				else this.#editor.handleInput(data);
+			}
 			this.#deps.requestRender();
 			return;
 		}

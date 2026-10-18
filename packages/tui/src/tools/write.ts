@@ -262,7 +262,7 @@ function createWriteStreamingPreviewState(language: string | undefined, uiTheme:
 
 /**
  * Advance line counting and syntax highlighting only across newly appended
- * content. Complete lines are retained because Ctrl+O can expand the preview;
+ * content. Complete lines are retained because the expansion action can reveal the preview;
  * the current partial line stays plain until its terminating newline arrives.
  * Once args are final, the trailing line is flushed through the highlighter
  * (its only push without a trailing newline) so a settled-but-queued preview

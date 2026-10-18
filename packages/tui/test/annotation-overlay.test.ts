@@ -280,6 +280,55 @@ describe("AnnotationOverlay", () => {
 		expect(completed).toEqual([]);
 	});
 
+	it("types printable submit, delete, cancel and external-editor bindings literally", () => {
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.input.submit": ["j", "enter"],
+			"tui.editor.deleteCharBackward": "k",
+			"tui.select.cancel": "g",
+			"app.editor.external": "h",
+		}));
+		const completed: (TextReviewOverlayResult | undefined)[] = [];
+		let externalEdits = 0;
+		const overlay = new AnnotationOverlay(makeTui(), darkTheme!, getKeybindings() as KeybindingsManager,
+			{ text: "source", label: "source" }, {
+				onComplete: result => completed.push(result),
+				onExternalEditor: () => { externalEdits++; },
+			});
+		overlay.handleInput("a");
+		const literal = "j/k h l gg G / note";
+		for (const char of literal) overlay.handleInput(char);
+		overlay.handleInput("\x1b[107u");
+		expect(overlay.getTextAnnotations()).toEqual([]);
+		expect(externalEdits).toBe(0);
+		expect(completed).toEqual([]);
+		overlay.handleInput(ENTER);
+		expect(overlay.getTextAnnotations().map(annotation => annotation.note)).toEqual([`${literal}k`]);
+	});
+
+	it("keeps annotation word typing in one undo unit", () => {
+		setKeybindings(KeybindingsManager.inMemory({ "tui.editor.undo": "ctrl+z" }));
+		const overlay = makeTextOverlay({ text: "source", label: "source" });
+		overlay.handleInput("a");
+		for (const char of "discard") overlay.handleInput(char);
+		overlay.handleInput("\x1a");
+		for (const char of "kept") overlay.handleInput(char);
+		overlay.handleInput(ENTER);
+		expect(overlay.getTextAnnotations().map(annotation => annotation.note)).toEqual(["kept"]);
+	});
+
+	it("forwards a pending character-jump target before printable submit bindings", () => {
+		setKeybindings(KeybindingsManager.inMemory({ "tui.input.submit": ["j", "enter"] }));
+		const overlay = makeTextOverlay({ text: "source", label: "source" });
+		overlay.handleInput("a");
+		for (const char of "alpha j omega") overlay.handleInput(char);
+		overlay.handleInput("\x01"); // line start
+		overlay.handleInput("\x1d"); // jump forward
+		overlay.handleInput("\x1b[106u"); // jump target, not a submission or insertion
+		overlay.handleInput("X");
+		overlay.handleInput(ENTER);
+		expect(overlay.getTextAnnotations().map(annotation => annotation.note)).toEqual(["alpha Xj omega"]);
+	});
+
 	describe("native sheet", () => {
 		it("titles the sheet by the review and routes its footer buttons like the keys", () => {
 			let result: CodeReviewOverlayResult | undefined;

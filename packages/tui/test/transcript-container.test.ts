@@ -261,7 +261,7 @@ describe("TranscriptContainer row split", () => {
 		const head = transcript.peekFinalizedBatch(80, 6)!;
 		transcript.acknowledgeFinalizedBatch(head.id);
 		expect(head.rows).toEqual(["… 20 earlier lines", "out20", "out21", "out22", "out23", "out24", "out25"]);
-		// Ctrl+O: the pane re-renders with head rows that history never received.
+		// Expansion: the pane re-renders with head rows that history never received.
 		expanded = true;
 		const rest = transcript.peekFlushBatch(80)!.rows;
 		expect(rest.filter(row => row.startsWith("out"))).toEqual(lines);

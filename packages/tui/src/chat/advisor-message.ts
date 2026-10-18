@@ -157,7 +157,7 @@ function advisorNoteSpans(entry: AdvisorNote): TspSpan[] {
 
 /** The advisor card: shared by the controlled expansion getter and native toggles. */
 export interface AdvisorMessageCard extends Component {
-	/** Transcript-wide expansion (`Ctrl+O`); clears a toggle made in the terminal. */
+	/** Transcript-wide expansion; clears a toggle made in the terminal. */
 	setExpanded(expanded: boolean): void;
 	handleNativeEvent(event: NativeUiEvent): void;
 }

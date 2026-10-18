@@ -919,7 +919,7 @@ export class ToolExecutionComponent extends Container {
 		this.#updateDisplay();
 	}
 
-	/** Mirrors the card collapsed or expanded in the terminal, so `Ctrl+O` and native toggles share one state. */
+	/** Keeps transcript expansion and native card toggles in one shared state. */
 	handleNativeEvent(event: NativeUiEvent): void {
 		const expanded = rootToggleExpanded(event);
 		if (expanded !== undefined) this.setExpanded(expanded);

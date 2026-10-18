@@ -323,7 +323,7 @@ export class ChatTranscriptBuilder {
 					// update` replay dumps — can be hundreds of KiB of Markdown each.
 					// Rendering their full body on cold open blocked the TUI (issue #6308);
 					// collapse them behind a compact summary that builds Markdown only on
-					// ctrl+o expand. Real user prompts stay fully rendered.
+					// expansion. Real user prompts stay fully rendered.
 					if (isSynthetic) {
 						const collapsed = new CollapsedSyntheticMessageComponent(userText);
 						this.#trackExpandable(collapsed);

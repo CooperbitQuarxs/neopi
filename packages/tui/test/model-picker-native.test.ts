@@ -373,6 +373,29 @@ test("the quick picker is an md sheet with the summary below and a task-model to
 	expect(picked).toEqual(["task:openai/gpt-5.6"]);
 });
 
+for (const kind of ["hub", "picker"] as const) {
+	test(`${kind} caller synchronizes filter entry and exit with the shared browser`, () => {
+		const menu = kind === "hub"
+			? openHub({ assign: [], cancel: 0 })
+			: new ModelPickerComponent(
+				ui,
+				source({ default: "demo/demo" }, ["demo/demo"]),
+				{ ...registry(MODELS), refreshIfStale: async () => false },
+				MODELS.map(entry => ({ model: entry })),
+				{ onPick: () => {}, onCancel: () => {} },
+			);
+		menu.handleInput("/");
+		for (const character of "jkggG/ ") menu.handleInput(character);
+		expect(props(menu.describe(withPicker)).query).toBe("jkggG/ ");
+		menu.handleInput("\x1b");
+		menu.handleInput("j");
+		expect(props(menu.describe(withPicker)).query).toBe("jkggG/ ");
+		menu.handleInput("/");
+		menu.handleInput("x");
+		expect(props(menu.describe(withPicker)).query).toBe("jkggG/ x");
+	});
+}
+
 test("shows a non-default service tier's own speed aggregate", () => {
 	const perf = new Map([
 		["openai/gpt-5.6", { samples: 4, tps: 25, ttftMs: 500 }],

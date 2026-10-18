@@ -628,8 +628,10 @@ export class PlanReviewOverlay implements Component {
 			return;
 		}
 		if (this.#annotating) {
-			if (extractPrintableText(keyData) !== undefined) {
-				this.#editor.handleInput(keyData);
+			const printable = extractPrintableText(keyData);
+			if (printable !== undefined) {
+				if (this.#editor.isJumpPending) this.#editor.handleInput(keyData);
+				else this.#editor.typeCharacter(printable);
 				return;
 			}
 			if (this.callbacks.onAnnotationExternalEditor && matchesAppExternalEditor(keyData)) {

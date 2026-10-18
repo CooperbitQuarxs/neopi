@@ -421,7 +421,7 @@ class SyntheticSummary implements Component {
  *
  * Collapsed by default: renders one dim summary row (label · size · line count ·
  * expand hint) and builds NO Markdown. The heavy {@link UserMessageComponent} is
- * constructed lazily only when expanded via `ctrl+o`, so blocks above the
+ * constructed lazily only on expansion, so blocks above the
  * viewport never pay layout cost until the reader asks to see them. The raw
  * observability data stays intact in `__advisor.jsonl`.
  */
@@ -445,7 +445,7 @@ export class CollapsedSyntheticMessageComponent implements Component {
 		});
 	}
 
-	/** ctrl+o toggle: reveal/hide the full Markdown body. */
+	/** Expansion action: reveal/hide the full Markdown body. */
 	setExpanded(expanded: boolean): void {
 		this.#expanded = expanded;
 		this.#disclosure.setExpanded(expanded);

@@ -452,8 +452,10 @@ export class AnnotationOverlay implements Focusable {
 			return;
 		}
 		if (this.#annotating) {
-			if (extractPrintableText(data) !== undefined) {
-				this.#editor.handleInput(data);
+			const printable = extractPrintableText(data);
+			if (printable !== undefined) {
+				if (this.#editor.isJumpPending) this.#editor.handleInput(data);
+				else this.#editor.typeCharacter(printable);
 				return;
 			}
 			if (matchesAppExternalEditor(data)) {
