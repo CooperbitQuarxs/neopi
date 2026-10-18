@@ -106,12 +106,19 @@ export function repoFromUrl(value: string | undefined): string | undefined {
 	return host === defaultGhHost() ? slug : formatRepoRef(host, slug);
 }
 
-/** Resolve HTTPS, SSH, or scp-like Git remotes to the same host-aware identity as GitHub URLs. */
+/**
+ * Resolve HTTPS, SSH, or scp-like Git remotes to the same host-aware identity
+ * as GitHub URLs. Only hosts `gh` addresses as GitHub qualify: github.com and
+ * the configured `GH_HOST`. GitLab, Bitbucket, and other Git hosts yield
+ * undefined rather than a repository `gh` cannot operate on.
+ */
 export function repoFromRemoteUrl(value: string | undefined): string | undefined {
 	if (!value) return undefined;
 	const source = parseGitUrl(value);
 	if (!source || !/^[^/\s?#]+\/[^/\s?#]+$/.test(source.path)) return undefined;
-	return repoFromUrl(`https://${source.host}/${source.path}`);
+	const host = source.host.toLowerCase();
+	if (host !== GITHUB_HOST && host !== defaultGhHost()) return undefined;
+	return repoFromUrl(`https://${host}/${source.path}`);
 }
 
 export const PR_URL_PATTERN = /^https:\/\/([^/]+)\/([^/]+\/[^/]+)\/pull\/(\d+)(?:\/.*)?$/;

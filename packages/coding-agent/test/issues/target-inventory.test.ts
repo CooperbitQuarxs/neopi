@@ -76,23 +76,37 @@ describe("GitHub remote identity parsing", () => {
 		expect(repoFromRemoteUrl(remote)).toBe(REPO);
 	});
 
-	it("retains a non-default host for HTTPS and SSH remotes", () => {
-		const host = defaultGhHost() === "ghe.inventory.test" ? "other.inventory.test" : "ghe.inventory.test";
-		for (const remote of [
-			`https://${host}/Owner/Project.git`,
-			`git@${host}:Owner/Project.git`,
-			`ssh://git@${host}/Owner/Project.git`,
-		]) {
-			expect(repoFromRemoteUrl(remote)).toBe(`${host}/Owner/Project`);
+	it("retains the configured GH_HOST enterprise host for HTTPS and SSH remotes", () => {
+		const previous = process.env.GH_HOST;
+		process.env.GH_HOST = "ghe.inventory.test";
+		try {
+			for (const remote of [
+				"https://ghe.inventory.test/Owner/Project.git",
+				"git@ghe.inventory.test:Owner/Project.git",
+				"ssh://git@ghe.inventory.test/Owner/Project.git",
+			]) {
+				expect(repoFromRemoteUrl(remote)).toBe(REPO);
+			}
+			// github.com stays addressable, host-qualified, while GH_HOST points elsewhere.
+			expect(repoFromRemoteUrl("git@github.com:Owner/Project.git")).toBe(`github.com/${REPO}`);
+		} finally {
+			if (previous === undefined) delete process.env.GH_HOST;
+			else process.env.GH_HOST = previous;
 		}
 	});
 
-	it.each([undefined, "", "/tmp/local-repo", "file:///tmp/local-repo", "not a remote"])(
-		"ignores non-hosted remote %s",
-		remote => {
-			expect(repoFromRemoteUrl(remote)).toBeUndefined();
-		},
-	);
+	it.each([
+		undefined,
+		"",
+		"/tmp/local-repo",
+		"file:///tmp/local-repo",
+		"not a remote",
+		"git@gitlab.com:Owner/Project.git",
+		"https://bitbucket.org/Owner/Project.git",
+		"https://codeberg.org/Owner/Project.git",
+	])("ignores remote %s that gh cannot address as GitHub", remote => {
+		expect(repoFromRemoteUrl(remote)).toBeUndefined();
+	});
 });
 
 describe("issue target inventory (real git)", () => {
@@ -186,14 +200,14 @@ describe("issue target inventory (real git)", () => {
 		expect(found && selectIssueCheckout(found, inventory.foreground?.repoRoot)?.path).toBe(target);
 	});
 
-	it("does not merge identical slugs on different hosts", async () => {
+	it("lists no candidate for a checkout hosted outside GitHub", async () => {
 		const cwd = await createRepo(root, "current");
-		const host = defaultGhHost() === "ghe.inventory.test" ? "other.inventory.test" : "ghe.inventory.test";
-		const enterprise = await createRepo(root, "enterprise", `git@${host}:Owner/Project.git`);
-		vi.spyOn(sessionListing, "listRecentProjects").mockResolvedValue([project(enterprise, 200)]);
+		const gitlab = await createRepo(root, "gitlab", "git@gitlab.com:Owner/Project.git");
+		vi.spyOn(sessionListing, "listRecentProjects").mockResolvedValue([project(gitlab, 200)]);
 		const inventory = await collectIssueTargetInventory({ cwd, settings: Settings.isolated() });
 
-		expect(inventory.repositories.map(item => item.repo)).toEqual([REPO, `${host}/Owner/Project`]);
+		expect(inventory.repositories.map(item => item.repo)).toEqual([REPO]);
+		expect(inventory.repositories[0]?.checkouts.map(item => item.path)).toEqual([cwd]);
 	});
 
 	it("retains local targets and a warning when GitHub inventory fails", async () => {

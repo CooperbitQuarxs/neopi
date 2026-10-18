@@ -160,7 +160,7 @@ export async function collectIssueTargetInventory(options: {
 		}
 	}
 	const byRoot = new Map<string, Promise<LocalCheckout>>();
-	const localCheckouts = new Array<LocalCheckout | undefined>(leads.length);
+	const localCheckouts: (LocalCheckout | undefined)[] = Array.from({ length: leads.length });
 	let next = 0;
 	const readNext = async () => {
 		while (next < leads.length) {
