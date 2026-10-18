@@ -10,13 +10,6 @@ import {
 	visibleWidth,
 } from "../index";
 import { theme } from "../theme/theme";
-import {
-	matchesAppInterrupt,
-	matchesSelectDown,
-	matchesSelectPageDown,
-	matchesSelectPageUp,
-	matchesSelectUp,
-} from "../keybinding-matchers";
 /** Prompt history fields displayed in search results. */
 export interface HistorySearchEntry {
 	prompt: string;
@@ -30,16 +23,16 @@ export interface HistorySource {
 	search(query: string, limit: number): HistorySearchEntry[];
 	getRecent(limit: number): HistorySearchEntry[];
 }
-import { boundKeys, editorKeys, keyHint, rawKeyHint } from "../chrome/keybinding-hints";
+import { boundKeys, rawKeyHint } from "../chrome/keybinding-hints";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { contentRowWidth, renderScrollableList } from "../chrome/selector-helpers";
 import { MenuSelection } from "../components/menu-selection";
-import { centeredViewportRange } from "../components/scroll-viewport";
+import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, menuScrollBy, type MenuViewportPosition } from "../components/menu-navigation";
 import type { KeyName } from "../key-hint-format";
 import type { TspPickerItem } from "@oh-my-pi/pi-wire";
 import { col, keyed, node, span } from "../native/describe";
-import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
-import { actionHint, hintsRow, overlayCard } from "../native/overlay";
+import type { DescribeContext, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
+import { hintsRow, overlayCard } from "../native/overlay";
 import { picker, pickerAction, pickerAge, pickerDate, pickerEvent, pickerHits, pickerQuery } from "../native/picker";
 import { shortenPath } from "../render/render-utils";
 
@@ -56,6 +49,8 @@ interface HistoryNativeMemo {
 	selected: HistorySearchEntry | undefined;
 	query: string;
 	cursor: number;
+	focused: boolean;
+	scroll: NativeScroll | undefined;
 	node: NativeNode;
 }
 
@@ -113,15 +108,23 @@ class HistoryResultsList implements Component {
 	#menu: MenuSelection<HistorySearchEntry>;
 	#tokens: string[] = [];
 	#maxVisible = MAX_VISIBLE;
+	readonly #viewport: MenuViewport;
+	#rowCounts: number[] = [];
 	/** Highlighted prompt text per entry, valid for one `(tokens, budget)` pair; reset on invalidate (theme). */
 	#highlightCache = new WeakMap<HistorySearchEntry, { tokens: string[]; budget: number; text: string }>();
 
-	constructor(menu: MenuSelection<HistorySearchEntry>) {
+	constructor(menu: MenuSelection<HistorySearchEntry>, viewport: MenuViewport) {
 		this.#menu = menu;
+		this.#viewport = viewport;
 	}
 
 	setTokens(tokens: string[]): void {
 		this.#tokens = tokens;
+		this.#rowCounts = this.#menu.visibleItems.map(() => 1);
+	}
+
+	prepareViewport(): ReturnType<MenuViewport["layout"]> {
+		return this.#viewport.layout(this.#rowCounts, this.#menu.selectedIndex, this.#maxVisible);
 	}
 
 	invalidate(): void {
@@ -151,11 +154,7 @@ class HistoryResultsList implements Component {
 		const cursorSymbol = `${theme.nav.cursor} `;
 		const gutterWidth = visibleWidth(cursorSymbol);
 
-		const { start: startIndex, end: endIndex } = centeredViewportRange(
-			this.#menu.selectedIndex,
-			items.length,
-			this.#maxVisible,
-		);
+		const { startIndex, endIndex, rowOffset } = this.prepareViewport();
 
 		const rowWidth = contentRowWidth(width, items.length, this.#maxVisible);
 		const rows: string[] = [];
@@ -187,7 +186,7 @@ class HistoryResultsList implements Component {
 			);
 		}
 
-		lines.push(...renderScrollableList(rows, { width, totalRows: items.length, scrollOffset: startIndex }));
+		lines.push(...renderScrollableList(rows, { width, totalRows: items.length, scrollOffset: rowOffset }));
 		return lines;
 	}
 }
@@ -195,6 +194,10 @@ class HistoryResultsList implements Component {
 export class HistorySearchComponent extends OverlayPanel {
 	#historyStorage: HistorySource;
 	#searchInput: Input;
+	readonly #search = new MenuSearchField("", true);
+	readonly #keys = new MenuKeyReader();
+	readonly #viewport = new MenuViewport();
+	#nativeScroll: NativeScroll | undefined;
 	#menu: MenuSelection<HistorySearchEntry>;
 	#resultsList: HistoryResultsList;
 	#onSelect: (prompt: string) => void;
@@ -224,7 +227,7 @@ export class HistorySearchComponent extends OverlayPanel {
 			getKey: entry => `${entry.created_at}:${entry.prompt}`,
 			getSearchText: entry => entry.prompt,
 		});
-		this.#searchInput = new Input();
+		this.#searchInput = this.#search.input;
 		this.#searchInput.onSubmit = () => {
 			this.#flushPendingSearch();
 			const selected = this.#menu.selectedItem;
@@ -232,18 +235,18 @@ export class HistorySearchComponent extends OverlayPanel {
 				this.#onSelect(selected.prompt);
 			}
 		};
-		this.#searchInput.onEscape = () => {
-			this.#onCancel();
-		};
+		this.#searchInput.onEscape = () => { this.#search.focused = false; };
 
-		this.#resultsList = new HistoryResultsList(this.#menu);
+		this.#resultsList = new HistoryResultsList(this.#menu, this.#viewport);
 
 		const dot = theme.fg("dim", theme.sep.dot);
-		const navigate = theme.fg("dim", editorKeys("tui.select.up", "tui.select.down")) + theme.fg("muted", " navigate");
-		const hint = [navigate, rawKeyHint("enter", "select"), keyHint("tui.select.cancel", "cancel")].join(dot);
+		const hint = [
+			"j/k ↑↓ · Ctrl-u/d half · PgUp/Dn · gg/G · Ctrl-e/y view",
+			rawKeyHint("enter", "select"), "/ search · Tab field/list · Esc field/list/close",
+		].join(dot);
 
 		this.addChild(new Spacer(1));
-		this.addChild(this.#searchInput);
+		this.addChild({ render: width => [this.#search.render(width, { muted: text => theme.fg("dim", text) })] });
 		this.addChild(new Spacer(1));
 		this.addChild(this.#resultsList);
 		this.addChild(new Spacer(1));
@@ -251,6 +254,33 @@ export class HistorySearchComponent extends OverlayPanel {
 		this.addChild(new Spacer(1));
 
 		this.#updateResults();
+	}
+
+	get filterFocused(): boolean {
+		return this.#search.focused;
+	}
+
+	navigationSnapshot(): unknown {
+		this.#flushPendingSearch();
+		return { search: this.#search.navigationSnapshot(), selected: this.#menu.selectedItem && nativeEntryKey(this.#menu.selectedItem), top: this.#viewport.top };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { search?: unknown; selected?: string; top?: MenuViewportPosition | number };
+		this.#cancelPendingSearch();
+		this.#search.restoreNavigation(state.search);
+		this.#updateResults();
+		const index = this.#menu.visibleItems.findIndex(entry => nativeEntryKey(entry) === state.selected);
+		if (index >= 0) this.#menu.setSelectedIndex(index);
+		this.#viewport.setTop(state.top);
+		this.#keys.reset();
+		this.#nativeScroll = undefined;
+		this.#nativeMemo = undefined;
+	}
+
+	leaveMenu(): void {
+		this.#cancelPendingSearch();
 	}
 
 	/**
@@ -268,58 +298,42 @@ export class HistorySearchComponent extends OverlayPanel {
 	}
 
 	handleInput(keyData: string): void {
-		if (matchesSelectUp(keyData)) {
-			this.#flushPendingSearch();
-			this.#menu.move(-1, false);
+		const before = this.#search.value;
+		const field = this.#search.handleInput(keyData);
+		if (field !== "pass") {
+			this.#keys.reset();
+			if (this.#search.value !== before) this.#scheduleResults();
 			return;
 		}
-
-		if (matchesSelectDown(keyData)) {
-			this.#flushPendingSearch();
-			this.#menu.move(1, false);
-			return;
-		}
-
-		if (matchesSelectPageUp(keyData)) {
-			this.#flushPendingSearch();
-			this.#menu.move(-MAX_VISIBLE, false);
-			return;
-		}
-
-		if (matchesSelectPageDown(keyData)) {
-			this.#flushPendingSearch();
-			this.#menu.move(MAX_VISIBLE, false);
-			return;
-		}
-
-		if (matchesKey(keyData, "home")) {
-			this.#flushPendingSearch();
-			this.#menu.moveToBoundary("first");
-			return;
-		}
-
-		if (matchesKey(keyData, "end")) {
-			this.#flushPendingSearch();
-			this.#menu.moveToBoundary("last");
-			return;
-		}
-
-		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-			this.#flushPendingSearch();
-			const selected = this.#menu.selectedItem;
-			if (selected) {
-				this.#onSelect(selected.prompt);
-			}
-			return;
-		}
-
-		if (matchesAppInterrupt(keyData)) {
+		if (matchesKey(keyData, "ctrl+c")) {
 			this.#onCancel();
 			return;
 		}
-
-		this.#searchInput.handleInput(keyData);
-		this.#scheduleResults();
+		const action = this.#keys.read(keyData);
+		if (!action || action === "pending") return;
+		if (action.kind === "search") {
+			this.#search.focused = true;
+			return;
+		}
+		if (action.kind === "context") {
+			this.#search.focused = !this.#search.focused;
+			return;
+		}
+		if (action.kind === "cancel") {
+			this.#onCancel();
+			return;
+		}
+		if (action.kind === "confirm" || action.kind === "toggle") {
+			this.#flushPendingSearch();
+			const selected = this.#menu.selectedItem;
+			if (selected) this.#onSelect(selected.prompt);
+			return;
+		}
+		this.#flushPendingSearch();
+		this.#resultsList.prepareViewport();
+		applyMenuMotion(action, this.#menu, this.#viewport);
+		const by = menuScrollBy(action);
+		if (by) this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
 	}
 
 	/**
@@ -343,13 +357,15 @@ export class HistorySearchComponent extends OverlayPanel {
 			memo.items === items &&
 			memo.selected === selected &&
 			memo.query === query &&
-			memo.cursor === cursor
+			memo.cursor === cursor &&
+			memo.focused === this.#search.focused &&
+			memo.scroll === this.#nativeScroll
 		) {
 			return memo.node;
 		}
 		if (usePicker) {
 			const root = col([keyed(this.#describePicker(items, selected, query), PICKER_KEY)]);
-			this.#nativeMemo = { picker: true, items, selected, query, cursor, node: root };
+			this.#nativeMemo = { picker: true, items, selected, query, cursor, focused: this.#search.focused, scroll: this.#nativeScroll, node: root };
 			return root;
 		}
 
@@ -364,7 +380,7 @@ export class HistorySearchComponent extends OverlayPanel {
 				nativeEntryKey(entry),
 			),
 		);
-		const list = node(
+		const list = { ...node(
 			"list",
 			{
 				selected: selected ? nativeEntryKey(selected) : null,
@@ -375,14 +391,15 @@ export class HistorySearchComponent extends OverlayPanel {
 			},
 			rows,
 			"list",
-		);
-		this.#nativeHints ??= hintsRow([
-			actionHint(["tui.select.up", "tui.select.down"], "navigate"),
+		), scroll: this.#nativeScroll };
+		this.#nativeHints = hintsRow([
+			{ keys: ["j", "k", "up", "down"], label: "navigate" },
 			{ keys: ENTER_KEYS, label: "select" },
-			actionHint("tui.select.cancel", "cancel"),
+			{ keys: ["/"], label: "search" },
+			{ keys: ["escape"], label: this.#search.focused ? "back to list" : "close" },
 		]);
 		const root = overlayCard(this.nativeRole, this.title, [this.#searchInput, list, this.#nativeHints]);
-		this.#nativeMemo = { picker: false, items, selected, query, cursor, node: root };
+		this.#nativeMemo = { picker: false, items, selected, query, cursor, focused: this.#search.focused, scroll: this.#nativeScroll, node: root };
 		return root;
 	}
 
@@ -440,7 +457,10 @@ export class HistorySearchComponent extends OverlayPanel {
 			this.#flushPendingSearch();
 			const index = this.#menu.visibleItems.findIndex(entry => nativeEntryKey(entry) === ev.item);
 			if (index < 0) return;
+			this.#search.focused = false;
+			this.#keys.reset();
 			this.#menu.setSelectedIndex(index);
+			this.#viewport.reveal();
 			if (ev.kind === "activate") this.#onSelect(this.#menu.visibleItems[index]!.prompt);
 			return;
 		}
@@ -449,7 +469,10 @@ export class HistorySearchComponent extends OverlayPanel {
 		const index = this.#menu.visibleItems.findIndex(entry => nativeEntryKey(entry) === event.item);
 		const target = this.#menu.visibleItems[index];
 		if (!target) return;
+		this.#search.focused = false;
+		this.#keys.reset();
 		this.#menu.setSelectedIndex(index);
+		this.#viewport.reveal();
 		this.#onSelect(target.prompt);
 	}
 
@@ -499,6 +522,7 @@ export class HistorySearchComponent extends OverlayPanel {
 			: this.#historyStorage.getRecent(this.#resultLimit);
 		this.#menu.setItems(results);
 		this.#menu.moveToBoundary("first");
+		this.#viewport.reveal();
 		this.#resultsList.setTokens(query ? queryTokens(query) : []);
 	}
 }
