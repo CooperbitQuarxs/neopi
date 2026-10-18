@@ -337,7 +337,9 @@ class MonitorPaneComponent implements Component {
 		const notice = connection.notice
 			? ` ${theme.fg("dim", theme.sep.dot)} ${theme.fg("warning", connection.notice)}`
 			: "";
-		const mode = connection.canChat ? "" : ` ${theme.fg("dim", theme.sep.dot)} ${theme.fg("muted", "view only")}`;
+		// Advisors never chat; an aborted subagent stops accepting messages, as in the Agent Hub.
+		const viewOnly = !connection.canChat || connection.record?.status === "aborted";
+		const mode = viewOnly ? ` ${theme.fg("dim", theme.sep.dot)} ${theme.fg("muted", "view only")}` : "";
 		return ` ${head} ${theme.fg("dim", theme.sep.dot)} ${state}${mode}${notice}`;
 	}
 
