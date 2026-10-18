@@ -534,7 +534,7 @@ test("hub context switches do not create visits; nested selectors and effort cho
 	expect(calls.cancel).toBe(1);
 });
 
-test("root-role yank preserves the existing single-model paste contract", () => {
+test("root-role yank includes configured fallbacks when pasted onto another role", () => {
 	const chains: Record<string, string[]> = { default: ["openai/gpt-5.6"] };
 	const hub = new ModelHubComponent(
 		ui,
@@ -553,7 +553,7 @@ test("root-role yank preserves the existing single-model paste contract", () => 
 	hub.handleInput("y");
 	hub.handleNativeEvent({ type: "select", key: "", item: "role:smol" });
 	hub.handleInput("p");
-	expect(chains.smol).toEqual(["demo/demo"]);
+	expect(chains.smol).toEqual(["demo/demo", "openai/gpt-5.6"]);
 });
 
 test("effort rules share paging, jumps and independent viewport scrolling", () => {

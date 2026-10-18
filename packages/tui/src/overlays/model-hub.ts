@@ -2512,7 +2512,7 @@ export class ModelHubComponent implements Component {
 		for (const { selector, selection } of this.#yankedFallback) {
 			if (chain.includes(selector)) continue;
 			chain.push(selector);
-			if (selection) copiedSelections[selector] = selection;
+			if (selection) copiedSelections[selector] = structuredClone(selection);
 		}
 		if (chain.length !== existing.length) this.#setFallbackChain(role, chain, copiedSelections);
 	}
@@ -3158,6 +3158,7 @@ export class ModelHubComponent implements Component {
 										? { ...selection }
 										: undefined,
 						},
+						...(this.#fallbackChains()[row.role] ?? []).map(entry => this.#snapshotFallback(row.role, entry)),
 					];
 				}
 			} else if (row?.kind === "fallback") {
@@ -3857,7 +3858,8 @@ export class ModelHubComponent implements Component {
 			const savePreset = this.#callbacks.onSavePreset ? ` · ${formatKeyHint("s")} save preset` : "";
 			const switchPreset =
 				this.#presets().names.length > 0 ? ` · ${formatKeyHints(["ctrl+left", "ctrl+right"])} preset` : "";
-			return `${upDown} rows · ${enter} pick · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} yank · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
+			const yank = row?.kind === "role" && (this.#fallbackChains()[row.role]?.length ?? 0) > 0 ? "yank chain" : "yank model";
+			return `${upDown} rows · ${enter} pick · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} ${yank} · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth
