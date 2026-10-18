@@ -5,8 +5,11 @@
  * `from` her, never forged as `Main`. Delivery to her needs no model turn; the
  * bus shows it on her UI and records it in the operator history.
  */
+import type { IrcLogSource } from "@oh-my-pi/pi-tui/tools/irc";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { AgentRegistry } from "../registry/agent-registry";
+import { AgentRegistry } from "../registry/agent-registry";
+import type { AgentSession } from "../session/agent-session";
+import { IrcBus, ircHistorySessionFile } from "./bus";
 
 /** The operator's IRC id unless `irc.operator.handle` names another. */
 export const DEFAULT_IRC_OPERATOR_HANDLE = "Operator";
@@ -32,5 +35,23 @@ export function registerIrcOperator(registry: AgentRegistry, handle: string, roo
 	});
 	return () => {
 		registry.unregister(handle, ref);
+	};
+}
+
+/**
+ * The operator IRC history of the UI bound to `session()`: its root's
+ * conversation. The one read side shared by the IRC viewer and the side
+ * panel's IRC view; agents gain nothing from it.
+ */
+export function operatorIrcLogSource(session: () => AgentSession): IrcLogSource {
+	const bus = IrcBus.global();
+	const registry = AgentRegistry.global();
+	return {
+		entries: () => {
+			const root = registry.rootForSession(session());
+			// Unchanged from the viewer's own source: no resolvable root reads the whole log.
+			return bus.history(root ? { rootId: root.id, sessionFile: ircHistorySessionFile(root) } : undefined);
+		},
+		subscribe: listener => bus.onHistory(listener),
 	};
 }

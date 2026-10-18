@@ -4,6 +4,8 @@ import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	type AutocompleteProvider,
 	type Component,
+	isKeyRelease,
+	type KeyId,
 	matchesKey,
 	parseSgrMouse,
 	type PasteOptions,
@@ -50,6 +52,7 @@ import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { PINNED_HUD_TOGGLE_ID } from "@oh-my-pi/pi-tui/prompt/composer";
 import { pickRecentFocusableAgentId } from "./session-focus-controller";
+import type { SidePanelView } from "./side-panel-controller";
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand, parseSubcommand } from "../../slash-commands/helpers/parse";
@@ -217,6 +220,14 @@ function safeAbort(label: string, fn: () => void): void {
 const LIVE_HANDOFF_HOLD_STATUS = "A voice handoff just reached the main agent; review the draft before sending";
 const LEFT_DOUBLE_TAP_MIN_GAP_MS = 40;
 const LEFT_DOUBLE_TAP_MAX_GAP_MS = 500;
+/** How long `app.sidebar.toggle` waits for the view key before the chord lapses. */
+const SIDEBAR_CHORD_TIMEOUT_MS = 2000;
+/** View keys after the chord prefix; the alt form works while the modifier is still held. */
+const SIDEBAR_CHORD_KEYS: readonly (readonly [SidePanelView, readonly KeyId[]])[] = [
+	["todo", ["t", "alt+t"]],
+	["agents", ["a", "alt+a"]],
+	["irc", ["i", "alt+i"]],
+];
 
 /** Chain step outputs longer than this show as a collapsed paste chip while the lock holds them. */
 const CHAIN_DISPLAY_COLLAPSE_CHARS = 8_000;
@@ -273,6 +284,9 @@ export class InputController {
 
 	/** Click-candidate id the hover band currently tracks; repaint only on change. */
 	#lastHoverClickId: string | undefined;
+
+	/** Expiry timer of a pending `app.sidebar.toggle` chord prefix; undefined when none is pending. */
+	#sidebarChordTimer: NodeJS.Timeout | undefined;
 
 	/** Return the last full editor snapshot delivered by its change contract. */
 	getDraftText(): string {
@@ -362,15 +376,21 @@ export class InputController {
 			// These actions target the main transcript/editor rather than the
 			// focused prompt. Keep focused components' own bindings authoritative.
 			this.ctx.ui.addInputListener(data => {
+				const chordView = this.#takeSidebarChord(data);
+				if (chordView === "cancel") return { consume: true };
+				if (chordView !== undefined) {
+					this.ctx.sidePanel.showView(chordView);
+					return { consume: true };
+				}
 				if (this.ctx.keybindings.matches(data, "app.sidebar.toggle")) {
 					// The inline tree selector binds Alt+T to its no-tools filter; its
 					// own binding stays authoritative, as for Alt+L above.
 					if (this.ctx.ui.getFocused() instanceof TreeSelectorComponent) return undefined;
-					// The same key closes the fullscreen form while that form is the active
-					// overlay; under any other overlay, including a dialog stacked above the
-					// form, the focused component keeps the key.
+					// The prefix also works while the fullscreen form is the active
+					// overlay; under any other overlay, including a dialog stacked above
+					// the form, the focused component keeps the key.
 					if (this.ctx.ui.hasOverlay() && !this.ctx.sidePanel.fullscreenActive) return undefined;
-					this.ctx.sidePanel.toggle();
+					this.#startSidebarChord();
 					return { consume: true };
 				}
 				if (
@@ -930,6 +950,37 @@ export class InputController {
 			default:
 				return false;
 		}
+	}
+
+	/** Arm the side-panel chord: the next key picks a view, until it expires. */
+	#startSidebarChord(): void {
+		clearTimeout(this.#sidebarChordTimer);
+		this.#sidebarChordTimer = setTimeout(() => {
+			this.#sidebarChordTimer = undefined;
+		}, SIDEBAR_CHORD_TIMEOUT_MS);
+		this.#sidebarChordTimer.unref?.();
+		const prefix = appKey(this.ctx.keybindings, "app.sidebar.toggle");
+		this.ctx.showStatus(`Side panel (${prefix}): t todo · a agents · i IRC · esc cancel`);
+	}
+
+	/**
+	 * Resolve the key after an armed chord prefix: the view it picks, `"cancel"`
+	 * for Escape (consumed), or undefined when no chord is pending or the key is
+	 * not a view key. Any other key ends the chord and keeps its usual meaning.
+	 * Mouse reports and key releases pass through without ending it.
+	 */
+	#takeSidebarChord(data: string): SidePanelView | "cancel" | undefined {
+		if (this.#sidebarChordTimer === undefined) return undefined;
+		if (data.startsWith("\x1b[<") || isKeyRelease(data)) return undefined;
+		clearTimeout(this.#sidebarChordTimer);
+		this.#sidebarChordTimer = undefined;
+		// An overlay that opened meanwhile owns its keys, except the fullscreen panel.
+		if (this.ctx.ui.hasOverlay() && !this.ctx.sidePanel.fullscreenActive) return undefined;
+		if (matchesKey(data, "escape")) return "cancel";
+		for (const [view, keys] of SIDEBAR_CHORD_KEYS) {
+			if (keys.some(key => matchesKey(data, key))) return view;
+		}
+		return undefined;
 	}
 
 	#handleFocusedLeftTap(): void {
