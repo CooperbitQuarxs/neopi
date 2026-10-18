@@ -8,6 +8,7 @@
  * control socket) mint that capability itself. `idle <session>` is the
  * placeholder that keeps an empty monitor session open until its owner exits.
  */
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import { APP_NAME, getProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
 import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
@@ -20,6 +21,7 @@ import type { MonitorGrantInfo } from "../control/monitor-service";
 import { type ControlMetadata, findControlMetadata, publicationProcessGone } from "../control/registry";
 import { cfgColorBlindMode, cfgSymbolPreset, cfgThemeDark, cfgThemeLight } from "../modes/settings";
 import { runMonitorAttach } from "../monitor/attach";
+import { paneClosedMarker } from "../monitor/tmux-manager";
 
 const IDLE_POLL_MS = 2_000;
 
@@ -77,7 +79,23 @@ export default class Monitor extends Command {
 			cfgThemeDark.get(settings),
 			cfgThemeLight.get(settings),
 		);
-		process.exitCode = await runMonitorAttach({ metadata, capability });
+		// Esc, Ctrl+C, or tmux killing the pane (SIGHUP) mark the pane as closed on purpose, so
+		// the monitor does not reopen it. A crash or a failed attach leaves no marker.
+		const markClosed = (): void => {
+			if (!capabilityFile) return;
+			try {
+				fsSync.writeFileSync(paneClosedMarker(capabilityFile), "", { mode: 0o600 });
+			} catch {
+				// The monitor already stopped and removed its directory.
+			}
+		};
+		process.once("SIGHUP", () => {
+			markClosed();
+			process.exit(129);
+		});
+		const result = await runMonitorAttach({ metadata, capability });
+		if (result.closedByUser) markClosed();
+		process.exitCode = result.exitCode;
 		process.exit();
 	}
 }

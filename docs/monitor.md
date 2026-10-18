@@ -22,7 +22,7 @@ The monitor needs the session to run inside tmux and the [control socket](./cont
 
 ## Panes
 
-A pane opens when an agent is registered and the panes of each window are tiled. A pane stays while its agent is parked or aborted. It closes when the agent is released or replaced by a new agent with the same id, and a replacement gets a new pane. If you close a pane yourself, the monitor does not reopen it for that agent.
+A pane opens when an agent is registered and the panes of each window are tiled. A pane stays while its agent is parked or aborted. It closes when the agent is released or replaced by a new agent with the same id, and a replacement gets a new pane. If you close a pane yourself (`Esc`, `Ctrl+C`, or killing the tmux pane), the monitor does not reopen it for that agent. A pane that ends any other way, for example because its attach failed or crashed, is reopened, up to three times per agent.
 
 The monitor kills only panes it created. A pane or window you add to its session stays when the monitor stops; the next `/monitor on` then uses `npi-monitor-<id>-2`.
 

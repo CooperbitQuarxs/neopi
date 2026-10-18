@@ -3,7 +3,7 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ControlMonitorService } from "../../src/control/monitor-service";
-import { TmuxMonitorManager } from "../../src/monitor/tmux-manager";
+import { paneClosedMarker, TmuxMonitorManager } from "../../src/monitor/tmux-manager";
 import type { AgentRef } from "../../src/registry/agent-registry";
 
 const tmuxPath = Bun.which("tmux");
@@ -67,6 +67,8 @@ async function fixture(maxPanesPerWindow = 2) {
 		await fsp.rm(root, { recursive: true, force: true });
 	});
 	const monitor = new FakeMonitor();
+	/** Capability file of each pane, in creation order. */
+	const capabilityFiles: string[] = [];
 	const create = () =>
 		new TmuxMonitorManager({
 			monitor: monitor as unknown as Pick<ControlMonitorService, "targets" | "grant" | "revoke" | "authenticate">,
@@ -75,7 +77,10 @@ async function fixture(maxPanesPerWindow = 2) {
 			instanceId: "0123456789abcdef",
 			cwd: root,
 			capabilityDir: path.join(root, "caps"),
-			paneCommand: () => ["sleep", "1000"],
+			paneCommand: file => {
+				capabilityFiles.push(file);
+				return ["sleep", "1000"];
+			},
 			placeholderCommand: ["sleep", "1000"],
 			includeAdvisors: () => true,
 			maxPanesPerWindow: () => maxPanesPerWindow,
@@ -87,7 +92,7 @@ async function fixture(maxPanesPerWindow = 2) {
 		(await tmux(["list-panes", "-a", "-F", "#{session_name} #{window_id} #{pane_id} #{@npi_agent}"])).stdout
 			.trim()
 			.split("\n");
-	return { monitor, create, tmux, panes, root };
+	return { monitor, create, tmux, panes, root, capabilityFiles };
 }
 
 it.skipIf(!tmuxPath)("tiles agent panes, overflows windows, and removes only the pane of a removed agent", async () => {
@@ -130,7 +135,7 @@ it.skipIf(!tmuxPath)("tiles agent panes, overflows windows, and removes only the
 });
 
 it.skipIf(!tmuxPath)("does not reopen a pane the user closed, and stop leaves user panes and the session", async () => {
-	const { monitor, create, tmux, panes } = await fixture();
+	const { monitor, create, tmux, panes, capabilityFiles } = await fixture();
 	const manager = create();
 	cleanups.push(() => manager.stop());
 	monitor.targetList = [target("A"), target("B")];
@@ -141,6 +146,8 @@ it.skipIf(!tmuxPath)("does not reopen a pane the user closed, and stop leaves us
 		await tmux(["split-window", "-d", "-P", "-F", "#{pane_id}", "-t", paneA.paneId, "sleep", "1000"])
 	).stdout.trim();
 
+	// What `npi monitor attach` does on Esc or Ctrl+C before its pane exits.
+	await fsp.writeFile(paneClosedMarker(capabilityFiles[0] ?? ""), "");
 	await tmux(["kill-pane", "-t", paneA.paneId]);
 	await manager.refresh();
 	await manager.refresh();
@@ -157,6 +164,28 @@ it.skipIf(!tmuxPath)("does not reopen a pane the user closed, and stop leaves us
 	const again = create();
 	cleanups.push(() => again.stop());
 	expect((await again.start()).sessionName).toBe("npi-monitor-01234567-2");
+});
+
+it.skipIf(!tmuxPath)("reopens a pane that exited without the close marker, a bounded number of times", async () => {
+	const { monitor, create, tmux } = await fixture();
+	const manager = create();
+	cleanups.push(() => manager.stop());
+	// B's pane keeps the session open while A's pane is gone.
+	monitor.targetList = [target("A"), target("B")];
+	let paneA = (await manager.start()).panes.find(pane => pane.agentId === "A")?.paneId;
+	const seen = new Set([paneA]);
+	// A failed or crashed attach leaves no marker while its grant is still valid.
+	for (let exit = 1; exit < 3; exit++) {
+		await tmux(["kill-pane", "-t", paneA ?? ""]);
+		await manager.refresh();
+		paneA = manager.status().panes.find(pane => pane.agentId === "A")?.paneId;
+		expect(paneA).toBeDefined();
+		expect(seen.has(paneA)).toBe(false);
+		seen.add(paneA);
+	}
+	await tmux(["kill-pane", "-t", paneA ?? ""]);
+	await manager.refresh();
+	expect(manager.status().panes.map(pane => pane.agentId)).toEqual(["B"]);
 });
 
 it.skipIf(!tmuxPath)("a start that fails after creating its tmux session removes that session", async () => {

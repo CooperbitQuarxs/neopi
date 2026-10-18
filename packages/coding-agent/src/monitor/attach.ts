@@ -360,24 +360,30 @@ class MonitorPaneComponent implements Component {
 	}
 }
 
-/** Run one attach pane until the user exits or the owner ends it. Returns the exit code. */
-export async function runMonitorAttach(options: MonitorAttachOptions): Promise<number> {
+/** How an attach pane ended. `closedByUser` is set for Esc or Ctrl+C, not when the owner ended it. */
+export interface MonitorAttachResult {
+	exitCode: number;
+	closedByUser: boolean;
+}
+
+/** Run one attach pane until the user exits or the owner ends it. */
+export async function runMonitorAttach(options: MonitorAttachOptions): Promise<MonitorAttachResult> {
 	const connection = new MonitorAttachConnection(options);
 	try {
 		await connection.start();
 	} catch (error) {
 		process.stderr.write(`npi monitor: ${error instanceof Error ? error.message : String(error)}\n`);
 		connection.dispose();
-		return 1;
+		return { exitCode: 1, closedByUser: false };
 	}
 	const record = connection.record;
 	if (!record) {
 		process.stderr.write(`npi monitor: ${connection.endReason ?? "the owner sent no agent"}\n`);
 		connection.dispose();
-		return 1;
+		return { exitCode: 1, closedByUser: false };
 	}
-	const done = Promise.withResolvers<void>();
-	const exit = (): void => done.resolve();
+	const done = Promise.withResolvers<boolean>();
+	const exit = (): void => done.resolve(true);
 	const ui = new TUI(new ProcessTerminal());
 	const keybindings = KeybindingsManager.create();
 	const viewer = new AgentTranscriptViewer({
@@ -399,13 +405,16 @@ export async function runMonitorAttach(options: MonitorAttachOptions): Promise<n
 	let lingerTimer: Timer | undefined;
 	const unsubscribe = connection.onChange(() => {
 		ui.requestRender();
-		if (connection.state === "ended" && !lingerTimer) lingerTimer = setTimeout(exit, ENDED_LINGER_MS);
+		if (connection.state === "ended" && !lingerTimer) {
+			lingerTimer = setTimeout(() => done.resolve(false), ENDED_LINGER_MS);
+		}
 	});
 	const overlay = ui.showOverlay(pane, { fullscreen: true, width: "100%", margin: 0 });
 	ui.setFocus(pane);
 	ui.start();
+	let closedByUser: boolean;
 	try {
-		await done.promise;
+		closedByUser = await done.promise;
 	} finally {
 		clearTimeout(lingerTimer);
 		unsubscribe();
@@ -414,5 +423,5 @@ export async function runMonitorAttach(options: MonitorAttachOptions): Promise<n
 		viewer.dispose();
 		connection.dispose();
 	}
-	return 0;
+	return { exitCode: 0, closedByUser };
 }

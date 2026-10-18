@@ -7,7 +7,8 @@
  * panes are tiled per window and overflow into further windows. Parked and
  * aborted agents keep their panes; a pane goes away only when its agent leaves
  * the registry or is replaced by a new generation. A pane the user closes is
- * not reopened for that agent generation. The manager only ever kills pane ids
+ * not reopened for that agent generation; a pane that exits any other way
+ * (attach failed, crashed) is reopened a few times. The manager only ever kills pane ids
  * it created; the session closes when its last pane does.
  *
  * Each pane authenticates with a per-agent capability the owner's control host
@@ -67,6 +68,16 @@ interface PaneRecord extends MonitorPane {
 
 const SYNC_DEBOUNCE_MS = 100;
 const DEFAULT_POLL_MS = 2_000;
+/** Reopens of one agent generation's pane after exits the user did not ask for. */
+const MAX_UNEXPECTED_EXITS = 3;
+
+/**
+ * File an attach pane writes next to its capability file when the user closes it
+ * (Esc or Ctrl+C), so the manager can tell a deliberate close from a failed attach.
+ */
+export function paneClosedMarker(capabilityFile: string): string {
+	return `${capabilityFile}.closed`;
+}
 
 export class TmuxMonitorError extends Error {
 	constructor(message: string) {
@@ -83,6 +94,8 @@ export class TmuxMonitorManager {
 	readonly #panes = new Map<string, PaneRecord>();
 	/** Agent generations whose pane the user closed; not reopened until the ref changes. */
 	readonly #closedByUser = new WeakSet<AgentRef>();
+	/** Exits of an agent generation's panes that were neither a user close nor an ended grant. */
+	readonly #unexpectedExits = new WeakMap<AgentRef, number>();
 	#sessionName = "";
 	#sessionId = "";
 	#placeholder: { paneId: string; windowId: string } | undefined;
@@ -240,11 +253,25 @@ export class TmuxMonitorManager {
 		for (const [agentId, pane] of [...this.#panes]) {
 			if (alive.has(pane.paneId)) continue;
 			this.#panes.delete(agentId);
-			// A pane that exited while its grant was still valid was closed by the user. One
-			// whose grant ended (root session replaced) gets a fresh pane and grant.
-			if (this.#options.monitor.authenticate(pane.capability)) this.#closedByUser.add(pane.ref);
+			const marker = paneClosedMarker(pane.capabilityFile);
+			// One whose grant ended (root session replaced) gets a fresh pane and grant. One that
+			// exited while its grant was valid stays closed if the user closed it; any other exit is
+			// reopened, until it has happened MAX_UNEXPECTED_EXITS times for this agent generation.
+			if (this.#options.monitor.authenticate(pane.capability)) {
+				if (await Bun.file(marker).exists()) {
+					this.#closedByUser.add(pane.ref);
+				} else {
+					const exits = (this.#unexpectedExits.get(pane.ref) ?? 0) + 1;
+					this.#unexpectedExits.set(pane.ref, exits);
+					if (exits >= MAX_UNEXPECTED_EXITS) {
+						logger.warn("monitor: agent pane keeps exiting; not reopening it", { agentId, exits });
+						this.#closedByUser.add(pane.ref);
+					}
+				}
+			}
 			this.#options.monitor.revoke(pane.capability);
 			await fs.rm(pane.capabilityFile, { force: true });
+			await fs.rm(marker, { force: true });
 		}
 		const includeAdvisors = this.#options.includeAdvisors();
 		const wanted = new Map<string, AgentRef & { kind: "sub" | "advisor" }>();
