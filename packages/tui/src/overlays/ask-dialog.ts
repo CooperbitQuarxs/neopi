@@ -116,7 +116,7 @@ const MAX_HEADER_CHIP_WIDTH = 16;
  *  row-cap pattern of the prompt editor's title (`boundPromptTitle`). */
 const MAX_HEADER_ROWS = 4;
 /** Maximum number of wrapped lines shown for an option description before
- *  Ctrl+O expansion. Mirrors the header row-cap above so long descriptions
+ *  expansion. Mirrors the header row-cap above so long descriptions
  *  cannot push later options off-screen. */
 const MAX_DESC_ROWS = 2;
 
@@ -673,7 +673,7 @@ export class AskDialogComponent implements Component {
 	}
 	/**
 	 * Toggle truncated question headers and option descriptions. Returns false
-	 * when there is nothing to expand so the global Ctrl+O listener can still
+	 * when there is nothing to expand so the global expansion action can still
 	 * expand transcript tools.
 	 */
 	toggleQuestionExpansion(): boolean {
@@ -723,7 +723,7 @@ export class AskDialogComponent implements Component {
 			this.#setHidden(!this.#hidden);
 			return;
 		}
-		// Expand before the draft-input guard so Ctrl+O can reveal a truncated
+		// Expand before the draft-input guard so the expansion action can reveal a truncated
 		// question even while a pending prompt still owns typing.
 		if (matchesAppToolsExpand(keyData)) {
 			this.toggleQuestionExpansion();

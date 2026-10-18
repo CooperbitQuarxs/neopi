@@ -406,7 +406,7 @@ export class BashExecutionComponent extends Container {
 		const hasSixelOutput = sixelLineMask?.some(Boolean) ?? false;
 		const showingAllLines = this.#expanded || hasSixelOutput;
 		// Only the collapsed preview hides lines; when the full output is shown
-		// the footer must not keep advertising hidden lines / ctrl+o.
+		// the footer must not keep advertising hidden lines or an expansion hint.
 		const hiddenLineCount = showingAllLines ? 0 : Math.max(0, availableLines.length - PREVIEW_LINES);
 		this.#outputPane.configure({ uncapSixel: hasSixelOutput, sixelContinuation: this.#outputStartsInSixel });
 		this.#outputPane.setLines(availableLines);

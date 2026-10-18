@@ -5491,7 +5491,7 @@ export class SessionMaintenance {
 		const deadEndWarning = noProgressDeadEnd ? compactionDeadEndWarning("clear large tool output") : undefined;
 		if (deadEndWarning) {
 			// Stamp the divider: the compaction bar badges the dead-end and
-			// carries the full warning in its ctrl+o detail, so the pause
+			// carries the full warning in its expanded detail, so the pause
 			// stays explained even after the notice row scrolls away. Stamp
 			// the branch's LATEST compaction entry — a frame rescue may have
 			// superseded `savedCompactionEntry` with a rebuilt one, and the

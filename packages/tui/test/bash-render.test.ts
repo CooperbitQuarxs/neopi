@@ -396,7 +396,7 @@ describe("bashToolRenderer", () => {
 		// (the live edge while args stream) stays visible behind an "earlier
 		// lines" marker. The finalized collapsed block MUST render the identical
 		// window — snapping the full command open on completion makes the block
-		// jump. Only ctrl+o (expanded) uncaps.
+		// jump. Only the expansion action (`expanded`) uncaps.
 		const total = previewWindowRows() + 5;
 		const command = Array.from({ length: total }, (_, i) => `echo step_${i}`).join("\n");
 		const render = (opts: { expanded: boolean; isPartial: boolean }) => {

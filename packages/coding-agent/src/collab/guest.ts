@@ -15,7 +15,7 @@
  * wire. Host ask dialogs (`ui-request` select/editor) present through the
  * same hook selector/editor seam and answer with `ui-response`;
  * `ui-request-end` dismisses a pending presentation without responding.
- * Everything renders through the same components, so ctrl+o, theming, and
+ * Everything renders through the same components, so expansion, theming, and
  * transcript behavior are native by construction.
  */
 import * as fs from "node:fs/promises";

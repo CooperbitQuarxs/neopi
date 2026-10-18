@@ -1,7 +1,7 @@
 /**
  * Contract: the compaction point renders as a slim horizontal divider —
- * `── 📷 compacted · ctrl+o ──` — instead of a full summary box, keeping the
- * transcript visually continuous. Expansion (ctrl+o) reveals the summary.
+ * `── 📷 compacted · Alt-E ──` — instead of a full summary box, keeping the
+ * transcript visually continuous. The expansion action reveals the summary.
  * The render cache must honor the pi-tui same-reference contract: unchanged
  * components return the identical array so containers can memoize.
  */
