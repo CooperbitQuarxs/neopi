@@ -24,6 +24,9 @@
 - Keep numeric text literal in focused setup filters, and return nested menu pages to their parent with Escape ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Chain configuration gains explicit search, consistent paging, and nested history that preserves draft prompts, tools, and parent views ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - `Ctrl-e`/`Ctrl-y` scroll one visual line through wrapped menu rows, and history retains partial-row viewport positions ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Page and search background jobs, switch to their output with `h`/`l`, and retain the selected job and both viewports in menu history ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Session-information and command-report viewers support shared scrolling and restore their reading positions through menu history ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Agent transcripts use explicit message-field focus and preserve unsent drafts when returning to the hub ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Added per-widget text templates for usage bars (`{label}`, `{percent}`, `{age}`), editable in `/statusline` with Tab ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 
 ### Changed

@@ -1,16 +1,15 @@
-import { type Component, Ellipsis, matchesKey, ScrollView, Text, truncateToWidth } from "../index";
+import { type Component, Ellipsis, ScrollView, Text, truncateToWidth } from "../index";
 import { theme } from "../theme/theme";
-import { matchesSelectCancel } from "../keybinding-matchers";
 import { OverlayPanel, PanelDivider, PanelRows } from "../chrome/overlay-box";
-import { formatKeyHints } from "../app-keybindings";
 import { editorKey } from "../chrome/keybinding-hints";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import { col, node, span, text } from "../native/describe";
-import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton } from "../native/overlay";
 import { plainText, styledSpans } from "../native/spans";
 import type { ContextUsage } from "../status-line/types";
+import { MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
 const PANEL_CHROME_ROWS = 4;
 
 /** One headed block of a key/value report. */
@@ -134,6 +133,8 @@ export class SessionInfoOverlay implements Component {
 	#lastInfoWidth: number | undefined;
 	#lastInfoLines: readonly string[] | undefined;
 	#lastHeight: number | undefined;
+	readonly #keys = new MenuKeyReader();
+	#scroll: NativeScroll | undefined;
 
 	/** `context` adds a context-window meter to the native sheet. */
 	constructor(host: SessionInfoOverlayHost, info: string, onClose: () => void, context?: ContextUsage) {
@@ -160,11 +161,22 @@ export class SessionInfoOverlay implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (matchesSelectCancel(data) || matchesKey(data, "escape") || matchesKey(data, "esc")) {
-			this.#onClose();
-			return;
-		}
-		this.#scrollView.handleScrollKey(data);
+		const action = this.#keys.read(data);
+		if (!action || action === "pending") return;
+		if (action.kind === "cancel") return this.#onClose();
+		if (!this.#scrollView.handleMenuAction(action)) return;
+		const by = menuScrollBy(action);
+		if (by) this.#scroll = { by, n: (this.#scroll?.n ?? 0) + 1 };
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#scrollView.navigationSnapshot();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		this.#scrollView.restoreNavigation(snapshot);
+		this.#keys.reset();
+		this.#scroll = undefined;
 	}
 
 	invalidate(): void {
@@ -196,7 +208,7 @@ export class SessionInfoOverlay implements Component {
 	 */
 	describe(cx: DescribeContext): NativeNode {
 		const meter = cx.supports("meter");
-		if (this.#nativeNode?.meter === meter) return this.#nativeNode.node;
+		if (this.#nativeNode?.meter === meter) return { ...this.#nativeNode.node, scroll: this.#scroll };
 		// The report prints the append-only context mode after the message counts;
 		// it is a provider setting, so it joins the Provider group when there is one.
 		const parsed = parseKvReport(this.#infoSource);
@@ -272,7 +284,7 @@ export class SessionInfoOverlay implements Component {
 		body.push(actionBar([null, actionButton("Close", "close", { keys: "escape" })]));
 		const described = col(body, { gap: "md" });
 		this.#nativeNode = { meter, node: described };
-		return described;
+		return { ...described, scroll: this.#scroll };
 	}
 
 	/**
@@ -375,7 +387,7 @@ export class SessionInfoOverlay implements Component {
 
 	render(width: number): readonly string[] {
 		const innerWidth = Math.max(1, width - 4);
-		const footerHint = `${formatKeyHints(["up", "down"])} scroll · ${editorKey("tui.select.cancel")} close`;
+		const footerHint = `j/k rows · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · ${editorKey("tui.select.cancel")} close`;
 		this.#footer.setLines([theme.fg("dim", truncateToWidth(footerHint, innerWidth))]);
 
 		const maxBodyHeight = Math.max(1, this.#host.terminal.rows - PANEL_CHROME_ROWS);
