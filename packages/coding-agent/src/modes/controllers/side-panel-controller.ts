@@ -1,6 +1,6 @@
 import type { KeybindingsManager, OverlayHandle, SgrMouseEvent, TUI } from "@oh-my-pi/pi-tui";
 import { SidePanel, SidePanelFullscreenComponent, type SidePanelSection } from "@oh-my-pi/pi-tui/chrome";
-import { type LayoutRect, layoutSize } from "@oh-my-pi/pi-tui/components/layout/geometry";
+import { isLayoutComponent, type LayoutRect, layoutSize } from "@oh-my-pi/pi-tui/components/layout/geometry";
 import type { Composer, SidePanelDock } from "@oh-my-pi/pi-tui/prompt/composer";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
@@ -8,10 +8,22 @@ import {
 	cfgSidebarEnabled,
 	cfgSidebarSide,
 	cfgSidebarSplitAt,
+	cfgSidebarView,
 	cfgSidebarWidthMax,
 	cfgSidebarWidthMin,
 	cfgSidebarWidthRatio,
 } from "../settings";
+
+/** What the panel shows: one view at a time. */
+export type SidePanelView = "todo" | "agents" | "irc";
+
+/** Right-click cycle order. */
+const VIEW_ORDER: readonly SidePanelView[] = ["todo", "agents", "irc"];
+
+/** A view's section, plus what a click on empty panel space does while it shows. */
+export interface SidePanelViewSection extends SidePanelSection {
+	clickEmpty?(): void;
+}
 
 /** What the controller needs from its interactive host. */
 export interface SidePanelHost {
@@ -29,29 +41,52 @@ const RATIO_BOUNDS = { min: 0.1, max: 0.6 } as const;
 
 /**
  * Owns the side panel: resolves the `sidebar.*` settings into dock options for
- * the composer (which alone measures and docks), opens the fullscreen form on
- * narrow terminals, and routes inline mouse reports that land outside the chat
- * column. Display-only: the panel never takes keyboard focus.
+ * the composer (which alone measures and docks), mounts the section of the
+ * active `sidebar.view`, opens the fullscreen form on narrow terminals, and
+ * routes inline mouse reports that land outside the chat column. The panel
+ * never takes keyboard focus.
  */
 export class SidePanelController {
 	readonly #host: SidePanelHost;
 	readonly #panel: SidePanel;
+	readonly #views = new Map<SidePanelView, SidePanelViewSection>();
+	#mounted: SidePanelViewSection | undefined;
 	#fullscreen: OverlayHandle | undefined;
 	#fullscreenComponent: SidePanelFullscreenComponent | undefined;
 
 	constructor(host: SidePanelHost) {
 		this.#host = host;
-		this.#panel = new SidePanel({ onChange: () => host.ui.requestRender() });
+		this.#panel = new SidePanel({
+			onChange: () => host.ui.requestRender(),
+			onSecondaryClick: () => this.cycleView(),
+			onEmptyClick: () => this.#mounted?.clickEmpty?.(),
+		});
 	}
 
 	/** Apply settings; called at init and from InteractiveMode's settings-change dispatch. */
 	applySettings(): void {
+		this.#mountActiveView();
 		const enabled = cfgSidebarEnabled.get(this.#host.settings);
 		if (!enabled) {
+			if (!this.fullscreenOpen) this.#panel.pointerLeave();
 			this.#host.composer.setSidePanel(undefined);
 			return;
 		}
 		this.#host.composer.setSidePanel(this.#panel, this.#resolveDock());
+	}
+
+	/** The view `sidebar.view` selects, shown whenever the panel is. */
+	get view(): SidePanelView {
+		return cfgSidebarView.get(this.#host.settings);
+	}
+
+	/**
+	 * The view the last composed frame docked beside the chat, or undefined
+	 * when nothing is docked. The transcript hides its own copy of exactly this
+	 * view (the todo HUD, the pinned subagents list) for that frame.
+	 */
+	get dockedView(): SidePanelView | undefined {
+		return this.docked ? this.view : undefined;
 	}
 
 	/** Whether the last composed frame docked the panel. */
@@ -60,9 +95,10 @@ export class SidePanelController {
 	}
 
 	/**
-	 * `app.sidebar.toggle`: close the fullscreen form if it is open (whatever
-	 * the width now is), else flip `sidebar.enabled` on a wide terminal, else
-	 * open the fullscreen form. The narrow path never touches the setting.
+	 * Plain show/hide of the current view: close the fullscreen form if it is
+	 * open (whatever the width now is), else flip `sidebar.enabled` on a wide
+	 * terminal, else open the fullscreen form. The narrow path never touches
+	 * the setting. The `alt+t` chords go through {@link showView}.
 	 */
 	toggle(): void {
 		if (this.fullscreenOpen) {
@@ -75,6 +111,59 @@ export class SidePanelController {
 			this.applySettings();
 			return;
 		}
+		this.#openFullscreen();
+	}
+
+	/**
+	 * An `alt+t` chord: show `view`. From hidden it opens the panel on that
+	 * view (docked when wide, fullscreen when narrow); with another view shown
+	 * it switches; with `view` already shown it hides the panel.
+	 */
+	showView(view: SidePanelView): void {
+		const { ui, settings } = this.#host;
+		if (this.fullscreenOpen) {
+			if (view === this.view) this.closeFullscreen();
+			else this.#selectView(view);
+			return;
+		}
+		if (ui.terminal.columns >= this.#resolveDock().splitAt) {
+			const hide = cfgSidebarEnabled.get(settings) && view === this.view;
+			this.#selectView(view);
+			cfgSidebarEnabled.set(settings, !hide);
+			this.applySettings();
+			return;
+		}
+		this.#selectView(view);
+		this.#openFullscreen();
+	}
+
+	/** Right-click in the panel: the next view in Todo → Agents → IRC order. */
+	cycleView(): void {
+		const index = VIEW_ORDER.indexOf(this.view);
+		this.#selectView(VIEW_ORDER[(index + 1) % VIEW_ORDER.length]!);
+	}
+
+	#selectView(view: SidePanelView): void {
+		if (view === this.view) return;
+		cfgSidebarView.set(this.#host.settings, view);
+		this.#mountActiveView();
+	}
+
+	/** Keep exactly the active view's section registered with the panel. */
+	#mountActiveView(): void {
+		const section = this.#views.get(this.view);
+		if (section === this.#mounted) return;
+		if (this.#mounted) {
+			this.#panel.pointerLeave();
+			this.#panel.unregister(this.#mounted.id);
+		}
+		this.#mounted = section;
+		this.#panel.scrollTo(0);
+		if (section) this.#panel.register(section);
+	}
+
+	#openFullscreen(): void {
+		const { ui } = this.#host;
 		const component = new SidePanelFullscreenComponent({
 			panel: this.#panel,
 			onClose: () => this.closeFullscreen(),
@@ -97,6 +186,7 @@ export class SidePanelController {
 		const handle = this.#fullscreen;
 		this.#fullscreen = undefined;
 		this.#fullscreenComponent = undefined;
+		this.#panel.pointerLeave();
 		handle?.hide();
 	}
 
@@ -116,12 +206,15 @@ export class SidePanelController {
 		this.#panel.scrollBy(delta);
 	}
 
-	register(section: SidePanelSection): () => void {
-		return this.#panel.register(section);
-	}
-
-	unregister(id: string): void {
-		this.#panel.unregister(id);
+	/** Register the section `view` shows (replacing an earlier one); mounted at once when `view` is active. */
+	registerView(view: SidePanelView, section: SidePanelViewSection): void {
+		const previous = this.#views.get(view);
+		this.#views.set(view, section);
+		if (previous !== undefined && previous === this.#mounted) {
+			this.#panel.unregister(previous.id);
+			this.#mounted = undefined;
+		}
+		this.#mountActiveView();
 	}
 
 	/**
@@ -138,7 +231,10 @@ export class SidePanelController {
 		if (geometry === undefined || viewport.length === 0) return false;
 		const local = event.row - viewport.top;
 		if (local < 0 || local >= viewport.length) return false;
-		if (withinColumns(geometry.chatRect, event.col)) return false;
+		if (withinColumns(geometry.chatRect, event.col)) {
+			this.#panel.pointerLeave();
+			return false;
+		}
 		// Leaving the chat column drops the hovered card's band. The consumed
 		// event reaches no other repaint, so repaint here — only when a band
 		// was actually showing, never for plain motion over the panel.
@@ -148,6 +244,9 @@ export class SidePanelController {
 		}
 		if (withinColumns(geometry.panelRect, event.col)) {
 			this.#panel.routeMouse(event, local - geometry.panelRect.row, event.col - geometry.panelRect.col);
+		} else {
+			// Divider or pad: no row is under the pointer.
+			this.#panel.pointerLeave();
 		}
 		return true;
 	}
@@ -165,6 +264,10 @@ export class SidePanelController {
 	dispose(): void {
 		this.closeFullscreen();
 		this.#panel.dispose();
+		// Sections of hidden views are not registered with the panel; release them too.
+		for (const section of this.#views.values()) {
+			if (section !== this.#mounted && isLayoutComponent(section.content)) section.content.dispose?.();
+		}
 		this.#host.composer.setSidePanel(undefined, undefined, { refreshHistory: false });
 	}
 
