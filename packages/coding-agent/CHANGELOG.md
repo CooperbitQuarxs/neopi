@@ -26,7 +26,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
-- Standalone updates ignore project `.env` build origins, preserve launch/user configuration, and show the selected build source ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
+- Standalone updates ignore project `.env` build origins, fall back to user configuration when launch values are blank, and show the selected source for binary updates and package-manager takeovers ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
 - An open `ask` question no longer locks the composer: speech-to-text and dictation keys work while it is up, and with the question hidden (`Alt+H`) you can type and send a message or slash command while the question stays pending ([#303](https://github.com/PsychedelicShayna/neopi/issues/303)).
 - A registered agent name with an effort suffix, such as `scout:high`, now runs that agent with its own prompt, tools and model at that effort instead of fuzzy-matching an unrelated model ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 - The agent no longer treats a smoke run as mandatory before finishing any non-trivial work; the base and project prompts drop that rule and its critical reinforcement ([#307](https://github.com/PsychedelicShayna/neopi/issues/307)).

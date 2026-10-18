@@ -301,12 +301,18 @@ for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
 refreshDirsFromEnv();
 
 /**
- * Read from the launch environment or the user dotenv snapshots, excluding
- * values merged from the project dotenv. Preserve user values even when a
- * project value masked them in Bun.env.
+ * Read the first non-blank, trimmed value from the launch environment or user
+ * dotenv snapshots, excluding project dotenv. Preserve user values even when
+ * a project value masked them in Bun.env.
  */
 export function getTrustedEnv(name: string): string | undefined {
-	return originalProcessEnv[name] ?? agentEnv[name] ?? piEnv[name] ?? homeEnv[name];
+	return (
+		originalProcessEnv[name]?.trim() ||
+		agentEnv[name]?.trim() ||
+		piEnv[name]?.trim() ||
+		homeEnv[name]?.trim() ||
+		undefined
+	);
 }
 
 /**

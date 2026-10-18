@@ -1641,6 +1641,7 @@ function packageManagerUpdateSteps(manager: "bun" | "npm", release: ReleaseInfo)
 		repair: async launcherPath => {
 			// The launcher is a manager's script or shim, never a build a patch
 			// could start from, so the check names no installed version.
+			console.log(chalk.dim(`Build source: ${buildServiceUrl()}`));
 			const build = await fetchBuild({ version: release.version });
 			// npm's script shims outrank `.exe` in PowerShell and Git Bash, so
 			// they must be retired rather than merely shadowed.
@@ -2155,6 +2156,7 @@ async function updateToStandaloneBinary(
 ): Promise<void> {
 	const target = await resolveUpdateTarget({ allowPackageManagers: false });
 	const fromVersion = target.method === "binary" ? await installedBuildVersion(target.path) : VERSION;
+	console.log(chalk.dim(`Build source: ${buildServiceUrl()}`));
 	const build = await fetchBuild({ channel }, { fromVersion });
 	if (compareVersions(build.version, release.version) < 0 && compareVersions(build.version, VERSION) <= 0) {
 		throw new Error(

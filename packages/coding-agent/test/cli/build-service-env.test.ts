@@ -64,4 +64,8 @@ describe("build origin trust", () => {
 	it("honors user configuration even when the project shadows its key", async () => {
 		expect(await requestBuildOrigin({ user: "https://user.example/" })).toBe("https://user.example");
 	});
+
+	it.each(["", "   "])("uses user configuration when the inherited origin is blank (%j)", async inherited => {
+		expect(await requestBuildOrigin({ inherited, user: "https://user.example/" })).toBe("https://user.example");
+	});
 });
