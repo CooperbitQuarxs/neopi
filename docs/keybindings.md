@@ -76,11 +76,17 @@ Menus, pickers, and overlays open in normal navigation; arrows, PageUp/PageDown,
 | `Ctrl+D` / `Ctrl+U` (`tui.select.halfPageDown` / `halfPageUp`) | Half page down / up; PageDown / PageUp move a full page |
 | `gg` / `G` (also `tui.select.first` / `last`: Home / End) | First / last row |
 | `Ctrl+E` / `Ctrl+Y` (`tui.select.scrollDown` / `scrollUp`) | Scroll the view one line; the selection stays put until the next motion |
-| `Space` (`tui.select.toggle`) | Toggle a checkbox, or activate the row without leaving the list |
-| `Tab` / `Shift+Tab` (`tui.select.nextContext` / `prevContext`) | Next / previous tab, section, or focus region |
+| `Space` (`tui.select.toggle`) | Toggle a checkbox, or confirm a nondestructive single-choice row; destructive and credential actions require Enter |
+| `Tab` / `Shift+Tab`, also `Ctrl+N` / `Ctrl+P` (`tui.select.nextContext` / `prevContext`) | Next / previous tab, section, or focus region; the session picker's existing Ctrl+P path toggle takes precedence |
 | `/` (`tui.select.search`) | Focus the search or filter field |
 
 While a search, rename, or form field has focus, every printable key (including `h`, `j`, `k`, `l`, `g`, `/`, Space) types literally and the field keeps its editing keys; Esc returns focus to the list without closing the menu, and a second Esc closes it.
+
+The prompt-history search (`Ctrl+R`) and move-path chooser are search-first exceptions: their text field opens focused. Esc returns to their list before closing. Pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom.
+
+Nested configuration pages are history visits too. Back/forward inside an open menu restores its page without closing it; closing from a nested page records that page for reopening. Blocking approvals and authentication challenges are not history destinations and cannot be dismissed or replayed by history; answer the focused prompt first.
+
+Native TSP lists and pickers retain selection, filtering, and history. Their terminal consumer owns scrolling and the protocol does not expose a viewport position, so `Ctrl+E`/`Ctrl+Y` cannot scroll their native viewport independently; they never move the selection as a substitute. ANSI menus support both keys fully.
 
 `Ctrl+O` and `Ctrl+I` walk a timeline of visited views: every opened menu and every return to the conversation is an entry. Esc out of `/statusline`, press `Ctrl+O`, and `/statusline` reopens where you left it; `Ctrl+I` returns to the conversation. Opening a menu from an older position adds it at the newest end without dropping the newer entries, and `Ctrl+O` from that new menu first returns to where you opened it: after `Ctrl+O` from `/statusline` back to the conversation and opening `/model`, `Ctrl+O` returns to the conversation, `Ctrl+I` to `/statusline`, and `Ctrl+I` again to `/model`.
 

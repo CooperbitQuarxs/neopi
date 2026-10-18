@@ -251,10 +251,14 @@ export function applyMenuMotion(
  * A menu whose per-view context (tab, focused pane, selection, filter,
  * scroll, unsaved edits) survives a menu-history round trip. The host takes
  * a snapshot when the menu closes and hands it back right after reopening.
+ * Nested navigation captures the previous snapshot, builds the new page,
+ * then notifies the host. The empty page id names the root. Restoration
+ * must not notify the host or create another visit.
  */
 export interface MenuHistoryParticipant {
 	navigationSnapshot(): unknown;
 	restoreNavigation(snapshot: unknown): void;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 }
 
 export function isMenuHistoryParticipant(value: unknown): value is MenuHistoryParticipant {

@@ -326,12 +326,39 @@ describe("SelectList", () => {
 		list.handleInput("\x05");
 		list.render(40);
 		const state = list.navigationState();
-		expect(state).toEqual({ selectedValue: "v1", filter: "", viewportTop: 1 });
+		expect(state).toEqual({
+			selectedValue: "v1",
+			filter: "",
+			viewportTop: 1,
+			filterFocused: false,
+			filterCursor: 0,
+		});
 
 		const reopened = new SelectList(items, 3, testTheme, { search: "always" });
 		reopened.restoreNavigationState(state);
 		reopened.render(40);
 		expect(reopened.navigationState()).toEqual(state);
+	});
+
+	it("restores literal filter focus and caret without activating the saved row", () => {
+		const items = [{ value: "a", label: "alpha" }];
+		const list = new SelectList(items, 3, testTheme, { search: "always" });
+		list.handleInput("/");
+		list.handleInput("aa");
+		list.handleInput("\x1b[D");
+		const reopened = new SelectList(items, 3, testTheme, { search: "always" });
+		let activated = false;
+		reopened.onSelect = () => {
+			activated = true;
+		};
+		reopened.restoreNavigation(list.navigationSnapshot());
+		expect(reopened.filterFocused).toBe(true);
+		reopened.handleInput("lph");
+		expect(reopened.navigationState().filter).toBe("alpha");
+		expect(activated).toBe(false);
+		reopened.handleInput("\x1b");
+		expect(reopened.filterFocused).toBe(false);
+		expect(reopened.getSelectedItem()?.value).toBe("a");
 	});
 
 	it("keeps printable keys inert when the list does not overflow", () => {
