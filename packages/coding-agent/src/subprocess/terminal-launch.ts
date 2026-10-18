@@ -13,6 +13,8 @@ import { validateRequest } from "./terminal-launch/validate";
 export { terminalLaunchCapabilities } from "./terminal-launch/providers";
 export * from "./terminal-launch/types";
 export { createDefaultTerminalLaunchRequest, getTerminalLaunchPlacement } from "./terminal-launch/request";
+export { scopeEnvCommand } from "./terminal-launch/scope-env";
+export { processCli } from "./terminal-launch/shared";
 
 /** Every supported provider's backend, keyed so a missing provider is a type error. */
 const backends: {

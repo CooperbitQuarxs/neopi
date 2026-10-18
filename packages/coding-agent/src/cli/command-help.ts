@@ -52,6 +52,11 @@ export const ctlHelp = {
 		"Drive a running npi session over its control socket: list, state, send, steer, abort, slash, action, keys, dialogs",
 } satisfies CommandMetadata;
 
+export const monitorHelp = {
+	description:
+		"Attach a live, view-and-message pane to one subagent or advisor of a running npi session (the /monitor tmux panes run this)",
+} satisfies CommandMetadata;
+
 export const clipHelp = {
 	description: "Upload a /record recording to live.omp.sh as a public clip and print its URL",
 } satisfies CommandMetadata;
