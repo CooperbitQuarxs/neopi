@@ -460,11 +460,13 @@ export class LiveSessionController {
 	}
 
 	async #stop(): Promise<void> {
+		// Stop owns the final receipt report; invalidate any acceptance continuation still queued.
+		this.#delegationGeneration += 1;
 		// A handoff still in flight either never starts, or already belongs to the main agent; in
 		// that case retire its speech from the composer now, while the caller still listens.
 		const pending = this.#pendingDelegation;
 		if (pending?.dispatching && this.#pendingDelivery && !this.#pendingDelivery.cancel()) {
-			const turns = this.#turnsWhere(turn => turn.claim === pending.generation);
+			const turns = this.#deleteTurns(turn => turn.claim === pending.generation);
 			this.#acceptSpeech(
 				turns
 					.map(turn => turn.text)
@@ -837,7 +839,9 @@ export class LiveSessionController {
 		const fromContext = this.#contextSinceResponse;
 		this.#contextSinceResponse = false;
 		if (this.#answeredTurns || fromContext) return;
-		this.#answeredTurns = this.#turnsWhere(turn => turn.final && turn.claim === undefined).map(turn => turn.turn);
+		this.#answeredTurns = this.#turnsWhere(turn => turn.final && !turn.blocked && turn.claim === undefined).map(
+			turn => turn.turn,
+		);
 	}
 
 	/** A main-agent turn the operator started from the composer with the destination `both`:
@@ -1354,11 +1358,20 @@ export class LiveSessionController {
 				}
 				this.#refreshAudioPhase();
 			}
-			this.#deleteTurns(turn => turn === current);
-			if (current.text) {
-				void this.sendOperatorText(current.text, "voice");
-				this.#callbacks.onSpeechSent?.(current.text);
+			const blocked = current;
+			if (!blocked.text) {
+				this.#deleteTurns(turn => turn === blocked);
+				return;
 			}
+			void this.sendOperatorText(blocked.text, "voice")
+				.then(delivered => {
+					// Keep failed delivery in the ledger and composer. A manual submit may already
+					// have retired this exact turn while the transport send was in flight.
+					if (delivered && this.#deleteTurns(turn => turn === blocked).length > 0) {
+						this.#callbacks.onSpeechSent?.(blocked.text);
+					}
+				})
+				.catch(cause => this.#reportFailure(errorFrom(cause)));
 			return;
 		}
 

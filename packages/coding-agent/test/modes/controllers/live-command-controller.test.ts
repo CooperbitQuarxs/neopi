@@ -357,6 +357,21 @@ describe("LiveCommandController", () => {
 		}
 	});
 
+	it("does not force-delegate a composer containing only the configured force phrase", async () => {
+		const h = createHarness();
+		const forced = vi.spyOn(LiveSessionController.prototype, "forceDelegateComposer").mockReturnValue(true);
+		cfgLiveForceDelegateKeyword.set(h.ctx.settings, "send it now");
+		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 0);
+		await h.controller.handleCommand();
+		try {
+			speak(h, 1, "SEND... IT, NOW!", true);
+			await Bun.sleep(20);
+			expect(forced).not.toHaveBeenCalled();
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
 	it("force-delegates only a trailing composer keyword after the same silence interval", async () => {
 		const h = createHarness();
 		const forced = vi.spyOn(LiveSessionController.prototype, "forceDelegateComposer").mockReturnValue(true);
