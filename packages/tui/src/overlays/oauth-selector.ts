@@ -526,7 +526,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 					"enter",
 					login ? { primary: true } : { primary: true, danger: true },
 				),
-				CLOSE_ACTION,
+				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : this.#cancelLabel === "close" ? "Close" : this.#cancelLabel },
 			],
 		});
 		return this.#pickerRoot;
@@ -596,8 +596,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 				this.#search.setValue("");
 				this.#syncSearchQuery();
 			} else if (ev.act === "close" || ev.act === "cancel") {
-				this.stopValidation();
-				this.#onCancelCallback();
+				this.handleInput("\x1b");
 			}
 			return;
 		}

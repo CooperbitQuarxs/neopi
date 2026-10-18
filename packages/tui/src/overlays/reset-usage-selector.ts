@@ -382,7 +382,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 				.map(account => this.#menu.adapter.getKey(account)),
 			selected: this.#menu.selectedKey ?? null,
 			empty: "No provider accounts with saved resets",
-			actions: [pickerAction("confirm", "Spend reset", "enter", { primary: true }), CLOSE_ACTION],
+			actions: [pickerAction("confirm", "Spend reset", "enter", { primary: true }), { ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" }],
 			confirm,
 		});
 		return this.#pickerRoot;
@@ -414,7 +414,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 			else if (ev.act === "cancel" && this.#menu.cancelConfirmation()) {
 				this.#statusMessage = undefined;
 				this.#updateList();
-			} else if (ev.act === "close" || ev.act === "cancel") this.#onCancelCallback();
+			} else if (ev.act === "close" || ev.act === "cancel") this.handleInput("\x1b");
 			return;
 		}
 		if (ev) {
