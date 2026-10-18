@@ -1,6 +1,6 @@
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
 import { MenuSelection } from "./menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuViewportPosition } from "./menu-navigation";
+import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuNavAction, type MenuViewportPosition } from "./menu-navigation";
 import { getKeybindings } from "../keybindings";
 import { type MouseRoutable, routeSelectListMouse, type SgrMouseEvent } from "../mouse";
 import { col, node, span } from "../native/describe";
@@ -555,6 +555,12 @@ export class SelectList implements Component, MouseRoutable {
 		}
 		const action = this.#keys.read(rawData);
 		if (action === undefined || action === "pending") return;
+		this.handleNavigation(action);
+	}
+
+	/** Apply a host-decoded normal action; focused fields still receive raw input first. */
+	handleNavigation(action: MenuNavAction): void {
+		this.#keys.reset();
 		switch (action.kind) {
 			case "search":
 				if (this.#canEditSearch()) this.#search.focused = true;
