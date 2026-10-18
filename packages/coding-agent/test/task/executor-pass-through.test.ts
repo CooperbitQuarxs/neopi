@@ -593,6 +593,26 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		// role's saved `:high` suffix and the agent definition's default.
 		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe(ThinkingLevel.Medium);
 	});
+
+	it("uses caller effort only from the ordered selector that selected the model", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallback = getBundledModel("anthropic", "claude-opus-4-5");
+		if (!model || !fallback) throw new Error("Expected bundled Anthropic models");
+		const spy = vi
+			.spyOn(sdkModule, "createAgentSession")
+			.mockResolvedValue(createSessionResult(yieldEmittingSession()));
+		const selectors = ["anthropic/claude-sonnet-4-5", "anthropic/claude-opus-4-5:high"];
+		const result = await runSubprocess({
+			...baseOptions,
+			modelOverride: selectors,
+			callerModelSelector: selectors,
+			modelRegistry: createModelRegistry([model, fallback]),
+			thinkingLevel: ThinkingLevel.Low,
+		});
+		expect(result.exitCode).toBe(0);
+		expect(spy.mock.calls[0]?.[0]?.model?.id).toBe(model.id);
+		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe(ThinkingLevel.Low);
+	});
 	it("resolves a regex model override including its effort suffix ahead of a glob fallback", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallback = getBundledModel("anthropic", "claude-opus-4-5");
