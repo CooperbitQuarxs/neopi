@@ -612,6 +612,14 @@ export class Form implements Component, Focusable, MouseRoutable {
 		return this.#focused;
 	}
 
+	get filterFocused(): boolean {
+		return this.#fields[this.#activeIndex]?.filterFocused === true;
+	}
+
+	get blocksMenuHistory(): boolean {
+		return this.#fields[this.#activeIndex]?.blocksMenuHistory === true;
+	}
+
 	get debugChildren(): readonly Component[] {
 		return this.#fields;
 	}
@@ -644,6 +652,11 @@ export class Form implements Component, Focusable, MouseRoutable {
 
 	handleInput(data: string): void {
 		const isCancel = this.#options.isCancel?.(data) ?? getKeybindings().matches(data, "tui.select.cancel");
+		const field = this.#fields[this.#activeIndex];
+		if (isCancel && field instanceof SelectFormField && field.filterFocused) {
+			field.handleInput(data);
+			return;
+		}
 		if (isCancel) {
 			this.#options.onCancel();
 			return;

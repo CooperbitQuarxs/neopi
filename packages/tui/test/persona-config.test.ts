@@ -231,13 +231,16 @@ describe("PersonaConfigOverlayComponent", () => {
 		expect(visits).toHaveLength(count);
 	});
 
-	it("uses h for parent, closes nested lists with Esc, and keeps Space off Delete", () => {
+	it("uses h and Esc for parent, closes only at root, and keeps Space off Delete", () => {
 		const nested = makeOverlay({ entries: [entry("alpha")] });
 		nested.press("l", "G", "k", SPACE);
 		expect(nested.overlay.navigationSnapshot().doc.entries).toHaveLength(1);
 		nested.press("h");
 		expect(nested.overlay.navigationSnapshot().context.screen).toBe("list");
 		nested.press("l", ESC);
+		expect(nested.isClosed()).toBe(false);
+		expect(nested.overlay.navigationSnapshot().context.screen).toBe("list");
+		nested.press(ESC);
 		expect(nested.isClosed()).toBe(true);
 	});
 	it("preserves a registered multiline prompt draft without submitting it", () => {

@@ -256,7 +256,6 @@ export class PersonaConfigOverlayComponent implements Component {
 		if (this.#active instanceof SelectList && !this.#active.filterFocused) {
 			const action = this.#keys.read(data);
 			if (action !== undefined && action !== "pending") {
-				if (action.kind === "cancel") { this.#requestClose(); return; }
 				if (action.kind === "horizontal") {
 					const index = this.#navigationContext.entryIndex;
 					if (action.delta === -1 && this.#screen !== "list") {
@@ -377,7 +376,8 @@ export class PersonaConfigOverlayComponent implements Component {
 		const previous = changed && !this.#restoringNavigation ? this.navigationSnapshot() : undefined;
 		this.#screen = screen;
 		this.#active = active;
-		this.#footerHint = active instanceof SelectList ? `${footerHint.replace(/Esc back/g, "Esc close")} · h parent / l open · / search` : footerHint;
+		const navigationHint = screen === "list" ? "l open" : screen === "detail" ? "h parent / l open" : "h parent";
+		this.#footerHint = active instanceof SelectList ? `${footerHint} · ${navigationHint} · / search` : footerHint;
 		this.#footerNote = undefined;
 		this.#previewScroll = 0;
 		this.#navigationContext = context;

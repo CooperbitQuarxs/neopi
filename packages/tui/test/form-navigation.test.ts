@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { Form, TextFormField } from "@oh-my-pi/pi-tui/components/form";
+import { Form, SelectFormField, TextFormField } from "@oh-my-pi/pi-tui/components/form";
+import { getSelectListTheme } from "@oh-my-pi/pi-tui/theme/tui-adapters";
 
 const theme = { label: (text: string) => text, description: (text: string) => text, error: (text: string) => text, hint: (text: string) => text };
 
@@ -8,6 +9,25 @@ function field(secret = false): TextFormField {
 }
 
 describe("form menu history", () => {
+	it("returns a standalone choice's search to its list before canceling the form", () => {
+		let cancelled = 0;
+		const choices = new SelectFormField({
+			theme, items: [{ value: "literal", label: "literal" }, { value: "other", label: "other" }],
+			maxVisible: 1,
+			selectTheme: getSelectListTheme(),
+			onSubmit: () => {}, onCancel: () => cancelled++,
+		});
+		const form = new Form({ fields: [choices], onCancel: () => cancelled++ });
+		form.handleInput("/");
+		form.handleInput("literal");
+		form.handleInput("\x1b");
+		expect(cancelled).toBe(0);
+		expect(choices.selectList.filterFocused).toBe(false);
+		expect(choices.selectList.getFilter()).toBe("literal");
+		form.handleInput("\x1b");
+		expect(cancelled).toBe(1);
+	});
+
 	it("restores ordinary draft text, caret and focused field without submitting", () => {
 		const first = field();
 		const second = field();

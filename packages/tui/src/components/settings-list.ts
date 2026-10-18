@@ -1085,10 +1085,10 @@ export class SettingsList implements Component {
 
 	handleInput(data: string): void {
 		// Text fields and nested filters retain literal input and their first
-		// Escape. Escape from a nested menu closes this surface.
+		// Escape. Escape from a nested menu returns to the settings list.
 		if (this.#submenuComponent) {
 			if (!this.filterFocused && getKeybindings().matches(data, "tui.select.cancel")) {
-				this.#onCancel();
+				this.#closeSubmenu();
 				return;
 			}
 			this.#submenuComponent.handleInput?.(data);

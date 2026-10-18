@@ -31,11 +31,17 @@ it("restores a pending plugin detail after the registry loads without a history 
 		parsePluginId: id => ({ name: id }),
 	};
 	const visits: string[] = [];
-	const panel = new PluginSettingsComponent(host, { onClose: () => {}, onPluginChanged: () => {}, requestRender: () => { mounted.resolve(); } });
+	let closed = false;
+	const panel = new PluginSettingsComponent(host, { onClose: () => { closed = true; }, onPluginChanged: () => {}, requestRender: () => { mounted.resolve(); } });
 	panel.onNavigationVisit = page => { visits.push(page); };
 	panel.restoreNavigation({ view: "npm-detail", plugin: "hjkl", content: undefined });
 	listed.resolve([plugin]);
 	await mounted.promise;
 	expect(panel.navigationSnapshot()).toMatchObject({ view: "npm-detail", plugin: "hjkl" });
 	expect(visits).toEqual([]);
+	panel.handleInput("\x1b");
+	expect(panel.navigationSnapshot()).toMatchObject({ view: "list" });
+	expect(closed).toBe(false);
+	panel.handleInput("\x1b");
+	expect(closed).toBe(true);
 });

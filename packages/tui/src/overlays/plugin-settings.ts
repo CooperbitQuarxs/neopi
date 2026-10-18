@@ -1120,7 +1120,11 @@ export class PluginSettingsComponent extends Container {
 		if (!textFocused) {
 			const action = this.#keys.read(data);
 			if (action !== undefined && action !== "pending") {
-				if (action.kind === "cancel") { this.callbacks.onClose(); return; }
+				if (action.kind === "cancel") {
+					if (this.#currentView === "list") this.callbacks.onClose();
+					else if (!((view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent) && view.navigateParent())) void this.#showPluginList();
+					return;
+				}
 				if (action.kind === "horizontal" && action.delta === -1 && this.#currentView !== "list") {
 					if ((view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent) && view.navigateParent()) return;
 					void this.#showPluginList();

@@ -340,6 +340,14 @@ describe("SelectList", () => {
 		expect(reopened.navigationState()).toEqual(state);
 	});
 
+	it("shows an empty focused search field even when every row fits", () => {
+		const list = new SelectList([{ value: "a", label: "Alpha" }], 5, testTheme, { search: "always" });
+		list.handleInput("/");
+		expect(list.render(80).join("\n")).toContain("Esc back to list");
+		list.handleInput("\x1b");
+		expect(list.render(80).join("\n")).not.toContain("Esc back to list");
+	});
+
 	it("restores literal filter focus and caret without activating the saved row", () => {
 		const items = [{ value: "a", label: "alpha" }];
 		const list = new SelectList(items, 3, testTheme, { search: "always" });
