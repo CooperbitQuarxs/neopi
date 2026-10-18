@@ -275,7 +275,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	/** Replay rows owned by the docked screen rather than native scrollback. */
 	#heldReplayRows: readonly string[] = [];
 	#pendingHeldReplay: { id: number; rows: readonly string[] } | undefined;
-	#releaseHeldReplay = false;
+	#releaseHeldCount = 0;
 	// The welcome header retires to terminal history exactly once, after the
 	// intro settles; until then it renders as mutable viewport chrome.
 	#headerRetired = false;
@@ -346,9 +346,9 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			this.#pendingHeldReplay = { id: plan.history.id, rows: held };
 			this.#lastChatPlan = { ...plan, history: { ...plan.history, rows: plan.history.rows.slice(0, split) } };
 		} else if (this.#offeredHistory?.source === "held") {
-			held = [];
+			held = held.slice(this.#offeredHistory.rows.length);
 		} else if (held.length > padTop) {
-			this.#releaseHeldReplay = true;
+			this.#releaseHeldCount = held.length - padTop;
 			this.ui.requestRender();
 		}
 		if (padTop === 0) return plan.viewport;
@@ -808,8 +808,8 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			this.#headerRetired = true;
 			this.#retiredHeaderRows = offered.rows;
 		} else if (offered.source === "held") {
-			this.#heldReplayRows = [];
-			this.#releaseHeldReplay = false;
+			this.#heldReplayRows = this.#heldReplayRows.slice(offered.rows.length);
+			this.#releaseHeldCount = 0;
 		} else {
 			if (offered.source.transcriptId !== undefined) {
 				offered.source.transcript.acknowledgeFinalizedBatch(offered.source.transcriptId);
@@ -892,7 +892,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#startHistoryReplay(): void {
 		this.#heldReplayRows = [];
 		this.#pendingHeldReplay = undefined;
-		this.#releaseHeldReplay = false;
+		this.#releaseHeldCount = 0;
 		this.#headerReplayPending = this.#headerRetired && (this.#retiredHeaderRows?.length ?? 0) > 0;
 		this.#historyReplayRequested = false;
 		for (const child of this.#runtimeChildren) {
@@ -915,10 +915,11 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				kind: this.#offeredHistory.kind,
 			};
 		}
-		if (this.#heldReplayRows.length > 0 && (!this.#docked || this.#historyFlush || this.#releaseHeldReplay)) {
+		const releaseCount = !this.#docked || this.#historyFlush ? this.#heldReplayRows.length : this.#releaseHeldCount;
+		if (releaseCount > 0) {
 			this.#offeredHistory = {
 				id: this.#nextHistoryId++,
-				rows: this.#heldReplayRows,
+				rows: this.#heldReplayRows.slice(0, releaseCount),
 				kind: "append",
 				source: "held",
 			};
@@ -1177,7 +1178,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		) {
 			this.#heldReplayRows = [];
 			this.#pendingHeldReplay = undefined;
-			this.#releaseHeldReplay = false;
+			this.#releaseHeldCount = 0;
 		}
 		this.#chromeFloor = undefined;
 		this.#nativeDock = options.nativeDock;

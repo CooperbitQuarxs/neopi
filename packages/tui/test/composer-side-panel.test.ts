@@ -158,6 +158,41 @@ describe("Composer side panel: history and geometry", () => {
 		}
 	});
 
+	it("releases only one held row when the live tail grows by one row", async () => {
+		const h = await setup();
+		try {
+			h.transcript.addChild(
+				new Text(
+					Array.from({ length: 30 }, (_, index) => `E${String(index).padStart(2, "0")}: history`).join("\n"),
+					0,
+					0,
+				),
+			);
+			commitLedger(h);
+			const live = new Text("LIVE", 0, 0);
+			h.transcript.addChild(live);
+			h.composer.setSidePanel(h.panel, RIGHT);
+			h.composer.ui.resetDisplay();
+			await h.scheduler.advance(h.term, 160);
+			const history = h.history();
+			const chat = h.viewport().map(row => row.slice(0, 81).trimEnd());
+			expect(chat.slice(0, 21).every(row => row.startsWith("E"))).toBe(true);
+
+			live.setText("LIVE\nGROWTH");
+			h.composer.ui.requestRender();
+			await h.scheduler.advance(h.term, 160);
+			expect(h.history()).toEqual([...history, chat[0]!]);
+			expect(h.viewport().map(row => row.slice(0, 81).trimEnd())).toEqual([
+				...chat.slice(1, -1),
+				"GROWTH",
+				"EDITOR",
+			]);
+			expectLedgerOnce(h, 29);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
 	for (const action of ["dock after replay", "growth", "quit", "undock", "second replay"] as const) {
 		it(`preserves the held ledger exactly once through ${action}`, async () => {
 			const h = await setup();
