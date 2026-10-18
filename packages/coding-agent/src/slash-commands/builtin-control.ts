@@ -2,6 +2,7 @@ import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { runPauseScreen } from "@oh-my-pi/pi-tui/overlays/pause-screen";
 import { clearSubmittedText } from "./helpers/draft";
 import { shutdownHandlerTui } from "./builtin-lifecycle";
+import { agentMonitorFor, startAgentMonitor, stopAgentMonitor } from "../monitor/controller";
 import { commandConsumed, errorMessage, usage } from "./helpers/parse";
 import type { SlashCommandSpec } from "./types";
 
@@ -81,6 +82,52 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			await runPauseScreen(runtime.ctx);
+		},
+	},
+	{
+		name: "monitor",
+		icon: "eye",
+		description: "Open a tmux session with one live pane per subagent and advisor",
+		inlineHint: "[on|off|status]",
+		subcommands: [
+			{ name: "on", description: "Start the monitor session (default)" },
+			{ name: "off", description: "Close the monitor session and its panes" },
+			{ name: "status", description: "Show the monitor session and its panes" },
+		],
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			clearSubmittedText(runtime);
+			const { ctx } = runtime;
+			const action = command.args.trim() || "on";
+			try {
+				if (action === "off") {
+					const stopped = await stopAgentMonitor(ctx.session);
+					ctx.showStatus(stopped ? "Agent monitor closed." : "The agent monitor is not running.");
+					return;
+				}
+				if (action === "status") {
+					const manager = agentMonitorFor(ctx.session);
+					if (!manager) {
+						ctx.showStatus("The agent monitor is not running. /monitor on starts it.");
+						return;
+					}
+					const status = manager.status();
+					const panes =
+						status.panes.map(pane => `${pane.agentId} (${pane.paneId})`).join(", ") || "no agent panes";
+					ctx.showStatus(`Agent monitor: tmux session ${status.sessionName} · ${panes}`);
+					return;
+				}
+				if (action !== "on") {
+					ctx.showError("Usage: /monitor [on|off|status]");
+					return;
+				}
+				const status = await startAgentMonitor(ctx.session, ctx.settings);
+				ctx.showStatus(
+					`Agent monitor running in tmux session ${status.sessionName}. View it from another terminal: tmux attach -t ${status.sessionName}`,
+				);
+			} catch (error) {
+				ctx.showError(errorMessage(error));
+			}
 		},
 	},
 	{

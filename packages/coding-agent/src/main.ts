@@ -66,6 +66,8 @@ import { all, combine, type ProtocolHost, type SettingValueOf } from "./config/r
 import { Settings, settings } from "./config/settings";
 import { startControlHost } from "./control/host";
 import { cfgControlEnabled } from "./control/settings";
+import { startAgentMonitor } from "./monitor/controller";
+import { cfgMonitorAutoStart } from "./monitor/settings";
 import { initializeWithSettings } from "./discovery";
 import {
 	clearPluginRootsAndCaches,
@@ -2754,6 +2756,21 @@ export async function runRootCommand(
 				throw error;
 			}
 			parentExit?.attach({ session, mcpManager });
+			// Opt-in tmux agent monitor (#345); it needs the control socket and a tmux client.
+			if (
+				controlHost &&
+				controlRole === "tui" &&
+				cfgMonitorAutoStart.get(settingsInstance) === true &&
+				process.env.TMUX
+			) {
+				startAgentMonitor(session, settingsInstance).catch(error => {
+					session.emitNotice(
+						"warning",
+						`Agent monitor did not start: ${error instanceof Error ? error.message : String(error)}`,
+						"monitor",
+					);
+				});
+			}
 
 			// Cold-revive support: a `parked` subagent ref restored from disk (Agent Hub
 			// scan, collab mirror, resumed process) has a sessionFile but no in-memory

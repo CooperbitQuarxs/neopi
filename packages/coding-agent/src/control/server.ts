@@ -16,6 +16,7 @@ import {
 	MAX_RPC_REASSEMBLED_BYTES,
 } from "../modes/rpc/rpc-frame";
 import { ADMISSIONS_PER_SECOND, HANDSHAKE_TIMEOUT_MS, HostBudget, MAX_CONNECTIONS, workClass } from "./budget";
+import type { MonitorGrant } from "./monitor-service";
 import { isSameUserPeer, peerCredentials, peerCredentialsSupported, type PeerCredentials } from "./peercred";
 import { callerConnectionToken, constantTimeEqual, findControlMetadata, type ControlMetadata } from "./registry";
 import {
@@ -42,6 +43,12 @@ export interface ControlConnectionHost {
 	onAuthenticated?(connection: ControlConnection): void;
 	/** A connection closed (authenticated or not). */
 	onClosed(connection: ControlConnection): void;
+	/**
+	 * Resolve a monitor capability presented in `hello.monitor.capability`
+	 * instead of the publication token. The connection is then scoped to that
+	 * grant: the host dispatches only monitor commands for it.
+	 */
+	authenticateMonitor?(capability: string): MonitorGrant | undefined;
 }
 
 let connectionSeq = 0;
@@ -55,6 +62,8 @@ export class ControlConnection {
 	readonly budget;
 	authenticated = false;
 	probe = false;
+	/** Set for a monitor connection: the one agent grant it authenticated with. */
+	monitor: MonitorGrant | undefined;
 	label = "";
 	kind: "tool" | "cli" | "other" = "other";
 	callerInstanceId: string | undefined;
@@ -91,6 +100,11 @@ export class ControlConnection {
 	/** Ancestry seen by a nested target: the caller's chain plus the caller. */
 	get propagatedChain(): string[] {
 		return this.callerInstanceId ? [...this.controlChain, this.callerInstanceId] : [...this.controlChain];
+	}
+
+	/** Bytes written to the socket but not yet flushed to the peer. */
+	get bufferedBytes(): number {
+		return this.socket.writableLength;
 	}
 
 	write(frame: object): void {
@@ -167,6 +181,10 @@ export class ControlConnection {
 			this.close("expected hello");
 			return;
 		}
+		if (frame.monitor !== undefined) {
+			this.#authenticateMonitor(frame);
+			return;
+		}
 		const failure = await authenticateHello(frame, this.host, this.peer);
 		if (failure) {
 			this.respond({
@@ -197,6 +215,49 @@ export class ControlConnection {
 			requestId: typeof frame.requestId === "string" ? frame.requestId : undefined,
 			success: true,
 			data: { connectionId: this.id, snapshot: this.host.snapshot() },
+		});
+		this.host.onAuthenticated?.(this);
+	}
+
+	/**
+	 * Monitor hello: a capability instead of the token. The reply carries the
+	 * grant's scope, never the host snapshot (that is the root session's state).
+	 */
+	#authenticateMonitor(frame: Record<string, unknown>): void {
+		const requestId = typeof frame.requestId === "string" ? frame.requestId : undefined;
+		const monitor = isRecord(frame.monitor) ? frame.monitor : undefined;
+		const client = isRecord(frame.client) ? frame.client : undefined;
+		const capability = typeof monitor?.capability === "string" ? monitor.capability : undefined;
+		const grant = capability ? this.host.authenticateMonitor?.(capability) : undefined;
+		const label = client?.label;
+		// Protocol v2 is required: whole oversized transcript entries and live frames arrive chunked.
+		if (!grant || frame.protocolVersion !== 2 || typeof label !== "string" || !/^[\x20-\x7e]{1,64}$/.test(label)) {
+			this.respond({
+				type: "response",
+				command: "hello",
+				requestId,
+				success: false,
+				error: "monitor access was not granted",
+				code: "unauthorized",
+			});
+			this.close("unauthorized");
+			return;
+		}
+		this.label = label;
+		this.kind = "other";
+		this.monitor = grant;
+		this.protocolVersion = 2;
+		this.encoder.setProtocolVersion(2);
+		this.authenticated = true;
+		this.respond({
+			type: "response",
+			command: "hello",
+			requestId,
+			success: true,
+			data: {
+				connectionId: this.id,
+				monitor: { agentId: grant.agentId, kind: grant.kind, canChat: grant.canChat },
+			},
 		});
 		this.host.onAuthenticated?.(this);
 	}

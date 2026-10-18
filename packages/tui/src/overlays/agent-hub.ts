@@ -268,7 +268,8 @@ export interface AgentHubRemoteTranscript {
 
 /** Guest-side proxy for hub actions executed on the collab host. */
 export interface AgentHubRemote {
-	chat(id: string, text: string): void;
+	/** Fire-and-forget for collab guests; a promise lets the viewer show a rejected send. */
+	chat(id: string, text: string): void | Promise<void>;
 	kill(id: string): void;
 	revive(id: string): void;
 	/** Mirrors readFileIncremental: text from fromByte (complete JSONL lines), newSize = next fromByte base; null = temporarily unavailable. */

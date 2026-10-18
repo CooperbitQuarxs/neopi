@@ -22,6 +22,19 @@ export interface ControlClientOptions {
 	/** Read-only probe (`list`). */
 	probe?: boolean;
 	timeoutMs?: number;
+	/**
+	 * Authenticate a monitor connection with this capability instead of the
+	 * publication token (`npi monitor attach`). The hello reply then carries
+	 * the grant's scope in {@link ControlClient.monitorScope}, not a snapshot.
+	 */
+	monitorCapability?: string;
+}
+
+/** Scope of an authenticated monitor connection. */
+export interface ControlMonitorScope {
+	agentId: string;
+	kind: "sub" | "advisor";
+	canChat: boolean;
 }
 
 export class ControlClientError extends Error {
@@ -54,6 +67,8 @@ export class ControlClient {
 	#closed = false;
 	connectionId = "";
 	snapshot: ControlSnapshot | undefined;
+	monitorScope: ControlMonitorScope | undefined;
+	readonly #closeListeners: Array<() => void> = [];
 
 	constructor(options: ControlClientOptions) {
 		this.#options = options;
@@ -110,10 +125,13 @@ export class ControlClient {
 						);
 						return;
 					}
-					const data = frame.data as { connectionId?: string; snapshot?: ControlSnapshot } | undefined;
+					const data = frame.data as
+						| { connectionId?: string; snapshot?: ControlSnapshot; monitor?: ControlMonitorScope }
+						| undefined;
 					this.#encoder.setProtocolVersion(2);
 					this.connectionId = data?.connectionId ?? "";
 					this.snapshot = data?.snapshot;
+					this.monitorScope = data?.monitor;
 					resolve(data?.snapshot as ControlSnapshot);
 					continue;
 				}
@@ -127,12 +145,23 @@ export class ControlClient {
 				pending.reject(new ControlClientError("closed", "connection closed"));
 			}
 			this.#pending.clear();
+			for (const listener of this.#closeListeners) listener();
 		});
 		return promise;
 	}
 
 	#hello(): Record<string, unknown> {
-		const { metadata, label, kind, caller, controlChain, allowSelf, allowNested, probe } = this.#options;
+		const { metadata, label, kind, caller, controlChain, allowSelf, allowNested, probe, monitorCapability } =
+			this.#options;
+		if (monitorCapability !== undefined) {
+			return {
+				type: "hello",
+				requestId: "h1",
+				protocolVersion: 2,
+				monitor: { capability: monitorCapability },
+				client: { label, kind: kind ?? "other" },
+			};
+		}
 		return {
 			type: "hello",
 			requestId: "h1",
@@ -185,6 +214,19 @@ export class ControlClient {
 		this.#pending.set(requestId, { resolve, reject, timer });
 		this.#socket.write(this.#encoder.encode(frame));
 		return promise;
+	}
+
+	/** Run `listener` once the socket closes, for any reason. */
+	onClose(listener: () => void): void {
+		if (this.#closed) {
+			listener();
+			return;
+		}
+		this.#closeListeners.push(listener);
+	}
+
+	get closed(): boolean {
+		return this.#closed;
 	}
 
 	/** Listen for non-response frames (events, receipts). Returns an unsubscribe. */
