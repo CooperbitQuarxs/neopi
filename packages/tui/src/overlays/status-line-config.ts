@@ -296,6 +296,8 @@ export class StatusLineConfigOverlayComponent implements Component {
 	readonly #search = new Input();
 	readonly #template = new Input();
 	#prompt: "exit" | "reset" | undefined;
+	/** Latest editor message; host statuses render behind the fullscreen editor, so the footer repeats it until the next key. */
+	#notice: { text: string; warning: boolean } | undefined;
 	#pendingG = false;
 	#applying = false;
 	#closed = false;
@@ -360,7 +362,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 		this.#syncTemplateField();
 		this.#syncFocusFlags();
 		if (draft && holdsEdits && this.#pending) {
-			this.#cb.notify("Restored the unapplied status-line draft. s applies it; R resets to the active layout.");
+			this.#notify("Restored the unapplied status-line draft. s applies it; R resets to the active layout.");
 		}
 		this.#cb.preview(this.#layout());
 	}
@@ -450,7 +452,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 	#draftFailed(error: unknown): void {
 		const message = sanitizeStatusText(String(error));
 		if (this.#draftError === undefined) {
-			this.#cb.notify(`Could not save the status-line draft (kept in this editor): ${message}`);
+			this.#notify(`Could not save the status-line draft (kept in this editor): ${message}`, true);
 		}
 		this.#draftError = message;
 	}
@@ -621,7 +623,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 
 	#requestReset(): void {
 		if (!this.#pending) {
-			this.#cb.notify("The draft already matches the active status-line layout.");
+			this.#notify("The draft already matches the active status-line layout.");
 			return;
 		}
 		this.#prompt = "reset";
@@ -639,14 +641,14 @@ export class StatusLineConfigOverlayComponent implements Component {
 		this.#templates = { ...this.#active.usageTemplates };
 		this.#addCatalogRows();
 		this.#syncTemplateField();
-		this.#cb.notify("Reset the status-line draft to the active layout.");
+		this.#notify("Reset the status-line draft to the active layout.");
 		this.#edited();
 	}
 
 	/** Apply the draft; the editor stays open unless `thenClose`. A failure keeps both the draft and the old layout. */
 	async #apply(thenClose: boolean): Promise<void> {
 		if (!thenClose && !this.#pending) {
-			this.#cb.notify("No status-line changes to apply.");
+			this.#notify("No status-line changes to apply.");
 			return;
 		}
 		const layout = this.#layout();
@@ -656,15 +658,16 @@ export class StatusLineConfigOverlayComponent implements Component {
 			await this.#cb.apply(copyLayout(layout));
 			this.#active = copyLayout(layout);
 			this.#base = copyLayout(layout);
-			this.#cb.notify("Applied the status-line layout and composer.");
+			this.#notify("Applied the status-line layout and composer.");
 			// A history reopen may already own a newer draft; never replace it on late completion.
 			if (!this.#closed) {
 				this.#persist();
 				if (thenClose) this.#close();
 			}
 		} catch (error) {
-			this.#cb.notify(
+			this.#notify(
 				`Could not apply the status-line layout; the draft is kept: ${sanitizeStatusText(String(error))}`,
+				true,
 			);
 		} finally {
 			this.#applying = false;
@@ -709,8 +712,15 @@ export class StatusLineConfigOverlayComponent implements Component {
 
 	// ── Input ─────────────────────────────────────────────────────────────
 
+	#notify(text: string, warning = false): void {
+		this.#notice = { text: sanitizeStatusText(text), warning };
+		this.#cb.notify(text);
+		this.#cb.requestRender();
+	}
+
 	handleInput(data: string): void {
 		if (this.#closed || this.#applying) return;
+		this.#notice = undefined;
 		if (data.startsWith("\x1b[<")) {
 			this.#pendingG = false;
 			this.#handleMouse(data);
@@ -759,7 +769,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 			if (parseUsageBarSegmentId(this.#selected)) {
 				this.#syncTemplateField();
 				this.#setFocus("template");
-			} else this.#cb.notify("Tab edits the text template of a usage widget; select one first.");
+			} else this.#notify("Tab edits the text template of a usage widget; select one first.");
 		} else if (char === "/") this.#setFocus("search");
 		else if (char === "s" || matchesKey(data, "ctrl+s")) void this.#apply(false);
 		else if (char === "R") this.#requestReset();
@@ -971,11 +981,16 @@ export class StatusLineConfigOverlayComponent implements Component {
 		this.#bodyRows = Math.max(3, (process.stdout.rows || 40) - 4);
 		this.#split.setHeight(this.#bodyRows);
 		const leftWidth = this.#split.measure(width).left?.width ?? 0;
-		const state = this.#draftError ? " · draft not saved" : this.#pending ? " · unapplied draft" : "";
+		const state = `${this.#pending ? " · unapplied draft" : ""}${this.#draftError ? " · draft not saved" : ""}`;
 		this.#titleRow.setLines([topBorderSplit(width, `Status-line configuration${state}`, leftWidth)]);
 		this.#divider.setLines([dividerSplit(width, leftWidth)]);
-		const hints = this.#hints();
-		this.#footer.setLines([row(this.#prompt ? theme.fg("warning", hints) : theme.fg("dim", hints), width)]);
+		const notice = this.#prompt || this.#applying ? undefined : this.#notice;
+		const footer = notice
+			? theme.fg(notice.warning ? "warning" : "accent", notice.text)
+			: this.#prompt
+				? theme.fg("warning", this.#hints())
+				: theme.fg("dim", this.#hints());
+		this.#footer.setLines([row(footer, width)]);
 		this.#bottom.setLines([bottomBorder(width)]);
 		this.#frame.setHeight(this.#bodyRows + 4);
 		return this.#frame.render(width);

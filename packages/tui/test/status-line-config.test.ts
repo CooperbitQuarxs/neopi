@@ -367,6 +367,8 @@ describe("status-line editor draft", () => {
 		await Bun.sleep(0);
 		expect(h.notices.at(-1)).toContain("Could not apply");
 		expect(h.notices.at(-1)).toContain("disk full");
+		// Host statuses sit behind the fullscreen editor; its own footer repeats the failure.
+		expect(h.text()).toContain("Could not apply the status-line layout");
 		expect(h.closed()).toBe(false);
 		expect(h.title()).toContain("unapplied draft");
 		expect(h.previews.at(-1)?.leftSegments).toEqual(["context_bar"]);
