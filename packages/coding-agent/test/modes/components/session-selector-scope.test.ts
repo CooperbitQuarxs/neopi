@@ -39,7 +39,7 @@ describe("SessionSelectorComponent scope toggle", () => {
 		selector.handleInput("\n");
 		expect(selected).toEqual(["beta"]);
 		selector.handleInput("k");
-		selector.handleInput("i");
+		selector.handleInput("/");
 		for (const key of "hjkl") selector.handleInput(key);
 		expect(Bun.stripANSI(selector.render(120).join("\n"))).toContain("hjkl");
 		selector.handleInput("\x1b");

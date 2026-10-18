@@ -2,12 +2,11 @@ import {
 	type Component,
 	Container,
 	FuzzyText,
-	Input,
 	matchesKey,
 	padding,
 	replaceTabs,
 	routeSgrMouseInput,
-	ScrollView,
+	type Input,
 	Spacer,
 	Text,
 	truncateToWidth,
@@ -26,12 +25,12 @@ import {
 	pickerEvent,
 	pickerHits,
 } from "../native/picker";
-import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { plainText } from "../native/spans";
 import { theme } from "../theme/theme";
-import { contentRowWidth } from "../chrome/selector-helpers";
-import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
+import { contentRowWidth, renderScrollableList } from "../chrome/selector-helpers";
+import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, menuScrollBy, type MenuViewportPosition } from "../components/menu-navigation";
 /** Session lifecycle status presented by the picker. */
 export type SessionSelectorStatus = "complete" | "interrupted" | "aborted" | "error" | "pending" | "unknown";
 
@@ -53,9 +52,10 @@ export interface SessionSelectorEntry {
 import { shortenPath } from "../render/render-utils";
 import { HookSelectorComponent } from "./hook-selector";
 import { bottomBorder, OverlayPanel, row, topBorder } from "../chrome/overlay-box";
-import { MenuSelection, getMenuWindow } from "../components/menu-selection";
+import { MenuSelection } from "../components/menu-selection";
 import { formatKeyHint } from "../app-keybindings";
 import { boundKeys, interruptKey } from "../chrome/keybinding-hints";
+import { getKeybindings } from "../keybindings";
 
 /**
  * Themed glyph + colored label for a session's lifecycle status, or `undefined`
@@ -516,6 +516,11 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	// (where the overlay enables mouse tracking and paints from screen row 0).
 	#hitRows: (number | undefined)[] = [];
 	readonly #searchInput: Input;
+	readonly #search = new MenuSearchField();
+	readonly #keys = new MenuKeyReader();
+	readonly #viewport = new MenuViewport();
+	#nativeScroll: NativeScroll | undefined;
+	#restoredSelected: string | undefined;
 	onSelect?: (session: T) => void;
 	onCancel?: () => void;
 	onExit: () => void = () => {};
@@ -527,7 +532,6 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	onDeleteRequest?: (session: T) => void;
 	/** Monotonic time of the last Delete/Backspace press, for {@link SESSION_DELETE_REARM_MS}. */
 	#lastEraseKeyAt = Number.NEGATIVE_INFINITY;
-	#filterEditing = false;
 
 	#allSessions: T[];
 	#showCwd: boolean;
@@ -569,7 +573,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		| { version: number; showCwd: boolean; currentPath: string | undefined; items: NativeNode[] }
 		| undefined;
 	#listNative:
-		| { items: readonly NativeNode[]; selected: string | undefined; query: string; node: NativeNode }
+		| { items: readonly NativeNode[]; selected: string | undefined; query: string; focused: boolean; scroll: NativeScroll | undefined; node: NativeNode }
 		| undefined;
 	/** Bumped when the session set itself changes (scope switch, delete): the picker catalogue's memo key. */
 	#datasetVersion = 0;
@@ -600,7 +604,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			getSearchText: sessionSearchText,
 		});
 		this.#selectCurrentSession();
-		this.#searchInput = new Input();
+		this.#searchInput = this.#search.input;
 
 		// Handle Enter in search input - select current item
 		this.#searchInput.onSubmit = () => {
@@ -609,6 +613,46 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 				this.onSelect?.(selected);
 			}
 		};
+	}
+
+	get filterFocused(): boolean { return this.#search.focused; }
+
+	navigationSnapshot(): unknown {
+		return {
+			search: this.#search.navigationSnapshot(),
+			selected: this.#restoredSelected ?? this.#menu.selectedKey,
+			order: this.#menu.visibleItems.map(session => session.path),
+			top: this.#viewport.top,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { search?: unknown; selected?: string; order?: string[]; top?: MenuViewportPosition | number };
+		this.dispose();
+		this.#search.restoreNavigation(state.search);
+		this.#restoredSelected = typeof state.selected === "string" ? state.selected : undefined;
+		this.#filterSessions(this.#search.value);
+		if (Array.isArray(state.order)) {
+			const byPath = new Map(this.#allSessions.map(session => [session.path, session]));
+			const ordered: T[] = [];
+			for (const path of state.order) {
+				const session = byPath.get(path);
+				if (session) ordered.push(session);
+			}
+			this.#menu.setItems(ordered, this.#restoredSelected);
+			this.#itemsVersion++;
+		} else if (this.#restoredSelected) this.#menu.setSelectedKey(this.#restoredSelected);
+		this.#selectionMoved = true;
+		this.#viewport.setTop(state.top);
+		this.#nativeScroll = undefined;
+		this.#keys.reset();
+	}
+
+	escape(): void {
+		if (this.#search.focused) this.#search.focused = false;
+		else this.onCancel?.();
+		this.#keys.reset();
 	}
 
 	/**
@@ -629,10 +673,6 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		return Math.max(8, this.#getTerminalRows() - CHROME - RESERVE);
 	}
 
-	/** PageUp/PageDown jump, approximated from the worst-case session height. */
-	#pageSize(): number {
-		return Math.max(2, Math.floor(this.#lineBudget() / 4));
-	}
 
 	/** Focus the live session when it is in the visible list. */
 	#selectCurrentSession(): void {
@@ -644,6 +684,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 
 	/** Replace the visible dataset, e.g. when toggling folder/all-projects scope. */
 	setSessions(sessions: T[], showCwd: boolean, pinnedIds?: ReadonlySet<string>): void {
+		this.#restoredSelected = undefined;
 		this.#datasetVersion++;
 		this.#allSessions = sessions;
 		this.#showCwd = showCwd;
@@ -656,6 +697,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	#filterSessions(query: string): void {
 		this.#scanGeneration++;
 		this.#itemsVersion++;
+		this.#viewport.reveal();
 		if (this.#scanTimer !== undefined) {
 			clearTimeout(this.#scanTimer);
 			this.#scanTimer = undefined;
@@ -763,7 +805,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		// The fuzzy scan and the history merge only clamp the cursor so an arrow
 		// selection survives recomposition; the query path resets explicitly.
 		const keepIndex = Math.min(this.#menu.selectedIndex, Math.max(0, composed.length - 1));
-		this.#menu.setItems(composed, keepIndex >= 0 ? composed[keepIndex]?.path : undefined);
+		this.#menu.setItems(composed, this.#restoredSelected ?? (keepIndex >= 0 ? composed[keepIndex]?.path : undefined));
 	}
 
 	/**
@@ -810,6 +852,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	removeSession(sessionPath: string): void {
 		const index = this.#allSessions.findIndex(s => s.path === sessionPath);
 		if (index === -1) return;
+		if (sessionPath === this.#restoredSelected) this.#restoredSelected = undefined;
 		this.#datasetVersion++;
 		this.#allSessions.splice(index, 1);
 		// Re-filter to update the composed result set
@@ -828,15 +871,21 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	/** Wheel notch: move the selection one step (clamped, no wrap). */
 	handleWheel(delta: -1 | 1): void {
 		if (this.#menu.visibleItems.length === 0) return;
+		this.#restoredSelected = undefined;
 		this.#selectionMoved = true;
 		this.#menu.move(delta, false);
+		this.#viewport.reveal();
 	}
 
 	/** Mouse click: select the session under the pointer and resume it. */
 	selectAndConfirm(index: number): void {
 		const session = this.#menu.visibleItems[index];
 		if (!session) return;
+		this.#restoredSelected = undefined;
 		this.#menu.setSelectedIndex(index);
+		this.#search.focused = false;
+		this.#keys.reset();
+		this.#viewport.reveal();
 		this.onSelect?.(session);
 	}
 
@@ -848,7 +897,11 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 
 	/** Native row click: move the selection there, as the arrow keys would. */
 	selectSession(path: string): void {
+		this.#restoredSelected = undefined;
 		if (this.#menu.setSelectedKey(path)) this.#selectionMoved = true;
+		this.#search.focused = false;
+		this.#keys.reset();
+		this.#viewport.reveal();
 	}
 
 	/** Enter: resume the selected session. */
@@ -865,6 +918,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 
 	/** Empty the search query (the empty state's "Clear search"). */
 	clearSearch(): void {
+		this.#restoredSelected = undefined;
 		this.#searchInput.setValue("");
 		this.#filterSessions("");
 	}
@@ -1072,17 +1126,18 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		const selected = this.#menu.selectedKey;
 		const query = this.#searchInput.getValue();
 		const memo = this.#listNative;
-		if (memo?.items === items.items && memo.selected === selected && memo.query === query) return memo.node;
+		if (memo?.items === items.items && memo.selected === selected && memo.query === query &&
+			memo.focused === this.#search.focused && memo.scroll === this.#nativeScroll) return memo.node;
 		const empty: TspText = this.#showCwd
 			? [span("No sessions found", "muted")]
 			: [span("No sessions in current folder. Press ", "muted"), span("tab", "key"), span(" to view all.", "muted")];
-		const list = node(
+		const list = { ...node(
 			"list",
 			{ selected: selected ?? null, filter: query.trim() || undefined, empty, virtual: true },
 			items.items,
 			"list",
-		);
-		this.#listNative = { items: items.items, selected, query, node: list };
+		), scroll: this.#nativeScroll };
+		this.#listNative = { items: items.items, selected, query, focused: this.#search.focused, scroll: this.#nativeScroll, node: list };
 		return list;
 	}
 
@@ -1135,14 +1190,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		const lines: string[] = [];
 		this.#hitRows = [];
 
-		// Render search input
-		const hint = this.#filterEditing ? "INSERT filter · Esc normal" : "hjkl navigate · i filter · Esc close";
-		lines.push(
-			truncateToWidth(
-				`${theme.fg("dim", hint)} ${this.#searchInput.render(Math.max(1, width - visibleWidth(hint) - 1))[0] ?? ""}`,
-				width,
-			),
-		);
+		lines.push(this.#search.render(width, { muted: text => theme.fg("dim", text) }));
 		lines.push(""); // Blank line after search
 
 		if (this.#menu.visibleItems.length === 0) {
@@ -1170,12 +1218,13 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		const {
 			startIndex,
 			endIndex,
+			lineOffset,
 			rowOffset: offsetRows,
 			totalRows: rawTotalRows,
-		} = getMenuWindow(this.#visibleRowHeights(filtered), this.#menu.selectedIndex, budget);
+		} = this.#viewport.layout(this.#visibleRowHeights(filtered), this.#menu.selectedIndex, budget);
 
-		// Each session block is built into sessionLines, then wrapped by ScrollView
-		// so the right-edge scrollbar is proportional at the physical-line level.
+		// Session blocks retain physical-line heights for the shared viewport
+		// and proportional right-edge scrollbar.
 		const sessionLines: string[] = [];
 		const sessionRowIndex: number[] = [];
 		const rowWidth = contentRowWidth(width, rawTotalRows, budget);
@@ -1240,28 +1289,17 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			const metadataLine = truncateToWidth(metadata, rowWidth);
 
 			sessionLines.push(metadataLine);
-			// Blank separator between sessions; the last block ends flush against
-			// the footer, whose leading blank provides the same gap.
-			if (i < endIndex - 1) sessionLines.push("");
+			// Keep physical item heights exact even when the window clips inside
+			// the separator; the dataset's final item alone has no separator.
+			if (i < filtered.length - 1) sessionLines.push("");
 			for (let k = blockStart; k < sessionLines.length; k++) sessionRowIndex[k] = i;
 		}
 
-		// Wrap the rendered window in a ScrollView for a proportional right-edge
-		// bar, with exact physical-line totals from the per-session heights.
-		// The last session's separator blank is never rendered (see the block
-		// loop above), so exclude it or a fully visible list would still show a
-		// scrollbar.
-		const totalRows = rawTotalRows - 1;
-		const sv = new ScrollView(sessionLines, {
-			height: sessionLines.length,
-			scrollbar: "auto",
-			totalRows,
-			theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
-		});
-		sv.setScrollOffset(offsetRows);
+		const visibleLines = lineOffset === 0 && sessionLines.length <= budget
+			? sessionLines : sessionLines.slice(lineOffset, lineOffset + budget);
 		const sessionRegionStart = lines.length;
-		const svLines = sv.render(width);
-		for (let k = 0; k < svLines.length; k++) this.#hitRows[sessionRegionStart + k] = sessionRowIndex[k];
+		const svLines = renderScrollableList(visibleLines, { width, totalRows: rawTotalRows, scrollOffset: offsetRows });
+		for (let k = 0; k < svLines.length; k++) this.#hitRows[sessionRegionStart + k] = sessionRowIndex[k + lineOffset];
 		lines.push(...svLines);
 
 		return lines;
@@ -1273,91 +1311,66 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		if (cached?.items === items && cached.length === items.length && cached.version === this.#itemsVersion) {
 			return cached.heights;
 		}
-		const heights = items.map(session => (session.title ? 4 : 3));
+		const heights = items.map((session, index) => (session.title ? 4 : 3) - (index === items.length - 1 ? 1 : 0));
 		this.#rowHeights = { items, length: items.length, version: this.#itemsVersion, heights };
 		return heights;
 	}
 
-	handleInput(rawData: string): void {
-		if (this.#filterEditing && matchesAppInterrupt(rawData)) {
-			this.#filterEditing = false;
-			return;
-		}
-		if (!this.#filterEditing && matchesKey(rawData, "i")) {
-			this.#filterEditing = true;
-			return;
-		}
-		const keyData = this.#filterEditing ? rawData : pickerNavigationKey(rawData);
-		// Backspace only ever edits the filter. Delete forward-deletes filter text; on an empty
-		// filter it requests session deletion, but only as a fresh press — never as the
-		// continuation of Delete/Backspace presses (auto-repeat included) that were erasing text.
-		const isDelete = matchesKey(keyData, "delete");
-		if (isDelete || matchesKey(keyData, "backspace")) {
+	handleInput(data: string): void {
+		const isDelete = matchesKey(data, "delete");
+		const isErase = isDelete || matchesKey(data, "backspace");
+		let sinceLastErase = Number.POSITIVE_INFINITY;
+		if (isErase) {
 			const now = performance.now();
-			const sinceLastErase = now - this.#lastEraseKeyAt;
+			sinceLastErase = now - this.#lastEraseKeyAt;
 			this.#lastEraseKeyAt = now;
-			if (isDelete && this.#searchInput.getValue().length === 0) {
-				const selected = this.#menu.selectedItem;
-				if (sinceLastErase >= SESSION_DELETE_REARM_MS && selected && this.onDeleteRequest) {
-					this.onDeleteRequest(selected);
-				}
-				return;
-			}
-			if (!this.#filterEditing) return;
-			this.#searchInput.handleInput(keyData);
-			this.#filterSessions(this.#searchInput.getValue());
-			return;
 		}
-		// Up arrow
-		if (matchesSelectUp(keyData)) {
-			this.#selectionMoved = true;
-			this.#menu.move(-1, false);
-			return;
-		}
-		// Down arrow
-		if (matchesSelectDown(keyData)) {
-			this.#selectionMoved = true;
-			this.#menu.move(1, false);
-			return;
-		}
-		// Page up - jump up by maxVisible items
-		if (matchesKey(keyData, "pageUp")) {
-			this.#selectionMoved = true;
-			this.#menu.move(-this.#pageSize(), false);
-			return;
-		}
-		// Page down - jump down by maxVisible items
-		if (matchesKey(keyData, "pageDown")) {
-			this.#selectionMoved = true;
-			this.#menu.move(this.#pageSize(), false);
-			return;
-		}
-		// Enter
-		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-			this.resumeSelected();
-			return;
-		}
-		// Escape - cancel
-		if (matchesAppInterrupt(keyData)) {
-			if (this.onCancel) {
-				this.onCancel();
+		const before = this.#search.value;
+		const field = this.#search.handleInput(data);
+		if (field !== "pass") {
+			this.#keys.reset();
+			if (this.#search.value !== before) {
+				this.#restoredSelected = undefined;
+				this.#filterSessions(this.#search.value);
 			}
 			return;
 		}
-		// Ctrl+C - exit
-		if (matchesKey(keyData, "ctrl+c")) {
+		if (isErase) {
+			// A focused query always owns erasing. Only a fresh Delete in the
+			// list with an empty query may request the destructive confirmation.
+			if (isDelete && !this.#search.value && sinceLastErase >= SESSION_DELETE_REARM_MS) this.requestDelete();
+			return;
+		}
+		if (matchesKey(data, "ctrl+c")) {
 			this.onExit();
 			return;
 		}
-		// Tab - toggle folder / all-projects scope
-		if (matchesKey(keyData, "tab")) {
+		const action = this.#keys.read(data);
+		if (!action || action === "pending") return;
+		if (action.kind === "search") {
+			this.#search.focused = true;
+			return;
+		}
+		if (action.kind === "cancel") return this.escape();
+		if (action.kind === "context") {
+			this.#search.focused = false;
 			this.onToggleScope?.();
 			return;
 		}
-		// Only insert mode edits the filter; normal-mode letters are navigation or inert.
-		if (!this.#filterEditing) return;
-		this.#searchInput.handleInput(keyData);
-		this.#filterSessions(this.#searchInput.getValue());
+		if (action.kind === "confirm" || action.kind === "toggle") {
+			this.resumeSelected();
+			return;
+		}
+		this.#viewport.layout(this.#visibleRowHeights(this.#menu.visibleItems), this.#menu.selectedIndex, this.#lineBudget());
+		const motion = applyMenuMotion(action, this.#menu, this.#viewport, { wrap: false });
+		if (motion.selectionChanged) {
+			this.#restoredSelected = undefined;
+			this.#selectionMoved = true;
+		}
+		if (action.kind === "scroll") {
+			const by = menuScrollBy(action);
+			if (by) this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
+		}
 	}
 }
 
@@ -1425,6 +1438,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	#scope: "folder" | "all" = "folder";
 	#toggling = false;
 	#inputLocked = false;
+	#deleting = false;
 	// 0-based line where the session list begins within this component's own
 	// render, captured each frame. The fullscreen picker overlay paints from
 	// screen row 0, so a mouse row maps to `row - #listLineOffset` inside the
@@ -1460,6 +1474,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 				message: SessionPickerMessage | undefined;
 				errorOpen: boolean;
 				choice: DeleteChoice<T> | null;
+				focused: boolean;
 				node: NativeNode;
 		  }
 		| undefined;
@@ -1539,6 +1554,45 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		this.#contentSlot = new Container();
 		this.#contentSlot.addChild(this.#sessionList);
 		this.addChild(this.#contentSlot);
+	}
+
+	get filterFocused(): boolean { return this.#sessionList.filterFocused; }
+
+	get blocksMenuHistory(): boolean {
+		return this.#toggling || this.#inputLocked || this.#deleting;
+	}
+
+	navigationSnapshot(): unknown {
+		return {
+			scope: this.#scope, allSessions: this.#globalSessions,
+			list: this.#sessionList.navigationSnapshot(),
+			message: this.#message?.kind === "error" ? this.#message : undefined,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { scope?: string; allSessions?: T[]; list?: unknown; message?: SessionPickerMessage };
+		this.leaveMenu();
+		if (Array.isArray(state.allSessions)) this.#globalSessions = state.allSessions;
+		this.#scope = state.scope === "all" && this.#globalSessions ? "all" : "folder";
+		this.#sessionList.setSessions(this.#scope === "all" ? this.#globalSessions! : this.#folderSessions, this.#scope === "all" || this.#folderShowCwd);
+		this.#sessionList.restoreNavigation(state.list);
+		this.title = this.#headerLabel();
+		this.#clearError();
+		if (state.message?.kind === "error") this.#showError(state.message.text.replace(/^Error: /, ""));
+		this.#nativeMemo = undefined;
+		this.#pickerMemo = undefined;
+	}
+
+	leaveMenu(): void {
+		this.#sessionList.dispose();
+		clearTimeout(this.#previewTimer);
+		this.#previewTimer = undefined;
+		this.#confirmationDialog = null;
+		this.#deleteChoice = null;
+		this.#contentSlot.clear();
+		this.#contentSlot.addChild(this.#sessionList);
 	}
 
 	#headerLabel(): string {
@@ -1635,8 +1689,10 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			this.#onRequestRender?.();
 		};
 		const answer = async (option: string) => {
+			if (this.#deleting) return;
 			if (option === "Yes" && this.#onDelete) {
 				this.#clearError();
+				this.#deleting = true;
 				try {
 					const deleted = await this.#onDelete(session);
 					if (deleted) {
@@ -1648,6 +1704,8 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 					}
 				} catch (err) {
 					this.#showError(err instanceof Error ? err.message : String(err));
+				} finally {
+					this.#deleting = false;
 				}
 			}
 			closeDialog();
@@ -1708,7 +1766,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		const cancel = interruptKey();
 		const hint = theme.fg(
 			"muted",
-			`[${formatKeyHint("delete")} delete · ${formatKeyHint("enter")} select · ${formatKeyHint("tab")} ${scopeHint} · ${cancel} cancel]`,
+			`[j/k ↑↓ · Ctrl-u/d half · PgUp/Dn · gg/G · Ctrl-e/y view · / search · ${formatKeyHint("delete")} delete (list) · Enter/Space select · ${formatKeyHint("tab")} ${scopeHint} · ${cancel} list/close]`,
 		);
 		return [row("", width), row(hint, width), row("", width), bottomBorder(width)];
 	}
@@ -1757,13 +1815,14 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			children.push(this.#sessionList.searchInput, list);
 		}
 		const hints: (NativeHint | undefined)[] = [
-			{ keys: ["delete", "backspace"], label: "delete" },
+			{ keys: ["delete"], label: "delete (list)" },
 			{ keys: ["enter"], label: "select" },
+			{ keys: ["/"], label: "search" },
 		];
 		if (this.#sessionList.onToggleScope) {
 			hints.push({ keys: ["tab"], label: this.#scope === "all" ? "current folder" : "all projects" });
 		}
-		hints.push({ keys: [boundKeys("app.interrupt", ["escape"])[0] ?? "escape"], label: "cancel" });
+		hints.push({ keys: [boundKeys("app.interrupt", ["escape"])[0] ?? "escape"], label: this.filterFocused ? "back to list" : "close" });
 		const result = overlayCard("omp.overlay.sessions", tabs ? this.#title : this.title, [
 			...children,
 			hintsRow(hints),
@@ -1800,7 +1859,8 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			memo.scope === this.#scope &&
 			memo.message === message &&
 			memo.errorOpen === errorOpen &&
-			memo.choice === choice
+			memo.choice === choice &&
+			memo.focused === list.filterFocused
 		) {
 			return memo.node;
 		}
@@ -1812,7 +1872,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			actions.push(pickerAction("scope", this.#scope === "all" ? "This folder" : "All projects", "tab"));
 		}
 		actions.push(
-			pickerAction("close", "Close", boundKeys("app.interrupt", ["escape"])[0] ?? "escape", { end: true }),
+			pickerAction("close", list.filterFocused ? "Back to list" : "Close", boundKeys("app.interrupt", ["escape"])[0] ?? "escape", { end: true }),
 		);
 		const folder = this.#scopeLabel === false ? undefined : (this.#scopeLabel ?? path.basename(getProjectDir()));
 		const title = this.#pickerTitle;
@@ -1858,7 +1918,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			},
 			preview,
 		);
-		this.#pickerMemo = { view, preview, scope: this.#scope, message, errorOpen, choice, node: result };
+		this.#pickerMemo = { view, preview, scope: this.#scope, message, errorOpen, choice, focused: list.filterFocused, node: result };
 		return result;
 	}
 
@@ -1911,7 +1971,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		else if (ev.act === "cancel") choice?.cancel();
 		else if (ev.act === "close") {
 			if (choice) choice.cancel();
-			else list.onCancel?.();
+			else list.escape();
 		} else if (choice) return;
 		else if (ev.act === "resume") list.resumeSelected();
 		else if (ev.act === "delete") list.requestDelete();
@@ -1922,7 +1982,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 
 	/** Picker events (root keypath); fallback: scope tab → toggle scope, click on a session → resume it, exactly like a mouse click. */
 	handleNativeEvent(event: NativeUiEvent): void {
-		if (this.#inputLocked) return;
+		if (this.#inputLocked || this.#deleting) return;
 		const ev = pickerEvent(event);
 		if (ev) {
 			this.#pickerErrorOpen = false;
@@ -1938,13 +1998,14 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	}
 
 	handleInput(keyData: string): void {
-		if (this.#inputLocked) return;
+		if (this.#inputLocked || this.#deleting) return;
 		this.#pickerErrorOpen = false;
 		if (keyData.startsWith("\x1b[<")) {
 			this.#handleMouse(keyData);
 			return;
 		}
 		if (this.#confirmationDialog) {
+			if (getKeybindings().matches(keyData, "tui.select.toggle")) return;
 			this.#confirmationDialog.handleInput(keyData);
 		} else {
 			this.#sessionList.handleInput(keyData);
