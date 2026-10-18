@@ -22,26 +22,42 @@ export function transcriptEntryTooLargeError(cap: number): string {
  * Read at most `cap` bytes of `file` from `fromByte`, trimmed to the last
  * complete line unless the read reaches end of file. A shrunken file (rotation,
  * rewrite) returns its current size so the reader restarts from there.
+ *
+ * When the next entry alone is longer than `cap`, it is returned whole as long
+ * as it fits in `maxEntryBytes` (default `cap`), so one large record does not
+ * stop the reader; an entry still being written returns no text until its line
+ * ends. Only an entry beyond `maxEntryBytes` is the oversized-entry error.
  */
-export async function readTranscriptSlice(file: string, fromByte: number, cap: number): Promise<TranscriptSlice> {
+export async function readTranscriptSlice(
+	file: string,
+	fromByte: number,
+	cap: number,
+	maxEntryBytes = cap,
+): Promise<TranscriptSlice> {
 	const stat = await fs.stat(file);
 	if (stat.size <= fromByte) return { text: "", newSize: stat.size };
-	const want = Math.min(stat.size - fromByte, cap);
-	const buf = Buffer.allocUnsafe(want);
 	const handle = await fs.open(file, "r");
-	let bytesRead: number;
 	try {
-		({ bytesRead } = await handle.read(buf, 0, want, fromByte));
+		const read = async (length: number): Promise<Buffer> => {
+			const buf = Buffer.allocUnsafe(Math.min(stat.size - fromByte, length));
+			const { bytesRead } = await handle.read(buf, 0, buf.byteLength, fromByte);
+			return buf.subarray(0, bytesRead);
+		};
+		const slice = await read(cap);
+		if (fromByte + slice.byteLength >= stat.size) return { text: slice.toString("utf-8"), newSize: stat.size };
+		// Trim to the last complete JSONL line so no line or UTF-8 character is split.
+		const lastNewline = slice.lastIndexOf(0x0a);
+		if (lastNewline >= 0) {
+			return { text: slice.subarray(0, lastNewline + 1).toString("utf-8"), newSize: fromByte + lastNewline + 1 };
+		}
+		if (maxEntryBytes <= cap) return { text: "", newSize: fromByte, error: transcriptEntryTooLargeError(cap) };
+		// One entry longer than `cap`: serve exactly that line, whole.
+		const entry = await read(maxEntryBytes);
+		const end = entry.indexOf(0x0a, slice.byteLength);
+		if (end >= 0) return { text: entry.subarray(0, end + 1).toString("utf-8"), newSize: fromByte + end + 1 };
+		if (fromByte + entry.byteLength >= stat.size) return { text: "", newSize: fromByte };
+		return { text: "", newSize: fromByte, error: transcriptEntryTooLargeError(maxEntryBytes) };
 	} finally {
 		await handle.close();
 	}
-	let slice = buf.subarray(0, bytesRead);
-	const reachedEof = fromByte + bytesRead >= stat.size;
-	if (!reachedEof) {
-		// Trim to the last complete JSONL line so no line or UTF-8 character is split.
-		const lastNewline = slice.lastIndexOf(0x0a);
-		if (lastNewline < 0) return { text: "", newSize: fromByte, error: transcriptEntryTooLargeError(cap) };
-		slice = slice.subarray(0, lastNewline + 1);
-	}
-	return { text: slice.toString("utf-8"), newSize: reachedEof ? stat.size : fromByte + slice.byteLength };
 }

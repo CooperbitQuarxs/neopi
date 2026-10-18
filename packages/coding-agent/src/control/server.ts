@@ -230,7 +230,8 @@ export class ControlConnection {
 		const capability = typeof monitor?.capability === "string" ? monitor.capability : undefined;
 		const grant = capability ? this.host.authenticateMonitor?.(capability) : undefined;
 		const label = client?.label;
-		if (!grant || typeof label !== "string" || !/^[\x20-\x7e]{1,64}$/.test(label)) {
+		// Protocol v2 is required: whole oversized transcript entries and live frames arrive chunked.
+		if (!grant || frame.protocolVersion !== 2 || typeof label !== "string" || !/^[\x20-\x7e]{1,64}$/.test(label)) {
 			this.respond({
 				type: "response",
 				command: "hello",
@@ -245,8 +246,8 @@ export class ControlConnection {
 		this.label = label;
 		this.kind = "other";
 		this.monitor = grant;
-		this.protocolVersion = frame.protocolVersion === 2 ? 2 : 1;
-		if (this.protocolVersion === 2) this.encoder.setProtocolVersion(2);
+		this.protocolVersion = 2;
+		this.encoder.setProtocolVersion(2);
 		this.authenticated = true;
 		this.respond({
 			type: "response",

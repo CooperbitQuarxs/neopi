@@ -82,10 +82,18 @@ export class MonitorRequestError extends Error {
 }
 
 /**
- * Per-read transcript cap. One reply must fit a protocol-v1 frame (1 MiB) after
- * JSON escaping; panes re-request from `newSize` until they reach the end.
+ * Per-read transcript cap. Panes re-request from `newSize` until they reach the
+ * end, so a normal reply stays small and many panes catching up at once stay
+ * well inside the host's spool budget.
  */
 export const MONITOR_TRANSCRIPT_READ_CAP = 256 * 1024;
+/**
+ * Largest single transcript entry a reply carries whole (the collab host's
+ * per-reply cap). Monitor connections speak protocol v2, so the reply is
+ * chunked; JSON escaping plus base64 chunking stays under the 16 MiB
+ * per-connection spool even with a full live frame queued beside it.
+ */
+export const MONITOR_TRANSCRIPT_ENTRY_CAP = 4 * 1024 * 1024;
 /** Live frames coalesce to at most one per interval per connection (latest state wins). */
 export const MONITOR_LIVE_INTERVAL_MS = 80;
 /** Unflushed socket bytes above which live pushes wait instead of queueing more. */
@@ -277,7 +285,8 @@ export class ControlMonitorService {
 		const registry = this.#options.registry;
 		const ref = registry.get(grant.agentId);
 		if (!ref) return gone(`${grant.agentId} was removed`);
-		if (ref !== grant.ref || ref.kind !== grant.kind || !isMonitored(ref)) return gone(`${grant.agentId} was replaced`);
+		if (ref !== grant.ref || ref.kind !== grant.kind || !isMonitored(ref))
+			return gone(`${grant.agentId} was replaced`);
 		const root = this.#root();
 		if (!root || root !== grant.root || registry.rootOf(grant.agentId) !== root) {
 			return gone(`${grant.agentId} belongs to another session`);
@@ -399,7 +408,12 @@ export class ControlMonitorService {
 		// reporting the terminal error the viewer would stop on.
 		if (!ref.sessionFile) return { text: "", newSize: 0 };
 		try {
-			const slice = await readTranscriptSlice(ref.sessionFile, start, MONITOR_TRANSCRIPT_READ_CAP);
+			const slice = await readTranscriptSlice(
+				ref.sessionFile,
+				start,
+				MONITOR_TRANSCRIPT_READ_CAP,
+				MONITOR_TRANSCRIPT_ENTRY_CAP,
+			);
 			this.check(grant);
 			return slice;
 		} catch (error) {

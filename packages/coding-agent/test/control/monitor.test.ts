@@ -15,12 +15,15 @@ import {
 	MONITOR_LIVE_BACKPRESSURE_BYTES,
 	MONITOR_LIVE_INTERVAL_MS,
 	MONITOR_LIVE_MAX_CHARS,
+	MONITOR_TRANSCRIPT_ENTRY_CAP,
+	MONITOR_TRANSCRIPT_READ_CAP,
 	type MonitorConnection,
 	type MonitorGrant,
 } from "../../src/control/monitor-service";
 import { AgentRegistry, type AgentRef } from "../../src/registry/agent-registry";
 import { AgentSession } from "../../src/session/agent-session";
 import { SessionManager } from "../../src/session/session-manager";
+import { transcriptEntryTooLargeError } from "../../src/session/transcript-slice";
 import { createAssistantMessage, createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -47,15 +50,17 @@ async function hostFixture(): Promise<HostFixture> {
 	const clients: ControlClient[] = [];
 	const refs: AgentRef[] = [];
 	const registry = AgentRegistry.global();
-	let host: ControlHost | undefined;
+	const hosts: ControlHost[] = [];
 	cleanups.push(async () => {
-		await Promise.all(clients.map(async client => {
-			const closed = Promise.withResolvers<void>();
-			client.onClose(closed.resolve);
-			client.close();
-			await closed.promise;
-		}));
-		await host?.close();
+		await Promise.all(
+			clients.map(async client => {
+				const closed = Promise.withResolvers<void>();
+				client.onClose(closed.resolve);
+				client.close();
+				await closed.promise;
+			}),
+		);
+		for (const host of hosts) await host.close();
 		for (const ref of refs.reverse()) registry.unregister(ref.id, ref);
 		for (const session of sessions.reverse()) await session.dispose();
 		auth.close();
@@ -85,25 +90,44 @@ async function hostFixture(): Promise<HostFixture> {
 	writeFileSync(subFile, "only-the-granted-sub\n");
 	writeFileSync(advisorFile, "private-advisor-transcript\n");
 	const sub = registry.register({
-		id: `${rootId}/sub`, displayName: "worker", kind: "sub", parentId: rootId,
-		session: child, sessionFile: subFile, status: "idle",
+		id: `${rootId}/sub`,
+		displayName: "worker",
+		kind: "sub",
+		parentId: rootId,
+		session: child,
+		sessionFile: subFile,
+		status: "idle",
 	});
 	const advisor = registry.register({
-		id: `${rootId}/advisor`, displayName: "advisor", kind: "advisor", parentId: rootId,
-		session: null, sessionFile: advisorFile, status: "parked", history: { readOnly: true },
+		id: `${rootId}/advisor`,
+		displayName: "advisor",
+		kind: "advisor",
+		parentId: rootId,
+		session: null,
+		sessionFile: advisorFile,
+		status: "parked",
+		history: { readOnly: true },
 	});
 	refs.push(root, sub, advisor);
-	host = new ControlHost({ session: owner, role: "rpc", dir: temp.path(), tmuxPane: null });
+	const host = new ControlHost({ session: owner, role: "rpc", dir: temp.path(), tmuxPane: null });
+	hosts.push(host);
 	await host.start();
-	const activeHost = host;
 	return {
-		host, registry, root, sub, advisor, child,
+		host,
+		registry,
+		root,
+		sub,
+		advisor,
+		child,
 		async connect(capability?: string, probe = false) {
-			const publication = activeHost.publication;
+			const publication = host.publication;
 			if (!publication) throw new Error("monitor test host did not publish");
 			const client = new ControlClient({
 				metadata: capability === undefined ? publication.metadata() : { ...publication.metadata(), token: "" },
-				label: "monitor-contract", monitorCapability: capability, probe, timeoutMs: 2_000,
+				label: "monitor-contract",
+				monitorCapability: capability,
+				probe,
+				timeoutMs: 2_000,
 			});
 			clients.push(client);
 			await client.connect();
@@ -137,8 +161,12 @@ class MemoryConnection implements MonitorConnection {
 	readonly frames: object[] = [];
 	bufferedBytes = 0;
 	closed = false;
-	write(frame: object): void { this.frames.push(frame); }
-	close(): void { this.closed = true; }
+	write(frame: object): void {
+		this.frames.push(frame);
+	}
+	close(): void {
+		this.closed = true;
+	}
 }
 
 interface ServiceFixture {
@@ -157,17 +185,37 @@ function serviceFixture(ensureLive: (id: string) => Promise<AgentSession>): Serv
 	const owner = { sessionName: "owner", sessionManager: { getCwd: () => "/tmp" } } as unknown as AgentSession;
 	const root = registry.register({ id: "owner", displayName: "owner", kind: "main", session: owner });
 	const sub = registry.register({
-		id: "owner/sub", displayName: "worker", kind: "sub", parentId: root.id, session: null, status: "parked",
+		id: "owner/sub",
+		displayName: "worker",
+		kind: "sub",
+		parentId: root.id,
+		session: null,
+		status: "parked",
 	});
 	let generation = 1;
-	const service = new ControlMonitorService({ session: owner, registry, generation: () => generation,
-		lifecycle: () => ({ ensureLive }) });
+	const service = new ControlMonitorService({
+		session: owner,
+		registry,
+		generation: () => generation,
+		lifecycle: () => ({ ensureLive }),
+	});
 	cleanups.push(() => service.dispose());
 	const { capability } = service.grant(sub.id);
 	const grant = requireGrant(service, capability);
 	const connection = new MemoryConnection();
-	return { service, registry, root, sub, grant, capability, connection,
-		bumpGeneration: () => { generation++; service.recheck(); } };
+	return {
+		service,
+		registry,
+		root,
+		sub,
+		grant,
+		capability,
+		connection,
+		bumpGeneration: () => {
+			generation++;
+			service.recheck();
+		},
+	};
 }
 
 function promptTarget(delivered: Array<{ text: string; behavior: string }>): AgentSession {
@@ -201,6 +249,42 @@ describe("monitor capability socket boundary", () => {
 		expect((await probe.request({ type: "state" })).success).toBe(true);
 	});
 
+	test("an entry over the read cap arrives whole; only one past the entry cap is an explicit error", async () => {
+		const fixture = await hostFixture();
+		const file = fixture.sub.sessionFile;
+		if (!file) throw new Error("fixture sub has no transcript");
+		// Quotes and backslashes double under JSON escaping; the reply is chunked, not cut.
+		const large = `{"big":"${'a\\"b'.repeat(Math.ceil((MONITOR_TRANSCRIPT_READ_CAP * 2) / 4))}"}\n`;
+		writeFileSync(file, `first\n${large}last\n`);
+		const info = fixture.host.monitor.grant(fixture.sub.id);
+		const monitor = await fixture.connect(info.capability);
+		const texts: string[] = [];
+		let fromByte = 0;
+		for (let guard = 0; guard < 4 && fromByte < Bun.file(file).size; guard++) {
+			const reply = await monitor.request({ type: "monitor_transcript", fromByte }, 10_000);
+			expect(reply.success).toBe(true);
+			const slice = reply.data as { text: string; newSize: number; error?: string };
+			expect(slice.error).toBeUndefined();
+			texts.push(slice.text);
+			fromByte = slice.newSize;
+		}
+		expect(texts).toEqual(["first\n", large, "last\n"]);
+
+		// A large entry still being written waits for its newline instead of failing.
+		const partial = "x".repeat(MONITOR_TRANSCRIPT_READ_CAP + 1);
+		writeFileSync(file, `first\n${partial}`);
+		const waiting = await monitor.request({ type: "monitor_transcript", fromByte: 6 }, 10_000);
+		expect(waiting.data).toEqual({ text: "", newSize: 6 });
+
+		writeFileSync(file, `first\n${"y".repeat(MONITOR_TRANSCRIPT_ENTRY_CAP + 1)}\nlast\n`);
+		const refused = await monitor.request({ type: "monitor_transcript", fromByte: 6 }, 10_000);
+		expect(refused.data).toEqual({
+			text: "",
+			newSize: 6,
+			error: transcriptEntryTooLargeError(MONITOR_TRANSCRIPT_ENTRY_CAP),
+		});
+	});
+
 	test("a wrong monitor capability is unauthorized even without a publication token", async () => {
 		const fixture = await hostFixture();
 		await expect(fixture.connect("0".repeat(64))).rejects.toMatchObject({ code: "unauthorized" });
@@ -228,7 +312,9 @@ describe("monitor capability socket boundary", () => {
 			if (change === "remove") fixture.registry.unregister(fixture.sub.id, fixture.sub);
 			else {
 				const replacement = fixture.registry.register({ ...fixture.sub, session: null, status: "parked" });
-				cleanups.push(() => { fixture.registry.unregister(replacement.id, replacement); });
+				cleanups.push(() => {
+					fixture.registry.unregister(replacement.id, replacement);
+				});
 			}
 			expect((await gone).agentId).toBe(fixture.sub.id);
 			await closed.promise;
@@ -259,15 +345,30 @@ describe("monitor capability socket boundary", () => {
 		const subscribed = await monitor.request({ type: "monitor_subscribe" });
 		expect((subscribed.data as { live: TranscriptLiveState }).live.assistant).toEqual(initial);
 		const frames: Record<string, unknown>[] = [];
-		const unsubscribe = monitor.onEvent(frame => { if (frame.type === "monitor_live") frames.push(frame); });
+		const unsubscribe = monitor.onEvent(frame => {
+			if (frame.type === "monitor_live") frames.push(frame);
+		});
 		const next = nextEvent(monitor, "monitor_live");
-		fixture.child.agent.emitExternalEvent({ type: "tool_execution_start", toolCallId: "call", toolName: "lookup", args: {} });
+		fixture.child.agent.emitExternalEvent({
+			type: "tool_execution_start",
+			toolCallId: "call",
+			toolName: "lookup",
+			args: {},
+		});
 		for (let index = 0; index < 30; index++) {
 			const message: AssistantMessage = { ...initial, content: [{ type: "text", text: `stream ${index}` }] };
-			fixture.child.agent.emitExternalEvent({ type: "message_update", message,
-				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: String(index), partial: message } });
-			fixture.child.agent.emitExternalEvent({ type: "tool_execution_update", toolCallId: "call", toolName: "lookup",
-				args: {}, partialResult: { content: [{ type: "text", text: `progress ${index}` }] } });
+			fixture.child.agent.emitExternalEvent({
+				type: "message_update",
+				message,
+				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: String(index), partial: message },
+			});
+			fixture.child.agent.emitExternalEvent({
+				type: "tool_execution_update",
+				toolCallId: "call",
+				toolName: "lookup",
+				args: {},
+				partialResult: { content: [{ type: "text", text: `progress ${index}` }] },
+			});
 		}
 		const live = (await next).state as TranscriptLiveState;
 		expect(live.assistant?.content).toEqual([{ type: "text", text: "stream 29" }]);
@@ -281,16 +382,25 @@ describe("monitor capability socket boundary", () => {
 		const fixture = await hostFixture();
 		const initial = createAssistantMessage("x".repeat(MONITOR_LIVE_MAX_CHARS + 1));
 		fixture.child.agent.emitExternalEvent({ type: "message_start", message: initial });
-		fixture.child.agent.emitExternalEvent({ type: "tool_execution_update", toolCallId: "huge", toolName: "lookup",
-			args: { text: "y".repeat(MONITOR_LIVE_MAX_CHARS + 1) }, partialResult: { content: [] } });
+		fixture.child.agent.emitExternalEvent({
+			type: "tool_execution_update",
+			toolCallId: "huge",
+			toolName: "lookup",
+			args: { text: "y".repeat(MONITOR_LIVE_MAX_CHARS + 1) },
+			partialResult: { content: [] },
+		});
 		const info = fixture.host.monitor.grant(fixture.sub.id);
 		const monitor = await fixture.connect(info.capability);
 		const subscribed = await monitor.request({ type: "monitor_subscribe" });
 		const state = (subscribed.data as { live: TranscriptLiveState }).live;
 		expect(JSON.stringify(state).length).toBeLessThanOrEqual(MONITOR_LIVE_MAX_CHARS);
 		const next = nextEvent(monitor, "monitor_live");
-		fixture.child.agent.emitExternalEvent({ type: "tool_execution_start", toolCallId: "huge", toolName: "lookup",
-			args: { text: "y".repeat(MONITOR_LIVE_MAX_CHARS + 1) } });
+		fixture.child.agent.emitExternalEvent({
+			type: "tool_execution_start",
+			toolCallId: "huge",
+			toolName: "lookup",
+			args: { text: "y".repeat(MONITOR_LIVE_MAX_CHARS + 1) },
+		});
 		const pushed = await next;
 		expect(JSON.stringify(pushed.state).length).toBeLessThanOrEqual(MONITOR_LIVE_MAX_CHARS);
 		expect(pushed.omitted).toBe("assistant");
@@ -309,8 +419,9 @@ describe("monitor capability socket boundary", () => {
 		connection.bufferedBytes = 0;
 		await Bun.sleep(MONITOR_LIVE_INTERVAL_MS + 30);
 		expect(connection.frames).toHaveLength(1);
-		expect((connection.frames[0] as { state: TranscriptLiveState }).state.assistant?.content)
-			.toEqual([{ type: "text", text: "latest" }]);
+		expect((connection.frames[0] as { state: TranscriptLiveState }).state.assistant?.content).toEqual([
+			{ type: "text", text: "latest" },
+		]);
 	});
 });
 
@@ -320,8 +431,14 @@ describe("monitor chat revival ownership", () => {
 		const target = promptTarget(delivered);
 		const revived = Promise.withResolvers<AgentSession>();
 		const requested: string[] = [];
-		const fixture = serviceFixture(id => { requested.push(id); return revived.promise; });
-		const pending = fixture.service.handle(fixture.connection, fixture.grant, { type: "monitor_chat", text: "  follow up  " });
+		const fixture = serviceFixture(id => {
+			requested.push(id);
+			return revived.promise;
+		});
+		const pending = fixture.service.handle(fixture.connection, fixture.grant, {
+			type: "monitor_chat",
+			text: "  follow up  ",
+		});
 		expect(requested).toEqual([fixture.sub.id]);
 		fixture.sub.session = target;
 		fixture.registry.setStatus(fixture.sub.id, "idle", fixture.sub);
@@ -336,7 +453,10 @@ describe("monitor chat revival ownership", () => {
 			const target = promptTarget(delivered);
 			const revived = Promise.withResolvers<AgentSession>();
 			const fixture = serviceFixture(() => revived.promise);
-			const pending = fixture.service.handle(fixture.connection, fixture.grant, { type: "monitor_chat", text: "must not send" });
+			const pending = fixture.service.handle(fixture.connection, fixture.grant, {
+				type: "monitor_chat",
+				text: "must not send",
+			});
 			fixture.sub.session = target;
 			if (change === "replaced") fixture.registry.register({ ...fixture.sub, session: target, status: "idle" });
 			else if (change === "aborted") fixture.registry.setStatus(fixture.sub.id, "aborted", fixture.sub);
@@ -352,7 +472,9 @@ describe("monitor chat revival ownership", () => {
 	}
 
 	test("strict root identity and ancestry invalidate a capability", () => {
-		const fixture = serviceFixture(async () => { throw new Error("must not revive"); });
+		const fixture = serviceFixture(async () => {
+			throw new Error("must not revive");
+		});
 		fixture.registry.register({ ...fixture.root });
 		expect(fixture.service.authenticate(fixture.capability)).toBeUndefined();
 		const fresh = fixture.service.grant(fixture.sub.id);
