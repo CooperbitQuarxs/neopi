@@ -163,20 +163,23 @@ describe("status-line editor list", () => {
 		expect((await h.draft()).selected).toBe(before.selected);
 	});
 
-	it("filters with / using literal text, and Esc leaves the filter before it closes anything", async () => {
+	it("filters with / using literal text; Esc returns to the list keeping the filter visible", async () => {
 		const h = setup();
 		h.press("/", "t", "i", "m", "e");
 		let draft = await h.draft();
 		expect(draft.focus).toBe("search");
 		expect(draft.query).toBe("time");
+		expect(draft.selected).toBe("time");
 		expect(h.text()).not.toContain("Context bar");
-		h.press(DOWN, ESC);
+		h.press(ESC);
 		draft = await h.draft();
 		expect(draft.focus).toBe("list");
-		expect(draft.selected).toBe("time");
-		h.press(ESC);
-		expect((await h.draft()).query).toBe("");
+		expect(draft.query).toBe("time");
+		expect(h.text()).toContain("time");
 		expect(h.closed()).toBe(false);
+		// Nothing is pending, so the next Esc leaves the editor like any menu.
+		h.press(ESC);
+		expect(h.closed()).toBe(true);
 	});
 
 	it("lists discovered quota windows and configured ids, enabling them as ordinary widgets", () => {
@@ -292,9 +295,11 @@ describe("status-line editor draft", () => {
 
 	it("restores every edit and the editor state when reopened from the saved draft", async () => {
 		const first = setup({ usageReports: MANY_WINDOWS });
-		first.press("j", " ", "j", "l", ">", CTRL_E, "/", "c", "o", ESC);
+		first.press("j", " ", "j", "l", ">", CTRL_E, CTRL_E);
 		const saved = await first.draft();
-		first.press(ESC, ESC, "n");
+		expect(saved.top).toBe(2);
+		first.press(ESC, "n");
+		expect(first.closed()).toBe(true);
 		const restoredDraft = parseStatusLineEditorDraft(JSON.parse(JSON.stringify(saved)));
 		expect(restoredDraft).toEqual(saved);
 
