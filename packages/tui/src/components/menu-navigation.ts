@@ -178,6 +178,7 @@ export class MenuSearchField {
 
 	render(width: number, theme: MenuSearchTheme): string {
 		const columns = Math.max(0, Math.trunc(width));
+		if (!this.focused && this.value.length === 0) return theme.muted(truncateToWidth("/ search", columns));
 		const prefix = "Search: ";
 		const hint = this.focused ? " · Esc back to list" : " · / search";
 		const fieldWidth = Math.max(0, columns - visibleWidth(prefix) - visibleWidth(hint));
@@ -201,6 +202,12 @@ export class MenuSearchField {
 	}
 }
 
+/** A viewport may start partway through a multi-line menu item. */
+export interface MenuViewportPosition {
+	readonly item: number;
+	readonly lineOffset: number;
+}
+
 /**
  * Scroll position over a list of variable-height items, independent of the
  * selection. Motions call {@link reveal} so the next layout scrolls the
@@ -208,13 +215,12 @@ export class MenuSearchField {
  * so the selection may leave the window until the next motion.
  */
 export class MenuViewport {
-	/** First visible item; undefined until the first layout, which centers the selection. */
-	#top: number | undefined;
+	#top: MenuViewportPosition | undefined;
 	#revealPending = false;
-	/** Items shown by the last layout; sizes half-page and page motions. */
 	#lastVisibleItems = 1;
+	#rowCounts: readonly number[] = [];
 
-	get top(): number | undefined {
+	get top(): MenuViewportPosition | undefined {
 		return this.#top;
 	}
 
@@ -223,64 +229,87 @@ export class MenuViewport {
 		return this.#lastVisibleItems;
 	}
 
-	/** Ask the next layout to bring the selection into view. */
 	reveal(): void {
 		this.#revealPending = true;
 	}
 
-	/** Move the view by `delta` items; the next layout clamps it to the list. */
+	/** Move by visual lines without moving the selected item. */
 	scroll(delta: number): void {
-		if (this.#top === undefined) return;
-		this.#top = Math.max(0, this.#top + Math.trunc(delta));
+		if (!this.#top || !Number.isFinite(delta)) return;
+		let { item, lineOffset } = this.#top;
+		lineOffset += Math.trunc(delta);
+		while (lineOffset < 0 && item > 0) {
+			item--;
+			lineOffset += Math.max(0, this.#rowCounts[item] ?? 0);
+		}
+		while (item < this.#rowCounts.length - 1 && lineOffset >= Math.max(0, this.#rowCounts[item] ?? 0)) {
+			lineOffset -= Math.max(0, this.#rowCounts[item] ?? 0);
+			item++;
+		}
+		this.#top = { item, lineOffset: Math.max(0, lineOffset) };
 	}
 
-	/** Restore a saved top (menu history, drafts); clamped at the next layout. */
-	setTop(top: number | undefined): void {
-		this.#top = top === undefined ? undefined : Math.max(0, Math.trunc(top));
+	/** Older numeric snapshots mean an item boundary; current snapshots retain its line offset. */
+	setTop(top: MenuViewportPosition | number | undefined): void {
+		if (top === undefined) {
+			this.#top = undefined;
+		} else if (typeof top !== "number" && (typeof top !== "object" || top === null)) {
+			return;
+		} else {
+			const item = typeof top === "number" ? top : top.item;
+			const lineOffset = typeof top === "number" ? 0 : top.lineOffset;
+			if (!Number.isFinite(item) || !Number.isFinite(lineOffset)) return;
+			this.#top = { item: Math.max(0, Math.trunc(item)), lineOffset: Math.max(0, Math.trunc(lineOffset)) };
+		}
 		this.#revealPending = false;
 	}
 
-	/**
-	 * Compute the window for this frame. `rowCounts[i]` is item i's height in
-	 * rows; `rowBudget` is the rows available.
-	 */
+	/** Window intersections include a clipped leading and/or trailing item. */
 	layout(rowCounts: readonly number[], selectedIndex: number, rowBudget: number): MenuWindow {
+		this.#rowCounts = rowCounts;
 		const count = rowCounts.length;
 		const budget = Math.max(1, Math.trunc(rowBudget));
-		if (this.#top === undefined) {
-			const centered = getMenuWindow(rowCounts, selectedIndex, budget);
-			this.#top = centered.startIndex;
-			this.#revealPending = false;
-			this.#lastVisibleItems = Math.max(1, centered.endIndex - centered.startIndex);
-			return centered;
-		}
 		let totalRows = 0;
 		for (const rows of rowCounts) totalRows += Math.max(0, rows);
 		if (count === 0) {
-			this.#top = 0;
+			this.#top = { item: 0, lineOffset: 0 };
 			this.#revealPending = false;
-			return { startIndex: 0, endIndex: 0, rowOffset: 0, totalRows };
+			this.#lastVisibleItems = 1;
+			return { startIndex: 0, endIndex: 0, lineOffset: 0, rowOffset: 0, totalRows };
 		}
-
-		let top = Math.min(this.#top, count - 1);
+		if (!this.#top) {
+			this.#top = { item: getMenuWindow(rowCounts, selectedIndex, budget).startIndex, lineOffset: 0 };
+		}
+		let top = Math.min(this.#top.item, count - 1);
+		let lineOffset = Math.min(this.#top.lineOffset, Math.max(0, (rowCounts[top] ?? 0) - 1));
 		if (this.#revealPending && selectedIndex >= 0 && selectedIndex < count) {
-			if (selectedIndex < top) top = selectedIndex;
-			else while (top < selectedIndex && rowsBetween(rowCounts, top, selectedIndex + 1) > budget) top++;
+			if (selectedIndex <= top) {
+				top = selectedIndex;
+				lineOffset = 0;
+			} else {
+				while (top < selectedIndex && rowsBetween(rowCounts, top, selectedIndex + 1) - lineOffset > budget) {
+					top++;
+					lineOffset = 0;
+				}
+			}
 		}
 		this.#revealPending = false;
-		top = Math.min(top, maxTop(rowCounts, budget));
-
-		let endIndex = top + 1;
-		let used = Math.max(0, rowCounts[top] ?? 0);
-		while (endIndex < count) {
-			const rows = Math.max(0, rowCounts[endIndex] ?? 0);
-			if (used + rows > budget) break;
-			used += rows;
+		const lastTop = maxTop(rowCounts, budget);
+		if (top > lastTop) {
+			top = lastTop;
+			lineOffset = Math.max(0, rowsBetween(rowCounts, top, count) - budget);
+		} else if (top === lastTop) {
+			lineOffset = Math.min(lineOffset, Math.max(0, rowsBetween(rowCounts, top, count) - budget));
+		}
+		let endIndex = top;
+		let used = -lineOffset;
+		while (endIndex < count && used < budget) {
+			used += Math.max(0, rowCounts[endIndex] ?? 0);
 			endIndex++;
 		}
-		this.#top = top;
+		this.#top = { item: top, lineOffset };
 		this.#lastVisibleItems = Math.max(1, endIndex - top);
-		return { startIndex: top, endIndex, rowOffset: rowsBetween(rowCounts, 0, top), totalRows };
+		return { startIndex: top, endIndex, lineOffset, rowOffset: rowsBetween(rowCounts, 0, top) + lineOffset, totalRows };
 	}
 }
 

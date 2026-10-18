@@ -299,6 +299,29 @@ describe("SelectList", () => {
 		expect(visible()).toEqual(["Item 7", "Item 8", "Item 9"]);
 	});
 
+	it("scrolls one visual line within a multi-line item without changing selection", () => {
+		const items = ["a", "b", "c"].map(value => ({ value, label: value }));
+		const list = new SelectList(items, 4, testTheme, {
+			search: "never",
+			renderItem: ({ item }) => [0, 1, 2].map(line => `${item.value}${line}`),
+		});
+		list.render(30);
+		list.handleInput("\x05");
+		const lines = list.render(30);
+		expect(lines[0]).toContain("a1");
+		expect(lines[1]).toContain("a2");
+		expect(lines[2]).toContain("b0");
+		expect(lines[3]).toContain("b1");
+		expect(list.getSelectedItem()?.value).toBe("a");
+		expect(list.navigationState().viewportTop).toEqual({ item: 0, lineOffset: 1 });
+		const reopened = new SelectList(items, 4, testTheme, {
+			search: "never",
+			renderItem: ({ item }) => [0, 1, 2].map(line => `${item.value}${line}`),
+		});
+		reopened.restoreNavigation(list.navigationSnapshot());
+		expect(reopened.render(30)).toEqual(lines);
+	});
+
 	it("jumps with gg/G, moves by half page with Ctrl-d/Ctrl-u, and lets any other key cancel a pending g", () => {
 		const items = Array.from({ length: 10 }, (_, i) => ({ value: `v${i}`, label: `Item ${i}` }));
 		const list = new SelectList(items, 4, testTheme, { search: "never" });
@@ -329,7 +352,7 @@ describe("SelectList", () => {
 		expect(state).toEqual({
 			selectedValue: "v1",
 			filter: "",
-			viewportTop: 1,
+			viewportTop: { item: 1, lineOffset: 0 },
 			filterFocused: false,
 			filterCursor: 0,
 		});

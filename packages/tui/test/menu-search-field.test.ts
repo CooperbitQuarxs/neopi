@@ -58,6 +58,13 @@ describe("literal menu search fields", () => {
 		expect(restored.cursor).toBe(4);
 	});
 
+	it("renders only the search hint when its empty field is not focused", () => {
+		const field = new MenuSearchField();
+		expect(field.render(80, theme)).toBe("/ search");
+		field.focused = true;
+		expect(field.render(80, theme)).toContain("Search:");
+	});
+
 	it("renders bounded search hints without raw tabs", () => {
 		const field = new MenuSearchField("a\tb long query");
 		for (const width of [0, 4, 12, 40]) {

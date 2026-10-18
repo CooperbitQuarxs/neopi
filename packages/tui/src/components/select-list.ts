@@ -1,6 +1,6 @@
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
 import { MenuSelection } from "./menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport } from "./menu-navigation";
+import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuViewportPosition } from "./menu-navigation";
 import { getKeybindings } from "../keybindings";
 import { type MouseRoutable, routeSelectListMouse, type SgrMouseEvent } from "../mouse";
 import { col, node, span } from "../native/describe";
@@ -139,7 +139,7 @@ export interface SelectListLayoutOptions {
 export interface SelectListNavigationState {
 	selectedValue: string | undefined;
 	filter: string;
-	viewportTop: number | undefined;
+	viewportTop: MenuViewportPosition | number | undefined;
 	filterFocused?: boolean;
 	filterCursor?: number;
 }
@@ -261,8 +261,6 @@ export class SelectList implements Component, MouseRoutable {
 		const state = snapshot as Partial<SelectListNavigationState>;
 		if (typeof state.filter !== "string") return;
 		if (state.selectedValue !== undefined && typeof state.selectedValue !== "string") return;
-		if (state.viewportTop !== undefined && (typeof state.viewportTop !== "number" || !Number.isFinite(state.viewportTop)))
-			return;
 		this.restoreNavigationState({
 			filter: state.filter,
 			selectedValue: state.selectedValue,
@@ -517,7 +515,8 @@ export class SelectList implements Component, MouseRoutable {
 			const itemRows = this.layout.renderItem
 				? [...this.layout.renderItem(context)]
 				: this.#renderItem(item, isSelected, rowWidth, primaryColumnWidth, iconColumnWidth);
-			for (const row of itemRows) {
+			for (let line = i === startIndex ? window.lineOffset : 0; line < itemRows.length; line++) {
+				const row = itemRows[line]!;
 				if (rows.length >= visualBudget) break;
 				this.#hitRows[rows.length] = i;
 				const styled =

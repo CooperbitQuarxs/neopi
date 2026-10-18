@@ -25,7 +25,9 @@ export type MenuActivation<T> =
 export interface MenuWindow {
 	startIndex: number;
 	endIndex: number;
-	/** Number of visual rows before startIndex, for scrollbar positioning. */
+	/** Visual rows clipped from the leading item. */
+	lineOffset: number;
+	/** Visual rows before the viewport, including clipping within its first item. */
 	rowOffset: number;
 	/** Total visual rows across every item. */
 	totalRows: number;
@@ -38,7 +40,7 @@ export interface MenuWindow {
 export function getMenuWindow(rowCounts: readonly number[], selectedIndex: number, rowBudget: number): MenuWindow {
 	let totalRows = 0;
 	for (const count of rowCounts) totalRows += Math.max(0, count);
-	if (rowCounts.length === 0) return { startIndex: 0, endIndex: 0, rowOffset: 0, totalRows };
+	if (rowCounts.length === 0) return { startIndex: 0, endIndex: 0, lineOffset: 0, rowOffset: 0, totalRows };
 
 	const budget = Math.max(1, Math.trunc(rowBudget));
 	const selected = Math.max(0, Math.min(Math.trunc(selectedIndex), rowCounts.length - 1));
@@ -70,7 +72,7 @@ export function getMenuWindow(rowCounts: readonly number[], selectedIndex: numbe
 
 	let rowOffset = 0;
 	for (let index = 0; index < startIndex; index++) rowOffset += Math.max(0, rowCounts[index] ?? 0);
-	return { startIndex, endIndex, rowOffset, totalRows };
+	return { startIndex, endIndex, lineOffset: 0, rowOffset, totalRows };
 }
 
 /**
