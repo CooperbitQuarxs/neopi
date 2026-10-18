@@ -62,6 +62,8 @@ import { resolveAdvisorRoleSelection, resolveModelRoleValue } from "../../config
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { getRoleInfo } from "../../config/model-roles";
 import { settings } from "../../config/settings";
+import type { AnySetting } from "../../config/registry";
+import type { StatusLineSettings } from "@oh-my-pi/pi-tui/status-line/types";
 import { createSettingsHost } from "../../config/settings-ui";
 import { createPluginSettingsHost } from "../../extensibility/plugins/settings-host";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
@@ -675,11 +677,39 @@ export class SelectorController {
 			},
 			renderPreview: (shape, width) => renderComposerShapePreview(shape, width, this.ctx.statusLine),
 			save: async draft => {
-				cfgStatusLineLeftSegments.set(this.ctx.settings, draft.leftSegments);
-				cfgStatusLineRightSegments.set(this.ctx.settings, draft.rightSegments);
-				cfgStatusLinePreset.set(this.ctx.settings, "custom");
-				cfgComposerShape.set(this.ctx.settings, draft.composerShape);
-				await this.ctx.settings.flush();
+				// Save writes the global layer, not the resolved preset or project/runtime
+				// overrides. Capture that same layer so absent keys remain absent.
+				const global = this.ctx.settings.getGlobalSettings();
+				const statusLine = global.statusLine as StatusLineSettings | undefined;
+				const composer = global.composer as { shape?: string } | undefined;
+				const previous: readonly (readonly [AnySetting, unknown])[] = [
+					[cfgStatusLineLeftSegments, statusLine?.leftSegments],
+					[cfgStatusLineRightSegments, statusLine?.rightSegments],
+					[cfgStatusLinePreset, statusLine?.preset],
+					[cfgComposerShape, composer?.shape],
+				];
+				try {
+					cfgStatusLineLeftSegments.set(this.ctx.settings, draft.leftSegments);
+					cfgStatusLineRightSegments.set(this.ctx.settings, draft.rightSegments);
+					cfgStatusLinePreset.set(this.ctx.settings, "custom");
+					cfgComposerShape.set(this.ctx.settings, draft.composerShape);
+					await this.ctx.settings.flush();
+				} catch (error) {
+					// Supersede the queued draft before retrying disk I/O; even if this
+					// flush also fails, later Settings retries contain only the originals.
+					for (const [setting, value] of previous) {
+						if (value === undefined || value === null) setting.unset(this.ctx.settings);
+						else setting.set(this.ctx.settings, value);
+					}
+					try {
+						await this.ctx.settings.flush();
+					} catch (rollbackError) {
+						logger.warn("Status-line configuration rollback could not be flushed", {
+							error: String(rollbackError),
+						});
+					}
+					throw error;
+				}
 			},
 			close: () => {
 				menu.handle?.hide();
