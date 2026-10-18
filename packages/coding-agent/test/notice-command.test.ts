@@ -9,7 +9,7 @@ import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/inp
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { DroppedPrompt } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
-import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { convertToLlm, isUserAuthoredMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	BUILTIN_SLASH_COMMANDS,
@@ -134,6 +134,7 @@ describe("/notice operator command", () => {
 		await harness.dispatch();
 		expectNotice(harness.mock.calls[0].context.messages, payload);
 		expectNotice(harness.session.messages, payload);
+		expectNotice(harness.session.messages.filter(isUserAuthoredMessage), payload);
 		expect(harness.ctx.editor.addToHistory).toHaveBeenCalledWith(`/notice ${payload}`);
 		await harness.manager.flush();
 		const file = harness.manager.getSessionFile();

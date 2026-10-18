@@ -1225,9 +1225,16 @@ function convertOneCached(m: AgentMessage, interruptedNext: boolean): Message[] 
 	return fragment;
 }
 
-/** A turn the user wrote: a user message, or a user-initiated custom prompt (`/skill:`, collab). */
+/** A turn the user wrote: a user message, deliberate operator notice, or user-initiated custom prompt. */
 export function isUserAuthoredMessage(message: AgentMessage): boolean {
-	return message.role === "user" || (message.role === "custom" && isUserTurnInitiator(message));
+	return (
+		message.role === "user" ||
+		(message.role === "developer" &&
+			message.synthetic === true &&
+			message.userInitiated === true &&
+			message.attribution === "user") ||
+		(message.role === "custom" && isUserTurnInitiator(message))
+	);
 }
 
 /**

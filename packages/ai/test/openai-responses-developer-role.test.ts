@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { buildTransformedCodexRequestBody } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { buildResponsesInput } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import type { Context, ImageContent } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -213,4 +214,17 @@ describe("operator developer-message wire roles", () => {
 			});
 		}
 	}
+	it("omits synthetic user fallback only when serializing Codex retention candidates", async () => {
+		const model = buildModel({
+			...spec,
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.example/backend-api",
+		});
+		const context: Context = { messages: [{ role: "developer", content: notice, timestamp: 1 }] };
+		const normal = await buildTransformedCodexRequestBody(model, context, undefined);
+		expect(normal.input?.map(item => item.role)).toEqual(["developer", "user"]);
+		const retained = await buildTransformedCodexRequestBody(model, context, undefined, undefined, undefined, false);
+		expect(retained.input).toEqual([{ role: "developer", content: [{ type: "input_text", text: notice }] }]);
+	});
 });

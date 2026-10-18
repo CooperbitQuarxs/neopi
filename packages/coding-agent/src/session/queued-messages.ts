@@ -2,7 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { MAGIC_KEYWORDS } from "../modes/magic-keywords";
 import type { RestoredQueuedMessage } from "./agent-session-types";
-import { type CustomMessage, readQueueChipText } from "./messages";
+import { type CustomMessage, isUserAuthoredMessage, readQueueChipText } from "./messages";
 
 function queuedTextContent(message: AgentMessage): string | undefined {
 	if (!("content" in message)) return undefined;
@@ -61,7 +61,7 @@ export function isTerminalTextAssistantAnswer(message: AgentMessage | undefined)
 export function isUserQueuedMessage(message: AgentMessage): boolean {
 	if (message.role === "user") return true;
 	if (message.role === "developer") {
-		return message.synthetic === true && message.userInitiated === true && message.attribution === "user";
+		return isUserAuthoredMessage(message);
 	}
 	return message.role === "custom" && message.attribution === "user" && message.display !== false;
 }
