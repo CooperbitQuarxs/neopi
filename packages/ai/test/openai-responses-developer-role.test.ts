@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { buildResponsesInput } from "@oh-my-pi/pi-ai/providers/openai-shared";
-import type { Context } from "@oh-my-pi/pi-ai/types";
+import type { Context, ImageContent } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
@@ -157,6 +157,36 @@ describe("operator developer-message wire roles", () => {
 					]);
 				});
 			}
+		}
+	}
+	for (const role of ["user", "developer"] as const) {
+		for (const supportsDeveloperRole of [true, false]) {
+			it(`keeps ${role} image content user-role with developer support ${supportsDeveloperRole}`, () => {
+				const image: ImageContent = { type: "image", data: "dGVzdA==", mimeType: "image/png", detail: "low" };
+				const context: Context = {
+					messages: [{ role, content: [{ type: "text", text: notice }, image], timestamp: 1 }],
+				};
+				const chat = buildModel({
+					...spec, api: "openai-completions", input: ["text", "image"], compat: { supportsDeveloperRole },
+				});
+				expect(convertMessages(chat, context, chat.compat)).toEqual([{
+					role: "user",
+					content: [{ type: "text", text: notice }, {
+						type: "image_url", image_url: { url: "data:image/png;base64,dGVzdA==", detail: "low" },
+					}],
+				}]);
+				const responses = buildModel({
+					...spec, api: "openai-responses", input: ["text", "image"], compat: { supportsDeveloperRole },
+				});
+				expect(buildResponsesInput({
+					model: responses, context, strictResponsesPairing: true, supportsImageDetailOriginal: false,
+				})).toEqual([{
+					role: "user",
+					content: [{ type: "input_text", text: notice }, {
+						type: "input_image", image_url: "data:image/png;base64,dGVzdA==", detail: "low",
+					}],
+				}]);
+			});
 		}
 	}
 });
