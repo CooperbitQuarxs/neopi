@@ -7801,7 +7801,7 @@ export class AgentSession implements SettingsScope {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		// Slash/custom-command handling below rewrites `text`; keep the original
 		// so a dropped prompt is handed back exactly as the user typed it.
-		const typedText = text;
+		const typedText = options?.rawText ?? text;
 		// Handle extension commands first (execute immediately, even during streaming)
 		if (expandPromptTemplates && text.startsWith("/")) {
 			if (options?.runCommands !== false) {
@@ -7849,6 +7849,7 @@ export class AgentSession implements SettingsScope {
 		}
 
 		const promptAttribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
+		const restoreOnDrop = !options?.synthetic || (options.userInitiated === true && promptAttribution === "user");
 
 		// If streaming, queue via steer()/followUp()/aside based on option
 		if (this.isStreaming) {
@@ -7877,7 +7878,7 @@ export class AgentSession implements SettingsScope {
 				promptGeneration: queueGeneration,
 			});
 			outcome.sessionClaimed = queued;
-			if (!queued && this.#promptGeneration !== queueGeneration && !options?.synthetic) {
+			if (!queued && this.#promptGeneration !== queueGeneration && restoreOnDrop) {
 				this.#promptDropped?.({ text: typedText, images: options?.images });
 			}
 			return true;
@@ -7926,7 +7927,7 @@ export class AgentSession implements SettingsScope {
 		// generation-race checks further down.
 		if (this.#promptGeneration !== preflightGeneration) {
 			outcome.sessionClaimed = false;
-			if (!options?.synthetic) {
+			if (restoreOnDrop) {
 				this.#promptDropped?.({ text: typedText, images: options?.images });
 			}
 			return true;
@@ -8032,7 +8033,7 @@ export class AgentSession implements SettingsScope {
 			});
 		} catch (error) {
 			turnError = error;
-			if (error instanceof AgentStartPolicyChangedError && message.role === "user") {
+			if (error instanceof AgentStartPolicyChangedError && restoreOnDrop) {
 				this.#promptDropped?.({ text: typedText, images: options?.images });
 			}
 			throw error;
@@ -8045,7 +8046,7 @@ export class AgentSession implements SettingsScope {
 			void this.#finishTurnObservation(observation, turnError);
 		}
 		outcome.sessionClaimed = dispatched;
-		if (!dispatched && message.role === "user") {
+		if (!dispatched && restoreOnDrop) {
 			// An abort (Esc) or preflight denial raced turn setup: the prompt never
 			// reached the agent or the session file. Hand it back to the host so the
 			// user can edit/resubmit instead of losing it (tree/branch can't offer
@@ -9692,8 +9693,10 @@ export class AgentSession implements SettingsScope {
 		const withdrawn = options?.forInterrupt ? this.agent.withdrawUndeliveredQueuedMessages() : undefined;
 		const steeringAll = [...(withdrawn?.steering ?? []), ...this.agent.peekSteeringQueue()];
 		const followUpAll = [...(withdrawn?.followUp ?? []), ...this.agent.peekFollowUpQueue()];
-		const steering = steeringAll.filter(isUserAuthoredQueuedMessage).map(toRestoredQueuedMessage);
-		const followUp = followUpAll.filter(isUserAuthoredQueuedMessage).map(toRestoredQueuedMessage);
+		const steering = steeringAll.filter(isUserAuthoredQueuedMessage)
+			.map(message => toRestoredQueuedMessage(message, this.#queuedMessageRawText.get(message)));
+		const followUp = followUpAll.filter(isUserAuthoredQueuedMessage)
+			.map(message => toRestoredQueuedMessage(message, this.#queuedMessageRawText.get(message)));
 		const keep: (m: AgentMessage) => boolean = options?.forInterrupt
 			? isAdvisorCard
 			: m => !isUserAuthoredQueuedMessage(m) && !isHiddenUserCompanion(m);
@@ -9733,8 +9736,9 @@ export class AgentSession implements SettingsScope {
 		return {
 			steering: [...this.agent.peekLiveSteeredMessages(), ...this.agent.peekSteeringQueue()]
 				.filter(isUserAuthoredQueuedMessage)
-				.map(queueChipText),
-			followUp: this.agent.peekFollowUpQueue().filter(isUserAuthoredQueuedMessage).map(queueChipText),
+				.map(message => queueChipText(message, this.#queuedMessageRawText.get(message))),
+			followUp: this.agent.peekFollowUpQueue().filter(isUserAuthoredQueuedMessage)
+				.map(message => queueChipText(message, this.#queuedMessageRawText.get(message))),
 			liveSteered,
 		};
 	}
@@ -9798,7 +9802,7 @@ export class AgentSession implements SettingsScope {
 		const removed = selected[index];
 		this.agent.replaceQueue(queue, this.#withoutQueuedUserMessage(selected, index));
 		this.#reconcileQueuedMessageDrain();
-		return toRestoredQueuedMessage(removed);
+		return toRestoredQueuedMessage(removed, this.#queuedMessageRawText.get(removed));
 	}
 
 	/**
@@ -9838,7 +9842,8 @@ export class AgentSession implements SettingsScope {
 			message => isUserAuthoredQueuedMessage(message) && this.#queuedMessageRawText.get(message) === text,
 		);
 		if (index < 0) {
-			index = queue.findIndex(message => isUserAuthoredQueuedMessage(message) && queueChipText(message) === text);
+			index = queue.findIndex(message => isUserAuthoredQueuedMessage(message) &&
+				queueChipText(message, this.#queuedMessageRawText.get(message)) === text);
 		}
 		return index;
 	}
@@ -9878,7 +9883,7 @@ export class AgentSession implements SettingsScope {
 			this.sessionManager.releaseEntryId(getMessageEntryId(removed));
 			this.agent.replaceQueues(this.#withoutQueuedUserMessage(steering, fromSteer), followUp.slice());
 			this.#reconcileQueuedMessageDrain();
-			return toRestoredQueuedMessage(removed);
+			return toRestoredQueuedMessage(removed, this.#queuedMessageRawText.get(removed));
 		}
 		const fromFollowUp = lastUserIndex(followUp);
 		if (fromFollowUp >= 0) {
@@ -9886,7 +9891,7 @@ export class AgentSession implements SettingsScope {
 			this.sessionManager.releaseEntryId(getMessageEntryId(removed));
 			this.agent.replaceQueues(steering.slice(), this.#withoutQueuedUserMessage(followUp, fromFollowUp));
 			this.#reconcileQueuedMessageDrain();
-			return toRestoredQueuedMessage(removed);
+			return toRestoredQueuedMessage(removed, this.#queuedMessageRawText.get(removed));
 		}
 		return undefined;
 	}

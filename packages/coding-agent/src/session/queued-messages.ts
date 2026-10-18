@@ -57,9 +57,12 @@ export function isTerminalTextAssistantAnswer(message: AgentMessage | undefined)
 	return hasText;
 }
 
-/** Whether a queued message is a user prompt: any user-role turn, or a visible user-attributed custom prompt. */
+/** Whether a queued message is an operator prompt, including operator-authored developer notices. */
 export function isUserQueuedMessage(message: AgentMessage): boolean {
 	if (message.role === "user") return true;
+	if (message.role === "developer") {
+		return message.synthetic === true && message.userInitiated === true && message.attribution === "user";
+	}
 	return message.role === "custom" && message.attribution === "user" && message.display !== false;
 }
 
@@ -97,7 +100,8 @@ export function isHiddenUserCompanion(message: AgentMessage): boolean {
 }
 
 /** Human-readable text shown for a queued-message chip. */
-export function queueChipText(message: AgentMessage): string {
+export function queueChipText(message: AgentMessage, rawText?: string): string {
+	if (message.role === "developer" && isUserAuthoredQueuedMessage(message) && rawText !== undefined) return rawText;
 	if (message.role === "custom") {
 		return readQueueChipText(message.details) ?? queuedTextContent(message) ?? "";
 	}
@@ -107,6 +111,6 @@ export function queueChipText(message: AgentMessage): string {
 }
 
 /** Converts a queued user message to editor-restorable content. */
-export function toRestoredQueuedMessage(message: AgentMessage): RestoredQueuedMessage {
-	return { text: queueChipText(message), images: queuedImageContent(message) };
+export function toRestoredQueuedMessage(message: AgentMessage, rawText?: string): RestoredQueuedMessage {
+	return { text: queueChipText(message, rawText), images: queuedImageContent(message) };
 }

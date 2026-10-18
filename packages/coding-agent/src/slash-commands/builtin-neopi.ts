@@ -234,6 +234,7 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				synthetic: true,
 				userInitiated: true,
 				attribution: "user" as const,
+				rawText: command.text,
 				expandPromptTemplates: false,
 				streamingBehavior: "steer" as const,
 			};

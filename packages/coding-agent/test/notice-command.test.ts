@@ -8,6 +8,7 @@ import { submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { DroppedPrompt } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
@@ -16,6 +17,7 @@ import {
 	lookupBuiltinSlashCommand,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import * as imageLoading from "@oh-my-pi/pi-coding-agent/utils/image-loading";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 
@@ -75,6 +77,7 @@ describe("/notice operator command", () => {
 			renderOptimisticSkillMessage: vi.fn(),
 			clearOptimisticSkillMessage: vi.fn(),
 		};
+		let editorText = "";
 		const ctx = createInteractiveModeContext({
 			session,
 			sessionManager: manager,
@@ -86,13 +89,18 @@ describe("/notice operator command", () => {
 			slashCommandNames: new Set(["notice"]),
 			skillCommands: new Map(),
 			fileSlashCommands: new Set(),
+			locallySubmittedUserSignatures: new Set(),
+			compactionQueuedMessages: [],
 			editor: {
+				getText: () => editorText,
+				getExpandedText: () => editorText,
+				setText: text => { editorText = text; },
 				pendingImages: [],
 				pendingImageLinks: [],
 				composerChips: () => [],
 				addToHistory: vi.fn(),
 				clearSubmittedDraft: vi.fn(),
-				setCollapsedText: vi.fn(),
+				setCollapsedText: vi.fn(text => { editorText = text; }),
 				setActionKeys: vi.fn(),
 				setCustomKeyHandler: vi.fn(),
 				clearCustomKeyHandlers: vi.fn(),
@@ -189,6 +197,89 @@ describe("/notice operator command", () => {
 		expectNotice(harness.mock.calls.at(-1)!.context.messages, "raced notice");
 	});
 
+	for (const interrupt of [false, true]) {
+		it(`restores the original queued notice through ${interrupt ? "Esc" : "Alt+Up"} without exposing automatic notices`, async () => {
+			const harness = createHarness();
+			const started = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			harness.mock.fallback = async () => {
+				started.resolve();
+				await release.promise;
+				return { content: ["Acknowledged"] };
+			};
+			const running = harness.session.prompt("held turn");
+			await started.promise;
+			const command = "/notice   editable :) {{literal}}\nsecond line  ";
+			try {
+				harness.session.agent.steer({
+					role: "developer", content: "automatic hidden notice", attribution: "agent",
+					synthetic: true, timestamp: Date.now(),
+				});
+				await harness.submit(command);
+				expect(harness.session.getQueuedMessages().steering).toEqual([command]);
+				if (interrupt) harness.controller.restoreQueuedMessagesToEditor({ abort: true });
+				else harness.controller.handleDequeue();
+				expect(harness.ctx.editor.getText()).toBe(command);
+				expect(harness.session.getQueuedMessages().steering).toEqual([]);
+				expect(harness.session.agent.peekSteeringQueue().some(message => textOf(message) === "automatic hidden notice"))
+					.toBe(!interrupt);
+			} finally {
+				release.resolve();
+				await running;
+				await harness.session.waitForIdle();
+			}
+			expect(harness.session.messages.some(message => textOf(message).includes("editable :)"))).toBe(false);
+		});
+	}
+
+	for (const busy of [false, true]) {
+		it(`restores an operator notice aborted during ${busy ? "busy" : "idle"} normalization`, async () => {
+			const harness = createHarness();
+			const turnStarted = Promise.withResolvers<void>();
+			const releaseTurn = Promise.withResolvers<void>();
+			harness.mock.fallback = async () => {
+				turnStarted.resolve();
+				await releaseTurn.promise;
+				return { content: ["Acknowledged"] };
+			};
+			const running = busy ? harness.session.prompt("held turn") : undefined;
+			if (busy) await turnStarted.promise;
+			const normalizationStarted = Promise.withResolvers<void>();
+			const releaseNormalization = Promise.withResolvers<void>();
+			vi.spyOn(imageLoading, "normalizeModelContextImages").mockImplementationOnce(async images => {
+				normalizationStarted.resolve();
+				await releaseNormalization.promise;
+				return images;
+			});
+			const command = "/notice   restore after abort\nliteral {{text}}  ";
+			const dropped = vi.fn((prompt: DroppedPrompt) => harness.ctx.editor.setCollapsedText(prompt.text));
+			harness.session.setPromptDropped(dropped);
+			let pending: Promise<void> | undefined;
+			try {
+				if (busy) pending = harness.submit(command);
+				else {
+					await harness.submit(command);
+					pending = harness.dispatch();
+				}
+				await normalizationStarted.promise;
+				const aborting = harness.session.abort();
+				releaseTurn.resolve();
+				await aborting;
+				releaseNormalization.resolve();
+				await pending;
+				expect(dropped).toHaveBeenCalledWith({ text: command, images: undefined });
+				expect(harness.ctx.editor.getText()).toBe(command);
+				expect(harness.session.getQueuedMessages()).toEqual({ steering: [], followUp: [], liveSteered: 0 });
+				expect(harness.mock.calls).toHaveLength(busy ? 1 : 0);
+			} finally {
+				releaseTurn.resolve();
+				releaseNormalization.resolve();
+				await pending;
+				await running;
+			}
+		});
+	}
+
 	for (const streamingBehavior of ["steer", "followUp"] as const) {
 		it(`preserves synthetic metadata in the existing ${streamingBehavior} queue`, async () => {
 			const harness = createHarness();
@@ -200,9 +291,12 @@ describe("/notice operator command", () => {
 					synthetic: true,
 					userInitiated: true,
 					attribution: "user",
+					rawText: "/notice queued",
 					expandPromptTemplates: false,
 					streamingBehavior,
 				});
+				expect(harness.session.getQueuedMessages()[streamingBehavior === "steer" ? "steering" : "followUp"])
+					.toEqual(["/notice queued"]);
 			});
 			await harness.session.prompt("initial");
 			expectNotice(harness.mock.calls.at(-1)!.context.messages, "queued");

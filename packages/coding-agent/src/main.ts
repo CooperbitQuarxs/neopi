@@ -469,6 +469,7 @@ export async function submitInteractiveInput(
 				expandPromptTemplates: false,
 				userInitiated: input.userInitiated,
 				attribution: input.attribution,
+				rawText: input.rawText,
 				streamingBehavior: input.streamingBehavior,
 			});
 		} else if (isKnownSkillCommand(skillHost, input.text)) {

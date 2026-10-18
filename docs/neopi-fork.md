@@ -78,8 +78,9 @@ In REPL mode, Enter inserts a newline so multi-line code is written as in an edi
 
 `/notice <text>` sends a hidden, operator-authored developer-role message to the foreground main session, wrapped in `<system-notice>` tags. It starts a turn when idle and uses the normal steering queue while the agent is busy. The developer role and operator attribution survive transcript persistence and replay.
 
-Text after the command separator is literal: multiline content, whitespace, shell characters, model mentions, and template expressions are not expanded. `/notice` without non-whitespace text shows `Usage: /notice <text>` without starting a turn. The command is host-only during collaboration, does not target focused subagents or broadcast, and is not an agent tool.
+Queued notices appear with their original `/notice …` text in the pending bar. Alt+Up returns a notice to the composer for editing; Esc restores pending operator notices before interrupting the turn. Notices cancelled during turn setup are also returned as the original command, not as wrapped prompt text. Automatic agent-authored notices remain hidden.
 
+Text after the command separator is literal: multiline content, whitespace, shell characters, model mentions, and template expressions are not expanded. `/notice` without non-whitespace text shows `Usage: /notice <text>` without starting a turn. The command is host-only during collaboration, does not target focused subagents or broadcast, and is not an agent tool.
 
 ## Iris live voice
 

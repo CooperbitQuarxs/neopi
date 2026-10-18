@@ -8,7 +8,7 @@
 
 ### Added
 
-- Added `/notice <text>` to send a literal, operator-authored system notice as a developer message, including while the agent is working ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
+- Added `/notice <text>` to send a literal, operator-authored system notice as a developer message, including editable pending notices that return to the composer when interrupted ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
 - The side panel shows one of three views chosen by chord: `Alt+T` `t` Todo, `Alt+T` `a` Agents (click a subagent to view its transcript, click again to return), `Alt+T` `i` IRC; repeating the shown view's chord hides the panel, right-click in the panel cycles views, and the docked view replaces its duplicate todo or pinned-subagents list above the editor ([#342](https://github.com/PsychedelicShayna/neopi/issues/342)).
 - Added `/statusline` to arrange builtin and provider-usage widgets and choose a composer with live previews, plus a flexible `context_bar` widget for every composer ([#227](https://github.com/PsychedelicShayna/neopi/issues/227), [#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
 - Added per-provider usage-bar status-line widgets (`usage:<provider>:<window>[:<tier>]`) showing each reported quota window's percent and age ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).

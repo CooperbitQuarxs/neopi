@@ -2015,8 +2015,8 @@ export class InputController {
 		const isContinueShortcut = streamingBehavior === "steer" && !images && (text === "." || text === "c");
 		this.ctx.editor.clearDraft(text);
 		try {
-			// Synthetic directives must not use streamingBehavior: AgentSession would
-			// otherwise queue them as visible user messages while the target is busy.
+			// Continue shortcuts do not request queueing: keep rejecting them while
+			// busy instead of scheduling another continuation behind the active turn.
 			if (isContinueShortcut) {
 				await target.prompt(manualContinuePrompt, { synthetic: true, userInitiated: true });
 			} else {

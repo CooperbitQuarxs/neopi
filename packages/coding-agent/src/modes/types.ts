@@ -79,6 +79,8 @@ export type SubmittedUserInput = {
 	userInitiated?: boolean;
 	/** Explicit initiator attribution for operator-authored developer messages. */
 	attribution?: MessageAttribution;
+	/** Original operator command, preserved for queue editing and cancellation. */
+	rawText?: string;
 	display?: boolean;
 	/** Queue intent if the session is (or becomes) busy when this submission is
 	 *  dispatched: "steer" (interrupt the active turn) or "followUp" (process after
