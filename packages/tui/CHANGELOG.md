@@ -15,6 +15,7 @@
 - Menu search fields share literal editing, consistent muted hints, and restorable caret/focus state across custom pickers ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Model lists use `/` search, Vim paging and jumps, and independent viewport scrolling while preserving search and selection through menu history ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
 - `/model` puts effort rules before providers and adds section-local `/` search, Vim paging, and draft-preserving nested menu history across Roles and model panes ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
+- Model menus retain partial-row viewport positions through history and show unfiltered provider counts and navigation outside All models ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
 - Settings and plugin configuration support explicit search, shared navigation, and nested menu history that preserves safe unsaved editor drafts ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Shared tabs and transcript viewers support consistent Vim navigation and restore their context and viewport without moving selected content ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Persona configuration preserves safe text drafts and nested page state while using explicit search and consistent menu navigation ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).

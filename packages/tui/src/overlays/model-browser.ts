@@ -27,8 +27,8 @@ import {
 } from "../thinking";
 import { thinkingLevelGlyph } from "../render/render-utils";
 import { type Theme, type ThemeColor, theme } from "../theme/theme";
-import { MenuSelection } from "../components/menu-selection";
-import { applyMenuMotion, MenuKeyReader, type MenuNavAction, MenuSearchField, MenuViewport } from "../components/menu-navigation";
+import { MenuSelection, type MenuWindow } from "../components/menu-selection";
+import { applyMenuMotion, MenuKeyReader, type MenuNavAction, MenuSearchField, MenuViewport, type MenuViewportPosition } from "../components/menu-navigation";
 import type {
 	TspPickerColumn,
 	TspPickerGroup,
@@ -944,7 +944,7 @@ export interface ModelBrowserNavigation {
 	cursor: number;
 	filterFocused: boolean;
 	selected: string | undefined;
-	top: number | undefined;
+	top: MenuViewportPosition | undefined;
 }
 
 /** Rendered rows before the list window: search row + blank. */
@@ -1197,7 +1197,7 @@ export class ModelBrowser implements Component {
 			cursor: this.cursor,
 			filterFocused: this.#search.focused,
 			selected: this.getSelected()?.selector,
-			top: this.#viewport.top,
+			top: this.#viewport.top ? { ...this.#viewport.top } : undefined,
 		};
 	}
 
@@ -1209,7 +1209,7 @@ export class ModelBrowser implements Component {
 		this.#applyQuery("reset-changed-prefix");
 		this.onQueryChange?.(state.query);
 		if (typeof state.selected === "string") this.#menu.setSelectedKey(state.selected);
-		this.#viewport.setTop(typeof state.top === "number" ? state.top : undefined);
+		this.#viewport.setTop(state.top);
 		this.#keys.reset();
 		this.#layoutWindow();
 	}
@@ -1286,12 +1286,13 @@ export class ModelBrowser implements Component {
 		return contextWindow > 0 && this.#currentContextTokens > contextWindow;
 	}
 
-	#layoutWindow(): void {
+	#layoutWindow(): MenuWindow {
 		const items = this.#menu.visibleItems;
 		if (this.#rowHeights?.items !== items) this.#rowHeights = { items, rows: items.map(() => 1) };
 		const window = this.#viewport.layout(this.#rowHeights.rows, this.#menu.selectedIndex, this.#maxVisible);
 		this.#windowStart = window.startIndex;
 		this.#windowCount = window.endIndex - window.startIndex;
+		return window;
 	}
 
 	#ensureSelectedVisible(): void {
@@ -1680,7 +1681,7 @@ export class ModelBrowser implements Component {
 		lines.push("");
 
 		const total = this.#menu.visibleItems.length;
-		this.#layoutWindow();
+		const window = this.#layoutWindow();
 		const startIndex = this.#windowStart;
 		const endIndex = startIndex + this.#windowCount;
 
@@ -1739,15 +1740,17 @@ export class ModelBrowser implements Component {
 					),
 				);
 			}
-			const scrollView = new ScrollView(rows, {
-				height: rows.length,
+			const clippedRows = window.lineOffset === 0 && rows.length <= this.#maxVisible
+				? rows : rows.slice(window.lineOffset, window.lineOffset + this.#maxVisible);
+			const scrollView = new ScrollView(clippedRows, {
+				height: clippedRows.length,
 				scrollbar: "auto",
-				totalRows: total,
+				totalRows: window.totalRows,
 				theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
 			});
-			scrollView.setScrollOffset(startIndex);
+			scrollView.setScrollOffset(window.rowOffset);
 			lines.push(...scrollView.render(width));
-			for (let i = rows.length; i < this.#maxVisible; i++) lines.push("");
+			for (let i = clippedRows.length; i < this.#maxVisible; i++) lines.push("");
 		}
 
 		lines.push("");
