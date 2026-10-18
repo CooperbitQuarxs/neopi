@@ -135,6 +135,15 @@ export class TranscriptBrowser implements Component {
 		if (typeof state.followBottom === "boolean") this.#followBottom = state.followBottom;
 	}
 
+	/** Current body budget; zero until the first frame has prepared its layout. */
+	get bodyHeight(): number {
+		return this.#layout?.bodyHeight ?? 0;
+	}
+
+	get scrollOffset(): number {
+		return this.#scrollView.getScrollOffset();
+	}
+
 	/** Prompt-zone-safe rendered rows for outline composition at `columnWidth`. */
 	renderOutlineRows(children: readonly Component[], columnWidth: number): Array<readonly string[]> {
 		return this.#rowCache.rows(children, Math.max(10, columnWidth - 4));
