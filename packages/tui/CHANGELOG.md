@@ -32,6 +32,7 @@
 - The directory chooser keeps path editing literal and supports paging and safe history restoration after Escape returns to its list ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Shared model browsers use explicit `/` search, clamped Vim navigation, and partial-row viewport snapshots in every host ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Usage reports support shared viewer motions and preserve the active tab and each tab's reading position without refreshing on history restore ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- IRC messages support explicit `/` search, independent visual-line scrolling, and history that preserves selection and unsent replies without replaying sends ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Added per-widget text templates for usage bars (`{label}`, `{percent}`, `{age}`), editable in `/statusline` with Tab ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 
 ### Changed
