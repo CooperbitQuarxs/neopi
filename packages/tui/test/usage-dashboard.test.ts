@@ -283,6 +283,55 @@ describe("UsageDashboardComponent", () => {
 		});
 	}
 
+	it("navigates viewer lines and tab contexts and restores without refreshing", () => {
+		let refreshes = 0;
+		let closes = 0;
+		const component = new UsageDashboardComponent({
+			reports: [],
+			renderDetail: () => Array.from({ length: 2000 }, (_, index) => `Detail ${index}`).join("\n"),
+			loadActivity: async () => {},
+			refresh: async () => {
+				refreshes++;
+				return [];
+			},
+			requestRender: () => {},
+			onClose: () => closes++,
+		});
+		try {
+			component.handleInput("l");
+			component.render(80);
+			component.handleInput("j");
+			expect(component.navigationSnapshot().scroll.detail).toBe(1);
+			component.handleInput("\x05");
+			expect(component.navigationSnapshot().scroll.detail).toBe(2);
+			component.handleInput("\x19");
+			expect(component.navigationSnapshot().scroll.detail).toBe(1);
+			component.handleInput("\x04");
+			expect(component.navigationSnapshot().scroll.detail).toBeGreaterThan(2);
+			component.handleInput("G");
+			const saved = component.navigationSnapshot();
+			expect(saved.view).toBe("detail");
+			expect(saved.scroll.detail).toBeGreaterThan(1);
+			component.handleInput("g");
+			component.handleInput("g");
+			expect(component.navigationSnapshot().scroll.detail).toBe(0);
+			component.handleInput("h");
+			expect(component.navigationSnapshot().view).toBe("overview");
+			component.restoreNavigation(saved);
+			expect(component.navigationSnapshot()).toEqual(saved);
+			expect(refreshes).toBe(0);
+			component.handleInput("\t");
+			expect(component.navigationSnapshot().view).toBe("overview");
+			component.handleInput("\x1b[Z");
+			expect(component.navigationSnapshot().view).toBe("detail");
+			component.handleInput("\x1b");
+			expect(closes).toBe(1);
+			expect(refreshes).toBe(0);
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("keeps usable bars and matching label rows across multi-column cards", () => {
 		const component = dashboard([
 			report("anthropic", "a@test", [
