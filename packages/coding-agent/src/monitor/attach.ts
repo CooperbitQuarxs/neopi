@@ -334,7 +334,9 @@ class MonitorPaneComponent implements Component {
 				: connection.state === "ended"
 					? theme.fg("error", `ended: ${connection.endReason ?? ""}`)
 					: theme.fg("warning", connection.state === "connecting" ? "connecting…" : "reconnecting…");
-		const notice = connection.notice ? ` ${theme.fg("dim", theme.sep.dot)} ${theme.fg("warning", connection.notice)}` : "";
+		const notice = connection.notice
+			? ` ${theme.fg("dim", theme.sep.dot)} ${theme.fg("warning", connection.notice)}`
+			: "";
 		const mode = connection.canChat ? "" : ` ${theme.fg("dim", theme.sep.dot)} ${theme.fg("muted", "view only")}`;
 		return ` ${head} ${theme.fg("dim", theme.sep.dot)} ${state}${mode}${notice}`;
 	}

@@ -321,11 +321,8 @@ export class ChatTranscriptBuilder {
 			}
 		}
 		for (const tool of tools) {
-			if (
-				!showTools ||
-				this.#pendingTools.has(tool.toolCallId) ||
-				this.#persistedToolResults.has(tool.toolCallId)
-			) continue;
+			if (!showTools || this.#pendingTools.has(tool.toolCallId) || this.#persistedToolResults.has(tool.toolCallId))
+				continue;
 			let card = this.#liveTools.get(tool.toolCallId);
 			if (!toolIds.has(tool.toolCallId)) {
 				card = this.#liveTool(tool.toolCallId, tool.toolName, tool.args);
@@ -335,7 +332,8 @@ export class ChatTranscriptBuilder {
 			card?.setExecutionStarted(tool.toolCallId);
 		}
 		for (const [id, card] of this.#liveTools) {
-			if (showTools && toolIds.has(id) && !this.#pendingTools.has(id) && !this.#persistedToolResults.has(id)) continue;
+			if (showTools && toolIds.has(id) && !this.#pendingTools.has(id) && !this.#persistedToolResults.has(id))
+				continue;
 			card.seal();
 			card.dispose();
 			this.#liveTools.delete(id);

@@ -2,7 +2,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import * as fs from "node:fs";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { ChatTranscriptBuilder, type TranscriptLiveState, type TranscriptLiveTool } from "../src/chat/chat-transcript-builder";
+import {
+	ChatTranscriptBuilder,
+	type TranscriptLiveState,
+	type TranscriptLiveTool,
+} from "../src/chat/chat-transcript-builder";
 import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
@@ -43,7 +47,11 @@ function assistant(content: AssistantMessage["content"], timestamp = 10): Assist
 		model: "claude-sonnet-4-5",
 		stopReason: content.some(block => block.type === "toolCall") ? "toolUse" : "stop",
 		usage: {
-			input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 		timestamp,
@@ -122,10 +130,16 @@ describe("ChatTranscriptBuilder pushed live tail", () => {
 		output = render(b);
 		expect(output).toContain("PARTIAL_UPDATED");
 		expect(output).not.toContain("PARTIAL_PROGRESS");
-		b.append([entry({
-			role: "toolResult", toolCallId: "pending", toolName: "lookup_live",
-			content: [{ type: "text", text: "FINAL_TOOL_OUTPUT" }], isError: false, timestamp: 11,
-		})]);
+		b.append([
+			entry({
+				role: "toolResult",
+				toolCallId: "pending",
+				toolName: "lookup_live",
+				content: [{ type: "text", text: "FINAL_TOOL_OUTPUT" }],
+				isError: false,
+				timestamp: 11,
+			}),
+		]);
 		// The last live progress may remain in flight after the final persisted result arrives.
 		b.setLive(state);
 		output = render(b);
@@ -146,10 +160,16 @@ describe("ChatTranscriptBuilder pushed live tail", () => {
 		const b = builder();
 		b.append([entry(assistant([call("first"), call("second")]))]);
 		b.setLive({ tools: [runningTool("first", "FIRST_PROGRESS"), runningTool("second", "SECOND_PROGRESS")] });
-		b.append([entry({
-			role: "toolResult", toolCallId: "first", toolName: "lookup_live",
-			content: [{ type: "text", text: "FIRST_FINISHED" }], isError: false, timestamp: 11,
-		})]);
+		b.append([
+			entry({
+				role: "toolResult",
+				toolCallId: "first",
+				toolName: "lookup_live",
+				content: [{ type: "text", text: "FIRST_FINISHED" }],
+				isError: false,
+				timestamp: 11,
+			}),
+		]);
 		const output = render(b);
 		expect(output).toContain("FIRST_FINISHED");
 		expect(output).not.toContain("FIRST_PROGRESS");
@@ -211,8 +231,10 @@ describe("ChatTranscriptBuilder pushed live tail", () => {
 	it("honors hidden tool activity for provisional cards without hiding assistant text", () => {
 		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		const b = builder();
-		b.setLive({ assistant: assistant([{ type: "text", text: "VISIBLE_ASSISTANT" }, call("hidden")]),
-			tools: [runningTool("hidden", "HIDDEN_TOOL_PROGRESS")] });
+		b.setLive({
+			assistant: assistant([{ type: "text", text: "VISIBLE_ASSISTANT" }, call("hidden")]),
+			tools: [runningTool("hidden", "HIDDEN_TOOL_PROGRESS")],
+		});
 		const output = render(b);
 		expect(output).toContain("VISIBLE_ASSISTANT");
 		expect(output).not.toContain("HIDDEN_TOOL_PROGRESS");
@@ -223,20 +245,33 @@ it("connects the viewer to pushed live text and releases its subscription on dis
 	let listener: ((state: TranscriptLiveState | undefined) => void) | undefined;
 	let unsubscribed = 0;
 	const ref: AgentRecordLike = {
-		id: "owner/advisor", displayName: "advisor", kind: "advisor", status: "parked", session: null,
-		sessionFile: null, createdAt: 0, lastActivity: 0,
+		id: "owner/advisor",
+		displayName: "advisor",
+		kind: "advisor",
+		status: "parked",
+		session: null,
+		sessionFile: null,
+		createdAt: 0,
+		lastActivity: 0,
 	};
 	const viewer = new AgentTranscriptViewer({
 		agentId: ref.id,
 		transcript: { fs, parseEntries: () => [] },
-		registry: { list: () => [ref], get: id => id === ref.id ? ref : undefined, onChange: () => () => {} },
+		registry: { list: () => [ref], get: id => (id === ref.id ? ref : undefined), onChange: () => () => {} },
 		remote: { chat() {}, kill() {}, revive() {}, readTranscript: async () => ({ text: "", newSize: 0 }) },
 		ui: new TUI(new VirtualTerminal(120, 40)),
-		cwd: "/tmp", expandKeys: [], hubKeys: [], requestRender() {}, onClose() {}, onHubClose() {},
+		cwd: "/tmp",
+		expandKeys: [],
+		hubKeys: [],
+		requestRender() {},
+		onClose() {},
+		onHubClose() {},
 		live: {
 			subscribe: callback => {
 				listener = callback;
-				return () => { unsubscribed++; };
+				return () => {
+					unsubscribed++;
+				};
 			},
 		},
 	});

@@ -8,20 +8,28 @@ import type { LiveAdvisor } from "../../src/session/session-advisors";
 class AdvisorFeed implements Pick<AgentSession, "liveAdvisors" | "onLiveAdvisorsChange"> {
 	#advisors: LiveAdvisor[] = [];
 	readonly #listeners = new Set<() => void>();
-	liveAdvisors(): LiveAdvisor[] { return this.#advisors; }
+	liveAdvisors(): LiveAdvisor[] {
+		return this.#advisors;
+	}
 	onLiveAdvisorsChange(listener: () => void): () => void {
 		this.#listeners.add(listener);
-		return () => { this.#listeners.delete(listener); };
+		return () => {
+			this.#listeners.delete(listener);
+		};
 	}
 	set(advisors: LiveAdvisor[]): void {
 		this.#advisors = advisors;
 		for (const listener of this.#listeners) listener();
 	}
-	get listenerCount(): number { return this.#listeners.size; }
+	get listenerCount(): number {
+		return this.#listeners.size;
+	}
 }
 
 const cleanups: Array<() => void> = [];
-afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); });
+afterEach(() => {
+	for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+});
 
 function advisor(slug = "", transcriptFile: string | undefined = "/tmp/owner/__advisor.jsonl"): LiveAdvisor {
 	return { slug, name: slug || "default", transcriptFile, agent: new Agent() };
@@ -167,8 +175,13 @@ describe("live advisor registry tracking", () => {
 		const { registry, owner, stop } = fixture([advisor()]);
 		stop();
 		const replacement = registry.register({
-			id: "owner/advisor", displayName: "replacement", kind: "advisor", parentId: owner.id,
-			session: null, sessionFile: "/tmp/replacement.jsonl", status: "idle",
+			id: "owner/advisor",
+			displayName: "replacement",
+			kind: "advisor",
+			parentId: owner.id,
+			session: null,
+			sessionFile: "/tmp/replacement.jsonl",
+			status: "idle",
 		});
 		registry.register({ ...owner });
 		stop();
@@ -189,10 +202,18 @@ describe("live advisor registry tracking", () => {
 	test("colliding non-advisors or advisors parented to another owner are never adopted", () => {
 		const { registry, feed } = fixture();
 		const collision = registry.register({
-			id: "owner/advisor", displayName: "ordinary sub", kind: "sub", parentId: "owner", session: null,
+			id: "owner/advisor",
+			displayName: "ordinary sub",
+			kind: "sub",
+			parentId: "owner",
+			session: null,
 		});
 		const foreign = registry.register({
-			id: "owner/advisor:foreign", displayName: "foreign advisor", kind: "advisor", parentId: "other", session: null,
+			id: "owner/advisor:foreign",
+			displayName: "foreign advisor",
+			kind: "advisor",
+			parentId: "other",
+			session: null,
 		});
 		feed.set([advisor(), advisor("foreign")]);
 		expect(registry.get(collision.id)).toBe(collision);

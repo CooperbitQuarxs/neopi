@@ -2758,9 +2758,18 @@ export async function runRootCommand(
 			}
 			parentExit?.attach({ session, mcpManager });
 			// Opt-in tmux agent monitor (#345); it needs the control socket and a tmux client.
-			if (controlHost && controlRole === "tui" && cfgMonitorAutoStart.get(settingsInstance) === true && process.env.TMUX) {
+			if (
+				controlHost &&
+				controlRole === "tui" &&
+				cfgMonitorAutoStart.get(settingsInstance) === true &&
+				process.env.TMUX
+			) {
 				startAgentMonitor(session, settingsInstance).catch(error => {
-					session.emitNotice("warning", `Agent monitor did not start: ${error instanceof Error ? error.message : String(error)}`, "monitor");
+					session.emitNotice(
+						"warning",
+						`Agent monitor did not start: ${error instanceof Error ? error.message : String(error)}`,
+						"monitor",
+					);
 				});
 			}
 

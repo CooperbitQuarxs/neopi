@@ -643,10 +643,10 @@ export class AgentTranscriptViewer implements Component {
 			const sent = this.#deps.remote.chat(id, trimmed);
 			if (sent instanceof Promise)
 				sent.catch((error: unknown) => {
-				if (this.#disposed) return;
-				this.#notice = error instanceof Error ? error.message : String(error);
-				this.#deps.requestRender();
-			});
+					if (this.#disposed) return;
+					this.#notice = error instanceof Error ? error.message : String(error);
+					this.#deps.requestRender();
+				});
 			this.#deps.requestRender();
 			return;
 		}

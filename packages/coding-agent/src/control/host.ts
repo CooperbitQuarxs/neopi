@@ -245,7 +245,8 @@ export class ControlHost {
 				this.#setSubagentLevel(connection, "off");
 				this.monitor.detach(connection);
 			},
-			authenticateMonitor: (capability: string) => (this.#closed ? undefined : this.monitor.authenticate(capability)),
+			authenticateMonitor: (capability: string) =>
+				this.#closed ? undefined : this.monitor.authenticate(capability),
 		};
 		const server = new ControlServer({ metadata: { instanceId: this.instanceId }, host: connectionHost });
 		if (server.disabled) {

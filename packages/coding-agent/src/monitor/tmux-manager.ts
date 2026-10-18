@@ -21,11 +21,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { getOriginalProcessEnv } from "@oh-my-pi/pi-utils/env";
 import type { ControlMonitorService } from "../control/monitor-service";
 import type { AgentRef, AgentRegistry } from "../registry/agent-registry";
-import {
-	createTerminalLauncher,
-	processCli,
-	type TerminalLaunchCliRunner,
-} from "../subprocess/terminal-launch";
+import { createTerminalLauncher, processCli, type TerminalLaunchCliRunner } from "../subprocess/terminal-launch";
 
 /** One pane this manager created for an agent. */
 export interface MonitorPane {
@@ -374,9 +370,14 @@ export class TmuxMonitorManager {
 	/** Window options on the monitor's own windows only: pane titles show the agent id. */
 	async #decorateWindow(windowId: string): Promise<void> {
 		await this.#tmux(["set-option", "-w", "-t", windowId, "pane-border-status", "top"]).catch(() => {});
-		await this.#tmux(["set-option", "-w", "-t", windowId, "pane-border-format", " #{?@npi_agent,#{@npi_agent},npi monitor} "]).catch(
-			() => {},
-		);
+		await this.#tmux([
+			"set-option",
+			"-w",
+			"-t",
+			windowId,
+			"pane-border-format",
+			" #{?@npi_agent,#{@npi_agent},npi monitor} ",
+		]).catch(() => {});
 	}
 
 	async #tmux(args: string[]): Promise<string> {

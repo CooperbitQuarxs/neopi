@@ -28,12 +28,19 @@ export default class Monitor extends Command {
 
 	static args = {
 		action: Args.string({ description: "attach or idle", required: true, options: ["attach", "idle"] }),
-		session: Args.string({ description: "Owner session: control instance id, prefix, or any ctl selector", required: true }),
+		session: Args.string({
+			description: "Owner session: control instance id, prefix, or any ctl selector",
+			required: true,
+		}),
 	};
 
 	static flags = {
-		"capability-file": Flags.string({ description: "File holding the owner-minted monitor capability (deleted on read)" }),
-		agent: Flags.string({ description: "Agent id to attach to, minting the capability over the owner's control socket" }),
+		"capability-file": Flags.string({
+			description: "File holding the owner-minted monitor capability (deleted on read)",
+		}),
+		agent: Flags.string({
+			description: "Agent id to attach to, minting the capability over the owner's control socket",
+		}),
 	};
 
 	static examples = [

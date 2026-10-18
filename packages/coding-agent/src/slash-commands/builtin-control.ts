@@ -112,7 +112,8 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 						return;
 					}
 					const status = manager.status();
-					const panes = status.panes.map(pane => `${pane.agentId} (${pane.paneId})`).join(", ") || "no agent panes";
+					const panes =
+						status.panes.map(pane => `${pane.agentId} (${pane.paneId})`).join(", ") || "no agent panes";
 					ctx.showStatus(`Agent monitor: tmux session ${status.sessionName} · ${panes}`);
 					return;
 				}
