@@ -28,6 +28,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Subagents load the user, workspace and repository `AGENTS.md` files that apply at their own working directory, including isolated worktree children, nested children, revived agents and vibe workers, and their advisors see the same set ([#334](https://github.com/PsychedelicShayna/neopi/issues/334)).
 - A failed `/statusline` save restores the prior settings, so cancelling cannot later persist the discarded layout.
 - An open `ask` question no longer locks the composer: speech-to-text and dictation keys work while it is up, and with the question hidden (`Alt+H`) you can type and send a message or slash command while the question stays pending ([#303](https://github.com/PsychedelicShayna/neopi/issues/303)).
 - A registered agent name with an effort suffix, such as `scout:high`, now runs that agent with its own prompt, tools and model at that effort instead of fuzzy-matching an unrelated model ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
