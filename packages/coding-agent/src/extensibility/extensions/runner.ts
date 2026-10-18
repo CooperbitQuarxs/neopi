@@ -1292,7 +1292,11 @@ export class ExtensionRunner {
 		"ctrl+k": true,
 		"ctrl+p": true,
 		"ctrl+l": true,
+		// Menu history (app.navigation.back/forward) and tools expand.
 		"ctrl+o": true,
+		"ctrl+i": true,
+		"alt+o": true,
+		"alt+e": true,
 		"ctrl+t": true,
 		"ctrl+g": true,
 		"alt+m": true,

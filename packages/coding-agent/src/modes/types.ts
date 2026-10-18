@@ -534,6 +534,8 @@ export interface InteractiveModeContext {
 	showSettingsSelector(): void;
 	/** Open the fullscreen `/usage` dashboard overlay for the given reports. */
 	showUsageDashboard(reports: UsageReport[]): void;
+	/** Ctrl-O (-1) / Ctrl-I (+1) through the menu history; false when there is no entry that way. */
+	navigateMenuHistory(direction: -1 | 1): boolean;
 	showAdvisorConfigure(): void;
 	showChainConfigure(): void;
 	showStatusLineConfigure(): void;

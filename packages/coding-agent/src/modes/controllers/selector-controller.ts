@@ -14,7 +14,8 @@ import type {
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
-import { Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
+import { isMenuHistoryLeaver, isMenuHistoryParticipant, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
+import { MenuHistory } from "../menu-history";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import {
@@ -237,12 +238,24 @@ type MenuKind =
 	| "irc-viewer"
 	| "usage-dashboard";
 
+/** Where menu history can return: a single-instance menu or the conversation. */
+type MenuLocation = MenuKind | "conversation";
+
+/** What a menu-history entry needs to bring its view back. */
+interface MenuVisitState {
+	/** Re-runs the request that opened the menu. */
+	reopen?: () => void;
+	/** The menu's {@link MenuHistoryParticipant} snapshot from when it was last left. */
+	snapshot?: unknown;
+}
+
 /** An open menu: registered when the request runs, filled once its component mounts. */
 interface OpenMenu {
 	component?: Component;
 	handle?: OverlayHandle;
 	/** Shows `component` as a new overlay and focuses it; also raises a covered menu. */
 	mount?: () => OverlayHandle;
+	reopen: () => void;
 }
 
 export class SelectorController {
@@ -253,6 +266,12 @@ export class SelectorController {
 	 * focuses it instead of stacking another menu on top.
 	 */
 	#openMenus = new Map<MenuKind, OpenMenu>();
+	/** Ctrl-O/Ctrl-I timeline over menus and the conversation (AGENTS.md › Menu Navigation). */
+	#menuHistory = new MenuHistory<MenuLocation, MenuVisitState>("conversation");
+	/** True while history itself opens and closes menus, which are then not new visits. */
+	#navigatingHistory = false;
+	/** Snapshot to hand to the `kind` menu as soon as its history reopen mounts it. */
+	#pendingRestore: { kind: MenuKind; snapshot: unknown } | undefined;
 
 	constructor(private ctx: InteractiveModeContext) {}
 	/**
@@ -280,6 +299,7 @@ export class SelectorController {
 	#focusOpenMenu(kind: MenuKind): boolean {
 		const open = this.#openMenus.get(kind);
 		if (!open) return false;
+		if (!this.#navigatingHistory) this.#menuHistory.visit(kind, { reopen: open.reopen });
 		if (open.component && open.mount && this.#isCovered(open.component)) {
 			open.handle?.hide();
 			open.handle = open.mount();
@@ -302,17 +322,69 @@ export class SelectorController {
 		menu.component = component;
 		menu.mount = mount;
 		menu.handle = mount();
+		const restore = this.#pendingRestore;
+		if (restore && this.#openMenus.get(restore.kind) === menu) {
+			this.#pendingRestore = undefined;
+			if (restore.snapshot !== undefined && isMenuHistoryParticipant(component)) {
+				component.restoreNavigation(restore.snapshot);
+				this.ctx.ui.requestRender();
+			}
+		}
 	}
 
-	/** Register a new `kind` menu; pass it to {@link #releaseMenu} when it closes or fails to open. */
-	#claimMenu(kind: MenuKind): OpenMenu {
-		const menu: OpenMenu = {};
+	/**
+	 * Register a new `kind` menu; pass it to {@link #releaseMenu} when it closes
+	 * or fails to open. `reopen` repeats this request when menu history returns.
+	 */
+	#claimMenu(kind: MenuKind, reopen: () => void): OpenMenu {
+		const menu: OpenMenu = { reopen };
 		this.#openMenus.set(kind, menu);
+		if (!this.#navigatingHistory) this.#menuHistory.visit(kind, { reopen });
 		return menu;
 	}
 
 	#releaseMenu(kind: MenuKind, menu: OpenMenu): void {
-		if (this.#openMenus.get(kind) === menu) this.#openMenus.delete(kind);
+		if (this.#openMenus.get(kind) !== menu) return;
+		this.#openMenus.delete(kind);
+		const snapshot = isMenuHistoryParticipant(menu.component) ? menu.component.navigationSnapshot() : undefined;
+		this.#menuHistory.recordState(kind, { reopen: menu.reopen, snapshot });
+		if (this.#navigatingHistory) return;
+		// Closing the last menu returns to the conversation, which is a visit too.
+		// Deferred so a menu that closes to open another (hub → login) is one step.
+		queueMicrotask(() => {
+			if (!this.#navigatingHistory && this.#openMenus.size === 0) this.#menuHistory.visit("conversation");
+		});
+	}
+
+	/**
+	 * Ctrl-O (`direction` -1) / Ctrl-I (+1): close the open menus and show the
+	 * previous/next view in the timeline with its recorded state. False when
+	 * the timeline has no entry in that direction.
+	 */
+	navigateMenuHistory(direction: -1 | 1): boolean {
+		if (!this.#menuHistory.canGo(direction)) return false;
+		this.#navigatingHistory = true;
+		try {
+			// Leave first, while the timeline still points at the open menu, so
+			// its snapshot lands on its own entry.
+			for (const [kind, menu] of [...this.#openMenus]) {
+				if (isMenuHistoryLeaver(menu.component)) menu.component.leaveMenu();
+				menu.handle?.hide();
+				this.#releaseMenu(kind, menu);
+			}
+			const target = direction < 0 ? this.#menuHistory.back() : this.#menuHistory.forward();
+			const reopen = target?.state?.reopen;
+			if (!target || target.location === "conversation" || !reopen) {
+				this.focusActiveEditorArea();
+			} else {
+				this.#pendingRestore = { kind: target.location, snapshot: target.state?.snapshot };
+				reopen();
+			}
+		} finally {
+			this.#navigatingHistory = false;
+		}
+		this.ctx.ui.requestRender();
+		return true;
 	}
 
 	/**
@@ -375,7 +447,7 @@ export class SelectorController {
 
 	showSettingsSelector(): void {
 		if (this.#focusOpenMenu("settings")) return;
-		const menu = this.#claimMenu("settings");
+		const menu = this.#claimMenu("settings", () => this.showSettingsSelector());
 		getAvailableThemes()
 			.then(availableThemes => {
 				// Fullscreen settings editor on the alternate screen: the overlay
@@ -523,7 +595,7 @@ export class SelectorController {
 			requestRender: () => this.ctx.ui.requestRender(),
 			onClose: done,
 		});
-		const menu = this.#claimMenu("usage-dashboard");
+		const menu = this.#claimMenu("usage-dashboard", () => this.showUsageDashboard(reports));
 		this.#mountMenu(menu, dashboard, () => this.#showFullscreenMenu(dashboard));
 	}
 
@@ -720,7 +792,7 @@ export class SelectorController {
 			requestRender: () => this.ctx.ui.requestRender(),
 			notify: message => this.ctx.showStatus(message),
 		});
-		const menu = this.#claimMenu("status-line-config");
+		const menu = this.#claimMenu("status-line-config", () => this.showStatusLineConfigure());
 		this.#mountMenu(menu, overlay, () => this.#showFullscreenMenu(overlay));
 	}
 
@@ -1037,7 +1109,7 @@ export class SelectorController {
 	 */
 	async showAgentsDashboard(): Promise<void> {
 		if (this.#focusOpenMenu("agents-dashboard")) return;
-		const menu = this.#claimMenu("agents-dashboard");
+		const menu = this.#claimMenu("agents-dashboard", () => void this.showAgentsDashboard());
 		const activeModel = this.ctx.session.model;
 		const activeModelPattern = activeModel ? `${activeModel.provider}/${activeModel.id}` : undefined;
 		const defaultModelPattern = this.ctx.settings.getModelRole("default");
@@ -1232,7 +1304,7 @@ export class SelectorController {
 				currentQuickRole: quickRoleCycle?.models[quickRoleCycle.currentIndex]?.role,
 			},
 		);
-		const menu = this.#claimMenu("model-picker");
+		const menu = this.#claimMenu("model-picker", () => this.#showModelPicker());
 		this.#mountMenu(menu, picker, () => {
 			const handle = this.ctx.ui.showOverlay(picker, {
 				anchor: "bottom-center",
@@ -1578,7 +1650,7 @@ export class SelectorController {
 				],
 			},
 		);
-		const menu = this.#claimMenu("model-hub");
+		const menu = this.#claimMenu("model-hub", () => this.#showModelHub(hubOptions));
 		this.#mountMenu(menu, hub, () => this.#showFullscreenMenu(hub));
 	}
 
@@ -2980,7 +3052,7 @@ export class SelectorController {
 			// Prime the detector before the first frame when the editor's double-←
 			// gesture opened the hub, so the next single ← dismisses it.
 			if (options?.armCloseTap) hub.armCloseTap();
-			menu = this.#claimMenu("agent-hub");
+			menu = this.#claimMenu("agent-hub", () => this.showAgentHub(observers, { ...options, armCloseTap: false }));
 			this.#mountMenu(menu, hub, () => this.#showFullscreenMenu(hub));
 		};
 
@@ -3028,7 +3100,7 @@ export class SelectorController {
 				? (to, message, replyTo) => this.ctx.sendAsIrcOperator(to, message, replyTo)
 				: undefined,
 		});
-		const menu = this.#claimMenu("irc-viewer");
+		const menu = this.#claimMenu("irc-viewer", () => this.showIrcViewer());
 		this.#mountMenu(menu, viewer, () => this.#showFullscreenMenu(viewer));
 	}
 }

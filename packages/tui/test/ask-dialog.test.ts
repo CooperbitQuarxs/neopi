@@ -1370,7 +1370,7 @@ describe("AskDialogComponent", () => {
 		expect(matches?.length ?? 0).toBeLessThan(10);
 	});
 
-	it("expands a truncated question header on Ctrl+O and collapses on a second press", () => {
+	it("expands a truncated question header on Alt+E and collapses on a second press", () => {
 		const longQuestion = "This is a very long question ".repeat(200);
 		const component = new AskDialogComponent(
 			[
@@ -1391,7 +1391,7 @@ describe("AskDialogComponent", () => {
 		const collapsedCount = collapsed.match(/This is a very long question/g)?.length ?? 0;
 		expect(collapsedCount).toBeLessThan(10);
 
-		component.handleInput("\x0f");
+		component.handleInput("\x1be");
 		const expanded = render(component);
 		const expandedCount = expanded.match(/This is a very long question/g)?.length ?? 0;
 		expect(expandedCount).toBeGreaterThan(collapsedCount);
@@ -1401,7 +1401,7 @@ describe("AskDialogComponent", () => {
 		// larger header rather than an exact copy count.
 		expect(expandedCount).toBeGreaterThanOrEqual(15);
 
-		component.handleInput("\x0f");
+		component.handleInput("\x1be");
 		const recollapsed = render(component);
 		expect(recollapsed.match(/This is a very long question/g)?.length ?? 0).toBe(collapsedCount);
 	});
@@ -1434,7 +1434,7 @@ describe("AskDialogComponent", () => {
 		expect(component.toggleQuestionExpansion()).toBe(false);
 		expect(render(component)).toBe(before);
 	});
-	it("expands truncated option descriptions on Ctrl+O and collapses on a second press", () => {
+	it("expands truncated option descriptions on Alt+E and collapses on a second press", () => {
 		const longDescription = "This is a very long description ".repeat(30);
 		const component = new AskDialogComponent(
 			[
@@ -1457,7 +1457,7 @@ describe("AskDialogComponent", () => {
 		expect(expandedCount).toBeGreaterThan(collapsedCount);
 		expect(expandedCount).toBeGreaterThanOrEqual(10);
 
-		component.handleInput("\x0f");
+		component.handleInput("\x1be");
 		const recollapsed = render(component);
 		expect(recollapsed.match(/This is a very long description/g)?.length ?? 0).toBe(collapsedCount);
 	});

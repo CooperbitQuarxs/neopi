@@ -200,9 +200,9 @@ export const TRUNCATE_LENGTHS = {
 /** Keybinding action that toggles tool-output expansion. */
 const EXPAND_ACTION = "app.tools.expand";
 /** Fallback key when no binding is resolvable (e.g. outside an interactive session). */
-const DEFAULT_EXPAND_KEY: KeyId = "ctrl+o";
+const DEFAULT_EXPAND_KEY: KeyId = "alt+e";
 
-/** Human-readable primary key bound to tool-output expansion, e.g. `Ctrl+O`. */
+/** Human-readable primary key bound to tool-output expansion, e.g. `Alt+E`. */
 export function expandKeyHint(): string {
 	const [key = DEFAULT_EXPAND_KEY] = getKeybindings().getKeys(EXPAND_ACTION);
 	return formatKeyHint(key);
