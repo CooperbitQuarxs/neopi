@@ -158,8 +158,11 @@ export const TUI_KEYBINDINGS = {
 	"tui.select.left": { defaultKeys: "left", description: "Selection left: pane, collapse, or adjust (also h)" },
 	"tui.select.right": { defaultKeys: "right", description: "Selection right: pane, expand, or adjust (also l)" },
 	"tui.select.toggle": { defaultKeys: "space", description: "Toggle or soft-activate the selection" },
-	"tui.select.nextContext": { defaultKeys: "tab", description: "Next tab, section, or focus region" },
-	"tui.select.prevContext": { defaultKeys: "shift+tab", description: "Previous tab, section, or focus region" },
+	"tui.select.nextContext": { defaultKeys: ["tab", "ctrl+n"], description: "Next tab, section, or focus region" },
+	"tui.select.prevContext": {
+		defaultKeys: ["shift+tab", "ctrl+p"],
+		description: "Previous tab, section, or focus region",
+	},
 	"tui.select.search": { defaultKeys: "/", description: "Focus the filter or search field" },
 	"tui.select.confirm": { defaultKeys: "enter", description: "Confirm selection" },
 	"tui.select.cancel": {

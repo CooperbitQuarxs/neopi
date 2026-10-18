@@ -106,6 +106,20 @@ export class Input implements Component, Focusable {
 		return this.#cursor;
 	}
 
+	/** Restore a UTF-16 caret offset, snapping backward to a whole grapheme. */
+	setCursor(offset: number): void {
+		const clamped = clampTextOffset(offset, this.#value.length);
+		if (clamped === this.#value.length) {
+			this.#cursor = clamped;
+			return;
+		}
+		this.#cursor = 0;
+		for (const grapheme of segmenter.segment(this.#value)) {
+			if (grapheme.index > clamped) break;
+			this.#cursor = grapheme.index;
+		}
+	}
+
 	/** Return bounded input content and cursor state for debug inspection. */
 	debugState(): Record<string, unknown> {
 		return {

@@ -8,6 +8,8 @@
 - Added a movable `context_bar` status-line widget that fills the remaining width in every composer ([#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
 - Added per-provider usage-bar status-line widgets (`usage:<provider>:<window>[:<tier>]`) showing each reported quota window's percent and age ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
 - Lists open in normal navigation: `j`/`k` move, `gg`/`G` jump to first/last, `Ctrl-d`/`Ctrl-u` move half a page, `Ctrl-e`/`Ctrl-y` scroll the view without moving the selection, and `/` focuses the search field, where every key types literally until Esc returns to the list ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Search setup and login providers with `/`, page or jump through accounts, and scroll the view without moving the selected provider ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Menu history preserves focused filter text and caret position, and `Ctrl-N`/`Ctrl-P` switch menu contexts alongside Tab/Shift-Tab ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 
 ### Fixed
 

@@ -104,7 +104,7 @@ export interface SelectListLayoutOptions {
 	minPrimaryColumnWidth?: number;
 	maxPrimaryColumnWidth?: number;
 	truncatePrimary?: (context: SelectListTruncatePrimaryContext) => string;
-	/** Enable type-to-filter search when the item count exceeds maxVisible. Defaults to true. */
+	/** Allow `/` to focus the filter when the item count exceeds maxVisible. Defaults to true. */
 	overflowSearch?: boolean;
 	/** Search activation policy. `overflowSearch` remains authoritative when this is omitted. */
 	search?: "overflow" | "always" | "never";
@@ -142,6 +142,8 @@ export interface SelectListNavigationState {
 	selectedValue: string | undefined;
 	filter: string;
 	viewportTop: number | undefined;
+	filterFocused?: boolean;
+	filterCursor?: number;
 }
 
 type SelectItemLayout =
@@ -227,23 +229,51 @@ export class SelectList implements Component, MouseRoutable {
 		};
 	}
 
+	/** Hosts route focused filter input before their own printable shortcuts. */
+	get filterFocused(): boolean {
+		return this.#filterEditing;
+	}
+
 	/** Selection, filter, and scroll position, for menu history and drafts to restore. */
 	navigationState(): SelectListNavigationState {
 		return {
 			selectedValue: this.#selection.selectedKey,
 			filter: this.#selection.query,
 			viewportTop: this.#viewport.top,
+			filterFocused: this.#filterEditing,
+			filterCursor: this.#search.getCursor(),
 		};
 	}
 
-	/** Reapply a {@link navigationState} snapshot; the filter returns unfocused. */
+	/** Reapply selection, field focus/caret, and viewport without activating a row. */
 	restoreNavigationState(state: SelectListNavigationState): void {
-		this.#filterEditing = false;
+		this.#filterEditing = state.filterFocused === true;
 		this.#keys.reset();
 		this.#search.setValue(state.filter);
+		if (state.filterCursor !== undefined) this.#search.setCursor(state.filterCursor);
 		this.#setFilter(this.#search.getValue(), false);
 		if (state.selectedValue !== undefined) this.#selection.setSelectedKey(state.selectedValue);
 		this.#viewport.setTop(state.viewportTop);
+	}
+
+	navigationSnapshot(): SelectListNavigationState {
+		return this.navigationState();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as Partial<SelectListNavigationState>;
+		if (typeof state.filter !== "string") return;
+		if (state.selectedValue !== undefined && typeof state.selectedValue !== "string") return;
+		if (state.viewportTop !== undefined && (typeof state.viewportTop !== "number" || !Number.isFinite(state.viewportTop)))
+			return;
+		this.restoreNavigationState({
+			filter: state.filter,
+			selectedValue: state.selectedValue,
+			viewportTop: state.viewportTop,
+			filterFocused: state.filterFocused === true,
+			filterCursor: typeof state.filterCursor === "number" ? state.filterCursor : undefined,
+		});
 	}
 
 	/** Refit the visible row budget (hosts clamp the list to available height). */
