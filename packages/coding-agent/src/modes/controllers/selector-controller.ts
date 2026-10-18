@@ -228,7 +228,7 @@ function loadProviderAuthUi(): ProviderAuthUiModules {
 }
 
 /** Menus that open at most once: a repeat request focuses the open one. */
-type MenuKind =
+export type MenuKind =
 	| "settings"
 	| "status-line-config"
 	| "model-picker"
@@ -236,13 +236,39 @@ type MenuKind =
 	| "agents-dashboard"
 	| "agent-hub"
 	| "irc-viewer"
-	| "usage-dashboard";
+	| "usage-dashboard"
+	| "advisor-config"
+	| "chain-config"
+	| "mixture-config"
+	| "persona-config"
+	| "extensions-dashboard"
+	| "history-search"
+	| "plugin-selector"
+	| "rewind-selector"
+	| "copy-selector"
+	| "tree-selector"
+	| "session-selector"
+	| "oauth-selector"
+	| "logout-account-selector"
+	| "session-account-selector"
+	| "reset-usage-selector"
+	| "thinking-selector"
+	| "debug-selector"
+	| "log-viewer"
+	| "raw-sse"
+	| "session-info"
+	| "jobs-panel"
+	| "report-panel"
+	| "btw-history"
+	| "git"
+	| "hotkeys";
 
 /** Where menu history can return: a single-instance menu or the conversation. */
-type MenuLocation = MenuKind | "conversation";
+type MenuLocation = MenuKind | `${MenuKind}:${string}` | "conversation";
 
 /** What a menu-history entry needs to bring its view back. */
 interface MenuVisitState {
+	kind?: MenuKind;
 	/** Re-runs the request that opened the menu. */
 	reopen?: () => void;
 	/** The menu's {@link MenuHistoryParticipant} snapshot from when it was last left. */
@@ -251,11 +277,19 @@ interface MenuVisitState {
 
 /** An open menu: registered when the request runs, filled once its component mounts. */
 interface OpenMenu {
+	kind: MenuKind;
+	location: MenuLocation;
 	component?: Component;
 	handle?: OverlayHandle;
 	/** Shows `component` as a new overlay and focuses it; also raises a covered menu. */
 	mount?: () => OverlayHandle;
 	reopen: () => void;
+}
+
+/** Lifecycle seam for menus owned by a command or another UI controller. */
+export interface MenuHost {
+	mount(component: Component, mount: () => OverlayHandle): void;
+	close(): void;
 }
 
 export class SelectorController {
@@ -271,9 +305,18 @@ export class SelectorController {
 	/** True while history itself opens and closes menus, which are then not new visits. */
 	#navigatingHistory = false;
 	/** Snapshot to hand to the `kind` menu as soon as its history reopen mounts it. */
-	#pendingRestore: { kind: MenuKind; snapshot: unknown } | undefined;
+	#pendingRestore: { kind: MenuKind; location: MenuLocation; snapshot: unknown } | undefined;
 
 	constructor(private ctx: InteractiveModeContext) {}
+
+	openMenu(kind: MenuKind, reopen: () => void): MenuHost | undefined {
+		if (this.#focusOpenMenu(kind)) return undefined;
+		const menu = this.#claimMenu(kind, reopen);
+		return {
+			mount: (component, mount) => this.#mountMenu(menu, component, mount),
+			close: () => this.#releaseMenu(kind, menu),
+		};
+	}
 	/**
 	 * Mount a primary fullscreen menu through the one polished modal path shared
 	 * by Settings, Model Hub, and Agent Hub.
@@ -299,7 +342,10 @@ export class SelectorController {
 	#focusOpenMenu(kind: MenuKind): boolean {
 		const open = this.#openMenus.get(kind);
 		if (!open) return false;
-		if (!this.#navigatingHistory) this.#menuHistory.visit(kind, { reopen: open.reopen });
+		if (!this.#navigatingHistory) {
+			this.#snapshotOpenMenus();
+			this.#menuHistory.visit(open.location, this.#menuState(open));
+		}
 		if (open.component && open.mount && this.#isCovered(open.component)) {
 			open.handle?.hide();
 			open.handle = open.mount();
@@ -319,9 +365,25 @@ export class SelectorController {
 
 	/** Mount `component` as `menu`'s overlay through `mount`, which also raises it later. */
 	#mountMenu(menu: OpenMenu, component: Component, mount: () => OverlayHandle): void {
+		if (this.#openMenus.get(menu.kind) !== menu) {
+			if (isMenuHistoryLeaver(component)) component.leaveMenu();
+			return;
+		}
 		menu.component = component;
 		menu.mount = mount;
 		menu.handle = mount();
+		if (isMenuHistoryParticipant(component)) {
+			component.onNavigationVisit = (page, previousSnapshot) => {
+				if (this.#navigatingHistory || this.#openMenus.get(menu.kind) !== menu) return;
+				this.#menuHistory.recordState(menu.location, {
+					kind: menu.kind,
+					reopen: menu.reopen,
+					snapshot: previousSnapshot,
+				});
+				menu.location = page === "" ? menu.kind : `${menu.kind}:${page}`;
+				this.#menuHistory.visit(menu.location, this.#menuState(menu));
+			};
+		}
 		const restore = this.#pendingRestore;
 		if (restore && this.#openMenus.get(restore.kind) === menu) {
 			this.#pendingRestore = undefined;
@@ -337,17 +399,30 @@ export class SelectorController {
 	 * or fails to open. `reopen` repeats this request when menu history returns.
 	 */
 	#claimMenu(kind: MenuKind, reopen: () => void): OpenMenu {
-		const menu: OpenMenu = { reopen };
+		const restore = this.#pendingRestore?.kind === kind ? this.#pendingRestore : undefined;
+		if (!this.#navigatingHistory && !restore) this.#snapshotOpenMenus();
+		const menu: OpenMenu = { kind, location: restore?.location ?? kind, reopen };
 		this.#openMenus.set(kind, menu);
-		if (!this.#navigatingHistory) this.#menuHistory.visit(kind, { reopen });
+		if (!this.#navigatingHistory && !restore) this.#menuHistory.visit(kind, { kind, reopen });
 		return menu;
+	}
+
+	#menuState(menu: OpenMenu): MenuVisitState {
+		return {
+			kind: menu.kind,
+			reopen: menu.reopen,
+			snapshot: isMenuHistoryParticipant(menu.component) ? menu.component.navigationSnapshot() : undefined,
+		};
+	}
+
+	#snapshotOpenMenus(): void {
+		for (const menu of this.#openMenus.values()) this.#menuHistory.recordState(menu.location, this.#menuState(menu));
 	}
 
 	#releaseMenu(kind: MenuKind, menu: OpenMenu): void {
 		if (this.#openMenus.get(kind) !== menu) return;
 		this.#openMenus.delete(kind);
-		const snapshot = isMenuHistoryParticipant(menu.component) ? menu.component.navigationSnapshot() : undefined;
-		this.#menuHistory.recordState(kind, { reopen: menu.reopen, snapshot });
+		this.#menuHistory.recordState(menu.location, this.#menuState(menu));
 		if (this.#navigatingHistory) return;
 		// Closing the last menu returns to the conversation, which is a visit too.
 		// Deferred so a menu that closes to open another (hub → login) is one step.
@@ -362,28 +437,57 @@ export class SelectorController {
 	 * the timeline has no entry in that direction.
 	 */
 	navigateMenuHistory(direction: -1 | 1): boolean {
+		const focused = this.ctx.ui.getFocused();
+		let focusedMenu = false;
+		for (const menu of this.#openMenus.values()) {
+			if (menu.component === focused) {
+				focusedMenu = true;
+				break;
+			}
+		}
+		const focusedOverlay = this.ctx.ui.overlayStack.findLast(entry => !entry.hidden && entry.component === focused);
+		if (
+			(focusedOverlay && !focusedMenu) ||
+			(isMenuHistoryParticipant(focused) && focused.blocksMenuHistory === true)
+		) {
+			this.ctx.showStatus("Finish or cancel the prompt first");
+			return true;
+		}
 		if (!this.#menuHistory.canGo(direction)) return false;
 		this.#navigatingHistory = true;
 		try {
-			// Leave first, while the timeline still points at the open menu, so
-			// its snapshot lands on its own entry.
+			this.#snapshotOpenMenus();
+			const currentKind = this.#menuHistory.current.state?.kind;
+			const target = direction < 0 ? this.#menuHistory.back() : this.#menuHistory.forward();
+			const targetKind = target?.state?.kind;
+			const sameMenu =
+				targetKind === currentKind && targetKind !== undefined ? this.#openMenus.get(targetKind) : undefined;
+			// Moving between pages of the open menu must not settle previews,
+			// dispose live sources, or reopen the same menu.
+			if (sameMenu && target && isMenuHistoryParticipant(sameMenu.component)) {
+				sameMenu.location = target.location;
+				sameMenu.component.restoreNavigation(target.state?.snapshot);
+				this.ctx.ui.setFocus(sameMenu.component);
+				return true;
+			}
 			for (const [kind, menu] of [...this.#openMenus]) {
+				this.#openMenus.delete(kind);
 				if (isMenuHistoryLeaver(menu.component)) menu.component.leaveMenu();
 				menu.handle?.hide();
-				this.#releaseMenu(kind, menu);
 			}
-			const target = direction < 0 ? this.#menuHistory.back() : this.#menuHistory.forward();
 			const reopen = target?.state?.reopen;
-			if (!target || target.location === "conversation" || !reopen) {
+			if (!target || target.location === "conversation" || !targetKind || !reopen) {
 				this.focusActiveEditorArea();
 			} else {
-				this.#pendingRestore = { kind: target.location, snapshot: target.state?.snapshot };
+				this.#pendingRestore = { kind: targetKind, location: target.location, snapshot: target.state?.snapshot };
 				reopen();
+				const reopened = this.#openMenus.get(targetKind);
+				if (reopened) reopened.location = target.location;
 			}
 		} finally {
 			this.#navigatingHistory = false;
+			this.ctx.ui.requestRender();
 		}
-		this.ctx.ui.requestRender();
 		return true;
 	}
 
@@ -426,10 +530,18 @@ export class SelectorController {
 	 * Temporarily replaces the editor slot with a selector, restoring the prior
 	 * slot contents and focus when the selector finishes.
 	 */
-	showSelector(create: (done: () => void) => { component: Component; focus: Component }): void {
+	showSelector(
+		create: (done: () => void) => { component: Component; focus: Component },
+		history?: { kind: MenuKind; reopen: () => void },
+	): void {
+		if (history && this.#focusOpenMenu(history.kind)) return;
+		const menu = history ? this.#claimMenu(history.kind, history.reopen) : undefined;
 		const previousChildren = [...this.ctx.editorContainer.children];
 		const previousFocus = this.ctx.ui.getFocused();
-		const done = () => {
+		let hidden = false;
+		const unmount = () => {
+			if (hidden) return;
+			hidden = true;
 			this.ctx.editorContainer.clear();
 			for (const child of previousChildren) this.ctx.editorContainer.addChild(child);
 			const focus =
@@ -438,10 +550,28 @@ export class SelectorController {
 					: (previousChildren[0] ?? this.ctx.editor);
 			this.ctx.ui.setFocus(focus);
 		};
+		const done = () => {
+			if (menu) this.#releaseMenu(menu.kind, menu);
+			unmount();
+			this.ctx.ui.requestRender();
+		};
 		const { component, focus } = create(done);
-		this.ctx.editorContainer.clear();
-		this.ctx.editorContainer.addChild(component);
-		this.ctx.ui.setFocus(focus);
+		const mount = (): OverlayHandle => {
+			hidden = false;
+			this.ctx.editorContainer.clear();
+			this.ctx.editorContainer.addChild(component);
+			this.ctx.ui.setFocus(focus);
+			return {
+				hide: unmount,
+				setHidden: value => {
+					if (value) unmount();
+					else if (hidden) mount();
+				},
+				isHidden: () => hidden,
+			};
+		};
+		if (menu) this.#mountMenu(menu, component, mount);
+		else mount();
 		this.ctx.ui.requestRender();
 	}
 
@@ -600,6 +730,7 @@ export class SelectorController {
 	}
 
 	showAdvisorConfigure(): void {
+		if (this.#focusOpenMenu("advisor-config")) return;
 		const cwd = this.ctx.sessionManager.getCwd();
 		const agentDir = getAgentDir() ?? getProjectDir();
 		const initialScope: AdvisorConfigScope = "project";
@@ -619,8 +750,11 @@ export class SelectorController {
 			}
 			// Fullscreen editor on the alternate screen (the /settings idiom): the
 			// overlay holds the alt buffer + mouse tracking; the transcript stays put.
+			if (this.#focusOpenMenu("advisor-config")) return;
+			const menu = this.#claimMenu("advisor-config", () => this.showAdvisorConfigure());
 			const done = () => {
-				overlayHandle?.hide();
+				this.#releaseMenu(menu.kind, menu);
+				menu.handle?.hide();
 				this.focusActiveEditorArea();
 				this.ctx.ui.requestRender();
 			};
@@ -709,15 +843,7 @@ export class SelectorController {
 					return identity ? (report, limit) => limitMatchesActiveAccount(report, limit, identity) : undefined;
 				},
 			});
-			const overlayHandle = this.ctx.ui.showOverlay(overlay, {
-				anchor: "bottom-center",
-				width: "100%",
-				maxHeight: "100%",
-				margin: 0,
-				fullscreen: true,
-			});
-			this.ctx.ui.setFocus(overlay);
-			this.ctx.ui.requestRender();
+			this.#mountMenu(menu, overlay, () => this.#showFullscreenMenu(overlay));
 		})();
 	}
 
@@ -797,6 +923,7 @@ export class SelectorController {
 	}
 
 	showChainConfigure(): void {
+		if (this.#focusOpenMenu("chain-config")) return;
 		const cwd = this.ctx.sessionManager.getCwd();
 		const agentDir = getAgentDir() ?? getProjectDir();
 		const initialScope: ChainConfigScope = "project";
@@ -813,8 +940,11 @@ export class SelectorController {
 			if (initialDoc.warnings?.length) {
 				this.ctx.showWarning(`CHAINS.yml: ${sanitizeDisplayWarnings(initialDoc.warnings).join("; ")}`);
 			}
+			if (this.#focusOpenMenu("chain-config")) return;
+			const menu = this.#claimMenu("chain-config", () => this.showChainConfigure());
 			const done = () => {
-				overlayHandle?.hide();
+				this.#releaseMenu(menu.kind, menu);
+				menu.handle?.hide();
 				this.focusActiveEditorArea();
 				this.ctx.ui.requestRender();
 			};
@@ -854,19 +984,12 @@ export class SelectorController {
 				notify: message => this.ctx.showStatus(message),
 				warn: message => this.ctx.showWarning(message),
 			});
-			const overlayHandle = this.ctx.ui.showOverlay(overlay, {
-				anchor: "bottom-center",
-				width: "100%",
-				maxHeight: "100%",
-				margin: 0,
-				fullscreen: true,
-			});
-			this.ctx.ui.setFocus(overlay);
-			this.ctx.ui.requestRender();
+			this.#mountMenu(menu, overlay, () => this.#showFullscreenMenu(overlay));
 		})();
 	}
 
 	showMixtureConfigure(name?: string, returnToModelHub = false): void {
+		if (this.#focusOpenMenu("mixture-config")) return;
 		const cwd = this.ctx.sessionManager.getCwd();
 		const agentDir = this.ctx.session.getMixtureAgentDir() ?? getAgentDir() ?? getProjectDir();
 		void (async () => {
@@ -904,6 +1027,8 @@ export class SelectorController {
 				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
 				activeName: () => (this.ctx.session.model?.api === "mixture" ? this.ctx.session.model.id : undefined),
 			};
+			if (this.#focusOpenMenu("mixture-config")) return;
+			const menu = this.#claimMenu("mixture-config", () => this.showMixtureConfigure(name, returnToModelHub));
 			const overlay = new MixtureConfigOverlayComponent(
 				this.ctx.ui,
 				deps,
@@ -944,7 +1069,8 @@ export class SelectorController {
 						this.ctx.showStatus(`Using mixture/${selectedName}`);
 					},
 					close: () => {
-						handle.hide();
+						this.#releaseMenu(menu.kind, menu);
+						menu.handle?.hide();
 						this.focusActiveEditorArea();
 						this.ctx.ui.requestRender();
 						if (returnToModelHub) this.#showModelHub({ initialProviderId: "mixture" });
@@ -955,19 +1081,12 @@ export class SelectorController {
 				},
 				name,
 			);
-			const handle = this.ctx.ui.showOverlay(overlay, {
-				anchor: "bottom-center",
-				width: "100%",
-				maxHeight: "100%",
-				margin: 0,
-				fullscreen: true,
-			});
-			this.ctx.ui.setFocus(overlay);
-			this.ctx.ui.requestRender();
+			this.#mountMenu(menu, overlay, () => this.#showFullscreenMenu(overlay));
 		})().catch(error => this.ctx.showError(error instanceof Error ? error.message : String(error)));
 	}
 
 	showPersonaConfigure(scope: PersonaScope): void {
+		if (this.#focusOpenMenu("persona-config")) return;
 		void (async () => {
 			const host = sessionPersonaHost(this.ctx.session, {
 				setStatus: (key, text) => this.ctx.setHookStatus(key, text),
@@ -980,8 +1099,11 @@ export class SelectorController {
 				this.ctx.showError(error instanceof Error ? error.message : String(error));
 				return;
 			}
+			if (this.#focusOpenMenu("persona-config")) return;
+			const menu = this.#claimMenu("persona-config", () => this.showPersonaConfigure(scope));
 			const done = () => {
-				overlayHandle?.hide();
+				this.#releaseMenu(menu.kind, menu);
+				menu.handle?.hide();
 				this.focusActiveEditorArea();
 				this.ctx.ui.requestRender();
 			};
@@ -1012,15 +1134,7 @@ export class SelectorController {
 					requestRender: () => this.ctx.ui.requestRender(),
 				},
 			);
-			const overlayHandle = this.ctx.ui.showOverlay(overlay, {
-				anchor: "bottom-center",
-				width: "100%",
-				maxHeight: "100%",
-				margin: 0,
-				fullscreen: true,
-			});
-			this.ctx.ui.setFocus(overlay);
-			this.ctx.ui.requestRender();
+			this.#mountMenu(menu, overlay, () => this.#showFullscreenMenu(overlay));
 		})();
 	}
 
@@ -1043,7 +1157,7 @@ export class SelectorController {
 			);
 			component.setOnRequestRender(() => this.ctx.ui.requestRender());
 			return { component, focus: component };
-		});
+		}, { kind: "history-search", reopen: () => this.showHistorySearch() });
 	}
 
 	/**
@@ -1051,6 +1165,7 @@ export class SelectorController {
 	 * Replaces /status with a unified view of all providers and extensions.
 	 */
 	async showExtensionsDashboard(): Promise<void> {
+		if (this.#focusOpenMenu("extensions-dashboard")) return;
 		const dashboard = await ExtensionDashboard.create({
 			runtime: createExtensionDashboardRuntime({
 				cwd: getProjectDir(),
@@ -1067,25 +1182,22 @@ export class SelectorController {
 				listLiveTools: () => listLiveToolRecords(this.ctx.session),
 			},
 		});
-		// Fullscreen dashboard on the alternate screen (the /settings idiom): the
-		// overlay borrows the terminal's alt buffer and enables mouse tracking for
-		// its lifetime, leaving the transcript untouched underneath.
-		const overlay = this.ctx.ui.showOverlay(dashboard, {
-			width: "100%",
-			maxHeight: "100%",
-			anchor: "top-left",
-			margin: 0,
-			fullscreen: true,
-		});
-		dashboard.onClose = () => {
+		if (this.#focusOpenMenu("extensions-dashboard")) {
 			dashboard.dispose();
-			overlay.hide();
+			return;
+		}
+		const menu = this.#claimMenu("extensions-dashboard", () => void this.showExtensionsDashboard());
+		dashboard.onClose = () => {
+			this.#releaseMenu(menu.kind, menu);
+			dashboard.dispose();
+			menu.handle?.hide();
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
 		dashboard.onRequestRender = () => {
 			this.ctx.ui.requestRender();
 		};
+		this.#mountMenu(menu, dashboard, () => this.#showFullscreenMenu(dashboard));
 	}
 
 	/**
@@ -1709,7 +1821,7 @@ export class SelectorController {
 					},
 				});
 				return { component: selector, focus: selector.getSelectList() };
-			});
+			}, { kind: "plugin-selector", reopen: () => void this.showPluginSelector(mode) });
 			return;
 		}
 
@@ -1746,10 +1858,11 @@ export class SelectorController {
 				},
 			});
 			return { component: selector, focus: selector.getSelectList() };
-		});
+		}, { kind: "plugin-selector", reopen: () => void this.showPluginSelector(mode) });
 	}
 
 	showUserMessageSelector(): void {
+		if (this.#focusOpenMenu("rewind-selector")) return;
 		const entries = this.ctx.sessionManager.getBranch().filter(isTranscriptEntry);
 		if (entries.length === 0) {
 			this.ctx.showStatus("No messages to branch from");
@@ -1757,7 +1870,8 @@ export class SelectorController {
 		}
 
 		const done = () => {
-			overlayHandle?.hide();
+			this.#releaseMenu(menu.kind, menu);
+			menu.handle?.hide();
 			selector?.dispose();
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
@@ -1782,18 +1896,8 @@ export class SelectorController {
 			this.ctx.showStatus("No messages to branch from");
 			return;
 		}
-		// Fullscreen alternate-screen overlay: the transcript replica draws over
-		// the live one, and the normal screen stays untouched until the rewind
-		// itself rewrites it.
-		const overlayHandle = this.ctx.ui.showOverlay(selector, {
-			anchor: "bottom-center",
-			width: "100%",
-			maxHeight: "100%",
-			margin: 0,
-			fullscreen: true,
-		});
-		this.ctx.ui.setFocus(selector);
-		this.ctx.ui.requestRender();
+		const menu = this.#claimMenu("rewind-selector", () => this.showUserMessageSelector());
+		this.#mountMenu(menu, selector, () => this.#showFullscreenMenu(selector));
 	}
 
 	/**
@@ -1887,6 +1991,7 @@ export class SelectorController {
 	}
 
 	showCopySelector(): void {
+		if (this.#focusOpenMenu("copy-selector")) return;
 		const entries = this.ctx.sessionManager.getBranch().filter(isTranscriptEntry);
 		if (entries.length === 0) {
 			this.ctx.showStatus("Nothing to copy yet.");
@@ -1894,7 +1999,8 @@ export class SelectorController {
 		}
 
 		const done = () => {
-			overlayHandle?.hide();
+			this.#releaseMenu(menu.kind, menu);
+			menu.handle?.hide();
 			selector?.dispose();
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
@@ -1931,15 +2037,8 @@ export class SelectorController {
 			this.ctx.showStatus("Nothing to copy yet.");
 			return;
 		}
-		const overlayHandle = this.ctx.ui.showOverlay(selector, {
-			anchor: "bottom-center",
-			width: "100%",
-			maxHeight: "100%",
-			margin: 0,
-			fullscreen: true,
-		});
-		this.ctx.ui.setFocus(selector);
-		this.ctx.ui.requestRender();
+		const menu = this.#claimMenu("copy-selector", () => this.showCopySelector());
+		this.#mountMenu(menu, selector, () => this.#showFullscreenMenu(selector));
 	}
 
 	showTreeSelector(): void {
@@ -2121,7 +2220,7 @@ export class SelectorController {
 				this.ctx.sessionManager.getSessionName(),
 			);
 			return { component: selector, focus: selector };
-		});
+		}, { kind: "tree-selector", reopen: () => this.showTreeSelector() });
 	}
 
 	/**
@@ -2211,6 +2310,7 @@ export class SelectorController {
 	}
 
 	async showSessionSelector(source?: ForeignSessionSource): Promise<void> {
+		if (this.#focusOpenMenu("session-selector")) return;
 		let sessions: SessionInfo[];
 		let onSelectSession: (session: SessionInfo) => Promise<boolean>;
 		let selectorOptions: SessionSelectorOptions<SessionInfo>;
@@ -2294,10 +2394,13 @@ export class SelectorController {
 			};
 		}
 
+		if (this.#focusOpenMenu("session-selector")) return;
+		const menu = this.#claimMenu("session-selector", () => void this.showSessionSelector(source));
 		// Keep the fullscreen picker on the alternate buffer while a selected
 		// session is loaded and its transcript is rebuilt.
 		const done = () => {
-			overlayHandle?.hide();
+			this.#releaseMenu(menu.kind, menu);
+			menu.handle?.hide();
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
@@ -2333,26 +2436,21 @@ export class SelectorController {
 			},
 		);
 		selector.setOnRequestRender(() => this.ctx.ui.requestRender());
-		const overlayHandle = this.ctx.ui.showOverlay(selector, {
-			anchor: "top-left",
-			width: "100%",
-			maxHeight: "100%",
-			margin: 0,
-			fullscreen: true,
+		this.#mountMenu(menu, selector, () => {
+			const handle = this.#showFullscreenMenu(selector);
+			const closeSessions = trackMountedDialog({
+				family: "selector",
+				kind: "session",
+				title: "Sessions",
+				cancel: done,
+			});
+			const hideSessions = handle.hide.bind(handle);
+			handle.hide = () => {
+				closeSessions();
+				hideSessions();
+			};
+			return handle;
 		});
-		const closeSessions = trackMountedDialog({
-			family: "selector",
-			kind: "session",
-			title: "Sessions",
-			cancel: () => overlayHandle.hide(),
-		});
-		const hideSessions = overlayHandle.hide.bind(overlayHandle);
-		overlayHandle.hide = () => {
-			closeSessions();
-			hideSessions();
-		};
-		this.ctx.ui.setFocus(selector);
-		this.ctx.ui.requestRender();
 	}
 
 	#refreshSessionTerminalTitle(): void {
@@ -2749,7 +2847,7 @@ export class SelectorController {
 				},
 			);
 			return { component: selector, focus: selector };
-		});
+		}, { kind: "logout-account-selector", reopen: () => void this.#showOAuthLogoutAccountSelector(providerId) });
 	}
 
 	async showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
@@ -2808,7 +2906,7 @@ export class SelectorController {
 				},
 			);
 			return { component: selector, focus: selector };
-		});
+		}, { kind: "oauth-selector", reopen: () => void this.showOAuthSelector(mode, providerId) });
 	}
 
 	async showSessionPinSelector(): Promise<void> {
@@ -2865,7 +2963,7 @@ export class SelectorController {
 				},
 			);
 			return { component: selector, focus: selector };
-		});
+		}, { kind: "session-account-selector", reopen: () => void this.showSessionPinSelector() });
 	}
 
 	async showResetUsageSelector(): Promise<void> {
@@ -2911,7 +3009,7 @@ export class SelectorController {
 				},
 			);
 			return { component: selector, focus: selector };
-		});
+		}, { kind: "reset-usage-selector", reopen: () => void this.showResetUsageSelector() });
 	}
 
 	async #redeemReset(account: ResetUsageAccount): Promise<void> {
@@ -2949,7 +3047,7 @@ export class SelectorController {
 		this.showSelector(done => {
 			const selector = new DebugSelectorComponent(this.ctx, done);
 			return { component: selector, focus: selector };
-		});
+		}, { kind: "debug-selector", reopen: () => void this.showDebugSelector() });
 	}
 
 	showThinkingSelector(): void {
@@ -2970,7 +3068,7 @@ export class SelectorController {
 				},
 			);
 			return { component: selector, focus: selector.getSelectList() };
-		});
+		}, { kind: "thinking-selector", reopen: () => this.showThinkingSelector() });
 	}
 
 	showAgentHub(observers: SessionObserverRegistry, options?: AgentHubOpenOptions): void {
