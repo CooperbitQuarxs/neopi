@@ -125,6 +125,17 @@ Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `643
 
 [PR #60](https://github.com/PsychedelicShayna/neopi/pull/60) added per-advisor system-prompt overrides. [PR #63](https://github.com/PsychedelicShayna/neopi/pull/63) separated concern, blocker, and nit delivery boundaries while preserving session safety gates.
 
+## Background issue filing
+
+`/issue <prose>` ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)) files the operator's own words as an issue without taking over the conversation. Everything after `/issue` is ordinary prose; there is no project, type, or label syntax. It runs as a background job on the `issues` model role, which must be assigned explicitly (it never falls back to the active model, and the job disables provider model fallback).
+
+Two agents run in sequence, both visible in the Agent Hub:
+
+1. `IssueTarget-<id>` picks the tracker. It sees the prose plus an inventory merged from the foreground checkout, the `issues.checkouts` override map (`OWNER/REPO` → local path), checkouts found through session history, and `gh repo list`. It can only select a repository from that inventory with a verified local checkout; it never clones. If the target is ambiguous it asks.
+2. `Issue-<id>` starts with its cwd in that checkout, so the target's own `AGENTS.md` chain is loaded, and its tools are pinned to the selected repository: read-only file tools, issue search/view, the live label list, five sampled historical issues (newest, ordinal midpoint, three random between them; all when fewer exist), and one `issue_publish`. Labels must already exist. Publication is exactly-once: repeated calls share one create, and an uncertain create is reconciled against the operator's own issues before anything is retried. When an existing issue owns the subject, it returns a drafted amendment instead and posts nothing.
+
+Questions from either agent appear in the transcript; answer them in the Agent Hub, where the request is kept. Status records (dispatch, question, filed URL with the submitted body and applied labels, existing owner, failure) are display-only: they never start a foreground turn and do not lift holds. While the foreground is mid-turn the status line shows them immediately and the record follows at the next turn.
+
 ## Whole-recording xAI speech input
 
 `Ctrl+Space` (`app.stt.toggle`) starts an independent xAI recording; press it again to stop and transcribe the complete WAV through native `grok-stt`. Pauses and silence remain in the recording, and 750 ms of synthetic silence is appended after nonempty captures so the recognizer hears the end of the utterance. Nothing is segmented, streamed, or transcribed while recording. Existing xAI OAuth credentials are preferred, with xAI API-key credentials as the fallback; no Dictation model selection, `stt.enabled` setting, local speech model, or helper executable is required.
