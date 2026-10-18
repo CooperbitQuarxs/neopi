@@ -1265,13 +1265,14 @@ function isUsageBarTemplateToken(name: string): name is UsageBarTemplateToken {
 /**
  * Split a usage-bar template into literal text and `{label}`/`{percent}`/`{age}`
  * placeholders. `{{` and `}}` produce literal braces; unknown or unclosed
- * placeholders stay literal. No expressions are evaluated. Sanitize before
- * truncating so a cut cannot expose part of a stripped terminal escape.
+ * placeholders stay literal. No expressions are evaluated. Control and escape
+ * sequences are stripped before width limiting, so a cut cannot expose part
+ * of one; literal spacing inside the template is kept.
  */
 export function parseUsageBarTemplate(template: string): readonly UsageBarTemplatePart[] {
 	const cached = usageBarTemplateCache.get(template);
 	if (cached) return cached;
-	const source = limitUsageBarTemplate(sanitizeStatusText(template));
+	const source = limitUsageBarTemplate(template);
 	const parts: UsageBarTemplatePart[] = [];
 	let text = "";
 	for (let index = 0; index < source.length; index++) {
@@ -1317,7 +1318,9 @@ function usageBarPieces(
 	const { label, value, color, age } = usageBarContent(bar, ctx);
 	const stale = age === undefined;
 	const pieces: { text: string; color?: ThemeColor }[] = [];
-	const template = ctx.options.usageBars?.templates?.[id] ?? DEFAULT_USAGE_BAR_TEMPLATE;
+	// `statusLine.segmentOptions` is a free-form record; anything but a string falls back to the default.
+	const configured: unknown = ctx.options.usageBars?.templates?.[id];
+	const template = typeof configured === "string" ? configured : DEFAULT_USAGE_BAR_TEMPLATE;
 	for (const part of parseUsageBarTemplate(template)) {
 		let text: string;
 		let pieceColor: ThemeColor | undefined;

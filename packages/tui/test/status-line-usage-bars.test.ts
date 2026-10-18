@@ -131,14 +131,15 @@ describe("provider usage-bar rendering", () => {
 			{ "usage:anthropic:5h": "{percent}\n\x1b]0;title\x07\x1b[31mX\tY\u0000Z\uD800" },
 		);
 		const content = renderSegment("usage:anthropic:5h", ctx).content;
-		expect(Bun.stripANSI(content)).toBe("10% X YZ");
+		// Newlines become one space and tabs become spaces; spacing is otherwise literal.
+		expect(Bun.stripANSI(content)).toBe("10% X   YZ");
 		expect(content).not.toContain("\n");
 		expect(content).not.toContain("\x1b]");
 		expect(
 			describeSegment("usage:anthropic:5h", ctx)
 				?.spans.map(part => part.t)
 				.join(""),
-		).toBe("10% X YZ");
+		).toBe("10% X   YZ");
 	});
 
 	it("strips whole escape sequences before limiting template width", () => {
@@ -195,6 +196,23 @@ describe("provider usage-bar rendering", () => {
 			const ctx = context(null, { "usage:anthropic:5h": template });
 			expect(renderSegment("usage:anthropic:5h", ctx)).toEqual({ content: "", visible: false });
 			expect(describeSegment("usage:anthropic:5h", ctx)).toBeNull();
+		}
+	});
+
+	it("keeps literal spacing inside a template", () => {
+		const ctx = context({ reports }, { "usage:anthropic:5h": "[{label}]  {percent}" });
+		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", ctx).content)).toBe("[AN 5h]  10%");
+	});
+
+	it("falls back to the default text when settings hold a non-string template", () => {
+		for (const template of [{ nested: true }, 42, null, ["{percent}"]]) {
+			const ctx = context({ reports }, { "usage:anthropic:5h": template as unknown as string });
+			expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", ctx).content)).toBe("AN 5h 10% 2m");
+			expect(
+				describeSegment("usage:anthropic:5h", ctx)
+					?.spans.map(part => part.t)
+					.join(""),
+			).toBe("AN 5h 10% 2m");
 		}
 	});
 });
