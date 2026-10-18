@@ -677,3 +677,70 @@ test("provider navigation footer stays concise and counts outside All ignore its
 	expect(p.query).toBe("sonnet");
 	expect(p.scopes?.find(scope => scope.id === "provider:openai")?.count).toBe(0);
 });
+
+test("native Close leaves every model-hub search field before closing and names its next step", () => {
+	for (const scope of ["all", "roles", "effort"]) {
+		const calls = { assign: [] as string[], cancel: 0 };
+		const hub = openHub(calls);
+		hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: scope, mods: [] });
+		hub.handleInput("/");
+		for (const char of "jkl") hub.handleInput(char);
+		expect(props(hub.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe("Back to list");
+		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+		expect(calls.cancel).toBe(0);
+		expect(props(hub.describe(withPicker)).query).toBe("jkl");
+		expect(props(hub.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe("Close");
+		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+		expect(calls.cancel).toBe(1);
+		expect(calls.assign).toEqual([]);
+	}
+});
+
+test("native Close names and follows text-field then immediate strip-parent cancellation", () => {
+	const calls = { assign: [] as string[], cancel: 0 };
+	const hub = openHub(calls);
+	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "effort", mods: [] });
+	hub.handleInput("l");
+	hub.handleInput("G");
+	hub.handleInput(" ");
+	for (const char of "re:demo/.*") hub.handleInput(char);
+	hub.handleInput("\r");
+	expect(hub.navigationSnapshot().strip?.kind).toBe("effortLevels");
+	expect(props(hub.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe("Back");
+	hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+	expect(hub.navigationSnapshot().strip?.kind).toBe("pattern");
+	expect(props(hub.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe("Leave field");
+	hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+	const pattern = hub.navigationSnapshot().strip;
+	if (pattern?.kind !== "pattern") throw new Error("expected defocused pattern");
+	expect(pattern.input.focused).toBe(false);
+	expect(pattern.input.getValue()).toBe("re:demo/.*");
+	expect(props(hub.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe("Back");
+	hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+	expect(hub.navigationSnapshot().strip).toBeNull();
+	expect(hub.navigationSnapshot().entry).toBe("effort");
+	expect(calls.cancel).toBe(0);
+	expect(calls.assign).toEqual([]);
+});
+
+test("quick picker native Close leaves literal search, repaints and closes only from the list", () => {
+	let closes = 0;
+	let renders = 0;
+	const picker = new ModelPickerComponent(
+		{ requestRender: () => { renders++; }, terminal: { rows: 40 } } as unknown as TUI,
+		source({}, []),
+		{ ...registry(MODELS), refreshIfStale: async () => false },
+		MODELS.map(entry => ({ model: entry })),
+		{ onPick: () => {}, onCancel: () => { closes++; } },
+	);
+	for (const char of "/demo") picker.handleInput(char);
+	expect(props(picker.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe("Back to list");
+	const before = renders;
+	picker.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+	expect(renders).toBeGreaterThan(before);
+	expect(closes).toBe(0);
+	expect(props(picker.describe(withPicker)).query).toBe("demo");
+	expect(props(picker.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe("Close");
+	picker.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+	expect(closes).toBe(1);
+});
