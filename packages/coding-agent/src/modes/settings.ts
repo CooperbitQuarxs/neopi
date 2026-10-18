@@ -12,6 +12,7 @@ import {
 	STATUS_LINE_PRESET_VALUES,
 	STATUS_LINE_SEGMENT_IDS,
 	STATUS_LINE_SEPARATOR_VALUES,
+	type StatusLineSegmentId,
 } from "@oh-my-pi/pi-tui/status-line/schema";
 import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { setEditorGapComposerShape } from "@oh-my-pi/pi-tui/prompt/editor-top-gap";
@@ -323,10 +324,15 @@ export const cfgStatusLineShowHookStatus = register({
 	},
 });
 
+// Array settings infer their value type from the default, not the accepted-item
+// predicate. Preserve the full builtin-or-provider-widget vocabulary here.
+const DEFAULT_LEFT_SEGMENTS: StatusLineSegmentId[] = CUSTOM_STATUS_LINE_DEFAULTS.left;
+const DEFAULT_RIGHT_SEGMENTS: StatusLineSegmentId[] = CUSTOM_STATUS_LINE_DEFAULTS.right;
+
 export const cfgStatusLineLeftSegments = register({
 	id: "statusLine.leftSegments",
 	type: "array",
-	default: CUSTOM_STATUS_LINE_DEFAULTS.left,
+	default: DEFAULT_LEFT_SEGMENTS,
 	items: {
 		values: STATUS_LINE_SEGMENT_IDS,
 		accepts: value => parseUsageBarSegmentId(value) !== undefined,
@@ -337,7 +343,7 @@ export const cfgStatusLineLeftSegments = register({
 export const cfgStatusLineRightSegments = register({
 	id: "statusLine.rightSegments",
 	type: "array",
-	default: CUSTOM_STATUS_LINE_DEFAULTS.right,
+	default: DEFAULT_RIGHT_SEGMENTS,
 	items: {
 		values: STATUS_LINE_SEGMENT_IDS,
 		accepts: value => parseUsageBarSegmentId(value) !== undefined,

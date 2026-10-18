@@ -8,7 +8,7 @@
 
 ### Added
 
-- Added `/statusline` to arrange widgets and choose a composer with live previews, plus a flexible `context_bar` widget for every composer ([#227](https://github.com/PsychedelicShayna/neopi/issues/227), [#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
+- Added `/statusline` to arrange builtin and provider-usage widgets and choose a composer with live previews, plus a flexible `context_bar` widget for every composer ([#227](https://github.com/PsychedelicShayna/neopi/issues/227), [#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
 - Added per-provider usage-bar status-line widgets (`usage:<provider>:<window>[:<tier>]`) showing each reported quota window's percent and age ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
 - Added an IRC communications viewer (`Alt+I`) that keeps every agent-to-agent message in the session, including broadcasts and failed deliveries, after the transcript's live cards have retired; the `irc.operator.relayToMainTranscript` setting can turn those cards off ([#1](https://github.com/PsychedelicShayna/neopi/issues/1)).
 - Added an IRC identity for the operator (`Operator`, or `irc.operator.handle`): agents can message you directly without waiting on the main model, and `/irc <agent>|all <message>` or `r` in the IRC viewer sends as you ([#31](https://github.com/PsychedelicShayna/neopi/issues/31)).

@@ -110,7 +110,7 @@ describe("single-instance menus", () => {
 		const controller = new SelectorController(ctx);
 		ctx.showStatusLineConfigure = () => controller.showStatusLineConfigure();
 		try {
-			expect(await executeBuiltinSlashCommand("/statusline", { ctx, handleBackgroundCommand: () => {} })).toBe(true);
+			expect(await executeBuiltinSlashCommand("/statusline", { ctx })).toBe(true);
 			expect(shown[0]).toBeInstanceOf(StatusLineConfigOverlayComponent);
 			controller.showStatusLineConfigure();
 			expect(shown).toHaveLength(1);
