@@ -691,6 +691,7 @@ export class LiveSessionController {
 		if (!merged) return;
 		pending.dispatching = true;
 		const { content, details } = buildLiveDelegationMessage(merged, pending.voiceText, this.#includeVoiceNote());
+		if (pending.delivery === "followUp") details.delegationId = pending.id;
 		const delivery = this.#session.sendCustomMessageWithReceipt(
 			{
 				customType: LIVE_DELEGATION_MESSAGE_TYPE,
@@ -715,9 +716,11 @@ export class LiveSessionController {
 			this.#deleteTurns(turn => turn.claim === generation);
 			this.#pendingDelegation = undefined;
 			this.#pendingDelivery = undefined;
-			this.#activeDelegationId = pending.id;
-			this.#lastRelayedResponse = undefined;
-			this.#thinkingRelayedLength = 0;
+			if (pending.delivery !== "followUp") {
+				this.#activeDelegationId = pending.id;
+				this.#lastRelayedResponse = undefined;
+				this.#thinkingRelayedLength = 0;
+			}
 			this.#acceptSpeech(merged, pending.forced);
 			await delivery.completed;
 		} catch (cause) {
@@ -788,8 +791,15 @@ export class LiveSessionController {
 			event.message.role === "custom" &&
 			event.message.customType === LIVE_DELEGATION_MESSAGE_TYPE
 		) {
-			const noteId = (event.message.details as LiveDelegationDetails | undefined)?.noteId;
-			if (noteId) for (const record of this.#voiceNotes) if (record.noteId === noteId) record.consumed = true;
+			const details = event.message.details as LiveDelegationDetails | undefined;
+			if (details?.noteId) {
+				for (const record of this.#voiceNotes) if (record.noteId === details.noteId) record.consumed = true;
+			}
+			if (details?.delegationId) {
+				this.#activeDelegationId = details.delegationId;
+				this.#lastRelayedResponse = undefined;
+				this.#thinkingRelayedLength = 0;
+			}
 			return;
 		}
 		if (event.type === "irc_message") {
@@ -803,6 +813,24 @@ export class LiveSessionController {
 		if (event.type === "message_end" && event.message.role === "assistant") {
 			this.#thinkingRelayedLength = 0;
 			if (event.message.stopReason === "toolUse") this.#appendProgress(event.message);
+			return;
+		}
+		if (
+			event.type === "turn_end" &&
+			event.message.role === "assistant" &&
+			event.message.stopReason === "stop" &&
+			this.#session.agent
+				.peekFollowUpQueue()
+				.some(
+					message =>
+						message.role === "custom" &&
+						message.customType === LIVE_DELEGATION_MESSAGE_TYPE &&
+						Boolean((message.details as LiveDelegationDetails | undefined)?.delegationId),
+				)
+		) {
+			// The agent loop consumes follow-ups before agent_end. Speak the preceding task's
+			// answer while its routing id still owns the relay, before the next message starts.
+			this.#appendFinalResponse([event.message], { closeDelegation: true });
 			return;
 		}
 		if (event.type !== "agent_end") return;

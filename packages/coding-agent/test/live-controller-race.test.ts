@@ -13,7 +13,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentRegistry } from "../src/registry/agent-registry";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
-import type { CustomMessage } from "../src/session/messages";
+import { type CustomMessage, LIVE_DELEGATION_MESSAGE_TYPE } from "../src/session/messages";
 import { type LiveDelegationDelivery, LiveSessionController } from "../src/live/controller";
 import { LiveIngest } from "../src/live/ingest";
 import { LIVE_INGEST_DEFAULTS, type LiveIngestSettingsSource } from "../src/live/ingest-settings";
@@ -128,6 +128,7 @@ function makeHarness(options?: {
 	const sentSpeech: string[] = [];
 	const abortGates: Array<{ promise: Promise<void>; resolve: () => void }> = [];
 	const deliveries: Harness["deliveries"] = [];
+	const followUps: AgentMessage[] = [];
 	let streaming = false;
 	let bashRunning = false;
 	let evalRunning = false;
@@ -139,6 +140,13 @@ function makeHarness(options?: {
 			: join(mkdtempSync(join(tmpdir(), "live-race-")), "t.live-transcript.log");
 
 	const session = {
+		agent: {
+			peekFollowUpQueue: () => followUps,
+			followUp: (message: AgentMessage) => followUps.push(message),
+			clearFollowUpQueue: () => {
+				followUps.length = 0;
+			},
+		},
 		modelRegistry: { authStorage: {} },
 		sessionId: "live-race-test",
 		sessionManager: {
@@ -368,6 +376,18 @@ describe("live microphone forwarding", () => {
 	});
 });
 
+function followUpMessage(id: string): CustomMessage {
+	return {
+		role: "custom",
+		customType: LIVE_DELEGATION_MESSAGE_TYPE,
+		content: "queued operator request",
+		display: true,
+		attribution: "agent",
+		details: { delegationId: id },
+		timestamp: 1,
+	};
+}
+
 describe("live controller delegation ownership", () => {
 	it.each(["steer", "followUp", "interrupt"] as const)(
 		"keeps accepted speech exactly once across the streaming boundary in %s mode",
@@ -379,11 +399,13 @@ describe("live controller delegation ownership", () => {
 			h.fireLive(delegation("dlg-first", ""));
 			if (mode === "interrupt") h.nextAbort().resolve();
 			await settle();
+			if (mode === "followUp") h.fireSession({ type: "message_start", message: followUpMessage("dlg-first") });
 			h.setStreaming(false);
 			h.fireSession(agentEnd([assistant("first answer", "stop")]));
 			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "second request" } });
 			h.fireLive(delegation("dlg-second", ""));
 			await settle();
+			if (mode === "followUp") h.fireSession({ type: "message_start", message: followUpMessage("dlg-second") });
 			expect(h.prompts).toEqual(["first request", "second request"]);
 			expect(h.sentSpeech).toEqual(["first request", "second request"]);
 			expect(h.aborts).toHaveLength(mode === "interrupt" ? 1 : 0);
@@ -393,6 +415,32 @@ describe("live controller delegation ownership", () => {
 			await h.controller.stop();
 		},
 	);
+
+	it("speaks the preceding delegation's answer before a queued follow-up takes over", async () => {
+		let mode: LiveDelegationDelivery = "steer";
+		const h = makeHarness({ delegationDelivery: () => mode });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "first task" } });
+		h.fireLive(delegation("dlg-first", ""));
+		await settle();
+		h.setStreaming(true);
+		mode = "followUp";
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "second task" } });
+		h.fireLive(delegation("dlg-second", ""));
+		await settle();
+		const next = followUpMessage("dlg-second");
+		h.session.agent.followUp(next);
+		h.fireSession({ type: "turn_end", message: assistant("first answer", "stop"), toolResults: [] });
+		h.session.agent.clearFollowUpQueue();
+		h.fireSession({ type: "message_start", message: next });
+		h.fireSession(agentEnd([assistant("second answer", "stop")]));
+		await settle();
+		const answers = finalAppends(h.sent);
+		expect(answers.map(item => item.delegation_item_id)).toEqual(["dlg-first", "dlg-second"]);
+		expect(answers[0]?.text).toContain("first answer");
+		expect(answers[1]?.text).toContain("second answer");
+		await h.controller.stop();
+	});
 
 	it.each(["steer", "followUp", "interrupt"] as const)(
 		"moves unaccepted claims to the newest handoff in %s mode",

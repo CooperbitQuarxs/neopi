@@ -249,10 +249,15 @@ describe("AgentSession queued steer delivery", () => {
 			session.agent.setTools([tool]);
 			let onLiveEvent: ((event: LiveServerEvent) => void) | undefined;
 			const speech: string[] = [];
+			const voiced: string[] = [];
 			const controller = new LiveSessionController({
 				session,
 				delegationDelivery: () => mode,
-				extractAssistantText: () => "",
+				extractAssistantText: message =>
+					message.content
+						.filter(part => part.type === "text")
+						.map(part => part.text)
+						.join(""),
 				callbacks: {
 					onPhase() {},
 					onLevels() {},
@@ -267,7 +272,11 @@ describe("AgentSession queued steer delivery", () => {
 					onLiveEvent = options.callbacks.onEvent;
 					return {
 						async connect() {},
-						async send() {},
+						async send(message) {
+							if (message.type === "session.context.append" || message.type === "delegation.context.append") {
+								voiced.push(message.content.map(part => part.text).join(""));
+							}
+						},
 						async close() {},
 						async setMuted() {},
 						pushAudio: () => true,
@@ -276,6 +285,7 @@ describe("AgentSession queued steer delivery", () => {
 				createRecorder: () => ({ stop() {} }),
 			});
 			await controller.start();
+			controller.expectOperatorTurn();
 			const run = session.prompt("finish existing work");
 			try {
 				await withTimeout(started.promise, 2_000, "Active work did not start");
@@ -305,6 +315,8 @@ describe("AgentSession queued steer delivery", () => {
 			expect(mock.calls).toHaveLength(mode === "followUp" ? 3 : 2);
 			const secondContext = JSON.stringify(mock.calls[1]?.context.messages);
 			expect(secondContext.includes("new spoken request")).toBe(mode === "steer");
+			expect(voiced.join("\n")).toContain("active run finished");
+			if (mode === "followUp") expect(voiced.join("\n")).toContain("follow-up finished");
 			if (mode === "followUp")
 				expect(JSON.stringify(mock.calls[2]?.context.messages)).toContain("new spoken request");
 		},
