@@ -23,6 +23,7 @@ import { currentControlActor, runAsControlActor } from "./actor";
 import { HostBudget, MAX_KEYS_BYTES, workClass } from "./budget";
 import { RPC_COMMAND_TYPES } from "./parity";
 import { encodeKeyId, encodeSgrMouse } from "./keys";
+import { ControlMonitorService, type MonitorGrantInfo } from "./monitor-service";
 import type { ControlPresenter, RewindOutcome } from "./presenter";
 import { newControlInstanceId, publishControlEndpoint, type ControlPublication } from "./registry";
 import { ControlServer, type ControlConnection } from "./server";
@@ -126,6 +127,8 @@ export class ControlHost {
 	readonly budget = new HostBudget();
 	readonly roles: RpcRoles;
 	readonly promptResults: RpcPromptResults;
+	/** Narrow per-agent capabilities for monitor panes (#345). */
+	readonly monitor: ControlMonitorService;
 	presenter: ControlPresenter | undefined;
 	publication: ControlPublication | undefined;
 	readonly #options: ControlHostOptions;
@@ -164,6 +167,11 @@ export class ControlHost {
 		this.#options = options;
 		this.roles = new RpcRoles(options.session);
 		this.promptResults = new RpcPromptResults(options.session, () => {});
+		this.monitor = new ControlMonitorService({
+			session: options.session,
+			registry: AgentRegistry.global(),
+			generation: () => this.#revisions.generation,
+		});
 		hosts.set(options.session, this);
 	}
 
@@ -185,6 +193,7 @@ export class ControlHost {
 	}
 	bumpGeneration(): void {
 		this.#revisions.generation++;
+		this.monitor.recheck();
 	}
 	bumpPaint(): void {
 		this.#revisions.paint++;
@@ -219,6 +228,7 @@ export class ControlHost {
 				this.#dispatch(connection, command),
 			onAuthenticated: (connection: ControlConnection) => {
 				this.#connections.add(connection);
+				if (connection.monitor) this.monitor.attach(connection, connection.monitor);
 				connection.write({
 					type: "ready",
 					protocolVersion: 1,
@@ -233,7 +243,9 @@ export class ControlHost {
 				this.#forwarders.delete(connection);
 				this.#closeBridges(connection);
 				this.#setSubagentLevel(connection, "off");
+				this.monitor.detach(connection);
 			},
+			authenticateMonitor: (capability: string) => (this.#closed ? undefined : this.monitor.authenticate(capability)),
 		};
 		const server = new ControlServer({ metadata: { instanceId: this.instanceId }, host: connectionHost });
 		if (server.disabled) {
@@ -399,6 +411,7 @@ export class ControlHost {
 		await this.publication?.close();
 		hosts.delete(this.#options.session);
 		this.#subagentLevels.clear();
+		this.monitor.dispose();
 		this.#subagents?.dispose();
 		this.#subagents = undefined;
 	}
@@ -417,6 +430,15 @@ export class ControlHost {
 
 	async #dispatchInner(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
 		const type = String(frame.type ?? "");
+		// A monitor connection is scoped to its one grant: nothing below this line is reachable from it.
+		if (connection.monitor) {
+			if (type === "bye") {
+				connection.close("bye");
+				return;
+			}
+			this.#reply(connection, frame, await this.monitor.handle(connection, connection.monitor, frame));
+			return;
+		}
 		if (connection.probe && type !== "get_status" && type !== "state" && type !== "bye") {
 			this.#reply(connection, frame, {
 				success: false,
@@ -872,6 +894,22 @@ export class ControlHost {
 			case "agents":
 				await this.#agents(connection, frame);
 				return;
+			case "monitor_grant": {
+				// A full (token) connection is owner-equivalent; it may mint a pane's narrow capability.
+				let data: MonitorGrantInfo;
+				try {
+					data = this.monitor.grant(String(frame.agentId ?? ""));
+				} catch (error) {
+					this.#reply(connection, frame, {
+						success: false,
+						error: error instanceof Error ? error.message : String(error),
+						code: "unknown_agent",
+					});
+					return;
+				}
+				this.#reply(connection, frame, { success: true, data });
+				return;
+			}
 			case "cycle_role_model": {
 				if (needTui()) return;
 				const direction = frame.direction === "backward" ? "app.model.cycleBackward" : "app.model.cycleForward";
