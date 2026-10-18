@@ -1,4 +1,5 @@
 import type { Model } from "@oh-my-pi/pi-ai";
+import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai/usage";
 import type { SessionState, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import type { NativeNode, NativeUiEvent } from "../native/node";
 import type { ContextLineMode, StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "./schema";
@@ -196,6 +197,10 @@ export interface SegmentContext {
 	 * the worktree/branch is already shown by the git segment.
 	 */
 	worktree: { projectName: string; worktreeName: string } | null;
+	/** Last completed shared usage fetch; null until one completes. */
+	usageReports: { reports: readonly UsageReport[] } | null;
+	/** Host account selection, absent in previews without an authenticated session. */
+	usageLimitMatchesActiveAccount?: (report: UsageReport, limit: UsageLimit) => boolean;
 	usage: {
 		tier?: string;
 		fiveHour?: { percent: number; resetMinutes?: number };

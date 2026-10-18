@@ -8,6 +8,7 @@
 
 ### Added
 
+- Added per-provider usage-bar status-line widgets (`usage:<provider>:<window>[:<tier>]`) showing each reported quota window's percent and age ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
 - Added an IRC communications viewer (`Alt+I`) that keeps every agent-to-agent message in the session, including broadcasts and failed deliveries, after the transcript's live cards have retired; the `irc.operator.relayToMainTranscript` setting can turn those cards off ([#1](https://github.com/PsychedelicShayna/neopi/issues/1)).
 - Added an IRC identity for the operator (`Operator`, or `irc.operator.handle`): agents can message you directly without waiting on the main model, and `/irc <agent>|all <message>` or `r` in the IRC viewer sends as you ([#31](https://github.com/PsychedelicShayna/neopi/issues/31)).
 - Added opt-in `re:` regular expressions for model selectors across scopes, effort rules, role and subagent model selection, and retry fallback chain keys and entries. Existing literal and glob selectors retain their behavior; malformed expressions produce configuration warnings and are skipped. (#208)

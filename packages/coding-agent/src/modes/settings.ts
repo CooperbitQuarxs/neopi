@@ -8,6 +8,7 @@ import { TREE_FILTER_MODES } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import {
 	CONTEXT_LINE_MODE_VALUES,
 	CUSTOM_STATUS_LINE_DEFAULTS,
+	parseUsageBarSegmentId,
 	STATUS_LINE_PRESET_VALUES,
 	STATUS_LINE_SEGMENT_IDS,
 	STATUS_LINE_SEPARATOR_VALUES,
@@ -326,14 +327,22 @@ export const cfgStatusLineLeftSegments = register({
 	id: "statusLine.leftSegments",
 	type: "array",
 	default: CUSTOM_STATUS_LINE_DEFAULTS.left,
-	items: { values: STATUS_LINE_SEGMENT_IDS, label: "status line segment" },
+	items: {
+		values: STATUS_LINE_SEGMENT_IDS,
+		accepts: value => parseUsageBarSegmentId(value) !== undefined,
+		label: "status line segment",
+	},
 });
 
 export const cfgStatusLineRightSegments = register({
 	id: "statusLine.rightSegments",
 	type: "array",
 	default: CUSTOM_STATUS_LINE_DEFAULTS.right,
-	items: { values: STATUS_LINE_SEGMENT_IDS, label: "status line segment" },
+	items: {
+		values: STATUS_LINE_SEGMENT_IDS,
+		accepts: value => parseUsageBarSegmentId(value) !== undefined,
+		label: "status line segment",
+	},
 });
 
 export const cfgStatusLineSegmentOptions = register({

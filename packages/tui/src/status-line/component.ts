@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
+import { usageReportSchema } from "@oh-my-pi/pi-ai/usage";
 import {
 	getAntigravityCounterKeyForModel,
 	scopeAntigravityLimitsForModel,
@@ -39,6 +40,7 @@ import { canReuseCachedPr, createPrCacheContext, isSamePrCacheContext, type PrCa
 import { summarizeUsageResetCredits } from "../overlays/usage-display";
 import { getPreset } from "./presets";
 import { describeSegment, renderSegment, type SegmentContext } from "./segments";
+import { parseUsageBarSegmentId } from "./schema";
 import type { TspMeterMark, TspProps } from "@oh-my-pi/pi-wire";
 import type { NativeNode, NativeUiEvent } from "../native/node";
 import { col, node, span } from "../native/describe";
@@ -794,6 +796,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	} | null = null;
 	#cachedUsageContextKey: string | null = null;
 	#usageFetchedAt = 0;
+	#cachedUsageReports: { reports: readonly UsageReport[] } | null = null;
+	#usageAgeTimer: NodeJS.Timeout | undefined;
 	#usageInFlight = false;
 	#usageStartTimer: Timer | null = null;
 	// A timed-out request may still resolve. Its result remains eligible only
@@ -954,6 +958,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		this.#invalidateStatusLineRenderCache();
 		if (this.#onBranchChange) this.#setupGitWatcher();
 		this.#syncPricingTimer();
+		this.#syncUsageAgeTimer();
 	}
 
 	getEffectiveSettingsForTest(): EffectiveStatusLineSettings {
@@ -1287,6 +1292,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		this.#stopSpeculationBlink();
 		this.#stopBrandFadeTimer();
 		this.#stopPricingTimer();
+		if (this.#usageAgeTimer) clearInterval(this.#usageAgeTimer);
+		this.#usageAgeTimer = undefined;
 		this.#clearUsageStartTimer();
 		this.#onCodexResetFireworks = undefined;
 		this.#onResetExpiryNotice = undefined;
@@ -1459,6 +1466,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	#invalidateSessionCaches(): void {
 		this.#clearUsageStartTimer();
 		this.#cachedUsage = null;
+		this.#cachedUsageReports = null;
 		this.#usageFetchedAt = 0;
 		this.#usageInFlight = false;
 		this.#contextUsageCache = undefined;
@@ -1971,6 +1979,24 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		return `${this.#formatUsageContextKey(activeProvider, identity)}\0${activeModelId}`;
 	}
 
+	#syncUsageAgeTimer(): void {
+		const settings = this.#resolveSettings();
+		const configured = [...settings.leftSegments, ...settings.rightSegments].some(
+			id => parseUsageBarSegmentId(id) !== undefined,
+		);
+		if (this.#disposed || !configured) {
+			if (this.#usageAgeTimer) clearInterval(this.#usageAgeTimer);
+			this.#usageAgeTimer = undefined;
+			return;
+		}
+		if (this.#usageAgeTimer) return;
+		this.#usageAgeTimer = setInterval(() => {
+			this.#invalidateStatusLineRenderCache();
+			this.#onBranchChange?.();
+		}, 60_000);
+		this.#usageAgeTimer.unref();
+	}
+
 	/**
 	 * Startup redraws only arm a short-delayed task; timeout releases the render
 	 * cadence while a late successful fetch can still refresh the cached segment.
@@ -1980,8 +2006,22 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const session = this.session;
 		const usageContextKey = this.#getUsageContextKey(session);
 		if (this.#cachedUsageContextKey !== usageContextKey) {
-			this.#cachedUsage = null;
-			this.#usageFetchedAt = 0;
+			const provider = session.state.model?.provider ?? session.model?.provider;
+			const previous = this.#cachedUsageContextKey;
+			// Preserve account-rotation refreshes, but model/provider switches reuse
+			// the all-provider snapshot and its existing five-minute fetch gate.
+			if (
+				provider &&
+				previous?.startsWith(`${provider}\0`) &&
+				previous.slice(0, previous.lastIndexOf("\0")) !==
+					usageContextKey.slice(0, usageContextKey.lastIndexOf("\0"))
+			)
+				this.#usageFetchedAt = 0;
+			this.#cachedUsage = this.#normalizeUsageReports(this.#cachedUsageReports?.reports, {
+				provider,
+				modelId: session.state.model?.id ?? session.model?.id,
+				identity: provider ? this.host.activeAccount(session, provider) : undefined,
+			});
 			this.#cachedUsageContextKey = usageContextKey;
 		}
 		if (this.#usageInFlight || this.#usageStartTimer) return;
@@ -2012,6 +2052,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		} catch {
 			if (this.session !== session) return;
 			this.#usageFetchedAt = Date.now();
+			if (this.#cachedUsageReports === null) {
+				this.#cachedUsageReports = { reports: [] };
+				this.#invalidateStatusLineRenderCache();
+				this.#onBranchChange?.();
+			}
 			if (signal.aborted && reportsPromise) {
 				this.#observeLateUsageRefresh(session, reportsPromise, sequence);
 			}
@@ -2025,6 +2070,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			return;
 		}
 		this.#latestAppliedUsageRefreshSequence = sequence;
+		this.#cachedUsageReports = {
+			reports: Array.isArray(reports)
+				? reports.filter((report): report is UsageReport => usageReportSchema.allows(report))
+				: [],
+		};
 		const activeProvider = session.state.model?.provider ?? session.model?.provider;
 		const activeModelId = session.state.model?.id ?? session.model?.id;
 		const activeIdentity = activeProvider ? this.host.activeAccount(session, activeProvider) : undefined;
@@ -2035,15 +2085,12 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		});
 		const resetSnapshot =
 			activeProvider === "openai-codex" ? this.#normalizeCodexResetSnapshot(reports, activeIdentity) : null;
-		const usageChanged = this.#cachedUsage !== normalized;
 		this.#cachedUsage = normalized;
 		this.#usageFetchedAt = Date.now();
 		// Usage fetch is async; without a repaint the top border stays blank until
 		// some unrelated event (git resolve, keystroke, …) rebuilds it.
-		if (usageChanged) {
-			this.#invalidateStatusLineRenderCache();
-			this.#onBranchChange?.();
-		}
+		this.#invalidateStatusLineRenderCache();
+		this.#onBranchChange?.();
 		this.#noticeResetExpiry(session, reports);
 		if (!resetSnapshot) return;
 		const contextKey = this.#formatUsageContextKey(activeProvider, activeIdentity);
@@ -2470,6 +2517,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 
 		// Trigger background fetch (5-min TTL); render uses cached value
 		this.refreshUsageInBackground();
+		this.#syncUsageAgeTimer();
 
 		// Get usage statistics
 		const aggregateUsageStats = this.session.sessionManager?.getUsageStatistics() ?? {
@@ -2575,6 +2623,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			},
 			worktree: activeRepoCache.worktree,
 			usage: this.#cachedUsage,
+			usageReports: this.#cachedUsageReports,
+			usageLimitMatchesActiveAccount: (report, limit) => {
+				const identity = this.host.activeAccount(this.session, report.provider);
+				return !identity || this.host.limitMatchesActiveAccount(report, limit, identity);
+			},
 		};
 	}
 

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added per-provider usage-bar status-line widgets (`usage:<provider>:<window>[:<tier>]`) showing each reported quota window's percent and age ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
 - Picker navigation accepts `h/j/k/l` as arrows in normal mode; `i` opens filter editing, where letters stay literal. Escape leaves the filter, then closes the picker on the next press (#35).
 
 ### Fixed
