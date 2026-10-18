@@ -13,6 +13,7 @@
 - Logout and usage-reset pickers support search, paging, and history without replaying destructive confirmations ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Small settings and account pickers preserve selection, search, and scroll position when reopened ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Menu search fields share literal editing, consistent muted hints, and restorable caret/focus state across custom pickers ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Settings and plugin configuration support explicit search, shared navigation, and nested menu history that preserves safe unsaved editor drafts ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 
 ### Fixed
 
