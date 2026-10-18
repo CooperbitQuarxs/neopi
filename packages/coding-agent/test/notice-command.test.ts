@@ -94,13 +94,17 @@ describe("/notice operator command", () => {
 			editor: {
 				getText: () => editorText,
 				getExpandedText: () => editorText,
-				setText: text => { editorText = text; },
+				setText: text => {
+					editorText = text;
+				},
 				pendingImages: [],
 				pendingImageLinks: [],
 				composerChips: () => [],
 				addToHistory: vi.fn(),
 				clearSubmittedDraft: vi.fn(),
-				setCollapsedText: vi.fn(text => { editorText = text; }),
+				setCollapsedText: vi.fn(text => {
+					editorText = text;
+				}),
 				setActionKeys: vi.fn(),
 				setCustomKeyHandler: vi.fn(),
 				clearCustomKeyHandlers: vi.fn(),
@@ -212,8 +216,11 @@ describe("/notice operator command", () => {
 			const command = "/notice   editable :) {{literal}}\nsecond line  ";
 			try {
 				harness.session.agent.steer({
-					role: "developer", content: "automatic hidden notice", attribution: "agent",
-					synthetic: true, timestamp: Date.now(),
+					role: "developer",
+					content: "automatic hidden notice",
+					attribution: "agent",
+					synthetic: true,
+					timestamp: Date.now(),
 				});
 				await harness.submit(command);
 				expect(harness.session.getQueuedMessages().steering).toEqual([command]);
@@ -221,8 +228,9 @@ describe("/notice operator command", () => {
 				else harness.controller.handleDequeue();
 				expect(harness.ctx.editor.getText()).toBe(command);
 				expect(harness.session.getQueuedMessages().steering).toEqual([]);
-				expect(harness.session.agent.peekSteeringQueue().some(message => textOf(message) === "automatic hidden notice"))
-					.toBe(!interrupt);
+				expect(
+					harness.session.agent.peekSteeringQueue().some(message => textOf(message) === "automatic hidden notice"),
+				).toBe(!interrupt);
 			} finally {
 				release.resolve();
 				await running;
@@ -295,8 +303,9 @@ describe("/notice operator command", () => {
 					expandPromptTemplates: false,
 					streamingBehavior,
 				});
-				expect(harness.session.getQueuedMessages()[streamingBehavior === "steer" ? "steering" : "followUp"])
-					.toEqual(["/notice queued"]);
+				expect(
+					harness.session.getQueuedMessages()[streamingBehavior === "steer" ? "steering" : "followUp"],
+				).toEqual(["/notice queued"]);
 			});
 			await harness.session.prompt("initial");
 			expectNotice(harness.mock.calls.at(-1)!.context.messages, "queued");

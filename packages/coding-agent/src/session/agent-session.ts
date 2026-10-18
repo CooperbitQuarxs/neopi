@@ -9694,9 +9694,11 @@ export class AgentSession implements SettingsScope {
 		const withdrawn = options?.forInterrupt ? this.agent.withdrawUndeliveredQueuedMessages() : undefined;
 		const steeringAll = [...(withdrawn?.steering ?? []), ...this.agent.peekSteeringQueue()];
 		const followUpAll = [...(withdrawn?.followUp ?? []), ...this.agent.peekFollowUpQueue()];
-		const steering = steeringAll.filter(isUserAuthoredQueuedMessage)
+		const steering = steeringAll
+			.filter(isUserAuthoredQueuedMessage)
 			.map(message => toRestoredQueuedMessage(message, this.#queuedMessageRawText.get(message)));
-		const followUp = followUpAll.filter(isUserAuthoredQueuedMessage)
+		const followUp = followUpAll
+			.filter(isUserAuthoredQueuedMessage)
 			.map(message => toRestoredQueuedMessage(message, this.#queuedMessageRawText.get(message)));
 		const keep: (m: AgentMessage) => boolean = options?.forInterrupt
 			? isAdvisorCard
@@ -9738,7 +9740,9 @@ export class AgentSession implements SettingsScope {
 			steering: [...this.agent.peekLiveSteeredMessages(), ...this.agent.peekSteeringQueue()]
 				.filter(isUserAuthoredQueuedMessage)
 				.map(message => queueChipText(message, this.#queuedMessageRawText.get(message))),
-			followUp: this.agent.peekFollowUpQueue().filter(isUserAuthoredQueuedMessage)
+			followUp: this.agent
+				.peekFollowUpQueue()
+				.filter(isUserAuthoredQueuedMessage)
 				.map(message => queueChipText(message, this.#queuedMessageRawText.get(message))),
 			liveSteered,
 		};
@@ -9843,8 +9847,11 @@ export class AgentSession implements SettingsScope {
 			message => isUserAuthoredQueuedMessage(message) && this.#queuedMessageRawText.get(message) === text,
 		);
 		if (index < 0) {
-			index = queue.findIndex(message => isUserAuthoredQueuedMessage(message) &&
-				queueChipText(message, this.#queuedMessageRawText.get(message)) === text);
+			index = queue.findIndex(
+				message =>
+					isUserAuthoredQueuedMessage(message) &&
+					queueChipText(message, this.#queuedMessageRawText.get(message)) === text,
+			);
 		}
 		return index;
 	}

@@ -167,25 +167,49 @@ describe("operator developer-message wire roles", () => {
 					messages: [{ role, content: [{ type: "text", text: notice }, image], timestamp: 1 }],
 				};
 				const chat = buildModel({
-					...spec, api: "openai-completions", input: ["text", "image"], compat: { supportsDeveloperRole },
+					...spec,
+					api: "openai-completions",
+					input: ["text", "image"],
+					compat: { supportsDeveloperRole },
 				});
-				expect(convertMessages(chat, context, chat.compat)).toEqual([{
-					role: "user",
-					content: [{ type: "text", text: notice }, {
-						type: "image_url", image_url: { url: "data:image/png;base64,dGVzdA==", detail: "low" },
-					}],
-				}]);
+				expect(convertMessages(chat, context, chat.compat)).toEqual([
+					{
+						role: "user",
+						content: [
+							{ type: "text", text: notice },
+							{
+								type: "image_url",
+								image_url: { url: "data:image/png;base64,dGVzdA==", detail: "low" },
+							},
+						],
+					},
+				]);
 				const responses = buildModel({
-					...spec, api: "openai-responses", input: ["text", "image"], compat: { supportsDeveloperRole },
+					...spec,
+					api: "openai-responses",
+					input: ["text", "image"],
+					compat: { supportsDeveloperRole },
 				});
-				expect(buildResponsesInput({
-					model: responses, context, strictResponsesPairing: true, supportsImageDetailOriginal: false,
-				})).toEqual([{
-					role: "user",
-					content: [{ type: "input_text", text: notice }, {
-						type: "input_image", image_url: "data:image/png;base64,dGVzdA==", detail: "low",
-					}],
-				}]);
+				expect(
+					buildResponsesInput({
+						model: responses,
+						context,
+						strictResponsesPairing: true,
+						supportsImageDetailOriginal: false,
+					}),
+				).toEqual([
+					{
+						role: "user",
+						content: [
+							{ type: "input_text", text: notice },
+							{
+								type: "input_image",
+								image_url: "data:image/png;base64,dGVzdA==",
+								detail: "low",
+							},
+						],
+					},
+				]);
 			});
 		}
 	}

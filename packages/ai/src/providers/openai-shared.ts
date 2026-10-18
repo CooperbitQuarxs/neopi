@@ -2188,7 +2188,8 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 					: undefined;
 			messages.push({
 				role:
-					msg.role === "developer" && (options.model.compat as OpenAICompatPolicyCompat).supportsDeveloperRole &&
+					msg.role === "developer" &&
+					(options.model.compat as OpenAICompatPolicyCompat).supportsDeveloperRole &&
 					content.every(part => part.type === "input_text")
 						? "developer"
 						: "user",
