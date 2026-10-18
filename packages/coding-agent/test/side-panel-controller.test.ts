@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SidePanelController } from "@oh-my-pi/pi-coding-agent/modes/controllers/side-panel-controller";
-import { cfgSidebarEnabled } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgSidebarEnabled, cfgSidebarView } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { type Component, parseSgrMouse, type SgrMouseEvent, Text } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
@@ -214,7 +214,7 @@ describe("SidePanelController", () => {
 			const h = await harness(120, { "sidebar.enabled": true, "sidebar.side": side });
 			try {
 				const routed: number[] = [];
-				h.controller.register({
+				h.controller.registerView("todo", {
 					id: "todo",
 					title: "TODO",
 					content: {
@@ -273,7 +273,7 @@ describe("SidePanelController", () => {
 		const h = await harness(120, { "sidebar.enabled": true });
 		const original = theme;
 		try {
-			h.controller.register({ id: "todo", title: "TODO", content: () => ["task"] });
+			h.controller.registerView("todo", { id: "todo", title: "TODO", content: () => ["task"] });
 			h.controller.applySettings();
 			await h.settle();
 			const light = (await getThemeByName("light")) as Theme;
@@ -287,6 +287,64 @@ describe("SidePanelController", () => {
 			expect(frame.viewport.join("\n")).toContain(lightTitle);
 		} finally {
 			setThemeInstance(original);
+			h.stop();
+		}
+	});
+
+	it("shows one view at a time and cycles views on a right-click in the panel", async () => {
+		const h = await harness(120, { "sidebar.enabled": true });
+		try {
+			h.controller.registerView("todo", { id: "todo", title: "TODO", content: () => ["task one"] });
+			h.controller.registerView("agents", { id: "agents", title: "AGENTS", content: () => ["agent row"] });
+			h.controller.registerView("irc", { id: "irc", title: "IRC", content: () => ["irc line"] });
+			h.controller.applySettings();
+			await h.settle();
+			const screen = () => h.term.getViewport().join("\n");
+			expect(screen()).toContain("task one");
+			expect(screen()).not.toContain("agent row");
+			expect(h.controller.dockedView).toBe("todo");
+
+			const geometry = h.composer.sidePanelGeometry();
+			if (!geometry) throw new Error("expected a docked frame");
+			const rightClick = parseSgrMouse(`\x1b[<2;${geometry.panelRect.col + 2};2M`);
+			if (!rightClick) throw new Error("bad report");
+			expect(h.controller.routeInlineMouse(rightClick)).toBe(true);
+			await h.settle();
+			expect(cfgSidebarView.get(h.settings)).toBe("agents");
+			expect(screen()).toContain("agent row");
+			expect(screen()).not.toContain("task one");
+
+			h.controller.routeInlineMouse(rightClick);
+			h.controller.routeInlineMouse(rightClick);
+			await h.settle();
+			expect(h.controller.dockedView).toBe("todo");
+			expect(screen()).toContain("task one");
+		} finally {
+			h.stop();
+		}
+	});
+
+	it("opens a narrow terminal's fullscreen form on the chosen view and closes it on that view's chord", async () => {
+		const h = await harness(100);
+		try {
+			h.controller.registerView("todo", { id: "todo", title: "TODO", content: () => ["task one"] });
+			h.controller.registerView("irc", { id: "irc", title: "IRC", content: () => ["irc line"] });
+			h.controller.showView("irc");
+			await h.settle();
+			expect(h.controller.fullscreenOpen).toBe(true);
+			expect(cfgSidebarEnabled.get(h.settings)).toBe(false);
+			expect(h.controller.dockedView).toBeUndefined();
+			expect(h.term.getViewport().join("\n")).toContain("irc line");
+
+			h.controller.showView("todo");
+			await h.settle();
+			expect(h.controller.fullscreenOpen).toBe(true);
+			expect(h.term.getViewport().join("\n")).toContain("task one");
+
+			h.controller.showView("todo");
+			await h.settle();
+			expect(h.controller.fullscreenOpen).toBe(false);
+		} finally {
 			h.stop();
 		}
 	});

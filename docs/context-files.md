@@ -183,6 +183,17 @@ Loading is automatic — there is no need to instruct the agent to search for `A
 
 When workspace-tree scanning is enabled (`includeWorkspaceTree`), deeper-directory `AGENTS.md` files that were _not_ auto-loaded (for example, ones below the current directory) are surfaced separately in a `<dir-context>` block that lists their paths and tells the agent to read them before editing those directories. Those files are pointers, not full injected content.
 
+## Subagents
+
+Subagents (task children, nested children, eval agents, vibe workers, and parked agents revived in the same process) run the same discovery at their own working directory, so they load the user, workspace, and repository context files that apply where they work, in the precedence above. Their prompts are rebuilt with fresh discovery like the root session's. An agent revived from its session file after a restart replays the system prompt it last sent, which already carries the files it discovered.
+
+- **Isolated children** work in a copy under `~/.omp/wt/`, whose own walk cannot reach the files above the source repository. Discovery runs at the copy for the repository and its subdirectories, and additionally loads the project files in the source repository's ancestor directories. A copy's nested children keep that original source root.
+- **Explicit sets.** When an SDK caller passes `contextFiles` to `createAgentSession`, that set is used verbatim, including for every subagent it spawns; nothing is discovered or filtered. An explicit empty list keeps children free of context files.
+- An isolated child does not reuse the parent's workspace tree, which describes the parent checkout; it scans its own copy when `includeWorkspaceTree` is enabled.
+- Advisors attached to a subagent review against that subagent's context files.
+
+Upstream oh-my-pi strips every `AGENTS.md` from subagent context ([can1357/oh-my-pi#233](https://github.com/can1357/oh-my-pi/issues/233)). NeoPi does not, because repository and workspace policy lives in those files ([#334](https://github.com/PsychedelicShayna/neopi/issues/334)). To keep a particular file out of every session, subagents included, use [`disabledExtensions`](#disabling-a-single-context-file).
+
 ## `@` imports
 
 Inside any context file, an `@path` token expands inline to the referenced file's content before injection:

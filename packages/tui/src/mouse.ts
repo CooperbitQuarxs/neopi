@@ -49,6 +49,11 @@ export function parseSgrMouse(data: string): SgrMouseEvent | null {
 	return { button, col, row, release, wheel, motion, leftClick };
 }
 
+/** Right-button press (button 2): not motion, release, or wheel. */
+export function isRightPress(event: SgrMouseEvent): boolean {
+	return !event.release && (event.button & 64) === 0 && !event.motion && (event.button & 3) === 2;
+}
+
 /** Handler invoked with a decoded SGR event; returning `false` reports unhandled. */
 export type SgrMouseHandler = (event: SgrMouseEvent) => boolean | undefined;
 
