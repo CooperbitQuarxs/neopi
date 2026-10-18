@@ -1,0 +1,386 @@
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import type { ToolDefinition } from "../../src/extensibility/extensions";
+import * as targetInventory from "../../src/issues/target-inventory";
+import {
+	createIssueAuthorTools,
+	createIssueTargetTool,
+	type IssueFilingOutcome,
+	type IssueTargetSelection,
+} from "../../src/issues/tools";
+import { github, type GhCommandResult } from "../../src/utils/github";
+
+const REPO = "github.com/Owner/Project";
+const OTHER_REPO = "ghe.example.test/Owner/Project";
+const CHECKOUT: targetInventory.IssueCheckout = {
+	path: "/tmp/npi-issue-tool-checkout",
+	repo: REPO,
+	linkedWorktree: false,
+	source: "override",
+};
+const TITLE = "bug: preserve the operator's request";
+const BODY = "## Report\n\nThe submitted draft, including uncertainty.\n";
+const LABELS = ["bug", "needs-triage"];
+const STARTED_AT = Date.parse("2026-10-18T12:00:00Z");
+const ACTUAL_ISSUE = {
+	number: 305,
+	title: "Recorded title",
+	url: "https://github.com/Owner/Project/issues/305",
+	createdAt: "2026-10-18T12:00:05Z",
+	body: "## Actual submitted body\n\nGitHub's recorded body, not the draft.\n",
+	labels: [{ name: "bug" }, { name: "priority: p1" }],
+};
+
+function spyDependencies() {
+	return {
+		json: vi.spyOn(github, "json").mockRejectedValue(new Error("Unexpected GitHub JSON request")),
+		run: vi.spyOn(github, "run").mockRejectedValue(new Error("Unexpected GitHub mutation")),
+		verify: vi.spyOn(targetInventory, "verifyIssueCheckout").mockResolvedValue(true),
+	};
+}
+
+function repository(
+	repo = REPO,
+	checkouts: targetInventory.IssueCheckout[] = [{ ...CHECKOUT, repo }],
+): targetInventory.IssueRepoCandidate {
+	return { repo, checkouts };
+}
+
+function inventory(...repositories: targetInventory.IssueRepoCandidate[]): targetInventory.IssueTargetInventory {
+	return { foreground: { cwd: CHECKOUT.path, repoRoot: CHECKOUT.path, repo: REPO }, repositories, warnings: [] };
+}
+
+function invoke(tool: ToolDefinition, params: Record<string, unknown>): Promise<AgentToolResult<unknown>> {
+	return tool.execute("issue-tool-test", params, undefined, undefined, {} as never);
+}
+
+function author() {
+	const outcomes: IssueFilingOutcome[] = [];
+	const onOutcome = vi.fn((outcome: IssueFilingOutcome) => outcomes.push(outcome));
+	const tools = createIssueAuthorTools({ repo: REPO, checkout: CHECKOUT, startedAt: STARTED_AT, onOutcome });
+	const named = (name: string): ToolDefinition => {
+		const tool = tools.find(entry => entry.name === name);
+		if (!tool) throw new Error(`Missing issue tool: ${name}`);
+		return tool;
+	};
+	return { publish: named("issue_publish"), existingOwner: named("issue_existing_owner"), outcomes, onOutcome };
+}
+
+function publishParams(): Record<string, unknown> {
+	return { title: TITLE, body: BODY, labels: LABELS };
+}
+
+const actualPublished: Extract<IssueFilingOutcome, { kind: "published" }> = {
+	kind: "published",
+	issue: {
+		repo: REPO,
+		number: ACTUAL_ISSUE.number,
+		url: ACTUAL_ISSUE.url,
+		title: ACTUAL_ISSUE.title,
+		body: ACTUAL_ISSUE.body,
+		labels: ACTUAL_ISSUE.labels.map(label => label.name),
+	},
+};
+
+const ownIssueListArgs = [
+	"issue",
+	"list",
+	"--repo",
+	REPO,
+	"--state",
+	"all",
+	"--author",
+	"@me",
+	"--limit",
+	"30",
+	"--json",
+	"number,title,url,state,createdAt,labels",
+];
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
+
+describe("issue_target", () => {
+	it("rejects a repository outside the discovered inventory", async () => {
+		const { verify, run, json } = spyDependencies();
+		const onSelect = vi.fn();
+		const tool = createIssueTargetTool({ inventory: inventory(repository()), onSelect });
+
+		await expect(invoke(tool, { repo: OTHER_REPO, reason: "requested project" })).rejects.toThrow(
+			"not in the inventory",
+		);
+		expect(onSelect).not.toHaveBeenCalled();
+		expect(verify).not.toHaveBeenCalled();
+		expect(run).not.toHaveBeenCalled();
+		expect(json).not.toHaveBeenCalled();
+	});
+
+	it("rejects repositories with issues disabled", async () => {
+		const { verify } = spyDependencies();
+		const onSelect = vi.fn();
+		const tool = createIssueTargetTool({ inventory: inventory({ ...repository(), issuesEnabled: false }), onSelect });
+
+		await expect(invoke(tool, { repo: REPO, reason: "requested project" })).rejects.toThrow("issues disabled");
+		expect(onSelect).not.toHaveBeenCalled();
+		expect(verify).not.toHaveBeenCalled();
+	});
+
+	it("rejects a target without a local checkout instead of cloning it", async () => {
+		const { verify, run } = spyDependencies();
+		const onSelect = vi.fn();
+		const tool = createIssueTargetTool({ inventory: inventory(repository(REPO, [])), onSelect });
+
+		await expect(invoke(tool, { repo: REPO, reason: "requested project" })).rejects.toThrow("has no local checkout");
+		expect(onSelect).not.toHaveBeenCalled();
+		expect(verify).not.toHaveBeenCalled();
+		expect(run).not.toHaveBeenCalled();
+	});
+
+	it("rejects a checkout that no longer verifies against the selected identity", async () => {
+		const { verify } = spyDependencies();
+		verify.mockResolvedValue(false);
+		const onSelect = vi.fn();
+		const tool = createIssueTargetTool({ inventory: inventory(repository()), onSelect });
+
+		await expect(invoke(tool, { repo: REPO, reason: "requested project" })).rejects.toThrow("no longer has a remote");
+		expect(verify).toHaveBeenCalledWith(CHECKOUT, REPO, undefined);
+		expect(onSelect).not.toHaveBeenCalled();
+	});
+
+	it("keeps the first selection immutable while allowing a repeat of the same identity", async () => {
+		const { verify } = spyDependencies();
+		const onSelect = vi.fn();
+		const first = repository();
+		const tool = createIssueTargetTool({ inventory: inventory(first, repository(OTHER_REPO)), onSelect });
+
+		await invoke(tool, { repo: REPO.toLowerCase(), reason: "the operator named Project" });
+		await invoke(tool, { repo: REPO, reason: "repeat" });
+		await expect(invoke(tool, { repo: OTHER_REPO, reason: "switch" })).rejects.toThrow("cannot be changed");
+		expect(onSelect).toHaveBeenCalledTimes(1);
+		expect(onSelect).toHaveBeenCalledWith({
+			candidate: first,
+			checkout: CHECKOUT,
+			reason: "the operator named Project",
+		});
+		expect(verify).toHaveBeenCalledTimes(1);
+	});
+
+	it("rejects a competing concurrent target after checkout verification resolves", async () => {
+		const { verify } = spyDependencies();
+		const verification = Promise.withResolvers<boolean>();
+		verify.mockImplementation(() => verification.promise);
+		const selections: IssueTargetSelection[] = [];
+		const tool = createIssueTargetTool({
+			inventory: inventory(repository(), repository(OTHER_REPO)),
+			onSelect: selection => selections.push(selection),
+		});
+		const first = invoke(tool, { repo: REPO, reason: "first" });
+		const competing = invoke(tool, { repo: OTHER_REPO, reason: "second" });
+		verification.resolve(true);
+		const results = await Promise.allSettled([first, competing]);
+
+		expect(results[0]?.status).toBe("fulfilled");
+		expect(results[1]).toMatchObject({ status: "rejected", reason: expect.any(Error) });
+		expect(selections).toHaveLength(1);
+		expect(selections[0]?.candidate.repo).toBe(REPO);
+	});
+});
+
+describe("issue_publish", () => {
+	it("rejects unknown labels without attempting issue creation", async () => {
+		const { json, run, verify } = spyDependencies();
+		json.mockResolvedValueOnce([{ name: "bug" }]);
+		const { publish, outcomes } = author();
+
+		await expect(invoke(publish, { title: TITLE, body: BODY, labels: ["invented-label"] })).rejects.toThrow(
+			"Unknown labels",
+		);
+		expect(run).not.toHaveBeenCalled();
+		expect(verify).not.toHaveBeenCalled();
+		expect(outcomes).toEqual([]);
+	});
+
+	it("pins creation to the target, sends body-file and labels, and reports the recorded issue", async () => {
+		const { json, run, verify } = spyDependencies();
+		json
+			.mockResolvedValueOnce(LABELS.map(name => ({ name })))
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce(ACTUAL_ISSUE);
+		run.mockImplementation(async (_cwd, args) => {
+			const bodyFile = args[args.indexOf("--body-file") + 1];
+			expect(await Bun.file(bodyFile).text()).toBe(BODY);
+			return { exitCode: 0, stdout: `${ACTUAL_ISSUE.url}\n`, stderr: "" };
+		});
+		const { publish, outcomes } = author();
+		const result = await invoke(publish, publishParams());
+
+		expect(verify).toHaveBeenCalledWith(CHECKOUT, REPO, undefined);
+		expect(run).toHaveBeenCalledTimes(1);
+		expect(run).toHaveBeenCalledWith(
+			CHECKOUT.path,
+			[
+				"issue",
+				"create",
+				"--repo",
+				REPO,
+				"--title",
+				TITLE,
+				"--body-file",
+				expect.any(String),
+				"--label",
+				"bug",
+				"--label",
+				"needs-triage",
+			],
+			undefined,
+			{ repoProvided: true },
+		);
+		expect(json).toHaveBeenLastCalledWith(
+			CHECKOUT.path,
+			[
+				"issue",
+				"view",
+				ACTUAL_ISSUE.url,
+				"--repo",
+				REPO,
+				"--json",
+				"number,title,url,state,createdAt,body,labels,author,comments",
+			],
+			undefined,
+			{ repoProvided: true },
+		);
+		expect(outcomes).toEqual([actualPublished]);
+		expect(result.content).toContainEqual({ type: "text", text: expect.stringContaining(ACTUAL_ISSUE.url) });
+		expect(result.content).toContainEqual({
+			type: "text",
+			text: expect.stringContaining("Labels: bug, priority: p1"),
+		});
+	});
+
+	it("shares one creation and one outcome across concurrent and repeated publish calls", async () => {
+		const { json, run } = spyDependencies();
+		json
+			.mockResolvedValueOnce(LABELS.map(name => ({ name })))
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce(ACTUAL_ISSUE);
+		const entered = Promise.withResolvers<void>();
+		const creation = Promise.withResolvers<GhCommandResult>();
+		run.mockImplementation(() => {
+			entered.resolve();
+			return creation.promise;
+		});
+		const { publish, outcomes, onOutcome } = author();
+		const first = invoke(publish, publishParams());
+		await entered.promise;
+		const second = invoke(publish, publishParams());
+		creation.resolve({ exitCode: 0, stdout: ACTUAL_ISSUE.url, stderr: "" });
+		const [firstResult, secondResult] = await Promise.all([first, second]);
+		const repeatedResult = await invoke(publish, publishParams());
+
+		expect(firstResult).toEqual(secondResult);
+		expect(repeatedResult).toEqual(firstResult);
+		expect(run).toHaveBeenCalledTimes(1);
+		expect(onOutcome).toHaveBeenCalledTimes(1);
+		expect(outcomes).toEqual([actualPublished]);
+	});
+
+	it.each(["nonzero exit", "thrown error"])(
+		"adopts a just-created own issue after %s without creating twice",
+		async failure => {
+			const { json, run } = spyDependencies();
+			const adopted = { ...ACTUAL_ISSUE, title: TITLE };
+			json
+				.mockResolvedValueOnce(LABELS.map(name => ({ name })))
+				.mockResolvedValueOnce([])
+				.mockResolvedValueOnce([
+					{ ...adopted, number: 1, createdAt: "2026-10-17T12:00:00Z" },
+					{ ...adopted, number: 2, title: "another request" },
+					adopted,
+				])
+				.mockResolvedValueOnce(adopted);
+			if (failure === "thrown error") run.mockRejectedValueOnce(new Error("connection dropped after sending"));
+			else run.mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "connection dropped after sending" });
+			const { publish, outcomes } = author();
+			const result = await invoke(publish, publishParams());
+			await invoke(publish, publishParams());
+
+			expect(run).toHaveBeenCalledTimes(1);
+			const lookups = json.mock.calls.filter(([, args]) => args[0] === "issue" && args[1] === "list");
+			expect(lookups).toHaveLength(2);
+			for (const call of lookups) {
+				expect(call).toEqual([CHECKOUT.path, ownIssueListArgs, undefined, { repoProvided: true }]);
+			}
+			expect(json).toHaveBeenLastCalledWith(
+				CHECKOUT.path,
+				[
+					"issue",
+					"view",
+					String(adopted.number),
+					"--repo",
+					REPO,
+					"--json",
+					"number,title,url,state,createdAt,body,labels,author,comments",
+				],
+				undefined,
+				{ repoProvided: true },
+			);
+			expect(outcomes).toEqual([{ ...actualPublished, issue: { ...actualPublished.issue, title: TITLE } }]);
+			expect(result.content).toContainEqual({ type: "text", text: expect.stringContaining(adopted.url) });
+		},
+	);
+
+	it("reports a failed create with no reconciled issue and lets a later call retry", async () => {
+		const { json, run } = spyDependencies();
+		json
+			.mockResolvedValueOnce(LABELS.map(name => ({ name })))
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce(LABELS.map(name => ({ name })))
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce(ACTUAL_ISSUE);
+		run.mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "request rejected" }).mockResolvedValueOnce({
+			exitCode: 0,
+			stdout: ACTUAL_ISSUE.url,
+			stderr: "",
+		});
+		const { publish, outcomes } = author();
+
+		await expect(invoke(publish, publishParams())).rejects.toThrow("gh issue create failed: request rejected");
+		expect(outcomes).toEqual([]);
+		await invoke(publish, publishParams());
+		expect(run).toHaveBeenCalledTimes(2);
+		expect(outcomes).toEqual([actualPublished]);
+	});
+});
+
+describe("issue_existing_owner", () => {
+	it("records the proposed amendment without posting and prevents subsequent publication", async () => {
+		const { json, run } = spyDependencies();
+		json.mockResolvedValueOnce(ACTUAL_ISSUE);
+		const { existingOwner, publish, outcomes } = author();
+		const draft = "Proposed additional report for the operator to review.";
+		const reason = "The existing issue already owns the same failure.";
+		await invoke(existingOwner, { number: ACTUAL_ISSUE.number, reason, draft });
+
+		expect(outcomes).toEqual([
+			{
+				kind: "existing-owner",
+				owner: {
+					repo: REPO,
+					number: ACTUAL_ISSUE.number,
+					url: ACTUAL_ISSUE.url,
+					title: ACTUAL_ISSUE.title,
+					reason,
+					draft,
+				},
+			},
+		]);
+		expect(json).toHaveBeenCalledTimes(1);
+		expect(json.mock.calls[0]?.[1].slice(0, 3)).toEqual(["issue", "view", String(ACTUAL_ISSUE.number)]);
+		expect(run).not.toHaveBeenCalled();
+		await expect(invoke(publish, publishParams())).rejects.toThrow("nothing more may be filed");
+		expect(json).toHaveBeenCalledTimes(1);
+		expect(run).not.toHaveBeenCalled();
+	});
+});
