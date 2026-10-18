@@ -14,6 +14,7 @@
 - Small settings and account pickers preserve selection, search, and scroll position when reopened ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Menu search fields share literal editing, consistent muted hints, and restorable caret/focus state across custom pickers ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Model lists use `/` search, Vim paging and jumps, and independent viewport scrolling while preserving search and selection through menu history ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
+- `/model` puts effort rules before providers and adds section-local `/` search, Vim paging, and draft-preserving nested menu history across Roles and model panes ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
 
 ### Fixed
 
