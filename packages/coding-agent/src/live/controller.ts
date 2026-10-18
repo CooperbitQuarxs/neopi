@@ -99,8 +99,8 @@ export interface LiveSessionCallbacks {
 	 *  turn, repeats included, with the final text authoritative. Composer input follows this,
 	 *  not the coalesced display transcript. */
 	onUserSpeech?(speech: LiveTranscript): void;
-	/** Final text delivered to the main agent or handled by the voice agent. */
-	onSpeechSent?(text: string): void;
+	/** Final delivered text. With turn ids, retire only those spoken spans; without them the entire draft was sent. */
+	onSpeechSent?(text: string, turns?: readonly number[]): void;
 }
 
 /** Structural transport surface the controller needs (test seam). */
@@ -1368,7 +1368,7 @@ export class LiveSessionController {
 					// Keep failed delivery in the ledger and composer. A manual submit may already
 					// have retired this exact turn while the transport send was in flight.
 					if (delivered && this.#deleteTurns(turn => turn === blocked).length > 0) {
-						this.#callbacks.onSpeechSent?.(blocked.text);
+						this.#callbacks.onSpeechSent?.(blocked.text, [blocked.turn]);
 					}
 				})
 				.catch(cause => this.#reportFailure(errorFrom(cause)));

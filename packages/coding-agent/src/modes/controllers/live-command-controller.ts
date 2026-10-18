@@ -89,6 +89,8 @@ export class LiveCommandController {
 	#protocolNoticeShown = new Set<string>();
 	#settling: Promise<void> | undefined;
 	#utterance: ComposerUtterance | undefined;
+	/** Controller speech turns mapped to the editor's existing edit-aware utterance spans. */
+	#committedSpeech = new Map<number, number>();
 	/** Set while the controller itself edits the draft, so those edits are not operator activity. */
 	#editing = false;
 	#phase: LivePhase | undefined;
@@ -161,6 +163,7 @@ export class LiveCommandController {
 		const session = this.#session;
 		if (!session) return "primary";
 		if (!session.retireComposerSpeech()) return "held";
+		this.#committedSpeech.clear();
 		if (this.#destination !== "voice" || options.hasImages) return "primary";
 		void session.sendOperatorText(text, "voice").then(delivered => {
 			if (!delivered) this.#restoreUndelivered(text);
@@ -177,7 +180,9 @@ export class LiveCommandController {
 	 * hold, or the same request would go out twice.
 	 */
 	discardSpeech(): boolean {
-		return this.#session?.retireComposerSpeech() ?? true;
+		const retired = this.#session?.retireComposerSpeech() ?? true;
+		if (retired) this.#committedSpeech.clear();
+		return retired;
 	}
 
 	/** A voice-only prompt never reached the voice agent (the call ended first): give it back. */
@@ -271,6 +276,7 @@ export class LiveCommandController {
 		this.#showPhase("connecting");
 		this.#clearKeywordTimer();
 		this.#utterance = undefined;
+		this.#committedSpeech.clear();
 		this.#ctx.liveTranscriptContainer.clear();
 		this.#assistantCaption = undefined;
 		this.#resumeVocalizer = vocalizer.suspend();
@@ -313,25 +319,37 @@ export class LiveCommandController {
 						// handed off either.
 						session.retireComposerSpeech();
 						this.#utterance = undefined;
+						this.#committedSpeech.clear();
 						this.#ctx.showStatus("Speech ignored while a chain rewrites the draft");
 						return;
 					}
 					this.#typeUserTranscript(speech);
 				},
-				onSpeechSent: text => {
+				onSpeechSent: (text, turns) => {
 					if (this.#session !== session) return;
 					this.#clearKeywordTimer();
 					this.#editing = true;
 					try {
-						const chips = this.#ctx.editor
-							.composerChips()
-							.map(chip => (chip.kind === "paste" ? chip.text.label : chipLabel(chip.kind, chip.n)));
-						this.#ctx.editor.setText(chips.join(" "));
+						if (turns) {
+							const ids = turns.flatMap(turn => {
+								const id = this.#committedSpeech.get(turn);
+								return id === undefined ? [] : [id];
+							});
+							this.#ctx.editor.removeUtterances(ids);
+							for (const turn of turns) this.#committedSpeech.delete(turn);
+						} else {
+							const chips = this.#ctx.editor
+								.composerChips()
+								.map(chip => (chip.kind === "paste" ? chip.text.label : chipLabel(chip.kind, chip.n)));
+							this.#ctx.editor.setText(chips.join(" "));
+							this.#committedSpeech.clear();
+							this.#utterance = undefined;
+						}
 						this.#ctx.editor.addToHistory(text);
-						this.#utterance = undefined;
 					} finally {
 						this.#editing = false;
 					}
+					if (turns) this.#scheduleKeyword();
 					this.#ctx.ui.requestRender();
 				},
 				onTerminal: error => this.#finish(session, error),
@@ -422,7 +440,9 @@ export class LiveCommandController {
 	}
 
 	#commitUtterance(utterance: ComposerUtterance, text: string): void {
-		this.#ctx.editor.commitVolatileText(`${utterance.prefix}${text}${this.#separator("after")}`);
+		const id = this.#ctx.editor.commitVolatileText(`${utterance.prefix}${text}${this.#separator("after")}`);
+		if (id !== undefined) this.#committedSpeech.set(utterance.turn, id);
+		else this.#committedSpeech.delete(utterance.turn);
 	}
 
 	/** A space when the character on that side of the cursor would otherwise touch the speech. */
@@ -522,6 +542,7 @@ export class LiveCommandController {
 		const utterance = this.#utterance;
 		this.#utterance = undefined;
 		if (utterance) this.#commitUtterance(utterance, utterance.text);
+		this.#committedSpeech.clear();
 		this.#showPhase(undefined);
 		this.#resumeVocalizer?.();
 		this.#resumeVocalizer = undefined;

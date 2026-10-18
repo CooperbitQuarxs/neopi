@@ -111,6 +111,7 @@ interface Harness {
 	deliveries: DeliveryControl[];
 	speech: Array<{ turn: number; text: string; final: boolean }>;
 	sentSpeech: string[];
+	sentTurns: Array<readonly number[] | undefined>;
 	audioSent: Float32Array[];
 	fireOutputLevel(level: number): void;
 	fireMicrophone(samples: Float32Array): void;
@@ -141,6 +142,7 @@ function makeHarness(options?: {
 	const audioSent: Float32Array[] = [];
 	let microphoneCallback: ((error: Error | null, samples: Float32Array) => void) | undefined;
 	const sentSpeech: string[] = [];
+	const sentTurns: Harness["sentTurns"] = [];
 	const abortGates: Array<{ promise: Promise<void>; resolve: () => void }> = [];
 	const deliveries: Harness["deliveries"] = [];
 	let streaming = false;
@@ -235,7 +237,10 @@ function makeHarness(options?: {
 			onTranscript() {},
 			onTerminal() {},
 			onUserSpeech: ({ turn, text, final }) => speech.push({ turn, text, final }),
-			onSpeechSent: text => sentSpeech.push(text),
+			onSpeechSent: (text, turns) => {
+				sentSpeech.push(text);
+				sentTurns.push(turns);
+			},
 		},
 		...(options?.speakableIdleMs !== undefined ? { speakableIdleMs: options.speakableIdleMs } : {}),
 		...(options?.thinkingFlushMs !== undefined ? { thinkingFlushMs: options.thinkingFlushMs } : {}),
@@ -279,6 +284,7 @@ function makeHarness(options?: {
 		deliveries,
 		speech,
 		sentSpeech,
+		sentTurns,
 		audioSent,
 		fireOutputLevel: level => liveCallbacks?.onOutputLevel(level),
 		fireMicrophone: samples => microphoneCallback?.(null, samples),
@@ -460,6 +466,7 @@ describe("live controller delegation ownership", () => {
 		delivered.resolve();
 		await settle(20);
 		expect(h.sentSpeech).toEqual(["tell me a joke"]);
+		expect(h.sentTurns).toEqual([[1]]);
 		expect(h.controller.pendingUserTurnCount()).toBe(0);
 		await h.controller.stop();
 	});
