@@ -332,7 +332,9 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 				const request = indexes.map(index => bounded[index]!);
 				const payload = rankPayloadTokens(query, request);
 				if (payload > hopTokens) {
-					throw new Error(`chronicle rank request of ${payload} tokens exceeds the ${hopTokens}-token hop ceiling`);
+					throw new Error(
+						`chronicle rank request of ${payload} tokens exceeds the ${hopTokens}-token hop ceiling`,
+					);
 				}
 				const outcome = await options.ranker.score(query, request, signal);
 				return { indexes, outcome };

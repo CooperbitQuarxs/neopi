@@ -193,9 +193,7 @@ describe("chronicle recall", () => {
 					await release.promise;
 				}
 				return {
-					scores: candidates.map(candidate =>
-						lexicalScore(query, `${candidate.label}\n${candidate.text}`),
-					),
+					scores: candidates.map(candidate => lexicalScore(query, `${candidate.label}\n${candidate.text}`)),
 				};
 			},
 		};
@@ -343,10 +341,7 @@ describe("chronicle recall", () => {
 			});
 
 			release.resolve();
-			const progress = await Promise.race([
-				firstProgress.promise,
-				Bun.sleep(2_000).then(() => undefined),
-			]);
+			const progress = await Promise.race([firstProgress.promise, Bun.sleep(2_000).then(() => undefined)]);
 			expect(progress).toBeDefined();
 			if (!progress) throw new Error("expected Chronicle progress");
 			const progressResource = await proc.resolve(parseInternalUrl(`proc://${progress.jobId}`), { session });
@@ -365,7 +360,9 @@ describe("chronicle recall", () => {
 			expect(ownerDeliveries.find(delivery => delivery.jobId === oauthId)?.text).toContain(written.atomIds[0]!);
 			expect(ownerDeliveries.find(delivery => delivery.jobId === oauthId)?.text).not.toContain(written.atomIds[1]!);
 			expect(ownerDeliveries.find(delivery => delivery.jobId === billingId)?.text).toContain(written.atomIds[1]!);
-			expect(ownerDeliveries.find(delivery => delivery.jobId === billingId)?.text).not.toContain(written.atomIds[0]!);
+			expect(ownerDeliveries.find(delivery => delivery.jobId === billingId)?.text).not.toContain(
+				written.atomIds[0]!,
+			);
 		} finally {
 			release.resolve();
 			progressRelease.resolve();
