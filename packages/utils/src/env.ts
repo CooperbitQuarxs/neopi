@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseEnv } from "node:util";
-import { getAgentDir, getConfigRootDir, getProjectDir, refreshDirsFromEnv } from "./dirs";
+import { getAgentDir, getConfigRootDir, getProjectDir, getUserEnvPaths, refreshDirsFromEnv } from "./dirs";
 import { launchEnvValues, startupCwd, startupProcessEnv } from "./launch-env";
 
 export * from "./worker-host";
@@ -272,10 +272,23 @@ export function parseEnvFile(filePath: string): Record<string, string> {
 }
 
 // Eagerly parse the user's $HOME/.env and the current project's .env (from cwd)
-const homeEnv = parseEnvFile(path.join(os.homedir(), ".env"));
-const piEnv = parseEnvFile(path.join(getConfigRootDir(), ".env"));
-const agentEnv = parseEnvFile(path.join(getAgentDir(), ".env"));
+const homePath = os.homedir();
+const configRootPath = getConfigRootDir();
+const agentPath = getAgentDir();
+const homeEnv = parseEnvFile(path.join(homePath, ".env"));
+const piEnv = parseEnvFile(path.join(configRootPath, ".env"));
+const agentEnv = parseEnvFile(path.join(agentPath, ".env"));
 const projectEnv = parseEnvFile(path.join(getProjectDir(), ".env"));
+
+// Read update-authority dotenv files from launch-derived locations. Reuse the
+// ordinary snapshots when their paths agree; do not change merged-env behavior.
+const trustedPaths = getUserEnvPaths(originalProcessEnv);
+const trustedHomeEnv =
+	trustedPaths.home === homePath ? homeEnv : parseEnvFile(path.join(trustedPaths.home, ".env"));
+const trustedPiEnv =
+	trustedPaths.configRoot === configRootPath ? piEnv : parseEnvFile(path.join(trustedPaths.configRoot, ".env"));
+const trustedAgentEnv =
+	trustedPaths.agentDir === agentPath ? agentEnv : parseEnvFile(path.join(trustedPaths.agentDir, ".env"));
 
 for (const key of Object.keys(Bun.env)) {
 	const value = Bun.env[key];
@@ -308,9 +321,9 @@ refreshDirsFromEnv();
 export function getTrustedEnv(name: string): string | undefined {
 	return (
 		originalProcessEnv[name]?.trim() ||
-		agentEnv[name]?.trim() ||
-		piEnv[name]?.trim() ||
-		homeEnv[name]?.trim() ||
+		trustedAgentEnv[name]?.trim() ||
+		trustedPiEnv[name]?.trim() ||
+		trustedHomeEnv[name]?.trim() ||
 		undefined
 	);
 }

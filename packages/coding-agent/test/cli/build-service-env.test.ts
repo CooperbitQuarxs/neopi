@@ -3,13 +3,35 @@ import * as fs from "node:fs/promises";
 import { TempDir } from "@oh-my-pi/pi-utils/temp";
 import * as path from "node:path";
 
-async function requestBuildOrigin(options: { inherited?: string; user?: string } = {}): Promise<string> {
+async function requestBuildOrigin(
+	options: {
+		inherited?: string;
+		user?: string;
+		redirectAgent?: boolean;
+		redirectConfig?: boolean;
+		profile?: string;
+		cliProfile?: boolean;
+		rootUser?: string;
+	} = {},
+): Promise<string> {
 	await using root = await TempDir.create("@npi-build-origin-");
 	const project = root.join("project");
 	const home = root.join("home");
-	const agent = path.join(home, ".omp", "agent");
+	const config = options.profile ? path.join(home, ".omp", "profiles", options.profile) : path.join(home, ".omp");
+	const agent = path.join(config, "agent");
 	await fs.mkdir(agent, { recursive: true });
-	await Bun.write(path.join(project, ".env"), "PI_BUILD_URL=https://evil.example\n");
+	const autoload = options.redirectAgent || options.redirectConfig;
+	await Bun.write(
+		path.join(project, ".env"),
+		`PI_BUILD_URL=https://evil.example\n${options.redirectAgent ? "PI_CODING_AGENT_DIR=./controlled\n" : ""}${options.redirectConfig ? "PI_CONFIG_DIR=../project/controlled\n" : ""}`,
+	);
+	if (autoload) {
+		await Bun.write(path.join(project, "controlled", ".env"), "PI_BUILD_URL=https://evil.example\n");
+		await Bun.write(path.join(project, "controlled", "agent", ".env"), "PI_BUILD_URL=https://evil.example\n");
+	}
+	if (options.rootUser !== undefined) {
+		await Bun.write(path.join(config, ".env"), `PI_BUILD_URL=${options.rootUser}\n`);
+	}
 	if (options.user !== undefined) {
 		await Bun.write(path.join(agent, ".env"), `PI_BUILD_URL=${options.user}\n`);
 	}
@@ -28,13 +50,25 @@ async function requestBuildOrigin(options: { inherited?: string; user?: string }
 		"});",
 		"console.log(origin);",
 	].join("\n");
-	const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", "--eval", script], {
+	const preload: string[] = [];
+	if (options.cliProfile) {
+		const bootstrap = root.join("profile-bootstrap.ts");
+		await Bun.write(
+			bootstrap,
+			`import ${JSON.stringify(path.resolve(import.meta.dir, "../../../../utils/src/launch-env.ts"))};\n` +
+				`import { setProfile } from ${JSON.stringify(path.resolve(import.meta.dir, "../../../../utils/src/dirs.ts"))};\n` +
+				`setProfile(${JSON.stringify(options.profile)});\n`,
+		);
+		preload.push("--preload", bootstrap);
+	}
+	const child = Bun.spawn([process.execPath, ...(autoload ? [] : ["--no-env-file"]), ...preload, "--no-install", "--eval", script], {
 		cwd: project,
 		env: {
 			HOME: home,
 			USERPROFILE: home,
 			PATH: process.env.PATH ?? "",
-			PI_CODING_AGENT_DIR: agent,
+			...(autoload ? {} : { PI_CODING_AGENT_DIR: options.cliProfile ? path.join(home, ".omp", "agent") : agent }),
+			...(options.profile && !options.cliProfile ? { OMP_PROFILE: options.profile } : {}),
 			...(options.inherited === undefined ? {} : { PI_BUILD_URL: options.inherited }),
 		},
 		stdout: "pipe",
@@ -67,5 +101,39 @@ describe("build origin trust", () => {
 
 	it.each(["", "   "])("uses user configuration when the inherited origin is blank (%j)", async inherited => {
 		expect(await requestBuildOrigin({ inherited, user: "https://user.example/" })).toBe("https://user.example");
+	});
+
+	it("rejects an agent dotenv selected by project autoload", async () => {
+		expect(await requestBuildOrigin({ redirectAgent: true })).toBe("https://build.stencil.so");
+	});
+
+	it("retains the trusted root dotenv when project autoload redirects the agent directory", async () => {
+		expect(await requestBuildOrigin({ redirectAgent: true, rootUser: "https://user.example" })).toBe(
+			"https://user.example",
+		);
+	});
+
+	it("retains the real user agent dotenv when project autoload redirects its directory", async () => {
+		expect(await requestBuildOrigin({ redirectAgent: true, user: "https://user.example" })).toBe(
+			"https://user.example",
+		);
+	});
+
+	it("retains the agent dotenv selected by a launch profile", async () => {
+		expect(await requestBuildOrigin({ profile: "work", user: "https://profile.example" })).toBe(
+			"https://profile.example",
+		);
+	});
+
+	it("retains the real user agent dotenv when project autoload redirects the config root", async () => {
+		expect(await requestBuildOrigin({ redirectConfig: true, user: "https://user.example" })).toBe(
+			"https://user.example",
+		);
+	});
+
+	it("honors explicit CLI profile selection after launch capture", async () => {
+		expect(await requestBuildOrigin({ cliProfile: true, profile: "work", user: "https://profile.example" })).toBe(
+			"https://profile.example",
+		);
 	});
 });
