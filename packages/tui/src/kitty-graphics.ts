@@ -73,14 +73,18 @@ export interface KittyGraphicsFeatures {
  * `PI_NO_KITTY_PLACEHOLDERS=1` and `PI_KITTY_PLACEHOLDERS=0` remain hard
  * opt-outs; `PI_KITTY_PLACEHOLDERS=1` explicitly opts in anywhere else.
  */
-export function detectKittyUnicodePlaceholdersSupport(terminalId: string, env: NodeJS.ProcessEnv = Bun.env): boolean {
+export function detectKittyUnicodePlaceholdersSupport(
+	terminalId: string,
+	env: NodeJS.ProcessEnv = Bun.env,
+	forcedImageProtocol: string = env.PI_FORCE_IMAGE_PROTOCOL?.trim().toLowerCase() ?? "",
+): boolean {
 	const offRaw = env.PI_NO_KITTY_PLACEHOLDERS?.trim().toLowerCase();
 	if (offRaw === "1" || offRaw === "true" || offRaw === "on" || offRaw === "yes" || offRaw === "y") return false;
 	const force = env.PI_KITTY_PLACEHOLDERS?.trim().toLowerCase();
 	if (force === "1" || force === "true" || force === "on" || force === "yes" || force === "y") return true;
 	if (force === "0" || force === "false" || force === "off" || force === "no" || force === "n") return false;
 	const insideMultiplexer = isInsideTerminalMultiplexer(env);
-	if (insideMultiplexer && env.PI_FORCE_IMAGE_PROTOCOL?.trim().toLowerCase() === "kitty") return true;
+	if (insideMultiplexer && forcedImageProtocol === "kitty") return true;
 	if (terminalMultiplexerSessions(env).some(multiplexer => multiplexer.imagesRequireOverride)) return false;
 	return (
 		terminalId === "kitty" ||

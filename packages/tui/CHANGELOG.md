@@ -4,6 +4,7 @@
 
 ### Added
 
+- Terminal image protocols can switch at runtime, with matching Kitty placeholder support and explicit Sixel passthrough gating ([#302](https://github.com/PsychedelicShayna/neopi/issues/302)).
 - The agent transcript viewer can show pushed, unsaved assistant text and tool progress, and drops its message input when the agent is aborted while open ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
 - The side panel reports right-clicks, clicks on empty panel space, and the pointer leaving it, so hosts can cycle views and drop row hover ([#342](https://github.com/PsychedelicShayna/neopi/issues/342)).
 - Added `/statusline` to toggle, reorder, and move widgets between groups, including provider usage bars, with live composer previews and save or discard ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
