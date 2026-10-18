@@ -54,7 +54,7 @@ describe("native composer facts", () => {
 			statusLine({
 				preset: "custom",
 				leftSegments: ["hostname", "path", "session", "model"],
-				rightSegments: ["session_name", "time", "context_pct", "cost"],
+				rightSegments: ["session_name", "time", "context_pct", "context_bar", "cost"],
 			}),
 		);
 

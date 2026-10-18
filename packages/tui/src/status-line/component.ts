@@ -3011,10 +3011,19 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const subagentBadge = this.#subagentBadgeText();
 
 		// Collect visible segment contents
+		let contextBarAdded = false;
 		const leftParts: string[] = [];
 		const leftSegIds: StatusLineSegmentId[] = [];
 		const leftSegmentIds = layout === "plain-right" ? [] : effectiveSettings.leftSegments;
 		for (const segId of leftSegmentIds) {
+			if (segId === "context_bar") {
+				if (!contextBarAdded) {
+					leftParts.push("");
+					leftSegIds.push(segId);
+					contextBarAdded = true;
+				}
+				continue;
+			}
 			if (subagentBadge && segId === "subagents") continue;
 			// The band composer relocates the title to the working row's trailer.
 			if (layout === "band" && segId === "session_name") continue;
@@ -3029,6 +3038,14 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const rightSegIds: StatusLineSegmentId[] = [];
 		const rightSegmentIds = layout === "plain-left" ? [] : effectiveSettings.rightSegments;
 		for (const segId of rightSegmentIds) {
+			if (segId === "context_bar") {
+				if (!contextBarAdded) {
+					rightParts.push("");
+					rightSegIds.push(segId);
+					contextBarAdded = true;
+				}
+				continue;
+			}
 			if (subagentBadge && segId === "subagents") continue;
 			if (layout === "band" && segId === "session_name") continue;
 			const rendered = renderSegment(segId, ctx);
@@ -3039,11 +3056,12 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		}
 
 		const embedContext =
-			!plain &&
+			(!plain || contextBarAdded) &&
 			effectiveSettings.contextLine === "embedded" &&
 			ctx.contextWindow > 0 &&
-			(hasContextSegment(leftSegIds) || hasContextSegment(rightSegIds)) &&
-			(hasNonContextSegment(leftSegIds) || hasNonContextSegment(rightSegIds));
+			(contextBarAdded ||
+				((hasContextSegment(leftSegIds) || hasContextSegment(rightSegIds)) &&
+					(hasNonContextSegment(leftSegIds) || hasNonContextSegment(rightSegIds))));
 		if (embedContext) {
 			removeContextSegments(leftParts, leftSegIds);
 			removeContextSegments(rightParts, rightSegIds);
@@ -3093,6 +3111,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			? embeddedContextGaugeMinWidth(ctx.contextPercent, ctx.contextWindow)
 			: 0;
 		const minimumGapWidth = (): number => {
+			if (contextBarAdded) return 0;
 			if (!embeddedContextWidth) return left.length > 0 && right.length > 0 ? 1 : 0;
 			// If the labels cannot coexist with the last surviving segment, fall
 			// back to the original one-cell gauge instead of dropping the entire
@@ -3127,6 +3146,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 				const removedWidth = rightWidths[right.length - 1];
 				right.pop();
 				rightWidths.pop();
+				rightSegIds.pop();
 				rightWidth = right.length > 0 ? rightWidth - removedWidth - rightSepWidth - 2 : 0;
 			}
 			// Shrink path before dropping left segments — path is the only elastic segment
@@ -3186,6 +3206,27 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			}
 		}
 
+		if (contextBarAdded) {
+			const leftIndex = leftSegIds.indexOf("context_bar");
+			const rightIndex = rightSegIds.indexOf("context_bar");
+			const parts = leftIndex >= 0 ? left : right;
+			const widths = leftIndex >= 0 ? leftWidths : rightWidths;
+			const index =
+				leftIndex >= 0 ? leftIndex : rightIndex < 0 ? -1 : rightIndex + right.length - rightSegIds.length;
+			if (index >= 0) {
+				const barWidth = Math.max(0, topFillWidth - leftWidth - rightWidth);
+				if (barWidth >= 8) {
+					parts[index] = this.#buildContextGaugeFill(barWidth, ctx, effectiveSettings, embedContext);
+					widths[index] = barWidth;
+				} else {
+					parts.splice(index, 1);
+					widths.splice(index, 1);
+				}
+				leftWidth = groupWidth(leftWidths, leftCapWidth + bandCapWidth, leftSepWidth);
+				rightWidth = groupWidth(rightWidths, rightCapWidth, rightSepWidth);
+			}
+		}
+
 		const renderGroup = (parts: string[], direction: "left" | "right"): string => {
 			if (parts.length === 0) return "";
 			const sep = direction === "left" ? separatorDef.left : separatorDef.right;
@@ -3213,6 +3254,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const leftGroup = renderGroup(left, "left");
 		const rightGroup = renderGroup(right, "right");
 		if (!leftGroup && !rightGroup) return "";
+		if (contextBarAdded) {
+			return leftGroup + padding(Math.max(0, topFillWidth - leftWidth - rightWidth)) + rightGroup;
+		}
 
 		if (topFillWidth === 0 || (plain && (left.length === 0 || right.length === 0))) {
 			return leftGroup + (leftGroup && rightGroup ? " " : "") + rightGroup;

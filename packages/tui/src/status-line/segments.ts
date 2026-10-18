@@ -1414,6 +1414,13 @@ export const SEGMENTS: Record<BuiltinStatusLineSegmentId, StatusLineSegment> = {
 	cost: costSegment,
 	context_pct: contextPctSegment,
 	context_total: contextTotalSegment,
+	// Flexible ANSI layout is owned by StatusLineComponent; the native composer
+	// already has its own context meter and must not describe a second one.
+	context_bar: {
+		id: "context_bar",
+		render: () => ({ content: "", visible: false }),
+		describe: () => null,
+	},
 	time_spent: timeSpentSegment,
 	time: timeSegment,
 	session: sessionSegment,
