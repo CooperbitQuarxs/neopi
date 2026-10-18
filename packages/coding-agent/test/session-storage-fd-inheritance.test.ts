@@ -4,18 +4,18 @@
  *
  * The bash tool executes through the natives brush shell, which `fork`/`exec`s
  * external commands and therefore hands every inheritable descriptor to them
- * (the same property pinned by `config-value-fd-inheritance.test.ts`). Bun's
- * `fs.open*` omits `O_CLOEXEC` where libuv adds it, so before #13224 a command
- * — or any daemon it started — held a writable handle to the session it was
- * launched from for its whole life.
+ * (the same property pinned by `config-value-fd-inheritance.test.ts`).
+ * Older Bun versions omitted `O_CLOEXEC` from `fs.open*`, allowing a command
+ * — or any daemon it started — to retain a writable session handle.
  *
  * Oracle: list the child's descriptor table. `sh -c` is required — a bare `ls`
- * resolves to an in-process builtin, whose `$$` is omp itself. A deliberately
- * inheritable control descriptor (the exact `fs.openSync(path, "a")` the
- * pre-fix writer used) runs in the same child so the assertions cannot pass
- * vacuously. /proc makes this Linux-only; the helper's flag handling is
+ * resolves to an in-process builtin, whose `$$` is omp itself. `dup(2)` makes a
+ * control descriptor explicitly inheritable even when Bun opens files with
+ * `O_CLOEXEC` by default. It runs in the same child so the assertions cannot
+ * pass vacuously. /proc makes this Linux-only; the helper's flag handling is
  * covered on every platform by `packages/utils/test/fs-open.test.ts`.
  */
+import { dlopen, FFIType } from "bun:ffi";
 import { afterAll, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
@@ -25,6 +25,31 @@ import { Shell } from "@oh-my-pi/pi-natives";
 import { RotatingFileSink } from "@oh-my-pi/pi-utils/logger/rotating-file";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { FileSessionStorage } from "../src/session/session-storage";
+
+/** POSIX dup clears FD_CLOEXEC, independently of the runtime's open defaults. */
+function openInheritableControl(filename: string): number {
+	const source = fs.openSync(filename, "a");
+	try {
+		for (const soname of ["libc.so.6", "libc.so"]) {
+			let libc;
+			try {
+				libc = dlopen(soname, { dup: { args: [FFIType.i32], returns: FFIType.i32 } });
+			} catch {
+				continue;
+			}
+			try {
+				const fd = libc.symbols.dup(source);
+				if (fd < 0) throw new Error("Could not duplicate the control descriptor");
+				return fd;
+			} finally {
+				libc.close();
+			}
+		}
+		throw new Error("Could not load libc to create an inheritable control descriptor");
+	} finally {
+		fs.closeSync(source);
+	}
+}
 
 const ROOTS: string[] = [];
 
@@ -53,13 +78,17 @@ test.skipIf(process.platform !== "linux")("bash tool children never inherit sess
 	logSink.write("entry");
 
 	const control = path.join(root, "control.jsonl");
-	const controlFd = fs.openSync(control, "a");
+	const controlFd = openInheritableControl(control);
 
 	let output = "";
 	try {
-		await new Shell().run({ command: "sh -c 'ls -l /proc/$$/fd'", cwd: root }, (_err, chunk) => {
+		const controlFlags = /^flags:\s+(\d+)$/m.exec(await Bun.file(`/proc/self/fdinfo/${controlFd}`).text())?.[1];
+		expect(controlFlags, "control descriptor flags must be observable").toBeDefined();
+		expect(Number.parseInt(controlFlags as string, 8) & 0o2000000, "control descriptor must be inheritable").toBe(0);
+		const result = await new Shell().run({ command: "sh -c 'ls -l /proc/$$/fd'", cwd: root }, (_err, chunk) => {
 			output += chunk;
 		});
+		expect(result.exitCode, output).toBe(0);
 	} finally {
 		fs.closeSync(controlFd);
 		logSink.close();
