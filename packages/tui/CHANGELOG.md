@@ -34,6 +34,7 @@
 - Usage reports support shared viewer motions and preserve the active tab and each tab's reading position without refreshing on history restore ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - IRC messages support explicit `/` search, independent visual-line scrolling, and history that preserves selection and unsent replies without replaying sends ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Session results support Vim paging, independent visual-line scrolling, and restored scope, search, caret, and selection; native search close returns to the list before closing ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Safe menu-editor history retains collapsed pasted text and attachment references when reopening a draft in a new editor ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Added per-widget text templates for usage bars (`{label}`, `{percent}`, `{age}`), editable in `/statusline` with Tab ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 
 ### Changed

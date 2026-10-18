@@ -480,6 +480,10 @@ export interface EditorNavigationState {
 	text: string;
 	cursor: { line: number; col: number };
 	scrollTop: number;
+	/** Collapsed draft payloads; values are existing text/reference strings, not copied blobs. */
+	pastes?: ReadonlyMap<number, string>;
+	atoms?: ReadonlyMap<string, string>;
+	pasteCounter?: number;
 }
 
 interface LayoutLine {
@@ -3076,10 +3080,22 @@ export class Editor implements Component, Focusable {
 
 	/** Hosts explicitly opt safe prompt drafts into menu history. */
 	getState(): EditorNavigationState {
-		return { text: this.getText(), cursor: this.getCursor(), scrollTop: this.#scrollOffset };
+		const state: EditorNavigationState = {
+			text: this.getText(),
+			cursor: this.getCursor(),
+			scrollTop: this.#scrollOffset,
+		};
+		if (this.#pastes.size > 0) state.pastes = new Map(this.#pastes);
+		if (this.#atoms.size > 0) state.atoms = new Map(this.#atoms);
+		if (this.#pasteCounter > 0) state.pasteCounter = this.#pasteCounter;
+		return state;
 	}
 
 	setState(state: EditorNavigationState): void {
+		this.#pastes = new Map(state.pastes);
+		this.#atoms = new Map(state.atoms);
+		this.#atomsRevision++;
+		this.#pasteCounter = state.pasteCounter ?? 0;
 		this.setText(state.text);
 		const line = clampTextOffset(state.cursor.line, this.#state.lines.length - 1);
 		const text = this.#state.lines[line] ?? "";

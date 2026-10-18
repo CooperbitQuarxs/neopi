@@ -39,6 +39,39 @@ describe("Editor component", () => {
 		expect(editor.getCursor()).toEqual({ line: 0, col: 1 });
 	});
 
+	it("restores collapsed paste and atom payloads into a new menu editor", () => {
+		const original = new Editor(defaultEditorTheme);
+		const pasted = "p".repeat(1500);
+		original.handleInput(`\x1b[200~${pasted}\x1b[201~`);
+		original.insertAtom("[attachment]", "attachment://existing-reference");
+		const saved = original.getState();
+		expect(saved.text).toContain("[Paste #1");
+		expect(saved.pastes?.size).toBe(1);
+		original.clearPasteState();
+
+		const restored = new Editor(defaultEditorTheme);
+		let submitted = false;
+		restored.onSubmit = () => { submitted = true; };
+		restored.setState(saved);
+		expect(restored.getText()).toBe(saved.text);
+		expect(restored.getCursor()).toEqual(saved.cursor);
+		expect(restored.getExpandedText()).toBe(`${pasted}attachment://existing-reference `);
+		expect(submitted).toBe(false);
+
+		const nextPaste = "q".repeat(1500);
+		restored.handleInput(`\x1b[200~${nextPaste}\x1b[201~`);
+		expect(restored.getText()).toContain("[Paste #2");
+		expect(restored.getExpandedText()).toBe(`${pasted}attachment://existing-reference ${nextPaste}`);
+		expect(saved.pastes?.size).toBe(1);
+		restored.registerAtom("[attachment]", "changed-reference");
+		expect(saved.atoms?.get("[attachment]")).toBe("attachment://existing-reference");
+
+		restored.setState({ text: "[attachment]", cursor: { line: 0, col: 0 }, scrollTop: 0 });
+		expect(restored.getExpandedText()).toBe("[attachment]");
+		expect(restored.getState().pastes).toBeUndefined();
+		expect(restored.getState().atoms).toBeUndefined();
+	});
+
 	describe("Word delete keybindings", () => {
 		it("honors a keybindings.yml remap of deleteWordBackward in the multi-line editor", () => {
 			setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.editor.deleteWordBackward": "alt+g" }));
