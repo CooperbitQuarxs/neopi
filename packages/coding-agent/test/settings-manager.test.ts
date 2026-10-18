@@ -487,6 +487,35 @@ describe("Settings", () => {
 				},
 			});
 		});
+		it("rejects both fallback records on conflict while merging edits to different chains", async () => {
+			await writeSettings({
+				retry: {
+					fallbackChains: { default: ["mock/backup"] },
+					fallbackEffortSelections: { default: { "mock/backup": { mode: "fixed", level: Effort.Low } } },
+				},
+			});
+			const stale = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			const winner = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			stale.setFallbackChainAndEfforts("default", ["mock/backup", "mock/new"], {
+				"mock/backup": { mode: "fixed", level: Effort.Low },
+				"mock/new": { mode: "auto" },
+			});
+			winner.setFallbackChainAndEfforts("default", ["mock/backup"], {
+				"mock/backup": { mode: "fixed", level: Effort.High },
+			});
+			stale.setFallbackChainAndEfforts("advisor", ["mock/advisor"], { "mock/advisor": { mode: "auto" } });
+			await winner.flush();
+			await stale.flush();
+			expect(await readSettings()).toMatchObject({
+				retry: {
+					fallbackChains: { default: ["mock/backup"], advisor: ["mock/advisor"] },
+					fallbackEffortSelections: {
+						default: { "mock/backup": { mode: "fixed", level: Effort.High } },
+						advisor: { "mock/advisor": { mode: "auto" } },
+					},
+				},
+			});
+		});
 	});
 
 	describe("status line segment validation", () => {
