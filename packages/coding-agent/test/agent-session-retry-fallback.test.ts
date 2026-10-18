@@ -336,15 +336,68 @@ describe("AgentSession retry fallback", () => {
 			}));
 			const classify = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.High);
 			session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
-			await session.prompt("Recover this exact request");
+			await session.prompt("Recover this exact request", { solutionSpace: "One bounded parser correction" });
 			await session.waitForIdle();
 			expect(wire.at(-1)).toBe(`${fallback.id}:${Effort.High}`);
 			expect(classify).toHaveBeenCalledTimes(1);
 			expect(classify.mock.calls[0]?.[0].request).toContain("Recover this exact request");
 			expect(classify.mock.calls[0]?.[1].model.id).toBe(fallback.id);
+			expect(classify.mock.calls[0]?.[0].solutionSpace).toBe("One bounded parser correction");
 		},
 		20_000,
 	);
+
+	it("classifies an admitted queued request after usage fallback, not the preceding turn", async () => {
+		const primary = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallback = getBundledModel("google", "gemini-2.5-flash");
+		if (!primary || !fallback) throw new Error("Expected bundled effort fallback models");
+		let reserve = false;
+		const parameters = type({ value: "string" });
+		const tool: AgentTool<typeof parameters> = {
+			name: "queue_next",
+			label: "Queue",
+			description: "Queue the next request",
+			parameters,
+			async execute() {
+				await session!.prompt("New admitted queued task", { streamingBehavior: "steer" });
+				reserve = true;
+				return { content: [{ type: "text", text: "queued" }] };
+			},
+		};
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "queue", name: "queue_next", arguments: { value: "next" } }] },
+				{ content: ["done"] },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: { model: primary, systemPrompt: ["Test"], tools: [tool], messages: [] },
+			streamFn: mock.stream,
+		});
+		const selector = `${fallback.provider}/${fallback.id}`;
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.usageAwareFallback": true,
+			"retry.usageReservePolicy": "auto",
+			"retry.fallbackChains": { default: [selector] },
+			"retry.fallbackEffortSelections": {
+				default: { [selector]: { mode: "auto", allowed: [Effort.Low, Effort.High] } },
+			},
+		});
+		settings.setModelRole("default", `${primary.provider}/${primary.id}`);
+		vi.spyOn(modelRegistry.authStorage.health, "model").mockImplementation(async (_provider, options) => ({
+			state: reserve && options.modelId === primary.id ? "depleted" : "healthy",
+			accounts: [],
+		}));
+		const classify = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.High);
+		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+		await session.prompt("Previous user task", { solutionSpace: "Previous task scope" });
+		await session.waitForIdle();
+		expect(classify).toHaveBeenCalledTimes(1);
+		expect(classify.mock.calls[0]?.[0].request).toBe("New admitted queued task");
+		expect(classify.mock.calls[0]?.[0].solutionSpace).toBeUndefined();
+	}, 20_000);
 
 	it("advances through a role-keyed fallback chain across retries", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");

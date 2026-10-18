@@ -1185,6 +1185,8 @@ export class AgentSession implements SettingsScope {
 	// Cursor exec, TUI listeners) is held back. Without this, a client that resumes
 	// on `agent_end` can fire its next `prompt` before #promptWithMessage's finally
 	#promptGeneration = 0;
+	/** Input owned by the admitted turn, including queued requests not emitted to history yet. */
+	#turnEffortContext: { generation: number; request: string; solutionSpace?: string } | undefined;
 	// abort() can finish in a message_end listener before queued settle work runs.
 	#activeAgentPromptGeneration = this.#promptGeneration;
 	/** Bumped by newSession()/switchSession() at the same point they clear the pending IRC/aside
@@ -2058,13 +2060,18 @@ export class AgentSession implements SettingsScope {
 				this.isAutoThinking &&
 				this.#models.autoResolvedThinkingLevel === undefined
 			) {
-				const request = this.agent.state.messages.findLast(
-					message => message.role === "user" || (message.role === "custom" && isUserInvokedSkillPrompt(message)),
-				);
+				const admitted = this.#turnEffortContext;
+				const context = admitted?.generation === this.#promptGeneration ? admitted : undefined;
+				const request = context
+					? undefined
+					: this.agent.state.messages.findLast(
+							message =>
+								message.role === "user" || (message.role === "custom" && isUserInvokedSkillPrompt(message)),
+						);
 				await this.#models.applyAutoThinkingLevel(
-					request ? formatSessionHistoryMarkdown([request]) : "",
+					context?.request ?? (request ? formatSessionHistoryMarkdown([request]) : ""),
 					this.#promptGeneration,
-					undefined,
+					context?.solutionSpace,
 					signal,
 				);
 				signal?.throwIfAborted();
@@ -8298,6 +8305,7 @@ export class AgentSession implements SettingsScope {
 		generation: number,
 		signal: AbortSignal | undefined,
 		origin: "direct" | "queued",
+		solutionSpace?: string,
 	): Promise<QueuedMessagePreparation & { baseXdevCatalogDelivered: boolean }> {
 		const sessionGeneration = this.#sessionGeneration;
 		const alreadyDisposing = this.#isDisposed && origin === "direct";
@@ -8396,6 +8404,10 @@ export class AgentSession implements SettingsScope {
 						this.#tools.clearTurnSystemPromptOverride();
 						this.agent.setSystemPrompt(this.#tools.baseSystemPrompt);
 					}
+					this.#turnEffortContext =
+						message.role === "user" || (message.role === "custom" && isUserInvokedSkillPrompt(message))
+							? { generation, request: prompt, solutionSpace }
+							: undefined;
 					return messages;
 				},
 			};
@@ -8537,6 +8549,7 @@ export class AgentSession implements SettingsScope {
 				generation,
 				setupAbort.signal,
 				"direct",
+				options?.solutionSpace,
 			);
 			const preparedMessages = preparation.commit();
 			if (!preparedMessages) return false;
