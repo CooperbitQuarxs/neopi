@@ -37,7 +37,7 @@ export interface IrcViewerOptions {
 }
 
 /** `HH:MM:SS` in local time. */
-function clockTime(ts: number): string {
+export function clockTime(ts: number): string {
 	const date = new Date(ts);
 	return [date.getHours(), date.getMinutes(), date.getSeconds()].map(n => String(n).padStart(2, "0")).join(":");
 }

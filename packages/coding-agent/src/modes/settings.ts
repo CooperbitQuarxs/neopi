@@ -692,7 +692,25 @@ export const cfgSidebarEnabled = register({
 		tab: "appearance",
 		group: "Side Panel",
 		label: "Side Panel",
-		description: "Dock a panel beside the chat for the todo list and other live sections",
+		description: "Dock a panel beside the chat showing the todo list, the agent roster, or IRC traffic",
+	},
+});
+
+export const cfgSidebarView = register({
+	id: "sidebar.view",
+	type: "enum",
+	values: ["todo", "agents", "irc"] as const,
+	default: "todo",
+	ui: {
+		tab: "appearance",
+		group: "Side Panel",
+		label: "View",
+		description: "What the panel shows; alt+t then t, a or i picks one, right-click in the panel cycles",
+		options: [
+			{ value: "todo", label: "Todo", description: "The todo list" },
+			{ value: "agents", label: "Agents", description: "This session's subagents and advisors" },
+			{ value: "irc", label: "IRC", description: "Agent-to-agent messages" },
+		],
 	},
 });
 
