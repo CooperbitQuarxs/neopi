@@ -19,4 +19,6 @@ export const RPC_CAPABILITIES: readonly string[] = [
 	"session_lease", // #106
 	"plan_proposal_cancel", // #118
 	"prompt_entry_ids", // #117
+	"session_catalog", // #355
+	"control_pipe", // #355
 ];

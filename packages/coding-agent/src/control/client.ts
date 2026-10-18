@@ -28,6 +28,8 @@ export interface ControlClientOptions {
 	 * the grant's scope in {@link ControlClient.monitorScope}, not a snapshot.
 	 */
 	monitorCapability?: string;
+	/** Observe every authenticated frame, including correlated responses and early ready frames. */
+	onFrame?: (frame: Record<string, unknown>) => void;
 }
 
 /** Scope of an authenticated monitor connection. */
@@ -85,7 +87,11 @@ export class ControlClient {
 			reject(new ControlClientError("timeout", "handshake timed out"));
 		}, this.#options.timeoutMs ?? 5_000);
 		let challenged = false;
+		let authenticated = false;
 		socket.once("error", error => reject(new ControlClientError("unreachable", error.message)));
+		// Treat the owner's read EOF as a closed transport even if the runtime
+		// leaves its writable half open with a request still pending.
+		socket.once("end", () => socket.destroy());
 		socket.setEncoding("utf8");
 		socket.on("data", (chunk: string) => {
 			this.#buffer += chunk;
@@ -114,7 +120,7 @@ export class ControlClient {
 					socket.write(`${JSON.stringify(this.#hello())}\n`);
 					continue;
 				}
-				if (frame.type === "response" && frame.command === "hello") {
+				if (!authenticated && frame.type === "response" && frame.command === "hello") {
 					clearTimeout(timer);
 					if (frame.success !== true) {
 						reject(
@@ -132,13 +138,18 @@ export class ControlClient {
 					this.connectionId = data?.connectionId ?? "";
 					this.snapshot = data?.snapshot;
 					this.monitorScope = data?.monitor;
+					authenticated = true;
 					resolve(data?.snapshot as ControlSnapshot);
 					continue;
 				}
+				if (!authenticated) continue;
+				this.#options.onFrame?.(frame);
 				this.#dispatch(frame);
 			}
 		});
 		socket.once("close", () => {
+			clearTimeout(timer);
+			reject(new ControlClientError("closed", "connection closed during handshake"));
 			this.#closed = true;
 			for (const pending of this.#pending.values()) {
 				if (pending.timer) clearTimeout(pending.timer);
@@ -214,6 +225,19 @@ export class ControlClient {
 		this.#pending.set(requestId, { resolve, reject, timer });
 		this.#socket.write(this.#encoder.encode(frame));
 		return promise;
+	}
+
+	/** Forward a frame without taking ownership of its request id or response. */
+	sendRaw(frame: Record<string, unknown>): void {
+		if (this.#closed || !this.#socket) throw new ControlClientError("closed", "not connected");
+		this.#socket.write(this.#encoder.encode(frame));
+	}
+
+	/** Flush a polite detach without terminating the owner or dropping the bye frame. */
+	detach(): void {
+		if (!this.#closed && this.#socket && !this.#socket.writableEnded) {
+			this.#socket.end(this.#encoder.encode({ type: "bye", requestId: "bye" }));
+		}
 	}
 
 	/** Run `listener` once the socket closes, for any reason. */
