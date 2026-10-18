@@ -170,7 +170,8 @@ describe("rewind page", () => {
 		}
 		selector.handleNativeEvent({ type: "action", key: "cancel", act: "cancel", mods: [] });
 		expect(cancelled.count).toBe(0);
-		expect(marks(selector.describeScreen(pickerCx).main)).toEqual(["-", "here:main:u2", "pick"]);
+		expect(selector.navigationSnapshot()).toMatchObject({ search: { value: "thankszzz", focused: false } });
+		expect(marks(selector.describeScreen(pickerCx).main)).toEqual(["omp.rewind.empty"]);
 		selector.handleNativeEvent({ type: "action", key: "cancel", act: "cancel", mods: [] });
 		expect(cancelled.count).toBe(1);
 	});

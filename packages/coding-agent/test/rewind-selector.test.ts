@@ -424,8 +424,9 @@ describe("RewindSelectorComponent", () => {
 			.render(80)
 			.map(line => Bun.stripANSI(line))
 			.join("\n");
-		// Full transcript is back; the filtered selection survives.
-		expect(body).toContain("second prompt");
+		// The field loses focus but keeps both query and filtered selection.
+		expect(body).not.toContain("second prompt");
+		expect(selector.navigationSnapshot()).toMatchObject({ search: { value: "first", focused: false } });
 		selector.handleInput(ENTER);
 
 		expect(selected).toEqual(["u1"]);
