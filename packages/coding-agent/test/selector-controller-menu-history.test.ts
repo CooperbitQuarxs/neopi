@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { SelectorController, type MenuKind } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
+import { SelectorController, type MenuHost, type MenuKind } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { SettingsList, type SettingsListTheme } from "@oh-my-pi/pi-tui/components/settings-list";
 import type { Component, OverlayHandle, OverlayOptions, TUI } from "@oh-my-pi/pi-tui";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
@@ -186,6 +186,56 @@ describe("controller menu timeline", () => {
 		expect(h.overlayStack).toHaveLength(2);
 		expect(h.focused()).toBe(external);
 		expect(h.controller.openMenu("jobs-panel", open)).toBeUndefined();
+	});
+
+	it("discards a delayed menu mount after another menu was visited", () => {
+		const h = harness();
+		const pending = h.controller.openMenu("git", () => {});
+		h.open("settings");
+		let disposed = 0;
+		let mounted = false;
+		const delayed: Component = { render: () => [], dispose: () => { disposed++; } };
+		pending!.mount(delayed, () => { mounted = true; return h.showOverlay(delayed); });
+		expect(mounted).toBe(false);
+		expect(disposed).toBe(1);
+		expect(pending!.close()).toBe(false);
+		expect(h.focused()).toBe(h.menus.get("settings"));
+	});
+
+	it("records conversation when the visible menu closes while an older load is pending", async () => {
+		const h = harness();
+		const pending = h.controller.openMenu("git", () => {});
+		h.open("settings");
+		h.closes.get("settings")!();
+		await Promise.resolve();
+		expect(pending!.close()).toBe(false);
+		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
+		expect(h.focused()).toBe(h.menus.get("settings"));
+	});
+
+	it("preserves a pending restore across another back and forward before mounting", () => {
+		const h = harness();
+		let pending: MenuHost | undefined;
+		const reopen = () => { pending = h.controller.openMenu("git", reopen); };
+		const saved = { query: "retained", selected: "stable-key" };
+		const original = { render: () => [], navigationSnapshot: () => saved, restoreNavigation: () => {} };
+		reopen();
+		pending!.mount(original, () => h.showOverlay(original));
+		h.open("settings");
+		h.controller.navigateMenuHistory(-1);
+		const abandoned = pending!;
+		h.controller.navigateMenuHistory(1);
+		h.controller.navigateMenuHistory(-1);
+		let restored: unknown;
+		const latest = {
+			render: () => [],
+			navigationSnapshot: () => restored,
+			restoreNavigation: (snapshot: unknown) => { restored = snapshot; },
+		};
+		pending!.mount(latest, () => h.showOverlay(latest));
+		expect(restored).toEqual(saved);
+		expect(abandoned.close()).toBe(false);
+		expect(h.focused()).toBe(latest);
 	});
 
 	it("keeps an editor-slot prompt mounted and focuses it on return to conversation", () => {
