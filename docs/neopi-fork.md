@@ -131,8 +131,16 @@ Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `643
 
 Two agents run in sequence, both visible in the Agent Hub:
 
-1. `IssueTarget-<id>` picks the tracker. It sees the prose plus an inventory merged from the foreground checkout, the `issues.checkouts` override map (`OWNER/REPO` → local path), checkouts found through session history, and `gh repo list`. It can only select a repository from that inventory with a verified local checkout; it never clones. If the target is ambiguous it asks.
-2. `Issue-<id>` starts with its cwd in that checkout, so the target's own `AGENTS.md` chain is loaded, and its tools are pinned to the selected repository: read-only file tools, issue search/view, the live label list, five sampled historical issues (newest, ordinal midpoint, three random between them; all when fewer exist), and one `issue_publish`. Labels must already exist. Publication is exactly-once: repeated calls share one create, and an uncertain create is reconciled against the operator's own issues before anything is retried. When an existing issue owns the subject, it returns a drafted amendment instead and posts nothing.
+1. `IssueTarget-<id>` picks the tracker. It sees the prose plus an inventory merged from the foreground checkout, the `issues.checkouts` override map (`OWNER/REPO` → local path), checkouts found through session history, and `gh repo list`. Only GitHub remotes count (github.com or the configured `GH_HOST`), and a checkout counts only for its `origin`. The agent can select only a repository from that inventory that has a verified local checkout; it never clones. If the target is ambiguous it asks.
+2. `Issue-<id>` starts with its cwd in that checkout, so the target's own `AGENTS.md` chain is loaded. Its tools are pinned to the selected repository:
+   - read-only file tools;
+   - issue search and view, and the live label list;
+   - five sampled historical issues: the newest, the ordinal midpoint, and three random issues between them (all issues when there are five or fewer);
+   - one `issue_publish`.
+
+   Labels must already exist. Publication is exactly-once: repeated calls share one create. A create whose result is uncertain is reconciled against the operator's own issues with the same title and body before anything is retried. When an existing issue owns the subject, the agent returns a drafted amendment instead and posts nothing.
+
+Either agent can end the request with `issue_decline`, for example when the operator replies that nothing should be filed. A declined request files nothing and records the reason.
 
 Questions from either agent appear in the transcript; answer them in the Agent Hub, where the request is kept. Status records (dispatch, question, filed URL with the submitted body and applied labels, existing owner, failure) are display-only: they never start a foreground turn and do not lift holds. While the foreground is mid-turn the status line shows them immediately and the record follows at the next turn.
 
