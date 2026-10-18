@@ -315,4 +315,53 @@ describe("ChainConfigOverlayComponent", () => {
 		expect(text).toContain("no tools");
 		expect(text).toContain("Cut the slop.");
 	});
+
+	it("preserves literal search and parent list state through nested visits", () => {
+		const { overlay, press } = makeOverlay({ chains: [
+			{ name: "hjkl", steps: [{ name: "first", prompt: "text" }] },
+			{ name: "other", steps: [{ name: "second", prompt: "text" }] },
+		] });
+		const visits: string[] = [];
+		overlay.onNavigationVisit = page => { visits.push(page); };
+		press("/", "hjkl", ESC, "l");
+		expect(overlay.navigationSnapshot().context.screen).toBe("chain");
+		press("h");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ filter: "hjkl", selectedValue: "chain:0" });
+		press("l", "/", "first", ESC, "l");
+		expect(overlay.navigationSnapshot().context.screen).toBe("step");
+		const snapshot = overlay.navigationSnapshot();
+		const restored = makeOverlay({ chains: [] });
+		restored.overlay.restoreNavigation(snapshot);
+		expect(restored.overlay.navigationSnapshot()).toEqual(snapshot);
+		const count = visits.length;
+		overlay.restoreNavigation(snapshot);
+		expect(visits).toHaveLength(count);
+		expect(visits.some(page => page.startsWith("step:"))).toBe(true);
+	});
+
+	it("round-trips an unsubmitted multiline step draft and ignores Space on Delete", () => {
+		const { overlay, press, saved } = makeOverlay({ chains: [{ name: "chain", steps: [{ name: "step", prompt: "text" }] }] });
+		press("l", DOWN, DOWN, "l", "G", "k", " ");
+		expect(overlay.navigationSnapshot().doc.chains[0]?.steps).toHaveLength(1);
+		press("k", "l", " draft hjkl");
+		const snapshot = overlay.navigationSnapshot();
+		expect(snapshot.context.screen).toBe("prompt");
+		const restored = makeOverlay({ chains: [] });
+		restored.overlay.restoreNavigation(snapshot);
+		expect(restored.overlay.navigationSnapshot()).toEqual(snapshot);
+		expect(saved).toEqual([]);
+		expect(restored.saved).toEqual([]);
+	});
+
+	it("scrolls the view independently of the selected chain", () => {
+		const { overlay, press } = makeOverlay({ chains: Array.from({ length: 80 }, (_, index) => ({ name: `chain ${index}`, steps: [{ name: "step", prompt: "text" }] })) });
+		overlay.render(100);
+		press("\x05");
+		const snapshot = overlay.navigationSnapshot();
+		expect(snapshot.content).toMatchObject({ selectedValue: "chain:0", viewportTop: 1 });
+		press("G");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "close" });
+		press("g", "g");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "chain:0" });
+	});
 });
