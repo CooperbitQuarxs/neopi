@@ -288,6 +288,8 @@ export interface InteractiveModeContext {
 	hookSelector: HookSelectorComponent | undefined;
 	hookInput: HookInputComponent | undefined;
 	hookEditor: HookEditorComponent | undefined;
+	/** Outstanding extension custom views own one result promise and cannot be replayed by history. */
+	readonly hookCustomComponents: Set<Component>;
 	lastStatus: StatusNotice | undefined;
 	fileSlashCommands: Set<string>;
 	/** Every name and alias in the slash-command picker, for unknown-command detection. */

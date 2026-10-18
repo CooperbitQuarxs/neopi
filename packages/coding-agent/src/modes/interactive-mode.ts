@@ -1527,6 +1527,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	hookSelector: HookSelectorComponent | undefined = undefined;
 	hookInput: HookInputComponent | undefined = undefined;
 	hookEditor: HookEditorComponent | undefined = undefined;
+	readonly hookCustomComponents = new Set<Component>();
 	lastStatus: StatusNotice | undefined = undefined;
 	fileSlashCommands: Set<string> = new Set();
 	slashCommandNames: ReadonlySet<string> = new Set();

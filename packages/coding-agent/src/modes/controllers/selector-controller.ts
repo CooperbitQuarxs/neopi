@@ -451,6 +451,10 @@ export class SelectorController {
 	 */
 	navigateMenuHistory(direction: -1 | 1): boolean {
 		const focused = this.ctx.ui.getFocused();
+		if (focused && this.ctx.hookCustomComponents.has(focused)) {
+			this.ctx.showStatus("Close this view first (Esc)");
+			return true;
+		}
 		let focusedMenu = false;
 		for (const menu of this.#openMenus.values()) {
 			if (menu.component === focused) {

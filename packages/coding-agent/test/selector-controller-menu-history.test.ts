@@ -169,6 +169,18 @@ describe("controller menu timeline", () => {
 		expect(h.overlayStack).toHaveLength(0);
 	});
 
+	it("keeps a focused custom view alive and names the view rather than a prompt", () => {
+		const h = harness();
+		h.open("settings");
+		const view = new SettingsList([], 4, theme, () => {}, () => {});
+		h.ctx.hookCustomComponents.add(view);
+		h.showOverlay(view);
+		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
+		expect(h.focused()).toBe(view);
+		expect(h.overlayStack).toHaveLength(2);
+		expect(h.status).toEqual(["Close this view first (Esc)"]);
+	});
+
 	it("keeps an unregistered blocking overlay mounted without changing history", () => {
 		const h = harness();
 		h.open("settings");
