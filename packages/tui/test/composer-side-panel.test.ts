@@ -209,6 +209,31 @@ describe("Composer side panel: history and geometry", () => {
 		}
 	});
 
+	it("offers overflow in its own frame and nothing after the live tail shrinks", async () => {
+		const h = await setup();
+		try {
+			rebuildLedger(h);
+			const live = h.transcript.children.at(-1) as Text;
+			h.composer.setSidePanel(h.panel, RIGHT);
+			h.composer.ui.resetDisplay();
+			await h.scheduler.advance(h.term, 160);
+			const firstHeld = h.viewport()[0]!.slice(0, 81).trimEnd();
+
+			live.setText(`${ledgerLine(30)}\nGROWTH`);
+			const overflowing = h.composer.renderFrame({ columns: 120, rows: 24 });
+			expect(overflowing.history?.kind).toBe("append");
+			expect(overflowing.history?.rows.map(row => Bun.stripANSI(row).trimEnd())).toEqual([firstHeld]);
+			h.composer.acknowledgeHistory(overflowing.history!.id);
+
+			live.setText(ledgerLine(30));
+			const shrinking = h.composer.renderFrame({ columns: 120, rows: 24 });
+			expect(shrinking.history).toBeUndefined();
+			expect(shrinking.viewport.some(row => Bun.stripANSI(row).startsWith("E29:"))).toBe(true);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
 	it("releases only one held row when the live tail grows by one row", async () => {
 		const h = await setup();
 		try {

@@ -276,7 +276,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#heldReplayRows: readonly string[] = [];
 	#heldReplayWidth: number | undefined;
 	#pendingHeldReplay: { id: number; rows: readonly string[]; width: number } | undefined;
-	#releaseHeldCount = 0;
 	// The welcome header retires to terminal history exactly once, after the
 	// intro settles; until then it renders as mutable viewport chrome.
 	#headerRetired = false;
@@ -348,9 +347,17 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			this.#lastChatPlan = { ...plan, history: { ...plan.history, rows: plan.history.rows.slice(0, split) } };
 		} else if (this.#offeredHistory?.source === "held") {
 			held = held.slice(this.#offeredHistory.rows.length);
-		} else if (held.length > padTop) {
-			this.#releaseHeldCount = held.length - padTop;
-			this.ui.requestRender();
+		} else if (this.#offeredHistory === undefined && held.length > padTop) {
+			// Retire the overflow using this frame's pad, not a later frame's geometry.
+			const count = held.length - padTop;
+			this.#offeredHistory = {
+				id: this.#nextHistoryId++,
+				rows: held.slice(0, count),
+				kind: "append",
+				source: "held",
+			};
+			this.#lastChatPlan = { ...plan, history: this.#offeredHistory };
+			held = held.slice(count);
 		}
 		if (padTop === 0) return plan.viewport;
 		// Click spans index viewport rows; the pad moves every painted row down.
@@ -811,7 +818,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		} else if (offered.source === "held") {
 			this.#heldReplayRows = this.#heldReplayRows.slice(offered.rows.length);
 			if (this.#heldReplayRows.length === 0) this.#heldReplayWidth = undefined;
-			this.#releaseHeldCount = 0;
 		} else {
 			if (offered.source.transcriptId !== undefined) {
 				offered.source.transcript.acknowledgeFinalizedBatch(offered.source.transcriptId);
@@ -896,7 +902,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		this.#heldReplayRows = [];
 		this.#heldReplayWidth = undefined;
 		this.#pendingHeldReplay = undefined;
-		this.#releaseHeldCount = 0;
 		this.#headerReplayPending = this.#headerRetired && (this.#retiredHeaderRows?.length ?? 0) > 0;
 		this.#historyReplayRequested = false;
 		for (const child of this.#runtimeChildren) {
@@ -919,14 +924,10 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				kind: this.#offeredHistory.kind,
 			};
 		}
-		const releaseCount =
-			!this.#docked || this.#historyFlush || this.#heldReplayWidth !== width
-				? this.#heldReplayRows.length
-				: this.#releaseHeldCount;
-		if (releaseCount > 0) {
+		if (this.#heldReplayRows.length > 0 && (!this.#docked || this.#historyFlush || this.#heldReplayWidth !== width)) {
 			this.#offeredHistory = {
 				id: this.#nextHistoryId++,
-				rows: this.#heldReplayRows.slice(0, releaseCount),
+				rows: this.#heldReplayRows,
 				kind: "append",
 				source: "held",
 			};
@@ -1186,7 +1187,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			this.#heldReplayRows = [];
 			this.#heldReplayWidth = undefined;
 			this.#pendingHeldReplay = undefined;
-			this.#releaseHeldCount = 0;
 		}
 		this.#chromeFloor = undefined;
 		this.#nativeDock = options.nativeDock;
