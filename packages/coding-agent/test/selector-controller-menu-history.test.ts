@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { SelectorController, type MenuHost, type MenuKind } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { SettingsList, type SettingsListTheme } from "@oh-my-pi/pi-tui/components/settings-list";
 import type { Component, OverlayHandle, OverlayOptions, TUI } from "@oh-my-pi/pi-tui";
-import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
+import { createInteractiveModeContext, type SessionOverrides } from "./helpers/interactive-mode-context";
 
 const theme: SettingsListTheme = {
 	label: text => text,
@@ -12,7 +12,7 @@ const theme: SettingsListTheme = {
 	hint: text => text,
 };
 
-function harness() {
+function harness(session?: SessionOverrides) {
 	const overlayStack: TUI["overlayStack"] = [];
 	let focused: Component | null = null;
 	const status: string[] = [];
@@ -33,6 +33,7 @@ function harness() {
 		};
 	};
 	const ctx = createInteractiveModeContext({
+		session,
 		ui: {
 			overlayStack,
 			showOverlay,
@@ -200,6 +201,32 @@ describe("controller menu timeline", () => {
 		expect(disposed).toBe(1);
 		expect(pending!.close()).toBe(false);
 		expect(h.focused()).toBe(h.menus.get("settings"));
+	});
+
+	it("claims an inline account picker before loading and discards its late result", async () => {
+		const lookup = Promise.withResolvers<undefined>();
+		const h = harness({ listCurrentProviderOAuthAccounts: () => lookup.promise });
+		h.open("settings");
+		const loading = h.controller.showSessionPinSelector();
+		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
+		lookup.resolve(undefined);
+		await loading;
+		expect(h.focused()).toBe(h.menus.get("settings"));
+		expect(h.overlayStack).toHaveLength(1);
+		expect(h.status).not.toContain("Select a model before pinning a provider account.");
+	});
+
+	it("releases failed inline opens so the next request can load again", async () => {
+		let attempts = 0;
+		const h = harness({
+			listCurrentProviderOAuthAccounts: async () => {
+				attempts++;
+				throw new Error("account listing failed");
+			},
+		});
+		await h.controller.showSessionPinSelector();
+		await h.controller.showSessionPinSelector();
+		expect(attempts).toBe(2);
 	});
 
 	it("records conversation when the visible menu closes while an older load is pending", async () => {
