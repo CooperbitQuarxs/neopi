@@ -6,6 +6,7 @@ import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
 import { type Component, getKeybindings, matchesKey, routeSgrMouseInput, truncateToWidth } from "../index";
 import { extractPrintableText } from "../keys";
+import { sanitizeDisplaySingleLine } from "./extensions/display-text";
 import {
 	isStatusLineSegmentId,
 	parseUsageBarSegmentId,
@@ -15,7 +16,7 @@ import {
 } from "../status-line/schema";
 import {
 	DEFAULT_USAGE_BAR_TEMPLATE,
-	USAGE_BAR_TEMPLATE_MAX_LENGTH,
+	limitUsageBarTemplate,
 	USAGE_BAR_TEMPLATE_TOKENS,
 	usageBarLabel,
 } from "../status-line/segments";
@@ -67,7 +68,7 @@ export interface StatusLineConfigCallbacks {
 	active: () => StatusLineLayout;
 	/** Draft persisted by an earlier editor session, already validated. */
 	draft?: StatusLineEditorDraft;
-	/** Persist the draft. Rejection leaves the active layout and the in-memory draft untouched. */
+	/** Capture each snapshot synchronously; the host coalesces disk writes and preserves it on rejection. */
 	saveDraft: (draft: StatusLineEditorDraft) => Promise<void>;
 	/** Persist `layout` as the active configuration. */
 	apply: (layout: StatusLineLayout) => Promise<void>;
@@ -118,7 +119,7 @@ const LIST_HINTS =
 	"j/k select · h/l move · Space toggle · </> composer · Tab template · / search · s apply · R reset · Esc close";
 const TEMPLATE_HINTS = "Type the template · Enter/Tab/Esc back to the list";
 const SEARCH_HINTS = "Type to filter · ↑/↓ select · Enter/Tab/Esc back to the list";
-const PROMPT_HINTS = "Apply pending changes?  y apply · n keep draft, close · Esc stay";
+const PROMPT_HINTS = "Apply pending changes?  y apply · n keep draft, close · Esc/c stay";
 const RESET_HINTS = "Reset the draft to the active layout?  y reset · n/Esc keep the draft";
 
 type Side = "left" | "right";
@@ -170,7 +171,7 @@ function normalizeTemplates(value: unknown): Record<string, string> {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return templates;
 	for (const [id, template] of Object.entries(value)) {
 		if (!parseUsageBarSegmentId(id) || typeof template !== "string") continue;
-		const text = template.slice(0, USAGE_BAR_TEMPLATE_MAX_LENGTH);
+		const text = limitUsageBarTemplate(template);
 		if (text.trim() && text !== DEFAULT_USAGE_BAR_TEMPLATE) templates[id] = text;
 	}
 	return templates;
@@ -186,7 +187,13 @@ function normalizeIds(value: unknown): StatusLineSegmentId[] {
 function normalizeLayout(value: unknown): StatusLineLayout | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	const record = value as Record<string, unknown>;
-	if (typeof record.composerShape !== "string") return undefined;
+	if (
+		typeof record.composerShape !== "string" ||
+		!Array.isArray(record.leftSegments) ||
+		!Array.isArray(record.rightSegments)
+	) {
+		return undefined;
+	}
 	const leftSegments = normalizeIds(record.leftSegments);
 	const left = new Set(leftSegments);
 	return {
@@ -218,7 +225,14 @@ function normalizeRows(value: unknown, seen: Set<string>): StatusLineWidgetRow[]
 export function parseStatusLineEditorDraft(value: unknown): StatusLineEditorDraft | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	const record = value as Record<string, unknown>;
-	if (record.version !== 1 || typeof record.composerShape !== "string") return undefined;
+	if (
+		record.version !== 1 ||
+		typeof record.composerShape !== "string" ||
+		!Array.isArray(record.left) ||
+		!Array.isArray(record.right)
+	) {
+		return undefined;
+	}
 	const base = normalizeLayout(record.base);
 	if (!base) return undefined;
 	const seen = new Set<string>();
@@ -235,7 +249,7 @@ export function parseStatusLineEditorDraft(value: unknown): StatusLineEditorDraf
 		selected: typeof record.selected === "string" ? record.selected : COMPOSER_ROW,
 		top: typeof record.top === "number" && Number.isInteger(record.top) && record.top > 0 ? record.top : 0,
 		focus,
-		query: typeof record.query === "string" ? sanitizeStatusText(record.query) : "",
+		query: typeof record.query === "string" ? sanitizeDisplaySingleLine(record.query) : "",
 	};
 }
 
@@ -252,11 +266,9 @@ function rowsForLayout(
 	const build = (want: readonly StatusLineSegmentId[], hinted: readonly StatusLineWidgetRow[]) => {
 		const wanted = new Set<string>(want);
 		const kept = hinted.map(row => row.id).filter(id => !enabled.has(id) || wanted.has(id));
-		const keptSet = new Set<string>(kept);
-		const queue = want.filter(id => keptSet.has(id));
 		let next = 0;
-		const ids = kept.map(id => (wanted.has(id) ? queue[next++]! : id));
-		for (const id of want) if (!keptSet.has(id)) ids.push(id);
+		const ids = kept.map(id => (wanted.has(id) ? want[next++]! : id));
+		for (; next < want.length; next++) ids.push(want[next]!);
 		return ids.map(id => ({ id, enabled: wanted.has(id) }));
 	};
 	const left = build(active.leftSegments, hint?.left ?? []);
@@ -287,11 +299,11 @@ export class StatusLineConfigOverlayComponent implements Component {
 	#pendingG = false;
 	#applying = false;
 	#closed = false;
-	#draftWriting = false;
-	#draftQueued = false;
+	#leavePending = false;
+	#draftWriteRevision = 0;
 	#draftError: string | undefined;
-	#bodyRows = 20;
-	#listRows = 20;
+	#bodyRows = Math.max(3, (process.stdout.rows || 40) - 4);
+	#listRows = this.#bodyRows;
 	readonly #titleRow = new PanelRows();
 	readonly #divider = new PanelRows();
 	readonly #footer = new PanelRows();
@@ -319,7 +331,10 @@ export class StatusLineConfigOverlayComponent implements Component {
 		const active = callbacks.active();
 		this.#active = normalizeLayout(active) ?? copyLayout(active);
 		const draft = callbacks.draft;
-		const holdsEdits = draft !== undefined && !sameStatusLineLayout(this.#layoutOf(draft), draft.base);
+		const holdsEdits =
+			draft !== undefined &&
+			!sameStatusLineLayout(this.#layoutOf(draft), draft.base) &&
+			!sameStatusLineLayout(this.#layoutOf(draft), this.#active);
 		if (draft && holdsEdits) {
 			this.#base = copyLayout(draft.base);
 			this.#composerShape = draft.composerShape;
@@ -359,6 +374,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 			this.#right.push({ id, enabled: false });
 		};
 		for (const id of STATUS_LINE_SEGMENT_IDS) add(id);
+		for (const id of Object.keys(this.#templates)) if (isStatusLineSegmentId(id)) add(id);
 		for (const report of this.#cb.usageReports ?? []) {
 			for (const limit of report.limits) {
 				const { windowId, tier } = limit.scope;
@@ -410,36 +426,33 @@ export class StatusLineConfigOverlayComponent implements Component {
 
 	// ── Draft persistence ─────────────────────────────────────────────────
 
-	/** Save the latest draft; writes never overlap and a burst collapses into one trailing write. */
+	/** Capture every change synchronously; the host coalesces disk writes across editor instances. */
 	#persist(): void {
-		if (this.#draftWriting) {
-			this.#draftQueued = true;
+		const revision = ++this.#draftWriteRevision;
+		let writing: Promise<void>;
+		try {
+			writing = this.#cb.saveDraft(this.#draft());
+		} catch (error) {
+			this.#draftFailed(error);
+			this.#cb.requestRender();
 			return;
 		}
-		this.#draftWriting = true;
-		const snapshot = this.#draft();
-		this.#cb
-			.saveDraft(snapshot)
+		void writing
 			.then(
 				() => {
-					this.#draftError = undefined;
+					if (revision === this.#draftWriteRevision) this.#draftError = undefined;
 				},
-				(error: unknown) => {
-					const message = sanitizeStatusText(String(error));
-					if (this.#draftError === undefined) {
-						this.#cb.notify(`Could not save the status-line draft (kept in this editor): ${message}`);
-					}
-					this.#draftError = message;
-				},
+				(error: unknown) => this.#draftFailed(error),
 			)
-			.finally(() => {
-				this.#draftWriting = false;
-				if (this.#draftQueued) {
-					this.#draftQueued = false;
-					this.#persist();
-				}
-				this.#cb.requestRender();
-			});
+			.finally(() => this.#cb.requestRender());
+	}
+
+	#draftFailed(error: unknown): void {
+		const message = sanitizeStatusText(String(error));
+		if (this.#draftError === undefined) {
+			this.#cb.notify(`Could not save the status-line draft (kept in this editor): ${message}`);
+		}
+		this.#draftError = message;
 	}
 
 	/** A layout edit: preview it live and autosave the draft. */
@@ -503,6 +516,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 	#select(key: string): void {
 		this.#selected = key;
 		if (this.#focus === "template" && !parseUsageBarSegmentId(key)) this.#focus = "list";
+		this.#syncFocusFlags();
 		this.#syncTemplateField();
 		this.#reveal();
 		this.#moved();
@@ -580,7 +594,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 	}
 
 	#setTemplate(id: string, value: string): void {
-		const text = value.slice(0, USAGE_BAR_TEMPLATE_MAX_LENGTH);
+		const text = limitUsageBarTemplate(value);
 		if (!text.trim() || text === DEFAULT_USAGE_BAR_TEMPLATE) delete this.#templates[id];
 		else this.#templates[id] = text;
 		this.#edited();
@@ -598,8 +612,10 @@ export class StatusLineConfigOverlayComponent implements Component {
 	}
 
 	#setFocus(focus: StatusLineEditorFocus): void {
+		if (this.#focus === "template" && focus !== "template") this.#syncTemplateField();
 		this.#focus = focus;
 		this.#syncFocusFlags();
+		this.#pendingG = false;
 		this.#moved();
 	}
 
@@ -638,14 +654,21 @@ export class StatusLineConfigOverlayComponent implements Component {
 			this.#active = copyLayout(layout);
 			this.#base = copyLayout(layout);
 			this.#cb.notify("Applied the status-line layout and composer.");
-			this.#persist();
-			if (thenClose) this.#close();
+			// A history reopen may already own a newer draft; never replace it on late completion.
+			if (!this.#closed) {
+				this.#persist();
+				if (thenClose) this.#close();
+			}
 		} catch (error) {
 			this.#cb.notify(
 				`Could not apply the status-line layout; the draft is kept: ${sanitizeStatusText(String(error))}`,
 			);
 		} finally {
 			this.#applying = false;
+			if (this.#leavePending) {
+				this.#leavePending = false;
+				this.#cb.preview(undefined);
+			}
 			this.#cb.requestRender();
 		}
 	}
@@ -669,15 +692,16 @@ export class StatusLineConfigOverlayComponent implements Component {
 
 	/**
 	 * Menu history is leaving this editor (Ctrl-O): no apply prompt. The draft
-	 * is saved and the live view returns to the active layout; history reopens
-	 * the editor through the host, which restores the draft.
+	 * is saved immediately. An in-flight apply restores the live view after it
+	 * settles, so the host can advance the active snapshot before restoration.
 	 */
 	leaveMenu(): void {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#prompt = undefined;
 		this.#persist();
-		this.#cb.preview(undefined);
+		if (this.#applying) this.#leavePending = true;
+		else this.#cb.preview(undefined);
 	}
 
 	// ── Input ─────────────────────────────────────────────────────────────
@@ -685,6 +709,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 	handleInput(data: string): void {
 		if (this.#closed || this.#applying) return;
 		if (data.startsWith("\x1b[<")) {
+			this.#pendingG = false;
 			this.#handleMouse(data);
 			return;
 		}
@@ -709,13 +734,8 @@ export class StatusLineConfigOverlayComponent implements Component {
 			else this.#pendingG = true;
 			return;
 		}
-		if (kb.matches(data, "tui.select.cancel")) {
-			if (this.#search.getValue()) {
-				this.#search.setValue("");
-				this.#reveal();
-				this.#moved();
-			} else this.#requestClose();
-		} else if (char === "j" || kb.matches(data, "tui.select.down")) this.#moveSelection(1);
+		if (kb.matches(data, "tui.select.cancel")) this.#requestClose();
+		else if (char === "j" || kb.matches(data, "tui.select.down")) this.#moveSelection(1);
 		else if (char === "k" || kb.matches(data, "tui.select.up")) this.#moveSelection(-1);
 		else if (char === "h" || char === "[" || matchesKey(data, "left") || matchesKey(data, "alt+up"))
 			this.#reorder(-1);
@@ -776,10 +796,12 @@ export class StatusLineConfigOverlayComponent implements Component {
 			this.#setFocus("list");
 			return;
 		}
+		const before = this.#template.getValue();
 		if (!this.#template.handleInput(data)) return;
-		const value = this.#template.getValue();
-		if (value.length > USAGE_BAR_TEMPLATE_MAX_LENGTH) this.#template.setValue(value.slice(0, USAGE_BAR_TEMPLATE_MAX_LENGTH));
-		this.#setTemplate(this.#selected, this.#template.getValue());
+		const value = limitUsageBarTemplate(this.#template.getValue());
+		if (this.#template.getValue() !== value) this.#template.setValue(value);
+		if (value !== before) this.#setTemplate(this.#selected, value);
+		else this.#cb.requestRender();
 	}
 
 	#handleSearchInput(data: string): void {
@@ -802,9 +824,18 @@ export class StatusLineConfigOverlayComponent implements Component {
 			return;
 		}
 		const before = this.#search.getValue();
-		if (!this.#search.handleInput(data) || this.#search.getValue() === before) return;
-		// Keep the selection on a visible row; otherwise land on the first match.
-		if (!this.#keys().includes(this.#selected)) {
+		if (!this.#search.handleInput(data)) return;
+		const query = sanitizeDisplaySingleLine(this.#search.getValue());
+		if (query !== this.#search.getValue()) this.#search.setValue(query);
+		if (query === before) {
+			this.#cb.requestRender();
+			return;
+		}
+		// A new filter lands on a match, not the always-visible composer/reset rows.
+		if (
+			!this.#keys().includes(this.#selected) ||
+			(query.trim() && (this.#selected === COMPOSER_ROW || this.#selected === RESET_ROW))
+		) {
 			const first = this.#lines().find(line => line.kind === "widget");
 			this.#selected = first && "key" in first ? first.key : COMPOSER_ROW;
 			this.#syncTemplateField();
@@ -923,7 +954,8 @@ export class StatusLineConfigOverlayComponent implements Component {
 		if (this.#prompt === "reset") return RESET_HINTS;
 		if (this.#focus === "template") return TEMPLATE_HINTS;
 		if (this.#focus === "search") return SEARCH_HINTS;
-		return LIST_HINTS;
+		const query = sanitizeStatusText(this.#search.getValue());
+		return query ? `filter "${query}" · ${LIST_HINTS}` : LIST_HINTS;
 	}
 
 	render(width: number): readonly string[] {

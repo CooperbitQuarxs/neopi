@@ -19,6 +19,7 @@ import { summarizeLoopCondition } from "./loop";
 import { formatMetric } from "../components/metric";
 import { formatBillingSummary } from "./metrics";
 import { sanitizeStatusText } from "../chrome/shared";
+import { sanitizeDisplaySingleLine } from "../overlays/extensions/display-text";
 import {
 	formatContextUsage,
 	getContextUsageLevel,
@@ -1247,6 +1248,11 @@ export const DEFAULT_USAGE_BAR_TEMPLATE = "{label} {percent} {age}";
 /** Templates are status-bar text; cap the source's terminal width without splitting Unicode. */
 export const USAGE_BAR_TEMPLATE_MAX_LENGTH = 80;
 
+/** Bound safe single-line editor text while preserving spaces needed for typing. */
+export function limitUsageBarTemplate(template: string): string {
+	return truncateToWidth(sanitizeDisplaySingleLine(template), USAGE_BAR_TEMPLATE_MAX_LENGTH, "");
+}
+
 export type UsageBarTemplatePart = { readonly text: string } | { readonly token: UsageBarTemplateToken };
 
 const usageBarTemplateCache = new Map<string, readonly UsageBarTemplatePart[]>();
@@ -1265,7 +1271,7 @@ function isUsageBarTemplateToken(name: string): name is UsageBarTemplateToken {
 export function parseUsageBarTemplate(template: string): readonly UsageBarTemplatePart[] {
 	const cached = usageBarTemplateCache.get(template);
 	if (cached) return cached;
-	const source = truncateToWidth(sanitizeStatusText(template), USAGE_BAR_TEMPLATE_MAX_LENGTH, "");
+	const source = limitUsageBarTemplate(sanitizeStatusText(template));
 	const parts: UsageBarTemplatePart[] = [];
 	let text = "";
 	for (let index = 0; index < source.length; index++) {

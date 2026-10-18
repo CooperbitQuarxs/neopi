@@ -259,8 +259,8 @@ export class SelectorController {
 	#openMenus = new Map<MenuKind, OpenMenu>();
 
 	constructor(private ctx: InteractiveModeContext) {}
-	/** Latest /statusline draft this process wrote, so a reopen never races its own pending write. */
-	#statusLineDraft: { path: string; draft: StatusLineEditorDraft } | undefined;
+	/** Latest draft plus a cross-reopen write chain: memory updates immediately, disk writes never overlap. */
+	#statusLineDraft: { path: string; draft: StatusLineEditorDraft; writing: Promise<void> } | undefined;
 
 	/**
 	 * Mount a primary fullscreen menu through the one polished modal path shared
@@ -683,9 +683,20 @@ export class SelectorController {
 				usageTemplates: { ...restore.segmentOptions.usageBars?.templates },
 			}),
 			draft,
-			saveDraft: async next => {
-				this.#statusLineDraft = { path: store.path, draft: next };
-				await store.write(next);
+			saveDraft: next => {
+				const previous = this.#statusLineDraft;
+				const state =
+					previous?.path === store.path
+						? previous
+						: { path: store.path, draft: next, writing: Promise.resolve() };
+				state.draft = next;
+				this.#statusLineDraft = state;
+				const writing = state.writing.catch(() => {}).then(() => {
+					// A newer snapshot supersedes this write, including after close/reopen.
+					if (state.draft === next) return store.write(next);
+				});
+				state.writing = writing;
+				return writing;
 			},
 			usageReports: this.ctx.statusLine.getUsageReports(),
 			preview: layout => {
