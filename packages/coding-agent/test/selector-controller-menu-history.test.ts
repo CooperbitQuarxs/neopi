@@ -169,6 +169,20 @@ describe("controller menu timeline", () => {
 		expect(h.overlayStack).toHaveLength(0);
 	});
 
+	it("ignores history silently while the composer completion popup is active", async () => {
+		const h = harness();
+		h.open("settings");
+		h.closes.get("settings")!();
+		await Promise.resolve();
+		h.ctx.editor.isAutocompleteActive = () => true;
+		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
+		expect(h.overlayStack).toHaveLength(0);
+		expect(h.status).toEqual([]);
+		h.ctx.editor.isAutocompleteActive = () => false;
+		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
+		expect(h.overlayStack).toHaveLength(1);
+	});
+
 	it("keeps a focused custom view alive and names the view rather than a prompt", () => {
 		const h = harness();
 		h.open("settings");

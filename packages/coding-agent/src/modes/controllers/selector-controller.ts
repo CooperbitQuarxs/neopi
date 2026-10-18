@@ -451,6 +451,8 @@ export class SelectorController {
 	 */
 	navigateMenuHistory(direction: -1 | 1): boolean {
 		const focused = this.ctx.ui.getFocused();
+		// Composer completion is not a separate menu or a blocking prompt.
+		if (focused === this.ctx.editor && this.ctx.editor.isAutocompleteActive()) return true;
 		if (focused && this.ctx.hookCustomComponents.has(focused)) {
 			this.ctx.showStatus("Close this view first (Esc)");
 			return true;
