@@ -12,29 +12,52 @@ import type { ControlSnapshot } from "../../src/control/types";
 import { MAX_RPC_FRAME_BYTES, RpcFrameDecoder, RpcFrameEncoder } from "../../src/modes/rpc/rpc-frame";
 
 const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+afterEach(async () => {
+	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+});
 
 async function fixture() {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "npi-pipe-"));
 	cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
 	const instanceId = "abcdef1234567890";
 	const snapshot: ControlSnapshot = {
-		version: 1, instanceId, imageId: "test", role: "tui", pid: process.pid, ready: true,
+		version: 1,
+		instanceId,
+		imageId: "test",
+		role: "tui",
+		pid: process.pid,
+		ready: true,
 		build: { version: "test", gitSha: null, dirty: null, execPath: process.execPath },
-		tmux: { pane: null, session: null, window: null }, cwd: dir, title: null, session: null,
+		tmux: { pane: null, session: null, window: null },
+		cwd: dir,
+		title: null,
+		session: null,
 		busy: { streaming: false, compacting: false, queued: 0, pendingAsyncWork: false, settled: true },
 		revisions: { generation: 1, human: 0, focus: 0, draft: 0, dialogs: 0, paint: 0, model: null, role: null },
-		view: null, modes: { plan: false, chat: "off", goal: false, vibe: false, live: false, repl: false },
-		dialogs: [], connections: 1, requests: { open: 0, retained: 0 }, hosts: [],
-		approvals: { controlAllowed: false, pending: 0 }, exemptions: [],
+		view: null,
+		modes: { plan: false, chat: "off", goal: false, vibe: false, live: false, repl: false },
+		dialogs: [],
+		connections: 1,
+		requests: { open: 0, retained: 0 },
+		hosts: [],
+		approvals: { controlAllowed: false, pending: 0 },
+		exemptions: [],
 	};
 	const disconnected = Promise.withResolvers<void>();
-	let publication: ControlPublication;
-	let server: ControlServer;
 	const commands: Record<string, unknown>[] = [];
 	const host = {
-		instanceId, token: "", budget: new HostBudget(), registryDir: dir, snapshot: () => snapshot,
-		onAuthenticated: connection => connection.write({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1, 2], capabilities: ["control_v1"] }),
+		instanceId,
+		token: "",
+		budget: new HostBudget(),
+		registryDir: dir,
+		snapshot: () => snapshot,
+		onAuthenticated: connection =>
+			connection.write({
+				type: "ready",
+				protocolVersion: 1,
+				supportedProtocolVersions: [1, 2],
+				capabilities: ["control_v1"],
+			}),
 		onClosed: () => disconnected.resolve(),
 		dispatch: async (connection: ControlConnection, frame) => {
 			if (frame.type === "bye") {
@@ -42,19 +65,41 @@ async function fixture() {
 				return;
 			}
 			commands.push(frame);
-			connection.respond({ type: "response", command: String(frame.type), requestId: frame.requestId as string | undefined,
-				id: frame.id as string | undefined, success: true,
-				data: frame.type === "negotiate_protocol" ? { protocolVersion: 2 } : frame.type === "subscribe" ? { cursor: 0 } : frame.payload ?? snapshot,
+			connection.respond({
+				type: "response",
+				command: String(frame.type),
+				requestId: frame.requestId as string | undefined,
+				id: frame.id as string | undefined,
+				success: true,
+				data:
+					frame.type === "negotiate_protocol"
+						? { protocolVersion: 2 }
+						: frame.type === "subscribe"
+							? { cursor: 0 }
+							: (frame.payload ?? snapshot),
 			});
 		},
 	} satisfies ControlConnectionHost;
-	publication = await publishControlEndpoint({
-		dir, role: "tui", instanceId, imageId: "test", execPath: process.execPath, gitSha: null, profile: null,
-		sessionId: "session", sessionFile: null, title: null, cwd: dir, tmuxPane: null, tmuxSession: null, tmuxWindow: null, tty: null,
+	const server = new ControlServer({ metadata: { instanceId }, host });
+	const publication = await publishControlEndpoint({
+		dir,
+		role: "tui",
+		instanceId,
+		imageId: "test",
+		execPath: process.execPath,
+		gitSha: null,
+		profile: null,
+		sessionId: "session",
+		sessionFile: null,
+		title: null,
+		cwd: dir,
+		tmuxPane: null,
+		tmuxSession: null,
+		tmuxWindow: null,
+		tty: null,
 		onConnection: socket => server.accept(socket),
 	});
 	host.token = publication.token;
-	server = new ControlServer({ metadata: { instanceId }, host });
 	cleanups.push(() => publication.close());
 	return { dir, instanceId, publication, commands, disconnected, server };
 }
@@ -70,7 +115,9 @@ describe("ctl pipe", () => {
 		const stderr: string[] = [];
 		const payload = "x".repeat(MAX_RPC_FRAME_BYTES + 100);
 		const result = await ctlPipe(f.instanceId, {
-			registry: { dir: f.dir }, input, label: "neocode",
+			registry: { dir: f.dir },
+			input,
+			label: "neocode",
 			io: {
 				stderr: text => stderr.push(text),
 				stdout: text => {
@@ -80,7 +127,8 @@ describe("ctl pipe", () => {
 						const frame = decoder.push(parsed) as Record<string, unknown> | undefined;
 						if (!frame) continue;
 						frames.push(frame);
-						if (frame.type === "ready") input.write(`${JSON.stringify({ type: "negotiate_protocol", id: "n", protocolVersion: 2 })}\n`);
+						if (frame.type === "ready")
+							input.write(`${JSON.stringify({ type: "negotiate_protocol", id: "n", protocolVersion: 2 })}\n`);
 						if (frame.command === "negotiate_protocol") {
 							encoder.setProtocolVersion(2);
 							input.write(encoder.encode({ type: "echo", id: "echo", payload }));
@@ -92,8 +140,16 @@ describe("ctl pipe", () => {
 		});
 		expect(result).toBe(0);
 		expect(stderr).toEqual([]);
-		expect(frames.map(frame => frame.type === "ready" ? "ready" : frame.command)).toEqual(["ready", "negotiate_protocol", "echo"]);
-		expect(frames[0]).toMatchObject({ protocolVersion: 1, supportedProtocolVersions: [1, 2], capabilities: ["control_v1"] });
+		expect(frames.map(frame => (frame.type === "ready" ? "ready" : frame.command))).toEqual([
+			"ready",
+			"negotiate_protocol",
+			"echo",
+		]);
+		expect(frames[0]).toMatchObject({
+			protocolVersion: 1,
+			supportedProtocolVersions: [1, 2],
+			capabilities: ["control_v1"],
+		});
 		expect(frames[1]).toMatchObject({ id: "n", success: true });
 		expect(frames[2]).toMatchObject({ id: "echo", success: true, data: payload });
 		expect(physical.some(frame => frame.type === "rpc_chunk")).toBe(true);
@@ -104,14 +160,26 @@ describe("ctl pipe", () => {
 		try {
 			await client.connect();
 			expect((await client.request({ type: "get_status" })).success).toBe(true);
-		} finally { client.close(); }
+		} finally {
+			client.close();
+		}
 	});
 
 	test("owner socket closure ends the pipe even with stdin still open", async () => {
 		const f = await fixture();
 		const input = new PassThrough();
-		const result = ctlPipe(f.instanceId, { registry: { dir: f.dir }, input,
-			io: { stderr: () => {}, stdout: text => { if (text.includes('"ready"')) queueMicrotask(() => { void f.publication.close(); }); } },
+		const result = ctlPipe(f.instanceId, {
+			registry: { dir: f.dir },
+			input,
+			io: {
+				stderr: () => {},
+				stdout: text => {
+					if (text.includes('"ready"'))
+						queueMicrotask(() => {
+							void f.publication.close();
+						});
+				},
+			},
 		});
 		expect(await result).toBe(0);
 		expect(input.destroyed).toBe(false);
@@ -124,7 +192,13 @@ describe("ctl pipe", () => {
 		const out: string[] = [];
 		const err: string[] = [];
 		const input = new PassThrough();
-		expect(await ctlPipe("missing", { registry: { dir: path.join(root, "missing") }, input, io: { stdout: text => out.push(text), stderr: text => err.push(text) } })).toBe(1);
+		expect(
+			await ctlPipe("missing", {
+				registry: { dir: path.join(root, "missing") },
+				input,
+				io: { stdout: text => out.push(text), stderr: text => err.push(text) },
+			}),
+		).toBe(1);
 		expect(out).toEqual([]);
 		expect(JSON.parse(err.join(""))).toMatchObject({ type: "startup_error", code: "control_unavailable" });
 		input.destroy();
