@@ -420,6 +420,7 @@ import {
 	VIBE_MODE_CONTEXT_MESSAGE_TYPE,
 } from "./messages";
 import { ModelControls, type ModelControlsHost } from "./model-controls";
+import { formatSessionHistoryMarkdown } from "./session-history-format";
 import {
 	isPrewalkPlanNudge,
 	PrewalkCoordinator,
@@ -2042,16 +2043,31 @@ export class AgentSession implements SettingsScope {
 		});
 		this.agent.prepareQueuedMessages = this.#prepareQueuedUserMessages;
 		this.#detachUsageBeforeModelCall = this.agent.addBeforeModelCallHook(async signal => {
-			if (!cfgRetryUsageAwareFallback.get(this.settings)) return;
-			if (this.#usagePreflightReadyForNextModelCall) {
-				const checkedModel = this.#usagePreflightReadyModel;
+			if (cfgRetryUsageAwareFallback.get(this.settings)) {
+				const checkedModel = this.#usagePreflightReadyForNextModelCall ? this.#usagePreflightReadyModel : undefined;
 				this.#usagePreflightReadyForNextModelCall = false;
 				this.#usagePreflightReadyModel = undefined;
-				if (checkedModel === this.model) return;
+				if (checkedModel !== this.model && !(await this.#runUsageAwarePreflight(signal))) {
+					signal?.throwIfAborted();
+					throw new DOMException("Usage preflight cancelled", "AbortError");
+				}
 			}
-			if (!(await this.#runUsageAwarePreflight(signal))) {
+			// Runtime fallback resumes this turn without passing real-user dispatch again.
+			if (
+				this.#recovery.hasActiveRetryFallback &&
+				this.isAutoThinking &&
+				this.#models.autoResolvedThinkingLevel === undefined
+			) {
+				const request = this.agent.state.messages.findLast(
+					message => message.role === "user" || (message.role === "custom" && isUserInvokedSkillPrompt(message)),
+				);
+				await this.#models.applyAutoThinkingLevel(
+					request ? formatSessionHistoryMarkdown([request]) : "",
+					this.#promptGeneration,
+					undefined,
+					signal,
+				);
 				signal?.throwIfAborted();
-				throw new DOMException("Usage preflight cancelled", "AbortError");
 			}
 		});
 		const statsHost: SessionStatsTrackerHost = {
