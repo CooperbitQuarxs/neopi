@@ -2,6 +2,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { untilAborted } from "@oh-my-pi/pi-utils";
+import { parseGitUrl } from "../extensibility/plugins/git-url";
 import { github } from "../utils/github";
 import type { ToolSession } from ".";
 import type { GhToolDetails } from "@oh-my-pi/pi-tui/tools/github";
@@ -103,6 +104,14 @@ export function repoFromUrl(value: string | undefined): string | undefined {
 	const host = match[1].toLowerCase();
 	const slug = `${match[2]}/${match[3]}`;
 	return host === defaultGhHost() ? slug : formatRepoRef(host, slug);
+}
+
+/** Resolve HTTPS, SSH, or scp-like Git remotes to the same host-aware identity as GitHub URLs. */
+export function repoFromRemoteUrl(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	const source = parseGitUrl(value);
+	if (!source || !/^[^/\s?#]+\/[^/\s?#]+$/.test(source.path)) return undefined;
+	return repoFromUrl(`https://${source.host}/${source.path}`);
 }
 
 export const PR_URL_PATTERN = /^https:\/\/([^/]+)\/([^/]+\/[^/]+)\/pull\/(\d+)(?:\/.*)?$/;
