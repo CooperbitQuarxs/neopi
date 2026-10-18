@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { MenuKeyReader, MenuViewport } from "../src/components/menu-navigation";
+import { MenuKeyReader, MenuSearchField, MenuViewport } from "../src/components/menu-navigation";
 import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "../src/keybindings";
 
 describe("menu keybinding ownership", () => {
@@ -21,6 +21,39 @@ describe("menu keybinding ownership", () => {
 		} finally {
 			setKeybindings(previous);
 		}
+	});
+});
+
+describe("literal menu field typing", () => {
+	it("keeps printable bindings literal while preserving word undo and Escape", () => {
+		const previous = getKeybindings();
+		try {
+			setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, {
+				"tui.select.cancel": "j",
+				"tui.input.submit": "k",
+				"tui.editor.deleteCharBackward": "l",
+				"tui.select.down": "g",
+				"tui.editor.undo": "ctrl+z",
+			}));
+			const field = new MenuSearchField("", true);
+			for (const key of "jklg/") expect(field.handleInput(key)).toBe("edited");
+			expect(field.value).toBe("jklg/");
+			expect(field.focused).toBe(true);
+			expect(field.handleInput("\x1a")).toBe("edited");
+			expect(field.value).toBe("");
+			expect(field.handleInput("\x1b")).toBe("exited");
+			expect(field.focused).toBe(false);
+		} finally {
+			setKeybindings(previous);
+		}
+	});
+
+	it("inserts Kitty text at the caret through the same typing path", () => {
+		const field = new MenuSearchField("ab", true);
+		field.input.setCursor(1);
+		expect(field.handleInput("\x1b[106u")).toBe("edited");
+		expect(field.value).toBe("ajb");
+		expect(field.cursor).toBe(2);
 	});
 });
 

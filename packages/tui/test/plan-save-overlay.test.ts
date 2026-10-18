@@ -40,3 +40,25 @@ test("Escape cancels the one-shot path prompt without adding menu navigation", (
 	overlay.handleInput("\x1b");
 	expect(results).toEqual([undefined]);
 });
+
+test("typed words remain one undo unit rather than one paste per character", () => {
+	setKeybindings(KeybindingsManager.inMemory({ "tui.editor.undo": "ctrl+z" }));
+	const results: (PlanSaveOverlayResult | undefined)[] = [];
+	const overlay = new PlanSaveOverlay("/tmp/default.md", result => results.push(result));
+	for (const char of "draft.md") overlay.handleInput(char);
+	overlay.handleInput("\x1a");
+	overlay.handleInput("\r");
+	expect(results).toEqual([{ path: "/tmp/default.md" }]);
+});
+
+test("literal binding overrides do not remove explicit Enter and Escape exits", () => {
+	setKeybindings(KeybindingsManager.inMemory({ "tui.input.submit": "j", "tui.select.cancel": "k" }));
+	const results: (PlanSaveOverlayResult | undefined)[] = [];
+	const first = new PlanSaveOverlay("/tmp/default.md", result => results.push(result));
+	first.handleInput("jk");
+	first.handleInput("\r");
+	const second = new PlanSaveOverlay("/tmp/default.md", result => results.push(result));
+	second.handleInput("kj");
+	second.handleInput("\x1b");
+	expect(results).toEqual([{ path: "jk" }, undefined]);
+});

@@ -162,12 +162,13 @@ export class MenuSearchField {
 
 	handleInput(data: string): "edited" | "exited" | "pass" {
 		if (!this.focused) return "pass";
-		if (extractPrintableText(data) !== undefined) {
-			this.#input.handleInput(data);
+		const text = extractPrintableText(data);
+		if (text !== undefined) {
+			this.#input.insertText(text);
 			return "edited";
 		}
 		const kb = getKeybindings();
-		if (kb.matches(data, "tui.select.cancel")) {
+		if (matchesKey(data, "escape") || kb.matches(data, "tui.select.cancel")) {
 			this.focused = false;
 			return "exited";
 		}

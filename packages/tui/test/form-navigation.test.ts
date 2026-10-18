@@ -1,4 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import { setKeybindings } from "@oh-my-pi/pi-tui";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { Form, SelectFormField, TextFormField } from "@oh-my-pi/pi-tui/components/form";
 import { getSelectListTheme } from "@oh-my-pi/pi-tui/theme/tui-adapters";
 
@@ -7,6 +9,8 @@ const theme = { label: (text: string) => text, description: (text: string) => te
 function field(secret = false): TextFormField {
 	return new TextFormField({ theme, secret, initialValue: "draft", onSubmit: () => {}, onCancel: () => {} });
 }
+
+afterEach(() => setKeybindings(KeybindingsManager.inMemory()));
 
 describe("form menu history", () => {
 	it("returns a standalone choice's search to its list before canceling the form", () => {
@@ -43,6 +47,35 @@ describe("form menu history", () => {
 		expect(first.focused).toBe(false);
 		form.handleInput("X");
 		expect(second.getValue()).toBe("drXaft");
+	});
+
+	it("types printable cancel, submit, delete and context bindings literally", () => {
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.select.cancel": ["escape", "j", "space"],
+			"tui.input.submit": ["enter", "k"],
+			"tui.editor.deleteCharBackward": ["backspace", "h"],
+			"tui.editor.deleteCharForward": ["delete", "/"],
+			"tui.select.nextContext": ["tab", "g"],
+			"tui.select.prevContext": ["shift+tab", "l"],
+		}));
+		let submitted = 0;
+		let cancelled = 0;
+		const first = new TextFormField({
+			theme, onSubmit: () => { submitted++; }, onCancel: () => { cancelled++; },
+		});
+		const second = field();
+		const form = new Form({ fields: [first, second], onCancel: () => { cancelled++; } });
+		form.focused = true;
+		for (const character of "hjklggG / ") form.handleInput(character);
+		expect(first.getValue()).toBe("hjklggG / ");
+		expect(first.focused).toBe(true);
+		expect(second.focused).toBe(false);
+		expect(submitted).toBe(0);
+		expect(cancelled).toBe(0);
+		form.handleInput("\r");
+		expect(submitted).toBe(1);
+		form.handleInput("\x1b");
+		expect(cancelled).toBe(1);
 	});
 
 	it("never snapshots or restores credential field contents", () => {
