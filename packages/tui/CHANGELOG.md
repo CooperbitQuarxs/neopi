@@ -29,7 +29,7 @@
 - Agent transcripts use explicit message-field focus and preserve unsent drafts when returning to the hub ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Navigate side-question history with Vim motions and `/` search while retaining safe follow-up drafts and reading positions ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Prompt-history search preserves its query, caret, selected entry, and viewport, with normal list navigation after leaving the search field ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- The directory chooser keeps path editing literal and supports paging and safe history restoration after Escape returns to its list ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- The directory chooser keeps path editing literal and supports paging after Escape returns to its list; its one-shot filesystem action is excluded from menu history ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Shared model browsers use explicit `/` search, clamped Vim navigation, and partial-row viewport snapshots in every host ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Usage reports support shared viewer motions and preserve the active tab and each tab's reading position without refreshing on history restore ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - IRC messages support explicit `/` search, independent visual-line scrolling, and history that preserves selection and unsent replies without replaying sends; reply focus stays a context rather than adding page visits ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
