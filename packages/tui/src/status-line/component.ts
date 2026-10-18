@@ -2069,11 +2069,12 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		if (this.#disposed || this.session !== session || sequence < this.#latestAppliedUsageRefreshSequence) {
 			return;
 		}
+		// The remote auth broker resolves null on failure instead of rejecting.
+		// Route every non-report result through the same retained-cache failure path.
+		if (!Array.isArray(reports)) throw new Error("Usage refresh returned no report snapshot");
 		this.#latestAppliedUsageRefreshSequence = sequence;
 		this.#cachedUsageReports = {
-			reports: Array.isArray(reports)
-				? reports.filter((report): report is UsageReport => usageReportSchema.allows(report))
-				: [],
+			reports: reports.filter((report): report is UsageReport => usageReportSchema.allows(report)),
 		};
 		const activeProvider = session.state.model?.provider ?? session.model?.provider;
 		const activeModelId = session.state.model?.id ?? session.model?.id;
