@@ -1,11 +1,12 @@
 import type { UsageResetCreditDetail } from "@oh-my-pi/pi-ai";
-import { Container, matchesKey, ScrollView, Spacer, Text, TruncatedText } from "../index";
+import { Container, ScrollView, Spacer, Text, TruncatedText } from "../index";
 import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
 import { theme } from "../theme/theme";
-import { matchesSelectCancel, matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
+import { matchesSelectCancel } from "../keybinding-matchers";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
-import { centeredViewportRange } from "../components/scroll-viewport";
+import { applyMenuMotion, MenuKeyReader, MenuViewport } from "../components/menu-navigation";
+import { Input } from "../components/input";
 import { formatUsageResetWindow } from "./usage-display";
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
@@ -102,6 +103,10 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 	#listContainer: Container;
 	#menu: MenuSelection<ResetUsageAccount>;
 	#statusMessage: string | undefined;
+	readonly #keys = new MenuKeyReader();
+	readonly #viewport = new MenuViewport();
+	readonly #search = new Input();
+	#filterFocused = false;
 	#onSelectCallback: (account: ResetUsageAccount) => void;
 	#onCancelCallback: () => void;
 	#nativeItems: readonly NativeNode[] | undefined;
@@ -140,7 +145,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 		const items = this.#menu.visibleItems;
 		const total = items.length;
 		const maxVisible = RESET_SELECTOR_MAX_VISIBLE;
-		const { start: startIndex, end: endIndex } = centeredViewportRange(this.#menu.selectedIndex, total, maxVisible);
+		const { startIndex, endIndex } = this.#viewport.layout(items.map(() => 1), this.#menu.selectedIndex, maxVisible);
 
 		const rows: string[] = [];
 		for (let i = startIndex; i < endIndex; i++) {
@@ -185,13 +190,16 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 				new TruncatedText(theme.fg("muted", "No provider accounts with saved resets"), 0, 0),
 			);
 		}
+		if (this.#filterFocused || this.#menu.query) {
+			this.#listContainer.addChild(new TruncatedText(`Search: ${this.#filterFocused ? (this.#search.render(40)[0] ?? "") : this.#menu.query} · Esc back to list`, 0, 0));
+		}
 
 		const pending = items.find(item => this.#menu.isPending(item));
 		const hint = pending
 			? theme.fg("warning", oneLine(this.#confirmationMessage(pending)))
 			: theme.fg(
 					"muted",
-					`j/k or ${editorKeys("tui.select.up", "tui.select.down")} select · ${formatKeyHint("enter")} spend a reset · ${editorKey("tui.select.cancel")} cancel`,
+					`j/k or ${editorKeys("tui.select.up", "tui.select.down")} select · / search · ${formatKeyHint("enter")} spend a reset · ${editorKey("tui.select.cancel")} cancel`,
 				);
 		this.#listContainer.addChild(new Text(hint, 0, 0));
 
@@ -225,41 +233,58 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 		].join(" ");
 	}
 
-	handleInput(rawData: string): void {
-		const keyData = pickerNavigationKey(rawData);
-		if (matchesSelectCancel(keyData)) {
-			if (this.#menu.cancelConfirmation()) {
-				this.#statusMessage = undefined;
+	navigationSnapshot(): unknown {
+		return { selectedKey: this.#menu.selectedKey, query: this.#menu.query, viewportTop: this.#viewport.top };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as { selectedKey?: string; query?: string; viewportTop?: number };
+		if (typeof state.query !== "string") return;
+		this.#filterFocused = false;
+		this.#search.setValue(state.query);
+		this.#menu.cancelConfirmation();
+		this.#menu.setQuery(state.query);
+		if (state.selectedKey !== undefined) this.#menu.setSelectedKey(state.selectedKey);
+		this.#viewport.setTop(state.viewportTop);
+		this.#nativeItems = undefined;
+		this.#pickerItems = undefined;
+		this.#updateList();
+	}
+
+	handleInput(data: string): void {
+		if (this.#filterFocused) {
+			if (matchesSelectCancel(data)) {
+				this.#filterFocused = false;
 				this.#updateList();
 				return;
 			}
-			this.#onCancelCallback();
-			return;
+			if (this.#search.handleInput(data)) {
+				this.#menu.setQuery(this.#search.getValue());
+				this.#viewport.reveal();
+				this.#nativeItems = undefined;
+				this.#pickerItems = undefined;
+				this.#updateList();
+				return;
+			}
 		}
-
-		if (matchesSelectUp(keyData)) {
-			this.#menu.cancelConfirmation();
-			this.#menu.move(-1, true);
+		const action = this.#keys.read(data);
+		if (action === undefined || action === "pending") return;
+		const motion = applyMenuMotion(action, this.#menu, this.#viewport, { wrap: true });
+		if (motion.handled) {
+			if (motion.selectionChanged) this.#menu.cancelConfirmation();
 			this.#statusMessage = undefined;
 			this.#updateList();
-		} else if (matchesSelectDown(keyData)) {
+		} else if (action.kind === "search") {
+			this.#filterFocused = true;
 			this.#menu.cancelConfirmation();
-			this.#menu.move(1, true);
-			this.#statusMessage = undefined;
 			this.#updateList();
-		} else if (matchesKey(keyData, "pageUp")) {
-			this.#menu.cancelConfirmation();
-			this.#menu.move(-RESET_SELECTOR_MAX_VISIBLE, false);
-			this.#statusMessage = undefined;
-			this.#updateList();
-		} else if (matchesKey(keyData, "pageDown")) {
-			this.#menu.cancelConfirmation();
-			this.#menu.move(RESET_SELECTOR_MAX_VISIBLE, false);
-			this.#statusMessage = undefined;
-			this.#updateList();
-		} else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-			this.#activateSelection();
-		}
+		} else if (action.kind === "cancel") {
+			if (this.#menu.cancelConfirmation()) {
+				this.#statusMessage = undefined;
+				this.#updateList();
+			} else this.#onCancelCallback();
+		} else if (action.kind === "confirm") this.#activateSelection();
 	}
 
 	#activateSelection(): void {
@@ -354,7 +379,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 			size: "md",
 			layout: "cards",
 			preview: "none",
-			query: null,
+			query: this.#menu.query,
 			columns: [
 				{ id: "expires", priority: 1 },
 				{ id: "resets", priority: 2 },
@@ -376,6 +401,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 		if (this.#menu.selectedKey === key) return true;
 		this.#menu.cancelConfirmation();
 		this.#menu.setSelectedKey(key);
+		this.#viewport.reveal();
 		if (this.#menu.selectedKey !== key) return false;
 		this.#statusMessage = undefined;
 		this.#updateList();

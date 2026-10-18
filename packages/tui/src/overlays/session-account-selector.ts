@@ -4,6 +4,7 @@ import { OverlayPanel } from "../chrome/overlay-box";
 import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-routing";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { SelectListSheet } from "../native/picker";
+import type { SelectListNavigationState } from "../components/select-list";
 
 const ACCOUNT_SELECTOR_MAX_VISIBLE = 10;
 
@@ -56,6 +57,7 @@ export class SessionAccountSelectorComponent extends OverlayPanel {
 			items,
 			Math.min(Math.max(items.length, 1), ACCOUNT_SELECTOR_MAX_VISIBLE),
 			getSelectListTheme(),
+			{ search: "always" },
 		);
 		const activeIndex = accounts.findIndex(account => account.active);
 		if (activeIndex >= 0) this.#selectList.setSelectedIndex(activeIndex);
@@ -95,6 +97,15 @@ export class SessionAccountSelectorComponent extends OverlayPanel {
 	/** Forward keyboard navigation and cancellation when the wrapper owns focus. */
 	handleInput(keyData: string): void {
 		this.#selectList.handleInput(keyData);
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationState();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null || !("filter" in snapshot) || typeof snapshot.filter !== "string") return;
+		this.#selectList.restoreNavigationState(snapshot as SelectListNavigationState);
 	}
 
 	/** Route mouse selection through the title rows into the account list. */

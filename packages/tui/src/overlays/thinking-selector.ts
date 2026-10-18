@@ -6,6 +6,7 @@ import { OverlayPanel } from "../chrome/overlay-box";
 import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-routing";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { SelectListSheet } from "../native/picker";
+import type { SelectListNavigationState } from "../components/select-list";
 
 /**
  * Component that renders a thinking level selector with borders
@@ -25,7 +26,7 @@ export class ThinkingSelectorComponent extends OverlayPanel {
 		const thinkingLevels: SelectItem[] = availableLevels.map(getConfiguredThinkingLevelMetadata);
 
 		// Create selector
-		this.#selectList = new SelectList(thinkingLevels, thinkingLevels.length, getSelectListTheme());
+		this.#selectList = new SelectList(thinkingLevels, thinkingLevels.length, getSelectListTheme(), { search: "always" });
 
 		// Preselect current level
 		const currentIndex = thinkingLevels.findIndex(item => item.value === currentLevel);
@@ -68,6 +69,15 @@ export class ThinkingSelectorComponent extends OverlayPanel {
 
 	getSelectList(): SelectList {
 		return this.#selectList;
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationState();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null || !("filter" in snapshot) || typeof snapshot.filter !== "string") return;
+		this.#selectList.restoreNavigationState(snapshot as SelectListNavigationState);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
