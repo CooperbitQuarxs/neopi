@@ -99,6 +99,28 @@ describe("session selector Vim navigation and safe history", () => {
 		} finally { selector.dispose(); }
 	});
 
+	it("allows history during a read-only scope load and ignores its late completion after leaving", async () => {
+		const loaded = Promise.withResolvers<SessionSelectorEntry[]>();
+		const repaint = vi.fn();
+		const selector = new SessionSelectorComponent(sessions.slice(0, 2), () => {}, () => {}, () => {}, {
+			loadAllSessions: () => loaded.promise,
+		});
+		try {
+			selector.setOnRequestRender(repaint);
+			selector.handleInput("\t");
+			expect(selector.blocksMenuHistory).toBe(false);
+			const saved = selector.navigationSnapshot();
+			selector.leaveMenu();
+			const rendersBeforeCompletion = repaint.mock.calls.length;
+			loaded.resolve(sessions.slice());
+			await loaded.promise;
+			expect(snapshot(selector).scope).toBe("folder");
+			expect(repaint).toHaveBeenCalledTimes(rendersBeforeCompletion);
+			selector.restoreNavigation(saved);
+			expect(snapshot(selector).scope).toBe("folder");
+		} finally { selector.dispose(); }
+	});
+
 	it("cancels delayed history matching when left", () => {
 		vi.useFakeTimers();
 		const matcher = vi.fn(() => [] as string[]);

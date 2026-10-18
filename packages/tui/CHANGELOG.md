@@ -33,7 +33,7 @@
 - Shared model browsers use explicit `/` search, clamped Vim navigation, and partial-row viewport snapshots in every host ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Usage reports support shared viewer motions and preserve the active tab and each tab's reading position without refreshing on history restore ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - IRC messages support explicit `/` search, independent visual-line scrolling, and history that preserves selection and unsent replies without replaying sends; reply focus stays a context rather than adding page visits ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Session results support Vim paging, independent visual-line scrolling, and restored scope, search, caret, and selection; native search close returns to the list before closing ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Session results support Vim paging, independent visual-line scrolling, and restored scope, search, caret, and selection; history stays available during read-only scans, and native search close returns to the list before closing ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Safe menu-editor history retains collapsed pasted text and attachment references when reopening a draft in a new editor ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Native account pickers and Agent Hub return from a focused search field to the list before closing, matching Escape in the ANSI UI ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Added per-widget text templates for usage bars (`{label}`, `{percent}`, `{age}`), editable in `/statusline` with Tab ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).

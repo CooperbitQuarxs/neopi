@@ -1437,6 +1437,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	#globalSessions: T[] | null = null;
 	#scope: "folder" | "all" = "folder";
 	#toggling = false;
+	#scopeGeneration = 0;
 	#inputLocked = false;
 	#deleting = false;
 	// 0-based line where the session list begins within this component's own
@@ -1559,7 +1560,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	get filterFocused(): boolean { return this.#sessionList.filterFocused; }
 
 	get blocksMenuHistory(): boolean {
-		return this.#toggling || this.#inputLocked || this.#deleting;
+		return this.#inputLocked || this.#deleting;
 	}
 
 	navigationSnapshot(): unknown {
@@ -1586,6 +1587,12 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	}
 
 	leaveMenu(): void {
+		this.#scopeGeneration++;
+		this.#toggling = false;
+		if (this.#message?.kind === "loading") {
+			this.#message = undefined;
+			this.#messageContainer.clear();
+		}
 		this.#sessionList.dispose();
 		clearTimeout(this.#previewTimer);
 		this.#previewTimer = undefined;
@@ -1608,6 +1615,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	 */
 	async #toggleScope(): Promise<void> {
 		if (this.#toggling || this.#confirmationDialog) return;
+		const generation = ++this.#scopeGeneration;
 		if (this.#scope === "folder") {
 			let global = this.#globalSessions;
 			if (!global) {
@@ -1619,7 +1627,9 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 				this.#onRequestRender?.();
 				try {
 					global = await this.#loadAllSessions();
+					if (generation !== this.#scopeGeneration) return;
 				} catch (err) {
+					if (generation !== this.#scopeGeneration) return;
 					this.#showError(err instanceof Error ? err.message : String(err));
 					this.#toggling = false;
 					this.#onRequestRender?.();
@@ -1658,8 +1668,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	 * child-walking dispose would miss its pending history-merge timer.
 	 */
 	override dispose(): void {
-		this.#sessionList.dispose();
-		clearTimeout(this.#previewTimer);
+		this.leaveMenu();
 		super.dispose();
 	}
 
