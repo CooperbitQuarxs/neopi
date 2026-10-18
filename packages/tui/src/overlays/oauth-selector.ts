@@ -11,7 +11,7 @@ import {
 import { theme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport } from "../components/menu-navigation";
+import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuViewportPosition } from "../components/menu-navigation";
 import type { TspPickerItem, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { node, span, text } from "../native/describe";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
@@ -381,7 +381,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 
 	restoreNavigation(snapshot: unknown): void {
 		if (typeof snapshot !== "object" || snapshot === null) return;
-		const state = snapshot as { selectedKey?: string; search?: unknown; viewportTop?: number };
+		const state = snapshot as { selectedKey?: string; search?: unknown; viewportTop?: MenuViewportPosition | number };
 		this.#navigationKeys.reset();
 		this.#search.restoreNavigation(state.search);
 		this.#menu.setQuery(this.#search.value, false);

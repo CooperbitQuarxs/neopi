@@ -99,6 +99,10 @@ async function harness(spaceHoldKeys: readonly KeyId[] = ["space"]) {
 		runEphemeralTurn,
 	} as unknown as InteractiveModeContext["session"];
 	const ctx = {
+		openMenu: () => ({
+			mount: (_component: unknown, show: () => unknown) => { show(); },
+			close: () => true,
+		}),
 		ui: {
 			requestRender: vi.fn(),
 			requestComponentRender: vi.fn(),

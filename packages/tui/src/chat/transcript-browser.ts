@@ -1,5 +1,6 @@
 import type { Component } from "../tui";
 import { type ScrollRangeAnchor, ScrollView } from "../components/scroll-view";
+import type { MenuNavAction } from "../components/menu-navigation";
 import { DynamicBorder } from "../chrome/dynamic-border";
 import { truncateToWidth } from "../utils";
 import { theme } from "../theme/theme";
@@ -186,6 +187,12 @@ export class TranscriptBrowser implements Component {
 	/** Apply the ScrollView navigation key set. */
 	handleScrollKey(data: string): boolean {
 		if (!this.#scrollView.handleScrollKey(data)) return false;
+		this.#syncFollowBottom();
+		return true;
+	}
+
+	handleMenuAction(action: MenuNavAction): boolean {
+		if (!this.#scrollView.handleMenuAction(action)) return false;
 		this.#syncFollowBottom();
 		return true;
 	}

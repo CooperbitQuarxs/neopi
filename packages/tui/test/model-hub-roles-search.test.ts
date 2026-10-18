@@ -172,10 +172,10 @@ test("Roles jumps, pages and viewport scrolling skip separators without wrapping
 	hub.render(120);
 	const after = hub.navigationSnapshot();
 	expect(after.roleKey).toBe(before.roleKey);
-	expect(after.roleTop).toBe((before.roleTop ?? 0) + 1);
+	expect(after.roleTop).toEqual({ item: (before.roleTop?.item ?? 0) + 1, lineOffset: 0 });
 	hub.handleInput("\x19");
 	hub.render(120);
-	expect(hub.navigationSnapshot().roleTop).toBe(before.roleTop);
+	expect(hub.navigationSnapshot().roleTop).toEqual(before.roleTop);
 	hub.dispose();
 });
 

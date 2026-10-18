@@ -38,7 +38,7 @@ import { hintsRow, type NativeHint } from "../native/overlay";
 import { plainText } from "../native/spans";
 import { isNativeRendering } from "../native/state";
 import { Input } from "../components/input";
-import { applyMenuMotion, MenuKeyReader, type MenuNavAction, MenuSearchField, MenuViewport } from "../components/menu-navigation";
+import { applyMenuMotion, MenuKeyReader, type MenuNavAction, MenuSearchField, MenuViewport, type MenuViewportPosition } from "../components/menu-navigation";
 import { MenuSelection } from "../components/menu-selection";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../mouse";
 import { truncateToWidth, visibleWidth } from "../utils";
@@ -142,6 +142,7 @@ function patternStripHint(value: string): string {
 }
 
 const MODEL_HUB_BODY_MIN_WIDTH = 28;
+const MODEL_SCOPE_HINT = "h/l pane · j/k providers · ⏎ models · / search · Alt+←/→ kind · ⎋ close";
 
 /**
  * A row of the Roles view: a role, a model/wildcard chain-key header, one of a
@@ -400,10 +401,10 @@ interface ModelHubPageNavigation {
 	effortQuery: string;
 	effortCursor: number;
 	roleKey: string | undefined;
-	roleTop: number | undefined;
+	roleTop: MenuViewportPosition | undefined;
 	effortIndex: number;
 	effortKey: string | undefined;
-	effortTop: number | undefined;
+	effortTop: MenuViewportPosition | undefined;
 	sidebarTop: number;
 	browser: ModelBrowserNavigation;
 	assigning: AssignTarget | null;
@@ -806,7 +807,9 @@ export class ModelHubComponent implements Component {
 	#copyNavigationPage(state: ModelHubPageNavigation): ModelHubPageNavigation {
 		return {
 			...state,
-			browser: { ...state.browser },
+			browser: { ...state.browser, top: state.browser.top ? { ...state.browser.top } : undefined },
+			roleTop: state.roleTop ? { ...state.roleTop } : undefined,
+			effortTop: state.effortTop ? { ...state.effortTop } : undefined,
 			assigning: state.assigning ? { ...state.assigning } : null,
 			strip: this.#copyStrip(state.strip),
 			yankedFallback: structuredClone(state.yankedFallback),
@@ -827,10 +830,10 @@ export class ModelHubComponent implements Component {
 			effortQuery: this.#effortSearch.value,
 			effortCursor: this.#effortSearch.cursor,
 			roleKey: row ? rolesRowKey(row, this.#roleIndex) : undefined,
-			roleTop: this.#roleViewport.top,
+			roleTop: this.#roleViewport.top ? { ...this.#roleViewport.top } : undefined,
 			effortIndex: this.#effortIndex,
 			effortKey: this.#effortIndex < 0 ? undefined : this.#effortRowKey(this.#effortIndex),
-			effortTop: this.#effortViewport.top,
+			effortTop: this.#effortViewport.top ? { ...this.#effortViewport.top } : undefined,
 			sidebarTop: this.#frame.sidebarScroll,
 			browser: this.#browser.navigationSnapshot(),
 			assigning: this.#assigning ? { ...this.#assigning } : null,
@@ -1432,12 +1435,12 @@ export class ModelHubComponent implements Component {
 	}
 
 	/**
-	 * Scope hops skip separators and model scopes with no search matches.
-	 * Roles and effort rules keep their own context, independent of model search.
+	 * Scope hops skip separators; only All models filters provider hops by query.
+	 * Other sections show full provider counts and must not inherit hidden filtering.
 	 */
 	#isHopSkipped(entry: SidebarEntry): boolean {
 		if (entry.kind === "separator") return true;
-		if (!this.#searchCounts) return false;
+		if (!this.#searchCounts || this.#activeEntry().kind !== "all") return false;
 		if (entry.kind === "recent") return this.#recentSearchCount === 0;
 		if (entry.kind === "provider") {
 			if (entry.locked) return true;
@@ -2044,13 +2047,15 @@ export class ModelHubComponent implements Component {
 			this.#effortSearch.render(width, { muted: value => theme.fg("muted", value) }),
 		];
 		if (indices.length === 0) lines.push(theme.fg("muted", " No matching effort rules"));
+		const body: string[] = [];
 		for (let row = view.startIndex; row < view.endIndex; row++) {
 			const index = indices[row];
 			const selected = this.#effortIndex === index;
 			const cursor = selected && this.#focus === "list" ? theme.fg("accent", theme.nav.cursor) : " ";
 			const label = this.#effortRowText(index);
-			lines.push(truncateToWidth(` ${cursor} ${selected ? theme.fg("accent", label) : label}`, width));
+			body.push(truncateToWidth(` ${cursor} ${selected ? theme.fg("accent", label) : label}`, width));
 		}
+		lines.push(...(view.lineOffset === 0 && body.length <= window ? body : body.slice(view.lineOffset, view.lineOffset + window)));
 		return lines;
 	}
 
@@ -3415,7 +3420,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	#sidebarStyle = (entry: SidebarEntry, index: number): SidebarStyle => {
-		const searching = this.#searchCounts !== null;
+		const searching = this.#searchCounts !== null && this.#activeEntry().kind === "all";
 		let matchCount: number | undefined;
 		if (searching) {
 			if (entry.kind === "provider" && !entry.locked) {
@@ -3586,9 +3591,11 @@ export class ModelHubComponent implements Component {
 		const viewHeight = overflow ? Math.max(0, capacity - 1) : capacity;
 		if (this.#roleIndex !== this.#roleLastIndex) this.#roleViewport.reveal();
 		this.#roleLastIndex = this.#roleIndex;
-		this.#roleScrollStart = this.#roleViewport.layout(this.#rolesRows.map(() => 1), this.#roleIndex, Math.max(1, viewHeight)).startIndex;
-		const endIndex = Math.min(this.#roleScrollStart + viewHeight, total);
-		this.#rolesVisibleCount = Math.max(0, endIndex - this.#roleScrollStart);
+		const view = this.#roleViewport.layout(this.#rolesRows.map(() => 1), this.#roleIndex, Math.max(1, viewHeight));
+		this.#roleScrollStart = view.startIndex;
+		const endIndex = view.endIndex;
+		this.#rolesVisibleCount = Math.min(viewHeight, Math.max(0, endIndex - this.#roleScrollStart - view.lineOffset));
+		const body: string[] = [];
 		for (let i = this.#roleScrollStart; i < endIndex; i++) {
 			const rowDef = this.#rolesRows[i];
 			if (!rowDef) continue;
@@ -3598,7 +3605,7 @@ export class ModelHubComponent implements Component {
 			const cursor = selected && listFocused ? theme.fg("accent", theme.nav.cursor) : " ";
 
 			if (rowDef.kind === "separator") {
-				lines.push(`   ${theme.fg("border", "─".repeat(Math.max(1, width - 6)))}`);
+				body.push(`   ${theme.fg("border", "─".repeat(Math.max(1, width - 6)))}`);
 				continue;
 			}
 
@@ -3606,7 +3613,7 @@ export class ModelHubComponent implements Component {
 				const label = rowDef.kind === "newRole" ? "+ New role…" : "+ New fallback…";
 				let line = ` ${cursor} ${theme.fg(selected ? "accent" : "dim", label)}`;
 				line = this.#finishRolesRow(line, width, hovered);
-				lines.push(line);
+				body.push(line);
 				continue;
 			}
 
@@ -3619,7 +3626,7 @@ export class ModelHubComponent implements Component {
 				const keyStyled = theme.fg("dim", key.slice(0, slash + 1)) + (selected ? theme.fg("accent", tail) : tail);
 				let line = ` ${cursor} ${theme.fg("dim", theme.status.shadowed)} ${keyStyled}`;
 				line = this.#finishRolesRow(line, width, hovered);
-				lines.push(line);
+				body.push(line);
 				continue;
 			}
 
@@ -3635,7 +3642,7 @@ export class ModelHubComponent implements Component {
 							: "";
 				let line = ` ${cursor} ${branch} ${selector}${theme.fg("dim", suffix)}`;
 				line = this.#finishRolesRow(line, width, hovered);
-				lines.push(line);
+				body.push(line);
 				continue;
 			}
 
@@ -3693,8 +3700,9 @@ export class ModelHubComponent implements Component {
 				line = `${line}${" ".repeat(width - lineWidth - rightWidth - 1)}${right}`;
 			}
 			line = this.#finishRolesRow(line, width, hovered);
-			lines.push(line);
+			body.push(line);
 		}
+		lines.push(...(view.lineOffset === 0 && body.length <= viewHeight ? body : body.slice(view.lineOffset, view.lineOffset + viewHeight)));
 
 		if (overflow) {
 			const hiddenAbove = this.#roleScrollStart;
@@ -3772,6 +3780,11 @@ export class ModelHubComponent implements Component {
 	}
 
 	#footerHint(): string {
+		const entry = this.#activeEntry();
+		if (!this.#strip && !this.#filterEditing && this.#assigning === null && this.#focus === "scope"
+			&& this.#isBrowserView(entry)
+			&& !(entry.kind === "provider" && this.#pinnedProviders.some(provider => provider.id === entry.providerId)))
+			return MODEL_SCOPE_HINT;
 		const detail = this.#surfaceFooterHint();
 		if (this.#strip || this.#filterEditing) return detail;
 		return `h/l pane · / search · ${detail}`;
@@ -4404,7 +4417,8 @@ export class ModelHubComponent implements Component {
 		const lockedView = entry.kind === "provider" && entry.locked === true && this.#assigning === null;
 		const strip = this.#strip;
 		const subtitle = this.#pickerSubtitle(entry, rolesView);
-		const navigation = strip || this.#filterEditing ? this.#surfaceFooterHint() : "j/k rows · h/l pane · / search · gg/G ends · Ctrl-u/d half";
+		const navigation = strip || this.#filterEditing ? this.#surfaceFooterHint()
+			: this.#focus === "scope" ? this.#footerHint() : "j/k rows · h/l pane · / search · gg/G ends · Ctrl-u/d half";
 		const props: TspPickerProps = {
 			title: "Models",
 			subtitle: [...(typeof subtitle === "string" ? [span(subtitle)] : subtitle ?? []), span(` · ${plainText(navigation)}`, "dim")],
@@ -4571,7 +4585,7 @@ export class ModelHubComponent implements Component {
 
 	/** The sidebar as picker scopes: Roles, All models, then signed-in and signed-out providers. */
 	#pickerScopes(): TspPickerScope[] {
-		const counts = this.#searchCounts;
+		const counts = this.#activeEntry().kind === "all" ? this.#searchCounts : null;
 		const oauthIds = new Set(getOAuthProviders().map(provider => provider.id));
 		const scopes: TspPickerScope[] = [];
 		for (const entry of this.#entries) {
@@ -5354,9 +5368,6 @@ export class ModelHubComponent implements Component {
 	}
 
 	#footerHints(): NativeHint[] {
-		const hint = this.#strip || this.#filterEditing
-			? this.#surfaceFooterHint()
-			: `h/l pane · / search · ${this.#surfaceFooterHint()}`;
-		return [{ keys: [], label: plainText(hint) }];
+		return [{ keys: [], label: plainText(this.#footerHint()) }];
 	}
 }

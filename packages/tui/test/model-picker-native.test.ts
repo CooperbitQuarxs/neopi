@@ -3,6 +3,7 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { TspPickerGroup, TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
+import { plainText } from "../src/native/spans";
 import { ModelHubComponent, type HubEffortRule, type ModelHubRegistry, type ModelHubSource } from "../src/overlays/model-hub";
 import { ModelPickerComponent } from "../src/overlays/model-picker";
 import { initTheme } from "../src/theme";
@@ -584,10 +585,10 @@ test("effort rules share paging, jumps and independent viewport scrolling", () =
 	hub.handleInput("\x05");
 	hub.render(120);
 	expect(hub.navigationSnapshot().effortIndex).toBe(first.effortIndex);
-	expect(hub.navigationSnapshot().effortTop).toBe((first.effortTop ?? 0) + 1);
+	expect(hub.navigationSnapshot().effortTop).toEqual({ item: (first.effortTop?.item ?? 0) + 1, lineOffset: 0 });
 	hub.handleInput("\x19");
 	hub.render(120);
-	expect(hub.navigationSnapshot().effortTop).toBe(first.effortTop);
+	expect(hub.navigationSnapshot().effortTop).toEqual(first.effortTop);
 });
 
 test("Roles and model scopes keep separate queries while switching panes", () => {
@@ -651,4 +652,28 @@ test("effort rule search stays in section and destructive actions target the fil
 	expect(props(hub.describe(withPicker)).query).toBe("needle");
 	hub.handleNativeEvent({ type: "action", key: "", act: "clear", mods: [] });
 	expect(props(hub.describe(withPicker)).order).toContain("effort:0");
+});
+
+test("provider navigation footer stays concise and counts outside All ignore its retained query", () => {
+	const hub = openHub({ assign: [], cancel: 0 });
+	const hint = "h/l pane · j/k providers · ⏎ models · / search · Alt+←/→ kind · ⎋ close";
+	expect(plainText(hub.render(180).join("\n"))).toContain(hint);
+	hub.handleInput("/");
+	for (const key of "sonnet") hub.handleInput(key);
+	hub.handleInput("\x1b");
+	expect(props(hub.describe(withPicker)).scopes?.find(scope => scope.id === "provider:openai")?.count).toBe(0);
+	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "roles", mods: [] });
+	expect(props(hub.describe(withPicker)).scopes?.find(scope => scope.id === "provider:openai")?.count).toBe(2);
+	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "provider:anthropic", mods: [] });
+	let p = props(hub.describe(withPicker));
+	expect(p.scopes?.find(scope => scope.id === "provider:anthropic")?.count).toBe(2);
+	expect(p.scopes?.find(scope => scope.id === "provider:openai")?.count).toBe(2);
+	hub.handleInput("h");
+	expect(plainText(hub.render(180).join("\n"))).toContain(hint);
+	hub.handleInput("G");
+	expect(props(hub.describe(withPicker)).scope).toBe("provider:openai");
+	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "all", mods: [] });
+	p = props(hub.describe(withPicker));
+	expect(p.query).toBe("sonnet");
+	expect(p.scopes?.find(scope => scope.id === "provider:openai")?.count).toBe(0);
 });

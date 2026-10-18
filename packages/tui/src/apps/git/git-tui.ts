@@ -30,7 +30,7 @@ import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { formatKeyHint, formatKeyHints, formatTooltipKey } from "../../app-keybindings";
 import { SplitPane } from "../../components/layout/split-pane";
 import { Stack } from "../../components/layout/stack";
-import { MenuKeyReader } from "../../components/menu-navigation";
+import { MenuKeyReader, menuScrollBy } from "../../components/menu-navigation";
 import { matchesKey } from "../../keys";
 import { ProcessTerminal } from "../../terminal";
 import { routeSgrMouseInput } from "../../mouse";
@@ -751,14 +751,8 @@ export class GitTuiComponent implements Component {
 			}
 		}
 		if (this.#focus === "diff") {
-			if (action?.kind === "move" || action?.kind === "scroll" || action?.kind === "page" || action?.kind === "boundary") {
-				const by = action.kind === "boundary"
-					? action.edge === "first" ? "start" : "end"
-					: action.kind === "page"
-						? action.delta < 0 ? "page-up" : "page-down"
-						: action.delta < 0 ? "line-up" : "line-down";
-				this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
-			}
+			const by = action && action !== "pending" ? menuScrollBy(action) : undefined;
+			if (by) this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
 			if (matchesKey(data, "shift+up")) this.#pane.moveCursor(-1, true);
 			else if (matchesKey(data, "shift+down")) this.#pane.moveCursor(1, true);
 			else if (action?.kind === "move") this.#pane.moveCursor(action.delta, false);

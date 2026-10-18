@@ -74,11 +74,11 @@ test("model browser viewport scroll never relocates selection", () => {
 	menu.render(100);
 	const selected = menu.getSelected();
 	menu.handleInput("\x05");
-	expect(menu.navigationSnapshot().top).toBe(1);
+	expect(menu.navigationSnapshot().top).toEqual({ item: 1, lineOffset: 0 });
 	expect(menu.getSelected()).toBe(selected);
 	expect(menu.render(100).slice(2, 8).join("\n")).not.toContain("model-00");
 	menu.handleInput("\x19");
-	expect(menu.navigationSnapshot().top).toBe(0);
+	expect(menu.navigationSnapshot().top).toEqual({ item: 0, lineOffset: 0 });
 	expect(menu.getSelected()).toBe(selected);
 });
 
@@ -117,4 +117,19 @@ test("Space activates a single model without creating preview state", () => {
 	menu.onActivate = item => { picked.push(item.selector); };
 	menu.handleInput(" ");
 	expect(picked).toEqual(["test/model-00"]);
+});
+
+test("model viewport restores visual positions and accepts older item-boundary snapshots", () => {
+	const menu = browser();
+	const saved = menu.navigationSnapshot();
+	menu.restoreNavigation({ ...saved, top: { item: 5, lineOffset: 0 } });
+	expect(menu.navigationSnapshot().top).toEqual({ item: 5, lineOffset: 0 });
+	expect(menu.getSelected()?.id).toBe("model-00");
+	expect(menu.render(100).slice(2, 8).join("\n")).toContain("model-05");
+	menu.restoreNavigation({ ...saved, top: 7 });
+	expect(menu.navigationSnapshot().top).toEqual({ item: 7, lineOffset: 0 });
+	// Model rows are single-line, so stale offsets clamp without growing the frame.
+	menu.restoreNavigation({ ...saved, top: { item: 9, lineOffset: 3 } });
+	expect(menu.navigationSnapshot().top).toEqual({ item: 9, lineOffset: 0 });
+	expect(menu.render(100)).toHaveLength(menu.renderedRows);
 });

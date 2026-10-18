@@ -2,7 +2,7 @@ import { formatKeyHint } from "../app-keybindings";
 import { matchesKey } from "../keys";
 import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
 import { ScrollView } from "../components/scroll-view";
-import { MenuKeyReader } from "../components/menu-navigation";
+import { MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
 import { renderTableRow, type TableCell, type TableColumn } from "../components/table";
 import { Text } from "../components/text";
 import type { Component } from "../tui";
@@ -17,7 +17,7 @@ import {
 	isBetter,
 } from "./autoresearch-data";
 import { fmtNum, formatNum, type ExperimentResult, type ExperimentState } from "../tools/autoresearch";
-import type { TspScrollBy, TspSpan, TspTableColumn, TspText } from "@oh-my-pi/pi-wire";
+import type { TspSpan, TspTableColumn, TspText } from "@oh-my-pi/pi-wire";
 import { card, col, elapsed, keyed, node, row, span, text } from "../native/describe";
 import type { DescribeContext, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton, hintsRow } from "../native/overlay";
@@ -217,14 +217,7 @@ export function createDashboardController(): DashboardController {
 							const action = keys.read(data);
 							if (!action || action === "pending") return;
 							scrollView?.handleMenuAction(action);
-							let by: TspScrollBy | undefined;
-							if (action.kind === "move" || action.kind === "scroll") {
-								by = action.delta < 0 ? "line-up" : "line-down";
-							} else if (action.kind === "page") {
-								by = action.delta < 0 ? "page-up" : "page-down";
-							} else if (action.kind === "boundary") {
-								by = action.edge === "first" ? "start" : "end";
-							}
+							const by = menuScrollBy(action);
 							if (by) scroll = { by, n: (scroll?.n ?? 0) + 1 };
 							tui.requestRender();
 						},
