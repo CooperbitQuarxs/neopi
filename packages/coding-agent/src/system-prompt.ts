@@ -8,7 +8,16 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ToolExample, TSchema } from "@oh-my-pi/pi-ai";
 import { renderToolInventory } from "@oh-my-pi/pi-ai/dialect";
 import type { DelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
-import { $env, getAgentDir, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	getAgentDir,
+	getProjectDir,
+	hasFsCode,
+	isEnoent,
+	logger,
+	prompt,
+	relativePathWithinRoot,
+} from "@oh-my-pi/pi-utils";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { findConfigFile } from "./config";
@@ -306,6 +315,11 @@ export interface LoadContextFilesOptions {
 	disabledExtensions?: string[];
 	/** Keep only project-level files (cwd hierarchy), dropping user/agent-dir context files. */
 	projectOnly?: boolean;
+	/**
+	 * Repository root that `cwd` mirrors (a task isolation copy). Project files in this root's
+	 * ancestor directories are loaded too: the copy's own walk ends outside the source tree.
+	 */
+	ancestorRoot?: string;
 }
 
 /**
@@ -352,27 +366,45 @@ export async function loadProjectContextFiles(
 	options: LoadContextFilesOptions = {},
 ): Promise<Array<{ path: string; content: string; depth?: number }>> {
 	const resolvedCwd = options.cwd ?? getProjectDir();
+	const loadItems = async (cwd: string) =>
+		(
+			await loadCapability<ContextFile>(contextFileCapability.id, {
+				cwd,
+				disabledExtensions: options.disabledExtensions,
+			})
+		).items;
 
-	const result = await loadCapability(contextFileCapability.id, {
-		cwd: resolvedCwd,
-		disabledExtensions: options.disabledExtensions,
-	});
+	const [cwdItems, ancestorItems] = await Promise.all([
+		loadItems(resolvedCwd),
+		options.ancestorRoot ? loadItems(options.ancestorRoot) : Promise.resolve([]),
+	]);
+	const ancestorRoot = options.ancestorRoot;
+	const items = ancestorRoot
+		? [
+				...cwdItems,
+				// Only directories strictly above the source root: the root and everything below it
+				// are the copy's own files, and user-level files already came from the cwd walk.
+				...ancestorItems.filter(
+					item =>
+						item.level === "project" &&
+						relativePathWithinRoot(path.dirname(item.path), ancestorRoot) !== null &&
+						!cwdItems.some(own => own.path === item.path),
+				),
+			]
+		: cwdItems;
 
 	// Materialize ContextFile items, expanding any `@path/to/file` includes
 	// in their content. The expansion uses the file's own directory as the
 	// resolution base so relative imports work the same way Claude Code,
 	// Goose, and other tools document.
 	const files = await Promise.all(
-		result.items
-			.filter(item => !options.projectOnly || (item as ContextFile).level === "project")
-			.map(async item => {
-				const contextFile = item as ContextFile;
-				return {
-					path: contextFile.path,
-					content: await expandAtImports(contextFile.content, contextFile.path),
-					depth: contextFile.depth,
-				};
-			}),
+		items
+			.filter(contextFile => !options.projectOnly || contextFile.level === "project")
+			.map(async contextFile => ({
+				path: contextFile.path,
+				content: await expandAtImports(contextFile.content, contextFile.path),
+				depth: contextFile.depth,
+			})),
 	);
 
 	// Sort by depth (descending): higher depth (farther from cwd) comes first,

@@ -242,6 +242,14 @@ export interface ToolSession {
 	skipPythonPreflight?: boolean;
 	/** Pre-loaded context files (AGENTS.md, etc) */
 	contextFiles?: ContextFileEntry[];
+	/**
+	 * Context files a spawned child session must use verbatim: the set an SDK caller supplied
+	 * explicitly. Undefined when this session discovered its own; the child then discovers the
+	 * user, ancestor and repository files at its own cwd (its worktree when isolated).
+	 */
+	childContextFiles?: ContextFileEntry[];
+	/** Source repository root this session's cwd mirrors when it runs in a task isolation copy. */
+	contextAncestorRoot?: string;
 	/** Pre-loaded workspace tree (forwarded to subagents to skip re-scanning) */
 	workspaceTree?: WorkspaceTree;
 	/** Pre-loaded skills */
