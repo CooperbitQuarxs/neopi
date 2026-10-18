@@ -260,6 +260,12 @@ export class ScrollView implements Component {
 
 	/** Current half-open logical row range. */
 	getVisibleRange(): { start: number; end: number } {
+		// Prewindowed callers need the restored top before they slice rows,
+		// not after render receives that already-windowed slice.
+		if (this.#restoredOffset !== undefined && this.#height > 0 &&
+			(this.#totalRows !== undefined || this.#rowCount() > 0)) {
+			this.setScrollOffset(this.#restoredOffset);
+		}
 		return viewportRange(this.#rowCount(), this.#height, this.#scrollOffset);
 	}
 

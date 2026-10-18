@@ -32,6 +32,21 @@ describe("ScrollView", () => {
 		expect(view.getScrollOffset()).toBe(0);
 	});
 
+	it("restores the first prewindowed frame before its caller projects visible rows", () => {
+		const previous = new ScrollView([], { height: 3, totalRows: 20 });
+		previous.setScrollOffset(10);
+		const saved = previous.navigationSnapshot();
+		const reopened = new ScrollView([], { height: 3, totalRows: 0 });
+		reopened.restoreNavigation(saved);
+		reopened.setTotalRows(20);
+		const range = reopened.getVisibleRange();
+		expect(range).toEqual({ start: 10, end: 13 });
+		reopened.setLines(Array.from({ length: range.end - range.start }, (_, index) => `row-${range.start + index}`));
+		const frame = reopened.render(20);
+		expect(frame[0]).toContain("row-10");
+		expect(frame[2]).toContain("row-12");
+	});
+
 	it("renders a fixed-height viewport and omits auto scrollbar when content fits", () => {
 		const view = new ScrollView(["one", "two"], { height: 3, theme });
 
