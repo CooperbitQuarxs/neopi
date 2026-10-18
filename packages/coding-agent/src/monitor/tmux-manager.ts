@@ -8,7 +8,7 @@
  * aborted agents keep their panes; a pane goes away only when its agent leaves
  * the registry or is replaced by a new generation. A pane the user closes is
  * not reopened for that agent generation. The manager only ever kills pane ids
- * it created and, on stop, the session id it created.
+ * it created; the session closes when its last pane does.
  *
  * Each pane authenticates with a per-agent capability the owner's control host
  * mints; the capability travels in a private file the pane deletes on read, so
@@ -130,7 +130,10 @@ export class TmuxMonitorManager {
 		}
 		await fs.mkdir(this.#options.capabilityDir, { recursive: true, mode: 0o700 });
 		await fs.chmod(this.#options.capabilityDir, 0o700);
-		const name = `npi-monitor-${this.#options.instanceId.slice(0, 8)}`;
+		const base = `npi-monitor-${this.#options.instanceId.slice(0, 8)}`;
+		// A pane the user added keeps an earlier monitor session (and its name) alive after `/monitor off`.
+		let name = base;
+		for (let n = 2; await this.#sessionExists(name); n++) name = `${base}-${n}`;
 		const created = await this.#tmux([
 			"new-session",
 			"-d",
@@ -160,7 +163,7 @@ export class TmuxMonitorManager {
 		return this.status();
 	}
 
-	/** Revoke every pane's capability and kill the session this manager created. */
+	/** Revoke every pane's capability and kill the panes this manager created. */
 	async stop(): Promise<void> {
 		if (!this.#running) return;
 		this.#running = false;
@@ -169,12 +172,21 @@ export class TmuxMonitorManager {
 		clearTimeout(this.#debounce);
 		clearInterval(this.#poll);
 		await this.#queue;
+		const owned = [...this.#panes.values()].map(pane => pane.paneId);
+		if (this.#placeholder) owned.push(this.#placeholder.paneId);
 		for (const pane of this.#panes.values()) this.#options.monitor.revoke(pane.capability);
 		this.#panes.clear();
 		this.#placeholder = undefined;
-		const sessionId = this.#sessionId;
+		// Only the panes this manager created: tmux closes the session with its last pane,
+		// and a pane or window the user added to it stays.
+		const alive = await this.#livePanes();
+		const targets = owned.filter(paneId => alive?.has(paneId));
 		this.#sessionId = "";
-		if (sessionId) await this.#tmux(["kill-session", "-t", sessionId]).catch(() => {});
+		if (targets.length > 0) {
+			await this.#tmux(targets.flatMap((paneId, i) => [...(i > 0 ? [";"] : []), "kill-pane", "-t", paneId])).catch(
+				() => {},
+			);
+		}
 		await fs.rm(this.#options.capabilityDir, { recursive: true, force: true });
 	}
 
@@ -378,6 +390,11 @@ export class TmuxMonitorManager {
 			"pane-border-format",
 			" #{?@npi_agent,#{@npi_agent},npi monitor} ",
 		]).catch(() => {});
+	}
+
+	async #sessionExists(name: string): Promise<boolean> {
+		const result = await this.#run(["tmux", "has-session", "-t", `=${name}`], this.#options.cwd);
+		return result.exitCode === 0;
 	}
 
 	async #tmux(args: string[]): Promise<string> {
