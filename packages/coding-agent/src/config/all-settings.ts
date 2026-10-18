@@ -42,6 +42,7 @@ import * as sttSettings from "../stt/settings";
 import * as liveSettings from "../live/settings";
 import * as collabSettings from "../collab/settings";
 import * as controlSettings from "../control/settings";
+import * as monitorSettings from "../monitor/settings";
 import * as commandsSettings from "../commands/settings";
 import * as chainsSettings from "../chains/settings";
 import * as moaSettings from "../moa/settings";
@@ -88,6 +89,7 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	sttSettings,
 	collabSettings,
 	controlSettings,
+	monitorSettings,
 	commandsSettings,
 	chainsSettings,
 	moaSettings,

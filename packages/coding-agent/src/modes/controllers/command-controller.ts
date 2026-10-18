@@ -109,6 +109,7 @@ import {
 	createDefaultTerminalLaunchRequest,
 	getTerminalLaunchPlacement,
 	launchTerminal,
+	scopeEnvCommand,
 	TerminalLaunchError,
 	type TerminalLaunchRequest,
 	type TerminalLaunchResult,
@@ -149,23 +150,6 @@ const FORK_LAUNCH_OVERRIDES: Readonly<Record<string, true>> = {
 	"--provider": true,
 	"--thinking": true,
 };
-
-/**
- * `env` prefix pinning each scope variable for the fork child. Multiplexer
- * servers keep stale environment snapshots, so every variable is pinned:
- * defined values are assigned, absent (or empty) ones are unset with `-u`
- * (which must precede the assignments) rather than exported as empty strings
- * that `??`-style consumers would treat as a set, relative path.
- */
-function forkScopeEnvCommand(scope: Readonly<Record<string, string | undefined>>): string[] {
-	const unset: string[] = [];
-	const assignments: string[] = [];
-	for (const [name, value] of Object.entries(scope)) {
-		if (value) assignments.push(`${name}=${value}`);
-		else unset.push("-u", name);
-	}
-	return ["env", ...unset, ...assignments];
-}
 
 function hasForkApiKeyOverride(argv: string[]): boolean {
 	for (let i = 0; i < argv.length; i++) {
@@ -1504,7 +1488,7 @@ export class CommandController {
 			childArgs.push("--fork", sourceSessionFile);
 			// Pin only non-secret scope variables.
 			const command = [
-				...forkScopeEnvCommand({
+				...scopeEnvCommand({
 					PI_CODING_AGENT_DIR: this.ctx.settings.getAgentDir(),
 					PI_CONFIG_DIR: getConfigDirName(),
 					OMP_PROFILE: activeProfile,
