@@ -5,10 +5,12 @@
  * equivalence. The mock-provider model scores the candidates it is actually
  * sent by concept overlap; nothing is keyed to expected ids.
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { parseFrontmatter, TempDir } from "@oh-my-pi/pi-utils";
+import { AsyncJobManager } from "../../src/async/job-manager";
+import { Settings } from "../../src/config/settings";
 import { loadChronicleCorpus } from "../../src/chronicler/temporal/corpus";
 import { indexChronicle } from "../../src/chronicler/temporal/indexer";
 import { createModelRanker, lexicalRanker, lexicalScore, type NodeRanker } from "../../src/chronicler/temporal/rank";
@@ -21,6 +23,10 @@ import {
 import { createSummarizer } from "../../src/chronicler/temporal/summarize";
 import type { IndexConfig } from "../../src/chronicler/temporal/tree";
 import { nodeDir, readViewNode } from "../../src/chronicler/temporal/view";
+import { ProcProtocolHandler } from "../../src/internal-urls/proc-protocol";
+import { parseInternalUrl } from "../../src/internal-urls/parse";
+import { ChronicleRecallTool } from "../../src/tools/chronicle-recall";
+import type { ToolSession } from "../../src/tools";
 import {
 	createFakeChronicleModel,
 	type FakeChronicleModel,
@@ -78,11 +84,11 @@ describe("chronicle recall", () => {
 		await tempDir.remove();
 	});
 
-	async function index(): Promise<void> {
+	async function index(config: IndexConfig = CONFIG): Promise<void> {
 		const report = await indexChronicle({
 			agentDir,
 			root,
-			config: CONFIG,
+			config,
 			summarizer: createSummarizer(fake.client),
 		});
 		expect(report.complete).toBe(true);
@@ -127,6 +133,214 @@ describe("chronicle recall", () => {
 		expect(lexical.results).toEqual([]);
 		expect(lexical.ambiguous).toBe(true);
 		expect(lexical.candidates.length).toBeGreaterThan(0);
+	});
+
+	it("runs recall ranking pages concurrently but with a small bound", async () => {
+		const atoms: FixtureAtom[] = Array.from({ length: 12 }, (_, index) => ({
+			title: `Recall candidate ${index}`,
+			eventTime: `2026-09-02T10:00:${String(index).padStart(2, "0")}.000Z`,
+			body: `Stored detail ${index}. ${repeat("saved route detail", 8)}`,
+		}));
+		const written = await writeSessionAtoms(sessionsDir, { cwd: "/work/alpha", sessionId: ALPHA, batches: [atoms] });
+		const atomIds = new Set(written.atomIds);
+		await index({ ...CONFIG, hopTokens: 200, terminalAtoms: 32 });
+
+		const twoPages = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let pageCalls = 0;
+		let active = 0;
+		let maxActive = 0;
+		const ranker: NodeRanker = {
+			kind: "model",
+			async score(_query, candidates, signal) {
+				const firstKey = candidates[0]?.key ?? "";
+				if (!atomIds.has(firstKey)) return { scores: candidates.map(() => 0.9) };
+				pageCalls++;
+				active++;
+				maxActive = Math.max(maxActive, active);
+				if (pageCalls === 2) twoPages.resolve();
+				try {
+					await release.promise;
+					signal?.throwIfAborted();
+					return { scores: candidates.map(() => 0.9) };
+				} finally {
+					active--;
+				}
+			},
+		};
+		const search = recall({ query: repeat("candidate", 100), ranker, budget: 1, beam: 1 });
+		const overlapped = await Promise.race([twoPages.promise.then(() => true), Bun.sleep(1_000).then(() => false)]);
+		release.resolve();
+		const result = await search;
+
+		expect(overlapped).toBe(true);
+		expect(maxActive).toBe(2);
+		expect(result.results).toHaveLength(1);
+	});
+
+	it("keeps concurrent recall queries and results isolated", async () => {
+		const written = await writeParaphraseCorpus();
+		const release = Promise.withResolvers<void>();
+		const bothQueries = Promise.withResolvers<void>();
+		const started = new Set<string>();
+		const ranker: NodeRanker = {
+			kind: "model",
+			async score(query, candidates) {
+				const kind = query.includes("OAuth token refresh") ? "oauth" : "billing";
+				if (!started.has(kind)) {
+					started.add(kind);
+					if (started.size === 2) bothQueries.resolve();
+					await release.promise;
+				}
+				return {
+					scores: candidates.map(candidate =>
+						lexicalScore(query, `${candidate.label}\n${candidate.text}`),
+					),
+				};
+			},
+		};
+		const oauth = recall({ query: "OAuth token refresh looped until patched", ranker, budget: 1 });
+		const billing = recall({ query: "Postgres schema migration billing", ranker, budget: 1 });
+		const overlapped = await Promise.race([bothQueries.promise.then(() => true), Bun.sleep(1_000).then(() => false)]);
+		release.resolve();
+		const [oauthResult, billingResult] = await Promise.all([oauth, billing]);
+
+		expect(overlapped).toBe(true);
+		expect(oauthResult.results[0]?.id).toBe(written.atomIds[0]);
+		expect(billingResult.results[0]?.id).toBe(written.atomIds[1]);
+	});
+
+	it("propagates cancellation to an in-flight rank request", async () => {
+		await writeParaphraseCorpus();
+		const started = Promise.withResolvers<void>();
+		const controller = new AbortController();
+		const ranker: NodeRanker = {
+			kind: "model",
+			async score(_query, _candidates, signal) {
+				started.resolve();
+				if (!signal) throw new Error("expected an in-flight rank signal");
+				const aborted = Promise.withResolvers<never>();
+				const abort = () => aborted.reject(signal.reason ?? new Error("rank aborted"));
+				if (signal.aborted) abort();
+				else signal.addEventListener("abort", abort, { once: true });
+				return aborted.promise;
+			},
+		};
+		const search = recall({ query: "OAuth", ranker, signal: controller.signal });
+		const rankStarted = await Promise.race([
+			started.promise.then(() => true),
+			search.then(
+				() => false,
+				() => false,
+			),
+			Bun.sleep(2_000).then(() => false),
+		]);
+		controller.abort(new Error("cancelled by test"));
+		const outcome = await Promise.race([
+			search.then(
+				() => ({ ok: true as const }),
+				error => ({ ok: false as const, error }),
+			),
+			Bun.sleep(2_000).then(() => undefined),
+		]);
+		expect(rankStarted).toBe(true);
+		expect(outcome?.ok).toBe(false);
+		expect(outcome && !outcome.ok ? outcome.error : undefined).toBeInstanceOf(Error);
+		if (outcome && !outcome.ok) expect(String(outcome.error)).toContain("cancelled by test");
+	});
+
+	it("returns owner-scoped job handles, auto-delivers concurrent results, and honors cancellation", async () => {
+		const written = await writeParaphraseCorpus();
+		const defaultDeliveries: string[] = [];
+		const ownerDeliveries: Array<{ jobId: string; text: string }> = [];
+		const otherDeliveries: string[] = [];
+		const manager = new AsyncJobManager({
+			retentionMs: 60_000,
+			onJobComplete: (_jobId, text) => {
+				defaultDeliveries.push(text);
+			},
+		});
+		const release = Promise.withResolvers<void>();
+		const originalRegister = manager.register.bind(manager);
+		spyOn(manager, "register").mockImplementation((type, label, run, options) =>
+			originalRegister(type, label, async context => {
+				await release.promise;
+				return run(context);
+			}, options),
+		);
+		manager.registerDeliverySink("OwnerA", (jobId, text) => {
+			ownerDeliveries.push({ jobId, text });
+		});
+		manager.registerDeliverySink("OwnerB", (_jobId, text) => {
+			otherDeliveries.push(text);
+		});
+		const settings = Settings.isolated({
+			"launch.enabled": false,
+			"chronicler.index.dir": root,
+			"chronicler.recall.ranker": "lexical",
+		});
+		const session = {
+			settings,
+			getAgentDir: () => agentDir,
+			getAgentId: () => "OwnerA",
+			asyncJobManager: manager,
+		} as unknown as ToolSession;
+		const tool = new ChronicleRecallTool(session);
+		const proc = new ProcProtocolHandler();
+		try {
+			const pendingHandles = Promise.all([
+				tool.execute("oauth-call", { query: "OAuth token refresh looped until patched" }),
+				tool.execute("billing-call", { query: "Postgres schema migration billing" }),
+				tool.execute("cancel-call", { query: "never let this finish" }),
+			]);
+			const immediate = await Promise.race([
+				pendingHandles.then(results => ({ results })),
+				Bun.sleep(2_000).then(() => undefined),
+			]);
+			expect(immediate).toBeDefined();
+			const [oauth, billing, cancelled] = immediate?.results ?? (await pendingHandles);
+			const jobId = (result: typeof oauth): string => {
+				const details = result.details as { async?: { jobId?: string; type?: string; state?: string } } | undefined;
+				if (!details?.async?.jobId) throw new Error("expected an async job handle");
+				return details.async.jobId;
+			};
+			const oauthId = jobId(oauth);
+			const billingId = jobId(billing);
+			const cancelledId = jobId(cancelled);
+
+			for (const result of [oauth, billing, cancelled]) {
+				expect(result.details?.async).toMatchObject({ state: "running", type: "chronicle" });
+				expect(result.content.map(block => (block.type === "text" ? block.text : "")).join("\n")).toContain(
+					"delivered automatically",
+				);
+			}
+			expect(manager.getJob(oauthId)).toMatchObject({ type: "chronicle", status: "running", ownerId: "OwnerA" });
+			const otherOwnerSession = { ...session, getAgentId: () => "OwnerB" } as ToolSession;
+			await expect(
+				proc.write(parseInternalUrl(`proc://${cancelledId}/kill`), "", { session: otherOwnerSession }),
+			).rejects.toThrow("not found");
+			expect(manager.getJob(cancelledId)?.status).toBe("running");
+			const cancellation = await proc.write(parseInternalUrl(`proc://${cancelledId}/kill`), "", { session });
+			expect(cancellation.details?.proc).toMatchObject({
+				cancelled: [{ id: cancelledId, status: "cancelled" }],
+			});
+
+			release.resolve();
+			await manager.waitForAll();
+			await manager.drainDeliveries({ timeoutMs: 2_000 });
+
+			expect(manager.getJob(cancelledId)?.status).toBe("cancelled");
+			expect(ownerDeliveries).toHaveLength(2);
+			expect(defaultDeliveries).toEqual([]);
+			expect(otherDeliveries).toEqual([]);
+			expect(ownerDeliveries.find(delivery => delivery.jobId === oauthId)?.text).toContain(written.atomIds[0]!);
+			expect(ownerDeliveries.find(delivery => delivery.jobId === oauthId)?.text).not.toContain(written.atomIds[1]!);
+			expect(ownerDeliveries.find(delivery => delivery.jobId === billingId)?.text).toContain(written.atomIds[1]!);
+			expect(ownerDeliveries.find(delivery => delivery.jobId === billingId)?.text).not.toContain(written.atomIds[0]!);
+		} finally {
+			release.resolve();
+			await manager.dispose();
+		}
 	});
 
 	it("backtracks from a branch whose summary matches but whose atoms each match only a fragment", async () => {
