@@ -1408,15 +1408,20 @@ class TreeList implements Component {
 			if (this.getSearchQuery() !== before) this.#applyFilter();
 			return;
 		}
-		if (matchesKey(data, "alt+up") || matchesKey(data, "alt+down")) {
+		const kb = getKeybindings();
+		if (
+			(matchesKey(data, "alt+up") || matchesKey(data, "alt+down")) &&
+			!kb.matches(data, "tui.select.up") &&
+			!kb.matches(data, "tui.select.down")
+		) {
 			this.#tree.moveSelectionWhere(node => node.entry.type === "message" &&
 				(node.entry.message.role === "user" || node.entry.message.role === "assistant"),
 				matchesKey(data, "alt+up") ? -1 : 1);
 			this.#viewport.reveal();
 			return;
 		}
-		if (getKeybindings().matches(data, "app.tree.previousBranch") || getKeybindings().matches(data, "app.tree.nextBranch")) {
-			this.#moveBranch(getKeybindings().matches(data, "app.tree.previousBranch") ? -1 : 1);
+		if (kb.matches(data, "app.tree.previousBranch") || kb.matches(data, "app.tree.nextBranch")) {
+			this.#moveBranch(kb.matches(data, "app.tree.previousBranch") ? -1 : 1);
 			this.#viewport.reveal();
 			return;
 		}
