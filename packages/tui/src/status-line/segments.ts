@@ -1244,10 +1244,13 @@ export const USAGE_BAR_TEMPLATE_TOKENS = ["label", "percent", "age"] as const;
 export type UsageBarTemplateToken = (typeof USAGE_BAR_TEMPLATE_TOKENS)[number];
 /** Reproduces the bar's built-in text: `AN 5h 10% 2m`. */
 export const DEFAULT_USAGE_BAR_TEMPLATE = "{label} {percent} {age}";
-/** Templates are status-bar text; longer input is cut rather than wrapped. */
+/** Templates are status-bar text; cap the source's terminal width without splitting Unicode. */
 export const USAGE_BAR_TEMPLATE_MAX_LENGTH = 80;
 
 export type UsageBarTemplatePart = { readonly text: string } | { readonly token: UsageBarTemplateToken };
+
+const usageBarTemplateCache = new Map<string, readonly UsageBarTemplatePart[]>();
+const USAGE_BAR_TEMPLATE_CACHE_LIMIT = 64;
 
 function isUsageBarTemplateToken(name: string): name is UsageBarTemplateToken {
 	return USAGE_BAR_TEMPLATE_TOKENS.some(token => token === name);
@@ -1255,12 +1258,14 @@ function isUsageBarTemplateToken(name: string): name is UsageBarTemplateToken {
 
 /**
  * Split a usage-bar template into literal text and `{label}`/`{percent}`/`{age}`
- * placeholders. `{{` and `}}` produce literal braces and an unknown `{name}`
- * stays literal, so a template can only ever place the three values; it never
- * evaluates anything. Control characters and newlines are stripped first.
+ * placeholders. `{{` and `}}` produce literal braces; unknown or unclosed
+ * placeholders stay literal. No expressions are evaluated. Sanitize before
+ * truncating so a cut cannot expose part of a stripped terminal escape.
  */
-export function parseUsageBarTemplate(template: string): UsageBarTemplatePart[] {
-	const source = sanitizeStatusText(template).slice(0, USAGE_BAR_TEMPLATE_MAX_LENGTH);
+export function parseUsageBarTemplate(template: string): readonly UsageBarTemplatePart[] {
+	const cached = usageBarTemplateCache.get(template);
+	if (cached) return cached;
+	const source = truncateToWidth(sanitizeStatusText(template), USAGE_BAR_TEMPLATE_MAX_LENGTH, "");
 	const parts: UsageBarTemplatePart[] = [];
 	let text = "";
 	for (let index = 0; index < source.length; index++) {
@@ -1280,10 +1285,16 @@ export function parseUsageBarTemplate(template: string): UsageBarTemplatePart[] 
 				index = end;
 				continue;
 			}
+			text += source.slice(index, end === -1 ? source.length : end + 1);
+			index = end === -1 ? source.length : end;
+			continue;
 		}
 		text += char;
 	}
 	if (text) parts.push({ text });
+	// Editing must not retain every historical template for the session's lifetime.
+	if (usageBarTemplateCache.size >= USAGE_BAR_TEMPLATE_CACHE_LIMIT) usageBarTemplateCache.clear();
+	usageBarTemplateCache.set(template, parts);
 	return parts;
 }
 
@@ -1299,43 +1310,55 @@ function usageBarPieces(
 ): { text: string; color?: ThemeColor }[] {
 	const { label, value, color, age } = usageBarContent(bar, ctx);
 	const stale = age === undefined;
-	const values: Record<UsageBarTemplateToken, string> = { label, percent: value, age: age ?? "" };
-	const tokenColor: Record<UsageBarTemplateToken, ThemeColor | undefined> = {
-		label: undefined,
-		percent: color,
-		age: "dim",
-	};
 	const pieces: { text: string; color?: ThemeColor }[] = [];
 	const template = ctx.options.usageBars?.templates?.[id] ?? DEFAULT_USAGE_BAR_TEMPLATE;
 	for (const part of parseUsageBarTemplate(template)) {
+		let text: string;
+		let pieceColor: ThemeColor | undefined;
 		if ("text" in part) {
-			pieces.push({ text: part.text });
-			continue;
+			text = part.text;
+		} else {
+			switch (part.token) {
+				case "label":
+					text = label;
+					break;
+				case "percent":
+					text = value;
+					pieceColor = color;
+					break;
+				case "age":
+					text = age ?? "";
+					pieceColor = "dim";
+					break;
+			}
 		}
-		const text = values[part.token];
-		if (text) pieces.push({ text, color: tokenColor[part.token] });
-		else {
-			const previous = pieces.at(-1);
-			if (previous && previous.color === undefined) previous.text = previous.text.trimEnd();
-		}
+		// Substitution can bring two space runs together, or leave one at an edge.
+		const previous = pieces.at(-1);
+		if (!previous) text = text.trimStart();
+		else if (previous.text.endsWith(" ")) text = text.replace(/^ +/, "");
+		if (!text) continue;
+		if (stale) pieceColor = "dim";
+		if (previous && previous.color === pieceColor) previous.text += text;
+		else pieces.push({ text, color: pieceColor });
 	}
-	const first = pieces[0];
-	if (first) first.text = first.text.trimStart();
 	const last = pieces.at(-1);
-	if (last) last.text = last.text.trimEnd();
-	const visible = pieces.filter(piece => piece.text.length > 0);
-	return stale ? [{ text: visible.map(piece => piece.text).join(""), color: "dim" }] : visible;
+	if (last) {
+		last.text = last.text.trimEnd();
+		if (!last.text) pieces.pop();
+	}
+	return pieces;
 }
 
 function renderUsageBar(id: string, bar: UsageBarSelector, ctx: SegmentContext): RenderedSegment {
 	const content = usageBarPieces(id, bar, ctx)
 		.map(piece => (piece.color ? theme.fg(piece.color, piece.text) : piece.text))
 		.join("");
-	return { content, visible: true };
+	return { content, visible: content.length > 0 };
 }
 
-function describeUsageBar(id: string, bar: UsageBarSelector, ctx: SegmentContext): SegmentView {
-	return segView(usageBarPieces(id, bar, ctx).map(piece => span(piece.text, piece.color)));
+function describeUsageBar(id: string, bar: UsageBarSelector, ctx: SegmentContext): SegmentView | null {
+	const pieces = usageBarPieces(id, bar, ctx);
+	return pieces.length > 0 ? segView(pieces.map(piece => span(piece.text, piece.color))) : null;
 }
 
 /**

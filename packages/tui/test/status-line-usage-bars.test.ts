@@ -1,7 +1,13 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { UsageReport } from "@oh-my-pi/pi-ai/usage";
-import { describeSegment, renderSegment, type SegmentContext } from "../src/status-line/segments";
-import { initTheme } from "../src/theme";
+import {
+	describeSegment,
+	parseUsageBarTemplate,
+	renderSegment,
+	USAGE_BAR_TEMPLATE_MAX_LENGTH,
+	type SegmentContext,
+} from "../src/status-line/segments";
+import { initTheme, theme } from "../src/theme";
 import { isStatusLineSegmentId, parseUsageBarSegmentId } from "../src/status-line/schema";
 
 beforeAll(async () => {
@@ -77,11 +83,15 @@ describe("provider usage-bar rendering", () => {
 		}
 	});
 
-	it("keeps honest loading and missing placeholders visible", () => {
-		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", context(null)).content)).toBe("AN 5h …");
-		expect(renderSegment("usage:anthropic:5h", context(null)).visible).toBe(true);
-		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", context({ reports: [] })).content)).toBe("AN 5h n/a");
-		expect(Bun.stripANSI(renderSegment("usage:kimi-code:5h", context({ reports })).content)).toBe("kimi-code 5h n/a");
+	it("keeps the entire loading or unavailable bar dim in both render paths", () => {
+		for (const [id, ctx, expected] of [
+			["usage:anthropic:5h", context(null), "AN 5h …"],
+			["usage:anthropic:5h", context({ reports: [] }), "AN 5h n/a"],
+			["usage:kimi-code:5h", context({ reports }), "kimi-code 5h n/a"],
+		] as const) {
+			expect(renderSegment(id, ctx)).toEqual({ content: theme.fg("dim", expected), visible: true });
+			expect(describeSegment(id, ctx)).toEqual({ spans: [{ t: expected, s: "dim" }] });
+		}
 	});
 
 	it("places each bar's values inside its own template, terminal and native alike", () => {
@@ -96,19 +106,103 @@ describe("provider usage-bar rendering", () => {
 		expect(Bun.stripANSI(renderSegment("usage:anthropic:7d", ctx).content)).toBe("AN wk 10% 2m");
 	});
 
-	it("treats templates as text: escaped braces, unknown names, and no terminal controls", () => {
-		const literal = context({ reports }, { "usage:anthropic:5h": "{{x}} {percent} {constructor} {age" });
-		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", literal).content)).toBe("{x} 10% {constructor} {age");
-		const hostile = context({ reports }, { "usage:anthropic:5h": "{percent}\n\x1b]0;title\x07\x1b[31mX" });
-		const content = renderSegment("usage:anthropic:5h", hostile).content;
-		expect(content).not.toContain("\n");
-		expect(content).not.toContain("\x1b]");
-		expect(content).not.toContain("\x1b[31m");
+	it("keeps escaped, unknown, and unclosed placeholders literal", () => {
+		for (const [template, expected] of [
+			["{{/}} {{percent}} {{{percent}}}", "{/} {percent} {10%}"],
+			["{{x}} {percent} {constructor} {age", "{x} 10% {constructor} {age"],
+			["{unknown}} {percent}", "{unknown}} 10%"],
+			["{unknown{percent}} {label}", "{unknown{percent}} AN 5h"],
+			["{age {percent}", "{age {percent}"],
+			["} {percent}", "} 10%"],
+		] as const) {
+			const ctx = context({ reports }, { "usage:anthropic:5h": template });
+			expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", ctx).content)).toBe(expected);
+			expect(
+				describeSegment("usage:anthropic:5h", ctx)
+					?.spans.map(part => part.t)
+					.join(""),
+			).toBe(expected);
+		}
 	});
 
-	it("drops the separator of a missing age so placeholders stay tidy", () => {
-		const ctx = context(null, { "usage:anthropic:5h": "{label} {percent} {age} left" });
-		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", ctx).content)).toBe("AN 5h … left");
+	it("sanitizes terminal controls and malformed Unicode before theming", () => {
+		const ctx = context(
+			{ reports },
+			{ "usage:anthropic:5h": "{percent}\n\x1b]0;title\x07\x1b[31mX\tY\u0000Z\uD800" },
+		);
+		const content = renderSegment("usage:anthropic:5h", ctx).content;
+		expect(Bun.stripANSI(content)).toBe("10% X YZ");
+		expect(content).not.toContain("\n");
+		expect(content).not.toContain("\x1b]");
+		expect(
+			describeSegment("usage:anthropic:5h", ctx)
+				?.spans.map(part => part.t)
+				.join(""),
+		).toBe("10% X YZ");
+	});
+
+	it("strips whole escape sequences before limiting template width", () => {
+		const ctx = context(
+			{ reports },
+			{ "usage:anthropic:5h": `\x1b]0;${"title".repeat(USAGE_BAR_TEMPLATE_MAX_LENGTH)}\x07{percent}` },
+		);
+		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", ctx).content)).toBe("10%");
+		expect(describeSegment("usage:anthropic:5h", ctx)).toEqual({ spans: [{ t: "10%", s: "muted" }] });
+	});
+
+	it("limits source width without cutting a surrogate pair", () => {
+		for (const [template, expected] of [
+			[
+				"x".repeat(USAGE_BAR_TEMPLATE_MAX_LENGTH - 1) + "\u{20000}",
+				"x".repeat(USAGE_BAR_TEMPLATE_MAX_LENGTH - 1),
+			],
+			[
+				"x".repeat(USAGE_BAR_TEMPLATE_MAX_LENGTH - 2) + "\u{20000}Z",
+				"x".repeat(USAGE_BAR_TEMPLATE_MAX_LENGTH - 2) + "\u{20000}",
+			],
+		] as const) {
+			const ctx = context({ reports }, { "usage:anthropic:5h": template });
+			expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", ctx).content)).toBe(expected);
+			expect(describeSegment("usage:anthropic:5h", ctx)).toEqual({ spans: [{ t: expected }] });
+		}
+	});
+
+	it("collapses spaces around missing ages without joining adjacent words", () => {
+		for (const [template, expected] of [
+			["{label} {percent} {age} left", "AN 5h … left"],
+			["{label} {age}{percent}", "AN 5h …"],
+			["{age} {age} {label} {age} {percent} {age}", "AN 5h …"],
+			["{percent} {age}left", "… left"],
+		] as const) {
+			const ctx = context(null, { "usage:anthropic:5h": template });
+			expect(renderSegment("usage:anthropic:5h", ctx)).toEqual({
+				content: theme.fg("dim", expected),
+				visible: true,
+			});
+			expect(describeSegment("usage:anthropic:5h", ctx)).toEqual({ spans: [{ t: expected, s: "dim" }] });
+		}
+	});
+
+	it("does not mutate cached templates when ages disappear or template text changes", () => {
+		const templates = { "usage:anthropic:5h": "{percent} {age}" };
+		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", context(null, templates)).content)).toBe("…");
+		const ctx = context({ reports }, templates);
+		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", ctx).content)).toBe("10% 2m");
+		templates["usage:anthropic:5h"] = "used {percent}";
+		expect(Bun.stripANSI(renderSegment("usage:anthropic:5h", ctx).content)).toBe("used 10%");
+		expect(parseUsageBarTemplate("{percent} {age}")).toEqual([
+			{ token: "percent" },
+			{ text: " " },
+			{ token: "age" },
+		]);
+	});
+
+	it("hides empty templates consistently instead of emitting an empty native segment", () => {
+		for (const template of ["", " \n\t ", "{age} {age}"]) {
+			const ctx = context(null, { "usage:anthropic:5h": template });
+			expect(renderSegment("usage:anthropic:5h", ctx)).toEqual({ content: "", visible: false });
+			expect(describeSegment("usage:anthropic:5h", ctx)).toBeNull();
+		}
 	});
 });
 
