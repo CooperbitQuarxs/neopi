@@ -9,7 +9,7 @@
  * - Shift+Tab / Arrow Left: Previous tab (wraps around)
  */
 import { formatKeyHint } from "../app-keybindings";
-import { matchesKey } from "../keys";
+import { MenuKeyReader } from "./menu-navigation";
 import { compactText, styledSpans, styleSpans } from "../native/spans";
 import { node, row } from "../native/describe";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
@@ -64,6 +64,7 @@ export class TabBar implements Component {
 	#label: string;
 	#hoverTabId: string | null = null;
 	#native?: { signature: string; node: NativeNode };
+	readonly #keys = new MenuKeyReader();
 	/** Per-render tab hit zones: 0-based line + [start, end) columns. */
 	#hitZones: { line: number; start: number; end: number; index: number }[] = [];
 
@@ -99,6 +100,17 @@ export class TabBar implements Component {
 	/** Get the index of the currently active tab */
 	getActiveIndex(): number {
 		return this.#activeIndex;
+	}
+
+	navigationSnapshot(): unknown {
+		return { activeTab: this.getActiveTab()?.id };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { activeTab?: string };
+		if (typeof state.activeTab === "string") this.setActiveById(state.activeTab);
+		this.#keys.reset();
 	}
 
 	/** Set the active tab by index (clamped to valid range) */
@@ -191,7 +203,7 @@ export class TabBar implements Component {
 		if (this.#label) parts.push(node("text", { spans: styleSpans(`${this.#label}:`, this.#theme.label) }));
 		parts.push(tabs);
 		if (this.showHint) {
-			parts.push(node("text", { spans: styleSpans(`(${formatKeyHint("tab")} to cycle)`, this.#theme.hint) }));
+			parts.push(node("text", { spans: styleSpans(`(h/l tabs · ${formatKeyHint("tab")} cycle)`, this.#theme.hint) }));
 		}
 		const described = parts.length === 1 ? tabs : row(parts, { gap: "md", align: "center" });
 		this.#native = { signature, node: described };
@@ -208,12 +220,9 @@ export class TabBar implements Component {
 	 * @returns true if the input was handled, false otherwise
 	 */
 	handleInput(data: string): boolean {
-		if (matchesKey(data, "tab") || matchesKey(data, "right")) {
-			this.nextTab();
-			return true;
-		}
-		if (matchesKey(data, "shift+tab") || matchesKey(data, "left")) {
-			this.prevTab();
+		const action = this.#keys.read(data);
+		if (action && action !== "pending" && (action.kind === "horizontal" || action.kind === "context")) {
+			this.#stepTab(action.delta);
 			return true;
 		}
 		return false;
@@ -262,7 +271,7 @@ export class TabBar implements Component {
 			// Navigation hint
 			if (this.showHint) {
 				chunks.push({ text: "  " });
-				chunks.push({ text: this.#theme.hint(`(${formatKeyHint("tab")} to cycle)`) });
+				chunks.push({ text: this.#theme.hint(`(h/l tabs · ${formatKeyHint("tab")} cycle)`) });
 			}
 			return chunks;
 		};

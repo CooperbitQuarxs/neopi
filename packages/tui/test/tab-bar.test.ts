@@ -10,6 +10,22 @@ const ansiTheme: TabBarTheme = {
 };
 
 describe("TabBar", () => {
+	it("switches with h/l and Tab while history restore stays silent", () => {
+		const tabs = new TabBar("", [{ id: "a", label: "A" }, { id: "b", label: "B" }], ansiTheme);
+		const changes: string[] = [];
+		tabs.onTabChange = tab => changes.push(tab.id);
+		tabs.handleInput("l");
+		expect(tabs.getActiveTab().id).toBe("b");
+		const saved = tabs.navigationSnapshot();
+		tabs.handleInput("h");
+		expect(tabs.getActiveTab().id).toBe("a");
+		tabs.restoreNavigation(saved);
+		expect(tabs.getActiveTab().id).toBe("b");
+		expect(changes).toEqual(["b", "a"]);
+		tabs.handleInput("\t");
+		expect(tabs.getActiveTab().id).toBe("a");
+	});
+
 	it("wraps without producing style-only lines or duplicate active highlights", () => {
 		const tabs = [
 			{ id: "display", label: "Display" },

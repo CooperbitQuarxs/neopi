@@ -8,6 +8,30 @@ const theme = {
 };
 
 describe("ScrollView", () => {
+	it("shares Vim viewer motions and restores scroll independently of content", () => {
+		const view = new ScrollView(Array.from({ length: 30 }, (_, i) => `row-${i}`), { height: 6 });
+		view.handleScrollKey("j");
+		expect(view.getScrollOffset()).toBe(1);
+		view.handleScrollKey("\x04");
+		expect(view.getScrollOffset()).toBe(4);
+		view.handleScrollKey("\x05");
+		expect(view.getScrollOffset()).toBe(5);
+		const saved = view.navigationSnapshot();
+		view.handleScrollKey("G");
+		expect(view.getScrollOffset()).toBe(24);
+		view.handleScrollKey("g");
+		expect(view.getScrollOffset()).toBe(24);
+		view.handleScrollKey("g");
+		expect(view.getScrollOffset()).toBe(0);
+		view.restoreNavigation(saved);
+		view.handleScrollKey("\x19");
+		expect(view.getScrollOffset()).toBe(4);
+		view.handleScrollKey("k");
+		expect(view.getScrollOffset()).toBe(3);
+		view.handleScrollKey("\x15");
+		expect(view.getScrollOffset()).toBe(0);
+	});
+
 	it("renders a fixed-height viewport and omits auto scrollbar when content fits", () => {
 		const view = new ScrollView(["one", "two"], { height: 3, theme });
 

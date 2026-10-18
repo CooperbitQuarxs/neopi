@@ -4,6 +4,7 @@ import { sameItems } from "../native/memo";
 import type { DescribeContext, NativeNode } from "../native/node";
 import type { Component } from "../tui";
 import { spaceForRows } from "./spacer";
+import { isMenuHistoryParticipant } from "./menu-navigation";
 
 /** Semantic role of a wizard step's primary interactive content. */
 export type WizardStepKind = "input" | "choice" | "confirm" | "async" | "custom";
@@ -148,6 +149,18 @@ export class WizardStep implements Component, MouseRoutable {
 
 	handleInput(data: string): void {
 		this.#content.handleInput?.(data);
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#kind !== "async" && isMenuHistoryParticipant(this.#content)
+			? this.#content.navigationSnapshot()
+			: undefined;
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (this.#kind !== "async" && isMenuHistoryParticipant(this.#content)) {
+			this.#content.restoreNavigation(snapshot);
+		}
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
