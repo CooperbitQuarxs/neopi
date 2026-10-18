@@ -14,12 +14,14 @@
 
 ### Changed
 
+- The selected model role's reasoning label and glyph use the model's highlight color, including Auto effort allowlists, even while the sidebar has focus ([#245](https://github.com/PsychedelicShayna/neopi/issues/245)).
 - `/statusline` keeps edits in an unapplied draft that survives closing and restarts: `s` applies without leaving, Escape asks before applying, and Reset to Active is the only way to discard it ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 - `/statusline` keeps enabled and disabled widgets in one stable list and navigates with `j`/`k`, `h`/`l` to move, Ctrl+D/U, `gg`/`G`, Ctrl+E/Y scrolling, `/` filtering, and `<`/`>` composer cycling that keeps the selection ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 
 ### Fixed
 
 - Model role assignments default to global storage; saving to the project now requires an explicit scope selection ([#244](https://github.com/PsychedelicShayna/neopi/issues/244)).
+- Persona clones preserve their prompt mode and file source, previews keep tabs inside their pane, and editing pauses during saves so later changes cannot be silently discarded ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
 - Keep the last usage-bar percentages and their age when a broker-backed refresh returns no report.
 - Keep transcript history visible with the side panel docked after compaction, resume, or a layout rebuild, and preserve it as the live conversation grows or the chat width changes.
 - Volatile speech updates reuse a cached draft and cursor offset, and apply a known edit region, instead of rejoining and diffing the whole buffer on every partial.

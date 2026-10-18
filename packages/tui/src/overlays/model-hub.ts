@@ -3366,7 +3366,7 @@ export class ModelHubComponent implements Component {
 						? `Auto [${policy.allowed.join(", ")}]`
 						: getConfiguredThinkingLevelMetadata(effective).label;
 				if (effective !== ThinkingLevel.Inherit) {
-					levelStyled = theme.fg("dim", glyph ? `${glyph} ${label}` : label);
+					levelStyled = theme.fg(selected ? "accent" : "dim", glyph ? `${glyph} ${label}` : label);
 				}
 			} else if (assignment) {
 				dot = theme.fg("dim", theme.status.shadowed);
@@ -3961,7 +3961,9 @@ export class ModelHubComponent implements Component {
 			if (assignment.thinkingLevel !== ThinkingLevel.Inherit) {
 				const glyph = thinkingLevelGlyph(assignment.thinkingLevel, theme);
 				const levelLabel = getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label;
-				value.push(span(glyph ? `${glyph} ${levelLabel}` : levelLabel, "dim"));
+				value.push(
+					span(glyph ? `${glyph} ${levelLabel}` : levelLabel, index === this.#roleIndex ? "accent" : "dim"),
+				);
 			}
 		} else {
 			label = [span(`${theme.status.shadowed} `, "dim"), span(tag, "dim")];

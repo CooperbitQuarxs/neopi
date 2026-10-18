@@ -20,6 +20,7 @@ import {
 } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
+import { thinkingLevelGlyph } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
 import { cfgCycleOrder, cfgModelPresets } from "@oh-my-pi/pi-coding-agent/config/model-settings";
@@ -463,6 +464,56 @@ describe("ModelHub", () => {
 			expect(defaultRow).not.toContain("inherit");
 			expect(smolRow).toContain("auto");
 		});
+		test.each(["fixed", "auto"] as const)(
+			"selected role highlights its %s reasoning cell across pane focus",
+			mode => {
+				const model = getBundledModel("openai", "gpt-5.5");
+				if (!model) throw new Error("Expected bundled reasoning model");
+				const settings = Settings.isolated({
+					modelRoles: { default: "openai/gpt-5.5", smol: "openai/gpt-5.5" },
+				});
+				const selection: HubEffortSelection =
+					mode === "auto"
+						? { mode: "auto", allowed: [Effort.Low, Effort.High] }
+						: { mode: "fixed", level: Effort.High };
+				settings.setRoleEffortSelection("default", selection);
+				settings.setRoleEffortSelection("smol", selection);
+				const { hub } = createHub({ models: [model], scoped: true, settings });
+				const glyph = thinkingLevelGlyph(mode === "auto" ? AUTO_THINKING : ThinkingLevel.High, theme);
+				const label = mode === "auto" ? "Auto [low, high]" : "high";
+				const effort = glyph ? `${glyph} ${label}` : label;
+
+				hub.handleInput(UP); // Roles preview; sidebar still owns focus.
+				for (const focusKey of ["", "\n", LEFT]) {
+					if (focusKey) hub.handleInput(focusKey);
+					for (const width of [120, 220]) {
+						const lines = hub.render(width);
+						const selected = lines.find(line => stripVTControlCharacters(line).includes("DEFAULT"));
+						const other = lines.find(line => stripVTControlCharacters(line).includes("SMOL"));
+						expect(selected).toContain(theme.fg("accent", effort));
+						expect(other).toContain(theme.fg("dim", effort));
+					}
+					for (const width of [36, 60, 90]) {
+						const lines = hub.render(width);
+						expect(lines.every(line => Bun.stringWidth(line) <= width)).toBe(true);
+						const selected = lines.find(line => stripVTControlCharacters(line).includes("DEFAULT"));
+						if (selected && stripVTControlCharacters(selected).includes(label)) {
+							expect(selected).toContain(theme.fg("accent", effort));
+						}
+					}
+				}
+				hub.handleInput("\n"); // Return focus to role rows.
+				hub.handleInput(DOWN); // DEFAULT → SMOL.
+				const moved = hub.render(120);
+				expect(moved.find(line => stripVTControlCharacters(line).includes("SMOL"))).toContain(
+					theme.fg("accent", effort),
+				);
+				expect(moved.find(line => stripVTControlCharacters(line).includes("DEFAULT"))).toContain(
+					theme.fg("dim", effort),
+				);
+			},
+		);
+
 		test("thinking-only edits preserve the model and scope from the persisted role layer", () => {
 			// Reasoning models: `t` only opens a strip where a level can apply.
 			const storedModel = getBundledModel("openai", "gpt-5.5");
