@@ -11,7 +11,6 @@ import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-r
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { SelectListSheet } from "../native/picker";
 import type { TspPickerItem } from "@oh-my-pi/pi-wire";
-import { matchesKey } from "../keys";
 
 export interface PluginSelectorCallbacks {
 	onSelect: (pluginName: string, marketplace: string, scope?: "user" | "project") => void;
@@ -74,14 +73,10 @@ export class PluginSelectorComponent extends OverlayPanel {
 			});
 		}
 
-		this.#selectList = new SelectList(items, Math.min(items.length, 20), getSelectListTheme(), { search: "always" });
-		if (mode === "uninstall") {
-			const handleInput = this.#selectList.handleInput.bind(this.#selectList);
-			this.#selectList.handleInput = data => {
-				if (!this.#selectList.filterFocused && matchesKey(data, "space")) return;
-				handleInput(data);
-			};
-		}
+		this.#selectList = new SelectList(items, Math.min(items.length, 20), getSelectListTheme(), {
+			search: "always",
+			activateOnSpace: mode !== "uninstall",
+		});
 
 		this.#selectList.onSelect = item => {
 			const [name, marketplace, scope] = splitPluginId(item.value);

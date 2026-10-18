@@ -106,6 +106,8 @@ export interface SelectListLayoutOptions {
 	overflowSearch?: boolean;
 	/** Search activation policy. `overflowSearch` remains authoritative when this is omitted. */
 	search?: "overflow" | "always" | "never";
+	/** Treat Space as Enter. Disable for destructive or credential choices. Defaults to true. */
+	activateOnSpace?: boolean;
 	/** Domain-specific filtering/ranking. Selection is retained by item value when possible. */
 	filterItems?: (items: readonly SelectItem[], query: string) => readonly SelectItem[];
 	/** Custom rich-row renderer. Every returned line is mouse-hit-tested as the same item. */
@@ -568,9 +570,11 @@ export class SelectList implements Component, MouseRoutable {
 			case "cancel":
 				if (!this.#selection.cancelConfirmation()) this.onCancel?.();
 				return;
-			case "confirm":
 			case "toggle":
-				// A plain list has no checkbox, so Space is the soft Enter.
+				if (this.layout.activateOnSpace === false) return;
+				this.#activateSelected();
+				return;
+			case "confirm":
 				this.#activateSelected();
 				return;
 			case "horizontal":

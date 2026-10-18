@@ -86,6 +86,29 @@ describe("SelectList", () => {
 		expect(list.getSelectedItem()?.value).toBe("a");
 	});
 
+	it("disables Space activation without retaining a pending navigation prefix", () => {
+		const selected: string[] = [];
+		const list = new SelectList(["a", "b"].map(value => ({ value, label: value })), 2, testTheme, {
+			search: "always",
+			activateOnSpace: false,
+		});
+		list.onSelect = item => selected.push(item.value);
+		list.handleInput("G");
+		list.handleInput("g");
+		list.handleNavigation({ kind: "toggle" });
+		list.handleInput("g");
+		expect(list.getSelectedItem()?.value).toBe("b");
+		list.handleInput("g");
+		expect(list.getSelectedItem()?.value).toBe("a");
+		expect(selected).toEqual([]);
+		list.handleNavigation({ kind: "confirm" });
+		expect(selected).toEqual(["a"]);
+		list.handleInput("/");
+		list.handleInput(" ");
+		expect(list.navigationState().filter).toBe(" ");
+		expect(selected).toEqual(["a"]);
+	});
+
 	it("re-sanitizes a reused item object whose label changed", () => {
 		const item = { value: "test", label: "before", description: "desc" };
 		const list = new SelectList([item], 5, testTheme);

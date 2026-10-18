@@ -8,6 +8,7 @@ function make(mode: "install" | "uninstall") {
 	const selected: string[] = [];
 	const selector = new PluginSelectorComponent(mode, 1, [
 		{ plugin: { name: "alpha", description: "First plugin" }, marketplace: "shop", scope: "user" },
+		{ plugin: { name: "beta", description: "Second plugin" }, marketplace: "shop", scope: "user" },
 	], new Set(), { onSelect: name => selected.push(name), onCancel: () => {} });
 	return { selector, list: selector.getSelectList(), selected };
 }
@@ -29,6 +30,18 @@ describe("plugin picker activation policy", () => {
 		expect(selected).toEqual([]);
 		list.handleInput("\x1b");
 		list.handleInput(" ");
+		expect(selected).toEqual([]);
+	});
+
+	it("cancels a pending g prefix when destructive Space is ignored", () => {
+		const { list, selected } = make("uninstall");
+		list.handleInput("G");
+		list.handleInput("g");
+		list.handleInput(" ");
+		list.handleInput("g");
+		expect(list.getSelectedItem()?.value).toBe("beta@shop#user");
+		list.handleInput("g");
+		expect(list.getSelectedItem()?.value).toBe("alpha@shop#user");
 		expect(selected).toEqual([]);
 	});
 
