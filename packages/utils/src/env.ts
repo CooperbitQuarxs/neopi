@@ -283,8 +283,7 @@ const projectEnv = parseEnvFile(path.join(getProjectDir(), ".env"));
 // Read update-authority dotenv files from launch-derived locations. Reuse the
 // ordinary snapshots when their paths agree; do not change merged-env behavior.
 const trustedPaths = getUserEnvPaths(originalProcessEnv);
-const trustedHomeEnv =
-	trustedPaths.home === homePath ? homeEnv : parseEnvFile(path.join(trustedPaths.home, ".env"));
+const trustedHomeEnv = trustedPaths.home === homePath ? homeEnv : parseEnvFile(path.join(trustedPaths.home, ".env"));
 const trustedPiEnv =
 	trustedPaths.configRoot === configRootPath ? piEnv : parseEnvFile(path.join(trustedPaths.configRoot, ".env"));
 const trustedAgentEnv =

@@ -11,23 +11,36 @@ async function requestBuildOrigin(
 		redirectConfig?: boolean;
 		profile?: string;
 		cliProfile?: boolean;
+		projectProfile?: string;
+		inheritedProfile?: string;
 		rootUser?: string;
 	} = {},
 ): Promise<string> {
 	await using root = await TempDir.create("@npi-build-origin-");
 	const project = root.join("project");
 	const home = root.join("home");
-	const config = options.profile ? path.join(home, ".omp", "profiles", options.profile) : path.join(home, ".omp");
+	const config =
+		options.profile && options.profile !== "default"
+			? path.join(home, ".omp", "profiles", options.profile)
+			: path.join(home, ".omp");
 	const agent = path.join(config, "agent");
 	await fs.mkdir(agent, { recursive: true });
-	const autoload = options.redirectAgent || options.redirectConfig;
+	const autoload = options.redirectAgent || options.redirectConfig || options.projectProfile;
 	await Bun.write(
 		path.join(project, ".env"),
-		`PI_BUILD_URL=https://evil.example\n${options.redirectAgent ? "PI_CODING_AGENT_DIR=./controlled\n" : ""}${options.redirectConfig ? "PI_CONFIG_DIR=../project/controlled\n" : ""}`,
+		`PI_BUILD_URL=https://evil.example\n${options.redirectAgent ? "PI_CODING_AGENT_DIR=./controlled\n" : ""}${options.redirectConfig ? "PI_CONFIG_DIR=../project/controlled\n" : ""}${options.projectProfile ? `OMP_PROFILE=${options.projectProfile}\n` : ""}`,
 	);
 	if (autoload) {
 		await Bun.write(path.join(project, "controlled", ".env"), "PI_BUILD_URL=https://evil.example\n");
 		await Bun.write(path.join(project, "controlled", "agent", ".env"), "PI_BUILD_URL=https://evil.example\n");
+	}
+	for (const profile of [options.projectProfile, options.inheritedProfile]) {
+		if (profile) {
+			await Bun.write(
+				path.join(home, ".omp", "profiles", profile, "agent", ".env"),
+				"PI_BUILD_URL=https://evil.example\n",
+			);
+		}
 	}
 	if (options.rootUser !== undefined) {
 		await Bun.write(path.join(config, ".env"), `PI_BUILD_URL=${options.rootUser}\n`);
@@ -51,29 +64,43 @@ async function requestBuildOrigin(
 		"console.log(origin);",
 	].join("\n");
 	const preload: string[] = [];
-	if (options.cliProfile) {
+	if (options.cliProfile || options.projectProfile) {
 		const bootstrap = root.join("profile-bootstrap.ts");
 		await Bun.write(
 			bootstrap,
-			`import ${JSON.stringify(path.resolve(import.meta.dir, "../../../../utils/src/launch-env.ts"))};\n` +
-				`import { setProfile } from ${JSON.stringify(path.resolve(import.meta.dir, "../../../../utils/src/dirs.ts"))};\n` +
-				`setProfile(${JSON.stringify(options.profile)});\n`,
+			`import { runCli } from ${JSON.stringify(path.resolve(import.meta.dir, "../../src/cli.ts"))};\n` +
+				`await runCli(${JSON.stringify(options.cliProfile ? ["--profile", options.profile, "--version"] : ["--version"])});\n`,
 		);
 		preload.push("--preload", bootstrap);
 	}
-	const child = Bun.spawn([process.execPath, ...(autoload ? [] : ["--no-env-file"]), ...preload, "--no-install", "--eval", script], {
-		cwd: project,
-		env: {
-			HOME: home,
-			USERPROFILE: home,
-			PATH: process.env.PATH ?? "",
-			...(autoload ? {} : { PI_CODING_AGENT_DIR: options.cliProfile ? path.join(home, ".omp", "agent") : agent }),
-			...(options.profile && !options.cliProfile ? { OMP_PROFILE: options.profile } : {}),
-			...(options.inherited === undefined ? {} : { PI_BUILD_URL: options.inherited }),
+	const child = Bun.spawn(
+		[process.execPath, ...(autoload ? [] : ["--no-env-file"]), ...preload, "--no-install", "--eval", script],
+		{
+			cwd: project,
+			env: {
+				HOME: home,
+				USERPROFILE: home,
+				PATH: process.env.PATH ?? "",
+				...(autoload
+					? {}
+					: {
+							PI_CODING_AGENT_DIR: options.inheritedProfile
+								? path.join(home, ".omp", "profiles", options.inheritedProfile, "agent")
+								: options.cliProfile
+									? path.join(home, ".omp", "agent")
+									: agent,
+						}),
+				...(options.inheritedProfile
+					? { OMP_PROFILE: options.inheritedProfile }
+					: options.profile && !options.cliProfile
+						? { OMP_PROFILE: options.profile }
+						: {}),
+				...(options.inherited === undefined ? {} : { PI_BUILD_URL: options.inherited }),
+			},
+			stdout: "pipe",
+			stderr: "pipe",
 		},
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	);
 	const [stdout, stderr, exitCode] = await Promise.all([
 		new Response(child.stdout).text(),
 		new Response(child.stderr).text(),
@@ -81,7 +108,7 @@ async function requestBuildOrigin(
 	]);
 	expect(stderr).toBe("");
 	expect(exitCode).toBe(0);
-	return stdout.trim();
+	return stdout.trim().split("\n").at(-1) ?? "";
 }
 
 describe("build origin trust", () => {
@@ -135,5 +162,22 @@ describe("build origin trust", () => {
 		expect(await requestBuildOrigin({ cliProfile: true, profile: "work", user: "https://profile.example" })).toBe(
 			"https://profile.example",
 		);
+	});
+
+	it("does not trust a project-autoloaded profile activated by the CLI environment branch", async () => {
+		expect(await requestBuildOrigin({ projectProfile: "attacker", user: "https://user.example" })).toBe(
+			"https://user.example",
+		);
+	});
+
+	it("drops an inherited profile-derived agent directory when CLI selects default", async () => {
+		expect(
+			await requestBuildOrigin({
+				inheritedProfile: "work",
+				cliProfile: true,
+				profile: "default",
+				user: "https://default.example",
+			}),
+		).toBe("https://default.example");
 	});
 });

@@ -654,9 +654,9 @@ if (testGlobal.__npiTestDirectoryGuardEnabled) {
 }
 
 /** Activate a named profile. Passing undefined or "default" returns to the default profile. */
-export function setProfile(profile: string | undefined): void {
+export function setProfile(profile: string | undefined, source: "explicit" | "environment" = "explicit"): void {
 	const next = normalizeProfileName(profile);
-	profileSelectedExplicitly = true;
+	profileSelectedExplicitly = source === "explicit";
 	if (next && !activeProfile) {
 		// First activation of a named profile in this process: snapshot the
 		// current PI_CODING_AGENT_DIR so a later reset can restore the user's
@@ -713,15 +713,14 @@ export function getUserEnvPaths(env: Readonly<NodeJS.ProcessEnv>): {
 	configRoot: string;
 	agentDir: string;
 } {
-	const home =
-		(process.platform === "win32" ? env.USERPROFILE : env.HOME) ||
-		os.userInfo().homedir;
+	const home = (process.platform === "win32" ? env.USERPROFILE : env.HOME) || os.userInfo().homedir;
 	const configDir = env.PI_CONFIG_DIR || CONFIG_DIR_NAME;
-	const profile = profileSelectedExplicitly ? activeProfile : readProfileFromEnvSafe(env);
+	const launchProfile = readProfileFromEnvSafe(env);
+	const profile = profileSelectedExplicitly ? activeProfile : launchProfile;
 	const configRoot = getProfileConfigRoot(profile, home, configDir);
 	const override =
 		agentDirSelectedExplicitly ??
-		resolvePreProfileAgentDir(profile, env.PI_CODING_AGENT_DIR, readPiProfileFromEnvSafe(env), home, configDir);
+		resolvePreProfileAgentDir(launchProfile, env.PI_CODING_AGENT_DIR, readPiProfileFromEnvSafe(env), home, configDir);
 	return {
 		home,
 		configRoot,
