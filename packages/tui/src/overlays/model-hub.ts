@@ -2994,8 +2994,11 @@ export class ModelHubComponent implements Component {
 	#handleStripInput(data: string): void {
 		const strip = this.#strip;
 		if (!strip) return;
-		const textFocused = (strip.kind === "name" || strip.kind === "pattern") && strip.input.focused;
-		if (matchesSelectCancel(data) && (!textFocused || extractPrintableText(data) === undefined)) {
+		const textInput = strip.kind === "name" || strip.kind === "pattern" ? strip.input : undefined;
+		const textFocused = textInput?.focused === true;
+		const printable = textFocused ? extractPrintableText(data) : undefined;
+		const cancel = matchesSelectCancel(data) || (textInput !== undefined && matchesKey(data, "escape"));
+		if (cancel && (!textFocused || printable === undefined)) {
 			this.#cancel();
 			return;
 		}
@@ -3021,7 +3024,8 @@ export class ModelHubComponent implements Component {
 				else this.#submitSelectorPattern(strip);
 				return;
 			}
-			strip.input.handleInput(data);
+			if (printable !== undefined) strip.input.insertText(printable);
+			else strip.input.handleInput(data);
 			if (strip.kind === "name" && strip.purpose === "compaction") strip.error = undefined;
 			return;
 		}
