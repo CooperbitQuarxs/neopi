@@ -31,6 +31,9 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { removeSyncWithRetries, Snowflake, withTimeout } from "@oh-my-pi/pi-utils";
 import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
+import { type LiveDelegationDelivery, LiveSessionController } from "../src/live/controller";
+import type { LiveServerEvent } from "../src/live/protocol";
+import { LIVE_DELEGATION_MESSAGE_TYPE } from "../src/session/messages";
 
 const COLLAB_PROMPT_TYPE = "collab-prompt";
 const IMAGE_SOURCE_PATH = "/tmp/private-project/screenshot.png";
@@ -142,6 +145,103 @@ describe("AgentSession queued steer delivery", () => {
 		};
 		return promise;
 	}
+
+	it.each(["steer", "followUp"] as const)(
+		"delivers a live %s once without aborting the active tool or reasoning turn",
+		async (mode: LiveDelegationDelivery) => {
+			const { session, mock } = await createSession([
+				{ content: [{ type: "toolCall", id: "work", name: "work", arguments: {} }] },
+				{ content: ["active run finished"] },
+				{ content: ["follow-up finished"] },
+			]);
+			const started = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const accepted = Promise.withResolvers<void>();
+			let interrupted = false;
+			const schema = type({});
+			const tool: AgentTool<typeof schema> = {
+				name: "work",
+				label: "Work",
+				description: "Complete the active work",
+				parameters: schema,
+				interruptible: false,
+				async execute(_id, _params, signal) {
+					const onAbort = () => {
+						interrupted = true;
+					};
+					signal?.addEventListener("abort", onAbort, { once: true });
+					started.resolve();
+					try {
+						await release.promise;
+						return { content: [{ type: "text", text: "work completed" }], details: {} };
+					} finally {
+						signal?.removeEventListener("abort", onAbort);
+					}
+				},
+			};
+			session.agent.setTools([tool]);
+			let onLiveEvent: ((event: LiveServerEvent) => void) | undefined;
+			const speech: string[] = [];
+			const controller = new LiveSessionController({
+				session,
+				delegationDelivery: () => mode,
+				extractAssistantText: () => "",
+				callbacks: {
+					onPhase() {},
+					onLevels() {},
+					onTranscript() {},
+					onTerminal() {},
+					onSpeechSent(text) {
+						speech.push(text);
+						accepted.resolve();
+					},
+				},
+				createTransport: options => {
+					onLiveEvent = options.callbacks.onEvent;
+					return {
+						async connect() {},
+						async send() {},
+						async close() {},
+						async setMuted() {},
+						pushAudio: () => true,
+					};
+				},
+				createRecorder: () => ({ stop() {} }),
+			});
+			await controller.start();
+			const run = session.prompt("finish existing work");
+			try {
+				await withTimeout(started.promise, 2_000, "Active work did not start");
+				onLiveEvent?.({ type: "turn.done", turn: { role: "user", transcript: "new spoken request" } });
+				onLiveEvent?.({
+					type: "delegation.created",
+					item: { type: "delegation", target: "client", id: "live-request", content: [] },
+				});
+				await withTimeout(accepted.promise, 2_000, "Live handoff was not queued");
+				expect(interrupted).toBe(false);
+				expect(session.isStreaming).toBe(true);
+			} finally {
+				release.resolve();
+				await run;
+				await session.waitForIdle();
+				await controller.stop();
+			}
+			expect(interrupted).toBe(false);
+			expect(speech).toEqual(["new spoken request"]);
+			expect(
+				session.messages.filter(message => message.role === "assistant").map(message => message.stopReason),
+			).not.toContain("aborted");
+			const deliveries = session.messages.filter(
+				message => message.role === "custom" && message.customType === LIVE_DELEGATION_MESSAGE_TYPE,
+			);
+			expect(deliveries).toHaveLength(1);
+			expect(mock.calls).toHaveLength(mode === "followUp" ? 3 : 2);
+			const secondContext = JSON.stringify(mock.calls[1]?.context.messages);
+			expect(secondContext.includes("new spoken request")).toBe(mode === "steer");
+			if (mode === "followUp")
+				expect(JSON.stringify(mock.calls[2]?.context.messages)).toContain("new spoken request");
+		},
+	);
 
 	it("delivers a collab steer that lands at the run's yield boundary", async () => {
 		const { session, sessionManager, mock } = await createSession([
