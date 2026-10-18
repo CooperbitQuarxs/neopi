@@ -27,6 +27,7 @@
 ### Fixed
 
 - Tree row-navigation remaps take precedence over the built-in Alt-Up/Down turn shortcuts ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Restored session pickers can switch scopes again, and a navigation attempt keeps delayed history matches from rearranging the list even at a boundary ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Persona, chain, and advisor previews expose their final content line at G/End and page by readable rows rather than counting the overflow status row as content ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Keep the last usage-bar percentages and their age when a broker-backed refresh returns no report.
 - Keep transcript history visible with the side panel docked after compaction, resume, or a layout rebuild, and preserve it as the live conversation grows or the chat width changes.

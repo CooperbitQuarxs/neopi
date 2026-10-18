@@ -1362,8 +1362,8 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			return;
 		}
 		this.#viewport.layout(this.#visibleRowHeights(this.#menu.visibleItems), this.#menu.selectedIndex, this.#lineBudget());
-		const motion = applyMenuMotion(action, this.#menu, this.#viewport, { wrap: false });
-		if (motion.selectionChanged) {
+		applyMenuMotion(action, this.#menu, this.#viewport, { wrap: false });
+		if (action.kind === "move" || action.kind === "page" || action.kind === "halfPage" || action.kind === "boundary") {
 			this.#restoredSelected = undefined;
 			this.#selectionMoved = true;
 		}
@@ -1575,7 +1575,10 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as { scope?: string; allSessions?: T[]; list?: unknown; message?: SessionPickerMessage };
 		this.leaveMenu();
-		if (Array.isArray(state.allSessions)) this.#globalSessions = state.allSessions;
+		if (Array.isArray(state.allSessions)) {
+			this.#globalSessions = state.allSessions;
+			this.#sessionList.onToggleScope ??= () => { void this.#toggleScope(); };
+		}
 		this.#scope = state.scope === "all" && this.#globalSessions ? "all" : "folder";
 		this.#sessionList.setSessions(this.#scope === "all" ? this.#globalSessions! : this.#folderSessions, this.#scope === "all" || this.#folderShowCwd);
 		this.#sessionList.restoreNavigation(state.list);
