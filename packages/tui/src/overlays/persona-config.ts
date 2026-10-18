@@ -16,6 +16,7 @@
  */
 import {
 	type Component,
+	extractPrintableText,
 	Input,
 	matchesKey,
 	routeSgrMouseInput,
@@ -31,7 +32,8 @@ import { bottomBorder, divider, dividerSplit, PanelRows, row, topBorder, topBord
 import { isLayoutMouseRoutable } from "../components/layout/geometry";
 import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
-import { MenuKeyReader, isMenuHistoryParticipant } from "../components/menu-navigation";
+import { MenuKeyReader, isMenuHistoryParticipant, type MenuNavAction } from "../components/menu-navigation";
+import type { SelectListNavigationState } from "../components/select-list";
 
 export type PersonaConfigVariant = "persona" | "live";
 export type PersonaConfigMode = "replace" | "prepend" | "append" | "literal-substitute";
@@ -135,11 +137,19 @@ interface PersonaNavigationContext {
 	creation?: { content: string; from?: string; sourceIndex?: number };
 }
 
+interface PersonaListState {
+	navigation: SelectListNavigationState;
+	previewScroll: number;
+	previewFocused: boolean;
+}
+
 interface PersonaNavigationSnapshot {
 	context: PersonaNavigationContext;
 	doc: PersonaConfigDoc;
 	dirty: boolean;
 	previewScroll: number;
+	previewFocused: boolean;
+	lists: [string, PersonaListState][];
 	content: unknown;
 }
 
@@ -161,6 +171,13 @@ export class PersonaConfigOverlayComponent implements Component {
 	/** One-shot message (save result, validation error) shown until the next screen change. */
 	#footerNote: { text: string; tone: "success" | "warning" } | undefined;
 	#previewScroll = 0;
+	#previewFocused = false;
+	#previewRowsLast = 1;
+	#previewWidthLast = 1;
+	#previewLayoutDirty = true;
+	#previewMaxScroll = 0;
+	readonly #listStates = new Map<string, PersonaListState>();
+	#previousNavigationSnapshot: PersonaNavigationSnapshot | undefined;
 	readonly #keys = new MenuKeyReader();
 	#navigationContext: PersonaNavigationContext = { screen: "list" };
 	#creation: PersonaNavigationContext["creation"];
@@ -223,7 +240,7 @@ export class PersonaConfigOverlayComponent implements Component {
 		const bodyRows = Math.max(3, height - 4);
 		this.#bodyRowsLast = bodyRows;
 		const heading = this.#deps.variant === "live" ? "Live personas" : "Personas";
-		const title = `${heading} · active: ${this.#activeLabel()}${this.#dirty ? "  ● unsaved" : ""}`;
+		const title = `${heading} · active: ${this.#activeLabel()}${this.#dirty ? "  ● unsaved" : ""}${this.#screen === "list" && this.#previewFocused ? " · Preview" : ""}`;
 		this.#split.setNarrowPane(this.#screen === "list" ? undefined : "left");
 		this.#split.setSplitAt(this.#screen === "list" ? 0 : Number.MAX_SAFE_INTEGER);
 		this.#split.setHeight(bodyRows);
@@ -250,27 +267,91 @@ export class PersonaConfigOverlayComponent implements Component {
 
 	handleInput(data: string): void {
 		if (data.startsWith("\x1b[<")) {
+			this.#keys.reset();
 			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
 			return;
 		}
-		if (this.#active instanceof SelectList && !this.#active.filterFocused) {
-			const action = this.#keys.read(data);
-			if (action !== undefined && action !== "pending") {
-				if (action.kind === "horizontal") {
-					const index = this.#navigationContext.entryIndex;
-					if (action.delta === -1 && this.#screen !== "list") {
-						if (this.#screen === "detail" || index === undefined) this.#showList(index === undefined ? undefined : `entry:${index}`);
-						else this.#showDetail(index);
-					} else if (action.delta === 1) {
-						const item = this.#active.getSelectedItem();
-						const navigable = item && (this.#screen === "list" ? /^entry:/.test(item.value) : this.#screen === "detail" && ["name", "mode", "path", "literal", "content", "view", "sources"].includes(item.value));
-						if (navigable && item) this.#active.onSelect?.(item);
+		let active = this.#active;
+		if (active instanceof Input || active instanceof HookEditorComponent ||
+			("filterFocused" in active && active.filterFocused === true)) {
+			this.#keys.reset();
+			const printable = active instanceof Input ? extractPrintableText(data) : undefined;
+			if (active instanceof Input && printable !== undefined) active.insertText(printable);
+			else active.handleInput?.(data);
+			return;
+		}
+		let cancelledDelete = false;
+		if (this.#screen === "list" && this.#pendingDelete !== null &&
+			!matchesKey(data, "delete") && !matchesKey(data, "backspace")) {
+			const selected = active instanceof SelectList ? active.getSelectedItem()?.value : undefined;
+			this.#pendingDelete = null;
+			this.#showList(selected);
+			active = this.#active;
+			cancelledDelete = true;
+		}
+		const action = this.#keys.read(data);
+		if (this.#screen === "list" && (action === undefined || action === "pending" || action.kind !== "cancel")) {
+			this.#closeArmed = false;
+		}
+		if (action === "pending") return;
+		if (cancelledDelete && action?.kind === "cancel") return;
+		if (action?.kind === "horizontal") {
+			if (this.#screen === "list") this.#previewFocused = action.delta > 0;
+			else if (active instanceof SelectList) {
+				if (action.delta < 0) active.onCancel?.();
+				else if (this.#screen === "detail") {
+					const item = active.getSelectedItem();
+					if (item && ["name", "mode", "path", "literal", "content", "view", "sources"].includes(item.value)) {
+						active.onSelect?.(item);
 					}
+				}
+			}
+			this.#cb.requestRender();
+			return;
+		}
+		if (this.#screen === "list") {
+			if (action?.kind === "context") {
+				this.#previewFocused = !this.#previewFocused;
+				this.#cb.requestRender();
+				return;
+			}
+			if (action?.kind === "search") this.#previewFocused = false;
+			if (this.#previewFocused && action && this.#applyPreviewMotion(action)) return;
+		}
+		if (action?.kind === "toggle" && active instanceof SelectList) {
+			const item = active.getSelectedItem();
+			if (item?.value === "delete") return;
+			if (this.#screen === "list") {
+				const match = /^entry:(\d+)$/.exec(item?.value ?? "");
+				const entry = match ? this.#doc.entries[Number(match[1])] : undefined;
+				if (entry) {
+					this.#toggleActive(entry);
+					this.#showList(item?.value);
 					return;
 				}
 			}
 		}
-		this.#active.handleInput?.(data);
+		if (action && active instanceof SelectList) active.handleNavigation(action);
+		else active.handleInput?.(data);
+	}
+
+	#applyPreviewMotion(action: MenuNavAction): boolean {
+		let next = this.#previewScroll;
+		switch (action.kind) {
+			case "move":
+			case "scroll": next += action.delta; break;
+			case "halfPage": next += action.delta * Math.max(1, Math.floor(this.#previewRowsLast / 2)); break;
+			case "page": next += action.delta * this.#previewRowsLast; break;
+			case "boundary": next = action.edge === "first" ? 0 : Number.POSITIVE_INFINITY; break;
+			default: return false;
+		}
+		if (this.#previewLayoutDirty) {
+			this.#previewMaxScroll = Math.max(0, this.#previewContent(this.#previewWidthLast).length - this.#previewRowsLast);
+			this.#previewLayoutDirty = false;
+		}
+		this.#previewScroll = Math.max(0, Math.min(this.#previewMaxScroll, next));
+		this.#cb.requestRender();
+		return true;
 	}
 
 	pasteText(text: string): void {
@@ -282,13 +363,13 @@ export class PersonaConfigOverlayComponent implements Component {
 		if (hit && hit.index === 1) {
 			const pane = this.#split.locate(hit.line, hit.col);
 			if (pane?.pane === "right") {
-				if (event.wheel !== null) {
-					this.#previewScroll = Math.max(0, this.#previewScroll + event.wheel);
-					this.#cb.requestRender();
-				}
+				if (event.leftClick || event.wheel !== null) this.#previewFocused = true;
+				if (event.wheel !== null) this.#applyPreviewMotion({ kind: "scroll", delta: event.wheel });
+				else if (event.leftClick) this.#cb.requestRender();
 				return true;
 			}
 			if (pane?.pane === "left" && isLayoutMouseRoutable(this.#active)) {
+				if (event.leftClick || event.wheel !== null) this.#previewFocused = false;
 				this.#active.routeMouse(event, pane.line, pane.col);
 				return true;
 			}
@@ -301,8 +382,13 @@ export class PersonaConfigOverlayComponent implements Component {
 
 	#previewWindow(bodyWidth: number, rows: number): string[] {
 		const lines = this.#previewContent(bodyWidth);
+		this.#previewWidthLast = bodyWidth;
+		this.#previewLayoutDirty = false;
 		const maxScroll = Math.max(0, lines.length - rows);
+		this.#previewRowsLast = Math.max(1, rows);
+		this.#previewMaxScroll = maxScroll;
 		const start = Math.min(this.#previewScroll, maxScroll);
+		this.#previewScroll = start;
 		const window = lines.slice(start, start + rows);
 		if (lines.length > rows) {
 			window[rows - 1] =
@@ -373,16 +459,40 @@ export class PersonaConfigOverlayComponent implements Component {
 	#setScreen(screen: Screen, active: Component, footerHint: string): void {
 		const context: PersonaNavigationContext = { screen, entryIndex: this.#entryIndex, creation: this.#creation };
 		const changed = screen !== this.#navigationContext.screen || context.entryIndex !== this.#navigationContext.entryIndex;
-		const previous = changed && !this.#restoringNavigation ? this.navigationSnapshot() : undefined;
+		if (!this.#restoringNavigation && this.#active instanceof SelectList) {
+			this.#listStates.set(this.#pageKey(this.#navigationContext), {
+				navigation: this.#active.navigationSnapshot(),
+				previewScroll: this.#previewScroll,
+				previewFocused: this.#previewFocused,
+			});
+		}
+		const previous = changed && !this.#restoringNavigation
+			? this.#previousNavigationSnapshot ?? this.navigationSnapshot() : undefined;
+		this.#previousNavigationSnapshot = undefined;
+		const saved = this.#listStates.get(this.#pageKey(context));
+		if (saved && active instanceof SelectList) {
+			active.restoreNavigation(changed ? saved.navigation : { ...saved.navigation, selectedValue: active.getSelectedItem()?.value });
+		}
 		this.#screen = screen;
 		this.#active = active;
-		const navigationHint = screen === "list" ? "l open" : screen === "detail" ? "h parent / l open" : "h parent";
-		this.#footerHint = active instanceof SelectList ? `${footerHint} · ${navigationHint} · / search` : footerHint;
+		const navigationHint = screen === "list" ? "h/l, Tab panes" : screen === "detail" ? "h parent / l open" : "h parent";
+		this.#footerHint = active instanceof SelectList ? `${navigationHint} · ${footerHint} · / search` : footerHint;
 		this.#footerNote = undefined;
-		this.#previewScroll = 0;
+		this.#previewScroll = saved?.previewScroll ?? 0;
+		this.#previewFocused = screen === "list" && saved?.previewFocused === true;
+		this.#previewLayoutDirty = true;
+		this.#keys.reset();
+		if (changed) {
+			this.#pendingDelete = null;
+			this.#closeArmed = false;
+		}
 		this.#navigationContext = context;
 		if (previous !== undefined) this.onNavigationVisit?.(screen === "list" ? "" : `${screen}:${context.entryIndex ?? "new"}`, previous);
 		this.#cb.requestRender();
+	}
+
+	#pageKey(context: PersonaNavigationContext): string {
+		return `${context.screen}:${context.entryIndex ?? "new"}`;
 	}
 
 	/**
@@ -489,28 +599,10 @@ export class PersonaConfigOverlayComponent implements Component {
 		const handleInput = list.handleInput.bind(list);
 		list.handleInput = data => {
 			if (list.filterFocused) { handleInput(data); return; }
-			if (!matchesKey(data, "escape")) this.#closeArmed = false;
 			const selected = list.getSelectedItem()?.value ?? "";
 			const match = /^entry:(\d+)$/.exec(selected);
 			if (match && (matchesKey(data, "delete") || matchesKey(data, "backspace"))) {
 				this.#onDelete(Number(match[1]));
-				return;
-			}
-			if (this.#pendingDelete !== null) {
-				// Any other key abandons the pending removal; Esc only does that.
-				this.#pendingDelete = null;
-				this.#showList(selected);
-				if (!matchesKey(data, "escape")) this.#active.handleInput?.(data);
-				return;
-			}
-			if (matchesKey(data, "space")) {
-				const entry = match ? this.#doc.entries[Number(match[1])] : undefined;
-				if (!entry) {
-					this.#onListSelect(selected);
-					return;
-				}
-				this.#toggleActive(entry);
-				this.#showList(selected);
 				return;
 			}
 			if (matchesKey(data, "s")) {
@@ -521,6 +613,7 @@ export class PersonaConfigOverlayComponent implements Component {
 		};
 		list.onSelectionChange = () => {
 			this.#previewScroll = 0;
+			this.#previewLayoutDirty = true;
 			this.#cb.requestRender();
 		};
 		list.onSelect = item => this.#onListSelect(item.value);
@@ -530,7 +623,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			list,
 			this.#pendingDelete !== null
 				? "Delete again to confirm removal · any other key cancels"
-				: "↑↓ move · Space activate/deactivate, else select · Enter / click edit · Delete removes · s save & apply · Esc close",
+				: "j/k move · Enter edit · Space active · Del×2 · s save · Esc close",
 		);
 	}
 
@@ -693,13 +786,6 @@ export class PersonaConfigOverlayComponent implements Component {
 		const handleInput = list.handleInput.bind(list);
 		list.handleInput = data => {
 			if (list.filterFocused) { handleInput(data); return; }
-			if (matchesKey(data, "space") && list.getSelectedItem()?.value === "delete") return;
-			if (matchesKey(data, "space")) {
-				// Space flips on/off rows; on any other row it is Enter.
-				const value = list.getSelectedItem()?.value;
-				if (value) this.#onDetailSelect(index, value);
-				return;
-			}
 			if (matchesKey(data, "s")) {
 				this.#save(() => this.#showDetail(index, list.getSelectedItem()?.value));
 				return;
@@ -778,6 +864,7 @@ export class PersonaConfigOverlayComponent implements Component {
 				this.#showNewEntryEditor(entry.content, entry.name, index);
 				return;
 			case "delete":
+				this.#previousNavigationSnapshot = this.navigationSnapshot();
 				this.#pendingDelete = null;
 				this.#doc.entries.splice(index, 1);
 				if (this.#doc.active === entry.name) this.#doc.active = undefined;
@@ -848,11 +935,6 @@ export class PersonaConfigOverlayComponent implements Component {
 		const handleInput = list.handleInput.bind(list);
 		list.handleInput = data => {
 			if (list.filterFocused) { handleInput(data); return; }
-			if (matchesKey(data, "space")) {
-				const key = list.getSelectedItem()?.value;
-				if (key) select(key);
-				return;
-			}
 			if (matchesKey(data, "s")) {
 				this.#save(() => this.#showSources(index, list.getSelectedItem()?.value));
 				return;
@@ -952,6 +1034,8 @@ export class PersonaConfigOverlayComponent implements Component {
 			doc: structuredClone(this.#doc),
 			dirty: this.#dirty,
 			previewScroll: this.#previewScroll,
+			previewFocused: this.#previewFocused,
+			lists: structuredClone([...this.#listStates]),
 			content: this.#active instanceof Input
 				? { value: this.#active.getValue(), cursor: this.#active.getCursor() }
 				: isMenuHistoryParticipant(this.#active) ? this.#active.navigationSnapshot() : undefined,
@@ -963,8 +1047,11 @@ export class PersonaConfigOverlayComponent implements Component {
 		const state = snapshot as PersonaNavigationSnapshot;
 		if (!state.context || !state.doc || !Array.isArray(state.doc.entries)) return;
 		this.#restoringNavigation = true;
+		this.#keys.reset();
 		try {
 			this.#doc = structuredClone(state.doc);
+			this.#listStates.clear();
+			for (const [key, value] of state.lists ?? []) this.#listStates.set(key, structuredClone(value));
 			this.#dirty = state.dirty;
 			this.#pendingDelete = null;
 			this.#closeArmed = false;
@@ -993,10 +1080,12 @@ export class PersonaConfigOverlayComponent implements Component {
 				if (typeof field.cursor === "number") this.#active.setCursor(field.cursor);
 			} else if (isMenuHistoryParticipant(this.#active)) this.#active.restoreNavigation(state.content);
 			this.#previewScroll = state.previewScroll;
+			this.#previewFocused = state.context.screen === "list" && state.previewFocused === true;
 		} finally { this.#restoringNavigation = false; }
 	}
 
 	leaveMenu(): void {
+		this.#keys.reset();
 		this.#pendingDelete = null;
 		this.#closeArmed = false;
 	}

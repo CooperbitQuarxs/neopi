@@ -24,6 +24,7 @@
 - Single-line form fields retain physical Enter/Esc submission and cancellation when configured shortcut aliases are printable text ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Model hub and quick-picker filter focus stays synchronized with the shared model browser ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Settings and plugin pages preserve parent filters through nested history, keep tab changes out of the timeline, and block departure only during real writes; native field-close respects literal editors and filtered choices ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Persona menus preserve parent navigation and focused preview reading without accidental drilldown or destructive Space activation ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Search setup and login providers with `/`, page or jump through accounts, and scroll the view without moving the selected provider ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Menu history preserves focused filter text and caret position, and `Ctrl-N`/`Ctrl-P` switch menu contexts alongside Tab/Shift-Tab ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Logout and usage-reset pickers support search, paging, and history without replaying destructive confirmations ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
