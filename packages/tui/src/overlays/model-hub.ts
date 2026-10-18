@@ -2994,8 +2994,11 @@ export class ModelHubComponent implements Component {
 	#handleStripInput(data: string): void {
 		const strip = this.#strip;
 		if (!strip) return;
-		const textFocused = (strip.kind === "name" || strip.kind === "pattern") && strip.input.focused;
-		if (matchesSelectCancel(data) && (!textFocused || extractPrintableText(data) === undefined)) {
+		const textInput = strip.kind === "name" || strip.kind === "pattern" ? strip.input : undefined;
+		const textFocused = textInput?.focused === true;
+		const printable = textFocused ? extractPrintableText(data) : undefined;
+		const cancel = matchesSelectCancel(data) || (textInput !== undefined && matchesKey(data, "escape"));
+		if (cancel && (!textFocused || printable === undefined)) {
 			this.#cancel();
 			return;
 		}
@@ -3021,7 +3024,8 @@ export class ModelHubComponent implements Component {
 				else this.#submitSelectorPattern(strip);
 				return;
 			}
-			strip.input.handleInput(data);
+			if (printable !== undefined) strip.input.insertText(printable);
+			else strip.input.handleInput(data);
 			if (strip.kind === "name" && strip.purpose === "compaction") strip.error = undefined;
 			return;
 		}
@@ -4465,7 +4469,7 @@ export class ModelHubComponent implements Component {
 							this.#effortIndex >= 0 ? pickerAction("effort:edit", "Edit / add", "enter", { primary: true }) : undefined,
 							this.#effortIndex >= 0 && this.#effortIndex < rules.length ? pickerAction("effort:remove", "Remove", "x") : undefined,
 							this.#effortSearch.value ? pickerAction("clear", "Clear search") : undefined,
-							CLOSE_ACTION,
+							this.#pickerCancelAction(),
 						]),
 			}, []);
 		}
@@ -4685,11 +4689,21 @@ export class ModelHubComponent implements Component {
 		return tabs;
 	}
 
+	#pickerCancelAction(): TspPickerAction {
+		if (this.#assignmentPending) return CLOSE_ACTION;
+		const strip = this.#strip;
+		const textFocused = (strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused;
+		return {
+			...CLOSE_ACTION,
+			label: this.#filterEditing ? "Back to list" : textFocused ? "Leave field" : strip || this.#assigning ? "Back" : "Close",
+		};
+	}
+
 	/** The action bar for the current view; every button runs the path of the key it shows. */
 	#pickerActions(entry: SidebarEntry, rolesView: boolean, lockedView: boolean): TspPickerAction[] {
 		const strip = this.#strip;
-		const cancel = (label: string): TspPickerAction => ({ ...CLOSE_ACTION, label });
-		if (this.#assignmentPending) return [CLOSE_ACTION];
+		const cancel = this.#pickerCancelAction();
+		if (this.#assignmentPending) return [cancel];
 		if (strip) {
 			const apply =
 				strip.kind === "name"
@@ -4722,7 +4736,7 @@ export class ModelHubComponent implements Component {
 							"enter",
 							{ primary: true },
 						);
-			return [apply, cancel(strip.kind === "thinking" ? "Keep" : "Cancel")];
+			return [apply, cancel];
 		}
 		const refresh =
 			entry.kind === "provider" && !entry.locked ? pickerAction("refresh", "Refresh provider", "f5") : undefined;
@@ -4735,7 +4749,7 @@ export class ModelHubComponent implements Component {
 						: this.#assigning.kind === "effortRule"
 							? "Pick rule model"
 							: "Assign";
-			return compact([pickerAction("assign", label, "enter", { primary: true }), refresh, cancel("Cancel")]);
+			return compact([pickerAction("assign", label, "enter", { primary: true }), refresh, cancel]);
 		}
 		if (rolesView) {
 			const row = this.#rolesRows[this.#roleIndex];
@@ -4792,12 +4806,12 @@ export class ModelHubComponent implements Component {
 					actions.push(roleAction("pick", "New role", "enter", true));
 					break;
 			}
-			return compact([...actions, this.#rolesSearch.value ? pickerAction("clear", "Clear search") : undefined, CLOSE_ACTION]);
+			return compact([...actions, this.#rolesSearch.value ? pickerAction("clear", "Clear search") : undefined, cancel]);
 		}
 		if (lockedView) {
 			return entry.oauth
-				? [pickerAction("login", "Log in", "enter", { primary: true }), CLOSE_ACTION]
-				: [CLOSE_ACTION];
+				? [pickerAction("login", "Log in", "enter", { primary: true }), cancel]
+				: [cancel];
 		}
 		return compact([
 			pickerAction(
@@ -4808,7 +4822,7 @@ export class ModelHubComponent implements Component {
 			),
 			refresh,
 			this.#browser.query.length > 0 ? pickerAction("clear", "Clear search") : undefined,
-			CLOSE_ACTION,
+			cancel,
 		]);
 	}
 

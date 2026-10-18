@@ -344,7 +344,7 @@ let consoleCodepageGuard: (() => void) | null | undefined;
  * killed — and two PHP processes in a pipeline race their restores. Once the
  * codepage falls back to an OEM page (437/850), every non-ASCII glyph the TUI
  * paints is mis-translated: box-drawing borders degrade into `Γöé`/`ΓöÇ`
- * mojibake on the next full repaint (most visibly ctrl+o expand, which
+ * mojibake on the next full repaint (most visibly transcript expansion, which
  * rewrites every row).
  *
  * `GetConsoleOutputCP` is one cheap console call per `#safeWrite`; the setter

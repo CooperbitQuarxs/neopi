@@ -289,7 +289,7 @@ export class AssistantMessageComponent extends Container {
 	/**
 	 * Whether the inline turn-ending error block renders its full body instead of
 	 * the {@link MAX_TRANSCRIPT_ERROR_ROWS}-capped preview. Toggled by
-	 * {@link setExpanded} so Ctrl+O (tool-output expansion) reveals a long
+	 * {@link setExpanded} so transcript expansion reveals a long
 	 * provider error whose tail would otherwise be unreachable in the live TUI.
 	 */
 	#errorExpanded = false;
@@ -760,8 +760,8 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	/**
-	 * Expand or collapse the inline turn-ending error block so Ctrl+O
-	 * (tool-output expansion) can reveal a long provider error's hidden tail.
+	 * Expand or collapse the inline turn-ending error block so transcript
+	 * expansion can reveal a long provider error's hidden tail.
 	 * Only re-renders when the current message carries a truncatable error, so
 	 * toggling expansion across the transcript skips ordinary turns. Works even
 	 * while the error is pinned in the banner: the inline block is drawn (in full)
@@ -1485,7 +1485,7 @@ export class AssistantMessageComponent extends Container {
 	/**
 	 * Render a turn-ending provider error inline, wrapped to the render width.
 	 * Collapsed (default), the block keeps {@link MAX_TRANSCRIPT_ERROR_ROWS}
-	 * wrapped rows and ends with a dim `ctrl+o`/expand hint when rows were cut,
+	 * wrapped rows and ends with a dim expansion hint when rows were cut,
 	 * so a pathological body — e.g. the HTML page a proxy returns on a 502 —
 	 * can't flood the transcript. Expanded (via {@link setExpanded}), every row
 	 * is rendered so the complete message is reachable. Mirrors

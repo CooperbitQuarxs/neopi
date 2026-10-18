@@ -297,6 +297,11 @@ export class Input implements Component, Focusable {
 		return true;
 	}
 
+	/** Insert decoded printable text with ordinary typing undo groups, without keybinding dispatch. */
+	insertText(text: string): void {
+		this.#insertCharacter(text);
+	}
+
 	/** Apply terminal paste semantics to text from non-bracketed paste transports
 	 *  (e.g. kitty's OSC 5522 enhanced clipboard read). Mirrors `Editor.pasteText`. */
 	pasteText(text: string): void {

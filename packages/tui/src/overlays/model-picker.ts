@@ -372,6 +372,7 @@ export class ModelPickerComponent implements Component {
 		switch (picked.act) {
 			case CLOSE_ACTION.id:
 				this.#browser.handleCancel();
+				this.#tui.requestRender();
 				return;
 			case "clear":
 				this.#browser.setQuery("");
@@ -456,7 +457,7 @@ export class ModelPickerComponent implements Component {
 						? pickerAction("task", "Task model", this.#taskModeKey, { on: mode === "task" })
 						: undefined,
 					query.length > 0 ? pickerAction("clear", "Clear search") : undefined,
-					CLOSE_ACTION,
+					{ ...CLOSE_ACTION, label: this.#browser.filterFocused ? "Back to list" : "Close" },
 				]),
 			},
 			preview,

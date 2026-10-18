@@ -1,5 +1,5 @@
 import type { TspScrollBy } from "@oh-my-pi/pi-wire";
-import { getKeybindings } from "../keybindings";
+import { getKeybindings, type KeybindingsManager } from "../keybindings";
 import { extractPrintableText, matchesKey } from "../keys";
 import { getMenuWindow, type MenuWindow } from "./menu-selection";
 import { Input } from "./input";
@@ -59,6 +59,12 @@ export function menuScrollBy(action: MenuNavAction): TspScrollBy | undefined {
  */
 export class MenuKeyReader {
 	#pendingG = false;
+	readonly #keybindings: KeybindingsManager | undefined;
+
+	/** Explicit hosts retain their binding registry; default readers follow the current global registry. */
+	constructor(keybindings?: KeybindingsManager) {
+		this.#keybindings = keybindings;
+	}
 
 	/** True while a `g` waits for its second key. */
 	get pending(): boolean {
@@ -78,7 +84,7 @@ export class MenuKeyReader {
 			this.#pendingG = true;
 			return "pending";
 		}
-		const kb = getKeybindings();
+		const kb = this.#keybindings ?? getKeybindings();
 		if (kb.matches(data, "tui.select.cancel")) return { kind: "cancel" };
 		if (kb.matches(data, "tui.select.confirm") || data === "\n") return { kind: "confirm" };
 		if (matchesKey(data, "shift+g") || kb.matches(data, "tui.select.last")) return { kind: "boundary", edge: "last" };
@@ -156,12 +162,13 @@ export class MenuSearchField {
 
 	handleInput(data: string): "edited" | "exited" | "pass" {
 		if (!this.focused) return "pass";
-		if (extractPrintableText(data) !== undefined) {
-			this.#input.handleInput(data);
+		const text = extractPrintableText(data);
+		if (text !== undefined) {
+			this.#input.insertText(text);
 			return "edited";
 		}
 		const kb = getKeybindings();
-		if (kb.matches(data, "tui.select.cancel")) {
+		if (matchesKey(data, "escape") || kb.matches(data, "tui.select.cancel")) {
 			this.focused = false;
 			return "exited";
 		}

@@ -205,4 +205,61 @@ describe("AdvisorConfigOverlayComponent", () => {
 		// The preview of the highlighted (first) advisor shows its enabled status.
 		expect(text).toContain("● on");
 	});
+
+	for (const scenario of [
+		{ rows: 1, lines: 40, overflows: true },
+		{ rows: 24, lines: 40, overflows: true },
+		{ rows: 15, lines: 1, overflows: false },
+	]) {
+		it(`keeps the final advisor preview content readable at G/End with ${scenario.rows} terminal rows`, async () => {
+			const uiTheme = await getThemeByName("dark");
+			if (!uiTheme) throw new Error("theme unavailable");
+			setThemeInstance(uiTheme);
+			const originalRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+			Object.defineProperty(process.stdout, "rows", { configurable: true, value: scenario.rows });
+			try {
+				const marker = "ADVISOR-LAST-CONTENT";
+				const overlay = make({ advisors: [{
+					name: "reader",
+					instructions: Array.from({ length: scenario.lines }, (_, index) =>
+						index === scenario.lines - 1 ? marker : `Preview line ${index}`).join("\n"),
+				}] });
+				const initial = overlay.render(100);
+				expect(initial).toHaveLength(Math.max(14, scenario.rows));
+				const contentRows = initial.length - 4 - (scenario.overflows ? 1 : 0);
+				const selected = overlay.navigationSnapshot().content;
+				const visits: string[] = [];
+				overlay.onNavigationVisit = page => visits.push(page);
+				overlay.handleInput("l");
+				overlay.handleInput("\x04");
+				expect(overlay.navigationSnapshot().previewScroll).toBe(scenario.overflows ? Math.max(1, Math.floor(contentRows / 2)) : 0);
+				overlay.handleInput("G");
+				const end = overlay.navigationSnapshot().previewScroll;
+				const lastContent = (): string => {
+					const frame = overlay.render(100);
+					return Bun.stripANSI(frame[frame.length - (scenario.overflows ? 5 : 4)] ?? "");
+				};
+				expect(lastContent()).toContain(marker);
+				if (scenario.overflows) {
+					expect(end).toBeGreaterThan(0);
+					overlay.handleInput("\x19");
+					expect(lastContent()).not.toContain(marker);
+					overlay.handleInput("\x05");
+					expect(lastContent()).toContain(marker);
+				} else expect(strip(overlay.render(100))).not.toContain("(end)");
+				overlay.handleInput("\x1b[5~");
+				expect(overlay.navigationSnapshot().previewScroll).toBe(Math.max(0, end - contentRows));
+				overlay.handleInput("\x1b[6~");
+				expect(lastContent()).toContain(marker);
+				overlay.handleInput("\x1b[H");
+				overlay.handleInput("\x1b[F");
+				expect(lastContent()).toContain(marker);
+				expect(overlay.navigationSnapshot().content).toEqual(selected);
+				expect(visits).toEqual([]);
+			} finally {
+				if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
+				else Reflect.deleteProperty(process.stdout, "rows");
+			}
+		});
+	}
 });

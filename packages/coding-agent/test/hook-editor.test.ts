@@ -82,6 +82,53 @@ function createControllerContext() {
 	return { ctx, editor, editorContainer, ui };
 }
 
+describe("HookEditorComponent literal text ownership", () => {
+	for (const promptStyle of [false, true]) {
+		it(`types printable shortcut remaps literally in ${promptStyle ? "prompt" : "hook"} mode`, () => {
+			setKeybindings(KeybindingsManager.inMemory({
+				"app.message.followUp": ["ctrl+q", "h"],
+				"app.interrupt": ["escape", "j"],
+				"app.editor.external": ["ctrl+g", "k"],
+				"tui.editor.deleteCharBackward": "l",
+				"tui.editor.submit": "/",
+			}));
+			const onSubmit = vi.fn();
+			const onCancel = vi.fn();
+			const externalEditor = vi.fn(async () => null);
+			const component = new HookEditorComponent(createTui(), "Draft", undefined, onSubmit, onCancel, {
+				promptStyle, menuHistory: true, externalEditor,
+			});
+			try {
+				for (const key of ["h", "j", "k", "l", " ", "/"]) component.handleInput(key);
+				expect(component.navigationSnapshot()?.text).toBe("hjkl /");
+				expect(onSubmit).not.toHaveBeenCalled();
+				expect(onCancel).not.toHaveBeenCalled();
+				expect(externalEditor).not.toHaveBeenCalled();
+				component.handleInput("\x1b");
+				expect(onCancel).toHaveBeenCalledTimes(1);
+			} finally { component.dispose(); }
+		});
+	}
+
+	it("lets a pending character jump consume its printable target before app shortcuts", () => {
+		setKeybindings(KeybindingsManager.inMemory({
+			"app.message.followUp": "h",
+			"tui.editor.jumpForward": "ctrl+]",
+		}));
+		const onSubmit = vi.fn();
+		const component = new HookEditorComponent(createTui(), "Draft", "abc h def", onSubmit, vi.fn(), { menuHistory: true });
+		try {
+			component.handleInput("\x01");
+			component.handleInput("\x1d");
+			component.handleInput("h");
+			expect(component.navigationSnapshot()).toMatchObject({
+				text: "abc h def", cursor: { line: 0, col: 4 },
+			});
+			expect(onSubmit).not.toHaveBeenCalled();
+		} finally { component.dispose(); }
+	});
+});
+
 describe("HookEditorComponent default (hook) mode", () => {
 	it("inserts a newline on Enter instead of submitting immediately", () => {
 		const onSubmit = vi.fn();

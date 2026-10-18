@@ -165,6 +165,170 @@ describe("AnnotationOverlay", () => {
 		setKeybindings(previousKeybindings);
 	});
 
+	it("drops a pending gg prefix when native line selection changes context", () => {
+		const text = Array.from({ length: 50 }, (_, index) => `line-${index}`).join("\n");
+		const overlay = makeTextOverlay({ text, label: "source" });
+		overlay.handleInput("g");
+		overlay.handleNativeEvent({ type: "select", key: "lines", item: "l20" });
+		overlay.handleInput("g");
+		overlay.handleInput("a");
+		overlay.handleInput("picked");
+		overlay.handleInput(ENTER);
+		expect(overlay.getTextAnnotations()).toEqual([{ scope: "line", line: 21, quote: "line-20", note: "picked" }]);
+	});
+
+	it("shares bounded file motions and independent file-view scrolling with explicit pane contexts", () => {
+		const rows = oneLineFiles[0]!.rows.slice(1);
+		const files = Array.from({ length: 40 }, (_, index) => diffFile(`src/file-${index}.ts`, ONE_LINE_HUNK, rows));
+		const completed: (CodeReviewOverlayResult | undefined)[] = [];
+		const overlay = makeDiffOverlay(files, { rows: 20, onComplete: result => completed.push(result) });
+		const rail = () => render(overlay).split("\n").map(line => line.split("│")[1] ?? "").join("\n");
+		expect(rail()).toContain("file-0.ts");
+		overlay.handleInput(CTRL_E);
+		expect(rail()).not.toContain("file-0.ts");
+		expect(overlay.reviewFilePath()).toBe("src/file-0.ts");
+		overlay.handleInput("\x19");
+		expect(rail()).toContain("file-0.ts");
+		overlay.handleInput("\x04");
+		expect(overlay.reviewFilePath()).not.toBe("src/file-0.ts");
+		overlay.handleInput(CTRL_U);
+		expect(overlay.reviewFilePath()).toBe("src/file-0.ts");
+		overlay.handleInput(PAGE_DOWN);
+		expect(overlay.reviewFilePath()).not.toBe("src/file-0.ts");
+		overlay.handleInput(PAGE_UP);
+		expect(overlay.reviewFilePath()).toBe("src/file-0.ts");
+		overlay.handleInput("G");
+		overlay.handleInput("j");
+		expect(overlay.reviewFilePath()).toBe("src/file-39.ts");
+		overlay.handleInput("g");
+		expect(overlay.reviewFilePath()).toBe("src/file-39.ts");
+		overlay.handleInput("g");
+		expect(overlay.reviewFilePath()).toBe("src/file-0.ts");
+		overlay.handleInput("\x0e"); // files -> diff
+		overlay.handleInput("a");
+		overlay.handleInput("line note");
+		overlay.handleInput(ENTER);
+		expect(overlay.getAnnotations()[0]?.scope).toBe("line");
+		overlay.handleInput("\x10"); // diff -> files
+		overlay.handleInput(" ");
+		overlay.handleInput("l"); // diff -> actions
+		overlay.handleInput(" ");
+		expect(completed).toEqual([]);
+	});
+
+	it("uses the exact injected keybinding manager instead of global context aliases", () => {
+		const files = [diffFile("one.ts", ONE_LINE_HUNK, []), diffFile("two.ts", ONE_LINE_HUNK, [])];
+		const overlay = new AnnotationOverlay(makeTui(), darkTheme!, KeybindingsManager.inMemory({
+			"tui.select.down": "ctrl+n",
+		}), files, "review", { onComplete: () => {} });
+		render(overlay);
+		overlay.handleInput("\x0e");
+		expect(overlay.reviewFilePath()).toBe("two.ts");
+	});
+
+	it("moves only the visual body on Ctrl-e/y and keeps annotation text literal", () => {
+		const text = Array.from({ length: 200 }, (_, index) => `line-${String(index).padStart(3, "0")}`).join("\n");
+		const completed: (TextReviewOverlayResult | undefined)[] = [];
+		let opened = 0;
+		const overlay = new AnnotationOverlay(makeTui(20), darkTheme!, getKeybindings() as KeybindingsManager,
+			{ text, label: "source" }, { onComplete: result => completed.push(result), onExternalEditor: () => { opened++; } });
+		overlay.focused = true;
+		expect(render(overlay)).toContain("line-000");
+		overlay.handleInput(CTRL_E);
+		expect(render(overlay)).not.toContain("line-000");
+		expect(opened).toBe(0); // a configured editor key cannot steal normal viewport motion
+		overlay.handleInput("\x19");
+		expect(render(overlay)).toContain("line-000");
+		overlay.handleInput(CTRL_E);
+		render(overlay);
+		overlay.handleInput("a");
+		const literal = "j/k h l gg G / note";
+		for (const char of literal) overlay.handleInput(char);
+		overlay.handleInput(ENTER);
+		expect(overlay.getTextAnnotations()).toEqual([{ scope: "line", line: 1, note: literal, quote: "line-000" }]);
+		overlay.handleInput("G");
+		expect(render(overlay)).toContain("line-199");
+		overlay.handleInput("g");
+		expect(render(overlay)).toContain("line-199");
+		overlay.handleInput("g");
+		expect(render(overlay)).toContain("line-000");
+		overlay.handleInput("\x04");
+		expect(render(overlay)).not.toContain("line-000");
+		overlay.handleInput(" ");
+		overlay.handleInput("l");
+		overlay.handleInput(" ");
+		expect(completed).toEqual([]);
+	});
+
+	it("shares existing-note chooser bounds and Space edits without completing the review", () => {
+		const completed: (TextReviewOverlayResult | undefined)[] = [];
+		const overlay = makeTextOverlay({ text: "source", label: "source" }, result => completed.push(result), 20);
+		for (const note of ["first", "middle", "last"]) {
+			overlay.handleInput("a");
+			overlay.handleInput(note);
+			overlay.handleInput(ENTER);
+		}
+		overlay.handleInput("e");
+		render(overlay);
+		overlay.handleInput("G");
+		overlay.handleInput("j");
+		overlay.handleInput(" ");
+		overlay.handleInput(CTRL_U);
+		overlay.handleInput("changed");
+		overlay.handleInput(ENTER);
+		expect(overlay.getTextAnnotations().map(annotation => annotation.note)).toEqual(["first", "middle", "changed"]);
+		expect(completed).toEqual([]);
+	});
+
+	it("types printable submit, delete, cancel and external-editor bindings literally", () => {
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.input.submit": ["j", "enter"],
+			"tui.editor.deleteCharBackward": "k",
+			"tui.select.cancel": "g",
+			"app.editor.external": "h",
+		}));
+		const completed: (TextReviewOverlayResult | undefined)[] = [];
+		let externalEdits = 0;
+		const overlay = new AnnotationOverlay(makeTui(), darkTheme!, getKeybindings() as KeybindingsManager,
+			{ text: "source", label: "source" }, {
+				onComplete: result => completed.push(result),
+				onExternalEditor: () => { externalEdits++; },
+			});
+		overlay.handleInput("a");
+		const literal = "j/k h l gg G / note";
+		for (const char of literal) overlay.handleInput(char);
+		overlay.handleInput("\x1b[107u");
+		expect(overlay.getTextAnnotations()).toEqual([]);
+		expect(externalEdits).toBe(0);
+		expect(completed).toEqual([]);
+		overlay.handleInput(ENTER);
+		expect(overlay.getTextAnnotations().map(annotation => annotation.note)).toEqual([`${literal}k`]);
+	});
+
+	it("keeps annotation word typing in one undo unit", () => {
+		setKeybindings(KeybindingsManager.inMemory({ "tui.editor.undo": "ctrl+z" }));
+		const overlay = makeTextOverlay({ text: "source", label: "source" });
+		overlay.handleInput("a");
+		for (const char of "discard") overlay.handleInput(char);
+		overlay.handleInput("\x1a");
+		for (const char of "kept") overlay.handleInput(char);
+		overlay.handleInput(ENTER);
+		expect(overlay.getTextAnnotations().map(annotation => annotation.note)).toEqual(["kept"]);
+	});
+
+	it("forwards a pending character-jump target before printable submit bindings", () => {
+		setKeybindings(KeybindingsManager.inMemory({ "tui.input.submit": ["j", "enter"] }));
+		const overlay = makeTextOverlay({ text: "source", label: "source" });
+		overlay.handleInput("a");
+		for (const char of "alpha j omega") overlay.handleInput(char);
+		overlay.handleInput("\x01"); // line start
+		overlay.handleInput("\x1d"); // jump forward
+		overlay.handleInput("\x1b[106u"); // jump target, not a submission or insertion
+		overlay.handleInput("X");
+		overlay.handleInput(ENTER);
+		expect(overlay.getTextAnnotations().map(annotation => annotation.note)).toEqual(["alpha Xj omega"]);
+	});
+
 	describe("native sheet", () => {
 		it("titles the sheet by the review and routes its footer buttons like the keys", () => {
 			let result: CodeReviewOverlayResult | undefined;
@@ -431,6 +595,7 @@ describe("AnnotationOverlay", () => {
 	});
 
 	it("opens the source editor on the global external-editor key and names that key", () => {
+		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "escape", "app.editor.external": "ctrl+g" }));
 		const opened: string[] = [];
 		const overlay = new AnnotationOverlay(
 			makeTui(),
@@ -446,8 +611,8 @@ describe("AnnotationOverlay", () => {
 			},
 		);
 		overlay.focused = true;
-		expect(render(overlay)).toContain(`${formatKeyHint("ctrl+e")} editor`);
-		overlay.handleInput(CTRL_E);
+		expect(render(overlay)).toContain(`${formatKeyHint("ctrl+g")} editor`);
+		overlay.handleInput("\x07");
 		expect(opened).toEqual(["source"]);
 		expect(overlay.reviewFilePath()).toBe("src/value.ts");
 	});
@@ -531,7 +696,7 @@ describe("AnnotationOverlay", () => {
 	});
 	it("selects the last and first rows of a diff that fits without scrolling", () => {
 		for (const [toEnd, toStart] of [
-			["G", "g"],
+			["G", "\x1b[H"],
 			[PAGE_DOWN, PAGE_UP],
 		]) {
 			const overlay = makeDiffOverlay(oneLineFiles);

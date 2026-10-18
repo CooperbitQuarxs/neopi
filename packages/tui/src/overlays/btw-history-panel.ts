@@ -1,6 +1,7 @@
 import {
 	type Component,
 	type Focusable,
+	extractPrintableText,
 	Input,
 	Markdown,
 	matchesKey,
@@ -477,6 +478,17 @@ export class BtwHistoryPanel implements Component, Focusable {
 	}
 	handleInput(data: string): void {
 		if (this.#composer) {
+			const printable = extractPrintableText(data);
+			if (printable !== undefined && !matchesKey(data, "space")) {
+				// Preserve the gesture's non-space release/reset path without
+				// letting remapped menu bindings consume ordinary draft text.
+				const input = this.#composer.input;
+				input.spaceHold.process(false);
+				input.insertText(printable);
+				this.#keys.reset();
+				this.#options.requestRender();
+				return;
+			}
 			// Literal input wins; an unconsumed context key leaves the field
 			// with its safe draft retained, rather than deleting it.
 			if (!this.#composer.input.handleInput(data)) {

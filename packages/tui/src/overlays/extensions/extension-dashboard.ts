@@ -25,27 +25,23 @@ import { Memo } from "../../native/memo";
 import type { DescribeContext, NativeNode, NativeScroll, NativeUiEvent } from "../../native/node";
 import { actionBar, actionButton } from "../../native/overlay";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent } from "../../native/picker";
-import { type KeyId, matchesKey } from "../../keys";
+import type { KeyId } from "../../keys";
 import { parseSgrMouse } from "../../mouse";
 import { SplitPane, type SplitPaneHit } from "../../components/layout/split-pane";
 import { Stack } from "../../components/layout/stack";
 import { ScrollView } from "../../components/scroll-view";
 import { TabBar, type Tab } from "../../components/tab-bar";
+import { MenuKeyReader, menuScrollBy, type MenuNavAction } from "../../components/menu-navigation";
 import { logger } from "@oh-my-pi/pi-utils";
 import { getTabBarTheme } from "../../chrome/shared";
 import { theme } from "../../theme";
-import {
-	matchesAppInterrupt,
-	matchesAppToolsExpand,
-	matchesSelectPageDown,
-	matchesSelectPageUp,
-} from "../../keybinding-matchers";
+import { matchesAppToolsExpand } from "../../keybinding-matchers";
 import { expandKeyHint } from "../../render/render-utils";
-import { formatKeyHint, formatKeyHints, formatTooltipKey } from "../../app-keybindings";
-import { boundKeys, editorKeys, interruptKey } from "../../chrome/keybinding-hints";
+import { formatTooltipKey } from "../../app-keybindings";
+import { boundKeys } from "../../chrome/keybinding-hints";
 import { bottomBorder, divider, PanelRows, row, topBorder } from "../../chrome/overlay-box";
-import { ExtensionList, type ExtensionListSwitch } from "./extension-list";
-import { InspectorPanel, type ToolRuntimeSource } from "./inspector-panel";
+import { ExtensionList, type ExtensionListNavigation, type ExtensionListSwitch } from "./extension-list";
+import { InspectorPanel, type InspectorPanelNavigation, type ToolRuntimeSource } from "./inspector-panel";
 import type { ExtensionInspectorSource } from "./inspector-model";
 import { snapshotToolRuntimeSource } from "./live-tool-session";
 import type { MCPRuntimeSource } from "./mcp-runtime";
@@ -85,11 +81,11 @@ export interface ExtensionDashboardOptions {
 	toolSource?: ToolRuntimeSource;
 }
 
-function extFooter(): string {
-	const upDown = editorKeys("tui.select.up", "tui.select.down");
-	const pages = editorKeys("tui.select.pageUp", "tui.select.pageDown");
-	const close = interruptKey();
-	return ` ${upDown}: navigate · ${formatKeyHint("space")}: toggle · ${formatKeyHints(["left", "right"])}: provider · ${pages}: inspector · ${expandKeyHint()}: expand · ${close}: close`;
+function extFooter(pane: "list" | "inspector", filtering: boolean): string {
+	if (filtering) return "Search extensions · Esc back to list · Tab focus";
+	return `j/k ${pane === "list" ? "select" : "scroll"} · h/l provider tabs · Tab focus · / search · ${
+		pane === "list" ? "Space toggle · " : ""
+	}${expandKeyHint()} expand · Esc close`;
 }
 
 /**
@@ -147,6 +143,14 @@ export function buildPickerScopes(tabs: ProviderTab[]): TspPickerScope[] {
 	});
 }
 
+export interface ExtensionDashboardNavigation {
+	provider: string;
+	pane: "list" | "inspector";
+	list: ExtensionListNavigation;
+	inspector: InspectorPanelNavigation;
+	inspectorViewport: unknown;
+}
+
 export class ExtensionDashboard implements Component {
 	#state!: DashboardState;
 	/** Bumped by every state change that reaches the screen; keys {@link #native}. */
@@ -159,6 +163,9 @@ export class ExtensionDashboard implements Component {
 	#tabBar!: TabBar;
 	#body!: TwoColumnBody;
 	#refreshToken = 0;
+	readonly #keys = new MenuKeyReader();
+	#pane: "list" | "inspector" = "list";
+	#pendingOperations = 0;
 	// Persistent fullscreen frame: top, tabs, divider, body, divider, footer,
 	// bottom. The fullscreen overlay paints from screen row 0, so mouse rows
 	// map 1:1 into the stack.
@@ -289,7 +296,7 @@ export class ExtensionDashboard implements Component {
 		this.#frameUpperDivider.setLines([divider(width)]);
 		this.#frameBody.setLines(this.#body.render(innerWidth).map(line => row(line, width)));
 		this.#frameLowerDivider.setLines([divider(width)]);
-		this.#frameFooter.setLines([row(theme.fg("dim", extFooter()), width)]);
+		this.#frameFooter.setLines([row(theme.fg("dim", extFooter(this.#pane, this.#mainList.filterFocused)), width)]);
 		this.#frameBottom.setLines([bottomBorder(width)]);
 		return this.#frame.render(width);
 	}
@@ -358,6 +365,7 @@ export class ExtensionDashboard implements Component {
 			return;
 		}
 		if (overList) {
+			this.#setPane("list");
 			this.#mainList.handleClick(paneLine);
 			this.#requestRender();
 		}
@@ -376,7 +384,7 @@ export class ExtensionDashboard implements Component {
 		this.#state.scrollOffset = 0;
 		this.#state.selected = this.#state.searchFiltered[0] ?? null;
 
-		this.#mainList.setExtensions(this.#state.searchFiltered);
+		this.#mainList.setExtensions(this.#state.tabFiltered);
 		this.#mainList.setMasterSwitchProvider(this.#getActiveProviderId());
 		this.#mainList.resetSelection();
 		if (this.#state.selected) {
@@ -430,7 +438,7 @@ export class ExtensionDashboard implements Component {
 		];
 		for (const name of names) {
 			try {
-				await this.#runtime.applyMcpToggle(name, false);
+				await this.#runOperation(this.#runtime.applyMcpToggle(name, false));
 			} catch (error) {
 				logger.warn("Failed to disconnect MCP server after provider disable", {
 					name,
@@ -472,7 +480,7 @@ export class ExtensionDashboard implements Component {
 	async #toggleMcpExtension(extensionId: string, enabled: boolean): Promise<void> {
 		const name = extensionId.slice("mcp:".length);
 		try {
-			await this.#runtime.persistMcpToggle(name, enabled, this.#writableMcpSourcePath(extensionId));
+			await this.#runOperation(this.#runtime.persistMcpToggle(name, enabled, this.#writableMcpSourcePath(extensionId)));
 		} catch (error) {
 			logger.warn("Failed to persist MCP toggle", { name, enabled, error: String(error) });
 			await this.#refreshFromState();
@@ -480,7 +488,7 @@ export class ExtensionDashboard implements Component {
 		}
 
 		try {
-			await this.#runtime.applyMcpToggle(name, enabled);
+			await this.#runOperation(this.#runtime.applyMcpToggle(name, enabled));
 		} catch (error) {
 			logger.warn("Failed to apply MCP toggle to live manager", { name, enabled, error: String(error) });
 		}
@@ -526,7 +534,7 @@ export class ExtensionDashboard implements Component {
 			}
 		}
 
-		this.#mainList.setExtensions(this.#state.searchFiltered);
+		this.#mainList.setExtensions(this.#state.tabFiltered);
 		this.#mainList.setMasterSwitchProvider(this.#getActiveProviderId());
 		if (this.#state.selected) {
 			this.#inspector.setExtension(this.#state.selected);
@@ -538,7 +546,7 @@ export class ExtensionDashboard implements Component {
 
 	#applyDisabledExtensions(disabledIds: string[]): void {
 		this.#state = applyDisabledExtensionsToState(this.#state, disabledIds, this.#runtime.getProviders());
-		this.#mainList.setExtensions(this.#state.searchFiltered);
+		this.#mainList.setExtensions(this.#state.tabFiltered);
 		if (this.#state.selected) {
 			this.#inspector.setExtension(this.#state.selected);
 		}
@@ -546,58 +554,108 @@ export class ExtensionDashboard implements Component {
 		this.#requestRender();
 	}
 
+	get blocksMenuHistory(): boolean {
+		return this.#pendingOperations > 0;
+	}
+
+	async #runOperation(operation: Promise<void>): Promise<void> {
+		this.#pendingOperations++;
+		try {
+			await operation;
+		} finally {
+			this.#pendingOperations--;
+			this.#requestRender();
+		}
+	}
+
+	navigationSnapshot(): ExtensionDashboardNavigation {
+		return {
+			provider: this.#state.tabs[this.#state.activeTabIndex]?.id ?? "all",
+			pane: this.#pane,
+			list: this.#mainList.navigationSnapshot(),
+			inspector: this.#inspector.navigationSnapshot(),
+			inspectorViewport: this.#body.inspectorNavigation(),
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as Partial<ExtensionDashboardNavigation>;
+		if (typeof state.list?.search.value === "string") this.#state.searchQuery = state.list.search.value;
+		if (typeof state.provider === "string") {
+			this.#tabBar.setActiveById(state.provider);
+			this.#selectProviderById(state.provider);
+		}
+		this.#mainList.restoreNavigation(state.list);
+		this.#syncSearch();
+		this.#inspector.restoreNavigation(state.inspector);
+		this.#body.restoreInspectorNavigation(state.inspectorViewport);
+		this.#pane = state.pane === "inspector" ? "inspector" : "list";
+		this.#mainList.setFocused(this.#pane === "list");
+		this.#inspectorScroll = undefined;
+		this.#keys.reset();
+		this.#requestRender();
+	}
+
+	#setPane(pane: "list" | "inspector"): void {
+		this.#pane = pane;
+		this.#mainList.setFocused(pane === "list");
+		this.#mainList.focusFilter(false);
+		this.#keys.reset();
+		this.#requestRender();
+	}
+
+	#cancel(): void {
+		if (this.#mainList.filterFocused) {
+			this.#mainList.focusFilter(false);
+			this.#keys.reset();
+			this.#requestRender();
+		} else this.#close();
+	}
+
+	#syncSearch(): void {
+		const query = this.#mainList.getSearchQuery();
+		if (query === this.#state.searchQuery) return;
+		this.#state.searchQuery = query;
+		this.#state.searchFiltered = applyFilter(this.#state.tabFiltered, query);
+	}
+
 	handleInput(data: string): void {
-		// SGR mouse reports (the fullscreen overlay enables tracking).
 		if (data.startsWith("\x1b[<")) {
 			this.#handleMouse(data);
 			return;
 		}
-
-		// Ctrl+C - close immediately
-		if (matchesKey(data, "ctrl+c")) {
-			this.#close();
+		if (this.#mainList.handleFilterInput(data)) {
+			this.#syncSearch();
+			this.#keys.reset();
+			this.#requestRender();
 			return;
 		}
-
-		// Escape - clear search first, then close
-		if (matchesAppInterrupt(data)) {
-			if (this.#state.searchQuery.length > 0) {
-				this.#clearSearch();
-				return;
-			}
-			this.#close();
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (action?.kind === "cancel") {
+			this.#cancel();
 			return;
 		}
-
 		if (matchesAppToolsExpand(data)) {
 			this.#inspector.toggleExpanded();
 			this.#requestRender();
 			return;
 		}
-
-		const page = matchesSelectPageUp(data) ? -1 : matchesSelectPageDown(data) ? 1 : 0;
-		if (page !== 0) {
-			this.#inspectorScroll = { by: page < 0 ? "page-up" : "page-down", n: (this.#inspectorScroll?.n ?? 0) + 1 };
+		if (!action) return;
+		if (action.kind === "horizontal") {
+			if (action.delta < 0) this.#tabBar.prevTab();
+			else this.#tabBar.nextTab();
+		} else if (action.kind === "context") this.#setPane(this.#pane === "list" ? "inspector" : "list");
+		else if (action.kind === "search") {
+			this.#setPane("list");
+			this.#mainList.focusFilter();
+		} else if (this.#pane === "list") this.#mainList.handleNavigation(action);
+		else if (this.#body.navigateInspector(action)) {
+			const by = menuScrollBy(action);
+			if (by) this.#inspectorScroll = { by, n: (this.#inspectorScroll?.n ?? 0) + 1 };
 		}
-		if (this.#body.pageInspector(page)) {
-			this.#requestRender();
-			return;
-		}
-
-		// Tab/Shift+Tab or ←/→: switch provider tabs (fires onTabChange).
-		if (this.#tabBar.handleInput(data)) {
-			return;
-		}
-
-		// All other input goes to the list.
-		this.#mainList.handleInput(data);
-
-		// Sync search query back to state.
-		const query = this.#mainList.getSearchQuery();
-		if (query !== this.#state.searchQuery) {
-			this.#state.searchQuery = query;
-			this.#state.searchFiltered = applyFilter(this.#state.tabFiltered, query);
-		}
+		this.#syncSearch();
 		this.#requestRender();
 	}
 
@@ -649,13 +707,14 @@ export class ExtensionDashboard implements Component {
 		return picker(
 			{
 				title: DASHBOARD_TITLE,
+				subtitle: extFooter(this.#pane, this.#mainList.filterFocused),
 				icon: "extension",
 				noun: "extensions",
 				size: "lg",
 				layout: "rows",
 				preview: "side",
 				...this.#mainList.nativeQuery(),
-				placeholder: "Search extensions…",
+				placeholder: "/ search extensions…",
 				scopes: buildPickerScopes(this.#state.tabs),
 				scope: activeTab?.id ?? "all",
 				columns: view.grouped ? undefined : KIND_COLUMNS,
@@ -666,7 +725,7 @@ export class ExtensionDashboard implements Component {
 				total: this.#state.tabFiltered.length,
 				empty: "No extensions found for this provider.",
 				actions: this.#pickerActions(this.#mainList.selectedSwitch()),
-				focus: "list",
+				focus: this.#pane === "inspector" ? "preview" : "list",
 			},
 			this.#inspectorPreview(),
 		);
@@ -683,19 +742,20 @@ export class ExtensionDashboard implements Component {
 	/** Action bar: Toggle (Space/Enter), Expand (the tools-expand key), Close (Esc). */
 	#pickerActions(selected: ExtensionListSwitch | undefined): TspPickerAction[] {
 		const expanded = this.#inspector.isExpanded();
+		const listFocused = this.#pane === "list" && !this.#mainList.filterFocused;
 		return [
-			pickerAction("toggle", "Toggle", "space", {
-				primary: true,
+			pickerAction("toggle", "Toggle", listFocused ? "space" : undefined, {
+				primary: listFocused,
 				on: selected?.on,
 				disabled: selected ? selected.blocked : "Select an extension",
 			}),
 			pickerAction("expand", expanded ? "Collapse" : "Expand", this.#expandKey(), { on: expanded }),
-			CLOSE_ACTION,
+			{ ...CLOSE_ACTION, label: this.#mainList.filterFocused ? "Back to list" : "Close" },
 		];
 	}
 
 	#expandKey(): KeyId {
-		return boundKeys("app.tools.expand", ["ctrl+o"])[0] ?? "ctrl+o";
+		return boundKeys("app.tools.expand", ["alt+e"])[0] ?? "alt+e";
 	}
 
 	#describePage(): NativeNode {
@@ -714,14 +774,14 @@ export class ExtensionDashboard implements Component {
 				node("icon", {
 					name: "x",
 					role: "omp.app.ibtn",
-					title: `Close  ${formatTooltipKey(boundKeys("app.interrupt", ["escape"])[0] ?? "escape")}`,
-					aria: "Close",
+					title: this.#mainList.filterFocused ? "Back to list  Esc" : `Close  ${formatTooltipKey("escape")}`,
+					aria: this.#mainList.filterFocused ? "Back to list" : "Close",
 					actions: { click: "close" },
 				}),
 			],
 			"head",
 		);
-		const search = text([span("Search: ", "muted"), query ? span(query, "accent") : span("type to filter", "dim")], {
+		const search = text([span(this.#mainList.filterFocused ? "Search: " : "/ search · ", "muted"), span(query, "accent")], {
 			truncate: "end",
 		});
 		const body = node(
@@ -739,24 +799,18 @@ export class ExtensionDashboard implements Component {
 		const expanded = this.#inspector.isExpanded();
 		const buttons: (NativeNode | null)[] = [
 			actionButton(selected?.on === false ? "Enable" : selected ? "Disable" : "Toggle", "toggle", {
-				keys: "space",
+				keys: this.#pane === "list" && !this.#mainList.filterFocused ? "space" : undefined,
 				tone: "accent",
 				title: selected?.blocked ?? (selected ? undefined : "Select an extension"),
 			}),
 			actionButton(expanded ? "Collapse" : "Expand", "expand", { keys: this.#expandKey() }),
 		];
-		if (query) buttons.push(actionButton("Clear search", "clear", { keys: "escape" }));
-		buttons.push(null, actionButton("Close", "close", { keys: "escape" }));
+		if (query) buttons.push(actionButton("Clear search", "clear"));
+		buttons.push(null, actionButton(this.#mainList.filterFocused ? "Back to list" : "Close", "close", { keys: "escape" }));
 		return col([head, this.#tabBar, keyed(search, "search"), body, actionBar(buttons)], { gap: "md", grow: 1 });
 	}
 
-	/**
-	 * Pointer input, each on the path of the key it stands for: a row click
-	 * selects (click on the selected row or double click toggles, like
-	 * Space/Enter), a scope switches provider (←/→), `toggle`/`expand` run
-	 * Space and the expand key, `clear` empties the search (first Esc) and
-	 * `close` closes. Provider tabs in the page route to the {@link TabBar}.
-	 */
+	/** Native controls use the same field-first cancel and explicit toggle/expand paths. */
 	handleNativeEvent(event: NativeUiEvent): void {
 		const pick = pickerEvent(event);
 		if (pick) {
@@ -777,12 +831,13 @@ export class ExtensionDashboard implements Component {
 
 	#handlePick(pick: PickerEvent): void {
 		if (pick.kind !== "action") {
+			this.#setPane("list");
 			if (this.#mainList.pickNative(pick.item, pick.kind === "activate")) this.#requestRender();
 			return;
 		}
 		switch (pick.act) {
 			case "close":
-				this.#close();
+				this.#cancel();
 				return;
 			case "clear":
 				this.#clearSearch();
@@ -824,8 +879,7 @@ export class ExtensionDashboard implements Component {
  */
 class TwoColumnBody implements Component {
 	#maxHeight: number;
-	#rightScroll = 0;
-	#rightTotal = 0;
+	readonly #rightView: ScrollView;
 
 	readonly #leftPane: ExtensionList;
 	readonly #rightPane: InspectorPanel;
@@ -836,22 +890,20 @@ class TwoColumnBody implements Component {
 		const inspectorWidth = Math.max(0, width - 2);
 		this.#rightPane.setHeight(numLines);
 		const rightLines = this.#rightPane.render(inspectorWidth);
-		this.#rightTotal = rightLines.length;
-		const maxScroll = Math.max(0, this.#rightTotal - numLines);
-		if (this.#rightScroll > maxScroll) this.#rightScroll = maxScroll;
-		const rightView = new ScrollView(rightLines, {
-			height: numLines,
-			scrollbar: "auto",
-			theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
-		});
-		rightView.setScrollOffset(this.#rightScroll);
-		return rightView.render(width);
+		this.#rightView.setHeight(numLines);
+		this.#rightView.setLines(rightLines);
+		return this.#rightView.render(width);
 	};
 
 	constructor(leftPane: ExtensionList, rightPane: InspectorPanel, maxHeight: number) {
 		this.#leftPane = leftPane;
 		this.#rightPane = rightPane;
 		this.#maxHeight = maxHeight;
+		this.#rightView = new ScrollView([], {
+			height: maxHeight,
+			scrollbar: "auto",
+			theme: { track: text => theme.fg("muted", text), thumb: text => theme.fg("accent", text) },
+		});
 		this.#split = new SplitPane({
 			left: this.#leftPane,
 			right: this.#renderInspectorPane,
@@ -864,6 +916,7 @@ class TwoColumnBody implements Component {
 	setMaxHeight(maxHeight: number): void {
 		this.#maxHeight = maxHeight;
 		this.#split.setHeight(maxHeight);
+		this.#rightView.setHeight(maxHeight);
 	}
 
 	/** Pane-local hit test from the last render. */
@@ -872,22 +925,24 @@ class TwoColumnBody implements Component {
 	}
 
 	resetInspectorScroll(): void {
-		this.#rightScroll = 0;
+		this.#rightView.scrollToTop();
 	}
 
-	/** Wheel notch over the inspector pane: scroll its content, clamped. */
+	inspectorNavigation(): unknown {
+		return this.#rightView.navigationSnapshot();
+	}
+
+	restoreInspectorNavigation(snapshot: unknown): void {
+		this.#rightView.restoreNavigation(snapshot);
+	}
+
+	/** Existing inspector viewport handles the same viewer intents as other surfaces. */
+	navigateInspector(action: MenuNavAction): boolean {
+		return this.#rightView.handleMenuAction(action);
+	}
+
 	scrollInspector(delta: -1 | 1): void {
-		const max = Math.max(0, this.#rightTotal - this.#maxHeight);
-		this.#rightScroll = Math.max(0, Math.min(this.#rightScroll + delta, max));
-	}
-
-	pageInspector(delta: -1 | 0 | 1): boolean {
-		if (delta === 0 || this.#rightTotal <= this.#maxHeight) return false;
-		const before = this.#rightScroll;
-		const step = Math.max(1, this.#maxHeight - 1);
-		const max = Math.max(0, this.#rightTotal - this.#maxHeight);
-		this.#rightScroll = Math.max(0, Math.min(this.#rightScroll + delta * step, max));
-		return this.#rightScroll !== before;
+		this.#rightView.scroll(delta);
 	}
 
 	render(width: number): readonly string[] {

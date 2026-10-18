@@ -318,3 +318,18 @@ test("hub transcript stays in the same overlay and restores its unsent editor dr
 		expect(setFocus).not.toHaveBeenCalled();
 	} finally { hub.dispose(); restored.dispose(); }
 });
+
+test("hub native close respects focused search before closing its root", () => {
+	const onDone = vi.fn();
+	const hub = createHub([agent("alpha", 1)], [], undefined, { onDone });
+	try {
+		hub.handleInput("/");
+		hub.handleInput("alpha");
+		expect(pickerProps(hub).actions?.find(action => action.id === "close")?.label).toBe("Back to list");
+		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+		expect(onDone).not.toHaveBeenCalled();
+		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "alpha", focused: false });
+		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+		expect(onDone).toHaveBeenCalledTimes(1);
+	} finally { hub.dispose(); }
+});

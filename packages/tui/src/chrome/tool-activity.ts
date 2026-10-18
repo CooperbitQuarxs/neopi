@@ -29,7 +29,7 @@ export class ToolActivityContainer extends Container implements ToolActivityComp
 	}
 
 	/**
-	 * Forward Ctrl+O expansion to wrapped children. The transcript's expansion
+	 * Forward the expansion action to wrapped children. The transcript's expansion
 	 * traversal only visits top-level children, so the wrapper must proxy or
 	 * wrapped renderers would freeze at their insertion-time expansion state.
 	 */

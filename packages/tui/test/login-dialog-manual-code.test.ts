@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import { getKeybindings, setKeybindings, type TUI } from "@oh-my-pi/pi-tui";
 import { LoginDialogComponent } from "@oh-my-pi/pi-tui/overlays/login-dialog";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { KeybindingsManager } from "../src/app-keybindings";
 
 /** Minimal TUI stub — the dialog only calls requestRender/setFocus. */
 function makeDialog(): LoginDialogComponent {
@@ -69,5 +70,132 @@ describe("LoginDialogComponent manual code input", () => {
 		dialog.pasteText(url);
 		dialog.handleInput("\r");
 		expect(await second).toBe(url);
+	});
+
+	it("keeps printable menu bindings and Kitty text literal until explicit CR or LF", async () => {
+		const previous = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.select.cancel": "j",
+			"tui.input.submit": "s",
+		}));
+		try {
+			for (const enter of ["\r", "\n"]) {
+				const dialog = makeDialog();
+				const outcome = dialog.showManualInput("Paste the code:")
+					.catch((error: unknown) => error);
+				const value = "j/k h l gg G /code s";
+				for (const char of value) dialog.handleInput(char);
+				dialog.handleInput("\x1b[106u");
+				expect(dialog.signal.aborted).toBe(false);
+				dialog.handleInput(enter);
+				expect(await outcome).toBe(`${value}j`);
+			}
+		} finally {
+			setKeybindings(previous);
+		}
+	});
+
+	it("retains explicit Escape when the configured cancel binding is printable", async () => {
+		const previous = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "j" }));
+		try {
+			const dialog = makeDialog();
+			const pending = dialog.showManualInput("Paste the code:");
+			const rejected = expect(pending).rejects.toThrow("Login cancelled");
+			dialog.handleInput("j");
+			expect(dialog.signal.aborted).toBe(false);
+			dialog.handleInput("\x1b");
+			await rejected;
+			expect(dialog.signal.aborted).toBe(true);
+		} finally {
+			setKeybindings(previous);
+		}
+	});
+
+	it("keeps typed words in one undo unit", async () => {
+		const previous = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory({ "tui.editor.undo": "ctrl+z" }));
+		try {
+			const dialog = makeDialog();
+			const pending = dialog.showManualInput("Paste the code:");
+			for (const char of "draft") dialog.handleInput(char);
+			dialog.handleInput("\x1a");
+			dialog.handleInput("\r");
+			expect(await pending).toBe("");
+		} finally {
+			setKeybindings(previous);
+		}
+	});
+
+	it("preserves native secret submission and starts the next prompt with fresh undo state", async () => {
+		const previous = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.select.cancel": "j",
+			"tui.input.submit": "s",
+			"tui.editor.undo": "ctrl+z",
+		}));
+		try {
+			const dialog = makeDialog();
+			const first = dialog.showPrompt({ message: "Secret:", secret: true })
+				.catch((error: unknown) => error);
+			const secret = "j-secret-s";
+			for (const char of secret) dialog.handleInput(char);
+			expect(dialog.signal.aborted).toBe(false);
+			expect(dialog.isSecretPrompt()).toBe(true);
+			dialog.handleNativeEvent({ type: "action", key: "actions/submit", act: "submit", mods: [] });
+			expect(await first).toBe(secret);
+
+			const second = dialog.showPrompt({ message: "Next code:" });
+			expect(dialog.isSecretPrompt()).toBe(false);
+			expect(dialog.render(80).join("\n")).not.toContain(secret);
+			dialog.handleInput("\x1a");
+			dialog.handleInput("\r");
+			expect(await second).toBe("");
+		} finally {
+			setKeybindings(previous);
+		}
+	});
+
+	it("retains configured nonprintable submit and cancel bindings", async () => {
+		const previous = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.select.cancel": "alt+q",
+			"tui.input.submit": "alt+s",
+		}));
+		try {
+			const first = makeDialog();
+			const submitted = first.showManualInput("Paste the code:");
+			first.handleInput("code");
+			first.handleInput("\x1bs");
+			expect(await submitted).toBe("code");
+
+			const second = makeDialog();
+			const cancelled = second.showManualInput("Paste the code:");
+			const rejected = expect(cancelled).rejects.toThrow("Login cancelled");
+			second.handleInput("\x1bq");
+			await rejected;
+			expect(second.signal.aborted).toBe(true);
+		} finally {
+			setKeybindings(previous);
+		}
+	});
+
+	it("lets the provider callback abort a pending prompt after literal remapped input", async () => {
+		const previous = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "j" }));
+		try {
+			const dialog = makeDialog();
+			const settled = new AbortController();
+			const error = new Error("native callback received");
+			const pending = dialog.showManualInput("Paste the code:", settled.signal);
+			const rejected = expect(pending).rejects.toBe(error);
+			dialog.handleInput("j");
+			expect(dialog.signal.aborted).toBe(false);
+			settled.abort(error);
+			await rejected;
+			expect(dialog.signal.aborted).toBe(false);
+		} finally {
+			setKeybindings(previous);
+		}
 	});
 });

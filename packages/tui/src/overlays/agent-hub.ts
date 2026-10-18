@@ -91,20 +91,7 @@ import { node, span, stableKey, text } from "../native/describe";
 import { type DescribeContext, leafKey, type NativeChild, type NativeNode, type NativeUiEvent } from "../native/node";
 import { hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { CLOSE_ACTION, picker, pickerQuery } from "../native/picker";
-import { Input } from "../components/input";
 import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuNavAction, type MenuSearchState, type MenuViewportPosition } from "../components/menu-navigation";
-
-/** A chrome-less search field: the overlay draws its own prompt. */
-export function filterInput(): Input {
-	const input = new Input();
-	input.prompt = "";
-	return input;
-}
-
-/** The field's text with its caret drawn, sized to the value (no trailing padding). */
-export function filterText(input: Input): string {
-	return input.render(visibleWidth(input.getValue()) + 1)[0] ?? "";
-}
 
 /** Two-pane mode needs a useful roster and a readable inspector. */
 const SPLIT_MIN_WIDTH = 96;
@@ -941,7 +928,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				}
 				return;
 			case "close":
-				this.#onDone();
+				this.handleInput("\x1b");
 				return;
 			case "filter":
 				if (activity) this.#activitySearch.focused = true;
@@ -1029,7 +1016,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			{ id: "kill", label: "Kill", keys: ["x"], danger: true, disabled: readOnly ?? (selected ? undefined : true) },
 			{ id: "view", label: "By parent", keys: ["t"], on: this.#viewMode === "tree" },
 			{ id: "filter", label: "Filter", keys: ["/"] },
-			CLOSE_ACTION,
+			{ ...CLOSE_ACTION, label: this.#agentFilter.focused ? "Back to list" : this.#narrowDetailsOpen ? "Back to roster" : "Close" },
 		];
 		return {
 			noun: "agents",
@@ -1221,7 +1208,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				{ id: "follow", label: "Follow", keys: ["space"], on: this.#activityFollow },
 				{ id: "agents", label: sanitizeDisplaySingleLine(scope), keys: ["s"] },
 				{ id: "filter", label: "Search", keys: ["/"] },
-				CLOSE_ACTION,
+				{ ...CLOSE_ACTION, label: this.#activitySearch.focused ? "Back to list" : "Close" },
 			],
 			focus: "list",
 		};

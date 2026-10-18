@@ -1,6 +1,6 @@
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
 import { MenuSelection } from "./menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuViewportPosition } from "./menu-navigation";
+import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuNavAction, type MenuViewportPosition } from "./menu-navigation";
 import { getKeybindings } from "../keybindings";
 import { type MouseRoutable, routeSelectListMouse, type SgrMouseEvent } from "../mouse";
 import { col, node, span } from "../native/describe";
@@ -106,6 +106,8 @@ export interface SelectListLayoutOptions {
 	overflowSearch?: boolean;
 	/** Search activation policy. `overflowSearch` remains authoritative when this is omitted. */
 	search?: "overflow" | "always" | "never";
+	/** Treat Space as Enter. Disable for destructive or credential choices. Defaults to true. */
+	activateOnSpace?: boolean;
 	/** Domain-specific filtering/ranking. Selection is retained by item value when possible. */
 	filterItems?: (items: readonly SelectItem[], query: string) => readonly SelectItem[];
 	/** Custom rich-row renderer. Every returned line is mouse-hit-tested as the same item. */
@@ -555,6 +557,12 @@ export class SelectList implements Component, MouseRoutable {
 		}
 		const action = this.#keys.read(rawData);
 		if (action === undefined || action === "pending") return;
+		this.handleNavigation(action);
+	}
+
+	/** Apply a host-decoded normal action; focused fields still receive raw input first. */
+	handleNavigation(action: MenuNavAction): void {
+		this.#keys.reset();
 		switch (action.kind) {
 			case "search":
 				if (this.#canEditSearch()) this.#search.focused = true;
@@ -562,9 +570,11 @@ export class SelectList implements Component, MouseRoutable {
 			case "cancel":
 				if (!this.#selection.cancelConfirmation()) this.onCancel?.();
 				return;
-			case "confirm":
 			case "toggle":
-				// A plain list has no checkbox, so Space is the soft Enter.
+				if (this.layout.activateOnSpace === false) return;
+				this.#activateSelected();
+				return;
+			case "confirm":
 				this.#activateSelected();
 				return;
 			case "horizontal":

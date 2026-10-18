@@ -1,4 +1,5 @@
 import { getKeybindings } from "../keybindings";
+import { extractPrintableText, matchesKey } from "../keys";
 import type { MouseRoutable, SgrMouseEvent } from "../mouse";
 import { col, node, span } from "../native/describe";
 import { plainText } from "../native/spans";
@@ -250,6 +251,21 @@ export class FormField implements Component, Focusable, MouseRoutable {
 	}
 
 	handleInput(data: string): void {
+		if (this.control instanceof Input) {
+			const printable = extractPrintableText(data);
+			if (printable !== undefined) {
+				this.control.insertText(printable);
+				return;
+			}
+			if (matchesKey(data, "escape")) {
+				this.control.onEscape?.();
+				return;
+			}
+			if (matchesKey(data, "enter") || data === "\n") {
+				this.control.onSubmit?.(this.control.getValue());
+				return;
+			}
+		}
 		this.control.handleInput(data);
 	}
 
@@ -651,8 +667,14 @@ export class Form implements Component, Focusable, MouseRoutable {
 	}
 
 	handleInput(data: string): void {
-		const isCancel = this.#options.isCancel?.(data) ?? getKeybindings().matches(data, "tui.select.cancel");
 		const field = this.#fields[this.#activeIndex];
+		if (field?.filterFocused && extractPrintableText(data) !== undefined) {
+			field.handleInput(data);
+			return;
+		}
+		const isCancel =
+			(field?.filterFocused && matchesKey(data, "escape")) ||
+			(this.#options.isCancel?.(data) ?? getKeybindings().matches(data, "tui.select.cancel"));
 		if (isCancel && field instanceof SelectFormField && field.filterFocused) {
 			field.handleInput(data);
 			return;

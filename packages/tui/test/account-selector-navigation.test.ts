@@ -2,6 +2,9 @@ import { beforeAll, expect, it } from "bun:test";
 import { initTheme } from "../src/theme/theme";
 import { LogoutAccountSelectorComponent } from "../src/overlays/logout-account-selector";
 import { ResetUsageSelectorComponent, type ResetUsageAccount } from "../src/overlays/reset-usage-selector";
+import { OAuthSelectorComponent } from "../src/overlays/oauth-selector";
+import type { DescribeContext } from "../src/native/node";
+import { PICKER_KEY } from "../src/native/picker";
 
 beforeAll(async () => { await initTheme(); });
 
@@ -43,4 +46,24 @@ it("reset requires explicit double Enter even after history restoration", () => 
 	expect(picked).toEqual([]);
 	restored.handleInput("\r");
 	expect(picked[0]?.target.credentialId).toBe(19);
+});
+
+const nativePickerContext: DescribeContext = { cols: 100, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
+
+it.each([
+	["provider", (cancel: () => void) => new OAuthSelectorComponent("login", { credentials: { has: () => false }, keys: { source: () => undefined } as never }, () => {}, cancel)],
+	["logout", (cancel: () => void) => new LogoutAccountSelectorComponent("Test", [{ credentialId: 1, provider: "test", label: "account", detail: "", type: "oauth", active: false }], () => {}, cancel)],
+	["reset", (cancel: () => void) => new ResetUsageSelectorComponent([{ label: "account", provider: "test", providerLabel: "Test", availableCount: 1, redeemableCount: 1, target: { provider: "test", credentialId: 1 }, active: false }], () => {}, cancel)],
+] as const)("%s native close first leaves its search field, then closes", (_name, make) => {
+	let closed = 0;
+	const selector = make(() => { closed++; });
+	selector.handleInput("/");
+	selector.handleInput("hjkl/ g");
+	expect(JSON.stringify(selector.describe(nativePickerContext))).toContain("Back to list");
+	const close = { type: "action", key: PICKER_KEY, act: "close", mods: [] } as const;
+	selector.handleNativeEvent(close);
+	expect(closed).toBe(0);
+	expect(selector.navigationSnapshot()).toMatchObject({ search: { value: "hjkl/ g", focused: false } });
+	selector.handleNativeEvent(close);
+	expect(closed).toBe(1);
 });

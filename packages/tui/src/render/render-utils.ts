@@ -351,10 +351,10 @@ export function previewWindowRows(): number {
  * of the command stays visible (it is the live edge while args stream) behind
  * an "… N earlier lines" marker on top. The same window applies while
  * streaming and after completion so the block never jumps; only `expanded`
- * (ctrl+o) uncaps it.
+ * (via the configured expansion action) uncaps it.
  *
  * `prefix` (raw, e.g. a dim tree gutter) is prepended to the marker line so
- * nested previews stay aligned. `expandHint: false` drops the "ctrl+o: Expand"
+ * nested previews stay aligned. `expandHint: false` drops the expansion-hint
  * suffix for callers that cap even inside the expanded view (task recent
  * output), where the hint would point the wrong way.
  */

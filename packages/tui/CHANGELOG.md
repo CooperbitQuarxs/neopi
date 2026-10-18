@@ -7,33 +7,19 @@
 - Added `/statusline` to toggle, reorder, and move widgets between groups, including provider usage bars, with live composer previews and save or discard ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
 - Added a movable `context_bar` status-line widget that fills the remaining width in every composer ([#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
 - Added per-provider usage-bar status-line widgets (`usage:<provider>:<window>[:<tier>]`) showing each reported quota window's percent and age ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
-- Lists open in normal navigation: `j`/`k` move, `gg`/`G` jump to first/last, `Ctrl-d`/`Ctrl-u` move half a page, `Ctrl-e`/`Ctrl-y` scroll the view without moving the selection, and `/` focuses the search field, where every key types literally until Esc returns to the list ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Search setup and login providers with `/`, page or jump through accounts, and scroll the view without moving the selected provider ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Menu history preserves focused filter text and caret position, and `Ctrl-N`/`Ctrl-P` switch menu contexts alongside Tab/Shift-Tab ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Logout and usage-reset pickers support search, paging, and history without replaying destructive confirmations ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Small settings and account pickers preserve selection, search, and scroll position when reopened ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Menu search fields share literal editing, consistent muted hints, and restorable caret/focus state across custom pickers ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Model lists use `/` search, Vim paging and jumps, and independent viewport scrolling while preserving search and selection through menu history ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
 - `/model` puts effort rules before providers and adds section-local `/` search, Vim paging, and draft-preserving nested menu history across Roles and model panes ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
 - Yanking a role root with fallbacks copies its primary model and complete ordered fallback chain, including effort settings ([#247](https://github.com/PsychedelicShayna/neopi/issues/247)).
 - Model menus retain partial-row viewport positions through history and show unfiltered provider counts and navigation outside All models ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
-- Settings and plugin configuration support explicit search, shared navigation, and nested menu history that preserves safe unsaved editor drafts ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Shared tabs and transcript viewers support consistent Vim navigation and restore their context and viewport without moving selected content ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Persona configuration preserves safe text drafts and nested page state while using explicit search and consistent menu navigation ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Debug logs use `/` for literal search and `o` for older entries, and preserve selection, expansion, and the viewport separately in menu history ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Navigate Git panes with `h`/`l`, search paths with `/`, and retain viewports and unsent commit drafts in menu history ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Page, search, and switch process-monitor views with consistent menu keys; open logs with `o` ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Use Vim scrolling and menu-history viewport restoration in raw provider streams ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Use shared viewer motions in experiment dashboards and the hotkeys reference ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Keep numeric text literal in focused setup filters, and return nested menu pages to their parent with Escape ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Chain configuration gains explicit search, consistent paging, and nested history that preserves draft prompts, tools, and parent views ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- `Ctrl-e`/`Ctrl-y` scroll one visual line through wrapped menu rows, and history retains partial-row viewport positions ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Page and search background jobs, switch to their output with `h`/`l`, and retain the selected job and both viewports in menu history ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Session-information and command-report viewers support shared scrolling and restore their reading positions through menu history ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Agent transcripts use explicit message-field focus and preserve unsent drafts when returning to the hub ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Navigate side-question history with Vim motions and `/` search while retaining safe follow-up drafts and reading positions ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- Prompt-history search preserves its query, caret, selected entry, and viewport, with normal list navigation after leaving the search field ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
-- The directory chooser keeps path editing literal and supports paging and safe history restoration after Escape returns to its list ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Native model-menu close controls name and follow the same field-first and parent-back steps as Escape ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
+- Model name and pattern fields keep printable shortcut aliases literal while physical Enter/Escape retain their staged-field behavior and ordinary typing undo ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
+- Menus, pickers, setup choices, configuration pages, and dashboards share normal navigation: `j`/`k`, `gg`/`G`, half-page and page motions, and contextual `h`/`l`. Tab/Shift-Tab and Ctrl-N/Ctrl-P switch contexts; existing arrows, Home/End, Enter, and Escape remain available ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- `/` explicitly focuses existing search fields. Focused search, path, prompt, review, and reply fields keep printable shortcut aliases literal without changing typing undo, character-jump editing, pasted attachments, or BTW's Space-hold dictation gestures ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Menu history restores selection, query/caret, pane/tab context, viewports, and safe unsent drafts across account, session, agent, configuration, Git, log, usage, extension, and transcript views. Nested pages are visits; tabs and reply focus are not. Restoring never repeats a copy, rewind, send, generation, save, or destructive confirmation ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Configuration menus retain parent filters and safe nested editor drafts. Root list/preview panes have independent focus and reading positions; Enter opens details, and nested Escape returns to the parent. Status-line configuration preserves its synchronous draft, template, apply, and leave behavior while sharing the navigation helpers ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- ANSI `Ctrl-e`/`Ctrl-y` scroll one visual line through wrapped rows without moving selection; history preserves partial-row positions. Pure viewers share line, half-page, page, and boundary motions. Native protocol limits and the oversized Ask-preview paging exception are documented in [Menu navigation](../../docs/keybindings.md#menu-navigation) ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Space toggles existing checkbox/radio controls or confirms nondestructive single-choice rows; it never approves prompts, authenticates, uninstalls plugins, or confirms destructive actions. Filter spaces stay literal, and native Close leaves a focused field before dismissing its menu ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Prompt-history search and the move-path chooser retain their search-first focus. Blocking approvals, credential handshakes, and one-shot custom dialogs are not replayable history destinations; editor-slot prompts keep their lifetime, and menu departure is blocked during real writes rather than read-only refreshes ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Tree filter modes use Tab/Shift-Tab instead of Ctrl-O, debug logs use `o` for older entries, and extension expansion uses Alt-E, leaving Ctrl-O to menu history. Tree labels, provider setup filters, and embedded model browsers follow the same literal-field and normal-navigation rules ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Added per-widget text templates for usage bars (`{label}`, `{percent}`, `{age}`), editable in `/statusline` with Tab ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 
 ### Changed
@@ -43,9 +29,14 @@
 
 ### Fixed
 
+- Persona, chain, and advisor previews expose their final content line at G/End and page by readable rows rather than counting the overflow status row as content ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Keep the last usage-bar percentages and their age when a broker-backed refresh returns no report.
 - Keep transcript history visible with the side panel docked after compaction, resume, or a layout rebuild, and preserve it as the live conversation grows or the chat width changes.
 - Volatile speech updates reuse a cached draft and cursor offset, and apply a known edit region, instead of rejoining and diffing the whole buffer on every partial.
+
+### Removed
+
+- Removed the legacy exported letter-to-arrow picker translator now that model menus and all other consumers use shared navigation ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
 
 ## [18.10.3] - 2026-10-12
 

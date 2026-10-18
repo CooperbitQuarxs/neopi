@@ -76,19 +76,25 @@ Menus, pickers, and overlays open in normal navigation; arrows, PageUp/PageDown,
 | `Ctrl+D` / `Ctrl+U` (`tui.select.halfPageDown` / `halfPageUp`) | Half page down / up; PageDown / PageUp move a full page |
 | `gg` / `G` (also `tui.select.first` / `last`: Home / End) | First / last row |
 | `Ctrl+E` / `Ctrl+Y` (`tui.select.scrollDown` / `scrollUp`) | Scroll the view one line; the selection stays put until the next motion |
-| `Space` (`tui.select.toggle`) | Toggle a checkbox, or confirm a nondestructive single-choice row; destructive and credential actions require Enter |
-| `Tab` / `Shift+Tab`, also `Ctrl+N` / `Ctrl+P` (`tui.select.nextContext` / `prevContext`) | Next / previous tab, section, or focus region; the session picker's existing Ctrl+P path toggle takes precedence |
+| `Space` (`tui.select.toggle`) | Toggle a checkbox or existing radio control, or confirm a nondestructive single-choice row; destructive and credential actions require Enter |
+| `Tab` / `Shift+Tab`, also `Ctrl+N` / `Ctrl+P` (`tui.select.nextContext` / `prevContext`) | Next / previous tab, section, or focus region; an existing surface-specific binding takes precedence |
 | `/` (`tui.select.search`) | Focus the search or filter field |
 
 While a search, rename, or form field has focus, every printable key (including `h`, `j`, `k`, `l`, `g`, `/`, Space) types literally and the field keeps its editing keys. Esc returns focus to the list without closing the menu. Esc on a nested page returns to its parent; Esc at the root closes.
 
 The prompt-history search (`Ctrl+R`) and move-path chooser are search-first exceptions: their text field opens focused. Esc returns to their list before closing. Pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom.
 
-Nested configuration pages are history visits too. Back/forward inside an open menu restores its page without closing it. Tabs, sections, and panes are contexts saved in the current snapshot, not extra visits. Blocking approvals and authentication challenges are not history destinations and cannot be dismissed or replayed by history. A focused prompt reports “Finish or cancel the prompt first”; a generic extension custom view reports “Close this view first (Esc)” because its one-shot result cannot be replayed. Two-press destructive confirmations are discarded on departure, never revived.
+Advisor, chain, and persona roots use `h`/`l` to switch between their list and preview; the preview accepts viewer motions, and Enter on the list opens a detail page. Existing radio-with-editor rows keep Space activation and Enter editing. Inside nested configuration pages, `h` returns to the parent and `l` opens a navigable child, never an action.
+
+Ask choices use ordinary list paging unless the selected answer's preview is taller than the viewport. For that oversized preview, PageUp/PageDown keep reading its content; row and half-page motions still change the choice, and `Ctrl+E`/`Ctrl+Y` always scroll the viewport without selecting or submitting an answer.
+
+Nested configuration pages are history visits too. Back/forward inside an open menu restores its page without closing it. Tabs, sections, panes, and reply-field focus are contexts saved in the current snapshot, not extra visits. Blocking approvals and authentication challenges are not history destinations and cannot be dismissed or replayed by history. A focused prompt reports “Finish or cancel the prompt first”; a custom view reports “Close this view first (Esc)” because its one-shot result cannot be replayed. Two-press destructive confirmations are discarded on departure, never revived.
+
+One-shot custom dialogs are excluded from history even when built in: the `/move` directory chooser, annotation source/code/text review dialogs, plan-save path chooser, experiment dashboard, and interactive shell. Their internal controls still follow the menu or literal-text contract; history never replays a filesystem action, review result, save, or live shell command. Plan approval is likewise a blocking decision, not a history destination.
 
 Native TSP lists and pickers retain selection, filtering, and history. Their terminal consumer owns scrolling and the protocol does not expose a viewport position, so `Ctrl+E`/`Ctrl+Y` cannot scroll their native viewport independently; they never move the selection as a substitute. Native viewers forward line, page, and start/end requests, but half-page and absolute viewport restoration are unsupported. Native Git diffs also cannot restore a hunk cursor/range. ANSI menus and viewers support the full navigation and viewport contract.
 
-`Ctrl+O` and `Ctrl+I` walk a timeline of visited views: every opened menu and every return to the conversation is an entry. Esc out of `/statusline`, press `Ctrl+O`, and `/statusline` reopens where you left it; `Ctrl+I` returns to the conversation. Opening a menu from an older position adds it at the newest end without dropping the newer entries, and `Ctrl+O` from that new menu first returns to where you opened it: after `Ctrl+O` from `/statusline` back to the conversation and opening `/model`, `Ctrl+O` returns to the conversation, `Ctrl+I` to `/statusline`, and `Ctrl+I` again to `/model`.
+`Ctrl+O` and `Ctrl+I` walk a timeline of visited views: each reopenable menu and return to the conversation is an entry. Esc out of `/statusline`, press `Ctrl+O`, and `/statusline` reopens where you left it; `Ctrl+I` returns to the conversation. Opening a menu from an older position adds it at the newest end without dropping the newer entries, and `Ctrl+O` from that new menu first returns to where you opened it: after `Ctrl+O` from `/statusline` back to the conversation and opening `/model`, `Ctrl+O` returns to the conversation, `Ctrl+I` to `/statusline`, and `Ctrl+I` again to `/model`.
 
 ## Recover a cleared prompt
 

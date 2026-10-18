@@ -504,7 +504,7 @@ describe("selector navigation keybindings", () => {
 		expect(list.getSelectedExtension()?.id).toBe("tool-a");
 	});
 
-	it("appends bare j/k to the extension search filter instead of navigating", () => {
+	it("types literal j/k after explicitly focusing extension search", () => {
 		setKeybindings(TEST_KEYBINDINGS);
 		const list = new ExtensionList([
 			createExtension("jira", "Jira"),
@@ -512,6 +512,7 @@ describe("selector navigation keybindings", () => {
 			createExtension("apple", "Apple"),
 		]);
 
+		list.handleInput("/");
 		for (const ch of "jira") list.handleInput(ch);
 
 		expect(list.getSearchQuery()).toBe("jira");
@@ -548,6 +549,7 @@ describe("selector navigation keybindings", () => {
 		const HOME = "\x1b[H";
 		const END = "\x1b[F";
 
+		selector.handleInput("\x1b"); // Leave the initially focused search field.
 		selector.handleInput(PAGE_DOWN); // index 0 -> 10  (p4)
 		selector.handleInput("\n");
 		selector.handleInput(END); // -> 14, last  (p0)

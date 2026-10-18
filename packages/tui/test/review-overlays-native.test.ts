@@ -63,6 +63,25 @@ describe("review overlays under a native surface", () => {
 		setKeybindings(previousKeybindings);
 	});
 
+	it("plan review: forwards native viewer requests without faking unsupported half pages", () => {
+		const overlay = new PlanReviewOverlay(PLAN, { options: OPTIONS }, { onPick: vi.fn(), onCancel: vi.fn() });
+		overlay.describe();
+		overlay.handleInput("h"); // actions -> body
+		overlay.handleInput("\x05");
+		expect(findKeyed(overlay.describe(), "body")?.node.scroll).toEqual({ by: "line-down", n: 1 });
+		overlay.handleInput("\x04");
+		overlay.handleInput("\x15");
+		expect(findKeyed(overlay.describe(), "body")?.node.scroll).toEqual({ by: "line-down", n: 1 });
+		overlay.handleInput("\x1b[6~");
+		expect(findKeyed(overlay.describe(), "body")?.node.scroll).toEqual({ by: "page-down", n: 2 });
+		overlay.handleInput("G");
+		expect(findKeyed(overlay.describe(), "body")?.node.scroll).toEqual({ by: "end", n: 3 });
+		overlay.handleInput("g");
+		expect(findKeyed(overlay.describe(), "body")?.node.scroll).toEqual({ by: "end", n: 3 });
+		overlay.handleInput("g");
+		expect(findKeyed(overlay.describe(), "body")?.node.scroll).toEqual({ by: "start", n: 4 });
+	});
+
 	it("plan review: a Contents click retargets the section that `a` annotates", () => {
 		const onFeedbackChange = vi.fn();
 		const overlay = new PlanReviewOverlay(
@@ -192,9 +211,23 @@ describe("review overlays under a native surface", () => {
 		overlay.handleInput("\t");
 		overlay.handleInput("\x1b[6~");
 		expect(list(overlay.describe(), "lines").selected).toBe("l2");
+		overlay.handleInput("\x05");
+		let scrolled = overlay.describe();
+		expect(list(scrolled, "lines").selected).toBe("l2");
+		expect(findKeyed(scrolled, "lines")?.node.scroll).toEqual({ by: "line-down", n: 1 });
+		overlay.handleInput("\x19");
+		scrolled = overlay.describe();
+		expect(list(scrolled, "lines").selected).toBe("l2");
+		expect(findKeyed(scrolled, "lines")?.node.scroll).toEqual({ by: "line-up", n: 2 });
+		overlay.handleInput("\x04");
+		expect(list(overlay.describe(), "lines").selected).toBe("l3");
+		overlay.handleInput("\x15");
+		expect(list(overlay.describe(), "lines").selected).toBe("l2");
 		overlay.handleInput("\x1b[5~");
 		expect(list(overlay.describe(), "lines").selected).toBe("l0");
 		overlay.handleInput("G");
+		expect(list(overlay.describe(), "lines").selected).toBe("l5");
+		overlay.handleInput("g");
 		expect(list(overlay.describe(), "lines").selected).toBe("l5");
 		overlay.handleInput("g");
 		expect(list(overlay.describe(), "lines").selected).toBe("l0");

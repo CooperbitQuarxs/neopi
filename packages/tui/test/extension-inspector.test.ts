@@ -912,7 +912,7 @@ export default function cloakTool() {}
 });
 
 describe("inspector expand", () => {
-	test("truncated command templates advertise ctrl+o and expand in place", () => {
+	test("truncated command templates advertise the configured expand key and expand in place", () => {
 		const longBody = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n");
 		const panel = new InspectorPanel();
 		panel.setExtension({

@@ -1,10 +1,13 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { TspPrefsProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
-import type { PluginSettingsHost } from "@oh-my-pi/pi-tui/overlays/plugin-settings";
+import type { InstalledPlugin, PluginSettingsHost } from "@oh-my-pi/pi-tui/overlays/plugin-settings";
 import type { SettingsDisplayEntry, SettingsHost } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
+import { getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import type { SelectListNavigationState } from "../src/components/select-list";
 
 const ENTER = "\n";
 const DOWN = "\x1b[B";
@@ -70,29 +73,38 @@ const ENTRIES: SettingsDisplayEntry[] = [
 	},
 ];
 
+const PLUGIN: InstalledPlugin = {
+	name: "hjkl", version: "1", enabled: true, enabledFeatures: null,
+	manifest: {
+		settings: {
+			message: { type: "string", default: "" },
+			mode: { type: "enum", values: ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa"], default: "alpha" },
+		},
+	},
+};
+
 interface Harness {
 	selector: SettingsSelectorComponent;
 	values: Map<string, unknown>;
 	changes: [string, unknown][];
 	previews: string[];
+	whenRendered: (ready: (props: TspPrefsProps) => boolean) => Promise<void>;
 }
 
-function harness(initial: Record<string, unknown> = {}): Harness {
-	const values = new Map<string, unknown>();
-	for (const entry of ENTRIES) values.set(entry.path, entry.defaultValue);
-	for (const key in initial) values.set(key, initial[key]);
-	const settings: SettingsHost = {
-		entries: ENTRIES,
-		get: path => values.get(path),
-		set: (path, value) => void values.set(path, value),
-		unset: path => void values.set(path, ENTRIES.find(entry => entry.path === path)?.defaultValue),
-		normalizeProviderLimits: () => ({}),
-		validateProviderLimits: () => ({}),
-	};
-	const plugins: PluginSettingsHost = {
+interface HarnessOptions {
+	entries?: readonly SettingsDisplayEntry[];
+	plugins?: PluginSettingsHost;
+	providers?: string[];
+	onPluginsChanged?: () => void | Promise<void>;
+	onCancel?: () => void;
+	requestRender?: () => void;
+}
+
+function pluginHost(installed: InstalledPlugin[] = []): PluginSettingsHost {
+	return {
 		manager: {
-			list: async () => [],
-			getPlugin: async () => undefined,
+			list: async () => installed,
+			getPlugin: async name => installed.find(plugin => plugin.name === name),
 			getPluginSettings: async () => ({}),
 			setEnabled: async () => {},
 			getEnabledFeatures: async () => null,
@@ -103,26 +115,62 @@ function harness(initial: Record<string, unknown> = {}): Harness {
 			listInstalledPlugins: async () => [],
 			setPluginEnabled: async () => {},
 		}),
-		parsePluginId: () => null,
+		parsePluginId: id => ({ name: id }),
+	};
+}
+
+function providerLimits(value: unknown): Record<string, number> {
+	const limits: Record<string, number> = {};
+	if (typeof value === "object" && value !== null) {
+		for (const [provider, limit] of Object.entries(value)) {
+			if (typeof limit === "number") limits[provider] = limit;
+		}
+	}
+	return limits;
+}
+
+function harness(initial: Record<string, unknown> = {}, options: HarnessOptions = {}): Harness {
+	const entries = options.entries ?? ENTRIES;
+	const values = new Map<string, unknown>();
+	for (const entry of entries) values.set(entry.path, entry.defaultValue);
+	for (const key in initial) values.set(key, initial[key]);
+	const settings: SettingsHost = {
+		entries,
+		get: path => values.get(path),
+		set: (path, value) => void values.set(path, value),
+		unset: path => void values.set(path, entries.find(entry => entry.path === path)?.defaultValue),
+		normalizeProviderLimits: providerLimits,
+		validateProviderLimits: providerLimits,
 	};
 	const changes: [string, unknown][] = [];
 	const previews: string[] = [];
+	let rendered = () => {};
 	const selector = new SettingsSelectorComponent(
 		{
 			settings,
-			plugins,
+			plugins: options.plugins ?? pluginHost(),
 			availableThinkingLevels: [],
 			thinkingLevel: undefined,
 			availableThemes: ["dark", "light", "titanium"],
-			providers: [],
+			providers: options.providers ?? [],
+			requestRender: () => { rendered(); options.requestRender?.(); },
 		},
 		{
 			onChange: (path, value) => changes.push([path, value]),
 			onThemePreview: name => void previews.push(name),
-			onCancel: () => {},
+			onPluginsChanged: options.onPluginsChanged,
+			onCancel: options.onCancel ?? (() => {}),
 		},
 	);
-	return { selector, values, changes, previews };
+	return {
+		selector, values, changes, previews,
+		whenRendered: ready => {
+			const pending = Promise.withResolvers<void>();
+			rendered = () => { if (ready(prefs(selector).props)) pending.resolve(); };
+			rendered();
+			return pending.promise;
+		},
+	};
 }
 
 const PREFS: DescribeContext = {
@@ -356,5 +404,242 @@ describe("settings as a native prefs page", () => {
 		selector.restoreNavigation(snapshot);
 		expect(visits).toHaveLength(count);
 		expect(selector.navigationSnapshot()).toEqual(snapshot);
+	});
+
+	it("treats root plugin h/l and Tab as contexts without history visits", async () => {
+		const h = harness({}, { plugins: pluginHost([PLUGIN]) });
+		const visits: string[] = [];
+		h.selector.onNavigationVisit = page => { visits.push(page); };
+		const pages = prefs(h.selector).props.pages;
+		for (const [key, page] of [["l", pages[0]!.id], ["h", pages.at(-2)!.id], ["\t", pages[0]!.id]] as const) {
+			send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
+			await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
+			h.selector.handleInput(key);
+			expect(prefs(h.selector).props.page).toBe(page);
+			expect(visits).toEqual([]);
+		}
+	});
+
+	it("mirrors filtered plugin rows, retained query and caret, and closes the filter before the page", async () => {
+		let closed = 0;
+		const h = harness({}, {
+			plugins: pluginHost([PLUGIN, { ...PLUGIN, name: "alpha" }]),
+			onCancel: () => { closed++; },
+		});
+		send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
+		await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
+		for (const key of ["/", "h", "j", "\x01", "\x1b[C"]) h.selector.handleInput(key);
+		expect(prefs(h.selector).props).toMatchObject({
+			query: "hj", cursor: 1, focus: "npm:hjkl",
+			sections: [{ rows: [{ id: "npm:hjkl" }] }],
+		});
+		send(h.selector, { type: "action", key: "", act: "close", mods: [] });
+		expect(closed).toBe(0);
+		expect(h.selector.navigationSnapshot()).toMatchObject({ plugin: { content: { filter: "hj", filterFocused: false, filterCursor: 1 } } });
+		expect(prefs(h.selector).props.query).toBe("hj");
+		send(h.selector, { type: "action", key: "", act: "close", mods: [] });
+		expect(closed).toBe(1);
+	});
+
+	it("restores a filtered plugin detail after async loading without a new visit", async () => {
+		const plugins = pluginHost([PLUGIN]);
+		const h = harness({}, { plugins });
+		send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
+		await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
+		for (const key of ["/", "hj", "\x1b"]) h.selector.handleInput(key);
+		send(h.selector, { type: "activate", key: "", item: "npm:hjkl" });
+		await h.whenRendered(props => props.sections.some(section => section.rows.some(row => row.id === "config:message")));
+		for (const key of ["/", "message", "\x01", "\x1b[C", "\x1b[C", "\x1b"]) h.selector.handleInput(key);
+		expect(prefs(h.selector).props).toMatchObject({
+			query: "message", cursor: 2, focus: "config:message",
+			sections: [{ rows: [{ id: "config:message" }] }],
+		});
+		const snapshot = h.selector.navigationSnapshot();
+		const restored = harness({}, { plugins });
+		const visits: string[] = [];
+		restored.selector.onNavigationVisit = page => { visits.push(page); };
+		restored.selector.restoreNavigation(snapshot);
+		await restored.whenRendered(props => props.sections.some(section => section.rows.some(row => row.id === "config:message")));
+		expect(prefs(restored.selector).props).toMatchObject({ query: "message", cursor: 2, focus: "config:message" });
+		expect(restored.selector.navigationSnapshot()).toEqual(snapshot);
+		expect(visits).toEqual([]);
+		restored.selector.handleInput("h");
+		await restored.whenRendered(props => props.sections.some(section => section.id === "installed"));
+		expect(prefs(restored.selector).props).toMatchObject({ query: "hj", cursor: 2 });
+		expect(visits).toEqual([""]);
+	});
+
+	it("exits text fields and native enum menus with printable cancel and submit remaps", () => {
+		const previous = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.select.cancel": "j", "tui.input.submit": ["s", "enter"], "tui.editor.deleteCharBackward": "k",
+		}));
+		try {
+			let closed = 0;
+			const h = harness({}, { onCancel: () => { closed++; } });
+			send(h.selector, { type: "action", key: "", act: "page", value: "shell", mods: [] });
+			send(h.selector, { type: "activate", key: "", item: "shell.path" });
+			const literal = "j/k h l gg G / note s";
+			for (const char of literal) h.selector.handleInput(char);
+			expect(prefs(h.selector).props.editing?.draft).toBe(literal);
+			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
+			expect(prefs(h.selector).props.editing).toBeNull();
+			expect(h.values.get("shell.path")).toBe("");
+			expect(closed).toBe(0);
+			send(h.selector, { type: "action", key: "", act: "page", value: "appearance", mods: [] });
+			send(h.selector, { type: "activate", key: "", item: "theme.dark" });
+			expect(prefs(h.selector).props.editing?.row).toBe("theme.dark");
+			send(h.selector, { type: "action", key: "", act: "close", value: "theme.dark", mods: [] });
+			expect(prefs(h.selector).props.editing).toBeNull();
+			expect(closed).toBe(0);
+			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
+			expect(closed).toBe(1);
+		} finally { setKeybindings(previous); }
+	});
+
+	it("closes a literal plugin field and then its enum filter/menu before the root", async () => {
+		const previous = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory({
+			"tui.select.cancel": "j", "tui.input.submit": ["s", "enter"], "tui.editor.deleteCharBackward": "k",
+		}));
+		try {
+			let closed = 0;
+			const h = harness({}, { plugins: pluginHost([PLUGIN]), onCancel: () => { closed++; } });
+			send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
+			await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
+			send(h.selector, { type: "activate", key: "", item: "npm:hjkl" });
+			await h.whenRendered(props => props.sections.some(section => section.rows.some(row => row.id === "config:message")));
+			send(h.selector, { type: "action", key: "", act: "edit", value: "config:message", mods: [] });
+			for (const char of "j/k h l gg G / note s") h.selector.handleInput(char);
+			expect(h.selector.navigationSnapshot()).toMatchObject({ plugin: { content: { submenuId: "config:message", submenu: { value: "j/k h l gg G / note s" } } } });
+			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
+			expect(h.selector.navigationSnapshot()).toMatchObject({ plugin: { content: { submenuId: null } } });
+			expect(closed).toBe(0);
+			send(h.selector, { type: "action", key: "", act: "edit", value: "config:mode", mods: [] });
+			for (const key of ["/", "b", "e"]) h.selector.handleInput(key);
+			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
+			expect(h.selector.navigationSnapshot()).toMatchObject({ plugin: { content: { submenuId: "config:mode", submenu: { filter: "be", filterFocused: false } } } });
+			send(h.selector, { type: "action", key: "", act: "close", value: "config:mode", mods: [] });
+			expect(h.selector.navigationSnapshot()).toMatchObject({ plugin: { content: { submenuId: null } } });
+			expect(closed).toBe(0);
+			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
+			expect(closed).toBe(1);
+		} finally { setKeybindings(previous); }
+	});
+
+	it("preserves multiselect cursor, query, caret and detached viewport through rebuild and restore", () => {
+		const ids = Array.from({ length: 20 }, (_, index) => `v${String(index).padStart(2, "0")}`);
+		const order: SettingsDisplayEntry = {
+			path: "providers.order", type: "array", defaultValue: ids,
+			ui: { tab: "providers", label: "Order", description: "", ordered: true, options: ids.map(value => ({ value, label: `Option ${value}` })) },
+		};
+		const entries = ENTRIES.map(entry => entry.path === order.path ? order : entry);
+		const h = harness({}, { entries });
+		send(h.selector, { type: "action", key: "", act: "page", value: "providers", mods: [] });
+		send(h.selector, { type: "activate", key: "", item: order.path });
+		for (const key of ["/", "option", "\x01", "\x1b[C", "\x1b[C", "\x1b", "G"]) h.selector.handleInput(key);
+		h.selector.render(120);
+		h.selector.handleInput("\x19");
+		h.selector.render(120);
+		const before = h.selector.navigationSnapshot() as { list: { submenu: { list: SelectListNavigationState } } };
+		expect(before.list.submenu.list).toMatchObject({
+			selectedValue: "v19", filter: "option", filterCursor: 2, filterFocused: false,
+			viewportTop: { item: 7, lineOffset: 0 },
+		});
+		for (const key of [" ", " ", "h"]) {
+			h.selector.handleInput(key);
+			expect(h.selector.navigationSnapshot()).toMatchObject({ list: { submenu: { list: before.list.submenu.list } } });
+		}
+		expect(h.values.get(order.path)).toEqual([...ids.slice(0, 18), ids[19]!, ids[18]!]);
+		const snapshot = h.selector.navigationSnapshot();
+		const restored = harness({}, { entries });
+		restored.selector.restoreNavigation(snapshot);
+		expect(restored.selector.navigationSnapshot()).toEqual(snapshot);
+		restored.selector.handleInput("h");
+		expect(prefs(restored.selector).props.editing).toEqual({ row: order.path, option: "v19" });
+		expect(restored.values.get(order.path)).toEqual([...ids.slice(0, 17), ids[19]!, ids[17]!, ids[18]!]);
+	});
+
+	it("restores provider parent search and makes Space/l inert on clear-all without phantom visits", () => {
+		const limits: SettingsDisplayEntry = {
+			path: "providers.maxInFlightRequests", type: "record", defaultValue: { acme: 3, zeta: 4 },
+			ui: { tab: "providers", label: "Max In-Flight Requests", description: "" },
+		};
+		const providers = ["acme", ...Array.from({ length: 12 }, (_, index) => `other-${index}`), "zeta"];
+		const h = harness({}, { entries: [...ENTRIES, limits], providers });
+		const visits: string[] = [];
+		h.selector.onNavigationVisit = page => { visits.push(page); };
+		send(h.selector, { type: "action", key: "", act: "page", value: "providers", mods: [] });
+		send(h.selector, { type: "activate", key: "", item: limits.path });
+		for (const key of ["/", "ze", "\x01", "\x1b[C", "\x1b"]) h.selector.handleInput(key);
+		const parent = h.selector.navigationSnapshot();
+		h.selector.handleInput("l");
+		expect(h.selector.navigationSnapshot()).toMatchObject({ list: { submenu: { provider: "zeta" } } });
+		h.selector.handleInput("\x1b");
+		expect(h.selector.navigationSnapshot()).toEqual(parent);
+		for (const key of ["/", "\x01", "\x0b", "\x1b", "G", " ", "l"]) h.selector.handleInput(key);
+		expect(h.changes).toEqual([]);
+		expect(h.values.get(limits.path)).toEqual({ acme: 3, zeta: 4 });
+		const count = visits.length;
+		h.selector.handleInput("\r");
+		expect(h.values.get(limits.path)).toEqual({});
+		expect(h.changes).toEqual([[limits.path, {}]]);
+		expect(h.selector.navigationSnapshot()).toMatchObject({ list: { submenuId: null } });
+		expect(visits.slice(count)).toEqual([""]);
+	});
+
+	it("keeps an in-flight plugin write blocked across tab switches and onPluginsChanged", async () => {
+		const plugins = pluginHost([PLUGIN]);
+		const write = Promise.withResolvers<void>();
+		const changed = Promise.withResolvers<void>();
+		const changedStarted = Promise.withResolvers<void>();
+		plugins.manager.setEnabled = () => write.promise;
+		const h = harness({}, {
+			plugins,
+			onPluginsChanged: () => { changedStarted.resolve(); return changed.promise; },
+		});
+		send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
+		await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
+		send(h.selector, { type: "activate", key: "", item: "npm:hjkl" });
+		await h.whenRendered(props => props.sections.some(section => section.rows.some(row => row.id === "__enabled__")));
+		send(h.selector, { type: "change", key: "", item: "__enabled__", value: false });
+		expect(h.selector.blocksMenuHistory).toBe(true);
+		send(h.selector, { type: "action", key: "", act: "page", value: "appearance", mods: [] });
+		expect(h.selector.blocksMenuHistory).toBe(true);
+		write.resolve();
+		await changedStarted.promise;
+		expect(h.selector.blocksMenuHistory).toBe(true);
+		const finished = h.whenRendered(() => !h.selector.blocksMenuHistory);
+		changed.resolve();
+		await finished;
+		expect(h.selector.blocksMenuHistory).toBe(false);
+	});
+
+	it("does not block for async plugin reloads or emit visits from a detached child", async () => {
+		const plugins = pluginHost([PLUGIN]);
+		const listed = Promise.withResolvers<InstalledPlugin[]>();
+		let lists = 0;
+		plugins.manager.list = () => ++lists === 1 ? Promise.resolve([PLUGIN]) : listed.promise;
+		const lateFrame = Promise.withResolvers<void>();
+		let expectLateFrame = false;
+		const h = harness({}, { plugins, requestRender: () => { if (expectLateFrame) lateFrame.resolve(); } });
+		const visits: string[] = [];
+		h.selector.onNavigationVisit = page => { visits.push(page); };
+		send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
+		expect(h.selector.blocksMenuHistory).toBe(false);
+		await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
+		send(h.selector, { type: "activate", key: "", item: "npm:hjkl" });
+		expect(h.selector.blocksMenuHistory).toBe(false);
+		await h.whenRendered(props => props.sections.some(section => section.rows.some(row => row.id === "config:message")));
+		h.selector.handleInput("h"); // parent navigation starts a read-only registry reload
+		expect(h.selector.blocksMenuHistory).toBe(false);
+		send(h.selector, { type: "action", key: "", act: "page", value: "appearance", mods: [] });
+		const count = visits.length;
+		expectLateFrame = true;
+		listed.resolve([PLUGIN]);
+		await lateFrame.promise;
+		expect(prefs(h.selector).props.page).toBe("appearance");
+		expect(h.selector.blocksMenuHistory).toBe(false);
+		expect(visits).toHaveLength(count);
 	});
 });

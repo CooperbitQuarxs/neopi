@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { SelectorController, type MenuKind } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
+import { SelectorController, type MenuHost, type MenuKind } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { SettingsList, type SettingsListTheme } from "@oh-my-pi/pi-tui/components/settings-list";
 import type { Component, OverlayHandle, OverlayOptions, TUI } from "@oh-my-pi/pi-tui";
-import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
+import { createInteractiveModeContext, type SessionOverrides } from "./helpers/interactive-mode-context";
 
 const theme: SettingsListTheme = {
 	label: text => text,
@@ -12,7 +12,7 @@ const theme: SettingsListTheme = {
 	hint: text => text,
 };
 
-function harness() {
+function harness(session?: SessionOverrides) {
 	const overlayStack: TUI["overlayStack"] = [];
 	let focused: Component | null = null;
 	const status: string[] = [];
@@ -33,6 +33,7 @@ function harness() {
 		};
 	};
 	const ctx = createInteractiveModeContext({
+		session,
 		ui: {
 			overlayStack,
 			showOverlay,
@@ -188,13 +189,98 @@ describe("controller menu timeline", () => {
 		expect(h.controller.openMenu("jobs-panel", open)).toBeUndefined();
 	});
 
-	it("does not treat an editor-slot prompt as an overlay history blocker", () => {
+	it("discards a delayed menu mount after another menu was visited", () => {
 		const h = harness();
+		const pending = h.controller.openMenu("git", () => {});
 		h.open("settings");
-		h.ctx.ui.setFocus(h.ctx.editor);
+		let disposed = 0;
+		let mounted = false;
+		const delayed: Component = { render: () => [], dispose: () => { disposed++; } };
+		pending!.mount(delayed, () => { mounted = true; return h.showOverlay(delayed); });
+		expect(mounted).toBe(false);
+		expect(disposed).toBe(1);
+		expect(pending!.close()).toBe(false);
+		expect(h.focused()).toBe(h.menus.get("settings"));
+	});
+
+	it("claims an inline account picker before loading and discards its late result", async () => {
+		const lookup = Promise.withResolvers<undefined>();
+		const h = harness({ listCurrentProviderOAuthAccounts: () => lookup.promise });
+		h.open("settings");
+		const loading = h.controller.showSessionPinSelector();
+		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
+		lookup.resolve(undefined);
+		await loading;
+		expect(h.focused()).toBe(h.menus.get("settings"));
+		expect(h.overlayStack).toHaveLength(1);
+		expect(h.status).not.toContain("Select a model before pinning a provider account.");
+	});
+
+	it("releases failed inline opens so the next request can load again", async () => {
+		let attempts = 0;
+		const h = harness({
+			listCurrentProviderOAuthAccounts: async () => {
+				attempts++;
+				throw new Error("account listing failed");
+			},
+		});
+		await h.controller.showSessionPinSelector();
+		await h.controller.showSessionPinSelector();
+		expect(attempts).toBe(2);
+	});
+
+	it("records conversation when the visible menu closes while an older load is pending", async () => {
+		const h = harness();
+		const pending = h.controller.openMenu("git", () => {});
+		h.open("settings");
+		h.closes.get("settings")!();
+		await Promise.resolve();
+		expect(pending!.close()).toBe(false);
+		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
+		expect(h.focused()).toBe(h.menus.get("settings"));
+	});
+
+	it("preserves a pending restore across another back and forward before mounting", () => {
+		const h = harness();
+		let pending: MenuHost | undefined;
+		const reopen = () => { pending = h.controller.openMenu("git", reopen); };
+		const saved = { query: "retained", selected: "stable-key" };
+		const original = { render: () => [], navigationSnapshot: () => saved, restoreNavigation: () => {} };
+		reopen();
+		pending!.mount(original, () => h.showOverlay(original));
+		h.open("settings");
+		h.controller.navigateMenuHistory(-1);
+		const abandoned = pending!;
+		h.controller.navigateMenuHistory(1);
+		h.controller.navigateMenuHistory(-1);
+		let restored: unknown;
+		const latest = {
+			render: () => [],
+			navigationSnapshot: () => restored,
+			restoreNavigation: (snapshot: unknown) => { restored = snapshot; },
+		};
+		pending!.mount(latest, () => h.showOverlay(latest));
+		expect(restored).toEqual(saved);
+		expect(abandoned.close()).toBe(false);
+		expect(h.focused()).toBe(latest);
+	});
+
+	it("keeps an editor-slot prompt mounted and focuses it on return to conversation", () => {
+		const h = harness();
+		const prompt: Component = { render: () => ["Pending credential wizard"] };
+		h.ctx.editorContainer.addChild(prompt);
+		h.ctx.ui.setFocus(prompt);
+		h.open("settings");
 		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
 		expect(h.status).toEqual([]);
 		expect(h.overlayStack).toHaveLength(0);
+		expect(h.ctx.editorContainer.children).toEqual([prompt]);
+		expect(h.focused()).toBe(prompt);
+		expect(h.controller.navigateMenuHistory(1)).toBe(true);
+		expect(h.focused()).toBe(h.menus.get("settings"));
+		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
+		expect(h.focused()).toBe(prompt);
+		expect(h.ctx.editorContainer.children).toEqual([prompt]);
 	});
 
 	it("ignores history silently while the composer completion popup is active", async () => {

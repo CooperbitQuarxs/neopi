@@ -9,7 +9,7 @@ import { previewWindowRows } from "@oh-my-pi/pi-tui/render/render-utils";
  * the cell source to a viewport-sized TAIL window (the end stays visible, the
  * head is elided behind an "earlier lines" marker) in BOTH the pending preview
  * and the final result, so a long cell neither floods the transcript nor snaps
- * open when the result lands. Only ctrl+o (expanded) uncaps.
+ * open when the result lands. Only the expansion action (`expanded`) uncaps.
  */
 describe("eval renderer: viewport tail window for cell code", () => {
 	let theme: Theme;
