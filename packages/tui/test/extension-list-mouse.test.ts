@@ -100,6 +100,70 @@ describe("ExtensionList mouse routing", () => {
 	});
 });
 
+describe("ExtensionList menu navigation", () => {
+	test("uses clamped shared motions and scrolls the viewport independently", () => {
+		const extensions = Array.from({ length: 20 }, (_, index) => skill(`skill-${String(index).padStart(2, "0")}`));
+		const toggles: string[] = [];
+		const list = new ExtensionList(extensions, { onToggle: id => toggles.push(id) }, 5);
+		list.setFocused(true);
+		list.render(50);
+		list.handleInput("j");
+		expect(list.getSelectedExtension()?.id).toBe(extensions[0]!.id);
+		expect(list.getSearchQuery()).toBe("");
+		const selected = list.navigationSnapshot().selected;
+		list.handleInput("\x05");
+		list.render(50);
+		expect(list.navigationSnapshot().top).toEqual({ item: 1, lineOffset: 0 });
+		expect(list.navigationSnapshot().selected).toBe(selected);
+		list.handleInput("\x19");
+		expect(list.navigationSnapshot().top).toEqual({ item: 0, lineOffset: 0 });
+		list.handleInput("\x04");
+		expect(list.getSelectedExtension()?.id).toBe(extensions[2]!.id);
+		list.handleInput("\x15");
+		expect(list.getSelectedExtension()?.id).toBe(extensions[0]!.id);
+		list.handleInput("\x1b[6~");
+		expect(list.getSelectedExtension()?.id).toBe(extensions[5]!.id);
+		list.handleInput("\x1b[5~");
+		expect(list.getSelectedExtension()?.id).toBe(extensions[0]!.id);
+		list.handleInput("G");
+		expect(list.getSelectedExtension()?.id).toBe(extensions[19]!.id);
+		list.handleInput("j");
+		expect(list.getSelectedExtension()?.id).toBe(extensions[19]!.id);
+		list.handleInput("g");
+		list.handleInput("g");
+		expect(list.getSelectedExtension()).toBeNull();
+		list.handleInput("k");
+		expect(list.getSelectedExtension()).toBeNull();
+		list.handleInput("j");
+		list.handleInput(" ");
+		expect(toggles).toEqual([extensions[0]!.id]);
+	});
+
+	test("keeps focused filtering literal and restores query caret, stable selection and viewport", () => {
+		const name = "j/k hg G / l";
+		const list = new ExtensionList([skill(name), skill("other")], {}, 5);
+		list.render(50);
+		list.handleInput("/");
+		for (const char of name) list.handleInput(char);
+		list.handleInput("\x1b[D");
+		expect(list.getSearchQuery()).toBe(name);
+		expect(list.nativeQuery().cursor).toBe(name.length - 1);
+		list.handleInput("\x1b");
+		expect(list.filterFocused).toBe(false);
+		expect(list.getSearchQuery()).toBe(name);
+		const saved = list.navigationSnapshot();
+		list.clearSearch();
+		list.handleInput("G");
+		list.restoreNavigation(saved);
+		expect(list.navigationSnapshot()).toEqual(saved);
+		expect(list.getSelectedExtension()?.id).toBe(`skill:${name}`);
+		list.focusFilter();
+		list.handleInput("\x01");
+		list.handleInput("X");
+		expect(list.getSearchQuery()).toBe(`X${name}`);
+	});
+});
+
 describe("buildProviderTabs", () => {
 	test("mutes empty enabled providers but keeps disabled providers selectable", () => {
 		const tabs = buildTabBarTabs([
