@@ -141,7 +141,7 @@ describe("tree selector entry labels", () => {
 		]) {
 			const selector = selectorFor([userEntry, ...bookkeeping]);
 			selector.handleInput(ALT_A);
-			selector.handleInput("i");
+			selector.handleInput("/");
 			selector.handleInput(query);
 			expect(visibleRows(selector).join("\n")).toContain(expected);
 			expect(visibleRows(selector).join("\n")).not.toContain("[reset boundary]");

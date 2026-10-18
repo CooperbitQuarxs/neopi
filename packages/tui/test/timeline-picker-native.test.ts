@@ -306,7 +306,7 @@ describe("session tree picker", () => {
 
 	test("filter mode narrows visible tree entries until the query is cleared", () => {
 		const selector = treeSelector();
-		selector.handleInput("i");
+		selector.handleInput("/");
 		typeText(selector, "explain");
 		const searched = treeProps(selector);
 		expect(searched.query).toBe("explain");

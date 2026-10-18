@@ -37,6 +37,7 @@
 - Safe menu-editor history retains collapsed pasted text and attachment references when reopening a draft in a new editor ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Native account pickers and Agent Hub return from a focused search field to the list before closing, matching Escape in the ANSI UI ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Extension menus share Vim navigation across inventory and inspector contexts, preserve search and reading state in history, and use `Alt-E` for expansion ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Tree navigation adds contextual collapse/expand, `/` search, filter tabs, restorable label drafts, and independent scrolling; `Ctrl-O` belongs to menu history ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Added per-widget text templates for usage bars (`{label}`, `{percent}`, `{age}`), editable in `/statusline` with Tab ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 
 ### Changed
