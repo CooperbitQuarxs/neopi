@@ -545,6 +545,15 @@ export interface AdvisorStatusOverviewEntry {
 	yielded: boolean;
 }
 
+/** A running advisor as observers see it: its agent (for live events) and its transcript file. */
+export interface LiveAdvisor {
+	readonly slug: string;
+	readonly name: string;
+	readonly agent: Agent;
+	/** `<session dir>/__advisor[.<slug>].jsonl`; undefined while the owner is unpersisted. */
+	readonly transcriptFile: string | undefined;
+}
+
 /** Owns advisor runtimes, delivery policy, context maintenance, and status reporting. */
 export class SessionAdvisors {
 	readonly #host: SessionAdvisorsHost;
@@ -619,6 +628,7 @@ export class SessionAdvisors {
 	#advisorBoundaryGuidanceLastTurn: number | undefined;
 	#pendingAdvisorCardEvents = new Set<Promise<void>>();
 	#advisorYieldQueueUnsubscribe: (() => void) | undefined;
+	readonly #liveListeners = new Set<() => void>();
 
 	constructor(host: SessionAdvisorsHost, options: SessionAdvisorsOptions) {
 		this.#host = host;
@@ -766,7 +776,37 @@ export class SessionAdvisors {
 
 	/** Starts configured advisor runtimes when they are eligible. */
 	buildRuntime(seedToCurrent = false): boolean {
-		return this.#buildAdvisorRuntime(seedToCurrent);
+		const running = this.#buildAdvisorRuntime(seedToCurrent);
+		this.#notifyLiveAdvisors();
+		return running;
+	}
+
+	/** The advisors whose runtimes are live right now, in roster order. */
+	liveAdvisors(): LiveAdvisor[] {
+		return this.#advisors
+			.filter(advisor => !advisor.runtime.disposed)
+			.map(advisor => ({
+				slug: advisor.slug,
+				name: advisor.name,
+				agent: advisor.agent,
+				transcriptFile: advisor.recorder.targetFile(),
+			}));
+	}
+
+	/** Called after every start, stop, or rebuild of the advisor runtimes. */
+	onLiveAdvisorsChange(listener: () => void): () => void {
+		this.#liveListeners.add(listener);
+		return () => this.#liveListeners.delete(listener);
+	}
+
+	#notifyLiveAdvisors(): void {
+		for (const listener of this.#liveListeners) {
+			try {
+				listener();
+			} catch (error) {
+				logger.warn("advisor live listener failed", { error: String(error) });
+			}
+		}
 	}
 
 	/** Stops every advisor runtime and starts recorder shutdown. */
@@ -1279,6 +1319,7 @@ export class SessionAdvisors {
 			this.#advisorYieldQueueUnsubscribe?.();
 			this.#advisorYieldQueueUnsubscribe = undefined;
 		}
+		this.#notifyLiveAdvisors();
 		return running;
 	}
 
@@ -1982,6 +2023,7 @@ export class SessionAdvisors {
 		this.#advisors = [];
 		this.#advisorYieldQueueUnsubscribe?.();
 		this.#advisorYieldQueueUnsubscribe = undefined;
+		this.#notifyLiveAdvisors();
 	}
 
 	/** Dispose the given advisors and extend the recorder-close barrier with their closes. */
@@ -2893,7 +2935,7 @@ export class SessionAdvisors {
 		this.#chatMode = chatMode;
 		if (!this.#advisorEnabled || this.#advisors.length === 0) return;
 		this.#stopAdvisorRuntime();
-		this.#buildAdvisorRuntime(true);
+		this.buildRuntime(true);
 	}
 
 	/**

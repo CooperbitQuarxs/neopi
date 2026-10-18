@@ -311,6 +311,15 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "statusline",
+		icon: "settings",
+		description: "Arrange status-line widgets and preview composer shapes",
+		handleTui: (_command, runtime) => {
+			runtime.ctx.showStatusLineConfigure();
+			clearSubmittedText(runtime);
+		},
+	},
+	{
 		name: "setup",
 		aliases: ["providers"],
 		icon: "gear",

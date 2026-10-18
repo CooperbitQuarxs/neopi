@@ -84,6 +84,7 @@ function createPathContext(): SegmentContext {
 			pr: null,
 		},
 		usage: null,
+		usageReports: null,
 	};
 }
 

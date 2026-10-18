@@ -39,6 +39,7 @@ Built-in operator commands added by the fork:
 | `/persona`, `/persona live` | Edit and switch system-prompt personas and live-voice personas |
 | `/loadout` | Switch runtime model loadouts |
 | `/repl`, `/kernel` | Point the composer at a JavaScript, Python, or Bash kernel |
+| `/notice <text>` | Send a literal operator-authored developer notice to the current session |
 
 See [docs/neopi-fork.md](docs/neopi-fork.md) for the committed fork history and boundaries.
 

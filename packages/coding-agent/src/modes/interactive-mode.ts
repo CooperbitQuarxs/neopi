@@ -130,7 +130,7 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
 import type { AgentHubRegistry } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { DEFAULT_IRC_OPERATOR_HANDLE, registerIrcOperator } from "../irc/operator";
+import { DEFAULT_IRC_OPERATOR_HANDLE, operatorIrcLogSource, registerIrcOperator } from "../irc/operator";
 import { cfgIrcOperatorHandle } from "../irc/settings";
 import { executeSend } from "../irc/messaging";
 import { registerPersistedSubagents } from "../registry/persisted-agents";
@@ -217,6 +217,8 @@ import { vocalizer } from "../tts/vocalizer";
 import { applyHyperlinkSetting, fileHyperlink } from "@oh-my-pi/pi-tui/render/hyperlink";
 import { renderTreeList } from "@oh-my-pi/pi-tui/render/tree-list";
 import { activePhase, formatTodoLine, renderTodoLines, TODO_LINE_BUDGET, TodoSection } from "./side-panel/todo-section";
+import { AgentsSection } from "./side-panel/agents-section";
+import { IrcSection } from "./side-panel/irc-section";
 import { SidePanelController } from "./controllers/side-panel-controller";
 import { formatStartupChangelogSummary, type StartupChangelogSelection } from "../utils/changelog";
 import { copyToClipboard } from "../utils/clipboard";
@@ -371,6 +373,7 @@ import {
 	cfgSidebarEnabled,
 	cfgSidebarSide,
 	cfgSidebarSplitAt,
+	cfgSidebarView,
 	cfgSidebarWidthMax,
 	cfgSidebarWidthMin,
 	cfgSidebarWidthRatio,
@@ -461,6 +464,7 @@ const cfgLiveUiSettings = combine({
 	"sidebar.width.min": cfgSidebarWidthMin,
 	"sidebar.width.max": cfgSidebarWidthMax,
 	"sidebar.splitAt": cfgSidebarSplitAt,
+	"sidebar.view": cfgSidebarView,
 	"display.subagentLivePreview": cfgDisplaySubagentLivePreview,
 	"compaction.idleEnabled": cfgCompactionIdleEnabled,
 	"compaction.idleThresholdTokens": cfgCompactionIdleThresholdTokens,
@@ -713,8 +717,20 @@ class TodoHudContainer extends AnchoredLiveContainer {
 		if (this.mode.isCompactTodoMode()) {
 			return [];
 		}
-		// Docked: the todo list lives in the side panel for this frame.
-		if (this.mode.composer.sidePanelDocked) return [];
+		// The docked Todo view shows the list for this frame.
+		if (this.mode.sidePanel.dockedView === "todo") return [];
+		return super.render(width);
+	}
+}
+
+/** The pinned subagents list; the docked Agents view replaces it for the frame it shows. */
+class SubagentHudContainer extends AnchoredLiveContainer {
+	constructor(private readonly mode: InteractiveMode) {
+		super();
+	}
+
+	override render(width: number): readonly string[] {
+		if (this.mode.sidePanel.dockedView === "agents") return [];
 		return super.render(width);
 	}
 }
@@ -1724,9 +1740,81 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	/** The side panel host: toggle, scroll, sections, inline mouse. */
+	/** The side panel host: views, toggle, scroll, inline mouse. */
 	get sidePanel(): SidePanelController {
 		return this.#sidePanelController;
+	}
+
+	/**
+	 * The panel's three views. Agents lists the same root-scoped roster as the
+	 * Agent Hub and navigates through the hub's focus path; IRC reads the same
+	 * operator history as the IRC viewer.
+	 */
+	#registerSidePanelViews(): void {
+		const panel = this.#sidePanelController;
+		const requestRender = () => this.ui.requestRender();
+		panel.registerView("todo", this.#todoSection);
+		panel.registerView(
+			"agents",
+			new AgentsSection({
+				agents: () => {
+					const guest = this.collabGuest?.agentRegistry;
+					if (guest) return guest.list();
+					const registry = AgentRegistry.global();
+					const root = registry.rootForSession(this.session);
+					return registry.list().filter(ref => registry.isInRootTree(ref.id, root));
+				},
+				focusedAgentId: () => this.focusedAgentId,
+				focus: id => this.#focusSidePanelAgent(id),
+				returnToPrimary: () => {
+					void this.unfocusSession().catch((error: unknown) => {
+						this.showStatus(error instanceof Error ? error.message : String(error));
+					});
+				},
+				requestRender,
+				onChange: listener => AgentRegistry.global().onChange(listener),
+			}),
+		);
+		panel.registerView(
+			"irc",
+			new IrcSection({
+				source: operatorIrcLogSource(() => this.session),
+				openViewer: () => this.showIrcViewer(),
+				requestRender,
+			}),
+		);
+	}
+
+	/**
+	 * A click on an Agents-view row: a live or parked subagent opens in the main
+	 * area (the hub's focus path, which revives a parked one); advisors and
+	 * aborted agents are read-only transcripts, so the hub opens instead.
+	 * Resolves when a focus request settles, so a second click can cancel a
+	 * revival still in flight.
+	 */
+	#focusSidePanelAgent(id: string): Promise<void> | undefined {
+		const ref = (this.collabGuest?.agentRegistry ?? AgentRegistry.global()).get(id);
+		if (!ref) {
+			this.showStatus("That agent is gone — open the hub for live agents");
+			return undefined;
+		}
+		if (ref.kind !== "sub" || ref.status === "aborted") {
+			this.showStatus(`${id} is a read-only transcript; showing the Agent Hub`);
+			this.showAgentHub();
+			return undefined;
+		}
+		// A collab guest cannot focus the host's agents locally; the hub views them through the host.
+		if (this.collabGuest) {
+			this.showAgentHub();
+			return undefined;
+		}
+		if (id === this.focusedAgentId) {
+			this.invalidatePendingFocus();
+			return undefined;
+		}
+		return this.focusAgentSession(id).catch((error: unknown) => {
+			this.showStatus(error instanceof Error ? error.message : String(error));
+		});
 	}
 
 	setClickHoverId(id: string | undefined): void {
@@ -1921,8 +2009,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			settings: this.settings,
 			keybindings: this.keybindings,
 		});
-		this.#sidePanelController.register(this.#todoSection);
-		this.subagentContainer = new AnchoredLiveContainer();
+		this.#registerSidePanelViews();
+		this.subagentContainer = new SubagentHudContainer(this);
 		this.btwContainer = new AnchoredLiveContainer();
 		this.omfgContainer = new AnchoredLiveContainer();
 		this.cleanseContainer = new AnchoredLiveContainer();
@@ -3613,6 +3701,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				"sidebar.width.min",
 				"sidebar.width.max",
 				"sidebar.splitAt",
+				"sidebar.view",
 			)
 		) {
 			this.#sidePanelController.applySettings();
@@ -3776,13 +3865,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			contextLine: cfgStatusLineContextLine.get(settings),
 		});
 	}
-	syncComposerShape(): void {
-		const shape = cfgComposerShape.get(settings);
+	syncComposerShape(previewShape?: string): void {
+		const shape = previewShape ?? cfgComposerShape.get(settings);
 		const style = getComposerStyle(shape);
 		this.composer.setPreferences({ composerShape: shape });
 		this.statusLine.attachToEditor(this.editor, style);
 		this.updateEditorBorderColor();
-		this.#scheduleComposerStatusPersist();
+		if (previewShape === undefined) this.#scheduleComposerStatusPersist();
 		this.ui.requestRender();
 	}
 
@@ -8142,6 +8231,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showChainConfigure(): void {
 		this.#selectorController.showChainConfigure();
+	}
+
+	showStatusLineConfigure(): void {
+		this.#selectorController.showStatusLineConfigure();
 	}
 
 	showMixtureConfigure(name?: string): void {

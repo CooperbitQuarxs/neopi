@@ -8,12 +8,18 @@
 
 ### Added
 
+- Added `/notice <text>` to send a literal, operator-authored system notice as a developer message, including editable pending notices that return to the composer when interrupted ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
+- Added `/monitor` and `npi monitor attach`: a separate tmux session with one live pane per subagent and advisor that shows unsaved output as it streams; you can message subagents from their panes, and advisor panes are view only ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
+- The side panel shows one of three views chosen by chord: `Alt+T` `t` Todo, `Alt+T` `a` Agents (click a subagent to view its transcript, click again to return), `Alt+T` `i` IRC; repeating the shown view's chord hides the panel, right-click in the panel cycles views, and the docked view replaces its duplicate todo or pinned-subagents list above the editor ([#342](https://github.com/PsychedelicShayna/neopi/issues/342)).
+- Added `/statusline` to arrange builtin and provider-usage widgets and choose a composer with live previews, plus a flexible `context_bar` widget for every composer ([#227](https://github.com/PsychedelicShayna/neopi/issues/227), [#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
+- Added per-provider usage-bar status-line widgets (`usage:<provider>:<window>[:<tier>]`) showing each reported quota window's percent and age ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
 - Added an IRC communications viewer (`Alt+I`) that keeps every agent-to-agent message in the session, including broadcasts and failed deliveries, after the transcript's live cards have retired; the `irc.operator.relayToMainTranscript` setting can turn those cards off ([#1](https://github.com/PsychedelicShayna/neopi/issues/1)).
 - Added an IRC identity for the operator (`Operator`, or `irc.operator.handle`): agents can message you directly without waiting on the main model, and `/irc <agent>|all <message>` or `r` in the IRC viewer sends as you ([#31](https://github.com/PsychedelicShayna/neopi/issues/31)).
 - Added opt-in `re:` regular expressions for model selectors across scopes, effort rules, role and subagent model selection, and retry fallback chain keys and entries. Existing literal and glob selectors retain their behavior; malformed expressions produce configuration warnings and are skipped. (#208)
 - Added a same-user control socket on every running session (`npi ctl`, the `ctl` tool). An orchestrator can submit, steer, run slash commands and keybinding actions, and answer mounted dialogs in the on-screen pane. A concurrent human edit wins: the draft is left alone and the pane shows `⌁ backed off`. Tool approvals from the socket stay with the pane unless `control.approvals` is on. (#171)
 - Added `OMP_BUILD_BYTECODE=0` for local binary builds affected by Bun bytecode startup failures.
 - Added independent, opt-in Chronicler capture with a built-in model role, per-session sourced markdown beats, bounded background passes, and immutable completed-batch checkpoints that recover without crash-replay duplicates. Local memory can remain enabled; task subagents do not capture.
+- Added owner-scoped cancellable background `chronicle_recall` jobs with immediate handles, inspectable progress, automatic result delivery, and bounded parallel ranking ([#268](https://github.com/PsychedelicShayna/neopi/issues/268)).
 - Added per-advisor base system prompt editing in `/advisor configure`, with Backspace to restore the bundled default.
 - Added `npi flash` to build and install an attested x86-64 baseline portable
   system with encrypted storage, resumable phases, a bounded profile, and
@@ -27,6 +33,9 @@
 ### Fixed
 
 - Standalone updates ignore project `.env` build origins and configuration-directory redirects, retain launch/user overrides and explicit profiles, and show the selected source for binary updates and package-manager takeovers ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
+- Saved images in Agent Hub transcripts of advisors and aborted agents, and in `/monitor` panes, now render as images instead of a wrong-size `[Image: … 800x600]` placeholder ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
+- Subagents load the user, workspace and repository `AGENTS.md` files that apply at their own working directory, including isolated worktree children, nested children, revived agents and vibe workers, and their advisors see the same set ([#334](https://github.com/PsychedelicShayna/neopi/issues/334)).
+- A failed `/statusline` save restores the prior settings, so cancelling cannot later persist the discarded layout.
 - An open `ask` question no longer locks the composer: speech-to-text and dictation keys work while it is up, and with the question hidden (`Alt+H`) you can type and send a message or slash command while the question stays pending ([#303](https://github.com/PsychedelicShayna/neopi/issues/303)).
 - A registered agent name with an effort suffix, such as `scout:high`, now runs that agent with its own prompt, tools and model at that effort instead of fuzzy-matching an unrelated model ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 - The agent no longer treats a smoke run as mandatory before finishing any non-trivial work; the base and project prompts drop that rule and its critical reinforcement ([#307](https://github.com/PsychedelicShayna/neopi/issues/307)).
@@ -53,6 +62,7 @@
 
 ### Changed
 
+- `/statusline` autosaves an unapplied draft to `neopi-statusline-draft.json` and restores it on reopen or restart; `s` applies usage-bar templates, widgets, and composer without closing, and Escape asks before applying ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 - Fork extensions now use NeoPi names and migrate existing persona, loadout, REPL, and live-persona state on first read.
 - Use `npi update` for the fork's PR-based update workflow and `npi flash` for portable builds.
 - The Dictation model role supports xAI alongside the independent Ctrl+Space whole-recording path.

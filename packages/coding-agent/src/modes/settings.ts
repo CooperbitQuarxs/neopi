@@ -8,9 +8,11 @@ import { TREE_FILTER_MODES } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import {
 	CONTEXT_LINE_MODE_VALUES,
 	CUSTOM_STATUS_LINE_DEFAULTS,
+	parseUsageBarSegmentId,
 	STATUS_LINE_PRESET_VALUES,
 	STATUS_LINE_SEGMENT_IDS,
 	STATUS_LINE_SEPARATOR_VALUES,
+	type StatusLineSegmentId,
 } from "@oh-my-pi/pi-tui/status-line/schema";
 import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { setEditorGapComposerShape } from "@oh-my-pi/pi-tui/prompt/editor-top-gap";
@@ -322,18 +324,31 @@ export const cfgStatusLineShowHookStatus = register({
 	},
 });
 
+// Array settings infer their value type from the default, not the accepted-item
+// predicate. Preserve the full builtin-or-provider-widget vocabulary here.
+const DEFAULT_LEFT_SEGMENTS: StatusLineSegmentId[] = CUSTOM_STATUS_LINE_DEFAULTS.left;
+const DEFAULT_RIGHT_SEGMENTS: StatusLineSegmentId[] = CUSTOM_STATUS_LINE_DEFAULTS.right;
+
 export const cfgStatusLineLeftSegments = register({
 	id: "statusLine.leftSegments",
 	type: "array",
-	default: CUSTOM_STATUS_LINE_DEFAULTS.left,
-	items: { values: STATUS_LINE_SEGMENT_IDS, label: "status line segment" },
+	default: DEFAULT_LEFT_SEGMENTS,
+	items: {
+		values: STATUS_LINE_SEGMENT_IDS,
+		accepts: value => parseUsageBarSegmentId(value) !== undefined,
+		label: "status line segment",
+	},
 });
 
 export const cfgStatusLineRightSegments = register({
 	id: "statusLine.rightSegments",
 	type: "array",
-	default: CUSTOM_STATUS_LINE_DEFAULTS.right,
-	items: { values: STATUS_LINE_SEGMENT_IDS, label: "status line segment" },
+	default: DEFAULT_RIGHT_SEGMENTS,
+	items: {
+		values: STATUS_LINE_SEGMENT_IDS,
+		accepts: value => parseUsageBarSegmentId(value) !== undefined,
+		label: "status line segment",
+	},
 });
 
 export const cfgStatusLineSegmentOptions = register({
@@ -677,7 +692,25 @@ export const cfgSidebarEnabled = register({
 		tab: "appearance",
 		group: "Side Panel",
 		label: "Side Panel",
-		description: "Dock a panel beside the chat for the todo list and other live sections",
+		description: "Dock a panel beside the chat showing the todo list, the agent roster, or IRC traffic",
+	},
+});
+
+export const cfgSidebarView = register({
+	id: "sidebar.view",
+	type: "enum",
+	values: ["todo", "agents", "irc"] as const,
+	default: "todo",
+	ui: {
+		tab: "appearance",
+		group: "Side Panel",
+		label: "View",
+		description: "What the panel shows; alt+t then t, a or i picks one, right-click in the panel cycles",
+		options: [
+			{ value: "todo", label: "Todo", description: "The todo list" },
+			{ value: "agents", label: "Agents", description: "This session's subagents and advisors" },
+			{ value: "irc", label: "IRC", description: "Agent-to-agent messages" },
+		],
 	},
 });
 

@@ -23,7 +23,7 @@ import type { StatusLineHost, StatusLineSession } from "./host";
 import {
 	CONTEXT_LINE_MODE_VALUES,
 	STATUS_LINE_PRESET_VALUES,
-	STATUS_LINE_SEGMENT_IDS,
+	isStatusLineSegmentId,
 	STATUS_LINE_SEPARATOR_VALUES,
 } from "./schema";
 import type { StatusLineSettings } from "./types";
@@ -109,7 +109,10 @@ function isOptionalBoolean(value: unknown): boolean {
 }
 
 function isSegmentList(value: unknown): boolean {
-	return value === undefined || (Array.isArray(value) && value.every(id => isOneOf(STATUS_LINE_SEGMENT_IDS, id)));
+	return (
+		value === undefined ||
+		(Array.isArray(value) && value.every(id => typeof id === "string" && isStatusLineSegmentId(id)))
+	);
 }
 
 /** Shallow check of persisted settings; nested segment options are trusted as written by this version. */

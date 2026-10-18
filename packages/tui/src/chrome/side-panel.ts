@@ -7,7 +7,7 @@ import {
 	renderLayoutContent,
 } from "../components/layout/geometry";
 import { clampScrollOffset, scrollbarThumbRange, viewportRange } from "../components/scroll-viewport";
-import type { MouseRoutable, SgrMouseEvent } from "../mouse";
+import { isRightPress, type MouseRoutable, type SgrMouseEvent } from "../mouse";
 import { theme } from "../theme/index";
 import type { Component } from "../tui";
 import { truncateToWidth, visibleWidth } from "../utils";
@@ -31,6 +31,19 @@ export interface SidePanelSection {
 export interface SidePanelOptions {
 	/** Called after any section change; the host maps it to ui.requestRender(). */
 	onChange?: () => void;
+	/** Right-button press anywhere in the panel (the host cycles views). */
+	onSecondaryClick?: () => void;
+	/** Left click on panel space no section row claims: gaps, the placeholder, below the document. */
+	onEmptyClick?: () => void;
+}
+
+/** Section content that tracks the pointer and drops its hover when the pointer leaves the panel. */
+export interface SidePanelPointerAware {
+	pointerLeave(): void;
+}
+
+function isPointerAware(content: unknown): content is SidePanelPointerAware {
+	return typeof (content as Partial<SidePanelPointerAware> | null)?.pointerLeave === "function";
 }
 
 /** Rows scrolled per wheel notch. */
@@ -70,6 +83,8 @@ const PLACEHOLDER_TAG: DocumentRowTag = { sectionId: "", kind: "gap", bodyRow: 0
 export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 	readonly debugId = "side-panel";
 	readonly #onChange: () => void;
+	readonly #onSecondaryClick: (() => void) | undefined;
+	readonly #onEmptyClick: (() => void) | undefined;
 	readonly #sections = new Map<string, RegisteredSection>();
 	#nextSequence = 0;
 	#height: number | undefined;
@@ -80,12 +95,17 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 
 	constructor(options: SidePanelOptions = {}) {
 		this.#onChange = options.onChange ?? (() => {});
+		this.#onSecondaryClick = options.onSecondaryClick;
+		this.#onEmptyClick = options.onEmptyClick;
 	}
 
 	/** Register or replace a section by id (keeping its place); returns an unregister function. */
 	register(section: SidePanelSection): () => void {
 		const existing = this.#sections.get(section.id);
 		if (existing) {
+			if (existing.section.content !== section.content && isPointerAware(existing.section.content)) {
+				existing.section.content.pointerLeave();
+			}
 			existing.section = section;
 			existing.titleRows.invalidate();
 		} else {
@@ -104,13 +124,17 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 
 	/** Remove a section; its content stays owned by the caller. */
 	unregister(id: string): void {
-		if (!this.#sections.delete(id)) return;
+		const entry = this.#sections.get(id);
+		if (!entry) return;
+		if (isPointerAware(entry.section.content)) entry.section.content.pointerLeave();
+		this.#sections.delete(id);
 		this.#onChange();
 	}
 
 	setCollapsed(id: string, collapsed: boolean): void {
 		const entry = this.#sections.get(id);
 		if (!entry || (entry.section.collapsed ?? false) === collapsed) return;
+		if (collapsed && isPointerAware(entry.section.content)) entry.section.content.pointerLeave();
 		entry.section.collapsed = collapsed;
 		this.#onChange();
 	}
@@ -128,6 +152,7 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 	scrollTo(offset: number): void {
 		const next = clampScrollOffset(offset, this.#documentRows, this.#height ?? this.#documentRows);
 		if (next === this.#scrollOffset) return;
+		this.pointerLeave();
 		this.#scrollOffset = next;
 		this.#onChange();
 	}
@@ -203,18 +228,42 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 			this.scrollBy(event.wheel * WHEEL_ROWS);
 			return;
 		}
-		// The scrollbar gutter is consumed without an action.
-		if (col >= this.#contentWidth) return;
+		if (isRightPress(event)) {
+			this.#onSecondaryClick?.();
+			return;
+		}
+		// The scrollbar gutter has no row target.
+		if (col < 0 || col >= this.#contentWidth) {
+			if (event.motion) this.pointerLeave();
+			return;
+		}
 		const tag = this.#rowTags[line + this.#scrollOffset];
-		if (!tag || tag.kind === "gap") return;
-		const entry = this.#sections.get(tag.sectionId);
-		if (!entry) return;
+		const entry = tag && tag.kind !== "gap" ? this.#sections.get(tag.sectionId) : undefined;
+		if (!tag || !entry) {
+			// Motion over empty space is a pointer leaving every section.
+			if (event.motion) this.pointerLeave();
+			else if (event.leftClick) this.#onEmptyClick?.();
+			return;
+		}
 		if (tag.kind === "title") {
+			if (event.motion) this.pointerLeave();
 			if (event.leftClick) this.toggleCollapsed(tag.sectionId);
 			return;
 		}
 		const content = entry.section.content;
+		if (event.motion) {
+			for (const other of this.#sections.values()) {
+				if (other !== entry && isPointerAware(other.section.content)) other.section.content.pointerLeave();
+			}
+		}
 		if (isLayoutMouseRoutable(content)) content.routeMouse(event, tag.bodyRow, col);
+	}
+
+	/** The pointer left the panel (or crossed onto non-section rows): sections drop hover state. */
+	pointerLeave(): void {
+		for (const entry of this.#sections.values()) {
+			if (isPointerAware(entry.section.content)) entry.section.content.pointerLeave();
+		}
 	}
 
 	invalidate(): void {

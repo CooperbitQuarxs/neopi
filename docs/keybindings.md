@@ -58,10 +58,27 @@ app.history.search: []
 | `app.live.destination.cycle` | `Ctrl+Alt+L`                                                          | During live voice mode, cycle where Enter sends composer text: main agent (default) → voice agent only → both. Slash, `!`, and `$` commands always go to the harness. The status-line mic shows `voice` or `both` when not sending to the main agent. |
 | `app.agents.hub`             | `Alt+A`                                                               | [Open the Agent Hub](./agent-hub.md)                                                                                                                                                 |
 | `app.irc.viewer`             | `Alt+I`                                                               | [Open the IRC communications viewer](./agent-hub.md#irc-viewer)                                                                                                                      |
+| `app.sidebar.toggle`         | `Alt+T`                                                               | [Side panel view chord](#side-panel-views): then `t` Todo, `a` Agents, `i` IRC                                                                                                        |
 | `app.tree.previousBranch`    | Unbound                                                               | Jump to the previous visible branch in `/tree` ([details](./tree.md))                                                                                                                |
 | `app.tree.nextBranch`        | Unbound                                                               | Jump to the next visible branch in `/tree` ([details](./tree.md))                                                                                                                    |
 
 `Ctrl+G` opens `$VISUAL` / `$EDITOR` with the currently painted terminal viewport above `<!-- omp:message starts here -->`. The visible conversation and status are reference only: saving sends just the text below that marker back to the composer. Keep the marker intact; removing it leaves the original draft unchanged.
+
+## Side panel views
+
+`app.sidebar.toggle` (`Alt+T`) is a chord prefix. The next key picks what the side panel shows:
+
+| Chord | View |
+| --- | --- |
+| `Alt+T` `t` | Todo list |
+| `Alt+T` `a` | Agents: this session's subagents and advisors, as in the Agent Hub |
+| `Alt+T` `i` | IRC: the newest agent-to-agent messages, from the same history as `Alt+I` |
+
+From hidden, a chord opens the panel on that view; with another view showing, it switches; the chord of the view already showing hides the panel. The view key also works with `Alt` still held (`Alt+T` `Alt+A`). The prefix waits two seconds. `Esc` cancels it, and any other key cancels it and keeps its usual meaning. A right-click inside the panel cycles Todo → Agents → IRC. The chosen view persists as `sidebar.view`.
+
+Wide terminals dock the panel beside the chat; below `sidebar.splitAt` the chord opens it fullscreen instead. While docked, the Todo view replaces the todo list above the editor and the Agents view replaces the pinned subagents list; each comes back when the panel closes or switches view. Other activity rows, such as waiting on subagents, stay where they are.
+
+In the Agents view, hovering highlights a row. Clicking a subagent shows its transcript in the main area, the same as selecting it in the Agent Hub; clicking it again, or empty panel space, returns to the main session. Advisors and aborted agents are read-only transcripts, so clicking one opens the Agent Hub. Clicking the IRC view opens the full IRC viewer.
 
 ## Recover a cleared prompt
 

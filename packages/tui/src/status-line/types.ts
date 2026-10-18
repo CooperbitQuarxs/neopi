@@ -1,4 +1,5 @@
 import type { Model } from "@oh-my-pi/pi-ai";
+import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai/usage";
 import type { SessionState, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import type { NativeNode, NativeUiEvent } from "../native/node";
 import type { ContextLineMode, StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "./schema";
@@ -40,6 +41,8 @@ export interface StatusLineSegmentOptions {
 	path?: { abbreviate?: boolean; maxLength?: number; stripWorkPrefix?: boolean };
 	git?: { showBranch?: boolean; showStaged?: boolean; showUnstaged?: boolean; showUntracked?: boolean };
 	time?: { format?: "12h" | "24h"; showSeconds?: boolean };
+	/** Per-widget text templates for `usage:<provider>:<window>[:<tier>]` bars, keyed by segment id. */
+	usageBars?: { templates?: Record<string, string> };
 }
 
 export interface StatusLineSettings {
@@ -56,9 +59,9 @@ export interface StatusLineSettings {
 	/** Replace the model-segment icon with the thinking-level glyph and drop the
 	 *  " · <level>" suffix, so the thinking level reads as a single compact icon. */
 	compactThinkingLevel?: boolean;
-	/** How the gap line between the left and right groups reacts to context
-	 *  usage. `embedded` moves configured context segments into the annotated
-	 *  gauge as percentage and window labels. Box composer only. */
+	/** How the context gauge reacts to usage. `embedded` moves configured context
+	 * segments into the annotated gauge as percentage and window labels.
+	 * Applies to the box/band gap and to explicit context_bar widgets. */
 	contextLine?: ContextLineMode;
 }
 
@@ -196,6 +199,10 @@ export interface SegmentContext {
 	 * the worktree/branch is already shown by the git segment.
 	 */
 	worktree: { projectName: string; worktreeName: string } | null;
+	/** Last completed shared usage fetch; null until one completes. */
+	usageReports: { reports: readonly UsageReport[] } | null;
+	/** Host account selection, absent in previews without an authenticated session. */
+	usageLimitMatchesActiveAccount?: (report: UsageReport, limit: UsageLimit) => boolean;
 	usage: {
 		tier?: string;
 		fiveHour?: { percent: number; resetMinutes?: number };

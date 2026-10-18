@@ -4,10 +4,23 @@
 
 ### Added
 
+- The agent transcript viewer can show pushed, unsaved assistant text and tool progress, and drops its message input when the agent is aborted while open ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
+- The side panel reports right-clicks, clicks on empty panel space, and the pointer leaving it, so hosts can cycle views and drop row hover ([#342](https://github.com/PsychedelicShayna/neopi/issues/342)).
+- Added `/statusline` to toggle, reorder, and move widgets between groups, including provider usage bars, with live composer previews and save or discard ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
+- Added a movable `context_bar` status-line widget that fills the remaining width in every composer ([#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
+- Added per-provider usage-bar status-line widgets (`usage:<provider>:<window>[:<tier>]`) showing each reported quota window's percent and age ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
 - Picker navigation accepts `h/j/k/l` as arrows in normal mode; `i` opens filter editing, where letters stay literal. Escape leaves the filter, then closes the picker on the next press (#35).
+- Added per-widget text templates for usage bars (`{label}`, `{percent}`, `{age}`), editable in `/statusline` with Tab ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
+
+### Changed
+
+- `/statusline` keeps edits in an unapplied draft that survives closing and restarts: `s` applies without leaving, Escape asks before applying, and Reset to Active is the only way to discard it ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
+- `/statusline` keeps enabled and disabled widgets in one stable list and navigates with `j`/`k`, `h`/`l` to move, Ctrl+D/U, `gg`/`G`, Ctrl+E/Y scrolling, `/` filtering, and `<`/`>` composer cycling that keeps the selection ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 
 ### Fixed
 
+- Keep the last usage-bar percentages and their age when a broker-backed refresh returns no report.
+- Keep transcript history visible with the side panel docked after compaction, resume, or a layout rebuild, and preserve it as the live conversation grows or the chat width changes.
 - Volatile speech updates reuse a cached draft and cursor offset, and apply a known edit region, instead of rejoining and diffing the whole buffer on every partial.
 
 ## [18.10.3] - 2026-10-12

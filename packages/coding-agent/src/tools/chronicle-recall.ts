@@ -1,6 +1,6 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { untilAborted } from "@oh-my-pi/pi-utils";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { cfgChroniclerRecallEnabled } from "../chronicler/settings";
 import { parseTimeBound } from "../chronicler/temporal/calendar";
 import { recallDefaultsFromSettings, resolveRanker, resolveViewRoot } from "../chronicler/temporal/config";
@@ -8,6 +8,7 @@ import { formatRecallResult } from "../chronicler/temporal/format";
 import { recallChronicle } from "../chronicler/temporal/recall";
 import chronicleRecallDescription from "../prompts/tools/chronicle-recall.md" with { type: "text" };
 import type { ToolSession } from ".";
+import { throwIfAborted } from "./tool-errors";
 
 const chronicleRecallSchema = type({
 	query: type("string").describe("what you remember, in any wording"),
@@ -25,11 +26,15 @@ const chronicleRecallSchema = type({
 
 export type ChronicleRecallParams = typeof chronicleRecallSchema.infer;
 
+export interface ChronicleRecallToolDetails {
+	async: { state: "running"; jobId: string; type: "chronicle" };
+}
+
 /**
  * Explicit recall over the Chronicler temporal view. Granted by
  * `chronicler.recall.enabled`; never injected, never on by default.
  */
-export class ChronicleRecallTool implements AgentTool<typeof chronicleRecallSchema> {
+export class ChronicleRecallTool implements AgentTool<typeof chronicleRecallSchema, ChronicleRecallToolDetails> {
 	readonly name = "chronicle_recall";
 	readonly approval = "read" as const;
 	readonly label = "Chronicle Recall";
@@ -45,31 +50,57 @@ export class ChronicleRecallTool implements AgentTool<typeof chronicleRecallSche
 		return cfgChroniclerRecallEnabled.get(session.settings) ? new ChronicleRecallTool(session) : null;
 	}
 
-	async execute(_id: string, params: ChronicleRecallParams, signal?: AbortSignal): Promise<AgentToolResult> {
-		return untilAborted(signal, async () => {
-			const settings = this.session.settings;
-			const defaults = recallDefaultsFromSettings(settings);
-			const result = await recallChronicle({
-				root: resolveViewRoot(settings, settings.getAgentDir()),
-				query: params.query,
-				from: params.from ? parseTimeBound(params.from) : undefined,
-				to: params.to ? parseTimeBound(params.to) : undefined,
-				project: params.project,
-				session: params.session,
-				hint: params.hint,
-				resolution: params.resolution,
-				node: params.node,
-				budget: params.budget ?? defaults.budget,
-				beam: defaults.beam,
-				neighborhoodMinutes: defaults.neighborhoodMinutes,
-				ranker: resolveRanker(settings, this.session.modelRegistry),
-				signal,
-			});
-			return {
-				content: [{ type: "text", text: formatRecallResult(result) }],
-				details: result,
-				...(result.results.length === 0 && result.candidates.length === 0 ? { useless: true } : {}),
-			};
-		});
+	async execute(
+		_id: string,
+		params: ChronicleRecallParams,
+		signal?: AbortSignal,
+	): Promise<AgentToolResult<ChronicleRecallToolDetails>> {
+		throwIfAborted(signal);
+		const manager = this.session.asyncJobManager;
+		if (!manager) throw new ToolError("Background job manager is unavailable for chronicle recall.");
+		const ownerId = this.session.getAgentId?.();
+		if (!ownerId) throw new ToolError("Could not identify the session owner for chronicle recall.");
+
+		const settings = this.session.settings;
+		const defaults = recallDefaultsFromSettings(settings);
+		const root = resolveViewRoot(settings, settings.getAgentDir());
+		const ranker = resolveRanker(settings, this.session.modelRegistry);
+		const from = params.from ? parseTimeBound(params.from) : undefined;
+		const to = params.to ? parseTimeBound(params.to) : undefined;
+		const jobId = manager.register(
+			"chronicle",
+			params.query.trim().replace(/\s+/g, " ").slice(0, 120) || "Chronicle recall",
+			async ({ jobId, signal: jobSignal, reportProgress }) => {
+				const asyncDetails = { async: { state: "running" as const, jobId, type: "chronicle" as const } };
+				const result = await recallChronicle({
+					root,
+					query: params.query,
+					from,
+					to,
+					project: params.project,
+					session: params.session,
+					hint: params.hint,
+					resolution: params.resolution,
+					node: params.node,
+					budget: params.budget ?? defaults.budget,
+					beam: defaults.beam,
+					neighborhoodMinutes: defaults.neighborhoodMinutes,
+					ranker,
+					signal: jobSignal,
+					onProgress: text => reportProgress(text, asyncDetails),
+				});
+				return formatRecallResult(result);
+			},
+			{ ownerId },
+		);
+		return {
+			content: [
+				{
+					type: "text",
+					text: `Chronicle recall is running as background job ${jobId}. Results will be delivered automatically when it finishes.`,
+				},
+			],
+			details: { async: { state: "running", jobId, type: "chronicle" } },
+		};
 	}
 }
