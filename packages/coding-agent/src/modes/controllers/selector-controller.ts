@@ -38,6 +38,8 @@ import { reset as resetCapabilities } from "../../capability";
 import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { type ChainConfigDeps, ChainConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/chain-config";
 import type { ChainConfigScope } from "@oh-my-pi/pi-tui/overlays/chain-types";
+import { StatusLineConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/status-line-config";
+import { renderComposerShapePreview } from "@oh-my-pi/pi-tui/overlays/composer-shape-preview";
 import { chainsConfigFilePath, discoverChains, loadChainsConfigFile, saveChainsConfigFile } from "../../chains/config";
 import { discoverMixtures, mixturesConfigFilePath } from "../../moa/config";
 import { MixtureCatalog } from "../../moa/provider";
@@ -171,6 +173,7 @@ import { cfgCycleOrder, cfgDisabledProviders, cfgModelRoleStorage } from "../../
 import { cfgDefaultThinkingLevel } from "../../session/settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "../../config/effort-policy";
 import {
+	cfgComposerShape,
 	cfgStatusLineCompactThinkingLevel,
 	cfgStatusLineContextLine,
 	cfgStatusLineLeftSegments,
@@ -224,6 +227,7 @@ function loadProviderAuthUi(): ProviderAuthUiModules {
 /** Menus that open at most once: a repeat request focuses the open one. */
 type MenuKind =
 	| "settings"
+	| "status-line-config"
 	| "model-picker"
 	| "model-hub"
 	| "agents-dashboard"
@@ -641,6 +645,53 @@ export class SelectorController {
 			this.ctx.ui.setFocus(overlay);
 			this.ctx.ui.requestRender();
 		})();
+	}
+
+	showStatusLineConfigure(): void {
+		if (this.#focusOpenMenu("status-line-config")) return;
+		const original = this.ctx.statusLine.getEffectiveSettings();
+		const originalShape = cfgComposerShape.get(this.ctx.settings);
+		const overlay = new StatusLineConfigOverlayComponent({
+			load: () => ({
+				composerShape: originalShape,
+				leftSegments: original.leftSegments,
+				rightSegments: original.rightSegments,
+			}),
+			usageReports: this.ctx.statusLine.getUsageReports(),
+			preview: draft => {
+				const shape = draft?.composerShape ?? originalShape;
+				this.ctx.statusLine.updateSettings(
+					draft
+						? {
+								...original,
+								preset: "custom",
+								leftSegments: draft.leftSegments,
+								rightSegments: draft.rightSegments,
+							}
+						: original,
+				);
+				this.ctx.syncComposerShape(shape);
+				this.ctx.ui.requestRender();
+			},
+			renderPreview: (shape, width) => renderComposerShapePreview(shape, width, this.ctx.statusLine),
+			save: async draft => {
+				cfgStatusLineLeftSegments.set(this.ctx.settings, draft.leftSegments);
+				cfgStatusLineRightSegments.set(this.ctx.settings, draft.rightSegments);
+				cfgStatusLinePreset.set(this.ctx.settings, "custom");
+				cfgComposerShape.set(this.ctx.settings, draft.composerShape);
+				await this.ctx.settings.flush();
+			},
+			close: () => {
+				menu.handle?.hide();
+				this.#releaseMenu("status-line-config", menu);
+				this.focusActiveEditorArea();
+				this.ctx.ui.requestRender();
+			},
+			requestRender: () => this.ctx.ui.requestRender(),
+			notify: message => this.ctx.showStatus(message),
+		});
+		const menu = this.#claimMenu("status-line-config");
+		this.#mountMenu(menu, overlay, () => this.#showFullscreenMenu(overlay));
 	}
 
 	showChainConfigure(): void {

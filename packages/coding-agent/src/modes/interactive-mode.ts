@@ -3776,13 +3776,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			contextLine: cfgStatusLineContextLine.get(settings),
 		});
 	}
-	syncComposerShape(): void {
-		const shape = cfgComposerShape.get(settings);
+	syncComposerShape(previewShape?: string): void {
+		const shape = previewShape ?? cfgComposerShape.get(settings);
 		const style = getComposerStyle(shape);
 		this.composer.setPreferences({ composerShape: shape });
 		this.statusLine.attachToEditor(this.editor, style);
 		this.updateEditorBorderColor();
-		this.#scheduleComposerStatusPersist();
+		if (previewShape === undefined) this.#scheduleComposerStatusPersist();
 		this.ui.requestRender();
 	}
 
@@ -8142,6 +8142,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showChainConfigure(): void {
 		this.#selectorController.showChainConfigure();
+	}
+
+	showStatusLineConfigure(): void {
+		this.#selectorController.showStatusLineConfigure();
 	}
 
 	showMixtureConfigure(name?: string): void {

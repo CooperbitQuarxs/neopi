@@ -961,8 +961,14 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		this.#syncUsageAgeTimer();
 	}
 
-	getEffectiveSettingsForTest(): EffectiveStatusLineSettings {
+	/** Current resolved layout, also used to seed non-persistent configuration previews. */
+	getEffectiveSettings(): EffectiveStatusLineSettings {
 		return this.#resolveSettings();
+	}
+
+	/** Latest shared usage reports; reading them never starts another fetch. */
+	getUsageReports(): readonly UsageReport[] {
+		return this.#cachedUsageReports?.reports ?? [];
 	}
 
 	setAutoCompactEnabled(enabled: boolean): void {
