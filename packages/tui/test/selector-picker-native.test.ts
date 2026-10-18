@@ -90,12 +90,12 @@ describe("short-list native picker search", () => {
 		const { selector, log } = make();
 		const initial = selector.describe(pickerCx);
 		expect(sheet(initial).props.query).toBeNull();
-		selector.handleInput("/");
+		selector.getSelectList().handleInput("/");
 		const focused = selector.describe(pickerCx);
 		expect(focused).not.toBe(initial);
 		expect(sheet(focused).props.query).toBe("");
 		expect(sheet(focused).props.actions?.at(-1)?.label).toBe("Back to list");
-		selector.handleInput("h");
+		selector.getSelectList().handleInput("h");
 		selector.handleNativeEvent(act("close"));
 		expect(sheet(selector.describe(pickerCx)).props.query).toBe("h");
 		expect(sheet(selector.describe(pickerCx)).props.actions?.at(-1)?.label).toBe("Close");
@@ -106,7 +106,7 @@ describe("short-list native picker search", () => {
 
 	it("invalidates the native sheet when an empty filter loses focus", () => {
 		const { selector, log } = make();
-		selector.handleInput("/");
+		selector.getSelectList().handleInput("/");
 		const focused = selector.describe(pickerCx);
 		selector.handleNativeEvent(act("cancel"));
 		const normal = selector.describe(pickerCx);
