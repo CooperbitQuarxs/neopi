@@ -2,7 +2,7 @@ import { afterEach, beforeAll, expect, spyOn, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import type { TspKind, TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
-import { AgentHubOverlayComponent } from "../src/overlays/agent-hub";
+import { AgentHubOverlayComponent, type AgentHubDeps } from "../src/overlays/agent-hub";
 import type { AgentRecordLike } from "../src/overlays/agent-hub-types";
 import {
 	type EventBusLike,
@@ -51,6 +51,7 @@ function createHub(
 	agents: AgentRecordLike[],
 	focused: string[] = [],
 	observers = new SessionObserverRegistry(),
+	options: Partial<Pick<AgentHubDeps, "ui" | "onDone">> = {},
 ): AgentHubOverlayComponent {
 	return new AgentHubOverlayComponent({
 		observers,
@@ -72,6 +73,7 @@ function createHub(
 		focusAgent: async id => {
 			focused.push(id);
 		},
+		...options,
 	});
 }
 
@@ -213,4 +215,106 @@ test("a follow-up turn does not age the previous turn's snapshot across the idle
 	} finally {
 		hub.dispose();
 	}
+});
+
+test("hub uses visual-line viewport scrolling without moving its selected agent", () => {
+	const agents = Array.from({ length: 40 }, (_, index) => agent(`agent-${index}`, 40 - index, { activity: `Task ${index}` }));
+	const hub = createHub(agents);
+	try {
+		hub.render(120);
+		const first = hub.navigationSnapshot();
+		hub.handleInput("\x05");
+		hub.render(120);
+		expect(hub.navigationSnapshot()).toMatchObject({
+			selectedAgentId: first.selectedAgentId,
+			rosterViewport: { item: 0, lineOffset: 1 },
+		});
+		hub.handleInput("\x19");
+		hub.render(120);
+		expect(hub.navigationSnapshot().rosterViewport).toEqual(first.rosterViewport);
+		hub.handleInput("G");
+		hub.render(120);
+		expect(hub.navigationSnapshot().selectedAgentId).toBe("agent-39");
+		hub.handleInput("g");
+		hub.handleInput("g");
+		hub.render(120);
+		expect(hub.navigationSnapshot()).toMatchObject({ selectedAgentId: "agent-0", rosterViewport: { item: 0, lineOffset: 0 } });
+		hub.handleInput("\x04");
+		expect(hub.navigationSnapshot().selectedAgentId).not.toBe("agent-0");
+	} finally { hub.dispose(); }
+});
+
+test("hub search is slash-focused literal input and Esc retains its query", () => {
+	const onDone = vi.fn();
+	const hub = createHub([agent("alpha", 1)], [], undefined, { onDone });
+	try {
+		hub.handleInput("i");
+		expect(hub.navigationSnapshot().agentFilter.focused).toBe(false);
+		hub.handleInput("/");
+		for (const key of "hjkl/ g") hub.handleInput(key);
+		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "hjkl/ g", focused: true });
+		hub.handleInput("\x1b");
+		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "hjkl/ g", focused: false });
+		expect(onDone).not.toHaveBeenCalled();
+		hub.handleInput("\x1b");
+		expect(onDone).toHaveBeenCalledTimes(1);
+	} finally { hub.dispose(); }
+});
+
+test("hub pane motion wins over an armed close and unrelated input disarms it", () => {
+	const onDone = vi.fn();
+	const hub = createHub([agent("alpha", 1)], [], undefined, { onDone });
+	try {
+		hub.render(120);
+		hub.handleInput("l");
+		hub.armCloseTap();
+		hub.handleInput("h");
+		expect(hub.navigationSnapshot().narrowDetailsOpen).toBe(false);
+		expect(onDone).not.toHaveBeenCalled();
+		hub.armCloseTap();
+		hub.handleInput("i");
+		hub.handleInput("h");
+		expect(onDone).not.toHaveBeenCalled();
+		hub.handleInput("h");
+		expect(onDone).toHaveBeenCalledTimes(1);
+	} finally { hub.dispose(); }
+});
+
+test("hub transcript stays in the same overlay and restores its unsent editor draft silently", () => {
+	const agents = [agent("alpha", 2), agent("beta", 1)];
+	const showOverlay = vi.fn();
+	const setFocus = vi.fn();
+	const options = {
+		ui: { terminal: { rows: 24 }, showOverlay, setFocus } as unknown as NonNullable<AgentHubDeps["ui"]>,
+	};
+	const hub = createHub(agents, [], undefined, options);
+	const restored = createHub(agents, [], undefined, options);
+	const visits: Array<[string, unknown]> = [];
+	hub.onNavigationVisit = (page, previous) => visits.push([page, previous]);
+	const restoredVisit = vi.fn();
+	restored.onNavigationVisit = restoredVisit;
+	try {
+		hub.handleInput("j");
+		const root = hub.navigationSnapshot();
+		hub.openChat("beta");
+		expect(showOverlay).not.toHaveBeenCalled();
+		expect(setFocus).not.toHaveBeenCalled();
+		expect(visits).toEqual([["transcript:beta", root]]);
+		expect(hub.nativeSheet(pickerCx)).toBe(false);
+		hub.handleInput("\t");
+		for (const key of "hjkl / draft") hub.handleInput(key);
+		const nested = hub.navigationSnapshot();
+		expect(nested.transcript?.state).toMatchObject({ focus: "editor", editor: { text: "hjkl / draft" } });
+		hub.handleInput("\x1b");
+		expect(visits).toHaveLength(1);
+		hub.handleInput("h");
+		expect(visits.map(([page]) => page)).toEqual(["transcript:beta", ""]);
+		expect(hub.navigationSnapshot().selectedAgentId).toBe("beta");
+		expect(hub.nativeSheet(pickerCx)).toBe(true);
+		restored.restoreNavigation(nested);
+		expect(restored.navigationSnapshot().transcript).toEqual(nested.transcript);
+		expect(restoredVisit).not.toHaveBeenCalled();
+		expect(showOverlay).not.toHaveBeenCalled();
+		expect(setFocus).not.toHaveBeenCalled();
+	} finally { hub.dispose(); restored.dispose(); }
 });

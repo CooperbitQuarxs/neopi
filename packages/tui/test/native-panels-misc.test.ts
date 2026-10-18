@@ -109,7 +109,7 @@ describe("AnnotationOverlay native esc", () => {
 });
 
 describe("AgentTranscriptViewer native esc", () => {
-	it("clears a typed draft first, then closes the viewer", () => {
+	it("leaves a focused message field without discarding its draft, then returns to the hub", () => {
 		const onClose = vi.fn();
 		const missing = (): never => {
 			throw Object.assign(new Error("missing"), { code: "ENOENT" });
@@ -125,7 +125,7 @@ describe("AgentTranscriptViewer native esc", () => {
 			lifecycle: () => ({}),
 			ui: { terminal: { rows: 40, columns: 100 }, requestRender: () => {} },
 			cwd: "/",
-			expandKeys: ["ctrl+o"],
+			expandKeys: ["alt+e"],
 			hubKeys: [],
 			requestRender: () => {},
 			onClose,
@@ -133,10 +133,20 @@ describe("AgentTranscriptViewer native esc", () => {
 		} as unknown as AgentTranscriptViewerDeps;
 		const viewer = new AgentTranscriptViewer(deps);
 		try {
-			viewer.handleInput("h");
 			viewer.handleInput("i");
+			expect(viewer.navigationSnapshot()).toMatchObject({ focus: "view", editor: { text: "" } });
+			viewer.handleInput("\t");
+			viewer.handleInput("hjkl / draft");
+			const draft = viewer.navigationSnapshot();
+			expect(draft).toMatchObject({ focus: "editor", editor: { text: "hjkl / draft" } });
+			const restored = new AgentTranscriptViewer(deps);
+			try {
+				restored.restoreNavigation(draft);
+				expect(restored.navigationSnapshot()).toEqual(draft);
+			} finally { restored.dispose(); }
 			viewer.handleNativeEvent(CLOSE_CLICK);
 			expect(onClose).not.toHaveBeenCalled();
+			expect(viewer.navigationSnapshot()).toMatchObject({ focus: "view", editor: { text: "hjkl / draft" } });
 			viewer.handleNativeEvent(CLOSE_CLICK);
 			expect(onClose).toHaveBeenCalledTimes(1);
 		} finally {
@@ -187,7 +197,7 @@ describe("BtwHistoryPanel native events", () => {
 		expect(findNode(described, node => node.key === "composer")).toBeDefined();
 	});
 
-	it("with escapeHides, puts a running answer away on Esc without cancelling it; x cancels it", () => {
+	it("puts a running answer away on Esc without cancelling it; x cancels it", () => {
 		const onClose = vi.fn();
 		const onCancel = vi.fn();
 		const running: BtwHistoryRecord = { ...record("a", "still going"), status: "running" };
@@ -198,7 +208,6 @@ describe("BtwHistoryPanel native events", () => {
 			onCancel,
 			requestRender: () => {},
 			getHeight: () => 30,
-			escapeHides: true,
 		});
 		history.handleInput("\x1b");
 		expect(onClose).toHaveBeenCalledTimes(1);
