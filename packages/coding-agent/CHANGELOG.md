@@ -31,6 +31,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Saved images in Agent Hub transcripts of advisors and aborted agents, and in `/monitor` panes, now render as images instead of a wrong-size `[Image: … 800x600]` placeholder ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
 - Subagents load the user, workspace and repository `AGENTS.md` files that apply at their own working directory, including isolated worktree children, nested children, revived agents and vibe workers, and their advisors see the same set ([#334](https://github.com/PsychedelicShayna/neopi/issues/334)).
 - A failed `/statusline` save restores the prior settings, so cancelling cannot later persist the discarded layout.
 - An open `ask` question no longer locks the composer: speech-to-text and dictation keys work while it is up, and with the question hidden (`Alt+H`) you can type and send a message or slash command while the question stays pending ([#303](https://github.com/PsychedelicShayna/neopi/issues/303)).
