@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Keep the last usage-bar percentages and their age when a broker-backed refresh returns no report.
 - Volatile speech updates reuse a cached draft and cursor offset, and apply a known edit region, instead of rejoining and diffing the whole buffer on every partial.
 
 ## [18.10.3] - 2026-10-12

@@ -225,22 +225,43 @@ describe("StatusLineComponent usage refresh", () => {
 		}
 	});
 
-	it("keeps the last provider snapshot and its age after a failed refresh", async () => {
-		let failed = false;
+	it.each(["rejected", "null", "undefined", "object"])(
+		"keeps the last provider snapshot after a %s refresh failure",
+		async failure => {
+			let failed = false;
+			const component = new StatusLineComponent(
+				makeSession(async () => {
+					if (failed) {
+						if (failure === "rejected") throw new Error("provider unavailable");
+						return failure === "null" ? null : failure === "undefined" ? undefined : {};
+					}
+					return usageReport(10);
+				}),
+				statusLineHost,
+			);
+			component.updateSettings({ preset: "custom", leftSegments: ["usage:anthropic:5h"], rightSegments: [] });
+			try {
+				await refreshUsage(component);
+				expect(plain(component.getTopBorder(120).content)).toContain("AN 5h 10% now");
+				failed = true;
+				await refreshUsage(component, 300_000);
+				expect(plain(component.getTopBorder(120).content)).toContain("AN 5h 10% 5m");
+			} finally {
+				component.dispose();
+			}
+		},
+	);
+
+	it("marks an unavailable first broker snapshot without retaining a loading placeholder", async () => {
 		const component = new StatusLineComponent(
-			makeSession(async () => {
-				if (failed) throw new Error("provider unavailable");
-				return usageReport(10);
-			}),
+			makeSession(async () => null),
 			statusLineHost,
 		);
 		component.updateSettings({ preset: "custom", leftSegments: ["usage:anthropic:5h"], rightSegments: [] });
 		try {
+			expect(plain(component.getTopBorder(120).content)).toContain("AN 5h …");
 			await refreshUsage(component);
-			expect(plain(component.getTopBorder(120).content)).toContain("AN 5h 10% now");
-			failed = true;
-			await refreshUsage(component, 300_000);
-			expect(plain(component.getTopBorder(120).content)).toContain("AN 5h 10% 5m");
+			expect(plain(component.getTopBorder(120).content)).toContain("AN 5h n/a");
 		} finally {
 			component.dispose();
 		}
