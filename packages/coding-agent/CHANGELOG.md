@@ -33,6 +33,7 @@
 ### Fixed
 
 - Live mode keeps Iris-only speech in the composer until delivery succeeds, and stopping during a handoff records the delivered speech only once ([#176](https://github.com/PsychedelicShayna/neopi/issues/176)).
+- Source installs retire managed legacy persona, loadout, and REPL extension links without deleting operator-owned extensions, preventing old hooks from running alongside built-ins ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
 - CI's session/log descriptor-leak check now works with Bun versions that open files close-on-exec by default ([#286](https://github.com/PsychedelicShayna/neopi/issues/286)).
 - Saved images in Agent Hub transcripts of advisors and aborted agents, and in `/monitor` panes, now render as images instead of a wrong-size `[Image: … 800x600]` placeholder ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
 - Subagents load the user, workspace and repository `AGENTS.md` files that apply at their own working directory, including isolated worktree children, nested children, revived agents and vibe workers, and their advisors see the same set ([#334](https://github.com/PsychedelicShayna/neopi/issues/334)).
