@@ -1585,7 +1585,7 @@ export class SessionAdvisors {
 			});
 
 			const advisorAgentFacade: AdvisorAgent = {
-				prompt: async (input, signal) => {
+				prompt: async (input, { signal } = {}) => {
 					let quarantined: string | undefined;
 					advisorLoopGuard.reset();
 					advisorLoopGuardStopped = false;
