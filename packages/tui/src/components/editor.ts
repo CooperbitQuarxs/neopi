@@ -3474,6 +3474,23 @@ export class Editor implements Component, Focusable {
 		return this.#speechSpans.some(span => span.id === id) ? id : undefined;
 	}
 
+	/** Project the current draft without unchanged speech owned by these utterances. */
+	getTextWithoutUtterances(ids: readonly number[]): string {
+		this.#reconcileVolatile();
+		let full = this.#draft();
+		this.#reconcileSpans(full);
+		for (const span of this.#removableSpeechSpans(ids, full)) {
+			full = full.slice(0, span.start) + full.slice(span.end);
+		}
+		return full;
+	}
+
+	#removableSpeechSpans(ids: readonly number[], full: string): SpeechSpan[] {
+		return this.#speechSpans
+			.filter(span => ids.includes(span.id) && full.slice(span.start, span.end) === span.text)
+			.sort((a, b) => b.start - a.start);
+	}
+
 	/**
 	 * Remove the speech committed under the given utterance ids as one undoable edit, leaving
 	 * the volatile preview intact. Only spans still holding exactly the spoken text are removed,
@@ -3484,9 +3501,7 @@ export class Editor implements Component, Focusable {
 		this.#reconcileVolatile();
 		let full = this.#state.lines.join("\n");
 		this.#reconcileSpans(full);
-		const targets = this.#speechSpans
-			.filter(span => ids.includes(span.id) && full.slice(span.start, span.end) === span.text)
-			.sort((a, b) => b.start - a.start);
+		const targets = this.#removableSpeechSpans(ids, full);
 		if (targets.length === 0) return 0;
 		this.#exitHistoryForEditing();
 		this.#recordUndoState();

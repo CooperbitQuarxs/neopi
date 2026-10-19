@@ -311,6 +311,15 @@ export class LiveCommandController {
 			}),
 			holdMode: () => cfgLiveHoldMode.get(this.#ctx.settings),
 			quietFloorMs: () => cfgLiveQuietFloorMs.get(this.#ctx.settings),
+			composerTextExcludingTurns: turns => {
+				const ids = turns.flatMap(turn => {
+					const id = this.#committedSpeech.get(turn);
+					return id === undefined ? [] : [id];
+				});
+				const text = this.#ctx.editor.getTextWithoutUtterances(ids);
+				const force = stripLiveKeyword(text, cfgLiveForceDelegateKeyword.get(this.#ctx.settings), true);
+				return force.matched ? force.text : stripLiveKeyword(text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).text;
+			},
 			relayGates: () => {
 				const settings = settingsSource.get();
 				return {

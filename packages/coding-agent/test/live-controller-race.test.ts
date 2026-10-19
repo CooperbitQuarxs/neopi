@@ -20,6 +20,8 @@ import { LIVE_INGEST_DEFAULTS, type LiveIngestSettingsSource } from "../src/live
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, type SubagentLifecyclePayload } from "../src/task/types";
 import { EventBus, emitSubagentFrame } from "../src/utils/event-bus";
 import type { LiveClientMessage, LiveServerEvent } from "../src/live/protocol";
+import { Settings } from "../src/config/settings";
+import { RpcLiveBridge } from "../src/modes/rpc/rpc-live";
 
 function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (cause: unknown) => void } {
 	let resolve!: (value: T) => void;
@@ -335,6 +337,132 @@ function makeHarness(options?: {
 
 describe("per-utterance delegation keywords", () => {
 	const defaults = () => ({ suppress: "Iris", force: "relay" });
+	for (const earlierPrimary of [false, true]) {
+		it(`rejects a finalized direct address without dropping an earlier pending request (${earlierPrimary})`, async () => {
+			const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
+			await h.controller.start();
+			try {
+				if (earlierPrimary) h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the parser" } });
+				h.fireLive({ type: "input_transcript.added", item: { text: "Iris" } });
+				h.fireLive(delegation("prefinal-address", ""));
+				h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris, tell me a joke" } });
+				await settle();
+				expect(h.prompts).toEqual(earlierPrimary ? ["fix the parser"] : []);
+				expect(h.sent.some(message => "content" in message &&
+					message.content.some(item => item.text.includes("Iris, tell me a joke")))).toBe(true);
+				h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "A joke" } });
+				await settle();
+				expect(h.controller.pendingUserTurnCount()).toBe(0);
+			} finally {
+				await h.controller.stop();
+			}
+		});
+	}
+
+	it("retries a provisional Iris handoff after the authoritative final changes its addressee", async () => {
+		const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "input_transcript.added", item: { text: "Iris" } });
+			h.fireLive(delegation("asr-early", ""));
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Here is the parser fix request" } });
+			await settle();
+			expect(h.prompts).toEqual(["Here is the parser fix request"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("uses the new explicit composer turn rather than a retired direct address", async () => {
+		const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris, tell me a joke" } });
+			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "The old joke" } });
+			expect(h.controller.forceDelegateComposer("fix the parser")).toBe(true);
+			await settle();
+			expect(h.prompts).toEqual(["fix the parser"]);
+			expect(h.controller.forceDelegateComposer("Iris, tell me a different joke")).toBe(true);
+			await settle();
+			const contexts = h.sent.filter(message => "content" in message)
+				.flatMap(message => message.content.map(item => item.text)).join("\n");
+			expect(contexts).toContain("Iris, tell me a different joke");
+			expect(h.prompts).toEqual(["fix the parser"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("uses session context for a forced answer before a real server route exists", async () => {
+		const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "relay fix the parser" } });
+			await settle();
+			h.fireSession(agentEnd([assistant("Parser fixed without a provider handoff", "stop")]));
+			await settle();
+			expect(h.sent.filter(message => message.type === "delegation.context.append")).toEqual([]);
+			expect(h.sent.some(message => message.type === "session.context.append" &&
+				message.content.some(item => item.text.includes("Parser fixed without a provider handoff")))).toBe(true);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("routes an automatic forced answer to the real server delegation rather than its local trigger", async () => {
+		const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "please relay fix the parser" } });
+			await settle();
+			h.fireLive(delegation("server-real-1", ""));
+			h.fireSession(agentEnd([assistant("Parser fixed", "stop")]));
+			await settle();
+			const replies = finalAppends(h.sent);
+			expect(replies).toHaveLength(1);
+			expect(replies[0]?.delegation_item_id).toBe("server-real-1");
+			expect(replies[0]?.text).toContain("Parser fixed");
+		} finally {
+			await h.controller.stop();
+		}
+	});
+	it("retains mandatory relay intent when additional speech resets the quiet floor", async () => {
+		const h = makeHarness({
+			quietFloorMs: () => 35,
+			delegationKeywords: () => ({ suppress: "Iris", force: "relay" }),
+		});
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "please relay fix the parser" } });
+			await wait(10);
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "and include tests" } });
+			await wait(60);
+			await settle();
+			expect(h.prompts).toEqual(["please relay fix the parser\n\nand include tests"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("preserves earlier primary work when a later utterance addresses Iris", async () => {
+		const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the parser" } });
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris, tell me a joke" } });
+			h.fireLive(delegation("mixed-addresses", ""));
+			await settle();
+			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "Here is a joke" } });
+			await settle();
+			expect(h.prompts).toEqual(["fix the parser"]);
+			expect(h.sentSpeech).toEqual(["fix the parser", "Iris, tell me a joke"]);
+			expect(h.sentTurns[0]).toEqual([1]);
+			expect(h.controller.pendingUserTurnCount()).toBe(0);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
 
 	it("refuses leading direct-address handoffs without retiring the canonical utterance", async () => {
 		const h = makeHarness({ delegationKeywords: defaults });
@@ -475,6 +603,90 @@ describe("operator-owned live floor", () => {
 		}
 	});
 
+	it("separates ordinary and blocked held utterances at explicit submission", async () => {
+		const h = makeHarness({ holdMode: () => true, blockDelegateKeyword: "iris only" });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "tell me a joke iris only" } });
+			expect(h.controller.forceDelegateComposer("fix the cache\n\ntell me a joke")).toBe(true);
+			await settle();
+			expect(h.prompts).toEqual(["fix the cache"]);
+			const voiceText = h.sent.filter(message => message.type === "session.context.append")
+				.flatMap(message => message.content.map(item => item.text)).join("\n");
+			expect(voiceText).toContain("tell me a joke");
+			expect(voiceText).not.toContain("fix the cache");
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("releases held canonical speech through the RPC submit keyword", async () => {
+		const h = makeHarness();
+		Object.assign(h.session, {
+			settings: Settings.isolated({
+				"live.holdMode": true,
+				"live.submitKeyword": "thanks",
+				"live.submitSilenceMs": 5,
+			}),
+		});
+		let fire: ((event: LiveServerEvent) => void) | undefined;
+		const bridge = new RpcLiveBridge(h.session, () => {}, options => new LiveSessionController({
+			...options,
+			createTransport: transportOptions => {
+				fire = transportOptions.callbacks.onEvent;
+				return {
+					async connect() {},
+					async send() {},
+					async close() {},
+					async setMuted() {},
+					pushAudio: () => true,
+					setOutputSuppressed() {},
+				};
+			},
+			createRecorder: () => ({ stop() {} }),
+		}));
+		await bridge.start();
+		try {
+			fire?.({ type: "turn.done", turn: { role: "user", transcript: "fix the cache thanks" } });
+			fire?.(delegation("rpc-held", ""));
+			await wait(70);
+			await settle();
+			expect(h.prompts).toEqual(["fix the cache"]);
+		} finally {
+			await bridge.stop();
+		}
+	});
+
+	for (const update of ["authoritative final", "composer edit"] as const) {
+		it(`retains a prefinal handoff across a quiet-floor ${update}`, async () => {
+			const h = makeHarness({ quietFloorMs: () => 30 });
+			await h.controller.start();
+			try {
+				h.fireLive({ type: "input_transcript.added", item: { text: "fix the cache" } });
+				h.fireLive(delegation("before-final", ""));
+				h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+				if (update === "composer edit") h.controller.noteComposerActivity();
+				await wait(70);
+				await settle();
+				expect(h.prompts).toEqual(["fix the cache"]);
+			} finally {
+				await h.controller.stop();
+			}
+		});
+	}
+
+	it("transmits dictation while remote output is suppressed instead of treating it as audible echo", async () => {
+		const h = makeHarness({ holdMode: () => true });
+		await h.controller.start();
+		try {
+			h.fireOutputLevel(0.5);
+			h.fireMicrophone(new Float32Array(160).fill(0.1));
+			expect(h.audioSent).toHaveLength(1);
+		} finally {
+			await h.controller.stop();
+		}
+	});
 	it("keeps a blocked utterance voice-only when a held submit releases it", async () => {
 		const h = makeHarness({ holdMode: () => true, quietFloorMs: () => 20, blockDelegateKeyword: "iris only" });
 		await h.controller.start();

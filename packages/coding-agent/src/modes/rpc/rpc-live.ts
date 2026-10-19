@@ -7,9 +7,12 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { LiveSessionController, type LiveSessionControllerOptions } from "../../live/controller";
 import {
 	cfgLiveDelegationDelivery,
+	cfgLiveForceDelegateKeyword,
 	cfgLiveForceUtteranceKeyword,
 	cfgLiveHoldMode,
 	cfgLiveQuietFloorMs,
+	cfgLiveSubmitKeyword,
+	cfgLiveSubmitSilenceMs,
 	cfgLiveSuppressDelegateKeyword,
 	cfgLiveVoice,
 } from "../../live/settings";
@@ -87,6 +90,11 @@ export class RpcLiveBridge {
 			}),
 			holdMode: () => cfgLiveHoldMode.get(this.#session.settings),
 			quietFloorMs: () => cfgLiveQuietFloorMs.get(this.#session.settings),
+			transcriptKeywords: () => ({
+				submit: cfgLiveSubmitKeyword.get(this.#session.settings),
+				force: cfgLiveForceDelegateKeyword.get(this.#session.settings),
+				silenceMs: cfgLiveSubmitSilenceMs.get(this.#session.settings),
+			}),
 			callbacks: {
 				onPhase: phase => this.#output({ type: "live_phase", phase }),
 				onLevels: (input, output) => {
