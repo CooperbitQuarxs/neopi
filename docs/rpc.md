@@ -684,6 +684,7 @@ role:
   models filter on it.
 - `source` is `"builtin"` for built-in role ids and `"configured"` for roles
   that exist only through configuration.
+- `namespace` is `"deck"` for every `deck-*` role, built-in or configured, and absent for other roles. The built-in `deck-inbox` chat role defaults to `openai-codex/gpt-6-luna`; consumers can register further `deck-*` roles through the ordinary [role settings](./models.md#neodeck-roles).
 - `tag` is absent for custom roles, which have no built-in tag.
 - `configured` is the raw `modelRoles` selector (lists joined with `", "`),
   absent when the role is not configured.

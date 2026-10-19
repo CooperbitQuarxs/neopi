@@ -64,6 +64,7 @@ import {
 export interface ExtensionDashboardRuntime {
 	getDisabledExtensions(): string[];
 	setDisabledExtensions(ids: string[]): void;
+	onRulesChanged?: () => Promise<void>;
 	getProviders(): readonly ExtensionProvider[];
 	loadExtensions(disabledIds: string[]): Promise<Extension[]>;
 	toggleProvider(providerId: string): boolean;
@@ -233,7 +234,7 @@ export class ExtensionDashboard implements Component {
 					this.#inspector.setExtension(ext);
 					this.#body.resetInspectorScroll();
 				},
-				onToggle: (extensionId, enabled) => this.#handleExtensionToggle(extensionId, enabled),
+				onToggle: (extensionId, enabled) => void this.#handleExtensionToggle(extensionId, enabled),
 				onMasterToggle: providerId => this.#handleProviderToggle(providerId),
 				onUserSourceToggle: providerId => this.#handleUserSourceToggle(providerId),
 				masterSwitchProvider: this.#getActiveProviderId(),
@@ -450,7 +451,7 @@ export class ExtensionDashboard implements Component {
 		await this.#refreshFromState();
 	}
 
-	#handleExtensionToggle(extensionId: string, enabled: boolean): void {
+	async #handleExtensionToggle(extensionId: string, enabled: boolean): Promise<void> {
 		// MCP toggles route through the canonical denylist in
 		// `~/.omp/agent/mcp.json` so `/mcp list`, the MCP runtime, and this
 		// dashboard agree on every server's enabled state (issue #3827).
@@ -474,6 +475,13 @@ export class ExtensionDashboard implements Component {
 		}
 
 		this.#applyDisabledExtensions(disabled);
+		if (extensionId.startsWith("rule:") && this.#runtime.onRulesChanged) {
+			try {
+				await this.#runOperation(this.#runtime.onRulesChanged());
+			} catch (error) {
+				logger.warn("Failed to refresh live rules after toggle", { extensionId, enabled, error: String(error) });
+			}
+		}
 		void this.#refreshFromState();
 	}
 
