@@ -693,7 +693,7 @@ export class LiveSessionController {
 		if (!merged) return;
 		pending.dispatching = true;
 		const { content, details } = buildLiveDelegationMessage(merged, pending.voiceText, this.#includeVoiceNote());
-		if (pending.delivery === "followUp") details.delegationId = pending.id;
+		if (pending.delivery !== "interrupt") details.delegationId = pending.id;
 		const delivery = this.#session.sendCustomMessageWithReceipt(
 			{
 				customType: LIVE_DELEGATION_MESSAGE_TYPE,
@@ -718,7 +718,7 @@ export class LiveSessionController {
 			this.#deleteTurns(turn => turn.claim === generation);
 			this.#pendingDelegation = undefined;
 			this.#pendingDelivery = undefined;
-			if (pending.delivery !== "followUp") {
+			if (pending.delivery === "interrupt") {
 				this.#activeDelegationId = pending.id;
 				this.#lastRelayedResponse = undefined;
 				this.#thinkingRelayedLength = 0;

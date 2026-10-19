@@ -14,7 +14,7 @@ export interface LiveDelegationDetails {
 	operator: string;
 	voice?: string;
 	noteId?: string;
-	/** Follow-up routing becomes active when this message is consumed, not when it is queued. */
+	/** Queued handoff routing becomes active when this message is consumed, not when it is queued. */
 	delegationId?: string;
 }
 
