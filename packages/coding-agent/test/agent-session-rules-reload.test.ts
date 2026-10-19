@@ -12,8 +12,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Api, Model, ModelSpec } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getActiveRules } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { initializeWithSettings } from "@oh-my-pi/pi-coding-agent/discovery";
+import { createExtensionDashboardRuntime } from "@oh-my-pi/pi-coding-agent/modes/components/extensions/dashboard-runtime";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -49,7 +52,10 @@ function restoreAgentDir(): void {
 	}
 }
 
-async function createReloadSession(tempDir: TempDir): Promise<{ session: AgentSession; authStorage: AuthStorage }> {
+async function createReloadSession(
+	tempDir: TempDir,
+	settings = Settings.isolated({ "compaction.enabled": false }),
+): Promise<{ session: AgentSession; authStorage: AuthStorage }> {
 	const marker = Bun.nanoseconds().toString(36);
 	const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 	authStorage.keys.setRuntime("managed-primary", "test-key");
@@ -60,7 +66,7 @@ async function createReloadSession(tempDir: TempDir): Promise<{ session: AgentSe
 		sessionManager: SessionManager.inMemory(tempDir.path()),
 		authStorage,
 		modelRegistry,
-		settings: Settings.isolated({ "compaction.enabled": false }),
+		settings,
 		model: buildLocalModel(`rules-reload-${marker}`),
 		disableExtensionDiscovery: true,
 		skills: [],
@@ -186,6 +192,77 @@ describe("AgentSession session-local rule snapshot reload on session reset", () 
 			// After the reset, `toolSession.activeRules` reflects the new snapshot, so `rule://` resolves.
 			expect(await readRule("after")).toContain(body);
 		} finally {
+			await session.dispose();
+			authStorage.close();
+		}
+	});
+
+	it("applies dashboard rule toggles to prompt, rule://, and streaming matches without resetting", async () => {
+		using tempDir = TempDir.createSync("@pi-rules-toggle-");
+		const rules = [
+			{ name: "toggle-always", metadata: "alwaysApply: true", body: "LIVE_ALWAYS_BODY" },
+			{ name: "toggle-book", metadata: "description: LIVE_RULEBOOK_DESCRIPTION", body: "LIVE_RULEBOOK_BODY" },
+			{ name: "toggle-ttsr", metadata: "condition: LIVE_TRIGGER\nscope: text", body: "LIVE_TTSR_BODY" },
+		];
+		for (const rule of rules) {
+			await Bun.write(
+				tempDir.join(".omp", "rules", `${rule.name}.md`),
+				`---\n${rule.metadata}\n---\n${rule.body}\n`,
+			);
+		}
+		const settings = Settings.isolated({ "ttsr.enabled": true, "ttsr.builtinRules": false });
+		const { session, authStorage } = await createReloadSession(tempDir, settings);
+		const runtime = createExtensionDashboardRuntime({
+			cwd: tempDir.path(),
+			settings,
+			onRulesChanged: () => session.refreshRules(),
+		});
+		const manager = session.ttsrManager!;
+		session.agent.appendMessage({ role: "user", content: "Keep this conversation.", timestamp: Date.now() });
+		const conversation = [...session.messages];
+		const readBook = async () => {
+			try {
+				const result = await session.getToolByName("read")!.execute(
+					"toggle-book-read",
+					{ path: "rule://toggle-book" },
+					new AbortController().signal,
+				);
+				return result.content.map(block => (block.type === "text" ? block.text : "")).join("\n");
+			} catch (error) {
+				return String(error);
+			}
+		};
+		try {
+			expect(session.systemPrompt.join("\n")).toContain("LIVE_ALWAYS_BODY");
+			expect(session.systemPrompt.join("\n")).toContain("LIVE_RULEBOOK_DESCRIPTION");
+			expect(await readBook()).toContain("LIVE_RULEBOOK_BODY");
+			expect(manager.checkSnapshot("LIVE_TRIGGER", { source: "text" }).map(rule => rule.name)).toContain(
+				"toggle-ttsr",
+			);
+
+			// A different session's global binding must not decide this session's toggle.
+			initializeWithSettings(Settings.isolated({}));
+			runtime.setDisabledExtensions(rules.map(rule => `rule:${rule.name}`));
+			await runtime.onRulesChanged!();
+			expect(session.systemPrompt.join("\n")).not.toContain("LIVE_ALWAYS_BODY");
+			expect(session.systemPrompt.join("\n")).not.toContain("LIVE_RULEBOOK_DESCRIPTION");
+			expect(await readBook()).not.toContain("LIVE_RULEBOOK_BODY");
+			expect(getActiveRules().filter(rule => rule.name.startsWith("toggle-"))).toEqual([]);
+			expect(manager.checkSnapshot("LIVE_TRIGGER", { source: "text" })).toEqual([]);
+
+			runtime.setDisabledExtensions([]);
+			await runtime.onRulesChanged!();
+			expect(session.systemPrompt.join("\n")).toContain("LIVE_ALWAYS_BODY");
+			expect(session.systemPrompt.join("\n")).toContain("LIVE_RULEBOOK_DESCRIPTION");
+			expect(await readBook()).toContain("LIVE_RULEBOOK_BODY");
+			expect(getActiveRules().filter(rule => rule.name.startsWith("toggle-"))).toHaveLength(3);
+			expect(session.ttsrManager).toBe(manager);
+			expect(manager.checkSnapshot("LIVE_TRIGGER", { source: "text" }).map(rule => rule.name)).toContain(
+				"toggle-ttsr",
+			);
+			expect(session.messages).toEqual(conversation);
+		} finally {
+			initializeWithSettings(settings);
 			await session.dispose();
 			authStorage.close();
 		}

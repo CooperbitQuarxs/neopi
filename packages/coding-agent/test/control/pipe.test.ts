@@ -33,7 +33,7 @@ async function fixture() {
 		cwd: dir,
 		title: null,
 		session: null,
-		busy: { streaming: false, compacting: false, queued: 0, pendingAsyncWork: false, settled: true },
+		busy: { streaming: false, compacting: false, pendingSteerAndFollowUp: 0, pendingAsyncWork: false, settled: true },
 		revisions: { generation: 1, human: 0, focus: 0, draft: 0, dialogs: 0, paint: 0, model: null, role: null },
 		view: null,
 		modes: { plan: false, chat: "off", goal: false, vibe: false, live: false, repl: false },

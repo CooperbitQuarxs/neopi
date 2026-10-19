@@ -4160,7 +4160,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					options.rules ??
 					(
 						await logger.time("rediscoverRules", () =>
-							loadCapability<Rule>(ruleCapability.id, { cwd: promptCwd, agentDir }),
+							loadCapability<Rule>(ruleCapability.id, {
+								cwd: promptCwd,
+								agentDir,
+								disabledExtensions: cfgDisabledExtensions.get(settings),
+							}),
 						)
 					).items;
 				const buckets = bucketRules(ruleItems, ttsrManager, {

@@ -10,6 +10,7 @@
 ### Added
 
 - GitHub now publishes platform binaries for every stable and nightly push, with manual stable builds available from Actions → CI → Run workflow.
+- Added NeoDeck's `deck-*` role namespace and configurable `deck-inbox` role in the model picker and RPC catalog, defaulting to GPT-6 Luna ([#277](https://github.com/PsychedelicShayna/neopi/issues/277)).
 - Proof sessions can hold destination-specific install locks for up to 60 minutes; installs report active or expired holds and support an explicit force override.
 - Added opt-in agent-visible runtime telemetry, compaction-headroom notices, independent tool-result summaries, and local `runtime.inspect()` in both Eval kernels ([#18](https://github.com/PsychedelicShayna/neopi/issues/18)).
 - Added `/issue <prose>`: a background agent on the new `issues` model role files your words as an issue in the right project's tracker, following that repository's own rules and existing labels, asks in the Agent Hub when the target or scope is unclear, and reports the filed URL, submitted body, and applied labels without interrupting the conversation ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)).
@@ -47,6 +48,8 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Control state labels pending steering and follow-up messages together; the first queued follow-up warns each calling session that steering usually reaches an automated agent sooner ([#333](https://github.com/PsychedelicShayna/neopi/issues/333)).
+- Rule toggles in `/status` immediately update the running session's prompt, rulebook, and TTSR matching without restarting ([#4](https://github.com/PsychedelicShayna/neopi/issues/4)).
 - Standalone updates ignore project and custom Bun dotenv build origins and configuration-directory redirects, retain launch/user overrides and explicit profiles, and show the selected source for binary updates and package-manager takeovers ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
 - `/issue` never repeats an uncertain create and reports a confirmed URL or an explicit unknown-publication state when GitHub cannot be read ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)).
 - `/issue` checks collaborator repositories' tracker metadata and rejects archived or unverifiable targets before authoring ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)).

@@ -127,6 +127,65 @@ describe("control host", () => {
 		expect(state.root).toBeUndefined();
 	});
 
+	test("first follow-up warns without dropping the message, then respects each connection's choice", async () => {
+		const { client } = await start();
+		const empty = await client.request({ type: "follow_up", message: "" });
+		expect(empty.success).toBe(true);
+		expect(empty.warning).toBeUndefined();
+		const first = await client.request({ type: "follow_up", message: "first queued message" });
+		expect(first.success).toBe(true);
+		expect(first.warning).toContain("very likely never reach this agent");
+		expect(first.warning).toContain("`steer`");
+		expect(session!.getQueuedMessages().followUp).toEqual(["first queued message"]);
+
+		const second = await client.request({ type: "follow_up", message: "second queued message" });
+		expect(second.success).toBe(true);
+		expect(second.warning).toBeUndefined();
+
+		const other = await connectAnother("another client");
+		const independent = await other.request({ type: "follow_up", message: "other client's message" });
+		expect(independent.success).toBe(true);
+		expect(independent.warning).toBe(first.warning);
+		expect(session!.getQueuedMessages().followUp).toEqual([
+			"first queued message",
+			"second queued message",
+			"other client's message",
+		]);
+	});
+
+	test("a bound calling session keeps its first-use warning across ctl reconnections", async () => {
+		const { host } = await start();
+		const callerSession = createSession();
+		extraSessions.push(callerSession);
+		const callerHost = new ControlHost({ session: callerSession, role: "rpc", dir, tmuxPane: null });
+		await callerHost.start();
+		try {
+			const target = host.publication!.metadata();
+			const caller = callerHost.publication!.metadata();
+			const connect = async () => {
+				const connection = new ControlClient({
+					metadata: target,
+					label: "ctl",
+					kind: "tool",
+					caller: { instanceId: caller.instanceId, token: caller.token },
+				});
+				extraClients.push(connection);
+				await connection.connect();
+				return connection;
+			};
+			const first = await connect();
+			expect((await first.request({ type: "follow_up", message: "first" })).warning).toBeString();
+			first.close();
+			const reconnected = await connect();
+			const second = await reconnected.request({ type: "follow_up", message: "second" });
+			expect(second.success).toBe(true);
+			expect(second.warning).toBeUndefined();
+			expect(session!.getQueuedMessages().followUp).toEqual(["first", "second"]);
+		} finally {
+			await callerHost.close();
+		}
+	});
+
 	test("target view reports the focused subagent's session and names the root; root ignores the focus", async () => {
 		const { host, client } = await start();
 		const viewed = createSession();

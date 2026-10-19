@@ -16,7 +16,13 @@ import {
 	resolveConfiguredModelPatterns,
 	resolveModelRoleValue,
 } from "../../config/model-resolver";
-import { formatModelRoleAlias, getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS } from "../../config/model-roles";
+import {
+	formatModelRoleAlias,
+	getKnownRoleIds,
+	getRoleInfo,
+	MODEL_ROLE_IDS,
+	modelRoleNamespace,
+} from "../../config/model-roles";
 import type { AgentSession } from "../../session/agent-session";
 import { EPHEMERAL_MODEL_CHANGE_ROLE, type ModelChangeEntry } from "../../session/session-entries";
 
@@ -37,6 +43,8 @@ export interface RpcRoleInfo {
 	tag?: string;
 	section: "chat" | "kind";
 	source: "builtin" | "configured";
+	/** Consumer-owned namespace, independent of whether the role is built-in or configured. */
+	namespace?: "deck";
 	/** Raw `modelRoles` selector; absent when the role is not configured. */
 	configured?: string;
 	/** Effective pattern chain for `@<id>`, thinking suffixes preserved. */
@@ -141,6 +149,7 @@ export class RpcRoles {
 			const alias = formatModelRoleAlias(id);
 			const configured = settings.getModelRole(id);
 			const resolved = resolveRole(this.#session, id);
+			const namespace = modelRoleNamespace(id);
 			return {
 				id,
 				alias,
@@ -148,6 +157,7 @@ export class RpcRoles {
 				...(info.tag ? { tag: info.tag } : {}),
 				section: info.section,
 				source: MODEL_ROLE_IDS.some(builtin => builtin === id) ? "builtin" : "configured",
+				...(namespace ? { namespace } : {}),
 				...(configured !== undefined ? { configured } : {}),
 				patterns: resolveConfiguredModelPatterns([alias], settings),
 				...(resolved
