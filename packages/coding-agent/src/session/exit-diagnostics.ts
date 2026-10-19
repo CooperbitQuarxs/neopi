@@ -79,7 +79,7 @@ function readPendingToolCalls(value: unknown): PendingToolCallDiagnostic[] | und
 	return value;
 }
 
-function readSessionExit(entry: SessionEntry): SessionExitData | undefined {
+export function readSessionExit(entry: SessionEntry): SessionExitData | undefined {
 	if (entry.type !== "custom" || entry.customType !== SESSION_EXIT_CUSTOM_TYPE || !isObject(entry.data)) {
 		return undefined;
 	}
