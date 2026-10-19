@@ -5,6 +5,7 @@
 ### Breaking Changes
 
 - Renamed the fork to NeoPi and its executable to `npi`; existing `.omp` configuration and provider compatibility remain unchanged.
+- The Mixture of Agents command is now `/moa`; `/mixture` is no longer a command. Slash-command completion, the command lists sent to ACP and control clients, the usage text, and the pause notice name `/moa`, while `mixture/<name>` model ids, `MIXTURES.toml`, and `moa.*` settings are unchanged ([#366](https://github.com/PsychedelicShayna/neopi/issues/366)).
 
 ### Added
 

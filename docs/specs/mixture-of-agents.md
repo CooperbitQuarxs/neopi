@@ -1148,7 +1148,7 @@ The cursor is **not** touched here.
 | steer | `paused` | steering hop at the paused member; a new soft-limit window is granted (§4.7) |
 | steer | `done`, `error` | the run is over; the steer text is an operator prompt: new run with it as topic |
 | operator prompt | none, `done`, `error` (not a retry) | new run; topic = the text; images forwarded to the entry hop |
-| operator prompt | `paused`, `checkpoint` | treated as a steer (the pause/checkpoint notice told the operator so); `/mixture reset` or a new conversation starts fresh. **Before M3 ships steering hops**, this row instead starts a new run and the abort/checkpoint notice says so (§14 M1); M3 replaces the row with the steer |
+| operator prompt | `paused`, `checkpoint` | treated as a steer (the pause/checkpoint notice told the operator so); `/moa reset` or a new conversation starts fresh. **Before M3 ships steering hops**, this row instead starts a new run and the abort/checkpoint notice says so (§14 M1); M3 replaces the row with the steer |
 | operator prompt | `running` | cannot happen in the session (the lock rejects it); in the gateway it is the busy error |
 | developer or notice messages only, no steer, no prompt | `checkpoint` | **continue**: resume at `run.phase` without a steering hop (a one-at-a-time steering queue can deliver a notice ahead of the user's steer, §6.2) |
 | developer or notice messages only, and the anchor came from the cursor with **no** message in the context carrying `lastRequest.responseId` | `done`, `error` | **recovery retry**: the session removed the response it was given (an empty-stop drop, `packages/coding-agent/src/session/turn-recovery.ts:864-941`, or a loop-detector retry) and appended its own reminder; start a **new run** with the previous run's topic, topic images, and conversation, as if the operator had re-sent the prompt. The reminder text reaches no member (members see only their envelopes, §3); the dropped response's settlements leave session totals with the dropped entry, as a native empty stop's usage does, and the broker already holds them (§4.7). The session's own retry cap ends a mixture that keeps returning empty |
@@ -1588,7 +1588,7 @@ Two **lifecycle records** share the same entry type and carry no card.
 host **on `commit` of the run's `done` response** (§4.2), so in the branch
 it always follows the assistant entry it refers to; it is a convenience
 marker for projections that walk forwards (they may stop at it), never the
-authority. `{ kind: "run_reset", runId, at }` is appended by `/mixture reset`
+authority. `{ kind: "run_reset", runId, at }` is appended by `/moa reset`
 (§10) unconditionally and is authoritative on its own. Errored runs get no
 lifecycle record: they stay retryable. Both records are `mixture_run` custom
 entries. They do not touch the session's own `reset_boundary` and clear
@@ -1936,7 +1936,7 @@ that already happened is never discarded.
 A caller abort (Esc in the session, a closed request in the gateway) marks the
 in-flight hop `aborted`, keeps every completed hop, and checkpoints. The next
 message on the same conversation is a steer at `activeMemberId`, so "Esc, then
-redirect" is one gesture. Starting over is explicit: `/mixture reset`
+redirect" is one gesture. Starting over is explicit: `/moa reset`
 (session) or a new conversation key (gateway). The session host emits an
 `emitNotice` (`packages/coding-agent/src/session/agent-session.ts:2909`)
 after an abort saying so.
@@ -2516,19 +2516,19 @@ and callbacks:
   `session.emitNotice("info", "N mixtures registered")`. Save-only leaves the
   running registration untouched, as advisors do.
 
-Slash command `/mixture` (alias `/moa`, decided) in
+Slash command `/moa` (renamed from `/mixture`, Amendment 6.16) in
 `packages/coding-agent/src/slash-commands/builtin-collaboration.ts` beside
-`chaining` (`:233`): `/mixture configure` opens the overlay, `/mixture list`
-prints discovered definitions with their validation state, `/mixture use
-<name>` is `/model mixture/<name>`, `/mixture reset` drops the current run
-(§6.3) and appends a `run_reset` lifecycle record (§4.8) so the dropped run
-cannot be restored or re-hydrated, `/mixture status` prints the active run's
-hop, member, and spend.
+`chain`: `/moa configure` opens the overlay, `/moa list` prints discovered
+definitions with their validation state, `/moa use <name>` is
+`/model mixture/<name>`, `/moa reset` drops the current run (§6.3) and
+appends a `run_reset` lifecycle record (§4.8) so the dropped run cannot be
+restored or re-hydrated, `/moa status` prints the active run's hop, member,
+and spend.
 
 ### M2 operator workflow
 
 Open **Mixture of Agents → + Define mixture model…** in the model hub, or
-run `/mixture configure` (`/moa configure`). The fullscreen editor displays
+run `/moa configure`. The fullscreen editor displays
 the definition list and a graph preview. Enter opens the selected mixture;
 edit members, verdict questions and rubrics, directed edges, transit parts,
 route/termination judges, budgets, and local role/envelope presets from their
@@ -2541,8 +2541,8 @@ Use `s` to validate and save the selected project/user configuration, then
 not change registered models. The status line reports validation errors;
 closing a dirty editor requires explicit discard confirmation. Space on a
 saved mixture in the list activates it. During a run,
-`/mixture status` shows the current member, hop, and spend;
-`/mixture reset` discards the resumable run without clearing the conversation.
+`/moa status` shows the current member, hop, and spend;
+`/moa reset` discards the resumable run without clearing the conversation.
 Opening or navigating a persisted session restores the latest committed,
 unfinished checkpoint on the active branch; a completed or reset run does
 not resume.
@@ -2669,7 +2669,7 @@ the judge with a scripted candidate plan; no `mock.module`.
 | `packages/coding-agent/test/moa-provider.test.ts` | with an empty auth store, **immediately** after `setRoster` and with no refresh: `getAvailable()` includes `mixture/<name>`, `hasConfiguredAuth` is true, `setModel` succeeds; the model survives `syncExtensionSources([])` and a forced `refresh()`; a definition with errors is absent; `setRoster` one → zero → one removes and restores the model; two sessions **sharing one registry** each `retain`, one releases, and the other still resolves `setModel(mixture/name)`; the last release unregisters; a `streamSimple` on a catalog with no headless host fails with the documented error |
 | `packages/coding-agent/test/moa-engine.test.ts` | linear A→B: the outer message contains only B's text (no thinking blocks) and B's captured context contains A's output and not A's reasoning when `x` omits it; `show = "never"` on A publishes a card without an output body while B still receives it, and an edge-level `show` override on the taken edge wins; member `error` on the first hop ends the outer stream with `error`/`reason: "error"` and the member's `errorStatus`, and an **identical** retry request (`[user U]` again) is recognised as a retry, re-runs only the failed member, and does not report "no new input"; the same after a consumed tool-result request errors, with the results applied once; a repeat of a **successful** tool-producing request with zero results applied replays the same outer tool-call ids without regenerating, and a repeat after a partial batch replays the remaining ids; caller abort yields `checkpoint` and the next message steers `activeMemberId`; `terminate` ends the run; `route` picks the judged edge, takes `fallback` below `min_confidence` on a native judge, ignores the floor on a one-hot judge, and pauses when the fallback is exhausted; `max_hops` with `pause` stops with the notice and the next message resumes with a fresh window while the hard cap still stops; each outer response's `usage` equals the settlements since the previous **committed** response, a second response issued before `commit` reports from the same `from`, `commit` advances the watermark and the cursor, the delta includes a failed judge attempt and the summarizer call, `usageBreakdown` names the real providers, and `onSettlement` fires exactly once per attempt across an errored response and its retry; two successive tool rounds resume correctly through the cursor alone (no `responseId`); a call outside the allow-list fails the hop before any tool event; a `length` stop with tool calls discards them; a queued user steer at a hop boundary ends the stream at a checkpoint, an agent-source steer does not, and a notice delivered ahead of the steer produces a continue then a second checkpoint; `toolChoice` `"required"`, `"any"`, `{ type: "function", name }`, and `{ type: "function", function: { name } }` each either produce a qualifying outer tool call (via the terminal member or the closing call) or end with `toolchoice.unsatisfiable`, including on a tools-disabled graph, and `{ type: "computer" }` ends with `toolchoice.unsupported`; with a required named tool, an intermediate tool-enabled member that calls `read` fails the run with `member.tool.detour` before any outer tool event, and a terminal member that first returns text without the tool has that text buffered and the closing call's result is the only outer content; more than five operator images reach an entry member whose provider budget allows them; a fan-out group with `quorum = 2` completes after two branches and aborts the straggler after `grace_ms` of active time, its join receives both outputs, branch tool calls across two rounds are demultiplexed back to the right branch, a group admitted with fewer than `N + 1` remaining hard-cap hops stops with `hard_cap` before any branch runs, and a budget hit mid-group cancels siblings |
 | `packages/coding-agent/test/moa-transit.test.ts` | `compact` summarizes only hops after `throughHop` on the second traversal and its call is settled; `verbatim` inserts the omission marker; `snapcompact` against the real package on a small transcript yields image blocks plus the archive's text head and tail on a vision target and fails validation on a non-vision target; `fitHopRequest` on a 32k-window target keeps the tool round intact and drops the fold first |
-| `packages/coding-agent/test/moa-checkpoint.test.ts` | a crash immediately after member settlement restores into `decision_pending` and decides without regenerating, and an identical request after that restore resumes the phase instead of replaying (`outcome: "in_progress"`); the same after a prior tool response exists (an identical `[U, A(calls), results]` request after a crash in `resume_hop` resumes the existing hop); a crash after routing restores into `hop_ready` for the next member; a crash during a member call restores into the last persisted phase (`hop_ready` or `resume_hop`) and redoes the call; a member error and a caller abort during a call each write a checkpoint whose phase is `resume_hop` (hop with applied results) or `hop_ready` (otherwise), never `generating`, and the retry keeps the settled usage and applied results; a crash after tool results are applied but before the resumed call starts restores into `resume_hop` and continues the existing hop with no new envelope; a crash after the terminal decision but before text emission restores into `finalizing` and emits the completed answer, never an empty `ended`; a crash after the `done` checkpoint but before the assistant append restores into `finalizing` and emits the answer again, and once that response commits the `run_end` record follows it; a crash after the assistant append but before the `run_end` record, and a `/tree` navigation that lands the leaf on the final assistant entry, both restore the run as `done` through `isMixtureRunComplete` with no `run_end` present, the next prompt starts a new run, and the panel projection reports the run as ended; an errored run with no lifecycle record restores as retryable at its phase; a crash between any other outer-return checkpoint and the assistant append skips that checkpoint and resumes from the newest committed hop-boundary checkpoint; the reporting watermark is `report.to` for a committed outer response and `committedThrough` for a hop-boundary checkpoint, so no settlement is reported twice; a replayed response reproduces the original content blocks (text followed by tool calls) and ids, compared by content equality not chunk boundaries; an `awaiting_tools` checkpoint with one result in the branch and one missing resumes with one real and one synthetic result; a checkpoint on another branch is ignored; `reset_boundary` ends the scan; a committed completed run reloads as completed and renders identically live and from persisted cards; `/mixture reset` followed by reload or a leaf switch with no intervening run restores nothing and hydrates nothing; a paused run renders identically from live `mixture_*` events and from persisted `mixture_trace` cards (status, which limit, and totals) |
+| `packages/coding-agent/test/moa-checkpoint.test.ts` | a crash immediately after member settlement restores into `decision_pending` and decides without regenerating, and an identical request after that restore resumes the phase instead of replaying (`outcome: "in_progress"`); the same after a prior tool response exists (an identical `[U, A(calls), results]` request after a crash in `resume_hop` resumes the existing hop); a crash after routing restores into `hop_ready` for the next member; a crash during a member call restores into the last persisted phase (`hop_ready` or `resume_hop`) and redoes the call; a member error and a caller abort during a call each write a checkpoint whose phase is `resume_hop` (hop with applied results) or `hop_ready` (otherwise), never `generating`, and the retry keeps the settled usage and applied results; a crash after tool results are applied but before the resumed call starts restores into `resume_hop` and continues the existing hop with no new envelope; a crash after the terminal decision but before text emission restores into `finalizing` and emits the completed answer, never an empty `ended`; a crash after the `done` checkpoint but before the assistant append restores into `finalizing` and emits the answer again, and once that response commits the `run_end` record follows it; a crash after the assistant append but before the `run_end` record, and a `/tree` navigation that lands the leaf on the final assistant entry, both restore the run as `done` through `isMixtureRunComplete` with no `run_end` present, the next prompt starts a new run, and the panel projection reports the run as ended; an errored run with no lifecycle record restores as retryable at its phase; a crash between any other outer-return checkpoint and the assistant append skips that checkpoint and resumes from the newest committed hop-boundary checkpoint; the reporting watermark is `report.to` for a committed outer response and `committedThrough` for a hop-boundary checkpoint, so no settlement is reported twice; a replayed response reproduces the original content blocks (text followed by tool calls) and ids, compared by content equality not chunk boundaries; an `awaiting_tools` checkpoint with one result in the branch and one missing resumes with one real and one synthetic result; a checkpoint on another branch is ignored; `reset_boundary` ends the scan; a committed completed run reloads as completed and renders identically live and from persisted cards; `/moa reset` followed by reload or a leaf switch with no intervening run restores nothing and hydrates nothing; a paused run renders identically from live `mixture_*` events and from persisted `mixture_trace` cards (status, which limit, and totals) |
 | `packages/ai/test/auth-gateway-keyless.test.ts` | a `resolveModel` returning an `allowsMissingApiKey` custom-API model is served with no credential on `/v1/chat/completions` **and** `/v1/pi/stream`; `prepareStreamOptions` sees the resolved model and the explicit client key on both paths, and a derived key is not reported as explicit; `/v1/models` lists it; the encoder's `onComplete` fires after the terminal SSE frame is enqueued and does not fire when the request is cancelled before it |
 | `packages/coding-agent/test/moa-gateway.test.ts` | with `gateway.serve = []` the catalog is empty and a credentialed physical model is 404; `gateway.serve = ["mixture/draft-then-edit"]` serves the mixture while its members stay unlisted; `serve = false` keeps a mixture out even when listed; a tool round continues with the same explicit key; a request retransmitted with the same explicit key after its tool-call response was lost receives the same outer tool-call ids again (zero results applied), and after a partial result batch receives the remaining ids; a request with no key and a diverging history starts a new run; two concurrent requests on one running key get the busy error; cancelling a streamed response before its terminal frame is consumed (no `onComplete`, no commit), then repeating with the same explicit key on each route, replays the same response and reporting range, records every member attempt exactly once in the broker ledger, and once the replay completes its commit advances the watermark; an errored non-streaming response commits, and the client's retry reports only later settlements |
 | `packages/tui/test/mixture-config.test.ts` | save with a validation error keeps the overlay dirty and shows the error; save with warnings writes the doc; the `x` editor cannot produce an empty `x`; a branch member's tool editor refuses a non-read-only tool |
@@ -2790,7 +2790,7 @@ eligibility, verdict members, `max_traversals`, `budget_usd`,
 `paused` run), `x.transcript` (`verbatim`, `compact`, `snapcompact`) with the
 coverage cursor, `tool_trace` rendering, decision trace lines, checkpoint
 restore (§4.8) including the watermark and lost-result reconciliation,
-`/mixture reset` and `/mixture status`.
+`/moa reset` and `/moa status`.
 
 Acceptance:
 - The M2 `courtroom` fixture (tools off, no steering table) runs prosecution
@@ -2853,7 +2853,7 @@ Acceptance:
 
 ### M5: configurator and provider entry
 
-Scope: `MixtureConfigOverlayComponent`, `showMixtureConfigure`, `/mixture
+Scope: `MixtureConfigOverlayComponent`, `showMixtureConfigure`, `/moa
 configure|list|use`, the pinned "Mixture of Agents" hub entry with "+ Define
 mixture model…", save/apply through `setRoster`.
 
@@ -2907,7 +2907,7 @@ entries) is documented.
 1. **Storage:** `MIXTURES.toml` per scope; YAML is banned for anything new.
 2. **Visibility:** every member visible as collapsible blocks (`show = "always"`).
 3. **`on_limit` default:** `pause`; the next message resumes; the hard cap still stops.
-4. **Command:** `/mixture`, alias `/moa`.
+4. **Command:** `/mixture`, alias `/moa`. Superseded by Amendment 6.16: `/moa` is the only name.
 5. **Steering:** both: `@member:` routes directly; without a prefix a picker appears.
 6. **Gateway:** opt-in for everything, nothing served implicitly. Implemented
    as the publication gate in §4.10 item 3 (`gateway.serve`, empty default)
@@ -2916,7 +2916,7 @@ entries) is documented.
 8. **Nesting:** not in v1, wanted on record; run keys carry `lineage` for it.
 9. **Trace:** v1 collapsible blocks plus status line; a clean hook for a future reusable side panel (§7.2).
 10. **Soft-limit allowance on resume:** fresh window; lifetime caps still bind (§4.7).
-11. **Esc:** checkpoint; the next message steers the member that was running; `/mixture reset` starts over (§6.3).
+11. **Esc:** checkpoint; the next message steers the member that was running; `/moa reset` starts over (§6.3).
 12. **Branch tool calls in fan-out:** read-only tools bubble concurrently with multiplexed ids (§8.3).
 13. **TOML key casing:** `snake_case`.
 14. **v2 write strategy:** per-branch isolated worktrees, the join member merges (recorded; not v1).
@@ -3121,6 +3121,18 @@ None open. Every question raised in rounds 1 to 3 is answered in §15.
   owner's own resolution restores its metadata contribution without reading
   a file under the wrong project's settings. A subsequent retry uses the
   same snapshots if immediate restoration also fails.
+
+### Amendment 6.16 (#366: the command is `/moa`)
+
+- Shayna asked on 2026-10-18 for `/mixture` to be renamed to `/moa`. The
+  slash command is registered as `moa` with no aliases, so slash-command
+  completion and the command lists sent to ACP and control clients show
+  `/moa`, and the usage text and pause notice name it. `/mixture` is no
+  longer a command, following the
+  `/chaining` → `/chain` rename (#204), which rejected the old name rather
+  than keeping an alias. Model ids (`mixture/<name>`), `MIXTURES.toml`, the
+  `moa.*` settings, session entry types, and module and type names are
+  unchanged.
 
 ### Amendment 6.9 (Codex security P2 r4118194866, post-merge: unbounded validation work)
 

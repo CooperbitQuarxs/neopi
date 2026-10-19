@@ -1,1 +1,1 @@
-⏸ {{mixture}} paused at {{member}} after {{hops}} hops (${{usd}} so far): {{reason}}. Send any message to resume with a fresh window; until steering arrives, the message's text is not forwarded to the members. /mixture reset starts over.
+⏸ {{mixture}} paused at {{member}} after {{hops}} hops (${{usd}} so far): {{reason}}. Send any message to resume with a fresh window; until steering arrives, the message's text is not forwarded to the members. /moa reset starts over.
