@@ -68,6 +68,23 @@ the last N visible messages and sets `truncated` when anything was dropped
 With `--json`, errors are a single stderr JSON line with `type: "error"`,
 `code`, and `message`, and a nonzero exit status.
 
+Modern journals also expose each visible message's persisted `entryId`,
+`leafId` (nullable), and the complete root-to-leaf `branchEntryIds`. The ancestry
+includes nonvisible entries and is never truncated. `branchMessages` is a separate
+full selected-branch text projection, including messages before compaction;
+`--max-messages` caps it independently and sets `branchMessagesTruncated`.
+The existing `messages` projection still follows the latest compaction.
+
+For safe restoration across process lifetimes, `userEntryIds` includes even
+textless user messages. `sessionExitEntryIds` includes every exact `session_exit`
+marker, including malformed markers; `sessionExits` contains only validated
+`{ entryId, kind, reason, pendingToolCallCount, lastAssistantStopReason }`
+metadata. A consumer must not skip an earlier malformed exit to certify a later
+process lifetime. These identity fields are absent for legacy journals without
+persisted IDs; ordinary transcript reads still work without modifying the file.
+Open and continue such a journal in NeoPi to persist migrated IDs before relying
+on them for restoration.
+
 `ctl pipe` accepts the same selectors as other ctl operations. It verifies the
 challenge, authenticates, and subscribes to all session events. Stdout starts
 with the owner's `ready` frame, carrying `protocolVersion: 1`,
@@ -88,8 +105,12 @@ attachment itself does not open a second writer, but callers must still respect
 the human-edit and approval rules above.
 
 RPC `ready` capabilities advertise `session_catalog` for the two session
-commands and `control_pipe` for the stdio attachment command. Hosts should gate
-on these capabilities, not a version-number guess.
+commands, `session_history_identity` for durable transcript/branch identity, and
+`control_pipe` for the stdio attachment command. Hosts should gate on these
+capabilities, not a version-number guess. History synchronization should read
+without a message cap and verify the saved leaf remains in the selected ancestry
+before appending new native entries; changed branches must not silently replace
+an existing host transcript.
 
 ## Monitor connections
 
