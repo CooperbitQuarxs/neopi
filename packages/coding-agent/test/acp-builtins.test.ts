@@ -16,6 +16,10 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import type { SessionDumpArchive } from "@oh-my-pi/pi-coding-agent/session/session-dump-format";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
+import {
+	BUILTIN_SLASH_COMMANDS,
+	lookupBuiltinSlashCommand,
+} from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { getProjectDir, removeWithRetries, setProjectDir } from "@oh-my-pi/pi-utils";
 
 import { cfgBrowserEnabled, cfgBrowserHeadless } from "@oh-my-pi/pi-coding-agent/tools/browser/settings";
@@ -291,6 +295,21 @@ describe("ACP builtin slash commands", () => {
 		expect(await executeAcpBuiltinSlashCommand("/chain configure", runtime)).toEqual({ consumed: true });
 		expect(output[0]).toContain("interactive TUI");
 		expect(await executeAcpBuiltinSlashCommand("/chaining off", runtime)).toBe(false);
+	});
+
+	it("dispatches and completes /moa and no longer recognizes the old /mixture command", async () => {
+		const { output, runtime } = createRuntime();
+		expect(await executeAcpBuiltinSlashCommand("/moa configure", runtime)).toEqual({ consumed: true });
+		expect(output).toEqual(["/moa configure requires the interactive TUI."]);
+		expect(await executeAcpBuiltinSlashCommand("/mixture list", runtime)).toBe(false);
+
+		expect(lookupBuiltinSlashCommand("moa")?.name).toBe("moa");
+		expect(lookupBuiltinSlashCommand("mixture")).toBeUndefined();
+		expect(BUILTIN_SLASH_COMMANDS.some(command => command.name === "mixture")).toBe(false);
+		const moa = BUILTIN_SLASH_COMMANDS.find(command => command.name === "moa");
+		expect(moa?.aliases).toBeUndefined();
+		const completions = await moa?.getArgumentCompletions?.("re");
+		expect(completions?.map(item => item.value)).toEqual(["reset "]);
 	});
 
 	it("toggles extended context with explicit controls and reports state", async () => {

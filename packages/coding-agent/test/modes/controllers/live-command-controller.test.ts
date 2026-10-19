@@ -233,6 +233,66 @@ describe("LiveCommandController", () => {
 		await h.controller.stop();
 	});
 
+	it("keeps newer typed and partial speech when a delayed receipt retires an older utterance", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		speak(h, 1, "older delivered speech", true);
+		h.editor.insertText(" new typed draft");
+		speak(h, 2, "newer speech", false);
+		h.callbacks().onSpeechSent?.("older delivered speech", [1]);
+		expect(h.editor.getText().trim()).toBe("new typed draft newer speech");
+		speak(h, 2, "newer speech finalized", true);
+		expect(h.editor.getText().trim()).toBe("new typed draft newer speech finalized");
+		await h.controller.stop();
+	});
+
+	it("retires only the older repeated utterance and preserves newer finalized speech", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		speak(h, 1, "repeat this", true);
+		speak(h, 2, "repeat this", true);
+		h.callbacks().onSpeechSent?.("repeat this", [1]);
+		expect(h.editor.getText()).toBe("repeat this");
+		h.callbacks().onSpeechSent?.("repeat this", [2]);
+		expect(h.editor.getText()).toBe("");
+		await h.controller.stop();
+	});
+
+	it("keeps an operator rewrite when an older speech receipt arrives", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		speak(h, 1, "original speech", true);
+		h.editor.setText("corrected speech and new work");
+		h.callbacks().onSpeechSent?.("original speech", [1]);
+		expect(h.editor.getText()).toBe("corrected speech and new work");
+		await h.controller.stop();
+	});
+
+	it("preserves attachments and a newer keyword submit through scoped speech retirement", async () => {
+		const h = createHarness();
+		cfgLiveSubmitKeyword.set(h.ctx.settings, "send off");
+		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 20);
+		const sent: string[] = [];
+		h.editor.onSubmit = text => {
+			sent.push(text);
+		};
+		await h.controller.handleCommand();
+		try {
+			h.editor.pendingImages = [{ type: "image", data: "img", mimeType: "image/png" }];
+			h.editor.pendingImageLinks = ["file:///tmp/future.png"];
+			h.editor.insertText("[Image #1]");
+			speak(h, 1, "delivered speech", true);
+			speak(h, 2, "next request send off", true);
+			h.callbacks().onSpeechSent?.("delivered speech", [1]);
+			expect(h.editor.pendingImages).toHaveLength(1);
+			expect(h.editor.pendingImageLinks).toEqual(["file:///tmp/future.png"]);
+			await Bun.sleep(50);
+			expect(sent).toEqual(["[Image #1] next request"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
 	it("keeps unsent image and text attachments when speech is handed off", async () => {
 		const h = createHarness();
 		await h.controller.handleCommand();
@@ -352,6 +412,21 @@ describe("LiveCommandController", () => {
 			cfgLiveSubmitKeyword.set(h.ctx.settings, "ship it");
 			await Bun.sleep(50);
 			expect(sent).toEqual(["review this", "review again"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("does not force-delegate a composer containing only the configured force phrase", async () => {
+		const h = createHarness();
+		const forced = vi.spyOn(LiveSessionController.prototype, "forceDelegateComposer").mockReturnValue(true);
+		cfgLiveForceDelegateKeyword.set(h.ctx.settings, "send it now");
+		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 0);
+		await h.controller.handleCommand();
+		try {
+			speak(h, 1, "SEND... IT, NOW!", true);
+			await Bun.sleep(20);
+			expect(forced).not.toHaveBeenCalled();
 		} finally {
 			await h.controller.stop();
 		}

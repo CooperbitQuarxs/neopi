@@ -17,7 +17,7 @@ import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import type { ChainConfig } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import { discoverChains } from "../../chains/config";
 import { EscapeGesture } from "../../chains/escape-gesture";
-import { ChainControl, runChain } from "../../chains/runner";
+import { ChainControl, enabledChainSteps, runChain } from "../../chains/runner";
 import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-roles";
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import { isSettingsInitialized, settings } from "../../config/settings";
@@ -1830,7 +1830,7 @@ export class InputController {
 		}
 		const chain = resolved;
 		chainName = chain.name;
-		currentStep = chain.steps[0]?.name ?? "";
+		currentStep = enabledChainSteps(chain)[0]?.name ?? "";
 		this.ctx.ui.requestRender();
 		try {
 			const result = await runChain(chain, text, {

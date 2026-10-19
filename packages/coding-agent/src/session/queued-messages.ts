@@ -1,8 +1,9 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { MAGIC_KEYWORDS } from "../modes/magic-keywords";
+import type { LiveDelegationDetails } from "../live/delegation-note";
 import type { RestoredQueuedMessage } from "./agent-session-types";
-import { type CustomMessage, isUserAuthoredMessage, readQueueChipText } from "./messages";
+import { type CustomMessage, isUserAuthoredMessage, LIVE_DELEGATION_MESSAGE_TYPE, readQueueChipText } from "./messages";
 
 function queuedTextContent(message: AgentMessage): string | undefined {
 	if (!("content" in message)) return undefined;
@@ -68,10 +69,21 @@ export function isUserQueuedMessage(message: AgentMessage): boolean {
 
 /**
  * Whether a queued user prompt was authored by the user rather than handed off by an
- * agent. Queue editing (chips, removal, promotion, editor restore) only touches these.
+ * agent. This attribution controls operator policy preparation and queue promotion.
  */
 export function isUserAuthoredQueuedMessage(message: AgentMessage): boolean {
 	return isUserQueuedMessage(message) && !("attribution" in message && message.attribution === "agent");
+}
+
+function liveOperatorText(message: AgentMessage): string | undefined {
+	if (message.role !== "custom" || message.customType !== LIVE_DELEGATION_MESSAGE_TYPE) return undefined;
+	const text = (message.details as LiveDelegationDetails | undefined)?.operator;
+	return typeof text === "string" && text.trim() ? text : undefined;
+}
+
+/** Operator speech remains editable/restorable without reattributing the voice agent's handoff. */
+export function isRestorableQueuedMessage(message: AgentMessage): boolean {
+	return isUserAuthoredQueuedMessage(message) || liveOperatorText(message) !== undefined;
 }
 
 /** Hidden magic-keyword notice types (`<id>-notice`) queued alongside a user prompt. */
@@ -101,6 +113,8 @@ export function isHiddenUserCompanion(message: AgentMessage): boolean {
 
 /** Human-readable text shown for a queued-message chip. */
 export function queueChipText(message: AgentMessage, rawText?: string): string {
+	const operator = liveOperatorText(message);
+	if (operator !== undefined) return operator;
 	if (message.role === "developer" && isUserAuthoredQueuedMessage(message) && rawText !== undefined) return rawText;
 	if (message.role === "custom") {
 		return readQueueChipText(message.details) ?? queuedTextContent(message) ?? "";
