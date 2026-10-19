@@ -8,6 +8,7 @@
 
 ### Added
 
+- Added read-only `npi sessions list/read --json` discovery and `npi ctl pipe` attachment to live sessions for external hosts ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
 - Added `terminal.imageProtocol` in `/settings` and `cfg://` to switch between automatic detection, Kitty, Sixel, iTerm2, or no terminal images without restarting ([#302](https://github.com/PsychedelicShayna/neopi/issues/302)).
 - Added `/notice <text>` to send a literal, operator-authored system notice as a developer message, including editable pending notices that return to the composer when interrupted ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
 - Added `/monitor` and `npi monitor attach`: a separate tmux session with one live pane per subagent and advisor that shows unsaved output as it streams; you can message subagents from their panes, and advisor panes are view only ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
@@ -34,6 +35,8 @@
 ### Fixed
 
 - Standalone updates ignore project `.env` build origins and configuration-directory redirects, retain launch/user overrides and explicit profiles, and show the selected source for binary updates and package-manager takeovers ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
+- Session discovery keeps listing files whose creation timestamp is missing or malformed ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
+- Live session attachment now negotiates protocol-v2 chunking and respects slow stdout consumers ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
 - Role switches and runtime fallbacks now honor their saved effort policies and admitted task scope, ordered subagent selectors retain the chosen source's explicit effort through role expansion, advisor classification stops on cancellation, and concurrent or in-flight fallback edits retain paired effort settings ([#178](https://github.com/PsychedelicShayna/neopi/issues/178)).
 - Model selector assignments save globally unless project scope is explicitly selected, including when project role storage is enabled ([#244](https://github.com/PsychedelicShayna/neopi/issues/244)).
 - Source installs retire managed legacy persona, loadout, and REPL extension links without deleting operator-owned extensions, preventing old hooks from running alongside built-ins ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
