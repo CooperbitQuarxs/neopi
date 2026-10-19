@@ -3,8 +3,9 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import { cfgBareSlashCommands } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { parseDeferredInput } from "@oh-my-pi/pi-coding-agent/neopi/defer";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -112,6 +113,111 @@ describe("/defer", () => {
 		await waitUntil(() => tan.mock.calls.length === 1);
 		expect(tan).toHaveBeenCalledWith("finish the task");
 		expect(h.mock.calls).toHaveLength(0);
+	});
+
+	for (const payload of ["plain delayed text", "/tan delayed command"]) {
+		it(`does not retire live speech or restore a live submitted snapshot for ${payload}`, async () => {
+			const h = harness();
+			const prompt = vi.spyOn(h.session, "prompt").mockResolvedValue(true);
+			const onSubmit = h.editor.onSubmit;
+			h.editor.onSubmit = () => {};
+			h.editor.setText("previous spoken submission");
+			h.editor.submit();
+			h.editor.onSubmit = onSubmit;
+			await h.submit(`/defer 5ms ${payload}`);
+			h.editor.setText("current operator draft");
+			const speech = ["unclaimed operator speech", "accepted pending handoff"];
+			const retire = vi.fn(() => {
+				speech.length = 0;
+				return false;
+			});
+			const route = vi.fn(() => {
+				speech.length = 0;
+				return "held" as const;
+			});
+			Object.assign(h.ctx, {
+				liveCallActive: true,
+				discardLiveSpeech: retire,
+				routeLiveSubmit: route,
+				shareLiveSubmit: vi.fn(),
+			});
+			await Bun.sleep(30);
+			expect(retire).not.toHaveBeenCalled();
+			expect(route).not.toHaveBeenCalled();
+			expect(speech).toEqual(["unclaimed operator speech", "accepted pending handoff"]);
+			expect(h.editor.getText()).toBe("current operator draft");
+			if (payload.startsWith("/tan")) expect(h.ctx.handleTanCommand).toHaveBeenCalledWith("delayed command");
+			else expect(prompt).toHaveBeenCalledWith(payload, expect.objectContaining({ streamingBehavior: "steer" }));
+		});
+	}
+
+	it("returns an unconfirmed slash command beside the current draft without restoring an older snapshot", async () => {
+		const h = harness();
+		const onSubmit = h.editor.onSubmit;
+		h.editor.onSubmit = () => {};
+		h.editor.setText("previous submission");
+		h.editor.submit();
+		h.editor.onSubmit = onSubmit;
+		await h.submit("/defer 5ms /unknown-deferred-command");
+		h.editor.setText("current operator draft");
+		await Bun.sleep(30);
+		expect(h.editor.getExpandedText()).toContain("/unknown-deferred-command");
+		expect(h.editor.getExpandedText()).toContain("current operator draft");
+		expect(h.editor.getExpandedText()).not.toContain("previous submission");
+		expect(h.mock.calls).toHaveLength(0);
+	});
+	it("returns a bare-command confirmation beside the operator draft", async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true });
+		cleanups.push(async () => resetSettingsForTest());
+		cfgBareSlashCommands.set(Settings.instance, true);
+		const h = harness();
+		h.session.agent.appendMessage({ role: "user", content: "earlier turn", timestamp: Date.now() });
+		await h.submit("/defer 5ms tan");
+		h.editor.setText("current operator draft");
+		await Bun.sleep(30);
+		expect(h.editor.getExpandedText()).toContain("tan");
+		expect(h.editor.getExpandedText()).toContain("current operator draft");
+		expect(h.ctx.handleTanCommand).not.toHaveBeenCalled();
+	});
+
+	it("returns a read-only collab refusal and a busy kernel submission instead of losing deferred text", async () => {
+		for (const payload of ["delayed collab text", "$p print(42)"]) {
+			const h = harness();
+			await h.submit(`/defer 5ms ${payload}`);
+			if (payload.startsWith("$")) vi.spyOn(h.session, "isEvalLanguageRunning").mockReturnValue(true);
+			else Object.assign(h.ctx, { collabGuest: { readOnly: true } });
+			h.editor.setText("current operator draft");
+			await Bun.sleep(30);
+			expect(h.editor.getExpandedText()).toContain(payload);
+			expect(h.editor.getExpandedText()).toContain("current operator draft");
+			expect(h.mock.calls).toHaveLength(0);
+		}
+	});
+
+	it("owns scheduled images until delivery and leaves newer image links untouched", async () => {
+		const h = harness();
+		const prompt = vi.spyOn(h.session, "prompt").mockResolvedValue(true);
+		const deferredImage = { type: "image" as const, data: "b2xk", mimeType: "image/png" };
+		const newerImage = { type: "image" as const, data: "bmV3", mimeType: "image/png" };
+		h.editor.pendingImages = [deferredImage];
+		h.editor.pendingImageLinks = ["deferred.png"];
+		h.editor.imageLinks = h.editor.pendingImageLinks;
+		await h.submit("/defer 5ms inspect [Image #1]");
+		expect(h.editor.pendingImages).toEqual([]);
+		h.editor.setText("current draft [Image #1]");
+		h.editor.pendingImages = [newerImage];
+		h.editor.pendingImageLinks = ["newer.png"];
+		h.editor.imageLinks = h.editor.pendingImageLinks;
+		await waitUntil(() => prompt.mock.calls.length === 1);
+		expect(prompt).toHaveBeenCalledWith("inspect [Image #1]", {
+			streamingBehavior: "steer",
+			images: [deferredImage],
+		});
+		expect(h.editor.getExpandedText()).toBe("current draft [Image #1]");
+		expect(h.editor.pendingImages).toEqual([newerImage]);
+		expect(h.editor.pendingImageLinks).toEqual(["newer.png"]);
+		expect(h.editor.imageLinks).toEqual(["newer.png"]);
 	});
 
 	it("preserves a deferred literal command's whitespace and unexpanded payload", async () => {

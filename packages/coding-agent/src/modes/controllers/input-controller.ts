@@ -14,6 +14,7 @@ import {
 import { getAgentDir, isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
 import { formatDoubleTap } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
+import { currentDeferredDraft } from "@oh-my-pi/pi-tui/draft-scope";
 import type { ChainConfig } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import { discoverChains } from "../../chains/config";
 import { EscapeGesture } from "../../chains/escape-gesture";
@@ -1189,17 +1190,21 @@ export class InputController {
 
 	setupEditorSubmitHandler(): void {
 		this.ctx.editor.onSubmit = async (text: string) => {
-			const forceChain = this.#chainNextSubmit;
-			this.#chainNextSubmit = false;
-			const toRepl = this.#replNextSubmit;
-			this.#replNextSubmit = false;
+			const deferred = currentDeferredDraft() !== undefined;
+			// A timer owns no real Enter gesture or live-call speech admission.
+			const forceChain = !deferred && this.#chainNextSubmit;
+			const toRepl = !deferred && this.#replNextSubmit;
+			if (!deferred) {
+				this.#chainNextSubmit = false;
+				this.#replNextSubmit = false;
+			}
 			if (toRepl && this.ctx.replMode.active && !isReplBypass(text) && text.trim()) {
 				await this.#runReplCell(text);
 				return;
 			}
 			const submittedText = text;
-			const armed = this.#armedBareCommand;
-			this.#armedBareCommand = undefined;
+			const armed = deferred ? undefined : this.#armedBareCommand;
+			if (!deferred) this.#armedBareCommand = undefined;
 			const armedBareCommand =
 				armed && armed.sessionId === this.ctx.sessionManager.getSessionId() ? armed.text : undefined;
 			// Notices and deferred input stay literal until their own submission is interpreted.
@@ -1210,15 +1215,15 @@ export class InputController {
 			if (!literalInput && (!isSettingsInitialized() || cfgEmojiAutocomplete.get(settings)) && text) {
 				text = expandEmoticons(text);
 			}
-			const warnedSlashText = this.#unknownSlashWarned;
-			this.#unknownSlashWarned = undefined;
+			const warnedSlashText = deferred ? undefined : this.#unknownSlashWarned;
+			if (!deferred) this.#unknownSlashWarned = undefined;
 
 			// Focused subagent session: the editor is a plain chat box for it.
 			// Everything below (slash/bash/python, loop,
 			// compaction queueing) is main-session-only.
 			if (this.ctx.focusedAgentId) {
 				// The composer's speech goes to the focused agent; the voice call must not relay it too.
-				if (this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) {
+				if (!deferred && this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) {
 					this.#holdForLiveHandoff(text);
 					return;
 				}
@@ -1265,7 +1270,7 @@ export class InputController {
 			// with the harness, but still consume the speech dictated into them; image drafts
 			// always reach the main agent.
 			let liveRoute: LiveSubmitRoute = "primary";
-			if (this.ctx.liveCallActive) {
+			if (!deferred && this.ctx.liveCallActive) {
 				// `$` is a harness command only when it parses as REPL input; `$HOME` stays prose.
 				const harnessCommand =
 					/^[/!]/.test(text) ||
@@ -1329,11 +1334,11 @@ export class InputController {
 			const queueBody = parseQueueShorthand(text);
 			if (queueBody !== undefined) {
 				const accepted = await this.#queueForYield(queueBody, {
-					historyText: this.ctx.liveCallActive ? undefined : text,
+					historyText: !deferred && this.ctx.liveCallActive ? undefined : text,
 					images: inputImages,
 					imageLinks: inputImageLinks,
 				});
-				if (accepted.length > 0 && this.ctx.liveCallActive) {
+				if (accepted.length > 0 && !deferred && this.ctx.liveCallActive) {
 					const delivered = accepted.join("\n\n");
 					this.ctx.editor.addToHistory(delivered);
 					this.ctx.shareLiveSubmit(delivered);
@@ -1420,7 +1425,7 @@ export class InputController {
 			if (this.ctx.collabGuest) {
 				if (text.startsWith("/")) {
 					this.ctx.showStatus(`${text.split(/\s+/, 1)[0]} is host-only during a collab session`);
-					this.ctx.editor.setText("");
+					this.ctx.editor.setText(deferred ? text : "");
 					return;
 				}
 				if (
@@ -1428,12 +1433,13 @@ export class InputController {
 					parseReplEvalInput(text, this.ctx.session.extensionRunner?.getEvalBackendAliases())
 				) {
 					this.ctx.showStatus("Local execution is host-only during a collab session");
-					this.ctx.editor.setText("");
+					this.ctx.editor.setText(deferred ? text : "");
 					return;
 				}
 				if (this.ctx.collabGuest.readOnly) {
 					// Keep the typed text: the prompt was not consumed.
 					this.ctx.showStatus("This collab link is read-only — prompting is disabled");
+					if (deferred) this.ctx.editor.setText(text);
 					return;
 				}
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
@@ -1585,12 +1591,12 @@ export class InputController {
 			// payloads, so release it once the prompt is on its way.
 			this.ctx.editor.clearSubmittedDraft();
 			// Only the prompt about to reach the main agent, after hooks and the chain.
-			if (this.ctx.liveCallActive) this.ctx.shareLiveSubmit(text);
+			if (!deferred && this.ctx.liveCallActive) this.ctx.shareLiveSubmit(text);
 
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
 			if (this.ctx.session.isStreaming) {
-				this.ctx.editor.addToHistory(this.ctx.liveCallActive ? text : typedText);
+				this.ctx.editor.addToHistory(!deferred && this.ctx.liveCallActive ? text : typedText);
 				// Enter already cleared the editor synchronously. Clearing after an
 				// awaited input hook would erase new text or an unbracketed paste tail.
 				this.ctx.editor.imageLinks = undefined;
@@ -1710,7 +1716,7 @@ export class InputController {
 				this.ctx.updatePendingMessagesDisplay();
 				this.ctx.ui.requestRender();
 			}
-			this.ctx.editor.addToHistory(this.ctx.liveCallActive ? text : typedText);
+			this.ctx.editor.addToHistory(!deferred && this.ctx.liveCallActive ? text : typedText);
 		};
 	}
 
