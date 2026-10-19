@@ -23,7 +23,11 @@ import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 const usage = {
-	input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
@@ -46,7 +50,9 @@ describe("fork-owned Ctrl+Space: xAI preempts configured dictation", () => {
 		await toggles[count];
 	}
 
-	beforeAll(async () => { await initTheme(); });
+	beforeAll(async () => {
+		await initTheme();
+	});
 	beforeEach(async () => {
 		saved = beginSettingsTest();
 		const root = os.tmpdir();
@@ -63,7 +69,9 @@ describe("fork-owned Ctrl+Space: xAI preempts configured dictation", () => {
 		vi.spyOn(registry, "getAvailable").mockReturnValue([model, dictation, registry.find("local", "whisper-base")!]);
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(directory, directory), settings, modelRegistry: registry,
+			sessionManager: SessionManager.create(directory, directory),
+			settings,
+			modelRegistry: registry,
 		});
 		mode = new InteractiveMode(session, "test");
 		vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});
@@ -89,10 +97,12 @@ describe("fork-owned Ctrl+Space: xAI preempts configured dictation", () => {
 		vi.spyOn(capture, "sharedAudioCapture").mockImplementation((_rate, callback) => {
 			const id = audio.length;
 			audio.push(callback);
-			return { stop: () => {
-				closed.push(id);
-				if (throwOnStop) throw new Error("stuck native recorder");
-			} };
+			return {
+				stop: () => {
+					closed.push(id);
+					if (throwOnStop) throw new Error("stuck native recorder");
+				},
+			};
 		});
 		vi.spyOn(xai, "transcribeXaiAudio").mockResolvedValue("xAI words");
 		mode.editor.setText("Existing draft: ");
@@ -105,90 +115,107 @@ describe("fork-owned Ctrl+Space: xAI preempts configured dictation", () => {
 		await fs.rm(directory, { recursive: true, force: true });
 	});
 
-	it.each(["recording", "transcribing"] as const)("preempts %s, preserves draft, and ignores late native results", async phase => {
-		const result = Promise.withResolvers<transcription.TranscriptionResult>();
-		const native = vi.spyOn(transcription, "transcribeAudio").mockReturnValue(result.promise);
-		await mode.handleDictationToggle();
-		expect(audio).toHaveLength(1);
-		audio[0]!(null, new Float32Array([0.25]));
-		const pending = phase === "transcribing" ? mode.handleDictationToggle() : Promise.resolve();
-		if (phase === "transcribing") expect(native).toHaveBeenCalledTimes(1);
+	it.each(["recording", "transcribing"] as const)(
+		"preempts %s, preserves draft, and ignores late native results",
+		async phase => {
+			const result = Promise.withResolvers<transcription.TranscriptionResult>();
+			const native = vi.spyOn(transcription, "transcribeAudio").mockReturnValue(result.promise);
+			await mode.handleDictationToggle();
+			expect(audio).toHaveLength(1);
+			audio[0]!(null, new Float32Array([0.25]));
+			const pending = phase === "transcribing" ? mode.handleDictationToggle() : Promise.resolve();
+			if (phase === "transcribing") expect(native).toHaveBeenCalledTimes(1);
 
-		await pressXai();
-		expect(mode.showWarning).not.toHaveBeenCalled();
-		expect(closed).toContain(0);
-		expect(audio).toHaveLength(2);
-		expect(mode.editor.getText()).toBe("Existing draft: ");
-		if (phase === "transcribing") expect(native.mock.calls[0]![2].signal?.aborted).toBe(true);
-		// A retired provider and microphone are deliberately uncooperative after abort.
-		result.resolve({ text: "WRONG native words", usage });
-		await pending;
-		audio[0]!(new Error("late retired mic error"), new Float32Array());
-		expect(mode.editor.getText()).toBe("Existing draft: ");
-		expect(mode.sttIdle).toBe(false);
-		audio[1]!(null, new Float32Array([0.5]));
-		await pressXai();
-		expect(mode.editor.getText()).toBe("Existing draft: xAI words");
-		expect(mode.sttIdle).toBe(true);
-		expect(mode.showWarning).not.toHaveBeenCalled();
-		// Taking over does not disable the selected configured provider.
-		await mode.handleDictationToggle();
-		expect(audio).toHaveLength(3);
-		expect(mode.sttIdle).toBe(false);
-	});
-	it.each(["resolve", "reject"] as const)("retires configured startup before dependency setup can %s", async outcome => {
-		settings.setModelRole("dictation", "local/whisper-base");
-		const cached = Promise.withResolvers<boolean>();
-		vi.spyOn(downloader, "isSttModelCached").mockReturnValue(cached.promise);
-		vi.spyOn(downloader, "downloadSttModel").mockResolvedValue(undefined);
-		const startStream = vi.spyOn(asr.sttClient, "startStream").mockReturnValue({
-			pushAudio() {}, stop: async () => "", cancel() {},
-		});
-		const pending = mode.handleDictationToggle();
-		expect(audio).toHaveLength(0);
-		await pressXai();
-		expect(audio).toHaveLength(1);
-		if (outcome === "resolve") cached.resolve(true);
-		else cached.reject(new Error("retired dependency failure"));
-		await pending;
-		expect(startStream).not.toHaveBeenCalled();
-		expect(audio).toHaveLength(1);
-		expect(mode.showWarning).not.toHaveBeenCalled();
-		expect(mode.editor.getText()).toBe("Existing draft: ");
-		expect(mode.sttIdle).toBe(false);
-	});
+			await pressXai();
+			expect(mode.showWarning).not.toHaveBeenCalled();
+			expect(closed).toContain(0);
+			expect(audio).toHaveLength(2);
+			expect(mode.editor.getText()).toBe("Existing draft: ");
+			if (phase === "transcribing") expect(native.mock.calls[0]![2].signal?.aborted).toBe(true);
+			// A retired provider and microphone are deliberately uncooperative after abort.
+			result.resolve({ text: "WRONG native words", usage });
+			await pending;
+			audio[0]!(new Error("late retired mic error"), new Float32Array());
+			expect(mode.editor.getText()).toBe("Existing draft: ");
+			expect(mode.sttIdle).toBe(false);
+			audio[1]!(null, new Float32Array([0.5]));
+			await pressXai();
+			expect(mode.editor.getText()).toBe("Existing draft: xAI words");
+			expect(mode.sttIdle).toBe(true);
+			expect(mode.showWarning).not.toHaveBeenCalled();
+			// Taking over does not disable the selected configured provider.
+			await mode.handleDictationToggle();
+			expect(audio).toHaveLength(3);
+			expect(mode.sttIdle).toBe(false);
+		},
+	);
+	it.each(["resolve", "reject"] as const)(
+		"retires configured startup before dependency setup can %s",
+		async outcome => {
+			settings.setModelRole("dictation", "local/whisper-base");
+			const cached = Promise.withResolvers<boolean>();
+			vi.spyOn(downloader, "isSttModelCached").mockReturnValue(cached.promise);
+			vi.spyOn(downloader, "downloadSttModel").mockResolvedValue(undefined);
+			const startStream = vi.spyOn(asr.sttClient, "startStream").mockReturnValue({
+				pushAudio() {},
+				stop: async () => "",
+				cancel() {},
+			});
+			const pending = mode.handleDictationToggle();
+			expect(audio).toHaveLength(0);
+			await pressXai();
+			expect(audio).toHaveLength(1);
+			if (outcome === "resolve") cached.resolve(true);
+			else cached.reject(new Error("retired dependency failure"));
+			await pending;
+			expect(startStream).not.toHaveBeenCalled();
+			expect(audio).toHaveLength(1);
+			expect(mode.showWarning).not.toHaveBeenCalled();
+			expect(mode.editor.getText()).toBe("Existing draft: ");
+			expect(mode.sttIdle).toBe(false);
+		},
+	);
 
-	it.each(["recording", "transcribing"] as const)("retires streaming %s even if provider cancellation throws", async phase => {
-		settings.setModelRole("dictation", "local/whisper-base");
-		vi.spyOn(downloader, "isSttModelCached").mockResolvedValue(true);
-		vi.spyOn(downloader, "downloadSttModel").mockResolvedValue(undefined);
-		const stopped = Promise.withResolvers<string>();
-		let partial: ((text: string) => void) | undefined;
-		let segment: ((text: string) => void) | undefined;
-		vi.spyOn(asr.sttClient, "startStream").mockImplementation((_key, options) => {
-			partial = options.onPartial;
-			segment = options.onSegment;
-			return { pushAudio() {}, stop: () => stopped.promise, cancel() { throw new Error("provider stuck"); } };
-		});
-		await mode.handleDictationToggle();
-		segment?.("committed");
-		const draft = mode.editor.getText();
-		partial?.("volatile");
-		const pending = phase === "transcribing" ? mode.handleDictationToggle() : Promise.resolve();
-		throwOnStop = true;
-		await pressXai();
-		throwOnStop = false;
-		expect(audio).toHaveLength(2);
-		expect(closed).toContain(0);
-		expect(mode.editor.getText()).toBe(draft);
-		partial?.("late partial");
-		segment?.("late segment");
-		stopped.resolve("late final");
-		await pending;
-		expect(mode.editor.getText()).toBe(draft);
-		expect(mode.sttIdle).toBe(false);
-		expect(mode.showWarning).not.toHaveBeenCalled();
-	});
+	it.each(["recording", "transcribing"] as const)(
+		"retires streaming %s even if provider cancellation throws",
+		async phase => {
+			settings.setModelRole("dictation", "local/whisper-base");
+			vi.spyOn(downloader, "isSttModelCached").mockResolvedValue(true);
+			vi.spyOn(downloader, "downloadSttModel").mockResolvedValue(undefined);
+			const stopped = Promise.withResolvers<string>();
+			let partial: ((text: string) => void) | undefined;
+			let segment: ((text: string) => void) | undefined;
+			vi.spyOn(asr.sttClient, "startStream").mockImplementation((_key, options) => {
+				partial = options.onPartial;
+				segment = options.onSegment;
+				return {
+					pushAudio() {},
+					stop: () => stopped.promise,
+					cancel() {
+						throw new Error("provider stuck");
+					},
+				};
+			});
+			await mode.handleDictationToggle();
+			segment?.("committed");
+			const draft = mode.editor.getText();
+			partial?.("volatile");
+			const pending = phase === "transcribing" ? mode.handleDictationToggle() : Promise.resolve();
+			throwOnStop = true;
+			await pressXai();
+			throwOnStop = false;
+			expect(audio).toHaveLength(2);
+			expect(closed).toContain(0);
+			expect(mode.editor.getText()).toBe(draft);
+			partial?.("late partial");
+			segment?.("late segment");
+			stopped.resolve("late final");
+			await pending;
+			expect(mode.editor.getText()).toBe(draft);
+			expect(mode.sttIdle).toBe(false);
+			expect(mode.showWarning).not.toHaveBeenCalled();
+		},
+	);
 
 	it.each(["failed", "disposed"] as const)("reaches xAI with a %s configured controller", async state => {
 		let configured: STTController | undefined;
@@ -207,26 +234,29 @@ describe("fork-owned Ctrl+Space: xAI preempts configured dictation", () => {
 		expect(mode.showWarning).not.toHaveBeenCalled();
 	});
 
-	it.each([false, true])("takes over an actual Space hold (latched=%s) and ignores its retired release", async latched => {
-		vi.useFakeTimers();
-		try {
-			for (let i = 0; i < 4; i++) {
-				vi.advanceTimersByTime(40);
-				mode.editor.handleInput(" ");
+	it.each([false, true])(
+		"takes over an actual Space hold (latched=%s) and ignores its retired release",
+		async latched => {
+			vi.useFakeTimers();
+			try {
+				for (let i = 0; i < 4; i++) {
+					vi.advanceTimersByTime(40);
+					mode.editor.handleInput(" ");
+				}
+				await Promise.resolve();
+				expect(audio).toHaveLength(1);
+				if (latched) mode.editor.handleInput("\x7f");
+				await pressXai();
+				expect(audio).toHaveLength(2);
+				vi.advanceTimersByTime(1000);
+				expect(mode.sttIdle).toBe(false);
+				expect(closed).toEqual([0]);
+				expect(mode.editor.getText()).toBe("Existing draft: ");
+			} finally {
+				vi.useRealTimers();
 			}
-			await Promise.resolve();
-			expect(audio).toHaveLength(1);
-			if (latched) mode.editor.handleInput("\x7f");
-			await pressXai();
-			expect(audio).toHaveLength(2);
-			vi.advanceTimersByTime(1000);
-			expect(mode.sttIdle).toBe(false);
-			expect(closed).toEqual([0]);
-			expect(mode.editor.getText()).toBe("Existing draft: ");
-		} finally {
-			vi.useRealTimers();
-		}
-	});
+		},
+	);
 
 	it("keeps xAI on the main composer while a modal owns keyboard focus", async () => {
 		const filter = new Input();

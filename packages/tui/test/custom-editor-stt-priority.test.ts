@@ -4,9 +4,16 @@ import { SPACE_HOLD_RELEASE_MS } from "../src/space-hold";
 import { getEditorTheme, initTheme } from "../src/theme";
 
 describe("fork-owned Ctrl+Space: xAI priority over configured Space gestures", () => {
-	beforeAll(async () => { await initTheme(); });
-	beforeEach(() => { vi.useFakeTimers(); });
-	afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+	beforeAll(async () => {
+		await initTheme();
+	});
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
 
 	function editorWithShortcuts() {
 		const editor = new CustomEditor(getEditorTheme());
@@ -59,22 +66,25 @@ describe("fork-owned Ctrl+Space: xAI priority over configured Space gestures", (
 		expect(configured).toHaveBeenCalledTimes(1);
 	});
 
-	it.each([false, true])("retires an existing configured hold (latched=%s) before dispatch, without transcribing it", latched => {
-		const { editor, xai, configured, end } = editorWithShortcuts();
-		for (let i = 0; i < 4; i++) {
-			vi.advanceTimersByTime(40);
+	it.each([false, true])(
+		"retires an existing configured hold (latched=%s) before dispatch, without transcribing it",
+		latched => {
+			const { editor, xai, configured, end } = editorWithShortcuts();
+			for (let i = 0; i < 4; i++) {
+				vi.advanceTimersByTime(40);
+				editor.handleInput(" ");
+			}
+			if (latched) editor.handleInput("\x7f");
+			expect(configured).toHaveBeenCalledTimes(1);
+			editor.handleInput("\x00");
+			expect(xai).toHaveBeenCalledTimes(1);
+			expect(end).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(SPACE_HOLD_RELEASE_MS + 1);
 			editor.handleInput(" ");
-		}
-		if (latched) editor.handleInput("\x7f");
-		expect(configured).toHaveBeenCalledTimes(1);
-		editor.handleInput("\x00");
-		expect(xai).toHaveBeenCalledTimes(1);
-		expect(end).not.toHaveBeenCalled();
-		vi.advanceTimersByTime(SPACE_HOLD_RELEASE_MS + 1);
-		editor.handleInput(" ");
-		expect(editor.getText()).toBe("Draft ");
-		expect(end).not.toHaveBeenCalled();
-	});
+			expect(editor.getText()).toBe("Draft ");
+			expect(end).not.toHaveBeenCalled();
+		},
+	);
 
 	it("reaches xAI even while a post-processing chain owns normal composer input", () => {
 		const { editor, xai } = editorWithShortcuts();
