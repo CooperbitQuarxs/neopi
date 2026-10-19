@@ -4,6 +4,7 @@
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { ctlFail, ctlList, ctlRpc, ctlSend, ctlState } from "../cli/ctl-cli";
 import { ctlHelp } from "../cli/command-help";
+import { ctlPipe } from "../cli/ctl-pipe";
 
 /** The named operations and aliases handled here; other operations pass through to RPC. */
 const OPERATIONS: Readonly<Record<string, string>> = {
@@ -37,6 +38,7 @@ export default class Ctl extends Command {
 		json: Flags.boolean({ char: "j", description: "Emit JSON", default: false }),
 		steer: Flags.boolean({ description: "Queue as a steer", default: false }),
 		"follow-up": Flags.boolean({ description: "Queue as a follow-up", default: false }),
+		label: Flags.string({ description: "Control pipe connection label" }),
 	};
 
 	static strict = false;
@@ -45,6 +47,10 @@ export default class Ctl extends Command {
 		const { args, argv, flags } = await this.parse(Ctl);
 		try {
 			const head = args.target ?? "list";
+			if (head === "pipe") {
+				process.exitCode = await ctlPipe(args.op ?? "", { label: flags.label });
+				return;
+			}
 			if (head === "list") {
 				process.exitCode = await ctlList(flags.json);
 				return;
