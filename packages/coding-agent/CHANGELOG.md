@@ -47,6 +47,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Live session pipes pause stdin when their control socket is blocked, and session transcript reads return null timestamps instead of failing on missing or malformed message dates ([#367](https://github.com/PsychedelicShayna/neopi/issues/367)).
 - Control state labels pending steering and follow-up messages together; the first queued follow-up warns each calling session that steering usually reaches an automated agent sooner ([#333](https://github.com/PsychedelicShayna/neopi/issues/333)).
 - Rule toggles in `/status` immediately update the running session's prompt, rulebook, and TTSR matching without restarting ([#4](https://github.com/PsychedelicShayna/neopi/issues/4)).
 - Standalone updates ignore project and custom Bun dotenv build origins and configuration-directory redirects, retain launch/user overrides and explicit profiles, and show the selected source for binary updates and package-manager takeovers ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
