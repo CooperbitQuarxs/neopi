@@ -7,8 +7,8 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import { addKeyAliases, canonicalKeyId } from "../keybindings";
 import { type KeyId, parseKey } from "../keys";
-import { extractPrintableText } from "../keys";
-import { matchesSelectCancel, pickerNavigationKey } from "../keybinding-matchers";
+import { MenuKeyReader } from "../components/menu-navigation";
+import type { ModelBrowserNavigation } from "./model-browser";
 import type { Component, TUI } from "../tui";
 import { type ThemeColor, theme } from "../theme/theme";
 import {
@@ -24,7 +24,7 @@ import type { ScopedModelItem } from "./model-hub";
 import { bottomBorder, row, topBorder } from "../chrome/overlay-box";
 import { resolveSegmentPalette } from "../chrome/segment-track";
 import { formatKeyHint } from "../app-keybindings";
-import { editorKey, editorKeys } from "../chrome/keybinding-hints";
+import { editorKey } from "../chrome/keybinding-hints";
 import { card, compact, span, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { CLOSE_ACTION, picker, pickerAction, pickerEvent } from "../native/picker";
@@ -95,16 +95,16 @@ const TASK_STATUS_HINT = "Task subagent switch — spawned task agents use this 
 
 /** Footer hint for the active mode; keys resolve at render time so theme/keybinding changes apply. */
 function footerHint(mode: "session" | "role" | "task"): string {
-	const upDown = editorKeys("tui.select.up", "tui.select.down");
+	const navigation = "j/k rows · / search · Ctrl-u/d half · gg/G ends";
 	const enter = formatKeyHint("enter");
 	const close = `${editorKey("tui.select.cancel")} close`;
 	switch (mode) {
 		case "role":
-			return `hjkl navigate · i filter · ${enter} apply role model · ${close}`;
+			return `${navigation} · ${enter}/Space apply role model · ${close}`;
 		case "task":
-			return `hjkl navigate · i filter · ${enter} use for Task subagents · ${close}`;
+			return `${navigation} · ${enter}/Space use for Task subagents · ${close}`;
 		default:
-			return `hjkl navigate · i filter · ${enter} use for this session · @ via filter · ${close}`;
+			return `${navigation} · ${enter}/Space use for this session · @ via search · ${close}`;
 	}
 }
 
@@ -127,10 +127,11 @@ export class ModelPickerComponent implements Component {
 	#quickRoles = new Map<string, ResolvedRoleModel>();
 	#roleMode = false;
 	#taskMode = false;
+	#hasTaskTarget = false;
 	#taskMatchKeys = new Set<string>();
 	#taskModeKey: KeyId | undefined;
 	#taskSelector: string | undefined;
-	#filterEditing = false;
+	#keys = new MenuKeyReader();
 	#nativeRoot: { memo: string; node: NativeNode } | undefined;
 	#pickerRoot:
 		| {
@@ -157,6 +158,7 @@ export class ModelPickerComponent implements Component {
 		this.#currentSelector = options.currentSelector;
 		this.#currentQuickRoleSelector = options.currentQuickRole ? `@${options.currentQuickRole}` : undefined;
 		this.#taskSelector = options.taskSelector;
+		this.#hasTaskTarget = callbacks.onPickTask !== undefined;
 		if (callbacks.onPickTask) {
 			this.#taskModeKey = options.taskModeKeys?.[0];
 			for (const key of options.taskModeKeys ?? []) addKeyAliases(this.#taskMatchKeys, key);
@@ -214,6 +216,22 @@ export class ModelPickerComponent implements Component {
 	}
 
 	invalidate(): void {}
+
+	navigationSnapshot(): { taskMode: boolean; browser: ModelBrowserNavigation } {
+		return { taskMode: this.#taskMode, browser: this.#browser.navigationSnapshot() };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { taskMode?: boolean; browser?: unknown };
+		this.#taskMode = state.taskMode === true && this.#hasTaskTarget;
+		this.#syncItemsForQuery(this.#browser.query, true);
+		this.#browser.restoreNavigation(state.browser);
+		this.#keys.reset();
+		this.#nativeRoot = undefined;
+		this.#pickerRoot = undefined;
+		this.#tui.requestRender();
+	}
 
 	/** Rebuild model items and role chips from the registry's in-memory state. */
 	#syncFromRegistryState(): void {
@@ -277,7 +295,11 @@ export class ModelPickerComponent implements Component {
 		// Mouse tracking is off outside fullscreen overlays; drop any stray SGR
 		// reports instead of feeding them to the search input.
 		if (data.startsWith("\x1b[<")) return;
-		if (this.#taskMatchKeys.size > 0) {
+		if (this.#browser.filterFocused) {
+			this.#browser.handleInput(data);
+			return;
+		}
+		if (this.#taskMatchKeys.size > 0 && !this.#roleMode) {
 			const parsed = parseKey(data);
 			const canonical = parsed !== undefined ? canonicalKeyId(parsed) : undefined;
 			if (canonical !== undefined && this.#taskMatchKeys.has(canonical)) {
@@ -285,24 +307,13 @@ export class ModelPickerComponent implements Component {
 				return;
 			}
 		}
-		if (this.#filterEditing) {
-			if (matchesSelectCancel(data)) {
-				this.#filterEditing = false;
-				this.#browser.focusFilter(false);
-			} else this.#browser.handleInput(data);
+		const action = this.#keys.read(data);
+		if (!action || action === "pending") return;
+		if (action.kind === "context" && this.#hasTaskTarget && !this.#roleMode) {
+			this.#toggleTaskMode();
 			return;
 		}
-		if (data === "i") {
-			this.#filterEditing = true;
-			this.#browser.focusFilter();
-			return;
-		}
-		if (matchesSelectCancel(data)) {
-			this.#browser.onCancel?.();
-			return;
-		}
-		const key = pickerNavigationKey(data);
-		if (extractPrintableText(key) === undefined) this.#browser.handleInput(key);
+		this.#browser.handleNavigation(action);
 	}
 	/** Flip between session-model and Task-subagent targets, repointing the highlight. */
 	#toggleTaskMode(): void {
@@ -312,6 +323,7 @@ export class ModelPickerComponent implements Component {
 		if (target) this.#browser.selectSelector(target);
 		this.#tui.requestRender();
 	}
+
 
 	render(width: number): string[] {
 		const termRows = Math.max(16, this.#tui.terminal?.rows || process.stdout.rows || 40);
@@ -327,8 +339,9 @@ export class ModelPickerComponent implements Component {
 
 		const borderColor: ThemeColor | undefined = this.#taskMode ? "error" : undefined;
 		let footer = footerHint(this.#taskMode ? "task" : this.#roleMode ? "role" : "session");
-		if (this.#filterEditing) footer = "INSERT filter · hjkl type literally · Esc normal";
-		if (this.#taskModeKey !== undefined && !this.#roleMode) {
+		if (this.#browser.filterFocused) footer = "Search · Esc back to list";
+		if (this.#hasTaskTarget && !this.#roleMode && !this.#browser.filterFocused) footer += " · Tab target";
+		if (this.#taskModeKey !== undefined && !this.#roleMode && !this.#browser.filterFocused) {
 			footer += ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? "session model" : "task model"}`;
 		}
 
@@ -359,9 +372,11 @@ export class ModelPickerComponent implements Component {
 		switch (picked.act) {
 			case CLOSE_ACTION.id:
 				this.#browser.handleCancel();
+				this.#tui.requestRender();
 				return;
 			case "clear":
-				if (this.#browser.query.length > 0) this.#browser.handleCancel();
+				this.#browser.setQuery("");
+				this.#syncItemsForQuery("", true);
 				return;
 			case "use": {
 				const selected = this.#browser.pickerSelected;
@@ -396,7 +411,7 @@ export class ModelPickerComponent implements Component {
 		const preview = this.#browser.pickerPreview("compact", current);
 		const selected = this.#browser.pickerSelected;
 		const cursor = this.#browser.cursor;
-		const memo = `${mode}\0${this.#configError ?? ""}\0${query}\0${cursor}\0${selected ?? ""}`;
+		const memo = `${mode}\0${this.#configError ?? ""}\0${query}\0${cursor}\0${selected ?? ""}\0${this.#browser.filterFocused}`;
 		const cached = this.#pickerRoot;
 		if (
 			cached !== undefined &&
@@ -409,11 +424,7 @@ export class ModelPickerComponent implements Component {
 		}
 		const subtitle: TspPickerProps["subtitle"] = this.#configError
 			? [span(this.#configError, "error")]
-			: mode === "task"
-				? [span(TASK_STATUS_HINT, "warning")]
-				: mode === "role"
-					? QUICK_ROLE_STATUS_HINT
-					: STATUS_HINT;
+			: `${mode === "task" ? TASK_STATUS_HINT : mode === "role" ? QUICK_ROLE_STATUS_HINT : STATUS_HINT} · ${this.#browser.filterFocused ? "Esc back to list" : `/ search · j/k rows · Ctrl-u/d half${this.#hasTaskTarget && !this.#roleMode ? " · Tab target" : ""}`}`;
 		const cycleKey = editorKey("app.model.cycleForward") || formatKeyHint("ctrl+p");
 		const node = picker(
 			{
@@ -445,7 +456,8 @@ export class ModelPickerComponent implements Component {
 					this.#taskModeKey !== undefined && mode !== "role"
 						? pickerAction("task", "Task model", this.#taskModeKey, { on: mode === "task" })
 						: undefined,
-					query.length > 0 ? { ...CLOSE_ACTION, label: "Clear search" } : CLOSE_ACTION,
+					query.length > 0 ? pickerAction("clear", "Clear search") : undefined,
+					{ ...CLOSE_ACTION, label: this.#browser.filterFocused ? "Back to list" : "Close" },
 				]),
 			},
 			preview,
@@ -476,10 +488,10 @@ export class ModelPickerComponent implements Component {
 							? "use for Task subagents"
 							: "use for this session",
 			},
-			{ keys: [], label: "type to search" },
+			{ keys: ["/"], label: "search (@ for quick roles)" },
 		];
-		if (mode === "session") hints.push({ keys: ["@"], label: "quick roles" });
 		hints.push(actionHint("tui.select.cancel", "close"));
+		if (this.#hasTaskTarget && !this.#roleMode) hints.push(actionHint("tui.select.nextContext", "session/Task target"));
 		if (this.#taskModeKey !== undefined && !this.#roleMode) {
 			hints.push({ keys: [this.#taskModeKey], label: this.#taskMode ? "session model" : "task model" });
 		}

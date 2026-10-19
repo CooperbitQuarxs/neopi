@@ -116,6 +116,7 @@ function startWebAssign(key: (data: string) => void): void {
 	key("\r"); // dive into the roles rows
 	key("\r"); // activate the `web` role row → selector-choice strip
 	key("\r"); // confirm "pick model…" → assign mode
+	key("h"); // return to provider scopes without changing the pending assignment
 }
 
 beforeAll(async () => {
@@ -127,10 +128,10 @@ describe("model hub assign mode scope filtering (#12692)", () => {
 		const { body, key } = createHub();
 		startWebAssign(key);
 
-		// Sidebar order: Roles, All models, google, litellm. Three Downs hop
-		// from Roles to the litellm provider scope.
+		// Rules are above providers; scope hopping must still reapply role acceptance.
 		key(DOWN); // Roles → All models
-		key(DOWN); // All models → google
+		key(DOWN); // All models → Effort rules
+		key(DOWN); // Effort rules → google
 		key(DOWN); // google → litellm
 
 		const rendered = body();
@@ -143,7 +144,8 @@ describe("model hub assign mode scope filtering (#12692)", () => {
 		startWebAssign(key);
 
 		key(DOWN); // Roles → All models
-		key(DOWN); // All models → google
+		key(DOWN); // All models → Effort rules
+		key(DOWN); // Effort rules → google
 
 		const rendered = body();
 		expect(rendered).toContain("web-search-pro");
@@ -154,7 +156,8 @@ describe("model hub assign mode scope filtering (#12692)", () => {
 		const { body, key } = createHub();
 		// From the initial All-models scope hop straight to the litellm provider
 		// without entering assign mode; the accepts filter must not apply.
-		key(DOWN); // All models → google
+		key(DOWN); // All models → Effort rules
+		key(DOWN); // Effort rules → google
 		key(DOWN); // google → litellm
 
 		const rendered = body();

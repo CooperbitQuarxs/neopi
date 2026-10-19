@@ -20,8 +20,9 @@ import {
 } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
+import { getKeybindings, setKeybindings, type TUI } from "@oh-my-pi/pi-tui";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { thinkingLevelGlyph } from "@oh-my-pi/pi-tui/render/render-utils";
-import type { TUI } from "@oh-my-pi/pi-tui";
 
 import { cfgCycleOrder, cfgModelPresets } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
@@ -864,6 +865,64 @@ describe("ModelHub", () => {
 			expect(footerLine(bareHub.render(220))).not.toContain("Preset name:");
 		});
 
+		test("name strips keep printable cancel/submit/delete bindings literal and retain physical exits", () => {
+			const previous = getKeybindings();
+			setKeybindings(KeybindingsManager.inMemory({
+				"tui.select.cancel": "j", "tui.input.submit": "s", "tui.editor.deleteCharBackward": "k",
+			}));
+			try {
+				const onSavePreset = vi.fn();
+				const { hub, onCancel } = createHub({
+					models: [makeModel("test", "preset-model")], scoped: true, callbacks: { onSavePreset },
+				});
+				for (const key of [UP, "\n", "s"]) hub.handleInput(key);
+				for (const char of "jsk-work") hub.handleInput(char);
+				hub.handleInput("\x1b[115u");
+				const typed = hub.navigationSnapshot().strip;
+				if (typed?.kind !== "name") throw new Error("Expected a focused preset-name strip");
+				expect(typed.input.getValue()).toBe("jsk-works");
+				expect(typed.input.focused).toBe(true);
+				expect(onSavePreset).not.toHaveBeenCalled();
+				hub.handleInput("\r");
+				expect(onSavePreset).toHaveBeenCalledTimes(1);
+				expect(onSavePreset).toHaveBeenCalledWith("jsk-works");
+
+				hub.handleInput("s");
+				for (const char of "jsk-draft") hub.handleInput(char);
+				hub.handleInput(ESC);
+				const defocused = hub.navigationSnapshot().strip;
+				if (defocused?.kind !== "name") throw new Error("Expected Escape to retain the name strip");
+				expect(defocused.input.getValue()).toBe("jsk-draft");
+				expect(defocused.input.focused).toBe(false);
+				expect(onCancel).not.toHaveBeenCalled();
+				hub.handleInput(ESC);
+				expect(hub.navigationSnapshot().strip).toBeNull();
+				expect(onCancel).not.toHaveBeenCalled();
+				expect(onSavePreset).toHaveBeenCalledTimes(1);
+			} finally { setKeybindings(previous); }
+		});
+
+		test("name-strip typing keeps an ordinary word in one undo unit", () => {
+			const previous = getKeybindings();
+			setKeybindings(KeybindingsManager.inMemory({
+				"tui.select.cancel": "j", "tui.input.submit": "s", "tui.editor.deleteCharBackward": "k",
+				"tui.editor.undo": "ctrl+z",
+			}));
+			try {
+				const onSavePreset = vi.fn();
+				const { hub } = createHub({
+					models: [makeModel("test", "preset-model")], scoped: true, callbacks: { onSavePreset },
+				});
+				for (const key of [UP, "\n", "s"]) hub.handleInput(key);
+				for (const char of "discard") hub.handleInput(char);
+				hub.handleInput("\x1a");
+				for (const char of "kept") hub.handleInput(char);
+				hub.handleInput("\r");
+				expect(onSavePreset).toHaveBeenCalledTimes(1);
+				expect(onSavePreset).toHaveBeenCalledWith("kept");
+			} finally { setKeybindings(previous); }
+		});
+
 		test("ctrl+←/→ switch between saved model presets from the Roles view", () => {
 			const a = makeModel("test", "model-a");
 			const b = makeModel("test", "model-b");
@@ -1502,6 +1561,49 @@ describe("ModelHub", () => {
 			hub.handleInput("\n"); // regex → effort options
 			hub.handleInput("\n"); // inherit
 			expect(cfgRetryFallbackChains.get(settings).default).toEqual(["re:^test/(model)"]);
+		});
+
+		test("pattern strips keep printable remaps literal through physical Escape, refocus and confirmation", () => {
+			const previous = getKeybindings();
+			setKeybindings(KeybindingsManager.inMemory({
+				"tui.select.cancel": "j", "tui.input.submit": "s", "tui.editor.deleteCharBackward": "k",
+			}));
+			try {
+				const { hub, onFallbackChainChange, onCancel } = createHub({
+					models: [makeModel("test", "jsk-model")], scoped: true,
+				});
+				enterRolesView(hub);
+				for (const key of ["f", "\x1b[C", "\n"]) hub.handleInput(key);
+				for (const char of "test/j") hub.handleInput(char);
+				hub.handleInput("\x1b[115u");
+				for (const char of "k*") hub.handleInput(char);
+				const typed = hub.navigationSnapshot().strip;
+				if (typed?.kind !== "pattern") throw new Error("Expected a focused selector-pattern strip");
+				expect(typed.input.getValue()).toBe("test/jsk*");
+				expect(typed.input.focused).toBe(true);
+				expect(onFallbackChainChange).not.toHaveBeenCalled();
+				hub.handleInput(ESC);
+				const defocused = hub.navigationSnapshot().strip;
+				if (defocused?.kind !== "pattern") throw new Error("Expected Escape to retain the pattern strip");
+				expect(defocused.input.getValue()).toBe("test/jsk*");
+				expect(defocused.input.focused).toBe(false);
+				hub.handleInput("/");
+				hub.handleInput("\r"); // physical Enter opens effort despite the printable submit remap
+				expect(onFallbackChainChange).not.toHaveBeenCalled();
+				hub.handleInput("\n"); // Inherit confirms the staged fallback
+				expect(onFallbackChainChange).toHaveBeenCalledTimes(1);
+				expect(onFallbackChainChange).toHaveBeenCalledWith("default", ["test/jsk*"], {
+					selector: "test/jsk*", selection: { mode: "inherit" },
+				});
+
+				for (const key of ["f", "\x1b[C", "\n"]) hub.handleInput(key);
+				for (const char of "test/jsk*") hub.handleInput(char);
+				hub.handleInput(ESC);
+				hub.handleInput(ESC);
+				expect(hub.navigationSnapshot().strip?.kind).toBe("selectorChoice");
+				expect(onFallbackChainChange).toHaveBeenCalledTimes(1);
+				expect(onCancel).not.toHaveBeenCalled();
+			} finally { setKeybindings(previous); }
 		});
 
 		test("x removes a chain entry and Enter on an entry replaces it", () => {

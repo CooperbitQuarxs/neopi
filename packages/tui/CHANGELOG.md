@@ -9,6 +9,11 @@
 - Added `/statusline` to toggle, reorder, and move widgets between groups, including provider usage bars, with live composer previews and save or discard ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
 - Added a movable `context_bar` status-line widget that fills the remaining width in every composer ([#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
 - Added per-provider usage-bar status-line widgets (`usage:<provider>:<window>[:<tier>]`) showing each reported quota window's percent and age ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
+- `/model` puts effort rules before providers and adds section-local `/` search, Vim paging, and draft-preserving nested menu history across Roles and model panes ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
+- Yanking a role root with fallbacks copies its primary model and complete ordered fallback chain, including effort settings ([#247](https://github.com/PsychedelicShayna/neopi/issues/247)).
+- Model menus retain partial-row viewport positions through history and show unfiltered provider counts and navigation outside All models ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
+- Native model-menu close controls name and follow the same field-first and parent-back steps as Escape ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
+- Model name and pattern fields keep printable shortcut aliases literal while physical Enter/Escape retain their staged-field behavior and ordinary typing undo ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
 - Menus, pickers, setup choices, configuration pages, and dashboards share normal navigation: `j`/`k`, `gg`/`G`, half-page and page motions, and contextual `h`/`l`. Tab/Shift-Tab and Ctrl-N/Ctrl-P switch contexts; existing arrows, Home/End, Enter, and Escape remain available ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - `/` explicitly focuses existing search fields. Focused search, path, prompt, review, and reply fields keep printable shortcut aliases literal without changing typing undo, character-jump editing, pasted attachments, or BTW's Space-hold dictation gestures ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Menu history restores selection, query/caret, pane/tab context, viewports, and safe unsent drafts across account, session, agent, configuration, Git, log, usage, extension, and transcript views. Nested pages are visits; tabs and reply focus are not. Restoring never repeats a copy, rewind, send, generation, save, or destructive confirmation ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
@@ -35,6 +40,10 @@
 - Keep the last usage-bar percentages and their age when a broker-backed refresh returns no report.
 - Keep transcript history visible with the side panel docked after compaction, resume, or a layout rebuild, and preserve it as the live conversation grows or the chat width changes.
 - Volatile speech updates reuse a cached draft and cursor offset, and apply a known edit region, instead of rejoining and diffing the whole buffer on every partial.
+
+### Removed
+
+- Removed the legacy exported letter-to-arrow picker translator now that model menus and all other consumers use shared navigation ([#330](https://github.com/PsychedelicShayna/neopi/issues/330)).
 
 ## [18.10.3] - 2026-10-12
 
