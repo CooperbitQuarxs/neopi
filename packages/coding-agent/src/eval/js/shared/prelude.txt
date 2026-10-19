@@ -71,6 +71,8 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	};
 	const write = async (path, data) => callHelper("writeFile", path, data);
 	const env = (key, value) => callHelper("env", key, value);
+	const inspectRuntime = async () => globalThis.__omp_call_tool__("__runtime_inspect__", {});
+
 
 	const __tools = new Map();
 	globalThis.__omp_tools__ = __tools;
@@ -621,6 +623,7 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	globalThis.display = display;
 	globalThis.tool = tool;
 	globalThis.completion = completion;
+	globalThis.runtime = { inspect: inspectRuntime };
 	globalThis.output = output;
 	globalThis.agent = agent;
 	globalThis.wait = wait;

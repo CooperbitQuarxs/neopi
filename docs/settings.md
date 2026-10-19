@@ -1057,6 +1057,43 @@ To spend one by hand, use `/usage reset` in a session or `omp usage reset` from 
 
 `omp usage` and the active account's status-line usage segment flag banked resets expiring within **7 days** when the account's fullest window they restore is at least 25% used. Within **24 hours**, `omp usage` opens with a banner per account: whether the sweep above spends the reset or asks first (only while an interactive omp session is open), or that it will not, and the `/usage reset` target that spends it now when the provider allows. The interactive TUI shows that warning once per conversation.
 
+### Local agent telemetry
+
+Agent-facing telemetry is local runtime information, separate from OTLP export
+(`telemetry.otlpExportEnabled`). All automatic telemetry injection is off by
+default. Enable only the detail you need: injected records consume context, and
+full records add more collection and serialization overhead than minimal ones.
+
+| Setting | Values | Default | Behavior |
+| --- | --- | --- | --- |
+| `telemetry.agent_context` | `off`, `minimal`, `full` | `off` | Controls automatic context telemetry supplied to the agent. |
+| `telemetry.tool_results` | `off`, `summary`, `full` | `off` | Independently controls telemetry attached to the latest completed tool-result batch. |
+| `telemetry.threshold_events` | boolean | `false` | Enables optional approaching-compaction notices at runtime boundaries. |
+
+`minimal` context telemetry includes the resolved provider, model, and effort;
+estimated current context usage and limit; compaction threshold and state;
+checkpoint availability; the previous assistant turn's usage and timing; and
+root-session fleet counts (running, idle, parked, and aborted). `full` adds
+cumulative usage, cache-read share, main/advisor cost splits, and per-agent
+context occupancy. Fleet information comes from runtime state, not peer IRC
+messages.
+
+The tool-results knob is independent of context injection: `summary` appends a
+small tool name/status/duration record, while `full` appends the current runtime
+telemetry record. Leave it `off` to keep tool results unchanged even when context
+telemetry is enabled.
+
+Inside eval, `runtime.inspect()` explicitly reads the local runtime snapshot
+without enabling automatic injection or exporting it remotely. It returns
+minimal telemetry when `telemetry.agent_context` is `off` or `minimal`, and full
+telemetry when it is `full`.
+
+With `telemetry.threshold_events: true`, the agent can receive a structured
+approaching-compaction notice in the speculation lead band. It includes estimated
+remaining token headroom and checkpoint availability. Usage and headroom are
+estimates of current occupancy, not token-precise predictions of when compaction
+will occur.
+
 ### Other groups
 
 Every schema path not individually tabulated in this catalog is explicitly deferred to `omp config list`. Additional groups include:

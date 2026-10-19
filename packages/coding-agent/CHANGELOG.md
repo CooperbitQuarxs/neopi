@@ -10,6 +10,7 @@
 ### Added
 
 - Proof sessions can hold destination-specific install locks for up to 60 minutes; installs report active or expired holds and support an explicit force override.
+- Added opt-in agent-visible runtime telemetry, compaction-headroom notices, independent tool-result summaries, and local `runtime.inspect()` in both Eval kernels ([#18](https://github.com/PsychedelicShayna/neopi/issues/18)).
 - Added `/issue <prose>`: a background agent on the new `issues` model role files your words as an issue in the right project's tracker, following that repository's own rules and existing labels, asks in the Agent Hub when the target or scope is unclear, and reports the filed URL, submitted body, and applied labels without interrupting the conversation ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)).
 - Added `/defer <duration> <input>` for cancellable delayed composer submissions, including slash commands and ordinary messages; delivery stays with its scheduling conversation across focus changes and asynchronous hooks ([#222](https://github.com/PsychedelicShayna/neopi/issues/222)).
 - Post-processing chain steps can be turned off without deleting them: Space on a step in `/chain configure` toggles it, the setting persists as `enabled: false` in `CHAINS.yml`, and a run skips off steps while keeping the rest in order. Steps saved before this change stay on ([#365](https://github.com/PsychedelicShayna/neopi/issues/365)).

@@ -2540,6 +2540,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
 			getMnemopiSessionState: () => session?.getMnemopiSessionState(),
 			getAgentId: () => resolvedAgentId,
+			getAgentTelemetry: () => session?.getAgentTelemetry(),
 			getPromptCacheKey: () => {
 				if (!session) return undefined;
 				const model = session.agent.state.model;
@@ -4543,7 +4544,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 		const transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {
 			const withContext = await extensionRunner.emitContext(messages, signal);
-			return wrapSteeringForModel(withContext);
+			const wrapped = wrapSteeringForModel(withContext);
+			return session ? session.prepareAgentTelemetry(wrapped) : wrapped;
 		};
 		// Per-request provider-context transforms. Obfuscate FIRST so secrets are
 		// redacted from text before snapcompact rasterizes it into PNG frames. Clamp
