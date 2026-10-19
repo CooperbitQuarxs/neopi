@@ -19,6 +19,12 @@ Submitted body:
 
 {{published.body}}
 {{/if}}
+{{#if unread}}
+**/issue {{requestId}}** filed {{unread.url}}
+
+- Repository: `{{unread.repo}}`
+- GitHub confirmed creation, but the recorded title, body and labels could not be retrieved.
+{{/if}}
 {{#if owner}}
 **/issue {{requestId}}** not filed: existing issue {{owner.url}} owns it. Nothing was posted.
 

@@ -5,6 +5,7 @@ import * as targetInventory from "../../src/issues/target-inventory";
 import {
 	createIssueAuthorTools,
 	createIssueTargetTool,
+	type CreatedIssue,
 	type IssueFilingOutcome,
 	type IssueTargetSelection,
 } from "../../src/issues/tools";
@@ -56,8 +57,15 @@ function invoke(tool: CustomTool, params: Record<string, unknown>): Promise<Agen
 
 function author() {
 	const outcomes: IssueFilingOutcome[] = [];
+	const created: CreatedIssue[] = [];
 	const onOutcome = vi.fn((outcome: IssueFilingOutcome) => outcomes.push(outcome));
-	const tools = createIssueAuthorTools({ repo: REPO, checkout: CHECKOUT, startedAt: STARTED_AT, onOutcome });
+	const tools = createIssueAuthorTools({
+		repo: REPO,
+		checkout: CHECKOUT,
+		startedAt: STARTED_AT,
+		onOutcome,
+		onCreated: issue => created.push(issue),
+	});
 	const named = (name: string): CustomTool => {
 		const tool = tools.find(entry => entry.name === name);
 		if (!tool) throw new Error(`Missing issue tool: ${name}`);
@@ -68,6 +76,7 @@ function author() {
 		existingOwner: named("issue_existing_owner"),
 		decline: named("issue_decline"),
 		outcomes,
+		created,
 		onOutcome,
 	};
 }

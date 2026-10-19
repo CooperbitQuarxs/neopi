@@ -30,6 +30,8 @@ function statusLine(notice: IssueNotice): string {
 			return `/issue failed: ${notice.error}`;
 		case "outcome":
 			if (notice.outcome.kind === "published") return `/issue filed ${notice.outcome.issue.url}`;
+			if (notice.outcome.kind === "published-unread")
+				return `/issue filed ${notice.outcome.issue.url} (record unavailable)`;
 			if (notice.outcome.kind === "existing-owner") {
 				return `/issue not filed: ${notice.outcome.owner.url} already owns it`;
 			}

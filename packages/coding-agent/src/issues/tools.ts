@@ -54,6 +54,12 @@ export interface PublishedIssue {
 	labels: string[];
 }
 
+/** GitHub confirmed creation, independently of whether its full record can be read. */
+export interface CreatedIssue {
+	repo: string;
+	url: string;
+}
+
 /** An existing issue the author reported as the owner instead of publishing. */
 export interface ExistingIssueOwner {
 	repo: string;
@@ -67,6 +73,7 @@ export interface ExistingIssueOwner {
 /** How one `/issue` request ended. */
 export type IssueFilingOutcome =
 	| { kind: "published"; issue: PublishedIssue }
+	| { kind: "published-unread"; issue: CreatedIssue }
 	| { kind: "existing-owner"; owner: ExistingIssueOwner }
 	| { kind: "declined"; reason: string };
 
@@ -261,6 +268,7 @@ export interface IssueAuthorToolOptions {
 	/** Epoch ms the request started; bounds the reconciliation of an uncertain create. */
 	startedAt: number;
 	onOutcome: (outcome: IssueFilingOutcome) => void;
+	onCreated: (issue: CreatedIssue) => void;
 	random?: () => number;
 }
 
@@ -374,6 +382,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 			created?.exitCode === 0 ? created.stdout.split("\n").findLast(line => line.startsWith("https://")) : undefined;
 		if (url) {
 			createdIssueRef = url;
+			options.onCreated({ repo, url });
 			return toPublished(await viewIssue(url, undefined));
 		}
 		// The create may have reached GitHub even though gh reported failure
@@ -383,6 +392,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		const reconciled = await findUncertainCreate(params.title, params.body);
 		if (reconciled) {
 			createdIssueRef = String(reconciled.number);
+			options.onCreated({ repo, url: reconciled.url });
 			return toPublished(await viewIssue(createdIssueRef, undefined));
 		}
 		if (createError) throw createError;
