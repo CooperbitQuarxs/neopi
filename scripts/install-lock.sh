@@ -25,6 +25,8 @@ npi_install_lock_open() {
 	NPI_INSTALL_LOCK_RECORD=()
 	mapfile -t NPI_INSTALL_LOCK_RECORD < "$NPI_INSTALL_LOCK_PATH"
 	NPI_INSTALL_LOCK_EXPIRY=${NPI_INSTALL_LOCK_RECORD[0]:-0}
+	# Explicit release must recover interrupted or otherwise malformed records.
+	[[ ${2:-} != release ]] || return 0
 	[[ $NPI_INSTALL_LOCK_EXPIRY =~ ^[0-9]{1,12}$ ]] || {
 		printf 'install lock: invalid expiry in %s; release it explicitly\n' "$NPI_INSTALL_LOCK_PATH" >&2
 		return 1
@@ -77,7 +79,7 @@ npi_install_lock_main() {
 			;;
 		release|status)
 			[[ $# -le 1 ]] || return 1
-			npi_install_lock_open "$dest" || return 1
+			npi_install_lock_open "$dest" "$command" || return 1
 			if [[ $command == release ]]; then
 				# Retain the inode: unlinking it would race other open flock descriptors.
 				: > "$NPI_INSTALL_LOCK_PATH"

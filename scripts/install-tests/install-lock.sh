@@ -79,3 +79,11 @@ scripts/install-lock.sh release
 	contains 'destination busy'
 )
 printf 'PASS: in-flight installer excludes a new proof hold\n'
+
+printf 'invalid-expiry\nproof-session\ninterrupted write\n' > "${locks[0]}"
+run_install 1
+contains 'invalid expiry'
+scripts/install-lock.sh release
+run_install 73
+contains 'reached version query before copy'
+printf 'PASS: release recovers a malformed record\n'
