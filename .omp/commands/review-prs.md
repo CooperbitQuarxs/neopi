@@ -1,6 +1,6 @@
 # Review PRs
 
-Parallel PR triage: decide merge-worthiness, prepare worktrees updated from `nightly`, fix blockers, return them for the owner's merge (agents merge only their own PRs; `~/repos/AGENTS.md`).
+Parallel PR triage: decide merge-worthiness, prepare worktrees updated from `nightly`, fix blockers, return them for the owner's merge (agents merge only their own PRs; `docs/agents/policy.md`).
 
 ## Arguments
 
@@ -111,7 +111,7 @@ Each fix: read existing patterns; follow `AGENTS.md` conventions; add/update beh
 
 #### Commit
 
-One conventional commit/logical fix atop the PR branch, signed and trailered per `~/repos/AGENTS.md`:
+One conventional commit/logical fix atop the PR branch, signed and trailered per `docs/agents/policy.md`:
 
 ```bash
 git add -A
@@ -120,7 +120,7 @@ git commit -m "fix(<scope>): <what & why>
 Addresses review feedback on #<PR>."
 ```
 
-Do NOT amend author commits, force-push, or push to or merge PRs you do not own (`~/repos/AGENTS.md`); the owner merges contributor PRs.
+Do NOT amend author commits, force-push, or push to or merge PRs you do not own (`docs/agents/policy.md`); the owner merges contributor PRs.
 
 #### Report
 
@@ -151,4 +151,4 @@ Then worktree paths grouped by decision.
 - MUST use parallel subagents, one/PR; NEVER serial loop.
 - `slop`/`superseded`: skip checkout; record decision only.
 - Fixes limited to merge blockers in that PR's diff.
-- MUST NOT push to or merge PRs you do not own; the owner merges them (`~/repos/AGENTS.md`).
+- MUST NOT push to or merge PRs you do not own; the owner merges them (`docs/agents/policy.md`).

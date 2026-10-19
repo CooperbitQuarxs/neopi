@@ -6,7 +6,7 @@ description: Use when asked to babysit, watch, monitor, shepherd, or drive a PR 
 # Babysit a PR
 
 Drive one PR through CI and bot review to merge. Who may merge and what may
-be posted is the workspace policy in `~/repos/AGENTS.md`: the authoring agent
+be posted is the repository policy in `docs/agents/policy.md`: the authoring agent
 pushes fixes, reruns CI, replies, and merges on its own judgment once the
 workspace gates pass. `docs/agents/pr-review-bots.md` holds the bot table,
 severities, and reply shapes. Read it first. This skill does not repeat it.
@@ -291,7 +291,7 @@ head commit's short SHA. If the latest response has `failed: true`, request
 the round once more. After three rounds with unresolved findings, or forty-five
 minutes of bot silence, follow the workspace policy: stop calling the bot,
 review locally with a sub-agent, fix, request review once more; if findings
-remain, label `review-stalled`, post a summary, and stop. When a round brings
+remain, label `review: stalled (codex)`, post a summary, and stop. When a round brings
 new findings, go back to step 3.
 
 ## 8. Merge

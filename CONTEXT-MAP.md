@@ -5,7 +5,8 @@ This is a multi-context monorepo. The consumer rules and layout are in
 document that currently defines its vocabulary. When a context gains its own
 `CONTEXT.md`, replace the link here with it.
 
-System-wide decisions live in [`docs/adr/`](docs/adr/README.md).
+Repository/tracker vocabulary lives in [`CONTEXT.md`](CONTEXT.md).
+System-wide decisions live in [`docs/agents/adr/`](docs/agents/adr/README.md).
 
 ## Contexts
 

@@ -295,6 +295,12 @@ import { generateSessionTitle, nerdGlyphsActive } from "../utils/title-generator
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import type { VibeModeState } from "../vibe/state";
 import type { AgentSessionEvent, AgentSessionEventListener } from "./agent-session-events";
+import {
+	type AgentContextTelemetry,
+	type AgentTelemetryHost,
+	injectAgentTelemetry,
+	inspectAgentTelemetry,
+} from "./agent-telemetry";
 import type {
 	AgentSessionConfig,
 	AgentSessionDisposeOptions,
@@ -1016,6 +1022,7 @@ export class AgentSession implements SettingsScope {
 
 	readonly #eval: EvalRunner;
 	readonly #evalToolSession: ToolSession | undefined;
+	readonly #agentTelemetryHost: AgentTelemetryHost;
 	/**
 	 * AsyncJobManager owned by this session: the async-job domain of the root
 	 * this top-level session heads. Subagents leave this undefined and **MUST
@@ -1845,6 +1852,14 @@ export class AgentSession implements SettingsScope {
 				modelRegistry: config.modelRegistry,
 				settings: config.settings,
 			};
+		this.#agentTelemetryHost = {
+			session: this,
+			settings: this.settings,
+			registry: evalToolSession.agentRegistry,
+			agentId: evalToolSession.getAgentId?.(),
+			entries: () => this.sessionManager.getBranchView(),
+		};
+		evalToolSession.getAgentTelemetry ??= () => this.getAgentTelemetry();
 		this.#bash = new BashRunner(bashHost);
 		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
 		const evalHost: EvalRunnerHost = {
@@ -13558,6 +13573,16 @@ export class AgentSession implements SettingsScope {
 
 	getContextUsage(options?: { contextWindow?: number }): ContextUsage | undefined {
 		return this.#stats.getContextUsage(options);
+	}
+
+	/** Live local runtime state, also returned by Eval's runtime.inspect(). */
+	getAgentTelemetry(): AgentContextTelemetry | undefined {
+		return inspectAgentTelemetry(this.#agentTelemetryHost);
+	}
+
+	/** One transient telemetry record per model-call boundary, never session history. */
+	prepareAgentTelemetry(messages: AgentMessage[]): AgentMessage[] {
+		return injectAgentTelemetry(messages, this.#agentTelemetryHost);
 	}
 
 	/**

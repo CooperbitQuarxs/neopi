@@ -74,6 +74,7 @@ const PYTHON_RESERVED_PRELUDE_EXPORTS: Record<string, true> = {
 	output: true,
 	phase: true,
 	read: true,
+	runtime: true,
 	tool: true,
 	wait: true,
 	workpool: true,

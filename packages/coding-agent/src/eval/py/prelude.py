@@ -495,6 +495,10 @@ if "__omp_prelude_loaded__" not in globals():
             msg = (data or {}).get("error") if isinstance(data, dict) else None
             raise RuntimeError(msg or f"bridge call {name!r} failed")
         return data.get("value")
+    def _runtime_inspect():
+        """Return the current agent context telemetry snapshot, or None if unavailable."""
+        return _bridge_call("__runtime_inspect__", {})
+
 
     def _surface_bridged_tool_images(value):
         """Surface bridge metadata/images without leaking opaque payloads to cell code."""
@@ -1163,3 +1167,9 @@ if "__omp_prelude_loaded__" not in globals():
                 return "<budget unavailable>"
 
     budget = _Budget()
+    class _Runtime:
+        def inspect(self):
+            """Return agent context telemetry, or None when the host does not provide it."""
+            return _runtime_inspect()
+
+    runtime = _Runtime()
