@@ -648,19 +648,9 @@ export class LiveSessionController {
 		if (this.#seenDelegationIds.has(event.item.id)) return;
 		this.#seenDelegationIds.add(event.item.id);
 		const latest = this.#latestUtterance;
-		if (latest && this.#isDirectAddress(latest.text) &&
-			!this.#turnsWhere(turn => !turn.blocked && !this.#isDirectAddress(turn.text) && turn.claim === undefined).length) {
-			this.#answeredTurns = this.#turnsWhere(
-				turn => turn.final && this.#isDirectAddress(turn.text) && turn.claim === undefined,
-			).map(turn => turn.turn);
-			const template = operatorTypedMessageTemplate;
-			const labelBytes = Buffer.byteLength(prompt.render(template, { message: "", delegationRejected: true }), "utf8");
-			for (const part of chunkLiveContext(latest.text, CONTEXT_CHUNK_BYTES - labelBytes)) {
-				void this.#queueSend(this.#voiceContext(
-					event.item.id,
-					prompt.render(template, { message: part, delegationRejected: true }),
-				));
-			}
+		if (latest?.final && this.#isDirectAddress(latest.text) &&
+			!this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined).length) {
+			this.#rejectDirectDelegation(event.item.id, latest.text);
 			return;
 		}
 		if (!forced && latest?.forcedDelegationId && latest.forcedDelegationId !== event.item.id) {
@@ -680,7 +670,7 @@ export class LiveSessionController {
 		const voiceText = joinDelegationContent(event.item.content);
 		// A claimed turn belongs to an earlier handoff; it cannot authorize superseding it.
 		const newOperatorWork = this.#turnsWhere(
-			turn => !turn.blocked && !this.#isDirectAddress(turn.text) && turn.claim === undefined,
+			turn => this.#mayDelegateTurn(turn) && turn.claim === undefined,
 		).length > 0;
 		if (!newOperatorWork) {
 			this.#dispatchVoiceOnly(voiceText);
@@ -713,7 +703,7 @@ export class LiveSessionController {
 		}
 		if (generation !== this.#delegationGeneration) return;
 		const claimed = this.#turnsWhere(
-			turn => !turn.blocked && !this.#isDirectAddress(turn.text) &&
+			turn => this.#mayDelegateTurn(turn) &&
 				(turn.claim === undefined || turn.claim === this.#pendingDelegation?.generation),
 		);
 		if (claimed.length === 0) return;
@@ -1583,7 +1573,33 @@ export class LiveSessionController {
 		}
 		this.#emitUserSpeech({ role: "user", turn: current.turn, text: current.text, final: current.final });
 		this.noteComposerActivity();
-		if (current.blocked || this.#isDirectAddress(current.text)) {
+		if (current.final && !current.blocked && this.#isDirectAddress(current.text)) {
+			const pending = this.#pendingDelegation;
+			if (pending && current.claim === pending.generation) {
+				current.claim = undefined;
+				pending.turns = pending.turns.filter(turn => turn !== current.turn);
+				if (pending.turns.length > 0) {
+					void this.#dispatchPendingDelegation(pending.generation)
+						.catch(cause => this.#reportFailure(errorFrom(cause)));
+				} else {
+					this.#pendingDelivery?.cancel();
+					this.#delegationGeneration += 1;
+					this.#pendingDelegation = undefined;
+					this.#pendingDelivery = undefined;
+					this.#refreshAudioPhase();
+				}
+				if (this.#voiceTurnBlocked()) {
+					this.#deferredVoiceDelegation = {
+						type: "delegation.created",
+						item: { type: "delegation", target: "client", id: pending.id, content: [] },
+					};
+				} else {
+					this.#rejectDirectDelegation(pending.id, current.text);
+				}
+			}
+			return;
+		}
+		if (current.blocked) {
 			const pending = this.#pendingDelegation;
 			if (pending && current.claim === pending.generation) {
 				this.#pendingDelivery?.cancel();
@@ -1596,7 +1612,6 @@ export class LiveSessionController {
 				this.#refreshAudioPhase();
 			}
 			const blocked = current;
-			if (!current.blocked) return;
 			if (this.#voiceTurnBlocked()) {
 				this.#suppressedResponse = true;
 				return;
@@ -1625,6 +1640,24 @@ export class LiveSessionController {
 
 	#isDirectAddress(text: string): boolean {
 		return stripLiveKeyword(text, this.#delegationKeywords().suppress, false, true).matched;
+	}
+
+	#mayDelegateTurn(turn: UserLedgerTurn): boolean {
+		return !turn.blocked && (!turn.final || !this.#isDirectAddress(turn.text));
+	}
+
+	#rejectDirectDelegation(delegationId: string, text: string): void {
+		this.#answeredTurns = this.#turnsWhere(
+			turn => turn.final && this.#isDirectAddress(turn.text) && turn.claim === undefined,
+		).map(turn => turn.turn);
+		const template = operatorTypedMessageTemplate;
+		const labelBytes = Buffer.byteLength(prompt.render(template, { message: "", delegationRejected: true }), "utf8");
+		for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
+			void this.#queueSend(this.#voiceContext(
+				delegationId,
+				prompt.render(template, { message: part, delegationRejected: true }),
+			));
+		}
 	}
 
 	#deliverBlockedTurn(blocked: UserLedgerTurn): void {

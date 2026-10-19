@@ -337,6 +337,42 @@ function makeHarness(options?: {
 
 describe("per-utterance delegation keywords", () => {
 	const defaults = () => ({ suppress: "Iris", force: "relay" });
+	for (const earlierPrimary of [false, true]) {
+		it(`rejects a finalized direct address without dropping an earlier pending request (${earlierPrimary})`, async () => {
+			const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
+			await h.controller.start();
+			try {
+				if (earlierPrimary) h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the parser" } });
+				h.fireLive({ type: "input_transcript.added", item: { text: "Iris" } });
+				h.fireLive(delegation("prefinal-address", ""));
+				h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris, tell me a joke" } });
+				await settle();
+				expect(h.prompts).toEqual(earlierPrimary ? ["fix the parser"] : []);
+				expect(h.sent.some(message => "content" in message &&
+					message.content.some(item => item.text.includes("Iris, tell me a joke")))).toBe(true);
+				h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "A joke" } });
+				await settle();
+				expect(h.controller.pendingUserTurnCount()).toBe(0);
+			} finally {
+				await h.controller.stop();
+			}
+		});
+	}
+
+	it("retries a provisional Iris handoff after the authoritative final changes its addressee", async () => {
+		const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "input_transcript.added", item: { text: "Iris" } });
+			h.fireLive(delegation("asr-early", ""));
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Here is the parser fix request" } });
+			await settle();
+			expect(h.prompts).toEqual(["Here is the parser fix request"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
 	it("uses the new explicit composer turn rather than a retired direct address", async () => {
 		const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
 		await h.controller.start();
