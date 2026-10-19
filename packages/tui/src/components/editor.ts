@@ -3317,6 +3317,7 @@ export class Editor implements Component, Focusable {
 	#volatileDropped = false;
 	/** Id of the utterance being shown. Speech it leaves in the draft is tracked under this id. */
 	#utteranceId = 1;
+	#nextComposerReceipt = -1;
 	/** Committed or adopted speech still in the draft, as offsets into {@link #spanBase}. */
 	#speechSpans: SpeechSpan[] = [];
 	/** Draft text the {@link #speechSpans} offsets refer to. */
@@ -3474,15 +3475,28 @@ export class Editor implements Component, Focusable {
 		return this.#speechSpans.some(span => span.id === id) ? id : undefined;
 	}
 
-	/** Project the current draft without unchanged speech owned by these utterances. */
-	getTextWithoutUtterances(ids: readonly number[]): string {
+	/** Capture submitted draft ranges, excluding unchanged protected utterances. */
+	captureTextWithoutUtterances(ids: readonly number[]): { text: string; receipt: number } {
 		this.#reconcileVolatile();
-		let full = this.#draft();
+		const full = this.#draft();
 		this.#reconcileSpans(full);
-		for (const span of this.#removableSpeechSpans(ids, full)) {
-			full = full.slice(0, span.start) + full.slice(span.end);
+		const excluded = this.#removableSpeechSpans(ids, full);
+		const receipt = this.#nextComposerReceipt--;
+		let start = 0;
+		let text = "";
+		const capture = (end: number): void => {
+			if (end <= start) return;
+			const part = full.slice(start, end);
+			text += part;
+			this.#speechSpans.push({ id: receipt, start, end, text: part });
+		};
+		for (let index = excluded.length - 1; index >= 0; index--) {
+			const span = excluded[index]!;
+			capture(span.start);
+			start = Math.max(start, span.end);
 		}
-		return full;
+		capture(full.length);
+		return { text, receipt };
 	}
 
 	#removableSpeechSpans(ids: readonly number[], full: string): SpeechSpan[] {
