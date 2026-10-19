@@ -36,3 +36,8 @@ export function currentDeferredDraft(): DetachedDraft | undefined {
 export function runWithDetachedDraft<T>(fn: () => T, source?: "defer"): T {
 	return draftScope.run({ text: "", images: [], imageLinks: [], source }, fn);
 }
+
+/** Begin deferred delivery outside any expired draft scope inherited from its scheduler. */
+export function runWithoutDetachedDraft<T>(fn: () => T): T {
+	return draftScope.exit(fn);
+}

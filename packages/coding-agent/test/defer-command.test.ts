@@ -166,6 +166,17 @@ describe("/defer", () => {
 		expect(h.editor.getExpandedText()).not.toContain("previous submission");
 		expect(h.mock.calls).toHaveLength(0);
 	});
+
+	it("returns a nested deferred refusal to the real composer rather than an expired parent scope", async () => {
+		const h = harness();
+		await h.submit("/defer 5ms /defer 5ms /unknown-nested-command");
+		h.editor.setText("current operator draft");
+		await Bun.sleep(50);
+		expect(h.editor.getExpandedText()).toContain("/unknown-nested-command");
+		expect(h.editor.getExpandedText()).toContain("current operator draft");
+		expect(h.mock.calls).toHaveLength(0);
+	});
+
 	it("returns a bare-command confirmation beside the operator draft", async () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });

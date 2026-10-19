@@ -2,7 +2,12 @@
  * NeoPi operator commands: `/notice`, `/persona`, `/loadout`, `/repl`, `/kernel`.
  */
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
-import { currentDeferredDraft, type DetachedDraft, runWithDetachedDraft } from "@oh-my-pi/pi-tui/draft-scope";
+import {
+	currentDeferredDraft,
+	type DetachedDraft,
+	runWithDetachedDraft,
+	runWithoutDetachedDraft,
+} from "@oh-my-pi/pi-tui/draft-scope";
 import { formatVisionMarker } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import type { InteractiveModeContext } from "../modes/types";
@@ -242,41 +247,42 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const imageLinks = runtime.input?.imageLinks ? [...runtime.input.imageLinks] : images.map(() => undefined);
 			const id = schedules.schedule(
 				parsed.delayMs,
-				async () => {
-					let returned: DetachedDraft | undefined;
-					try {
-						await runWithDetachedDraft(async () => {
-							const draft = currentDeferredDraft();
-							if (!draft) throw new Error("Missing deferred draft scope");
-							returned = draft;
-							ctx.editor.pendingImages = [...images];
-							ctx.editor.pendingImageLinks = [...imageLinks];
-							ctx.editor.imageLinks = draft.imageLinks;
-							// Enter has already removed the submitted text; only refusal paths put it back.
-							try {
-								await ctx.editor.onSubmit?.(parsed.input);
-							} catch (error) {
-								ctx.editor.setText(parsed.input);
+				() =>
+					runWithoutDetachedDraft(async () => {
+						let returned: DetachedDraft | undefined;
+						try {
+							await runWithDetachedDraft(async () => {
+								const draft = currentDeferredDraft();
+								if (!draft) throw new Error("Missing deferred draft scope");
+								returned = draft;
 								ctx.editor.pendingImages = [...images];
 								ctx.editor.pendingImageLinks = [...imageLinks];
-								throw error;
-							}
-						}, "defer");
-					} finally {
-						if (returned) {
-							const text =
-								returned.text ||
-								returned.images.map((_, index) => formatVisionMarker("image", index + 1)).join(" ");
-							if (text.trim()) {
-								restoreDetachedDraft(ctx.editor, text, returned.images, returned.imageLinks);
-								ctx.showWarning(
-									"Deferred input was not consumed; returned to the composer beside your current draft.",
-								);
-								ctx.ui.requestRender();
+								ctx.editor.imageLinks = draft.imageLinks;
+								// Enter has already removed the submitted text; only refusal paths put it back.
+								try {
+									await ctx.editor.onSubmit?.(parsed.input);
+								} catch (error) {
+									ctx.editor.setText(parsed.input);
+									ctx.editor.pendingImages = [...images];
+									ctx.editor.pendingImageLinks = [...imageLinks];
+									throw error;
+								}
+							}, "defer");
+						} finally {
+							if (returned) {
+								const text =
+									returned.text ||
+									returned.images.map((_, index) => formatVisionMarker("image", index + 1)).join(" ");
+								if (text.trim()) {
+									restoreDetachedDraft(ctx.editor, text, returned.images, returned.imageLinks);
+									ctx.showWarning(
+										"Deferred input was not consumed; returned to the composer beside your current draft.",
+									);
+									ctx.ui.requestRender();
+								}
 							}
 						}
-					}
-				},
+					}),
 				error => ctx.showError(`Deferred submission failed: ${errorMessage(error)}`),
 			);
 			if (images.length && images.every((image, index) => ctx.editor.pendingImages[index] === image)) {
