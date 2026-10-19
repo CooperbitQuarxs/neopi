@@ -32,6 +32,11 @@ on:
    # "Use workflow from" selects the exact branch/tag to compile; manual runs
    # always publish a stable release, including when selecting nightly.
    workflow_dispatch:
+      inputs:
+         skip_npm:
+            description: "Skip npm publish"
+            type: boolean
+            default: false
 
 # Supersede stale PR heads, but keep every push proof on nightly/neopi.
 # Unique non-PR groups preserve running and queued base/release evidence;
@@ -58,20 +63,73 @@ permissions:
    contents: read
 
 jobs:
-   # Every branch push has its own build; no pre-existing tag is required.
-   # Run ID + attempt keep repeat builds append-only, even for the same SHA.
+   # scripts/release.ts pushes the version-bump commit and its `v*` tag
+   # atomically (`git push --atomic origin refs/heads/neopi:refs/heads/neopi
+   # <sha>:refs/tags/v<version>`), so a release now arrives as a single `push` to
+   # `refs/heads/neopi` — we no longer trigger on the tag ref at all (see
+   # `on.push`). This one branch-push run is therefore authoritative: it runs the
+   # full build AND, when HEAD carries a release tag, the release/publish jobs.
+   # `release_metadata` resolves that tag once so downstream jobs switch on
+   # `is-release` and address the tag by name — `github.ref` is
+   # `refs/heads/neopi` here, not the tag. A `workflow_dispatch` from a `v*` tag
+   # ref (or from a tagged main HEAD) is also treated as a release.
    release_metadata:
       name: Resolve release metadata
-      if: github.event_name != 'pull_request'
+      # Hosted, not omp-kata: this ~20 s git-tag probe gates the whole release
+      # chain, and queueing it behind the 4-runner kata pool adds dead minutes
+      # to the release critical path.
       runs-on: ubuntu-22.04
       outputs:
          is-release: ${{ steps.detect.outputs.is-release }}
          release-tag: ${{ steps.detect.outputs.release-tag }}
+         # Canary tags publish to npm's canary dist-tag (derived script-side), mark
+         # the GitHub release prerelease, and skip the stable-only brew tap.
          channel: ${{ steps.detect.outputs.channel }}
+         # Fork releases do not turn on the inherited upstream publishers.
+         github-release: ${{ steps.fork.outputs.is-release }}
+         github-tag: ${{ steps.fork.outputs.release-tag }}
+         github-channel: ${{ steps.fork.outputs.channel }}
       steps:
+         # Only a main-branch run needs tags fetched, so `git tag --points-at
+         # HEAD` can see the freshly-pushed `v*`. A tag-ref dispatch reads the
+         # tag straight from `github.ref_name`, and fetching `--tags` while
+         # checkout uses an explicit tag refspec makes git refuse — so scope
+         # fetch-tags to main refs.
          - uses: actions/checkout@v4
-         - name: Resolve release tag
+           with:
+              fetch-tags: ${{ github.ref == 'refs/heads/neopi' }}
+         - name: Detect release tag at HEAD
            id: detect
+           shell: bash
+           run: |
+              is_release=false
+              release_tag=""
+              channel=stable
+              case "${{ github.ref }}" in
+                refs/tags/v[0-9]*)
+                  release_tag="${{ github.ref_name }}"
+                  ;;
+                refs/heads/neopi)
+                  if [ "${{ github.event_name }}" != "pull_request" ]; then
+                    release_tag=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1 || true)
+                  fi
+                  ;;
+              esac
+              if [ -n "$release_tag" ]; then
+                echo "HEAD carries release tag $release_tag; this run builds and publishes the release."
+                is_release=true
+              fi
+              if [[ "$release_tag" == *-canary.* ]]; then
+                channel=canary
+              fi
+              {
+                echo "is-release=$is_release"
+                echo "release-tag=$release_tag"
+                echo "channel=$channel"
+              } >> "$GITHUB_OUTPUT"
+         - name: Resolve append-only GitHub release tag
+           id: fork
+           if: github.event_name != 'pull_request'
            shell: bash
            run: |
               set -euo pipefail
@@ -669,16 +727,45 @@ jobs:
               OMP_INSTALL_TEST_SKIP_NATIVE_BUILD: "1"
            run: bun run ci:test:install-methods
 
+   # Aggregates every validation job so publish-side release jobs gate on one
+   # result. Binary BUILDS deliberately do not wait for this gate — they run
+   # in parallel with the test fan-out and only publishing is held back.
+   release_gate:
+      name: Release validation gate
+      if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
+         needs.rust_validate.result == 'success' &&
+         needs.native_addons.result == 'success' &&
+         needs.native_addons_cross.result == 'success' &&
+         needs.test_workspace.result == 'success' &&
+         needs.test_coding_agent_singleton.result == 'success' &&
+         needs.test_ts_native.result == 'success' &&
+         needs.test_coding_agent_ui.result == 'success' &&
+         needs.test_coding_agent_runtime.result == 'success' &&
+         needs.test_coding_agent_native.result == 'success' &&
+         needs.test_smoke.result == 'success' && needs.check.result == 'success' &&
+         needs.install_methods.result == 'success' }}
+      needs: [release_metadata, check, rust_validate, native_addons, native_addons_cross, test_workspace, test_coding_agent_singleton, test_ts_native, test_coding_agent_ui, test_coding_agent_runtime, test_coding_agent_native, test_smoke, install_methods]
+      runs-on: ubuntu-22.04
+      steps:
+         - uses: actions/checkout@v4
+         - uses: ./.github/actions/bun-install
+         # Generated-config drift gate: bazel/clippy.bazelrc is maintained by
+         # scripts/release.ts (like the lockfiles); a stale file only blocks
+         # publishing, never ordinary CI.
+         - name: Check generated clippy config
+           run: bun scripts/gen-clippy-bazelrc.ts --check
+         - run: echo "release validation green"
+
    # Builds (does not publish) every release binary on one Linux x64 image in
    # parallel with the test fan-out; the needs are the two native_addons jobs,
    # whose artifacts supply their addons. bun cross-compiles every target;
    # macOS binaries are Developer ID signed and notarized here too
    # (rcodesign). release_smoke then runs each binary on its own platform.
-   # GitHub publishing waits only for the binary builds and platform smokes,
-   # not unrelated validation jobs. The fork never publishes upstream registries.
+   # GitHub publishing waits only for the binary builds and platform smokes.
+   # The original tag-gated upstream publishers still use release_gate.
    release_binary:
       name: "Release binary: ${{ matrix.target_id }}"
-      if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
+      if: ${{ needs.release_metadata.outputs.github-release == 'true' && !cancelled() &&
          needs.native_addons.result == 'success' &&
          needs.native_addons_cross.result == 'success' }}
       needs: [release_metadata, native_addons, native_addons_cross]
@@ -799,23 +886,23 @@ jobs:
    # published assets.
    release_smoke:
       name: "Smoke release binary: ${{ matrix.target_id }}"
-      if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
+      if: ${{ needs.release_metadata.outputs.github-release == 'true' && !cancelled() &&
          needs.release_binary.result == 'success' }}
       needs: [release_metadata, release_binary]
       strategy:
          fail-fast: false
          matrix:
             include:
-               - { os: ubuntu-22.04, target_id: linux-x64, binary: omp-linux-x64 }
-               - { os: ubuntu-24.04-arm, target_id: linux-arm64, binary: omp-linux-arm64 }
+               - { os: ubuntu-22.04, target_id: linux-x64, binary: npi-linux-x64 }
+               - { os: ubuntu-24.04-arm, target_id: linux-arm64, binary: npi-linux-arm64 }
                # musl binaries need the musl loader, which glibc runners lack:
                # they run in an Alpine container of the runner's arch.
-               - { os: ubuntu-22.04, target_id: linux-musl-x64, binary: omp-linux-musl-x64, alpine: true }
-               - { os: ubuntu-24.04-arm, target_id: linux-musl-arm64, binary: omp-linux-musl-arm64, alpine: true }
-               - { os: macos-15-intel, target_id: darwin-x64, binary: omp-darwin-x64 }
-               - { os: macos-15, target_id: darwin-arm64, binary: omp-darwin-arm64 }
-               - { os: windows-2025, target_id: win32-x64, binary: omp-windows-x64.exe }
-               - { os: windows-11-arm, target_id: win32-arm64, binary: omp-windows-arm64.exe }
+               - { os: ubuntu-22.04, target_id: linux-musl-x64, binary: npi-linux-musl-x64, alpine: true }
+               - { os: ubuntu-24.04-arm, target_id: linux-musl-arm64, binary: npi-linux-musl-arm64, alpine: true }
+               - { os: macos-15-intel, target_id: darwin-x64, binary: npi-darwin-x64 }
+               - { os: macos-15, target_id: darwin-arm64, binary: npi-darwin-arm64 }
+               - { os: windows-2025, target_id: win32-x64, binary: npi-windows-x64.exe }
+               - { os: windows-11-arm, target_id: win32-arm64, binary: npi-windows-arm64.exe }
       runs-on: ${{ matrix.os }}
       permissions:
          contents: read
@@ -886,9 +973,101 @@ jobs:
               & $env:BINARY --smoke-test
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+   # Publishes the six @oh-my-pi/pi-natives-<tag> leaf packages once
+   # validation passes and every binary built. Runs on one linux runner: leaf
+   # publishing is platform-agnostic file packaging (gen-npm-packages reads
+   # packages/natives/native), so no per-platform runners are needed.
+   release_native_leaves:
+      name: Publish native leaf packages
+      if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
+         needs.release_gate.result == 'success' &&
+         needs.release_binary.result == 'success' &&
+         needs.release_smoke.result == 'success' &&
+         !inputs.skip_npm }}
+      needs: [release_metadata, release_gate, release_binary, release_smoke]
+      runs-on: ubuntu-22.04
+      # id-token lets npm mint the OIDC token for trusted publishing; the
+      # NODE_AUTH_TOKEN below is the fallback for unconfigured packages.
+      permissions:
+         id-token: write
+         contents: read
+      steps:
+         - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+         - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+         - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+           with:
+              node-version: "24"
+              registry-url: "https://registry.npmjs.org"
+         # npm runs under Bun when invoked by the release script; npm 12
+         # requires a newer emulated Node version than Bun 1.3 provides.
+         - name: Ensure npm supports trusted publishing
+           run: npm install -g npm@11.17.0
+         - name: Restore bun store
+           id: bun-cache
+           uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+              restore-keys: |
+                 bun-${{ runner.os }}-
+         - run: bun install --frozen-lockfile
+         # Main-only save: caches saved on a tag or branch are readable only by
+         # that ref yet count against the shared 10 GB repo cache quota.
+         - name: Save bun store
+           if: github.ref == 'refs/heads/neopi' && steps.bun-cache.outputs.cache-hit != 'true'
+           uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+         # Every leaf's addon from the native_addons artifacts (gnu targets
+         # only — musl reuses the linux filenames and has no leaf package).
+         - name: Install native addons
+           uses: ./.github/actions/native-artifacts
+           with:
+              targets: linux-x64-baseline linux-x64-modern linux-arm64 darwin-x64-baseline darwin-arm64 win32-x64-baseline win32-arm64
+         - name: Publish native leaf packages
+           env:
+              # Fallback auth: setup-node wrote an .npmrc referencing
+              # NODE_AUTH_TOKEN; npm uses it only when OIDC has no trusted
+              # publisher for the package (or on a first publish).
+              NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+           # The six leaves are independent: each process generates its own
+           # packages/natives/npm/<tag> dir and packs into a private temp dir,
+           # and the legal payload is tracked in packages/natives, so nothing
+           # shared is written. Serially they cost ~140 s on the release
+           # critical path. Every leaf runs to completion so one failure does
+           # not strand the others half-published; reruns skip published ones.
+           run: |
+              set -uo pipefail
+              logs="$RUNNER_TEMP/native-leaf-logs"
+              mkdir -p "$logs"
+              tags=(linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64 win32-arm64)
+              pids=()
+              for tag in "${tags[@]}"; do
+                bun run ci:release:publish-native-leaf "$tag" >"$logs/$tag.log" 2>&1 &
+                pids+=("$!")
+              done
+              failed=()
+              for i in "${!tags[@]}"; do
+                tag="${tags[$i]}"
+                if wait "${pids[$i]}"; then
+                  status=ok
+                else
+                  status="failed (exit $?)"
+                  failed+=("$tag")
+                fi
+                echo "::group::$tag: $status"
+                cat "$logs/$tag.log"
+                echo "::endgroup::"
+              done
+              if [ "${#failed[@]}" -gt 0 ]; then
+                echo "::error title=Native leaf publish::failed: ${failed[*]}"
+                exit 1
+              fi
+
    release_github:
       name: Publish GitHub release
-      if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
+      if: ${{ needs.release_metadata.outputs.github-release == 'true' && !cancelled() &&
          needs.release_binary.result == 'success' &&
          needs.release_smoke.result == 'success' }}
       needs: [release_metadata, release_binary, release_smoke]
@@ -922,8 +1101,8 @@ jobs:
            shell: bash
            env:
               GH_TOKEN: ${{ github.token }}
-              RELEASE_TAG: ${{ needs.release_metadata.outputs.release-tag }}
-              RELEASE_CHANNEL: ${{ needs.release_metadata.outputs.channel }}
+              RELEASE_TAG: ${{ needs.release_metadata.outputs.github-tag }}
+              RELEASE_CHANNEL: ${{ needs.release_metadata.outputs.github-channel }}
            run: |
               set -euo pipefail
               existing=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")
@@ -942,3 +1121,138 @@ jobs:
                 packages/browser-relay/dist/npi-browser-relay-extension.zip \
                 LICENSE THIRD-PARTY-NOTICES.txt SHA256SUMS.txt
 
+   # Publishes the release binaries to build.stencil.so, which serves them
+   # (with binary patches between releases) to `omp update`, the install
+   # scripts' binary mode, and the Homebrew formula. Canary tags upload to the
+   # canary channel (derived script-side). Not gated on skip_npm: binary
+   # clients never read npm.
+   release_build:
+      name: Publish to build.stencil.so
+      if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
+         needs.release_gate.result == 'success' &&
+         needs.release_binary.result == 'success' &&
+         needs.release_smoke.result == 'success' &&
+         needs.release_github.result == 'success' }}
+      needs: [release_metadata, release_gate, release_binary, release_smoke, release_github]
+      runs-on: ubuntu-22.04
+      # `id-token: write` lets the upload mint the GitHub OIDC token (audience
+      # build.stencil.so) the service authenticates the publisher with.
+      permissions:
+         id-token: write
+         contents: read
+      steps:
+         - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+         - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+         - name: Download release binaries
+           uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+           with:
+              pattern: omp-binary-*
+              path: packages/coding-agent/binaries
+              merge-multiple: true
+         # Dependency-free script (bun APIs + curl), so no `bun install`.
+         - name: Publish to build.stencil.so
+           run: bun scripts/ci-build-upload.ts "${{ needs.release_metadata.outputs.release-tag }}" packages/coding-agent/binaries/npi-*
+
+   release_npm:
+      name: Publish to npm
+      if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
+         needs.release_binary.result == 'success' &&
+         needs.release_smoke.result == 'success' &&
+         needs.release_build.result == 'success' &&
+         needs.release_native_leaves.result == 'success' &&
+         !inputs.skip_npm }}
+      # release_native_leaves must finish first: the core package lists the
+      # leaf packages as lockstep-versioned optionalDependencies, so installs
+      # resolve them the moment the core version is live. release_build too:
+      # binary updates install what build.stencil.so published (update-cli.ts),
+      # so the build service must lead npm.
+      needs: [release_metadata, release_binary, release_smoke, release_build, release_native_leaves]
+      runs-on: ubuntu-22.04
+      # `id-token: write` lets npm mint the GitHub OIDC token it exchanges for a
+      # short-lived publish token (trusted publishing + provenance). When a
+      # package has no matching trusted publisher configured, npm silently falls
+      # back to NODE_AUTH_TOKEN below — which also covers first-ever publishes.
+      permissions:
+         id-token: write
+         contents: read
+      steps:
+         - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+         - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+         - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+           with:
+              node-version: "24"
+              registry-url: "https://registry.npmjs.org"
+         # npm runs under Bun when invoked by the release script; npm 12
+         # requires a newer emulated Node version than Bun 1.3 provides.
+         - name: Ensure npm supports trusted publishing
+           run: npm install -g npm@11.17.0
+         - name: Restore bun store
+           id: bun-cache
+           uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+              restore-keys: |
+                 bun-${{ runner.os }}-
+         - run: bun install --frozen-lockfile
+         # Main-only save: caches saved on a tag or branch are readable only by
+         # that ref yet count against the shared 10 GB repo cache quota.
+         - name: Save bun store
+           if: github.ref == 'refs/heads/neopi' && steps.bun-cache.outputs.cache-hit != 'true'
+           uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+         # The prepack executes workspace code which loads the Linux x64
+         # addon, so install the native_addons job's artifact before publishing.
+         - name: Install prebuilt native addons
+           uses: ./.github/actions/native-artifacts
+           with:
+              targets: linux-x64-baseline linux-x64-modern
+         - name: Publish to npm
+           env:
+              # Fallback auth: setup-node wrote an .npmrc referencing
+              # NODE_AUTH_TOKEN; npm uses it only when OIDC has no trusted
+              # publisher for the package (or on a first publish).
+              NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+           run: bun run ci:release:publish
+
+   # Regenerate the Homebrew tap formula (can1357/homebrew-tap) from the build
+   # release_build just published to build.stencil.so and push it; the formula
+   # downloads from there. release_smoke already ran those binaries on their
+   # own platforms. No-ops when HOMEBREW_TAP_DEPLOY_KEY is unset, so a release
+   # never blocks on tap access.
+   release_brew:
+      name: Update Homebrew tap
+      if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
+         needs.release_metadata.outputs.channel != 'canary' &&
+         needs.release_build.result == 'success' }}
+      needs: [release_metadata, release_build]
+      runs-on: ubuntu-22.04
+      env:
+         HAS_TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY != '' }}
+      steps:
+         - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+           if: env.HAS_TAP_KEY == 'true'
+         - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+           if: env.HAS_TAP_KEY == 'true'
+         - name: Check out the Homebrew tap
+           if: env.HAS_TAP_KEY == 'true'
+           uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+           with:
+              repository: can1357/homebrew-tap
+              ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+              path: homebrew-tap
+         - name: Regenerate and push the formula
+           if: env.HAS_TAP_KEY == 'true'
+           run: |
+              bun scripts/ci-update-brew-formula.ts "${{ needs.release_metadata.outputs.release-tag }}" --out homebrew-tap/Formula/omp.rb
+              cd homebrew-tap
+              if git diff --quiet -- Formula/omp.rb; then
+                echo "formula already up to date for ${{ needs.release_metadata.outputs.release-tag }}"
+                exit 0
+              fi
+              git -c user.name="github-actions[bot]" \
+                  -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                  commit -m "omp ${{ needs.release_metadata.outputs.release-tag }}" -- Formula/omp.rb
+              git push origin HEAD:main

@@ -91,8 +91,9 @@ Tags derive from `packages/coding-agent/package.json`: stable builds use
 `v<version>-nightly.<short-sha>.<run-id>.<attempt>`. Repeated builds get new tags;
 existing releases and tags are never overwritten or deleted. Release assets
 include all platform binaries, the browser relay extension, legal notices and
-`SHA256SUMS.txt`. The fork publishes to GitHub only, not npm, build.stencil.so or
-the upstream Homebrew tap.
+`SHA256SUMS.txt`. Ordinary fork builds publish to GitHub without enabling the
+inherited npm, build.stencil.so or Homebrew publishers; those jobs retain their
+existing pre-tagged-release conditions and validation gate.
 
 The workflow must reach the default branch before GitHub exposes its manual
 dispatch controls. After the first merge into `nightly`, watch that push's
