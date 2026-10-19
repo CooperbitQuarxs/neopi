@@ -171,7 +171,7 @@ function formatSnapshot(snapshot: ControlSnapshot): string {
 	return [
 		`${snapshot.instanceId}  ${snapshot.role}  pid=${snapshot.pid}  ready=${snapshot.ready}`,
 		`cwd=${snapshot.cwd}`,
-		`busy streaming=${snapshot.busy.streaming} queued=${snapshot.busy.queued}`,
+		`busy streaming=${snapshot.busy.streaming} pending(steer+follow-up)=${snapshot.busy.pendingSteerAndFollowUp}`,
 		`build ${snapshot.build.gitSha ?? "unknown"}`,
 		"",
 	].join("\n");
