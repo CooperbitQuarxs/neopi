@@ -1324,6 +1324,7 @@ export class LiveSessionController {
 	}
 
 	#handleOutputLevel(level: number): void {
+		if (this.#voiceTurnBlocked()) level = 0;
 		const wasActive = this.#outputLevel > OUTPUT_ACTIVE_LEVEL;
 		this.#outputSilenceDeadline = Date.now() + OUTPUT_SILENCE_MS;
 		this.#outputSilenceTimer ??= setTimeout(() => this.#expireOutputLevel(), OUTPUT_SILENCE_MS);
@@ -1358,7 +1359,7 @@ export class LiveSessionController {
 		this.#microphoneFrames += 1;
 		// Until the native audio path has AEC, suppress likely speaker echo
 		// during playback. The speaker level expires when packets stop arriving.
-		const outputActive = this.#outputLevel > OUTPUT_ACTIVE_LEVEL;
+		const outputActive = !this.#voiceTurnBlocked() && this.#outputLevel > OUTPUT_ACTIVE_LEVEL;
 		const echoThreshold = Math.max(MIN_BARGE_IN_LEVEL, this.#outputLevel * OUTPUT_ECHO_RATIO);
 		if (outputActive && this.#inputLevel < echoThreshold) {
 			this.#framesDroppedAtGate += 1;

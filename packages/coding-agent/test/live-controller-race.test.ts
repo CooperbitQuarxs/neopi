@@ -332,6 +332,18 @@ function makeHarness(options?: {
 }
 
 describe("operator-owned live floor", () => {
+	it("transmits dictation while remote output is suppressed instead of treating it as audible echo", async () => {
+		const h = makeHarness({ holdMode: () => true });
+		await h.controller.start();
+		try {
+			h.fireOutputLevel(0.5);
+			h.fireMicrophone(new Float32Array(160).fill(0.1));
+			expect(h.audioSent).toHaveLength(1);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
 	it("keeps a blocked utterance voice-only when a held submit releases it", async () => {
 		const h = makeHarness({ holdMode: () => true, quietFloorMs: () => 20, blockDelegateKeyword: "iris only" });
 		await h.controller.start();
