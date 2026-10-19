@@ -7,6 +7,7 @@ On error, retry only the failed step; earlier steps may have taken effect.
 <prelude>
 {{#ifAll py js}}Python helpers: sync, kwargs; JS helpers: async, ONE trailing options object.{{else}}{{#if py}}Sync; kwargs.{{/if}}{{#if js}}Async; ONE trailing options object.{{/if}}{{/ifAll}}
 ```
+runtime.inspect() — return agent context telemetry (JS: `await runtime.inspect()`; Python: synchronous). Returns null/None when unavailable.
 display(value)  print(value, ...)  log(message)  phase(title)
 read(path, offset?, limit?)  write(path, content)  env(key?, value?)  output(*ids, format?, query?, offset?, limit?)
 {{#if js}}await {{/if}}tool.<name>(args) — session tool; `args` is its parameter object
