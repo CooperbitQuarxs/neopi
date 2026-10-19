@@ -12,8 +12,9 @@ rest. Do not restart review after fixes, pushes or base changes. Never wait:
 delegate any watching to a cheap poller and move the next PR.
 
 The owner may commission parallel bug hunts against recently merged work on
-`nightly`. These investigations do not gate merges. The owner is rewriting the
-babysit-pr skill body separately; leave it untouched.
+`nightly`. These investigations do not gate merges. The Nightly delivery rules
+take precedence over any older gate text in the babysit-pr skill; leave its
+file untouched.
 
 ## Configured bots
 

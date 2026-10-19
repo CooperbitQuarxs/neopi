@@ -155,5 +155,5 @@ invalid and declined dispositions.
 
 Portable repository skills live in `.agents/skills/`; NeoPi discovers that path
 through its agents provider. Harness-specific commands and tool probes remain in
-`.omp/`. The owner is rewriting the babysit-pr skill separately; use this policy
-for delivery without editing that skill body.
+`.omp/`. The Nightly delivery rules take precedence over any older gate text
+in the babysit-pr skill. Leave the skill file untouched.
