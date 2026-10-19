@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added launch/user-only environment lookup that honors case-insensitive Windows keys, skips blank values, and ignores project dotenv values and directory redirects, including `BUN_ENV` mode files; without pre-dotenv launch provenance, project-defined names fail closed even for inherited overrides ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
+
 ## [18.10.0] - 2026-10-12
 
 ### Added

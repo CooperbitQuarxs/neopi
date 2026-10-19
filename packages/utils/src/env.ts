@@ -2,8 +2,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseEnv } from "node:util";
-import { getAgentDir, getConfigRootDir, getProjectDir, refreshDirsFromEnv } from "./dirs";
-import { launchEnvValues, startupCwd, startupProcessEnv } from "./launch-env";
+import { getAgentDir, getConfigRootDir, getProjectDir, getUserEnvPaths, refreshDirsFromEnv } from "./dirs";
+import { getEnvValue, launchEnvFiles, launchEnvValues, startupCwd, startupProcessEnv } from "./launch-env";
 
 export * from "./worker-host";
 
@@ -109,9 +109,11 @@ export function stripGitRepoLocationEnv(
 }
 
 const projectEnvNamesLoadedByOmp = new Set<string>();
+// Without a pre-dotenv snapshot, a project-defined name cannot confer launch
+// authority, even when Bun expansion made its value differ from the file text.
 const originalProcessEnv: Record<string, string> = launchEnvValues
 	? filterProcessEnv(Object.fromEntries(launchEnvValues))
-	: filterChildShellEnvInternal(startupProcessEnv!, startupCwd);
+	: filterChildShellEnvInternal(startupProcessEnv!, startupCwd, undefined, true);
 // Interactive restoration must not pin Git to the launcher's checkout either.
 stripGitRepoLocationEnv(originalProcessEnv);
 Object.freeze(originalProcessEnv);
@@ -141,16 +143,51 @@ function filterChildShellEnvInternal(
 	env: Record<string, string | undefined>,
 	cwd: string,
 	onDotenvValue?: (value: string) => void,
+	excludeUnprovenProjectNames = false,
 ): Record<string, string> {
 	const runtimeLaunchEnvValues = env === Bun.env || env === process.env ? launchEnvValues : undefined;
 	const result = filterProcessEnv(env);
 	const projectEnv = parseEnvFile(path.join(cwd, ".env"));
-	const launchNodeEnv = runtimeLaunchEnvValues ? runtimeLaunchEnvValues.get("NODE_ENV") : env.NODE_ENV;
+	const launchNodeEnv = runtimeLaunchEnvValues ? runtimeLaunchEnvValues.get("NODE_ENV") : getEnvValue(env, "NODE_ENV");
 	const nodeEnvName = `.env.${launchNodeEnv || "development"}`;
 	const modeEnv = parseEnvFile(path.join(cwd, nodeEnvName));
 	const localEnv = parseEnvFile(path.join(cwd, ".env.local"));
 	const modeLocalEnv = parseEnvFile(path.join(cwd, `${nodeEnvName}.local`));
 	const launchEnv = { ...projectEnv, ...modeEnv, ...localEnv, ...modeLocalEnv };
+	if (excludeUnprovenProjectNames) {
+		for (const file of launchEnvFiles) {
+			Object.assign(launchEnv, parseEnvFile(path.resolve(cwd, file)));
+		}
+		// Bun prefers BUN_ENV, but either selector may itself have been autoloaded.
+		// Exclude every plausible mode without reconstructing Bun expansion.
+		const bunEnvName = `.env.${getEnvValue(env, "BUN_ENV") || "development"}`;
+		const bunModeEnv =
+			bunEnvName === nodeEnvName || bunEnvName === ".env.development"
+				? undefined
+				: parseEnvFile(path.join(cwd, bunEnvName));
+		const bunModeLocalEnv =
+			bunEnvName === nodeEnvName || bunEnvName === ".env.development"
+				? undefined
+				: parseEnvFile(path.join(cwd, `${bunEnvName}.local`));
+		const defaultModeEnv =
+			nodeEnvName === ".env.development" ? undefined : parseEnvFile(path.join(cwd, ".env.development"));
+		const defaultModeLocalEnv =
+			nodeEnvName === ".env.development" ? undefined : parseEnvFile(path.join(cwd, ".env.development.local"));
+		for (const key in result) {
+			if (
+				getEnvValue(launchEnv, key) !== undefined ||
+				(bunModeEnv && getEnvValue(bunModeEnv, key) !== undefined) ||
+				(bunModeLocalEnv && getEnvValue(bunModeLocalEnv, key) !== undefined) ||
+				(defaultModeEnv && getEnvValue(defaultModeEnv, key) !== undefined) ||
+				(defaultModeLocalEnv && getEnvValue(defaultModeLocalEnv, key) !== undefined)
+			) {
+				onDotenvValue?.(result[key]!);
+				delete result[key];
+			}
+		}
+		stripGitRepoLocationEnv(result);
+		return result;
+	}
 	const expandedLaunchEnv = {
 		...expandDotenvValues(projectEnv, result),
 		...expandDotenvValues(modeEnv, result),
@@ -272,10 +309,22 @@ export function parseEnvFile(filePath: string): Record<string, string> {
 }
 
 // Eagerly parse the user's $HOME/.env and the current project's .env (from cwd)
-const homeEnv = parseEnvFile(path.join(os.homedir(), ".env"));
-const piEnv = parseEnvFile(path.join(getConfigRootDir(), ".env"));
-const agentEnv = parseEnvFile(path.join(getAgentDir(), ".env"));
+const homePath = os.homedir();
+const configRootPath = getConfigRootDir();
+const agentPath = getAgentDir();
+const homeEnv = parseEnvFile(path.join(homePath, ".env"));
+const piEnv = parseEnvFile(path.join(configRootPath, ".env"));
+const agentEnv = parseEnvFile(path.join(agentPath, ".env"));
 const projectEnv = parseEnvFile(path.join(getProjectDir(), ".env"));
+
+// Read update-authority dotenv files from launch-derived locations. Reuse the
+// ordinary snapshots when their paths agree; do not change merged-env behavior.
+const trustedPaths = getUserEnvPaths(originalProcessEnv);
+const trustedHomeEnv = trustedPaths.home === homePath ? homeEnv : parseEnvFile(path.join(trustedPaths.home, ".env"));
+const trustedPiEnv =
+	trustedPaths.configRoot === configRootPath ? piEnv : parseEnvFile(path.join(trustedPaths.configRoot, ".env"));
+const trustedAgentEnv =
+	trustedPaths.agentDir === agentPath ? agentEnv : parseEnvFile(path.join(trustedPaths.agentDir, ".env"));
 
 for (const key of Object.keys(Bun.env)) {
 	const value = Bun.env[key];
@@ -299,6 +348,25 @@ for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
 // it now from the updated env. `getAgentDir()` already located the `.env` from
 // the profile name + home, so this re-reads only the directory vars.
 refreshDirsFromEnv();
+
+/**
+ * Read the first non-blank, trimmed value from the launch environment or user
+ * dotenv snapshots, excluding project dotenv. Preserve user values even when
+ * a project value masked them in Bun.env.
+ *
+ * Without a pre-dotenv launch snapshot, project-defined names are excluded even
+ * when a real inherited value differs. Use --no-env-file without explicit
+ * --env-file options, or user dotenv, to retain authority without launch provenance.
+ */
+export function getTrustedEnv(name: string): string | undefined {
+	return (
+		getEnvValue(originalProcessEnv, name)?.trim() ||
+		getEnvValue(trustedAgentEnv, name)?.trim() ||
+		getEnvValue(trustedPiEnv, name)?.trim() ||
+		getEnvValue(trustedHomeEnv, name)?.trim() ||
+		undefined
+	);
+}
 
 /**
  * Intentional re-export of Bun.env.
