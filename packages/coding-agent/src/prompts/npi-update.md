@@ -3,7 +3,7 @@ Update the local `PsychedelicShayna/neopi` source fork to the newest stable upst
 <critical>
 - NEVER replace, overwrite, move, relink, or reinstall the live `omp` executable.
 - Resolve every merge conflict yourself, sequentially. NEVER delegate conflict resolution.
-- Land changes through a pull request into `nightly`, merged after checks, build, staged installation, and runtime smoke verification pass. `nightly` is promoted into `neopi` by the weekly `promote-nightly` workflow; do not promote by hand.
+- Land changes through a pull request into `nightly`, merged after checks, build, staged installation, and runtime smoke verification pass. Promotion into `neopi` follows `docs/agents/policy.md`; the workflow opens monthly PRs and the owner merges.
 </critical>
 
 1. Locate the `PsychedelicShayna/neopi` checkout; verify its remotes before changing it. Read `AGENTS.md`, `docs/agents/policy.md`, and `docs/agents/upstream-sync.md`.
