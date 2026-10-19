@@ -78,7 +78,9 @@ export class IrcViewerComponent implements Component {
 	constructor(options: IrcViewerOptions) {
 		this.#options = options;
 		this.#unsubscribe = options.source.subscribe(() => {
-			this.#syncSelection(this.#visible());
+			const visible = this.#visible();
+			this.#syncSelection(visible);
+			this.#refreshSelectedSpan(visible);
 			options.requestRender();
 		});
 	}
@@ -100,6 +102,20 @@ export class IrcViewerComponent implements Component {
 		if (anchored >= 0) this.#selected = anchored;
 		else if (this.#follow || this.#selected >= visible.length) this.#selected = Math.max(0, visible.length - 1);
 		this.#selectedId = visible[this.#selected]?.message.id;
+	}
+
+	/** Keep navigation coordinates current even when input precedes the next repaint. */
+	#refreshSelectedSpan(visible: readonly IrcLogEntry[]): void {
+		let start = 0;
+		for (let index = 0; index < visible.length; index++) {
+			const end = start + 1 + this.#bodyLines(visible[index], this.#bodyWidth, index === this.#selected).length;
+			if (index === this.#selected) {
+				this.#selectedSpan = { start, end };
+				return;
+			}
+			start = end;
+		}
+		this.#selectedSpan = { start: 0, end: 0 };
 	}
 
 	#header(entry: IrcLogEntry, selected: boolean): string {
@@ -221,6 +237,7 @@ export class IrcViewerComponent implements Component {
 		this.#selected = Math.max(0, Math.min(count - 1, index));
 		this.#selectedId = visible[this.#selected]?.message.id;
 		this.#follow = this.#selected === count - 1;
+		this.#refreshSelectedSpan(visible);
 		this.#options.requestRender();
 	}
 
@@ -245,11 +262,12 @@ export class IrcViewerComponent implements Component {
 	}
 
 	#toggleExpanded(): void {
-		const entry = this.#visible()[this.#selected];
+		const visible = this.#visible();
+		const entry = visible[this.#selected];
 		if (!entry) return;
 		const { id } = entry.message;
 		if (!this.#expanded.delete(id)) this.#expanded.add(id);
-		this.#selectedSpan.end = this.#selectedSpan.start + 1 + this.#bodyLines(entry, this.#bodyWidth, true).length;
+		this.#refreshSelectedSpan(visible);
 		this.#follow = false;
 		this.#options.requestRender();
 	}

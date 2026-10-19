@@ -229,6 +229,25 @@ describe("IrcViewerComponent", () => {
 			expect(sent).toEqual([["0-Selected", "answer", selected.message.id]]);
 		});
 
+		it("keeps scrolling an expanded selection after an earlier insert before repaint", () => {
+			const selected = entry("0-Selected", "Captain", Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n"));
+			const { view, sent } = withReply([selected, entry("0-Later", "Captain", "next")]);
+			view.screen();
+			view.viewer.handleInput("\x1b[H");
+			view.screen();
+			view.viewer.handleInput("\r");
+			view.screen();
+			view.viewer.handleInput("\x1b[6~");
+			view.viewer.handleInput("\x1b[6~");
+			view.screen();
+			view.insert(0, entry("0-Earlier", "Captain", "slow send"));
+			view.viewer.handleInput("\x1b[B");
+			view.viewer.handleInput("r");
+			view.type("answer");
+			view.viewer.handleInput("\r");
+			expect(sent).toEqual([["0-Selected", "answer", selected.message.id]]);
+		});
+
 		it("answers the recipient when the selected message is her own", () => {
 			const { view } = withReply([entry("Captain", "0-Beta", "status?")]);
 			view.viewer.handleInput("r");
