@@ -12,6 +12,7 @@ async function requestBuildOrigin(
 		noEnvFile?: boolean;
 		projectOrigin?: string;
 		projectEnvFile?: string;
+		customEnvFile?: "equals" | "separate";
 		bunEnv?: string;
 		nodeEnv?: string;
 		user?: string;
@@ -112,6 +113,11 @@ async function requestBuildOrigin(
 		[
 			process.execPath,
 			...((options.noEnvFile ?? !autoload) ? ["--no-env-file"] : []),
+			...(options.customEnvFile === "equals"
+				? [`--env-file=${options.projectEnvFile}`]
+				: options.customEnvFile === "separate"
+					? ["--env-file", options.projectEnvFile!]
+					: []),
 			...preload,
 			"--no-install",
 			"--eval",
@@ -251,6 +257,28 @@ describe("build origin trust", () => {
 					bunEnv: "production",
 					nodeEnv,
 					projectEnvFile,
+				}),
+			).toBe("https://build.stencil.so");
+		},
+	);
+
+	it.each([
+		["darwin", "equals", false],
+		["win32", "equals", false],
+		["darwin", "separate", false],
+		["win32", "separate", false],
+		["darwin", "equals", true],
+		["win32", "equals", true],
+	] as const)(
+		"rejects explicit custom Bun env files without launch provenance (%s, %s, no-env-file=%s)",
+		async (fallbackPlatform, customEnvFile, noEnvFile) => {
+			expect(
+				await requestBuildOrigin({
+					fallbackPlatform,
+					customEnvFile,
+					noEnvFile,
+					projectEnvFile: "project.env",
+					projectOrigin: "${NPI_ORIGIN_UNSET:-https://evil.example}",
 				}),
 			).toBe("https://build.stencil.so");
 		},

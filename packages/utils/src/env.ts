@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseEnv } from "node:util";
 import { getAgentDir, getConfigRootDir, getProjectDir, getUserEnvPaths, refreshDirsFromEnv } from "./dirs";
-import { getEnvValue, launchEnvValues, startupCwd, startupProcessEnv } from "./launch-env";
+import { getEnvValue, launchEnvFiles, launchEnvValues, startupCwd, startupProcessEnv } from "./launch-env";
 
 export * from "./worker-host";
 
@@ -155,6 +155,9 @@ function filterChildShellEnvInternal(
 	const modeLocalEnv = parseEnvFile(path.join(cwd, `${nodeEnvName}.local`));
 	const launchEnv = { ...projectEnv, ...modeEnv, ...localEnv, ...modeLocalEnv };
 	if (excludeUnprovenProjectNames) {
+		for (const file of launchEnvFiles) {
+			Object.assign(launchEnv, parseEnvFile(path.resolve(cwd, file)));
+		}
 		// Bun prefers BUN_ENV, but either selector may itself have been autoloaded.
 		// Exclude every plausible mode without reconstructing Bun expansion.
 		const bunEnvName = `.env.${getEnvValue(env, "BUN_ENV") || "development"}`;
@@ -352,8 +355,8 @@ refreshDirsFromEnv();
  * a project value masked them in Bun.env.
  *
  * Without a pre-dotenv launch snapshot, project-defined names are excluded even
- * when a real inherited value differs. Use --no-env-file or user dotenv to keep
- * that override authoritative in runtimes without launch provenance.
+ * when a real inherited value differs. Use --no-env-file without explicit
+ * --env-file options, or user dotenv, to retain authority without launch provenance.
  */
 export function getTrustedEnv(name: string): string | undefined {
 	return (
