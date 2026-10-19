@@ -26,6 +26,8 @@ import {
 	cfgLiveBlockDelegateKeyword,
 	cfgLiveDelegationDelivery,
 	cfgLiveForceDelegateKeyword,
+	cfgLiveForceUtteranceKeyword,
+	cfgLiveSuppressDelegateKeyword,
 	cfgLiveSubmitKeyword,
 	cfgLiveSubmitSilenceMs,
 	cfgLiveVoice,
@@ -294,6 +296,10 @@ export class LiveCommandController {
 			},
 			includeVoiceNote: () => settingsSource.get().includeVoiceNote,
 			delegationDelivery: () => cfgLiveDelegationDelivery.get(this.#ctx.settings),
+			delegationKeywords: () => ({
+				suppress: cfgLiveSuppressDelegateKeyword.get(this.#ctx.settings),
+				force: cfgLiveForceUtteranceKeyword.get(this.#ctx.settings),
+			}),
 			relayGates: () => {
 				const settings = settingsSource.get();
 				return {

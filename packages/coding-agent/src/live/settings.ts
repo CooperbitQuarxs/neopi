@@ -49,6 +49,30 @@ export const cfgLiveDelegationDelivery = register({
 	},
 });
 
+export const cfgLiveSuppressDelegateKeyword = register({
+	id: "live.suppressDelegateKeyword",
+	type: "string",
+	default: "Iris",
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Direct-Address Keyword",
+		description: "Leading address that rejects handoffs to the main agent; case/punctuation insensitive (empty disables)",
+	},
+});
+
+export const cfgLiveForceUtteranceKeyword = register({
+	id: "live.forceUtteranceKeyword",
+	type: "string",
+	default: "relay",
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Force-Utterance Keyword",
+		description: "Phrase anywhere in finalized speech that requires a canonical main-agent handoff; direct address wins (empty disables)",
+	},
+});
+
 export const cfgLiveForceDelegateKeyword = register({
 	id: "live.forceDelegateKeyword",
 	type: "string",

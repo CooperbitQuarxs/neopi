@@ -14,6 +14,8 @@ import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import {
 	cfgLiveForceDelegateKeyword,
+	cfgLiveForceUtteranceKeyword,
+	cfgLiveSuppressDelegateKeyword,
 	cfgLiveSubmitKeyword,
 	cfgLiveSubmitSilenceMs,
 } from "@oh-my-pi/pi-coding-agent/live/settings";
@@ -28,6 +30,7 @@ interface Harness {
 	/** Callbacks the controller handed to the live session. */
 	callbacks(): LiveSessionCallbacks;
 	voice(): string | undefined;
+	delegationKeywords(): { suppress: string; force: string } | undefined;
 	/** Components mounted into or focused away from the composer slot. */
 	layoutChanges: unknown[];
 	/** Latest status-line live state, `null` when hidden. */
@@ -117,6 +120,7 @@ function createHarness(): Harness {
 			return options.callbacks;
 		},
 		voice: () => options?.voice,
+		delegationKeywords: () => options?.delegationKeywords?.(),
 		layoutChanges,
 		liveStatus: () => liveStatus,
 		sentToVoice,
@@ -133,6 +137,22 @@ afterEach(() => {
 });
 
 describe("LiveCommandController", () => {
+	it("forwards configurable per-utterance keywords without restarting the call", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		try {
+			expect(h.delegationKeywords()).toEqual({ suppress: "Iris", force: "relay" });
+			cfgLiveSuppressDelegateKeyword.set(h.ctx.settings, "Nova");
+			cfgLiveForceUtteranceKeyword.set(h.ctx.settings, "pass along");
+			expect(h.delegationKeywords()).toEqual({ suppress: "Nova", force: "pass along" });
+			cfgLiveSuppressDelegateKeyword.set(h.ctx.settings, "");
+			cfgLiveForceUtteranceKeyword.set(h.ctx.settings, "");
+			expect(h.delegationKeywords()).toEqual({ suppress: "", force: "" });
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
 	it("forwards the selected voice across the live-session boundary", async () => {
 		const h = createHarness();
 		try {

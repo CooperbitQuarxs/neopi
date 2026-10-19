@@ -63,6 +63,7 @@ interface UserLedgerTurn {
 	final: boolean;
 	claim?: number;
 	blocked?: boolean;
+	forcedDelegationId?: string;
 }
 
 type HeldContextKind = "report" | "thinking" | "progress" | "overflow-alert";
@@ -135,6 +136,7 @@ export interface LiveSessionControllerOptions {
 	/** Realtime output voice, defaulting to sol. */
 	voice?: string;
 	blockDelegateKeyword?: string;
+	delegationKeywords?: () => { suppress: string; force: string };
 	/** Test seam: quiet time after operator activity before held context sends; defaults to 10000 ms. */
 	speakableIdleMs?: number;
 	/** Test seam: minimum gap between reasoning narrations; defaults to 3000 ms. */
@@ -224,6 +226,8 @@ export class LiveSessionController {
 	readonly #includeVoiceNote: () => boolean;
 	readonly #delegationDelivery: () => LiveDelegationDelivery;
 	readonly #relayGates: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
+	readonly #delegationKeywords: () => { suppress: string; force: string };
+	#latestUtterance: UserLedgerTurn | undefined;
 
 	readonly #createTransport: (options: ConstructorParameters<typeof CodexLiveTransport>[0]) => LiveTransportLike;
 	readonly #createRecorder: (
@@ -342,6 +346,7 @@ export class LiveSessionController {
 		this.#includeVoiceNote = options.includeVoiceNote ?? (() => true);
 		this.#delegationDelivery = options.delegationDelivery ?? (() => "steer");
 		this.#relayGates = options.relayGates ?? (() => ({ reasoning: true, progress: true, finalAnswers: true }));
+		this.#delegationKeywords = options.delegationKeywords ?? (() => ({ suppress: "", force: "" }));
 		const speakableIdleMs = options.speakableIdleMs;
 		this.#speakableIdleMs =
 			typeof speakableIdleMs === "number" && Number.isFinite(speakableIdleMs) && speakableIdleMs >= 0
@@ -599,10 +604,28 @@ export class LiveSessionController {
 	): Promise<void> {
 		if (this.#seenDelegationIds.has(event.item.id)) return;
 		this.#seenDelegationIds.add(event.item.id);
+		const latest = this.#latestUtterance;
+		if (latest && this.#isDirectAddress(latest.text)) {
+			const template = operatorTypedMessageTemplate;
+			const labelBytes = Buffer.byteLength(prompt.render(template, { message: "", delegationRejected: true }), "utf8");
+			for (const part of chunkLiveContext(latest.text, CONTEXT_CHUNK_BYTES - labelBytes)) {
+				void this.#queueSend(buildDelegationContextAppend(
+					event.item.id,
+					prompt.render(template, { message: part, delegationRejected: true }),
+				));
+			}
+			return;
+		}
+		if (!forced && latest?.forcedDelegationId && latest.forcedDelegationId !== event.item.id) {
+			if (latest.claim !== undefined || !this.#userTurns.has(latest.turn)) return;
+			latest.forcedDelegationId = event.item.id;
+		}
 
 		const voiceText = joinDelegationContent(event.item.content);
 		// A claimed turn belongs to an earlier handoff; it cannot authorize superseding it.
-		const newOperatorWork = this.#turnsWhere(turn => !turn.blocked && turn.claim === undefined).length > 0;
+		const newOperatorWork = this.#turnsWhere(
+			turn => !turn.blocked && !this.#isDirectAddress(turn.text) && turn.claim === undefined,
+		).length > 0;
 		if (!newOperatorWork) {
 			this.#dispatchVoiceOnly(voiceText);
 			return;
@@ -633,7 +656,8 @@ export class LiveSessionController {
 		}
 		if (generation !== this.#delegationGeneration) return;
 		const claimed = this.#turnsWhere(
-			turn => !turn.blocked && (turn.claim === undefined || turn.claim === this.#pendingDelegation?.generation),
+			turn => !turn.blocked && !this.#isDirectAddress(turn.text) &&
+				(turn.claim === undefined || turn.claim === this.#pendingDelegation?.generation),
 		);
 		if (claimed.length === 0) return;
 		// The voice agent is acting on the operator's words now; hold nothing back.
@@ -1381,6 +1405,7 @@ export class LiveSessionController {
 			// one continues the previous word. Trimming it away glued words together.
 			current.text += /^\s/.test(text) ? ` ${normalized}` : normalized;
 		}
+		this.#latestUtterance = current;
 		if (final) {
 			const block = stripLiveKeyword(current.text, this.#blockDelegateKeyword);
 			if (block.matched) {
@@ -1389,7 +1414,7 @@ export class LiveSessionController {
 			}
 		}
 		this.#emitUserSpeech({ role: "user", turn: current.turn, text: current.text, final: current.final });
-		if (current.blocked) {
+		if (current.blocked || this.#isDirectAddress(current.text)) {
 			const pending = this.#pendingDelegation;
 			if (pending && current.claim === pending.generation) {
 				this.#pendingDelivery?.cancel();
@@ -1402,6 +1427,7 @@ export class LiveSessionController {
 				this.#refreshAudioPhase();
 			}
 			const blocked = current;
+			if (!current.blocked) return;
 			if (!blocked.text) {
 				this.#deleteTurns(turn => turn === blocked);
 				return;
@@ -1422,11 +1448,24 @@ export class LiveSessionController {
 		if (final && pendingGeneration !== undefined) {
 			void this.#dispatchPendingDelegation(pendingGeneration).catch(cause => this.#reportFailure(errorFrom(cause)));
 		}
+		if (final && current.claim === undefined && stripLiveKeyword(current.text, this.#delegationKeywords().force).matched) {
+			// Re-enter the same event boundary: hold/quiet-floor gating owns this handoff too.
+			current.forcedDelegationId = `keyword-${current.turn}`;
+			this.#handleLiveEvent({
+				type: "delegation.created",
+				item: { type: "delegation", target: "client", id: current.forcedDelegationId, content: [] },
+			});
+		}
+	}
+
+	#isDirectAddress(text: string): boolean {
+		return stripLiveKeyword(text, this.#delegationKeywords().suppress, false, true).matched;
 	}
 
 	/** Drop a partial turn the recognizer withdrew, clearing its composer preview. A pending handoff
 	 *  that claimed it either dispatches its remaining turns or, with none left, ends. */
 	#retractPartialTurn(turn: { turn: number; claim?: number }): void {
+		if (this.#latestUtterance?.turn === turn.turn) this.#latestUtterance = undefined;
 		this.#deleteTurns(entry => entry.turn === turn.turn);
 		this.#emitUserSpeech({ role: "user", turn: turn.turn, text: "", final: true });
 		const pending = this.#pendingDelegation;
