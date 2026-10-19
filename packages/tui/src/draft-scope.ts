@@ -14,6 +14,9 @@ export interface DetachedDraft {
 	text: string;
 	images: ImageContent[];
 	imageLinks: (string | undefined)[];
+	/** Deferred input must not consume state owned by a real composer keypress. */
+	source?: "defer";
+	renderImageLinks?: readonly (string | undefined)[];
 }
 
 const draftScope = new AsyncLocalStorage<DetachedDraft>();
@@ -23,7 +26,18 @@ export function currentDetachedDraft(): DetachedDraft | undefined {
 	return draftScope.getStore();
 }
 
+/** Deferred submission provenance, deliberately separate from baseline control submissions. */
+export function currentDeferredDraft(): DetachedDraft | undefined {
+	const draft = draftScope.getStore();
+	return draft?.source === "defer" ? draft : undefined;
+}
+
 /** Run `fn` so editor writes land on a fresh detached draft. */
-export function runWithDetachedDraft<T>(fn: () => T): T {
-	return draftScope.run({ text: "", images: [], imageLinks: [] }, fn);
+export function runWithDetachedDraft<T>(fn: () => T, source?: "defer"): T {
+	return draftScope.run({ text: "", images: [], imageLinks: [], source }, fn);
+}
+
+/** Begin deferred delivery outside any expired draft scope inherited from its scheduler. */
+export function runWithoutDetachedDraft<T>(fn: () => T): T {
+	return draftScope.exit(fn);
 }
