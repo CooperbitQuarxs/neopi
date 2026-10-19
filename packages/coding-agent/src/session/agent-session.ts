@@ -9716,23 +9716,27 @@ export class AgentSession implements SettingsScope {
 	 *  fires while agent.hasQueuedMessages()). `forInterrupt` also withdraws input the run already
 	 *  dequeued but never recorded — live-steered into the aborted response, or taken for its next
 	 *  model call — and treats it as queued ahead of the rest (it was queued first).
+	 *  Compaction rollback uses `userAuthoredOnly` to leave independently accepted agent handoffs
+	 *  queued rather than discarding speech that rollback does not own; interrupts ignore that option.
 	 *  Plain Alt+Up dequeue preserves those non-user steers. */
-	clearQueue(options?: { forInterrupt?: boolean }): {
+	clearQueue(options?: { forInterrupt?: boolean; userAuthoredOnly?: boolean }): {
 		steering: RestoredQueuedMessage[];
 		followUp: RestoredQueuedMessage[];
 	} {
+		const restorable =
+			options?.userAuthoredOnly && !options.forInterrupt ? isUserAuthoredQueuedMessage : isRestorableQueuedMessage;
 		const withdrawn = options?.forInterrupt ? this.agent.withdrawUndeliveredQueuedMessages() : undefined;
 		const steeringAll = [...(withdrawn?.steering ?? []), ...this.agent.peekSteeringQueue()];
 		const followUpAll = [...(withdrawn?.followUp ?? []), ...this.agent.peekFollowUpQueue()];
 		const steering = steeringAll
-			.filter(isRestorableQueuedMessage)
+			.filter(restorable)
 			.map(message => toRestoredQueuedMessage(message, this.#queuedMessageRawText.get(message)));
 		const followUp = followUpAll
-			.filter(isRestorableQueuedMessage)
+			.filter(restorable)
 			.map(message => toRestoredQueuedMessage(message, this.#queuedMessageRawText.get(message)));
 		const keep: (m: AgentMessage) => boolean = options?.forInterrupt
 			? isAdvisorCard
-			: m => !isRestorableQueuedMessage(m) && !isHiddenUserCompanion(m);
+			: m => !restorable(m) && !isHiddenUserCompanion(m);
 		for (const message of [...steeringAll, ...followUpAll]) {
 			if (!keep(message) && message.role === "custom" && message.customType === "ttsr-injection") {
 				this.#ttsr.releaseDeferredReservationFromDetails(message.details);

@@ -11,7 +11,7 @@
  *     post-prompt recovery, but the loop is already done) must be drained when
  *     the session settles.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -35,6 +35,8 @@ import { type LiveDelegationDelivery, LiveSessionController } from "../src/live/
 import type { LiveServerEvent } from "../src/live/protocol";
 import { LIVE_DELEGATION_MESSAGE_TYPE } from "../src/session/messages";
 import { buildLiveDelegationMessage } from "../src/live/delegation-note";
+import { UiHelpers } from "../src/modes/utils/ui-helpers";
+import type { CompactionQueuedMessage, InteractiveModeContext } from "../src/modes/types";
 
 const COLLAB_PROMPT_TYPE = "collab-prompt";
 const IMAGE_SOURCE_PATH = "/tmp/private-project/screenshot.png";
@@ -77,6 +79,7 @@ describe("AgentSession queued steer delivery", () => {
 
 	afterEach(async () => {
 		await session?.dispose();
+		vi.restoreAllMocks();
 		removeSyncWithRetries(tempDir);
 	});
 
@@ -146,6 +149,128 @@ describe("AgentSession queued steer delivery", () => {
 		};
 		return promise;
 	}
+
+	it.each(["steer", "followUp"] as const)(
+		"preserves an accepted vocal %s when post-compaction prompt authentication fails",
+		async mode => {
+			const { session } = await createSession([
+				{ content: ["recovered work"] },
+				{ content: ["recovered follow-up"] },
+				{ content: ["remaining work"] },
+			]);
+			const received = Promise.withResolvers<void>();
+			const unsubscribe = session.subscribe(event => {
+				if (
+					event.type === "message_end" &&
+					event.message.role === "custom" &&
+					event.message.customType === LIVE_DELEGATION_MESSAGE_TYPE
+				)
+					received.resolve();
+			});
+			const checkingCredentials = Promise.withResolvers<void>();
+			const finishCredentials = Promise.withResolvers<void>();
+			vi.spyOn(modelRegistry, "getApiKey").mockImplementationOnce(async () => {
+				checkingCredentials.resolve();
+				await finishCredentials.promise;
+				return undefined;
+			});
+			const queued: CompactionQueuedMessage[] = [{ text: "typed request parked during compaction", mode: "steer" }];
+			const restored = Promise.withResolvers<string>();
+			const ctx = {
+				session,
+				compactionQueuedMessages: [...queued],
+				skillCommands: new Map(),
+				isKnownSlashCommand: () => false,
+				recordLocalSubmission: () => () => {},
+				updatePendingMessagesDisplay() {},
+				showError: (message: string) => restored.resolve(message),
+				loopModeEnabled: false,
+			} as unknown as InteractiveModeContext;
+			const helpers = new UiHelpers(ctx);
+			let onLiveEvent: ((event: LiveServerEvent) => void) | undefined;
+			const speech: string[] = [];
+			const accepted = Promise.withResolvers<void>();
+			const controller = new LiveSessionController({
+				session,
+				delegationDelivery: () => mode,
+				extractAssistantText: () => "",
+				callbacks: {
+					onPhase() {},
+					onLevels() {},
+					onTranscript() {},
+					onTerminal() {},
+					onSpeechSent(text) {
+						speech.push(text);
+						accepted.resolve();
+					},
+				},
+				createTransport: options => {
+					onLiveEvent = options.callbacks.onEvent;
+					return {
+						async connect() {},
+						async send() {},
+						async close() {},
+						async setMuted() {},
+						pushAudio: () => true,
+					};
+				},
+				createRecorder: () => ({ stop() {} }),
+			});
+			await controller.start();
+			try {
+				await helpers.flushCompactionQueue();
+				await withTimeout(checkingCredentials.promise, 2_000, "Post-compaction credential lookup did not start");
+				expect(session.isStreaming).toBe(true);
+				expect(session.agent.state.isStreaming).toBe(false);
+				onLiveEvent?.({ type: "turn.done", turn: { role: "user", transcript: "accepted operator speech" } });
+				onLiveEvent?.({
+					type: "delegation.created",
+					item: { type: "delegation", target: "client", id: "during-auth", content: [] },
+				});
+				await withTimeout(accepted.promise, 2_000, "Vocal handoff was not accepted");
+				expect(controller.pendingUserTurnCount()).toBe(0);
+				expect(session.getQueuedMessages()[mode === "steer" ? "steering" : "followUp"]).toEqual([
+					"accepted operator speech",
+				]);
+				finishCredentials.resolve();
+				expect(
+					await withTimeout(restored.promise, 2_000, "Authentication failure did not reach compaction restore"),
+				).toContain("No API key found");
+				expect(ctx.compactionQueuedMessages).toEqual(queued);
+				// An idle continuation may already have claimed the preserved message. It must
+				// remain owned by the real queue, its in-flight claim, or the recorded transcript.
+				expect([
+					...session.agent.peekSteeringQueue(),
+					...session.agent.peekFollowUpQueue(),
+					...session.agent.peekUndeliveredQueuedMessages(),
+					...session.messages,
+				]).toContainEqual(
+					expect.objectContaining({
+						role: "custom",
+						customType: LIVE_DELEGATION_MESSAGE_TYPE,
+						details: expect.objectContaining({ operator: "accepted operator speech" }),
+					}),
+				);
+				await helpers.flushCompactionQueue();
+				await withTimeout(received.promise, 2_000, "Accepted vocal input was not delivered after recovery");
+				await session.waitForIdle();
+				const delivered = session.messages.filter(
+					message => message.role === "custom" && message.customType === LIVE_DELEGATION_MESSAGE_TYPE,
+				);
+				expect(delivered).toHaveLength(1);
+				expect(delivered[0]).toMatchObject({
+					details: { operator: "accepted operator speech" },
+					attribution: "agent",
+				});
+				expect(speech).toEqual(["accepted operator speech"]);
+			} finally {
+				finishCredentials.resolve();
+				await session.waitForIdle();
+				await controller.stop();
+				unsubscribe();
+			}
+		},
+	);
 
 	it.each(["steer", "followUp"] as const)(
 		"restores queued vocal %s text on Esc without voice-agent prose",
