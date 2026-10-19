@@ -236,4 +236,30 @@ describe("ExtensionDashboard menu navigation", () => {
 		await Bun.sleep(0);
 		dashboard.dispose();
 	});
+
+	test("persists rule toggles before awaiting the live session refresh", async () => {
+		const fx = fixture([extension("rule", "guard", "native")]);
+		const applied: string[][] = [];
+		const pending = Promise.withResolvers<void>();
+		fx.runtime.onRulesChanged = async () => {
+			applied.push([...fx.disabled]);
+			await pending.promise;
+		};
+		const dashboard = await ExtensionDashboard.create({ runtime: fx.runtime, terminalHeight: 30 });
+		try {
+			dashboard.handleInput("G");
+			dashboard.handleInput(" ");
+			expect(applied).toEqual([["rule:guard"]]);
+			expect(dashboard.blocksMenuHistory).toBe(true);
+			pending.resolve();
+			await Bun.sleep(0);
+			expect(dashboard.blocksMenuHistory).toBe(false);
+			dashboard.handleInput(" ");
+			await Bun.sleep(0);
+			expect(applied).toEqual([["rule:guard"], []]);
+		} finally {
+			pending.resolve();
+			dashboard.dispose();
+		}
+	});
 });

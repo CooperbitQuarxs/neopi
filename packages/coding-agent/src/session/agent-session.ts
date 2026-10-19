@@ -6823,6 +6823,11 @@ export class AgentSession implements SettingsScope {
 		return this.#tools.refreshSkills();
 	}
 
+	/** Applies rule toggles to this session without resetting its conversation. */
+	refreshRules(): Promise<void> {
+		return this.#tools.refreshRules();
+	}
+
 	/**
 	 * Rediscovers skills and file-based slash commands for the current cwd, rebuilds the
 	 * system prompt, and notifies command-metadata listeners (TUI autocomplete, RPC/ACP
