@@ -29,7 +29,9 @@ describe("xAI main-composer destination ownership", () => {
 	let mode: InteractiveMode;
 	let audio: capture.AudioSink[];
 
-	beforeAll(async () => { await initTheme(); });
+	beforeAll(async () => {
+		await initTheme();
+	});
 	beforeEach(async () => {
 		saved = beginSettingsTest();
 		const root = os.tmpdir();
@@ -44,7 +46,9 @@ describe("xAI main-composer destination ownership", () => {
 		const model = registry.find("anthropic", "claude-sonnet-4-5")!;
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(directory, directory), settings, modelRegistry: registry,
+			sessionManager: SessionManager.create(directory, directory),
+			settings,
+			modelRegistry: registry,
 		});
 		mode = new InteractiveMode(session, "test");
 		vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});
@@ -74,13 +78,16 @@ describe("xAI main-composer destination ownership", () => {
 		const finished = Promise.withResolvers<string>();
 		const sent = Promise.withResolvers<void>();
 		vi.spyOn(chainConfig, "discoverChains").mockResolvedValue({
-			chains: [{ name: "rewrite", steps: [{ name: "rewrite", prompt: "rewrite", enabled: true }] }], warnings: [],
+			chains: [{ name: "rewrite", steps: [{ name: "rewrite", prompt: "rewrite", enabled: true }] }],
+			warnings: [],
 		});
 		vi.spyOn(chainRunner, "runChain").mockImplementation(async () => {
 			started.resolve();
 			return await finished.promise;
 		});
-		const prompt = vi.spyOn(session, "prompt").mockImplementation(async () => { sent.resolve(); });
+		const prompt = vi.spyOn(session, "prompt").mockImplementation(async () => {
+			sent.resolve();
+		});
 		mode.editor.setText("Original draft");
 		mode.editor.handleInput("\x1bc");
 		await started.promise;
@@ -104,7 +111,8 @@ describe("xAI main-composer destination ownership", () => {
 			const completed = Promise.withResolvers<void>();
 			const step = { name: "rewrite", prompt: "rewrite", enabled: true };
 			vi.spyOn(chainConfig, "discoverChains").mockResolvedValue({
-				chains: [{ name: "rewrite", steps: [step] }], warnings: [],
+				chains: [{ name: "rewrite", steps: [step] }],
+				warnings: [],
 			});
 			vi.spyOn(chainRunner, "runChain").mockImplementation(async (_chain, original, options) => {
 				const signal = options.control!.beginStep();
@@ -122,7 +130,11 @@ describe("xAI main-composer destination ownership", () => {
 			const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined);
 			const submit = mode.editor.onSubmit!;
 			mode.editor.onSubmit = async text => {
-				try { await submit(text); } finally { completed.resolve(); }
+				try {
+					await submit(text);
+				} finally {
+					completed.resolve();
+				}
 			};
 			mode.editor.setText("Original draft");
 			mode.editor.handleInput("\x1bc");
@@ -145,6 +157,7 @@ describe("xAI main-composer destination ownership", () => {
 			expect(mode.editor.getText()).toBe("FIRSTSECOND");
 			if (outcome === "abort" || outcome === "error") {
 				expect(prompt).not.toHaveBeenCalled();
+				mode.editor.clearDraft();
 				mode.editor.handleInput("\x1b[A");
 				expect(mode.editor.getText()).toBe("Original draft");
 			} else {
@@ -159,7 +172,8 @@ describe("xAI main-composer destination ownership", () => {
 		const completed = Promise.withResolvers<void>();
 		cfgChainingActive.set(settings, "");
 		vi.spyOn(chainConfig, "discoverChains").mockResolvedValue({
-			chains: [{ name: "rewrite", steps: [{ name: "rewrite", prompt: "rewrite", enabled: true }] }], warnings: [],
+			chains: [{ name: "rewrite", steps: [{ name: "rewrite", prompt: "rewrite", enabled: true }] }],
+			warnings: [],
 		});
 		vi.spyOn(mode, "showHookSelector").mockImplementation(async () => {
 			opened.resolve();
@@ -168,7 +182,11 @@ describe("xAI main-composer destination ownership", () => {
 		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined);
 		const submit = mode.editor.onSubmit!;
 		mode.editor.onSubmit = async text => {
-			try { await submit(text); } finally { completed.resolve(); }
+			try {
+				await submit(text);
+			} finally {
+				completed.resolve();
+			}
 		};
 		mode.editor.setText("Original draft");
 		mode.editor.handleInput("\x1bc");
@@ -189,7 +207,8 @@ describe("xAI main-composer destination ownership", () => {
 		const finished = Promise.withResolvers<string>();
 		const speechSent = Promise.withResolvers<void>();
 		vi.spyOn(chainConfig, "discoverChains").mockResolvedValue({
-			chains: [{ name: "rewrite", steps: [{ name: "rewrite", prompt: "rewrite", enabled: true }] }], warnings: [],
+			chains: [{ name: "rewrite", steps: [{ name: "rewrite", prompt: "rewrite", enabled: true }] }],
+			warnings: [],
 		});
 		vi.spyOn(chainRunner, "runChain").mockImplementation(async () => {
 			started.resolve();
@@ -218,7 +237,8 @@ describe("xAI main-composer destination ownership", () => {
 		const completed = Promise.withResolvers<void>();
 		session.agent.state.isStreaming = streaming;
 		vi.spyOn(chainConfig, "discoverChains").mockResolvedValue({
-			chains: [{ name: "rewrite", steps: [{ name: "rewrite", prompt: "rewrite", enabled: true }] }], warnings: [],
+			chains: [{ name: "rewrite", steps: [{ name: "rewrite", prompt: "rewrite", enabled: true }] }],
+			warnings: [],
 		});
 		vi.spyOn(chainRunner, "runChain").mockImplementation(async () => {
 			started.resolve();
@@ -232,7 +252,11 @@ describe("xAI main-composer destination ownership", () => {
 		vi.spyOn(mode, "showError").mockImplementation(() => {});
 		const submit = mode.editor.onSubmit!;
 		mode.editor.onSubmit = async text => {
-			try { await submit(text); } finally { completed.resolve(); }
+			try {
+				await submit(text);
+			} finally {
+				completed.resolve();
+			}
 		};
 		mode.editor.setText("Original draft");
 		mode.editor.handleInput("\x1bc");
@@ -247,6 +271,7 @@ describe("xAI main-composer destination ownership", () => {
 		rejected.resolve();
 		await completed.promise;
 		expect(mode.editor.getText()).toBe("NEW SPEECH");
+		mode.editor.clearDraft();
 		mode.editor.handleInput("\x1b[A");
 		if (!streaming) {
 			expect(mode.editor.getText()).toBe("Original draft");
