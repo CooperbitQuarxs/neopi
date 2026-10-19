@@ -140,6 +140,9 @@ export interface LiveSessionControllerOptions {
 	blockDelegateKeyword?: string;
 	delegationKeywords?: () => { suppress: string; force: string };
 	holdMode?: () => boolean;
+	/** Headless callers use canonical transcript text instead of an editable composer. */
+	transcriptKeywords?: () => { submit: string; force: string; silenceMs: number };
+	composerTextExcludingTurns?: (turns: readonly number[]) => string;
 	quietFloorMs?: () => number;
 	/** Test seam: quiet time after operator activity before held context sends; defaults to 10000 ms. */
 	speakableIdleMs?: number;
@@ -238,6 +241,9 @@ export class LiveSessionController {
 	#lastComposerWrite = Number.NEGATIVE_INFINITY;
 	#voiceFloorTimer: NodeJS.Timeout | undefined;
 	#deferredVoiceDelegation: Extract<LiveServerEvent, { type: "delegation.created" }> | undefined;
+	readonly #transcriptKeywords: (() => { submit: string; force: string; silenceMs: number }) | undefined;
+	#transcriptKeywordTimer: NodeJS.Timeout | undefined;
+	readonly #composerTextExcludingTurns: ((turns: readonly number[]) => string) | undefined;
 	#suppressedResponse = false;
 
 	readonly #createTransport: (options: ConstructorParameters<typeof CodexLiveTransport>[0]) => LiveTransportLike;
@@ -308,6 +314,7 @@ export class LiveSessionController {
 				dispatchEnabled: boolean;
 				dispatching: boolean;
 				voiceText: string;
+				composerText?: string;
 		  }
 		| undefined;
 	#pendingDelivery: CustomMessageDelivery | undefined;
@@ -359,6 +366,8 @@ export class LiveSessionController {
 		this.#relayGates = options.relayGates ?? (() => ({ reasoning: true, progress: true, finalAnswers: true }));
 		this.#delegationKeywords = options.delegationKeywords ?? (() => ({ suppress: "", force: "" }));
 		this.#holdMode = options.holdMode ?? (() => false);
+		this.#transcriptKeywords = options.transcriptKeywords;
+		this.#composerTextExcludingTurns = options.composerTextExcludingTurns;
 		this.#quietFloorMs = options.quietFloorMs ?? (() => 0);
 		const speakableIdleMs = options.speakableIdleMs;
 		this.#speakableIdleMs =
@@ -509,6 +518,8 @@ export class LiveSessionController {
 		this.#stopped = true;
 		clearTimeout(this.#voiceFloorTimer);
 		this.#voiceFloorTimer = undefined;
+		clearTimeout(this.#transcriptKeywordTimer);
+		this.#transcriptKeywordTimer = undefined;
 		this.#deferredVoiceDelegation = undefined;
 		clearTimeout(this.#outputSilenceTimer);
 		this.#outputSilenceTimer = undefined;
@@ -628,6 +639,7 @@ export class LiveSessionController {
 	async #handleDelegation(
 		event: Extract<LiveServerEvent, { type: "delegation.created" }>,
 		forced = false,
+		composerText?: string,
 	): Promise<void> {
 		if (this.#seenDelegationIds.has(event.item.id)) return;
 		this.#seenDelegationIds.add(event.item.id);
@@ -702,6 +714,7 @@ export class LiveSessionController {
 			delivery: this.#delegationDelivery(),
 			turns: claimed.map(turn => turn.turn),
 			voiceText,
+			composerText,
 			dispatchEnabled: false,
 			dispatching: false,
 		};
@@ -743,10 +756,7 @@ export class LiveSessionController {
 			.map(turnNumber => this.#userTurns.get(turnNumber))
 			.filter((turn): turn is UserLedgerTurn => turn !== undefined && turn.claim === generation);
 		if (turns.length === 0 || turns.some(turn => !turn.final)) return;
-		const merged = turns
-			.map(turn => turn.text)
-			.join("\n\n")
-			.trim();
+		const merged = pending.composerText ?? turns.map(turn => turn.text).join("\n\n").trim();
 		if (!merged) return;
 		pending.dispatching = true;
 		const { content, details } = buildLiveDelegationMessage(merged, pending.voiceText, this.#includeVoiceNote());
@@ -1074,7 +1084,20 @@ export class LiveSessionController {
 		const message = text.trim();
 		if (!message || this.#stopped) return false;
 		const block = stripLiveKeyword(message, this.#blockDelegateKeyword);
-		if (block.matched || this.#turnsWhere(turn => turn.blocked === true).length > 0) {
+		const blocked = this.#turnsWhere(turn => turn.blocked === true);
+		if (blocked.length) {
+			if (Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
+			const primary = this.#composerTextExcludingTurns?.(blocked.map(turn => turn.turn)) ??
+				this.#turnsWhere(turn => !turn.blocked && turn.claim === undefined).map(turn => turn.text).join("\n\n");
+			this.#holdReleased = true;
+			this.#suppressedResponse = false;
+			this.#deferredVoiceDelegation = undefined;
+			this.refreshTurnGate(false);
+			for (const turn of blocked) this.#deliverBlockedTurn(turn);
+			if (primary.trim()) this.#forcePendingComposer(primary.trim());
+			return true;
+		}
+		if (block.matched) {
 			if (Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
 			this.#holdReleased = true;
 			this.#suppressedResponse = false;
@@ -1094,14 +1117,19 @@ export class LiveSessionController {
 		this.refreshTurnGate();
 		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text: message, final: true };
 		this.#putTurn(turn);
+		this.#forcePendingComposer();
+		return true;
+	}
+
+	#forcePendingComposer(composerText?: string): void {
 		void this.#handleDelegation(
 			{
 				type: "delegation.created",
 				item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
 			},
 			true,
+			composerText,
 		).catch(cause => this.#reportFailure(errorFrom(cause)));
-		return true;
 	}
 
 	/** The voice agent finished answering: the turns it answered are its own and must not ride a
@@ -1222,11 +1250,30 @@ export class LiveSessionController {
 	noteComposerActivity(): void {
 		this.#lastComposerWrite = Date.now();
 		this.#holdReleased = false;
-		if (!this.#turnsWhere(turn => turn.forcedDelegationId !== undefined && turn.claim === undefined).length) {
-			this.#deferredVoiceDelegation = undefined;
-		}
+
 		this.refreshTurnGate(false);
 		this.#markUserActivity();
+		this.#scheduleTranscriptKeyword();
+	}
+
+	#scheduleTranscriptKeyword(): void {
+		clearTimeout(this.#transcriptKeywordTimer);
+		this.#transcriptKeywordTimer = undefined;
+		const keywords = this.#transcriptKeywords?.();
+		if (!keywords || this.#stopped) return;
+		const text = this.#turnsWhere(turn => turn.claim === undefined).map(turn => turn.text).join("\n\n");
+		if (!stripLiveKeyword(text, keywords.force, true).matched &&
+			!stripLiveKeyword(text, keywords.submit, true).matched) return;
+		this.#transcriptKeywordTimer = setTimeout(() => {
+			this.#transcriptKeywordTimer = undefined;
+			const current = this.#transcriptKeywords?.();
+			if (!current || this.#stopped) return;
+			const draft = this.#turnsWhere(turn => turn.claim === undefined).map(turn => turn.text).join("\n\n");
+			if (draft !== text) return;
+			const force = stripLiveKeyword(draft, current.force, true);
+			const submit = force.matched ? force : stripLiveKeyword(draft, current.submit, true);
+			if (submit.matched && submit.text) this.forceDelegateComposer(submit.text);
+		}, Math.max(keywords.silenceMs, this.#quietFloorMs()));
 	}
 
 	#voiceTurnBlocked(): boolean {
@@ -1359,6 +1406,7 @@ export class LiveSessionController {
 	}
 
 	#handleOutputLevel(level: number): void {
+		if (this.#voiceTurnBlocked()) level = 0;
 		const wasActive = this.#outputLevel > OUTPUT_ACTIVE_LEVEL;
 		this.#outputSilenceDeadline = Date.now() + OUTPUT_SILENCE_MS;
 		this.#outputSilenceTimer ??= setTimeout(() => this.#expireOutputLevel(), OUTPUT_SILENCE_MS);
@@ -1393,7 +1441,7 @@ export class LiveSessionController {
 		this.#microphoneFrames += 1;
 		// Until the native audio path has AEC, suppress likely speaker echo
 		// during playback. The speaker level expires when packets stop arriving.
-		const outputActive = this.#outputLevel > OUTPUT_ACTIVE_LEVEL;
+		const outputActive = !this.#voiceTurnBlocked() && this.#outputLevel > OUTPUT_ACTIVE_LEVEL;
 		const echoThreshold = Math.max(MIN_BARGE_IN_LEVEL, this.#outputLevel * OUTPUT_ECHO_RATIO);
 		if (outputActive && this.#inputLevel < echoThreshold) {
 			this.#framesDroppedAtGate += 1;

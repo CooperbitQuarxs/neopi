@@ -726,6 +726,11 @@ struct OutputLevel {
 
 impl OutputLevel {
 	fn observe(&mut self, decoded: &[f32], core: &Weak<LivePeerCore>) {
+		if core.upgrade().is_none_or(|core| core.output_suppressed.load(Ordering::Acquire)) {
+			self.sum_squares = 0.0;
+			self.samples = 0;
+			return;
+		}
 		let mut offset = 0;
 		while offset < decoded.len() {
 			let take = (OUTPUT_LEVEL_SAMPLES - self.samples).min(decoded.len() - offset);
