@@ -22,6 +22,8 @@ Read `state` before a write. Pass `if` revisions on draft and surface commands. 
 
 The `hello`, `get_status`, and `state` snapshots carry `session`: the same RPC session state `get_state` returns, minus the `systemPrompt` and `dumpTools` dump fields, so a snapshot stays one frame. `state` with `target: "view"` reports the subagent the pane is focused on and adds `root` (the root session id and generation); with nothing focused, or with the default `target: "root"`, it reports the root session.
 
+Control snapshots and subscribed `queue_update` events include an exact oldest prefix of each queue: at most 256 entries and 1,048,576 text characters per queue. They stop before the first entry that would exceed either budget; no returned queue-chip text is shortened, so it remains valid for `remove_queued_message` and `promote_queued_message`. `queuedMessageCount` and `liveSteered` remain exact even when not all entries fit. RPC `get_state` keeps the full queue; `dequeue` can retrieve a full queued message.
+
 `get_subagents`, `get_subagent_messages`, `cancel_subagent`, `steer_subagent`, and `set_subagent_subscription` use the process's live subagent registry. Every connection sees the same roster, including subagents that started before it connected. `set_subagent_subscription` is per connection: lifecycle and progress frames (and, at `events`, raw subagent events) go only to connections that asked for them.
 
 Disable publishing with `--no-control-socket` or `control.enabled=false`.

@@ -37,6 +37,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Control snapshots stay bounded without shortening queue text used to remove or promote pending messages ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 - Live mode confirms Iris-only speech delivery before retiring only that utterance, preserving newer composer input, and stopping during a handoff records the delivered speech only once ([#176](https://github.com/PsychedelicShayna/neopi/issues/176)).
 - Live vocal handoffs steer without cancelling by default, offer queue-for-yield or explicit interrupt delivery, restore queued speech on Esc, and speak the preceding task's answer before a follow-up ([#218](https://github.com/PsychedelicShayna/neopi/issues/218)).
 - Accepted vocal requests stay queued when a typed post-compaction prompt fails, instead of being lost during rollback ([#218](https://github.com/PsychedelicShayna/neopi/issues/218)).

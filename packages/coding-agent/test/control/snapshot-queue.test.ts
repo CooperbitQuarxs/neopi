@@ -49,7 +49,10 @@ describe("control snapshot queue", () => {
 	});
 
 	/** A session whose queue reads as `steering` plus one follow-up, behind a published host and a connected client. */
-	async function startWithQueue(steering: string[]): Promise<{ client: ControlClient; hello: ControlSnapshot }> {
+	async function startWithQueue(
+		steering?: string[],
+		followUp: string[] = [],
+	): Promise<{ client: ControlClient; hello: ControlSnapshot }> {
 		const model = createMockModel({ provider: "anthropic", responses: [] });
 		session = new AgentSession({
 			agent: new Agent({
@@ -61,7 +64,9 @@ describe("control snapshot queue", () => {
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
 			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
 		});
-		vi.spyOn(session, "getQueuedMessages").mockReturnValue({ steering, followUp: ["later"], liveSteered: 1 });
+		if (steering)
+			vi.spyOn(session, "getQueuedMessages").mockReturnValue({ steering, followUp: ["later"], liveSteered: 1 });
+		for (const content of followUp) session.agent.followUp({ role: "user", content, timestamp: Date.now() });
 		host = new ControlHost({ session, role: "rpc", dir: tempDir.join(`control-${++hosts}`), tmuxPane: null });
 		await host.start();
 		const publication = host.publication;
@@ -73,15 +78,14 @@ describe("control snapshot queue", () => {
 	function expectBounded(queue: { steering: readonly string[]; followUp: readonly string[]; liveSteered: number }) {
 		expect(queue.liveSteered).toBe(1);
 		expect(queue.steering).toHaveLength(CONTROL_QUEUE_LIMIT.entries);
-		expect(queue.steering[0]).toHaveLength(CONTROL_QUEUE_LIMIT.chars);
-		expect(queue.steering[0]?.startsWith("qqqq")).toBe(true);
-		expect(queue.steering[1]).toBe("steer 0");
+		expect(queue.steering[0]).toBe("steer 0");
+		expect(queue.steering.at(-1)).toBe(`steer ${CONTROL_QUEUE_LIMIT.entries - 1}`);
 		expect(queue.followUp).toEqual(["later"]);
 	}
 
 	const overLimit = () => [
-		"q".repeat(MAX_RPC_REASSEMBLED_BYTES + 1),
 		...Array.from({ length: CONTROL_QUEUE_LIMIT.entries + 10 }, (_, i) => `steer ${i}`),
+		"q".repeat(MAX_RPC_REASSEMBLED_BYTES + 1),
 	];
 
 	test("a queue past the frame limit still lets clients connect, with a bounded copy", async () => {
@@ -93,7 +97,24 @@ describe("control snapshot queue", () => {
 		// RPC get_state builds without a limit and keeps every entry whole.
 		const full = buildRpcSessionState(session!, { includeDump: false });
 		expect(full.queuedMessages.steering).toHaveLength(steering.length);
-		expect(full.queuedMessages.steering[0]).toHaveLength(steering[0]!.length);
+		expect(full.queuedMessages.steering.at(-1)).toHaveLength(steering.at(-1)!.length);
+	});
+
+	test("long queue-chip text remains actionable for promotion and removal", async () => {
+		const text = "keep the exact prompt ".repeat(300);
+		const { client, hello } = await startWithQueue(undefined, [text, `${text} promote`]);
+		const [removeChip, promoteChip] = hello.session!.queuedMessages.followUp;
+		expect(
+			(await client.request({ type: "remove_queued_message", message: removeChip!, queue: "followUp" })).data,
+		).toMatchObject({ removed: true });
+		expect((await client.request({ type: "promote_queued_message", message: promoteChip! })).data).toEqual({
+			promoted: true,
+		});
+	});
+
+	test("a text-budget overflow omits the remaining prefix without rewriting queue commands", async () => {
+		const { hello } = await startWithQueue(["first", "q".repeat(CONTROL_QUEUE_LIMIT.chars), "last"]);
+		expect(hello.session!.queuedMessages.steering).toEqual(["first"]);
 	});
 
 	test("subscribers keep receiving queue updates, bounded the same way", async () => {
