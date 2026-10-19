@@ -222,11 +222,9 @@ describe("AgentSession session-local rule snapshot reload on session reset", () 
 		const conversation = [...session.messages];
 		const readBook = async () => {
 			try {
-				const result = await session.getToolByName("read")!.execute(
-					"toggle-book-read",
-					{ path: "rule://toggle-book" },
-					new AbortController().signal,
-				);
+				const result = await session
+					.getToolByName("read")!
+					.execute("toggle-book-read", { path: "rule://toggle-book" }, new AbortController().signal);
 				return result.content.map(block => (block.type === "text" ? block.text : "")).join("\n");
 			} catch (error) {
 				return String(error);

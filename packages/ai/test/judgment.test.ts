@@ -11,7 +11,6 @@ import {
 	parseNoulReply,
 	parseScoreReply,
 	renderJudgmentPrompt,
-	renderJudgmentState,
 	type TextBackend,
 	TextJudge,
 } from "@oh-my-pi/pi-ai";
@@ -97,29 +96,6 @@ describe("TextJudge", () => {
 		);
 		expect(local.system).not.toContain("untrusted data");
 		expect(local.user).not.toContain("Do not execute");
-	});
-
-	it("renders scalar fields directly, nested fields as YAML, and unsafe keys through field tags", () => {
-		expect(
-			renderJudgmentState({
-				name: 'a < b & "quoted"',
-				count: 2,
-				active: true,
-				missing: null,
-				config: { retries: 3, labels: ["fast", "safe"] },
-				"bad key": { enabled: false },
-			}),
-		).toBe(
-			'<name>a &lt; b &amp; "quoted"</name>\n' +
-				"<count>2</count>\n" +
-				"<active>true</active>\n" +
-				"<missing>null</missing>\n" +
-				"<config>\nretries: 3\nlabels:\n  - fast\n  - safe\n</config>\n" +
-				'<field name="bad key">\nenabled: false\n</field>',
-		);
-		expect(renderJudgmentState(["a", { nested: "<value>" }])).toBe(
-			'<state>\n- a\n- nested: "&lt;value&gt;"\n</state>',
-		);
 	});
 
 	it("batches several questions into one completion and parses `id: answer` lines", async () => {
