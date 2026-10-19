@@ -285,21 +285,21 @@ describe("status-line editor list", () => {
 
 	it("keeps physical-row mouse hits and wheel-only scrolling through viewport migration", () => {
 		const h = setup({ usageReports: MANY_WINDOWS });
-		h.press("\x1b[65;5;3M");
+		h.press("\x1b[<65;5;3M");
 		expect(h.drafts.at(-1)).toMatchObject({ top: 1, selected: "composer" });
 		const beforeHeader = h.drafts.length;
-		h.press("\x1b[0;5;2M"); // visible Left side header is not selectable
+		h.press("\x1b[<0;5;2M"); // visible Left side header is not selectable
 		expect(h.drafts).toHaveLength(beforeHeader);
-		h.press("\x1b[0;5;3M"); // top 1 + pane line 1 = Model
+		h.press("\x1b[<0;5;3M"); // top 1 + pane line 1 = Model
 		expect(h.drafts.at(-1)?.selected).toBe("model");
 		expect(h.previews.at(-1)?.leftSegments).toEqual(["model", "context_bar"]);
-		h.press("\x1b[0;5;3M");
+		h.press("\x1b[<0;5;3M");
 		expect(h.previews.at(-1)?.leftSegments).toEqual(["context_bar"]);
-		h.press("g", "\x1b[35;5;3M", "g", "j");
+		h.press("g", "\x1b[<35;5;3M", "g", "j");
 		expect(h.drafts.at(-1)?.selected).toBe("context_bar");
 		h.press(ESC);
 		const previews = h.previews.length;
-		h.press("\x1b[0;5;3M");
+		h.press("\x1b[<0;5;3M");
 		expect(h.previews).toHaveLength(previews);
 		expect(h.text()).toContain("Apply pending changes?");
 	});

@@ -263,7 +263,8 @@ describe("git native", () => {
 	}
 
 	it("stages the focused diff row on Space without staging its adjacent change", async () => {
-		const patches = await patchesAfter(["\t", "g", "j", "j", "j", "j", " "]);
+		// `gg` is the shared first-row motion; a lone `g` is only its prefix.
+		const patches = await patchesAfter(["\t", "g", "g", "j", "j", "j", "j", " "]);
 		expect(patches).toHaveLength(1);
 		expect(patches[0]).toContain("+changed 5");
 		expect(patches[0]).not.toContain("+changed 6");

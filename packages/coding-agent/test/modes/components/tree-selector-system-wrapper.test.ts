@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import type { SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
@@ -47,7 +48,7 @@ function searchResult(tree: SessionTreeNode[], query: string): string {
 	);
 	selector.handleInput("/");
 	for (const ch of query) selector.handleInput(ch);
-	return Bun.stripANSI(selector.render(120).join("\n"));
+	return Bun.stripANSI(selector.render(120).join("\n").replaceAll(CURSOR_MARKER, ""));
 }
 
 function render(tree: SessionTreeNode[]): string {
@@ -58,7 +59,7 @@ function render(tree: SessionTreeNode[]): string {
 		() => {},
 		() => {},
 	);
-	return Bun.stripANSI(selector.render(120).join("\n"));
+	return Bun.stripANSI(selector.render(120).join("\n").replaceAll(CURSOR_MARKER, ""));
 }
 
 describe("TreeSelectorComponent system-wrapper message rendering", () => {

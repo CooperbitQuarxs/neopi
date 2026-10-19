@@ -284,7 +284,11 @@ describe("single-instance menus", () => {
 			const reopened = shown[1]!;
 			expect(reopened).toBeInstanceOf(StatusLineConfigOverlayComponent);
 			expect(reopened).not.toBe(first);
-			expect(reopened.render(100).join("\n")).toContain('filter "model"');
+			// The restore notice owns the footer; the restored filter shows in its Search pane and the filtered list.
+			const reopenedText = Bun.stripANSI(reopened.render(100).join("\n"));
+			expect(reopenedText).toContain("Restored the unapplied status-line draft");
+			expect(reopenedText).toMatch(/Search\s*│\n.*│ model\s/);
+			expect(reopenedText).not.toContain("Time");
 			expect(statusLine.getEffectiveSettings().leftSegments).toEqual([]);
 			expect(syncComposerShape).toHaveBeenLastCalledWith("box");
 			expect(controller.navigateMenuHistory(1)).toBe(true);

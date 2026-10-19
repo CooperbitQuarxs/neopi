@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { HistorySearchComponent } from "@oh-my-pi/pi-tui/overlays/history-search";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { HistoryEntry, HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
@@ -32,7 +33,8 @@ function fakeStorage(entries: HistoryEntry[]): HistoryStorage {
 function render(component: HistorySearchComponent, width = 80): { raw: string; plain: string } {
 	const lines = component.render(width);
 	const raw = lines.join("\n");
-	return { raw, plain: Bun.stripANSI(raw) };
+	// The query-first field carries the hardware-cursor marker, which stripANSI does not parse.
+	return { raw, plain: Bun.stripANSI(raw.replaceAll(CURSOR_MARKER, "")) };
 }
 
 function type(component: HistorySearchComponent, text: string): void {

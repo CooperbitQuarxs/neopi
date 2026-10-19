@@ -445,7 +445,11 @@ export class ChainConfigOverlayComponent implements Component {
 
 	// ───────────────────────────── screens ───────────────────────────
 
-	#setScreen(screen: Screen, active: Component, footerHint: string): void {
+	/**
+	 * Mount a screen and restore that page's saved list state. An explicit
+	 * `selectedValue` (the row the caller is returning to) wins over the saved selection.
+	 */
+	#setScreen(screen: Screen, active: Component, footerHint: string, selectedValue?: string): void {
 		const context: ChainNavigationContext = {
 			screen, chainIndex: this.#chainIndex, stepIndex: this.#stepIndex,
 			thinking: screen === "thinking" ? this.#thinking : undefined,
@@ -461,7 +465,8 @@ export class ChainConfigOverlayComponent implements Component {
 		this.#previousNavigationSnapshot = undefined;
 		const savedList = this.#listStates.get(this.#pageKey(context, this.#scope));
 		if (savedList && active instanceof SelectList) {
-			active.restoreNavigation(changed ? savedList.navigation : { ...savedList.navigation, selectedValue: active.getSelectedItem()?.value });
+			const selected = !changed ? active.getSelectedItem()?.value : selectedValue ?? savedList.navigation.selectedValue;
+			active.restoreNavigation({ ...savedList.navigation, selectedValue: selected });
 		}
 		this.#screen = screen;
 		this.#active = active;
@@ -560,6 +565,7 @@ export class ChainConfigOverlayComponent implements Component {
 			this.#pendingDeleteChain !== null
 				? "Delete again to confirm removal · any other key cancels"
 				: "j/k move · Enter/Space edit · Del×2 removes · Esc close",
+			selectedValue,
 		);
 	}
 
@@ -707,6 +713,7 @@ export class ChainConfigOverlayComponent implements Component {
 			"chain",
 			list,
 			`Editing "${chain.name}" · Enter / click edit · Alt+↑↓ or [ ] reorder steps · Delete removes a step · Esc back`,
+			selectedField,
 		);
 	}
 
@@ -878,6 +885,7 @@ export class ChainConfigOverlayComponent implements Component {
 			"step",
 			list,
 			`Step ${stepIndex + 1} "${step.name}" · Enter / click edit · Esc back to the chain`,
+			selectedField,
 		);
 	}
 

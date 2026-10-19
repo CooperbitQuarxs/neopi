@@ -641,7 +641,7 @@ describe("AgentsHub navigation history", () => {
 			expect(generationCalls).toBe(1);
 			expect(hub.blocksMenuHistory).toBe(true);
 			generation.resolve(JSON.stringify({
-				identifier: "draft-agent", whenToUse: "Use for draft tasks",
+				identifier: "draft-agent", whenToUse: "Use this agent when drafting tasks",
 				systemPrompt: Array.from({ length: 100 }, (_, index) => `Prompt line ${index}`).join("\n"),
 			}));
 			await new Promise<void>(resolve => setImmediate(resolve));

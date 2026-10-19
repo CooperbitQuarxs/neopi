@@ -468,12 +468,17 @@ describe("ChainConfigOverlayComponent", () => {
 		overlay.render(100);
 		const selectedModel = (): string | undefined =>
 			(overlay.navigationSnapshot().content as { selected?: string }).selected;
-		press("G", "g", "l", "g");
-		expect(selectedModel()).toMatch(/model-29$/);
+		// The browser's sort order is its own; only the bounds matter here.
+		const first = selectedModel();
+		press("G");
+		const last = selectedModel();
+		expect(last).not.toBe(first);
+		press("g", "l", "g");
+		expect(selectedModel()).toBe(last);
 		press("g");
-		expect(selectedModel()).toMatch(/model-00$/);
+		expect(selectedModel()).toBe(first);
 		press("\x05");
-		expect(selectedModel()).toMatch(/model-00$/);
+		expect(selectedModel()).toBe(first);
 		press("/", "hjklgG /");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ query: "hjklgG /", filterFocused: true });
 		press(ESC);

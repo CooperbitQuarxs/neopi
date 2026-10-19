@@ -100,12 +100,13 @@ describe("LoginDialogComponent manual code input", () => {
 		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "j" }));
 		try {
 			const dialog = makeDialog();
-			const pending = dialog.showManualInput("Paste the code:");
-			const rejected = expect(pending).rejects.toThrow("Login cancelled");
+			// Capture the settlement: `expect(pending).rejects` spins Bun's loop while the promise is pending.
+			const outcome = dialog.showManualInput("Paste the code:").catch((error: unknown) => error);
 			dialog.handleInput("j");
 			expect(dialog.signal.aborted).toBe(false);
 			dialog.handleInput("\x1b");
-			await rejected;
+			expect(await outcome).toBeInstanceOf(Error);
+			expect((await outcome as Error).message).toContain("Login cancelled");
 			expect(dialog.signal.aborted).toBe(true);
 		} finally {
 			setKeybindings(previous);
@@ -170,10 +171,9 @@ describe("LoginDialogComponent manual code input", () => {
 			expect(await submitted).toBe("code");
 
 			const second = makeDialog();
-			const cancelled = second.showManualInput("Paste the code:");
-			const rejected = expect(cancelled).rejects.toThrow("Login cancelled");
+			const cancelled = second.showManualInput("Paste the code:").catch((error: unknown) => error);
 			second.handleInput("\x1bq");
-			await rejected;
+			expect(((await cancelled) as Error).message).toContain("Login cancelled");
 			expect(second.signal.aborted).toBe(true);
 		} finally {
 			setKeybindings(previous);
@@ -187,12 +187,11 @@ describe("LoginDialogComponent manual code input", () => {
 			const dialog = makeDialog();
 			const settled = new AbortController();
 			const error = new Error("native callback received");
-			const pending = dialog.showManualInput("Paste the code:", settled.signal);
-			const rejected = expect(pending).rejects.toBe(error);
+			const pending = dialog.showManualInput("Paste the code:", settled.signal).catch((reason: unknown) => reason);
 			dialog.handleInput("j");
 			expect(dialog.signal.aborted).toBe(false);
 			settled.abort(error);
-			await rejected;
+			expect(await pending).toBe(error);
 			expect(dialog.signal.aborted).toBe(false);
 		} finally {
 			setKeybindings(previous);

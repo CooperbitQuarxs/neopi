@@ -1211,7 +1211,8 @@ export class ModelBrowser implements Component {
 		if (typeof state.selected === "string") this.#menu.setSelectedKey(state.selected);
 		this.#viewport.setTop(state.top);
 		this.#keys.reset();
-		this.#layoutWindow();
+		// A browser that was never laid out keeps its viewport lazy until the first render.
+		if (state.top) this.#layoutWindow();
 	}
 
 	getSelected(): ModelBrowserItem | undefined {
