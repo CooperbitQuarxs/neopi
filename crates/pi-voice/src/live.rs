@@ -115,6 +115,7 @@ pub struct LivePeerCore {
 	started:          AtomicBool,
 	closing:          AtomicBool,
 	muted:            AtomicBool,
+	output_suppressed: AtomicBool,
 	failure_reported: AtomicBool,
 	queued_samples:   AtomicUsize,
 }
@@ -130,6 +131,7 @@ impl LivePeerCore {
 			started: AtomicBool::new(false),
 			closing: AtomicBool::new(false),
 			muted: AtomicBool::new(false),
+			output_suppressed: AtomicBool::new(false),
 			failure_reported: AtomicBool::new(false),
 			queued_samples: AtomicUsize::new(0),
 		}
@@ -148,6 +150,7 @@ impl LivePeerCore {
 		}
 
 		let playback = PlaybackStream::start(OUTPUT_SAMPLE_RATE)?;
+		playback.set_gain(if self.output_suppressed.load(Ordering::Acquire) { 0.0 } else { 1.0 })?;
 		let playback_tx = playback.writer()?;
 		let mut media_engine = MediaEngine::default();
 		let capability = opus_capability();
@@ -316,6 +319,15 @@ impl LivePeerCore {
 			input_tx
 				.send(InputCommand::Muted(muted))
 				.map_err(|_| "Native live audio input is closed".to_owned())?;
+		}
+		Ok(())
+	}
+
+	/// Silence already queued audio at render time and discard new remote audio.
+	pub fn set_output_suppressed(&self, suppressed: bool) -> VoiceResult<()> {
+		self.output_suppressed.store(suppressed, Ordering::Release);
+		if let Some(resources) = self.resources.lock().as_ref() {
+			resources.playback.set_gain(if suppressed { 0.0 } else { 1.0 })?;
 		}
 		Ok(())
 	}
@@ -690,6 +702,9 @@ async fn receive_output_audio(
 }
 
 fn write_output(playback_tx: &PlaybackWriter, samples: &[f32], core: &Weak<LivePeerCore>) -> bool {
+	if core.upgrade().is_none_or(|core| core.output_suppressed.load(Ordering::Acquire)) {
+		return true;
+	}
 	match playback_tx.write(samples) {
 		Ok(()) => true,
 		Err(error) => {

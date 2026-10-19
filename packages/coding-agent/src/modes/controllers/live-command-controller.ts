@@ -26,6 +26,10 @@ import {
 	cfgLiveBlockDelegateKeyword,
 	cfgLiveDelegationDelivery,
 	cfgLiveForceDelegateKeyword,
+	cfgLiveForceUtteranceKeyword,
+	cfgLiveSuppressDelegateKeyword,
+	cfgLiveHoldMode,
+	cfgLiveQuietFloorMs,
 	cfgLiveSubmitKeyword,
 	cfgLiveSubmitSilenceMs,
 	cfgLiveVoice,
@@ -248,7 +252,10 @@ export class LiveCommandController {
 			!stripLiveKeyword(text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).matched
 		)
 			return;
-		const delay = cfgLiveSubmitSilenceMs.get(this.#ctx.settings);
+		const delay = Math.max(
+			cfgLiveSubmitSilenceMs.get(this.#ctx.settings),
+			cfgLiveQuietFloorMs.get(this.#ctx.settings),
+		);
 		this.#keywordTimer = setTimeout(() => {
 			this.#keywordTimer = undefined;
 			const session = this.#session;
@@ -260,6 +267,10 @@ export class LiveCommandController {
 			}
 			const submit = stripLiveKeyword(text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true);
 			if (!submit.matched || !submit.text) return;
+			if (cfgLiveHoldMode.get(this.#ctx.settings)) {
+				session.forceDelegateComposer(submit.text);
+				return;
+			}
 			this.#editing = true;
 			try {
 				this.#ctx.editor.setCollapsedText(submit.text);
@@ -294,6 +305,12 @@ export class LiveCommandController {
 			},
 			includeVoiceNote: () => settingsSource.get().includeVoiceNote,
 			delegationDelivery: () => cfgLiveDelegationDelivery.get(this.#ctx.settings),
+			delegationKeywords: () => ({
+				suppress: cfgLiveSuppressDelegateKeyword.get(this.#ctx.settings),
+				force: cfgLiveForceUtteranceKeyword.get(this.#ctx.settings),
+			}),
+			holdMode: () => cfgLiveHoldMode.get(this.#ctx.settings),
+			quietFloorMs: () => cfgLiveQuietFloorMs.get(this.#ctx.settings),
 			relayGates: () => {
 				const settings = settingsSource.get();
 				return {
@@ -372,8 +389,19 @@ export class LiveCommandController {
 		this.#session = session;
 		const detachSettings = settingsSource.attach();
 		this.#call = { session, ingest, detachSettings };
-		for (const setting of [cfgLiveForceDelegateKeyword, cfgLiveSubmitKeyword, cfgLiveSubmitSilenceMs]) {
-			this.#keywordSettingsUnsubscribe.push(setting.listen(this.#ctx.settings, () => this.#scheduleKeyword()));
+		for (const setting of [
+			cfgLiveForceDelegateKeyword,
+			cfgLiveSubmitKeyword,
+			cfgLiveSubmitSilenceMs,
+			cfgLiveHoldMode,
+			cfgLiveQuietFloorMs,
+		]) {
+			this.#keywordSettingsUnsubscribe.push(
+				setting.listen(this.#ctx.settings, () => {
+					session.refreshTurnGate();
+					this.#scheduleKeyword();
+				}),
+			);
 		}
 		this.#scheduleKeyword();
 		this.#ctx.ui.requestRender();

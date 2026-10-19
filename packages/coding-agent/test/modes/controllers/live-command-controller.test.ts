@@ -14,6 +14,10 @@ import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import {
 	cfgLiveForceDelegateKeyword,
+	cfgLiveForceUtteranceKeyword,
+	cfgLiveSuppressDelegateKeyword,
+	cfgLiveHoldMode,
+	cfgLiveQuietFloorMs,
 	cfgLiveSubmitKeyword,
 	cfgLiveSubmitSilenceMs,
 } from "@oh-my-pi/pi-coding-agent/live/settings";
@@ -28,6 +32,7 @@ interface Harness {
 	/** Callbacks the controller handed to the live session. */
 	callbacks(): LiveSessionCallbacks;
 	voice(): string | undefined;
+	delegationKeywords(): { suppress: string; force: string } | undefined;
 	/** Components mounted into or focused away from the composer slot. */
 	layoutChanges: unknown[];
 	/** Latest status-line live state, `null` when hidden. */
@@ -117,6 +122,7 @@ function createHarness(): Harness {
 			return options.callbacks;
 		},
 		voice: () => options?.voice,
+		delegationKeywords: () => options?.delegationKeywords?.(),
 		layoutChanges,
 		liveStatus: () => liveStatus,
 		sentToVoice,
@@ -133,6 +139,49 @@ afterEach(() => {
 });
 
 describe("LiveCommandController", () => {
+	it("forwards configurable per-utterance keywords without restarting the call", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		try {
+			expect(h.delegationKeywords()).toEqual({ suppress: "Iris", force: "relay" });
+			cfgLiveSuppressDelegateKeyword.set(h.ctx.settings, "Nova");
+			cfgLiveForceUtteranceKeyword.set(h.ctx.settings, "pass along");
+			expect(h.delegationKeywords()).toEqual({ suppress: "Nova", force: "pass along" });
+			cfgLiveSuppressDelegateKeyword.set(h.ctx.settings, "");
+			cfgLiveForceUtteranceKeyword.set(h.ctx.settings, "");
+			expect(h.delegationKeywords()).toEqual({ suppress: "", force: "" });
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("force-delegates a hold-mode submit after both silence and the quiet floor regardless of destination", async () => {
+		const h = createHarness();
+		const forced = vi.spyOn(LiveSessionController.prototype, "forceDelegateComposer").mockReturnValue(true);
+		cfgLiveHoldMode.set(h.ctx.settings, true);
+		cfgLiveSubmitKeyword.set(h.ctx.settings, "thanks");
+		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 10);
+		cfgLiveQuietFloorMs.set(h.ctx.settings, 60);
+		await h.controller.handleCommand();
+		try {
+			h.controller.cycleDestination();
+			speak(h, 1, "fix the cache. THANKS!", false);
+			await Bun.sleep(25);
+			expect(forced).not.toHaveBeenCalled();
+			await Bun.sleep(55);
+			expect(forced).toHaveBeenCalledTimes(1);
+			expect(forced).toHaveBeenCalledWith("fix the cache.");
+			expect(h.sentToVoice).toEqual([]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("validates quiet floor durations independently of keyword silence", () => {
+		const h = createHarness();
+		expect(() => cfgLiveQuietFloorMs.set(h.ctx.settings, -1)).toThrow("must not be negative");
+		expect(cfgLiveQuietFloorMs.get(h.ctx.settings)).toBe(0);
+	});
 	it("forwards the selected voice across the live-session boundary", async () => {
 		const h = createHarness();
 		try {
