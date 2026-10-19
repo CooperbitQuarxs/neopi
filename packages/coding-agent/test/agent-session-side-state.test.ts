@@ -290,13 +290,13 @@ describe("one-shot side request state", () => {
 		await session.runEphemeralTurn({ promptText: "Predict.", minimizeEffort: true });
 		await main([...history, { role: "user", content: "Third", timestamp: 3 }], "medium");
 
-		// Updates and user turns, in wire order; assistant output is irrelevant here.
+		// Updates and input turns, in wire order; assistant output is irrelevant here.
 		const shape = (body: ResponsesRequest | undefined) =>
 			(body?.input ?? []).flatMap(item => {
 				if (item.type === "configuration_update") return [`update:${item.reasoning?.effort}`];
-				if (item.role !== "user") return [];
-				const [part] = userContent.assert(item.content);
-				return [`user:${part?.text}`];
+				if (item.role !== "user" && item.role !== "developer") return [];
+				const text = typeof item.content === "string" ? item.content : userContent.assert(item.content)[0]?.text;
+				return [`${item.role}:${text}`];
 			});
 		const [, mainFollowUp, side, minimized, mainNext] = bodies;
 		const prefix = shape(mainFollowUp);
@@ -307,8 +307,12 @@ describe("one-shot side request state", () => {
 			expect(shape(body).slice(0, prefix.length)).toEqual(prefix);
 		}
 		// Each side request appends its no-tools reminder, then the prompt.
-		expect(shape(side).slice(prefix.length)).toEqual([expect.any(String), "user:Side question"]);
-		expect(shape(minimized).slice(prefix.length)).toEqual([expect.any(String), "update:low", "user:Predict."]);
+		expect(shape(side).slice(prefix.length)).toEqual([expect.stringMatching(/^developer:\S/), "user:Side question"]);
+		expect(shape(minimized).slice(prefix.length)).toEqual([
+			expect.stringMatching(/^developer:\S/),
+			"update:low",
+			"user:Predict.",
+		]);
 		// The minimized side request's update never reaches the main conversation.
 		expect(shape(mainNext).slice(prefix.length)).toEqual(["user:Third"]);
 	});

@@ -9,6 +9,7 @@
  * resolved against their canonical committed batch before they are returned.
  */
 import * as path from "node:path";
+import { mapWithConcurrencyLimit } from "../../task/parallel";
 import { localParts, localStamp, spanWithin, type TimeBound, type TimeSpan } from "./calendar";
 import { type CanonicalAtomResult, type ChronicleAtom, readCanonicalAtom } from "./corpus";
 import type { NodeRanker, RankCandidate } from "./rank";
@@ -49,6 +50,8 @@ export interface RecallOptions {
 	neighborhoodMinutes: number;
 	ranker: NodeRanker;
 	signal?: AbortSignal;
+	/** Report lightweight search progress to the owning async job. */
+	onProgress?: (text: string) => void | Promise<void>;
 }
 
 export type TraceAction =
@@ -191,7 +194,10 @@ function lower(value: string | undefined): string | undefined {
 }
 
 export async function recallChronicle(options: RecallOptions): Promise<RecallResult> {
+	options.signal?.throwIfAborted();
+	await options.onProgress?.("Loading the Chronicle index");
 	const manifest = await readViewManifest(options.root);
+	options.signal?.throwIfAborted();
 	const trace: TraceStep[] = [];
 	const cache = new Map<string, ViewNode | null>();
 	let viewStale = false;
@@ -223,7 +229,9 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 	): Promise<ViewNode | null> => {
 		let node = cache.get(key);
 		if (node === undefined) {
+			options.signal?.throwIfAborted();
 			const stored = await readViewNode(options.root, key);
+			options.signal?.throwIfAborted();
 			node = stored.state === "ok" ? stored.node : null;
 			cache.set(key, node);
 			if (stored.state !== "ok" && key !== "") {
@@ -298,37 +306,54 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 			return { ...candidate, label, text };
 		});
 		const scores: number[] = Array.from({ length: candidates.length }, () => 0);
+		const pages: number[][] = [];
 		let page: number[] = [];
 		let tokens = base;
-		const flush = async (): Promise<void> => {
+		const flush = (): void => {
 			if (page.length === 0) return;
-			const request = page.map(index => bounded[index]!);
-			const payload = rankPayloadTokens(query, request);
-			if (payload > hopTokens) {
-				throw new Error(`chronicle rank request of ${payload} tokens exceeds the ${hopTokens}-token hop ceiling`);
-			}
-			const outcome = await options.ranker.score(
-				query,
-				page.map(index => bounded[index]!),
-				options.signal,
-			);
-			if (outcome.fallback) {
-				rankerFallback = true;
-				trace.push({ search, hop, node: key, action: "ranker-fallback", note: outcome.fallback });
-			}
-			page.forEach((index, position) => {
-				scores[index] = outcome.scores[position] ?? 0;
-			});
+			pages.push(page);
 			page = [];
 			tokens = base;
 		};
 		for (let index = 0; index < bounded.length; index++) {
 			const cost = rankCandidateTokens(bounded[index]!);
-			if (page.length > 0 && tokens + cost > hopTokens) await flush();
+			if (page.length > 0 && tokens + cost > hopTokens) flush();
 			page.push(index);
 			tokens += cost;
 		}
-		await flush();
+		flush();
+
+		await options.onProgress?.(`Ranking ${candidates.length} ${search} candidates at ${key || "root"}`);
+		const ranked = await mapWithConcurrencyLimit(
+			pages,
+			2,
+			async (indexes, _pageIndex, signal) => {
+				signal.throwIfAborted();
+				const request = indexes.map(index => bounded[index]!);
+				const payload = rankPayloadTokens(query, request);
+				if (payload > hopTokens) {
+					throw new Error(
+						`chronicle rank request of ${payload} tokens exceeds the ${hopTokens}-token hop ceiling`,
+					);
+				}
+				const outcome = await options.ranker.score(query, request, signal);
+				return { indexes, outcome };
+			},
+			options.signal,
+		);
+		options.signal?.throwIfAborted();
+		for (const result of ranked.results) {
+			if (!result) continue;
+			const { indexes, outcome } = result;
+			if (outcome.fallback) {
+				rankerFallback = true;
+				trace.push({ search, hop, node: key, action: "ranker-fallback", note: outcome.fallback });
+			}
+			indexes.forEach((index, position) => {
+				scores[index] = outcome.scores[position] ?? 0;
+			});
+		}
+		await options.onProgress?.(`Ranked ${candidates.length} ${search} candidates at ${key || "root"}`);
 		return scores;
 	};
 
@@ -361,6 +386,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 			// Enough confident atoms, and no retained branch scores close enough to hide an equal one.
 			if (confident.length >= budget && frontier[0]!.score < confident[budget - 1]! - TIE_MARGIN) break;
 			const item = frontier.shift()!;
+			await options.onProgress?.(`Exploring ${search} at ${item.key || "root"} (hop ${hops + 1})`);
 			if (lastExpanded !== null && item.parent !== lastExpanded) {
 				trace.push({
 					search,
@@ -484,6 +510,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 
 	/** In-scope atoms within [startMs, endMs], found by walking only overlapping nodes. */
 	const collectWindow = async (startMs: number, endMs: number, search: "query" | "hint"): Promise<ScoredAtom[]> => {
+		options.signal?.throwIfAborted();
 		const out: ScoredAtom[] = [];
 		const walk = async (node: ViewNode): Promise<void> => {
 			if (node.atoms) {
@@ -494,6 +521,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 				}
 				return;
 			}
+			options.signal?.throwIfAborted();
 			for (const child of node.children) {
 				if (Date.parse(child.end) < startMs || Date.parse(child.start) > endMs || !inScopeRef(child)) continue;
 				const loaded = await load(child.key, child, search);
@@ -516,10 +544,13 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 	): Promise<ChronicleAtom | null> => {
 		let resolved: CanonicalAtomResult;
 		try {
+			options.signal?.throwIfAborted();
 			resolved = await readCanonicalAtom(entry);
+			options.signal?.throwIfAborted();
 		} catch (error) {
 			resolved = { ok: false, reason: error instanceof Error ? error.message : String(error) };
 		}
+		options.signal?.throwIfAborted();
 		if (!resolved.ok) {
 			viewStale = true;
 			trace.push({
@@ -633,13 +664,17 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 
 	const results: RecallAtom[] = [];
 	for (const { atom, via } of selected) {
+		options.signal?.throwIfAborted();
 		const entry = atom.entry;
 		let resolved: CanonicalAtomResult;
 		try {
+			options.signal?.throwIfAborted();
 			resolved = await readCanonicalAtom(entry);
+			options.signal?.throwIfAborted();
 		} catch (error) {
 			resolved = { ok: false, reason: error instanceof Error ? error.message : String(error) };
 		}
+		options.signal?.throwIfAborted();
 		if (!resolved.ok) {
 			viewStale = true;
 			evidenceErrors.push({ id: entry.id, reason: resolved.reason });

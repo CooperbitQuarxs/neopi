@@ -171,10 +171,11 @@ function entryMessageText(entry: Record<string, unknown> | undefined): string {
 }
 
 describe("RPC prompt entry ids (#117)", () => {
-	test("advertises prompt_entry_ids", async () => {
+	test("advertises prompt_entry_ids and session_history_identity", async () => {
 		const child = await spawnChild();
 		const ready = child.frames.find(frame => frame.type === "ready");
 		expect(ready?.capabilities).toContain("prompt_entry_ids");
+		expect(ready?.capabilities).toContain("session_history_identity");
 	}, 60_000);
 
 	test("a prompt's userEntryId is the user entry it wrote, and paged messages carry their entry ids", async () => {

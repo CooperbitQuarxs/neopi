@@ -1,0 +1,212 @@
+// Read-only host session discovery (#355).
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
+import { isRecord } from "@oh-my-pi/pi-utils";
+import { getSessionsDir } from "@oh-my-pi/pi-utils/dirs";
+import { readControlEntries, type ControlRegistryOptions } from "../control/registry";
+import { readSessionExit, SESSION_EXIT_CUSTOM_TYPE, type SessionExitData } from "../session/exit-diagnostics";
+import { getMessageEntryId } from "../session/message-entry-ids";
+import { filterSessionsForPicker, listAllSessions, listSessionsReadOnly } from "../session/session-listing";
+import { loadSessionBranchReadOnly } from "../session/session-loader";
+import { sessionDirForCwd, worktreeSessionDirs } from "../session/session-paths";
+import { loadPinnedSessionIds } from "../session/session-pins";
+import { FileSessionStorage } from "../session/session-storage";
+
+export interface SessionCatalogOptions {
+	cwd?: string;
+	sessionDirs?: string[];
+	all?: boolean;
+	/** Explicit roots keep SDK consumers and tests independent of process globals. */
+	sessionsRoot?: string;
+	agentDir?: string;
+	controlRegistry?: ControlRegistryOptions;
+}
+
+export interface SessionCatalogMessage {
+	/** Missing only for legacy journals without persisted native IDs. */
+	entryId?: string;
+	role: "user" | "assistant";
+	text: string;
+	timestamp: string;
+}
+
+export interface SessionCatalogNativeMessage extends SessionCatalogMessage {
+	entryId: string;
+}
+
+export interface SessionCatalogExit {
+	entryId: string;
+	kind: SessionExitData["kind"];
+	reason: string;
+	pendingToolCallCount: number;
+	lastAssistantStopReason: string | null;
+}
+
+export interface SessionCatalogReadResult {
+	version: 1;
+	session: { path: string; id: string; cwd: string; title: string | null };
+	messages: SessionCatalogMessage[];
+	truncated: boolean;
+	/** Identity-dependent fields are absent for legacy journals. */
+	branchEntryIds?: string[];
+	leafId?: string | null;
+	userEntryIds?: string[];
+	sessionExits?: SessionCatalogExit[];
+	sessionExitEntryIds?: string[];
+	branchMessages?: SessionCatalogNativeMessage[];
+	branchMessagesTruncated?: boolean;
+}
+
+async function canonicalPath(file: string): Promise<string> {
+	return fs.realpath(file).catch(() => path.resolve(file));
+}
+
+export async function listSessionCatalog(options: SessionCatalogOptions = {}) {
+	if (options.all && options.sessionDirs?.length) throw new Error("--all and --session-dir are mutually exclusive");
+	const cwd = path.resolve(options.cwd ?? process.cwd());
+	const root = options.sessionsRoot ?? getSessionsDir();
+	const storage = new FileSessionStorage();
+	const pinned = await loadPinnedSessionIds(options.agentDir);
+	let sessions;
+	if (options.all) {
+		sessions = await listAllSessions(storage, root);
+	} else {
+		const primary = sessionDirForCwd(cwd, root);
+		const dirs = options.sessionDirs?.length
+			? options.sessionDirs.map(dir => path.resolve(dir))
+			: [primary, ...(await worktreeSessionDirs(cwd, primary))];
+		sessions = (await Promise.all(dirs.map(dir => listSessionsReadOnly(dir, storage)))).flat();
+	}
+	const controls = new Map<string, { instanceId: string; role: "tui" | "rpc" | "acp" | "print"; pid: number }>();
+	for (const { meta } of await readControlEntries(options.controlRegistry)) {
+		if (!meta.sessionFile) continue;
+		controls.set(await canonicalPath(meta.sessionFile), {
+			instanceId: meta.instanceId,
+			role: meta.role,
+			pid: meta.pid,
+		});
+	}
+	const seen = new Set<string>();
+	const rows = [];
+	for (const session of filterSessionsForPicker(sessions, pinned).sort(
+		(a, b) => b.modified.getTime() - a.modified.getTime(),
+	)) {
+		const file = await canonicalPath(session.path);
+		if (seen.has(file)) continue;
+		seen.add(file);
+		const modified = Number.isFinite(session.modified.getTime()) ? session.modified.toISOString() : null;
+		const created = Number.isFinite(session.created.getTime()) ? session.created.toISOString() : modified;
+		rows.push({
+			path: path.resolve(session.path),
+			id: session.id,
+			cwd: session.cwd,
+			title: session.title ?? null,
+			parentSessionPath: session.parentSessionPath ?? null,
+			created,
+			modified,
+			messageCount: session.messageCount,
+			status: session.status ?? null,
+			firstMessage: session.firstMessage === "(no messages)" ? "" : session.firstMessage.trim().slice(0, 300),
+			inUse: session.inUse ?? null,
+			control: controls.get(file) ?? null,
+		});
+	}
+	return { version: 1 as const, sessions: rows };
+}
+
+export async function readSessionCatalog(file: string, maxMessages?: number): Promise<SessionCatalogReadResult> {
+	if (maxMessages !== undefined && (!Number.isSafeInteger(maxMessages) || maxMessages < 0)) {
+		throw new Error("--max-messages must be a nonnegative integer");
+	}
+	const resolved = path.resolve(file);
+	const storage = new FileSessionStorage();
+	const info = (await listSessionsReadOnly(path.dirname(resolved), storage)).find(
+		session => path.resolve(session.path) === resolved,
+	);
+	if (!info) throw new Error(`Not a readable session file: ${resolved}`);
+	const branch = await loadSessionBranchReadOnly(resolved);
+	if (branch.entries === null) {
+		const messages: SessionCatalogMessage[] = [];
+		for (const message of branch.messages) {
+			if (message.role !== "user" && message.role !== "assistant") continue;
+			const text = textContent(message.content, "\n\n");
+			if (!text.trim()) continue;
+			messages.push({ role: message.role, text, timestamp: new Date(message.timestamp).toISOString() });
+		}
+		const truncated = maxMessages !== undefined && messages.length > maxMessages;
+		return {
+			version: 1 as const,
+			session: { path: resolved, id: info.id, cwd: info.cwd, title: info.title ?? null },
+			messages: truncated ? messages.slice(messages.length - maxMessages!) : messages,
+			truncated,
+		};
+	}
+	const branchMessages: SessionCatalogNativeMessage[] = [];
+	const userEntryIds: string[] = [];
+	const sessionExits: SessionCatalogExit[] = [];
+	const sessionExitEntryIds: string[] = [];
+	let lastAssistantStopReason: string | null = null;
+	for (const entry of branch.entries) {
+		if (entry.type === "custom" && entry.customType === SESSION_EXIT_CUSTOM_TYPE) {
+			sessionExitEntryIds.push(entry.id);
+		}
+		if (entry.type === "custom" && isRecord(entry.data)) {
+			const exit = readSessionExit(entry);
+			// Native shutdown omits the pending-call list when it is empty.
+			// A present but malformed list cannot certify a clean exit.
+			if (exit && (entry.data.pendingToolCalls === undefined || exit.pendingToolCalls !== undefined)) {
+				sessionExits.push({
+					entryId: entry.id,
+					kind: exit.kind,
+					reason: exit.reason,
+					pendingToolCallCount: exit.pendingToolCalls?.length ?? 0,
+					lastAssistantStopReason,
+				});
+			}
+		}
+		if (entry.type !== "message") continue;
+		const { message } = entry;
+		if (message.role === "user") {
+			userEntryIds.push(entry.id);
+			lastAssistantStopReason = null;
+		} else if (message.role === "assistant") {
+			lastAssistantStopReason = typeof message.stopReason === "string" ? message.stopReason : null;
+		}
+		if (message.role !== "user" && message.role !== "assistant") continue;
+		const text = textContent(message.content, "\n\n");
+		if (!text.trim()) continue;
+		branchMessages.push({
+			entryId: entry.id,
+			role: message.role,
+			text,
+			timestamp: new Date(message.timestamp).toISOString(),
+		});
+	}
+	const messages: SessionCatalogNativeMessage[] = [];
+	for (const message of branch.messages) {
+		if (message.role !== "user" && message.role !== "assistant") continue;
+		const text = textContent(message.content, "\n\n");
+		if (!text.trim()) continue;
+		const entryId = getMessageEntryId(message);
+		if (entryId === undefined) throw new Error("Session transcript message has no native entry identity");
+		messages.push({ entryId, role: message.role, text, timestamp: new Date(message.timestamp).toISOString() });
+	}
+	const truncated = maxMessages !== undefined && messages.length > maxMessages;
+	const branchMessagesTruncated = maxMessages !== undefined && branchMessages.length > maxMessages;
+	return {
+		version: 1 as const,
+		session: { path: resolved, id: info.id, cwd: info.cwd, title: info.title ?? null },
+		branchEntryIds: branch.entries.map(entry => entry.id),
+		leafId: branch.leafId,
+		userEntryIds,
+		sessionExits,
+		sessionExitEntryIds,
+		messages: truncated ? messages.slice(messages.length - maxMessages!) : messages,
+		truncated,
+		branchMessages: branchMessagesTruncated
+			? branchMessages.slice(branchMessages.length - maxMessages!)
+			: branchMessages,
+		branchMessagesTruncated,
+	};
+}

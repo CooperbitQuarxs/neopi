@@ -233,9 +233,8 @@ export class AdvisorTranscriptRecorder {
 			default:
 				return;
 		}
-		const sessionFile = this.resolveSessionFile();
-		if (!sessionFile?.endsWith(JSONL_SUFFIX)) return;
-		const file = path.join(sessionFile.slice(0, -JSONL_SUFFIX.length), this.#filename);
+		const file = this.targetFile();
+		if (!file) return;
 		// A new target file starts a fresh replay window: positions from the prior
 		// session's turns must never suppress the new file's first delta.
 		if (file !== this.#windowFile) {
@@ -295,6 +294,13 @@ export class AdvisorTranscriptRecorder {
 	 */
 	commitTurn(): void {
 		this.#clearReplayWindow();
+	}
+
+	/** File the next record lands in: `<session dir>/<filename>`, undefined while the session is unpersisted. */
+	targetFile(): string | undefined {
+		const sessionFile = this.resolveSessionFile();
+		if (!sessionFile?.endsWith(JSONL_SUFFIX)) return undefined;
+		return path.join(sessionFile.slice(0, -JSONL_SUFFIX.length), this.#filename);
 	}
 
 	/** Discard replay identity for a failed batch that will not be retried. */

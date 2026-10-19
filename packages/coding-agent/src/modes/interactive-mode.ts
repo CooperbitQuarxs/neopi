@@ -405,6 +405,7 @@ import {
 	cfgStatusLineTransparent,
 	cfgSymbolPreset,
 	cfgTerminalProgramStatus,
+	cfgTerminalImageProtocol,
 	cfgTerminalShowImages,
 	cfgTuiHyperlinks,
 	cfgTuiImeSafeCursor,
@@ -477,6 +478,7 @@ const cfgLiveUiSettings = combine({
 	"compaction.methodOrder": cfgCompactionMethodOrder,
 	"display.hideToolActivity": cfgDisplayHideToolActivity,
 	"terminal.showImages": cfgTerminalShowImages,
+	"terminal.imageProtocol": cfgTerminalImageProtocol,
 	"terminal.programStatus": cfgTerminalProgramStatus,
 	hideThinkingBlock: cfgHideThinkingBlock,
 	proseOnlyThinking: cfgProseOnlyThinking,
@@ -3744,6 +3746,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (hideToolActivity) this.ui.clearInlineImages();
 			// Visibility changes must rebuild retired terminal history.
 			resetDisplay = true;
+		}
+		if (any("terminal.imageProtocol")) {
+			this.ui.refreshImageProtocol();
+			this.#sidePanelController.invalidate();
 		}
 		if (any("terminal.showImages")) {
 			const visible = cfgTerminalShowImages.get(this.settings);

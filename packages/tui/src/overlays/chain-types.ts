@@ -8,6 +8,8 @@
 /** One step of a chain: a single model pass over the previous step's text. */
 export interface ChainStep {
 	name: string;
+	/** `false` skips the step at run time while keeping its prompt, model, and position; omitted is enabled. */
+	enabled?: boolean;
 	/** Model selector or `@role`, with an optional `:level` thinking suffix; omitted uses `@prose`. */
 	model?: string;
 	/** Built-in tool names the step may call; omitted or empty grants none. */

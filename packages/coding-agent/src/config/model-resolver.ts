@@ -1655,7 +1655,13 @@ export function resolveModelOverride(
 	modelPatterns: string[],
 	modelRegistry: ModelLookupRegistry,
 	settings?: Settings,
-): { model?: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel; explicitThinkingLevel: boolean; warning?: string } {
+): {
+	model?: Model<Api>;
+	thinkingLevel?: ConfiguredThinkingLevel;
+	explicitThinkingLevel: boolean;
+	warning?: string;
+	matchedPattern?: string;
+} {
 	if (modelPatterns.length === 0) return { explicitThinkingLevel: false };
 	const availableModels = modelRegistry.getAvailable();
 	const matchPreferences = getModelMatchPreferences(settings);
@@ -1671,7 +1677,7 @@ export function resolveModelOverride(
 			matchPreferences,
 		});
 		if (model) {
-			return { model, thinkingLevel, explicitThinkingLevel, warning: patternWarning };
+			return { model, thinkingLevel, explicitThinkingLevel, warning: patternWarning, matchedPattern: pattern };
 		}
 		if (!warning && patternWarning) warning = patternWarning;
 	}
@@ -1777,6 +1783,7 @@ export async function resolveModelOverrideWithAuthFallback(
 	explicitThinkingLevel: boolean;
 	authFallbackUsed: boolean;
 	warning?: string;
+	matchedPattern?: string;
 }> {
 	const disabledProviders = disabledProviderIds(settings);
 	let lookupRegistry: ModelLookupRegistry = modelRegistry;
