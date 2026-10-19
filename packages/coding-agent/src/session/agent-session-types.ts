@@ -463,6 +463,8 @@ export interface PromptOptions {
 	userInitiated?: boolean;
 	/** Explicit billing/initiator attribution. */
 	attribution?: MessageAttribution;
+	/** Original operator command for queue editing and cancelled-prompt restore; never sent to the model. */
+	rawText?: string;
 	/** Skip pre-send compaction checks for this prompt. */
 	skipCompactionCheck?: boolean;
 	/**

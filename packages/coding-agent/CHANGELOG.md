@@ -8,6 +8,7 @@
 
 ### Added
 
+- Added `/notice <text>` to send a literal, operator-authored system notice as a developer message, including editable pending notices that return to the composer when interrupted ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
 - Added `/monitor` and `npi monitor attach`: a separate tmux session with one live pane per subagent and advisor that shows unsaved output as it streams; you can message subagents from their panes, and advisor panes are view only ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
 - The side panel shows one of three views chosen by chord: `Alt+T` `t` Todo, `Alt+T` `a` Agents (click a subagent to view its transcript, click again to return), `Alt+T` `i` IRC; repeating the shown view's chord hides the panel, right-click in the panel cycles views, and the docked view replaces its duplicate todo or pinned-subagents list above the editor ([#342](https://github.com/PsychedelicShayna/neopi/issues/342)).
 - Added `/statusline` to arrange builtin and provider-usage widgets and choose a composer with live previews, plus a flexible `context_bar` widget for every composer ([#227](https://github.com/PsychedelicShayna/neopi/issues/227), [#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
@@ -36,6 +37,9 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Model selector assignments save globally unless project scope is explicitly selected, including when project role storage is enabled ([#244](https://github.com/PsychedelicShayna/neopi/issues/244)).
+- Source installs retire managed legacy persona, loadout, and REPL extension links without deleting operator-owned extensions, preventing old hooks from running alongside built-ins ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
+- CI's session/log descriptor-leak check now works with Bun versions that open files close-on-exec by default ([#286](https://github.com/PsychedelicShayna/neopi/issues/286)).
 - Saved images in Agent Hub transcripts of advisors and aborted agents, and in `/monitor` panes, now render as images instead of a wrong-size `[Image: … 800x600]` placeholder ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
 - Subagents load the user, workspace and repository `AGENTS.md` files that apply at their own working directory, including isolated worktree children, nested children, revived agents and vibe workers, and their advisors see the same set ([#334](https://github.com/PsychedelicShayna/neopi/issues/334)).
 - A failed `/statusline` save restores the prior settings, so cancelling cannot later persist the discarded layout.

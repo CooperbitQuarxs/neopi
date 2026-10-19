@@ -19,6 +19,7 @@ import {
 	extractPrintableText,
 	Input,
 	matchesKey,
+	replaceTabs,
 	routeSgrMouseInput,
 	type SelectItem,
 	SelectList,
@@ -120,13 +121,13 @@ const PREVIEW_WIDTH = 60;
 
 function previewLineOrNone(text: string | undefined): string {
 	if (!text?.trim()) return "(none)";
-	const first = text.trim().split("\n", 1)[0] ?? "";
+	const first = replaceTabs(text.trim().split("\n", 1)[0] ?? "");
 	return first.length > PREVIEW_WIDTH ? `${first.slice(0, PREVIEW_WIDTH - 1)}…` : first;
 }
 
 function wrap(text: string, width: number): string[] {
 	if (!text) return [""];
-	return Bun.wrapAnsi(text, Math.max(1, width), { trim: false }).split("\n");
+	return Bun.wrapAnsi(replaceTabs(text), Math.max(1, width), { trim: false }).split("\n");
 }
 
 type Screen = "list" | "detail" | "sources" | "name" | "content" | "path" | "literal" | "mode";
@@ -159,6 +160,7 @@ export class PersonaConfigOverlayComponent implements Component {
 	#cb: PersonaConfigCallbacks;
 	#doc: PersonaConfigDoc;
 	#dirty = false;
+	#saving = false;
 	/** First Esc on a dirty list arms close; the second discards. */
 	#closeArmed = false;
 	/** Entry row awaiting a second Delete/Backspace before it is removed. */
@@ -182,7 +184,6 @@ export class PersonaConfigOverlayComponent implements Component {
 	#navigationContext: PersonaNavigationContext = { screen: "list" };
 	#creation: PersonaNavigationContext["creation"];
 	#restoringNavigation = false;
-	#saving = 0;
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	#bodyRowsLast = 3;
@@ -266,6 +267,7 @@ export class PersonaConfigOverlayComponent implements Component {
 	// ───────────────────────────── input ─────────────────────────────
 
 	handleInput(data: string): void {
+		if (this.#saving) return;
 		if (data.startsWith("\x1b[<")) {
 			this.#keys.reset();
 			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
@@ -360,6 +362,7 @@ export class PersonaConfigOverlayComponent implements Component {
 	}
 
 	pasteText(text: string): void {
+		if (this.#saving) return;
 		if (this.#active instanceof HookEditorComponent) this.#active.pasteText(text);
 	}
 
@@ -429,7 +432,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			return (this.#deps.protocolLinesText ?? "")
 				.split("\n")
 				.slice(0, 12)
-				.map(line => truncateToWidth(theme.fg("muted", line), bodyWidth));
+				.map(line => truncateToWidth(theme.fg("muted", replaceTabs(line)), bodyWidth));
 		}
 		if (entry) return this.#entryPreview(entry, bodyWidth);
 		const help =
@@ -457,7 +460,7 @@ export class PersonaConfigOverlayComponent implements Component {
 		if (this.#deps.variant === "live" || entry.sourceKind === "inline") {
 			lines.push(...(entry.content.trim() ? wrap(entry.content, bodyWidth) : [theme.fg("muted", "(empty)")]));
 		}
-		return lines.map(line => truncateToWidth(line, bodyWidth));
+		return lines.map(line => truncateToWidth(replaceTabs(line), bodyWidth));
 	}
 
 	// ───────────────────────────── helpers ───────────────────────────
@@ -524,7 +527,7 @@ export class PersonaConfigOverlayComponent implements Component {
 	#entrySummary(entry: PersonaConfigEntry): string {
 		if (entry.builtin) return "built-in default";
 		if (this.#deps.variant === "live") return `${entry.content.length} chars`;
-		return `${entry.mode} · ${entry.sourceKind === "file" ? entry.path || "(no path)" : "inline"}`;
+		return `${entry.mode} · ${entry.sourceKind === "file" ? replaceTabs(entry.path) || "(no path)" : "inline"}`;
 	}
 
 	#sourcesSummary(entry: PersonaConfigEntry): string {
@@ -565,16 +568,21 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#flash(`Not saved — ${problem}`);
 			return;
 		}
-		this.#saving++;
+		this.#saving = true;
+		this.#flash("Saving — editing is paused until the write completes", "success");
 		void this.#cb.save(this.#doc).then(
 			message => {
+				this.#saving = false;
 				for (const entry of this.#doc.entries) if (!entry.builtin) entry.originalName = entry.name;
 				this.#dirty = false;
 				reshow();
 				this.#flash(message, "success");
 			},
-			err => this.#flash(`Not saved — ${err instanceof Error ? err.message : String(err)}`),
-		).finally(() => { this.#saving--; });
+			err => {
+				this.#saving = false;
+				this.#flash(`Not saved — ${err instanceof Error ? err.message : String(err)}`);
+			},
+		);
 	}
 
 	// ───────────────────────────── list ──────────────────────────────
@@ -703,12 +711,12 @@ export class PersonaConfigOverlayComponent implements Component {
 			}
 			this.#doc.entries.push({
 				name,
-				mode: "replace",
-				sourceKind: "inline",
+				mode: sourceEntry?.mode ?? "replace",
+				sourceKind: sourceEntry?.sourceKind ?? "inline",
 				content,
-				path: "",
-				literal: "",
-				inheritToTasks: false,
+				path: sourceEntry?.path ?? "",
+				literal: sourceEntry?.literal ?? "",
+				inheritToTasks: sourceEntry?.inheritToTasks ?? false,
 				sources: sourceEntry ? structuredClone(sourceEntry.sources) : fresh?.fields,
 				sourcesRaw: structuredClone(sourceEntry ? sourceEntry.sourcesRaw : fresh?.raw),
 			});
@@ -750,12 +758,12 @@ export class PersonaConfigOverlayComponent implements Component {
 					{ value: "source", label: "Source", description: entry.sourceKind },
 				);
 				if (entry.sourceKind === "file") {
-					items.push({ value: "path", label: "File path", description: entry.path || "(none)" });
+					items.push({ value: "path", label: "File path", description: replaceTabs(entry.path) || "(none)" });
 				} else {
 					items.push({ value: "content", label: "Content", description: previewLineOrNone(entry.content) });
 				}
 				if (entry.mode === "literal-substitute") {
-					items.push({ value: "literal", label: "Literal", description: entry.literal || "(none)" });
+					items.push({ value: "literal", label: "Literal", description: replaceTabs(entry.literal) || "(none)" });
 				}
 				items.push({
 					value: "inherit",
@@ -1031,7 +1039,7 @@ export class PersonaConfigOverlayComponent implements Component {
 	}
 
 	get blocksMenuHistory(): boolean {
-		return this.#saving > 0 || (isMenuHistoryParticipant(this.#active) && this.#active.blocksMenuHistory === true);
+		return this.#saving || (isMenuHistoryParticipant(this.#active) && this.#active.blocksMenuHistory === true);
 	}
 
 	navigationSnapshot(): PersonaNavigationSnapshot {

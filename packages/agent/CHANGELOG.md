@@ -5,6 +5,11 @@
 ### Added
 
 - Added per-message steering interruption modes so queued guidance can wait for running tools or interrupt immediately without changing the session preference.
+
+### Fixed
+
+- Provider-native V2 compaction keeps user-authored custom prompts and operator notices when they serialize as developer messages, without retaining automatic harness notes as user prompts ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
+
 ## [18.10.3] - 2026-10-12
 
 ### Breaking Changes

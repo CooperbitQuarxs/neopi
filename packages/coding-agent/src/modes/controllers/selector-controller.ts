@@ -1595,7 +1595,7 @@ export class SelectorController {
 				) => {
 					const releaseDefaultMutation = role === "default" ? await this.#acquireDefaultRoleMutation() : undefined;
 					const configuredStorage = cfgModelRoleStorage.get(this.ctx.settings);
-					const targetScope = configuredStorage === "project" ? (scope ?? "project") : "global";
+					const targetScope = configuredStorage === "project" ? (scope ?? "global") : "global";
 					const selectorValue = selector ?? `${model.provider}/${model.id}`;
 					const scopeLabel =
 						configuredStorage === "project" ? `${targetScope === "project" ? "Project" : "Global"} ` : "";
