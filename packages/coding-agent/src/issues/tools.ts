@@ -215,6 +215,7 @@ export function createIssueTargetTool(options: {
 			const candidate = options.inventory.repositories.find(entry => githubRepoSlugEquals(entry.repo, params.repo));
 			if (!candidate) throw new Error(`${params.repo} is not in the inventory.`);
 			if (candidate.issuesEnabled === false) throw new Error(`${candidate.repo} has issues disabled.`);
+			if (candidate.archived) throw new Error(`${candidate.repo} is archived; its issues are read-only.`);
 			const checkout = selectIssueCheckout(candidate, options.inventory.foreground?.repoRoot);
 			if (!checkout) {
 				throw new Error(

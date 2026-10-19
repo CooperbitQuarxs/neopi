@@ -141,6 +141,16 @@ describe("issue_target", () => {
 		expect(verify).not.toHaveBeenCalled();
 	});
 
+	it("rejects archived repositories before selecting or starting authoring", async () => {
+		const { verify, run } = spyDependencies();
+		const onSelect = vi.fn();
+		const tool = createIssueTargetTool({ inventory: inventory({ ...repository(), archived: true }), onSelect });
+		await expect(invoke(tool, { repo: REPO, reason: "explicitly requested project" })).rejects.toThrow("archived");
+		expect(onSelect).not.toHaveBeenCalled();
+		expect(verify).not.toHaveBeenCalled();
+		expect(run).not.toHaveBeenCalled();
+	});
+
 	it("rejects a target without a local checkout instead of cloning it", async () => {
 		const { verify, run } = spyDependencies();
 		const onSelect = vi.fn();
