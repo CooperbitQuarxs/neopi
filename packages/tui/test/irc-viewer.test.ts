@@ -265,6 +265,22 @@ describe("IrcViewerComponent", () => {
 			expect(sent).toEqual([["0-Earlier", "answer", earlier.message.id]]);
 		});
 
+		it("scrolls the newest expanded message when End and Up arrive before repaint", () => {
+			const last = entry("0-Last", "Captain", Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n"));
+			const { view, sent } = withReply([entry("0-First", "Captain", "first"), last]);
+			view.screen();
+			view.viewer.handleInput("\r");
+			view.screen();
+			view.viewer.handleInput("\x1b[H");
+			view.screen();
+			view.viewer.handleInput("\x1b[F");
+			view.viewer.handleInput("\x1b[A");
+			view.viewer.handleInput("r");
+			view.type("answer");
+			view.viewer.handleInput("\r");
+			expect(sent).toEqual([["0-Last", "answer", last.message.id]]);
+		});
+
 		it("answers the recipient when the selected message is her own", () => {
 			const { view } = withReply([entry("Captain", "0-Beta", "status?")]);
 			view.viewer.handleInput("r");
