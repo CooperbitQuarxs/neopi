@@ -8,6 +8,8 @@ import { LiveSessionController, type LiveSessionControllerOptions } from "../../
 import {
 	cfgLiveDelegationDelivery,
 	cfgLiveForceUtteranceKeyword,
+	cfgLiveHoldMode,
+	cfgLiveQuietFloorMs,
 	cfgLiveSuppressDelegateKeyword,
 	cfgLiveVoice,
 } from "../../live/settings";
@@ -83,6 +85,8 @@ export class RpcLiveBridge {
 				suppress: cfgLiveSuppressDelegateKeyword.get(this.#session.settings),
 				force: cfgLiveForceUtteranceKeyword.get(this.#session.settings),
 			}),
+			holdMode: () => cfgLiveHoldMode.get(this.#session.settings),
+			quietFloorMs: () => cfgLiveQuietFloorMs.get(this.#session.settings),
 			callbacks: {
 				onPhase: phase => this.#output({ type: "live_phase", phase }),
 				onLevels: (input, output) => {

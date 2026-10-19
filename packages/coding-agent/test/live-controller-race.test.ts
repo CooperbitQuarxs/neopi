@@ -97,6 +97,7 @@ interface Harness {
 	sentSpeech: string[];
 	sentTurns: Array<readonly number[] | undefined>;
 	audioSent: Float32Array[];
+	outputSuppressed: boolean[];
 	fireOutputLevel(level: number): void;
 	fireMicrophone(samples: Float32Array): void;
 	fireLive(event: LiveServerEvent): void;
@@ -111,6 +112,8 @@ function makeHarness(options?: {
 	artifactPath?: string | undefined;
 	speakableIdleMs?: number;
 	thinkingFlushMs?: number;
+	holdMode?: () => boolean;
+	quietFloorMs?: () => number;
 	holdDelivery?: boolean;
 	dropAudio?: boolean;
 	playbackQueue?: { queuedMs: number; droppedMs: number };
@@ -127,6 +130,7 @@ function makeHarness(options?: {
 	const prompts: string[] = [];
 	const speech: Harness["speech"] = [];
 	const audioSent: Float32Array[] = [];
+	const outputSuppressed: boolean[] = [];
 	let microphoneCallback: ((error: Error | null, samples: Float32Array) => void) | undefined;
 	const sentSpeech: string[] = [];
 	const sentTurns: Harness["sentTurns"] = [];
@@ -262,6 +266,8 @@ function makeHarness(options?: {
 		blockDelegateKeyword: options?.blockDelegateKeyword,
 		delegationDelivery: options?.delegationDelivery,
 		delegationKeywords: options?.delegationKeywords,
+		holdMode: options?.holdMode,
+		quietFloorMs: options?.quietFloorMs,
 		ircRelayTransform: options?.ircRelayTransform,
 		ircRelayAllowed: options?.ircRelayAllowed,
 		relayGates: options?.relayGates,
@@ -276,6 +282,9 @@ function makeHarness(options?: {
 				},
 				async close() {},
 				async setMuted() {},
+				setOutputSuppressed(suppressed: boolean) {
+					outputSuppressed.push(suppressed);
+				},
 				pushAudio(samples: Float32Array) {
 					if (options?.dropAudio) return false;
 					audioSent.push(samples);
@@ -303,6 +312,7 @@ function makeHarness(options?: {
 		sentSpeech,
 		sentTurns,
 		audioSent,
+		outputSuppressed,
 		fireOutputLevel: level => liveCallbacks?.onOutputLevel(level),
 		fireMicrophone: samples => microphoneCallback?.(null, samples),
 		fireLive: event => liveCallbacks?.onEvent(event),
@@ -417,6 +427,135 @@ describe("per-utterance delegation keywords", () => {
 	});
 });
 
+describe("operator-owned live floor", () => {
+	it("keeps forced utterances behind hold mode until the explicit composer submit", async () => {
+		const h = makeHarness({
+			holdMode: () => true,
+			quietFloorMs: () => 20,
+			delegationKeywords: () => ({ suppress: "Iris", force: "relay" }),
+		});
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "relay the cache fix thanks" } });
+			h.fireLive(delegation("provider-after-keyword", ""));
+			await wait(35);
+			expect(h.prompts).toEqual([]);
+			expect(h.outputSuppressed.at(-1)).toBe(true);
+			expect(h.controller.forceDelegateComposer("relay the cache fix")).toBe(true);
+			await settle();
+			expect(h.prompts).toEqual(["relay the cache fix"]);
+			expect(h.aborts).toEqual([]);
+			expect(h.sentSpeech).toEqual(["relay the cache fix"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("preserves mandatory force delivery when a provider call replaces its quiet-floor event", async () => {
+		const h = makeHarness({
+			quietFloorMs: () => 40,
+			delegationKeywords: () => ({ suppress: "Iris", force: "relay" }),
+		});
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "please relay the exact cache request" } });
+			h.fireLive(delegation("provider-after-force", "model paraphrase"));
+			await settle();
+			expect(h.prompts).toEqual([]);
+			expect(h.outputSuppressed.at(-1)).toBe(true);
+			await wait(60);
+			await settle();
+			expect(h.prompts).toEqual(["please relay the exact cache request"]);
+			h.fireLive(delegation("late-provider", "another paraphrase"));
+			await settle();
+			expect(h.prompts).toHaveLength(1);
+			expect(h.session.agent.peekFollowUpQueue()).toEqual([]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("keeps a blocked utterance voice-only when a held submit releases it", async () => {
+		const h = makeHarness({ holdMode: () => true, quietFloorMs: () => 20, blockDelegateKeyword: "iris only" });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "tell me a joke iris only" } });
+			h.fireLive(delegation("blocked-handoff", ""));
+			expect(h.sent).toEqual([]);
+			await wait(35);
+			expect(h.prompts).toEqual([]);
+			expect(h.sentSpeech).toEqual([]);
+			expect(h.controller.forceDelegateComposer("tell me a joke")).toBe(true);
+			await settle();
+			expect(h.prompts).toEqual([]);
+			expect(h.sentSpeech).toEqual(["tell me a joke"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("holds speech indefinitely and ignores voice replies and handoffs until an explicit forced submit", async () => {
+		const h = makeHarness({ holdMode: () => true });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+			h.fireLive({ type: "output_transcript.added", item: { text: "I will answer instead" } });
+			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "I will answer instead" } });
+			h.fireLive(delegation("unwanted", ""));
+			await settle();
+			expect(h.prompts).toEqual([]);
+			expect(h.sentSpeech).toEqual([]);
+			expect(h.controller.pendingUserTurnCount()).toBe(1);
+			expect(h.outputSuppressed.at(-1)).toBe(true);
+			expect(h.controller.forceDelegateComposer("typed context: fix the cache")).toBe(true);
+			await settle();
+			expect(h.prompts).toEqual(["typed context: fix the cache"]);
+			expect(h.aborts).toEqual([]);
+			expect(h.sentSpeech).toEqual(["typed context: fix the cache"]);
+			expect(h.outputSuppressed.at(-1)).toBe(false);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("resets the quiet floor on composer edits before releasing a deferred canonical handoff", async () => {
+		const h = makeHarness({ quietFloorMs: () => 60 });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+			h.fireLive(delegation("too-early", ""));
+			await wait(35);
+			expect(h.prompts).toEqual([]);
+			h.controller.noteComposerActivity();
+			h.fireLive(delegation("after-edit", ""));
+			await wait(35);
+			expect(h.prompts).toEqual([]);
+			expect(h.outputSuppressed.at(-1)).toBe(true);
+			await wait(45);
+			await settle();
+			expect(h.prompts).toEqual(["fix the cache"]);
+			expect(h.outputSuppressed.at(-1)).toBe(false);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("never retires a quiet-floor-suppressed reply and reoffers the canonical text after quiet", async () => {
+		const h = makeHarness({ quietFloorMs: () => 40 });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "tell me a joke" } });
+			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "Too early!" } });
+			expect(h.sentSpeech).toEqual([]);
+			await wait(60);
+			await settle();
+			expect(h.sent.some(message => "content" in message && message.content.some(item => item.text.includes("tell me a joke")))).toBe(true);
+			expect(h.sentSpeech).toEqual([]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+});
 function finalAppends(sent: LiveClientMessage[]): Array<{ delegation_item_id: string; text: string }> {
 	const appends: Array<{ delegation_item_id: string; text: string }> = [];
 	for (const message of sent) {

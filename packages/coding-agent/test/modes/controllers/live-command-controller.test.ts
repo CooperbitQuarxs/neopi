@@ -16,6 +16,8 @@ import {
 	cfgLiveForceDelegateKeyword,
 	cfgLiveForceUtteranceKeyword,
 	cfgLiveSuppressDelegateKeyword,
+	cfgLiveHoldMode,
+	cfgLiveQuietFloorMs,
 	cfgLiveSubmitKeyword,
 	cfgLiveSubmitSilenceMs,
 } from "@oh-my-pi/pi-coding-agent/live/settings";
@@ -153,6 +155,33 @@ describe("LiveCommandController", () => {
 		}
 	});
 
+	it("force-delegates a hold-mode submit after both silence and the quiet floor regardless of destination", async () => {
+		const h = createHarness();
+		const forced = vi.spyOn(LiveSessionController.prototype, "forceDelegateComposer").mockReturnValue(true);
+		cfgLiveHoldMode.set(h.ctx.settings, true);
+		cfgLiveSubmitKeyword.set(h.ctx.settings, "thanks");
+		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 10);
+		cfgLiveQuietFloorMs.set(h.ctx.settings, 60);
+		await h.controller.handleCommand();
+		try {
+			h.controller.cycleDestination();
+			speak(h, 1, "fix the cache. THANKS!", false);
+			await Bun.sleep(25);
+			expect(forced).not.toHaveBeenCalled();
+			await Bun.sleep(55);
+			expect(forced).toHaveBeenCalledTimes(1);
+			expect(forced).toHaveBeenCalledWith("fix the cache.");
+			expect(h.sentToVoice).toEqual([]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("validates quiet floor durations independently of keyword silence", () => {
+		const h = createHarness();
+		expect(() => cfgLiveQuietFloorMs.set(h.ctx.settings, -1)).toThrow("must not be negative");
+		expect(cfgLiveQuietFloorMs.get(h.ctx.settings)).toBe(0);
+	});
 	it("forwards the selected voice across the live-session boundary", async () => {
 		const h = createHarness();
 		try {
