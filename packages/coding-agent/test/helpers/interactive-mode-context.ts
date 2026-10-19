@@ -220,11 +220,18 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 	const ctx = {
 		ui,
 		chatContainer,
+		hookCustomComponents: new Set<Component>(),
+		openMenu: () => ({
+			mount: (_component, show) => {
+				show();
+			},
+			close: () => true,
+		}),
 		statusContainer: new Container(),
 		editorContainer: new Container(),
 		pendingMessagesContainer: new Container(),
 		todoContainer: new Container(),
-		editor: { getText: () => "", setText: vi.fn(), onEscape: undefined },
+		editor: { getText: () => "", setText: vi.fn(), onEscape: undefined, isAutocompleteActive: () => false },
 		statusLine: {
 			invalidate: vi.fn(),
 			markActivityStart: vi.fn(),

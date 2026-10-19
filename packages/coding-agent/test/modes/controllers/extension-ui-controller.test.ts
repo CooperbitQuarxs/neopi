@@ -50,6 +50,7 @@ function makeHarness() {
 	let uiContext: ExtensionUIContext | undefined;
 	const ctx = {
 		editor,
+		hookCustomComponents: new Set<Component>(),
 		ui: {
 			requestRender,
 			getFocused,
@@ -85,6 +86,7 @@ function makeHarness() {
 		fakeHandle,
 		runAppAction,
 		controller,
+		hookCustomComponents: ctx.hookCustomComponents,
 		inputController: (readText: () => Promise<string>) =>
 			new InputController(ctx, { readImage: async () => null, readText }),
 		handleInput(data: string): void {
@@ -624,6 +626,25 @@ describe("ExtensionUiController custom overlay", () => {
 		expect(harness.showOverlay).toHaveBeenCalledWith(expect.any(Container), overlayOptions);
 		expect(onHandle).toHaveBeenCalledTimes(1);
 		expect(onHandle).toHaveBeenCalledWith(harness.fakeHandle);
+	});
+
+	it("tracks a custom view only while its result is outstanding", async () => {
+		const harness = makeHarness();
+		const ui = await harness.init();
+		const component = new Container();
+		let close = () => {};
+		const pending = ui.custom<void>(
+			(_tui, _theme, _keys, done) => {
+				close = done;
+				return component;
+			},
+			{ overlay: true },
+		);
+		await flushMicrotasks();
+		expect(harness.hookCustomComponents.has(component)).toBe(true);
+		close();
+		await pending;
+		expect(harness.hookCustomComponents.has(component)).toBe(false);
 	});
 
 	it("resolves overlayOptions factories before showing the overlay", async () => {

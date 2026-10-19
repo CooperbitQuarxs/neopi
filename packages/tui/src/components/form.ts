@@ -1,5 +1,5 @@
 import { getKeybindings } from "../keybindings";
-import { matchesKey } from "../keys";
+import { extractPrintableText, matchesKey } from "../keys";
 import type { MouseRoutable, SgrMouseEvent } from "../mouse";
 import { col, node, span } from "../native/describe";
 import { plainText } from "../native/spans";
@@ -8,6 +8,7 @@ import { type SelectPickerOptions, SelectListSheet } from "../native/picker";
 import { Container, type Component, type Focusable } from "../tui";
 import { replaceTabs, truncateToWidth } from "../utils";
 import { Input } from "./input";
+import { isMenuHistoryParticipant, MenuKeyReader } from "./menu-navigation";
 import { type SelectItem, SelectList, type SelectListTheme } from "./select-list";
 import { Spacer } from "./spacer";
 import { Text } from "./text";
@@ -203,12 +204,28 @@ export class FormField implements Component, Focusable, MouseRoutable {
 		return this.#focused;
 	}
 
+	get filterFocused(): boolean {
+		return this.control instanceof Input || (this.control instanceof SelectList && this.control.filterFocused);
+	}
+
+	get blocksMenuHistory(): boolean {
+		return isMenuHistoryParticipant(this.control) && this.control.blocksMenuHistory === true;
+	}
+
 	get hasError(): boolean {
 		return this.#error.value !== "";
 	}
 
 	get debugChildren(): readonly Component[] {
 		return [this.control];
+	}
+
+	navigationSnapshot(): unknown {
+		return isMenuHistoryParticipant(this.control) ? this.control.navigationSnapshot() : undefined;
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (isMenuHistoryParticipant(this.control)) this.control.restoreNavigation(snapshot);
 	}
 
 	set focused(value: boolean) {
@@ -234,6 +251,21 @@ export class FormField implements Component, Focusable, MouseRoutable {
 	}
 
 	handleInput(data: string): void {
+		if (this.control instanceof Input) {
+			const printable = extractPrintableText(data);
+			if (printable !== undefined) {
+				this.control.insertText(printable);
+				return;
+			}
+			if (matchesKey(data, "escape")) {
+				this.control.onEscape?.();
+				return;
+			}
+			if (matchesKey(data, "enter") || data === "\n") {
+				this.control.onSubmit?.(this.control.getValue());
+				return;
+			}
+		}
 		this.control.handleInput(data);
 	}
 
@@ -348,6 +380,22 @@ export class TextFormField extends FormField {
 		this.setError(undefined);
 	}
 
+	override navigationSnapshot(): unknown {
+		return this.input.mask ? undefined : { value: this.input.getValue(), cursor: this.input.getCursor() };
+	}
+
+	override get blocksMenuHistory(): boolean {
+		return this.input.mask;
+	}
+
+	override restoreNavigation(snapshot: unknown): void {
+		if (this.input.mask || !snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { value?: string; cursor?: number };
+		if (typeof state.value !== "string") return;
+		this.setValue(state.value);
+		if (typeof state.cursor === "number") this.input.setCursor(state.cursor);
+	}
+
 	/** Validate and submit the current value according to the configured empty policy. */
 	submit(): void {
 		const value = this.input.getValue();
@@ -400,6 +448,8 @@ export interface SelectFormFieldOptions extends Omit<FormFieldOptions, "preview"
 	onSelectionChange?: (value: string) => void | Promise<void>;
 	onSubmit(value: string): void | Promise<void>;
 	onCancel(): void;
+	/** Settle external previews on history departure without submitting or closing the field. */
+	onLeaveMenu?: () => void;
 	/** Schedule a frame after an asynchronous preview update settles. */
 	requestRender?: () => void;
 	/** The picker sheet a long choice (> {@link PICKER_MIN_ITEMS} items) describes as; defaults to the label. */
@@ -415,6 +465,7 @@ export class SelectFormField extends FormField {
 	readonly #previewText: StyledText | undefined;
 	readonly #getPreview: (() => string) | undefined;
 	readonly #requestRender: (() => void) | undefined;
+	readonly #onLeaveMenu: (() => void) | undefined;
 	readonly #sheet: SelectListSheet;
 	/** Number of choices (before filtering). */
 	readonly itemCount: number;
@@ -439,6 +490,7 @@ export class SelectFormField extends FormField {
 		this.#previewText = previewText;
 		this.#getPreview = options.getPreview;
 		this.#requestRender = options.requestRender;
+		this.#onLeaveMenu = options.onLeaveMenu;
 		this.itemCount = options.items.length;
 		this.#sheet = new SelectListSheet(
 			selectList,
@@ -503,6 +555,20 @@ export class SelectFormField extends FormField {
 		return this.itemCount > PICKER_MIN_ITEMS && cx.supports("picker") ? this.#sheet.describe() : super.describe(cx);
 	}
 
+	override navigationSnapshot(): unknown {
+		return this.selectList.navigationSnapshot();
+	}
+
+	override restoreNavigation(snapshot: unknown): void {
+		this.selectList.restoreNavigation(snapshot);
+		this.#updatePreview();
+	}
+
+	leaveMenu(): void {
+		this.#previewRequestId++;
+		this.#onLeaveMenu?.();
+	}
+
 	/** Picker pointer events drive the list as its keys do (preview, pick, cancel). */
 	handleNativeEvent(event: NativeUiEvent): void {
 		this.#sheet.handle(event);
@@ -553,6 +619,7 @@ export class Form implements Component, Focusable, MouseRoutable {
 	#memoFieldLines: (readonly string[])[] = [];
 	#memoLines: readonly string[] = [];
 	readonly #native: NativeNode;
+	readonly #keys = new MenuKeyReader();
 
 	constructor(options: FormOptions) {
 		this.#options = options;
@@ -570,8 +637,33 @@ export class Form implements Component, Focusable, MouseRoutable {
 		return this.#focused;
 	}
 
+	get filterFocused(): boolean {
+		return this.#fields[this.#activeIndex]?.filterFocused === true;
+	}
+
+	get blocksMenuHistory(): boolean {
+		return this.#fields[this.#activeIndex]?.blocksMenuHistory === true;
+	}
+
 	get debugChildren(): readonly Component[] {
 		return this.#fields;
+	}
+
+	navigationSnapshot(): unknown {
+		return { activeIndex: this.#activeIndex, fields: this.#fields.map(field => field.navigationSnapshot()) };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { activeIndex?: number; fields?: unknown[] };
+		if (typeof state.activeIndex === "number" && Number.isInteger(state.activeIndex)) {
+			this.#activeIndex = Math.max(0, Math.min(this.#fields.length - 1, state.activeIndex));
+		}
+		if (Array.isArray(state.fields)) {
+			this.#fields.forEach((field, index) => field.restoreNavigation(state.fields?.[index]));
+		}
+		this.#keys.reset();
+		this.#syncFocus();
 	}
 
 	set focused(value: boolean) {
@@ -584,14 +676,32 @@ export class Form implements Component, Focusable, MouseRoutable {
 	}
 
 	handleInput(data: string): void {
-		const isCancel = this.#options.isCancel?.(data) ?? getKeybindings().matches(data, "tui.select.cancel");
+		const field = this.#fields[this.#activeIndex];
+		if (field?.filterFocused && extractPrintableText(data) !== undefined) {
+			field.handleInput(data);
+			return;
+		}
+		const isCancel =
+			(field?.filterFocused && matchesKey(data, "escape")) ||
+			(this.#options.isCancel?.(data) ?? getKeybindings().matches(data, "tui.select.cancel"));
+		if (isCancel && field instanceof SelectFormField && field.filterFocused) {
+			field.handleInput(data);
+			return;
+		}
 		if (isCancel) {
 			this.#options.onCancel();
 			return;
 		}
-		if (this.#fields.length > 1 && (matchesKey(data, "tab") || matchesKey(data, "shift+tab"))) {
-			const delta = matchesKey(data, "shift+tab") ? -1 : 1;
-			this.#activeIndex = (this.#activeIndex + delta + this.#fields.length) % this.#fields.length;
+		// Context aliases are recognized without routing printable text through
+		// the menu reader: form controls keep every literal editing key.
+		if (
+			this.#fields.length > 1 &&
+			(getKeybindings().matches(data, "tui.select.nextContext") ||
+				getKeybindings().matches(data, "tui.select.prevContext"))
+		) {
+			const action = this.#keys.read(data);
+			if (!action || action === "pending" || action.kind !== "context") return;
+			this.#activeIndex = (this.#activeIndex + action.delta + this.#fields.length) % this.#fields.length;
 			this.#syncFocus();
 			return;
 		}

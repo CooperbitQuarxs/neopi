@@ -37,7 +37,7 @@ describe("OAuthSelectorComponent", () => {
 
 		component.handleInput("j");
 		component.handleInput("k");
-		component.handleInput("i");
+		component.handleInput("/");
 		for (const char of target.id) {
 			component.handleInput(char);
 		}
@@ -63,7 +63,7 @@ describe("OAuthSelectorComponent", () => {
 			() => {},
 			() => cancelled++,
 		);
-		component.handleInput("i");
+		component.handleInput("/");
 		component.handleInput("h");
 		component.handleInput("j");
 		component.handleInput("\x1b");
@@ -90,6 +90,7 @@ describe("OAuthSelectorComponent", () => {
 			() => {},
 		);
 
+		component.handleInput("/");
 		for (const char of "opencode-go") {
 			component.handleInput(char);
 		}
@@ -119,6 +120,7 @@ describe("OAuthSelectorComponent", () => {
 			() => {},
 		);
 
+		component.handleInput("/");
 		for (const char of "opencode-go") {
 			component.handleInput(char);
 		}
@@ -158,6 +160,7 @@ describe("OAuthSelectorComponent", () => {
 				() => {},
 				{ disabledProviders: cfgDisabledProviders.get(settings) },
 			);
+			component.handleInput("/");
 			for (const char of victim.id) {
 				component.handleInput(char);
 			}
@@ -184,6 +187,7 @@ describe("OAuthSelectorComponent", () => {
 				() => {},
 				{ disabledProviders: cfgDisabledProviders.get(settings) },
 			);
+			component.handleInput("/");
 			for (const char of alias.id) {
 				component.handleInput(char);
 			}
@@ -212,6 +216,7 @@ describe("OAuthSelectorComponent", () => {
 				() => {},
 				{ disabledProviders: cfgDisabledProviders.get(settings) },
 			);
+			component.handleInput("/");
 			for (const char of "opencode-go") {
 				component.handleInput(char);
 			}

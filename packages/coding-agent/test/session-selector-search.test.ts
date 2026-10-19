@@ -63,7 +63,7 @@ function makeHarness(sessions: SessionInfo[], historyMatcher?: (query: string) =
 	);
 	selector.setOnRequestRender(() => renders++);
 	const list = selector.getSessionList();
-	list.handleInput("i");
+	list.handleInput("/");
 	const filtered = (): SessionInfo[] => {
 		const out: SessionInfo[] = [];
 		list.onSelect = session => {
@@ -80,6 +80,7 @@ function makeHarness(sessions: SessionInfo[], historyMatcher?: (query: string) =
 	return {
 		selector,
 		type: text => {
+			if (!selector.filterFocused) list.handleInput("/");
 			for (const ch of text) list.handleInput(ch);
 		},
 		filtered,

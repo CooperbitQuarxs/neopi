@@ -1,6 +1,7 @@
 import {
 	type Component,
 	type Focusable,
+	extractPrintableText,
 	Input,
 	Markdown,
 	matchesKey,
@@ -18,26 +19,29 @@ import {
 	getBtwTurns,
 } from "./btw-history";
 import { getMarkdownTheme, type ThemeColor, theme } from "../theme/theme";
-import {
-	matchesSelectCancel,
-	matchesSelectDown,
-	matchesSelectPageDown,
-	matchesSelectPageUp,
-	matchesSelectUp,
-} from "../keybinding-matchers";
 import type { SpaceHoldHandler } from "../space-hold";
 import { sanitizeErrorLine } from "../chrome/error-block";
 import { sanitizeDisplayLine, sanitizeDisplayText } from "./extensions/display-text";
-import { editorKey, editorKeys, keyHint, rawKeyHint } from "../chrome/keybinding-hints";
+import { editorKey, keyHint, rawKeyHint } from "../chrome/keybinding-hints";
 import { formatKeyHint } from "../app-keybindings";
 import { bottomBorder, row, topBorder } from "../chrome/overlay-box";
 import { padToWidth } from "../render/utils";
 import { SplitPane } from "../components/layout/split-pane";
-import { clampSelection, contentRowWidth, padLinesToHeight, renderScrollableList } from "../chrome/selector-helpers";
-import type { TspScrollBy, TspSpan } from "@oh-my-pi/pi-wire";
+import { contentRowWidth, padLinesToHeight, renderScrollableList } from "../chrome/selector-helpers";
+import type { TspSpan } from "@oh-my-pi/pi-wire";
 import type { NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { col, md, node, span, text } from "../native/describe";
 import { actionBar, actionButton } from "../native/overlay";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	menuScrollBy,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
+import { MenuSelection } from "../components/menu-selection";
+import { fuzzyFilter } from "../fuzzy";
 
 interface BtwHistoryPanelOptions {
 	records: readonly BtwHistoryRecord[];
@@ -50,7 +54,7 @@ interface BtwHistoryPanelOptions {
 	requestRender: () => void;
 	getHeight: () => number;
 	/**
-	 * Esc closes the panel even while the selected answer runs (it keeps
+	 * When true, Esc puts the sheet away (the running answer keeps
 	 * streaming in the background) and `x` cancels it, instead of Esc cancelling
 	 * first. For a host with no inline panel to fall back to (Tern).
 	 */
@@ -61,6 +65,12 @@ interface FollowUpComposer {
 	recordId: string;
 	input: Input;
 	abortController: AbortController;
+	notice?: string;
+}
+
+interface FollowUpDraft {
+	value: string;
+	cursor: number;
 	notice?: string;
 }
 
@@ -85,6 +95,10 @@ interface BtwHistoryNativeMemo {
 	copied: boolean;
 	scroll: NativeScroll | undefined;
 	node: NativeNode;
+	query: string;
+	queryFocused: boolean;
+	queryCursor: number;
+	listScroll: NativeScroll | undefined;
 }
 
 const STATUS: Record<BtwHistoryRecord["status"], { label: string; color: ThemeColor }> = {
@@ -120,10 +134,20 @@ export class BtwHistoryPanel implements Component, Focusable {
 	#records: readonly BtwHistoryRecord[] = [];
 	#selectedId: string | undefined;
 	#focus: "list" | "answer" = "list";
-	#listScroll = 0;
+	readonly #listViewport = new MenuViewport();
+	readonly #keys = new MenuKeyReader();
+	readonly #search = new MenuSearchField();
+	readonly #selection = new MenuSelection<BtwHistoryRecord>([], {
+		getKey: record => record.id,
+		getSearchText: record => record.question,
+	});
+	#filtered: { source: readonly BtwHistoryRecord[]; query: string; records: readonly BtwHistoryRecord[] } | undefined;
+	#rowCounts: number[] = [];
+	#listNativeScroll: NativeScroll | undefined;
 	#listHeight = 1;
 	#focused = false;
 	#composer: FollowUpComposer | undefined;
+	readonly #drafts = new Map<string, FollowUpDraft>();
 	#followUpPending = false;
 	#followLatest = false;
 	#turns: RenderedTurn[] = [];
@@ -187,6 +211,102 @@ export class BtwHistoryPanel implements Component, Focusable {
 		this.#records = options.records;
 		this.#selectedId = options.records[0]?.id;
 		if (options.records.length === 1) this.#focus = "answer";
+		this.#listHeight = Math.max(1, options.getHeight() - 8);
+	}
+
+	get blocksMenuHistory(): boolean {
+		return this.#followUpPending;
+	}
+
+	get filterFocused(): boolean {
+		return this.#search.focused || this.#composer !== undefined;
+	}
+
+	navigationSnapshot(): unknown {
+		return {
+			selectedId: this.#selected()?.id,
+			focus: this.#focus,
+			search: this.#search.navigationSnapshot(),
+			listTop: this.#listViewport.top,
+			detail: this.#detail.navigationSnapshot(),
+			followLatest: this.#followLatest,
+			composer: this.#composer
+				? {
+						recordId: this.#composer.recordId,
+						value: this.#composer.input.getValue(),
+						cursor: this.#composer.input.getCursor(),
+						notice: this.#composer.notice,
+					}
+				: undefined,
+			drafts: [...this.#drafts],
+			copiedId: this.#lastCopiedId,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as {
+			selectedId?: string;
+			focus?: "list" | "answer";
+			search?: unknown;
+			listTop?: MenuViewportPosition | number;
+			detail?: unknown;
+			followLatest?: boolean;
+			copiedId?: string;
+			composer?: { recordId?: string; value?: string; cursor?: number; notice?: string };
+			drafts?: Array<[string, FollowUpDraft]>;
+		};
+		this.#composer?.abortController.abort();
+		this.#composer = undefined;
+		this.#drafts.clear();
+		for (const [id, draft] of state.drafts ?? []) {
+			if (typeof id === "string" && typeof draft.value === "string") this.#drafts.set(id, { ...draft });
+		}
+		this.#search.restoreNavigation(state.search);
+		this.#selectedId = state.selectedId;
+		this.#visibleRecords();
+		const draftRecord = state.composer && this.#records.find(record => record.id === state.composer?.recordId);
+		if (draftRecord && this.#options.onFollowUp) {
+			const composer = this.#openComposer(draftRecord);
+			composer.input.setValue(state.composer?.value ?? "");
+			if (typeof state.composer?.cursor === "number") composer.input.setCursor(state.composer.cursor);
+			composer.notice = state.composer?.notice;
+		}
+		this.#focus = state.focus === "answer" ? "answer" : "list";
+		this.#listViewport.setTop(state.listTop);
+		this.#detail.restoreNavigation(state.detail);
+		this.#followLatest = state.followLatest === true;
+		this.#lastCopiedId = state.copiedId;
+		const copied = this.#records.find(record => record.id === state.copiedId);
+		this.#lastCopiedText = copied ? getBtwCopyText(copied) : undefined;
+		this.#scroll = undefined;
+		this.#listNativeScroll = undefined;
+		this.#keys.reset();
+		this.#native = undefined;
+		this.#detailDirty = true;
+	}
+
+	leaveMenu(): void {
+		this.#composer?.abortController.abort();
+	}
+
+	dispose(): void {
+		this.#composer?.abortController.abort();
+		this.#detail.dispose();
+		this.#split.dispose();
+		this.#labels.dispose();
+	}
+
+	#visibleRecords(): readonly BtwHistoryRecord[] {
+		if (this.#filtered?.source === this.#records && this.#filtered.query === this.#search.value)
+			return this.#filtered.records;
+		const records = this.#search.value.trim()
+			? fuzzyFilter(this.#records, this.#search.value, record => `${record.question} ${record.answer}`)
+			: this.#records;
+		this.#filtered = { source: this.#records, query: this.#search.value, records };
+		this.#selection.setItems(records, this.#selectedId);
+		this.#rowCounts = records.map(() => 1);
+		return records;
 	}
 
 	get focused(): boolean {
@@ -199,6 +319,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 
 	update(records: readonly BtwHistoryRecord[]): void {
 		this.#records = records;
+		this.#filtered = undefined;
 		this.#detailDirty = true;
 		const copied =
 			this.#lastCopiedId !== undefined ? records.find(record => record.id === this.#lastCopiedId) : undefined;
@@ -211,7 +332,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 		}
 		if (!records.some(record => record.id === this.#selectedId)) {
 			this.#selectedId = records[0]?.id;
-			this.#listScroll = 0;
+			this.#listViewport.setTop(0);
 			this.#followLatest = false;
 			this.#detail.scrollToTop();
 		}
@@ -247,18 +368,23 @@ export class BtwHistoryPanel implements Component, Focusable {
 	#selectedIndex(): number {
 		return Math.max(
 			0,
-			this.#records.findIndex(record => record.id === this.#selectedId),
+			this.#visibleRecords().findIndex(record => record.id === this.#selectedId),
 		);
 	}
 
 	#selected(): BtwHistoryRecord | undefined {
-		return this.#records[this.#selectedIndex()];
+		const record = this.#visibleRecords()[this.#selectedIndex()];
+		this.#selectedId = record?.id;
+		return record;
 	}
 
 	#select(index: number): void {
-		const record = this.#records[Math.max(0, Math.min(index, this.#records.length - 1))];
+		const records = this.#visibleRecords();
+		const record = records[Math.max(0, Math.min(index, records.length - 1))];
 		if (!record || record.id === this.#selectedId) return;
 		this.#selectedId = record.id;
+		this.#selection.setSelectedKey(record.id);
+		this.#listViewport.reveal();
 		this.#followLatest = false;
 		this.#detail.scrollToTop();
 	}
@@ -272,7 +398,10 @@ export class BtwHistoryPanel implements Component, Focusable {
 		const index = this.#records.findIndex(record => record.id === recordId);
 		const record = this.#records[index];
 		if (!record || !this.#canFollowUp(record)) return false;
-		this.#select(index);
+		if (!this.#visibleRecords().some(item => item.id === record.id)) this.#search.setValue("");
+		this.#visibleRecords();
+		this.#selectedId = record.id;
+		this.#selection.setSelectedKey(record.id);
 		this.#openComposer(record);
 		return true;
 	}
@@ -281,7 +410,11 @@ export class BtwHistoryPanel implements Component, Focusable {
 	showRecord(recordId: string): void {
 		const index = this.#records.findIndex(record => record.id === recordId);
 		if (index === -1) return;
-		this.#select(index);
+		if (!this.#visibleRecords().some(record => record.id === recordId)) this.#search.setValue("");
+		this.#selectedId = recordId;
+		this.#visibleRecords();
+		this.#selection.setSelectedKey(recordId);
+		this.#listViewport.reveal();
 		this.#focus = "answer";
 		this.#options.requestRender();
 	}
@@ -297,13 +430,22 @@ export class BtwHistoryPanel implements Component, Focusable {
 		this.#scroll = { by: "end", n: (this.#scroll?.n ?? 0) + 1 };
 	}
 
-	#openComposer(record: BtwHistoryRecord): void {
+	#openComposer(record: BtwHistoryRecord): FollowUpComposer {
+		this.#search.focused = false;
+		this.#keys.reset();
 		const input = new Input();
 		input.prompt = theme.fg("accent", "Follow up: ");
 		input.placeholder = "Ask about this answer…";
 		input.spaceHold.handler = this.#options.spaceHold?.(input);
 		const composer: FollowUpComposer = { recordId: record.id, input, abortController: new AbortController() };
+		const draft = this.#drafts.get(record.id);
+		if (draft) {
+			input.setValue(draft.value);
+			input.setCursor(draft.cursor);
+			composer.notice = draft.notice;
+		}
 		input.onEscape = () => {
+			this.#drafts.set(record.id, { value: input.getValue(), cursor: input.getCursor(), notice: composer.notice });
 			composer.abortController.abort();
 			this.#composer = undefined;
 		};
@@ -315,6 +457,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 		// Following up reads from the newest turn, right above the composer.
 		this.#jumpToEnd();
 		this.#options.requestRender();
+		return composer;
 	}
 
 	async #submitFollowUp(composer: FollowUpComposer, value: string): Promise<void> {
@@ -336,6 +479,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 			const accepted = await this.#options.onFollowUp!(record, question, composer.abortController.signal);
 			if (this.#composer !== composer) return;
 			if (accepted) {
+				this.#drafts.delete(composer.recordId);
 				this.#composer = undefined;
 				this.#selectedId = composer.recordId;
 				this.#focus = "answer";
@@ -366,24 +510,50 @@ export class BtwHistoryPanel implements Component, Focusable {
 	}
 	handleInput(data: string): void {
 		if (this.#composer) {
-			// The input owns every key, including panel shortcuts and pasted text.
-			this.#composer.input.handleInput(data);
+			const printable = extractPrintableText(data);
+			if (printable !== undefined && !matchesKey(data, "space")) {
+				// Preserve the gesture's non-space release/reset path without
+				// letting remapped menu bindings consume ordinary draft text.
+				const input = this.#composer.input;
+				input.spaceHold.process(false);
+				input.insertText(printable);
+				this.#keys.reset();
+				this.#options.requestRender();
+				return;
+			}
+			// Literal input wins; an unconsumed context key leaves the field
+			// with its safe draft retained, rather than deleting it.
+			if (!this.#composer.input.handleInput(data)) {
+				const action = this.#keys.read(data);
+				if (action && action !== "pending" && action.kind === "context") {
+					this.#composer.input.onEscape?.();
+					if (this.#records.length > 1) this.#focus = "list";
+				}
+			}
+			this.#options.requestRender();
+			return;
+		}
+		const before = this.#search.value;
+		const search = this.#search.handleInput(data);
+		if (search !== "pass") {
+			this.#keys.reset();
+			if (this.#search.value !== before) {
+				this.#visibleRecords();
+				this.#selectedId = this.#selection.selectedKey;
+				this.#listViewport.reveal();
+				this.#detailDirty = true;
+			}
 			this.#options.requestRender();
 			return;
 		}
 		const record = this.#selected();
 		const running = record !== undefined && getBtwLatestTurn(record).status === "running" ? record : undefined;
 		const hides = this.#options.escapeHides === true;
-		if (matchesSelectCancel(data) || matchesKey(data, "escape")) {
-			if (running && !hides) this.#options.onCancel(running);
-			else this.#options.onClose();
-			return;
-		}
 		if (hides && matchesKey(data, "x")) {
 			if (running) this.#options.onCancel(running);
 			return;
 		}
-		if (matchesKey(data, "f") || matchesKey(data, "enter")) {
+		if (matchesKey(data, "f")) {
 			if (record) this.openFollowUp(record.id);
 			return;
 		}
@@ -391,50 +561,50 @@ export class BtwHistoryPanel implements Component, Focusable {
 			if (record && getBtwCopyText(record) !== undefined) this.#options.onCopy(record);
 			return;
 		}
-		// Legacy terminals deliver Ctrl+/ (and Ctrl+_) as US without Kitty protocol.
-		if (
-			matchesKey(data, "tab") ||
-			matchesKey(data, "shift+tab") ||
-			matchesKey(data, "ctrl+/") ||
-			matchesKey(data, "ctrl+_") ||
-			data === String.fromCharCode(31)
-		) {
-			// One side question has nothing to pick: its answer keeps the arrow keys.
+		// Keep the existing context alias without stealing slash or text keys.
+		if (matchesKey(data, "ctrl+/") || matchesKey(data, "ctrl+_") || data === String.fromCharCode(31)) {
 			if (this.#records.length > 1) this.#focus = this.#focus === "list" ? "answer" : "list";
-		} else if (matchesKey(data, "right")) {
-			this.#focus = "answer";
-		} else if (matchesKey(data, "left")) {
-			if (this.#records.length > 1) this.#focus = "list";
+			this.#options.requestRender();
+			return;
+		}
+		const action = this.#keys.read(data);
+		if (!action || action === "pending") return;
+		if (action.kind === "cancel") {
+			if (running && !hides) this.#options.onCancel(running);
+			else this.#options.onClose();
+			return;
+		}
+		if (action.kind === "search") {
+			this.#focus = "list";
+			this.#search.focused = true;
+		} else if (action.kind === "context" || action.kind === "horizontal") {
+			this.#search.focused = false;
+			if (this.#records.length > 1)
+				this.#focus =
+					action.kind === "horizontal"
+						? action.delta < 0
+							? "list"
+							: "answer"
+						: this.#focus === "list"
+							? "answer"
+							: "list";
+		} else if (action.kind === "confirm" || action.kind === "toggle") {
+			if (record) this.openFollowUp(record.id);
 		} else if (this.#focus === "list") {
-			const index = this.#selectedIndex();
-			if (matchesSelectUp(data)) this.#select(index - 1);
-			else if (matchesSelectDown(data)) this.#select(index + 1);
-			else if (matchesSelectPageUp(data)) this.#select(index - this.#listHeight);
-			else if (matchesSelectPageDown(data)) this.#select(index + this.#listHeight);
-			else if (matchesKey(data, "home")) this.#select(0);
-			else if (matchesKey(data, "end")) this.#select(this.#records.length - 1);
-			else return;
-		} else {
-			const by: TspScrollBy | undefined = matchesSelectUp(data)
-				? "line-up"
-				: matchesSelectDown(data)
-					? "line-down"
-					: matchesSelectPageUp(data)
-						? "page-up"
-						: matchesSelectPageDown(data)
-							? "page-down"
-							: matchesKey(data, "home")
-								? "start"
-								: matchesKey(data, "end")
-									? "end"
-									: undefined;
-			if (by === "line-up") this.#detail.scroll(-1);
-			else if (by === "line-down") this.#detail.scroll(1);
-			else if (by === "page-up") this.#detail.page(-1);
-			else if (by === "page-down") this.#detail.page(1);
-			else if (!this.#detail.handleScrollKey(data)) return;
+			this.#visibleRecords();
+			if (this.#selectedId) this.#selection.setSelectedKey(this.#selectedId);
+			if (this.#listViewport.top === undefined)
+				this.#listViewport.layout(this.#rowCounts, this.#selectedIndex(), this.#listHeight);
+			const motion = applyMenuMotion(action, this.#selection, this.#listViewport);
+			if (motion.selectionChanged) this.#select(this.#selection.selectedIndex);
+			if (action.kind === "scroll") {
+				const by = menuScrollBy(action);
+				if (by) this.#listNativeScroll = { by, n: (this.#listNativeScroll?.n ?? 0) + 1 };
+			}
+		} else if (this.#detail.handleMenuAction(action)) {
+			const by = menuScrollBy(action);
 			if (by) this.#scroll = { by, n: (this.#scroll?.n ?? 0) + 1 };
-			this.#followLatest = matchesKey(data, "end");
+			this.#followLatest = action.kind === "boundary" && action.edge === "last";
 		}
 		this.#options.requestRender();
 	}
@@ -446,12 +616,13 @@ export class BtwHistoryPanel implements Component, Focusable {
 
 	describe(): NativeNode {
 		const record = this.#selected();
+		const records = this.#visibleRecords();
 		const composer = this.#composer;
 		const canFollowUp = record !== undefined && this.#canFollowUp(record);
 		const copied = record !== undefined && this.#isCopied(record);
 		const memo = this.#native;
 		if (
-			memo?.records === this.#records &&
+			memo?.records === records &&
 			memo.selectedId === this.#selectedId &&
 			memo.focus === this.#focus &&
 			memo.focused === this.#focused &&
@@ -460,7 +631,11 @@ export class BtwHistoryPanel implements Component, Focusable {
 			memo.followUpPending === this.#followUpPending &&
 			memo.canFollowUp === canFollowUp &&
 			memo.copied === copied &&
-			memo.scroll === this.#scroll
+			memo.scroll === this.#scroll &&
+			memo.query === this.#search.value &&
+			memo.queryFocused === this.#search.focused &&
+			memo.queryCursor === this.#search.cursor &&
+			memo.listScroll === this.#listNativeScroll
 		) {
 			return memo.node;
 		}
@@ -468,7 +643,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 		// so the list stays put while a long answer scrolls. Plain columns, not
 		// `section`s (Tern draws those as foldable `##` headings). With one side
 		// question the list is noise: the reader alone.
-		const children: NativeChild[] = [];
+		const children: NativeChild[] = [this.#search.input];
 		if (record) {
 			const reader: NativeNode = {
 				...node(
@@ -489,7 +664,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 		// The sheet is the frame (`nativeOverlay`); its last row is the pinned footer.
 		const described = col(children, { gap: "none" });
 		this.#native = {
-			records: this.#records,
+			records,
 			selectedId: this.#selectedId,
 			focus: this.#focus,
 			focused: this.#focused,
@@ -499,6 +674,10 @@ export class BtwHistoryPanel implements Component, Focusable {
 			canFollowUp,
 			copied,
 			scroll: this.#scroll,
+			query: this.#search.value,
+			queryFocused: this.#search.focused,
+			queryCursor: this.#search.cursor,
+			listScroll: this.#listNativeScroll,
 			node: described,
 		};
 		return described;
@@ -523,8 +702,15 @@ export class BtwHistoryPanel implements Component, Focusable {
 				case "send":
 					this.#composer?.input.submit();
 					break;
-				case "discard":
+				case "back":
 					this.#composer?.input.onEscape?.();
+					break;
+				case "discard":
+					if (this.#composer) {
+						this.#drafts.delete(this.#composer.recordId);
+						this.#composer.abortController.abort();
+						this.#composer = undefined;
+					}
 					break;
 				default:
 					return;
@@ -533,8 +719,10 @@ export class BtwHistoryPanel implements Component, Focusable {
 			return;
 		}
 		if ((event.type !== "select" && event.type !== "activate") || this.#composer) return;
-		const index = this.#records.findIndex(record => record.id === event.item);
+		const index = this.#visibleRecords().findIndex(record => record.id === event.item);
 		if (index === -1) return;
+		this.#search.focused = false;
+		this.#keys.reset();
 		this.#select(index);
 		this.#focus = "list";
 		// Enter on a history row opens the follow-up composer.
@@ -548,7 +736,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 	 * reader has the keys the selection rests (`omp.btw.list.idle`).
 	 */
 	#describeList(): NativeNode {
-		const items = this.#records.map(record => {
+		const items = this.#visibleRecords().map(record => {
 			const followUps = record.followUps?.length ?? 0;
 			const detail: TspSpan[] = [span(this.#timeFormat.format(record.createdAt), "mono")];
 			if (followUps > 0) detail.push(span(` · ${followUps} follow-up${followUps === 1 ? "" : "s"}`));
@@ -563,7 +751,12 @@ export class BtwHistoryPanel implements Component, Focusable {
 		return node(
 			"col",
 			{ role: "omp.btw.history", shrink: 0 },
-			[node("list", { role, selected: this.#selectedId ?? null }, items, "records")],
+			[
+				{
+					...node("list", { role, selected: this.#selectedId ?? null }, items, "records"),
+					scroll: this.#listNativeScroll,
+				},
+			],
 			"history",
 		);
 	}
@@ -626,7 +819,9 @@ export class BtwHistoryPanel implements Component, Focusable {
 			"col",
 			{ role: "omp.btw.empty", align: "center", gap: "sm" },
 			[
-				text("No side questions yet", { role: "omp.btw.empty.title" }),
+				text(this.#search.value ? "No matching side questions" : "No side questions yet", {
+					role: "omp.btw.empty.title",
+				}),
 				text(
 					[
 						span("Ask one with "),
@@ -649,7 +844,8 @@ export class BtwHistoryPanel implements Component, Focusable {
 		if (this.#composer) {
 			return actionBar([
 				null,
-				actionButton("Cancel", "discard", { keys: "escape" }),
+				actionButton(this.#followUpPending ? "Cancel send" : "Back", "back", { keys: "escape" }),
+				actionButton("Discard draft", "discard"),
 				actionButton(this.#followUpPending ? "Sending…" : "Send", "send", { keys: "enter", tone: "accent" }),
 			]);
 		}
@@ -670,23 +866,30 @@ export class BtwHistoryPanel implements Component, Focusable {
 
 	#renderList(width: number, height: number): readonly string[] {
 		const rowSpan = width < 36 && height >= 2 ? 2 : 1;
-		this.#listHeight = Math.max(1, Math.floor(height / rowSpan));
-		if (this.#records.length === 0) {
-			return new Text(theme.fg("muted", "No side questions yet.\n\nUse /btw QUESTION to start one."), 0, 0)
+		this.#listHeight = Math.max(1, height);
+		const records = this.#visibleRecords();
+		if (records.length === 0) {
+			return new Text(
+				theme.fg(
+					"muted",
+					this.#search.value
+						? "No matching side questions."
+						: "No side questions yet.\n\nUse /btw QUESTION to start one.",
+				),
+				0,
+				0,
+			)
 				.render(width)
 				.slice(0, height);
 		}
 		const selectedIndex = this.#selectedIndex();
-		const selection = clampSelection(selectedIndex, this.#listScroll, this.#records.length, this.#listHeight);
-		this.#listScroll = Math.min(selection.scrollOffset, Math.max(0, this.#records.length - this.#listHeight));
-		const contentWidth = contentRowWidth(width, this.#records.length * rowSpan, height);
+		if (this.#rowCounts.length !== records.length || this.#rowCounts[0] !== rowSpan)
+			this.#rowCounts = records.map(() => rowSpan);
+		const window = this.#listViewport.layout(this.#rowCounts, selectedIndex, height);
+		const contentWidth = contentRowWidth(width, records.length * rowSpan, height);
 		const lines: string[] = [];
-		for (
-			let index = this.#listScroll;
-			index < Math.min(this.#records.length, this.#listScroll + this.#listHeight);
-			index++
-		) {
-			const record = this.#records[index]!;
+		for (let index = window.startIndex; index < window.endIndex; index++) {
+			const record = records[index]!;
 			const selected = index === selectedIndex;
 			const status = STATUS[getBtwLatestTurn(record).status];
 			const cursor = selected ? theme.fg(this.#focus === "list" ? "accent" : "muted", theme.nav.cursor) : " ";
@@ -713,10 +916,14 @@ export class BtwHistoryPanel implements Component, Focusable {
 				);
 			}
 		}
-		return renderScrollableList(padLinesToHeight(lines, height), {
+		const visibleLines =
+			window.lineOffset === 0 && lines.length <= height
+				? lines
+				: lines.slice(window.lineOffset, window.lineOffset + height);
+		return renderScrollableList(padLinesToHeight(visibleLines, height), {
 			width,
-			totalRows: this.#records.length * rowSpan,
-			scrollOffset: this.#listScroll * rowSpan,
+			totalRows: records.length * rowSpan,
+			scrollOffset: window.rowOffset,
 		});
 	}
 
@@ -796,7 +1003,15 @@ export class BtwHistoryPanel implements Component, Focusable {
 				this.#turns.length = turns.length;
 			} else {
 				lines.push(
-					...wrapTextWithAnsi(theme.fg("muted", "No side questions yet. Use /btw QUESTION to start one."), inner),
+					...wrapTextWithAnsi(
+						theme.fg(
+							"muted",
+							this.#search.value
+								? "No matching side questions."
+								: "No side questions yet. Use /btw QUESTION to start one.",
+						),
+						inner,
+					),
 				);
 			}
 			this.#detailRecord = record;
@@ -839,12 +1054,12 @@ export class BtwHistoryPanel implements Component, Focusable {
 		const actions = composer
 			? [
 					keyHint("tui.input.submit", this.#followUpPending ? "starting…" : "send"),
-					keyHint("tui.select.cancel", "cancel"),
+					keyHint("tui.select.cancel", this.#followUpPending ? "cancel send (keep draft)" : "back (keep draft)"),
 				]
 			: [
-					keyHint("tui.select.cancel", running && !this.#options.escapeHides ? "cancel" : "close"),
+					keyHint("tui.select.cancel", running && !this.#options.escapeHides ? "cancel answer" : "close"),
 					...(running && this.#options.escapeHides ? [rawKeyHint("x", "cancel")] : []),
-					...(this.#records.length > 1 ? [rawKeyHint(["tab", "ctrl+/"], "switch pane")] : []),
+					...(this.#records.length > 1 ? [rawKeyHint(["h", "l", "tab", "ctrl+/"], "switch pane")] : []),
 				];
 		if (!composer) {
 			if (record && this.#canFollowUp(record)) actions.push(rawKeyHint(["f", "enter"], "follow up"));
@@ -855,7 +1070,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 			}
 		}
 		const actionLines = wrapTextWithAnsi(actions.join(" · "), inner).slice(0, framed ? 2 : 1);
-		const chrome = framed ? 3 + actionLines.length : height >= 3 ? 2 : 0;
+		const chrome = (framed ? 3 + actionLines.length : height >= 3 ? 2 : 0) + 1;
 		const composerLines: string[] = [];
 		if (composer) {
 			const availableRows = Math.max(1, height - chrome - 1);
@@ -897,6 +1112,8 @@ export class BtwHistoryPanel implements Component, Focusable {
 		} else if (height >= 3) {
 			lines.push(truncateToWidth(this.#focusLabel(this.#focus), width));
 		}
+		const searchLine = this.#search.render(inner, { muted: text => theme.fg("dim", text) });
+		lines.push(framed ? row(searchLine, width) : searchLine);
 		if (framed) {
 			this.#bodyHeightLast = bodyHeight;
 			this.#detailCache = detail ?? [];
@@ -912,8 +1129,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 			if (showNavigation) {
 				lines.push(
 					row(
-						theme.fg("dim", editorKeys("tui.select.up", "tui.select.down")) +
-							theme.fg("muted", ` ${this.#focus === "list" ? "select" : "scroll"}`),
+						theme.fg("dim", "j/k · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · / search"),
 						width,
 					),
 				);

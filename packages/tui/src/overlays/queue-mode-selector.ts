@@ -29,7 +29,7 @@ export class QueueModeSelectorComponent extends OverlayPanel {
 		];
 
 		// Create selector
-		this.#selectList = new SelectList(queueModes, 2, getSelectListTheme());
+		this.#selectList = new SelectList(queueModes, 2, getSelectListTheme(), { search: "always" });
 
 		// Preselect current mode
 		const currentIndex = queueModes.findIndex(item => item.value === currentMode);
@@ -75,6 +75,14 @@ export class QueueModeSelectorComponent extends OverlayPanel {
 
 	getSelectList(): SelectList {
 		return this.#selectList;
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationState();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		this.#selectList.restoreNavigation(snapshot);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {

@@ -8,6 +8,7 @@ import { getThemeByName } from "@oh-my-pi/pi-tui/theme";
 import type { ExperimentResult, ExperimentState } from "@oh-my-pi/pi-tui/tools/autoresearch";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import type { TspText } from "@oh-my-pi/pi-wire";
+import { isMenuHistoryParticipant } from "../src/components/menu-navigation";
 
 const cx: DescribeContext = { cols: 120, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
 
@@ -130,6 +131,32 @@ describe("autoresearch dashboard sheet", () => {
 		expect(describeSheet(sheet).scroll).toEqual({ by: "line-down", n: 1 });
 		sheet.handleInput?.("G");
 		expect(describeSheet(sheet).scroll).toEqual({ by: "end", n: 2 });
+	});
+
+	it("uses gg, independent viewer scrolling and safe viewport history", async () => {
+		const sheet = await openSheet(runtime(Array.from({ length: 40 }, (_, i) => result(i + 1, 50 - i, "keep"))));
+		try {
+			if (!isMenuHistoryParticipant(sheet)) throw new Error("dashboard is not a menu participant");
+			sheet.render(100);
+			sheet.handleInput?.("G");
+			const end = describeSheet(sheet).scroll;
+			sheet.handleInput?.("g");
+			expect(describeSheet(sheet).scroll).toEqual(end);
+			sheet.handleInput?.("g");
+			expect(describeSheet(sheet).scroll?.by).toBe("start");
+			sheet.handleInput?.("\x04");
+			const saved = sheet.navigationSnapshot();
+			expect((saved as { scrollOffset: number }).scrollOffset).toBeGreaterThan(0);
+			expect(describeSheet(sheet).scroll?.by).toBe("start"); // Native has no half-page request.
+			sheet.handleInput?.("G");
+			sheet.restoreNavigation(saved);
+			sheet.render(100);
+			expect(sheet.navigationSnapshot()).toEqual(saved);
+			sheet.handleInput?.("\x05");
+			expect(describeSheet(sheet).scroll?.by).toBe("line-down");
+		} finally {
+			sheet.dispose?.();
+		}
 	});
 
 	it("keeps the terminal rendering", async () => {

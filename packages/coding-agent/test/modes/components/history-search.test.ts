@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { HistorySearchComponent } from "@oh-my-pi/pi-tui/overlays/history-search";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { HistoryEntry, HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
@@ -32,7 +33,8 @@ function fakeStorage(entries: HistoryEntry[]): HistoryStorage {
 function render(component: HistorySearchComponent, width = 80): { raw: string; plain: string } {
 	const lines = component.render(width);
 	const raw = lines.join("\n");
-	return { raw, plain: Bun.stripANSI(raw) };
+	// The query-first field carries the hardware-cursor marker, which stripANSI does not parse.
+	return { raw, plain: Bun.stripANSI(raw.replaceAll(CURSOR_MARKER, "")) };
 }
 
 function type(component: HistorySearchComponent, text: string): void {
@@ -88,6 +90,70 @@ describe("HistorySearchComponent", () => {
 		);
 		type(unmatched, "zzzz");
 		expect(render(unmatched).plain).toContain("No matching history");
+	});
+});
+
+describe("HistorySearchComponent normal navigation and history", () => {
+	it("opens query-first, preserves literal navigation text, then leaves the field before closing", () => {
+		const cancelled = vi.fn();
+		const component = new HistorySearchComponent(fakeStorage([]), () => {}, cancelled);
+		type(component, "jkgG/ ");
+		component.handleInput("\x1b");
+		expect(component.navigationSnapshot()).toMatchObject({ search: { value: "jkgG/ ", focused: false, cursor: 6 } });
+		expect(cancelled).not.toHaveBeenCalled();
+		component.handleInput("\x1b");
+		expect(cancelled).toHaveBeenCalledTimes(1);
+		component.dispose();
+	});
+
+	it("uses boundaries, half pages, and independent visual scrolling in list focus", () => {
+		const entries = Array.from({ length: 40 }, (_, i) => makeEntry(i, `prompt ${i}`));
+		const selected: string[] = [];
+		const component = new HistorySearchComponent(
+			fakeStorage(entries),
+			prompt => selected.push(prompt),
+			() => {},
+		);
+		component.handleInput("\x1b");
+		render(component);
+		component.handleInput("G");
+		component.handleInput("g");
+		component.handleInput("g");
+		render(component);
+		const before = component.navigationSnapshot() as { selected: string };
+		component.handleInput("\x05");
+		render(component);
+		expect(component.navigationSnapshot()).toMatchObject({
+			selected: before.selected,
+			top: { item: 1, lineOffset: 0 },
+		});
+		component.handleInput("\x04");
+		component.handleInput("\r");
+		expect(selected).toEqual(["prompt 5"]);
+		component.dispose();
+	});
+
+	it("restores query caret, focus, stable result and scrolled view without inserting", () => {
+		const storage = fakeStorage(Array.from({ length: 40 }, (_, i) => makeEntry(i, `prompt ${i}`)));
+		const inserted = vi.fn();
+		const component = new HistorySearchComponent(storage, inserted, () => {});
+		const reopened = new HistorySearchComponent(storage, inserted, () => {});
+		type(component, "prompt");
+		component.handleInput("\x1b[D");
+		component.handleInput("\x1b");
+		component.handleInput("j");
+		render(component);
+		component.handleInput("\x05");
+		render(component);
+		const saved = component.navigationSnapshot();
+		component.leaveMenu();
+		reopened.restoreNavigation(saved);
+		render(reopened);
+		expect(reopened.navigationSnapshot()).toEqual(saved);
+		expect(reopened.navigationSnapshot()).toMatchObject({ search: { value: "prompt", cursor: 5, focused: false } });
+		expect(inserted).not.toHaveBeenCalled();
+		component.dispose();
+		reopened.dispose();
 	});
 });
 
@@ -208,5 +274,22 @@ describe("HistorySearchComponent debounced search", () => {
 		expect(render(component).plain).not.toContain("routine status update");
 		component.handleInput("\x7f");
 		expect(render(component).plain).toContain("routine status update");
+	});
+	it("cancels a pending query when leaving instead of publishing a stale repaint", () => {
+		vi.useFakeTimers();
+		const { storage, searches } = countingStorage([makeEntry(1, "needle in a haystack")]);
+		const component = new HistorySearchComponent(
+			storage,
+			() => {},
+			() => {},
+		);
+		const repaint = vi.fn();
+		component.setOnRequestRender(repaint);
+		type(component, "needle");
+		component.leaveMenu();
+		vi.advanceTimersByTime(150);
+		expect(searches).toEqual([]);
+		expect(repaint).not.toHaveBeenCalled();
+		component.dispose();
 	});
 });

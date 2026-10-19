@@ -214,6 +214,7 @@ function renderSyntheticAssistant(usage?: { input: number; output: number }): st
 		try {
 			viewer.render(80);
 			viewer.handleInput("g");
+			viewer.handleInput("g");
 			return viewer
 				.render(80)
 				.map(line => Bun.stripANSI(line))
@@ -263,6 +264,7 @@ describe("AgentTranscriptViewer", () => {
 	it("aligns the title and body content on the same gutter", () => {
 		withViewer(viewer => {
 			viewer.render(80); // populate the scroll view before navigating
+			viewer.handleInput("g");
 			viewer.handleInput("g"); // scroll to top so the first message is visible
 			const lines = viewer.render(80).map(l => Bun.stripANSI(l));
 			const titleLine = lines.find(l => l.includes("Agent Hub"));
@@ -328,6 +330,7 @@ describe("AgentTranscriptViewer", () => {
 		const viewer = makeViewer(file);
 		try {
 			viewer.render(80);
+			viewer.handleInput("g");
 			viewer.handleInput("g"); // scroll to top
 			const collapsed = viewer.render(80).map(l => Bun.stripANSI(l));
 			const collapsedBody = collapsed.join("\n");
@@ -338,6 +341,7 @@ describe("AgentTranscriptViewer", () => {
 			// ctrl+o reveals the full body; scroll back to the top to see it.
 			viewer.handleInput("\x0f");
 			viewer.render(80);
+			viewer.handleInput("g");
 			viewer.handleInput("g");
 			const expandedBody = viewer
 				.render(80)
@@ -350,12 +354,13 @@ describe("AgentTranscriptViewer", () => {
 		}
 	});
 
-	it("scrolls the visible window with j/k and g/G", () => {
+	it("scrolls the visible window with j/k and gg/G", () => {
 		withViewer(viewer => {
 			const atBottom = viewer
 				.render(80)
 				.map(l => Bun.stripANSI(l))
 				.join("\n");
+			viewer.handleInput("g");
 			viewer.handleInput("g");
 			const atTop = viewer
 				.render(80)
@@ -411,6 +416,7 @@ describe("AgentTranscriptViewer", () => {
 				.join("\n");
 		try {
 			viewer.render(80);
+			viewer.handleInput("g");
 			viewer.handleInput("g");
 			expect(body()).toContain("PROMPTMARKER");
 

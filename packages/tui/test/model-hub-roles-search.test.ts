@@ -1,8 +1,4 @@
-/**
- * The Roles view's letter commands (`s` save preset, `f` fallback, …) must not
- * swallow a search: the picker offers no search field while they own the
- * keys, and once a query is live, typing keeps editing it.
- */
+/** Roles search owns literal text only while slash has focused its field. */
 import { beforeAll, expect, test } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
@@ -78,14 +74,14 @@ const registryStub: ModelHubRegistry = {
 	refreshProvider: async () => {},
 };
 
-function createHub(): ModelHubComponent {
+function createHub(overrides: Partial<ModelHubSource> = {}): ModelHubComponent {
 	const callbacks: ModelHubCallbacks = {
 		onAssign: () => true,
 		onUnassign: () => {},
 		onCancel: () => {},
 		onSavePreset: () => {},
 	};
-	return new ModelHubComponent(tuiStub, source, registryStub, [{ model: sonnet }], callbacks);
+	return new ModelHubComponent(tuiStub, { ...source, ...overrides }, registryStub, [{ model: sonnet }], callbacks);
 }
 
 function pickerProps(hub: ModelHubComponent): TspPickerProps {
@@ -108,20 +104,101 @@ test("with no query the Roles rows hide the search field and keep their letter c
 
 	hub.handleInput("s");
 	expect(pickerProps(hub).strip).not.toBeNull();
+	hub.dispose();
 });
 
-test("a live query keeps taking printable keys on the Roles rows", () => {
-	const hub = createHub();
-	hub.handleInput("i"); // INSERT filter mode: printable keys are commands otherwise
-	for (const ch of "son") hub.handleInput(ch);
-	hub.handleInput("\x1b"); // back to normal mode with the query live
+test("slash filters Roles in place and Esc retains query without stealing letter actions", () => {
+	const hub = createHub({ knownRoleIds: ["default", "smol"] });
 	hub.handleNativeEvent(CLICK_ROLES);
-	expect(pickerProps(hub).query).toBe("son");
+	hub.handleInput("i");
+	expect(pickerProps(hub).query).toBeNull();
+	hub.handleInput("/");
+	for (const ch of "default") hub.handleInput(ch);
+	let props = pickerProps(hub);
+	expect(props.scope).toBe("roles");
+	expect(props.query).toBe("default");
+	expect(props.order).toContain("role:default");
+	expect(props.order).not.toContain("role:smol");
+	hub.handleInput("\x1b");
+	hub.handleInput("s");
+	props = pickerProps(hub);
+	expect(props.query).toBe("default");
+	expect(props.strip).not.toBeNull();
+	hub.dispose();
+});
 
-	hub.handleInput("n");
-	hub.handleInput("e");
+test("fallback search retains its parent role and actions target visible rows", () => {
+	const hub = createHub({
+		knownRoleIds: ["default", "smol"],
+		fallbackChains: { smol: ["example/backup:high"] },
+	});
+	hub.handleNativeEvent(CLICK_ROLES);
+	hub.handleInput("/");
+	for (const ch of "backup") hub.handleInput(ch);
 	const props = pickerProps(hub);
-	expect(props.strip).toBeNull();
-	expect(props.query).toBe("sonne");
-	expect(props.scope).toBe("all");
+	expect(props.scope).toBe("roles");
+	expect(props.order).toContain("role:smol");
+	expect(props.order).toContain("fallback:smol:0");
+	expect(props.order).not.toContain("role:default");
+	hub.handleInput("\x1b");
+	hub.handleInput("j");
+	expect(pickerProps(hub).selected).toBe("fallback:smol:0");
+	hub.handleInput(" ");
+	expect(pickerProps(hub).strip).not.toBeNull();
+	hub.dispose();
+});
+
+test("Roles jumps, pages and viewport scrolling skip separators without wrapping", () => {
+	const hub = createHub({ knownRoleIds: Array.from({ length: 60 }, (_, index) => `role-${index}`) });
+	hub.handleNativeEvent(CLICK_ROLES);
+	hub.render(120);
+	hub.handleInput("G");
+	expect(pickerProps(hub).selected).toBe("newFallback");
+	hub.handleInput("j");
+	expect(pickerProps(hub).selected).toBe("newFallback");
+	hub.handleInput("g");
+	hub.handleInput("g");
+	expect(pickerProps(hub).selected).toBe("role:role-0");
+	hub.handleInput("\x04");
+	const half = pickerProps(hub).selected;
+	expect(half).not.toBe("role:role-0");
+	hub.handleInput("\x1b[6~");
+	expect(pickerProps(hub).selected).not.toBe(half);
+	hub.handleInput("g");
+	hub.handleInput("g");
+	hub.render(120);
+	const before = hub.navigationSnapshot();
+	hub.handleInput("\x05");
+	hub.render(120);
+	const after = hub.navigationSnapshot();
+	expect(after.roleKey).toBe(before.roleKey);
+	expect(after.roleTop).toEqual({ item: (before.roleTop?.item ?? 0) + 1, lineOffset: 0 });
+	hub.handleInput("\x19");
+	hub.render(120);
+	expect(hub.navigationSnapshot().roleTop).toEqual(before.roleTop);
+	hub.dispose();
+});
+
+test("nested Roles editor visits capture the parent and restore drafts silently", () => {
+	const hub = createHub();
+	hub.handleNativeEvent(CLICK_ROLES);
+	const visits: { page: string; previous: unknown; next: unknown }[] = [];
+	hub.onNavigationVisit = (page, previous) => {
+		visits.push({ page, previous, next: hub.navigationSnapshot() });
+	};
+	const parent = hub.navigationSnapshot();
+	hub.handleInput("s");
+	expect(visits).toHaveLength(1);
+	expect(visits[0]?.previous).toEqual(parent);
+	for (const key of "draft hjkl/") hub.handleInput(key);
+	const draft = hub.navigationSnapshot();
+	hub.restoreNavigation(parent);
+	expect(pickerProps(hub).strip).toBeNull();
+	hub.restoreNavigation(draft);
+	const restored = hub.navigationSnapshot().strip;
+	if (restored?.kind !== "name") throw new Error("expected preset-name editor");
+	expect(restored.input.getValue()).toBe("draft hjkl/");
+	expect(restored.input.getCursor()).toBe("draft hjkl/".length);
+	expect(visits).toHaveLength(1);
+	hub.dispose();
 });

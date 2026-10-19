@@ -87,6 +87,17 @@ export class DebugViewerFrame implements Component {
 		return Math.max(this.#minimumBodyRows, height - this.#headerRows - this.#footerRows - 4);
 	}
 
+	navigationSnapshot(): unknown {
+		return { viewport: this.#viewport.navigationSnapshot(), followTail: this.#followTail };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { viewport?: unknown; followTail?: boolean };
+		this.#viewport.restoreNavigation(state.viewport);
+		if (typeof state.followTail === "boolean") this.#followTail = state.followTail && this.#supportsFollowTail;
+	}
+
 	isFollowingTail(): boolean {
 		return !this.#disposed && this.#followTail;
 	}

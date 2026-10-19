@@ -3,21 +3,22 @@
  *
  * Interactive multi-step wizard for adding MCP servers.
  */
-import { Container, matchesKey, replaceTabs, Spacer, Text, truncateToWidth, wrapTextWithAnsi } from "../index";
+import { Container, replaceTabs, Spacer, Text, truncateToWidth, wrapTextWithAnsi } from "../index";
 import type { Component } from "../tui";
 import * as path from "node:path";
 import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "../render/render-utils";
 import { getSelectListTheme, theme } from "../theme/theme";
 import type { TspText } from "@oh-my-pi/pi-wire";
-import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { matchesAppInterrupt } from "../keybinding-matchers";
 import { formatKeyHint } from "../app-keybindings";
-import { boundKeys, editorKey, editorKeys, interruptKey } from "../chrome/keybinding-hints";
+import { boundKeys, editorKey, interruptKey } from "../chrome/keybinding-hints";
 import type { KeyName } from "../key-hint-format";
 import { getKeybindings } from "../keybindings";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { TextFormField, type FormFieldTheme } from "../components/form";
 import { SelectList } from "../components/select-list";
+import { MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
 import { WizardStep, type WizardStepKind } from "../components/wizard-step";
 import { col, compact, node, row, span, text } from "../native/describe";
 import { type DescribeContext, leafKey, type NativeChild, type NativeNode, type NativeUiEvent } from "../native/node";
@@ -184,9 +185,9 @@ function inputHint(escapeAction: string): string {
 	return `[${editorKey("tui.input.submit")} to continue, ${editorKey("tui.select.cancel")} to ${escapeAction}]`;
 }
 
-/** Footer for choice steps; the wizard routes navigation, Enter, and Escape itself. */
+/** Choice rows own their viewport; submit and back remain explicit wizard actions. */
 function choiceHint(escapeAction: string): string {
-	return `[${editorKeys("tui.select.up", "tui.select.down")} to navigate, ${formatKeyHint("enter")} to select, ${interruptKey()} to ${escapeAction}]`;
+	return `[j/k, ↑/↓ navigate · Ctrl+U/D half page · PgUp/Dn page · gg/G bounds · Ctrl+E/Y scroll · ${formatKeyHint("enter")} select · ${interruptKey()} ${escapeAction}]`;
 }
 
 /** The wizard's phases, the native progress strip's segments in order. */
@@ -342,6 +343,11 @@ export class MCPAddWizard extends OverlayPanel {
 	#stepKind: WizardStepKind = "input";
 	#inputField: TextFormField | null = null;
 	#selectedIndex = 0;
+	#choiceList: SelectList | null = null;
+	#keys = new MenuKeyReader();
+	#choiceScroll: NativeNode["scroll"];
+	/** Non-auth field drafts stay in this mounted prompt, never in menu history. */
+	#inputDrafts = new Map<MCPWizardStep, { value: string; cursor: number }>();
 	#validationError: string | null = null;
 	/** Why the last OAuth attempt ended: the error (whole for native, fitted for ANSI) and a tip. */
 	#oauthFailure: { cancelled: boolean; message: string; ansiMessage: string; tip?: string } | null = null;
@@ -420,6 +426,9 @@ export class MCPAddWizard extends OverlayPanel {
 
 	/** Mount a step as the wizard body. Overlay chrome is unbounded, so no height budget applies. */
 	#show(step: WizardStep, native: NativeWizardStep): void {
+		this.#keys.reset();
+		this.#choiceList = null;
+		this.#choiceScroll = undefined;
 		step.setMaxHeight(undefined);
 		this.#step = step;
 		this.#contentContainer.clear();
@@ -457,6 +466,7 @@ export class MCPAddWizard extends OverlayPanel {
 			options.escape === undefined
 				? `[Press ${editorKey("tui.input.submit")} to skip or continue]`
 				: inputHint(options.escape);
+		const draft = this.#inputDrafts.get(this.#currentStep);
 		const field = new TextFormField({
 			theme: mcpFormTheme,
 			label: options.lead,
@@ -465,7 +475,7 @@ export class MCPAddWizard extends OverlayPanel {
 				? [new Text(theme.fg("error", `✗ ${sanitize(options.error)}`), 0, 0), new Spacer(1)]
 				: undefined,
 			hint: options.note ? `[${options.note}]\n${keyHint}` : keyHint,
-			initialValue: options.initial,
+			initialValue: draft?.value ?? options.initial,
 			secret: options.secret,
 			empty: options.optional ? "submit" : "reject",
 			emptyError: " ",
@@ -473,6 +483,7 @@ export class MCPAddWizard extends OverlayPanel {
 			onCancel: () => this.#cancelInputStep(),
 		});
 		field.input.placeholder = options.placeholder;
+		if (draft) field.input.setCursor(draft.cursor);
 		this.#inputField = field;
 		const caption = options.error
 			? text([span(plainText(options.error), "error")], { role: "omp.mcpAdd.note", wrap: "word" })
@@ -524,6 +535,7 @@ export class MCPAddWizard extends OverlayPanel {
 		}));
 		const list = new SelectList(items, MAX_DISPLAY_WIDTH * Math.max(1, items.length), getSelectListTheme(), {
 			search: "never",
+			activateOnSpace: false,
 			renderItem: ({ item, selected, width }) => {
 				const prefix = selected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
 				const label = selected ? theme.fg("accent", item.label) : item.label;
@@ -558,6 +570,7 @@ export class MCPAddWizard extends OverlayPanel {
 				},
 			},
 		);
+		this.#choiceList = list;
 	}
 
 	/**
@@ -629,14 +642,15 @@ export class MCPAddWizard extends OverlayPanel {
 				),
 			);
 			// Keyed per step: a double-click's trailing event never lands on the next step's list.
-			children.push(
-				node(
+			children.push({
+				...node(
 					"list",
 					{ selected: String(this.#selectedIndex), role: "omp.mcpAdd.choices" },
 					items,
 					`choices-${this.#currentStep}`,
 				),
-			);
+				scroll: this.#choiceScroll,
+			});
 		}
 		children.push(this.#describeActions(step.actions));
 		// The wizard replaces the editor in the dock; its sheet hoists into the terminal's layer.
@@ -720,11 +734,20 @@ export class MCPAddWizard extends OverlayPanel {
 	}
 
 	#cancelInputStep(): void {
+		this.#rememberInputDraft();
 		if (this.#currentStep === "name") {
 			this.#onCancelCallback();
 			return;
 		}
 		this.#goBack();
+	}
+
+	#rememberInputDraft(): void {
+		if (!this.#inputField || this.#currentStep === "apikey" || this.#currentStep.startsWith("oauth-")) return;
+		this.#inputDrafts.set(this.#currentStep, {
+			value: this.#inputField.getValue(),
+			cursor: this.#inputField.input.getCursor(),
+		});
 	}
 
 	#renderStep(): void {
@@ -1022,25 +1045,35 @@ export class MCPAddWizard extends OverlayPanel {
 			return;
 		}
 
-		// Selector steps - handle Enter
-		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
+		const action = this.#keys.read(keyData);
+		if (action === undefined || action === "pending") return;
+		if (action.kind === "cancel") {
+			this.#runAction("back");
+		} else if (action.kind === "confirm") {
 			this.#selectCurrentOption();
-			return;
+		} else if (
+			this.#choiceList &&
+			(action.kind === "move" ||
+				action.kind === "halfPage" ||
+				action.kind === "page" ||
+				action.kind === "boundary" ||
+				action.kind === "scroll")
+		) {
+			this.#choiceList.handleNavigation(action);
+			this.#selectedIndex = Number(this.#choiceList.getSelectedItem()?.value ?? "0");
+			if (action.kind === "scroll") {
+				const by = menuScrollBy(action);
+				if (by) this.#choiceScroll = { by, n: (this.#choiceScroll?.n ?? 0) + 1 };
+			}
+			this.#native = undefined;
+			this.#requestRender();
 		}
-
-		// Handle up/down arrows for selectors
-		if (matchesSelectUp(keyData)) {
-			this.#moveSelection(-1);
-			return;
-		}
-		if (matchesSelectDown(keyData)) {
-			this.#moveSelection(1);
-			return;
-		}
+		// Space never starts authentication, advances credentials, or saves.
 	}
 
 	#saveInputAndProceed(): void {
 		if (!this.#inputField) return;
+		this.#rememberInputDraft();
 
 		const value = this.#inputField.getValue().trim();
 
@@ -1206,13 +1239,6 @@ export class MCPAddWizard extends OverlayPanel {
 		}
 
 		this.#renderStep();
-	}
-
-	#moveSelection(delta: number): void {
-		const maxIndex = this.#getMaxIndexForCurrentStep();
-		this.#selectedIndex = (this.#selectedIndex + delta + maxIndex + 1) % (maxIndex + 1);
-		this.#renderStep();
-		this.#requestRender();
 	}
 
 	#getMaxIndexForCurrentStep(): number {

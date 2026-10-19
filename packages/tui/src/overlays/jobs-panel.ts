@@ -7,13 +7,24 @@
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { formatDuration } from "@oh-my-pi/pi-utils";
 import type { Component } from "../tui";
-import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
 import { matchesKey } from "../keys";
-import { truncateToWidth } from "../utils";
+import { replaceTabs, truncateToWidth } from "../utils";
 import { collapseCommand } from "../apps/ps-data";
 import { ansi, code, col, compact, item, node, row, span, stableKey, text } from "../native/describe";
-import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton, selectList } from "../native/overlay";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	menuScrollBy,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
+import { MenuSelection } from "../components/menu-selection";
+import { ScrollView } from "../components/scroll-view";
+import { Text } from "../components/text";
+import { fuzzyFilter } from "../fuzzy";
 
 /** One async job as the session snapshots it. */
 export interface JobsPanelJob {
@@ -86,8 +97,8 @@ const STATUS_GLYPH: Record<JobsPanelJob["status"], TspSpan> = {
 /** The list row's icon per job type (Tern icon names); other types read as a generic job. */
 const TYPE_ICON: Record<string, string> = { bash: "bash", task: "agent" };
 
-/** Output tail rows the terminal fallback shows under the selected job. */
-const FALLBACK_TAIL_LINES = 8;
+/** The terminal fallback initially retains the existing eight-row output tail. */
+const OUTPUT_ROWS = 8;
 
 /**
  * The jobs pill's sheet: a centred `lg` glass sheet titled Background jobs.
@@ -107,67 +118,109 @@ export class JobsSheet implements Component {
 		head: "Background jobs",
 	} as const;
 	readonly #source: JobsSheetSource;
+	readonly #keys = new MenuKeyReader();
+	readonly #search = new MenuSearchField();
+	readonly #selection = new MenuSelection<JobsPanelJob>([], {
+		getKey: job => job.id,
+		getSearchText: job => `${job.label} ${job.id} ${job.type} ${job.status}`,
+	});
+	readonly #viewport = new MenuViewport();
+	readonly #output = new Text("", 0, 0);
+	readonly #outputView = new ScrollView(this.#output, { height: OUTPUT_ROWS, followTail: true, anchor: "end" });
 	#selectedId: string | undefined;
-	#native: { key: string; output: string | undefined; node: NativeNode } | undefined;
-	/** Fallback output tail, reused while the selected job's output is unchanged. */
-	#tail: { id: string; output: string; lines: readonly string[] } | undefined;
+	#focus: "list" | "output" = "list";
+	#rowCounts: number[] = [];
+	#outputSource: { id: string; output: string } | undefined;
+	#nativeListScroll: NativeScroll | undefined;
+	#nativeOutputScroll: NativeScroll | undefined;
 
 	constructor(source: JobsSheetSource) {
 		this.#source = source;
 	}
 
-	describe(_cx: DescribeContext): NativeNode {
+	navigationSnapshot(): unknown {
+		this.#current();
+		return {
+			selectedId: this.#selectedId,
+			focus: this.#focus,
+			search: this.#search.navigationSnapshot(),
+			viewportTop: this.#viewport.top,
+			output: this.#outputView.navigationSnapshot(),
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as {
+			selectedId?: string;
+			focus?: "list" | "output";
+			search?: unknown;
+			viewportTop?: MenuViewportPosition | number;
+			output?: unknown;
+		};
+		this.#search.restoreNavigation(state.search);
+		this.#selectedId = typeof state.selectedId === "string" ? state.selectedId : undefined;
+		this.#current();
+		this.#focus = state.focus === "output" ? "output" : "list";
+		this.#viewport.setTop(state.viewportTop);
+		this.#outputView.restoreNavigation(state.output);
+		this.#keys.reset();
+		this.#nativeListScroll = undefined;
+		this.#nativeOutputScroll = undefined;
+		this.#outputSource = undefined;
+	}
+
+	describe(cx: DescribeContext): NativeNode {
 		const { jobs, selected } = this.#current();
 		const detail = selected && this.#source.inspect(selected.id);
 		const now = Date.now();
-		// Elapsed nodes tick on their own; list values and the output pane redraw
-		// when a job starts, settles or leaves, its process changes, its output
-		// grows, or (while one runs) once a second.
-		const key = [
-			jobs.map(job => `${job.id}:${job.status}`).join(","),
-			selected?.id,
-			detail?.pids.join(" "),
-			detail?.exitCode,
-			detail?.artifactId,
-			jobs.some(job => job.status === "running") ? Math.floor(now / 1000) : "",
-		].join("|");
-		const output = detail?.output;
-		if (this.#native?.key === key && this.#native.output === output) return this.#native.node;
 		const close = actionButton("Close", "close", { keys: "escape" });
-		const described = selected
-			? col([
-					node(
-						"row",
-						{ role: "omp.jobs.split" },
-						[
-							node("col", { role: "omp.jobs.master" }, [describeJobList(jobs, selected, now)], "master"),
-							describeDetail(selected, detail, now),
-						],
-						"split",
-					),
-					actionBar([describeSummary(jobs), null, close]),
-				])
-			: col([describeEmpty(), actionBar([null, close])]);
-		this.#native = { key, output, node: described };
-		return described;
+		return col([
+			this.#search.input.describe(cx),
+			...(selected
+				? [
+						node(
+							"row",
+							{ role: "omp.jobs.split" },
+							[
+								node(
+									"col",
+									{ role: "omp.jobs.master" },
+									[{ ...describeJobList(jobs, selected, now), scroll: this.#nativeListScroll }],
+									"master",
+								),
+								describeDetail(selected, detail, now, this.#nativeOutputScroll),
+							],
+							"split",
+						),
+						actionBar([describeSummary(jobs), null, close]),
+					]
+				: [describeEmpty(), actionBar([null, close])]),
+		]);
 	}
 
-	/** Rows for a terminal without the native surface: one per job, then the selected job's facts and output tail. */
 	render(width: number): readonly string[] {
 		const { jobs, selected } = this.#current();
 		const now = Date.now();
 		const running = jobs.filter(job => job.status === "running").length;
-		const lines = [truncateToWidth(` Background jobs · ${running} running`, width)];
-		if (jobs.length === 0) lines.push(" No background jobs");
-		for (const job of jobs) {
+		const lines = [
+			truncateToWidth(` Background jobs · ${running} running`, width),
+			this.#search.render(width, { muted: text => text }),
+		];
+		const window = this.#viewport.layout(this.#rowCounts, this.#selection.selectedIndex, this.#listRows());
+		if (jobs.length === 0) lines.push(this.#search.value ? " No matching jobs" : " No background jobs");
+		for (let index = window.startIndex; index < window.endIndex; index++) {
+			const job = jobs[index]!;
 			const cursor = job === selected ? ">" : " ";
-			const age = formatDuration(jobAge(job, now));
 			lines.push(
-				truncateToWidth(`${cursor} ${job.status}  ${job.type} ${age}  ${collapseCommand(job.label)}`, width),
+				truncateToWidth(
+					`${cursor} ${job.status}  ${job.type} ${formatDuration(jobAge(job, now))}  ${collapseCommand(job.label)}`,
+					width,
+				),
 			);
 		}
 		const detail = selected && this.#source.inspect(selected.id);
-		if (detail) {
+		if (selected && detail) {
 			const facts = compact([
 				detail.cwd && `cwd ${detail.cwd}`,
 				detail.pids.length > 0 && `pid ${detail.pids.join(", ")}`,
@@ -175,53 +228,111 @@ export class JobsSheet implements Component {
 				detail.artifactId && `artifact://${detail.artifactId}`,
 			]);
 			if (facts.length > 0) lines.push(truncateToWidth(`   ${facts.join(" · ")}`, width));
-			for (const line of this.#tailLines(selected.id, detail.output ?? "")) {
-				if (line) lines.push(truncateToWidth(`   ${line}`, width));
+			const output = detail.output ?? "";
+			if (this.#outputSource?.id !== selected.id || this.#outputSource.output !== output) {
+				if (this.#outputSource && this.#outputSource.id !== selected.id) this.#outputView.setFollowTail(true);
+				this.#outputSource = { id: selected.id, output };
+				this.#output.setText(replaceTabs(output));
 			}
+			lines.push(...this.#outputView.render(Math.max(1, width - 3)).map(line => `   ${line}`));
 		}
+		lines.push(
+			truncateToWidth(
+				`j/k rows · h/l or Tab list/output · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Enter/Space details · / search · x cancel · Esc close`,
+				width,
+			),
+		);
 		return lines;
 	}
 
 	invalidate(): void {
-		this.#native = undefined;
+		this.#outputView.invalidate();
+	}
+
+	dispose(): void {
+		this.#outputView.dispose();
 	}
 
 	handleInput(data: string): void {
-		if (matchesSelectCancel(data)) this.#source.close();
-		else if (matchesSelectUp(data)) this.#move(-1);
-		else if (matchesSelectDown(data)) this.#move(1);
-		else if (matchesKey(data, "x")) this.#cancelSelected();
+		const before = this.#search.value;
+		if (this.#search.handleInput(data) !== "pass") {
+			if (this.#search.value !== before) this.#viewport.reveal();
+			this.#keys.reset();
+			return;
+		}
+		this.#current();
+		if (this.#viewport.top === undefined)
+			this.#viewport.layout(this.#rowCounts, this.#selection.selectedIndex, this.#listRows());
+		const action = this.#keys.read(data);
+		if (!action || action === "pending") {
+			if (matchesKey(data, "x")) this.#cancelSelected();
+			return;
+		}
+		if (action.kind === "cancel") return this.#source.close();
+		if (action.kind === "search") {
+			this.#focus = "list";
+			this.#search.focused = true;
+			return;
+		}
+		if (action.kind === "context" || action.kind === "horizontal") {
+			this.#search.focused = false;
+			this.#focus =
+				action.kind === "horizontal"
+					? action.delta < 0
+						? "list"
+						: "output"
+					: this.#focus === "list"
+						? "output"
+						: "list";
+			return;
+		}
+		if (action.kind === "confirm" || action.kind === "toggle") {
+			this.#search.focused = false;
+			this.#focus = "output";
+			return;
+		}
+		if (this.#focus === "output") {
+			const by = menuScrollBy(action);
+			if (by) this.#nativeOutputScroll = { by, n: (this.#nativeOutputScroll?.n ?? 0) + 1 };
+			if (this.#outputView.handleMenuAction(action)) {
+				this.#outputView.setFollowTail(action.kind === "boundary" && action.edge === "last");
+			}
+		} else {
+			const motion = applyMenuMotion(action, this.#selection, this.#viewport);
+			if (action.kind === "scroll") {
+				const by = menuScrollBy(action);
+				if (by) this.#nativeListScroll = { by, n: (this.#nativeListScroll?.n ?? 0) + 1 };
+			}
+			if (motion.selectionChanged) this.#selectedId = this.#selection.selectedKey;
+		}
 	}
 
-	/** Clicks select a row; Close and Cancel job run what Esc and X run. */
 	handleNativeEvent(event: NativeUiEvent): void {
-		if (event.type === "select" || event.type === "activate") this.#selectedId = event.item;
-		else if (event.type === "action" && event.act === "close") this.#source.close();
+		if (event.type === "select" || event.type === "activate") {
+			this.#search.focused = false;
+			this.#keys.reset();
+			this.#selectedId = event.item;
+			this.#focus = event.type === "activate" ? "output" : "list";
+			this.#viewport.reveal();
+		} else if (event.type === "action" && event.act === "close") this.#source.close();
 		else if (event.type === "action" && event.act === "cancel") this.#cancelSelected();
 	}
 
-	/** Every job, running first, and the selected one (the first when the selection left). */
+	#listRows(): number {
+		return Math.max(1, Math.min(12, Math.floor(((process.stdout.rows || 24) - 6) / 2)));
+	}
+
 	#current(): { jobs: readonly JobsPanelJob[]; selected: JobsPanelJob | undefined } {
 		const { running, recent } = this.#source.load();
-		const jobs = [...running, ...recent];
-		const selected = jobs.find(job => job.id === this.#selectedId) ?? jobs[0];
+		const all = [...running, ...recent];
+		const jobs = this.#search.value.trim()
+			? fuzzyFilter(all, this.#search.value, job => `${job.label} ${job.id} ${job.type} ${job.status}`)
+			: all;
+		this.#selection.setItems(jobs, this.#selectedId);
+		const selected = this.#selection.selectedItem;
 		this.#selectedId = selected?.id;
+		if (this.#rowCounts.length !== jobs.length) this.#rowCounts = jobs.map(() => 1);
 		return { jobs, selected };
-	}
-
-	#tailLines(id: string, output: string): readonly string[] {
-		const cached = this.#tail;
-		if (cached?.id === id && cached.output === output) return cached.lines;
-		const lines = tailLines(output, FALLBACK_TAIL_LINES);
-		this.#tail = { id, output, lines };
-		return lines;
-	}
-
-	#move(delta: number): void {
-		const { jobs, selected } = this.#current();
-		if (!selected) return;
-		const index = Math.max(0, Math.min(jobs.length - 1, jobs.indexOf(selected) + delta));
-		this.#selectedId = jobs[index]?.id;
 	}
 
 	#cancelSelected(): void {
@@ -233,23 +344,6 @@ export class JobsSheet implements Component {
 /** How long a job ran, or has been running. */
 function jobAge(job: JobsPanelJob, nowMs: number): number {
 	return Math.max(0, (job.endTime ?? nowMs) - job.startTime);
-}
-
-/**
- * The last `count` pieces of `text.trimEnd().split("\n")`, found by scanning
- * back from the end so a long running output is never split as a whole.
- */
-function tailLines(text: string, count: number): string[] {
-	const trimmed = text.trimEnd();
-	const lines: string[] = [];
-	let end = trimmed.length;
-	while (lines.length < count) {
-		const newline = end > 0 ? trimmed.lastIndexOf("\n", end - 1) : -1;
-		lines.push(trimmed.slice(newline + 1, end));
-		if (newline < 0) break;
-		end = newline;
-	}
-	return lines.reverse();
 }
 
 /**
@@ -317,7 +411,12 @@ function describeEmpty(): NativeNode {
  * The selected job: a status line (pill, live elapsed, type · id, Cancel job),
  * its task or full command, facts and the output pane (or its empty state).
  */
-function describeDetail(job: JobsPanelJob, detail: JobsPanelDetail | undefined, nowMs: number): NativeNode {
+function describeDetail(
+	job: JobsPanelJob,
+	detail: JobsPanelDetail | undefined,
+	nowMs: number,
+	scroll?: NativeScroll,
+): NativeNode {
 	const settled = job.status !== "running";
 	const exit = detail?.exitCode;
 	const age = Math.round(jobAge(job, nowMs));
@@ -361,7 +460,10 @@ function describeDetail(job: JobsPanelJob, detail: JobsPanelDetail | undefined, 
 			[
 				text("Output", { role: "omp.jobs.label" }),
 				detail?.output
-					? ansi(detail.output, { follow: !settled, role: "omp.jobs.output", max: { h: "16lines" } })
+					? {
+							...ansi(detail.output, { follow: !settled, role: "omp.jobs.output", max: { h: "16lines" } }),
+							scroll,
+						}
 					: text(settled ? "No output" : "No output yet", { role: "omp.jobs.nooutput" }),
 			],
 			"out",

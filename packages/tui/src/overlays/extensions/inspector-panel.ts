@@ -92,6 +92,10 @@ const MCP_TOOL_BUDGET = PREVIEW_LIMITS.COLLAPSED_ITEMS;
 const MCP_INLINE_ARG_LIMIT = 3;
 const MCP_INLINE_DESC_LINES = 3;
 
+export interface InspectorPanelNavigation {
+	expanded: boolean;
+}
+
 export class InspectorPanel implements Component {
 	#extension: Extension | null = null;
 	#extensionKey: string | null = null;
@@ -136,6 +140,15 @@ export class InspectorPanel implements Component {
 	toggleExpanded(): boolean {
 		this.#expanded = !this.#expanded;
 		return this.#expanded;
+	}
+
+	navigationSnapshot(): InspectorPanelNavigation {
+		return { expanded: this.#expanded };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		this.#expanded = (snapshot as Partial<InspectorPanelNavigation>).expanded === true;
 	}
 
 	invalidate(): void {}

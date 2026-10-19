@@ -30,16 +30,9 @@ import { ensureThemeSync, theme } from "../theme/theme";
 import { formatAbsoluteOnlyAmount } from "../prompt/usage-amounts";
 import { truncateMiddleToWidth } from "../render/render-utils";
 import { sanitizeDisplayLine } from "./extensions/display-text";
-import {
-	matchesSelectCancel,
-	matchesSelectDown,
-	matchesSelectPageDown,
-	matchesSelectPageUp,
-	matchesSelectUp,
-} from "../keybinding-matchers";
+import { MenuKeyReader } from "../components/menu-navigation";
 import { OverlayPanel, PanelDivider, PanelRows } from "../chrome/overlay-box";
-import { formatKeyHint } from "../app-keybindings";
-import { editorKey, editorKeys } from "../chrome/keybinding-hints";
+import { editorKey } from "../chrome/keybinding-hints";
 import type { TspSpan, TspTableColumn, TspText, TspTone } from "@oh-my-pi/pi-wire";
 import { col, elapsed, node, span, text } from "../native/describe";
 import { type DescribeContext, leafKey, type NativeChild, type NativeNode, type NativeUiEvent } from "../native/node";
@@ -668,6 +661,11 @@ interface CardRowLayout {
 	labelHeights: number[];
 }
 
+export interface UsageDashboardNavigation {
+	view: "overview" | "detail";
+	scroll: { overview: number; detail: number };
+}
+
 export class UsageDashboardComponent implements Component {
 	/** The terminal draws the sheet: a large glass overlay titled Usage. */
 	readonly nativeOverlay = { role: "omp.overlay.usage", size: "lg", anchor: "center", head: "Usage" } as const;
@@ -681,6 +679,9 @@ export class UsageDashboardComponent implements Component {
 	#revision = 0;
 	#view: "overview" | "detail" = "overview";
 	#scroll = 0;
+	readonly #keys = new MenuKeyReader();
+	readonly #viewScroll = { overview: 0, detail: 0 };
+	#maxScroll = 0;
 	#activity: DailyActivityPoint[] | null = null;
 	#activityError: string | null = null;
 	#syncing = true;
@@ -1039,7 +1040,8 @@ export class UsageDashboardComponent implements Component {
 		const contentRows = Math.max(5, height - 5);
 		this.#lastViewportRows = contentRows;
 		const maxScroll = Math.max(0, contentSource.length - contentRows);
-		if (this.#scroll > maxScroll) this.#scroll = maxScroll;
+		this.#maxScroll = maxScroll;
+		this.#scroll = Math.max(0, Math.min(this.#scroll, maxScroll));
 
 		const latestFetchedAt = Math.max(0, ...this.#reports.map(report => report.fetchedAt ?? 0));
 		const checkedText = this.#refreshing
@@ -1049,13 +1051,9 @@ export class UsageDashboardComponent implements Component {
 				: "";
 		const title = this.#view === "detail" ? "Usage · Details" : "Usage";
 
-		const scrollHint = maxScroll > 0 ? `${editorKeys("tui.select.up", "tui.select.down")} scroll · ` : "";
-		const cancel = editorKey("tui.select.cancel");
+		const scrollHint = maxScroll > 0 ? "j/k scroll · " : "";
 		const refreshHint = this.#options.refresh ? "r refresh · " : "";
-		const hint =
-			this.#view === "detail"
-				? `${scrollHint}${refreshHint}${cancel} back`
-				: `${scrollHint}${refreshHint}${formatKeyHint("enter")} details · ${cancel} close`;
+		const hint = `${scrollHint}h/l views · Tab next view · ${refreshHint}${editorKey("tui.select.cancel")} close`;
 		this.#panel.title = title;
 		this.#header.setLines([checkedText ? theme.fg("dim", checkedText) : ""]);
 		this.#body.setLines(contentSource.slice(this.#scroll, this.#scroll + contentRows));
@@ -1084,8 +1082,7 @@ export class UsageDashboardComponent implements Component {
 			return cache.node;
 		}
 		const body = this.#view === "detail" ? this.#describeDetail() : this.#describeOverview(meter, chart);
-		// Esc leaves Details for Overview first, so only Overview's Close wears its keycap.
-		const close = actionButton("Close", "close", this.#view === "overview" ? { keys: "escape" } : {});
+		const close = actionButton("Close", "close", { keys: "escape" });
 		const root = col(
 			[
 				this.#describeHead(),
@@ -1098,7 +1095,7 @@ export class UsageDashboardComponent implements Component {
 		return root;
 	}
 
-	/** Tab clicks switch views like Enter/Esc; the Refresh button runs `r`; Close closes from either view. */
+	/** Views are contexts, not history visits; Refresh is always an explicit action. */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type === "action") {
 			if (event.act === "refresh") void this.#refresh();
@@ -1766,13 +1763,34 @@ export class UsageDashboardComponent implements Component {
 	}
 
 	#scrollBy(delta: number): void {
-		this.#scroll = Math.max(0, this.#scroll + delta);
+		this.#scroll = Math.max(0, Math.min(this.#maxScroll, this.#scroll + delta));
 		this.#options.requestRender();
 	}
 
 	#setView(view: "overview" | "detail"): void {
+		if (view === this.#view) return;
+		this.#viewScroll[this.#view] = this.#scroll;
 		this.#view = view;
-		this.#scroll = 0;
+		this.#scroll = this.#viewScroll[view];
+		this.#keys.reset();
+		this.#changed();
+	}
+
+	navigationSnapshot(): UsageDashboardNavigation {
+		return { view: this.#view, scroll: { ...this.#viewScroll, [this.#view]: this.#scroll } };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as Partial<UsageDashboardNavigation>;
+		if (state.view !== "overview" && state.view !== "detail") return;
+		for (const view of ["overview", "detail"] as const) {
+			const scroll = state.scroll?.[view];
+			if (typeof scroll === "number" && Number.isFinite(scroll)) this.#viewScroll[view] = Math.max(0, scroll);
+		}
+		this.#view = state.view;
+		this.#scroll = this.#viewScroll[state.view];
+		this.#keys.reset();
 		this.#changed();
 	}
 
@@ -1786,11 +1804,9 @@ export class UsageDashboardComponent implements Component {
 		) {
 			return;
 		}
-		if (matchesSelectCancel(data) || matchesKey(data, "q")) {
-			if (this.#view === "detail") {
-				this.#setView("overview");
-				return;
-			}
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (action?.kind === "cancel" || matchesKey(data, "q")) {
 			this.#close();
 			return;
 		}
@@ -1798,21 +1814,17 @@ export class UsageDashboardComponent implements Component {
 			void this.#refresh();
 			return;
 		}
-		if (
-			this.#view === "overview" &&
-			(matchesKey(data, "return") || matchesKey(data, "tab") || matchesKey(data, "d"))
-		) {
-			this.#setView("detail");
-			return;
-		}
-		if (matchesSelectUp(data)) this.#scrollBy(-1);
-		else if (matchesSelectDown(data)) this.#scrollBy(1);
-		else if (matchesSelectPageUp(data)) this.#scrollBy(-this.#lastViewportRows);
-		else if (matchesSelectPageDown(data)) this.#scrollBy(this.#lastViewportRows);
-		else if (matchesKey(data, "home")) {
-			this.#scroll = 0;
+		if (action?.kind === "horizontal") this.#setView(action.delta < 0 ? "overview" : "detail");
+		else if (action?.kind === "context") this.#setView(this.#view === "overview" ? "detail" : "overview");
+		else if (action?.kind === "confirm" || matchesKey(data, "d")) this.#setView("detail");
+		else if (action?.kind === "move" || action?.kind === "scroll") this.#scrollBy(action.delta);
+		else if (action?.kind === "halfPage")
+			this.#scrollBy(action.delta * Math.max(1, Math.floor(this.#lastViewportRows / 2)));
+		else if (action?.kind === "page") this.#scrollBy(action.delta * this.#lastViewportRows);
+		else if (action?.kind === "boundary") {
+			this.#scroll = action.edge === "first" ? 0 : this.#maxScroll;
 			this.#options.requestRender();
-		} else if (matchesKey(data, "end")) this.#scrollBy(Number.MAX_SAFE_INTEGER);
+		}
 	}
 
 	#close(): void {

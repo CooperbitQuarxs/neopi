@@ -1,11 +1,11 @@
 /**
  * Fullscreen transcript viewer.
  *
- * `AgentHubOverlayComponent.openChat` mounts this as a `fullscreen` overlay
- * (`ui.showOverlay(..., { fullscreen: true })`), so it borrows the terminal's
- * alternate screen buffer (the vim/less idiom) and paints the whole screen — no
- * compositing into the live transcript's scrollback. It renders a parked
- * subagent / advisor / collab-guest transcript that has no live in-view session.
+ * `AgentHubOverlayComponent.openChat` opens this as a nested page of the hub's
+ * registered fullscreen overlay. It shares the hub's menu-history owner and
+ * alternate screen rather than mounting a second overlay or touching the live
+ * transcript's scrollback. It renders a parked subagent / advisor / collab-guest
+ * transcript that has no live in-view session.
  *
  * Local transcripts tail append-only growth: unchanged file identity plus stable
  * sentinels means only newly appended JSONL is parsed and rendered. Rewrites,
@@ -17,11 +17,11 @@ import type * as fs from "node:fs";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import type { Component, TUI } from "../tui";
-import { Editor } from "../components/editor";
-import { matchesKey } from "../keys";
+import { Editor, type EditorNavigationState } from "../components/editor";
+import { extractPrintableText, matchesKey } from "../keys";
 import { routeSgrMouseInput } from "../mouse";
 import { formatDuration, formatNumber, logger } from "@oh-my-pi/pi-utils";
-import { formatKeyHint, formatKeyHints, type KeyId } from "../app-keybindings";
+import { formatKeyHint, type KeyId } from "../app-keybindings";
 import { editorKey } from "../chrome/keybinding-hints";
 import type { MessageRenderer } from "../chat/extension-types";
 import type { AgentLifecycleLike } from "./agent-hub-types";
@@ -29,7 +29,8 @@ import type { AgentHubRegistry, AgentStatus } from "./agent-hub-types";
 import type { SessionMessageEntryLike } from "../chat/transcript-entry";
 import type { ObservableSession, SessionObserverRegistry } from "./session-observer-registry";
 import { getEditorTheme, theme } from "../theme/theme";
-import { matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { getKeybindings } from "../keybindings";
+import { MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
 import type { AgentHubRemote } from "./agent-hub";
 import { ChatTranscriptBuilder, type TranscriptLiveState } from "../chat/chat-transcript-builder";
 import {
@@ -41,7 +42,7 @@ import { sanitizeErrorLine } from "../chrome/error-block";
 import type { ScrollRangeAnchor } from "../components/scroll-view";
 import { formatContextUsage } from "../chrome/context-thresholds";
 import { node, span, text } from "../native/describe";
-import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionHint, escCloseButton, hintsRow, overlayCard } from "../native/overlay";
 
 /** Parsed message and model metadata relevant to a transcript viewer. */
@@ -188,6 +189,10 @@ export class AgentTranscriptViewer implements Component {
 	#editor: Editor | undefined;
 	#notice: string | undefined;
 	#expanded = false;
+	readonly #keys = new MenuKeyReader();
+	#focus: "view" | "editor" = "view";
+	#pendingSends = 0;
+	#scroll: NativeScroll | undefined;
 
 	#localState: LocalTranscriptState | undefined;
 	#localUnavailable = "";
@@ -257,7 +262,7 @@ export class AgentTranscriptViewer implements Component {
 			if (this.#disposed || !this.#editor || this.#sendable) return;
 			this.#editor = undefined;
 			this.#nativeCache = undefined;
-			this.#deps.requestRender();
+			this.#setFocus("view");
 		});
 	}
 
@@ -587,59 +592,68 @@ export class AgentTranscriptViewer implements Component {
 			});
 			return;
 		}
-
-		// The hub/observe toggle keys close the whole hub (matches the table view's
-		// toggle semantics), not just this viewer.
+		if (this.#focus === "editor" && this.#editor) {
+			this.#keys.reset();
+			const text = extractPrintableText(data);
+			if (this.#editor.isJumpPending) this.#editor.handleInput(data);
+			else if (text !== undefined) this.#editor.typeCharacter(text);
+			else {
+				const kb = getKeybindings();
+				if (
+					kb.matches(data, "tui.select.cancel") ||
+					kb.matches(data, "tui.select.nextContext") ||
+					kb.matches(data, "tui.select.prevContext")
+				)
+					this.#setFocus("view");
+				else this.#editor.handleInput(data);
+			}
+			this.#deps.requestRender();
+			return;
+		}
 		for (const key of this.#deps.hubKeys) {
 			if (matchesKey(data, key)) {
 				this.#deps.onHubClose();
 				return;
 			}
 		}
-
-		if (matchesKey(data, "escape")) {
-			this.#escape();
-			return;
-		}
-
 		for (const key of this.#deps.expandKeys) {
 			if (matchesKey(data, key)) {
-				this.#expanded = !this.#expanded;
-				this.#builder.setExpanded(this.#expanded);
-				this.#deps.requestRender();
+				this.#toggleExpanded();
 				return;
 			}
 		}
-
-		// Once the reader starts typing a message, the editor owns every key.
-		const editorEmpty = !this.#editor || this.#editor.getText().trim() === "";
-		if (editorEmpty && this.#handleScroll(data)) return;
-
-		if (this.#editor) {
-			this.#editor.handleInput(data);
+		const action = this.#keys.read(data);
+		if (action === undefined || action === "pending") return;
+		if (action.kind === "cancel" || (action.kind === "horizontal" && action.delta === -1)) {
+			this.#deps.onClose();
+			return;
+		}
+		if (action.kind === "context") {
+			if (this.#editor) this.#setFocus("editor");
+			return;
+		}
+		if (action.kind === "toggle") {
+			this.#toggleExpanded();
+			return;
+		}
+		if (this.#browser.handleMenuAction(action)) {
+			const by = menuScrollBy(action);
+			if (by !== undefined) this.#scroll = { by, n: (this.#scroll?.n ?? 0) + 1 };
 			this.#deps.requestRender();
 		}
 	}
 
-	/** Returns true when the key was a scroll command. The browser owns the offset. */
-	#handleScroll(data: string): boolean {
-		if (this.#browser.handleScrollKey(data)) {
-			this.#deps.requestRender();
-			return true;
-		}
-		if (matchesKey(data, "j") || matchesSelectDown(data)) {
-			this.#browser.scroll(1);
-		} else if (matchesKey(data, "k") || matchesSelectUp(data)) {
-			this.#browser.scroll(-1);
-		} else if (data === "g") {
-			this.#browser.scrollToTop();
-		} else if (data === "G") {
-			this.#browser.scrollToBottom();
-		} else {
-			return false;
-		}
+	#setFocus(focus: "view" | "editor"): void {
+		this.#focus = this.#editor ? focus : "view";
+		if (this.#editor) this.#editor.focused = this.#focus === "editor";
+		this.#keys.reset();
 		this.#deps.requestRender();
-		return true;
+	}
+
+	#toggleExpanded(): void {
+		this.#expanded = !this.#expanded;
+		this.#builder.setExpanded(this.#expanded);
+		this.#deps.requestRender();
 	}
 
 	#submit(text: string): void {
@@ -661,6 +675,7 @@ export class AgentTranscriptViewer implements Component {
 		}
 		const lifecycle = this.#deps.lifecycle;
 		if (!lifecycle) return;
+		this.#pendingSends++;
 		void (async () => {
 			try {
 				// Revives a parked agent; returns the live session for running/idle.
@@ -669,6 +684,8 @@ export class AgentTranscriptViewer implements Component {
 				await session.prompt(trimmed, { streamingBehavior: "steer" });
 			} catch (error) {
 				this.#notice = error instanceof Error ? error.message : String(error);
+			} finally {
+				this.#pendingSends--;
 			}
 			this.#deps.requestRender();
 		})();
@@ -692,14 +709,10 @@ export class AgentTranscriptViewer implements Component {
 		if (event.type === "action" && event.act === "close") this.#escape();
 	}
 
-	/** Esc: clear a non-empty draft first, else close the viewer. */
+	/** Esc leaves the focused field without discarding its draft, then returns to the hub. */
 	#escape(): void {
-		if (this.#editor && this.#editor.getText().trim() !== "") {
-			this.#editor.setText("");
-			this.#deps.requestRender();
-			return;
-		}
-		this.#deps.onClose();
+		if (this.#focus === "editor") this.#setFocus("view");
+		else this.#deps.onClose();
 	}
 
 	/**
@@ -724,6 +737,9 @@ export class AgentTranscriptViewer implements Component {
 			placeholder,
 			stats,
 			this.#deps.expandKeys[0],
+			this.#focus,
+			this.#expanded,
+			this.#scroll,
 		]);
 		const cached = this.#nativeCache;
 		if (cached?.signature === signature) return cached.node;
@@ -748,7 +764,10 @@ export class AgentTranscriptViewer implements Component {
 		children.push(node("row", { gap: "md", align: "center" }, top, "top"));
 		children.push(
 			placeholder === undefined
-				? node("col", { grow: 1 }, [this.#builder.container, this.#builder.liveContainer], "transcript")
+				? {
+						...node("col", { grow: 1 }, [this.#builder.container, this.#builder.liveContainer], "transcript"),
+						scroll: this.#scroll,
+					}
 				: node("text", { spans: [span(placeholder, "dim")], wrap: "word" }, undefined, "placeholder"),
 		);
 		if (notice) {
@@ -807,8 +826,11 @@ export class AgentTranscriptViewer implements Component {
 		}
 		children.push(
 			hintsRow([
-				this.#editor ? actionHint("tui.input.submit", "send") : undefined,
-				{ keys: [this.#deps.expandKeys[0] ?? "ctrl+o"], label: "expand" },
+				this.#editor
+					? { keys: ["tab", "shift+tab"], label: this.#focus === "editor" ? "view" : "message" }
+					: undefined,
+				this.#focus === "editor" ? actionHint("tui.input.submit", "send") : undefined,
+				{ keys: [this.#deps.expandKeys[0] ?? "alt+e", "space"], label: "expand" },
 			]),
 		);
 		const head = [span("Agent Hub", "accent"), span(` ${theme.sep.dot} `, "dim"), span(id, "accent")];
@@ -872,10 +894,11 @@ export class AgentTranscriptViewer implements Component {
 		const lines: string[] = [];
 		const statsLine = this.#statsLine();
 		if (statsLine) lines.push(statsLine);
-		const keys =
-			`${formatKeyHint("escape")}:close  ${formatKeyHint(this.#deps.expandKeys[0] ?? "ctrl+o")}:expand  ` +
-			`${this.#editor ? "empty input → " : ""}${formatKeyHints(["j", "k"])}:scroll  ${formatKeyHints(["g", "shift+g"])}:top/bottom`;
-		const hint = this.#editor ? `${editorKey("tui.input.submit")}:send  ${keys}` : keys;
+		const keys = `${formatKeyHint("escape")}/h:hub  ${formatKeyHint(this.#deps.expandKeys[0] ?? "alt+e")}/Space:expand  j/k:scroll  Ctrl-d/u:half page  gg/G:top/bottom`;
+		const hint =
+			this.#focus === "editor"
+				? `${editorKey("tui.input.submit")}:send · Tab/Esc back to view`
+				: `${keys}${this.#editor ? " · Tab message" : ""}`;
 		lines.push(theme.fg("dim", hint));
 		return lines;
 	}
@@ -911,5 +934,49 @@ export class AgentTranscriptViewer implements Component {
 		}
 		if (!this.#deps.registry.get(this.#deps.agentId)?.sessionFile) return "No session file available yet.";
 		return "No messages yet.";
+	}
+
+	get agentId(): string {
+		return this.#deps.agentId;
+	}
+	get blocksMenuHistory(): boolean {
+		return this.#pendingSends > 0;
+	}
+
+	navigationSnapshot(): unknown {
+		return {
+			focus: this.#focus,
+			expanded: this.#expanded,
+			viewport: this.#browser.navigationSnapshot(),
+			editor: this.#editor?.getState(),
+			initialEntryId: this.#initialEntryId,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as {
+			focus?: "view" | "editor";
+			expanded?: boolean;
+			viewport?: unknown;
+			editor?: EditorNavigationState;
+			initialEntryId?: string;
+		};
+		if (typeof state.expanded === "boolean") {
+			this.#expanded = state.expanded;
+			this.#builder.setExpanded(state.expanded);
+		}
+		this.#browser.restoreNavigation(state.viewport);
+		if (
+			state.editor &&
+			typeof state.editor.text === "string" &&
+			typeof state.editor.cursor?.line === "number" &&
+			typeof state.editor.cursor?.col === "number" &&
+			typeof state.editor.scrollTop === "number"
+		)
+			this.#editor?.setState(state.editor);
+		this.#initialEntryId = state.initialEntryId;
+		this.#setFocus(state.focus === "editor" ? "editor" : "view");
+		this.#nativeCache = undefined;
 	}
 }

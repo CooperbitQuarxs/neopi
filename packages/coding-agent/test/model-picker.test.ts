@@ -98,7 +98,7 @@ describe("ModelPicker", () => {
 		const settings = Settings.isolated({ modelRoles: { image: "test/image-model" } });
 		const { picker } = createPicker({ models: [chat, image], scoped: true, settings });
 
-		picker.handleInput("i");
+		picker.handleInput("/");
 		picker.handleInput("image");
 
 		expect(normalize(picker.render(220))).toContain("● image");
@@ -115,7 +115,7 @@ describe("ModelPicker", () => {
 
 		expect(normalize(picker.render(220))).toContain("Session-only switch");
 
-		picker.handleInput("i");
+		picker.handleInput("/");
 		picker.handleInput("small");
 		const rendered = normalize(picker.render(220));
 		expect(rendered).toContain("context>4.1k");
@@ -136,7 +136,7 @@ describe("ModelPicker", () => {
 			picker: { currentContextTokens: 6000 },
 		});
 
-		picker.handleInput("i");
+		picker.handleInput("/");
 		picker.handleInput("large");
 		picker.handleInput("\n");
 		expect(onPick).toHaveBeenCalledTimes(1);
@@ -205,7 +205,7 @@ describe("ModelPicker", () => {
 			picker: { currentSelector: "test/cc-match" },
 		});
 
-		picker.handleInput("i");
+		picker.handleInput("/");
 		picker.handleInput("match");
 		picker.handleInput("\n");
 
@@ -220,7 +220,7 @@ describe("ModelPicker", () => {
 			picker: { currentSelector: "test/cc-shared" },
 		});
 
-		picker.handleInput("i");
+		picker.handleInput("/");
 		picker.handleInput("shared");
 		picker.handleInput("\n");
 
@@ -244,7 +244,7 @@ describe("ModelPicker", () => {
 			},
 		});
 
-		picker.handleInput("i");
+		picker.handleInput("/");
 		picker.handleInput("@");
 		const rendered = picker.render(220);
 		const frame = rendered.join("\n");
@@ -259,10 +259,10 @@ describe("ModelPicker", () => {
 		expect(onPick).not.toHaveBeenCalled();
 	});
 
-	test("insert mode types hjkl literally and double-Esc cancels with the query preserved", () => {
+	test("search field types hjkl literally and double-Esc cancels with the query preserved", () => {
 		const { picker, onCancel } = createPicker({ models: [makeModel("test", "test-model")], scoped: true });
 
-		picker.handleInput("i");
+		picker.handleInput("/");
 		picker.handleInput("hjkl");
 		picker.handleInput(ESC);
 		expect(onCancel).not.toHaveBeenCalled();

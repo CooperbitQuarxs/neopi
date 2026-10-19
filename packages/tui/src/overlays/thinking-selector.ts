@@ -25,7 +25,9 @@ export class ThinkingSelectorComponent extends OverlayPanel {
 		const thinkingLevels: SelectItem[] = availableLevels.map(getConfiguredThinkingLevelMetadata);
 
 		// Create selector
-		this.#selectList = new SelectList(thinkingLevels, thinkingLevels.length, getSelectListTheme());
+		this.#selectList = new SelectList(thinkingLevels, thinkingLevels.length, getSelectListTheme(), {
+			search: "always",
+		});
 
 		// Preselect current level
 		const currentIndex = thinkingLevels.findIndex(item => item.value === currentLevel);
@@ -68,6 +70,14 @@ export class ThinkingSelectorComponent extends OverlayPanel {
 
 	getSelectList(): SelectList {
 		return this.#selectList;
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationState();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		this.#selectList.restoreNavigation(snapshot);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {

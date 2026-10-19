@@ -21,6 +21,7 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import {
 	type Component,
+	extractPrintableText,
 	Input,
 	matchesKey,
 	routeSgrMouseInput,
@@ -39,6 +40,8 @@ import { isLayoutMouseRoutable } from "../components/layout/geometry";
 import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
 import type { ChainConfig, ChainConfigScope, ChainsConfigDoc, ChainStep } from "./chain-types";
+import { MenuKeyReader, isMenuHistoryParticipant, type MenuNavAction } from "../components/menu-navigation";
+import type { SelectListNavigationState } from "../components/select-list";
 
 /** Host callbacks: all disk + live-runtime effects flow through these. */
 export interface ChainConfigCallbacks {
@@ -112,6 +115,31 @@ type Screen =
 	| "prompt"
 	| "systemPrompt";
 
+interface ChainNavigationContext {
+	screen: Screen;
+	chainIndex?: number;
+	stepIndex?: number;
+	thinking?: { selector: string; efforts: readonly string[] };
+	tools?: readonly string[];
+}
+
+interface ChainListState {
+	navigation: SelectListNavigationState;
+	previewScroll: number;
+	previewFocused: boolean;
+}
+
+interface ChainNavigationSnapshot {
+	context: ChainNavigationContext;
+	scope: ChainConfigScope;
+	doc: ChainsConfigDoc;
+	dirty: boolean;
+	previewScroll: number;
+	previewFocused: boolean;
+	lists: [string, ChainListState][];
+	content: unknown;
+}
+
 /**
  * Fullscreen chain-configuration overlay. Implements {@link Component} directly
  * (rather than extending Container) so it owns the whole frame and the mouse
@@ -132,9 +160,26 @@ export class ChainConfigOverlayComponent implements Component {
 
 	#screen: Screen = "list";
 	/** The interactive element for the current screen. */
-	#active: Component = new SelectList([], 1, getSelectListTheme());
+	#active: Component = new SelectList([], 1, getSelectListTheme(), { search: "always" });
 	#footerHint = "";
 	#previewScroll = 0;
+	#previewFocused = false;
+	#previewRowsLast = 1;
+	#previewWidthLast = 1;
+	#previewLayoutDirty = true;
+	#previewMaxScroll = 0;
+	#previousNavigationSnapshot: ChainNavigationSnapshot | undefined;
+	readonly #keys = new MenuKeyReader();
+	#chainIndex: number | undefined;
+	#stepIndex: number | undefined;
+	#thinking: ChainNavigationContext["thinking"];
+	#tools: readonly string[] | undefined;
+	#navigationContext: ChainNavigationContext = { screen: "list" };
+	#restoringNavigation = false;
+	#pendingOperations = 0;
+	readonly #listStates = new Map<string, ChainListState>();
+	#navigationScope: ChainConfigScope = "project";
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	// Persistent frame: top, growing two-pane body, divider, footer, bottom.
 	// The frame paints from screen row 0, so SGR `event.row`/`event.col` —
@@ -143,6 +188,7 @@ export class ChainConfigOverlayComponent implements Component {
 	#bodyRowsLast = 3;
 	#renderActivePane = (width: number, height: number | undefined): readonly string[] => {
 		const rows = Math.max(0, Math.floor(height ?? this.#bodyRowsLast));
+		if (this.#active instanceof SelectList) this.#active.setMaxVisible(Math.max(1, rows - 1));
 		const lines = [...this.#active.render(width)];
 		while (lines.length < rows) lines.push("");
 		return lines.slice(0, rows);
@@ -199,7 +245,7 @@ export class ChainConfigOverlayComponent implements Component {
 		const height = Math.max(14, process.stdout.rows || 40);
 		const bodyRows = Math.max(3, height - 4);
 		this.#bodyRowsLast = bodyRows;
-		const title = `Chain configuration · ${this.#scope}${this.#dirty ? "  ● unsaved" : ""}`;
+		const title = `Chain configuration · ${this.#scope}${this.#dirty ? "  ● unsaved" : ""}${this.#screen === "list" && this.#previewFocused ? " · Preview" : ""}`;
 		this.#split.setNarrowPane(this.#screen === "list" ? undefined : "left");
 		this.#split.setSplitAt(this.#screen === "list" ? 0 : Number.MAX_SAFE_INTEGER);
 		this.#split.setHeight(bodyRows);
@@ -218,10 +264,126 @@ export class ChainConfigOverlayComponent implements Component {
 
 	handleInput(data: string): void {
 		if (data.startsWith("\x1b[<")) {
+			this.#keys.reset();
 			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
 			return;
 		}
-		this.#active.handleInput?.(data);
+		let active = this.#active;
+		if (
+			active instanceof Input ||
+			active instanceof HookEditorComponent ||
+			("filterFocused" in active && active.filterFocused === true)
+		) {
+			this.#keys.reset();
+			const printable = active instanceof Input ? extractPrintableText(data) : undefined;
+			if (active instanceof Input && printable !== undefined) active.insertText(printable);
+			else active.handleInput?.(data);
+			return;
+		}
+		let cancelledDelete = false;
+		if (
+			this.#screen === "list" &&
+			this.#pendingDeleteChain !== null &&
+			!matchesKey(data, "delete") &&
+			!matchesKey(data, "backspace")
+		) {
+			const selected = active instanceof SelectList ? active.getSelectedItem()?.value : undefined;
+			this.#pendingDeleteChain = null;
+			this.#showList(selected);
+			active = this.#active;
+			cancelledDelete = true;
+		}
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (cancelledDelete && action?.kind === "cancel") return;
+		if (action?.kind === "horizontal") {
+			if (this.#screen === "list") this.#previewFocused = action.delta > 0;
+			else if (this.#screen === "thinking" && active instanceof SelectList && this.#thinking) {
+				const value = active.getSelectedItem()?.value ?? "";
+				const index = value === "" ? 0 : this.#thinking.efforts.indexOf(value) + 1;
+				const next = Math.max(0, Math.min(this.#thinking.efforts.length, index + action.delta));
+				active.setSelectedValue(next === 0 ? "" : this.#thinking.efforts[next - 1]!);
+			} else if (action.delta < 0) {
+				if (active instanceof SelectList) active.onCancel?.();
+				else if (active instanceof ModelBrowser) active.handleCancel();
+			} else if (active instanceof SelectList) {
+				const item = active.getSelectedItem();
+				const navigable =
+					item &&
+					((this.#screen === "chain" &&
+						(/^step:/.test(item.value) || ["name", "description"].includes(item.value))) ||
+						(this.#screen === "step" &&
+							["name", "model", "tools", "systemPrompt", "prompt"].includes(item.value)));
+				if (navigable && item) active.onSelect?.(item);
+			}
+			this.#cb.requestRender();
+			return;
+		}
+		if (this.#screen === "list") {
+			if (action?.kind === "context") {
+				this.#previewFocused = !this.#previewFocused;
+				this.#cb.requestRender();
+				return;
+			}
+			if (action?.kind === "search") this.#previewFocused = false;
+			if (this.#previewFocused && action && this.#applyPreviewMotion(action)) return;
+		}
+		if (action?.kind === "toggle" && active instanceof SelectList) {
+			const value = active.getSelectedItem()?.value ?? "";
+			if (["delete", "resetModel"].includes(value) || (this.#screen === "list" && this.#dirty && value === "close"))
+				return;
+			if (this.#screen === "chain" && value.startsWith("step:") && this.#chainIndex !== undefined) {
+				const step = this.#doc.chains[this.#chainIndex]?.steps[Number(value.slice(5))];
+				if (step) {
+					// Toggle in the decoded action path without opening the step editor.
+					if (step.enabled === false) delete step.enabled;
+					else step.enabled = false;
+					this.#dirty = true;
+					this.#showChain(this.#chainIndex, value);
+				}
+				return;
+			}
+		}
+		if (action && (active instanceof SelectList || active instanceof ModelBrowser)) active.handleNavigation(action);
+		else active.handleInput?.(data);
+	}
+
+	#applyPreviewMotion(action: MenuNavAction): boolean {
+		if (
+			action.kind !== "move" &&
+			action.kind !== "scroll" &&
+			action.kind !== "halfPage" &&
+			action.kind !== "page" &&
+			action.kind !== "boundary"
+		)
+			return false;
+		if (this.#previewLayoutDirty) {
+			const total = this.#previewContent(this.#previewWidthLast).length;
+			const rows = this.#bodyRowsLast;
+			const contentRows = rows > 1 && total > rows ? rows - 1 : rows;
+			this.#previewRowsLast = Math.max(1, contentRows);
+			this.#previewMaxScroll = Math.max(0, total - contentRows);
+			this.#previewLayoutDirty = false;
+		}
+		let next = this.#previewScroll;
+		switch (action.kind) {
+			case "move":
+			case "scroll":
+				next += action.delta;
+				break;
+			case "halfPage":
+				next += action.delta * Math.max(1, Math.floor(this.#previewRowsLast / 2));
+				break;
+			case "page":
+				next += action.delta * this.#previewRowsLast;
+				break;
+			case "boundary":
+				next = action.edge === "first" ? 0 : this.#previewMaxScroll;
+				break;
+		}
+		this.#previewScroll = Math.max(0, Math.min(this.#previewMaxScroll, next));
+		this.#cb.requestRender();
+		return true;
 	}
 
 	/** Forward enhanced-paste transports into the multiline prompt editor. */
@@ -233,16 +395,15 @@ export class ChainConfigOverlayComponent implements Component {
 		const hit = this.#frame.locate(event.row, event.col);
 		if (hit && hit.index === 1) {
 			const pane = this.#split.locate(hit.line, hit.col);
-			// Right pane of the split (the preview) only scrolls; the left pane
-			// routes into the active list/component at pane-local coordinates.
+			// Pointer focus follows a click or wheel, never passive hover.
 			if (pane?.pane === "right") {
-				if (event.wheel !== null) {
-					this.#previewScroll = Math.max(0, this.#previewScroll + event.wheel);
-					this.#cb.requestRender();
-				}
+				if (event.leftClick || event.wheel !== null) this.#previewFocused = true;
+				if (event.wheel !== null) this.#applyPreviewMotion({ kind: "scroll", delta: event.wheel });
+				else if (event.leftClick) this.#cb.requestRender();
 				return true;
 			}
 			if (pane?.pane === "left" && isLayoutMouseRoutable(this.#active)) {
+				if (event.leftClick || event.wheel !== null) this.#previewFocused = false;
 				this.#active.routeMouse(event, pane.line, pane.col);
 				return true;
 			}
@@ -255,15 +416,22 @@ export class ChainConfigOverlayComponent implements Component {
 
 	#previewWindow(bodyWidth: number, rows: number): string[] {
 		const lines = this.#previewContent(bodyWidth);
-		const maxScroll = Math.max(0, lines.length - rows);
+		// Overflow status owns a row; never overwrite a content line at the end.
+		const contentRows = rows > 1 && lines.length > rows ? rows - 1 : rows;
+		this.#previewWidthLast = bodyWidth;
+		this.#previewLayoutDirty = false;
+		this.#previewRowsLast = Math.max(1, contentRows);
+		const maxScroll = Math.max(0, lines.length - contentRows);
+		this.#previewMaxScroll = maxScroll;
 		const start = Math.min(this.#previewScroll, maxScroll);
-		const window = lines.slice(start, start + rows);
-		if (lines.length > rows) {
-			const marker =
-				start + rows < lines.length
-					? theme.fg("dim", `  ↓ ${lines.length - rows - start} more`)
-					: theme.fg("dim", "  (end)");
-			window[rows - 1] = marker;
+		this.#previewScroll = start;
+		const window = lines.slice(start, start + contentRows);
+		if (contentRows < rows) {
+			window.push(
+				start + contentRows < lines.length
+					? theme.fg("dim", `  ↓ ${lines.length - contentRows - start} more`)
+					: theme.fg("dim", "  (end)"),
+			);
 		}
 		return window;
 	}
@@ -322,12 +490,62 @@ export class ChainConfigOverlayComponent implements Component {
 
 	// ───────────────────────────── screens ───────────────────────────
 
-	#setScreen(screen: Screen, active: Component, footerHint: string): void {
+	/**
+	 * Mount a screen and restore that page's saved list state. An explicit
+	 * `selectedValue` (the row the caller is returning to) wins over the saved selection.
+	 */
+	#setScreen(screen: Screen, active: Component, footerHint: string, selectedValue?: string): void {
+		const context: ChainNavigationContext = {
+			screen,
+			chainIndex: this.#chainIndex,
+			stepIndex: this.#stepIndex,
+			thinking: screen === "thinking" ? this.#thinking : undefined,
+			tools: screen === "tools" ? this.#tools : undefined,
+		};
+		const changed =
+			screen !== this.#navigationContext.screen ||
+			context.chainIndex !== this.#navigationContext.chainIndex ||
+			context.stepIndex !== this.#navigationContext.stepIndex;
+		if (!this.#restoringNavigation && this.#active instanceof SelectList)
+			this.#listStates.set(this.#pageKey(this.#navigationContext, this.#navigationScope), {
+				navigation: this.#active.navigationSnapshot(),
+				previewScroll: this.#previewScroll,
+				previewFocused: this.#previewFocused,
+			});
+		const previous =
+			changed && !this.#restoringNavigation
+				? (this.#previousNavigationSnapshot ?? this.navigationSnapshot())
+				: undefined;
+		this.#previousNavigationSnapshot = undefined;
+		const savedList = this.#listStates.get(this.#pageKey(context, this.#scope));
+		if (savedList && active instanceof SelectList) {
+			const selected = !changed
+				? active.getSelectedItem()?.value
+				: (selectedValue ?? savedList.navigation.selectedValue);
+			active.restoreNavigation({ ...savedList.navigation, selectedValue: selected });
+		}
 		this.#screen = screen;
 		this.#active = active;
-		this.#footerHint = footerHint;
-		this.#previewScroll = 0;
+		const navigationHint =
+			screen === "thinking" ? "h/l effort" : screen === "list" ? "h/l, Tab panes" : "h parent / l open";
+		this.#footerHint = active instanceof SelectList ? `${navigationHint} · ${footerHint} · / search` : footerHint;
+		this.#previewScroll = savedList?.previewScroll ?? 0;
+		this.#previewFocused = screen === "list" && savedList?.previewFocused === true;
+		this.#previewLayoutDirty = true;
+		this.#keys.reset();
+		if (changed) this.#pendingDeleteChain = null;
+		this.#navigationContext = context;
+		this.#navigationScope = this.#scope;
+		if (previous !== undefined)
+			this.onNavigationVisit?.(
+				screen === "list" ? "" : `${screen}:${context.chainIndex ?? "new"}:${context.stepIndex ?? "new"}`,
+				previous,
+			);
 		this.#cb.requestRender();
+	}
+
+	#pageKey(context: ChainNavigationContext, scope: ChainConfigScope): string {
+		return `${scope}:${context.screen}:${context.chainIndex ?? "new"}:${context.stepIndex ?? "new"}`;
 	}
 
 	#otherScope(): ChainConfigScope {
@@ -368,6 +586,8 @@ export class ChainConfigOverlayComponent implements Component {
 	}
 
 	#showList(selectedValue?: string): void {
+		this.#chainIndex = undefined;
+		this.#stepIndex = undefined;
 		const items: SelectItem[] = this.#doc.chains.map((chain, index) => ({
 			value: `chain:${index}`,
 			label:
@@ -379,28 +599,26 @@ export class ChainConfigOverlayComponent implements Component {
 		items.push({ value: "save", label: "Save & apply" });
 		items.push({ value: "close", label: "Close" });
 
-		// Show every row (no internal overflow-search); the split frame supplies height.
-		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme());
+		// The split frame supplies the list's viewport height.
+		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		if (selectedValue) list.setSelectedValue(selectedValue);
 		const handleInput = list.handleInput.bind(list);
 		list.handleInput = data => {
+			if (list.filterFocused) {
+				handleInput(data);
+				return;
+			}
 			const selected = list.getSelectedItem()?.value ?? "";
 			const match = /^chain:(\d+)$/.exec(selected);
 			if (match && (matchesKey(data, "delete") || matchesKey(data, "backspace"))) {
 				this.#onDeleteChain(Number(match[1]));
 				return;
 			}
-			if (this.#pendingDeleteChain !== null) {
-				// Any other key abandons the pending removal; Esc only does that.
-				this.#pendingDeleteChain = null;
-				this.#showList(selected);
-				if (!matchesKey(data, "escape")) this.#active.handleInput?.(data);
-				return;
-			}
 			handleInput(data);
 		};
 		list.onSelectionChange = () => {
 			this.#previewScroll = 0;
+			this.#previewLayoutDirty = true;
 			this.#cb.requestRender();
 		};
 		list.onSelect = item =>
@@ -413,7 +631,8 @@ export class ChainConfigOverlayComponent implements Component {
 			list,
 			this.#pendingDeleteChain !== null
 				? "Delete again to confirm removal · any other key cancels"
-				: "↑↓ move · Enter / click select · Delete removes a chain · scroll preview on the right · Esc close",
+				: "j/k move · Enter/Space edit · Del×2 removes · Esc close",
+			selectedValue,
 		);
 	}
 
@@ -440,7 +659,10 @@ export class ChainConfigOverlayComponent implements Component {
 				return;
 			}
 			const next = this.#otherScope();
-			const doc = await this.#cb.loadDoc(next);
+			this.#pendingOperations++;
+			const doc = await this.#cb.loadDoc(next).finally(() => {
+				this.#pendingOperations--;
+			});
 			this.#doc = doc;
 			this.#scope = next;
 			// Surface malformed entries in the file just made active. The host shows
@@ -460,7 +682,10 @@ export class ChainConfigOverlayComponent implements Component {
 				this.#cb.notify(`Not saved — ${problem}`);
 				return;
 			}
-			await this.#cb.save(this.#scope, this.#doc);
+			this.#pendingOperations++;
+			await this.#cb.save(this.#scope, this.#doc).finally(() => {
+				this.#pendingOperations--;
+			});
 			// The saved file contains only the normalized entries, so the load-time
 			// warnings no longer apply to it. (On failure the throw skips this.)
 			this.#doc.warnings = undefined;
@@ -477,6 +702,8 @@ export class ChainConfigOverlayComponent implements Component {
 	}
 
 	#showNewChainEditor(): void {
+		this.#chainIndex = undefined;
+		this.#stepIndex = undefined;
 		const input = new Input();
 		input.setValue(`Chain ${this.#doc.chains.length + 1}`);
 		input.onSubmit = value => {
@@ -496,6 +723,8 @@ export class ChainConfigOverlayComponent implements Component {
 	// ───────────────────────────── chain detail ──────────────────────
 
 	#showChain(index: number, selectedField?: string): void {
+		this.#chainIndex = index;
+		this.#stepIndex = undefined;
 		const chain = this.#doc.chains[index];
 		if (!chain) {
 			this.#showList();
@@ -517,13 +746,17 @@ export class ChainConfigOverlayComponent implements Component {
 			{ value: "delete", label: "Delete this chain" },
 			{ value: "back", label: "Back" },
 		);
-		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme());
+		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		if (selectedField) {
 			const found = items.findIndex(item => item.value === selectedField);
 			if (found >= 0) list.setSelectedIndex(found);
 		}
 		const handleInput = list.handleInput.bind(list);
 		list.handleInput = data => {
+			if (list.filterFocused) {
+				handleInput(data);
+				return;
+			}
 			const selected = list.getSelectedItem()?.value ?? "";
 			const stepMatch = /^step:(\d+)$/.exec(selected);
 			if (stepMatch) {
@@ -534,15 +767,6 @@ export class ChainConfigOverlayComponent implements Component {
 				}
 				if (matchesKey(data, "alt+down") || data === "]") {
 					this.#moveStep(index, stepIndex, 1);
-					return;
-				}
-				const step = chain.steps[stepIndex];
-				if (step && matchesKey(data, "space")) {
-					// Disabling keeps the prompt, model, and position; the runner skips the step.
-					if (step.enabled === false) delete step.enabled;
-					else step.enabled = false;
-					this.#dirty = true;
-					this.#showChain(index, `step:${stepIndex}`);
 					return;
 				}
 				if (matchesKey(data, "delete") || matchesKey(data, "backspace")) {
@@ -563,6 +787,7 @@ export class ChainConfigOverlayComponent implements Component {
 			"chain",
 			list,
 			`Editing "${chain.name}" · Enter / click edit · Space turns a step on/off · Alt+↑↓ or [ ] reorder steps · Delete removes a step · Esc back`,
+			selectedField,
 		);
 	}
 
@@ -595,6 +820,7 @@ export class ChainConfigOverlayComponent implements Component {
 				this.#showNewStepEditor(index);
 				return;
 			case "delete":
+				this.#previousNavigationSnapshot = this.navigationSnapshot();
 				this.#doc.chains.splice(index, 1);
 				this.#dirty = true;
 				this.#showList();
@@ -649,6 +875,8 @@ export class ChainConfigOverlayComponent implements Component {
 	}
 
 	#showNewStepEditor(chainIndex: number): void {
+		this.#chainIndex = chainIndex;
+		this.#stepIndex = undefined;
 		const chain = this.#doc.chains[chainIndex];
 		if (!chain) {
 			this.#showList();
@@ -677,6 +905,8 @@ export class ChainConfigOverlayComponent implements Component {
 	}
 
 	#showStep(chainIndex: number, stepIndex: number, selectedField?: string): void {
+		this.#chainIndex = chainIndex;
+		this.#stepIndex = stepIndex;
 		const step = this.#step(chainIndex, stepIndex);
 		if (!step) {
 			this.#showChain(chainIndex);
@@ -705,13 +935,17 @@ export class ChainConfigOverlayComponent implements Component {
 			{ value: "delete", label: "Delete this step" },
 			{ value: "back", label: "Back" },
 		);
-		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme());
+		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		if (selectedField) {
 			const found = items.findIndex(item => item.value === selectedField);
 			if (found >= 0) list.setSelectedIndex(found);
 		}
 		const handleInput = list.handleInput.bind(list);
 		list.handleInput = data => {
+			if (list.filterFocused) {
+				handleInput(data);
+				return;
+			}
 			if (matchesKey(data, "backspace") && list.getSelectedItem()?.value === "systemPrompt") {
 				if (step.systemPrompt !== undefined) {
 					delete step.systemPrompt;
@@ -728,6 +962,7 @@ export class ChainConfigOverlayComponent implements Component {
 			"step",
 			list,
 			`Step ${stepIndex + 1} "${step.name}" · Enter / click edit · Esc back to the chain`,
+			selectedField,
 		);
 	}
 
@@ -764,6 +999,7 @@ export class ChainConfigOverlayComponent implements Component {
 				this.#showPromptEditor(chainIndex, stepIndex);
 				return;
 			case "delete": {
+				this.#previousNavigationSnapshot = this.navigationSnapshot();
 				const chain = this.#doc.chains[chainIndex];
 				chain?.steps.splice(stepIndex, 1);
 				this.#dirty = true;
@@ -823,7 +1059,7 @@ export class ChainConfigOverlayComponent implements Component {
 			}
 		};
 		picker.onCancel = () => this.#showStep(chainIndex, stepIndex, "model");
-		this.#setScreen("model", picker, "Type to search · Enter / click twice picks · Esc back");
+		this.#setScreen("model", picker, "/ search · Enter / click twice picks · h / Esc back");
 	}
 
 	#setStepModel(chainIndex: number, stepIndex: number, selector: string | undefined): void {
@@ -838,9 +1074,10 @@ export class ChainConfigOverlayComponent implements Component {
 	}
 
 	#showThinkingPicker(chainIndex: number, stepIndex: number, selector: string, efforts: readonly string[]): void {
+		this.#thinking = { selector, efforts: [...efforts] };
 		const items: SelectItem[] = [{ value: "", label: "(model default thinking)" }];
 		for (const effort of efforts) items.push({ value: effort, label: effort });
-		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme());
+		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		list.onSelect = item => {
 			// Values are supported efforts or the empty model-default choice.
 			this.#setStepModel(chainIndex, stepIndex, item.value ? `${selector}:${item.value}` : selector);
@@ -850,18 +1087,16 @@ export class ChainConfigOverlayComponent implements Component {
 	}
 
 	#showToolsEditor(chainIndex: number, stepIndex: number, selected: Set<string>, cursor: number): void {
+		this.#tools = [...selected];
 		const all = this.#availableToolNames;
 		const items: SelectItem[] = all.map(name => ({
 			value: name,
 			label: `${selected.has(name) ? "[x]" : "[ ]"} ${name}`,
 		}));
 		items.push({ value: "__done", label: "Done" });
-		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme());
+		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		list.setSelectedIndex(cursor);
-		let cursorIndex = cursor;
-		list.onSelectionChange = item => {
-			cursorIndex = items.findIndex(i => i.value === item.value);
-		};
+		list.onSelectionChange = () => this.#cb.requestRender();
 		const commit = (): void => {
 			const step = this.#step(chainIndex, stepIndex);
 			if (step) {
@@ -877,7 +1112,12 @@ export class ChainConfigOverlayComponent implements Component {
 			}
 			if (selected.has(item.value)) selected.delete(item.value);
 			else selected.add(item.value);
-			this.#showToolsEditor(chainIndex, stepIndex, selected, cursorIndex);
+			this.#showToolsEditor(
+				chainIndex,
+				stepIndex,
+				selected,
+				items.findIndex(candidate => candidate.value === item.value),
+			);
 		};
 		list.onCancel = commit;
 		this.#setScreen("tools", list, "Enter / click toggle · select Done or Esc to apply (empty = no tools)");
@@ -899,7 +1139,7 @@ export class ChainConfigOverlayComponent implements Component {
 				this.#showStep(chainIndex, stepIndex, "prompt");
 			},
 			() => this.#showStep(chainIndex, stepIndex, "prompt"),
-			{ externalEditor: this.#deps.externalEditor },
+			{ externalEditor: this.#deps.externalEditor, menuHistory: true },
 		);
 		this.#setScreen("prompt", editor, "");
 	}
@@ -920,8 +1160,108 @@ export class ChainConfigOverlayComponent implements Component {
 				this.#showStep(chainIndex, stepIndex, "systemPrompt");
 			},
 			() => this.#showStep(chainIndex, stepIndex, "systemPrompt"),
-			{ externalEditor: this.#deps.externalEditor },
+			{ externalEditor: this.#deps.externalEditor, menuHistory: true },
 		);
 		this.#setScreen("systemPrompt", editor, "");
+	}
+
+	get blocksMenuHistory(): boolean {
+		return (
+			this.#pendingOperations > 0 ||
+			(isMenuHistoryParticipant(this.#active) && this.#active.blocksMenuHistory === true)
+		);
+	}
+
+	navigationSnapshot(): ChainNavigationSnapshot {
+		return {
+			context: structuredClone(this.#navigationContext),
+			scope: this.#scope,
+			doc: structuredClone(this.#doc),
+			dirty: this.#dirty,
+			previewScroll: this.#previewScroll,
+			previewFocused: this.#previewFocused,
+			lists: structuredClone([...this.#listStates]),
+			content:
+				this.#active instanceof Input
+					? { value: this.#active.getValue(), cursor: this.#active.getCursor() }
+					: isMenuHistoryParticipant(this.#active)
+						? this.#active.navigationSnapshot()
+						: undefined,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as ChainNavigationSnapshot;
+		if (!state.context || !state.doc || !Array.isArray(state.doc.chains)) return;
+		this.#restoringNavigation = true;
+		this.#keys.reset();
+		try {
+			this.#doc = structuredClone(state.doc);
+			this.#listStates.clear();
+			for (const [key, value] of state.lists ?? []) this.#listStates.set(key, structuredClone(value));
+			this.#scope = state.scope;
+			this.#dirty = state.dirty;
+			this.#pendingDeleteChain = null;
+			this.#chainIndex = state.context.chainIndex;
+			this.#stepIndex = state.context.stepIndex;
+			this.#thinking = state.context.thinking;
+			this.#tools = state.context.tools;
+			const chain = state.context.chainIndex;
+			const step = state.context.stepIndex;
+			if (state.context.screen === "list") this.#showList();
+			else if (state.context.screen === "chainName" && chain === undefined) this.#showNewChainEditor();
+			else if (chain === undefined || !this.#doc.chains[chain]) this.#showList();
+			else if (state.context.screen === "chain") this.#showChain(chain);
+			else if (state.context.screen === "chainName") this.#showChainNameEditor(chain);
+			else if (state.context.screen === "description") this.#showDescriptionEditor(chain);
+			else if (state.context.screen === "stepName" && step === undefined) this.#showNewStepEditor(chain);
+			else if (step === undefined || !this.#step(chain, step)) this.#showChain(chain);
+			else {
+				switch (state.context.screen) {
+					case "stepName":
+						this.#showStepNameEditor(chain, step);
+						break;
+					case "model":
+						this.#showModelPicker(chain, step);
+						break;
+					case "thinking":
+						if (state.context.thinking)
+							this.#showThinkingPicker(
+								chain,
+								step,
+								state.context.thinking.selector,
+								state.context.thinking.efforts,
+							);
+						else this.#showModelPicker(chain, step);
+						break;
+					case "tools":
+						this.#showToolsEditor(chain, step, new Set(state.context.tools), 0);
+						break;
+					case "prompt":
+						this.#showPromptEditor(chain, step);
+						break;
+					case "systemPrompt":
+						this.#showSystemPromptEditor(chain, step);
+						break;
+					default:
+						this.#showStep(chain, step);
+				}
+			}
+			if (this.#active instanceof Input && typeof state.content === "object" && state.content !== null) {
+				const field = state.content as { value?: string; cursor?: number };
+				if (typeof field.value === "string") this.#active.setValue(field.value);
+				if (typeof field.cursor === "number") this.#active.setCursor(field.cursor);
+			} else if (isMenuHistoryParticipant(this.#active)) this.#active.restoreNavigation(state.content);
+			this.#previewScroll = state.previewScroll;
+			this.#previewFocused = state.context.screen === "list" && state.previewFocused === true;
+		} finally {
+			this.#restoringNavigation = false;
+		}
+	}
+
+	leaveMenu(): void {
+		this.#keys.reset();
+		this.#pendingDeleteChain = null;
 	}
 }

@@ -557,9 +557,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 
 	/**
-	 * Mirrors the terminal's toggles: the `tool` head (the group's root) is
-	 * `Ctrl+O`'s expansion; a fallback preview card collapses on its own
-	 * (`setExpanded` resets those).
+	 * Mirrors the terminal's toggles: the transcript-wide expansion action
+	 * controls the `tool` head (the group's root); a fallback preview card
+	 * collapses on its own (`setExpanded` resets those).
 	 */
 	handleNativeEvent(event: NativeUiEvent): void {
 		const expanded = rootToggleExpanded(event);

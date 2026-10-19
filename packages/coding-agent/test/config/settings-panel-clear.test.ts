@@ -59,6 +59,7 @@ it("clearing a settings-panel text field removes the key from config.yml so its 
 		{ onChange: () => {}, onCancel: () => {} },
 	);
 
+	selector.handleInput("/");
 	for (const ch of "searxng endpoint") selector.handleInput(ch);
 	selector.handleInput("\n"); // open the text field
 	selector.handleInput("\x15"); // clear it

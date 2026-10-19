@@ -65,7 +65,7 @@ class GlyphSceneController implements SetupSceneController {
 	handleInput(data: string): void {
 		if (this.#committing) return;
 		const quickIndex = data >= "1" && data <= "3" ? Number(data) - 1 : -1;
-		if (quickIndex >= 0) {
+		if (!this.#selectList.filterFocused && quickIndex >= 0) {
 			const preset = GLYPH_PRESETS[quickIndex];
 			this.#selectList.setSelectedIndex(quickIndex);
 			this.#preview(preset);

@@ -3,6 +3,7 @@ import { KeybindingsManager } from "../src/app-keybindings";
 import { MoveOverlay, type MoveOverlayResult } from "../src/overlays/move-overlay";
 import { AnnotationOverlay } from "../src/overlays/annotation-overlay";
 import { AgentTranscriptViewer, type AgentTranscriptViewerDeps } from "../src/overlays/agent-transcript-viewer";
+import { getKeybindings, setKeybindings } from "../src/keybindings";
 import { BtwHistoryPanel } from "../src/overlays/btw-history-panel";
 import type { BtwHistoryRecord } from "../src/overlays/btw-history";
 import { CodexResetFireworksController } from "../src/overlays/codex-reset-fireworks";
@@ -109,8 +110,9 @@ describe("AnnotationOverlay native esc", () => {
 });
 
 describe("AgentTranscriptViewer native esc", () => {
-	it("clears a typed draft first, then closes the viewer", () => {
+	it("leaves a focused message field without discarding its draft, then returns to the hub", () => {
 		const onClose = vi.fn();
+		const previous = getKeybindings();
 		const missing = (): never => {
 			throw Object.assign(new Error("missing"), { code: "ENOENT" });
 		};
@@ -125,7 +127,7 @@ describe("AgentTranscriptViewer native esc", () => {
 			lifecycle: () => ({}),
 			ui: { terminal: { rows: 40, columns: 100 }, requestRender: () => {} },
 			cwd: "/",
-			expandKeys: ["ctrl+o"],
+			expandKeys: ["alt+e"],
 			hubKeys: [],
 			requestRender: () => {},
 			onClose,
@@ -133,13 +135,41 @@ describe("AgentTranscriptViewer native esc", () => {
 		} as unknown as AgentTranscriptViewerDeps;
 		const viewer = new AgentTranscriptViewer(deps);
 		try {
-			viewer.handleInput("h");
 			viewer.handleInput("i");
+			expect(viewer.navigationSnapshot()).toMatchObject({ focus: "view", editor: { text: "" } });
+			viewer.handleInput("\t");
+			setKeybindings(
+				KeybindingsManager.inMemory({
+					"tui.select.cancel": ["escape", "h"],
+					"tui.select.nextContext": ["tab", "j"],
+					"tui.select.prevContext": ["shift+tab", "k"],
+					"tui.editor.submit": "l",
+					"tui.editor.jumpForward": "ctrl+]",
+				}),
+			);
+			for (const key of "hjkl / draft") viewer.handleInput(key);
+			viewer.handleInput("\x01");
+			viewer.handleInput("\x1d");
+			viewer.handleInput("j");
+			const draft = viewer.navigationSnapshot();
+			expect(draft).toMatchObject({
+				focus: "editor",
+				editor: { text: "hjkl / draft", cursor: { line: 0, col: 1 } },
+			});
+			const restored = new AgentTranscriptViewer(deps);
+			try {
+				restored.restoreNavigation(draft);
+				expect(restored.navigationSnapshot()).toEqual(draft);
+			} finally {
+				restored.dispose();
+			}
 			viewer.handleNativeEvent(CLOSE_CLICK);
 			expect(onClose).not.toHaveBeenCalled();
+			expect(viewer.navigationSnapshot()).toMatchObject({ focus: "view", editor: { text: "hjkl / draft" } });
 			viewer.handleNativeEvent(CLOSE_CLICK);
 			expect(onClose).toHaveBeenCalledTimes(1);
 		} finally {
+			setKeybindings(previous);
 			viewer.dispose();
 		}
 	});
@@ -185,6 +215,30 @@ describe("BtwHistoryPanel native events", () => {
 		const described = history.describe();
 		expect(listOf(described).p?.selected).toBe("b");
 		expect(findNode(described, node => node.key === "composer")).toBeDefined();
+	});
+
+	it("without escapeHides, keeps explicit Close separate from Escape's running-answer cancellation", () => {
+		const onClose = vi.fn();
+		const onCancel = vi.fn();
+		const running: BtwHistoryRecord = { ...record("a", "still going"), status: "running" };
+		const history = new BtwHistoryPanel({
+			records: [running],
+			onClose,
+			onCopy: () => {},
+			onCancel,
+			requestRender: () => {},
+			getHeight: () => 30,
+		});
+		history.handleNativeEvent(CLOSE_CLICK);
+		expect(onClose).toHaveBeenCalledTimes(1);
+		expect(onCancel).not.toHaveBeenCalled();
+		history.handleInput("x");
+		expect(onCancel).not.toHaveBeenCalled();
+		history.handleInput("\x1b");
+		expect(onCancel).toHaveBeenCalledWith(running);
+		history.update([{ ...running, status: "cancelled" }]);
+		history.handleInput("\x1b");
+		expect(onClose).toHaveBeenCalledTimes(2);
 	});
 
 	it("with escapeHides, puts a running answer away on Esc without cancelling it; x cancels it", () => {

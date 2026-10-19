@@ -71,6 +71,12 @@ function makeCtx(session: InteractiveModeContext["session"], btwContainer = new 
 		} as unknown as TUI,
 		keybindings: KeybindingsManager.inMemory(),
 		btwContainer,
+		openMenu: () => ({
+			mount: (_component: unknown, show: () => unknown) => {
+				show();
+			},
+			close: () => true,
+		}),
 		session,
 		sessionManager: {
 			getLeafId: () => leafId,

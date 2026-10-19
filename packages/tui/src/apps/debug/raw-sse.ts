@@ -1,7 +1,7 @@
 import type { TspScrollBy } from "@oh-my-pi/pi-wire";
-import { formatKeyHint } from "../../app-keybindings";
 import type { Component } from "../../tui";
 import { matchesKey } from "../../keys";
+import { MenuKeyReader, menuScrollBy } from "../../components/menu-navigation";
 import { col, compact, keyed, node, row, span, text } from "../../native/describe";
 import { Memo } from "../../native/memo";
 import type { NativeNode, NativeScreen, NativeScroll, NativeUiEvent } from "../../native/node";
@@ -114,6 +114,7 @@ export class RawSseViewerComponent implements Component {
 	#bodyRevision = -1;
 	#bodyWidth = -1;
 	#bodyThemeEpoch = -1;
+	readonly #keys = new MenuKeyReader();
 
 	constructor(options: RawSseViewerOptions) {
 		this.#deps = options.deps;
@@ -147,6 +148,20 @@ export class RawSseViewerComponent implements Component {
 		this.#frame.dispose();
 	}
 
+	leaveMenu(): void {
+		this.dispose();
+	}
+
+	navigationSnapshot(): unknown {
+		return { viewport: this.#frame.navigationSnapshot() };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		this.#frame.restoreNavigation((snapshot as { viewport?: unknown }).viewport);
+		this.#keys.reset();
+	}
+
 	handleInput(keyData: string): void {
 		if (routeSgrMouseInput(keyData, event => this.#handleMouse(event))) {
 			return;
@@ -162,20 +177,17 @@ export class RawSseViewerComponent implements Component {
 			return;
 		}
 
-		const by: TspScrollBy | undefined = matchesKey(keyData, "up")
-			? "line-up"
-			: matchesKey(keyData, "down")
-				? "line-down"
-				: matchesKey(keyData, "pageUp")
-					? "page-up"
-					: matchesKey(keyData, "pageDown")
-						? "page-down"
-						: matchesKey(keyData, "home")
-							? "start"
-							: matchesKey(keyData, "end")
-								? "end"
-								: undefined;
-		if (by) this.#scroll(by);
+		const action = this.#keys.read(keyData);
+		if (!action || action === "pending") return;
+		const by = menuScrollBy(action);
+		if (by) {
+			this.#scroll(by);
+		} else if (action.kind === "halfPage") {
+			// The native ANSI stream supports line/page/bounds only. Keep the
+			// row renderer's exact half page; never substitute a native full page.
+			this.#frame.scroll(action.delta * Math.max(1, Math.floor(this.#frame.getBodyHeight() / 2)));
+			this.#onUpdate?.();
+		}
 	}
 
 	/**
@@ -466,7 +478,7 @@ export class RawSseViewerComponent implements Component {
 	}
 
 	#statusText(): string {
-		const help = `${formatKeyHint("escape")} close · ${formatKeyHint("ctrl+c")} copy raw · ${formatKeyHint("end")} follow tail · wheel scroll · click summary toggles follow`;
+		const help = `Esc close · Ctrl-c copy raw · j/k scroll · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · End follow tail · click summary toggles follow`;
 		return this.#statusMessage
 			? `${theme.fg("success", this.#statusMessage)}  ${theme.fg("dim", help)}`
 			: theme.fg("dim", help);

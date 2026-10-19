@@ -154,4 +154,56 @@ describe("JobsSheet", () => {
 		expect(lines).toContain("pid 41");
 		expect(lines).toContain("running 12 tests");
 	});
+
+	it("pages jobs, scrolls without moving selection, and restores search and output context", () => {
+		const jobs: JobsPanelJob[] = Array.from({ length: 24 }, (_, index) => ({
+			id: `job-${index}`,
+			type: "bash",
+			status: "completed",
+			label: `command-${index}`,
+			startTime: 0,
+		}));
+		const source = {
+			load: () => ({ running: [], recent: jobs }),
+			inspect: () => ({ pids: [], output: Array.from({ length: 30 }, (_, i) => `output-${i}`).join("\n") }),
+			cancel: vi.fn(),
+			close: vi.fn(),
+		};
+		const sheet = new JobsSheet(source);
+		try {
+			sheet.render(120);
+			sheet.handleInput("\x05");
+			sheet.render(120);
+			expect(prop(list(sheet.describe(CX)), "selected")).toBe("job-0");
+			sheet.handleInput("G");
+			expect(prop(list(sheet.describe(CX)), "selected")).toBe("job-23");
+			sheet.handleInput("g");
+			expect(prop(list(sheet.describe(CX)), "selected")).toBe("job-23");
+			sheet.handleInput("g");
+			expect(prop(list(sheet.describe(CX)), "selected")).toBe("job-0");
+			sheet.handleInput("/");
+			for (const key of "command-17") sheet.handleInput(key);
+			sheet.handleInput("\x1b");
+			expect(source.close).not.toHaveBeenCalled();
+			expect(prop(list(sheet.describe(CX)), "selected")).toBe("job-17");
+			sheet.handleInput(" "); // Nondestructive detail focus, never cancellation.
+			sheet.handleInput("/");
+			sheet.handleInput("\t");
+			expect(sheet.navigationSnapshot()).toMatchObject({
+				focus: "output",
+				search: { value: "command-17", focused: false },
+			});
+			sheet.handleInput("g");
+			sheet.handleInput("g");
+			const saved = sheet.navigationSnapshot();
+			sheet.handleInput("G");
+			sheet.restoreNavigation(saved);
+			expect(sheet.navigationSnapshot()).toEqual(saved);
+			expect(source.cancel).not.toHaveBeenCalled();
+			sheet.handleInput("\x1b");
+			expect(source.close).toHaveBeenCalledTimes(1);
+		} finally {
+			sheet.dispose();
+		}
+	});
 });

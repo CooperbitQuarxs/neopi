@@ -66,6 +66,8 @@ interface AppKeybindings {
 	"app.tree.nextBranch": true;
 	"app.plan.toggle": true;
 	"app.history.search": true;
+	"app.navigation.back": true;
+	"app.navigation.forward": true;
 	"app.stt.toggle": true;
 	"app.dictation.toggle": true;
 	"app.live.toggle": true;
@@ -142,7 +144,8 @@ export const KEYBINDINGS = {
 		description: "Select temporary model for current session",
 	},
 	"app.tools.expand": {
-		defaultKeys: "ctrl+o",
+		// Ctrl+O is menu-history back (app.navigation.back), Vim's jumplist key.
+		defaultKeys: "alt+e",
 		description: "Expand tools",
 	},
 	"app.tools.toggleVisibility": {
@@ -274,6 +277,17 @@ export const KEYBINDINGS = {
 	"app.history.search": {
 		defaultKeys: "ctrl+r",
 		description: "Search history",
+	},
+	"app.navigation.back": {
+		defaultKeys: "ctrl+o",
+		description: "Go back to the previously visited menu or the conversation",
+	},
+	"app.navigation.forward": {
+		// Ctrl+I is distinct from Tab only under the Kitty keyboard protocol or
+		// xterm modifyOtherKeys; elsewhere both arrive as 0x09 and Tab keeps its
+		// meaning (context switch, autocomplete). Alt+O works on every terminal.
+		defaultKeys: ["ctrl+i", "alt+o"],
+		description: "Go forward in the menu history",
 	},
 	// =====================================================================
 	// NEVER ALTER. CTRL+SPACE IS A RESERVED ACCESSIBILITY KEYBINDING.

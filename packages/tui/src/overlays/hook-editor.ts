@@ -36,6 +36,8 @@ import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "..
 import { actionBar, actionButton } from "../native/overlay";
 import { plainText } from "../native/spans";
 import { sanitizeCarriageReturns } from "../render/render-utils";
+import type { EditorNavigationState } from "../components/editor";
+import { extractPrintableText } from "../keys";
 
 /** Root role of the native sheet. */
 const ROLE = "omp.overlay.hook-editor";
@@ -99,6 +101,8 @@ export interface HookEditorOptions {
 	 * hint out of view.
 	 */
 	maxHeight?: number;
+	/** Only registered configuration pages may preserve this safe text draft in menu history. */
+	menuHistory?: boolean;
 }
 
 /** Interactive multiline dialog used by hooks and the ask tool's Other response. */
@@ -118,6 +122,8 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 	#pendingPastes: { settled: boolean; text: string | undefined }[] = [];
 	#submitQueued = false;
 	#disposed = false;
+	readonly #menuHistory: boolean;
+	#editingExternal = false;
 	/** Head, field and action bar; every part but the editor (which describes itself) is fixed, so it is built once. */
 	#nativeRoot: NativeNode;
 	/** Focus state mirrored to the nested editor during rendering. */
@@ -146,6 +152,7 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		this.#acceptImages = options?.acceptImages ?? false;
 		this.#images = this.#acceptImages ? [...(options?.images ?? [])] : [];
 		this.#externalEditor = options?.externalEditor;
+		this.#menuHistory = options?.menuHistory === true;
 		this.#onPasteImage = options?.onPasteImage;
 		this.#onPasteImagePath = options?.onPasteImagePath;
 
@@ -315,6 +322,15 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 			if (paste.remaining.length > 0) this.handleInput(paste.remaining);
 			return;
 		}
+		if (this.#editor.isJumpPending) {
+			this.#editor.handleInput(keyData);
+			return;
+		}
+		const text = extractPrintableText(keyData);
+		if (text !== undefined) {
+			this.#editor.typeCharacter(text);
+			return;
+		}
 		if (this.#promptStyle) {
 			this.#handlePromptStyleInput(keyData);
 		} else {
@@ -476,11 +492,33 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		this.#editor.handleInput(keyData);
 	}
 
+	get blocksMenuHistory(): boolean {
+		return !this.#menuHistory || this.#editingExternal || this.#pendingPastes.length > 0;
+	}
+
+	navigationSnapshot(): EditorNavigationState | undefined {
+		return this.#menuHistory ? this.#editor.getState() : undefined;
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!this.#menuHistory || typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as EditorNavigationState;
+		if (
+			typeof state.text !== "string" ||
+			typeof state.cursor?.line !== "number" ||
+			typeof state.cursor?.col !== "number" ||
+			typeof state.scrollTop !== "number"
+		)
+			return;
+		this.#editor.setState(state);
+	}
+
 	async #openExternalEditor(): Promise<void> {
 		const externalEditor = this.#externalEditor;
 		if (!externalEditor) return;
 
 		const currentText = this.#editor.getExpandedText();
+		this.#editingExternal = true;
 		try {
 			this.#tui.stop();
 			const result = await externalEditor(currentText);
@@ -488,6 +526,7 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 				this.#editor.setText(result);
 			}
 		} finally {
+			this.#editingExternal = false;
 			this.#tui.start();
 			this.#tui.requestRender(true);
 		}

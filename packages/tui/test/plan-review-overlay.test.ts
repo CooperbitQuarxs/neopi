@@ -12,6 +12,8 @@ const LEFT = "\x1b[D";
 const RIGHT = "\x1b[C";
 const ENTER = "\r";
 const TAB = "\t";
+const SHIFT_LEFT = "\x1b[1;2D";
+const SHIFT_RIGHT = "\x1b[1;2C";
 const SHIFT_DOWN = "\x1b[1;2B";
 const CANCEL = "\x07"; // ctrl+g, remapped to tui.select.cancel below
 
@@ -42,6 +44,254 @@ describe("PlanReviewOverlay", () => {
 	afterEach(() => {
 		setKeybindings(KeybindingsManager.inMemory());
 		vi.restoreAllMocks();
+	});
+
+	it("drops a pending gg prefix when native pointer selection changes context", () => {
+		const onPick = vi.fn();
+		const overlay = new PlanReviewOverlay("plan", { options: APPROVAL_OPTIONS }, { onPick, onCancel: vi.fn() });
+		overlay.handleInput("g");
+		overlay.handleNativeEvent({ type: "select", key: "options", item: "o1" });
+		overlay.handleInput("g");
+		overlay.handleInput(ENTER);
+		expect(onPick).toHaveBeenCalledTimes(1);
+		expect(onPick).toHaveBeenCalledWith("Approve and compact context");
+	});
+
+	it("shares bounded action motions while Space never approves", () => {
+		const onPick = vi.fn();
+		const overlay = new PlanReviewOverlay("plan", { options: APPROVAL_OPTIONS }, { onPick, onCancel: vi.fn() });
+		overlay.handleInput("k");
+		overlay.handleInput("G");
+		overlay.handleInput(" ");
+		expect(onPick).not.toHaveBeenCalled();
+		overlay.handleInput("g");
+		overlay.handleInput("g");
+		overlay.handleInput("j");
+		overlay.handleInput("\x04");
+		overlay.handleInput("\x15");
+		overlay.handleInput("\x1b[6~");
+		overlay.handleInput("\x1b[5~");
+		overlay.handleInput("j");
+		overlay.handleInput(ENTER);
+		expect(onPick).toHaveBeenCalledTimes(1);
+		expect(onPick).toHaveBeenCalledWith("Approve and compact context");
+	});
+
+	it("uses viewer motions, gg prefixes and explicit pane/context keys without submitting", () => {
+		const rows = Array.from({ length: 400 }, (_, index) => `L${String(index).padStart(3, "0")}`).join("\n");
+		const onPick = vi.fn();
+		const overlay = new PlanReviewOverlay(
+			`# Plan\n\n\`\`\`\n${rows}\n\`\`\`\n`,
+			{ options: APPROVAL_OPTIONS },
+			{ onPick, onCancel: vi.fn() },
+		);
+		const visible = () =>
+			render(overlay)
+				.split("\n")
+				.flatMap(line => line.match(/L\d{3}/)?.[0] ?? []);
+		render(overlay);
+		overlay.handleInput(LEFT);
+		for (let index = 0; index < 12; index++) overlay.handleInput("j");
+		const before = visible();
+		overlay.handleInput("\x05");
+		expect(visible()[0]).toBe(before[1]);
+		overlay.handleInput("\x19");
+		expect(visible()[0]).toBe(before[0]);
+		overlay.handleInput("\x04");
+		expect(visible()[0]).not.toBe(before[0]);
+		overlay.handleInput("\x15");
+		expect(visible()[0]).toBe(before[0]);
+		overlay.handleInput("\x1b[6~");
+		overlay.handleInput("\x1b[5~");
+		expect(visible()[0]).toBe(before[0]);
+		overlay.handleInput("G");
+		expect(render(overlay)).toContain("L399");
+		overlay.handleInput("g");
+		expect(render(overlay)).toContain("L399");
+		overlay.handleInput("g");
+		expect(render(overlay)).toContain("L000");
+		overlay.handleInput(RIGHT);
+		overlay.handleInput(" ");
+		expect(onPick).not.toHaveBeenCalled();
+		overlay.handleInput("\x0e");
+		expect(render(overlay)).toContain("↑/↓ scroll");
+		overlay.handleInput("\x10");
+		expect(render(overlay)).not.toContain("↑/↓ scroll");
+	});
+
+	it("scrolls Contents without relocating the selected section and clamps its last row", () => {
+		const plan =
+			"# Plan\n\n" + Array.from({ length: 40 }, (_, index) => `## Section ${index}\n\nbody-${index}\n\n`).join("");
+		let titles: string[] = [];
+		const overlay = new PlanReviewOverlay(
+			plan,
+			{ options: APPROVAL_OPTIONS },
+			{
+				onPick: vi.fn(),
+				onCancel: vi.fn(),
+				onAnnotationStateChange: state => {
+					titles = state.annotations.map(annotation => annotation.section.title);
+				},
+			},
+		);
+		render(overlay);
+		overlay.handleInput(TAB);
+		overlay.handleInput("\x05");
+		render(overlay);
+		overlay.handleInput("a");
+		overlay.handleInput("first");
+		overlay.handleInput(ENTER);
+		expect(titles).toEqual(["Section 0"]);
+		overlay.handleInput("G");
+		overlay.handleInput("j");
+		overlay.handleInput("a");
+		overlay.handleInput("last");
+		overlay.handleInput(ENTER);
+		expect(titles).toEqual(["Section 0", "Section 39"]);
+		overlay.handleInput("l"); // body scroll resumes passive Contents following
+		overlay.handleInput("g");
+		overlay.handleInput("g");
+		const sidebar = render(overlay)
+			.split("\n")
+			.map(line => line.split("│")[1] ?? "")
+			.join("\n");
+		expect(sidebar).toContain("Section 0");
+	});
+
+	it("keeps annotation text literal, shares chooser bounds and cancels native drafts before the review", () => {
+		const onPick = vi.fn();
+		const onCancel = vi.fn();
+		let notes: string[] = [];
+		const overlay = new PlanReviewOverlay(
+			"# Plan\n\n## First\n\nbody\n\n## Last\n\nend\n",
+			{ options: APPROVAL_OPTIONS },
+			{
+				onPick,
+				onCancel,
+				onAnnotationStateChange: state => {
+					notes = state.annotations.map(annotation => annotation.note);
+				},
+			},
+		);
+		render(overlay);
+		overlay.handleInput(TAB);
+		overlay.handleInput("a");
+		const literal = "j/k h l gg G / note";
+		for (const char of literal) overlay.handleInput(char);
+		expect(render(overlay)).toContain(literal);
+		overlay.handleNativeEvent({ type: "action", key: "tools/cancel", act: "cancel", mods: [] });
+		expect(onCancel).not.toHaveBeenCalled();
+		expect(notes).toEqual([]);
+		for (const note of [literal, "second"]) {
+			overlay.handleInput("a");
+			for (const char of note) overlay.handleInput(char);
+			overlay.handleInput(ENTER);
+		}
+		overlay.handleInput("e");
+		overlay.handleInput("G");
+		overlay.handleInput("j");
+		overlay.handleInput(" ");
+		overlay.handleInput("\x15");
+		overlay.handleInput("changed");
+		overlay.handleInput(ENTER);
+		expect(notes).toEqual([literal, "changed"]);
+		expect(onPick).not.toHaveBeenCalled();
+		overlay.handleNativeEvent({ type: "action", key: "tools/cancel", act: "cancel", mods: [] });
+		expect(onCancel).toHaveBeenCalledTimes(1);
+	});
+
+	it("types printable submit, delete, cancel and external-editor bindings literally", () => {
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.input.submit": ["j", "enter"],
+				"tui.editor.deleteCharBackward": "k",
+				"tui.select.cancel": "g",
+				"app.editor.external": "h",
+			}),
+		);
+		const onPick = vi.fn();
+		const onCancel = vi.fn();
+		const onAnnotationExternalEditor = vi.fn();
+		let notes: string[] = [];
+		const overlay = new PlanReviewOverlay(
+			"# Plan\n\n## Part\n\nbody",
+			{ options: APPROVAL_OPTIONS },
+			{
+				onPick,
+				onCancel,
+				onAnnotationExternalEditor,
+				onAnnotationStateChange: state => {
+					notes = state.annotations.map(annotation => annotation.note);
+				},
+			},
+		);
+		render(overlay);
+		overlay.handleInput(TAB);
+		overlay.handleInput("a");
+		const literal = "j/k h l gg G / note";
+		for (const char of literal) overlay.handleInput(char);
+		overlay.handleInput("\x1b[107u");
+		expect(notes).toEqual([]);
+		expect(onPick).not.toHaveBeenCalled();
+		expect(onCancel).not.toHaveBeenCalled();
+		expect(onAnnotationExternalEditor).not.toHaveBeenCalled();
+		overlay.handleInput(ENTER);
+		expect(notes).toEqual([`${literal}k`]);
+	});
+
+	it("keeps annotation word typing in one undo unit", () => {
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": "ctrl+g",
+				"tui.editor.undo": "ctrl+z",
+			}),
+		);
+		let notes: string[] = [];
+		const overlay = new PlanReviewOverlay(
+			"# Plan\n\n## Part\n\nbody",
+			{ options: APPROVAL_OPTIONS },
+			{
+				onPick: vi.fn(),
+				onCancel: vi.fn(),
+				onAnnotationStateChange: state => {
+					notes = state.annotations.map(annotation => annotation.note);
+				},
+			},
+		);
+		render(overlay);
+		overlay.handleInput(TAB);
+		overlay.handleInput("a");
+		for (const char of "discard") overlay.handleInput(char);
+		overlay.handleInput("\x1a");
+		for (const char of "kept") overlay.handleInput(char);
+		overlay.handleInput(ENTER);
+		expect(notes).toEqual(["kept"]);
+	});
+
+	it("forwards a pending character-jump target before printable submit bindings", () => {
+		setKeybindings(KeybindingsManager.inMemory({ "tui.input.submit": ["j", "enter"] }));
+		let notes: string[] = [];
+		const overlay = new PlanReviewOverlay(
+			"# Plan\n\n## Part\n\nbody",
+			{ options: APPROVAL_OPTIONS },
+			{
+				onPick: vi.fn(),
+				onCancel: vi.fn(),
+				onAnnotationStateChange: state => {
+					notes = state.annotations.map(annotation => annotation.note);
+				},
+			},
+		);
+		render(overlay);
+		overlay.handleInput(TAB);
+		overlay.handleInput("a");
+		for (const char of "alpha j omega") overlay.handleInput(char);
+		overlay.handleInput("\x01"); // line start
+		overlay.handleInput("\x1d"); // jump forward
+		overlay.handleInput("\x1b[106u"); // jump target, not a submission or insertion
+		overlay.handleInput("X");
+		overlay.handleInput(ENTER);
+		expect(notes).toEqual(["alpha Xj omega"]);
 	});
 
 	it("renders the plan body, prompt, options and footer inside one outlined box", () => {
@@ -150,7 +400,7 @@ describe("PlanReviewOverlay", () => {
 		expect(onCancel).toHaveBeenCalledTimes(1);
 	});
 
-	it("drives the model-tier slider with left/right without changing the option cursor", () => {
+	it("drives the model-tier slider with Shift-Left/Right without changing the option cursor", () => {
 		const changes: number[] = [];
 		const slider: HookSelectorSlider = {
 			caption: "continue with",
@@ -164,12 +414,12 @@ describe("PlanReviewOverlay", () => {
 			{ promptTitle: "next", options: APPROVAL_OPTIONS, slider },
 			{ onPick, onCancel: vi.fn() },
 		);
-		overlay.handleInput(RIGHT);
+		overlay.handleInput(SHIFT_RIGHT);
 		expect(changes).toEqual([1]);
 		// Clamped at the right edge.
-		overlay.handleInput(RIGHT);
+		overlay.handleInput(SHIFT_RIGHT);
 		expect(changes).toEqual([1]);
-		overlay.handleInput(LEFT);
+		overlay.handleInput(SHIFT_LEFT);
 		expect(changes).toEqual([1, 0]);
 
 		// The slider must not have moved the option cursor.
@@ -178,14 +428,14 @@ describe("PlanReviewOverlay", () => {
 	});
 
 	it("invokes the external-editor callback on its key", () => {
-		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "ctrl+g", "app.editor.external": "ctrl+e" }));
+		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "ctrl+g", "app.editor.external": "alt+g" }));
 		const onExternalEditor = vi.fn();
 		const overlay = new PlanReviewOverlay(
 			"plan",
 			{ promptTitle: "next", options: APPROVAL_OPTIONS },
 			{ onPick: vi.fn(), onCancel: vi.fn(), onExternalEditor },
 		);
-		overlay.handleInput("\x05"); // ctrl+e
+		overlay.handleInput("\x1bg");
 		expect(onExternalEditor).toHaveBeenCalledTimes(1);
 	});
 
@@ -199,12 +449,14 @@ describe("PlanReviewOverlay", () => {
 		const top = render(overlay);
 		expect(top).toContain("para 0");
 		expect(top).not.toContain("para 199");
+		overlay.handleInput("h"); // explicit body context
 
 		overlay.handleInput("G");
 		const bottom = render(overlay);
 		expect(bottom).toContain("para 199");
 		expect(bottom).not.toContain("para 0");
 
+		overlay.handleInput("g");
 		overlay.handleInput("g");
 		const backToTop = render(overlay);
 		expect(backToTop).toContain("para 0");
@@ -226,6 +478,7 @@ describe("PlanReviewOverlay", () => {
 		try {
 			setRows(40);
 			render(overlay);
+			overlay.handleInput("h");
 			overlay.handleInput("G");
 			const bottom = render(overlay);
 			expect(bottom).toContain("L399");
@@ -258,6 +511,7 @@ describe("PlanReviewOverlay", () => {
 		try {
 			setRows(40);
 			render(overlay);
+			overlay.handleInput("h");
 			overlay.handleInput("G");
 			setRows(1000);
 			render(overlay);
@@ -287,6 +541,7 @@ describe("PlanReviewOverlay", () => {
 		try {
 			setRows(1000);
 			render(overlay);
+			overlay.handleInput("h");
 			overlay.handleInput("\x1b[F");
 			setRows(40);
 			const restored = render(overlay);
@@ -305,6 +560,8 @@ describe("PlanReviewOverlay", () => {
 			{ promptTitle: "next", options: APPROVAL_OPTIONS },
 			{ onPick: vi.fn(), onCancel: vi.fn() },
 		);
+		render(overlay);
+		overlay.handleInput("h");
 		overlay.handleInput("G"); // scroll away from the top
 		overlay.setPlanContent("# Fresh plan\n\nbrand new body");
 		const out = render(overlay);
@@ -380,7 +637,7 @@ describe("PlanReviewOverlay", () => {
 		expect(sidebar).not.toContain("build the thing");
 	});
 
-	it("flows past the end of a region into the actions on Down", () => {
+	it("clamps region navigation until an explicit pane change", () => {
 		const overlay = new PlanReviewOverlay(
 			SECTION_PLAN,
 			{ promptTitle: "next", options: APPROVAL_OPTIONS },
@@ -388,11 +645,13 @@ describe("PlanReviewOverlay", () => {
 		);
 		render(overlay);
 		overlay.handleInput(TAB); // -> toc, first section
-		// Walk to the last ToC entry, then one more Down drops into the actions.
+		// Walking beyond the last ToC entry must not change focus.
 		for (let i = 0; i < 10; i++) overlay.handleInput(DOWN);
 		const out = render(overlay);
-		// Actions focus restores the option cursor highlight + actions help.
-		expect(out).not.toContain("a annotate");
+		expect(out).toContain("a annotate");
+		overlay.handleInput("l"); // ToC -> body
+		overlay.handleInput("l"); // body -> actions
+		expect(render(overlay)).not.toContain("a annotate");
 	});
 
 	it("scrolls the body exactly one line per keystroke in body focus", () => {
@@ -1003,7 +1262,7 @@ describe("PlanReviewOverlay", () => {
 		expect(feedback).toContain("Goal");
 	});
 
-	it("drives the slider with both arrows even when a sidebar is present", () => {
+	it("drives the slider with Shift-arrows even when a sidebar is present", () => {
 		const changes: number[] = [];
 		const slider: HookSelectorSlider = {
 			caption: "continue with",
@@ -1017,12 +1276,11 @@ describe("PlanReviewOverlay", () => {
 			{ onPick: vi.fn(), onCancel: vi.fn() },
 		);
 		render(overlay); // establish the sidebar
-		// The sidebar sits beside the body, not the slider, so left must still step
-		// the tier back instead of being stolen to focus the ToC.
-		overlay.handleInput(RIGHT); // 0 -> 1
-		overlay.handleInput(LEFT); // 1 -> 0
+		// Shift-arrows retain the slider while unmodified h/l and arrows own panes.
+		overlay.handleInput(SHIFT_RIGHT); // 0 -> 1
+		overlay.handleInput(SHIFT_LEFT); // 1 -> 0
 		expect(changes).toEqual([1, 0]);
-		// Focus stayed on the actions region (left did not jump to the ToC).
+		// Slider adjustment keeps action focus.
 		expect(render(overlay)).not.toContain("a annotate");
 	});
 

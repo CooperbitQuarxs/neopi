@@ -619,7 +619,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						sections: [
 							{
 								// Viewport-sized tail window in every state — streaming and final
-								// render identically; only ctrl+o uncaps.
+								// render identically; only the expansion action uncaps.
 								content: capPreviewLines(
 									args ? (cmdLines ??= formatBashCommandLines(renderArgs, uiTheme)) : [],
 									uiTheme,

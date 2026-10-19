@@ -105,6 +105,14 @@ export class DebugSelectorComponent extends OverlayPanel {
 		this.#selectList.handleInput(keyData);
 	}
 
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationSnapshot();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		this.#selectList.restoreNavigation(snapshot);
+	}
+
 	async #handleSelection(value: string): Promise<void> {
 		switch (value) {
 			case "open-artifacts":
@@ -336,19 +344,23 @@ export class DebugSelectorComponent extends OverlayPanel {
 	}
 
 	async #handleViewLogs(): Promise<void> {
+		const menu = this.ctx.openMenu("log-viewer", () => void this.#handleViewLogs());
+		if (!menu) return;
 		try {
 			const logSource = await createDebugLogSource();
 			const logs = await logSource.getInitialText();
 			if (!logs && !logSource.hasOlderLogs()) {
+				menu.close();
 				this.ctx.showWarning("No log entries found for today.");
 				return;
 			}
 
 			let overlay: OverlayHandle | undefined;
 			const close = (): void => {
+				const closed = menu.close();
 				overlay?.hide();
 				overlay = undefined;
-				void this.ctx.showDebugSelector();
+				if (closed) void this.ctx.showDebugSelector();
 			};
 			const viewer = new DebugLogViewerComponent({
 				logs,
@@ -364,15 +376,19 @@ export class DebugSelectorComponent extends OverlayPanel {
 				},
 			});
 
-			overlay = this.ctx.ui.showOverlay(viewer, {
-				anchor: "top-left",
-				width: "100%",
-				maxHeight: "100%",
-				margin: 0,
-				fullscreen: true,
+			menu.mount(viewer, () => {
+				overlay = this.ctx.ui.showOverlay(viewer, {
+					anchor: "top-left",
+					width: "100%",
+					maxHeight: "100%",
+					margin: 0,
+					fullscreen: true,
+				});
+				this.ctx.ui.setFocus(viewer);
+				return overlay;
 			});
-			this.ctx.ui.setFocus(viewer);
 		} catch (err) {
+			menu.close();
 			this.ctx.showError(`Failed to read logs: ${err instanceof Error ? err.message : String(err)}`);
 		}
 
@@ -380,12 +396,15 @@ export class DebugSelectorComponent extends OverlayPanel {
 	}
 
 	async #handleViewRawSse(): Promise<void> {
+		const menu = this.ctx.openMenu("raw-sse", () => void this.#handleViewRawSse());
+		if (!menu) return;
 		let overlay: OverlayHandle | undefined;
 		const close = (): void => {
+			const closed = menu.close();
 			viewer?.dispose();
 			overlay?.hide();
 			overlay = undefined;
-			void this.ctx.showDebugSelector();
+			if (closed) void this.ctx.showDebugSelector();
 		};
 		const viewer = new RawSseViewerComponent({
 			deps: { copyToClipboard },
@@ -396,14 +415,17 @@ export class DebugSelectorComponent extends OverlayPanel {
 			onUpdate: () => this.ctx.ui.requestRender(),
 		});
 
-		overlay = this.ctx.ui.showOverlay(viewer, {
-			anchor: "top-left",
-			width: "100%",
-			maxHeight: "100%",
-			margin: 0,
-			fullscreen: true,
+		menu.mount(viewer, () => {
+			overlay = this.ctx.ui.showOverlay(viewer, {
+				anchor: "top-left",
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+				fullscreen: true,
+			});
+			this.ctx.ui.setFocus(viewer);
+			return overlay;
 		});
-		this.ctx.ui.setFocus(viewer);
 		this.ctx.ui.requestRender();
 	}
 

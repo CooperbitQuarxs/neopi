@@ -6,14 +6,13 @@
  */
 import { formatKeyHint, type KeyId } from "../app-keybindings";
 import { bottomBorder, divider, row, topBorder } from "../chrome/overlay-box";
-import { matchesSelectDown, matchesSelectPageDown, matchesSelectPageUp, matchesSelectUp } from "../keybinding-matchers";
+import { MenuKeyReader, MenuSearchField, type MenuSearchState } from "../components/menu-navigation";
 import { matchesKey } from "../keys";
 import { routeSgrMouseInput } from "../mouse";
 import { theme } from "../theme/theme";
 import type { IrcLogEntry, IrcLogSource } from "../tools/irc";
 import type { Component } from "../tui";
 import { Ellipsis, replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
-import { filterInput, filterText } from "./agent-hub";
 import { sanitizeDisplaySingleLine, sanitizeDisplayText } from "./extensions/display-text";
 
 /** Body lines a collapsed entry shows before its "+N more" line. */
@@ -49,11 +48,22 @@ function matchesParticipant(entry: IrcLogEntry, query: string): boolean {
 	return entry.message.from.toLowerCase().includes(needle) || entry.message.to.toLowerCase().includes(needle);
 }
 
+export interface IrcViewerNavigation {
+	selected: string | undefined;
+	selectedIndex: number;
+	top: number;
+	follow: boolean;
+	expanded: string[];
+	filter: MenuSearchState;
+	draft: MenuSearchState;
+	compose: { to: string; replyTo: string } | undefined;
+}
+
 export class IrcViewerComponent implements Component {
 	readonly #options: IrcViewerOptions;
 	readonly #unsubscribe: () => void;
-	readonly #filter = filterInput();
-	#filterEditing = false;
+	readonly #filter = new MenuSearchField();
+	readonly #keys = new MenuKeyReader();
 	/** Index into the filtered entries; the last entry while following. */
 	#selected = 0;
 	/** Stable anchor when an earlier send finishes after the selected message. */
@@ -64,6 +74,9 @@ export class IrcViewerComponent implements Component {
 	#top = 0;
 	/** List rows the last frame had room for. */
 	#listRows = 1;
+	#totalRows = 0;
+	#visibleMessages = 1;
+	#revealSelection = true;
 	/** Body width used by the current layout, including synchronous expansion updates. */
 	#bodyWidth = 1;
 	/** List-row span of the selected entry in the last frame. */
@@ -71,7 +84,9 @@ export class IrcViewerComponent implements Component {
 	readonly #expanded = new Set<string>();
 	/** The reply being written, and to whom. */
 	#compose: { to: string; replyTo: string } | undefined;
-	readonly #draft = filterInput();
+	readonly #draft = new MenuSearchField();
+	#sending = false;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	/** Outcome of the last reply, shown in the status row until the next key. */
 	#notice: { text: string; isError: boolean } | undefined;
 
@@ -91,8 +106,44 @@ export class IrcViewerComponent implements Component {
 
 	invalidate(): void {}
 
+	get blocksMenuHistory(): boolean {
+		return this.#sending;
+	}
+
+	navigationSnapshot(): IrcViewerNavigation {
+		return {
+			selected: this.#visible()[this.#selected]?.message.id,
+			selectedIndex: this.#selected,
+			top: this.#top,
+			follow: this.#follow,
+			expanded: [...this.#expanded],
+			filter: this.#filter.navigationSnapshot(),
+			draft: this.#draft.navigationSnapshot(),
+			compose: this.#compose ? { ...this.#compose } : undefined,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as Partial<IrcViewerNavigation>;
+		this.#filter.restoreNavigation(state.filter);
+		this.#draft.restoreNavigation(state.draft);
+		const entries = this.#visible();
+		const selected = entries.findIndex(entry => entry.message.id === state.selected);
+		this.#selected = selected >= 0 ? selected : Math.max(0, Math.min(entries.length - 1, state.selectedIndex ?? 0));
+		this.#top = typeof state.top === "number" ? Math.max(0, state.top) : 0;
+		this.#follow = state.follow === true;
+		this.#expanded.clear();
+		for (const id of state.expanded ?? []) this.#expanded.add(id);
+		this.#compose = state.compose && this.#options.reply ? { ...state.compose } : undefined;
+		if (!this.#compose) this.#draft.focused = false;
+		this.#revealSelection = false;
+		this.#keys.reset();
+		this.#options.requestRender();
+	}
+
 	#visible(): readonly IrcLogEntry[] {
-		const query = this.#filter.getValue().trim();
+		const query = this.#filter.value.trim();
 		const entries = this.#options.source.entries();
 		return query ? entries.filter(entry => matchesParticipant(entry, query)) : entries;
 	}
@@ -167,22 +218,33 @@ export class IrcViewerComponent implements Component {
 		const list: string[] = [];
 		let selectedStart = 0;
 		let selectedEnd = 0;
+		const starts: number[] = [];
 		visible.forEach((entry, index) => {
 			const selected = index === this.#selected;
+			starts.push(list.length);
 			if (selected) selectedStart = list.length;
 			list.push(this.#header(entry, selected), ...this.#bodyLines(entry, inner, selected));
 			if (selected) selectedEnd = list.length;
 		});
 
 		this.#listRows = height - CHROME_ROWS;
+		this.#totalRows = list.length;
 		this.#selectedSpan = { start: selectedStart, end: selectedEnd };
 		if (this.#follow) this.#top = Math.max(0, list.length - this.#listRows);
-		else if (selectedEnd - selectedStart > this.#listRows)
-			// Taller than the screen (an expanded long message): keep the viewport inside it, wherever line scrolling left it.
-			this.#top = Math.max(selectedStart, Math.min(this.#top, selectedEnd - this.#listRows));
-		else if (selectedStart < this.#top) this.#top = selectedStart;
-		else if (selectedEnd > this.#top + this.#listRows) this.#top = selectedEnd - this.#listRows;
+		else if (this.#revealSelection) {
+			if (selectedEnd - selectedStart > this.#listRows)
+				this.#top = Math.max(selectedStart, Math.min(this.#top, selectedEnd - this.#listRows));
+			else if (selectedStart < this.#top) this.#top = selectedStart;
+			else if (selectedEnd > this.#top + this.#listRows) this.#top = selectedEnd - this.#listRows;
+		}
+		this.#revealSelection = false;
 		this.#top = Math.max(0, Math.min(this.#top, Math.max(0, list.length - this.#listRows)));
+		this.#visibleMessages = 0;
+		for (let index = 0; index < starts.length; index++) {
+			if (starts[index]! < this.#top + this.#listRows && (starts[index + 1] ?? list.length) > this.#top)
+				this.#visibleMessages++;
+		}
+		this.#visibleMessages = Math.max(1, this.#visibleMessages);
 
 		const body =
 			visible.length === 0
@@ -198,22 +260,28 @@ export class IrcViewerComponent implements Component {
 		const participants = new Set(all.flatMap(entry => [entry.message.from, entry.message.to])).size;
 		const broadcasts = all.filter(entry => entry.broadcast).length;
 		const counts = `${all.length} ${all.length === 1 ? "message" : "messages"} · ${broadcasts} broadcast · ${participants} ${participants === 1 ? "participant" : "participants"}`;
-		const query = this.#filter.getValue();
-		const status = this.#compose
-			? theme.fg("accent", `reply to ${sanitizeDisplaySingleLine(this.#compose.to)}: ${filterText(this.#draft)}`)
-			: this.#notice
-				? theme.fg(this.#notice.isError ? "error" : "success", sanitizeDisplaySingleLine(this.#notice.text))
-				: this.#filterEditing
-					? theme.fg("accent", `filter: ${filterText(this.#filter)}`)
+		const query = this.#filter.value;
+		const draft = this.#compose
+			? (this.#draft.input.render(Math.max(0, inner - 12 - this.#compose.to.length))[0] ?? "")
+			: "";
+		const filter = this.#filter.focused ? (this.#filter.input.render(Math.max(0, inner - 8))[0] ?? "") : query;
+		const status = this.#filter.focused
+			? theme.fg("accent", `filter: ${filter}`)
+			: this.#compose
+				? theme.fg("accent", `reply to ${sanitizeDisplaySingleLine(this.#compose.to)}: ${draft}`)
+				: this.#notice
+					? theme.fg(this.#notice.isError ? "error" : "success", sanitizeDisplaySingleLine(this.#notice.text))
 					: query
-						? `${theme.fg("accent", `filter: ${query}`)}${theme.fg("dim", `  ${visible.length} shown · ${counts}`)}`
+						? `${theme.fg("accent", `filter: ${filter}`)}${theme.fg("dim", `  ${visible.length} shown · ${counts}`)}`
 						: theme.fg("dim", counts);
 
-		const hints = this.#compose
-			? "enter send · esc cancel"
-			: this.#filterEditing
-				? "enter apply · esc clear"
-				: `↑↓ select · enter expand${this.#options.reply ? " · r reply" : ""} · / filter · end follow · ${[
+		const hints = this.#filter.focused
+			? "enter apply · esc leave field"
+			: this.#compose
+				? this.#draft.focused
+					? "enter send · Tab view · esc leave field"
+					: "j/k select · Tab edit reply · esc cancel reply"
+				: `j/k select · enter/space expand${this.#options.reply ? " · r reply" : ""} · / filter · G follow · ${[
 						"esc",
 						...this.#options.viewerKeys.map(key => formatKeyHint(key)),
 					].join("/")} close`;
@@ -237,6 +305,7 @@ export class IrcViewerComponent implements Component {
 		this.#selected = Math.max(0, Math.min(count - 1, index));
 		this.#selectedId = visible[this.#selected]?.message.id;
 		this.#follow = this.#selected === count - 1;
+		this.#revealSelection = true;
 		this.#refreshSelectedSpan(visible);
 		this.#options.requestRender();
 	}
@@ -271,20 +340,22 @@ export class IrcViewerComponent implements Component {
 		if (!this.#expanded.delete(id)) this.#expanded.add(id);
 		this.#refreshSelectedSpan(visible);
 		this.#follow = false;
+		this.#revealSelection = true;
 		this.#options.requestRender();
 	}
 
-	#handleFilterInput(data: string): void {
-		if (matchesKey(data, "escape")) {
-			this.#filter.setValue("");
-			this.#filterEditing = false;
-		} else if (matchesKey(data, "enter") || data === "\r" || data === "\n") {
-			this.#filterEditing = false;
-		} else if (!this.#filter.handleInput(data)) {
-			return;
+	#handleFilterInput(data: string): boolean {
+		const result = this.#filter.handleInput(data);
+		if (result === "pass") {
+			if (!matchesKey(data, "enter") && data !== "\n") return false;
+			this.#filter.focused = false;
+		} else if (result === "edited") {
+			this.#follow = true;
+			this.#revealSelection = true;
 		}
-		this.#follow = true;
+		this.#keys.reset();
 		this.#options.requestRender();
+		return true;
 	}
 
 	#startReply(): void {
@@ -293,34 +364,56 @@ export class IrcViewerComponent implements Component {
 		const { message } = entry;
 		const to = message.from === this.#options.operatorId ? message.to : message.from;
 		this.#compose = { to, replyTo: message.id };
+		this.#filter.focused = false;
 		this.#draft.setValue("");
+		this.#draft.focused = true;
+		this.#keys.reset();
 		this.#options.requestRender();
 	}
 
-	#handleComposeInput(data: string): void {
+	#leaveReply(): void {
+		this.#compose = undefined;
+		this.#draft.focused = false;
+		this.#keys.reset();
+		this.#options.requestRender();
+	}
+
+	#handleComposeInput(data: string): boolean {
 		const compose = this.#compose;
 		const reply = this.#options.reply;
-		if (!compose || !reply) return;
-		if (matchesKey(data, "escape")) {
-			this.#compose = undefined;
-		} else if (matchesKey(data, "enter") || data === "\r" || data === "\n") {
-			const body = this.#draft.getValue().trim();
-			if (!body) return;
-			this.#compose = undefined;
-			this.#follow = true;
-			void reply(compose.to, body, compose.replyTo).then(
+		if (!compose || !reply || !this.#draft.focused) return false;
+		const result = this.#draft.handleInput(data);
+		if (result !== "pass") {
+			this.#keys.reset();
+			this.#options.requestRender();
+			return true;
+		}
+		if (!matchesKey(data, "enter") && data !== "\n") return false;
+		const body = this.#draft.value.trim();
+		if (!body) return true;
+		this.#leaveReply();
+		this.#sending = true;
+		this.#follow = true;
+		void reply(compose.to, body, compose.replyTo)
+			.then(
 				result => {
 					this.#notice = result;
-					this.#options.requestRender();
 				},
 				(error: unknown) => {
 					this.#notice = { text: error instanceof Error ? error.message : String(error), isError: true };
-					this.#options.requestRender();
 				},
-			);
-		} else if (!this.#draft.handleInput(data)) {
-			return;
-		}
+			)
+			.finally(() => {
+				this.#sending = false;
+				this.#options.requestRender();
+			});
+		return true;
+	}
+
+	#scrollBy(delta: number): void {
+		this.#follow = false;
+		this.#revealSelection = false;
+		this.#top = Math.max(0, Math.min(Math.max(0, this.#totalRows - this.#listRows), this.#top + delta));
 		this.#options.requestRender();
 	}
 
@@ -334,38 +427,43 @@ export class IrcViewerComponent implements Component {
 		) {
 			return;
 		}
-		if (this.#compose) {
-			this.#handleComposeInput(data);
-			return;
-		}
+		if (this.#handleComposeInput(data)) return;
 		this.#notice = undefined;
-		if (this.#filterEditing) {
-			this.#handleFilterInput(data);
-			return;
-		}
-		if (matchesKey(data, "escape") || this.#options.viewerKeys.some(key => matchesKey(data, key))) {
+		if (this.#filter.focused && this.#handleFilterInput(data)) return;
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (action?.kind === "cancel") {
+			if (this.#compose) this.#leaveReply();
+			else this.#options.onClose();
+		} else if (this.#options.viewerKeys.some(key => matchesKey(data, key))) {
 			this.#options.onClose();
-			return;
-		}
-		if (data === "/") {
-			this.#filterEditing = true;
+		} else if (action?.kind === "context") {
+			if (this.#compose) this.#draft.focused = !this.#draft.focused;
+			this.#filter.focused = false;
+			this.#keys.reset();
 			this.#options.requestRender();
-			return;
-		}
-		if (data === "r" && this.#options.reply) {
+		} else if (action?.kind === "search") {
+			this.#filter.focused = true;
+			this.#draft.focused = false;
+			this.#keys.reset();
+			this.#options.requestRender();
+		} else if (data === "r" && this.#options.reply && !this.#compose && !this.#sending) {
 			this.#startReply();
-			return;
-		}
-		if (matchesKey(data, "enter") || this.#options.expandKeys.some(key => matchesKey(data, key))) {
+		} else if (
+			action?.kind === "confirm" ||
+			action?.kind === "toggle" ||
+			this.#options.expandKeys.some(key => matchesKey(data, key))
+		) {
 			this.#toggleExpanded();
-			return;
-		}
-		const page = Math.max(1, Math.floor(this.#listRows / 3));
-		if (matchesSelectUp(data)) this.#step(-1, -1);
-		else if (matchesSelectDown(data)) this.#step(1, 1);
-		else if (matchesSelectPageUp(data)) this.#step(-Math.max(1, this.#listRows - 1), -page);
-		else if (matchesSelectPageDown(data)) this.#step(Math.max(1, this.#listRows - 1), page);
-		else if (matchesKey(data, "home")) this.#select(0);
-		else if (matchesKey(data, "end")) this.#select(Number.MAX_SAFE_INTEGER);
+		} else if (action?.kind === "move") this.#step(action.delta, action.delta);
+		else if (action?.kind === "halfPage")
+			this.#step(
+				action.delta * Math.max(1, Math.floor(this.#listRows / 2)),
+				action.delta * Math.max(1, Math.floor(this.#visibleMessages / 2)),
+			);
+		else if (action?.kind === "page")
+			this.#step(action.delta * Math.max(1, this.#listRows - 1), action.delta * this.#visibleMessages);
+		else if (action?.kind === "scroll") this.#scrollBy(action.delta);
+		else if (action?.kind === "boundary") this.#select(action.edge === "first" ? 0 : Number.MAX_SAFE_INTEGER);
 	}
 }

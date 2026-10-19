@@ -63,6 +63,7 @@ async function waitForDraft(
 interface OverlayUi {
 	overlayStack: TUI["overlayStack"];
 	setFocus: (component: Component | null) => void;
+	getFocused: () => Component | null;
 	showOverlay: (component: Component, options?: OverlayOptions) => OverlayHandle;
 }
 
@@ -75,7 +76,10 @@ function overlayUi(): {
 } {
 	const overlayStack: TUI["overlayStack"] = [];
 	const shown: Component[] = [];
-	const setFocus = vi.fn<(component: Component | null) => void>();
+	let focused: Component | null = null;
+	const setFocus = vi.fn<(component: Component | null) => void>(component => {
+		focused = component;
+	});
 	const showOverlay = (component: Component, options?: OverlayOptions): OverlayHandle => {
 		const entry = { component, options, preFocus: null, hidden: false, released: false };
 		overlayStack.push(entry);
@@ -91,7 +95,7 @@ function overlayUi(): {
 			isHidden: () => entry.hidden,
 		};
 	};
-	return { shown, setFocus, overlayStack, ui: { overlayStack, setFocus, showOverlay } };
+	return { shown, setFocus, overlayStack, ui: { overlayStack, setFocus, showOverlay, getFocused: () => focused } };
 }
 
 /** A context whose session-model picker reads an empty, current catalog. */
@@ -255,6 +259,52 @@ describe("single-instance menus", () => {
 			expect(draft.left).toContainEqual({ id: "model", enabled: false });
 		} finally {
 			statusLine.dispose();
+		}
+	});
+
+	it("reopens the status-line draft through history and returns forward to the conversation", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "npi-statusline-history-"));
+		const isolated = await Settings.loadIsolated({ agentDir: dir, cwd: dir });
+		cfgComposerShape.set(isolated, "band");
+		const statusLine = startupStatusLine(["model"], ["time"]);
+		const active = statusLine.getEffectiveSettings();
+		const { ui, shown, setFocus } = overlayUi();
+		const syncComposerShape = vi.fn<(shape?: string) => void>();
+		const ctx = createInteractiveModeContext({ settings: isolated, statusLine, ui, syncComposerShape });
+		const controller = new SelectorController(ctx);
+		try {
+			controller.showStatusLineConfigure();
+			const first = shown[0]!;
+			press(first, "\r", DOWN, " ", "/", ..."model", ESC);
+			expect(first.render(100).join("\n")).toContain('filter "model"');
+			press(first, ESC, "n");
+			await Promise.resolve();
+			expect(ui.overlayStack).toHaveLength(0);
+			expect(statusLine.getEffectiveSettings()).toEqual(active);
+
+			expect(controller.navigateMenuHistory(-1)).toBe(true);
+			const reopened = shown[1]!;
+			expect(reopened).toBeInstanceOf(StatusLineConfigOverlayComponent);
+			expect(reopened).not.toBe(first);
+			// The restore notice owns the footer; the restored filter shows in its Search pane and the filtered list.
+			const reopenedText = Bun.stripANSI(reopened.render(100).join("\n"));
+			expect(reopenedText).toContain("Restored the unapplied status-line draft");
+			expect(reopenedText).toMatch(/Search\s*│\n.*│ model\s/);
+			expect(reopenedText).not.toContain("Time");
+			expect(statusLine.getEffectiveSettings().leftSegments).toEqual([]);
+			expect(syncComposerShape).toHaveBeenLastCalledWith("box");
+			expect(controller.navigateMenuHistory(1)).toBe(true);
+			expect(ui.overlayStack).toHaveLength(0);
+			expect(setFocus).toHaveBeenLastCalledWith(ctx.editorContainer.children[0] ?? ctx.editor);
+			expect(statusLine.getEffectiveSettings()).toEqual(active);
+			expect(cfgComposerShape.get(isolated)).toBe("band");
+			const draft = await waitForDraft(statusLineDraftPath(dir), saved => saved.query === "model");
+			expect(draft.left).toContainEqual({ id: "model", enabled: false });
+			expect(draft.composerShape).toBe("box");
+		} finally {
+			statusLine.dispose();
+			await isolated.flush();
+			await fs.rm(dir, { recursive: true, force: true });
 		}
 	});
 

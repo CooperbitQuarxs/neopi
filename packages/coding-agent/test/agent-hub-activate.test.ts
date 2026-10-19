@@ -183,7 +183,7 @@ describe("Agent hub Enter activation", () => {
 		resetSettingsForTest();
 	});
 
-	it("navigates with hjkl and keeps literal filter text through insert Esc until normal Esc closes (#35)", () => {
+	it("navigates with hjkl and keeps literal filter text through search Esc until normal Esc closes (#35)", () => {
 		const { hub, doneCalls } = makeHub(async () => {}, true);
 		const [firstId, secondId] = renderedRosterIds(hub, 120);
 		expect(renderedRosterEntry(hub, firstId!, 120)).toContain("❯");
@@ -193,7 +193,7 @@ describe("Agent hub Enter activation", () => {
 		expect(renderedRosterEntry(hub, firstId!, 120)).toContain("❯");
 		hub.handleInput("l");
 		hub.handleInput("h");
-		hub.handleInput("i");
+		hub.handleInput("/");
 		for (const key of "hjkl") hub.handleInput(key);
 		expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("/hjkl");
 		hub.handleInput("\x1b");
@@ -265,12 +265,16 @@ describe("Agent hub Enter activation", () => {
 		hub.handleInput("\r");
 
 		expect(focusAgent).not.toHaveBeenCalled();
-		expect(showOverlay).toHaveBeenCalledWith(expect.anything(), {
-			width: "100%",
-			margin: 0,
-			fullscreen: true,
-		});
-		expect(setFocus).toHaveBeenCalledWith(expect.anything());
+		expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("Agent Hub  ·  Worker");
+		expect(Bun.stripANSI(hub.render(120).join("\n"))).not.toContain("Tab message");
+		expect(showOverlay).not.toHaveBeenCalled();
+		expect(setFocus).not.toHaveBeenCalled();
+		hub.handleInput("\t");
+		hub.handleInput("attempted message");
+		hub.handleInput("\r");
+		expect(focusAgent).not.toHaveBeenCalled();
+		hub.handleInput("\x1b");
+		expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("Roster");
 		expect(onDone).not.toHaveBeenCalled();
 		hub.dispose();
 	});

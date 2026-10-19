@@ -73,6 +73,49 @@ describe("theme selector picker", () => {
 	});
 });
 
+describe("short-list native picker search", () => {
+	function make() {
+		const log: string[] = [];
+		const selector = new ThinkingSelectorComponent(
+			"low" as never,
+			["low", "high"] as never,
+			() => log.push("select"),
+			() => log.push("cancel"),
+		);
+		return { selector, log };
+	}
+
+	it("shows a short-list filter and leaves it before native close cancels", () => {
+		const { selector, log } = make();
+		const initial = selector.describe(pickerCx);
+		expect(sheet(initial).props.query).toBeNull();
+		selector.getSelectList().handleInput("/");
+		const focused = selector.describe(pickerCx);
+		expect(focused).not.toBe(initial);
+		expect(sheet(focused).props.query).toBe("");
+		expect(sheet(focused).props.actions?.at(-1)?.label).toBe("Back to list");
+		selector.getSelectList().handleInput("h");
+		selector.handleNativeEvent(act("close"));
+		expect(sheet(selector.describe(pickerCx)).props.query).toBe("h");
+		expect(sheet(selector.describe(pickerCx)).props.actions?.at(-1)?.label).toBe("Close");
+		expect(log).not.toContain("cancel");
+		selector.handleNativeEvent(act("close"));
+		expect(log).toContain("cancel");
+	});
+
+	it("invalidates the native sheet when an empty filter loses focus", () => {
+		const { selector, log } = make();
+		selector.getSelectList().handleInput("/");
+		const focused = selector.describe(pickerCx);
+		selector.handleNativeEvent(act("cancel"));
+		const normal = selector.describe(pickerCx);
+		expect(normal).not.toBe(focused);
+		expect(sheet(normal).props.query).toBeNull();
+		expect(sheet(normal).props.actions?.at(-1)?.label).toBe("Close");
+		expect(log).not.toContain("cancel");
+	});
+});
+
 describe("thinking selector picker", () => {
 	it("meters each level's depth, deeper levels fuller", () => {
 		const selector = new ThinkingSelectorComponent(
@@ -237,6 +280,7 @@ describe("oauth selector picker", () => {
 		expect(row?.detail).toBe("Signed in · login");
 		expect(first.items?.find(item => item.id !== signedIn)?.dot).toBe("muted");
 		expect(first.query).toBe("");
+		selector.handleInput("/");
 		selector.handleInput(providers[1]!.name.slice(0, 3));
 		const typed = sheet(selector.describe(pickerCx)).props;
 		expect(typed.items).toBe(first.items);
@@ -255,5 +299,43 @@ describe("oauth selector picker", () => {
 		selector.handleNativeEvent(at("activate", target));
 		selector.handleNativeEvent(act("close"));
 		expect(log).toEqual([target, "cancel"]);
+	});
+
+	it("moves and scrolls independently, restores search, and never activates with Space", () => {
+		const picked: string[] = [];
+		let closed = false;
+		const selector = new OAuthSelectorComponent(
+			"login",
+			auth,
+			id => picked.push(id),
+			() => {
+				closed = true;
+			},
+		);
+		selector.handleInput("G");
+		const last = sheet(selector.describe(pickerCx)).props.selected;
+		selector.handleInput("g");
+		selector.handleInput("g");
+		const first = sheet(selector.describe(pickerCx)).props.selected;
+		expect(first).not.toBe(last);
+		selector.handleInput("\x05");
+		expect(sheet(selector.describe(pickerCx)).props.selected).toBe(first);
+		selector.handleInput(" ");
+		expect(picked).toEqual([]);
+		selector.handleInput("/");
+		selector.handleInput("hjkl /");
+		selector.handleInput("\x1b");
+		expect(closed).toBe(false);
+		const snapshot = selector.navigationSnapshot();
+		const restored = new OAuthSelectorComponent(
+			"login",
+			auth,
+			() => {},
+			() => {},
+		);
+		restored.restoreNavigation(snapshot);
+		expect(restored.navigationSnapshot()).toEqual(snapshot);
+		selector.handleInput("\x1b");
+		expect(closed).toBe(true);
 	});
 });

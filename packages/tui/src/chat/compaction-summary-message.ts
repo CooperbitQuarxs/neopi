@@ -191,20 +191,20 @@ class SummaryMessageComponent implements Component {
 /**
  * Compaction point in the transcript, rendered as a slim horizontal divider:
  *
- *   ──────── 📷 remote-compacted · 256K→20K · ctrl+o ────────
+ *   ──────── 📷 remote-compacted · 256K→20K · Alt-E ────────
  *
  * The label names the maintenance method that fired (remote/soft/handoff/
  * snapcompact; "compacted" for legacy or extension-provided entries) and the
  * before → after context amounts when the entry recorded them. The
  * conversation above the divider stays visible (display transcript keeps
- * full history); only the LLM context was reset. Expanding (ctrl+o) reveals
+ * full history); only the LLM context was reset. The expansion action reveals
  * the compaction summary below the divider.
  */
 export class CompactionSummaryMessageComponent extends SummaryMessageComponent {
 	constructor(message: CompactionSummaryMessage) {
 		super({
 			// A dead-end warning stamped by the progress guard badges the bar;
-			// the full text lives in the ctrl+o detail block below.
+			// the full text lives in the expanded detail block below.
 			label: () => compactionLabel(message),
 			nativeLabel: () => compactionNativeLabel(message),
 			nativeDetail: () => compactionNativeDetail(message),

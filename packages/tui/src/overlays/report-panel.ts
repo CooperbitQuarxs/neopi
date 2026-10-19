@@ -1,18 +1,11 @@
-import type { TspScrollBy, TspText } from "@oh-my-pi/pi-wire";
+import type { TspText } from "@oh-my-pi/pi-wire";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { editorKey } from "../chrome/keybinding-hints";
 import { Ellipsis } from "../index";
 import { ScrollView } from "../components/scroll-view";
+import { MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
 import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
-import {
-	matchesSelectCancel,
-	matchesSelectDown,
-	matchesSelectPageDown,
-	matchesSelectPageUp,
-	matchesSelectUp,
-} from "../keybinding-matchers";
-import { matchesKey } from "../keys";
 import { routeSgrMouseInput } from "../mouse";
 import { actionBar, actionButton } from "../native/overlay";
 import { col } from "../native/describe";
@@ -70,6 +63,7 @@ export class ReportPanel extends OverlayPanel {
 	#bodyRows = 0;
 	#scroll: NativeScroll | undefined;
 	#native: { scroll: NativeScroll | undefined; node: NativeNode } | undefined;
+	readonly #keys = new MenuKeyReader();
 
 	constructor(options: ReportPanelOptions) {
 		super(options.title, "omp.overlay.report");
@@ -104,6 +98,17 @@ export class ReportPanel extends OverlayPanel {
 		this.#closeHint = `${editorKey("tui.select.cancel")} to close`;
 	}
 
+	navigationSnapshot(): unknown {
+		return this.#view.navigationSnapshot();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		this.#view.restoreNavigation(snapshot);
+		this.#keys.reset();
+		this.#scroll = undefined;
+		this.#native = undefined;
+	}
+
 	/**
 	 * Text mode: cap the box to {@link ReportPanelOptions.maxRows}, scrolling a
 	 * taller body. The cap is a hard limit: when a resize leaves fewer rows than
@@ -118,7 +123,7 @@ export class ReportPanel extends OverlayPanel {
 		const overflows = rows > bodyMax;
 		this.#bodyRows = Math.min(rows, bodyMax);
 		this.#view.setHeight(this.#bodyRows);
-		const scrollHint = `${editorKey("tui.select.pageUp")}/${editorKey("tui.select.pageDown")} scroll · `;
+		const scrollHint = `${editorKey("tui.select.pageUp")}/${editorKey("tui.select.pageDown")} scroll · j/k rows · Ctrl-u/d half · gg/G bounds · Ctrl-e/y scroll · `;
 		this.#footer.setText(theme.fg("muted", overflows ? scrollHint + this.#closeHint : this.#closeHint));
 		const lines = super.render(width);
 		return cap !== undefined && lines.length > cap ? lines.slice(0, Math.max(0, cap)) : lines;
@@ -162,30 +167,12 @@ export class ReportPanel extends OverlayPanel {
 		) {
 			return;
 		}
-		if (matchesSelectCancel(data)) {
-			this.#onClose();
-			return;
-		}
-		const by: TspScrollBy | undefined = matchesSelectUp(data)
-			? "line-up"
-			: matchesSelectDown(data)
-				? "line-down"
-				: matchesSelectPageUp(data)
-					? "page-up"
-					: matchesSelectPageDown(data)
-						? "page-down"
-						: matchesKey(data, "home")
-							? "start"
-							: matchesKey(data, "end")
-								? "end"
-								: undefined;
-		if (by === undefined) return;
-		// Natively the terminal scrolls the sheet body; text mode scrolls the box.
-		this.#scroll = { by, n: (this.#scroll?.n ?? 0) + 1 };
-		const page = Math.max(1, this.#bodyRows - 1);
-		if (by === "start") this.#view.scrollToTop();
-		else if (by === "end") this.#view.scrollToBottom();
-		else this.#view.scroll(by === "line-up" ? -1 : by === "line-down" ? 1 : by === "page-up" ? -page : page);
+		const action = this.#keys.read(data);
+		if (!action || action === "pending") return;
+		if (action.kind === "cancel") return this.#onClose();
+		if (!this.#view.handleMenuAction(action)) return;
+		const by = menuScrollBy(action);
+		if (by) this.#scroll = { by, n: (this.#scroll?.n ?? 0) + 1 };
 	}
 
 	/** Close runs what Esc runs. */

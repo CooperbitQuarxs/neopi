@@ -8,6 +8,7 @@ import { OverlayPanel } from "../chrome/overlay-box";
 import { TextFormField } from "../components/form";
 import { formatKeyHint, keyHintPlatform } from "../app-keybindings";
 import { editorKey } from "../chrome/keybinding-hints";
+import { extractPrintableText, matchesKey } from "../keys";
 import { col, keyed, node, span, text } from "../native/describe";
 import type { NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton } from "../native/overlay";
@@ -540,14 +541,18 @@ export class LoginDialogComponent extends OverlayPanel {
 	}
 
 	handleInput(data: string): void {
-		const kb = getKeybindings();
+		const printable = extractPrintableText(data);
+		if (printable !== undefined) {
+			this.#input.input.insertText(printable);
+			return;
+		}
 
-		if (kb.matches(data, "tui.select.cancel")) {
+		if (matchesKey(data, "escape") || getKeybindings().matches(data, "tui.select.cancel")) {
 			this.#cancel();
 			return;
 		}
 
-		// Pass to input
-		this.#input.handleInput(data);
+		if (matchesKey(data, "enter") || data === "\n") this.#input.submit();
+		else this.#input.handleInput(data);
 	}
 }

@@ -102,7 +102,7 @@ describe("provider error expand", () => {
 		const pinned = Bun.stripANSI(component.render(120).join("\n"));
 		expect(pinned).not.toContain("provider error detail line 0");
 
-		// Ctrl+O while pinned must still reach the full body inline.
+		// Expansion while pinned must still reach the full body inline.
 		component.setExpanded(true);
 		const expanded = Bun.stripANSI(component.render(120).join("\n"));
 		const shown = expanded.match(/provider error detail line \d+/g) ?? [];

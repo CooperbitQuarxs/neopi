@@ -20,6 +20,11 @@
 - Added `/monitor` and `npi monitor attach`: a separate tmux session with one live pane per subagent and advisor that shows unsaved output as it streams; you can message subagents from their panes, and advisor panes are view only ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
 - The side panel shows one of three views chosen by chord: `Alt+T` `t` Todo, `Alt+T` `a` Agents (click a subagent to view its transcript, click again to return), `Alt+T` `i` IRC; repeating the shown view's chord hides the panel, right-click in the panel cycles views, and the docked view replaces its duplicate todo or pinned-subagents list above the editor ([#342](https://github.com/PsychedelicShayna/neopi/issues/342)).
 - Added `/statusline` to arrange builtin and provider-usage widgets and choose a composer with live previews, plus a flexible `context_bar` widget for every composer ([#227](https://github.com/PsychedelicShayna/neopi/issues/227), [#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
+- Added menu history: `Ctrl+O` returns to the previously visited menu with its state (or the conversation) and `Ctrl+I`/`Alt+O` goes forward; opening a menu from an older position keeps the newer entries ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Menu history includes nested configuration pages and the session, tree, rewind, copy, account, plugin, and advisor selectors; returning within an open menu restores its page without closing it ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Git, debug viewers, BTW history, jobs, session information, and modal command reports participate in menu history without replaying actions or letting delayed cleanup steal focus; raising a covered viewer retains its history registration ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Menu history keeps extension custom views and live prompts open, with distinct guidance instead of replaying their one-shot results, and ignores active composer completion popups without a prompt warning ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Delayed menu loads, including initial session/plugin/account listings, cannot cover a newer visited view; history retains pending snapshots, and failed opens release their registrations ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Added per-provider usage-bar status-line widgets (`usage:<provider>:<window>[:<tier>]`) showing each reported quota window's percent and age ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
 - Added an IRC communications viewer (`Alt+I`) that keeps every agent-to-agent message in the session, including broadcasts and failed deliveries, after the transcript's live cards have retired; the `irc.operator.relayToMainTranscript` setting can turn those cards off ([#1](https://github.com/PsychedelicShayna/neopi/issues/1)).
 - Added an IRC identity for the operator (`Operator`, or `irc.operator.handle`): agents can message you directly without waiting on the main model, and `/irc <agent>|all <message>` or `r` in the IRC viewer sends as you ([#31](https://github.com/PsychedelicShayna/neopi/issues/31)).
@@ -83,6 +88,7 @@
 
 ### Changed
 
+- Tool-output expansion (`app.tools.expand`) defaults to `Alt+E`; `Ctrl+O` is now menu history back. A `keybindings.yml` that binds the action keeps its keys ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - `/statusline` autosaves an unapplied draft to `neopi-statusline-draft.json` and restores it on reopen or restart; `s` applies usage-bar templates, widgets, and composer without closing, and Escape asks before applying ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 - Fork extensions now use NeoPi names and migrate existing persona, loadout, REPL, and live-persona state on first read.
 - Use `npi update` for the fork's PR-based update workflow and `npi flash` for portable builds.

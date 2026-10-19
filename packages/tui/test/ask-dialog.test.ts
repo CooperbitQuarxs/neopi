@@ -1270,7 +1270,7 @@ describe("AskDialogComponent", () => {
 		}
 	});
 
-	it("keeps a selected inline preview visible when its row fits the viewport", () => {
+	it("reveals a fitting preview, then pages the answer list normally", () => {
 		const originalRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
 		Object.defineProperty(process.stdout, "rows", { configurable: true, value: 24 });
 		try {
@@ -1279,8 +1279,9 @@ describe("AskDialogComponent", () => {
 				{ label: "Target", preview: "```\nPREVIEW-SHORT-FIRST\npreview-short-middle\nPREVIEW-SHORT-LAST\n```" },
 				...Array.from({ length: 8 }, (_, index) => ({ label: `After ${index}` })),
 			];
+			const onSubmit = vi.fn();
 			const component = new AskDialogComponent([{ id: "q1", question: "Pick one?", options }], {
-				onSubmit: vi.fn(),
+				onSubmit,
 				onCancel: vi.fn(),
 				onPrompt: vi.fn(),
 			});
@@ -1292,9 +1293,9 @@ describe("AskDialogComponent", () => {
 			expect(out).toMatch(/[↓↑↕] scroll/);
 			component.handleInput(PAGE_DOWN);
 			out = render(component);
-			expect(out).toContain("PREVIEW-SHORT-FIRST");
-			expect(out).toContain("PREVIEW-SHORT-LAST");
-			expect(out).toMatch(/[↓↑↕] scroll/);
+			expect(out).toMatch(/❯.*After/);
+			component.handleInput(ENTER);
+			expect(onSubmit.mock.calls[0][0].results[0].selectedOptions[0]).toMatch(/^After /);
 		} finally {
 			if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
 			else Reflect.deleteProperty(process.stdout, "rows");
@@ -1370,7 +1371,7 @@ describe("AskDialogComponent", () => {
 		expect(matches?.length ?? 0).toBeLessThan(10);
 	});
 
-	it("expands a truncated question header on Ctrl+O and collapses on a second press", () => {
+	it("expands a truncated question header on Alt+E and collapses on a second press", () => {
 		const longQuestion = "This is a very long question ".repeat(200);
 		const component = new AskDialogComponent(
 			[
@@ -1391,7 +1392,7 @@ describe("AskDialogComponent", () => {
 		const collapsedCount = collapsed.match(/This is a very long question/g)?.length ?? 0;
 		expect(collapsedCount).toBeLessThan(10);
 
-		component.handleInput("\x0f");
+		component.handleInput("\x1be");
 		const expanded = render(component);
 		const expandedCount = expanded.match(/This is a very long question/g)?.length ?? 0;
 		expect(expandedCount).toBeGreaterThan(collapsedCount);
@@ -1401,7 +1402,7 @@ describe("AskDialogComponent", () => {
 		// larger header rather than an exact copy count.
 		expect(expandedCount).toBeGreaterThanOrEqual(15);
 
-		component.handleInput("\x0f");
+		component.handleInput("\x1be");
 		const recollapsed = render(component);
 		expect(recollapsed.match(/This is a very long question/g)?.length ?? 0).toBe(collapsedCount);
 	});
@@ -1434,7 +1435,7 @@ describe("AskDialogComponent", () => {
 		expect(component.toggleQuestionExpansion()).toBe(false);
 		expect(render(component)).toBe(before);
 	});
-	it("expands truncated option descriptions on Ctrl+O and collapses on a second press", () => {
+	it("expands truncated option descriptions on Alt+E and collapses on a second press", () => {
 		const longDescription = "This is a very long description ".repeat(30);
 		const component = new AskDialogComponent(
 			[
@@ -1457,7 +1458,7 @@ describe("AskDialogComponent", () => {
 		expect(expandedCount).toBeGreaterThan(collapsedCount);
 		expect(expandedCount).toBeGreaterThanOrEqual(10);
 
-		component.handleInput("\x0f");
+		component.handleInput("\x1be");
 		const recollapsed = render(component);
 		expect(recollapsed.match(/This is a very long description/g)?.length ?? 0).toBe(collapsedCount);
 	});

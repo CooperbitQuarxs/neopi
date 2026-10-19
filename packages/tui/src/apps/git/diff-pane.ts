@@ -657,6 +657,41 @@ export class DiffPane {
 		return this.#doc;
 	}
 
+	navigationSnapshot(): unknown {
+		return {
+			mode: this.mode,
+			wrap: this.wrap,
+			selectedHunk: this.selectedHunk,
+			scrollTop: this.scrollTop,
+			scrollLeft: this.scrollLeft,
+			cursor: this.cursor,
+			anchor: this.anchor,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as {
+			mode?: ViewMode;
+			wrap?: boolean;
+			selectedHunk?: number;
+			scrollTop?: number;
+			scrollLeft?: number;
+			cursor?: number;
+			anchor?: number | null;
+		};
+		if (state.mode === "file" || state.mode === "split" || state.mode === "inline" || state.mode === "hunk")
+			this.mode = state.mode;
+		if (typeof state.wrap === "boolean") this.wrap = state.wrap;
+		if (typeof state.selectedHunk === "number") this.selectedHunk = Math.max(0, Math.trunc(state.selectedHunk));
+		if (typeof state.scrollTop === "number") this.scrollTop = state.scrollTop;
+		if (typeof state.scrollLeft === "number") this.scrollLeft = state.scrollLeft;
+		if (typeof state.cursor === "number")
+			this.cursor = Math.max(0, Math.min(this.#total() - 1, Math.trunc(state.cursor)));
+		if (state.anchor === null || typeof state.anchor === "number") this.anchor = state.anchor;
+		this.#clampScroll();
+	}
+
 	setDocument(doc: DiffDocument | null, state: DiffPaneState): void {
 		this.#doc = doc;
 		this.#docVersion++;

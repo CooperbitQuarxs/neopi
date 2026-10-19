@@ -101,6 +101,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 		cfgHindsightApiToken.set(settings, "saved-secret-token");
 		const comp = createSelector();
 
+		comp.handleInput("/");
 		for (const ch of "hindsight api token") comp.handleInput(ch);
 		const row = comp.render(120).join("\n");
 		expect(row).toContain("Hindsight API Token");
@@ -145,13 +146,14 @@ describe("SettingsSelectorComponent memory tab", () => {
 		expect(after).not.toContain("Hindsight Auto Recall");
 	});
 
-	it("clears the global settings search on Escape before closing the selector", () => {
+	it("leaves the global settings search field on Escape before closing the selector", () => {
 		let cancelCount = 0;
 		const comp = createSelector(() => {
 			cancelCount++;
 		});
 
-		// Typing starts the cross-tab search: banner shows the query and matches.
+		// Explicit search focus starts cross-tab filtering with a query and match count.
+		comp.handleInput("/");
 		comp.handleInput("b");
 		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
 		const searching = comp.render(120).map(strip).join("\n");
@@ -163,10 +165,11 @@ describe("SettingsSelectorComponent memory tab", () => {
 		expect(banner).toContain(" b ");
 		expect(searching).toMatch(/\d+ match/);
 
-		// First Escape exits search mode without closing the panel.
+		// First Escape leaves the field, retaining the query and filtered results.
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(0);
-		expect(comp.render(120).join("\n")).not.toContain("matches");
+		expect(comp.render(120).map(strip).join("\n")).toMatch(/\d+ match/);
+		expect(comp.render(120).map(strip).join("\n")).toContain(" b ");
 
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(1);
@@ -174,6 +177,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 
 	it("puts the exact global settings search hit before incidental matches", () => {
 		const comp = createSelector();
+		comp.handleInput("/");
 		for (const ch of "fetch provider") comp.handleInput(ch);
 
 		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
@@ -200,6 +204,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 				.find(line => /\d+ match/.test(line)) ?? "";
 
 		// alt+backspace deletes the trailing word from the query.
+		comp.handleInput("/");
 		for (const ch of "image provider") comp.handleInput(ch);
 		comp.handleInput("\x1b\x7f");
 		expect(banner()).toContain("image");

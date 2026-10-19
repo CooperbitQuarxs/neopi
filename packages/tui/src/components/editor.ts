@@ -19,6 +19,7 @@ import { col, node } from "../native/describe";
 import { sameItems, sameProps } from "../native/memo";
 import { plainText } from "../native/spans";
 import {
+	clampTextOffset,
 	type DescribeContext,
 	type NativeChild,
 	type NativeNode,
@@ -472,6 +473,17 @@ interface EditorState {
 	lines: string[];
 	cursorLine: number;
 	cursorCol: number;
+}
+
+/** Safe draft state for registered menu-hosted editors, not conversation history. */
+export interface EditorNavigationState {
+	text: string;
+	cursor: { line: number; col: number };
+	scrollTop: number;
+	/** Collapsed draft payloads; values are existing text/reference strings, not copied blobs. */
+	pastes?: ReadonlyMap<number, string>;
+	atoms?: ReadonlyMap<string, string>;
+	pasteCounter?: number;
 }
 
 interface LayoutLine {
@@ -3064,6 +3076,40 @@ export class Editor implements Component, Focusable {
 
 	getCursor(): { line: number; col: number } {
 		return { line: this.#state.cursorLine, col: this.#state.cursorCol };
+	}
+
+	/** Hosts explicitly opt safe prompt drafts into menu history. */
+	getState(): EditorNavigationState {
+		const state: EditorNavigationState = {
+			text: this.getText(),
+			cursor: this.getCursor(),
+			scrollTop: this.#scrollOffset,
+		};
+		if (this.#pastes.size > 0) state.pastes = new Map(this.#pastes);
+		if (this.#atoms.size > 0) state.atoms = new Map(this.#atoms);
+		if (this.#pasteCounter > 0) state.pasteCounter = this.#pasteCounter;
+		return state;
+	}
+
+	setState(state: EditorNavigationState): void {
+		this.#pastes = new Map(state.pastes);
+		this.#atoms = new Map(state.atoms);
+		this.#atomsRevision++;
+		this.#pasteCounter = state.pasteCounter ?? 0;
+		this.setText(state.text);
+		const line = clampTextOffset(state.cursor.line, this.#state.lines.length - 1);
+		const text = this.#state.lines[line] ?? "";
+		const requested = clampTextOffset(state.cursor.col, text.length);
+		let col = requested === text.length ? requested : 0;
+		if (requested !== text.length) {
+			for (const grapheme of segmenter.segment(text)) {
+				if (grapheme.index > requested) break;
+				col = grapheme.index;
+			}
+		}
+		this.#state.cursorLine = line;
+		this.#setCursorCol(col);
+		this.#scrollOffset = Number.isFinite(state.scrollTop) ? Math.max(0, Math.trunc(state.scrollTop)) : 0;
 	}
 
 	moveToLineStart(): void {

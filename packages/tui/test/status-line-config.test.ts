@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { UsageReport } from "@oh-my-pi/pi-ai/usage";
+import { KeybindingsManager } from "../src/app-keybindings";
 import {
 	parseStatusLineEditorDraft,
 	StatusLineConfigOverlayComponent,
@@ -8,8 +9,8 @@ import {
 	type StatusLineLayout,
 } from "../src/overlays/status-line-config";
 import { initTheme } from "../src/theme";
-import { getComposerStyle, visibleWidth } from "../src/index";
-import { installExtensionComposerShape } from "../src/overlays/composer-shape-registry";
+import { getComposerStyle, getKeybindings, setKeybindings, visibleWidth } from "../src/index";
+import { getComposerShapeOptions, installExtensionComposerShape } from "../src/overlays/composer-shape-registry";
 
 beforeAll(async () => {
 	await initTheme();
@@ -232,6 +233,126 @@ describe("status-line editor list", () => {
 			unregister();
 		}
 	});
+
+	it("selects the first widget for every edited query, including Composer and Reset origins", () => {
+		for (const origin of ["composer", "reset"]) {
+			const h = setup();
+			if (origin === "reset") h.press("G");
+			h.press("/", "t", "i");
+			expect(h.drafts.at(-1)?.selected).toBe("time");
+			h.press(BACKSPACE); // Time still matches t, but Context bar is the first match.
+			expect(h.drafts.at(-1)?.query).toBe("t");
+			expect(h.drafts.at(-1)?.selected).toBe("context_bar");
+			h.press(BACKSPACE);
+			expect(h.drafts.at(-1)?.selected).toBe("model");
+		}
+	});
+
+	it("honors configured reader intents and captures navigation drafts synchronously", () => {
+		const previous = getKeybindings();
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.down": "alt+n",
+				"tui.select.halfPageDown": "alt+d",
+				"tui.select.halfPageUp": "alt+u",
+				"tui.select.scrollDown": "alt+e",
+				"tui.select.scrollUp": "alt+y",
+				"tui.select.first": "alt+g",
+				"tui.select.last": "alt+b",
+				"tui.select.search": "ctrl+f",
+			}),
+		);
+		try {
+			const h = setup({ usageReports: MANY_WINDOWS });
+			h.press("\x1bn");
+			expect(h.drafts.at(-1)?.selected).toBe("model");
+			h.press("\x1be");
+			expect(h.drafts.at(-1)).toMatchObject({ selected: "model", top: 1 });
+			h.press("\x1by");
+			expect(h.drafts.at(-1)?.top).toBe(0);
+			h.press("\x1bd");
+			expect(h.drafts.at(-1)?.selected).not.toBe("model");
+			h.press("\x1bu");
+			expect(h.drafts.at(-1)?.selected).toBe("model");
+			h.press("\x1bb");
+			expect(h.drafts.at(-1)?.selected).toBe("reset");
+			h.press("\x1bg");
+			expect(h.drafts.at(-1)?.selected).toBe("composer");
+			h.press("\x06");
+			expect(h.drafts.at(-1)?.focus).toBe("search");
+		} finally {
+			setKeybindings(previous);
+		}
+	});
+
+	it("keeps physical-row mouse hits and wheel-only scrolling through viewport migration", () => {
+		const h = setup({ usageReports: MANY_WINDOWS });
+		h.press("\x1b[<65;5;3M");
+		expect(h.drafts.at(-1)).toMatchObject({ top: 1, selected: "composer" });
+		const beforeHeader = h.drafts.length;
+		h.press("\x1b[<0;5;2M"); // visible Left side header is not selectable
+		expect(h.drafts).toHaveLength(beforeHeader);
+		h.press("\x1b[<0;5;3M"); // top 1 + pane line 1 = Model
+		expect(h.drafts.at(-1)?.selected).toBe("model");
+		expect(h.previews.at(-1)?.leftSegments).toEqual(["model", "context_bar"]);
+		h.press("\x1b[<0;5;3M");
+		expect(h.previews.at(-1)?.leftSegments).toEqual(["context_bar"]);
+		h.press("g", "\x1b[<35;5;3M", "g", "j");
+		expect(h.drafts.at(-1)?.selected).toBe("context_bar");
+		h.press(ESC);
+		const previews = h.previews.length;
+		h.press("\x1b[<0;5;3M");
+		expect(h.previews).toHaveLength(previews);
+		expect(h.text()).toContain("Apply pending changes?");
+	});
+
+	it("pages before the first render using terminal-derived selectable-row counts", () => {
+		const drafts: StatusLineEditorDraft[] = [];
+		const overlay = new StatusLineConfigOverlayComponent({
+			active: () => structuredClone(ACTIVE),
+			usageReports: MANY_WINDOWS,
+			saveDraft: async draft => {
+				drafts.push(structuredClone(draft));
+			},
+			apply: async () => {},
+			preview: () => {},
+			close: () => {},
+			requestRender: () => {},
+			notify: () => {},
+		});
+		overlay.handleInput(CTRL_D);
+		const draft = drafts.at(-1)!;
+		const keys = ["composer", ...draft.left.map(row => row.id), ...draft.right.map(row => row.id), "reset"];
+		const step = Math.max(1, Math.floor(Math.max(3, (process.stdout.rows || 40) - 4) / 2));
+		expect(draft.selected).toBe(keys[Math.min(keys.length - 1, step)]);
+	});
+
+	it("cycles an unknown composer to the first or last registered shape without moving", () => {
+		const shapes = getComposerShapeOptions();
+		for (const [key, expected] of [
+			[">", shapes[0]!.value],
+			["<", shapes.at(-1)!.value],
+		] as const) {
+			const h = setup({}, { ...ACTIVE, composerShape: "unknown-shape" });
+			h.press(key);
+			expect(h.previews.at(-1)?.composerShape).toBe(expected);
+			expect(h.drafts.at(-1)?.selected).toBe("composer");
+			expect(h.drafts.at(-1)?.top).toBe(0);
+		}
+	});
+
+	it("leaves composer and reset rows inert for every widget-reorder alias", () => {
+		const h = setup();
+		h.press("\x1b[H"); // establish the initial navigation draft without an edit
+		const aliases = ["h", "l", "[", "]", "\x1b[1;3A", "\x1b[1;3B"];
+		const previews = h.previews.length;
+		h.press(...aliases);
+		expect(h.previews).toHaveLength(previews);
+		expect(h.drafts.at(-1)?.selected).toBe("composer");
+		h.press("G", ...aliases);
+		expect(h.previews).toHaveLength(previews);
+		expect(h.drafts.at(-1)?.selected).toBe("reset");
+	});
 });
 
 describe("status-line editor templates", () => {
@@ -252,6 +373,53 @@ describe("status-line editor templates", () => {
 		const h = setup();
 		h.press("j", "\t");
 		expect(h.notices.at(-1)).toContain("usage widget");
+	});
+
+	it("keeps printable bindings literal in search and template fields without applying", () => {
+		const previous = getKeybindings();
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": "j",
+				"tui.input.submit": "s",
+				"tui.select.nextContext": "alt+t",
+			}),
+		);
+		try {
+			const literal = "js h/l gg G";
+			const search = setup();
+			search.press("/", ...literal);
+			expect(search.drafts.at(-1)?.query).toBe(literal);
+			expect(search.drafts.at(-1)?.focus).toBe("search");
+			expect(search.previews).toHaveLength(1);
+			expect(search.applied).toEqual([]);
+			search.press(ESC);
+			expect(search.drafts.at(-1)?.focus).toBe("list");
+			const template = setup({}, { ...ACTIVE, rightSegments: ["usage:acme:5h"] });
+			template.press("\x1b[B", "\x1b[B", "\x1b[B", "\x1bt");
+			expect(template.drafts.at(-1)?.focus).toBe("template");
+			template.press(...Array.from({ length: 30 }, () => BACKSPACE), ...literal);
+			expect(template.previews.at(-1)?.usageTemplates).toEqual({ "usage:acme:5h": literal });
+			expect(template.previews.at(-1)?.leftSegments).toEqual(ACTIVE.leftSegments);
+			expect(template.applied).toEqual([]);
+			template.press("\r");
+			expect(template.drafts.at(-1)?.focus).toBe("list");
+		} finally {
+			setKeybindings(previous);
+		}
+	});
+
+	it("keeps caret-only template keys out of preview and draft edits and still limits text", () => {
+		const h = setup({}, { ...ACTIVE, rightSegments: ["usage:acme:5h"] });
+		h.press("j", "j", "j", "\t");
+		const previews = h.previews.length;
+		const drafts = h.drafts.length;
+		h.press("\x01", "\x1b[C", CTRL_E, "\x1b[D");
+		expect(h.previews).toHaveLength(previews);
+		expect(h.drafts).toHaveLength(drafts);
+		h.press(...Array.from({ length: 100 }, () => "A"));
+		const value = h.drafts.at(-1)?.usageTemplates["usage:acme:5h"] ?? "";
+		expect(visibleWidth(value)).toBeLessThanOrEqual(80);
+		expect(h.applied).toEqual([]);
 	});
 });
 
@@ -429,5 +597,76 @@ describe("status-line editor draft", () => {
 		expect(parsed?.top).toBe(0);
 		expect(parsed?.focus).toBe("list");
 		expect(parsed?.query).not.toContain("\n");
+	});
+
+	it("keeps no-op apply/reset notices and requires y rather than Enter for reset", () => {
+		const h = setup();
+		h.press("s");
+		expect(h.notices.at(-1)).toContain("No status-line changes to apply");
+		h.press("R");
+		expect(h.notices.at(-1)).toContain("already matches");
+		expect(h.applied).toEqual([]);
+		h.press("j", " ", "R", "\r");
+		expect(h.text()).toContain("Reset the draft to the active layout?");
+		expect(h.previews.at(-1)?.leftSegments).toEqual(["context_bar"]);
+		h.press("n", "R", "Y");
+		expect(h.previews.at(-1)).toEqual(ACTIVE);
+		expect(h.applied).toEqual([]);
+	});
+
+	it("ignores input during apply and never overwrites a newer draft after leaving", async () => {
+		const completion = Promise.withResolvers<void>();
+		const writes: StatusLineEditorDraft[] = [];
+		const saveDraft = async (draft: StatusLineEditorDraft): Promise<void> => {
+			writes.push(structuredClone(draft));
+		};
+		let applies = 0;
+		const first = setup({
+			saveDraft,
+			apply: () => {
+				applies++;
+				return completion.promise;
+			},
+		});
+		first.press("j", " ", "s");
+		const duringApply = writes.length;
+		first.press("G", "/", "l", ESC, "y");
+		expect(writes).toHaveLength(duringApply);
+		expect(applies).toBe(1);
+		first.overlay.leaveMenu();
+		expect(first.previews.at(-1)).toBeDefined();
+		const second = setup({ saveDraft, draft: writes.at(-1) });
+		second.press("j", ">");
+		const newer = structuredClone(writes.at(-1));
+		const beforeCompletion = writes.length;
+		completion.resolve();
+		await Bun.sleep(0);
+		expect(writes).toHaveLength(beforeCompletion);
+		expect(writes.at(-1)).toEqual(newer);
+		expect(first.previews.at(-1)).toBeUndefined();
+		expect(second.closed()).toBe(false);
+	});
+
+	it("clears a draft-write failure only when the latest revision succeeds", async () => {
+		const writes: { resolve: () => void; reject: (error: Error) => void }[] = [];
+		const h = setup({
+			saveDraft: () => {
+				const pending = Promise.withResolvers<void>();
+				writes.push({ resolve: () => pending.resolve(), reject: error => pending.reject(error) });
+				return pending.promise;
+			},
+		});
+		h.press("j", " ", "j");
+		expect(writes).toHaveLength(3);
+		writes[0]!.reject(new Error("first write failed"));
+		await Bun.sleep(0);
+		expect(h.title()).toContain("unapplied draft");
+		expect(h.title()).toContain("draft not saved");
+		writes[1]!.resolve();
+		await Bun.sleep(0);
+		expect(h.title()).toContain("draft not saved");
+		writes[2]!.resolve();
+		await Bun.sleep(0);
+		expect(h.title()).not.toContain("draft not saved");
 	});
 });

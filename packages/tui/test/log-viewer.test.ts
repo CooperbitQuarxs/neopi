@@ -282,6 +282,39 @@ describe("DebugLogViewerModel", () => {
 		viewer.handleInput("\x1b[<0;2;6M");
 		expect(text(80)).toContain("▾ beta");
 	});
+
+	it("navigates and scrolls independently, then restores the filtered selection", () => {
+		const copied: string[] = [];
+		let closed = 0;
+		const viewer = new DebugLogViewerComponent({
+			deps: { copyToClipboard: value => copied.push(value) },
+			logs: Array.from({ length: 30 }, (_, i) => `entry-${i}`).join("\n"),
+			terminalRows: 14,
+			processStartMs: 0,
+			onExit: () => closed++,
+		});
+		viewer.render(100);
+		viewer.handleInput("g");
+		viewer.handleInput("g");
+		viewer.handleInput("j");
+		viewer.handleInput("\x03");
+		expect(copied.at(-1)).toBe("entry-1");
+		viewer.handleInput("\x05");
+		viewer.render(100);
+		viewer.handleInput("\x03");
+		expect(copied.at(-1)).toBe("entry-1");
+		viewer.handleInput("/");
+		for (const key of "entry-17") viewer.handleInput(key);
+		viewer.handleInput("\x1b");
+		expect(closed).toBe(0);
+		const saved = viewer.navigationSnapshot();
+		viewer.handleInput("G");
+		viewer.restoreNavigation(saved);
+		viewer.handleInput("\x03");
+		expect(copied.at(-1)).toBe("entry-17");
+		viewer.handleInput("\x1b");
+		expect(closed).toBe(1);
+	});
 });
 
 describe("buildLogCopyPayload", () => {

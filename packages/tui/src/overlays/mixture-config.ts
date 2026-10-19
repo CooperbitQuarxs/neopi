@@ -33,6 +33,9 @@ import {
 	type SequentialEdge,
 	type TransitPartName,
 } from "./mixture-types";
+import { extractPrintableText } from "../keys";
+import { isMenuHistoryParticipant, MenuKeyReader, type MenuNavAction } from "../components/menu-navigation";
+import type { SelectListNavigationState } from "../components/select-list";
 
 export interface MixtureConfigDeps {
 	getAvailableModels: () => Model[];
@@ -62,6 +65,59 @@ function preview(text: string | undefined, width: number): string {
 
 const DECISION_PARTS = ["output", "input", "toolTrace"] as const;
 
+type MixturePageContext =
+	| { page: "list" }
+	| { page: "mixture" | "members" | "edges" | "limits"; index: number }
+	| {
+			page:
+				| "member"
+				| "verdict"
+				| "choice-criteria"
+				| "score-criteria"
+				| "route"
+				| "terminate"
+				| "model"
+				| "tools"
+				| "edge"
+				| "transit"
+				| "transcript";
+			index: number;
+			position: number;
+	  }
+	| { page: "choice-option"; index: number; position: number; name: string }
+	| { page: "presets"; index: number; kind: "roles" | "envelopes" }
+	| { page: "preset"; index: number; kind: "roles" | "envelopes"; name: string }
+	| { page: "thinking"; index: number; position: number; selector: string; efforts: readonly string[] };
+
+type MixtureNavigationContext = MixturePageContext | { page: "field"; parent: MixturePageContext; key: string };
+
+interface MixtureListState {
+	navigation?: SelectListNavigationState;
+	browser?: unknown;
+	previewScroll: number;
+	previewFocused: boolean;
+}
+
+interface MixtureNavigationSnapshot {
+	context: MixtureNavigationContext;
+	scope: MixtureConfigScope;
+	doc: MixturesConfigDoc;
+	dirty: boolean;
+	pendingApply: boolean;
+	previewScroll: number;
+	previewFocused: boolean;
+	lists: Array<[string, MixtureListState]>;
+	content: unknown;
+}
+
+interface MixturePageOpener {
+	open: (value: string) => void;
+	accepts?: (value: string) => boolean;
+	navigable?: (value: string) => boolean;
+}
+
+type MixtureMenuShortcut = (data: string, list: SelectList) => boolean;
+
 /** Fullscreen, keyboard- and mouse-driven editor for the project or user MIXTURES.toml. */
 export class MixtureConfigOverlayComponent implements Component {
 	readonly #tui: TUI;
@@ -73,21 +129,41 @@ export class MixtureConfigOverlayComponent implements Component {
 	#pendingApply = false;
 	#pendingDelete: number | null = null;
 	#screen = "list";
-	#active: Component = new SelectList([], 1, getSelectListTheme());
+	#active!: Component;
 	#footer = "";
 	#previewScroll = 0;
 	#bodyRows = 3;
+	#previewFocused = false;
+	#previewRows = 1;
+	#previewMax = 0;
+	readonly #keys = new MenuKeyReader();
+	#navigationContext: MixtureNavigationContext = { page: "list" };
+	#buildingContext: MixtureNavigationContext | undefined;
+	#navigationScope: MixtureConfigScope;
+	#restoringNavigation = false;
+	#previousVisitSnapshot: MixtureNavigationSnapshot | undefined;
+	readonly #listStates = new Map<string, MixtureListState>();
+	readonly #openers = new Map<string, MixturePageOpener>();
+	#shortcut: MixtureMenuShortcut | undefined;
+	#pendingOperations = 0;
+	#loadRevision = 0;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	readonly #split = new SplitPane({
 		left: (width, height) => {
-			const lines = [...this.#active.render(width)];
 			const rows = Math.max(0, Math.floor(height ?? this.#bodyRows));
+			if (this.#active instanceof SelectList) this.#active.setMaxVisible(Math.max(1, rows - 1));
+			else if (this.#active instanceof ModelBrowser) this.#active.setMaxVisible(Math.max(1, rows - 5));
+			const lines = [...this.#active.render(width)];
 			while (lines.length < rows) lines.push("");
 			return lines.slice(0, rows);
 		},
 		right: (width, height) => {
 			const rows = Math.max(0, Math.floor(height ?? this.#bodyRows));
 			const lines = this.#previewLines(width);
-			const start = Math.min(this.#previewScroll, Math.max(0, lines.length - rows));
+			this.#previewRows = rows;
+			this.#previewMax = Math.max(0, lines.length - rows);
+			const start = Math.min(this.#previewScroll, this.#previewMax);
+			this.#previewScroll = start;
 			const visible = lines.slice(start, start + rows);
 			while (visible.length < rows) visible.push("");
 			return visible;
@@ -123,6 +199,7 @@ export class MixtureConfigOverlayComponent implements Component {
 		this.#deps = deps;
 		this.#scope = scope;
 		this.#doc = doc;
+		this.#navigationScope = scope;
 		this.#cb = callbacks;
 		this.#showList(
 			selectedName ? `mixture:${this.#doc.mixtures.findIndex(item => item.name === selectedName)}` : undefined,
@@ -133,7 +210,7 @@ export class MixtureConfigOverlayComponent implements Component {
 		const height = Math.max(14, process.stdout.rows || 40);
 		this.#bodyRows = Math.max(3, height - 4);
 		const title = `Mixture configuration · ${this.#scope}${this.#dirty ? "  ● unsaved" : this.#pendingApply ? "  ◐ saved, not applied" : ""}`;
-		this.#split.setNarrowPane(this.#screen === "list" ? undefined : "left");
+		this.#split.setNarrowPane(this.#screen === "list" && this.#previewFocused ? "right" : "left");
 		this.#split.setSplitAt(this.#screen === "list" ? 0 : Number.MAX_SAFE_INTEGER);
 		this.#split.setHeight(this.#bodyRows);
 		const geometry = this.#split.measure(width);
@@ -141,7 +218,8 @@ export class MixtureConfigOverlayComponent implements Component {
 		this.#top.setLines([geometry.mode === "split" ? topBorderSplit(width, title, left) : topBorder(width, title)]);
 		this.#divider.setLines([geometry.mode === "split" ? dividerSplit(width, left) : divider(width)]);
 		const status = this.#dirty ? "● unsaved · " : this.#pendingApply ? "◐ saved, not applied · " : "";
-		this.#footerRow.setLines([row(theme.fg("dim", status + sanitizeDisplayLine(this.#footer)), width)]);
+		const pane = this.#screen === "list" ? `${this.#previewFocused ? "Preview" : "List"} · ` : "";
+		this.#footerRow.setLines([row(theme.fg("dim", status + pane + sanitizeDisplayLine(this.#footer)), width)]);
 		this.#bottom.setLines([bottomBorder(width)]);
 		this.#frame.setHeight(this.#bodyRows + 4);
 		return this.#frame.render(width);
@@ -149,10 +227,108 @@ export class MixtureConfigOverlayComponent implements Component {
 
 	handleInput(data: string): void {
 		if (data.startsWith("\x1b[<")) {
+			this.#keys.reset();
 			routeSgrMouseInput(data, event => this.#routeMouse(event));
 			return;
 		}
-		this.#active.handleInput?.(data);
+		const active = this.#active;
+		if (
+			active instanceof Input ||
+			active instanceof HookEditorComponent ||
+			((active instanceof SelectList || active instanceof ModelBrowser) && active.filterFocused)
+		) {
+			this.#keys.reset();
+			const text = active instanceof Input ? extractPrintableText(data) : undefined;
+			if (text !== undefined && active instanceof Input) active.insertText(text);
+			else active.handleInput?.(data);
+			return;
+		}
+		if (
+			this.#screen === "list" &&
+			this.#pendingDelete !== null &&
+			active instanceof SelectList &&
+			this.#shortcut?.(data, active)
+		) {
+			this.#keys.reset();
+			return;
+		}
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (action === undefined && active instanceof SelectList && this.#shortcut?.(data, active)) {
+			this.#keys.reset();
+			return;
+		}
+		if (action?.kind === "horizontal") {
+			if (this.#screen === "list") this.#previewFocused = action.delta > 0;
+			else if (this.#navigationContext.page === "thinking" && active instanceof SelectList) {
+				const view = active.pickerView();
+				const selected = view.items.findIndex(item => item.value === view.selected);
+				active.setSelectedIndex(Math.max(0, Math.min(view.items.length - 1, selected + action.delta)));
+			} else if (action.delta < 0) {
+				if (active instanceof SelectList || active instanceof ModelBrowser) active.onCancel?.();
+			} else if (
+				active instanceof SelectList &&
+				this.#navigationContext.page !== "field" &&
+				this.#screen !== "discard"
+			) {
+				const value = active.getSelectedItem()?.value;
+				if (value !== undefined) this.#openField(value, true);
+			}
+			this.#cb.requestRender();
+			return;
+		}
+		if (this.#screen === "list") {
+			if (action?.kind === "context") {
+				this.#previewFocused = !this.#previewFocused;
+				this.#cb.requestRender();
+				return;
+			}
+			if (action?.kind === "search") this.#previewFocused = false;
+			if (this.#previewFocused && action && this.#applyPreviewMotion(action)) return;
+		}
+		if (action?.kind === "toggle" && active instanceof SelectList) {
+			const value = active.getSelectedItem()?.value;
+			if (this.#screen === "list") {
+				if (value !== undefined) {
+					const match = /^mixture:(\d+)$/.exec(value);
+					void this.#onListSelect(match ? `activate:${match[1]}` : value).catch(error =>
+						this.#cb.notify(String(error)),
+					);
+				}
+				return;
+			}
+			if (
+				(this.#screen === "discard" && value === "discard") ||
+				((this.#screen === "route" || this.#screen === "terminate") && value === "remove")
+			)
+				return;
+		}
+		if (action && (active instanceof SelectList || active instanceof ModelBrowser)) active.handleNavigation(action);
+		else active.handleInput?.(data);
+	}
+
+	#applyPreviewMotion(action: MenuNavAction): boolean {
+		let next = this.#previewScroll;
+		switch (action.kind) {
+			case "move":
+			case "scroll":
+				next += action.delta;
+				break;
+			case "halfPage":
+				next += action.delta * Math.max(1, Math.floor(this.#previewRows / 2));
+				break;
+			case "page":
+				next += action.delta * this.#previewRows;
+				break;
+			case "boundary":
+				next = action.edge === "first" ? 0 : this.#previewMax;
+				break;
+			default:
+				return false;
+		}
+		this.#previewScroll = Math.max(0, Math.min(this.#previewMax, next));
+		this.#cb.requestRender();
+		return true;
 	}
 
 	pasteText(text: string): void {
@@ -165,7 +341,7 @@ export class MixtureConfigOverlayComponent implements Component {
 		const pane = this.#split.locate(hit.line, hit.col);
 		if (pane?.pane === "right") {
 			if (event.wheel !== null) {
-				this.#previewScroll = Math.max(0, this.#previewScroll + event.wheel);
+				this.#previewScroll = Math.max(0, Math.min(this.#previewMax, this.#previewScroll + event.wheel));
 				this.#cb.requestRender();
 			}
 			return true;
@@ -209,11 +385,79 @@ export class MixtureConfigOverlayComponent implements Component {
 		return [...warnings, ...lines.map(line => truncateToWidth(line, width))];
 	}
 
-	#setScreen(screen: string, active: Component, footer: string): void {
+	#preparePage(context: MixturePageContext): void {
+		if (JSON.stringify(context) !== JSON.stringify(this.#navigationContext)) this.#loadRevision++;
+		this.#buildingContext = context;
+		this.#openers.clear();
+	}
+
+	#pageKey(context: MixtureNavigationContext, scope: MixtureConfigScope): string {
+		return `${scope}:${JSON.stringify(context)}`;
+	}
+
+	#openField(value: string, navigationOnly = false): boolean {
+		if (this.#navigationContext.page === "field") return false;
+		const opener = this.#openers.get(value);
+		if (!opener || (navigationOnly && opener.navigable?.(value) === false)) return false;
+		const context: MixtureNavigationContext = { page: "field", parent: this.#navigationContext, key: value };
+		this.#loadRevision++;
+		this.#buildingContext = context;
+		opener.open(value);
+		if (this.#buildingContext === context) this.#buildingContext = undefined;
+		return true;
+	}
+
+	#setScreen(
+		screen: string,
+		active: Component,
+		footer: string,
+		shortcut?: MixtureMenuShortcut,
+		selected?: string,
+	): void {
+		const context = this.#buildingContext ?? this.#navigationContext;
+		this.#buildingContext = undefined;
+		const changed = JSON.stringify(context) !== JSON.stringify(this.#navigationContext);
+		if (
+			!this.#restoringNavigation &&
+			this.#screen !== "discard" &&
+			(this.#active instanceof SelectList || this.#active instanceof ModelBrowser)
+		) {
+			this.#listStates.set(this.#pageKey(this.#navigationContext, this.#navigationScope), {
+				navigation: this.#active instanceof SelectList ? this.#active.navigationState() : undefined,
+				browser: this.#active instanceof ModelBrowser ? this.#active.navigationSnapshot() : undefined,
+				previewScroll: this.#previewScroll,
+				previewFocused: this.#previewFocused,
+			});
+		}
+		const previous =
+			changed && !this.#restoringNavigation ? (this.#previousVisitSnapshot ?? this.navigationSnapshot()) : undefined;
+		this.#previousVisitSnapshot = undefined;
+		const saved = this.#listStates.get(this.#pageKey(context, this.#scope));
+		if (saved?.navigation && active instanceof SelectList && screen !== "discard") {
+			active.restoreNavigation({ ...saved.navigation, selectedValue: selected ?? saved.navigation.selectedValue });
+		} else if (saved?.browser !== undefined && active instanceof ModelBrowser)
+			active.restoreNavigation(saved.browser);
+		this.#keys.reset();
 		this.#screen = screen;
 		this.#active = active;
-		this.#footer = footer;
-		this.#previewScroll = 0;
+		this.#shortcut = shortcut;
+		const navigation =
+			screen === "list"
+				? "h/l panes · Tab pane"
+				: screen === "discard"
+					? "h/Esc keep editing"
+					: context.page === "thinking"
+						? "h/l effort"
+						: context.page !== "field" && this.#openers.size > 0
+							? "h parent / l open"
+							: "h parent";
+		this.#footer = active instanceof SelectList ? `${navigation} · / search · ${footer}` : footer;
+		this.#previewScroll = saved?.previewScroll ?? 0;
+		this.#previewFocused = screen === "list" && (saved?.previewFocused ?? false);
+		this.#navigationContext = context;
+		this.#navigationScope = this.#scope;
+		if (previous !== undefined)
+			this.onNavigationVisit?.(context.page === "list" ? "" : this.#pageKey(context, this.#scope), previous);
 		this.#cb.requestRender();
 	}
 
@@ -222,32 +466,44 @@ export class MixtureConfigOverlayComponent implements Component {
 		items: SelectItem[],
 		selected: string | undefined,
 		footer: string,
-		onSelect: (value: string) => void | Promise<void>,
+		onSelect: ((value: string) => void | Promise<void>) | undefined,
 		onCancel: () => void,
-		onKey?: (data: string, list: SelectList) => boolean,
+		onKey?: MixtureMenuShortcut,
+		navigation?: MixturePageOpener,
 	): void {
 		const safeItems = items.map(item => ({
 			...item,
 			label: sanitizeDisplayLine(item.label),
 			description: item.description === undefined ? undefined : sanitizeDisplayLine(item.description),
 		}));
-		const list = new SelectList(safeItems, Math.max(1, items.length), getSelectListTheme());
+		const list = new SelectList(
+			safeItems,
+			Math.max(1, Math.min(items.length, this.#bodyRows - 1)),
+			getSelectListTheme(),
+			{ search: "always" },
+		);
 		if (selected && items.some(item => item.value === selected)) list.setSelectedValue(selected);
-		const handle = list.handleInput.bind(list);
-		list.handleInput = data => {
-			if (!onKey?.(data, list)) handle(data);
-		};
+		if (navigation)
+			for (const item of safeItems) {
+				if (navigation.accepts ? navigation.accepts(item.value) : item.value !== "back")
+					this.#openers.set(item.value, navigation);
+			}
 		list.onSelect = item => {
-			void Promise.resolve(onSelect(item.value)).catch(error =>
+			if (this.#openField(item.value)) return;
+			void Promise.resolve(onSelect ? onSelect(item.value) : onCancel()).catch(error =>
 				this.#cb.notify(error instanceof Error ? error.message : String(error)),
 			);
 		};
 		list.onCancel = onCancel;
-		list.onSelectionChange = () => this.#cb.requestRender();
-		this.#setScreen(screen, list, footer);
+		list.onSelectionChange = () => {
+			if (screen === "list") this.#previewScroll = 0;
+			this.#cb.requestRender();
+		};
+		this.#setScreen(screen, list, footer, onKey, selected);
 	}
 
 	#touch(): void {
+		this.#loadRevision++;
 		this.#dirty = true;
 		this.#cb.requestRender();
 	}
@@ -257,6 +513,8 @@ export class MixtureConfigOverlayComponent implements Component {
 	}
 
 	#showList(selected?: string): void {
+		this.#preparePage({ page: "list" });
+		this.#openers.set("new", { open: () => this.#newMixture(), navigable: () => false });
 		const active = this.#deps.activeName();
 		const items: SelectItem[] = this.#doc.mixtures.map((mixture, index) => ({
 			value: `mixture:${index}`,
@@ -282,7 +540,7 @@ export class MixtureConfigOverlayComponent implements Component {
 			selected,
 			this.#pendingDelete !== null
 				? "Delete again to confirm · any other key cancels"
-				: "↑↓ move · Enter edit · Space activate · Delete remove · s save · a apply · Esc close",
+				: "Enter edit · Space activate · Del delete · s save · a apply · Esc close",
 			value => this.#onListSelect(value),
 			() => this.#close(),
 			(data, list) => {
@@ -295,12 +553,6 @@ export class MixtureConfigOverlayComponent implements Component {
 				if (this.#pendingDelete !== null) {
 					this.#pendingDelete = null;
 					this.#showList(value);
-					return true;
-				}
-				if (matchesKey(data, "space")) {
-					void this.#onListSelect(match ? `activate:${match[1]}` : value).catch(error =>
-						this.#cb.notify(String(error)),
-					);
 					return true;
 				}
 				if (matchesKey(data, "s") || matchesKey(data, "a")) {
@@ -345,25 +597,37 @@ export class MixtureConfigOverlayComponent implements Component {
 	}
 
 	async #save(): Promise<void> {
-		await this.#cb.save(this.#scope, this.#doc);
-		this.#doc.warnings = undefined;
-		this.#dirty = false;
-		this.#pendingApply = true;
+		this.#pendingOperations++;
+		try {
+			await this.#cb.save(this.#scope, this.#doc);
+			this.#doc.warnings = undefined;
+			this.#dirty = false;
+			this.#pendingApply = true;
+		} finally {
+			this.#pendingOperations--;
+			this.#cb.requestRender();
+		}
 	}
 
 	async #apply(): Promise<void> {
-		if (this.#dirty) await this.#save();
-		if (!this.#pendingApply) {
+		if (!this.#dirty && !this.#pendingApply) {
 			this.#cb.notify("Nothing new to apply.");
 			return;
 		}
-		await this.#cb.apply();
-		this.#pendingApply = false;
+		this.#pendingOperations++;
+		try {
+			if (this.#dirty) await this.#save();
+			await this.#cb.apply();
+			this.#pendingApply = false;
+		} finally {
+			this.#pendingOperations--;
+			this.#cb.requestRender();
+		}
 	}
 
 	async #onListSelect(value: string, selected?: string): Promise<void> {
 		if (value === "new") {
-			this.#newMixture();
+			this.#openField("new");
 			return;
 		}
 		if (value === "scope") {
@@ -372,7 +636,9 @@ export class MixtureConfigOverlayComponent implements Component {
 				return;
 			}
 			const scope = this.#otherScope();
+			const revision = ++this.#loadRevision;
 			const doc = await this.#cb.loadDoc(scope);
+			if (revision !== this.#loadRevision) return;
 			this.#scope = scope;
 			this.#doc = doc;
 			this.#pendingApply = false;
@@ -398,9 +664,15 @@ export class MixtureConfigOverlayComponent implements Component {
 		if (activate) {
 			const mixture = this.#doc.mixtures[Number(activate[1])];
 			if (!mixture) return;
-			if (this.#dirty || this.#pendingApply) await this.#apply();
-			await this.#cb.activate(mixture.name);
-			this.#showList(`mixture:${activate[1]}`);
+			this.#pendingOperations++;
+			try {
+				if (this.#dirty || this.#pendingApply) await this.#apply();
+				await this.#cb.activate(mixture.name);
+				this.#showList(`mixture:${activate[1]}`);
+			} finally {
+				this.#pendingOperations--;
+				this.#cb.requestRender();
+			}
 			return;
 		}
 		const match = /^mixture:(\d+)$/.exec(value);
@@ -448,7 +720,7 @@ export class MixtureConfigOverlayComponent implements Component {
 				back();
 			},
 			back,
-			{ externalEditor: this.#deps.externalEditor },
+			{ externalEditor: this.#deps.externalEditor, menuHistory: true },
 		);
 		this.#setScreen("editor", editor, "Ctrl+Q save · Ctrl+G external editor · Esc cancel");
 	}
@@ -478,6 +750,7 @@ export class MixtureConfigOverlayComponent implements Component {
 	}
 
 	#showMixture(index: number, selected?: string): void {
+		this.#preparePage({ page: "mixture", index });
 		const mixture = this.#mixture(index);
 		if (!mixture) return this.#showList();
 		const items: SelectItem[] = [
@@ -512,68 +785,73 @@ export class MixtureConfigOverlayComponent implements Component {
 			items,
 			selected,
 			`Editing ${mixture.name} · Enter select · Esc back`,
-			value => {
-				switch (value) {
-					case "name":
-						this.#editText(
-							"Mixture name",
-							mixture.name,
-							text => {
-								if (text.trim()) {
-									mixture.name = text.trim();
-									this.#touch();
-								}
-							},
-							() => this.#showMixture(index, value),
-						);
-						break;
-					case "description":
-						this.#editText(
-							"Description",
-							mixture.description ?? "",
-							text => {
-								mixture.description = text.trim() || undefined;
-								this.#touch();
-							},
-							() => this.#showMixture(index, value),
-						);
-						break;
-					case "entry":
-						this.#choose(
-							"Entry member",
-							mixture.members
-								.filter(member => member.kind !== "verdict")
-								.map(member => ({ value: member.id, label: member.id })),
-							mixture.entry,
-							id => {
-								mixture.entry = id;
-								this.#touch();
-							},
-							() => this.#showMixture(index, value),
-						);
-						break;
-					case "members":
-						this.#showMembers(index);
-						break;
-					case "edges":
-						this.#showEdges(index);
-						break;
-					case "limits":
-						this.#showLimits(index);
-						break;
-					case "roles":
-					case "envelopes":
-						this.#showPresets(index, value);
-						break;
-					default:
-						this.#showList(`mixture:${index}`);
-				}
-			},
+			undefined,
 			() => this.#showList(`mixture:${index}`),
+			undefined,
+			{
+				open: value => {
+					switch (value) {
+						case "name":
+							this.#editText(
+								"Mixture name",
+								mixture.name,
+								text => {
+									if (text.trim()) {
+										mixture.name = text.trim();
+										this.#touch();
+									}
+								},
+								() => this.#showMixture(index, value),
+							);
+							break;
+						case "description":
+							this.#editText(
+								"Description",
+								mixture.description ?? "",
+								text => {
+									mixture.description = text.trim() || undefined;
+									this.#touch();
+								},
+								() => this.#showMixture(index, value),
+							);
+							break;
+						case "entry":
+							this.#choose(
+								"Entry member",
+								mixture.members
+									.filter(member => member.kind !== "verdict")
+									.map(member => ({ value: member.id, label: member.id })),
+								mixture.entry,
+								id => {
+									mixture.entry = id;
+									this.#touch();
+								},
+								() => this.#showMixture(index, value),
+							);
+							break;
+						case "members":
+							this.#showMembers(index);
+							break;
+						case "edges":
+							this.#showEdges(index);
+							break;
+						case "limits":
+							this.#showLimits(index);
+							break;
+						case "roles":
+						case "envelopes":
+							this.#showPresets(index, value);
+							break;
+						default:
+							this.#showList(`mixture:${index}`);
+					}
+				},
+			},
 		);
 	}
 
 	#showMembers(index: number, selected?: string): void {
+		this.#preparePage({ page: "members", index });
 		const mixture = this.#mixture(index);
 		if (!mixture) return this.#showList();
 		const items: SelectItem[] = mixture.members.map((member, position) => ({
@@ -591,40 +869,7 @@ export class MixtureConfigOverlayComponent implements Component {
 			items,
 			selected,
 			"Enter edit · Delete remove member and its edges · Alt+↑↓ reorder · Esc back",
-			value => {
-				const match = /^member:(\d+)$/.exec(value);
-				if (match) {
-					const position = Number(match[1]);
-					if (mixture.members[position]?.kind === "verdict") this.#showVerdict(index, position);
-					else this.#showMember(index, position);
-				} else if (value === "add")
-					this.#editText(
-						"Member id",
-						"",
-						text => {
-							const id = text.trim();
-							if (!id) return;
-							mixture.members.push({ id, model: "", tools: false });
-							this.#touch();
-							this.#showMember(index, mixture.members.length - 1);
-						},
-						() => this.#showMembers(index),
-					);
-				else if (value === "verdict")
-					this.#editText(
-						"Verdict member id",
-						"",
-						text => {
-							const id = text.trim();
-							if (!id) return false;
-							mixture.members.push({ id, kind: "verdict", question: { type: "noul", instructions: "" } });
-							this.#touch();
-							this.#showVerdict(index, mixture.members.length - 1);
-						},
-						() => this.#showMembers(index),
-					);
-				else this.#showMixture(index, "members");
-			},
+			undefined,
 			() => this.#showMixture(index, "members"),
 			(data, list) => {
 				const match = /^member:(\d+)$/.exec(list.getSelectedItem()?.value ?? "");
@@ -656,6 +901,43 @@ export class MixtureConfigOverlayComponent implements Component {
 				this.#touch();
 				this.#showMembers(index, `member:${position + delta}`);
 				return true;
+			},
+			{
+				open: value => {
+					const match = /^member:(\d+)$/.exec(value);
+					if (match) {
+						const position = Number(match[1]);
+						if (mixture.members[position]?.kind === "verdict") this.#showVerdict(index, position);
+						else this.#showMember(index, position);
+					} else if (value === "add")
+						this.#editText(
+							"Member id",
+							"",
+							text => {
+								const id = text.trim();
+								if (!id) return;
+								mixture.members.push({ id, model: "", tools: false });
+								this.#touch();
+								this.#showMember(index, mixture.members.length - 1);
+							},
+							() => this.#showMembers(index),
+						);
+					else if (value === "verdict")
+						this.#editText(
+							"Verdict member id",
+							"",
+							text => {
+								const id = text.trim();
+								if (!id) return false;
+								mixture.members.push({ id, kind: "verdict", question: { type: "noul", instructions: "" } });
+								this.#touch();
+								this.#showVerdict(index, mixture.members.length - 1);
+							},
+							() => this.#showMembers(index),
+						);
+					else this.#showMixture(index, "members");
+				},
+				navigable: value => value !== "add" && value !== "verdict",
 			},
 		);
 	}
@@ -690,6 +972,7 @@ export class MixtureConfigOverlayComponent implements Component {
 	}
 
 	#showMember(index: number, position: number, selected?: string): void {
+		this.#preparePage({ page: "member", index, position });
 		const member = this.#modelMember(index, position);
 		if (!member) return this.#showMembers(index);
 		const items: SelectItem[] = [
@@ -727,106 +1010,110 @@ export class MixtureConfigOverlayComponent implements Component {
 			items,
 			selected,
 			`Member ${member.id} · Enter edit · Esc back`,
-			value => {
-				const back = () => this.#showMember(index, position, value);
-				switch (value) {
-					case "id":
-						this.#editText(
-							"Member id",
-							member.id,
-							text => this.#renameMember(this.#mixture(index)!, member, text.trim()),
-							back,
-						);
-						break;
-					case "model":
-						this.#showModelPicker(index, position);
-						break;
-					case "description":
-						this.#editText(
-							"Member description",
-							member.description ?? "",
-							text => {
-								member.description = text.trim() || undefined;
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "role":
-						this.#editLong(
-							"Role prompt",
-							member.systemPrompt ?? "",
-							text => {
-								member.systemPrompt = text || undefined;
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "rolePreset":
-						this.#editText(
-							"Role preset name",
-							member.role ?? "",
-							text => {
-								member.role = text.trim() || undefined;
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "inherit":
-						this.#choose(
-							"Inherit outer instructions",
-							[
-								{ value: "default", label: "Automatic" },
-								{ value: "yes", label: "Yes" },
-								{ value: "no", label: "No" },
-							],
-							member.inherit === undefined ? "default" : member.inherit ? "yes" : "no",
-							choice => {
-								member.inherit = choice === "default" ? undefined : choice === "yes";
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "tools":
-						this.#showTools(index, position);
-						break;
-					case "show":
-						this.#choose(
-							"Show hop",
-							["default", "always", "never", "final"].map(choice => ({ value: choice, label: choice })),
-							member.show ?? "default",
-							choice => {
-								member.show = choice === "default" ? undefined : (choice as "always" | "never" | "final");
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "maxTokens":
-						this.#editNumber(
-							"Maximum output tokens",
-							member.maxTokens,
-							number => {
-								member.maxTokens = number;
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "route":
-						this.#showRoute(index, position);
-						break;
-					case "terminate":
-						this.#showTerminate(index, position);
-						break;
-					default:
-						this.#showMembers(index, `member:${position}`);
-				}
-			},
+			undefined,
 			() => this.#showMembers(index, `member:${position}`),
+			undefined,
+			{
+				open: value => {
+					const back = () => this.#showMember(index, position, value);
+					switch (value) {
+						case "id":
+							this.#editText(
+								"Member id",
+								member.id,
+								text => this.#renameMember(this.#mixture(index)!, member, text.trim()),
+								back,
+							);
+							break;
+						case "model":
+							this.#showModelPicker(index, position);
+							break;
+						case "description":
+							this.#editText(
+								"Member description",
+								member.description ?? "",
+								text => {
+									member.description = text.trim() || undefined;
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "role":
+							this.#editLong(
+								"Role prompt",
+								member.systemPrompt ?? "",
+								text => {
+									member.systemPrompt = text || undefined;
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "rolePreset":
+							this.#editText(
+								"Role preset name",
+								member.role ?? "",
+								text => {
+									member.role = text.trim() || undefined;
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "inherit":
+							this.#choose(
+								"Inherit outer instructions",
+								[
+									{ value: "default", label: "Automatic" },
+									{ value: "yes", label: "Yes" },
+									{ value: "no", label: "No" },
+								],
+								member.inherit === undefined ? "default" : member.inherit ? "yes" : "no",
+								choice => {
+									member.inherit = choice === "default" ? undefined : choice === "yes";
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "tools":
+							this.#showTools(index, position);
+							break;
+						case "show":
+							this.#choose(
+								"Show hop",
+								["default", "always", "never", "final"].map(choice => ({ value: choice, label: choice })),
+								member.show ?? "default",
+								choice => {
+									member.show = choice === "default" ? undefined : (choice as "always" | "never" | "final");
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "maxTokens":
+							this.#editNumber(
+								"Maximum output tokens",
+								member.maxTokens,
+								number => {
+									member.maxTokens = number;
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "route":
+							this.#showRoute(index, position);
+							break;
+						case "terminate":
+							this.#showTerminate(index, position);
+							break;
+						default:
+							this.#showMembers(index, `member:${position}`);
+					}
+				},
+			},
 		);
 	}
 
@@ -836,6 +1123,7 @@ export class MixtureConfigOverlayComponent implements Component {
 	}
 
 	#showVerdict(index: number, position: number, selected?: string): void {
+		this.#preparePage({ page: "verdict", index, position });
 		const member = this.#verdictMember(index, position);
 		const mixture = this.#mixture(index);
 		if (!member || !mixture) return this.#showMembers(index);
@@ -872,126 +1160,134 @@ export class MixtureConfigOverlayComponent implements Component {
 			items,
 			selected,
 			`Verdict ${member.id} · Enter edit · Esc back`,
-			value => {
-				const back = () => this.#showVerdict(index, position, value);
-				switch (value) {
-					case "id":
-						this.#editText(
-							"Verdict id",
-							member.id,
-							text => this.#renameMember(mixture, member, text.trim()),
-							back,
-						);
-						break;
-					case "description":
-						this.#editText(
-							"Verdict description",
-							member.description ?? "",
-							text => {
-								member.description = text.trim() || undefined;
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "show":
-						this.#choose(
-							"Show verdict",
-							["default", "always", "never", "final"].map(option => ({
-								value: option,
-								label: option,
-							})),
-							member.show ?? "default",
-							option => {
-								member.show = option === "default" ? undefined : (option as "always" | "never" | "final");
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "type":
-						this.#choose(
-							"Question type",
-							["noul", "choice", "score"].map(option => ({
-								value: option,
-								label: option,
-							})),
-							question.type,
-							option => {
-								if (option === question.type) return;
-								const instructions = question.instructions;
-								member.question =
-									option === "choice"
-										? { type: "choice", instructions, criteria: {} }
-										: option === "score"
-											? { type: "score", instructions, criteria: ["", ""] }
-											: { type: "noul", instructions };
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "instructions":
-						this.#editLong(
-							"Verdict question",
-							question.instructions,
-							text => {
-								member.question.instructions = text.trim();
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "state":
-						this.#showDecisionState(
-							"Verdict judge context",
-							TRANSIT_PART_NAMES,
-							member.state,
-							state => {
-								member.state = state;
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "render":
-						this.#editLong(
-							"Verdict answer template",
-							member.render ?? "",
-							text => {
-								member.render = text || undefined;
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "criteria":
-						if (question.type === "choice") this.#showChoiceCriteria(index, position);
-						else if (question.type === "score") this.#showScoreCriteria(index, position);
-						break;
-					case "true":
-					case "false":
-						if (question.type !== "noul") break;
-						this.#editLong(
-							`${value === "true" ? "Yes" : "No"} criterion`,
-							question.criteria?.[value] ?? "",
-							text => {
-								if (member.question.type !== "noul") return;
-								member.question.criteria = { ...member.question.criteria, [value]: text.trim() || undefined };
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					default:
-						this.#showMembers(index, `member:${position}`);
-				}
-			},
+			undefined,
 			() => this.#showMembers(index, `member:${position}`),
+			undefined,
+			{
+				open: value => {
+					const back = () => this.#showVerdict(index, position, value);
+					switch (value) {
+						case "id":
+							this.#editText(
+								"Verdict id",
+								member.id,
+								text => this.#renameMember(mixture, member, text.trim()),
+								back,
+							);
+							break;
+						case "description":
+							this.#editText(
+								"Verdict description",
+								member.description ?? "",
+								text => {
+									member.description = text.trim() || undefined;
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "show":
+							this.#choose(
+								"Show verdict",
+								["default", "always", "never", "final"].map(option => ({
+									value: option,
+									label: option,
+								})),
+								member.show ?? "default",
+								option => {
+									member.show = option === "default" ? undefined : (option as "always" | "never" | "final");
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "type":
+							this.#choose(
+								"Question type",
+								["noul", "choice", "score"].map(option => ({
+									value: option,
+									label: option,
+								})),
+								question.type,
+								option => {
+									if (option === question.type) return;
+									const instructions = question.instructions;
+									member.question =
+										option === "choice"
+											? { type: "choice", instructions, criteria: {} }
+											: option === "score"
+												? { type: "score", instructions, criteria: ["", ""] }
+												: { type: "noul", instructions };
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "instructions":
+							this.#editLong(
+								"Verdict question",
+								question.instructions,
+								text => {
+									member.question.instructions = text.trim();
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "state":
+							this.#showDecisionState(
+								"Verdict judge context",
+								TRANSIT_PART_NAMES,
+								member.state,
+								state => {
+									member.state = state;
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "render":
+							this.#editLong(
+								"Verdict answer template",
+								member.render ?? "",
+								text => {
+									member.render = text || undefined;
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "criteria":
+							if (question.type === "choice") this.#showChoiceCriteria(index, position);
+							else if (question.type === "score") this.#showScoreCriteria(index, position);
+							break;
+						case "true":
+						case "false":
+							if (question.type !== "noul") break;
+							this.#editLong(
+								`${value === "true" ? "Yes" : "No"} criterion`,
+								question.criteria?.[value] ?? "",
+								text => {
+									if (member.question.type !== "noul") return;
+									member.question.criteria = {
+										...member.question.criteria,
+										[value]: text.trim() || undefined,
+									};
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						default:
+							this.#showMembers(index, `member:${position}`);
+					}
+				},
+			},
 		);
 	}
 
 	#showChoiceCriteria(index: number, position: number, selected?: string): void {
+		this.#preparePage({ page: "choice-criteria", index, position });
 		const member = this.#verdictMember(index, position);
 		if (!member || member.question.type !== "choice") return this.#showVerdict(index, position);
 		const criteria = member.question.criteria;
@@ -1008,26 +1304,7 @@ export class MixtureConfigOverlayComponent implements Component {
 			],
 			selected,
 			"Choice options · Enter edit · Delete remove · Esc back",
-			value => {
-				if (value === "__back") return this.#showVerdict(index, position, "criteria");
-				if (value === "__add")
-					this.#editText(
-						"Choice option name",
-						"",
-						text => {
-							const name = text.trim();
-							if (!name || Object.hasOwn(criteria, name)) {
-								this.#cb.notify("Enter a new, unique option name");
-								return false;
-							}
-							criteria[name] = null;
-							this.#touch();
-							this.#showChoiceOption(index, position, name);
-						},
-						() => this.#showChoiceCriteria(index, position),
-					);
-				else this.#showChoiceOption(index, position, value);
-			},
+			undefined,
 			() => this.#showVerdict(index, position, "criteria"),
 			(data, list) => {
 				const name = list.getSelectedItem()?.value;
@@ -1038,10 +1315,35 @@ export class MixtureConfigOverlayComponent implements Component {
 				this.#showChoiceCriteria(index, position);
 				return true;
 			},
+			{
+				open: value => {
+					if (value === "__back") return this.#showVerdict(index, position, "criteria");
+					if (value === "__add")
+						this.#editText(
+							"Choice option name",
+							"",
+							text => {
+								const name = text.trim();
+								if (!name || Object.hasOwn(criteria, name)) {
+									this.#cb.notify("Enter a new, unique option name");
+									return false;
+								}
+								criteria[name] = null;
+								this.#touch();
+								this.#showChoiceOption(index, position, name);
+							},
+							() => this.#showChoiceCriteria(index, position),
+						);
+					else this.#showChoiceOption(index, position, value);
+				},
+				accepts: value => value !== "__back",
+				navigable: value => value !== "__add",
+			},
 		);
 	}
 
 	#showChoiceOption(index: number, position: number, name: string): void {
+		this.#preparePage({ page: "choice-option", index, position, name });
 		const member = this.#verdictMember(index, position);
 		if (!member || member.question.type !== "choice") return this.#showVerdict(index, position);
 		const criteria = member.question.criteria;
@@ -1054,44 +1356,50 @@ export class MixtureConfigOverlayComponent implements Component {
 			],
 			undefined,
 			`Option ${name} · Enter edit · Esc back`,
-			value => {
-				if (value === "name")
-					this.#editText(
-						"Choice option name",
-						name,
-						text => {
-							const updated = text.trim();
-							if (!updated || (updated !== name && Object.hasOwn(criteria, updated))) {
-								this.#cb.notify("Enter a new, unique option name");
-								return false;
-							}
-							if (updated !== name) {
-								const rubric = criteria[name] ?? null;
-								delete criteria[name];
-								criteria[updated] = rubric;
-								this.#touch();
-							}
-							this.#showChoiceOption(index, position, updated);
-						},
-						() => this.#showChoiceOption(index, position, name),
-					);
-				else if (value === "rubric")
-					this.#editLong(
-						"Choice rubric (empty uses the option name)",
-						criteria[name] ?? "",
-						text => {
-							criteria[name] = text.trim() || null;
-							this.#touch();
-						},
-						() => this.#showChoiceOption(index, position, name),
-					);
-				else this.#showChoiceCriteria(index, position, name);
-			},
+			undefined,
 			() => this.#showChoiceCriteria(index, position, name),
+			undefined,
+			{
+				open: value => {
+					if (value === "name")
+						this.#editText(
+							"Choice option name",
+							name,
+							text => {
+								const updated = text.trim();
+								if (!updated || (updated !== name && Object.hasOwn(criteria, updated))) {
+									this.#cb.notify("Enter a new, unique option name");
+									return false;
+								}
+								if (updated !== name) {
+									this.#previousVisitSnapshot = this.navigationSnapshot();
+									const rubric = criteria[name] ?? null;
+									delete criteria[name];
+									criteria[updated] = rubric;
+									this.#touch();
+								}
+								this.#showChoiceOption(index, position, updated);
+							},
+							() => this.#showChoiceOption(index, position, name),
+						);
+					else if (value === "rubric")
+						this.#editLong(
+							"Choice rubric (empty uses the option name)",
+							criteria[name] ?? "",
+							text => {
+								criteria[name] = text.trim() || null;
+								this.#touch();
+							},
+							() => this.#showChoiceOption(index, position, name),
+						);
+					else this.#showChoiceCriteria(index, position, name);
+				},
+			},
 		);
 	}
 
 	#showScoreCriteria(index: number, position: number): void {
+		this.#preparePage({ page: "score-criteria", index, position });
 		const member = this.#verdictMember(index, position);
 		if (!member || member.question.type !== "score") return this.#showVerdict(index, position);
 		const question = member.question;
@@ -1109,26 +1417,11 @@ export class MixtureConfigOverlayComponent implements Component {
 			undefined,
 			"Score levels · lowest to highest · Enter edit · Delete remove · Esc back",
 			value => {
-				if (value === "back") return this.#showVerdict(index, position, "criteria");
 				if (value === "add") {
 					question.criteria = [...question.criteria, ""];
 					this.#touch();
-					return this.#showScoreCriteria(index, position);
-				}
-				const number = Number(value);
-				this.#editLong(
-					`Level ${number + 1}`,
-					question.criteria[number] ?? "",
-					text => {
-						question.criteria = question.criteria.map((level, at) => (at === number ? text.trim() : level)) as [
-							string,
-							string,
-							...string[],
-						];
-						this.#touch();
-					},
-					() => this.#showScoreCriteria(index, position),
-				);
+					this.#showScoreCriteria(index, position);
+				} else this.#showVerdict(index, position, "criteria");
 			},
 			() => this.#showVerdict(index, position, "criteria"),
 			(data, list) => {
@@ -1152,6 +1445,23 @@ export class MixtureConfigOverlayComponent implements Component {
 				this.#touch();
 				this.#showScoreCriteria(index, position);
 				return true;
+			},
+			{
+				open: value => {
+					const number = Number(value);
+					this.#editLong(
+						`Level ${number + 1}`,
+						question.criteria[number] ?? "",
+						text => {
+							question.criteria = question.criteria.map((level, at) =>
+								at === number ? text.trim() : level,
+							) as [string, string, ...string[]];
+							this.#touch();
+						},
+						() => this.#showScoreCriteria(index, position),
+					);
+				},
+				accepts: value => value !== "add" && value !== "back",
 			},
 		);
 	}
@@ -1181,16 +1491,12 @@ export class MixtureConfigOverlayComponent implements Component {
 				this.#showDecisionState(label, parts, next, save, back);
 			},
 			back,
-			(data, list) => {
-				if (!matchesKey(data, "space")) return false;
-				const value = list.getSelectedItem()?.value;
-				if (value) list.onSelect?.({ value, label: value });
-				return true;
-			},
+			undefined,
 		);
 	}
 
 	#showRoute(index: number, position: number, selected?: string): void {
+		this.#preparePage({ page: "route", index, position });
 		const member = this.#modelMember(index, position);
 		const mixture = this.#mixture(index);
 		if (!member || !mixture) return this.#showMembers(index);
@@ -1213,81 +1519,92 @@ export class MixtureConfigOverlayComponent implements Component {
 			selected,
 			`Route from ${member.id} · Enter edit · Esc back`,
 			value => {
-				const again = () => this.#showRoute(index, position, value);
-				switch (value) {
-					case "instructions":
-						this.#editLong(
-							"Choice instructions",
-							route?.instructions ?? "",
-							text => {
-								member.route = { ...(member.route ?? { instructions: "" }), instructions: text.trim() };
-								this.#touch();
-							},
-							again,
-						);
-						break;
-					case "state":
-						this.#showDecisionState(
-							"Route judge context",
-							DECISION_PARTS,
-							route?.state,
-							state => {
-								member.route = { ...(member.route ?? { instructions: "" }), state };
-								this.#touch();
-							},
-							again,
-						);
-						break;
-					case "confidence":
-						this.#editNumber(
-							"Native confidence floor (0–1)",
-							route?.minConfidence,
-							number => {
-								if (number !== undefined && number > 1) {
-									this.#cb.notify("Confidence floor must be between 0 and 1");
-									return false;
-								}
-								member.route = { ...(member.route ?? { instructions: "" }), minConfidence: number };
-								this.#touch();
-							},
-							again,
-						);
-						break;
-					case "fallback":
-						this.#choose(
-							"Route fallback",
-							[
-								{ value: "", label: "None" },
-								{ value: "pause", label: "Pause" },
-								...mixture.edges
-									.filter(edge => edge.from === member.id)
-									.map(edge => ({
-										value: mixtureEdgeId(edge),
-										label: mixtureEdgeId(edge),
-									})),
-							],
-							route?.fallback,
-							fallback => {
-								member.route = { ...(member.route ?? { instructions: "" }), fallback: fallback || undefined };
-								this.#touch();
-							},
-							again,
-						);
-						break;
-					case "remove":
-						member.route = undefined;
-						this.#touch();
-						back();
-						break;
-					default:
-						back();
+				if (value === "remove") {
+					this.#previousVisitSnapshot = this.navigationSnapshot();
+					member.route = undefined;
+					this.#touch();
 				}
+				back();
 			},
 			back,
+			undefined,
+			{
+				open: value => {
+					const again = () => this.#showRoute(index, position, value);
+					switch (value) {
+						case "instructions":
+							this.#editLong(
+								"Choice instructions",
+								route?.instructions ?? "",
+								text => {
+									member.route = { ...(member.route ?? { instructions: "" }), instructions: text.trim() };
+									this.#touch();
+								},
+								again,
+							);
+							break;
+						case "state":
+							this.#showDecisionState(
+								"Route judge context",
+								DECISION_PARTS,
+								route?.state,
+								state => {
+									member.route = { ...(member.route ?? { instructions: "" }), state };
+									this.#touch();
+								},
+								again,
+							);
+							break;
+						case "confidence":
+							this.#editNumber(
+								"Native confidence floor (0–1)",
+								route?.minConfidence,
+								number => {
+									if (number !== undefined && number > 1) {
+										this.#cb.notify("Confidence floor must be between 0 and 1");
+										return false;
+									}
+									member.route = { ...(member.route ?? { instructions: "" }), minConfidence: number };
+									this.#touch();
+								},
+								again,
+							);
+							break;
+						case "fallback":
+							this.#choose(
+								"Route fallback",
+								[
+									{ value: "", label: "None" },
+									{ value: "pause", label: "Pause" },
+									...mixture.edges
+										.filter(edge => edge.from === member.id)
+										.map(edge => ({
+											value: mixtureEdgeId(edge),
+											label: mixtureEdgeId(edge),
+										})),
+								],
+								route?.fallback,
+								fallback => {
+									member.route = {
+										...(member.route ?? { instructions: "" }),
+										fallback: fallback || undefined,
+									};
+									this.#touch();
+								},
+								again,
+							);
+							break;
+						default:
+							back();
+					}
+				},
+				accepts: value => value !== "remove" && value !== "back",
+			},
 		);
 	}
 
 	#showTerminate(index: number, position: number, selected?: string): void {
+		this.#preparePage({ page: "terminate", index, position });
 		const member = this.#modelMember(index, position);
 		if (!member) return this.#showMembers(index);
 		const terminate = member.terminate;
@@ -1314,62 +1631,70 @@ export class MixtureConfigOverlayComponent implements Component {
 			selected,
 			`Termination at ${member.id} · Enter edit · Esc back`,
 			value => {
-				const again = () => this.#showTerminate(index, position, value);
-				if (value === "instructions")
-					this.#editLong(
-						"Termination condition",
-						terminate?.instructions ?? "",
-						text => {
-							member.terminate = { ...(member.terminate ?? { instructions: "" }), instructions: text.trim() };
-							this.#touch();
-						},
-						again,
-					);
-				else if (value === "state")
-					this.#showDecisionState(
-						"Termination judge context",
-						DECISION_PARTS,
-						terminate?.state,
-						state => {
-							member.terminate = { ...(member.terminate ?? { instructions: "" }), state };
-							this.#touch();
-						},
-						again,
-					);
-				else if (value === "threshold")
-					this.#editNumber(
-						"Yes-probability threshold (0–1)",
-						terminate?.threshold,
-						number => {
-							if (number !== undefined && number > 1) {
-								this.#cb.notify("Termination threshold must be between 0 and 1");
-								return false;
-							}
-							member.terminate = { ...(member.terminate ?? { instructions: "" }), threshold: number };
-							this.#touch();
-						},
-						again,
-					);
-				else if (value === "true" || value === "false")
-					this.#editLong(
-						`${value === "true" ? "Yes" : "No"} criterion`,
-						terminate?.criteria?.[value] ?? "",
-						text => {
-							member.terminate = {
-								...(member.terminate ?? { instructions: "" }),
-								criteria: { ...member.terminate?.criteria, [value]: text.trim() || undefined },
-							};
-							this.#touch();
-						},
-						again,
-					);
-				else if (value === "remove") {
+				if (value === "remove") {
+					this.#previousVisitSnapshot = this.navigationSnapshot();
 					member.terminate = undefined;
 					this.#touch();
-					back();
-				} else back();
+				}
+				back();
 			},
 			back,
+			undefined,
+			{
+				open: value => {
+					const again = () => this.#showTerminate(index, position, value);
+					if (value === "instructions")
+						this.#editLong(
+							"Termination condition",
+							terminate?.instructions ?? "",
+							text => {
+								member.terminate = { ...(member.terminate ?? { instructions: "" }), instructions: text.trim() };
+								this.#touch();
+							},
+							again,
+						);
+					else if (value === "state")
+						this.#showDecisionState(
+							"Termination judge context",
+							DECISION_PARTS,
+							terminate?.state,
+							state => {
+								member.terminate = { ...(member.terminate ?? { instructions: "" }), state };
+								this.#touch();
+							},
+							again,
+						);
+					else if (value === "threshold")
+						this.#editNumber(
+							"Yes-probability threshold (0–1)",
+							terminate?.threshold,
+							number => {
+								if (number !== undefined && number > 1) {
+									this.#cb.notify("Termination threshold must be between 0 and 1");
+									return false;
+								}
+								member.terminate = { ...(member.terminate ?? { instructions: "" }), threshold: number };
+								this.#touch();
+							},
+							again,
+						);
+					else if (value === "true" || value === "false")
+						this.#editLong(
+							`${value === "true" ? "Yes" : "No"} criterion`,
+							terminate?.criteria?.[value] ?? "",
+							text => {
+								member.terminate = {
+									...(member.terminate ?? { instructions: "" }),
+									criteria: { ...member.terminate?.criteria, [value]: text.trim() || undefined },
+								};
+								this.#touch();
+							},
+							again,
+						);
+					else back();
+				},
+				accepts: value => value !== "remove" && value !== "back",
+			},
 		);
 	}
 
@@ -1397,6 +1722,7 @@ export class MixtureConfigOverlayComponent implements Component {
 	}
 
 	#showModelPicker(index: number, position: number): void {
+		this.#preparePage({ page: "model", index, position });
 		const source = this.#deps.browserSource;
 		const models = this.#deps.getAvailableModels().filter(model => model.api !== "mixture");
 		const items = buildBrowserItems(models);
@@ -1407,29 +1733,37 @@ export class MixtureConfigOverlayComponent implements Component {
 		browser.setItems(items);
 		browser.onActivate = item => {
 			const efforts = getSupportedEfforts(item.model);
-			const assign = (effort: string) => {
-				const member = this.#modelMember(index, position);
-				if (member) {
-					member.model = effort ? `${item.selector}:${effort}` : item.selector;
-					this.#touch();
-				}
+			if (efforts.length) this.#showThinking(index, position, item.selector, efforts);
+			else {
+				this.#assignMemberModel(index, position, item.selector, "");
 				this.#showMember(index, position, "model");
-			};
-			if (efforts.length)
-				this.#choose(
-					"Thinking effort",
-					[{ value: "", label: "Model default" }, ...efforts.map(effort => ({ value: effort, label: effort }))],
-					"",
-					assign,
-					() => this.#showModelPicker(index, position),
-				);
-			else assign("");
+			}
 		};
 		browser.onCancel = () => this.#showMember(index, position, "model");
-		this.#setScreen("model", browser, "Type to search · Enter choose · Esc back");
+		this.#setScreen("model", browser, "/ search · Enter choose · h/Esc back");
+	}
+
+	#assignMemberModel(index: number, position: number, selector: string, effort: string): void {
+		const member = this.#modelMember(index, position);
+		if (!member) return;
+		this.#previousVisitSnapshot = this.navigationSnapshot();
+		member.model = effort ? `${selector}:${effort}` : selector;
+		this.#touch();
+	}
+
+	#showThinking(index: number, position: number, selector: string, efforts: readonly string[]): void {
+		this.#preparePage({ page: "thinking", index, position, selector, efforts });
+		this.#choose(
+			"Thinking effort",
+			[{ value: "", label: "Model default" }, ...efforts.map(effort => ({ value: effort, label: effort }))],
+			"",
+			effort => this.#assignMemberModel(index, position, selector, effort),
+			() => this.#showModelPicker(index, position),
+		);
 	}
 
 	#showTools(index: number, position: number, cursor = 0): void {
+		this.#preparePage({ page: "tools", index, position });
 		const member = this.#modelMember(index, position);
 		if (!member) return this.#showMembers(index);
 		const all = this.#deps.availableToolNames;
@@ -1465,16 +1799,12 @@ export class MixtureConfigOverlayComponent implements Component {
 				);
 			},
 			() => this.#showMember(index, position, "tools"),
-			(data, list) => {
-				if (!matchesKey(data, "space")) return false;
-				const value = list.getSelectedItem()?.value;
-				if (value) list.onSelect?.({ value, label: value });
-				return true;
-			},
+			undefined,
 		);
 	}
 
 	#showEdges(index: number, selected?: string): void {
+		this.#preparePage({ page: "edges", index });
 		const mixture = this.#mixture(index);
 		if (!mixture) return this.#showList();
 		const items: SelectItem[] = mixture.edges.map((edge, position) => ({
@@ -1489,16 +1819,16 @@ export class MixtureConfigOverlayComponent implements Component {
 			selected,
 			"Enter edit · Delete remove · Alt+↑↓ reorder · Esc back",
 			value => {
-				const match = /^edge:(\d+)$/.exec(value);
-				if (match) this.#showEdge(index, Number(match[1]));
-				else if (value === "add") {
-					const from = mixture.members[0]?.id;
-					const to = mixture.members[1]?.id;
-					if (!from || !to) return this.#cb.notify("Add at least two members before connecting them.");
-					mixture.edges.push({ from, to, x: { output: true } });
-					this.#touch();
-					this.#showEdge(index, mixture.edges.length - 1);
-				} else this.#showMixture(index, "edges");
+				if (value !== "add") {
+					this.#showMixture(index, "edges");
+					return;
+				}
+				const from = mixture.members[0]?.id;
+				const to = mixture.members[1]?.id;
+				if (!from || !to) return this.#cb.notify("Add at least two members before connecting them.");
+				mixture.edges.push({ from, to, x: { output: true } });
+				this.#touch();
+				this.#showEdge(index, mixture.edges.length - 1);
 			},
 			() => this.#showMixture(index, "edges"),
 			(data, list) => {
@@ -1521,6 +1851,14 @@ export class MixtureConfigOverlayComponent implements Component {
 				this.#showEdges(index, `edge:${position + delta}`);
 				return true;
 			},
+			{
+				open: value => {
+					const match = /^edge:(\d+)$/.exec(value);
+					if (match) this.#showEdge(index, Number(match[1]));
+					else this.#showMixture(index, "edges");
+				},
+				accepts: value => value.startsWith("edge:"),
+			},
 		);
 	}
 
@@ -1530,6 +1868,7 @@ export class MixtureConfigOverlayComponent implements Component {
 	}
 
 	#showEdge(index: number, position: number, selected?: string): void {
+		this.#preparePage({ page: "edge", index, position });
 		const edge = this.#edge(index, position);
 		const mixture = this.#mixture(index);
 		if (!edge || !mixture) return this.#showEdges(index);
@@ -1549,94 +1888,99 @@ export class MixtureConfigOverlayComponent implements Component {
 			items,
 			selected,
 			`Edge ${mixtureEdgeId(edge)} · Enter edit · Esc back`,
-			value => {
-				const back = () => this.#showEdge(index, position, value);
-				switch (value) {
-					case "id":
-						this.#editText(
-							"Edge id (blank derives from endpoints)",
-							edge.id ?? "",
-							text => {
-								const oldId = mixtureEdgeId(edge);
-								edge.id = text.trim() || undefined;
-								this.#syncFallback(mixture, oldId, mixtureEdgeId(edge));
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "from":
-					case "to":
-						this.#choose(
-							`${value} member`,
-							mixture.members.map(member => ({ value: member.id, label: member.id })),
-							edge[value],
-							id => {
-								const oldId = mixtureEdgeId(edge);
-								edge[value] = id;
-								this.#syncFallback(mixture, oldId, mixtureEdgeId(edge));
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "x":
-						this.#showTransit(index, position);
-						break;
-					case "envelope":
-						this.#editLong(
-							"Envelope template or preset name",
-							edge.envelope ?? "",
-							text => {
-								edge.envelope = text.trim() || undefined;
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "when":
-						this.#editLong(
-							"Edge condition",
-							edge.when ?? "",
-							text => {
-								edge.when = text.trim() || undefined;
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "show":
-						this.#choose(
-							"Show source hop",
-							["default", "always", "never"].map(choice => ({ value: choice, label: choice })),
-							edge.show ?? "default",
-							choice => {
-								edge.show = choice === "default" ? undefined : (choice as "always" | "never");
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					case "maxTraversals":
-						this.#editNumber(
-							"Maximum traversals",
-							edge.maxTraversals,
-							number => {
-								edge.maxTraversals = number;
-								this.#touch();
-							},
-							back,
-						);
-						break;
-					default:
-						this.#showEdges(index, `edge:${position}`);
-				}
-			},
+			undefined,
 			() => this.#showEdges(index, `edge:${position}`),
+			undefined,
+			{
+				open: value => {
+					const back = () => this.#showEdge(index, position, value);
+					switch (value) {
+						case "id":
+							this.#editText(
+								"Edge id (blank derives from endpoints)",
+								edge.id ?? "",
+								text => {
+									const oldId = mixtureEdgeId(edge);
+									edge.id = text.trim() || undefined;
+									this.#syncFallback(mixture, oldId, mixtureEdgeId(edge));
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "from":
+						case "to":
+							this.#choose(
+								`${value} member`,
+								mixture.members.map(member => ({ value: member.id, label: member.id })),
+								edge[value],
+								id => {
+									const oldId = mixtureEdgeId(edge);
+									edge[value] = id;
+									this.#syncFallback(mixture, oldId, mixtureEdgeId(edge));
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "x":
+							this.#showTransit(index, position);
+							break;
+						case "envelope":
+							this.#editLong(
+								"Envelope template or preset name",
+								edge.envelope ?? "",
+								text => {
+									edge.envelope = text.trim() || undefined;
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "when":
+							this.#editLong(
+								"Edge condition",
+								edge.when ?? "",
+								text => {
+									edge.when = text.trim() || undefined;
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "show":
+							this.#choose(
+								"Show source hop",
+								["default", "always", "never"].map(choice => ({ value: choice, label: choice })),
+								edge.show ?? "default",
+								choice => {
+									edge.show = choice === "default" ? undefined : (choice as "always" | "never");
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						case "maxTraversals":
+							this.#editNumber(
+								"Maximum traversals",
+								edge.maxTraversals,
+								number => {
+									edge.maxTraversals = number;
+									this.#touch();
+								},
+								back,
+							);
+							break;
+						default:
+							this.#showEdges(index, `edge:${position}`);
+					}
+				},
+			},
 		);
 	}
 
 	#showTransit(index: number, position: number, selected?: string): void {
+		this.#preparePage({ page: "transit", index, position });
 		const edge = this.#edge(index, position);
 		if (!edge) return this.#showEdges(index);
 		const items: SelectItem[] = TRANSIT_PART_NAMES.map(part => ({
@@ -1651,7 +1995,6 @@ export class MixtureConfigOverlayComponent implements Component {
 			"Space / Enter toggle parts · Transcript opens optimization settings · Esc back",
 			value => {
 				if (value === "back") return this.#showEdge(index, position, "x");
-				if (value === "transcript") return this.#showTranscript(index, position);
 				const part = value as Exclude<TransitPartName, "transcript">;
 				if (edge.x[part]) delete edge.x[part];
 				else edge.x[part] = true;
@@ -1659,16 +2002,13 @@ export class MixtureConfigOverlayComponent implements Component {
 				this.#showTransit(index, position, value);
 			},
 			() => this.#showEdge(index, position, "x"),
-			(data, list) => {
-				if (!matchesKey(data, "space")) return false;
-				const value = list.getSelectedItem()?.value;
-				if (value) list.onSelect?.({ value, label: value });
-				return true;
-			},
+			undefined,
+			{ open: () => this.#showTranscript(index, position), accepts: value => value === "transcript" },
 		);
 	}
 
 	#showTranscript(index: number, position: number, selected?: string): void {
+		this.#preparePage({ page: "transcript", index, position });
 		const edge = this.#edge(index, position);
 		if (!edge) return this.#showEdges(index);
 		const spec = edge.x.transcript;
@@ -1683,50 +2023,55 @@ export class MixtureConfigOverlayComponent implements Component {
 			],
 			selected,
 			"Transcript transit · Enter edit · Esc back",
-			value => {
-				const back = () => this.#showTranscript(index, position, value);
-				if (value === "mode")
-					this.#choose(
-						"Transcript optimization",
-						[
-							{ value: "off", label: "Off" },
-							{ value: "verbatim", label: "Verbatim; omit older hops" },
-							{ value: "compact", label: "Compact; summarize older hops" },
-							{ value: "snapcompact", label: "Snapcompact; preserve history frames" },
-						],
-						spec ? optimize : "off",
-						mode => {
-							if (mode === "off") delete edge.x.transcript;
-							else
-								edge.x.transcript = {
-									optimize: mode as "verbatim" | "compact" | "snapcompact",
-									budgetTokens: budget,
-								};
-							this.#touch();
-						},
-						back,
-					);
-				else if (value === "budget")
-					this.#editNumber(
-						"Transcript token budget",
-						budget,
-						number => {
-							if (number !== undefined && (!Number.isInteger(number) || number < 1)) {
-								this.#cb.notify("Transcript budget must be a positive integer");
-								return false;
-							}
-							edge.x.transcript = { optimize, budgetTokens: number };
-							this.#touch();
-						},
-						back,
-					);
-				else this.#showTransit(index, position, "transcript");
-			},
+			undefined,
 			() => this.#showTransit(index, position, "transcript"),
+			undefined,
+			{
+				open: value => {
+					const back = () => this.#showTranscript(index, position, value);
+					if (value === "mode")
+						this.#choose(
+							"Transcript optimization",
+							[
+								{ value: "off", label: "Off" },
+								{ value: "verbatim", label: "Verbatim; omit older hops" },
+								{ value: "compact", label: "Compact; summarize older hops" },
+								{ value: "snapcompact", label: "Snapcompact; preserve history frames" },
+							],
+							spec ? optimize : "off",
+							mode => {
+								if (mode === "off") delete edge.x.transcript;
+								else
+									edge.x.transcript = {
+										optimize: mode as "verbatim" | "compact" | "snapcompact",
+										budgetTokens: budget,
+									};
+								this.#touch();
+							},
+							back,
+						);
+					else if (value === "budget")
+						this.#editNumber(
+							"Transcript token budget",
+							budget,
+							number => {
+								if (number !== undefined && (!Number.isInteger(number) || number < 1)) {
+									this.#cb.notify("Transcript budget must be a positive integer");
+									return false;
+								}
+								edge.x.transcript = { optimize, budgetTokens: number };
+								this.#touch();
+							},
+							back,
+						);
+					else this.#showTransit(index, position, "transcript");
+				},
+			},
 		);
 	}
 
 	#showLimits(index: number, selected?: string): void {
+		this.#preparePage({ page: "limits", index });
 		const mixture = this.#mixture(index);
 		if (!mixture) return this.#showList();
 		const limits = mixture.limits ?? {};
@@ -1747,59 +2092,64 @@ export class MixtureConfigOverlayComponent implements Component {
 			items,
 			selected,
 			"Enter edit · Esc back",
-			value => {
-				if (value === "back") return this.#showMixture(index, "limits");
-				const back = () => this.#showLimits(index, value);
-				if (value === "onLimit")
-					this.#choose(
-						"On limit",
-						[
-							{ value: "default", label: "Setting default" },
-							...["stop", "pause", "judge"].map(choice => ({ value: choice, label: choice })),
-						],
-						limits.onLimit ?? "default",
-						choice => {
-							(mixture.limits ??= {}).onLimit =
-								choice === "default" ? undefined : (choice as "stop" | "pause" | "judge");
-							this.#touch();
-						},
-						back,
-					);
-				else if (value === "limitTarget")
-					this.#choose(
-						"Limit target",
-						[
-							{ value: "", label: "None" },
-							...mixture.members
-								.filter(member => member.kind !== "verdict")
-								.map(member => ({ value: member.id, label: member.id })),
-						],
-						limits.limitTarget,
-						id => {
-							(mixture.limits ??= {}).limitTarget = id || undefined;
-							this.#touch();
-						},
-						back,
-					);
-				else if (value === "maxHops" || value === "budgetUsd" || value === "wallClockMinutes")
-					this.#editNumber(
-						value,
-						limits[value],
-						number => {
-							(mixture.limits ??= {})[value] = number;
-							this.#touch();
-						},
-						back,
-					);
-			},
+			undefined,
 			() => this.#showMixture(index, "limits"),
+			undefined,
+			{
+				open: value => {
+					if (value === "back") return this.#showMixture(index, "limits");
+					const back = () => this.#showLimits(index, value);
+					if (value === "onLimit")
+						this.#choose(
+							"On limit",
+							[
+								{ value: "default", label: "Setting default" },
+								...["stop", "pause", "judge"].map(choice => ({ value: choice, label: choice })),
+							],
+							limits.onLimit ?? "default",
+							choice => {
+								(mixture.limits ??= {}).onLimit =
+									choice === "default" ? undefined : (choice as "stop" | "pause" | "judge");
+								this.#touch();
+							},
+							back,
+						);
+					else if (value === "limitTarget")
+						this.#choose(
+							"Limit target",
+							[
+								{ value: "", label: "None" },
+								...mixture.members
+									.filter(member => member.kind !== "verdict")
+									.map(member => ({ value: member.id, label: member.id })),
+							],
+							limits.limitTarget,
+							id => {
+								(mixture.limits ??= {}).limitTarget = id || undefined;
+								this.#touch();
+							},
+							back,
+						);
+					else if (value === "maxHops" || value === "budgetUsd" || value === "wallClockMinutes")
+						this.#editNumber(
+							value,
+							limits[value],
+							number => {
+								(mixture.limits ??= {})[value] = number;
+								this.#touch();
+							},
+							back,
+						);
+				},
+			},
 		);
 	}
 
 	#showPresets(index: number, kind: "roles" | "envelopes", selected?: string): void {
+		this.#preparePage({ page: "presets", index, kind });
 		const mixture = this.#mixture(index);
 		if (!mixture) return this.#showList();
-		const presets = (mixture[kind] ??= {});
+		const presets = mixture[kind] ?? {};
 		const names = Object.keys(presets);
 		const items: SelectItem[] = names.map(name => ({
 			value: name,
@@ -1812,40 +2162,7 @@ export class MixtureConfigOverlayComponent implements Component {
 			items,
 			selected,
 			"Enter edit text · Delete remove · Esc back",
-			value => {
-				if (value === "__back") return this.#showMixture(index, kind);
-				if (value === "__add")
-					this.#editText(
-						"Preset name",
-						"",
-						text => {
-							const name = text.trim();
-							if (!name) return;
-							presets[name] = "";
-							this.#touch();
-							this.#editLong(
-								`${kind} / ${name}`,
-								"",
-								content => {
-									presets[name] = content;
-									this.#touch();
-								},
-								() => this.#showPresets(index, kind, name),
-							);
-						},
-						() => this.#showPresets(index, kind),
-					);
-				else
-					this.#editLong(
-						`${kind} / ${value}`,
-						presets[value] ?? "",
-						content => {
-							presets[value] = content;
-							this.#touch();
-						},
-						() => this.#showPresets(index, kind, value),
-					);
-			},
+			undefined,
 			() => this.#showMixture(index, kind),
 			(data, list) => {
 				const value = list.getSelectedItem()?.value;
@@ -1856,6 +2173,189 @@ export class MixtureConfigOverlayComponent implements Component {
 				this.#showPresets(index, kind);
 				return true;
 			},
+			{
+				open: value => {
+					if (value === "__back") return this.#showMixture(index, kind);
+					if (value === "__add")
+						this.#editText(
+							"Preset name",
+							"",
+							text => {
+								const name = text.trim();
+								if (!name) return;
+								(mixture[kind] ??= {})[name] = "";
+								this.#touch();
+								this.#showPresetEditor(index, kind, name);
+							},
+							() => this.#showPresets(index, kind),
+						);
+					else this.#showPresetEditor(index, kind, value);
+				},
+				accepts: value => value !== "__back",
+				navigable: value => value !== "__add",
+			},
 		);
+	}
+
+	#showPresetEditor(index: number, kind: "roles" | "envelopes", name: string): void {
+		this.#preparePage({ page: "preset", index, kind, name });
+		const mixture = this.#mixture(index);
+		if (!mixture) return this.#showList();
+		this.#editLong(
+			`${kind} / ${name}`,
+			mixture[kind]?.[name] ?? "",
+			content => {
+				(mixture[kind] ??= {})[name] = content;
+				this.#touch();
+			},
+			() => this.#showPresets(index, kind, name),
+		);
+	}
+
+	get blocksMenuHistory(): boolean {
+		return (
+			this.#pendingOperations > 0 || (this.#active instanceof HookEditorComponent && this.#active.blocksMenuHistory)
+		);
+	}
+
+	navigationSnapshot(): MixtureNavigationSnapshot {
+		const list =
+			this.#screen === "discard"
+				? this.#listStates.get(this.#pageKey(this.#navigationContext, this.#navigationScope))
+				: undefined;
+		return {
+			context: structuredClone(this.#navigationContext),
+			scope: this.#scope,
+			doc: structuredClone(this.#doc),
+			dirty: this.#dirty,
+			pendingApply: this.#pendingApply,
+			previewScroll: list?.previewScroll ?? this.#previewScroll,
+			previewFocused: list?.previewFocused ?? this.#previewFocused,
+			lists: structuredClone([...this.#listStates]),
+			content:
+				list?.navigation ??
+				(this.#active instanceof Input
+					? { value: this.#active.getValue(), cursor: this.#active.getCursor() }
+					: isMenuHistoryParticipant(this.#active)
+						? this.#active.navigationSnapshot()
+						: undefined),
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as MixtureNavigationSnapshot;
+		if (
+			!state.context ||
+			!state.doc ||
+			!Array.isArray(state.doc.mixtures) ||
+			(state.scope !== "project" && state.scope !== "user")
+		)
+			return;
+		this.#keys.reset();
+		this.#loadRevision++;
+		this.#restoringNavigation = true;
+		try {
+			this.#scope = state.scope;
+			this.#doc = structuredClone(state.doc);
+			this.#dirty = state.dirty;
+			this.#pendingApply = state.pendingApply;
+			this.#pendingDelete = null;
+			this.#previousVisitSnapshot = undefined;
+			this.#listStates.clear();
+			for (const [key, list] of state.lists ?? []) this.#listStates.set(key, structuredClone(list));
+			if (state.context.page === "field") {
+				this.#buildPage(state.context.parent);
+				this.#openField(state.context.key);
+			} else this.#buildPage(state.context);
+			if (this.#active instanceof Input && typeof state.content === "object" && state.content !== null) {
+				const field = state.content as { value?: string; cursor?: number };
+				if (typeof field.value === "string") this.#active.setValue(field.value);
+				if (typeof field.cursor === "number") this.#active.setCursor(field.cursor);
+			} else if (isMenuHistoryParticipant(this.#active)) this.#active.restoreNavigation(state.content);
+			this.#previewScroll = state.previewScroll;
+			this.#previewFocused = state.context.page === "list" && state.previewFocused;
+		} finally {
+			this.#restoringNavigation = false;
+		}
+		this.#cb.requestRender();
+	}
+
+	#buildPage(context: MixturePageContext): void {
+		switch (context.page) {
+			case "list":
+				this.#showList();
+				break;
+			case "mixture":
+				this.#showMixture(context.index);
+				break;
+			case "members":
+				this.#showMembers(context.index);
+				break;
+			case "member":
+				this.#showMember(context.index, context.position);
+				break;
+			case "verdict":
+				this.#showVerdict(context.index, context.position);
+				break;
+			case "choice-criteria":
+				this.#showChoiceCriteria(context.index, context.position);
+				break;
+			case "choice-option":
+				this.#showChoiceOption(context.index, context.position, context.name);
+				break;
+			case "score-criteria":
+				this.#showScoreCriteria(context.index, context.position);
+				break;
+			case "route":
+				this.#showRoute(context.index, context.position);
+				break;
+			case "terminate":
+				this.#showTerminate(context.index, context.position);
+				break;
+			case "model":
+				this.#showModelPicker(context.index, context.position);
+				break;
+			case "thinking":
+				this.#showThinking(context.index, context.position, context.selector, context.efforts);
+				break;
+			case "tools":
+				this.#showTools(context.index, context.position);
+				break;
+			case "edges":
+				this.#showEdges(context.index);
+				break;
+			case "edge":
+				this.#showEdge(context.index, context.position);
+				break;
+			case "transit":
+				this.#showTransit(context.index, context.position);
+				break;
+			case "transcript":
+				this.#showTranscript(context.index, context.position);
+				break;
+			case "limits":
+				this.#showLimits(context.index);
+				break;
+			case "presets":
+				this.#showPresets(context.index, context.kind);
+				break;
+			case "preset":
+				this.#showPresetEditor(context.index, context.kind, context.name);
+				break;
+		}
+	}
+
+	leaveMenu(): void {
+		this.#keys.reset();
+		this.#loadRevision++;
+		this.#pendingDelete = null;
+		this.#buildingContext = undefined;
+		this.#previousVisitSnapshot = undefined;
+	}
+
+	dispose(): void {
+		this.leaveMenu();
+		if (this.#active instanceof HookEditorComponent) this.#active.dispose();
 	}
 }

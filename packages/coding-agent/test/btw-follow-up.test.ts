@@ -99,6 +99,12 @@ async function harness(spaceHoldKeys: readonly KeyId[] = ["space"]) {
 		runEphemeralTurn,
 	} as unknown as InteractiveModeContext["session"];
 	const ctx = {
+		openMenu: () => ({
+			mount: (_component: unknown, show: () => unknown) => {
+				show();
+			},
+			close: () => true,
+		}),
 		ui: {
 			requestRender: vi.fn(),
 			requestComponentRender: vi.fn(),
@@ -415,12 +421,13 @@ describe("BTW follow-up lifecycle", () => {
 		if (!(panel instanceof BtwHistoryPanel)) throw new Error("Expected BTW history");
 		const handle = overlay.mock.results.at(-1)!.value;
 		if (!handle || typeof handle !== "object" || !("hide" in handle)) throw new Error("Expected overlay handle");
+		const hide = vi.spyOn(handle, "hide");
 
 		panel.handleInput("x");
 		expect(running.args.signal?.aborted).toBe(false);
 		panel.handleInput("\x1b");
 		expect(running.args.signal?.aborted).toBe(true);
-		expect(handle.hide).not.toHaveBeenCalled();
+		expect(hide).not.toHaveBeenCalled();
 		expect(Bun.stripANSI(panel.render(100).join("\n"))).toContain("Retained partial answer");
 		await h.controller.flush();
 		expect((await records(h.manager))[0]).toMatchObject({
@@ -428,7 +435,7 @@ describe("BTW follow-up lifecycle", () => {
 			status: "cancelled",
 		});
 		panel.handleInput("\x1b");
-		expect(handle.hide).toHaveBeenCalledTimes(1);
+		expect(hide).toHaveBeenCalledTimes(1);
 		running.resolve(answer("Late final answer"));
 		await drain();
 		await h.controller.flush();
@@ -528,10 +535,12 @@ describe("BTW follow-up lifecycle", () => {
 					expect(saved.followUps).toBeUndefined();
 				}
 
-				// A fresh composer must not inherit cancellation or a stranded topic lease.
+				// Reopening keeps the cancelled draft, not its cancelled transport.
 				await drain();
 				settled = Promise.withResolvers<boolean>();
 				expect(panel.openFollowUp(topic.id)).toBe(true);
+				expect(Bun.stripANSI(panel.render(100).join("\n"))).toContain("Cancel this follow-up");
+				panel.handleInput("\x15"); // Explicitly replace the retained draft.
 				panel.pasteText("Accepted follow-up");
 				panel.handleInput("\r");
 				expect(await settled.promise).toBe(true);
