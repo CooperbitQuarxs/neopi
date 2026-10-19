@@ -22,6 +22,10 @@ import { applyHyperlinkSetting } from "@oh-my-pi/pi-tui/render/hyperlink";
 import { setInlineImageMaxColumns, setInlineImageMaxRows } from "@oh-my-pi/pi-tui/render/render-utils";
 import { setShimmerMode } from "@oh-my-pi/pi-tui/theme/shimmer";
 import {
+	setTerminalImageProtocolSetting,
+	TERMINAL_IMAGE_PROTOCOL_SETTINGS,
+} from "@oh-my-pi/pi-tui/terminal-capabilities";
+import {
 	setAutoThemeMapping,
 	setBrandGlyph,
 	setColorBlindMode,
@@ -358,6 +362,20 @@ export const cfgStatusLineSegmentOptions = register({
 });
 
 // Images and terminal
+export const cfgTerminalImageProtocol = register({
+	id: "terminal.imageProtocol",
+	type: "enum",
+	values: TERMINAL_IMAGE_PROTOCOL_SETTINGS,
+	default: "auto",
+	ui: {
+		tab: "appearance",
+		group: "Images",
+		label: "Terminal Image Protocol",
+		description: "Switch image rendering now; Auto uses PI_FORCE_IMAGE_PROTOCOL or terminal detection",
+	},
+});
+effect(cfgTerminalImageProtocol, setTerminalImageProtocolSetting);
+
 export const cfgTerminalShowImages = register({
 	id: "terminal.showImages",
 	type: "boolean",

@@ -193,8 +193,13 @@ export function isNotificationSuppressed(): boolean {
 	return value === "off" || value === "0" || value === "false";
 }
 
-function getForcedImageProtocol(): ImageProtocol | null | undefined {
-	const raw = $env.PI_FORCE_IMAGE_PROTOCOL?.trim().toLowerCase();
+export const TERMINAL_IMAGE_PROTOCOL_SETTINGS = ["auto", "kitty", "sixel", "iterm2", "off"] as const;
+export type TerminalImageProtocolSetting = (typeof TERMINAL_IMAGE_PROTOCOL_SETTINGS)[number];
+let imageProtocolSetting: TerminalImageProtocolSetting = "auto";
+
+export function getForcedImageProtocol(): ImageProtocol | null | undefined {
+	const raw =
+		imageProtocolSetting === "auto" ? $env.PI_FORCE_IMAGE_PROTOCOL?.trim().toLowerCase() : imageProtocolSetting;
 	if (!raw) return undefined;
 	if (raw === "kitty") return ImageProtocol.Kitty;
 	if (raw === "iterm2" || raw === "iterm") return ImageProtocol.Iterm2;
@@ -737,13 +742,32 @@ export const TERMINAL: RuntimeTerminal = (() => {
 // kitty/ghostty/otty are known to honor `U=1` placement; other Kitty-protocol paths
 // (wezterm, tmux/screen fallback) treat the placeholder cells as literal PUA
 // glyphs, which is the "ASCII artifact + laggy scrolling" reported in #1877.
-setKittyGraphics({ unicodePlaceholders: detectKittyUnicodePlaceholdersSupport(TERMINAL.id, Bun.env) });
+updateKittyGraphics();
+
+function updateKittyGraphics(): void {
+	const forced = getForcedImageProtocol();
+	setKittyGraphics({
+		unicodePlaceholders:
+			TERMINAL.imageProtocol === ImageProtocol.Kitty &&
+			detectKittyUnicodePlaceholdersSupport(TERMINAL.id, Bun.env, forced === ImageProtocol.Kitty ? "kitty" : ""),
+	});
+}
+
+/** Apply the user's setting; `auto` restores environment overrides and static detection. */
+export function setTerminalImageProtocolSetting(setting: TerminalImageProtocolSetting): void {
+	imageProtocolSetting = setting;
+	const forced = getForcedImageProtocol();
+	setTerminalImageProtocol(
+		forced !== undefined ? forced : resolveImageProtocol(TERMINAL.id, Bun.env, process.stdout.isTTY === true),
+	);
+}
 
 /**
  * Override terminal image protocol at runtime after capability probes complete.
  */
 export function setTerminalImageProtocol(imageProtocol: ImageProtocol | null): void {
 	TERMINAL.imageProtocol = imageProtocol;
+	updateKittyGraphics();
 }
 
 /**
