@@ -1,6 +1,6 @@
 name: Question
 description: Ask about usage or configuration
-labels: ["question"]
+labels: ["needs-triage"]
 body:
   - type: textarea
     id: question

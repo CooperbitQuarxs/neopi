@@ -1,25 +1,28 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live in GitHub Issues at `PsychedelicShayna/neopi`. Use the `gh` CLI from this clone so it resolves the repository from `origin`.
+Issues and specs live in `PsychedelicShayna/neopi` GitHub Issues. Use `gh` from
+this clone so `origin` resolves the repository. Read [policy.md](policy.md) for
+posting identity, branches and authority; read [triage.md](triage.md) before
+intake classification, relationship reconciliation, actor transitions or closure.
+The label vocabulary is [triage-labels.md](triage-labels.md).
 
-## Conventions
+## CLI mechanics
 
-- Create: `gh issue create --title "..." --body-file <path>`.
-- Read: `gh issue view <number> --comments`, including labels.
-- List: `gh issue list --state <state> --json number,title,body,labels,comments` with the filters the task requires.
-- Apply or remove labels: `gh issue edit <number> --add-label "..."` or `--remove-label "..."`.
-- Close an issue when the fix merged (`Fixes #<n>` in the merging commit does it), when it is a verified duplicate, or when the owner said so. Say why in the closing comment.
-- Posting rules are the workspace policy in `~/repos/AGENTS.md` (comment identity block, labels). This guide is mechanics only.
+- Create: `gh issue create --title "..." --body-file <path> --label needs-triage`.
+- Read the full record: `gh issue view <number> --comments` including labels.
+- List candidates: `gh issue list --state open --limit 1000 --json number,title,body,labels,comments,updatedAt`; paginate through the API if the result reaches the limit.
+- Apply verified deltas: `gh issue edit <number> --add-label "..." --remove-label "..."`.
+- Read upstream: `gh issue list --repo can1357/oh-my-pi --state all --search "<relevant terms>"`, followed by complete matching records and related PRs.
 
-## Pull requests as a triage surface
+"Publish to the issue tracker" means create a GitHub issue. "Fetch the relevant
+ticket" includes body, comments, labels, acceptance and linked implementation.
+PRs are evidence and a triage surface, not a substitute request backlog. Read PR
+review bodies as well as inline threads and issue comments when reconciling state.
 
-**PRs as a request surface: no.**
-
-## Skill meanings
-
-- "Publish to the issue tracker" means create a GitHub issue.
-- "Fetch the relevant ticket" means read the GitHub issue, its comments, and labels.
-
-## Dual taxonomy
-
-House labels (type, `effort:*`, `priority:*`, and `entangled` only for true alternative clusters) and Matt triage labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) are **orthogonal layers**, not replacements. An issue may carry both. Do not strip house labels to be Matt-only. The Issue Funnel contract is `docs/agents/issue-funnel.md`.
+Record proposals in a persistent working file with URL, observed `updatedAt`,
+labels, proposed additions/removals, evidence and uncertainty. Re-read changed
+records before applying state deltas. The initial reconciliation includes open
+and closed issues/PRs; subsequent at-least-daily passes cover all open work and
+changed closed/merged records. An assignment may separate proposal from application;
+apply only within its authority. The [publication seat](issue-funnel.md) has its
+own queue and amendment boundaries. No scheduler is installed by these docs.
