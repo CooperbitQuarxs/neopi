@@ -1909,6 +1909,12 @@ export class SessionTools {
 		this.#host.notifyCommandMetadataChanged();
 	}
 
+	/** Reloads rule discovery, prompt buckets, TTSR registrations, and rule:// snapshots. */
+	async refreshRules(): Promise<void> {
+		resetCapabilities();
+		await this.refreshBaseSystemPrompt();
+	}
+
 	/** Selects enabled tools, ignoring names absent from the registry. */
 	setActiveToolsByName(toolNames: string[]): Promise<void> {
 		return this.runToolRegistryMutation(async () => {

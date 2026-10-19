@@ -29,6 +29,11 @@ export function formatModelRoleAlias(role: string): string {
 	return `${MODEL_ROLE_ALIAS_PREFIX}${role}`;
 }
 
+/** Consumer-owned role namespace; registration uses the ordinary role catalog/settings. */
+export function modelRoleNamespace(role: string): "deck" | undefined {
+	return role.startsWith("deck-") ? "deck" : undefined;
+}
+
 export type { ModelRole } from "@oh-my-pi/pi-tui/overlays/model-browser";
 export { CHAT_MODEL_ROLE_IDS, KIND_ROLE_IDS, MODEL_ROLE_IDS } from "@oh-my-pi/pi-tui/overlays/model-browser";
 
@@ -76,6 +81,8 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	effort: { tag: "EFFORT", name: "Effort classifier", color: "accent", section: "chat", accepts: acceptsChat },
 	prose: { tag: "PROSE", name: "Prose", color: "warning", section: "chat", accepts: acceptsChat },
 	issues: { tag: "ISSUES", name: "Issue filing", color: "muted", section: "chat", accepts: acceptsChat },
+	// NeoDeck classifies inbox items and chooses where they go.
+	"deck-inbox": { tag: "INBOX", name: "Deck inbox", color: "muted", section: "chat", accepts: acceptsChat },
 	image: {
 		tag: "IMAGE",
 		name: "Image generation",
