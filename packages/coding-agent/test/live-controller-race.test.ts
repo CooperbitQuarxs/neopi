@@ -174,7 +174,10 @@ function makeHarness(options?: {
 			streaming = false;
 			return gate.promise;
 		},
-		sendCustomMessageWithReceipt(message: { content: string }, deliveryOptions?: DeliveryControl["options"]) {
+		sendCustomMessageWithReceipt(
+			message: { content: string; details?: unknown },
+			deliveryOptions?: DeliveryControl["options"],
+		) {
 			const acceptedGate = deferred();
 			const completedGate = deferred<boolean>();
 			const delivery: DeliveryControl = {
@@ -187,6 +190,20 @@ function makeHarness(options?: {
 					delivery.accepted = true;
 					prompts.push(delivery.content);
 					acceptedGate.resolve();
+					if (deliveryOptions?.deliverAs !== "followUp") {
+						sessionSubscriber?.({
+							type: "message_start",
+							message: {
+								role: "custom",
+								customType: LIVE_DELEGATION_MESSAGE_TYPE,
+								content: message.content,
+								display: true,
+								attribution: "agent",
+								details: message.details,
+								timestamp: 1,
+							},
+						});
+					}
 				},
 				failBeforeAcceptance(cause: unknown = new Error("delivery rejected before acceptance")) {
 					if (delivery.accepted || delivery.cancelled) return;
