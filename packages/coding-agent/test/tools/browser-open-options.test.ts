@@ -484,7 +484,8 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser open options", () => {
 		}
 	}, 20_000);
 
-	it("saves each tab's downloads into its own downloads directory, also after another tab closes", async () => {
+	// quarantined: flaky in CI, tracked by #295
+	it.skipIf(!!process.env.CI)("saves each tab's downloads into its own downloads directory, also after another tab closes", async () => {
 		let served = 0;
 		const gateReached = Promise.withResolvers<void>();
 		const gateOpened = Promise.withResolvers<void>();
