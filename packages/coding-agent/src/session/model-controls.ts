@@ -323,8 +323,9 @@ export class ModelControls {
 		}
 
 		const targetModel = await this.#host.modelRegistry.refreshSelectedModelMetadata(model);
-		if (options?.effortSelection && cfgEffortPolicyMode.get(this.#host.settings) === "replacement") {
-			resolveImplicitEffort(this.#host.settings, targetModel, options.effortSelection, "role");
+		const effortSelection = options?.effortSelection ?? this.#host.settings.getRoleEffortSelection(role);
+		if (effortSelection && cfgEffortPolicyMode.get(this.#host.settings) === "replacement") {
+			resolveImplicitEffort(this.#host.settings, targetModel, effortSelection, "role");
 		}
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
@@ -347,11 +348,11 @@ export class ModelControls {
 		this.#host.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
 
 		// A draft role selection becomes active only after the target model switch succeeds.
-		if (options?.effortSelection?.mode === "auto") {
-			this.#autoSelection = options.effortSelection;
+		if (effortSelection?.mode === "auto") {
+			this.#autoSelection = effortSelection;
 			this.setThinkingLevel(AUTO_THINKING, false, "role");
-		} else if (options?.effortSelection?.mode === "fixed") {
-			this.setThinkingLevel(options.effortSelection.level, false, "role");
+		} else if (effortSelection?.mode === "fixed") {
+			this.setThinkingLevel(effortSelection.level, false, "role");
 		} else {
 			this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
 		}
@@ -794,7 +795,12 @@ export class ModelControls {
 	 * Bounded by a timeout and abort; replacement policy falls back to the
 	 * lowest permitted effort. Never fails the turn or clears Auto.
 	 */
-	async applyAutoThinkingLevel(promptText: string, generation: number, solutionSpace?: string): Promise<void> {
+	async applyAutoThinkingLevel(
+		promptText: string,
+		generation: number,
+		solutionSpace?: string,
+		signal?: AbortSignal,
+	): Promise<void> {
 		const model = this.#model;
 		if (!model?.reasoning || model.thinking?.unverified) return;
 		// Models with reasoning but no controllable effort surface (devin-agent
@@ -837,7 +843,7 @@ export class ModelControls {
 						sessionId: this.#host.sessionId(),
 						allowedEfforts: candidates,
 						sessionManager: this.#host.sessionManager,
-						signal: controller.signal,
+						signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
 						metadataResolver: provider => this.#host.agent.metadataForProvider(provider),
 						onContextFallback: reason =>
 							this.#host.emitNotice(reason.includes("unreadable") ? "warning" : "info", reason, "effort-policy"),
@@ -860,6 +866,7 @@ export class ModelControls {
 
 		// Drop the result if the turn was aborted/superseded while classifying.
 		if (
+			signal?.aborted ||
 			this.#host.promptGeneration() !== generation ||
 			!this.#autoThinking ||
 			this.#model !== model ||
