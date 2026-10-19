@@ -9,7 +9,7 @@ import type { IrcLogSource } from "@oh-my-pi/pi-tui/tools/irc";
 import { logger } from "@oh-my-pi/pi-utils";
 import { AgentRegistry } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
-import { IrcBus, ircHistorySessionFile } from "./bus";
+import { IrcBus, ircHistorySessionId } from "./bus";
 
 /** The operator's IRC id unless `irc.operator.handle` names another. */
 export const DEFAULT_IRC_OPERATOR_HANDLE = "Operator";
@@ -50,7 +50,7 @@ export function operatorIrcLogSource(session: () => AgentSession): IrcLogSource 
 		entries: () => {
 			const root = registry.rootForSession(session());
 			// Unchanged from the viewer's own source: no resolvable root reads the whole log.
-			return bus.history(root ? { rootId: root.id, sessionFile: ircHistorySessionFile(root) } : undefined);
+			return bus.history(root ? { rootId: root.id, sessionId: ircHistorySessionId(root) } : undefined);
 		},
 		subscribe: listener => bus.onHistory(listener),
 	};
