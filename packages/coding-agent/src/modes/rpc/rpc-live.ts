@@ -5,7 +5,7 @@
  */
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { LiveSessionController, type LiveSessionControllerOptions } from "../../live/controller";
-import { cfgLiveDelegationDelivery, cfgLiveVoice } from "../../live/settings";
+import { cfgLiveDelegationDelivery, cfgLiveHoldMode, cfgLiveQuietFloorMs, cfgLiveVoice } from "../../live/settings";
 import { DEFAULT_LIVE_VOICE } from "../../live/voices";
 import type { AgentSession } from "../../session/agent-session";
 import type { RpcLiveFrame } from "./rpc-types";
@@ -74,6 +74,8 @@ export class RpcLiveBridge {
 			extractAssistantText: extractVisibleAssistantText,
 			voice,
 			delegationDelivery: () => cfgLiveDelegationDelivery.get(this.#session.settings),
+			holdMode: () => cfgLiveHoldMode.get(this.#session.settings),
+			quietFloorMs: () => cfgLiveQuietFloorMs.get(this.#session.settings),
 			callbacks: {
 				onPhase: phase => this.#output({ type: "live_phase", phase }),
 				onLevels: (input, output) => {
