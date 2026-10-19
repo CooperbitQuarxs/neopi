@@ -1,7 +1,7 @@
 import * as url from "node:url";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { BracketedPasteHandler } from "../bracketed-paste";
-import { currentDetachedDraft } from "../draft-scope";
+import { currentDeferredDraft, currentDetachedDraft } from "../draft-scope";
 import { BRACKETED_PASTE_END, BRACKETED_PASTE_START } from "../stdin-buffer";
 import {
 	Editor,
@@ -462,7 +462,16 @@ export type ComposerChipDescriptor =
 export class CustomEditor extends Editor {
 	#spelling = new MacOSSpellingProvider();
 	#wordCompletion = new WordCompletionProvider();
-	imageLinks?: readonly (string | undefined)[];
+	#imageLinks?: readonly (string | undefined)[];
+	get imageLinks(): readonly (string | undefined)[] | undefined {
+		const draft = currentDeferredDraft();
+		return draft ? draft.renderImageLinks : this.#imageLinks;
+	}
+	set imageLinks(links: readonly (string | undefined)[] | undefined) {
+		const draft = currentDeferredDraft();
+		if (draft) draft.renderImageLinks = links;
+		else this.#imageLinks = links;
+	}
 
 	/** Draft images pasted into the composer, consumed on submit. Co-located with
 	 *  {@link imageLinks} so every piece of draft-image state lives on the editor. */
@@ -590,6 +599,28 @@ export class CustomEditor extends Editor {
 		super.setText(text);
 	}
 
+	override getExpandedText(): string {
+		return currentDeferredDraft()?.text ?? super.getExpandedText();
+	}
+
+	override restoreSubmittedDraft(): boolean {
+		return currentDeferredDraft() ? false : super.restoreSubmittedDraft();
+	}
+
+	override clearSubmittedDraft(): void {
+		if (!currentDeferredDraft()) super.clearSubmittedDraft();
+	}
+
+	override clearPasteState(): void {
+		if (!currentDeferredDraft()) super.clearPasteState();
+	}
+
+	override insertPaste(content: string): void {
+		const draft = currentDeferredDraft();
+		if (draft) draft.text += content;
+		else super.insertPaste(content);
+	}
+
 	/** Preserve a canceled draft in local navigation, then clear the composer. */
 	clearDraftForRecall(): void {
 		if (!this.getText().trim()) {
@@ -641,6 +672,10 @@ export class CustomEditor extends Editor {
 	/** Set restored text with image, skill, and model references collapsed into atomic chips.
 	 *  Leaves pending image/text state untouched — callers own that. */
 	setCollapsedText(text: string): void {
+		if (currentDeferredDraft()) {
+			this.setText(text);
+			return;
+		}
 		const register = (label: string, expansion: string) => this.registerAtom(label, expansion);
 		this.setText(
 			collapseModelMentions(
