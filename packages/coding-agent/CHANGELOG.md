@@ -33,6 +33,7 @@
 ### Fixed
 
 - Live mode confirms Iris-only speech delivery before retiring only that utterance, preserving newer composer input, and stopping during a handoff records the delivered speech only once ([#176](https://github.com/PsychedelicShayna/neopi/issues/176)).
+- Role switches and runtime fallbacks now honor their saved effort policies and admitted task scope, ordered subagent selectors retain the chosen source's explicit effort through role expansion, advisor classification stops on cancellation, and concurrent or in-flight fallback edits retain paired effort settings ([#178](https://github.com/PsychedelicShayna/neopi/issues/178)).
 - Model selector assignments save globally unless project scope is explicitly selected, including when project role storage is enabled ([#244](https://github.com/PsychedelicShayna/neopi/issues/244)).
 - Source installs retire managed legacy persona, loadout, and REPL extension links without deleting operator-owned extensions, preventing old hooks from running alongside built-ins ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
 - CI's session/log descriptor-leak check now works with Bun versions that open files close-on-exec by default ([#286](https://github.com/PsychedelicShayna/neopi/issues/286)).
