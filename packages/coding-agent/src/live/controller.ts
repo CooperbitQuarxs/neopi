@@ -259,6 +259,8 @@ export class LiveSessionController {
 	 * open, so the next settle must not repeat an answer the caller already heard.
 	 */
 	#lastRelayedResponse: AgentMessage | undefined;
+	/** Completed response awaiting either the next consumed handoff or the run's settle. */
+	#completedResponse: AssistantMessage | undefined;
 	/** Monotonic voice-handoff generation; the newest survivor owns dispatch. */
 	#delegationGeneration = 0;
 	/** Canonical controller-owned user turns awaiting or undergoing a handoff. */
@@ -487,6 +489,7 @@ export class LiveSessionController {
 		this.#pendingDelegation = undefined;
 		this.#pendingDelivery = undefined;
 		this.#stopped = true;
+		this.#completedResponse = undefined;
 		clearTimeout(this.#outputSilenceTimer);
 		this.#outputSilenceTimer = undefined;
 		clearTimeout(this.#speakableIdleTimer);
@@ -720,6 +723,7 @@ export class LiveSessionController {
 			this.#pendingDelivery = undefined;
 			if (pending.delivery === "interrupt") {
 				this.#activeDelegationId = pending.id;
+				this.#completedResponse = undefined;
 				this.#lastRelayedResponse = undefined;
 				this.#thinkingRelayedLength = 0;
 			}
@@ -788,19 +792,29 @@ export class LiveSessionController {
 	}
 
 	#handleSessionEvent(event: AgentSessionEvent): void {
+		if (event.type === "message_start" && event.message.role === "assistant") {
+			// A provider continuation still belongs to the current handoff, not its prior stop.
+			this.#completedResponse = undefined;
+		}
 		if (
 			event.type === "message_start" &&
 			event.message.role === "custom" &&
 			event.message.customType === LIVE_DELEGATION_MESSAGE_TYPE
 		) {
 			const details = event.message.details as LiveDelegationDetails | undefined;
-			if (details?.noteId) {
-				for (const record of this.#voiceNotes) if (record.noteId === details.noteId) record.consumed = true;
-			}
 			if (details?.delegationId) {
+				// Queue membership cannot predict whether steering or follow-up runs next.
+				// Retire the preceding answer only when this handoff actually takes over.
+				if (this.#completedResponse) {
+					this.#appendFinalResponse([this.#completedResponse], { closeDelegation: true });
+					this.#completedResponse = undefined;
+				}
 				this.#activeDelegationId = details.delegationId;
 				this.#lastRelayedResponse = undefined;
 				this.#thinkingRelayedLength = 0;
+			}
+			if (details?.noteId) {
+				for (const record of this.#voiceNotes) if (record.noteId === details.noteId) record.consumed = true;
 			}
 			return;
 		}
@@ -817,22 +831,8 @@ export class LiveSessionController {
 			if (event.message.stopReason === "toolUse") this.#appendProgress(event.message);
 			return;
 		}
-		if (
-			event.type === "turn_end" &&
-			event.message.role === "assistant" &&
-			event.message.stopReason === "stop" &&
-			this.#session.agent
-				.peekFollowUpQueue()
-				.some(
-					message =>
-						message.role === "custom" &&
-						message.customType === LIVE_DELEGATION_MESSAGE_TYPE &&
-						Boolean((message.details as LiveDelegationDetails | undefined)?.delegationId),
-				)
-		) {
-			// The agent loop consumes follow-ups before agent_end. Speak the preceding task's
-			// answer while its routing id still owns the relay, before the next message starts.
-			this.#appendFinalResponse([event.message], { closeDelegation: true });
+		if (event.type === "turn_end" && event.message.role === "assistant") {
+			this.#completedResponse = event.message.stopReason === "stop" ? event.message : undefined;
 			return;
 		}
 		if (event.type !== "agent_end") return;
@@ -853,6 +853,7 @@ export class LiveSessionController {
 		const { relay, closeDelegation } = classifyRelaySettle(event);
 		if (!relay) return;
 		this.#appendFinalResponse(event.messages, { closeDelegation });
+		this.#completedResponse = undefined;
 	}
 
 	#appendProgress(message: AssistantMessage): void {

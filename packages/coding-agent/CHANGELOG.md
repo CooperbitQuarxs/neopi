@@ -59,6 +59,7 @@
 - Live vocal handoffs steer without cancelling by default, offer queue-for-yield or explicit interrupt delivery, restore queued speech on Esc, and speak the preceding task's answer before a follow-up ([#218](https://github.com/PsychedelicShayna/neopi/issues/218)).
 - Accepted vocal requests stay queued when a typed post-compaction prompt fails, instead of being lost during rollback ([#218](https://github.com/PsychedelicShayna/neopi/issues/218)).
 - Queued vocal steering keeps the current request's reasoning and progress on its original voice route until the new handoff is actually consumed ([#371](https://github.com/PsychedelicShayna/neopi/issues/371)).
+- Rapid vocal handoffs preserve each request's spoken answer and route, even when steering overtakes a follow-up at the active turn's yield boundary ([#374](https://github.com/PsychedelicShayna/neopi/issues/374)).
 - Session discovery keeps listing files whose creation timestamp is missing or malformed ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
 - Live session attachment now negotiates protocol-v2 chunking and respects slow stdout consumers ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
 - Role switches and runtime fallbacks now honor their saved effort policies and admitted task scope, ordered subagent selectors retain the chosen source's explicit effort through role expansion, advisor classification stops on cancellation, and concurrent or in-flight fallback edits retain paired effort settings ([#178](https://github.com/PsychedelicShayna/neopi/issues/178)).
