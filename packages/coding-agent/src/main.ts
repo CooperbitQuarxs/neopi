@@ -2745,6 +2745,7 @@ export async function runRootCommand(
 				session,
 				role: controlRole,
 				subagentEventBus,
+				launchModel: parsedArgs.provider ? undefined : parsedArgs.model,
 				enabled: parsedArgs.noControlSocket !== true && cfgControlEnabled.get(settingsInstance) === true,
 			});
 			if (controlHost && controlRole !== "tui") controlHost.markReady();
