@@ -62,7 +62,8 @@ An invalid creation timestamp falls back to the file's modification time.
 `sessions read` returns `{ "version": 1, "session": { "path": "...", "id": "...",
 "cwd": "...", "title": null }, "messages": [...], "truncated": false }`. Each
 message has `role` (`user` or `assistant`), visible `text`, and an ISO-8601
-`timestamp`. Text blocks are joined with two newlines. Thinking, tools, custom
+`timestamp` (or `null` when the persisted message timestamp is missing or invalid).
+Text blocks are joined with two newlines. Thinking, tools, custom
 entries, and empty visible messages are omitted. The read-only display transcript
 follows the persisted leaf and the latest compaction. `--max-messages N` retains
 the last N visible messages and sets `truncated` when anything was dropped
@@ -96,7 +97,9 @@ frame except the responses to its own hello and subscription. Stdin accepts
 ordinary RPC JSONL, including v2 `rpc_chunk` frames. Stdout remains v1 until a
 successful relayed `negotiate_protocol` response, then uses v2 chunking, just like
 stdio RPC. Request ids and responses pass through unchanged. A blocked stdout
-pauses owner-frame consumption until the consumer drains.
+pauses owner-frame consumption until the consumer drains. A blocked control socket
+pauses stdin consumption, including frames already buffered in the current chunk,
+until the socket drains.
 
 Stdin EOF sends `bye` and exits successfully; it detaches without stopping or
 aborting the owner. Owner socket closure also exits successfully. Resolution or

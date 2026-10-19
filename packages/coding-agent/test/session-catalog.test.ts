@@ -210,6 +210,50 @@ describe("read-only session catalog", () => {
 		expect((await fs.readdir(path.dirname(file))).sort()).toEqual(before);
 		await expect(readSessionCatalog(file, -1)).rejects.toThrow("nonnegative integer");
 	});
+
+	test("read preserves visible messages with missing, malformed, or out-of-range timestamps", async () => {
+		const f = await fixture();
+		const timestamps = [undefined, "not-a-date", null, {}, true, 8_640_000_000_000_001, 0, "2026-06-01T00:00:00.000Z"];
+		const file = await session(
+			path.join(f.root, "isolated"),
+			"bad-message-dates",
+			f.cwd,
+			timestamps.map((timestamp, index) => ({
+				role: "user",
+				content: `message ${index}`,
+				timestamp,
+			})),
+		);
+		const before = await Bun.file(file).text();
+		const result = await readSessionCatalog(file);
+		const expected = timestamps.map((_timestamp, index) => ({
+			entryId: `m${index}`,
+			role: "user",
+			text: `message ${index}`,
+			timestamp: index < 6 ? null : index === 6 ? "1970-01-01T00:00:00.000Z" : "2026-06-01T00:00:00.000Z",
+		}));
+		expect(result.messages).toEqual(expected);
+		expect(result.branchMessages).toEqual(expected);
+		expect(await Bun.file(file).text()).toBe(before);
+	});
+
+	test("pre-tree transcript reads also keep messages with invalid timestamps", async () => {
+		const f = await fixture();
+		const file = path.join(f.root, "legacy.jsonl");
+		await Bun.write(
+			file,
+			[
+				{ type: "session", version: 1, id: "legacy", cwd: f.cwd, timestamp: "2026-06-01T00:00:00.000Z" },
+				{ type: "message", message: { role: "user", content: "missing date" } },
+				{ type: "message", message: { role: "assistant", content: "bad date", timestamp: "not-a-date" } },
+			].map(record => JSON.stringify(record)).join("\n") + "\n",
+		);
+		expect((await readSessionCatalog(file)).messages).toEqual([
+			{ role: "user", text: "missing date", timestamp: null },
+			{ role: "assistant", text: "bad date", timestamp: null },
+		]);
+	});
+
 	test("read exports complete selected ancestry and native messages across compaction without writing", async () => {
 		const f = await fixture();
 		const file = await session(path.join(f.root, "isolated"), "branched", f.cwd, [

@@ -233,10 +233,20 @@ export class ControlClient {
 		return promise;
 	}
 
-	/** Forward a frame without taking ownership of its request id or response. */
-	sendRaw(frame: Record<string, unknown>): void {
+	/** Forward a frame; false means the producer must wait for onDrain before sending more. */
+	sendRaw(frame: Record<string, unknown>): boolean {
 		if (this.#closed || !this.#socket) throw new ControlClientError("closed", "not connected");
-		this.#socket.write(this.#encoder.encode(frame));
+		return this.#socket.write(this.#encoder.encode(frame));
+	}
+
+	/** Observe outbound socket backpressure clearing. Returns an unsubscribe. */
+	onDrain(listener: () => void): () => void {
+		const socket = this.#socket;
+		if (this.#closed || !socket) throw new ControlClientError("closed", "not connected");
+		socket.on("drain", listener);
+		return () => {
+			socket.off("drain", listener);
+		};
 	}
 
 	/** Stop receiving and dispatching frames until the downstream transport drains. */

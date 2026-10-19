@@ -28,7 +28,8 @@ export interface SessionCatalogMessage {
 	entryId?: string;
 	role: "user" | "assistant";
 	text: string;
-	timestamp: string;
+	/** ISO-8601, or null when the persisted message timestamp is missing or invalid. */
+	timestamp: string | null;
 }
 
 export interface SessionCatalogNativeMessage extends SessionCatalogMessage {
@@ -115,6 +116,12 @@ export async function listSessionCatalog(options: SessionCatalogOptions = {}) {
 	return { version: 1 as const, sessions: rows };
 }
 
+function messageTimestamp(value: unknown): string | null {
+	if (typeof value !== "number" && typeof value !== "string") return null;
+	const date = new Date(value);
+	return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
 export async function readSessionCatalog(file: string, maxMessages?: number): Promise<SessionCatalogReadResult> {
 	if (maxMessages !== undefined && (!Number.isSafeInteger(maxMessages) || maxMessages < 0)) {
 		throw new Error("--max-messages must be a nonnegative integer");
@@ -132,7 +139,7 @@ export async function readSessionCatalog(file: string, maxMessages?: number): Pr
 			if (message.role !== "user" && message.role !== "assistant") continue;
 			const text = textContent(message.content, "\n\n");
 			if (!text.trim()) continue;
-			messages.push({ role: message.role, text, timestamp: new Date(message.timestamp).toISOString() });
+			messages.push({ role: message.role, text, timestamp: messageTimestamp(message.timestamp) });
 		}
 		const truncated = maxMessages !== undefined && messages.length > maxMessages;
 		return {
@@ -180,7 +187,7 @@ export async function readSessionCatalog(file: string, maxMessages?: number): Pr
 			entryId: entry.id,
 			role: message.role,
 			text,
-			timestamp: new Date(message.timestamp).toISOString(),
+			timestamp: messageTimestamp(message.timestamp),
 		});
 	}
 	const messages: SessionCatalogNativeMessage[] = [];
@@ -190,7 +197,7 @@ export async function readSessionCatalog(file: string, maxMessages?: number): Pr
 		if (!text.trim()) continue;
 		const entryId = getMessageEntryId(message);
 		if (entryId === undefined) throw new Error("Session transcript message has no native entry identity");
-		messages.push({ entryId, role: message.role, text, timestamp: new Date(message.timestamp).toISOString() });
+		messages.push({ entryId, role: message.role, text, timestamp: messageTimestamp(message.timestamp) });
 	}
 	const truncated = maxMessages !== undefined && messages.length > maxMessages;
 	const branchMessagesTruncated = maxMessages !== undefined && branchMessages.length > maxMessages;
