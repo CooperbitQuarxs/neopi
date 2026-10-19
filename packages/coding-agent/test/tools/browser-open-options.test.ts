@@ -485,77 +485,81 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser open options", () => {
 	}, 20_000);
 
 	// quarantined: flaky in CI, tracked by #295
-	it.skipIf(!!process.env.CI)("saves each tab's downloads into its own downloads directory, also after another tab closes", async () => {
-		let served = 0;
-		const gateReached = Promise.withResolvers<void>();
-		const gateOpened = Promise.withResolvers<void>();
-		const server = Bun.serve({
-			port: 0,
-			async fetch(request) {
-				const url = new URL(request.url);
-				const tab = url.searchParams.get("tab");
-				if (url.pathname === "/gate") {
-					gateReached.resolve();
-					await gateOpened.promise;
-					return new Response("open");
-				}
-				if (url.pathname === "/file") {
-					return new Response(`tab ${tab}, download ${++served}\n`, {
-						headers: {
-							"content-type": "application/octet-stream",
-							"content-disposition": 'attachment; filename="fixture.bin"',
-						},
+	it.skipIf(!!process.env.CI)(
+		"saves each tab's downloads into its own downloads directory, also after another tab closes",
+		async () => {
+			let served = 0;
+			const gateReached = Promise.withResolvers<void>();
+			const gateOpened = Promise.withResolvers<void>();
+			const server = Bun.serve({
+				port: 0,
+				async fetch(request) {
+					const url = new URL(request.url);
+					const tab = url.searchParams.get("tab");
+					if (url.pathname === "/gate") {
+						gateReached.resolve();
+						await gateOpened.promise;
+						return new Response("open");
+					}
+					if (url.pathname === "/file") {
+						return new Response(`tab ${tab}, download ${++served}\n`, {
+							headers: {
+								"content-type": "application/octet-stream",
+								"content-disposition": 'attachment; filename="fixture.bin"',
+							},
+						});
+					}
+					return new Response(`<a id="download" href="/file?tab=${tab}">download</a>`, {
+						headers: { "content-type": "text/html" },
 					});
-				}
-				return new Response(`<a id="download" href="/file?tab=${tab}">download</a>`, {
-					headers: { "content-type": "text/html" },
-				});
-			},
-		});
-		const first = await fs.mkdtemp(path.join(os.tmpdir(), "omp-browser-download-test-"));
-		const second = await fs.mkdtemp(path.join(os.tmpdir(), "omp-browser-download-test-"));
-		tempDirs.push(first, second);
-		try {
-			const invoke = browserHost();
-			const download = async (name: string, beforeClick = "") =>
-				returnedValue(
-					await invoke({
-						action: "run",
-						name,
-						code: [
-							"const pending = tab.waitForDownload({ timeout: 5000 });",
-							beforeClick,
-							"await tab.evaluate(() => document.querySelector('#download').click());",
-							"return await pending;",
-						].join("\n"),
-					}),
-				) as { path: string };
-			const firstTab = `download-${crypto.randomUUID()}`;
-			const secondTab = `download-${crypto.randomUUID()}`;
-			await invoke({ action: "open", name: firstTab, url: `${server.url.href}?tab=first`, downloads: first });
+				},
+			});
+			const first = await fs.mkdtemp(path.join(os.tmpdir(), "omp-browser-download-test-"));
+			const second = await fs.mkdtemp(path.join(os.tmpdir(), "omp-browser-download-test-"));
+			tempDirs.push(first, second);
+			try {
+				const invoke = browserHost();
+				const download = async (name: string, beforeClick = "") =>
+					returnedValue(
+						await invoke({
+							action: "run",
+							name,
+							code: [
+								"const pending = tab.waitForDownload({ timeout: 5000 });",
+								beforeClick,
+								"await tab.evaluate(() => document.querySelector('#download').click());",
+								"return await pending;",
+							].join("\n"),
+						}),
+					) as { path: string };
+				const firstTab = `download-${crypto.randomUUID()}`;
+				const secondTab = `download-${crypto.randomUUID()}`;
+				await invoke({ action: "open", name: firstTab, url: `${server.url.href}?tab=first`, downloads: first });
 
-			// `tab.title()` waits until the first tab's wait has pointed the browser's download folder at its own; the
-			// second tab then opens and points it at its own before the first tab's download starts.
-			const gate = JSON.stringify(`${server.url.href}gate`);
-			const firstDownload = download(firstTab, `await tab.title(); await fetch(${gate});`);
-			await gateReached.promise;
-			await invoke({ action: "open", name: secondTab, url: `${server.url.href}?tab=second`, downloads: second });
-			gateOpened.resolve();
-			expect((await firstDownload).path).toBe(path.join(first, "fixture.bin"));
-			expect(await Bun.file(path.join(first, "fixture.bin")).text()).toBe("tab first, download 1\n");
-			expect(await fs.readdir(second)).toEqual([]);
+				// `tab.title()` waits until the first tab's wait has pointed the browser's download folder at its own; the
+				// second tab then opens and points it at its own before the first tab's download starts.
+				const gate = JSON.stringify(`${server.url.href}gate`);
+				const firstDownload = download(firstTab, `await tab.title(); await fetch(${gate});`);
+				await gateReached.promise;
+				await invoke({ action: "open", name: secondTab, url: `${server.url.href}?tab=second`, downloads: second });
+				gateOpened.resolve();
+				expect((await firstDownload).path).toBe(path.join(first, "fixture.bin"));
+				expect(await Bun.file(path.join(first, "fixture.bin")).text()).toBe("tab first, download 1\n");
+				expect(await fs.readdir(second)).toEqual([]);
 
-			expect((await download(secondTab)).path).toBe(path.join(second, "fixture.bin"));
-			expect(await Bun.file(path.join(second, "fixture.bin")).text()).toBe("tab second, download 2\n");
+				expect((await download(secondTab)).path).toBe(path.join(second, "fixture.bin"));
+				expect(await Bun.file(path.join(second, "fixture.bin")).text()).toBe("tab second, download 2\n");
 
-			await invoke({ action: "close", name: secondTab });
-			expect((await download(firstTab)).path).toBe(path.join(first, "fixture.bin"));
-			expect(await Bun.file(path.join(first, "fixture.bin")).text()).toBe("tab first, download 3\n");
-		} finally {
-			gateOpened.resolve();
-			server.stop(true);
-		}
-	}, 20_000);
+				await invoke({ action: "close", name: secondTab });
+				expect((await download(firstTab)).path).toBe(path.join(first, "fixture.bin"));
+				expect(await Bun.file(path.join(first, "fixture.bin")).text()).toBe("tab first, download 3\n");
+			} finally {
+				gateOpened.resolve();
+				server.stop(true);
+			}
+		},
+		20_000,
+	);
 
 	it("saves a download started inside the tab's iframe into the tab's downloads directory", async () => {
 		const payload = new TextEncoder().encode("download payload\n");
