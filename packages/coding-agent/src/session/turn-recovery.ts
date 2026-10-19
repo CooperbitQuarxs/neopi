@@ -1818,6 +1818,11 @@ export class TurnRecovery {
 		return getRetryFallbackRevertPolicy(this.#host.settings);
 	}
 
+	/** Whether the current turn is running through an armed fallback chain. */
+	get hasActiveRetryFallback(): boolean {
+		return this.#activeRetryFallback !== undefined;
+	}
+
 	/** Clears fallback ownership after an explicit model change or a restore. */
 	clearActiveRetryFallback(): void {
 		this.#activeRetryFallback = undefined;

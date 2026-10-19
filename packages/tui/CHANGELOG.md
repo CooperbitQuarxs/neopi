@@ -4,6 +4,7 @@
 
 ### Added
 
+- Terminal image protocols can switch at runtime, with matching Kitty placeholder support and explicit Sixel passthrough gating ([#302](https://github.com/PsychedelicShayna/neopi/issues/302)).
 - The agent transcript viewer can show pushed, unsaved assistant text and tool progress, and drops its message input when the agent is aborted while open ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
 - The side panel reports right-clicks, clicks on empty panel space, and the pointer leaving it, so hosts can cycle views and drop row hover ([#342](https://github.com/PsychedelicShayna/neopi/issues/342)).
 - Added `/statusline` to toggle, reorder, and move widgets between groups, including provider usage bars, with live composer previews and save or discard ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
@@ -20,6 +21,7 @@
 
 ### Fixed
 
+- Model role assignments default to global storage; saving to the project now requires an explicit scope selection ([#244](https://github.com/PsychedelicShayna/neopi/issues/244)).
 - Persona clones preserve their prompt mode and file source, previews keep tabs inside their pane, and editing pauses during saves so later changes cannot be silently discarded ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
 - Keep the last usage-bar percentages and their age when a broker-backed refresh returns no report.
 - Keep transcript history visible with the side panel docked after compaction, resume, or a layout rebuild, and preserve it as the live conversation grows or the chat width changes.

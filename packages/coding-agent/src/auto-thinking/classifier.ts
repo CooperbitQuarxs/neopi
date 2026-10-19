@@ -24,6 +24,7 @@ import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { ModelRegistry } from "../config/model-registry";
 import { cfgEffortPolicyMode, resolveImplicitEffort } from "../config/effort-policy";
 import effortQuestionInstructions from "../prompts/system/auto-thinking-effort-question.md" with { type: "text" };
+import minimalCriterion from "../prompts/system/auto-thinking-minimal-criterion.md" with { type: "text" };
 import type { Settings } from "../config/settings";
 import { type JudgmentUsage, resolveEffortJudge, resolveJudge, sharedJudgmentCache } from "../judgment";
 import questionFile from "../prompts/judge/auto-thinking.json" with { type: "json" };
@@ -146,9 +147,7 @@ export async function classifyDifficulty(
 		const criteria = Object.fromEntries(
 			candidates.map(effort => [
 				effort,
-				effort === Effort.Minimal
-					? "Simple lookup or mechanical edit requiring the least reasoning."
-					: QUESTIONS.level.criteria[effort as Level],
+				effort === Effort.Minimal ? minimalCriterion.trim() : QUESTIONS.level.criteria[effort as Level],
 			]),
 		) as Record<Effort, string>;
 		const question: ChoiceQuestion = {
