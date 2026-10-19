@@ -38,6 +38,14 @@ Landed 11 Aug 2026 in `cc3819def5`, `2407c059ba`, and `c9ca7ae0a5`.
 
 Agent frontmatter may select the inherited `omp`, `claude`, or `codex` harness identifiers. Claude has an adapter and sidecar. Codex adapter code exists under `task/external-harness/codex.ts`, but `assertExternalHarnessCapabilities` rejects that route because its tool and containment contract cannot be represented exactly. Codex dispatch is present but disabled, not a working feature.
 
+## Terminal image protocol
+
+`/settings` → Appearance → Images → **Terminal Image Protocol** switches terminal image rendering without restarting. The same setting is available at `cfg://terminal.imageProtocol`: `auto` (default), `kitty`, `sixel`, `iterm2`, or `off`.
+
+An explicit setting wins over `PI_FORCE_IMAGE_PROTOCOL`; `auto` uses that environment variable when present and otherwise restores terminal detection and probing. `off` disables new terminal images. Kitty placeholder support follows the effective choice; passing through raw Sixel output still also requires `PI_ALLOW_SIXEL_PASSTHROUGH=1`.
+
+Switching applies from that point forward with a redraw. It does not delete or retransmit images already shown, so earlier images may not render correctly under the new protocol. The setting only controls terminal output: images sent to the model and provider prompt caching are unaffected.
+
 ## Operator commands
 
 Introduced as extensions on 11 Aug 2026 and made built-in commands on 28 Sep 2026. The `extensions/` directory, its installer, and the build and install deployment hooks are gone; state files are unchanged.
