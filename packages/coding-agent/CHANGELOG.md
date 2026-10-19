@@ -5,9 +5,15 @@
 ### Breaking Changes
 
 - Renamed the fork to NeoPi and its executable to `npi`; existing `.omp` configuration and provider compatibility remain unchanged.
+- The Mixture of Agents command is now `/moa`; `/mixture` is no longer a command. Slash-command completion, the command lists sent to ACP and control clients, the usage text, and the pause notice name `/moa`, while `mixture/<name>` model ids, `MIXTURES.toml`, and `moa.*` settings are unchanged ([#366](https://github.com/PsychedelicShayna/neopi/issues/366)).
 
 ### Added
 
+- Added `/defer <duration> <input>` for cancellable delayed composer submissions, including slash commands and ordinary messages; delivery stays with its scheduling conversation across focus changes and asynchronous hooks ([#222](https://github.com/PsychedelicShayna/neopi/issues/222)).
+- Post-processing chain steps can be turned off without deleting them: Space on a step in `/chain configure` toggles it, the setting persists as `enabled: false` in `CHAINS.yml`, and a run skips off steps while keeping the rest in order. Steps saved before this change stay on ([#365](https://github.com/PsychedelicShayna/neopi/issues/365)).
+- Added read-only `npi sessions list/read --json` discovery and `npi ctl pipe` attachment to live sessions for external hosts ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
+- Session exports now include durable message and branch identities so graphical frontends can restore terminal continuations without duplicating history ([#373](https://github.com/PsychedelicShayna/neopi/issues/373)).
+- Added `terminal.imageProtocol` in `/settings` and `cfg://` to switch between automatic detection, Kitty, Sixel, iTerm2, or no terminal images without restarting ([#302](https://github.com/PsychedelicShayna/neopi/issues/302)).
 - Added `/notice <text>` to send a literal, operator-authored system notice as a developer message, including editable pending notices that return to the composer when interrupted ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
 - Added `/monitor` and `npi monitor attach`: a separate tmux session with one live pane per subagent and advisor that shows unsaved output as it streams; you can message subagents from their panes, and advisor panes are view only ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
 - The side panel shows one of three views chosen by chord: `Alt+T` `t` Todo, `Alt+T` `a` Agents (click a subagent to view its transcript, click again to return), `Alt+T` `i` IRC; repeating the shown view's chord hides the panel, right-click in the panel cycles views, and the docked view replaces its duplicate todo or pinned-subagents list above the editor ([#342](https://github.com/PsychedelicShayna/neopi/issues/342)).
@@ -37,6 +43,14 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Control snapshots stay bounded without shortening queue text used to remove or promote pending messages ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
+- Live mode confirms Iris-only speech delivery before retiring only that utterance, preserving newer composer input, and stopping during a handoff records the delivered speech only once ([#176](https://github.com/PsychedelicShayna/neopi/issues/176)).
+- Live vocal handoffs steer without cancelling by default, offer queue-for-yield or explicit interrupt delivery, restore queued speech on Esc, and speak the preceding task's answer before a follow-up ([#218](https://github.com/PsychedelicShayna/neopi/issues/218)).
+- Accepted vocal requests stay queued when a typed post-compaction prompt fails, instead of being lost during rollback ([#218](https://github.com/PsychedelicShayna/neopi/issues/218)).
+- Queued vocal steering keeps the current request's reasoning and progress on its original voice route until the new handoff is actually consumed ([#371](https://github.com/PsychedelicShayna/neopi/issues/371)).
+- Session discovery keeps listing files whose creation timestamp is missing or malformed ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
+- Live session attachment now negotiates protocol-v2 chunking and respects slow stdout consumers ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
+- Role switches and runtime fallbacks now honor their saved effort policies and admitted task scope, ordered subagent selectors retain the chosen source's explicit effort through role expansion, advisor classification stops on cancellation, and concurrent or in-flight fallback edits retain paired effort settings ([#178](https://github.com/PsychedelicShayna/neopi/issues/178)).
 - Model selector assignments save globally unless project scope is explicitly selected, including when project role storage is enabled ([#244](https://github.com/PsychedelicShayna/neopi/issues/244)).
 - Source installs retire managed legacy persona, loadout, and REPL extension links without deleting operator-owned extensions, preventing old hooks from running alongside built-ins ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
 - CI's session/log descriptor-leak check now works with Bun versions that open files close-on-exec by default ([#286](https://github.com/PsychedelicShayna/neopi/issues/286)).

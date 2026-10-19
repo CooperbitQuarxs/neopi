@@ -4,6 +4,8 @@
 
 ### Added
 
+- The chain configurator's chain screen toggles the highlighted step on or off with Space, shows `[x]`/`[ ]` on each step row, and counts only enabled steps in its summaries ([#365](https://github.com/PsychedelicShayna/neopi/issues/365)).
+- Terminal image protocols can switch at runtime, with matching Kitty placeholder support and explicit Sixel passthrough gating ([#302](https://github.com/PsychedelicShayna/neopi/issues/302)).
 - The agent transcript viewer can show pushed, unsaved assistant text and tool progress, and drops its message input when the agent is aborted while open ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
 - The side panel reports right-clicks, clicks on empty panel space, and the pointer leaving it, so hosts can cycle views and drop row hover ([#342](https://github.com/PsychedelicShayna/neopi/issues/342)).
 - Added `/statusline` to toggle, reorder, and move widgets between groups, including provider usage bars, with live composer previews and save or discard ([#227](https://github.com/PsychedelicShayna/neopi/issues/227)).
@@ -35,6 +37,7 @@
 - Tree row-navigation remaps take precedence over the built-in Alt-Up/Down turn shortcuts ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Restored session pickers can switch scopes again, and a navigation attempt keeps delayed history matches from rearranging the list even at a boundary ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Persona, chain, and advisor previews expose their final content line at G/End and page by readable rows rather than counting the overflow status row as content ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Deferred submissions preserve the operator's live speech, newer composer draft, and attachment ownership, and return refused input for editing ([#222](https://github.com/PsychedelicShayna/neopi/issues/222)).
 - Model role assignments default to global storage; saving to the project now requires an explicit scope selection ([#244](https://github.com/PsychedelicShayna/neopi/issues/244)).
 - Persona clones preserve their prompt mode and file source, previews keep tabs inside their pane, and editing pauses during saves so later changes cannot be silently discarded ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
 - Keep the last usage-bar percentages and their age when a broker-backed refresh returns no report.

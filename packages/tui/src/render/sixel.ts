@@ -1,4 +1,5 @@
-import { $env, $flag } from "@oh-my-pi/pi-utils";
+import { $flag } from "@oh-my-pi/pi-utils";
+import { getForcedImageProtocol, ImageProtocol } from "../terminal-capabilities";
 
 const SIXEL_START_REGEX = /\x1bP(?:[0-9;]*)q/u;
 const SIXEL_END_SEQUENCE = "\x1b\\";
@@ -10,12 +11,11 @@ const SIXEL_PLACEHOLDER_PREFIX = "__OMP_SIXEL_SEQUENCE_";
  * Returns whether SIXEL passthrough is explicitly enabled.
  *
  * Both gates must be enabled to preserve SIXEL control sequences:
- * - PI_FORCE_IMAGE_PROTOCOL=sixel
+ * - An explicit Sixel image protocol setting or PI_FORCE_IMAGE_PROTOCOL=sixel
  * - PI_ALLOW_SIXEL_PASSTHROUGH=1
  */
 export function isSixelPassthroughEnabled(): boolean {
-	const forcedProtocol = $env.PI_FORCE_IMAGE_PROTOCOL?.trim().toLowerCase();
-	return forcedProtocol === "sixel" && $flag("PI_ALLOW_SIXEL_PASSTHROUGH");
+	return getForcedImageProtocol() === ImageProtocol.Sixel && $flag("PI_ALLOW_SIXEL_PASSTHROUGH");
 }
 /** Returns true when the text contains a SIXEL start sequence. */
 export function containsSixelSequence(text: string): boolean {

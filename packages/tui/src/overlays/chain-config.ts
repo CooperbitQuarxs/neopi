@@ -5,9 +5,9 @@
  * It mirrors {@link ./advisor-config} one level deeper: the list screen is a
  * two-pane split (clickable chain sidebar on the left, a preview of the
  * highlighted chain's description and ordered steps on the right), a chain
- * detail screen edits the chain's name, description, and step order, and a step
- * detail screen edits one step's name, model, tools, transcript context, system
- * prompt, and prompt.
+ * detail screen edits the chain's name, description, step order, and which steps
+ * are on (Space), and a step detail screen edits one step's name, model, tools,
+ * transcript context, system prompt, and prompt.
  *
  * Every screen is backed by a proven primitive — {@link SelectList} (list /
  * chain / step / tools / thinking), {@link Input} (names and description),
@@ -89,6 +89,11 @@ function commitTools(selected: ReadonlySet<string>, all: readonly string[]): str
 
 function formatStepTools(tools: readonly string[] | undefined): string {
 	return tools && tools.length > 0 ? tools.join(", ") : "no tools";
+}
+
+/** Steps that run; `enabled: false` keeps a step in the chain without running it. */
+function enabledStepCount(chain: ChainConfig): number {
+	return chain.steps.filter(step => step.enabled !== false).length;
 }
 
 /** Soft-wrap plain text to `width`, returning at least one (possibly empty) line. */
@@ -431,12 +436,15 @@ export class ChainConfigOverlayComponent implements Component {
 		const lines = [theme.bold(chain.name || "(unnamed)"), ""];
 		const description = chain.description?.trim();
 		lines.push(...(description ? wrap(description, bodyWidth) : [theme.fg("muted", "(no description)")]));
-		lines.push("", theme.fg("dim", `Steps (${chain.steps.length}):`));
+		const enabled = enabledStepCount(chain);
+		const count = enabled === chain.steps.length ? `${enabled}` : `${enabled} of ${chain.steps.length} on`;
+		lines.push("", theme.fg("dim", `Steps (${count}):`));
 		if (chain.steps.length === 0) {
 			lines.push(theme.fg("muted", "  (none — a chain needs at least one step)"));
 		}
 		for (const [index, step] of chain.steps.entries()) {
-			lines.push(`  ${index + 1}. ${step.name || "(unnamed)"}`);
+			const off = step.enabled === false ? theme.fg("muted", " (off)") : "";
+			lines.push(`  ${index + 1}. ${step.name || "(unnamed)"}${off}`);
 			lines.push(theme.fg("dim", `     ${this.#stepModelLabel(step)} · ${formatStepTools(step.tools)}`));
 			lines.push(theme.fg("muted", `     ${previewLineOrNone(step.prompt)}`));
 		}
@@ -499,7 +507,10 @@ export class ChainConfigOverlayComponent implements Component {
 	}
 
 	#chainSummary(chain: ChainConfig): string {
-		const count = `${chain.steps.length} step${chain.steps.length === 1 ? "" : "s"}`;
+		const total = chain.steps.length;
+		const enabled = enabledStepCount(chain);
+		const noun = `step${total === 1 ? "" : "s"}`;
+		const count = enabled === total ? `${total} ${noun}` : `${enabled} of ${total} ${noun} on`;
 		const description = chain.description?.trim();
 		return description ? `${count} · ${previewLineOrNone(description)}` : count;
 	}
@@ -666,7 +677,7 @@ export class ChainConfigOverlayComponent implements Component {
 		for (const [stepIndex, step] of chain.steps.entries()) {
 			items.push({
 				value: `step:${stepIndex}`,
-				label: `${stepIndex + 1}. ${step.name || "(unnamed)"} — ${this.#stepModelLabel(step)}`,
+				label: `${step.enabled === false ? "[ ]" : "[x]"} ${stepIndex + 1}. ${step.name || "(unnamed)"} — ${this.#stepModelLabel(step)}`,
 				description: `${formatStepTools(step.tools)} · ${previewLineOrNone(step.prompt)}`,
 			});
 		}
@@ -695,6 +706,15 @@ export class ChainConfigOverlayComponent implements Component {
 					this.#moveStep(index, stepIndex, 1);
 					return;
 				}
+				const step = chain.steps[stepIndex];
+				if (step && matchesKey(data, "space")) {
+					// Disabling keeps the prompt, model, and position; the runner skips the step.
+					if (step.enabled === false) delete step.enabled;
+					else step.enabled = false;
+					this.#dirty = true;
+					this.#showChain(index, `step:${stepIndex}`);
+					return;
+				}
 				if (matchesKey(data, "delete") || matchesKey(data, "backspace")) {
 					chain.steps.splice(stepIndex, 1);
 					this.#dirty = true;
@@ -712,7 +732,7 @@ export class ChainConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"chain",
 			list,
-			`Editing "${chain.name}" · Enter / click edit · Alt+↑↓ or [ ] reorder steps · Delete removes a step · Esc back`,
+			`Editing "${chain.name}" · Enter / click edit · Space turns a step on/off · Alt+↑↓ or [ ] reorder steps · Delete removes a step · Esc back`,
 			selectedField,
 		);
 	}

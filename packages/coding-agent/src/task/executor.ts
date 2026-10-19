@@ -4577,6 +4577,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				explicitThinkingLevel,
 				authFallbackUsed,
 				warning: modelResolutionWarning,
+				matchedPattern,
 			} = await awaitAbortable(
 				resolveModelOverrideWithAuthFallback(
 					modelPatterns,
@@ -4640,15 +4641,21 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					: Array.isArray(callerModelSelector)
 						? callerModelSelector
 						: [callerModelSelector];
+			// Role aliases have already expanded in spawn preflight. Recover the source
+			// of the selected pattern, not an effort suffix on an unused alternative.
+			const matchedCallerSelector =
+				!authFallbackUsed && matchedPattern
+					? callerSelectors.find(selector =>
+							resolveConfiguredModelPatterns(selector, settings).includes(matchedPattern),
+						)
+					: undefined;
 			const callerLevel =
 				options.callerThinkingLevel ??
-				callerSelectors
-					.map(selector =>
-						extractExplicitThinkingSelector(selector, undefined, {
+				(matchedCallerSelector
+					? extractExplicitThinkingSelector(matchedCallerSelector, undefined, {
 							isLiteralModelId: (provider, id) => registryHasLiteralModel(modelRegistry, provider, id),
-						}),
-					)
-					.find(level => level !== undefined);
+						})
+					: undefined);
 			const role = modelRole ?? resolveExplicitModelRole(callerModelSelector, settings);
 			const savedRoleSelection = role ? settings.getRoleEffortSelection(role) : undefined;
 			const replacementEffort =

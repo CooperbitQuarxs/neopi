@@ -30,12 +30,19 @@ const deps: ChainConfigDeps = {
 	defaultSystemPrompt: "default",
 };
 
+const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 const ENTER = "\r";
 const ESC = "\x1b";
+const SPACE = " ";
 const CTRL_Q = "\x11";
 const HOME = "\x1b[H";
 const DELETE = "\x1b[3~";
+
+/** Rendered frame text without ANSI styling. */
+function plain(lines: readonly string[]): string {
+	return lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+}
 
 interface Harness {
 	overlay: ChainConfigOverlayComponent;
@@ -267,6 +274,67 @@ describe("ChainConfigOverlayComponent", () => {
 		press(DELETE);
 
 		expect(doc.chains[0]?.steps.map(step => step.name)).toEqual(["Proofread"]);
+	});
+
+	it("toggles only the focused step with Space, keeping its prompt, model, and position", async () => {
+		const doc: ChainsConfigDoc = {
+			chains: [
+				{
+					name: "Polish",
+					steps: [
+						{ name: "Tighten", model: "@smol", prompt: "Cut the slop." },
+						{ name: "Proofread", prompt: "Fix typos only." },
+						{ name: "Format", prompt: "Wrap at 80." },
+					],
+				},
+			],
+		};
+		const { press, saved, overlay } = makeOverlay(doc);
+		const steps = () => doc.chains[0]?.steps ?? [];
+
+		press(ENTER, DOWN, DOWN); // open chain, land on step 1
+		// Space leaves the focus on step 1, so Down reaches step 2, not step 3.
+		press(SPACE, DOWN, SPACE);
+		expect(steps()).toEqual([
+			{ name: "Tighten", model: "@smol", prompt: "Cut the slop.", enabled: false },
+			{ name: "Proofread", prompt: "Fix typos only.", enabled: false },
+			{ name: "Format", prompt: "Wrap at 80." },
+		]);
+		const detail = plain(overlay.render(160));
+		expect(detail).toContain("[ ] 1. Tighten");
+		expect(detail).toContain("[ ] 2. Proofread");
+		expect(detail).toContain("[x] 3. Format");
+
+		press(UP, SPACE); // step 1 back on, unchanged
+		expect(steps()[0]).toEqual({ name: "Tighten", model: "@smol", prompt: "Cut the slop." });
+		expect(Object.hasOwn(steps()[0]!, "enabled")).toBe(false);
+
+		press(ESC); // back to the list; its preview counts enabled steps
+		const list = plain(overlay.render(200));
+		expect(list).toContain("Steps (2 of 3 on):");
+		expect(list).toContain("2. Proofread (off)");
+
+		press(DOWN, DOWN, DOWN, ENTER); // Save & apply
+		await Bun.sleep(0);
+		expect(saved[0]?.chains[0]?.steps).toEqual([
+			{ name: "Tighten", model: "@smol", prompt: "Cut the slop." },
+			{ name: "Proofread", prompt: "Fix typos only.", enabled: false },
+			{ name: "Format", prompt: "Wrap at 80." },
+		]);
+	});
+
+	it("keeps Space literal in the name input and the prompt editor", () => {
+		const doc: ChainsConfigDoc = { chains: [{ name: "Polish", steps: [{ name: "Tighten", prompt: "a" }] }] };
+		const { press } = makeOverlay(doc);
+
+		press(ENTER, ENTER); // open chain, open its Name input
+		press("\x15", "M", "y", SPACE, "c", "h", "a", "i", "n", ENTER);
+		expect(doc.chains[0]?.name).toBe("My chain");
+
+		press(DOWN, DOWN, ENTER); // Name → Description → step 1 detail
+		press(DOWN, DOWN, DOWN, DOWN, DOWN, ENTER); // Prompt editor
+		press(SPACE, "b", CTRL_Q);
+		expect(doc.chains[0]?.steps[0]).toEqual({ name: "Tighten", prompt: "a b" });
 	});
 
 	it("toggles a step's transcript context on and back off", () => {
