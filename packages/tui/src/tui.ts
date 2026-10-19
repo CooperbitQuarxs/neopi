@@ -3620,6 +3620,25 @@ export class TUI extends Container {
 			!destructiveReset &&
 			this.#providerWindow.length > 0;
 		const pushed = diffable ? 0 : Math.max(0, startTop + preparedHistory.lines.length + rows - height);
+		// A full-height dock cannot leave native history above its viewport.
+		// Replace only the rows that will scroll out with the committed chat
+		// rows, then diff against the surviving, shifted screen. Clearing the
+		// entire live region first makes even a two-row append flash the dock.
+		// Graphics and scaled text retain the placement-aware repaint path.
+		const scrollAppend =
+			geometryStable &&
+			!destructiveReset &&
+			!this.#forceViewportRepaintOnNextRender &&
+			history?.kind !== "replay" &&
+			startTop === 0 &&
+			rows === height &&
+			this.#providerWindow.length === height &&
+			historyRows.length > 0 &&
+			historyRows.length < height &&
+			this.#screenImagePlacements.size === 0 &&
+			!this.#providerPreparedRows.some(row => row.isImage || isOsc66Line(row.line)) &&
+			!prepared.rows.some(row => row.isImage || isOsc66Line(row.line)) &&
+			!preparedHistory.rows.some(row => row.isImage || isOsc66Line(row.line));
 		// New history replaces live rows with fresh placement ids before it scrolls.
 		const committedTo = startTop;
 		for (const placement of this.#screenImagePlacements.values()) {
@@ -3631,7 +3650,13 @@ export class TUI extends Container {
 			if (placement.attachTop < 0) placement.archived = true;
 		}
 		for (const sequence of this.#imageBudget.takeTransmits()) append(sequence);
-		if (diffable) {
+		if (diffable || scrollAppend) {
+			if (scrollAppend) {
+				for (let index = 0; index < preparedHistory.lines.length; index++) {
+					buffer += `\x1b[${index + 1};1H${this.#lineRewriteSequence(preparedHistory.rows[index]!, width, index)}`;
+				}
+				buffer += `${LINE_TERMINATOR}\x1b[${pushed}S`;
+			}
 			for (let index = 0; index < rows; index++) {
 				if (
 					!this.#rowNeedsRewrite(
@@ -3640,6 +3665,7 @@ export class TUI extends Container {
 						prepared.lines,
 						prepared.rows,
 						index,
+						index + (scrollAppend ? pushed : 0),
 					)
 				) {
 					continue;
@@ -4312,11 +4338,12 @@ export class TUI extends Container {
 		lines: readonly string[],
 		rows: readonly PreparedLine[],
 		index: number,
+		previousIndex = index,
 	): boolean {
-		const previous = previousRows[index];
+		const previous = previousRows[previousIndex];
 		const current = rows[index]!;
 		return (
-			previousLines[index] !== lines[index] ||
+			previousLines[previousIndex] !== lines[index] ||
 			previous === undefined ||
 			previous.width !== current.width ||
 			previous.widthEpoch !== current.widthEpoch ||

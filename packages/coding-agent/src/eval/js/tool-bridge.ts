@@ -2,6 +2,7 @@ import { type AgentTool, type AgentToolResult, validateAgentToolArguments } from
 import { type ImageContent, toolWireSchema } from "@oh-my-pi/pi-ai";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
+import type { AgentContextTelemetry } from "../../session/agent-telemetry";
 import type { ToolSession } from "../../tools";
 import { committedTodoPhases } from "../../tools/todo";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
@@ -32,6 +33,8 @@ import { EVAL_WORKPOOL_BRIDGE_NAME, type EvalWorkpoolResult, runEvalWorkpool } f
 import type { RuntimeCallIdentity } from "./shared/runtime";
 import type { JsStatusEvent } from "./shared/types";
 
+export const EVAL_INSPECT_BRIDGE_NAME = "__runtime_inspect__";
+
 export type { JsStatusEvent } from "./shared/types";
 
 export interface ToolBridgeOptions {
@@ -44,6 +47,8 @@ export interface ToolBridgeOptions {
 
 type ToolValue =
 	| string
+	| AgentContextTelemetry
+	| null
 	| EvalBudgetResult
 	| EvalAgentHandleResult
 	| EvalCompletionHandleResult
@@ -199,6 +204,10 @@ function waitForSpeculativeClaim<T>(claim: Promise<T>, signal?: AbortSignal): Pr
 }
 
 export async function callSessionTool(name: string, args: unknown, options: ToolBridgeOptions): Promise<ToolValue> {
+	if (name === EVAL_INSPECT_BRIDGE_NAME) {
+		return options.session.getAgentTelemetry?.() ?? null;
+	}
+
 	if (name === "__prelude__") {
 		const request = parsePreludeRequest(args);
 		const toolCallId = `prelude-${request.name}-${crypto.randomUUID()}`;

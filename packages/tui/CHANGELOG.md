@@ -39,6 +39,7 @@
 - Tree row-navigation remaps take precedence over the built-in Alt-Up/Down turn shortcuts ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Restored session pickers can switch scopes again, and a navigation attempt keeps delayed history matches from rearranging the list even at a boundary ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Persona, chain, and advisor previews expose their final content line at G/End and page by readable rows rather than counting the overflow status row as content ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Multi-line transcript appends no longer clear the whole screen with the sidebar open; surviving rows repaint only when changed ([#380](https://github.com/PsychedelicShayna/neopi/issues/380)).
 - IRC replies keep their selected recipient when an earlier send arrives out of order, and expanded messages scroll correctly before repaint ([#1](https://github.com/PsychedelicShayna/neopi/issues/1)).
 - Deferred submissions preserve the operator's live speech, newer composer draft, and attachment ownership, and return refused input for editing ([#222](https://github.com/PsychedelicShayna/neopi/issues/222)).
 - Model role assignments default to global storage; saving to the project now requires an explicit scope selection ([#244](https://github.com/PsychedelicShayna/neopi/issues/244)).

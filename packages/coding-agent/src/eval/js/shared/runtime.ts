@@ -101,6 +101,7 @@ const PRELUDE_GLOBAL_KEYS = [
 	"display",
 	"tool",
 	"completion",
+	"runtime",
 	"output",
 	"agent",
 	"wait",
