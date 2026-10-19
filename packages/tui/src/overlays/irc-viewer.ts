@@ -96,8 +96,7 @@ export class IrcViewerComponent implements Component {
 	#syncSelection(visible: readonly IrcLogEntry[]): void {
 		const anchored = this.#follow ? -1 : visible.findIndex(entry => entry.message.id === this.#selectedId);
 		if (anchored >= 0) this.#selected = anchored;
-		else if (this.#follow || this.#selected >= visible.length)
-			this.#selected = Math.max(0, visible.length - 1);
+		else if (this.#follow || this.#selected >= visible.length) this.#selected = Math.max(0, visible.length - 1);
 		this.#selectedId = visible[this.#selected]?.message.id;
 	}
 
