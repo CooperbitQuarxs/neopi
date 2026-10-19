@@ -130,6 +130,30 @@ describe("on-demand effort classification", () => {
 		expect(system).not.toContain("medium:");
 	});
 
+	it("renders the minimal effort criterion in the provider-facing question", async () => {
+		const target = { ...model, thinking: { mode: "effort" as const, efforts: [Effort.Minimal, Effort.Low] } };
+		const call = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			content: [{ type: "text", text: "minimal" }],
+		} as never);
+		const result = await classifyDifficulty(
+			{ request: "look up a name" },
+			{
+				settings: Settings.isolated({ modelRoles: { effort: "mock/classifier:low" } }),
+				registry: registry(),
+				model: target,
+				allowedEfforts: [Effort.Minimal, Effort.Low],
+			},
+		);
+		expect(result).toBe(Effort.Minimal);
+		expect(call.mock.calls[0]?.[1].systemPrompt?.join("\n")).toContain(
+			"Simple lookup or mechanical edit requiring the least reasoning.",
+		);
+	});
+
 	it("returns a singleton without contacting the classifier", async () => {
 		const call = vi.spyOn(ai, "completeSimple");
 		const effort = await classifyDifficulty(
