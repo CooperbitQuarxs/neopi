@@ -335,6 +335,25 @@ function makeHarness(options?: {
 
 describe("per-utterance delegation keywords", () => {
 	const defaults = () => ({ suppress: "Iris", force: "relay" });
+	it("preserves earlier primary work when a later utterance addresses Iris", async () => {
+		const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the parser" } });
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris, tell me a joke" } });
+			h.fireLive(delegation("mixed-addresses", ""));
+			await settle();
+			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "Here is a joke" } });
+			await settle();
+			expect(h.prompts).toEqual(["fix the parser"]);
+			expect(h.sentSpeech).toEqual(["fix the parser", "Iris, tell me a joke"]);
+			expect(h.sentTurns[0]).toEqual([1]);
+			expect(h.controller.pendingUserTurnCount()).toBe(0);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
 
 	it("refuses leading direct-address handoffs without retiring the canonical utterance", async () => {
 		const h = makeHarness({ delegationKeywords: defaults });

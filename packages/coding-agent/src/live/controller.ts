@@ -499,6 +499,7 @@ export class LiveSessionController {
 					.join("\n\n")
 					.trim(),
 				pending.forced,
+				turns.map(turn => turn.turn),
 			);
 		} else {
 			this.#pendingDelivery?.cancel();
@@ -631,7 +632,11 @@ export class LiveSessionController {
 		if (this.#seenDelegationIds.has(event.item.id)) return;
 		this.#seenDelegationIds.add(event.item.id);
 		const latest = this.#latestUtterance;
-		if (latest && this.#isDirectAddress(latest.text)) {
+		if (latest && this.#isDirectAddress(latest.text) &&
+			!this.#turnsWhere(turn => !turn.blocked && !this.#isDirectAddress(turn.text) && turn.claim === undefined).length) {
+			this.#answeredTurns = this.#turnsWhere(
+				turn => turn.final && this.#isDirectAddress(turn.text) && turn.claim === undefined,
+			).map(turn => turn.turn);
 			const template = operatorTypedMessageTemplate;
 			const labelBytes = Buffer.byteLength(prompt.render(template, { message: "", delegationRejected: true }), "utf8");
 			for (const part of chunkLiveContext(latest.text, CONTEXT_CHUNK_BYTES - labelBytes)) {
@@ -674,6 +679,7 @@ export class LiveSessionController {
 					.join("\n\n")
 					.trim(),
 				previousPending?.forced ?? false,
+				accepted.map(turn => turn.turn),
 			);
 		}
 		this.#pendingDelivery = undefined;
@@ -774,7 +780,7 @@ export class LiveSessionController {
 				this.#lastRelayedResponse = undefined;
 				this.#thinkingRelayedLength = 0;
 			}
-			this.#acceptSpeech(merged, pending.forced);
+			this.#acceptSpeech(merged, pending.forced, turns.map(turn => turn.turn));
 			await delivery.completed;
 		} catch (cause) {
 			// A newer handoff supersedes this continuation; its delivery owns any error.
@@ -832,9 +838,9 @@ export class LiveSessionController {
 		for (const record of this.#voiceNotes) if (record.consumed) this.#voiceNotes.delete(record);
 	}
 
-	#acceptSpeech(text: string, forced: boolean): void {
+	#acceptSpeech(text: string, forced: boolean, turns?: readonly number[]): void {
 		if (!text) return;
-		this.#callbacks.onSpeechSent?.(text);
+		this.#callbacks.onSpeechSent?.(text, this.#userTurns.size > 0 ? turns : undefined);
 		if (forced) this.#queueSend(buildSessionContextAppend("Operator Message Sent To Main Agent", "commentary"));
 	}
 
@@ -1110,7 +1116,10 @@ export class LiveSessionController {
 			.map(turn => turn.text)
 			.join("\n\n")
 			.trim();
-		if (text) this.#callbacks.onSpeechSent?.(text);
+		if (text) this.#callbacks.onSpeechSent?.(
+			text,
+			this.#userTurns.size > turns.length ? turns.map(turn => turn.turn) : undefined,
+		);
 		this.#deleteTurns(turn => turn.claim === undefined && answered.includes(turn.turn));
 	}
 
