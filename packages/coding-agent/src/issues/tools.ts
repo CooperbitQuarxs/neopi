@@ -275,6 +275,8 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 	const cwd = checkout.path;
 	let outcome: IssueFilingOutcome | undefined;
 	let publication: Promise<PublishedIssue> | undefined;
+	// Once GitHub confirms creation, retries may read this issue but never create another.
+	let createdIssueRef: string | undefined;
 	// Set synchronously when issue_existing_owner starts, before it awaits, so a
 	// publish in the same parallel tool batch cannot also file.
 	let ownerClaim: Promise<GhIssueRow> | undefined;
@@ -343,6 +345,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		params: { title: string; body: string; labels: string[]; assignees?: string[]; milestone?: string },
 		signal: AbortSignal | undefined,
 	): Promise<PublishedIssue> => {
+		if (createdIssueRef) return toPublished(await viewIssue(createdIssueRef, undefined));
 		const available = new Set((await listLabels(signal)).map(label => label.name));
 		const unknown = params.labels.filter(label => !available.has(label));
 		if (unknown.length > 0) {
@@ -369,13 +372,19 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		}
 		const url =
 			created?.exitCode === 0 ? created.stdout.split("\n").findLast(line => line.startsWith("https://")) : undefined;
-		if (url) return toPublished(await viewIssue(url, undefined));
+		if (url) {
+			createdIssueRef = url;
+			return toPublished(await viewIssue(url, undefined));
+		}
 		// The create may have reached GitHub even though gh reported failure
 		// (timeout, dropped connection, cancellation mid-request): adopt that
 		// issue instead of filing twice. Unbound from the caller's signal so a
 		// cancellation cannot hide an issue that already exists.
 		const reconciled = await findUncertainCreate(params.title, params.body);
-		if (reconciled) return toPublished(await viewIssue(String(reconciled.number), undefined));
+		if (reconciled) {
+			createdIssueRef = String(reconciled.number);
+			return toPublished(await viewIssue(createdIssueRef, undefined));
+		}
 		if (createError) throw createError;
 		throw new Error(`gh issue create failed: ${created?.stderr || created?.stdout || "no output"}`);
 	};
@@ -506,7 +515,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 					attempt.then(
 						issue => settle({ kind: "published", issue }),
 						() => {
-							// A failed attempt that provably created nothing may be retried.
+							// Retrying a known creation only re-reads its retained reference.
 							if (publication === attempt) publication = undefined;
 						},
 					);
@@ -535,7 +544,8 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 				if (params instanceof type.errors) {
 					throw new Error(`issue_existing_owner received invalid arguments: ${params.summary}`);
 				}
-				if (outcome || publication || ownerClaim) throw new Error("This request already has an outcome.");
+				if (outcome || publication || createdIssueRef || ownerClaim)
+					throw new Error("This request already has an outcome.");
 				const claim = viewIssue(String(params.number), signal);
 				ownerClaim = claim;
 				let owner: GhIssueRow;
@@ -563,7 +573,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		createIssueDeclineTool({
 			onDecline: reason => settle({ kind: "declined", reason }),
 			blocked: () =>
-				outcome || publication || ownerClaim
+				outcome || publication || createdIssueRef || ownerClaim
 					? "This request already has an outcome; it cannot be declined."
 					: undefined,
 		}),

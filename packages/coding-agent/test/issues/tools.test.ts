@@ -285,6 +285,29 @@ describe("issue_publish", () => {
 		expect(outcomes).toEqual([actualPublished]);
 	});
 
+	it("retries only the read after a successful create whose confirmation fails", async () => {
+		const { json, run } = spyDependencies();
+		let reads = 0;
+		json.mockImplementation(async (_cwd, args) => {
+			if (args[0] === "label") return LABELS.map(name => ({ name })) as never;
+			if (args[0] === "issue" && args[1] === "view") {
+				if (++reads === 1) throw new Error("temporary confirmation failure");
+				return ACTUAL_ISSUE as never;
+			}
+			throw new Error("Unexpected GitHub request");
+		});
+		run.mockResolvedValue({ exitCode: 0, stdout: ACTUAL_ISSUE.url, stderr: "" });
+		const { publish, decline, existingOwner, outcomes } = author();
+		await expect(invoke(publish, publishParams())).rejects.toThrow("temporary confirmation failure");
+		await expect(invoke(decline, { reason: "cancel after creation" })).rejects.toThrow("already has an outcome");
+		await expect(
+			invoke(existingOwner, { number: 7, reason: "different owner", draft: "amend instead" }),
+		).rejects.toThrow("already has an outcome");
+		await invoke(publish, publishParams());
+		expect(run).toHaveBeenCalledTimes(1);
+		expect(outcomes).toEqual([actualPublished]);
+	});
+
 	it.each(["nonzero exit", "thrown error"])(
 		"adopts a just-created own issue after %s without creating twice",
 		async failure => {
