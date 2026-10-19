@@ -64,7 +64,8 @@ async function formatChainingStatus(cwd: string): Promise<string> {
 		lines.push("Chains:");
 		for (const chain of chains) {
 			const marker = chain.name === active ? "*" : "-";
-			lines.push(`  ${marker} ${chain.name}: ${chain.steps.map(step => step.name).join(" → ")}`);
+			const steps = chain.steps.map(step => (step.enabled === false ? `${step.name} (off)` : step.name));
+			lines.push(`  ${marker} ${chain.name}: ${steps.join(" → ")}`);
 		}
 	}
 	for (const warning of warnings) lines.push(`Warning: ${warning}`);
