@@ -1673,7 +1673,12 @@ export class CustomEditor extends Editor {
 			this.#speechSpaceAt = undefined;
 			return true;
 		}
-		if (!matchesKey(data, "space")) return false;
+		if (!matchesKey(data, "space")) {
+			// Typing/navigation ends the originating Space gesture. Modifier key-up
+			// events alone do not: the still-held Space may now repeat without Ctrl.
+			if (kitty?.eventType !== KeyEventType.Release) this.#speechSpaceAt = undefined;
+			return false;
+		}
 		if (kitty?.eventType !== KeyEventType.Press) {
 			const now = performance.now();
 			if (this.#speechSpaceAt !== undefined && now - this.#speechSpaceAt <= SPACE_HOLD_RELEASE_MS) {

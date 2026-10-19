@@ -1,4 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { Input } from "../src/components/input";
+import { TUI } from "../src/tui";
+import { VirtualTerminal } from "./virtual-terminal";
 import { CustomEditor } from "../src/prompt/custom-editor";
 import { SPACE_HOLD_RELEASE_MS } from "../src/space-hold";
 import { getEditorTheme, initTheme } from "../src/theme";
@@ -92,4 +95,32 @@ describe("fork-owned Ctrl+Space: xAI priority over configured Space gestures", (
 		editor.handleInput("\x00");
 		expect(xai).toHaveBeenCalledTimes(1);
 	});
+
+	it.each(["\x00", "\x1b[32;5u", "\x1b[27;5;32~"])(
+		"preserves deliberate overlay word separators after %j starts a new typing gesture",
+		chord => {
+			const { editor, xai } = editorWithShortcuts();
+			const terminal = new VirtualTerminal(60, 12);
+			const ui = new TUI(terminal);
+			ui.addChild(editor);
+			ui.setFocus(editor);
+			ui.addInputListener(data => (editor.handleSpeechShortcut(data) ? { consume: true } : undefined));
+			const input = new Input();
+			const overlay = ui.showOverlay(input);
+			try {
+				ui.start();
+				terminal.sendInput(chord);
+				for (const key of ["a", " ", "b"]) {
+					vi.advanceTimersByTime(20);
+					terminal.sendInput(key);
+				}
+				expect(xai).toHaveBeenCalledTimes(1);
+				expect(input.getValue()).toBe("a b");
+				expect(editor.getText()).toBe("Draft");
+			} finally {
+				overlay.hide();
+				ui.stop();
+			}
+		},
+	);
 });
