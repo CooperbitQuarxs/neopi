@@ -7,7 +7,7 @@ and crate vocabulary is routed by [domain.md](../domain.md).
 
 | ADR | Decision | Status |
 | --- | --- | --- |
-| [0001](0001-pr-review-bot-merge-gate.md) | PRs merge only when CI and the latest round from every review bot are clean | accepted |
+| [0001](0001-pr-review-bot-merge-gate.md) | Nightly delivery by integrator confidence; CI/review are information | superseded by owner delivery policy (2026-10-19) |
 
 ## When to write one
 

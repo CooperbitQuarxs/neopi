@@ -95,22 +95,20 @@ estimates remain unchanged, including `frame: years`.
 - Keep only one state per actor. Different actors' states may coexist when
   they describe distinct parts. Started is a claim, not continuous activity or
   a heartbeat; another actor checks the claim before duplicating work.
-- Finished means that actor's part is done, not that the whole issue is accepted
-  or the PR is `mergeable`. Review and CI can still require changes.
+- Finished means that actor's part is done, not that the whole issue is accepted.
+  CI and review are information, not nightly merge gates.
 - `entangled` and `needs-info` issues are not pending work for either actor.
   Record the blocker and existing claim, remove pending labels, and reassess
   eligibility once the choice or information arrives.
 
-## Assign review requirements
+## Optional review
 
-Default: assign `review: codex` to every PR and to issues expected to produce a
-PR, including documentation and workflow changes. The PR author re-checks the
-review policy against the actual diff before requesting a round. A hypothetical
-conditional security policy is not permission to start security passes: this
-repository currently requires CODE review only. The token/login/trigger mapping,
-current-head receipts and review-state lifecycle live in
-[pr-review-bots.md](pr-review-bots.md). Role completion never substitutes for that
-gate or for merge authority.
+Review bots are optional double-checkers, not nightly gates. Assign `review: codex`
+only when choosing the single optional round for a large-blast-radius change
+that could make the harness unusable. [pr-review-bots.md](pr-review-bots.md) owns
+bot mapping and descriptive states. The owner may commission bug hunts against
+`nightly`; they do not gate merges. Actor completion and review labels are
+distinct from the integrator's confidence decision.
 
 ## Closure and daily reconciliation
 

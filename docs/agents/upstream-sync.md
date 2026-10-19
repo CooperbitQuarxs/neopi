@@ -6,13 +6,13 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 
 ## Invariants
 
-- MUST start from freshly fetched `origin/<default>` after every prerequisite PR has merged with checks, build, and runtime proof.
+- MUST start from freshly fetched `origin/nightly`; merge prerequisite PRs first without waiting for CI or review.
 - MUST use the newest upstream release tag, not an arbitrary branch tip.
 - MUST preserve dirty work and local-ahead commits before integration.
 - MUST resolve conflicts personally, sequentially, one file at a time. NEVER delegate conflict resolution.
 - MUST record each resolution in the ledger while resolving it.
 - MUST preserve fork behavior unless upstream satisfies the same observable contract.
-- MUST land through a PR after checks, build, staged installation, and runtime proof pass. NEVER commit or push directly to the default branch.
+- MUST land through a PR under [Nightly delivery](policy.md#nightly-delivery), then build/install and check launch. CI/tests never block integration. NEVER commit or push directly to `nightly` or the default branch.
 - MUST sign every commit with the agent signing key and attribute the actual executing provider/model.
 
 ## 1. Preserve local work
@@ -111,7 +111,7 @@ git verify-commit HEAD
 
 Replace the attribution placeholder with the actual model identity from the running session. Never claim another model performed the work. Put post-merge fixes in separate signed logical commits with a short subject, explanatory body, actual-model attribution trailer, and `git verify-commit` proof for each commit.
 
-Run verification from the integration worktree. At minimum:
+Checks provide information rather than blocking nightly. Delegate any watching to a cheap poller; choose focused checks relevant to the sync and report only what ran. Examples:
 
 ```sh
 bun install --frozen-lockfile
@@ -125,15 +125,15 @@ bun run test:scripts
 packages/coding-agent/dist/npi --smoke-test
 ```
 
-Also run every focused test that covers a conflicted path. Exercise the changed runtime path rather than relying only on tests. Record exact commands, pass counts, failures, and any unavailable check in the ledger's `## Verification` section. Record binary version and smoke evidence under `## Binary`. A failure may be classified as pre-existing only with evidence from the unmodified base or upstream tag.
+Record observed commands, results and unavailable checks in the ledger's `## Verification` section. Note suspected sync-caused failures in the merge note and follow up if they matter. Record post-merge build/install and launch evidence under `## Binary`; owner-decided promotion retains its check requirements.
 
 The built artifact must be `packages/coding-agent/dist/npi`, produced by `./build.sh`. Every upstream version bump invalidates the gitignored native addon in each checkout; `build.sh` detects that and rebuilds it, so never assemble the build from individual `bun run` commands. Source-fork verification and installation never use a remote installer, `bun setup`, a global package install, or a differently named binary.
 
-Before PR merge, stage an installation in a temporary prefix: `NPI_DEST=<prefix>/bin/npi PI_CODING_AGENT_DIR=<prefix>/agent ./install.sh`, then verify the managed links resolve to this checkout. Exercise that installed binary's `--version`, `--smoke-test`, `--help`, and a real prompt (`-p "Reply with exactly: OK"`). Record the observed version, exit statuses, response, and extension result. MUST keep the live installation and profile untouched during this proof.
+After the nightly merge or batch, build and install `npi-nightly` using `AGENTS.md` and check that it launches. A temporary-prefix installation may supply additional evidence without replacing the delivery step. Proof sessions use the bounded destination lock in [policy.md](policy.md#nightly-delivery), releasing promptly; protect the separate default-channel installation and profile.
 
 ## 6. Publish through a PR
 
-Push the integration branch, create a PR targeting the remote default branch, and summarize:
+Push the `sync/<date>` topic branch, create a PR targeting `nightly`, and summarize:
 
 - upstream tag and commits;
 - recovery ref;
@@ -143,7 +143,7 @@ Push the integration branch, create a PR targeting the remote default branch, an
 - checks, focused tests, package suites, build, version, and smoke result;
 - pre-existing failures with base evidence.
 
-Merge only after the local evidence is green and the PR's required checks pass. Preserve the merge commit; do not bypass the PR by pushing the integration directly to the default branch.
+Merge into `nightly` at about 80% integrator confidence (lower acceptable), recording confidence and suspected PR-caused check failures in the merge note; CI/tests and optional review do not block integration. Build/install nightly after the merge or batch and check launch under [policy.md](policy.md#nightly-delivery). The owner alone decides promotion into the default branch. Preserve merge commits and never push either protected branch directly.
 
 ## 7. Realign the main checkout safely
 
@@ -166,4 +166,4 @@ Run that fast-forward path only after preserving dirty work and confirming the m
 
 Never realign a local default branch merely because a similarly named PR exists. Verify the PR incorporated the commit's intended tree changes first. Never delete or overwrite a WIP branch as cleanup for an upstream sync.
 
-Before installing, compare the verified integration tree with `origin/$DEFAULT`. If they differ, build and verify the fetched remote tree in a fresh worktree. Back up the existing `npi` binary, then run `./build.sh && ./install.sh` from the realigned checkout; this also refreshes that checkout's native addon, which otherwise stays at the previous release and fails the next build. MUST verify the installed binary's version, smoke test, help, and a real prompt, plus extension links and startup errors. Restore preserved local-only configuration afterward without overwriting source changes; keep recovery refs. The upstream installer is not part of this source-fork workflow.
+After each nightly merge or batch, use `AGENTS.md`'s `./build.sh` and nightly-destination `install.sh` commands, then check that `npi-nightly` launches. Respect the ten-minute proof hold and release in [policy.md](policy.md#nightly-delivery); preserve local configuration and recovery refs. Additional smoke/version checks are information, not integration prerequisites. Updating the separate `npi` default channel belongs to owner-decided promotion.
