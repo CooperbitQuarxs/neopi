@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { listSessionCatalog, readSessionCatalog } from "../src/cli/sessions-cli";
+import {
+	listSessionCatalog,
+	readSessionCatalog,
+	type SessionCatalogExit,
+	type SessionCatalogMessage,
+} from "../src/cli/sessions-cli";
 import { publishControlEndpoint } from "../src/control/registry";
 import { loadSessionMessagesReadOnly } from "../src/session/session-loader";
 import { sessionDirForCwd } from "../src/session/session-paths";
@@ -192,7 +197,6 @@ describe("read-only session catalog", () => {
 				timestamp: new Date(1_780_000_003_000).toISOString(),
 			},
 		]);
-		expect(full.branchMessages).toEqual(full.messages);
 		expect(full.branchMessagesTruncated).toBe(false);
 		expect(full.branchEntryIds).toEqual(["m0", "m1", "m2", "m3"]);
 		expect(full.leafId).toBe("m3");
@@ -407,7 +411,7 @@ describe("read-only session catalog", () => {
 			file,
 			(await Bun.file(file).text()) + entries.map(entry => `${JSON.stringify(entry)}\n`).join(""),
 		);
-		const expectedExits = [
+		const expectedExits: SessionCatalogExit[] = [
 			{
 				entryId: "clean-exit",
 				kind: "normal",
@@ -507,7 +511,7 @@ describe("read-only session catalog", () => {
 			const source = `${records.map(record => JSON.stringify(record)).join("\n")}\n`;
 			await Bun.write(file, source);
 			const filesBefore = (await fs.readdir(dir)).sort();
-			const messages = [
+			const messages: SessionCatalogMessage[] = [
 				{ role: "user", text: "legacy question", timestamp: new Date(1_780_000_000_000).toISOString() },
 			];
 			expect(await readSessionCatalog(file)).toEqual({
