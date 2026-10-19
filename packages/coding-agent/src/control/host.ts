@@ -9,6 +9,7 @@ import { randomBytes } from "node:crypto";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import { BUILD_INFO } from "../build-info";
+import followUpWarning from "../prompts/control-follow-up-warning.md" with { type: "text" };
 import { lookup } from "../config/registry";
 import { readSetting, unsetSetting, writeSetting } from "./settings-adapter";
 import { RpcPromptResults } from "../modes/rpc/rpc-prompt-results";
@@ -144,6 +145,8 @@ export class ControlHost {
 	readonly #bridges = new Map<ControlConnection, ConnectionBridges>();
 	readonly #openHandles = new Set<string>();
 	readonly #settledHandles = new Set<string>();
+	readonly #followUpWarnedCallers = new Set<string>();
+	readonly #followUpWarnedConnections = new WeakSet<ControlConnection>();
 	#approvalUiOpen = false;
 	#planMode: RpcPlanModeController | undefined;
 	#settleWatcher: RpcSessionSettleWatcher | undefined;
@@ -348,7 +351,7 @@ export class ControlHost {
 			busy: {
 				streaming: session.isStreaming,
 				compacting: session.isCompacting,
-				queued: session.queuedMessageCount,
+				pendingSteerAndFollowUp: session.queuedMessageCount,
 				pendingAsyncWork: session.hasPendingAsyncWork(),
 				settled: !session.isStreaming && session.queuedMessageCount === 0,
 			},
@@ -618,7 +621,19 @@ export class ControlHost {
 
 	async #rpc(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
 		const response = await this.#runRpc(connection, frame);
-		connection.write({ ...response, requestId: response.id });
+		let warning: string | undefined;
+		if (response.command === "follow_up" && response.success && response.data?.userEntryId) {
+			const caller = connection.callerInstanceId;
+			const warned = caller
+				? this.#followUpWarnedCallers.has(caller)
+				: this.#followUpWarnedConnections.has(connection);
+			if (!warned) {
+				if (caller) this.#followUpWarnedCallers.add(caller);
+				else this.#followUpWarnedConnections.add(connection);
+				warning = followUpWarning.trim();
+			}
+		}
+		connection.write({ ...response, requestId: response.id, ...(warning ? { warning } : {}) });
 	}
 
 	/** Run one RPC command for this connection and return its response without writing it. */
