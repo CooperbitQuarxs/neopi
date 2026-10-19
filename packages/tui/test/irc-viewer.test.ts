@@ -248,6 +248,23 @@ describe("IrcViewerComponent", () => {
 			expect(sent).toEqual([["0-Selected", "answer", selected.message.id]]);
 		});
 
+		it("selects the preceding message on Up when an insert shifts the expanded viewport before repaint", () => {
+			const selected = entry("0-Selected", "Captain", Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n"));
+			const earlier = entry("0-Earlier", "Captain", "slow send");
+			const { view, sent } = withReply([selected, entry("0-Later", "Captain", "next")]);
+			view.screen();
+			view.viewer.handleInput("\x1b[H");
+			view.screen();
+			view.viewer.handleInput("\r");
+			view.screen();
+			view.insert(0, earlier);
+			view.viewer.handleInput("\x1b[A");
+			view.viewer.handleInput("r");
+			view.type("answer");
+			view.viewer.handleInput("\r");
+			expect(sent).toEqual([["0-Earlier", "answer", earlier.message.id]]);
+		});
+
 		it("answers the recipient when the selected message is her own", () => {
 			const { view } = withReply([entry("Captain", "0-Beta", "status?")]);
 			view.viewer.handleInput("r");

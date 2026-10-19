@@ -249,6 +249,8 @@ export class IrcViewerComponent implements Component {
 	#scrollWithinSelected(delta: number): boolean {
 		const { start, end } = this.#selectedSpan;
 		if (end - start <= this.#listRows) return false;
+		// Reconcile an insertion-shifted viewport before applying the requested direction.
+		this.#top = Math.max(start, Math.min(this.#top, end - this.#listRows));
 		const next = Math.max(start, Math.min(this.#top + delta, end - this.#listRows));
 		if (next === this.#top) return false;
 		this.#top = next;
