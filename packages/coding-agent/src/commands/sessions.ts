@@ -22,13 +22,16 @@ export default class Sessions extends Command {
 			const { args, flags } = await this.parse(Sessions);
 			if (args.operation === "read" && !args.file) throw new Error("sessions read requires a session file");
 			if (args.operation === "list" && args.file) throw new Error("sessions list does not accept a session file");
-			const result = args.operation === "read"
-				? await readSessionCatalog(args.file!, flags["max-messages"])
-				: await listSessionCatalog({ cwd: flags.cwd, sessionDirs: flags["session-dir"], all: flags.all });
+			const result =
+				args.operation === "read"
+					? await readSessionCatalog(args.file!, flags["max-messages"])
+					: await listSessionCatalog({ cwd: flags.cwd, sessionDirs: flags["session-dir"], all: flags.all });
 			process.stdout.write(`${JSON.stringify(result)}\n`);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			process.stderr.write(`${json ? JSON.stringify({ type: "error", code: "session_catalog_error", message }) : message}\n`);
+			process.stderr.write(
+				`${json ? JSON.stringify({ type: "error", code: "session_catalog_error", message }) : message}\n`,
+			);
 			process.exitCode = 1;
 		}
 	}
