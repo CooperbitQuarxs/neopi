@@ -178,6 +178,7 @@ import type { MnemopiSessionState } from "./mnemopi/state";
 import mcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
+import { trackLiveAdvisors } from "./registry/live-advisors";
 import {
 	type AgentKind,
 	type AgentRef,
@@ -788,6 +789,12 @@ export interface CreateAgentSessionOptions {
 	rules?: Rule[];
 	/** Context files (AGENTS.md content). Default: discovered walking up from cwd */
 	contextFiles?: Array<{ path: string; content: string }>;
+	/**
+	 * Repository root that `cwd` mirrors (task isolation copies). Discovery also loads the
+	 * project context files in this root's ancestor directories, which the copy's own walk
+	 * cannot reach. Ignored when `contextFiles` is supplied.
+	 */
+	contextAncestorRoot?: string;
 	/** Pre-built workspace tree (skips re-scanning; passed by parents to subagents). */
 	workspaceTree?: WorkspaceTree;
 	/** Prompt templates. Default: discovered from cwd/.omp/prompts/ + agentDir/prompts/ */
@@ -1314,11 +1321,13 @@ export async function discoverContextFiles(
 	_agentDir?: string,
 	disabledExtensions?: string[],
 	projectOnly?: boolean,
+	ancestorRoot?: string,
 ): Promise<Array<{ path: string; content: string; depth?: number }>> {
 	return await loadContextFilesInternal({
 		cwd: cwd ?? getProjectDir(),
 		disabledExtensions,
 		projectOnly,
+		ancestorRoot,
 	});
 }
 
@@ -1917,7 +1926,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const contextFilesPromise = options.contextFiles
 		? Promise.resolve(options.contextFiles)
 		: chatKeepsContextFiles
-			? logger.time("discoverContextFiles", discoverContextFiles, cwd, agentDir, undefined, chatMode !== undefined)
+			? logger.time(
+					"discoverContextFiles",
+					discoverContextFiles,
+					cwd,
+					agentDir,
+					undefined,
+					chatMode !== undefined,
+					options.contextAncestorRoot,
+				)
 			: Promise.resolve([]);
 	contextFilesPromise.catch(() => {});
 	const resolveRepoContext = async (repoCwd: string) => {
@@ -2489,6 +2506,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			},
 			skipPythonPreflight: options.skipPythonPreflight,
 			contextFiles,
+			// Discovered sets stay per-session: a child rediscovers at its own cwd so it gets the
+			// current user, ancestor and repository policy for where it runs (issue #334).
+			childContextFiles: options.contextFiles,
+			contextAncestorRoot: options.contextAncestorRoot,
 			get workspaceTree() {
 				return lateWorkspaceTree ?? resolvedWorkspaceTree;
 			},
@@ -4118,6 +4139,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 								agentDir,
 								[...cfgDisabledExtensions.get(settings)],
 								liveChatMode !== undefined,
+								options.contextAncestorRoot,
 							);
 				toolSession.contextFiles = contextFiles;
 				session.setAdvisorContextPrompt(formatAdvisorContextPrompt(contextFiles));
@@ -5502,6 +5524,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			throw new Error(`Agent "${resolvedAgentId}" was replaced during session initialization.`);
 		}
 		hasRegistered = true;
+		// Advisor refs follow the advisor runtimes (running/idle/parked), not just disk discovery.
+		const stopAdvisorTracking = trackLiveAdvisors({ registry: agentRegistry, ownerId: resolvedAgentId, session });
 		// MCP notification bridge cleanup — assigned when the bridge is wired below,
 		// invoked from the dispose wrapper AND registered as a postmortem so both
 		// explicit-dispose (SDK embedders that reuse the process across sessions) and
@@ -5557,6 +5581,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						}
 					}
 					unregisterUnlessParked();
+					stopAdvisorTracking();
 					unsubscribeCredentialDisabled();
 					unbindSessionEffects?.();
 					restoreProviderToggles?.();

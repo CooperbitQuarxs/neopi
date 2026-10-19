@@ -1,6 +1,6 @@
 import { Stack } from "../components/layout/stack";
 import { type KeyId, matchesKey } from "../keys";
-import { routeSgrMouseInput } from "../mouse";
+import { isRightPress, routeSgrMouseInput } from "../mouse";
 import { theme } from "../theme/index";
 import type { Component } from "../tui";
 import { PanelRows } from "./overlay-box";
@@ -10,9 +10,9 @@ import type { SidePanel } from "./side-panel";
 export interface SidePanelFullscreenOptions {
 	/** The same panel instance the dock shows; both forms share sections and scroll. */
 	readonly panel: SidePanel;
-	/** Close request (Escape or a toggle key); the owner hides exactly this overlay. */
+	/** Close request (Escape); the owner hides exactly this overlay. */
 	readonly onClose: () => void;
-	/** Keys bound to `app.sidebar.toggle`; they close the form like Escape. */
+	/** Keys bound to `app.sidebar.toggle`, the view-chord prefix; shown in the footer hint. */
 	readonly toggleKeys: readonly KeyId[];
 	/** Terminal rows available to the form (the overlay has no height input of its own). */
 	readonly rows: () => number;
@@ -43,9 +43,9 @@ export class SidePanelFullscreenComponent implements Component {
 	render(width: number): readonly string[] {
 		const rows = Math.max(3, this.#options.rows());
 		this.#title.setLines([theme.bold(theme.fg("accent", "Side panel"))]);
-		const toggle = this.#options.toggleKeys[0];
-		const close = toggle === undefined ? "esc" : `esc / ${toggle}`;
-		this.#footer.setLines([theme.fg("dim", `${close} close · ↑↓ scroll`)]);
+		const prefix = this.#options.toggleKeys[0];
+		const views = prefix === undefined ? "" : ` · ${prefix} t/a/i view`;
+		this.#footer.setLines([theme.fg("dim", `esc close${views} · right-click cycle · ↑↓ scroll`)]);
 		this.#stack.setHeight(rows);
 		return this.#stack.render(width);
 	}
@@ -53,13 +53,15 @@ export class SidePanelFullscreenComponent implements Component {
 	handleInput(data: string): void {
 		const panel = this.#options.panel;
 		const handledMouse = routeSgrMouseInput(data, event => {
-			const bodyRows = Math.max(1, this.#options.rows()) - 2;
-			// Title and footer rows are consumed; body rows are panel-local after the title.
+			const bodyRows = Math.max(3, this.#options.rows()) - 2;
+			// Title and footer rows have no section target, but still belong to the panel.
 			if (event.row >= 1 && event.row <= bodyRows) panel.routeMouse(event, event.row - 1, event.col);
+			else if (event.motion) panel.pointerLeave();
+			else if (isRightPress(event)) panel.routeMouse(event, -1, event.col);
 			return true;
 		});
 		if (handledMouse) return;
-		if (matchesKey(data, "escape") || this.#options.toggleKeys.some(key => matchesKey(data, key))) {
+		if (matchesKey(data, "escape")) {
 			this.#options.onClose();
 			return;
 		}

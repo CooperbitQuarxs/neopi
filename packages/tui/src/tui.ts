@@ -2440,6 +2440,16 @@ export class TUI extends Container {
 		this.#inputListeners.delete(listener);
 	}
 
+	/** Re-probe automatic image support and redraw without clearing existing terminal images. */
+	refreshImageProtocol(): void {
+		if (!this.#stopped && !this.#inputDeferred) {
+			this.#querySixelSupport();
+			this.#queryCellSize();
+		}
+		this.invalidate();
+		this.requestRender(true);
+	}
+
 	#querySixelSupport(): void {
 		// A statically known protocol (Kitty/iTerm2 terminals) or an explicit
 		// PI_FORCE_IMAGE_PROTOCOL choice — including its `off` kill switch — wins
@@ -2545,7 +2555,7 @@ export class TUI extends Container {
 	}
 
 	#enableSixelProtocol(): void {
-		if (TERMINAL.imageProtocol) return;
+		if (TERMINAL.imageProtocol || isImageProtocolForced()) return;
 
 		setTerminalImageProtocol(ImageProtocol.Sixel);
 		this.#queryCellSize();

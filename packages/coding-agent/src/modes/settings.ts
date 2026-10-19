@@ -8,9 +8,11 @@ import { TREE_FILTER_MODES } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import {
 	CONTEXT_LINE_MODE_VALUES,
 	CUSTOM_STATUS_LINE_DEFAULTS,
+	parseUsageBarSegmentId,
 	STATUS_LINE_PRESET_VALUES,
 	STATUS_LINE_SEGMENT_IDS,
 	STATUS_LINE_SEPARATOR_VALUES,
+	type StatusLineSegmentId,
 } from "@oh-my-pi/pi-tui/status-line/schema";
 import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { setEditorGapComposerShape } from "@oh-my-pi/pi-tui/prompt/editor-top-gap";
@@ -19,6 +21,10 @@ import { WORD_COMPLETION_METHODS } from "@oh-my-pi/pi-tui/prompt/word-completion
 import { applyHyperlinkSetting } from "@oh-my-pi/pi-tui/render/hyperlink";
 import { setInlineImageMaxColumns, setInlineImageMaxRows } from "@oh-my-pi/pi-tui/render/render-utils";
 import { setShimmerMode } from "@oh-my-pi/pi-tui/theme/shimmer";
+import {
+	setTerminalImageProtocolSetting,
+	TERMINAL_IMAGE_PROTOCOL_SETTINGS,
+} from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
 	setAutoThemeMapping,
 	setBrandGlyph,
@@ -322,18 +328,31 @@ export const cfgStatusLineShowHookStatus = register({
 	},
 });
 
+// Array settings infer their value type from the default, not the accepted-item
+// predicate. Preserve the full builtin-or-provider-widget vocabulary here.
+const DEFAULT_LEFT_SEGMENTS: StatusLineSegmentId[] = CUSTOM_STATUS_LINE_DEFAULTS.left;
+const DEFAULT_RIGHT_SEGMENTS: StatusLineSegmentId[] = CUSTOM_STATUS_LINE_DEFAULTS.right;
+
 export const cfgStatusLineLeftSegments = register({
 	id: "statusLine.leftSegments",
 	type: "array",
-	default: CUSTOM_STATUS_LINE_DEFAULTS.left,
-	items: { values: STATUS_LINE_SEGMENT_IDS, label: "status line segment" },
+	default: DEFAULT_LEFT_SEGMENTS,
+	items: {
+		values: STATUS_LINE_SEGMENT_IDS,
+		accepts: value => parseUsageBarSegmentId(value) !== undefined,
+		label: "status line segment",
+	},
 });
 
 export const cfgStatusLineRightSegments = register({
 	id: "statusLine.rightSegments",
 	type: "array",
-	default: CUSTOM_STATUS_LINE_DEFAULTS.right,
-	items: { values: STATUS_LINE_SEGMENT_IDS, label: "status line segment" },
+	default: DEFAULT_RIGHT_SEGMENTS,
+	items: {
+		values: STATUS_LINE_SEGMENT_IDS,
+		accepts: value => parseUsageBarSegmentId(value) !== undefined,
+		label: "status line segment",
+	},
 });
 
 export const cfgStatusLineSegmentOptions = register({
@@ -343,6 +362,20 @@ export const cfgStatusLineSegmentOptions = register({
 });
 
 // Images and terminal
+export const cfgTerminalImageProtocol = register({
+	id: "terminal.imageProtocol",
+	type: "enum",
+	values: TERMINAL_IMAGE_PROTOCOL_SETTINGS,
+	default: "auto",
+	ui: {
+		tab: "appearance",
+		group: "Images",
+		label: "Terminal Image Protocol",
+		description: "Switch image rendering now; Auto uses PI_FORCE_IMAGE_PROTOCOL or terminal detection",
+	},
+});
+effect(cfgTerminalImageProtocol, setTerminalImageProtocolSetting);
+
 export const cfgTerminalShowImages = register({
 	id: "terminal.showImages",
 	type: "boolean",
@@ -677,7 +710,25 @@ export const cfgSidebarEnabled = register({
 		tab: "appearance",
 		group: "Side Panel",
 		label: "Side Panel",
-		description: "Dock a panel beside the chat for the todo list and other live sections",
+		description: "Dock a panel beside the chat showing the todo list, the agent roster, or IRC traffic",
+	},
+});
+
+export const cfgSidebarView = register({
+	id: "sidebar.view",
+	type: "enum",
+	values: ["todo", "agents", "irc"] as const,
+	default: "todo",
+	ui: {
+		tab: "appearance",
+		group: "Side Panel",
+		label: "View",
+		description: "What the panel shows; alt+t then t, a or i picks one, right-click in the panel cycles",
+		options: [
+			{ value: "todo", label: "Todo", description: "The todo list" },
+			{ value: "agents", label: "Agents", description: "This session's subagents and advisors" },
+			{ value: "irc", label: "IRC", description: "Agent-to-agent messages" },
+		],
 	},
 });
 

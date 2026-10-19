@@ -1528,7 +1528,7 @@ export class ModelHubComponent implements Component {
 	#openRoleStrip(item: ModelBrowserItem): void {
 		const chips: StripChip[] = [];
 		const scopedStorage = this.#settings.modelRoleStorage === "project";
-		const scopes: readonly ModelRoleSelectionScope[] = scopedStorage ? ["project", "global"] : ["global"];
+		const scopes: readonly ModelRoleSelectionScope[] = scopedStorage ? ["global", "project"] : ["global"];
 		for (const role of this.#visibleRoleIds()) {
 			const info = this.#settings.getRoleInfo(role);
 			if (!info.accepts(item.model)) continue;
@@ -1577,8 +1577,8 @@ export class ModelHubComponent implements Component {
 
 	#openScopeStrip(item: ModelBrowserItem, role: string, returnToRoles: boolean): void {
 		const chips: StripChip[] = [
-			{ label: "project", styled: theme.fg("accent", "project"), action: "scope", scope: "project" },
-			{ label: "global", styled: theme.fg("muted", "global"), action: "scope", scope: "global" },
+			{ label: "global", styled: theme.fg("accent", "global"), action: "scope", scope: "global" },
+			{ label: "project", styled: theme.fg("muted", "project"), action: "scope", scope: "project" },
 		];
 		this.#strip = { kind: "scope", item, role, chips, index: 0, returnToRoles };
 	}
@@ -3366,7 +3366,7 @@ export class ModelHubComponent implements Component {
 						? `Auto [${policy.allowed.join(", ")}]`
 						: getConfiguredThinkingLevelMetadata(effective).label;
 				if (effective !== ThinkingLevel.Inherit) {
-					levelStyled = theme.fg("dim", glyph ? `${glyph} ${label}` : label);
+					levelStyled = theme.fg(selected ? "accent" : "dim", glyph ? `${glyph} ${label}` : label);
 				}
 			} else if (assignment) {
 				dot = theme.fg("dim", theme.status.shadowed);
@@ -3961,7 +3961,9 @@ export class ModelHubComponent implements Component {
 			if (assignment.thinkingLevel !== ThinkingLevel.Inherit) {
 				const glyph = thinkingLevelGlyph(assignment.thinkingLevel, theme);
 				const levelLabel = getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label;
-				value.push(span(glyph ? `${glyph} ${levelLabel}` : levelLabel, "dim"));
+				value.push(
+					span(glyph ? `${glyph} ${levelLabel}` : levelLabel, index === this.#roleIndex ? "accent" : "dim"),
+				);
 			}
 		} else {
 			label = [span(`${theme.status.shadowed} `, "dim"), span(tag, "dim")];
@@ -4850,7 +4852,7 @@ export class ModelHubComponent implements Component {
 					: [span(chip.label, color)];
 			}
 			case "scope":
-				return [span(chip.label, chip.scope === "project" ? "accent" : "muted")];
+				return [span(chip.label, chip.scope === "global" ? "accent" : "muted")];
 			case "thinking": {
 				const glyph = chip.thinkingLevel === undefined ? "" : thinkingLevelGlyph(chip.thinkingLevel, theme);
 				return glyph ? [span(glyph, "accent"), span(` ${chip.label}`)] : [span(chip.label)];

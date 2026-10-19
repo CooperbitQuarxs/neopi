@@ -442,6 +442,10 @@ export interface ExecutorOptions {
 	/** Parent session whose stored credential affinities seed the child session. */
 	credentialSourceSessionId?: string;
 	worktree?: string;
+	/** Source repository root that the isolation `worktree` mirrors; its ancestors carry workspace policy. */
+	worktreeRepoRoot?: string;
+	/** Parent's `contextAncestorRoot`: set when the parent itself runs in an isolation copy. */
+	contextAncestorRoot?: string;
 	agent: AgentDefinition;
 	task: string;
 	assignment?: string;
@@ -4573,6 +4577,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				explicitThinkingLevel,
 				authFallbackUsed,
 				warning: modelResolutionWarning,
+				matchedPattern,
 			} = await awaitAbortable(
 				resolveModelOverrideWithAuthFallback(
 					modelPatterns,
@@ -4636,15 +4641,21 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					: Array.isArray(callerModelSelector)
 						? callerModelSelector
 						: [callerModelSelector];
+			// Role aliases have already expanded in spawn preflight. Recover the source
+			// of the selected pattern, not an effort suffix on an unused alternative.
+			const matchedCallerSelector =
+				!authFallbackUsed && matchedPattern
+					? callerSelectors.find(selector =>
+							resolveConfiguredModelPatterns(selector, settings).includes(matchedPattern),
+						)
+					: undefined;
 			const callerLevel =
 				options.callerThinkingLevel ??
-				callerSelectors
-					.map(selector =>
-						extractExplicitThinkingSelector(selector, undefined, {
+				(matchedCallerSelector
+					? extractExplicitThinkingSelector(matchedCallerSelector, undefined, {
 							isLiteralModelId: (provider, id) => registryHasLiteralModel(modelRegistry, provider, id),
-						}),
-					)
-					.find(level => level !== undefined);
+						})
+					: undefined);
 			const role = modelRole ?? resolveExplicitModelRole(callerModelSelector, settings);
 			const savedRoleSelection = role ? settings.getRoleEffortSelection(role) : undefined;
 			const replacementEffort =
@@ -4874,9 +4885,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					restrictToolNames: options.restrictToolNames,
 					requireYieldTool: structured,
 					contextFiles: options.contextFiles,
+					// An isolation copy lives in the harness worktree directory, so its own walk never reaches
+					// the workspace files above the source repository; discovery adds them from there. A
+					// parent that is itself a copy hands down the original root, so nesting keeps it.
+					contextAncestorRoot:
+						options.contextAncestorRoot ?? (worktree === undefined ? undefined : options.worktreeRepoRoot),
 					skills: options.skills,
 					promptTemplates: options.promptTemplates,
-					workspaceTree: options.workspaceTree,
+					// The parent's tree (and its nested AGENTS.md list) is rooted at the parent's cwd; an
+					// isolated child scans its own worktree instead of pointing at the parent checkout.
+					workspaceTree: worktree === undefined ? options.workspaceTree : undefined,
 					rules: options.rules,
 					extensionRoots: options.extensionRoots,
 					preloadedExtensionPaths: restrictToolNames ? [] : options.preloadedExtensionPaths,

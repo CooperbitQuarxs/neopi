@@ -80,6 +80,7 @@ export function createGallerySegmentContext(sessionOptions?: GallerySessionOptio
 			pr: { number: 1842, url: "https://github.com/can1357/oh-my-pi/pull/1842" },
 		},
 		worktree: null,
+		usageReports: null,
 		usage: {
 			tier: "Pro",
 			fiveHour: { percent: 32, resetMinutes: 71 },

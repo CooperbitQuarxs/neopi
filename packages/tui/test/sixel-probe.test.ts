@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { ImageProtocol, setTerminalImageProtocol, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
+import { setTerminalImageProtocolSetting } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { VirtualTerminal } from "./virtual-terminal";
 import {
 	createProcessTerminalRenderHarness,
@@ -150,6 +151,36 @@ describe("TUI SIXEL capability probe", () => {
 
 		expect(TERMINAL.imageProtocol).toBe(ImageProtocol.Sixel);
 		tui.stop();
+	});
+
+	it("does not let an in-flight probe override a runtime off setting", () => {
+		const terminal = new VirtualTerminal(80, 24);
+		const tui = startProbe(terminal);
+		try {
+			setTerminalImageProtocolSetting("off");
+			terminal.sendInput(SIXEL_SUPPORTED_REPLY);
+			expect(TERMINAL.imageProtocol).toBeNull();
+		} finally {
+			tui.stop();
+			setTerminalImageProtocolSetting("auto");
+		}
+	});
+
+	it("resumes probing after switching back to auto", () => {
+		const terminal = new VirtualTerminal(80, 24);
+		const tui = startProbe(terminal);
+		try {
+			setTerminalImageProtocolSetting("off");
+			tui.refreshImageProtocol();
+			setTerminalImageProtocolSetting("auto");
+			setTerminalImageProtocol(null);
+			tui.refreshImageProtocol();
+			terminal.sendInput(SIXEL_SUPPORTED_REPLY);
+			expect(TERMINAL.imageProtocol).toBe(ImageProtocol.Sixel);
+		} finally {
+			tui.stop();
+			setTerminalImageProtocolSetting("auto");
+		}
 	});
 
 	it("respects the PI_FORCE_IMAGE_PROTOCOL kill switch", () => {

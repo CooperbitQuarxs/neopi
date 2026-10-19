@@ -102,11 +102,11 @@ export interface RunChainOptions {
 	obfuscator?: SecretObfuscator;
 	/** Skip/abort handle; a private one is used when omitted. */
 	control?: ChainControl;
-	/** Called before each step starts, for progress display. */
+	/** Called before each step starts, for progress display; `index` and `total` count enabled steps only. */
 	onStep?: (step: ChainStep, index: number, total: number) => void;
-	/** Called after a step completes with its output. */
+	/** Called after a step completes with its output; `index` counts enabled steps only. */
 	onStepDone?: (step: ChainStep, index: number, output: string) => void;
-	/** Called when a step was skipped; its input passes to the next step unchanged. */
+	/** Called when a step was skipped; its input passes to the next step unchanged. `index` counts enabled steps only. */
 	onStepSkipped?: (step: ChainStep, index: number) => void;
 }
 
@@ -338,9 +338,15 @@ export async function runChainStep(
 	return hidesSecrets && obfuscator ? obfuscator.deobfuscate(text) : text;
 }
 
+/** The steps of `chain` that run, in configured order; a step with `enabled: false` is left out. */
+export function enabledChainSteps(chain: ChainConfig): ChainStep[] {
+	return chain.steps.filter(step => step.enabled !== false);
+}
+
 /**
- * Pass `text` through every step of `chain` in order and return the last output.
- * A skipped step passes its input through; an aborted chain rejects with
+ * Pass `text` through every enabled step of `chain` in order and return the last output.
+ * Disabled steps never run, so a chain with none enabled returns `text` unchanged, like an
+ * empty chain. A skipped step passes its input through; an aborted chain rejects with
  * `options.control.signal.aborted` set. `runStep` is replaceable for tests.
  */
 export async function runChain(
@@ -350,12 +356,13 @@ export async function runChain(
 	runStep: typeof runChainStep = runChainStep,
 ): Promise<string> {
 	const control = options.control ?? new ChainControl();
+	const steps = enabledChainSteps(chain);
 	let current = text;
-	for (const [index, step] of chain.steps.entries()) {
+	for (const [index, step] of steps.entries()) {
 		control.signal.throwIfAborted();
 		// Before onStep: a skip/abort issued from the callback targets this step.
 		const stepSignal = control.beginStep();
-		options.onStep?.(step, index, chain.steps.length);
+		options.onStep?.(step, index, steps.length);
 		let output: string;
 		try {
 			stepSignal.throwIfAborted();

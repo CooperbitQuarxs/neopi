@@ -150,6 +150,43 @@ describe("runChain control", () => {
 		expect(done).toEqual([["a", "in+a"]]);
 		expect(control.signal.aborted).toBe(false);
 	});
+
+	it("never calls the model for a disabled step and counts only enabled steps", async () => {
+		const fake = fakeStep();
+		const started: Array<[string, number, number]> = [];
+		const steps = chain.steps.map(step => (step.name === "b" ? { ...step, enabled: false } : step));
+		const result = runChain(
+			{ name: "c", steps },
+			"in",
+			{ ...baseOptions, onStep: (step, index, total) => started.push([step.name, index, total]) },
+			fake.run,
+		);
+		await fake.release();
+		await fake.release();
+
+		expect(await result).toBe("in+a+c");
+		expect(fake.calls).toEqual(["a", "c"]);
+		expect(started).toEqual([
+			["a", 0, 2],
+			["c", 1, 2],
+		]);
+	});
+
+	it("returns the draft unchanged without any model call when every step is disabled", async () => {
+		const fake = fakeStep();
+		const started: string[] = [];
+		const steps = chain.steps.map(step => ({ ...step, enabled: false }));
+		const result = await runChain(
+			{ name: "c", steps },
+			"in",
+			{ ...baseOptions, onStep: step => started.push(step.name) },
+			fake.run,
+		);
+
+		expect(result).toBe("in");
+		expect(fake.calls).toEqual([]);
+		expect(started).toEqual([]);
+	});
 });
 
 describe("renderChainInput", () => {

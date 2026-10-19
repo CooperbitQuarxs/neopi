@@ -10,7 +10,6 @@
  */
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import * as fs from "node:fs/promises";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { APP_NAME, logger } from "@oh-my-pi/pi-utils";
 import type {
@@ -27,6 +26,7 @@ import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
 import type { SessionEntry as StoredSessionEntry } from "../session/session-entries";
+import { readTranscriptSlice } from "../session/transcript-slice";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
 import { collabDisplayName } from "./display-name";
@@ -123,7 +123,6 @@ function isWireSessionEntry(entry: StoredSessionEntry): entry is StoredSessionEn
 const CONNECT_TIMEOUT_MS = 15_000;
 /** Max bytes served per fetch-transcript reply (guest re-requests from `newSize`). */
 export const TRANSCRIPT_READ_CAP = 4 * 1024 * 1024;
-const TRANSCRIPT_ENTRY_TOO_LARGE_ERROR = `transcript entry exceeds transcript fetch cap (${TRANSCRIPT_READ_CAP} bytes)`;
 /**
  * Soft byte cap per `snapshot-chunk` frame. The first MB of a snapshot takes
  * ~3s through the default relay, so a 512 KB chunk lands well under the
@@ -1214,34 +1213,9 @@ export class CollabHost {
 			reply("", fromByte, "no transcript available");
 			return;
 		}
-		const file = ref.sessionFile;
 		try {
-			const stat = await fs.stat(file);
-			if (stat.size <= fromByte) {
-				reply("", stat.size);
-				return;
-			}
-			const want = Math.min(stat.size - fromByte, TRANSCRIPT_READ_CAP);
-			const handle = await fs.open(file, "r");
-			let bytesRead: number;
-			const buf = Buffer.allocUnsafe(want);
-			try {
-				({ bytesRead } = await handle.read(buf, 0, want, fromByte));
-			} finally {
-				await handle.close();
-			}
-			let slice = buf.subarray(0, bytesRead);
-			const reachedEof = fromByte + bytesRead >= stat.size;
-			if (!reachedEof) {
-				// Trim to the last complete JSONL line so no line or UTF-8 char is split.
-				const lastNewline = slice.lastIndexOf(0x0a);
-				if (lastNewline < 0) {
-					reply("", fromByte, TRANSCRIPT_ENTRY_TOO_LARGE_ERROR);
-					return;
-				}
-				slice = slice.subarray(0, lastNewline + 1);
-			}
-			reply(slice.toString("utf-8"), reachedEof ? stat.size : fromByte + slice.byteLength);
+			const slice = await readTranscriptSlice(ref.sessionFile, fromByte, TRANSCRIPT_READ_CAP);
+			reply(slice.text, slice.newSize, slice.error);
 		} catch (err) {
 			logger.debug("collab transcript read failed", { agentId, error: String(err) });
 			reply("", fromByte, String(err));
