@@ -5,7 +5,7 @@
  * The user types a path, Tab autocompletes the highlighted directory, and Enter
  * confirms — yielding the resolved directory string (or `undefined` on cancel).
  */
-import { type Component, type Focusable, Key, matchesKey } from "../index";
+import { type Component, type Focusable, Key, matchesKey, truncateToWidth } from "../index";
 import { theme } from "../theme/theme";
 import { applyMenuMotion, MenuKeyReader, MenuViewport, menuScrollBy, type MenuViewportPosition } from "../components/menu-navigation";
 import { formTheme } from "../chrome/form-theme";
@@ -210,7 +210,7 @@ export class MoveOverlay implements Component, Focusable {
 			empty: this.#field.getValue().length > 0 ? [span("No matching directories", "dim")] : undefined,
 			max: { lines: MAX_RESULTS },
 		}, items, "results"), scroll: this.#nativeScroll };
-		const hints = statusHintsRow([span(this.#pathFocused ? "Type path · Tab complete · Esc back to list" : "j/k ↑↓ · Ctrl-u/d · PgUp/Dn · gg/G · Ctrl-e/y · / edit", "dim")]);
+		const hints = statusHintsRow([span(this.#pathFocused ? "Type path · Tab complete · Esc back to list" : "j/k ↑↓ · Ctrl-u/d · PgUp/Dn · gg/G · Ctrl-e/y · / edit", "dim")], []);
 		const actions = actionBar([
 			actionButton("Accept", "accept", { keys: this.#pathFocused ? "tab" : undefined }),
 			this.#pathFocused ? actionButton("Back to list", "back", { keys: "escape" }) : null,

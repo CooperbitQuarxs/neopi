@@ -292,6 +292,8 @@ describe("DebugLogViewerModel", () => {
 			terminalRows: 14, processStartMs: 0, onExit: () => closed++,
 		});
 		viewer.render(100);
+		viewer.handleInput("g");
+		viewer.handleInput("g");
 		viewer.handleInput("j");
 		viewer.handleInput("\x03");
 		expect(copied.at(-1)).toBe("entry-1");

@@ -1277,7 +1277,7 @@ export class AnnotationOverlay implements Focusable {
 					? `j/k line · Shift faster · gg/G ends · Ctrl-u/d half · Ctrl-e/y view · ${formatKeyHint("a")} line note · ${formatKeyHint("shift+a")} ${this.#textSource ? "text" : "file"} note · ${editNote}`
 					: `${upDown} select · ${confirm} confirm`;
 		const editorHint = this.#callbacks.onExternalEditor ? ` · ${formatKeyHint(appExternalEditorKey())} editor` : "";
-		return `${focusHelp} · h/l panes · ${formatKeyHint("u")} undo · ${formatKeyHint("tab")} regions${editorHint} · ${this.#key("tui.select.cancel")} cancel`;
+		return `${focusHelp}${editorHint} · h/l panes · ${formatKeyHint("u")} undo · ${formatKeyHint("tab")} regions · ${this.#key("tui.select.cancel")} cancel`;
 	}
 
 	#ensureCursorVisible(renderedRowBySource: readonly number[]): boolean {

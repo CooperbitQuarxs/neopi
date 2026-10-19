@@ -46,6 +46,12 @@ interface BtwHistoryPanelOptions {
 	spaceHold?: (input: Input) => SpaceHoldHandler;
 	requestRender: () => void;
 	getHeight: () => number;
+	/**
+	 * When true, Esc puts the sheet away (the running answer keeps
+	 * streaming in the background) and `x` cancels it, instead of Esc cancelling
+	 * first. For a host with no inline panel to fall back to (Tern).
+	 */
+	escapeHides?: boolean;
 }
 
 interface FollowUpComposer {
@@ -412,7 +418,6 @@ export class BtwHistoryPanel implements Component, Focusable {
 			composer.notice = draft.notice;
 		}
 		input.onEscape = () => {
-			if (this.#followUpPending) return;
 			this.#drafts.set(record.id, { value: input.getValue(), cursor: input.getCursor(), notice: composer.notice });
 			composer.abortController.abort();
 			this.#composer = undefined;
@@ -515,8 +520,10 @@ export class BtwHistoryPanel implements Component, Focusable {
 			return;
 		}
 		const record = this.#selected();
-		if (matchesKey(data, "x")) {
-			if (record && getBtwLatestTurn(record).status === "running") this.#options.onCancel(record);
+		const running = record !== undefined && getBtwLatestTurn(record).status === "running" ? record : undefined;
+		const hides = this.#options.escapeHides === true;
+		if (hides && matchesKey(data, "x")) {
+			if (running) this.#options.onCancel(running);
 			return;
 		}
 		if (matchesKey(data, "f")) {
@@ -535,7 +542,11 @@ export class BtwHistoryPanel implements Component, Focusable {
 		}
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
-		if (action.kind === "cancel") return this.#options.onClose();
+		if (action.kind === "cancel") {
+			if (running && !hides) this.#options.onCancel(running);
+			else this.#options.onClose();
+			return;
+		}
 		if (action.kind === "search") {
 			this.#focus = "list";
 			this.#search.focused = true;
@@ -788,20 +799,22 @@ export class BtwHistoryPanel implements Component, Focusable {
 		if (this.#composer) {
 			return actionBar([
 				null,
-				actionButton("Back", "back", { keys: "escape" }),
+				actionButton(this.#followUpPending ? "Cancel send" : "Back", "back", { keys: "escape" }),
 				actionButton("Discard draft", "discard"),
 				actionButton(this.#followUpPending ? "Sending…" : "Send", "send", { keys: "enter", tone: "accent" }),
 			]);
 		}
 		const running = record !== undefined && getBtwLatestTurn(record).status === "running";
+		const hides = this.#options.escapeHides === true;
 		const buttons: (NativeNode | null)[] = [];
-		if (running) buttons.push(actionButton("Stop answer", "stop", { keys: "x" }));
+		if (running) buttons.push(actionButton("Stop answer", "stop", { keys: hides ? "x" : "escape" }));
 		if (record && getBtwCopyText(record) !== undefined) {
 			buttons.push(actionButton(copied ? "Copy again" : "Copy answer", "copy", { keys: "c" }));
 			if (copied) buttons.push(text([span("✓ Copied", "success")], { role: "omp.btw.copied" }));
 		}
 		buttons.push(null);
-		buttons.push(actionButton("Close", "close", { keys: "escape" }));
+		// Clicking Close always dismisses the sheet; its tooltip names Esc only where Esc does too.
+		buttons.push(actionButton("Close", "close", running && !hides ? undefined : { keys: "escape" }));
 		if (canFollowUp) buttons.push(actionButton("Follow up", "follow-up", { keys: "f", tone: "accent" }));
 		return actionBar(buttons);
 	}
@@ -980,11 +993,11 @@ export class BtwHistoryPanel implements Component, Focusable {
 		const actions = composer
 			? [
 					keyHint("tui.input.submit", this.#followUpPending ? "starting…" : "send"),
-					keyHint("tui.select.cancel", "back (keep draft)"),
+					keyHint("tui.select.cancel", this.#followUpPending ? "cancel send (keep draft)" : "back (keep draft)"),
 				]
 			: [
-					keyHint("tui.select.cancel", "close"),
-					...(running ? [rawKeyHint("x", "cancel")] : []),
+					keyHint("tui.select.cancel", running && !this.#options.escapeHides ? "cancel answer" : "close"),
+					...(running && this.#options.escapeHides ? [rawKeyHint("x", "cancel")] : []),
 					...(this.#records.length > 1 ? [rawKeyHint(["h", "l", "tab", "ctrl+/"], "switch pane")] : []),
 				];
 		if (!composer) {

@@ -210,7 +210,7 @@ describe("BtwHistoryPanel native events", () => {
 		expect(findNode(described, node => node.key === "composer")).toBeDefined();
 	});
 
-	it("puts a running answer away on Esc without cancelling it; x cancels it", () => {
+	it("without escapeHides, keeps explicit Close separate from Escape's running-answer cancellation", () => {
 		const onClose = vi.fn();
 		const onCancel = vi.fn();
 		const running: BtwHistoryRecord = { ...record("a", "still going"), status: "running" };
@@ -221,6 +221,31 @@ describe("BtwHistoryPanel native events", () => {
 			onCancel,
 			requestRender: () => {},
 			getHeight: () => 30,
+		});
+		history.handleNativeEvent(CLOSE_CLICK);
+		expect(onClose).toHaveBeenCalledTimes(1);
+		expect(onCancel).not.toHaveBeenCalled();
+		history.handleInput("x");
+		expect(onCancel).not.toHaveBeenCalled();
+		history.handleInput("\x1b");
+		expect(onCancel).toHaveBeenCalledWith(running);
+		history.update([{ ...running, status: "cancelled" }]);
+		history.handleInput("\x1b");
+		expect(onClose).toHaveBeenCalledTimes(2);
+	});
+
+	it("with escapeHides, puts a running answer away on Esc without cancelling it; x cancels it", () => {
+		const onClose = vi.fn();
+		const onCancel = vi.fn();
+		const running: BtwHistoryRecord = { ...record("a", "still going"), status: "running" };
+		const history = new BtwHistoryPanel({
+			records: [running],
+			onClose,
+			onCopy: () => {},
+			onCancel,
+			requestRender: () => {},
+			getHeight: () => 30,
+			escapeHides: true,
 		});
 		history.handleInput("\x1b");
 		expect(onClose).toHaveBeenCalledTimes(1);

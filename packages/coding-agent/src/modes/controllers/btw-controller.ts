@@ -521,6 +521,8 @@ export class BtwController {
 			spaceHold: input => this.ctx.dictationSpaceHold(input),
 			requestRender: () => this.ctx.ui.requestRender(),
 			getHeight: () => this.ctx.ui.terminal.rows,
+			// Tern has no inline panel: Esc puts the sheet away, `x` cancels.
+			escapeHides: this.ctx.ui.nativeRendering,
 		});
 		const menu = this.ctx.openMenu("btw-history", () => this.#showHistory(store));
 		if (!menu) return panel;

@@ -907,6 +907,7 @@ describe("AnnotationOverlay", () => {
 			for (let page = 0; page < 8; page++) overlay.handleInput(PAGE_DOWN);
 			expect(render(overlay, 72)).toContain("TAIL_MARKER");
 			overlay.handleInput("g");
+			overlay.handleInput("g");
 			expect(render(overlay, 72)).toContain("START_MARKER");
 			for (let page = 0; page < 8; page++) overlay.handleInput(PAGE_DOWN);
 			expect(render(overlay, 72)).toContain("TAIL_MARKER");

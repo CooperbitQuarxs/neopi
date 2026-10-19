@@ -62,10 +62,6 @@ function makeCtx(session: InteractiveModeContext["session"], btwContainer = new 
 	let leafId: string | null = "leaf-1";
 	let sessionId = "session-1";
 	return {
-		openMenu: () => ({
-			mount: (_component: unknown, show: () => unknown) => { show(); },
-			close: () => true,
-		}),
 		ui: {
 			requestRender: vi.fn(),
 			requestComponentRender: vi.fn(),
@@ -75,6 +71,12 @@ function makeCtx(session: InteractiveModeContext["session"], btwContainer = new 
 		} as unknown as TUI,
 		keybindings: KeybindingsManager.inMemory(),
 		btwContainer,
+		openMenu: () => ({
+			mount: (_component: unknown, show: () => unknown) => {
+				show();
+			},
+			close: () => true,
+		}),
 		session,
 		sessionManager: {
 			getLeafId: () => leafId,
@@ -165,7 +167,7 @@ describe("BtwController", () => {
 		await controller.dispose();
 	});
 
-	it.each([false, true])("history Escape keeps the answer streaming (native=%s)", async nativeRendering => {
+	it("in Tern answers in the BTW history sheet, which Esc puts away while the answer keeps streaming", async () => {
 		const pending = Promise.withResolvers<RunEphemeralTurnResult>();
 		let onTextDelta: ((delta: string) => void) | undefined;
 		const runEphemeralTurn = vi.fn((args: RunEphemeralTurnArgs) => {
@@ -176,7 +178,7 @@ describe("BtwController", () => {
 		const ctx = makeCtx(makeFakeSession(runEphemeralTurn), btwContainer);
 		const hide = vi.fn();
 		const showOverlay = vi.fn((_component: unknown) => ({ hide }));
-		Object.assign(ctx.ui, { nativeRendering, showOverlay });
+		Object.assign(ctx.ui, { nativeRendering: true, showOverlay });
 		const controller = new BtwController(ctx);
 		const sheetAt = (call: number): BtwHistoryPanel => {
 			const sheet = showOverlay.mock.calls[call]?.[0];
@@ -197,7 +199,7 @@ describe("BtwController", () => {
 		};
 
 		await controller.start("Why?");
-		if (!nativeRendering) await controller.start("");
+		// No inline dock panel: Tern clips it, while the sheet body scrolls.
 		expect(btwContainer.children).toHaveLength(0);
 		onTextDelta?.("Because streaming.");
 		expect(answerText(sheetAt(0))).toBeDefined();
@@ -205,11 +207,7 @@ describe("BtwController", () => {
 		sheetAt(0).handleInput("\x1b");
 		expect(hide).toHaveBeenCalledTimes(1);
 		expect(runEphemeralTurn.mock.calls[0]?.[0].signal?.aborted).toBe(false);
-		if (nativeRendering) {
-			expect(ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining("/btw to reopen"), { dim: true });
-		} else {
-			expect(btwContainer.children).toHaveLength(1);
-		}
+		expect(ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining("/btw to reopen"), { dim: true });
 
 		// `/btw` lands back on the answer that kept streaming.
 		await controller.start("");
