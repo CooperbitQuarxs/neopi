@@ -1189,7 +1189,6 @@ export class LiveSessionController {
 	noteComposerActivity(): void {
 		this.#lastComposerWrite = Date.now();
 		this.#holdReleased = false;
-		this.#deferredVoiceDelegation = undefined;
 		this.refreshTurnGate(false);
 		this.#markUserActivity();
 	}

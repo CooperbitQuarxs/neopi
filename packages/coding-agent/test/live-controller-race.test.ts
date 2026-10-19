@@ -332,6 +332,24 @@ function makeHarness(options?: {
 }
 
 describe("operator-owned live floor", () => {
+	for (const update of ["authoritative final", "composer edit"] as const) {
+		it(`retains a prefinal handoff across a quiet-floor ${update}`, async () => {
+			const h = makeHarness({ quietFloorMs: () => 30 });
+			await h.controller.start();
+			try {
+				h.fireLive({ type: "input_transcript.added", item: { text: "fix the cache" } });
+				h.fireLive(delegation("before-final", ""));
+				h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+				if (update === "composer edit") h.controller.noteComposerActivity();
+				await wait(70);
+				await settle();
+				expect(h.prompts).toEqual(["fix the cache"]);
+			} finally {
+				await h.controller.stop();
+			}
+		});
+	}
+
 	it("transmits dictation while remote output is suppressed instead of treating it as audible echo", async () => {
 		const h = makeHarness({ holdMode: () => true });
 		await h.controller.start();
