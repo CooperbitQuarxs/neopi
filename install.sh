@@ -5,6 +5,7 @@
 #   NPI_DEST              install path; its file name must be npi (default ~/.local/bin/npi)
 #   PI_CODING_AGENT_DIR   setting it makes this a staged install: the smoke tests run under a
 #                         throwaway HOME, and the live native cache is left alone.
+#   NPI_INSTALL_FORCE=1   explicitly override an active proof-session lock.
 set -euo pipefail
 
 cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
@@ -16,13 +17,17 @@ die() {
 say() { printf 'install.sh: %s\n' "$*"; }
 # shellcheck source=scripts/npi-build-lib.sh
 source scripts/npi-build-lib.sh
+# shellcheck source=scripts/install-lock.sh
+source scripts/install-lock.sh
+
+dest=$(npi_install_dest)
+# The fork installs only as npi, and `npi update` routing keys on that basename.
+[[ $(basename -- "$dest") == npi ]] || die "install path must be named npi, got $dest"
+npi_install_lock_check "$dest" || exit 1
 
 command -v bun >/dev/null || die "bun is not on PATH"
 
 binary=packages/coding-agent/dist/npi
-dest=$(realpath -ms -- "${NPI_DEST:-$HOME/.local/bin/npi}")
-# The fork installs only as npi, and `npi update` routing keys on that basename.
-[[ $(basename -- "$dest") == npi ]] || die "install path must be named npi, got $dest"
 version=$(bun -p 'require("./packages/coding-agent/package.json").version')
 
 [[ -x $binary && -f $binary.source ]] || die "$binary is missing or was not built by ./build.sh; run ./build.sh"

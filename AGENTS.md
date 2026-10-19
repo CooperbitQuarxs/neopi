@@ -29,6 +29,8 @@ checkout, and only `build.sh` detects and rebuilds it.
 | `npi` | `neopi` | `~/repos/neopi` | `./install.sh` → `~/.local/bin/npi` |
 | `npi-nightly` | `nightly` | `~/repos/neopi-nightly` | `NPI_DEST=~/.local/lib/npi-nightly/npi ./install.sh`; `~/.local/bin/npi-nightly` is a wrapper, `ni` the fish alias |
 
+Install after every merge batch; proof sessions hold a time-bounded [install lock](docs/agents/policy.md#install-after-merge-batches).
+
 - The compiled artifact is `packages/coding-agent/dist/npi`. Source runs use
   `bun run dev` or `bun --cwd=packages/coding-agent src/cli.ts`.
 - The fork's operator commands (`/persona`, `/loadout`, `/repl`, `/kernel`)
