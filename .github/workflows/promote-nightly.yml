@@ -73,10 +73,15 @@ jobs:
                  echo "- [ ] Tested locally (not run: promotion PR)"
                  echo "- [ ] CHANGELOG updated (not applicable: promotion PR)"
               } > "$body"
+              promotion_labels=(--label enhancement --label "human: pending" --label "review: codex")
+              merge_subjects=$(git log --merges --format=%s "origin/$BASE..origin/$SOURCE")
+              sync_branch_pattern='(^|[^[:alnum:]_/-])sync/[^[:space:]]+'
+              if [[ "$merge_subjects" =~ $sync_branch_pattern ]]; then
+                 promotion_labels+=(--label upstream)
+              fi
               url=$(gh pr create --base "$BASE" --head "$branch" \
                  --title "chore(promote): nightly into neopi $date" \
-                 --body-file "$body" --label enhancement \
-                 --label "human: pending" --label "review: codex")
+                 --body-file "$body" "${promotion_labels[@]}")
               number=${url##*/}
               [ -n "$number" ] || { echo "::error::could not determine the promotion PR number"; exit 1; }
               echo "number=$number" >> "$GITHUB_OUTPUT"
