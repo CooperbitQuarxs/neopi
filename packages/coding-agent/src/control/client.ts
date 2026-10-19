@@ -65,6 +65,8 @@ export class ControlClient {
 	readonly #events: Array<(frame: Record<string, unknown>) => void> = [];
 	#socket: net.Socket | undefined;
 	#buffer = "";
+	#framesPaused = false;
+	#drainFrames: (() => void) | undefined;
 	#seq = 0;
 	#closed = false;
 	connectionId = "";
@@ -93,10 +95,9 @@ export class ControlClient {
 		// leaves its writable half open with a request still pending.
 		socket.once("end", () => socket.destroy());
 		socket.setEncoding("utf8");
-		socket.on("data", (chunk: string) => {
-			this.#buffer += chunk;
+		const drainFrames = () => {
 			let newline = this.#buffer.indexOf("\n");
-			while (newline >= 0) {
+			while (!this.#framesPaused && newline >= 0) {
 				const line = this.#buffer.slice(0, newline).trim();
 				this.#buffer = this.#buffer.slice(newline + 1);
 				newline = this.#buffer.indexOf("\n");
@@ -146,6 +147,11 @@ export class ControlClient {
 				this.#options.onFrame?.(frame);
 				this.#dispatch(frame);
 			}
+		};
+		this.#drainFrames = drainFrames;
+		socket.on("data", (chunk: string) => {
+			this.#buffer += chunk;
+			drainFrames();
 		});
 		socket.once("close", () => {
 			clearTimeout(timer);
@@ -231,6 +237,19 @@ export class ControlClient {
 	sendRaw(frame: Record<string, unknown>): void {
 		if (this.#closed || !this.#socket) throw new ControlClientError("closed", "not connected");
 		this.#socket.write(this.#encoder.encode(frame));
+	}
+
+	/** Stop receiving and dispatching frames until the downstream transport drains. */
+	pauseFrames(): void {
+		this.#framesPaused = true;
+		this.#socket?.pause();
+	}
+
+	resumeFrames(): void {
+		if (!this.#framesPaused) return;
+		this.#framesPaused = false;
+		this.#drainFrames?.();
+		if (!this.#framesPaused) this.#socket?.resume();
 	}
 
 	/** Flush a polite detach without terminating the owner or dropping the bye frame. */

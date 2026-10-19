@@ -33,6 +33,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Live session attachment now negotiates protocol-v2 chunking and respects slow stdout consumers ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
 - Source installs retire managed legacy persona, loadout, and REPL extension links without deleting operator-owned extensions, preventing old hooks from running alongside built-ins ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
 - CI's session/log descriptor-leak check now works with Bun versions that open files close-on-exec by default ([#286](https://github.com/PsychedelicShayna/neopi/issues/286)).
 - Saved images in Agent Hub transcripts of advisors and aborted agents, and in `/monitor` panes, now render as images instead of a wrong-size `[Image: … 800x600]` placeholder ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).

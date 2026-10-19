@@ -70,11 +70,13 @@ With `--json`, errors are a single stderr JSON line with `type: "error"`,
 `ctl pipe` accepts the same selectors as other ctl operations. It verifies the
 challenge, authenticates, and subscribes to all session events. Stdout starts
 with the owner's `ready` frame, carrying `protocolVersion: 1`,
-`supportedProtocolVersions: [1, 2]`, and `control_v1`. It relays every subsequent
+`supportedProtocolVersions: [1, 2]`, the same `maxFrameBytes` and
+`maxReassembledFrameBytes` limits as stdio RPC, and `control_v1`. It relays every subsequent
 frame except the responses to its own hello and subscription. Stdin accepts
 ordinary RPC JSONL, including v2 `rpc_chunk` frames. Stdout remains v1 until a
 successful relayed `negotiate_protocol` response, then uses v2 chunking, just like
-stdio RPC. Request ids and responses pass through unchanged.
+stdio RPC. Request ids and responses pass through unchanged. A blocked stdout
+pauses owner-frame consumption until the consumer drains.
 
 Stdin EOF sends `bye` and exits successfully; it detaches without stopping or
 aborting the owner. Owner socket closure also exits successfully. Resolution or

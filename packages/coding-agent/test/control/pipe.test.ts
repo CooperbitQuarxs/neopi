@@ -2,13 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import { ctlPipe } from "../../src/cli/ctl-pipe";
 import { HostBudget } from "../../src/control/budget";
 import { ControlClient } from "../../src/control/client";
 import { publishControlEndpoint, type ControlPublication } from "../../src/control/registry";
 import { ControlServer, type ControlConnection, type ControlConnectionHost } from "../../src/control/server";
 import type { ControlSnapshot } from "../../src/control/types";
+import { supportsRpcProtocolV2 } from "../../src/modes/rpc/rpc-client";
 import { MAX_RPC_FRAME_BYTES, RpcFrameDecoder, RpcFrameEncoder } from "../../src/modes/rpc/rpc-frame";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -146,11 +147,13 @@ describe("ctl pipe", () => {
 			"echo",
 		]);
 		expect(frames[0]).toMatchObject({
+			maxFrameBytes: MAX_RPC_FRAME_BYTES,
 			protocolVersion: 1,
 			supportedProtocolVersions: [1, 2],
 			capabilities: ["control_v1"],
 		});
 		expect(frames[1]).toMatchObject({ id: "n", success: true });
+		expect(supportsRpcProtocolV2(frames[0])).toBe(true);
 		expect(frames[2]).toMatchObject({ id: "echo", success: true, data: payload });
 		expect(physical.some(frame => frame.type === "rpc_chunk")).toBe(true);
 		expect(f.commands[0]).toMatchObject({ type: "subscribe", events: "all" });
@@ -163,6 +166,42 @@ describe("ctl pipe", () => {
 		} finally {
 			client.close();
 		}
+	});
+
+	test("slow output bounds queued frames until the consumer drains", async () => {
+		const f = await fixture();
+		const input = new PassThrough();
+		const frames: Record<string, unknown>[] = [];
+		const first = Promise.withResolvers<void>();
+		let release: (() => void) | undefined;
+		const output = new Writable({
+			highWaterMark: 1,
+			write(chunk, _encoding, callback) {
+				const frame = JSON.parse(chunk.toString()) as Record<string, unknown>;
+				frames.push(frame);
+				if (frames.length === 2) {
+					release = callback;
+					first.resolve();
+				} else {
+					callback();
+					if (frame.id === "last") input.end();
+				}
+			},
+		});
+		for (let i = 0; i < 20; i++)
+			input.write(`${JSON.stringify({ type: "echo", id: i === 19 ? "last" : String(i) })}\n`);
+		const result = ctlPipe(f.instanceId, { registry: { dir: f.dir }, input, output });
+		await first.promise;
+		await Bun.sleep(50);
+		expect(frames.map(frame => frame.type)).toEqual(["ready", "response"]);
+		expect(output.writableLength).toBe(Buffer.byteLength(JSON.stringify(frames[1])) + 1);
+		release!();
+		expect(await result).toBe(0);
+		expect(frames.slice(1).map(frame => frame.id)).toEqual([
+			...Array.from({ length: 19 }, (_, i) => String(i)),
+			"last",
+		]);
+		output.destroy();
 	});
 
 	test("owner socket closure ends the pipe even with stdin still open", async () => {
