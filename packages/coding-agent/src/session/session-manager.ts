@@ -43,7 +43,12 @@ import {
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import { createInterruptedToolResults, sessionExitFollowsLastMessage } from "./exit-diagnostics";
 import type { RetryFallbackRole } from "./retry-fallback-chains";
-import { type BuildSessionContextOptions, buildSessionContext, type SessionContext } from "./session-context";
+import {
+	type BuildSessionContextOptions,
+	buildSessionContext,
+	type SessionContext,
+	walkSessionBranch,
+} from "./session-context";
 import {
 	type BranchSummaryEntry,
 	type CompactionEntry,
@@ -668,21 +673,7 @@ class SessionEntryIndex {
 	}
 
 	#walk(leaf: string | null): SessionEntry[] {
-		const branch: SessionEntry[] = [];
-		// Per-path visited set: a corrupt cyclic parentId chain must stop at
-		// the FIRST repeated id (a bare depth cap of `size` still duplicates
-		// entries when unrelated entries inflate the index — e.g. a self-cycle
-		// plus one unrelated entry yields [entry, entry]).
-		const seen = new Set<string>();
-		let cursor = leaf ? this.#entriesById.get(leaf) : undefined;
-
-		while (cursor && !seen.has(cursor.id)) {
-			seen.add(cursor.id);
-			branch.push(cursor);
-			cursor = cursor.parentId ? this.#entriesById.get(cursor.parentId) : undefined;
-		}
-		branch.reverse();
-		return branch;
+		return walkSessionBranch(leaf, this.#entriesById);
 	}
 
 	tree(entries: readonly SessionEntry[]): SessionTreeNode[] {
