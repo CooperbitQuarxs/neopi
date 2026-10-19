@@ -379,6 +379,8 @@ export class InputController {
 			// These actions target the main transcript/editor rather than the
 			// focused prompt. Keep focused components' own bindings authoritative.
 			this.ctx.ui.addInputListener(data => {
+				// Reserved accessibility input always targets the main composer, even under a modal.
+				if (this.ctx.editor.handleSpeechShortcut?.(data)) return { consume: true };
 				const chordView = this.#takeSidebarChord(data);
 				if (chordView === "cancel") return { consume: true };
 				if (chordView !== undefined) {

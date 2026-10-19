@@ -8012,10 +8012,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	// =====================================================================
 	/** Ctrl+Space owns an independent, whole-recording xAI path. */
 	async handleSTTToggle(): Promise<void> {
-		if (this.#sttController && this.#sttController.state !== "idle") {
-			this.showWarning("Finish configured dictation before recording xAI speech input.");
-			return;
+		// Retire the configured controller, even when dependency setup still reports idle.
+		// Its late callbacks must never regain the composer after this handoff.
+		this.editor.spaceHold.cancel();
+		try {
+			this.#sttController?.dispose();
+		} catch (error) {
+			logger.warn("Configured dictation cleanup failed during xAI takeover", { error: String(error) });
 		}
+		this.#sttController = undefined;
 		// IMMUTABLE: see Ctrl+Space notice above
 		this.#xaiSttController ??= new XaiSTTController({
 			settings: this.settings,
@@ -8087,6 +8092,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				} else if (state === "transcribing") {
 					this.#micCursor?.showTranscribing();
 				} else {
+					target.spaceHold?.cancel();
 					this.#micCursor?.dispose();
 					this.#micCursor = undefined;
 				}
