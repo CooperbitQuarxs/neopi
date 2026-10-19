@@ -25,6 +25,7 @@ import {
 import { Container, type Component } from "@oh-my-pi/pi-tui/tui";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { __resetDirsFromEnvForTests } from "@oh-my-pi/pi-utils";
+import type { LiveClientMessage, LiveServerEvent } from "@oh-my-pi/pi-coding-agent/live/protocol";
 
 interface Harness {
 	ctx: InteractiveModeContext;
@@ -143,6 +144,61 @@ afterEach(() => {
 });
 
 describe("LiveCommandController", () => {
+	for (const mode of ["edited address", "typed request"] as const) {
+		it(`submits an authoritative ${mode} even without an ordinary speech-ledger turn`, async () => {
+			const prompts: string[] = [];
+			const sent: LiveClientMessage[] = [];
+			let live: LiveSessionController | undefined;
+			let fire: ((event: LiveServerEvent) => void) | undefined;
+			const h = createHarness(options => {
+				live = new LiveSessionController({
+					...options,
+					createTransport: transportOptions => {
+						fire = transportOptions.callbacks.onEvent;
+						return {
+							async connect() {},
+							async send(message: LiveClientMessage) { sent.push(message); },
+							async close() {},
+							async setMuted() {},
+							setOutputSuppressed() {},
+							pushAudio: () => true,
+						};
+					},
+					createRecorder: () => ({ stop() {} }),
+				});
+				return live;
+			});
+			cfgLiveHoldMode.set(h.ctx.settings, true);
+			Object.assign(h.ctx.session, {
+				sessionId: `authoritative-composer-${mode}`,
+				modelRegistry: { authStorage: {} },
+				sessionManager: { allocateArtifactPath: async () => ({}) },
+				agent: { peekFollowUpQueue: () => [] },
+				sendCustomMessageWithReceipt(message: { content: string }) {
+					prompts.push(message.content);
+					return { accepted: Promise.resolve(), completed: Promise.resolve(true), cancel: () => false };
+				},
+			});
+			await h.controller.handleCommand();
+			try {
+				const original = mode === "edited address" ? "Iris, fix the parser" : "Iris, tell me a joke";
+				fire?.({ type: "turn.done", turn: { role: "user", transcript: original } });
+				h.editor.setText(mode === "edited address" ? "fix the parser" : `${h.editor.getText()}\n\nfix the parser`);
+				expect(live?.forceDelegateComposer(h.editor.getText())).toBe(true);
+				for (let i = 0; i < 80; i++) await Promise.resolve();
+				expect(prompts).toEqual(["fix the parser"]);
+				expect(h.editor.getText().trim()).toBe("");
+				if (mode === "edited address") {
+					expect(sent.filter(message => "content" in message)
+						.flatMap(message => message.content.map(item => item.text)).join("\n")).not.toContain(original);
+				}
+				expect(live?.pendingUserTurnCount()).toBe(0);
+			} finally {
+				await h.controller.stop();
+			}
+		});
+	}
+
 	it("forwards configurable per-utterance keywords without restarting the call", async () => {
 		const h = createHarness();
 		await h.controller.handleCommand();
