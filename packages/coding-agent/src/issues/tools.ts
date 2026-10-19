@@ -60,6 +60,11 @@ export interface CreatedIssue {
 	url: string;
 }
 
+/** A write attempt stays uncertain until GitHub identifies the created issue. */
+export type IssuePublicationState =
+	| { kind: "uncertain"; repo: string; title: string }
+	| { kind: "created"; issue: CreatedIssue };
+
 /** An existing issue the author reported as the owner instead of publishing. */
 export interface ExistingIssueOwner {
 	repo: string;
@@ -74,6 +79,7 @@ export interface ExistingIssueOwner {
 export type IssueFilingOutcome =
 	| { kind: "published"; issue: PublishedIssue }
 	| { kind: "published-unread"; issue: CreatedIssue }
+	| { kind: "publication-uncertain"; repo: string; title: string }
 	| { kind: "existing-owner"; owner: ExistingIssueOwner }
 	| { kind: "declined"; reason: string };
 
@@ -269,15 +275,15 @@ export interface IssueAuthorToolOptions {
 	/** Epoch ms the request started; bounds the reconciliation of an uncertain create. */
 	startedAt: number;
 	onOutcome: (outcome: IssueFilingOutcome) => void;
-	onCreated: (issue: CreatedIssue) => void;
+	onPublication: (state: IssuePublicationState) => void;
 	random?: () => number;
 }
 
 /**
  * Author tools. `issue_publish` is exactly-once: concurrent and repeated calls
- * share one publication, and a create that may have reached GitHub despite an
- * error is reconciled against the operator's own issues created since the
- * request started before anything is retried.
+ * share one publication. Once a create is attempted, later calls only read its
+ * known reference or reconcile the original title/body; a failed lookup never
+ * grants authority for a second create.
  */
 export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomTool[] {
 	const { repo, checkout } = options;
@@ -286,6 +292,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 	let publication: Promise<PublishedIssue> | undefined;
 	// Once GitHub confirms creation, retries may read this issue but never create another.
 	let createdIssueRef: string | undefined;
+	let uncertainCreate: { title: string; body: string } | undefined;
 	// Set synchronously when issue_existing_owner starts, before it awaits, so a
 	// publish in the same parallel tool batch cannot also file.
 	let ownerClaim: Promise<GhIssueRow> | undefined;
@@ -350,11 +357,27 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		labels: labelNames(row),
 	});
 
+	const recordCreated = (ref: string, url: string) => {
+		createdIssueRef = ref;
+		options.onPublication({ kind: "created", issue: { repo, url } });
+	};
+
+	const reconcilePublication = async (title: string, body: string, cause?: unknown): Promise<PublishedIssue> => {
+		// Unbound from cancellation: a cancelled request may already have created the issue.
+		const reconciled = await findUncertainCreate(title, body);
+		if (!reconciled)
+			throw new Error("Issue creation has not been confirmed; no second create will be attempted.", { cause });
+		const ref = String(reconciled.number);
+		recordCreated(ref, reconciled.url);
+		return toPublished(await viewIssue(ref, undefined));
+	};
+
 	const publishOnce = async (
 		params: { title: string; body: string; labels: string[]; assignees?: string[]; milestone?: string },
 		signal: AbortSignal | undefined,
 	): Promise<PublishedIssue> => {
 		if (createdIssueRef) return toPublished(await viewIssue(createdIssueRef, undefined));
+		if (uncertainCreate) return await reconcilePublication(uncertainCreate.title, uncertainCreate.body);
 		const available = new Set((await listLabels(signal)).map(label => label.name));
 		const unknown = params.labels.filter(label => !available.has(label));
 		if (unknown.length > 0) {
@@ -371,6 +394,8 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		for (const label of params.labels) args.push("--label", label);
 		for (const assignee of params.assignees ?? []) args.push("--assignee", assignee);
 		if (params.milestone) args.push("--milestone", params.milestone);
+		uncertainCreate = { title: params.title, body: params.body };
+		options.onPublication({ kind: "uncertain", repo, title: params.title });
 
 		let created: { exitCode: number; stdout: string; stderr: string } | undefined;
 		let createError: unknown;
@@ -382,22 +407,14 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		const url =
 			created?.exitCode === 0 ? created.stdout.split("\n").findLast(line => line.startsWith("https://")) : undefined;
 		if (url) {
-			createdIssueRef = url;
-			options.onCreated({ repo, url });
+			recordCreated(url, url);
 			return toPublished(await viewIssue(url, undefined));
 		}
-		// The create may have reached GitHub even though gh reported failure
-		// (timeout, dropped connection, cancellation mid-request): adopt that
-		// issue instead of filing twice. Unbound from the caller's signal so a
-		// cancellation cannot hide an issue that already exists.
-		const reconciled = await findUncertainCreate(params.title, params.body);
-		if (reconciled) {
-			createdIssueRef = String(reconciled.number);
-			options.onCreated({ repo, url: reconciled.url });
-			return toPublished(await viewIssue(createdIssueRef, undefined));
-		}
-		if (createError) throw createError;
-		throw new Error(`gh issue create failed: ${created?.stderr || created?.stdout || "no output"}`);
+		return await reconcilePublication(
+			uncertainCreate.title,
+			uncertainCreate.body,
+			createError ?? new Error(`gh issue create failed: ${created?.stderr || created?.stdout || "no output"}`),
+		);
 	};
 
 	const settle = (next: IssueFilingOutcome) => {
@@ -555,7 +572,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 				if (params instanceof type.errors) {
 					throw new Error(`issue_existing_owner received invalid arguments: ${params.summary}`);
 				}
-				if (outcome || publication || createdIssueRef || ownerClaim)
+				if (outcome || publication || uncertainCreate || ownerClaim)
 					throw new Error("This request already has an outcome.");
 				const claim = viewIssue(String(params.number), signal);
 				ownerClaim = claim;
@@ -584,7 +601,7 @@ export function createIssueAuthorTools(options: IssueAuthorToolOptions): CustomT
 		createIssueDeclineTool({
 			onDecline: reason => settle({ kind: "declined", reason }),
 			blocked: () =>
-				outcome || publication || createdIssueRef || ownerClaim
+				outcome || publication || uncertainCreate || ownerClaim
 					? "This request already has an outcome; it cannot be declined."
 					: undefined,
 		}),

@@ -5,7 +5,7 @@ import * as targetInventory from "../../src/issues/target-inventory";
 import {
 	createIssueAuthorTools,
 	createIssueTargetTool,
-	type CreatedIssue,
+	type IssuePublicationState,
 	type IssueFilingOutcome,
 	type IssueTargetSelection,
 } from "../../src/issues/tools";
@@ -57,14 +57,14 @@ function invoke(tool: CustomTool, params: Record<string, unknown>): Promise<Agen
 
 function author() {
 	const outcomes: IssueFilingOutcome[] = [];
-	const created: CreatedIssue[] = [];
+	const publicationStates: IssuePublicationState[] = [];
 	const onOutcome = vi.fn((outcome: IssueFilingOutcome) => outcomes.push(outcome));
 	const tools = createIssueAuthorTools({
 		repo: REPO,
 		checkout: CHECKOUT,
 		startedAt: STARTED_AT,
 		onOutcome,
-		onCreated: issue => created.push(issue),
+		onPublication: state => publicationStates.push(state),
 	});
 	const named = (name: string): CustomTool => {
 		const tool = tools.find(entry => entry.name === name);
@@ -76,7 +76,7 @@ function author() {
 		existingOwner: named("issue_existing_owner"),
 		decline: named("issue_decline"),
 		outcomes,
-		created,
+		publicationStates,
 		onOutcome,
 	};
 }
@@ -327,6 +327,26 @@ describe("issue_publish", () => {
 		expect(outcomes).toEqual([actualPublished]);
 	});
 
+	it("reconciles an uncertain create again after the lookup fails without creating twice", async () => {
+		const { json, run } = spyDependencies();
+		let lookups = 0;
+		json.mockImplementation(async (_cwd, args) => {
+			if (args[0] === "label") return LABELS.map(name => ({ name })) as never;
+			if (args[0] === "issue" && args[1] === "list") {
+				if (++lookups === 1) throw new Error("temporary reconciliation failure");
+				return [{ ...ACTUAL_ISSUE, title: TITLE, body: BODY }] as never;
+			}
+			if (args[0] === "issue" && args[1] === "view") return ACTUAL_ISSUE as never;
+			throw new Error("Unexpected GitHub request");
+		});
+		run.mockResolvedValue({ exitCode: 1, stdout: "", stderr: "connection dropped after sending" });
+		const { publish, outcomes } = author();
+		await expect(invoke(publish, publishParams())).rejects.toThrow("temporary reconciliation failure");
+		await invoke(publish, publishParams());
+		expect(run).toHaveBeenCalledTimes(1);
+		expect(outcomes).toEqual([actualPublished]);
+	});
+
 	it.each(["nonzero exit", "thrown error"])(
 		"adopts a just-created own issue after %s without creating twice",
 		async failure => {
@@ -373,24 +393,26 @@ describe("issue_publish", () => {
 		},
 	);
 
-	it("reports a failed create with no reconciled issue and lets a later call retry", async () => {
+	it("keeps an absent reconciliation result uncertain and never repeats the create", async () => {
 		const { json, run } = spyDependencies();
 		json
 			.mockResolvedValueOnce(LABELS.map(name => ({ name })))
 			.mockResolvedValueOnce([])
-			.mockResolvedValueOnce(LABELS.map(name => ({ name })))
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([{ ...ACTUAL_ISSUE, title: TITLE, body: BODY }])
 			.mockResolvedValueOnce(ACTUAL_ISSUE);
-		run.mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "request rejected" }).mockResolvedValueOnce({
-			exitCode: 0,
-			stdout: ACTUAL_ISSUE.url,
-			stderr: "",
-		});
-		const { publish, outcomes } = author();
-
-		await expect(invoke(publish, publishParams())).rejects.toThrow("gh issue create failed: request rejected");
+		run.mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "request outcome unknown" });
+		const { publish, decline, existingOwner, outcomes, publicationStates } = author();
+		await expect(invoke(publish, publishParams())).rejects.toThrow("has not been confirmed");
+		expect(publicationStates).toEqual([{ kind: "uncertain", repo: REPO, title: TITLE }]);
 		expect(outcomes).toEqual([]);
-		await invoke(publish, publishParams());
-		expect(run).toHaveBeenCalledTimes(2);
+		await expect(invoke(decline, { reason: "cancel while uncertain" })).rejects.toThrow("already has an outcome");
+		await expect(invoke(existingOwner, { number: 7, reason: "owner", draft: "draft" })).rejects.toThrow(
+			"already has an outcome",
+		);
+		await expect(invoke(publish, publishParams())).rejects.toThrow("has not been confirmed");
+		await invoke(publish, { ...publishParams(), title: "changed retry title", body: "changed retry body" });
+		expect(run).toHaveBeenCalledTimes(1);
 		expect(outcomes).toEqual([actualPublished]);
 	});
 

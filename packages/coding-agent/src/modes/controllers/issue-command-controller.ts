@@ -32,6 +32,8 @@ function statusLine(notice: IssueNotice): string {
 			if (notice.outcome.kind === "published") return `/issue filed ${notice.outcome.issue.url}`;
 			if (notice.outcome.kind === "published-unread")
 				return `/issue filed ${notice.outcome.issue.url} (record unavailable)`;
+			if (notice.outcome.kind === "publication-uncertain")
+				return `/issue publication unconfirmed for ${notice.outcome.repo}`;
 			if (notice.outcome.kind === "existing-owner") {
 				return `/issue not filed: ${notice.outcome.owner.url} already owns it`;
 			}

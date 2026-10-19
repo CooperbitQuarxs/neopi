@@ -25,6 +25,13 @@ Submitted body:
 - Repository: `{{unread.repo}}`
 - GitHub confirmed creation, but the recorded title, body and labels could not be retrieved.
 {{/if}}
+{{#if uncertain}}
+**/issue {{requestId}}** could not confirm whether GitHub created the issue.
+
+- Repository: `{{uncertain.repo}}`
+- Requested title: {{uncertain.title}}
+- The create may have reached GitHub; no second create will be attempted for this request.
+{{/if}}
 {{#if owner}}
 **/issue {{requestId}}** not filed: existing issue {{owner.url}} owns it. Nothing was posted.
 

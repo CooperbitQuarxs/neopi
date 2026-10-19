@@ -44,7 +44,7 @@ describe("runIssueFiling", () => {
 		removeSyncWithRetries(root);
 	});
 
-	it.each(["confirmed", "read-failed", "cancelled"])(
+	it.each(["confirmed", "read-failed", "cancelled", "uncertain"])(
 		"asks in the hub, then reports the target checkout's publication (%s)",
 		async confirmation => {
 			const model = getBundledModel("openai", "gpt-4o-mini");
@@ -94,7 +94,10 @@ describe("runIssueFiling", () => {
 					];
 				}
 				if (command === "label list") return [{ name: "enhancement" }, { name: "needs-triage" }];
-				if (command === "issue list") return [];
+				if (command === "issue list") {
+					if (confirmation === "uncertain") throw new Error("reconciliation unavailable");
+					return [];
+				}
 				if (command === "issue view") {
 					if (confirmation !== "confirmed") {
 						if (confirmation === "cancelled") controller.abort(new Error("cancelled after creation"));
@@ -115,6 +118,8 @@ describe("runIssueFiling", () => {
 				requireSignal(signal);
 				if (args[0] === "issue" && args[1] === "create") {
 					createArgs.push(args);
+					if (confirmation === "uncertain")
+						return { exitCode: 1, stdout: "", stderr: "connection dropped after sending" };
 					return { exitCode: 0, stdout: ISSUE_URL, stderr: "" };
 				}
 				throw new Error(`unexpected gh run: ${args.join(" ")}`);
@@ -202,6 +207,17 @@ describe("runIssueFiling", () => {
 				const question = notices[1];
 				expect(question.kind === "question" && question.agentId).toBe(targetId);
 				const outcome = notices[2];
+				if (confirmation === "uncertain") {
+					expect(outcome).toMatchObject({
+						kind: "outcome",
+						outcome: { kind: "publication-uncertain", repo: "acme/widget", title: "Widgets should wobble" },
+					});
+					expect(result).toContain("could not confirm whether GitHub created the issue");
+					expect(result).not.toContain("nothing was filed");
+					expect(result).not.toContain(ISSUE_URL);
+					expect(createArgs).toHaveLength(1);
+					return;
+				}
 				if (confirmation !== "confirmed") {
 					expect(outcome).toMatchObject({
 						kind: "outcome",

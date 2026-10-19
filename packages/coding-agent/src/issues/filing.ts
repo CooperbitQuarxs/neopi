@@ -36,7 +36,7 @@ import {
 	createIssueAuthorTools,
 	createIssueDeclineTool,
 	createIssueTargetTool,
-	type CreatedIssue,
+	type IssuePublicationState,
 	type IssueFilingOutcome,
 	type IssueTargetSelection,
 } from "./tools";
@@ -101,6 +101,8 @@ export function renderIssueNotice(requestId: string, prose: string, notice: Issu
 				context.published = { ...notice.outcome.issue, labels: notice.outcome.issue.labels.join(", ") };
 			} else if (notice.outcome.kind === "published-unread") {
 				context.unread = notice.outcome.issue;
+			} else if (notice.outcome.kind === "publication-uncertain") {
+				context.uncertain = notice.outcome;
 			} else if (notice.outcome.kind === "existing-owner") {
 				context.owner = notice.outcome.owner;
 			} else {
@@ -332,7 +334,7 @@ export async function runIssueFiling(
 	// Phase 2: author in the target's own checkout and policy.
 	const authorAgentId = `Issue-${request.requestId}`;
 	let outcome: IssueFilingOutcome | undefined;
-	let createdIssue: CreatedIssue | undefined;
+	let publicationState: IssuePublicationState | undefined;
 	const checkoutPath = target.checkout.path;
 	const authorSession = await createIssueAgent(request, {
 		agentId: authorAgentId,
@@ -344,7 +346,7 @@ export async function runIssueFiling(
 			checkout: target.checkout,
 			startedAt,
 			onOutcome: value => (outcome = value),
-			onCreated: value => (createdIssue = value),
+			onPublication: value => (publicationState = value),
 		}),
 		toolNames: [
 			...AUTHOR_READ_TOOLS,
@@ -363,8 +365,8 @@ export async function runIssueFiling(
 		}),
 		discoverContext: true,
 	});
-	// Confirmed creation remains authoritative even if reading its full record
-	// or the following model turn fails: the known URL must still reach her.
+	// Keep known or uncertain publication authoritative if the next read or model
+	// turn fails; neither cancellation nor a lookup failure proves nothing was filed.
 	let conversationError: unknown;
 	try {
 		await ctx.reportProgress(`authoring for ${target.candidate.repo}`);
@@ -380,7 +382,7 @@ export async function runIssueFiling(
 				foregroundCwd: shortenPath(request.cwd),
 				foregroundRepo: foreground?.repo,
 			}),
-			done: () => outcome !== undefined || createdIssue !== undefined,
+			done: () => outcome !== undefined || publicationState !== undefined,
 			signal,
 			notify,
 			reportProgress: ctx.reportProgress,
@@ -392,11 +394,16 @@ export async function runIssueFiling(
 			registry,
 			authorSession,
 			authorAgentId,
-			signal.aborted && outcome === undefined && createdIssue === undefined,
+			signal.aborted && outcome === undefined && publicationState === undefined,
 		);
 	}
 	const settled: IssueFilingOutcome | undefined =
-		outcome ?? (createdIssue ? { kind: "published-unread", issue: createdIssue } : undefined);
+		outcome ??
+		(publicationState?.kind === "created"
+			? { kind: "published-unread", issue: publicationState.issue }
+			: publicationState
+				? { kind: "publication-uncertain", repo: publicationState.repo, title: publicationState.title }
+				: undefined);
 	if (!settled) throw conversationError ?? new Error("The authoring agent ended without an outcome.");
 	await notify({ kind: "outcome", outcome: settled });
 	return renderIssueNotice(request.requestId, request.prose, { kind: "outcome", outcome: settled });
