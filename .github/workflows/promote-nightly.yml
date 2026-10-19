@@ -1,15 +1,11 @@
 name: promote-nightly
 
-# Weekly promotion of the integration branch into the default branch.
-# Opens a sync/promote-<date> PR from nightly into neopi and merges it with
-# a merge commit. The neopi ruleset requires a PR and forbids non-fast-forward
-# pushes; it requires no approvals and no status checks, so GITHUB_TOKEN can
-# complete the merge. If the merge is refused, the PR is left open and
-# labelled human: pending, and the run fails so it is visible.
+# Monthly promotion request from integration into the default branch.
+# Opens a sync/promote-<date> PR labelled human: pending; the owner merges.
 
 on:
    schedule:
-      - cron: "0 6 * * 1" # Mondays 06:00 UTC
+      - cron: "0 6 1 * *" # First day of each month, 06:00 UTC
    workflow_dispatch:
 
 permissions:
@@ -47,14 +43,13 @@ jobs:
               set -euo pipefail
               date=$(date -u +%Y-%m-%d)
               branch="sync/promote-$date"
-              git config user.name "github-actions[bot]"
-              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-              git push --force origin "origin/$SOURCE:refs/heads/$branch"
               existing=$(gh pr list --base "$BASE" --head "$branch" --state open --json number --jq '.[0].number // empty')
               if [ -n "$existing" ]; then
+                 gh pr edit "$existing" --add-label "human: pending"
                  echo "number=$existing" >> "$GITHUB_OUTPUT"
                  exit 0
               fi
+              git push origin "origin/$SOURCE:refs/heads/$branch"
               body=$(mktemp)
               {
                  echo "> [!NOTE]"
@@ -62,7 +57,7 @@ jobs:
                  echo
                  echo "## What"
                  echo
-                 echo "Weekly promotion of \`$SOURCE\` into \`$BASE\` (${{ steps.diff.outputs.ahead }} commits)."
+                 echo "Monthly promotion request from \`$SOURCE\` into \`$BASE\` (${{ steps.diff.outputs.ahead }} commits). The owner reviews and merges this PR; this workflow never merges."
                  echo
                  echo "## Why"
                  echo
@@ -80,27 +75,8 @@ jobs:
               } > "$body"
               url=$(gh pr create --base "$BASE" --head "$branch" \
                  --title "chore(promote): nightly into neopi $date" \
-                 --body-file "$body" --label upstream)
+                 --body-file "$body" --label upstream --label enhancement \
+                 --label "human: pending" --label "review: codex")
               number=${url##*/}
               [ -n "$number" ] || { echo "::error::could not determine the promotion PR number"; exit 1; }
               echo "number=$number" >> "$GITHUB_OUTPUT"
-
-         - name: Merge the promotion PR
-           if: steps.diff.outputs.ahead != '0'
-           run: |
-              set -euo pipefail
-              n="${{ steps.pr.outputs.number }}"
-              title=$(gh pr view "$n" --json title --jq .title)
-              if gh pr merge "$n" --merge --delete-branch \
-                    --subject "Merge PR #$n: $title (@github-actions)" \
-                    --body "Automated weekly promotion of nightly into neopi."; then
-                 echo "merged PR #$n"
-              else
-                 gh pr edit "$n" --add-label "human: pending"
-                 gh pr comment "$n" --body "> [!NOTE]
-              > promote-nightly workflow on behalf of PsychedelicShayna
-
-              Automatic merge was refused by the repository rules. The owner needs to merge this promotion by hand."
-                 echo "::error::merge of PR #$n refused; labelled human: pending"
-                 exit 1
-              fi
