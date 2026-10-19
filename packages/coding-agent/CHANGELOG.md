@@ -33,6 +33,7 @@
 ### Fixed
 
 - Standalone updates ignore project `.env` build origins and configuration-directory redirects, retain launch/user overrides and explicit profiles, and show the selected source for binary updates and package-manager takeovers ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
+- Model selector assignments save globally unless project scope is explicitly selected, including when project role storage is enabled ([#244](https://github.com/PsychedelicShayna/neopi/issues/244)).
 - Source installs retire managed legacy persona, loadout, and REPL extension links without deleting operator-owned extensions, preventing old hooks from running alongside built-ins ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
 - CI's session/log descriptor-leak check now works with Bun versions that open files close-on-exec by default ([#286](https://github.com/PsychedelicShayna/neopi/issues/286)).
 - Saved images in Agent Hub transcripts of advisors and aborted agents, and in `/monitor` panes, now render as images instead of a wrong-size `[Image: … 800x600]` placeholder ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
