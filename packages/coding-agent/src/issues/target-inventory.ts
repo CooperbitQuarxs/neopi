@@ -45,6 +45,13 @@ interface RemoteRepository {
 	hasIssuesEnabled: boolean;
 }
 
+function applyRepositoryMetadata(candidate: IssueRepoCandidate, remote: RemoteRepository): void {
+	candidate.description = remote.description ?? undefined;
+	candidate.archived = remote.isArchived;
+	candidate.fork = remote.isFork;
+	candidate.issuesEnabled = remote.hasIssuesEnabled;
+}
+
 interface CheckoutLead {
 	cwd: string;
 	source: IssueCheckout["source"];
@@ -226,10 +233,30 @@ export async function collectIssueTargetInventory(options: {
 	}
 	for (const remote of remoteRepositories) {
 		const candidate = candidateFor(remote.nameWithOwner);
-		candidate.description = remote.description ?? undefined;
-		candidate.archived = remote.isArchived;
-		candidate.fork = remote.isFork;
-		candidate.issuesEnabled = remote.hasIssuesEnabled;
+		applyRepositoryMetadata(candidate, remote);
+	}
+	// `gh repo list` covers the authenticated owner's repositories, not every
+	// collaborator checkout found locally. Admission still needs its actual flags.
+	for (let index = 0; index < inventory.repositories.length; index++) {
+		const candidate = inventory.repositories[index];
+		if (
+			candidate.checkouts.length === 0 ||
+			(candidate.archived !== undefined && candidate.issuesEnabled !== undefined)
+		)
+			continue;
+		try {
+			const metadata = await github.json<RemoteRepository>(
+				cwd,
+				["repo", "view", candidate.repo, "--json", "nameWithOwner,description,isArchived,isFork,hasIssuesEnabled"],
+				signal,
+				{ repoProvided: true },
+			);
+			applyRepositoryMetadata(candidate, metadata);
+		} catch (error) {
+			throwIfAborted(signal);
+			warn(`Issue repository metadata is unavailable for ${candidate.repo}: ${renderError(error)}`);
+			inventory.repositories.splice(index--, 1);
+		}
 	}
 	return inventory;
 }

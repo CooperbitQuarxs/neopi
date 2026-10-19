@@ -18,6 +18,12 @@ import { github } from "../../src/utils/github";
 
 const REMOTE = "https://github.com/Owner/Project.git";
 const REPO = repoFromUrl("https://github.com/Owner/Project")!;
+const REMOTE_METADATA = {
+	nameWithOwner: REPO,
+	isArchived: false,
+	isFork: false,
+	hasIssuesEnabled: true,
+};
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
 	await $`git -c user.name=Test -c user.email=test@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null ${args}`
@@ -114,7 +120,9 @@ describe("issue target inventory (real git)", () => {
 
 	beforeEach(async () => {
 		root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "npi-issue-inventory-")));
-		vi.spyOn(github, "json").mockResolvedValue([]);
+		vi.spyOn(github, "json").mockImplementation(
+			async (_cwd, args) => (args[0] === "repo" && args[1] === "view" ? REMOTE_METADATA : []) as never,
+		);
 		vi.spyOn(sessionListing, "listRecentProjects").mockResolvedValue([]);
 	});
 
@@ -171,6 +179,36 @@ describe("issue target inventory (real git)", () => {
 		);
 	});
 
+	it("reads metadata directly for a collaborator checkout absent from the owner's repository list", async () => {
+		const remote = "https://github.com/OtherOwner/Shared.git";
+		const cwd = await createRepo(root, "collaborator", remote);
+		const repo = repoFromRemoteUrl(remote)!;
+		vi.spyOn(github, "json").mockImplementation(async (_cwd, args) => {
+			if (args[0] === "repo" && args[1] === "view")
+				return {
+					nameWithOwner: "OtherOwner/Shared",
+					description: "Archived shared tracker",
+					isArchived: true,
+					isFork: false,
+					hasIssuesEnabled: true,
+				} as never;
+			return [] as never;
+		});
+		const inventory = await collectIssueTargetInventory({ cwd, settings: Settings.isolated() });
+		expect(inventory.repositories[0]).toMatchObject({
+			repo,
+			archived: true,
+			issuesEnabled: true,
+			description: "Archived shared tracker",
+		});
+		expect(github.json).toHaveBeenCalledWith(
+			cwd,
+			["repo", "view", repo, "--json", "nameWithOwner,description,isArchived,isFork,hasIssuesEnabled"],
+			undefined,
+			{ repoProvided: true },
+		);
+	});
+
 	it("skips deleted history paths silently, including missing paths inside an existing checkout", async () => {
 		const cwd = await createRepo(root, "current");
 		vi.spyOn(sessionListing, "listRecentProjects").mockResolvedValue([
@@ -210,14 +248,25 @@ describe("issue target inventory (real git)", () => {
 		expect(inventory.repositories[0]?.checkouts.map(item => item.path)).toEqual([cwd]);
 	});
 
-	it("retains local targets and a warning when GitHub inventory fails", async () => {
+	it("retains verified local targets when only the owner's repository list fails", async () => {
 		const cwd = await createRepo(root, "current");
-		vi.spyOn(github, "json").mockRejectedValue(new Error("GitHub CLI is not authenticated"));
+		vi.spyOn(github, "json").mockImplementation(async (_cwd, args) => {
+			if (args[0] === "repo" && args[1] === "list") throw new Error("owner list unavailable");
+			return REMOTE_METADATA as never;
+		});
 		const inventory = await collectIssueTargetInventory({ cwd, settings: Settings.isolated() });
-
 		expect(inventory.repositories[0]?.checkouts[0]?.path).toBe(cwd);
+		expect(inventory.warnings).toEqual(["GitHub repository inventory is unavailable: owner list unavailable"]);
+	});
+
+	it("does not admit a local repository whose metadata cannot be verified", async () => {
+		const cwd = await createRepo(root, "current");
+		vi.spyOn(github, "json").mockRejectedValue(new Error("not authorized"));
+		const inventory = await collectIssueTargetInventory({ cwd, settings: Settings.isolated() });
+		expect(inventory.repositories).toEqual([]);
 		expect(inventory.warnings).toEqual([
-			"GitHub repository inventory is unavailable: GitHub CLI is not authenticated",
+			"GitHub repository inventory is unavailable: not authorized",
+			`Issue repository metadata is unavailable for ${REPO}: not authorized`,
 		]);
 	});
 

@@ -276,7 +276,7 @@ export async function runIssueFiling(
 	await ctx.reportProgress("collecting repositories");
 	const inventory = await collectIssueTargetInventory({ cwd: request.cwd, settings: request.settings, signal });
 	if (inventory.repositories.length === 0) {
-		throw new Error(`No GitHub repository found locally or through gh. ${inventory.warnings.join(" ")}`.trim());
+		throw new Error(`No GitHub issue target could be verified. ${inventory.warnings.join(" ")}`.trim());
 	}
 
 	// Phase 1: choose the tracker.
