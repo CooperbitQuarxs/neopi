@@ -5,7 +5,7 @@ name: promote-nightly
 # a merge commit. The neopi ruleset requires a PR and forbids non-fast-forward
 # pushes; it requires no approvals and no status checks, so GITHUB_TOKEN can
 # complete the merge. If the merge is refused, the PR is left open and
-# labelled ready-for-human, and the run fails so it is visible.
+# labelled human: pending, and the run fails so it is visible.
 
 on:
    schedule:
@@ -66,7 +66,7 @@ jobs:
                  echo
                  echo "## Why"
                  echo
-                 echo "Scheduled promotion per \`docs/policy/README.md\` › Promotion. Everything here already merged into \`$SOURCE\` through its own PR."
+                 echo "Scheduled promotion per \`docs/agents/policy.md\` › Promotion and issue completion. Everything here already merged into \`$SOURCE\` through its own PR."
                  echo
                  echo "## Testing"
                  echo
@@ -80,7 +80,7 @@ jobs:
               } > "$body"
               url=$(gh pr create --base "$BASE" --head "$branch" \
                  --title "chore(promote): nightly into neopi $date" \
-                 --body-file "$body" --label upstream-sync)
+                 --body-file "$body" --label upstream)
               number=${url##*/}
               [ -n "$number" ] || { echo "::error::could not determine the promotion PR number"; exit 1; }
               echo "number=$number" >> "$GITHUB_OUTPUT"
@@ -96,11 +96,11 @@ jobs:
                     --body "Automated weekly promotion of nightly into neopi."; then
                  echo "merged PR #$n"
               else
-                 gh pr edit "$n" --add-label ready-for-human
+                 gh pr edit "$n" --add-label "human: pending"
                  gh pr comment "$n" --body "> [!NOTE]
               > promote-nightly workflow on behalf of PsychedelicShayna
 
               Automatic merge was refused by the repository rules. The owner needs to merge this promotion by hand."
-                 echo "::error::merge of PR #$n refused; labelled ready-for-human"
+                 echo "::error::merge of PR #$n refused; labelled human: pending"
                  exit 1
               fi
