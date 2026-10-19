@@ -46,6 +46,7 @@ import { createModelBrowserSource } from "../model-browser-source";
 import { parseQueueShorthand, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import type { InteractiveModeContext, SubmittedUserInput } from "../../modes/types";
+import { isDeferredSubmissionActive, waitForDeferredInput } from "../../neopi/defer";
 import type { LiveSubmitRoute } from "./live-command-controller";
 import manualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
 import { AgentRegistry } from "../../registry/agent-registry";
@@ -1178,6 +1179,7 @@ export class InputController {
 		imageLinks?: (string | undefined)[],
 	): Promise<{ text: string; images?: ImageContent[]; imageLinks?: (string | undefined)[] } | undefined> {
 		const result = await this.ctx.session.extensionRunner?.emitInput(text, images, "interactive");
+		if (!isDeferredSubmissionActive()) return undefined;
 		if (result?.handled) return undefined;
 		if (result?.text !== undefined) text = result.text.trim();
 		if (result?.images !== undefined) {
@@ -1191,6 +1193,7 @@ export class InputController {
 	setupEditorSubmitHandler(): void {
 		this.ctx.editor.onSubmit = async (text: string) => {
 			const deferred = currentDeferredDraft() !== undefined;
+			if (!isDeferredSubmissionActive()) return;
 			// A timer owns no real Enter gesture or live-call speech admission.
 			const forceChain = !deferred && this.#chainNextSubmit;
 			const toRepl = !deferred && this.#replNextSubmit;
@@ -1221,9 +1224,9 @@ export class InputController {
 			// Focused subagent session: the editor is a plain chat box for it.
 			// Everything below (slash/bash/python, loop,
 			// compaction queueing) is main-session-only.
-			if (this.ctx.focusedAgentId) {
+			if (!deferred && this.ctx.focusedAgentId) {
 				// The composer's speech goes to the focused agent; the voice call must not relay it too.
-				if (!deferred && this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) {
+				if (this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) {
 					this.#holdForLiveHandoff(text);
 					return;
 				}
@@ -1300,6 +1303,7 @@ export class InputController {
 
 			if (!literalInput && runner?.hasHandlers("input")) {
 				const input = await this.#runInputHandlers(text, inputImages, inputImageLinks);
+				if (!isDeferredSubmissionActive()) return;
 				if (!input) {
 					// The handler consumed the submission. The editor text was reset
 					// before this callback ran, so anything in it now is a newer draft;
@@ -1397,6 +1401,7 @@ export class InputController {
 				try {
 					slashResult = await executeBuiltinSlashCommand(text, { ctx: this.ctx, input, draftDetached });
 				} catch (error) {
+					if (!isDeferredSubmissionActive()) return;
 					// Detached mode commands (plan/vibe/goal/guided-goal) rethrow so
 					// this caller — the one that took the draft's images out of the
 					// editor before dispatch — restores the submission and reports
@@ -1406,6 +1411,7 @@ export class InputController {
 					this.ctx.showError(error instanceof Error ? error.message : String(error));
 					return;
 				}
+				if (!isDeferredSubmissionActive()) return;
 				if (slashResult === true) {
 					if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 					return;
@@ -1465,7 +1471,9 @@ export class InputController {
 					this.ctx.queueCompactionMessage(text, "steer", images);
 					return;
 				}
-				if (await this.#invokeSkillCommand(text, "steer", inputImages, inputImageLinks)) {
+				const handled = await this.#invokeSkillCommand(text, "steer", inputImages, inputImageLinks);
+				if (!isDeferredSubmissionActive()) return;
+				if (handled) {
 					// The dispatch above ran the turn inline without resolving the input
 					// callback, so nothing re-enters `getUserInput` to arm the next
 					// iteration. Arm it here, now that the turn has settled.
@@ -1561,6 +1569,7 @@ export class InputController {
 			const typedText = text;
 			if (forceChain || (isSettingsInitialized() && cfgChainingAuto.get(settings))) {
 				const outcome = await this.#applyPostProcessingChain(text);
+				if (!isDeferredSubmissionActive()) return;
 				if (!outcome.send) {
 					if (inputImages && inputImages.length > 0) {
 						this.ctx.editor.pendingImages = [...inputImages];
@@ -1671,7 +1680,9 @@ export class InputController {
 					},
 					{ clearEditor: false },
 				);
+				const consumed = waitForDeferredInput(submission);
 				this.ctx.onInputCallback(submission);
+				await consumed;
 			} else {
 				// No input waiter: the main loop is between turns (post-turn
 				// epilogue, retry backoff, or a scheduled continue) with the agent

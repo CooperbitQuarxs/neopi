@@ -98,7 +98,7 @@ Images attached to the `/defer` submission travel with that scheduled input, not
 
 Durations accept numbers immediately followed by `ms`, `s`, `m`, `h`, `d`, `w`, `M`, or `Y`, including fractions (`.5h`). Units are case-sensitive: `M` means 30 days and `Y` means 365 days, not calendar arithmetic. Zero or negative delays submit immediately.
 
-Scheduling reports an ID. `/defer cancel <id>` cancels that pending submission; `/defer cancel all` cancels every pending submission. Timers are local to the running conversation, are cancelled on a session change or shutdown, and are not persisted across restarts.
+Scheduling reports an ID. `/defer cancel <id>` cancels that submission, including delivery still waiting on an input hook or command; `/defer cancel all` cancels every pending submission. Deferred input stays bound to the scheduling conversation even if you focus a subagent before it fires. A session change or shutdown cancels both waiting timers and in-flight delivery, so resumed hooks cannot send old input into a new conversation or restore its attachments there. Timers are local to the running conversation and are not persisted across restarts.
 
 ## Iris live voice
 

@@ -4,12 +4,17 @@ import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import { submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
+import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { cfgBareSlashCommands } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { parseDeferredInput } from "@oh-my-pi/pi-coding-agent/neopi/defer";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { lookupBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -258,6 +263,195 @@ describe("/defer", () => {
 			release.resolve();
 			await running;
 		}
+	});
+
+	for (const payload of ["focused prose [Image #1]", "/tan main command"]) {
+		it(`keeps ${payload} on its scheduling session when a subagent gains focus`, async () => {
+			const h = harness();
+			const focused = harness();
+			const mainPrompt = vi.spyOn(h.session, "prompt").mockResolvedValue(true);
+			const focusedPrompt = vi.spyOn(focused.session, "prompt").mockResolvedValue(true);
+			const tan = vi.spyOn(h.ctx, "handleTanCommand");
+			const image = { type: "image" as const, mimeType: "image/png", data: "Y2FwdHVyZWQ=" };
+			if (!payload.startsWith("/")) h.editor.pendingImages = [image];
+			await h.submit(`/defer 10ms ${payload}`);
+			Object.defineProperty(h.ctx, "viewSession", { configurable: true, value: focused.session });
+			Object.defineProperty(h.ctx, "focusedAgentId", { configurable: true, value: "focused-task" });
+			if (payload.startsWith("/")) {
+				await waitUntil(() => tan.mock.calls.length === 1);
+			} else {
+				await waitUntil(() => mainPrompt.mock.calls.length === 1 || focusedPrompt.mock.calls.length === 1);
+				expect(mainPrompt).toHaveBeenCalledWith(payload, expect.objectContaining({ images: [image] }));
+			}
+			expect(focusedPrompt).not.toHaveBeenCalled();
+		});
+	}
+
+	for (const transition of ["newSession", "cancel", "dispose"] as const) {
+		it(`drops deferred input whose async hook outlives ${transition}`, async () => {
+			const h = harness();
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const finished = Promise.withResolvers<void>();
+			let delivery: Promise<void> | undefined;
+			const onSubmit = h.editor.onSubmit;
+			h.editor.onSubmit = text => {
+				const pending = Promise.resolve(onSubmit?.(text));
+				if (text === "old conversation payload") delivery = pending;
+				return pending;
+			};
+			const runtime = new ExtensionRuntime();
+			const extension = await loadExtensionFromFactory(
+				pi => {
+					pi.on("input", async () => {
+						entered.resolve();
+						await release.promise;
+						finished.resolve();
+						return {};
+					});
+				},
+				h.session.sessionManager.getCwd(),
+				new EventBus(),
+				runtime,
+				"defer-session-owner",
+			);
+			const runner = new ExtensionRunner(
+				[extension],
+				runtime,
+				h.session.sessionManager.getCwd(),
+				h.session.sessionManager,
+				h.session.modelRegistry,
+			);
+			Object.defineProperty(h.session, "extensionRunner", { configurable: true, value: runner });
+			await h.submit("/defer 5ms old conversation payload");
+			await entered.promise;
+			if (transition === "newSession") await h.session.newSession();
+			else if (transition === "cancel") await h.submit("/defer cancel all");
+			else h.session.beginDispose();
+			h.editor.setText("new conversation draft");
+			release.resolve();
+			await finished.promise;
+			await delivery;
+			await Bun.sleep(0);
+			expect(h.mock.calls).toHaveLength(0);
+			expect(h.session.getQueuedMessages().steering).toEqual([]);
+			expect(h.editor.getExpandedText()).toBe("new conversation draft");
+		});
+	}
+
+	for (const admission of ["prompt", "steer", "followUp", "custom", "subagent"] as const) {
+		it(`rejects ${admission} from a deferred slash handler resumed in a new session`, async () => {
+			const h = harness();
+			const child = admission === "subagent" ? harness() : undefined;
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const finished = Promise.withResolvers<void>();
+			const oldImage = { type: "image" as const, mimeType: "image/png", data: "b2xk" };
+			const newImage = { type: "image" as const, mimeType: "image/png", data: "bmV3" };
+			h.editor.pendingImages = [oldImage];
+			h.editor.pendingImageLinks = ["old.png"];
+			vi.spyOn(h.ctx, "handleTanCommand").mockImplementation(async () => {
+				entered.resolve();
+				await release.promise;
+				try {
+					if (admission === "prompt") await h.session.prompt("stale handler payload");
+					else if (admission === "steer") await h.session.steer("stale handler payload");
+					else if (admission === "followUp") await h.session.followUp("stale handler payload");
+					else if (child) await child.session.prompt("stale handler payload");
+					else
+						await h.session.promptCustomMessage({
+							customType: "defer-owner-test",
+							content: "stale handler payload",
+							display: false,
+							attribution: "user",
+						});
+				} finally {
+					finished.resolve();
+				}
+			});
+			await h.submit("/defer 5ms /tan old command [Image #1]");
+			await entered.promise;
+			await h.session.newSession();
+			h.editor.setText("new conversation draft");
+			h.editor.pendingImages = [newImage];
+			h.editor.pendingImageLinks = ["new.png"];
+			h.editor.imageLinks = h.editor.pendingImageLinks;
+			release.resolve();
+			await finished.promise;
+			await Bun.sleep(25);
+			expect(h.mock.calls).toHaveLength(0);
+			expect(child?.mock.calls ?? []).toHaveLength(0);
+			expect(h.editor.pendingImages).toEqual([newImage]);
+			expect(h.editor.pendingImageLinks).toEqual(["new.png"]);
+			expect(h.editor.imageLinks).toEqual(["new.png"]);
+			expect(h.session.getQueuedMessages()).toEqual(expect.objectContaining({ steering: [], followUp: [] }));
+			expect(h.editor.getExpandedText()).toBe("new conversation draft");
+		});
+	}
+
+	it("allows an active deferred command to delegate intentionally to another session", async () => {
+		const h = harness();
+		const child = harness();
+		const finished = Promise.withResolvers<void>();
+		vi.spyOn(h.ctx, "handleTanCommand").mockImplementation(async () => {
+			await child.session.prompt("intentional child task");
+			finished.resolve();
+		});
+		await h.submit("/defer 5ms /tan launch child");
+		await finished.promise;
+		expect(h.mock.calls).toHaveLength(0);
+		expect(child.mock.calls).toHaveLength(1);
+	});
+
+	for (const transition of ["newSession", "cancel"] as const) {
+		it(`keeps ownership across the main-loop input handoff during ${transition}`, async () => {
+			const h = harness();
+			const received = Promise.withResolvers<SubmittedUserInput>();
+			h.ctx.startPendingSubmission = input => ({ ...input, cancelled: false, started: false });
+			h.ctx.onInputCallback = input => received.resolve(input);
+			const mode = {
+				markPendingSubmissionStarted: vi.fn(() => true),
+				finishPendingSubmission: vi.fn(),
+				showError: vi.fn(),
+				checkShutdownRequested: vi.fn(async () => {}),
+				skillCommands: new Map(),
+				optimisticSkillMessagePending: false,
+				renderOptimisticSkillMessage: vi.fn(),
+				clearOptimisticSkillMessage: vi.fn(),
+			};
+			await h.submit("/defer 5ms old handed-off payload");
+			const input = await received.promise;
+			if (transition === "newSession") await h.session.newSession();
+			else await h.submit("/defer cancel all");
+			h.editor.setText("new conversation draft");
+			await submitInteractiveInput(mode, h.session, input);
+			expect(h.mock.calls).toHaveLength(0);
+			expect(h.editor.getExpandedText()).toBe("new conversation draft");
+			expect(mode.finishPendingSubmission).toHaveBeenCalledWith(input);
+		});
+	}
+
+	it("drops custom-command prompt transformations resumed after a conversation switch", async () => {
+		const h = harness();
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const finished = Promise.withResolvers<void>();
+		vi.spyOn(h.session, "executeCustomCommand").mockImplementation(async () => {
+			entered.resolve();
+			await release.promise;
+			finished.resolve();
+			return "old transformed payload";
+		});
+		h.ctx.isKnownSlashCommand = text => text === "/custom";
+		await h.submit("/defer 5ms /custom");
+		await entered.promise;
+		await h.session.newSession();
+		h.editor.setText("new conversation draft");
+		release.resolve();
+		await finished.promise;
+		await Bun.sleep(25);
+		expect(h.mock.calls).toHaveLength(0);
+		expect(h.editor.getExpandedText()).toBe("new conversation draft");
 	});
 
 	it("cancels individual and all timers, including delays beyond the platform timer limit", async () => {

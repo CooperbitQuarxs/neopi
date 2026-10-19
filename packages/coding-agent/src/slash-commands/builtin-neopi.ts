@@ -11,7 +11,7 @@ import {
 import { formatVisionMarker } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import type { InteractiveModeContext } from "../modes/types";
-import { deferredSubmissionsFor, DEFER_USAGE, parseDeferredInput } from "../neopi/defer";
+import { deferredSubmissionsFor, DEFER_USAGE, isDeferredSubmissionActive, parseDeferredInput } from "../neopi/defer";
 import { type LoadoutHost, loadoutFeature } from "../neopi/loadout";
 import {
 	PERSONA_SUBCOMMANDS,
@@ -269,7 +269,7 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 								}
 							}, "defer");
 						} finally {
-							if (returned) {
+							if (returned && isDeferredSubmissionActive()) {
 								const text =
 									returned.text ||
 									returned.images.map((_, index) => formatVisionMarker("image", index + 1)).join(" ");

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { sleepLong } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../session/agent-session";
 
@@ -22,7 +23,54 @@ export function parseDeferredInput(args: string): { delayMs: number; input: stri
 	return { delayMs: Math.max(0, delayMs), input: match[3] };
 }
 
-/** Owns only cancellable clocks. Delivery still uses the composer's interpreter and AgentSession's queues. */
+interface DeferredDelivery {
+	session: AgentSession;
+	sessionId: string;
+	signal: AbortSignal;
+}
+
+const deliveryScope = new AsyncLocalStorage<DeferredDelivery>();
+const pendingInputs = new WeakMap<object, { delivery: DeferredDelivery; finish: () => void }>();
+
+function isCurrent(delivery: DeferredDelivery): boolean {
+	return (
+		!delivery.signal.aborted &&
+		!delivery.session.isDisposed &&
+		delivery.session.sessionManager.getSessionId() === delivery.sessionId
+	);
+}
+
+/** Commands may delegate while their original scheduling conversation remains active. */
+export function isDeferredSubmissionActive(): boolean {
+	const delivery = deliveryScope.getStore();
+	return !delivery || isCurrent(delivery);
+}
+
+/** Preserve ownership across the existing composer→main-loop promise handoff. */
+export function waitForDeferredInput(input: object): Promise<void> | undefined {
+	const delivery = deliveryScope.getStore();
+	if (!delivery) return;
+	const done = Promise.withResolvers<void>();
+	const finish = () => done.resolve();
+	pendingInputs.set(input, { delivery, finish });
+	delivery.signal.addEventListener("abort", finish, { once: true });
+	if (delivery.signal.aborted) finish();
+	return done.promise.finally(() => delivery.signal.removeEventListener("abort", finish));
+}
+
+export function consumeDeferredInput(input: object, submit: () => Promise<void>): Promise<void> {
+	const pending = pendingInputs.get(input);
+	if (!pending) return submit();
+	return deliveryScope.run(pending.delivery, async () => {
+		try {
+			await submit();
+		} finally {
+			pending.finish();
+		}
+	});
+}
+
+/** Owns cancellable clocks and in-flight delivery, not AgentSession's message queues. */
 export class DeferredSubmissions {
 	#nextId = 0;
 	#timers = new Map<number, AbortController>();
@@ -43,14 +91,9 @@ export class DeferredSubmissions {
 		this.#timers.set(id, controller);
 		void sleepLong(delayMs, controller.signal)
 			.then(async () => {
-				this.#timers.delete(id);
-				if (
-					controller.signal.aborted ||
-					this.session.isDisposed ||
-					this.session.sessionManager.getSessionId() !== sessionId
-				)
-					return;
-				await submit();
+				const delivery = { session: this.session, sessionId, signal: controller.signal };
+				if (!isCurrent(delivery)) return;
+				await deliveryScope.run(delivery, submit);
 			})
 			.catch(error => {
 				if (!controller.signal.aborted) onError(error);
