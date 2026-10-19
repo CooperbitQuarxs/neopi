@@ -134,6 +134,17 @@ export class SpaceHoldGesture {
 		return "swallow";
 	}
 
+	/** Forget a retired capture's gesture without stopping/transcribing it again. */
+	cancel(): void {
+		this.#active = false;
+		this.#latch = undefined;
+		this.#resetRun();
+		if (this.#releaseTimer) {
+			clearTimeout(this.#releaseTimer);
+			this.#releaseTimer = undefined;
+		}
+	}
+
 	#resetRun(): void {
 		this.#typed = 0;
 		this.#mechanicalRun = 0;

@@ -1,4 +1,5 @@
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
+import type { SpaceHoldGesture } from "@oh-my-pi/pi-tui/space-hold";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { hsvToRgb, type RGB } from "@oh-my-pi/pi-utils";
 import type { SttTarget } from "./stt-controller";
@@ -12,7 +13,7 @@ export interface MicCursorTarget extends Component {
 
 /** A text input push-to-talk dictates into: the text the STT controller writes and the cursor the
  *  mic glyph replaces. */
-export type DictationTarget = SttTarget & MicCursorTarget;
+export type DictationTarget = SttTarget & MicCursorTarget & { readonly spaceHold?: SpaceHoldGesture };
 
 const TRANSCRIBING_COLOR: RGB = { r: 200, g: 200, b: 200 };
 
