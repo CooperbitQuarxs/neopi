@@ -31,11 +31,14 @@ also run it by hand with `gh workflow run promote-nightly.yml`.
 
 ## Labels
 
-- Type: `bug`, `enhancement`, `documentation`, `question`, …
-- Priority: `priority: p0` … `priority: p3`. Effort: `effort: tiny` … `effort: very large`.
-- Issue triage (meanings in `docs/agents/triage-labels.md`): `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`.
-- PR state: `needs-review`, `ready-for-merge`, `review-stalled`.
-- Other: `baseline` (defect found on the base branch during a PR), `upstream-sync`, `hotfix`, `entangled`, `downstream`, `rpc`, `t3c-npi`, `npi-deck`, `codex-review`, `sentinel-review-requested`.
+- Labels compose across type, priority, estimates, relationships and specification presence. The settled vocabulary and unresolved decisions are in `docs/agents/triage-labels.md`; do not treat the interim guide as the finished setup policy.
+- Priority names remain `priority: p0` … `priority: p3`. Grounded `difficulty:*` bands and `frame:*` estimates replace compulsory new `effort:*` assignment; preserve estimate provenance and review historical labels before removal.
+- `idea`, `experiment` and `spec` distinguish undecided possibilities, experimental approaches and specification presence. None alone authorizes implementation. `experiment` replaces `experimental idea`.
+- Existing readiness names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) remain usable during the participation-state design. Final human/agent lifecycle spellings are not chosen.
+- Current PR-state names remain `needs-review`, `ready-for-merge`, `review-stalled`. The target `mergeable` name requires a coordinated workspace-policy/consumer cutover before the live label is renamed.
+- Current `upstream-sync` remains until its consumers, including the promotion workflow, are migrated to target `upstream` (substantive upstream involvement). `baseline` removal is unresolved; do not equate every base defect with upstream.
+- Deselected labels such as `rpc`, `t3c-npi`, `npi-deck`, `codex-review` and `sentinel-review-requested` are not new triage assignments. Preserve existing associations until reviewed cutover; this is not permission to delete them or ignore an existing required review.
+- Reconcile the tracker at least daily using `docs/agents/issue-tracker.md`. Use the runtime `commit` role until the owner configures a dedicated triage role; proposals require evidence and review before application. No scheduler is installed by this documentation change.
 
 ## Where the rest lives
 
