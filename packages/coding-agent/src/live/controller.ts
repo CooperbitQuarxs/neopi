@@ -1130,6 +1130,7 @@ export class LiveSessionController {
 		this.refreshTurnGate();
 		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text: message, final: true };
 		this.#putTurn(turn);
+		this.#latestUtterance = turn;
 		this.#forcePendingComposer();
 		return true;
 	}

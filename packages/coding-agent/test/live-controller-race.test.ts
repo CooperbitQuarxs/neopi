@@ -337,6 +337,26 @@ function makeHarness(options?: {
 
 describe("per-utterance delegation keywords", () => {
 	const defaults = () => ({ suppress: "Iris", force: "relay" });
+	it("uses the new explicit composer turn rather than a retired direct address", async () => {
+		const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris, tell me a joke" } });
+			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "The old joke" } });
+			expect(h.controller.forceDelegateComposer("fix the parser")).toBe(true);
+			await settle();
+			expect(h.prompts).toEqual(["fix the parser"]);
+			expect(h.controller.forceDelegateComposer("Iris, tell me a different joke")).toBe(true);
+			await settle();
+			const contexts = h.sent.filter(message => "content" in message)
+				.flatMap(message => message.content.map(item => item.text)).join("\n");
+			expect(contexts).toContain("Iris, tell me a different joke");
+			expect(h.prompts).toEqual(["fix the parser"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
 	it("uses session context for a forced answer before a real server route exists", async () => {
 		const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
 		await h.controller.start();
