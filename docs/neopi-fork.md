@@ -90,6 +90,16 @@ Queued notices appear with their original `/notice …` text in the pending bar.
 
 Text after the command separator is literal: multiline content, whitespace, shell characters, model mentions, and template expressions are not expanded. `/notice` without non-whitespace text shows `Usage: /notice <text>` without starting a turn. The command is host-only during collaboration, does not target focused subagents or broadcast, and is not an agent tool.
 
+## Delayed composer submissions
+
+`/defer <duration> <input>` submits the remaining input through the normal composer interpreter after the delay. For example, `/defer 10m /compact` runs compaction in ten minutes, while `/defer 10m hi` sends `hi` just like Enter. Busy prompts use the existing session message queue; slash commands keep their normal behavior. Your current draft and its images are not submitted with the deferred input.
+
+Images attached to the `/defer` submission travel with that scheduled input, not your next message. A timer is not a new Enter gesture: during a live call it follows the session input path without retiring or handing off your current speech. If confirmation, a read-only session, or a busy kernel refuses the input, it returns to the composer alongside your newer draft, with a warning and its own attachments preserved.
+
+Durations accept numbers immediately followed by `ms`, `s`, `m`, `h`, `d`, `w`, `M`, or `Y`, including fractions (`.5h`). Units are case-sensitive: `M` means 30 days and `Y` means 365 days, not calendar arithmetic. Zero or negative delays submit immediately.
+
+Scheduling reports an ID. `/defer cancel <id>` cancels that submission, including delivery still waiting on an input hook or command; `/defer cancel all` cancels every pending submission. Deferred input stays bound to the scheduling conversation even if you focus a subagent before it fires. A session change or shutdown cancels both waiting timers and in-flight delivery, so resumed hooks cannot send old input into a new conversation or restore its attachments there. Timers are local to the running conversation and are not persisted across restarts.
+
 ## Iris live voice
 
 Landed from 22–26 Aug 2026.
