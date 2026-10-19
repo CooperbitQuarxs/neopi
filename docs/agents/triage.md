@@ -7,8 +7,12 @@ This manual defines the process; no scheduler or webhook is installed by it.
 
 ## Intake and two passes
 
-1. New submissions enter with `needs-triage`. Read the whole body, comments,
-   acceptance criteria, current labels and linked work. Reconcile existing
+1. Begin intake with `needs-triage`. Issue templates apply it automatically;
+   blank/API submissions may arrive unlabeled, so the intake actor adds it when
+   discovered, including during daily reconciliation. Blank filing stays enabled;
+   automatic labeling outside templates is an open automation item. Read the
+   whole body, comments, acceptance criteria, current labels and linked work.
+   Reconcile existing
    claims before assigning another implementer. Replace `needs-triage` with
    `triage: started` while assessment is in progress; this spelling is an
    iteration-1 proposal, not a promise that classification is complete.
