@@ -56,12 +56,18 @@ export class IrcViewerComponent implements Component {
 	#filterEditing = false;
 	/** Index into the filtered entries; the last entry while following. */
 	#selected = 0;
+	/** Stable anchor when an earlier send finishes after the selected message. */
+	#selectedId: string | undefined;
 	/** Keep the newest message selected as traffic arrives. */
 	#follow = true;
 	/** First list row on screen. */
 	#top = 0;
 	/** List rows the last frame had room for. */
 	#listRows = 1;
+	/** Body width used by the current layout, including synchronous expansion updates. */
+	#bodyWidth = 1;
+	/** List-row span of the selected entry in the last frame. */
+	#selectedSpan = { start: 0, end: 0 };
 	readonly #expanded = new Set<string>();
 	/** The reply being written, and to whom. */
 	#compose: { to: string; replyTo: string } | undefined;
@@ -71,7 +77,12 @@ export class IrcViewerComponent implements Component {
 
 	constructor(options: IrcViewerOptions) {
 		this.#options = options;
-		this.#unsubscribe = options.source.subscribe(() => options.requestRender());
+		this.#unsubscribe = options.source.subscribe(() => {
+			const visible = this.#visible();
+			this.#syncSelection(visible);
+			this.#refreshSelectedSpan(visible);
+			options.requestRender();
+		});
 	}
 
 	dispose(): void {
@@ -84,6 +95,27 @@ export class IrcViewerComponent implements Component {
 		const query = this.#filter.getValue().trim();
 		const entries = this.#options.source.entries();
 		return query ? entries.filter(entry => matchesParticipant(entry, query)) : entries;
+	}
+
+	#syncSelection(visible: readonly IrcLogEntry[]): void {
+		const anchored = this.#follow ? -1 : visible.findIndex(entry => entry.message.id === this.#selectedId);
+		if (anchored >= 0) this.#selected = anchored;
+		else if (this.#follow || this.#selected >= visible.length) this.#selected = Math.max(0, visible.length - 1);
+		this.#selectedId = visible[this.#selected]?.message.id;
+	}
+
+	/** Keep navigation coordinates current even when input precedes the next repaint. */
+	#refreshSelectedSpan(visible: readonly IrcLogEntry[]): void {
+		let start = 0;
+		for (let index = 0; index < visible.length; index++) {
+			const end = start + 1 + this.#bodyLines(visible[index], this.#bodyWidth, index === this.#selected).length;
+			if (index === this.#selected) {
+				this.#selectedSpan = { start, end };
+				return;
+			}
+			start = end;
+		}
+		this.#selectedSpan = { start: 0, end: 0 };
 	}
 
 	#header(entry: IrcLogEntry, selected: boolean): string {
@@ -127,9 +159,10 @@ export class IrcViewerComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = Math.max(CHROME_ROWS + 1, this.#options.rows());
 		const inner = Math.max(1, width - 4);
+		this.#bodyWidth = inner;
 		const all = this.#options.source.entries();
 		const visible = this.#visible();
-		if (this.#follow || this.#selected >= visible.length) this.#selected = Math.max(0, visible.length - 1);
+		this.#syncSelection(visible);
 
 		const list: string[] = [];
 		let selectedStart = 0;
@@ -142,10 +175,13 @@ export class IrcViewerComponent implements Component {
 		});
 
 		this.#listRows = height - CHROME_ROWS;
+		this.#selectedSpan = { start: selectedStart, end: selectedEnd };
 		if (this.#follow) this.#top = Math.max(0, list.length - this.#listRows);
+		else if (selectedEnd - selectedStart > this.#listRows)
+			// Taller than the screen (an expanded long message): keep the viewport inside it, wherever line scrolling left it.
+			this.#top = Math.max(selectedStart, Math.min(this.#top, selectedEnd - this.#listRows));
 		else if (selectedStart < this.#top) this.#top = selectedStart;
-		else if (selectedEnd > this.#top + this.#listRows)
-			this.#top = Math.min(selectedStart, selectedEnd - this.#listRows);
+		else if (selectedEnd > this.#top + this.#listRows) this.#top = selectedEnd - this.#listRows;
 		this.#top = Math.max(0, Math.min(this.#top, Math.max(0, list.length - this.#listRows)));
 
 		const body =
@@ -195,18 +231,45 @@ export class IrcViewerComponent implements Component {
 	}
 
 	#select(index: number): void {
-		const count = this.#visible().length;
+		const visible = this.#visible();
+		const count = visible.length;
 		if (count === 0) return;
 		this.#selected = Math.max(0, Math.min(count - 1, index));
+		this.#selectedId = visible[this.#selected]?.message.id;
 		this.#follow = this.#selected === count - 1;
+		this.#refreshSelectedSpan(visible);
 		this.#options.requestRender();
 	}
 
+	/**
+	 * Scroll by `delta` lines inside the selected entry when it is taller than
+	 * the screen; false when it fits or the edge is already showing, so the
+	 * key moves the selection instead.
+	 */
+	#scrollWithinSelected(delta: number): boolean {
+		const { start, end } = this.#selectedSpan;
+		if (end - start <= this.#listRows) return false;
+		// Honor End's follow position, or reconcile an insertion, before applying the direction.
+		this.#top = this.#follow ? end - this.#listRows : Math.max(start, Math.min(this.#top, end - this.#listRows));
+		const next = Math.max(start, Math.min(this.#top + delta, end - this.#listRows));
+		if (next === this.#top) return false;
+		this.#top = next;
+		this.#follow = false;
+		this.#options.requestRender();
+		return true;
+	}
+
+	#step(lines: number, entries: number): void {
+		if (!this.#scrollWithinSelected(lines)) this.#select(this.#selected + entries);
+	}
+
 	#toggleExpanded(): void {
-		const entry = this.#visible()[this.#selected];
+		const visible = this.#visible();
+		const entry = visible[this.#selected];
 		if (!entry) return;
 		const { id } = entry.message;
 		if (!this.#expanded.delete(id)) this.#expanded.add(id);
+		this.#refreshSelectedSpan(visible);
 		this.#follow = false;
 		this.#options.requestRender();
 	}
@@ -265,7 +328,7 @@ export class IrcViewerComponent implements Component {
 		if (
 			routeSgrMouseInput(data, event => {
 				if (event.wheel === null) return false;
-				this.#select(this.#selected + event.wheel);
+				this.#step(event.wheel * 3, event.wheel);
 				return true;
 			})
 		) {
@@ -298,10 +361,10 @@ export class IrcViewerComponent implements Component {
 			return;
 		}
 		const page = Math.max(1, Math.floor(this.#listRows / 3));
-		if (matchesSelectUp(data)) this.#select(this.#selected - 1);
-		else if (matchesSelectDown(data)) this.#select(this.#selected + 1);
-		else if (matchesSelectPageUp(data)) this.#select(this.#selected - page);
-		else if (matchesSelectPageDown(data)) this.#select(this.#selected + page);
+		if (matchesSelectUp(data)) this.#step(-1, -1);
+		else if (matchesSelectDown(data)) this.#step(1, 1);
+		else if (matchesSelectPageUp(data)) this.#step(-Math.max(1, this.#listRows - 1), -page);
+		else if (matchesSelectPageDown(data)) this.#step(Math.max(1, this.#listRows - 1), page);
 		else if (matchesKey(data, "home")) this.#select(0);
 		else if (matchesKey(data, "end")) this.#select(Number.MAX_SAFE_INTEGER);
 	}

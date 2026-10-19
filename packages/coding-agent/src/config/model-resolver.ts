@@ -1891,6 +1891,34 @@ export function resolveClassifierRoleSelection(
 	});
 	return resolved.model ? { model: resolved.model, thinkingLevel: resolved.thinkingLevel } : undefined;
 }
+
+/**
+ * Resolve the `/issue` filing role. It has no priority chain and no configured
+ * fallback, so it resolves only when the operator assigned it explicitly:
+ * issue filing never borrows the foreground model. An effort saved for the
+ * role in `/models` wins over a selector suffix, as for other role workloads.
+ */
+export function resolveIssuesRoleSelection(
+	settings: Settings,
+	availableModels: Model<Api>[],
+): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
+	if (!settings.getModelRole("issues")?.trim()) return undefined;
+	const resolved = resolveModelRoleValue(formatModelRoleAlias("issues"), availableModels, {
+		settings,
+		matchPreferences: getModelMatchPreferences(settings),
+	});
+	if (!resolved.model) return undefined;
+	const saved = settings.getRoleEffortSelection("issues");
+	const thinkingLevel =
+		saved?.mode === "fixed"
+			? saved.level
+			: saved?.mode === "auto"
+				? AUTO_THINKING
+				: saved?.mode === "inherit"
+					? undefined
+					: resolved.thinkingLevel;
+	return { model: resolved.model, thinkingLevel };
+}
 /**
  * Resolve model patterns to actual Model objects with optional thinking levels
  * Format: "pattern:level" where :level is optional

@@ -156,6 +156,25 @@ Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `643
 
 [PR #60](https://github.com/PsychedelicShayna/neopi/pull/60) added per-advisor system-prompt overrides. [PR #63](https://github.com/PsychedelicShayna/neopi/pull/63) separated concern, blocker, and nit delivery boundaries while preserving session safety gates.
 
+## Background issue filing
+
+`/issue <prose>` ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)) files the operator's own words as an issue without taking over the conversation. Everything after `/issue` is ordinary prose; there is no project, type, or label syntax. It runs as a background job on the `issues` model role, which must be assigned explicitly (it never falls back to the active model, and the job disables provider model fallback).
+
+Two agents run in sequence, both visible in the Agent Hub:
+
+1. `IssueTarget-<id>` picks the tracker. It sees the prose plus an inventory merged from the foreground checkout, the `issues.checkouts` override map (`OWNER/REPO` → local path), checkouts found through session history, and `gh repo list`. Only GitHub remotes count (github.com or the configured `GH_HOST`), and a checkout counts only for its `origin`. The agent can select only a repository from that inventory that has a verified local checkout; it never clones. If the target is ambiguous it asks.
+2. `Issue-<id>` starts with its cwd in that checkout, so the target's own `AGENTS.md` chain is loaded. Its tools are pinned to the selected repository:
+   - read-only file tools;
+   - issue search and view, and the live label list;
+   - five sampled historical issues: the newest, the ordinal midpoint, and three random issues between them (all issues when there are five or fewer);
+   - one `issue_publish`.
+
+   Labels must already exist. Publication is exactly-once: repeated calls share one create. A create whose result is uncertain is reconciled against the operator's own issues with the same title and body before anything is retried. When an existing issue owns the subject, the agent returns a drafted amendment instead and posts nothing.
+
+Either agent can end the request with `issue_decline`, for example when the operator replies that nothing should be filed. A declined request files nothing and records the reason.
+
+Questions from either agent appear in the transcript; answer them in the Agent Hub, where the request is kept. Status records (dispatch, question, filed URL with the submitted body and applied labels, existing owner, failure) are display-only: they never start a foreground turn and do not lift holds. While the foreground is mid-turn the status line shows them immediately and the record follows at the next turn.
+
 ## Whole-recording xAI speech input
 
 `Ctrl+Space` (`app.stt.toggle`) starts an independent xAI recording; press it again to stop and transcribe the complete WAV through native `grok-stt`. Pauses and silence remain in the recording, and 750 ms of synthetic silence is appended after nonempty captures so the recognizer hears the end of the utterance. Nothing is segmented, streamed, or transcribed while recording. Existing xAI OAuth credentials are preferred, with xAI API-key credentials as the fallback; no Dictation model selection, `stt.enabled` setting, local speech model, or helper executable is required.

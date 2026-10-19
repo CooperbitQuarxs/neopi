@@ -17,6 +17,7 @@ import * as path from "node:path";
 import type * as NativePath from "@oh-my-pi/pi-natives/path";
 import { engines, version } from "../package.json" with { type: "json" };
 import { isEexist, isEnoent, isEnotdir } from "./fs-error";
+import { getEnvValue } from "./launch-env";
 
 /** Executable name used in CLI output and launch commands. */
 export const APP_NAME: string = "npi";
@@ -97,8 +98,8 @@ export function resolveProfileEnv(omp: string | undefined, pi: string | undefine
 	return normalizeProfileName(omp !== undefined ? omp : pi);
 }
 
-function getProfileFromEnv(): string | undefined {
-	return resolveProfileEnv(process.env.OMP_PROFILE, process.env.PI_PROFILE);
+function getProfileFromEnv(env: Readonly<NodeJS.ProcessEnv> = process.env): string | undefined {
+	return resolveProfileEnv(getEnvValue(env, "OMP_PROFILE"), getEnvValue(env, "PI_PROFILE"));
 }
 
 /**
@@ -109,9 +110,9 @@ function getProfileFromEnv(): string | undefined {
  * CLI re-validates the env (see `runCli` in coding-agent/src/cli.ts) so the
  * user still gets a clean invalid-profile message.
  */
-function readProfileFromEnvSafe(): string | undefined {
+function readProfileFromEnvSafe(env: Readonly<NodeJS.ProcessEnv> = process.env): string | undefined {
 	try {
-		return getProfileFromEnv();
+		return getProfileFromEnv(env);
 	} catch {
 		return undefined;
 	}
@@ -119,28 +120,37 @@ function readProfileFromEnvSafe(): string | undefined {
 
 /** Profile-independent config root (~/.omp), shared by every NeoPi profile. */
 export function getBaseConfigRoot(): string {
-	return path.join(os.homedir(), getConfigDirName());
+	return getProfileConfigRoot(undefined);
 }
 
-function getProfileConfigRoot(profile: string | undefined): string {
-	const root = getBaseConfigRoot();
+function getProfileConfigRoot(
+	profile: string | undefined,
+	home = os.homedir(),
+	configDir = getConfigDirName(),
+): string {
+	const root = path.join(home, configDir);
 	return profile ? path.join(root, "profiles", profile) : root;
 }
 
-function readPiProfileFromEnvSafe(): string | undefined {
+function readPiProfileFromEnvSafe(env: Readonly<NodeJS.ProcessEnv> = process.env): string | undefined {
 	try {
-		return normalizeProfileName(process.env.PI_PROFILE);
+		return normalizeProfileName(getEnvValue(env, "PI_PROFILE"));
 	} catch {
 		return undefined;
 	}
 }
 
-function getProfileAgentDir(profile: string): string {
-	return path.join(getProfileConfigRoot(profile), "agent");
+function getProfileAgentDir(profile: string, home = os.homedir(), configDir = getConfigDirName()): string {
+	return path.join(getProfileConfigRoot(profile, home, configDir), "agent");
 }
 
-function isProfileDerivedAgentDir(profile: string | undefined, agentDirEnv: string | undefined): boolean {
-	return profile !== undefined && agentDirEnv === getProfileAgentDir(profile);
+function isProfileDerivedAgentDir(
+	profile: string | undefined,
+	agentDirEnv: string | undefined,
+	home = os.homedir(),
+	configDir = getConfigDirName(),
+): boolean {
+	return profile !== undefined && agentDirEnv === getProfileAgentDir(profile, home, configDir);
 }
 // =============================================================================
 // Project directory
@@ -516,11 +526,17 @@ function resolvePreProfileAgentDir(
 	profile: string | undefined,
 	agentDirEnv: string | undefined,
 	profileAgentDirSource: string | undefined = profile,
+	home = os.homedir(),
+	configDir = getConfigDirName(),
 ): string | undefined {
-	return isProfileDerivedAgentDir(profile ?? profileAgentDirSource, agentDirEnv) ? undefined : agentDirEnv;
+	return isProfileDerivedAgentDir(profile ?? profileAgentDirSource, agentDirEnv, home, configDir)
+		? undefined
+		: agentDirEnv;
 }
 
 let activeProfile = readProfileFromEnvSafe();
+let profileSelectedExplicitly = false;
+let agentDirSelectedExplicitly: string | undefined;
 
 /**
  * Resolve the agent-dir override for the current `activeProfile` from the live
@@ -589,6 +605,8 @@ export function getConfigRootDir(): string {
 
 /** Set the coding agent directory. Creates a fresh resolver, invalidating all cached paths. */
 export function setAgentDir(dir: string): void {
+	profileSelectedExplicitly = true;
+	agentDirSelectedExplicitly = dir;
 	activeProfile = undefined;
 	dirs = new DirResolver({ agentDirOverride: dir });
 	process.env.PI_CODING_AGENT_DIR = dir;
@@ -621,6 +639,8 @@ export function __resetProfileSnapshotForTests(): void {
  * back.
  */
 export function __resetDirsFromEnvForTests(): void {
+	profileSelectedExplicitly = false;
+	agentDirSelectedExplicitly = undefined;
 	activeProfile = readProfileFromEnvSafe();
 	__resetProfileSnapshotForTests();
 	refreshDirsFromEnv();
@@ -635,8 +655,9 @@ if (testGlobal.__npiTestDirectoryGuardEnabled) {
 }
 
 /** Activate a named profile. Passing undefined or "default" returns to the default profile. */
-export function setProfile(profile: string | undefined): void {
+export function setProfile(profile: string | undefined, source: "explicit" | "environment" = "explicit"): void {
 	const next = normalizeProfileName(profile);
+	profileSelectedExplicitly = source === "explicit";
 	if (next && !activeProfile) {
 		// First activation of a named profile in this process: snapshot the
 		// current PI_CODING_AGENT_DIR so a later reset can restore the user's
@@ -681,6 +702,37 @@ export function getProfileRootDir(profile: string | undefined): string {
 export function getAgentDir(): string {
 	assertTestPathIsIsolated(dirs.agentDir, "agent");
 	return dirs.agentDir;
+}
+
+/**
+ * Resolve user dotenv locations from a supplied launch snapshot, without
+ * changing the ordinary directory resolver. Explicit API/CLI selections still
+ * win; project-autoloaded HOME, config-root, profile and agent-dir values do not.
+ */
+export function getUserEnvPaths(env: Readonly<NodeJS.ProcessEnv>): {
+	home: string;
+	configRoot: string;
+	agentDir: string;
+} {
+	const home = getEnvValue(env, process.platform === "win32" ? "USERPROFILE" : "HOME") || os.userInfo().homedir;
+	const configDir = getEnvValue(env, "PI_CONFIG_DIR") || CONFIG_DIR_NAME;
+	const launchProfile = readProfileFromEnvSafe(env);
+	const profile = profileSelectedExplicitly ? activeProfile : launchProfile;
+	const configRoot = getProfileConfigRoot(profile, home, configDir);
+	const override =
+		agentDirSelectedExplicitly ??
+		resolvePreProfileAgentDir(
+			launchProfile,
+			getEnvValue(env, "PI_CODING_AGENT_DIR"),
+			readPiProfileFromEnvSafe(env),
+			home,
+			configDir,
+		);
+	return {
+		home,
+		configRoot,
+		agentDir: !profile && override ? path.resolve(override) : path.join(configRoot, "agent"),
+	};
 }
 
 /** Get the project-local config directory (.omp). */

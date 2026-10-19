@@ -27,7 +27,7 @@
  * for the target (on the channel, or at the version).
  */
 import * as fs from "node:fs";
-import { $env, APP_NAME, isRecord, VERSION } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getTrustedEnv, isRecord, VERSION } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import {
 	isTimeoutError,
@@ -48,9 +48,9 @@ const PRODUCT = "omp";
 
 const BUILD_CHECK_TIMEOUT_MS = 30_000;
 
-/** Build service origin: `PI_BUILD_URL` without trailing slashes, else {@link DEFAULT_BUILD_URL}. */
+/** Build origin from launch/user configuration only; project dotenv is never an update authority. */
 export function buildServiceUrl(): string {
-	const configured = ($env.PI_BUILD_URL ?? "").trim().replace(/\/+$/, "");
+	const configured = (getTrustedEnv("PI_BUILD_URL") ?? "").trim().replace(/\/+$/, "");
 	return configured || DEFAULT_BUILD_URL;
 }
 

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { APP_NAME, removeWithRetries, VERSION } from "@oh-my-pi/pi-utils";
-import { currentBuildHost } from "../../src/cli/build-service";
+import { buildServiceUrl, currentBuildHost } from "../../src/cli/build-service";
 import { fixedNpmRegistry } from "../../src/cli/npm-registry";
 import { getLatestRelease, runUpdateCommand } from "../../src/cli/update-cli";
 import { cfgUpdateChannel } from "../../src/modes/settings";
@@ -15,14 +15,11 @@ type FetchInit = RequestInit | BunFetchRequestInit;
 
 describe("runUpdateCommand version source", () => {
 	const previousPath = process.env.PATH;
-	const previousBuildUrl = process.env.PI_BUILD_URL;
 	const dirs: string[] = [];
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		process.env.PATH = previousPath;
-		if (previousBuildUrl === undefined) delete process.env.PI_BUILD_URL;
-		else process.env.PI_BUILD_URL = previousBuildUrl;
 		await Promise.all(dirs.splice(0).map(dir => removeWithRetries(dir)));
 	});
 
@@ -68,14 +65,13 @@ describe("runUpdateCommand version source", () => {
 
 	it("checks npm, with a timeout, when no standalone binary is on PATH", async () => {
 		await isolatePath();
-		process.env.PI_BUILD_URL = "https://build.test";
 		quiet();
 		const requests = stubFetch(() => Response.json({ version: "999.0.0" }));
 
 		await runUpdateCommand({ force: false, check: true });
 
 		expect(requests.length).toBeGreaterThan(0);
-		expect(requests.some(request => request.url.startsWith("https://build.test/"))).toBe(false);
+		expect(requests.some(request => request.url.startsWith(`${buildServiceUrl()}/`))).toBe(false);
 		for (const request of requests) expect(request.signal).toBeInstanceOf(AbortSignal);
 	});
 
@@ -88,8 +84,7 @@ describe("runUpdateCommand version source", () => {
 			await fs.chmod(npiPath, 0o755);
 			const next = `#!/bin/sh\necho ${APP_NAME}/999.0.0\n`;
 			const { target, fileName } = await currentBuildHost();
-			process.env.PI_BUILD_URL = "https://build.test";
-			const check = `https://build.test/api/products/omp/latest/${target}?channel=stable&from_version=${VERSION}`;
+			const check = `${buildServiceUrl()}/api/products/omp/latest/${target}?channel=stable&from_version=${VERSION}`;
 			const { logs } = quiet();
 			const requests = stubFetch(url => {
 				if (url === check) {
@@ -108,6 +103,53 @@ describe("runUpdateCommand version source", () => {
 			expect(requests.map(request => request.url)).toEqual([check, "https://r2.test/npi"]);
 			expect(await Bun.file(npiPath).text()).toBe(next);
 			expect(logs.some(line => line.includes("Updated to 999.0.0"))).toBe(true);
+			expect(logs.some(line => line.includes(`Build source: ${buildServiceUrl()}`))).toBe(true);
+		},
+	);
+
+	it.skipIf(process.platform === "win32").each(["binary", "npm"])(
+		"announces the build source before a %s manager takeover fetch",
+		async dist => {
+			const root = await isolatePath();
+			const bin = path.join(root, "bin");
+			await fs.mkdir(bin);
+			const entry = path.join(root, "lib/node_modules/@oh-my-pi/pi-coding-agent/cli.js");
+			await Bun.write(entry, `#!/bin/sh\necho ${APP_NAME}/1.0.0\n`);
+			await fs.chmod(entry, 0o755);
+			await fs.symlink(entry, path.join(bin, APP_NAME));
+			const npm = path.join(bin, "npm");
+			await Bun.write(npm, `#!/bin/sh\nif [ "$1" = prefix ]; then printf '%s\\n' '${root}'; fi\nexit 0\n`);
+			await fs.chmod(npm, 0o755);
+			const origin = "https://build.test";
+			const script = [
+				`import { runUpdateCommand } from ${JSON.stringify(path.resolve(import.meta.dir, "../../src/cli/update-cli.ts"))};`,
+				"globalThis.fetch = async input => {",
+				"  const url = String(input); console.log(`Request: ${url}`);",
+				`  return url.startsWith(${JSON.stringify(origin)})`,
+				"    ? Response.json({ error: 'no_build' }, { status: 404 })",
+				`    : Response.json({ version: '999.0.0', omp: { dist: ${JSON.stringify(dist)} } });`,
+				"};",
+				"await runUpdateCommand({ force: true, check: false });",
+			].join("\n");
+			const child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", "--eval", script], {
+				cwd: root,
+				env: { HOME: root, PATH: bin, PI_CODING_AGENT_DIR: path.join(root, "agent"), PI_BUILD_URL: origin },
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+				child.exited,
+			]);
+			expect(exitCode).toBe(1);
+			expect(stderr).toContain("No npi");
+			const requests = stdout.split("\n").filter(line => line.startsWith("Request: "));
+			expect(requests[0]).toContain("registry.npmjs.org/");
+			expect(requests[1]).toContain(`${origin}/api/products/omp/`);
+			if (dist === "npm") expect(requests[1]).toContain("/999.0.0/");
+			expect(stdout).toContain(`Build source: ${origin}`);
+			expect(await Bun.file(entry).text()).toBe(`#!/bin/sh\necho ${APP_NAME}/1.0.0\n`);
 		},
 	);
 });

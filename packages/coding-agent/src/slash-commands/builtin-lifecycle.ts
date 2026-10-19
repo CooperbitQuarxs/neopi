@@ -462,6 +462,18 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		},
 	},
 	{
+		name: "issue",
+		icon: "rule",
+		description: "File an issue in the right project's tracker from a background agent",
+		inlineHint: "<what to file, in your own words>",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const prose = command.text.slice(`/${command.name}`.length).trim();
+			clearSubmittedText(runtime);
+			await runtime.ctx.handleIssueCommand(prose);
+		},
+	},
+	{
 		name: "omfg",
 		icon: "rule",
 		description: "Forge a TTSR rule from a complaint to stop a recurring behavior",
