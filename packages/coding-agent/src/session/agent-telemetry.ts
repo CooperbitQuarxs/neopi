@@ -12,11 +12,7 @@ import type { Settings } from "../config/settings";
 import type { ContextUsage } from "../extensibility/extensions/types";
 import template from "../prompts/system/agent-telemetry.md" with { type: "text" };
 import type { AgentRegistry } from "../registry/agent-registry";
-import {
-	cfgTelemetryAgentContext,
-	cfgTelemetryThresholdEvents,
-	cfgTelemetryToolResults,
-} from "../telemetry-settings";
+import { cfgTelemetryAgentContext, cfgTelemetryThresholdEvents, cfgTelemetryToolResults } from "../telemetry-settings";
 import type { AgentSession } from "./agent-session";
 import { readToolExecutionStart } from "./exit-diagnostics";
 import { resolveModelCompactionSettings } from "./model-compaction-threshold";
@@ -80,25 +76,30 @@ export function inspectAgentTelemetry(
 	if (!model) return undefined;
 	const context = session.getContextUsage();
 	const policy = resolveModelCompactionSettings(settings, model);
-	const threshold = context && context.contextWindow > 0 ? resolveThresholdTokens(context.contextWindow, policy) : null;
-	const speculationStartsAt = threshold === null ? null : Math.max(0, threshold - resolveSpeculationLeadTokens(threshold));
+	const threshold =
+		context && context.contextWindow > 0 ? resolveThresholdTokens(context.contextWindow, policy) : null;
+	const speculationStartsAt =
+		threshold === null ? null : Math.max(0, threshold - resolveSpeculationLeadTokens(threshold));
 	const previous = session.messages.findLast(message => message.role === "assistant");
 	const checkpointActive = session.getCheckpointState() !== undefined;
-	const refs = registry?.list().filter(ref => {
-		if (ref.kind !== "main" && ref.kind !== "sub" && ref.kind !== "advisor") return false;
-		return registry.isInRootTree(ref.id, agentId ? registry.rootOf(agentId) : undefined);
-	}) ?? [];
+	const refs =
+		registry?.list().filter(ref => {
+			if (ref.kind !== "main" && ref.kind !== "sub" && ref.kind !== "advisor") return false;
+			return registry.isInRootTree(ref.id, agentId ? registry.rootOf(agentId) : undefined);
+		}) ?? [];
 	const fleet = { running: 0, idle: 0, parked: 0, aborted: 0 };
 	for (const ref of refs) fleet[ref.status]++;
 	const record: AgentContextTelemetry = {
 		type: "agent_context",
 		model: { provider: model.provider, id: model.id, effort: session.thinkingLevel ?? null },
-		context: context ? {
-			usedTokens: context.tokens,
-			limitTokens: context.contextWindow,
-			percent: Math.round(context.percent * 10) / 10,
-			estimated: true,
-		} : null,
+		context: context
+			? {
+					usedTokens: context.tokens,
+					limitTokens: context.contextWindow,
+					percent: Math.round(context.percent * 10) / 10,
+					estimated: true,
+				}
+			: null,
 		compaction: {
 			enabled: session.autoCompactionEnabled,
 			thresholdTokens: threshold,
@@ -109,14 +110,22 @@ export function inspectAgentTelemetry(
 		previousTurn: previous ? agentUsageFromMessages([previous]) : null,
 		fleet,
 	};
-	if (cfgTelemetryThresholdEvents.get(settings) && session.autoCompactionEnabled && context &&
-		threshold !== null && speculationStartsAt !== null && context.tokens >= speculationStartsAt) {
-		record.events = [{
-			type: "approaching_compaction",
-			headroomTokens: Math.max(0, threshold - context.tokens),
-			estimated: true,
-			checkpointAvailable: checkpointActive,
-		}];
+	if (
+		cfgTelemetryThresholdEvents.get(settings) &&
+		session.autoCompactionEnabled &&
+		context &&
+		threshold !== null &&
+		speculationStartsAt !== null &&
+		context.tokens >= speculationStartsAt
+	) {
+		record.events = [
+			{
+				type: "approaching_compaction",
+				headroomTokens: Math.max(0, threshold - context.tokens),
+				estimated: true,
+				checkpointAvailable: checkpointActive,
+			},
+		];
 	}
 	if (includeFull) {
 		const usage = emptyAgentUsage();
@@ -126,13 +135,15 @@ export function inspectAgentTelemetry(
 		const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
 		record.full = {
 			usage,
-			cacheReadPercent: promptTokens > 0 ? Math.round(usage.cacheRead / promptTokens * 1_000) / 10 : null,
+			cacheReadPercent: promptTokens > 0 ? Math.round((usage.cacheRead / promptTokens) * 1_000) / 10 : null,
 			cost: { main: usage.cost, advisors: session.getAdvisorCost() },
 			agents: refs.map(ref => ({
 				id: ref.id,
 				status: ref.status,
 				context: ref.session?.getContextUsage() ?? null,
-				usage: ref.session ? agentUsageFromMessages(ref.session.messages) : ref.history?.metrics?.agentUsage ?? null,
+				usage: ref.session
+					? agentUsageFromMessages(ref.session.messages)
+					: (ref.history?.metrics?.agentUsage ?? null),
 			})),
 		};
 	}
@@ -159,8 +170,8 @@ export function injectAgentTelemetry(messages: AgentMessage[], host: AgentTeleme
 		projected = messages.map((message, index) => {
 			if (index <= lastAssistant || message.role !== "toolResult") return message;
 			const startedAt = starts.get(message.toolCallId);
-			const durationMs = startedAt !== undefined && Number.isFinite(startedAt)
-				? Math.max(0, message.timestamp - startedAt) : null;
+			const durationMs =
+				startedAt !== undefined && Number.isFinite(startedAt) ? Math.max(0, message.timestamp - startedAt) : null;
 			const value = {
 				type: "tool_telemetry",
 				tool: message.toolName,
@@ -172,16 +183,23 @@ export function injectAgentTelemetry(messages: AgentMessage[], host: AgentTeleme
 		});
 	}
 	if (contextMode !== "off" || (thresholdEvents && record.events)) {
-		const value = contextMode === "off" ? { type: "agent_threshold_events", events: record.events } :
-			contextMode === "minimal" && record.full ? { ...record, full: undefined } : record;
-		projected = [...projected, {
-			role: "custom",
-			customType: "agent-runtime-telemetry",
-			content: renderTelemetry(value),
-			display: false,
-			attribution: "agent",
-			timestamp: messages.at(-1)?.timestamp ?? 0,
-		}];
+		const value =
+			contextMode === "off"
+				? { type: "agent_threshold_events", events: record.events }
+				: contextMode === "minimal" && record.full
+					? { ...record, full: undefined }
+					: record;
+		projected = [
+			...projected,
+			{
+				role: "custom",
+				customType: "agent-runtime-telemetry",
+				content: renderTelemetry(value),
+				display: false,
+				attribution: "agent",
+				timestamp: messages.at(-1)?.timestamp ?? 0,
+			},
+		];
 	}
 	return projected;
 }

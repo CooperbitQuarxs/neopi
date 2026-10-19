@@ -60,7 +60,13 @@ function fixture(settings = Settings.isolated()) {
 		getAgentId: () => "Root",
 	};
 	const agent = new Agent({
-		initialState: { model: mock.model, messages: [previous], systemPrompt: ["test"], tools: [] },
+		initialState: {
+			model: mock.model,
+			thinkingLevel: "medium",
+			messages: [previous],
+			systemPrompt: ["test"],
+			tools: [],
+		},
 		streamFn: mock.stream,
 	});
 	const session = new AgentSession({
@@ -73,15 +79,31 @@ function fixture(settings = Settings.isolated()) {
 	});
 	sessions.push(session);
 	registry.register({ id: "Root", displayName: "Root", kind: "main", session, status: "running" });
-	registry.register({ id: "Child", displayName: "Child", kind: "sub", session: null, parentId: "Root", status: "idle" });
-	registry.register({ id: "Parked", displayName: "Parked", kind: "sub", session: null, parentId: "Root", status: "parked" });
+	registry.register({
+		id: "Child",
+		displayName: "Child",
+		kind: "sub",
+		session: null,
+		parentId: "Root",
+		status: "idle",
+	});
+	registry.register({
+		id: "Parked",
+		displayName: "Parked",
+		kind: "sub",
+		session: null,
+		parentId: "Root",
+		status: "parked",
+	});
 	registry.register({ id: "Other", displayName: "Other", kind: "main", session: null, status: "running" });
 	registry.register({ id: "Operator", displayName: "Operator", kind: "operator", session: null, status: "running" });
 	return { session, manager, previous, toolSession, registry, mock };
 }
 
 function telemetryFrom(messages: AgentMessage[]): AgentContextTelemetry {
-	const notices = messages.filter(message => message.role === "custom" && message.customType === "agent-runtime-telemetry");
+	const notices = messages.filter(
+		message => message.role === "custom" && message.customType === "agent-runtime-telemetry",
+	);
 	expect(notices).toHaveLength(1);
 	const notice = notices[0]!;
 	if (typeof notice.content !== "string") throw new Error("Expected text notice");
@@ -91,8 +113,12 @@ function telemetryFrom(messages: AgentMessage[]): AgentContextTelemetry {
 }
 
 function modelText(message: Message): string {
-	return typeof message.content === "string" ? message.content : message.content
-		.filter(block => block.type === "text").map(block => block.text).join("\n");
+	return typeof message.content === "string"
+		? message.content
+		: message.content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n");
 }
 
 describe("agent-visible runtime telemetry", () => {
@@ -100,7 +126,9 @@ describe("agent-visible runtime telemetry", () => {
 		const { session } = fixture();
 		const messages: AgentMessage[] = [{ role: "user", content: "keep every byte\n\tunchanged", timestamp: 123 }];
 		const before = JSON.stringify(convertToLlm(messages));
-		const readContext = vi.spyOn(session, "getContextUsage").mockImplementation(() => { throw new Error("off read counters"); });
+		const readContext = vi.spyOn(session, "getContextUsage").mockImplementation(() => {
+			throw new Error("off read counters");
+		});
 		const projected = session.prepareAgentTelemetry(messages);
 		expect(projected).toBe(messages);
 		expect(JSON.stringify(convertToLlm(projected))).toBe(before);
@@ -109,11 +137,15 @@ describe("agent-visible runtime telemetry", () => {
 
 	it("injects exactly one minimal record matching the local inspect snapshot", () => {
 		const { session, toolSession, previous } = fixture(Settings.isolated({ "telemetry.agent_context": "minimal" }));
-		session.setCheckpointState({ checkpointEntryId: null, checkpointMessageCount: 1, startedAt: "2026-10-19T00:00:00Z" });
+		session.setCheckpointState({
+			checkpointEntryId: null,
+			checkpointMessageCount: 1,
+			startedAt: "2026-10-19T00:00:00Z",
+		});
 		const messages: AgentMessage[] = [previous, { role: "user", content: "continue", timestamp: 123 }];
 		const record = telemetryFrom(session.prepareAgentTelemetry(messages));
 		expect(record).toEqual(toolSession.getAgentTelemetry?.());
-		expect(record.model).toEqual({ provider: session.model!.provider, id: session.model!.id, effort: "medium" });
+		expect(record.model).toEqual({ provider: session.model!.provider, id: session.model!.id, effort: null });
 		expect(record.context).toEqual({
 			usedTokens: session.getContextUsage()!.tokens,
 			limitTokens: 100_000,
@@ -124,7 +156,11 @@ describe("agent-visible runtime telemetry", () => {
 		expect(record.compaction.state).toBe("idle");
 		expect(record.checkpoint.active).toBe(true);
 		expect(record.previousTurn).toMatchObject({
-			input: 12_000, output: 600, reasoning: 200, total: 16_600, requests: 1,
+			input: 12_000,
+			output: 600,
+			reasoning: 200,
+			total: 16_600,
+			requests: 1,
 			last: { durationMs: 2_000, ttftMs: 100, outputTokensPerSecond: 300 },
 		});
 		expect(record.fleet).toEqual({ running: 1, idle: 1, parked: 1, aborted: 0 });
@@ -133,13 +169,17 @@ describe("agent-visible runtime telemetry", () => {
 	});
 
 	it("emits optional structured threshold notices with estimated headroom and checkpoint state", () => {
-		const { session } = fixture(Settings.isolated({
-			"telemetry.threshold_events": true,
-			"compaction.thresholdPercent": 85,
-		}));
+		const { session } = fixture(
+			Settings.isolated({
+				"telemetry.threshold_events": true,
+				"compaction.thresholdPercent": 85,
+			}),
+		);
 		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 80_000, contextWindow: 100_000, percent: 80 });
 		const snapshot = session.getAgentTelemetry()!;
-		expect(snapshot.events).toEqual([{ type: "approaching_compaction", headroomTokens: 5_000, estimated: true, checkpointAvailable: false }]);
+		expect(snapshot.events).toEqual([
+			{ type: "approaching_compaction", headroomTokens: 5_000, estimated: true, checkpointAvailable: false },
+		]);
 		const projected = session.prepareAgentTelemetry([{ role: "user", content: "continue", timestamp: 1 }]);
 		const notice = projected.at(-1)!;
 		expect(notice.role).toBe("custom");
@@ -164,39 +204,69 @@ describe("agent-visible runtime telemetry", () => {
 		expect(record.full!.agents[0]!.context!.contextWindow).toBe(100_000);
 	});
 
-	it("keeps independent tool summaries transient and preserves tool payloads and pairing", () => {
-		const { session, manager, previous } = fixture(Settings.isolated({ "telemetry.tool_results": "summary" }));
-		manager.appendCustomEntry("tool_execution_start", { toolCallId: "call-1", toolName: "read", startedAt: "2026-10-19T00:00:00.000Z" });
-		const result: ToolResultMessage = {
-			role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "original output" }],
-			isError: false, timestamp: Date.parse("2026-10-19T00:00:00.125Z"), details: { original: true },
-		};
-		const projected = session.prepareAgentTelemetry([previous, result]);
-		expect(projected).toHaveLength(2);
-		const annotated = projected[1] as ToolResultMessage;
-		expect(annotated.toolCallId).toBe("call-1");
-		expect(annotated.details).toBe(result.details);
-		expect(annotated.content[0]).toBe(result.content[0]!);
-		expect(modelText(annotated)).toContain('"durationMs":125');
-		expect(modelText(annotated)).not.toContain('"runtime"');
-		expect(result.content).toHaveLength(1);
-	});
+	it.each(["summary", "full"] as const)(
+		"keeps independent %s tool telemetry transient and preserves pairing",
+		mode => {
+			const { session, manager, previous } = fixture(Settings.isolated({ "telemetry.tool_results": mode }));
+			manager.appendCustomEntry("tool_execution_start", {
+				toolCallId: "call-1",
+				toolName: "read",
+				startedAt: "2026-10-19T00:00:00.000Z",
+			});
+			const result: ToolResultMessage = {
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "read",
+				content: [{ type: "text", text: "original output" }],
+				isError: false,
+				timestamp: Date.parse("2026-10-19T00:00:00.125Z"),
+				details: { original: true },
+			};
+			const projected = session.prepareAgentTelemetry([previous, result]);
+			expect(projected).toHaveLength(2);
+			const annotated = projected[1] as ToolResultMessage;
+			expect(annotated.toolCallId).toBe("call-1");
+			expect(annotated.details).toBe(result.details);
+			expect(annotated.content[0]).toBe(result.content[0]!);
+			expect(modelText(annotated)).toContain('"durationMs":125');
+			if (mode === "summary") expect(modelText(annotated)).not.toContain('"runtime"');
+			else expect(modelText(annotated)).toContain('"runtime":{"type":"agent_context"');
+			expect(result.content).toHaveLength(1);
+		},
+	);
 
 	it("injects one fresh record on every real SDK model boundary without accumulating it in history", async () => {
 		const temp = await TempDir.create("@agent-telemetry-sdk-");
 		tempDirs.push(temp);
 		const auth = createInMemoryAuthStorage();
 		authStores.push(auth);
-		const mock = createMockModel({ handler: { content: ["done"], usage: { input: 100, output: 10, totalTokens: 110 } } });
+		const mock = createMockModel({
+			handler: { content: ["done"], usage: { input: 100, output: 10, totalTokens: 110 } },
+		});
 		const settings = Settings.isolated({ "telemetry.agent_context": "minimal", "compaction.enabled": false });
+		const modelRegistry = new ModelRegistry(auth, path.join(temp.path(), "models.yml"));
+		vi.spyOn(modelRegistry, "getApiKey").mockResolvedValue("test-key");
 		const { session } = await createAgentSession({
-			cwd: temp.path(), agentDir: temp.path(), authStorage: auth,
-			modelRegistry: new ModelRegistry(auth, path.join(temp.path(), "models.yml")),
-			model: mock.model, settings, sessionManager: SessionManager.inMemory(temp.path()),
-			agentRegistry: new AgentRegistry(), disableExtensionDiscovery: true, extensions: [],
-			skills: [], contextFiles: [], promptTemplates: [], slashCommands: [], rules: [],
-			enableMCP: false, enableLsp: false, skipPythonPreflight: true,
-			preloadedCustomToolPaths: [], toolNames: [],
+			cwd: temp.path(),
+			agentDir: temp.path(),
+			authStorage: auth,
+			modelRegistry,
+			model: mock.model,
+			settings,
+			sessionManager: SessionManager.inMemory(temp.path()),
+			agentRegistry: new AgentRegistry(),
+			disableExtensionDiscovery: true,
+			extensions: [],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			rules: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			preloadedCustomToolPaths: [],
+			toolNames: [],
 		});
 		sessions.push(session);
 		session.agent.streamFn = mock.stream;
@@ -205,9 +275,15 @@ describe("agent-visible runtime telemetry", () => {
 		await session.prompt("second");
 		expect(mock.calls).toHaveLength(2);
 		for (const call of mock.calls) {
-			expect(call.context.messages.filter(message => modelText(message).includes('"type":"agent_context"'))).toHaveLength(1);
+			expect(
+				call.context.messages.filter(message => modelText(message).includes('"type":"agent_context"')),
+			).toHaveLength(1);
 		}
 		expect(modelText(mock.calls[1]!.context.messages.at(-1)!)).toContain('"output":10');
-		expect(session.messages.some(message => message.role === "custom" && message.customType === "agent-runtime-telemetry")).toBe(false);
-	});
+		expect(
+			session.messages.some(
+				message => message.role === "custom" && message.customType === "agent-runtime-telemetry",
+			),
+		).toBe(false);
+	}, 30_000);
 });

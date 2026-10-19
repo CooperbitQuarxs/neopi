@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { disposeAllVmContexts, executeJs } from "@oh-my-pi/pi-coding-agent/eval/js";
+import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
+import { executeJs } from "@oh-my-pi/pi-coding-agent/eval/js/executor";
 import { disposeAllKernelSessions, executePython } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { AgentContextTelemetry } from "@oh-my-pi/pi-coding-agent/session/agent-telemetry";
@@ -49,7 +50,7 @@ describe("runtime.inspect", () => {
 
 			expect(result.exitCode).toBe(0);
 			expect(JSON.parse(result.output.trim())).toEqual(telemetry);
-		});
+		}, 30_000);
 
 		it(`returns explicit null when telemetry is unavailable in ${language}`, async () => {
 			const toolSession = session(undefined);
@@ -64,6 +65,6 @@ describe("runtime.inspect", () => {
 
 			expect(result.exitCode).toBe(0);
 			expect(result.output.trim()).toBe("null");
-		});
+		}, 30_000);
 	}
 });

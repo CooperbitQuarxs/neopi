@@ -21,11 +21,14 @@ describe("local agent telemetry settings", () => {
 		expect(cfgTelemetryThresholdEvents.get(settings)).toBe(false);
 	});
 
-	it.each(["off", "summary", "full"] as const)("accepts tool-result mode %s independently of context injection", mode => {
-		const settings = Settings.isolated({ "telemetry.tool_results": mode });
-		expect(cfgTelemetryToolResults.get(settings)).toBe(mode);
-		expect(cfgTelemetryAgentContext.get(settings)).toBe("off");
-	});
+	it.each(["off", "summary", "full"] as const)(
+		"accepts tool-result mode %s independently of context injection",
+		mode => {
+			const settings = Settings.isolated({ "telemetry.tool_results": mode });
+			expect(cfgTelemetryToolResults.get(settings)).toBe(mode);
+			expect(cfgTelemetryAgentContext.get(settings)).toBe("off");
+		},
+	);
 
 	it("enables threshold notices without changing either detail mode", () => {
 		const settings = Settings.isolated({ "telemetry.threshold_events": true });
