@@ -11,6 +11,7 @@
 
 - Added configurable direct-address (`Iris`) and per-utterance force (`relay`) live keywords: leading addresses refuse primary handoffs, mentions elsewhere remain delegable, and forced utterances send the exact operator text once; editing the composer determines the final handoff even when speech originally addressed Iris ([#40](https://github.com/PsychedelicShayna/neopi/issues/40)).
 - Added Live Hold Mode and a configurable quiet floor in settings: keep speech in the composer until a trailing submit phrase forces a main-agent handoff, and reserve breathing room before voice responses or delegation ([#269](https://github.com/PsychedelicShayna/neopi/issues/269)).
+- Added persistent named routing policies with per-slot model, explicit effort, specialist and role boundary; task and Eval spawns can reference declared slots with a resolved routing preview ([#8](https://github.com/PsychedelicShayna/neopi/issues/8)).
 - GitHub now publishes platform binaries for every stable and nightly push, with manual stable builds available from Actions → CI → Run workflow.
 - Added NeoDeck's `deck-*` role namespace and configurable `deck-inbox` role in the model picker and RPC catalog, defaulting to GPT-6 Luna ([#277](https://github.com/PsychedelicShayna/neopi/issues/277)).
 - Proof sessions can hold destination-specific install locks for up to 60 minutes; installs report active or expired holds and support an explicit force override.
