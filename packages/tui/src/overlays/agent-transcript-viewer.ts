@@ -262,7 +262,7 @@ export class AgentTranscriptViewer implements Component {
 			if (this.#disposed || !this.#editor || this.#sendable) return;
 			this.#editor = undefined;
 			this.#nativeCache = undefined;
-			this.#deps.requestRender();
+			this.#setFocus("view");
 		});
 	}
 

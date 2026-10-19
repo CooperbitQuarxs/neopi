@@ -478,6 +478,11 @@ export class AnnotationOverlay implements Focusable {
 			this.#editor.handleInput(data);
 			return;
 		}
+		if (this.#callbacks.onExternalEditor && matchesAppExternalEditor(data)) {
+			this.#keys.reset();
+			void this.#openSourceEditor();
+			return;
+		}
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
 		if (action?.kind === "cancel") {
@@ -493,10 +498,6 @@ export class AnnotationOverlay implements Focusable {
 			const index = Math.max(0, regions.indexOf(this.#focus));
 			this.#focus = regions[Math.max(0, Math.min(regions.length - 1, index + action.delta))]!;
 			this.#keys.reset();
-			return;
-		}
-		if (!action && this.#callbacks.onExternalEditor && matchesAppExternalEditor(data)) {
-			void this.#openSourceEditor();
 			return;
 		}
 		if (data === "A" && (this.#focus === "files" || this.#focus === "diff")) {

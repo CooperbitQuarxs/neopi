@@ -294,7 +294,7 @@ describe("Agent hub row ordering", () => {
 
 			const text = Bun.stripANSI(hub.render(120).join("\n"));
 			expect(text).toContain("10000 parked");
-			expect(text).toMatch(/… \d+ more/);
+			expect(text).toMatch(/↑ 0 lines above · ↓ \d+ below/);
 
 			// Moving selection re-renders only the new viewport, not the whole roster.
 			getSessions.mockClear();
@@ -382,6 +382,9 @@ describe("Agent hub row ordering", () => {
 				description: "Complete the assignment below, thoroughly:\n- check performance\n- check leaks",
 				lastUpdate: Date.now(),
 				progress: {
+					id: "RevAgentStream",
+					status: "running",
+					task: "Complete the assignment below, thoroughly:\n- check performance\n- check leaks",
 					currentTool: "bash",
 					currentToolArgs: "\x1b[2Jdangerous args",
 				} as never,
@@ -399,7 +402,7 @@ describe("Agent hub row ordering", () => {
 			const width = visibleWidth(line);
 			expect(width).toBeLessThanOrEqual(80);
 		}
-		hub.handleInput("\t");
+		hub.handleInput("l");
 		const details = hub.render(80).join("\n");
 		expect(details).not.toContain("\x1b[2J");
 		expect(details).toContain("dangerous args");
@@ -715,6 +718,7 @@ describe("Agent hub row ordering", () => {
 			expect(rendered).toContain("Shared workspace · per-agent LoC not attributable");
 			expect(rendered).toContain("Output /tmp/Reviewer.md");
 			expect(rendered).toContain("Patch /tmp/Reviewer.patch");
+			hub.handleInput("l");
 			hub.handleInput("\x1b[6~");
 			expect(Bun.stripANSI(hub.render(140).join("\n"))).toContain("Worktree branch omp/task/Reviewer");
 		} finally {
@@ -1157,7 +1161,7 @@ describe("Agent hub row ordering", () => {
 			const roster = Bun.stripANSI(hub.render(80).join("\n"));
 			expect(roster).not.toContain("Registered ");
 
-			hub.handleInput("\t");
+			hub.handleInput("l");
 			const details = Bun.stripANSI(hub.render(80).join("\n"));
 			expect(details).toContain("Agent Hub · NarrowAgent");
 			expect(details).toContain("Usage");
@@ -1229,6 +1233,8 @@ describe("Agent hub row ordering", () => {
 			const open = vi.spyOn(hub, "openChat");
 			hub.handleInput("\r");
 			expect(open).toHaveBeenCalledWith("Worker", "entry-42");
+			expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("Agent Hub  ·  Worker");
+			hub.handleInput("\x1b");
 			hub.handleInput(" ");
 			expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("paused");
 			hub.handleInput("1");

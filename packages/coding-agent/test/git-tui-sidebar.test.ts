@@ -249,13 +249,15 @@ describe("git tui sidebar staging", () => {
 			expect(sidebar.selectedFile?.path).toBe("b/three.txt");
 			const scrolled = sidebar.render(40, 12);
 			expect(strip(scrolled[0] ?? "")).not.toContain("file change");
+			expect(strip(scrolled[0] ?? "")).not.toContain("/ search");
 
 			// Wheel back to the top; an idle re-render (2s refresh tick) must not
 			// snap the viewport back down to keep the selection visible.
 			sidebar.handleWheel(-4);
 			sidebar.render(40, 12);
 			const idle = sidebar.render(40, 12);
-			expect(strip(idle[0] ?? "")).toContain("file change");
+			expect(strip(idle[0] ?? "")).toContain("/ search");
+			expect(strip(idle[1] ?? "")).toContain("file change");
 
 			// An explicit selection change still pulls the row into view.
 			sidebar.handleInput("j");

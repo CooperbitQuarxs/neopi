@@ -297,6 +297,7 @@ it("drops the message input once a long-lived viewer's agent is aborted", () => 
 		lastActivity: 0,
 	};
 	let record = ref;
+	const sent: string[] = [];
 	const viewer = new AgentTranscriptViewer({
 		agentId: ref.id,
 		transcript: { fs, parseEntries: () => [] },
@@ -308,7 +309,14 @@ it("drops the message input once a long-lived viewer's agent is aborted", () => 
 				return () => listeners.delete(listener);
 			},
 		},
-		remote: { chat() {}, kill() {}, revive() {}, readTranscript: async () => ({ text: "", newSize: 0 }) },
+		remote: {
+			chat: (_id, text) => {
+				sent.push(text);
+			},
+			kill() {},
+			revive() {},
+			readTranscript: async () => ({ text: "", newSize: 0 }),
+		},
 		ui: new TUI(new VirtualTerminal(120, 40)),
 		cwd: "/tmp",
 		expandKeys: [],
@@ -318,10 +326,17 @@ it("drops the message input once a long-lived viewer's agent is aborted", () => 
 		onHubClose() {},
 	});
 	viewers.push(viewer);
+	expect(Bun.stripANSI(viewer.render(120).join("\n"))).toContain("Tab message");
+	viewer.handleInput("\t");
 	expect(Bun.stripANSI(viewer.render(120).join("\n"))).toContain(":send");
 	record = { ...ref, status: "aborted" };
 	for (const listener of listeners) listener();
 	expect(Bun.stripANSI(viewer.render(120).join("\n"))).not.toContain(":send");
+	expect(Bun.stripANSI(viewer.render(120).join("\n"))).not.toContain("Tab message");
+	viewer.handleInput("\t");
+	for (const key of "must not send") viewer.handleInput(key);
+	viewer.handleInput("\r");
+	expect(sent).toEqual([]);
 	viewer.dispose();
 	expect(listeners.size).toBe(0);
 });

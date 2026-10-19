@@ -461,7 +461,8 @@ describe("InteractiveMode plan review rendering", () => {
 			expect(feedback).toContain("## Rollout\n```md\n- add rollback command\n- include smoke test\n```");
 
 			overlay.handleInput("\x1b[B"); // Rollout -> Verify
-			overlay.handleInput("\x1b[B"); // toc -> actions
+			overlay.handleInput("\t"); // toc -> body
+			overlay.handleInput("\t"); // body -> actions
 			overlay.handleInput("\x1b[B"); // select Refine plan
 			overlay.handleInput("\r");
 			expect(await choice).toBe("Refine plan");

@@ -30,6 +30,7 @@ import { hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { plainText } from "../native/spans";
 import { theme } from "../theme/theme";
 import { contentRowWidth, renderScrollableList } from "../chrome/selector-helpers";
+import { matchesAppInterrupt } from "../keybinding-matchers";
 import {
 	applyMenuMotion,
 	MenuKeyReader,
@@ -1383,13 +1384,15 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			this.onExit();
 			return;
 		}
+		if (matchesAppInterrupt(data)) return this.escape();
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
 		if (action.kind === "search") {
 			this.#search.focused = true;
 			return;
 		}
-		if (action.kind === "cancel") return this.escape();
+		// Session cancellation follows app.interrupt, including explicit remaps.
+		if (action.kind === "cancel") return;
 		if (action.kind === "context") {
 			this.#search.focused = false;
 			this.onToggleScope?.();

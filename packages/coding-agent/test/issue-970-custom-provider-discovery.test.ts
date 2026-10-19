@@ -47,8 +47,8 @@ async function createHub(state: ProviderDiscoveryState): Promise<ModelHubCompone
 	});
 	await Bun.sleep(0);
 	installTestTheme();
-	// Scope-hop is the default arrow mode: one Down moves All models → the
-	// sole provider entry (separators are skipped).
+	// Scope-hop arrows skip separators: All models → Effort rules → sole provider.
+	hub.handleInput("\x1b[B");
 	hub.handleInput("\x1b[B");
 	await Bun.sleep(0);
 	return hub;
