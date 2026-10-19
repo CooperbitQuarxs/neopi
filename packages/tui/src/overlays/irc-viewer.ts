@@ -64,6 +64,8 @@ export class IrcViewerComponent implements Component {
 	#top = 0;
 	/** List rows the last frame had room for. */
 	#listRows = 1;
+	/** Body width used by the current layout, including synchronous expansion updates. */
+	#bodyWidth = 1;
 	/** List-row span of the selected entry in the last frame. */
 	#selectedSpan = { start: 0, end: 0 };
 	readonly #expanded = new Set<string>();
@@ -141,6 +143,7 @@ export class IrcViewerComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = Math.max(CHROME_ROWS + 1, this.#options.rows());
 		const inner = Math.max(1, width - 4);
+		this.#bodyWidth = inner;
 		const all = this.#options.source.entries();
 		const visible = this.#visible();
 		this.#syncSelection(visible);
@@ -246,6 +249,7 @@ export class IrcViewerComponent implements Component {
 		if (!entry) return;
 		const { id } = entry.message;
 		if (!this.#expanded.delete(id)) this.#expanded.add(id);
+		this.#selectedSpan.end = this.#selectedSpan.start + 1 + this.#bodyLines(entry, this.#bodyWidth, true).length;
 		this.#follow = false;
 		this.#options.requestRender();
 	}
