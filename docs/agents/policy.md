@@ -60,6 +60,9 @@ work. PR titles use the primary commit's Conventional Commits form. Use
 only true boxes and explain unchecked checks. Record dependencies as
 `Depends on #N` and wait for them before merging.
 
+A topic branch with commits gets a PR in the same turn it is declared done;
+[daily triage](triage.md#closure-and-daily-reconciliation) lists orphan branches.
+
 Use [triage-labels.md](triage-labels.md) for kind, priority, relationships,
 participation, review and merge eligibility. Every issue/PR has a supported kind
 and appropriate state; unresolved intake gets `needs-triage`. Every PR carries
@@ -68,12 +71,11 @@ reconciliation process; [issue-tracker.md](issue-tracker.md) owns CLI mechanics.
 
 ## Review and checks
 
-A clean CODE round on the final head and a factual answer to every finding are
-required before merge, including docs and policy changes. Read
-[pr-review-bots.md](pr-review-bots.md) for triggers, current-head receipts, state
-labels and unresolved-round handling. Request no new security passes. Existing
-security findings still need disposition. Contributor heads are read-only on the
-owner's machine; the owner-head safety rule is in that review guide.
+Use the one-round, 80% confidence gate in [pr-review-bots.md](pr-review-bots.md),
+including its base-only merge exception and factual disposition of every finding.
+Request no new security passes. Existing security findings still need disposition.
+Contributor heads are read-only on the owner's machine; the owner-head safety
+rule is in that review guide.
 
 Finish relevant local verification before requesting review and report only
 checks actually run. Follow `AGENTS.md` for package-local commands. Classify a
@@ -85,14 +87,19 @@ A CI fix affecting every PR stays in a single-purpose PR. Workflow changes that
 cannot exercise their changed event path before merge are watched on their first
 integration run and reverted through a PR on failure.
 
+Delegate every CI or review wait to a `openai-codex/gpt-6-luna` poller, which
+reports exact-head results and failures to the integrator. The integrator moves
+another actionable PR while the poller watches rather than blocking on a wait.
+
 ## Merge authority
 
 `mergeable` means full acceptance, required checks green (or a documented
-identical baseline failure), clean final-head CODE receipt, all findings answered,
-and branch current with the base. It is independent of actor-finished labels and
-GitHub's no-conflicts flag. The authoring agent merges its own PR into `nightly`
-when these criteria pass, except when the assignment reserves integration to
-another agent. Open PRs awaiting a decision or dependency say so in a comment.
+identical baseline failure), the review guide's merge gate satisfied, every
+finding answered, and branch current with the base. It is independent of
+actor-finished labels and GitHub's no-conflicts flag. The authoring agent merges
+its own PR into `nightly` when these criteria pass, except when the assignment
+reserves integration to another agent. Open PRs awaiting a decision or dependency
+say so in a comment.
 Policy-file owner approval mechanics remain an open decision; do not invent a
 new approval mechanism in this iteration.
 
