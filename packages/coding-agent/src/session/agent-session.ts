@@ -180,6 +180,7 @@ import type {
 	ToolInfo,
 	TreePreparation,
 } from "../extensibility/extensions";
+import { isDeferredSubmissionActive } from "../neopi/defer";
 import { type PersonaHost, personaFeature } from "../neopi/persona";
 import { emitSessionShutdownEvent, TOP_LEVEL_AGENT, UNAVAILABLE_ANNOTATIONS } from "../extensibility/extensions";
 import { extensionEventFromSessionEvent } from "../extensibility/extensions/lifecycle-mirror";
@@ -7798,6 +7799,7 @@ export class AgentSession implements SettingsScope {
 	}
 
 	async #prompt(text: string, options?: PromptOptions): Promise<boolean> {
+		if (!isDeferredSubmissionActive()) return false;
 		// Stamp the operator's submission instant before ANY async preprocessing —
 		// command execution, image normalization, vision-model description — so the
 		// prompt→yield delta includes the whole wait, whatever path the prompt takes.
@@ -7823,6 +7825,7 @@ export class AgentSession implements SettingsScope {
 		submittedAt: number,
 		outcome: PromptDispatchOutcome,
 	): Promise<boolean> {
+		if (!isDeferredSubmissionActive()) return false;
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		// Slash/custom-command handling below rewrites `text`; keep the original
 		// so a dropped prompt is handed back exactly as the user typed it.
@@ -7831,12 +7834,14 @@ export class AgentSession implements SettingsScope {
 		if (expandPromptTemplates && text.startsWith("/")) {
 			if (options?.runCommands !== false) {
 				const handled = await this.#tryExecuteExtensionCommand(text, options?.onPromptAdmitted);
+				if (!isDeferredSubmissionActive()) return false;
 				if (handled) {
 					return false;
 				}
 
 				// Try custom commands (TypeScript slash commands)
 				const customResult = options?.customCommandResult ?? (await this.executeCustomCommand(text));
+				if (!isDeferredSubmissionActive()) return false;
 				if (customResult !== null) {
 					if (customResult === "") {
 						return false;
@@ -7943,6 +7948,7 @@ export class AgentSession implements SettingsScope {
 		const imageDescriptionNotice = normalizedImages?.length
 			? await this.#buildImageDescriptionNotice(normalizedImages)
 			: undefined;
+		if (!isDeferredSubmissionActive()) return false;
 
 		// abort() bumps #promptGeneration and can land while normalization and the
 		// vision-description call above are still in flight. #promptWithMessage below
@@ -8115,6 +8121,7 @@ export class AgentSession implements SettingsScope {
 			queueOnly?: boolean;
 		},
 	): Promise<boolean> {
+		if (!isDeferredSubmissionActive()) return false;
 		// Same barrier/claim protocol as prompt(): skill invocations, collab peer
 		// prompts and the CLI initial message must not start during manual
 		// compaction or before a handoff commits its history.
@@ -8140,6 +8147,7 @@ export class AgentSession implements SettingsScope {
 			| undefined,
 		outcome: PromptDispatchOutcome,
 	): Promise<boolean> {
+		if (!isDeferredSubmissionActive()) return false;
 		const textContent =
 			typeof message.content === "string"
 				? message.content
@@ -8198,6 +8206,7 @@ export class AgentSession implements SettingsScope {
 		const descriptionNotice = hasSkillImages
 			? await this.#buildSkillImageDescriptionNotice(preparedMessage)
 			: undefined;
+		if (!isDeferredSubmissionActive()) return false;
 		// Same drop as #dispatchPrompt: abort() during normalization or the vision
 		// description must not publish the skill or start a turn afterwards.
 		if (hasSkillImages && (this.#promptGeneration !== preparationGeneration || this.#isDisposed)) {
@@ -8433,6 +8442,7 @@ export class AgentSession implements SettingsScope {
 			acceptTerminalEmptyStop?: boolean;
 		},
 	): Promise<boolean> {
+		if (!isDeferredSubmissionActive()) return false;
 		// Returns false when the prompt was dropped before reaching the agent —
 		// every pre-dispatch bail (generation bump from abort, disposal, usage
 		// preflight denial) exits silently, and prompt() uses the outcome to hand
@@ -8512,7 +8522,7 @@ export class AgentSession implements SettingsScope {
 
 			// Early bail-out: if a newer abort/prompt cycle started during setup,
 			// return before mutating shared state (nextTurn messages, system prompt).
-			if (this.#promptGeneration !== generation) {
+			if (this.#promptGeneration !== generation || !isDeferredSubmissionActive()) {
 				return false;
 			}
 
@@ -8567,7 +8577,7 @@ export class AgentSession implements SettingsScope {
 			const isUserTurn = message.role === "user" || (message.role === "custom" && isUserInvokedSkillPrompt(message));
 			if (this.isAutoThinking && isUserTurn) {
 				await this.#models.applyAutoThinkingLevel(expandedText, generation, options?.solutionSpace);
-				if (this.#promptGeneration !== generation) {
+				if (this.#promptGeneration !== generation || !isDeferredSubmissionActive()) {
 					return false;
 				}
 			}
@@ -8586,7 +8596,7 @@ export class AgentSession implements SettingsScope {
 				maintenanceMessages.splice(xdevMountNoticeIndex, 0, previewXdevMountNotice.notice);
 			}
 			await this.#maintenance.runPrePromptCompactionIfNeeded(maintenanceMessages);
-			if (this.#promptGeneration !== generation) {
+			if (this.#promptGeneration !== generation || !isDeferredSubmissionActive()) {
 				return false;
 			}
 			// Consume the xd:// notice only when its previewed revision still holds.
@@ -8857,6 +8867,7 @@ export class AgentSession implements SettingsScope {
 	 * flipping advisor auto-resume.
 	 */
 	async followUp(text: string, images?: ImageContent[], options?: FollowUpOptions): Promise<void> {
+		if (!isDeferredSubmissionActive()) return;
 		if (text.startsWith("/")) {
 			this.#throwIfExtensionCommand(text);
 		}
@@ -8886,6 +8897,7 @@ export class AgentSession implements SettingsScope {
 		const imageDescriptionNotice = normalizedImages?.length
 			? await this.#buildImageDescriptionNotice(normalizedImages)
 			: undefined;
+		if (!isDeferredSubmissionActive()) return;
 		this.#allowQueuedMessageDrainRetry();
 		if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
 		this.agent.followUp({
@@ -8959,6 +8971,7 @@ export class AgentSession implements SettingsScope {
 			promptGeneration?: number;
 		},
 	): Promise<boolean> {
+		if (!isDeferredSubmissionActive()) return false;
 		const attribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
 		const timestamp = options?.timestamp;
 		const rawText = options?.rawText ?? text;
@@ -9000,6 +9013,7 @@ export class AgentSession implements SettingsScope {
 			if (options?.origin && message.role === "user") message.origin = options.origin;
 			return message;
 		};
+		if (!isDeferredSubmissionActive()) return false;
 		if (options?.promptGeneration !== undefined && this.#promptGeneration !== options.promptGeneration) {
 			return false;
 		}
@@ -9358,6 +9372,7 @@ export class AgentSession implements SettingsScope {
 			onPromptAdmitted?: () => void;
 		},
 	): Promise<void> {
+		if (!isDeferredSubmissionActive()) return;
 		const sessionGeneration = this.#sessionGeneration;
 		const details =
 			options?.queueChipText !== undefined
@@ -9388,6 +9403,7 @@ export class AgentSession implements SettingsScope {
 		const descriptionNotice = preprocessed
 			? preprocessed.descriptionNotice
 			: await this.#buildSkillImageDescriptionNotice(normalizedAppMessage);
+		if (!isDeferredSubmissionActive()) return;
 		if (deliverAs === "aside") {
 			if (await this.#sessionGenerationChanged(sessionGeneration)) return;
 			// Non-interrupting: rides the same step-boundary aside poll as

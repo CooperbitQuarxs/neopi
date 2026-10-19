@@ -27,6 +27,7 @@ import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reset as resetCapabilities } from "./capability";
 import { readChatModeEntry, resolveChatMode } from "./chat/chat-mode";
+import { consumeDeferredInput, isDeferredSubmissionActive } from "./neopi/defer";
 import {
 	type Args,
 	reportInvalidFlagValues,
@@ -421,89 +422,95 @@ export async function submitInteractiveInput(
 	session: Pick<AgentSession, "prompt" | "promptCustomMessage" | "isStreaming">,
 	input: SubmittedUserInput,
 ): Promise<void> {
-	if (input.cancelled) {
-		return;
-	}
-
-	try {
-		using _keepalive = new EventLoopKeepalive();
-		// Honor the submission's queue intent, defaulting to followUp. Reading
-		// `session.isStreaming` to decide queue-vs-fresh is NOT atomic with the
-		// eventual `agent.prompt()` call inside `session.prompt()`: a background turn
-		// (queued-message drain, idle compaction, goal/loop continuation timer) can
-		// flip the agent busy in the gap, and a bare prompt() would then throw
-		// AgentBusyError straight to an error toast even though the UI shows no
-		// "Working…". Passing a behavior unconditionally is a no-op when the session
-		// is genuinely idle (a fresh turn runs and the option is ignored) and queues
-		// the message instead of erroring when a turn is already underway. Normal
-		// user Enter carries "steer" (interrupt, matching the streaming-branch Enter);
-		// background/continuation submits omit it and fall back to "followUp".
-		// Synthetic submits retain their explicit queue intent only.
-		const streamingBehavior = input.streamingBehavior ?? ("followUp" as const);
-		// Continue shortcuts submit an already-started synthetic developer prompt with
-		// no optimistic user message.
-		if (!input.started && !mode.markPendingSubmissionStarted(input)) {
+	return consumeDeferredInput(input, async () => {
+		if (input.cancelled) {
 			return;
 		}
-		const skillHost = {
-			skillCommands: mode.skillCommands,
-			session,
-			showError: mode.showError.bind(mode),
-			renderOptimisticSkillMessage: mode.renderOptimisticSkillMessage.bind(mode),
-			clearOptimisticSkillMessage: mode.clearOptimisticSkillMessage.bind(mode),
-			get optimisticSkillMessagePending() {
-				return mode.optimisticSkillMessagePending;
-			},
-		};
-		if (input.customType) {
-			const message = {
-				customType: input.customType,
-				content: input.text,
-				display: input.display ?? false,
-				attribution: "agent" as const,
-			};
-			await session.promptCustomMessage(message, { streamingBehavior });
-		} else if (input.synthetic) {
-			// Preserve explicit operator queue intent; automatic continuations without
-			// one keep rejecting while busy instead of scheduling an extra turn.
-			await session.prompt(input.text, {
-				synthetic: true,
-				expandPromptTemplates: false,
-				userInitiated: input.userInitiated,
-				attribution: input.attribution,
-				rawText: input.rawText,
-				streamingBehavior: input.streamingBehavior,
-			});
-		} else if (isKnownSkillCommand(skillHost, input.text)) {
-			// Resubmitted skill text must dispatch through the skill path, or the
-			// model receives a literal `/skill:` token.
-			await invokeSkillCommandFromText(skillHost, input.text, streamingBehavior, {
-				images: input.images,
-				imageLinks: input.imageLinks,
-				optimistic: true,
-				propagateErrors: true,
-			});
-		} else {
-			let forwarded = false;
-			try {
-				forwarded = await session.prompt(input.text, { images: input.images, streamingBehavior });
-			} catch (error: unknown) {
-				mode.showError(error instanceof Error ? error.message : "Unknown error occurred");
-			}
-			// Dispatch consumed the body locally (void custom command) or rejected
-			// instead of starting a turn: when it is the armed loop body, park the
-			// loop rather than resubmitting a failed or local-only body after
-			// every yield. A failed body degrades to idle like any other
-			// submission failure instead of error-looping.
-			if (!forwarded && mode.loopPrompt === input.text) mode.pauseLoop?.();
+		if (!isDeferredSubmissionActive()) {
+			mode.finishPendingSubmission(input);
+			return;
 		}
-	} catch (error: unknown) {
-		const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
-		mode.showError(errorMessage);
-	} finally {
-		mode.finishPendingSubmission(input);
-		await mode.checkShutdownRequested();
-	}
+
+		try {
+			using _keepalive = new EventLoopKeepalive();
+			// Honor the submission's queue intent, defaulting to followUp. Reading
+			// `session.isStreaming` to decide queue-vs-fresh is NOT atomic with the
+			// eventual `agent.prompt()` call inside `session.prompt()`: a background turn
+			// (queued-message drain, idle compaction, goal/loop continuation timer) can
+			// flip the agent busy in the gap, and a bare prompt() would then throw
+			// AgentBusyError straight to an error toast even though the UI shows no
+			// "Working…". Passing a behavior unconditionally is a no-op when the session
+			// is genuinely idle (a fresh turn runs and the option is ignored) and queues
+			// the message instead of erroring when a turn is already underway. Normal
+			// user Enter carries "steer" (interrupt, matching the streaming-branch Enter);
+			// background/continuation submits omit it and fall back to "followUp".
+			// Synthetic submits retain their explicit queue intent only.
+			const streamingBehavior = input.streamingBehavior ?? ("followUp" as const);
+			// Continue shortcuts submit an already-started synthetic developer prompt with
+			// no optimistic user message.
+			if (!input.started && !mode.markPendingSubmissionStarted(input)) {
+				return;
+			}
+			const skillHost = {
+				skillCommands: mode.skillCommands,
+				session,
+				showError: mode.showError.bind(mode),
+				renderOptimisticSkillMessage: mode.renderOptimisticSkillMessage.bind(mode),
+				clearOptimisticSkillMessage: mode.clearOptimisticSkillMessage.bind(mode),
+				get optimisticSkillMessagePending() {
+					return mode.optimisticSkillMessagePending;
+				},
+			};
+			if (input.customType) {
+				const message = {
+					customType: input.customType,
+					content: input.text,
+					display: input.display ?? false,
+					attribution: "agent" as const,
+				};
+				await session.promptCustomMessage(message, { streamingBehavior });
+			} else if (input.synthetic) {
+				// Preserve explicit operator queue intent; automatic continuations without
+				// one keep rejecting while busy instead of scheduling an extra turn.
+				await session.prompt(input.text, {
+					synthetic: true,
+					expandPromptTemplates: false,
+					userInitiated: input.userInitiated,
+					attribution: input.attribution,
+					rawText: input.rawText,
+					streamingBehavior: input.streamingBehavior,
+				});
+			} else if (isKnownSkillCommand(skillHost, input.text)) {
+				// Resubmitted skill text must dispatch through the skill path, or the
+				// model receives a literal `/skill:` token.
+				await invokeSkillCommandFromText(skillHost, input.text, streamingBehavior, {
+					images: input.images,
+					imageLinks: input.imageLinks,
+					optimistic: true,
+					propagateErrors: true,
+				});
+			} else {
+				let forwarded = false;
+				try {
+					forwarded = await session.prompt(input.text, { images: input.images, streamingBehavior });
+				} catch (error: unknown) {
+					mode.showError(error instanceof Error ? error.message : "Unknown error occurred");
+				}
+				// Dispatch consumed the body locally (void custom command) or rejected
+				// instead of starting a turn: when it is the armed loop body, park the
+				// loop rather than resubmitting a failed or local-only body after
+				// every yield. A failed body degrades to idle like any other
+				// submission failure instead of error-looping.
+				if (!forwarded && mode.loopPrompt === input.text) mode.pauseLoop?.();
+			}
+		} catch (error: unknown) {
+			const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+			mode.showError(errorMessage);
+		} finally {
+			mode.finishPendingSubmission(input);
+			await mode.checkShutdownRequested();
+		}
+	});
 }
 
 interface AcpSessionHandle {
