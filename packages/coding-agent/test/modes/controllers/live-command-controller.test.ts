@@ -13,6 +13,7 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import {
+	cfgLiveBlockDelegateKeyword,
 	cfgLiveForceDelegateKeyword,
 	cfgLiveHoldMode,
 	cfgLiveQuietFloorMs,
@@ -41,7 +42,7 @@ interface Harness {
 	presented: unknown[];
 }
 
-function createHarness(): Harness {
+function createHarness(factory?: (options: LiveSessionControllerOptions) => LiveSessionController): Harness {
 	const editor = new CustomEditor(getEditorTheme());
 	const layoutChanges: unknown[] = [];
 	let liveStatus: unknown = null;
@@ -101,6 +102,7 @@ function createHarness(): Harness {
 	let options: LiveSessionControllerOptions | undefined;
 	const controller = new LiveCommandController(ctx, created => {
 		options = created;
+		if (factory) return factory(created);
 		const session = new LiveSessionController(created);
 		vi.spyOn(session, "start").mockResolvedValue();
 		vi.spyOn(session, "stop").mockResolvedValue();
@@ -120,7 +122,7 @@ function createHarness(): Harness {
 			return options.callbacks;
 		},
 		voice: () => options?.voice,
-		projectComposer: turns => options?.composerTextExcludingTurns?.(turns),
+		projectComposer: turns => options?.captureComposerExcludingTurns?.(turns).text,
 		layoutChanges,
 		liveStatus: () => liveStatus,
 		sentToVoice,
@@ -137,6 +139,62 @@ afterEach(() => {
 });
 
 describe("LiveCommandController", () => {
+	it("retires accepted edited dictation while a blocked voice delivery is still pending", async () => {
+		const voiceSend = Promise.withResolvers<void>();
+		const prompts: string[] = [];
+		let live: LiveSessionController | undefined;
+		let fire: ((event: { type: "turn.done"; turn: { role: "user"; transcript: string } }) => void) | undefined;
+		const h = createHarness(options => {
+			live = new LiveSessionController({
+				...options,
+				createTransport: transportOptions => {
+					fire = transportOptions.callbacks.onEvent;
+					return {
+						async connect() {},
+						async send() { await voiceSend.promise; },
+						async close() {},
+						async setMuted() {},
+						setOutputSuppressed() {},
+						pushAudio: () => true,
+					};
+				},
+				createRecorder: () => ({ stop() {} }),
+			});
+			return live;
+		});
+		cfgLiveHoldMode.set(h.ctx.settings, true);
+		cfgLiveBlockDelegateKeyword.set(h.ctx.settings, "iris only");
+		Object.assign(h.ctx.session, {
+			sessionId: "accepted-edited-composer",
+			modelRegistry: { authStorage: {} },
+			sessionManager: { allocateArtifactPath: async () => ({}) },
+			agent: { peekFollowUpQueue: () => [] },
+			sendCustomMessageWithReceipt(message: { content: string }) {
+				prompts.push(message.content);
+				return { accepted: Promise.resolve(), completed: Promise.resolve(true), cancel: () => false };
+			},
+		});
+		await h.controller.handleCommand();
+		try {
+			fire?.({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+			h.editor.setText("fix the parser");
+			fire?.({ type: "turn.done", turn: { role: "user", transcript: "tell me a joke iris only" } });
+			expect(live?.forceDelegateComposer(h.editor.getText())).toBe(true);
+			for (let i = 0; i < 20; i++) await Promise.resolve();
+			expect(prompts).toEqual(["fix the parser"]);
+			voiceSend.resolve();
+			for (let i = 0; i < 40; i++) await Promise.resolve();
+			expect(h.editor.getText().trim()).toBe("");
+			fire?.({ type: "turn.done", turn: { role: "user", transcript: "and include tests" } });
+			expect(live?.forceDelegateComposer(h.editor.getText())).toBe(true);
+			for (let i = 0; i < 20; i++) await Promise.resolve();
+			expect(prompts).toEqual(["fix the parser", "and include tests"]);
+		} finally {
+			voiceSend.resolve();
+			await h.controller.stop();
+		}
+	});
+
 	it("projects a mixed held draft without blocked speech while preserving typed context and the original editor", async () => {
 		const h = createHarness();
 		cfgLiveSubmitKeyword.set(h.ctx.settings, "thanks");
