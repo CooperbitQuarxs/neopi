@@ -51,7 +51,7 @@ Before opening a pull request, you must:
 You are responsible for the code, regardless of who or what generated it.
 
 This section binds external contributors. The maintainer's own agents work
-under the repository's agent policy (`AGENTS.md`, `docs/policy/README.md`),
+under the repository's agent policy (`AGENTS.md`, `docs/agents/policy.md`),
 which lets them open and merge their own pull requests into `nightly`.
 
 ## Pull request requirements

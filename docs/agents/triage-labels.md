@@ -1,102 +1,125 @@
-# Tracker labels
+# Tracker label vocabulary
 
-This is the settled part of the replacement taxonomy, not the finished policy
-or setup skill. Labels compose: a type, an estimate, a relationship and a
-specification describe different facts. Additional repository-specific labels
-are not removed merely because they are absent from this guide.
+Labels compose facts rather than encode one compound category. This iteration-1
+vocabulary is shared by issues and PRs. [triage.md](triage.md) defines assignment
+and reconciliation; [pr-review-bots.md](pr-review-bots.md) defines review receipts.
+Spellings marked **proposal** remain revisable.
 
-## Available vocabulary
+## Kind
 
-| Axis | Labels | Meaning |
-| --- | --- | --- |
-| Type and context | `accessibility`, `bug`, `documentation`, `enhancement`, `hotfix` | Apply when the issue's evidence supports the description |
-| Idea and experiment | `idea`, `experiment` | An undecided possibility or an experimental approach; neither starts authorized work |
-| Specification | `spec` | The issue is or contains an implementation specification, not merely a brainstorm with headings |
-| Relationship | `downstream`, `entangled`, `duplicate` | A consumer dependency, incompatible alternatives, or a verified duplicate |
-| Assessment | `needs-triage`, `needs-info`, `invalid`, `wontfix` | Assessment needed, missing information, invalid report, or an explicit decision not to proceed |
-| Priority | `priority: p0`, `priority: p1`, `priority: p2`, `priority: p3` | Use the repository's documented priority meanings; do not invent a new scale |
-| Time | `frame: hours`, `frame: days`, `frame: weeks`, `frame: months`, `frame: years` | Estimated time with estimator and normalization provenance |
-| Existing implementation | `stale: identical`, `stale: similar` | Verified equivalent implementation, or a partial/different implementation with remaining scope |
-
-`experiment` replaces `experimental idea`. It can coexist with `idea`, `bug`
-or another applicable type. Experimental work stays on an experimental topic
-branch; moving it into `nightly` or the default branch needs a separate owner
-decision. `spec` may accompany a collapsible `<details>` specification in the
-issue body. Its presence does not establish permission, current ownership or
-merge eligibility.
-
-`entangled` is for alternatives where choosing one supersedes the others,
-not ordinary dependencies or merely related issues. Preserve the unresolved
-owner choice rather than assigning all alternatives for AFK implementation.
-
-### Difficulty
-
-Available bands are `difficulty: 0.000-0.125`, `difficulty: 0.125-0.250`,
-`difficulty: 0.250-0.375`, `difficulty: 0.375-0.500`,
-`difficulty: 0.500-0.625`, `difficulty: 0.625-0.750`,
-`difficulty: 0.750-0.875` and `difficulty: 0.875-1.000`.
-Lower bounds are inclusive; upper bounds are exclusive except for `1.000`.
-Difficulty is separate from time and priority. Record the estimate's source;
-do not infer a score from an unexplained historical title prefix or rewrite
-titles as part of a label pass.
-
-### Time estimates
-
-For a fresh agent-authored estimate, normalize down exactly one step:
-years → months → weeks → days → hours. Hours is the floor. Human-authored
-estimates stay unchanged. Record the estimator, original estimate and whether
-normalization has already happened so another triage pass does not shrink it
-again.
-
-Historical `effort:*` tiers are not literal durations. Do not convert them
-automatically to frames, require them on new issues, or erase existing labels
-without reviewing their meaning.
-
-## Operational names during cutover
-
-The target name `upstream` covers substantive upstream involvement, not only
-release synchronization. A fork-local manifestation does not rule out upstream
-origin. The current operational label is still `upstream-sync`: migrate literal
-consumers, including the promotion workflow, before renaming it.
-
-The target name `mergeable` means the repository's documented merge criteria
-are met. It does not grant permission to merge a default branch. The current
-operational label remains `ready-for-merge` until the workspace policy and
-consumers are cut over together. Keep using the current name in live PR work;
-do not create parallel aliases or claim this rename has happened.
-
-The proposed removal of `baseline` is unresolved. Keep the existing label and
-its base-branch evidence; do not translate every baseline into `upstream`.
-
-## Legacy readiness and open decisions
-
-| Existing role/label | Interim handling |
+| Label | Meaning |
 | --- | --- |
-| `needs-triage` | Needs initial or renewed assessment |
-| `needs-info` | Identify the concrete missing information and who can supply it |
-| `ready-for-agent` | Legacy AFK-readiness marker; verify the current contract and authorization before pickup |
-| `ready-for-human` | Legacy human-required routing marker; not a finalized participation state |
-| `wontfix` | Record the decision not to proceed |
+| `bug` | Something is not working |
+| `enhancement` | New feature or request |
+| `documentation` | User- or agent-facing docs, README or changelog |
+| `accessibility` | Barrier affecting people with disabilities |
+| `idea` | Undecided possibility; not a spec or authorized work |
+| `experiment` | Tried on an `experimental/` branch; owner decision required before integration or default-branch merge |
+| `spec` | Is or contains an implementation specification |
+| `hotfix` | Urgent targeted fix to the default branch |
 
-Keep these exact names when existing skills refer to their canonical roles.
-Do not invent replacement spellings while the actor-state design is open.
-The human/agent pending, started and finished concepts describe participation:
-started signals claimed work; finished need not mean the whole PR is
-mergeable. Exact names and transition rules are not finalized. Reviewer-state
-syntax and the separate upstream-conflict/user-disruption axes also remain
-open.
+## Relationships and disposition
 
-The evidence-led reconciliation procedure is in `issue-tracker.md`.
+| Label | Meaning |
+| --- | --- |
+| `upstream` | Upstream is involved: sync, compatibility, conflict avoidance or divergence |
+| `downstream` | Needed by a project that consumes this one |
+| `duplicate` | Same request as another issue; useful context reconciled into the canonical issue |
+| `entangled` | Incompatible alternatives; owner chooses one and the rest close |
+| `baseline` | Pre-existing defect found on the base during review; retained this iteration |
+| `invalid` | Closed: wrong repo, missing required information/format, or policy violation |
+| `wontfix` | Closed: will not be worked on |
+| `stale: identical` | Already implemented essentially as specified |
+| `stale: similar` | Implemented differently; open for remaining differences |
 
-## Deselected families
+## Priority and estimates
 
-Do not add deselected labels to new triage assignments: this includes
-`effort:*`, `good first issue`, `help wanted`, `question`, `rpc`,
-`neopi-upstream`, `npi-deck`, `t3c-npi`, `codex-review`,
-`sentinel-review-requested`, and the size, vouch, wayfinder and native-change
-families. Preserve existing associations until an evidence-led cutover;
-deselection is not an unconditional deletion order.
+| Label | Meaning |
+| --- | --- |
+| `priority: p0` | Blocks current work or handles an active incident |
+| `priority: p1` | High value or prerequisite for several issues |
+| `priority: p2` | Useful planned work |
+| `priority: p3` | Backlog or opportunistic work |
+| `difficulty: 0.000-0.125` | Estimated implementation difficulty in this band |
+| `difficulty: 0.125-0.250` | Estimated implementation difficulty in this band |
+| `difficulty: 0.250-0.375` | Estimated implementation difficulty in this band |
+| `difficulty: 0.375-0.500` | Estimated implementation difficulty in this band |
+| `difficulty: 0.500-0.625` | Estimated implementation difficulty in this band |
+| `difficulty: 0.625-0.750` | Estimated implementation difficulty in this band |
+| `difficulty: 0.750-0.875` | Estimated implementation difficulty in this band |
+| `difficulty: 0.875-1.000` | Estimated implementation difficulty in this band |
+| `frame: hours` | Estimated time frame: hours (agent estimates lowered one unit) |
+| `frame: days` | Estimated time frame: days (agent estimates lowered one unit) |
+| `frame: weeks` | Estimated time frame: weeks (agent estimates lowered one unit) |
+| `frame: months` | Estimated time frame: months (agent estimates lowered one unit) |
+| `frame: years` | Estimated time frame: years (agent estimates lowered one unit) |
 
-The current operational PR/readiness names above remain in use while their
-replacement is unresolved. Do not bypass an existing required review merely
-because the future label family is being redesigned.
+Difficulty bounds are lower-inclusive and upper-exclusive except `1.000`.
+Priority, difficulty and time are separate dimensions. Record estimator and
+original time unit; apply the [manual's normalization](triage.md#classification-and-estimates)
+once for agent estimates, with hours as the floor. Human estimates are unchanged.
+
+## Triage and participation
+
+| Label | Meaning |
+| --- | --- |
+| `needs-triage` | Not yet triaged |
+| `triage: started` (**proposal**) | Triage in progress; labels are provisional |
+| `needs-info` | Cannot proceed until named information arrives |
+| `agent: pending` | Ready for an out-of-the-loop agent to pick up |
+| `agent: started` | An agent has claimed this; do not duplicate the work |
+| `agent: finished` | Agent's part is done; not necessarily mergeable |
+| `human: pending` | Needs an in-the-loop session with a human |
+| `human: started` | A human has claimed the in-the-loop part |
+| `human: finished` | Human's in-the-loop part is done |
+
+Started is a claim, not a heartbeat. Human refers to participation, not who
+writes code. Use one state per actor; distinct actor states can coexist.
+`entangled` and `needs-info` issues have no pending actor state until unblocked.
+
+## Review and merge
+
+| Label | Meaning |
+| --- | --- |
+| `review: codex` | Codex reviews this change; reviewer token maps to its login and trigger |
+| `review: requested (codex)` | A Codex round is requested on the current head |
+| `review: open (codex)` | Codex findings are unanswered on the current head |
+| `review: closed (codex)` | Latest current-head round is clean and every finding answered |
+| `review: stalled (codex)` (**proposal**) | Review loop ended unresolved; summary posted |
+| `mergeable` | Meets this repository's documented merge criteria; authority to merge is separate |
+
+`review: codex` is a requirement and composes with one current review-state
+label. A new head invalidates the old head's state and merge eligibility.
+A completed actor state or GitHub's no-conflicts flag alone is not `mergeable`.
+The evidence rules are in [pr-review-bots.md](pr-review-bots.md).
+
+## Composition
+
+`upstream` + `bug` means an upstream-involved bug; `downstream` + `enhancement`
+means an enhancement needed by a consumer. `experiment` can compose with `idea`,
+`bug` or another kind while keeping experimental work off integration/default
+branches without an owner decision. `duplicate` + `entangled` is valid when
+requests overlap but their proposed implementations conflict. `spec` describes
+specification presence, not authorization, ownership or acceptance. Use the
+labels supported by the evidence rather than forcing exactly one kind.
+
+The existing `sentinel-review-requested` marker remains recognized because the
+outer workspace policy still consumes it. It does not configure Magi or authorize
+new security passes; resolve that inherited requirement with the integration
+owner when encountered.
+
+## Open decisions
+
+These remain open, not implemented by this iteration:
+
+- Retiring `baseline`: proposed bug plus upstream composition loses the marker
+  for fork-local base defects; base and upstream are different facts.
+- Separate upstream-conflict-potential and user-disruption axes.
+- A label for blocking questions and the needs-info/invalid boundary.
+- Resource allocation replacing the former contributor-help category.
+- A narrow squash/rebase exception; merge commits remain the live rule.
+- Owner approval mechanism for policy files.
+- Setup skill and HTML questionnaire.
+- Magi, the future tribunal reviewer; it is not configured.
+- Automated triage runner/webhook.
+- GitHub Projects/Discussions reporting.

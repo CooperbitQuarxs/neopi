@@ -9,8 +9,8 @@ Scout seats gather evidence. This seat owns final issue prose and `gh` publish. 
 Read in this order, then work:
 
 1. This file.
-2. `docs/agents/issue-tracker.md` (mechanics and evidence-led reconciliation).
-3. `docs/agents/triage-labels.md` (settled vocabulary, legacy names and open decisions).
+2. `docs/agents/issue-tracker.md` (publication mechanics) and `docs/agents/triage.md` (assessment and reconciliation).
+3. `docs/agents/triage-labels.md` (composable vocabulary and open decisions).
 4. Session anchors in the vision-diary repo, if that tree is mounted:
    - `handoffs/funnel-queue.md` (queue contract)
    - `handoffs/funnel-ledger.md` (resume here)
@@ -56,15 +56,13 @@ them all with a readiness marker.
 
 - Type: `bug`, `enhancement`, `documentation` or another applicable category.
 - Priority: one `priority: p0`–`priority: p3` where the repository defines the scale; do not claim those meanings were newly decided here.
-- Estimates: grounded difficulty and time with provenance, not compulsory `effort:*` tiers or an automatic effort-to-frame conversion.
+- Estimates: grounded difficulty and time with estimator and original-unit provenance; normalize fresh agent frames once per `triage.md`.
 - `idea` and `spec`: preserve the distinction between an undecided possibility and an implementation specification. Neither alone authorizes work.
 - `entangled`: true incompatible alternatives whose choice supersedes siblings, not every dependency. Preserve the owner decision.
 
-Known facts may be published with `needs-triage` for remaining assessment.
-Existing `ready-for-agent`/`ready-for-human` names remain legacy routing
-markers until the actor-state design is finalized; do not create replacement
-aliases or turn them into automatic permission. Preserve existing label
-associations until reviewed; do not add deselected families to new items.
+Publish new submissions with `needs-triage` for remaining assessment. Actor
+claims and pending/started/finished states follow `triage.md`; neither a
+specification nor a completed actor part establishes whole-change acceptance.
 
 ## Dedupe and amend
 

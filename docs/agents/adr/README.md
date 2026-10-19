@@ -1,8 +1,7 @@
 # Architecture decision records
 
-System-wide decisions for this fork. Package- or crate-scoped decisions go in
-that context's own `docs/adr/` (see
-[`docs/agents/domain.md`](../agents/domain.md)).
+System-wide decisions for this fork. Agent-facing decisions live here; package
+and crate vocabulary is routed by [domain.md](../domain.md).
 
 ## Index
 
