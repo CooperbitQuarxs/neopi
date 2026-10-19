@@ -1862,6 +1862,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	#sttController: STTController | undefined;
 	#xaiSttController: XaiSTTController | undefined;
 	#micCursor: MicCursor | undefined;
+	// Fork: the main-composer destination outlives extension editor replacements.
+	readonly #xaiComposerDestination = {
+		insertText: (text: string) => this.editor.insertText(text),
+		submit: () => this.editor.submit(),
+	};
+	#xaiComposerMicState: SttState = "idle";
 	#resizeHandler?: () => void;
 	#observerRegistry: SessionObserverRegistry;
 	/** The operator's IRC id while she is registered as a participant (issue #31). */
@@ -7263,6 +7269,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
 	): void {
 		const previousEditor = this.editor;
+		if (this.#xaiComposerMicState !== "idle") {
+			this.#micCursor?.dispose();
+			this.#micCursor = undefined;
+		}
 		const previousText = previousEditor.getText();
 		const nextEditor = factory
 			? factory(this.ui, getEditorTheme(), this.keybindings)
@@ -7314,6 +7324,9 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.#inputController.setupKeyHandlers();
 		this.#inputController.setupEditorSubmitHandler();
+		if (this.#xaiComposerMicState !== "idle") {
+			this.#dictationCallbacks(() => this.editor).onStateChange(this.#xaiComposerMicState);
+		}
 
 		void this.refreshSlashCommandState().catch(error => {
 			logger.warn("Failed to refresh slash command state for custom editor", {
@@ -8035,7 +8048,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				}),
 		});
 		// IMMUTABLE: see Ctrl+Space notice above
-		await this.#xaiSttController.toggle(this.editor, this.#dictationCallbacks(this.editor));
+		await this.#xaiSttController.toggle(
+			this.#xaiComposerDestination,
+			this.#dictationCallbacks(() => this.editor),
+		);
 	}
 
 	/** Configured dictation stays on its own shortcut and the Space-hold gesture. */
@@ -8078,11 +8094,13 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Callbacks for a capture dictating into `target`: the mic glyph replaces its cursor while the
 	 *  capture runs. */
-	#dictationCallbacks(target: DictationTarget): SttCallbacks {
+	#dictationCallbacks(destination: DictationTarget | (() => DictationTarget)): SttCallbacks {
 		return {
 			showWarning: (msg: string) => this.showWarning(msg),
 			showStatus: (msg: string) => this.showStatus(msg),
 			onStateChange: (state: SttState) => {
+				const target = typeof destination === "function" ? destination() : destination;
+				if (typeof destination === "function") this.#xaiComposerMicState = state;
 				// Duck assistant speech while the user is talking (push-to-talk); restore after.
 				if (state === "recording") vocalizer.duck();
 				else vocalizer.unduck();
@@ -8090,6 +8108,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.#micCursor?.dispose();
 					this.#micCursor = new MicCursor(this.ui, target);
 				} else if (state === "transcribing") {
+					this.#micCursor ??= new MicCursor(this.ui, target);
 					this.#micCursor?.showTranscribing();
 				} else {
 					target.spaceHold?.cancel();
