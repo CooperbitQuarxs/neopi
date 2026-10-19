@@ -66,6 +66,8 @@ import { all, combine, type ProtocolHost, type SettingValueOf } from "./config/r
 import { Settings, settings } from "./config/settings";
 import { startControlHost } from "./control/host";
 import { cfgControlEnabled } from "./control/settings";
+import { startAgentMonitor } from "./monitor/controller";
+import { cfgMonitorAutoStart } from "./monitor/settings";
 import { initializeWithSettings } from "./discovery";
 import {
 	clearPluginRootsAndCaches,
@@ -435,8 +437,8 @@ export async function submitInteractiveInput(
 		// is genuinely idle (a fresh turn runs and the option is ignored) and queues
 		// the message instead of erroring when a turn is already underway. Normal
 		// user Enter carries "steer" (interrupt, matching the streaming-branch Enter);
-		// background/continuation submits omit it and fall back to "followUp". The
-		// synthetic branch below opts out by design.
+		// background/continuation submits omit it and fall back to "followUp".
+		// Synthetic submits retain their explicit queue intent only.
 		const streamingBehavior = input.streamingBehavior ?? ("followUp" as const);
 		// Continue shortcuts submit an already-started synthetic developer prompt with
 		// no optimistic user message.
@@ -462,16 +464,15 @@ export async function submitInteractiveInput(
 			};
 			await session.promptCustomMessage(message, { streamingBehavior });
 		} else if (input.synthetic) {
-			// Synthetic continue shortcuts are hidden developer prompts. The streaming
-			// queue (#queueUserMessage) only carries user-attributed messages, so we do
-			// NOT pass streamingBehavior here: queueing would silently demote the
-			// developer directive to a visible user message. A synthetic submit while
-			// streaming keeps its prior behavior (rejected as busy) rather than changing
-			// its role.
+			// Preserve explicit operator queue intent; automatic continuations without
+			// one keep rejecting while busy instead of scheduling an extra turn.
 			await session.prompt(input.text, {
 				synthetic: true,
 				expandPromptTemplates: false,
 				userInitiated: input.userInitiated,
+				attribution: input.attribution,
+				rawText: input.rawText,
+				streamingBehavior: input.streamingBehavior,
 			});
 		} else if (isKnownSkillCommand(skillHost, input.text)) {
 			// Resubmitted skill text must dispatch through the skill path, or the
@@ -2756,6 +2757,21 @@ export async function runRootCommand(
 				throw error;
 			}
 			parentExit?.attach({ session, mcpManager });
+			// Opt-in tmux agent monitor (#345); it needs the control socket and a tmux client.
+			if (
+				controlHost &&
+				controlRole === "tui" &&
+				cfgMonitorAutoStart.get(settingsInstance) === true &&
+				process.env.TMUX
+			) {
+				startAgentMonitor(session, settingsInstance).catch(error => {
+					session.emitNotice(
+						"warning",
+						`Agent monitor did not start: ${error instanceof Error ? error.message : String(error)}`,
+						"monitor",
+					);
+				});
+			}
 
 			// Cold-revive support: a `parked` subagent ref restored from disk (Agent Hub
 			// scan, collab mirror, resumed process) has a sessionFile but no in-memory

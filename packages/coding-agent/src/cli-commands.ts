@@ -96,6 +96,16 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.ctlHelp,
 	},
 	{
+		name: "sessions",
+		load: () => import("./commands/sessions").then(m => m.default),
+		help: commandHelp.sessionsHelp,
+	},
+	{
+		name: "monitor",
+		load: () => import("./commands/monitor").then(m => m.default),
+		help: commandHelp.monitorHelp,
+	},
+	{
 		name: "commit",
 		load: () => import("./commands/commit").then(m => m.default),
 		help: commandHelp.commitHelp,

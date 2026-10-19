@@ -22,6 +22,21 @@ export interface ControlClientOptions {
 	/** Read-only probe (`list`). */
 	probe?: boolean;
 	timeoutMs?: number;
+	/**
+	 * Authenticate a monitor connection with this capability instead of the
+	 * publication token (`npi monitor attach`). The hello reply then carries
+	 * the grant's scope in {@link ControlClient.monitorScope}, not a snapshot.
+	 */
+	monitorCapability?: string;
+	/** Observe every authenticated frame, including correlated responses and early ready frames. */
+	onFrame?: (frame: Record<string, unknown>) => void;
+}
+
+/** Scope of an authenticated monitor connection. */
+export interface ControlMonitorScope {
+	agentId: string;
+	kind: "sub" | "advisor";
+	canChat: boolean;
 }
 
 export class ControlClientError extends Error {
@@ -50,10 +65,14 @@ export class ControlClient {
 	readonly #events: Array<(frame: Record<string, unknown>) => void> = [];
 	#socket: net.Socket | undefined;
 	#buffer = "";
+	#framesPaused = false;
+	#drainFrames: (() => void) | undefined;
 	#seq = 0;
 	#closed = false;
 	connectionId = "";
 	snapshot: ControlSnapshot | undefined;
+	monitorScope: ControlMonitorScope | undefined;
+	readonly #closeListeners: Array<() => void> = [];
 
 	constructor(options: ControlClientOptions) {
 		this.#options = options;
@@ -70,12 +89,15 @@ export class ControlClient {
 			reject(new ControlClientError("timeout", "handshake timed out"));
 		}, this.#options.timeoutMs ?? 5_000);
 		let challenged = false;
+		let authenticated = false;
 		socket.once("error", error => reject(new ControlClientError("unreachable", error.message)));
+		// Treat the owner's read EOF as a closed transport even if the runtime
+		// leaves its writable half open with a request still pending.
+		socket.once("end", () => socket.destroy());
 		socket.setEncoding("utf8");
-		socket.on("data", (chunk: string) => {
-			this.#buffer += chunk;
+		const drainFrames = () => {
 			let newline = this.#buffer.indexOf("\n");
-			while (newline >= 0) {
+			while (!this.#framesPaused && newline >= 0) {
 				const line = this.#buffer.slice(0, newline).trim();
 				this.#buffer = this.#buffer.slice(newline + 1);
 				newline = this.#buffer.indexOf("\n");
@@ -99,7 +121,7 @@ export class ControlClient {
 					socket.write(`${JSON.stringify(this.#hello())}\n`);
 					continue;
 				}
-				if (frame.type === "response" && frame.command === "hello") {
+				if (!authenticated && frame.type === "response" && frame.command === "hello") {
 					clearTimeout(timer);
 					if (frame.success !== true) {
 						reject(
@@ -110,29 +132,53 @@ export class ControlClient {
 						);
 						return;
 					}
-					const data = frame.data as { connectionId?: string; snapshot?: ControlSnapshot } | undefined;
+					const data = frame.data as
+						| { connectionId?: string; snapshot?: ControlSnapshot; monitor?: ControlMonitorScope }
+						| undefined;
 					this.#encoder.setProtocolVersion(2);
 					this.connectionId = data?.connectionId ?? "";
 					this.snapshot = data?.snapshot;
+					this.monitorScope = data?.monitor;
+					authenticated = true;
 					resolve(data?.snapshot as ControlSnapshot);
 					continue;
 				}
+				if (!authenticated) continue;
+				this.#options.onFrame?.(frame);
 				this.#dispatch(frame);
 			}
+		};
+		this.#drainFrames = drainFrames;
+		socket.on("data", (chunk: string) => {
+			this.#buffer += chunk;
+			drainFrames();
 		});
 		socket.once("close", () => {
+			clearTimeout(timer);
+			reject(new ControlClientError("closed", "connection closed during handshake"));
 			this.#closed = true;
 			for (const pending of this.#pending.values()) {
 				if (pending.timer) clearTimeout(pending.timer);
 				pending.reject(new ControlClientError("closed", "connection closed"));
 			}
 			this.#pending.clear();
+			for (const listener of this.#closeListeners) listener();
 		});
 		return promise;
 	}
 
 	#hello(): Record<string, unknown> {
-		const { metadata, label, kind, caller, controlChain, allowSelf, allowNested, probe } = this.#options;
+		const { metadata, label, kind, caller, controlChain, allowSelf, allowNested, probe, monitorCapability } =
+			this.#options;
+		if (monitorCapability !== undefined) {
+			return {
+				type: "hello",
+				requestId: "h1",
+				protocolVersion: 2,
+				monitor: { capability: monitorCapability },
+				client: { label, kind: kind ?? "other" },
+			};
+		}
 		return {
 			type: "hello",
 			requestId: "h1",
@@ -185,6 +231,45 @@ export class ControlClient {
 		this.#pending.set(requestId, { resolve, reject, timer });
 		this.#socket.write(this.#encoder.encode(frame));
 		return promise;
+	}
+
+	/** Forward a frame without taking ownership of its request id or response. */
+	sendRaw(frame: Record<string, unknown>): void {
+		if (this.#closed || !this.#socket) throw new ControlClientError("closed", "not connected");
+		this.#socket.write(this.#encoder.encode(frame));
+	}
+
+	/** Stop receiving and dispatching frames until the downstream transport drains. */
+	pauseFrames(): void {
+		this.#framesPaused = true;
+		this.#socket?.pause();
+	}
+
+	resumeFrames(): void {
+		if (!this.#framesPaused) return;
+		this.#framesPaused = false;
+		this.#drainFrames?.();
+		if (!this.#framesPaused) this.#socket?.resume();
+	}
+
+	/** Flush a polite detach without terminating the owner or dropping the bye frame. */
+	detach(): void {
+		if (!this.#closed && this.#socket && !this.#socket.writableEnded) {
+			this.#socket.end(this.#encoder.encode({ type: "bye", requestId: "bye" }));
+		}
+	}
+
+	/** Run `listener` once the socket closes, for any reason. */
+	onClose(listener: () => void): void {
+		if (this.#closed) {
+			listener();
+			return;
+		}
+		this.#closeListeners.push(listener);
+	}
+
+	get closed(): boolean {
+		return this.#closed;
 	}
 
 	/** Listen for non-response frames (events, receipts). Returns an unsubscribe. */

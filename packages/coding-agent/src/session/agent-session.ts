@@ -420,6 +420,7 @@ import {
 	VIBE_MODE_CONTEXT_MESSAGE_TYPE,
 } from "./messages";
 import { ModelControls, type ModelControlsHost } from "./model-controls";
+import { formatSessionHistoryMarkdown } from "./session-history-format";
 import {
 	isPrewalkPlanNudge,
 	PrewalkCoordinator,
@@ -430,6 +431,7 @@ import {
 	isAdvisorCard,
 	isDisplayableQueuedMessage,
 	isHiddenUserCompanion,
+	isRestorableQueuedMessage,
 	isUserAuthoredQueuedMessage,
 	isUserQueuedMessage,
 	queueChipText,
@@ -441,6 +443,7 @@ import {
 	type AdvisorCatchupOptions,
 	type AdvisorStats,
 	type AdvisorStatusOverviewEntry,
+	type LiveAdvisor,
 	SessionAdvisors,
 	type SessionAdvisorsHost,
 } from "./session-advisors";
@@ -486,7 +489,7 @@ import { YieldQueue } from "./yield-queue";
 
 export * from "./agent-session-events";
 export * from "./agent-session-types";
-export type { AdvisorStats, AdvisorStatusOverviewEntry, PerAdvisorStat } from "./session-advisors";
+export type { AdvisorStats, AdvisorStatusOverviewEntry, LiveAdvisor, PerAdvisorStat } from "./session-advisors";
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
 /** Assistant thinking+reply words a deferred auto-title waits for before retitling from context. */
@@ -1183,6 +1186,8 @@ export class AgentSession implements SettingsScope {
 	// Cursor exec, TUI listeners) is held back. Without this, a client that resumes
 	// on `agent_end` can fire its next `prompt` before #promptWithMessage's finally
 	#promptGeneration = 0;
+	/** Input owned by the admitted turn, including queued requests not emitted to history yet. */
+	#turnEffortContext: { generation: number; request: string; solutionSpace?: string } | undefined;
 	// abort() can finish in a message_end listener before queued settle work runs.
 	#activeAgentPromptGeneration = this.#promptGeneration;
 	/** Bumped by newSession()/switchSession() at the same point they clear the pending IRC/aside
@@ -2041,16 +2046,36 @@ export class AgentSession implements SettingsScope {
 		});
 		this.agent.prepareQueuedMessages = this.#prepareQueuedUserMessages;
 		this.#detachUsageBeforeModelCall = this.agent.addBeforeModelCallHook(async signal => {
-			if (!cfgRetryUsageAwareFallback.get(this.settings)) return;
-			if (this.#usagePreflightReadyForNextModelCall) {
-				const checkedModel = this.#usagePreflightReadyModel;
+			if (cfgRetryUsageAwareFallback.get(this.settings)) {
+				const checkedModel = this.#usagePreflightReadyForNextModelCall ? this.#usagePreflightReadyModel : undefined;
 				this.#usagePreflightReadyForNextModelCall = false;
 				this.#usagePreflightReadyModel = undefined;
-				if (checkedModel === this.model) return;
+				if (checkedModel !== this.model && !(await this.#runUsageAwarePreflight(signal))) {
+					signal?.throwIfAborted();
+					throw new DOMException("Usage preflight cancelled", "AbortError");
+				}
 			}
-			if (!(await this.#runUsageAwarePreflight(signal))) {
+			// Runtime fallback resumes this turn without passing real-user dispatch again.
+			if (
+				this.#recovery.hasActiveRetryFallback &&
+				this.isAutoThinking &&
+				this.#models.autoResolvedThinkingLevel === undefined
+			) {
+				const admitted = this.#turnEffortContext;
+				const context = admitted?.generation === this.#promptGeneration ? admitted : undefined;
+				const request = context
+					? undefined
+					: this.agent.state.messages.findLast(
+							message =>
+								message.role === "user" || (message.role === "custom" && isUserInvokedSkillPrompt(message)),
+						);
+				await this.#models.applyAutoThinkingLevel(
+					context?.request ?? (request ? formatSessionHistoryMarkdown([request]) : ""),
+					this.#promptGeneration,
+					context?.solutionSpace,
+					signal,
+				);
 				signal?.throwIfAborted();
-				throw new DOMException("Usage preflight cancelled", "AbortError");
 			}
 		});
 		const statsHost: SessionStatsTrackerHost = {
@@ -7801,7 +7826,7 @@ export class AgentSession implements SettingsScope {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		// Slash/custom-command handling below rewrites `text`; keep the original
 		// so a dropped prompt is handed back exactly as the user typed it.
-		const typedText = text;
+		const typedText = options?.rawText ?? text;
 		// Handle extension commands first (execute immediately, even during streaming)
 		if (expandPromptTemplates && text.startsWith("/")) {
 			if (options?.runCommands !== false) {
@@ -7849,6 +7874,7 @@ export class AgentSession implements SettingsScope {
 		}
 
 		const promptAttribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
+		const restoreOnDrop = !options?.synthetic || (options.userInitiated === true && promptAttribution === "user");
 
 		// If streaming, queue via steer()/followUp()/aside based on option
 		if (this.isStreaming) {
@@ -7869,13 +7895,15 @@ export class AgentSession implements SettingsScope {
 				attribution: promptAttribution,
 				entryId: options?.entryId,
 				origin: options?.origin,
+				synthetic: options?.synthetic,
+				userInitiated: options?.userInitiated,
 				prependMessages: keywordNotices,
 				rawText: typedText,
 				onPromptAdmitted: options?.onPromptAdmitted,
 				promptGeneration: queueGeneration,
 			});
 			outcome.sessionClaimed = queued;
-			if (!queued && this.#promptGeneration !== queueGeneration && !options?.synthetic) {
+			if (!queued && this.#promptGeneration !== queueGeneration && restoreOnDrop) {
 				this.#promptDropped?.({ text: typedText, images: options?.images });
 			}
 			return true;
@@ -7924,7 +7952,7 @@ export class AgentSession implements SettingsScope {
 		// generation-race checks further down.
 		if (this.#promptGeneration !== preflightGeneration) {
 			outcome.sessionClaimed = false;
-			if (!options?.synthetic) {
+			if (restoreOnDrop) {
 				this.#promptDropped?.({ text: typedText, images: options?.images });
 			}
 			return true;
@@ -7949,6 +7977,8 @@ export class AgentSession implements SettingsScope {
 				attribution: promptAttribution,
 				entryId: options?.entryId,
 				origin: options?.origin,
+				synthetic: options?.synthetic,
+				userInitiated: options?.userInitiated,
 				prependMessages: keywordNotices,
 				rawText: typedText,
 				preprocessed: {
@@ -8028,7 +8058,7 @@ export class AgentSession implements SettingsScope {
 			});
 		} catch (error) {
 			turnError = error;
-			if (error instanceof AgentStartPolicyChangedError && message.role === "user") {
+			if (error instanceof AgentStartPolicyChangedError && restoreOnDrop) {
 				this.#promptDropped?.({ text: typedText, images: options?.images });
 			}
 			throw error;
@@ -8041,7 +8071,7 @@ export class AgentSession implements SettingsScope {
 			void this.#finishTurnObservation(observation, turnError);
 		}
 		outcome.sessionClaimed = dispatched;
-		if (!dispatched && message.role === "user") {
+		if (!dispatched && restoreOnDrop) {
 			// An abort (Esc) or preflight denial raced turn setup: the prompt never
 			// reached the agent or the session file. Hand it back to the host so the
 			// user can edit/resubmit instead of losing it (tree/branch can't offer
@@ -8276,6 +8306,7 @@ export class AgentSession implements SettingsScope {
 		generation: number,
 		signal: AbortSignal | undefined,
 		origin: "direct" | "queued",
+		solutionSpace?: string,
 	): Promise<QueuedMessagePreparation & { baseXdevCatalogDelivered: boolean }> {
 		const sessionGeneration = this.#sessionGeneration;
 		const alreadyDisposing = this.#isDisposed && origin === "direct";
@@ -8374,6 +8405,10 @@ export class AgentSession implements SettingsScope {
 						this.#tools.clearTurnSystemPromptOverride();
 						this.agent.setSystemPrompt(this.#tools.baseSystemPrompt);
 					}
+					this.#turnEffortContext =
+						message.role === "user" || (message.role === "custom" && isUserInvokedSkillPrompt(message))
+							? { generation, request: prompt, solutionSpace }
+							: undefined;
 					return messages;
 				},
 			};
@@ -8515,6 +8550,7 @@ export class AgentSession implements SettingsScope {
 				generation,
 				setupAbort.signal,
 				"direct",
+				options?.solutionSpace,
 			);
 			const preparedMessages = preparation.commit();
 			if (!preparedMessages) return false;
@@ -8840,10 +8876,8 @@ export class AgentSession implements SettingsScope {
 			});
 			return;
 		}
-		// Synthetic branch: agent-initiated hidden developer message. Bypass
-		// #queueUserMessage (which clears advisor auto-resume suppression and
-		// enqueues as a user-role message) and place the developer message
-		// directly on the follow-up queue.
+		// Agent-initiated synthetic follow-ups keep their existing hidden delivery
+		// path without re-enabling advisor auto-resume.
 		const normalizedImages = await this.#normalizeImagesForModel(images);
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
 		if (normalizedImages?.length) {
@@ -8904,6 +8938,9 @@ export class AgentSession implements SettingsScope {
 			/** Reserved entry id and control-socket provenance of the user message. */
 			entryId?: string;
 			origin?: MessageOrigin;
+			/** Preserve developer-role prompts through the existing operator queues. */
+			synthetic?: boolean;
+			userInitiated?: boolean;
 			prependMessages?: readonly CustomMessage[];
 			/** Original submitted text before prompt transformations, for queue removal. */
 			rawText?: string;
@@ -8922,7 +8959,7 @@ export class AgentSession implements SettingsScope {
 			promptGeneration?: number;
 		},
 	): Promise<boolean> {
-		const attribution = options?.attribution ?? "user";
+		const attribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
 		const timestamp = options?.timestamp;
 		const rawText = options?.rawText ?? text;
 		const preprocessed = options?.preprocessed;
@@ -8939,7 +8976,9 @@ export class AgentSession implements SettingsScope {
 		// user-driven (folds into context via #resumeStrandedIrcAsides's post-interrupt
 		// branch) until the next deliberate steer/follow-up/prompt, matching the
 		// sendCustomMessage aside path (queueAside), which never touches this flag.
-		if (mode !== "aside") this.#advisors.autoResumeSuppressed = false;
+		if (mode !== "aside" && (options?.userInitiated ?? !options?.synthetic)) {
+			this.#advisors.autoResumeSuppressed = false;
+		}
 		// The pre-dispatch re-check in prompt() arrives with normalization and the
 		// vision description already done — reuse them instead of paying a second
 		// vision-model request for the same attachment.
@@ -8964,18 +9003,30 @@ export class AgentSession implements SettingsScope {
 		if (options?.promptGeneration !== undefined && this.#promptGeneration !== options.promptGeneration) {
 			return false;
 		}
+		const message: AgentMessage = reserved(
+			options?.synthetic
+				? {
+						role: "developer",
+						content,
+						attribution,
+						timestamp: timestamp ?? Date.now(),
+						synthetic: true,
+						userInitiated: options.userInitiated === true ? true : undefined,
+					}
+				: {
+						role: "user",
+						content,
+						attribution,
+						timestamp: timestamp ?? Date.now(),
+						...(mode === "steer" ? { steering: true } : {}),
+					},
+		);
+		this.#queuedMessageRawText.set(message, rawText);
 		if (mode === "aside") {
 			if (await this.#sessionGenerationChanged(sessionGeneration)) return false;
 			const records: AgentMessage[] = [...prependMessages, ...attachmentSourceNotices];
 			if (imageDescriptionNotice) records.push(imageDescriptionNotice);
-			const userMessage: AgentMessage = reserved({
-				role: "user",
-				content,
-				attribution,
-				timestamp: timestamp ?? Date.now(),
-			});
-			this.#queuedMessageRawText.set(userMessage, rawText);
-			records.push(userMessage);
+			records.push(message);
 			this.#irc.queueAside(records);
 			options?.onPromptAdmitted?.();
 			// The awaits above (image normalization / vision description) can span the run's
@@ -8991,27 +9042,12 @@ export class AgentSession implements SettingsScope {
 			for (const notice of prependMessages) this.agent.followUp(notice);
 			for (const notice of attachmentSourceNotices) this.agent.followUp(notice);
 			if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
-			const userMessage: AgentMessage = reserved({
-				role: "user",
-				content,
-				attribution,
-				timestamp: timestamp ?? Date.now(),
-			});
-			this.#queuedMessageRawText.set(userMessage, rawText);
-			this.agent.followUp(userMessage);
+			this.agent.followUp(message);
 		} else {
 			for (const notice of prependMessages) this.agent.steer(notice);
 			for (const notice of attachmentSourceNotices) this.agent.steer(notice);
 			if (imageDescriptionNotice) this.agent.steer(imageDescriptionNotice);
-			const userMessage: AgentMessage = reserved({
-				role: "user",
-				content,
-				steering: true,
-				attribution,
-				timestamp: timestamp ?? Date.now(),
-			});
-			this.#queuedMessageRawText.set(userMessage, rawText);
-			this.agent.steer(userMessage);
+			this.agent.steer(message);
 		}
 		options?.onPromptAdmitted?.();
 		this.#scheduleIdleQueueDrain();
@@ -9671,8 +9707,8 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/** Clear queued messages and return the user-restorable ones (text plus any attached images).
-	 *  Only user-authored messages (plain user turns, `attribution:"user"` custom like `/skill`) are
-	 *  returned for editor restore. Other queued messages stay in the agent-core queues so a continuing
+	 *  User-authored messages and canonical operator speech in live handoffs are returned for editor
+	 *  restore. Other queued messages stay in the agent-core queues so a continuing
 	 *  stream still delivers them — EXCEPT on `forInterrupt` (Esc+abort), where only advisor cards are
 	 *  kept (abort()'s #extractQueuedAdvisorCards preserves them as visible advice) and every other
 	 *  non-user steer (hidden goal/plan/budget, IRC/extension asides) is dropped, so abort()'s
@@ -9680,19 +9716,27 @@ export class AgentSession implements SettingsScope {
 	 *  fires while agent.hasQueuedMessages()). `forInterrupt` also withdraws input the run already
 	 *  dequeued but never recorded — live-steered into the aborted response, or taken for its next
 	 *  model call — and treats it as queued ahead of the rest (it was queued first).
+	 *  Compaction rollback uses `userAuthoredOnly` to leave independently accepted agent handoffs
+	 *  queued rather than discarding speech that rollback does not own; interrupts ignore that option.
 	 *  Plain Alt+Up dequeue preserves those non-user steers. */
-	clearQueue(options?: { forInterrupt?: boolean }): {
+	clearQueue(options?: { forInterrupt?: boolean; userAuthoredOnly?: boolean }): {
 		steering: RestoredQueuedMessage[];
 		followUp: RestoredQueuedMessage[];
 	} {
+		const restorable =
+			options?.userAuthoredOnly && !options.forInterrupt ? isUserAuthoredQueuedMessage : isRestorableQueuedMessage;
 		const withdrawn = options?.forInterrupt ? this.agent.withdrawUndeliveredQueuedMessages() : undefined;
 		const steeringAll = [...(withdrawn?.steering ?? []), ...this.agent.peekSteeringQueue()];
 		const followUpAll = [...(withdrawn?.followUp ?? []), ...this.agent.peekFollowUpQueue()];
-		const steering = steeringAll.filter(isUserAuthoredQueuedMessage).map(toRestoredQueuedMessage);
-		const followUp = followUpAll.filter(isUserAuthoredQueuedMessage).map(toRestoredQueuedMessage);
+		const steering = steeringAll
+			.filter(restorable)
+			.map(message => toRestoredQueuedMessage(message, this.#queuedMessageRawText.get(message)));
+		const followUp = followUpAll
+			.filter(restorable)
+			.map(message => toRestoredQueuedMessage(message, this.#queuedMessageRawText.get(message)));
 		const keep: (m: AgentMessage) => boolean = options?.forInterrupt
 			? isAdvisorCard
-			: m => !isUserAuthoredQueuedMessage(m) && !isHiddenUserCompanion(m);
+			: m => !restorable(m) && !isHiddenUserCompanion(m);
 		for (const message of [...steeringAll, ...followUpAll]) {
 			if (!keep(message) && message.role === "custom" && message.customType === "ttsr-injection") {
 				this.#ttsr.releaseDeferredReservationFromDetails(message.details);
@@ -9725,12 +9769,15 @@ export class AgentSession implements SettingsScope {
 	/** Chip texts for the queue display. Steering live steering took for the streaming response
 	 *  stays listed until the transcript records it, when the model actually switches to it. */
 	getQueuedMessages(): { steering: readonly string[]; followUp: readonly string[]; liveSteered: number } {
-		const liveSteered = this.agent.peekLiveSteeredMessages().filter(isUserAuthoredQueuedMessage).length;
+		const liveSteered = this.agent.peekLiveSteeredMessages().filter(isRestorableQueuedMessage).length;
 		return {
 			steering: [...this.agent.peekLiveSteeredMessages(), ...this.agent.peekSteeringQueue()]
-				.filter(isUserAuthoredQueuedMessage)
-				.map(queueChipText),
-			followUp: this.agent.peekFollowUpQueue().filter(isUserAuthoredQueuedMessage).map(queueChipText),
+				.filter(isRestorableQueuedMessage)
+				.map(message => queueChipText(message, this.#queuedMessageRawText.get(message))),
+			followUp: this.agent
+				.peekFollowUpQueue()
+				.filter(isRestorableQueuedMessage)
+				.map(message => queueChipText(message, this.#queuedMessageRawText.get(message))),
 			liveSteered,
 		};
 	}
@@ -9794,7 +9841,7 @@ export class AgentSession implements SettingsScope {
 		const removed = selected[index];
 		this.agent.replaceQueue(queue, this.#withoutQueuedUserMessage(selected, index));
 		this.#reconcileQueuedMessageDrain();
-		return toRestoredQueuedMessage(removed);
+		return toRestoredQueuedMessage(removed, this.#queuedMessageRawText.get(removed));
 	}
 
 	/**
@@ -9806,7 +9853,7 @@ export class AgentSession implements SettingsScope {
 	promoteQueuedMessage(text: string): boolean {
 		const followUp = this.agent.peekFollowUpQueue();
 		const index = this.#findQueuedUserMessage(followUp, text);
-		if (index < 0) return false;
+		if (index < 0 || !isUserAuthoredQueuedMessage(followUp[index])) return false;
 
 		const promoted = followUp.slice(this.#queuedUserGroupStart(followUp, index), index + 1);
 		const message = promoted[promoted.length - 1];
@@ -9831,10 +9878,14 @@ export class AgentSession implements SettingsScope {
 	 */
 	#findQueuedUserMessage(queue: readonly AgentMessage[], text: string): number {
 		let index = queue.findIndex(
-			message => isUserAuthoredQueuedMessage(message) && this.#queuedMessageRawText.get(message) === text,
+			message => isRestorableQueuedMessage(message) && this.#queuedMessageRawText.get(message) === text,
 		);
 		if (index < 0) {
-			index = queue.findIndex(message => isUserAuthoredQueuedMessage(message) && queueChipText(message) === text);
+			index = queue.findIndex(
+				message =>
+					isRestorableQueuedMessage(message) &&
+					queueChipText(message, this.#queuedMessageRawText.get(message)) === text,
+			);
 		}
 		return index;
 	}
@@ -9857,14 +9908,14 @@ export class AgentSession implements SettingsScope {
 	/**
 	 * Pop the last queued message (steering first, then follow-up).
 	 * Used by dequeue keybinding to restore messages to editor one at a time.
-	 * Steps over agent-authored queued messages (advisor cards, hidden/internal steers).
+	 * Steps over agent-authored queued messages without canonical operator speech.
 	 */
 	popLastQueuedMessage(): RestoredQueuedMessage | undefined {
 		const steering = this.agent.peekSteeringQueue();
 		const followUp = this.agent.peekFollowUpQueue();
 		const lastUserIndex = (queue: readonly AgentMessage[]): number => {
 			for (let i = queue.length - 1; i >= 0; i--) {
-				if (isUserAuthoredQueuedMessage(queue[i])) return i;
+				if (isRestorableQueuedMessage(queue[i])) return i;
 			}
 			return -1;
 		};
@@ -9874,7 +9925,7 @@ export class AgentSession implements SettingsScope {
 			this.sessionManager.releaseEntryId(getMessageEntryId(removed));
 			this.agent.replaceQueues(this.#withoutQueuedUserMessage(steering, fromSteer), followUp.slice());
 			this.#reconcileQueuedMessageDrain();
-			return toRestoredQueuedMessage(removed);
+			return toRestoredQueuedMessage(removed, this.#queuedMessageRawText.get(removed));
 		}
 		const fromFollowUp = lastUserIndex(followUp);
 		if (fromFollowUp >= 0) {
@@ -9882,7 +9933,7 @@ export class AgentSession implements SettingsScope {
 			this.sessionManager.releaseEntryId(getMessageEntryId(removed));
 			this.agent.replaceQueues(steering.slice(), this.#withoutQueuedUserMessage(followUp, fromFollowUp));
 			this.#reconcileQueuedMessageDrain();
-			return toRestoredQueuedMessage(removed);
+			return toRestoredQueuedMessage(removed, this.#queuedMessageRawText.get(removed));
 		}
 		return undefined;
 	}
@@ -14531,6 +14582,16 @@ export class AgentSession implements SettingsScope {
 	 */
 	getAdvisorAgent(): Agent | undefined {
 		return this.#advisors.getAdvisorAgent();
+	}
+
+	/** Advisors whose runtimes are live now (agent + transcript file), in roster order. */
+	liveAdvisors(): LiveAdvisor[] {
+		return this.#advisors.liveAdvisors();
+	}
+
+	/** Notified after advisor runtimes start, stop, or rebuild. */
+	onLiveAdvisorsChange(listener: () => void): () => void {
+		return this.#advisors.onLiveAdvisorsChange(listener);
 	}
 
 	/** WATCHDOG.yml problems from startup discovery; shown by the UI once it is ready. */
