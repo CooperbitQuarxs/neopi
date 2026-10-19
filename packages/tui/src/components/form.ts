@@ -448,6 +448,8 @@ export interface SelectFormFieldOptions extends Omit<FormFieldOptions, "preview"
 	onSelectionChange?: (value: string) => void | Promise<void>;
 	onSubmit(value: string): void | Promise<void>;
 	onCancel(): void;
+	/** Settle external previews on history departure without submitting or closing the field. */
+	onLeaveMenu?: () => void;
 	/** Schedule a frame after an asynchronous preview update settles. */
 	requestRender?: () => void;
 	/** The picker sheet a long choice (> {@link PICKER_MIN_ITEMS} items) describes as; defaults to the label. */
@@ -463,6 +465,7 @@ export class SelectFormField extends FormField {
 	readonly #previewText: StyledText | undefined;
 	readonly #getPreview: (() => string) | undefined;
 	readonly #requestRender: (() => void) | undefined;
+	readonly #onLeaveMenu: (() => void) | undefined;
 	readonly #sheet: SelectListSheet;
 	/** Number of choices (before filtering). */
 	readonly itemCount: number;
@@ -487,6 +490,7 @@ export class SelectFormField extends FormField {
 		this.#previewText = previewText;
 		this.#getPreview = options.getPreview;
 		this.#requestRender = options.requestRender;
+		this.#onLeaveMenu = options.onLeaveMenu;
 		this.itemCount = options.items.length;
 		this.#sheet = new SelectListSheet(
 			selectList,
@@ -558,6 +562,11 @@ export class SelectFormField extends FormField {
 	override restoreNavigation(snapshot: unknown): void {
 		this.selectList.restoreNavigation(snapshot);
 		this.#updatePreview();
+	}
+
+	leaveMenu(): void {
+		this.#previewRequestId++;
+		this.#onLeaveMenu?.();
 	}
 
 	/** Picker pointer events drive the list as its keys do (preview, pick, cancel). */

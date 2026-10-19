@@ -34,7 +34,7 @@
 
 ### Fixed
 
-- Closing a settings choice restores its theme preview, and Space still toggles chain steps with normal menu navigation enabled ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
+- Closing a settings choice or leaving its page through menu history restores the uncommitted preview, and Space still toggles chain steps with normal menu navigation enabled ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Tree row-navigation remaps take precedence over the built-in Alt-Up/Down turn shortcuts ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Restored session pickers can switch scopes again, and a navigation attempt keeps delayed history matches from rearranging the list even at a boundary ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Persona, chain, and advisor previews expose their final content line at G/End and page by readable rows rather than counting the overflow status row as content ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).

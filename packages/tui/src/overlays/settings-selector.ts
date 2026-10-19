@@ -61,7 +61,12 @@ import { col, node, span, text } from "../native/describe";
 import { actionHint, hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { styledSpans } from "../native/spans";
 import { sameItems } from "../native/memo";
-import { MenuKeyReader, MenuSearchField, isMenuHistoryParticipant } from "../components/menu-navigation";
+import {
+	MenuKeyReader,
+	MenuSearchField,
+	isMenuHistoryLeaver,
+	isMenuHistoryParticipant,
+} from "../components/menu-navigation";
 import type { KeyName } from "../key-hint-format";
 
 /** The native page id of the plugins tab. */
@@ -198,6 +203,7 @@ function createSettingsSelectField(
 	footer?: Component,
 	requestRender?: () => void,
 	picker?: SelectPickerOptions,
+	onLeaveMenu?: () => void,
 ): SelectFormField {
 	const field = new SelectFormField({
 		theme: formTheme,
@@ -211,6 +217,7 @@ function createSettingsSelectField(
 		onSelectionChange,
 		onSubmit: onSelect,
 		onCancel,
+		onLeaveMenu,
 		hint: `  ${editorKey("tui.select.confirm")} to select · ${editorKey("tui.select.cancel")} to go back`,
 		footer,
 		requestRender,
@@ -1798,6 +1805,7 @@ export class SettingsSelectorComponent implements Component {
 			footer,
 			this.#context.requestRender,
 			isThemeSetting ? themePickerOptions(def.label, String(currentValue)) : undefined,
+			onPreviewCancel,
 		);
 	}
 
@@ -2179,6 +2187,11 @@ export class SettingsSelectorComponent implements Component {
 		};
 	}
 
+	leaveMenu(): void {
+		(this.#searchList ?? this.#currentList)?.leaveMenu();
+		if (isMenuHistoryLeaver(this.#pluginComponent)) this.#pluginComponent.leaveMenu();
+	}
+
 	restoreNavigation(snapshot: unknown): void {
 		this.#menuKeys.reset();
 		if (typeof snapshot !== "object" || snapshot === null) return;
@@ -2193,6 +2206,7 @@ export class SettingsSelectorComponent implements Component {
 			plugin?: unknown;
 		};
 		if (!this.#tabs.some(tab => tab.id === state.tab)) return;
+		this.leaveMenu();
 		this.#restoringNavigation = true;
 		try {
 			const tab = state.tab as SettingTab | "plugins";

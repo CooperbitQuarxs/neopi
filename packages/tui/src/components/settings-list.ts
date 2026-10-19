@@ -16,6 +16,7 @@ import { MenuSelection } from "./menu-selection";
 import {
 	applyMenuMotion,
 	isMenuHistoryParticipant,
+	isMenuHistoryLeaver,
 	MenuKeyReader,
 	MenuSearchField,
 	MenuViewport,
@@ -285,6 +286,10 @@ export class SettingsList implements Component {
 		};
 	}
 
+	leaveMenu(): void {
+		if (isMenuHistoryLeaver(this.#submenuComponent)) this.#submenuComponent.leaveMenu();
+	}
+
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as {
@@ -299,6 +304,7 @@ export class SettingsList implements Component {
 		};
 		this.#restoring = true;
 		try {
+			this.leaveMenu();
 			this.#submenuComponent = null;
 			this.#submenuItemId = null;
 			this.#keys.reset();

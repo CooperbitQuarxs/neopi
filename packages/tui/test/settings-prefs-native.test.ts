@@ -4,10 +4,11 @@ import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tu
 import type { InstalledPlugin, PluginSettingsHost } from "@oh-my-pi/pi-tui/overlays/plugin-settings";
 import type { SettingsDisplayEntry, SettingsHost } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
+import { getCurrentThemeName, getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import { getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SelectListNavigationState } from "../src/components/select-list";
+import { isMenuHistoryLeaver } from "../src/components/menu-navigation";
 
 const ENTER = "\n";
 const DOWN = "\x1b[B";
@@ -306,6 +307,34 @@ describe("settings as a native prefs page", () => {
 		expect(values.get("theme.dark")).toBe("dark");
 	});
 
+	it.each(["leave", "restore"] as const)(
+		"settles theme previews before history %s without saving or new visits",
+		mode => {
+			const { selector, values, changes, previews } = harness();
+			const parent = selector.navigationSnapshot();
+			const activeTheme = getCurrentThemeName() ?? "dark";
+			send(selector, { type: "activate", key: "", item: "theme.dark" });
+			send(selector, { type: "select", key: "", item: "theme.dark=titanium" });
+			const nested = selector.navigationSnapshot();
+			const visits: string[] = [];
+			selector.onNavigationVisit = page => visits.push(page);
+			expect(previews).toEqual(["titanium"]);
+
+			if (mode === "leave") {
+				expect(isMenuHistoryLeaver(selector)).toBe(true);
+				if (isMenuHistoryLeaver(selector)) selector.leaveMenu();
+			} else selector.restoreNavigation(parent);
+			expect(previews.at(-1)).toBe(activeTheme);
+			expect(values.get("theme.dark")).toBe("dark");
+			expect(changes).toEqual([]);
+			expect(visits).toEqual([]);
+
+			const reopened = harness().selector;
+			reopened.restoreNavigation(nested);
+			expect(prefs(reopened).props.editing).toEqual({ row: "theme.dark", option: "titanium" });
+		},
+	);
+
 	it("picks a menu option like Enter in the submenu", () => {
 		const { selector, values, changes } = harness();
 		send(selector, { type: "change", key: "", item: "theme.dark", value: "light" });
@@ -401,6 +430,9 @@ describe("settings as a native prefs page", () => {
 		expect(prefs(selector).props.page).not.toBe(originalPage);
 		selector.handleInput("h");
 		expect(prefs(selector).props.page).toBe(originalPage);
+		selector.handleInput("i");
+		for (const key of "typing") selector.handleInput(key);
+		expect(prefs(selector).props.query).toBeUndefined();
 		selector.handleInput("/");
 		selector.handleInput("color");
 		expect(prefs(selector).props.query).toBe("color");
