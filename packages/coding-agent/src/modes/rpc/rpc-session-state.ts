@@ -5,6 +5,7 @@
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import type { AgentSession } from "../../session/agent-session";
 import { calculateTokensPerSecond } from "../../utils/token-rate";
+import { MAX_RPC_FRAME_BYTES } from "./rpc-frame";
 import { rpcPlanModeState } from "./rpc-plan-mode";
 import { isRpcSessionSettled, type RpcScheduledTurnProbe } from "./rpc-session-settle";
 import type { RpcSessionState } from "./rpc-types";
@@ -32,13 +33,17 @@ export interface QueueLimit {
 
 /**
  * The queue's share of a control frame: snapshots and forwarded
- * `queue_update` events. Queued prompts are unbounded, and a frame over the
- * 64 MiB limit is replaced by an error, so `hello` would fail and subscribers
- * would lose queue state until it drained. Each queue keeps an exact oldest
+ * `queue_update` events. Protocol-v1 frames are limited to 1 MiB, including
+ * JSON escaping and the rest of the snapshot. Oversized replies lose `hello`
+ * and queue state until the queue drains. Each queue keeps an exact oldest
  * prefix within its text budget, so returned chips remain valid queue-command
  * arguments. Counts stay exact, and `dequeue` returns the full message.
  */
-export const CONTROL_QUEUE_LIMIT: QueueLimit = { entries: 256, chars: 1024 * 1024 };
+// Two queues × six JSON bytes per UTF-16 code unit use at most half a v1 frame.
+export const CONTROL_QUEUE_LIMIT: QueueLimit = {
+	entries: 256,
+	chars: Math.floor(MAX_RPC_FRAME_BYTES / 24),
+};
 
 /** Copy of `entries`, capped by `limit` when given. */
 export function copyQueue(entries: readonly string[], limit: QueueLimit | undefined): string[] {

@@ -12,7 +12,7 @@ import { Settings } from "../../src/config/settings";
 import { ControlClient } from "../../src/control/client";
 import { ControlHost } from "../../src/control/host";
 import type { ControlSnapshot } from "../../src/control/types";
-import { MAX_RPC_REASSEMBLED_BYTES } from "../../src/modes/rpc/rpc-frame";
+import { MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "../../src/modes/rpc/rpc-frame";
 import { buildRpcSessionState, CONTROL_QUEUE_LIMIT } from "../../src/modes/rpc/rpc-session-state";
 import { AgentSession } from "../../src/session/agent-session";
 import type { AuthStorage } from "../../src/session/auth-storage";
@@ -65,7 +65,11 @@ describe("control snapshot queue", () => {
 			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
 		});
 		if (steering)
-			vi.spyOn(session, "getQueuedMessages").mockReturnValue({ steering, followUp: ["later"], liveSteered: 1 });
+			vi.spyOn(session, "getQueuedMessages").mockReturnValue({
+				steering,
+				followUp: followUp.length > 0 ? followUp : ["later"],
+				liveSteered: 1,
+			});
 		for (const content of followUp) session.agent.followUp({ role: "user", content, timestamp: Date.now() });
 		host = new ControlHost({ session, role: "rpc", dir: tempDir.join(`control-${++hosts}`), tmuxPane: null });
 		await host.start();
@@ -115,6 +119,16 @@ describe("control snapshot queue", () => {
 	test("a text-budget overflow omits the remaining prefix without rewriting queue commands", async () => {
 		const { hello } = await startWithQueue(["first", "q".repeat(CONTROL_QUEUE_LIMIT.chars), "last"]);
 		expect(hello.session!.queuedMessages.steering).toEqual(["first"]);
+	});
+
+	test("protocol-v1 snapshots and queue updates retain both worst-case escaped queue budgets", async () => {
+		const text = "\0".repeat(CONTROL_QUEUE_LIMIT.chars);
+		const { hello } = await startWithQueue([text], [text]);
+		const encoder = new RpcFrameEncoder();
+		const snapshotFrame = { type: "response", command: "hello", success: true, data: hello };
+		expect(JSON.parse(encoder.encode(snapshotFrame))).toEqual(snapshotFrame);
+		const update = { type: "queue_update", ...hello.session!.queuedMessages };
+		expect(JSON.parse(encoder.encode(update))).toEqual(update);
 	});
 
 	test("subscribers keep receiving queue updates, bounded the same way", async () => {
