@@ -56,6 +56,8 @@ export class IrcViewerComponent implements Component {
 	#filterEditing = false;
 	/** Index into the filtered entries; the last entry while following. */
 	#selected = 0;
+	/** Stable anchor when an earlier send finishes after the selected message. */
+	#selectedId: string | undefined;
 	/** Keep the newest message selected as traffic arrives. */
 	#follow = true;
 	/** First list row on screen. */
@@ -73,7 +75,10 @@ export class IrcViewerComponent implements Component {
 
 	constructor(options: IrcViewerOptions) {
 		this.#options = options;
-		this.#unsubscribe = options.source.subscribe(() => options.requestRender());
+		this.#unsubscribe = options.source.subscribe(() => {
+			this.#syncSelection(this.#visible());
+			options.requestRender();
+		});
 	}
 
 	dispose(): void {
@@ -86,6 +91,14 @@ export class IrcViewerComponent implements Component {
 		const query = this.#filter.getValue().trim();
 		const entries = this.#options.source.entries();
 		return query ? entries.filter(entry => matchesParticipant(entry, query)) : entries;
+	}
+
+	#syncSelection(visible: readonly IrcLogEntry[]): void {
+		const anchored = this.#follow ? -1 : visible.findIndex(entry => entry.message.id === this.#selectedId);
+		if (anchored >= 0) this.#selected = anchored;
+		else if (this.#follow || this.#selected >= visible.length)
+			this.#selected = Math.max(0, visible.length - 1);
+		this.#selectedId = visible[this.#selected]?.message.id;
 	}
 
 	#header(entry: IrcLogEntry, selected: boolean): string {
@@ -131,7 +144,7 @@ export class IrcViewerComponent implements Component {
 		const inner = Math.max(1, width - 4);
 		const all = this.#options.source.entries();
 		const visible = this.#visible();
-		if (this.#follow || this.#selected >= visible.length) this.#selected = Math.max(0, visible.length - 1);
+		this.#syncSelection(visible);
 
 		const list: string[] = [];
 		let selectedStart = 0;
@@ -200,9 +213,11 @@ export class IrcViewerComponent implements Component {
 	}
 
 	#select(index: number): void {
-		const count = this.#visible().length;
+		const visible = this.#visible();
+		const count = visible.length;
 		if (count === 0) return;
 		this.#selected = Math.max(0, Math.min(count - 1, index));
+		this.#selectedId = visible[this.#selected]?.message.id;
 		this.#follow = this.#selected === count - 1;
 		this.#options.requestRender();
 	}

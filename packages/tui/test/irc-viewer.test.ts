@@ -51,6 +51,10 @@ function mount(initial: IrcLogEntry[], rows = 30, extra: Partial<IrcViewerOption
 			entries.push(next);
 			for (const listener of listeners) listener();
 		},
+		insert: (index: number, next: IrcLogEntry) => {
+			entries.splice(index, 0, next);
+			for (const listener of listeners) listener();
+		},
 		listenerCount: () => listeners.size,
 		renders: () => renders,
 		closed: () => closed,
@@ -193,6 +197,22 @@ describe("IrcViewerComponent", () => {
 			await Bun.sleep(0);
 			expect(sent).toEqual([["0-Alpha", "nightly", question.message.id]]);
 			expect(view.screen().join("\n")).toContain("Delivered to 0-Alpha.");
+		});
+
+		it("keeps a manually selected reply target when an earlier send completes out of order", () => {
+			const earlier = entry("0-Earlier", "Captain", "slow send");
+			const selected = entry("0-Selected", "Captain", "selected note");
+			const later = entry("0-Later", "Captain", "newer note");
+			const { view, sent } = withReply([selected, later]);
+			view.screen();
+			view.viewer.handleInput("\x1b[H");
+			view.screen();
+			view.insert(0, earlier);
+			// Input can arrive before the requested repaint.
+			view.viewer.handleInput("r");
+			view.type("answer");
+			view.viewer.handleInput("\r");
+			expect(sent).toEqual([["0-Selected", "answer", selected.message.id]]);
 		});
 
 		it("answers the recipient when the selected message is her own", () => {
