@@ -1249,7 +1249,7 @@ image protocol set as in `packages/tui/test/image-render.test.ts:58`; no
 
 | Test | Contract / failure mode |
 | --- | --- |
-| reset never resurrects | Run to completion or pause, `/mixture reset` (engine appends `run_reset`), then reload and separately switch view/leaf and back with no intervening run: `projectMixtureTrace` returns an empty projection and the section renders zero rows both times. Regression: M5 — a reset run's history reappearing in the panel. |
+| reset never resurrects | Run to completion or pause, `/moa reset` (engine appends `run_reset`), then reload and separately switch view/leaf and back with no intervening run: `projectMixtureTrace` returns an empty projection and the section renders zero rows both times. Regression: M5 — a reset run's history reappearing in the panel. |
 | completed run, live vs hydrated | Drive `mixture_run_start … mixture_run_end` live and capture the section rows; reload from the persisted cards with `isMixtureRunComplete(branch, runId)` true (a `done` checkpoint followed by its assistant entry) and capture again: identical rows, header row marked completed with the same `endReason`, no pause banner. With the `done` checkpoint present but its assistant entry **absent** (crash before `message_end`), the predicate is false and reload shows the run as in progress/paused by its newest header, not completed. Regression: a completed run reloading as in-progress because its last card predates `status = done`, or an uncommitted `done` checkpoint marking a run complete. |
 | `/tree` onto the final assistant | Complete a run, then `/tree` so the active leaf is the final assistant entry itself: the `run_end` record (appended after that entry) is off-branch, `isMixtureRunComplete` is still true, and the panel shows the run ended. Regression: the projection reading `run_end` for state and showing a finished run as in progress after tree navigation. |
 | pause → resume → complete, live vs hydrated (A5.2) | A `limit` card with `action: "pause"` and a `checkpoint` with `reason: "pause"` (headers `run.status = "paused"`) show the banner; a steering hop (headers `running`) drops it while the earlier pause-limit card remains in the list; `run_end` marks completion. Hydrating from the same cards at each of the three points yields the same banner state as live. Regression: a banner driven by the last `limit` card outliving the resume, or missing on a paused run whose newest card is the checkpoint. |
@@ -1353,7 +1353,7 @@ Registration and lifetime:
   is where `InteractiveMode` already re-derives view state from a session;
   `reloadMixtureTrace(source)` is added beside it and called from the same
   sites.
-- Live: `reset()` on `/mixture reset` (the engine appends the `run_reset`
+- Live: `reset()` on `/moa reset` (the engine appends the `run_reset`
   record in the same command, MoA §10) and when `mixture_run_start` carries
   a `runId` different from the one shown, so after two runs the live view
   holds only the latest; `markEnded` on the `mixture_run_end` event, which

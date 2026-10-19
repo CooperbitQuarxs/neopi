@@ -49,6 +49,8 @@ function parseStep(raw: unknown, where: string, warnings: string[]): ChainStep |
 		return undefined;
 	}
 	const step: ChainStep = { name, prompt };
+	// Only an explicit `false` disables: steps written before the key existed stay enabled.
+	if (entry.enabled === false) step.enabled = false;
 	const model = stringField(entry.model)?.trim();
 	if (model) step.model = model;
 	const tools = parseTools(entry.tools, `${where} (${name})`, warnings);
@@ -159,6 +161,7 @@ export function serializeChainsConfig(doc: ChainsConfigDoc): string {
 		lines.push("    steps:");
 		for (const step of chain.steps) {
 			lines.push(`      - name: ${YAML.stringify(step.name)}`);
+			if (step.enabled === false) lines.push("        enabled: false");
 			if (step.model?.trim()) lines.push(`        model: ${YAML.stringify(step.model)}`);
 			if (step.context) lines.push("        context: true");
 			if (step.tools && step.tools.length > 0) {
