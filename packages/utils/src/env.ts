@@ -148,15 +148,24 @@ function filterChildShellEnvInternal(
 	const runtimeLaunchEnvValues = env === Bun.env || env === process.env ? launchEnvValues : undefined;
 	const result = filterProcessEnv(env);
 	const projectEnv = parseEnvFile(path.join(cwd, ".env"));
-	const launchNodeEnv = runtimeLaunchEnvValues ? runtimeLaunchEnvValues.get("NODE_ENV") : env.NODE_ENV;
+	const launchNodeEnv = runtimeLaunchEnvValues ? runtimeLaunchEnvValues.get("NODE_ENV") : getEnvValue(env, "NODE_ENV");
 	const nodeEnvName = `.env.${launchNodeEnv || "development"}`;
 	const modeEnv = parseEnvFile(path.join(cwd, nodeEnvName));
 	const localEnv = parseEnvFile(path.join(cwd, ".env.local"));
 	const modeLocalEnv = parseEnvFile(path.join(cwd, `${nodeEnvName}.local`));
 	const launchEnv = { ...projectEnv, ...modeEnv, ...localEnv, ...modeLocalEnv };
 	if (excludeUnprovenProjectNames) {
-		// NODE_ENV may itself have been autoloaded after Bun selected development.
-		// Trust only name provenance here, not a reimplementation of Bun expansion.
+		// Bun prefers BUN_ENV, but either selector may itself have been autoloaded.
+		// Exclude every plausible mode without reconstructing Bun expansion.
+		const bunEnvName = `.env.${getEnvValue(env, "BUN_ENV") || "development"}`;
+		const bunModeEnv =
+			bunEnvName === nodeEnvName || bunEnvName === ".env.development"
+				? undefined
+				: parseEnvFile(path.join(cwd, bunEnvName));
+		const bunModeLocalEnv =
+			bunEnvName === nodeEnvName || bunEnvName === ".env.development"
+				? undefined
+				: parseEnvFile(path.join(cwd, `${bunEnvName}.local`));
 		const defaultModeEnv =
 			nodeEnvName === ".env.development" ? undefined : parseEnvFile(path.join(cwd, ".env.development"));
 		const defaultModeLocalEnv =
@@ -164,6 +173,8 @@ function filterChildShellEnvInternal(
 		for (const key in result) {
 			if (
 				getEnvValue(launchEnv, key) !== undefined ||
+				(bunModeEnv && getEnvValue(bunModeEnv, key) !== undefined) ||
+				(bunModeLocalEnv && getEnvValue(bunModeLocalEnv, key) !== undefined) ||
 				(defaultModeEnv && getEnvValue(defaultModeEnv, key) !== undefined) ||
 				(defaultModeLocalEnv && getEnvValue(defaultModeLocalEnv, key) !== undefined)
 			) {

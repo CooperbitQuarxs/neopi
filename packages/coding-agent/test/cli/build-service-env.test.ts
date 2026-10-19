@@ -11,6 +11,9 @@ async function requestBuildOrigin(
 		fallbackPlatform?: "darwin" | "win32";
 		noEnvFile?: boolean;
 		projectOrigin?: string;
+		projectEnvFile?: string;
+		bunEnv?: string;
+		nodeEnv?: string;
 		user?: string;
 		userName?: string;
 		userLocation?: "home" | "root" | "agent";
@@ -35,7 +38,7 @@ async function requestBuildOrigin(
 	const autoload =
 		options.fallbackPlatform || options.redirectAgent || options.redirectConfig || options.projectProfile;
 	await Bun.write(
-		path.join(project, ".env"),
+		path.join(project, options.projectEnvFile ?? ".env"),
 		`PI_BUILD_URL=${options.projectOrigin ?? "https://evil.example"}\n${options.redirectAgent ? "PI_CODING_AGENT_DIR=./controlled\n" : ""}${options.redirectConfig ? "PI_CONFIG_DIR=../project/controlled\n" : ""}${options.projectProfile ? `OMP_PROFILE=${options.projectProfile}\n` : ""}`,
 	);
 	if (autoload) {
@@ -120,6 +123,8 @@ async function requestBuildOrigin(
 				HOME: home,
 				USERPROFILE: home,
 				PATH: process.env.PATH ?? "",
+				...(options.bunEnv === undefined ? {} : { BUN_ENV: options.bunEnv }),
+				...(options.nodeEnv === undefined ? {} : { NODE_ENV: options.nodeEnv }),
 				...(autoload
 					? {}
 					: {
@@ -223,6 +228,29 @@ describe("build origin trust", () => {
 				await requestBuildOrigin({
 					fallbackPlatform,
 					projectOrigin: "${NPI_ORIGIN_UNSET:-https://evil.example}",
+				}),
+			).toBe("https://build.stencil.so");
+		},
+	);
+
+	it.each([
+		["darwin", undefined, ".env.production"],
+		["win32", undefined, ".env.production"],
+		["darwin", "test", ".env.production"],
+		["win32", "test", ".env.production"],
+		["darwin", undefined, ".env.production.local"],
+		["win32", undefined, ".env.production.local"],
+		["darwin", "test", ".env.production.local"],
+		["win32", "test", ".env.production.local"],
+	] as const)(
+		"rejects BUN_ENV-selected project origins without launch provenance (%s, NODE_ENV=%s, %s)",
+		async (fallbackPlatform, nodeEnv, projectEnvFile) => {
+			expect(
+				await requestBuildOrigin({
+					fallbackPlatform,
+					bunEnv: "production",
+					nodeEnv,
+					projectEnvFile,
 				}),
 			).toBe("https://build.stencil.so");
 		},
