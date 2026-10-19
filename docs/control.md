@@ -48,13 +48,14 @@ lease. Results are sorted by modification time, newest first.
 
 The single JSON document is `{ "version": 1, "sessions": [...] }`. Each entry has
 `path`, `id`, `cwd`, nullable `title` and `parentSessionPath`, ISO-8601 `created`
-and `modified`, `messageCount`, nullable lifecycle `status`, and a trimmed
+and `modified` (or `null` if unavailable), `messageCount`, nullable lifecycle `status`, and a trimmed
 `firstMessage` of at most 300 characters. `inUse` is `null` or `{ "pid": 1234 }`
 (`0` means an unknown live holder). `control` is `null` or
 `{ "instanceId": "...", "role": "tui", "pid": 1234 }`, matched against a live
 control publication by the session file's resolved real path. Roles can also be
 `rpc`, `acp`, or `print`. A busy session without a control endpoint cannot be
 attached; do not open it as another writer.
+An invalid creation timestamp falls back to the file's modification time.
 
 `sessions read` returns `{ "version": 1, "session": { "path": "...", "id": "...",
 "cwd": "...", "title": null }, "messages": [...], "truncated": false }`. Each

@@ -43,21 +43,35 @@ export async function listSessionCatalog(options: SessionCatalogOptions = {}) {
 	const controls = new Map<string, { instanceId: string; role: "tui" | "rpc" | "acp" | "print"; pid: number }>();
 	for (const { meta } of await readControlEntries(options.controlRegistry)) {
 		if (!meta.sessionFile) continue;
-		controls.set(await canonicalPath(meta.sessionFile), { instanceId: meta.instanceId, role: meta.role, pid: meta.pid });
+		controls.set(await canonicalPath(meta.sessionFile), {
+			instanceId: meta.instanceId,
+			role: meta.role,
+			pid: meta.pid,
+		});
 	}
 	const seen = new Set<string>();
 	const rows = [];
-	for (const session of filterSessionsForPicker(sessions, pinned).sort((a, b) => b.modified.getTime() - a.modified.getTime())) {
+	for (const session of filterSessionsForPicker(sessions, pinned).sort(
+		(a, b) => b.modified.getTime() - a.modified.getTime(),
+	)) {
 		const file = await canonicalPath(session.path);
 		if (seen.has(file)) continue;
 		seen.add(file);
+		const modified = Number.isFinite(session.modified.getTime()) ? session.modified.toISOString() : null;
+		const created = Number.isFinite(session.created.getTime()) ? session.created.toISOString() : modified;
 		rows.push({
-			path: path.resolve(session.path), id: session.id, cwd: session.cwd,
-			title: session.title ?? null, parentSessionPath: session.parentSessionPath ?? null,
-			created: session.created.toISOString(), modified: session.modified.toISOString(),
-			messageCount: session.messageCount, status: session.status ?? null,
+			path: path.resolve(session.path),
+			id: session.id,
+			cwd: session.cwd,
+			title: session.title ?? null,
+			parentSessionPath: session.parentSessionPath ?? null,
+			created,
+			modified,
+			messageCount: session.messageCount,
+			status: session.status ?? null,
 			firstMessage: session.firstMessage === "(no messages)" ? "" : session.firstMessage.trim().slice(0, 300),
-			inUse: session.inUse ?? null, control: controls.get(file) ?? null,
+			inUse: session.inUse ?? null,
+			control: controls.get(file) ?? null,
 		});
 	}
 	return { version: 1 as const, sessions: rows };
@@ -69,7 +83,9 @@ export async function readSessionCatalog(file: string, maxMessages?: number) {
 	}
 	const resolved = path.resolve(file);
 	const storage = new FileSessionStorage();
-	const info = (await listSessionsReadOnly(path.dirname(resolved), storage)).find(session => path.resolve(session.path) === resolved);
+	const info = (await listSessionsReadOnly(path.dirname(resolved), storage)).find(
+		session => path.resolve(session.path) === resolved,
+	);
 	if (!info) throw new Error(`Not a readable session file: ${resolved}`);
 	const messages = [];
 	for (const message of await loadSessionMessagesReadOnly(resolved)) {
