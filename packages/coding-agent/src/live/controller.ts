@@ -26,6 +26,7 @@ import {
 	buildSessionContextAppend,
 	CONTEXT_CHUNK_BYTES,
 	chunkLiveContext,
+	type LiveContextChannel,
 	type LiveClientMessage,
 	type LiveServerEvent,
 } from "./protocol";
@@ -232,6 +233,8 @@ export class LiveSessionController {
 	readonly #ircRelayAllowed: (message: CustomMessage) => boolean;
 	readonly #includeVoiceNote: () => boolean;
 	readonly #delegationDelivery: () => LiveDelegationDelivery;
+	readonly #serverDelegationIds = new Set<string>();
+	readonly #delegationAliases = new Map<string, string>();
 	readonly #relayGates: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
 	readonly #delegationKeywords: () => { suppress: string; force: string };
 	#latestUtterance: UserLedgerTurn | undefined;
@@ -582,7 +585,8 @@ export class LiveSessionController {
 		}
 	}
 
-	#handleLiveEvent(event: LiveServerEvent): void {
+	#handleLiveEvent(event: LiveServerEvent, serverCreated = true): void {
+		if (event.type === "delegation.created" && serverCreated) this.#serverDelegationIds.add(event.item.id);
 		const assistantOutput =
 			event.type === "output_transcript.added" ||
 			event.type === "output_audio.delta" ||
@@ -652,7 +656,7 @@ export class LiveSessionController {
 			const template = operatorTypedMessageTemplate;
 			const labelBytes = Buffer.byteLength(prompt.render(template, { message: "", delegationRejected: true }), "utf8");
 			for (const part of chunkLiveContext(latest.text, CONTEXT_CHUNK_BYTES - labelBytes)) {
-				void this.#queueSend(buildDelegationContextAppend(
+				void this.#queueSend(this.#voiceContext(
 					event.item.id,
 					prompt.render(template, { message: part, delegationRejected: true }),
 				));
@@ -660,7 +664,16 @@ export class LiveSessionController {
 			return;
 		}
 		if (!forced && latest?.forcedDelegationId && latest.forcedDelegationId !== event.item.id) {
-			if (latest.claim !== undefined || !this.#userTurns.has(latest.turn)) return;
+			if (latest.claim !== undefined || !this.#userTurns.has(latest.turn)) {
+				const localId = latest.forcedDelegationId;
+				if (!this.#serverDelegationIds.has(localId) && this.#serverDelegationIds.has(event.item.id)) {
+					this.#delegationAliases.set(localId, event.item.id);
+					latest.forcedDelegationId = event.item.id;
+					if (this.#activeDelegationId === localId) this.#activeDelegationId = event.item.id;
+					if (this.#pendingDelegation?.id === localId) this.#pendingDelegation.id = event.item.id;
+				}
+				return;
+			}
 			latest.forcedDelegationId = event.item.id;
 		}
 
@@ -786,7 +799,7 @@ export class LiveSessionController {
 			this.#pendingDelegation = undefined;
 			this.#pendingDelivery = undefined;
 			if (pending.delivery === "interrupt") {
-				this.#activeDelegationId = pending.id;
+				this.#activeDelegationId = this.#delegationAliases.get(pending.id) ?? pending.id;
 				this.#lastRelayedResponse = undefined;
 				this.#thinkingRelayedLength = 0;
 			}
@@ -865,7 +878,7 @@ export class LiveSessionController {
 				for (const record of this.#voiceNotes) if (record.noteId === details.noteId) record.consumed = true;
 			}
 			if (details?.delegationId) {
-				this.#activeDelegationId = details.delegationId;
+				this.#activeDelegationId = this.#delegationAliases.get(details.delegationId) ?? details.delegationId;
 				this.#lastRelayedResponse = undefined;
 				this.#thinkingRelayedLength = 0;
 			}
@@ -932,7 +945,7 @@ export class LiveSessionController {
 		this.#deliverOrHold("progress", () => {
 			if (!this.#relayGates().progress) return;
 			for (const chunk of chunks) {
-				this.#queueSend(buildDelegationContextAppend(delegationId, chunk, "commentary"));
+				this.#queueSend(this.#voiceContext(delegationId, chunk, "commentary"));
 			}
 		});
 	}
@@ -984,7 +997,7 @@ export class LiveSessionController {
 				// unsolicited context only; holding a final answer delays it until the next handoff.
 				this.#contextSinceResponse = true;
 				for (const chunk of chunkLiveContext(finalContext)) {
-					this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
+					this.#queueSend(this.#voiceContext(delegationId, chunk));
 				}
 				break;
 			}
@@ -1363,7 +1376,7 @@ export class LiveSessionController {
 		const delegationId = this.#activeDelegationId;
 		void this.#queueSend(
 			delegationId
-				? buildDelegationContextAppend(delegationId, item, "commentary")
+				? this.#voiceContext(delegationId, item, "commentary")
 				: buildSessionContextAppend(item, "commentary"),
 		);
 	}
@@ -1373,9 +1386,16 @@ export class LiveSessionController {
 		const delegationId = this.#activeDelegationId;
 		return this.#queueSend(
 			delegationId
-				? buildDelegationContextAppend(delegationId, item, "speakable")
+				? this.#voiceContext(delegationId, item, "speakable")
 				: buildSessionContextAppend(item, "speakable"),
 		);
+	}
+
+	#voiceContext(delegationId: string, text: string, channel?: LiveContextChannel): LiveClientMessage {
+		const route = this.#delegationAliases.get(delegationId) ?? delegationId;
+		return this.#serverDelegationIds.has(route)
+			? buildDelegationContextAppend(route, text, channel)
+			: buildSessionContextAppend(text, channel);
 	}
 
 	#markUserActivity(): void {
@@ -1598,7 +1618,7 @@ export class LiveSessionController {
 			this.#handleLiveEvent({
 				type: "delegation.created",
 				item: { type: "delegation", target: "client", id: current.forcedDelegationId, content: [] },
-			});
+			}, false);
 		}
 	}
 

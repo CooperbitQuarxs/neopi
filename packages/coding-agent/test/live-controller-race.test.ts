@@ -337,6 +337,39 @@ function makeHarness(options?: {
 
 describe("per-utterance delegation keywords", () => {
 	const defaults = () => ({ suppress: "Iris", force: "relay" });
+	it("uses session context for a forced answer before a real server route exists", async () => {
+		const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "relay fix the parser" } });
+			await settle();
+			h.fireSession(agentEnd([assistant("Parser fixed without a provider handoff", "stop")]));
+			await settle();
+			expect(h.sent.filter(message => message.type === "delegation.context.append")).toEqual([]);
+			expect(h.sent.some(message => message.type === "session.context.append" &&
+				message.content.some(item => item.text.includes("Parser fixed without a provider handoff")))).toBe(true);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("routes an automatic forced answer to the real server delegation rather than its local trigger", async () => {
+		const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "please relay fix the parser" } });
+			await settle();
+			h.fireLive(delegation("server-real-1", ""));
+			h.fireSession(agentEnd([assistant("Parser fixed", "stop")]));
+			await settle();
+			const replies = finalAppends(h.sent);
+			expect(replies).toHaveLength(1);
+			expect(replies[0]?.delegation_item_id).toBe("server-real-1");
+			expect(replies[0]?.text).toContain("Parser fixed");
+		} finally {
+			await h.controller.stop();
+		}
+	});
 	it("retains mandatory relay intent when additional speech resets the quiet floor", async () => {
 		const h = makeHarness({
 			quietFloorMs: () => 35,
