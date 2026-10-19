@@ -92,6 +92,16 @@ describe("control snapshot queue", () => {
 		"q".repeat(MAX_RPC_REASSEMBLED_BYTES + 1),
 	];
 
+	test("busy summary names both delivery paths and counts steering plus follow-up", async () => {
+		const { client } = await startWithQueue(undefined, ["later"]);
+		await session!.steer("change course");
+		const state = (await client.request({ type: "state" })).data as ControlSnapshot;
+		expect(state.busy.pendingSteerAndFollowUp).toBe(2);
+		expect(state.busy).not.toHaveProperty("queued");
+		expect(state.session!.queuedMessages.steering).toEqual(["change course"]);
+		expect(state.session!.queuedMessages.followUp).toEqual(["later"]);
+	});
+
 	test("a queue past the frame limit still lets clients connect, with a bounded copy", async () => {
 		const steering = overLimit();
 		const { client, hello } = await startWithQueue(steering);
