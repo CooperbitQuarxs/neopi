@@ -4,7 +4,11 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "../../src/session/agent-session";
 import type { AgentSessionEvent } from "../../src/session/agent-session-events";
 import { LIVE_DELEGATION_MESSAGE_TYPE } from "../../src/session/messages";
-import { buildLiveDelegationMessage, LIVE_VOICE_NOTE_ENTRY_TYPE } from "../../src/live/delegation-note";
+import {
+	buildLiveDelegationMessage,
+	type LiveDelegationDetails,
+	LIVE_VOICE_NOTE_ENTRY_TYPE,
+} from "../../src/live/delegation-note";
 import { LiveSessionController } from "../../src/live/controller";
 import liveClientProtocolTemplate from "../../src/live/prompts/live-client-protocol.md" with { type: "text" };
 import liveInstructionsTemplate from "../../src/live/prompts/live-instructions.md" with { type: "text" };
@@ -21,7 +25,7 @@ function delegation(id: string, text: string): LiveServerEvent {
 function harness(includeVoiceNote: () => boolean = () => true) {
 	const sent: LiveClientMessage[] = [];
 	const received: Array<{
-		message: { content: string; details?: { operator: string; voice?: string; noteId?: string } };
+		message: { content: string; details?: LiveDelegationDetails };
 		options?: object;
 	}> = [];
 	const entries: Array<{ type: string; data: unknown }> = [];
@@ -61,10 +65,7 @@ function harness(includeVoiceNote: () => boolean = () => true) {
 			aborted.push(value);
 			streaming = false;
 		},
-		sendCustomMessageWithReceipt(
-			message: { content: string; details?: { operator: string; voice?: string; noteId?: string } },
-			options?: object,
-		) {
+		sendCustomMessageWithReceipt(message: { content: string; details?: LiveDelegationDetails }, options?: object) {
 			received.push({ message, options });
 			const accepted = Promise.withResolvers<void>();
 			accept.push(() => accepted.resolve());
@@ -196,7 +197,11 @@ describe("live delegation provenance", () => {
 		h.fire(delegation("d1", "Should I check tests too?"));
 		await flush();
 		expect(h.received[0]?.message.content).toStartWith("fix the build\n\n<voice-agent-note>");
-		expect(h.received[0]?.message.details).toEqual({ operator: "fix the build", voice: "Should I check tests too?" });
+		expect(h.received[0]?.message.details).toEqual({
+			operator: "fix the build",
+			voice: "Should I check tests too?",
+			delegationId: "d1",
+		});
 		expect(h.spoken).toEqual(["fix the build"]);
 		await h.controller.stop();
 	});
