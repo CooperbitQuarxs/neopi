@@ -80,6 +80,22 @@ describe("model switch effort preflight", () => {
 		}
 	});
 
+	it("applies saved fixed and Auto effort when selecting only a role", async () => {
+		const session = await createSession();
+		try {
+			session.settings.setRoleEffortSelection("reviewer", { mode: "fixed", level: Effort.Low });
+			await session.setModel(target, "reviewer");
+			expect(session.thinkingLevel).toBe(Effort.Low);
+			expect(session.effortOrigin).toBe("role");
+			session.settings.setRoleEffortSelection("reviewer", { mode: "auto", allowed: [Effort.Low, Effort.High] });
+			await session.setModel(target, "reviewer");
+			expect(session.isAutoThinking).toBe(true);
+			expect(session.autoSelection).toEqual({ mode: "auto", allowed: [Effort.Low, Effort.High] });
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	it("rejects a temporary model with an unsupported explicit effort before switching", async () => {
 		const session = await createSession();
 		try {
