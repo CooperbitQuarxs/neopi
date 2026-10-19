@@ -176,7 +176,12 @@ export async function readSessionCatalog(file: string, maxMessages?: number): Pr
 		if (message.role !== "user" && message.role !== "assistant") continue;
 		const text = textContent(message.content, "\n\n");
 		if (!text.trim()) continue;
-		branchMessages.push({ entryId: entry.id, role: message.role, text, timestamp: new Date(message.timestamp).toISOString() });
+		branchMessages.push({
+			entryId: entry.id,
+			role: message.role,
+			text,
+			timestamp: new Date(message.timestamp).toISOString(),
+		});
 	}
 	const messages: SessionCatalogNativeMessage[] = [];
 	for (const message of branch.messages) {
@@ -199,7 +204,9 @@ export async function readSessionCatalog(file: string, maxMessages?: number): Pr
 		sessionExitEntryIds,
 		messages: truncated ? messages.slice(messages.length - maxMessages!) : messages,
 		truncated,
-		branchMessages: branchMessagesTruncated ? branchMessages.slice(branchMessages.length - maxMessages!) : branchMessages,
+		branchMessages: branchMessagesTruncated
+			? branchMessages.slice(branchMessages.length - maxMessages!)
+			: branchMessages,
 		branchMessagesTruncated,
 	};
 }

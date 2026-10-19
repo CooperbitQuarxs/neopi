@@ -238,10 +238,7 @@ export function isTranscriptEntry(entry: SessionEntry): entry is TranscriptEntry
 }
 
 /** Native ancestry in root-to-leaf order, including non-transcript entries. */
-export function walkSessionBranch(
-	leafId: string | null,
-	byId: ReadonlyMap<string, SessionEntry>,
-): SessionEntry[] {
+export function walkSessionBranch(leafId: string | null, byId: ReadonlyMap<string, SessionEntry>): SessionEntry[] {
 	const branch: SessionEntry[] = [];
 	const seen = new Set<string>();
 	let current = leafId ? byId.get(leafId) : undefined;

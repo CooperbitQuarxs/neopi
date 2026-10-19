@@ -185,7 +185,12 @@ describe("read-only session catalog", () => {
 		if (full.branchMessages === undefined) throw new Error("Native fixture lost its branch identities");
 		expect(full.messages).toEqual([
 			{ entryId: "m0", role: "user", text: "question", timestamp: new Date(1_780_000_000_000).toISOString() },
-			{ entryId: "m3", role: "assistant", text: "first\n\nsecond", timestamp: new Date(1_780_000_003_000).toISOString() },
+			{
+				entryId: "m3",
+				role: "assistant",
+				text: "first\n\nsecond",
+				timestamp: new Date(1_780_000_003_000).toISOString(),
+			},
 		]);
 		expect(full.branchMessages).toEqual(full.messages);
 		expect(full.branchMessagesTruncated).toBe(false);
@@ -286,16 +291,39 @@ describe("read-only session catalog", () => {
 			},
 			{ type: "custom", id: "leaf", parentId: "aborted", timestamp, customType: "checkpoint", data: {} },
 		];
-		await Bun.write(file, (await Bun.file(file).text()) + selectedEntries.map(entry => `${JSON.stringify(entry)}\n`).join(""));
+		await Bun.write(
+			file,
+			(await Bun.file(file).text()) + selectedEntries.map(entry => `${JSON.stringify(entry)}\n`).join(""),
+		);
 		const source = await Bun.file(file).text();
 		const filesBefore = (await fs.readdir(path.dirname(file))).sort();
 		const full = await readSessionCatalog(file);
 		if (full.branchMessages === undefined) throw new Error("Native fixture lost its branch identities");
 		expect(full.branchMessages).toEqual([
-			{ entryId: "m0", role: "user", text: "before compaction", timestamp: new Date(1_780_000_000_000).toISOString() },
-			{ entryId: "m1", role: "assistant", text: "original reply", timestamp: new Date(1_780_000_001_000).toISOString() },
-			{ entryId: "after", role: "user", text: "after compaction", timestamp: new Date(1_780_000_005_000).toISOString() },
-			{ entryId: "aborted", role: "assistant", text: "interrupted reply", timestamp: new Date(1_780_000_006_000).toISOString() },
+			{
+				entryId: "m0",
+				role: "user",
+				text: "before compaction",
+				timestamp: new Date(1_780_000_000_000).toISOString(),
+			},
+			{
+				entryId: "m1",
+				role: "assistant",
+				text: "original reply",
+				timestamp: new Date(1_780_000_001_000).toISOString(),
+			},
+			{
+				entryId: "after",
+				role: "user",
+				text: "after compaction",
+				timestamp: new Date(1_780_000_005_000).toISOString(),
+			},
+			{
+				entryId: "aborted",
+				role: "assistant",
+				text: "interrupted reply",
+				timestamp: new Date(1_780_000_006_000).toISOString(),
+			},
 		]);
 		expect(full.messages).toEqual(full.branchMessages.slice(2));
 		const branchEntryIds = ["m0", "m1", ...selectedEntries.map(entry => entry.id)];
@@ -306,7 +334,9 @@ describe("read-only session catalog", () => {
 		for (const cap of [0, 1, full.messages.length, full.branchMessages.length]) {
 			const capped = await readSessionCatalog(file, cap);
 			expect(capped.messages).toEqual(full.messages.slice(Math.max(0, full.messages.length - cap)));
-			expect(capped.branchMessages).toEqual(full.branchMessages.slice(Math.max(0, full.branchMessages.length - cap)));
+			expect(capped.branchMessages).toEqual(
+				full.branchMessages.slice(Math.max(0, full.branchMessages.length - cap)),
+			);
 			expect(capped.branchMessagesTruncated).toBe(cap < full.branchMessages.length);
 			expect(capped.branchEntryIds).toEqual(branchEntryIds);
 			expect(capped.leafId).toBe("leaf");
@@ -341,8 +371,7 @@ describe("read-only session catalog", () => {
 				type: "message",
 				message: { role: "assistant", content: [], timestamp: 1_780_000_001_000, stopReason },
 			});
-		const exit = (id: string, data: object) =>
-			append(id, { type: "custom", customType: "session_exit", data });
+		const exit = (id: string, data: object) => append(id, { type: "custom", customType: "session_exit", data });
 		assistant("reply", "stop");
 		exit("clean-exit", cleanExit);
 		append("textless-user", {
@@ -374,14 +403,53 @@ describe("read-only session catalog", () => {
 			message: { role: "user", content: " \n ", timestamp: 1_780_000_003_000 },
 		});
 		exit("blank-user-exit", cleanExit);
-		await Bun.write(file, (await Bun.file(file).text()) + entries.map(entry => `${JSON.stringify(entry)}\n`).join(""));
+		await Bun.write(
+			file,
+			(await Bun.file(file).text()) + entries.map(entry => `${JSON.stringify(entry)}\n`).join(""),
+		);
 		const expectedExits = [
-			{ entryId: "clean-exit", kind: "normal", reason: "dispose", pendingToolCallCount: 0, lastAssistantStopReason: "stop" },
-			{ entryId: "unanswered-exit", kind: "normal", reason: "dispose", pendingToolCallCount: 0, lastAssistantStopReason: null },
-			{ entryId: "pending-exit", kind: "normal", reason: "dispose", pendingToolCallCount: 1, lastAssistantStopReason: "toolUse" },
-			{ entryId: "length-exit", kind: "normal", reason: "dispose", pendingToolCallCount: 0, lastAssistantStopReason: "length" },
-			{ entryId: "fatal-exit", kind: "fatal", reason: "uncaughtException", pendingToolCallCount: 0, lastAssistantStopReason: "length" },
-			{ entryId: "blank-user-exit", kind: "normal", reason: "dispose", pendingToolCallCount: 0, lastAssistantStopReason: null },
+			{
+				entryId: "clean-exit",
+				kind: "normal",
+				reason: "dispose",
+				pendingToolCallCount: 0,
+				lastAssistantStopReason: "stop",
+			},
+			{
+				entryId: "unanswered-exit",
+				kind: "normal",
+				reason: "dispose",
+				pendingToolCallCount: 0,
+				lastAssistantStopReason: null,
+			},
+			{
+				entryId: "pending-exit",
+				kind: "normal",
+				reason: "dispose",
+				pendingToolCallCount: 1,
+				lastAssistantStopReason: "toolUse",
+			},
+			{
+				entryId: "length-exit",
+				kind: "normal",
+				reason: "dispose",
+				pendingToolCallCount: 0,
+				lastAssistantStopReason: "length",
+			},
+			{
+				entryId: "fatal-exit",
+				kind: "fatal",
+				reason: "uncaughtException",
+				pendingToolCallCount: 0,
+				lastAssistantStopReason: "length",
+			},
+			{
+				entryId: "blank-user-exit",
+				kind: "normal",
+				reason: "dispose",
+				pendingToolCallCount: 0,
+				lastAssistantStopReason: null,
+			},
 		];
 		const expectedExitIds = [
 			"clean-exit",
