@@ -47,9 +47,13 @@ export const collabHelp = {
 		"List active local Collab host metadata without URLs; use collab link <instanceId|pid> to retrieve a control link (--view for view-only)",
 } satisfies CommandMetadata;
 
+export const sessionsHelp = {
+	description: "Discover sessions and read their transcripts without taking a writer lease",
+} satisfies CommandMetadata;
+
 export const ctlHelp = {
 	description:
-		"Drive a running npi session over its control socket: list, state, send, steer, abort, slash, action, keys, dialogs",
+		"Drive a running npi session over its control socket: list, pipe, state, send, steer, abort, slash, action, keys, dialogs",
 } satisfies CommandMetadata;
 
 export const monitorHelp = {
