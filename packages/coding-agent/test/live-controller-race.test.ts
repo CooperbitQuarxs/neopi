@@ -335,6 +335,24 @@ function makeHarness(options?: {
 
 describe("per-utterance delegation keywords", () => {
 	const defaults = () => ({ suppress: "Iris", force: "relay" });
+	it("retains mandatory relay intent when additional speech resets the quiet floor", async () => {
+		const h = makeHarness({
+			quietFloorMs: () => 35,
+			delegationKeywords: () => ({ suppress: "Iris", force: "relay" }),
+		});
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "please relay fix the parser" } });
+			await wait(10);
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "and include tests" } });
+			await wait(60);
+			await settle();
+			expect(h.prompts).toEqual(["please relay fix the parser\n\nand include tests"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
 	it("preserves earlier primary work when a later utterance addresses Iris", async () => {
 		const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });
 		await h.controller.start();
