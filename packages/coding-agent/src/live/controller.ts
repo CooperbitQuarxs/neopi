@@ -1099,17 +1099,17 @@ export class LiveSessionController {
 		const message = text.trim();
 		if (!message || this.#stopped) return false;
 		const block = stripLiveKeyword(message, this.#blockDelegateKeyword);
-		const blocked = this.#turnsWhere(turn => turn.blocked === true);
-		if (blocked.length) {
+		const voiceOnly = this.#turnsWhere(turn => turn.final && !this.#mayDelegateTurn(turn));
+		if (voiceOnly.length) {
 			if (Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
-			const primary = this.#captureComposerExcludingTurns?.(blocked.map(turn => turn.turn)) ?? {
-				text: this.#turnsWhere(turn => !turn.blocked && turn.claim === undefined).map(turn => turn.text).join("\n\n"),
+			const primary = this.#captureComposerExcludingTurns?.(voiceOnly.map(turn => turn.turn)) ?? {
+				text: this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined).map(turn => turn.text).join("\n\n"),
 			};
 			this.#holdReleased = true;
 			this.#suppressedResponse = false;
 			this.#deferredVoiceDelegation = undefined;
 			this.refreshTurnGate(false);
-			for (const turn of blocked) this.#deliverBlockedTurn(turn);
+			for (const turn of voiceOnly) this.#deliverBlockedTurn(turn);
 			if (primary.text.trim()) this.#forcePendingComposer(primary.text.trim(), primary.receipt);
 			return true;
 		}

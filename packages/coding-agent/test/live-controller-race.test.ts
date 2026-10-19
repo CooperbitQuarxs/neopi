@@ -337,6 +337,42 @@ function makeHarness(options?: {
 
 describe("per-utterance delegation keywords", () => {
 	const defaults = () => ({ suppress: "Iris", force: "relay" });
+	it("excludes direct-address speech from a mixed blocked composer projection", async () => {
+		const h = makeHarness({
+			holdMode: () => true,
+			blockDelegateKeyword: "iris only",
+			delegationKeywords: () => ({ suppress: "Iris", force: "relay" }),
+		});
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris, tell me a joke" } });
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "what is the weather iris only" } });
+			expect(h.controller.forceDelegateComposer("fix the cache\n\nIris, tell me a joke\n\nwhat is the weather")).toBe(true);
+			await settle();
+			expect(h.prompts).toEqual(["fix the cache"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+	it("keeps later ordinary work when a held composer starts with a direct address", async () => {
+		const h = makeHarness({
+			holdMode: () => true,
+			delegationKeywords: () => ({ suppress: "Iris", force: "relay" }),
+		});
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris, tell me a joke" } });
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the parser" } });
+			expect(h.controller.forceDelegateComposer("Iris, tell me a joke\n\nfix the parser")).toBe(true);
+			await settle();
+			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "A joke" } });
+			await settle();
+			expect(h.prompts).toEqual(["fix the parser"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
 	it("releases a finalized direct-answer correction after a second quiet floor", async () => {
 		const h = makeHarness({
 			quietFloorMs: () => 30,
