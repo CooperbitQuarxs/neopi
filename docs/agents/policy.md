@@ -60,53 +60,72 @@ work. PR titles use the primary commit's Conventional Commits form. Use
 only true boxes and explain unchecked checks. Record dependencies as
 `Depends on #N` and wait for them before merging.
 
+A branch with commits gets a PR in the same turn it is declared done, and that
+PR merges. Every opened PR is merged; if wrong, revert it rather than leaving
+it open. [Daily triage](triage.md#closure-and-daily-reconciliation) lists orphans.
+
 Use [triage-labels.md](triage-labels.md) for kind, priority, relationships,
-participation, review and merge eligibility. Every issue/PR has a supported kind
-and appropriate state; unresolved intake gets `needs-triage`. Every PR carries
-`review: codex`. [triage.md](triage.md) owns the two-pass triage and daily
-reconciliation process; [issue-tracker.md](issue-tracker.md) owns CLI mechanics.
+participation and descriptive review state. Every issue/PR has a supported kind
+and appropriate state; unresolved intake gets `needs-triage`. Review is optional.
+[triage.md](triage.md) owns two-pass triage and daily reconciliation;
+[issue-tracker.md](issue-tracker.md) owns CLI mechanics.
+
+## Nightly delivery
+
+`nightly` exists to be merged into, built and installed so the owner can use
+the change and give feedback. The owner is the tester; her feedback, not CI or
+a review bot, decides whether a change stays.
+
+- Merge at about 80% integrator confidence; lower is acceptable. Record confidence
+  in the merge note. A PR is a unit of tangible change the owner can feel when
+  she runs the build.
+- After every merge or batch, build and install `npi-nightly` using `AGENTS.md`,
+  then check that it launches. "It does not start" is the bar that blocks.
+- A proof session may hold the destination-scoped install lock for at most ten
+  minutes; use the same `NPI_DEST` with `scripts/install-lock.sh hold <minutes> <holder> [reason]`,
+  `status`, `release` and `install.sh`, and release as soon as proof ends.
+  Expired holds do not defer installation. The lock implementation landed in
+  [#386](https://github.com/PsychedelicShayna/neopi/pull/386).
+- Base changes never invalidate anything. Merge the base into a topic only to
+  resolve an actual conflict, never to refresh and never by rebasing.
+- Never block or wait: hand any CI/review watching to a cheap poller agent and
+  keep moving the next PR.
 
 ## Review and checks
 
-A clean CODE round on the final head and a factual answer to every finding are
-required before merge, including docs and policy changes. Read
-[pr-review-bots.md](pr-review-bots.md) for triggers, current-head receipts, state
-labels and unresolved-round handling. Request no new security passes. Existing
-security findings still need disposition. Contributor heads are read-only on the
-owner's machine; the owner-head safety rule is in that review guide.
+Review bots are optional double-checkers, not merge gates. Do not request a
+round by default. At most one round is allowed, only for a large-blast-radius
+change that could make the harness unusable if wrong. Fix what that round finds
+that matters to merging; note or ignore the rest. [pr-review-bots.md](pr-review-bots.md)
+owns bot identity and optional request mechanics. Bug hunts run against `nightly`
+at the owner's discretion, using parallel agents over recently merged PRs;
+their findings do not gate merges.
 
-Finish relevant local verification before requesting review and report only
-checks actually run. Follow `AGENTS.md` for package-local commands. Classify a
-failing check from evidence: head-only is the PR's defect; identical base/head
-failure is a baseline defect; passes on both establish a flake. File a `baseline`
-issue with runs and output before accepting a red baseline check or rerunning a
-flake. An unavailable local check needs concrete evidence, not hopeful reruns.
-A CI fix affecting every PR stays in a single-purpose PR. Workflow changes that
-cannot exercise their changed event path before merge are watched on their first
-integration run and reverted through a PR on failure.
+CI and test suites never block a merge into `nightly`. A failing check is
+information: note suspected PR-caused failures in the merge note and fix in a
+follow-up if it matters. Report only checks actually run. Checks still matter
+for promotion into `neopi`, which the owner decides.
 
 ## Merge authority
 
-`mergeable` means full acceptance, required checks green (or a documented
-identical baseline failure), clean final-head CODE receipt, all findings answered,
-and branch current with the base. It is independent of actor-finished labels and
-GitHub's no-conflicts flag. The authoring agent merges its own PR into `nightly`
-when these criteria pass, except when the assignment reserves integration to
-another agent. Open PRs awaiting a decision or dependency say so in a comment.
-Policy-file owner approval mechanics remain an open decision; do not invent a
-new approval mechanism in this iteration.
+Agents merge into `nightly` under the delivery rules above, unless the assignment
+reserves integration to another agent. `mergeable` records readiness under those
+rules, not CI or review approval. Merge order is the agents' job.
 
 Use merge commits: `gh pr merge --merge`, with subject
-`Merge PR #<number>: <conventional PR subject> (@<author>)`. Resolve topic conflicts
-by merging the base into the topic, preserving both histories. Re-check dependent
-open PRs after every merge. Revert a broken integration through a PR. The owner
-alone merges promotions and other PRs into `neopi`. Agents leave repository
-rulesets, branch protection and settings unchanged.
+`Merge PR #<number>: <conventional PR subject> (@<author>)`. Resolve real conflicts
+by merging the base into the topic; preserve both histories. Revert a broken
+integration through a PR. The owner alone merges promotions and `hotfix/` PRs
+into `neopi`. Leave repository rulesets, branch protection and settings unchanged.
 
-The author may push its topic commits, post and answer on its own PR, file
-baseline issues, maintain the documented labels, and merge its own integration
-PR under these gates. Other authors' PRs remain read-only unless the owner
-explicitly delegates them.
+Workflow changes exercised only after landing stay single-purpose: delegate
+watching their first integration run and revert through a PR on failure.
+Contributor heads remain read-only on the owner's machine; the owner-head
+safety rule lives in [pr-review-bots.md](pr-review-bots.md#running-pr-code).
+
+The author may push its topic commits, post on its own PR, file issues, maintain
+supported labels and merge its integration PR. Other authors' PRs remain
+read-only unless the owner explicitly delegates them.
 
 ## Install after merge batches
 
@@ -154,5 +173,5 @@ invalid and declined dispositions.
 
 Portable repository skills live in `.agents/skills/`; NeoPi discovers that path
 through its agents provider. Harness-specific commands and tool probes remain in
-`.omp/`. The babysit-pr procedure is undergoing a separate owner rewrite; where
-its older procedure differs, use this policy and the review guide for the gate.
+`.omp/`. The Nightly delivery rules take precedence over any older gate text
+in the babysit-pr skill. Leave the skill file untouched.

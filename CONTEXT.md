@@ -27,6 +27,8 @@ spellings and meanings live in [triage-labels.md](docs/agents/triage-labels.md).
 | Difficulty / frame / priority | Implementation challenge / estimated time unit / urgency or ordering; independent axes |
 | Frame normalization | Lower a fresh agent estimate one unit exactly once, with hours as the floor; human estimates unchanged |
 | Reviewer token | Configured name such as `codex`, mapped to bot login and invocation in the review guide |
-| Review state | Requested, open, closed or stalled for a configured reviewer on a specific head; independent of actor state |
+| Review state | Optional review activity and findings; descriptive only, unchanged by base movement and independent of actor state |
 | Round / receipt | A requested reviewer response on one head / the evidence that identifies its pass, status and commit |
 | Acceptance | The full requested contract, not merely a merged linked PR or implementation claim |
+
+PR: a unit of tangible change the owner can feel when she runs the build.

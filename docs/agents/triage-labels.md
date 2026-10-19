@@ -81,17 +81,17 @@ writes code. Use one state per actor; distinct actor states can coexist.
 
 | Label | Meaning |
 | --- | --- |
-| `review: codex` | Codex reviews this change; reviewer token maps to its login and trigger |
-| `review: requested (codex)` | A Codex round is requested on the current head |
-| `review: open (codex)` | Codex findings are unanswered on the current head |
-| `review: closed (codex)` | Latest current-head round is clean and every finding answered |
-| `review: stalled (codex)` (**proposal**) | Review loop ended unresolved; summary posted |
-| `mergeable` | Meets this repository's documented merge criteria; authority to merge is separate |
+| `review: codex` | Codex chosen as an optional double-checker |
+| `review: requested (codex)` | Optional Codex round requested or running |
+| `review: open (codex)` | Findings noted or under consideration |
+| `review: closed (codex)` | Optional round handled; important findings fixed, others noted or ignored |
+| `review: stalled (codex)` | Optional round failed/stopped; informational only |
+| `mergeable` | Integrator considers this ready under nightly delivery policy; not CI/review approval |
 
-`review: codex` is a requirement and composes with one current review-state
-label. A new head invalidates the old head's state and merge eligibility.
-A completed actor state or GitHub's no-conflicts flag alone is not `mergeable`.
-The evidence rules are in [pr-review-bots.md](pr-review-bots.md).
+Use at most one state per chosen reviewer. No review is needed by default.
+Base changes never invalidate anything, including review state or merge
+readiness. None of these labels gates `nightly`; [policy.md](policy.md) owns the
+confidence decision and owner-decided promotion.
 
 ## Composition
 
@@ -103,10 +103,6 @@ requests overlap but their proposed implementations conflict. `spec` describes
 specification presence, not authorization, ownership or acceptance. Use the
 labels supported by the evidence rather than forcing exactly one kind.
 
-The existing `sentinel-review-requested` marker remains recognized because the
-outer workspace policy still consumes it. It does not configure Magi or authorize
-new security passes; resolve that inherited requirement with the integration
-owner when encountered.
 
 ## Open decisions
 
