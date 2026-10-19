@@ -2,15 +2,6 @@ import type { KeyId } from "./app-keybindings";
 import { getKeybindings } from "./keybindings";
 import { matchesKey } from "./keys";
 
-/** Treat Vim motion keys as arrows only while a picker is in normal mode. */
-export function pickerNavigationKey(data: string): string {
-	if (matchesKey(data, "h") || matchesKey(data, "shift+h")) return "\x1b[D";
-	if (matchesKey(data, "j") || matchesKey(data, "shift+j")) return "\x1b[B";
-	if (matchesKey(data, "k") || matchesKey(data, "shift+k")) return "\x1b[A";
-	if (matchesKey(data, "l") || matchesKey(data, "shift+l")) return "\x1b[C";
-	return data;
-}
-
 /**
  * Match the coding-agent interrupt key.
  *
@@ -27,14 +18,14 @@ export function matchesAppInterrupt(data: string): boolean {
 	return matchesKey(data, "escape") || matchesKey(data, "esc");
 }
 
-/** Match `app.tools.expand`, falling back to Ctrl+O when the action is unbound. */
+/** Match `app.tools.expand`, falling back to Alt+E when the action is unbound. */
 export function matchesAppToolsExpand(data: string): boolean {
 	const keybindings = getKeybindings();
 	const expandKeys = keybindings.getKeys("app.tools.expand");
 	if (expandKeys.length > 0) {
 		return keybindings.matches(data, "app.tools.expand");
 	}
-	return matchesKey(data, "ctrl+o");
+	return matchesKey(data, "alt+e");
 }
 
 /** Match the generic selector cancel keybinding. */
@@ -62,11 +53,15 @@ export function matchesSelectPageDown(data: string): boolean {
 	return getKeybindings().matches(data, "tui.select.pageDown");
 }
 
+/** Effective external-editor key: the first bound key, or Ctrl+G when unbound. */
+export function appExternalEditorKey(): KeyId {
+	return getKeybindings().getKeys("app.editor.external")[0] ?? "ctrl+g";
+}
+
 /** Match the external-editor keybinding, falling back to Ctrl+G when unbound. */
 export function matchesAppExternalEditor(data: string): boolean {
 	const keybindings = getKeybindings();
-	const externalEditorKeys = keybindings.getKeys("app.editor.external");
-	if (externalEditorKeys.length > 0) {
+	if (keybindings.getKeys("app.editor.external").length > 0) {
 		return keybindings.matches(data, "app.editor.external");
 	}
 	return matchesKey(data, "ctrl+g");

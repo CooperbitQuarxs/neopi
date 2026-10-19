@@ -18,6 +18,7 @@ import { shutdownTinyTitleClient, tinyTitleClient, tinyWorkerUsesMlx } from "../
 
 /** CLI key for the word-completion model (`spelling.autocomplete` `auto`/`smollm`). */
 const SMOLLM_KEY = "smollm";
+export const TINY_MODEL_CHOICES = [...TINY_LOCAL_MODELS.map(spec => spec.key), SMOLLM_KEY, "all"];
 
 export type TinyModelsAction = "download" | "list";
 

@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
+import {
+	disableProvider,
+	enableProvider,
+	getDisabledProviders,
+	isProviderEnabled,
+	setDisabledProviders,
+} from "@oh-my-pi/pi-coding-agent/capability";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentCompactionThresholdOverride } from "@oh-my-pi/pi-coding-agent/config/compaction-threshold";
 import type { BeforeSubagentSpawnEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
@@ -10,6 +18,7 @@ import {
 	resetRegisteredArtifactDirsForTests,
 } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
 import * as planHandoff from "@oh-my-pi/pi-coding-agent/plan-mode/plan-handoff";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { createEvalCustomTools } from "@oh-my-pi/pi-coding-agent/task/eval-tools";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -140,6 +149,35 @@ describe("structured subagent primitive", () => {
 		expect(policy.modelOverride).toEqual(["b/y"]);
 	});
 
+	it("rescans agents when a plugin provider is disabled while an earlier discovery is in flight", async () => {
+		const previouslyDisabled = getDisabledProviders();
+		enableProvider("omp-plugins");
+		const firstEntered = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		let scans = 0;
+		vi.spyOn(discoveryModule, "discoverAgents").mockImplementation(async () => {
+			const pluginsEnabled = isProviderEnabled("omp-plugins");
+			if (++scans === 1) {
+				firstEntered.resolve();
+				await releaseFirst.promise;
+			}
+			const agents = pluginsEnabled ? [AGENT, { ...AGENT, name: "plugin-worker" }] : [AGENT];
+			return { agents, projectAgentsDir: null };
+		});
+		try {
+			const first = resolveEffectiveSubagentPolicy(request({ agent: "plugin-worker" }));
+			await firstEntered.promise;
+			disableProvider("omp-plugins");
+			const second = resolveEffectiveSubagentPolicy(request({ agent: "plugin-worker" }));
+			releaseFirst.resolve();
+
+			expect((await first).agent.name).toBe("plugin-worker");
+			await expect(second).rejects.toThrow('Unknown agent "plugin-worker"');
+		} finally {
+			setDisabledProviders(previouslyDisabled);
+		}
+	});
+
 	it("uses caller, agent, then session schemas in precedence order", async () => {
 		mockDiscovery();
 		const callerSchema = { type: "object", properties: { caller: { type: "string" } } };
@@ -259,6 +297,8 @@ describe("structured subagent primitive", () => {
 			expect(cfgRetryModelFallback.get(liveSettings)).toBe(false);
 		} finally {
 			liveSettings.cancelPendingSaves();
+			// `Settings.loadIsolated` opened `<agentDir>/agent.db`; Windows cannot delete it while open.
+			AgentStorage.close();
 			await fs.rm(root, { recursive: true, force: true });
 		}
 	});
@@ -313,6 +353,7 @@ describe("structured subagent primitive", () => {
 			expect(second.serviceTierOverride).toBe("none");
 		} finally {
 			liveSettings.cancelPendingSaves();
+			AgentStorage.close();
 			await fs.rm(root, { recursive: true, force: true });
 		}
 	});
@@ -1066,5 +1107,49 @@ describe("agent model selectors", () => {
 		const policy = await resolveEffectiveSubagentPolicy(request({ session: roleSession, agent: "@smol:low" }));
 		expect(policy.agentName).toBe("task");
 		expect(policy.modelRole).toBe("smol");
+	});
+
+	it("keeps a registered agent when its name carries an effort suffix", async () => {
+		const scout: AgentDefinition = { ...AGENT, name: "scout", tools: ["read", "grep"], model: ["openai/gpt-4o"] };
+		mockAgents(scout, TASK_AGENT);
+		for (const invocationKind of ["task", "eval"] satisfies StructuredSubagentRequest["invocationKind"][]) {
+			const policy = await resolveEffectiveSubagentPolicy(
+				request({ session: withRegistry(session()), agent: "scout:high", invocationKind }),
+			);
+			expect(policy.agentName).toBe("scout");
+			expect(policy.effectiveAgent.tools).toEqual(["read", "grep"]);
+			expect(policy.effectiveAgent.systemPrompt).toBe(AGENT.systemPrompt);
+			expect(policy.modelOverride).toEqual(["openai/gpt-4o"]);
+			expect(policy.callerThinkingLevel).toBe(ThinkingLevel.High);
+		}
+	});
+
+	it("rejects a named-agent effort its model cannot honor, naming that model", async () => {
+		const scout: AgentDefinition = { ...AGENT, name: "scout", model: ["openai/gpt-4o"] };
+		mockAgents(scout, TASK_AGENT);
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: withRegistry(session()), agent: "scout:max" })),
+		).rejects.toThrow(
+			'Unsupported effort ":max" in agent selector "scout:max": agent "scout" runs openai/gpt-4o. openai/gpt-4o supports: minimal, low, medium, high',
+		);
+	});
+
+	it("prefers an exact registered name containing a selector-shaped suffix", async () => {
+		const literal: AgentDefinition = { ...AGENT, name: "scout:high", model: ["kimi-code/k3"] };
+		const scout: AgentDefinition = { ...AGENT, name: "scout", model: ["openai/gpt-4o"] };
+		mockAgents(literal, scout, TASK_AGENT);
+		const policy = await resolveEffectiveSubagentPolicy(
+			request({ session: withRegistry(session()), agent: "scout:high" }),
+		);
+		expect(policy.agentName).toBe("scout:high");
+		expect(policy.modelOverride).toEqual(["kimi-code/k3"]);
+		expect(policy.callerThinkingLevel).toBeUndefined();
+	});
+
+	it("does not fall back to model matching when an agent-name suffix base is unknown", async () => {
+		mockAgents();
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: withRegistry(session()), agent: "gpt-4o:high" })),
+		).resolves.toMatchObject({ agentName: "task", modelOverride: ["gpt-4o:high"] });
 	});
 });

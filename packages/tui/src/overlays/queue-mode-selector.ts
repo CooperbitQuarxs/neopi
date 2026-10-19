@@ -29,7 +29,7 @@ export class QueueModeSelectorComponent extends OverlayPanel {
 		];
 
 		// Create selector
-		this.#selectList = new SelectList(queueModes, 2, getSelectListTheme());
+		this.#selectList = new SelectList(queueModes, 2, getSelectListTheme(), { search: "always" });
 
 		// Preselect current mode
 		const currentIndex = queueModes.findIndex(item => item.value === currentMode);
@@ -48,9 +48,19 @@ export class QueueModeSelectorComponent extends OverlayPanel {
 		this.addChild(this.#selectList);
 		this.#sheet = new SelectListSheet(this.#selectList, {
 			title: "Queue mode",
+			subtitle: "How messages you send while omp works are delivered",
 			icon: "list",
 			noun: "modes",
 			current: [currentMode],
+			// The terminal list shows the setting's values; the sheet names them for people.
+			decorate: item =>
+				item.value === "one-at-a-time"
+					? {
+							label: "One at a time",
+							detail: "Each queued message gets its own turn",
+							badges: [{ text: "recommended" }],
+						}
+					: { label: "All at once", detail: "Queued messages are sent together in one turn" },
 		});
 	}
 
@@ -65,6 +75,14 @@ export class QueueModeSelectorComponent extends OverlayPanel {
 
 	getSelectList(): SelectList {
 		return this.#selectList;
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationState();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		this.#selectList.restoreNavigation(snapshot);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {

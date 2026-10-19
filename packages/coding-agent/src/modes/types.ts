@@ -1,10 +1,12 @@
 import type { SidePanelController } from "./controllers/side-panel-controller";
+import type { MenuHost, MenuKind } from "./controllers/selector-controller";
 import type { PersonaScope } from "../neopi/persona-config";
 import type { ReplMode, ReplTarget } from "../neopi/repl";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
-import type { Component, Container, EditorTheme, Loader, TUI } from "@oh-my-pi/pi-tui";
+import type { AssistantMessage, ImageContent, MessageAttribution, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
+import type { Component, Container, EditorTheme, KeyId, Loader, TUI } from "@oh-my-pi/pi-tui";
+import type { TspText } from "@oh-my-pi/pi-wire";
 import type { StatusNotice } from "@oh-my-pi/pi-tui/chrome/status-notice";
 import type { CollabController } from "../collab/controller";
 import type { CollabGuestLink } from "../collab/guest";
@@ -49,7 +51,6 @@ import type { ServedModelTracker } from "@oh-my-pi/pi-tui/chat/served-model-mark
 import type { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import type { ToolExecutionHandle } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import type { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import type { RecentSession } from "@oh-my-pi/pi-tui/prompt/welcome";
 import type { EventController } from "./controllers/event-controller";
 import type { LiveSubmitRoute } from "./controllers/live-command-controller";
 import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
@@ -69,15 +70,18 @@ export type SubmittedUserInput = {
 	images?: ImageContent[];
 	imageLinks?: (string | undefined)[];
 	customType?: string;
-	/** Route through `session.prompt(text, { synthetic: true })` so the text lands
-	 *  as a hidden agent-authored `developer` message rather than a visible user
-	 *  turn. Used by the `c`/`.` continue shortcut. */
+	/** Route through `session.prompt(text, { synthetic: true })` as a hidden
+	 *  developer message. Used by continue shortcuts and operator notices. */
 	synthetic?: boolean;
 	/** Marks this submission as a deliberate user resume (set by the `.`/`c`
 	 *  continue shortcut, which is also `synthetic`). Forwarded to
 	 *  `session.prompt({ userInitiated })` so it clears advisor auto-resume
 	 *  suppression even though it is synthetic. */
 	userInitiated?: boolean;
+	/** Explicit initiator attribution for operator-authored developer messages. */
+	attribution?: MessageAttribution;
+	/** Original operator command, preserved for queue editing and cancellation. */
+	rawText?: string;
 	display?: boolean;
 	/** Queue intent if the session is (or becomes) busy when this submission is
 	 *  dispatched: "steer" (interrupt the active turn) or "followUp" (process after
@@ -93,17 +97,24 @@ export interface InteractiveModeInitOptions {
 	clearInitialTerminalHistory?: boolean;
 	/** Opt into hosting when the caller owns outer startup readiness and shutdown. */
 	autoStartCollab?: boolean;
-	/** Recent-session rows loaded by the prepaint composer while runtime modules initialized. */
-	recentSessions?: Promise<RecentSession[] | undefined>;
 }
 
-export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions & Pick<HookSelectorOptions, "disabledIndices">;
+export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions &
+	Pick<HookSelectorOptions, "disabledIndices" | "inline">;
 
 export interface RenderSessionContextOptions {
 	updateFooter?: boolean;
 	reuseSettledComponents?: boolean;
 	/** Tool calls whose existing live component remains the sole render owner across a rebuild. */
 	preservedLiveToolCallIds?: ReadonlySet<string>;
+}
+
+/** How {@link InteractiveModeContext.showStatus} shows a notice. */
+export interface ShowStatusOptions {
+	/** Dims the ANSI line (default true). */
+	dim?: boolean;
+	/** Toasts it on a native terminal (default true); false keeps it to the ANSI transcript. */
+	toast?: boolean;
 }
 
 export interface AgentHubOpenOptions {
@@ -130,12 +141,14 @@ export interface InteractiveModeContext {
 	errorBannerContainer: Container;
 	modelCycleContainer: Container;
 	deferredCommandContainer: Container;
+	/** The docked `/changelog`-style command report, just above the editor; Esc clears it. */
+	reportContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
 	hookWidgetContainerAbove: Container;
 	hookWidgetContainerBelow: Container;
 	statusLine: StatusLineComponent;
-	syncComposerShape(): void;
+	syncComposerShape(previewShape?: string): void;
 
 	// Session access
 	session: AgentSession;
@@ -146,6 +159,10 @@ export interface InteractiveModeContext {
 	readonly viewSession: AgentSession;
 	/** Id of the focused agent, undefined when the main session is attached. */
 	readonly focusedAgentId: string | undefined;
+	/** The operator's IRC id (issue #31), undefined when she is not a registered participant. */
+	readonly ircOperatorId: string | undefined;
+	/** Send an IRC message as the operator (to a peer id or `all`); resolves with the delivery summary. */
+	sendAsIrcOperator(to: string, message: string, replyTo?: string): Promise<{ text: string; isError: boolean }>;
 	/** Focus the main view on an agent's live session (delegates to SessionFocusController.focusAgent). */
 	focusAgentSession(id: string): Promise<void>;
 	/** Focus the focused agent's parent session, falling back to main (delegates to focusParent). */
@@ -215,12 +232,15 @@ export interface InteractiveModeContext {
 	 */
 	readonly effectiveHideThinkingBlock: boolean;
 	readonly assistantImagesVisible: boolean;
-	resolveAssistantMessageLinks(texts: readonly string[]): Promise<ReadonlyMap<string, string>>;
+	/** Whether the viewed session's tables get charts: the main session's do, a focused subagent's do not. */
+	readonly tableChartsVisible: boolean;
+	resolveAssistantMessageLinkHrefs(hrefs: readonly string[]): Promise<ReadonlyMap<string, string>>;
 	/** Whether this visible session has produced thinking content the user can reveal. */
 	readonly hasDisplayableThinkingContent: boolean;
 	/** Record a message whose thinking content makes Ctrl+T meaningful even at thinking level "off"; returns true on first observation. */
 	noteDisplayableThinkingContent(message: AgentMessage): boolean;
 	proseOnlyThinking: boolean;
+	expandThinkingBlocks: boolean;
 	compactionQueuedMessages: CompactionQueuedMessage[];
 	/** Settled user/assistant components reusable across post-compaction transcript rebuilds. */
 	transcriptMessageComponents: WeakMap<AgentMessage, Component>;
@@ -271,6 +291,8 @@ export interface InteractiveModeContext {
 	hookSelector: HookSelectorComponent | undefined;
 	hookInput: HookInputComponent | undefined;
 	hookEditor: HookEditorComponent | undefined;
+	/** Outstanding extension custom views own one result promise and cannot be replayed by history. */
+	readonly hookCustomComponents: Set<Component>;
 	lastStatus: StatusNotice | undefined;
 	fileSlashCommands: Set<string>;
 	/** Every name and alias in the slash-command picker, for unknown-command detection. */
@@ -325,7 +347,7 @@ export interface InteractiveModeContext {
 	 * leak.
 	 */
 	resetTranscript(): void;
-	showStatus(message: string, options?: { dim?: boolean }): void;
+	showStatus(message: string, options?: ShowStatusOptions): void;
 	/** Show the ctrl+p role chip track above the editor, `activeIndex` filled. */
 	showModelCycleTrack(segments: readonly TrackSegment[], activeIndex: number): void;
 	showError(message: string): void;
@@ -348,7 +370,7 @@ export interface InteractiveModeContext {
 	applyPendingWorkingMessage(): void;
 	ensureLoadingAnimation(): void;
 	/** Interrupt key id for a maintenance working row's stop control; undefined while Esc would not cancel it. */
-	maintenanceInterruptKey(): string | undefined;
+	maintenanceInterruptKey(): KeyId | undefined;
 	/** A click on a working row's stop control: the interrupt key's handler. */
 	interruptFromPointer(): void;
 	/** Reconcile the idle "F5 to Retry" status row with the transcript tail. */
@@ -445,13 +467,15 @@ export interface InteractiveModeContext {
 	handleToolsCommand(): void;
 	handleContextCommand(): void;
 	handleDumpCommand(): Promise<void>;
+	handleDumpAllCommand(): Promise<void>;
+	handleDumpAnonCommand(): Promise<void>;
 	handleAdvisorDumpCommand(isRaw?: boolean): void;
 	handleDebugTranscriptCommand(): Promise<void>;
 	handleClearCommand(): Promise<void>;
 	handleFreshCommand(): Promise<void>;
 	handleResetContextCommand(): Promise<void>;
 	handleDeleteCommand(): Promise<void>;
-	handleForkCommand(): Promise<void>;
+	handleForkCommand(placement?: "pane" | "window"): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handleEvalCommand(
 		language: string,
@@ -471,8 +495,8 @@ export interface InteractiveModeContext {
 	handleHandoffCommand(customInstructions?: string): Promise<void>;
 	handleShakeCommand(mode: ShakeMode): Promise<void>;
 	handleMoveCommand(targetPath?: string): Promise<void>;
-	/** `/wt`: fork the checkout into a new worktree (keeping changes) and move there. */
-	handleWorktreeCommand(branch?: string): Promise<void>;
+	/** `/wt`: fork the checkout into a new worktree (keeping changes unless `keepChanges` is false) and move there. */
+	handleWorktreeCommand(branch?: string, options?: { keepChanges?: boolean }): Promise<void>;
 	withBtwSessionMove(operation: () => Promise<boolean>): Promise<boolean>;
 	handleRenameCommand(title: string): Promise<void>;
 	handleMemoryCommand(text: string): Promise<void>;
@@ -513,11 +537,16 @@ export interface InteractiveModeContext {
 	applyCwdChange(newCwd: string, options?: { deferMixtureCommit?: boolean }): Promise<boolean>;
 
 	// Selector handling
+	/** Register a command-owned menu with the shared history and single-instance lifecycle. */
+	openMenu(kind: MenuKind, reopen: () => void): MenuHost | undefined;
 	showSettingsSelector(): void;
 	/** Open the fullscreen `/usage` dashboard overlay for the given reports. */
 	showUsageDashboard(reports: UsageReport[]): void;
+	/** Ctrl-O (-1) / Ctrl-I (+1) through the menu history; false when there is no entry that way. */
+	navigateMenuHistory(direction: -1 | 1): boolean;
 	showAdvisorConfigure(): void;
 	showChainConfigure(): void;
+	showStatusLineConfigure(): void;
 	/** Edit, save, apply, and activate mixtures in the fullscreen graph configurator. */
 	showMixtureConfigure(name?: string): void;
 	/** Fullscreen persona editor: main system-prompt personas or live-voice personas. */
@@ -536,6 +565,8 @@ export interface InteractiveModeContext {
 	showUserMessageSelector(): void;
 	showCopySelector(): void;
 	showTreeSelector(): void;
+	/** Open the `/effort` picker over the levels the current model accepts. */
+	showThinkingSelector(): void;
 	showSessionSelector(source?: ForeignSessionSource): void;
 	/** Settle side requests before replacing the session or deleting its artifacts. */
 	prepareSessionSwitch(): Promise<void>;
@@ -545,13 +576,16 @@ export interface InteractiveModeContext {
 	showSessionPinSelector(): Promise<void>;
 	showResetUsageSelector(): Promise<void>;
 	showProviderSetup(): Promise<void>;
-	showHookConfirm(title: string, message: string): Promise<boolean>;
+	showHookConfirm(title: string, message: string, dialogOptions?: InteractiveSelectorDialogOptions): Promise<boolean>;
 	showDebugSelector(): Promise<void>;
 	showAgentHub(options?: AgentHubOpenOptions): void;
+	showIrcViewer(): void;
 	resetObserverRegistry(): void;
 
 	// Input handling
 	handleCtrlC(): void;
+	/** Run the app action bound to `id` as its key would; false when `id` is not an app action. */
+	runAppAction(id: string): boolean;
 	handleCtrlD(): void;
 	handleCtrlZ(): void;
 	/** Re-query terminal appearance for an explicit display reset, then immediately replay the display. */
@@ -571,6 +605,7 @@ export interface InteractiveModeContext {
 	): Promise<void>;
 	handleBtwCommand(question: string): Promise<void>;
 	handleTanCommand(work: string): Promise<void>;
+	handleIssueCommand(prose: string): Promise<void>;
 	hasActiveBtw(): boolean;
 	handleBtwEscape(): boolean;
 	handleBtwBranchKey(): Promise<boolean>;
@@ -592,6 +627,18 @@ export interface InteractiveModeContext {
 	handleCleanseCommand(args: string): Promise<void>;
 	hasActiveCleanse(): boolean;
 	handleCleanseEscape(): boolean;
+	/**
+	 * Show a read-only command report outside the transcript: above the editor
+	 * like `/btw` (a full-screen page when taller) in text mode, a `/usage`-style
+	 * sheet natively. Replaces the report already shown.
+	 */
+	showCommandReport(options: { title: string; head?: TspText; body: Component }): void;
+	/** The live background-jobs sheet (the jobs pill's). */
+	showJobsSheet(): void;
+	/** Clear the docked command report; false when none was shown (Esc falls through). */
+	dismissCommandReport(): boolean;
+	/** Screen rows a report above the editor may take (all of them but the editor and the chrome under it). */
+	commandReportRows(): number | undefined;
 	cycleThinkingLevel(): void;
 	cycleRoleModel(direction?: "forward" | "backward"): Promise<void>;
 	toggleToolOutputExpansion(): void;

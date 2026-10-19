@@ -16,6 +16,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ContextUsage } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import { getComposerStyle, visibleWidth } from "@oh-my-pi/pi-tui";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
 import { initTheme, setSymbolPreset, theme } from "@oh-my-pi/pi-tui/theme";
@@ -160,6 +161,26 @@ describe("StatusLineComponent context breakdown", () => {
 		comp.getCachedContextBreakdown();
 
 		expect(usageCalls()).toBe(2);
+	});
+
+	it("re-queries when streaming tool-call arguments grow in place", () => {
+		const payload = { text: "x" };
+		const args: Record<string, unknown> = { path: "a.ts", payload };
+		const tail = { role: "assistant", content: [{ type: "toolCall", name: "write", arguments: args }] };
+		const { session, usageCalls } = makeSession({ messages: [userMessage("hi"), tail] });
+		const comp = statusLines.track(new StatusLineComponent(session, statusLineHost));
+
+		comp.getCachedContextBreakdown();
+		const body = "streamed file body".repeat(8);
+		args.content = body;
+		comp.getCachedContextBreakdown();
+		args.content = `${body} and more`;
+		comp.getCachedContextBreakdown();
+		// A nested field growing in place changes the serialized size too.
+		payload.text = "x".repeat(40);
+		comp.getCachedContextBreakdown();
+
+		expect(usageCalls()).toBe(4);
 	});
 
 	it("re-queries when the message array is replaced (branch switch / rebuild)", () => {
@@ -480,6 +501,70 @@ describe("StatusLineComponent context breakdown", () => {
 			cfgStatusLinePreset.clearOverride(settings);
 		}
 	});
+	it.each(["box", "band", "claude", "rule", "pi", "borderless", "rail", "field"])(
+		"fills the available width with one context_bar in either group of %s",
+		async shape => {
+			const { session } = makeSession({
+				messages: [userMessage("hi"), assistantMessage("done")],
+				usage: { tokens: 50_000, contextWindow: 100_000, percent: 50 },
+				settings,
+			});
+			const comp = statusLines.track(new StatusLineComponent(session, statusLineHost));
+			await setSymbolPreset("unicode");
+			try {
+				for (const group of ["left", "right"]) {
+					comp.updateSettings({
+						preset: "custom",
+						leftSegments: group === "left" ? ["model", "context_bar"] : ["model"],
+						rightSegments: group === "right" ? ["context_bar"] : [],
+						separator: "none",
+						contextLine: "annotated",
+					});
+					const lines = comp.getPreviewLines(80, getComposerStyle(shape)).map(line => Bun.stripANSI(line));
+					const gauge = lines.find(line => line.includes("┃"));
+					expect(gauge).toBeDefined();
+					expect(visibleWidth(gauge!)).toBe(80);
+					expect(lines.join("").split("┃").length - 1).toBe(1);
+					expect(lines.join("").split("╎").length - 1).toBe(1);
+				}
+			} finally {
+				await initTheme();
+			}
+		},
+	);
+
+	it("keeps a context_bar between its neighbors and hides it below eight cells", async () => {
+		const { session } = makeSession({
+			messages: [userMessage("hi"), assistantMessage("done")],
+			usage: { tokens: 50_000, contextWindow: 100_000, percent: 50 },
+			settings,
+		});
+		const comp = statusLines.track(new StatusLineComponent(session, statusLineHost));
+		await setSymbolPreset("unicode");
+		try {
+			for (const group of ["left", "right"]) {
+				comp.updateSettings({
+					preset: "custom",
+					leftSegments: group === "left" ? ["model", "context_bar", "context_pct"] : [],
+					rightSegments: group === "right" ? ["model", "context_bar", "context_pct"] : [],
+					separator: "none",
+					contextLine: "annotated",
+				});
+				const line = Bun.stripANSI(comp.renderBottomBar(100, "full"));
+				expect(visibleWidth(line)).toBe(100);
+				expect(line).toContain("test-model");
+				expect(line).toContain("%");
+				expect(line.indexOf("test-model")).toBeLessThan(line.indexOf("╎"));
+				expect(line.indexOf("┃")).toBeLessThan(line.indexOf("%"));
+			}
+			comp.updateSettings({ leftSegments: ["context_bar"], rightSegments: [] });
+			expect(comp.renderBottomBar(9, "full")).toBe("");
+			expect(visibleWidth(comp.renderBottomBar(10, "full"))).toBe(10);
+		} finally {
+			await initTheme();
+		}
+	});
+
 	it("uses semantic Nerd Font markers for async speculation and compaction boundaries", async () => {
 		const { session } = makeSession({
 			messages: [userMessage("hi"), assistantMessage("done")],

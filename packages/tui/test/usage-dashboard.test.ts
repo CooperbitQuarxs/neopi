@@ -160,6 +160,32 @@ describe("buildProviderCards", () => {
 		expect(unlimited?.unlimited).toBe(true);
 	});
 
+	it("keeps provider window order and ranks cards by their fullest window", () => {
+		// Rows used to sort by used fraction, so 5h/week/month reshuffled as
+		// usage moved and a glance read the wrong window.
+		const reports = [
+			report("opencode-go", "g@x.test", [
+				limit("opencode-go", "g", "5h", "5 Hour limit", 0.01, "ok"),
+				limit("opencode-go", "g", "7d", "Weekly limit", 0.42, "ok"),
+				limit("opencode-go", "g", "monthly", "Monthly limit", 0.21, "ok"),
+			]),
+			report("openai-codex", "o@x.test", [limit("openai-codex", "o", "7d", "7 days", 0.3, "ok")]),
+		];
+		const cards = buildProviderCards(reports, now);
+		expect(cards.map(card => card.provider)).toEqual(["opencode-go", "openai-codex"]);
+		expect(cards[0].windows.map(window => window.label)).toEqual(["5 Hour limit", "Weekly limit", "Monthly limit"]);
+	});
+
+	it("keeps an exhausted bucket past the row cap visible", () => {
+		// Gemini emits one limit per model bucket; with declared order alone an
+		// exhausted 5th bucket would hide behind "+1 more".
+		const buckets = ["a", "b", "c", "d", "e"].map((model, index) =>
+			limit("google-gemini-cli", "g", model, `Model ${model}`, index === 4 ? 1 : 0.1 * (index + 1), "ok"),
+		);
+		const [card] = buildProviderCards([report("google-gemini-cli", "g@x.test", buckets)], now);
+		expect(card.windows.map(window => window.label)).toEqual(["Model b", "Model c", "Model d", "Model e", "Model a"]);
+	});
+
 	it("shows a prepaid balance on the card instead of falling back to no data", () => {
 		// Balance-only limits carry no fraction, so the card used to render the
 		// literal "no data" for providers that sell prepaid credits.
@@ -256,6 +282,55 @@ describe("UsageDashboardComponent", () => {
 			onClose: () => {},
 		});
 	}
+
+	it("navigates viewer lines and tab contexts and restores without refreshing", () => {
+		let refreshes = 0;
+		let closes = 0;
+		const component = new UsageDashboardComponent({
+			reports: [],
+			renderDetail: () => Array.from({ length: 2000 }, (_, index) => `Detail ${index}`).join("\n"),
+			loadActivity: async () => {},
+			refresh: async () => {
+				refreshes++;
+				return [];
+			},
+			requestRender: () => {},
+			onClose: () => closes++,
+		});
+		try {
+			component.handleInput("l");
+			component.render(80);
+			component.handleInput("j");
+			expect(component.navigationSnapshot().scroll.detail).toBe(1);
+			component.handleInput("\x05");
+			expect(component.navigationSnapshot().scroll.detail).toBe(2);
+			component.handleInput("\x19");
+			expect(component.navigationSnapshot().scroll.detail).toBe(1);
+			component.handleInput("\x04");
+			expect(component.navigationSnapshot().scroll.detail).toBeGreaterThan(2);
+			component.handleInput("G");
+			const saved = component.navigationSnapshot();
+			expect(saved.view).toBe("detail");
+			expect(saved.scroll.detail).toBeGreaterThan(1);
+			component.handleInput("g");
+			component.handleInput("g");
+			expect(component.navigationSnapshot().scroll.detail).toBe(0);
+			component.handleInput("h");
+			expect(component.navigationSnapshot().view).toBe("overview");
+			component.restoreNavigation(saved);
+			expect(component.navigationSnapshot()).toEqual(saved);
+			expect(refreshes).toBe(0);
+			component.handleInput("\t");
+			expect(component.navigationSnapshot().view).toBe("overview");
+			component.handleInput("\x1b[Z");
+			expect(component.navigationSnapshot().view).toBe("detail");
+			component.handleInput("\x1b");
+			expect(closes).toBe(1);
+			expect(refreshes).toBe(0);
+		} finally {
+			component.dispose();
+		}
+	});
 
 	it("keeps usable bars and matching label rows across multi-column cards", () => {
 		const component = dashboard([

@@ -106,6 +106,20 @@ export class Input implements Component, Focusable {
 		return this.#cursor;
 	}
 
+	/** Restore a UTF-16 caret offset, snapping backward to a whole grapheme. */
+	setCursor(offset: number): void {
+		const clamped = clampTextOffset(offset, this.#value.length);
+		if (clamped === this.#value.length) {
+			this.#cursor = clamped;
+			return;
+		}
+		this.#cursor = 0;
+		for (const grapheme of segmenter.segment(this.#value)) {
+			if (grapheme.index > clamped) break;
+			this.#cursor = grapheme.index;
+		}
+	}
+
 	/** Return bounded input content and cursor state for debug inspection. */
 	debugState(): Record<string, unknown> {
 		return {
@@ -132,6 +146,11 @@ export class Input implements Component, Focusable {
 
 	getUseTerminalCursor(): boolean {
 		return this.#useTerminalCursor;
+	}
+
+	/** The fork's Space-hold gesture is handled inside {@link handleInput}; nothing is pre-claimed. */
+	capturesInput(_data: string): boolean {
+		return false;
 	}
 
 	/**
@@ -278,15 +297,21 @@ export class Input implements Component, Focusable {
 		return true;
 	}
 
+	/** Insert decoded printable text with ordinary typing undo groups, without keybinding dispatch. */
+	insertText(text: string): void {
+		this.#insertCharacter(text);
+	}
+
 	/** Apply terminal paste semantics to text from non-bracketed paste transports
 	 *  (e.g. kitty's OSC 5522 enhanced clipboard read). Mirrors `Editor.pasteText`. */
 	pasteText(text: string): void {
 		this.#handlePaste(text);
 	}
 
-	/** Terminal-side selection edits on the `input` node (see {@link applyHostEdit}). */
+	/** Terminal-side selection edits and undo on the `input` node (see {@link applyHostEdit}). */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type === "edit") this.applyHostEdit(event);
+		else if (event.type === "undo") this.#undo();
 	}
 
 	/**
@@ -582,6 +607,7 @@ export class Input implements Component, Focusable {
 		const props: TspInputProps = {
 			text: value,
 			cursor,
+			sendable: false,
 			prompt: prompt || undefined,
 			placeholder: this.placeholder,
 		};

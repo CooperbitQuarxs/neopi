@@ -1,5 +1,6 @@
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { combine, effect, register, type Setting } from "../config/registry";
+import type { Settings } from "../config/settings";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
 import { cfgReadToolResultPreview } from "../tools/settings";
 import { MAGIC_KEYWORDS, type MagicKeywordId } from "./magic-keywords";
@@ -7,9 +8,11 @@ import { TREE_FILTER_MODES } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import {
 	CONTEXT_LINE_MODE_VALUES,
 	CUSTOM_STATUS_LINE_DEFAULTS,
+	parseUsageBarSegmentId,
 	STATUS_LINE_PRESET_VALUES,
 	STATUS_LINE_SEGMENT_IDS,
 	STATUS_LINE_SEPARATOR_VALUES,
+	type StatusLineSegmentId,
 } from "@oh-my-pi/pi-tui/status-line/schema";
 import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { setEditorGapComposerShape } from "@oh-my-pi/pi-tui/prompt/editor-top-gap";
@@ -18,6 +21,10 @@ import { WORD_COMPLETION_METHODS } from "@oh-my-pi/pi-tui/prompt/word-completion
 import { applyHyperlinkSetting } from "@oh-my-pi/pi-tui/render/hyperlink";
 import { setInlineImageMaxColumns, setInlineImageMaxRows } from "@oh-my-pi/pi-tui/render/render-utils";
 import { setShimmerMode } from "@oh-my-pi/pi-tui/theme/shimmer";
+import {
+	setTerminalImageProtocolSetting,
+	TERMINAL_IMAGE_PROTOCOL_SETTINGS,
+} from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
 	setAutoThemeMapping,
 	setBrandGlyph,
@@ -191,7 +198,7 @@ export const cfgComposerTokenRate = register({
 		group: "Composer",
 		label: "Generation Rate",
 		description:
-			"Show a live generation tok/s readout on the working row, docked right next to the session title. Estimated from streamed deltas and corrected by the provider's billed output count as each message completes.",
+			"Show a live generation tok/s readout: on the working row next to the session title, or in the native composer bar right after the thinking level, where the last reading stays between turns. Estimated from streamed deltas and corrected by the provider's billed output count as each message completes.",
 	},
 });
 
@@ -305,7 +312,7 @@ export const cfgStatusLineCompactThinkingLevel = register({
 		group: "Status Line",
 		label: "Compact Thinking Level",
 		description:
-			"Show the thinking level as a single icon on the model name instead of a separate ` · <level>` suffix.",
+			"Show the thinking level as a single icon on the model name instead of a separate ` · <level>` suffix; in Tern's composer, as the model chip's icon instead of a separate chip (click the icon to cycle it).",
 	},
 });
 
@@ -321,18 +328,31 @@ export const cfgStatusLineShowHookStatus = register({
 	},
 });
 
+// Array settings infer their value type from the default, not the accepted-item
+// predicate. Preserve the full builtin-or-provider-widget vocabulary here.
+const DEFAULT_LEFT_SEGMENTS: StatusLineSegmentId[] = CUSTOM_STATUS_LINE_DEFAULTS.left;
+const DEFAULT_RIGHT_SEGMENTS: StatusLineSegmentId[] = CUSTOM_STATUS_LINE_DEFAULTS.right;
+
 export const cfgStatusLineLeftSegments = register({
 	id: "statusLine.leftSegments",
 	type: "array",
-	default: CUSTOM_STATUS_LINE_DEFAULTS.left,
-	items: { values: STATUS_LINE_SEGMENT_IDS, label: "status line segment" },
+	default: DEFAULT_LEFT_SEGMENTS,
+	items: {
+		values: STATUS_LINE_SEGMENT_IDS,
+		accepts: value => parseUsageBarSegmentId(value) !== undefined,
+		label: "status line segment",
+	},
 });
 
 export const cfgStatusLineRightSegments = register({
 	id: "statusLine.rightSegments",
 	type: "array",
-	default: CUSTOM_STATUS_LINE_DEFAULTS.right,
-	items: { values: STATUS_LINE_SEGMENT_IDS, label: "status line segment" },
+	default: DEFAULT_RIGHT_SEGMENTS,
+	items: {
+		values: STATUS_LINE_SEGMENT_IDS,
+		accepts: value => parseUsageBarSegmentId(value) !== undefined,
+		label: "status line segment",
+	},
 });
 
 export const cfgStatusLineSegmentOptions = register({
@@ -342,6 +362,20 @@ export const cfgStatusLineSegmentOptions = register({
 });
 
 // Images and terminal
+export const cfgTerminalImageProtocol = register({
+	id: "terminal.imageProtocol",
+	type: "enum",
+	values: TERMINAL_IMAGE_PROTOCOL_SETTINGS,
+	default: "auto",
+	ui: {
+		tab: "appearance",
+		group: "Images",
+		label: "Terminal Image Protocol",
+		description: "Switch image rendering now; Auto uses PI_FORCE_IMAGE_PROTOCOL or terminal detection",
+	},
+});
+effect(cfgTerminalImageProtocol, setTerminalImageProtocolSetting);
+
 export const cfgTerminalShowImages = register({
 	id: "terminal.showImages",
 	type: "boolean",
@@ -448,6 +482,19 @@ export const cfgTerminalShowProgress = register({
 	},
 });
 
+export const cfgTerminalProgramStatus = register({
+	id: "terminal.programStatus",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Program Status (OSC 7501)",
+		description:
+			"Report whether the agent is working, waiting on you, done, or failed over OSC 7501, for terminal tab indicators and agent inboxes",
+	},
+});
+
 export const cfgTuiTextSizing = register({
 	id: "tui.textSizing",
 	type: "boolean",
@@ -470,6 +517,47 @@ export const cfgTuiRenderMermaid = register({
 		group: "Display",
 		label: "Render Mermaid Diagrams",
 		description: "Render Mermaid fenced code blocks as ASCII diagrams",
+	},
+});
+
+export const cfgTuiRenderSvg = register({
+	id: "tui.renderSvg",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Render SVG Figures",
+		description:
+			"Invite the agent to draw diagrams and charts as SVG, rendered inline as images on terminals that show graphics",
+	},
+});
+
+export const cfgTuiAutoGraph = register({
+	id: "tui.autoGraph",
+	type: "enum",
+	values: ["smart", "always", "off"] as const,
+	default: "always",
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Auto-Graph Tables",
+		description:
+			"Draw a chart under numeric tables in the agent's answers, in your theme's colors, on terminals that show graphics",
+		options: [
+			{
+				value: "smart",
+				label: "Smart",
+				description:
+					"The judge model refines each chart: kind, columns, row names and grouping, scales, which way is better, and its title",
+			},
+			{
+				value: "always",
+				label: "Always",
+				description: "Chart every table that reads as numeric, using the built-in best guess",
+			},
+			{ value: "off", label: "Off", description: "Leave tables as tables" },
+		],
 	},
 });
 
@@ -622,7 +710,25 @@ export const cfgSidebarEnabled = register({
 		tab: "appearance",
 		group: "Side Panel",
 		label: "Side Panel",
-		description: "Dock a panel beside the chat for the todo list and other live sections",
+		description: "Dock a panel beside the chat showing the todo list, the agent roster, or IRC traffic",
+	},
+});
+
+export const cfgSidebarView = register({
+	id: "sidebar.view",
+	type: "enum",
+	values: ["todo", "agents", "irc"] as const,
+	default: "todo",
+	ui: {
+		tab: "appearance",
+		group: "Side Panel",
+		label: "View",
+		description: "What the panel shows; alt+t then t, a or i picks one, right-click in the panel cycles",
+		options: [
+			{ value: "todo", label: "Todo", description: "The todo list" },
+			{ value: "agents", label: "Agents", description: "This session's subagents and advisors" },
+			{ value: "irc", label: "IRC", description: "Agent-to-agent messages" },
+		],
 	},
 });
 
@@ -908,7 +1014,7 @@ export const cfgTuiVimModeDisplay = register({
 		description: "How the current Vim mode appears in the status line",
 		condition: "vimModeEnabled",
 		options: [
-			{ value: "text", label: "Text", description: "Full mode name — NORMAL, INSERT, VISUAL, V-LINE" },
+			{ value: "text", label: "Text", description: "Full mode name — NORMAL, INSERT, VISUAL, V-LINE, REPLACE" },
 			{ value: "icon", label: "Icon", description: "Single compact glyph per mode" },
 			{ value: "none", label: "Hidden", description: "Do not show the mode in the status line" },
 		],
@@ -1091,6 +1197,20 @@ export const cfgSpellingAutocomplete = register({
 				? [{ value: "apple" as const, label: "Apple", description: "macOS dictionary completions" }]
 				: []),
 		],
+	},
+});
+
+export const cfgComposerPredictions = register({
+	id: "composer.predictions",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "interaction",
+		group: "Input",
+		label: "Composer Predictions",
+		get description() {
+			return `After a completed turn, ask the active model to predict your next message and show it as ghost text in the empty composer; ${formatKeyHint("tab")} or ${formatKeyHint("right")} inserts it without sending. Extra usage: every completed turn sends one more billed request over the whole conversation (counted in /stats)`;
+		},
 	},
 });
 
@@ -1314,7 +1434,8 @@ export const cfgAskTimeout = register({
 		tab: "interaction",
 		group: "Notifications",
 		label: "Ask Timeout",
-		description: "Auto-select the recommended ask option after this many seconds (0 disables)",
+		description:
+			"Auto-select the recommended ask option after this many seconds (0 disables). Also bounds cfg:// approval prompts; an unanswered approval denies the write instead of auto-selecting",
 		options: [
 			{ value: "0", label: "Disabled" },
 			{ value: "15", label: "15 seconds" },
@@ -1324,6 +1445,16 @@ export const cfgAskTimeout = register({
 		],
 	},
 });
+
+/**
+ * `ask.timeout` in the milliseconds dialogs consume, or `undefined` for no
+ * deadline. Shared by the ask tool and the `cfg://` approval prompt so the
+ * setting means the same thing everywhere it is honored.
+ */
+export function askTimeoutMs(settings: Settings): number | undefined {
+	const timeoutSeconds = cfgAskTimeout.get(settings);
+	return timeoutSeconds === 0 ? undefined : timeoutSeconds * 1000;
+}
 
 export const cfgAskNotify = register({
 	id: "ask.notify",

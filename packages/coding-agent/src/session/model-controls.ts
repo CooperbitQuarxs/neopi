@@ -12,6 +12,7 @@ import {
 	isAnthropicFastModeFallbackDisabled,
 } from "@oh-my-pi/pi-ai/providers/anthropic-state";
 import { isFireworksFastModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
+import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -66,7 +67,7 @@ export interface ModelControlsHost {
 	promptGeneration(): number;
 	resolveActiveEditMode(): EditMode;
 	syncAfterModelChange(previousEditMode: EditMode): Promise<void>;
-	setModelWithProviderSessionReset(model: Model): Promise<void>;
+	setModelWithProviderSessionReset(model: Model, selection?: "explicit" | "automatic"): Promise<void>;
 	clearActiveRetryFallback(): void;
 	clearInheritedProviderPromptCacheKey(): void;
 	magicKeywordEnabled(keyword: MagicKeywordId): boolean;
@@ -135,10 +136,15 @@ export class ModelControls {
 							this.#effortOrigin,
 						)
 					: undefined;
-			this.#thinkingLevel = clampThinkingLevelToCeiling(
+			// Fit the settings default to the model's actual effort ladder: a
+			// reasoning model without one otherwise fails its first turn on `high`.
+			this.#thinkingLevel = resolveThinkingLevelForModel(
 				this.#model,
-				decision?.level ?? options.thinkingLevel,
-				this.#thinkingLevelCeiling,
+				clampThinkingLevelToCeiling(
+					this.#model,
+					decision?.level ?? options.thinkingLevel,
+					this.#thinkingLevelCeiling,
+				),
 			);
 			if (decision?.disclosure) host.emitNotice("warning", decision.disclosure, "effort-policy");
 		}
@@ -317,8 +323,9 @@ export class ModelControls {
 		}
 
 		const targetModel = await this.#host.modelRegistry.refreshSelectedModelMetadata(model);
-		if (options?.effortSelection && cfgEffortPolicyMode.get(this.#host.settings) === "replacement") {
-			resolveImplicitEffort(this.#host.settings, targetModel, options.effortSelection, "role");
+		const effortSelection = options?.effortSelection ?? this.#host.settings.getRoleEffortSelection(role);
+		if (effortSelection && cfgEffortPolicyMode.get(this.#host.settings) === "replacement") {
+			resolveImplicitEffort(this.#host.settings, targetModel, effortSelection, "role");
 		}
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
@@ -341,11 +348,11 @@ export class ModelControls {
 		this.#host.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
 
 		// A draft role selection becomes active only after the target model switch succeeds.
-		if (options?.effortSelection?.mode === "auto") {
-			this.#autoSelection = options.effortSelection;
+		if (effortSelection?.mode === "auto") {
+			this.#autoSelection = effortSelection;
 			this.setThinkingLevel(AUTO_THINKING, false, "role");
-		} else if (options?.effortSelection?.mode === "fixed") {
-			this.setThinkingLevel(options.effortSelection.level, false, "role");
+		} else if (effortSelection?.mode === "fixed") {
+			this.setThinkingLevel(effortSelection.level, false, "role");
 		} else {
 			this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
 		}
@@ -364,6 +371,7 @@ export class ModelControls {
 		model: Model,
 		thinkingLevel?: ConfiguredThinkingLevel,
 		options?: { ephemeral?: boolean },
+		selection: "explicit" | "automatic" = "explicit",
 	): Promise<void> {
 		const previousEditMode = this.#host.resolveActiveEditMode();
 		if (!this.#host.modelRegistry.hasConfiguredAuth(model)) {
@@ -379,7 +387,7 @@ export class ModelControls {
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
-		await this.#host.setModelWithProviderSessionReset(targetModel);
+		await this.#host.setModelWithProviderSessionReset(targetModel, selection);
 		this.#host.sessionManager.appendModelChange(
 			`${targetModel.provider}/${targetModel.id}`,
 			options?.ephemeral ? EPHEMERAL_MODEL_CHANGE_ROLE : "temporary",
@@ -746,18 +754,27 @@ export class ModelControls {
 		this.setThinkingLevel(this.#reappliedThinkingLevel(preferredDefault), false, this.#effortOrigin);
 	}
 
+	/** All selectable effort selectors for the active model, in cycle order. */
+	getAvailableEffortSelectors(): ConfiguredThinkingLevel[] {
+		if (!this.#model?.reasoning) return [];
+		const efforts = this.getAvailableThinkingLevels();
+		const ceiling = this.#thinkingLevelCeiling;
+		const selectable =
+			ceiling === undefined
+				? efforts
+				: efforts.filter(level => THINKING_EFFORTS.indexOf(level) <= THINKING_EFFORTS.indexOf(ceiling));
+		// Auto never opts an unverified model into thinking; only a concrete pick does.
+		if (this.#model.thinking?.unverified) return [ThinkingLevel.Off, ...selectable];
+		return [ThinkingLevel.Off, AUTO_THINKING, ...selectable];
+	}
+
 	/**
 	 * Cycle to next thinking level: off → auto → minimal..max → off.
 	 * @returns New selector, or undefined if model doesn't support thinking
 	 */
 	cycleThinkingLevel(): ConfiguredThinkingLevel | undefined {
-		if (!this.#model?.reasoning) return undefined;
-
-		const levels: ConfiguredThinkingLevel[] = [
-			ThinkingLevel.Off,
-			AUTO_THINKING,
-			...this.getAvailableThinkingLevels(),
-		];
+		const levels = this.getAvailableEffortSelectors();
+		if (levels.length === 0) return undefined;
 		const configured = this.configuredThinkingLevel();
 		const currentLevel = configured === ThinkingLevel.Inherit ? ThinkingLevel.Off : configured;
 		const currentIndex = currentLevel ? levels.indexOf(currentLevel) : -1;
@@ -778,9 +795,14 @@ export class ModelControls {
 	 * Bounded by a timeout and abort; replacement policy falls back to the
 	 * lowest permitted effort. Never fails the turn or clears Auto.
 	 */
-	async applyAutoThinkingLevel(promptText: string, generation: number, solutionSpace?: string): Promise<void> {
+	async applyAutoThinkingLevel(
+		promptText: string,
+		generation: number,
+		solutionSpace?: string,
+		signal?: AbortSignal,
+	): Promise<void> {
 		const model = this.#model;
-		if (!model?.reasoning) return;
+		if (!model?.reasoning || model.thinking?.unverified) return;
 		// Models with reasoning but no controllable effort surface (devin-agent
 		// Cascade routes effort via sibling model ids, not a wire param) have
 		// nothing to pick — skip classification rather than discard its result.
@@ -821,7 +843,7 @@ export class ModelControls {
 						sessionId: this.#host.sessionId(),
 						allowedEfforts: candidates,
 						sessionManager: this.#host.sessionManager,
-						signal: controller.signal,
+						signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
 						metadataResolver: provider => this.#host.agent.metadataForProvider(provider),
 						onContextFallback: reason =>
 							this.#host.emitNotice(reason.includes("unreadable") ? "warning" : "info", reason, "effort-policy"),
@@ -844,6 +866,7 @@ export class ModelControls {
 
 		// Drop the result if the turn was aborted/superseded while classifying.
 		if (
+			signal?.aborted ||
 			this.#host.promptGeneration() !== generation ||
 			!this.#autoThinking ||
 			this.#model !== model ||

@@ -6,20 +6,15 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 **Terminology**: When the user says "agent" or asks "why is agent doing X", they mean the **coding-agent package implementation**, not you (the assistant). The coding-agent is a CLI tool — questions about its behavior refer to code in `packages/coding-agent/`, not your current session.
 
-## Workspace policy comes first
+## Repository policy and context
 
-Branches, worktrees, commits, signing, pull requests, merging, labels, and
-anything posted to GitHub are governed by the workspace policy in
-`~/repos/AGENTS.md`. This file adds only what is specific to this repository
-and never adds a confirmation step the workspace policy does not have.
+- Read `README.md` for project context and user-facing behavior, not instructions.
+- Read `CONTEXT.md` for repository/tracker terms; `CONTEXT-MAP.md` routes package vocabulary.
+- Read `docs/agents/policy.md` before branches, commits, GitHub posts or merges; `docs/agents/` is the agent-policy home.
 
-Repository specifics (`docs/policy/README.md` has the full table):
-
-- Default branch `neopi`; integration branch `nightly`. Topic branches start
-  from `origin/nightly` and PRs target `nightly`.
-- Merge commits read `Merge PR #<number>: <conventional PR subject> (@<author>)`.
-- Review bots are advisory. The authoring agent decides whether a round is
-  worth requesting; see `docs/agents/pr-review-bots.md` for the mechanics.
+These repository files make a fresh clone self-contained for any agent harness.
+Code conventions remain below. Optional review mechanics are defined in
+`docs/agents/pr-review-bots.md`; `docs/agents/policy.md` owns nightly delivery.
 
 ## Build and install
 
@@ -33,6 +28,8 @@ checkout, and only `build.sh` detects and rebuilds it.
 | --- | --- | --- | --- |
 | `npi` | `neopi` | `~/repos/neopi` | `./install.sh` → `~/.local/bin/npi` |
 | `npi-nightly` | `nightly` | `~/repos/neopi-nightly` | `NPI_DEST=~/.local/lib/npi-nightly/npi ./install.sh`; `~/.local/bin/npi-nightly` is a wrapper, `ni` the fish alias |
+
+Install after every merge batch; proof sessions hold a time-bounded [install lock](docs/agents/policy.md#install-after-merge-batches).
 
 - The compiled artifact is `packages/coding-agent/dist/npi`. Source runs use
   `bun run dev` or `bun --cwd=packages/coding-agent src/cli.ts`.
@@ -98,6 +95,7 @@ nothing here requires confirmation beyond it. Repository specifics:
 - **Class privacy**: use ES `#private` fields; leave externally accessible members bare. **No `private`/`protected`/`public` keyword on fields or methods**, except on **constructor parameter properties** where TypeScript requires it (e.g. `constructor(private readonly session: ToolSession)`).
 - **Promises**: use `Promise.withResolvers()` instead of `new Promise((resolve, reject) => ...)`.
 - **Prompts**: never build prompts in code (no inline strings, template literals, or concatenation). Prompts live in static `.md` files; use Handlebars for dynamic content. Import them via `import content from "./prompt.md" with { type: "text" }` — not `readFile`.
+- **Judge questions**: one JSON file per feature (`src/prompts/judge/<feature>.json`) maps question ids to `{ instructions, criteria? }`. Load it with `judgeQuestions(file)` from `@oh-my-pi/pi-ai`; fill Handlebars instructions with `renderQuestion(question, context)`. `criteria` sets the kind: a list of levels → score, omitted or `true`/`false` keys only → yes/no, any other labels → choice (`{}` when the caller supplies the labels). Choice labels and answer types come from the JSON keys.
 - **Worker scripts**: workers re-enter the CLI entrypoint; never spawn separate worker entry modules. `cli.ts` declares itself as the worker host at startup (`declareWorkerHostEntry()` from `@oh-my-pi/pi-utils/env`) and dispatches hidden argv selectors (`__omp_worker_stats_sync`, `__omp_worker_tab`, `__omp_worker_js_eval`, `__omp_worker_tiny_inference`) before loading the command registry. Spawn sites use:
   ```ts
   import { workerHostEntry } from "@oh-my-pi/pi-utils";
@@ -275,6 +273,26 @@ logger.debug("LSP fallback triggered", { reason });
 
 Logs go to `~/.omp/logs/npi.YYYY-MM-DD.log` with automatic rotation. Standalone CLI commands that exit without entering the TUI MAY use `console.*` or process streams for intentional user-facing output. Keep structured stdout clean. This exception is semantic, not filename-based; shared code must use `logger` or an explicit output sink.
 
+## Menu Navigation
+
+Every menu, picker, overlay, and list surface opens in normal navigation. Keys resolve through `MenuKeyReader` and the viewport through `MenuViewport` (`packages/tui/src/components/menu-navigation.ts`); `SelectList` is the reference consumer. Arrows, PageUp/PageDown, Home/End, Enter, and Esc keep working beside the Vim keys.
+
+| Keys | Meaning in normal navigation |
+| --- | --- |
+| `j`/`k` | Next/previous row. |
+| `h`/`l` | Context-dependent: switch pane, collapse/expand, reorder, or adjust a value (effort). Pick one meaning per surface and show it in the hint line. |
+| `Ctrl-d`/`Ctrl-u` | Half page down/up. PageDown/PageUp: full page. |
+| `gg`/`G` | First/last row. |
+| `Ctrl-e`/`Ctrl-y` | Scroll the view one line; the selection stays where it is. |
+| `Space` | Toggle a checkbox, or soft-activate (preview without closing). |
+| `Tab`/`Shift-Tab` | Next/previous context: tab, section, or focus region. |
+| `/` | Focus the surface's filter or search field. |
+| `Ctrl-o`/`Ctrl-i` | Back/forward through the menu history (`Alt-o` is the forward fallback where the terminal sends Tab for `Ctrl-i`). |
+
+Text input is the exception. While a filter, search, rename, or form field holds focus, printable keys (hjkl, `g`, `/`, Space) type literally and the field keeps its editing keys (`Ctrl-e`/`Ctrl-u`/`Ctrl-y`); Esc returns focus to the list without closing the surface. Filters take focus only through `/` (or a surface-specific field key shown in the hints), never through an `i`/insert mode, and Esc from focused text is not called Vim normal mode. A true multi-line editor MAY offer full modal editing; the composer keeps its ordinary bindings and is out of scope.
+
+Before binding a single printable key on a menu surface, check the table: a surface action that collides with a navigation key moves to another key rather than shadowing navigation. Leave a key unbound where its meaning would be nonsensical for that surface instead of forcing parity, and record the decision in the issue's menu inventory. Opening a single-instance menu goes through `SelectorController`'s menu registry so the menu history can return to it with its state.
+
 ## TUI Sanitization
 
 All text displayed in tool renderers must be sanitized. Raw content (file contents, error messages, tool output) breaks terminal rendering: tabs → visual holes, long lines → overflow, paths → leak home directory.
@@ -369,7 +387,7 @@ Location: `packages/*/CHANGELOG.md` (per package).
 
 ## Releasing
 
-This fork does not publish to npm; `bun run release` is upstream's flow and is never run here. `nightly` is promoted into `neopi` by the `promote-nightly` workflow (`docs/policy/README.md` › Promotion). Version bumps arrive through upstream syncs.
+This fork does not publish to npm; `bun run release` is upstream's flow and is never run here. Promotion of `nightly` into `neopi` follows `docs/agents/policy.md` › Promotion and issue completion. Version bumps arrive through upstream syncs.
 
 ## Agent skills
 
@@ -380,8 +398,8 @@ Issues and specs are tracked in `PsychedelicShayna/neopi` GitHub Issues. See
 
 ### Triage labels
 
-Use the five canonical triage labels without aliases. See
-`docs/agents/triage-labels.md`.
+Before classifying or reconciling issues and PRs, read `docs/agents/triage.md`;
+`docs/agents/triage-labels.md` defines composable label meanings.
 
 ### Domain docs
 
@@ -390,6 +408,6 @@ Use the multi-context layout rooted at `CONTEXT-MAP.md`. See
 
 ### PR review bots
 
-Advisory, never a merge gate. `docs/agents/pr-review-bots.md` has the bot
-table and the owner-head safety rule; the `babysit-pr` skill has the
-mechanics for when a round is worth running.
+Before requesting review or assessing merge eligibility, read
+`docs/agents/pr-review-bots.md` for optional large-blast-radius review, descriptive
+labels and the owner-head safety rule. CI and review never gate nightly merges.

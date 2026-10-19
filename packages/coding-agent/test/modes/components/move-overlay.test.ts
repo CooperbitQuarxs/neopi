@@ -135,7 +135,7 @@ describe("MoveOverlay", () => {
 		expect(result!.directory).toBe("newø");
 	});
 
-	it("calls done with undefined on Escape", () => {
+	it("leaves the path field on Escape, then calls done with undefined", () => {
 		let result: MoveOverlayResult | undefined = "sentinel" as unknown as MoveOverlayResult;
 		const overlay = new MoveOverlay(
 			cwd,
@@ -144,6 +144,9 @@ describe("MoveOverlay", () => {
 			},
 			moveDirectorySource,
 		);
+		overlay.handleInput("\x1b");
+		expect(result).toBe("sentinel" as unknown as MoveOverlayResult);
+		expect(overlay.filterFocused).toBe(false);
 		overlay.handleInput("\x1b");
 		expect(result).toBeUndefined();
 	});
@@ -195,6 +198,60 @@ describe("MoveOverlay", () => {
 		overlay.handleInput("\r");
 		expect(result).toBeDefined();
 		expect(result!.directory).toBe(path.join(cwd, "alpha"));
+	});
+
+	it("keeps navigation characters literal in the path field and retains its caret", () => {
+		const overlay = new MoveOverlay(cwd, () => {}, moveDirectorySource);
+		overlay.handleInput("jkG /");
+		overlay.handleInput("\x1b[D");
+		overlay.handleInput("\x1b");
+		const saved = overlay.navigationSnapshot();
+		const reopened = new MoveOverlay(
+			cwd,
+			() => {
+				throw new Error("restore must not move");
+			},
+			moveDirectorySource,
+		);
+		reopened.restoreNavigation(saved);
+		expect(reopened.navigationSnapshot()).toMatchObject({
+			field: { value: "jkG /", cursor: 4 },
+			pathFocused: false,
+		});
+		reopened.handleInput("/");
+		reopened.handleInput("x");
+		expect(reopened.navigationSnapshot()).toMatchObject({ field: { value: "jkG x/" }, pathFocused: true });
+	});
+
+	it("moves and pages a bounded list without changing the path or confirming on Space", () => {
+		const results: (MoveOverlayResult | undefined)[] = [];
+		const entries = Array.from({ length: 40 }, (_, index) => ({
+			value: `/work/${index}`,
+			label: `folder-${index}/`,
+		}));
+		const overlay = new MoveOverlay(cwd, result => results.push(result), { search: () => entries });
+		overlay.handleInput("\x1b");
+		overlay.render(80);
+		overlay.handleInput("G");
+		expect(overlay.navigationSnapshot()).toMatchObject({ selected: "/work/39" });
+		overlay.handleInput("g");
+		overlay.handleInput("g");
+		overlay.render(80);
+		overlay.handleInput("\x05");
+		overlay.render(80);
+		expect(overlay.navigationSnapshot()).toMatchObject({
+			selected: "/work/0",
+			viewportTop: { item: 1, lineOffset: 0 },
+		});
+		const saved = overlay.navigationSnapshot();
+		overlay.handleInput("\x04");
+		expect(overlay.navigationSnapshot()).toMatchObject({ selected: "/work/7" });
+		overlay.handleInput(" ");
+		expect(results).toEqual([]);
+		overlay.restoreNavigation(saved);
+		expect(overlay.navigationSnapshot()).toEqual(saved);
+		overlay.handleInput("\r");
+		expect(results).toEqual([{ directory: "/work/0" }]);
 	});
 
 	it("does not stat every directory entry per keystroke", async () => {

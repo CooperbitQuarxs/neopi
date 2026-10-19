@@ -7,6 +7,7 @@ import type { Component } from "../tui";
 import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
 import { ScrollView, type ScrollViewTheme } from "./scroll-view";
 import { centeredViewportRange, viewportRange } from "./scroll-viewport";
+import type { MenuWindow } from "./menu-selection";
 
 /** Stable identity accepted by {@link TreeView}. Keys must be unique within one hierarchy. */
 export type TreeKey = string | number;
@@ -43,8 +44,32 @@ export interface FlattenTreeOptions<T, K extends TreeKey> {
 	rootDepth?: number;
 	/** Override the display depth inherited by direct children. */
 	getChildDepth?: (item: T, row: TreeRow<T, K>, children: readonly T[]) => number;
+	/**
+	 * Reuse the parent ancestor list when a child keeps the same display depth
+	 * and the current item has no siblings (`siblingCount === 1`). Otherwise
+	 * retain the current item as an ancestor so connector gutters remain
+	 * accurate, including when the item has multiple children.
+	 */
+	compactSameDepthAncestors?: boolean;
 	/** Stop projection after this many structural items. Omit for no traversal cap. */
 	maxItems?: number;
+}
+
+/**
+ * Ancestors live in a shared parent chain instead of a per-row array: a linear
+ * conversation is an n-deep path, and copying the array at every level costs
+ * O(n²) memory — 80k-entry sessions exhausted RAM opening `/tree`. Rows build
+ * the array lazily, so only rendered rows pay O(depth).
+ */
+interface AncestorChain<K extends TreeKey> {
+	value: TreeAncestor<K>;
+	parent: AncestorChain<K> | undefined;
+}
+
+function ancestorArray<K extends TreeKey>(chain: AncestorChain<K> | undefined): readonly TreeAncestor<K>[] {
+	const out: TreeAncestor<K>[] = [];
+	for (let node = chain; node !== undefined; node = node.parent) out.push(node.value);
+	return out.reverse();
 }
 
 interface PendingTreeRow<T, K extends TreeKey> {
@@ -53,7 +78,7 @@ interface PendingTreeRow<T, K extends TreeKey> {
 	depth: number;
 	siblingIndex: number;
 	siblingCount: number;
-	ancestors: readonly TreeAncestor<K>[];
+	chain: AncestorChain<K> | undefined;
 }
 
 interface FlattenTreeResult<T, K extends TreeKey> {
@@ -77,13 +102,14 @@ function projectTree<T, K extends TreeKey>(options: FlattenTreeOptions<T, K>): F
 			depth: rootDepth,
 			siblingIndex: index,
 			siblingCount: roots.length,
-			ancestors: [],
+			chain: undefined,
 		});
 	}
 
 	while (stack.length > 0 && rows.length < maxItems) {
 		const pending = stack.pop()!;
 		const key = options.getKey(pending.item);
+		const chain = pending.chain;
 		const row: TreeRow<T, K> = {
 			item: pending.item,
 			key,
@@ -93,7 +119,9 @@ function projectTree<T, K extends TreeKey>(options: FlattenTreeOptions<T, K>): F
 			siblingIndex: pending.siblingIndex,
 			siblingCount: pending.siblingCount,
 			isLast: pending.siblingIndex === pending.siblingCount - 1,
-			ancestors: pending.ancestors,
+			get ancestors() {
+				return ancestorArray(chain);
+			},
 		};
 		rows.push(row);
 
@@ -104,10 +132,13 @@ function projectTree<T, K extends TreeKey>(options: FlattenTreeOptions<T, K>): F
 			0,
 			Math.trunc(options.getChildDepth?.(pending.item, row, children) ?? pending.depth + 1),
 		);
-		const ancestors: readonly TreeAncestor<K>[] = [
-			...pending.ancestors,
-			{ key, depth: pending.depth, isLast: row.isLast, siblingCount: pending.siblingCount },
-		];
+		const childChain: AncestorChain<K> | undefined =
+			options.compactSameDepthAncestors && childDepth === pending.depth && pending.siblingCount === 1
+				? chain
+				: {
+						value: { key, depth: pending.depth, isLast: row.isLast, siblingCount: pending.siblingCount },
+						parent: chain,
+					};
 		for (let index = children.length - 1; index >= 0; index--) {
 			stack.push({
 				item: children[index],
@@ -115,7 +146,7 @@ function projectTree<T, K extends TreeKey>(options: FlattenTreeOptions<T, K>): F
 				depth: childDepth,
 				siblingIndex: index,
 				siblingCount: children.length,
-				ancestors,
+				chain: childChain,
 			});
 		}
 	}
@@ -226,7 +257,7 @@ export class TreeView<T, K extends TreeKey = string> implements Component {
 	#structureDirty = true;
 	#filterDirty = true;
 	#version = 0;
-	#cache?: { width: number; version: number; result: TreeViewRenderResult };
+	#cache?: { width: number; version: number; explicitWindow: boolean; result: TreeViewRenderResult };
 	#childByKey = new Map<K, Component>();
 	#native?: { version: number; node: NativeNode | null };
 
@@ -392,22 +423,42 @@ export class TreeView<T, K extends TreeKey = string> implements Component {
 		return described;
 	}
 
-	/** Render lines plus budget/window metadata for adapters that append an ellipsis. */
-	renderWithState(width: number): TreeViewRenderResult {
+	/** Render lines plus metadata, optionally using an owner's logical menu window. */
+	renderWithState(width: number, explicitWindow?: Pick<MenuWindow, "startIndex" | "endIndex">): TreeViewRenderResult {
 		this.#ensureRows();
 		const safeWidth = Number.isFinite(width) ? Math.max(0, Math.trunc(width)) : Number.POSITIVE_INFINITY;
-		if (this.#cache?.width === safeWidth && this.#cache.version === this.#version) return this.#cache.result;
+		const cached = this.#cache;
+		if (
+			!explicitWindow &&
+			cached &&
+			!cached.explicitWindow &&
+			cached.width === safeWidth &&
+			cached.version === this.#version
+		)
+			return cached.result;
 
 		const totalRows = this.#rows.length;
 		const maxRows = this.#normalizeBudget(this.#options.maxRows, totalRows);
 		const selectedIndex = this.selectionIndex;
 		const centerSelection = this.#options.centerSelection ?? this.#selectedKey !== undefined;
-		const window =
-			centerSelection && selectedIndex >= 0
+		const window = explicitWindow
+			? undefined
+			: centerSelection && selectedIndex >= 0
 				? centeredViewportRange(selectedIndex, totalRows, maxRows)
 				: viewportRange(totalRows, maxRows, 0);
-		const windowStart = window.start;
-		const windowEnd = window.end;
+		const windowStart = explicitWindow ? Math.max(0, Math.min(totalRows, explicitWindow.startIndex)) : window!.start;
+		const windowEnd = explicitWindow
+			? Math.max(windowStart, Math.min(totalRows, explicitWindow.endIndex))
+			: window!.end;
+		if (
+			explicitWindow &&
+			cached?.explicitWindow &&
+			cached.width === safeWidth &&
+			cached.version === this.#version &&
+			cached.result.windowStart === windowStart &&
+			cached.result.windowEnd === windowEnd
+		)
+			return cached.result;
 		const windowRows = this.#rows.slice(windowStart, windowEnd);
 		const maxLines = this.#normalizeBudget(this.#options.maxLines, Number.POSITIVE_INFINITY);
 		const lines: string[] = [];
@@ -471,7 +522,12 @@ export class TreeView<T, K extends TreeKey = string> implements Component {
 		}
 
 		let renderedLines: readonly string[] = lines;
-		if (this.#options.scrollbar && maxRows < totalRows && lines.length > 0 && Number.isFinite(safeWidth)) {
+		if (
+			this.#options.scrollbar &&
+			(explicitWindow ? windowStart > 0 || windowEnd < totalRows : maxRows < totalRows) &&
+			lines.length > 0 &&
+			Number.isFinite(safeWidth)
+		) {
 			const viewport = new ScrollView(lines, {
 				height: lines.length,
 				totalRows,
@@ -483,7 +539,7 @@ export class TreeView<T, K extends TreeKey = string> implements Component {
 		}
 
 		const result: TreeViewRenderResult = { lines: renderedLines, truncated, windowStart, windowEnd, totalRows };
-		this.#cache = { width: safeWidth, version: this.#version, result };
+		this.#cache = { width: safeWidth, version: this.#version, explicitWindow: explicitWindow !== undefined, result };
 		return result;
 	}
 

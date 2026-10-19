@@ -63,7 +63,7 @@ function makeHarness(sessions: SessionInfo[], historyMatcher?: (query: string) =
 	);
 	selector.setOnRequestRender(() => renders++);
 	const list = selector.getSessionList();
-	list.handleInput("i");
+	list.handleInput("/");
 	const filtered = (): SessionInfo[] => {
 		const out: SessionInfo[] = [];
 		list.onSelect = session => {
@@ -80,6 +80,7 @@ function makeHarness(sessions: SessionInfo[], historyMatcher?: (query: string) =
 	return {
 		selector,
 		type: text => {
+			if (!selector.filterFocused) list.handleInput("/");
 			for (const ch of text) list.handleInput(ch);
 		},
 		filtered,
@@ -123,6 +124,18 @@ describe("session picker incremental search", () => {
 
 		vi.runAllTimers(); // drain the zero-delay chunk chain
 		expect(ids(harness.filtered())).toEqual(ids(reference));
+	});
+
+	it("publishes a multi-chunk fuzzy scan as one re-render, not one per chunk", () => {
+		const harness = makeHarness(makeCorpus());
+
+		// No literal hits: 300 of 400 sessions spill past the inline slice into two chunks, both with matches.
+		harness.type("zzmarkr");
+		const rendersBefore = harness.renders();
+		vi.runAllTimers();
+
+		// Each re-render reorders the native picker's list, which replays its row-arrival animation.
+		expect(harness.renders() - rendersBefore).toBe(1);
 	});
 
 	it("orphans in-flight fuzzy chunks when the query changes mid-scan", () => {

@@ -113,6 +113,7 @@ describe("settings layout", () => {
 			},
 		);
 
+		selector.handleInput("/");
 		for (const ch of "composer shape") selector.handleInput(ch);
 		// Open the composer.shape submenu
 		selector.handleInput("\n");

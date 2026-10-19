@@ -280,13 +280,13 @@ Native provider (`id: native`) reads native config from:
 ### Directory admission rules
 
 - Slash commands, directory rules, prompts, instructions, hooks, tools, extensions, extension modules, and settings use a project/user root only when the root directory exists and is non-empty.
-- Skills scan `<ancestor>/.omp/skills` for each ancestor from the current working directory up to the repo root/home boundary, plus `~/.omp/agent/skills`, without requiring the root `.omp` directory itself to be non-empty.
+- Skills scan `<ancestor>/.omp/skills` up to the repo root/home boundary, plus `~/.omp/agent/skills`, without requiring the root `.omp` directory itself to be non-empty.
 - `SYSTEM.md`, `SYSTEM_TEMPLATE.md`, `RULES.md`, and `.omp/AGENTS.md` read user-level files directly and use the nearest non-empty ancestor `.omp` directory for project files. Project system-prompt entries load before user entries. `RULES.md` becomes an always-apply sticky rule. See [`docs/system-prompt-customization.md`](./system-prompt-customization.md) for the full `SYSTEM.md` / `APPEND_SYSTEM.md` contract.
 - MCP does not use the non-empty-root admission helper. It reads project `.omp/mcp.json` then `.omp/.mcp.json`, followed by user `mcp.json` then `.mcp.json`, directly.
 
 ### Scope-specific loading
 
-- Skills: `<ancestor>/.omp/skills/*/SKILL.md` and `~/.omp/agent/skills/*/SKILL.md`
+- Native skills: `<ancestor>/.omp/skills/*/SKILL.md` and `~/.omp/agent/skills/*/SKILL.md`.
 - Managed skills: `~/.omp/agent/managed-skills/*/SKILL.md`, through a separate priority-5 provider; authored skills from any other provider win name collisions. Discovery is unconditional; `autolearn.enabled` gates writing/nudging, not loading.
 - Slash commands: `commands/*.md`
 - Rules: `rules/*.{md,mdc}` plus top-level `RULES.md`
@@ -302,6 +302,20 @@ Native provider (`id: native`) reads native config from:
 ### Nearest-project lookup nuance
 
 For `SYSTEM.md`, `SYSTEM_TEMPLATE.md`, `RULES.md`, and `.omp/AGENTS.md`, the native provider walks upward to the nearest non-empty project `.omp` directory.
+
+### Portable `.agents` skill provider
+
+Portable repository skills live in `.agents/skills/`. The separate `agents`
+provider (`discovery/agents.ts`, priority 70) scans `.agent/skills` and
+`.agents/skills` through the project walk-up and supported user-home paths.
+It is not part of the native `.omp` provider (priority 100). On a name collision,
+native skill precedence wins; moving a skill removes its native copy rather
+than leaving an alias that shadows the portable version.
+
+`skills.enableAgentsProject` and `skills.enableAgentsUser` gate this provider's
+project and user skill sources; `skills.enablePiProject` and
+`skills.enablePiUser` gate native sources only. The master `skills.enabled`
+switch gates all skills, and `disabledProviders` can disable provider `agents`.
 
 ## 7) How major subsystems consume config
 
@@ -319,7 +333,8 @@ Create `TITLE_SYSTEM.md` in any generic config base:
 Generate a session name using lowercase `<type>:<primary-objective>`.
 ```
 
-- Missing `TITLE_SYSTEM.md` keeps the bundled title prompts.
+- Missing `TITLE_SYSTEM.md` keeps the bundled title prompts. A new session's first title then comes from a fork of its first reply: when the reply's first text or tool-call block starts, the session's own model answers `src/prompts/system/title-fork.md` as a side turn on the cached prefix, naming the title plus a card index (Nerd Fonts icon, emoji, 1-6 character code) that the window title shows as `<icon> <CODE>: <title>`. The tiny title model takes over when the fork fails, times out, declines, or the reply never starts.
+- With `TITLE_SYSTEM.md` present, the first title skips the fork and comes from the tiny title model with the override, as do replan refreshes.
 - Discovery checks the current project directory bases first (`<cwd>/.omp`, `.claude`, `.codex`, `.gemini`), then the user bases in the generic helper order. Unlike native `SYSTEM.md`, project title discovery does **not** walk ancestor directories.
 - The override replaces only the automatic session-title generation system prompt; normal `SYSTEM.md` / `APPEND_SYSTEM.md` prompt customization is unaffected.
 - The online path asks the title model to wrap the title in `<title>...</title>` and parses it leniently from text (a plain sentence, a truncated/unclosed tag, or a stray `{"title": "..."}` JSON echo all still work). A `TITLE_SYSTEM.md` override gets the wrap-in-`<title>` instruction appended after it. The local tiny-title path keeps the `<title>...</title>` prefill/stop wrapper and uses this file as its system turn.

@@ -17,20 +17,16 @@ import { MAIN_AGENT_ID, type AgentStatus, type AgentMetricsSummary } from "@oh-m
 export { MAIN_AGENT_ID };
 export type { AgentStatus, AgentMetricsSummary };
 
-/** Sidecar marker retained beside a child transcript after an explicit kill. */
-const AGENT_TOMBSTONE_SUFFIX = ".tombstone";
-
-export function getAgentTombstonePath(sessionFile: string): string {
-	return `${sessionFile}${AGENT_TOMBSTONE_SUFFIX}`;
-}
-
 /**
  * - `main`/`sub`: the user-facing agent tree (driving agent + task subagents).
  * - `advisor`: a passive review transcript persisted like a subagent for usage
  *   attribution and Agent Hub observability, but never a peer — hidden from
  *   agent-facing rosters (`proc://`, `history://`) and not messageable/revivable.
+ * - `mailbox`: a session-less control-socket inbox (`npi ctl`); messageable, not a peer.
+ * - `operator`: the human at this process's UI as an IRC participant (issue #31);
+ *   session-less, listed as a peer, and messageable like any agent.
  */
-export type AgentKind = "main" | "sub" | "advisor" | "mailbox";
+export type AgentKind = "main" | "sub" | "advisor" | "mailbox" | "operator";
 
 /**
  * Run lifecycle milestones, stamped as they happen and scoped to the CURRENT
@@ -56,6 +52,8 @@ export interface AgentHistorySummary {
 	/** Whether the last resolved model was selected by retry fallback routing. */
 	resolvedModelIsFallback?: boolean;
 	metrics?: AgentMetricsSummary;
+	/** Cumulative own-session assistant and model_usage cost, excluding nested task results. */
+	directCost?: number;
 	readOnly?: boolean;
 	/** Durable task output artifact, when the executor wrote one. */
 	outputPath?: string;
@@ -360,7 +358,8 @@ export class AgentRegistry {
 
 	/**
 	 * Returns every alive agent (running | idle) except the caller. Advisor refs
-	 * are observability-only transcripts, never peers, so they are excluded.
+	 * are observability-only transcripts, never peers, so they are excluded, as
+	 * are control mailboxes. The operator is a peer like any agent.
 	 * Flat namespace: every other agent is visible.
 	 */
 	listVisibleTo(id: string): AgentRef[] {

@@ -2,13 +2,13 @@ import { describe, expect, it, spyOn } from "bun:test";
 import { TUI } from "@oh-my-pi/pi-tui";
 import { CleanseBoardModel } from "../src/apps/cleanse-board";
 import { showGitOverlay } from "../src/apps/git/git-tui";
-import type { ChangedFile, GitTuiModel } from "../src/apps/git/state";
+import type { AssetFileContents, ChangedFile, GitTuiModel } from "../src/apps/git/state";
 import { initTheme } from "../src/theme/theme";
 import { TspHarness } from "./native/tsp-harness";
 import type { PsScope, PsScopeReport } from "../src/apps/ps-data";
 import { type PsTopHost, PsTopComponent } from "../src/apps/ps-top";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
-import type { TspKind } from "@oh-my-pi/pi-wire";
+import { TSP_KINDS, type TspKind } from "@oh-my-pi/pi-wire";
 import type { DaemonSnapshot, DaemonSpec } from "../src/tools/daemon";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -95,6 +95,47 @@ describe("ps-top native", () => {
 			component.dispose();
 		}
 	});
+
+	it("shares row motions, view-only scroll and slash filtering without stealing literal input", async () => {
+		const described: string[] = [];
+		const tui = new TUI(new VirtualTerminal(90, 24));
+		let rendered = Promise.withResolvers<void>();
+		const renderSpy = spyOn(tui, "requestRender").mockImplementation(() => rendered.resolve());
+		const component = new PsTopComponent(tui, { all: false }, fakeHost(described));
+		const running = component.run();
+		await rendered.promise;
+		await Promise.resolve();
+		try {
+			const list = () => nodes([component.describe()]).find(n => n.k === "list");
+			const initial = list()?.p;
+			component.render(90);
+			component.handleInput("\x05");
+			component.render(90);
+			expect(list()?.p).toEqual(initial);
+			component.handleInput("G");
+			const last = list()?.p;
+			expect(last).not.toEqual(initial);
+			component.handleInput("g");
+			expect(list()?.p).toEqual(last);
+			component.handleInput("g");
+			expect(list()?.p).toEqual(initial);
+			component.handleInput("/");
+			for (const key of "web") component.handleInput(key);
+			component.handleInput("\x1b");
+			expect(nodes(list()?.c).filter(n => n.k === "item")).toHaveLength(1);
+			rendered = Promise.withResolvers<void>();
+			component.handleInput(" ");
+			await rendered.promise;
+			expect(described).toEqual(["web"]);
+			component.handleInput("h"); // Info → process table, rather than a text shortcut.
+			expect(list()).toBeDefined();
+			component.handleInput("\x1b");
+			await running;
+		} finally {
+			component.dispose();
+			renderSpy.mockRestore();
+		}
+	});
 });
 
 describe("git native", () => {
@@ -165,6 +206,207 @@ describe("git native", () => {
 			await closed;
 			h.tui.stop();
 		}
+	});
+
+	/** Open a 60-line file whose lines 5 and 6 changed, type `keys` into the diff, and return the applied patches. */
+	async function patchesAfter(keys: readonly string[]): Promise<string[]> {
+		await initTheme();
+		const h = await TspHarness.start(undefined, { cols: 150, rows: 24 });
+		const original = Array.from({ length: 60 }, (_, index) => `line ${index + 1}`).join("\n") + "\n";
+		const changed = original.replace("line 5\nline 6", "changed 5\nchanged 6").replace("line 40\n", "changed 40\n");
+		const patches: string[] = [];
+		const loaded = Promise.withResolvers<void>();
+		const closed = showGitOverlay(h.tui, {
+			model: {
+				...model,
+				unstaged: [file("lines.txt", "unstaged")],
+				streamContents: async () => {
+					loaded.resolve();
+					return {
+						kind: "text",
+						oldText: original,
+						newText: changed,
+						streamResult: undefined as never,
+					};
+				},
+				applyPatch: async patch => {
+					patches.push(patch);
+				},
+			},
+			createAvatarSource: () => ({ get: () => null }),
+			aiStage: async () => ({ matchedFiles: 0, totalFiles: 0, stagedHunks: 0, totalHunks: 0, wholeFiles: 0 }),
+			generateCommitMessage: async () => {
+				throw new Error("unused");
+			},
+		});
+		try {
+			await loaded.promise;
+			const ready = () => h.find(node => node.k === "diff" && JSON.stringify(node.p).includes("changed 5"));
+			for (let i = 0; i < 10 && !ready(); i++) {
+				await Promise.resolve();
+				h.tui.requestRender();
+				h.flush(10);
+			}
+			expect(ready()).toBeDefined();
+			for (const key of keys) {
+				h.terminal.send(key);
+				h.flush();
+			}
+			await Promise.resolve();
+			return patches;
+		} finally {
+			h.terminal.send("q");
+			h.flush();
+			await closed;
+			h.tui.stop();
+		}
+	}
+
+	it("stages the focused diff row on Space without staging its adjacent change", async () => {
+		// `gg` is the shared first-row motion; a lone `g` is only its prefix.
+		const patches = await patchesAfter(["\t", "g", "g", "j", "j", "j", "j", " "]);
+		expect(patches).toHaveLength(1);
+		expect(patches[0]).toContain("+changed 5");
+		expect(patches[0]).not.toContain("+changed 6");
+	});
+
+	it("stages the focused hunk on Space in hunk view", async () => {
+		const patches = await patchesAfter(["\t", "4", " "]);
+		expect(patches).toHaveLength(1);
+		expect(patches[0]).toContain("+changed 5");
+		expect(patches[0]).toContain("+changed 6");
+	});
+
+	it("stages the cursor's later hunk rather than the previously selected hunk", async () => {
+		const patches = await patchesAfter(["\t", "4", "G", "k", " "]);
+		expect(patches).toHaveLength(1);
+		expect(patches[0]).toContain("+changed 40");
+		expect(patches[0]).not.toContain("+changed 5");
+		expect(patches[0]).not.toContain("+changed 6");
+	});
+
+	/** A 1×1 PNG side of an image change. */
+	const pngSide: AssetFileContents["old"] = {
+		kind: "image",
+		image: {
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+			mimeType: "image/png",
+			sourceMimeType: "image/png",
+			widthPx: 1,
+			heightPx: 1,
+			byteLength: 68,
+			key: "logo",
+		},
+	};
+
+	/** Open the overlay on one changed image in `area` under a terminal advertising `kinds`, and return its asset nodes. */
+	async function describeImageChange(
+		area: ChangedFile["area"],
+		contents: AssetFileContents,
+		kinds: readonly TspKind[] = TSP_KINDS,
+	) {
+		await initTheme();
+		const h = await TspHarness.start(undefined, { cols: 150, rows: 40, kinds });
+		const changed = file("assets/logo.png", area);
+		const closed = showGitOverlay(h.tui, {
+			model: {
+				...model,
+				unstaged: area === "unstaged" ? [changed] : [],
+				staged: area === "staged" ? [changed] : [],
+				streamContents: async () => contents,
+			},
+			createAvatarSource: () => ({ get: () => null }),
+			aiStage: async () => ({ matchedFiles: 0, totalFiles: 0, stagedHunks: 0, totalHunks: 0, wholeFiles: 0 }),
+			generateCommitMessage: async () => {
+				throw new Error("unused");
+			},
+		});
+		try {
+			const role = (n: { p?: unknown }) => (n.p as { role?: string } | undefined)?.role;
+			const shown = () => h.find(n => role(n) === "omp.app.git.compare" || n.k === "kv");
+			for (let i = 0; i < 10 && !shown(); i++) {
+				await Promise.resolve();
+				h.tui.requestRender();
+				h.flush(10);
+			}
+			return {
+				media: h
+					.findAll(n => n.k === "media")
+					.map(n => {
+						const { path, rev, link } = n.p as { path: string; rev?: string; link?: string };
+						return { path, rev, link };
+					}),
+				heads: h.findAll(n => role(n) === "omp.app.git.media-head").map(n => JSON.stringify(n.p)),
+				notes: h.findAll(n => role(n) === "omp.app.git.media-none").map(n => JSON.stringify(n.p)),
+				kv: h.find(n => n.k === "kv")?.p,
+			};
+		} finally {
+			h.terminal.send("q");
+			h.flush();
+			await closed;
+			h.tui.stop();
+		}
+	}
+
+	it("compares an unstaged image change as index and worktree media nodes when the terminal has media", async () => {
+		const shown = await describeImageChange("unstaged", {
+			kind: "asset",
+			old: pngSide,
+			new: pngSide,
+			oldRef: { path: "/repo/assets/logo.png", rev: ":0" },
+			newRef: { path: "/repo/assets/logo.png" },
+		});
+		expect(shown.media).toEqual([
+			{ path: "/repo/assets/logo.png", rev: ":0", link: "git-compare" },
+			{ path: "/repo/assets/logo.png", rev: undefined, link: "git-compare" },
+		]);
+		expect(shown.heads).toHaveLength(2);
+		expect(shown.heads[0]).toContain("Before · PNG");
+		expect(shown.heads[1]).toContain("After · PNG");
+		expect(shown.kv).toBeUndefined();
+	});
+
+	it("compares a staged image change as HEAD and index media nodes when the terminal has media", async () => {
+		const shown = await describeImageChange("staged", {
+			kind: "asset",
+			old: pngSide,
+			new: pngSide,
+			oldRef: { path: "/repo/assets/old-logo.png", rev: "HEAD" },
+			newRef: { path: "/repo/assets/logo.png", rev: ":0" },
+		});
+		expect(shown.media).toEqual([
+			{ path: "/repo/assets/old-logo.png", rev: "HEAD", link: "git-compare" },
+			{ path: "/repo/assets/logo.png", rev: ":0", link: "git-compare" },
+		]);
+		expect(shown.notes).toEqual([]);
+	});
+
+	it("shows an added image's missing side as a note beside its media node", async () => {
+		const shown = await describeImageChange("staged", {
+			kind: "asset",
+			old: { kind: "empty" },
+			new: pngSide,
+			newRef: { path: "/repo/assets/logo.png", rev: ":0" },
+		});
+		expect(shown.media).toEqual([{ path: "/repo/assets/logo.png", rev: ":0", link: "git-compare" }]);
+		expect(shown.notes).toHaveLength(1);
+		expect(shown.notes[0]).toContain("Did not exist");
+	});
+
+	it("falls back to the before/after facts when the terminal lacks media", async () => {
+		const shown = await describeImageChange(
+			"staged",
+			{
+				kind: "asset",
+				old: pngSide,
+				new: pngSide,
+				oldRef: { path: "/repo/assets/logo.png", rev: "HEAD" },
+				newRef: { path: "/repo/assets/logo.png", rev: ":0" },
+			},
+			TSP_KINDS.filter(kind => kind !== "media"),
+		);
+		expect(shown.media).toEqual([]);
+		expect(JSON.stringify(shown.kv)).toContain("image 1×1");
 	});
 });
 

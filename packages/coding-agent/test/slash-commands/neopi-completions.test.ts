@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { lookupBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import {
+	BUILTIN_SLASH_COMMANDS,
+	lookupBuiltinSlashCommand,
+} from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import { PromptActionAutocompleteProvider } from "@oh-my-pi/pi-tui/prompt/prompt-action-autocomplete";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
 
 async function complete(command: string, prefix: string) {
@@ -30,6 +34,22 @@ describe("NeoPi command completion", () => {
 		await Bun.write(
 			path.join(dir, "neopi-live-personas.json"),
 			JSON.stringify({ schemaVersion: 1, personas: { iris: { instructions: "Iris." } } }),
+		);
+		await Bun.write(
+			path.join(dir, "neopi-loadout.json"),
+			JSON.stringify({
+				schemaVersion: 1,
+				loadouts: {
+					reviewer: {
+						name: "reviewer",
+						mainModel: "openai/gpt-4.1",
+						modelRoles: {},
+						retryFallbackChains: {},
+						taskAgentModelOverrides: {},
+					},
+				},
+				activeLoadout: null,
+			}),
 		);
 	});
 
@@ -60,5 +80,22 @@ describe("NeoPi command completion", () => {
 
 	it("offers only the resettable kernels", async () => {
 		expect((await complete("kernel", "reset ")).map(item => item.value)).toEqual(["reset js", "reset py"]);
+	});
+
+	it("discovers the executable loadout use alias and completes its name in the normal composer", async () => {
+		const provider = new PromptActionAutocompleteProvider([...BUILTIN_SLASH_COMMANDS], dir, []);
+		const verbLine = "/loadout u";
+		const verbs = await provider.getSuggestions([verbLine], 0, verbLine.length);
+		expect(verbs?.items.map(item => item.value)).toEqual(["use "]);
+		expect(verbs?.items[0]?.submitsCommand).toBe(false);
+		const appliedVerb = provider.applyCompletion([verbLine], 0, verbLine.length, verbs!.items[0]!, verbs!.prefix);
+		expect(appliedVerb.lines).toEqual(["/loadout use "]);
+
+		const nameLine = "/loadout use rev";
+		const names = await provider.getSuggestions([nameLine], 0, nameLine.length);
+		expect(names?.items.map(item => item.value)).toEqual(["use reviewer"]);
+		expect(names?.items[0]?.submitsCommand).toBe(true);
+		const appliedName = provider.applyCompletion([nameLine], 0, nameLine.length, names!.items[0]!, names!.prefix);
+		expect(appliedName.lines).toEqual(["/loadout use reviewer"]);
 	});
 });

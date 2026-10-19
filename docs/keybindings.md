@@ -34,8 +34,11 @@ app.history.search: []
 | `app.model.select`           | `Alt+M`                                                               | Open the model selector and set roles                                                                                                                                                |
 | `app.plan.toggle`            | `Alt+Shift+P`                                                         | Toggle plan mode                                                                                                                                                                     |
 | `app.history.search`         | `Ctrl+R`                                                              | Search prompt history                                                                                                                                                                |
-| `app.tools.expand`           | `Ctrl+O`                                                              | Toggle tool-output expansion                                                                                                                                                         |
+| `app.navigation.back`        | `Ctrl+O`                                                              | Return to the previously visited menu (with its state) or the conversation; see [Menu navigation](#menu-navigation)                                                                 |
+| `app.navigation.forward`     | `Ctrl+I`, `Alt+O`                                                     | Go forward in the menu history. `Ctrl+I` arrives distinct from `Tab` only under the Kitty keyboard protocol or xterm modifyOtherKeys; `Alt+O` works everywhere                       |
+| `app.tools.expand`           | `Alt+E`                                                               | Toggle tool-output expansion                                                                                                                                                         |
 | `app.tools.toggleVisibility` | `Ctrl+Shift+O`                                                        | Show or hide tool activity                                                                                                                                                           |
+| `app.ask.hide`               | `Alt+H`                                                               | Hide a pending `ask` question to one line (the Hide button in Tern); the same key, `Enter`, or Show brings it back                                                                   |
 | `app.thinking.toggle`        | `Ctrl+T`                                                              | Toggle thinking-block visibility                                                                                                                                                     |
 | `app.thinking.cycle`         | `Shift+Tab`                                                           | Cycle thinking level                                                                                                                                                                 |
 | `app.editor.external`        | `Ctrl+G`                                                              | Edit the draft in `$VISUAL` / `$EDITOR`                                                                                                                                              |
@@ -56,9 +59,59 @@ app.history.search: []
 | `app.live.mute`              | `Alt+Shift+M`                                                         | Mute or unmute the microphone during live voice mode                                                                                                                                 |
 | `app.live.destination.cycle` | `Ctrl+Alt+L`                                                          | During live voice mode, cycle where Enter sends composer text: main agent (default) → voice agent only → both. Slash, `!`, and `$` commands always go to the harness. The status-line mic shows `voice` or `both` when not sending to the main agent. |
 | `app.agents.hub`             | `Alt+A`                                                               | [Open the Agent Hub](./agent-hub.md)                                                                                                                                                 |
+| `app.irc.viewer`             | `Alt+I`                                                               | [Open the IRC communications viewer](./agent-hub.md#irc-viewer)                                                                                                                      |
+| `app.sidebar.toggle`         | `Alt+T`                                                               | [Side panel view chord](#side-panel-views): then `t` Todo, `a` Agents, `i` IRC                                                                                                        |
+| `app.tree.previousBranch`    | Unbound                                                               | Jump to the previous visible branch in `/tree` ([details](./tree.md))                                                                                                                |
+| `app.tree.nextBranch`        | Unbound                                                               | Jump to the next visible branch in `/tree` ([details](./tree.md))                                                                                                                    |
 
 `Ctrl+G` opens `$VISUAL` / `$EDITOR` with the currently painted terminal viewport above `<!-- omp:message starts here -->`. The visible conversation and status are reference only: saving sends just the text below that marker back to the composer. Keep the marker intact; removing it leaves the original draft unchanged.
 
+## Menu navigation
+
+Menus, pickers, and overlays open in normal navigation; arrows, PageUp/PageDown, Home/End, Enter, and Esc keep working beside the Vim keys.
+
+| Keys | Action |
+| --- | --- |
+| `j` / `k` | Next / previous row |
+| `h` / `l` | Surface-dependent: switch pane, collapse/expand, reorder, or adjust a value (the hint line names it) |
+| `Ctrl+D` / `Ctrl+U` (`tui.select.halfPageDown` / `halfPageUp`) | Half page down / up; PageDown / PageUp move a full page |
+| `gg` / `G` (also `tui.select.first` / `last`: Home / End) | First / last row |
+| `Ctrl+E` / `Ctrl+Y` (`tui.select.scrollDown` / `scrollUp`) | Scroll the view one line; the selection stays put until the next motion |
+| `Space` (`tui.select.toggle`) | Toggle a checkbox or existing radio control, or confirm a nondestructive single-choice row; destructive and credential actions require Enter |
+| `Tab` / `Shift+Tab`, also `Ctrl+N` / `Ctrl+P` (`tui.select.nextContext` / `prevContext`) | Next / previous tab, section, or focus region; an existing surface-specific binding takes precedence |
+| `/` (`tui.select.search`) | Focus the search or filter field |
+
+While a search, rename, or form field has focus, every printable key (including `h`, `j`, `k`, `l`, `g`, `/`, Space) types literally and the field keeps its editing keys. Esc returns focus to the list without closing the menu. Esc on a nested page returns to its parent; Esc at the root closes.
+
+The prompt-history search (`Ctrl+R`) and move-path chooser are search-first exceptions: their text field opens focused. Esc returns to their list before closing. Pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom.
+
+Advisor, chain, and persona roots use `h`/`l` to switch between their list and preview; the preview accepts viewer motions, and Enter on the list opens a detail page. Existing radio-with-editor rows keep Space activation and Enter editing. Inside nested configuration pages, `h` returns to the parent and `l` opens a navigable child, never an action.
+
+Ask choices use ordinary list paging unless the selected answer's preview is taller than the viewport. For that oversized preview, PageUp/PageDown keep reading its content; row and half-page motions still change the choice, and `Ctrl+E`/`Ctrl+Y` always scroll the viewport without selecting or submitting an answer.
+
+Nested configuration pages are history visits too. Back/forward inside an open menu restores its page without closing it. Tabs, sections, panes, and reply-field focus are contexts saved in the current snapshot, not extra visits. Blocking approvals and authentication challenges are not history destinations and cannot be dismissed or replayed by history. A focused prompt reports “Finish or cancel the prompt first”; a custom view reports “Close this view first (Esc)” because its one-shot result cannot be replayed. Two-press destructive confirmations are discarded on departure, never revived.
+
+One-shot custom dialogs are excluded from history even when built in: the `/move` directory chooser, annotation source/code/text review dialogs, plan-save path chooser, experiment dashboard, and interactive shell. Their internal controls still follow the menu or literal-text contract; history never replays a filesystem action, review result, save, or live shell command. Plan approval is likewise a blocking decision, not a history destination.
+
+Native TSP lists and pickers retain selection, filtering, and history. Their terminal consumer owns scrolling and the protocol does not expose a viewport position, so `Ctrl+E`/`Ctrl+Y` cannot scroll their native viewport independently; they never move the selection as a substitute. Native viewers forward line, page, and start/end requests, but half-page and absolute viewport restoration are unsupported. Native Git diffs also cannot restore a hunk cursor/range. ANSI menus and viewers support the full navigation and viewport contract.
+
+`Ctrl+O` and `Ctrl+I` walk a timeline of visited views: each reopenable menu and return to the conversation is an entry. Esc out of `/statusline`, press `Ctrl+O`, and `/statusline` reopens where you left it; `Ctrl+I` returns to the conversation. Opening a menu from an older position adds it at the newest end without dropping the newer entries, and `Ctrl+O` from that new menu first returns to where you opened it: after `Ctrl+O` from `/statusline` back to the conversation and opening `/model`, `Ctrl+O` returns to the conversation, `Ctrl+I` to `/statusline`, and `Ctrl+I` again to `/model`.
+
+## Side panel views
+
+`app.sidebar.toggle` (`Alt+T`) is a chord prefix. The next key picks what the side panel shows:
+
+| Chord | View |
+| --- | --- |
+| `Alt+T` `t` | Todo list |
+| `Alt+T` `a` | Agents: this session's subagents and advisors, as in the Agent Hub |
+| `Alt+T` `i` | IRC: the newest agent-to-agent messages, from the same history as `Alt+I` |
+
+From hidden, a chord opens the panel on that view; with another view showing, it switches; the chord of the view already showing hides the panel. The view key also works with `Alt` still held (`Alt+T` `Alt+A`). The prefix waits two seconds. `Esc` cancels it, and any other key cancels it and keeps its usual meaning. A right-click inside the panel cycles Todo → Agents → IRC. The chosen view persists as `sidebar.view`.
+
+Wide terminals dock the panel beside the chat; below `sidebar.splitAt` the chord opens it fullscreen instead. While docked, the Todo view replaces the todo list above the editor and the Agents view replaces the pinned subagents list; each comes back when the panel closes or switches view. Other activity rows, such as waiting on subagents, stay where they are.
+
+In the Agents view, hovering highlights a row. Clicking a subagent shows its transcript in the main area, the same as selecting it in the Agent Hub; clicking it again, or empty panel space, returns to the main session. Advisors and aborted agents are read-only transcripts, so clicking one opens the Agent Hub. Clicking the IRC view opens the full IRC viewer.
 ## Recover a cleared prompt
 
 Press `Ctrl+C` to clear an unsent composer draft, then `Up` to recall it. Older drafts and submitted prompts share the existing Up/Down navigation. Recalled drafts remain editable and are never sent until you submit them.
@@ -101,11 +154,18 @@ The status line also shows the mode, pending command, and multi-line Visual sele
 | `h` `j` `k` `l`               | Move by character and line (arrow keys work too)               |
 | `0` `^` `$`                   | Line start / first non-blank / line end                        |
 | `w` `b` `e`                   | Next word, previous word, end of word                          |
+| `f` `F` `t` `T` + char        | Find / till that character on the line (`;` repeats, `,` reverses) |
 | `gg` `G`                      | First line, last line (`5gg` and `5G` jump to line 5)          |
 | `1`–`9` prefix                | Repeat a motion or operator, e.g. `3w`, `5j`, `2dd`            |
 | `i` `a` `I` `A`               | Insert before / after cursor, at line start / line end         |
 | `o` `O`                       | Open a line below / above and insert                           |
 | `x` `D` `C`                   | Delete character, delete to line end (`2D` takes `count` lines), change to line end (`2C` likewise) |
+| `r` + char                    | Replace the character under the cursor (`3rx` replaces three)  |
+| `R`                           | Replace mode: typed characters overwrite until Escape          |
+| `%`                           | Jump to the matching `()` `[]` `{}` `"` `'` on or after the cursor. Quotes stay on the line; brackets can cross lines. With a count, `50%` goes to that percentage of the buffer. |
+| `{` `}`                       | Previous / next paragraph (blank-line boundary)                |
+| `J`                           | Join lines, dropping the indent of the following line (an empty line joins without a space) |
+| `>>` `<<`                     | Indent / outdent by two spaces (`3>>` shifts three lines; `>}` shifts a motion). Empty lines are left alone. |
 | `d` `y` `c` + motion          | Operate over a motion, e.g. `dw`, `d$`, `yb`, `cw`             |
 | `dd` `yy` `cc`                | Linewise delete / yank / change                                |
 | `d` `y` `c` + text object     | Operate over a text object, e.g. `diw`, `ca(`, `ci"`, `dap`    |
@@ -137,6 +197,7 @@ A selection that would cut through an attachment placeholder such as `[Image #1,
 
 - **Insert mode** → switch to Normal mode (an open autocomplete popup gets the first Escape to dismiss it).
 - **Visual mode**, or a half-typed count or operator → cancel back to a quiet Normal mode.
+- **Replace mode** (`R`) → switch to Normal mode, stepping back onto the last overwritten character.
 - **Normal mode with nothing pending** → falls through to app behavior: dismiss autocomplete, abort active work, or run the configured double-Escape action with an empty editor. An idle main-session draft is preserved; bash/python and focused-agent views have their own Escape behavior.
 
-Vim keys never shadow app chords: `Ctrl`-combinations, `Enter`, and `Tab` keep their normal behavior in every mode, so `Enter` still submits from Normal mode. Prompt history stays on `Up`/`Down` in Insert mode only — in Normal mode those keys are `k` and `j`, so navigating a multi-line draft never loads a previous prompt.
+Vim keys never shadow app chords: `Ctrl`-combinations, `Enter`, and `Tab` keep their normal behavior in every mode, so `Enter` still submits from Normal mode. Such a key also cancels a half-typed command (`d`, `r`, `f`) first, so the command never carries over into the next prompt. Prompt history stays on `Up`/`Down` in Insert mode only — in Normal mode those keys are `k` and `j`, so navigating a multi-line draft never loads a previous prompt.

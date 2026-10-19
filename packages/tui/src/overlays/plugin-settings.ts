@@ -29,6 +29,7 @@ import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "..
 import { col, node, span, text } from "../native/describe";
 import type { TspPrefsControl, TspPrefsSection } from "@oh-my-pi/pi-wire";
 import { actionHint, hintsRow, overlayCard } from "../native/overlay";
+import { MenuKeyReader, isMenuHistoryParticipant, type MenuNavAction } from "../components/menu-navigation";
 
 const PLUGIN_SETTINGS_ROLE = "omp.overlay.plugin-settings";
 /** A plugin row's control on the native settings page: open the plugin's settings. */
@@ -40,6 +41,8 @@ export interface PluginPrefsPage {
 	sections: TspPrefsSection[];
 	focus: string | null;
 	editing: PrefsEditing | null;
+	query?: string;
+	cursor?: number;
 	/** An open value editor without a native control, shown over the page. */
 	editor?: NativeChild;
 }
@@ -59,6 +62,7 @@ function prefsDetailPage(title: string, lead: string, list: SettingsList | undef
 				: { k: "action", label: item.currentValue.trim() || "Edit…", act: "edit" },
 	);
 	const open = list.openSubmenu;
+	const search = list.hasSearchQuery() || (!open && list.filterFocused) ? list.navigationSnapshot() : undefined;
 	return {
 		lead,
 		sections: sections.map(section => ({
@@ -67,6 +71,8 @@ function prefsDetailPage(title: string, lead: string, list: SettingsList | undef
 		})),
 		focus: list.prefsFocus().row ?? null,
 		editing: null,
+		query: search?.filter,
+		cursor: search?.filterCursor,
 		editor: open ? col([open.component], { role: "omp.prefs.editor" }) : undefined,
 	};
 }
@@ -276,17 +282,12 @@ async function buildPluginConfigItems(
 }
 
 /**
- * Stable SelectList value for a list entry. Combined with `findEntryByValue`
- * this keeps lookup correct even when the same plugin id exists in both user
- * and project scope (one of which is `shadowedBy: "project"`).
+ * Stable SelectList value, including scope so user and project installs with
+ * the same plugin id retain distinct selection and native rows.
  */
 function entryValue(entry: PluginListEntry): string {
 	if (entry.kind === "npm") return `npm:${entry.plugin.name}`;
 	return `mkt:${entry.plugin.scope}:${entry.plugin.id}`;
-}
-
-function findEntryByValue(entries: ReadonlyArray<PluginListEntry>, value: string): PluginListEntry | undefined {
-	return entries.find(e => entryValue(e) === value);
 }
 
 /**
@@ -297,12 +298,15 @@ function findEntryByValue(entries: ReadonlyArray<PluginListEntry>, value: string
 export class PluginListComponent extends OverlayPanel {
 	readonly #selectList: SelectList;
 	#native: NativeNode | undefined;
+	readonly #keys = new MenuKeyReader();
+	readonly #entriesByValue: ReadonlyMap<string, PluginListEntry>;
 
 	constructor(
 		private readonly entries: ReadonlyArray<PluginListEntry>,
 		callbacks: PluginListCallbacks,
 	) {
 		super("Plugins", PLUGIN_SETTINGS_ROLE);
+		this.#entriesByValue = new Map(entries.map(entry => [entryValue(entry), entry]));
 		this.addChild(new Spacer(1));
 
 		if (entries.length === 0) {
@@ -321,8 +325,9 @@ export class PluginListComponent extends OverlayPanel {
 			this.addChild(new Spacer(1));
 
 			// Empty list still handles Escape so the user can leave the panel.
-			this.#selectList = new SelectList([], 1, getSelectListTheme());
+			this.#selectList = new SelectList([], 1, getSelectListTheme(), { search: "always" });
 			this.#selectList.onCancel = callbacks.onCancel;
+			this.addChild(this.#selectList);
 			return;
 		}
 
@@ -332,12 +337,13 @@ export class PluginListComponent extends OverlayPanel {
 		// SelectList default primary column (32 chars). Widen the bound so the
 		// id remains readable; the description gets whatever width is left.
 		this.#selectList = new SelectList(items, Math.min(items.length, 8), getSelectListTheme(), {
+			search: "always",
 			minPrimaryColumnWidth: 24,
 			maxPrimaryColumnWidth: 64,
 		});
 
 		this.#selectList.onSelect = item => {
-			const found = findEntryByValue(this.entries, item.value);
+			const found = this.#entriesByValue.get(item.value);
 			if (!found) return;
 			if (found.kind === "npm") callbacks.onNpmSelect(found.plugin);
 			else callbacks.onMarketplaceSelect(found.plugin);
@@ -348,20 +354,15 @@ export class PluginListComponent extends OverlayPanel {
 		this.addChild(this.#selectList);
 		this.addChild(new Spacer(1));
 		this.addChild(
-			new Text(
-				theme.fg(
-					"dim",
-					`${editorKey("tui.select.confirm")} to configure · ${editorKey("tui.select.cancel")} to go back`,
-				),
-				0,
-				0,
-			),
+			new Text(theme.fg("dim", `${editorKey("tui.select.confirm")} configure · / search · Esc close`), 0, 0),
 		);
 	}
 
 	/** The installed plugins as one native page section: a row per plugin with its status and a Configure button. */
 	prefsPage(): PluginPrefsPage {
-		const rows = this.entries.map(entry => {
+		const picker = this.#selectList.pickerView();
+		const rows = picker.items.map(item => {
+			const entry = this.#entriesByValue.get(item.value)!;
 			const id = entryValue(entry);
 			if (entry.kind === "npm") {
 				const p = entry.plugin;
@@ -383,17 +384,20 @@ export class PluginListComponent extends OverlayPanel {
 		});
 		return {
 			lead:
-				rows.length > 0
+				this.entries.length > 0
 					? "Plugins installed for you and this project. Configure one to turn it or its features on and off."
 					: `No plugins installed. Install one with ${APP_NAME} plugin install <package>, or <name>@<marketplace>.`,
 			sections: rows.length > 0 ? [{ id: "installed", title: "Installed", rows }] : [],
 			focus: this.#selectList.getSelectedItem()?.value ?? null,
 			editing: null,
+			query: this.#selectList.filterFocused || picker.query ? picker.query : undefined,
+			cursor: picker.cursor,
 		};
 	}
 
 	/** A native page event: a row click moves the selection, Configure (or a double click) opens the plugin. */
 	handlePrefsEvent(event: NativeUiEvent): void {
+		this.#keys.reset();
 		if (event.type === "select") this.#selectList.setSelectedValue(event.item);
 		else if (event.type === "activate") this.#selectList.handleNativeEvent(event);
 		else if (event.type === "action" && event.act === "open" && event.value) {
@@ -417,6 +421,7 @@ export class PluginListComponent extends OverlayPanel {
 								},
 							],
 						}),
+						this.#selectList,
 						hintsRow([actionHint("tui.select.cancel", "go back")]),
 					]
 				: [
@@ -470,7 +475,36 @@ export class PluginListComponent extends OverlayPanel {
 	}
 
 	handleInput(data: string): void {
-		this.#selectList.handleInput(data);
+		if (this.#selectList.filterFocused) {
+			this.#keys.reset();
+			this.#selectList.handleInput(data);
+			return;
+		}
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (action) this.handleNavigation(action);
+		else this.#selectList.handleInput(data);
+	}
+
+	handleNavigation(action: MenuNavAction): void {
+		this.#keys.reset();
+		if (action.kind === "horizontal") {
+			const item = this.#selectList.getSelectedItem();
+			if (action.delta > 0 && item) this.#selectList.onSelect?.(item);
+			return;
+		}
+		this.#selectList.handleNavigation(action);
+	}
+
+	get filterFocused(): boolean {
+		return this.#selectList.filterFocused;
+	}
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationSnapshot();
+	}
+	restoreNavigation(snapshot: unknown): void {
+		this.#keys.reset();
+		this.#selectList.restoreNavigation(snapshot);
 	}
 }
 
@@ -495,6 +529,8 @@ export interface PluginDetailCallbacks {
  */
 export class PluginDetailComponent extends OverlayPanel {
 	#settingsList!: SettingsFormField;
+	#pendingNavigation: unknown;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	constructor(
 		private plugin: InstalledPlugin,
@@ -588,13 +624,49 @@ export class PluginDetailComponent extends OverlayPanel {
 			},
 			onCancel: this.callbacks.onBack,
 		});
+		this.#settingsList.settingsList.onNavigationVisit = (page, previousSnapshot) =>
+			this.onNavigationVisit?.(page, previousSnapshot);
+		if (this.#pendingNavigation !== undefined) {
+			this.#settingsList.restoreNavigation(this.#pendingNavigation);
+			this.#pendingNavigation = undefined;
+		}
 
 		this.addChild(this.#settingsList);
+		this.callbacks.requestRender?.();
 	}
 
 	handleInput(data: string): void {
 		if (!this.#settingsList) return;
 		this.#settingsList.handleInput(data);
+	}
+
+	handleNavigation(action: MenuNavAction): void {
+		this.#settingsList?.settingsList.handleNavigation(action);
+	}
+	get hasOpenSubmenu(): boolean {
+		return this.#settingsList?.settingsList.hasOpenSubmenu() ?? false;
+	}
+
+	get filterFocused(): boolean {
+		return this.#settingsList?.filterFocused ?? false;
+	}
+	get blocksMenuHistory(): boolean {
+		return this.#settingsList?.blocksMenuHistory ?? false;
+	}
+	navigationSnapshot(): unknown {
+		return this.#settingsList?.navigationSnapshot() ?? this.#pendingNavigation;
+	}
+	restoreNavigation(snapshot: unknown): void {
+		if (this.#settingsList) this.#settingsList.restoreNavigation(snapshot);
+		else this.#pendingNavigation = snapshot;
+	}
+	navigateParent(): boolean {
+		return this.#settingsList?.settingsList.navigateParent() ?? false;
+	}
+	navigateChild(): void {
+		const list = this.#settingsList?.settingsList;
+		const item = list?.getSelectedItem();
+		if (item?.submenu) list?.openSubmenuFor(item.id);
 	}
 
 	/** This plugin's settings as a native page section. */
@@ -631,6 +703,9 @@ export interface MarketplacePluginDetailCallbacks {
  */
 export class MarketplacePluginDetailComponent extends OverlayPanel {
 	#settingsList!: SettingsFormField;
+	#pendingNavigation: unknown;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
+	#configLoaded = false;
 
 	constructor(
 		private plugin: InstalledPluginSummary,
@@ -668,6 +743,8 @@ export class MarketplacePluginDetailComponent extends OverlayPanel {
 	}
 
 	#render(runtimePlugin: InstalledPlugin | undefined, configItems: SettingItem[]): void {
+		const previousNavigation = this.#pendingNavigation ?? this.#settingsList?.navigationSnapshot();
+		this.#configLoaded = runtimePlugin !== undefined;
 		this.clear();
 
 		const plugin = this.plugin;
@@ -726,12 +803,47 @@ export class MarketplacePluginDetailComponent extends OverlayPanel {
 			},
 			onCancel: this.callbacks.onBack,
 		});
+		this.#settingsList.settingsList.onNavigationVisit = (page, previousSnapshot) =>
+			this.onNavigationVisit?.(page, previousSnapshot);
+		if (previousNavigation !== undefined) {
+			this.#settingsList.restoreNavigation(previousNavigation);
+			this.#pendingNavigation = this.#configLoaded ? undefined : previousNavigation;
+		}
 
 		this.addChild(this.#settingsList);
 	}
 
 	handleInput(data: string): void {
 		this.#settingsList.handleInput(data);
+	}
+
+	handleNavigation(action: MenuNavAction): void {
+		this.#settingsList?.settingsList.handleNavigation(action);
+	}
+	get hasOpenSubmenu(): boolean {
+		return this.#settingsList?.settingsList.hasOpenSubmenu() ?? false;
+	}
+
+	get filterFocused(): boolean {
+		return this.#settingsList?.filterFocused ?? false;
+	}
+	get blocksMenuHistory(): boolean {
+		return this.#settingsList?.blocksMenuHistory ?? false;
+	}
+	navigationSnapshot(): unknown {
+		return this.#pendingNavigation ?? this.#settingsList?.navigationSnapshot();
+	}
+	restoreNavigation(snapshot: unknown): void {
+		this.#settingsList?.restoreNavigation(snapshot);
+		this.#pendingNavigation = this.#configLoaded ? undefined : snapshot;
+	}
+	navigateParent(): boolean {
+		return this.#settingsList?.settingsList.navigateParent() ?? false;
+	}
+	navigateChild(): void {
+		const list = this.#settingsList?.settingsList;
+		const item = list?.getSelectedItem();
+		if (item?.submenu) list?.openSubmenuFor(item.id);
 	}
 
 	/** This plugin's settings as a native page section, with its install facts as the lead. */
@@ -759,6 +871,7 @@ export class MarketplacePluginDetailComponent extends OverlayPanel {
  */
 class ConfigFieldPanel extends OverlayPanel {
 	#field: FormField;
+	readonly #keys = new MenuKeyReader();
 
 	constructor(key: string, field: FormField) {
 		super(key, `${PLUGIN_SETTINGS_ROLE}.field`);
@@ -779,7 +892,38 @@ class ConfigFieldPanel extends OverlayPanel {
 	}
 
 	handleInput(data: string): void {
-		this.#field.handleInput(data);
+		if (!(this.#field instanceof SelectFormField) || this.#field.filterFocused) {
+			this.#keys.reset();
+			this.#field.handleInput(data);
+			return;
+		}
+		if (matchesKey(data, "escape")) {
+			this.#keys.reset();
+			this.#field.selectList.onCancel?.();
+			return;
+		}
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (action?.kind === "horizontal") {
+			if (action.delta < 0) this.#field.selectList.onCancel?.();
+			return;
+		}
+		if (action) this.#field.selectList.handleNavigation(action);
+		else this.#field.handleInput(data);
+	}
+
+	get filterFocused(): boolean {
+		return this.#field.filterFocused;
+	}
+	get blocksMenuHistory(): boolean {
+		return this.#field.blocksMenuHistory;
+	}
+	navigationSnapshot(): unknown {
+		return this.#field.navigationSnapshot();
+	}
+	restoreNavigation(snapshot: unknown): void {
+		this.#keys.reset();
+		this.#field.restoreNavigation(snapshot);
 	}
 
 	pasteText(text: string): void {
@@ -787,6 +931,7 @@ class ConfigFieldPanel extends OverlayPanel {
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
+		this.#keys.reset();
 		// OverlayPanel contributes one top-border row and a two-column body inset.
 		this.#field.routeMouse(event, line - 1, col - 2);
 	}
@@ -810,7 +955,7 @@ function createConfigEnumPanel(
 		currentValue,
 		maxVisible: 8,
 		selectTheme: getSelectListTheme(),
-		hint: `${editorKey("tui.select.confirm")} to select · ${editorKey("tui.select.cancel")} to cancel`,
+		hint: `${editorKey("tui.select.confirm")} select · h/${editorKey("tui.select.cancel")} back · / search`,
 		onSubmit: onSelect,
 		onCancel,
 		requestRender,
@@ -854,13 +999,10 @@ function createConfigInputPanel(
 export interface PluginSettingsCallbacks {
 	onClose: () => void;
 	onPluginChanged: () => void | Promise<void>;
+	/** Keeps the owning settings overlay blocked even when its tab changes. */
+	onPendingWrite?: (delta: 1 | -1) => void;
 	/** Schedules a TUI frame after asynchronous plugin data loads. */
 	requestRender?: () => void;
-}
-
-/** Component with handleInput method */
-interface InputHandler {
-	handleInput(data: string): void;
 }
 
 /**
@@ -870,13 +1012,17 @@ interface InputHandler {
 export class PluginSettingsComponent extends Container {
 	readonly #host: PluginSettingsHost;
 	#manager: PluginSettingsManager;
-	#viewComponent: (Component & InputHandler) | null = null;
-	// oxlint-disable-next-line no-unused-private-class-members -- state tracking for view management
+	#viewComponent: PluginListComponent | PluginDetailComponent | MarketplacePluginDetailComponent | null = null;
 	#currentView: "list" | "npm-detail" | "marketplace-detail" = "list";
-	// oxlint-disable-next-line no-unused-private-class-members -- state tracking for view management
 	#currentPlugin: InstalledPlugin | null = null;
-	// oxlint-disable-next-line no-unused-private-class-members -- state tracking for view management
 	#currentMarketplacePlugin: InstalledPluginSummary | null = null;
+	#entries: readonly PluginListEntry[] = [];
+	#pendingNavigation: unknown;
+	#listNavigation: unknown;
+	#restoringNavigation = false;
+	#pendingOperations = 0;
+	readonly #keys = new MenuKeyReader();
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	constructor(
 		host: PluginSettingsHost,
@@ -889,10 +1035,14 @@ export class PluginSettingsComponent extends Container {
 	}
 
 	async #showPluginList(): Promise<void> {
+		this.#keys.reset();
+		const changedPage = this.#currentView !== "list";
+		const previous = this.navigationSnapshot();
 		this.#currentView = "list";
 		this.#currentPlugin = null;
 		this.#currentMarketplacePlugin = null;
 		this.clear();
+		this.#viewComponent = null;
 
 		// Surface registry failures without taking the whole tab down — either
 		// registry can fail to load (corrupt JSON, missing project root) and the
@@ -921,14 +1071,21 @@ export class PluginSettingsComponent extends Container {
 			...npmPlugins.map((plugin): PluginListEntry => ({ kind: "npm", plugin })),
 			...marketplacePlugins.map((plugin): PluginListEntry => ({ kind: "marketplace", plugin })),
 		];
+		this.#entries = entries;
 
 		this.#viewComponent = new PluginListComponent(entries, {
 			onNpmSelect: plugin => this.#showPluginDetail(plugin),
 			onMarketplaceSelect: plugin => this.#showMarketplaceDetail(plugin),
 			onCancel: () => this.callbacks.onClose(),
 		});
+		if (isMenuHistoryParticipant(this.#viewComponent)) this.#viewComponent.restoreNavigation(this.#listNavigation);
 
 		this.addChild(this.#viewComponent);
+		if (this.#pendingNavigation !== undefined) {
+			const pending = this.#pendingNavigation;
+			this.#pendingNavigation = undefined;
+			this.restoreNavigation(pending);
+		} else if (changedPage && !this.#restoringNavigation) this.onNavigationVisit?.("", previous);
 
 		// The list mounts after the first frame (npm + marketplace listing is
 		// async and this method runs fire-and-forget), so ask for a repaint —
@@ -952,6 +1109,7 @@ export class PluginSettingsComponent extends Container {
 
 	/** Routes a native page event to the current view. */
 	handlePrefsEvent(event: NativeUiEvent): void {
+		this.#keys.reset();
 		const view = this.#viewComponent;
 		if (
 			view instanceof PluginListComponent ||
@@ -963,6 +1121,11 @@ export class PluginSettingsComponent extends Container {
 	}
 
 	#showPluginDetail(plugin: InstalledPlugin): void {
+		this.#keys.reset();
+		const previous = this.navigationSnapshot();
+		if (!this.#restoringNavigation && this.#currentView === "list" && isMenuHistoryParticipant(this.#viewComponent)) {
+			this.#listNavigation = this.#viewComponent.navigationSnapshot();
+		}
 		this.#currentView = "npm-detail";
 		this.#currentPlugin = plugin;
 		this.#currentMarketplacePlugin = null;
@@ -970,31 +1133,59 @@ export class PluginSettingsComponent extends Container {
 
 		this.#viewComponent = new PluginDetailComponent(plugin, this.#manager, {
 			onEnabledChange: async enabled => {
-				await this.#manager.setEnabled(plugin.name, enabled);
-				await this.callbacks.onPluginChanged();
+				this.#pendingOperations++;
+				this.callbacks.onPendingWrite?.(1);
+				try {
+					await this.#manager.setEnabled(plugin.name, enabled);
+					await this.callbacks.onPluginChanged();
+				} finally {
+					this.#pendingOperations--;
+					this.callbacks.onPendingWrite?.(-1);
+					this.callbacks.requestRender?.();
+				}
 			},
 			onFeatureChange: async (feature, enabled) => {
-				const current = new Set((await this.#manager.getEnabledFeatures(plugin.name)) ?? []);
-				if (enabled) {
-					current.add(feature);
-				} else {
-					current.delete(feature);
+				this.#pendingOperations++;
+				this.callbacks.onPendingWrite?.(1);
+				try {
+					const current = new Set((await this.#manager.getEnabledFeatures(plugin.name)) ?? []);
+					if (enabled) current.add(feature);
+					else current.delete(feature);
+					await this.#manager.setEnabledFeatures(plugin.name, [...current]);
+					await this.callbacks.onPluginChanged();
+				} finally {
+					this.#pendingOperations--;
+					this.callbacks.onPendingWrite?.(-1);
+					this.callbacks.requestRender?.();
 				}
-				await this.#manager.setEnabledFeatures(plugin.name, [...current]);
-				await this.callbacks.onPluginChanged();
 			},
 			onConfigChange: async (key, value) => {
-				await this.#manager.setPluginSetting(plugin.name, key, value);
-				await this.callbacks.onPluginChanged();
+				this.#pendingOperations++;
+				this.callbacks.onPendingWrite?.(1);
+				try {
+					await this.#manager.setPluginSetting(plugin.name, key, value);
+					await this.callbacks.onPluginChanged();
+				} finally {
+					this.#pendingOperations--;
+					this.callbacks.onPendingWrite?.(-1);
+					this.callbacks.requestRender?.();
+				}
 			},
 			onBack: () => this.#showPluginList(),
 			requestRender: this.callbacks.requestRender,
 		});
 
 		this.addChild(this.#viewComponent);
+		this.#wireNavigation();
+		if (!this.#restoringNavigation) this.onNavigationVisit?.(`npm:${plugin.name}`, previous);
 	}
 
 	#showMarketplaceDetail(plugin: InstalledPluginSummary): void {
+		this.#keys.reset();
+		const previous = this.navigationSnapshot();
+		if (!this.#restoringNavigation && this.#currentView === "list" && isMenuHistoryParticipant(this.#viewComponent)) {
+			this.#listNavigation = this.#viewComponent.navigationSnapshot();
+		}
 		this.#currentView = "marketplace-detail";
 		this.#currentPlugin = null;
 		this.#currentMarketplacePlugin = plugin;
@@ -1003,6 +1194,8 @@ export class PluginSettingsComponent extends Container {
 		this.#viewComponent = new MarketplacePluginDetailComponent(plugin, this.#manager, {
 			parsePluginId: id => this.#host.parsePluginId(id),
 			onEnabledChange: async enabled => {
+				this.#pendingOperations++;
+				this.callbacks.onPendingWrite?.(1);
 				try {
 					const mgr = await this.#host.createMarketplaceManager();
 					await mgr.setPluginEnabled(plugin.id, enabled, plugin.scope);
@@ -1014,30 +1207,159 @@ export class PluginSettingsComponent extends Container {
 						enabled,
 						error: err instanceof Error ? err.message : String(err),
 					});
+				} finally {
+					this.#pendingOperations--;
+					this.callbacks.onPendingWrite?.(-1);
+					this.callbacks.requestRender?.();
 				}
 			},
 			onConfigChange: async (pluginName, key, value) => {
-				await this.#manager.setPluginSetting(pluginName, key, value);
-				await this.callbacks.onPluginChanged();
+				this.#pendingOperations++;
+				this.callbacks.onPendingWrite?.(1);
+				try {
+					await this.#manager.setPluginSetting(pluginName, key, value);
+					await this.callbacks.onPluginChanged();
+				} finally {
+					this.#pendingOperations--;
+					this.callbacks.onPendingWrite?.(-1);
+					this.callbacks.requestRender?.();
+				}
 			},
 			onBack: () => this.#showPluginList(),
 			requestRender: this.callbacks.requestRender,
 		});
 
 		this.addChild(this.#viewComponent);
+		this.#wireNavigation();
+		if (!this.#restoringNavigation) this.onNavigationVisit?.(`marketplace:${plugin.id}:${plugin.scope}`, previous);
 	}
 
 	handleInput(data: string): void {
-		if (!this.#viewComponent) {
-			// The list view mounts asynchronously (npm + marketplace listing).
-			// Until it does — or if listing rejected and no view ever mounted —
-			// Escape must still close the panel instead of leaving /settings
-			// non-dismissible.
-			if (data === "\x1b" || data === "\x1b\x1b") {
-				this.callbacks.onClose();
+		const view = this.#viewComponent;
+		if (this.filterFocused || this.hasOpenSubmenu) {
+			this.#keys.reset();
+			view?.handleInput(data);
+			return;
+		}
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (action) this.handleNavigation(action);
+		else if (view) view.handleInput(data);
+		else if (data === "\x1b" || data === "\x1b\x1b") this.callbacks.onClose();
+	}
+
+	handleNavigation(action: MenuNavAction): void {
+		this.#keys.reset();
+		const view = this.#viewComponent;
+		if (action.kind === "cancel" || (action.kind === "horizontal" && action.delta < 0)) {
+			if (this.atRoot) {
+				if (action.kind === "cancel") this.callbacks.onClose();
+			} else if (
+				!(
+					(view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent) &&
+					view.navigateParent()
+				)
+			) {
+				void this.#showPluginList();
 			}
 			return;
 		}
-		this.#viewComponent.handleInput(data);
+		if (
+			action.kind === "horizontal" &&
+			action.delta > 0 &&
+			(view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent)
+		) {
+			view.navigateChild();
+			return;
+		}
+		view?.handleNavigation(action);
+	}
+
+	get atRoot(): boolean {
+		return this.#currentView === "list";
+	}
+	get hasOpenSubmenu(): boolean {
+		const view = this.#viewComponent;
+		return (
+			(view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent) &&
+			view.hasOpenSubmenu
+		);
+	}
+
+	get filterFocused(): boolean {
+		const view = this.#viewComponent;
+		return view instanceof PluginListComponent ||
+			view instanceof PluginDetailComponent ||
+			view instanceof MarketplacePluginDetailComponent
+			? view.filterFocused
+			: false;
+	}
+
+	get blocksMenuHistory(): boolean {
+		return (
+			this.#pendingOperations > 0 ||
+			(isMenuHistoryParticipant(this.#viewComponent) && this.#viewComponent.blocksMenuHistory === true)
+		);
+	}
+
+	navigationSnapshot(): unknown {
+		return {
+			view: this.#currentView,
+			plugin: this.#currentPlugin?.name,
+			marketplace: this.#currentMarketplacePlugin
+				? { id: this.#currentMarketplacePlugin.id, scope: this.#currentMarketplacePlugin.scope }
+				: undefined,
+			list: this.#listNavigation,
+			content: isMenuHistoryParticipant(this.#viewComponent) ? this.#viewComponent.navigationSnapshot() : undefined,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		this.#keys.reset();
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		if (!this.#viewComponent) {
+			this.#pendingNavigation = snapshot;
+			return;
+		}
+		const state = snapshot as {
+			view?: string;
+			plugin?: string;
+			marketplace?: { id: string; scope: string };
+			content?: unknown;
+			list?: unknown;
+		};
+		this.#listNavigation = state.list;
+		this.#restoringNavigation = true;
+		try {
+			if (state.view === "npm-detail") {
+				const entry = this.#entries.find(entry => entry.kind === "npm" && entry.plugin.name === state.plugin);
+				if (entry?.kind === "npm") this.#showPluginDetail(entry.plugin);
+			} else if (state.view === "marketplace-detail") {
+				const entry = this.#entries.find(
+					entry =>
+						entry.kind === "marketplace" &&
+						entry.plugin.id === state.marketplace?.id &&
+						entry.plugin.scope === state.marketplace.scope,
+				);
+				if (entry?.kind === "marketplace") this.#showMarketplaceDetail(entry.plugin);
+			} else if (this.#currentView !== "list") {
+				this.#pendingNavigation = snapshot;
+				void this.#showPluginList();
+				return;
+			}
+			if (isMenuHistoryParticipant(this.#viewComponent)) this.#viewComponent.restoreNavigation(state.content);
+		} finally {
+			this.#restoringNavigation = false;
+		}
+	}
+
+	#wireNavigation(): void {
+		const view = this.#viewComponent;
+		if (!isMenuHistoryParticipant(view)) return;
+		view.onNavigationVisit = (page, previousContent) => {
+			if (view !== this.#viewComponent) return;
+			const previous = { ...(this.navigationSnapshot() as object), content: previousContent };
+			if (!this.#restoringNavigation) this.onNavigationVisit?.(`${this.#currentView}:${page}`, previous);
+		};
 	}
 }

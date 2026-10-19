@@ -1,5 +1,5 @@
 import type { Component, OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
-import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
+import { Container, getKeybindings, Spacer, Text } from "@oh-my-pi/pi-tui";
 import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-wire";
 import type { CollabHost } from "../../collab/host";
 import { formatKeyHint, formatKeyHints, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
@@ -21,6 +21,7 @@ import type {
 	ExtensionUiComponent,
 	ExtensionWidgetContent,
 	ExtensionWidgetOptions,
+	SendMessageHandler,
 	SendUserMessageHandler,
 	TerminalInputHandler,
 } from "../../extensibility/extensions";
@@ -42,8 +43,12 @@ import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../sessi
 import { disambiguateDisplayLabels, sanitizeCarriageReturns } from "@oh-my-pi/pi-tui/render/render-utils";
 import { setExtensionTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
+import { launchTerminal } from "../../subprocess/terminal-launch";
+import { controlAnswerToAskResult } from "./ask-control-answer";
 
 const MAX_WIDGET_LINES = 10;
+/** App actions an open ask dialog lets through to the session: speech input into the composer. */
+const ASK_PASSTHROUGH_ACTIONS = ["app.stt.toggle", "app.dictation.toggle"] as const;
 
 /**
  * Footer hint for a guest-rendered ask selector. The guest's selector handles
@@ -56,6 +61,18 @@ function guestAskHelpText(enterAction: string, extra = ""): string {
 const ASK_OTHER_OPTION = "Other (type your own)";
 const ASK_CHAT_OPTION = "Chat about this";
 const ASK_NEXT_OPTION = "Next →";
+
+function withTerminalLauncher(uiContext: ExtensionUIContext, hasUI: boolean): ExtensionUIContext {
+	if (!hasUI || uiContext.openTerminal) return uiContext;
+	const descriptors = Object.getOwnPropertyDescriptors(uiContext);
+	descriptors.openTerminal = {
+		configurable: true,
+		enumerable: true,
+		value: launchTerminal,
+		writable: true,
+	};
+	return Object.create(Object.getPrototypeOf(uiContext), descriptors) as ExtensionUIContext;
+}
 
 async function editDialogExternally(text: string): Promise<string | null> {
 	const command = getEditorCommand();
@@ -105,6 +122,7 @@ export class ExtensionUiController {
 		kind: string;
 		title: string;
 		schema?: unknown;
+		convert?: (value: unknown) => unknown;
 	};
 	#extensionTerminalInputUnsubscribers = new Set<() => void>();
 	#composerShapeDisposers: Array<() => void> = [];
@@ -143,6 +161,7 @@ export class ExtensionUiController {
 		// Create and set hook & tool UI context
 		const uiContext: ExtensionUIContext = {
 			timeoutStartsOnPresentation: true,
+			supportsEditor: true,
 			select: (title, options, dialogOptions) => this.showCollabAwareSelector(title, options, dialogOptions),
 			confirm: (title, message, dialogOptions) => this.showHookConfirm(title, message, dialogOptions),
 			input: (title, placeholder, dialogOptions) => this.showHookInput(title, placeholder, dialogOptions),
@@ -184,8 +203,9 @@ export class ExtensionUiController {
 			getToolsExpanded: () => this.ctx.toolOutputExpanded,
 			setToolsExpanded: expanded => this.ctx.setToolsExpanded(expanded),
 		};
-		this.ctx.setToolUIContext(uiContext, true);
-		this.#toolUIContext = uiContext;
+		const enrichedUiContext = withTerminalLauncher(uiContext, true);
+		this.ctx.setToolUIContext(enrichedUiContext, true);
+		this.#toolUIContext = enrichedUiContext;
 		this.ctx.session.setUsageFallbackConfirmer?.((confirmation, signal) => {
 			const reserve =
 				confirmation.remainingPercent === undefined
@@ -205,18 +225,7 @@ export class ExtensionUiController {
 		}
 
 		const actions: ExtensionActions = {
-			sendMessage: (message, options) => {
-				const wasStreaming = this.ctx.session.isStreaming;
-				const normalized = normalizeCustomMessagePayload(message);
-				this.ctx.session
-					.sendCustomMessage(normalized, options)
-					.then(() => this.#applyCustomMessageDisplay(wasStreaming, normalized.display))
-					.catch((err: unknown) => {
-						this.ctx.showError(
-							`Extension sendMessage failed: ${err instanceof Error ? err.message : String(err)}`,
-						);
-					});
-			},
+			sendMessage: this.#sendExtensionMessage,
 			sendUserMessage: this.#sendExtensionUserMessage,
 			appendEntry: (customType, data) => {
 				this.ctx.sessionManager.appendCustomEntry(customType, data);
@@ -331,18 +340,24 @@ export class ExtensionUiController {
 			switchSession: async sessionPath => {
 				await this.ctx.prepareSessionSwitch();
 				this.clearHookWidgets();
-				const result = await this.ctx.session.switchSession(sessionPath);
+				let modelFallbackWarning: string | undefined;
+				const result = await this.ctx.session.switchSession(sessionPath, {
+					onModelFallback: warning => {
+						modelFallbackWarning = warning;
+					},
+				});
 				if (!result) {
 					return { cancelled: true };
 				}
 				setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 				await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 				await this.ctx.reloadTodos();
+				if (modelFallbackWarning) this.ctx.showWarning(modelFallbackWarning);
 				return { cancelled: false };
 			},
 		};
 
-		extensionRunner.initialize(actions, contextActions, commandActions, uiContext, "tui");
+		extensionRunner.initialize(actions, contextActions, commandActions, enrichedUiContext, "tui");
 
 		// Subscribe to extension errors
 		extensionRunner.onError((error: ExtensionError) => {
@@ -440,17 +455,7 @@ export class ExtensionUiController {
 		}
 
 		const actions: ExtensionActions = {
-			sendMessage: (message, options) => {
-				const wasStreaming = this.ctx.session.isStreaming;
-				const normalized = normalizeCustomMessagePayload(message);
-				this.ctx.session
-					.sendCustomMessage(normalized, options)
-					.then(() => this.#applyCustomMessageDisplay(wasStreaming, normalized.display))
-					.catch((err: unknown) => {
-						const errorText = `Extension sendMessage failed: ${err instanceof Error ? err.message : String(err)}`;
-						this.ctx.showError(errorText);
-					});
-			},
+			sendMessage: this.#sendExtensionMessage,
 			sendUserMessage: this.#sendExtensionUserMessage,
 			appendEntry: (customType, data) => {
 				this.ctx.sessionManager.appendCustomEntry(customType, data);
@@ -562,17 +567,24 @@ export class ExtensionUiController {
 			switchSession: async sessionPath => {
 				await this.ctx.prepareSessionSwitch();
 				this.clearHookWidgets();
-				const result = await this.ctx.session.switchSession(sessionPath);
+				let modelFallbackWarning: string | undefined;
+				const result = await this.ctx.session.switchSession(sessionPath, {
+					onModelFallback: warning => {
+						modelFallbackWarning = warning;
+					},
+				});
 				if (!result) {
 					return { cancelled: true };
 				}
 				await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 				await this.ctx.reloadTodos();
+				if (modelFallbackWarning) this.ctx.showWarning(modelFallbackWarning);
 				return { cancelled: false };
 			},
 		};
 
-		extensionRunner.initialize(actions, contextActions, commandActions, uiContext, "tui");
+		const runnerUiContext = withTerminalLauncher(uiContext, _hasUI);
+		extensionRunner.initialize(actions, contextActions, commandActions, runnerUiContext, "tui");
 		this.#syncExtensionComposerShapes();
 	}
 
@@ -686,25 +698,38 @@ export class ExtensionUiController {
 		questions: ExtensionAskDialogQuestion[],
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<ExtensionAskDialogResult | undefined> {
-		this.#nextDialog = { family: "ask", kind: "ask", title: "Ask" };
+		this.#nextDialog = {
+			family: "ask",
+			kind: "ask",
+			title: "Ask",
+			convert: value => controlAnswerToAskResult(questions, value),
+		};
 		return this.#presentDialog<ExtensionAskDialogResult>(dialogOptions?.signal, settle => {
 			let promptEditor: HookEditorComponent | undefined;
 			let promptResolve: ((value: AskDialogPromptValue | undefined) => void) | undefined;
 			let closed = false;
 			const draftEditor = this.ctx.editor;
-			const inputGuard =
-				draftEditor.getText().length > 0
-					? {
-							isBlocked: () => draftEditor.getText().length > 0,
-							handleInput: (keyData: string) => draftEditor.handleDraftEdit(keyData),
-							hint: "Finish or clear the current prompt to answer",
-							// Show the draft's insertion cursor while it owns input; drop it
-							// once the draft clears and the ask controls take over.
-							syncPresentation: () => {
-								draftEditor.focused = draftEditor.getText().length > 0;
-							},
-						}
-					: undefined;
+			// The composer stays mounted beneath the question and keeps its draft:
+			// a non-empty draft owns typing until it is sent or cleared, and hiding
+			// the question hands typing to it (issue #303).
+			const inputGuard = {
+				isBlocked: () => draftEditor.getText().length > 0,
+				handleInput: (keyData: string) => draftEditor.handleDraftEdit(keyData),
+				hint: "Finish or clear the current prompt to answer",
+				// Show the draft's insertion cursor while it owns input; drop it
+				// once the draft clears and the ask controls take over.
+				syncPresentation: () => {
+					draftEditor.focused = draftEditor.getText().length > 0;
+				},
+			};
+			// Speech input must start, stop and deliver into the composer while a
+			// question is up, or a running recording could only end by cancelling it.
+			const passthrough = (keyData: string): boolean => {
+				for (const action of ASK_PASSTHROUGH_ACTIONS) {
+					if (getKeybindings().matches(keyData, action)) return this.ctx.runAppAction(action);
+				}
+				return false;
+			};
 
 			const restoreAskDialog = (): void => {
 				if (closed || !askDialog) return;
@@ -714,7 +739,7 @@ export class ExtensionUiController {
 				// initial presentation: the guard re-blocks whenever the draft is
 				// non-empty (e.g. a failed submit restored its text while a nested
 				// prompt was open), and routed input must land on a visible surface.
-				if (inputGuard) this.ctx.editorContainer.addChild(this.ctx.editor);
+				this.ctx.editorContainer.addChild(this.ctx.editor);
 				this.ctx.ui.setFocus(askDialog);
 				this.ctx.ui.requestRender();
 			};
@@ -790,11 +815,12 @@ export class ExtensionUiController {
 					onTimeout: dialogOptions?.onTimeout,
 					tui: this.ctx.ui,
 					inputGuard,
+					passthrough,
 				},
 			);
 			this.ctx.editorContainer.clear();
 			this.ctx.editorContainer.addChild(askDialog);
-			if (inputGuard) this.ctx.editorContainer.addChild(this.ctx.editor);
+			this.ctx.editorContainer.addChild(this.ctx.editor);
 			this.ctx.ui.setFocus(askDialog);
 			this.ctx.ui.requestRender();
 
@@ -1044,6 +1070,7 @@ export class ExtensionUiController {
 					checkedIndices: dialogOptions?.checkedIndices,
 					markableCount: dialogOptions?.markableCount,
 					maxVisible,
+					inline: dialogOptions?.inline,
 					slider: extra?.slider,
 				},
 			);
@@ -1069,7 +1096,11 @@ export class ExtensionUiController {
 	/**
 	 * Show a confirmation dialog for hooks.
 	 */
-	async showHookConfirm(title: string, message: string, dialogOptions?: ExtensionUIDialogOptions): Promise<boolean> {
+	async showHookConfirm(
+		title: string,
+		message: string,
+		dialogOptions?: InteractiveSelectorDialogOptions,
+	): Promise<boolean> {
 		const result = await this.showHookSelector(`${title}\n${message}`, ["Yes", "No"], dialogOptions);
 		return result === "Yes";
 	}
@@ -1189,6 +1220,7 @@ export class ExtensionUiController {
 		let editorReplaced = false;
 
 		const cleanup = () => {
+			if (component) this.ctx.hookCustomComponents.delete(component);
 			component?.dispose?.();
 			overlayHandle?.hide();
 			overlayHandle = undefined;
@@ -1227,6 +1259,7 @@ export class ExtensionUiController {
 					return;
 				}
 				component = c;
+				this.ctx.hookCustomComponents.add(component);
 				if (options?.overlay) {
 					const overlayOptions =
 						typeof options.overlayOptions === "function" ? options.overlayOptions() : options.overlayOptions;
@@ -1304,7 +1337,39 @@ export class ExtensionUiController {
 		await this.ctx.sessionManager.setSessionName(name, "user");
 	}
 
+	/**
+	 * Collab guest: the replica session only mirrors the host, and mirrored host
+	 * lifecycle events (`agent_end`, `turn_end`, …) reach guest extensions. An
+	 * extension reacting to them must not start or queue a turn on the replica —
+	 * it would run on the guest's local model and diverge from the host. Refuse
+	 * like typed prompts are refused (input-controller); true when dropped.
+	 */
+	#rejectGuestExtensionTurn(): boolean {
+		if (!this.ctx.collabGuest) return false;
+		this.ctx.showStatus("Extension-initiated turns are host-only during a collab session");
+		return true;
+	}
+
+	#sendExtensionMessage: SendMessageHandler = (message, options) => {
+		const startsTurn =
+			options?.triggerTurn === true ||
+			options?.deliverAs === "steer" ||
+			options?.deliverAs === "followUp" ||
+			options?.deliverAs === "aside";
+		if (startsTurn && this.#rejectGuestExtensionTurn()) return;
+		const wasStreaming = this.ctx.session.isStreaming;
+		const normalized = normalizeCustomMessagePayload(message);
+		this.ctx.session
+			.sendCustomMessage(normalized, options)
+			.then(() => this.#applyCustomMessageDisplay(wasStreaming, normalized.display))
+			.catch((err: unknown) => {
+				this.ctx.showError(`Extension sendMessage failed: ${err instanceof Error ? err.message : String(err)}`);
+			});
+	};
+
+	/** Every `sendUserMessage` form prompts or queues a user turn (see `AgentSession.sendUserMessage`). */
 	#sendExtensionUserMessage: SendUserMessageHandler = (content, options) => {
+		if (this.#rejectGuestExtensionTurn()) return;
 		this.ctx.session.sendUserMessage(content, options).catch((err: unknown) => {
 			this.ctx.showError(`Extension sendUserMessage failed: ${err instanceof Error ? err.message : String(err)}`);
 		});
@@ -1343,9 +1408,12 @@ export class ExtensionUiController {
 			kind: string;
 			title: string;
 			schema?: unknown;
+			convert?: (value: unknown) => unknown;
 		},
 	): Promise<T | undefined> {
 		const { promise, resolve, reject } = Promise.withResolvers<T | undefined>();
+		const described = meta ?? this.#nextDialog;
+		this.#nextDialog = undefined;
 		let settled = false;
 		let started = false;
 		let hide: (() => void) | undefined;
@@ -1383,8 +1451,6 @@ export class ExtensionUiController {
 			started = true;
 			this.#dialogActive = true;
 			const registry = dialogRegistry();
-			const described = meta ?? this.#nextDialog;
-			this.#nextDialog = undefined;
 			const opened = described
 				? registry?.open({
 						family: described.family,
@@ -1393,7 +1459,13 @@ export class ExtensionUiController {
 						schema: described.schema,
 						openedBy: actor ? "control" : "extension",
 						answer: value => {
-							settle(value as T);
+							if (value === "cancel") {
+								settle(undefined);
+								return true;
+							}
+							const converted = described.convert ? described.convert(value) : value;
+							if (described.convert && converted === undefined) return false;
+							settle(converted as T);
 							return true;
 						},
 						cancel: () => settle(undefined),

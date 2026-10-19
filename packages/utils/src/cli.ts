@@ -62,6 +62,8 @@ export interface ArgDescriptor {
 	required?: boolean;
 	multiple?: boolean;
 	options?: readonly string[];
+	/** Discoverable choices for an open argument (unlike options, not a constraint). */
+	suggestions?: readonly string[];
 }
 
 interface FlagInput {
@@ -78,6 +80,7 @@ interface ArgInput {
 	required?: boolean;
 	multiple?: boolean;
 	options?: readonly string[];
+	suggestions?: readonly string[];
 }
 
 /** Builders that match the `Flags.*()` / `Args.*()` API from oclif. */
@@ -346,7 +349,9 @@ function formatUsageArgs(Cmd: CommandCtor): string {
 /** Build the single USAGE line for a command (without the leading label). */
 export function commandUsageLine(bin: string, id: string, Cmd: CommandCtor): string {
 	const hasFlags = Object.keys(Cmd.flags ?? {}).length > 0;
-	const subcommands = Cmd.subcommands ? ` <${Object.keys(Cmd.subcommands).join("|")}>` : "";
+	const childNames = Object.keys(Cmd.subcommands ?? {});
+	const subcommands =
+		childNames.length && Object.keys(Cmd.args ?? {}).length === 0 ? ` <${childNames.join("|")}>` : "";
 	return `$ ${bin} ${id}${subcommands}${formatUsageArgs(Cmd)}${hasFlags ? " [FLAGS]" : ""}`;
 }
 
@@ -356,7 +361,9 @@ export function renderCommandHelp(bin: string, id: string, Cmd: CommandCtor): vo
 	if (Cmd.description) lines.push(`${Cmd.description}\n`);
 	lines.push("USAGE");
 	lines.push(`  ${commandUsageLine(bin, id, Cmd)}\n`);
-	if (Cmd.subcommands) lines.push(`Run \`${bin} ${id} <subcommand> --help\` for subcommand flags.\n`);
+	if (Object.keys(Cmd.subcommands ?? {}).length) {
+		lines.push(`Run \`${bin} ${id} <subcommand> --help\` for subcommand flags.\n`);
+	}
 	renderCommandBody(lines, Cmd);
 	process.stdout.write(lines.join("\n"));
 }
@@ -374,6 +381,7 @@ function renderCommandBody(lines: string[], command: CommandMetadata): void {
 			const parts = [name.toUpperCase().padEnd(maxLen + 2)];
 			if (desc.description) parts.push(desc.description);
 			if (desc.options) parts.push(`(${[...desc.options].join("|")})`);
+			if (desc.suggestions) parts.push(`(e.g. ${desc.suggestions.join("|")})`);
 			lines.push(`  ${parts.join(" ")}`);
 		}
 		lines.push("");
@@ -522,11 +530,30 @@ interface ResolvedTarget {
 
 /** Load the entry, then descend into a nested subcommand named by the first argv token. */
 async function resolveTarget(entry: CommandEntry, argv: string[]): Promise<ResolvedTarget> {
-	const Cmd = await loadEntry(entry);
-	const name = argv[0];
-	const load = name && Cmd.subcommands && Object.hasOwn(Cmd.subcommands, name) ? Cmd.subcommands[name] : undefined;
-	if (!load) return { id: entry.name, Cmd, argv };
-	return { id: `${entry.name} ${name}`, Cmd: await load(), argv: argv.slice(1) };
+	let Cmd = await loadEntry(entry);
+	let id = entry.name;
+	while (argv[0] && Cmd.subcommands) {
+		const name = argv[0];
+		let childName = name;
+		let child: CommandCtor | undefined;
+		if (Object.hasOwn(Cmd.subcommands, name)) {
+			child = await Cmd.subcommands[name]();
+		} else {
+			for (const [canonical, load] of Object.entries(Cmd.subcommands)) {
+				const candidate = await load();
+				if (candidate.aliases?.includes(name)) {
+					childName = canonical;
+					child = candidate;
+					break;
+				}
+			}
+		}
+		if (!child) break;
+		id += ` ${childName}`;
+		Cmd = child;
+		argv = argv.slice(1);
+	}
+	return { id, Cmd, argv };
 }
 
 /** Load one command module, leaving streaming markers around the import. */

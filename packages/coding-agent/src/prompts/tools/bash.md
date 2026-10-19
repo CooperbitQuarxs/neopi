@@ -2,10 +2,10 @@ Persistent shell: one fact command/pipeline; dependencies use `&&`.
 {{#if hasEval}}Scripts/heredocs/`$(…)`/complex pipelines → `eval`.{{else}}Scripts/heredocs/`$(…)`/complex flow → dedicated tool or checked-in script.{{/if}}
 `cwd`, not `cd`; `pty` only interactive.
 Internal URIs work as paths for builtins/coreutils, redirects, globs.
-{{#if asyncEnabled}}`async` defers finite results; timeout unchanged.{{/if}}
+{{#if asyncEnabled}}`async` defers finite results but keeps the deadline (default {{defaultTimeoutSec}}s); `timeout: 0` for watchers and long jobs.{{/if}}
 No `head`/`tail`/redirection; output trunc by default, full result at `artifact://<id>`.
 {{#if hasLaunch}}Long-lived services: unique name; ready requires name; no async/timeout; pty defaults true. ready needs log regex or port (both if given); host defaults 127.0.0.1, ready.timeout 30s.{{/if}}
-{{#if autoBackgroundEnabled}}Background results follow; NEVER poll; foreground wait unchanged.{{/if}}
+{{#if autoBackgroundEnabled}}Non-`pty` calls still running after {{autoBackgroundSeconds}}s (or 1s before `timeout`, if sooner) usually move to background job `bg_N` and keep running to `timeout` (not when the client terminal runs the command or the job cap is reached); the result arrives automatically as a follow-up message. NEVER poll.{{/if}}
 Tool shells disable editors and credential prompts, but retain the host `TERM`. `OMP_HOST_EDITOR`, `OMP_HOST_VISUAL`, `OMP_HOST_SSH_ASKPASS`, `OMP_HOST_SUDO_ASKPASS`, and `OMP_HOST_TERM` expose launcher values when present.
 For POSIX shells only, before starting a tmux server/pane or sibling TUI, use a subshell: `( set -- "$SHELL"; . "$OMP_HOST_ENV_FILE"; "$1" -lc '<launch command>' )`. Capture the resolved POSIX shell before sourcing because restoration may unset a synthetic `SHELL` absent from the launcher. This recipe is not for cmd.exe or PowerShell: they cannot source this POSIX file and must not receive `-lc`; use a POSIX shell for this restoration workflow. The private 0600 POSIX file restores the original launcher environment, including unsetting tool-only overrides. Do not print or share it: it may contain credentials. It is removed when this npi process exits. This does not repair an already-poisoned tmux server's environment.
 Capture precedes profile bootstrap without loading profile dotenv; profile-derived runtime variables are not launcher values. When the runtime cannot read the pre-dotenv launch environment, values matching project dotenv files are excluded conservatively from the snapshot.

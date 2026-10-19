@@ -9,6 +9,7 @@ import {
 } from "@oh-my-pi/pi-tui/overlays/agent-hub-projection";
 import type { AgentTranscriptSource } from "@oh-my-pi/pi-tui/overlays/agent-transcript-viewer";
 import type { ObservableSession, SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
+import { getBlobsDir } from "@oh-my-pi/pi-utils";
 import { AgentActivityIndex } from "../activity";
 import { getRoleInfo } from "../config/model-roles";
 import type { Settings } from "../config/settings";
@@ -16,13 +17,26 @@ import { IrcBus } from "../irc/bus";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { registerPersistedSubagents, sessionFileBelongsToRoot } from "../registry/persisted-agents";
-import { parseSessionEntries } from "../session/session-loader";
+import { BlobStore } from "../session/blob-store";
+import { normalizeAssistantUsage, parseSessionEntries, resolveBlobRefsInEntriesSync } from "../session/session-loader";
 
-/** Filesystem and parser used by local and host-backed transcript viewers. */
+/**
+ * Filesystem and parser used by local and host-backed transcript viewers.
+ * Persistence moves large images to the blob store; the parser restores them
+ * so the viewer renders the image instead of a text placeholder for the ref.
+ */
 export const agentTranscriptSource: AgentTranscriptSource = {
 	fs,
-	parseEntries: text =>
-		parseSessionEntries(text).filter(entry => entry.type === "message" || entry.type === "model_change"),
+	parseEntries: text => {
+		const entries = parseSessionEntries(text).filter(
+			entry => entry.type === "message" || entry.type === "model_change",
+		);
+		resolveBlobRefsInEntriesSync(entries, new BlobStore(getBlobsDir()));
+		for (const entry of entries) {
+			if (entry.type === "message" && entry.message.role === "assistant") normalizeAssistantUsage(entry.message);
+		}
+		return entries;
+	},
 };
 
 /** Host services used by the roster, without exposing runtime implementation to tui. */

@@ -13,8 +13,13 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins";
 import { MarketplaceManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { SessionDumpArchive } from "@oh-my-pi/pi-coding-agent/session/session-dump-format";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
+import {
+	BUILTIN_SLASH_COMMANDS,
+	lookupBuiltinSlashCommand,
+} from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { getProjectDir, removeWithRetries, setProjectDir } from "@oh-my-pi/pi-utils";
 
 import { cfgBrowserEnabled, cfgBrowserHeadless } from "@oh-my-pi/pi-coding-agent/tools/browser/settings";
@@ -30,6 +35,7 @@ interface FakeAcpBuiltinSession {
 	sessionId: string;
 	sessionName: string;
 	titleGenerationSignal: AbortSignal;
+	renameTitle(title?: string): Promise<string | null | undefined>;
 	_todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
 	_switchedTo: string | undefined;
 	_movedFromEmptySessionFile: string | undefined;
@@ -40,8 +46,10 @@ interface FakeAcpBuiltinSession {
 	setForcedToolChoice(toolName: string): void;
 	fetchUsageReports?: () => Promise<unknown>;
 	getAsyncJobSnapshot: (opts?: { recentLimit?: number }) => { running: unknown[]; recent: unknown[] } | null;
+	cancelAsyncJob: (id: string) => boolean;
 	formatSessionAsText: () => string;
 	dumpLlmRequestToTmpDir: () => Promise<string | undefined>;
+	dumpSessionArchiveToTmpDir: () => Promise<SessionDumpArchive | undefined>;
 	getLastAssistantText: () => string | undefined;
 	messages: unknown[];
 	settings: Settings;
@@ -91,6 +99,10 @@ function createRuntime() {
 		sessionId: "fake-session-id",
 		sessionName: "Fake Session",
 		titleGenerationSignal: new AbortController().signal,
+		// A typed title passes through uncarded; a bare /rename has nothing to generate from.
+		async renameTitle(title?: string) {
+			return title || null;
+		},
 		_todoPhases: [],
 		_switchedTo: undefined,
 		_movedFromEmptySessionFile: undefined,
@@ -163,8 +175,10 @@ function createRuntime() {
 		async rebindMixturesForCwd() {},
 		commitMixtureWorkspaceMove() {},
 		getAsyncJobSnapshot: () => null,
+		cancelAsyncJob: () => false,
 		formatSessionAsText: () => "",
 		dumpLlmRequestToTmpDir: async () => undefined,
+		dumpSessionArchiveToTmpDir: async () => undefined,
 		getLastAssistantText: () => undefined,
 		messages: [],
 		model: undefined,
@@ -281,6 +295,21 @@ describe("ACP builtin slash commands", () => {
 		expect(await executeAcpBuiltinSlashCommand("/chain configure", runtime)).toEqual({ consumed: true });
 		expect(output[0]).toContain("interactive TUI");
 		expect(await executeAcpBuiltinSlashCommand("/chaining off", runtime)).toBe(false);
+	});
+
+	it("dispatches and completes /moa and no longer recognizes the old /mixture command", async () => {
+		const { output, runtime } = createRuntime();
+		expect(await executeAcpBuiltinSlashCommand("/moa configure", runtime)).toEqual({ consumed: true });
+		expect(output).toEqual(["/moa configure requires the interactive TUI."]);
+		expect(await executeAcpBuiltinSlashCommand("/mixture list", runtime)).toBe(false);
+
+		expect(lookupBuiltinSlashCommand("moa")?.name).toBe("moa");
+		expect(lookupBuiltinSlashCommand("mixture")).toBeUndefined();
+		expect(BUILTIN_SLASH_COMMANDS.some(command => command.name === "mixture")).toBe(false);
+		const moa = BUILTIN_SLASH_COMMANDS.find(command => command.name === "moa");
+		expect(moa?.aliases).toBeUndefined();
+		const completions = await moa?.getArgumentCompletions?.("re");
+		expect(completions?.map(item => item.value)).toEqual(["reset "]);
 	});
 
 	it("toggles extended context with explicit controls and reports state", async () => {
@@ -556,7 +585,51 @@ describe("ACP builtin slash commands", () => {
 		expect(output[0]).not.toContain(command);
 		expect(output[1]).toContain(command);
 		expect(output[1]).toContain("build done");
-		expect(output[2]).toContain("Usage: /jobs [full]");
+		expect(output[2]).toContain("Usage: /jobs [full|kill <id>|kill all]");
+	});
+
+	it("jobs kill: collapses tabs/newlines and bounds the echoed id", async () => {
+		const { output, runtime } = createRuntime();
+		runtime.session.getAsyncJobSnapshot = () => ({
+			running: [],
+			recent: [],
+			delivery: { queued: 0, delivering: false, pendingJobIds: [] },
+		});
+
+		await executeAcpBuiltinSlashCommand(`/jobs kill "a\tb\nc${"x".repeat(200)}"`, runtime);
+
+		const line = output[0] as string;
+		expect(line).not.toMatch(/[\t\n]/);
+		expect(line).toContain("a b c");
+		expect(line).not.toContain("x".repeat(70));
+	});
+
+	it("jobs kill <id>: cancels the running job and reports it", async () => {
+		const { output, runtime } = createRuntime();
+		const cancelled: string[] = [];
+		runtime.session.getAsyncJobSnapshot = () => ({
+			running: [{ id: "j1", type: "bash", status: "running", label: "npm install", startTime: Date.now() }],
+			recent: [],
+			delivery: { queued: 0, delivering: false, pendingJobIds: [] },
+		});
+		runtime.session.cancelAsyncJob = (id: string) => {
+			cancelled.push(id);
+			return true;
+		};
+
+		const result = await executeAcpBuiltinSlashCommand("/jobs kill j1", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(cancelled).toEqual(["j1"]);
+		expect(output[0]).toContain("Cancelled background job j1");
+	});
+
+	it("jobs kill: missing id prints usage", async () => {
+		const { output, runtime } = createRuntime();
+
+		await executeAcpBuiltinSlashCommand("/jobs kill", runtime);
+
+		expect(output[0]).toBe("Usage: /jobs kill <id>|all");
 	});
 
 	it("jobs full: strips control sequences and fences the command", async () => {
@@ -608,6 +681,27 @@ describe("ACP builtin slash commands", () => {
 
 		expect(result).toEqual({ consumed: true });
 		expect(output[0]).toContain("No messages");
+	});
+
+	it("dump all: reports the archive and reaches subagents only via the all argument", async () => {
+		const { output, runtime } = createRuntime();
+		runtime.session.formatSessionAsText = () => "Session content here";
+		runtime.session.dumpSessionArchiveToTmpDir = async () => ({
+			path: "/tmp/omp-dump-test.zip",
+			files: ["session.md", "llm-request.json", "subagents/Scout.md"],
+			subagentCount: 1,
+			subagentError: "EACCES: permission denied",
+		});
+
+		await executeAcpBuiltinSlashCommand("/dump all", runtime);
+		await executeAcpBuiltinSlashCommand("/dump", runtime);
+		await executeAcpBuiltinSlashCommand("/dump everything", runtime);
+
+		expect(output[0]).toContain("Session dump archive: /tmp/omp-dump-test.zip");
+		expect(output[0]).toContain("  subagents/Scout.md");
+		expect(output[0]).toContain("Subagent transcripts unavailable: EACCES: permission denied");
+		expect(output[1]).toBe("Session content here");
+		expect(output[2]).toContain("Usage: /dump [all|anon]");
 	});
 
 	// /model
@@ -1098,6 +1192,9 @@ describe("wave 3 commands", () => {
 			await git("init", "-q", "-b", "main");
 			await git("config", "user.email", "t@example.com");
 			await git("config", "user.name", "t");
+			// The reset source is compared byte-for-byte; Git for Windows'
+			// system `core.autocrlf=true` would restore it as CRLF.
+			await git("config", "core.autocrlf", "false");
 			await Bun.write(path.join(repoDir, "tracked.txt"), "committed\n");
 			await Bun.write(path.join(repoDir, ".gitignore"), "build/\n");
 			await git("add", "-A");
@@ -1501,7 +1598,7 @@ describe("wave 5 — adapters and polish", () => {
 		(session as unknown as Record<string, unknown>).systemPrompt = ["You are a helpful assistant."];
 		session.messages = [
 			{ role: "user", content: "Hello, how are you?" },
-			{ role: "assistant", content: "I am doing well." },
+			{ role: "assistant", content: [{ type: "text", text: "I am doing well." }] },
 		];
 		const result = await executeAcpBuiltinSlashCommand("/context", runtime);
 		expect(result).toEqual({ consumed: true });

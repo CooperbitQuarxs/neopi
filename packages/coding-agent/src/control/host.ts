@@ -14,7 +14,7 @@ import { readSetting, unsetSetting, writeSetting } from "./settings-adapter";
 import { RpcPromptResults } from "../modes/rpc/rpc-prompt-results";
 import { RpcRoles } from "../modes/rpc/rpc-roles";
 import { RPC_CAPABILITIES } from "../modes/rpc/rpc-capabilities";
-import type { RpcCommand } from "../modes/rpc/rpc-types";
+import type { RpcCommand, RpcSubagentSubscriptionLevel } from "../modes/rpc/rpc-types";
 import type { AgentSession } from "../session/agent-session";
 import { AgentRegistry } from "../registry/agent-registry";
 import { executeSend } from "../irc/messaging";
@@ -23,12 +23,16 @@ import { currentControlActor, runAsControlActor } from "./actor";
 import { HostBudget, MAX_KEYS_BYTES, workClass } from "./budget";
 import { RPC_COMMAND_TYPES } from "./parity";
 import { encodeKeyId, encodeSgrMouse } from "./keys";
+import { ControlMonitorService, type MonitorGrantInfo } from "./monitor-service";
 import type { ControlPresenter, RewindOutcome } from "./presenter";
 import { newControlInstanceId, publishControlEndpoint, type ControlPublication } from "./registry";
 import { ControlServer, type ControlConnection } from "./server";
 import { APPROVAL_GATED_SETTINGS, cfgControlApprovals, cfgControlSecretInput } from "./settings";
 import { RpcPlanModeController } from "../modes/rpc/rpc-plan-mode";
 import { RpcSessionSettleWatcher } from "../modes/rpc/rpc-session-settle";
+import { buildRpcSessionState, CONTROL_QUEUE_LIMIT, copyQueue } from "../modes/rpc/rpc-session-state";
+import { type RpcSubagentBus, RpcSubagentRegistry } from "../modes/rpc/rpc-subagents";
+import type { EventBus } from "../utils/event-bus";
 import { RpcSessionEventForwarder } from "../modes/rpc/rpc-session-events";
 import { RpcHostToolBridge } from "../modes/rpc/host-tools";
 import type { RpcPendingExtensionRequests } from "../modes/rpc/rpc-mode";
@@ -56,6 +60,13 @@ export interface ControlHostOptions {
 	/** Registry directory override (tests). */
 	dir?: string;
 	tmuxPane?: string | null;
+	/** Subagent observability bus behind `get_subagents` and subagent event streaming. */
+	subagentEventBus?: EventBus;
+	/**
+	 * `--model` selector the process launched with (absent with `--provider`).
+	 * A role selector seeds `activeRole` in snapshots, as it does for RPC `get_state`.
+	 */
+	launchModel?: string;
 }
 
 /** Field that failed an optimistic revision check, if any. */
@@ -121,6 +132,8 @@ export class ControlHost {
 	readonly budget = new HostBudget();
 	readonly roles: RpcRoles;
 	readonly promptResults: RpcPromptResults;
+	/** Narrow per-agent capabilities for monitor panes (#345). */
+	readonly monitor: ControlMonitorService;
 	presenter: ControlPresenter | undefined;
 	publication: ControlPublication | undefined;
 	readonly #options: ControlHostOptions;
@@ -134,6 +147,10 @@ export class ControlHost {
 	#approvalUiOpen = false;
 	#planMode: RpcPlanModeController | undefined;
 	#settleWatcher: RpcSessionSettleWatcher | undefined;
+	/** Shared subagent roster, so a fresh connection sees subagents started before it opened. */
+	#subagents: RpcSubagentRegistry | undefined;
+	/** Per-connection `set_subagent_subscription` level; absent means `off`. */
+	readonly #subagentLevels = new Map<ControlConnection, RpcSubagentSubscriptionLevel>();
 	readonly #extensionTracker = new RpcExtensionUserMessageTracker();
 	#runOwnerSeq = 0;
 	#revisions: Revisions = {
@@ -153,8 +170,13 @@ export class ControlHost {
 
 	constructor(options: ControlHostOptions) {
 		this.#options = options;
-		this.roles = new RpcRoles(options.session);
+		this.roles = new RpcRoles(options.session, options.launchModel);
 		this.promptResults = new RpcPromptResults(options.session, () => {});
+		this.monitor = new ControlMonitorService({
+			session: options.session,
+			registry: AgentRegistry.global(),
+			generation: () => this.#revisions.generation,
+		});
 		hosts.set(options.session, this);
 	}
 
@@ -176,6 +198,7 @@ export class ControlHost {
 	}
 	bumpGeneration(): void {
 		this.#revisions.generation++;
+		this.monitor.recheck();
 	}
 	bumpPaint(): void {
 		this.#revisions.paint++;
@@ -190,6 +213,14 @@ export class ControlHost {
 	async start(): Promise<void> {
 		liveHosts.add(this);
 		const session = this.#options.session;
+		const subagentEventBus = this.#options.subagentEventBus;
+		if (subagentEventBus && !this.#subagents) {
+			this.#subagents = new RpcSubagentRegistry(subagentEventBus, frame => {
+				for (const [connection, level] of this.#subagentLevels) {
+					if (level === "events" || frame.type !== "subagent_event") connection.write(frame);
+				}
+			});
+		}
 		this.#seenSessionId = session.sessionId;
 		this.#identityKey = this.#currentIdentityKey();
 		const connectionHost = {
@@ -202,6 +233,7 @@ export class ControlHost {
 				this.#dispatch(connection, command),
 			onAuthenticated: (connection: ControlConnection) => {
 				this.#connections.add(connection);
+				if (connection.monitor) this.monitor.attach(connection, connection.monitor);
 				connection.write({
 					type: "ready",
 					protocolVersion: 1,
@@ -215,7 +247,11 @@ export class ControlHost {
 				this.#handlers.delete(connection);
 				this.#forwarders.delete(connection);
 				this.#closeBridges(connection);
+				this.#setSubagentLevel(connection, "off");
+				this.monitor.detach(connection);
 			},
+			authenticateMonitor: (capability: string) =>
+				this.#closed ? undefined : this.monitor.authenticate(capability),
 		};
 		const server = new ControlServer({ metadata: { instanceId: this.instanceId }, host: connectionHost });
 		if (server.disabled) {
@@ -254,7 +290,17 @@ export class ControlHost {
 			if (event.type === "model_changed") {
 				this.#revisions.model = session.model ? `${session.model.provider}/${session.model.id}` : null;
 			}
-			for (const forwarder of this.#forwarders.values()) forwarder.forward(event);
+			if (this.#forwarders.size === 0) return;
+			// Same cap as the snapshots: a queue past the frame limit would replace the update with an error.
+			const forwarded =
+				event.type === "queue_update"
+					? {
+							...event,
+							steering: copyQueue(event.steering, CONTROL_QUEUE_LIMIT),
+							followUp: copyQueue(event.followUp, CONTROL_QUEUE_LIMIT),
+						}
+					: event;
+			for (const forwarder of this.#forwarders.values()) forwarder.forward(forwarded);
 		});
 	}
 
@@ -279,7 +325,12 @@ export class ControlHost {
 		});
 	}
 
-	snapshot(): ControlSnapshot {
+	/**
+	 * Host snapshot. `session` is the root session's RPC state, or, for `"view"`,
+	 * the state of the subagent the pane is focused on (root when none is).
+	 * Dump fields are omitted so the snapshot stays one frame.
+	 */
+	snapshot(target: "root" | "view" = "root"): ControlSnapshot {
 		const session = this.#options.session;
 		const presenter = this.presenter;
 		return {
@@ -293,7 +344,7 @@ export class ControlHost {
 			tmux: { pane: this.#options.tmuxPane ?? process.env.TMUX_PANE ?? null, session: null, window: null },
 			cwd: session.sessionManager.getCwd(),
 			title: session.sessionName ?? null,
-			session: null,
+			...this.#snapshotSession(target),
 			busy: {
 				streaming: session.isStreaming,
 				compacting: session.isCompacting,
@@ -306,16 +357,16 @@ export class ControlHost {
 				? {
 						focus: null,
 						overlays: 0,
-						focusedAgent: null,
+						focusedAgent: presenter.viewTarget?.()?.agentId ?? null,
 						liveDestination: null,
 						replMode: null,
 						draftLength: presenter.draft().text.length,
 					}
 				: null,
 			modes: {
-				plan: false,
+				plan: session.getPlanModeState()?.enabled === true,
 				chat: session.chatMode?.mode ?? "off",
-				goal: false,
+				goal: session.getGoalModeState()?.enabled === true,
 				vibe: false,
 				live: false,
 				repl: false,
@@ -326,6 +377,47 @@ export class ControlHost {
 			hosts: [{ kind: this.#options.role, canPresent: presenter !== undefined, canApprove: true }],
 			approvals: { controlAllowed: cfgControlApprovals.get(session.settings) === true, pending: 0 },
 			exemptions: [...CONTROL_EXEMPTIONS],
+		};
+	}
+
+	#snapshotSession(target: "root" | "view"): Pick<ControlSnapshot, "session" | "root"> {
+		const root = this.#options.session;
+		const viewed = target === "view" ? this.presenter?.viewTarget?.() : undefined;
+		if (viewed) {
+			return {
+				session: buildRpcSessionState(viewed.session, { includeDump: false, queueLimit: CONTROL_QUEUE_LIMIT }),
+				root: { sessionId: root.sessionId, generation: this.#revisions.generation },
+			};
+		}
+		return {
+			session: buildRpcSessionState(root, {
+				activeRole: this.roles.activeRole(),
+				includeDump: false,
+				queueLimit: CONTROL_QUEUE_LIMIT,
+			}),
+		};
+	}
+
+	/** Record a connection's subagent subscription and run the shared registry at the widest one. */
+	#setSubagentLevel(connection: ControlConnection, level: RpcSubagentSubscriptionLevel): void {
+		if (level === "off") this.#subagentLevels.delete(connection);
+		else this.#subagentLevels.set(connection, level);
+		const levels = new Set(this.#subagentLevels.values());
+		this.#subagents?.setSubscriptionLevel(
+			levels.has("events") ? "events" : levels.has("progress") ? "progress" : "off",
+		);
+	}
+
+	/** This connection's view of the shared subagent registry, or undefined without a bus. */
+	#subagentBusFor(connection: ControlConnection): RpcSubagentBus | undefined {
+		const registry = this.#subagents;
+		if (!registry) return undefined;
+		return {
+			clear: () => registry.clear(),
+			getSubagents: () => registry.getSubagents(),
+			resolveSessionFile: selector => registry.resolveSessionFile(selector),
+			setSubscriptionLevel: level => this.#setSubagentLevel(connection, level),
+			getSubscriptionLevel: () => this.#subagentLevels.get(connection) ?? "off",
 		};
 	}
 
@@ -340,6 +432,10 @@ export class ControlHost {
 		AgentRegistry.global().unregister(this.#mailboxId());
 		await this.publication?.close();
 		hosts.delete(this.#options.session);
+		this.#subagentLevels.clear();
+		this.monitor.dispose();
+		this.#subagents?.dispose();
+		this.#subagents = undefined;
 	}
 
 	async #dispatch(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
@@ -356,6 +452,15 @@ export class ControlHost {
 
 	async #dispatchInner(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
 		const type = String(frame.type ?? "");
+		// A monitor connection is scoped to its one grant: nothing below this line is reachable from it.
+		if (connection.monitor) {
+			if (type === "bye") {
+				connection.close("bye");
+				return;
+			}
+			this.#reply(connection, frame, await this.monitor.handle(connection, connection.monitor, frame));
+			return;
+		}
 		if (connection.probe && type !== "get_status" && type !== "state" && type !== "bye") {
 			this.#reply(connection, frame, {
 				success: false,
@@ -493,7 +598,7 @@ export class ControlHost {
 			onPromptError: (id, command) => promptError => output(error(id, command, promptError.message)),
 			extensionUserMessageTracker: this.#extensionTracker,
 			trackBackground: () => {},
-			subagentRegistry: undefined,
+			subagentRegistry: this.#subagentBusFor(connection),
 			planMode,
 			settleWatcher,
 			rpcRoles: this.roles,
@@ -559,7 +664,10 @@ export class ControlHost {
 		switch (type) {
 			case "get_status":
 			case "state":
-				this.#reply(connection, frame, { success: true, data: this.snapshot() });
+				this.#reply(connection, frame, {
+					success: true,
+					data: this.snapshot(frame.target === "view" ? "view" : "root"),
+				});
 				return;
 			case "subscribe":
 				this.#subscribed.add(connection);
@@ -808,6 +916,22 @@ export class ControlHost {
 			case "agents":
 				await this.#agents(connection, frame);
 				return;
+			case "monitor_grant": {
+				// A full (token) connection is owner-equivalent; it may mint a pane's narrow capability.
+				let data: MonitorGrantInfo;
+				try {
+					data = this.monitor.grant(String(frame.agentId ?? ""));
+				} catch (error) {
+					this.#reply(connection, frame, {
+						success: false,
+						error: error instanceof Error ? error.message : String(error),
+						code: "unknown_agent",
+					});
+					return;
+				}
+				this.#reply(connection, frame, { success: true, data });
+				return;
+			}
 			case "cycle_role_model": {
 				if (needTui()) return;
 				const direction = frame.direction === "backward" ? "app.model.cycleBackward" : "app.model.cycleForward";

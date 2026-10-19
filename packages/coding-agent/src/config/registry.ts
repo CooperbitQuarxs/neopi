@@ -56,8 +56,10 @@ export interface UiString extends UiBase {
 }
 
 export interface UiArray extends UiBase {
-	/** Membership choices. Without options, an array setting has no UI representation (config-file only). */
+	/** Membership choices. Without options or a JSON editor, the array stays config-file only. */
 	options?: ReadonlyArray<SubmenuOption>;
+	/** Opt in to free-form JSON editing instead of a membership picker. */
+	editor?: "json";
 	/** Selection order is meaningful; the editor renders positions and supports reordering. */
 	ordered?: boolean;
 }
@@ -155,7 +157,7 @@ export interface ArrayDefinition<T = unknown> extends DefinitionBase {
 	 * segment"). Writes naming an unknown entry are rejected; configured values that already contain
 	 * one load unchanged with a single warning per entry, so a retired id never breaks startup.
 	 */
-	items?: { values: readonly string[]; label: string };
+	items?: { values: readonly string[]; accepts?: (value: string) => boolean; label: string };
 	ui?: UiArray;
 }
 
@@ -702,7 +704,7 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 		if (!items || !Array.isArray(value)) return [];
 		const unknown = new Set<string>();
 		for (const entry of value) {
-			if (!items.values.includes(entry))
+			if (!items.values.includes(entry) && !(typeof entry === "string" && items.accepts?.(entry)))
 				unknown.add(typeof entry === "string" ? JSON.stringify(entry) : String(entry));
 		}
 		return [...unknown];

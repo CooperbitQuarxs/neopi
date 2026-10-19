@@ -61,10 +61,16 @@ function isUsageWindowBoundary(entry: SessionEntry): boolean {
 }
 
 /** Branch entries belonging to the same active transcript window as `agent.state.messages`. */
-function activeWindowEntries(branch: SessionEntry[]): SessionEntry[] {
+function activeWindowEntries(branch: readonly SessionEntry[]): readonly SessionEntry[] {
 	const latestCompaction = getLatestCompactionEntry(branch);
 	const compactionIndex = latestCompaction ? branch.lastIndexOf(latestCompaction) : -1;
-	const resetIndex = branch.reduce((latest, entry, index) => (entry.type === "reset_boundary" ? index : latest), -1);
+	let resetIndex = -1;
+	for (let index = branch.length - 1; index > compactionIndex; index--) {
+		if (branch[index].type === "reset_boundary") {
+			resetIndex = index;
+			break;
+		}
+	}
 	let startIndex = 0;
 	if (resetIndex > compactionIndex) {
 		startIndex = resetIndex + 1;
@@ -74,6 +80,13 @@ function activeWindowEntries(branch: SessionEntry[]): SessionEntry[] {
 		while (startIndex > 0 && !isUsageWindowBoundary(branch[startIndex - 1])) startIndex--;
 	}
 	return branch.slice(startIndex);
+}
+
+/** Model calls belonging to the same active transcript window as `agent.state.messages`. */
+function forEachActiveModelUsage(branch: readonly SessionEntry[], visit: (usage: Usage) => void): void {
+	for (const entry of activeWindowEntries(branch)) {
+		if (entry.type === "model_usage") visit(entry.usage);
+	}
 }
 
 /**
@@ -129,6 +142,33 @@ export class SessionStatsTracker {
 			this.#tokenizer.countMessages(activeMessages.slice(tailFromIndex)) +
 			pendingTokens
 		);
+	}
+
+	/**
+	 * Token totals of {@link getSessionStats} without the message counts or the
+	 * context breakdown — for per-turn accounting (goal budgets) that only
+	 * needs the counters.
+	 */
+	getTokenTotals(): SessionStats["tokens"] {
+		const tokens = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+		const addUsage = (usage: Usage): void => {
+			tokens.input += usage.input;
+			tokens.output += usage.output;
+			tokens.reasoning += usage.reasoningTokens ?? 0;
+			tokens.cacheRead += usage.cacheRead;
+			tokens.cacheWrite += usage.cacheWrite;
+			tokens.total += usage.totalTokens;
+		};
+		for (const message of this.#host.agent.state.messages) {
+			if (message.role === "assistant") {
+				if (message.usage) addUsage(message.usage);
+			} else if (message.role === "toolResult" && message.toolName === "task") {
+				const usage = taskToolUsage(message.details);
+				if (usage) addUsage(usage);
+			}
+		}
+		forEachActiveModelUsage(this.#host.sessionManager.getBranchView(), addUsage);
+		return tokens;
 	}
 
 	/** Returns aggregate message, token, and cost statistics for the session. */
@@ -192,7 +232,7 @@ export class SessionStatsTracker {
 				}
 			}
 		}
-		const window = activeWindowEntries(this.#host.sessionManager.getBranch());
+		const window = activeWindowEntries(this.#host.sessionManager.getBranchView());
 		const countRouted = (provider: string, model: string): void => {
 			const routed = `${provider}/${model}`;
 			routedModels[routed] = (routedModels[routed] ?? 0) + 1;
@@ -258,7 +298,7 @@ export class SessionStatsTracker {
 			this.#tokenizer,
 			this.#host.session.settings?.revision,
 		);
-		const branchEntries = this.#host.sessionManager.getBranch();
+		const branchEntries = this.#host.sessionManager.getBranchView();
 		const latestCompaction = getLatestCompactionEntry(branchEntries);
 		const compactionIndex = latestCompaction ? branchEntries.lastIndexOf(latestCompaction) : -1;
 		let usedTokens = 0;
@@ -393,7 +433,7 @@ export class SessionStatsTracker {
 	recordAnchoredHistoryRewrite(tokensRemoved: number): void {
 		if (!Number.isFinite(tokensRemoved) || tokensRemoved <= 0) return;
 
-		const branchEntries = this.#host.sessionManager.getBranch();
+		const branchEntries = this.#host.sessionManager.getBranchView();
 		const latestCompaction = getLatestCompactionEntry(branchEntries);
 		const compactionIndex = latestCompaction ? branchEntries.lastIndexOf(latestCompaction) : -1;
 		for (let index = branchEntries.length - 1; index > compactionIndex; index--) {

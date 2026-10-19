@@ -10,8 +10,10 @@
 import { formatKeyHint } from "../../app-keybindings";
 import type { KeyName } from "../../key-hint-format";
 import { matchesKey } from "../../keys";
+import { ScrollView } from "../../components/scroll-view";
 import { col, node, span } from "../../native/describe";
-import type { NativeNode } from "../../native/node";
+import type { NativeNode, NativeUiEvent } from "../../native/node";
+import { actionBar, actionButton } from "../../native/overlay";
 import { theme } from "../../theme/theme";
 import type { Component } from "../../tui";
 import { truncateToWidth, visibleWidth } from "../../utils";
@@ -26,12 +28,17 @@ const GROUPS: readonly { readonly title: string; readonly rows: readonly Shortcu
 		title: "Move",
 		rows: [
 			{ keys: ["up", "down"], label: "Move the selection" },
-			{ keys: ["left", "right"], label: "Fold or unfold a folder or section" },
+			{ keys: ["h", "l", "left", "right"], label: "Choose the left diff or right changes pane" },
 			{ keys: ["enter"], label: "Open the file in the diff" },
 			{ keys: ["tab"], label: "Switch between the diff and the changes" },
 			{ keys: ["]", "["], label: "Next or previous file" },
 			{ keys: ["alt+down", "alt+up"], label: "Next or previous change" },
-			{ keys: ["g", "shift+g"], label: "First or last row" },
+			{ keys: ["g", "shift+g"], label: "gg first row; G last row" },
+			{ keys: ["ctrl+u", "ctrl+d"], label: "Half page up or down" },
+			{ keys: ["pageUp", "pageDown"], label: "Full page up or down" },
+			{ keys: ["ctrl+y", "ctrl+e"], label: "Scroll view without moving selection" },
+			{ keys: ["alt+left", "alt+right"], label: "Fold/unfold tree or pan diff" },
+			{ keys: ["/"], label: "Search changed file paths" },
 		],
 	},
 	{
@@ -70,37 +77,59 @@ export class GitHelpSheet implements Component {
 	readonly nativeOverlay = { role: "omp.overlay.hotkeys", head: "Keyboard shortcuts", size: "lg" } as const;
 	readonly #close: () => void;
 	#native: NativeNode | undefined;
+	readonly #viewport = new ScrollView([], { height: 1 });
 
-	constructor(close: () => void) {
+	constructor(
+		close: () => void,
+		readonly back: () => void = close,
+	) {
 		this.#close = close;
 	}
 
 	handleInput(data: string): void {
-		if (data === "?" || data === "q" || matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) this.#close();
+		if (data === "?" || data === "h") this.back();
+		else if (data === "q" || matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) this.#close();
+		else this.#viewport.handleScrollKey(data);
+	}
+
+	/** Close runs what Esc runs. */
+	handleNativeEvent(event: NativeUiEvent): void {
+		if (event.type === "action" && event.act === "close") this.#close();
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#viewport.navigationSnapshot();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		this.#viewport.restoreNavigation(snapshot);
 	}
 
 	describe(): NativeNode {
 		this.#native ??= col(
-			GROUPS.map(group =>
-				node(
-					"section",
-					{ head: group.title, role: "omp.hotkeys.group" },
-					[
-						node("table", {
-							role: "omp.hotkeys.table",
-							cols: [
-								{ id: "keys", head: "Keys" },
-								{ id: "does", head: "Action", grow: 1 },
-							],
-							rows: group.rows.map((row, index) => ({
-								id: String(index),
-								cells: { keys: row.keys.map(key => span(formatKeyHint(key), "key")), does: row.label },
-							})),
-						}),
-					],
-					group.title,
+			[
+				...GROUPS.map(group =>
+					node(
+						"section",
+						{ head: group.title, role: "omp.hotkeys.group" },
+						[
+							node("table", {
+								role: "omp.hotkeys.table",
+								cols: [
+									{ id: "keys", head: "Keys" },
+									{ id: "does", head: "Action", grow: 1 },
+								],
+								rows: group.rows.map((row, index) => ({
+									id: String(index),
+									cells: { keys: row.keys.map(key => span(formatKeyHint(key), "key")), does: row.label },
+								})),
+							}),
+						],
+						group.title,
+					),
 				),
-			),
+				actionBar([null, actionButton("Close", "close", { keys: "escape" })]),
+			],
 			{ gap: "lg", role: "omp.app.git.help" },
 		);
 		return this.#native;
@@ -120,8 +149,10 @@ export class GitHelpSheet implements Component {
 			}
 			lines.push("");
 		}
-		lines.push(truncateToWidth(` ${theme.fg("dim", `${formatKeyHint("escape")} close`)}`, width));
-		return lines;
+		lines.push(truncateToWidth(` ${theme.fg("dim", `h / ${formatKeyHint("escape")} back`)}`, width));
+		this.#viewport.setLines(lines);
+		this.#viewport.setHeight(Math.max(3, Math.floor((process.stdout.rows || 24) * 0.9) - 2));
+		return this.#viewport.render(width);
 	}
 
 	invalidate(): void {

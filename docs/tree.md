@@ -55,26 +55,31 @@ Example tree view (active path marked with •):
 │        └─ assistant: "B result"
 ```
 
-The selector recenters around current selection and shows up to:
+The initial viewport centers the selection. Selection motions reveal it when needed; viewport-only scrolling keeps the selected node unchanged. The selector shows up to:
 
 - `max(1, min(max(5, floor(terminalHeight / 2)), terminalHeight - 8))` rows, reserving panel chrome on short terminals
 
 ## Keybindings inside tree selector
 
-- `Up` / `Down`: move selection (wraps)
+- `j` / `k`, or `Down` / `Up`: move selection (wraps)
 - `Alt+Up` / `Alt+Down`: jump to previous/next user or assistant turn
-- `Page Up` / `Page Down`, or `Left` / `Right`: page
-- `Home` / `End`: first/last visible item
+- `app.tree.previousBranch` / `app.tree.nextBranch` (unbound by default; bind them in [`keybindings.yml`](./keybindings.md), e.g. to `Shift+Left` / `Shift+Right`): jump to the previous/next visible branch in rendered order (wraps), across nested forks. A branch whose head is filtered out lands on its first visible descendant.
+- `Ctrl+D` / `Ctrl+U`: move half a visible page; `Page Down` / `Page Up`: move a full page
+- `gg` / `G`, or `Home` / `End`: first/last visible item
+- `Ctrl+E` / `Ctrl+Y`: scroll the viewport one line without changing selection
+- `h` / `Left`: collapse the selected subtree, or select its parent; `l` / `Right`: expand
+- `Space`: toggle a subtree without switching the session branch
 - `Enter`: select node
 - `Shift+Enter`: summarize and switch without opening the summary-choice prompt
-- `Esc`: clear search if active; otherwise close selector
+- `Esc`: leave the search field while keeping its query; leave a label editor for its parent; close from the root list
 - `Ctrl+C`: close selector
-- `Type`: append to search query
-- `Backspace`: delete search character
-- `Shift+L`: edit/clear label when search is empty
-- `Ctrl+O`: cycle filter forward
-- `Shift+Ctrl+O`: cycle filter backward
+- `/`: focus search; printable and editing keys stay literal until Escape returns to the list
+- `e`: edit/clear the selected node's label
+- `Tab` / `Ctrl+N`: cycle filter forward; `Shift+Tab` / `Ctrl+P`: cycle backward
 - `Alt+D/T/U/L/A`: jump directly to a filter
+- `Ctrl+O`: menu history back; `Ctrl+I` / `Alt+O`: forward (not filter cycling)
+
+Menu history preserves the selected node, filter mode, query and caret, collapsed subtrees, viewport, and safe unsaved label drafts. Restoring a label page never saves the label or switches branches.
 
 ## Filters and search semantics
 

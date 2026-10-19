@@ -50,7 +50,7 @@
 6. Otherwise it uses the selector/editor fallback for each question:
    - single-select list plus `Other (type your own)`
    - multi-select checkbox loop plus `Done selecting` when applicable and `Other (type your own)`
-7. In fallback multi-question mode, left/right arrow handlers move backward/forward and preserve prior answers. Single-select answers advance automatically; multi-select options toggle until the user moves forward or submits custom input.
+7. In fallback multi-question mode, left/right arrow handlers move backward/forward and preserve prior answers. Single-select answers advance automatically; multi-select options toggle until the user picks `Done selecting`, moves forward, or submits custom input.
 8. If a timeout fires before an answer, the fallback auto-selects the valid recommended option, or the first option otherwise; result text gets ` (auto-selected after timeout)` and `details.timedOut` is set. The rich dialog reports its own `timedOut` answers.
 9. If the user cancels without timeout, `execute()` aborts the tool context and throws `ToolAbortError("Ask tool was cancelled by the user")`.
 10. On success it formats human-readable text plus structured `details`; the TUI renderer uses `details` for rich result display.
@@ -61,6 +61,7 @@
 - Single-select: one option or custom input.
 - Multi-select: toggled choices and/or custom input. The rich dialog permits an empty multi-select answer (`User did not select any options` for one question, `id: []` for multiple questions). In the fallback, `Done selecting` appears only when forward navigation is not active and at least one choice is selected.
 - Rich ask dialog: supports per-question headers, option previews, answer notes, pasted images in custom answers and notes, and a `Chat about this` redirect. Submitting a nonempty custom answer advances to the next question, or to review for a single multi-select question; existing checkbox selections are preserved. A single-select question still submits immediately when it is the only question.
+- Composer alongside the question: in the TUI the composer stays mounted under the rich dialog. Speech input (`app.stt.toggle`, `app.dictation.toggle`) starts, stops and fills the composer while the question is up. A non-empty composer takes typing until it is sent or cleared. Hiding the question with `Alt+H` hands typing to the composer, and `Enter` on an empty composer shows the question again. A message sent this way is queued like any message sent mid-turn: the agent receives it after the question is answered, and the question is not cancelled.
 - Pasted images: the custom-answer and note prompts take images the same ways the main editor does and mark them `[Image #N, WxH]`; deleting a marker drops its image. Extensions calling `ui.askDialog` get this only with `acceptImages: true`; collab guests, RPC, and ACP stay text-only.
 - Custom editor: paste followed by Enter submits the pasted text, including when they arrive together. Submission waits for an in-flight clipboard read; cancellation discards pending clipboard delivery.
 - Selector/editor fallback: supports labels/descriptions but not headers, previews, notes, images, or chat redirect.

@@ -111,9 +111,9 @@ describe("session selector picker", () => {
 		expect(props(selector.describe(withPicker)).size).toBe("screen");
 	});
 
-	it("filters session picker results only after entering filter mode", () => {
+	it("filters session picker results only after focusing search", () => {
 		const selector = make();
-		selector.handleInput("i");
+		selector.handleInput("/");
 		type(selector, "gam");
 		const after = props(selector.describe(withPicker));
 		expect(after.query).toBe("gam");
@@ -198,5 +198,24 @@ describe("history search picker", () => {
 		search.handleNativeEvent({ type: "activate", key: "^picker", item: p.items![0]!.id });
 		expect(inserted).toEqual(["deploy the release\nwith notes"]);
 		expect(search.describe(withoutPicker).k).toBe("card");
+	});
+
+	it("routes the native close action through query focus before closing the history picker", () => {
+		let cancelled = 0;
+		const search = new HistorySearchComponent(
+			source,
+			() => {},
+			() => cancelled++,
+		);
+		type(search, "deploy");
+		const sheet = () => (search.describe(withPicker).c as NativeNode[])[0]!;
+		expect(props(sheet()).actions?.find(action => action.id === "close")?.label).toBe("Back to list");
+		search.handleNativeEvent({ type: "action", key: "^picker", act: "close", mods: [] });
+		expect(cancelled).toBe(0);
+		expect(search.navigationSnapshot()).toMatchObject({ search: { value: "deploy", focused: false } });
+		expect(props(sheet()).actions?.find(action => action.id === "close")?.label).toBe("Close");
+		search.handleNativeEvent({ type: "action", key: "^picker", act: "close", mods: [] });
+		expect(cancelled).toBe(1);
+		search.dispose();
 	});
 });

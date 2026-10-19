@@ -1,6 +1,6 @@
 # Fix Issues Command
 
-Diagnose, reproduce, then fix reproducible open GitHub issues in parallel: one clean worktree/issue; symlink build artifacts to avoid rebuilds. Commits, branches, PRs, and merging follow `~/repos/AGENTS.md`.
+Diagnose, reproduce, then fix reproducible open GitHub issues in parallel: one clean worktree/issue; symlink build artifacts to avoid rebuilds. Commits, branches, PRs, and merging follow `docs/agents/policy.md`.
 
 ## Arguments
 
@@ -91,7 +91,7 @@ MUST NOT symlink whole `packages/natives/native/`: shadows tracked source.
 
 ### f. Commit
 
-One logical conventional commit with `Fixes #<N>`, signed and trailered per `~/repos/AGENTS.md`:
+One logical conventional commit with `Fixes #<N>`, signed and trailered per `docs/agents/policy.md`:
 
 ```bash
 git add -A
@@ -105,7 +105,7 @@ Model: <provider>/<model-id>
 Co-authored-by: <Model Name> <noreply@<provider-domain>>"
 ```
 
-Then push the topic branch and open the PR into `nightly` per `~/repos/AGENTS.md`; the Assignee babysits it with `babysit-pr`.
+Then push the topic branch and open the PR into `nightly` per `docs/agents/policy.md`; the Assignee babysits it with `babysit-pr`.
 
 ### g. Report
 
@@ -134,6 +134,6 @@ Group worktree paths by status, `fixed` first.
 
 MUST: reproduce on current-cwd `nightly` before worktree; parallel one-issue subagents; check existing PR first and divert reasonable ones to `review-prs`; symlink `target`, `node_modules`, native `*.node` before worktree builds/tests; conventional commits with body `Fixes #<N>`.
 
-MUST NOT: symlink entire `packages/natives/native/`; comment on issues or PRs other than per `~/repos/AGENTS.md`; ship stubs, product-code mocks, or `TODO: implement` placeholders; expand beyond reported bug into adjacent code smells.
+MUST NOT: symlink entire `packages/natives/native/`; comment on issues or PRs other than per `docs/agents/policy.md`; ship stubs, product-code mocks, or `TODO: implement` placeholders; expand beyond reported bug into adjacent code smells.
 
 Failed repro → delete temporary cwd test before yielding; leave original checkout clean.

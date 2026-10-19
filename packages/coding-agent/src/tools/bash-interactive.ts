@@ -18,7 +18,7 @@ export interface BashInteractiveResult extends OutputSummary {
 }
 
 export async function runInteractiveBashPty(
-	ui: NonNullable<AgentToolContext["ui"]>,
+	ui: Pick<NonNullable<AgentToolContext["ui"]>, "custom">,
 	options: {
 		command: string;
 		cwd: string;
@@ -32,7 +32,14 @@ export async function runInteractiveBashPty(
 	const settings = await Settings.init();
 	// Load the xterm Terminal ctor here (async boundary) — the ui.custom factory below is sync.
 	const XtermTerminal = await loadXtermTerminal();
-	const { shell: resolvedShell } = settings.getShellConfig();
+	const { shell: resolvedShell, env: shellEnv } = settings.getShellConfig();
+	// The native PTY starts from the process's C environ, which Bun's
+	// `process.env` writes never reach, so it is handed the spawn env. A pty call
+	// has a user at the keyboard, so it gets the spawn env minus its
+	// non-interactive guards (GIT_EDITOR, GPG_TTY, CI; added by procmgr's
+	// `buildSpawnEnv`, and a guard added there belongs here too) and NO_COLOR, a
+	// monochrome marker. A key left out keeps the inherited launch value.
+	const { GIT_EDITOR: _gitEditor, GPG_TTY: _gpgTty, CI: _ci, NO_COLOR: _noColor, ...interactiveShellEnv } = shellEnv;
 	const hostEnv = await getHostEnvForTools(options.env);
 	const graphics = new TerminalGraphicsDecoder();
 	const sink = new OutputSink({
@@ -105,9 +112,11 @@ export async function runInteractiveBashPty(
 							cwd: options.cwd,
 							timeoutMs: options.timeoutMs,
 							// Interactive PTY: inherit the user's environment (the Rust side
-							// applies these as overrides), with a real TERM so editors,
-							// pagers, and TUIs behave like a normal terminal.
+							// applies these as overrides) minus the non-interactive guards, with
+							// a real TERM so editors, pagers, and TUIs behave like a normal
+							// terminal; direnv's values win over everything.
 							env: {
+								...interactiveShellEnv,
 								TERM: "xterm-256color",
 								...hostEnv,
 								...options.env,

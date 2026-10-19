@@ -5,17 +5,19 @@ import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 import { theme } from "../theme/theme";
 import { formatMetricRow, MetricRow, type MetricSpec } from "../components/metric";
 import { node, row, span, text } from "../native/describe";
-import type { NativeChild, NativeNode } from "../native/node";
+import type { DescribeContext, NativeChild, NativeNode } from "../native/node";
 
 /** Below this the rate is nonsense (cached/instant responses yield absurd tok/s). */
 const MIN_DURATION_MS = 100;
 
-/** Local `YYYY-MM-DD HH:mm:ss` stamp for the per-turn usage row. */
-function formatUsageTimestamp(ms: number): string {
+/** Local ISO date with a wall-clock time; only the hour cycle follows the terminal. */
+function formatUsageTimestamp(ms: number, hour12 = false): string {
 	const d = new Date(ms);
 	const pad = (n: number): string => String(n).padStart(2, "0");
 	const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-	const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+	const time = hour12
+		? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12 })
+		: `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 	return `${date} ${time}`;
 }
 
@@ -102,13 +104,16 @@ export function formatTurnUsage(summary: TurnUsageSummary): { text: string; titl
 	return { text: `${text} this turn`, title: `This turn: ${title}` };
 }
 
-/** Output tokens per second over the whole request; undefined when the duration is too short to mean anything. */
-function usageThroughput(usage: Usage, durationMs: number | undefined): number | undefined {
-	if (!durationMs || durationMs <= MIN_DURATION_MS || usage.output <= 0) return undefined;
+/**
+ * Output tokens per second over the whole request; undefined when the request
+ * was too short (≤100ms, e.g. a cached or local reply) for the rate to mean anything.
+ */
+export function outputTokensPerSecond(output: number, durationMs: number | undefined): number | undefined {
+	if (!durationMs || durationMs <= MIN_DURATION_MS || output <= 0) return undefined;
 	// TPS over the total request duration — the post-TTFT window undercounts
 	// generation time when reasoning tokens are hidden before the first
 	// visible byte, inflating the rate.
-	return (usage.output / durationMs) * 1000;
+	return (output / durationMs) * 1000;
 }
 
 /** Every metric except throughput, which the native row declares as a `rate`. */
@@ -146,7 +151,7 @@ function usageRowSpecs(
 	turnElapsedMs?: number,
 ): MetricSpec[] {
 	const specs = usageRowBaseSpecs(usage, ttftMs, timestamp, turnElapsedMs);
-	const tokPerSec = usageThroughput(usage, durationMs);
+	const tokPerSec = outputTokensPerSecond(usage.output, durationMs);
 	if (tokPerSec !== undefined) {
 		specs.push({ leading: theme.icon.throughput, value: `${tokPerSec.toFixed(1)}/s` });
 	}
@@ -161,6 +166,8 @@ class UsageRowBlock extends Container {
 	readonly #timestamp: number | undefined;
 	readonly #turnElapsedMs: number | undefined;
 	#nativeNode: NativeNode | undefined;
+	/** The terminal's clock {@link #nativeNode} was described with. */
+	#nativeHour12: boolean | undefined;
 
 	constructor(usage: Usage, durationMs?: number, ttftMs?: number, timestamp?: number, turnElapsedMs?: number) {
 		super();
@@ -186,13 +193,23 @@ class UsageRowBlock extends Container {
 	 * ttft 0.9s · 96 tok/s`): worded metrics instead of the ANSI icons, the
 	 * full timestamp in the tooltip, and throughput as a `rate`.
 	 */
-	override describe(): NativeNode {
-		if (this.#nativeNode) return this.#nativeNode;
+	override describe(cx?: DescribeContext): NativeNode {
+		// The terminal's clock: the process locale doesn't reliably carry the user's 12/24-hour choice.
+		const hour12 = cx?.hour12;
+		if (this.#nativeNode && this.#nativeHour12 === hour12) return this.#nativeNode;
+		this.#nativeHour12 = hour12;
 		const usage = this.#usage;
 		const parts: string[] = [];
 		const timestamp = this.#timestamp;
 		const stamped = timestamp !== undefined && Number.isFinite(timestamp) && timestamp > 0;
-		if (stamped) parts.push(formatUsageTimestamp(timestamp).slice(11, 16));
+		// Only a 12-hour clock goes through the locale; 24-hour keeps the tooltip's own `HH:mm`.
+		if (stamped) {
+			parts.push(
+				hour12
+					? new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12 })
+					: formatUsageTimestamp(timestamp).slice(11, 16),
+			);
+		}
 		if (this.#turnElapsedMs !== undefined && this.#turnElapsedMs > 0) {
 			parts.push(`Δ ${formatDuration(Math.round(this.#turnElapsedMs))}`);
 		}
@@ -200,7 +217,7 @@ class UsageRowBlock extends Container {
 		if (usage.cacheRead > 0) parts.push(`cache ${formatNumber(usage.cacheRead)}`);
 		if (this.#ttftMs && this.#ttftMs > 0) parts.push(`ttft ${(this.#ttftMs / 1000).toFixed(1)}s`);
 		const children: NativeChild[] = [text([span(parts.join(" · "), "dim")])];
-		const tokPerSec = usageThroughput(usage, this.#durationMs);
+		const tokPerSec = outputTokensPerSecond(usage.output, this.#durationMs);
 		if (tokPerSec !== undefined) {
 			children.push(
 				text([span(" · ", "dim")]),
@@ -211,7 +228,7 @@ class UsageRowBlock extends Container {
 			role: "omp.usage.turn",
 			gap: "none",
 			align: "baseline",
-			...(stamped ? { title: formatUsageTimestamp(timestamp) } : {}),
+			...(stamped ? { title: formatUsageTimestamp(timestamp, hour12) } : {}),
 		});
 		return this.#nativeNode;
 	}

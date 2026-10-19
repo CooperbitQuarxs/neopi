@@ -9,7 +9,7 @@ import { previewWindowRows } from "@oh-my-pi/pi-tui/render/render-utils";
  * the cell source to a viewport-sized TAIL window (the end stays visible, the
  * head is elided behind an "earlier lines" marker) in BOTH the pending preview
  * and the final result, so a long cell neither floods the transcript nor snaps
- * open when the result lands. Only ctrl+o (expanded) uncaps.
+ * open when the result lands. Only the expansion action (`expanded`) uncaps.
  */
 describe("eval renderer: viewport tail window for cell code", () => {
 	let theme: Theme;
@@ -63,5 +63,21 @@ describe("eval renderer: viewport tail window for cell code", () => {
 		expect(rendered).toContain(lastLine);
 		expect(rendered).toContain("earlier line");
 		expect(rendered).not.toContain(firstLine);
+	});
+
+	it("renders every cell of a streamed call while a later cell's code has not arrived", () => {
+		const component = evalToolRenderer.renderCall(
+			{
+				cells: [
+					{ language: "js", title: "first cell", code: "const ready = 1;" },
+					{ language: "js", title: "second cell" },
+				],
+			},
+			{ expanded: false, isPartial: true, spinnerFrame: 0 },
+			theme,
+		);
+		const rendered = Bun.stripANSI(component.render(120).join("\n"));
+		expect(rendered).toContain("const ready = 1;");
+		expect(rendered).toContain("second cell");
 	});
 });

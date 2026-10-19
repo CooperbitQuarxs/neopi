@@ -2,7 +2,7 @@
 
 `omp` resolves settings from built-in defaults, a persistent global config file, optional project-local config, one-shot CLI overlays, and in-memory runtime overrides. Reach for project settings when one repository needs a different provider set, model role, tool policy, memory backend, or UI behavior than your global defaults — without touching your machine-wide configuration.
 
-Settings are stored as plain YAML mappings. Every key, its type, default, and enum values come from its setting definition (declared with `register(...)` next to the owning feature, e.g. `packages/coding-agent/src/tools/settings.ts`, and collected by `packages/coding-agent/src/config/all-settings.ts`). `omp config` exposes the complete schema; the interactive `/settings` panel exposes entries with supported UI editors. Some entries are conditional, and numbers or arrays without UI choices remain config-file-only.
+Settings are stored as plain YAML mappings. Every key, its type, default, and enum values come from its setting definition (declared with `register(...)` next to the owning feature, e.g. `packages/coding-agent/src/tools/settings.ts`, and collected by `packages/coding-agent/src/config/all-settings.ts`). `omp config` exposes the complete schema; the interactive `/settings` panel exposes entries with supported UI editors. Some entries are conditional; numbers and arrays without UI choices remain config-file-only unless the setting opts into the panel's JSON editor (such as `contextFiles.extra`).
 
 - For model/provider credentials, `.env` files, and the env-var table that resolves API keys, see [Providers](./providers.md).
 - For custom model definitions in `models.yml`, see [Models](./models.md).
@@ -103,7 +103,11 @@ Saves through a symlinked main config preserve the link and update its resolved 
 
 Interactive sessions and RPC/RPC-UI hosts watch the main global file, project settings sources, and config overlays. Changes are reloaded after a short debounce, preserving runtime overrides. A layer that fails to parse or validate keeps its last good values and logs a warning; other valid layers can still refresh. Live reload does not move the invalid file to a `.broken-*` backup.
 
+Symlinked configs follow edits to their target and replacement of any intermediate file or directory symlink, including profile links. After a link switches targets, subsequent edits to the new target are watched too.
+
 Reloading changes the settings values available to consumers; startup-only work is not rerun. Provider-source switches take effect on the next discovery pass. Task/eval dispatch also reloads persisted settings before resolving a subagent's policy.
+
+Routing changes to `modelRoles`, `retry.fallbackChains`, and `task.agentModelOverrides` apply to subsequent subagent launches and fallback decisions without restarting the host. `auth.accountPolicies` and `retry.usageReservePct` also update the long-lived account router for subsequent credential selection and quota checks. Reloading does not restart running subagents or switch a healthy active session's model; explicit runtime overrides still take precedence.
 
 ## Precedence
 
@@ -297,7 +301,7 @@ omp --config ./local/ci-settings.yml "check this failure"
 omp --config ./base.yml --config ./experiment.yml "try this model"
 ```
 
-`--config` is accepted by the default launch command, `acp`, and `models`.
+`--config` is accepted by the default launch command, `acp`, `models`, and `dry-balance`. For `models` and `dry-balance`, put it after the command name (`omp dry-balance --config ./policy.yml`); placed before the command name, it is dropped.
 
 Wrappers may instead set `PI_CONFIG_FILES` to a platform-delimited path list (`:` on Unix, `;` on Windows). Environment overlays load in listed order before explicit `--config` overlays.
 
@@ -569,6 +573,7 @@ retry:
   baseDelayMs: 500
   maxDelayMs: 300000
   modelFallback: true
+  fallbackOn: any
   fallbackRevertPolicy: cooldown-expiry
   fallbackChains:
     # Chat roles without their own chain may inherit "default". Model-kind
@@ -614,6 +619,7 @@ providers:
 | `retry.baseDelayMs`                      | number  | `500`             | Initial backoff.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `retry.maxDelayMs`                       | number  | `300000`          | Backoff ceiling (5 min). Provider-stated waits longer than this fail fast when no credential or model fallback succeeds, unless `retry.waitForUsageReset` admits an authoritative quota-reset wait. `0` disables the cap.                                                                                                                                                                                                                                                                                                                  |
 | `retry.modelFallback`                    | boolean | `true`            | Fall back to another chat model when one is unavailable. Role-driven helpers that honor this switch, including online session-title generation, stop after their first resolvable candidate when it is `false`.                                                                                                                                                                                                                                                                                                                                  |
+| `retry.fallbackOn` | enum | `any` | Which failed requests in a session turn (subagents included) or advisor turn may walk `retry.fallbackChains`. `any` switches on every provider error. `usage-limit` switches only on usage limits (quota windows, spend caps, exhausted balances); in a session turn other retryable errors retry the same model with the normal backoff up to `retry.maxRetries` and then surface, and non-retryable errors, refusals included, surface at once. `except-usage-limit` switches on everything else and waits out or surfaces usage limits. Advisors kept off the chain keep their own retry and drop behaviour (see `docs/advisor-watchdog.md`). Credential rotation and `retry.usageAwareFallback` are unaffected. |
 | `retry.fallbackChains`                   | record  | `{}`              | Maps roles, model selectors, `re:` regex keys, or `provider/*` wildcards to ordered fallback selectors. A literal key matches its model first; then regex keys (first declared wins), then longest provider wildcards, then role keys. Regex keys match the full active selector including `:effort`. A regex entry resolves to the first matching catalog model; a `provider/*` entry keeps the failing model's id and swaps provider. Invalid regexes and unknown selectors are reported as startup config warnings and skipped. Model-kind roles use their built-in chain when unset and no fallbacks when set to `[]`; `default` never applies to them. |
 | `retry.fallbackRevertPolicy`             | enum    | `cooldown-expiry` | `cooldown-expiry` returns to the primary model once its suppression window ends; `never` stays on the fallback until switched manually.                                                                                                                                                                                                                                                                                                                                                     |
 | `retry.waitForUsageReset` | boolean | `false` | Allow provider-stated usage-limit waits past `retry.maxDelayMs` when a reset hint or complete usage report supplies authoritative timing. Waits are abortable but can also hold subagents. |
@@ -666,7 +672,7 @@ tools:
 
 Mounting still follows the session's explicit tool allow-list. A session that permits `read` but omits `write` can receive a device-only write transport; this does not grant filesystem writes.
 
-Individual built-in tools and Eval preludes are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `computer.enabled`, `ratchet.enabled` (default `false`; the `ratchet(flow)` eval/hillclimb prelude, which `/ratchet` turns on for the current session only), `astEdit.enabled`, `astGrep.enabled`, `find.enabled` (`auto`/`on`/`off`; `auto` enables `find` only when the `judge` role resolves to a native TypeSafe jev model), and `web_search.enabled`. Image questions use `read <image>?q=<question>` and honor `images.questionTimeoutMs`.
+Individual built-in tools and Eval preludes are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `computer.enabled`, `ratchet.enabled` (default `false`; the `ratchet(flow)` eval/hillclimb prelude, which `/ratchet` turns on for the current session only), `archive.enabled` (default `true`; the read-only `archive` eval prelude over prompt history, recent projects, past sessions, and recaps), `astEdit.enabled`, `astGrep.enabled`, `find.enabled` (`auto`/`on`/`off`; `auto` enables `find` only when the `judge` role resolves to a native TypeSafe jev model), and `web_search.enabled`. Image questions use `read <image>?q=<question>` and honor `images.questionTimeoutMs`.
 
 ### Window-scoped computer use
 
@@ -719,6 +725,7 @@ lsp:
 | --------------------------------- | ------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bash.enabled`                    | boolean | `true`    | Enable the bash tool.                                                                                                                                       |
 | `bash.allowCompoundCommands`      | boolean | `false`   | Evaluate flat, literal `&&` chains per segment; unmatched segments inherit normal bash approval policy and mode.                                            |
+| `bash.gitGuard`                   | boolean | `false`   | For checkouts shared by concurrent agents: refuse `git stash` (except `list`/`show`), `reset --hard`, `reset` to another commit, and `checkout`/`switch`/working-tree `restore` unless a merge or rebase conflict is being resolved. Unstaging stays allowed. Enforced by the embedded shell's `git` builtin, so it sees expanded commands and the real cwd; services, client terminals, `pty` calls, and git started by path or through another program are not guarded. |
 | `launch.enabled`                  | boolean | `true`    | Enable named `bash` services and `proc://` supervision for shared long-running project processes; there is no separate launch tool.                                                                                           |
 | `launch.brokerScope`              | boolean | `true`    | On Linux with a reachable systemd user manager, start the shared daemon broker (project or machine-global, with the daemons it supervises) in its own transient scope (`systemd-run --user --scope --collect`), so killing the client that spawned it cannot take it down. `false`, no `systemd-run`, or an unreachable manager keeps the broker in the spawning client's cgroup (new session via `setsid`). A scope launch that fails, or has not produced a reachable broker within 4 s, is killed and falls back to the same. Processes that never load settings (e.g. `omp ps`) read the persisted global and project config. The placement is logged. |
 | `launch.brokerSlice`              | string  | `neopi-broker.slice` | Slice for the broker scope; dash-separated names nest, so the default runs under `neopi.slice`. Blank selects the default.                                   |
@@ -782,7 +789,7 @@ read:
 
 ### Context, compaction, and memory
 
-`/extended-context on` opts in to larger context windows; `/extended-context off` restores standard windows and premium-pricing caps. For `openai-codex/gpt-6-astra`, `openai-codex/gpt-6.1-sol`, and their `-wm` routes, off uses 272,000 tokens and on uses the curated 922,000-token input window (1.05M total context with 128K output), or a higher discovered maximum. The curated maximum corrects stale lower discovery values. Explicit per-model `contextWindow` overrides in `models.yml` take precedence in both modes; remove an override if you want the toggle to control that model again. Codex overrides still clamp to the effective server-honored ceiling, allowing the curated or higher live maximum rather than an arbitrary larger window.
+`/extended-context on` opts in to larger context windows; `/extended-context off` restores standard windows and premium-pricing caps. For `openai-codex/gpt-6-astra`, `openai-codex/gpt-6.1-sol`, and their `-wm` routes, off uses the Codex default window (272,000 tokens for Astra, 500,000 for GPT-6.1 Sol) and on uses the curated 922,000-token input window (1.05M total context with 128K output), or a higher discovered maximum. The curated maximum corrects stale lower discovery values. Explicit per-model `contextWindow` overrides in `models.yml` take precedence in both modes; remove an override if you want the toggle to control that model again. Codex overrides still clamp to the effective server-honored ceiling, allowing the curated or higher live maximum rather than an arbitrary larger window.
 
 Custom providers can opt into the same toggle by setting `contextWindow` (normal)
 and `maxContextWindow` (extended) on a model or `modelOverrides` entry in
@@ -819,6 +826,8 @@ memory:
 | `compaction.methodOrder`      | array   | `remote, snapcompact, handoff, shake, soft` | Ordered fallbacks. `remote` uses provider-native server compaction (OpenAI Responses compact, Anthropic compaction beta); unavailable or failed methods advance. |
 | `compaction.thresholdPercent` | number  | `-1`                                     | Percent-of-context trigger; `-1` = reserve-based default.                                                                                                                                                                                 |
 | `compaction.thresholdTokens`  | number  | `-1`                                     | Fixed token trigger when `> 0`.                                                                                                                                                                                                           |
+| `compaction.modelThresholds`  | record  | `{}`                                     | Per-model compaction limit keyed by `provider/model-id` or a `*`-terminated prefix (`deepseek/*`): a token base the compaction policy scales (`90000`), a fixed token trigger (`"f90000"`), or a percentage of the window (`"80%"`). See below. |
+| `compaction.modelThresholdsEnabled` | boolean | `true`                             | Whether `compaction.modelThresholds` applies. Subagents with a `task.agentCompactionThresholdOverrides` entry run with it off. |
 | `task.agentCompactionThresholdOverrides` | record | `{}` | Exact-name task/eval agent → compaction trigger: a positive token count (`90000`) or a percentage string (`"80%"`). See below. |
 | `compaction.reserveTokens`    | number  | _(unset)_                                | Absolute reserve floor. When unset, the effective reserve is the larger of `16384` and 15% of the context window; if that default would leave no practical small-window budget, it falls back to the 15% reserve.                         |
 | `compaction.keepRecentTokens` | number  | `20000`                                  | Recent-history token budget for summary compaction.                                                                                                                                                                                                           |
@@ -828,9 +837,28 @@ memory:
 | `autolearn.autoContinue`      | boolean | `false`       | After an eligible primary stop, run a private capture turn (uses extra tokens). Off keeps only standing guidance; no hidden reminder is inserted into the next turn. Aborted, plan-mode, and goal-loop turns are skipped.                                                                                                           |
 | `autolearn.minToolCalls`      | number  | `5`           | Minimum completed tool calls in a primary turn before automatic capture is eligible.                                                                                                                                                                               |
 
-A positive `compaction.thresholdTokens` wins over `thresholdPercent` and is clamped below the context window. Otherwise, a positive percentage is clamped to 1–99%; non-positive percentages use the reserve-based threshold.
+A positive `compaction.thresholdTokens` wins over `thresholdPercent`. A fixed trigger (this or an `f` model entry) at or past the model's context window, for example where a provider caps the window lower, compacts at the window less the reserve, like the reserve-based default; the `/models` preview marks it `capped by window`. Otherwise, a positive percentage is clamped to 1–99%; non-positive percentages use the reserve-based threshold.
 
 `compaction` has additional tuning keys (idle compaction, supersede/drop heuristics) visible in `omp config list`. See [Compaction](./compaction.md) for the full strategy reference.
+
+Per-model compaction limits apply to the models they match. A token count is the base the usual policy scales: omp treats it as the model's window when computing the threshold, so with defaults it compacts at the base minus the reserve (85% for bases above ~109k) and with `compaction.thresholdPercent: 80` at 80% of it; a global `compaction.thresholdTokens` does not apply to that model. Prefix the count with `f` (`f400k`, stored as `"f400000"`) to make it the exact trigger instead. A percentage entry replaces both `compaction.threshold*` settings and scales the real window. Requests and overflow handling still use the real window. The `/models` preview shows where each model compacts; to set a limit, select a role or fallback row in the **Roles** view and press `k` (or click **Compaction limit**), then type `400k`, `f400k`, `1M`, or `80%` (empty input resets). That writes the exact `provider/model-id` key to the global config. By hand:
+
+```yaml
+compaction:
+  thresholdPercent: 80
+  modelThresholds:
+    "deepseek/*": 90000
+    "openrouter/anthropic/*": "60%"
+    anthropic/claude-opus-5.5: 150000 # base: compacts at 80% of 150k
+    openai/gpt-5.6-terra: "f400000" # fixed: compacts at exactly 400k
+```
+
+- An exact `provider/model-id` key wins; otherwise the longest matching `*`-terminated prefix applies. `*` is only allowed at the end, and every key needs a `provider/` part.
+- Entry values are parsed like `task.agentCompactionThresholdOverrides` below (`null` clears a lower-layer entry), plus the `"fN"` fixed form; an agent entry's token count is always the exact trigger, and the `f` prefix is not accepted there.
+- The trigger follows the active model: switching models, context promotion, and advisors each use their own model's entry.
+- A `task.agentCompactionThresholdOverrides` entry outranks model entries for that agent, including entries added while it runs.
+- The hub refuses an edit when the project config sets the same model key; change it in the project config instead.
+- A token base larger than the model's standard window, or a fixed trigger at or past it, opts that model into its extended window (the window `extendedContext` would give it, including long-context pricing tiers) without turning `extendedContext` on. A base is the window size you want, so it opens the extended window even when its scaled trigger lands inside the standard one (a `300k` base on a 272K model compacts at 255K but runs on the larger window, keeping the reserve as headroom); use a base at or below the standard window, or an `f` trigger below it, to stay on the standard window. The hub warns first and saves on a second Enter; it rejects a base larger than the largest window the model can run with, and a fixed trigger at or past it. A subagent whose `task.agentCompactionThresholdOverrides` entry applies ignores model entries, so it keeps the standard window.
 
 Per-agent compaction triggers for task/eval subagents. This keeps the main session at 40,000 tokens while `scout` compacts at 80% of its window and `task` at 90,000 tokens:
 
@@ -894,12 +922,23 @@ tui:
 | `images.autoResize`         | boolean | `true`           | Resize large images for model compatibility.                              |
 | `images.blockImages`        | boolean | `false`          | Never send images to providers.                                           |
 | `tui.hyperlinks`            | enum    | `auto`           | `off`, `auto`, `always`.                                                  |
+| `tui.autoGraph`               | enum    | `always`         | Chart numeric tables in the agent's answers, in the theme's colors, on terminals that show graphics: `always` uses the built-in best guess, `smart` lets the judge model refine each chart (kind, columns, row names and grouping, scales and reference row, which way each measure is better, the focus row, and the title) for tables with several numeric columns or numbered rows, `off` leaves tables alone. Tern receives the chart as SVG. Applies to the main session in the TUI only: subagent transcripts, print, RPC, and ACP output stay plain, and their system prompts omit the diagram and chart guidance. |
 | `tui.mouse`                 | boolean | `false`          | Capture mouse clicks in the main session so live subagent cards and HUD rows focus on click, with a hover highlight on the target. Native text selection becomes Shift+drag and wheel scroll becomes Shift+wheel while on. |
 | `display.pinnedAgents`      | enum    | `collapsed`      | Pinned live-agent jump list above the editor: `off` hides it, `collapsed` shows a few rows with an expander, `full` lists all. |
 | `tui.resizeScrollback`      | enum    | `rebuild`        | How a settled width resize refreshes transcript rows kept in terminal scrollback: `append` replays the transcript at the new width below retained history, `rebuild` erases pane scrollback then replays one current-width copy, `preserve` repaints only the viewport. |
 | `display.subagentLivePreview` | boolean | `false` | Show each pinned subagent's current (or most recent) tool call beneath its jump-list row. |
 
 For a custom status line, set `statusLine.preset: custom` and configure `statusLine.leftSegments`, `statusLine.rightSegments`, and `statusLine.segmentOptions`. Include `status` in either segment list to render extension statuses registered through `ctx.ui.setStatus()`, ordered by key and joined inline. Set `statusLine.showHookStatus: false` to suppress the same statuses in the footer.
+
+Use `/statusline` to edit that layout interactively. The fullscreen editor lists the composer, then every widget in one stable list split into a left and a right side: builtins, configured ids, and provider quota windows discovered in the latest cached usage reports. Disabled widgets keep their place, and Space toggles a widget without moving the selection. `j`/`k` (or up/down) select; `h`/`l` (or left/right, `[`/`]`, Alt+up/down) move the selected widget earlier or later along the status line, crossing to the other side at either end. Ctrl+D/Ctrl+U move half a page, PageUp/PageDown a page, `gg`/`G` (or Home/End) jump to the first and last rows, and Ctrl+E/Ctrl+Y scroll the view without moving the selection. `/` filters rows by name or id; Escape returns to the list with the filter kept and shown in the footer (edit it again with `/`). `<` and `>`, or Space on the composer row, cycle built-in and registered extension composer shapes while the selection and view stay put.
+
+Every change previews live and is autosaved as an unapplied draft in `<agent dir>/neopi-statusline-draft.json`, separate from `config.yml`. `s` or Ctrl+S applies the draft (custom segment lists, usage templates, composer shape) through the settings API and keeps the editor open. Escape with unapplied changes asks first: `y` applies and closes, `n` closes with the active layout unchanged and the draft kept, Escape or `c` stays. Reopening `/statusline`, also after a restart, restores the draft with its selection, view, and filter. The **Reset to Active** row at the bottom, or `R`, discards the draft's edits after a `y` confirmation. A failed apply keeps the draft and the previous configuration; a failed draft write is reported and leaves the configuration untouched.
+
+Tab on a usage widget edits the text around its values; Enter, Tab, or Escape returns to the list. Templates are stored per widget in `statusLine.segmentOptions.usageBars.templates`, keyed by segment id, for example `usage:anthropic:5h: "Claude {percent} ({age} ago)"`. `{label}`, `{percent}`, and `{age}` are replaced, `{{` and `}}` produce literal braces, and everything else is shown as plain text; nothing is evaluated. An empty template restores the default `{label} {percent} {age}`. Editing templates or the layout never fetches usage.
+
+Custom segment lists also accept `usage:<provider>:<window>[:<tier>]`, independently of the active model. For example, `usage:anthropic:5h`, `usage:anthropic:7d`, `usage:anthropic:7d:fable`, and `usage:openai-codex:7d` display `AN 5h`, `AN wk`, `Fable`, and `OA wk`. Each shows the reported percentage used and the age of its cached value. Window ids and optional tiers must match the provider's usage report; an untiered widget matches only untiered limits. Before the first fetch a widget shows `…`; unavailable windows show `n/a`. Failed refreshes retain the last known value and its age. These widgets use the existing shared usage cache and refresh cadence, not an additional poller.
+
+Add `context_bar` to either group to place the context-window gauge in any composer, including standalone bottom bars. It expands in place to the remaining width after the other widgets and separators, and hides when fewer than eight cells remain. `statusLine.contextLine` controls its percentage, compaction markers, and embedded labels; box and band layouts do not draw a second gap gauge when this widget is configured.
 
 The `live` segment shows the microphone phase, mute state, and non-primary composer destination while `/live` is active. Every built-in preset includes it, including `minimal` without a model segment. Existing custom segment lists must include `live` to keep the call visible; it is no longer attached to `model`.
 
@@ -917,7 +956,7 @@ The `cost` segment shows recorded session costs. For an active provider/model wi
 | `autoResume`           | boolean | `false`         | Auto-resume the most recent session in the cwd. Ignored by `--new-session` and rpc/acp modes.           |
 | `plan.enabled`         | boolean | `true`          | Enable plan mode.                                                                                       |
 | `plan.defaultOnStartup` | boolean | `false`         | Start each fresh interactive session in plan mode when plan mode is enabled. Print/JSON (`--print`) mode ignores this and prints a note; use `--plan-yolo` for a headless plan flow. |
-| `ask.timeout`          | number  | `0`             | Auto-select the recommended ask option after this many seconds; `0` disables automatic selection. |
+| `ask.timeout`          | number  | `0`             | Auto-select the recommended ask option after this many seconds; `0` disables automatic selection. Also bounds `cfg://` approval prompts; an unanswered approval denies the write instead of auto-selecting. |
 | `ask.notify`           | enum    | `on`            | `on`, `off`.                                                                                            |
 | `input.bareExitOnEmptySession` | boolean | `true` | Submitting exactly `exit`, `quit`, or `q` (case-insensitive) before the first message quits. |
 | `input.bareSlashCommands` | boolean | `false` | Run an exact command name without `/`; after session messages exist, Enter must be pressed twice to confirm. |
@@ -950,10 +989,12 @@ provider:
 
 tts:
   localVoice: af_heart
+  localSpeed: 1
 
 speech:
   enabled: false
   voice: af_heart
+  speed: 1
 
 stt:
   enabled: false
@@ -977,7 +1018,9 @@ searxng:
 | `providers.maxInFlightRequests`     | record  | `{}`      | Positive per-provider concurrency limits for LLM HTTP requests, shared across local `omp` processes using the same config root. Omitted providers are unlimited. `omp config set` rejects non-positive or non-numeric values.                                                                                                                                                                                                          |
 | `providers.tinyModelDtype`          | enum    | `default` | ONNX precision for local tiny models. Overridden by `PI_TINY_DTYPE`.                                                                                                                                                                                                                                                                                                                                                                   |
 | `tts.localVoice`                    | enum    | `af_heart` | Voice used by the local Kokoro TTS runner. Available local voices remain configurable independently of `modelRoles.speech`.                                                                                                                                                                                                                                                                                                           |
+| `tts.localSpeed`                    | number  | `1`       | Speaking rate of the local Kokoro TTS runner (`tts` tool, `omp say`). `1` is normal; values are clamped to `0.5`–`2.5`.                                                                                                                                                                                                                                                                                                              |
 | `speech.voice`                      | enum    | `af_heart` | Kokoro voice used when assistant-output vocalization is enabled.                                                                                                                                                                                                                                                                                                                                                                     |
+| `speech.speed`                      | number  | `1`       | Speaking rate for assistant-output vocalization. `1` is normal; values are clamped to `0.5`–`2.5`.                                                                                                                                                                                                                                                                                                                                   |
 | `stt.enabled`                       | boolean | `false`   | Enable microphone speech-to-text; choose the recognition model with `modelRoles.dictation`.                                                                                                                                                                                                                                                                                                                                           |
 | `stt.language`                      | string  | `en`      | Source language hint for speech-to-text.                                                                                                                                                                                                                                                                                                                                                                                               |
 | `stt.submitTrigger`                 | enum    | `never`   | When completed dictation auto-submits: `never`, `release`, `release-complete`, or `say-submit`.                                                                                                                                                                                                                                                                                                                                        |
@@ -997,18 +1040,68 @@ searxng:
 | `searxng.token`                     | string  | _(unset)_ | SearXNG token; also `searxng.basicUsername`/`searxng.basicPassword`/`searxng.categories`/`searxng.language`/`searxng.engines` (comma-separated engine names or bang shortcuts, e.g. `ddg, br, startpage`, sent as the API's `engines=` parameter)/`searxng.safesearch`.                                                                                                                                                                                                                                                                                                 |
 | `auth.broker.url`                   | string  | _(unset)_ | Auth-broker URL. The actual credential connection uses env then the main global config, not project/config-overlay values.                                                                                                                                                                                                                                                                                                                                                                                  |
 | `auth.broker.token`                 | string  | _(unset)_ | Auth-broker token. `OMP_AUTH_BROKER_TOKEN` wins over the main global config; the broker token file is a fallback. Project/config-overlay values do not redirect credentials.                                                                                                                                                                                                                                                                                                                                                                              |
+| `task.agentAccountPools`            | record  | `{}`      | Exact-name task/eval agent → provider id → OAuth identity keys (the `identityKey` values of [client account pools](./auth-broker-gateway.md#client-account-pools-routing-not-authorization), e.g. `email:<address>\|org:<id>` for Anthropic; `omp usage accounts` lists them). The agent authenticates for each listed provider only with those accounts, never another account or an API key, and fails when none can serve; an empty list allows no account. A malformed entry fails settings load. See [Task agent discovery](./task-agent-discovery.md#model-and-structured-output-precedence). |
 | `secrets.enabled`                   | boolean | `false`   | Enable configured secret obfuscation and built-in credential-shaped token redaction before provider requests. See [Secret obfuscation](./secrets.md).                                                                                                                                                                                                                                                                                  |
 
 Provider credentials and custom model definitions are configured separately — see [Providers](./providers.md) and [Models](./models.md).
+
+#### Saved reset auto-consumption
+
+`codexResets.autoRedeem` and `claudeResets.autoRedeem` independently control saved-reset consumption: `yes` enables automatic spending, `no` disables it, and `unset` requires consent before the first spend. A session with no prompt UI to ask (such as `omp -p`) spends a reset under `unset` only when that reset expires within 5 minutes and would otherwise be lost; everything else waits for consent, with a notice pointing at `/usage reset`.
+
+When a usage refresh detects an eligible banked reset expiring within the next **5 minutes**, auto-consumption attempts it even with little or no usage, a credit reserve, or `salvageHorizonHours: 0`. Provider eligibility, covered-limit requirements, cooldowns, and duplicate-spend protections still apply.
+
+`salvageHorizonHours` controls earlier, usage-based salvage; setting it to `0` leaves the five-minute last-chance rule active. Set the provider's `autoRedeem` to `no` to disable all automatic spending.
+
+To spend one by hand, use `/usage reset` in a session or `omp usage reset` from a shell, which needs no session or TTY and works from an auth-broker client: without arguments it lists each account's saved resets by `<provider>/<credential id>`, and with one it spends a single reset on that account.
+
+`omp usage` and the active account's status-line usage segment flag banked resets expiring within **7 days** when the account's fullest window they restore is at least 25% used. Within **24 hours**, `omp usage` opens with a banner per account: whether the sweep above spends the reset or asks first (only while an interactive omp session is open), or that it will not, and the `/usage reset` target that spends it now when the provider allows. The interactive TUI shows that warning once per conversation.
+
+### Local agent telemetry
+
+Agent-facing telemetry is local runtime information, separate from OTLP export
+(`telemetry.otlpExportEnabled`). All automatic telemetry injection is off by
+default. Enable only the detail you need: injected records consume context, and
+full records add more collection and serialization overhead than minimal ones.
+
+| Setting | Values | Default | Behavior |
+| --- | --- | --- | --- |
+| `telemetry.agent_context` | `off`, `minimal`, `full` | `off` | Controls automatic context telemetry supplied to the agent. |
+| `telemetry.tool_results` | `off`, `summary`, `full` | `off` | Independently controls telemetry attached to the latest completed tool-result batch. |
+| `telemetry.threshold_events` | boolean | `false` | Enables optional approaching-compaction notices at runtime boundaries. |
+
+`minimal` context telemetry includes the resolved provider, model, and effort;
+estimated current context usage and limit; compaction threshold and state;
+checkpoint availability; the previous assistant turn's usage and timing; and
+root-session fleet counts (running, idle, parked, and aborted). `full` adds
+cumulative usage, cache-read share, main/advisor cost splits, and per-agent
+context occupancy. Fleet information comes from runtime state, not peer IRC
+messages.
+
+The tool-results knob is independent of context injection: `summary` appends a
+small tool name/status/duration record, while `full` appends the current runtime
+telemetry record. Leave it `off` to keep tool results unchanged even when context
+telemetry is enabled.
+
+Inside eval, `runtime.inspect()` explicitly reads the local runtime snapshot
+without enabling automatic injection or exporting it remotely. It returns
+minimal telemetry when `telemetry.agent_context` is `off` or `minimal`, and full
+telemetry when it is `full`.
+
+With `telemetry.threshold_events: true`, the agent can receive a structured
+approaching-compaction notice in the speculation lead band. It includes estimated
+remaining token headroom and checkpoint availability. Usage and headroom are
+estimates of current occupancy, not token-precise predictions of when compaction
+will occur.
 
 ### Other groups
 
 Every schema path not individually tabulated in this catalog is explicitly deferred to `omp config list`. Additional groups include:
 
-- Agent behavior and safety: `ask.*`, `dev.*`, `eval.*`, `features.*`, `goal.*`, `loop.*`, `model.loopGuard.*`, `model.toolCallLoopGuard.*`, `prewalk.*`, `recap.*`, `sharpshooter.*`, `task.*`, `tools.*`, and `vault.*`.
+- Agent behavior and safety: `ask.*`, `dev.*`, `eval.*`, `features.*`, `goal.*`, `irc.*`, `loop.*`, `model.loopGuard.*`, `model.toolCallLoopGuard.*`, `prewalk.*`, `recap.*`, `sharpshooter.*`, `task.*`, `tools.*`, and `vault.*`. `irc.*` is documented in [IRC viewer](./agent-hub.md#irc-viewer).
 - Execution and content: `commit.*`, `completion.*`, `edit.*`, `error.*`, `extensionHandlers.*`, `generate_image.*`, `git.*`, `images.*`, `live.*`, `paste.*`, `power.*`, `read.*`, `shellMinimizer.*`, `speech.*`, `terminal.*`, and `title.*`.
 - Interface and startup: `composer.*`, `display.*`, `input.*`, `marketplace.*`, `spelling.*`, `statusLine.*`, `startup.*`, `stt.*`, `tui.*`, `ttsr.*`, and `update.*`.
-- Discovery, sharing, and auth: `auth.*`, `browser.*`, `claudeResets.*`, `codexResets.*`, `collab.*`, `commands.*`, `gc.*`, `ida.*`, `mcp.*`, `share.*`, `skills.*`, `stream.*`, and `telemetry.*`.
+- Discovery, sharing, and auth: `auth.*`, `browser.*`, `claudeResets.*`, `codexResets.*`, `collab.*`, `commands.*`, `contextFiles.*`, `gc.*`, `ida.*`, `mcp.*`, `share.*`, `skills.*`, `stream.*`, and `telemetry.*`. `contextFiles.extra` is documented in [Context files](./context-files.md#extra-filenames).
 - Ungrouped keys: `setupVersion`, `proseOnlyThinking`, `omitThinking`, `externalThinking`, `includeWorkspaceTree`, `autocompleteMaxVisible`, `emojiAutocomplete`, `disabledExtensions`, `inlineToolDescriptors`, and `treeFilterMode`.
 
 These settings follow the same schema-defined type and default rules shown above.

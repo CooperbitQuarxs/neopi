@@ -15,7 +15,7 @@ import type { TspPickerAction, TspPickerColumn, TspPickerItem, TspPickerScope, T
 import {
 	type Component,
 	Editor,
-	fuzzyMatch,
+	FuzzyQuery,
 	Input,
 	matchesKey,
 	replaceTabs,
@@ -27,22 +27,17 @@ import {
 	wrapTextWithAnsi,
 } from "../index";
 import { code, col, md, node, row, span, text } from "../native/describe";
-import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionHint, type NativeHint, hintsRow } from "../native/overlay";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerEvent, pickerQuery } from "../native/picker";
 import type { AgentSource } from "../tools/task";
 import { shortenPath } from "../render/render-utils";
 import { sanitizeDisplaySingleLine } from "./extensions/display-text";
 import { getEditorTheme, theme } from "../theme";
-import {
-	matchesAppFollowUp,
-	matchesSelectCancel,
-	matchesSelectDown,
-	matchesSelectUp,
-	pickerNavigationKey,
-} from "../keybinding-matchers";
+import { matchesAppFollowUp, matchesSelectCancel } from "../keybinding-matchers";
+import { extractPrintableText } from "../keys";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
-import { boundKeys, editorKey, editorKeys } from "../chrome/keybinding-hints";
+import { boundKeys, editorKey } from "../chrome/keybinding-hints";
 import {
 	buildBrowserItems,
 	ModelBrowser,
@@ -54,12 +49,23 @@ import {
 	describeHubFrame,
 	describeHubSidebar,
 	HubFrame,
-	moveStripSelection,
 	type SidebarEntry as HubSidebarEntry,
 	type SidebarStyle,
 	type StripChip as HubStripChip,
 	type StripState as HubStripState,
 } from "./hub-frame";
+import type { EditorNavigationState } from "../components/editor";
+import { ScrollView } from "../components/scroll-view";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	menuScrollBy,
+	type MenuNavAction,
+	type MenuSearchState,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 
 /** One agent with its per-agent settings overrides resolved for display. */
 export interface HubAgent {
@@ -144,9 +150,45 @@ export interface AgentsHubCallbacks {
 	onCancel: () => void;
 }
 
+type AgentStripNavigationState =
+	| { kind: "chips"; agentName: string; property?: PropertyKind; index: number; start: number }
+	| { kind: "pattern"; agentName: string; property: PropertyKind; value: string; cursor: number };
+
+interface AgentsHubNavigationSnapshot {
+	entryId: string;
+	listScopeId: string;
+	focus: "scope" | "list";
+	selectedRow?: string;
+	search: MenuSearchState;
+	listViewport?: MenuViewportPosition;
+	sidebarScroll: number;
+	notice: string | null;
+	strip: AgentStripNavigationState | null;
+	assigning?: {
+		agentName: string;
+		property: PropertyKind;
+		browser: unknown;
+		parent: AgentStripNavigationState | null;
+	};
+	create?: {
+		description: string;
+		scope: "project" | "user";
+		editor?: EditorNavigationState;
+		spec: GeneratedAgentSpec | null;
+		error: string | null;
+		preview: unknown;
+		promptCollapsed: boolean;
+	};
+}
+
 const IDENTIFIER_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+){1,5}$/;
 
 function extractJsonObject(raw: string): string {
+	// A bare JSON object may legitimately contain code fences inside string values; keep it intact.
+	try {
+		JSON.parse(raw);
+		return raw;
+	} catch {}
 	const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
 	if (fenceMatch?.[1]) return fenceMatch[1].trim();
 	const start = raw.indexOf("{");
@@ -155,7 +197,15 @@ function extractJsonObject(raw: string): string {
 	return raw.trim();
 }
 
-function parseGeneratedAgentSpec(raw: string): GeneratedAgentSpec {
+/**
+ * Parse model output into a {@link GeneratedAgentSpec}. Accepts a bare JSON object
+ * (tried first) or one wrapped in a code fence. Returns the spec with trimmed fields.
+ * Throws if the output is not valid JSON or not an object, if `identifier`, `whenToUse`
+ * or `systemPrompt` is missing or not a string, if the identifier is not lowercase
+ * kebab-case with 2+ words, if `whenToUse` does not start with "Use this agent when",
+ * or if `systemPrompt` is empty.
+ */
+export function parseGeneratedAgentSpec(raw: string): GeneratedAgentSpec {
 	const parsed = JSON.parse(extractJsonObject(raw)) as Partial<GeneratedAgentSpec>;
 	if (!parsed || typeof parsed !== "object") {
 		throw new Error("Model output is not a JSON object");
@@ -187,12 +237,12 @@ function listRowId(rowDef: ListRow): string {
 	return rowDef.kind === "new" ? "new" : `agent:${rowDef.agent.source}:${rowDef.agent.name}`;
 }
 
-function matchAgent(agent: HubAgent, query: string): boolean {
+/** All `tokens` (prepared once per query) fuzzy-match the agent's searchable text. */
+function matchAgent(agent: HubAgent, tokens: readonly FuzzyQuery[]): boolean {
+	// Not memoized: `overrideModel` is edited in place, and the module index
+	// cache already reuses the per-text index for unchanged agents.
 	const text = `${agent.name} ${agent.description} ${SOURCE_LABEL[agent.source]} ${agent.overrideModel ?? ""}`;
-	return query
-		.trim()
-		.split(/\s+/)
-		.every(token => fuzzyMatch(token, text).matches);
+	return tokens.every(token => token.match(text).matches);
 }
 
 /**
@@ -209,21 +259,38 @@ export class AgentsHubComponent implements Component {
 	#entries: SidebarEntry[] = [];
 	#activeEntryId = "all";
 	#focus: "scope" | "list" = "list";
+	#listScopeId = "all";
+	#scopeEntries: SidebarEntry[] = [];
+	#sidebarFollow = true;
+	#sidebarRowsLast = 1;
+	#sidebarVisibleItems = 1;
 
 	#rows: ListRow[] = [];
 	#rowIndex = 0;
 	#rowHover: number | null = null;
 	#listScroll = 0;
-	/** Type-to-filter field for the agent list (chrome-less; the hub draws `search:`). */
-	readonly #search = Object.assign(new Input(), { prompt: "" });
-	#filterEditing = false;
+	readonly #viewport = new MenuViewport();
+	#rowCounts: number[] = [];
+	readonly #keys = new MenuKeyReader();
+	readonly #rowMotion = {
+		move: (delta: number) => this.#moveRow(this.#rowIndex + delta),
+		moveToBoundary: (edge: "first" | "last") => this.#moveRow(edge === "first" ? 0 : this.#rows.length - 1),
+	};
+	/** Explicit slash-focused search; normal-mode letters never edit it. */
+	readonly #search = new MenuSearchField();
 	#notice: string | null = null;
 	#loadError: string | null = null;
 
 	#strip: StripState | null = null;
+	#stripStart = 0;
+	#stripVisibleItems = 1;
 	/** Non-null while the body shows the model browser for one agent property. */
 	#assigning: { agent: HubAgent; property: PropertyKind } | null = null;
 	#browser: ModelBrowser;
+	#assignParent: AgentStripNavigationState | null = null;
+	#restoringNavigation = false;
+	#pendingOperations = 0;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	// Create flow (AI-generated agent definition).
 	#createInput: Editor | null = null;
@@ -233,6 +300,8 @@ export class AgentsHubComponent implements Component {
 	#createSpec: GeneratedAgentSpec | null = null;
 	#createError: string | null = null;
 	#createStreamingText = "";
+	readonly #createPreview = new ScrollView([], { height: 1 });
+	#createNativeScroll: NativeScroll | undefined;
 
 	/** Bumped on every visible-state change; the described node is rebuilt when it moves. */
 	#nativeVersion = 0;
@@ -258,14 +327,27 @@ export class AgentsHubComponent implements Component {
 	readonly #frame: HubFrame = new HubFrame(
 		"Agents",
 		{ min: 16, max: 24 },
-		(width, rows) =>
-			this.#frame.renderSidebar(
+		(width, rows) => {
+			this.#sidebarRowsLast = Math.max(1, rows);
+			const lines = this.#frame.renderSidebar(
 				this.#entries,
 				width,
 				rows,
-				{ id: this.#activeEntryId, focused: this.#focus === "scope", follow: true, clamp: false },
+				{ id: this.#activeEntryId, focused: this.#focus === "scope", follow: this.#sidebarFollow, clamp: true },
 				this.#sidebarStyle,
-			),
+			);
+			this.#sidebarFollow = false;
+			this.#sidebarVisibleItems = 0;
+			for (
+				let index = this.#frame.sidebarScroll;
+				index < Math.min(this.#entries.length, this.#frame.sidebarScroll + rows);
+				index++
+			) {
+				if (this.#entries[index]?.kind !== "separator") this.#sidebarVisibleItems++;
+			}
+			this.#sidebarVisibleItems = Math.max(1, this.#sidebarVisibleItems);
+			return lines;
+		},
 		this.#renderBodyPane,
 	);
 	/** First agent-list row's offset in body-line coordinates (after the status row). */
@@ -293,7 +375,9 @@ export class AgentsHubComponent implements Component {
 		return hub;
 	}
 
-	dispose(): void {}
+	dispose(): void {
+		this.#createPreview.dispose();
+	}
 	invalidate(): void {
 		this.#nativeVersion++;
 		this.#frame.invalidate();
@@ -355,7 +439,9 @@ export class AgentsHubComponent implements Component {
 		entries.push({ id: "sep:actions", kind: "separator", label: "" });
 		entries.push({ id: "new", kind: "new", label: "New agent" });
 		this.#entries = entries;
+		this.#scopeEntries = entries.filter(entry => entry.kind !== "separator");
 		if (!entries.some(entry => entry.id === this.#activeEntryId)) this.#activeEntryId = "all";
+		if (!entries.some(entry => entry.id === this.#listScopeId)) this.#listScopeId = "all";
 	}
 
 	#activeEntry(): SidebarEntry {
@@ -363,12 +449,23 @@ export class AgentsHubComponent implements Component {
 	}
 
 	#buildRows(): void {
-		const entry = this.#activeEntry();
+		const active = this.#activeEntry();
+		if (active.kind !== "new") this.#listScopeId = active.id;
+		const entry = this.#entries.find(candidate => candidate.id === this.#listScopeId) ?? this.#entries[0]!;
 		const scoped =
 			entry.kind === "source" ? this.#allAgents.filter(agent => agent.source === entry.source) : this.#allAgents;
-		const query = this.#search.getValue();
-		const filtered = query ? scoped.filter(agent => matchAgent(agent, query)) : scoped;
+		const query = this.#search.value;
+		let filtered = scoped;
+		if (query) {
+			const tokens = query
+				.trim()
+				.split(/\s+/)
+				.map(token => new FuzzyQuery(token));
+			filtered = scoped.filter(agent => matchAgent(agent, tokens));
+		}
 		this.#rows = [...filtered.map(agent => ({ kind: "agent", agent }) as ListRow), { kind: "new" }];
+		if (this.#rowCounts.length !== this.#rows.length)
+			this.#rowCounts = Array.from({ length: this.#rows.length }, () => 1);
 	}
 
 	#clampRowIndex(): void {
@@ -461,6 +558,8 @@ export class AgentsHubComponent implements Component {
 
 	/** Level-1 strip: pick which knob of `agent` to change. */
 	#openAgentStrip(agent: HubAgent): void {
+		this.#keys.reset();
+		this.#stripStart = 0;
 		const enabledChip: StripChip = {
 			label: agent.disabled ? "enable" : "disable",
 			styled: agent.disabled
@@ -486,6 +585,8 @@ export class AgentsHubComponent implements Component {
 
 	/** Level-2 strip: value choices for one property of `agent`. */
 	#openPropertyStrip(agent: HubAgent, property: PropertyKind): void {
+		this.#keys.reset();
+		this.#stripStart = 0;
 		const current = this.#overrideFor(agent, property)?.toLowerCase();
 		const chips: StripChip[] = [];
 		const mark = (label: string, active: boolean, color: "accent" | "muted" = "muted"): string =>
@@ -539,6 +640,8 @@ export class AgentsHubComponent implements Component {
 	}
 
 	#openPatternStrip(agent: HubAgent, property: PropertyKind): void {
+		this.#keys.reset();
+		this.#stripStart = 0;
 		const input = new Input();
 		const current = this.#overrideFor(agent, property);
 		if (current) input.setValue(current);
@@ -547,6 +650,8 @@ export class AgentsHubComponent implements Component {
 
 	#closeStrip(): void {
 		this.#strip = null;
+		this.#keys.reset();
+		this.#stripStart = 0;
 		this.#frame.chipRanges = [];
 	}
 
@@ -569,7 +674,6 @@ export class AgentsHubComponent implements Component {
 				this.#closeStrip();
 				return;
 			case "pick":
-				this.#closeStrip();
 				this.#startAssign(strip.agent, action.property);
 				return;
 			case "pattern":
@@ -590,26 +694,41 @@ export class AgentsHubComponent implements Component {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	#startAssign(agent: HubAgent, property: PropertyKind): void {
+		const previous = this.#restoringNavigation ? undefined : this.navigationSnapshot();
+		this.#assignParent = this.#stripSnapshot();
+		this.#closeStrip();
 		const items = buildBrowserItems(this.#deps.getAvailableModels());
 		sortModelItems(items, { mruOrder: this.#deps.browserSource.mruOrder });
 		this.#assigning = { agent, property };
 		this.#browser.setItems(items);
 		this.#browser.setQuery("");
+		this.#browser.focusFilter(false);
 		const current = this.#overrideFor(agent, property);
 		if (current) this.#browser.selectSelector(current);
+		if (!this.#restoringNavigation) this.onNavigationVisit?.(`assign:${agent.name}:${property}`, previous);
 	}
 
 	#commitPickedModel(item: ModelBrowserItem): void {
 		const target = this.#assigning;
 		if (!target) return;
+		const previous = this.#restoringNavigation ? undefined : this.navigationSnapshot();
 		this.#assigning = null;
 		this.#browser.setQuery("");
 		this.#setOverride(target.agent, target.property, item.selector);
+		this.#assignParent = null;
+		this.#browser.focusFilter(false);
+		if (!this.#restoringNavigation) this.onNavigationVisit?.("", previous);
 	}
 
 	#cancelAssign(): void {
+		if (!this.#assigning) return;
+		const previous = this.#restoringNavigation ? undefined : this.navigationSnapshot();
 		this.#assigning = null;
 		this.#browser.setQuery("");
+		this.#restoreStrip(this.#assignParent);
+		this.#assignParent = null;
+		this.#browser.focusFilter(false);
+		if (!this.#restoringNavigation) this.onNavigationVisit?.("", previous);
 		this.#requestRender();
 	}
 
@@ -623,6 +742,10 @@ export class AgentsHubComponent implements Component {
 
 	#beginCreateFlow(): void {
 		if (this.#createGenerating) return;
+		const previous = this.#restoringNavigation ? undefined : this.navigationSnapshot();
+		this.#keys.reset();
+		this.#createPreview.scrollToTop();
+		this.#createNativeScroll = undefined;
 		this.#createError = null;
 		this.#createSpec = null;
 		this.#createDescription = "";
@@ -635,16 +758,20 @@ export class AgentsHubComponent implements Component {
 			this.#createDescription = value;
 		};
 		this.#createInput = editor;
+		if (!this.#restoringNavigation) this.onNavigationVisit?.("create", previous);
 		this.#requestRender();
 	}
 
-	#clearCreateFlow(): void {
+	#clearCreateFlow(visit = true): void {
+		const previous = visit && this.#createActive ? this.navigationSnapshot() : undefined;
 		this.#createInput = null;
 		this.#createDescription = "";
 		this.#createGenerating = false;
 		this.#createSpec = null;
 		this.#createError = null;
 		this.#createStreamingText = "";
+		this.#keys.reset();
+		if (previous !== undefined && !this.#restoringNavigation) this.onNavigationVisit?.("", previous);
 	}
 
 	async #generateAgentFromDescription(rawDescription: string): Promise<void> {
@@ -663,6 +790,7 @@ export class AgentsHubComponent implements Component {
 		try {
 			const spec = await this.#runAgentCreationArchitect(description);
 			this.#createSpec = spec;
+			this.#createPreview.scrollToTop();
 			this.#notice = null;
 		} catch (error) {
 			this.#createError = error instanceof Error ? error.message : String(error);
@@ -683,10 +811,15 @@ export class AgentsHubComponent implements Component {
 	async #saveGeneratedAgent(): Promise<void> {
 		const spec = this.#createSpec;
 		if (!spec) return;
-		const filePath = await this.#deps.saveAgent(this.#createScope, spec);
-		this.#clearCreateFlow();
-		this.#notice = `Created agent ${spec.identifier} at ${shortenPath(filePath)}`;
-		await this.#reload();
+		this.#pendingOperations++;
+		try {
+			const filePath = await this.#deps.saveAgent(this.#createScope, spec);
+			this.#clearCreateFlow();
+			this.#notice = `Created agent ${spec.identifier} at ${shortenPath(filePath)}`;
+			await this.#reload();
+		} finally {
+			this.#pendingOperations--;
+		}
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -696,6 +829,7 @@ export class AgentsHubComponent implements Component {
 	handleInput(data: string): void {
 		this.#nativeVersion++;
 		if (data.startsWith("\x1b[<")) {
+			this.#keys.reset();
 			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
 			this.#requestRender();
 			return;
@@ -713,118 +847,105 @@ export class AgentsHubComponent implements Component {
 			return;
 		}
 
-		if (this.#filterEditing) {
-			if (matchesSelectCancel(data)) {
-				this.#filterEditing = false;
-				this.#requestRender();
-			} else if (this.#assigning) {
-				this.#browser.handleInput(data);
-				this.#requestRender();
-			} else {
-				this.#handleFilterInput(data);
-			}
-			return;
-		}
-		if (matchesKey(data, "i")) {
-			this.#filterEditing = true;
-			this.#focus = "list";
-			this.#requestRender();
-			return;
-		}
-		data = pickerNavigationKey(data);
-		if (matchesSelectCancel(data)) {
-			this.#callbacks.onCancel();
-			return;
-		}
-
 		if (this.#assigning) {
-			this.#browser.handleInput(data);
-			this.#requestRender();
-			return;
-		}
-
-		if (matchesKey(data, "ctrl+r")) {
-			void this.#reload();
-			return;
-		}
-
-		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
-			this.#focus = this.#focus === "scope" ? "list" : "scope";
-			this.#requestRender();
-			return;
-		}
-		if (matchesKey(data, "left")) {
-			this.#focus = "scope";
-			this.#requestRender();
-			return;
-		}
-		if (matchesKey(data, "right")) {
-			this.#focus = "list";
-			this.#requestRender();
-			return;
-		}
-
-		if (this.#focus === "scope") {
-			if (matchesSelectUp(data)) {
-				this.#moveSidebar(-1);
-				this.#requestRender();
-				return;
-			}
-			if (matchesSelectDown(data)) {
-				this.#moveSidebar(1);
-				this.#requestRender();
-				return;
-			}
-			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-				if (this.#activeEntry().kind === "new") {
-					this.#beginCreateFlow();
-				} else {
-					this.#focus = "list";
+			if (this.#browser.filterFocused) {
+				this.#keys.reset();
+				this.#browser.handleInput(data);
+			} else {
+				const action = this.#keys.read(data);
+				if (action !== "pending") {
+					if (action?.kind === "horizontal" && action.delta < 0) this.#cancelAssign();
+					else if (action) this.#browser.handleNavigation(action);
+					else this.#browser.handleInput(data);
 				}
-				this.#requestRender();
-				return;
 			}
+			this.#requestRender();
+			return;
 		}
+		const before = this.#search.value;
+		const field = this.#search.handleInput(data);
+		if (field !== "pass") {
+			this.#keys.reset();
+			if (this.#search.value !== before) {
+				this.#focus = "list";
+				this.#buildRows();
+				this.#rowIndex = 0;
+				this.#viewport.reveal();
+			}
+			this.#requestRender();
+			return;
+		}
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (action) {
+			if (this.#search.focused && (action.kind === "confirm" || action.kind === "context"))
+				this.#search.focused = false;
+			else this.#handleMenuAction(action);
+			this.#requestRender();
+			return;
+		}
+		if (!this.#search.focused && matchesKey(data, "ctrl+r")) void this.#reload();
+	}
 
-		if (matchesSelectUp(data)) {
-			this.#rowIndex = Math.max(0, this.#rowIndex - 1);
-			this.#requestRender();
-			return;
-		}
-		if (matchesSelectDown(data)) {
-			this.#rowIndex = Math.min(this.#rows.length - 1, this.#rowIndex + 1);
-			this.#requestRender();
-			return;
-		}
-		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-			this.#activateRow(this.#rows[this.#rowIndex]);
-			this.#requestRender();
-			return;
-		}
-		if (data === " " && !this.#search.getValue()) {
-			const agent = this.#selectedAgent();
-			if (agent) this.#toggleAgent(agent);
-			return;
+	#handleMenuAction(action: MenuNavAction): void {
+		if (this.#focus === "scope") {
+			switch (action.kind) {
+				case "move":
+					this.#moveSidebar(action.delta);
+					return;
+				case "halfPage":
+					this.#moveSidebar(action.delta * Math.max(1, Math.floor(this.#sidebarVisibleItems / 2)), false);
+					return;
+				case "page":
+					this.#moveSidebar(action.delta * this.#sidebarVisibleItems, false);
+					return;
+				case "boundary":
+					this.#selectSidebar(action.edge === "first" ? 0 : this.#scopeEntries.length - 1);
+					return;
+				case "scroll":
+					this.#sidebarFollow = false;
+					this.#frame.scrollSidebar(action.delta, this.#sidebarRowsLast, this.#entries.length);
+					return;
+			}
+		} else if (applyMenuMotion(action, this.#rowMotion, this.#viewport).handled) return;
+		switch (action.kind) {
+			case "search":
+				this.#search.focused = true;
+				this.#focus = "list";
+				this.#keys.reset();
+				return;
+			case "horizontal":
+				this.#focus = action.delta < 0 ? "scope" : "list";
+				return;
+			case "context":
+				this.#focus = this.#focus === "scope" ? "list" : "scope";
+				return;
+			case "cancel":
+				this.#callbacks.onCancel();
+				return;
+			case "confirm":
+				if (this.#focus === "scope") {
+					if (this.#activeEntry().kind === "new") this.#beginCreateFlow();
+					else this.#focus = "list";
+				} else this.#activateRow(this.#rows[this.#rowIndex]);
+				return;
+			case "toggle":
+				if (this.#focus === "scope") {
+					if (this.#activeEntry().kind === "new") this.#beginCreateFlow();
+					else this.#focus = "list";
+				} else {
+					const agent = this.#selectedAgent();
+					if (agent) this.#toggleAgent(agent);
+				}
+				return;
 		}
 	}
 
-	#handleFilterInput(data: string): void {
-		const before = this.#search.getValue();
-		if (!this.#search.handleInput(data)) return;
-		const value = this.#search.getValue();
-		if (value === before) {
-			this.#requestRender();
-		} else if (value.length < before.length) {
-			this.#buildRows();
-			this.#clampRowIndex();
-			this.#requestRender();
-		} else {
-			this.#focus = "list";
-			this.#buildRows();
-			this.#rowIndex = 0;
-			this.#listScroll = 0;
-			this.#requestRender();
-		}
+	#moveRow(index: number): boolean {
+		const next = Math.max(0, Math.min(index, this.#rows.length - 1));
+		const changed = next !== this.#rowIndex;
+		this.#rowIndex = next;
+		return changed;
 	}
 
 	#activateRow(rowDef: ListRow | undefined): void {
@@ -851,10 +972,44 @@ export class AgentsHubComponent implements Component {
 			strip.input.handleInput(data);
 			return;
 		}
-		if (moveStripSelection(strip, data)) return;
-		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-			this.#activateStripChip();
-			return;
+		const action = this.#keys.read(data);
+		if (!action || action === "pending") return;
+		switch (action.kind) {
+			case "move":
+				strip.index = (strip.index + action.delta + strip.chips.length) % strip.chips.length;
+				return;
+			case "halfPage":
+				strip.index = Math.max(
+					0,
+					Math.min(
+						strip.chips.length - 1,
+						strip.index + action.delta * Math.max(1, Math.floor(this.#stripVisibleItems / 2)),
+					),
+				);
+				return;
+			case "page":
+				strip.index = Math.max(
+					0,
+					Math.min(strip.chips.length - 1, strip.index + action.delta * this.#stripVisibleItems),
+				);
+				return;
+			case "boundary":
+				strip.index = action.edge === "first" ? 0 : strip.chips.length - 1;
+				return;
+			case "horizontal":
+				this.#closeStrip();
+				this.#search.focused = false;
+				this.#focus = action.delta < 0 ? "scope" : "list";
+				return;
+			case "context":
+				this.#closeStrip();
+				this.#search.focused = false;
+				this.#focus = this.#focus === "scope" ? "list" : "scope";
+				return;
+			case "confirm":
+			case "toggle":
+				this.#activateStripChip();
+				return;
 		}
 	}
 
@@ -872,25 +1027,32 @@ export class AgentsHubComponent implements Component {
 	}
 
 	#handleCreateInput(data: string): void {
+		if (this.#pendingOperations > 0) return;
 		if (this.#createSpec) {
-			if (matchesSelectCancel(data)) {
-				this.#clearCreateFlow();
-				return;
-			}
-			if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
-				this.#createScope = this.#createScope === "project" ? "user" : "project";
-				return;
-			}
-			if (data.toLowerCase() === "r") {
-				void this.#generateAgentFromDescription(this.#createDescription);
-				return;
-			}
-			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+			const action = this.#keys.read(data);
+			if (action === "pending") return;
+			if (action && this.#applyCreatePreviewMotion(action)) return;
+			if (action?.kind === "cancel" || (action?.kind === "horizontal" && action.delta < 0)) this.#clearCreateFlow();
+			else if (action?.kind === "context") this.#createScope = this.#createScope === "project" ? "user" : "project";
+			else if (action?.kind === "confirm") {
 				void this.#saveGeneratedAgent().catch(error => {
 					this.#createError = error instanceof Error ? error.message : String(error);
 					this.#requestRender();
 				});
-			}
+			} else if (!action && data.toLowerCase() === "r")
+				void this.#generateAgentFromDescription(this.#createDescription);
+			return;
+		}
+		const editor = this.#createInput;
+		if (editor?.isJumpPending) {
+			editor.handleInput(data);
+			this.#createDescription = editor.getExpandedText();
+			return;
+		}
+		const text = extractPrintableText(data);
+		if (text !== undefined && editor) {
+			editor.typeCharacter(text);
+			this.#createDescription = editor.getExpandedText();
 			return;
 		}
 		if (matchesSelectCancel(data)) {
@@ -915,23 +1077,34 @@ export class AgentsHubComponent implements Component {
 		this.#createDescription = this.#createInput?.getExpandedText() ?? "";
 	}
 
-	#moveSidebar(delta: number): void {
-		const count = this.#entries.length;
+	#applyCreatePreviewMotion(action: MenuNavAction): boolean {
+		if (!this.#createPreview.handleMenuAction(action)) return false;
+		const by = menuScrollBy(action);
+		if (by !== undefined) this.#createNativeScroll = { by, n: (this.#createNativeScroll?.n ?? 0) + 1 };
+		return true;
+	}
+
+	#moveSidebar(delta: number, wrap = true): void {
+		const count = this.#scopeEntries.length;
 		if (count === 0) return;
-		let index = this.#entries.findIndex(entry => entry.id === this.#activeEntryId);
-		if (index < 0) index = 0;
-		for (let step = 0; step < count; step++) {
-			index = (index + delta + count) % count;
-			const entry = this.#entries[index];
-			if (entry && entry.kind !== "separator") {
-				this.#activeEntryId = entry.id;
-				if (entry.kind !== "new") {
-					this.#buildRows();
-					this.#rowIndex = 0;
-					this.#listScroll = 0;
-				}
-				return;
-			}
+		const index = Math.max(
+			0,
+			this.#scopeEntries.findIndex(entry => entry.id === this.#activeEntryId),
+		);
+		this.#selectSidebar(
+			wrap ? (((index + delta) % count) + count) % count : Math.max(0, Math.min(count - 1, index + delta)),
+		);
+	}
+
+	#selectSidebar(index: number): void {
+		const entry = this.#scopeEntries[index];
+		if (!entry) return;
+		this.#activeEntryId = entry.id;
+		this.#sidebarFollow = true;
+		if (entry.kind !== "new") {
+			this.#buildRows();
+			this.#rowIndex = 0;
+			this.#viewport.setTop(0);
 		}
 	}
 
@@ -957,13 +1130,19 @@ export class AgentsHubComponent implements Component {
 			if (overBody) this.#browser.routeMouse(event, bodyLine);
 			return true;
 		}
+		if (this.#createSpec && overBody && event.wheel !== null) {
+			this.#applyCreatePreviewMotion({ kind: "scroll", delta: event.wheel });
+			return true;
+		}
 		if (this.#createActive || this.#strip) return true;
 
 		if (event.wheel !== null) {
 			if (overSidebar) {
+				this.#sidebarFollow = false;
 				this.#frame.scrollSidebar(event.wheel, bodyHeight, this.#entries.length);
 			} else if (overBody) {
 				this.#rowIndex = Math.max(0, Math.min(this.#rows.length - 1, this.#rowIndex + event.wheel));
+				this.#viewport.reveal();
 			}
 			return true;
 		}
@@ -984,9 +1163,7 @@ export class AgentsHubComponent implements Component {
 				if (clicked.kind === "new") {
 					this.#beginCreateFlow();
 				} else {
-					this.#activeEntryId = clicked.id;
-					this.#buildRows();
-					this.#rowIndex = 0;
+					this.#selectSidebar(this.#scopeEntries.findIndex(entry => entry.id === clicked.id));
 					this.#focus = "scope";
 				}
 			}
@@ -1000,6 +1177,7 @@ export class AgentsHubComponent implements Component {
 					this.#activateRow(this.#rows[listLine]);
 				} else {
 					this.#rowIndex = listLine;
+					this.#viewport.reveal();
 				}
 			}
 		}
@@ -1047,19 +1225,14 @@ export class AgentsHubComponent implements Component {
 
 	#renderList(width: number, rows: number): string[] {
 		const lines: string[] = [];
-		const query = this.#search.getValue();
-		const searchText = query
-			? theme.fg("accent", this.#filterEditing ? (this.#search.render(visibleWidth(query) + 1)[0] ?? "") : query)
-			: theme.fg("dim", "i to filter");
-		lines.push(truncateToWidth(` ${theme.fg("muted", "search:")} ${searchText}`, width));
+		lines.push(this.#search.render(width, { muted: value => theme.fg("muted", value) }));
 		lines.push("");
 		this.#listRowStart = lines.length;
 
 		const detailRows = 4;
 		const visibleRows = Math.max(3, rows - lines.length - detailRows);
-		if (this.#rowIndex < this.#listScroll) this.#listScroll = this.#rowIndex;
-		else if (this.#rowIndex >= this.#listScroll + visibleRows) this.#listScroll = this.#rowIndex - visibleRows + 1;
-		this.#listScroll = Math.max(0, Math.min(this.#listScroll, Math.max(0, this.#rows.length - visibleRows)));
+		const window = this.#viewport.layout(this.#rowCounts, this.#rowIndex, visibleRows);
+		this.#listScroll = window.startIndex;
 
 		let nameWidth = 0;
 		for (const rowDef of this.#rows) {
@@ -1067,7 +1240,7 @@ export class AgentsHubComponent implements Component {
 		}
 
 		const listFocused = this.#focus === "list";
-		for (let i = this.#listScroll; i < Math.min(this.#rows.length, this.#listScroll + visibleRows); i++) {
+		for (let i = window.startIndex; i < window.endIndex; i++) {
 			const rowDef = this.#rows[i];
 			if (!rowDef) continue;
 			const selected = i === this.#rowIndex;
@@ -1140,7 +1313,7 @@ export class AgentsHubComponent implements Component {
 		return lines.slice(0, rows);
 	}
 
-	#renderCreate(width: number, rows: number): string[] {
+	#renderCreate(width: number, rows: number): readonly string[] {
 		const lines: string[] = [];
 		lines.push("");
 		if (this.#createSpec) {
@@ -1151,7 +1324,7 @@ export class AgentsHubComponent implements Component {
 			lines.push(truncateToWidth(theme.fg("muted", ` Scope: ${this.#createScope}`), width));
 			lines.push("");
 			lines.push(theme.fg("muted", " whenToUse:"));
-			for (const line of wrapTextWithAnsi(replaceTabs(spec.whenToUse), Math.max(20, width - 2)).slice(0, 6)) {
+			for (const line of wrapTextWithAnsi(replaceTabs(spec.whenToUse), Math.max(20, width - 2))) {
 				lines.push(truncateToWidth(` ${line}`, width));
 			}
 			lines.push("");
@@ -1161,12 +1334,8 @@ export class AgentsHubComponent implements Component {
 			for (const raw of spec.systemPrompt.split("\n")) {
 				for (const w of wrapTextWithAnsi(replaceTabs(raw), promptWidth)) wrapped.push(w);
 			}
-			const budget = Math.max(3, rows - lines.length - 3);
-			for (const line of wrapped.slice(0, budget)) {
+			for (const line of wrapped) {
 				lines.push(truncateToWidth(`   ${theme.fg("dim", line)}`, width));
-			}
-			if (wrapped.length > budget) {
-				lines.push(theme.fg("dim", `   … ${wrapped.length - budget} more lines`));
 			}
 		} else {
 			lines.push(truncateToWidth(theme.bold(theme.fg("accent", " Create new agent")), width));
@@ -1201,6 +1370,11 @@ export class AgentsHubComponent implements Component {
 			lines.push("");
 			lines.push(truncateToWidth(theme.fg("error", ` ${replaceTabs(this.#createError)}`), width));
 		}
+		if (this.#createSpec) {
+			this.#createPreview.setLines(lines);
+			this.#createPreview.setHeight(Math.max(1, rows));
+			return this.#createPreview.render(width);
+		}
 		while (lines.length < rows) lines.push("");
 		return lines.slice(0, rows);
 	}
@@ -1208,34 +1382,30 @@ export class AgentsHubComponent implements Component {
 	#footerHint(): string {
 		const enter = formatKeyHint("enter");
 		const cancel = editorKey("tui.select.cancel");
-		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		if (this.#strip) {
 			if (this.#strip.kind === "pattern") {
 				const property = this.#strip.property;
 				const values = property === "model" ? "a model pattern" : '"on", "off", or a model pattern';
 				return `Enter ${values} (role aliases like @smol and :level suffixes work; empty clears) · ${cancel} back`;
 			}
-			const choose = formatKeyHints(["left", "right"]);
-			return this.#strip.property
-				? `${choose} choose · ${enter} apply · ${cancel} back`
-				: `${choose} choose · ${enter} open · ${cancel} cancel`;
+			return `j/k choose · ${enter}/Space set · h/l pane · Tab context · ${cancel} back`;
 		}
-		if (this.#filterEditing) return "INSERT filter · hjkl type literally · Esc normal";
+		if (this.#search.focused) return "Search · hjkl type literally · Esc back to list";
 		if (this.#assigning) {
-			return `${enter} pick · hjkl navigate · i filter · ${cancel} cancel`;
+			return `${enter} pick · j/k Pg C-d/u gg/G move · / search · h/${cancel} back`;
 		}
 		if (this.#createActive) {
 			const tab = formatKeyHint("tab");
 			if (this.#createSpec)
-				return `${enter} save · ${tab} scope · ${formatKeyHint("r")} regenerate · ${cancel} cancel`;
+				return `${enter} save · j/k Pg C-d/u gg/G scroll · ${tab} scope · r regenerate · ${cancel} back`;
 			if (this.#createGenerating) return "Generating…";
 			const generate = formatKeyHints(boundKeys("app.message.followUp", ["ctrl+q", "ctrl+enter"]));
 			return `${generate} generate · ${enter} newline · ${tab} scope · ${cancel} cancel`;
 		}
 		if (this.#focus === "scope") {
-			return `${upDown} scopes · ${formatKeyHints(["right", "enter"])} agents · hjkl navigate · i filter · ${cancel} close`;
+			return `j/k Pg C-d/u gg/G scopes · C-e/y view · l/Enter agents · / search · ${cancel} close`;
 		}
-		return `${enter} configure · ${formatKeyHint("space")} enable/disable · hjkl navigate · i filter · ${formatKeyHint("ctrl+r")} reload · ${cancel} close`;
+		return `${enter} configure · Space enable/disable · j/k Pg C-d/u gg/G move · C-e/y view · h/l panes · / search · Ctrl-R reload · ${cancel} close`;
 	}
 
 	#renderFooter(width: number): string {
@@ -1258,7 +1428,26 @@ export class AgentsHubComponent implements Component {
 		const prefix = strip.property
 			? `${theme.fg("accent", strip.agent.name)}${theme.fg("dim", ` · ${strip.property} →`)} `
 			: `${theme.fg("accent", strip.agent.name)}${theme.fg("dim", " →")} `;
-		return this.#frame.renderChips(width, prefix, strip);
+		const prefixWidth = visibleWidth(prefix);
+		let start = Math.max(0, Math.min(this.#stripStart, strip.index));
+		let used = prefixWidth + Number(start > 0) * 2;
+		for (let index = start; index <= strip.index; index++)
+			used += visibleWidth(strip.chips[index]!.styled) + 3 + Number(index === strip.index) * 2;
+		while (used > width && start < strip.index) {
+			used -= visibleWidth(strip.chips[start]!.styled) + 3;
+			if (start === 0) used += 2;
+			start++;
+		}
+		this.#stripStart = start;
+		used = prefixWidth + Number(start > 0) * 2;
+		this.#stripVisibleItems = 0;
+		for (let index = start; index < strip.chips.length; index++) {
+			used += visibleWidth(strip.chips[index]!.styled) + 3 + Number(index === strip.index) * 2;
+			if (used > width) break;
+			this.#stripVisibleItems++;
+		}
+		this.#stripVisibleItems = Math.max(1, this.#stripVisibleItems);
+		return this.#frame.renderChips(width, prefix, strip, start);
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -1323,6 +1512,7 @@ export class AgentsHubComponent implements Component {
 				if (index < 0) return;
 				this.#focus = "list";
 				this.#rowIndex = index;
+				this.#viewport.reveal();
 				if (activate) this.#activateRow(this.#rows[index]);
 			} else if (target === "scopes") {
 				if (this.#strip || this.#createActive || this.#assigning) return;
@@ -1331,10 +1521,7 @@ export class AgentsHubComponent implements Component {
 				if (entry.kind === "new") {
 					this.#beginCreateFlow();
 				} else {
-					this.#activeEntryId = entry.id;
-					this.#buildRows();
-					this.#rowIndex = 0;
-					this.#listScroll = 0;
+					this.#selectSidebar(this.#scopeEntries.findIndex(candidate => candidate.id === entry.id));
 					this.#focus = activate ? "list" : "scope";
 				}
 			} else {
@@ -1355,11 +1542,12 @@ export class AgentsHubComponent implements Component {
 			if (index < 0) return;
 			this.#focus = "list";
 			this.#rowIndex = index;
+			this.#viewport.reveal();
 			if (pick.kind === "activate") this.#activateRow(this.#rows[index]);
 			return;
 		}
 		if (pick.act === "close") {
-			this.#callbacks.onCancel();
+			this.handleInput("\x1b");
 			return;
 		}
 		if (strip?.kind === "chips") {
@@ -1380,10 +1568,7 @@ export class AgentsHubComponent implements Component {
 			case "scope": {
 				const entry = this.#entries.find(candidate => candidate.id === pick.value);
 				if (!entry || entry.kind === "separator" || entry.kind === "new") return;
-				this.#activeEntryId = entry.id;
-				this.#buildRows();
-				this.#rowIndex = 0;
-				this.#listScroll = 0;
+				this.#selectSidebar(this.#scopeEntries.findIndex(candidate => candidate.id === entry.id));
 				this.#focus = "scope";
 				return;
 			}
@@ -1443,7 +1628,7 @@ export class AgentsHubComponent implements Component {
 				{ id: "model", label: "Model", disabled: noAgent },
 				{ id: "new", label: "New agent" },
 				{ id: "reload", label: "Reload", keys: ["ctrl", "r"] },
-				CLOSE_ACTION,
+				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
 			];
 		}
 		const selectedRow = this.#rows[this.#rowIndex];
@@ -1456,7 +1641,7 @@ export class AgentsHubComponent implements Component {
 				size: "lg",
 				layout: "rows",
 				preview: "side",
-				...pickerQuery(this.#search),
+				...pickerQuery(this.#search.input),
 				placeholder: "Search agents…",
 				scopes,
 				scope: entry.kind === "source" ? entry.id : "all",
@@ -1581,7 +1766,10 @@ export class AgentsHubComponent implements Component {
 		} else {
 			children.push(...this.#describeList());
 		}
-		return node("col", { gap: "sm", grow: 1 }, children, "body");
+		return {
+			...node("col", { gap: "sm", grow: 1 }, children, "body"),
+			scroll: this.#createSpec ? this.#createNativeScroll : undefined,
+		};
 	}
 
 	#statusSpans(): TspSpan[] {
@@ -1600,18 +1788,26 @@ export class AgentsHubComponent implements Component {
 	}
 
 	#describeList(): NativeNode[] {
-		const search = node(
-			"text",
-			{
-				spans: [
-					span("search: ", "muted"),
-					this.#search.getValue() ? span(this.#search.getValue(), "accent") : span("type to filter", "dim"),
-				],
-				truncate: "end",
-			},
-			undefined,
-			"search",
-		);
+		const search = this.#search.focused
+			? node(
+					"input",
+					{ text: this.#search.value, cursor: this.#search.cursor, prompt: [span("Search: ", "muted")] },
+					undefined,
+					"search",
+				)
+			: node(
+					"text",
+					{
+						spans: [
+							this.#search.value
+								? span(`Search: ${sanitizeDisplaySingleLine(this.#search.value)} · / search`, "muted")
+								: span("/ search", "dim"),
+						],
+						truncate: "end",
+					},
+					undefined,
+					"search",
+				);
 		const items = this.#rows.map(rowDef =>
 			rowDef.kind === "new"
 				? node("item", { label: [span("+ New agent…", "dim")] }, undefined, listRowId(rowDef))
@@ -1622,7 +1818,7 @@ export class AgentsHubComponent implements Component {
 			"list",
 			{
 				selected: selectedRow ? listRowId(selectedRow) : null,
-				filter: this.#search.getValue() || undefined,
+				filter: this.#search.value || undefined,
 				virtual: true,
 				grow: 1,
 				tone: this.#focus === "list" ? "accent" : undefined,
@@ -1810,16 +2006,17 @@ export class AgentsHubComponent implements Component {
 				];
 			}
 			return [
-				{ keys: ["left", "right"], label: "choose" },
-				{ keys: ["enter"], label: strip.property ? "apply" : "open" },
-				cancel(strip.property ? "back" : "cancel"),
+				{ keys: ["j", "k"], label: "choose" },
+				{ keys: ["enter", "space"], label: "set" },
+				{ keys: ["h", "l"], label: "pane" },
+				cancel("back"),
 			];
 		}
 		if (this.#assigning) {
 			return [
 				{ keys: ["enter"], label: "pick" },
 				upDown("models"),
-				{ keys: [], label: "type to search" },
+				{ keys: ["/"], label: "search" },
 				cancel("cancel"),
 			];
 		}
@@ -1827,6 +2024,8 @@ export class AgentsHubComponent implements Component {
 			if (this.#createSpec) {
 				return [
 					{ keys: ["enter"], label: "save" },
+					upDown("scroll"),
+					{ keys: ["pageUp", "pageDown"], label: "page" },
 					{ keys: ["tab"], label: "scope" },
 					{ keys: ["r"], label: "regenerate" },
 					cancel("cancel"),
@@ -1840,6 +2039,7 @@ export class AgentsHubComponent implements Component {
 				cancel("cancel"),
 			];
 		}
+		if (this.#search.focused) return [cancel("back to list")];
 		if (this.#focus === "scope") {
 			return [upDown("scopes"), { keys: ["right", "enter"], label: "agents" }, cancel("close")];
 		}
@@ -1847,10 +2047,138 @@ export class AgentsHubComponent implements Component {
 			{ keys: ["enter"], label: "configure" },
 			{ keys: ["space"], label: "enable/disable" },
 			upDown("rows"),
-			{ keys: [], label: "type to search" },
+			{ keys: ["/"], label: "search" },
 			{ keys: ["ctrl+r"], label: "reload" },
 			cancel("close"),
 		];
+	}
+
+	get blocksMenuHistory(): boolean {
+		return this.#createGenerating || this.#pendingOperations > 0;
+	}
+
+	leaveMenu(): void {
+		this.#keys.reset();
+	}
+
+	#stripSnapshot(): AgentStripNavigationState | null {
+		const strip = this.#strip;
+		if (!strip) return null;
+		return strip.kind === "chips"
+			? {
+					kind: "chips",
+					agentName: strip.agent.name,
+					property: strip.property,
+					index: strip.index,
+					start: this.#stripStart,
+				}
+			: {
+					kind: "pattern",
+					agentName: strip.agent.name,
+					property: strip.property,
+					value: strip.input.getValue(),
+					cursor: strip.input.getCursor(),
+				};
+	}
+
+	#restoreStrip(state: AgentStripNavigationState | null): void {
+		this.#closeStrip();
+		if (!state) return;
+		const agent = this.#allAgents.find(candidate => candidate.name === state.agentName);
+		if (!agent) return;
+		if (state.kind === "pattern") {
+			this.#openPatternStrip(agent, state.property);
+			const strip = this.#strip;
+			if (strip?.kind === "pattern") {
+				strip.input.setValue(state.value);
+				strip.input.setCursor(state.cursor);
+			}
+		} else {
+			if (state.property) this.#openPropertyStrip(agent, state.property);
+			else this.#openAgentStrip(agent);
+			const strip = this.#strip;
+			if (strip?.kind === "chips") strip.index = Math.max(0, Math.min(strip.chips.length - 1, state.index));
+			this.#stripStart = Math.max(0, state.start);
+		}
+	}
+
+	navigationSnapshot(): AgentsHubNavigationSnapshot {
+		const selected = this.#rows[this.#rowIndex];
+		return {
+			entryId: this.#activeEntryId,
+			listScopeId: this.#listScopeId,
+			focus: this.#focus,
+			selectedRow: selected ? listRowId(selected) : undefined,
+			search: this.#search.navigationSnapshot(),
+			listViewport: this.#viewport.top,
+			sidebarScroll: this.#frame.sidebarScroll,
+			notice: this.#notice,
+			strip: this.#stripSnapshot(),
+			assigning: this.#assigning
+				? {
+						agentName: this.#assigning.agent.name,
+						property: this.#assigning.property,
+						browser: this.#browser.navigationSnapshot(),
+						parent: this.#assignParent,
+					}
+				: undefined,
+			create: this.#createActive
+				? {
+						description: this.#createDescription,
+						scope: this.#createScope,
+						editor: this.#createInput?.getState(),
+						spec: this.#createSpec ? { ...this.#createSpec } : null,
+						error: this.#createError,
+						preview: this.#createPreview.navigationSnapshot(),
+						promptCollapsed: this.#promptCollapsed,
+					}
+				: undefined,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as AgentsHubNavigationSnapshot;
+		if (!state.search || (state.focus !== "scope" && state.focus !== "list")) return;
+		this.#restoringNavigation = true;
+		this.#keys.reset();
+		try {
+			this.#assigning = null;
+			this.#assignParent = null;
+			this.#clearCreateFlow(false);
+			this.#activeEntryId = this.#entries.some(entry => entry.id === state.entryId) ? state.entryId : "all";
+			this.#listScopeId = state.listScopeId;
+			this.#focus = state.focus;
+			this.#search.restoreNavigation(state.search);
+			this.#buildRows();
+			const selected = this.#rows.findIndex(rowDef => listRowId(rowDef) === state.selectedRow);
+			this.#rowIndex = selected >= 0 ? selected : 0;
+			this.#viewport.setTop(state.listViewport);
+			this.#frame.sidebarScroll = Math.max(0, state.sidebarScroll);
+			this.#sidebarFollow = false;
+			this.#notice = state.notice;
+			this.#restoreStrip(state.strip);
+			if (state.assigning) {
+				const agent = this.#allAgents.find(candidate => candidate.name === state.assigning!.agentName);
+				if (agent) {
+					this.#startAssign(agent, state.assigning.property);
+					this.#assignParent = state.assigning.parent;
+					this.#browser.restoreNavigation(state.assigning.browser);
+				}
+			} else if (state.create) {
+				this.#beginCreateFlow();
+				this.#createScope = state.create.scope;
+				if (state.create.editor) this.#createInput?.setState(state.create.editor);
+				this.#createDescription = this.#createInput?.getExpandedText() ?? state.create.description;
+				this.#createSpec = state.create.spec ? { ...state.create.spec } : null;
+				this.#createError = state.create.error;
+				this.#createPreview.restoreNavigation(state.create.preview);
+				this.#promptCollapsed = state.create.promptCollapsed;
+			}
+		} finally {
+			this.#restoringNavigation = false;
+		}
+		this.#requestRender();
 	}
 
 	render(width: number): readonly string[] {

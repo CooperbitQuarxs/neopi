@@ -1,8 +1,26 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 
+import { stripVTControlCharacters } from "node:util";
 import { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
+import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import { getKeybindings, setKeybindings, type TUI } from "@oh-my-pi/pi-tui";
+import type { TspSpan } from "@oh-my-pi/pi-wire";
+import { KeybindingsManager } from "../src/app-keybindings";
+
+const CX: DescribeContext = { cols: 100, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
+
+/** Every described node under `child`, components expanded through their own `describe`. */
+function nodes(child: NativeChild): NativeNode[] {
+	const described = "k" in child ? child : child.describe?.(CX);
+	if (!described) return [];
+	return [described, ...(described.c ?? []).flatMap(nodes)];
+}
+
+/** The spans of a `text` node (none for other kinds). */
+function spans(node: NativeNode): readonly TspSpan[] {
+	return node.k === "text" ? (node.p?.spans ?? []) : [];
+}
 
 beforeAll(async () => {
 	const theme = await getThemeByName("dark");
@@ -103,5 +121,179 @@ describe("HookInputComponent timeout", () => {
 		expect(onSubmit).toHaveBeenCalledWith("sk-line1sk-line2");
 
 		component.dispose();
+	});
+});
+
+describe("HookInputComponent native sheet", () => {
+	it("Submit and Cancel run what Enter and Esc run; keys live only in tooltips", () => {
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const component = new HookInputComponent("Search pull requests", undefined, onSubmit, onCancel);
+		const buttons = nodes(component.describe(CX)).filter(node => node.p?.role === "omp.btn");
+		expect(buttons.map(button => [button.key, button.p?.title])).toEqual([
+			["cancel", "Cancel  esc"],
+			["submit", "Submit  ⏎"],
+		]);
+		// No key legend text in the native body: the terminal-only hint stays in render().
+		const texts = nodes(component.describe(CX)).flatMap(node => spans(node).map(s => s.t));
+		expect(texts.some(t => t.includes("submit"))).toBe(false);
+		expect(stripVTControlCharacters(component.render(80).join("\n"))).toContain("submit");
+
+		component.handleInput("4");
+		component.handleInput("2");
+		component.handleNativeEvent({ type: "action", key: "actions/submit", act: "submit", mods: [] });
+		expect(onSubmit).toHaveBeenCalledWith("42");
+		component.handleNativeEvent({ type: "action", key: "actions/cancel", act: "cancel", mods: [] });
+		expect(onCancel).toHaveBeenCalledTimes(1);
+	});
+
+	it("splits the title into head and detail and draws the placeholder natively", () => {
+		const component = new HookInputComponent(
+			"Search pull requests\nTitle, author or #123",
+			"e.g. #482",
+			vi.fn(),
+			vi.fn(),
+		);
+		const all = nodes(component.describe(CX));
+		const title = all.find(node => node.p?.role === "omp.hook-input.title");
+		const detail = all.find(node => node.p?.role === "omp.hook-input.detail");
+		expect(title && spans(title).map(s => s.t)).toEqual(["Search pull requests"]);
+		expect(detail && spans(detail).map(s => s.t)).toEqual(["Title, author or #123"]);
+		expect(all.find(node => node.k === "input")?.p).toMatchObject({ placeholder: "e.g. #482" });
+	});
+
+	it("a refused submit keeps the value and tints the field with the reason under it", () => {
+		const component = new HookInputComponent(
+			"PR number",
+			undefined,
+			value => {
+				throw new Error(`"${value}" isn't a number`);
+			},
+			vi.fn(),
+		);
+		component.handleInput("x");
+		component.handleInput("\n");
+		const all = nodes(component.describe(CX));
+		expect(all.find(node => node.p?.role === "omp.hook-input.field")?.p).toMatchObject({ tone: "error" });
+		expect(all.some(node => spans(node).some(s => s.t === `"x" isn't a number` && s.s === "error"))).toBe(true);
+		expect(all.find(node => node.k === "input")?.p).toMatchObject({ text: "x" });
+	});
+});
+
+describe("HookInputComponent literal text", () => {
+	it("keeps printable interrupt, cancel and submit bindings literal, including Kitty text", () => {
+		const previous = getKeybindings();
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"app.interrupt": "j",
+				"tui.select.cancel": "k",
+				"tui.input.submit": "s",
+			}),
+		);
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const component = new HookInputComponent("Prompt", undefined, onSubmit, onCancel);
+		try {
+			const value = "j/k h l gg G /code s";
+			for (const char of value) component.handleInput(char);
+			component.handleInput("\x1b[106u");
+			expect(onSubmit).not.toHaveBeenCalled();
+			expect(onCancel).not.toHaveBeenCalled();
+			component.handleInput("\r");
+			expect(onSubmit).toHaveBeenCalledTimes(1);
+			expect(onSubmit).toHaveBeenCalledWith(`${value}j`);
+			component.handleInput("\x1b");
+			expect(onCancel).toHaveBeenCalledTimes(1);
+		} finally {
+			component.dispose();
+			setKeybindings(previous);
+		}
+	});
+
+	it("keeps explicit LF submission when the submit binding is printable", () => {
+		const previous = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory({ "tui.input.submit": "s" }));
+		const onSubmit = vi.fn();
+		const component = new HookInputComponent("Prompt", undefined, onSubmit, vi.fn());
+		try {
+			component.handleInput("s");
+			expect(onSubmit).not.toHaveBeenCalled();
+			component.handleInput("\n");
+			expect(onSubmit).toHaveBeenCalledTimes(1);
+			expect(onSubmit).toHaveBeenCalledWith("s");
+		} finally {
+			component.dispose();
+			setKeybindings(previous);
+		}
+	});
+
+	it("preserves ordinary typed-word undo instead of creating a paste per character", () => {
+		const previous = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory({ "tui.editor.undo": "ctrl+z" }));
+		const onSubmit = vi.fn();
+		const component = new HookInputComponent("Prompt", undefined, onSubmit, vi.fn());
+		try {
+			for (const char of "draft") component.handleInput(char);
+			component.handleInput("\x1a");
+			component.handleInput("\r");
+			expect(onSubmit).toHaveBeenCalledTimes(1);
+			expect(onSubmit).toHaveBeenCalledWith("");
+		} finally {
+			component.dispose();
+			setKeybindings(previous);
+		}
+	});
+
+	it("retains nonprintable submit, field-cancel and application-interrupt bindings", () => {
+		const previous = getKeybindings();
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"app.interrupt": "alt+x",
+				"tui.select.cancel": "alt+q",
+				"tui.input.submit": "alt+s",
+			}),
+		);
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const component = new HookInputComponent("Prompt", undefined, onSubmit, onCancel);
+		try {
+			component.handleInput("code");
+			component.handleInput("\x1bs");
+			expect(onSubmit).toHaveBeenCalledTimes(1);
+			expect(onSubmit).toHaveBeenCalledWith("code");
+			component.handleInput("\x1bq");
+			component.handleInput("\x1bx");
+			expect(onCancel).toHaveBeenCalledTimes(2);
+		} finally {
+			component.dispose();
+			setKeybindings(previous);
+		}
+	});
+
+	it("resets the timeout while typing a remapped printable interrupt", () => {
+		const previous = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory({ "app.interrupt": "j" }));
+		vi.useFakeTimers();
+		const onCancel = vi.fn();
+		const onTimeout = vi.fn();
+		const component = new HookInputComponent("Prompt", undefined, vi.fn(), onCancel, {
+			timeout: 1_000,
+			tui: { requestRender: vi.fn() } as unknown as TUI,
+			onTimeout,
+		});
+		try {
+			vi.advanceTimersByTime(900);
+			component.handleInput("j");
+			vi.advanceTimersByTime(900);
+			expect(onTimeout).not.toHaveBeenCalled();
+			expect(onCancel).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(200);
+			expect(onTimeout).toHaveBeenCalledTimes(1);
+			expect(onCancel).toHaveBeenCalledTimes(1);
+		} finally {
+			component.dispose();
+			vi.useRealTimers();
+			setKeybindings(previous);
+		}
 	});
 });

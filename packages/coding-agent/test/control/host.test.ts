@@ -25,6 +25,9 @@ import { InternalUrlRouter } from "../../src/internal-urls/router";
 import { AgentSession } from "../../src/session/agent-session";
 import type { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
+import { type SubagentLifecyclePayload, TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "../../src/task/types";
+import { EventBus } from "../../src/utils/event-bus";
+import type { ControlSnapshot } from "../../src/control/types";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 describe("control host", () => {
@@ -34,6 +37,9 @@ describe("control host", () => {
 	let host: ControlHost | undefined;
 	let client: ControlClient | undefined;
 	let dir: string;
+	/** Extra sessions and clients a test opened beyond the primary pair. */
+	const extraSessions: AgentSession[] = [];
+	const extraClients: ControlClient[] = [];
 
 	beforeAll(() => {
 		tempDir = TempDir.createSync("@pi-control-host-");
@@ -42,12 +48,14 @@ describe("control host", () => {
 	});
 
 	afterEach(async () => {
+		for (const extra of extraClients.splice(0)) extra.close();
 		client?.close();
 		client = undefined;
 		await host?.close();
 		host = undefined;
 		await session?.dispose();
 		session = undefined;
+		for (const extra of extraSessions.splice(0)) await extra.dispose();
 	});
 
 	afterAll(async () => {
@@ -55,9 +63,9 @@ describe("control host", () => {
 		await tempDir.remove();
 	});
 
-	async function start(settings: Record<string, unknown> = {}): Promise<{ host: ControlHost; client: ControlClient }> {
+	function createSession(settings: Record<string, unknown> = {}): AgentSession {
 		const model = createMockModel({ provider: "anthropic", responses: [] });
-		session = new AgentSession({
+		return new AgentSession({
 			agent: new Agent({
 				getApiKey: () => "test-key",
 				initialState: { model, systemPrompt: [], tools: [] },
@@ -67,15 +75,122 @@ describe("control host", () => {
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, ...settings }),
 			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
 		});
+	}
+
+	async function start(
+		settings: Record<string, unknown> = {},
+		options: { subagentEventBus?: EventBus } = {},
+	): Promise<{ host: ControlHost; client: ControlClient; hello: ControlSnapshot }> {
+		session = createSession(settings);
 		dir = mkdtempSync(join(tmpdir(), "omp-ctl-host-"));
-		host = new ControlHost({ session, role: "rpc", dir, tmuxPane: null });
+		host = new ControlHost({ session, role: "rpc", dir, tmuxPane: null, ...options });
 		await host.start();
 		const publication = host.publication;
 		if (!publication) throw new Error("control host did not publish");
 		client = new ControlClient({ metadata: publication.metadata(), label: "test", kind: "cli" });
-		await client.connect();
-		return { host, client };
+		const hello = await client.connect();
+		return { host, client, hello };
 	}
+
+	/** A second connection to the running host. */
+	async function connectAnother(label: string): Promise<ControlClient> {
+		const publication = host?.publication;
+		if (!publication) throw new Error("control host did not publish");
+		const extra = new ControlClient({ metadata: publication.metadata(), label, kind: "cli" });
+		extraClients.push(extra);
+		await extra.connect();
+		return extra;
+	}
+
+	function emitStarted(bus: EventBus, id: string): void {
+		const sessionFile = join(tempDir.path(), `${id}.jsonl`);
+		bus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+			id,
+			runToken: `${sessionFile}:${id}`,
+			index: 0,
+			agent: "task",
+			agentSource: "bundled",
+			status: "started",
+			sessionFile,
+		} satisfies SubagentLifecyclePayload);
+	}
+
+	test("hello and state carry the root session's RPC state, without the dump fields", async () => {
+		const { client, hello } = await start();
+		expect(hello.session?.sessionId).toBe(session!.sessionId);
+		const state = (await client.request({ type: "state" })).data as ControlSnapshot;
+		expect(state.session?.sessionId).toBe(session!.sessionId);
+		expect(state.session?.model?.provider).toBe("anthropic");
+		expect(state.session?.mode).toBe("default");
+		expect(state.session?.systemPrompt).toBeUndefined();
+		expect(state.session?.dumpTools).toBeUndefined();
+		expect(state.root).toBeUndefined();
+	});
+
+	test("target view reports the focused subagent's session and names the root; root ignores the focus", async () => {
+		const { host, client } = await start();
+		const viewed = createSession();
+		extraSessions.push(viewed);
+		host.presenter = {
+			...stubPresenter({ approvalOpen: false }).presenter,
+			viewTarget: () => ({ agentId: "Viewed", session: viewed }),
+		};
+		const view = (await client.request({ type: "state", target: "view" })).data as ControlSnapshot;
+		expect(view.session?.sessionId).toBe(viewed.sessionId);
+		expect(view.root).toEqual({ sessionId: session!.sessionId, generation: 1 });
+		expect(view.view?.focusedAgent).toBe("Viewed");
+		const root = (await client.request({ type: "get_status" })).data as ControlSnapshot;
+		expect(root.session?.sessionId).toBe(session!.sessionId);
+		expect(root.root).toBeUndefined();
+	});
+
+	test("target view falls back to the root session while nothing is focused", async () => {
+		const { host, client } = await start();
+		host.presenter = { ...stubPresenter({ approvalOpen: false }).presenter, viewTarget: () => undefined };
+		const view = (await client.request({ type: "state", target: "view" })).data as ControlSnapshot;
+		expect(view.session?.sessionId).toBe(session!.sessionId);
+		expect(view.view?.focusedAgent).toBeNull();
+	});
+
+	test("a connection opened after a subagent started still lists it", async () => {
+		const bus = new EventBus();
+		await start({}, { subagentEventBus: bus });
+		emitStarted(bus, "EarlySub");
+		const late = await connectAnother("late");
+		const reply = await late.request({ type: "get_subagents" });
+		expect(reply.success).toBe(true);
+		expect((reply.data as { subagents: { id: string }[] }).subagents.map(subagent => subagent.id)).toEqual([
+			"EarlySub",
+		]);
+	});
+
+	test("subagent frames reach only connections that subscribed, at their own level", async () => {
+		const bus = new EventBus();
+		const { client: watcher } = await start({}, { subagentEventBus: bus });
+		const quiet = await connectAnother("quiet");
+		const watched: unknown[] = [];
+		const heard: unknown[] = [];
+		watcher.onEvent(frame => watched.push(frame.type));
+		quiet.onEvent(frame => heard.push(frame.type));
+		const subscribed = await watcher.request({ type: "set_subagent_subscription", level: "progress" });
+		expect(subscribed.data).toEqual({ level: "progress" });
+		emitStarted(bus, "StreamedSub");
+		// Host writes are ordered per socket, so a round trip flushes any frame emitted before it.
+		await watcher.request({ type: "get_status" });
+		await quiet.request({ type: "get_status" });
+		expect(watched).toContain("subagent_lifecycle");
+		expect(heard).not.toContain("subagent_lifecycle");
+
+		// Unsubscribing one connection stops its stream without disturbing another's.
+		await quiet.request({ type: "set_subagent_subscription", level: "progress" });
+		await watcher.request({ type: "set_subagent_subscription", level: "off" });
+		watched.length = 0;
+		emitStarted(bus, "LaterSub");
+		await watcher.request({ type: "get_status" });
+		await quiet.request({ type: "get_status" });
+		expect(watched).not.toContain("subagent_lifecycle");
+		expect(heard).toContain("subagent_lifecycle");
+	});
 
 	test("set_approval_handler and tool_approval_response stay with the pane while control.approvals is off", async () => {
 		const { client } = await start();

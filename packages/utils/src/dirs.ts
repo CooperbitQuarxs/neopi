@@ -17,6 +17,7 @@ import * as path from "node:path";
 import type * as NativePath from "@oh-my-pi/pi-natives/path";
 import { engines, version } from "../package.json" with { type: "json" };
 import { isEexist, isEnoent, isEnotdir } from "./fs-error";
+import { getEnvValue } from "./launch-env";
 
 /** Executable name used in CLI output and launch commands. */
 export const APP_NAME: string = "npi";
@@ -97,8 +98,8 @@ export function resolveProfileEnv(omp: string | undefined, pi: string | undefine
 	return normalizeProfileName(omp !== undefined ? omp : pi);
 }
 
-function getProfileFromEnv(): string | undefined {
-	return resolveProfileEnv(process.env.OMP_PROFILE, process.env.PI_PROFILE);
+function getProfileFromEnv(env: Readonly<NodeJS.ProcessEnv> = process.env): string | undefined {
+	return resolveProfileEnv(getEnvValue(env, "OMP_PROFILE"), getEnvValue(env, "PI_PROFILE"));
 }
 
 /**
@@ -109,9 +110,9 @@ function getProfileFromEnv(): string | undefined {
  * CLI re-validates the env (see `runCli` in coding-agent/src/cli.ts) so the
  * user still gets a clean invalid-profile message.
  */
-function readProfileFromEnvSafe(): string | undefined {
+function readProfileFromEnvSafe(env: Readonly<NodeJS.ProcessEnv> = process.env): string | undefined {
 	try {
-		return getProfileFromEnv();
+		return getProfileFromEnv(env);
 	} catch {
 		return undefined;
 	}
@@ -119,28 +120,37 @@ function readProfileFromEnvSafe(): string | undefined {
 
 /** Profile-independent config root (~/.omp), shared by every NeoPi profile. */
 export function getBaseConfigRoot(): string {
-	return path.join(os.homedir(), getConfigDirName());
+	return getProfileConfigRoot(undefined);
 }
 
-function getProfileConfigRoot(profile: string | undefined): string {
-	const root = getBaseConfigRoot();
+function getProfileConfigRoot(
+	profile: string | undefined,
+	home = os.homedir(),
+	configDir = getConfigDirName(),
+): string {
+	const root = path.join(home, configDir);
 	return profile ? path.join(root, "profiles", profile) : root;
 }
 
-function readPiProfileFromEnvSafe(): string | undefined {
+function readPiProfileFromEnvSafe(env: Readonly<NodeJS.ProcessEnv> = process.env): string | undefined {
 	try {
-		return normalizeProfileName(process.env.PI_PROFILE);
+		return normalizeProfileName(getEnvValue(env, "PI_PROFILE"));
 	} catch {
 		return undefined;
 	}
 }
 
-function getProfileAgentDir(profile: string): string {
-	return path.join(getProfileConfigRoot(profile), "agent");
+function getProfileAgentDir(profile: string, home = os.homedir(), configDir = getConfigDirName()): string {
+	return path.join(getProfileConfigRoot(profile, home, configDir), "agent");
 }
 
-function isProfileDerivedAgentDir(profile: string | undefined, agentDirEnv: string | undefined): boolean {
-	return profile !== undefined && agentDirEnv === getProfileAgentDir(profile);
+function isProfileDerivedAgentDir(
+	profile: string | undefined,
+	agentDirEnv: string | undefined,
+	home = os.homedir(),
+	configDir = getConfigDirName(),
+): boolean {
+	return profile !== undefined && agentDirEnv === getProfileAgentDir(profile, home, configDir);
 }
 // =============================================================================
 // Project directory
@@ -388,6 +398,7 @@ class DirResolver {
 	// With XDG on Linux, they point to $XDG_*_HOME/omp/.
 	readonly #rootDirs: Record<XdgCategory, string>;
 	readonly #agentDirs: Record<XdgCategory, string>;
+	readonly #baseRootDirs: Record<XdgCategory, string>;
 
 	readonly #rootCache = new Map<string, string>();
 	readonly #agentCache = new Map<string, string>();
@@ -416,7 +427,8 @@ class DirResolver {
 		let xdgData: string | undefined;
 		let xdgState: string | undefined;
 		let xdgCache: string | undefined;
-		if ((process.platform === "linux" || process.platform === "darwin") && isDefault) {
+		const xdgPlatform = process.platform === "linux" || process.platform === "darwin";
+		if (xdgPlatform && isDefault) {
 			const resolveIf = (envVar: string) => {
 				const value = process.env[envVar];
 				if (!value) return undefined;
@@ -424,14 +436,10 @@ class DirResolver {
 					const appRoot = path.join(value, XDG_DIR_NAME);
 					if (profile) {
 						const profilePath = path.join(appRoot, "profiles", profile);
-						if (fs.existsSync(profilePath)) {
-							return profilePath;
-						}
+						if (fs.existsSync(profilePath)) return profilePath;
 						return undefined;
 					}
-					if (fs.existsSync(appRoot)) {
-						return appRoot;
-					}
+					return fs.existsSync(appRoot) ? appRoot : undefined;
 				} catch {}
 				return undefined;
 			};
@@ -439,6 +447,22 @@ class DirResolver {
 			xdgState = resolveIf("XDG_STATE_HOME");
 			xdgCache = resolveIf("XDG_CACHE_HOME");
 		}
+
+		// XDG choice for machine-global paths (daemon scopes shared by every
+		// process): keyed only on the base app root, independent of both the
+		// profile and any agent-dir override, so every omp process on the machine
+		// agrees on one location. These hold process-scoped runtime state
+		// (sockets, tokens), so there is no migration to protect.
+		const resolveBase = (envVar: string) => {
+			if (!xdgPlatform) return undefined;
+			const value = process.env[envVar];
+			if (!value) return undefined;
+			try {
+				const appRoot = path.join(value, XDG_DIR_NAME);
+				return fs.existsSync(appRoot) ? appRoot : undefined;
+			} catch {}
+			return undefined;
+		};
 
 		this.#rootDirs = {
 			data: xdgData ?? this.configRoot,
@@ -451,6 +475,17 @@ class DirResolver {
 			state: xdgState ?? this.agentDir,
 			cache: xdgCache ?? this.agentDir,
 		};
+		const baseRoot = getBaseConfigRoot();
+		this.#baseRootDirs = {
+			data: resolveBase("XDG_DATA_HOME") ?? baseRoot,
+			state: resolveBase("XDG_STATE_HOME") ?? baseRoot,
+			cache: resolveBase("XDG_CACHE_HOME") ?? baseRoot,
+		};
+	}
+
+	/** Profile-independent config-root subdirectory, with optional XDG override. Shared across profiles. */
+	baseRootSubdir(subdir: string, xdg?: XdgCategory): string {
+		return path.join(xdg ? this.#baseRootDirs[xdg] : getBaseConfigRoot(), subdir);
 	}
 
 	/** Config-root subdirectory, with optional XDG override. */
@@ -491,11 +526,17 @@ function resolvePreProfileAgentDir(
 	profile: string | undefined,
 	agentDirEnv: string | undefined,
 	profileAgentDirSource: string | undefined = profile,
+	home = os.homedir(),
+	configDir = getConfigDirName(),
 ): string | undefined {
-	return isProfileDerivedAgentDir(profile ?? profileAgentDirSource, agentDirEnv) ? undefined : agentDirEnv;
+	return isProfileDerivedAgentDir(profile ?? profileAgentDirSource, agentDirEnv, home, configDir)
+		? undefined
+		: agentDirEnv;
 }
 
 let activeProfile = readProfileFromEnvSafe();
+let profileSelectedExplicitly = false;
+let agentDirSelectedExplicitly: string | undefined;
 
 /**
  * Resolve the agent-dir override for the current `activeProfile` from the live
@@ -564,6 +605,8 @@ export function getConfigRootDir(): string {
 
 /** Set the coding agent directory. Creates a fresh resolver, invalidating all cached paths. */
 export function setAgentDir(dir: string): void {
+	profileSelectedExplicitly = true;
+	agentDirSelectedExplicitly = dir;
 	activeProfile = undefined;
 	dirs = new DirResolver({ agentDirOverride: dir });
 	process.env.PI_CODING_AGENT_DIR = dir;
@@ -596,6 +639,8 @@ export function __resetProfileSnapshotForTests(): void {
  * back.
  */
 export function __resetDirsFromEnvForTests(): void {
+	profileSelectedExplicitly = false;
+	agentDirSelectedExplicitly = undefined;
 	activeProfile = readProfileFromEnvSafe();
 	__resetProfileSnapshotForTests();
 	refreshDirsFromEnv();
@@ -610,8 +655,9 @@ if (testGlobal.__npiTestDirectoryGuardEnabled) {
 }
 
 /** Activate a named profile. Passing undefined or "default" returns to the default profile. */
-export function setProfile(profile: string | undefined): void {
+export function setProfile(profile: string | undefined, source: "explicit" | "environment" = "explicit"): void {
 	const next = normalizeProfileName(profile);
+	profileSelectedExplicitly = source === "explicit";
 	if (next && !activeProfile) {
 		// First activation of a named profile in this process: snapshot the
 		// current PI_CODING_AGENT_DIR so a later reset can restore the user's
@@ -656,6 +702,37 @@ export function getProfileRootDir(profile: string | undefined): string {
 export function getAgentDir(): string {
 	assertTestPathIsIsolated(dirs.agentDir, "agent");
 	return dirs.agentDir;
+}
+
+/**
+ * Resolve user dotenv locations from a supplied launch snapshot, without
+ * changing the ordinary directory resolver. Explicit API/CLI selections still
+ * win; project-autoloaded HOME, config-root, profile and agent-dir values do not.
+ */
+export function getUserEnvPaths(env: Readonly<NodeJS.ProcessEnv>): {
+	home: string;
+	configRoot: string;
+	agentDir: string;
+} {
+	const home = getEnvValue(env, process.platform === "win32" ? "USERPROFILE" : "HOME") || os.userInfo().homedir;
+	const configDir = getEnvValue(env, "PI_CONFIG_DIR") || CONFIG_DIR_NAME;
+	const launchProfile = readProfileFromEnvSafe(env);
+	const profile = profileSelectedExplicitly ? activeProfile : launchProfile;
+	const configRoot = getProfileConfigRoot(profile, home, configDir);
+	const override =
+		agentDirSelectedExplicitly ??
+		resolvePreProfileAgentDir(
+			launchProfile,
+			getEnvValue(env, "PI_CODING_AGENT_DIR"),
+			readPiProfileFromEnvSafe(env),
+			home,
+			configDir,
+		);
+	return {
+		home,
+		configRoot,
+		agentDir: !profile && override ? path.resolve(override) : path.join(configRoot, "agent"),
+	};
 }
 
 /** Get the project-local config directory (.omp). */
@@ -735,12 +812,14 @@ export function getRemoteDir(): string {
  * Expand a leading `~` and require an absolute result. Returns `undefined` for
  * empty/whitespace input or a path that is still relative after expansion.
  *
- * A worktree base is process-global and consumed by both creation
- * (PR checkout, task isolation) and cleanup (`npi worktree`). A relative value
- * would resolve against whatever cwd happened to launch `npi`, so checkout and
- * cleanup could disagree — we refuse it rather than silently bind it to cwd.
+ * Worktree bases and the natives directory are process-global: a worktree base
+ * is consumed by both creation (PR checkout, task isolation) and cleanup
+ * (`npi worktree`), and every launch extracts or loads the native addon from
+ * the same natives directory. A relative value would resolve against whatever
+ * cwd happened to launch `npi`, so those readers could disagree — we refuse it
+ * rather than silently bind it to cwd.
  */
-function resolveWorktreeBase(value: string | undefined): string | undefined {
+function resolveAbsoluteDir(value: string | undefined): string | undefined {
 	const trimmed = value?.trim();
 	if (!trimmed) return undefined;
 	let p = trimmed;
@@ -757,13 +836,13 @@ let worktreesDirOverride: string | undefined;
  * `worktree.base` setting in coding-agent; pass `undefined`/empty to clear and
  * fall back to `OMP_WORKTREE_DIR` or the `~/.omp/wt` default.
  *
- * `~` is expanded and a relative path is rejected (see {@link resolveWorktreeBase}).
+ * `~` is expanded and a relative path is rejected (see {@link resolveAbsoluteDir}).
  * Returns the absolute path that took effect, or `undefined` if the input was
  * cleared or rejected — callers can warn on a non-empty input that returns
  * `undefined`.
  */
 export function setWorktreesDir(dir: string | undefined): string | undefined {
-	worktreesDirOverride = resolveWorktreeBase(dir);
+	worktreesDirOverride = resolveAbsoluteDir(dir);
 	return worktreesDirOverride;
 }
 
@@ -775,7 +854,7 @@ export function setWorktreesDir(dir: string | undefined): string | undefined {
  * ignored and resolution falls through.
  */
 export function getWorktreesDir(): string {
-	return resolveWorktreeBase(process.env.OMP_WORKTREE_DIR) ?? worktreesDirOverride ?? dirs.rootSubdir("wt", "data");
+	return resolveAbsoluteDir(process.env.OMP_WORKTREE_DIR) ?? worktreesDirOverride ?? dirs.rootSubdir("wt", "data");
 }
 
 /** Get the SSH control socket directory (~/.omp/ssh-control). */
@@ -903,9 +982,18 @@ export function getFastembedRuntimeDir(): string {
 	return dirs.rootSubdir(path.join("cache", "fastembed-runtime"), "cache");
 }
 
-/** Get the natives directory (~/.omp/natives). */
+/**
+ * Get the directory the native addon loads downloaded tree-sitter wasm grammars
+ * from (`<natives dir>/grammars`, ~/.omp/natives/grammars). The natives loader
+ * configures the addon with the same path.
+ */
+export function getNativeGrammarsDir(): string {
+	return path.join(getNativesDir(), "grammars");
+}
+
+/** Get the natives directory. PI_NATIVES_DIR overrides the usual cache root; relative values are ignored. */
 export function getNativesDir(): string {
-	return dirs.rootSubdir("natives", "cache");
+	return resolveAbsoluteDir(process.env.PI_NATIVES_DIR) ?? dirs.rootSubdir("natives", "cache");
 }
 
 /** Get the stats database path (~/.omp/stats.db). */
@@ -979,6 +1067,17 @@ export function getDocumentConversionCacheDir(agentDir?: string): string {
 /** Get the composer speculative cache database (~/.omp/agent/cache/composer.db; XDG default: $XDG_CACHE_HOME/omp/cache/composer.db). */
 export function getComposerCacheDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, path.join("cache", "composer.db"), "cache");
+}
+/** Get the skill descriptions database (~/.omp/agent/skill-descriptions.db; XDG default: $XDG_DATA_HOME/omp/skill-descriptions.db). */
+export function getSkillDescriptionsDbPath(agentDir?: string): string {
+	return dirs.agentSubdir(agentDir, "skill-descriptions.db", "data");
+}
+/** Get the text-predict engine state directory (~/.omp/agent/predict/<method>; XDG default: $XDG_DATA_HOME/omp/predict/<method>). Adopts legacy engine state on first XDG resolution. */
+export function getPredictStateDir(agentDir: string | undefined, method: string): string {
+	const subdir = path.join("predict", method);
+	const stateDir = dirs.agentSubdir(agentDir, subdir, "data");
+	adoptLegacyDir(path.join(agentDir ?? dirs.agentDir, subdir), stateDir);
+	return stateDir;
 }
 
 /** Get the sessions directory (~/.omp/agent/sessions). */
@@ -1093,6 +1192,29 @@ export async function readJsonWithLegacyFile(targetPath: string, legacyPath: str
 	return file.json();
 }
 
+/**
+ * Best-effort one-time copy of a legacy directory to its redirected XDG
+ * location, so learned state survives enabling XDG. The copy is staged next to
+ * the target and renamed into place, so a reader never sees a partial tree and
+ * a concurrent adopter cannot clobber a finished one. The legacy directory is
+ * left in place for older omp versions sharing the profile.
+ */
+function adoptLegacyDir(legacyPath: string, targetPath: string): void {
+	if (targetPath === legacyPath) return;
+	const staging = `${targetPath}.adopt-${process.pid}`;
+	try {
+		if (fs.existsSync(targetPath) || !fs.statSync(legacyPath, { throwIfNoEntry: false })?.isDirectory()) return;
+		fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+		fs.rmSync(staging, { recursive: true, force: true });
+		fs.cpSync(legacyPath, staging, { recursive: true });
+		fs.renameSync(staging, targetPath);
+	} catch {
+		// Opportunistic: a lost race or unwritable XDG dir falls back to fresh
+		// state at the new path — the pre-adoption behavior.
+		fs.rmSync(staging, { recursive: true, force: true });
+	}
+}
+
 /** Get the secret placeholder key path (~/.omp/agent/secret-placeholder.key; XDG default: $XDG_STATE_HOME/omp/secret-placeholder.key). Adopts a legacy key on first XDG resolution. */
 export function getSecretPlaceholderKeyPath(): string {
 	const keyPath = dirs.agentSubdir(undefined, "secret-placeholder.key", "state");
@@ -1110,6 +1232,11 @@ export function getHostEnvRuntimeRoot(): string {
 	return dirs.rootSubdir(path.join("run", "host-env"), "state");
 }
 
+/** Directory holding the per-model mnemopi embedding server endpoints and logs (~/.omp/run/mnemopi; XDG default: $XDG_STATE_HOME/omp/run/mnemopi). */
+export function getMnemopiEmbedRuntimeDir(): string {
+	return dirs.rootSubdir(path.join("run", "mnemopi"), "state");
+}
+
 /** Root directory containing every per-project daemon runtime scope (~/.omp/run/daemons; XDG default: $XDG_STATE_HOME/omp/run/daemons). */
 export function getDaemonRuntimeRoot(): string {
 	return dirs.rootSubdir(path.join("run", "daemons"), "state");
@@ -1121,9 +1248,9 @@ export function getDaemonRuntimeDir(projectDir: string): string {
 	return path.join(getDaemonRuntimeRoot(), key);
 }
 
-/** Root directory containing every machine-global daemon service scope. */
+/** Root directory containing every machine-global daemon service scope (~/.omp/run/daemons/global; XDG default: $XDG_STATE_HOME/omp/run/daemons/global). Shared across profiles. */
 export function getGlobalDaemonRuntimeRoot(): string {
-	return path.join(getBaseConfigRoot(), "run", "daemons", "global");
+	return dirs.baseRootSubdir(path.join("run", "daemons", "global"), "state");
 }
 
 /** Get a profile-independent runtime directory for a machine-global daemon service. */
@@ -1132,6 +1259,15 @@ export function getGlobalDaemonRuntimeDir(service: string): string {
 		throw new Error(`Invalid global daemon service name: ${JSON.stringify(service)}`);
 	}
 	return path.join(getGlobalDaemonRuntimeRoot(), service);
+}
+
+/**
+ * Directory naming session ownership leases (~/.omp/run/session-owners; XDG
+ * default: $XDG_STATE_HOME/omp/run/session-owners). Shared across profiles:
+ * every omp process that opens a session must meet the same lease.
+ */
+export function getSessionOwnersDir(): string {
+	return dirs.baseRootSubdir(path.join("run", "session-owners"), "state");
 }
 
 /** Get the provider in-flight root directory (~/.omp/run/provider-inflight; XDG default: $XDG_STATE_HOME/omp/run/provider-inflight). */

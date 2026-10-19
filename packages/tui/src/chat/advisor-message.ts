@@ -52,6 +52,10 @@ class AdvisorHeader implements Component {
 		this.#uiTheme = uiTheme;
 	}
 
+	releaseRenderCaches(): void {
+		this.#cache = undefined;
+	}
+
 	invalidate(): void {
 		this.#cache = undefined;
 	}
@@ -80,6 +84,10 @@ class AdvisorNotes implements Component {
 		this.#entries = entries;
 		this.#hidden = hidden;
 		this.#uiTheme = uiTheme;
+	}
+
+	releaseRenderCaches(): void {
+		this.#cache = undefined;
 	}
 
 	invalidate(): void {
@@ -149,7 +157,7 @@ function advisorNoteSpans(entry: AdvisorNote): TspSpan[] {
 
 /** The advisor card: shared by the controlled expansion getter and native toggles. */
 export interface AdvisorMessageCard extends Component {
-	/** Transcript-wide expansion (`Ctrl+O`); clears a toggle made in the terminal. */
+	/** Transcript-wide expansion; clears a toggle made in the terminal. */
 	setExpanded(expanded: boolean): void;
 	handleNativeEvent(event: NativeUiEvent): void;
 }
@@ -235,6 +243,9 @@ export function createAdvisorMessageCard(
 		},
 		invalidate(): void {
 			disclosure.invalidate();
+		},
+		releaseRenderCaches(): void {
+			disclosure.releaseRenderCaches();
 		},
 		dispose(): void {
 			disclosure.dispose();

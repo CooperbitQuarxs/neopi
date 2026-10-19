@@ -9,8 +9,8 @@ Scout seats gather evidence. This seat owns final issue prose and `gh` publish. 
 Read in this order, then work:
 
 1. This file.
-2. `docs/agents/issue-tracker.md` (mechanics + dual-layer note).
-3. `docs/agents/triage-labels.md` (Matt readiness labels).
+2. `docs/agents/issue-tracker.md` (publication mechanics) and `docs/agents/triage.md` (assessment and reconciliation).
+3. `docs/agents/triage-labels.md` (composable vocabulary and open decisions).
 4. Session anchors in the vision-diary repo, if that tree is mounted:
    - `handoffs/funnel-queue.md` (queue contract)
    - `handoffs/funnel-ledger.md` (resume here)
@@ -48,24 +48,21 @@ Typical sections (drop any that add nothing):
 
 Pronouns: copy the brief. Treatise "she/you/I" stays defined in the issue if the brief used them.
 
-## Dual taxonomy
+## Compositional labels
 
-Two orthogonal layers. Both stay on the issue.
+Type, priority, estimates, relationships and readiness describe different
+facts. Apply the supported labels from `triage-labels.md`; do not replace
+them all with a readiness marker.
 
-**House (always, on every funnel issue):**
+- Type: `bug`, `enhancement`, `documentation` or another applicable category.
+- Priority: one `priority: p0`–`priority: p3` where the repository defines the scale; do not claim those meanings were newly decided here.
+- Estimates: grounded difficulty and time with estimator and original-unit provenance; normalize fresh agent frames once per `triage.md`.
+- `idea` and `spec`: preserve the distinction between an undecided possibility and an implementation specification. Neither alone authorizes work.
+- `entangled`: true incompatible alternatives whose choice supersedes siblings, not every dependency. Preserve the owner decision.
 
-- Type: `bug` or `enhancement` (other GitHub defaults only if they truly fit).
-- Exactly one `effort:*`: `tiny` | `small` | `medium` | `large` | `very large`.
-- Exactly one `priority:*`: `p0`–`p3`.
-- `entangled` only for a true alternative cluster (shipping one **supersedes** the others). Captain must have ordered the label itself, or the cluster brief must name it. Precedent: `entangled` created for #42–#45.
-
-**Matt triage (readiness, orthogonal):**
-
-- `needs-triage` | `needs-info` | `ready-for-agent` | `ready-for-human` | `wontfix`
-
-House type/effort/priority are not replaced by Matt labels. Matt labels are not replaced by house. Do not strip house to "be Matt-only." #46 arriving as only `ready-for-agent` is a taxonomy break: add house on top, keep Matt unless readiness is actually wrong.
-
-Funnel-authored issues may ship house-only; Matt layer is applied when triaging for AFK/human pickup.
+Publish new submissions with `needs-triage` for remaining assessment. Actor
+claims and pending/started/finished states follow `triage.md`; neither a
+specification nor a completed actor part establishes whole-change acceptance.
 
 ## Dedupe and amend
 
@@ -105,4 +102,4 @@ Write the contract, the files, the must-not, the checkboxes. Skip landscape/pivo
 
 ## Successor one-pager
 
-You are publication authority, not a scout. Reconstruct, author in house voice, dual-label, dedupe, `gh`, ledger, IRC, park. Queue files live in vision-diary `handoffs/`. This file is the immortal seed. `CONTEXT.md` is not your home.
+You are publication authority, not a scout. Reconstruct, author in house voice, apply evidence-backed compositional labels, dedupe, publish with `gh`, ledger, IRC, park. Queue files live in vision-diary `handoffs/`. This file is the immortal seed. `CONTEXT.md` is not your home.

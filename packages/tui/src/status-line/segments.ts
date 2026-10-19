@@ -2,6 +2,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getTimeBasedPricingPeriod } from "@oh-my-pi/pi-catalog/models";
+import { resolveUsedFraction } from "@oh-my-pi/pi-ai/usage";
 import { SPINNER_ADVANCE_MS, TERMINAL } from "../index";
 import {
 	formatDuration,
@@ -18,6 +19,7 @@ import { summarizeLoopCondition } from "./loop";
 import { formatMetric } from "../components/metric";
 import { formatBillingSummary } from "./metrics";
 import { sanitizeStatusText } from "../chrome/shared";
+import { sanitizeDisplaySingleLine } from "../overlays/extensions/display-text";
 import {
 	formatContextUsage,
 	getContextUsageLevel,
@@ -29,6 +31,7 @@ import { node, span } from "../native/describe";
 import { thinkingLevelToken } from "../theme/theme-class";
 import type { StatusLineSession } from "./host";
 import type { RenderedSegment, SegmentContext, SegmentView, StatusLineSegment, StatusLineSegmentId } from "./types";
+import { type BuiltinStatusLineSegmentId, parseUsageBarSegmentId, type UsageBarSelector } from "./schema";
 
 export type { SegmentContext } from "./types";
 
@@ -183,7 +186,9 @@ function getProjectDirDisplay(projectDir: string): ProjectDirDisplay {
 		}
 	}
 	if (!scratch) {
-		displayRoots ??= [path.join(homeDir, "Projects"), "/work"].map(normalizePathForComparison);
+		displayRoots ??= [path.join(homeDir, "Projects"), path.join(homeDir, "repos"), "/work"].map(
+			normalizePathForComparison,
+		);
 		for (const root of displayRoots) {
 			const relative = relativePathWithinNormalizedRoot(root, normalizedProjectDir);
 			if (relative) {
@@ -708,19 +713,15 @@ const gitSegment: StatusLineSegment = {
 		const showBranch = opts.showBranch !== false;
 		const spans: TspSpan[] = [];
 		if (showBranch && branch) spans.push(span(branch, colorName));
-		const indicators: TspSpan[] = [];
 		if (status) {
-			if (opts.showUnstaged !== false && status.unstaged > 0) {
-				indicators.push(span(`*${status.unstaged}`, "statusLineDirty"));
-			}
-			if (opts.showStaged !== false && status.staged > 0) {
-				indicators.push(span(`+${status.staged}`, "statusLineStaged"));
-			}
-			if (opts.showUntracked !== false && status.untracked > 0) {
-				indicators.push(span(`?${status.untracked}`, "statusLineUntracked"));
-			}
+			// Spans join as one text: each count after the branch or a previous count leads with a space.
+			const push = (text: string, token: string): void => {
+				spans.push(span(spans.length > 0 ? ` ${text}` : text, token));
+			};
+			if (opts.showUnstaged !== false && status.unstaged > 0) push(`*${status.unstaged}`, "statusLineDirty");
+			if (opts.showStaged !== false && status.staged > 0) push(`+${status.staged}`, "statusLineStaged");
+			if (opts.showUntracked !== false && status.untracked > 0) push(`?${status.untracked}`, "statusLineUntracked");
 		}
-		spans.push(...indicators);
 		if (spans.length === 0) return null;
 		return segView(spans, showBranch && branch ? "branch" : "git", isDirty ? "warning" : undefined);
 	},
@@ -999,16 +1000,19 @@ const sessionSegment: StatusLineSegment = {
 	},
 };
 
+/** Short (first-label) machine hostname; resolved once — `os.hostname()` is a syscall per call. */
+let shortHostname: string | undefined;
+
 const hostnameSegment: StatusLineSegment = {
 	id: "hostname",
 	render(ctx) {
-		const name = ctx.hostname ?? os.hostname().split(".")[0];
+		const name = ctx.hostname ?? (shortHostname ??= os.hostname().split(".")[0]);
 		const content = withIcon(theme.icon.host, name);
 		const ansi = sessionAccentAnsi(ctx);
 		return { content: ansi ? `${ansi}${content}\x1b[39m` : content, visible: true };
 	},
 	describe(ctx) {
-		const name = ctx.hostname ?? os.hostname().split(".")[0];
+		const name = ctx.hostname ?? (shortHostname ??= os.hostname().split(".")[0]);
 		return segView([span(name, sessionAccentAnsi(ctx) ? "accent" : undefined)], "host");
 	},
 };
@@ -1112,6 +1116,7 @@ const VIM_MODE_LABELS: Record<NonNullable<SegmentContext["vim"]>["mode"], string
 	normal: "NORMAL",
 	visual: "VISUAL",
 	"visual-line": "V-LINE",
+	replace: "REPLACE",
 };
 
 /**
@@ -1124,6 +1129,7 @@ const VIM_MODE_ICON_KEYS: Record<NonNullable<SegmentContext["vim"]>["mode"], Sym
 	normal: "icon.vimNormal",
 	visual: "icon.vimVisual",
 	"visual-line": "icon.vimVisualLine",
+	replace: "icon.vimReplace",
 };
 
 const VIM_MODE_COLORS: Record<NonNullable<SegmentContext["vim"]>["mode"], ThemeColor> = {
@@ -1131,6 +1137,7 @@ const VIM_MODE_COLORS: Record<NonNullable<SegmentContext["vim"]>["mode"], ThemeC
 	normal: "accent",
 	visual: "warning",
 	"visual-line": "warning",
+	replace: "accent",
 };
 
 const vimSegment: StatusLineSegment = {
@@ -1167,6 +1174,200 @@ function pickUsageColor(percent: number): "muted" | "warning" | "error" {
 	if (percent >= 80) return "error";
 	if (percent >= 50) return "warning";
 	return "muted";
+}
+
+function usageBarWindowLabel(windowId: string): string {
+	switch (windowId) {
+		case "7d":
+		case "1w":
+			return "wk";
+		case "1d":
+		case "24h":
+		case "daily":
+			return "day";
+		case "monthly":
+		case "1mo":
+		case "30d":
+			return "mo";
+		default:
+			return sanitizeStatusText(windowId);
+	}
+}
+
+/** Shared label for a quota widget in both the bar and its configurator. */
+export function usageBarLabel(bar: UsageBarSelector): string {
+	const window = usageBarWindowLabel(bar.windowId);
+	const tier = bar.tier?.trim().toLowerCase();
+	const provider =
+		bar.provider === "anthropic"
+			? "AN"
+			: bar.provider === "openai-codex"
+				? "OA"
+				: truncateToWidth(sanitizeStatusText(bar.provider), TRUNCATE_LENGTHS.SHORT);
+	const tierLabel = tier ? sanitizeStatusText(tier[0]!.toUpperCase() + tier.slice(1)) : undefined;
+	return tierLabel ? (window === "wk" ? tierLabel : `${tierLabel} ${window}`) : `${provider} ${window}`;
+}
+
+function usageBarContent(
+	bar: UsageBarSelector,
+	ctx: SegmentContext,
+): {
+	label: string;
+	value: string;
+	color: ThemeColor;
+	age?: string;
+} {
+	const tier = bar.tier?.trim().toLowerCase();
+	const label = usageBarLabel(bar);
+	if (!ctx.usageReports) return { label, value: "…", color: "dim" };
+	for (const report of ctx.usageReports.reports) {
+		if (report.provider !== bar.provider) continue;
+		for (const limit of report.limits) {
+			if (
+				limit.scope.windowId !== bar.windowId ||
+				(limit.scope.tier?.trim().toLowerCase() || undefined) !== tier ||
+				ctx.usageLimitMatchesActiveAccount?.(report, limit) === false
+			)
+				continue;
+			const fraction = resolveUsedFraction(limit);
+			if (fraction === undefined || !Number.isFinite(fraction)) return { label, value: "n/a", color: "dim" };
+			const percent = Math.round(fraction * 100);
+			const elapsed = Math.max(0, (ctx.now?.getTime() ?? Date.now()) - report.fetchedAt);
+			const age = elapsed < 60_000 ? "now" : formatDuration(Math.floor(elapsed / 60_000) * 60_000);
+			return { label, value: `${percent}%`, color: pickUsageColor(percent), age };
+		}
+	}
+	return { label, value: "n/a", color: "dim" };
+}
+
+/** Placeholders a usage-bar template may contain; all other text renders literally. */
+export const USAGE_BAR_TEMPLATE_TOKENS = ["label", "percent", "age"] as const;
+export type UsageBarTemplateToken = (typeof USAGE_BAR_TEMPLATE_TOKENS)[number];
+/** Reproduces the bar's built-in text: `AN 5h 10% 2m`. */
+export const DEFAULT_USAGE_BAR_TEMPLATE = "{label} {percent} {age}";
+/** Templates are status-bar text; cap the source's terminal width without splitting Unicode. */
+export const USAGE_BAR_TEMPLATE_MAX_LENGTH = 80;
+
+/** Bound safe single-line editor text while preserving spaces needed for typing. */
+export function limitUsageBarTemplate(template: string): string {
+	return truncateToWidth(sanitizeDisplaySingleLine(template), USAGE_BAR_TEMPLATE_MAX_LENGTH, "");
+}
+
+export type UsageBarTemplatePart = { readonly text: string } | { readonly token: UsageBarTemplateToken };
+
+const usageBarTemplateCache = new Map<string, readonly UsageBarTemplatePart[]>();
+const USAGE_BAR_TEMPLATE_CACHE_LIMIT = 64;
+
+function isUsageBarTemplateToken(name: string): name is UsageBarTemplateToken {
+	return USAGE_BAR_TEMPLATE_TOKENS.some(token => token === name);
+}
+
+/**
+ * Split a usage-bar template into literal text and `{label}`/`{percent}`/`{age}`
+ * placeholders. `{{` and `}}` produce literal braces; unknown or unclosed
+ * placeholders stay literal. No expressions are evaluated. Control and escape
+ * sequences are stripped before width limiting, so a cut cannot expose part
+ * of one; literal spacing inside the template is kept.
+ */
+export function parseUsageBarTemplate(template: string): readonly UsageBarTemplatePart[] {
+	const cached = usageBarTemplateCache.get(template);
+	if (cached) return cached;
+	const source = limitUsageBarTemplate(template);
+	const parts: UsageBarTemplatePart[] = [];
+	let text = "";
+	for (let index = 0; index < source.length; index++) {
+		const char = source[index]!;
+		if ((char === "{" || char === "}") && source[index + 1] === char) {
+			text += char;
+			index++;
+			continue;
+		}
+		if (char === "{") {
+			const end = source.indexOf("}", index + 1);
+			const name = end > index ? source.slice(index + 1, end) : "";
+			if (isUsageBarTemplateToken(name)) {
+				if (text) parts.push({ text });
+				text = "";
+				parts.push({ token: name });
+				index = end;
+				continue;
+			}
+			text += source.slice(index, end === -1 ? source.length : end + 1);
+			index = end === -1 ? source.length : end;
+			continue;
+		}
+		text += char;
+	}
+	if (text) parts.push({ text });
+	// Editing must not retain every historical template for the session's lifetime.
+	if (usageBarTemplateCache.size >= USAGE_BAR_TEMPLATE_CACHE_LIMIT) usageBarTemplateCache.clear();
+	usageBarTemplateCache.set(template, parts);
+	return parts;
+}
+
+/**
+ * The bar's text as colored pieces. A missing age (no report yet, or no
+ * percentage) drops the whitespace that only separated it, and the whole bar
+ * dims, exactly as the built-in layout does.
+ */
+function usageBarPieces(
+	id: string,
+	bar: UsageBarSelector,
+	ctx: SegmentContext,
+): { text: string; color?: ThemeColor }[] {
+	const { label, value, color, age } = usageBarContent(bar, ctx);
+	const stale = age === undefined;
+	const pieces: { text: string; color?: ThemeColor }[] = [];
+	// `statusLine.segmentOptions` is a free-form record; anything but a string falls back to the default.
+	const configured: unknown = ctx.options.usageBars?.templates?.[id];
+	const template = typeof configured === "string" ? configured : DEFAULT_USAGE_BAR_TEMPLATE;
+	for (const part of parseUsageBarTemplate(template)) {
+		let text: string;
+		let pieceColor: ThemeColor | undefined;
+		if ("text" in part) {
+			text = part.text;
+		} else {
+			switch (part.token) {
+				case "label":
+					text = label;
+					break;
+				case "percent":
+					text = value;
+					pieceColor = color;
+					break;
+				case "age":
+					text = age ?? "";
+					pieceColor = "dim";
+					break;
+			}
+		}
+		// Substitution can bring two space runs together, or leave one at an edge.
+		const previous = pieces.at(-1);
+		if (!previous) text = text.trimStart();
+		else if (previous.text.endsWith(" ")) text = text.replace(/^ +/, "");
+		if (!text) continue;
+		if (stale) pieceColor = "dim";
+		if (previous && previous.color === pieceColor) previous.text += text;
+		else pieces.push({ text, color: pieceColor });
+	}
+	const last = pieces.at(-1);
+	if (last) {
+		last.text = last.text.trimEnd();
+		if (!last.text) pieces.pop();
+	}
+	return pieces;
+}
+
+function renderUsageBar(id: string, bar: UsageBarSelector, ctx: SegmentContext): RenderedSegment {
+	const content = usageBarPieces(id, bar, ctx)
+		.map(piece => (piece.color ? theme.fg(piece.color, piece.text) : piece.text))
+		.join("");
+	return { content, visible: content.length > 0 };
+}
+
+function describeUsageBar(id: string, bar: UsageBarSelector, ctx: SegmentContext): SegmentView | null {
+	const pieces = usageBarPieces(id, bar, ctx);
+	return pieces.length > 0 ? segView(pieces.map(piece => span(piece.text, piece.color))) : null;
 }
 
 /**
@@ -1218,6 +1419,12 @@ function formatUsageReset(value: number, unit: "m" | "h"): string {
 	return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
 }
 
+/** Expiring saved resets outrank the usable/unusable color: red within 24 hours, yellow within 7 days. */
+function resetCreditsColor(resets: NonNullable<NonNullable<SegmentContext["usage"]>["resetCredits"]>): ThemeColor {
+	if (resets.expiring) return resets.expiring.tier === "imminent" ? "error" : "warning";
+	return resets.redeemableCount > 0 ? "success" : "warning";
+}
+
 const usageSegment: StatusLineSegment = {
 	id: "usage",
 	render(ctx) {
@@ -1252,7 +1459,8 @@ const usageSegment: StatusLineSegment = {
 				resetText += ` (${resets.redeemableCount} usable)`;
 			}
 			if (resets.expiryHours !== undefined) {
-				resetText += ` exp ${formatUsageReset(resets.expiryHours, "h")}`;
+				const expiring = resets.expiring ? `▲ ${resets.expiring.count} ` : "";
+				resetText += ` ${expiring}exp ${formatUsageReset(resets.expiryHours, "h")}`;
 			} else if (resets.expired) {
 				resetText += " expired";
 			}
@@ -1260,7 +1468,7 @@ const usageSegment: StatusLineSegment = {
 				const reason = truncateToWidth(sanitizeStatusText(resets.unavailableReason), TRUNCATE_LENGTHS.SHORT);
 				if (reason) resetText += ` ${reason}`;
 			}
-			parts.push(theme.fg(resets.redeemableCount > 0 ? "success" : "warning", resetText));
+			parts.push(theme.fg(resetCreditsColor(resets), resetText));
 		}
 		const content = withIcon(theme.icon.time, parts.join(theme.sep.dot));
 		return { content, visible: true };
@@ -1285,13 +1493,15 @@ const usageSegment: StatusLineSegment = {
 			const resets = u.resetCredits;
 			let resetText = `✦ ${resets.bankedCount}`;
 			if (resets.redeemableCount !== resets.bankedCount) resetText += ` (${resets.redeemableCount} usable)`;
-			if (resets.expiryHours !== undefined) resetText += ` exp ${formatUsageReset(resets.expiryHours, "h")}`;
-			else if (resets.expired) resetText += " expired";
+			if (resets.expiryHours !== undefined) {
+				const expiring = resets.expiring ? `▲ ${resets.expiring.count} ` : "";
+				resetText += ` ${expiring}exp ${formatUsageReset(resets.expiryHours, "h")}`;
+			} else if (resets.expired) resetText += " expired";
 			if (resets.redeemableCount === 0 && resets.unavailableReason) {
 				const reason = sanitizeStatusText(resets.unavailableReason);
 				if (reason) resetText += ` ${reason}`;
 			}
-			parts.push([span(resetText, resets.redeemableCount > 0 ? "success" : "warning")]);
+			parts.push([span(resetText, resetCreditsColor(resets))]);
 		}
 		const spans: TspSpan[] = [];
 		for (const part of parts) {
@@ -1306,7 +1516,7 @@ const usageSegment: StatusLineSegment = {
 // Segment Registry
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
+export const SEGMENTS: Record<BuiltinStatusLineSegmentId, StatusLineSegment> = {
 	pi: piSegment,
 	status: statusSegment,
 	model: modelSegment,
@@ -1323,6 +1533,13 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	cost: costSegment,
 	context_pct: contextPctSegment,
 	context_total: contextTotalSegment,
+	// Flexible ANSI layout is owned by StatusLineComponent; the native composer
+	// already has its own context meter and must not describe a second one.
+	context_bar: {
+		id: "context_bar",
+		render: () => ({ content: "", visible: false }),
+		describe: () => null,
+	},
 	time_spent: timeSpentSegment,
 	time: timeSegment,
 	session: sessionSegment,
@@ -1338,7 +1555,9 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 };
 
 export function renderSegment(id: StatusLineSegmentId, ctx: SegmentContext): RenderedSegment {
-	const segment = SEGMENTS[id];
+	const bar = parseUsageBarSegmentId(id);
+	if (bar) return renderUsageBar(id, bar, ctx);
+	const segment = SEGMENTS[id as BuiltinStatusLineSegmentId];
 	if (!segment) {
 		return { content: "", visible: false };
 	}
@@ -1347,7 +1566,8 @@ export function renderSegment(id: StatusLineSegmentId, ctx: SegmentContext): Ren
 
 /** Native description of one segment; null when it is hidden or unknown. */
 export function describeSegment(id: StatusLineSegmentId, ctx: SegmentContext): SegmentView | null {
-	return SEGMENTS[id]?.describe(ctx) ?? null;
+	const bar = parseUsageBarSegmentId(id);
+	return bar ? describeUsageBar(id, bar, ctx) : (SEGMENTS[id as BuiltinStatusLineSegmentId]?.describe(ctx) ?? null);
 }
 
-export const ALL_SEGMENT_IDS: StatusLineSegmentId[] = Object.keys(SEGMENTS) as StatusLineSegmentId[];
+export const ALL_SEGMENT_IDS: BuiltinStatusLineSegmentId[] = Object.keys(SEGMENTS) as BuiltinStatusLineSegmentId[];

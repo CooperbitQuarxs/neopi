@@ -11,12 +11,11 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getModelPricingStatus, modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
-import type { ModelKind, ModelPricingStatus } from "@oh-my-pi/pi-catalog/types";
+import { modelKind, type ModelKind, type ModelPricingStatus } from "@oh-my-pi/pi-catalog/types";
 import type { Component } from "../tui";
-import { fuzzyRank } from "../fuzzy";
-import { Input } from "../components/input";
+import { FuzzyCorpus, fuzzyRank } from "../fuzzy";
 import { ScrollView } from "../components/scroll-view";
-import { matchesKey } from "../keys";
+import { extractPrintableText } from "../keys";
 import type { SgrMouseEvent } from "../mouse";
 import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
 import { formatNumber, sanitizeText } from "@oh-my-pi/pi-utils";
@@ -27,17 +26,24 @@ import {
 	parseConfiguredThinkingLevel,
 } from "../thinking";
 import { thinkingLevelGlyph } from "../render/render-utils";
-import { type ThemeColor, theme } from "../theme/theme";
+import { type Theme, type ThemeColor, theme } from "../theme/theme";
+import { MenuSelection, type MenuWindow } from "../components/menu-selection";
 import {
-	matchesSelectCancel,
-	matchesSelectDown,
-	matchesSelectPageDown,
-	matchesSelectPageUp,
-	matchesSelectUp,
-} from "../keybinding-matchers";
-import { MenuSelection } from "../components/menu-selection";
-import { clampScrollOffset, scrollOffsetForRow } from "../components/scroll-viewport";
-import type { TspPickerColumn, TspPickerGroup, TspPickerItem, TspSpan, TspText } from "@oh-my-pi/pi-wire";
+	applyMenuMotion,
+	MenuKeyReader,
+	type MenuNavAction,
+	MenuSearchField,
+	MenuViewport,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
+import type {
+	TspPickerColumn,
+	TspPickerGroup,
+	TspPickerItem,
+	TspPickerMark,
+	TspSpan,
+	TspText,
+} from "@oh-my-pi/pi-wire";
 import { col, md, node, row, span, text } from "../native/describe";
 import { pickerFuzzyHits } from "../native/picker";
 import type { NativeChild, NativeNode, NativeUiEvent } from "../native/node";
@@ -61,6 +67,7 @@ export type ModelRole =
 	| "classifier"
 	| "effort"
 	| "prose"
+	| "issues"
 	| "image"
 	| "web"
 	| "speech"
@@ -82,6 +89,7 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"classifier",
 	"effort",
 	"prose",
+	"issues",
 	"image",
 	"web",
 	"speech",
@@ -104,6 +112,7 @@ export const CHAT_MODEL_ROLE_IDS: ModelRole[] = [
 	"classifier",
 	"effort",
 	"prose",
+	"issues",
 ];
 export const KIND_ROLE_IDS: ModelRole[] = ["image", "web", "speech", "dictation", "judge"];
 
@@ -137,6 +146,18 @@ export interface ResolvedModelRoleValue {
 	warning?: string;
 }
 
+/** Where auto-compaction triggers for one model, as the model hub's preview shows it (edited from the Roles view). */
+export interface ModelCompactionPoint {
+	/** Context tokens that trigger auto-compaction; undefined when auto-compaction is off or the window is unknown. */
+	tokens: number | undefined;
+	/** Why it triggers there, in a few words: `fixed`, `85% of 400K base`, `80% of window`. */
+	basis?: string;
+	/** What sets it: the matching `compaction.modelThresholds` key, `global`, or `default`. */
+	source: string;
+	/** The model's own exact entry as editable text (`90k`, `80%`); absent when it has none. */
+	draft?: string;
+}
+
 /** Host-provided preferences and model-role resolution for the browser. */
 export interface ModelBrowserSource extends ModelRoleLookup {
 	/**
@@ -149,9 +170,17 @@ export interface ModelBrowserSource extends ModelRoleLookup {
 	readonly knownRoleIds: readonly string[];
 	readonly mruOrder: readonly string[];
 	readonly modelPerf: ReadonlyMap<string, ModelBrowserPerf>;
+	/**
+	 * Service tier the host would send for `model`, when it runs one. Rows with a
+	 * measured tier aggregate (`selector@tier`) then display that tier's numbers
+	 * instead of the standard aggregate.
+	 */
+	serviceTierFor?(model: Model): string | undefined;
 	getRoleInfo(role: string): ModelBrowserRoleInfo;
 	defaultRoleChain(role: string): string[];
 	resolveRoleValue(value: string | undefined, models: Model[], roleLookup?: ModelRoleLookup): ResolvedModelRoleValue;
+	/** Auto-compaction point for `model`; absent hosts show no compaction row in the preview. */
+	compactionPointFor?(model: Model): ModelCompactionPoint | undefined;
 }
 
 /** Read-only catalog surface consumed by model browsers. */
@@ -258,6 +287,22 @@ export function resolveRoleAssignments(
 	return roles;
 }
 
+/**
+ * Role-resolution pool for a `--models`/`enabledModels` scope: the scoped
+ * models plus every available non-chat runner (judge, search, image, …). The
+ * scope only filters chat models (it feeds Ctrl+P cycling) and runtime role
+ * resolution ignores it for other kinds, so displayed role assignments must too.
+ * Shared by the /models hub and the session picker.
+ */
+export function scopedRolePool(scoped: ReadonlyArray<Model>, registry: ModelBrowserRegistry): Model[] {
+	const pool = [...scoped];
+	for (const model of registry.getAvailable("all")) {
+		if (modelKind(model) === "chat" || scoped.some(entry => modelsAreEqual(entry, model))) continue;
+		pool.push(model);
+	}
+	return pool;
+}
+
 /** Wrap raw models into browser items. */
 export function buildBrowserItems(models: ReadonlyArray<Model>): ModelBrowserItem[] {
 	return models.map(model => ({
@@ -312,13 +357,17 @@ export interface SortModelItemsOptions {
  * then per provider by priority, version, and recency.
  */
 export function sortModelItems(items: ModelBrowserItem[], options: SortModelItemsOptions = {}): void {
+	items.sort(modelItemComparator(options));
+}
+
+function modelItemComparator(options: SortModelItemsOptions): (a: ModelBrowserItem, b: ModelBrowserItem) => number {
 	const { roles = {}, mruOrder = [], skipRoleRank = false } = options;
 	const mruIndex = new Map(mruOrder.map((key, i) => [key, i]));
 
 	const dateRe = /-(\d{8})$/;
 	const latestRe = /-latest$/;
 
-	items.sort((a, b) => {
+	return (a, b) => {
 		if (!skipRoleRank) {
 			const aRank = computeModelRank(a.model, roles);
 			const bRank = computeModelRank(b.model, roles);
@@ -363,9 +412,9 @@ export function sortModelItems(items: ModelBrowserItem[], options: SortModelItem
 		// Both have dates — descending (newest first)
 		if (aDate && bDate) return bDate.localeCompare(aDate);
 
-		// One has date, other is latest — latest first
-		return aIsLatest ? -1 : bIsLatest ? 1 : a.id.localeCompare(b.id);
-	});
+		// Both -latest — alphabetical (a fixed -1 here made the order depend on input order)
+		return a.id.localeCompare(b.id);
+	};
 }
 
 /** Picker candidates and ordering inputs shared with composer model mentions. */
@@ -378,8 +427,16 @@ export interface SessionModelScope {
 
 /** Catalog inputs a {@link SessionModelScope} is derived from. */
 interface SessionModelScopeInputs {
+	/** Chat models listed as picker rows. */
 	models: ReadonlyArray<Model>;
+	/** Catalog that configured role values resolve against. */
 	allModels: ReadonlyArray<Model>;
+	/**
+	 * Available models of every kind that unconfigured roles auto-select from,
+	 * as at runtime; a chat-only pool would pin `judge` on a chat model while
+	 * the session judges with an available native judge.
+	 */
+	roleModels: ReadonlyArray<Model>;
 	error: string | undefined;
 }
 
@@ -387,21 +444,32 @@ function readSessionModelScopeInputs(
 	registry: ModelBrowserRegistry,
 	scopedModels: ReadonlyArray<Model>,
 ): SessionModelScopeInputs {
-	if (scopedModels.length > 0) return { models: scopedModels, allModels: scopedModels, error: undefined };
+	if (scopedModels.length > 0) {
+		let roleModels: ReadonlyArray<Model>;
+		let error: string | undefined;
+		try {
+			roleModels = scopedRolePool(scopedModels, registry);
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : String(cause);
+			roleModels = scopedModels;
+		}
+		return { models: scopedModels, allModels: roleModels, roleModels, error };
+	}
 	const loadError = registry.getError();
 	let error = loadError ? String(loadError) : undefined;
-	let models: ReadonlyArray<Model>;
+	let roleModels: ReadonlyArray<Model>;
 	try {
-		models = registry.getAvailable();
+		roleModels = registry.getAvailable("all");
 	} catch (cause) {
 		error = cause instanceof Error ? cause.message : String(cause);
-		models = [];
+		roleModels = [];
 	}
-	return { models, allModels: registry.getAll("all"), error };
+	const models = roleModels.filter(model => modelKind(model) === "chat");
+	return { models, allModels: registry.getAll("all"), roleModels, error };
 }
 
 function scopeFromInputs(settings: ModelBrowserSource, inputs: SessionModelScopeInputs): SessionModelScope {
-	const roles = resolveRoleAssignments(settings, inputs.allModels, inputs.models);
+	const roles = resolveRoleAssignments(settings, inputs.allModels, inputs.roleModels);
 	const mruOrder = settings.mruOrder;
 	const items = buildBrowserItems(inputs.models);
 	sortModelItems(items, { roles, mruOrder });
@@ -446,6 +514,7 @@ export class SessionModelScopeCache {
 			inputs.error === cachedInputs.error &&
 			sameItems(inputs.models, cachedInputs.models) &&
 			sameItems(inputs.allModels, cachedInputs.allModels) &&
+			sameItems(inputs.roleModels, cachedInputs.roleModels) &&
 			sameItems(this.#settings.mruOrder, cached.mruOrder)
 		) {
 			return cached;
@@ -545,58 +614,100 @@ function compactModelSearchText(value: string): string {
 	return value.toLowerCase().replace(/[^\p{Letter}\p{Mark}\p{Number}]+/gu, "");
 }
 
-/** Exact id/selector → contiguous literal → fuzzy-only. */
-function modelSearchTier(query: string, item: ModelBrowserItem): number {
+/** Exact id/selector → contiguous literal → fuzzy-only, against precomputed compact forms. */
+function modelSearchTier(query: string, id: string, selector: string): number {
 	if (!query) return 2;
-	const id = compactModelSearchText(item.id);
-	const selector = compactModelSearchText(item.selector);
 	if (query === id || query === selector) return 0;
 	if (id.includes(query) || selector.includes(query)) return 1;
 	return 2;
+}
+
+/** Inputs to {@link rankModelItems} / {@link ModelItemRanker}. */
+export interface ModelRankOptions {
+	roles: RoleAssignments;
+	mruOrder: ReadonlyArray<string>;
+	affinity: SearchAffinity;
+}
+
+/** Query-independent sort keys of one candidate, computed once per ranker. */
+interface ModelRankKeys {
+	compactId: string;
+	compactSelector: string;
+	modelAffinity: number;
+	providerAffinity: number;
+	/** Position class in the MRU/version order; comparator-equal items share it. */
+	orderGroup: number;
+}
+
+/**
+ * {@link rankModelItems} prepared for one candidate list: the fuzzy index, the
+ * MRU/version order, and the affinity ranks depend only on the items and options,
+ * so per-keystroke callers (composer mentions, `/switch` arguments, the picker)
+ * hold one ranker and pay only the per-query fuzzy scan.
+ */
+export class ModelItemRanker {
+	readonly items: ReadonlyArray<ModelBrowserItem>;
+	readonly options: ModelRankOptions;
+	readonly #corpus: FuzzyCorpus<ModelBrowserItem>;
+	readonly #keys = new Map<ModelBrowserItem, ModelRankKeys>();
+
+	constructor(items: ReadonlyArray<ModelBrowserItem>, options: ModelRankOptions) {
+		this.items = items;
+		this.options = options;
+		this.#corpus = new FuzzyCorpus(items, modelSearchText);
+		const compare = modelItemComparator({ roles: options.roles, mruOrder: options.mruOrder, skipRoleRank: true });
+		const ordered = [...items].sort(compare);
+		let group = 0;
+		for (let i = 0; i < ordered.length; i++) {
+			const item = ordered[i]!;
+			if (i > 0 && compare(ordered[i - 1]!, item) !== 0) group++;
+			this.#keys.set(item, {
+				compactId: compactModelSearchText(item.id),
+				compactSelector: compactModelSearchText(item.selector),
+				modelAffinity: options.affinity.models.get(item.selector.toLowerCase()) ?? Number.MAX_SAFE_INTEGER,
+				providerAffinity: options.affinity.providers.get(item.provider.toLowerCase()) ?? Number.MAX_SAFE_INTEGER,
+				orderGroup: group,
+			});
+		}
+	}
+
+	/** Rank by text relevance, user affinity, and MRU/version order. */
+	rank(query: string): ModelBrowserItem[] {
+		if (!query.trim()) return [...this.items];
+		const queryKey = compactModelSearchText(query);
+		// Exact and contiguous matches stay ahead of fuzzy-only candidates; affinity
+		// breaks ties before fuzzy quality and the normal MRU/version ordering, and
+		// fuzzy order settles items that ordering cannot tell apart.
+		const rows = this.#corpus.rank(query).map((result, fuzzyIndex) => {
+			const keys = this.#keys.get(result.item)!;
+			return {
+				item: result.item,
+				keys,
+				tier: modelSearchTier(queryKey, keys.compactId, keys.compactSelector),
+				bucket: Math.round(result.score / 10),
+				fuzzyIndex,
+			};
+		});
+		rows.sort(
+			(a, b) =>
+				a.tier - b.tier ||
+				a.keys.modelAffinity - b.keys.modelAffinity ||
+				a.keys.providerAffinity - b.keys.providerAffinity ||
+				a.bucket - b.bucket ||
+				a.keys.orderGroup - b.keys.orderGroup ||
+				a.fuzzyIndex - b.fuzzyIndex,
+		);
+		return rows.map(row => row.item);
+	}
 }
 
 /** Rank picker and mention candidates by text relevance, user affinity, and MRU/version order. */
 export function rankModelItems(
 	query: string,
 	items: ReadonlyArray<ModelBrowserItem>,
-	options: { roles: RoleAssignments; mruOrder: ReadonlyArray<string>; affinity: SearchAffinity },
+	options: ModelRankOptions,
 ): ModelBrowserItem[] {
-	if (!query.trim()) return [...items];
-	const ranked = fuzzyRank(items, query, modelSearchText);
-	const matches = ranked.map(result => result.item);
-	// Exact and contiguous matches stay ahead of fuzzy-only candidates; affinity
-	// breaks ties before fuzzy quality and the normal MRU/version ordering.
-	sortModelItems(matches, { roles: options.roles, mruOrder: options.mruOrder, skipRoleRank: true });
-	const fallbackRanks = new Map(matches.map((item, index) => [item, index]));
-	const queryKey = compactModelSearchText(query);
-	const searchRanks = new Map<ModelBrowserItem, { tier: number; bucket: number }>();
-	for (const result of ranked) {
-		searchRanks.set(result.item, {
-			tier: modelSearchTier(queryKey, result.item),
-			bucket: Math.round(result.score / 10),
-		});
-	}
-	matches.sort((a, b) => {
-		const aSearch = searchRanks.get(a);
-		const bSearch = searchRanks.get(b);
-		const tierCmp = (aSearch?.tier ?? Number.MAX_SAFE_INTEGER) - (bSearch?.tier ?? Number.MAX_SAFE_INTEGER);
-		if (tierCmp !== 0) return tierCmp;
-
-		const modelCmp =
-			(options.affinity.models.get(a.selector.toLowerCase()) ?? Number.MAX_SAFE_INTEGER) -
-			(options.affinity.models.get(b.selector.toLowerCase()) ?? Number.MAX_SAFE_INTEGER);
-		if (modelCmp !== 0) return modelCmp;
-
-		const providerCmp =
-			(options.affinity.providers.get(a.provider.toLowerCase()) ?? Number.MAX_SAFE_INTEGER) -
-			(options.affinity.providers.get(b.provider.toLowerCase()) ?? Number.MAX_SAFE_INTEGER);
-		if (providerCmp !== 0) return providerCmp;
-
-		const bucketCmp = (aSearch?.bucket ?? Number.MAX_SAFE_INTEGER) - (bSearch?.bucket ?? Number.MAX_SAFE_INTEGER);
-		if (bucketCmp !== 0) return bucketCmp;
-		return (fallbackRanks.get(a) ?? Number.MAX_SAFE_INTEGER) - (fallbackRanks.get(b) ?? Number.MAX_SAFE_INTEGER);
-	});
-	return matches;
+	return new ModelItemRanker(items, options).rank(query);
 }
 
 /**
@@ -722,6 +833,20 @@ function previewPrice(model: Model): string {
 	return withCreditBadge(model, parts.join(" · "));
 }
 
+/**
+ * A provider's picker mark: the terminal's logo for it, else its initials
+ * (`amazon-bedrock` → `AB`, `anthropic` → `An`) on its own gradient.
+ */
+export function providerMark(providerId: string): TspPickerMark {
+	const words = providerId.split(/[-_\s.]+/).filter(word => word.length > 0);
+	const word = words[0] ?? providerId;
+	const text =
+		words.length >= 2
+			? `${words[0]!.charAt(0)}${words[1]!.charAt(0)}`.toUpperCase()
+			: `${word.charAt(0).toUpperCase()}${word.charAt(1)}`;
+	return { text, seed: providerId, icon: `provider:${providerId}` };
+}
+
 /** The omp theme token of a thinking level's dot (`thinkingHigh`); none for inherit and auto. */
 export function thinkingDotToken(level: ConfiguredThinkingLevel): string | undefined {
 	if (level === ThinkingLevel.Inherit || level === AUTO_THINKING) return undefined;
@@ -824,6 +949,14 @@ export interface ModelBrowserOptions {
 	emptyText?: () => string | undefined;
 }
 
+export interface ModelBrowserNavigation {
+	query: string;
+	cursor: number;
+	filterFocused: boolean;
+	selected: string | undefined;
+	top: MenuViewportPosition | undefined;
+}
+
 /** Rendered rows before the list window: search row + blank. */
 const LIST_ROW_START = 2;
 /** Rendered rows after the list window: blank + two detail rows. */
@@ -832,8 +965,41 @@ const DETAIL_ROWS = 3;
 const PERF_TPS_MIN_WIDTH = 76;
 /** Row width from which the perf column also includes TTFT. */
 const PERF_FULL_MIN_WIDTH = 96;
+/** Narrowest model-name cell retained before cost and context are dropped. */
+const MIN_NAME_WIDTH = 16;
+
+/** Total width of present metadata columns, joined by two-space gaps. */
+function metaColumnsWidth(widths: readonly number[]): number {
+	let total = 0;
+	let count = 0;
+	for (const width of widths) {
+		if (width <= 0) continue;
+		total += width;
+		count++;
+	}
+	return count > 0 ? total + 2 * (count - 1) : 0;
+}
+
 /** What the per-row perf column shows at the current width. */
 type PerfMode = "off" | "tps" | "full";
+
+/** A measured perf aggregate and, when it came from one, its service tier. */
+interface MeasuredPerf {
+	perf: ModelBrowserPerf;
+	tier?: string;
+}
+
+/** Plain catalog metric cells of one row and their terminal widths, valid for one model and theme. */
+interface MetricCells {
+	model: Model;
+	theme: Theme;
+	intelligence: string;
+	intelligenceWidth: number;
+	ctx: string;
+	ctxWidth: number;
+	cost: string;
+	costWidth: number;
+}
 
 /**
  * The reusable browser component. Renders a fixed-height block
@@ -842,7 +1008,10 @@ type PerfMode = "off" | "tps" | "full";
  */
 export class ModelBrowser implements Component {
 	#settings: ModelBrowserSource;
-	#searchInput = new Input();
+	#search = new MenuSearchField();
+	#keys = new MenuKeyReader();
+	#viewport = new MenuViewport();
+	#rowHeights: { items: readonly ModelBrowserItem[]; rows: number[] } | undefined;
 	#menu = new MenuSelection<ModelBrowserItem>([], {
 		getKey: item => item.selector,
 		getSearchText: modelSearchText,
@@ -852,7 +1021,17 @@ export class ModelBrowser implements Component {
 	#roles: RoleAssignments = {};
 	#mruOrder: ReadonlyArray<string> = [];
 	#affinity: SearchAffinity = { models: new Map(), providers: new Map() };
+	/** Ranker for the menu's current item array; rebuilt when items or affinity change. */
+	#ranker?: { source: readonly ModelBrowserItem[]; ranker: ModelItemRanker };
 	#perf: ReadonlyMap<string, ModelBrowserPerf> = new Map();
+	/** Fastest tier aggregate per selector in {@link #perf}, built on the first lookup miss. */
+	#perfTiers:
+		| { perf: ReadonlyMap<string, ModelBrowserPerf>; size: number; best: Map<string, MeasuredPerf> }
+		| undefined;
+	/** Theme-formatted catalog metric cells per item; rebuilt when the item's model or the theme changes. */
+	#metricCells = new WeakMap<ModelBrowserItem, MetricCells>();
+	/** Non-separator items of the last ranked visible list, for {@link queryMatches}. */
+	#queryMatches: { visible: readonly ModelBrowserItem[]; matches: readonly ModelBrowserItem[] } | undefined;
 	#hoveredIndex: number | null = null;
 	#maxVisible = 10;
 	#showProvider: boolean;
@@ -921,7 +1100,7 @@ export class ModelBrowser implements Component {
 	onActivate?: (item: ModelBrowserItem) => void;
 	onSelectionChange?: (item: ModelBrowserItem | undefined) => void;
 	onQueryChange?: (query: string) => void;
-	/** Cancel key with an empty query (a non-empty query is cleared first). */
+	/** Cancel from list navigation; leaving the filter retains its query. */
 	onCancel?: () => void;
 
 	constructor(settings: ModelBrowserSource, options: ModelBrowserOptions = {}) {
@@ -1000,17 +1179,50 @@ export class ModelBrowser implements Component {
 	}
 
 	get query(): string {
-		return this.#searchInput.getValue();
+		return this.#search.value;
 	}
 
 	/** Caret into {@link query} (UTF-16 offset), for native picker `cursor`. */
 	get cursor(): number {
-		return this.#searchInput.getCursor();
+		return this.#search.cursor;
 	}
 
 	setQuery(query: string): void {
-		this.#searchInput.setValue(query);
+		this.#search.setValue(query);
 		this.#applyQuery("reset-changed-prefix");
+	}
+
+	get filterFocused(): boolean {
+		return this.#search.focused;
+	}
+
+	focusFilter(focused = true): void {
+		this.#search.focused = focused;
+		this.#keys.reset();
+	}
+
+	navigationSnapshot(): ModelBrowserNavigation {
+		return {
+			query: this.query,
+			cursor: this.cursor,
+			filterFocused: this.#search.focused,
+			selected: this.getSelected()?.selector,
+			top: this.#viewport.top ? { ...this.#viewport.top } : undefined,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as Partial<ModelBrowserNavigation>;
+		if (typeof state.query !== "string") return;
+		this.#search.restoreNavigation({ value: state.query, cursor: state.cursor, focused: state.filterFocused });
+		this.#applyQuery("reset-changed-prefix");
+		this.onQueryChange?.(state.query);
+		if (typeof state.selected === "string") this.#menu.setSelectedKey(state.selected);
+		this.#viewport.setTop(state.top);
+		this.#keys.reset();
+		// A browser that was never laid out keeps its viewport lazy until the first render.
+		if (state.top) this.#layoutWindow();
 	}
 
 	getSelected(): ModelBrowserItem | undefined {
@@ -1019,6 +1231,22 @@ export class ModelBrowser implements Component {
 
 	get visibleCount(): number {
 		return this.#menu.visibleItems.length;
+	}
+
+	/**
+	 * Base items matching the live query, best first, without the separator
+	 * row; undefined while the query is blank. Reuses the ranking the list
+	 * already ran, so hosts can derive match counts without ranking again.
+	 */
+	get queryMatches(): readonly ModelBrowserItem[] | undefined {
+		if (!this.query.trim()) return undefined;
+		const visible = this.#menu.visibleItems;
+		let cached = this.#queryMatches;
+		if (cached?.visible !== visible) {
+			cached = { visible, matches: visible.filter(item => !this.#isDisabled(item)) };
+			this.#queryMatches = cached;
+		}
+		return cached.matches;
 	}
 
 	/** Move selection to `selector`; false when it is not in the current view. */
@@ -1039,17 +1267,26 @@ export class ModelBrowser implements Component {
 	 * unfiltered when the query is blank.
 	 */
 	#filterItems(items: readonly ModelBrowserItem[], query: string): readonly ModelBrowserItem[] {
-		const base = items.filter(item => !this.#isDisabled(item));
-		const ranked = this.#preserveQueryOrder
-			? query.trim()
-				? fuzzyRank(base, query, modelSearchText).map(result => result.item)
-				: base
-			: rankModelItems(query, base, {
-					roles: this.#roles,
-					mruOrder: this.#mruOrder,
-					affinity: this.#affinity,
-				});
-		return this.#insertSeparator(ranked);
+		if (this.#preserveQueryOrder) {
+			const base = items.filter(item => !this.#isDisabled(item));
+			return this.#insertSeparator(
+				query.trim() ? fuzzyRank(base, query, modelSearchText).map(result => result.item) : base,
+			);
+		}
+		// The menu hands back the same array until `setItems`, and roles/MRU replace the
+		// affinity object, so one ranker serves every keystroke of a search.
+		let cached = this.#ranker;
+		if (cached?.source !== items || cached.ranker.options.affinity !== this.#affinity) {
+			cached = {
+				source: items,
+				ranker: new ModelItemRanker(
+					items.filter(item => !this.#isDisabled(item)),
+					{ roles: this.#roles, mruOrder: this.#mruOrder, affinity: this.#affinity },
+				),
+			};
+			this.#ranker = cached;
+		}
+		return this.#insertSeparator(cached.ranker.rank(query));
 	}
 
 	/** True when `item`'s context window is smaller than the live session token count (grayed row; hosts compact before switching). */
@@ -1060,20 +1297,18 @@ export class ModelBrowser implements Component {
 		return contextWindow > 0 && this.#currentContextTokens > contextWindow;
 	}
 
-	/** Clamp a window start into `[0, total - maxVisible]`. */
-	#clampWindowStart(start: number): number {
-		return clampScrollOffset(start, this.#menu.visibleItems.length, this.#maxVisible);
+	#layoutWindow(): MenuWindow {
+		const items = this.#menu.visibleItems;
+		if (this.#rowHeights?.items !== items) this.#rowHeights = { items, rows: items.map(() => 1) };
+		const window = this.#viewport.layout(this.#rowHeights.rows, this.#menu.selectedIndex, this.#maxVisible);
+		this.#windowStart = window.startIndex;
+		this.#windowCount = window.endIndex - window.startIndex;
+		return window;
 	}
 
-	/** Scroll just enough to keep the selected row inside the window. */
 	#ensureSelectedVisible(): void {
-		this.#windowStart = scrollOffsetForRow(
-			this.#windowStart,
-			this.#menu.selectedIndex,
-			this.#menu.visibleItems.length,
-			this.#maxVisible,
-			"nearest",
-		);
+		this.#viewport.reveal();
+		this.#layoutWindow();
 	}
 
 	/**
@@ -1143,7 +1378,7 @@ export class ModelBrowser implements Component {
 	}
 
 	#applyQuery(selection: "clamp" | "reset-changed-prefix" = "clamp"): void {
-		const query = this.#searchInput.getValue();
+		const query = this.#search.value;
 		const previousItems = this.#menu.visibleItems;
 		const previousSelectedIndex = this.#menu.selectedIndex;
 		const previousSelected = previousItems[previousSelectedIndex];
@@ -1173,59 +1408,49 @@ export class ModelBrowser implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (matchesSelectCancel(data)) {
-			this.handleCancel();
-			return;
-		}
-		if (matchesSelectUp(data)) {
-			this.moveSelection(-1);
-			return;
-		}
-		if (matchesSelectDown(data)) {
-			this.moveSelection(1);
-			return;
-		}
-		if (matchesSelectPageUp(data)) {
-			this.moveSelection(-this.#maxVisible, { wrap: false });
-			return;
-		}
-		if (matchesSelectPageDown(data)) {
-			this.moveSelection(this.#maxVisible, { wrap: false });
-			return;
-		}
-		if (matchesKey(data, "home")) {
-			this.moveSelection(-this.#menu.visibleItems.length, { wrap: false });
-			return;
-		}
-		if (matchesKey(data, "end")) {
-			this.moveSelection(this.#menu.visibleItems.length, { wrap: false });
-			return;
-		}
-		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-			const selected = this.getSelected();
-			if (selected && !this.#isDisabled(selected)) {
-				this.onActivate?.(selected);
+		if (this.#search.focused) {
+			const before = this.query;
+			const result = this.#search.handleInput(data);
+			if (this.query !== before) {
+				this.#applyQuery("reset-changed-prefix");
+				this.onQueryChange?.(this.query);
 			}
+			if (result !== "pass" || extractPrintableText(data) !== undefined) return;
+		}
+		const action = this.#keys.read(data);
+		if (!action || action === "pending") return;
+		this.handleNavigation(action);
+	}
+
+	/** Hosts with their own pane routing share these intents without translating keys. */
+	handleNavigation(action: MenuNavAction): void {
+		this.#layoutWindow();
+		const motion = applyMenuMotion(action, this.#menu, this.#viewport);
+		if (motion.handled) {
+			this.#layoutWindow();
+			if (motion.selectionChanged) this.onSelectionChange?.(this.getSelected());
 			return;
 		}
-		// Everything else edits the query like a regular single-line editor.
-		const before = this.#searchInput.getValue();
-		this.#searchInput.handleInput(data);
-		const after = this.#searchInput.getValue();
-		if (after !== before) {
-			this.#applyQuery("reset-changed-prefix");
-			this.onQueryChange?.(after);
+		switch (action.kind) {
+			case "search":
+				this.focusFilter();
+				break;
+			case "cancel":
+				this.handleCancel();
+				break;
+			case "confirm":
+			case "toggle": {
+				this.focusFilter(false);
+				const selected = this.getSelected();
+				if (selected && !this.#isDisabled(selected)) this.onActivate?.(selected);
+				break;
+			}
 		}
 	}
 
-	/** Cancel-key ladder: clear a non-empty query first, then bubble to the host. */
 	handleCancel(): void {
-		if (this.#searchInput.getValue().length > 0) {
-			this.setQuery("");
-			this.onQueryChange?.("");
-			return;
-		}
-		this.onCancel?.();
+		if (this.#search.focused) this.focusFilter(false);
+		else this.onCancel?.();
 	}
 
 	/**
@@ -1235,7 +1460,9 @@ export class ModelBrowser implements Component {
 	routeMouse(event: SgrMouseEvent, line: number): void {
 		if (event.wheel !== null) {
 			// Wheel pans the window; it never moves the selection and never wraps.
-			this.#windowStart = this.#clampWindowStart(this.#windowStart + event.wheel);
+			this.#layoutWindow();
+			this.#viewport.scroll(event.wheel);
+			this.#layoutWindow();
 			this.#hoveredIndex = this.#hoverIndexAt(line);
 			return;
 		}
@@ -1270,14 +1497,76 @@ export class ModelBrowser implements Component {
 		return index;
 	}
 
+	/**
+	 * Measured perf for a row: the tier the host would send, else the standard
+	 * aggregate, else any measured tier (fastest first) so a model only ever run
+	 * on a non-default tier still shows its real speed. `tier` is set whenever
+	 * the numbers come from a tier aggregate, for the caller to label.
+	 */
+	#perfFor(item: ModelBrowserItem): MeasuredPerf | undefined {
+		if (this.#perf.size === 0) return undefined;
+		const tier = this.#settings.serviceTierFor?.(item.model);
+		if (tier) {
+			const tiered = this.#perf.get(`${item.selector}@${tier}`);
+			if (tiered) return { perf: tiered, tier };
+		}
+		const standard = this.#perf.get(item.selector);
+		if (standard) return { perf: standard };
+		return this.#fastestTierPerf(item.selector);
+	}
+
+	/** Fastest `selector@tier` aggregate (first wins ties), from an index built once per perf map. */
+	#fastestTierPerf(selector: string): MeasuredPerf | undefined {
+		const perfMap = this.#perf;
+		let index = this.#perfTiers;
+		if (index?.perf !== perfMap || index.size !== perfMap.size) {
+			const best = new Map<string, MeasuredPerf>();
+			for (const [key, perf] of perfMap) {
+				// Every `@` may end the selector: `a@b@t` is tier `b@t` of `a` and tier `t` of `a@b`.
+				for (let at = key.indexOf("@"); at >= 0; at = key.indexOf("@", at + 1)) {
+					const owner = key.slice(0, at);
+					const current = best.get(owner);
+					if (!current || perf.tps > current.perf.tps) best.set(owner, { perf, tier: key.slice(at + 1) });
+				}
+			}
+			index = { perf: perfMap, size: perfMap.size, best };
+			this.#perfTiers = index;
+		}
+		return index.best.get(selector);
+	}
+
+	/** Catalog metric cells of a row, formatted once per model and theme. */
+	#metricCellsFor(item: ModelBrowserItem): MetricCells {
+		const cached = this.#metricCells.get(item);
+		if (cached?.model === item.model && cached.theme === theme) return cached;
+		const intelligence = formatIntelligence(item.model);
+		const ctx = formatContext(item.model);
+		const cost = formatCostPair(item.model);
+		const cells: MetricCells = {
+			model: item.model,
+			theme,
+			intelligence,
+			intelligenceWidth: visibleWidth(intelligence),
+			ctx,
+			ctxWidth: visibleWidth(ctx),
+			cost,
+			costWidth: visibleWidth(cost),
+		};
+		this.#metricCells.set(item, cells);
+		return cells;
+	}
+
 	/** Measured TPS/TTFT, falling back to the catalog TPS as an estimated `~118t/s`. */
 	#perfCell(item: ModelBrowserItem, mode: PerfMode): string {
 		if (mode === "off") return "";
-		const perf = this.#perf.get(item.selector);
-		if (perf) {
-			const tps = formatTps(perf.tps);
-			if (mode === "full" && perf.ttftMs !== null) return `${formatTtft(perf.ttftMs)} ${tps}`;
-			return tps;
+		const measured = this.#perfFor(item);
+		if (measured) {
+			const tps = formatTps(measured.perf.tps);
+			const tier = measured.tier ? ` ${measured.tier}` : "";
+			if (mode === "full" && measured.perf.ttftMs !== null) {
+				return `${formatTtft(measured.perf.ttftMs)} ${tps}${tier}`;
+			}
+			return `${tps}${tier}`;
 		}
 		const tps = item.model.tps;
 		return tps != null && Number.isFinite(tps) && tps > 0 ? `~${formatTps(tps)}` : "";
@@ -1292,7 +1581,8 @@ export class ModelBrowser implements Component {
 		costWidth: number,
 		intelligenceWidth: number,
 		perfWidth: number,
-		perfMode: PerfMode,
+		metrics: MetricCells,
+		perfCell: string,
 	): string {
 		if (item.id === "separator") {
 			const dashCount = Math.max(0, width - 4);
@@ -1314,25 +1604,18 @@ export class ModelBrowser implements Component {
 			: "";
 		let left = `${prefix}${providerPrefix}${name}${currentMark}${overLimit}`;
 
-		// Metric columns collapse independently when no visible row has data.
-		const intelligenceCol =
-			intelligenceWidth > 0
-				? `${theme.fg("dim", padLeftVisible(formatIntelligence(item.model), intelligenceWidth))}  `
-				: "";
-		const perfCol =
-			perfWidth > 0 ? `${theme.fg("dim", padLeftVisible(this.#perfCell(item, perfMode), perfWidth))}  ` : "";
-		const meta = `${intelligenceCol}${perfCol}${theme.fg("dim", padLeftVisible(formatContext(item.model), ctxWidth))}  ${theme.fg("dim", padLeftVisible(formatCostPair(item.model), costWidth))}`;
-		const metaWidth =
-			ctxWidth +
-			costWidth +
-			2 +
-			(intelligenceWidth > 0 ? intelligenceWidth + 2 : 0) +
-			(perfWidth > 0 ? perfWidth + 2 : 0);
-		const available = Math.max(1, width - metaWidth - 1);
+		// Metric columns collapse when empty or when the row needs room for its name.
+		const cols: string[] = [];
+		if (intelligenceWidth > 0) cols.push(theme.fg("dim", padLeftVisible(metrics.intelligence, intelligenceWidth)));
+		if (perfWidth > 0) cols.push(theme.fg("dim", padLeftVisible(perfCell, perfWidth)));
+		if (ctxWidth > 0) cols.push(theme.fg("dim", padLeftVisible(metrics.ctx, ctxWidth)));
+		if (costWidth > 0) cols.push(theme.fg("dim", padLeftVisible(metrics.cost, costWidth)));
+		const metaWidth = metaColumnsWidth([intelligenceWidth, perfWidth, ctxWidth, costWidth]);
+		const available = Math.max(1, width - metaWidth - (cols.length > 0 ? 1 : 0));
 		left = truncateToWidth(left, available);
 		const gap = Math.max(0, available - visibleWidth(left));
 
-		let line = `${left}${" ".repeat(gap)} ${meta}`;
+		let line = cols.length > 0 ? `${left}${" ".repeat(gap)} ${cols.join("  ")}` : `${left}${" ".repeat(gap)}`;
 		if (overContext) {
 			// Gray the whole row but keep the selection cursor visible: over-context
 			// models stay selectable (the host compacts before switching).
@@ -1365,10 +1648,10 @@ export class ModelBrowser implements Component {
 		if (model.input.includes("image")) facts.push("vision");
 		const intelligence = formatIntelligence(model);
 		if (intelligence) facts.push(intelligence);
-		const perf = this.#perf.get(selected.selector);
-		if (perf) {
-			facts.push(`~${formatTps(perf.tps)}`);
-			if (perf.ttftMs !== null) facts.push(`${formatTtft(perf.ttftMs)} ttft`);
+		const measured = this.#perfFor(selected);
+		if (measured) {
+			facts.push(`~${formatTps(measured.perf.tps)}${measured.tier ? ` ${measured.tier}` : ""}`);
+			if (measured.perf.ttftMs !== null) facts.push(`${formatTtft(measured.perf.ttftMs)} ttft`);
 		} else if (model.tps != null && Number.isFinite(model.tps) && model.tps > 0) {
 			facts.push(`~${formatTps(model.tps)}`);
 		}
@@ -1405,19 +1688,13 @@ export class ModelBrowser implements Component {
 	render(width: number): string[] {
 		const lines: string[] = [];
 
-		const searchIcon = theme.fg("accent", theme.symbol("icon.search"));
-		const inputWidth = Math.max(4, width - visibleWidth(theme.symbol("icon.search")) - 2);
-		lines.push(` ${searchIcon} ${this.#searchInput.render(inputWidth)[0] ?? ""}`);
+		lines.push(this.#search.render(width, { muted: value => theme.fg("muted", value) }));
 		lines.push("");
 
 		const total = this.#menu.visibleItems.length;
-		// The window is persistent state: wheel scrolling panned it, keyboard
-		// navigation snapped it to the selection. Re-clamp here because items
-		// or maxVisible may have changed since.
-		this.#windowStart = this.#clampWindowStart(this.#windowStart);
+		const window = this.#layoutWindow();
 		const startIndex = this.#windowStart;
-		const endIndex = Math.min(startIndex + this.#maxVisible, total);
-		this.#windowCount = Math.max(0, endIndex - startIndex);
+		const endIndex = startIndex + this.#windowCount;
 
 		if (total === 0) {
 			const message =
@@ -1432,20 +1709,32 @@ export class ModelBrowser implements Component {
 			const perfMode: PerfMode = width >= PERF_FULL_MIN_WIDTH ? "full" : width >= PERF_TPS_MIN_WIDTH ? "tps" : "off";
 			let intelligenceWidth = 0;
 			let perfWidth = 0;
+			const visible = this.#menu.visibleItems;
+			const windowMetrics: MetricCells[] = [];
+			const windowPerf: string[] = [];
 			for (let i = startIndex; i < endIndex; i++) {
-				const item = this.#menu.visibleItems[i];
+				const item = visible[i];
 				if (!item) continue;
-				ctxWidth = Math.max(ctxWidth, visibleWidth(formatContext(item.model)));
-				costWidth = Math.max(costWidth, visibleWidth(formatCostPair(item.model)));
+				const metrics = this.#metricCellsFor(item);
+				const perfCell = this.#perfCell(item, perfMode);
+				windowMetrics[i - startIndex] = metrics;
+				windowPerf[i - startIndex] = perfCell;
+				ctxWidth = Math.max(ctxWidth, metrics.ctxWidth);
+				costWidth = Math.max(costWidth, metrics.costWidth);
 				if (perfMode !== "off") {
-					intelligenceWidth = Math.max(intelligenceWidth, visibleWidth(formatIntelligence(item.model)));
+					intelligenceWidth = Math.max(intelligenceWidth, metrics.intelligenceWidth);
 				}
-				perfWidth = Math.max(perfWidth, visibleWidth(this.#perfCell(item, perfMode)));
+				perfWidth = Math.max(perfWidth, visibleWidth(perfCell));
 			}
+			// Preserve at least a readable name by dropping cost, then context.
+			let nameRoom = width - 2 - metaColumnsWidth([intelligenceWidth, perfWidth, ctxWidth, costWidth]);
+			if (nameRoom < MIN_NAME_WIDTH) costWidth = 0;
+			nameRoom = width - 2 - metaColumnsWidth([intelligenceWidth, perfWidth, ctxWidth, costWidth]);
+			if (nameRoom < MIN_NAME_WIDTH) ctxWidth = 0;
 
 			const rows: string[] = [];
 			for (let i = startIndex; i < endIndex; i++) {
-				const item = this.#menu.visibleItems[i];
+				const item = visible[i];
 				if (!item) continue;
 				rows.push(
 					this.#renderRow(
@@ -1457,19 +1746,24 @@ export class ModelBrowser implements Component {
 						costWidth,
 						intelligenceWidth,
 						perfWidth,
-						perfMode,
+						windowMetrics[i - startIndex]!,
+						windowPerf[i - startIndex]!,
 					),
 				);
 			}
-			const scrollView = new ScrollView(rows, {
-				height: rows.length,
+			const clippedRows =
+				window.lineOffset === 0 && rows.length <= this.#maxVisible
+					? rows
+					: rows.slice(window.lineOffset, window.lineOffset + this.#maxVisible);
+			const scrollView = new ScrollView(clippedRows, {
+				height: clippedRows.length,
 				scrollbar: "auto",
-				totalRows: total,
+				totalRows: window.totalRows,
 				theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
 			});
-			scrollView.setScrollOffset(startIndex);
+			scrollView.setScrollOffset(window.rowOffset);
 			lines.push(...scrollView.render(width));
-			for (let i = rows.length; i < this.#maxVisible; i++) lines.push("");
+			for (let i = clippedRows.length; i < this.#maxVisible; i++) lines.push("");
 		}
 
 		lines.push("");
@@ -1499,7 +1793,7 @@ export class ModelBrowser implements Component {
 	 * scrolls), and the selection's facts and role chips.
 	 */
 	describe(): NativeNode {
-		this.#nativeSearch ??= row([text([span(theme.symbol("icon.search"), "accent")]), this.#searchInput], {
+		this.#nativeSearch ??= row([text([span(theme.symbol("icon.search"), "muted")]), this.#search.input], {
 			gap: "sm",
 			align: "center",
 		});
@@ -1628,10 +1922,10 @@ export class ModelBrowser implements Component {
 			if (model.input.includes("image")) facts.push("vision");
 			const intelligence = formatIntelligence(model);
 			if (intelligence) facts.push(intelligence);
-			const perf = this.#perf.get(selected.selector);
-			if (perf) {
-				facts.push(`~${formatTps(perf.tps)}`);
-				if (perf.ttftMs !== null) facts.push(`${formatTtft(perf.ttftMs)} ttft`);
+			const measured = this.#perfFor(selected);
+			if (measured) {
+				facts.push(`~${formatTps(measured.perf.tps)}${measured.tier ? ` ${measured.tier}` : ""}`);
+				if (measured.perf.ttftMs !== null) facts.push(`${formatTtft(measured.perf.ttftMs)} ttft`);
 			} else if (model.tps != null && Number.isFinite(model.tps) && model.tps > 0) {
 				facts.push(`~${formatTps(model.tps)}`);
 			}
@@ -1743,7 +2037,9 @@ export class ModelBrowser implements Component {
 		const facts: Record<string, TspText | number> = {};
 		const int = model.int != null && Number.isFinite(model.int) ? model.int : undefined;
 		if (int !== undefined) facts.int = String(Math.round(int));
-		const speed = this.#perfCell(item, "tps").replace(/t\/s$/, "");
+		const speed = this.#perfCell(item, "tps")
+			.replace(/\s*t\/s\s*/, " ")
+			.trim();
 		if (speed) facts.speed = speed;
 		if (model.contextWindow) facts.ctx = model.contextWindow;
 		facts.price = pickerPrice(model);
@@ -1773,6 +2069,7 @@ export class ModelBrowser implements Component {
 		const value: TspPickerItem = {
 			id: item.selector,
 			label: quickRole ? item.id : item.selector,
+			mark: providerMark(item.model.provider),
 			mono: true,
 			...(quickRole ? { detail: `${item.model.provider}/${item.model.id}` } : {}),
 			facts,
@@ -1885,7 +2182,7 @@ export class ModelBrowser implements Component {
 	pickerPreview(mode: "full" | "compact", current?: string): readonly NativeChild[] {
 		const selected = this.getSelected();
 		const item = selected && !this.#isDisabled(selected) ? selected : undefined;
-		const key = `${mode}\0${current ?? ""}`;
+		const key = `${mode}\0${current ?? ""}\0${this.#settings.revision}`;
 		const memo = this.#pickerPreview;
 		if (
 			memo !== undefined &&
@@ -1905,7 +2202,7 @@ export class ModelBrowser implements Component {
 	modelPreview(item: ModelBrowserItem, mode: "full" | "compact", current: string | undefined): NativeChild[] {
 		const model = item.model;
 		const selector = `${model.provider}/${model.id}`;
-		const perf = this.#perf.get(selector);
+		const measured = this.#perfFor(item);
 		const ctx = model.contextWindow ?? 0;
 		const out = model.maxTokens ?? 0;
 		const overContext = this.isOverContext(item);
@@ -1965,10 +2262,12 @@ export class ModelBrowser implements Component {
 		if (badges.length > 0) children.push(row(badges, { gap: "xs", wrap: true }));
 
 		const speed: string[] = [];
-		if (perf) {
-			speed.push(`${formatTps(perf.tps).replace("t/s", " t/s")}`);
-			if (perf.ttftMs !== null) speed.push(`${formatTtft(perf.ttftMs).replace("s", " s")} TTFT`);
-			speed.push(`${perf.samples} ${perf.samples === 1 ? "sample" : "samples"}`);
+		if (measured) {
+			speed.push(
+				`${formatTps(measured.perf.tps).replace("t/s", " t/s")}${measured.tier ? ` ${measured.tier}` : ""}`,
+			);
+			if (measured.perf.ttftMs !== null) speed.push(`${formatTtft(measured.perf.ttftMs).replace("s", " s")} TTFT`);
+			speed.push(`${measured.perf.samples} ${measured.perf.samples === 1 ? "sample" : "samples"}`);
 		} else if (model.tps != null && Number.isFinite(model.tps) && model.tps > 0) {
 			speed.push(`~${formatTps(model.tps).replace("t/s", " t/s")} (catalog)`);
 		}
@@ -1977,6 +2276,17 @@ export class ModelBrowser implements Component {
 			if (v) facts.push({ k: [span(k, "muted")], v: [span(v, "mono")] });
 		};
 		fact("Context", ctx > 0 ? ctx.toLocaleString("en-US") : undefined);
+		const compaction = this.#settings.compactionPointFor?.(model);
+		if (compaction) {
+			const value =
+				compaction.tokens === undefined
+					? "off"
+					: `${compaction.tokens.toLocaleString("en-US")}${compaction.basis !== undefined ? ` · ${compaction.basis}` : ""}`;
+			facts.push({
+				k: [span("Compacts at", "muted")],
+				v: [span(value, "mono"), span(` · ${compaction.source}`, "dim")],
+			});
+		}
 		fact("Max output", out > 0 ? out.toLocaleString("en-US") : undefined);
 		fact("Price", isFreeModel(model) ? "free" : `${previewPrice(model)} per M`);
 		fact("Speed", speed.length > 0 ? speed.join(" · ") : undefined);

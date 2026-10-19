@@ -4,6 +4,7 @@ import { col } from "../native/describe";
 import type { DescribeContext, NativeNode } from "../native/node";
 import type { Component } from "../tui";
 import { Ellipsis, getWidthConfigEpoch, padding, replaceTabs, truncateToWidth, visibleWidth } from "../utils";
+import { MenuKeyReader, type MenuNavAction } from "./menu-navigation";
 import {
 	clampScrollOffset,
 	maxScrollOffset,
@@ -130,6 +131,8 @@ export class ScrollView implements Component {
 	#cache: RenderCache | undefined;
 	#disposed = false;
 	#native: { content: readonly string[] | Component; height: number; node: NativeNode } | undefined;
+	readonly #keys = new MenuKeyReader();
+	#restoredOffset: number | undefined;
 
 	constructor(content: readonly string[] | Component, options: ScrollViewOptions) {
 		this.#child = isComponent(content) ? content : undefined;
@@ -170,6 +173,33 @@ export class ScrollView implements Component {
 			activeRow: this.#activeRow,
 			disposed: this.#disposed,
 		};
+	}
+
+	navigationSnapshot(): unknown {
+		return {
+			scrollOffset: this.#scrollOffset,
+			followTail: this.#followTail,
+			anchor: this.#anchor,
+			range: this.#rangeSnapshot,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as {
+			scrollOffset?: number;
+			followTail?: boolean;
+			anchor?: ScrollAnchor;
+			range?: RangeSnapshot;
+		};
+		if (typeof state.followTail === "boolean") this.#followTail = state.followTail;
+		if (state.anchor === "start" || state.anchor === "end") this.#anchor = state.anchor;
+		if (typeof state.scrollOffset === "number") {
+			this.setScrollOffset(state.scrollOffset);
+			this.#restoredOffset = state.scrollOffset;
+		}
+		if (state.range?.anchor && typeof state.range.anchor.id === "string") this.#rangeSnapshot = state.range;
+		this.#keys.reset();
 	}
 
 	setLines(lines: readonly string[]): void {
@@ -240,6 +270,15 @@ export class ScrollView implements Component {
 
 	/** Current half-open logical row range. */
 	getVisibleRange(): { start: number; end: number } {
+		// Prewindowed callers need the restored top before they slice rows,
+		// not after render receives that already-windowed slice.
+		if (
+			this.#restoredOffset !== undefined &&
+			this.#height > 0 &&
+			(this.#totalRows !== undefined || this.#rowCount() > 0)
+		) {
+			this.setScrollOffset(this.#restoredOffset);
+		}
 		return viewportRange(this.#rowCount(), this.#height, this.#scrollOffset);
 	}
 
@@ -261,6 +300,7 @@ export class ScrollView implements Component {
 	}
 
 	setScrollOffset(offset: number): void {
+		this.#restoredOffset = undefined;
 		const next = clampScrollOffset(offset, this.#rowCount(), this.#height);
 		if (this.#scrollOffset === next) return;
 		this.#scrollOffset = next;
@@ -364,7 +404,7 @@ export class ScrollView implements Component {
 		this.setScrollOffset(this.getMaxScrollOffset());
 	}
 
-	/** Apply Arrow, Shift+Arrow, Page, Home, and End navigation keys. */
+	/** Shared viewer motions, retaining the existing accelerated Shift+Arrow keys. */
 	handleScrollKey(data: string): boolean {
 		if (matchesKey(data, "shift+up")) {
 			this.scroll(-this.#fastScrollLines);
@@ -374,31 +414,30 @@ export class ScrollView implements Component {
 			this.scroll(this.#fastScrollLines);
 			return true;
 		}
-		if (matchesKey(data, "up")) {
-			this.scroll(-1);
-			return true;
+		const action = this.#keys.read(data);
+		return action === "pending" || (action !== undefined && this.handleMenuAction(action));
+	}
+
+	/** Apply a decoded motion without reinterpreting a host's pending `gg` prefix. */
+	handleMenuAction(action: MenuNavAction): boolean {
+		switch (action.kind) {
+			case "move":
+			case "scroll":
+				this.scroll(action.delta);
+				return true;
+			case "halfPage":
+				this.scroll(action.delta * Math.max(1, Math.floor(this.#height / 2)));
+				return true;
+			case "page":
+				this.page(action.delta);
+				return true;
+			case "boundary":
+				if (action.edge === "first") this.scrollToTop();
+				else this.scrollToBottom();
+				return true;
+			default:
+				return false;
 		}
-		if (matchesKey(data, "down")) {
-			this.scroll(1);
-			return true;
-		}
-		if (matchesKey(data, "pageUp")) {
-			this.page(-1);
-			return true;
-		}
-		if (matchesKey(data, "pageDown")) {
-			this.page(1);
-			return true;
-		}
-		if (matchesKey(data, "home")) {
-			this.scrollToTop();
-			return true;
-		}
-		if (matchesKey(data, "end")) {
-			this.scrollToBottom();
-			return true;
-		}
-		return false;
 	}
 
 	invalidate(): void {
@@ -406,6 +445,11 @@ export class ScrollView implements Component {
 		this.#cache = undefined;
 		this.#native = undefined;
 		this.#child?.invalidate?.();
+	}
+
+	releaseRenderCaches(): void {
+		this.#cache = undefined;
+		this.#child?.releaseRenderCaches?.();
 	}
 
 	/** Permanently release a wrapped child's timers, subscriptions, and other resources. */
@@ -461,6 +505,7 @@ export class ScrollView implements Component {
 			sourceLines = this.#lines;
 			showScrollbar = this.#shouldRenderScrollbar(this.#rowCount(), safeWidth);
 		}
+		if (this.#restoredOffset !== undefined) this.setScrollOffset(this.#restoredOffset);
 
 		this.#scrollOffset = clampScrollOffset(this.#scrollOffset, this.#rowCount(), this.#height);
 		const rowCount = this.#rowCount();

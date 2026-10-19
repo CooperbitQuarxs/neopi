@@ -469,7 +469,7 @@ describe("interactive /usage account visibility", () => {
 			expect(details).not.toContain("%");
 			expect(details).not.toContain("Infinity");
 
-			mounted?.handleInput("\x1b");
+			mounted?.handleInput("h"); // Detail and overview are contexts, not nested pages.
 			expect(display()).toContain("2 accts");
 			mounted?.handleInput("\x1b");
 			expect(mounted).toBeUndefined();

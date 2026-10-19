@@ -271,12 +271,28 @@ describe("usage status-line segment", () => {
 		const reports = [
 			{
 				provider: "anthropic",
-				limits: [{ scope: { windowId: "5h" }, amount: { usedFraction: 0.24 } }],
+				fetchedAt: Date.now(),
+				limits: [
+					{
+						id: "anthropic:5h",
+						label: "5 Hour",
+						scope: { provider: "anthropic", windowId: "5h" },
+						amount: { unit: "percent", usedFraction: 0.24 },
+					},
+				],
 			},
 			{
 				provider: "openai-codex",
+				fetchedAt: Date.now(),
 				metadata: { accountId: "active-account" },
-				limits: [{ scope: { windowId: "5h", tier: "prolite" }, amount: { usedFraction: 0.8 } }],
+				limits: [
+					{
+						id: "openai-codex:5h",
+						label: "5 Hour",
+						scope: { provider: "openai-codex", windowId: "5h", tier: "prolite" },
+						amount: { unit: "percent", usedFraction: 0.8 },
+					},
+				],
 			},
 		];
 		const session = {
@@ -337,16 +353,26 @@ describe("usage status-line segment", () => {
 		const reports = [
 			{
 				provider: "openai-codex",
+				fetchedAt: Date.now(),
 				metadata: { accountId: "active-account" },
 				limits: [
-					{ scope: { windowId: "7d" }, amount: { usedFraction: 0.08 } },
 					{
-						scope: { windowId: "5h", tier: "spark", modelId: "GPT-5.3-Codex-Spark" },
-						amount: { usedFraction: 0.42 },
+						id: "weekly",
+						label: "Weekly",
+						scope: { provider: "openai-codex", windowId: "7d" },
+						amount: { unit: "percent", usedFraction: 0.08 },
 					},
 					{
-						scope: { windowId: "7d", tier: "spark", modelId: "GPT-5.3-Codex-Spark" },
-						amount: { usedFraction: 0.11 },
+						id: "spark:5h",
+						label: "Spark 5 Hour",
+						scope: { provider: "openai-codex", windowId: "5h", tier: "spark", modelId: "GPT-5.3-Codex-Spark" },
+						amount: { unit: "percent", usedFraction: 0.42 },
+					},
+					{
+						id: "spark:7d",
+						label: "Spark Weekly",
+						scope: { provider: "openai-codex", windowId: "7d", tier: "spark", modelId: "GPT-5.3-Codex-Spark" },
+						amount: { unit: "percent", usedFraction: 0.11 },
 					},
 				],
 			},

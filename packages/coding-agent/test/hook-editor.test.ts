@@ -82,6 +82,66 @@ function createControllerContext() {
 	return { ctx, editor, editorContainer, ui };
 }
 
+describe("HookEditorComponent literal text ownership", () => {
+	for (const promptStyle of [false, true]) {
+		it(`types printable shortcut remaps literally in ${promptStyle ? "prompt" : "hook"} mode`, () => {
+			setKeybindings(
+				KeybindingsManager.inMemory({
+					"app.message.followUp": ["ctrl+q", "h"],
+					"app.interrupt": ["escape", "j"],
+					"app.editor.external": ["ctrl+g", "k"],
+					"tui.editor.deleteCharBackward": "l",
+					"tui.editor.submit": "/",
+				}),
+			);
+			const onSubmit = vi.fn();
+			const onCancel = vi.fn();
+			const externalEditor = vi.fn(async () => null);
+			const component = new HookEditorComponent(createTui(), "Draft", undefined, onSubmit, onCancel, {
+				promptStyle,
+				menuHistory: true,
+				externalEditor,
+			});
+			try {
+				for (const key of ["h", "j", "k", "l", " ", "/"]) component.handleInput(key);
+				expect(component.navigationSnapshot()?.text).toBe("hjkl /");
+				expect(onSubmit).not.toHaveBeenCalled();
+				expect(onCancel).not.toHaveBeenCalled();
+				expect(externalEditor).not.toHaveBeenCalled();
+				component.handleInput("\x1b");
+				expect(onCancel).toHaveBeenCalledTimes(1);
+			} finally {
+				component.dispose();
+			}
+		});
+	}
+
+	it("lets a pending character jump consume its printable target before app shortcuts", () => {
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"app.message.followUp": "h",
+				"tui.editor.jumpForward": "ctrl+]",
+			}),
+		);
+		const onSubmit = vi.fn();
+		const component = new HookEditorComponent(createTui(), "Draft", "abc h def", onSubmit, vi.fn(), {
+			menuHistory: true,
+		});
+		try {
+			component.handleInput("\x01");
+			component.handleInput("\x1d");
+			component.handleInput("h");
+			expect(component.navigationSnapshot()).toMatchObject({
+				text: "abc h def",
+				cursor: { line: 0, col: 4 },
+			});
+			expect(onSubmit).not.toHaveBeenCalled();
+		} finally {
+			component.dispose();
+		}
+	});
+});
+
 describe("HookEditorComponent default (hook) mode", () => {
 	it("inserts a newline on Enter instead of submitting immediately", () => {
 		const onSubmit = vi.fn();
@@ -214,9 +274,38 @@ describe("HookEditorComponent prompt-style mode", () => {
 			supports: () => true,
 			feature: () => true,
 		};
-		const card = component.describe(cx);
-		expect(card.p).toMatchObject({ head: "Custom answer" });
-		expect(card.c?.[0]).toMatchObject({ k: "md", p: { text: question, role: "omp.ask.question" } });
+		const root = component.describe(cx);
+		const head = root.c?.[0];
+		const parts = typeof head === "object" && head !== null && "k" in head ? head.c : undefined;
+		expect(parts?.[0]).toMatchObject({ k: "text", p: { spans: [{ t: "Custom answer" }] } });
+		expect(parts?.[1]).toMatchObject({ k: "md", p: { text: question, role: "omp.ask.question" } });
+	});
+
+	it("runs the native action bar's Submit, Cancel and Open in editor like their keys", async () => {
+		const onSubmit = vi.fn();
+		const submitted = new HookEditorComponent(createTui(), "Prompt", "draft", onSubmit, vi.fn(), {
+			promptStyle: true,
+		});
+		submitted.handleNativeEvent({ type: "action", key: "actions/submit", act: "submit", mods: [] });
+		expect(onSubmit).toHaveBeenCalledWith("draft");
+
+		const onCancel = vi.fn();
+		const cancelled = new HookEditorComponent(createTui(), "Prompt", "draft", vi.fn(), onCancel);
+		cancelled.handleNativeEvent({ type: "action", key: "actions/cancel", act: "cancel", mods: [] });
+		expect(onCancel).toHaveBeenCalledTimes(1);
+
+		const tui = createTui();
+		// The external edit ends by restarting the TUI and requesting a render; await that.
+		const rendered = Promise.withResolvers<void>();
+		(tui.requestRender as Mock<TUI["requestRender"]>).mockImplementation(() => rendered.resolve());
+		const externalEditor = vi.fn(async (text: string) => `${text} edited`);
+		const onExternalSubmit = vi.fn();
+		const external = new HookEditorComponent(tui, "Prompt", "draft", onExternalSubmit, vi.fn(), { externalEditor });
+		external.handleNativeEvent({ type: "action", key: "actions/external", act: "external", mods: [] });
+		await rendered.promise;
+		expect(externalEditor).toHaveBeenCalledWith("draft");
+		external.handleNativeEvent({ type: "action", key: "actions/submit", act: "submit", mods: [] });
+		expect(onExternalSubmit).toHaveBeenCalledWith("draft edited");
 	});
 
 	it("refuses image attachments unless the prompt opted in and is still open", () => {

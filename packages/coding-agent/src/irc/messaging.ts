@@ -41,10 +41,10 @@ export function messageResult(senderId: string, waited: IrcMessage): AgentToolRe
 	};
 }
 
-/** Send a direct message or broadcast; delivery never waits for a reply. */
+/** Send a direct message or broadcast, optionally as a reply to message `replyTo`; delivery never waits for a reply. */
 export async function executeSend(
 	deps: { registry: AgentRegistry; senderId: string; sessionFileHint?: string | null },
-	params: { to: string; message: string },
+	params: { to: string; message: string; replyTo?: string },
 ): Promise<AgentToolResult<CoordinationDetails>> {
 	const { registry, senderId, sessionFileHint } = deps;
 	const to = params.to.trim();
@@ -68,7 +68,12 @@ export async function executeSend(
 	const suppressRelay = isBroadcast && relayRootId !== undefined && targets.includes(relayRootId);
 	const bus = IrcBus.global();
 	const receipts = await Promise.all(
-		targets.map(target => bus.send({ from: senderId, to: target, body: message }, { suppressRelay })),
+		targets.map(target =>
+			bus.send(
+				{ from: senderId, to: target, body: message, replyTo: params.replyTo },
+				{ suppressRelay, broadcast: isBroadcast },
+			),
+		),
 	);
 	const delivered = receipts.filter(receipt => receipt.outcome !== "failed");
 	let text: string;

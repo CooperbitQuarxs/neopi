@@ -53,6 +53,10 @@ class DividerSummary implements Component {
 		this.#cache = undefined;
 	}
 
+	releaseRenderCaches(): void {
+		this.#cache = undefined;
+	}
+
 	render(width: number): readonly string[] {
 		width = Math.max(1, width);
 		if (this.#cache?.width === width) return this.#cache.lines;
@@ -150,6 +154,10 @@ class SummaryMessageComponent implements Component {
 		if (this.#ignoreTight !== undefined) this.#disclosure.setIgnoreTight(this.#ignoreTight);
 	}
 
+	releaseRenderCaches(): void {
+		this.#disclosure.releaseRenderCaches();
+	}
+
 	dispose(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
@@ -183,20 +191,20 @@ class SummaryMessageComponent implements Component {
 /**
  * Compaction point in the transcript, rendered as a slim horizontal divider:
  *
- *   ──────── 📷 remote-compacted · 256K→20K · ctrl+o ────────
+ *   ──────── 📷 remote-compacted · 256K→20K · Alt-E ────────
  *
  * The label names the maintenance method that fired (remote/soft/handoff/
  * snapcompact; "compacted" for legacy or extension-provided entries) and the
  * before → after context amounts when the entry recorded them. The
  * conversation above the divider stays visible (display transcript keeps
- * full history); only the LLM context was reset. Expanding (ctrl+o) reveals
+ * full history); only the LLM context was reset. The expansion action reveals
  * the compaction summary below the divider.
  */
 export class CompactionSummaryMessageComponent extends SummaryMessageComponent {
 	constructor(message: CompactionSummaryMessage) {
 		super({
 			// A dead-end warning stamped by the progress guard badges the bar;
-			// the full text lives in the ctrl+o detail block below.
+			// the full text lives in the expanded detail block below.
 			label: () => compactionLabel(message),
 			nativeLabel: () => compactionNativeLabel(message),
 			nativeDetail: () => compactionNativeDetail(message),

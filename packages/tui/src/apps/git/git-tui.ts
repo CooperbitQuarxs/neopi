@@ -13,27 +13,30 @@
  * arrows/PgUp/PgDn, vim motions (`j`/`k`/`h`/`l`/`g`/`G`), and mouse
  * clicks/wheel. All toolbar buttons are clickable and mirrored by keys:
  * `v` cycles the view (`1`–`4` pick one), `alt+↓`/`alt+↑` jump hunks and roll
- * into the adjacent file at the edges, `]`/`[` switch files, `s`/`u`
- * stage/unstage (hunk-aware), `x` discards a hunk, `delete` discards the
+ * into the adjacent file at the edges, `space` stages/unstages the focused
+ * diff row (the focused hunk in hunk view), `s`/`u` stage/unstage
+ * (hunk-aware), `x` discards a hunk, `delete` discards the
  * whole file (press twice to confirm), `w` wraps, `b` cycles
  * whitespace handling (exact → ignore whitespace → ignore
  * formatting/import-only changes), `c` jumps to the commit form, `r`
- * refreshes. In the sidebar tree `←`/`→` collapse/expand directories,
+ * refreshes. h/l and arrows choose the left diff/right changes pane;
+ * Alt+←/→ fold directories or pan long diff lines.
  * `enter` opens the selected file in the diff pane, `space` stages or
  * unstages the selected row, and `delete` discards it — on a directory,
  * every file underneath it.
  */
 
 import type { TspSpan } from "@oh-my-pi/pi-wire";
-import { formatKeyHint, formatKeyHints } from "../../app-keybindings";
+import { formatKeyHint, formatKeyHints, formatTooltipKey } from "../../app-keybindings";
 import { SplitPane } from "../../components/layout/split-pane";
 import { Stack } from "../../components/layout/stack";
+import { MenuKeyReader, menuScrollBy } from "../../components/menu-navigation";
 import { matchesKey } from "../../keys";
 import { ProcessTerminal } from "../../terminal";
 import { routeSgrMouseInput } from "../../mouse";
-import { col, compact, keyed, node, row, span, text } from "../../native/describe";
+import { col, compact, keyed, node, row, span, stableKey, text } from "../../native/describe";
 import { Memo } from "../../native/memo";
-import type { DescribeContext, NativeNode, NativeUiEvent } from "../../native/node";
+import type { DescribeContext, NativeNode, NativeScroll, NativeUiEvent } from "../../native/node";
 import { actionButton } from "../../native/overlay";
 import { type Component, type OverlayHandle, TUI } from "../../tui";
 import { truncateToWidth, visibleWidth } from "../../utils";
@@ -41,6 +44,7 @@ import { theme, warmHighlighter } from "../../theme/theme";
 import type { AvatarSource } from "./avatar";
 import { pill, softPill, tintChip } from "./colors";
 import {
+	assetTitle,
 	buildDiffDocument,
 	type DiffDocument,
 	buildLineSelectionPatch,
@@ -52,7 +56,7 @@ import {
 } from "./diff-pane";
 import { GitHelpSheet } from "./help";
 import { Sidebar, type SidebarAction, type GitCommitMessage } from "./sidebar";
-import type { AssetFileContents, ChangedFile, FileContents, GitTuiModel } from "./state";
+import type { AssetFileContents, ChangedFile, FileAssetSide, FileContents, GitTuiModel, MediaRef } from "./state";
 
 /** AI staging counts displayed after filtering the working tree. */
 export interface AiStageOutcome {
@@ -151,7 +155,7 @@ function chip(label: string, active: boolean): string {
 	return softPill(text, { active });
 }
 
-class GitTuiComponent implements Component {
+export class GitTuiComponent implements Component {
 	readonly #ui: TUI;
 	readonly #model: GitTuiModel;
 	readonly #host: GitTuiHost;
@@ -185,9 +189,17 @@ class GitTuiComponent implements Component {
 	#pendingHunkEdge: "last" | null = null;
 	#disposed = false;
 	#help: OverlayHandle | null = null;
+	#helpComponent: GitHelpSheet | undefined;
 	readonly #nativeBar = new Memo();
 	readonly #nativeBody = new Memo();
 	readonly #nativeRoot = new Memo();
+	readonly #keys = new MenuKeyReader();
+	#navigationReady = false;
+	#pendingNavigation: unknown;
+	#pendingPaneNavigation: unknown;
+	#restoringNavigation = false;
+	#nativeScroll: NativeScroll | undefined;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	constructor(ui: TUI, host: GitTuiHost) {
 		this.#ui = ui;
@@ -221,6 +233,12 @@ class GitTuiComponent implements Component {
 
 	async run(): Promise<void> {
 		await this.#refresh(true);
+		this.#navigationReady = true;
+		if (this.#pendingNavigation !== undefined) {
+			const pending = this.#pendingNavigation;
+			this.#pendingNavigation = undefined;
+			this.restoreNavigation(pending);
+		}
 		this.#refreshTimer = setInterval(() => void this.#refresh(false), REFRESH_MS);
 		return this.#done.promise;
 	}
@@ -236,6 +254,64 @@ class GitTuiComponent implements Component {
 		this.#help?.hide();
 		this.#sidebar.dispose();
 		this.#stack.dispose();
+	}
+
+	get blocksMenuHistory(): boolean {
+		return this.#busy;
+	}
+
+	leaveMenu(): void {
+		this.#done.resolve();
+	}
+
+	navigationSnapshot(): unknown {
+		return {
+			focus: this.#focus,
+			filePath: this.#currentFile?.path,
+			fileArea: this.#currentFile?.area,
+			whitespace: this.#whitespace,
+			sidebar: this.#sidebar.navigationSnapshot(),
+			pane: this.#pane.navigationSnapshot(),
+			help: this.#help !== null,
+			helpView: this.#helpComponent?.navigationSnapshot(),
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		if (!this.#navigationReady) {
+			this.#pendingNavigation = snapshot;
+			return;
+		}
+		const state = snapshot as {
+			focus?: Focus;
+			filePath?: string;
+			fileArea?: string;
+			whitespace?: WhitespaceMode;
+			sidebar?: unknown;
+			pane?: unknown;
+			help?: boolean;
+			helpView?: unknown;
+		};
+		this.#restoringNavigation = true;
+		try {
+			if (state.whitespace === "off" || state.whitespace === "whitespace" || state.whitespace === "formatting") {
+				this.#whitespace = state.whitespace;
+			}
+			this.#sidebar.restoreNavigation(state.sidebar);
+			const file = [...this.#model.unstaged, ...this.#model.staged, ...(this.#model.headCommit?.files ?? [])].find(
+				candidate => candidate.path === state.filePath && candidate.area === state.fileArea,
+			);
+			this.#pendingPaneNavigation = state.pane;
+			if (file) this.#showFile(file);
+			else this.#pane.restoreNavigation(state.pane);
+			if (state.focus === "diff" || state.focus === "sidebar") this.#setFocus(state.focus);
+			if ((state.help === true) !== (this.#help !== null)) this.#toggleHelp();
+			this.#helpComponent?.restoreNavigation(state.helpView);
+			this.#keys.reset();
+		} finally {
+			this.#restoringNavigation = false;
+		}
 	}
 
 	// ── data ───────────────────────────────────────────────────────────────
@@ -357,6 +433,10 @@ class GitTuiComponent implements Component {
 						: this.#pane.highlightAsync(abort.signal, () => this.#ui.requestRender()),
 				)
 				.catch(() => undefined);
+		}
+		if (this.#pendingPaneNavigation !== undefined) {
+			this.#pane.restoreNavigation(this.#pendingPaneNavigation);
+			this.#pendingPaneNavigation = undefined;
 		}
 		this.#ui.requestRender();
 	}
@@ -617,8 +697,32 @@ class GitTuiComponent implements Component {
 			return;
 		}
 		if (this.#handleMouse(data)) return;
-		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
+		if (this.#sidebar.search.focused && this.#sidebar.handleSearchInput(data)) return;
+		if (
+			this.#focus === "sidebar" &&
+			this.#sidebar.editing &&
+			!this.#sidebar.search.focused &&
+			!matchesKey(data, "escape") &&
+			!matchesKey(data, "tab") &&
+			!matchesKey(data, "shift+tab")
+		) {
+			this.#sidebar.handleInput(data);
+			return;
+		}
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (action?.kind === "context") {
 			this.#setFocus(this.#focus === "diff" ? "sidebar" : "diff");
+			return;
+		}
+		if (action?.kind === "horizontal") {
+			this.#setFocus(action.delta < 0 ? "diff" : "sidebar");
+			return;
+		}
+		if (action?.kind === "search") {
+			this.#setFocus("sidebar");
+			this.#sidebar.search.focused = true;
+			this.#ui.requestRender();
 			return;
 		}
 		if (matchesKey(data, "escape")) {
@@ -664,19 +768,29 @@ class GitTuiComponent implements Component {
 			}
 		}
 		if (this.#focus === "diff") {
+			const by = action ? menuScrollBy(action) : undefined;
+			if (by) this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
 			if (matchesKey(data, "shift+up")) this.#pane.moveCursor(-1, true);
 			else if (matchesKey(data, "shift+down")) this.#pane.moveCursor(1, true);
-			else if (matchesKey(data, "up") || data === "k") this.#pane.moveCursor(-1, false);
-			else if (matchesKey(data, "down") || data === "j") this.#pane.moveCursor(1, false);
-			else if (matchesKey(data, "pageUp")) this.#pane.moveCursor(-Math.max(1, this.#contentHeight - 2), false);
-			else if (matchesKey(data, "pageDown") || data === " ")
-				this.#pane.moveCursor(Math.max(1, this.#contentHeight - 2), false);
-			else if (matchesKey(data, "left") || data === "h") this.#pane.scrollLeftBy(-8);
-			else if (matchesKey(data, "right") || data === "l") this.#pane.scrollLeftBy(8);
-			else if (matchesKey(data, "home") || data === "g") this.#pane.cursorToEdge("start");
-			else if (matchesKey(data, "end") || data === "G") this.#pane.cursorToEdge("end");
-			else if (matchesKey(data, "enter")) return this.#jumpHunkOrFile(1);
-			else if (data === "s" || data === "u") {
+			else if (action?.kind === "move") this.#pane.moveCursor(action.delta, false);
+			else if (action?.kind === "halfPage" || action?.kind === "page")
+				this.#pane.moveCursor(
+					action.delta * Math.max(1, Math.floor(this.#contentHeight / (action.kind === "halfPage" ? 2 : 1))),
+					false,
+				);
+			else if (action?.kind === "scroll") this.#pane.scrollBy(action.delta);
+			else if (action?.kind === "boundary") this.#pane.cursorToEdge(action.edge === "first" ? "start" : "end");
+			else if (matchesKey(data, "alt+left")) this.#pane.scrollLeftBy(-8);
+			else if (matchesKey(data, "alt+right")) this.#pane.scrollLeftBy(8);
+			else if (action?.kind === "confirm") return this.#jumpHunkOrFile(1);
+			else if (matchesKey(data, "space")) {
+				// Hunk-view rows do not map back to document rows, so Space acts on the focused hunk there.
+				const target = this.#pane.patchTarget;
+				const hunk = this.#pane.mode === "hunk" ? this.#pane.currentHunk : null;
+				if (target && hunk) void this.#hunkAction(hunk, target);
+				else if (target && this.#pane.selection) void this.#lineAction(target);
+				return;
+			} else if (data === "s" || data === "u") {
 				if (this.#pane.selection?.explicit && this.#pane.patchTarget) {
 					void this.#lineAction(this.#pane.patchTarget);
 					return;
@@ -700,7 +814,7 @@ class GitTuiComponent implements Component {
 			this.#ui.requestRender();
 			return;
 		}
-		this.#sidebar.handleInput(data);
+		this.#sidebar.handleInput(data, action);
 	}
 
 	#handleMouse(data: string): boolean {
@@ -790,8 +904,8 @@ class GitTuiComponent implements Component {
 			theme.fg(
 				"dim",
 				this.#focus === "diff"
-					? `${formatKeyHints(["alt+down", "alt+up"])} hunk · ${formatKeyHints(["]", "["])} file · ${formatKeyHints(["shift+up", "shift+down"])} select · ${formatKeyHints(["s", "u"])} stage · ${formatKeyHints(["x", "delete"])} discard · ${formatKeyHint("v")} view · ${formatKeyHint("c")} commit · ${formatKeyHint("?")} keys · ${formatKeyHint("q")} quit`
-					: `${formatKeyHints(["up", "down"])} move · ${formatKeyHints(["left", "right"])} fold · ${formatKeyHint("space")} stage · ${formatKeyHint("delete")} discard · ${formatKeyHint("enter")} open · ${formatKeyHints(["alt+down", "alt+up"])} hunk · ${formatKeyHint("c")} commit · ${formatKeyHint("t")} tree · ${formatKeyHint("?")} keys · ${formatKeyHint("q")} quit`,
+					? `j/k rows · h/l panes · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Alt-←/→ pan · Space stage · / search · ? keys · q quit`
+					: `j/k rows · h/l panes · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Alt-←/→ fold · Space stage · / search · ? keys · q quit`,
 			);
 		const free = width - row.width - right.width - 1;
 		const middleText = free > visibleWidth(middle) + 4 ? middle : truncateToWidth(middle, Math.max(0, free - 4));
@@ -880,15 +994,23 @@ class GitTuiComponent implements Component {
 
 	/** `?`: the keyboard shortcuts sheet over the app. */
 	#toggleHelp(): void {
+		const previous = this.navigationSnapshot();
 		if (this.#help) {
 			this.#help.hide();
 			this.#help = null;
+			this.#helpComponent = undefined;
+			if (!this.#restoringNavigation) this.onNavigationVisit?.("", previous);
 			return;
 		}
-		const sheet = new GitHelpSheet(() => this.#toggleHelp());
+		const sheet = new GitHelpSheet(
+			() => this.#toggleHelp(),
+			() => this.#toggleHelp(),
+		);
+		this.#helpComponent = sheet;
 		this.#help = this.#ui.showOverlay(sheet, { anchor: "center", width: "80%", maxHeight: "90%" });
 		this.#ui.setFocus(sheet);
 		this.#ui.requestRender();
+		if (!this.#restoringNavigation) this.onNavigationVisit?.("help", previous);
 	}
 
 	// ── native ─────────────────────────────────────────────────────────────
@@ -922,8 +1044,10 @@ class GitTuiComponent implements Component {
 				this.#contents,
 				this.#currentFile,
 				this.#pane.emptyMessage,
+				cx.supports("media"),
+				this.#nativeScroll,
 			],
-			() => this.#describeBody(),
+			() => this.#describeBody(cx),
 		);
 		const side = this.#sidebar.describe(cx);
 		return this.#nativeRoot.get([bar, body, side, narrow, status, this.#status, this.#statusTone], () => {
@@ -1023,8 +1147,8 @@ class GitTuiComponent implements Component {
 		const right: NativeNode[] = [
 			row(
 				[
-					iconButton("chev-up", "prev-hunk", `Previous change (${formatKeyHint("alt+up")})`),
-					iconButton("chev", "next-hunk", `Next change (${formatKeyHint("alt+down")})`),
+					iconButton("chev-up", "prev-hunk", `Previous change (${formatTooltipKey("alt+up")})`),
+					iconButton("chev", "next-hunk", `Next change (${formatTooltipKey("alt+down")})`),
 				],
 				{ gap: "none", align: "center" },
 			),
@@ -1045,13 +1169,13 @@ class GitTuiComponent implements Component {
 					"type",
 					"whitespace",
 					this.#whitespace === "off"
-						? `Ignore whitespace (${formatKeyHint("b")})`
+						? `Ignore whitespace (${formatTooltipKey("b")})`
 						: this.#whitespace === "whitespace"
-							? `Ignoring whitespace; also ignore formatting (${formatKeyHint("b")})`
-							: `Ignoring formatting and imports; show all (${formatKeyHint("b")})`,
+							? `Ignoring whitespace; also ignore formatting (${formatTooltipKey("b")})`
+							: `Ignoring formatting and imports; show all (${formatTooltipKey("b")})`,
 					this.#whitespace !== "off",
 				),
-				iconButton("corner-down-right", "wrap", `Wrap lines (${formatKeyHint("w")})`, this.#pane.wrap),
+				iconButton("corner-down-right", "wrap", `Wrap lines (${formatTooltipKey("w")})`, this.#pane.wrap),
 			);
 		}
 		if (file?.area === "unstaged" || file?.area === "staged") {
@@ -1063,8 +1187,8 @@ class GitTuiComponent implements Component {
 			);
 		}
 		right.push(
-			iconButton("keyboard", "help", `Keyboard shortcuts (${formatKeyHint("?")})`),
-			iconButton("x", "close", `Close (${formatKeyHint("q")})`),
+			iconButton("keyboard", "help", `Keyboard shortcuts (${formatTooltipKey("?")})`),
+			iconButton("x", "close", `Close (${formatTooltipKey("q")})`),
 		);
 		return keyed(
 			row(
@@ -1079,24 +1203,39 @@ class GitTuiComponent implements Component {
 	}
 
 	/** The diff for the view mode, or the loading, empty and media states. */
-	#describeBody(): NativeNode {
+	#describeBody(cx: DescribeContext): NativeNode {
 		const doc = this.#pane.doc;
 		const file = this.#currentFile;
 		if (doc && this.#pane.state === "ready") {
-			return node(
-				"diff",
-				{
-					text: unifiedDiff(doc, this.#pane.mode === "file"),
-					path: doc.filePath,
-					mode: this.#pane.mode === "split" ? "split" : "unified",
-					role: "omp.app.git.diff",
-				},
-				undefined,
-				"diff",
-			);
+			return {
+				...node(
+					"diff",
+					{
+						text: unifiedDiff(doc, this.#pane.mode === "file"),
+						path: doc.filePath,
+						mode: this.#pane.mode === "split" ? "split" : "unified",
+						role: "omp.app.git.diff",
+					},
+					undefined,
+					"diff",
+				),
+				scroll: this.#nativeScroll,
+			};
 		}
 		const contents = this.#contents;
 		if (this.#pane.state === "asset" && file && contents?.kind === "asset") {
+			if (cx.supports("media")) {
+				return keyed(
+					row(
+						[
+							mediaColumn("before", contents.old, contents.oldRef),
+							mediaColumn("after", contents.new, contents.newRef),
+						],
+						{ gap: "sm", align: "stretch", grow: 1, role: "omp.app.git.compare" },
+					),
+					"compare",
+				);
+			}
 			return keyed(
 				col(
 					[
@@ -1183,6 +1322,41 @@ function unifiedDiff(doc: DiffDocument, whole: boolean): string {
 	return out.join("\n");
 }
 
+/** `media` nodes of the before/after compare share this link, so they pan and zoom together. */
+const MEDIA_COMPARE_LINK = "git-compare";
+
+/**
+ * One column of the native media compare: its heading (`Before · PNG`) over a
+ * `media` node Tern loads from `ref`, keyed by path so another file remounts,
+ * or a muted line when the side has no file.
+ */
+function mediaColumn(side: "before" | "after", asset: FileAssetSide, ref: MediaRef | undefined): NativeNode {
+	const head = keyed(
+		text([span(assetTitle(side === "before" ? "Before" : "After", asset), "strong")], {
+			truncate: "end",
+			role: "omp.app.git.media-head",
+		}),
+		"head",
+	);
+	const body = ref
+		? node(
+				"media",
+				{ ...ref, link: MEDIA_COMPARE_LINK, grow: 1, role: "omp.app.git.media" },
+				undefined,
+				`media-${stableKey(ref.path)}`,
+			)
+		: keyed(
+				text(
+					asset.kind === "empty"
+						? [span(side === "before" ? "Did not exist" : "Deleted", "muted")]
+						: assetText(asset).map(fact => span(fact.t, "muted")),
+					{ role: "omp.app.git.media-none" },
+				),
+				"none",
+			);
+	return keyed(col([head, body], { gap: "xs", grow: 1, basis: 0, role: "omp.app.git.media-side" }), side);
+}
+
 /** One side of a media/binary change as a short fact line. */
 function assetText(asset: AssetFileContents["old"]): TspSpan[] {
 	const size = (bytes: number | undefined): string =>
@@ -1207,24 +1381,33 @@ function assetText(asset: AssetFileContents["old"]): TspSpan[] {
  * Mount the git TUI as a fullscreen overlay on an existing TUI (the `/git`
  * slash command). Resolves when the user closes it; the caller restores focus.
  */
-export async function showGitOverlay(ui: TUI, host: GitTuiHost): Promise<void> {
+export async function showGitOverlay(
+	ui: TUI,
+	host: GitTuiHost,
+	onMount?: (component: GitTuiComponent, mount: () => OverlayHandle) => void,
+): Promise<void> {
 	const component = new GitTuiComponent(ui, host);
-	const overlay = ui.showOverlay(component, {
-		anchor: "top-left",
-		width: "100%",
-		maxHeight: "100%",
-		margin: 0,
-		fullscreen: true,
-		mouseTracking: true,
-	});
-	ui.setFocus(component);
-	ui.requestRender();
+	let overlay: OverlayHandle | undefined;
+	const mount = (): OverlayHandle => {
+		overlay = ui.showOverlay(component, {
+			anchor: "top-left",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+			fullscreen: true,
+			mouseTracking: true,
+		});
+		ui.setFocus(component);
+		ui.requestRender();
+		return overlay;
+	};
+	if (onMount) onMount(component, mount);
+	else mount();
 	try {
 		await component.run();
 	} finally {
 		component.dispose();
-		// overlay.hide() restores focus to the pre-overlay component.
-		overlay.hide();
+		overlay?.hide();
 	}
 }
 

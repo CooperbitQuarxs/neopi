@@ -105,13 +105,46 @@ Advisor transcript files (`__advisor*.jsonl`) appear as `advisor`-kind rows unde
 
 Collab does not replicate advisor rows or serve their transcripts to guests; the host also rejects advisor chat, revive, and kill requests by id.
 
+## IRC viewer
+
+`Alt+I` (`app.irc.viewer`) opens a fullscreen history of the agent-to-agent messages in this session. The live IRC cards in the main transcript retire after a few seconds and only four show at once; the viewer keeps every message.
+
+Each row shows the time, sender `➤` recipient, and the message body. Broadcasts appear as one row per recipient, marked `broadcast`. Replies are marked `reply`, wake-turn relays `relay`, and failed deliveries show the error. Long bodies are collapsed to two lines.
+
+| Key | Action |
+| --- | --- |
+| `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End`, wheel | Select a message; `End` follows new traffic again. An expanded message taller than the screen scrolls through its lines first |
+| `Enter` or the tool-expand key | Expand or collapse the selected message |
+| `/` | Filter by participant (sender or recipient); `Enter` applies, `Esc` clears |
+| `r` | Reply to the selected message as yourself; `Enter` sends, `Esc` cancels |
+| `Esc` or `Alt+I` | Close |
+
+The history belongs to this UI's root session and its current conversation: `/new` or resuming another session shows that conversation's messages, with or without a session file. It lives in memory and is lost when the process exits. Settings:
+
+- `irc.operator.viewerEnabled` (default `true`) lets the key open the viewer.
+- `irc.operator.relayToMainTranscript` (default `true`) controls the live cards in the main transcript; the viewer keeps messages either way.
+- `irc.history.maxEntries` (default `1000`) caps the history per process; the oldest messages drop first.
+- `irc.operator.handle` (default `Operator`) is your own IRC id; see below.
+
+The viewer is for the operator only. Agents still receive only messages addressed to them, and no tool exposes this history to them.
+
+### You as a participant
+
+You take part in IRC under your own id, `Operator` unless `irc.operator.handle` names another (it takes effect the next time npi starts). This id is separate from `Main`, the model behind the composer:
+
+- Agents list you among their peers and can message you with `write agent://Operator`. Delivery does not wait for any model's turn: the message shows as a card in the main transcript and stays in the viewer. Broadcasts to `agent://all` reach you too.
+- `/irc <agent> <message>` or `/irc all <message>` sends as you, and `r` in the viewer replies to the selected message. Agents see these messages as coming from your id, never from `Main`. `/irc` alone opens the viewer.
+- The composer still talks to `Main`.
+
+You are not listed in the Agent Hub, and collab guests do not get an id of their own.
+
 ## Related surfaces
 
 Agent Hub is the human-facing live session view. Adjacent commands and internal URLs serve narrower purposes:
 
 `/agents` is a separate agent-definition/settings hub, not the live roster. It manages discovered agents, enable/disable state, model overrides, prewalk, and advisor selection.
 
-- `/jobs` prints a snapshot of running and recently settled asynchronous tool jobs. It does not replace the per-agent transcript or control view.
+- `/jobs` prints a snapshot of running and recently settled asynchronous tool jobs. It does not replace the per-agent transcript or control view. `/jobs kill <id>|all` cancels running jobs from the command line.
 - `history://<id>` gives the coding agent a concise transcript for a live/parked subagent or a retained on-disk transcript.
 - `agent://<id>` resolves a subagent's saved final output artifact; it is not the live transcript. Before that artifact exists, a registered agent resolves to its status, the `yield` payloads it has submitted so far, and its latest assistant text.
 - `write agent://<id>` steers or follows up with a normal subagent; `agent://all` broadcasts to visible live peers. Messaging a parked subagent revives it. `read history://` lists registered agents and retained on-disk transcripts, refreshing the caller root's persisted roster first, the same as `history://<id>` lookups.

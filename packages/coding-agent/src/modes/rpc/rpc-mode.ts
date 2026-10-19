@@ -11,14 +11,15 @@
  * - Prompt completion: one `prompt_result` per accepted prompt, correlated by the command `id`
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { MessageOrigin } from "@oh-my-pi/pi-ai";
+import type { MessageOrigin, Model } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { $env, getAgentDir, isRecord, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { $env, getAgentDir, isRecord, logger, Snowflake, toError } from "@oh-my-pi/pi-utils";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionAskDialogQuestion,
@@ -49,16 +50,17 @@ import {
 	wordCompletionQuery,
 } from "@oh-my-pi/pi-tui/prompt/word-completion";
 import { requestTextPrediction, textPredictionBackend } from "../../predict/client";
-import type { AgentSession } from "../../session/agent-session";
+import { type AgentSession, SessionBusyError } from "../../session/agent-session";
+import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { CACHE_WARMING_MODES } from "../../session/cache-warmer";
 import { findMostRecentNonEmptySession } from "../../session/session-listing";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
+import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import type { EventBus } from "../../utils/event-bus";
 import { selectRpcEntries } from "./rpc-compat";
-import { calculateTokensPerSecond } from "../../utils/token-rate";
 import {
 	formatPersistenceDurabilityFailure,
 	formatPersistenceFailure,
@@ -72,19 +74,30 @@ import { RPC_CAPABILITIES } from "./rpc-capabilities";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
+import { RpcBtwController } from "./rpc-btw";
+import { RpcGoalController } from "./rpc-goal";
+import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
 import { RpcOutputWriter } from "./rpc-output";
 import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } from "./rpc-plan-mode";
 import { RpcExtensionUserMessageTracker, RpcPromptResults, watchAndReportPromptResult } from "./rpc-prompt-results";
 import type { RpcPromptTicket } from "./rpc-prompt-results";
+import { controlHostFor } from "../../control/host";
 import { RpcRoles } from "./rpc-roles";
 import { setRpcChatMode } from "./rpc-chat-mode";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
 import { sessionLeaseErrorCode } from "./rpc-session-lease";
-import { isRpcSessionSettled, RpcSessionSettleWatcher } from "./rpc-session-settle";
-import { RpcSubagentRegistry, readRpcSubagentTranscript, resolveOwnedLiveSubagent } from "./rpc-subagents";
+import { RpcSessionSettleWatcher, watchedScheduledTurnProbe } from "./rpc-session-settle";
+import { buildRpcSessionState } from "./rpc-session-state";
+import {
+	type RpcSubagentBus,
+	RpcSubagentRegistry,
+	readRpcSubagentTranscript,
+	resolveOwnedLiveSubagent,
+} from "./rpc-subagents";
 import { getRpcUsage, RpcUsageUnavailableError } from "./rpc-usage";
 import { isRpcApprovalHandler, isRpcToolApprovalResponse, RpcToolApprovalBridge } from "./rpc-tool-approval";
 import type {
+	RpcAbortAndRestoreQueueResult,
 	RpcCommand,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
@@ -100,8 +113,8 @@ import type {
 	RpcOpenSessionResult,
 	RpcPlanProposalResponse,
 	RpcReadyFrame,
+	RpcRemoveQueuedMessageResult,
 	RpcResponse,
-	RpcSessionState,
 	RpcSubagentSubscriptionLevel,
 	RpcToolApprovalResponse,
 } from "./rpc-types";
@@ -228,7 +241,7 @@ type RpcOutput = (
 
 export type RpcSessionChangeCommand = Extract<
 	RpcCommand,
-	{ type: "new_session" } | { type: "switch_session" } | { type: "branch" }
+	{ type: "new_session" } | { type: "switch_session" } | { type: "branch" } | { type: "fork" }
 >;
 
 export type RpcQueueModeCommand = Extract<
@@ -239,9 +252,10 @@ export type RpcQueueModeCommand = Extract<
 export type RpcSessionChangeResult =
 	| { type: "new_session"; data: { cancelled: boolean } }
 	| { type: "switch_session"; data: { cancelled: boolean } }
-	| { type: "branch"; data: { text: string; cancelled: boolean } };
+	| { type: "branch"; data: { text: string; cancelled: boolean } }
+	| { type: "fork"; data: { cancelled: boolean } };
 
-export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchSession" | "branch">;
+export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchSession" | "branch" | "fork">;
 
 export type RpcSkillCommandSession = Pick<AgentSession, "promptCustomMessage" | "skills" | "skillsSettings">;
 export type RpcSkillCommandResult = { agentInvoked: true; userEntryId?: string };
@@ -458,10 +472,17 @@ export function answerRpcProtocolNegotiation(
 /**
  * Commands that skip the serial queue entirely; see {@link dispatchRpcInputFrame}.
  * (`prompt` and `steer_subagent` are also backgrounded there, but start through
- * the serial tail.)
+ * the serial tail.) `btw_cancel` is synchronous and must overtake a `btw` still
+ * starting or a long serial command.
  * A Set, not a Record: `type` is untrusted input and must not hit prototype keys.
  */
-const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>(["bash", "get_usage", "predict_word"]);
+const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
+	"bash",
+	"get_usage",
+	"predict_word",
+	"live_start",
+	"btw_cancel",
+]);
 
 /**
  * Dispatch a single parsed frame from the RPC input stream.
@@ -477,7 +498,8 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>(["b
  * while a shell command runs, or `abort` (and `steer`/`follow_up`/`get_state`)
  * while a `prompt` or `steer_subagent` is still admitting. `predict_word` is
  * backgrounded too, so a cold prediction engine never stalls the command queue
- * behind a keystroke.
+ * behind a keystroke. `live_start` responds only once the realtime session is
+ * connected and recording, so it is backgrounded and `live_stop` can cancel it.
  * Response correlation is preserved via each command's `id`; ordering across
  * concurrent commands is not guaranteed and clients MUST match on `id`.
  * Provider usage fetches (`get_usage`) are backgrounded for the same reason.
@@ -541,6 +563,7 @@ const SESSION_CHANGE_TYPES: Record<string, true> = {
 	new_session: true,
 	switch_session: true,
 	branch: true,
+	fork: true,
 	open_session: true,
 };
 
@@ -561,7 +584,8 @@ export class RpcUserInputGate {
 
 	/** Call from {@link RpcInputDispatcher.dispatch} before the handler is queued. */
 	accept(command: RpcCommand): void {
-		const isAbort = command.type === "abort" || command.type === "abort_and_prompt";
+		const isAbort =
+			command.type === "abort" || command.type === "abort_and_prompt" || command.type === "abort_and_restore_queue";
 		if (
 			!isAbort &&
 			!Object.hasOwn(USER_INPUT_TYPES, command.type) &&
@@ -759,6 +783,77 @@ export class RpcShutdownCoordinator {
 	}
 }
 
+/** UTF-8 JSON size of `value`, as compared against `RpcFrameEncoder.maxResponseBytes`. */
+function encodedBytes(value: unknown): number {
+	return Buffer.byteLength(JSON.stringify(value));
+}
+
+/**
+ * Build the `remove_queued_message` response within `maxBytes`. The message is already removed,
+ * so an oversized response must not become a transport-limit error that loses it: its images are
+ * omitted instead (`imagesDropped`).
+ */
+export function fitRemoveQueuedMessageResponse(
+	id: string | undefined,
+	removed: RestoredQueuedMessage | undefined,
+	maxBytes: number,
+): RpcResponse {
+	const response = (data: RpcRemoveQueuedMessageResult): RpcResponse => ({
+		id,
+		type: "response",
+		command: "remove_queued_message",
+		success: true,
+		data,
+	});
+	if (!removed?.images) return response({ removed: removed !== undefined });
+	const full = response({ removed: true, images: removed.images });
+	return encodedBytes(full) <= maxBytes ? full : response({ removed: true, imagesDropped: true });
+}
+
+/**
+ * Build the `abort_and_restore_queue` response within `maxBytes`. The queue is already withdrawn,
+ * so an oversized response must not become a transport-limit error that loses it: images go first
+ * (`imagesDropped`, keeping every text), then the newest entries (`truncated`, keeping an
+ * oldest-first prefix of steering then follow-ups).
+ */
+export function fitAbortAndRestoreQueueResponse(
+	id: string | undefined,
+	restored: RpcAbortAndRestoreQueueResult,
+	maxBytes: number,
+): RpcResponse {
+	const response = (data: RpcAbortAndRestoreQueueResult): RpcResponse => ({
+		id,
+		type: "response",
+		command: "abort_and_restore_queue",
+		success: true,
+		data,
+	});
+	const full = response(restored);
+	if (encodedBytes(full) <= maxBytes) return full;
+	const imagesDropped = [...restored.steering, ...restored.followUp].some(entry => entry.images?.length);
+	const flags = imagesDropped ? { imagesDropped: true as const } : {};
+	const textOnly = {
+		steering: restored.steering.map(({ text }) => ({ text })),
+		followUp: restored.followUp.map(({ text }) => ({ text })),
+	};
+	if (imagesDropped) {
+		const withoutImages = response({ ...textOnly, ...flags });
+		if (encodedBytes(withoutImages) <= maxBytes) return withoutImages;
+	}
+	const fitted: RpcAbortAndRestoreQueueResult = { steering: [], followUp: [], ...flags, truncated: true };
+	// Exact: each entry adds its own JSON plus a comma after the first in its array.
+	let remaining = maxBytes - encodedBytes(response(fitted));
+	for (const queue of ["steering", "followUp"] as const) {
+		for (const entry of textOnly[queue]) {
+			const cost = encodedBytes(entry) + (fitted[queue].length > 0 ? 1 : 0);
+			if (cost > remaining) return response(fitted);
+			fitted[queue].push(entry);
+			remaining -= cost;
+		}
+	}
+	return response(fitted);
+}
+
 export type RpcSubagentResetRegistry = Pick<RpcSubagentRegistry, "clear">;
 
 /**
@@ -859,6 +954,7 @@ export async function handleRpcSessionChange(
 	session: RpcSessionChangeSession,
 	command: RpcSessionChangeCommand,
 	subagentRegistry?: RpcSubagentResetRegistry,
+	requestedModel?: Model,
 ): Promise<RpcSessionChangeResult> {
 	switch (command.type) {
 		case "new_session": {
@@ -869,7 +965,8 @@ export async function handleRpcSessionChange(
 		}
 
 		case "switch_session": {
-			const cancelled = !(await session.switchSession(command.sessionPath));
+			const options = requestedModel ? { model: requestedModel } : undefined;
+			const cancelled = !(await session.switchSession(command.sessionPath, options));
 			if (!cancelled) subagentRegistry?.clear();
 			return { type: "switch_session", data: { cancelled } };
 		}
@@ -879,13 +976,21 @@ export async function handleRpcSessionChange(
 			if (!result.cancelled) subagentRegistry?.clear();
 			return { type: "branch", data: { text: result.selectedText, cancelled: result.cancelled } };
 		}
+
+		case "fork": {
+			// RPC forks are snapshots: refuse while work could still write into the transcript.
+			// fork() rechecks after its awaits; interactive /fork keeps carrying running bash across.
+			const cancelled = !(await session.fork(command.entryId, { requireIdle: true }));
+			if (!cancelled) subagentRegistry?.clear();
+			return { type: "fork", data: { cancelled } };
+		}
 	}
 	throw new Error("Unsupported RPC session change command");
 }
 
 export type RpcOpenSessionSession = Pick<
 	AgentSession,
-	"newSession" | "switchSession" | "sessionFile" | "sessionId" | "messages"
+	"newSession" | "switchSession" | "sessionFile" | "sessionId" | "messages" | "model" | "setModel"
 >;
 
 /**
@@ -894,12 +999,17 @@ export type RpcOpenSessionSession = Pick<
  * can bind a pre-spawned process to a conversation it keys by directory.
  * Reopening the session that is already active is a no-op and does not abort a run.
  *
+ * With `model`, the session uses that model instead of its saved one, like an
+ * explicit `--model`; otherwise a saved model that cannot be restored fails the
+ * switch (see {@link AgentSession.switchSession}).
+ *
  * @throws Error when the process runs without session persistence (`--no-session`).
  */
 export async function openRpcSession(
 	session: RpcOpenSessionSession,
 	sessionDir: string,
 	subagentRegistry?: RpcSubagentResetRegistry,
+	model?: Model,
 ): Promise<RpcOpenSessionResult> {
 	if (!session.sessionFile) throw new Error("open_session requires session persistence (omit --no-session)");
 	const dir = path.resolve(sessionDir);
@@ -910,15 +1020,50 @@ export async function openRpcSession(
 		: path.dirname(current) === dir && session.messages.length === 0;
 	let cancelled = false;
 	if (!alreadyOpen) {
-		cancelled = latest ? !(await session.switchSession(latest)) : !(await session.newSession({ sessionDir: dir }));
+		cancelled = latest
+			? !(await session.switchSession(latest, model ? { model } : undefined))
+			: !(await session.newSession({ sessionDir: dir }));
 		if (!cancelled) subagentRegistry?.clear();
 	}
+	// A resumed session is bound to the model by the switch; an already-open or
+	// fresh one selects it as `set_model` would.
+	if (!cancelled && model && !modelsAreEqual(session.model, model)) await session.setModel(model);
 	return {
 		cancelled,
 		resumed: !cancelled && latest !== null,
 		sessionId: session.sessionId,
 		sessionFile: session.sessionFile,
 	};
+}
+
+type RpcModelLookupSession = Pick<AgentSession, "getAvailableModels" | "modelRegistry">;
+
+/**
+ * The available model with exactly this provider and id. Models missing from
+ * the current catalog wait for in-flight background discovery first: on cold
+ * start, discovery-backed providers (proxy / ollama / etc.) populate seconds
+ * after session ready. Catalog hits skip the wait, so the RPC queue is not
+ * stalled behind unrelated discovery.
+ */
+async function findRpcModel(session: RpcModelLookupSession, provider: string, modelId: string) {
+	const find = () => session.getAvailableModels().find(m => m.provider === provider && m.id === modelId);
+	const model = find();
+	if (model) return model;
+	await session.modelRegistry.awaitBackgroundRefresh();
+	return find();
+}
+
+/** The optional `provider`/`modelId` pair of `open_session` or `switch_session`, validated like `set_model`. */
+async function resolveRequestedRpcModel(
+	session: RpcModelLookupSession,
+	command: { provider?: string; modelId?: string },
+): Promise<Model | undefined> {
+	const { provider, modelId } = command;
+	if (provider === undefined && modelId === undefined) return undefined;
+	if (provider === undefined || modelId === undefined) throw new Error("provider and modelId must be given together");
+	const model = await findRpcModel(session, provider, modelId);
+	if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
+	return model;
 }
 
 function normalizeHostToolDefinitions(tools: RpcHostToolDefinition[]): RpcHostToolDefinition[] {
@@ -1280,6 +1425,8 @@ export interface RpcModeOptions {
 	input?: ReadableStream<Uint8Array>;
 	/** `--model` selector the process launched with (absent with `--provider`); a role selector seeds `activeRole`. */
 	launchModel?: string;
+	/** Builds `live_start` sessions; defaults to the real {@link LiveSessionController}. */
+	createLiveSession?: RpcLiveSessionFactory;
 }
 
 /**
@@ -1305,7 +1452,7 @@ export interface RpcCommandHandlerContext {
 	onPromptError: (id: string | undefined, command: string) => (promptError: Error) => void;
 	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
 	trackBackground: (task: () => Promise<void>) => void;
-	subagentRegistry: RpcSubagentRegistry | undefined;
+	subagentRegistry: RpcSubagentBus | undefined;
 	planMode: RpcPlanModeController;
 	settleWatcher: RpcSessionSettleWatcher;
 	rpcRoles: RpcRoles;
@@ -1319,6 +1466,16 @@ export interface RpcCommandHandlerContext {
 	setAskDialogEnabled?: (enabled: boolean) => void;
 	inputGate?: RpcUserInputGate;
 	isShutdownRequested?: () => boolean;
+	/** Goal mode over RPC; absent on transports without goal support (control sockets). */
+	goalController?: RpcGoalController;
+	/** Probe for a scheduled or held goal turn, feeding `get_state.isSettled`. */
+	goalTurnScheduled?: () => boolean;
+	/** Side questions (`/btw`) over RPC. */
+	btw?: RpcBtwController;
+	/** GPT live voice over RPC. */
+	liveBridge?: RpcLiveBridge;
+	/** Response size cap used to fit restored queue payloads into one frame. */
+	maxResponseBytes?: () => number;
 }
 
 // Handle a single command
@@ -1349,7 +1506,13 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 		toolApprovalBridge,
 		pendingExtensionRequests,
 		createUiContext,
+		goalController,
+		goalTurnScheduled,
+		btw,
+		liveBridge,
 	} = ctx;
+	// Without a frame encoder (control sockets) no response-size cap applies.
+	const maxResponseBytes = (): number => ctx.maxResponseBytes?.() ?? Number.MAX_SAFE_INTEGER;
 	const wordPredictor = new RpcWordPredictor();
 	const inputGate = ctx.inputGate ?? new RpcUserInputGate();
 	type OrderedUserInput = Extract<RpcCommand, { type: "prompt" | "steer" | "follow_up" | "abort_and_prompt" }>;
@@ -1523,9 +1686,11 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				if (command.queue !== "steering" && command.queue !== "followUp") {
 					return error(id, "remove_queued_message", "queue must be steering or followUp");
 				}
-				return success(id, "remove_queued_message", {
-					removed: session.removeQueuedMessage(command.message, command.queue),
-				});
+				return fitRemoveQueuedMessageResponse(
+					id,
+					session.takeQueuedMessage(command.message, command.queue),
+					maxResponseBytes(),
+				);
 			}
 
 			case "promote_queued_message": {
@@ -1536,11 +1701,23 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			}
 
 			case "abort": {
+				goalController?.stopForHostAbort();
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				return success(id, "abort");
 			}
 
+			case "abort_and_restore_queue": {
+				// Mirrors the TUI Esc restore: withdraw queued user input (including input the run
+				// dequeued but never recorded) before aborting, so neither the aborted turn nor
+				// abort()'s stranded-queue drain can run it.
+				const restored = session.clearQueue({ forInterrupt: true });
+				goalController?.stopForHostAbort();
+				await session.abort({ reason: USER_INTERRUPT_LABEL });
+				return fitAbortAndRestoreQueueResponse(id, restored, maxResponseBytes());
+			}
+
 			case "abort_and_prompt": {
+				goalController?.stopForHostAbort();
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				const ticket = promptResults.begin(id);
 				void dispatchOrderedUserInput(command, ticket).then(
@@ -1559,18 +1736,39 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 
 			case "new_session":
 			case "switch_session":
-			case "branch": {
-				let result: RpcSessionChangeResult;
+			case "branch":
+			case "fork": {
+				// Fast refusal before the goal controller voids a waiting continuation;
+				// fork() repeats the check after each of its own awaits.
+				if (command.type === "fork" && session.isBusyForSnapshot) {
+					return error(id, "fork", new SessionBusyError("fork the session").message, "session_busy");
+				}
+				const requestedModel =
+					command.type === "switch_session" ? await resolveRequestedRpcModel(session, command) : undefined;
+				// Validation first: a refused change must not cancel the running side question.
+				await btw?.close();
+				await goalController?.beginSessionChange();
+				let result: RpcSessionChangeResult | undefined;
 				try {
-					result = await handleRpcSessionChange(session, command, subagentRegistry);
+					result = await handleRpcSessionChange(session, command, subagentRegistry, requestedModel);
 				} catch (err) {
+					// fork() refuses when work started while its transition awaited.
+					if (err instanceof SessionBusyError) return error(id, command.type, err.message, "session_busy");
 					const code = sessionLeaseErrorCode(err);
 					if (!code) throw err;
 					return error(id, command.type, err instanceof Error ? err.message : String(err), code);
+				} finally {
+					// Branch and fork switch files in-process without detaching a run (fork requires idle).
+					await goalController?.endSessionChange({
+						detachedRun: command.type !== "branch" && command.type !== "fork" && result?.data.cancelled !== true,
+					});
+					// Respond only once this change's reattach (and any queued ahead of it) has run.
+					await goalController?.settled();
 				}
 				if (!result.data.cancelled) {
 					inputGate.commitSessionChange(command);
-					promptResults.abortOpen();
+					// `branch` leaves a live run streaming to its normal yield; new/switch detach it.
+					if (command.type !== "branch" && command.type !== "fork") promptResults.abortOpen();
 					// The detached run publishes no terminal agent_end to settle on.
 					void settleWatcher.check();
 					await emitAvailableCommandsUpdate();
@@ -1581,17 +1779,29 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			}
 
 			case "open_session": {
-				let result: RpcOpenSessionResult;
+				const requestedModel = await resolveRequestedRpcModel(session, command);
+				const fileBeforeOpen = session.sessionFile;
+				await btw?.close();
+				await goalController?.beginSessionChange();
+				let result: RpcOpenSessionResult | undefined;
 				try {
-					result = await openRpcSession(session, command.sessionDir, subagentRegistry);
+					result = await openRpcSession(session, command.sessionDir, subagentRegistry, requestedModel);
 				} catch (err) {
 					const code = sessionLeaseErrorCode(err);
 					if (!code) throw err;
 					return error(id, "open_session", err instanceof Error ? err.message : String(err), code);
+				} finally {
+					// Opening the session that is already open leaves a live run going (see below).
+					await goalController?.endSessionChange({ detachedRun: session.sessionFile !== fileBeforeOpen });
+					// Respond only once this change's reattach (and any queued ahead of it) has run.
+					await goalController?.settled();
 				}
 				if (!result.cancelled) {
 					inputGate.commitSessionChange(command);
-					promptResults.abortOpen();
+					// Opening the session that is already open switches nothing and leaves a live run
+					// going. Any real open (switch or new) changes the file, even when an aliased path
+					// reopens a transcript with the same id.
+					if (session.sessionFile !== fileBeforeOpen) promptResults.abortOpen();
 					void settleWatcher.check();
 					await emitAvailableCommandsUpdate();
 					await planMode.settled();
@@ -1604,41 +1814,36 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			// =================================================================
 
 			case "get_state": {
-				const state: RpcSessionState = {
-					model: session.model,
-					thinkingLevel: session.thinkingLevel,
-					isStreaming: session.isStreaming,
-					isCompacting: session.isCompacting,
-					steeringMode: session.steeringMode,
-					followUpMode: session.followUpMode,
-					interruptMode: session.interruptMode,
-					sessionFile: session.sessionFile,
-					sessionId: session.sessionId,
-					sessionName: session.sessionName,
-					chronicler: session.chroniclerHealth,
-					autoCompactionEnabled: session.autoCompactionEnabled,
-					queuedMessageCount: session.queuedMessageCount,
-					queuedMessages: session.getQueuedMessages(),
-					hasPendingAsyncWork: session.hasPendingAsyncWork(),
-					isSettled: isRpcSessionSettled(session),
-					todoPhases: session.getTodoPhases(),
-					fastModeEnabled: session.isFastModeEnabled(),
-					tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),
-					fastModeActive: session.isFastModeActive(),
-					messageCount: session.messages.length,
-					systemPrompt: session.systemPrompt,
-					dumpTools: session.agent.state.tools.map(tool => ({
-						name: tool.name,
-						description: tool.description,
-						parameters: toolWireSchema(tool),
-						examples: tool.examples,
-					})),
-					contextUsage: session.getContextUsage(),
+				// A goal exit triggered by the last turn restores tools asynchronously; report after it.
+				await goalController?.settled();
+				const state = buildRpcSessionState(session, {
 					activeRole: rpcRoles.activeRole(),
-					chatMode: session.chatMode?.mode ?? "off",
-					...planMode.state,
-				};
+					// A scheduled goal continuation will start a turn: not settled.
+					scheduledTurn: goalTurnScheduled,
+					includeDump: true,
+				});
 				return success(id, "get_state", state);
+			}
+
+			case "set_slow_mode": {
+				// A truthy non-boolean must not flip a persisted global setting.
+				if (typeof command.enabled !== "boolean") {
+					return error(id, "set_slow_mode", "set_slow_mode requires boolean enabled");
+				}
+				const supported = session.setSlowMode(command.enabled);
+				if (command.enabled && !supported) {
+					return error(id, "set_slow_mode", "Slow mode is unavailable for the current model.");
+				}
+				return success(id, "set_slow_mode", { enabled: session.isSlowModeEnabled() });
+			}
+
+			case "goal": {
+				if (!goalController) return error(id, "goal", "Goal mode is unavailable on this transport");
+				try {
+					return success(id, "goal", await goalController.handle(command));
+				} catch (goalError) {
+					return error(id, "goal", goalError instanceof Error ? goalError.message : String(goalError));
+				}
 			}
 
 			case "set_fast_mode": {
@@ -1713,6 +1918,29 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				const rpcTools = hostToolBridge.setTools(tools);
 				await session.refreshRpcHostTools(rpcTools);
 				return success(id, "set_host_tools", { toolNames: tools.map(tool => tool.name) });
+			}
+
+			case "live_start": {
+				if (!liveBridge) return error(id, "live_start", "Live voice is unavailable on this transport");
+				try {
+					return success(id, "live_start", await liveBridge.start({ voice: command.voice }));
+				} catch (err) {
+					return error(id, "live_start", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "live_stop": {
+				await liveBridge?.stop();
+				return success(id, "live_stop");
+			}
+
+			case "live_mute": {
+				if (!liveBridge) return error(id, "live_mute", "Live voice is unavailable on this transport");
+				try {
+					return success(id, "live_mute", liveBridge.setMuted(command.muted));
+				} catch (err) {
+					return error(id, "live_mute", err instanceof Error ? err.message : String(err));
+				}
 			}
 
 			case "set_host_uri_schemes": {
@@ -1825,19 +2053,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			// =================================================================
 
 			case "set_model": {
-				let models = session.getAvailableModels();
-				let model = models.find(m => m.provider === command.provider && m.id === command.modelId);
-				if (!model) {
-					// Model not in the current catalog. Wait for in-flight
-					// background discovery before declaring it missing: on cold
-					// start, discovery-backed providers (proxy / ollama / etc.)
-					// populate seconds after session ready. Models already in
-					// the bundled catalog skip this await entirely so the RPC
-					// queue is not stalled behind unrelated discovery.
-					await session.modelRegistry.awaitBackgroundRefresh();
-					models = session.getAvailableModels();
-					model = models.find(m => m.provider === command.provider && m.id === command.modelId);
-				}
+				const model = await findRpcModel(session, command.provider, command.modelId);
 				if (!model) {
 					return error(id, "set_model", `Model not found: ${command.provider}/${command.modelId}`);
 				}
@@ -2148,7 +2364,9 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					id: provider.id,
 					name: provider.name,
 					available: provider.available,
-					authenticated: session.modelRegistry.authStorage.keys.source(provider.id) !== undefined,
+					authenticated:
+						session.modelRegistry.authStorage.keys.source(provider.storeCredentialsAs ?? provider.id) !==
+						undefined,
 				}));
 				return success(id, "get_login_providers", { providers });
 			}
@@ -2202,12 +2420,60 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					// Provider-scoped online refresh so the just-persisted credential
 					// re-runs discovery instead of reusing a fresh authoritative cache
 					// row (#5780).
-					await session.modelRegistry.refreshProvider(command.providerId, "online");
+					await session.modelRegistry.refreshProvider(
+						knownProvider.storeCredentialsAs ?? knownProvider.id,
+						"online",
+					);
 					return success(id, "login", { providerId: command.providerId });
 				} catch (err: unknown) {
 					return error(id, "login", err instanceof Error ? err.message : String(err));
 				}
 			}
+
+			case "get_logout_accounts": {
+				// An absent provider would list every provider's credentials.
+				if (typeof command.providerId !== "string") {
+					return error(id, "get_logout_accounts", "providerId must be a string");
+				}
+				const accounts = await listLogoutAccounts(
+					session.modelRegistry.authStorage,
+					command.providerId,
+					session.sessionId,
+				);
+				return success(id, "get_logout_accounts", { accounts });
+			}
+
+			case "logout": {
+				if (typeof command.providerId !== "string" || !Number.isInteger(command.credentialId)) {
+					return error(id, "logout", "providerId must be a string and credentialId an integer");
+				}
+				const { removed, remainingSource } = await logoutCredential(
+					session.modelRegistry,
+					command.providerId,
+					command.credentialId,
+					session.sessionId,
+				);
+				if (!removed) {
+					return error(id, "logout", `Credential ${command.credentialId} is not stored for ${command.providerId}`);
+				}
+				return success(id, "logout", { remainingSource });
+			}
+
+			// =================================================================
+			// Side questions (/btw)
+			// =================================================================
+
+			case "btw": {
+				if (!btw) return error(id, "btw", "Side questions are unavailable on this transport");
+				const record = await btw.ask(command.question, command.recordId);
+				return success(id, "btw", { record });
+			}
+
+			case "btw_cancel":
+				return success(id, "btw_cancel", { cancelled: btw?.cancel(command.recordId) ?? false });
+
+			case "get_btw_history":
+				return success(id, "get_btw_history", { records: (await btw?.history()) ?? [] });
 
 			case "predict_word": {
 				if (!isTextCursor(command.text, command.cursor)) {
@@ -2253,7 +2519,14 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 }
 
 export async function runRpcMode(session: AgentSession, options: RpcModeOptions = {}): Promise<never> {
-	const { setToolUIContext, headless = false, subagentEventBus, input = claimRpcInput(), launchModel } = options;
+	const {
+		setToolUIContext,
+		headless = false,
+		subagentEventBus,
+		input = claimRpcInput(),
+		launchModel,
+		createLiveSession,
+	} = options;
 	// Signal to RPC clients that the server is ready to accept commands
 	// Suppress terminal notifications: they write \x07 (BEL) or OSC sequences directly to
 	// process.stdout with no newline, which the reader merges with the next JSON line and
@@ -2262,7 +2535,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	process.env.PI_NOTIFICATIONS = "off";
 
 	const frameEncoder = new RpcFrameEncoder();
-	const outputWriter = new RpcOutputWriter(process.stdout, failure => {
+	// Bun on Windows writes a piped process.stdout with a blocking WriteFile on the
+	// JS thread and never reports backpressure, so a client that stops reading
+	// stdout froze the whole worker, stdin reader included. An fd write stream
+	// writes from the threadpool and reports backpressure, letting the writer spool.
+	const stdout = process.platform === "win32" ? fs.createWriteStream("", { fd: 1, autoClose: false }) : process.stdout;
+	const outputWriter = new RpcOutputWriter(stdout, failure => {
 		logger.error("RPC output delivery failed", { error: String(failure) });
 		void session.dispose().finally(() => process.exit(1));
 	});
@@ -2298,9 +2576,18 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	};
 
 	const extensionUserMessageTracker = new RpcExtensionUserMessageTracker();
-	const promptResults = new RpcPromptResults(session, output);
+	const btw = new RpcBtwController(session, output);
+	// A continuation abandoned while waiting leaves nothing to end the activity stretch: re-check settlement.
+	const goalController = new RpcGoalController(session, () => void settleWatcher.check());
+	// A scheduled or held goal turn will start a turn: every settle report treats it as busy,
+	// and any report of "not settled" for that reason is later closed by `session_settled`.
+	const goalTurnScheduled = watchedScheduledTurnProbe(
+		() => goalController.continuationPending,
+		() => settleWatcher,
+	);
+	const promptResults = new RpcPromptResults(session, output, goalTurnScheduled);
 	const sessionEvents = new RpcSessionEventForwarder(output);
-	const settleWatcher = new RpcSessionSettleWatcher(session, output);
+	const settleWatcher = new RpcSessionSettleWatcher(session, output, goalTurnScheduled);
 
 	const pendingExtensionRequests = new RpcPendingExtensionRequests();
 	const hostToolBridge = new RpcHostToolBridge(output);
@@ -2310,8 +2597,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		runner: session.extensionRunner,
 		settings: session.settings,
 	});
+	// Live frames go straight to `output`, so `set_event_filter` (session events only) never drops them.
+	const liveBridge = new RpcLiveBridge(session, output, createLiveSession);
 	const subagentRegistry = subagentEventBus ? new RpcSubagentRegistry(subagentEventBus, output) : undefined;
-	const rpcRoles = new RpcRoles(session, launchModel);
+	// One tracker for both surfaces, so control snapshots report the same activeRole as get_state.
+	const rpcRoles = controlHostFor(session)?.roles ?? new RpcRoles(session, launchModel);
 	const planMode = new RpcPlanModeController(session, output);
 
 	// Shutdown request flag (wrapped in object to allow mutation with const)
@@ -2321,6 +2611,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	 * Extension UI context that uses the RPC protocol.
 	 */
 	class RpcExtensionUIContext implements ExtensionUIContext {
+		readonly supportsEditor = true;
 		/** Set by `set_ask_dialog`; hosts that never opt in keep the select/editor ask fallback. */
 		askDialogEnabled = false;
 
@@ -2565,6 +2856,30 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// Set up extensions with RPC-based UI context
 	await initializeExtensions(session, {
 		mode: "rpc",
+		// Extension-initiated session changes get the same goal quiesce/reattach as the commands below.
+		wrapSessionChange: async <T extends { cancelled: boolean }>(
+			change: () => Promise<T>,
+			{ detachesRun }: { detachesRun: boolean },
+		): Promise<T> => {
+			await btw.close();
+			await goalController.beginSessionChange();
+			let result: T | undefined;
+			try {
+				result = await change();
+				return result;
+			} finally {
+				// Reattaches only if the session actually changed, then re-checks settlement.
+				// A change that throws may already have detached the run: count it as detached.
+				await goalController.endSessionChange({ detachedRun: detachesRun && result?.cancelled !== true });
+				if (result && !result.cancelled) {
+					// As for the host's new/switch commands: a detached run never yields, so
+					// close the prompts it was answering. Branch and navigation leave a live
+					// run streaming to its normal yield.
+					if (detachesRun) promptResults.abortOpen();
+					void settleWatcher.check();
+				}
+			}
+		},
 		reportSendError: (action, err) => {
 			output(error(undefined, action, err.message));
 		},
@@ -2584,10 +2899,15 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// Output all agent events as JSON; prompt results follow the frame that settled them.
 	session.subscribe(event => {
 		sessionEvents.forward(event);
+		// Before the prompt-result and settle reports: a goal continuation decided at this
+		// agent_end is scheduled (and reported as pending) before either reads settlement.
+		goalController.observe(event);
 		promptResults.observe(event);
 		settleWatcher.observe(event);
 		planMode.observe(event);
 	});
+	await goalController.reconcile();
+	await goalController.settled();
 
 	// Discriminates a store failure from any other dispose rejection below.
 	let persistenceFailure: Error | undefined;
@@ -2609,6 +2929,14 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	 */
 	const disposeAndExit = async (): Promise<never> => {
 		try {
+			// The process ends regardless; report an unsaved side answer instead of skipping dispose.
+			await btw.close().catch(btwError => {
+				const message = toError(btwError).message;
+				logger.error(message);
+				output({ type: "notice", level: "error", message, source: "btw-history" });
+			});
+			// Close the realtime call (microphone, socket) before the session it delegates into.
+			await liveBridge.stop();
 			await session.dispose();
 		} catch (error) {
 			if (!persistenceFailure || error !== persistenceFailure) throw error;
@@ -2707,6 +3035,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		setAskDialogEnabled: enabled => {
 			rpcUiContext.askDialogEnabled = enabled;
 		},
+		goalController,
+		goalTurnScheduled,
+		btw,
+		liveBridge,
+		maxResponseBytes: () => frameEncoder.maxResponseBytes,
 	});
 
 	// Deferred shutdown (pi.shutdown() from an extension) must not kill the
@@ -2736,6 +3069,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	hostToolBridge.close("RPC client disconnected before host tool execution completed");
 	hostUriBridge.clear("RPC client disconnected before host URI request completed");
 	toolApprovalBridge.close("RPC client disconnected before tool approval response completed");
+	await liveBridge.stop();
 	await inputDispatcher.drain();
 	await shutdownCoordinator.drain();
 	subagentRegistry?.dispose();

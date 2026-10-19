@@ -5,6 +5,7 @@
 #   NPI_DEST              install path; its file name must be npi (default ~/.local/bin/npi)
 #   PI_CODING_AGENT_DIR   setting it makes this a staged install: the smoke tests run under a
 #                         throwaway HOME, and the live native cache is left alone.
+#   NPI_INSTALL_FORCE=1   explicitly override an active proof-session lock.
 set -euo pipefail
 
 cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
@@ -16,13 +17,17 @@ die() {
 say() { printf 'install.sh: %s\n' "$*"; }
 # shellcheck source=scripts/npi-build-lib.sh
 source scripts/npi-build-lib.sh
+# shellcheck source=scripts/install-lock.sh
+source scripts/install-lock.sh
+
+dest=$(npi_install_dest)
+# The fork installs only as npi, and `npi update` routing keys on that basename.
+[[ $(basename -- "$dest") == npi ]] || die "install path must be named npi, got $dest"
+npi_install_lock_check "$dest" || exit 1
 
 command -v bun >/dev/null || die "bun is not on PATH"
 
 binary=packages/coding-agent/dist/npi
-dest=$(realpath -ms -- "${NPI_DEST:-$HOME/.local/bin/npi}")
-# The fork installs only as npi, and `npi update` routing keys on that basename.
-[[ $(basename -- "$dest") == npi ]] || die "install path must be named npi, got $dest"
 version=$(bun -p 'require("./packages/coding-agent/package.json").version')
 
 [[ -x $binary && -f $binary.source ]] || die "$binary is missing or was not built by ./build.sh; run ./build.sh"
@@ -90,6 +95,25 @@ say "installed $dest"
 smoke "$dest"
 installed=1
 say "smoke test passed: $("$dest" --version)"
+
+# Built-ins replace these formerly deployed hooks. Retire only links with the
+# managed extensions/<name> target shape, including links to older checkouts
+# and dangling links. Operator-owned files, directories, and other links stay.
+# An explicit staging agent directory must win over inherited profile names.
+ext_env=()
+((staging)) && ext_env=(env -u OMP_PROFILE -u PI_PROFILE)
+ext_dir=$("${ext_env[@]}" bun -e 'import { getAgentDir } from "@oh-my-pi/pi-utils/dirs"; process.stdout.write(getAgentDir() + "/extensions")')
+for name in neopi-persona neopi-loadout neopi-repl neopi-live-persona \
+	omomp-persona omomp-loadout omomp-repl omomp-live-persona; do
+	entry="$ext_dir/$name"
+	[[ -L $entry ]] || continue
+	target=$(readlink -- "$entry")
+	[[ $target == /* ]] || target="$ext_dir/$target"
+	target=$(realpath -ms -- "$target")
+	[[ $(basename -- "$target") == "$name" && $(basename -- "$(dirname -- "$target")") == extensions ]] || continue
+	rm -- "$entry"
+	say "retired managed extension $entry"
+done
 
 prune_natives() {
 	natives_version=$(bun -p 'require("./packages/natives/package.json").version')

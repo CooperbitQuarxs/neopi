@@ -1,11 +1,11 @@
 /**
  * Fullscreen transcript viewer.
  *
- * `AgentHubOverlayComponent.openChat` mounts this as a `fullscreen` overlay
- * (`ui.showOverlay(..., { fullscreen: true })`), so it borrows the terminal's
- * alternate screen buffer (the vim/less idiom) and paints the whole screen — no
- * compositing into the live transcript's scrollback. It renders a parked
- * subagent / advisor / collab-guest transcript that has no live in-view session.
+ * `AgentHubOverlayComponent.openChat` opens this as a nested page of the hub's
+ * registered fullscreen overlay. It shares the hub's menu-history owner and
+ * alternate screen rather than mounting a second overlay or touching the live
+ * transcript's scrollback. It renders a parked subagent / advisor / collab-guest
+ * transcript that has no live in-view session.
  *
  * Local transcripts tail append-only growth: unchanged file identity plus stable
  * sentinels means only newly appended JSONL is parsed and rendered. Rewrites,
@@ -17,11 +17,11 @@ import type * as fs from "node:fs";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import type { Component, TUI } from "../tui";
-import { Editor } from "../components/editor";
-import { matchesKey } from "../keys";
+import { Editor, type EditorNavigationState } from "../components/editor";
+import { extractPrintableText, matchesKey } from "../keys";
 import { routeSgrMouseInput } from "../mouse";
 import { formatDuration, formatNumber, logger } from "@oh-my-pi/pi-utils";
-import { formatKeyHint, formatKeyHints, type KeyId } from "../app-keybindings";
+import { formatKeyHint, type KeyId } from "../app-keybindings";
 import { editorKey } from "../chrome/keybinding-hints";
 import type { MessageRenderer } from "../chat/extension-types";
 import type { AgentLifecycleLike } from "./agent-hub-types";
@@ -29,9 +29,10 @@ import type { AgentHubRegistry, AgentStatus } from "./agent-hub-types";
 import type { SessionMessageEntryLike } from "../chat/transcript-entry";
 import type { ObservableSession, SessionObserverRegistry } from "./session-observer-registry";
 import { getEditorTheme, theme } from "../theme/theme";
-import { matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
+import { getKeybindings } from "../keybindings";
+import { MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
 import type { AgentHubRemote } from "./agent-hub";
-import { ChatTranscriptBuilder } from "../chat/chat-transcript-builder";
+import { ChatTranscriptBuilder, type TranscriptLiveState } from "../chat/chat-transcript-builder";
 import {
 	TranscriptBrowser,
 	type TranscriptBrowserFrame,
@@ -41,15 +42,22 @@ import { sanitizeErrorLine } from "../chrome/error-block";
 import type { ScrollRangeAnchor } from "../components/scroll-view";
 import { formatContextUsage } from "../chrome/context-thresholds";
 import { node, span, text } from "../native/describe";
-import type { DescribeContext, NativeChild, NativeNode } from "../native/node";
-import { actionHint, hintsRow, overlayCard } from "../native/overlay";
+import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
+import { actionHint, escCloseButton, hintsRow, overlayCard } from "../native/overlay";
 
 /** Parsed message and model metadata relevant to a transcript viewer. */
 export type AgentTranscriptEntry = SessionMessageEntryLike | { type: "model_change"; model: string };
 
 /** Local filesystem and session parsing capabilities supplied by the host. */
 export interface AgentTranscriptSource {
-	fs: Pick<typeof fs, "openSync" | "closeSync" | "readSync" | "readFileSync" | "statSync">;
+	/**
+	 * Sync primitives drive the first paint and the incremental tail. When the
+	 * host also supplies `promises.readFile` (e.g. passes `node:fs` itself), full
+	 * reloads after rotation/rewrite read the file off the UI thread.
+	 */
+	fs: Pick<typeof fs, "openSync" | "closeSync" | "readSync" | "readFileSync" | "statSync"> & {
+		promises?: Pick<typeof fs.promises, "readFile">;
+	};
 	parseEntries(text: string): AgentTranscriptEntry[];
 }
 
@@ -73,6 +81,7 @@ export interface AgentTranscriptViewerDeps {
 	cwd: string;
 	hideThinkingBlock?: () => boolean;
 	proseOnlyThinking?: () => boolean;
+	expandThinkingBlocks?: () => boolean;
 	expandKeys: KeyId[];
 	/** Keys that toggle the whole hub closed (app.agents.hub + app.session.observe). */
 	hubKeys: KeyId[];
@@ -81,10 +90,22 @@ export interface AgentTranscriptViewerDeps {
 	onClose: () => void;
 	/** Close this viewer AND the hub (hub-toggle keys). */
 	onHubClose: () => void;
+	/**
+	 * Pushed owner state that is not persisted yet (streaming assistant text,
+	 * running tool progress). Without it the viewer shows persisted entries only.
+	 */
+	live?: AgentTranscriptLiveFeed;
+}
+
+/** Source of {@link TranscriptLiveState} snapshots; `undefined` clears the live tail. */
+export interface AgentTranscriptLiveFeed {
+	subscribe(listener: (state: TranscriptLiveState | undefined) => void): () => void;
 }
 
 /** How often to re-stat a file-backed transcript for growth (advisor/live tail). */
 const POLL_MS = 250;
+/** Every Nth idle poll re-verifies sentinels, catching same-size/mtime rewrites. */
+const IDLE_SENTINEL_CHECK_EVERY = 5;
 
 const SENTINEL_BYTES = 4096;
 
@@ -168,6 +189,10 @@ export class AgentTranscriptViewer implements Component {
 	#editor: Editor | undefined;
 	#notice: string | undefined;
 	#expanded = false;
+	readonly #keys = new MenuKeyReader();
+	#focus: "view" | "editor" = "view";
+	#pendingSends = 0;
+	#scroll: NativeScroll | undefined;
 
 	#localState: LocalTranscriptState | undefined;
 	#localUnavailable = "";
@@ -182,11 +207,18 @@ export class AgentTranscriptViewer implements Component {
 	#model: string | undefined;
 	#pollTimer: NodeJS.Timeout | undefined;
 	#disposed = false;
+	/** Async full reload in flight; polls are skipped until it lands. */
+	#localLoadInFlight = false;
+	/** Idle polls since the sentinels were last verified. */
+	#idlePolls = 0;
 	#initialEntryId: string | undefined;
 	/** Last described node and the visible inputs it was built from. */
 	#nativeCache: { signature: string; node: NativeNode } | undefined;
 
 	readonly #deps: AgentTranscriptViewerDeps;
+
+	#liveUnsubscribe: (() => void) | undefined;
+	readonly #registryUnsubscribe: () => void;
 
 	constructor(deps: AgentTranscriptViewerDeps) {
 		this.#deps = deps;
@@ -199,6 +231,9 @@ export class AgentTranscriptViewer implements Component {
 			cwd: deps.cwd,
 			hideThinkingBlock: deps.hideThinkingBlock,
 			proseOnlyThinking: deps.proseOnlyThinking,
+			expandThinkingBlocks: deps.expandThinkingBlocks,
+			// Charts are for the main session's answers, not parked subagent, advisor, or guest transcripts.
+			tableCharts: false,
 			requestRender: deps.requestRender,
 		});
 		this.#browser = new TranscriptBrowser({
@@ -211,15 +246,37 @@ export class AgentTranscriptViewer implements Component {
 			this.#editor.setMaxHeight(4);
 			this.#editor.onSubmit = text => this.#submit(text);
 		}
-		this.#refresh();
-		this.#pollTimer = setInterval(() => this.#refresh(), POLL_MS);
+		// First paint loads synchronously so the initial entry can be revealed
+		// immediately; later full reloads from the poll may go async.
+		this.#refresh(false);
+		this.#pollTimer = setInterval(() => this.#refresh(true), POLL_MS);
 		this.#pollTimer.unref?.();
+		this.#liveUnsubscribe = deps.live?.subscribe(state => {
+			if (this.#disposed) return;
+			this.#builder.setLive(state);
+			this.#nativeCache = undefined;
+			this.#deps.requestRender();
+		});
+		// A long-lived viewer (a tmux monitor pane) loses its input once the agent turns read-only.
+		this.#registryUnsubscribe = deps.registry.onChange(() => {
+			if (this.#disposed || !this.#editor || this.#sendable) return;
+			this.#editor = undefined;
+			this.#nativeCache = undefined;
+			this.#setFocus("view");
+		});
 	}
 
 	/** Advisor and aborted-agent transcripts are read-only. */
 	get #sendable(): boolean {
 		const ref = this.#deps.registry.get(this.#deps.agentId);
-		if (!ref || ref.kind === "advisor" || ref.kind === "mailbox" || ref.status === "aborted") return false;
+		if (
+			!ref ||
+			ref.kind === "advisor" ||
+			ref.kind === "mailbox" ||
+			ref.kind === "operator" ||
+			ref.status === "aborted"
+		)
+			return false;
 		return Boolean(this.#deps.remote || this.#deps.lifecycle);
 	}
 
@@ -227,7 +284,13 @@ export class AgentTranscriptViewer implements Component {
 		this.#disposed = true;
 		this.#stopPolling();
 		this.#remoteToken++;
-		this.#builder.dispose();
+		try {
+			this.#liveUnsubscribe?.();
+			this.#registryUnsubscribe();
+		} finally {
+			this.#liveUnsubscribe = undefined;
+			this.#builder.dispose();
+		}
 	}
 
 	#stopPolling(): void {
@@ -241,12 +304,13 @@ export class AgentTranscriptViewer implements Component {
 	// ========================================================================
 
 	/** Refresh the transcript from a local file or remote host. */
-	#refresh(): void {
+	#refresh(allowAsync: boolean): void {
 		if (this.#disposed) return;
 		if (this.#deps.remote) {
 			this.#fetchRemote();
 			return;
 		}
+		if (this.#localLoadInFlight) return;
 		const sessionFile = this.#deps.registry.get(this.#deps.agentId)?.sessionFile;
 		if (!sessionFile) {
 			this.#clearLocal("none");
@@ -260,14 +324,29 @@ export class AgentTranscriptViewer implements Component {
 			return;
 		}
 		const state = this.#localState;
-		if (state && this.#canAppendLocal(sessionFile, stat, state)) {
-			if (stat.size === state.size && stat.mtimeMs === state.mtimeMs) return;
-			if (stat.size > state.size) {
-				this.#appendLocal(sessionFile, stat, state);
+		if (state) {
+			// Idle fast path: an unchanged identity/size/mtime costs one stat;
+			// sentinels are re-read only every Nth idle poll so a rewrite that
+			// keeps size and mtime is still noticed.
+			if (
+				state.path === sessionFile &&
+				state.dev === stat.dev &&
+				state.ino === stat.ino &&
+				stat.size === state.size &&
+				stat.mtimeMs === state.mtimeMs
+			) {
+				if (++this.#idlePolls < IDLE_SENTINEL_CHECK_EVERY) return;
+				this.#idlePolls = 0;
+				if (this.#canAppendLocal(sessionFile, stat, state)) return;
+				this.#loadLocalFull(sessionFile, stat, allowAsync);
+				return;
+			}
+			if (stat.size > state.size && this.#canAppendLocal(sessionFile, stat, state)) {
+				this.#appendLocal(sessionFile, stat, state, allowAsync);
 				return;
 			}
 		}
-		this.#loadLocalFull(sessionFile, stat);
+		this.#loadLocalFull(sessionFile, stat, allowAsync);
 	}
 
 	#clearLocal(reason: string): void {
@@ -301,7 +380,23 @@ export class AgentTranscriptViewer implements Component {
 		return true;
 	}
 
-	#loadLocalFull(sessionFile: string, stat: fs.Stats): void {
+	#loadLocalFull(sessionFile: string, stat: fs.Stats, allowAsync: boolean): void {
+		const promises = allowAsync ? this.#deps.transcript.fs.promises : undefined;
+		if (promises) {
+			this.#localLoadInFlight = true;
+			void promises
+				.readFile(sessionFile)
+				.then(data => {
+					this.#localLoadInFlight = false;
+					if (!this.#disposed) this.#applyLocalFull(sessionFile, stat, data);
+				})
+				.catch((err: unknown) => {
+					// Leave #localState unchanged so a transient read error retries next poll.
+					this.#localLoadInFlight = false;
+					logger.debug("transcript viewer: read failed", { err: String(err) });
+				});
+			return;
+		}
 		let data: Buffer;
 		try {
 			data = this.#deps.transcript.fs.readFileSync(sessionFile);
@@ -310,6 +405,10 @@ export class AgentTranscriptViewer implements Component {
 			logger.debug("transcript viewer: read failed", { err: String(err) });
 			return;
 		}
+		this.#applyLocalFull(sessionFile, stat, data);
+	}
+
+	#applyLocalFull(sessionFile: string, stat: fs.Stats, data: Buffer): void {
 		// The file may have grown between the earlier `statSync` and this read.
 		// Anchor the tail cursor to what we actually consumed so the next poll's
 		// `#appendLocal` never re-renders bytes already in the rebuilt transcript;
@@ -343,7 +442,7 @@ export class AgentTranscriptViewer implements Component {
 		this.#rebuild(this.#extractMessages(this.#deps.transcript.parseEntries(complete)));
 	}
 
-	#appendLocal(sessionFile: string, stat: fs.Stats, state: LocalTranscriptState): void {
+	#appendLocal(sessionFile: string, stat: fs.Stats, state: LocalTranscriptState, allowAsync: boolean): void {
 		let chunk: string;
 		try {
 			chunk = readFileRangeSync(
@@ -354,7 +453,7 @@ export class AgentTranscriptViewer implements Component {
 			).toString("utf-8");
 		} catch (err) {
 			logger.debug("transcript viewer: tail read failed", { err: String(err) });
-			this.#loadLocalFull(sessionFile, stat);
+			this.#loadLocalFull(sessionFile, stat, allowAsync);
 			return;
 		}
 		const combined = state.pending + chunk;
@@ -369,7 +468,7 @@ export class AgentTranscriptViewer implements Component {
 			// File unlinked/rotated mid-poll: fall back to a guarded full reload
 			// instead of letting the open escape the poll timer.
 			logger.debug("transcript viewer: sentinel recompute failed", { err: String(err) });
-			this.#loadLocalFull(sessionFile, stat);
+			this.#loadLocalFull(sessionFile, stat, allowAsync);
 			return;
 		}
 		this.#localState = {
@@ -493,64 +592,68 @@ export class AgentTranscriptViewer implements Component {
 			});
 			return;
 		}
-
-		// The hub/observe toggle keys close the whole hub (matches the table view's
-		// toggle semantics), not just this viewer.
+		if (this.#focus === "editor" && this.#editor) {
+			this.#keys.reset();
+			const text = extractPrintableText(data);
+			if (this.#editor.isJumpPending) this.#editor.handleInput(data);
+			else if (text !== undefined) this.#editor.typeCharacter(text);
+			else {
+				const kb = getKeybindings();
+				if (
+					kb.matches(data, "tui.select.cancel") ||
+					kb.matches(data, "tui.select.nextContext") ||
+					kb.matches(data, "tui.select.prevContext")
+				)
+					this.#setFocus("view");
+				else this.#editor.handleInput(data);
+			}
+			this.#deps.requestRender();
+			return;
+		}
 		for (const key of this.#deps.hubKeys) {
 			if (matchesKey(data, key)) {
 				this.#deps.onHubClose();
 				return;
 			}
 		}
-
-		if (matchesKey(data, "escape")) {
-			if (this.#editor && this.#editor.getText().trim() !== "") {
-				this.#editor.setText("");
-				this.#deps.requestRender();
+		for (const key of this.#deps.expandKeys) {
+			if (matchesKey(data, key)) {
+				this.#toggleExpanded();
 				return;
 			}
+		}
+		const action = this.#keys.read(data);
+		if (action === undefined || action === "pending") return;
+		if (action.kind === "cancel" || (action.kind === "horizontal" && action.delta === -1)) {
 			this.#deps.onClose();
 			return;
 		}
-
-		for (const key of this.#deps.expandKeys) {
-			if (matchesKey(data, key)) {
-				this.#expanded = !this.#expanded;
-				this.#builder.setExpanded(this.#expanded);
-				this.#deps.requestRender();
-				return;
-			}
+		if (action.kind === "context") {
+			if (this.#editor) this.#setFocus("editor");
+			return;
 		}
-
-		// Once the reader starts typing a message, the editor owns every key.
-		const editorEmpty = !this.#editor || this.#editor.getText().trim() === "";
-		if (editorEmpty && this.#handleScroll(data)) return;
-
-		if (this.#editor) {
-			this.#editor.handleInput(data);
+		if (action.kind === "toggle") {
+			this.#toggleExpanded();
+			return;
+		}
+		if (this.#browser.handleMenuAction(action)) {
+			const by = menuScrollBy(action);
+			if (by !== undefined) this.#scroll = { by, n: (this.#scroll?.n ?? 0) + 1 };
 			this.#deps.requestRender();
 		}
 	}
 
-	/** Returns true when the key was a scroll command. The browser owns the offset. */
-	#handleScroll(data: string): boolean {
-		if (this.#browser.handleScrollKey(data)) {
-			this.#deps.requestRender();
-			return true;
-		}
-		if (matchesKey(data, "j") || matchesSelectDown(data)) {
-			this.#browser.scroll(1);
-		} else if (matchesKey(data, "k") || matchesSelectUp(data)) {
-			this.#browser.scroll(-1);
-		} else if (data === "g") {
-			this.#browser.scrollToTop();
-		} else if (data === "G") {
-			this.#browser.scrollToBottom();
-		} else {
-			return false;
-		}
+	#setFocus(focus: "view" | "editor"): void {
+		this.#focus = this.#editor ? focus : "view";
+		if (this.#editor) this.#editor.focused = this.#focus === "editor";
+		this.#keys.reset();
 		this.#deps.requestRender();
-		return true;
+	}
+
+	#toggleExpanded(): void {
+		this.#expanded = !this.#expanded;
+		this.#builder.setExpanded(this.#expanded);
+		this.#deps.requestRender();
 	}
 
 	#submit(text: string): void {
@@ -560,12 +663,19 @@ export class AgentTranscriptViewer implements Component {
 		this.#notice = undefined;
 		const id = this.#deps.agentId;
 		if (this.#deps.remote) {
-			this.#deps.remote.chat(id, trimmed);
+			const sent = this.#deps.remote.chat(id, trimmed);
+			if (sent instanceof Promise)
+				sent.catch((error: unknown) => {
+					if (this.#disposed) return;
+					this.#notice = error instanceof Error ? error.message : String(error);
+					this.#deps.requestRender();
+				});
 			this.#deps.requestRender();
 			return;
 		}
 		const lifecycle = this.#deps.lifecycle;
 		if (!lifecycle) return;
+		this.#pendingSends++;
 		void (async () => {
 			try {
 				// Revives a parked agent; returns the live session for running/idle.
@@ -574,6 +684,8 @@ export class AgentTranscriptViewer implements Component {
 				await session.prompt(trimmed, { streamingBehavior: "steer" });
 			} catch (error) {
 				this.#notice = error instanceof Error ? error.message : String(error);
+			} finally {
+				this.#pendingSends--;
 			}
 			this.#deps.requestRender();
 		})();
@@ -590,6 +702,17 @@ export class AgentTranscriptViewer implements Component {
 			this.#initialEntryId = undefined;
 		}
 		return lines;
+	}
+
+	/** The top-right `esc` runs Esc. */
+	handleNativeEvent(event: NativeUiEvent): void {
+		if (event.type === "action" && event.act === "close") this.#escape();
+	}
+
+	/** Esc leaves the focused field without discarding its draft, then returns to the hub. */
+	#escape(): void {
+		if (this.#focus === "editor") this.#setFocus("view");
+		else this.#deps.onClose();
 	}
 
 	/**
@@ -614,12 +737,17 @@ export class AgentTranscriptViewer implements Component {
 			placeholder,
 			stats,
 			this.#deps.expandKeys[0],
+			this.#focus,
+			this.#expanded,
+			this.#scroll,
 		]);
 		const cached = this.#nativeCache;
 		if (cached?.signature === signature) return cached.node;
 
 		const id = this.#deps.agentId;
 		const children: NativeChild[] = [];
+		// Top row: the agent's meta on the left, a clickable `esc` (close) on the right.
+		const top: NativeChild[] = [];
 		if (ref) {
 			const kindTag = ref.parentId ? `${ref.kind} ${theme.sep.dot} of ${ref.parentId}` : ref.kind;
 			const meta: NativeChild[] = [
@@ -628,11 +756,18 @@ export class AgentTranscriptViewer implements Component {
 				text([span(kindTag, "dim")], { truncate: "end" }),
 			];
 			if (this.#model) meta.push(text([span(this.#model, "muted")], { truncate: "end" }));
-			children.push(node("row", { gap: "sm", align: "center" }, meta, "meta"));
+			top.push(node("row", { gap: "sm", align: "center", grow: 1, min: { w: 0 } }, meta, "meta"));
+		} else {
+			top.push(node("spacer", { grow: 1 }));
 		}
+		top.push(escCloseButton());
+		children.push(node("row", { gap: "md", align: "center" }, top, "top"));
 		children.push(
 			placeholder === undefined
-				? node("col", { grow: 1 }, [this.#builder.container], "transcript")
+				? {
+						...node("col", { grow: 1 }, [this.#builder.container, this.#builder.liveContainer], "transcript"),
+						scroll: this.#scroll,
+					}
 				: node("text", { spans: [span(placeholder, "dim")], wrap: "word" }, undefined, "placeholder"),
 		);
 		if (notice) {
@@ -691,9 +826,11 @@ export class AgentTranscriptViewer implements Component {
 		}
 		children.push(
 			hintsRow([
-				this.#editor ? actionHint("tui.input.submit", "send") : undefined,
-				{ keys: ["escape"], label: "close" },
-				{ keys: [this.#deps.expandKeys[0] ?? "ctrl+o"], label: "expand" },
+				this.#editor
+					? { keys: ["tab", "shift+tab"], label: this.#focus === "editor" ? "view" : "message" }
+					: undefined,
+				this.#focus === "editor" ? actionHint("tui.input.submit", "send") : undefined,
+				{ keys: [this.#deps.expandKeys[0] ?? "alt+e", "space"], label: "expand" },
 			]),
 		);
 		const head = [span("Agent Hub", "accent"), span(` ${theme.sep.dot} `, "dim"), span(id, "accent")];
@@ -722,7 +859,7 @@ export class AgentTranscriptViewer implements Component {
 
 		const contentLines = this.#builder.isEmpty
 			? [` ${theme.fg("dim", this.#placeholder(Math.max(10, contentWidth - 1)))}`]
-			: this.#builder.container.render(contentWidth);
+			: [...this.#builder.container.render(contentWidth), ...this.#builder.liveContainer.render(contentWidth)];
 		let anchor: ScrollRangeAnchor | undefined;
 		if (this.#initialEntryId) {
 			const targetRow = this.#builder.rowForEntry(this.#initialEntryId);
@@ -757,10 +894,11 @@ export class AgentTranscriptViewer implements Component {
 		const lines: string[] = [];
 		const statsLine = this.#statsLine();
 		if (statsLine) lines.push(statsLine);
-		const keys =
-			`${formatKeyHint("escape")}:close  ${formatKeyHint(this.#deps.expandKeys[0] ?? "ctrl+o")}:expand  ` +
-			`${this.#editor ? "empty input → " : ""}${formatKeyHints(["j", "k"])}:scroll  ${formatKeyHints(["g", "shift+g"])}:top/bottom`;
-		const hint = this.#editor ? `${editorKey("tui.input.submit")}:send  ${keys}` : keys;
+		const keys = `${formatKeyHint("escape")}/h:hub  ${formatKeyHint(this.#deps.expandKeys[0] ?? "alt+e")}/Space:expand  j/k:scroll  Ctrl-d/u:half page  gg/G:top/bottom`;
+		const hint =
+			this.#focus === "editor"
+				? `${editorKey("tui.input.submit")}:send · Tab/Esc back to view`
+				: `${keys}${this.#editor ? " · Tab message" : ""}`;
 		lines.push(theme.fg("dim", hint));
 		return lines;
 	}
@@ -796,5 +934,49 @@ export class AgentTranscriptViewer implements Component {
 		}
 		if (!this.#deps.registry.get(this.#deps.agentId)?.sessionFile) return "No session file available yet.";
 		return "No messages yet.";
+	}
+
+	get agentId(): string {
+		return this.#deps.agentId;
+	}
+	get blocksMenuHistory(): boolean {
+		return this.#pendingSends > 0;
+	}
+
+	navigationSnapshot(): unknown {
+		return {
+			focus: this.#focus,
+			expanded: this.#expanded,
+			viewport: this.#browser.navigationSnapshot(),
+			editor: this.#editor?.getState(),
+			initialEntryId: this.#initialEntryId,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (typeof snapshot !== "object" || snapshot === null) return;
+		const state = snapshot as {
+			focus?: "view" | "editor";
+			expanded?: boolean;
+			viewport?: unknown;
+			editor?: EditorNavigationState;
+			initialEntryId?: string;
+		};
+		if (typeof state.expanded === "boolean") {
+			this.#expanded = state.expanded;
+			this.#builder.setExpanded(state.expanded);
+		}
+		this.#browser.restoreNavigation(state.viewport);
+		if (
+			state.editor &&
+			typeof state.editor.text === "string" &&
+			typeof state.editor.cursor?.line === "number" &&
+			typeof state.editor.cursor?.col === "number" &&
+			typeof state.editor.scrollTop === "number"
+		)
+			this.#editor?.setState(state.editor);
+		this.#initialEntryId = state.initialEntryId;
+		this.#setFocus(state.focus === "editor" ? "editor" : "view");
+		this.#nativeCache = undefined;
 	}
 }

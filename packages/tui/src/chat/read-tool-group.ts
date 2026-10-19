@@ -557,9 +557,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 
 	/**
-	 * Mirrors the terminal's toggles: the `tool` head (the group's root) is
-	 * `Ctrl+O`'s expansion; a fallback preview card collapses on its own
-	 * (`setExpanded` resets those).
+	 * Mirrors the terminal's toggles: the transcript-wide expansion action
+	 * controls the `tool` head (the group's root); a fallback preview card
+	 * collapses on its own (`setExpanded` resets those).
 	 */
 	handleNativeEvent(event: NativeUiEvent): void {
 		const expanded = rootToggleExpanded(event);
@@ -1143,6 +1143,10 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const title = pathDisplay ? `Read ${pathDisplay}` : "Read";
 		let cachedWidth: number | undefined;
 		let cachedLines: string[] | undefined;
+		const dropCache = () => {
+			cachedWidth = undefined;
+			cachedLines = undefined;
+		};
 		const expanded = this.#expanded;
 		const component: Component = {
 			render: (width: number) => {
@@ -1164,10 +1168,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 				cachedWidth = width;
 				return cachedLines;
 			},
-			invalidate: () => {
-				cachedWidth = undefined;
-				cachedLines = undefined;
-			},
+			invalidate: dropCache,
+			releaseRenderCaches: dropCache,
 		};
 		this.addChild(component);
 	}

@@ -124,7 +124,8 @@ describe("SelectorController model hub writes", () => {
 		const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
 		const { controller, showError } = start(settings, model("claude-sonnet-4-5"));
 
-		openModelHub(controller).onFallbackChainChange?.("slow", ["user/new"]);
+		const hub = openModelHub(controller);
+		hub.onFallbackChainChange?.("slow", ["user/new"]);
 		await settings.flush();
 
 		expect(showError).not.toHaveBeenCalled();
@@ -136,7 +137,9 @@ describe("SelectorController model hub writes", () => {
 			},
 		});
 
-		openModelHub(controller).onFallbackChainChange?.("slow", []);
+		// The hub is still open (the mock never closes it); a second showModelSelector
+		// refocuses the registered menu instead of mounting a new one.
+		hub.onFallbackChainChange?.("slow", []);
 		await settings.flush();
 		expect(YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text())).toEqual({
 			retry: {
@@ -144,5 +147,100 @@ describe("SelectorController model hub writes", () => {
 				fallbackEffortSelections: { default: { "user/default": { mode: "inherit" } } },
 			},
 		});
+	});
+
+	it.each(["default", "smol"])(
+		"saves an unscoped %s assignment globally without touching project roles",
+		async role => {
+			const agentDir = tempDir.join("agent");
+			const projectPath = tempDir.join(".omp", "config.yml");
+			const project = { modelRoles: { [role]: "anthropic/claude-opus-4-5" } };
+			await Bun.write(projectPath, YAML.stringify(project));
+			await Bun.write(path.join(agentDir, "config.yml"), YAML.stringify({ modelRoleStorage: "project" }));
+			const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+			const { controller, showError } = start(settings, model("claude-opus-4-5"));
+
+			await openModelHub(controller).onAssign(
+				model("claude-sonnet-4-5"),
+				role,
+				undefined,
+				"anthropic/claude-sonnet-4-5",
+			);
+			await settings.flush();
+
+			expect(showError).not.toHaveBeenCalled();
+			const saved = YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text()) as RawSettings;
+			expect(saved).toEqual({
+				modelRoleStorage: "project",
+				modelRoles: { [role]: "anthropic/claude-sonnet-4-5" },
+			});
+			expect(YAML.parse(await Bun.file(projectPath).text())).toEqual(project);
+			expect(session?.model?.id).toBe("claude-opus-4-5");
+		},
+	);
+
+	it("writes an explicitly project-scoped assignment only to the project layer", async () => {
+		const agentDir = tempDir.join("agent");
+		const globalPath = path.join(agentDir, "config.yml");
+		const global = { modelRoleStorage: "project", modelRoles: { smol: "anthropic/claude-opus-4-5" } };
+		await Bun.write(globalPath, YAML.stringify(global));
+		const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+		const { controller, showError } = start(settings, model("claude-opus-4-5"));
+
+		await openModelHub(controller).onAssign(
+			model("claude-sonnet-4-5"),
+			"smol",
+			undefined,
+			"anthropic/claude-sonnet-4-5",
+			"project",
+		);
+		await settings.flush();
+
+		expect(showError).not.toHaveBeenCalled();
+		expect(YAML.parse(await Bun.file(globalPath).text())).toEqual(global);
+		const project = YAML.parse(await Bun.file(tempDir.join(".omp", "config.yml")).text()) as RawSettings;
+		expect(project).toEqual({ modelRoles: { smol: "anthropic/claude-sonnet-4-5" } });
+	});
+
+	it("switches the session to the project default when its already-assigned chip is picked", async () => {
+		const agentDir = tempDir.join("agent");
+		await Bun.write(
+			tempDir.join(".omp", "config.yml"),
+			YAML.stringify({ modelRoles: { default: "anthropic/claude-opus-4-5" } }),
+		);
+		const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+		// The session moved off the configured default earlier (an in-session pick).
+		const { controller, showError } = start(settings, model("claude-sonnet-4-5"));
+
+		// The hub shows the project default as assigned, so picking it sends unassign.
+		await openModelHub(controller).onUnassign("default");
+
+		expect(showError).not.toHaveBeenCalled();
+		expect(session?.model?.id).toBe("claude-opus-4-5");
+	});
+
+	it("refreshes the open hub once a confirmed compaction point has moved the model to its extended window", async () => {
+		const settings = await Settings.init({ agentDir: tempDir.join("agent"), cwd: tempDir.path() });
+		const { controller, showError } = start(settings, model("claude-sonnet-4-5"));
+		const registry = session!.modelRegistry;
+		const terra = registry.find("openai", "gpt-5.6-terra");
+		if (!terra) throw new Error("Expected bundled gpt-5.6-terra");
+		const refreshed = Promise.withResolvers<number | null | undefined>();
+		vi.spyOn(modelHubModule, "ModelHubComponent").mockImplementation(function (...args: unknown[]) {
+			const callbacks = args[4] as modelHubModule.ModelHubCallbacks;
+			queueMicrotask(() => {
+				expect(callbacks.onCompactionPointChange?.(terra, "400k", true)).toBeUndefined();
+			});
+			return {
+				// The window the hub would re-read when it refreshes.
+				refreshAfterExternalMutation: () =>
+					refreshed.resolve(registry.find("openai", "gpt-5.6-terra")?.contextWindow),
+				dispose: () => {},
+			};
+		} as never);
+		controller.showModelSelector();
+
+		expect(await refreshed.promise).toBe(1_050_000);
+		expect(showError).not.toHaveBeenCalled();
 	});
 });

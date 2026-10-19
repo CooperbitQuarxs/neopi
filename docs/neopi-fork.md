@@ -38,6 +38,14 @@ Landed 11 Aug 2026 in `cc3819def5`, `2407c059ba`, and `c9ca7ae0a5`.
 
 Agent frontmatter may select the inherited `omp`, `claude`, or `codex` harness identifiers. Claude has an adapter and sidecar. Codex adapter code exists under `task/external-harness/codex.ts`, but `assertExternalHarnessCapabilities` rejects that route because its tool and containment contract cannot be represented exactly. Codex dispatch is present but disabled, not a working feature.
 
+## Terminal image protocol
+
+`/settings` → Appearance → Images → **Terminal Image Protocol** switches terminal image rendering without restarting. The same setting is available at `cfg://terminal.imageProtocol`: `auto` (default), `kitty`, `sixel`, `iterm2`, or `off`.
+
+An explicit setting wins over `PI_FORCE_IMAGE_PROTOCOL`; `auto` uses that environment variable when present and otherwise restores terminal detection and probing. `off` disables new terminal images. Kitty placeholder support follows the effective choice; passing through raw Sixel output still also requires `PI_ALLOW_SIXEL_PASSTHROUGH=1`.
+
+Switching applies from that point forward with a redraw. It does not delete or retransmit images already shown, so earlier images may not render correctly under the new protocol. The setting only controls terminal output: images sent to the model and provider prompt caching are unaffected.
+
 ## Operator commands
 
 Introduced as extensions on 11 Aug 2026 and made built-in commands on 28 Sep 2026. The `extensions/` directory, its installer, and the build and install deployment hooks are gone; state files are unchanged.
@@ -48,6 +56,7 @@ Introduced as extensions on 11 Aug 2026 and made built-in commands on 28 Sep 202
 | `/persona live` | `neopi-live-personas.json` |
 | `/loadout` | `neopi-loadout.json` |
 | `/repl`, `/kernel` | none (per TUI session) |
+| `/notice <text>` | current session transcript |
 
 Each store is schema-v1 JSON written atomically with a `.bak` of the previous file. A missing `neopi-*` file falls back to the pre-rename `omomp-*` file.
 
@@ -63,7 +72,7 @@ The session persona is selected per session id. `AgentSession` applies it while 
 
 ### Loadouts
 
-`/loadout` lists loadouts; picking one applies it, and "Turn loadout off" restores the configured models. `/loadout set|off|list|show|status` do the same from the command line. `AgentSession.applyRuntimeModelLoadout` swaps model roles, retry fallback chains, and task-agent model overrides as one volatile overlay, and only while the session is idle.
+`/loadout` lists loadouts; picking one applies it, and "Turn loadout off" restores the configured models. `/loadout set|use|off|list|show|status` do the same from the composer; `use <name>` is an alias for `set <name>`. The normal command catalogue includes its description and icon, and argument completion offers subcommands and loadout names. Accepting `set` or `use` waits for the required name before submitting. `AgentSession.applyRuntimeModelLoadout` swaps model roles, retry fallback chains, and task-agent model overrides as one volatile overlay, and only while the session is idle.
 
 ### REPL mode
 
@@ -73,11 +82,29 @@ In REPL mode, Enter inserts a newline so multi-line code is written as in an edi
 
 `/kernel` shows which kernels are running, `/kernel reset <py|js>` starts the next cell in a fresh kernel, and `/kernel interrupt` cancels running cells.
 
+### Operator notices
+
+`/notice <text>` sends a hidden, operator-authored developer-role message to the foreground main session, wrapped in `<system-notice>` tags. It starts a turn when idle and uses the normal steering queue while the agent is busy. The developer role and operator attribution survive transcript persistence and replay.
+
+Queued notices appear with their original `/notice …` text in the pending bar. Alt+Up returns a notice to the composer for editing; Esc restores pending operator notices before interrupting the turn. Notices cancelled during turn setup are also returned as the original command, not as wrapped prompt text. Automatic agent-authored notices remain hidden.
+
+Text after the command separator is literal: multiline content, whitespace, shell characters, model mentions, and template expressions are not expanded. `/notice` without non-whitespace text shows `Usage: /notice <text>` without starting a turn. The command is host-only during collaboration, does not target focused subagents or broadcast, and is not an agent tool.
+
+## Delayed composer submissions
+
+`/defer <duration> <input>` submits the remaining input through the normal composer interpreter after the delay. For example, `/defer 10m /compact` runs compaction in ten minutes, while `/defer 10m hi` sends `hi` just like Enter. Busy prompts use the existing session message queue; slash commands keep their normal behavior. Your current draft and its images are not submitted with the deferred input.
+
+Images attached to the `/defer` submission travel with that scheduled input, not your next message. A timer is not a new Enter gesture: during a live call it follows the session input path without retiring or handing off your current speech. If confirmation, a read-only session, or a busy kernel refuses the input, it returns to the composer alongside your newer draft, with a warning and its own attachments preserved.
+
+Durations accept numbers immediately followed by `ms`, `s`, `m`, `h`, `d`, `w`, `M`, or `Y`, including fractions (`.5h`). Units are case-sensitive: `M` means 30 days and `Y` means 365 days, not calendar arithmetic. Zero or negative delays submit immediately.
+
+Scheduling reports an ID. `/defer cancel <id>` cancels that submission, including delivery still waiting on an input hook or command; `/defer cancel all` cancels every pending submission. Deferred input stays bound to the scheduling conversation even if you focus a subagent before it fires. A session change or shutdown cancels both waiting timers and in-flight delivery, so resumed hooks cannot send old input into a new conversation or restore its attachments there. Timers are local to the running conversation and are not persisted across restarts.
+
 ## Iris live voice
 
 Landed from 22–26 Aug 2026.
 
-The voice model is Iris, separate from the coding agent. Relays stay silent unless addressed. A live handoff aborts through a bounded subscriber drain so barge-in works; spoken responses may continue while background jobs keep the session awake. Crew IRC and provisional reasoning use a speakable channel, live personas resolve transport instructions, and speakable chunks truncate on Unicode code points.
+The voice model is Iris, separate from the coding agent. Relays stay silent unless addressed. Live handoffs steer without cancelling active work by default; spoken responses may continue while background jobs keep the session awake. Crew IRC and provisional reasoning use a speakable channel, live personas resolve transport instructions, and speakable chunks truncate on Unicode code points.
 
 Provenance: `c7bb908557`, `7a87cfe115`, `3b4dd762b6`, `6fa90d9a09`, `14c6e4406f`, `21b0e7cf7e`, `6983ee1a60`, `990964437a`, `4eb5e2594f`, `a991cf58d0`.
 
@@ -90,8 +117,12 @@ Iris's in-flight reply appears in a single-row **Voice:** caption above the stat
 - Keys: `Ctrl+L` starts and ends the call; `Alt+Shift+M` (`app.live.mute`) mutes; `Ctrl+Alt+L` (`app.live.destination.cycle`) cycles where Enter sends plain text: main agent, voice agent only, or both. Esc and Ctrl+C keep their composer meanings.
 - Status: the model segment shows a mic colored by call phase, slashed while muted, labelled `voice` or `both` when Enter does not target the main agent, and red after a call ends in an error.
 - Enter is the operator's handoff: submitting (or clearing the draft with Ctrl+C) drops unclaimed spoken turns and cancels a handoff not yet accepted, so the voice agent cannot relay them again. If a handoff of that speech is landing at that moment, Enter holds the draft instead. Voice-only text reaches the voice model as an `"Operator Typed Message"`; `both` also sends the final prompt, after input hooks and any post-processing chain, as silent commentary, and the voice agent speaks that turn's final answer.
+- **Live Handoff Delivery** in settings (`live.delegationDelivery`) selects `steer` (default: deliver between steps without cancelling reasoning or running tools), `followUp` (queue until the active run yields), or `interrupt` (abort through a bounded subscriber drain and restart). Changes apply to the next handoff, including force-delegation, without restarting the call. When no model run is active, a handoff starts a new turn; standalone operator bash/eval work is left running unless `interrupt` is selected. Esc still explicitly stops the main agent.
+- Queued vocal requests appear as their canonical operator text. Esc restores undelivered speech to the composer without Iris's routing prose; Alt+Up can also take queued speech back for editing. Queue-for-yield preserves the preceding task's spoken final answer. Steering and queued follow-ups activate the next handoff's voice routing only when its message is consumed, so ongoing reasoning and progress keep their original request's route.
+- If a typed prompt replayed after compaction fails, its rollback restores only the typed queue it owns. Independently accepted vocal handoffs stay in the main agent's existing queue and are delivered once when work resumes.
 - Crew reports, reasoning narration, and final answers wait while the operator speaks or edits the composer (10-second quiet window), releasing early when the voice agent speaks or delegates.
 - `live.submitKeyword` and `live.forceDelegateKeyword` act on the text visible in the composer, including partial speech, corrections, and typed edits. When either phrase is at the end and the composer has not changed for `live.submitSilenceMs` (default 2000 ms), submit presses Enter with the phrase removed and follows the selected main/voice/both destination; force-delegate sends the stripped composer draft directly to the main agent and silently notifies Iris. More speech or a correction removing the trailing phrase cancels the pending action. An empty phrase disables that action. Matching lowercases and ignores punctuation, collapsed whitespace, and even missing whitespace. `live.blockDelegateKeyword` remains per finalized provider turn: a turn containing its phrase stays with Iris and rejects her delegation. Iris still hears live microphone audio before the finalized transcript is available.
+- Iris-only speech is removed from the composer and added to history only after its sanitized message reaches the voice transport. Its receipt removes only that utterance's unchanged spoken spans: newer typed text, partial/final speech, attachments, and operator rewrites remain in the composer. If the call stops or delivery fails first, the sanitized text stays for manual recovery. Stopping after the main agent accepts a handoff records that speech in history exactly once.
 
 - `/persona live` stores context-source defaults per live persona. Open a persona's **Context sources** pane to choose IRC, subagent depth and voiced slots, classifier timing, catalog effort alerts, advisor notes, reasoning/progress/final-answer relays, and delegation provenance; the built-in default has editable source settings too. **Importance classifier** and **Effort red alerts (catalog)** are independent switches: disabling ranking does not disable authorization checks. Turning **Primary final answers** (`relayFinalAnswers`) off also silences delegated answers returned to Iris.
 - Importance scoring uses the `classifier` model role followed by the configured global fallback chain. Effort alerts consult the schema-v1 model catalog (the configured path supports `~` expansion): a present `null` model/effort slot means no policy recommendation, while an absent model or slot is reported as missing metadata. Authorization attempts each candidate model up to three times before falling through. Cooperative timeout/backoff arithmetic does not bound real latency because provider setup, prior single-flight work, and streams that ignore abort may wait indefinitely. When alert bookkeeping overflows, Iris receives a counted `authorization not checked` notice; the client never blocks or kills those agents.
@@ -104,6 +135,8 @@ Iris's in-flight reply appears in a single-row **Voice:** caption above the stat
 Landed 23 Aug 2026 in `e4fadf1299` and `7039de1ad4`.
 
 An unregistered `agent` value shaped like `provider/model[:effort]` or `@role[:effort]` crews the generic task agent. Registered agent names take precedence. Invalid selectors fail during preflight.
+
+A registered agent name may carry an effort suffix: `scout:high` runs the `scout` agent, with its own prompt, tools, restrictions and model, at `high` effort. An exact registered name wins first, so a name that itself contains `:` keeps working. The suffix is a caller-explicit level, like a model selector's; an effort the agent's model cannot honor fails preflight and names that model. The same grammar applies to task, eval `agent()` and `workpool()` ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 
 ## Binary and update
 
@@ -122,6 +155,25 @@ Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `643
 ## Advisor behavior
 
 [PR #60](https://github.com/PsychedelicShayna/neopi/pull/60) added per-advisor system-prompt overrides. [PR #63](https://github.com/PsychedelicShayna/neopi/pull/63) separated concern, blocker, and nit delivery boundaries while preserving session safety gates.
+
+## Background issue filing
+
+`/issue <prose>` ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)) files the operator's own words as an issue without taking over the conversation. Everything after `/issue` is ordinary prose; there is no project, type, or label syntax. It runs as a background job on the `issues` model role, which must be assigned explicitly (it never falls back to the active model, and the job disables provider model fallback).
+
+Two agents run in sequence, both visible in the Agent Hub:
+
+1. `IssueTarget-<id>` picks the tracker. It sees the prose plus an inventory merged from the foreground checkout, the `issues.checkouts` override map (`OWNER/REPO` → local path), checkouts found through session history, and `gh repo list`. Only GitHub remotes count (github.com or the configured `GH_HOST`), and a checkout counts only for its `origin`. The agent can select only a repository from that inventory that has a verified local checkout; it never clones. If the target is ambiguous it asks.
+2. `Issue-<id>` starts with its cwd in that checkout, so the target's own `AGENTS.md` chain is loaded. Its tools are pinned to the selected repository:
+   - read-only file tools;
+   - issue search and view, and the live label list;
+   - five sampled historical issues: the newest, the ordinal midpoint, and three random issues between them (all issues when there are five or fewer);
+   - one `issue_publish`.
+
+   Labels must already exist. Publication is exactly-once: repeated calls share one create. A create whose result is uncertain is reconciled against the operator's own issues with the same title and body before anything is retried. When an existing issue owns the subject, the agent returns a drafted amendment instead and posts nothing.
+
+Either agent can end the request with `issue_decline`, for example when the operator replies that nothing should be filed. A declined request files nothing and records the reason.
+
+Questions from either agent appear in the transcript; answer them in the Agent Hub, where the request is kept. Status records (dispatch, question, filed URL with the submitted body and applied labels, existing owner, failure) are display-only: they never start a foreground turn and do not lift holds. While the foreground is mid-turn the status line shows them immediately and the record follows at the next turn.
 
 ## Whole-recording xAI speech input
 
@@ -152,8 +204,9 @@ While a chain runs, the composer is locked: the draft stays visible with every l
 - **Esc Esc Esc** (within the same 3 s) or **Ctrl+C** aborts the chain and puts the typed draft back, nothing sent.
 - A failing step stops the chain and leaves the last completed output in the composer, editable and unsent.
 
-Chains live in `CHAINS.yml` beside advisors' `WATCHDOG.yml`: `<agent dir>/CHAINS.yml` (global) and the project root's `CHAINS.yml`; a project chain shadows a global chain with the same name. `/chain configure` edits either scope. Each step has a name, a prompt (step instructions; the incoming text is the user message), an optional model (`provider/id`, `provider/id:level`, or `@role`), optional tools (none by default), and two optional keys:
+Chains live in `CHAINS.yml` beside advisors' `WATCHDOG.yml`: `<agent dir>/CHAINS.yml` (global) and the project root's `CHAINS.yml`; a project chain shadows a global chain with the same name. `/chain configure` edits either scope. Each step has a name, a prompt (step instructions; the incoming text is the user message), an optional model (`provider/id`, `provider/id:level`, or `@role`), optional tools (none by default), and three optional keys:
 
+- **`enabled: false`** turns a step off without deleting it: the chain skips it and runs the remaining steps in their configured order, and the step keeps its prompt, model, and position for when it is turned back on. Steps without the key are on. In `/chain configure`, Space on a step row of the chain screen turns that step on or off; the row shows `[x]` or `[ ]`, and `/chain status` and the configure preview mark it `(off)`. A chain whose steps are all off sends the text unchanged, the same as a chain with no steps.
 - **`context: true`** gives the step the live session transcript (thinking elided, tool calls collapsed) wrapped in `<transcript>`, with the text to rewrite in `<draft>`, so references like "remove mine" resolve against the conversation. Both tags carry a per-run boundary so tag-like text inside them cannot close a block. The transcript keeps only the newest messages that fit after the step prompt, granted tool schemas, framing, and the provider's maximum output are reserved; the output reserve includes provider-added reasoning tokens when enabled. Off by default; the configure screen's "Transcript context" row toggles it.
 - **`systemPrompt`** replaces the bundled chain system prompt, which tells the model it is rewriting a draft and to output only the rewrite, with no notes about what changed. The step `prompt` is always appended after it. In `/chain configure` the "System prompt" row shows `(bundled default)`, Enter opens the current text, and Backspace on the row resets an override.
 

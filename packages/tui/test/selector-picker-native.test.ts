@@ -6,6 +6,8 @@ import { HookSelectorComponent } from "../src/overlays/hook-selector";
 import { OAuthSelectorComponent, type OAuthSelectorAuthSource } from "../src/overlays/oauth-selector";
 import { ThemeSelectorComponent } from "../src/overlays/theme-selector";
 import { ThinkingSelectorComponent } from "../src/overlays/thinking-selector";
+import { SessionAccountSelectorComponent } from "../src/overlays/session-account-selector";
+import { type ResetUsageAccount, ResetUsageSelectorComponent } from "../src/overlays/reset-usage-selector";
 import { initTheme } from "../src/theme/theme";
 
 beforeAll(async () => {
@@ -71,8 +73,51 @@ describe("theme selector picker", () => {
 	});
 });
 
+describe("short-list native picker search", () => {
+	function make() {
+		const log: string[] = [];
+		const selector = new ThinkingSelectorComponent(
+			"low" as never,
+			["low", "high"] as never,
+			() => log.push("select"),
+			() => log.push("cancel"),
+		);
+		return { selector, log };
+	}
+
+	it("shows a short-list filter and leaves it before native close cancels", () => {
+		const { selector, log } = make();
+		const initial = selector.describe(pickerCx);
+		expect(sheet(initial).props.query).toBeNull();
+		selector.getSelectList().handleInput("/");
+		const focused = selector.describe(pickerCx);
+		expect(focused).not.toBe(initial);
+		expect(sheet(focused).props.query).toBe("");
+		expect(sheet(focused).props.actions?.at(-1)?.label).toBe("Back to list");
+		selector.getSelectList().handleInput("h");
+		selector.handleNativeEvent(act("close"));
+		expect(sheet(selector.describe(pickerCx)).props.query).toBe("h");
+		expect(sheet(selector.describe(pickerCx)).props.actions?.at(-1)?.label).toBe("Close");
+		expect(log).not.toContain("cancel");
+		selector.handleNativeEvent(act("close"));
+		expect(log).toContain("cancel");
+	});
+
+	it("invalidates the native sheet when an empty filter loses focus", () => {
+		const { selector, log } = make();
+		selector.getSelectList().handleInput("/");
+		const focused = selector.describe(pickerCx);
+		selector.handleNativeEvent(act("cancel"));
+		const normal = selector.describe(pickerCx);
+		expect(normal).not.toBe(focused);
+		expect(sheet(normal).props.query).toBeNull();
+		expect(sheet(normal).props.actions?.at(-1)?.label).toBe("Close");
+		expect(log).not.toContain("cancel");
+	});
+});
+
 describe("thinking selector picker", () => {
-	it("carries a thinking-level colour chip per level", () => {
+	it("meters each level's depth, deeper levels fuller", () => {
 		const selector = new ThinkingSelectorComponent(
 			"high" as never,
 			["low", "high"] as never,
@@ -80,8 +125,104 @@ describe("thinking selector picker", () => {
 			() => {},
 		);
 		const p = sheet(selector.describe(pickerCx)).props;
-		expect(p.items?.find(item => item.id === "high")?.chips?.[0]?.dot).toBe("thinkingHigh");
+		expect(p.columns?.map(c => c.format)).toEqual(["bar"]);
+		const depth = (id: string) => p.items?.find(item => item.id === id)?.facts?.depth as number;
+		expect(depth("high")).toBeGreaterThan(depth("low"));
+		expect(depth("high")).toBeLessThanOrEqual(1);
 		expect(p.current).toEqual(["high"]);
+	});
+
+	it("marks auto as current without a depth meter; off meters empty", () => {
+		const withAuto = new ThinkingSelectorComponent(
+			"auto",
+			["off", "auto", "high"] as never,
+			() => {},
+			() => {},
+		);
+		const p = sheet(withAuto.describe(pickerCx)).props;
+		expect(p.current).toEqual(["auto"]);
+		expect(p.selected).toBe("auto");
+		expect(p.items?.find(item => item.id === "auto")?.facts).toBeUndefined();
+		expect(p.items?.find(item => item.id === "off")?.facts?.depth).toBe(0);
+	});
+});
+
+describe("session account picker", () => {
+	const accounts = [
+		{ position: 0, credentialId: 11, email: "a@x.so", label: "a@x.so", orgName: "Acme", active: false },
+		{ position: 1, credentialId: 12, email: "b@x.so", label: "b@x.so", active: true },
+	];
+
+	it("checks the active account, details the org, and pins on confirm", () => {
+		const picked: number[] = [];
+		const selector = new SessionAccountSelectorComponent(
+			"Anthropic",
+			accounts,
+			account => picked.push(account.credentialId),
+			() => picked.push(-1),
+		);
+		const p = sheet(selector.describe(pickerCx)).props;
+		expect(p.current).toEqual(["12"]);
+		expect(p.selected).toBe("12");
+		expect(p.items?.find(item => item.id === "11")?.detail).toBe("Acme");
+		expect(p.actions?.map(a => a.label)).toEqual(["Pin", "Close"]);
+		selector.handleNativeEvent(at("select", "11"));
+		selector.handleNativeEvent(act("confirm"));
+		selector.handleNativeEvent(act("close"));
+		expect(picked).toEqual([11, -1]);
+		expect(selector.describe(genericCx)?.c?.[0]).not.toMatchObject({ k: "picker" });
+	});
+});
+
+describe("reset usage picker", () => {
+	const usable: ResetUsageAccount = {
+		label: "a@x.so",
+		provider: "anthropic",
+		providerLabel: "Claude Max",
+		availableCount: 2,
+		redeemableCount: 2,
+		target: { credentialId: 4, provider: "anthropic", creditId: "c1" },
+		active: true,
+		credit: { id: "c1", clears: ["anthropic:5h"] } as never,
+	};
+	const blocked: ResetUsageAccount = {
+		label: "b@x.so",
+		provider: "openai-codex",
+		providerLabel: "ChatGPT Pro",
+		availableCount: 1,
+		redeemableCount: 0,
+		target: { credentialId: 7, provider: "openai-codex" },
+		active: false,
+		unavailableReason: "limit not reached",
+	};
+
+	it("disables unusable accounts with their reason and spends only after the confirm strip", () => {
+		const spent: string[] = [];
+		const selector = new ResetUsageSelectorComponent(
+			[usable, blocked],
+			account => spent.push(account.label),
+			() => spent.push("cancel"),
+		);
+		const first = sheet(selector.describe(pickerCx)).props;
+		expect(first.current).toEqual(["anthropic:4:c1"]);
+		expect(first.items?.find(item => item.id === "openai-codex:7:")?.disabled).toBe("limit not reached");
+		expect(first.confirm).toBeNull();
+
+		selector.handleNativeEvent(act("confirm"));
+		const pending = sheet(selector.describe(pickerCx)).props;
+		expect(pending.confirm?.label).toBe("Spend");
+		expect(pending.subtitle).toBe("Covers Claude 5h.");
+		expect(spent).toEqual([]);
+
+		selector.handleNativeEvent(act("cancel"));
+		expect(sheet(selector.describe(pickerCx)).props.confirm).toBeNull();
+		expect(spent).toEqual([]);
+
+		selector.handleNativeEvent(act("confirm"));
+		selector.handleNativeEvent(act("confirm"));
+		expect(spent).toEqual(["a@x.so"]);
+		selector.handleNativeEvent(act("close"));
+		expect(spent).toEqual(["a@x.so", "cancel"]);
 	});
 });
 
@@ -99,6 +240,21 @@ describe("hook selector picker", () => {
 		expect(picked).toEqual([]);
 		selector.handleNativeEvent(act("confirm"));
 		expect(picked).toEqual(["two"]);
+	});
+
+	it("inline stays in the dock as a card instead of a hoisted picker sheet", () => {
+		const picked: string[] = [];
+		const selector = new HookSelectorComponent(
+			"Save where?",
+			["project", "global"],
+			o => picked.push(o),
+			() => {},
+			{ inline: true },
+		);
+		const root = selector.describe(pickerCx);
+		expect(JSON.stringify(root)).not.toContain('"k":"picker"');
+		selector.handleNativeEvent({ type: "activate", key: "list", item: "1" });
+		expect(picked).toEqual(["global"]);
 	});
 });
 
@@ -124,6 +280,7 @@ describe("oauth selector picker", () => {
 		expect(row?.detail).toBe("Signed in · login");
 		expect(first.items?.find(item => item.id !== signedIn)?.dot).toBe("muted");
 		expect(first.query).toBe("");
+		selector.handleInput("/");
 		selector.handleInput(providers[1]!.name.slice(0, 3));
 		const typed = sheet(selector.describe(pickerCx)).props;
 		expect(typed.items).toBe(first.items);
@@ -142,5 +299,43 @@ describe("oauth selector picker", () => {
 		selector.handleNativeEvent(at("activate", target));
 		selector.handleNativeEvent(act("close"));
 		expect(log).toEqual([target, "cancel"]);
+	});
+
+	it("moves and scrolls independently, restores search, and never activates with Space", () => {
+		const picked: string[] = [];
+		let closed = false;
+		const selector = new OAuthSelectorComponent(
+			"login",
+			auth,
+			id => picked.push(id),
+			() => {
+				closed = true;
+			},
+		);
+		selector.handleInput("G");
+		const last = sheet(selector.describe(pickerCx)).props.selected;
+		selector.handleInput("g");
+		selector.handleInput("g");
+		const first = sheet(selector.describe(pickerCx)).props.selected;
+		expect(first).not.toBe(last);
+		selector.handleInput("\x05");
+		expect(sheet(selector.describe(pickerCx)).props.selected).toBe(first);
+		selector.handleInput(" ");
+		expect(picked).toEqual([]);
+		selector.handleInput("/");
+		selector.handleInput("hjkl /");
+		selector.handleInput("\x1b");
+		expect(closed).toBe(false);
+		const snapshot = selector.navigationSnapshot();
+		const restored = new OAuthSelectorComponent(
+			"login",
+			auth,
+			() => {},
+			() => {},
+		);
+		restored.restoreNavigation(snapshot);
+		expect(restored.navigationSnapshot()).toEqual(snapshot);
+		selector.handleInput("\x1b");
+		expect(closed).toBe(true);
 	});
 });

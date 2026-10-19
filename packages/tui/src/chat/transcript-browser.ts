@@ -1,5 +1,6 @@
 import type { Component } from "../tui";
 import { type ScrollRangeAnchor, ScrollView } from "../components/scroll-view";
+import type { MenuNavAction } from "../components/menu-navigation";
 import { DynamicBorder } from "../chrome/dynamic-border";
 import { truncateToWidth } from "../utils";
 import { theme } from "../theme/theme";
@@ -123,6 +124,26 @@ export class TranscriptBrowser implements Component {
 		this.#scrollView.invalidate();
 	}
 
+	navigationSnapshot(): unknown {
+		return { viewport: this.#scrollView.navigationSnapshot(), followBottom: this.#followBottom };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { viewport?: unknown; followBottom?: boolean };
+		this.#scrollView.restoreNavigation(state.viewport);
+		if (typeof state.followBottom === "boolean") this.#followBottom = state.followBottom;
+	}
+
+	/** Current body budget; zero until the first frame has prepared its layout. */
+	get bodyHeight(): number {
+		return this.#layout?.bodyHeight ?? 0;
+	}
+
+	get scrollOffset(): number {
+		return this.#scrollView.getScrollOffset();
+	}
+
 	/** Prompt-zone-safe rendered rows for outline composition at `columnWidth`. */
 	renderOutlineRows(children: readonly Component[], columnWidth: number): Array<readonly string[]> {
 		return this.#rowCache.rows(children, Math.max(10, columnWidth - 4));
@@ -175,6 +196,12 @@ export class TranscriptBrowser implements Component {
 	/** Apply the ScrollView navigation key set. */
 	handleScrollKey(data: string): boolean {
 		if (!this.#scrollView.handleScrollKey(data)) return false;
+		this.#syncFollowBottom();
+		return true;
+	}
+
+	handleMenuAction(action: MenuNavAction): boolean {
+		if (!this.#scrollView.handleMenuAction(action)) return false;
 		this.#syncFollowBottom();
 		return true;
 	}

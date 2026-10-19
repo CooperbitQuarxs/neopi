@@ -39,7 +39,7 @@ import { combine } from "./config/registry";
 import { cfgBashAutoBackgroundEnabled } from "./exec/settings";
 import { cfgEvalAutoBackgroundEnabled } from "./eval/settings";
 import { cfgTtsrBuiltinRules, cfgTtsrDisabledRules, cfgTtsrEnabled } from "./export/ttsr-settings";
-import { cfgTuiReactions, cfgTuiRenderMermaid } from "./modes/settings";
+import { cfgTuiAutoGraph, cfgTuiReactions, cfgTuiRenderMermaid, cfgTuiRenderSvg } from "./modes/settings";
 import { cfgSecretsEnabled } from "./secrets/settings";
 import { cfgToolsFormat } from "./session/context-settings";
 import {
@@ -74,6 +74,8 @@ export const cfgSystemPromptInputs = combine({
 	xdevInlineDevices: cfgToolsXdevInlineDevices,
 	vaultEnabled: cfgVaultEnabled,
 	renderMermaid: cfgTuiRenderMermaid,
+	renderSvg: cfgTuiRenderSvg,
+	autoGraph: cfgTuiAutoGraph,
 	reactions: cfgTuiReactions,
 	// Rendered into the bash/eval/task tool descriptions (inline catalog) or read by
 	// the prompt builder (eager/batch delegation).
@@ -304,6 +306,11 @@ export interface LoadContextFilesOptions {
 	disabledExtensions?: string[];
 	/** Keep only project-level files (cwd hierarchy), dropping user/agent-dir context files. */
 	projectOnly?: boolean;
+	/**
+	 * Repository root that `cwd` mirrors (a task isolation copy). Project files in this root's
+	 * ancestor directories are loaded too: the copy's own walk ends outside the source tree.
+	 */
+	ancestorRoot?: string;
 }
 
 /**
@@ -350,27 +357,45 @@ export async function loadProjectContextFiles(
 	options: LoadContextFilesOptions = {},
 ): Promise<Array<{ path: string; content: string; depth?: number }>> {
 	const resolvedCwd = options.cwd ?? getProjectDir();
+	const loadItems = async (cwd: string) =>
+		(
+			await loadCapability<ContextFile>(contextFileCapability.id, {
+				cwd,
+				disabledExtensions: options.disabledExtensions,
+			})
+		).items;
 
-	const result = await loadCapability(contextFileCapability.id, {
-		cwd: resolvedCwd,
-		disabledExtensions: options.disabledExtensions,
-	});
+	const [cwdItems, ancestorItems] = await Promise.all([
+		loadItems(resolvedCwd),
+		options.ancestorRoot ? loadItems(options.ancestorRoot) : Promise.resolve([]),
+	]);
+	const ancestorRoot = options.ancestorRoot;
+	const items = ancestorRoot
+		? [
+				...cwdItems,
+				// Only scopes strictly above the source root (discovered depth > 0, which also covers
+				// config-directory files such as `<ancestor>/.github/copilot-instructions.md`): the root
+				// and everything below it are the copy's own files, and user-level files already came
+				// from the cwd walk.
+				...ancestorItems.filter(
+					item =>
+						item.level === "project" && (item.depth ?? 0) > 0 && !cwdItems.some(own => own.path === item.path),
+				),
+			]
+		: cwdItems;
 
 	// Materialize ContextFile items, expanding any `@path/to/file` includes
 	// in their content. The expansion uses the file's own directory as the
 	// resolution base so relative imports work the same way Claude Code,
 	// Goose, and other tools document.
 	const files = await Promise.all(
-		result.items
-			.filter(item => !options.projectOnly || (item as ContextFile).level === "project")
-			.map(async item => {
-				const contextFile = item as ContextFile;
-				return {
-					path: contextFile.path,
-					content: await expandAtImports(contextFile.content, contextFile.path),
-					depth: contextFile.depth,
-				};
-			}),
+		items
+			.filter(contextFile => !options.projectOnly || contextFile.level === "project")
+			.map(async contextFile => ({
+				path: contextFile.path,
+				content: await expandAtImports(contextFile.content, contextFile.path),
+				depth: contextFile.depth,
+			})),
 	);
 
 	// Sort by depth (descending): higher depth (farther from cwd) comes first,
@@ -579,6 +604,10 @@ export interface BuildSystemPromptOptions {
 	includeWorkspaceTree?: boolean;
 	/** Whether Mermaid fenced blocks render as terminal ASCII diagrams. Default: true */
 	renderMermaid?: boolean;
+	/** Whether the reader's UI draws ```svg fences as themed images, so the prompt invites figures. Default: false */
+	renderSvg?: boolean;
+	/** Whether the reader's UI charts numeric Markdown tables, so the prompt routes data to tables and forbids duplicate charts. Default: false */
+	autoGraph?: boolean;
 	/** Whether the TUI lifts an opening emoji into a reaction badge on the user's message. Default: false */
 	reactions?: boolean;
 	/** Pre-resolved nested active repo context. Undefined resolves from cwd. */
@@ -591,6 +620,11 @@ export interface BuildSystemPromptOptions {
 	autoQaEnabled?: boolean;
 	/** Whether active `write` is restricted to xd:// dispatch and the plan artifact sandbox. */
 	writeTransportOnly?: boolean;
+	/**
+	 * Whether this prompt is for a subagent session. Replaces the Verify workflow with a hand-off:
+	 * the main agent verifies once after all subagents land, so parallel children don't storm the CPU.
+	 */
+	subagent?: boolean;
 }
 
 /** Result of building provider-facing system prompt messages. */
@@ -668,11 +702,14 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		personality = "default",
 		includeWorkspaceTree = false,
 		renderMermaid = true,
+		renderSvg = false,
+		autoGraph = false,
 		reactions = false,
 		xdevTools = [],
 		xdevDocs = "",
 		autoQaEnabled = false,
 		writeTransportOnly = false,
+		subagent = false,
 		activeRepoContext: providedActiveRepoContext,
 	} = options;
 	const inlineToolDescriptors = providedInlineToolDescriptors ?? false;
@@ -995,12 +1032,15 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		computerEnabled: evalPreludes.some(prelude => prelude.name === "computer"),
 		includeWorkspaceTree,
 		renderMermaid,
+		renderSvg,
+		autoGraph,
 		reactions,
 		xdevTools,
 		hasDynamicXdevTools: xdevTools.some(mounted => mounted.dynamic === true),
 		xdevDocs,
 		autoQaEnabled,
 		writeTransportOnly,
+		subagent,
 	};
 	const selectedTemplate = resolvedCustomPrompt
 		? customSystemPromptTemplate

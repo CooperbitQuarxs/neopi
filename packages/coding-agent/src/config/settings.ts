@@ -280,6 +280,19 @@ function setByPath(obj: RawSettings, segments: readonly string[], value: unknown
 }
 
 /**
+ * Assign `obj[key]` as an own property. Plain assignment of a parsed
+ * `__proto__` key (an agent name, say) would replace the prototype instead,
+ * silently dropping that entry.
+ */
+function setOwn(obj: RawSettings, key: string, value: unknown): void {
+	if (key === "__proto__") {
+		Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
+	} else {
+		obj[key] = value;
+	}
+}
+
+/**
  * Removes the value at `segments`, pruning the parent objects the removal leaves empty. Every record on the
  * path below `obj` is replaced by a copy rather than edited: a merged view or a cached read may share it.
  */
@@ -713,6 +726,8 @@ export class Settings {
 	#modifiedGlobalRoleEfforts = new Set<string>();
 	/** Roles whose model and effort must pass the same conflict check. */
 	#pairedGlobalRoleMutations = new Set<string>();
+	/** Fallback chains whose selectors and effort metadata share one conflict decision. */
+	#pairedGlobalFallbackMutations = new Set<string>();
 	/** On-disk generations and prior values observed before each pending global mutation, keyed like {@link #modified}. */
 	#modifiedPathMutations = new Map<string, PendingYamlMutation>();
 	#modifiedGlobalModelRoleMutations = new Map<string, PendingYamlMutation>();
@@ -1233,9 +1248,10 @@ export class Settings {
 	 * Apply on-disk edits live: watch the directories holding config.yml, the
 	 * project settings files, and `--config` overlays, and run a debounced
 	 * keep-last-good reload (a file that fails to parse or validate keeps its
-	 * layer's last good values). Only the persisting process-global instance watches; other
-	 * instances ignore the call. Stopped by {@link stopWatching} /
-	 * {@link cancelPendingSaves}.
+	 * layer's last good values). Arming a watch also schedules one reload, so
+	 * edits that landed before it went live are not lost. Only the persisting
+	 * process-global instance watches; other instances ignore the call. Stopped
+	 * by {@link stopWatching} / {@link cancelPendingSaves}.
 	 */
 	startWatching(): void {
 		if (this.#watchingFiles || !this.#persist || this.#savesCancelled || globalInstance !== this) return;
@@ -1261,19 +1277,39 @@ export class Settings {
 			else targets.set(dir, new Set([name]));
 		};
 		const addFile = (file: string) => {
-			const dir = path.dirname(file);
-			// A missing directory cannot be watched; watch its parent for the
-			// directory's creation instead (the next sync re-arms the real watch).
-			if (fs.existsSync(dir)) addTarget(dir, path.basename(file));
-			else addTarget(path.dirname(dir), path.basename(dir));
-			// Symlinked configs (dotfile managers) change at the link target.
-			let real: string;
-			try {
-				real = fs.realpathSync(file);
-			} catch {
-				return;
+			// Walk physically so every symlink hop (including profile/ancestor
+			// directory links) is observed, not just the logical file and final
+			// realpath. Physical directory keys also re-arm a watch after retargeting.
+			const absolute = path.resolve(file);
+			let dir = path.parse(absolute).root;
+			let segments = physicalTargetSegments(absolute);
+			let hops = 0;
+			while (segments.length > 0) {
+				const segment = segments.shift()!;
+				if (segment === "" || segment === ".") continue;
+				if (segment === "..") {
+					dir = path.dirname(dir);
+					continue;
+				}
+				const current = path.join(dir, segment);
+				if (segments.length === 0) addTarget(dir, segment);
+				try {
+					if (fs.lstatSync(current).isSymbolicLink()) {
+						addTarget(dir, segment);
+						if (++hops > MAX_SYMLINK_HOPS) return;
+						const target = fs.readlinkSync(current);
+						if (path.isAbsolute(target)) dir = path.parse(target).root;
+						segments = [...physicalTargetSegments(target), ...segments];
+					} else {
+						dir = current;
+					}
+				} catch {
+					// Watch the nearest existing parent, even when several
+					// directories or a symlink's referent are missing.
+					addTarget(dir, segment);
+					return;
+				}
 			}
-			if (real !== file) addTarget(path.dirname(real), path.basename(real));
 		};
 		for (const filename of MAIN_CONFIG_FILENAMES) addFile(path.join(this.#agentDir, filename));
 		const projectCwd = path.resolve(this.#cwd);
@@ -1293,6 +1329,7 @@ export class Settings {
 	#syncFileWatchers(): void {
 		if (!this.#watchingFiles) return;
 		const targets = this.#configWatchTargets();
+		let armed = false;
 		for (const [dir, entry] of this.#fileWatchers) {
 			if (targets.has(dir)) continue;
 			entry.watcher.close();
@@ -1323,7 +1360,13 @@ export class Settings {
 				if (this.#fileWatchers.get(dir)?.watcher === watcher) this.#fileWatchers.delete(dir);
 			});
 			this.#fileWatchers.set(dir, { watcher, names });
+			armed = true;
 		}
+		// The sources were last read before this watch existed, and Bun arms macOS
+		// FSEvents asynchronously, so a write in between raises no event (a write
+		// right after a symlink retarget, or any edit during startup). Re-read once
+		// the watch is live; that reload's own sync arms nothing new, so it settles.
+		if (armed) this.#scheduleWatchReload();
 	}
 
 	#scheduleWatchReload(): void {
@@ -1457,7 +1500,13 @@ export class Settings {
 	async #reloadPersistedLayers(mode: PersistedReloadMode): Promise<void> {
 		const keepLastGood = mode === "keep-last-good";
 		for (;;) {
-			await this.flush();
+			try {
+				await this.flush();
+			} catch (error) {
+				// The failed writes stay pending for the next flush and are re-applied over the
+				// layers read below, so an unwritable config never blocks a reload or reverts them.
+				logger.warn("Settings: reloading over unsaved changes", { error: String(error) });
+			}
 			const mutationGeneration = this.#persistedMutationGeneration;
 
 			const [globalResult, projectResult, overlayResult] = await Promise.allSettled([
@@ -1476,10 +1525,15 @@ export class Settings {
 
 			const refreshed: LayerRefresh[] = [];
 			if (globalResult.status === "fulfilled") {
-				const { settings, configPath } = globalResult.value;
+				const { configPath } = globalResult.value;
+				// A config this instance moved aside as malformed reads as missing until a save
+				// recreates it; keep the last good layer instead of rebuilding it from pending writes.
+				const quarantined = this.#configPath !== null && this.#quarantinedYamlTargets.has(this.#configPath);
+				const settings = globalResult.value.settings ?? (quarantined ? structuredClone(this.#global) : {});
+				this.#applyPendingGlobalWrites(settings);
 				refreshed.push({
 					layer: "global",
-					settings: settings ?? {},
+					settings,
 					source: configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]),
 					commit: () => {
 						this.#configPath = configPath;
@@ -1488,6 +1542,7 @@ export class Settings {
 			}
 			if (projectResult.status === "fulfilled") {
 				const project = projectResult.value;
+				this.#applyPendingProjectWrites(project.settings);
 				refreshed.push({
 					layer: "project",
 					settings: project.settings,
@@ -1629,6 +1684,11 @@ export class Settings {
 
 	getAgentDir(): string {
 		return this.#agentDir;
+	}
+
+	/** Resolved absolute paths of the config overlays supplied to this instance. */
+	getConfigFiles(): readonly string[] {
+		return [...this.#configFiles];
 	}
 
 	/**
@@ -2021,14 +2081,13 @@ export class Settings {
 		const previousChains = cfgRetryFallbackChains.get(this);
 		const previousEfforts = cfgFallbackEffortSelections.get(this);
 		for (const setting of [cfgRetryFallbackChains, cfgFallbackEffortSelections]) {
-			this.#captureGlobalMutation(
-				JSON.stringify(setting.segments),
-				this.#modifiedPathMutations,
-				getByPath(this.#global, setting.segments),
-			);
-			this.#modified.set(JSON.stringify(setting.segments), setting.segments);
+			const segments = [...setting.segments, role];
+			const key = JSON.stringify(segments);
+			this.#captureGlobalMutation(key, this.#modifiedPathMutations, getByPath(this.#global, segments));
+			this.#modified.set(key, segments);
 			this.#releaseSoftPin(setting);
 		}
+		this.#pairedGlobalFallbackMutations.add(role);
 		this.#global = staged;
 		this.#persistedMutationGeneration++;
 		this.#rebuildMerged();
@@ -2758,10 +2817,12 @@ export class Settings {
 		if (rejectedWarnings) {
 			throw new Error(`Project settings failed to parse: ${rejectedWarnings.join("; ")}`);
 		}
+		// A native config this instance moved aside reads as missing until a save recreates it;
+		// keep its last good contents, as `#saveProjectNow` does.
 		const nativeProject = quarantineInvalid
 			? await this.#loadYaml(projectConfigPath)
 			: (this.#unwrapYamlLoadResult(projectConfigPath, await this.#loadYamlIfPresent(projectConfigPath, false)) ??
-				{});
+				(this.#quarantinedYamlTargets.has(projectConfigPath) ? structuredClone(this.#projectFileSettings) : {}));
 		const nativeModelRoles = getByPath(nativeProject, ["modelRoles"]);
 		if (nativeModelRoles !== undefined) {
 			merged = this.#deepMerge(merged, { modelRoles: nativeModelRoles });
@@ -3482,6 +3543,24 @@ export class Settings {
 			delete raw["advisor.subagents"];
 		}
 
+		// task.completionProbeMs (poll period, 0 = off) → task.completionProbe
+		// (on/off with a built-in backoff schedule). Mapped IN THE SAME LAYER so a
+		// project-level `0` keeps overriding a global period; an explicit new key wins.
+		{
+			const taskObj = isRecord(raw.task) ? raw.task : undefined;
+			const legacyProbeMs =
+				taskObj && "completionProbeMs" in taskObj ? taskObj.completionProbeMs : raw["task.completionProbeMs"];
+			if (typeof legacyProbeMs === "number") {
+				const target = taskObj ?? {};
+				if (!("completionProbe" in target) && !("task.completionProbe" in raw)) {
+					target.completionProbe = legacyProbeMs > 0;
+				}
+				raw.task = target;
+			}
+			if (taskObj) delete taskObj.completionProbeMs;
+			delete raw["task.completionProbeMs"];
+		}
+
 		// Early per-agent toggles were persisted as booleans even though the
 		// runtime record contract is "on"/"off"/model pattern. Normalize each
 		// layer before merging so project-level false still overrides global true.
@@ -3904,6 +3983,8 @@ export class Settings {
 		const globalRolesAtStart = this.#modelRolesFromLayer(this.#global);
 		const modifiedRoleEfforts = [...this.#modifiedGlobalRoleEfforts];
 		const pairedRoles = new Set(this.#pairedGlobalRoleMutations);
+		const pairedFallbacks = new Set(this.#pairedGlobalFallbackMutations);
+		this.#pairedGlobalFallbackMutations.clear();
 		const modifiedRoleEffortMutations = new Map(this.#modifiedGlobalRoleEffortMutations);
 		const globalEffortsAtStart = getByPath(this.#global, cfgRoleEffortSelections.segments);
 		const effortValuesAtStart: Record<string, unknown> = isRecord(globalEffortsAtStart)
@@ -3935,11 +4016,35 @@ export class Settings {
 				let shouldWrite = false;
 				const writtenPaths: (readonly string[])[] = [];
 
+				const blockedFallbackPaths = new Set<string>();
+				for (const role of pairedFallbacks) {
+					const paths = [cfgRetryFallbackChains, cfgFallbackEffortSelections].map(setting => [
+						...setting.segments,
+						role,
+					]);
+					if (
+						paths.some(
+							segments =>
+								!pendingChangeApplies(
+									modifiedPathMutations.get(JSON.stringify(segments)),
+									segments,
+									current,
+									loaded.generation,
+									[],
+								),
+						)
+					) {
+						for (const segments of paths) blockedFallbackPaths.add(JSON.stringify(segments));
+					}
+				}
 				// Apply pending changes unless a newer file generation also
 				// changed that setting. Disjoint external edits still merge.
 				for (const [modKey, segments] of modifiedPaths) {
 					const mutation = modifiedPathMutations.get(modKey);
-					if (!pendingChangeApplies(mutation, segments, current, loaded.generation, writtenPaths)) {
+					if (
+						blockedFallbackPaths.has(modKey) ||
+						!pendingChangeApplies(mutation, segments, current, loaded.generation, writtenPaths)
+					) {
 						logger.warn("Settings: skipped stale change after external config edit", {
 							path: configPath,
 							setting: segments.join("."),
@@ -4096,6 +4201,29 @@ export class Settings {
 						});
 					}
 				}
+				// A newer paired edit can have one half absorbed by this write while
+				// the other remains dirty. Keep the satisfied half as a no-op mutation
+				// so the next save still validates both records against the same file.
+				for (const role of this.#pairedGlobalFallbackMutations) {
+					const paths = [cfgRetryFallbackChains, cfgFallbackEffortSelections].map(setting => [
+						...setting.segments,
+						role,
+					]);
+					if (paths.every(segments => !this.#modified.has(JSON.stringify(segments)))) {
+						this.#pairedGlobalFallbackMutations.delete(role);
+						continue;
+					}
+					for (const segments of paths) {
+						const modKey = JSON.stringify(segments);
+						if (this.#modified.has(modKey)) continue;
+						writtenGeneration ??= this.#readYamlGeneration(configPath);
+						this.#modified.set(modKey, segments);
+						this.#modifiedPathMutations.set(modKey, {
+							generation: writtenGeneration,
+							baseValue: structuredClone(getByPath(current, segments)),
+						});
+					}
+				}
 				this.#adoptSavedGlobal(current, configPath);
 				// These pending roles were included in this write. Remove each
 				// only if no newer local change arrived while the write was in flight.
@@ -4124,6 +4252,7 @@ export class Settings {
 			const retryGeneration = this.#quarantinedYamlTargets.has(configPath)
 				? this.#readYamlGeneration(configPath)
 				: undefined;
+			for (const role of pairedFallbacks) this.#pairedGlobalFallbackMutations.add(role);
 			// Re-add failed paths for retry, retaining any newer mutation's generation.
 			for (const [p, segments] of modifiedPaths) {
 				this.#modified.set(p, segments);
@@ -4178,36 +4307,49 @@ export class Settings {
 	 * Notifies every setting whose effective value changed.
 	 */
 	#adoptSavedGlobal(saved: RawSettings, source: string): void {
-		if (this.#modifiedGlobalModelRoles.size > 0) {
-			const liveRoles = getByPath(this.#global, ["modelRoles"]);
-			const savedRoles = getByPath(saved, ["modelRoles"]);
-			const roles: Record<string, unknown> = isRecord(savedRoles) ? savedRoles : {};
-			for (const role of this.#modifiedGlobalModelRoles) {
-				if (isRecord(liveRoles) && Object.hasOwn(liveRoles, role)) roles[role] = liveRoles[role];
-				else delete roles[role];
-			}
-			setByPath(saved, ["modelRoles"], roles);
-		}
-		if (this.#modifiedGlobalRoleEfforts.size > 0) {
-			const liveEfforts = getByPath(this.#global, cfgRoleEffortSelections.segments);
-			const savedEfforts = getByPath(saved, cfgRoleEffortSelections.segments);
-			const efforts: Record<string, unknown> = isRecord(savedEfforts) ? savedEfforts : {};
-			for (const role of this.#modifiedGlobalRoleEfforts) {
-				if (isRecord(liveEfforts) && Object.hasOwn(liveEfforts, role)) efforts[role] = liveEfforts[role];
-				else delete efforts[role];
-			}
-			setByPath(saved, cfgRoleEffortSelections.segments, efforts);
-		}
-		for (const segments of this.#modified.values()) {
-			const value = getByPath(this.#global, segments);
-			if (value === undefined) deleteByPath(saved, segments);
-			else setByPath(saved, segments, value);
-		}
+		this.#applyPendingGlobalWrites(saved);
 		if (!this.#acceptsLayers({ ...this.#ownLayers(), global: saved }, source)) return;
 		const previous = this.#snapshot();
 		this.#global = saved;
 		this.#rebuildMerged();
 		this.#fireChangesSince(previous);
+	}
+
+	/** Re-applies every global write still pending a save onto `target`, a global layer read from disk. */
+	#applyPendingGlobalWrites(target: RawSettings): void {
+		if (this.#modifiedGlobalModelRoles.size > 0) {
+			const liveRoles = getByPath(this.#global, ["modelRoles"]);
+			const targetRoles = getByPath(target, ["modelRoles"]);
+			const roles: Record<string, unknown> = isRecord(targetRoles) ? targetRoles : {};
+			for (const role of this.#modifiedGlobalModelRoles) {
+				if (isRecord(liveRoles) && Object.hasOwn(liveRoles, role)) roles[role] = liveRoles[role];
+				else delete roles[role];
+			}
+			setByPath(target, ["modelRoles"], roles);
+		}
+		if (this.#modifiedGlobalRoleEfforts.size > 0) {
+			const liveEfforts = getByPath(this.#global, cfgRoleEffortSelections.segments);
+			const targetEfforts = getByPath(target, cfgRoleEffortSelections.segments);
+			const efforts: Record<string, unknown> = isRecord(targetEfforts) ? targetEfforts : {};
+			for (const role of this.#modifiedGlobalRoleEfforts) {
+				if (isRecord(liveEfforts) && Object.hasOwn(liveEfforts, role)) efforts[role] = liveEfforts[role];
+				else delete efforts[role];
+			}
+			setByPath(target, cfgRoleEffortSelections.segments, efforts);
+		}
+		for (const segments of this.#modified.values()) {
+			const value = getByPath(this.#global, segments);
+			if (value === undefined) deleteByPath(target, segments);
+			else setByPath(target, segments, value);
+		}
+	}
+
+	/** Re-applies every project model role still pending a save onto `target`, a project layer read from disk. */
+	#applyPendingProjectWrites(target: RawSettings): void {
+		const liveRoles = getByPath(this.#project, ["modelRoles"]);
+		for (const role of this.#modifiedProjectModelRoles) {
+			setByPath(target, ["modelRoles", role], isRecord(liveRoles) ? liveRoles[role] : undefined);
+		}
 	}
 
 	#queueProjectSave(): void {
@@ -4356,7 +4498,7 @@ export class Settings {
 		const result: RawSettings = {};
 		for (const key of Object.keys(overrides)) {
 			const override = overrides[key];
-			const baseVal = base[key];
+			const baseVal = Object.hasOwn(base, key) ? base[key] : undefined;
 
 			if (override === undefined) continue;
 
@@ -4370,17 +4512,20 @@ export class Settings {
 			) {
 				// Effort selections are discriminated values: a project "fixed"
 				// must replace global "auto", not inherit its allowed/selector fields.
-				result[key] =
+				setOwn(
+					result,
+					key,
 					"mode" in override &&
-					(override.mode === "auto" || override.mode === "fixed" || override.mode === "inherit") &&
-					"mode" in baseVal
+						(override.mode === "auto" || override.mode === "fixed" || override.mode === "inherit") &&
+						"mode" in baseVal
 						? override
-						: this.#deepMerge(baseVal as RawSettings, override as RawSettings);
+						: this.#deepMerge(baseVal as RawSettings, override as RawSettings),
+				);
 			} else {
-				result[key] = override;
+				setOwn(result, key, override);
 			}
 		}
-		for (const key of Object.keys(base)) if (!Object.hasOwn(result, key)) result[key] = base[key];
+		for (const key of Object.keys(base)) if (!Object.hasOwn(result, key)) setOwn(result, key, base[key]);
 		return result;
 	}
 }

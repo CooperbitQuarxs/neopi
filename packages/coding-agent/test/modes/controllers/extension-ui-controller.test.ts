@@ -1,6 +1,12 @@
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import { type Component, Container, isFocusable, type OverlayOptions, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { Settings } from "../../../src/config/settings";
+import { DialogRegistry, dialogRegistry, setDialogRegistry } from "../../../src/control/dialogs";
+import { AskTool } from "../../../src/tools/ask";
+import type { ToolSession } from "../../../src/tools";
 import type { ExtensionAskDialogQuestion, ExtensionUIContext } from "../../../src/extensibility/extensions";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
@@ -40,9 +46,11 @@ function makeHarness() {
 		isHidden: vi.fn(() => false),
 	};
 	const showOverlay = vi.fn(() => fakeHandle);
+	const runAppAction = vi.fn((_id: string) => true);
 	let uiContext: ExtensionUIContext | undefined;
 	const ctx = {
 		editor,
+		hookCustomComponents: new Set<Component>(),
 		ui: {
 			requestRender,
 			getFocused,
@@ -62,6 +70,7 @@ function makeHarness() {
 		addAutocompleteProvider,
 		syncComposerShape: vi.fn(),
 		showStatus: vi.fn(),
+		runAppAction,
 	} as unknown as InteractiveModeContext;
 
 	const controller = new ExtensionUiController(ctx);
@@ -75,7 +84,9 @@ function makeHarness() {
 		setFocus,
 		showOverlay,
 		fakeHandle,
+		runAppAction,
 		controller,
+		hookCustomComponents: ctx.hookCustomComponents,
 		inputController: (readText: () => Promise<string>) =>
 			new InputController(ctx, { readImage: async () => null, readText }),
 		handleInput(data: string): void {
@@ -93,6 +104,113 @@ function makeHarness() {
 		},
 	};
 }
+
+describe("ExtensionUiController control ask answers", () => {
+	const questions: ExtensionAskDialogQuestion[] = [
+		{
+			id: "choice",
+			question: "Choose an answer?",
+			options: [{ label: "Alpha" }, { label: "Beta" }],
+			recommended: 0,
+		},
+	];
+
+	it.each([
+		[{ index: 0 }, ["Alpha"], undefined],
+		[JSON.parse('"A custom answer"'), [], "A custom answer"],
+	])("returns an ask tool result for control answer %j", async (answer, selectedOptions, customInput) => {
+		const previous = dialogRegistry();
+		const registry = new DialogRegistry();
+		setDialogRegistry(registry);
+		try {
+			const harness = makeHarness();
+			const tool = new AskTool({
+				cwd: "/tmp",
+				hasUI: true,
+				canPromptUser: true,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+				settings: Settings.isolated(),
+			} as ToolSession);
+			const context = {
+				hasUI: true,
+				ui: { askDialog: harness.controller.showAskDialog.bind(harness.controller) },
+				abort: vi.fn(),
+			} as unknown as AgentToolContext;
+			const pending = tool.execute("control-ask", { questions }, undefined, undefined, context);
+			const dialog = registry.list()[0];
+			expect(dialog?.family).toBe("ask");
+			expect(registry.answer(dialog!.dialogId, { index: 99 })).toEqual({
+				settled: false,
+				error: "dialog rejected that answer",
+			});
+			expect(registry.answer(dialog!.dialogId, answer)).toEqual({ settled: true });
+			const result = await pending;
+			expect(result.details).toMatchObject({
+				question: questions[0].question,
+				options: ["Alpha", "Beta"],
+				multi: false,
+				selectedOptions,
+			});
+			expect(result.details?.customInput).toBe(customInput);
+			expect(context.abort).not.toHaveBeenCalled();
+		} finally {
+			setDialogRegistry(previous);
+		}
+	});
+
+	it("retains each queued ask's question mapping and registry entry", async () => {
+		const previous = dialogRegistry();
+		const registry = new DialogRegistry();
+		setDialogRegistry(registry);
+		try {
+			const harness = makeHarness();
+			const first = harness.controller.showAskDialog(questions);
+			const nextQuestions = [
+				{ id: "one", question: "First?", options: [{ label: "One" }] },
+				{ id: "two", question: "Second?", options: [{ label: "Two" }] },
+			];
+			const next = harness.controller.showAskDialog(nextQuestions);
+			expect(registry.answer(registry.list()[0].dialogId, { index: 0 })).toEqual({ settled: true });
+			expect(await first).toMatchObject({
+				kind: "submit",
+				results: [{ id: "choice", selectedOptions: ["Alpha"] }],
+			});
+			expect(registry.answer(registry.list()[0].dialogId, { one: 0, two: "custom" })).toEqual({ settled: true });
+			expect(await next).toEqual({
+				kind: "submit",
+				results: [
+					{ id: "one", question: "First?", options: ["One"], multi: false, selectedOptions: ["One"] },
+					{
+						id: "two",
+						question: "Second?",
+						options: ["Two"],
+						multi: false,
+						selectedOptions: [],
+						customInput: "custom",
+					},
+				],
+			});
+		} finally {
+			setDialogRegistry(previous);
+		}
+	});
+
+	it.each(["cancel", null])("cancels without fabricating an ask result for %j", async answer => {
+		const previous = dialogRegistry();
+		const registry = new DialogRegistry();
+		setDialogRegistry(registry);
+		try {
+			const harness = makeHarness();
+			const pending = harness.controller.showAskDialog(questions);
+			expect(registry.answer(registry.list()[0].dialogId, answer)).toEqual({ settled: true });
+			expect(await pending).toBeUndefined();
+			expect(harness.editorContainer.children).toEqual([harness.editor]);
+		} finally {
+			setDialogRegistry(previous);
+		}
+	});
+});
 
 describe("ExtensionUiController Ask dialog input", () => {
 	const questions: ExtensionAskDialogQuestion[] = [
@@ -417,6 +535,58 @@ describe("ExtensionUiController editor UI", () => {
 		expect(harness.editor.getText()).toBe("half typed prompt!");
 	});
 
+	describe("composer stays usable under an ask (#303)", () => {
+		const questions: ExtensionAskDialogQuestion[] = [
+			{ id: "confirm", question: "Continue?", options: [{ label: "Yes" }, { label: "No" }] },
+		];
+
+		it("routes speech keys past the question and lets a dictated draft be sent while it stays open", async () => {
+			const harness = makeHarness();
+			const sent: string[] = [];
+			harness.editor.onSubmit = text => {
+				sent.push(text);
+				harness.editor.setText("");
+			};
+			const pending = harness.controller.showAskDialog(questions);
+			const ask = harness.editorContainer.children[0];
+			expect(ask).toBeInstanceOf(AskDialogComponent);
+			// Even over an empty prompt the composer stays mounted, so a transcript has somewhere visible to land.
+			expect(harness.editorContainer.children).toEqual([ask, harness.editor]);
+
+			ask?.handleInput?.("\x00"); // Ctrl+Space
+			expect(harness.runAppAction).toHaveBeenCalledWith("app.stt.toggle");
+
+			// The recording's transcript lands in the composer; the draft then owns typing and Enter sends it.
+			harness.editor.setText("dictated words");
+			ask?.handleInput?.("!");
+			ask?.handleInput?.("\r");
+			expect(sent).toEqual(["dictated words!"]);
+			expect(harness.editorContainer.children).toEqual([ask, harness.editor]);
+
+			// The question is still open and answerable.
+			ask?.handleInput?.("\n");
+			expect((await pending)?.kind).toBe("submit");
+		});
+
+		it("hands typing to the composer while the question is hidden, and Enter on an empty composer shows it again", async () => {
+			const harness = makeHarness();
+			const pending = harness.controller.showAskDialog(questions);
+			const ask = harness.editorContainer.children[0] as AskDialogComponent;
+
+			ask.handleInput("\x1bh"); // Alt+H hides
+			expect(stripVTControlCharacters(ask.render(120).join("\n"))).toContain("type to write a message");
+			ask.handleInput("h");
+			ask.handleInput("i");
+			expect(harness.editor.getText()).toBe("hi");
+
+			harness.editor.setText("");
+			ask.handleInput("\n");
+			expect(stripVTControlCharacters(ask.render(120).join("\n"))).toContain("Continue?");
+			ask.handleInput("\n");
+			expect((await pending)?.kind).toBe("submit");
+		});
+	});
+
 	it("bridges addAutocompleteProvider factories to the interactive mode context (#4919)", async () => {
 		const harness = makeHarness();
 		const ui = await harness.init();
@@ -456,6 +626,25 @@ describe("ExtensionUiController custom overlay", () => {
 		expect(harness.showOverlay).toHaveBeenCalledWith(expect.any(Container), overlayOptions);
 		expect(onHandle).toHaveBeenCalledTimes(1);
 		expect(onHandle).toHaveBeenCalledWith(harness.fakeHandle);
+	});
+
+	it("tracks a custom view only while its result is outstanding", async () => {
+		const harness = makeHarness();
+		const ui = await harness.init();
+		const component = new Container();
+		let close = () => {};
+		const pending = ui.custom<void>(
+			(_tui, _theme, _keys, done) => {
+				close = done;
+				return component;
+			},
+			{ overlay: true },
+		);
+		await flushMicrotasks();
+		expect(harness.hookCustomComponents.has(component)).toBe(true);
+		close();
+		await pending;
+		expect(harness.hookCustomComponents.has(component)).toBe(false);
 	});
 
 	it("resolves overlayOptions factories before showing the overlay", async () => {

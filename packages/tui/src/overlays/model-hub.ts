@@ -24,22 +24,29 @@ import type { KeysApi, Model } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
-import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { MODEL_KINDS, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { Component, TUI } from "../tui";
 import { extractPrintableText, matchesKey } from "../keys";
-import { fuzzyFilter } from "../fuzzy";
+import { FuzzyCorpus } from "../fuzzy";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
 import { boundKeys, editorKey, editorKeys } from "../chrome/keybinding-hints";
-import type { KeyName } from "../key-hint-format";
 import { col, compact, kbd, md, node, row, span, text } from "../native/describe";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent } from "../native/picker";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
-import { actionHint, hintsRow, type NativeHint } from "../native/overlay";
+import { hintsRow, type NativeHint } from "../native/overlay";
 import { plainText } from "../native/spans";
 import { isNativeRendering } from "../native/state";
 import { Input } from "../components/input";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	type MenuNavAction,
+	MenuSearchField,
+	MenuViewport,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
+import { MenuSelection } from "../components/menu-selection";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../mouse";
 import { truncateToWidth, visibleWidth } from "../utils";
 import type {
@@ -49,25 +56,27 @@ import type {
 	ResolvedModelRoleValue,
 } from "./model-browser";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevelMetadata } from "../thinking";
-import { thinkingLevelGlyph } from "../render/render-utils";
+import { sanitizeDisplayWarning, thinkingLevelGlyph } from "../render/render-utils";
 import { theme } from "../theme/theme";
-import { matchesSelectCancel, matchesSelectDown, matchesSelectUp, pickerNavigationKey } from "../keybinding-matchers";
+import { matchesSelectCancel } from "../keybinding-matchers";
 import {
 	buildBrowserItems,
 	MODEL_PICKER_COLUMNS,
 	ModelBrowser,
 	type ModelBrowserItem,
+	type ModelBrowserNavigation,
 	modelSearchText,
+	providerMark,
 	thinkingDotToken,
 	type RoleAssignments,
 	resolveRoleAssignments,
+	scopedRolePool,
 	sortModelItems,
 } from "./model-browser";
 import {
 	describeHubFrame,
 	describeHubSidebar,
 	HubFrame,
-	moveStripSelection,
 	type SidebarEntry as HubSidebarEntry,
 	type SidebarStyle,
 	type StripChip as HubStripChip,
@@ -139,6 +148,9 @@ function patternStripHint(value: string): string {
 	return "error" in compiled ? theme.fg("error", `regex · ${compiled.error}`) : theme.fg("dim", "regex");
 }
 
+const MODEL_HUB_BODY_MIN_WIDTH = 28;
+const MODEL_SCOPE_HINT = "h/l pane · j/k providers · ⏎ models · / search · Alt+←/→ kind · ⎋ close";
+
 /**
  * A row of the Roles view: a role, a model/wildcard chain-key header, one of a
  * chain's fallback entries, or the trailing "+ New role…". Fallback rows under
@@ -182,6 +194,11 @@ export interface ModelHubSource extends ModelBrowserSource {
 	getFallbackEffortSelection(role: string, selector: string): HubEffortSelection | undefined;
 	/** Serialize a resolved role model, retaining any host-specific upstream route. */
 	formatModelSelector(model: Model): string;
+	/**
+	 * Saved model presets (in switch order) and the one the current role setup
+	 * matches, if any. Absent hosts have no presets to switch between.
+	 */
+	getModelPresets?(): { names: readonly string[]; active: string | undefined };
 }
 
 /** Catalog capabilities required by the model hub. */
@@ -240,10 +257,38 @@ export interface ModelHubCallbacks {
 	onDefineMixture?: (name?: string) => void;
 	/** Save the current role assignments and default thinking level as a named model preset. */
 	onSavePreset?: (name: string) => void;
+	/**
+	 * Apply a saved model preset (ctrl+←/→ or p/⇧P in the Roles view) and report
+	 * the outcome itself. A switch that writes nothing (a refused preset) still
+	 * advances the hub's preset cursor, so the next press moves past it.
+	 */
+	onSwitchPreset?: (name: string) => void | Promise<void>;
 	/** Persist a new quick-switch cycle order (the ctrl+p role cycle). */
 	onCycleOrderChange?: (order: string[]) => void;
+	/**
+	 * Persist typed text as `model`'s own compaction limit: a token base the
+	 * policy scales (`400k`), a fixed trigger (`f400k`), a percentage (`80%`), or
+	 * empty to reset. Rejected input returns `{ kind: "error" }`; input that
+	 * needs acknowledgement (one that opens the extended window) returns
+	 * `{ kind: "confirm" }` until called again with the same text and
+	 * `confirmed`. Either keeps the field open.
+	 */
+	onCompactionPointChange?: (
+		model: Model,
+		input: string,
+		confirmed: boolean,
+	) => CompactionPointChangeResult | undefined;
+	/**
+	 * One short line on where `model` would compact with the typed limit
+	 * (`compacts at 340K · 85% of 400K base`), shown beside the field while
+	 * typing; undefined for input that does not parse or fit.
+	 */
+	previewCompactionPoint?: (model: Model, input: string) => string | undefined;
 	onCancel: () => void;
 }
+
+/** Why {@link ModelHubCallbacks.onCompactionPointChange} kept the field open. */
+export type CompactionPointChangeResult = { kind: "error"; message: string } | { kind: "confirm"; message: string };
 
 export interface ModelHubOptions {
 	/** Preselect this provider's sidebar entry (e.g. when reopening after /login). */
@@ -336,10 +381,65 @@ type StripState =
 			target: { kind: "role"; role: string } | { kind: "fallback"; role: string; index: number | null };
 			chips: StripChip[];
 			index: number;
+	  }
+	| {
+			/**
+			 * Footer text input setting `model`'s compaction limit; `error` is the last
+			 * rejection, `confirm` the warning a second Enter on the same `value`
+			 * accepts, `preview` the host's live line for the typed `value`.
+			 */
+			kind: "name";
+			purpose: "compaction";
+			model: Model;
+			input: Input;
+			error?: string;
+			confirm?: { value: string; message: string };
+			preview?: { value: string; text: string | undefined };
 	  };
 
+interface ModelHubPageNavigation {
+	entry: string;
+	focus: "scope" | "list";
+	modelKind: "all" | ModelKind;
+	roleTab: RoleTab;
+	filterFocused: boolean;
+	rolesQuery: string;
+	rolesCursor: number;
+	effortQuery: string;
+	effortCursor: number;
+	roleKey: string | undefined;
+	roleTop: MenuViewportPosition | undefined;
+	effortIndex: number;
+	effortKey: string | undefined;
+	effortTop: MenuViewportPosition | undefined;
+	sidebarTop: number;
+	browser: ModelBrowserNavigation;
+	assigning: AssignTarget | null;
+	strip: StripState | null;
+	yankedFallback: readonly { selector: string; selection?: HubEffortSelection }[] | null;
+	pinnedActionFocused: boolean;
+	configError: string | undefined;
+	presetCursor: { name: string; revision: number } | undefined;
+}
+
+interface ModelHubNavigation extends ModelHubPageNavigation {
+	parents: ModelHubPageNavigation[];
+}
+
 /** A Roles-view command; keys and the picker's action bar both run {@link ModelHubComponent}'s `#runRolesAction`. */
-type RolesAction = "pick" | "clear" | "fallback" | "cycle" | "earlier" | "later" | "new" | "thinking" | "save";
+type RolesAction =
+	| "pick"
+	| "clear"
+	| "fallback"
+	| "cycle"
+	| "earlier"
+	| "later"
+	| "new"
+	| "thinking"
+	| "compaction"
+	| "save"
+	| "nextPreset"
+	| "prevPreset";
 
 /** Printable keys of the Roles view and the command each runs. */
 const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
@@ -350,6 +450,9 @@ const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
 	"]": "later",
 	n: "new",
 	t: "thinking",
+	// `k` is vim navigation and `p`/`P` paste fallbacks in this fork, so the
+	// compaction limit lives on `m` and preset switching only on ctrl+←/→.
+	m: "compaction",
 	s: "save",
 };
 
@@ -374,16 +477,43 @@ const MODEL_KIND_LABELS: Record<"all" | ModelKind, string> = {
 	video: "Video",
 };
 
-/** A provider mark's initials: `amazon-bedrock` → `AB`, `anthropic` → `An`. */
-function providerInitials(providerId: string): string {
-	const words = providerId.split(/[-_\s.]+/).filter(word => word.length > 0);
-	if (words.length >= 2) return `${words[0]!.charAt(0)}${words[1]!.charAt(0)}`.toUpperCase();
-	const word = words[0] ?? providerId;
-	return `${word.charAt(0).toUpperCase()}${word.charAt(1)}`;
-}
-
 const PROVIDER_REFRESH_DEBOUNCE_MS = 120;
 const RECENT_LIMIT = 15;
+/** Accepted compaction limit input, shown beside the field: a scaled base, a fixed trigger, or a percentage. */
+const COMPACTION_INPUT_HINT = "400k base · f400k fixed · 80% · empty resets";
+
+type CompactionStrip = Extract<StripState, { purpose: "compaction" }>;
+
+/** Whether the compaction field still holds the text its pending warning was raised for. */
+function compactionConfirmPending(strip: CompactionStrip): boolean {
+	return strip.confirm !== undefined && strip.confirm.value === strip.input.getValue();
+}
+
+/**
+ * The note beside the compaction field: the last error, a pending warning, the
+ * host's live preview of the typed limit, or (empty or unparsed input) the
+ * input syntax. Host text embeds model ids and config text, so it is
+ * sanitized for every render path (terminal footer, Tern picker and strip).
+ */
+function compactionNotice(
+	strip: CompactionStrip,
+	preview: ((model: Model, input: string) => string | undefined) | undefined,
+): { text: string; style: "error" | "warning" | "dim" } {
+	if (strip.error) return { text: sanitizeDisplayWarning(strip.error), style: "error" };
+	// The footer hint and the primary action already say Enter accepts; the
+	// notice stays short so it fits beside the field.
+	if (strip.confirm && compactionConfirmPending(strip)) {
+		return { text: sanitizeDisplayWarning(strip.confirm.message), style: "warning" };
+	}
+	const value = strip.input.getValue();
+	if (preview && value.trim().length > 0) {
+		// Renders repeat per frame; ask the host once per typed value.
+		if (strip.preview?.value !== value) strip.preview = { value, text: preview(strip.model, value) };
+		if (strip.preview.text) return { text: sanitizeDisplayWarning(strip.preview.text), style: "dim" };
+	}
+	return { text: COMPACTION_INPUT_HINT, style: "dim" };
+}
+
 const MODEL_KIND_TABS: ReadonlyArray<"all" | ModelKind> = ["all", ...MODEL_KINDS];
 const ROLE_TABS = ["all", "chat", "kind"] as const;
 type RoleTab = (typeof ROLE_TABS)[number];
@@ -432,12 +562,48 @@ export class ModelHubComponent implements Component {
 	#roles: RoleAssignments = {};
 	#availableItems: ModelBrowserItem[] = [];
 	#recentItems: ModelBrowserItem[] = [];
+	/** Selectors of {@link #recentItems}, rebuilt with it, for search hit counts. */
+	#recentSelectors: ReadonlySet<string> = new Set();
 	#candidateItems: ModelBrowserItem[] = [];
+	/** {@link #availableItems} when the candidates are that whole catalog (All scope, no role filter). */
+	#candidateCatalog: readonly ModelBrowserItem[] | undefined;
+	/** {@link #availableItems} when the browser's base items are that whole catalog; its query ranking then covers every count. */
+	#browserCatalog: readonly ModelBrowserItem[] | undefined;
+	/** Fuzzy index over {@link #availableItems}, for match counts while the browser holds a narrower scope. */
+	#catalogCorpus: { items: readonly ModelBrowserItem[]; corpus: FuzzyCorpus<ModelBrowserItem> } | undefined;
 	#modelKindTab: "all" | ModelKind = "all";
 	#roleTab: RoleTab = "all";
 	#configError: string | undefined;
 	#effortIndex = 0;
+	#keys = new MenuKeyReader();
+	#rolesSearch = new MenuSearchField();
+	#effortSearch = new MenuSearchField();
+	#roleViewport = new MenuViewport();
+	#effortViewport = new MenuViewport();
+	#roleLastIndex = 0;
+	#effortLastIndex = 0;
+	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
+	#scopeViewport = new MenuViewport();
+	#scopeSelection = new MenuSelection<SidebarEntry>([], {
+		getKey: entry => entry.id,
+		getSearchText: entry => entry.label,
+		isDisabled: entry => this.#isHopSkipped(entry),
+	});
+	#roleSelection = new MenuSelection<RolesRow>([], {
+		getKey: entry => rolesRowKey(entry, 0),
+		getSearchText: () => "",
+		isDisabled: entry => entry.kind === "separator",
+	});
+	#effortSelection = new MenuSelection<number>([], {
+		getKey: String,
+		getSearchText: index => this.#effortRowText(index),
+	});
+	#effortRows: number[] = [];
+	#sidebarVisibleCount = 0;
+	#effortVisibleCount = 0;
 	#effortScrollStart = 0;
+	#parentPages: ModelHubPageNavigation[] = [];
+	#parentRestored = false;
 
 	#entries: SidebarEntry[] = [];
 	// Sidebar sections from the last registry sync; #composeEntries assembles
@@ -458,15 +624,27 @@ export class ModelHubComponent implements Component {
 	 * the model list; Tab toggles; ←/→ switches between sidebar and list.
 	 */
 	#focus: "scope" | "list" = "scope";
-	/** The browser query receives literal keys only after `i`; Escape returns to navigation. */
-	#filterEditing = false;
+	get #filterEditing(): boolean {
+		if (this.#assigning === null) {
+			if (this.#activeEntry().kind === "roles") return this.#rolesSearch.focused;
+			if (this.#activeEntry().kind === "effort") return this.#effortSearch.focused;
+		}
+		return this.#browser.filterFocused;
+	}
+
+	set #filterEditing(focused: boolean) {
+		const kind = this.#assigning === null ? this.#activeEntry().kind : undefined;
+		this.#rolesSearch.focused = focused && kind === "roles";
+		this.#effortSearch.focused = focused && kind === "effort";
+		this.#browser.focusFilter(focused && kind !== "roles" && kind !== "effort");
+	}
 
 	#rolesRows: RolesRow[] = [];
 	#roleIndex = 0;
 	/** In-hub yank register: selectors and sparse effort selections are immutable snapshots. */
 	#yankedFallback: readonly { selector: string; selection?: HubEffortSelection }[] | null = null;
 	#roleHover: number | null = null;
-	/** First roles row drawn in the scroll window; follows the cursor and clamps to the list. */
+	/** First Roles row painted by the independent viewport; mouse hit-testing uses this offset. */
 	#roleScrollStart = 0;
 	/** Roles rows actually drawn this frame; bounds mouse hit-testing to the visible window. */
 	#rolesVisibleCount = 0;
@@ -474,6 +652,12 @@ export class ModelHubComponent implements Component {
 	#assigning: AssignTarget | null = null;
 	#strip: StripState | null = null;
 	#assignmentPending = false;
+	/**
+	 * Last preset ctrl+←/→ tried in this hub, with the settings revision after the
+	 * attempt; steps from it while nothing matches the setup or nothing changed since.
+	 */
+	#presetCursor: { name: string; revision: number } | undefined;
+	#presetsMemo: { revision: number; names: readonly string[]; active: string | undefined } | undefined;
 	#disposed = false;
 	/** Per-provider fuzzy match counts while a query is active; null when not searching. */
 	#searchCounts: Map<string, number> | null = null;
@@ -522,6 +706,7 @@ export class ModelHubComponent implements Component {
 		{ min: 18, max: 26 },
 		(width, rows) => this.#renderSidebar(width, rows),
 		this.#renderBodyPane,
+		{ bodyMinWidth: MODEL_HUB_BODY_MIN_WIDTH, preserveSidebar: true },
 	);
 	#pinnedActionLine: number | null = null;
 	#pinnedActionFocused = false;
@@ -543,6 +728,7 @@ export class ModelHubComponent implements Component {
 				row: RolesRow | undefined;
 				roles: RoleAssignments;
 				rows: readonly RolesRow[];
+				revision: number;
 				children: readonly NativeChild[];
 		  }
 		| undefined;
@@ -570,7 +756,7 @@ export class ModelHubComponent implements Component {
 			this.#filterEditing = false;
 			this.#activateItem(item);
 		};
-		this.#browser.onCancel = () => this.#callbacks.onCancel();
+		this.#browser.onCancel = () => this.#cancel();
 		this.#browser.onQueryChange = query => this.#onQueryChanged(query);
 
 		// Hydrate synchronously from the current registry snapshot so the first
@@ -605,6 +791,176 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
+	#copyStrip(strip: StripState | null): StripState | null {
+		if (!strip) return null;
+		if (strip.kind === "name" || strip.kind === "pattern") {
+			const input = new Input();
+			input.setValue(strip.input.getValue());
+			input.setCursor(strip.input.getCursor());
+			input.focused = strip.input.focused;
+			return { ...strip, input };
+		}
+		if (strip.kind === "effortLevels")
+			return {
+				...strip,
+				baseSelection: structuredClone(strip.baseSelection),
+				fallbackTarget: strip.fallbackTarget ? { ...strip.fallbackTarget } : undefined,
+				toggle: new EffortToggle([...strip.toggle.options], [...strip.toggle.selected]),
+			};
+		const snapshot = { ...strip, chips: strip.chips.map(chip => ({ ...chip })) };
+		if ("initialSelection" in snapshot) snapshot.initialSelection = structuredClone(snapshot.initialSelection);
+		if ("fallbackTarget" in snapshot && snapshot.fallbackTarget)
+			snapshot.fallbackTarget = { ...snapshot.fallbackTarget };
+		if ("target" in snapshot) snapshot.target = { ...snapshot.target };
+		return snapshot;
+	}
+
+	#copyNavigationPage(state: ModelHubPageNavigation): ModelHubPageNavigation {
+		return {
+			...state,
+			browser: { ...state.browser, top: state.browser.top ? { ...state.browser.top } : undefined },
+			roleTop: state.roleTop ? { ...state.roleTop } : undefined,
+			effortTop: state.effortTop ? { ...state.effortTop } : undefined,
+			assigning: state.assigning ? { ...state.assigning } : null,
+			strip: this.#copyStrip(state.strip),
+			yankedFallback: structuredClone(state.yankedFallback),
+			presetCursor: state.presetCursor ? { ...state.presetCursor } : undefined,
+		};
+	}
+
+	navigationSnapshot(): ModelHubNavigation {
+		const row = this.#rolesRows[this.#roleIndex];
+		return {
+			entry: this.#activeEntryId,
+			focus: this.#focus,
+			modelKind: this.#modelKindTab,
+			roleTab: this.#roleTab,
+			filterFocused: this.#filterEditing,
+			rolesQuery: this.#rolesSearch.value,
+			rolesCursor: this.#rolesSearch.cursor,
+			effortQuery: this.#effortSearch.value,
+			effortCursor: this.#effortSearch.cursor,
+			roleKey: row ? rolesRowKey(row, this.#roleIndex) : undefined,
+			roleTop: this.#roleViewport.top ? { ...this.#roleViewport.top } : undefined,
+			effortIndex: this.#effortIndex,
+			effortKey: this.#effortIndex < 0 ? undefined : this.#effortRowKey(this.#effortIndex),
+			effortTop: this.#effortViewport.top ? { ...this.#effortViewport.top } : undefined,
+			sidebarTop: this.#frame.sidebarScroll,
+			browser: this.#browser.navigationSnapshot(),
+			assigning: this.#assigning ? { ...this.#assigning } : null,
+			strip: this.#copyStrip(this.#strip),
+			yankedFallback: structuredClone(this.#yankedFallback),
+			pinnedActionFocused: this.#pinnedActionFocused,
+			configError: this.#configError,
+			presetCursor: this.#presetCursor ? { ...this.#presetCursor } : undefined,
+			parents: this.#parentPages.map(state => this.#copyNavigationPage(state)),
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as Partial<ModelHubNavigation>;
+		if (typeof state.entry !== "string" || !state.browser) return;
+		this.#modelKindTab = MODEL_KIND_TABS.includes(state.modelKind ?? "all") ? (state.modelKind ?? "all") : "all";
+		this.#roleTab = state.roleTab && ROLE_TABS.includes(state.roleTab) ? state.roleTab : "all";
+		this.#assigning = state.assigning ? { ...state.assigning } : null;
+		this.#rolesSearch.restoreNavigation({ value: state.rolesQuery ?? "", cursor: state.rolesCursor, focused: false });
+		this.#effortSearch.restoreNavigation({
+			value: state.effortQuery ?? "",
+			cursor: state.effortCursor,
+			focused: false,
+		});
+		this.#buildRolesRows();
+		this.#setActiveEntry(state.entry);
+		this.#browser.restoreNavigation(state.browser);
+		this.#roleIndex = Math.max(
+			0,
+			this.#rolesRows.findIndex((row, index) => rolesRowKey(row, index) === state.roleKey),
+		);
+		this.#roleLastIndex = this.#roleIndex;
+		this.#roleViewport.setTop(state.roleTop);
+		const rules = this.#settings.effortRules;
+		const effortIndex =
+			state.effortKey === "newExact"
+				? rules.length
+				: state.effortKey === "newPattern"
+					? rules.length + 1
+					: state.effortKey?.startsWith("rule:")
+						? rules.findIndex(rule => `rule:${rule.selector}` === state.effortKey)
+						: -1;
+		this.#effortIndex =
+			effortIndex >= 0 ? effortIndex : Math.max(-1, Math.min(state.effortIndex ?? 0, rules.length + 1));
+		this.#syncEffortSelection();
+		this.#effortLastIndex = this.#effortIndex;
+		this.#effortViewport.setTop(state.effortTop);
+		this.#frame.sidebarScroll = Math.max(0, state.sidebarTop ?? 0);
+		this.#sidebarFollowActive = false;
+		this.#focus = state.focus === "list" ? "list" : "scope";
+		this.#filterEditing = state.filterFocused === true;
+		this.#strip = this.#copyStrip(state.strip ?? null);
+		this.#yankedFallback = structuredClone(state.yankedFallback ?? null);
+		this.#pinnedActionFocused = state.pinnedActionFocused === true;
+		this.#configError = state.configError;
+		this.#presetCursor = state.presetCursor ? { ...state.presetCursor } : undefined;
+		this.#parentPages = Array.isArray(state.parents)
+			? state.parents.map(parent => this.#copyNavigationPage(parent))
+			: [];
+		this.#keys.reset();
+		this.#requestRender();
+	}
+
+	#navigationPage(): string {
+		const strip = this.#strip;
+		if (strip) {
+			const target = "fallbackTarget" in strip ? strip.fallbackTarget : "target" in strip ? strip.target : undefined;
+			const owner =
+				typeof target === "object" && target && "role" in target
+					? target.role
+					: "role" in strip
+						? (strip.role ?? "")
+						: "";
+			const slot =
+				typeof target === "object" && target && "index" in target
+					? (target.index ?? "new")
+					: "ruleIndex" in strip
+						? (strip.ruleIndex ?? "")
+						: "";
+			const purpose = "purpose" in strip ? strip.purpose : "";
+			return `${this.#activeEntryId}/${strip.kind}/${owner}/${slot}/${purpose}`;
+		}
+		const assigning = this.#assigning;
+		if (assigning)
+			return `assign/${assigning.kind}/${"role" in assigning ? assigning.role : ""}/${"index" in assigning ? (assigning.index ?? "new") : ""}`;
+		return "";
+	}
+
+	#withNavigationVisit(action: () => void): void {
+		const page = this.#navigationPage();
+		const previous = this.navigationSnapshot();
+		this.#parentRestored = false;
+		action();
+		const next = this.#navigationPage();
+		if (next !== page) {
+			if (!this.#parentRestored) {
+				if (next === "") this.#parentPages = [];
+				else {
+					const { parents: _parents, ...parent } = previous;
+					this.#parentPages.push(parent);
+				}
+			}
+			this.onNavigationVisit?.(next, previous);
+		}
+		this.#parentRestored = false;
+	}
+
+	#returnToParent(): boolean {
+		const parent = this.#parentPages.pop();
+		if (!parent) return false;
+		this.restoreNavigation({ ...parent, parents: this.#parentPages });
+		this.#parentRestored = true;
+		return true;
+	}
+
 	/** Cancel pending provider refresh timers and the spinner. Host calls this on overlay close. */
 	dispose(): void {
 		this.#disposed = true;
@@ -637,22 +993,6 @@ export class ModelHubComponent implements Component {
 		return this.#settings.knownRoleIds.filter(role => !this.#settings.getRoleInfo(role).hidden);
 	}
 
-	/**
-	 * Models a `--models`/`enabledModels` scope exposes. The scope only resolves
-	 * chat models (it feeds Ctrl+P cycling), so available non-chat runners
-	 * (judge, search, image, …) join from the registry — runtime role
-	 * resolution ignores the scope for them as well.
-	 */
-	#scopedPool(): Model[] {
-		const pool = this.#scopedModels.map(scoped => scoped.model);
-		for (const model of this.#registry.getAvailable("all")) {
-			if (modelKind(model) === "chat") continue;
-			if (this.#scopedModels.some(scoped => modelsAreEqual(scoped.model, model))) continue;
-			pool.push(model);
-		}
-		return pool;
-	}
-
 	/** Resolve every known role: configured values first, auto-selection for the rest. */
 	#reloadRoles(autoCandidates: ReadonlyArray<Model>): void {
 		const allModels = this.#scopedModels.length > 0 ? autoCandidates : this.#registry.getAll("all");
@@ -671,7 +1011,10 @@ export class ModelHubComponent implements Component {
 		if (this.#scopedModels.length > 0) {
 			this.#configError = undefined;
 			try {
-				allModels = this.#scopedPool();
+				allModels = scopedRolePool(
+					this.#scopedModels.map(scoped => scoped.model),
+					this.#registry,
+				);
 			} catch (error) {
 				this.#configError = error instanceof Error ? error.message : String(error);
 				allModels = this.#scopedModels.map(scoped => scoped.model);
@@ -706,6 +1049,7 @@ export class ModelHubComponent implements Component {
 			if (item) this.#recentItems.push(item);
 			if (this.#recentItems.length >= RECENT_LIMIT) break;
 		}
+		this.#recentSelectors = new Set(this.#recentItems.map(item => item.selector));
 
 		this.#buildSidebar(allModels, availableModels);
 		this.#restoreSidebarAnchor(anchor);
@@ -828,17 +1172,17 @@ export class ModelHubComponent implements Component {
 			});
 		}
 
-		const entries: SidebarEntry[] = [...this.#fixedEntries];
+		const entries: SidebarEntry[] = [
+			...this.#fixedEntries,
+			{ id: "sep:effort", kind: "separator", label: "" },
+			{ id: "effort", kind: "effort", label: "Effort rules", annotation: String(this.#settings.effortRules.length) },
+		];
 		if (providers.length > 0) {
 			entries.push({ id: "sep:providers", kind: "separator", label: "" }, ...providers);
 		}
 		if (this.#lockedProviderEntries.length > 0) {
 			entries.push({ id: "sep:locked", kind: "separator", label: "" }, ...this.#lockedProviderEntries);
 		}
-		entries.push(
-			{ id: "sep:effort", kind: "separator", label: "" },
-			{ id: "effort", kind: "effort", label: "Effort rules", annotation: String(this.#settings.effortRules.length) },
-		);
 
 		this.#entries = entries;
 		if (!entries.some(entry => entry.id === this.#activeEntryId)) {
@@ -941,13 +1285,27 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
+	/**
+	 * Push the active scope's items into the browser. While assigning a role,
+	 * the role's `accepts` predicate is re-applied here so a scope hop
+	 * (provider/all/recent) can never surface a model the role rejects — role
+	 * resolution and the runtime candidate pool filter the same way, so an
+	 * unaccepted pick would persist a selector that never resolves.
+	 */
 	#setCandidateItems(items: ReadonlyArray<ModelBrowserItem>): void {
-		this.#candidateItems = [...items];
+		const assigning = this.#assigning;
+		const scoped =
+			assigning?.kind === "role"
+				? items.filter(item => this.#settings.getRoleInfo(assigning.role).accepts(item.model))
+				: items;
+		this.#candidateItems = [...scoped];
+		this.#candidateCatalog = scoped === this.#availableItems ? this.#availableItems : undefined;
 		this.#applyModelKind();
 	}
 
 	#applyModelKind(): void {
 		const kind = this.#modelKindTab;
+		this.#browserCatalog = kind === "all" ? this.#candidateCatalog : undefined;
 		this.#browser.setItems(
 			kind === "all"
 				? [...this.#candidateItems]
@@ -984,8 +1342,24 @@ export class ModelHubComponent implements Component {
 	#buildRolesRows(): void {
 		const rows: RolesRow[] = [];
 		const chains = this.#fallbackChains();
+		const query = this.#rolesSearch.value.trim().toLowerCase();
+		const matches = (role: string): boolean => {
+			if (!query) return true;
+			const info = this.#settings.getRoleInfo(role);
+			const assignment = this.#roles[role];
+			return [
+				role,
+				info.name,
+				info.tag,
+				assignment?.model.id,
+				assignment?.model.provider,
+				this.#settings.getModelRole(role),
+				...(chains[role] ?? []),
+			].some(value => value?.toLowerCase().includes(query));
+		};
 		const appendRoles = (roles: ReadonlyArray<string>): void => {
 			for (const role of roles) {
+				if (!matches(role)) continue;
 				rows.push({ kind: "role", role });
 				const chain = chains[role] ?? [];
 				for (let i = 0; i < chain.length; i++) {
@@ -1003,20 +1377,27 @@ export class ModelHubComponent implements Component {
 		} else {
 			appendRoles(visibleRoles.filter(role => this.#settings.getRoleInfo(role).section === this.#roleTab));
 		}
-		rows.push({ kind: "newRole" });
+		if (!query) rows.push({ kind: "newRole" });
 		rows.push({ kind: "separator" });
 		const modelKeys = Object.keys(chains)
 			.filter(key => key.includes("/"))
 			.sort();
 		for (const key of modelKeys) {
+			if (query && ![key, ...(chains[key] ?? [])].some(value => value.toLowerCase().includes(query))) continue;
 			const chain = chains[key] ?? [];
 			rows.push({ kind: "chainKey", role: key });
 			for (let i = 0; i < chain.length; i++) {
 				rows.push({ kind: "fallback", role: key, chainIndex: i, selector: chain[i] });
 			}
 		}
-		rows.push({ kind: "newFallback" });
-		this.#rolesRows = rows;
+		if (!query) rows.push({ kind: "newFallback" });
+		this.#rolesRows = rows.filter(
+			(row, index) =>
+				row.kind !== "separator" || (index > 0 && index < rows.length - 1 && rows[index - 1]?.kind !== "separator"),
+		);
+		this.#roleIndex = Math.max(0, Math.min(this.#roleIndex, this.#rolesRows.length - 1));
+		if (this.#rolesRows[this.#roleIndex]?.kind === "separator")
+			this.#roleIndex = this.#stepRoleIndex(this.#roleIndex, 1, { wrap: false });
 	}
 
 	/**
@@ -1056,16 +1437,14 @@ export class ModelHubComponent implements Component {
 			this.#composeEntries();
 			return;
 		}
-		const matches = fuzzyFilter(this.#availableItems, query, modelSearchText);
+		const matches = this.#catalogMatches(query);
 		const counts = new Map<string, number>();
+		let recentCount = 0;
 		for (const item of matches) {
 			counts.set(item.provider, (counts.get(item.provider) ?? 0) + 1);
+			if (this.#recentSelectors.has(item.selector)) recentCount++;
 		}
-		const recentSelectors = new Set(this.#recentItems.map(item => item.selector));
-		this.#recentSearchCount = matches.reduce(
-			(total, item) => total + (recentSelectors.has(item.selector) ? 1 : 0),
-			0,
-		);
+		this.#recentSearchCount = recentCount;
 		this.#searchTotal = matches.length;
 		this.#searchCounts = counts;
 		this.#composeEntries();
@@ -1082,14 +1461,30 @@ export class ModelHubComponent implements Component {
 	}
 
 	/**
-	 * Entries the scope hop skips: separators always; while searching, also
-	 * the Roles view (not a model scope), an empty Recent, locked providers,
-	 * and providers without matches.
+	 * Catalog items matching a non-blank `query`. When the browser holds the
+	 * whole catalog its ranking for this query already ran, so reuse it;
+	 * otherwise scan a catalog index kept across keystrokes.
+	 */
+	#catalogMatches(query: string): readonly ModelBrowserItem[] {
+		if (this.#browserCatalog === this.#availableItems && this.#browser.query === query) {
+			const ranked = this.#browser.queryMatches;
+			if (ranked) return ranked;
+		}
+		let cached = this.#catalogCorpus;
+		if (cached?.items !== this.#availableItems) {
+			cached = { items: this.#availableItems, corpus: new FuzzyCorpus(this.#availableItems, modelSearchText) };
+			this.#catalogCorpus = cached;
+		}
+		return cached.corpus.rank(query).map(result => result.item);
+	}
+
+	/**
+	 * Scope hops skip separators; only All models filters provider hops by query.
+	 * Other sections show full provider counts and must not inherit hidden filtering.
 	 */
 	#isHopSkipped(entry: SidebarEntry): boolean {
 		if (entry.kind === "separator") return true;
-		if (!this.#searchCounts) return false;
-		if (entry.kind === "roles" || entry.kind === "effort") return true;
+		if (!this.#searchCounts || this.#activeEntry().kind !== "all") return false;
 		if (entry.kind === "recent") return this.#recentSearchCount === 0;
 		if (entry.kind === "provider") {
 			if (entry.locked) return true;
@@ -1279,7 +1674,13 @@ export class ModelHubComponent implements Component {
 	#roleForScope(role: string, scope: ModelRoleSelectionScope): ResolvedModelRoleValue {
 		const roleValue =
 			scope === "project" ? this.#settings.getProjectModelRole(role) : this.#settings.getGlobalModelRole(role);
-		const allModels = this.#scopedModels.length > 0 ? this.#scopedPool() : this.#registry.getAll("all");
+		const allModels =
+			this.#scopedModels.length > 0
+				? scopedRolePool(
+						this.#scopedModels.map(scoped => scoped.model),
+						this.#registry,
+					)
+				: this.#registry.getAll("all");
 		const roleLookup: ModelRoleLookup = {
 			getModelRole: scopedRole =>
 				scope === "project"
@@ -1305,7 +1706,7 @@ export class ModelHubComponent implements Component {
 			applied => {
 				this.#assignmentPending = false;
 				if (this.#disposed) return;
-				if (applied !== false) onSuccess();
+				if (applied !== false) this.#withNavigationVisit(onSuccess);
 				else this.#requestRender();
 			},
 			() => {
@@ -1353,6 +1754,7 @@ export class ModelHubComponent implements Component {
 	 */
 	#thinkingOptionsFor(model: Model, role?: string): ConfiguredThinkingLevel[] {
 		if (!model.reasoning) return [];
+		if (model.thinking?.unverified) return [ThinkingLevel.Inherit, ThinkingLevel.Off, ...getSupportedEfforts(model)];
 		return [
 			ThinkingLevel.Inherit,
 			ThinkingLevel.Off,
@@ -1395,7 +1797,7 @@ export class ModelHubComponent implements Component {
 	#openRoleStrip(item: ModelBrowserItem): void {
 		const chips: StripChip[] = [];
 		const scopedStorage = this.#settings.modelRoleStorage === "project";
-		const scopes: readonly ModelRoleSelectionScope[] = scopedStorage ? ["project", "global"] : ["global"];
+		const scopes: readonly ModelRoleSelectionScope[] = scopedStorage ? ["global", "project"] : ["global"];
 		for (const role of this.#visibleRoleIds()) {
 			const info = this.#settings.getRoleInfo(role);
 			if (!info.accepts(item.model)) continue;
@@ -1444,8 +1846,8 @@ export class ModelHubComponent implements Component {
 
 	#openScopeStrip(item: ModelBrowserItem, role: string, returnToRoles: boolean): void {
 		const chips: StripChip[] = [
-			{ label: "project", styled: theme.fg("accent", "project"), action: "scope", scope: "project" },
-			{ label: "global", styled: theme.fg("muted", "global"), action: "scope", scope: "global" },
+			{ label: "global", styled: theme.fg("accent", "global"), action: "scope", scope: "global" },
+			{ label: "project", styled: theme.fg("muted", "project"), action: "scope", scope: "project" },
 		];
 		this.#strip = { kind: "scope", item, role, chips, index: 0, returnToRoles };
 	}
@@ -1513,6 +1915,7 @@ export class ModelHubComponent implements Component {
 		role?: string,
 	): void {
 		const input = new Input();
+		input.focused = true;
 		if (fallbackTarget?.index !== null && fallbackTarget?.index !== undefined) {
 			const previous = this.#fallbackChains()[fallbackTarget.role]?.[fallbackTarget.index];
 			if (previous) input.setValue(previous);
@@ -1607,10 +2010,11 @@ export class ModelHubComponent implements Component {
 				this.#focus = "list";
 			return;
 		}
+		this.#syncEffortSelection();
 		const count = this.#settings.effortRules.length;
-		if (matchesSelectUp(data)) this.#effortIndex = (this.#effortIndex + count + 1) % (count + 2);
-		else if (matchesSelectDown(data)) this.#effortIndex = (this.#effortIndex + 1) % (count + 2);
-		else if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+		if (this.#effortIndex < 0) return;
+		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+			this.#filterEditing = false;
 			if (this.#effortIndex === count) {
 				this.#assigning = { kind: "effortRule" };
 				this.#browser.setQuery("");
@@ -1650,28 +2054,60 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
-	#renderEffortRules(width: number, rows: number): string[] {
+	#effortRowKey(index: number): string {
+		const rule = this.#settings.effortRules[index];
+		return rule ? `rule:${rule.selector}` : index === this.#settings.effortRules.length ? "newExact" : "newPattern";
+	}
+
+	#effortRowText(index: number): string {
 		const rules = this.#settings.effortRules;
-		const labels = [
-			...rules.map((rule, i) => {
-				const kind = selectorKind(rule.selector);
-				const prefix = kind === "exact" ? "exact" : `${i + 1}. ${kind}`;
-				return `${prefix}  ${rule.selector}  [${rule.allowed.join(", ")}]`;
-			}),
-			"+ Pick exact model…",
-			"+ Enter glob or re: regex…",
+		const rule = rules[index];
+		if (!rule) return index === rules.length ? "+ Pick exact model…" : "+ Enter glob or re: regex…";
+		const kind = selectorKind(rule.selector);
+		const prefix = kind === "exact" ? "exact" : `${index + 1}. ${kind}`;
+		return `${prefix}  ${rule.selector}  [${rule.allowed.join(", ")}]`;
+	}
+
+	#syncEffortSelection(): readonly number[] {
+		const count = this.#settings.effortRules.length + 2;
+		if (this.#effortRows.length !== count) this.#effortRows = Array.from({ length: count }, (_, index) => index);
+		this.#effortSelection.setItems(this.#effortRows, String(this.#effortIndex));
+		this.#effortSelection.setQuery(this.#effortSearch.value);
+		if (this.#effortIndex >= 0) this.#effortSelection.setSelectedKey(String(this.#effortIndex));
+		this.#effortIndex = this.#effortSelection.selectedItem ?? -1;
+		return this.#effortSelection.visibleItems;
+	}
+
+	#renderEffortRules(width: number, rows: number): string[] {
+		const indices = this.#syncEffortSelection();
+		const window = Math.max(1, rows - 3);
+		this.#effortVisibleCount = window;
+		if (this.#effortIndex !== this.#effortLastIndex) this.#effortViewport.reveal();
+		this.#effortLastIndex = this.#effortIndex;
+		const view = this.#effortViewport.layout(
+			indices.map(() => 1),
+			this.#effortSelection.selectedIndex,
+			window,
+		);
+		this.#effortScrollStart = view.startIndex;
+		const lines = [
+			theme.fg("muted", " Exact rules win, then regex, then glob — each in listed order"),
+			this.#effortSearch.render(width, { muted: value => theme.fg("muted", value) }),
 		];
-		const window = Math.max(1, rows - 2);
-		const start = Math.max(0, Math.min(this.#effortIndex - window + 1, labels.length - window));
-		this.#effortScrollStart = start;
-		const lines = [theme.fg("muted", " Exact rules win, then regex, then glob — each in listed order")];
-		for (let index = start; index < Math.min(labels.length, start + window); index++) {
+		if (indices.length === 0) lines.push(theme.fg("muted", " No matching effort rules"));
+		const body: string[] = [];
+		for (let row = view.startIndex; row < view.endIndex; row++) {
+			const index = indices[row];
 			const selected = this.#effortIndex === index;
 			const cursor = selected && this.#focus === "list" ? theme.fg("accent", theme.nav.cursor) : " ";
-			lines.push(
-				truncateToWidth(` ${cursor} ${selected ? theme.fg("accent", labels[index]) : labels[index]}`, width),
-			);
+			const label = this.#effortRowText(index);
+			body.push(truncateToWidth(` ${cursor} ${selected ? theme.fg("accent", label) : label}`, width));
 		}
+		lines.push(
+			...(view.lineOffset === 0 && body.length <= window
+				? body
+				: body.slice(view.lineOffset, view.lineOffset + window)),
+		);
 		return lines;
 	}
 
@@ -2037,14 +2473,15 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
-	/** Switch the body into assign mode for `role`: full catalog, cleared query, current model preselected. */
+	/**
+	 * Switch the body into assign mode for `role`: full catalog, cleared query, current model preselected.
+	 * Arrows land on the model rows (the next step of the flow); ← still reaches the provider scopes.
+	 */
 	#startAssign(role: string): void {
 		this.#assigning = { kind: "role", role };
-		this.#focus = "scope";
+		this.#focus = "list";
 		this.#browser.setShowProvider(true);
-		this.#setCandidateItems(
-			this.#availableItems.filter(item => this.#settings.getRoleInfo(role).accepts(item.model)),
-		);
+		this.#setCandidateItems(this.#availableItems);
 		this.#browser.setQuery("");
 		const current = this.#roles[role];
 		if (current) {
@@ -2055,7 +2492,7 @@ export class ModelHubComponent implements Component {
 	/** Browse the catalog to fill a fallback-chain slot: `index` replaces an entry, `null` appends. */
 	#startAssignFallback(role: string, index: number | null): void {
 		this.#assigning = { kind: "fallback", role, index };
-		this.#focus = "scope";
+		this.#focus = "list";
 		this.#browser.setShowProvider(true);
 		this.#setCandidateItems(this.#availableItems);
 		this.#browser.setQuery("");
@@ -2073,7 +2510,7 @@ export class ModelHubComponent implements Component {
 	/** Browse the catalog for the primary model a brand-new fallback chain protects. */
 	#startAssignFallbackKey(): void {
 		this.#assigning = { kind: "fallbackKey" };
-		this.#focus = "scope";
+		this.#focus = "list";
 		this.#browser.setShowProvider(true);
 		this.#setCandidateItems(this.#availableItems);
 		this.#browser.setQuery("");
@@ -2132,7 +2569,7 @@ export class ModelHubComponent implements Component {
 		for (const { selector, selection } of this.#yankedFallback) {
 			if (chain.includes(selector)) continue;
 			chain.push(selector);
-			if (selection) copiedSelections[selector] = selection;
+			if (selection) copiedSelections[selector] = structuredClone(selection);
 		}
 		if (chain.length !== existing.length) this.#setFallbackChain(role, chain, copiedSelections);
 	}
@@ -2202,13 +2639,52 @@ export class ModelHubComponent implements Component {
 
 	/** Open the footer name input: a new custom role, or saving the current setup as a model preset. */
 	#openNameStrip(purpose: "role" | "preset"): void {
-		this.#strip = { kind: "name", purpose, input: new Input() };
+		const input = new Input();
+		input.focused = true;
+		this.#strip = { kind: "name", purpose, input };
 	}
 
-	/** Validate and commit the name strip: a new role jumps into assigning it, a preset name saves it. */
+	/** The model a Roles row resolves to (assigned role or fallback), whose compaction point `m` edits. */
+	#roleRowModel(): Model | undefined {
+		const row = this.#rolesRows[this.#roleIndex];
+		if (row?.kind === "role") return this.#roles[row.role]?.model;
+		if (row?.kind === "fallback") return this.#resolveFallbackEntry(row.role, row.chainIndex)?.item.model;
+		return undefined;
+	}
+
+	/** Open the footer input for the Roles row's model compaction point, prefilled with its own entry. */
+	#openCompactionStrip(): void {
+		if (!this.#callbacks.onCompactionPointChange) return;
+		const model = this.#roleRowModel();
+		if (!model) return;
+		const input = new Input();
+		input.focused = true;
+		input.setValue(this.#settings.compactionPointFor?.(model)?.draft ?? "");
+		this.#strip = { kind: "name", purpose: "compaction", model, input };
+	}
+
+	/** Validate and commit the name strip: a new role, a preset name, or a compaction point. */
 	#submitNameStrip(): void {
 		const strip = this.#strip;
 		if (strip?.kind !== "name") return;
+		if (strip.purpose === "compaction") {
+			const value = strip.input.getValue();
+			const result = this.#callbacks.onCompactionPointChange?.(strip.model, value, compactionConfirmPending(strip));
+			if (result?.kind === "error") {
+				strip.error = result.message;
+				strip.confirm = undefined;
+				return;
+			}
+			if (result?.kind === "confirm") {
+				strip.error = undefined;
+				strip.confirm = { value, message: result.message };
+				return;
+			}
+			this.#strip = null;
+			this.#frame.chipRanges = [];
+			this.#refreshAfterMutation();
+			return;
+		}
 		if (strip.purpose === "preset") {
 			this.#submitPresetName();
 			return;
@@ -2256,18 +2732,83 @@ export class ModelHubComponent implements Component {
 		const next = (Math.max(0, current) + delta + ROLE_TABS.length) % ROLE_TABS.length;
 		this.#roleTab = ROLE_TABS[next] ?? "all";
 		this.#roleIndex = 0;
-		this.#roleScrollStart = 0;
+		this.#roleViewport.setTop(0);
 		this.#buildRolesRows();
 	}
 
+	/** Saved presets and the one the setup matches; empty unless the host can both list and switch. */
+	#presets(): { names: readonly string[]; active: string | undefined } {
+		if (!this.#callbacks.onSwitchPreset || !this.#settings.getModelPresets) return { names: [], active: undefined };
+		const revision = this.#settings.revision;
+		if (this.#presetsMemo?.revision !== revision) {
+			const { names, active } = this.#settings.getModelPresets();
+			this.#presetsMemo = { revision, names, active };
+		}
+		return this.#presetsMemo;
+	}
+
+	/**
+	 * The preset ctrl+←/→ steps from: the last one tried here while settings are
+	 * unchanged since (a refused switch writes nothing, so the next press moves
+	 * past it) or nothing matches; otherwise the preset the setup matches.
+	 */
+	#presetBase(active: string | undefined): string | undefined {
+		const cursor = this.#presetCursor;
+		if (cursor && (active === undefined || cursor.revision === this.#settings.revision)) return cursor.name;
+		return active;
+	}
+
+	/** Apply the previous/next saved preset (wrapping), as `/modelpreset switch` does. */
+	#switchPreset(delta: -1 | 1): void {
+		const onSwitchPreset = this.#callbacks.onSwitchPreset;
+		const { names, active } = this.#presets();
+		if (!onSwitchPreset || names.length === 0) return;
+		const base = this.#presetBase(active);
+		const current = base === undefined ? -1 : names.indexOf(base);
+		const next = current < 0 ? (delta > 0 ? 0 : names.length - 1) : (current + delta + names.length) % names.length;
+		const name = names[next];
+		if (name === undefined) return;
+		const settle = () => {
+			this.#presetCursor = { name, revision: this.#settings.revision };
+			this.#refreshAfterMutation();
+		};
+		// Stepping onto the preset already in effect has nothing to apply.
+		if (name === active) {
+			settle();
+			return;
+		}
+		// The host reports refusals itself, so the cursor moves once the switch
+		// resolves, refused or not (`#presetBase` sees a refusal left the revision alone).
+		this.#finishAssignment(onSwitchPreset(name), settle);
+	}
+
 	handleInput(rawData: string): void {
+		if (rawData.startsWith("\x1b[<")) {
+			this.#nativeVersion++;
+			routeSgrMouseInput(rawData, event => {
+				if (!event.leftClick) return this.#routeMouseEvent(event);
+				let handled: boolean | undefined;
+				this.#withNavigationVisit(() => {
+					handled = this.#routeMouseEvent(event);
+				});
+				return handled;
+			});
+			return;
+		}
+		const strip = this.#strip;
+		const fieldFocused =
+			this.#filterEditing || ((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused);
+		if (fieldFocused && extractPrintableText(rawData) !== undefined) {
+			this.#handleInput(rawData);
+			return;
+		}
+		this.#withNavigationVisit(() => this.#handleInput(rawData));
+	}
+
+	#handleInput(rawData: string): void {
 		this.#nativeVersion++;
 		if (this.#assignmentPending) {
 			if (matchesSelectCancel(rawData)) this.#callbacks.onCancel();
-			return;
-		}
-		if (rawData.startsWith("\x1b[<")) {
-			routeSgrMouseInput(rawData, event => this.#routeMouseEvent(event));
 			return;
 		}
 
@@ -2275,24 +2816,35 @@ export class ModelHubComponent implements Component {
 			this.#handleStripInput(rawData);
 			return;
 		}
+		const rolesSearching = this.#activeEntry().kind === "roles" && this.#assigning === null;
+		const effortSearching = this.#activeEntry().kind === "effort" && this.#assigning === null;
 		if (this.#filterEditing) {
-			if (matchesSelectCancel(rawData)) {
-				this.#filterEditing = false;
+			// Shared field ownership keeps literal text and editing keys out of navigation.
+			if (!rolesSearching && !effortSearching) {
+				this.#browser.handleInput(rawData);
+				if (!this.#browser.filterFocused) this.#keys.reset();
 				return;
 			}
-			this.#browser.handleInput(rawData);
-			this.#focus = "list";
-			return;
+			const search = rolesSearching ? this.#rolesSearch : this.#effortSearch;
+			const before = search.value;
+			const result = search.handleInput(rawData);
+			if (before !== search.value) {
+				if (rolesSearching) {
+					this.#roleIndex = 0;
+					this.#roleViewport.setTop(0);
+					this.#buildRolesRows();
+				} else {
+					this.#effortIndex = -1;
+					this.#effortViewport.setTop(0);
+					this.#syncEffortSelection();
+				}
+			}
+			if (result !== "pass" || extractPrintableText(rawData) !== undefined) return;
 		}
-		if (matchesKey(rawData, "i")) {
-			this.#filterEditing = true;
-			this.#focus = "list";
-			if (!this.#isBrowserView(this.#activeEntry())) this.#setActiveEntry("all");
-			return;
-		}
-		const data = pickerNavigationKey(rawData);
-
-		if (matchesSelectCancel(data)) {
+		const data = rawData;
+		const action = this.#keys.read(data);
+		if (action === "pending") return;
+		if (action?.kind === "cancel") {
 			this.#cancel();
 			return;
 		}
@@ -2302,7 +2854,16 @@ export class ModelHubComponent implements Component {
 		const effortView = entry.kind === "effort" && this.#assigning === null;
 		const lockedView = entry.kind === "provider" && entry.locked && this.#assigning === null;
 
-		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
+		if (action?.kind === "search") {
+			if (rolesView || effortView || this.#isBrowserView(entry)) {
+				this.#filterEditing = true;
+				this.#focus = "list";
+				this.#keys.reset();
+				if (!rolesView && !effortView) this.#browser.focusFilter();
+			}
+			return;
+		}
+		if (action?.kind === "context") {
 			this.#focus = this.#focus === "scope" ? "list" : "scope";
 			return;
 		}
@@ -2314,6 +2875,11 @@ export class ModelHubComponent implements Component {
 			) {
 				this.#scheduleProviderRefresh(entry.providerId ?? "", { force: true });
 			}
+			return;
+		}
+		// Ctrl+←/→ in the Roles view steps through saved model presets, wrapping.
+		if (rolesView && (matchesKey(data, "ctrl+left") || matchesKey(data, "ctrl+right"))) {
+			this.#switchPreset(matchesKey(data, "ctrl+left") ? -1 : 1);
 			return;
 		}
 		// Alt+←/→ cycles whichever tab strip is on screen: role tabs in the
@@ -2332,38 +2898,27 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 
-		// ←/→ are spatial pane switches: the sidebar sits left of the rows.
-		// They never reach the search caret — fuzzy queries don't need one.
-		if (matchesKey(data, "left")) {
-			this.#focus = "scope";
+		if (action?.kind === "horizontal") {
+			if (action.delta < 0) this.#focus = "scope";
+			else if (rolesView || effortView || this.#isBrowserView(entry)) this.#focus = "list";
 			return;
 		}
-		if (matchesKey(data, "right")) {
-			// Only views with rows can take list focus (not the locked pane).
-			if (rolesView || effortView || this.#isBrowserView(entry)) {
-				this.#focus = "list";
-			}
-			return;
-		}
-
-		// Arrow ownership: scope mode hops the sidebar; list mode navigates rows.
-		if (this.#focus === "scope") {
-			if (matchesSelectUp(data)) {
-				this.#moveSidebar(-1);
-				return;
-			}
-			if (matchesSelectDown(data)) {
-				this.#moveSidebar(1);
-				return;
-			}
-		}
+		if (action && (this.#focus === "scope" || rolesView || effortView) && this.#applyPanelMotion(action)) return;
 
 		if (rolesView) {
+			if (action?.kind === "confirm" || action?.kind === "toggle") {
+				if (this.#focus === "scope") this.#focus = "list";
+				else {
+					this.#filterEditing = false;
+					this.#runRolesAction("pick");
+				}
+				return;
+			}
 			this.#handleRolesViewInput(data);
 			return;
 		}
 		if (effortView) {
-			this.#handleEffortRulesInput(data);
+			this.#handleEffortRulesInput(action?.kind === "toggle" ? "\r" : data);
 			return;
 		}
 		if (lockedView) {
@@ -2384,13 +2939,13 @@ export class ModelHubComponent implements Component {
 				if (selected) this.#callbacks.onDefineMixture?.(selected.model.id);
 				return;
 			}
-			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+			if (action?.kind === "confirm" || action?.kind === "toggle") {
 				if (this.#pinnedActionFocused) {
 					pinned.action.onSelect();
 					return;
 				}
 			}
-			if (matchesSelectDown(data)) {
+			if (action?.kind === "move" && action.delta > 0) {
 				if (!this.#pinnedActionFocused) {
 					const selected = this.#browser.getSelected();
 					this.#browser.moveSelection(1, { wrap: false });
@@ -2398,7 +2953,7 @@ export class ModelHubComponent implements Component {
 				}
 				return;
 			}
-			if (matchesSelectUp(data) && this.#pinnedActionFocused) {
+			if (action?.kind === "move" && action.delta < 0 && this.#pinnedActionFocused) {
 				this.#pinnedActionFocused = false;
 				return;
 			}
@@ -2409,22 +2964,88 @@ export class ModelHubComponent implements Component {
 
 		// Enter on the sidebar is a pane switch, like →: it lands on the model
 		// rows instead of acting on a row the user cannot see is selected.
-		if (this.#focus === "scope" && (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n")) {
+		if (this.#focus === "scope" && (action?.kind === "confirm" || action?.kind === "toggle")) {
 			this.#focus = "list";
 			if (pinned && !this.#browser.getSelected()) this.#pinnedActionFocused = true;
 			return;
 		}
 
-		if (extractPrintableText(data) !== undefined || matchesKey(data, "backspace")) return;
-		this.#browser.handleInput(data);
+		if (action) this.#browser.handleNavigation(action);
 	}
 
-	/** The cancel key's ladder: close a strip, leave assign mode, clear the query, then close the hub. */
+	#applyPanelMotion(action: MenuNavAction): boolean {
+		const budget = Math.max(1, (this.#tui.terminal?.rows ?? 30) - 10);
+		if (this.#focus === "scope") {
+			const rows = this.#sidebarVisibleCount || budget;
+			this.#scopeSelection.setItems(this.#entries, this.#activeEntryId);
+			this.#scopeViewport.setTop(this.#frame.sidebarScroll);
+			this.#scopeViewport.layout(
+				this.#entries.map(() => 1),
+				this.#scopeSelection.selectedIndex,
+				rows,
+			);
+			const motion = applyMenuMotion(action, this.#scopeSelection, this.#scopeViewport);
+			if (!motion.handled) return false;
+			if (motion.selectionChanged) {
+				const entry = this.#scopeSelection.selectedItem;
+				if (entry) {
+					if (entry.kind === "roles") this.#assigning = null;
+					this.#setActiveEntry(entry.id);
+				}
+			}
+			const window = this.#scopeViewport.layout(
+				this.#entries.map(() => 1),
+				this.#scopeSelection.selectedIndex,
+				rows,
+			);
+			this.#frame.sidebarScroll = window.startIndex;
+			this.#sidebarFollowActive = false;
+			return true;
+		}
+		if (this.#activeEntry().kind === "roles") {
+			this.#roleSelection.setItems(this.#rolesRows);
+			this.#roleSelection.setSelectedIndex(this.#roleIndex);
+			this.#roleViewport.layout(
+				this.#rolesRows.map(() => 1),
+				this.#roleIndex,
+				this.#rolesVisibleCount || budget,
+			);
+			const motion = applyMenuMotion(action, this.#roleSelection, this.#roleViewport);
+			if (!motion.handled) return false;
+			this.#roleIndex = this.#roleSelection.selectedIndex;
+			this.#roleLastIndex = this.#roleIndex;
+			return true;
+		}
+		const indices = this.#syncEffortSelection();
+		this.#effortViewport.layout(
+			indices.map(() => 1),
+			this.#effortSelection.selectedIndex,
+			this.#effortVisibleCount || budget,
+		);
+		const motion = applyMenuMotion(action, this.#effortSelection, this.#effortViewport);
+		if (!motion.handled) return false;
+		this.#effortIndex = this.#effortSelection.selectedItem ?? -1;
+		this.#effortLastIndex = this.#effortIndex;
+		return true;
+	}
+
+	/** Esc leaves the focused field, then a nested strip/assignment, then the hub. */
 	#cancel(): void {
 		if (this.#assignmentPending) {
 			this.#callbacks.onCancel();
 			return;
 		}
+		if (this.#filterEditing) {
+			this.#filterEditing = false;
+			this.#browser.focusFilter(false);
+			return;
+		}
+		const strip = this.#strip;
+		if ((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused) {
+			strip.input.focused = false;
+			return;
+		}
+		if ((this.#strip || this.#assigning) && this.#returnToParent()) return;
 		if (this.#strip) {
 			this.#closeStrip();
 			return;
@@ -2444,57 +3065,90 @@ export class ModelHubComponent implements Component {
 	#handleStripInput(data: string): void {
 		const strip = this.#strip;
 		if (!strip) return;
-		if (matchesSelectCancel(data)) {
-			this.#closeStrip();
+		const textInput = strip.kind === "name" || strip.kind === "pattern" ? strip.input : undefined;
+		const textFocused = textInput?.focused === true;
+		const printable = textFocused ? extractPrintableText(data) : undefined;
+		const cancel = matchesSelectCancel(data) || (textInput !== undefined && matchesKey(data, "escape"));
+		if (cancel && (!textFocused || printable === undefined)) {
+			this.#cancel();
 			return;
 		}
 		if (strip.kind === "name" || strip.kind === "pattern") {
+			if (!strip.input.focused) {
+				const action = this.#keys.read(data);
+				if (!action || action === "pending") return;
+				if (action.kind === "search") {
+					strip.input.focused = true;
+					this.#keys.reset();
+				} else if (action.kind === "confirm") {
+					if (strip.kind === "name") this.#submitNameStrip();
+					else this.#submitSelectorPattern(strip);
+				} else if (action.kind === "horizontal" || action.kind === "context") {
+					const focus =
+						action.kind === "horizontal"
+							? action.delta < 0
+								? "scope"
+								: "list"
+							: this.#focus === "scope"
+								? "list"
+								: "scope";
+					this.#closeStrip();
+					this.#focus = focus;
+				}
+				return;
+			}
 			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
 				if (strip.kind === "name") this.#submitNameStrip();
 				else this.#submitSelectorPattern(strip);
 				return;
 			}
-			strip.input.handleInput(data);
+			if (printable !== undefined) strip.input.insertText(printable);
+			else strip.input.handleInput(data);
+			if (strip.kind === "name" && strip.purpose === "compaction") strip.error = undefined;
+			return;
+		}
+		const action = this.#keys.read(data);
+		if (!action || action === "pending") return;
+		const effort = strip.kind === "effortLevels" || strip.kind === "thinking" || strip.kind === "patternEffort";
+		if (action.kind === "context" || (action.kind === "horizontal" && !effort)) {
+			const focus =
+				action.kind === "horizontal"
+					? action.delta < 0
+						? "scope"
+						: "list"
+					: this.#focus === "scope"
+						? "list"
+						: "scope";
+			this.#closeStrip();
+			this.#focus = focus;
+			return;
+		}
+		const count = strip.kind === "effortLevels" ? strip.toggle.options.length : strip.chips.length;
+		if (count === 0) return;
+		if (action.kind === "move" || (action.kind === "horizontal" && effort)) {
+			strip.index = Math.max(0, Math.min(count - 1, strip.index + action.delta));
+			return;
+		}
+		if (action.kind === "boundary") {
+			strip.index = action.edge === "first" ? 0 : count - 1;
+			return;
+		}
+		if (action.kind === "halfPage" || action.kind === "page") {
+			const step = action.kind === "page" ? count : Math.max(1, Math.floor(count / 2));
+			strip.index = Math.max(0, Math.min(count - 1, strip.index + step * action.delta));
 			return;
 		}
 		if (strip.kind === "effortLevels") {
-			const count = strip.toggle.options.length;
-			if (count === 0) {
-				this.#configError = "This model has no configurable reasoning efforts";
-				return;
-			}
-			if (matchesKey(data, "left") || matchesSelectUp(data)) strip.index = (strip.index + count - 1) % count;
-			else if (matchesKey(data, "right") || matchesSelectDown(data)) strip.index = (strip.index + 1) % count;
-			else if (matchesKey(data, "space")) {
+			if (action.kind === "toggle") {
 				const level = strip.toggle.options[strip.index];
 				if (level) strip.toggle.toggle(level);
 				this.#configError = undefined;
-			} else if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n")
-				this.#confirmEffortLevels(strip);
+			} else if (action.kind === "confirm") this.#confirmEffortLevels(strip);
 			return;
 		}
-		if (moveStripSelection(strip, data)) return;
-		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+		if (action.kind === "confirm" || (action.kind === "toggle" && strip.chips[strip.index]?.action !== "unassign")) {
 			if (strip.kind === "selectorChoice") this.#activateSelectorChoice(strip);
 			else this.#activateStripChip();
-		}
-	}
-
-	#moveSidebar(delta: number): void {
-		const count = this.#entries.length;
-		if (count === 0) return;
-		let index = this.#entries.findIndex(entry => entry.id === this.#activeEntryId);
-		if (index < 0) index = 0;
-		for (let step = 0; step < count; step++) {
-			index = (index + delta + count) % count;
-			const entry = this.#entries[index];
-			if (entry && !this.#isHopSkipped(entry)) {
-				// Scope changes keep an active assignment (scoping helps find the
-				// model); landing on the Roles view cancels it.
-				if (entry.kind === "roles") this.#assigning = null;
-				this.#setActiveEntry(entry.id);
-				return;
-			}
 		}
 	}
 
@@ -2526,15 +3180,6 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
-	/** Scroll `#roleScrollStart` just enough to keep `#roleIndex` inside a window of `viewHeight` rows, clamped to the list. */
-	#ensureRoleVisible(viewHeight: number, total: number): number {
-		if (viewHeight <= 0) return 0;
-		let start = this.#roleScrollStart;
-		if (this.#roleIndex < start) start = this.#roleIndex;
-		else if (this.#roleIndex >= start + viewHeight) start = this.#roleIndex - viewHeight + 1;
-		return Math.max(0, Math.min(start, Math.max(0, total - viewHeight)));
-	}
-
 	/** Step the roles cursor by one row, skipping separator rows. Wraps at the ends unless `wrap: false` (then the cursor stays put). */
 	#stepRoleIndex(from: number, delta: -1 | 1, options: { wrap?: boolean } = {}): number {
 		const wrap = options.wrap ?? true;
@@ -2555,26 +3200,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	#handleRolesViewInput(data: string): void {
-		// Scope focus treats the roles view as a preview: Enter/Space dives
-		// into the rows, everything else is inert (arrows already hop).
-		if (this.#focus === "scope") {
-			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n" || matchesKey(data, "space")) {
-				this.#focus = "list";
-			}
-			return;
-		}
-		if (matchesSelectUp(data)) {
-			this.#roleIndex = this.#stepRoleIndex(this.#roleIndex, -1);
-			return;
-		}
-		if (matchesSelectDown(data)) {
-			this.#roleIndex = this.#stepRoleIndex(this.#roleIndex, 1);
-			return;
-		}
-		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-			this.#runRolesAction("pick");
-			return;
-		}
+		if (this.#focus === "scope") return;
 		if (matchesKey(data, "backspace") || matchesKey(data, "delete")) {
 			this.#runRolesAction("clear");
 			return;
@@ -2624,6 +3250,7 @@ export class ModelHubComponent implements Component {
 										? { ...selection }
 										: undefined,
 						},
+						...(this.#fallbackChains()[row.role] ?? []).map(entry => this.#snapshotFallback(row.role, entry)),
 					];
 				}
 			} else if (row?.kind === "fallback") {
@@ -2684,6 +3311,13 @@ export class ModelHubComponent implements Component {
 				return;
 			case "save":
 				if (this.#callbacks.onSavePreset) this.#openNameStrip("preset");
+				return;
+			case "nextPreset":
+			case "prevPreset":
+				this.#switchPreset(action === "nextPreset" ? 1 : -1);
+				return;
+			case "compaction":
+				this.#openCompactionStrip();
 				return;
 			case "thinking":
 				if (role) {
@@ -2748,10 +3382,10 @@ export class ModelHubComponent implements Component {
 				if (entry.kind === "roles" && this.#assigning === null) {
 					this.#roleIndex = this.#stepRoleIndex(this.#roleIndex, event.wheel > 0 ? 1 : -1, { wrap: false });
 				} else if (entry.kind === "effort" && this.#assigning === null) {
-					this.#effortIndex = Math.max(
-						0,
-						Math.min(this.#settings.effortRules.length + 1, this.#effortIndex + (event.wheel > 0 ? 1 : -1)),
-					);
+					this.#syncEffortSelection();
+					this.#effortSelection.move(event.wheel > 0 ? 1 : -1);
+					this.#effortIndex = this.#effortSelection.selectedItem ?? -1;
+					this.#effortViewport.reveal();
 				} else if (this.#isBrowserView(entry) && bodyLine > 0) {
 					this.#browser.routeMouse(event, bodyLine - 1);
 				}
@@ -2803,8 +3437,9 @@ export class ModelHubComponent implements Component {
 				}
 			} else if (entry.kind === "effort" && this.#assigning === null) {
 				this.#focus = "list";
-				const index = bodyLine - 1 + this.#effortScrollStart;
-				if (index >= 0 && index < this.#settings.effortRules.length + 2) {
+				const indices = this.#syncEffortSelection();
+				const index = indices[bodyLine - 2 + this.#effortScrollStart];
+				if (index !== undefined) {
 					if (this.#effortIndex === index) this.#handleEffortRulesInput("\r");
 					else this.#effortIndex = index;
 				}
@@ -2835,6 +3470,8 @@ export class ModelHubComponent implements Component {
 	/** Pointer activation of a sidebar entry: pick the scope; a second click on a locked provider logs in. */
 	#clickSidebarEntry(clicked: SidebarEntry | undefined): void {
 		if (!clicked || clicked.kind === "separator") return;
+		this.#filterEditing = false;
+		if (this.#strip) this.#closeStrip();
 		const already = clicked.id === this.#activeEntryId;
 		if (clicked.kind === "roles" || clicked.kind === "effort") this.#assigning = null;
 		this.#setActiveEntry(clicked.id);
@@ -2857,6 +3494,7 @@ export class ModelHubComponent implements Component {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	#renderSidebar(width: number, rows: number): string[] {
+		this.#sidebarVisibleCount = rows;
 		const lines = this.#frame.renderSidebar(
 			this.#entries,
 			width,
@@ -2869,7 +3507,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	#sidebarStyle = (entry: SidebarEntry, index: number): SidebarStyle => {
-		const searching = this.#searchCounts !== null;
+		const searching = this.#searchCounts !== null && this.#activeEntry().kind === "all";
 		let matchCount: number | undefined;
 		if (searching) {
 			if (entry.kind === "provider" && !entry.locked) {
@@ -2880,8 +3518,8 @@ export class ModelHubComponent implements Component {
 				matchCount = this.#searchTotal;
 			}
 		}
-		// Search-ineligible entries gray out, but keep their place in the viewport.
-		const muted = entry.locked || matchCount === 0 || (searching && entry.kind === "roles");
+		// Only model scopes without matches gray out; Roles has its own search.
+		const muted = entry.locked || matchCount === 0;
 		let icon: string;
 		if (entry.kind === "recent") {
 			icon = theme.icon.time;
@@ -2923,8 +3561,14 @@ export class ModelHubComponent implements Component {
 			ROLE_TABS.map(tab => ({ label: tab === "kind" ? "kinds" : tab })),
 			Math.max(0, active),
 		);
+		const { names, active: activePreset } = this.#presets();
+		const presetKeys = formatKeyHints(["ctrl+left", "ctrl+right"]);
+		const preset =
+			names.length > 0
+				? `   ${theme.fg("dim", "Preset:")} ${activePreset ? theme.fg("accent", activePreset) : theme.fg("muted", "custom")}  ${theme.fg("dim", presetKeys)}`
+				: "";
 		return truncateToWidth(
-			` ${theme.fg("dim", "Roles:")} ${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}`,
+			` ${theme.fg("dim", "Roles:")} ${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}${preset}`,
 			width,
 		);
 	}
@@ -3012,6 +3656,7 @@ export class ModelHubComponent implements Component {
 	#renderRolesView(width: number, rows: number): string[] {
 		const lines: string[] = [];
 		lines.push(this.#renderRoleTabs(width));
+		lines.push(this.#rolesSearch.render(width, { muted: value => theme.fg("muted", value) }));
 		// First row's offset in bodyLine coordinates: the mouse router's
 		// `bodyLine` has already dropped the status row, leaving the tabs row.
 		this.#rolesRowStart = lines.length;
@@ -3031,9 +3676,17 @@ export class ModelHubComponent implements Component {
 		const capacity = Math.max(0, rows - 2 - this.#rolesRowStart);
 		const overflow = total > capacity;
 		const viewHeight = overflow ? Math.max(0, capacity - 1) : capacity;
-		this.#roleScrollStart = this.#ensureRoleVisible(viewHeight, total);
-		const endIndex = Math.min(this.#roleScrollStart + viewHeight, total);
-		this.#rolesVisibleCount = Math.max(0, endIndex - this.#roleScrollStart);
+		if (this.#roleIndex !== this.#roleLastIndex) this.#roleViewport.reveal();
+		this.#roleLastIndex = this.#roleIndex;
+		const view = this.#roleViewport.layout(
+			this.#rolesRows.map(() => 1),
+			this.#roleIndex,
+			Math.max(1, viewHeight),
+		);
+		this.#roleScrollStart = view.startIndex;
+		const endIndex = view.endIndex;
+		this.#rolesVisibleCount = Math.min(viewHeight, Math.max(0, endIndex - this.#roleScrollStart - view.lineOffset));
+		const body: string[] = [];
 		for (let i = this.#roleScrollStart; i < endIndex; i++) {
 			const rowDef = this.#rolesRows[i];
 			if (!rowDef) continue;
@@ -3043,7 +3696,7 @@ export class ModelHubComponent implements Component {
 			const cursor = selected && listFocused ? theme.fg("accent", theme.nav.cursor) : " ";
 
 			if (rowDef.kind === "separator") {
-				lines.push(`   ${theme.fg("border", "─".repeat(Math.max(1, width - 6)))}`);
+				body.push(`   ${theme.fg("border", "─".repeat(Math.max(1, width - 6)))}`);
 				continue;
 			}
 
@@ -3051,7 +3704,7 @@ export class ModelHubComponent implements Component {
 				const label = rowDef.kind === "newRole" ? "+ New role…" : "+ New fallback…";
 				let line = ` ${cursor} ${theme.fg(selected ? "accent" : "dim", label)}`;
 				line = this.#finishRolesRow(line, width, hovered);
-				lines.push(line);
+				body.push(line);
 				continue;
 			}
 
@@ -3064,7 +3717,7 @@ export class ModelHubComponent implements Component {
 				const keyStyled = theme.fg("dim", key.slice(0, slash + 1)) + (selected ? theme.fg("accent", tail) : tail);
 				let line = ` ${cursor} ${theme.fg("dim", theme.status.shadowed)} ${keyStyled}`;
 				line = this.#finishRolesRow(line, width, hovered);
-				lines.push(line);
+				body.push(line);
 				continue;
 			}
 
@@ -3080,7 +3733,7 @@ export class ModelHubComponent implements Component {
 							: "";
 				let line = ` ${cursor} ${branch} ${selector}${theme.fg("dim", suffix)}`;
 				line = this.#finishRolesRow(line, width, hovered);
-				lines.push(line);
+				body.push(line);
 				continue;
 			}
 
@@ -3114,7 +3767,7 @@ export class ModelHubComponent implements Component {
 						? `Auto [${policy.allowed.join(", ")}]`
 						: getConfiguredThinkingLevelMetadata(effective).label;
 				if (effective !== ThinkingLevel.Inherit) {
-					levelStyled = theme.fg("dim", glyph ? `${glyph} ${label}` : label);
+					levelStyled = theme.fg(selected ? "accent" : "dim", glyph ? `${glyph} ${label}` : label);
 				}
 			} else if (assignment) {
 				dot = theme.fg("dim", theme.status.shadowed);
@@ -3138,8 +3791,13 @@ export class ModelHubComponent implements Component {
 				line = `${line}${" ".repeat(width - lineWidth - rightWidth - 1)}${right}`;
 			}
 			line = this.#finishRolesRow(line, width, hovered);
-			lines.push(line);
+			body.push(line);
 		}
+		lines.push(
+			...(view.lineOffset === 0 && body.length <= viewHeight
+				? body
+				: body.slice(view.lineOffset, view.lineOffset + viewHeight)),
+		);
 
 		if (overflow) {
 			const hiddenAbove = this.#roleScrollStart;
@@ -3217,9 +3875,25 @@ export class ModelHubComponent implements Component {
 	}
 
 	#footerHint(): string {
+		const entry = this.#activeEntry();
+		if (
+			!this.#strip &&
+			!this.#filterEditing &&
+			this.#assigning === null &&
+			this.#focus === "scope" &&
+			this.#isBrowserView(entry) &&
+			!(entry.kind === "provider" && this.#pinnedProviders.some(provider => provider.id === entry.providerId))
+		)
+			return MODEL_SCOPE_HINT;
+		const detail = this.#surfaceFooterHint();
+		if (this.#strip || this.#filterEditing) return detail;
+		return `h/l pane · / search · ${detail}`;
+	}
+
+	#surfaceFooterHint(): string {
 		const enter = formatKeyHint("enter");
 		const cancel = editorKey("tui.select.cancel");
-		const upDown = editorKeys("tui.select.up", "tui.select.down");
+		const upDown = `j/k ${editorKeys("tui.select.up", "tui.select.down")}`;
 		const left = formatKeyHint("left");
 		const leftRight = formatKeyHints(["left", "right"]);
 		const enterRight = formatKeyHints(["enter", "right"]);
@@ -3227,26 +3901,35 @@ export class ModelHubComponent implements Component {
 		const strip = this.#strip;
 		if (strip) {
 			if (strip.kind === "name") {
-				if (strip.purpose === "preset") {
-					return `${enter} save preset · ${cancel} cancel`;
+				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent · h/l pane`;
+				if (strip.purpose === "compaction") {
+					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · ${cancel} leave field`;
 				}
-				return `${enter} create + pick model · ${cancel} cancel`;
+				if (strip.purpose === "preset") {
+					return `${enter} save preset · ${cancel} leave field`;
+				}
+				return `${enter} create + pick model · ${cancel} leave field`;
 			}
-			if (strip.kind === "pattern") return `${enter} continue to effort · ${cancel} cancel`;
+			if (strip.kind === "pattern")
+				return strip.input.focused
+					? `${enter} continue to effort · ${cancel} leave field`
+					: `/ edit · ${enter} continue · ${cancel} parent · h/l pane`;
 			if (strip.kind === "effortLevels")
-				return `${leftRight} choose · ${formatKeyHint("space")} toggle · ${enter} save · ${cancel} discard`;
+				return `h/l ${leftRight} effort · ${formatKeyHint("space")} toggle · ${enter} save · ${cancel} discard`;
 			if (strip.kind === "selectorChoice")
-				return `${leftRight} exact or pattern · ${enter} select · ${cancel} cancel`;
-			if (strip.kind === "role") return `${leftRight} choose · ${enter} assign/clear · ${cancel} cancel`;
-			if (strip.kind === "scope") return `${leftRight} save scope · ${enter} choose · ${cancel} cancel`;
-			return `${leftRight} thinking level · ${enter} apply · ${cancel} keep`;
+				return `j/k choose exact/pattern · ${enter}/Space set · h/l pane · Tab context · ${cancel} cancel`;
+			if (strip.kind === "role")
+				return `j/k choose role · ${enter} assign/clear · h/l pane · Tab context · ${cancel} cancel`;
+			if (strip.kind === "scope")
+				return `j/k save scope · ${enter}/Space set · h/l pane · Tab context · ${cancel} cancel`;
+			return `h/l ${leftRight} effort · ${enter}/Space apply · ${cancel} keep`;
 		}
-		if (this.#filterEditing) return "INSERT filter · hjkl type literally · Esc normal";
+		if (this.#filterEditing) return "Search · Esc back to list";
 		if (this.#assigning !== null) {
 			if (this.#focus === "scope") {
-				return `${enterRight} models · ${upDown} providers · hjkl navigate · i filter · ${altLeftRight} kind · ${cancel} cancel`;
+				return `${enterRight} models · ${upDown} providers · / search · ${altLeftRight} kind · ${cancel} cancel`;
 			}
-			const browse = `${upDown} models · ${left} providers · hjkl navigate · i filter · ${altLeftRight} kind · ${cancel} cancel`;
+			const browse = `${upDown} models · ${left} providers · / search · ${altLeftRight} kind · ${cancel} cancel`;
 			switch (this.#assigning.kind) {
 				case "fallback":
 					return `${enter} pick fallback · ${browse}`;
@@ -3259,19 +3942,25 @@ export class ModelHubComponent implements Component {
 		const entry = this.#activeEntry();
 		if (entry.kind === "effort") {
 			return this.#focus === "list"
-				? "↑/↓ rules · hjkl navigate · Enter edit/add · x remove · [/] reorder patterns · ← scopes"
-				: "↑/↓ scopes · hjkl navigate · Enter/→ effort rules · Esc close";
+				? "↑/↓ rules · Enter edit/add · x remove · [/] reorder patterns · ← scopes"
+				: "↑/↓ scopes · Enter/→ effort rules · Esc close";
 		}
 		if (entry.kind === "roles") {
 			if (this.#focus !== "list") {
-				return `${upDown} providers · ${enterRight} roles · hjkl navigate · ${altLeftRight} tabs · ${cancel} close`;
+				const presets =
+					this.#presets().names.length > 0 ? ` · ${formatKeyHints(["ctrl+left", "ctrl+right"])} preset` : "";
+				return `${upDown} providers · ${enterRight} roles · ${altLeftRight} tabs${presets} · ${cancel} close`;
 			}
 			const row = this.#rolesRows[this.#roleIndex];
+			const compaction =
+				this.#callbacks.onCompactionPointChange && this.#roleRowModel()
+					? ` · ${formatKeyHint("m")} compaction limit`
+					: "";
 			if (row?.kind === "fallback") {
 				// Advertise thinking only when the entry resolves to an editable model.
 				const editable = this.#resolveFallbackEntry(row.role, row.chainIndex) !== undefined;
 				const thinking = editable ? ` · ${formatKeyHint("t")} effort` : "";
-				return `${upDown} rows · ${enter} exact/pattern · ${formatKeyHint("f")} add · ${formatKeyHints(["y", "shift+y"])} yank · ${formatKeyHint("p")} append · ${formatKeyHint("x")} remove${thinking} · [/] reorder · ${left} scopes`;
+				return `${upDown} rows · ${enter} exact/pattern · ${formatKeyHint("f")} add · ${formatKeyHints(["y", "shift+y"])} yank · ${formatKeyHint("p")} append · ${formatKeyHint("x")} remove${thinking}${compaction} · [/] reorder · ${left} scopes`;
 			}
 			if (row?.kind === "chainKey") {
 				return `${upDown} rows · ${formatKeyHints(["enter", "f"])} add fallback · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear chain · ${left} providers`;
@@ -3283,7 +3972,11 @@ export class ModelHubComponent implements Component {
 			const editable = row?.kind === "role" && this.#roleThinkingTarget(row.role) !== undefined;
 			const thinking = editable ? ` · ${formatKeyHint("t")} thinking` : "";
 			const savePreset = this.#callbacks.onSavePreset ? ` · ${formatKeyHint("s")} save preset` : "";
-			return `${upDown} rows · ${enter} pick · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} yank · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}`;
+			const switchPreset =
+				this.#presets().names.length > 0 ? ` · ${formatKeyHints(["ctrl+left", "ctrl+right"])} preset` : "";
+			const yank =
+				row?.kind === "role" && (this.#fallbackChains()[row.role]?.length ?? 0) > 0 ? "yank chain" : "yank model";
+			return `${upDown} rows · ${enter} pick · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} ${yank} · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth
@@ -3297,9 +3990,9 @@ export class ModelHubComponent implements Component {
 		}
 		const refresh = entry.kind === "provider" ? ` · ${formatKeyHint("f5")} refresh` : "";
 		if (this.#focus === "scope") {
-			return `${enterRight} models · ${upDown} providers · hjkl navigate · i filter · ${altLeftRight} kind${refresh} · ${cancel} close`;
+			return `${enterRight} models · ${upDown} providers · / search · ${altLeftRight} kind${refresh} · ${cancel} close`;
 		}
-		return `${enter} assign roles · ${upDown} models · ${left} providers · hjkl navigate · i filter · ${altLeftRight} kind${refresh} · ${cancel} close`;
+		return `${enter} assign roles · ${upDown} models · ${left} providers · / search · ${altLeftRight} kind${refresh} · ${cancel} close`;
 	}
 
 	#renderFooter(width: number): string {
@@ -3307,18 +4000,51 @@ export class ModelHubComponent implements Component {
 		return this.#frame.renderFooter(
 			width,
 			this.#footerHint(),
-			strip ? () => this.#renderStrip(width, strip) : undefined,
+			strip
+				? () => {
+						const label =
+							strip.kind === "name" || strip.kind === "pattern"
+								? strip.input.focused
+									? "Enter set · Esc leave field"
+									: "/ edit · Esc parent"
+								: strip.kind === "effortLevels"
+									? "h/l effort · Space toggle"
+									: strip.kind === "thinking" || strip.kind === "patternEffort"
+										? "h/l effort · Enter set"
+										: "j/k choose · Enter set · h/l pane";
+						const hint = truncateToWidth(label, Math.max(0, width - 36));
+						const columns = Math.max(1, width - visibleWidth(hint) - (hint ? 3 : 0));
+						const line = this.#renderStrip(columns, strip);
+						return hint
+							? `${line}${" ".repeat(Math.max(0, columns - visibleWidth(line)))} · ${theme.fg("dim", hint)}`
+							: line;
+					}
+				: undefined,
 		);
 	}
 
 	#renderStrip(width: number, strip: StripState): string {
 		if (strip.kind === "name") {
-			const preset = strip.purpose === "preset";
-			const labelText = preset ? "Preset name:" : "New role name:";
+			const labelText =
+				strip.purpose === "compaction"
+					? `${strip.model.id} limit:`
+					: strip.purpose === "preset"
+						? "Preset name:"
+						: "New role name:";
 			const label = theme.fg("accent", labelText);
-			const inputWidth = Math.max(8, Math.min(32, width - visibleWidth(labelText) - 24));
+			// A compaction point is at most a few characters (`1500k`, `12.5%`); a
+			// narrow field leaves the row for its notice.
+			const maxInputWidth = strip.purpose === "compaction" ? 10 : 32;
+			const inputWidth = Math.max(8, Math.min(maxInputWidth, width - visibleWidth(labelText) - 24));
 			const inputLine = strip.input.render(inputWidth)[0] ?? "";
-			return truncateToWidth(`${label} ${inputLine} ${theme.fg("dim", "(letters, digits, - and _)")}`, width);
+			let hint: string;
+			if (strip.purpose === "compaction") {
+				const notice = compactionNotice(strip, this.#callbacks.previewCompactionPoint);
+				hint = theme.fg(notice.style, notice.text);
+			} else {
+				hint = theme.fg("dim", "(letters, digits, - and _)");
+			}
+			return truncateToWidth(`${label} ${inputLine} ${hint}`, width);
 		}
 		if (strip.kind === "pattern") {
 			const label = theme.fg(
@@ -3431,6 +4157,10 @@ export class ModelHubComponent implements Component {
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
+		this.#withNavigationVisit(() => this.#handleNativeEvent(event));
+	}
+
+	#handleNativeEvent(event: NativeUiEvent): void {
 		const picked = pickerEvent(event);
 		if (picked) {
 			this.#handlePickerEvent(picked);
@@ -3460,12 +4190,21 @@ export class ModelHubComponent implements Component {
 					this.#activateRolesRow(rowDef);
 					break;
 				}
+				case "effortRules": {
+					if (this.#activeEntry().kind !== "effort" || this.#assigning !== null) return;
+					const index = Number(event.item);
+					if (!Number.isInteger(index) || !this.#syncEffortSelection().includes(index)) return;
+					this.#focus = "list";
+					this.#effortIndex = index;
+					if (event.type === "activate") this.#handleEffortRulesInput("\r");
+					break;
+				}
 				case "roleTabs": {
 					const tab = ROLE_TABS.find(candidate => candidate === event.item);
 					if (!tab) return;
 					this.#roleTab = tab;
 					this.#roleIndex = 0;
-					this.#roleScrollStart = 0;
+					this.#roleViewport.setTop(0);
 					this.#buildRolesRows();
 					break;
 				}
@@ -3516,6 +4255,25 @@ export class ModelHubComponent implements Component {
 		const entry = this.#activeEntry();
 		if (entry.kind === "roles" && this.#assigning === null) {
 			children.push(...this.#describeRolesView());
+		} else if (entry.kind === "effort" && this.#assigning === null) {
+			const indices = this.#syncEffortSelection();
+			const items = indices.map(index =>
+				node("item", { label: this.#effortRowText(index) }, undefined, String(index)),
+			);
+			children.push(this.#effortSearch.input);
+			children.push(
+				node(
+					"list",
+					{
+						selected: this.#effortIndex < 0 ? null : String(this.#effortIndex),
+						virtual: true,
+						grow: 1,
+						aria: "Effort rules",
+					},
+					items,
+					"effortRules",
+				),
+			);
 		} else if (entry.kind === "provider" && entry.locked && this.#assigning === null) {
 			children.push(this.#describeLockedView(entry));
 		} else {
@@ -3601,7 +4359,7 @@ export class ModelHubComponent implements Component {
 		return node("text", { spans, truncate: "end" }, undefined, "status");
 	}
 
-	#describeRolesView(): NativeNode[] {
+	#describeRolesView(): NativeChild[] {
 		const tabs = node(
 			"row",
 			{ gap: "sm", align: "center" },
@@ -3634,7 +4392,7 @@ export class ModelHubComponent implements Component {
 			items,
 			"roles",
 		);
-		return [tabs, list, this.#describeCycle(cycleOrder)];
+		return [tabs, this.#rolesSearch.input, list, this.#describeCycle(cycleOrder)];
 	}
 
 	#describeRolesRow(rowDef: RolesRow, index: number, cycleOrder: readonly string[]): NativeNode {
@@ -3680,7 +4438,9 @@ export class ModelHubComponent implements Component {
 			if (assignment.thinkingLevel !== ThinkingLevel.Inherit) {
 				const glyph = thinkingLevelGlyph(assignment.thinkingLevel, theme);
 				const levelLabel = getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label;
-				value.push(span(glyph ? `${glyph} ${levelLabel}` : levelLabel, "dim"));
+				value.push(
+					span(glyph ? `${glyph} ${levelLabel}` : levelLabel, index === this.#roleIndex ? "accent" : "dim"),
+				);
 			}
 		} else {
 			label = [span(`${theme.status.shadowed} `, "dim"), span(tag, "dim")];
@@ -3783,23 +4543,77 @@ export class ModelHubComponent implements Component {
 		const rolesView = entry.kind === "roles" && this.#assigning === null;
 		const lockedView = entry.kind === "provider" && entry.locked === true && this.#assigning === null;
 		const strip = this.#strip;
+		const subtitle = this.#pickerSubtitle(entry, rolesView);
+		const navigation =
+			strip || this.#filterEditing
+				? this.#surfaceFooterHint()
+				: this.#focus === "scope"
+					? this.#footerHint()
+					: "j/k rows · h/l pane · / search · gg/G ends · Ctrl-u/d half";
 		const props: TspPickerProps = {
 			title: "Models",
-			subtitle: this.#pickerSubtitle(entry, rolesView),
+			subtitle: [
+				...(typeof subtitle === "string" ? [span(subtitle)] : (subtitle ?? [])),
+				span(` · ${plainText(navigation)}`, "dim"),
+			],
 			icon: "cpu",
 			noun: rolesView ? "roles" : "models",
 			size: "lg",
 			layout: "rows",
 			preview: "side",
-			query: this.#browser.query,
-			cursor: this.#browser.cursor,
-			placeholder: "Search models…",
+			query: rolesView
+				? this.#rolesSearch.value || this.#filterEditing
+					? this.#rolesSearch.value
+					: null
+				: this.#browser.query,
+			cursor: rolesView ? this.#rolesSearch.cursor : this.#browser.cursor,
+			placeholder: rolesView ? "Search roles and fallback chains…" : "/ search models…",
 			scopes: this.#pickerScopes(),
 			scope: entry.id,
 			actions: this.#pickerActions(entry, rolesView, lockedView),
 			strip: strip ? this.#pickerStrip(strip) : null,
 			focus: strip ? "strip" : this.#focus === "scope" ? "scopes" : "list",
 		};
+		if (entry.kind === "effort" && this.#assigning === null) {
+			const rules = this.#settings.effortRules;
+			const indices = this.#syncEffortSelection();
+			const items: TspPickerItem[] = rules.map((rule, index) => ({
+				id: `effort:${index}`,
+				label: rule.selector,
+				detail: `${selectorKind(rule.selector)} · ${rule.allowed.join(", ")}`,
+				mono: true,
+			}));
+			items.push(
+				{ id: `effort:${rules.length}`, label: "Pick exact model…", icon: "plus" },
+				{ id: `effort:${rules.length + 1}`, label: "Enter glob or re: regex…", icon: "plus" },
+			);
+			return picker(
+				{
+					...props,
+					noun: "rules",
+					query: this.#effortSearch.value,
+					cursor: this.#effortSearch.cursor,
+					placeholder: "Search effort rules…",
+					items,
+					order: indices.map(index => `effort:${index}`),
+					selected: this.#effortIndex < 0 ? null : `effort:${this.#effortIndex}`,
+					total: rules.length,
+					actions: this.#strip
+						? props.actions
+						: compact([
+								this.#effortIndex >= 0
+									? pickerAction("effort:edit", "Edit / add", "enter", { primary: true })
+									: undefined,
+								this.#effortIndex >= 0 && this.#effortIndex < rules.length
+									? pickerAction("effort:remove", "Remove", "x")
+									: undefined,
+								this.#effortSearch.value ? pickerAction("clear", "Clear search") : undefined,
+								this.#pickerCancelAction(),
+							]),
+				},
+				[],
+			);
+		}
 		if (rolesView) {
 			const row = this.#rolesRows[this.#roleIndex];
 			return picker(
@@ -3898,6 +4712,17 @@ export class ModelHubComponent implements Component {
 		if (entry.kind === "provider" && entry.providerId && this.#refreshingProviders.has(entry.providerId)) {
 			return `${entry.label} · refreshing model list…`;
 		}
+		const presets = rolesView ? this.#presets() : undefined;
+		if (presets && presets.names.length > 0) {
+			return [
+				span("Preset ", "muted"),
+				presets.active ? span(presets.active, "strong") : span("custom", "muted"),
+				span(
+					this.#scopedModels.length > 0 ? " · --models scope" : " · Cleared roles fall back to auto-selection",
+					"muted",
+				),
+			];
+		}
 		if (this.#scopedModels.length > 0) return "--models scope";
 		if (rolesView) return "Cleared roles fall back to auto-selection";
 		return undefined;
@@ -3905,7 +4730,7 @@ export class ModelHubComponent implements Component {
 
 	/** The sidebar as picker scopes: Roles, All models, then signed-in and signed-out providers. */
 	#pickerScopes(): TspPickerScope[] {
-		const counts = this.#searchCounts;
+		const counts = this.#activeEntry().kind === "all" ? this.#searchCounts : null;
 		const oauthIds = new Set(getOAuthProviders().map(provider => provider.id));
 		const scopes: TspPickerScope[] = [];
 		for (const entry of this.#entries) {
@@ -3914,6 +4739,14 @@ export class ModelHubComponent implements Component {
 					break;
 				case "roles":
 					scopes.push({ id: entry.id, label: "Roles", icon: "sparkles", count: this.#visibleRoleIds().length });
+					break;
+				case "effort":
+					scopes.push({
+						id: entry.id,
+						label: "Effort rules",
+						icon: "sliders",
+						count: this.#settings.effortRules.length,
+					});
 					break;
 				case "all":
 					scopes.push({
@@ -3933,7 +4766,7 @@ export class ModelHubComponent implements Component {
 					break;
 				case "provider": {
 					const providerId = entry.providerId ?? entry.label;
-					const mark = { text: providerInitials(providerId), seed: providerId };
+					const mark = providerMark(providerId);
 					if (entry.locked) {
 						const envVars = providerEntry(providerId)?.envVars ?? [];
 						scopes.push({
@@ -4002,20 +4835,43 @@ export class ModelHubComponent implements Component {
 		return tabs;
 	}
 
+	#pickerCancelAction(): TspPickerAction {
+		if (this.#assignmentPending) return CLOSE_ACTION;
+		const strip = this.#strip;
+		const textFocused = (strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused;
+		return {
+			...CLOSE_ACTION,
+			label: this.#filterEditing
+				? "Back to list"
+				: textFocused
+					? "Leave field"
+					: strip || this.#assigning
+						? "Back"
+						: "Close",
+		};
+	}
+
 	/** The action bar for the current view; every button runs the path of the key it shows. */
 	#pickerActions(entry: SidebarEntry, rolesView: boolean, lockedView: boolean): TspPickerAction[] {
 		const strip = this.#strip;
-		const cancel = (label: string): TspPickerAction => ({ ...CLOSE_ACTION, label });
-		if (this.#assignmentPending) return [CLOSE_ACTION];
+		const cancel = this.#pickerCancelAction();
+		if (this.#assignmentPending) return [cancel];
 		if (strip) {
 			const apply =
 				strip.kind === "name"
-					? pickerAction(
-							strip.purpose === "preset" ? "presetName" : "roleName",
-							strip.purpose === "preset" ? "Save preset" : "Create role",
-							"enter",
-							{ primary: true },
-						)
+					? strip.purpose === "compaction"
+						? pickerAction(
+								"compactionPoint",
+								compactionConfirmPending(strip) ? "Accept compaction point" : "Set compaction point",
+								"enter",
+								{ primary: true },
+							)
+						: pickerAction(
+								strip.purpose === "preset" ? "presetName" : "roleName",
+								strip.purpose === "preset" ? "Save preset" : "Create role",
+								"enter",
+								{ primary: true },
+							)
 					: pickerAction(
 							"stripApply",
 							strip.kind === "thinking" || strip.kind === "patternEffort"
@@ -4032,7 +4888,7 @@ export class ModelHubComponent implements Component {
 							"enter",
 							{ primary: true },
 						);
-			return [apply, cancel(strip.kind === "thinking" ? "Keep" : "Cancel")];
+			return [apply, cancel];
 		}
 		const refresh =
 			entry.kind === "provider" && !entry.locked ? pickerAction("refresh", "Refresh provider", "f5") : undefined;
@@ -4045,13 +4901,24 @@ export class ModelHubComponent implements Component {
 						: this.#assigning.kind === "effortRule"
 							? "Pick rule model"
 							: "Assign";
-			return compact([pickerAction("assign", label, "enter", { primary: true }), refresh, cancel("Cancel")]);
+			return compact([pickerAction("assign", label, "enter", { primary: true }), refresh, cancel]);
 		}
 		if (rolesView) {
 			const row = this.#rolesRows[this.#roleIndex];
+			// Only the focused search owns printable keys.
+			const searching = this.#filterEditing;
 			const roleAction = (action: RolesAction, label: string, key: string, primary = false) =>
-				pickerAction(`roles:${action}`, label, key, primary ? { primary: true } : undefined);
+				pickerAction(
+					`roles:${action}`,
+					label,
+					searching && key !== "enter" ? undefined : key,
+					primary ? { primary: true } : undefined,
+				);
 			const actions: (TspPickerAction | undefined)[] = [];
+			const compaction =
+				this.#callbacks.onCompactionPointChange && this.#roleRowModel()
+					? roleAction("compaction", "Compaction limit", "m")
+					: undefined;
 			switch (row?.kind) {
 				case "role": {
 					const assigned = this.#roles[row.role];
@@ -4060,9 +4927,11 @@ export class ModelHubComponent implements Component {
 						roleAction("fallback", "Add fallback", "f"),
 						assigned && !assigned.autoSelected ? roleAction("clear", "Clear", "x") : undefined,
 						this.#roleThinkingTarget(row.role) ? roleAction("thinking", "Thinking", "t") : undefined,
+						compaction,
 						roleAction("cycle", this.#cycleOrder().includes(row.role) ? "Leave cycle" : "Add to cycle", "c"),
 						roleAction("new", "New role", "n"),
 						this.#callbacks.onSavePreset ? roleAction("save", "Save preset", "s") : undefined,
+						this.#presets().names.length > 0 ? roleAction("nextPreset", "Next preset", "ctrl+right") : undefined,
 					);
 					break;
 				}
@@ -4074,6 +4943,7 @@ export class ModelHubComponent implements Component {
 						this.#resolveFallbackEntry(row.role, row.chainIndex)
 							? roleAction("thinking", "Thinking", "t")
 							: undefined,
+						compaction,
 						roleAction("earlier", "Earlier", "["),
 						roleAction("later", "Later", "]"),
 					);
@@ -4088,12 +4958,14 @@ export class ModelHubComponent implements Component {
 					actions.push(roleAction("pick", "New role", "enter", true));
 					break;
 			}
-			return compact([...actions, CLOSE_ACTION]);
+			return compact([
+				...actions,
+				this.#rolesSearch.value ? pickerAction("clear", "Clear search") : undefined,
+				cancel,
+			]);
 		}
 		if (lockedView) {
-			return entry.oauth
-				? [pickerAction("login", "Log in", "enter", { primary: true }), CLOSE_ACTION]
-				: [CLOSE_ACTION];
+			return entry.oauth ? [pickerAction("login", "Log in", "enter", { primary: true }), cancel] : [cancel];
 		}
 		return compact([
 			pickerAction(
@@ -4103,13 +4975,27 @@ export class ModelHubComponent implements Component {
 				this.#browser.pickerSelected ? { primary: true } : { primary: true, disabled: "No model selected" },
 			),
 			refresh,
-			this.#browser.query.length > 0 ? cancel("Clear search") : CLOSE_ACTION,
+			this.#browser.query.length > 0 ? pickerAction("clear", "Clear search") : undefined,
+			cancel,
 		]);
 	}
 
 	/** The open strip as the picker's chip strip (role assignment, save scope, thinking level, new role name). */
 	#pickerStrip(strip: StripState): NonNullable<TspPickerProps["strip"]> {
 		if (strip.kind === "name" || strip.kind === "pattern") {
+			if (strip.kind === "name" && strip.purpose === "compaction") {
+				const notice = compactionNotice(strip, this.#callbacks.previewCompactionPoint);
+				return {
+					label: [
+						span(strip.model.id, "mono"),
+						span(" limit ", "muted"),
+						span(strip.input.getValue(), "mono"),
+						span("▏", "accent"),
+						span(`  ${notice.text}`, notice.style),
+					],
+					items: [],
+				};
+			}
 			return {
 				label: [
 					span(
@@ -4278,7 +5164,14 @@ export class ModelHubComponent implements Component {
 	/** The selected Roles-view row's preview: its model's facts and its fallback chain. */
 	#rolePreview(row: RolesRow | undefined): readonly NativeChild[] {
 		const memo = this.#pickerRolePreview;
-		if (memo !== undefined && memo.row === row && memo.roles === this.#roles && memo.rows === this.#rolesRows) {
+		const revision = this.#settings.revision;
+		if (
+			memo !== undefined &&
+			memo.row === row &&
+			memo.roles === this.#roles &&
+			memo.rows === this.#rolesRows &&
+			memo.revision === revision
+		) {
 			return memo.children;
 		}
 		const children: NativeChild[] = [];
@@ -4352,7 +5245,7 @@ export class ModelHubComponent implements Component {
 				);
 				break;
 		}
-		this.#pickerRolePreview = { row, roles: this.#roles, rows: this.#rolesRows, children };
+		this.#pickerRolePreview = { row, roles: this.#roles, rows: this.#rolesRows, revision, children };
 		return children;
 	}
 
@@ -4385,16 +5278,7 @@ export class ModelHubComponent implements Component {
 	/** Picker pointer events, each on the path of the key it stands for. */
 	#handlePickerEvent(event: PickerEvent): void {
 		if (event.kind === "action" && event.act === CLOSE_ACTION.id) {
-			if (
-				!this.#strip &&
-				this.#assigning === null &&
-				this.#isBrowserView(this.#activeEntry()) &&
-				this.#browser.query
-			) {
-				this.#browser.handleCancel();
-			} else {
-				this.#cancel();
-			}
+			this.#cancel();
 			return;
 		}
 		// Same gate as the keys: only cancel works while an assignment applies.
@@ -4403,6 +5287,19 @@ export class ModelHubComponent implements Component {
 		const rolesView = entry.kind === "roles" && this.#assigning === null;
 		if (event.kind !== "action") {
 			if (this.#strip) return;
+			if (entry.kind === "effort" && this.#assigning === null) {
+				const index = Number(event.item.slice("effort:".length));
+				if (
+					!event.item.startsWith("effort:") ||
+					!Number.isInteger(index) ||
+					!this.#syncEffortSelection().includes(index)
+				)
+					return;
+				this.#focus = "list";
+				this.#effortIndex = index;
+				if (event.kind === "activate") this.#handleEffortRulesInput("\r");
+				return;
+			}
 			if (rolesView) {
 				const index = this.#rolesRows.findIndex((row, i) => rolesRowKey(row, i) === event.item);
 				const row = this.#rolesRows[index];
@@ -4426,6 +5323,13 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		switch (act) {
+			case "effort:edit":
+			case "effort:remove":
+				if (entry.kind === "effort" && this.#assigning === null) {
+					this.#focus = "list";
+					this.#handleEffortRulesInput(act === "effort:edit" ? "\r" : "x");
+				}
+				return;
 			case "scope":
 				this.#clickSidebarEntry(this.#entries.find(candidate => candidate.id === value));
 				return;
@@ -4435,7 +5339,7 @@ export class ModelHubComponent implements Component {
 					if (!tab) return;
 					this.#roleTab = tab;
 					this.#roleIndex = 0;
-					this.#roleScrollStart = 0;
+					this.#roleViewport.setTop(0);
 					this.#buildRolesRows();
 				} else {
 					const kind = MODEL_KIND_TABS.find(candidate => candidate === value);
@@ -4476,11 +5380,25 @@ export class ModelHubComponent implements Component {
 			case "presetName":
 				this.#submitPresetName();
 				return;
+			case "compactionPoint":
+				this.#submitNameStrip();
+				return;
 			case "cancel":
-				if (this.#strip) this.#closeStrip();
+				if (this.#strip) this.#cancel();
 				return;
 			case "clear":
-				if (this.#browser.query.length > 0) this.#browser.handleCancel();
+				if (entry.kind === "roles" && this.#assigning === null) {
+					this.#rolesSearch.setValue("");
+					this.#buildRolesRows();
+					this.#roleViewport.reveal();
+				} else if (entry.kind === "effort" && this.#assigning === null) {
+					this.#effortSearch.setValue("");
+					this.#syncEffortSelection();
+					this.#effortViewport.reveal();
+				} else {
+					this.#browser.setQuery("");
+					this.#onQueryChanged("");
+				}
 				return;
 			case "assign": {
 				if (this.#strip || !this.#isBrowserView(entry)) return;
@@ -4512,7 +5430,7 @@ export class ModelHubComponent implements Component {
 					: [span(chip.label, color)];
 			}
 			case "scope":
-				return [span(chip.label, chip.scope === "project" ? "accent" : "muted")];
+				return [span(chip.label, chip.scope === "global" ? "accent" : "muted")];
 			case "thinking": {
 				const glyph = chip.thinkingLevel === undefined ? "" : thinkingLevelGlyph(chip.thinkingLevel, theme);
 				return glyph ? [span(glyph, "accent"), span(` ${chip.label}`)] : [span(chip.label)];
@@ -4526,6 +5444,19 @@ export class ModelHubComponent implements Component {
 		const strip = this.#strip;
 		if (!strip) return undefined;
 		if (strip.kind === "name") {
+			if (strip.purpose === "compaction") {
+				const notice = compactionNotice(strip, this.#callbacks.previewCompactionPoint);
+				return node(
+					"row",
+					{ gap: "sm", align: "center" },
+					[
+						text([span(`${strip.model.id} limit:`, "accent")]),
+						col([strip.input], { grow: 1 }),
+						text([span(notice.text, notice.style)], { wrap: "word" }),
+					],
+					"compactionPoint",
+				);
+			}
 			const preset = strip.purpose === "preset";
 			return node(
 				"row",
@@ -4609,120 +5540,7 @@ export class ModelHubComponent implements Component {
 		);
 	}
 
-	#footerHints(): (NativeHint | undefined)[] {
-		const keys = (label: string, ...ids: KeyName[]): NativeHint => ({ keys: ids, label });
-		const cancel = (label: string) => actionHint("tui.select.cancel", label);
-		const upDown = (label: string) => actionHint(["tui.select.up", "tui.select.down"], label);
-		const search = keys("type to search");
-		const kind = keys("kind", "alt+left", "alt+right");
-		const reorder = keys("reorder", "[", "]");
-		const strip = this.#strip;
-		if (strip) {
-			switch (strip.kind) {
-				case "name":
-					return strip.purpose === "preset"
-						? [keys("save preset", "enter"), cancel("cancel")]
-						: [keys("create + pick model", "enter"), cancel("cancel")];
-				case "pattern":
-					return [keys("continue to effort", "enter"), cancel("cancel")];
-				case "effortLevels":
-					return [
-						keys("choose", "left", "right"),
-						keys("toggle", "space"),
-						keys("save", "enter"),
-						cancel("discard"),
-					];
-				case "selectorChoice":
-					return [keys("exact or pattern", "left", "right"), keys("select", "enter"), cancel("cancel")];
-				case "patternEffort":
-					return [keys("thinking level", "left", "right"), keys("apply", "enter"), cancel("keep")];
-				case "role":
-					return [keys("choose", "left", "right"), keys("assign/clear", "enter"), cancel("cancel")];
-				case "scope":
-					return [keys("save scope", "left", "right"), keys("choose", "enter"), cancel("cancel")];
-				case "thinking":
-					return [keys("thinking level", "left", "right"), keys("apply", "enter"), cancel("keep")];
-			}
-		}
-		if (this.#assigning !== null) {
-			if (this.#focus === "scope") {
-				return [keys("models", "enter", "right"), upDown("providers"), search, kind, cancel("cancel")];
-			}
-			const pick =
-				this.#assigning.kind === "fallback"
-					? "pick fallback"
-					: this.#assigning.kind === "fallbackKey"
-						? "pick the protected model"
-						: this.#assigning.kind === "effortRule"
-							? "pick rule model"
-							: "assign";
-			return [keys(pick, "enter"), upDown("models"), keys("providers", "left"), search, kind, cancel("cancel")];
-		}
-		const entry = this.#activeEntry();
-		if (entry.kind === "roles") {
-			if (this.#focus !== "list") {
-				return [
-					upDown("providers"),
-					keys("roles", "enter", "right"),
-					keys("tabs", "alt+left", "alt+right"),
-					cancel("close"),
-				];
-			}
-			const row = this.#rolesRows[this.#roleIndex];
-			if (row?.kind === "fallback") {
-				// Advertise `t` only where a strip would open, as the ANSI footer does.
-				const editable = this.#resolveFallbackEntry(row.role, row.chainIndex) !== undefined;
-				return [
-					upDown("rows"),
-					keys("replace", "enter"),
-					keys("add another", "f"),
-					keys("remove", "x"),
-					editable ? keys("thinking", "t") : undefined,
-					reorder,
-					keys("providers", "left"),
-				];
-			}
-			if (row?.kind === "chainKey") {
-				return [
-					upDown("rows"),
-					keys("add fallback", "enter", "f"),
-					keys("clear chain", "x"),
-					keys("providers", "left"),
-				];
-			}
-			if (row?.kind === "newFallback") {
-				return [upDown("rows"), keys("new model/provider fallback chain", "enter"), keys("providers", "left")];
-			}
-			const editable = row?.kind === "role" && this.#roleThinkingTarget(row.role) !== undefined;
-			return [
-				upDown("rows"),
-				keys("pick", "enter"),
-				keys("fallback", "f"),
-				keys("clear", "x"),
-				editable ? keys("thinking", "t") : undefined,
-				keys("cycle", "c"),
-				reorder,
-				keys("new", "n"),
-				this.#callbacks.onSavePreset ? keys("save preset", "s") : undefined,
-			];
-		}
-		if (entry.kind === "provider" && entry.locked) {
-			return entry.oauth
-				? [keys("log in", "enter"), upDown("providers"), cancel("close")]
-				: [upDown("providers"), cancel("close")];
-		}
-		const refresh = entry.kind === "provider" ? keys("refresh", "f5") : undefined;
-		if (this.#focus === "scope") {
-			return [keys("models", "enter", "right"), upDown("providers"), search, kind, refresh, cancel("close")];
-		}
-		return [
-			keys("assign roles", "enter"),
-			upDown("models"),
-			keys("providers", "left"),
-			search,
-			kind,
-			refresh,
-			cancel("close"),
-		];
+	#footerHints(): NativeHint[] {
+		return [{ keys: [], label: plainText(this.#footerHint()) }];
 	}
 }

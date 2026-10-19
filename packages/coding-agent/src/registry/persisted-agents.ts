@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
+import { type AssistantUsageSource, addAssistantUsage, emptyAgentUsage } from "@oh-my-pi/pi-tui/tools/agent-usage";
 import { ADVISOR_TRANSCRIPT_FILENAME, isAdvisorTranscriptName } from "../advisor/transcript-recorder";
 import { resolveExplicitModelRole } from "../config/model-resolver";
 import { assistantTurnProducedOutput } from "../session/messages";
@@ -14,9 +15,9 @@ import {
 	type AgentHistorySummary,
 	type AgentMetricsSummary,
 	type AgentRegistry,
-	getAgentTombstonePath,
 	MAIN_AGENT_ID,
 } from "./agent-registry";
+import { getAgentTombstonePath } from "./agent-tombstone";
 
 /** Maximum prefix entries inspected for task metadata. */
 const MAX_METADATA_LINES = 64;
@@ -108,6 +109,8 @@ interface AssistantMetrics {
 	 * same verdict the session reached while running it.
 	 */
 	served: boolean;
+	/** Raw usage and timing, for the shared per-agent usage record. */
+	usageSource: AssistantUsageSource;
 }
 
 function assistantMetrics(message: Record<string, unknown>): AssistantMetrics {
@@ -122,6 +125,11 @@ function assistantMetrics(message: Record<string, unknown>): AssistantMetrics {
 		cost: finiteNumber(cost?.total),
 		contextTokens: finiteNumber(usage.totalTokens) || undefined,
 		resolvedModel: provider && model ? `${provider}/${model}` : undefined,
+		usageSource: {
+			usage: usage as AssistantUsageSource["usage"],
+			ttft: typeof message.ttft === "number" ? message.ttft : undefined,
+			duration: typeof message.duration === "number" ? message.duration : undefined,
+		},
 		served: assistantTurnProducedOutput({
 			stopReason: message.stopReason,
 			content,
@@ -153,6 +161,8 @@ async function readPersistedAgentHistory(
 	const modelChangeById = new Map<string, { model: string; role?: string; resolvedModelIsFallback: boolean }>();
 	let leafId: string | undefined;
 	let leafTimestamp: number | undefined;
+	let directCost = 0;
+	// Direct cost mirrors lifetime SessionManager usage; legacy metrics below stay leaf-scoped.
 	try {
 		await visitEntriesFromFileStream(
 			transcript.sessionFile,
@@ -166,6 +176,12 @@ async function readPersistedAgentHistory(
 				leafId = id;
 				const parsedTimestamp = timestampOf(record.timestamp);
 				if (parsedTimestamp !== undefined) leafTimestamp = parsedTimestamp;
+				if (record.type === "model_usage") {
+					const usage = recordOf(record.usage);
+					const cost = recordOf(usage?.cost);
+					directCost += finiteNumber(cost?.total);
+					return;
+				}
 				if (record.type === "model_change" && typeof record.model === "string") {
 					modelChangeById.set(id, {
 						model: record.model,
@@ -176,7 +192,11 @@ async function readPersistedAgentHistory(
 				}
 				if (record.type !== "message") return;
 				const message = recordOf(record.message);
-				if (message?.role === "assistant") assistantById.set(id, assistantMetrics(message));
+				if (message?.role === "assistant") {
+					const assistant = assistantMetrics(message);
+					assistantById.set(id, assistant);
+					directCost += assistant.cost;
+				}
 			},
 			// Advisor transcripts are the one file that can grow pathologically large
 			// (issue #9553); cap their scan so one bad transcript can't stall the Hub
@@ -222,6 +242,8 @@ async function readPersistedAgentHistory(
 	let servedModel: string | undefined;
 	let latestModelChange: { model: string; resolvedModelIsFallback: boolean } | undefined;
 	const visited = new Set<string>();
+	/** Assistant turns on the active branch, newest first (the walk runs leaf → root). */
+	const branchAssistants: AssistantMetrics[] = [];
 	for (let id = leafId; id && !visited.has(id); id = parents.get(id)) {
 		visited.add(id);
 		const modelChange = modelChangeById.get(id);
@@ -248,6 +270,7 @@ async function readPersistedAgentHistory(
 		if (servedModel === undefined && assistant.served && assistant.resolvedModel) {
 			servedModel = assistant.resolvedModel;
 		}
+		branchAssistants.push(assistant);
 		metrics.requests++;
 		metrics.tokens += assistant.tokens;
 		metrics.tools += assistant.tools;
@@ -263,7 +286,14 @@ async function readPersistedAgentHistory(
 		resolvedModelIsFallback = servedModel !== undefined ? false : latestModelChange?.resolvedModelIsFallback;
 	}
 	if (contextTokens !== undefined) metrics.contextTokens = contextTokens;
+	const usage = emptyAgentUsage();
+	// Oldest first, so `last` ends on the newest request.
+	for (let index = branchAssistants.length - 1; index >= 0; index--) {
+		addAssistantUsage(usage, branchAssistants[index]!.usageSource);
+	}
+	metrics.agentUsage = usage;
 	return {
+		directCost,
 		...(metrics.requests > 0 ? { metrics } : {}),
 		...(resolvedModel ? { resolvedModel, resolvedModelIsFallback } : {}),
 		...(modelRole ? { modelRole } : {}),
@@ -341,7 +371,10 @@ async function readPersistedAgentMetadata(
 				hasSessionInit = true;
 				createdAt ??= timestampOf(record.timestamp);
 				if (typeof record.task === "string") activity = summarizePersistedTask(record.task);
-				const inferred = typeof record.systemPrompt === "string" ? inferBundledAgent(record.systemPrompt) : {};
+				const systemPrompt = Array.isArray(record.systemPrompt)
+					? record.systemPrompt.join("\n\n")
+					: record.systemPrompt;
+				const inferred = typeof systemPrompt === "string" ? inferBundledAgent(systemPrompt) : {};
 				history = {
 					...history,
 					...inferred,

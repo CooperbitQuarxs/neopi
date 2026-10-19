@@ -26,8 +26,10 @@ import * as execSettings from "../exec/settings";
 import * as launchSettings from "../launch/settings";
 import * as evalSettings from "../eval/settings";
 import * as taskSettings from "../task/settings";
+import * as ircSettings from "../irc/settings";
 import * as planModeSettings from "../plan-mode/settings";
 import * as goalsSettings from "../goals/settings";
+import * as titleSettings from "../utils/title-settings";
 import * as extensibilitySettings from "../extensibility/settings";
 import * as webSettings from "../web/settings";
 import * as toolsBrowserSettings from "../tools/browser/settings";
@@ -40,7 +42,9 @@ import * as sttSettings from "../stt/settings";
 import * as liveSettings from "../live/settings";
 import * as collabSettings from "../collab/settings";
 import * as controlSettings from "../control/settings";
+import * as monitorSettings from "../monitor/settings";
 import * as commandsSettings from "../commands/settings";
+import * as issuesSettings from "../issues/settings";
 import * as chainsSettings from "../chains/settings";
 import * as moaSettings from "../moa/settings";
 import * as streamSettings from "../stream/settings";
@@ -72,8 +76,10 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	launchSettings,
 	evalSettings,
 	taskSettings,
+	ircSettings,
 	planModeSettings,
 	goalsSettings,
+	titleSettings,
 	extensibilitySettings,
 	webSettings,
 	toolsBrowserSettings,
@@ -84,7 +90,9 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	sttSettings,
 	collabSettings,
 	controlSettings,
+	monitorSettings,
 	commandsSettings,
+	issuesSettings,
 	chainsSettings,
 	moaSettings,
 	streamSettings,

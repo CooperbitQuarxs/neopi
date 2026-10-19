@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { Input } from "@oh-my-pi/pi-tui/components/input";
+import { SPACE_HOLD_MECHANICAL_RUN } from "@oh-my-pi/pi-tui/space-hold";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import {
 	resetHangulCompatibilityJamoWidthForTests,
@@ -31,6 +32,22 @@ describe("Input component", () => {
 		resetHangulCompatibilityJamoWidthForTests();
 	});
 
+	it("restores a bounded caret without splitting emoji or combining graphemes", () => {
+		const input = new Input();
+		input.setValue("a👩‍💻e\u0301z");
+		input.setCursor(4);
+		expect(input.getCursor()).toBe(1);
+		input.handleInput("X");
+		expect(input.getValue()).toBe("aX👩‍💻e\u0301z");
+		input.setCursor(input.getValue().length - 2);
+		expect(input.getCursor()).toBe(7);
+		input.setCursor(-10);
+		expect(input.getCursor()).toBe(0);
+		input.setCursor(Number.NaN);
+		expect(input.getCursor()).toBe(0);
+		input.setCursor(999);
+		expect(input.getCursor()).toBe(input.getValue().length);
+	});
 	it("replaces a volatile dictation preview in place and undoes the committed dictation in one step", () => {
 		const input = setupAtEnd("ask ");
 		input.setVolatileText("hel");

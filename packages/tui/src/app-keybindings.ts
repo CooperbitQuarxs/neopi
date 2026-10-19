@@ -38,6 +38,7 @@ interface AppKeybindings {
 	"app.model.selectTemporary": true;
 	"app.tools.expand": true;
 	"app.tools.toggleVisibility": true;
+	"app.ask.hide": true;
 	"app.editor.external": true;
 	"app.message.followUp": true;
 	"app.message.chain": true;
@@ -50,6 +51,7 @@ interface AppKeybindings {
 	"app.clipboard.copyLine": true;
 	"app.clipboard.copyPrompt": true;
 	"app.agents.hub": true;
+	"app.irc.viewer": true;
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
@@ -60,10 +62,12 @@ interface AppKeybindings {
 	"app.session.rename": true;
 	"app.session.delete": true;
 	"app.session.deleteNoninvasive": true;
-	"app.tree.foldOrUp": true;
-	"app.tree.unfoldOrDown": true;
+	"app.tree.previousBranch": true;
+	"app.tree.nextBranch": true;
 	"app.plan.toggle": true;
 	"app.history.search": true;
+	"app.navigation.back": true;
+	"app.navigation.forward": true;
 	"app.stt.toggle": true;
 	"app.dictation.toggle": true;
 	"app.live.toggle": true;
@@ -140,12 +144,17 @@ export const KEYBINDINGS = {
 		description: "Select temporary model for current session",
 	},
 	"app.tools.expand": {
-		defaultKeys: "ctrl+o",
+		// Ctrl+O is menu-history back (app.navigation.back), Vim's jumplist key.
+		defaultKeys: "alt+e",
 		description: "Expand tools",
 	},
 	"app.tools.toggleVisibility": {
 		defaultKeys: "ctrl+shift+o",
 		description: "Show or hide tool activity",
+	},
+	"app.ask.hide": {
+		defaultKeys: "alt+h",
+		description: "Hide or show a pending ask dialog",
 	},
 	"app.editor.external": {
 		defaultKeys: "ctrl+g",
@@ -225,6 +234,10 @@ export const KEYBINDINGS = {
 		defaultKeys: "alt+a",
 		description: "Open the agent hub",
 	},
+	"app.irc.viewer": {
+		defaultKeys: "alt+i",
+		description: "Open the IRC communications viewer",
+	},
 	"app.session.observe": {
 		defaultKeys: "ctrl+s",
 		description: "Open the agent hub",
@@ -249,13 +262,13 @@ export const KEYBINDINGS = {
 		defaultKeys: "ctrl+backspace",
 		description: "Delete session (non-invasive)",
 	},
-	"app.tree.foldOrUp": {
-		defaultKeys: ["ctrl+left", "alt+left"],
-		description: "Fold or move up",
+	"app.tree.previousBranch": {
+		defaultKeys: [],
+		description: "Jump to the previous branch in /tree",
 	},
-	"app.tree.unfoldOrDown": {
-		defaultKeys: ["ctrl+right", "alt+right"],
-		description: "Unfold or move down",
+	"app.tree.nextBranch": {
+		defaultKeys: [],
+		description: "Jump to the next branch in /tree",
 	},
 	"app.plan.toggle": {
 		defaultKeys: "alt+shift+p",
@@ -264,6 +277,17 @@ export const KEYBINDINGS = {
 	"app.history.search": {
 		defaultKeys: "ctrl+r",
 		description: "Search history",
+	},
+	"app.navigation.back": {
+		defaultKeys: "ctrl+o",
+		description: "Go back to the previously visited menu or the conversation",
+	},
+	"app.navigation.forward": {
+		// Ctrl+I is distinct from Tab only under the Kitty keyboard protocol or
+		// xterm modifyOtherKeys; elsewhere both arrive as 0x09 and Tab keeps its
+		// meaning (context switch, autocomplete). Alt+O works on every terminal.
+		defaultKeys: ["ctrl+i", "alt+o"],
+		description: "Go forward in the menu history",
 	},
 	// =====================================================================
 	// NEVER ALTER. CTRL+SPACE IS A RESERVED ACCESSIBILITY KEYBINDING.
@@ -296,7 +320,7 @@ export const KEYBINDINGS = {
 	},
 	"app.sidebar.toggle": {
 		defaultKeys: "alt+t",
-		description: "Toggle the side panel",
+		description: "Side panel views: then t todo, a agents, i IRC (the shown view's key hides it)",
 	},
 	"app.sidebar.scrollUp": {
 		defaultKeys: "alt+shift+up",

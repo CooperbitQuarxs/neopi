@@ -773,7 +773,7 @@ class MixtureCall {
 				tokenizer.countTokens(systemPrompt) -
 				budget,
 		);
-		const frames = Math.min(providerFrameBudget(member.model.provider), Math.floor(remaining / FRAME_TOKEN_ESTIMATE));
+		const frames = Math.min(providerFrameBudget(member.model), Math.floor(remaining / FRAME_TOKEN_ESTIMATE));
 		if (frames < 1) {
 			logger.warn("mixture transcript degraded to compact", {
 				mixture: run.key.mixture,

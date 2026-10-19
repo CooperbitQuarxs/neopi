@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
@@ -47,7 +48,8 @@ function userMessageTree(): SessionTreeNode[] {
 
 function renderSelector(selector: TreeSelectorComponent): string {
 	const lines = (selector as unknown as { render: (w: number) => string[] }).render(120);
-	return Bun.stripANSI(lines.join("\n"));
+	// A focused search field carries the hardware-cursor marker, which stripANSI does not parse.
+	return Bun.stripANSI(lines.join("\n").replaceAll(CURSOR_MARKER, ""));
 }
 
 describe("issue #1909: tree-selector empty-state messaging", () => {
@@ -79,7 +81,7 @@ describe("issue #1909: tree-selector empty-state messaging", () => {
 			() => {},
 		);
 		// Type a character that won't match anything in the tree.
-		selector.handleInput("i");
+		selector.handleInput("/");
 		selector.handleInput("z");
 		const text = renderSelector(selector);
 

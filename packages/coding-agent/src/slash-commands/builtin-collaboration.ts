@@ -23,6 +23,7 @@ import { copyToClipboard } from "../utils/clipboard";
 import { refreshStatusLine } from "./builtin-modes";
 import { CollabQrCodeComponent, collabBrowserLink } from "@oh-my-pi/pi-tui/chrome/collab-qrcode";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
+import { formatDumpArchiveReport } from "../session/session-dump-format";
 import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 import { cfgBrowserEnabled, cfgBrowserHeadless } from "../tools/browser/settings";
@@ -63,7 +64,8 @@ async function formatChainingStatus(cwd: string): Promise<string> {
 		lines.push("Chains:");
 		for (const chain of chains) {
 			const marker = chain.name === active ? "*" : "-";
-			lines.push(`  ${marker} ${chain.name}: ${chain.steps.map(step => step.name).join(" → ")}`);
+			const steps = chain.steps.map(step => (step.enabled === false ? `${step.name} (off)` : step.name));
+			lines.push(`  ${marker} ${chain.name}: ${steps.join(" → ")}`);
 		}
 	}
 	for (const warning of warnings) lines.push(`Warning: ${warning}`);
@@ -104,7 +106,7 @@ async function applyChainingVerb(verb: string, rest: string, cwd: string): Promi
 
 const CHAINING_USAGE = "Usage: /chain [on|off|status|use [name]|configure]";
 
-const MIXTURE_USAGE = "Usage: /mixture [configure|list|use <name>|reset|status]";
+const MIXTURE_USAGE = "Usage: /moa [configure|list|use <name>|reset|status]";
 
 async function mixtureList(runtime: Pick<SlashCommandRuntime, "session" | "settings" | "cwd">): Promise<string> {
 	const agentDir = runtime.session.getMixtureAgentDir() ?? getAgentDir();
@@ -129,7 +131,7 @@ async function mixtureList(runtime: Pick<SlashCommandRuntime, "session" | "setti
 			`  ${active === item.definition.name ? "*" : "-"} ${sanitizeDisplayLine(item.definition.name)} (${state})`,
 		);
 	}
-	if (found.mixtures.length === 0) lines.push("  (none — open /mixture to create one)");
+	if (found.mixtures.length === 0) lines.push("  (none — open /moa to create one)");
 	for (const warning of found.warnings) lines.push(`Warning: ${sanitizeDisplayLine(warning)}`);
 	return lines.join("\n");
 }
@@ -319,8 +321,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		},
 	},
 	{
-		name: "mixture",
-		aliases: ["moa"],
+		name: "moa",
 		icon: "advisor",
 		description: "Configure, select, reset, and inspect Mixture of Agents models and runs",
 		acpDescription: "Manage Mixture of Agents models and runs",
@@ -344,7 +345,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				return commandConsumed();
 			}
 			if (verb === "configure") {
-				await runtime.output("/mixture configure requires the interactive TUI.");
+				await runtime.output("/moa configure requires the interactive TUI.");
 				return commandConsumed();
 			}
 			const message =
@@ -443,8 +444,33 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		icon: "clipboard",
 		description: "Copy session transcript to clipboard (and write LLM request JSON to tmp)",
 		acpDescription: "Return full transcript as plain text, with LLM request JSON path",
+		acpInputHint: "[all|anon]",
+		subcommands: [
+			{
+				name: "all",
+				description: "Write a zip with the main transcript, LLM request JSON, and one file per subagent",
+			},
+			{
+				name: "anon",
+				description: "Write a zip of anonymized session JSONL (contents redacted, metadata kept) plus subagents",
+			},
+		],
 		allowArgs: true,
-		handle: async (_command, runtime) => {
+		handle: async (command, runtime) => {
+			const { verb } = parseSubcommand(command.args);
+			if (verb === "all" || verb === "anon") {
+				const archive =
+					verb === "all"
+						? await runtime.session.dumpSessionArchiveToTmpDir()
+						: await runtime.session.dumpAnonymizedArchiveToTmpDir();
+				if (!archive) {
+					await runtime.output("No messages to dump yet.");
+					return commandConsumed();
+				}
+				await runtime.output(formatDumpArchiveReport(archive).join("\n"));
+				return commandConsumed();
+			}
+			if (verb) return usage("Usage: /dump [all|anon]", runtime);
 			const text = runtime.session.formatSessionAsText();
 			if (!text) {
 				await runtime.output("No messages to dump yet.");
@@ -466,8 +492,12 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			await runtime.output(lines.join("\n"));
 			return commandConsumed();
 		},
-		handleTui: async (_command, runtime) => {
-			await runtime.ctx.handleDumpCommand();
+		handleTui: async (command, runtime) => {
+			const { verb } = parseSubcommand(command.args);
+			if (verb === "all") await runtime.ctx.handleDumpAllCommand();
+			else if (verb === "anon") await runtime.ctx.handleDumpAnonCommand();
+			else if (verb) runtime.ctx.showStatus("Usage: /dump [all|anon]");
+			else await runtime.ctx.handleDumpCommand();
 			clearSubmittedText(runtime);
 		},
 	},

@@ -1,8 +1,17 @@
 /**
- * NeoPi operator commands: `/persona`, `/loadout`, `/repl`, `/kernel`.
+ * NeoPi operator commands: `/notice`, `/persona`, `/loadout`, `/repl`, `/kernel`.
  */
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import {
+	currentDeferredDraft,
+	type DetachedDraft,
+	runWithDetachedDraft,
+	runWithoutDetachedDraft,
+} from "@oh-my-pi/pi-tui/draft-scope";
+import { formatVisionMarker } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
+import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import type { InteractiveModeContext } from "../modes/types";
+import { deferredSubmissionsFor, DEFER_USAGE, isDeferredSubmissionActive, parseDeferredInput } from "../neopi/defer";
 import { type LoadoutHost, loadoutFeature } from "../neopi/loadout";
 import {
 	PERSONA_SUBCOMMANDS,
@@ -14,15 +23,21 @@ import {
 	sessionPersonaHost,
 } from "../neopi/persona-config";
 import { parseReplTarget, REPL_TARGETS, type ReplTarget, replTargetLabel } from "../neopi/repl";
+import noticeTemplate from "../prompts/system/operator-notice.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { buildArgumentCompletions, buildSubcommandInlineHint, ghostHint } from "./builtin-completions";
+import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import type { SlashCommandSpec, SubcommandDef, TuiSlashCommandRuntime } from "./types";
+
+// Compile the static wrapper without prompt.format(), which would rewrite payload whitespace.
+const renderNotice = prompt.compile(noticeTemplate.trimEnd());
 
 const PERSONA_DEFS: SubcommandDef[] = PERSONA_SUBCOMMANDS.map(item => ({ ...item }));
 const LIVE_PERSONA_DEFS = PERSONA_DEFS.filter(item => item.name !== "live");
 const LOADOUT_DEFS: SubcommandDef[] = [
 	{ name: "set", description: "Apply a loadout", usage: "<name>" },
+	{ name: "use", description: "Apply a loadout (alias for set)", usage: "<name>" },
 	{ name: "off", description: "Restore the configured models" },
 	{ name: "list", description: "List loadouts; * marks the active one" },
 	{ name: "show", description: "Print a loadout definition", usage: "<name>" },
@@ -107,7 +122,7 @@ function personaInlineHint(argumentText: string): string | null {
 	return lead ? livePersonaSubcommandHint(argumentText.slice(lead.length)) : personaSubcommandHint(argumentText);
 }
 
-const LOADOUT_USAGE = "Usage: /loadout [set <name>|off|list|show <name>|status]";
+const LOADOUT_USAGE = "Usage: /loadout [set <name>|use <name>|off|list|show <name>|status]";
 const REPL_USAGE = "Usage: /repl [agent|js|py|bash]";
 const KERNEL_USAGE = "Usage: /kernel [status|reset <py|js>|interrupt]";
 
@@ -208,6 +223,116 @@ function kernelStatus(session: AgentSession): string {
 
 export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
+		name: "defer",
+		icon: "prompt",
+		description: "Submit composer input after a delay, or cancel a deferred submission",
+		inlineHint: "<duration> <input> | cancel <id|all>",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const { ctx } = runtime;
+			clearSubmittedText(runtime);
+			const schedules = deferredSubmissionsFor(ctx.session);
+			const cancellation = /^cancel\s+(\d+|all)$/.exec(command.args);
+			if (cancellation) {
+				const count = schedules.cancel(cancellation[1] === "all" ? undefined : Number(cancellation[1]));
+				ctx.showStatus(`Cancelled ${count} deferred submission${count === 1 ? "" : "s"}.`);
+				return;
+			}
+			const parsed = parseDeferredInput(command.text.slice(command.name.length + 2).trimStart());
+			if (!parsed) {
+				ctx.showError(DEFER_USAGE);
+				return;
+			}
+			const images = runtime.input?.images ? [...runtime.input.images] : [];
+			const imageLinks = runtime.input?.imageLinks ? [...runtime.input.imageLinks] : images.map(() => undefined);
+			const id = schedules.schedule(
+				parsed.delayMs,
+				() =>
+					runWithoutDetachedDraft(async () => {
+						let returned: DetachedDraft | undefined;
+						try {
+							await runWithDetachedDraft(async () => {
+								const draft = currentDeferredDraft();
+								if (!draft) throw new Error("Missing deferred draft scope");
+								returned = draft;
+								ctx.editor.pendingImages = [...images];
+								ctx.editor.pendingImageLinks = [...imageLinks];
+								ctx.editor.imageLinks = draft.imageLinks;
+								// Enter has already removed the submitted text; only refusal paths put it back.
+								try {
+									await ctx.editor.onSubmit?.(parsed.input);
+								} catch (error) {
+									ctx.editor.setText(parsed.input);
+									ctx.editor.pendingImages = [...images];
+									ctx.editor.pendingImageLinks = [...imageLinks];
+									throw error;
+								}
+							}, "defer");
+						} finally {
+							if (returned && isDeferredSubmissionActive()) {
+								const text =
+									returned.text ||
+									returned.images.map((_, index) => formatVisionMarker("image", index + 1)).join(" ");
+								if (text.trim()) {
+									restoreDetachedDraft(ctx.editor, text, returned.images, returned.imageLinks);
+									ctx.showWarning(
+										"Deferred input was not consumed; returned to the composer beside your current draft.",
+									);
+									ctx.ui.requestRender();
+								}
+							}
+						}
+					}),
+				error => ctx.showError(`Deferred submission failed: ${errorMessage(error)}`),
+			);
+			if (images.length && images.every((image, index) => ctx.editor.pendingImages[index] === image)) {
+				ctx.editor.pendingImages.splice(0, images.length);
+				ctx.editor.pendingImageLinks.splice(0, images.length);
+				ctx.editor.imageLinks = ctx.editor.pendingImageLinks.length ? ctx.editor.pendingImageLinks : undefined;
+			}
+			ctx.showStatus(`Deferred submission ${id} scheduled. Cancel with /defer cancel ${id}.`);
+		},
+	},
+	{
+		name: "notice",
+		icon: "prompt",
+		description: "Send an operator-authored system notice to this session",
+		inlineHint: "<text>",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const { ctx } = runtime;
+			// Discard only the command and its separator; all remaining text is literal.
+			const text = command.text.slice(command.name.length + 2);
+			clearSubmittedText(runtime);
+			if (!text.trim()) {
+				ctx.showStatus("Usage: /notice <text>");
+				return;
+			}
+			const notice = renderNotice({ text });
+			const options = {
+				synthetic: true,
+				userInitiated: true,
+				attribution: "user" as const,
+				rawText: command.text,
+				expandPromptTemplates: false,
+				streamingBehavior: "steer" as const,
+			};
+			ctx.editor.clearSubmittedDraft();
+			if (ctx.onInputCallback && !ctx.session.isStreaming) {
+				ctx.onInputCallback({ text: notice, ...options, cancelled: false, started: true });
+				return;
+			}
+			try {
+				await ctx.session.prompt(notice, options);
+			} catch (error) {
+				ctx.editor.setCollapsedText(command.text);
+				ctx.showError(errorMessage(error));
+			}
+			ctx.updatePendingMessagesDisplay();
+			ctx.ui.requestRender();
+		},
+	},
+	{
 		name: "persona",
 		icon: "prompt",
 		description: "Edit and switch system-prompt personas; `/persona live` does the same for the voice model",
@@ -251,10 +376,10 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "loadout",
 		icon: "swap",
 		description: "Switch runtime model loadouts (model roles, fallback chains, task-agent models)",
-		acpInputHint: "[set <name>|off|list|show <name>|status]",
+		acpInputHint: "[set <name>|use <name>|off|list|show <name>|status]",
 		subcommands: LOADOUT_DEFS,
 		getTuiArgumentCompletions: prefix =>
-			subcommandThenNameCompletions(prefix, "", LOADOUT_DEFS, new Set(["set", "show"]), async () =>
+			subcommandThenNameCompletions(prefix, "", LOADOUT_DEFS, new Set(["set", "use", "show"]), async () =>
 				(await loadoutFeature().data()).items.map(item => ({
 					name: item.name,
 					description: item.loadout.mainModel,

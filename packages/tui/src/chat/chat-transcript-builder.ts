@@ -13,7 +13,7 @@
  */
 import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { type Component, type TUI } from "../tui";
+import { type Component, Container, type TUI } from "../tui";
 import type { AdvisorMessageDetails } from "./messages";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "./messages";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
@@ -66,7 +66,7 @@ import {
 } from "./late-diagnostics-message";
 import { groupedReadUsageCallIds, ReadToolGroupComponent, readArgsCollapseIntoGroup } from "./read-tool-group";
 import { SkillMessageComponent } from "./skill-message";
-import { ToolExecutionComponent } from "./tool-execution";
+import { ToolExecutionComponent, type ToolResultFrame } from "./tool-execution";
 import { TranscriptContainer } from "../chrome/transcript-container";
 import { createUsageRowBlock, TurnUsageTally, turnElapsedMs } from "../overlays/usage-row";
 import { CollapsedSyntheticMessageComponent, UserMessageComponent } from "./user-message";
@@ -80,9 +80,31 @@ export interface ChatTranscriptBuilderDeps {
 	cwd: string;
 	hideThinkingBlock?: () => boolean;
 	proseOnlyThinking?: () => boolean;
+	expandThinkingBlocks?: () => boolean;
 	/** Session-scoped resolved destinations for model-authored Markdown links. */
 	linkTargets?: ReadonlyMap<string, string>;
+	/** Draw charts under numeric tables; false for transcripts that are not the main session's. Default: true. */
+	tableCharts?: boolean;
 	requestRender: () => void;
+}
+
+/** One running tool call as the owning session last reported it. */
+export interface TranscriptLiveTool {
+	toolCallId: string;
+	toolName: string;
+	args: unknown;
+	/** Latest progress frame; absent until the tool reports progress. */
+	partialResult?: ToolResultFrame;
+}
+
+/**
+ * Owner state that is not in the persisted transcript yet: the assistant
+ * message being streamed (or just finished and not yet written) and the
+ * tools still running. A remote viewer receives it as a pushed snapshot.
+ */
+export interface TranscriptLiveState {
+	assistant?: Extract<AgentMessage, { role: "assistant" }>;
+	tools: readonly TranscriptLiveTool[];
 }
 
 export class ChatTranscriptBuilder {
@@ -105,6 +127,22 @@ export class ChatTranscriptBuilder {
 	#expandables: Array<{ setExpanded(expanded: boolean): void }> = [];
 	#expanded = false;
 	#entryComponents = new Map<string, Component[]>();
+	/**
+	 * Live tail: owner state not persisted yet, rendered after {@link container}.
+	 * It never enters the transcript container, so persisted rows keep their
+	 * order and the tail is simply dropped once the entry it previewed lands.
+	 */
+	readonly liveContainer = new Container();
+	#live: TranscriptLiveState | undefined;
+	/** Timestamps of persisted assistant messages; a live message with one of them is already on screen. */
+	#persistedAssistants = new Set<number>();
+	#persistedToolResults = new Set<string>();
+	#liveAssistantTimestamp: number | undefined;
+	#liveAssistant: AssistantMessageComponent | undefined;
+	#liveSegments = new Map<string, AssistantMessageComponent>();
+	#liveTools = new Map<string, ToolExecutionComponent>();
+	/** Last partial frame applied to each card, so an unchanged live push repaints nothing. */
+	#appliedPartials = new WeakMap<object, Map<string, string>>();
 
 	readonly #deps: ChatTranscriptBuilderDeps;
 
@@ -115,23 +153,39 @@ export class ChatTranscriptBuilder {
 
 	/** Whether the transcript currently holds any rendered rows. */
 	get isEmpty(): boolean {
-		return this.container.children.length === 0;
+		return this.container.children.length === 0 && this.liveContainer.children.length === 0;
 	}
 
 	/** Discard all components and rebuild the whole transcript from `entries`. */
 	rebuild(entries: TranscriptEntry[]): void {
+		const live = this.#live;
 		this.reset();
+		this.#live = live;
 		for (const entry of entries) this.#appendEntry(entry);
 		// Flush the trailing turn's usage row only once its tools are materialized
 		// (a read whose result has not arrived stays pending); otherwise the row
 		// would sit above its tools. The drain happens here at the end of the pass.
 		if (this.#readArgs.size === 0 && this.#pendingTools.size === 0) this.#flushPendingUsage();
+		this.#applyLive();
 	}
 
 	/** Append newly persisted entries without rebuilding already rendered rows. */
 	append(entries: TranscriptEntry[]): void {
 		for (const entry of entries) this.#appendEntry(entry);
 		if (this.#readArgs.size === 0 && this.#pendingTools.size === 0) this.#flushPendingUsage();
+		this.#applyLive();
+	}
+
+	/**
+	 * Show the owner's unpersisted state after the persisted transcript. The
+	 * streaming assistant message renders as a provisional tail until an entry
+	 * with the same timestamp is appended; partial tool results update the
+	 * persisted pending card when its call is already on screen, else the
+	 * provisional one. `undefined` drops the tail.
+	 */
+	setLive(state: TranscriptLiveState | undefined): void {
+		this.#live = state;
+		this.#applyLive();
 	}
 
 	/**
@@ -143,6 +197,9 @@ export class ChatTranscriptBuilder {
 	setExpanded(expanded: boolean): void {
 		this.#expanded = expanded;
 		for (const component of this.#expandables) component.setExpanded(expanded);
+		this.#liveAssistant?.setExpanded(expanded);
+		for (const component of this.#liveSegments.values()) component.setExpanded(expanded);
+		for (const component of this.#liveTools.values()) component.setExpanded(expanded);
 	}
 
 	get expanded(): boolean {
@@ -160,6 +217,7 @@ export class ChatTranscriptBuilder {
 
 	/** Tear down components (sealing pending spinners) and clear build state. */
 	reset(): void {
+		this.#live = undefined;
 		for (const pending of this.#pendingTools.values()) pending.seal();
 		this.#pendingTools.clear();
 		this.#readArgs.clear();
@@ -178,12 +236,156 @@ export class ChatTranscriptBuilder {
 		this.#todoSnapshot = null;
 		this.#expandables = [];
 		this.#entryComponents.clear();
+		this.#persistedAssistants.clear();
+		this.#persistedToolResults.clear();
+		this.#clearLiveTail();
 		this.container.dispose();
 		this.container.clear();
 	}
 
 	dispose(): void {
+		this.#live = undefined;
 		this.reset();
+	}
+
+	#clearLiveTail(): void {
+		for (const tool of this.#liveTools.values()) tool.seal();
+		this.liveContainer.dispose();
+		this.liveContainer.clear();
+		this.#liveAssistant = undefined;
+		this.#liveAssistantTimestamp = undefined;
+		this.#liveSegments.clear();
+		this.#liveTools.clear();
+	}
+
+	#applyLive(): void {
+		const live = this.#live;
+		const message = live?.assistant;
+		this.#renderLiveAssistant(
+			message && !this.#persistedAssistants.has(message.timestamp) ? message : undefined,
+			live?.tools ?? [],
+		);
+		for (const tool of live?.tools ?? []) {
+			const card = this.#pendingTools.get(tool.toolCallId) ?? this.#liveTools.get(tool.toolCallId);
+			if (!card) continue;
+			if (card instanceof ToolExecutionComponent) card.setExecutionStarted(tool.toolCallId);
+			const partial = tool.partialResult;
+			if (!partial) continue;
+			const signature = JSON.stringify(partial);
+			let applied = this.#appliedPartials.get(card);
+			if (applied?.get(tool.toolCallId) === signature) continue;
+			if (!applied) {
+				applied = new Map<string, string>();
+				this.#appliedPartials.set(card, applied);
+			}
+			applied.set(tool.toolCallId, signature);
+			card.updateResult(partial, true, tool.toolCallId);
+		}
+	}
+
+	/** Same shape as the live main view: text before tools, one card per call, text after each call. */
+	#renderLiveAssistant(
+		message: Extract<AgentMessage, { role: "assistant" }> | undefined,
+		tools: readonly TranscriptLiveTool[],
+	): void {
+		if (this.#liveAssistantTimestamp !== message?.timestamp) {
+			this.#clearLiveTail();
+			this.#liveAssistantTimestamp = message?.timestamp;
+		}
+		const order: Component[] = [];
+		const toolIds = new Set<string>();
+		const segmentIds = new Set<string>();
+		const showTools = !displayPreferences.hideToolActivity;
+		if (message) {
+			const timeline = splitAssistantMessageToolTimeline(message);
+			this.#liveAssistant ??= this.#createAssistantComponent();
+			this.#liveAssistant.updateContent(timeline.beforeTools, { transient: true });
+			order.push(this.#liveAssistant);
+			for (const content of message.content) {
+				if (content.type !== "toolCall" || toolIds.has(content.id)) continue;
+				toolIds.add(content.id);
+				if (showTools && !this.#pendingTools.has(content.id) && !this.#persistedToolResults.has(content.id)) {
+					order.push(this.#liveTool(content.id, content.name, content.arguments));
+				}
+				const after = timeline.afterToolCalls.get(content.id);
+				if (after && assistantHasVisibleContent(after)) {
+					let segment = this.#liveSegments.get(content.id);
+					if (!segment) {
+						segment = this.#createAssistantComponent();
+						this.#liveSegments.set(content.id, segment);
+					}
+					segment.updateContent(after, { transient: true });
+					segmentIds.add(content.id);
+					order.push(segment);
+				}
+			}
+		}
+		for (const tool of tools) {
+			if (!showTools || this.#pendingTools.has(tool.toolCallId) || this.#persistedToolResults.has(tool.toolCallId))
+				continue;
+			let card = this.#liveTools.get(tool.toolCallId);
+			if (!toolIds.has(tool.toolCallId)) {
+				card = this.#liveTool(tool.toolCallId, tool.toolName, tool.args);
+				toolIds.add(tool.toolCallId);
+				order.push(card);
+			}
+			card?.setExecutionStarted(tool.toolCallId);
+		}
+		for (const [id, card] of this.#liveTools) {
+			if (showTools && toolIds.has(id) && !this.#pendingTools.has(id) && !this.#persistedToolResults.has(id))
+				continue;
+			card.seal();
+			card.dispose();
+			this.#liveTools.delete(id);
+		}
+		for (const [id, segment] of this.#liveSegments) {
+			if (segmentIds.has(id)) continue;
+			segment.dispose();
+			this.#liveSegments.delete(id);
+		}
+		this.liveContainer.clear();
+		for (const component of order) this.liveContainer.addChild(component);
+	}
+
+	#liveTool(id: string, name: string, args: unknown): ToolExecutionComponent {
+		let card = this.#liveTools.get(id);
+		if (card) {
+			card.updateArgs(args, id);
+			return card;
+		}
+		card = new ToolExecutionComponent(
+			name,
+			args,
+			{
+				useBuiltInRenderer: this.#deps.isBuiltInTool?.(name) ?? true,
+				showImages: displayPreferences.showImages,
+			},
+			this.#deps.getTool?.(name),
+			this.#deps.ui,
+			this.#deps.cwd,
+			id,
+		);
+		card.setExpanded(this.#expanded);
+		this.#liveTools.set(id, card);
+		return card;
+	}
+
+	#createAssistantComponent(): AssistantMessageComponent {
+		const component = new AssistantMessageComponent(
+			undefined,
+			this.#deps.hideThinkingBlock?.() ?? false,
+			() => this.#deps.requestRender(),
+			this.#deps.getMessageRenderer ? undefined : [],
+			this.#deps.ui.imageBudget,
+			this.#deps.proseOnlyThinking ? this.#deps.proseOnlyThinking() : true,
+			this.#deps.linkTargets,
+			this.#deps.expandThinkingBlocks?.() ?? false,
+		);
+		component.setImagesVisible(displayPreferences.showImages);
+		component.setToolResultImagesVisible(!displayPreferences.hideToolActivity);
+		component.setTableChartsVisible(this.#deps.tableCharts !== false);
+		component.setExpanded(this.#expanded);
+		return component;
 	}
 
 	#appendEntry(entry: TranscriptEntry): void {
@@ -220,9 +422,7 @@ export class ChatTranscriptBuilder {
 		}
 		if (previous.canBeDisplacedBy(nextToolName)) {
 			this.#todoSnapshot = null;
-			if (this.container.canRemoveBlock(previous)) {
-				this.container.removeChild(previous);
-			}
+			this.container.removeChild(previous);
 			previous.seal();
 			return;
 		}
@@ -322,7 +522,7 @@ export class ChatTranscriptBuilder {
 					// update` replay dumps — can be hundreds of KiB of Markdown each.
 					// Rendering their full body on cold open blocked the TUI (issue #6308);
 					// collapse them behind a compact summary that builds Markdown only on
-					// ctrl+o expand. Real user prompts stay fully rendered.
+					// expansion. Real user prompts stay fully rendered.
 					if (isSynthetic) {
 						const collapsed = new CollapsedSyntheticMessageComponent(userText);
 						this.#trackExpandable(collapsed);
@@ -408,8 +608,10 @@ export class ChatTranscriptBuilder {
 	}
 
 	#appendAssistantMessage(message: Extract<AgentMessage, { role: "assistant" }>): void {
+		this.#persistedAssistants.add(message.timestamp);
 		const hideThinkingBlock = this.#deps.hideThinkingBlock?.() ?? false;
 		const proseOnlyThinking = this.#deps.proseOnlyThinking ? this.#deps.proseOnlyThinking() : true;
+		const expandThinkingBlocks = this.#deps.expandThinkingBlocks?.() ?? false;
 		const timeline = splitAssistantMessageToolTimeline(message);
 		const assistantComponent = new AssistantMessageComponent(
 			timeline.beforeTools,
@@ -419,9 +621,11 @@ export class ChatTranscriptBuilder {
 			this.#deps.ui.imageBudget,
 			proseOnlyThinking,
 			this.#deps.linkTargets,
+			expandThinkingBlocks,
 		);
 		assistantComponent.setImagesVisible(displayPreferences.showImages);
 		assistantComponent.setToolResultImagesVisible(!displayPreferences.hideToolActivity);
+		assistantComponent.setTableChartsVisible(this.#deps.tableCharts !== false);
 		this.#trackExpandable(assistantComponent);
 		assistantComponent.pickReactionTarget(this.container.children);
 		this.container.addChild(assistantComponent);
@@ -456,9 +660,11 @@ export class ChatTranscriptBuilder {
 				undefined,
 				proseOnlyThinking,
 				this.#deps.linkTargets,
+				expandThinkingBlocks,
 			);
 			component.setImagesVisible(displayPreferences.showImages);
 			component.setToolResultImagesVisible(!displayPreferences.hideToolActivity);
+			component.setTableChartsVisible(this.#deps.tableCharts !== false);
 			this.#trackExpandable(component);
 			this.container.addChild(component);
 			lastAssistantComponent = component;
@@ -534,6 +740,7 @@ export class ChatTranscriptBuilder {
 	}
 
 	#appendToolResult(message: Extract<AgentMessage, { role: "toolResult" }>): void {
+		this.#persistedToolResults.add(message.toolCallId);
 		const pending = this.#pendingTools.get(message.toolCallId);
 		const isReadGroupResult = message.toolName === "read" && (!pending || pending instanceof ReadToolGroupComponent);
 		if (isReadGroupResult) {

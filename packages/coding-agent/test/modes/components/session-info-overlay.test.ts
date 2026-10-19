@@ -155,10 +155,11 @@ describe("SessionInfoOverlay", () => {
 
 		expect(scrolled).not.toBe(initial);
 		expect(onClose).not.toHaveBeenCalled();
+		// Rebinding cancel replaces Escape rather than adding a second close key.
+		overlay.handleInput("\x1b");
+		expect(onClose).not.toHaveBeenCalled();
 		overlay.handleInput("\x07");
 		expect(onClose).toHaveBeenCalledTimes(1);
-		overlay.handleInput("\x1b");
-		expect(onClose).toHaveBeenCalledTimes(2);
 	});
 
 	it("owns Escape through TUI focus and restores the editor without forwarding it", () => {

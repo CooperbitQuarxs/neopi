@@ -99,8 +99,8 @@ export interface LiveSessionCallbacks {
 	 *  turn, repeats included, with the final text authoritative. Composer input follows this,
 	 *  not the coalesced display transcript. */
 	onUserSpeech?(speech: LiveTranscript): void;
-	/** Final text delivered to the main agent or handled by the voice agent. */
-	onSpeechSent?(text: string): void;
+	/** Final delivered text. With turn ids, retire only those spoken spans; without them the entire draft was sent. */
+	onSpeechSent?(text: string, turns?: readonly number[]): void;
 }
 
 /** Structural transport surface the controller needs (test seam). */
@@ -112,6 +112,8 @@ export type LiveTransportLike = Pick<CodexLiveTransport, "connect" | "send" | "c
 export interface LiveRecorderLike {
 	stop(): void;
 }
+/** Delivery parity with typed input: interrupt, non-cancelling steer, or follow-up at yield. */
+export type LiveDelegationDelivery = "interrupt" | "steer" | "followUp";
 
 /** Dependencies and presentation callbacks for a live session. */
 export interface LiveSessionControllerOptions {
@@ -125,6 +127,8 @@ export interface LiveSessionControllerOptions {
 	ircRelayTransform?: (message: CustomMessage, body: string) => string | undefined;
 	/** Recheck the current source gate when a held crew report is released. */
 	ircRelayAllowed?: (message: CustomMessage) => boolean;
+	/** Operator-configured handoff delivery, read once for each new delegation; defaults to steer. */
+	delegationDelivery?: () => LiveDelegationDelivery;
 	/** Whether a voice-authored note reaches the main agent (read at dispatch). */
 	includeVoiceNote?: () => boolean;
 	relayGates?: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
@@ -218,6 +222,7 @@ export class LiveSessionController {
 	readonly #ircRelayTransform: (message: CustomMessage, body: string) => string | undefined;
 	readonly #ircRelayAllowed: (message: CustomMessage) => boolean;
 	readonly #includeVoiceNote: () => boolean;
+	readonly #delegationDelivery: () => LiveDelegationDelivery;
 	readonly #relayGates: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
 
 	readonly #createTransport: (options: ConstructorParameters<typeof CodexLiveTransport>[0]) => LiveTransportLike;
@@ -244,6 +249,9 @@ export class LiveSessionController {
 	#framesSent = 0;
 	#framesDroppedAtGate = 0;
 	#framesDroppedAtNativeQueue = 0;
+	/** Last pair passed to `onLevels`; repeated identical levels are not re-emitted. */
+	#emittedInputLevel = -1;
+	#emittedOutputLevel = -1;
 	#activeDelegationId: string | undefined;
 	/**
 	 * Last assistant message already relayed for the active delegation. A settle
@@ -281,6 +289,7 @@ export class LiveSessionController {
 				generation: number;
 				turns: number[];
 				forced: boolean;
+				delivery: LiveDelegationDelivery;
 				dispatchEnabled: boolean;
 				dispatching: boolean;
 				voiceText: string;
@@ -331,6 +340,7 @@ export class LiveSessionController {
 		this.#ircRelayTransform = options.ircRelayTransform ?? ((_, body) => body);
 		this.#ircRelayAllowed = options.ircRelayAllowed ?? (() => true);
 		this.#includeVoiceNote = options.includeVoiceNote ?? (() => true);
+		this.#delegationDelivery = options.delegationDelivery ?? (() => "steer");
 		this.#relayGates = options.relayGates ?? (() => ({ reasoning: true, progress: true, finalAnswers: true }));
 		const speakableIdleMs = options.speakableIdleMs;
 		this.#speakableIdleMs =
@@ -457,11 +467,13 @@ export class LiveSessionController {
 	}
 
 	async #stop(): Promise<void> {
+		// Stop owns the final receipt report; invalidate any acceptance continuation still queued.
+		this.#delegationGeneration += 1;
 		// A handoff still in flight either never starts, or already belongs to the main agent; in
 		// that case retire its speech from the composer now, while the caller still listens.
 		const pending = this.#pendingDelegation;
 		if (pending?.dispatching && this.#pendingDelivery && !this.#pendingDelivery.cancel()) {
-			const turns = this.#turnsWhere(turn => turn.claim === pending.generation);
+			const turns = this.#deleteTurns(turn => turn.claim === pending.generation);
 			this.#acceptSpeech(
 				turns
 					.map(turn => turn.text)
@@ -579,7 +591,7 @@ export class LiveSessionController {
 	 * The event contributes only its routing id. Prompt text is assembled from
 	 * canonical user turns recorded by this controller. Newest intent wins:
 	 * unaccepted claims move to the newest routing id, while accepted turns are
-	 * retired and later speech barges into the active work as a new handoff.
+	 * retired and later speech is delivered according to the operator's delivery setting.
 	 */
 	async #handleDelegation(
 		event: Extract<LiveServerEvent, { type: "delegation.created" }>,
@@ -631,13 +643,17 @@ export class LiveSessionController {
 			id: event.item.id,
 			generation,
 			forced,
+			delivery: this.#delegationDelivery(),
 			turns: claimed.map(turn => turn.turn),
 			voiceText,
 			dispatchEnabled: false,
 			dispatching: false,
 		};
 		this.#emitPhase("working");
-		if (this.#session.isStreaming || this.#session.isBashRunning || this.#session.isEvalRunning) {
+		if (
+			this.#pendingDelegation.delivery === "interrupt" &&
+			(this.#session.isStreaming || this.#session.isBashRunning || this.#session.isEvalRunning)
+		) {
 			// Coalesce concurrent live aborts: AgentSession.abort() is not
 			// reentrant-safe, and every waiter only needs "some abort finished
 			// after I arrived". One expected settle per real abort, not per waiter.
@@ -649,8 +665,9 @@ export class LiveSessionController {
 						this.#liveAbortPromise = undefined;
 					});
 			}
-			await this.#liveAbortPromise;
 		}
+		// A new non-interrupting handoff must not race a prior explicit interrupt's teardown.
+		if (this.#liveAbortPromise) await this.#liveAbortPromise;
 		if (this.#stopped) return;
 		// Superseded while awaiting: the newest survivor owns the ledger claims.
 		if (generation !== this.#delegationGeneration) return;
@@ -676,6 +693,7 @@ export class LiveSessionController {
 		if (!merged) return;
 		pending.dispatching = true;
 		const { content, details } = buildLiveDelegationMessage(merged, pending.voiceText, this.#includeVoiceNote());
+		if (pending.delivery !== "interrupt") details.delegationId = pending.id;
 		const delivery = this.#session.sendCustomMessageWithReceipt(
 			{
 				customType: LIVE_DELEGATION_MESSAGE_TYPE,
@@ -684,7 +702,11 @@ export class LiveSessionController {
 				attribution: "agent",
 				details,
 			},
-			{ triggerTurn: true },
+			{
+				triggerTurn: true,
+				...(pending.delivery === "followUp" ? { deliverAs: "followUp" as const } : {}),
+				steeringInterruptMode: "wait",
+			},
 		);
 		this.#pendingDelivery = delivery;
 		void delivery.completed.catch(() => {});
@@ -696,14 +718,15 @@ export class LiveSessionController {
 			this.#deleteTurns(turn => turn.claim === generation);
 			this.#pendingDelegation = undefined;
 			this.#pendingDelivery = undefined;
-			this.#activeDelegationId = pending.id;
-			this.#lastRelayedResponse = undefined;
-			this.#thinkingRelayedLength = 0;
+			if (pending.delivery === "interrupt") {
+				this.#activeDelegationId = pending.id;
+				this.#lastRelayedResponse = undefined;
+				this.#thinkingRelayedLength = 0;
+			}
 			this.#acceptSpeech(merged, pending.forced);
 			await delivery.completed;
 		} catch (cause) {
-			// A newer delegation barging in aborts this turn mid-await; that
-			// rejection is expected and must not kill the live call.
+			// A newer handoff supersedes this continuation; its delivery owns any error.
 			if (generation !== this.#delegationGeneration) return;
 			if (!accepted) {
 				// Normalization/preflight/drop failures occur before ownership.
@@ -770,8 +793,15 @@ export class LiveSessionController {
 			event.message.role === "custom" &&
 			event.message.customType === LIVE_DELEGATION_MESSAGE_TYPE
 		) {
-			const noteId = (event.message.details as LiveDelegationDetails | undefined)?.noteId;
-			if (noteId) for (const record of this.#voiceNotes) if (record.noteId === noteId) record.consumed = true;
+			const details = event.message.details as LiveDelegationDetails | undefined;
+			if (details?.noteId) {
+				for (const record of this.#voiceNotes) if (record.noteId === details.noteId) record.consumed = true;
+			}
+			if (details?.delegationId) {
+				this.#activeDelegationId = details.delegationId;
+				this.#lastRelayedResponse = undefined;
+				this.#thinkingRelayedLength = 0;
+			}
 			return;
 		}
 		if (event.type === "irc_message") {
@@ -785,6 +815,24 @@ export class LiveSessionController {
 		if (event.type === "message_end" && event.message.role === "assistant") {
 			this.#thinkingRelayedLength = 0;
 			if (event.message.stopReason === "toolUse") this.#appendProgress(event.message);
+			return;
+		}
+		if (
+			event.type === "turn_end" &&
+			event.message.role === "assistant" &&
+			event.message.stopReason === "stop" &&
+			this.#session.agent
+				.peekFollowUpQueue()
+				.some(
+					message =>
+						message.role === "custom" &&
+						message.customType === LIVE_DELEGATION_MESSAGE_TYPE &&
+						Boolean((message.details as LiveDelegationDetails | undefined)?.delegationId),
+				)
+		) {
+			// The agent loop consumes follow-ups before agent_end. Speak the preceding task's
+			// answer while its routing id still owns the relay, before the next message starts.
+			this.#appendFinalResponse([event.message], { closeDelegation: true });
 			return;
 		}
 		if (event.type !== "agent_end") return;
@@ -834,7 +882,9 @@ export class LiveSessionController {
 		const fromContext = this.#contextSinceResponse;
 		this.#contextSinceResponse = false;
 		if (this.#answeredTurns || fromContext) return;
-		this.#answeredTurns = this.#turnsWhere(turn => turn.final && turn.claim === undefined).map(turn => turn.turn);
+		this.#answeredTurns = this.#turnsWhere(turn => turn.final && !turn.blocked && turn.claim === undefined).map(
+			turn => turn.turn,
+		);
 	}
 
 	/** A main-agent turn the operator started from the composer with the destination `both`:
@@ -1351,11 +1401,20 @@ export class LiveSessionController {
 				}
 				this.#refreshAudioPhase();
 			}
-			this.#deleteTurns(turn => turn === current);
-			if (current.text) {
-				void this.sendOperatorText(current.text, "voice");
-				this.#callbacks.onSpeechSent?.(current.text);
+			const blocked = current;
+			if (!blocked.text) {
+				this.#deleteTurns(turn => turn === blocked);
+				return;
 			}
+			void this.sendOperatorText(blocked.text, "voice")
+				.then(delivered => {
+					// Keep failed delivery in the ledger and composer. A manual submit may already
+					// have retired this exact turn while the transport send was in flight.
+					if (delivered && this.#deleteTurns(turn => turn === blocked).length > 0) {
+						this.#callbacks.onSpeechSent?.(blocked.text, [blocked.turn]);
+					}
+				})
+				.catch(cause => this.#reportFailure(errorFrom(cause)));
 			return;
 		}
 
@@ -1528,8 +1587,13 @@ export class LiveSessionController {
 	}
 
 	#emitLevels(): void {
+		if (this.#inputLevel === this.#emittedInputLevel && this.#outputLevel === this.#emittedOutputLevel) return;
+		const input = this.#inputLevel;
+		const output = this.#outputLevel;
 		try {
-			this.#callbacks.onLevels(this.#inputLevel, this.#outputLevel);
+			this.#callbacks.onLevels(input, output);
+			this.#emittedInputLevel = input;
+			this.#emittedOutputLevel = output;
 		} catch (cause) {
 			this.#reportFailure(errorFrom(cause));
 		}

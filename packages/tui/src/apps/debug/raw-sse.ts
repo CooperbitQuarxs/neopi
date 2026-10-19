@@ -1,7 +1,7 @@
 import type { TspScrollBy } from "@oh-my-pi/pi-wire";
-import { formatKeyHint } from "../../app-keybindings";
 import type { Component } from "../../tui";
 import { matchesKey } from "../../keys";
+import { MenuKeyReader, menuScrollBy } from "../../components/menu-navigation";
 import { col, compact, keyed, node, row, span, text } from "../../native/describe";
 import { Memo } from "../../native/memo";
 import type { NativeNode, NativeScreen, NativeScroll, NativeUiEvent } from "../../native/node";
@@ -9,7 +9,7 @@ import { actionBar, actionButton } from "../../native/overlay";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../../mouse";
 import { truncateToWidth } from "../../utils";
 import { sanitizeDisplayText } from "../../overlays/extensions/display-text";
-import { theme } from "../../theme/theme";
+import { getThemeEpoch, theme } from "../../theme/theme";
 import { DebugViewerFrame } from "./viewer-frame";
 import {
 	formatRawSseIsoTime,
@@ -106,6 +106,15 @@ export class RawSseViewerComponent implements Component {
 	// Sequences are monotonic; we prune entries below the oldest live record
 	// after each render so the cache tracks the buffer's eviction window.
 	readonly #prettyLinesCache = new Map<number, string[]>();
+	/** Buffer snapshot for {@link #snapshotRevision}; the buffer's revision bumps on every change. */
+	#snapshot: RawSseDebugSnapshot | undefined;
+	#snapshotRevision = -1;
+	/** Rendered body for (buffer revision, width, theme epoch). */
+	#bodyLines: string[] = [];
+	#bodyRevision = -1;
+	#bodyWidth = -1;
+	#bodyThemeEpoch = -1;
+	readonly #keys = new MenuKeyReader();
 
 	constructor(options: RawSseViewerOptions) {
 		this.#deps = options.deps;
@@ -139,6 +148,20 @@ export class RawSseViewerComponent implements Component {
 		this.#frame.dispose();
 	}
 
+	leaveMenu(): void {
+		this.dispose();
+	}
+
+	navigationSnapshot(): unknown {
+		return { viewport: this.#frame.navigationSnapshot() };
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		this.#frame.restoreNavigation((snapshot as { viewport?: unknown }).viewport);
+		this.#keys.reset();
+	}
+
 	handleInput(keyData: string): void {
 		if (routeSgrMouseInput(keyData, event => this.#handleMouse(event))) {
 			return;
@@ -154,20 +177,17 @@ export class RawSseViewerComponent implements Component {
 			return;
 		}
 
-		const by: TspScrollBy | undefined = matchesKey(keyData, "up")
-			? "line-up"
-			: matchesKey(keyData, "down")
-				? "line-down"
-				: matchesKey(keyData, "pageUp")
-					? "page-up"
-					: matchesKey(keyData, "pageDown")
-						? "page-down"
-						: matchesKey(keyData, "home")
-							? "start"
-							: matchesKey(keyData, "end")
-								? "end"
-								: undefined;
-		if (by) this.#scroll(by);
+		const action = this.#keys.read(keyData);
+		if (!action || action === "pending") return;
+		const by = menuScrollBy(action);
+		if (by) {
+			this.#scroll(by);
+		} else if (action.kind === "halfPage") {
+			// The native ANSI stream supports line/page/bounds only. Keep the
+			// row renderer's exact half page; never substitute a native full page.
+			this.#frame.scroll(action.delta * Math.max(1, Math.floor(this.#frame.getBodyHeight() / 2)));
+			this.#onUpdate?.();
+		}
 	}
 
 	/**
@@ -227,6 +247,7 @@ export class RawSseViewerComponent implements Component {
 		this.#native.clear();
 		this.#nativeHead.clear();
 		this.#nativeBody.clear();
+		this.#bodyRevision = -1;
 	}
 
 	render(width: number): readonly string[] {
@@ -249,7 +270,7 @@ export class RawSseViewerComponent implements Component {
 	 * so they never scroll away.
 	 */
 	describeScreen(): NativeScreen {
-		const snapshot = this.#buffer.snapshot();
+		const snapshot = this.#currentSnapshot();
 		const stream = this.#feedNative(snapshot);
 		const head = this.#nativeHead.get(
 			[snapshot.totalEvents, snapshot.records.length, snapshot.droppedRecords, snapshot.lastUpdatedAt],
@@ -372,15 +393,40 @@ export class RawSseViewerComponent implements Component {
 		this.#onExit();
 	}
 
+	/** The buffer's snapshot, re-taken only when its revision moved. */
+	#currentSnapshot(): RawSseDebugSnapshot {
+		const revision = this.#buffer.revision;
+		if (!this.#snapshot || this.#snapshotRevision !== revision) {
+			this.#snapshot = this.#buffer.snapshot();
+			this.#snapshotRevision = revision;
+		}
+		return this.#snapshot;
+	}
+
 	#renderRawLines(innerWidth: number): string[] {
-		const snapshot = this.#buffer.snapshot();
+		const snapshot = this.#currentSnapshot();
+		const themeEpoch = getThemeEpoch();
+		if (
+			this.#bodyRevision === this.#snapshotRevision &&
+			this.#bodyWidth === innerWidth &&
+			this.#bodyThemeEpoch === themeEpoch
+		) {
+			return this.#bodyLines;
+		}
+		this.#bodyRevision = this.#snapshotRevision;
+		this.#bodyWidth = innerWidth;
+		this.#bodyThemeEpoch = themeEpoch;
+		this.#bodyLines = this.#formatRawLines(snapshot, innerWidth);
+		return this.#bodyLines;
+	}
+
+	#formatRawLines(snapshot: RawSseDebugSnapshot, innerWidth: number): string[] {
 		if (snapshot.records.length === 0) {
 			return [
 				theme.fg("muted", "No raw SSE frames captured yet."),
 				theme.fg("muted", "HTTP SSE providers populate this view while a model response is streaming."),
 			];
 		}
-
 		const lines: string[] = [];
 		if (snapshot.droppedRecords > 0) {
 			lines.push(
@@ -421,7 +467,7 @@ export class RawSseViewerComponent implements Component {
 		}
 	}
 	#summaryText(): string {
-		const snapshot = this.#buffer.snapshot();
+		const snapshot = this.#currentSnapshot();
 		const last = snapshot.lastUpdatedAt
 			? `${theme.fg("muted", "last")} ${theme.fg("accent", formatRawSseIsoTime(snapshot.lastUpdatedAt))}`
 			: theme.fg("muted", "waiting for first frame");
@@ -432,7 +478,7 @@ export class RawSseViewerComponent implements Component {
 	}
 
 	#statusText(): string {
-		const help = `${formatKeyHint("escape")} close · ${formatKeyHint("ctrl+c")} copy raw · ${formatKeyHint("end")} follow tail · wheel scroll · click summary toggles follow`;
+		const help = `Esc close · Ctrl-c copy raw · j/k scroll · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · End follow tail · click summary toggles follow`;
 		return this.#statusMessage
 			? `${theme.fg("success", this.#statusMessage)}  ${theme.fg("dim", help)}`
 			: theme.fg("dim", help);

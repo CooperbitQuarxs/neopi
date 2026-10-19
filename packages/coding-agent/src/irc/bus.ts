@@ -9,11 +9,12 @@
  * boundary (see AgentSession.deliverIrcMessage).
  */
 
-import { type IrcDeliveryReceipt, type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
+import { type IrcDeliveryReceipt, type IrcLogEntry, type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { CustomMessage } from "../session/messages";
+import { ircHistoryMaxEntries, ircRelayToMainTranscript } from "./policy";
 
 interface IrcWaiter {
 	from?: string;
@@ -23,6 +24,31 @@ interface IrcWaiter {
 
 /** Mailbox cap per agent; oldest messages are dropped beyond it. */
 const MAILBOX_CAP = 100;
+
+/** Options of one {@link IrcBus.send} leg. */
+export interface IrcSendOptions {
+	/** Skip the display-only main-UI relay for this leg. */
+	suppressRelay?: boolean;
+	/** This leg is one recipient of a `to: "all"` fan-out. */
+	broadcast?: boolean;
+}
+
+/** Which root's operator a history entry belongs to; see {@link IrcBus.history}. */
+export interface IrcHistoryScope {
+	rootId: string;
+	/**
+	 * The root's session id: one per conversation, so `/new` starts a fresh
+	 * history (with or without a session file) and moving a session keeps its own.
+	 */
+	sessionId: string | undefined;
+}
+
+interface IrcHistoryRecord extends IrcLogEntry {
+	/** Root whose UI observed the sender when it sent (see {@link ircRelayRoot}); undefined when none resolved. */
+	readonly scope: IrcHistoryScope | undefined;
+	/** Send-start order: a slow delivery still lands where it was sent, not where it finished. */
+	readonly seq: number;
+}
 
 export class IrcBus {
 	static #global: IrcBus | undefined;
@@ -45,6 +71,10 @@ export class IrcBus {
 	readonly #waiters = new Map<string, IrcWaiter[]>();
 	/** Timestamp of the latest successful send per `from` → `to`; see {@link sentSince}. */
 	readonly #lastSent = new Map<string, Map<string, number>>();
+	/** Operator-only log of every delivery attempt; agents never read it. */
+	readonly #history: IrcHistoryRecord[] = [];
+	readonly #historyListeners = new Set<() => void>();
+	#nextHistorySeq = 0;
 
 	constructor(registry: AgentRegistry = AgentRegistry.global(), lifecycle?: AgentLifecycleManager) {
 		this.#registry = registry;
@@ -69,10 +99,23 @@ export class IrcBus {
 	 * Set by broadcast fan-out when the same broadcast also targets the main
 	 * agent directly: the main agent then already sees the body as its own
 	 * incoming card, so relaying the sibling legs would duplicate it.
+	 *
+	 * Every attempt, failed ones included, is appended to the operator history
+	 * ({@link history}); that never changes delivery or unread counts.
 	 */
-	async send(msg: Omit<IrcMessage, "id" | "ts">, opts?: { suppressRelay?: boolean }): Promise<IrcDeliveryReceipt> {
+	async send(msg: Omit<IrcMessage, "id" | "ts">, opts?: IrcSendOptions): Promise<IrcDeliveryReceipt> {
 		const message: IrcMessage = { ...msg, id: Snowflake.next(), ts: Date.now() };
+		const seq = this.#nextHistorySeq++;
+		const scope = this.#historyScope(message.from);
 		const receipt = await this.#deliver(message, opts);
+		this.#record({
+			message,
+			outcome: receipt.outcome,
+			error: receipt.error,
+			broadcast: opts?.broadcast === true,
+			scope,
+			seq,
+		});
 		if (receipt.outcome !== "failed") {
 			let sent = this.#lastSent.get(message.from);
 			if (!sent) {
@@ -94,7 +137,49 @@ export class IrcBus {
 		return ts !== undefined && ts >= sinceTs;
 	}
 
-	async #deliver(message: IrcMessage, opts?: { suppressRelay?: boolean }): Promise<IrcDeliveryReceipt> {
+	/**
+	 * The operator's IRC history, oldest first: entries observed by `scope`'s
+	 * root in that conversation, or every entry when `scope` is undefined.
+	 */
+	history(scope?: IrcHistoryScope): IrcLogEntry[] {
+		const entries = scope
+			? this.#history.filter(
+					entry =>
+						entry.scope === undefined ||
+						(entry.scope.rootId === scope.rootId && entry.scope.sessionId === scope.sessionId),
+				)
+			: this.#history;
+		return entries.map(({ scope: _scope, seq: _seq, ...entry }) => entry);
+	}
+
+	/** Calls `listener` after each history entry; returns the unsubscribe. */
+	onHistory(listener: () => void): () => void {
+		this.#historyListeners.add(listener);
+		return () => this.#historyListeners.delete(listener);
+	}
+
+	#historyScope(senderId: string): IrcHistoryScope | undefined {
+		const root = ircRelayRoot(this.#registry, senderId);
+		return root ? { rootId: root.id, sessionId: ircHistorySessionId(root) } : undefined;
+	}
+
+	#record(record: IrcHistoryRecord): void {
+		// Concurrent sends finish out of order; keep the history in the order they started.
+		let index = this.#history.length;
+		while (index > 0 && this.#history[index - 1]!.seq > record.seq) index--;
+		this.#history.splice(index, 0, record);
+		const excess = this.#history.length - ircHistoryMaxEntries();
+		if (excess > 0) this.#history.splice(0, excess);
+		for (const listener of this.#historyListeners) {
+			try {
+				listener();
+			} catch (error) {
+				logger.debug("IrcBus: history listener failed", { error: String(error) });
+			}
+		}
+	}
+
+	async #deliver(message: IrcMessage, opts?: IrcSendOptions): Promise<IrcDeliveryReceipt> {
 		const ref = this.#registry.get(message.to);
 		if (!ref) {
 			return {
@@ -119,6 +204,15 @@ export class IrcBus {
 			}
 			this.#enqueue(message);
 			return { to: message.to, outcome: "queued" };
+		}
+		// The operator reads IRC on her UI, not in a session: the history entry is
+		// the record and a card on her root's transcript the notification, so it
+		// arrives without waiting on any model's turn. A message from that root's
+		// own model already shows as its hub tool call.
+		if (ref.kind === "operator") {
+			const root = ircRelayRoot(this.#registry, ref.id);
+			if (root && message.from !== root.id) this.#showOnUi(root, message);
+			return { to: message.to, outcome: "injected" };
 		}
 		// Advisor refs are observability-only transcripts, never messageable peers.
 		if (ref.kind === "advisor") {
@@ -207,10 +301,7 @@ export class IrcBus {
 		filter: { from?: string },
 		timeoutMs: number,
 		signal?: AbortSignal,
-		options?: {
-			drainPending?: boolean;
-			liveness?: { registry: AgentRegistry; senderId: string };
-		},
+		options?: { drainPending?: boolean },
 	): Promise<IrcMessage | null> {
 		if (signal?.aborted) {
 			throw signal.reason instanceof Error ? signal.reason : new Error("IRC wait aborted");
@@ -225,12 +316,6 @@ export class IrcBus {
 		const { promise, resolve, reject } = Promise.withResolvers<IrcMessage | null>();
 		let timer: NodeJS.Timeout | undefined;
 		let onAbort: (() => void) | undefined;
-		let unsubscribeLiveness: (() => void) | undefined;
-
-		const liveness = options?.liveness;
-		const livenessReason = filter.from
-			? `IRC wait aborted: agent "${filter.from}" is not running`
-			: "IRC wait aborted: no running peers remain";
 
 		const settle = (
 			outcome: { kind: "message"; msg: IrcMessage } | { kind: "timeout" } | { kind: "abort"; error: Error },
@@ -249,7 +334,6 @@ export class IrcBus {
 			this.#removeWaiter(agentId, waiter);
 			clearTimeout(timer);
 			if (signal && onAbort) signal.removeEventListener("abort", onAbort);
-			unsubscribeLiveness?.();
 		};
 
 		const waiter: IrcWaiter = {
@@ -277,21 +361,6 @@ export class IrcBus {
 			this.#waiters.set(agentId, waiters);
 		}
 		waiters.push(waiter);
-
-		if (liveness) {
-			const { registry, senderId } = liveness;
-			const hasRunningSender = (from?: string): boolean =>
-				registry.listVisibleTo(senderId).some(ref => registry.isRunning(ref) && (!from || ref.id === from));
-			const check = filter.from ? () => hasRunningSender(filter.from) : () => hasRunningSender();
-			unsubscribeLiveness = registry.onChange(() => {
-				if (!check()) {
-					settle({ kind: "abort", error: new Error(livenessReason) });
-				}
-			});
-			if (!check()) {
-				settle({ kind: "abort", error: new Error(livenessReason) });
-			}
-		}
 
 		return promise;
 	}
@@ -373,10 +442,16 @@ export class IrcBus {
 	 * outbound body — relaying it again would duplicate it in the transcript.
 	 */
 	#relayToMainUi(message: IrcMessage): void {
+		if (!ircRelayToMainTranscript()) return;
 		const root = ircRelayRoot(this.#registry, message.from);
 		if (!root || message.to === root.id || message.from === root.id) return;
-		const mainSession = root.session;
-		if (!mainSession) return;
+		this.#showOnUi(root, message);
+	}
+
+	/** Display-only `irc:relay` card for `message` on `root`'s UI; never persisted. */
+	#showOnUi(root: AgentRef, message: IrcMessage): void {
+		const session = root.session;
+		if (!session) return;
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:relay",
@@ -387,7 +462,7 @@ export class IrcBus {
 			timestamp: message.ts,
 		};
 		try {
-			mainSession.emitIrcRelayObservation(record);
+			session.emitIrcRelayObservation(record);
 		} catch (error) {
 			// Display-only forwarding must never affect delivery semantics.
 			logger.debug("IrcBus: main UI relay failed", { to: message.to, error: String(error) });
@@ -402,4 +477,11 @@ export class IrcBus {
  */
 export function ircRelayRoot(registry: AgentRegistry, senderId: string): AgentRef | undefined {
 	return registry.rootOf(senderId) ?? registry.get(MAIN_AGENT_ID);
+}
+
+/** The session id `root` currently runs, scoping its IRC history to one conversation. */
+export function ircHistorySessionId(root: AgentRef): string | undefined {
+	// Roots without a live session (and test doubles) have no conversation to scope by.
+	const manager: { getSessionId?(): string } | undefined = root.session?.sessionManager;
+	return manager?.getSessionId?.();
 }

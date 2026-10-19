@@ -184,6 +184,48 @@ function withViewer(fn: (viewer: AgentTranscriptViewer) => void): void {
 		removeSyncWithRetries(dir);
 	}
 }
+
+function renderSyntheticAssistant(usage?: { input: number; output: number }): string {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "adv-view-usage-"));
+	const file = path.join(dir, "__advisor.jsonl");
+	fs.writeFileSync(
+		file,
+		[
+			JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION, id: "adv", timestamp: TS, cwd: dir }),
+			JSON.stringify({
+				type: "message",
+				id: "a0",
+				parentId: null,
+				timestamp: TS,
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "SYNTHETICREPLY" }],
+					model: "qq",
+					provider: "qq",
+					usage,
+					stopReason: "stop",
+					timestamp: Date.now(),
+				},
+			}),
+		].join("\n") + "\n",
+	);
+	try {
+		const viewer = makeViewer(file);
+		try {
+			viewer.render(80);
+			viewer.handleInput("g");
+			viewer.handleInput("g");
+			return viewer
+				.render(80)
+				.map(line => Bun.stripANSI(line))
+				.join("\n");
+		} finally {
+			viewer.dispose();
+		}
+	} finally {
+		removeSyncWithRetries(dir);
+	}
+}
 async function settleRemoteRefresh(): Promise<void> {
 	await Promise.resolve();
 	await Promise.resolve();
@@ -209,6 +251,8 @@ describe("AgentTranscriptViewer", () => {
 	});
 
 	afterEach(() => {
+		// A leaked fs spy would make the next test's sync first load recurse and fail.
+		vi.restoreAllMocks();
 		vi.useRealTimers();
 		if (rowsDesc) {
 			Object.defineProperty(process.stdout, "rows", rowsDesc);
@@ -220,6 +264,7 @@ describe("AgentTranscriptViewer", () => {
 	it("aligns the title and body content on the same gutter", () => {
 		withViewer(viewer => {
 			viewer.render(80); // populate the scroll view before navigating
+			viewer.handleInput("g");
 			viewer.handleInput("g"); // scroll to top so the first message is visible
 			const lines = viewer.render(80).map(l => Bun.stripANSI(l));
 			const titleLine = lines.find(l => l.includes("Agent Hub"));
@@ -229,6 +274,14 @@ describe("AgentTranscriptViewer", () => {
 			// The body must not sit one column right of the title.
 			expect(gutter(bodyLine!)).toBe(gutter(titleLine!));
 		});
+	});
+
+	it("shows a synthetic assistant reply without usage", () => {
+		expect(renderSyntheticAssistant()).toContain("SYNTHETICREPLY");
+	});
+
+	it("shows a synthetic assistant reply with tokens but no cost", () => {
+		expect(renderSyntheticAssistant({ input: 1, output: 2 })).toContain("SYNTHETICREPLY");
 	});
 
 	it("collapses synthetic advisor inputs on cold open and expands their body on ctrl+o", () => {
@@ -277,6 +330,7 @@ describe("AgentTranscriptViewer", () => {
 		const viewer = makeViewer(file);
 		try {
 			viewer.render(80);
+			viewer.handleInput("g");
 			viewer.handleInput("g"); // scroll to top
 			const collapsed = viewer.render(80).map(l => Bun.stripANSI(l));
 			const collapsedBody = collapsed.join("\n");
@@ -287,6 +341,7 @@ describe("AgentTranscriptViewer", () => {
 			// ctrl+o reveals the full body; scroll back to the top to see it.
 			viewer.handleInput("\x0f");
 			viewer.render(80);
+			viewer.handleInput("g");
 			viewer.handleInput("g");
 			const expandedBody = viewer
 				.render(80)
@@ -299,12 +354,13 @@ describe("AgentTranscriptViewer", () => {
 		}
 	});
 
-	it("scrolls the visible window with j/k and g/G", () => {
+	it("scrolls the visible window with j/k and gg/G", () => {
 		withViewer(viewer => {
 			const atBottom = viewer
 				.render(80)
 				.map(l => Bun.stripANSI(l))
 				.join("\n");
+			viewer.handleInput("g");
 			viewer.handleInput("g");
 			const atTop = viewer
 				.render(80)
@@ -360,6 +416,7 @@ describe("AgentTranscriptViewer", () => {
 				.join("\n");
 		try {
 			viewer.render(80);
+			viewer.handleInput("g");
 			viewer.handleInput("g");
 			expect(body()).toContain("PROMPTMARKER");
 
@@ -443,6 +500,33 @@ describe("AgentTranscriptViewer", () => {
 			// The race-window entry must be rendered exactly once, not duplicated
 			// by the poll fast-path re-reading bytes already in the rebuild.
 			expect(body().match(/RACEMARK/g)?.length ?? 0).toBe(1);
+		} finally {
+			viewer.dispose();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("reloads a rewrite that keeps the file size and mtime within a few idle polls", async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "adv-view-"));
+		const file = path.join(dir, "__advisor.jsonl");
+		fs.writeFileSync(file, `${buildJsonl()}${messageLine("same", "OLDMARKER")}\n`);
+		const original = fs.statSync(file);
+		const viewer = makeViewer(file);
+		try {
+			const body = () =>
+				viewer
+					.render(80)
+					.map(l => Bun.stripANSI(l))
+					.join("\n");
+			expect(body()).toContain("OLDMARKER");
+			fs.writeFileSync(file, `${buildJsonl()}${messageLine("same", "NEWMARKER")}\n`);
+			fs.utimesSync(file, original.atime, original.mtime);
+			const readFile = vi.spyOn(fs.promises, "readFile");
+			vi.advanceTimersByTime(250 * 5);
+			expect(readFile).toHaveBeenCalledTimes(1);
+			await readFile.mock.results[0]!.value;
+			await settleRemoteRefresh();
+			expect(body()).toContain("NEWMARKER");
 		} finally {
 			viewer.dispose();
 			fs.rmSync(dir, { recursive: true, force: true });

@@ -2,7 +2,7 @@
  * Interactive marketplace plugin selector.
  *
  * Shows available plugins from all configured marketplaces in a SelectList.
- * Selecting a plugin triggers installation. Esc cancels.
+ * Enter installs or uninstalls the selected plugin. Space never uninstalls. Esc cancels.
  */
 import { type SelectItem, SelectList, type SgrMouseEvent } from "../index";
 import { getSelectListTheme } from "../theme/theme";
@@ -10,6 +10,7 @@ import { OverlayPanel } from "../chrome/overlay-box";
 import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-routing";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { SelectListSheet } from "../native/picker";
+import type { TspPickerItem } from "@oh-my-pi/pi-wire";
 
 export interface PluginSelectorCallbacks {
 	onSelect: (pluginName: string, marketplace: string, scope?: "user" | "project") => void;
@@ -28,6 +29,7 @@ export class PluginSelectorComponent extends OverlayPanel {
 	#sheet: SelectListSheet;
 
 	constructor(
+		mode: "install" | "uninstall",
 		marketplaceCount: number,
 		plugins: PluginItem[],
 		installedIds: Set<string>,
@@ -35,6 +37,8 @@ export class PluginSelectorComponent extends OverlayPanel {
 	) {
 		super("Plugins", "omp.overlay.plugins");
 
+		// The sheet draws version, install state and scope as badges instead of bracketed label text.
+		const badgesByValue = new Map<string, NonNullable<TspPickerItem["badges"]>>();
 		const items: SelectItem[] = plugins.map(({ plugin, marketplace, scope }) => {
 			// Encode scope into the value so onSelect can recover it without a parallel Map.
 			// Format: "name@marketplace" or "name@marketplace#scope"
@@ -43,6 +47,11 @@ export class PluginSelectorComponent extends OverlayPanel {
 			const version = plugin.version ? `@${plugin.version}` : "";
 			const status = installed ? " [installed]" : "";
 			const scopeTag = scope ? ` [${scope}]` : "";
+			badgesByValue.set(id, [
+				...(plugin.version ? [{ text: plugin.version }] : []),
+				...(installed ? [{ text: "installed", tone: "success" as const }] : []),
+				...(scope ? [{ text: scope, tone: "accent" as const }] : []),
+			]);
 
 			return {
 				value: id,
@@ -64,7 +73,10 @@ export class PluginSelectorComponent extends OverlayPanel {
 			});
 		}
 
-		this.#selectList = new SelectList(items, Math.min(items.length, 20), getSelectListTheme());
+		this.#selectList = new SelectList(items, Math.min(items.length, 20), getSelectListTheme(), {
+			search: "always",
+			activateOnSpace: mode !== "uninstall",
+		});
 
 		this.#selectList.onSelect = item => {
 			const [name, marketplace, scope] = splitPluginId(item.value);
@@ -82,8 +94,16 @@ export class PluginSelectorComponent extends OverlayPanel {
 			title: "Plugins",
 			icon: "plus",
 			noun: "plugins",
-			confirm: "Install",
-			decorate: item => (item.hint ? { facts: { marketplace: item.hint } } : undefined),
+			confirm: mode === "uninstall" ? "Uninstall" : "Install",
+			decorate: item => {
+				const [name] = splitPluginId(item.value);
+				if (!name) return undefined;
+				return {
+					label: name,
+					badges: badgesByValue.get(item.value) ?? [],
+					...(item.hint ? { facts: { marketplace: item.hint } } : {}),
+				};
+			},
 			columns: [{ id: "marketplace", format: "dim" }],
 		});
 	}
@@ -99,6 +119,14 @@ export class PluginSelectorComponent extends OverlayPanel {
 
 	getSelectList(): SelectList {
 		return this.#selectList;
+	}
+
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationState();
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		this.#selectList.restoreNavigation(snapshot);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {

@@ -200,9 +200,9 @@ export const TRUNCATE_LENGTHS = {
 /** Keybinding action that toggles tool-output expansion. */
 const EXPAND_ACTION = "app.tools.expand";
 /** Fallback key when no binding is resolvable (e.g. outside an interactive session). */
-const DEFAULT_EXPAND_KEY: KeyId = "ctrl+o";
+const DEFAULT_EXPAND_KEY: KeyId = "alt+e";
 
-/** Human-readable primary key bound to tool-output expansion, e.g. `Ctrl+O`. */
+/** Human-readable primary key bound to tool-output expansion, e.g. `Alt+E`. */
 export function expandKeyHint(): string {
 	const [key = DEFAULT_EXPAND_KEY] = getKeybindings().getKeys(EXPAND_ACTION);
 	return formatKeyHint(key);
@@ -351,10 +351,10 @@ export function previewWindowRows(): number {
  * of the command stays visible (it is the live edge while args stream) behind
  * an "… N earlier lines" marker on top. The same window applies while
  * streaming and after completion so the block never jumps; only `expanded`
- * (ctrl+o) uncaps it.
+ * (via the configured expansion action) uncaps it.
  *
  * `prefix` (raw, e.g. a dim tree gutter) is prepended to the marker line so
- * nested previews stay aligned. `expandHint: false` drops the "ctrl+o: Expand"
+ * nested previews stay aligned. `expandHint: false` drops the expansion-hint
  * suffix for callers that cap even inside the expanded view (task recent
  * output), where the hint would point the wrong way.
  */
@@ -1042,8 +1042,12 @@ export function formatToolWorkingDirectory(workdir: string | undefined, projectD
 		return undefined;
 	}
 	const relativePath = path.relative(resolvedProjectDir, resolvedWorkdir);
+	// On Windows, `path.relative` across drives returns the absolute target, which is not inside the project.
 	const isWithinProject =
-		relativePath.length > 0 && !relativePath.startsWith("..") && !relativePath.startsWith(`..${path.sep}`);
+		relativePath.length > 0 &&
+		!path.isAbsolute(relativePath) &&
+		!relativePath.startsWith("..") &&
+		!relativePath.startsWith(`..${path.sep}`);
 	const displayWorkdir = isWithinProject ? relativePath : shortenPath(resolvedWorkdir);
 	return replaceTabs(displayWorkdir);
 }
@@ -1124,6 +1128,9 @@ export function createCachedComponent(
 		invalidate() {
 			cached = undefined;
 		},
+		releaseRenderCaches() {
+			cached = undefined;
+		},
 	};
 }
 
@@ -1154,6 +1161,14 @@ export function createRenderedStringCache(): RenderedStringCache {
 /** Drop the memo so the next lookup re-renders (e.g. the render function identity changed). */
 export function invalidateRenderedStringCache(cache: RenderedStringCache): void {
 	cache.theme = null;
+}
+
+export function releaseRenderedStringCache(cache: RenderedStringCache): void {
+	cache.theme = null;
+	cache.expanded = false;
+	cache.salt = "";
+	cache.content = "";
+	cache.value = "";
 }
 
 /** Reuse a rendered string while its theme, expansion, content, and salt match. */

@@ -1,6 +1,7 @@
 // Deep import: the pi-utils barrel loads the host native addon, which is
 // absent on cross-compiling release runners.
 import { USER_AGENT } from "@oh-my-pi/pi-utils/dirs";
+import { embeddedAddonFiles, type NativeEmbedTarget } from "../../natives/scripts/embed-native";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
@@ -18,6 +19,11 @@ export interface CodingAgentCompileOptions {
 	readonly outfile: string;
 	/** Concrete Transformers.js version baked into the tiny-model worker. */
 	readonly transformersVersion: string;
+	/**
+	 * Native addon target embedded for the runtime loader to extract; `null`
+	 * compiles without one (probe builds that never load the addon).
+	 */
+	readonly native: NativeEmbedTarget | null;
 	/** Optional cross-compilation runtime target. */
 	readonly target?: Bun.Build.CompileTarget;
 	/** Compile target recorded in the standalone executable for compatibility gates. */
@@ -50,6 +56,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			entrypoints: [options.entrypoint],
 			root: options.repoRoot,
 			external: [...COMPILED_EXTERNAL_DEPENDENCIES],
+			files: options.native ? await embeddedAddonFiles(options.native) : {},
 			define: {
 				"process.env.PI_COMPILED": JSON.stringify("true"),
 				"process.env.PI_COMPILE_TARGET": JSON.stringify(options.compileTarget ?? options.target ?? "host"),
@@ -64,6 +71,9 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			format: "esm",
 			// Allow local builds to bypass Bun bytecode regressions without changing source.
 			bytecode: Bun.env.OMP_BUILD_BYTECODE !== "0",
+			splitting: true,
+			// Discovery entry chunks can share a hash; include their source names to avoid collisions.
+			naming: { chunk: "chunks/[name]-[hash].[ext]" },
 			minify: {
 				identifiers: options.minifyIdentifiers ?? false,
 				keepNames: true,

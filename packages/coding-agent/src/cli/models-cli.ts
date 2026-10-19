@@ -52,7 +52,7 @@ export interface ModelsCommandArgs {
  * as a provider/substring filter for the default `ls` view, so every provider
  * name doubles as an `npi models <provider>` shortcut.
  */
-const KNOWN_ACTIONS: Record<string, ModelsAction> = {
+export const MODEL_ACTIONS: Readonly<Record<string, ModelsAction>> = {
 	ls: "ls",
 	list: "ls",
 	find: "find",
@@ -64,7 +64,7 @@ export function resolveModelsArgs(
 	first: string | undefined,
 	second: string | undefined,
 ): { action: ModelsAction; pattern: string | undefined } {
-	const known = first === undefined ? undefined : KNOWN_ACTIONS[first];
+	const known = first === undefined ? undefined : MODEL_ACTIONS[first];
 	if (known) {
 		return { action: known, pattern: second };
 	}
@@ -366,6 +366,9 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 		// Discover runtime (extension) provider catalogs now that they are registered.
 		await modelRegistry.refreshRuntimeProviders(action === "refresh" ? "online" : "online-if-uncached");
 
+		for (const warning of modelRegistry.drainConfigWarnings()) {
+			process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
+		}
 		renderProviderModels(modelRegistry, action, pattern, json, kind);
 	} finally {
 		await emitSessionShutdownEvent(extensionRunner);

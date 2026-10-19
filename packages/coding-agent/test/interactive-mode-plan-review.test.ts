@@ -409,12 +409,13 @@ describe("InteractiveMode plan review rendering", () => {
 	});
 
 	it("opens the annotation external editor from the real plan review overlay", async () => {
-		const editorPath = path.join(tempDir.path(), "annotation-editor.sh");
+		// A Bun script instead of a `#!/bin/sh` file: Windows launches $EDITOR through cmd.exe, which cannot run sh scripts.
+		const editorScriptPath = path.join(tempDir.path(), "annotation-editor.ts");
 		await Bun.write(
-			editorPath,
-			"#!/bin/sh\nprintf '%s\\n%s\\n' '- add rollback command' '- include smoke test' > \"$1\"\n",
+			editorScriptPath,
+			'await Bun.write(process.argv[2]!, "- add rollback command\\n- include smoke test\\n");\n',
 		);
-		await fs.chmod(editorPath, 0o755);
+		const editorPath = `"${process.execPath}" "${editorScriptPath}"`;
 		const previousEditor = Bun.env.EDITOR;
 		const previousVisual = Bun.env.VISUAL;
 		const keybindings = KeybindingsManager.inMemory({
@@ -460,7 +461,8 @@ describe("InteractiveMode plan review rendering", () => {
 			expect(feedback).toContain("## Rollout\n```md\n- add rollback command\n- include smoke test\n```");
 
 			overlay.handleInput("\x1b[B"); // Rollout -> Verify
-			overlay.handleInput("\x1b[B"); // toc -> actions
+			overlay.handleInput("\t"); // toc -> body
+			overlay.handleInput("\t"); // body -> actions
 			overlay.handleInput("\x1b[B"); // select Refine plan
 			overlay.handleInput("\r");
 			expect(await choice).toBe("Refine plan");

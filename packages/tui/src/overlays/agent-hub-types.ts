@@ -1,5 +1,6 @@
 import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
+import type { AgentUsage } from "../tools/agent-usage";
 
 /** Identity of the ambient main session in the agent roster. */
 export const MAIN_AGENT_ID = "Main";
@@ -15,6 +16,8 @@ export interface AgentMetricsSummary {
 	durationKind?: "active" | "span" | "unknown";
 	contextTokens?: number;
 	contextWindow?: number;
+	/** Per-bucket tokens, cost, and last-request timing; the record subagent progress and advisors share. */
+	agentUsage?: AgentUsage;
 }
 /** Live session data and actions used by the agent hub. */
 export interface AgentHubSession {
@@ -22,6 +25,10 @@ export interface AgentHubSession {
 	readonly model: Model | undefined;
 	readonly servingModel?: { selector: string; isFallback: boolean };
 	readonly agent?: { state: { messages: AgentMessage[] } };
+	/** Existing session ledger includes off-transcript model usage and nested-task attribution. */
+	readonly sessionManager?: {
+		getUsageStatistics(): { cost: number; subagentCost: number };
+	};
 	getSessionStats(): {
 		tokens: { input: number; output: number; cacheWrite: number };
 		assistantMessages: number;
@@ -35,7 +42,7 @@ export interface AgentHubSession {
 export interface AgentRecordLike {
 	id: string;
 	displayName: string;
-	kind: "main" | "sub" | "advisor" | "mailbox";
+	kind: "main" | "sub" | "advisor" | "mailbox" | "operator";
 	parentId?: string;
 	status: AgentStatus;
 	session: AgentHubSession | null;
@@ -49,6 +56,8 @@ export interface AgentRecordLike {
 		resolvedModel?: string;
 		resolvedModelIsFallback?: boolean;
 		metrics?: AgentMetricsSummary;
+		/** Cumulative own-session assistant and model_usage cost, excluding nested task results. */
+		directCost?: number;
 		readOnly?: boolean;
 		outputPath?: string;
 		patchPath?: string;

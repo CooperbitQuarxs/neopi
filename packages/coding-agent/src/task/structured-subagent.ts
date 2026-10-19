@@ -10,11 +10,14 @@ import path from "node:path";
 import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { resolveAgentModelSelection, resolveConfiguredModelPatterns } from "../config/model-resolver";
+import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
 import {
 	type CompactionThresholdPair,
 	validateAgentCompactionThresholdOverrides,
 } from "../config/compaction-threshold";
 import { type ServiceTierInheritSettingValue, validateAgentServiceTierOverrides } from "../config/service-tier";
+import { isProviderEnabled, isUserSourceEnabled } from "../capability";
+import type { EffectiveExtensionRoots } from "../capability/types";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import { sessionLocalProtocolOptions } from "../internal-urls/context";
 import { registerArtifactsDir } from "../internal-urls/registry-helpers";
@@ -25,12 +28,18 @@ import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.m
 import isolationRecoveryHintTemplate from "../prompts/tools/isolation-recovery-hint.md" with { type: "text" };
 import salvagedChildHintTemplate from "../prompts/tools/salvaged-child-hint.md" with { type: "text" };
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
-import type { TaskEffort } from "@oh-my-pi/pi-tui/thinking";
+import type { ConfiguredThinkingLevel, TaskEffort } from "@oh-my-pi/pi-tui/thinking";
 import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../irc/messaging";
 import { buildOutputValidator } from "../tools/output-schema-validator";
 import { trackLateCleanup } from "../utils/late-cleanup";
-import { AgentSelectorError, isAgentModelSelector, validateAgentModelSelector } from "./agent-selector";
+import {
+	AgentSelectorError,
+	isAgentModelSelector,
+	splitNamedAgentSelector,
+	validateAgentModelSelector,
+	validateNamedAgentEffort,
+} from "./agent-selector";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
 import { type ExecutorOptions, runSubprocess } from "./executor";
 import { assertExternalHarnessCapabilities } from "./external-harness";
@@ -60,6 +69,7 @@ import { parseIsolationBackend } from "./worktree";
 
 import {
 	cfgIsolationBackend,
+	cfgTaskAgentAccountPools,
 	cfgTaskAgentCompactionThresholdOverrides,
 	cfgTaskAgentModelOverrides,
 	cfgTaskAgentServiceTierOverrides,
@@ -111,6 +121,11 @@ export interface StructuredSubagentRequest {
 	/** Presence, rather than truthiness, makes this the highest-priority schema. */
 	outputSchema?: unknown;
 	schemaMode?: StructuredSubagentSchemaMode;
+	/**
+	 * `false` = no output schema (caller, agent, or session) and no `yield` tool:
+	 * the child's final assistant message is its result. Default `true`.
+	 */
+	structured?: boolean;
 	/** Per-spawn thinking effort mapped onto the resolved model's supported range; overrides the agent's default selector. */
 	effort?: TaskEffort;
 	/** Caller's description of how open-ended the work is; steers the child's `auto` thinking classification. */
@@ -161,12 +176,16 @@ export interface EffectiveSubagentPolicy {
 	modelRole?: string;
 	/** Raw caller selector before role expansion, distinct from saved agent defaults. */
 	callerModelSelector?: string | string[];
+	/** Explicit level from a `<agent-name>:<effort>` selector; caller-origin, like a model selector suffix. */
+	callerThinkingLevel?: ConfiguredThinkingLevel;
 	/** Extension routing note explaining a `before_subagent_spawn` model replacement. */
 	modelRoute?: string;
 	/** Exact-name `task.agentServiceTierOverrides` entry for this agent, applied after model resolution. */
 	serviceTierOverride?: ServiceTierInheritSettingValue;
 	/** Exact-name entry normalized to both child compaction threshold fields. */
 	compactionThresholdOverride?: CompactionThresholdPair;
+	/** Exact-name `task.agentAccountPools` entry: the only OAuth accounts the child may use, per listed provider. */
+	oauthAccountPools?: OAuthAccountPools;
 	parentActiveModelPattern?: string;
 	schema: StructuredSubagentSchemaResolution;
 	planMode: boolean;
@@ -224,6 +243,9 @@ function sanitizeAgentId(value: string | undefined): string | undefined {
 
 function resolveSchema(request: StructuredSubagentRequest, agent: AgentDefinition): StructuredSubagentSchemaResolution {
 	const mode = request.schemaMode ?? request.session.outputSchemaMode ?? "permissive";
+	if (request.structured === false) {
+		return { schema: undefined, source: "none", mode, outputSchemaOverridesAgent: false };
+	}
 	if (Object.hasOwn(request, "outputSchema")) {
 		return { schema: request.outputSchema, source: "caller", mode, outputSchemaOverridesAgent: true };
 	}
@@ -290,6 +312,39 @@ function assertDepthAndSpawnAllowed(request: StructuredSubagentRequest, agentNam
 }
 
 /**
+ * In-flight agent discovery, keyed by resolved cwd, the effective extension
+ * roots and the provider/source toggles `discoverAgents` consults. Concurrent
+ * preflights (task batch items, eval `agent()` fan-out) share one disk scan;
+ * the entry is dropped when the scan settles, so any later call rescans and
+ * policy resolution stays as fresh as before. A toggle flipped mid-scan changes
+ * the key, so later callers rescan under the new policy. The live
+ * `discoverAgents` binding is part of the entry so spies swapped mid-flight
+ * never receive a stale result.
+ */
+const inflightDiscovery = new Map<string, { fn: typeof discoverAgents; promise: Promise<DiscoveryResult> }>();
+
+function discoverAgentsShared(cwd: string, extensionRoots?: EffectiveExtensionRoots): Promise<DiscoveryResult> {
+	const fn = discoverAgents;
+	const policy = [
+		isProviderEnabled("omp-plugins"),
+		isProviderEnabled("claude-plugins"),
+		isUserSourceEnabled("claude-plugins"),
+		isUserSourceEnabled("claude"),
+	].join(",");
+	const key = `${path.resolve(cwd)}\0${policy}\0${JSON.stringify(extensionRoots ?? null)}`;
+	const existing = inflightDiscovery.get(key);
+	if (existing && existing.fn === fn) return existing.promise;
+	const promise = fn(cwd, undefined, extensionRoots);
+	const entry = { fn, promise };
+	inflightDiscovery.set(key, entry);
+	const clear = () => {
+		if (inflightDiscovery.get(key) === entry) inflightDiscovery.delete(key);
+	};
+	promise.then(clear, clear);
+	return promise;
+}
+
+/**
  * Resolve every policy shared by task and eval before allocating artifacts or
  * dispatching work. Callers translate {@link StructuredSubagentError} into
  * their own wire-level error surface.
@@ -309,14 +364,23 @@ export async function resolveEffectiveSubagentPolicy(
 	// after discovery.
 	assertDepthAndSpawnAllowed(request, selectorShaped ? DEFAULT_SPAWN_AGENT : selector);
 
-	const discovery = await discoverAgents(request.session.cwd, undefined, request.session.effectiveExtensionRoots?.());
+	const discovery = await discoverAgentsShared(request.session.cwd, request.session.effectiveExtensionRoots?.());
 	const agents = [...discovery.agents, ...(request.session.getSessionAgents?.() ?? [])];
 	let agentName = selector;
 	let agent = getAgent(agents, selector);
 	/** Model selector routed into the request-model channel for the generic task agent. */
 	let selectorModel: string | undefined;
+	/** Explicit effort from `<agent-name>:<effort>` when the base, not the full value, is registered. */
+	let callerThinkingLevel: ConfiguredThinkingLevel | undefined;
+	const named = agent ? undefined : splitNamedAgentSelector(selector);
+	const namedAgent = named ? getAgent(agents, named.base) : undefined;
 	if (agent && selectorShaped) {
 		assertDepthAndSpawnAllowed(request, selector);
+	} else if (named && namedAgent) {
+		agentName = named.base;
+		agent = namedAgent;
+		callerThinkingLevel = named.level;
+		assertDepthAndSpawnAllowed(request, agentName);
 	} else if (!agent && selectorShaped) {
 		try {
 			validateAgentModelSelector(selector, request.session.modelRegistry, request.session.settings);
@@ -380,6 +444,8 @@ export async function resolveEffectiveSubagentPolicy(
 	const compactionThresholdOverride = Object.hasOwn(compactionThresholdOverrides, agentName)
 		? compactionThresholdOverrides[agentName]
 		: undefined;
+	const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(request.session.settings));
+	const oauthAccountPools = Object.hasOwn(agentAccountPools, agentName) ? agentAccountPools[agentName] : undefined;
 	const parentActiveModelPattern = request.session.getActiveModelString?.();
 	const modelResolution = {
 		// A model-selector `agent` value is the most explicit crew choice and
@@ -395,6 +461,24 @@ export async function resolveEffectiveSubagentPolicy(
 	// from different sources: the expansion below discards the alias, and the
 	// child's inherited retry-fallback chain is keyed off the role.
 	const { patterns: modelOverride, role: modelRole } = resolveAgentModelSelection(modelResolution);
+	if (callerThinkingLevel !== undefined) {
+		const effortPatterns = modelOverride ?? (parentActiveModelPattern ? [parentActiveModelPattern] : []);
+		try {
+			validateNamedAgentEffort(
+				selector,
+				agentName,
+				callerThinkingLevel,
+				effortPatterns,
+				request.session.modelRegistry,
+				request.session.settings,
+			);
+		} catch (error) {
+			if (error instanceof AgentSelectorError) {
+				throw new StructuredSubagentError("preflight", error.message, { cause: error });
+			}
+			throw error;
+		}
+	}
 	const isolationEnabled = cfgTaskIsolationEnabled.get(request.session.settings);
 	const isIsolated = request.isolation?.requested === true;
 	if (isIsolated && !isolationEnabled) {
@@ -410,9 +494,11 @@ export async function resolveEffectiveSubagentPolicy(
 		effectiveAgent,
 		modelOverride,
 		callerModelSelector: selectorModel ?? request.model,
+		callerThinkingLevel,
 		modelRole,
 		serviceTierOverride,
 		compactionThresholdOverride,
+		oauthAccountPools,
 		parentActiveModelPattern,
 		schema,
 		planMode,
@@ -546,13 +632,16 @@ function buildExecutorOptions(
 		modelOverride: policy.modelOverride,
 		modelRole: policy.modelRole,
 		callerModelSelector: policy.callerModelSelector,
+		callerThinkingLevel: policy.callerThinkingLevel,
 		modelRoute: policy.modelRoute,
 		serviceTierOverride: policy.serviceTierOverride,
 		compactionThresholdOverride: policy.compactionThresholdOverride,
+		oauthAccountPools: policy.oauthAccountPools,
 		parentActiveModelPattern: policy.parentActiveModelPattern,
 		thinkingLevel: policy.effectiveAgent.thinkingLevel,
 		effort: request.effort,
 		solutionSpace: request.solutionSpace?.trim() || undefined,
+		structured: request.structured !== false,
 		...(policy.schema.source === "none"
 			? {}
 			: {
@@ -576,12 +665,14 @@ function buildExecutorOptions(
 		authStorage: session.authStorage,
 		modelRegistry: session.modelRegistry,
 		settings: session.settings,
+		asyncJobManager: session.asyncJobManager,
 		inheritedSessionAgents: session.getSessionAgents?.(),
 		mcpManager: enableMCP ? (session.mcpManager ?? MCPManager.instance()) : undefined,
 		enableMCP,
 		customTools: request.customTools,
 		workPoolYieldItems: request.workPoolYieldItems,
-		contextFiles: session.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md"),
+		contextFiles: session.childContextFiles,
+		contextAncestorRoot: session.contextAncestorRoot,
 		skills,
 		autoloadSkills,
 		workspaceTree: session.workspaceTree,
@@ -600,7 +691,7 @@ function buildExecutorOptions(
 		parentMnemopiSessionState: session.getMnemopiSessionState?.(),
 		parentTelemetry: session.getTelemetry?.(),
 		parentAgentId: session.getAgentId?.() ?? MAIN_AGENT_ID,
-		asyncJobManager: session.asyncJobManager,
+		parentPromptCacheKey: session.getPromptCacheKey?.(),
 		parentServiceTier: session.getServiceTierByFamily ? (session.getServiceTierByFamily() ?? null) : undefined,
 	};
 }

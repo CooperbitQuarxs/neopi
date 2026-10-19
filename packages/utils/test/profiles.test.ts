@@ -485,3 +485,52 @@ describe("dirs module import behavior", () => {
 		}
 	});
 });
+
+describe("trusted user dotenv paths", () => {
+	it("matches mixed-case Windows directory keys from launch snapshots", async () => {
+		const home = path.join(os.tmpdir(), "npi-trusted-launch-home");
+		const config = path.join(home, ".trusted");
+		const customAgent = path.join(home, "custom-agent");
+		const snapshots = [
+			{ uSeRpRoFiLe: home, pI_cOnFiG_dIr: ".trusted", pI_cOdInG_aGeNt_DiR: customAgent },
+			{ uSeRpRoFiLe: home, pI_cOnFiG_dIr: ".trusted", oMp_pRoFiLe: "work", pI_pRoFiLe: "other" },
+			{ uSeRpRoFiLe: home, pI_cOnFiG_dIr: ".trusted", pI_pRoFiLe: "legacy" },
+			{ uSeRpRoFiLe: home, pI_cOnFiG_dIr: ".trusted", oMp_pRoFiLe: "", pI_pRoFiLe: "ignored" },
+		];
+		const dirsUrl = url.pathToFileURL(path.join(import.meta.dir, "..", "src", "dirs.ts")).href;
+		const script = [
+			`import { getUserEnvPaths } from ${JSON.stringify(dirsUrl)};`,
+			'Object.defineProperty(process, "platform", { value: "win32" });',
+			`console.log(JSON.stringify(${JSON.stringify(snapshots)}.map(env => getUserEnvPaths(env))));`,
+		].join("\n");
+		const proc = Bun.spawn([process.execPath, "--no-env-file", "--no-install", "--eval", script], {
+			env: {
+				HOME: path.join(home, "fallback"),
+				USERPROFILE: path.join(home, "fallback"),
+				PATH: process.env.PATH ?? "",
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, exitCode] = await Promise.all([
+			readStream(proc.stdout),
+			readStream(proc.stderr),
+			proc.exited,
+		]);
+		expect(exitCode, stderr).toBe(0);
+		expect(JSON.parse(stdout)).toEqual([
+			{ home, configRoot: config, agentDir: customAgent },
+			{
+				home,
+				configRoot: path.join(config, "profiles", "work"),
+				agentDir: path.join(config, "profiles", "work", "agent"),
+			},
+			{
+				home,
+				configRoot: path.join(config, "profiles", "legacy"),
+				agentDir: path.join(config, "profiles", "legacy", "agent"),
+			},
+			{ home, configRoot: config, agentDir: path.join(config, "agent") },
+		]);
+	});
+});

@@ -63,6 +63,25 @@ describe("review overlays under a native surface", () => {
 		setKeybindings(previousKeybindings);
 	});
 
+	it("plan review: forwards native viewer requests without faking unsupported half pages", () => {
+		const overlay = new PlanReviewOverlay(PLAN, { options: OPTIONS }, { onPick: vi.fn(), onCancel: vi.fn() });
+		overlay.describe();
+		overlay.handleInput("h"); // actions -> body
+		overlay.handleInput("\x05");
+		expect(findKeyed(overlay.describe(), "body")?.node.scroll).toEqual({ by: "line-down", n: 1 });
+		overlay.handleInput("\x04");
+		overlay.handleInput("\x15");
+		expect(findKeyed(overlay.describe(), "body")?.node.scroll).toEqual({ by: "line-down", n: 1 });
+		overlay.handleInput("\x1b[6~");
+		expect(findKeyed(overlay.describe(), "body")?.node.scroll).toEqual({ by: "page-down", n: 2 });
+		overlay.handleInput("G");
+		expect(findKeyed(overlay.describe(), "body")?.node.scroll).toEqual({ by: "end", n: 3 });
+		overlay.handleInput("g");
+		expect(findKeyed(overlay.describe(), "body")?.node.scroll).toEqual({ by: "end", n: 3 });
+		overlay.handleInput("g");
+		expect(findKeyed(overlay.describe(), "body")?.node.scroll).toEqual({ by: "start", n: 4 });
+	});
+
 	it("plan review: a Contents click retargets the section that `a` annotates", () => {
 		const onFeedbackChange = vi.fn();
 		const overlay = new PlanReviewOverlay(
@@ -135,7 +154,7 @@ describe("review overlays under a native surface", () => {
 		};
 		let result: CodeReviewOverlayResult | undefined;
 		const overlay = new AnnotationOverlay(
-			{ requestRender() {} } as unknown as TUI,
+			{ terminal: { rows: 40 }, requestRender() {} } as unknown as TUI,
 			darkTheme!,
 			getKeybindings() as KeybindingsManager,
 			[file],
@@ -154,25 +173,77 @@ describe("review overlays under a native surface", () => {
 			expect.objectContaining({ scope: "line", oldLine: 2, rawLine: "-gone", note: "why remove" }),
 		]);
 
-		// Paste is enabled once a note exists; activating it finishes with the notes.
-		const actions = list(overlay.describe(), "actions");
-		overlay.handleNativeEvent({ type: "activate", key: actions.path, item: actions.items[1]!.key! });
+		// Paste is enabled once a note exists; its footer button finishes with the notes.
+		overlay.describe();
+		overlay.handleNativeEvent({ type: "action", key: "actions/paste", act: "paste", mods: [] });
 		expect(result).toEqual({ action: "paste", annotations: overlay.getAnnotations() });
 	});
 
+	it("code review: pages native diff selection by logical source rows", () => {
+		const hunkHeader = "@@ -1,6 +1,6 @@";
+		const sourceRows: ReviewDiffFile["rows"] = Array.from(
+			{ length: 6 },
+			(_, index): ReviewDiffFile["rows"][number] => {
+				const number = index + 1;
+				const content = `NATIVE_ROW_${number}`;
+				return { kind: "added", raw: `+${content}`, content, newLine: number, hunkHeader };
+			},
+		);
+		const file: ReviewDiffFile = {
+			path: "src/native.ts",
+			occurrence: 1,
+			rawDiff: "",
+			rows: [{ kind: "hunk", raw: hunkHeader, hunkHeader }, ...sourceRows],
+			linesAdded: sourceRows.length,
+			linesRemoved: 0,
+			isBinary: false,
+		};
+		const overlay = new AnnotationOverlay(
+			{ terminal: { rows: 12 }, requestRender() {}, nativeRendering: true } as unknown as TUI,
+			darkTheme!,
+			getKeybindings() as KeybindingsManager,
+			[file],
+			"Reviewing",
+			{ onComplete: () => {} },
+		);
+
+		overlay.describe();
+		overlay.handleInput("\t");
+		overlay.handleInput("\x1b[6~");
+		expect(list(overlay.describe(), "lines").selected).toBe("l2");
+		overlay.handleInput("\x05");
+		let scrolled = overlay.describe();
+		expect(list(scrolled, "lines").selected).toBe("l2");
+		expect(findKeyed(scrolled, "lines")?.node.scroll).toEqual({ by: "line-down", n: 1 });
+		overlay.handleInput("\x19");
+		scrolled = overlay.describe();
+		expect(list(scrolled, "lines").selected).toBe("l2");
+		expect(findKeyed(scrolled, "lines")?.node.scroll).toEqual({ by: "line-up", n: 2 });
+		overlay.handleInput("\x04");
+		expect(list(overlay.describe(), "lines").selected).toBe("l3");
+		overlay.handleInput("\x15");
+		expect(list(overlay.describe(), "lines").selected).toBe("l2");
+		overlay.handleInput("\x1b[5~");
+		expect(list(overlay.describe(), "lines").selected).toBe("l0");
+		overlay.handleInput("G");
+		expect(list(overlay.describe(), "lines").selected).toBe("l5");
+		overlay.handleInput("g");
+		expect(list(overlay.describe(), "lines").selected).toBe("l5");
+		overlay.handleInput("g");
+		expect(list(overlay.describe(), "lines").selected).toBe("l0");
+	});
 	it("code review: a disabled paste action ignores activation", () => {
 		const onComplete = vi.fn();
 		const overlay = new AnnotationOverlay(
-			{ requestRender() {} } as unknown as TUI,
+			{ terminal: { rows: 40 }, requestRender() {} } as unknown as TUI,
 			darkTheme!,
 			getKeybindings() as KeybindingsManager,
 			[],
 			"Reviewing",
 			{ onComplete },
 		);
-		const actions = list(overlay.describe(), "actions");
-		expect(actions.items[1]?.p).toMatchObject({ disabled: true });
-		overlay.handleNativeEvent({ type: "activate", key: actions.path, item: actions.items[1]!.key! });
+		overlay.describe();
+		overlay.handleNativeEvent({ type: "action", key: "actions/paste", act: "paste", mods: [] });
 		expect(onComplete).not.toHaveBeenCalled();
 	});
 });

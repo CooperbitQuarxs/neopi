@@ -39,7 +39,7 @@ describe("SessionSelectorComponent scope toggle", () => {
 		selector.handleInput("\n");
 		expect(selected).toEqual(["beta"]);
 		selector.handleInput("k");
-		selector.handleInput("i");
+		selector.handleInput("/");
 		for (const key of "hjkl") selector.handleInput(key);
 		expect(Bun.stripANSI(selector.render(120).join("\n"))).toContain("hjkl");
 		selector.handleInput("\x1b");
@@ -90,6 +90,34 @@ describe("SessionSelectorComponent scope toggle", () => {
 		selector.handleInput(TAB);
 		await Bun.sleep(0);
 		expect(loads).toBe(1);
+	});
+
+	it("shows directories in folder scope only when the list spans worktrees, across a Tab round-trip", () => {
+		const single = new SessionSelectorComponent(
+			[createSession("a", "Alpha", "/work/repo"), createSession("b", "Beta", "/work/repo")],
+			() => {},
+			() => {},
+			() => {},
+		);
+		expect(single.render(120).join("\n")).not.toContain("/work/repo");
+
+		const folder = [createSession("main", "Main", "/work/repo"), createSession("wt", "Moved", "/work/repo-wt")];
+		const selector = new SessionSelectorComponent(
+			folder,
+			() => {},
+			() => {},
+			() => {},
+			// Preloaded, so both Tab toggles apply synchronously.
+			{ allSessions: folder },
+		);
+		expect(selector.render(120).join("\n")).toContain("/work/repo-wt");
+
+		selector.handleInput(TAB);
+		expect(selector.render(120).join("\n")).toContain("(all projects)");
+		selector.handleInput(TAB);
+		const rendered = selector.render(120).join("\n");
+		expect(rendered).toContain("(current folder)");
+		expect(rendered).toContain("/work/repo-wt");
 	});
 
 	it("returns the full selected session, including its cwd", async () => {

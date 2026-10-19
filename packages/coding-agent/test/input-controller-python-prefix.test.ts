@@ -62,7 +62,6 @@ function createContext() {
 			isEvalRunning: false,
 			isEvalLanguageRunning: () => false,
 			extensionRunner: undefined,
-			maybeStartTitleGeneration: vi.fn(),
 			prompt,
 			queuedMessageCount: 0,
 			getQueuedMessages: () => ({ steering: [], followUp: [] }),

@@ -13,13 +13,15 @@
  * Focus regions (`toc`/`body`/`actions`) cycle with Tab/Shift+Tab; arrows move
  * within the focused region and step left into the sidebar. The default focus is
  * `actions`, so the muscle memory of the old single-target overlay carries over:
- * ↑/↓ select options, Enter confirms, ←/→ drives the slider when there is no
- * sidebar, g/G + PgUp/PgDn scroll, and the external-editor key opens the plan.
+ * ↑/↓ select options, Enter confirms, ←/→ drives the slider, g/G + PgUp/PgDn
+ * scroll, and the external-editor key opens the plan. Under Tern the options
+ * are a horizontal bar, so ←/→ select options and Shift+←/→ drive the slider.
  */
 import {
 	type Component,
 	Ellipsis,
 	Editor,
+	getWidthConfigEpoch,
 	Markdown,
 	type MarkdownTheme,
 	matchesKey,
@@ -31,13 +33,17 @@ import {
 } from "../index";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { sanitizeStatusText } from "../chrome/shared";
-import { getEditorTheme, getMarkdownTheme, theme } from "../theme/theme";
+import { getEditorTheme, getMarkdownTheme, getThemeEpoch, theme } from "../theme/theme";
+import { matchesAppExternalEditor, matchesSelectCancel } from "../keybinding-matchers";
+import { extractPrintableText } from "../keys";
+import { MenuSelection } from "../components/menu-selection";
 import {
-	matchesAppExternalEditor,
-	matchesSelectCancel,
-	matchesSelectDown,
-	matchesSelectUp,
-} from "../keybinding-matchers";
+	applyMenuMotion,
+	MenuKeyReader,
+	menuScrollBy,
+	type MenuNavAction,
+	MenuViewport,
+} from "../components/menu-navigation";
 import type { HookSelectorSlider } from "./hook-selector";
 import {
 	bottomBorder,
@@ -56,7 +62,7 @@ import { formatKeyHint, formatKeyHints } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import type { KeyName } from "../key-hint-format";
 import { col, item, keyed, md, node, row as rowNode, span, text } from "../native/describe";
-import { leafKey, type NativeChild, type NativeNode, type NativeUiEvent } from "../native/node";
+import { leafKey, type NativeChild, type NativeNode, type NativeScroll, type NativeUiEvent } from "../native/node";
 import { actionButton, actionHint, hintsRow, itemIndex, type NativeHint, selectList } from "../native/overlay";
 import { getKeybindings } from "../keybindings";
 
@@ -74,6 +80,8 @@ const SIDEBAR_MIN_TOTAL_WIDTH = 64;
 const SIDEBAR_MIN_BODY_WIDTH = 40;
 /** Persisted line-context cap; render-time captions clamp again to the viewport. */
 const MAX_ANNOTATION_CONTEXT_WIDTH = 120;
+/** Oldest delete/annotate undo snapshots are dropped past this depth (each holds the full plan text). */
+const MAX_UNDO_ENTRIES = 100;
 
 type Focus = "toc" | "body" | "actions";
 
@@ -146,6 +154,78 @@ interface UndoEntry {
 	deleted: string[];
 }
 
+/** Concatenated plan body rows and their anchors, reused while every render input is unchanged. */
+interface BodyLayout {
+	width: number;
+	annotationRev: number;
+	themeEpoch: number;
+	widthEpoch: number;
+	/** Each section's `Markdown.render` result the layout was built from (compared by identity). */
+	rendered: readonly (readonly string[])[];
+	lines: readonly string[];
+	anchors: BodyRowAnchor[];
+	offsets: number[];
+}
+
+/** Line contexts per rendered-lines array; `Markdown.render` returns a stable array per (text, width). */
+const lineContextCache = new WeakMap<readonly string[], readonly LineAnchorContext[]>();
+/** Match keys per context list, so resolving several annotations normalizes each row once. */
+const normalizedContextCache = new WeakMap<readonly LineAnchorContext[], readonly string[]>();
+
+function lineContexts(rendered: readonly string[]): readonly LineAnchorContext[] {
+	let contexts = lineContextCache.get(rendered);
+	if (!contexts) {
+		contexts = rendered.map(line => {
+			const sanitized = sanitizeStatusText(line);
+			const truncated = visibleWidth(sanitized) > MAX_ANNOTATION_CONTEXT_WIDTH;
+			const text = truncateToWidth(sanitized, MAX_ANNOTATION_CONTEXT_WIDTH, Ellipsis.Unicode);
+			return { text: text || "(blank line)", truncated };
+		});
+		lineContextCache.set(rendered, contexts);
+	}
+	return contexts;
+}
+
+function normalizeLineContext(context: LineAnchorContext): string {
+	const normalized = sanitizeStatusText(context.text).replace(/\s+/g, " ").trim();
+	return context.truncated && normalized.endsWith("…") ? normalized.slice(0, -1) : normalized;
+}
+
+/** Row in `contexts` nearest `storedRow` whose text matches the stored context, or -1. */
+function resolveLineRow(
+	storedRow: number,
+	storedContext: LineAnchorContext,
+	contexts: readonly LineAnchorContext[],
+): number {
+	if (contexts.length === 0) return -1;
+	const targetRow = Math.max(0, Math.floor(storedRow));
+	const normalizedStoredContext = normalizeLineContext(storedContext);
+	if (!normalizedStoredContext) return -1;
+	let normalizedContexts = normalizedContextCache.get(contexts);
+	if (!normalizedContexts) {
+		normalizedContexts = contexts.map(normalizeLineContext);
+		normalizedContextCache.set(contexts, normalizedContexts);
+	}
+	let best = -1;
+	let bestDistance = Number.POSITIVE_INFINITY;
+	for (let row = 0; row < normalizedContexts.length; row++) {
+		const normalizedContext = normalizedContexts[row]!;
+		if (
+			normalizedContext !== normalizedStoredContext &&
+			!normalizedContext.includes(normalizedStoredContext) &&
+			!normalizedStoredContext.includes(normalizedContext)
+		) {
+			continue;
+		}
+		const distance = Math.abs(row - targetRow);
+		if (distance < bestDistance) {
+			best = row;
+			bestDistance = distance;
+		}
+	}
+	return best;
+}
+
 export interface PlanReviewOverlayCallbacks {
 	/** Invoked with the chosen option label (never a disabled one). */
 	onPick: (label: string) => void;
@@ -186,6 +266,20 @@ export interface PlanReviewOverlayOptions {
 export class PlanReviewOverlay implements Component {
 	#mdTheme: MarkdownTheme;
 	#scrollView: ScrollView;
+	readonly #keys = new MenuKeyReader();
+	readonly #tocMenu = new MenuSelection<number>([], {
+		getKey: String,
+		getSearchText: index => this.#sections[index]?.title ?? "",
+	});
+	readonly #tocViewport = new MenuViewport();
+	#tocRows: number[] = [];
+	readonly #actionMenu: MenuSelection<number>;
+	readonly #actionViewport = new MenuViewport();
+	readonly #actionRows: number[];
+	readonly #chooserMenu = new MenuSelection<number>([], { getKey: String, getSearchText: () => "" });
+	readonly #chooserViewport = new MenuViewport();
+	#chooserRows: number[] = [];
+	#bodyNativeScroll: NativeScroll | undefined;
 	#sections: OverlaySection[] = [];
 	#toc: number[] = [];
 	/** Section holding the plan's title heading (dropped from the ToC; the native sheet title), or -1. */
@@ -197,6 +291,10 @@ export class PlanReviewOverlay implements Component {
 	#sectionOffsets: number[] = [];
 	/** Rendered body row to underlying plan row; callouts retain their owner's anchor. */
 	#bodyRowAnchors: BodyRowAnchor[] = [];
+	/** Memoized {@link #buildBody} result. */
+	#bodyLayout: BodyLayout | undefined;
+	/** Lines last handed to the scroll view; unchanged layouts skip the copy and keep its render cache. */
+	#scrollLines: readonly string[] | undefined;
 	#undo: UndoEntry[] = [];
 	/** Titles of sections deleted in the overlay, surfaced as Refine feedback. */
 	#deleted: string[] = [];
@@ -249,6 +347,11 @@ export class PlanReviewOverlay implements Component {
 	#nativeRoot: NativeNode | undefined;
 	/** Content the memoized root was built from. */
 	#nativeRootContent: NativePlanContent | undefined;
+	/**
+	 * The section the last Contents jump targets under a native surface, which
+	 * scrolls the body itself: `n` counts the jumps, so each one reveals it again.
+	 */
+	#jump: { section: number; n: number } | undefined;
 
 	constructor(
 		planContent: string,
@@ -270,6 +373,16 @@ export class PlanReviewOverlay implements Component {
 		this.#externalEditorLabel = options.externalEditorLabel;
 		this.#promptTitle = options.promptTitle;
 		this.#selectedIndex = this.#coerceIndex(options.initialIndex ?? 0);
+		this.#actionMenu = new MenuSelection(
+			this.#options.map((_option, index) => index),
+			{
+				getKey: String,
+				getSearchText: index => this.#options[index] ?? "",
+				isDisabled: index => this.#disabled.has(index),
+			},
+		);
+		this.#actionMenu.setSelectedIndex(this.#selectedIndex);
+		this.#actionRows = this.#options.map(() => 1);
 		if (options.slider && options.slider.segments.length > 0) {
 			this.#slider = options.slider;
 			this.#sliderIndex = Math.max(0, Math.min(options.slider.index, options.slider.segments.length - 1));
@@ -437,8 +550,8 @@ export class PlanReviewOverlay implements Component {
 			) {
 				continue;
 			}
-			const contexts = section.md.render(MAX_ANNOTATION_CONTEXT_WIDTH).map(line => this.#lineContext(line));
-			const row = this.#resolveLineRow(
+			const contexts = lineContexts(section.md.render(MAX_ANNOTATION_CONTEXT_WIDTH));
+			const row = resolveLineRow(
 				entry.target.row,
 				{ text: entry.target.context, truncated: entry.target.contextTruncated === true },
 				contexts,
@@ -473,6 +586,9 @@ export class PlanReviewOverlay implements Component {
 		this.#titleIndex = titleIndex ?? -1;
 		this.#toc = headings.filter(i => i !== titleIndex);
 		this.#tocBaseLevel = this.#toc.length > 0 ? Math.min(...this.#toc.map(i => this.#sections[i]!.level)) : 1;
+		this.#tocMenu.setItems(this.#toc);
+		this.#tocRows = this.#toc.map(() => 1);
+		this.#tocViewport.reveal();
 	}
 
 	/** Clamp `index` to range, then walk to the nearest enabled option so the
@@ -485,29 +601,6 @@ export class PlanReviewOverlay implements Component {
 		for (let i = clamped + 1; i <= max; i++) if (!this.#disabled.has(i)) return i;
 		for (let i = clamped - 1; i >= 0; i--) if (!this.#disabled.has(i)) return i;
 		return clamped;
-	}
-
-	/** First enabled option index (or -1 when none), used to detect the "top". */
-	#firstEnabledIndex(): number {
-		for (let i = 0; i < this.#options.length; i++) if (!this.#disabled.has(i)) return i;
-		return -1;
-	}
-
-	/** Move the option cursor by `delta`, skipping disabled rows, stopping at the
-	 *  list edge. */
-	#moveSelection(delta: number): void {
-		const max = this.#options.length - 1;
-		if (max < 0) return;
-		let index = this.#selectedIndex;
-		while (true) {
-			const next = Math.max(0, Math.min(index + delta, max));
-			if (next === index) return;
-			index = next;
-			if (!this.#disabled.has(index)) {
-				this.#selectedIndex = index;
-				return;
-			}
-		}
 	}
 
 	/** Step the slider by `delta`, clamped to its edges (narrow-terminal mode). */
@@ -529,6 +622,16 @@ export class PlanReviewOverlay implements Component {
 		}
 	}
 
+	#cancelReview(): void {
+		if (this.#annotationChooser) this.#annotationChooser = undefined;
+		else if (this.#annotating) this.#exitAnnotate();
+		else {
+			this.#committed = true;
+			this.callbacks.onCancel();
+		}
+		this.#keys.reset();
+	}
+
 	handleInput(keyData: string): void {
 		if (this.#committed) return;
 		if (keyData.startsWith("\x1b[<") && this.#handleMouse(keyData)) return;
@@ -537,59 +640,53 @@ export class PlanReviewOverlay implements Component {
 			return;
 		}
 		if (this.#annotating) {
+			const printable = extractPrintableText(keyData);
+			if (printable !== undefined) {
+				if (this.#editor.isJumpPending) this.#editor.handleInput(keyData);
+				else this.#editor.typeCharacter(printable);
+				return;
+			}
 			if (this.callbacks.onAnnotationExternalEditor && matchesAppExternalEditor(keyData)) {
 				this.callbacks.onAnnotationExternalEditor(this.#editor.getExpandedText(), text => {
 					if (text !== null && this.#annotating) this.#editor.setText(text);
 				});
 				return;
 			}
-			if (matchesSelectCancel(keyData)) {
-				this.#exitAnnotate();
-				return;
-			}
-			this.#editor.handleInput(keyData);
+			if (matchesSelectCancel(keyData)) this.#cancelReview();
+			else this.#editor.handleInput(keyData);
 			return;
 		}
-		if (matchesSelectCancel(keyData)) {
-			this.#committed = true;
-			this.callbacks.onCancel();
+		if (this.#focus === "actions" && (matchesKey(keyData, "shift+left") || matchesKey(keyData, "shift+right"))) {
+			this.#moveSlider(matchesKey(keyData, "shift+left") ? -1 : 1);
 			return;
 		}
-		if (this.#focus !== "actions" && keyData === "u") {
-			this.#undoLast();
+		const action = this.#keys.read(keyData);
+		if (action === "pending") return;
+		if (action?.kind === "cancel") {
+			this.#cancelReview();
 			return;
 		}
-		if (this.#focus !== "actions" && keyData === "e") {
-			this.#editCurrentAnnotation();
+		if (action?.kind === "context") {
+			this.#cycleRegion(action.delta);
 			return;
 		}
-		if (this.callbacks.onExternalEditor && matchesAppExternalEditor(keyData)) {
-			this.callbacks.onExternalEditor();
+		if (action?.kind === "horizontal") {
+			const regions: Focus[] = this.#sidebarShown ? ["toc", "body", "actions"] : ["body", "actions"];
+			const index = Math.max(0, regions.indexOf(this.#focus));
+			this.#setFocus(regions[Math.max(0, Math.min(regions.length - 1, index + action.delta))]!);
 			return;
 		}
-		if (this.callbacks.onCopyPlan && keyData === "c") {
-			void this.callbacks.onCopyPlan(joinPlanSections(this.#sections));
-			return;
+		if (!action) {
+			if (this.#focus !== "actions" && keyData === "u") this.#undoLast();
+			else if (this.#focus !== "actions" && keyData === "e") this.#editCurrentAnnotation();
+			else if (this.callbacks.onExternalEditor && matchesAppExternalEditor(keyData))
+				this.callbacks.onExternalEditor();
+			else if (this.callbacks.onCopyPlan && keyData === "c")
+				void this.callbacks.onCopyPlan(joinPlanSections(this.#sections));
 		}
-		if (matchesKey(keyData, "tab") || keyData === "\t") {
-			this.#cycleRegion(1);
-			return;
-		}
-		if (matchesKey(keyData, "shift+tab") || keyData === "\x1b[Z") {
-			this.#cycleRegion(-1);
-			return;
-		}
-		switch (this.#focus) {
-			case "actions":
-				this.#handleActions(keyData);
-				return;
-			case "body":
-				this.#handleBody(keyData);
-				return;
-			case "toc":
-				this.#handleToc(keyData);
-				return;
-		}
+		if (this.#focus === "actions") this.#handleActions(action);
+		else if (this.#focus === "body") this.#handleBody(action, keyData);
+		else this.#handleToc(action, keyData);
 	}
 
 	/**
@@ -603,6 +700,7 @@ export class PlanReviewOverlay implements Component {
 	 */
 	#handleMouse(data: string): boolean {
 		return routeSgrMouseInput(data, event => {
+			this.#keys.reset();
 			if (event.wheel !== null) {
 				// Scroll wheel: three rows per notch.
 				this.#scrollView.scroll(event.wheel * 3);
@@ -657,147 +755,58 @@ export class PlanReviewOverlay implements Component {
 
 	#setFocus(focus: Focus): void {
 		this.#focus = focus;
+		this.#keys.reset();
+		if (focus === "toc") this.#tocViewport.reveal();
 		if (focus === "toc") this.#tocCursor = this.#deriveTocCursorFromScroll();
 	}
 
-	#handleActions(data: string): void {
-		// Left/right always drive the slider. The sidebar sits beside the body
-		// (above this row), not the slider, so stealing left for it would strand
-		// the operator unable to step the model tier back — reach the ToC via Tab.
-		const isLeft = matchesKey(data, "left") || (this.#slider !== undefined && matchesKey(data, "h"));
-		const isRight = matchesKey(data, "right") || (this.#slider !== undefined && matchesKey(data, "l"));
-		if (isLeft) {
-			this.#moveSlider(-1);
-			return;
-		}
-		if (isRight) {
-			this.#moveSlider(1);
-			return;
-		}
-		if (matchesSelectUp(data) || matchesKey(data, "k")) {
-			if (this.#selectedIndex === this.#firstEnabledIndex()) this.#setFocus("body");
-			else this.#moveSelection(-1);
-			return;
-		}
-		if (matchesSelectDown(data) || matchesKey(data, "j")) {
-			this.#moveSelection(1);
-			return;
-		}
-		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-			this.#confirmSelection();
-			return;
-		}
-		this.#handleBodyScroll(data);
+	#handleActions(action: MenuNavAction | undefined): void {
+		if (!action) return;
+		this.#actionMenu.setSelectedIndex(this.#selectedIndex);
+		this.#actionViewport.layout(this.#actionRows, this.#selectedIndex, Math.max(1, this.#options.length));
+		const motion = applyMenuMotion(action, this.#actionMenu, this.#actionViewport);
+		if (motion.handled) this.#selectedIndex = this.#actionMenu.selectedIndex;
+		else if (action.kind === "confirm") this.#confirmSelection();
 	}
 
-	#handleBody(data: string): void {
+	#handleBody(action: MenuNavAction | undefined, data: string): void {
 		if (data === "a") {
 			this.#startBodyAnnotate();
 			return;
 		}
-		if (matchesKey(data, "left") || matchesKey(data, "h")) {
-			if (this.#sidebarShown) this.#setFocus("toc");
-			return;
-		}
-		if (
-			matchesKey(data, "right") ||
-			matchesKey(data, "l") ||
-			matchesKey(data, "enter") ||
-			matchesKey(data, "return") ||
-			data === "\n"
-		) {
+		if (action?.kind === "confirm") {
 			this.#setFocus("actions");
 			return;
 		}
-		// Vertical nav flows between regions at the edges: scrolling off the bottom
-		// drops into the actions ("next step"); scrolling off the top steps back up
-		// to the ToC.
-		if (matchesSelectUp(data) || matchesKey(data, "k")) {
-			if (this.#scrollView.getScrollOffset() <= 0 && this.#sidebarShown) {
-				this.#setFocus("toc");
-			} else {
-				this.#scrollView.scroll(-1);
-				this.#captureScrollProgress();
+		const handled = action
+			? this.#scrollView.handleMenuAction(action)
+			: (matchesKey(data, "shift+up") || matchesKey(data, "shift+down")) && this.#scrollView.handleScrollKey(data);
+		if (!handled) return;
+		if (action?.kind === "boundary") this.#scrollProgress = action.edge === "first" ? 0 : 1;
+		else this.#captureScrollProgress();
+		const by = action && menuScrollBy(action);
+		if (by) this.#bodyNativeScroll = { by, n: (this.#bodyNativeScroll?.n ?? 0) + 1 };
+	}
+
+	#handleToc(action: MenuNavAction | undefined, data: string): void {
+		this.#tocMenu.setSelectedIndex(this.#tocCursor);
+		this.#tocViewport.layout(this.#tocRows, this.#tocCursor, this.#tocViewport.visibleItems);
+		const motion = action && applyMenuMotion(action, this.#tocMenu, this.#tocViewport);
+		if (motion?.handled) {
+			if (action?.kind !== "scroll") {
+				this.#tocCursor = this.#tocMenu.selectedIndex;
+				this.#scrubBodyToToc();
 			}
-			return;
-		}
-		if (matchesSelectDown(data) || matchesKey(data, "j")) {
-			if (this.#scrollView.getScrollOffset() >= this.#scrollView.getMaxScrollOffset()) {
-				this.#setFocus("actions");
-			} else {
-				this.#scrollView.scroll(1);
-				this.#captureScrollProgress();
-			}
-			return;
-		}
-		this.#handleBodyScroll(data);
-	}
-
-	/**
-	 * Shared scroll dispatch for body + actions focus. Delegates standard keys
-	 * (Arrows, Shift+Arrow fast-scroll, PgUp/PgDn, Home/End) to the ScrollView,
-	 * then adds the vim g/G jumps. Plain Arrow/k/j are consumed by the callers
-	 * before this runs, so here it only ever sees the paging/fast keys.
-	 */
-	#handleBodyScroll(data: string): void {
-		if (this.#scrollView.handleScrollKey(data)) {
-			if (matchesKey(data, "home")) this.#scrollProgress = 0;
-			else if (matchesKey(data, "end")) this.#scrollProgress = 1;
-			else this.#captureScrollProgress();
-			return;
-		}
-		if (data === "g") {
-			this.#scrollView.scrollToTop();
-			this.#scrollProgress = 0;
-		} else if (data === "G") {
-			this.#scrollView.scrollToBottom();
-			this.#scrollProgress = 1;
-		}
-	}
-
-	#handleToc(data: string): void {
-		if (matchesSelectUp(data) || matchesKey(data, "k")) {
-			this.#moveTocCursor(-1);
-			return;
-		}
-		if (matchesSelectDown(data) || matchesKey(data, "j")) {
-			// Past the last section, fall through to the actions ("next step").
-			if (this.#tocCursor >= this.#toc.length - 1) this.#setFocus("actions");
-			else this.#moveTocCursor(1);
-			return;
-		}
-		if (
-			matchesKey(data, "right") ||
-			matchesKey(data, "l") ||
-			matchesKey(data, "enter") ||
-			matchesKey(data, "return") ||
-			data === "\n"
-		) {
-			this.#setFocus("body");
-			return;
-		}
-		if (data === "d" || matchesKey(data, "delete")) {
-			this.#deleteSelectedSection();
-			return;
-		}
-		if (data === "a") {
-			this.#startSectionAnnotate();
-			return;
-		}
-	}
-
-	#moveTocCursor(delta: number): void {
-		if (this.#toc.length === 0) return;
-		const next = Math.max(0, Math.min(this.#toc.length - 1, this.#tocCursor + delta));
-		if (next === this.#tocCursor) return;
-		this.#tocCursor = next;
-		this.#scrubBodyToToc();
+		} else if (action?.kind === "confirm" || action?.kind === "toggle") this.#setFocus("body");
+		else if (data === "d" || matchesKey(data, "delete")) this.#deleteSelectedSection();
+		else if (data === "a") this.#startSectionAnnotate();
 	}
 
 	/** Scroll the body so the selected ToC section's heading sits at the top. */
 	#scrubBodyToToc(): void {
 		const sectionIndex = this.#toc[this.#tocCursor];
 		if (sectionIndex === undefined) return;
+		this.#jump = { section: sectionIndex, n: (this.#jump?.n ?? 0) + 1 };
 		const offset = this.#sectionOffsets[sectionIndex];
 		if (offset !== undefined) {
 			this.#scrollView.setScrollOffset(offset);
@@ -823,6 +832,7 @@ export class PlanReviewOverlay implements Component {
 	}
 
 	#pushUndo(): void {
+		if (this.#undo.length >= MAX_UNDO_ENTRIES) this.#undo.shift();
 		this.#undo.push({
 			text: joinPlanSections(this.#sections),
 			annotations: this.#sections.map(section =>
@@ -881,6 +891,7 @@ export class PlanReviewOverlay implements Component {
 	}
 
 	#startAnnotate(target: BodyRowAnchor | { sectionIndex: number; row: null; context: null }): void {
+		this.#keys.reset();
 		this.#annotationTarget = target;
 		this.#editingAnnotation = undefined;
 		this.#annotating = true;
@@ -888,6 +899,7 @@ export class PlanReviewOverlay implements Component {
 	}
 
 	#startExistingAnnotation(selection: AnnotationSelection): void {
+		this.#keys.reset();
 		const section = this.#sections[selection.sectionIndex];
 		const annotation = section?.annotations[selection.annotationIndex];
 		if (!section || !annotation) return;
@@ -916,7 +928,7 @@ export class PlanReviewOverlay implements Component {
 			seenRows.add(candidate.row);
 			sectionAnchors.push({ text: candidate.context, truncated: candidate.contextTruncated });
 		}
-		const resolvedRow = this.#resolveLineRow(
+		const resolvedRow = resolveLineRow(
 			annotation.target.row,
 			{ text: annotation.target.context, truncated: annotation.target.contextTruncated },
 			sectionAnchors,
@@ -955,26 +967,30 @@ export class PlanReviewOverlay implements Component {
 			return;
 		}
 		this.#annotationChooser = { entries, selected: 0 };
+		this.#chooserMenu.setItems(entries.map((_entry, index) => index));
+		this.#chooserMenu.setSelectedIndex(0);
+		this.#chooserRows = entries.map(() => 1);
+		this.#chooserViewport.setTop(0);
+		this.#keys.reset();
 	}
 
 	#handleAnnotationChooser(data: string): void {
 		const chooser = this.#annotationChooser;
 		if (!chooser) return;
-		if (matchesSelectCancel(data)) {
-			this.#annotationChooser = undefined;
+		const action = this.#keys.read(data);
+		if (!action || action === "pending") return;
+		if (action.kind === "cancel") {
+			this.#cancelReview();
 			return;
 		}
-		if (matchesSelectUp(data) || matchesKey(data, "k")) {
-			chooser.selected = (chooser.selected - 1 + chooser.entries.length) % chooser.entries.length;
-			return;
-		}
-		if (matchesSelectDown(data) || matchesKey(data, "j")) {
-			chooser.selected = (chooser.selected + 1) % chooser.entries.length;
-			return;
-		}
-		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+		this.#chooserMenu.setSelectedIndex(chooser.selected);
+		this.#chooserViewport.layout(this.#chooserRows, chooser.selected, this.#chooserViewport.visibleItems);
+		const motion = applyMenuMotion(action, this.#chooserMenu, this.#chooserViewport);
+		if (motion.handled) chooser.selected = this.#chooserMenu.selectedIndex;
+		else if (action.kind === "confirm" || action.kind === "toggle") {
 			const selection = chooser.entries[chooser.selected];
 			this.#annotationChooser = undefined;
+			this.#keys.reset();
 			if (selection) this.#startExistingAnnotation(selection);
 		}
 	}
@@ -1102,7 +1118,7 @@ export class PlanReviewOverlay implements Component {
 		switch (this.#focus) {
 			case "actions":
 				parts.push(`${upDown} select`, `${enter} confirm`);
-				if (this.#slider) parts.push(`${formatKeyHints(["left", "right"])} model`);
+				if (this.#slider) parts.push(`${formatKeyHints(["shift+left", "shift+right"])} model`);
 				break;
 			case "toc":
 				parts.push(
@@ -1119,7 +1135,7 @@ export class PlanReviewOverlay implements Component {
 					`${upDown} scroll`,
 					`${formatKeyHint("shift")} faster`,
 					formatKeyHints(["pageUp", "pageDown"]),
-					`${formatKeyHints(["g", "shift+g"])} ends`,
+					"gg/G ends · Ctrl-u/d half · Ctrl-e/y view",
 					`${formatKeyHint("a")} annotate`,
 					`${formatKeyHint("e")} edit`,
 					`${formatKeyHint("u")} undo`,
@@ -1127,7 +1143,7 @@ export class PlanReviewOverlay implements Component {
 				break;
 		}
 		if (this.callbacks.onCopyPlan) parts.push(`${formatKeyHint("c")} copy`);
-		parts.push(`${formatKeyHint("tab")} regions`);
+		parts.push("h/l panes", `${formatKeyHint("tab")} regions`);
 		if (this.#externalEditorLabel && this.#focus !== "toc") parts.push(`${this.#externalEditorLabel} editor`);
 		parts.push(this.#helpSuffix ?? `${editorKey("tui.select.cancel")} cancel`);
 		return parts.join(sep);
@@ -1144,23 +1160,64 @@ export class PlanReviewOverlay implements Component {
 
 	#layoutBody(lines: readonly string[], height: number): void {
 		this.#captureScrollProgress();
-		this.#scrollView.setLines(lines);
+		if (lines !== this.#scrollLines) {
+			this.#scrollView.setLines(lines);
+			this.#scrollLines = lines;
+		}
 		this.#scrollView.setHeight(height);
 		const maxOffset = this.#scrollView.getMaxScrollOffset();
 		if (maxOffset > 0) this.#scrollView.setScrollOffset(Math.round(this.#scrollProgress * maxOffset));
 	}
 
-	/** Build the concatenated body lines and map each rendered row back to a plan anchor. */
-	#buildBody(bodyContentWidth: number): string[] {
+	/**
+	 * Build the concatenated body lines and map each rendered row back to a plan
+	 * anchor. Memoized on width, annotation revision, theme/width epochs and each
+	 * section's rendered-lines identity, so steady frames and scrolling reuse it.
+	 */
+	#buildBody(bodyContentWidth: number): readonly string[] {
+		const themeEpoch = getThemeEpoch();
+		const widthEpoch = getWidthConfigEpoch();
+		const cached = this.#bodyLayout;
+		if (
+			cached?.width === bodyContentWidth &&
+			cached.annotationRev === this.#annotationRev &&
+			cached.themeEpoch === themeEpoch &&
+			cached.widthEpoch === widthEpoch &&
+			cached.rendered.length === this.#sections.length &&
+			this.#sections.every((section, i) => section.md.render(bodyContentWidth) === cached.rendered[i])
+		) {
+			this.#sectionOffsets = cached.offsets;
+			this.#bodyRowAnchors = cached.anchors;
+			return cached.lines;
+		}
 		const lines: string[] = [];
 		const anchors: BodyRowAnchor[] = [];
+		const renderedSections: (readonly string[])[] = [];
 		// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 		const offsets: number[] = new Array(this.#sections.length);
 		for (let sectionIndex = 0; sectionIndex < this.#sections.length; sectionIndex++) {
 			const section = this.#sections[sectionIndex]!;
 			offsets[sectionIndex] = lines.length;
 			const rendered = section.md.render(bodyContentWidth);
-			const contexts = rendered.map(line => this.#lineContext(line));
+			renderedSections.push(rendered);
+			const contexts = lineContexts(rendered);
+			// Resolve each note's row once; notes on one row keep their array order.
+			let notesByRow: Map<number, string[]> | undefined;
+			for (const annotation of section.annotations) {
+				const annotationRow =
+					annotation.target.kind === "section"
+						? 0
+						: resolveLineRow(
+								annotation.target.row,
+								{ text: annotation.target.context, truncated: annotation.target.contextTruncated },
+								contexts,
+							);
+				if (annotationRow < 0) continue;
+				notesByRow ??= new Map();
+				const notes = notesByRow.get(annotationRow);
+				if (notes) notes.push(annotation.note);
+				else notesByRow.set(annotationRow, [annotation.note]);
+			}
 			for (let row = 0; row < rendered.length; row++) {
 				const context = contexts[row]!;
 				const anchor = {
@@ -1171,67 +1228,24 @@ export class PlanReviewOverlay implements Component {
 				};
 				lines.push(rendered[row]!);
 				anchors.push(anchor);
-				for (const annotation of section.annotations) {
-					const annotationRow =
-						annotation.target.kind === "section"
-							? 0
-							: this.#resolveLineRow(
-									annotation.target.row,
-									{
-										text: annotation.target.context,
-										truncated: annotation.target.contextTruncated,
-									},
-									contexts,
-								);
-					if (annotationRow === row) {
-						this.#appendAnnotationCallout(lines, anchors, annotation.note, anchor, bodyContentWidth);
-					}
-				}
+				const notes = notesByRow?.get(row);
+				if (!notes) continue;
+				for (const note of notes) this.#appendAnnotationCallout(lines, anchors, note, anchor, bodyContentWidth);
 			}
 		}
 		this.#sectionOffsets = offsets;
 		this.#bodyRowAnchors = anchors;
-		return lines;
-	}
-
-	#lineContext(line: string): LineAnchorContext {
-		const sanitized = sanitizeStatusText(line);
-		const truncated = visibleWidth(sanitized) > MAX_ANNOTATION_CONTEXT_WIDTH;
-		const text = truncateToWidth(sanitized, MAX_ANNOTATION_CONTEXT_WIDTH, Ellipsis.Unicode);
-		return { text: text || "(blank line)", truncated };
-	}
-
-	#resolveLineRow(
-		storedRow: number,
-		storedContext: LineAnchorContext,
-		contexts: readonly LineAnchorContext[],
-	): number {
-		if (contexts.length === 0) return -1;
-		const targetRow = Math.max(0, Math.floor(storedRow));
-		const normalize = (context: LineAnchorContext): string => {
-			const normalized = sanitizeStatusText(context.text).replace(/\s+/g, " ").trim();
-			return context.truncated && normalized.endsWith("…") ? normalized.slice(0, -1) : normalized;
+		this.#bodyLayout = {
+			width: bodyContentWidth,
+			annotationRev: this.#annotationRev,
+			themeEpoch,
+			widthEpoch,
+			rendered: renderedSections,
+			lines,
+			anchors,
+			offsets,
 		};
-		const normalizedStoredContext = normalize(storedContext);
-		if (!normalizedStoredContext) return -1;
-		let best = -1;
-		let bestDistance = Number.POSITIVE_INFINITY;
-		for (let row = 0; row < contexts.length; row++) {
-			const normalizedContext = normalize(contexts[row]!);
-			if (
-				normalizedContext !== normalizedStoredContext &&
-				!normalizedContext.includes(normalizedStoredContext) &&
-				!normalizedStoredContext.includes(normalizedContext)
-			) {
-				continue;
-			}
-			const distance = Math.abs(row - targetRow);
-			if (distance < bestDistance) {
-				best = row;
-				bestDistance = distance;
-			}
-		}
-		return best;
+		return lines;
 	}
 
 	#appendAnnotationCallout(
@@ -1280,10 +1294,7 @@ export class PlanReviewOverlay implements Component {
 		const posForRow: (number | undefined)[] = [];
 		const slots = Math.max(0, regionRows);
 		const total = this.#toc.length;
-		let start = 0;
-		if (total > slots) {
-			start = Math.max(0, Math.min(this.#tocCursor - Math.floor(slots / 2), total - slots));
-		}
+		const start = this.#tocViewport.layout(this.#tocRows, this.#tocCursor, Math.max(1, slots)).startIndex;
 		for (let r = 0; r < slots; r++) {
 			const p = start + r;
 			lines.push(p < total ? this.#renderTocEntry(p, sidebarWidth) : "");
@@ -1318,13 +1329,11 @@ export class PlanReviewOverlay implements Component {
 		const chooser = this.#annotationChooser;
 		if (!chooser || maxRows <= 0) return [];
 		const optionLimit = Number.isFinite(maxRows) ? Math.max(0, Math.floor(maxRows) - 2) : chooser.entries.length;
-		const start =
-			optionLimit >= chooser.entries.length
-				? 0
-				: Math.max(
-						0,
-						Math.min(chooser.selected - Math.floor(optionLimit / 2), chooser.entries.length - optionLimit),
-					);
+		const start = this.#chooserViewport.layout(
+			this.#chooserRows,
+			chooser.selected,
+			Math.max(1, optionLimit),
+		).startIndex;
 		const lines = [theme.bold(theme.fg("accent", "Edit annotation"))];
 		for (let windowIndex = 0; windowIndex < optionLimit; windowIndex++) {
 			const optionIndex = start + windowIndex;
@@ -1404,6 +1413,8 @@ export class PlanReviewOverlay implements Component {
 		const sig = [
 			this.#focus,
 			this.#tocCursor,
+			this.#jump?.n ?? 0,
+			this.#bodyNativeScroll?.n ?? 0,
 			this.#selectedIndex,
 			this.#sliderIndex,
 			this.#committed ? `committed:${this.#committedLabel ?? ""}` : "",
@@ -1419,12 +1430,22 @@ export class PlanReviewOverlay implements Component {
 		const children: NativeChild[] = [];
 		const tools = this.#describeTools();
 		if (tools) children.push(tools);
-		const bodyCol = node(
-			"col",
-			{ role: "omp.plan.body", grow: 1, gap: "md", tone: this.#focus === "body" ? "accent" : undefined },
-			content.body,
-			"body",
-		);
+		// The section a Contents jump targets scrolls to the body's top.
+		const jump = this.#jump;
+		const body = jump
+			? content.body.map((section): NativeNode =>
+					section.key === `s${jump.section}` ? { ...section, reveal: { at: "start", n: jump.n } } : section,
+				)
+			: content.body;
+		const bodyCol: NativeNode = {
+			...node(
+				"col",
+				{ role: "omp.plan.body", grow: 1, gap: "md", tone: this.#focus === "body" ? "accent" : undefined },
+				body,
+				"body",
+			),
+			scroll: this.#bodyNativeScroll,
+		};
 		if (this.#sidebarShown) {
 			const tocSection = this.#toc[this.#tocCursor];
 			const toc = selectList("toc", content.toc, {
@@ -1478,7 +1499,7 @@ export class PlanReviewOverlay implements Component {
 		return this.#nativeRoot;
 	}
 
-	/** Head tools: Copy `c` and the external editor, mirroring their keys. */
+	/** Head tools: Copy `c`, the external editor and Cancel, mirroring their keys. */
 	#describeTools(): NativeNode | undefined {
 		if (this.#committed) return undefined;
 		const buttons: NativeNode[] = [];
@@ -1489,14 +1510,25 @@ export class PlanReviewOverlay implements Component {
 		if (this.callbacks.onExternalEditor) {
 			buttons.push(actionButton("Edit in $EDITOR", "externalEditor", editorKeyId ? { keys: editorKeyId } : {}));
 		}
+		// Cancel the review the way the cancel key does; while annotating that key
+		// only leaves the draft/chooser, so the button is hidden there.
+		if (!this.#annotating && !this.#annotationChooser) {
+			const cancelKeyId = getKeybindings().getKeys("tui.select.cancel")[0];
+			buttons.push(actionButton("Cancel", "cancel", cancelKeyId ? { keys: cancelKeyId } : {}));
+		}
 		if (buttons.length === 0) return undefined;
 		return node("row", { role: "omp.plan.tools", gap: "sm", align: "center", justify: "end" }, buttons, "tools");
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (this.#committed) return;
+		this.#keys.reset();
 		if (event.type === "action") {
-			// Head tools run exactly what `c` and the external-editor key run.
+			if (event.act === "cancel") {
+				this.#cancelReview();
+				return;
+			}
+			// Head tools run exactly what `c`, the external-editor key and Esc run.
 			if (this.#annotating || this.#annotationChooser) return;
 			if (event.act === "copyPlan" && this.callbacks.onCopyPlan) {
 				void this.callbacks.onCopyPlan(joinPlanSections(this.#sections));
@@ -1673,7 +1705,7 @@ export class PlanReviewOverlay implements Component {
 		switch (this.#focus) {
 			case "actions":
 				hints.push(upDown("select"), key("enter", "confirm"));
-				if (this.#slider) hints.push(key(["left", "right"], "model"));
+				if (this.#slider) hints.push(key(["shift+left", "shift+right"], "model"));
 				break;
 			case "toc":
 				hints.push(
@@ -1690,7 +1722,7 @@ export class PlanReviewOverlay implements Component {
 					upDown("scroll"),
 					key("shift", "faster"),
 					key(["pageUp", "pageDown"], "page"),
-					key(["g", "shift+g"], "ends"),
+					{ keys: [], label: "gg/G ends · Ctrl-u/d half · Ctrl-e/y view" },
 					key("a", "annotate"),
 					key("e", "edit"),
 					key("u", "undo"),
@@ -1698,7 +1730,7 @@ export class PlanReviewOverlay implements Component {
 				break;
 		}
 		// Copy and the external editor are head buttons with their keycaps; the hints skip them.
-		hints.push(key("tab", "regions"));
+		hints.push(key(["h", "l"], "panes"), key("tab", "regions"));
 		hints.push(this.#helpSuffix ? { keys: [], label: this.#helpSuffix } : actionHint("tui.select.cancel", "cancel"));
 		return hints;
 	}
@@ -1737,7 +1769,11 @@ export class PlanReviewOverlay implements Component {
 			this.#pendingScrollToToc = false;
 			this.#scrubBodyToToc();
 		}
-		if (this.#focus !== "toc") this.#tocCursor = this.#deriveTocCursorFromScroll();
+		if (this.#focus !== "toc") {
+			const cursor = this.#deriveTocCursorFromScroll();
+			if (cursor !== this.#tocCursor) this.#tocViewport.reveal();
+			this.#tocCursor = cursor;
+		}
 		const body = this.#scrollView.render(bodyContentWidth);
 
 		this.#optionClickRows.clear();

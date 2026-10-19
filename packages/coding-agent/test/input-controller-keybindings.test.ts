@@ -68,6 +68,7 @@ async function createContext() {
 	let editorText = "";
 	const keyMap: Record<string, KeyId[]> = {
 		"app.display.reset": ["alt+l"],
+		"app.stt.pushToTalk": ["space"],
 		"app.thinking.toggle": ["ctrl+t"],
 		"app.history.search": ["ctrl+r"],
 		"app.editor.external": ["ctrl+g"],
@@ -1120,7 +1121,7 @@ describe("InputController global editor actions", () => {
 		expect(openExternalEditor).not.toHaveBeenCalled();
 	});
 
-	it("defers the tree selector's Ctrl+Shift+O filter binding", async () => {
+	it("honors global tool visibility now tree filtering uses Tab", async () => {
 		const context = await createContext();
 		const controller = new context.InputController(context.ctx);
 		controller.setupKeyHandlers();
@@ -1141,8 +1142,8 @@ describe("InputController global editor actions", () => {
 		);
 		const listeners = registeredInputListeners(context.spies.addInputListener);
 
-		expect(dispatchInput(listeners, CTRL_SHIFT_O)).toBeUndefined();
-		expect(context.ctx.hideToolActivity).toBe(false);
+		expect(dispatchInput(listeners, CTRL_SHIFT_O)).toEqual({ consume: true });
+		expect(context.ctx.hideToolActivity).toBe(true);
 	});
 });
 
@@ -1185,7 +1186,7 @@ describe("InputController global tool-output expand (ctrl+o)", () => {
 		expect(ctx.toolOutputExpanded).toBe(false);
 	});
 
-	it("defers to the tree selector's own ctrl+o filter cycle", async () => {
+	it("honors an explicitly bound expand key while tree filtering uses Tab", async () => {
 		const { ctx, listeners, setFocused } = await setup();
 		const tree = [
 			{
@@ -1203,8 +1204,8 @@ describe("InputController global tool-output expand (ctrl+o)", () => {
 			),
 		);
 
-		expect(dispatchInput(listeners, CTRL_O)).toBeUndefined();
-		expect(ctx.toolOutputExpanded).toBe(false);
+		expect(dispatchInput(listeners, CTRL_O)).toEqual({ consume: true });
+		expect(ctx.toolOutputExpanded).toBe(true);
 	});
 
 	it("honors a remapped expand key while the tree selector has focus", async () => {

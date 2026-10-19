@@ -1,16 +1,16 @@
 import type { TspPickerGroup, TspPickerItem, TspTone } from "@oh-my-pi/pi-wire";
-import { formatKeyHint, formatKeyHints } from "../../app-keybindings";
+import { formatKeyHint } from "../../app-keybindings";
 import type { Component } from "../../tui";
 import { code } from "../../native/describe";
 import { Memo } from "../../native/memo";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../../native/node";
 import { CLOSE_ACTION, picker, pickerAction, pickerEvent, pickerHits, pickerQuery } from "../../native/picker";
 import { matchesKey } from "../../keys";
-import { Input } from "../../components/input";
+import { MenuKeyReader, MenuSearchField } from "../../components/menu-navigation";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../../mouse";
 import { padding, truncateToWidth, visibleWidth } from "../../utils";
 import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
-import { theme } from "../../theme/theme";
+import { getThemeEpoch, theme } from "../../theme/theme";
 import { sanitizeDisplayText } from "../../overlays/extensions/display-text";
 import { DebugViewerFrame, type DebugViewerFrameContent, type DebugViewerFrameContext } from "./viewer-frame";
 import { formatDebugLogExpandedLines, parseDebugLogPid, parseDebugLogTimestampMs } from "./log-formatting";
@@ -28,6 +28,12 @@ export const LOAD_OLDER_LABEL = "### MOVE UP TO LOAD MORE...";
 
 const INITIAL_LOG_CHUNK = 50;
 const LOAD_OLDER_CHUNK = 50;
+/**
+ * Default for {@link DebugLogViewerModelOptions.maxLogEntries}. Once this many
+ * entries are loaded, older history stops loading; the newest entries (the
+ * current session) are never evicted.
+ */
+const MAX_LOG_ENTRIES = 50_000;
 const MIN_LOG_VIEWER_WIDTH = 48;
 /** Picker item id of the "load older entries" row. */
 const OLDER_ITEM = "older";
@@ -43,6 +49,24 @@ type LogEntry = {
 	rawLine: string;
 	timestampMs: number | undefined;
 	pid: number | undefined;
+	/** Lowercased {@link rawLine}, filled on first filter match. */
+	lowerLine?: string;
+};
+
+type SelectionState = {
+	rows: readonly ViewerRow[];
+	cursor: number;
+	anchor: number | undefined;
+	indices: number[];
+	set: Set<number>;
+};
+
+type CachedLogRow = {
+	width: number;
+	selected: boolean;
+	active: boolean;
+	expanded: boolean;
+	lines: string[];
 };
 
 type CursorToken = { kind: "log"; logIndex: number } | { kind: "load-older" };
@@ -52,6 +76,8 @@ type DebugLogViewerModelOptions = {
 	processPid?: number;
 	hasOlderLogs?: () => boolean;
 	loadOlderLogs?: (limitDays?: number) => Promise<string>;
+	/** Most entries kept; older history beyond it is not loaded. Defaults to {@link MAX_LOG_ENTRIES}. */
+	maxLogEntries?: number;
 };
 
 /**
@@ -111,6 +137,17 @@ function getProcessStartMs(): number {
 	return Date.now() - process.uptime() * 1000;
 }
 
+function parseLogEntries(logText: string): LogEntry[] {
+	return logText
+		.split("\n")
+		.filter(line => line.length > 0)
+		.map(rawLine => ({
+			rawLine,
+			timestampMs: parseDebugLogTimestampMs(rawLine),
+			pid: parseDebugLogPid(rawLine),
+		}));
+}
+
 /** Split raw log text into nonempty entries. */
 export function splitLogText(logText: string): string[] {
 	return logText.split("\n").filter(line => line.length > 0);
@@ -126,12 +163,18 @@ export function buildLogCopyPayload(lines: string[]): string {
 
 /** Filter, paginate, expand, and select captured log entries. */
 export class DebugLogViewerModel {
+	/**
+	 * Loaded entries, newest first, so loading older history appends instead of
+	 * copying the whole array. Log index `i` (0 = oldest) lives at `length - 1 - i`.
+	 */
 	#entries: LogEntry[];
+	readonly #maxLogEntries: number;
 	#rows: ViewerRow[];
 	#visibleLogIndices: number[];
 	#selectableRowIndices: number[];
 	#cursorSelectableIndex = 0;
 	#selectionAnchorSelectableIndex: number | undefined;
+	#selection: SelectionState | undefined;
 	#expandedLogIndices = new Set<number>();
 	#filterQuery = "";
 	#processStartMs: number;
@@ -142,12 +185,17 @@ export class DebugLogViewerModel {
 	#loadOlderLogs?: (limitDays?: number) => Promise<string>;
 
 	constructor(logText: string, options: DebugLogViewerModelOptions = {}) {
-		const { processStartMs = getProcessStartMs(), processPid = process.pid, hasOlderLogs, loadOlderLogs } = options;
-		this.#entries = splitLogText(logText).map(rawLine => ({
-			rawLine,
-			timestampMs: parseDebugLogTimestampMs(rawLine),
-			pid: parseDebugLogPid(rawLine),
-		}));
+		const {
+			processStartMs = getProcessStartMs(),
+			processPid = process.pid,
+			hasOlderLogs,
+			loadOlderLogs,
+			maxLogEntries = MAX_LOG_ENTRIES,
+		} = options;
+		this.#maxLogEntries = Math.max(1, maxLogEntries);
+		this.#entries = parseLogEntries(logText).reverse();
+		// Newest first: truncating keeps the newest entries and drops the oldest.
+		if (this.#entries.length > this.#maxLogEntries) this.#entries.length = this.#maxLogEntries;
 		this.#processStartMs = processStartMs;
 		this.#processPid = processPid;
 		this.#hasOlderLogs = hasOlderLogs;
@@ -159,8 +207,56 @@ export class DebugLogViewerModel {
 		this.#rebuildRows();
 	}
 
+	navigationSnapshot(): unknown {
+		return {
+			filter: this.#filterQuery,
+			processFilter: this.#processFilterEnabled,
+			cursor: this.#getCursorToken(),
+			anchor: this.#getAnchorLogIndex(),
+			expanded: [...this.#expandedLogIndices],
+			loadedStart: this.#loadedStartIndex,
+			logCount: this.logCount,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as {
+			filter?: string;
+			processFilter?: boolean;
+			cursor?: CursorToken;
+			anchor?: number;
+			expanded?: number[];
+			loadedStart?: number;
+			logCount?: number;
+		};
+		const offset = typeof state.logCount === "number" ? this.logCount - state.logCount : 0;
+		if (typeof state.filter === "string") this.#filterQuery = state.filter;
+		if (typeof state.processFilter === "boolean") this.#processFilterEnabled = state.processFilter;
+		if (typeof state.loadedStart === "number") this.#loadedStartIndex = Math.max(0, state.loadedStart + offset);
+		if (Array.isArray(state.expanded)) {
+			this.#expandedLogIndices = new Set(
+				state.expanded
+					.filter(index => Number.isInteger(index) && index + offset >= 0 && index + offset < this.logCount)
+					.map(index => index + offset),
+			);
+		}
+		const cursor =
+			state.cursor?.kind === "log"
+				? { kind: "log" as const, logIndex: state.cursor.logIndex + offset }
+				: state.cursor?.kind === "load-older"
+					? state.cursor
+					: undefined;
+		this.#rebuildRows(cursor, typeof state.anchor === "number" ? state.anchor + offset : undefined);
+	}
+
 	get logCount(): number {
 		return this.#entries.length;
+	}
+
+	/** True once the entry cap is reached, so older history no longer loads. */
+	get historyLimitReached(): boolean {
+		return this.#entries.length >= this.#maxLogEntries;
 	}
 
 	get visibleLogCount(): number {
@@ -201,7 +297,7 @@ export class DebugLogViewerModel {
 	}
 
 	getRawLine(logIndex: number): string {
-		return this.#entries[logIndex]?.rawLine ?? "";
+		return this.#entryAt(logIndex)?.rawLine ?? "";
 	}
 
 	setFilterQuery(query: string): void {
@@ -269,38 +365,15 @@ export class DebugLogViewerModel {
 	}
 
 	getSelectedLogIndices(): number[] {
-		if (this.#selectableRowIndices.length === 0) {
-			return [];
-		}
-
-		const cursorRow = this.#getCursorRow();
-		if (this.#selectionAnchorSelectableIndex === undefined) {
-			if (cursorRow?.kind !== "log") {
-				return [];
-			}
-			return [cursorRow.logIndex];
-		}
-
-		const min = Math.min(this.#selectionAnchorSelectableIndex, this.#cursorSelectableIndex);
-		const max = Math.max(this.#selectionAnchorSelectableIndex, this.#cursorSelectableIndex);
-		const selected: number[] = [];
-		for (let i = min; i <= max; i++) {
-			const rowIndex = this.#selectableRowIndices[i];
-			const row = rowIndex === undefined ? undefined : this.#rows[rowIndex];
-			if (row?.kind === "log") {
-				selected.push(row.logIndex);
-			}
-		}
-		return selected;
+		return this.#selectionState().indices.slice();
 	}
 
 	getSelectedCount(): number {
-		return this.getSelectedLogIndices().length;
+		return this.#selectionState().indices.length;
 	}
 
 	isSelected(logIndex: number): boolean {
-		const selected = this.getSelectedLogIndices();
-		return selected.includes(logIndex);
+		return this.#selectionState().set.has(logIndex);
 	}
 
 	isExpanded(logIndex: number): boolean {
@@ -320,8 +393,7 @@ export class DebugLogViewerModel {
 	}
 
 	getSelectedRawLines(): string[] {
-		const selectedIndices = this.getSelectedLogIndices();
-		return selectedIndices.map(index => this.getRawLine(index));
+		return this.#selectionState().indices.map(index => this.getRawLine(index));
 	}
 
 	selectAllVisible(): void {
@@ -381,16 +453,17 @@ export class DebugLogViewerModel {
 	prependLogs(logText: string): number {
 		const previousCursor = this.#getCursorToken();
 		const previousAnchorLogIndex = this.#getAnchorLogIndex();
-		const newEntries = splitLogText(logText).map(rawLine => ({
-			rawLine,
-			timestampMs: parseDebugLogTimestampMs(rawLine),
-			pid: parseDebugLogPid(rawLine),
-		}));
+		const room = this.#maxLogEntries - this.#entries.length;
+		const parsed = room > 0 ? parseLogEntries(logText) : [];
+		// Chronological order: past the cap, keep the chunk's newest entries (nearest the loaded history).
+		const newEntries = parsed.length > room ? parsed.slice(parsed.length - room) : parsed;
 		if (newEntries.length === 0) {
 			return 0;
 		}
 		const offset = newEntries.length;
-		this.#entries = [...newEntries, ...this.#entries];
+		for (let i = offset - 1; i >= 0; i--) {
+			this.#entries.push(newEntries[i]!);
+		}
 		this.#loadedStartIndex += offset;
 		this.#expandedLogIndices = new Set([...this.#expandedLogIndices].map(logIndex => logIndex + offset));
 		const adjustedCursor: CursorToken | undefined =
@@ -421,7 +494,7 @@ export class DebugLogViewerModel {
 		const query = this.#filterQuery.toLowerCase();
 		const visible: number[] = [];
 		for (let i = this.#loadedStartIndex; i < this.#entries.length; i++) {
-			const entry = this.#entries[i];
+			const entry = this.#entryAt(i);
 			if (!entry) {
 				continue;
 			}
@@ -438,7 +511,7 @@ export class DebugLogViewerModel {
 		let olderSeen = false;
 		let warningInserted = false;
 		for (const logIndex of visible) {
-			const timestampMs = this.#entries[logIndex]?.timestampMs;
+			const timestampMs = this.#entryAt(logIndex)?.timestampMs;
 			if (timestampMs !== undefined) {
 				if (timestampMs < this.#processStartMs) {
 					olderSeen = true;
@@ -486,7 +559,7 @@ export class DebugLogViewerModel {
 	}
 
 	#matchesFilters(entry: LogEntry, query: string): boolean {
-		if (query.length > 0 && !entry.rawLine.toLowerCase().includes(query)) {
+		if (query.length > 0 && !(entry.lowerLine ??= entry.rawLine.toLowerCase()).includes(query)) {
 			return false;
 		}
 		if (!this.#processFilterEnabled) {
@@ -503,7 +576,7 @@ export class DebugLogViewerModel {
 			return false;
 		}
 		for (let i = 0; i < this.#loadedStartIndex; i++) {
-			const entry = this.#entries[i];
+			const entry = this.#entryAt(i);
 			if (entry && this.#matchesFilters(entry, query)) {
 				return true;
 			}
@@ -512,7 +585,60 @@ export class DebugLogViewerModel {
 	}
 
 	#hasExternalOlderLogs(): boolean {
-		return this.#hasOlderLogs?.() ?? false;
+		return !this.historyLimitReached && (this.#hasOlderLogs?.() ?? false);
+	}
+
+	#entryAt(logIndex: number): LogEntry | undefined {
+		return this.#entries[this.#entries.length - 1 - logIndex];
+	}
+
+	/** Selected log indices, memoized until the rows, cursor or anchor change. */
+	#selectionState(): SelectionState {
+		const cached = this.#selection;
+		if (
+			cached &&
+			cached.rows === this.#rows &&
+			cached.cursor === this.#cursorSelectableIndex &&
+			cached.anchor === this.#selectionAnchorSelectableIndex
+		) {
+			return cached;
+		}
+		const indices = this.#computeSelectedLogIndices();
+		const state: SelectionState = {
+			rows: this.#rows,
+			cursor: this.#cursorSelectableIndex,
+			anchor: this.#selectionAnchorSelectableIndex,
+			indices,
+			set: new Set(indices),
+		};
+		this.#selection = state;
+		return state;
+	}
+
+	#computeSelectedLogIndices(): number[] {
+		if (this.#selectableRowIndices.length === 0) {
+			return [];
+		}
+
+		const cursorRow = this.#getCursorRow();
+		if (this.#selectionAnchorSelectableIndex === undefined) {
+			if (cursorRow?.kind !== "log") {
+				return [];
+			}
+			return [cursorRow.logIndex];
+		}
+
+		const min = Math.min(this.#selectionAnchorSelectableIndex, this.#cursorSelectableIndex);
+		const max = Math.max(this.#selectionAnchorSelectableIndex, this.#cursorSelectableIndex);
+		const selected: number[] = [];
+		for (let i = min; i <= max; i++) {
+			const rowIndex = this.#selectableRowIndices[i];
+			const row = rowIndex === undefined ? undefined : this.#rows[rowIndex];
+			if (row?.kind === "log") {
+				selected.push(row.logIndex);
+			}
+		}
+		return selected;
 	}
 
 	#getCursorRow(): ViewerRow | undefined {
@@ -560,7 +686,8 @@ interface DebugLogViewerComponentOptions {
 export class DebugLogViewerComponent implements Component {
 	#model: DebugLogViewerModel;
 	/** Filter field; its value is pushed into the model whenever it changes. */
-	readonly #filter = new Input();
+	readonly #search = new MenuSearchField();
+	readonly #filter = this.#search.input;
 	#terminalRows: number;
 	#onExit: () => void;
 	#onStatus?: (message: string) => void;
@@ -572,9 +699,14 @@ export class DebugLogViewerComponent implements Component {
 	#loadingOlder = false;
 	#bodyLineToRowIndex: Array<number | undefined> = [];
 	readonly #native = new Memo();
-	/** Picker rows by log index, valid while {@link #nativeItemsCount} entries are loaded (a prepend shifts indices). */
+	/** Picker rows by log index, valid for {@link #nativeItemsGeneration} (a prepend shifts indices). */
 	#nativeItems = new Map<number, TspPickerItem>();
-	#nativeItemsCount = 0;
+	#nativeItemsGeneration = 0;
+	/** Formatted ANSI log rows by log index, valid for {@link #rowCacheGeneration} and {@link #rowCacheThemeEpoch}. */
+	#rowCache = new Map<number, CachedLogRow>();
+	#rowCacheGeneration = 0;
+	#rowCacheThemeEpoch = -1;
+	readonly #keys = new MenuKeyReader();
 
 	constructor(options: DebugLogViewerComponentOptions) {
 		this.#deps = options.deps;
@@ -600,113 +732,97 @@ export class DebugLogViewerComponent implements Component {
 		});
 	}
 
+	navigationSnapshot(): unknown {
+		return {
+			model: this.#model.navigationSnapshot(),
+			viewport: this.#frame.navigationSnapshot(),
+			filterFocused: this.#search.focused,
+			filterCursor: this.#search.cursor,
+		};
+	}
+
+	restoreNavigation(snapshot: unknown): void {
+		if (!snapshot || typeof snapshot !== "object") return;
+		const state = snapshot as { model?: unknown; viewport?: unknown; filterFocused?: boolean; filterCursor?: number };
+		this.#model.restoreNavigation(state.model);
+		this.#filter.setValue(this.#model.filterQuery);
+		if (typeof state.filterCursor === "number") this.#filter.setCursor(state.filterCursor);
+		this.#search.focused = state.filterFocused === true;
+		this.#frame.restoreNavigation(state.viewport);
+		this.#keys.reset();
+	}
+
 	handleInput(keyData: string): void {
-		if (routeSgrMouseInput(keyData, event => this.#handleMouse(event))) {
+		if (routeSgrMouseInput(keyData, event => this.#handleMouse(event))) return;
+		const before = this.#search.value;
+		const search = this.#search.handleInput(keyData);
+		if (search !== "pass") {
+			if (search === "exited") this.#keys.reset();
+			if (this.#search.value !== before) this.#model.setFilterQuery(this.#search.value);
 			return;
 		}
-
-		if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc")) {
-			this.#onExit();
-			return;
-		}
-
-		if (matchesKey(keyData, "ctrl+c")) {
-			this.#copySelected();
-			return;
-		}
-
+		if (matchesKey(keyData, "ctrl+c")) return this.#copySelected();
 		if (matchesKey(keyData, "ctrl+p")) {
-			this.#statusMessage = undefined;
 			this.#model.toggleProcessFilter();
 			return;
 		}
-
 		if (matchesKey(keyData, "ctrl+a")) {
-			this.#statusMessage = undefined;
 			this.#model.selectAllVisible();
 			return;
 		}
-
-		if (matchesKey(keyData, "ctrl+o")) {
-			this.#statusMessage = undefined;
-			void this.#handleLoadOlder(this.#frame.getBodyHeight() + 1);
-			return;
-		}
-
-		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return")) {
-			if (this.#model.cursorRowKind === "load-older") {
-				this.#statusMessage = undefined;
-				void this.#handleLoadOlder();
-			}
-			return;
-		}
-
 		if (matchesKey(keyData, "shift+up")) {
-			this.#statusMessage = undefined;
 			void this.#handleMoveUp(true);
 			return;
 		}
-
-		if (matchesKey(keyData, "shift+down")) {
-			this.#statusMessage = undefined;
-			this.#model.moveCursor(1, true);
-			return;
-		}
-
-		if (matchesKey(keyData, "up")) {
-			this.#statusMessage = undefined;
-			void this.#handleMoveUp(false);
-			return;
-		}
-
-		if (matchesKey(keyData, "down")) {
-			this.#statusMessage = undefined;
-			this.#model.moveCursor(1, false);
-			return;
-		}
-
-		// Page and end keys jump the cursor; the frame (or the native list)
-		// keeps it in view.
-		const jump = matchesKey(keyData, "pageUp")
-			? -this.#frame.getBodyHeight()
-			: matchesKey(keyData, "pageDown")
-				? this.#frame.getBodyHeight()
-				: matchesKey(keyData, "home")
-					? -this.#model.rows.length
-					: matchesKey(keyData, "end")
-						? this.#model.rows.length
-						: 0;
-		if (jump !== 0) {
-			this.#statusMessage = undefined;
-			this.#model.moveCursor(jump, false);
-			this.#onUpdate?.();
-			return;
-		}
-
-		if (matchesKey(keyData, "right")) {
-			this.#statusMessage = undefined;
-			if (this.#model.cursorRowKind === "load-older") {
-				void this.#handleLoadOlder();
-				return;
+		if (matchesKey(keyData, "shift+down")) return this.#model.moveCursor(1, true);
+		const action = this.#keys.read(keyData);
+		if (action === "pending") return;
+		this.#statusMessage = undefined;
+		if (action) {
+			switch (action.kind) {
+				case "cancel":
+					return this.#onExit();
+				case "search":
+					this.#filter.focused = true;
+					return;
+				case "move":
+					if (action.delta < 0) void this.#handleMoveUp(false);
+					else this.#model.moveCursor(1, false);
+					return;
+				case "halfPage":
+				case "page":
+					this.#model.moveCursor(
+						action.delta *
+							Math.max(1, Math.floor(this.#frame.getBodyHeight() / (action.kind === "halfPage" ? 2 : 1))),
+						false,
+					);
+					return;
+				case "boundary":
+					this.#model.moveCursor((action.edge === "first" ? -1 : 1) * this.#model.rows.length, false);
+					return;
+				case "scroll":
+					this.#frame.scroll(action.delta);
+					return;
+				case "horizontal":
+					if (action.delta < 0) this.#model.collapseSelected();
+					else this.#model.expandSelected();
+					return;
+				case "toggle": {
+					const index = this.#model.cursorLogIndex;
+					if (index !== undefined) {
+						if (this.#model.isExpanded(index)) this.#model.collapseSelected();
+						else this.#model.expandSelected();
+					}
+					return;
+				}
+				case "confirm":
+					if (this.#model.cursorRowKind === "load-older") void this.#handleLoadOlder();
+					return;
+				default:
+					return;
 			}
-			this.#model.expandSelected();
-			return;
 		}
-
-		if (matchesKey(keyData, "left")) {
-			this.#statusMessage = undefined;
-			this.#model.collapseSelected();
-			return;
-		}
-
-		// Everything else edits the filter field; refilter only when the text changed.
-		const before = this.#filter.getValue();
-		this.#filter.handleInput(keyData);
-		const after = this.#filter.getValue();
-		if (after !== before) {
-			this.#statusMessage = undefined;
-			this.#model.setFilterQuery(after);
-		}
+		if (keyData === "o") void this.#handleLoadOlder(this.#frame.getBodyHeight() + 1);
 	}
 
 	#handleMouse(event: SgrMouseEvent): boolean {
@@ -744,6 +860,7 @@ export class DebugLogViewerComponent implements Component {
 	invalidate(): void {
 		this.#frame.invalidate();
 		this.#native.clear();
+		this.#rowCache.clear();
 	}
 
 	dispose(): void {
@@ -774,6 +891,7 @@ export class DebugLogViewerComponent implements Component {
 				model.cursorRowIndex,
 				selected.join(","),
 				model.logCount,
+				model.historyLimitReached,
 				model.isProcessFilterEnabled(),
 				model.canLoadOlder(),
 				query,
@@ -782,9 +900,11 @@ export class DebugLogViewerComponent implements Component {
 				this.#statusMessage,
 			],
 			() => {
-				if (this.#nativeItemsCount !== model.logCount) {
+				// Entries only grow, and every prepend shifts log indices, so the count keys the item cache.
+				const generation = model.logCount;
+				if (this.#nativeItemsGeneration !== generation) {
 					this.#nativeItems = new Map();
-					this.#nativeItemsCount = model.logCount;
+					this.#nativeItemsGeneration = generation;
 				}
 				const items: TspPickerItem[] = [];
 				const order: (string | TspPickerGroup)[] = [];
@@ -817,6 +937,7 @@ export class DebugLogViewerComponent implements Component {
 				const subtitle = [
 					`${model.visibleLogCount}/${model.logCount} entries`,
 					selected.length > 1 ? `${selected.length} selected` : undefined,
+					model.historyLimitReached ? "history limit reached" : undefined,
 					this.#loadingOlder ? "loading older…" : undefined,
 				]
 					.filter(part => part !== undefined)
@@ -852,8 +973,12 @@ export class DebugLogViewerComponent implements Component {
 							pickerAction("copy", "Copy", "ctrl+c", { primary: true }),
 							pickerAction("all", "Select all", "ctrl+a"),
 							pickerAction("pid", "This process", "ctrl+p", { on: model.isProcessFilterEnabled() }),
-							pickerAction("older", "Load older", "ctrl+o", {
-								disabled: model.canLoadOlder() ? undefined : "No older log entries",
+							pickerAction("older", "Load older", "o", {
+								disabled: model.canLoadOlder()
+									? undefined
+									: model.historyLimitReached
+										? "Log history limit reached"
+										: "No older log entries",
 							}),
 							CLOSE_ACTION,
 						],
@@ -936,7 +1061,7 @@ export class DebugLogViewerComponent implements Component {
 		}
 		this.#bodyLineToRowIndex = mapping;
 		return {
-			header: [this.#summaryText(), this.#filterText()],
+			header: [this.#summaryText(), this.#filterText(context.contentWidth)],
 			body: anchor ? { lines, anchor } : { lines },
 			footer: [this.#statusText(), theme.fg("dim", this.#controlsText())],
 		};
@@ -945,28 +1070,27 @@ export class DebugLogViewerComponent implements Component {
 	#summaryText(): string {
 		const selected = this.#model.getSelectedCount();
 		const expanded = this.#model.expandedCount;
-		return `${theme.fg("muted", "showing")} ${theme.fg("accent", `${this.#model.visibleLogCount}/${this.#model.logCount}`)}  ${theme.fg("muted", "selected")} ${theme.fg(selected > 0 ? "accent" : "muted", String(selected))}  ${theme.fg("muted", "expanded")} ${theme.fg(expanded > 0 ? "accent" : "muted", String(expanded))}`;
+		const limitText = this.#model.historyLimitReached ? `  ${theme.fg("warning", "history limit reached")}` : "";
+		return `${theme.fg("muted", "showing")} ${theme.fg("accent", `${this.#model.visibleLogCount}/${this.#model.logCount}`)}  ${theme.fg("muted", "selected")} ${theme.fg(selected > 0 ? "accent" : "muted", String(selected))}  ${theme.fg("muted", "expanded")} ${theme.fg(expanded > 0 ? "accent" : "muted", String(expanded))}${limitText}`;
 	}
 
 	#controlsText(): string {
-		return `${formatKeyHint("escape")} close · ${formatKeyHint("ctrl+c")} copy · ${formatKeyHints(["up", "down"])}/wheel move · ${formatKeyHints(["pageUp", "pageDown"])} page · ${formatKeyHints(["home", "end"])} first/last · click toggle · ${formatKeyHints(["shift+up", "shift+down"])} select · ${formatKeyHints(["left", "right"])} collapse/expand · ${formatKeyHint("ctrl+a")} all · ${formatKeyHint("ctrl+o")} older · ${formatKeyHint("ctrl+p")} pid`;
+		return `Esc close · Ctrl-c copy · j/k rows · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · h/l collapse/expand · Space toggle · Shift-↑/↓ select · Ctrl-a all · o older · Ctrl-p pid · / search`;
 	}
 
-	#filterText(): string {
-		const value = this.#filter.getValue();
-		const [field = ""] = this.#filter.render(visibleWidth(value) + 1);
-		const query = value.length === 0 ? field + theme.fg("muted", "type to filter") : theme.fg("accent", field);
+	#filterText(width: number): string {
+		const query = this.#search.render(Math.max(0, width - 12), { muted: text => theme.fg("muted", text) });
 		const pidStatus = this.#model.isProcessFilterEnabled()
 			? theme.fg("success", "pid on")
 			: theme.fg("muted", "pid off");
 		const loading = this.#loadingOlder ? `  ${theme.fg("warning", "loading older…")}` : "";
-		return `${theme.fg("muted", "filter")} ${query}  ${pidStatus}${loading}`;
+		return `${query}  ${pidStatus}${loading}`;
 	}
 
 	#statusText(): string {
 		return this.#statusMessage
 			? theme.fg("success", this.#statusMessage)
-			: theme.fg("dim", `${formatKeyHint("enter")} loads older when highlighted; printable keys update filter`);
+			: theme.fg("dim", this.#search.focused ? "Esc back to list" : "Enter loads older when highlighted · / search");
 	}
 
 	async #handleLoadOlder(additionalCount: number = LOAD_OLDER_CHUNK): Promise<void> {
@@ -1017,10 +1141,21 @@ export class DebugLogViewerComponent implements Component {
 	}
 
 	#renderRows(innerWidth: number): Array<{ lines: string[]; rowIndex: number }> {
+		const model = this.#model;
 		const rendered: Array<{ lines: string[]; rowIndex: number }> = [];
+		// Entries only grow, and every prepend shifts log indices, so the count keys the row cache.
+		const generation = model.logCount;
+		const themeEpoch = getThemeEpoch();
+		if (this.#rowCacheGeneration !== generation || this.#rowCacheThemeEpoch !== themeEpoch) {
+			this.#rowCache.clear();
+			this.#rowCacheGeneration = generation;
+			this.#rowCacheThemeEpoch = themeEpoch;
+		}
+		const cursorRowIndex = model.cursorRowIndex;
+		const cursorLogIndex = model.cursorLogIndex;
 
-		for (let rowIndex = 0; rowIndex < this.#model.rows.length; rowIndex++) {
-			const row = this.#model.rows[rowIndex];
+		for (let rowIndex = 0; rowIndex < model.rows.length; rowIndex++) {
+			const row = model.rows[rowIndex];
 			if (!row) {
 				continue;
 			}
@@ -1034,7 +1169,7 @@ export class DebugLogViewerComponent implements Component {
 			}
 
 			if (row.kind === "load-older") {
-				const active = this.#model.cursorRowIndex === rowIndex;
+				const active = cursorRowIndex === rowIndex;
 				const marker = active ? theme.fg("accent", "❯") : " ";
 				const prefix = `${marker}  `;
 				const contentWidth = Math.max(1, innerWidth - visibleWidth(prefix));
@@ -1047,32 +1182,40 @@ export class DebugLogViewerComponent implements Component {
 			}
 
 			const logIndex = row.logIndex;
-			const selected = this.#model.isSelected(logIndex);
-			const cursorLogIndex = this.#model.cursorLogIndex;
+			const selected = model.isSelected(logIndex);
 			const active = cursorLogIndex !== undefined && cursorLogIndex === logIndex;
-			const expanded = this.#model.isExpanded(logIndex);
+			const expanded = model.isExpanded(logIndex);
+			const cached = this.#rowCache.get(logIndex);
+			if (
+				cached &&
+				cached.width === innerWidth &&
+				cached.selected === selected &&
+				cached.active === active &&
+				cached.expanded === expanded
+			) {
+				rendered.push({ rowIndex, lines: cached.lines });
+				continue;
+			}
+
 			const marker = active ? theme.fg("accent", "❯") : selected ? theme.fg("accent", "•") : " ";
 			const fold = expanded ? theme.fg("accent", "▾") : theme.fg("muted", "▸");
 			const prefix = `${marker}${fold} `;
 			const contentWidth = Math.max(1, innerWidth - visibleWidth(prefix));
-
+			let lines: string[];
 			if (expanded) {
-				const wrapped = formatDebugLogExpandedLines(this.#model.getRawLine(logIndex), contentWidth);
+				const wrapped = formatDebugLogExpandedLines(model.getRawLine(logIndex), contentWidth);
 				const indent = padding(visibleWidth(prefix));
-				const lines = wrapped.map((segment, index) => {
+				lines = wrapped.map((segment, index) => {
 					const content = selected ? theme.bold(segment) : segment;
 					return truncateToWidth(`${index === 0 ? prefix : indent}${content}`, innerWidth);
 				});
-				rendered.push({ rowIndex, lines });
-				continue;
+			} else {
+				const preview = truncateToWidth(sanitizeDisplayText(model.getRawLine(logIndex)), contentWidth);
+				const content = selected ? theme.bold(preview) : preview;
+				lines = [truncateToWidth(`${prefix}${content}`, innerWidth)];
 			}
-
-			const preview = truncateToWidth(
-				sanitizeDisplayText(this.#model.getRawLine(logIndex)),
-				Math.max(1, contentWidth),
-			);
-			const content = selected ? theme.bold(preview) : preview;
-			rendered.push({ rowIndex, lines: [truncateToWidth(`${prefix}${content}`, innerWidth)] });
+			this.#rowCache.set(logIndex, { width: innerWidth, selected, active, expanded, lines });
+			rendered.push({ rowIndex, lines });
 		}
 
 		return rendered;

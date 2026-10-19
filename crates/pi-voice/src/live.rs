@@ -333,8 +333,7 @@ impl LivePeerCore {
 			.resources
 			.lock()
 			.as_ref()
-			.map(|resources| resources.playback.queue_stats())
-			.unwrap_or_default()
+			.map_or_else(PlaybackQueueStats::default, |resources| resources.playback.queue_stats())
 	}
 
 	fn report_event(&self, payload: String) {

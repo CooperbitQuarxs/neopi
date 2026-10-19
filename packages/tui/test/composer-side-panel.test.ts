@@ -19,7 +19,7 @@ import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-containe
 import { COMPOSER_DEFAULTS, Composer, type SidePanelDock } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { type Component, type ResizeScrollbackMode, type TerminalFramePlan, Text, TUI } from "@oh-my-pi/pi-tui";
-import { withoutTerminalMultiplexer } from "./terminal-multiplexer-environment";
+import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
 import { VirtualRenderScheduler } from "./virtual-render-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -111,6 +111,27 @@ function labelCounts(rows: readonly string[]): Map<string, number> {
 	return counts;
 }
 
+/** Reconstructed history is committed before the short current turn is mounted. */
+function rebuildLedger(h: Harness): void {
+	h.transcript.clear();
+	for (let index = 0; index < 30; index++) h.transcript.addChild(new Text(ledgerLine(index), 0, 0));
+	commitLedger(h);
+	h.transcript.addChild(new Text(ledgerLine(30), 0, 0));
+}
+
+function commitLedger(h: Harness): void {
+	for (;;) {
+		const batch = h.transcript.peekFlushBatch(120);
+		if (!batch) break;
+		h.transcript.acknowledgeFinalizedBatch(batch.id);
+	}
+}
+
+function expectLedgerOnce(h: Harness, end = 30): void {
+	const labels = entryRows([...h.history(), ...h.viewport()]).map(row => row.slice(0, 4));
+	expect(labels).toEqual(Array.from({ length: end + 1 }, (_, index) => `E${String(index).padStart(2, "0")}:`));
+}
+
 beforeAll(async () => {
 	await initTheme();
 });
@@ -120,6 +141,199 @@ afterEach(() => {
 });
 
 describe("Composer side panel: history and geometry", () => {
+	it.each([1, 2, 6])("diffs a %i-line live append beside the dock", async count => {
+		const h = await setup({ entries: 25 });
+		try {
+			const live = new Text("live start", 0, 0);
+			h.transcript.addChild(live);
+			h.composer.setSidePanel(h.panel, RIGHT);
+			await h.scheduler.advance(h.term, 160);
+			h.writes.length = 0;
+			live.setText(["live start", ...Array.from({ length: count }, (_, index) => `append ${index}`)].join("\n"));
+			h.composer.ui.requestRender();
+			await h.settle();
+			const output = h.writes.join("");
+			const rewritten = (output.match(/\r/g) ?? []).length;
+			expect(output).not.toMatch(/\x1b\[(?:2J|3J|J)/);
+			expect(rewritten).toBeLessThanOrEqual(24 + count);
+			expect(h.viewport().some(row => row.includes(`append ${count - 1}`))).toBe(true);
+			expectLedgerOnce(h, 24);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
+	it("keeps the visible suffix of a settled block when newer content retires its head", async () => {
+		const h = await setup();
+		try {
+			const labels = Array.from({ length: 27 }, (_, index) => `E${String(index).padStart(2, "0")}: settled`);
+			h.composer.setSidePanel(h.panel, RIGHT);
+			h.transcript.addChild(new Text(labels.slice(0, 10).join("\n"), 0, 0));
+			h.transcript.addChild(new Text(labels.slice(10, 26).join("\n"), 0, 0));
+			h.composer.ui.requestRender();
+			await h.scheduler.advance(h.term, 160);
+			expect(h.viewport()[0]?.slice(0, 81).trimEnd()).toBe(labels[4]);
+			expectLedgerOnce(h, 25);
+
+			h.transcript.addChild(new Text(labels[26]!, 0, 0));
+			h.composer.ui.requestRender();
+			await h.scheduler.advance(h.term, 160);
+			expect(
+				h
+					.viewport()
+					.slice(0, 4)
+					.map(row => row.slice(0, 81).trimEnd()),
+			).toEqual(labels.slice(6, 10));
+			expectLedgerOnce(h, 26);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
+	it("preserves all held cells when a preserve-mode dock changes chat width", async () => {
+		const h = await setup({ mode: "preserve" });
+		try {
+			rebuildLedger(h);
+			h.composer.setSidePanel(h.panel, RIGHT);
+			h.composer.ui.resetDisplay();
+			await h.scheduler.advance(h.term, 160);
+			const heldRow = h
+				.viewport()
+				.find(row => row.startsWith("E29:"))!
+				.slice(0, 81);
+			expect(heldRow.length).toBe(81);
+			expect(h.history()).not.toContain(heldRow);
+
+			h.composer.setSidePanel(h.panel, { ...RIGHT, width: { ratio: 0.4, min: 32, max: 48 } });
+			await h.scheduler.advance(h.term, 160);
+			expect(h.composer.sidePanelGeometry()?.chatRect.width).toBe(69);
+			expect(h.history()).toContain(heldRow);
+			expectLedgerOnce(h);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
+	it("keeps a rebuilt committed ledger visible above a short docked live tail", async () => {
+		const h = await setup();
+		try {
+			rebuildLedger(h);
+			h.composer.setSidePanel(h.panel, RIGHT);
+			h.composer.ui.resetDisplay();
+			await h.settle();
+			expect(entryRows(h.viewport()).length).toBeGreaterThan(1);
+			expect(h.viewport().some(row => row.startsWith("E29:"))).toBe(true);
+			const counts = labelCounts([...h.history(), ...h.viewport()]);
+			for (let index = 0; index <= 30; index++) expect(counts.get(`E${String(index).padStart(2, "0")}:`)).toBe(1);
+			for (const row of h.history()) expect(Bun.stringWidth(row)).toBeLessThanOrEqual(81);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
+	it("offers overflow in its own frame and nothing after the live tail shrinks", async () => {
+		const h = await setup();
+		try {
+			rebuildLedger(h);
+			const live = h.transcript.children.at(-1) as Text;
+			h.composer.setSidePanel(h.panel, RIGHT);
+			h.composer.ui.resetDisplay();
+			await h.scheduler.advance(h.term, 160);
+			const firstHeld = h.viewport()[0]!.slice(0, 81).trimEnd();
+
+			live.setText(`${ledgerLine(30)}\nGROWTH`);
+			const overflowing = h.composer.renderFrame({ columns: 120, rows: 24 });
+			expect(overflowing.history?.kind).toBe("append");
+			expect(overflowing.history?.rows.map(row => Bun.stripANSI(row).trimEnd())).toEqual([firstHeld]);
+			h.composer.acknowledgeHistory(overflowing.history!.id);
+
+			live.setText(ledgerLine(30));
+			const shrinking = h.composer.renderFrame({ columns: 120, rows: 24 });
+			expect(shrinking.history).toBeUndefined();
+			expect(shrinking.viewport.some(row => Bun.stripANSI(row).startsWith("E29:"))).toBe(true);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
+	it("releases only one held row when the live tail grows by one row", async () => {
+		const h = await setup();
+		try {
+			h.transcript.addChild(
+				new Text(
+					Array.from({ length: 30 }, (_, index) => `E${String(index).padStart(2, "0")}: history`).join("\n"),
+					0,
+					0,
+				),
+			);
+			commitLedger(h);
+			const live = new Text("LIVE", 0, 0);
+			h.transcript.addChild(live);
+			h.composer.setSidePanel(h.panel, RIGHT);
+			h.composer.ui.resetDisplay();
+			await h.scheduler.advance(h.term, 160);
+			const history = h.history();
+			const chat = h.viewport().map(row => row.slice(0, 81).trimEnd());
+			expect(chat.slice(0, 21).every(row => row.startsWith("E"))).toBe(true);
+
+			live.setText("LIVE\nGROWTH");
+			h.composer.ui.requestRender();
+			await h.scheduler.advance(h.term, 160);
+			expect(h.history()).toEqual([...history, chat[0]!]);
+			expect(h.viewport().map(row => row.slice(0, 81).trimEnd())).toEqual([
+				...chat.slice(1, -1),
+				"GROWTH",
+				"EDITOR",
+			]);
+			expectLedgerOnce(h, 29);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
+	for (const action of ["dock after replay", "growth", "quit", "undock", "second replay"] as const) {
+		it(`preserves the held ledger exactly once through ${action}`, async () => {
+			const h = await setup();
+			try {
+				rebuildLedger(h);
+				if (action !== "dock after replay") h.composer.setSidePanel(h.panel, RIGHT);
+				h.composer.ui.resetDisplay();
+				await h.settle();
+				if (action === "dock after replay") {
+					h.composer.setSidePanel(h.panel, RIGHT);
+					await h.settle();
+				}
+				expect(h.viewport().some(row => row.startsWith("E29:"))).toBe(true);
+				expectLedgerOnce(h);
+				if (action === "growth") {
+					for (let index = 31; index < 60; index++) {
+						h.transcript.addChild(new Text(ledgerLine(index), 0, 0));
+						h.composer.ui.requestRender();
+						await h.scheduler.advance(h.term, 160);
+						expectLedgerOnce(h, index);
+					}
+					expect(h.history().some(row => row.startsWith("E29:"))).toBe(true);
+				} else if (action === "quit") {
+					h.composer.stop();
+					await h.settle();
+					expectLedgerOnce(h);
+				} else if (action === "undock") {
+					h.composer.setSidePanel(undefined, undefined, { refreshHistory: false });
+					h.composer.ui.requestRender();
+					await h.settle();
+					expectLedgerOnce(h);
+				} else if (action === "second replay") {
+					h.composer.ui.resetDisplay();
+					await h.settle();
+					expectLedgerOnce(h);
+					expect(h.viewport().some(row => row.startsWith("E29:"))).toBe(true);
+				}
+			} finally {
+				h.composer.stop();
+			}
+		});
+	}
+
 	it("retires transcript rows at the painted chat width", async () => {
 		const h = await setup({ entries: 4 });
 		try {
@@ -589,6 +803,30 @@ describe("Composer side panel: inline images", () => {
 		terminal.imageProtocol = originalProtocol;
 		terminal.id = originalId;
 		setKittyGraphics(originalGraphics);
+	});
+
+	it("holds only the text fallback of a replayed image above the live tail", async () => {
+		const h = await setup();
+		try {
+			rebuildLedger(h);
+			h.transcript.addChild(new ImageBlock(h.composer.ui.imageBudget, "held", 4));
+			commitLedger(h);
+			h.transcript.addChild(new Text("LIVE TAIL", 0, 0));
+			h.composer.setSidePanel(h.panel, RIGHT);
+			h.writes.length = 0;
+			h.composer.ui.resetDisplay();
+			await h.settle();
+			expect(h.viewport().some(row => row.includes("image/png"))).toBe(true);
+			expect(h.history().some(row => row.includes("image/png"))).toBe(false);
+			expect(
+				kittyCommands(h.writes.join("")).some(
+					command => command.a === "p" || command.a === "t" || command.a === "T",
+				),
+			).toBe(false);
+			expect(h.writes.join("")).not.toContain("\x1bPq");
+		} finally {
+			h.composer.stop();
+		}
 	});
 
 	function idOf(h: Harness, key: string): number {
