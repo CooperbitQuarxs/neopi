@@ -253,6 +253,9 @@ export class LiveSessionController {
 	#emittedInputLevel = -1;
 	#emittedOutputLevel = -1;
 	#activeDelegationId: string | undefined;
+	/** Earlier handoffs consumed into the same response as the active delegation. */
+	#coConsumedDelegationIds: string[] = [];
+	#awaitingDelegatedResponse = false;
 	/**
 	 * Last assistant message already relayed for the active delegation. A settle
 	 * that pauses for background jobs relays the answer while the delegation stays
@@ -490,6 +493,8 @@ export class LiveSessionController {
 		this.#pendingDelivery = undefined;
 		this.#stopped = true;
 		this.#completedResponse = undefined;
+		this.#coConsumedDelegationIds.length = 0;
+		this.#awaitingDelegatedResponse = false;
 		clearTimeout(this.#outputSilenceTimer);
 		this.#outputSilenceTimer = undefined;
 		clearTimeout(this.#speakableIdleTimer);
@@ -724,6 +729,8 @@ export class LiveSessionController {
 			if (pending.delivery === "interrupt") {
 				this.#activeDelegationId = pending.id;
 				this.#completedResponse = undefined;
+				this.#coConsumedDelegationIds.length = 0;
+				this.#awaitingDelegatedResponse = false;
 				this.#lastRelayedResponse = undefined;
 				this.#thinkingRelayedLength = 0;
 			}
@@ -795,6 +802,7 @@ export class LiveSessionController {
 		if (event.type === "message_start" && event.message.role === "assistant") {
 			// A provider continuation still belongs to the current handoff, not its prior stop.
 			this.#completedResponse = undefined;
+			this.#awaitingDelegatedResponse = false;
 		}
 		if (
 			event.type === "message_start" &&
@@ -809,6 +817,14 @@ export class LiveSessionController {
 					this.#appendFinalResponse([this.#completedResponse], { closeDelegation: true });
 					this.#completedResponse = undefined;
 				}
+				if (this.#awaitingDelegatedResponse && this.#activeDelegationId) {
+					if (!this.#coConsumedDelegationIds.includes(this.#activeDelegationId)) {
+						this.#coConsumedDelegationIds.push(this.#activeDelegationId);
+					}
+				} else {
+					this.#coConsumedDelegationIds.length = 0;
+				}
+				this.#awaitingDelegatedResponse = true;
 				this.#activeDelegationId = details.delegationId;
 				this.#lastRelayedResponse = undefined;
 				this.#thinkingRelayedLength = 0;
@@ -918,6 +934,9 @@ export class LiveSessionController {
 				// unsolicited context only; holding a final answer delays it until the next handoff.
 				this.#contextSinceResponse = true;
 				for (const chunk of chunkLiveContext(finalContext)) {
+					for (const coConsumedId of this.#coConsumedDelegationIds) {
+						this.#queueSend(buildDelegationContextAppend(coConsumedId, chunk));
+					}
 					this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
 				}
 				break;
@@ -925,6 +944,8 @@ export class LiveSessionController {
 		}
 		if (options.closeDelegation) {
 			this.#activeDelegationId = undefined;
+			this.#coConsumedDelegationIds.length = 0;
+			this.#awaitingDelegatedResponse = false;
 			this.#lastRelayedResponse = undefined;
 			this.#retireConsumedVoiceNotes();
 		}

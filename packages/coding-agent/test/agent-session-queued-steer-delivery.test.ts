@@ -464,6 +464,7 @@ describe("AgentSession queued steer delivery", () => {
 			const batchedAtYield = first === "B" && arrival === "at stop";
 			const started = Promise.withResolvers<void>();
 			const release = Promise.withResolvers<void>();
+			const answersDelivered = Promise.withResolvers<void>();
 			const accepted = new Map(
 				["request A", "request B", "request C"].map(text => [text, Promise.withResolvers<void>()]),
 			);
@@ -524,6 +525,13 @@ describe("AgentSession queued steer delivery", () => {
 						async connect() {},
 						async send(message) {
 							sent.push(message);
+							if (
+								message.type === "delegation.context.append" &&
+								message.delegation_item_id === "dlg-B" &&
+								message.content.some(part => part.text.includes("answer B"))
+							) {
+								answersDelivered.resolve();
+							}
 						},
 						async close() {},
 						async setMuted() {},
@@ -557,6 +565,7 @@ describe("AgentSession queued steer delivery", () => {
 				release.resolve();
 				await withTimeout(session.waitForIdle(), 2_000, "Handoffs did not finish");
 				await boundaryHandoff;
+				await withTimeout(answersDelivered.promise, 2_000, "Final handoff answer was not delivered");
 				await controller.stop();
 				unsubscribe();
 			}
@@ -574,7 +583,7 @@ describe("AgentSession queued steer delivery", () => {
 				);
 				expect(
 					answers.map(message => message.type === "delegation.context.append" && message.delegation_item_id),
-				).toEqual([batchedAtYield && name === "C" ? "dlg-B" : `dlg-${name}`]);
+				).toEqual(batchedAtYield && name !== "A" ? ["dlg-C", "dlg-B"] : [`dlg-${name}`]);
 			}
 			expect(mock.calls).toHaveLength(batchedAtYield ? 2 : 3);
 			expect(JSON.stringify(mock.calls[0]?.context.messages)).not.toContain("request C");
