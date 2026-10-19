@@ -82,6 +82,9 @@ align_native_manifest() {
    jq --arg version "$addon_version" '.version = $version' "$NATIVES_PACKAGE" > "$WORK_DIR/natives-package.aligned.json"
    mv "$WORK_DIR/natives-package.aligned.json" "$NATIVES_PACKAGE"
 }
+section "Proof-session install lock"
+bash scripts/install-tests/install-lock.sh
+
 section "Binary install smoke"
 if [ "${OMP_INSTALL_TEST_SKIP_NATIVE_BUILD:-0}" != "1" ]; then
    bun --cwd=packages/natives run build

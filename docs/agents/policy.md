@@ -108,6 +108,24 @@ baseline issues, maintain the documented labels, and merge its own integration
 PR under these gates. Other authors' PRs remain read-only unless the owner
 explicitly delegates them.
 
+## Install after merge batches
+
+Install the integration channel after every merge batch using `AGENTS.md`'s
+build/install commands. A proof session may defer installation for at most
+60 minutes: set `NPI_DEST` to the channel's install path and run
+`scripts/install-lock.sh hold <minutes> <holder> [reason]`. Repeat `hold` with
+the same holder to renew explicitly; run `release` as soon as the proof ends.
+Use the same `NPI_DEST` for `hold`, `status`, `release`, and `install.sh`.
+
+The destination-scoped record lives at
+`${XDG_RUNTIME_DIR:-/tmp}/npi-install-<dest-hash>.lock`; all participants use the
+same runtime directory. `status` reports the holder, reason and UTC expiry.
+Expired records are reported and ignored. Installation refuses active records
+before staging; `NPI_INSTALL_FORCE=1 ./install.sh` explicitly overrides one and
+prints its details. A concurrent installation or lock update fails fast; retry
+after that operation completes. An installer retains the file's advisory lock
+through its existing atomic stage/rename and rollback sequence.
+
 ## Promotion and issue completion
 
 The agreed promotion policy is monthly PR creation plus `workflow_dispatch`:
