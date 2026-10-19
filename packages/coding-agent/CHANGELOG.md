@@ -9,6 +9,7 @@
 
 ### Added
 
+- Post-processing chain steps can be turned off without deleting them: Space on a step in `/chain configure` toggles it, the setting persists as `enabled: false` in `CHAINS.yml`, and a run skips off steps while keeping the rest in order. Steps saved before this change stay on ([#365](https://github.com/PsychedelicShayna/neopi/issues/365)).
 - Added read-only `npi sessions list/read --json` discovery and `npi ctl pipe` attachment to live sessions for external hosts ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
 - Added `terminal.imageProtocol` in `/settings` and `cfg://` to switch between automatic detection, Kitty, Sixel, iTerm2, or no terminal images without restarting ([#302](https://github.com/PsychedelicShayna/neopi/issues/302)).
 - Added `/notice <text>` to send a literal, operator-authored system notice as a developer message, including editable pending notices that return to the composer when interrupted ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
