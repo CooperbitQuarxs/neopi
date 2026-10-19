@@ -1021,6 +1021,9 @@ export class LiveSessionController {
 			}
 		}
 		if (options.closeDelegation) {
+			// A final answer supersedes progress held during operator activity.
+			// Retire it now, before narration or the quiet deadline can release it.
+			this.#heldContext = this.#heldContext.filter(item => item.kind !== "progress");
 			this.#activeDelegationId = undefined;
 			this.#lastRelayedResponse = undefined;
 			this.#retireConsumedVoiceNotes();

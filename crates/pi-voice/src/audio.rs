@@ -20,7 +20,7 @@ use tokio::sync::Notify;
 
 use crate::{
 	VoiceResult,
-	device::{CaptureDevice, DeviceConfig, PlaybackDevice, playback_drain_periods},
+	device::{CaptureDevice, DeviceConfig, PlaybackDevice, PlaybackFill, playback_drain_periods},
 };
 
 // PulseAudio TCP playback stutters with a 20 ms target buffer; 50 ms absorbs
@@ -278,9 +278,20 @@ pub struct PlaybackStream {
 impl PlaybackStream {
 	/// Open and start the default speaker at the requested logical sample rate.
 	pub fn start(sample_rate: u32) -> VoiceResult<Self> {
+		let (mut stream, config, fill) = Self::prepare(sample_rate)?;
+		stream.device = Some(
+			PlaybackDevice::start(config, fill)
+				.map_err(|error| format!("Failed to open the default speaker: {error}"))?,
+		);
+		Ok(stream)
+	}
+
+	/// Register the producer before a backend can synchronously prime its buffers.
+	fn prepare(sample_rate: u32) -> VoiceResult<(Self, DeviceConfig, PlaybackFill)> {
 		let sample_rate = audio_sample_rate(sample_rate)?;
 		let state = Arc::new(PlaybackState::new());
 		let queue = Arc::new(PlaybackQueue::new(sample_rate));
+		let writer = PlaybackWriter::new(Arc::clone(&queue), Arc::clone(&state));
 		let callback_state = Arc::clone(&state);
 		let callback_queue = Arc::clone(&queue);
 		let mut current = Vec::new();
@@ -293,29 +304,24 @@ impl PlaybackStream {
 		// callback for any reason (worker exit on device loss, stop), waiters
 		// blocked in `wait_for_drain` wake instead of hanging forever.
 		let guard = FillGuard { state: Arc::clone(&state) };
-		let device = PlaybackDevice::start(
-			config,
-			Box::new(move |output| {
-				let _ = &guard;
-				fill_playback(
-					&callback_queue,
-					&mut current,
-					&mut cursor,
-					output,
-					&callback_state,
-					&mut empty_callbacks,
-					drain_callbacks,
-				);
-			}),
-		)
-		.map_err(|error| format!("Failed to open the default speaker: {error}"))?;
+		let fill: PlaybackFill = Box::new(move |output| {
+			let _ = &guard;
+			fill_playback(
+				&callback_queue,
+				&mut current,
+				&mut cursor,
+				output,
+				&callback_state,
+				&mut empty_callbacks,
+				drain_callbacks,
+			);
+		});
 
-		Ok(Self {
-			device: Some(device),
-			writer: Some(PlaybackWriter::new(Arc::clone(&queue), Arc::clone(&state))),
-			state,
-			queue,
-		})
+		Ok((
+			Self { device: None, writer: Some(writer), state, queue },
+			config,
+			fill,
+		))
 	}
 
 	/// Clone the producer endpoint used by the remote-audio decoder.
@@ -499,6 +505,35 @@ mod tests {
 		}
 		drop(writer);
 		queue
+	}
+
+	#[test]
+	fn playback_priming_cannot_drain_before_the_first_decoder_write() {
+		let (mut stream, config, mut fill) = PlaybackStream::prepare(48_000).unwrap();
+		let drain_callbacks =
+			(playback_drain_periods(config) as usize) + PLAYBACK_DRAIN_MARGIN_CALLBACKS;
+		let mut output = [1.0; 16];
+
+		// Model synchronous CoreAudio priming plus a running callback before
+		// the decoder has received any remote audio.
+		for _ in 0..drain_callbacks + 1 {
+			fill(&mut output);
+			assert_eq!(output, [0.0; 16]);
+			assert!(!stream.state.drained.load(Ordering::Acquire));
+		}
+
+		let writer = stream.writer().unwrap();
+		writer.write(&[0.5; 16]).expect("priming must not close the writer");
+		fill(&mut output);
+		assert_eq!(output, [0.5; 16]);
+		assert!(!stream.state.drained.load(Ordering::Acquire));
+
+		drop(writer);
+		stream.finish_input();
+		for _ in 0..drain_callbacks {
+			fill(&mut output);
+		}
+		assert!(stream.state.drained.load(Ordering::Acquire));
 	}
 
 	#[test]

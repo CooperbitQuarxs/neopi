@@ -2086,6 +2086,73 @@ describe("live controller delegation ownership", () => {
 		await h.controller.stop();
 	});
 
+	it.each(["answer", "empty", "gated"] as const)(
+		"retires held tool progress immediately on %s delegation closure without dropping crew reports",
+		async closure => {
+			const h = makeHarness({
+				speakableIdleMs: 60_000,
+				relayGates: () => ({ reasoning: true, progress: true, finalAnswers: closure !== "gated" }),
+			});
+			await h.controller.start();
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "run checks" } });
+			h.fireLive(delegation("closing-progress", ""));
+			await settle();
+			h.controller.noteComposerActivity();
+			h.fireSession({
+				type: "message_end",
+				message: assistant("obsolete tool progress", "toolUse"),
+			} as AgentSessionEvent);
+			h.fireSession(crewMessage("retained-report", "Helios", "crew report survives"));
+			expect(h.controller.heldContextCount()).toBe(2);
+
+			h.fireSession(agentEnd(closure === "empty" ? [] : [assistant("checks completed", "stop")]));
+			expect(h.controller.heldContextCount()).toBe(1);
+			await settle();
+			expect(finalAppends(h.sent).length).toBe(closure === "answer" ? 1 : 0);
+
+			h.fireOutputLevel(0.5);
+			await settle();
+			expect(h.controller.heldContextCount()).toBe(0);
+			const context = h.sent.flatMap(message =>
+				message.type === "delegation.context.append" || message.type === "session.context.append"
+					? message.content.map(item => item.text)
+					: [],
+			);
+			expect(context.some(text => text.includes("obsolete tool progress"))).toBe(false);
+			expect(context.some(text => text.includes("crew report survives"))).toBe(true);
+			await h.controller.stop();
+		},
+	);
+
+	it("keeps held progress when an asynchronous settle leaves its delegation open", async () => {
+		const h = makeHarness({ speakableIdleMs: 60_000 });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "run checks" } });
+		h.fireLive(delegation("paused-progress", ""));
+		await settle();
+		h.controller.noteComposerActivity();
+		h.fireSession({
+			type: "message_end",
+			message: assistant("still running checks", "toolUse"),
+		} as AgentSessionEvent);
+		h.fireSession(
+			agentEnd([assistant("background checks started", "stop")], { isTerminal: false, hasFinalResponse: true }),
+		);
+		expect(h.controller.heldContextCount()).toBe(1);
+		h.fireOutputLevel(0.5);
+		await settle();
+		expect(
+			h.sent.some(
+				message =>
+					message.type === "delegation.context.append" &&
+					message.delegation_item_id === "paused-progress" &&
+					message.channel === "commentary" &&
+					message.content.some(item => item.text === "still running checks"),
+			),
+		).toBe(true);
+		await h.controller.stop();
+	});
+
 	it("silences gated final answers but still retires delegation and operator-turn ownership", async () => {
 		let finalAnswers = false;
 		const h = makeHarness({ relayGates: () => ({ reasoning: true, progress: true, finalAnswers }) });
