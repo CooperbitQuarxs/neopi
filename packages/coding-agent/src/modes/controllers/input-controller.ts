@@ -4,6 +4,7 @@ import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	type AutocompleteProvider,
 	type Component,
+	Editor,
 	isKeyRelease,
 	type KeyId,
 	matchesKey,
@@ -14,8 +15,9 @@ import {
 import { getAgentDir, isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
 import { formatDoubleTap } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
-import { currentDeferredDraft } from "@oh-my-pi/pi-tui/draft-scope";
+import { currentDeferredDraft, runWithoutDetachedDraft } from "@oh-my-pi/pi-tui/draft-scope";
 import type { ChainConfig } from "@oh-my-pi/pi-tui/overlays/chain-types";
+import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import { discoverChains } from "../../chains/config";
 import { EscapeGesture } from "../../chains/escape-gesture";
 import { ChainControl, enabledChainSteps, runChain } from "../../chains/runner";
@@ -274,6 +276,56 @@ export class InputController {
 
 	#enhancedPaste?: EnhancedPasteController;
 	#draftText: string | undefined;
+	// Fork: chain previews own the composer until their caller finishes restoration.
+	#chainOwnsComposer = false;
+	#chainSpeechDraft: Editor | undefined;
+	#chainSpeechSubmit = false;
+
+	insertComposerSpeech(text: string): void {
+		if (!this.#chainOwnsComposer) {
+			this.ctx.editor.insertText(text);
+			return;
+		}
+		this.#chainSpeechDraft ??= new Editor(getEditorTheme());
+		this.#chainSpeechDraft.insertText(text);
+	}
+
+	submitComposerSpeech(): void {
+		if (this.#chainOwnsComposer) this.#chainSpeechSubmit = true;
+		else this.ctx.editor.submit();
+	}
+
+	#releaseChainComposer(): void {
+		this.#chainOwnsComposer = false;
+		const draft = this.#chainSpeechDraft;
+		const submit = this.#chainSpeechSubmit;
+		this.#chainSpeechDraft = undefined;
+		this.#chainSpeechSubmit = false;
+		if (!draft) return;
+		// On abort/error, retain the restored chain draft separately for Up recall.
+		this.ctx.editor.clearDraftForRecall();
+		this.ctx.editor.setDraft(draft.getText());
+		this.ctx.ui.requestRender();
+		// Let the original submission enter dispatch before the next one can submit.
+		if (submit) queueMicrotask(() => this.ctx.editor.submit());
+	}
+
+	/** Retain a rejected prompt for recall without replacing speech already on the next draft. */
+	#restoreRejectedPrompt(text: string, images?: ImageContent[], links?: (string | undefined)[]): void {
+		const editor = this.ctx.editor;
+		const newerText = editor.getExpandedText();
+		const newerImages = [...editor.pendingImages];
+		const newerLinks = [...editor.pendingImageLinks];
+		const hasNewerDraft = newerText.length > 0 || newerImages.length > 0;
+		editor.setDraft(text, images);
+		editor.pendingImageLinks = links ? [...links] : (images ?? []).map(() => undefined);
+		editor.imageLinks = editor.pendingImageLinks;
+		if (!hasNewerDraft) return;
+		editor.clearDraftForRecall();
+		editor.setDraft(newerText, newerImages);
+		editor.pendingImageLinks = newerLinks;
+		editor.imageLinks = newerLinks;
+	}
 	/** Unknown `/command` text already warned about; submitting it again sends it as a prompt. */
 	#unknownSlashWarned: string | undefined;
 	#focusedLeftTapListenerInstalled = false;
@@ -1577,33 +1629,38 @@ export class InputController {
 			// stays in history so Up recalls what was written, not the rewrite.
 			const typedText = text;
 			if (forceChain || (isSettingsInitialized() && cfgChainingAuto.get(settings))) {
-				const outcome = await this.#applyPostProcessingChain(text);
-				if (!isDeferredSubmissionActive()) return;
-				if (!outcome.send) {
-					if (inputImages && inputImages.length > 0) {
-						this.ctx.editor.pendingImages = [...inputImages];
-						this.ctx.editor.pendingImageLinks = inputImageLinks
-							? [...inputImageLinks]
-							: inputImages.map(() => undefined);
-						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
-					}
-					if (outcome.text === typedText && this.ctx.editor.restoreSubmittedDraft()) {
-						// An untouched draft comes back as displayed, large pastes still collapsed.
-					} else {
-						// A later step failed: Up still recalls what was typed, and a large rewrite
-						// shows collapsed.
-						this.ctx.editor.addToHistory(typedText);
-						if (outcome.text.length > CHAIN_DISPLAY_COLLAPSE_CHARS) {
-							this.ctx.editor.setText("");
-							this.ctx.editor.insertPaste(outcome.text);
-						} else {
-							this.ctx.editor.setCollapsedText(outcome.text);
+				this.#chainOwnsComposer = true;
+				try {
+					const outcome = await this.#applyPostProcessingChain(text);
+					if (!isDeferredSubmissionActive()) return;
+					if (!outcome.send) {
+						if (inputImages && inputImages.length > 0) {
+							this.ctx.editor.pendingImages = [...inputImages];
+							this.ctx.editor.pendingImageLinks = inputImageLinks
+								? [...inputImageLinks]
+								: inputImages.map(() => undefined);
+							this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
 						}
+						if (outcome.text === typedText && this.ctx.editor.restoreSubmittedDraft()) {
+							// An untouched draft comes back as displayed, large pastes still collapsed.
+						} else {
+							// A later step failed: Up still recalls what was typed, and a large rewrite
+							// shows collapsed.
+							this.ctx.editor.addToHistory(typedText);
+							if (outcome.text.length > CHAIN_DISPLAY_COLLAPSE_CHARS) {
+								this.ctx.editor.setText("");
+								this.ctx.editor.insertPaste(outcome.text);
+							} else {
+								this.ctx.editor.setCollapsedText(outcome.text);
+							}
+						}
+						return;
 					}
+					text = outcome.text;
+				} finally {
 					this.ctx.editor.clearSubmittedDraft();
-					return;
+					runWithoutDetachedDraft(() => this.#releaseChainComposer());
 				}
-				text = outcome.text;
 			}
 			// The submitted-draft snapshot served the live hold and the chain; it holds paste
 			// payloads, so release it once the prompt is on its way.
@@ -1638,16 +1695,7 @@ export class InputController {
 					// state untouched, so the previous body (if any) survives.
 					if (submittedMode === "loop" && forwarded) this.ctx.setLoopPrompt(text);
 				} catch (error) {
-					// Don't lose the queued steer draft: restore images then the collapsed
-					// text so chip tokens (and band cards) survive the retry.
-					if (images && images.length > 0) {
-						this.ctx.editor.pendingImages = [...images];
-						this.ctx.editor.pendingImageLinks = inputImageLinks
-							? [...inputImageLinks]
-							: images.map(() => undefined);
-						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
-					}
-					this.ctx.editor.setCollapsedText(text);
+					this.#restoreRejectedPrompt(text, images, inputImageLinks);
 					this.ctx.showError(error instanceof Error ? error.message : String(error));
 				}
 				this.ctx.updatePendingMessagesDisplay();
@@ -1717,17 +1765,7 @@ export class InputController {
 					// loop instead of resubmitting a local action on next idle.
 					if (!forwarded && this.ctx.loopPrompt === text) this.ctx.pauseLoop();
 				} catch (error) {
-					// Don't lose the message: hand images then collapsed text back to the
-					// editor so the user can retry (e.g. prompt dispatch rejecting an
-					// extension command).
-					if (images && images.length > 0) {
-						this.ctx.editor.pendingImages = [...images];
-						this.ctx.editor.pendingImageLinks = inputImageLinks
-							? [...inputImageLinks]
-							: images.map(() => undefined);
-						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
-					}
-					this.ctx.editor.setCollapsedText(text);
+					this.#restoreRejectedPrompt(text, images, inputImageLinks);
 					this.ctx.showError(error instanceof Error ? error.message : String(error));
 					// Dispatch rejected after the body was armed: park it so the
 					// failed prompt is not resubmitted on next idle.

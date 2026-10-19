@@ -48,6 +48,7 @@ import {
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
 import type { TerminalAppearanceRequestToken } from "@oh-my-pi/pi-tui/terminal";
+import { runWithoutDetachedDraft } from "@oh-my-pi/pi-tui/draft-scope";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { col, kbd, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import { sameItems } from "@oh-my-pi/pi-tui/native/memo";
@@ -1864,8 +1865,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#micCursor: MicCursor | undefined;
 	// Fork: the main-composer destination outlives extension editor replacements.
 	readonly #xaiComposerDestination = {
-		insertText: (text: string) => this.editor.insertText(text),
-		submit: () => this.editor.submit(),
+		insertText: (text: string) => runWithoutDetachedDraft(() => this.#inputController.insertComposerSpeech(text)),
+		submit: () => runWithoutDetachedDraft(() => this.#inputController.submitComposerSpeech()),
 	};
 	#xaiComposerMicState: SttState = "idle";
 	#resizeHandler?: () => void;
