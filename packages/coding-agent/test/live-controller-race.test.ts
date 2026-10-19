@@ -337,6 +337,28 @@ function makeHarness(options?: {
 
 describe("per-utterance delegation keywords", () => {
 	const defaults = () => ({ suppress: "Iris", force: "relay" });
+	it("releases a finalized direct-answer correction after a second quiet floor", async () => {
+		const h = makeHarness({
+			quietFloorMs: () => 30,
+			delegationKeywords: () => ({ suppress: "Iris", force: "relay" }),
+		});
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "input_transcript.added", item: { text: "Iris" } });
+			await wait(50);
+			h.fireLive(delegation("partial-before-quiet-final", ""));
+			await settle();
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris, tell me a joke" } });
+			await wait(70);
+			await settle();
+			expect(h.sent.some(message => "content" in message &&
+				message.content.some(item => item.text.includes("Iris, tell me a joke")))).toBe(true);
+			expect(h.prompts).toEqual([]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
 	for (const earlierPrimary of [false, true]) {
 		it(`rejects a finalized direct address without dropping an earlier pending request (${earlierPrimary})`, async () => {
 			const h = makeHarness({ delegationKeywords: () => ({ suppress: "Iris", force: "relay" }) });

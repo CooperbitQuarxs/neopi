@@ -243,7 +243,10 @@ export class LiveSessionController {
 	#holdReleased = false;
 	#lastComposerWrite = Number.NEGATIVE_INFINITY;
 	#voiceFloorTimer: NodeJS.Timeout | undefined;
-	#deferredVoiceDelegation: Extract<LiveServerEvent, { type: "delegation.created" }> | undefined;
+	#deferredVoiceDelegation: {
+		event: Extract<LiveServerEvent, { type: "delegation.created" }>;
+		directAnswerTurn?: number;
+	} | undefined;
 	readonly #transcriptKeywords: (() => { submit: string; force: string; silenceMs: number }) | undefined;
 	#transcriptKeywordTimer: NodeJS.Timeout | undefined;
 	readonly #composerTextExcludingTurns: ((turns: readonly number[]) => string) | undefined;
@@ -592,7 +595,7 @@ export class LiveSessionController {
 			event.type === "output_audio.delta" ||
 			(event.type === "turn.done" && event.turn.role === "assistant");
 		if (this.#voiceTurnBlocked()) {
-			if (event.type === "delegation.created") this.#deferredVoiceDelegation = event;
+			if (event.type === "delegation.created") this.#deferredVoiceDelegation = { event };
 			if (assistantOutput) this.#suppressedResponse = true;
 			if (assistantOutput || event.type === "delegation.created") return;
 		}
@@ -1306,8 +1309,13 @@ export class LiveSessionController {
 		}
 		const delegation = this.#deferredVoiceDelegation;
 		this.#deferredVoiceDelegation = undefined;
-		if (delegation && this.#turnsWhere(turn => !turn.blocked && turn.claim === undefined).length > 0) {
-			void this.#handleDelegation(delegation).catch(cause => this.#reportFailure(errorFrom(cause)));
+		if (delegation?.directAnswerTurn !== undefined) {
+			const turn = this.#userTurns.get(delegation.directAnswerTurn);
+			if (turn?.final && this.#isDirectAddress(turn.text)) {
+				this.#rejectDirectDelegation(delegation.event.item.id, turn.text);
+			}
+		} else if (delegation && this.#turnsWhere(turn => !turn.blocked && turn.claim === undefined).length > 0) {
+			void this.#handleDelegation(delegation.event).catch(cause => this.#reportFailure(errorFrom(cause)));
 		} else if (this.#suppressedResponse) {
 			const turns = this.#turnsWhere(turn => turn.final && !turn.blocked && turn.claim === undefined);
 			this.#suppressedResponse = false;
@@ -1590,8 +1598,11 @@ export class LiveSessionController {
 				}
 				if (this.#voiceTurnBlocked()) {
 					this.#deferredVoiceDelegation = {
-						type: "delegation.created",
-						item: { type: "delegation", target: "client", id: pending.id, content: [] },
+						event: {
+							type: "delegation.created",
+							item: { type: "delegation", target: "client", id: pending.id, content: [] },
+						},
+						directAnswerTurn: current.turn,
 					};
 				} else {
 					this.#rejectDirectDelegation(pending.id, current.text);
