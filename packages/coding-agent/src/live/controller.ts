@@ -65,6 +65,7 @@ interface UserLedgerTurn {
 	claim?: number;
 	blocked?: boolean;
 	forcedDelegationId?: string;
+	composerReceipt?: LiveComposerReceipt;
 	delivering?: boolean;
 }
 
@@ -88,10 +89,17 @@ export interface LiveTranscript {
 	final: boolean;
 }
 
+export interface LiveComposerReceipt {
+	id: number;
+	turns: readonly number[];
+}
+
 export interface LiveComposerSubmission {
 	text: string;
 	/** Editor-owned exact draft ranges to retire when the primary accepts this submission. */
-	receipt?: number;
+	receipt?: LiveComposerReceipt;
+	/** Only unchanged editor-owned turns remain voice-only after explicit composer edits. */
+	voiceOnlyTurns?: readonly number[];
 }
 
 /** UI notifications emitted during a live session. */
@@ -108,8 +116,9 @@ export interface LiveSessionCallbacks {
 	 *  turn, repeats included, with the final text authoritative. Composer input follows this,
 	 *  not the coalesced display transcript. */
 	onUserSpeech?(speech: LiveTranscript): void;
-	/** Final delivered text. With turn ids, retire only those spoken spans; without them the entire draft was sent. */
-	onSpeechSent?(text: string, turns?: readonly number[], composerReceipt?: number): void;
+	/** Delivered text. Turn ids retire spoken spans; editor receipt ids also retire captured typed/edited ranges.
+	 * Without either scope, the entire composer was sent. */
+	onSpeechSent?(text: string, turns?: readonly number[], composerReceipts?: readonly number[]): void;
 }
 
 /** Structural transport surface the controller needs (test seam). */
@@ -326,8 +335,6 @@ export class LiveSessionController {
 				dispatchEnabled: boolean;
 				dispatching: boolean;
 				voiceText: string;
-				composerText?: string;
-				composerReceipt?: number;
 		  }
 		| undefined;
 	#pendingDelivery: CustomMessageDelivery | undefined;
@@ -516,10 +523,9 @@ export class LiveSessionController {
 		if (pending?.dispatching && this.#pendingDelivery && !this.#pendingDelivery.cancel()) {
 			const turns = this.#deleteTurns(turn => turn.claim === pending.generation);
 			this.#acceptSpeech(
-				pending.composerText ?? turns.map(turn => turn.text).join("\n\n").trim(),
+				turns.map(turn => turn.text).join("\n\n").trim(),
 				pending.forced,
-				turns.map(turn => turn.turn),
-				pending.composerReceipt,
+				turns,
 			);
 		} else {
 			this.#pendingDelivery?.cancel();
@@ -651,8 +657,6 @@ export class LiveSessionController {
 	async #handleDelegation(
 		event: Extract<LiveServerEvent, { type: "delegation.created" }>,
 		forced = false,
-		composerText?: string,
-		composerReceipt?: number,
 	): Promise<void> {
 		if (this.#seenDelegationIds.has(event.item.id)) return;
 		this.#seenDelegationIds.add(event.item.id);
@@ -698,10 +702,9 @@ export class LiveSessionController {
 			// from the composer here.
 			const accepted = this.#deleteTurns(turn => turn.claim === previousGeneration);
 			this.#acceptSpeech(
-				previousPending?.composerText ?? accepted.map(turn => turn.text).join("\n\n").trim(),
+				accepted.map(turn => turn.text).join("\n\n").trim(),
 				previousPending?.forced ?? false,
-				accepted.map(turn => turn.turn),
-				previousPending?.composerReceipt,
+				accepted,
 			);
 		}
 		this.#pendingDelivery = undefined;
@@ -724,8 +727,6 @@ export class LiveSessionController {
 			delivery: this.#delegationDelivery(),
 			turns: claimed.map(turn => turn.turn),
 			voiceText,
-			composerText,
-			composerReceipt,
 			dispatchEnabled: false,
 			dispatching: false,
 		};
@@ -767,7 +768,7 @@ export class LiveSessionController {
 			.map(turnNumber => this.#userTurns.get(turnNumber))
 			.filter((turn): turn is UserLedgerTurn => turn !== undefined && turn.claim === generation);
 		if (turns.length === 0 || turns.some(turn => !turn.final)) return;
-		const merged = pending.composerText ?? turns.map(turn => turn.text).join("\n\n").trim();
+		const merged = turns.map(turn => turn.text).join("\n\n").trim();
 		if (!merged) return;
 		pending.dispatching = true;
 		const { content, details } = buildLiveDelegationMessage(merged, pending.voiceText, this.#includeVoiceNote());
@@ -801,7 +802,7 @@ export class LiveSessionController {
 				this.#lastRelayedResponse = undefined;
 				this.#thinkingRelayedLength = 0;
 			}
-			this.#acceptSpeech(merged, pending.forced, turns.map(turn => turn.turn), pending.composerReceipt);
+			this.#acceptSpeech(merged, pending.forced, turns);
 			await delivery.completed;
 		} catch (cause) {
 			// A newer handoff supersedes this continuation; its delivery owns any error.
@@ -859,12 +860,27 @@ export class LiveSessionController {
 		for (const record of this.#voiceNotes) if (record.consumed) this.#voiceNotes.delete(record);
 	}
 
-	#acceptSpeech(text: string, forced: boolean, turns?: readonly number[], composerReceipt?: number): void {
+	#acceptSpeech(
+		text: string,
+		forced: boolean,
+		turns: readonly UserLedgerTurn[],
+		scope: "composer" | "turns" = "composer",
+	): void {
 		if (!text) return;
+		const ids: number[] = [];
+		let receipts: number[] | undefined;
+		for (const turn of turns) {
+			if (turn.composerReceipt) {
+				ids.push(...turn.composerReceipt.turns);
+				(receipts ??= []).push(turn.composerReceipt.id);
+			} else {
+				ids.push(turn.turn);
+			}
+		}
 		this.#callbacks.onSpeechSent?.(
 			text,
-			this.#userTurns.size > 0 || composerReceipt !== undefined ? turns : undefined,
-			composerReceipt,
+			scope === "turns" || this.#userTurns.size > 0 || receipts ? ids : undefined,
+			receipts,
 		);
 		if (forced) this.#queueSend(buildSessionContextAppend("Operator Message Sent To Main Agent", "commentary"));
 	}
@@ -1072,7 +1088,7 @@ export class LiveSessionController {
 	 * with it. Returns false when a handoff was accepted but has not yet retired its speech from
 	 * the composer: submitting now would send those words a second time.
 	 */
-	retireComposerSpeech(): boolean {
+	retireComposerSpeech(preserveTurns?: readonly number[]): boolean {
 		const pending = this.#pendingDelegation;
 		const last = this.#tailTurn();
 		let settled = true;
@@ -1083,10 +1099,13 @@ export class LiveSessionController {
 			this.#delegationGeneration += 1;
 			this.#pendingDelegation = undefined;
 			this.#pendingDelivery = undefined;
-			this.#deleteTurns(turn => turn.claim === pending.generation);
+			this.#deleteTurns(turn => turn.claim === pending.generation && !preserveTurns?.includes(turn.turn));
+			for (const turn of this.#userTurns.values()) {
+				if (turn.claim === pending.generation) turn.claim = undefined;
+			}
 			this.#refreshAudioPhase();
 		}
-		this.#deleteTurns(turn => turn.claim === undefined);
+		this.#deleteTurns(turn => turn.claim === undefined && !preserveTurns?.includes(turn.turn));
 		// A partial turn retired mid-utterance: the rest of it, final included, is already handled.
 		if (last && !last.final && !this.#userTurns.has(last.turn)) this.#retiredPartialTurn = last.turn;
 		this.#answeredTurns = undefined;
@@ -1102,14 +1121,18 @@ export class LiveSessionController {
 		const voiceOnly = this.#turnsWhere(turn => turn.final && !this.#mayDelegateTurn(turn));
 		if (voiceOnly.length) {
 			if (Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
-			const primary = this.#captureComposerExcludingTurns?.(voiceOnly.map(turn => turn.turn)) ?? {
+			const primary: LiveComposerSubmission = this.#captureComposerExcludingTurns?.(voiceOnly.map(turn => turn.turn)) ?? {
 				text: this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined).map(turn => turn.text).join("\n\n"),
 			};
+			const preserved = primary.voiceOnlyTurns ?? voiceOnly.map(turn => turn.turn);
+			if (!this.retireComposerSpeech(preserved)) return false;
 			this.#holdReleased = true;
 			this.#suppressedResponse = false;
 			this.#deferredVoiceDelegation = undefined;
 			this.refreshTurnGate(false);
-			for (const turn of voiceOnly) this.#deliverBlockedTurn(turn);
+			for (const turn of voiceOnly) {
+				if (preserved.includes(turn.turn)) this.#deliverBlockedTurn(turn);
+			}
 			if (primary.text.trim()) this.#forcePendingComposer(primary.text.trim(), primary.receipt);
 			return true;
 		}
@@ -1131,22 +1154,20 @@ export class LiveSessionController {
 		this.#holdReleased = true;
 		this.#deferredVoiceDelegation = undefined;
 		this.refreshTurnGate();
-		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text: message, final: true };
-		this.#putTurn(turn);
-		this.#latestUtterance = turn;
-		this.#forcePendingComposer();
+		this.#forcePendingComposer(message);
 		return true;
 	}
 
-	#forcePendingComposer(composerText?: string, composerReceipt?: number): void {
+	#forcePendingComposer(text: string, composerReceipt?: LiveComposerReceipt): void {
+		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text, final: true, composerReceipt };
+		this.#putTurn(turn);
+		this.#latestUtterance = turn;
 		void this.#handleDelegation(
 			{
 				type: "delegation.created",
 				item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
 			},
 			true,
-			composerText,
-			composerReceipt,
 		).catch(cause => this.#reportFailure(errorFrom(cause)));
 	}
 
@@ -1157,16 +1178,12 @@ export class LiveSessionController {
 		const answered = this.#answeredTurns;
 		this.#answeredTurns = undefined;
 		if (!answered?.length) return;
-		const turns = this.#turnsWhere(turn => turn.claim === undefined && answered.includes(turn.turn));
+		const turns = this.#deleteTurns(turn => turn.claim === undefined && answered.includes(turn.turn));
 		const text = turns
 			.map(turn => turn.text)
 			.join("\n\n")
 			.trim();
-		if (text) this.#callbacks.onSpeechSent?.(
-			text,
-			this.#userTurns.size > turns.length ? turns.map(turn => turn.turn) : undefined,
-		);
-		this.#deleteTurns(turn => turn.claim === undefined && answered.includes(turn.turn));
+		this.#acceptSpeech(text, false, turns);
 	}
 
 	/** Fleet feed: relay a crew IRC message onto the speakable channel for background awareness. */
@@ -1689,8 +1706,9 @@ export class LiveSessionController {
 			.then(delivered => {
 				blocked.delivering = false;
 				// A manual submit may have retired this exact turn during the transport send.
-				if (delivered && this.#deleteTurns(turn => turn === blocked).length > 0) {
-					this.#callbacks.onSpeechSent?.(blocked.text, [blocked.turn]);
+				if (delivered) {
+					const turns = this.#deleteTurns(turn => turn === blocked);
+					if (turns.length) this.#acceptSpeech(blocked.text, false, turns, "turns");
 				}
 			})
 			.catch(cause => this.#reportFailure(errorFrom(cause)));

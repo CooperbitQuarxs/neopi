@@ -3476,7 +3476,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	/** Capture submitted draft ranges, excluding unchanged protected utterances. */
-	captureTextWithoutUtterances(ids: readonly number[]): { text: string; receipt: number } {
+	captureTextWithoutUtterances(ids: readonly number[]): { text: string; receipt: number; excludedIds: number[] } {
 		this.#reconcileVolatile();
 		const full = this.#draft();
 		this.#reconcileSpans(full);
@@ -3496,7 +3496,7 @@ export class Editor implements Component, Focusable {
 			start = Math.max(start, span.end);
 		}
 		capture(full.length);
-		return { text, receipt };
+		return { text, receipt, excludedIds: excluded.map(span => span.id) };
 	}
 
 	#removableSpeechSpans(ids: readonly number[], full: string): SpeechSpan[] {

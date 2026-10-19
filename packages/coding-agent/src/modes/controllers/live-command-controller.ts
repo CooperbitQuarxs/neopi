@@ -317,9 +317,17 @@ export class LiveCommandController {
 					return id === undefined ? [] : [id];
 				});
 				const captured = this.#ctx.editor.captureTextWithoutUtterances(ids);
+				const voiceOnlyTurns = turns.filter(turn => {
+					const id = this.#committedSpeech.get(turn);
+					return id !== undefined && captured.excludedIds.includes(id);
+				});
 				const force = stripLiveKeyword(captured.text, cfgLiveForceDelegateKeyword.get(this.#ctx.settings), true);
 				return {
-					receipt: captured.receipt,
+					receipt: {
+						id: captured.receipt,
+						turns: [...this.#committedSpeech.keys()].filter(turn => !voiceOnlyTurns.includes(turn)),
+					},
+					voiceOnlyTurns,
 					text: force.matched ? force.text :
 						stripLiveKeyword(captured.text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).text,
 				};
@@ -357,12 +365,12 @@ export class LiveCommandController {
 					}
 					this.#typeUserTranscript(speech);
 				},
-				onSpeechSent: (text, turns, composerReceipt) => {
+				onSpeechSent: (text, turns, composerReceipts) => {
 					if (this.#session !== session) return;
 					this.#clearKeywordTimer();
 					this.#editing = true;
 					try {
-						if (composerReceipt !== undefined) this.#ctx.editor.removeUtterances([composerReceipt]);
+						if (composerReceipts) this.#ctx.editor.removeUtterances(composerReceipts);
 						if (turns) {
 							const ids = turns.flatMap(turn => {
 								const id = this.#committedSpeech.get(turn);
