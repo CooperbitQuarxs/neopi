@@ -510,7 +510,7 @@ export function fuzzyRank<T>(items: readonly T[], query: string, getText: (item:
 	return rankIndexed(items, prepareQuery(query), i => buildSearchIndex(getText(items[i]!), i < INDEX_CACHE_MAX));
 }
 
-export function fuzzyFilter<T>(items: T[], query: string, getText: (item: T) => string): T[] {
+export function fuzzyFilter<T>(items: readonly T[], query: string, getText: (item: T) => string): T[] {
 	return fuzzyRank(items, query, getText).map(result => result.item);
 }
 

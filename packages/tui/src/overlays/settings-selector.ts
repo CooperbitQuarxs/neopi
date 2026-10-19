@@ -2116,20 +2116,26 @@ export class SettingsSelectorComponent implements Component {
 		else list.handleInput(data);
 	}
 
+	/** A credential editor is open: its value is never snapshotted and it holds history until closed. */
+	#secretSubmenuOpen(list: SettingsList | null | undefined): boolean {
+		const submenuId = list?.openSubmenu?.id;
+		if (submenuId === undefined) return false;
+		const def = getSettingDef(this.#context.settings.entries, submenuId);
+		return def?.type === "text" && def.secret;
+	}
+
 	get blocksMenuHistory(): boolean {
 		const list = this.#searchList ?? this.#currentList;
-		const submenuId = list?.openSubmenu?.id;
 		return list?.blocksMenuHistory === true
 			|| this.#pendingPluginWrites > 0
 			|| this.#pluginComponent?.blocksMenuHistory === true
-			|| (submenuId !== undefined && getSettingDef(this.#context.settings.entries, submenuId)?.credential === true);
+			|| this.#secretSubmenuOpen(list);
 	}
 
 	navigationSnapshot(): unknown {
 		const list = this.#searchList ?? this.#currentList;
 		let listSnapshot = list?.navigationSnapshot();
-		const submenuId = list?.openSubmenu?.id;
-		if (submenuId && getSettingDef(this.#context.settings.entries, submenuId)?.credential && typeof listSnapshot === "object" && listSnapshot !== null) {
+		if (this.#secretSubmenuOpen(list) && typeof listSnapshot === "object" && listSnapshot !== null) {
 			listSnapshot = { ...listSnapshot, submenu: undefined };
 		}
 		return {

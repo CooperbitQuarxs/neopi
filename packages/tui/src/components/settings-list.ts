@@ -305,9 +305,9 @@ export class SettingsList implements Component {
 			});
 			if (typeof state.submenuId === "string" && this.selectItem(state.submenuId)) {
 				this.#activateItem();
-				if (isMenuHistoryParticipant(this.#submenuComponent)) {
-					this.#submenuComponent.restoreNavigation(state.submenu);
-				}
+				// #activateItem reassigns the submenu that the reset above narrowed to null.
+				const submenu = this.#submenuComponent as Component | null;
+				if (isMenuHistoryParticipant(submenu)) submenu.restoreNavigation(state.submenu);
 			}
 			this.#viewport.setTop(state.viewportTop);
 			this.#notifySelection();

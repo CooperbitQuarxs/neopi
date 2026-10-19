@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { initTheme } from "../src/theme/theme";
 import { ThemeSelectorComponent } from "../src/overlays/theme-selector";
 import { ThinkingSelectorComponent } from "../src/overlays/thinking-selector";
@@ -32,7 +33,12 @@ describe("small selector history", () => {
 
 	it("round-trips the small settings pickers and keeps slash search explicit", () => {
 		const selectors = [
-			new ThinkingSelectorComponent("low", ["off", "low", "high"], () => {}, () => {}),
+			new ThinkingSelectorComponent(
+				ThinkingLevel.Low,
+				[ThinkingLevel.Off, ThinkingLevel.Low, ThinkingLevel.High],
+				() => {},
+				() => {},
+			),
 			new ShowImagesSelectorComponent(true, () => {}, () => {}),
 			new QueueModeSelectorComponent("all", () => {}, () => {}),
 		];

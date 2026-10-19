@@ -751,7 +751,7 @@ export class GitTuiComponent implements Component {
 			}
 		}
 		if (this.#focus === "diff") {
-			const by = action && action !== "pending" ? menuScrollBy(action) : undefined;
+			const by = action ? menuScrollBy(action) : undefined;
 			if (by) this.#nativeScroll = { by, n: (this.#nativeScroll?.n ?? 0) + 1 };
 			if (matchesKey(data, "shift+up")) this.#pane.moveCursor(-1, true);
 			else if (matchesKey(data, "shift+down")) this.#pane.moveCursor(1, true);

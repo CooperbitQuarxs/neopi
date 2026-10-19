@@ -25,8 +25,8 @@ afterEach(() => { vi.restoreAllMocks(); });
 describe("setup choice shortcuts", () => {
 	for (const scene of [themeSetupScene, glyphSetupScene, composerSetupScene]) {
 		it(`${scene.id} keeps numeric shortcuts literal while its filter owns focus`, () => {
-			spyOn(themeModule, "setSymbolPreset").mockImplementation(() => {});
-			spyOn(themeModule, "setColorBlindMode").mockImplementation(() => {});
+			spyOn(themeModule, "setSymbolPreset").mockImplementation(async () => {});
+			spyOn(themeModule, "setColorBlindMode").mockImplementation(async () => {});
 			spyOn(themeModule, "previewTheme").mockResolvedValue({ success: true });
 			const host = {
 				ctx: { composerShape: "band", symbolPreset: "unicode", colorBlindMode: false, statusLine: undefined },

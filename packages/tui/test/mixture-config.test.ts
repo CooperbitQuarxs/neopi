@@ -50,7 +50,7 @@ function makeOverlay(
 		setFocus: () => {},
 		start: () => {},
 		stop: () => {},
-	} as TUI;
+	} as unknown as TUI;
 	const overlay = new MixtureConfigOverlayComponent(tui, fixtureDeps, "project", structuredClone(doc), {
 		loadDoc: async () => ({ mixtures: [] }),
 		save: async (_scope, draft) => {

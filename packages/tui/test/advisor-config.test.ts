@@ -541,7 +541,9 @@ describe("advisor menu navigation and history", () => {
 	});
 
 	it("moves the preview independently, preserves root panes as contexts and isolates gg", () => {
-		const h = make({ advisors: [{ name: "Reviewer" }], warnings: Array.from({ length: 40 }, (_, index) => `Warning ${index}`) });
+		// The overlay sizes itself from the real terminal, so the preview must overflow any height.
+		const instructions = Array.from({ length: 120 }, (_, index) => `Instruction line ${index}`).join("\n");
+		const h = make({ advisors: [{ name: "Reviewer", instructions }], warnings: Array.from({ length: 40 }, (_, index) => `Warning ${index}`) });
 		const visits: string[] = [];
 		h.overlay.onNavigationVisit = page => visits.push(page);
 		try {
@@ -654,7 +656,7 @@ describe("advisor menu navigation and history", () => {
 		const cx: DescribeContext = { cols: 120, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
 		const sheet = () => {
 			const root = h.overlay.describe(cx);
-			const component = root.c?.[0] as { describe(): NativeNode | null; handleNativeEvent(event: NativeUiEvent): void };
+			const component = root.c?.[0] as unknown as { describe(): NativeNode | null; handleNativeEvent(event: NativeUiEvent): void };
 			const node = component?.describe();
 			if (node?.k !== "picker") throw new Error("expected a filtered advisor picker");
 			return { component, props: node.p as TspPickerProps };

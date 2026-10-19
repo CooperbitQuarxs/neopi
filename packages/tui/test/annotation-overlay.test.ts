@@ -167,7 +167,7 @@ describe("AnnotationOverlay", () => {
 
 	it("drops a pending gg prefix when native line selection changes context", () => {
 		const text = Array.from({ length: 50 }, (_, index) => `line-${index}`).join("\n");
-		const overlay = makeTextOverlay({ text, label: "source" });
+		const overlay = makeTextOverlay({ id: "source", kind: "message", text, label: "source" });
 		overlay.handleInput("g");
 		overlay.handleNativeEvent({ type: "select", key: "lines", item: "l20" });
 		overlay.handleInput("g");
@@ -231,7 +231,7 @@ describe("AnnotationOverlay", () => {
 		const completed: (TextReviewOverlayResult | undefined)[] = [];
 		let opened = 0;
 		const overlay = new AnnotationOverlay(makeTui(20), darkTheme!, getKeybindings() as KeybindingsManager,
-			{ text, label: "source" }, { onComplete: result => completed.push(result), onExternalEditor: () => { opened++; } });
+			{ id: "source", kind: "message", text, label: "source" }, { onComplete: result => completed.push(result), onExternalEditor: () => { opened++; } });
 		overlay.focused = true;
 		expect(render(overlay)).toContain("line-000");
 		overlay.handleInput(CTRL_E);
@@ -262,7 +262,7 @@ describe("AnnotationOverlay", () => {
 
 	it("shares existing-note chooser bounds and Space edits without completing the review", () => {
 		const completed: (TextReviewOverlayResult | undefined)[] = [];
-		const overlay = makeTextOverlay({ text: "source", label: "source" }, result => completed.push(result), 20);
+		const overlay = makeTextOverlay({ id: "source", kind: "message", text: "source", label: "source" }, result => completed.push(result), 20);
 		for (const note of ["first", "middle", "last"]) {
 			overlay.handleInput("a");
 			overlay.handleInput(note);
@@ -290,7 +290,7 @@ describe("AnnotationOverlay", () => {
 		const completed: (TextReviewOverlayResult | undefined)[] = [];
 		let externalEdits = 0;
 		const overlay = new AnnotationOverlay(makeTui(), darkTheme!, getKeybindings() as KeybindingsManager,
-			{ text: "source", label: "source" }, {
+			{ id: "source", kind: "message", text: "source", label: "source" }, {
 				onComplete: result => completed.push(result),
 				onExternalEditor: () => { externalEdits++; },
 			});
@@ -307,7 +307,7 @@ describe("AnnotationOverlay", () => {
 
 	it("keeps annotation word typing in one undo unit", () => {
 		setKeybindings(KeybindingsManager.inMemory({ "tui.editor.undo": "ctrl+z" }));
-		const overlay = makeTextOverlay({ text: "source", label: "source" });
+		const overlay = makeTextOverlay({ id: "source", kind: "message", text: "source", label: "source" });
 		overlay.handleInput("a");
 		for (const char of "discard") overlay.handleInput(char);
 		overlay.handleInput("\x1a");
@@ -318,7 +318,7 @@ describe("AnnotationOverlay", () => {
 
 	it("forwards a pending character-jump target before printable submit bindings", () => {
 		setKeybindings(KeybindingsManager.inMemory({ "tui.input.submit": ["j", "enter"] }));
-		const overlay = makeTextOverlay({ text: "source", label: "source" });
+		const overlay = makeTextOverlay({ id: "source", kind: "message", text: "source", label: "source" });
 		overlay.handleInput("a");
 		for (const char of "alpha j omega") overlay.handleInput(char);
 		overlay.handleInput("\x01"); // line start

@@ -157,7 +157,7 @@ describe("controller menu timeline", () => {
 		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
 		expect(leaves).toBe(1);
 		expect(host!.close()).toBe(false);
-		expect(h.focused()).toBe(h.menus.get("settings"));
+		expect(h.focused()).toBe(h.menus.get("settings")!);
 		expect(h.overlayStack).toHaveLength(1);
 	});
 
@@ -200,7 +200,7 @@ describe("controller menu timeline", () => {
 		expect(mounted).toBe(false);
 		expect(disposed).toBe(1);
 		expect(pending!.close()).toBe(false);
-		expect(h.focused()).toBe(h.menus.get("settings"));
+		expect(h.focused()).toBe(h.menus.get("settings")!);
 	});
 
 	it("claims an inline account picker before loading and discards its late result", async () => {
@@ -211,7 +211,7 @@ describe("controller menu timeline", () => {
 		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
 		lookup.resolve(undefined);
 		await loading;
-		expect(h.focused()).toBe(h.menus.get("settings"));
+		expect(h.focused()).toBe(h.menus.get("settings")!);
 		expect(h.overlayStack).toHaveLength(1);
 		expect(h.status).not.toContain("Select a model before pinning a provider account.");
 	});
@@ -237,7 +237,7 @@ describe("controller menu timeline", () => {
 		await Promise.resolve();
 		expect(pending!.close()).toBe(false);
 		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
-		expect(h.focused()).toBe(h.menus.get("settings"));
+		expect(h.focused()).toBe(h.menus.get("settings")!);
 	});
 
 	it("preserves a pending restore across another back and forward before mounting", () => {
@@ -277,7 +277,7 @@ describe("controller menu timeline", () => {
 		expect(h.ctx.editorContainer.children).toEqual([prompt]);
 		expect(h.focused()).toBe(prompt);
 		expect(h.controller.navigateMenuHistory(1)).toBe(true);
-		expect(h.focused()).toBe(h.menus.get("settings"));
+		expect(h.focused()).toBe(h.menus.get("settings")!);
 		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
 		expect(h.focused()).toBe(prompt);
 		expect(h.ctx.editorContainer.children).toEqual([prompt]);
