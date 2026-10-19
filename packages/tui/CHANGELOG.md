@@ -22,6 +22,8 @@
 
 ### Fixed
 
+- IRC replies keep their selected recipient when an earlier send arrives out of order, and expanded messages scroll correctly before repaint ([#1](https://github.com/PsychedelicShayna/neopi/issues/1)).
+- Deferred submissions preserve the operator's live speech, newer composer draft, and attachment ownership, and return refused input for editing ([#222](https://github.com/PsychedelicShayna/neopi/issues/222)).
 - Model role assignments default to global storage; saving to the project now requires an explicit scope selection ([#244](https://github.com/PsychedelicShayna/neopi/issues/244)).
 - Persona clones preserve their prompt mode and file source, previews keep tabs inside their pane, and editing pauses during saves so later changes cannot be silently discarded ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
 - Keep the last usage-bar percentages and their age when a broker-backed refresh returns no report.

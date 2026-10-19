@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import {
 	type BuildHost,
+	buildServiceUrl,
 	fetchBuild,
 	isMuslLinuxForTest,
 	parseBuildAnswer,
@@ -117,15 +118,8 @@ describe("build service targets", () => {
 
 describe("fetchBuild", () => {
 	const host: BuildHost = { target: "macos-arm64", fileName };
-	const previousUrl = process.env.PI_BUILD_URL;
 
-	afterEach(() => {
-		if (previousUrl === undefined) delete process.env.PI_BUILD_URL;
-		else process.env.PI_BUILD_URL = previousUrl;
-	});
-
-	it("asks the configured origin for the channel's newest build, naming the installed version", async () => {
-		process.env.PI_BUILD_URL = "https://build.test/";
+	it("asks for the channel's newest build, naming the installed version", async () => {
 		const requests: Array<{ url: string; userAgent: string | null; signal: AbortSignal | null | undefined }> = [];
 
 		const build = await fetchBuild(
@@ -146,7 +140,7 @@ describe("fetchBuild", () => {
 
 		expect(requests).toHaveLength(1);
 		expect(requests[0].url).toBe(
-			"https://build.test/api/products/omp/latest/macos-arm64?channel=canary&from_version=18.8.8",
+			`${buildServiceUrl()}/api/products/omp/latest/macos-arm64?channel=canary&from_version=18.8.8`,
 		);
 		expect(requests[0].userAgent).toBe(`npi/${VERSION}`);
 		expect(requests[0].signal).toBeInstanceOf(AbortSignal);
@@ -154,7 +148,6 @@ describe("fetchBuild", () => {
 	});
 
 	it("asks for one exact version without a channel", async () => {
-		delete process.env.PI_BUILD_URL;
 		let url = "";
 
 		await fetchBuild(
@@ -168,7 +161,7 @@ describe("fetchBuild", () => {
 			},
 		);
 
-		expect(url).toBe("https://build.stencil.so/api/products/omp/versions/18.8.9/macos-arm64");
+		expect(url).toBe(`${buildServiceUrl()}/api/products/omp/versions/18.8.9/macos-arm64`);
 	});
 
 	it("names the target when nothing is published for it", async () => {
