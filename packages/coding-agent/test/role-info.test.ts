@@ -46,6 +46,7 @@ describe("getRoleInfo", () => {
 		const settings = Settings.isolated({});
 
 		expect(acceptedIds("default", settings)).toEqual(["chat", "explicit-chat", "grounded-chat"]);
+		expect(acceptedIds("deck-inbox", settings)).toEqual(["chat", "explicit-chat", "grounded-chat"]);
 		expect(acceptedIds("tiny", settings)).toEqual(["chat", "explicit-chat", "grounded-chat", "tiny"]);
 		expect(acceptedIds("memory", settings)).toEqual(["chat", "explicit-chat", "grounded-chat", "tiny"]);
 		expect(acceptedIds("image", settings)).toEqual(["image"]);

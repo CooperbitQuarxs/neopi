@@ -9,6 +9,7 @@
 
 ### Added
 
+- Added NeoDeck's `deck-*` role namespace and configurable `deck-inbox` role in the model picker and RPC catalog, defaulting to GPT-6 Luna ([#277](https://github.com/PsychedelicShayna/neopi/issues/277)).
 - Proof sessions can hold destination-specific install locks for up to 60 minutes; installs report active or expired holds and support an explicit force override.
 - Added opt-in agent-visible runtime telemetry, compaction-headroom notices, independent tool-result summaries, and local `runtime.inspect()` in both Eval kernels ([#18](https://github.com/PsychedelicShayna/neopi/issues/18)).
 - Added `/issue <prose>`: a background agent on the new `issues` model role files your words as an issue in the right project's tracker, following that repository's own rules and existing labels, asks in the Agent Hub when the target or scope is unclear, and reports the filed URL, submitted body, and applied labels without interrupting the conversation ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)).
