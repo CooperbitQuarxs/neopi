@@ -1,8 +1,12 @@
-# 0001: Merge only when CI and every review bot's latest round are clean
+# 0001: Original final-head review gate (superseded)
 
-Status: accepted (2026-09-28; manual-request context restored 2026-10-19).
+Status: superseded (2026-10-19) by the owner's one-round, 80% confidence decision.
+[The current merge gate](../pr-review-bots.md#merge-gate) requires a completed
+CODE round and finding dispositions, with integrator assessment of later fixes
+and a mechanical exception for conflict-free base-only merges. The final-head
+requirements below are the historical decision, not current instructions.
 
-## Decision
+## Historical decision
 
 Merge only after CI and the latest required reviewer round on the final head
 are clean, with every finding answered. Rounds are requested manually; a push

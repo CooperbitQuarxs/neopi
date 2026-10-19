@@ -13,7 +13,7 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 - Read `docs/agents/policy.md` before branches, commits, GitHub posts or merges; `docs/agents/` is the agent-policy home.
 
 These repository files make a fresh clone self-contained for any agent harness.
-Code conventions remain below. Review receipts and the final-head CODE gate
+Code conventions remain below. Review receipts and the one-round confidence gate
 are defined in `docs/agents/pr-review-bots.md`.
 
 ## Build and install
@@ -387,5 +387,5 @@ Use the multi-context layout rooted at `CONTEXT-MAP.md`. See
 ### PR review bots
 
 Before requesting review or assessing merge eligibility, read
-`docs/agents/pr-review-bots.md` for current-head CODE receipts, the label
-lifecycle and the owner-head safety rule.
+`docs/agents/pr-review-bots.md` for CODE receipts, post-review fix/base-merge
+assessment, the label lifecycle and the owner-head safety rule.

@@ -84,12 +84,13 @@ writes code. Use one state per actor; distinct actor states can coexist.
 | `review: codex` | Codex reviews this change; reviewer token maps to its login and trigger |
 | `review: requested (codex)` | A Codex round is requested on the current head |
 | `review: open (codex)` | Codex findings are unanswered on the current head |
-| `review: closed (codex)` | Latest current-head round is clean and every finding answered |
-| `review: stalled (codex)` (**proposal**) | Review loop ended unresolved; summary posted |
+| `review: closed (codex)` | Completed recorded round and every finding dispositioned under the review guide's merge gate |
+| `review: stalled (codex)` | Missing/failed round or remaining gate blocker; summary posted |
 | `mergeable` | Meets this repository's documented merge criteria; authority to merge is separate |
 
-`review: codex` is a requirement and composes with one current review-state
-label. A new head invalidates the old head's state and merge eligibility.
+`review: codex` composes with one current review-state label. A new head clears
+stale state and merge eligibility until the review guide's fix assessment or
+base-only comparison re-establishes them; it need not trigger another round.
 A completed actor state or GitHub's no-conflicts flag alone is not `mergeable`.
 The evidence rules are in [pr-review-bots.md](pr-review-bots.md).
 

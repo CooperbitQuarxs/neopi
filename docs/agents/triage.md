@@ -135,7 +135,7 @@ At least daily, reconcile all open issues and PRs, not only new intake. Read
 bodies, review bodies, inline threads and comments; check linked merged work,
 remaining acceptance, claims, estimate provenance, review receipts on the actual
 head and merge criteria. Apply supported deltas; preserve unresolved choices.
-Daily, after fetching origin, list orphan topic branches from `git branch -r --no-merged origin/nightly`, excluding remote HEAD/default/integration refs and branches with an open PR (match the paginated open-PR inventory by head repository and branch).
+Daily, after `git fetch --prune origin`, list orphan topic branches from `git branch -r --no-merged origin/nightly`, excluding remote HEAD/default/integration refs and branches with an open PR (match the paginated open-PR inventory by head repository and branch).
 Use the runtime `commit` role for a bounded triage assignment until a dedicated
 triage role is configured. [issue-tracker.md](issue-tracker.md) has CLI mechanics;
 [issue-funnel.md](issue-funnel.md) governs the publication seat.
