@@ -9,6 +9,7 @@
 
 ### Added
 
+- Added `/issue <prose>`: a background agent on the new `issues` model role files your words as an issue in the right project's tracker, following that repository's own rules and existing labels, asks in the Agent Hub when the target or scope is unclear, and reports the filed URL, submitted body, and applied labels without interrupting the conversation ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)).
 - Added `/defer <duration> <input>` for cancellable delayed composer submissions, including slash commands and ordinary messages; delivery stays with its scheduling conversation across focus changes and asynchronous hooks ([#222](https://github.com/PsychedelicShayna/neopi/issues/222)).
 - Post-processing chain steps can be turned off without deleting them: Space on a step in `/chain configure` toggles it, the setting persists as `enabled: false` in `CHAINS.yml`, and a run skips off steps while keeping the rest in order. Steps saved before this change stay on ([#365](https://github.com/PsychedelicShayna/neopi/issues/365)).
 - Added read-only `npi sessions list/read --json` discovery and `npi ctl pipe` attachment to live sessions for external hosts ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
@@ -39,6 +40,8 @@
 ### Fixed
 
 - Standalone updates ignore project `.env` build origins and configuration-directory redirects, retain launch/user overrides and explicit profiles, and show the selected source for binary updates and package-manager takeovers ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
+- `/issue` never repeats an uncertain create and reports a confirmed URL or an explicit unknown-publication state when GitHub cannot be read ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)).
+- `/issue` checks collaborator repositories' tracker metadata and rejects archived or unverifiable targets before authoring ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)).
 - Control snapshots stay bounded without shortening queue text used to remove or promote pending messages ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 - Live mode confirms Iris-only speech delivery before retiring only that utterance, preserving newer composer input, and stopping during a handoff records the delivered speech only once ([#176](https://github.com/PsychedelicShayna/neopi/issues/176)).
 - Live vocal handoffs steer without cancelling by default, offer queue-for-yield or explicit interrupt delivery, restore queued speech on Esc, and speak the preceding task's answer before a follow-up ([#218](https://github.com/PsychedelicShayna/neopi/issues/218)).

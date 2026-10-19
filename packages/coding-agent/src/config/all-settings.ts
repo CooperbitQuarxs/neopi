@@ -44,6 +44,7 @@ import * as collabSettings from "../collab/settings";
 import * as controlSettings from "../control/settings";
 import * as monitorSettings from "../monitor/settings";
 import * as commandsSettings from "../commands/settings";
+import * as issuesSettings from "../issues/settings";
 import * as chainsSettings from "../chains/settings";
 import * as moaSettings from "../moa/settings";
 import * as streamSettings from "../stream/settings";
@@ -91,6 +92,7 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	controlSettings,
 	monitorSettings,
 	commandsSettings,
+	issuesSettings,
 	chainsSettings,
 	moaSettings,
 	streamSettings,
