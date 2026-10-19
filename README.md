@@ -69,6 +69,38 @@ cp packages/coding-agent/dist/npi ~/.local/bin/npi        # a dedicated npi path
 
 This repository does not prescribe a remote installer or a global package-manager install. The existing package scope and protocol identifiers remain `@oh-my-pi/*`; configuration remains under `~/.omp` unless `PI_CONFIG_DIR` or the documented profile settings select another location.
 
+## GitHub releases
+
+The existing **CI** workflow builds and publishes downloadable binaries on every
+push to `nightly` and `neopi`, including documentation-only pushes. A merge into
+`neopi` publishes a stable release; a `nightly` push publishes a prerelease that
+does not replace the latest stable release. Publishing waits for the binary
+builds and their platform smoke checks, not the unrelated CI validation jobs.
+
+To compile and publish a stable version manually, open **Actions → CI → Run
+workflow**, choose a branch or tag in **Use workflow from**, and run it. That
+selection determines the exact source commit; manual runs are always stable,
+even when selecting `nightly`. The CLI equivalent is:
+
+```sh
+gh workflow run ci.yml --repo PsychedelicShayna/neopi --ref neopi
+```
+
+Tags derive from `packages/coding-agent/package.json`: stable builds use
+`v<version>+build.<run-id>.<attempt>` and nightlies use
+`v<version>-nightly.<short-sha>.<run-id>.<attempt>`. Repeated builds get new tags;
+existing releases and tags are never overwritten or deleted. Release assets
+include all platform binaries, the browser relay extension, legal notices and
+`SHA256SUMS.txt`. The fork publishes to GitHub only, not npm, build.stencil.so or
+the upstream Homebrew tap.
+
+The workflow must reach the default branch before GitHub exposes its manual
+dispatch controls. After the first merge into `nightly`, watch that push's
+**Publish GitHub release** job and check the prerelease's commit and assets.
+After promotion to `neopi`, check that its push publishes a stable release
+marked **Latest**. Builds run in GitHub Actions; a local `./build.sh` does not
+publish a release or change your installed binary automatically.
+
 ## Updating
 
 Run `npi update` for the fork-aware interactive update path. Maintainers integrating upstream releases must use the origin-based worktree and PR procedure in [docs/agents/upstream-sync.md](docs/agents/upstream-sync.md); the remote default branch is the source of truth.
