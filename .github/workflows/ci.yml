@@ -38,12 +38,13 @@ on:
             type: boolean
             default: false
 
-# Supersede stale PR heads and nightly pushes.
-# Unique groups preserve every running and queued neopi push/manual release;
-# disabling cancellation alone would still replace older pending runs.
+# Supersede stale PR heads. Nightly pushes share one group without cancellation:
+# a running nightly build always finishes and publishes its prerelease, and only
+# the newest waiting push replaces older waiting ones.
+# Unique groups preserve every running and queued neopi push/manual release.
 concurrency:
    group: "${{ github.workflow }}-${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/nightly')) && github.ref || github.run_id }}"
-   cancel-in-progress: "${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/nightly') }}"
+   cancel-in-progress: "${{ github.event_name == 'pull_request' }}"
 
 env:
    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
