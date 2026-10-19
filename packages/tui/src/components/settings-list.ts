@@ -13,7 +13,15 @@ import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth, wrapText
 import { ScrollView } from "./scroll-view";
 import { FormField, type FormFieldOptions, type FormFieldTheme, SelectFormField, TextFormField } from "./form";
 import { MenuSelection } from "./menu-selection";
-import { applyMenuMotion, isMenuHistoryParticipant, MenuKeyReader, MenuSearchField, MenuViewport, type MenuNavAction, type MenuViewportPosition } from "./menu-navigation";
+import {
+	applyMenuMotion,
+	isMenuHistoryParticipant,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	type MenuNavAction,
+	type MenuViewportPosition,
+} from "./menu-navigation";
 
 function sanitizeSingleLine(text: string): string {
 	return replaceTabs(text)
@@ -831,8 +839,10 @@ export class SettingsList implements Component {
 	}
 
 	#hintText(): string {
-		return this.#options.hint ??
-			`${editorKey("tui.select.confirm")} edit · ${formatKeyHint("space")} cycle · j/k rows · Ctrl-u/d half page · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Tab sections · / search · ${editorKey("tui.select.cancel")} close`;
+		return (
+			this.#options.hint ??
+			`${editorKey("tui.select.confirm")} edit · ${formatKeyHint("space")} cycle · j/k rows · Ctrl-u/d half page · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Tab sections · / search · ${editorKey("tui.select.cancel")} close`
+		);
 	}
 
 	/** Warning glyph suffix for a row that carries a risk note, or "" when none applies. */
@@ -915,9 +925,7 @@ export class SettingsList implements Component {
 			lines.push(...splitLines);
 		} else {
 			const viewportHeight = Math.min(this.#maxVisible, this.#filteredItems.length);
-			const { startIndex } = this.#viewport.layout(
-				this.#rowCounts, this.#selectedIndex, viewportHeight,
-			);
+			const { startIndex } = this.#viewport.layout(this.#rowCounts, this.#selectedIndex, viewportHeight);
 			const labelWidths = this.#filteredItems
 				.filter(item => !item.heading)
 				.map(item => visibleWidth(item.label + this.#warningMark(item)));
@@ -1032,9 +1040,7 @@ export class SettingsList implements Component {
 		// section's heading row belongs to its dim-exempt range.
 		const activeStart = active.name ? active.firstItemIndex - 1 : active.firstItemIndex;
 		const viewportHeight = Math.min(this.#maxVisible, this.#filteredItems.length);
-		const { startIndex: startRow } = this.#viewport.layout(
-			this.#rowCounts, this.#selectedIndex, viewportHeight,
-		);
+		const { startIndex: startRow } = this.#viewport.layout(this.#rowCounts, this.#selectedIndex, viewportHeight);
 		// Label column width spans all items so the layout stays stable across sections.
 		const labelWidths = this.#filteredItems
 			.filter(item => !item.heading)
@@ -1087,7 +1093,11 @@ export class SettingsList implements Component {
 		// Text fields and nested filters retain literal input and their first
 		// Escape. Escape from a nested menu returns to the settings list.
 		if (this.#submenuComponent) {
-			if (!this.filterFocused && getKeybindings().matches(data, "tui.select.cancel")) {
+			if (
+				!(this.#submenuComponent instanceof FormField) &&
+				!this.filterFocused &&
+				getKeybindings().matches(data, "tui.select.cancel")
+			) {
 				this.#closeSubmenu();
 				return;
 			}
@@ -1104,7 +1114,8 @@ export class SettingsList implements Component {
 	/** Apply a host-decoded root action; focused fields and open submenus receive raw input first. */
 	handleNavigation(action: MenuNavAction): void {
 		this.#keys.reset();
-		if (this.#viewport.top === undefined) this.#viewport.layout(this.#rowCounts, this.#selectedIndex, this.#maxVisible);
+		if (this.#viewport.top === undefined)
+			this.#viewport.layout(this.#rowCounts, this.#selectedIndex, this.#maxVisible);
 		if (action.kind === "search") {
 			if (this.#options.typeToSearch !== false) {
 				this.#search.focused = true;

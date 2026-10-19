@@ -56,7 +56,16 @@ import {
 } from "./hub-frame";
 import type { EditorNavigationState } from "../components/editor";
 import { ScrollView } from "../components/scroll-view";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, menuScrollBy, type MenuNavAction, type MenuSearchState, type MenuViewportPosition } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	menuScrollBy,
+	type MenuNavAction,
+	type MenuSearchState,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 
 /** One agent with its per-agent settings overrides resolved for display. */
 export interface HubAgent {
@@ -155,10 +164,20 @@ interface AgentsHubNavigationSnapshot {
 	sidebarScroll: number;
 	notice: string | null;
 	strip: AgentStripNavigationState | null;
-	assigning?: { agentName: string; property: PropertyKind; browser: unknown; parent: AgentStripNavigationState | null };
+	assigning?: {
+		agentName: string;
+		property: PropertyKind;
+		browser: unknown;
+		parent: AgentStripNavigationState | null;
+	};
 	create?: {
-		description: string; scope: "project" | "user"; editor?: EditorNavigationState;
-		spec: GeneratedAgentSpec | null; error: string | null; preview: unknown; promptCollapsed: boolean;
+		description: string;
+		scope: "project" | "user";
+		editor?: EditorNavigationState;
+		spec: GeneratedAgentSpec | null;
+		error: string | null;
+		preview: unknown;
+		promptCollapsed: boolean;
 	};
 }
 
@@ -310,11 +329,20 @@ export class AgentsHubComponent implements Component {
 		{ min: 16, max: 24 },
 		(width, rows) => {
 			this.#sidebarRowsLast = Math.max(1, rows);
-			const lines = this.#frame.renderSidebar(this.#entries, width, rows,
-				{ id: this.#activeEntryId, focused: this.#focus === "scope", follow: this.#sidebarFollow, clamp: true }, this.#sidebarStyle);
+			const lines = this.#frame.renderSidebar(
+				this.#entries,
+				width,
+				rows,
+				{ id: this.#activeEntryId, focused: this.#focus === "scope", follow: this.#sidebarFollow, clamp: true },
+				this.#sidebarStyle,
+			);
 			this.#sidebarFollow = false;
 			this.#sidebarVisibleItems = 0;
-			for (let index = this.#frame.sidebarScroll; index < Math.min(this.#entries.length, this.#frame.sidebarScroll + rows); index++) {
+			for (
+				let index = this.#frame.sidebarScroll;
+				index < Math.min(this.#entries.length, this.#frame.sidebarScroll + rows);
+				index++
+			) {
 				if (this.#entries[index]?.kind !== "separator") this.#sidebarVisibleItems++;
 			}
 			this.#sidebarVisibleItems = Math.max(1, this.#sidebarVisibleItems);
@@ -347,7 +375,9 @@ export class AgentsHubComponent implements Component {
 		return hub;
 	}
 
-	dispose(): void { this.#createPreview.dispose(); }
+	dispose(): void {
+		this.#createPreview.dispose();
+	}
 	invalidate(): void {
 		this.#nativeVersion++;
 		this.#frame.invalidate();
@@ -434,7 +464,8 @@ export class AgentsHubComponent implements Component {
 			filtered = scoped.filter(agent => matchAgent(agent, tokens));
 		}
 		this.#rows = [...filtered.map(agent => ({ kind: "agent", agent }) as ListRow), { kind: "new" }];
-		if (this.#rowCounts.length !== this.#rows.length) this.#rowCounts = Array.from({ length: this.#rows.length }, () => 1);
+		if (this.#rowCounts.length !== this.#rows.length)
+			this.#rowCounts = Array.from({ length: this.#rows.length }, () => 1);
 	}
 
 	#clampRowIndex(): void {
@@ -786,7 +817,9 @@ export class AgentsHubComponent implements Component {
 			this.#clearCreateFlow();
 			this.#notice = `Created agent ${spec.identifier} at ${shortenPath(filePath)}`;
 			await this.#reload();
-		} finally { this.#pendingOperations--; }
+		} finally {
+			this.#pendingOperations--;
+		}
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -845,7 +878,8 @@ export class AgentsHubComponent implements Component {
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
 		if (action) {
-			if (this.#search.focused && (action.kind === "confirm" || action.kind === "context")) this.#search.focused = false;
+			if (this.#search.focused && (action.kind === "confirm" || action.kind === "context"))
+				this.#search.focused = false;
 			else this.#handleMenuAction(action);
 			this.#requestRender();
 			return;
@@ -856,10 +890,18 @@ export class AgentsHubComponent implements Component {
 	#handleMenuAction(action: MenuNavAction): void {
 		if (this.#focus === "scope") {
 			switch (action.kind) {
-				case "move": this.#moveSidebar(action.delta); return;
-				case "halfPage": this.#moveSidebar(action.delta * Math.max(1, Math.floor(this.#sidebarVisibleItems / 2)), false); return;
-				case "page": this.#moveSidebar(action.delta * this.#sidebarVisibleItems, false); return;
-				case "boundary": this.#selectSidebar(action.edge === "first" ? 0 : this.#scopeEntries.length - 1); return;
+				case "move":
+					this.#moveSidebar(action.delta);
+					return;
+				case "halfPage":
+					this.#moveSidebar(action.delta * Math.max(1, Math.floor(this.#sidebarVisibleItems / 2)), false);
+					return;
+				case "page":
+					this.#moveSidebar(action.delta * this.#sidebarVisibleItems, false);
+					return;
+				case "boundary":
+					this.#selectSidebar(action.edge === "first" ? 0 : this.#scopeEntries.length - 1);
+					return;
 				case "scroll":
 					this.#sidebarFollow = false;
 					this.#frame.scrollSidebar(action.delta, this.#sidebarRowsLast, this.#entries.length);
@@ -867,10 +909,20 @@ export class AgentsHubComponent implements Component {
 			}
 		} else if (applyMenuMotion(action, this.#rowMotion, this.#viewport).handled) return;
 		switch (action.kind) {
-			case "search": this.#search.focused = true; this.#focus = "list"; this.#keys.reset(); return;
-			case "horizontal": this.#focus = action.delta < 0 ? "scope" : "list"; return;
-			case "context": this.#focus = this.#focus === "scope" ? "list" : "scope"; return;
-			case "cancel": this.#callbacks.onCancel(); return;
+			case "search":
+				this.#search.focused = true;
+				this.#focus = "list";
+				this.#keys.reset();
+				return;
+			case "horizontal":
+				this.#focus = action.delta < 0 ? "scope" : "list";
+				return;
+			case "context":
+				this.#focus = this.#focus === "scope" ? "list" : "scope";
+				return;
+			case "cancel":
+				this.#callbacks.onCancel();
+				return;
 			case "confirm":
 				if (this.#focus === "scope") {
 					if (this.#activeEntry().kind === "new") this.#beginCreateFlow();
@@ -923,10 +975,27 @@ export class AgentsHubComponent implements Component {
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
 		switch (action.kind) {
-			case "move": strip.index = (strip.index + action.delta + strip.chips.length) % strip.chips.length; return;
-			case "halfPage": strip.index = Math.max(0, Math.min(strip.chips.length - 1, strip.index + action.delta * Math.max(1, Math.floor(this.#stripVisibleItems / 2)))); return;
-			case "page": strip.index = Math.max(0, Math.min(strip.chips.length - 1, strip.index + action.delta * this.#stripVisibleItems)); return;
-			case "boundary": strip.index = action.edge === "first" ? 0 : strip.chips.length - 1; return;
+			case "move":
+				strip.index = (strip.index + action.delta + strip.chips.length) % strip.chips.length;
+				return;
+			case "halfPage":
+				strip.index = Math.max(
+					0,
+					Math.min(
+						strip.chips.length - 1,
+						strip.index + action.delta * Math.max(1, Math.floor(this.#stripVisibleItems / 2)),
+					),
+				);
+				return;
+			case "page":
+				strip.index = Math.max(
+					0,
+					Math.min(strip.chips.length - 1, strip.index + action.delta * this.#stripVisibleItems),
+				);
+				return;
+			case "boundary":
+				strip.index = action.edge === "first" ? 0 : strip.chips.length - 1;
+				return;
 			case "horizontal":
 				this.#closeStrip();
 				this.#search.focused = false;
@@ -938,7 +1007,9 @@ export class AgentsHubComponent implements Component {
 				this.#focus = this.#focus === "scope" ? "list" : "scope";
 				return;
 			case "confirm":
-			case "toggle": this.#activateStripChip(); return;
+			case "toggle":
+				this.#activateStripChip();
+				return;
 		}
 	}
 
@@ -968,7 +1039,8 @@ export class AgentsHubComponent implements Component {
 					this.#createError = error instanceof Error ? error.message : String(error);
 					this.#requestRender();
 				});
-			} else if (!action && data.toLowerCase() === "r") void this.#generateAgentFromDescription(this.#createDescription);
+			} else if (!action && data.toLowerCase() === "r")
+				void this.#generateAgentFromDescription(this.#createDescription);
 			return;
 		}
 		const editor = this.#createInput;
@@ -1015,8 +1087,13 @@ export class AgentsHubComponent implements Component {
 	#moveSidebar(delta: number, wrap = true): void {
 		const count = this.#scopeEntries.length;
 		if (count === 0) return;
-		const index = Math.max(0, this.#scopeEntries.findIndex(entry => entry.id === this.#activeEntryId));
-		this.#selectSidebar(wrap ? ((index + delta) % count + count) % count : Math.max(0, Math.min(count - 1, index + delta)));
+		const index = Math.max(
+			0,
+			this.#scopeEntries.findIndex(entry => entry.id === this.#activeEntryId),
+		);
+		this.#selectSidebar(
+			wrap ? (((index + delta) % count) + count) % count : Math.max(0, Math.min(count - 1, index + delta)),
+		);
 	}
 
 	#selectSidebar(index: number): void {
@@ -1354,7 +1431,8 @@ export class AgentsHubComponent implements Component {
 		const prefixWidth = visibleWidth(prefix);
 		let start = Math.max(0, Math.min(this.#stripStart, strip.index));
 		let used = prefixWidth + Number(start > 0) * 2;
-		for (let index = start; index <= strip.index; index++) used += visibleWidth(strip.chips[index]!.styled) + 3 + Number(index === strip.index) * 2;
+		for (let index = start; index <= strip.index; index++)
+			used += visibleWidth(strip.chips[index]!.styled) + 3 + Number(index === strip.index) * 2;
 		while (used > width && start < strip.index) {
 			used -= visibleWidth(strip.chips[start]!.styled) + 3;
 			if (start === 0) used += 2;
@@ -1688,7 +1766,10 @@ export class AgentsHubComponent implements Component {
 		} else {
 			children.push(...this.#describeList());
 		}
-		return { ...node("col", { gap: "sm", grow: 1 }, children, "body"), scroll: this.#createSpec ? this.#createNativeScroll : undefined };
+		return {
+			...node("col", { gap: "sm", grow: 1 }, children, "body"),
+			scroll: this.#createSpec ? this.#createNativeScroll : undefined,
+		};
 	}
 
 	#statusSpans(): TspSpan[] {
@@ -1708,8 +1789,25 @@ export class AgentsHubComponent implements Component {
 
 	#describeList(): NativeNode[] {
 		const search = this.#search.focused
-			? node("input", { text: this.#search.value, cursor: this.#search.cursor, prompt: [span("Search: ", "muted")] }, undefined, "search")
-			: node("text", { spans: [this.#search.value ? span(`Search: ${sanitizeDisplaySingleLine(this.#search.value)} · / search`, "muted") : span("/ search", "dim")], truncate: "end" }, undefined, "search");
+			? node(
+					"input",
+					{ text: this.#search.value, cursor: this.#search.cursor, prompt: [span("Search: ", "muted")] },
+					undefined,
+					"search",
+				)
+			: node(
+					"text",
+					{
+						spans: [
+							this.#search.value
+								? span(`Search: ${sanitizeDisplaySingleLine(this.#search.value)} · / search`, "muted")
+								: span("/ search", "dim"),
+						],
+						truncate: "end",
+					},
+					undefined,
+					"search",
+				);
 		const items = this.#rows.map(rowDef =>
 			rowDef.kind === "new"
 				? node("item", { label: [span("+ New agent…", "dim")] }, undefined, listRowId(rowDef))
@@ -1955,16 +2053,32 @@ export class AgentsHubComponent implements Component {
 		];
 	}
 
-	get blocksMenuHistory(): boolean { return this.#createGenerating || this.#pendingOperations > 0; }
+	get blocksMenuHistory(): boolean {
+		return this.#createGenerating || this.#pendingOperations > 0;
+	}
 
-	leaveMenu(): void { this.#keys.reset(); }
+	leaveMenu(): void {
+		this.#keys.reset();
+	}
 
 	#stripSnapshot(): AgentStripNavigationState | null {
 		const strip = this.#strip;
 		if (!strip) return null;
 		return strip.kind === "chips"
-			? { kind: "chips", agentName: strip.agent.name, property: strip.property, index: strip.index, start: this.#stripStart }
-			: { kind: "pattern", agentName: strip.agent.name, property: strip.property, value: strip.input.getValue(), cursor: strip.input.getCursor() };
+			? {
+					kind: "chips",
+					agentName: strip.agent.name,
+					property: strip.property,
+					index: strip.index,
+					start: this.#stripStart,
+				}
+			: {
+					kind: "pattern",
+					agentName: strip.agent.name,
+					property: strip.property,
+					value: strip.input.getValue(),
+					cursor: strip.input.getCursor(),
+				};
 	}
 
 	#restoreStrip(state: AgentStripNavigationState | null): void {
@@ -1975,7 +2089,10 @@ export class AgentsHubComponent implements Component {
 		if (state.kind === "pattern") {
 			this.#openPatternStrip(agent, state.property);
 			const strip = this.#strip;
-			if (strip?.kind === "pattern") { strip.input.setValue(state.value); strip.input.setCursor(state.cursor); }
+			if (strip?.kind === "pattern") {
+				strip.input.setValue(state.value);
+				strip.input.setCursor(state.cursor);
+			}
 		} else {
 			if (state.property) this.#openPropertyStrip(agent, state.property);
 			else this.#openAgentStrip(agent);
@@ -1988,19 +2105,34 @@ export class AgentsHubComponent implements Component {
 	navigationSnapshot(): AgentsHubNavigationSnapshot {
 		const selected = this.#rows[this.#rowIndex];
 		return {
-			entryId: this.#activeEntryId, listScopeId: this.#listScopeId, focus: this.#focus,
+			entryId: this.#activeEntryId,
+			listScopeId: this.#listScopeId,
+			focus: this.#focus,
 			selectedRow: selected ? listRowId(selected) : undefined,
-			search: this.#search.navigationSnapshot(), listViewport: this.#viewport.top,
-			sidebarScroll: this.#frame.sidebarScroll, notice: this.#notice, strip: this.#stripSnapshot(),
-			assigning: this.#assigning ? {
-				agentName: this.#assigning.agent.name, property: this.#assigning.property,
-				browser: this.#browser.navigationSnapshot(), parent: this.#assignParent,
-			} : undefined,
-			create: this.#createActive ? {
-				description: this.#createDescription, scope: this.#createScope, editor: this.#createInput?.getState(),
-				spec: this.#createSpec ? { ...this.#createSpec } : null, error: this.#createError,
-				preview: this.#createPreview.navigationSnapshot(), promptCollapsed: this.#promptCollapsed,
-			} : undefined,
+			search: this.#search.navigationSnapshot(),
+			listViewport: this.#viewport.top,
+			sidebarScroll: this.#frame.sidebarScroll,
+			notice: this.#notice,
+			strip: this.#stripSnapshot(),
+			assigning: this.#assigning
+				? {
+						agentName: this.#assigning.agent.name,
+						property: this.#assigning.property,
+						browser: this.#browser.navigationSnapshot(),
+						parent: this.#assignParent,
+					}
+				: undefined,
+			create: this.#createActive
+				? {
+						description: this.#createDescription,
+						scope: this.#createScope,
+						editor: this.#createInput?.getState(),
+						spec: this.#createSpec ? { ...this.#createSpec } : null,
+						error: this.#createError,
+						preview: this.#createPreview.navigationSnapshot(),
+						promptCollapsed: this.#promptCollapsed,
+					}
+				: undefined,
 		};
 	}
 
@@ -2043,7 +2175,9 @@ export class AgentsHubComponent implements Component {
 				this.#createPreview.restoreNavigation(state.create.preview);
 				this.#promptCollapsed = state.create.promptCollapsed;
 			}
-		} finally { this.#restoringNavigation = false; }
+		} finally {
+			this.#restoringNavigation = false;
+		}
 		this.#requestRender();
 	}
 

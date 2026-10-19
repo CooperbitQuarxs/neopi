@@ -5,14 +5,31 @@ import { GitHelpSheet } from "../src/apps/git/help";
 import type { ChangedFile, GitViewState } from "../src/apps/git/state";
 import { initTheme } from "../src/theme/theme";
 
-beforeAll(async () => { await initTheme(); });
+beforeAll(async () => {
+	await initTheme();
+});
 
 function sidebar(): Sidebar {
 	const model: GitViewState = {
-		cwd: "/repo", branch: "main", clean: false, staged: [], headCommit: null,
-		unstaged: Array.from({ length: 20 }, (_, index): ChangedFile => ({ path: `file-${index}.ts`, kind: "modified", area: "unstaged" })),
+		cwd: "/repo",
+		branch: "main",
+		clean: false,
+		staged: [],
+		headCommit: null,
+		unstaged: Array.from({ length: 20 }, (_, index): ChangedFile => ({
+			path: `file-${index}.ts`,
+			kind: "modified",
+			area: "unstaged",
+		})),
 	};
-	const view = new Sidebar({ model, avatars: { get: () => null }, onSelectFile: () => {}, onAction: () => {}, onFocusDiff: () => {}, requestRender: () => {} });
+	const view = new Sidebar({
+		model,
+		avatars: { get: () => null },
+		onSelectFile: () => {},
+		onAction: () => {},
+		onFocusDiff: () => {},
+		requestRender: () => {},
+	});
 	view.viewStyle = "path";
 	view.reconcile();
 	return view;
@@ -41,7 +58,9 @@ describe("Git menu navigation", () => {
 			expect(view.selected).toEqual(selected);
 			view.handleInput("g");
 			expect(view.selected?.kind).toBe("section");
-		} finally { view.dispose(); }
+		} finally {
+			view.dispose();
+		}
 	});
 
 	it("filters file paths only in the shared search field and retains its query on Escape", () => {
@@ -52,10 +71,15 @@ describe("Git menu navigation", () => {
 			view.handleSearchInput("\x1b");
 			expect(view.search.value).toBe("file-17");
 			expect(view.search.focused).toBe(false);
-			const output = view.render(60, 30).map(line => Bun.stripANSI(line)).join("\n");
+			const output = view
+				.render(60, 30)
+				.map(line => Bun.stripANSI(line))
+				.join("\n");
 			expect(output).toContain("file-17.ts");
 			expect(output).not.toContain("file-16.ts");
-		} finally { view.dispose(); }
+		} finally {
+			view.dispose();
+		}
 	});
 
 	it("restores diff cursor, selection and independent viewport", () => {
@@ -79,7 +103,10 @@ describe("Git menu navigation", () => {
 
 	it("returns from help to its parent with h or Escape", () => {
 		let back = 0;
-		const help = new GitHelpSheet(() => back++, () => back++);
+		const help = new GitHelpSheet(
+			() => back++,
+			() => back++,
+		);
 		help.handleInput("h");
 		expect(back).toBe(1);
 		help.handleInput("\x1b");

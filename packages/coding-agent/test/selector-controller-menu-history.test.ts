@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { SelectorController, type MenuHost, type MenuKind } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
+import {
+	SelectorController,
+	type MenuHost,
+	type MenuKind,
+} from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { SettingsList, type SettingsListTheme } from "@oh-my-pi/pi-tui/components/settings-list";
 import type { Component, OverlayHandle, OverlayOptions, TUI } from "@oh-my-pi/pi-tui";
 import { createInteractiveModeContext, type SessionOverrides } from "./helpers/interactive-mode-context";
@@ -28,7 +32,9 @@ function harness(session?: SessionOverrides) {
 				if (at >= 0) overlayStack.splice(at, 1);
 				focused = entry.preFocus;
 			},
-			setHidden: hidden => { entry.hidden = hidden; },
+			setHidden: hidden => {
+				entry.hidden = hidden;
+			},
 			isHidden: () => entry.hidden,
 		};
 	};
@@ -38,9 +44,13 @@ function harness(session?: SessionOverrides) {
 			overlayStack,
 			showOverlay,
 			getFocused: () => focused,
-			setFocus: component => { focused = component; },
+			setFocus: component => {
+				focused = component;
+			},
 		},
-		showStatus: message => { status.push(message); },
+		showStatus: message => {
+			status.push(message);
+		},
 	});
 	const controller = new SelectorController(ctx);
 	const menus = new Map<MenuKind, SettingsList>();
@@ -54,16 +64,37 @@ function harness(session?: SessionOverrides) {
 			handle.hide();
 			controller.focusActiveEditorArea();
 		};
-		const list = new SettingsList([
-			{ id: "first", label: "First", currentValue: "off", values: ["off", "on"] },
-			{ id: "nested", label: "Nested", currentValue: "", submenu: (_value, done) => new SettingsList([
-				{ id: "a", label: "Alpha", currentValue: "off", values: ["off", "on"] },
-				{ id: "b", label: "Beta", currentValue: "off", values: ["off", "on"] },
-			], 4, theme, () => {}, () => done()) },
-		], 4, theme, () => {}, close);
+		const list = new SettingsList(
+			[
+				{ id: "first", label: "First", currentValue: "off", values: ["off", "on"] },
+				{
+					id: "nested",
+					label: "Nested",
+					currentValue: "",
+					submenu: (_value, done) =>
+						new SettingsList(
+							[
+								{ id: "a", label: "Alpha", currentValue: "off", values: ["off", "on"] },
+								{ id: "b", label: "Beta", currentValue: "off", values: ["off", "on"] },
+							],
+							4,
+							theme,
+							() => {},
+							() => done(),
+						),
+				},
+			],
+			4,
+			theme,
+			() => {},
+			close,
+		);
 		menus.set(kind, list);
 		closes.set(kind, close);
-		host.mount(list, () => { handle = showOverlay(list); return handle; });
+		host.mount(list, () => {
+			handle = showOverlay(list);
+			return handle;
+		});
 	};
 	return { controller, ctx, open, menus, closes, shown, status, overlayStack, showOverlay, focused: () => focused };
 }
@@ -151,7 +182,9 @@ describe("controller menu timeline", () => {
 			invalidate: () => {},
 			navigationSnapshot: () => ({ draft: "safe unsent text" }),
 			restoreNavigation: () => {},
-			leaveMenu: () => { leaves++; },
+			leaveMenu: () => {
+				leaves++;
+			},
 		};
 		host!.mount(external, () => h.showOverlay(external));
 		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
@@ -195,8 +228,16 @@ describe("controller menu timeline", () => {
 		h.open("settings");
 		let disposed = 0;
 		let mounted = false;
-		const delayed: Component = { render: () => [], dispose: () => { disposed++; } };
-		pending!.mount(delayed, () => { mounted = true; return h.showOverlay(delayed); });
+		const delayed: Component = {
+			render: () => [],
+			dispose: () => {
+				disposed++;
+			},
+		};
+		pending!.mount(delayed, () => {
+			mounted = true;
+			return h.showOverlay(delayed);
+		});
 		expect(mounted).toBe(false);
 		expect(disposed).toBe(1);
 		expect(pending!.close()).toBe(false);
@@ -243,7 +284,9 @@ describe("controller menu timeline", () => {
 	it("preserves a pending restore across another back and forward before mounting", () => {
 		const h = harness();
 		let pending: MenuHost | undefined;
-		const reopen = () => { pending = h.controller.openMenu("git", reopen); };
+		const reopen = () => {
+			pending = h.controller.openMenu("git", reopen);
+		};
 		const saved = { query: "retained", selected: "stable-key" };
 		const original = { render: () => [], navigationSnapshot: () => saved, restoreNavigation: () => {} };
 		reopen();
@@ -257,7 +300,9 @@ describe("controller menu timeline", () => {
 		const latest = {
 			render: () => [],
 			navigationSnapshot: () => restored,
-			restoreNavigation: (snapshot: unknown) => { restored = snapshot; },
+			restoreNavigation: (snapshot: unknown) => {
+				restored = snapshot;
+			},
 		};
 		pending!.mount(latest, () => h.showOverlay(latest));
 		expect(restored).toEqual(saved);
@@ -300,7 +345,13 @@ describe("controller menu timeline", () => {
 	it("keeps a focused custom view alive and names the view rather than a prompt", () => {
 		const h = harness();
 		h.open("settings");
-		const view = new SettingsList([], 4, theme, () => {}, () => {});
+		const view = new SettingsList(
+			[],
+			4,
+			theme,
+			() => {},
+			() => {},
+		);
 		h.ctx.hookCustomComponents.add(view);
 		h.showOverlay(view);
 		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
@@ -312,7 +363,13 @@ describe("controller menu timeline", () => {
 	it("keeps an unregistered blocking overlay mounted without changing history", () => {
 		const h = harness();
 		h.open("settings");
-		const prompt = new SettingsList([], 4, theme, () => {}, () => {});
+		const prompt = new SettingsList(
+			[],
+			4,
+			theme,
+			() => {},
+			() => {},
+		);
 		h.showOverlay(prompt);
 		expect(h.controller.navigateMenuHistory(-1)).toBe(true);
 		expect(h.focused()).toBe(prompt);

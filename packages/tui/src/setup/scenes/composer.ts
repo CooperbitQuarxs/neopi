@@ -64,7 +64,12 @@ class ComposerSceneController implements SetupSceneController {
 	handleInput(data: string): void {
 		if (this.#committing) return;
 		const quickIndex = data.length === 1 ? Number(data) - 1 : -1;
-		if (!this.#selectList.filterFocused && Number.isInteger(quickIndex) && quickIndex >= 0 && quickIndex < this.#items.length) {
+		if (
+			!this.#selectList.filterFocused &&
+			Number.isInteger(quickIndex) &&
+			quickIndex >= 0 &&
+			quickIndex < this.#items.length
+		) {
 			this.#selectList.setSelectedIndex(quickIndex);
 			this.#preview(this.#shapes[quickIndex] ?? "band");
 			return;

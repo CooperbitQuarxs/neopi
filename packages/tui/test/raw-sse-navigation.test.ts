@@ -3,10 +3,13 @@ import { RawSseViewerComponent } from "../src/apps/debug/raw-sse";
 import { RawSseDebugBuffer } from "../src/apps/debug/raw-sse-buffer";
 import { initTheme } from "../src/theme/theme";
 
-beforeAll(async () => { await initTheme(); });
+beforeAll(async () => {
+	await initTheme();
+});
 
 function offset(viewer: RawSseViewerComponent): number {
-	return (viewer.navigationSnapshot() as { viewport: { viewport: { scrollOffset: number } } }).viewport.viewport.scrollOffset;
+	return (viewer.navigationSnapshot() as { viewport: { viewport: { scrollOffset: number } } }).viewport.viewport
+		.scrollOffset;
 }
 
 function nativeScroll(viewer: RawSseViewerComponent): unknown {
@@ -16,8 +19,14 @@ function nativeScroll(viewer: RawSseViewerComponent): unknown {
 describe("raw SSE menu navigation", () => {
 	it("supports viewer motions and restores ANSI viewport without substituting native half pages", () => {
 		const buffer = new RawSseDebugBuffer();
-		for (let i = 0; i < 40; i++) buffer.recordEvent({ event: "delta", data: `event-${i}`, raw: [`data: event-${i}`] });
-		const viewer = new RawSseViewerComponent({ buffer, terminalRows: 16, deps: { copyToClipboard() {} }, onExit() {} });
+		for (let i = 0; i < 40; i++)
+			buffer.recordEvent({ event: "delta", data: `event-${i}`, raw: [`data: event-${i}`] });
+		const viewer = new RawSseViewerComponent({
+			buffer,
+			terminalRows: 16,
+			deps: { copyToClipboard() {} },
+			onExit() {},
+		});
 		try {
 			viewer.render(100);
 			const end = offset(viewer);
@@ -41,6 +50,8 @@ describe("raw SSE menu navigation", () => {
 			expect(offset(viewer)).toBe(restored + 1);
 			viewer.handleInput("k");
 			expect(offset(viewer)).toBe(restored);
-		} finally { viewer.dispose(); }
+		} finally {
+			viewer.dispose();
+		}
 	});
 });

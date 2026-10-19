@@ -179,7 +179,8 @@ export class MenuSearchField {
 			kb.matches(data, "tui.select.pageDown") ||
 			kb.matches(data, "tui.select.confirm") ||
 			data === "\n"
-		) return "pass";
+		)
+			return "pass";
 		return this.#input.handleInput(data) ? "edited" : "pass";
 	}
 
@@ -316,7 +317,13 @@ export class MenuViewport {
 		}
 		this.#top = { item: top, lineOffset };
 		this.#lastVisibleItems = Math.max(1, endIndex - top);
-		return { startIndex: top, endIndex, lineOffset, rowOffset: rowsBetween(rowCounts, 0, top) + lineOffset, totalRows };
+		return {
+			startIndex: top,
+			endIndex,
+			lineOffset,
+			rowOffset: rowsBetween(rowCounts, 0, top) + lineOffset,
+			totalRows,
+		};
 	}
 }
 

@@ -4,7 +4,12 @@ import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { Form, SelectFormField, TextFormField } from "@oh-my-pi/pi-tui/components/form";
 import { getSelectListTheme } from "@oh-my-pi/pi-tui/theme/tui-adapters";
 
-const theme = { label: (text: string) => text, description: (text: string) => text, error: (text: string) => text, hint: (text: string) => text };
+const theme = {
+	label: (text: string) => text,
+	description: (text: string) => text,
+	error: (text: string) => text,
+	hint: (text: string) => text,
+};
 
 function field(secret = false): TextFormField {
 	return new TextFormField({ theme, secret, initialValue: "draft", onSubmit: () => {}, onCancel: () => {} });
@@ -16,10 +21,15 @@ describe("form menu history", () => {
 	it("returns a standalone choice's search to its list before canceling the form", () => {
 		let cancelled = 0;
 		const choices = new SelectFormField({
-			theme, items: [{ value: "literal", label: "literal" }, { value: "other", label: "other" }],
+			theme,
+			items: [
+				{ value: "literal", label: "literal" },
+				{ value: "other", label: "other" },
+			],
 			maxVisible: 1,
 			selectTheme: getSelectListTheme(),
-			onSubmit: () => {}, onCancel: () => cancelled++,
+			onSubmit: () => {},
+			onCancel: () => cancelled++,
 		});
 		const form = new Form({ fields: [choices], onCancel: () => cancelled++ });
 		form.handleInput("/");
@@ -50,21 +60,34 @@ describe("form menu history", () => {
 	});
 
 	it("types printable cancel, submit, delete and context bindings literally", () => {
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": ["j", "space"],
-			"tui.input.submit": ["k"],
-			"tui.editor.deleteCharBackward": ["backspace", "h"],
-			"tui.editor.deleteCharForward": ["delete", "/"],
-			"tui.select.nextContext": ["tab", "g"],
-			"tui.select.prevContext": ["shift+tab", "l"],
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": ["j", "space"],
+				"tui.input.submit": ["k"],
+				"tui.editor.deleteCharBackward": ["backspace", "h"],
+				"tui.editor.deleteCharForward": ["delete", "/"],
+				"tui.select.nextContext": ["tab", "g"],
+				"tui.select.prevContext": ["shift+tab", "l"],
+			}),
+		);
 		let submitted = 0;
 		let cancelled = 0;
 		const first = new TextFormField({
-			theme, onSubmit: () => { submitted++; }, onCancel: () => { cancelled++; },
+			theme,
+			onSubmit: () => {
+				submitted++;
+			},
+			onCancel: () => {
+				cancelled++;
+			},
 		});
 		const second = field();
-		const form = new Form({ fields: [first, second], onCancel: () => { cancelled++; } });
+		const form = new Form({
+			fields: [first, second],
+			onCancel: () => {
+				cancelled++;
+			},
+		});
 		form.focused = true;
 		for (const character of "hjklggG / ") form.handleInput(character);
 		expect(first.getValue()).toBe("hjklggG / ");
@@ -79,16 +102,22 @@ describe("form menu history", () => {
 	});
 
 	it("keeps physical submit and cancel on standalone literal text fields", () => {
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": ["j"],
-			"tui.input.submit": ["k"],
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": ["j"],
+				"tui.input.submit": ["k"],
+			}),
+		);
 		const submitted: string[] = [];
 		let cancelled = 0;
 		const text = new TextFormField({
 			theme,
-			onSubmit: value => { submitted.push(value); },
-			onCancel: () => { cancelled++; },
+			onSubmit: value => {
+				submitted.push(value);
+			},
+			onCancel: () => {
+				cancelled++;
+			},
 		});
 		text.handleInput("j");
 		text.handleInput("k");

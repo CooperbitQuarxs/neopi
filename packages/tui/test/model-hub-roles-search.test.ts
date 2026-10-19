@@ -183,7 +183,9 @@ test("nested Roles editor visits capture the parent and restore drafts silently"
 	const hub = createHub();
 	hub.handleNativeEvent(CLICK_ROLES);
 	const visits: { page: string; previous: unknown; next: unknown }[] = [];
-	hub.onNavigationVisit = (page, previous) => { visits.push({ page, previous, next: hub.navigationSnapshot() }); };
+	hub.onNavigationVisit = (page, previous) => {
+		visits.push({ page, previous, next: hub.navigationSnapshot() });
+	};
 	const parent = hub.navigationSnapshot();
 	hub.handleInput("s");
 	expect(visits).toHaveLength(1);

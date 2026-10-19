@@ -61,13 +61,24 @@ import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent, pick
 import { plainText } from "../native/spans";
 import type { OutlineTarget } from "../chat/transcript-outline";
 import { collectBlocks, targetCopy, turnPreview } from "./copy-selector";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, menuScrollBy, type MenuViewportPosition } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	menuScrollBy,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 
 /** Filter mode for tree display */
 type FilterMode = TreeFilterMode;
 
 const FILTER_MODE_KEYS = [
-	["alt+d", "default"], ["alt+t", "no-tools"], ["alt+u", "user-only"], ["alt+l", "labeled-only"], ["alt+a", "all"],
+	["alt+d", "default"],
+	["alt+t", "no-tools"],
+	["alt+u", "user-only"],
+	["alt+l", "labeled-only"],
+	["alt+a", "all"],
 ] as const;
 
 /**
@@ -312,7 +323,9 @@ class TreeList implements Component {
 		}
 	}
 
-	get filterFocused(): boolean { return this.#search.focused; }
+	get filterFocused(): boolean {
+		return this.#search.focused;
+	}
 
 	renderSearch(width: number): string {
 		return this.#search.render(width, { muted: text => theme.fg("dim", text) });
@@ -320,14 +333,23 @@ class TreeList implements Component {
 
 	navigationSnapshot(): unknown {
 		return {
-			search: this.#search.navigationSnapshot(), filterMode: this.#filterMode,
-			selected: this.#tree.selectedKey, collapsed: [...this.#collapsed], top: this.#viewport.top,
+			search: this.#search.navigationSnapshot(),
+			filterMode: this.#filterMode,
+			selected: this.#tree.selectedKey,
+			collapsed: [...this.#collapsed],
+			top: this.#viewport.top,
 		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
-		const state = snapshot as { search?: unknown; filterMode?: string; selected?: string; collapsed?: string[]; top?: MenuViewportPosition | number };
+		const state = snapshot as {
+			search?: unknown;
+			filterMode?: string;
+			selected?: string;
+			collapsed?: string[];
+			top?: MenuViewportPosition | number;
+		};
 		this.#search.restoreNavigation(state.search);
 		const mode = TREE_FILTER_MODES.find(mode => mode === state.filterMode);
 		if (mode) this.#filterMode = mode;
@@ -341,7 +363,9 @@ class TreeList implements Component {
 		this.#keys.reset();
 	}
 
-	leaveMenu(): void { this.#keys.reset(); }
+	leaveMenu(): void {
+		this.#keys.reset();
+	}
 
 	#prepareViewport(): ReturnType<MenuViewport["layout"]> {
 		const rows = this.#tree.rows;
@@ -812,7 +836,12 @@ class TreeList implements Component {
 			this.#pickerItems = {
 				rows: allRows,
 				labels: this.#labelVersion,
-				items: allRows.map(row => this.#pickerItem(row, branchPoints.has(row.key) || row.item.children.length > 1 || this.#collapsed.has(row.key))),
+				items: allRows.map(row =>
+					this.#pickerItem(
+						row,
+						branchPoints.has(row.key) || row.item.children.length > 1 || this.#collapsed.has(row.key),
+					),
+				),
 			};
 		}
 		const rows = this.#tree.rows;
@@ -921,13 +950,24 @@ class TreeList implements Component {
 		) {
 			return memo.node;
 		}
-		const list = { ...node(
-			"list",
-			{ selected: selected ?? null, filter: query || undefined, empty: this.#emptyText(), virtual: true },
-			items.items,
-			"list",
-		), scroll: this.#nativeScroll };
-		this.#listNative = { items: items.items, selected, query, filterMode: this.#filterMode, focused: this.#search.focused, scroll: this.#nativeScroll, node: list };
+		const list = {
+			...node(
+				"list",
+				{ selected: selected ?? null, filter: query || undefined, empty: this.#emptyText(), virtual: true },
+				items.items,
+				"list",
+			),
+			scroll: this.#nativeScroll,
+		};
+		this.#listNative = {
+			items: items.items,
+			selected,
+			query,
+			filterMode: this.#filterMode,
+			focused: this.#search.focused,
+			scroll: this.#nativeScroll,
+			node: list,
+		};
 		return list;
 	}
 
@@ -937,9 +977,7 @@ class TreeList implements Component {
 		if (total === 0) return [span("No entries found", "muted")];
 		const query = this.getSearchQuery();
 		if (query.length > 0) {
-			return [
-				span(`No entries match search "${query}". Edit the search to change results.`, "muted"),
-			];
+			return [span(`No entries match search "${query}". Edit the search to change results.`, "muted")];
 		}
 		const filterLabel = this.#getFilterLabel().trim() || "[default]";
 		return [
@@ -1010,9 +1048,7 @@ class TreeList implements Component {
 				lines.push(truncateToWidth(theme.fg("muted", `(0/0)${this.#getFilterLabel()}`), width));
 			} else if (this.getSearchQuery().length > 0) {
 				lines.push(truncateToWidth(theme.fg("muted", `No entries match search "${this.getSearchQuery()}"`), width));
-				lines.push(
-					truncateToWidth(theme.fg("muted", "Edit the search to change results."), width),
-				);
+				lines.push(truncateToWidth(theme.fg("muted", "Edit the search to change results."), width));
 				lines.push(truncateToWidth(theme.fg("muted", `(0/${totalCount})${this.#getFilterLabel()}`), width));
 			} else {
 				const filterLabel = this.#getFilterLabel().trim() || "[default]";
@@ -1414,9 +1450,12 @@ class TreeList implements Component {
 			!kb.matches(data, "tui.select.up") &&
 			!kb.matches(data, "tui.select.down")
 		) {
-			this.#tree.moveSelectionWhere(node => node.entry.type === "message" &&
-				(node.entry.message.role === "user" || node.entry.message.role === "assistant"),
-				matchesKey(data, "alt+up") ? -1 : 1);
+			this.#tree.moveSelectionWhere(
+				node =>
+					node.entry.type === "message" &&
+					(node.entry.message.role === "user" || node.entry.message.role === "assistant"),
+				matchesKey(data, "alt+up") ? -1 : 1,
+			);
 			this.#viewport.reveal();
 			return;
 		}
@@ -1426,16 +1465,29 @@ class TreeList implements Component {
 			return;
 		}
 		// Preserve the composer's existing legacy LF/Shift-Enter summary path.
-		if (matchesKey(data, "shift+enter") || matchesKey(data, "shift+return") ||
-			data === "\n" || data === "\x1b[13;2~") {
+		if (
+			matchesKey(data, "shift+enter") ||
+			matchesKey(data, "shift+return") ||
+			data === "\n" ||
+			data === "\x1b[13;2~"
+		) {
 			this.confirm(true);
 			return;
 		}
 		for (const [key, mode] of FILTER_MODE_KEYS) {
-			if (matchesKey(data, key)) { this.setFilterMode(mode); return; }
+			if (matchesKey(data, key)) {
+				this.setFilterMode(mode);
+				return;
+			}
 		}
-		if (matchesKey(data, "e")) { this.editLabel(); return; }
-		if (matchesKey(data, "ctrl+c")) { this.onCancel?.(); return; }
+		if (matchesKey(data, "e")) {
+			this.editLabel();
+			return;
+		}
+		if (matchesKey(data, "ctrl+c")) {
+			this.onCancel?.();
+			return;
+		}
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
 		if (action.kind === "search") this.#search.focused = true;
@@ -1538,7 +1590,9 @@ class LabelInput implements Component {
 		lines.push(truncateToWidth(theme.fg("muted", "Label (empty to remove):"), width));
 		lines.push(...this.#input.render(width));
 		const cancel = interruptKey();
-		lines.push(truncateToWidth(theme.fg("dim", `${formatKeyHint("enter")}: save  ${cancel}: back (keep draft)`), width));
+		lines.push(
+			truncateToWidth(theme.fg("dim", `${formatKeyHint("enter")}: save  ${cancel}: back (keep draft)`), width),
+		);
 		return lines;
 	}
 
@@ -1647,14 +1701,23 @@ export class TreeSelectorComponent extends OverlayPanel {
 		this.addChild(new Spacer(1));
 
 		if (tree.length === 0) {
-			this.#emptyTimer = setTimeout(() => { this.#emptyTimer = undefined; onCancel(); }, 100);
+			this.#emptyTimer = setTimeout(() => {
+				this.#emptyTimer = undefined;
+				onCancel();
+			}, 100);
 		}
 	}
 
-	get filterFocused(): boolean { return this.#labelInput !== null || this.#treeList.filterFocused; }
+	get filterFocused(): boolean {
+		return this.#labelInput !== null || this.#treeList.filterFocused;
+	}
 
 	navigationSnapshot(): unknown {
-		return { tree: this.#treeList.navigationSnapshot(), label: this.#labelInput?.navigationSnapshot(), drafts: [...this.#labelDrafts] };
+		return {
+			tree: this.#treeList.navigationSnapshot(),
+			label: this.#labelInput?.navigationSnapshot(),
+			drafts: [...this.#labelDrafts],
+		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {

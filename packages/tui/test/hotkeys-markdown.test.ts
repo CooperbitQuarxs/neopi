@@ -99,14 +99,22 @@ describe("buildHotkeysMarkdown", () => {
 });
 
 describe("hotkeys sheet navigation", () => {
-	beforeAll(async () => { await initTheme(); });
+	beforeAll(async () => {
+		await initTheme();
+	});
 	beforeEach(() => setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS)));
 	afterEach(() => setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS)));
 
 	it("scrolls the ANSI viewer, restores its viewport, and forwards supported native motions", () => {
 		let closed = false;
 		const bindings = { keybindings: { ...noForwardDelete, getDisplayString: () => "Disabled" } };
-		const sheet = new HotkeysSheetComponent(bindings, () => { closed = true; }, () => 14);
+		const sheet = new HotkeysSheetComponent(
+			bindings,
+			() => {
+				closed = true;
+			},
+			() => 14,
+		);
 		sheet.render(80);
 		sheet.handleInput("j");
 		expect(sheet.navigationSnapshot()).toMatchObject({ scrollOffset: 1 });
@@ -116,7 +124,11 @@ describe("hotkeys sheet navigation", () => {
 		expect(sheet.navigationSnapshot()).toMatchObject({ scrollOffset: 6 });
 		expect(sheet.describe().scroll).toBe(nativeBeforeHalf);
 		const saved = sheet.navigationSnapshot();
-		const reopened = new HotkeysSheetComponent(bindings, () => {}, () => 14);
+		const reopened = new HotkeysSheetComponent(
+			bindings,
+			() => {},
+			() => 14,
+		);
 		reopened.restoreNavigation(saved);
 		reopened.render(80);
 		expect(reopened.navigationSnapshot()).toEqual(saved);

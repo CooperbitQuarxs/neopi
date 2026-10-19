@@ -23,7 +23,13 @@ import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { formatKeyHint } from "../app-keybindings";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { renderSegmentTrack } from "../chrome/segment-track";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, menuScrollBy } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	menuScrollBy,
+} from "../components/menu-navigation";
 import { MenuSelection, getMenuWindow } from "../components/menu-selection";
 import type { KeyName } from "../key-hint-format";
 import { node, span } from "../native/describe";
@@ -499,12 +505,18 @@ export class HookSelectorComponent extends OverlayPanel {
 			const selected = this.#menu.selectedItem;
 			if (selected && selectedDescRows > 0) {
 				rowCounts[this.#menu.selectedIndex] = this.#optionRowCount(
-					selected.option, renderWidth, true, mdTheme, selectedDescRows,
+					selected.option,
+					renderWidth,
+					true,
+					mdTheme,
+					selectedDescRows,
 				);
 			}
 		}
 		const { startIndex, endIndex, lineOffset } = this.#viewport.layout(
-			rowCounts, this.#menu.selectedIndex, this.#maxVisible,
+			rowCounts,
+			this.#menu.selectedIndex,
+			this.#maxVisible,
 		);
 
 		for (let i = startIndex; i < endIndex; i++) {
@@ -535,9 +547,10 @@ export class HookSelectorComponent extends OverlayPanel {
 			rows.push({ text: theme.fg("dim", "  No matching options"), highlight: false });
 		}
 
-		const status = startIndex > 0 || endIndex < total || lineOffset > 0 || this.#shouldRenderSearchStatus(renderWidth, mdTheme)
-			? this.#renderStatusLine(total)
-			: undefined;
+		const status =
+			startIndex > 0 || endIndex < total || lineOffset > 0 || this.#shouldRenderSearchStatus(renderWidth, mdTheme)
+				? this.#renderStatusLine(total)
+				: undefined;
 		this.#list.setLines(rows, lineOffset, this.#maxVisible, status);
 	}
 
@@ -663,10 +676,12 @@ export class HookSelectorComponent extends OverlayPanel {
 		} else if (action.kind === "confirm" || action.kind === "toggle") {
 			const selected = this.#menu.selectedItem;
 			if (
-				selected && !this.#menu.isDisabled(selected) &&
+				selected &&
+				!this.#menu.isDisabled(selected) &&
 				(action.kind === "confirm" ||
 					(this.#selectionMarker === "checkbox" && selected.index < this.#markableCount))
-			) this.#onSelectCallback(selected.option.label);
+			)
+				this.#onSelectCallback(selected.option.label);
 		} else if (action.kind === "horizontal" || action.kind === "context") {
 			this.#search.focused = false;
 			if (this.#slider) this.#moveSlider(action.delta);
@@ -785,30 +800,38 @@ export class HookSelectorComponent extends OverlayPanel {
 		for (const filtered of items) {
 			rows.push(this.#describeOption(filtered, filtered === selectedItem, mdTheme));
 		}
-		children.push(
-			{
-				...node(
-					"list",
-					{
-						selected: selectedItem && !this.#menu.isDisabled(selectedItem) ? (selected ?? null) : null,
-						filter: query.trim() || undefined,
-						empty: "No matching options",
-						max: { lines: this.#maxVisible },
-					},
-					rows,
-					"list",
-				),
-				scroll: this.#nativeScroll,
-			},
-		);
+		children.push({
+			...node(
+				"list",
+				{
+					selected: selectedItem && !this.#menu.isDisabled(selectedItem) ? (selected ?? null) : null,
+					filter: query.trim() || undefined,
+					empty: "No matching options",
+					max: { lines: this.#maxVisible },
+				},
+				rows,
+				"list",
+			),
+			scroll: this.#nativeScroll,
+		});
 		if (this.#search.focused) children.push(this.#search.input);
 		else if (query) {
-			children.push(node("text", { spans: [span("Search: ", "dim"), span(query)], wrap: "none" }, undefined, "search"));
+			children.push(
+				node("text", { spans: [span("Search: ", "dim"), span(query)], wrap: "none" }, undefined, "search"),
+			);
 		}
 		children.push(fixed.hints);
 
 		const root = overlayCard(this.nativeRole, countdown ? undefined : fixed.title, children);
-		this.#nativeMemo = { items, selected, query, slider: this.#sliderIndex, countdown, focused: this.#search.focused, node: root };
+		this.#nativeMemo = {
+			items,
+			selected,
+			query,
+			slider: this.#sliderIndex,
+			countdown,
+			focused: this.#search.focused,
+			node: root,
+		};
 		return root;
 	}
 

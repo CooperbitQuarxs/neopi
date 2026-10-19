@@ -91,7 +91,15 @@ import { node, span, stableKey, text } from "../native/describe";
 import { type DescribeContext, leafKey, type NativeChild, type NativeNode, type NativeUiEvent } from "../native/node";
 import { hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { CLOSE_ACTION, picker, pickerQuery } from "../native/picker";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuNavAction, type MenuSearchState, type MenuViewportPosition } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	type MenuNavAction,
+	type MenuSearchState,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 
 /** Two-pane mode needs a useful roster and a readable inspector. */
 const SPLIT_MIN_WIDTH = 96;
@@ -380,11 +388,13 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	readonly #keys = new MenuKeyReader();
 	readonly #rosterMotion = {
 		move: (delta: number) => this.#moveRosterSelection(this.#selectedRow + delta),
-		moveToBoundary: (edge: "first" | "last") => this.#moveRosterSelection(edge === "first" ? 0 : this.#rows.length - 1),
+		moveToBoundary: (edge: "first" | "last") =>
+			this.#moveRosterSelection(edge === "first" ? 0 : this.#rows.length - 1),
 	};
 	readonly #activityMotion = {
 		move: (delta: number) => this.#moveActivitySelection(this.#selectedActivityRow + delta),
-		moveToBoundary: (edge: "first" | "last") => this.#moveActivitySelection(edge === "first" ? 0 : this.#activityRows.length - 1),
+		moveToBoundary: (edge: "first" | "last") =>
+			this.#moveActivitySelection(edge === "first" ? 0 : this.#activityRows.length - 1),
 	};
 	#statusCounts: Record<AgentStatus, number> = { running: 0, idle: 0, parked: 0, aborted: 0 };
 	#selectedRow = 0;
@@ -601,7 +611,10 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	}
 
 	handleInput(keyData: string): void {
-		if (this.#transcriptViewer) { this.#transcriptViewer.handleInput(keyData); return; }
+		if (this.#transcriptViewer) {
+			this.#transcriptViewer.handleInput(keyData);
+			return;
+		}
 		const armedCloseTap = this.#lastLeftTap;
 		this.#disarmCloseTap();
 		if (
@@ -609,7 +622,10 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				if (this.#section === "agents" && (this.#split.mode === "split" || this.#narrowDetailsOpen)) {
 					const frameHit = this.#frame.locate(event.row, event.col);
 					const pane = frameHit?.index === 1 ? this.#split.locate(frameHit.line, frameHit.col) : undefined;
-					if (pane?.pane === "right" && event.wheel !== null) { this.#scrollDetails(event.wheel); return true; }
+					if (pane?.pane === "right" && event.wheel !== null) {
+						this.#scrollDetails(event.wheel);
+						return true;
+					}
 					if (event.wheel === null && frameHit?.index === 1 && pane?.pane !== "left") return false;
 				}
 				return routeSelectListMouse(this, event, event.row);
@@ -639,7 +655,10 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			return;
 		}
 		for (const key of this.#hubKeys) {
-			if (matchesKey(keyData, key)) { this.#onDone(); return; }
+			if (matchesKey(keyData, key)) {
+				this.#onDone();
+				return;
+			}
 		}
 		const action = this.#keys.read(keyData);
 		if (action === "pending") return;
@@ -652,9 +671,15 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			this.#handleMenuAction(action, armedCloseTap);
 			return;
 		}
-		if (keyData === "1" || keyData === "2") { this.#switchSection(keyData === "1" ? "agents" : "activity"); return; }
+		if (keyData === "1" || keyData === "2") {
+			this.#switchSection(keyData === "1" ? "agents" : "activity");
+			return;
+		}
 		if (this.#section === "activity") {
-			if (keyData === "f") this.#setActivityFilter(ACTIVITY_FILTERS[(ACTIVITY_FILTERS.indexOf(this.#activityFilter) + 1) % ACTIVITY_FILTERS.length]!);
+			if (keyData === "f")
+				this.#setActivityFilter(
+					ACTIVITY_FILTERS[(ACTIVITY_FILTERS.indexOf(this.#activityFilter) + 1) % ACTIVITY_FILTERS.length]!,
+				);
 			else if (keyData === "s") this.#cycleActivityScope();
 		} else if (keyData === "t") this.#toggleViewMode();
 		else if (keyData === "r") this.#reviveSelected();
@@ -664,7 +689,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#handleMenuAction(action: MenuNavAction, armedCloseTap: number): void {
 		const activity = this.#section === "activity";
 		if (!activity && this.#narrowDetailsOpen && this.#applyDetailMotion(action)) return;
-		const motion = applyMenuMotion(action, activity ? this.#activityMotion : this.#rosterMotion, activity ? this.#activityViewport : this.#rosterViewport);
+		const motion = applyMenuMotion(
+			action,
+			activity ? this.#activityMotion : this.#rosterMotion,
+			activity ? this.#activityViewport : this.#rosterViewport,
+		);
 		if (motion.handled) {
 			if (activity) this.#activityFollow = false;
 			this.#hoveredRow = null;
@@ -684,12 +713,20 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				if (action.delta > 0) {
 					if (this.#rows.length > 0) this.#narrowDetailsOpen = true;
 				} else if (this.#narrowDetailsOpen) this.#narrowDetailsOpen = false;
-				else if (armedCloseTap > 0 && Date.now() - armedCloseTap < LEFT_TAP_WINDOW_MS) { this.#onDone(); return; }
-				else { this.armCloseTap(); return; }
+				else if (armedCloseTap > 0 && Date.now() - armedCloseTap < LEFT_TAP_WINDOW_MS) {
+					this.#onDone();
+					return;
+				} else {
+					this.armCloseTap();
+					return;
+				}
 				break;
 			case "cancel":
 				if (!activity && this.#narrowDetailsOpen) this.#narrowDetailsOpen = false;
-				else { this.#onDone(); return; }
+				else {
+					this.#onDone();
+					return;
+				}
 				break;
 			case "confirm":
 				if (activity) {
@@ -710,14 +747,21 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#applyDetailMotion(action: MenuNavAction): boolean {
 		switch (action.kind) {
 			case "move":
-			case "scroll": this.#scrollDetails(action.delta); return true;
-			case "halfPage": this.#scrollDetails(action.delta * Math.max(1, Math.floor(this.#detailRowsLast / 2))); return true;
-			case "page": this.#scrollDetails(action.delta * this.#detailRowsLast); return true;
+			case "scroll":
+				this.#scrollDetails(action.delta);
+				return true;
+			case "halfPage":
+				this.#scrollDetails(action.delta * Math.max(1, Math.floor(this.#detailRowsLast / 2)));
+				return true;
+			case "page":
+				this.#scrollDetails(action.delta * this.#detailRowsLast);
+				return true;
 			case "boundary":
 				this.#detailScrollOffset = action.edge === "first" ? 0 : this.#detailMaxScroll;
 				this.#requestRender();
 				return true;
-			default: return false;
+			default:
+				return false;
 		}
 	}
 
@@ -733,7 +777,10 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	armCloseTap(): void {
 		this.#lastLeftTap = Date.now();
 		if (this.#closeTapTimer) clearTimeout(this.#closeTapTimer);
-		this.#closeTapTimer = setTimeout(() => { this.#disarmCloseTap(); this.#requestRender(); }, LEFT_TAP_WINDOW_MS);
+		this.#closeTapTimer = setTimeout(() => {
+			this.#disarmCloseTap();
+			this.#requestRender();
+		}, LEFT_TAP_WINDOW_MS);
 		this.#closeTapTimer.unref?.();
 		this.#requestRender();
 	}
@@ -831,7 +878,10 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	 * what Enter does on that row. Picker actions run the key handlers' paths.
 	 */
 	handleNativeEvent(event: NativeUiEvent): void {
-		if (this.#transcriptViewer) { this.#transcriptViewer.handleNativeEvent(event); return; }
+		if (this.#transcriptViewer) {
+			this.#transcriptViewer.handleNativeEvent(event);
+			return;
+		}
 		this.#disarmCloseTap();
 		if (event.key === "") {
 			this.#handlePickerEvent(event);
@@ -1017,7 +1067,10 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			{ id: "kill", label: "Kill", keys: ["x"], danger: true, disabled: readOnly ?? (selected ? undefined : true) },
 			{ id: "view", label: "By parent", keys: ["t"], on: this.#viewMode === "tree" },
 			{ id: "filter", label: "Filter", keys: ["/"] },
-			{ ...CLOSE_ACTION, label: this.#agentFilter.focused ? "Back to list" : this.#narrowDetailsOpen ? "Back to roster" : "Close" },
+			{
+				...CLOSE_ACTION,
+				label: this.#agentFilter.focused ? "Back to list" : this.#narrowDetailsOpen ? "Back to roster" : "Close",
+			},
 		];
 		return {
 			noun: "agents",
@@ -1266,9 +1319,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				),
 			);
 		} else if (this.#agentFilter.value) {
-			children.push(
-				node("text", { spans: [span(`/${this.#agentFilter.value}`, "accent")] }, undefined, "filter"),
-			);
+			children.push(node("text", { spans: [span(`/${this.#agentFilter.value}`, "accent")] }, undefined, "filter"));
 		}
 		children.push(
 			node(
@@ -1602,12 +1653,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 						undefined,
 						"search",
 					)
-				: text([
-						span(
-							this.#activitySearch.value ? `search: ${this.#activitySearch.value}` : "search: —",
-							"dim",
-						),
-					]),
+				: text([span(this.#activitySearch.value ? `search: ${this.#activitySearch.value}` : "search: —", "dim")]),
 		];
 		const selected = this.#activityRows[this.#selectedActivityRow]?.id ?? null;
 		return [
@@ -1620,10 +1666,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 					virtual: true,
 					grow: 1,
 					empty: [
-						span(
-							this.#activitySearch.value ? "No matching activity" : "No agent activity recorded yet",
-							"muted",
-						),
+						span(this.#activitySearch.value ? "No matching activity" : "No agent activity recorded yet", "muted"),
 					],
 				},
 				this.#activityRows.map(activity => this.#describeActivityItem(activity)),
@@ -1812,7 +1855,8 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		});
 		if (this.#activityFilter === "errors") rows = rows.filter(row => row.status === "error");
 		this.#activityRows = rows;
-		if (this.#activityRowCounts.length !== rows.length) this.#activityRowCounts = Array.from({ length: rows.length }, () => 1);
+		if (this.#activityRowCounts.length !== rows.length)
+			this.#activityRowCounts = Array.from({ length: rows.length }, () => 1);
 		if (rows.length === 0) this.#selectedActivityRow = 0;
 		else if (this.#activityFollow) this.#selectedActivityRow = rows.length - 1;
 		else {
@@ -1861,10 +1905,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const budget = Math.max(0, contentRows - body.length);
 		if (this.#activityRows.length === 0 && budget > 0) {
 			body.push(
-				theme.fg(
-					"muted",
-					this.#activitySearch.value ? "No matching activity" : "No agent activity recorded yet",
-				),
+				theme.fg("muted", this.#activitySearch.value ? "No matching activity" : "No agent activity recorded yet"),
 			);
 		} else if (budget > 0) {
 			const selected = Math.min(this.#selectedActivityRow, this.#activityRows.length - 1);
@@ -1876,7 +1917,13 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				this.#hitRows[1 + body.length] = index;
 				body.push(this.#formatActivityRow(this.#activityRows[index]!, index === selected, innerWidth));
 			}
-			if (overflow) body.push(theme.fg("dim", `↑ ${window.startIndex} earlier${theme.sep.dot}↓ ${this.#activityRows.length - window.endIndex} later`));
+			if (overflow)
+				body.push(
+					theme.fg(
+						"dim",
+						`↑ ${window.startIndex} earlier${theme.sep.dot}↓ ${this.#activityRows.length - window.endIndex} later`,
+					),
+				);
 		}
 		while (body.length < contentRows) body.push("");
 
@@ -1948,15 +1995,23 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	}
 
 	#footer(detailsFocused: boolean, availableWidth: number): string {
-		if (this.#agentFilter.focused) return this.#agentFilter.render(availableWidth, { muted: value => theme.fg("muted", value) });
+		if (this.#agentFilter.focused)
+			return this.#agentFilter.render(availableWidth, { muted: value => theme.fg("muted", value) });
 		const filter = this.#agentFilter.value
 			? `${this.#agentFilter.render(Math.min(34, availableWidth), { muted: value => theme.fg("muted", value) })}${theme.sep.dot}`
 			: "";
 		const close = this.#lastLeftTap > 0 && Date.now() - this.#lastLeftTap < LEFT_TAP_WINDOW_MS ? "←:close  " : "";
 		const motion = availableWidth < 96 ? "j/k Pg gg/G:move" : "j/k Pg C-d/u gg/G:move  C-e/y:view";
-		if (detailsFocused) return theme.fg("dim", `${filter}h/←:roster  ${motion.replace(":move", ":scroll")}  Tab:section  Enter:open  Esc:roster`);
+		if (detailsFocused)
+			return theme.fg(
+				"dim",
+				`${filter}h/←:roster  ${motion.replace(":move", ":scroll")}  Tab:section  Enter:open  Esc:roster`,
+			);
 		const nextView = this.#viewMode === "roster" ? "tree" : "flat";
-		return theme.fg("dim", `${filter}${close}${motion}  h/l:panes  /:filter  Enter:open  t:${nextView}  Tab:section  r/x:manage  Esc:close`);
+		return theme.fg(
+			"dim",
+			`${filter}${close}${motion}  h/l:panes  /:filter  Enter:open  t:${nextView}  Tab:section  r/x:manage  Esc:close`,
+		);
 	}
 
 	#renderRosterPanel(width: number, rows: number, observedById: ReadonlyMap<string, ObservableSession>): RosterRender {
@@ -2015,7 +2070,13 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		// Render only intersecting entries, retaining bounded paint cost for 5,000 agents.
 		for (let index = window.startIndex; index < window.endIndex && lines.length < listRows; index++) {
 			const ref = this.#rows[index]!;
-			const entry = this.#renderEntry(ref, index === this.#selectedRow, width, observedById.get(ref.id) ?? this.#observers.getSession(ref.id), index === this.#hoveredRow);
+			const entry = this.#renderEntry(
+				ref,
+				index === this.#selectedRow,
+				width,
+				observedById.get(ref.id) ?? this.#observers.getSession(ref.id),
+				index === this.#hoveredRow,
+			);
 			const start = index === window.startIndex ? window.lineOffset : 0;
 			for (let line = start; line < entry.length && lines.length < listRows; line++) {
 				lines.push(entry[line]!);
@@ -2023,7 +2084,12 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			}
 		}
 		if (overflow) {
-			lines.push(theme.fg("dim", `↑ ${window.rowOffset} lines above${theme.sep.dot}↓ ${Math.max(0, window.totalRows - window.rowOffset - listRows)} below`));
+			lines.push(
+				theme.fg(
+					"dim",
+					`↑ ${window.rowOffset} lines above${theme.sep.dot}↓ ${Math.max(0, window.totalRows - window.rowOffset - listRows)} below`,
+				),
+			);
 			hitRows.push(undefined);
 		}
 		return { lines, hitRows };
@@ -2370,7 +2436,6 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		this.#requestRender();
 	}
 
-
 	/** Space on the activity log: follow the newest row, or hold the selection. */
 	#toggleActivityFollow(): void {
 		this.#activityFollow = !this.#activityFollow;
@@ -2404,7 +2469,6 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		this.#requestRender();
 	}
 
-
 	/**
 	 * Enter on a row: focus the main view on the agent's live session and close
 	 * the hub. The transcript then renders through the regular session pipeline —
@@ -2428,7 +2492,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			} catch (error) {
 				this.#notice = error instanceof Error ? error.message : String(error);
 				this.#requestRender();
-			} finally { this.#pendingOperations--; }
+			} finally {
+				this.#pendingOperations--;
+			}
 		})();
 	}
 
@@ -2458,7 +2524,10 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			.catch((error: unknown) => {
 				this.#notice = error instanceof Error ? error.message : String(error);
 				this.#requestRender();
-			}).finally(() => { this.#pendingOperations--; });
+			})
+			.finally(() => {
+				this.#pendingOperations--;
+			});
 		this.#requestRender();
 	}
 
@@ -2487,15 +2556,22 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			} catch (error) {
 				logger.warn("Agent hub: kill failed", { id: ref.id, error: String(error) });
 				this.#notice = error instanceof Error ? error.message : String(error);
-			} finally { this.#pendingOperations--; }
+			} finally {
+				this.#pendingOperations--;
+			}
 			this.#refreshRows();
 			this.#requestRender();
 		})();
 	}
 
-	get blocksMenuHistory(): boolean { return this.#pendingOperations > 0 || this.#transcriptViewer?.blocksMenuHistory === true; }
+	get blocksMenuHistory(): boolean {
+		return this.#pendingOperations > 0 || this.#transcriptViewer?.blocksMenuHistory === true;
+	}
 
-	leaveMenu(): void { this.#keys.reset(); this.#disarmCloseTap(); }
+	leaveMenu(): void {
+		this.#keys.reset();
+		this.#disarmCloseTap();
+	}
 
 	navigationSnapshot(): AgentHubNavigationSnapshot {
 		return {
@@ -2503,7 +2579,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			selectedAgentId: this.#rows[this.#selectedRow]?.id,
 			selectedActivityId: this.#activityRows[this.#selectedActivityRow]?.id,
 			viewMode: this.#viewMode,
-			rowOrder: this.#rowOrder ? [...this.#rowOrder].map(([ref, rank]): [string, number] => [ref.id, rank]) : undefined,
+			rowOrder: this.#rowOrder
+				? [...this.#rowOrder].map(([ref, rank]): [string, number] => [ref.id, rank])
+				: undefined,
 			nextNewRowOrder: this.#nextNewRowOrder,
 			agentFilter: this.#agentFilter.navigationSnapshot(),
 			activitySearch: this.#activitySearch.navigationSnapshot(),
@@ -2515,7 +2593,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			detailAgentId: this.#detailAgentId,
 			rosterViewport: this.#rosterViewport.top,
 			activityViewport: this.#activityViewport.top,
-			transcript: this.#transcriptViewer ? { agentId: this.#transcriptViewer.agentId, state: this.#transcriptViewer.navigationSnapshot() } : undefined,
+			transcript: this.#transcriptViewer
+				? { agentId: this.#transcriptViewer.agentId, state: this.#transcriptViewer.navigationSnapshot() }
+				: undefined,
 		};
 	}
 
@@ -2558,7 +2638,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				this.openChat(state.transcript.agentId);
 				this.#transcriptViewer?.restoreNavigation(state.transcript.state);
 			}
-		} finally { this.#restoringNavigation = false; }
+		} finally {
+			this.#restoringNavigation = false;
+		}
 		this.#requestRender();
 	}
 }

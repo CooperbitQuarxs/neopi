@@ -19,22 +19,30 @@ const source: ModelBrowserSource = {
 function browser(): ModelBrowser {
 	const result = new ModelBrowser(source);
 	result.setMaxVisible(6);
-	result.setItems(buildBrowserItems(Array.from({ length: 30 }, (_, index) => buildModel({
-		id: `model-${String(index).padStart(2, "0")}`,
-		name: `Model ${index}`,
-		provider: "test",
-		api: "ollama-chat",
-		baseUrl: "https://example.com",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128_000,
-		maxTokens: 1024,
-	}))));
+	result.setItems(
+		buildBrowserItems(
+			Array.from({ length: 30 }, (_, index) =>
+				buildModel({
+					id: `model-${String(index).padStart(2, "0")}`,
+					name: `Model ${index}`,
+					provider: "test",
+					api: "ollama-chat",
+					baseUrl: "https://example.com",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128_000,
+					maxTokens: 1024,
+				}),
+			),
+		),
+	);
 	return result;
 }
 
-beforeAll(async () => { await initTheme(false); });
+beforeAll(async () => {
+	await initTheme(false);
+});
 
 test("model browser starts in navigation and slash alone focuses literal search", () => {
 	const menu = browser();
@@ -85,7 +93,9 @@ test("model browser viewport scroll never relocates selection", () => {
 test("focused model search retains editing keys and Esc does not close", () => {
 	const menu = browser();
 	let closed = 0;
-	menu.onCancel = () => { closed++; };
+	menu.onCancel = () => {
+		closed++;
+	};
 	menu.handleInput("/");
 	for (const key of "model") menu.handleInput(key);
 	menu.handleInput("\x15");
@@ -114,7 +124,9 @@ test("model navigation restores query, caret, selection, focus and viewport", ()
 test("Space activates a single model without creating preview state", () => {
 	const menu = browser();
 	const picked: string[] = [];
-	menu.onActivate = item => { picked.push(item.selector); };
+	menu.onActivate = item => {
+		picked.push(item.selector);
+	};
 	menu.handleInput(" ");
 	expect(picked).toEqual(["test/model-00"]);
 });

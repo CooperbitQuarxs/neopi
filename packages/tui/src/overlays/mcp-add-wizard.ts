@@ -642,17 +642,15 @@ export class MCPAddWizard extends OverlayPanel {
 				),
 			);
 			// Keyed per step: a double-click's trailing event never lands on the next step's list.
-			children.push(
-				{
-					...node(
-						"list",
-						{ selected: String(this.#selectedIndex), role: "omp.mcpAdd.choices" },
-						items,
-						`choices-${this.#currentStep}`,
-					),
-					scroll: this.#choiceScroll,
-				},
-			);
+			children.push({
+				...node(
+					"list",
+					{ selected: String(this.#selectedIndex), role: "omp.mcpAdd.choices" },
+					items,
+					`choices-${this.#currentStep}`,
+				),
+				scroll: this.#choiceScroll,
+			});
 		}
 		children.push(this.#describeActions(step.actions));
 		// The wizard replaces the editor in the dock; its sheet hoists into the terminal's layer.
@@ -1055,8 +1053,11 @@ export class MCPAddWizard extends OverlayPanel {
 			this.#selectCurrentOption();
 		} else if (
 			this.#choiceList &&
-			(action.kind === "move" || action.kind === "halfPage" || action.kind === "page" ||
-				action.kind === "boundary" || action.kind === "scroll")
+			(action.kind === "move" ||
+				action.kind === "halfPage" ||
+				action.kind === "page" ||
+				action.kind === "boundary" ||
+				action.kind === "scroll")
 		) {
 			this.#choiceList.handleNavigation(action);
 			this.#selectedIndex = Number(this.#choiceList.getSelectedItem()?.value ?? "0");

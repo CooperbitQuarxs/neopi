@@ -2,7 +2,13 @@ import { Container, ScrollView, TruncatedText } from "../index";
 import { theme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuViewportPosition } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { node, span } from "../native/describe";
@@ -73,7 +79,11 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		const items = this.#menu.visibleItems;
 		const total = items.length;
 		const maxVisible = LOGOUT_SELECTOR_MAX_VISIBLE;
-		const { startIndex, endIndex } = this.#viewport.layout(items.map(() => 1), this.#menu.selectedIndex, maxVisible);
+		const { startIndex, endIndex } = this.#viewport.layout(
+			items.map(() => 1),
+			this.#menu.selectedIndex,
+			maxVisible,
+		);
 
 		const rows: string[] = [];
 		for (let i = startIndex; i < endIndex; i++) {
@@ -103,7 +113,9 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", "No stored accounts to log out"), 0, 0));
 		}
 		if (this.#search.focused || this.#menu.query) {
-			this.#listContainer.addChild(new TruncatedText(this.#search.render(72, { muted: text => theme.fg("muted", text) }), 0, 0));
+			this.#listContainer.addChild(
+				new TruncatedText(this.#search.render(72, { muted: text => theme.fg("muted", text) }), 0, 0),
+			);
 		}
 
 		this.#listContainer.addChild(
@@ -119,7 +131,11 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 	}
 
 	navigationSnapshot(): unknown {
-		return { selectedKey: this.#menu.selectedKey, search: this.#search.navigationSnapshot(), viewportTop: this.#viewport.top };
+		return {
+			selectedKey: this.#menu.selectedKey,
+			search: this.#search.navigationSnapshot(),
+			viewportTop: this.#viewport.top,
+		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
@@ -182,7 +198,10 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 				current: this.#accounts.filter(account => account.active).map(account => String(account.credentialId)),
 				selected: this.#menu.selectedKey ?? null,
 				empty: "No stored accounts to log out",
-				actions: [pickerAction("confirm", "Sign out", "enter", { primary: true, danger: true }), { ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" }],
+				actions: [
+					pickerAction("confirm", "Sign out", "enter", { primary: true, danger: true }),
+					{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
+				],
 			});
 			return this.#pickerRoot;
 		}

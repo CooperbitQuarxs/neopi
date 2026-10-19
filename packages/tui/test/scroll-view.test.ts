@@ -9,7 +9,10 @@ const theme = {
 
 describe("ScrollView", () => {
 	it("shares Vim viewer motions and restores scroll independently of content", () => {
-		const view = new ScrollView(Array.from({ length: 30 }, (_, i) => `row-${i}`), { height: 6 });
+		const view = new ScrollView(
+			Array.from({ length: 30 }, (_, i) => `row-${i}`),
+			{ height: 6 },
+		);
 		view.handleScrollKey("j");
 		expect(view.getScrollOffset()).toBe(1);
 		view.handleScrollKey("\x04");

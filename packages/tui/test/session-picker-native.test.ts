@@ -202,7 +202,11 @@ describe("history search picker", () => {
 
 	it("routes the native close action through query focus before closing the history picker", () => {
 		let cancelled = 0;
-		const search = new HistorySearchComponent(source, () => {}, () => cancelled++);
+		const search = new HistorySearchComponent(
+			source,
+			() => {},
+			() => cancelled++,
+		);
 		type(search, "deploy");
 		const sheet = () => (search.describe(withPicker).c as NativeNode[])[0]!;
 		expect(props(sheet()).actions?.find(action => action.id === "close")?.label).toBe("Back to list");

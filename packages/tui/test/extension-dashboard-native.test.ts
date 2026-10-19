@@ -29,7 +29,9 @@ interface Fixture {
 	readonly disabled: string[];
 }
 
-function fixture(extensions: Extension[] = [extension("skill", "alpha", "native"), extension("slash-command", "gamma", "claude")]): Fixture {
+function fixture(
+	extensions: Extension[] = [extension("skill", "alpha", "native"), extension("slash-command", "gamma", "claude")],
+): Fixture {
 	const disabled: string[] = [];
 	const providers: ExtensionProvider[] = [
 		{ id: "native", displayName: "OMP", enabled: true, userSourceEnabled: true, foreignUserSource: false },
@@ -140,7 +142,9 @@ describe("ExtensionDashboard menu navigation", () => {
 		dashboard.render(120);
 		dashboard.handleInput("j");
 		const selected = dashboard.navigationSnapshot().list.selected;
-		expect(describedPicker(dashboard).items?.find(item => item.id === describedPicker(dashboard).selected)?.label).toBe("alpha");
+		expect(
+			describedPicker(dashboard).items?.find(item => item.id === describedPicker(dashboard).selected)?.label,
+		).toBe("alpha");
 		dashboard.handleInput("\x0f");
 		expect(dashboard.navigationSnapshot().inspector.expanded).toBe(false);
 		dashboard.handleInput("\x1be");
@@ -214,9 +218,11 @@ describe("ExtensionDashboard menu navigation", () => {
 		const refreshed = Promise.withResolvers<Extension[]>();
 		let loads = 0;
 		let applies = 0;
-		fx.runtime.loadExtensions = async () => ++loads === 1 ? [server] : refreshed.promise;
+		fx.runtime.loadExtensions = async () => (++loads === 1 ? [server] : refreshed.promise);
 		fx.runtime.persistMcpToggle = () => persisted.promise;
-		fx.runtime.applyMcpToggle = async () => { applies++; };
+		fx.runtime.applyMcpToggle = async () => {
+			applies++;
+		};
 		const dashboard = await ExtensionDashboard.create({ runtime: fx.runtime, terminalHeight: 30 });
 		dashboard.handleInput("G");
 		dashboard.handleInput(" ");

@@ -256,21 +256,34 @@ export class RewindSelectorComponent implements Component {
 		});
 	}
 
-	get filterFocused(): boolean { return this.#search.focused; }
+	get filterFocused(): boolean {
+		return this.#search.focused;
+	}
 
 	navigationSnapshot(): unknown {
 		const column = this.#activeVariant > 0 ? this.#stripColumns()[this.#activeVariant - 1] : undefined;
 		return {
 			selected: this.#targets[this.#selected]?.turnId,
-			variant: column?.rootId, sibling: column?.targets[this.#siblingSelected]?.entryId,
-			search: this.#search.navigationSnapshot(), expanded: this.#expanded, truncated: this.#truncated,
+			variant: column?.rootId,
+			sibling: column?.targets[this.#siblingSelected]?.entryId,
+			search: this.#search.navigationSnapshot(),
+			expanded: this.#expanded,
+			truncated: this.#truncated,
 			viewport: this.#browser.navigationSnapshot(),
 		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
-		const state = snapshot as { selected?: string; variant?: string; sibling?: string; search?: unknown; expanded?: boolean; truncated?: boolean; viewport?: unknown };
+		const state = snapshot as {
+			selected?: string;
+			variant?: string;
+			sibling?: string;
+			search?: unknown;
+			expanded?: boolean;
+			truncated?: boolean;
+			viewport?: unknown;
+		};
 		this.leaveMenu();
 		this.#search.restoreNavigation(state.search);
 		if (typeof state.expanded === "boolean") this.#expanded = state.expanded;
@@ -281,7 +294,8 @@ export class RewindSelectorComponent implements Component {
 			previous.dispose();
 			this.#truncated = entries.length < this.#entries.length;
 		} else this.#builder.setExpanded(this.#expanded);
-		for (const columns of this.#variantCache.values()) for (const column of columns) column.builder.setExpanded(this.#expanded);
+		for (const columns of this.#variantCache.values())
+			for (const column of columns) column.builder.setExpanded(this.#expanded);
 		const selected = this.#targets.findIndex(target => target.turnId === state.selected);
 		if (selected >= 0) this.#selected = selected;
 		this.#activeVariant = 0;
@@ -310,10 +324,15 @@ export class RewindSelectorComponent implements Component {
 	}
 
 	#ensureGeometry(): void {
-		if (!this.#browser.bodyHeight || this.#geometryTargets !== this.#targets ||
-			this.#geometrySelected !== this.#selected || this.#geometryVariant !== this.#activeVariant ||
-			this.#geometrySiblingSelected !== this.#siblingSelected || this.#geometryExpanded !== this.#expanded ||
-			this.#geometryFilter !== this.#filter) {
+		if (
+			!this.#browser.bodyHeight ||
+			this.#geometryTargets !== this.#targets ||
+			this.#geometrySelected !== this.#selected ||
+			this.#geometryVariant !== this.#activeVariant ||
+			this.#geometrySiblingSelected !== this.#siblingSelected ||
+			this.#geometryExpanded !== this.#expanded ||
+			this.#geometryFilter !== this.#filter
+		) {
 			this.render(this.#width || this.deps.ui.terminal?.columns || process.stdout.columns || 80);
 		}
 	}
@@ -329,7 +348,8 @@ export class RewindSelectorComponent implements Component {
 			if (this.#pageEnds[middle]! <= top) first = middle + 1;
 			else end = middle;
 		}
-		const visible = this.#filter !== undefined ? undefined : this.#activeVariant > 0 ? this.#siblingVisible : this.#mainVisible;
+		const visible =
+			this.#filter !== undefined ? undefined : this.#activeVariant > 0 ? this.#siblingVisible : this.#mainVisible;
 		let count = 0;
 		for (let index = first; index < this.#pageStarts.length && this.#pageStarts[index]! < bottom; index++) {
 			if (this.#pageEnds[index]! > this.#pageStarts[index]! && visible?.[index] !== false) count++;
@@ -338,8 +358,12 @@ export class RewindSelectorComponent implements Component {
 	}
 
 	#recordPageGeometry(
-		rows: readonly (readonly string[])[], targets: readonly OutlineTarget[], selected: number,
-		lineOffset = 0, destinationStart = 0, targetCount = targets.length,
+		rows: readonly (readonly string[])[],
+		targets: readonly OutlineTarget[],
+		selected: number,
+		lineOffset = 0,
+		destinationStart = 0,
+		targetCount = targets.length,
 	): void {
 		this.#pageStarts.length = destinationStart + targetCount;
 		this.#pageEnds.length = destinationStart + targetCount;
@@ -356,7 +380,8 @@ export class RewindSelectorComponent implements Component {
 	}
 
 	#boundary(edge: "first" | "last"): void {
-		if (this.#filter === undefined && this.#activeVariant === 0 && edge === "first" && this.#truncated) this.#loadFullHistory(false);
+		if (this.#filter === undefined && this.#activeVariant === 0 && edge === "first" && this.#truncated)
+			this.#loadFullHistory(false);
 		this.#ensureGeometry();
 		if (this.#filter !== undefined) {
 			const matches = this.#filterMatches();
@@ -524,9 +549,18 @@ export class RewindSelectorComponent implements Component {
 			} else this.deps.requestRender();
 			return;
 		}
-		if (matchesKey(data, "f")) { this.#openFilter(); return; }
-		if (matchesAppToolsExpand(data)) { this.#toggleExpanded(); return; }
-		if (data === "a" || data === "A") { this.#loadFullHistory(); return; }
+		if (matchesKey(data, "f")) {
+			this.#openFilter();
+			return;
+		}
+		if (matchesAppToolsExpand(data)) {
+			this.#toggleExpanded();
+			return;
+		}
+		if (data === "a" || data === "A") {
+			this.#loadFullHistory();
+			return;
+		}
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
 		if (!action) {
@@ -612,7 +646,6 @@ export class RewindSelectorComponent implements Component {
 	// ========================================================================
 	// Filter
 	// ========================================================================
-
 
 	/** Leave the field, retaining the query and its filtered projection. */
 	#closeFilter(): void {
@@ -748,7 +781,10 @@ export class RewindSelectorComponent implements Component {
 
 	/** Move inside a column; only a single-row Up may leave a sibling's top. */
 	#moveVertical(delta: number, allowColumnExit = true): void {
-		if (this.#activeVariant === 0) { this.#move(delta); return; }
+		if (this.#activeVariant === 0) {
+			this.#move(delta);
+			return;
+		}
 		const targets = this.#stripColumns()[this.#activeVariant - 1]?.targets ?? [];
 		const direction = delta < 0 ? -1 : 1;
 		let changed = false;
@@ -775,13 +811,21 @@ export class RewindSelectorComponent implements Component {
 		let changed = false;
 		for (let step = 0; step < Math.abs(delta); step++) {
 			let index = this.#selected + direction;
-			while (index >= 0 && index < this.#targets.length &&
-				(!this.#isMainSelectable(index) || (userTurnsOnly && !this.#targets[index]!.isUserTurn))) index += direction;
+			while (
+				index >= 0 &&
+				index < this.#targets.length &&
+				(!this.#isMainSelectable(index) || (userTurnsOnly && !this.#targets[index]!.isUserTurn))
+			)
+				index += direction;
 			if (index < 0 && this.#truncated) {
 				this.#loadFullHistory(false);
 				changed = true;
 				index = this.#selected + direction;
-				while (index >= 0 && (!this.#isMainSelectable(index) || (userTurnsOnly && !this.#targets[index]!.isUserTurn))) index += direction;
+				while (
+					index >= 0 &&
+					(!this.#isMainSelectable(index) || (userTurnsOnly && !this.#targets[index]!.isUserTurn))
+				)
+					index += direction;
 			}
 			if (index < 0 || index >= this.#targets.length) break;
 			this.#selected = index;
@@ -984,10 +1028,21 @@ export class RewindSelectorComponent implements Component {
 					],
 					{ wrap: "none" },
 				),
-				hintsRow(this.#search.focused
-					? [upDown, { keys: ["escape"], label: "back to list" }]
-					: [upDown, { keys: ["h", "l", "left", "right"], label: "user turns" }, { keys: ["/", "f"], label: "search" }, ...NORMAL_MOTION_HINTS]),
-				actionBar([actionButton("Show all", "clear-filter"), actionButton(this.#search.focused ? "Back to list" : "Close", "cancel", { keys: "escape" }), rewind]),
+				hintsRow(
+					this.#search.focused
+						? [upDown, { keys: ["escape"], label: "back to list" }]
+						: [
+								upDown,
+								{ keys: ["h", "l", "left", "right"], label: "user turns" },
+								{ keys: ["/", "f"], label: "search" },
+								...NORMAL_MOTION_HINTS,
+							],
+				),
+				actionBar([
+					actionButton("Show all", "clear-filter"),
+					actionButton(this.#search.focused ? "Back to list" : "Close", "cancel", { keys: "escape" }),
+					rewind,
+				]),
 			];
 		}
 		const root = node("row", { role: "omp.rewind.bar", gap: "md", align: "center", wrap: true }, children);
@@ -1043,7 +1098,8 @@ export class RewindSelectorComponent implements Component {
 			this.#siblingSelected = 0;
 		}
 
-		if (this.#filter !== undefined) return this.#filterFrame(this.#filter, prepared.childRows, contentWidth, chromeWidth);
+		if (this.#filter !== undefined)
+			return this.#filterFrame(this.#filter, prepared.childRows, contentWidth, chromeWidth);
 
 		const columns = this.#stripColumns();
 		if (columns.length === 0) this.#recordPageGeometry(prepared.childRows, this.#targets, this.#selected);
@@ -1080,7 +1136,8 @@ export class RewindSelectorComponent implements Component {
 	#filterFrame(
 		query: string,
 		childRows: readonly (readonly string[])[],
-		contentWidth: number, chromeWidth: number,
+		contentWidth: number,
+		chromeWidth: number,
 	): TranscriptBrowserFrame {
 		const matches = this.#filterMatches();
 		const rows: (readonly string[])[] = [];
@@ -1159,7 +1216,8 @@ export class RewindSelectorComponent implements Component {
 			end: target.end - anchor.start,
 		}));
 		const currentHeader = this.#columnHeader(0, count, "current", colWidth);
-		if (this.#activeVariant === 0) this.#recordPageGeometry(suffixRows, suffixTargets, 0, stripTop + currentHeader.length, this.#selected);
+		if (this.#activeVariant === 0)
+			this.#recordPageGeometry(suffixRows, suffixTargets, 0, stripTop + currentHeader.length, this.#selected);
 		const composedColumns: ComposedColumn[] = [
 			composeOutlineColumn(
 				suffixRows,

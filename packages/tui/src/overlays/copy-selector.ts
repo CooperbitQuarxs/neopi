@@ -392,15 +392,25 @@ export class CopySelectorComponent implements Component {
 
 	navigationSnapshot(): unknown {
 		return {
-			selected: this.#targets[this.#selected]?.turnId, descended: this.#blocks !== undefined,
-			blockSelected: this.#blockSelected, expanded: this.#expanded, truncated: this.#truncated,
+			selected: this.#targets[this.#selected]?.turnId,
+			descended: this.#blocks !== undefined,
+			blockSelected: this.#blockSelected,
+			expanded: this.#expanded,
+			truncated: this.#truncated,
 			viewport: this.#browser.navigationSnapshot(),
 		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
-		const state = snapshot as { selected?: string; descended?: boolean; blockSelected?: number; expanded?: boolean; truncated?: boolean; viewport?: unknown };
+		const state = snapshot as {
+			selected?: string;
+			descended?: boolean;
+			blockSelected?: number;
+			expanded?: boolean;
+			truncated?: boolean;
+			viewport?: unknown;
+		};
 		if (typeof state.expanded === "boolean") this.#expanded = state.expanded;
 		if (typeof state.truncated === "boolean" && state.truncated !== this.#truncated) {
 			const entries = state.truncated ? recentTranscriptEntries(this.#entries) : this.#entries;
@@ -413,7 +423,9 @@ export class CopySelectorComponent implements Component {
 		if (index >= 0) this.#selected = index;
 		const target = this.#targets[this.#selected];
 		this.#blocks = state.descended && target ? this.#blocksFor(target) : undefined;
-		this.#blockSelected = this.#blocks ? Math.max(0, Math.min(this.#blocks.length - 1, Math.trunc(state.blockSelected ?? 0))) : 0;
+		this.#blockSelected = this.#blocks
+			? Math.max(0, Math.min(this.#blocks.length - 1, Math.trunc(state.blockSelected ?? 0)))
+			: 0;
 		this.#visible = undefined;
 		this.#geometryTargets = undefined;
 		this.#nativeScroll = undefined;
@@ -423,12 +435,19 @@ export class CopySelectorComponent implements Component {
 		this.#browser.restoreNavigation(state.viewport);
 	}
 
-	leaveMenu(): void { this.#keys.reset(); }
+	leaveMenu(): void {
+		this.#keys.reset();
+	}
 
 	#ensureGeometry(): void {
-		if (!this.#browser.bodyHeight || this.#geometryTargets !== this.#targets ||
-			this.#geometryBlocks !== this.#blocks || this.#geometrySelected !== this.#selected ||
-			this.#geometryBlockSelected !== this.#blockSelected || this.#geometryExpanded !== this.#expanded) {
+		if (
+			!this.#browser.bodyHeight ||
+			this.#geometryTargets !== this.#targets ||
+			this.#geometryBlocks !== this.#blocks ||
+			this.#geometrySelected !== this.#selected ||
+			this.#geometryBlockSelected !== this.#blockSelected ||
+			this.#geometryExpanded !== this.#expanded
+		) {
 			this.render(this.#width || this.deps.ui.terminal?.columns || process.stdout.columns || 80);
 		}
 	}
@@ -446,7 +465,8 @@ export class CopySelectorComponent implements Component {
 		}
 		let count = 0;
 		for (let index = first; index < this.#pageStarts.length && this.#pageStarts[index]! < bottom; index++) {
-			if (this.#pageEnds[index]! > this.#pageStarts[index]! && (this.#blocks || this.#visible?.[index] !== false)) count++;
+			if (this.#pageEnds[index]! > this.#pageStarts[index]! && (this.#blocks || this.#visible?.[index] !== false))
+				count++;
 		}
 		return Math.max(1, count);
 	}
@@ -563,8 +583,14 @@ export class CopySelectorComponent implements Component {
 			this.deps.requestRender();
 			return;
 		}
-		if ((data === "a" || data === "A") && !this.#blocks) { this.#loadFullHistory(); return; }
-		if (data === "o" || data === "O") { this.#openSelectedBlock(); return; }
+		if ((data === "a" || data === "A") && !this.#blocks) {
+			this.#loadFullHistory();
+			return;
+		}
+		if (data === "o" || data === "O") {
+			this.#openSelectedBlock();
+			return;
+		}
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
 		if (!action) {
@@ -873,9 +899,8 @@ export class CopySelectorComponent implements Component {
 		let hints: (NativeHint | undefined)[];
 		if (this.#blocks && target) {
 			const block = this.#blocks[this.#blockSelected];
-			children.push(
-				row([text([span("‹ back", "accent")], { actions: { click: "back" } })], { gap: "md" }),
-				{ ...node(
+			children.push(row([text([span("‹ back", "accent")], { actions: { click: "back" } })], { gap: "md" }), {
+				...node(
 					"list",
 					{ selected: String(this.#blockSelected), empty: "No blocks" },
 					this.#blocks.map((item, index) => {
@@ -888,8 +913,9 @@ export class CopySelectorComponent implements Component {
 						);
 					}),
 					"blocks",
-				), scroll: this.#nativeScroll },
-			);
+				),
+				scroll: this.#nativeScroll,
+			});
 			if (block) children.push(this.#blockPreview(block, action));
 			hints = [
 				upDown,
@@ -899,14 +925,15 @@ export class CopySelectorComponent implements Component {
 			];
 		} else {
 			const blocks = target ? this.#blocksFor(target) : [];
-			children.push(
-				{ ...node(
+			children.push({
+				...node(
 					"list",
 					{ selected: target?.turnId ?? null, virtual: true, max: 0.5, empty: "Nothing to copy" },
 					this.#transcriptItems(),
 					"list",
-				), scroll: this.#nativeScroll },
-			);
+				),
+				scroll: this.#nativeScroll,
+			});
 			if (target) {
 				const item = targetCopy(target, blocks);
 				const body: NativeChild[] = [turnPreview(target, item.content)];

@@ -172,9 +172,9 @@ export class PsTopComponent implements Component {
 		this.#filteredQuery = this.#search.value;
 		this.#reports = this.#search.value.trim()
 			? this.#sourceReports.map(report => ({
-				...report,
-				daemons: fuzzyFilter(report.daemons, this.#search.value, row => tableCells(row).join(" ")),
-			}))
+					...report,
+					daemons: fuzzyFilter(report.daemons, this.#search.value, row => tableCells(row).join(" ")),
+				}))
 			: this.#sourceReports;
 		this.#flat = this.#reports.flatMap(report => report.daemons.map(row => ({ scope: report.scope, row })));
 		this.#restoreSelection();
@@ -781,9 +781,10 @@ export class PsTopComponent implements Component {
 		});
 		this.#tableView.setLines(display);
 		this.#tableView.setHeight(bodyHeight);
-		this.#tableView.revealRange(selectedLine >= 0
-			? { id: this.#selectedKey ?? "", start: selectedLine, end: selectedLine + 1 }
-			: undefined, width);
+		this.#tableView.revealRange(
+			selectedLine >= 0 ? { id: this.#selectedKey ?? "", start: selectedLine, end: selectedLine + 1 } : undefined,
+			width,
+		);
 
 		const lines = [header, ...this.#tableView.render(width)];
 		while (lines.length < height - footer.length) lines.push("");
@@ -794,7 +795,10 @@ export class PsTopComponent implements Component {
 	#renderInfo(width: number, height: number): string[] {
 		const info = this.#info;
 		const header = this.#header(width, "process info");
-		const footer = this.#footer(width, `j/k scroll · h/l or Tab views · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Esc back · q back`);
+		const footer = this.#footer(
+			width,
+			`j/k scroll · h/l or Tab views · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Esc back · q back`,
+		);
 		const body = [""];
 		if (info) {
 			const daemon = info.daemon;

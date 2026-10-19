@@ -1,6 +1,13 @@
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
 import { MenuSelection } from "./menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuNavAction, type MenuViewportPosition } from "./menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	type MenuNavAction,
+	type MenuViewportPosition,
+} from "./menu-navigation";
 import { getKeybindings } from "../keybindings";
 import { type MouseRoutable, routeSelectListMouse, type SgrMouseEvent } from "../mouse";
 import { col, node, span } from "../native/describe";

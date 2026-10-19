@@ -28,13 +28,15 @@ describe("literal menu field typing", () => {
 	it("keeps printable bindings literal while preserving word undo and Escape", () => {
 		const previous = getKeybindings();
 		try {
-			setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, {
-				"tui.select.cancel": "j",
-				"tui.input.submit": "k",
-				"tui.editor.deleteCharBackward": "l",
-				"tui.select.down": "g",
-				"tui.editor.undo": "ctrl+z",
-			}));
+			setKeybindings(
+				new KeybindingsManager(TUI_KEYBINDINGS, {
+					"tui.select.cancel": "j",
+					"tui.input.submit": "k",
+					"tui.editor.deleteCharBackward": "l",
+					"tui.select.down": "g",
+					"tui.editor.undo": "ctrl+z",
+				}),
+			);
 			const field = new MenuSearchField("", true);
 			for (const key of "jklg/") expect(field.handleInput(key)).toBe("edited");
 			expect(field.value).toBe("jklg/");
@@ -62,7 +64,13 @@ describe("menu viewport visual lines", () => {
 		const view = new MenuViewport();
 		view.layout([3, 3, 3], 0, 4);
 		view.scroll(1);
-		expect(view.layout([3, 3, 3], 0, 4)).toEqual({ startIndex: 0, endIndex: 2, lineOffset: 1, rowOffset: 1, totalRows: 9 });
+		expect(view.layout([3, 3, 3], 0, 4)).toEqual({
+			startIndex: 0,
+			endIndex: 2,
+			lineOffset: 1,
+			rowOffset: 1,
+			totalRows: 9,
+		});
 		const saved = view.top;
 		view.scroll(1);
 		expect(view.layout([3, 3, 3], 0, 4).lineOffset).toBe(2);

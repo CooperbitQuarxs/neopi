@@ -123,11 +123,16 @@ describe("MCP wizard prompt navigation", () => {
 		const connection = Promise.withResolvers<void>();
 		const apiKeyMounted = Promise.withResolvers<void>();
 		const oauth = vi.fn();
-		let wizard: MCPAddWizard;
-		wizard = new MCPAddWizard(
+		const wizard: MCPAddWizard = new MCPAddWizard(
 			{ ...deps, analyzeAuthError: () => ({ requiresAuth: true, authType: "apikey" }) },
-			vi.fn(), vi.fn(), oauth, () => connection.promise,
-			() => { if (title(wizard) === "API key") apiKeyMounted.resolve(); }, "example",
+			vi.fn(),
+			vi.fn(),
+			oauth,
+			() => connection.promise,
+			() => {
+				if (title(wizard) === "API key") apiKeyMounted.resolve();
+			},
+			"example",
 		);
 		wizard.handleInput("j");
 		wizard.handleInput("\r");

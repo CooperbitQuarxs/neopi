@@ -4,7 +4,13 @@ import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
 import { theme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuViewportPosition } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 import { formatUsageResetWindow } from "./usage-display";
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
@@ -142,7 +148,11 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 		const items = this.#menu.visibleItems;
 		const total = items.length;
 		const maxVisible = RESET_SELECTOR_MAX_VISIBLE;
-		const { startIndex, endIndex } = this.#viewport.layout(items.map(() => 1), this.#menu.selectedIndex, maxVisible);
+		const { startIndex, endIndex } = this.#viewport.layout(
+			items.map(() => 1),
+			this.#menu.selectedIndex,
+			maxVisible,
+		);
 
 		const rows: string[] = [];
 		for (let i = startIndex; i < endIndex; i++) {
@@ -188,7 +198,9 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 			);
 		}
 		if (this.#search.focused || this.#menu.query) {
-			this.#listContainer.addChild(new TruncatedText(this.#search.render(72, { muted: text => theme.fg("muted", text) }), 0, 0));
+			this.#listContainer.addChild(
+				new TruncatedText(this.#search.render(72, { muted: text => theme.fg("muted", text) }), 0, 0),
+			);
 		}
 
 		const pending = items.find(item => this.#menu.isPending(item));
@@ -231,7 +243,11 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 	}
 
 	navigationSnapshot(): unknown {
-		return { selectedKey: this.#menu.selectedKey, search: this.#search.navigationSnapshot(), viewportTop: this.#viewport.top };
+		return {
+			selectedKey: this.#menu.selectedKey,
+			search: this.#search.navigationSnapshot(),
+			viewportTop: this.#viewport.top,
+		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
@@ -382,7 +398,10 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 				.map(account => this.#menu.adapter.getKey(account)),
 			selected: this.#menu.selectedKey ?? null,
 			empty: "No provider accounts with saved resets",
-			actions: [pickerAction("confirm", "Spend reset", "enter", { primary: true }), { ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" }],
+			actions: [
+				pickerAction("confirm", "Spend reset", "enter", { primary: true }),
+				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
+			],
 			confirm,
 		});
 		return this.#pickerRoot;

@@ -11,7 +11,14 @@ const ansiTheme: TabBarTheme = {
 
 describe("TabBar", () => {
 	it("switches with h/l and Tab while history restore stays silent", () => {
-		const tabs = new TabBar("", [{ id: "a", label: "A" }, { id: "b", label: "B" }], ansiTheme);
+		const tabs = new TabBar(
+			"",
+			[
+				{ id: "a", label: "A" },
+				{ id: "b", label: "B" },
+			],
+			ansiTheme,
+		);
 		const changes: string[] = [];
 		tabs.onTabChange = tab => changes.push(tab.id);
 		tabs.handleInput("l");

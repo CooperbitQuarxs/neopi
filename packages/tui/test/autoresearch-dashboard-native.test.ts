@@ -154,7 +154,9 @@ describe("autoresearch dashboard sheet", () => {
 			expect(sheet.navigationSnapshot()).toEqual(saved);
 			sheet.handleInput?.("\x05");
 			expect(describeSheet(sheet).scroll?.by).toBe("line-down");
-		} finally { sheet.dispose?.(); }
+		} finally {
+			sheet.dispose?.();
+		}
 	});
 
 	it("keeps the terminal rendering", async () => {

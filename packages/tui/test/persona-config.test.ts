@@ -294,7 +294,9 @@ describe("PersonaConfigOverlayComponent", () => {
 	it("keeps search literal, visits nested pages, and restores a safe field draft", () => {
 		const { overlay, press, saved } = makeOverlay({ entries: [entry("hjkl"), entry("beta")] });
 		const visits: { page: string; previous: unknown }[] = [];
-		overlay.onNavigationVisit = (page, previous) => { visits.push({ page, previous }); };
+		overlay.onNavigationVisit = (page, previous) => {
+			visits.push({ page, previous });
+		};
 		press("/", "hjkl", ESC, ENTER);
 		expect(visits.at(-1)?.page).toBe("detail:0");
 		const detail = overlay.navigationSnapshot();
@@ -337,16 +339,22 @@ describe("PersonaConfigOverlayComponent", () => {
 	});
 
 	it("switches root preview contexts without visits and scrolls only the focused pane", () => {
-		const { overlay, press, frame } = makeOverlay({ entries: [
-			entry("alpha", { content: Array.from({ length: 140 }, (_, index) => `Preview line ${index}`).join("\n") }),
-			entry("beta"),
-		] });
+		const { overlay, press, frame } = makeOverlay({
+			entries: [
+				entry("alpha", { content: Array.from({ length: 140 }, (_, index) => `Preview line ${index}`).join("\n") }),
+				entry("beta"),
+			],
+		});
 		const contentRows = frame().split("\n").length - 5;
 		const list = overlay.navigationSnapshot().content;
 		const visits: string[] = [];
 		overlay.onNavigationVisit = page => visits.push(page);
 		press("l", "j", "\x05");
-		expect(overlay.navigationSnapshot()).toMatchObject({ previewFocused: true, previewScroll: 2, context: { screen: "list" } });
+		expect(overlay.navigationSnapshot()).toMatchObject({
+			previewFocused: true,
+			previewScroll: 2,
+			context: { screen: "list" },
+		});
 		expect(overlay.navigationSnapshot().content).toEqual(list);
 		expect(frame()).toContain("Preview");
 		press("k", "\x19");
@@ -369,8 +377,13 @@ describe("PersonaConfigOverlayComponent", () => {
 		press("\x1b[H");
 		expect(overlay.navigationSnapshot().previewScroll).toBe(0);
 		for (const [key, focused] of [
-			["h", false], ["\t", true], ["\x10", false], ["\x0e", true],
-			["\x1b[Z", false], ["\x1b[C", true], ["\x1b[D", false],
+			["h", false],
+			["\t", true],
+			["\x10", false],
+			["\x0e", true],
+			["\x1b[Z", false],
+			["\x1b[C", true],
+			["\x1b[D", false],
 		] as const) {
 			press(key);
 			expect(overlay.navigationSnapshot().previewFocused).toBe(focused);
@@ -382,8 +395,11 @@ describe("PersonaConfigOverlayComponent", () => {
 	});
 
 	it("retains parent filtering, caret, selection, viewport and preview focus on back and silent restore", () => {
-		const { overlay, press, frame } = makeOverlay({ entries: Array.from({ length: 80 }, (_, index) =>
-			entry(`prefix-${index}`, { content: "Long preview\n".repeat(100) })) });
+		const { overlay, press, frame } = makeOverlay({
+			entries: Array.from({ length: 80 }, (_, index) =>
+				entry(`prefix-${index}`, { content: "Long preview\n".repeat(100) }),
+			),
+		});
 		frame();
 		press("/", "prefix", "\x1b[D", ESC, "G");
 		frame();
@@ -396,11 +412,16 @@ describe("PersonaConfigOverlayComponent", () => {
 		restored.overlay.restoreNavigation(parent);
 		expect(restored.overlay.navigationSnapshot()).toEqual(parent);
 		restored.press("/");
-		expect(restored.overlay.navigationSnapshot()).toMatchObject({ previewFocused: false, content: { filterFocused: true } });
+		expect(restored.overlay.navigationSnapshot()).toMatchObject({
+			previewFocused: false,
+			content: { filterFocused: true },
+		});
 	});
 
 	it("owns gg once and resets the prefix on pane, field, mouse and restore transitions", () => {
-		const { overlay, press, frame } = makeOverlay({ entries: Array.from({ length: 80 }, (_, index) => entry(`entry-${index}`)) });
+		const { overlay, press, frame } = makeOverlay({
+			entries: Array.from({ length: 80 }, (_, index) => entry(`entry-${index}`)),
+		});
 		frame();
 		press("G", "g", "l", "h", "g");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "close" });
@@ -421,21 +442,29 @@ describe("PersonaConfigOverlayComponent", () => {
 	});
 
 	it("keeps remapped printable actions literal in direct Inputs and leaves explicit exits intact", () => {
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": ["escape", "j"],
-			"tui.input.submit": ["enter", "k"],
-			"tui.editor.deleteCharBackward": ["backspace", "h"],
-			"tui.editor.deleteCharForward": ["delete", "/"],
-			"tui.select.nextContext": ["tab", "g"],
-			"tui.select.prevContext": ["shift+tab", "l"],
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": ["escape", "j"],
+				"tui.input.submit": ["enter", "k"],
+				"tui.editor.deleteCharBackward": ["backspace", "h"],
+				"tui.editor.deleteCharForward": ["delete", "/"],
+				"tui.select.nextContext": ["tab", "g"],
+				"tui.select.prevContext": ["shift+tab", "l"],
+			}),
+		);
 		const { overlay, press, saved } = makeOverlay({ entries: [entry("alpha")] });
 		press(ENTER, ENTER, "\x15");
 		for (const character of "hjklggG / ") press(character);
-		expect(overlay.navigationSnapshot()).toMatchObject({ context: { screen: "name" }, content: { value: "hjklggG / " } });
+		expect(overlay.navigationSnapshot()).toMatchObject({
+			context: { screen: "name" },
+			content: { value: "hjklggG / " },
+		});
 		expect(saved).toEqual([]);
 		press(ESC, ENTER, "\x15", "hjkl", ENTER);
-		expect(overlay.navigationSnapshot()).toMatchObject({ context: { screen: "detail" }, doc: { entries: [{ name: "hjkl" }] } });
+		expect(overlay.navigationSnapshot()).toMatchObject({
+			context: { screen: "detail" },
+			doc: { entries: [{ name: "hjkl" }] },
+		});
 	});
 
 	it("captures the pre-delete detail and never treats Space or l as removal approval", () => {
@@ -447,7 +476,11 @@ describe("PersonaConfigOverlayComponent", () => {
 		press(ENTER);
 		expect(overlay.navigationSnapshot().doc.entries.map(item => item.name)).toEqual(["beta"]);
 		const previous = visits.at(-1)?.previous;
-		expect(previous).toMatchObject({ context: { screen: "detail", entryIndex: 0 }, doc: { entries: [{ name: "alpha" }, { name: "beta" }] }, content: { selectedValue: "delete" } });
+		expect(previous).toMatchObject({
+			context: { screen: "detail", entryIndex: 0 },
+			doc: { entries: [{ name: "alpha" }, { name: "beta" }] },
+			content: { selectedValue: "delete" },
+		});
 		const count = visits.length;
 		overlay.restoreNavigation(previous);
 		expect(overlay.navigationSnapshot().doc.entries.map(item => item.name)).toEqual(["alpha", "beta"]);
@@ -473,10 +506,15 @@ describe("PersonaConfigOverlayComponent", () => {
 			Object.defineProperty(process.stdout, "rows", { configurable: true, value: scenario.rows });
 			try {
 				const marker = "PERSONA-LAST-CONTENT";
-				const { overlay, press } = makeOverlay({ entries: [entry("reader", {
-					content: Array.from({ length: scenario.lines }, (_, index) =>
-						index === scenario.lines - 1 ? marker : `Preview line ${index}`).join("\n"),
-				})] });
+				const { overlay, press } = makeOverlay({
+					entries: [
+						entry("reader", {
+							content: Array.from({ length: scenario.lines }, (_, index) =>
+								index === scenario.lines - 1 ? marker : `Preview line ${index}`,
+							).join("\n"),
+						}),
+					],
+				});
 				const initial = overlay.render(100);
 				expect(initial).toHaveLength(Math.max(14, scenario.rows));
 				const contentRows = initial.length - 4 - (scenario.overflows ? 1 : 0);
@@ -484,7 +522,9 @@ describe("PersonaConfigOverlayComponent", () => {
 				const visits: string[] = [];
 				overlay.onNavigationVisit = page => visits.push(page);
 				press("l", "\x04");
-				expect(overlay.navigationSnapshot().previewScroll).toBe(scenario.overflows ? Math.max(1, Math.floor(contentRows / 2)) : 0);
+				expect(overlay.navigationSnapshot().previewScroll).toBe(
+					scenario.overflows ? Math.max(1, Math.floor(contentRows / 2)) : 0,
+				);
 				press("G");
 				const end = overlay.navigationSnapshot().previewScroll;
 				const lastContent = (): string => {

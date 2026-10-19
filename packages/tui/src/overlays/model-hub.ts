@@ -38,7 +38,14 @@ import { hintsRow, type NativeHint } from "../native/overlay";
 import { plainText } from "../native/spans";
 import { isNativeRendering } from "../native/state";
 import { Input } from "../components/input";
-import { applyMenuMotion, MenuKeyReader, type MenuNavAction, MenuSearchField, MenuViewport, type MenuViewportPosition } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	type MenuNavAction,
+	MenuSearchField,
+	MenuViewport,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 import { MenuSelection } from "../components/menu-selection";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../mouse";
 import { truncateToWidth, visibleWidth } from "../utils";
@@ -587,7 +594,10 @@ export class ModelHubComponent implements Component {
 		getSearchText: () => "",
 		isDisabled: entry => entry.kind === "separator",
 	});
-	#effortSelection = new MenuSelection<number>([], { getKey: String, getSearchText: index => this.#effortRowText(index) });
+	#effortSelection = new MenuSelection<number>([], {
+		getKey: String,
+		getSearchText: index => this.#effortRowText(index),
+	});
 	#effortRows: number[] = [];
 	#sidebarVisibleCount = 0;
 	#effortVisibleCount = 0;
@@ -799,7 +809,8 @@ export class ModelHubComponent implements Component {
 			};
 		const snapshot = { ...strip, chips: strip.chips.map(chip => ({ ...chip })) };
 		if ("initialSelection" in snapshot) snapshot.initialSelection = structuredClone(snapshot.initialSelection);
-		if ("fallbackTarget" in snapshot && snapshot.fallbackTarget) snapshot.fallbackTarget = { ...snapshot.fallbackTarget };
+		if ("fallbackTarget" in snapshot && snapshot.fallbackTarget)
+			snapshot.fallbackTarget = { ...snapshot.fallbackTarget };
 		if ("target" in snapshot) snapshot.target = { ...snapshot.target };
 		return snapshot;
 	}
@@ -850,22 +861,35 @@ export class ModelHubComponent implements Component {
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as Partial<ModelHubNavigation>;
 		if (typeof state.entry !== "string" || !state.browser) return;
-		this.#modelKindTab = MODEL_KIND_TABS.includes(state.modelKind ?? "all") ? state.modelKind ?? "all" : "all";
+		this.#modelKindTab = MODEL_KIND_TABS.includes(state.modelKind ?? "all") ? (state.modelKind ?? "all") : "all";
 		this.#roleTab = state.roleTab && ROLE_TABS.includes(state.roleTab) ? state.roleTab : "all";
 		this.#assigning = state.assigning ? { ...state.assigning } : null;
 		this.#rolesSearch.restoreNavigation({ value: state.rolesQuery ?? "", cursor: state.rolesCursor, focused: false });
-		this.#effortSearch.restoreNavigation({ value: state.effortQuery ?? "", cursor: state.effortCursor, focused: false });
+		this.#effortSearch.restoreNavigation({
+			value: state.effortQuery ?? "",
+			cursor: state.effortCursor,
+			focused: false,
+		});
 		this.#buildRolesRows();
 		this.#setActiveEntry(state.entry);
 		this.#browser.restoreNavigation(state.browser);
-		this.#roleIndex = Math.max(0, this.#rolesRows.findIndex((row, index) => rolesRowKey(row, index) === state.roleKey));
+		this.#roleIndex = Math.max(
+			0,
+			this.#rolesRows.findIndex((row, index) => rolesRowKey(row, index) === state.roleKey),
+		);
 		this.#roleLastIndex = this.#roleIndex;
 		this.#roleViewport.setTop(state.roleTop);
 		const rules = this.#settings.effortRules;
-		const effortIndex = state.effortKey === "newExact" ? rules.length
-			: state.effortKey === "newPattern" ? rules.length + 1
-				: state.effortKey?.startsWith("rule:") ? rules.findIndex(rule => `rule:${rule.selector}` === state.effortKey) : -1;
-		this.#effortIndex = effortIndex >= 0 ? effortIndex : Math.max(-1, Math.min(state.effortIndex ?? 0, rules.length + 1));
+		const effortIndex =
+			state.effortKey === "newExact"
+				? rules.length
+				: state.effortKey === "newPattern"
+					? rules.length + 1
+					: state.effortKey?.startsWith("rule:")
+						? rules.findIndex(rule => `rule:${rule.selector}` === state.effortKey)
+						: -1;
+		this.#effortIndex =
+			effortIndex >= 0 ? effortIndex : Math.max(-1, Math.min(state.effortIndex ?? 0, rules.length + 1));
 		this.#syncEffortSelection();
 		this.#effortLastIndex = this.#effortIndex;
 		this.#effortViewport.setTop(state.effortTop);
@@ -878,7 +902,9 @@ export class ModelHubComponent implements Component {
 		this.#pinnedActionFocused = state.pinnedActionFocused === true;
 		this.#configError = state.configError;
 		this.#presetCursor = state.presetCursor ? { ...state.presetCursor } : undefined;
-		this.#parentPages = Array.isArray(state.parents) ? state.parents.map(parent => this.#copyNavigationPage(parent)) : [];
+		this.#parentPages = Array.isArray(state.parents)
+			? state.parents.map(parent => this.#copyNavigationPage(parent))
+			: [];
 		this.#keys.reset();
 		this.#requestRender();
 	}
@@ -887,14 +913,24 @@ export class ModelHubComponent implements Component {
 		const strip = this.#strip;
 		if (strip) {
 			const target = "fallbackTarget" in strip ? strip.fallbackTarget : "target" in strip ? strip.target : undefined;
-			const owner = typeof target === "object" && target && "role" in target ? target.role : "role" in strip ? strip.role ?? "" : "";
-			const slot = typeof target === "object" && target && "index" in target ? target.index ?? "new" : "ruleIndex" in strip ? strip.ruleIndex ?? "" : "";
+			const owner =
+				typeof target === "object" && target && "role" in target
+					? target.role
+					: "role" in strip
+						? (strip.role ?? "")
+						: "";
+			const slot =
+				typeof target === "object" && target && "index" in target
+					? (target.index ?? "new")
+					: "ruleIndex" in strip
+						? (strip.ruleIndex ?? "")
+						: "";
 			const purpose = "purpose" in strip ? strip.purpose : "";
 			return `${this.#activeEntryId}/${strip.kind}/${owner}/${slot}/${purpose}`;
 		}
 		const assigning = this.#assigning;
 		if (assigning)
-			return `assign/${assigning.kind}/${"role" in assigning ? assigning.role : ""}/${"index" in assigning ? assigning.index ?? "new" : ""}`;
+			return `assign/${assigning.kind}/${"role" in assigning ? assigning.role : ""}/${"index" in assigning ? (assigning.index ?? "new") : ""}`;
 		return "";
 	}
 
@@ -1311,8 +1347,15 @@ export class ModelHubComponent implements Component {
 			if (!query) return true;
 			const info = this.#settings.getRoleInfo(role);
 			const assignment = this.#roles[role];
-			return [role, info.name, info.tag, assignment?.model.id, assignment?.model.provider, this.#settings.getModelRole(role), ...(chains[role] ?? [])]
-				.some(value => value?.toLowerCase().includes(query));
+			return [
+				role,
+				info.name,
+				info.tag,
+				assignment?.model.id,
+				assignment?.model.provider,
+				this.#settings.getModelRole(role),
+				...(chains[role] ?? []),
+			].some(value => value?.toLowerCase().includes(query));
 		};
 		const appendRoles = (roles: ReadonlyArray<string>): void => {
 			for (const role of roles) {
@@ -1348,8 +1391,9 @@ export class ModelHubComponent implements Component {
 			}
 		}
 		if (!query) rows.push({ kind: "newFallback" });
-		this.#rolesRows = rows.filter((row, index) =>
-			row.kind !== "separator" || (index > 0 && index < rows.length - 1 && rows[index - 1]?.kind !== "separator"),
+		this.#rolesRows = rows.filter(
+			(row, index) =>
+				row.kind !== "separator" || (index > 0 && index < rows.length - 1 && rows[index - 1]?.kind !== "separator"),
 		);
 		this.#roleIndex = Math.max(0, Math.min(this.#roleIndex, this.#rolesRows.length - 1));
 		if (this.#rolesRows[this.#roleIndex]?.kind === "separator")
@@ -2040,7 +2084,11 @@ export class ModelHubComponent implements Component {
 		this.#effortVisibleCount = window;
 		if (this.#effortIndex !== this.#effortLastIndex) this.#effortViewport.reveal();
 		this.#effortLastIndex = this.#effortIndex;
-		const view = this.#effortViewport.layout(indices.map(() => 1), this.#effortSelection.selectedIndex, window);
+		const view = this.#effortViewport.layout(
+			indices.map(() => 1),
+			this.#effortSelection.selectedIndex,
+			window,
+		);
 		this.#effortScrollStart = view.startIndex;
 		const lines = [
 			theme.fg("muted", " Exact rules win, then regex, then glob — each in listed order"),
@@ -2055,7 +2103,11 @@ export class ModelHubComponent implements Component {
 			const label = this.#effortRowText(index);
 			body.push(truncateToWidth(` ${cursor} ${selected ? theme.fg("accent", label) : label}`, width));
 		}
-		lines.push(...(view.lineOffset === 0 && body.length <= window ? body : body.slice(view.lineOffset, view.lineOffset + window)));
+		lines.push(
+			...(view.lineOffset === 0 && body.length <= window
+				? body
+				: body.slice(view.lineOffset, view.lineOffset + window)),
+		);
 		return lines;
 	}
 
@@ -2736,13 +2788,16 @@ export class ModelHubComponent implements Component {
 			routeSgrMouseInput(rawData, event => {
 				if (!event.leftClick) return this.#routeMouseEvent(event);
 				let handled: boolean | undefined;
-				this.#withNavigationVisit(() => { handled = this.#routeMouseEvent(event); });
+				this.#withNavigationVisit(() => {
+					handled = this.#routeMouseEvent(event);
+				});
 				return handled;
 			});
 			return;
 		}
 		const strip = this.#strip;
-		const fieldFocused = this.#filterEditing || ((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused);
+		const fieldFocused =
+			this.#filterEditing || ((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused);
 		if (fieldFocused && extractPrintableText(rawData) !== undefined) {
 			this.#handleInput(rawData);
 			return;
@@ -2924,7 +2979,11 @@ export class ModelHubComponent implements Component {
 			const rows = this.#sidebarVisibleCount || budget;
 			this.#scopeSelection.setItems(this.#entries, this.#activeEntryId);
 			this.#scopeViewport.setTop(this.#frame.sidebarScroll);
-			this.#scopeViewport.layout(this.#entries.map(() => 1), this.#scopeSelection.selectedIndex, rows);
+			this.#scopeViewport.layout(
+				this.#entries.map(() => 1),
+				this.#scopeSelection.selectedIndex,
+				rows,
+			);
 			const motion = applyMenuMotion(action, this.#scopeSelection, this.#scopeViewport);
 			if (!motion.handled) return false;
 			if (motion.selectionChanged) {
@@ -2934,7 +2993,11 @@ export class ModelHubComponent implements Component {
 					this.#setActiveEntry(entry.id);
 				}
 			}
-			const window = this.#scopeViewport.layout(this.#entries.map(() => 1), this.#scopeSelection.selectedIndex, rows);
+			const window = this.#scopeViewport.layout(
+				this.#entries.map(() => 1),
+				this.#scopeSelection.selectedIndex,
+				rows,
+			);
 			this.#frame.sidebarScroll = window.startIndex;
 			this.#sidebarFollowActive = false;
 			return true;
@@ -2942,7 +3005,11 @@ export class ModelHubComponent implements Component {
 		if (this.#activeEntry().kind === "roles") {
 			this.#roleSelection.setItems(this.#rolesRows);
 			this.#roleSelection.setSelectedIndex(this.#roleIndex);
-			this.#roleViewport.layout(this.#rolesRows.map(() => 1), this.#roleIndex, this.#rolesVisibleCount || budget);
+			this.#roleViewport.layout(
+				this.#rolesRows.map(() => 1),
+				this.#roleIndex,
+				this.#rolesVisibleCount || budget,
+			);
 			const motion = applyMenuMotion(action, this.#roleSelection, this.#roleViewport);
 			if (!motion.handled) return false;
 			this.#roleIndex = this.#roleSelection.selectedIndex;
@@ -2950,7 +3017,11 @@ export class ModelHubComponent implements Component {
 			return true;
 		}
 		const indices = this.#syncEffortSelection();
-		this.#effortViewport.layout(indices.map(() => 1), this.#effortSelection.selectedIndex, this.#effortVisibleCount || budget);
+		this.#effortViewport.layout(
+			indices.map(() => 1),
+			this.#effortSelection.selectedIndex,
+			this.#effortVisibleCount || budget,
+		);
 		const motion = applyMenuMotion(action, this.#effortSelection, this.#effortViewport);
 		if (!motion.handled) return false;
 		this.#effortIndex = this.#effortSelection.selectedItem ?? -1;
@@ -3013,7 +3084,14 @@ export class ModelHubComponent implements Component {
 					if (strip.kind === "name") this.#submitNameStrip();
 					else this.#submitSelectorPattern(strip);
 				} else if (action.kind === "horizontal" || action.kind === "context") {
-					const focus = action.kind === "horizontal" ? (action.delta < 0 ? "scope" : "list") : this.#focus === "scope" ? "list" : "scope";
+					const focus =
+						action.kind === "horizontal"
+							? action.delta < 0
+								? "scope"
+								: "list"
+							: this.#focus === "scope"
+								? "list"
+								: "scope";
 					this.#closeStrip();
 					this.#focus = focus;
 				}
@@ -3033,7 +3111,14 @@ export class ModelHubComponent implements Component {
 		if (!action || action === "pending") return;
 		const effort = strip.kind === "effortLevels" || strip.kind === "thinking" || strip.kind === "patternEffort";
 		if (action.kind === "context" || (action.kind === "horizontal" && !effort)) {
-			const focus = action.kind === "horizontal" ? (action.delta < 0 ? "scope" : "list") : this.#focus === "scope" ? "list" : "scope";
+			const focus =
+				action.kind === "horizontal"
+					? action.delta < 0
+						? "scope"
+						: "list"
+					: this.#focus === "scope"
+						? "list"
+						: "scope";
 			this.#closeStrip();
 			this.#focus = focus;
 			return;
@@ -3067,7 +3152,6 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
-
 	/** Row count of the roles view (roles, their fallback entries, and the trailing "+ New role…" row). */
 	get #rolesRowCount(): number {
 		return this.#rolesRows.length;
@@ -3095,7 +3179,6 @@ export class ModelHubComponent implements Component {
 				return;
 		}
 	}
-
 
 	/** Step the roles cursor by one row, skipping separator rows. Wraps at the ends unless `wrap: false` (then the cursor stays put). */
 	#stepRoleIndex(from: number, delta: -1 | 1, options: { wrap?: boolean } = {}): number {
@@ -3595,7 +3678,11 @@ export class ModelHubComponent implements Component {
 		const viewHeight = overflow ? Math.max(0, capacity - 1) : capacity;
 		if (this.#roleIndex !== this.#roleLastIndex) this.#roleViewport.reveal();
 		this.#roleLastIndex = this.#roleIndex;
-		const view = this.#roleViewport.layout(this.#rolesRows.map(() => 1), this.#roleIndex, Math.max(1, viewHeight));
+		const view = this.#roleViewport.layout(
+			this.#rolesRows.map(() => 1),
+			this.#roleIndex,
+			Math.max(1, viewHeight),
+		);
 		this.#roleScrollStart = view.startIndex;
 		const endIndex = view.endIndex;
 		this.#rolesVisibleCount = Math.min(viewHeight, Math.max(0, endIndex - this.#roleScrollStart - view.lineOffset));
@@ -3706,7 +3793,11 @@ export class ModelHubComponent implements Component {
 			line = this.#finishRolesRow(line, width, hovered);
 			body.push(line);
 		}
-		lines.push(...(view.lineOffset === 0 && body.length <= viewHeight ? body : body.slice(view.lineOffset, view.lineOffset + viewHeight)));
+		lines.push(
+			...(view.lineOffset === 0 && body.length <= viewHeight
+				? body
+				: body.slice(view.lineOffset, view.lineOffset + viewHeight)),
+		);
 
 		if (overflow) {
 			const hiddenAbove = this.#roleScrollStart;
@@ -3785,9 +3876,14 @@ export class ModelHubComponent implements Component {
 
 	#footerHint(): string {
 		const entry = this.#activeEntry();
-		if (!this.#strip && !this.#filterEditing && this.#assigning === null && this.#focus === "scope"
-			&& this.#isBrowserView(entry)
-			&& !(entry.kind === "provider" && this.#pinnedProviders.some(provider => provider.id === entry.providerId)))
+		if (
+			!this.#strip &&
+			!this.#filterEditing &&
+			this.#assigning === null &&
+			this.#focus === "scope" &&
+			this.#isBrowserView(entry) &&
+			!(entry.kind === "provider" && this.#pinnedProviders.some(provider => provider.id === entry.providerId))
+		)
 			return MODEL_SCOPE_HINT;
 		const detail = this.#surfaceFooterHint();
 		if (this.#strip || this.#filterEditing) return detail;
@@ -3814,15 +3910,18 @@ export class ModelHubComponent implements Component {
 				}
 				return `${enter} create + pick model · ${cancel} leave field`;
 			}
-			if (strip.kind === "pattern") return strip.input.focused
-				? `${enter} continue to effort · ${cancel} leave field`
-				: `/ edit · ${enter} continue · ${cancel} parent · h/l pane`;
+			if (strip.kind === "pattern")
+				return strip.input.focused
+					? `${enter} continue to effort · ${cancel} leave field`
+					: `/ edit · ${enter} continue · ${cancel} parent · h/l pane`;
 			if (strip.kind === "effortLevels")
 				return `h/l ${leftRight} effort · ${formatKeyHint("space")} toggle · ${enter} save · ${cancel} discard`;
 			if (strip.kind === "selectorChoice")
 				return `j/k choose exact/pattern · ${enter}/Space set · h/l pane · Tab context · ${cancel} cancel`;
-			if (strip.kind === "role") return `j/k choose role · ${enter} assign/clear · h/l pane · Tab context · ${cancel} cancel`;
-			if (strip.kind === "scope") return `j/k save scope · ${enter}/Space set · h/l pane · Tab context · ${cancel} cancel`;
+			if (strip.kind === "role")
+				return `j/k choose role · ${enter} assign/clear · h/l pane · Tab context · ${cancel} cancel`;
+			if (strip.kind === "scope")
+				return `j/k save scope · ${enter}/Space set · h/l pane · Tab context · ${cancel} cancel`;
 			return `h/l ${leftRight} effort · ${enter}/Space apply · ${cancel} keep`;
 		}
 		if (this.#filterEditing) return "Search · Esc back to list";
@@ -3875,7 +3974,8 @@ export class ModelHubComponent implements Component {
 			const savePreset = this.#callbacks.onSavePreset ? ` · ${formatKeyHint("s")} save preset` : "";
 			const switchPreset =
 				this.#presets().names.length > 0 ? ` · ${formatKeyHints(["ctrl+left", "ctrl+right"])} preset` : "";
-			const yank = row?.kind === "role" && (this.#fallbackChains()[row.role]?.length ?? 0) > 0 ? "yank chain" : "yank model";
+			const yank =
+				row?.kind === "role" && (this.#fallbackChains()[row.role]?.length ?? 0) > 0 ? "yank chain" : "yank model";
 			return `${upDown} rows · ${enter} pick · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} ${yank} · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
 		}
 		if (entry.kind === "provider" && entry.locked) {
@@ -3900,19 +4000,26 @@ export class ModelHubComponent implements Component {
 		return this.#frame.renderFooter(
 			width,
 			this.#footerHint(),
-			strip ? () => {
-				const label = strip.kind === "name" || strip.kind === "pattern"
-					? strip.input.focused ? "Enter set · Esc leave field" : "/ edit · Esc parent"
-					: strip.kind === "effortLevels"
-						? "h/l effort · Space toggle"
-						: strip.kind === "thinking" || strip.kind === "patternEffort"
-							? "h/l effort · Enter set"
-							: "j/k choose · Enter set · h/l pane";
-				const hint = truncateToWidth(label, Math.max(0, width - 36));
-				const columns = Math.max(1, width - visibleWidth(hint) - (hint ? 3 : 0));
-				const line = this.#renderStrip(columns, strip);
-				return hint ? `${line}${" ".repeat(Math.max(0, columns - visibleWidth(line)))} · ${theme.fg("dim", hint)}` : line;
-			} : undefined,
+			strip
+				? () => {
+						const label =
+							strip.kind === "name" || strip.kind === "pattern"
+								? strip.input.focused
+									? "Enter set · Esc leave field"
+									: "/ edit · Esc parent"
+								: strip.kind === "effortLevels"
+									? "h/l effort · Space toggle"
+									: strip.kind === "thinking" || strip.kind === "patternEffort"
+										? "h/l effort · Enter set"
+										: "j/k choose · Enter set · h/l pane";
+						const hint = truncateToWidth(label, Math.max(0, width - 36));
+						const columns = Math.max(1, width - visibleWidth(hint) - (hint ? 3 : 0));
+						const line = this.#renderStrip(columns, strip);
+						return hint
+							? `${line}${" ".repeat(Math.max(0, columns - visibleWidth(line)))} · ${theme.fg("dim", hint)}`
+							: line;
+					}
+				: undefined,
 		);
 	}
 
@@ -4150,9 +4257,23 @@ export class ModelHubComponent implements Component {
 			children.push(...this.#describeRolesView());
 		} else if (entry.kind === "effort" && this.#assigning === null) {
 			const indices = this.#syncEffortSelection();
-			const items = indices.map(index => node("item", { label: this.#effortRowText(index) }, undefined, String(index)));
-			children.push(this.#effortSearch.input.describe());
-			children.push(node("list", { selected: this.#effortIndex < 0 ? null : String(this.#effortIndex), virtual: true, grow: 1, aria: "Effort rules" }, items, "effortRules"));
+			const items = indices.map(index =>
+				node("item", { label: this.#effortRowText(index) }, undefined, String(index)),
+			);
+			children.push(this.#effortSearch.input);
+			children.push(
+				node(
+					"list",
+					{
+						selected: this.#effortIndex < 0 ? null : String(this.#effortIndex),
+						virtual: true,
+						grow: 1,
+						aria: "Effort rules",
+					},
+					items,
+					"effortRules",
+				),
+			);
 		} else if (entry.kind === "provider" && entry.locked && this.#assigning === null) {
 			children.push(this.#describeLockedView(entry));
 		} else {
@@ -4238,7 +4359,7 @@ export class ModelHubComponent implements Component {
 		return node("text", { spans, truncate: "end" }, undefined, "status");
 	}
 
-	#describeRolesView(): NativeNode[] {
+	#describeRolesView(): NativeChild[] {
 		const tabs = node(
 			"row",
 			{ gap: "sm", align: "center" },
@@ -4271,7 +4392,7 @@ export class ModelHubComponent implements Component {
 			items,
 			"roles",
 		);
-		return [tabs, this.#rolesSearch.input.describe(), list, this.#describeCycle(cycleOrder)];
+		return [tabs, this.#rolesSearch.input, list, this.#describeCycle(cycleOrder)];
 	}
 
 	#describeRolesRow(rowDef: RolesRow, index: number, cycleOrder: readonly string[]): NativeNode {
@@ -4423,17 +4544,28 @@ export class ModelHubComponent implements Component {
 		const lockedView = entry.kind === "provider" && entry.locked === true && this.#assigning === null;
 		const strip = this.#strip;
 		const subtitle = this.#pickerSubtitle(entry, rolesView);
-		const navigation = strip || this.#filterEditing ? this.#surfaceFooterHint()
-			: this.#focus === "scope" ? this.#footerHint() : "j/k rows · h/l pane · / search · gg/G ends · Ctrl-u/d half";
+		const navigation =
+			strip || this.#filterEditing
+				? this.#surfaceFooterHint()
+				: this.#focus === "scope"
+					? this.#footerHint()
+					: "j/k rows · h/l pane · / search · gg/G ends · Ctrl-u/d half";
 		const props: TspPickerProps = {
 			title: "Models",
-			subtitle: [...(typeof subtitle === "string" ? [span(subtitle)] : subtitle ?? []), span(` · ${plainText(navigation)}`, "dim")],
+			subtitle: [
+				...(typeof subtitle === "string" ? [span(subtitle)] : (subtitle ?? [])),
+				span(` · ${plainText(navigation)}`, "dim"),
+			],
 			icon: "cpu",
 			noun: rolesView ? "roles" : "models",
 			size: "lg",
 			layout: "rows",
 			preview: "side",
-			query: rolesView ? (this.#rolesSearch.value || this.#filterEditing ? this.#rolesSearch.value : null) : this.#browser.query,
+			query: rolesView
+				? this.#rolesSearch.value || this.#filterEditing
+					? this.#rolesSearch.value
+					: null
+				: this.#browser.query,
 			cursor: rolesView ? this.#rolesSearch.cursor : this.#browser.cursor,
 			placeholder: rolesView ? "Search roles and fallback chains…" : "/ search models…",
 			scopes: this.#pickerScopes(),
@@ -4455,25 +4587,32 @@ export class ModelHubComponent implements Component {
 				{ id: `effort:${rules.length}`, label: "Pick exact model…", icon: "plus" },
 				{ id: `effort:${rules.length + 1}`, label: "Enter glob or re: regex…", icon: "plus" },
 			);
-			return picker({
-				...props,
-				noun: "rules",
-				query: this.#effortSearch.value,
-				cursor: this.#effortSearch.cursor,
-				placeholder: "Search effort rules…",
-				items,
-				order: indices.map(index => `effort:${index}`),
-				selected: this.#effortIndex < 0 ? null : `effort:${this.#effortIndex}`,
-				total: rules.length,
-				actions: this.#strip
-					? props.actions
-					: compact([
-							this.#effortIndex >= 0 ? pickerAction("effort:edit", "Edit / add", "enter", { primary: true }) : undefined,
-							this.#effortIndex >= 0 && this.#effortIndex < rules.length ? pickerAction("effort:remove", "Remove", "x") : undefined,
-							this.#effortSearch.value ? pickerAction("clear", "Clear search") : undefined,
-							this.#pickerCancelAction(),
-						]),
-			}, []);
+			return picker(
+				{
+					...props,
+					noun: "rules",
+					query: this.#effortSearch.value,
+					cursor: this.#effortSearch.cursor,
+					placeholder: "Search effort rules…",
+					items,
+					order: indices.map(index => `effort:${index}`),
+					selected: this.#effortIndex < 0 ? null : `effort:${this.#effortIndex}`,
+					total: rules.length,
+					actions: this.#strip
+						? props.actions
+						: compact([
+								this.#effortIndex >= 0
+									? pickerAction("effort:edit", "Edit / add", "enter", { primary: true })
+									: undefined,
+								this.#effortIndex >= 0 && this.#effortIndex < rules.length
+									? pickerAction("effort:remove", "Remove", "x")
+									: undefined,
+								this.#effortSearch.value ? pickerAction("clear", "Clear search") : undefined,
+								this.#pickerCancelAction(),
+							]),
+				},
+				[],
+			);
 		}
 		if (rolesView) {
 			const row = this.#rolesRows[this.#roleIndex];
@@ -4602,7 +4741,12 @@ export class ModelHubComponent implements Component {
 					scopes.push({ id: entry.id, label: "Roles", icon: "sparkles", count: this.#visibleRoleIds().length });
 					break;
 				case "effort":
-					scopes.push({ id: entry.id, label: "Effort rules", icon: "sliders", count: this.#settings.effortRules.length });
+					scopes.push({
+						id: entry.id,
+						label: "Effort rules",
+						icon: "sliders",
+						count: this.#settings.effortRules.length,
+					});
 					break;
 				case "all":
 					scopes.push({
@@ -4697,7 +4841,13 @@ export class ModelHubComponent implements Component {
 		const textFocused = (strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused;
 		return {
 			...CLOSE_ACTION,
-			label: this.#filterEditing ? "Back to list" : textFocused ? "Leave field" : strip || this.#assigning ? "Back" : "Close",
+			label: this.#filterEditing
+				? "Back to list"
+				: textFocused
+					? "Leave field"
+					: strip || this.#assigning
+						? "Back"
+						: "Close",
 		};
 	}
 
@@ -4808,12 +4958,14 @@ export class ModelHubComponent implements Component {
 					actions.push(roleAction("pick", "New role", "enter", true));
 					break;
 			}
-			return compact([...actions, this.#rolesSearch.value ? pickerAction("clear", "Clear search") : undefined, cancel]);
+			return compact([
+				...actions,
+				this.#rolesSearch.value ? pickerAction("clear", "Clear search") : undefined,
+				cancel,
+			]);
 		}
 		if (lockedView) {
-			return entry.oauth
-				? [pickerAction("login", "Log in", "enter", { primary: true }), cancel]
-				: [cancel];
+			return entry.oauth ? [pickerAction("login", "Log in", "enter", { primary: true }), cancel] : [cancel];
 		}
 		return compact([
 			pickerAction(
@@ -5137,7 +5289,12 @@ export class ModelHubComponent implements Component {
 			if (this.#strip) return;
 			if (entry.kind === "effort" && this.#assigning === null) {
 				const index = Number(event.item.slice("effort:".length));
-				if (!event.item.startsWith("effort:") || !Number.isInteger(index) || !this.#syncEffortSelection().includes(index)) return;
+				if (
+					!event.item.startsWith("effort:") ||
+					!Number.isInteger(index) ||
+					!this.#syncEffortSelection().includes(index)
+				)
+					return;
 				this.#focus = "list";
 				this.#effortIndex = index;
 				if (event.kind === "activate") this.#handleEffortRulesInput("\r");

@@ -85,7 +85,10 @@ describe("PlanReviewOverlay", () => {
 			{ options: APPROVAL_OPTIONS },
 			{ onPick, onCancel: vi.fn() },
 		);
-		const visible = () => render(overlay).split("\n").flatMap(line => line.match(/L\d{3}/)?.[0] ?? []);
+		const visible = () =>
+			render(overlay)
+				.split("\n")
+				.flatMap(line => line.match(/L\d{3}/)?.[0] ?? []);
 		render(overlay);
 		overlay.handleInput(LEFT);
 		for (let index = 0; index < 12; index++) overlay.handleInput("j");
@@ -111,19 +114,26 @@ describe("PlanReviewOverlay", () => {
 		overlay.handleInput(" ");
 		expect(onPick).not.toHaveBeenCalled();
 		overlay.handleInput("\x0e");
-		expect(render(overlay)).toContain("a annotate");
+		expect(render(overlay)).toContain("↑/↓ scroll");
 		overlay.handleInput("\x10");
-		expect(render(overlay)).not.toContain("a annotate");
+		expect(render(overlay)).not.toContain("↑/↓ scroll");
 	});
 
 	it("scrolls Contents without relocating the selected section and clamps its last row", () => {
-		const plan = "# Plan\n\n" + Array.from({ length: 40 }, (_, index) => `## Section ${index}\n\nbody-${index}\n\n`).join("");
+		const plan =
+			"# Plan\n\n" + Array.from({ length: 40 }, (_, index) => `## Section ${index}\n\nbody-${index}\n\n`).join("");
 		let titles: string[] = [];
-		const overlay = new PlanReviewOverlay(plan, { options: APPROVAL_OPTIONS }, {
-			onPick: vi.fn(),
-			onCancel: vi.fn(),
-			onAnnotationStateChange: state => { titles = state.annotations.map(annotation => annotation.section.title); },
-		});
+		const overlay = new PlanReviewOverlay(
+			plan,
+			{ options: APPROVAL_OPTIONS },
+			{
+				onPick: vi.fn(),
+				onCancel: vi.fn(),
+				onAnnotationStateChange: state => {
+					titles = state.annotations.map(annotation => annotation.section.title);
+				},
+			},
+		);
 		render(overlay);
 		overlay.handleInput(TAB);
 		overlay.handleInput("\x05");
@@ -141,7 +151,10 @@ describe("PlanReviewOverlay", () => {
 		overlay.handleInput("l"); // body scroll resumes passive Contents following
 		overlay.handleInput("g");
 		overlay.handleInput("g");
-		const sidebar = render(overlay).split("\n").map(line => line.split("│")[1] ?? "").join("\n");
+		const sidebar = render(overlay)
+			.split("\n")
+			.map(line => line.split("│")[1] ?? "")
+			.join("\n");
 		expect(sidebar).toContain("Section 0");
 	});
 
@@ -149,11 +162,17 @@ describe("PlanReviewOverlay", () => {
 		const onPick = vi.fn();
 		const onCancel = vi.fn();
 		let notes: string[] = [];
-		const overlay = new PlanReviewOverlay("# Plan\n\n## First\n\nbody\n\n## Last\n\nend\n", { options: APPROVAL_OPTIONS }, {
-			onPick,
-			onCancel,
-			onAnnotationStateChange: state => { notes = state.annotations.map(annotation => annotation.note); },
-		});
+		const overlay = new PlanReviewOverlay(
+			"# Plan\n\n## First\n\nbody\n\n## Last\n\nend\n",
+			{ options: APPROVAL_OPTIONS },
+			{
+				onPick,
+				onCancel,
+				onAnnotationStateChange: state => {
+					notes = state.annotations.map(annotation => annotation.note);
+				},
+			},
+		);
 		render(overlay);
 		overlay.handleInput(TAB);
 		overlay.handleInput("a");
@@ -182,22 +201,30 @@ describe("PlanReviewOverlay", () => {
 	});
 
 	it("types printable submit, delete, cancel and external-editor bindings literally", () => {
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.input.submit": ["j", "enter"],
-			"tui.editor.deleteCharBackward": "k",
-			"tui.select.cancel": "g",
-			"app.editor.external": "h",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.input.submit": ["j", "enter"],
+				"tui.editor.deleteCharBackward": "k",
+				"tui.select.cancel": "g",
+				"app.editor.external": "h",
+			}),
+		);
 		const onPick = vi.fn();
 		const onCancel = vi.fn();
 		const onAnnotationExternalEditor = vi.fn();
 		let notes: string[] = [];
-		const overlay = new PlanReviewOverlay("# Plan\n\n## Part\n\nbody", { options: APPROVAL_OPTIONS }, {
-			onPick,
-			onCancel,
-			onAnnotationExternalEditor,
-			onAnnotationStateChange: state => { notes = state.annotations.map(annotation => annotation.note); },
-		});
+		const overlay = new PlanReviewOverlay(
+			"# Plan\n\n## Part\n\nbody",
+			{ options: APPROVAL_OPTIONS },
+			{
+				onPick,
+				onCancel,
+				onAnnotationExternalEditor,
+				onAnnotationStateChange: state => {
+					notes = state.annotations.map(annotation => annotation.note);
+				},
+			},
+		);
 		render(overlay);
 		overlay.handleInput(TAB);
 		overlay.handleInput("a");
@@ -213,16 +240,24 @@ describe("PlanReviewOverlay", () => {
 	});
 
 	it("keeps annotation word typing in one undo unit", () => {
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": "ctrl+g",
-			"tui.editor.undo": "ctrl+z",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": "ctrl+g",
+				"tui.editor.undo": "ctrl+z",
+			}),
+		);
 		let notes: string[] = [];
-		const overlay = new PlanReviewOverlay("# Plan\n\n## Part\n\nbody", { options: APPROVAL_OPTIONS }, {
-			onPick: vi.fn(),
-			onCancel: vi.fn(),
-			onAnnotationStateChange: state => { notes = state.annotations.map(annotation => annotation.note); },
-		});
+		const overlay = new PlanReviewOverlay(
+			"# Plan\n\n## Part\n\nbody",
+			{ options: APPROVAL_OPTIONS },
+			{
+				onPick: vi.fn(),
+				onCancel: vi.fn(),
+				onAnnotationStateChange: state => {
+					notes = state.annotations.map(annotation => annotation.note);
+				},
+			},
+		);
 		render(overlay);
 		overlay.handleInput(TAB);
 		overlay.handleInput("a");
@@ -236,11 +271,17 @@ describe("PlanReviewOverlay", () => {
 	it("forwards a pending character-jump target before printable submit bindings", () => {
 		setKeybindings(KeybindingsManager.inMemory({ "tui.input.submit": ["j", "enter"] }));
 		let notes: string[] = [];
-		const overlay = new PlanReviewOverlay("# Plan\n\n## Part\n\nbody", { options: APPROVAL_OPTIONS }, {
-			onPick: vi.fn(),
-			onCancel: vi.fn(),
-			onAnnotationStateChange: state => { notes = state.annotations.map(annotation => annotation.note); },
-		});
+		const overlay = new PlanReviewOverlay(
+			"# Plan\n\n## Part\n\nbody",
+			{ options: APPROVAL_OPTIONS },
+			{
+				onPick: vi.fn(),
+				onCancel: vi.fn(),
+				onAnnotationStateChange: state => {
+					notes = state.annotations.map(annotation => annotation.note);
+				},
+			},
+		);
 		render(overlay);
 		overlay.handleInput(TAB);
 		overlay.handleInput("a");

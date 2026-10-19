@@ -7,13 +7,22 @@ import { ShowImagesSelectorComponent } from "../src/overlays/show-images-selecto
 import { QueueModeSelectorComponent } from "../src/overlays/queue-mode-selector";
 import { SessionAccountSelectorComponent } from "../src/overlays/session-account-selector";
 
-beforeAll(async () => { await initTheme(); });
+beforeAll(async () => {
+	await initTheme();
+});
 
 describe("small selector history", () => {
 	it("restores selected theme, literal search, and viewport without applying it", () => {
 		const applied: string[] = [];
 		const previewed: string[] = [];
-		const make = () => new ThemeSelectorComponent("dark", ["dark", "light", "hjkl"], name => applied.push(name), () => {}, name => previewed.push(name));
+		const make = () =>
+			new ThemeSelectorComponent(
+				"dark",
+				["dark", "light", "hjkl"],
+				name => applied.push(name),
+				() => {},
+				name => previewed.push(name),
+			);
 		const selector = make();
 		const list = selector.getSelectList();
 		list.handleInput("G");
@@ -39,8 +48,16 @@ describe("small selector history", () => {
 				() => {},
 				() => {},
 			),
-			new ShowImagesSelectorComponent(true, () => {}, () => {}),
-			new QueueModeSelectorComponent("all", () => {}, () => {}),
+			new ShowImagesSelectorComponent(
+				true,
+				() => {},
+				() => {},
+			),
+			new QueueModeSelectorComponent(
+				"all",
+				() => {},
+				() => {},
+			),
 		];
 		for (const selector of selectors) {
 			const list = selector.getSelectList();
@@ -60,8 +77,19 @@ describe("small selector history", () => {
 
 	it("restores the account pin selection without pinning an account", () => {
 		const picked: number[] = [];
-		const accounts = [1, 2].map(credentialId => ({ position: credentialId - 1, credentialId, active: credentialId === 1, label: `account ${credentialId}` }));
-		const make = () => new SessionAccountSelectorComponent("Test", accounts, account => picked.push(account.credentialId), () => {});
+		const accounts = [1, 2].map(credentialId => ({
+			position: credentialId - 1,
+			credentialId,
+			active: credentialId === 1,
+			label: `account ${credentialId}`,
+		}));
+		const make = () =>
+			new SessionAccountSelectorComponent(
+				"Test",
+				accounts,
+				account => picked.push(account.credentialId),
+				() => {},
+			);
 		const selector = make();
 		selector.handleInput("G");
 		const state = selector.navigationSnapshot();

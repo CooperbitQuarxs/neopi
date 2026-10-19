@@ -26,7 +26,9 @@ describe("Editor component", () => {
 	it("restores a menu-hosted draft caret and viewport without submitting", () => {
 		const editor = new Editor(defaultEditorTheme);
 		let submitted = false;
-		editor.onSubmit = () => { submitted = true; };
+		editor.onSubmit = () => {
+			submitted = true;
+		};
 		editor.setState({ text: "first\nsecond\nthird\nfourth", cursor: { line: 2, col: 2 }, scrollTop: 1 });
 		const saved = editor.getState();
 		editor.setText("different");
@@ -51,7 +53,9 @@ describe("Editor component", () => {
 
 		const restored = new Editor(defaultEditorTheme);
 		let submitted = false;
-		restored.onSubmit = () => { submitted = true; };
+		restored.onSubmit = () => {
+			submitted = true;
+		};
 		restored.setState(saved);
 		expect(restored.getText()).toBe(saved.text);
 		expect(restored.getCursor()).toEqual(saved.cursor);

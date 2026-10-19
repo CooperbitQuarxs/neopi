@@ -206,10 +206,17 @@ describe("MoveOverlay", () => {
 		overlay.handleInput("\x1b[D");
 		overlay.handleInput("\x1b");
 		const saved = overlay.navigationSnapshot();
-		const reopened = new MoveOverlay(cwd, () => { throw new Error("restore must not move"); }, moveDirectorySource);
+		const reopened = new MoveOverlay(
+			cwd,
+			() => {
+				throw new Error("restore must not move");
+			},
+			moveDirectorySource,
+		);
 		reopened.restoreNavigation(saved);
 		expect(reopened.navigationSnapshot()).toMatchObject({
-			field: { value: "jkG /", cursor: 4 }, pathFocused: false,
+			field: { value: "jkG /", cursor: 4 },
+			pathFocused: false,
 		});
 		reopened.handleInput("/");
 		reopened.handleInput("x");
@@ -218,17 +225,24 @@ describe("MoveOverlay", () => {
 
 	it("moves and pages a bounded list without changing the path or confirming on Space", () => {
 		const results: (MoveOverlayResult | undefined)[] = [];
-		const entries = Array.from({ length: 40 }, (_, index) => ({ value: `/work/${index}`, label: `folder-${index}/` }));
+		const entries = Array.from({ length: 40 }, (_, index) => ({
+			value: `/work/${index}`,
+			label: `folder-${index}/`,
+		}));
 		const overlay = new MoveOverlay(cwd, result => results.push(result), { search: () => entries });
 		overlay.handleInput("\x1b");
 		overlay.render(80);
 		overlay.handleInput("G");
 		expect(overlay.navigationSnapshot()).toMatchObject({ selected: "/work/39" });
-		overlay.handleInput("g"); overlay.handleInput("g");
+		overlay.handleInput("g");
+		overlay.handleInput("g");
 		overlay.render(80);
 		overlay.handleInput("\x05");
 		overlay.render(80);
-		expect(overlay.navigationSnapshot()).toMatchObject({ selected: "/work/0", viewportTop: { item: 1, lineOffset: 0 } });
+		expect(overlay.navigationSnapshot()).toMatchObject({
+			selected: "/work/0",
+			viewportTop: { item: 1, lineOffset: 0 },
+		});
 		const saved = overlay.navigationSnapshot();
 		overlay.handleInput("\x04");
 		expect(overlay.navigationSnapshot()).toMatchObject({ selected: "/work/7" });

@@ -176,12 +176,22 @@ export class ScrollView implements Component {
 	}
 
 	navigationSnapshot(): unknown {
-		return { scrollOffset: this.#scrollOffset, followTail: this.#followTail, anchor: this.#anchor, range: this.#rangeSnapshot };
+		return {
+			scrollOffset: this.#scrollOffset,
+			followTail: this.#followTail,
+			anchor: this.#anchor,
+			range: this.#rangeSnapshot,
+		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
-		const state = snapshot as { scrollOffset?: number; followTail?: boolean; anchor?: ScrollAnchor; range?: RangeSnapshot };
+		const state = snapshot as {
+			scrollOffset?: number;
+			followTail?: boolean;
+			anchor?: ScrollAnchor;
+			range?: RangeSnapshot;
+		};
 		if (typeof state.followTail === "boolean") this.#followTail = state.followTail;
 		if (state.anchor === "start" || state.anchor === "end") this.#anchor = state.anchor;
 		if (typeof state.scrollOffset === "number") {
@@ -262,8 +272,11 @@ export class ScrollView implements Component {
 	getVisibleRange(): { start: number; end: number } {
 		// Prewindowed callers need the restored top before they slice rows,
 		// not after render receives that already-windowed slice.
-		if (this.#restoredOffset !== undefined && this.#height > 0 &&
-			(this.#totalRows !== undefined || this.#rowCount() > 0)) {
+		if (
+			this.#restoredOffset !== undefined &&
+			this.#height > 0 &&
+			(this.#totalRows !== undefined || this.#rowCount() > 0)
+		) {
 			this.setScrollOffset(this.#restoredOffset);
 		}
 		return viewportRange(this.#rowCount(), this.#height, this.#scrollOffset);

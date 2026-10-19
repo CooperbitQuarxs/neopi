@@ -1,10 +1,24 @@
 import { beforeAll, expect, it } from "bun:test";
 import { initTheme } from "../src/theme/theme";
-import { PluginListComponent, PluginSettingsComponent, type InstalledPlugin, type InstalledPluginSummary, type PluginSettingsHost } from "../src/overlays/plugin-settings";
+import {
+	PluginListComponent,
+	PluginSettingsComponent,
+	type InstalledPlugin,
+	type InstalledPluginSummary,
+	type PluginSettingsHost,
+} from "../src/overlays/plugin-settings";
 
-beforeAll(async () => { await initTheme(); });
+beforeAll(async () => {
+	await initTheme();
+});
 
-const plugin: InstalledPlugin = { name: "hjkl", version: "1", enabled: true, enabledFeatures: null, manifest: { settings: { token: { type: "string", secret: true } } } };
+const plugin: InstalledPlugin = {
+	name: "hjkl",
+	version: "1",
+	enabled: true,
+	enabledFeatures: null,
+	manifest: { settings: { token: { type: "string", secret: true } } },
+};
 
 function pluginHost(installed: InstalledPlugin[], marketplace: InstalledPluginSummary[] = []): PluginSettingsHost {
 	return {
@@ -27,7 +41,14 @@ function pluginHost(installed: InstalledPlugin[], marketplace: InstalledPluginSu
 
 it("routes literal plugin search before configure shortcuts and restores it", () => {
 	const opened: string[] = [];
-	const make = () => new PluginListComponent([{ kind: "npm", plugin }], { onNpmSelect: entry => { opened.push(entry.name); }, onMarketplaceSelect: () => {}, onCancel: () => {} });
+	const make = () =>
+		new PluginListComponent([{ kind: "npm", plugin }], {
+			onNpmSelect: entry => {
+				opened.push(entry.name);
+			},
+			onMarketplaceSelect: () => {},
+			onCancel: () => {},
+		});
 	const list = make();
 	list.handleInput("/");
 	list.handleInput("hjkl");
@@ -45,14 +66,35 @@ it("restores a pending plugin detail after the registry loads without a history 
 	const listed = Promise.withResolvers<InstalledPlugin[]>();
 	const mounted = Promise.withResolvers<void>();
 	const host: PluginSettingsHost = {
-		manager: { list: () => listed.promise, getPlugin: async () => plugin, getPluginSettings: async () => ({}), setEnabled: async () => {}, getEnabledFeatures: async () => null, setEnabledFeatures: async () => {}, setPluginSetting: async () => {} },
-		createMarketplaceManager: async () => ({ listInstalledPlugins: async () => [], setPluginEnabled: async () => {} }),
+		manager: {
+			list: () => listed.promise,
+			getPlugin: async () => plugin,
+			getPluginSettings: async () => ({}),
+			setEnabled: async () => {},
+			getEnabledFeatures: async () => null,
+			setEnabledFeatures: async () => {},
+			setPluginSetting: async () => {},
+		},
+		createMarketplaceManager: async () => ({
+			listInstalledPlugins: async () => [],
+			setPluginEnabled: async () => {},
+		}),
 		parsePluginId: id => ({ name: id }),
 	};
 	const visits: string[] = [];
 	let closed = false;
-	const panel = new PluginSettingsComponent(host, { onClose: () => { closed = true; }, onPluginChanged: () => {}, requestRender: () => { mounted.resolve(); } });
-	panel.onNavigationVisit = page => { visits.push(page); };
+	const panel = new PluginSettingsComponent(host, {
+		onClose: () => {
+			closed = true;
+		},
+		onPluginChanged: () => {},
+		requestRender: () => {
+			mounted.resolve();
+		},
+	});
+	panel.onNavigationVisit = page => {
+		visits.push(page);
+	};
 	panel.restoreNavigation({ view: "npm-detail", plugin: "hjkl", content: undefined });
 	listed.resolve([plugin]);
 	await mounted.promise;
@@ -82,7 +124,13 @@ it("clears a gg prefix when a horizontal or context action is consumed", () => {
 	}
 });
 
-for (const transaction of ["npm-enabled", "npm-feature", "npm-config", "marketplace-enabled", "marketplace-config"] as const) {
+for (const transaction of [
+	"npm-enabled",
+	"npm-feature",
+	"npm-config",
+	"marketplace-enabled",
+	"marketplace-config",
+] as const) {
 	it(`blocks history through the complete ${transaction} write and onPluginChanged callback`, async () => {
 		const configured: InstalledPlugin = {
 			...plugin,
@@ -101,7 +149,10 @@ for (const transaction of ["npm-enabled", "npm-feature", "npm-config", "marketpl
 		const writeStarted = Promise.withResolvers<void>();
 		const changed = Promise.withResolvers<void>();
 		const changedStarted = Promise.withResolvers<void>();
-		const startWrite = () => { writeStarted.resolve(); return write.promise; };
+		const startWrite = () => {
+			writeStarted.resolve();
+			return write.promise;
+		};
 		host.manager.setEnabled = startWrite;
 		host.manager.setEnabledFeatures = startWrite;
 		host.manager.setPluginSetting = startWrite;
@@ -113,20 +164,32 @@ for (const transaction of ["npm-enabled", "npm-feature", "npm-config", "marketpl
 		let repaint = Promise.withResolvers<void>();
 		const panel = new PluginSettingsComponent(host, {
 			onClose: () => {},
-			onPluginChanged: () => { changedStarted.resolve(); return changed.promise; },
-			onPendingWrite: delta => { pending.push(delta); },
-			requestRender: () => { repaint.resolve(); },
+			onPluginChanged: () => {
+				changedStarted.resolve();
+				return changed.promise;
+			},
+			onPendingWrite: delta => {
+				pending.push(delta);
+			},
+			requestRender: () => {
+				repaint.resolve();
+			},
 		});
 		expect(panel.blocksMenuHistory).toBe(false); // registry reads are not writes
 		await repaint.promise;
 		repaint = Promise.withResolvers<void>();
 		panel.handlePrefsEvent({
-			type: "activate", key: "", item: transaction.startsWith("npm") ? "npm:hjkl" : "mkt:user:hjkl@tests",
+			type: "activate",
+			key: "",
+			item: transaction.startsWith("npm") ? "npm:hjkl" : "mkt:user:hjkl@tests",
 		});
 		expect(panel.blocksMenuHistory).toBe(false); // detail configuration reads are not writes
 		await repaint.promise;
-		const item = transaction.endsWith("enabled") ? "__enabled__"
-			: transaction === "npm-feature" ? "feature:sample" : "config:flag";
+		const item = transaction.endsWith("enabled")
+			? "__enabled__"
+			: transaction === "npm-feature"
+				? "feature:sample"
+				: "config:flag";
 		panel.handlePrefsEvent({ type: "change", key: "", item, value: !transaction.endsWith("enabled") });
 		expect(panel.blocksMenuHistory).toBe(true);
 		expect(pending).toEqual([1]);
@@ -146,13 +209,18 @@ for (const transaction of ["npm-enabled", "npm-feature", "npm-config", "marketpl
 for (const kind of ["npm", "marketplace"] as const) {
 	it(`retains the ${kind} detail's saved parent query when restoring through a fresh registry load`, async () => {
 		const marketplace: InstalledPluginSummary = {
-			id: "hjkl@tests", scope: "user",
+			id: "hjkl@tests",
+			scope: "user",
 			entries: [{ installPath: "/plugins/hjkl", version: "1", installedAt: "", lastUpdated: "" }],
 		};
 		const host = pluginHost([plugin], [marketplace]);
 		let repaint = Promise.withResolvers<void>();
 		const panel = new PluginSettingsComponent(host, {
-			onClose: () => {}, onPluginChanged: () => {}, requestRender: () => { repaint.resolve(); },
+			onClose: () => {},
+			onPluginChanged: () => {},
+			requestRender: () => {
+				repaint.resolve();
+			},
 		});
 		await repaint.promise;
 		for (const key of ["/", "hj", "\x1b"]) panel.handleInput(key);
@@ -164,7 +232,8 @@ for (const kind of ["npm", "marketplace"] as const) {
 		const parent = Promise.withResolvers<void>();
 		let returning = false;
 		const restored = new PluginSettingsComponent(host, {
-			onClose: () => {}, onPluginChanged: () => {},
+			onClose: () => {},
+			onPluginChanged: () => {},
 			requestRender: () => {
 				const page = restored.prefsPage();
 				if (page.sections.some(section => section.rows.some(row => row.id === "config:token"))) ready.resolve();
@@ -172,7 +241,9 @@ for (const kind of ["npm", "marketplace"] as const) {
 			},
 		});
 		const visits: string[] = [];
-		restored.onNavigationVisit = page => { visits.push(page); };
+		restored.onNavigationVisit = page => {
+			visits.push(page);
+		};
 		restored.restoreNavigation(snapshot);
 		await ready.promise;
 		expect(restored.navigationSnapshot()).toEqual(snapshot);

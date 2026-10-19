@@ -633,10 +633,13 @@ describe("ExtensionUiController custom overlay", () => {
 		const ui = await harness.init();
 		const component = new Container();
 		let close = () => {};
-		const pending = ui.custom<void>((_tui, _theme, _keys, done) => {
-			close = done;
-			return component;
-		}, { overlay: true });
+		const pending = ui.custom<void>(
+			(_tui, _theme, _keys, done) => {
+				close = done;
+				return component;
+			},
+			{ overlay: true },
+		);
 		await flushMicrotasks();
 		expect(harness.hookCustomComponents.has(component)).toBe(true);
 		close();

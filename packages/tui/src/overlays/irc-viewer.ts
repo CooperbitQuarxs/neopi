@@ -227,11 +227,9 @@ export class IrcViewerComponent implements Component {
 		const counts = `${all.length} ${all.length === 1 ? "message" : "messages"} · ${broadcasts} broadcast · ${participants} ${participants === 1 ? "participant" : "participants"}`;
 		const query = this.#filter.value;
 		const draft = this.#compose
-			? this.#draft.input.render(Math.max(0, inner - 12 - this.#compose.to.length))[0] ?? ""
+			? (this.#draft.input.render(Math.max(0, inner - 12 - this.#compose.to.length))[0] ?? "")
 			: "";
-		const filter = this.#filter.focused
-			? this.#filter.input.render(Math.max(0, inner - 8))[0] ?? ""
-			: query;
+		const filter = this.#filter.focused ? (this.#filter.input.render(Math.max(0, inner - 8))[0] ?? "") : query;
 		const status = this.#filter.focused
 			? theme.fg("accent", `filter: ${filter}`)
 			: this.#compose
@@ -334,17 +332,19 @@ export class IrcViewerComponent implements Component {
 		this.#leaveReply();
 		this.#sending = true;
 		this.#follow = true;
-		void reply(compose.to, body, compose.replyTo).then(
-			result => {
-				this.#notice = result;
-			},
-			(error: unknown) => {
-				this.#notice = { text: error instanceof Error ? error.message : String(error), isError: true };
-			},
-		).finally(() => {
-			this.#sending = false;
-			this.#options.requestRender();
-		});
+		void reply(compose.to, body, compose.replyTo)
+			.then(
+				result => {
+					this.#notice = result;
+				},
+				(error: unknown) => {
+					this.#notice = { text: error instanceof Error ? error.message : String(error), isError: true };
+				},
+			)
+			.finally(() => {
+				this.#sending = false;
+				this.#options.requestRender();
+			});
 		return true;
 	}
 
@@ -387,8 +387,11 @@ export class IrcViewerComponent implements Component {
 			this.#options.requestRender();
 		} else if (data === "r" && this.#options.reply && !this.#compose && !this.#sending) {
 			this.#startReply();
-		} else if (action?.kind === "confirm" || action?.kind === "toggle" ||
-			this.#options.expandKeys.some(key => matchesKey(data, key))) {
+		} else if (
+			action?.kind === "confirm" ||
+			action?.kind === "toggle" ||
+			this.#options.expandKeys.some(key => matchesKey(data, key))
+		) {
 			this.#toggleExpanded();
 		} else if (action?.kind === "move") this.#select(this.#selected + action.delta);
 		else if (action?.kind === "halfPage")

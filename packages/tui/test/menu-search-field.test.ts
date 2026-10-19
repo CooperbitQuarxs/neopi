@@ -7,11 +7,13 @@ const theme = { muted: (text: string) => text };
 describe("literal menu search fields", () => {
 	it("keeps printable remapped menu keys literal while the field is focused", () => {
 		const previous = getKeybindings();
-		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, {
-			"tui.select.up": "k",
-			"tui.select.cancel": "x",
-			"tui.select.confirm": "l",
-		}));
+		setKeybindings(
+			new KeybindingsManager(TUI_KEYBINDINGS, {
+				"tui.select.up": "k",
+				"tui.select.cancel": "x",
+				"tui.select.confirm": "l",
+			}),
+		);
 		try {
 			const field = new MenuSearchField("", true);
 			for (const key of ["k", "x", "l"]) expect(field.handleInput(key)).toBe("edited");

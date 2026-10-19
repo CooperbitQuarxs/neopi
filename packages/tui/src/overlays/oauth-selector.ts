@@ -1,17 +1,17 @@
 import type { CredentialsApi, KeysApi } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth/types";
-import {
-	Container,
-	ScrollView,
-	type SgrMouseEvent,
-	Spacer,
-	TruncatedText,
-} from "../index";
+import { Container, ScrollView, type SgrMouseEvent, Spacer, TruncatedText } from "../index";
 import { theme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, type MenuViewportPosition } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 import type { TspPickerItem, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { node, span, text } from "../native/describe";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
@@ -298,7 +298,6 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		this.#updateList();
 	}
 
-
 	#updateList(): void {
 		this.#nativeRoot = undefined;
 		this.#pickerRoot = undefined;
@@ -376,7 +375,11 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		return rows;
 	}
 	navigationSnapshot(): unknown {
-		return { selectedKey: this.#menu.selectedKey, search: this.#search.navigationSnapshot(), viewportTop: this.#viewport.top };
+		return {
+			selectedKey: this.#menu.selectedKey,
+			search: this.#search.navigationSnapshot(),
+			viewportTop: this.#viewport.top,
+		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
@@ -526,7 +529,14 @@ export class OAuthSelectorComponent extends OverlayPanel {
 					"enter",
 					login ? { primary: true } : { primary: true, danger: true },
 				),
-				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : this.#cancelLabel === "close" ? "Close" : this.#cancelLabel },
+				{
+					...CLOSE_ACTION,
+					label: this.#search.focused
+						? "Back to list"
+						: this.#cancelLabel === "close"
+							? "Close"
+							: this.#cancelLabel,
+				},
 			],
 		});
 		return this.#pickerRoot;

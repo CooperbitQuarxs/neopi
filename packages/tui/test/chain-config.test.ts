@@ -54,23 +54,33 @@ interface Harness {
 	retype: (text: string) => void;
 }
 
-function makeOverlay(doc: ChainsConfigDoc, overrides?: Partial<ChainConfigCallbacks>, dependencyOverrides: Partial<ChainConfigDeps> = {}): Harness {
+function makeOverlay(
+	doc: ChainsConfigDoc,
+	overrides?: Partial<ChainConfigCallbacks>,
+	dependencyOverrides: Partial<ChainConfigDeps> = {},
+): Harness {
 	const saved: ChainsConfigDoc[] = [];
 	const notices: string[] = [];
 	const loaded: ChainConfigScope[] = [];
-	const overlay = new ChainConfigOverlayComponent({} as unknown as TUI, { ...deps, ...dependencyOverrides }, "project", doc, {
-		loadDoc: async scope => {
-			loaded.push(scope);
-			return { chains: [] };
+	const overlay = new ChainConfigOverlayComponent(
+		{} as unknown as TUI,
+		{ ...deps, ...dependencyOverrides },
+		"project",
+		doc,
+		{
+			loadDoc: async scope => {
+				loaded.push(scope);
+				return { chains: [] };
+			},
+			save: async (_scope, savedDoc) => {
+				saved.push(structuredClone(savedDoc));
+			},
+			close: () => {},
+			requestRender: () => {},
+			notify: message => notices.push(message),
+			...overrides,
 		},
-		save: async (_scope, savedDoc) => {
-			saved.push(structuredClone(savedDoc));
-		},
-		close: () => {},
-		requestRender: () => {},
-		notify: message => notices.push(message),
-		...overrides,
-	});
+	);
 	const press = (...keys: string[]): void => {
 		for (const key of keys) overlay.handleInput(key);
 	};
@@ -391,12 +401,16 @@ describe("ChainConfigOverlayComponent", () => {
 	});
 
 	it("preserves literal search and parent list state through nested visits", () => {
-		const { overlay, press } = makeOverlay({ chains: [
-			{ name: "hjkl", steps: [{ name: "first", prompt: "text" }] },
-			{ name: "other", steps: [{ name: "second", prompt: "text" }] },
-		] });
+		const { overlay, press } = makeOverlay({
+			chains: [
+				{ name: "hjkl", steps: [{ name: "first", prompt: "text" }] },
+				{ name: "other", steps: [{ name: "second", prompt: "text" }] },
+			],
+		});
 		const visits: string[] = [];
-		overlay.onNavigationVisit = page => { visits.push(page); };
+		overlay.onNavigationVisit = page => {
+			visits.push(page);
+		};
 		press("/", "hjkl", ESC, ENTER);
 		expect(overlay.navigationSnapshot().context.screen).toBe("chain");
 		press("h");
@@ -414,7 +428,9 @@ describe("ChainConfigOverlayComponent", () => {
 	});
 
 	it("round-trips an unsubmitted multiline step draft and ignores Space on Delete", () => {
-		const { overlay, press, saved } = makeOverlay({ chains: [{ name: "chain", steps: [{ name: "step", prompt: "text" }] }] });
+		const { overlay, press, saved } = makeOverlay({
+			chains: [{ name: "chain", steps: [{ name: "step", prompt: "text" }] }],
+		});
 		press(ENTER, DOWN, DOWN, "l", "G", "k", " ");
 		expect(overlay.navigationSnapshot().doc.chains[0]?.steps).toHaveLength(1);
 		press("k", "l", " draft hjkl");
@@ -428,7 +444,12 @@ describe("ChainConfigOverlayComponent", () => {
 	});
 
 	it("scrolls the view independently of the selected chain", () => {
-		const { overlay, press } = makeOverlay({ chains: Array.from({ length: 80 }, (_, index) => ({ name: `chain ${index}`, steps: [{ name: "step", prompt: "text" }] })) });
+		const { overlay, press } = makeOverlay({
+			chains: Array.from({ length: 80 }, (_, index) => ({
+				name: `chain ${index}`,
+				steps: [{ name: "step", prompt: "text" }],
+			})),
+		});
 		overlay.render(100);
 		press("\x05");
 		const snapshot = overlay.navigationSnapshot();
@@ -440,16 +461,25 @@ describe("ChainConfigOverlayComponent", () => {
 	});
 
 	it("switches root preview contexts without visits and keeps preview motions off the chain cursor", () => {
-		const { overlay, press } = makeOverlay({ chains: [{
-			name: "alpha", description: Array.from({ length: 140 }, (_, index) => `Preview line ${index}`).join("\n"),
-			steps: [{ name: "step", prompt: "text" }],
-		}] });
+		const { overlay, press } = makeOverlay({
+			chains: [
+				{
+					name: "alpha",
+					description: Array.from({ length: 140 }, (_, index) => `Preview line ${index}`).join("\n"),
+					steps: [{ name: "step", prompt: "text" }],
+				},
+			],
+		});
 		const contentRows = overlay.render(100).length - 5;
 		const list = overlay.navigationSnapshot().content;
 		const visits: string[] = [];
 		overlay.onNavigationVisit = page => visits.push(page);
 		press("l", "j", "\x05");
-		expect(overlay.navigationSnapshot()).toMatchObject({ context: { screen: "list" }, previewFocused: true, previewScroll: 2 });
+		expect(overlay.navigationSnapshot()).toMatchObject({
+			context: { screen: "list" },
+			previewFocused: true,
+			previewScroll: 2,
+		});
 		expect(overlay.navigationSnapshot().content).toEqual(list);
 		expect(overlay.render(100).join("\n")).toContain("Preview");
 		press("k", "\x19");
@@ -472,8 +502,13 @@ describe("ChainConfigOverlayComponent", () => {
 		press(HOME);
 		expect(overlay.navigationSnapshot().previewScroll).toBe(0);
 		for (const [key, focused] of [
-			["h", false], ["\t", true], ["\x10", false], ["\x0e", true],
-			["\x1b[Z", false], ["\x1b[C", true], ["\x1b[D", false],
+			["h", false],
+			["\t", true],
+			["\x10", false],
+			["\x0e", true],
+			["\x1b[Z", false],
+			["\x1b[C", true],
+			["\x1b[D", false],
 		] as const) {
 			press(key);
 			expect(overlay.navigationSnapshot().previewFocused).toBe(focused);
@@ -485,26 +520,41 @@ describe("ChainConfigOverlayComponent", () => {
 	});
 
 	it("preserves preview focus and offset when backing out and restoring silently", () => {
-		const { overlay, press } = makeOverlay({ chains: [{
-			name: "alpha", description: "Long preview\n".repeat(120), steps: [{ name: "step", prompt: "text" }],
-		}] });
+		const { overlay, press } = makeOverlay({
+			chains: [
+				{
+					name: "alpha",
+					description: "Long preview\n".repeat(120),
+					steps: [{ name: "step", prompt: "text" }],
+				},
+			],
+		});
 		overlay.render(100);
 		press("l", "G");
 		const snapshot = overlay.navigationSnapshot();
 		press(ENTER, "h");
-		expect(overlay.navigationSnapshot()).toMatchObject({ previewFocused: true, previewScroll: snapshot.previewScroll });
+		expect(overlay.navigationSnapshot()).toMatchObject({
+			previewFocused: true,
+			previewScroll: snapshot.previewScroll,
+		});
 		expect(overlay.navigationSnapshot().content).toEqual(snapshot.content);
 		const restored = makeOverlay({ chains: [] });
 		restored.overlay.restoreNavigation(snapshot);
 		expect(restored.overlay.navigationSnapshot()).toEqual(snapshot);
 		restored.press("/");
-		expect(restored.overlay.navigationSnapshot()).toMatchObject({ previewFocused: false, content: { filterFocused: true } });
+		expect(restored.overlay.navigationSnapshot()).toMatchObject({
+			previewFocused: false,
+			content: { filterFocused: true },
+		});
 	});
 
 	it("resets parent gg on pane, search, mouse and restore transitions", () => {
-		const { overlay, press } = makeOverlay({ chains: Array.from({ length: 80 }, (_, index) => ({
-			name: `chain-${index}`, steps: [{ name: "step", prompt: "text" }],
-		})) });
+		const { overlay, press } = makeOverlay({
+			chains: Array.from({ length: 80 }, (_, index) => ({
+				name: `chain-${index}`,
+				steps: [{ name: "step", prompt: "text" }],
+			})),
+		});
 		overlay.render(100);
 		press("G", "g", "l", "h", "g");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "close" });
@@ -525,13 +575,25 @@ describe("ChainConfigOverlayComponent", () => {
 	});
 
 	it("delegates decoded model-browser motions once and keeps model filters literal", () => {
-		const models = Array.from({ length: 30 }, (_, index) => buildModel({
-			id: `model-${String(index).padStart(2, "0")}`, name: `Model ${String(index).padStart(2, "0")}`,
-			provider: "test", api: "ollama-chat", baseUrl: "https://example.test", reasoning: false,
-			input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128_000, maxTokens: 1024,
-		}));
-		const { overlay, press } = makeOverlay({ chains: [{ name: "chain", steps: [{ name: "step", prompt: "text" }] }] },
-			undefined, { getAvailableModels: () => models });
+		const models = Array.from({ length: 30 }, (_, index) =>
+			buildModel({
+				id: `model-${String(index).padStart(2, "0")}`,
+				name: `Model ${String(index).padStart(2, "0")}`,
+				provider: "test",
+				api: "ollama-chat",
+				baseUrl: "https://example.test",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 128_000,
+				maxTokens: 1024,
+			}),
+		);
+		const { overlay, press } = makeOverlay(
+			{ chains: [{ name: "chain", steps: [{ name: "step", prompt: "text" }] }] },
+			undefined,
+			{ getAvailableModels: () => models },
+		);
 		press(ENTER, DOWN, DOWN, ENTER, DOWN, ENTER);
 		overlay.render(100);
 		const selectedModel = (): string | undefined =>
@@ -556,26 +618,46 @@ describe("ChainConfigOverlayComponent", () => {
 	});
 
 	it("keeps direct Input text literal under remapped menu actions and honors explicit exits", () => {
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": ["escape", "j"], "tui.input.submit": ["enter", "k"],
-			"tui.editor.deleteCharBackward": ["backspace", "h"], "tui.editor.deleteCharForward": ["delete", "/"],
-			"tui.select.nextContext": ["tab", "g"], "tui.select.prevContext": ["shift+tab", "l"],
-		}));
-		const { overlay, press, saved } = makeOverlay({ chains: [{ name: "alpha", steps: [{ name: "step", prompt: "text" }] }] });
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": ["escape", "j"],
+				"tui.input.submit": ["enter", "k"],
+				"tui.editor.deleteCharBackward": ["backspace", "h"],
+				"tui.editor.deleteCharForward": ["delete", "/"],
+				"tui.select.nextContext": ["tab", "g"],
+				"tui.select.prevContext": ["shift+tab", "l"],
+			}),
+		);
+		const { overlay, press, saved } = makeOverlay({
+			chains: [{ name: "alpha", steps: [{ name: "step", prompt: "text" }] }],
+		});
 		press(ENTER, ENTER, "\x15");
 		for (const character of "hjklggG / ") press(character);
-		expect(overlay.navigationSnapshot()).toMatchObject({ context: { screen: "chainName" }, content: { value: "hjklggG / " } });
+		expect(overlay.navigationSnapshot()).toMatchObject({
+			context: { screen: "chainName" },
+			content: { value: "hjklggG / " },
+		});
 		expect(saved).toEqual([]);
 		press(ESC, ENTER, "\x15", "hjkl", ENTER);
-		expect(overlay.navigationSnapshot()).toMatchObject({ context: { screen: "chain" }, doc: { chains: [{ name: "hjkl" }] } });
+		expect(overlay.navigationSnapshot()).toMatchObject({
+			context: { screen: "chain" },
+			doc: { chains: [{ name: "hjkl" }] },
+		});
 	});
 
 	it("adjusts thinking with h/l but types those characters in its focused filter", () => {
-		const { overlay, press } = makeOverlay({ chains: [{ name: "chain", steps: [{ name: "step", prompt: "text" }] }] });
+		const { overlay, press } = makeOverlay({
+			chains: [{ name: "chain", steps: [{ name: "step", prompt: "text" }] }],
+		});
 		const original = overlay.navigationSnapshot();
 		overlay.restoreNavigation({
 			...original,
-			context: { screen: "thinking", chainIndex: 0, stepIndex: 0, thinking: { selector: "test/model", efforts: ["low", "high"] } },
+			context: {
+				screen: "thinking",
+				chainIndex: 0,
+				stepIndex: 0,
+				thinking: { selector: "test/model", efforts: ["low", "high"] },
+			},
 			content: { selectedValue: "", filter: "", filterFocused: false, filterCursor: 0, viewportTop: undefined },
 		});
 		press("l");
@@ -585,11 +667,16 @@ describe("ChainConfigOverlayComponent", () => {
 		press("h");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "low" });
 		press("/", "hl");
-		expect(overlay.navigationSnapshot()).toMatchObject({ context: { screen: "thinking" }, content: { filter: "hl", filterFocused: true } });
+		expect(overlay.navigationSnapshot()).toMatchObject({
+			context: { screen: "thinking" },
+			content: { filter: "hl", filterFocused: true },
+		});
 	});
 
 	it("keeps a silently restored tool cursor on the tool it toggles", () => {
-		const { overlay, press } = makeOverlay({ chains: [{ name: "chain", steps: [{ name: "step", prompt: "text", tools: ["read"] }] }] });
+		const { overlay, press } = makeOverlay({
+			chains: [{ name: "chain", steps: [{ name: "step", prompt: "text", tools: ["read"] }] }],
+		});
 		press(ENTER, DOWN, DOWN, ENTER, DOWN, DOWN, ENTER, DOWN);
 		const snapshot = overlay.navigationSnapshot();
 		expect(snapshot.content).toMatchObject({ selectedValue: "grep" });
@@ -604,10 +691,18 @@ describe("ChainConfigOverlayComponent", () => {
 
 	for (const target of ["chain", "step"] as const) {
 		it(`captures the pre-delete ${target} before changing pages and ignores destructive Space/l`, () => {
-			const { overlay, press } = makeOverlay({ chains: [
-				{ name: "alpha", steps: [{ name: "first", prompt: "text" }, { name: "second", prompt: "text" }] },
-				{ name: "beta", steps: [{ name: "other", prompt: "text" }] },
-			] });
+			const { overlay, press } = makeOverlay({
+				chains: [
+					{
+						name: "alpha",
+						steps: [
+							{ name: "first", prompt: "text" },
+							{ name: "second", prompt: "text" },
+						],
+					},
+					{ name: "beta", steps: [{ name: "other", prompt: "text" }] },
+				],
+			});
 			const visits: { page: string; previous: unknown }[] = [];
 			overlay.onNavigationVisit = (page, previous) => visits.push({ page, previous });
 			press(ENTER);
@@ -618,7 +713,10 @@ describe("ChainConfigOverlayComponent", () => {
 			expect(overlay.navigationSnapshot().doc.chains[0]?.steps).toHaveLength(2);
 			press(ENTER);
 			const previous = visits.at(-1)?.previous;
-			expect(previous).toMatchObject({ context: { screen: target, chainIndex: 0 }, content: { selectedValue: "delete" } });
+			expect(previous).toMatchObject({
+				context: { screen: target, chainIndex: 0 },
+				content: { selectedValue: "delete" },
+			});
 			const count = visits.length;
 			overlay.restoreNavigation(previous);
 			expect(overlay.navigationSnapshot().doc.chains.map(chain => chain.name)).toEqual(["alpha", "beta"]);
@@ -629,9 +727,21 @@ describe("ChainConfigOverlayComponent", () => {
 
 	it("does not reset a model or discard dirty edits with Space", () => {
 		let closed = 0;
-		const { overlay, press } = makeOverlay({ chains: [{
-			name: "chain", steps: [{ name: "step", prompt: "text", model: "test/model:high" }],
-		}] }, { close: () => { closed++; } });
+		const { overlay, press } = makeOverlay(
+			{
+				chains: [
+					{
+						name: "chain",
+						steps: [{ name: "step", prompt: "text", model: "test/model:high" }],
+					},
+				],
+			},
+			{
+				close: () => {
+					closed++;
+				},
+			},
+		);
 		press(ENTER, DOWN, DOWN, ENTER, "/", "Reset model", ESC, " ", "l");
 		expect(overlay.navigationSnapshot().doc.chains[0]?.steps[0]?.model).toBe("test/model:high");
 		press(ENTER);
@@ -643,9 +753,12 @@ describe("ChainConfigOverlayComponent", () => {
 	});
 
 	it("cancels inline deletion on the first g rather than confirming it on a later Delete", () => {
-		const { overlay, press } = makeOverlay({ chains: [
-			{ name: "alpha", steps: [{ name: "step", prompt: "text" }] }, { name: "beta", steps: [{ name: "step", prompt: "text" }] },
-		] });
+		const { overlay, press } = makeOverlay({
+			chains: [
+				{ name: "alpha", steps: [{ name: "step", prompt: "text" }] },
+				{ name: "beta", steps: [{ name: "step", prompt: "text" }] },
+			],
+		});
 		press(DELETE, "g", DELETE);
 		expect(overlay.navigationSnapshot().doc.chains).toHaveLength(2);
 		press(DELETE);
@@ -662,11 +775,18 @@ describe("ChainConfigOverlayComponent", () => {
 			Object.defineProperty(process.stdout, "rows", { configurable: true, value: scenario.rows });
 			try {
 				const marker = "CHAIN-LAST-CONTENT";
-				const { overlay, press } = makeOverlay({ chains: [{
-					name: "reader",
-					description: Array.from({ length: scenario.descriptionLines }, (_, index) => `Preview line ${index}`).join("\n"),
-					steps: [{ name: "step", prompt: marker }],
-				}] });
+				const { overlay, press } = makeOverlay({
+					chains: [
+						{
+							name: "reader",
+							description: Array.from(
+								{ length: scenario.descriptionLines },
+								(_, index) => `Preview line ${index}`,
+							).join("\n"),
+							steps: [{ name: "step", prompt: marker }],
+						},
+					],
+				});
 				const initial = overlay.render(100);
 				expect(initial).toHaveLength(Math.max(14, scenario.rows));
 				const contentRows = initial.length - 4 - (scenario.overflows ? 1 : 0);
@@ -674,7 +794,9 @@ describe("ChainConfigOverlayComponent", () => {
 				const visits: string[] = [];
 				overlay.onNavigationVisit = page => visits.push(page);
 				press("l", "\x04");
-				expect(overlay.navigationSnapshot().previewScroll).toBe(scenario.overflows ? Math.max(1, Math.floor(contentRows / 2)) : 0);
+				expect(overlay.navigationSnapshot().previewScroll).toBe(
+					scenario.overflows ? Math.max(1, Math.floor(contentRows / 2)) : 0,
+				);
 				press("G");
 				const end = overlay.navigationSnapshot().previewScroll;
 				const lastContent = (): string => {

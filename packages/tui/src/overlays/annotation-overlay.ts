@@ -18,7 +18,13 @@ import { formatKeyHint, formatKeyHints, type KeybindingsManager } from "../app-k
 import type { Keybinding } from "../keybindings";
 import { extractPrintableText } from "../keys";
 import { MenuSelection } from "../components/menu-selection";
-import { applyMenuMotion, MenuKeyReader, menuScrollBy, type MenuNavAction, MenuViewport } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	menuScrollBy,
+	type MenuNavAction,
+	MenuViewport,
+} from "../components/menu-navigation";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { type Theme } from "../theme/theme";
 import type {
@@ -312,7 +318,10 @@ export class AnnotationOverlay implements Focusable {
 			this.#mode = modeOrCallbacks as string;
 			this.#callbacks = maybeCallbacks!;
 		}
-		this.#fileMenu = new MenuSelection(this.#files, { getKey: file => `${file.path}:${file.occurrence}`, getSearchText: displayFileLabel });
+		this.#fileMenu = new MenuSelection(this.#files, {
+			getKey: file => `${file.path}:${file.occurrence}`,
+			getSearchText: displayFileLabel,
+		});
 		this.#fileRows = this.#files.map(() => 1);
 		this.#actionMenu = new MenuSelection(this.#actions, {
 			getKey: action => action,
@@ -582,7 +591,10 @@ export class AnnotationOverlay implements Focusable {
 		} else if (action.kind === "halfPage" || action.kind === "page") {
 			this.#viewportDetached = false;
 			if (this.#tui.nativeRendering && !this.#textSource) {
-				const step = action.kind === "halfPage" ? Math.max(1, Math.floor(this.#bodyHeight / 2)) : Math.max(1, this.#bodyHeight - 1);
+				const step =
+					action.kind === "halfPage"
+						? Math.max(1, Math.floor(this.#bodyHeight / 2))
+						: Math.max(1, this.#bodyHeight - 1);
 				this.#moveSourceCursor(action.delta * step);
 			} else {
 				this.#scrollView.handleMenuAction(action);
@@ -592,7 +604,10 @@ export class AnnotationOverlay implements Focusable {
 			}
 		} else if (action.kind === "boundary") {
 			this.#viewportDetached = false;
-			this.#sourceIndex = action.edge === "first" ? 0 : Math.max(0, (this.#textSource ? this.#textLines.length : this.#currentSourceRows().length) - 1);
+			this.#sourceIndex =
+				action.edge === "first"
+					? 0
+					: Math.max(0, (this.#textSource ? this.#textLines.length : this.#currentSourceRows().length) - 1);
 			if (this.#textSource || this.#tui.nativeRendering) this.#viewportDriven = false;
 			else {
 				this.#scrollView.handleMenuAction(action);
@@ -600,7 +615,8 @@ export class AnnotationOverlay implements Focusable {
 				this.#viewportTowardEnd = action.edge === "last";
 			}
 		}
-		const by = action.kind === "scroll" || (this.#textSource && action.kind === "page") ? menuScrollBy(action) : undefined;
+		const by =
+			action.kind === "scroll" || (this.#textSource && action.kind === "page") ? menuScrollBy(action) : undefined;
 		if (by) this.#bodyNativeScroll = { by, n: (this.#bodyNativeScroll?.n ?? 0) + 1 };
 	}
 
@@ -1175,7 +1191,11 @@ export class AnnotationOverlay implements Focusable {
 			return [this.#renderAnnotationChooserEntry(chooser, index, start, width)];
 		}
 		const optionLimit = Number.isFinite(availableRows) ? Math.max(1, availableRows - 2) : chooser.entries.length;
-		const start = this.#chooserViewport.layout(this.#chooserRows, chooser.selected, Math.max(1, optionLimit)).startIndex;
+		const start = this.#chooserViewport.layout(
+			this.#chooserRows,
+			chooser.selected,
+			Math.max(1, optionLimit),
+		).startIndex;
 		const options = chooser.entries
 			.slice(start, start + optionLimit)
 			.map((index, windowIndex) => this.#renderAnnotationChooserEntry(chooser, index, start + windowIndex, width));

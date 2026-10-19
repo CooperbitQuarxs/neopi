@@ -3,7 +3,9 @@ import { SessionInfoOverlay } from "../src/overlays/session-info-overlay";
 import { initTheme } from "../src/theme/theme";
 import type { DescribeContext } from "../src/native/node";
 
-beforeAll(async () => { await initTheme(); });
+beforeAll(async () => {
+	await initTheme();
+});
 const cx: DescribeContext = { cols: 80, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
 
 describe("session information viewer navigation", () => {

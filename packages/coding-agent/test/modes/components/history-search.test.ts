@@ -109,16 +109,24 @@ describe("HistorySearchComponent normal navigation and history", () => {
 	it("uses boundaries, half pages, and independent visual scrolling in list focus", () => {
 		const entries = Array.from({ length: 40 }, (_, i) => makeEntry(i, `prompt ${i}`));
 		const selected: string[] = [];
-		const component = new HistorySearchComponent(fakeStorage(entries), prompt => selected.push(prompt), () => {});
+		const component = new HistorySearchComponent(
+			fakeStorage(entries),
+			prompt => selected.push(prompt),
+			() => {},
+		);
 		component.handleInput("\x1b");
 		render(component);
 		component.handleInput("G");
-		component.handleInput("g"); component.handleInput("g");
+		component.handleInput("g");
+		component.handleInput("g");
 		render(component);
 		const before = component.navigationSnapshot() as { selected: string };
 		component.handleInput("\x05");
 		render(component);
-		expect(component.navigationSnapshot()).toMatchObject({ selected: before.selected, top: { item: 1, lineOffset: 0 } });
+		expect(component.navigationSnapshot()).toMatchObject({
+			selected: before.selected,
+			top: { item: 1, lineOffset: 0 },
+		});
 		component.handleInput("\x04");
 		component.handleInput("\r");
 		expect(selected).toEqual(["prompt 5"]);
@@ -144,7 +152,8 @@ describe("HistorySearchComponent normal navigation and history", () => {
 		expect(reopened.navigationSnapshot()).toEqual(saved);
 		expect(reopened.navigationSnapshot()).toMatchObject({ search: { value: "prompt", cursor: 5, focused: false } });
 		expect(inserted).not.toHaveBeenCalled();
-		component.dispose(); reopened.dispose();
+		component.dispose();
+		reopened.dispose();
 	});
 });
 
@@ -269,7 +278,11 @@ describe("HistorySearchComponent debounced search", () => {
 	it("cancels a pending query when leaving instead of publishing a stale repaint", () => {
 		vi.useFakeTimers();
 		const { storage, searches } = countingStorage([makeEntry(1, "needle in a haystack")]);
-		const component = new HistorySearchComponent(storage, () => {}, () => {});
+		const component = new HistorySearchComponent(
+			storage,
+			() => {},
+			() => {},
+		);
 		const repaint = vi.fn();
 		component.setOnRequestRender(repaint);
 		type(component, "needle");

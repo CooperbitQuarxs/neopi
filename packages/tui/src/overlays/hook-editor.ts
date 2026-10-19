@@ -503,7 +503,13 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 	restoreNavigation(snapshot: unknown): void {
 		if (!this.#menuHistory || typeof snapshot !== "object" || snapshot === null) return;
 		const state = snapshot as EditorNavigationState;
-		if (typeof state.text !== "string" || typeof state.cursor?.line !== "number" || typeof state.cursor?.col !== "number" || typeof state.scrollTop !== "number") return;
+		if (
+			typeof state.text !== "string" ||
+			typeof state.cursor?.line !== "number" ||
+			typeof state.cursor?.col !== "number" ||
+			typeof state.scrollTop !== "number"
+		)
+			return;
 		this.#editor.setState(state);
 	}
 

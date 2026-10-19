@@ -294,7 +294,13 @@ describe("SettingsList", () => {
 	}
 
 	it("pages through sectioned rows instead of wrapping whole sections", () => {
-		const list = new SettingsList(sectionedItems(), 3, testTheme, () => {}, () => {});
+		const list = new SettingsList(
+			sectionedItems(),
+			3,
+			testTheme,
+			() => {},
+			() => {},
+		);
 		list.render(80);
 		list.handleInput("\x1b[6~");
 		expect(list.getSelectedItem()?.id).toBe("gamma");
@@ -643,9 +649,18 @@ describe("SettingsList", () => {
 
 	it("scrolls the view without moving selection and restores its off-screen cursor", () => {
 		const items = Array.from({ length: 16 }, (_, index) => ({
-			id: `row-${index}`, label: `Row ${index}`, currentValue: "off", values: ["off", "on"],
+			id: `row-${index}`,
+			label: `Row ${index}`,
+			currentValue: "off",
+			values: ["off", "on"],
 		}));
-		const list = new SettingsList(items, 4, testTheme, () => {}, () => {});
+		const list = new SettingsList(
+			items,
+			4,
+			testTheme,
+			() => {},
+			() => {},
+		);
 		list.render(60);
 		list.handleInput("\x05");
 		list.render(60);
@@ -664,7 +679,11 @@ describe("SettingsList", () => {
 
 	it("keeps focused search literal and preserves its caret across history", () => {
 		const list = new SettingsList(
-			[{ id: "literal", label: "hjklgG /", currentValue: "" }], 4, testTheme, () => {}, () => {},
+			[{ id: "literal", label: "hjklgG /", currentValue: "" }],
+			4,
+			testTheme,
+			() => {},
+			() => {},
 		);
 		list.handleInput("/");
 		for (const key of "hjklgG /") list.handleInput(key);
@@ -688,13 +707,26 @@ describe("SettingsList", () => {
 	it("records nested editor visits and restores safe drafts without replaying changes", () => {
 		const visits: Array<{ page: string; previous: unknown }> = [];
 		let changes = 0;
-		const list = new SettingsList([{
-			id: "name", label: "Name", currentValue: "active",
-			submenu: (initialValue, done) => new TextFormField({
-				theme: { label: text => text, description: text => text, error: text => text, hint: text => text },
-				initialValue, onSubmit: value => done(value), onCancel: () => done(),
-			}),
-		}], 4, testTheme, () => changes++, () => {});
+		const list = new SettingsList(
+			[
+				{
+					id: "name",
+					label: "Name",
+					currentValue: "active",
+					submenu: (initialValue, done) =>
+						new TextFormField({
+							theme: { label: text => text, description: text => text, error: text => text, hint: text => text },
+							initialValue,
+							onSubmit: value => done(value),
+							onCancel: () => done(),
+						}),
+				},
+			],
+			4,
+			testTheme,
+			() => changes++,
+			() => {},
+		);
 		list.onNavigationVisit = (page, previous) => visits.push({ page, previous });
 		list.handleInput(" ");
 		expect(list.hasOpenSubmenu()).toBe(false);

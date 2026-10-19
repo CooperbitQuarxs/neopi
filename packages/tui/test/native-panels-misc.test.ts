@@ -138,24 +138,31 @@ describe("AgentTranscriptViewer native esc", () => {
 			viewer.handleInput("i");
 			expect(viewer.navigationSnapshot()).toMatchObject({ focus: "view", editor: { text: "" } });
 			viewer.handleInput("\t");
-			setKeybindings(KeybindingsManager.inMemory({
-				"tui.select.cancel": ["escape", "h"],
-				"tui.select.nextContext": ["tab", "j"],
-				"tui.select.prevContext": ["shift+tab", "k"],
-				"tui.editor.submit": "l",
-				"tui.editor.jumpForward": "ctrl+]",
-			}));
+			setKeybindings(
+				KeybindingsManager.inMemory({
+					"tui.select.cancel": ["escape", "h"],
+					"tui.select.nextContext": ["tab", "j"],
+					"tui.select.prevContext": ["shift+tab", "k"],
+					"tui.editor.submit": "l",
+					"tui.editor.jumpForward": "ctrl+]",
+				}),
+			);
 			for (const key of "hjkl / draft") viewer.handleInput(key);
 			viewer.handleInput("\x01");
 			viewer.handleInput("\x1d");
 			viewer.handleInput("j");
 			const draft = viewer.navigationSnapshot();
-			expect(draft).toMatchObject({ focus: "editor", editor: { text: "hjkl / draft", cursor: { line: 0, col: 1 } } });
+			expect(draft).toMatchObject({
+				focus: "editor",
+				editor: { text: "hjkl / draft", cursor: { line: 0, col: 1 } },
+			});
 			const restored = new AgentTranscriptViewer(deps);
 			try {
 				restored.restoreNavigation(draft);
 				expect(restored.navigationSnapshot()).toEqual(draft);
-			} finally { restored.dispose(); }
+			} finally {
+				restored.dispose();
+			}
 			viewer.handleNativeEvent(CLOSE_CLICK);
 			expect(onClose).not.toHaveBeenCalled();
 			expect(viewer.navigationSnapshot()).toMatchObject({ focus: "view", editor: { text: "hjkl / draft" } });

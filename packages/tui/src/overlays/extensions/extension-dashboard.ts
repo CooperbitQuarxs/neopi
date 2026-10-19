@@ -480,7 +480,9 @@ export class ExtensionDashboard implements Component {
 	async #toggleMcpExtension(extensionId: string, enabled: boolean): Promise<void> {
 		const name = extensionId.slice("mcp:".length);
 		try {
-			await this.#runOperation(this.#runtime.persistMcpToggle(name, enabled, this.#writableMcpSourcePath(extensionId)));
+			await this.#runOperation(
+				this.#runtime.persistMcpToggle(name, enabled, this.#writableMcpSourcePath(extensionId)),
+			);
 		} catch (error) {
 			logger.warn("Failed to persist MCP toggle", { name, enabled, error: String(error) });
 			await this.#refreshFromState();
@@ -781,9 +783,12 @@ export class ExtensionDashboard implements Component {
 			],
 			"head",
 		);
-		const search = text([span(this.#mainList.filterFocused ? "Search: " : "/ search · ", "muted"), span(query, "accent")], {
-			truncate: "end",
-		});
+		const search = text(
+			[span(this.#mainList.filterFocused ? "Search: " : "/ search · ", "muted"), span(query, "accent")],
+			{
+				truncate: "end",
+			},
+		);
 		const body = node(
 			"row",
 			{ gap: "md", grow: 1 },
@@ -806,7 +811,10 @@ export class ExtensionDashboard implements Component {
 			actionButton(expanded ? "Collapse" : "Expand", "expand", { keys: this.#expandKey() }),
 		];
 		if (query) buttons.push(actionButton("Clear search", "clear"));
-		buttons.push(null, actionButton(this.#mainList.filterFocused ? "Back to list" : "Close", "close", { keys: "escape" }));
+		buttons.push(
+			null,
+			actionButton(this.#mainList.filterFocused ? "Back to list" : "Close", "close", { keys: "escape" }),
+		);
 		return col([head, this.#tabBar, keyed(search, "search"), body, actionBar(buttons)], { gap: "md", grow: 1 });
 	}
 

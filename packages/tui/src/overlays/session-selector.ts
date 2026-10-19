@@ -30,7 +30,14 @@ import { hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { plainText } from "../native/spans";
 import { theme } from "../theme/theme";
 import { contentRowWidth, renderScrollableList } from "../chrome/selector-helpers";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, menuScrollBy, type MenuViewportPosition } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	menuScrollBy,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 /** Session lifecycle status presented by the picker. */
 export type SessionSelectorStatus = "complete" | "interrupted" | "aborted" | "error" | "pending" | "unknown";
 
@@ -573,7 +580,14 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		| { version: number; showCwd: boolean; currentPath: string | undefined; items: NativeNode[] }
 		| undefined;
 	#listNative:
-		| { items: readonly NativeNode[]; selected: string | undefined; query: string; focused: boolean; scroll: NativeScroll | undefined; node: NativeNode }
+		| {
+				items: readonly NativeNode[];
+				selected: string | undefined;
+				query: string;
+				focused: boolean;
+				scroll: NativeScroll | undefined;
+				node: NativeNode;
+		  }
 		| undefined;
 	/** Bumped when the session set itself changes (scope switch, delete): the picker catalogue's memo key. */
 	#datasetVersion = 0;
@@ -615,7 +629,9 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		};
 	}
 
-	get filterFocused(): boolean { return this.#search.focused; }
+	get filterFocused(): boolean {
+		return this.#search.focused;
+	}
 
 	navigationSnapshot(): unknown {
 		return {
@@ -628,7 +644,12 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
-		const state = snapshot as { search?: unknown; selected?: string; order?: string[]; top?: MenuViewportPosition | number };
+		const state = snapshot as {
+			search?: unknown;
+			selected?: string;
+			order?: string[];
+			top?: MenuViewportPosition | number;
+		};
 		this.dispose();
 		this.#search.restoreNavigation(state.search);
 		this.#restoredSelected = typeof state.selected === "string" ? state.selected : undefined;
@@ -672,7 +693,6 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		const RESERVE = 1;
 		return Math.max(8, this.#getTerminalRows() - CHROME - RESERVE);
 	}
-
 
 	/** Focus the live session when it is in the visible list. */
 	#selectCurrentSession(): void {
@@ -1126,18 +1146,34 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		const selected = this.#menu.selectedKey;
 		const query = this.#searchInput.getValue();
 		const memo = this.#listNative;
-		if (memo?.items === items.items && memo.selected === selected && memo.query === query &&
-			memo.focused === this.#search.focused && memo.scroll === this.#nativeScroll) return memo.node;
+		if (
+			memo?.items === items.items &&
+			memo.selected === selected &&
+			memo.query === query &&
+			memo.focused === this.#search.focused &&
+			memo.scroll === this.#nativeScroll
+		)
+			return memo.node;
 		const empty: TspText = this.#showCwd
 			? [span("No sessions found", "muted")]
 			: [span("No sessions in current folder. Press ", "muted"), span("tab", "key"), span(" to view all.", "muted")];
-		const list = { ...node(
-			"list",
-			{ selected: selected ?? null, filter: query.trim() || undefined, empty, virtual: true },
-			items.items,
-			"list",
-		), scroll: this.#nativeScroll };
-		this.#listNative = { items: items.items, selected, query, focused: this.#search.focused, scroll: this.#nativeScroll, node: list };
+		const list = {
+			...node(
+				"list",
+				{ selected: selected ?? null, filter: query.trim() || undefined, empty, virtual: true },
+				items.items,
+				"list",
+			),
+			scroll: this.#nativeScroll,
+		};
+		this.#listNative = {
+			items: items.items,
+			selected,
+			query,
+			focused: this.#search.focused,
+			scroll: this.#nativeScroll,
+			node: list,
+		};
 		return list;
 	}
 
@@ -1295,8 +1331,10 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			for (let k = blockStart; k < sessionLines.length; k++) sessionRowIndex[k] = i;
 		}
 
-		const visibleLines = lineOffset === 0 && sessionLines.length <= budget
-			? sessionLines : sessionLines.slice(lineOffset, lineOffset + budget);
+		const visibleLines =
+			lineOffset === 0 && sessionLines.length <= budget
+				? sessionLines
+				: sessionLines.slice(lineOffset, lineOffset + budget);
 		const sessionRegionStart = lines.length;
 		const svLines = renderScrollableList(visibleLines, { width, totalRows: rawTotalRows, scrollOffset: offsetRows });
 		for (let k = 0; k < svLines.length; k++) this.#hitRows[sessionRegionStart + k] = sessionRowIndex[k + lineOffset];
@@ -1361,9 +1399,18 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			this.resumeSelected();
 			return;
 		}
-		this.#viewport.layout(this.#visibleRowHeights(this.#menu.visibleItems), this.#menu.selectedIndex, this.#lineBudget());
+		this.#viewport.layout(
+			this.#visibleRowHeights(this.#menu.visibleItems),
+			this.#menu.selectedIndex,
+			this.#lineBudget(),
+		);
 		applyMenuMotion(action, this.#menu, this.#viewport, { wrap: false });
-		if (action.kind === "move" || action.kind === "page" || action.kind === "halfPage" || action.kind === "boundary") {
+		if (
+			action.kind === "move" ||
+			action.kind === "page" ||
+			action.kind === "halfPage" ||
+			action.kind === "boundary"
+		) {
 			this.#restoredSelected = undefined;
 			this.#selectionMoved = true;
 		}
@@ -1557,7 +1604,9 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		this.addChild(this.#contentSlot);
 	}
 
-	get filterFocused(): boolean { return this.#sessionList.filterFocused; }
+	get filterFocused(): boolean {
+		return this.#sessionList.filterFocused;
+	}
 
 	get blocksMenuHistory(): boolean {
 		return this.#inputLocked || this.#deleting;
@@ -1565,7 +1614,8 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 
 	navigationSnapshot(): unknown {
 		return {
-			scope: this.#scope, allSessions: this.#globalSessions,
+			scope: this.#scope,
+			allSessions: this.#globalSessions,
 			list: this.#sessionList.navigationSnapshot(),
 			message: this.#message?.kind === "error" ? this.#message : undefined,
 		};
@@ -1577,10 +1627,15 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		this.leaveMenu();
 		if (Array.isArray(state.allSessions)) {
 			this.#globalSessions = state.allSessions;
-			this.#sessionList.onToggleScope ??= () => { void this.#toggleScope(); };
+			this.#sessionList.onToggleScope ??= () => {
+				void this.#toggleScope();
+			};
 		}
 		this.#scope = state.scope === "all" && this.#globalSessions ? "all" : "folder";
-		this.#sessionList.setSessions(this.#scope === "all" ? this.#globalSessions! : this.#folderSessions, this.#scope === "all" || this.#folderShowCwd);
+		this.#sessionList.setSessions(
+			this.#scope === "all" ? this.#globalSessions! : this.#folderSessions,
+			this.#scope === "all" || this.#folderShowCwd,
+		);
 		this.#sessionList.restoreNavigation(state.list);
 		this.title = this.#headerLabel();
 		this.#clearError();
@@ -1834,7 +1889,10 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		if (this.#sessionList.onToggleScope) {
 			hints.push({ keys: ["tab"], label: this.#scope === "all" ? "current folder" : "all projects" });
 		}
-		hints.push({ keys: [boundKeys("app.interrupt", ["escape"])[0] ?? "escape"], label: this.filterFocused ? "back to list" : "close" });
+		hints.push({
+			keys: [boundKeys("app.interrupt", ["escape"])[0] ?? "escape"],
+			label: this.filterFocused ? "back to list" : "close",
+		});
 		const result = overlayCard("omp.overlay.sessions", tabs ? this.#title : this.title, [
 			...children,
 			hintsRow(hints),
@@ -1884,7 +1942,12 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			actions.push(pickerAction("scope", this.#scope === "all" ? "This folder" : "All projects", "tab"));
 		}
 		actions.push(
-			pickerAction("close", list.filterFocused ? "Back to list" : "Close", boundKeys("app.interrupt", ["escape"])[0] ?? "escape", { end: true }),
+			pickerAction(
+				"close",
+				list.filterFocused ? "Back to list" : "Close",
+				boundKeys("app.interrupt", ["escape"])[0] ?? "escape",
+				{ end: true },
+			),
 		);
 		const folder = this.#scopeLabel === false ? undefined : (this.#scopeLabel ?? path.basename(getProjectDir()));
 		const title = this.#pickerTitle;
@@ -1930,7 +1993,16 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			},
 			preview,
 		);
-		this.#pickerMemo = { view, preview, scope: this.#scope, message, errorOpen, choice, focused: list.filterFocused, node: result };
+		this.#pickerMemo = {
+			view,
+			preview,
+			scope: this.#scope,
+			message,
+			errorOpen,
+			choice,
+			focused: list.filterFocused,
+			node: result,
+		};
 		return result;
 	}
 

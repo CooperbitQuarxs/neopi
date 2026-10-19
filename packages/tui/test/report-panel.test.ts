@@ -198,8 +198,11 @@ describe("ReportPanel in text mode", () => {
 
 	it("uses Vim viewer motions and restores its independent viewport", () => {
 		const panel = new ReportPanel({
-			title: "Report", body: new Text(Array.from({ length: 40 }, (_, i) => `Entry ${i}`).join("\n"), 0, 0),
-			closeKey: "Esc", onClose: () => {}, maxRows: () => 15,
+			title: "Report",
+			body: new Text(Array.from({ length: 40 }, (_, i) => `Entry ${i}`).join("\n"), 0, 0),
+			closeKey: "Esc",
+			onClose: () => {},
+			maxRows: () => 15,
 		});
 		panel.render(80);
 		panel.handleInput("j");

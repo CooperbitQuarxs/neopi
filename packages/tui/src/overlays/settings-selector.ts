@@ -219,8 +219,16 @@ function createSettingsSelectField(
 	const keys = new MenuKeyReader();
 	const handleInput = field.handleInput.bind(field);
 	field.handleInput = data => {
-		if (field.filterFocused) { keys.reset(); handleInput(data); return; }
-		if (matchesKey(data, "escape")) { keys.reset(); onCancel(); return; }
+		if (field.filterFocused) {
+			keys.reset();
+			handleInput(data);
+			return;
+		}
+		if (matchesKey(data, "escape")) {
+			keys.reset();
+			onCancel();
+			return;
+		}
 		const action = keys.read(data);
 		if (action === "pending") return;
 		if (action?.kind === "horizontal") {
@@ -290,9 +298,11 @@ class MultiSelectSubmenu extends Container {
 		});
 		this.#selectList = new SelectList(items, Math.min(items.length, 12), getSelectListTheme(), { search: "always" });
 		this.#selectList.setSelectedIndex(this.#cursor);
-		if (navigation) this.#selectList.restoreNavigation({
-			...navigation, selectedValue: this.#options[this.#cursor]?.value,
-		});
+		if (navigation)
+			this.#selectList.restoreNavigation({
+				...navigation,
+				selectedValue: this.#options[this.#cursor]?.value,
+			});
 		this.#selectList.onSelect = item => this.#toggle(item.value);
 		this.#selectList.onSelectionChange = item => {
 			this.#cursor = this.#options.findIndex(option => option.value === item.value);
@@ -432,7 +442,9 @@ class MultiSelectSubmenu extends Container {
 		else this.#selectList.handleInput(data);
 	}
 
-	get filterFocused(): boolean { return this.#selectList.filterFocused; }
+	get filterFocused(): boolean {
+		return this.#selectList.filterFocused;
+	}
 
 	navigationSnapshot(): unknown {
 		return { list: this.#selectList.navigationSnapshot(), value: [...this.#value] };
@@ -442,7 +454,8 @@ class MultiSelectSubmenu extends Container {
 		this.#keys.reset();
 		if (typeof snapshot !== "object" || snapshot === null) return;
 		const state = snapshot as { list?: unknown; value?: string[] };
-		if (Array.isArray(state.value)) this.#value = state.value.filter(value => this.#options.some(option => option.value === value));
+		if (Array.isArray(state.value))
+			this.#value = state.value.filter(value => this.#options.some(option => option.value === value));
 		this.#rebuild();
 		this.#selectList.restoreNavigation(state.list);
 		this.#cursor = this.#options.findIndex(option => option.value === this.#selectList.getSelectedItem()?.value);
@@ -587,7 +600,11 @@ class ProviderLimitsSubmenu extends Container {
 	handleInput(data: string): void {
 		if (this.#listField) {
 			const list = this.#listField.selectList;
-			if (list.filterFocused) { this.#keys.reset(); this.#listField.handleInput(data); return; }
+			if (list.filterFocused) {
+				this.#keys.reset();
+				this.#listField.handleInput(data);
+				return;
+			}
 			const action = this.#keys.read(data);
 			if (action === "pending") return;
 			const selected = list.getSelectedItem();
@@ -630,7 +647,9 @@ class ProviderLimitsSubmenu extends Container {
 			else this.#showProviderList();
 			const child = this.children[0];
 			if (isMenuHistoryParticipant(child)) child.restoreNavigation(state.content);
-		} finally { this.#restoringNavigation = false; }
+		} finally {
+			this.#restoringNavigation = false;
+		}
 	}
 }
 
@@ -1108,7 +1127,11 @@ export class SettingsSelectorComponent implements Component {
 		this.#menuKeys.reset();
 		if (event.type === "action" && event.act === "close" && event.value === undefined) {
 			const list = this.#searchList ?? this.#currentList;
-			if ((this.#searchList && this.#search.focused) || list?.filterFocused || this.#pluginComponent?.filterFocused) {
+			if (
+				(this.#searchList && this.#search.focused) ||
+				list?.filterFocused ||
+				this.#pluginComponent?.filterFocused
+			) {
 				this.handleInput(ESCAPE);
 				return;
 			}
@@ -2019,7 +2042,9 @@ export class SettingsSelectorComponent implements Component {
 		this.#pluginComponent = new PluginSettingsComponent(this.#context.plugins, {
 			onClose: () => this.#callbacks.onCancel(),
 			onPluginChanged: () => this.#callbacks.onPluginsChanged?.(),
-			onPendingWrite: delta => { this.#pendingPluginWrites += delta; },
+			onPendingWrite: delta => {
+				this.#pendingPluginWrites += delta;
+			},
 			requestRender: this.#context.requestRender,
 		});
 	}
@@ -2126,10 +2151,12 @@ export class SettingsSelectorComponent implements Component {
 
 	get blocksMenuHistory(): boolean {
 		const list = this.#searchList ?? this.#currentList;
-		return list?.blocksMenuHistory === true
-			|| this.#pendingPluginWrites > 0
-			|| this.#pluginComponent?.blocksMenuHistory === true
-			|| this.#secretSubmenuOpen(list);
+		return (
+			list?.blocksMenuHistory === true ||
+			this.#pendingPluginWrites > 0 ||
+			this.#pluginComponent?.blocksMenuHistory === true ||
+			this.#secretSubmenuOpen(list)
+		);
 	}
 
 	navigationSnapshot(): unknown {
@@ -2146,14 +2173,25 @@ export class SettingsSelectorComponent implements Component {
 			searchFocused: this.#search.focused,
 			searchCursor: this.#search.input.getCursor(),
 			list: listSnapshot,
-			plugin: isMenuHistoryParticipant(this.#pluginComponent) ? this.#pluginComponent.navigationSnapshot() : undefined,
+			plugin: isMenuHistoryParticipant(this.#pluginComponent)
+				? this.#pluginComponent.navigationSnapshot()
+				: undefined,
 		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
 		this.#menuKeys.reset();
 		if (typeof snapshot !== "object" || snapshot === null) return;
-		const state = snapshot as { tab?: string; preSearchTab?: string; searching?: boolean; query?: string; searchFocused?: boolean; searchCursor?: number; list?: unknown; plugin?: unknown };
+		const state = snapshot as {
+			tab?: string;
+			preSearchTab?: string;
+			searching?: boolean;
+			query?: string;
+			searchFocused?: boolean;
+			searchCursor?: number;
+			list?: unknown;
+			plugin?: unknown;
+		};
 		if (!this.#tabs.some(tab => tab.id === state.tab)) return;
 		this.#restoringNavigation = true;
 		try {
@@ -2163,7 +2201,8 @@ export class SettingsSelectorComponent implements Component {
 			this.#switchToTab(tab);
 			if (state.searching) {
 				this.#startSearch(state.query ?? "");
-				if (typeof state.preSearchTab === "string") this.#preSearchTabId = state.preSearchTab as SettingTab | "plugins";
+				if (typeof state.preSearchTab === "string")
+					this.#preSearchTabId = state.preSearchTab as SettingTab | "plugins";
 				this.#search.focused = state.searchFocused === true;
 				if (typeof state.searchCursor === "number") this.#search.input.setCursor(state.searchCursor);
 			}
@@ -2176,14 +2215,24 @@ export class SettingsSelectorComponent implements Component {
 
 	#wireNavigation(): void {
 		const list = this.#searchList ?? this.#currentList;
-		if (list) list.onNavigationVisit = (page, previousList) => {
-			if (list !== (this.#searchList ?? this.#currentList)) return;
-			if (!this.#restoringNavigation) this.onNavigationVisit?.(page ? `${this.#currentTabId}:${page}` : "", { ...(this.navigationSnapshot() as object), list: previousList });
-		};
+		if (list)
+			list.onNavigationVisit = (page, previousList) => {
+				if (list !== (this.#searchList ?? this.#currentList)) return;
+				if (!this.#restoringNavigation)
+					this.onNavigationVisit?.(page ? `${this.#currentTabId}:${page}` : "", {
+						...(this.navigationSnapshot() as object),
+						list: previousList,
+					});
+			};
 		const plugin = this.#pluginComponent;
-		if (isMenuHistoryParticipant(plugin)) plugin.onNavigationVisit = (page, previousPlugin) => {
-			if (plugin !== this.#pluginComponent) return;
-			if (!this.#restoringNavigation) this.onNavigationVisit?.(page ? `plugins:${page}` : "", { ...(this.navigationSnapshot() as object), plugin: previousPlugin });
-		};
+		if (isMenuHistoryParticipant(plugin))
+			plugin.onNavigationVisit = (page, previousPlugin) => {
+				if (plugin !== this.#pluginComponent) return;
+				if (!this.#restoringNavigation)
+					this.onNavigationVisit?.(page ? `plugins:${page}` : "", {
+						...(this.navigationSnapshot() as object),
+						plugin: previousPlugin,
+					});
+			};
 	}
 }

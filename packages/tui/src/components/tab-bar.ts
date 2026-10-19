@@ -203,7 +203,9 @@ export class TabBar implements Component {
 		if (this.#label) parts.push(node("text", { spans: styleSpans(`${this.#label}:`, this.#theme.label) }));
 		parts.push(tabs);
 		if (this.showHint) {
-			parts.push(node("text", { spans: styleSpans(`(h/l tabs · ${formatKeyHint("tab")} cycle)`, this.#theme.hint) }));
+			parts.push(
+				node("text", { spans: styleSpans(`(h/l tabs · ${formatKeyHint("tab")} cycle)`, this.#theme.hint) }),
+			);
 		}
 		const described = parts.length === 1 ? tabs : row(parts, { gap: "md", align: "center" });
 		this.#native = { signature, node: described };

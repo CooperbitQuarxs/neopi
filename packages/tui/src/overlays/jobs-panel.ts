@@ -13,7 +13,14 @@ import { collapseCommand } from "../apps/ps-data";
 import { ansi, code, col, compact, item, node, row, span, stableKey, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton, selectList } from "../native/overlay";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, menuScrollBy, type MenuViewportPosition } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	menuScrollBy,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 import { MenuSelection } from "../components/menu-selection";
 import { ScrollView } from "../components/scroll-view";
 import { Text } from "../components/text";
@@ -105,13 +112,17 @@ const OUTPUT_ROWS = 8;
  */
 export class JobsSheet implements Component {
 	readonly nativeOverlay = {
-		role: "omp.overlay.jobs", size: "lg", anchor: "center", head: "Background jobs",
+		role: "omp.overlay.jobs",
+		size: "lg",
+		anchor: "center",
+		head: "Background jobs",
 	} as const;
 	readonly #source: JobsSheetSource;
 	readonly #keys = new MenuKeyReader();
 	readonly #search = new MenuSearchField();
 	readonly #selection = new MenuSelection<JobsPanelJob>([], {
-		getKey: job => job.id, getSearchText: job => `${job.label} ${job.id} ${job.type} ${job.status}`,
+		getKey: job => job.id,
+		getSearchText: job => `${job.label} ${job.id} ${job.type} ${job.status}`,
 	});
 	readonly #viewport = new MenuViewport();
 	readonly #output = new Text("", 0, 0);
@@ -130,15 +141,22 @@ export class JobsSheet implements Component {
 	navigationSnapshot(): unknown {
 		this.#current();
 		return {
-			selectedId: this.#selectedId, focus: this.#focus, search: this.#search.navigationSnapshot(),
-			viewportTop: this.#viewport.top, output: this.#outputView.navigationSnapshot(),
+			selectedId: this.#selectedId,
+			focus: this.#focus,
+			search: this.#search.navigationSnapshot(),
+			viewportTop: this.#viewport.top,
+			output: this.#outputView.navigationSnapshot(),
 		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as {
-			selectedId?: string; focus?: "list" | "output"; search?: unknown; viewportTop?: MenuViewportPosition | number; output?: unknown;
+			selectedId?: string;
+			focus?: "list" | "output";
+			search?: unknown;
+			viewportTop?: MenuViewportPosition | number;
+			output?: unknown;
 		};
 		this.#search.restoreNavigation(state.search);
 		this.#selectedId = typeof state.selectedId === "string" ? state.selectedId : undefined;
@@ -159,15 +177,25 @@ export class JobsSheet implements Component {
 		const close = actionButton("Close", "close", { keys: "escape" });
 		return col([
 			this.#search.input.describe(cx),
-			...(selected ? [
-				node("row", { role: "omp.jobs.split" }, [
-					node("col", { role: "omp.jobs.master" }, [
-						{ ...describeJobList(jobs, selected, now), scroll: this.#nativeListScroll },
-					], "master"),
-					describeDetail(selected, detail, now, this.#nativeOutputScroll),
-				], "split"),
-				actionBar([describeSummary(jobs), null, close]),
-			] : [describeEmpty(), actionBar([null, close])]),
+			...(selected
+				? [
+						node(
+							"row",
+							{ role: "omp.jobs.split" },
+							[
+								node(
+									"col",
+									{ role: "omp.jobs.master" },
+									[{ ...describeJobList(jobs, selected, now), scroll: this.#nativeListScroll }],
+									"master",
+								),
+								describeDetail(selected, detail, now, this.#nativeOutputScroll),
+							],
+							"split",
+						),
+						actionBar([describeSummary(jobs), null, close]),
+					]
+				: [describeEmpty(), actionBar([null, close])]),
 		]);
 	}
 
@@ -184,9 +212,12 @@ export class JobsSheet implements Component {
 		for (let index = window.startIndex; index < window.endIndex; index++) {
 			const job = jobs[index]!;
 			const cursor = job === selected ? ">" : " ";
-			lines.push(truncateToWidth(
-				`${cursor} ${job.status}  ${job.type} ${formatDuration(jobAge(job, now))}  ${collapseCommand(job.label)}`, width,
-			));
+			lines.push(
+				truncateToWidth(
+					`${cursor} ${job.status}  ${job.type} ${formatDuration(jobAge(job, now))}  ${collapseCommand(job.label)}`,
+					width,
+				),
+			);
 		}
 		const detail = selected && this.#source.inspect(selected.id);
 		if (selected && detail) {
@@ -205,9 +236,12 @@ export class JobsSheet implements Component {
 			}
 			lines.push(...this.#outputView.render(Math.max(1, width - 3)).map(line => `   ${line}`));
 		}
-		lines.push(truncateToWidth(
-			`j/k rows · h/l or Tab list/output · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Enter/Space details · / search · x cancel · Esc close`, width,
-		));
+		lines.push(
+			truncateToWidth(
+				`j/k rows · h/l or Tab list/output · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Enter/Space details · / search · x cancel · Esc close`,
+				width,
+			),
+		);
 		return lines;
 	}
 
@@ -227,7 +261,8 @@ export class JobsSheet implements Component {
 			return;
 		}
 		this.#current();
-		if (this.#viewport.top === undefined) this.#viewport.layout(this.#rowCounts, this.#selection.selectedIndex, this.#listRows());
+		if (this.#viewport.top === undefined)
+			this.#viewport.layout(this.#rowCounts, this.#selection.selectedIndex, this.#listRows());
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") {
 			if (matchesKey(data, "x")) this.#cancelSelected();
@@ -241,9 +276,14 @@ export class JobsSheet implements Component {
 		}
 		if (action.kind === "context" || action.kind === "horizontal") {
 			this.#search.focused = false;
-			this.#focus = action.kind === "horizontal"
-				? action.delta < 0 ? "list" : "output"
-				: this.#focus === "list" ? "output" : "list";
+			this.#focus =
+				action.kind === "horizontal"
+					? action.delta < 0
+						? "list"
+						: "output"
+					: this.#focus === "list"
+						? "output"
+						: "list";
 			return;
 		}
 		if (action.kind === "confirm" || action.kind === "toggle") {
@@ -305,7 +345,6 @@ export class JobsSheet implements Component {
 function jobAge(job: JobsPanelJob, nowMs: number): number {
 	return Math.max(0, (job.endTime ?? nowMs) - job.startTime);
 }
-
 
 /**
  * The master list: Running, then Recent, each under a quiet group label (a
@@ -372,7 +411,12 @@ function describeEmpty(): NativeNode {
  * The selected job: a status line (pill, live elapsed, type · id, Cancel job),
  * its task or full command, facts and the output pane (or its empty state).
  */
-function describeDetail(job: JobsPanelJob, detail: JobsPanelDetail | undefined, nowMs: number, scroll?: NativeScroll): NativeNode {
+function describeDetail(
+	job: JobsPanelJob,
+	detail: JobsPanelDetail | undefined,
+	nowMs: number,
+	scroll?: NativeScroll,
+): NativeNode {
 	const settled = job.status !== "running";
 	const exit = detail?.exitCode;
 	const age = Math.round(jobAge(job, nowMs));
@@ -416,7 +460,10 @@ function describeDetail(job: JobsPanelJob, detail: JobsPanelDetail | undefined, 
 			[
 				text("Output", { role: "omp.jobs.label" }),
 				detail?.output
-					? { ...ansi(detail.output, { follow: !settled, role: "omp.jobs.output", max: { h: "16lines" } }), scroll }
+					? {
+							...ansi(detail.output, { follow: !settled, role: "omp.jobs.output", max: { h: "16lines" } }),
+							scroll,
+						}
 					: text(settled ? "No output" : "No output yet", { role: "omp.jobs.nooutput" }),
 			],
 			"out",

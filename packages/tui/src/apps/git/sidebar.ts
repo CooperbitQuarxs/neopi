@@ -518,14 +518,16 @@ export class Sidebar {
 	/** Section entries in display order: tree dirs + files, or flat files. */
 	#fileEntries(files: readonly ChangedFile[], section: string): SidebarFileEntry[] {
 		const cached = this.#fileEntryCache.get(section);
-		if (cached?.files === files && cached.style === this.viewStyle && cached.treeVersion === this.#treeVersion &&
-			cached.query === this.search.value) {
+		if (
+			cached?.files === files &&
+			cached.style === this.viewStyle &&
+			cached.treeVersion === this.#treeVersion &&
+			cached.query === this.search.value
+		) {
 			return cached.entries;
 		}
 
-		const visibleFiles = this.search.value.trim()
-			? fuzzyFilter(files, this.search.value, file => file.path)
-			: files;
+		const visibleFiles = this.search.value.trim() ? fuzzyFilter(files, this.search.value, file => file.path) : files;
 		let entries: SidebarFileEntry[];
 		if (this.viewStyle === "path") {
 			entries = visibleFiles.map(file => ({ target: { kind: "file", file } as const, file }));
@@ -557,7 +559,8 @@ export class Sidebar {
 			snapshot.staged === this.#model.staged &&
 			snapshot.headFiles === headFiles &&
 			snapshot.style === this.viewStyle &&
-			snapshot.treeVersion === this.#treeVersion && snapshot.query === this.search.value
+			snapshot.treeVersion === this.#treeVersion &&
+			snapshot.query === this.search.value
 		) {
 			return;
 		}
@@ -604,22 +607,34 @@ export class Sidebar {
 
 	navigationSnapshot(): unknown {
 		return {
-			selected: this.#selection.selectedKey, collapsed: [...this.#collapsed],
-			collapsedSections: [...this.#collapsedSections], viewStyle: this.viewStyle,
-			viewport: this.#scrollView.navigationSnapshot(), search: this.search.navigationSnapshot(),
-			summary: this.summary.navigationSnapshot(), description: this.description.getState(),
+			selected: this.#selection.selectedKey,
+			collapsed: [...this.#collapsed],
+			collapsedSections: [...this.#collapsedSections],
+			viewStyle: this.viewStyle,
+			viewport: this.#scrollView.navigationSnapshot(),
+			search: this.search.navigationSnapshot(),
+			summary: this.summary.navigationSnapshot(),
+			description: this.description.getState(),
 			aiPrompt: this.#aiPromptOpen,
-			aiInput: this.aiInput.navigationSnapshot(), amend: this.amend,
+			aiInput: this.aiInput.navigationSnapshot(),
+			amend: this.amend,
 		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as {
-			selected?: string; collapsed?: string[]; collapsedSections?: SectionTarget["area"][];
-			viewStyle?: "path" | "tree"; viewport?: unknown; search?: unknown;
-			summary?: unknown; description?: EditorNavigationState;
-			aiPrompt?: boolean; aiInput?: unknown; amend?: boolean;
+			selected?: string;
+			collapsed?: string[];
+			collapsedSections?: SectionTarget["area"][];
+			viewStyle?: "path" | "tree";
+			viewport?: unknown;
+			search?: unknown;
+			summary?: unknown;
+			description?: EditorNavigationState;
+			aiPrompt?: boolean;
+			aiInput?: unknown;
+			amend?: boolean;
 		};
 		this.#collapsed.clear();
 		for (const key of state.collapsed ?? []) if (typeof key === "string") this.#collapsed.add(key);
@@ -982,9 +997,9 @@ export class Sidebar {
 		else if (action?.kind === "boundary") {
 			this.#moveSelection((action.edge === "first" ? -1 : 1) * this.#selection.items.length);
 		} else if (action?.kind === "halfPage" || action?.kind === "page") {
-			this.#moveSelection(action.delta * Math.max(1, Math.floor(
-				(this.#lastHeight - 4) / (action.kind === "halfPage" ? 2 : 1),
-			)));
+			this.#moveSelection(
+				action.delta * Math.max(1, Math.floor((this.#lastHeight - 4) / (action.kind === "halfPage" ? 2 : 1))),
+			);
 		} else if (action?.kind === "scroll") {
 			this.#scrollView.scroll(action.delta);
 			this.#requestRender();
@@ -995,7 +1010,10 @@ export class Sidebar {
 			// Enter opens a file (focus the diff); space/s/u do the staging.
 			if (target.kind === "file") this.#onFocusDiff();
 			else this.#activate(target);
-		} else if (action?.kind === "toggle" && (target?.kind === "file" || target?.kind === "dir" || target?.kind === "section")) {
+		} else if (
+			action?.kind === "toggle" &&
+			(target?.kind === "file" || target?.kind === "dir" || target?.kind === "section")
+		) {
 			// Space stages/unstages the row — folders and section headers act on every file underneath.
 			// Enter/click toggle dir/section collapse; ←/→ fold explicitly.
 			const action = this.#stageActionFor(target);

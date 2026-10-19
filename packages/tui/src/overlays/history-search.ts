@@ -27,7 +27,14 @@ import { boundKeys, rawKeyHint } from "../chrome/keybinding-hints";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { contentRowWidth, renderScrollableList } from "../chrome/selector-helpers";
 import { MenuSelection } from "../components/menu-selection";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, menuScrollBy, type MenuViewportPosition } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	menuScrollBy,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 import type { KeyName } from "../key-hint-format";
 import type { TspPickerItem } from "@oh-my-pi/pi-wire";
 import { col, keyed, node, span } from "../native/describe";
@@ -235,14 +242,17 @@ export class HistorySearchComponent extends OverlayPanel {
 				this.#onSelect(selected.prompt);
 			}
 		};
-		this.#searchInput.onEscape = () => { this.#search.focused = false; };
+		this.#searchInput.onEscape = () => {
+			this.#search.focused = false;
+		};
 
 		this.#resultsList = new HistoryResultsList(this.#menu, this.#viewport);
 
 		const dot = theme.fg("dim", theme.sep.dot);
 		const hint = [
 			"j/k ↑↓ · Ctrl-u/d half · PgUp/Dn · gg/G · Ctrl-e/y view",
-			rawKeyHint("enter", "select"), "/ search · Tab field/list · Esc field/list/close",
+			rawKeyHint("enter", "select"),
+			"/ search · Tab field/list · Esc field/list/close",
 		].join(dot);
 
 		this.addChild(new Spacer(1));
@@ -262,7 +272,11 @@ export class HistorySearchComponent extends OverlayPanel {
 
 	navigationSnapshot(): unknown {
 		this.#flushPendingSearch();
-		return { search: this.#search.navigationSnapshot(), selected: this.#menu.selectedItem && nativeEntryKey(this.#menu.selectedItem), top: this.#viewport.top };
+		return {
+			search: this.#search.navigationSnapshot(),
+			selected: this.#menu.selectedItem && nativeEntryKey(this.#menu.selectedItem),
+			top: this.#viewport.top,
+		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
@@ -371,7 +385,16 @@ export class HistorySearchComponent extends OverlayPanel {
 		}
 		if (usePicker) {
 			const root = col([keyed(this.#describePicker(items, selected, query), PICKER_KEY)]);
-			this.#nativeMemo = { picker: true, items, selected, query, cursor, focused: this.#search.focused, scroll: this.#nativeScroll, node: root };
+			this.#nativeMemo = {
+				picker: true,
+				items,
+				selected,
+				query,
+				cursor,
+				focused: this.#search.focused,
+				scroll: this.#nativeScroll,
+				node: root,
+			};
 			return root;
 		}
 
@@ -386,18 +409,21 @@ export class HistorySearchComponent extends OverlayPanel {
 				nativeEntryKey(entry),
 			),
 		);
-		const list = { ...node(
-			"list",
-			{
-				selected: selected ? nativeEntryKey(selected) : null,
-				filter: query || undefined,
-				empty: query ? "No matching history" : "No history yet",
-				max: { lines: MAX_VISIBLE },
-				virtual: true,
-			},
-			rows,
-			"list",
-		), scroll: this.#nativeScroll };
+		const list = {
+			...node(
+				"list",
+				{
+					selected: selected ? nativeEntryKey(selected) : null,
+					filter: query || undefined,
+					empty: query ? "No matching history" : "No history yet",
+					max: { lines: MAX_VISIBLE },
+					virtual: true,
+				},
+				rows,
+				"list",
+			),
+			scroll: this.#nativeScroll,
+		};
 		this.#nativeHints = hintsRow([
 			{ keys: ["j", "k", "up", "down"], label: "navigate" },
 			{ keys: ENTER_KEYS, label: "select" },
@@ -405,7 +431,16 @@ export class HistorySearchComponent extends OverlayPanel {
 			{ keys: ["escape"], label: this.#search.focused ? "back to list" : "close" },
 		]);
 		const root = overlayCard(this.nativeRole, this.title, [this.#searchInput, list, this.#nativeHints]);
-		this.#nativeMemo = { picker: false, items, selected, query, cursor, focused: this.#search.focused, scroll: this.#nativeScroll, node: root };
+		this.#nativeMemo = {
+			picker: false,
+			items,
+			selected,
+			query,
+			cursor,
+			focused: this.#search.focused,
+			scroll: this.#nativeScroll,
+			node: root,
+		};
 		return root;
 	}
 
@@ -435,7 +470,12 @@ export class HistorySearchComponent extends OverlayPanel {
 			empty: "No history yet",
 			actions: [
 				pickerAction("insert", "Insert", "enter", { primary: true }),
-				pickerAction("close", this.#search.focused ? "Back to list" : "Close", boundKeys("app.interrupt", ["escape"])[0] ?? "escape", { end: true }),
+				pickerAction(
+					"close",
+					this.#search.focused ? "Back to list" : "Close",
+					boundKeys("app.interrupt", ["escape"])[0] ?? "escape",
+					{ end: true },
+				),
 			],
 		});
 	}

@@ -227,7 +227,9 @@ export function selectListPicker(list: SelectList, o: SelectPickerOptions): TspP
 		size: "md",
 		layout: "rows",
 		preview: "none",
-		...(o.searchable || list.filterFocused || view.query ? { query: view.query, cursor: view.cursor } : { query: null }),
+		...(o.searchable || list.filterFocused || view.query
+			? { query: view.query, cursor: view.cursor }
+			: { query: null }),
 		items,
 		selected: view.selected,
 		...(o.current ? { current: o.current } : {}),

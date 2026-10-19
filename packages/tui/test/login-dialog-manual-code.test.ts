@@ -74,15 +74,16 @@ describe("LoginDialogComponent manual code input", () => {
 
 	it("keeps printable menu bindings and Kitty text literal until explicit CR or LF", async () => {
 		const previous = getKeybindings();
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": "j",
-			"tui.input.submit": "s",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": "j",
+				"tui.input.submit": "s",
+			}),
+		);
 		try {
 			for (const enter of ["\r", "\n"]) {
 				const dialog = makeDialog();
-				const outcome = dialog.showManualInput("Paste the code:")
-					.catch((error: unknown) => error);
+				const outcome = dialog.showManualInput("Paste the code:").catch((error: unknown) => error);
 				const value = "j/k h l gg G /code s";
 				for (const char of value) dialog.handleInput(char);
 				dialog.handleInput("\x1b[106u");
@@ -106,7 +107,7 @@ describe("LoginDialogComponent manual code input", () => {
 			expect(dialog.signal.aborted).toBe(false);
 			dialog.handleInput("\x1b");
 			expect(await outcome).toBeInstanceOf(Error);
-			expect((await outcome as Error).message).toContain("Login cancelled");
+			expect(((await outcome) as Error).message).toContain("Login cancelled");
 			expect(dialog.signal.aborted).toBe(true);
 		} finally {
 			setKeybindings(previous);
@@ -130,15 +131,16 @@ describe("LoginDialogComponent manual code input", () => {
 
 	it("preserves native secret submission and starts the next prompt with fresh undo state", async () => {
 		const previous = getKeybindings();
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": "j",
-			"tui.input.submit": "s",
-			"tui.editor.undo": "ctrl+z",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": "j",
+				"tui.input.submit": "s",
+				"tui.editor.undo": "ctrl+z",
+			}),
+		);
 		try {
 			const dialog = makeDialog();
-			const first = dialog.showPrompt({ message: "Secret:", secret: true })
-				.catch((error: unknown) => error);
+			const first = dialog.showPrompt({ message: "Secret:", secret: true }).catch((error: unknown) => error);
 			const secret = "j-secret-s";
 			for (const char of secret) dialog.handleInput(char);
 			expect(dialog.signal.aborted).toBe(false);
@@ -159,10 +161,12 @@ describe("LoginDialogComponent manual code input", () => {
 
 	it("retains configured nonprintable submit and cancel bindings", async () => {
 		const previous = getKeybindings();
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": "alt+q",
-			"tui.input.submit": "alt+s",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": "alt+q",
+				"tui.input.submit": "alt+s",
+			}),
+		);
 		try {
 			const first = makeDialog();
 			const submitted = first.showManualInput("Paste the code:");

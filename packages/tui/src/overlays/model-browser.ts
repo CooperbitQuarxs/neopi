@@ -28,7 +28,14 @@ import {
 import { thinkingLevelGlyph } from "../render/render-utils";
 import { type Theme, type ThemeColor, theme } from "../theme/theme";
 import { MenuSelection, type MenuWindow } from "../components/menu-selection";
-import { applyMenuMotion, MenuKeyReader, type MenuNavAction, MenuSearchField, MenuViewport, type MenuViewportPosition } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	type MenuNavAction,
+	MenuSearchField,
+	MenuViewport,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 import type {
 	TspPickerColumn,
 	TspPickerGroup,
@@ -1741,8 +1748,10 @@ export class ModelBrowser implements Component {
 					),
 				);
 			}
-			const clippedRows = window.lineOffset === 0 && rows.length <= this.#maxVisible
-				? rows : rows.slice(window.lineOffset, window.lineOffset + this.#maxVisible);
+			const clippedRows =
+				window.lineOffset === 0 && rows.length <= this.#maxVisible
+					? rows
+					: rows.slice(window.lineOffset, window.lineOffset + this.#maxVisible);
 			const scrollView = new ScrollView(clippedRows, {
 				height: clippedRows.length,
 				scrollbar: "auto",

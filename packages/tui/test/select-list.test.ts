@@ -63,7 +63,11 @@ describe("SelectList", () => {
 	});
 
 	it("lets a parent own gg prefixes while applying decoded list actions", () => {
-		const list = new SelectList(["a", "b", "c"].map(value => ({ value, label: value })), 3, testTheme);
+		const list = new SelectList(
+			["a", "b", "c"].map(value => ({ value, label: value })),
+			3,
+			testTheme,
+		);
 		const parent = new MenuKeyReader();
 		const send = (data: string) => {
 			const action = parent.read(data);
@@ -88,10 +92,15 @@ describe("SelectList", () => {
 
 	it("disables Space activation without retaining a pending navigation prefix", () => {
 		const selected: string[] = [];
-		const list = new SelectList(["a", "b"].map(value => ({ value, label: value })), 2, testTheme, {
-			search: "always",
-			activateOnSpace: false,
-		});
+		const list = new SelectList(
+			["a", "b"].map(value => ({ value, label: value })),
+			2,
+			testTheme,
+			{
+				search: "always",
+				activateOnSpace: false,
+			},
+		);
 		list.onSelect = item => selected.push(item.value);
 		list.handleInput("G");
 		list.handleInput("g");

@@ -182,7 +182,11 @@ describe("AnnotationOverlay", () => {
 		const files = Array.from({ length: 40 }, (_, index) => diffFile(`src/file-${index}.ts`, ONE_LINE_HUNK, rows));
 		const completed: (CodeReviewOverlayResult | undefined)[] = [];
 		const overlay = makeDiffOverlay(files, { rows: 20, onComplete: result => completed.push(result) });
-		const rail = () => render(overlay).split("\n").map(line => line.split("│")[1] ?? "").join("\n");
+		const rail = () =>
+			render(overlay)
+				.split("\n")
+				.map(line => line.split("│")[1] ?? "")
+				.join("\n");
 		expect(rail()).toContain("file-0.ts");
 		overlay.handleInput(CTRL_E);
 		expect(rail()).not.toContain("file-0.ts");
@@ -218,9 +222,16 @@ describe("AnnotationOverlay", () => {
 
 	it("uses the exact injected keybinding manager instead of global context aliases", () => {
 		const files = [diffFile("one.ts", ONE_LINE_HUNK, []), diffFile("two.ts", ONE_LINE_HUNK, [])];
-		const overlay = new AnnotationOverlay(makeTui(), darkTheme!, KeybindingsManager.inMemory({
-			"tui.select.down": "ctrl+n",
-		}), files, "review", { onComplete: () => {} });
+		const overlay = new AnnotationOverlay(
+			makeTui(),
+			darkTheme!,
+			KeybindingsManager.inMemory({
+				"tui.select.down": "ctrl+n",
+			}),
+			files,
+			"review",
+			{ onComplete: () => {} },
+		);
 		render(overlay);
 		overlay.handleInput("\x0e");
 		expect(overlay.reviewFilePath()).toBe("two.ts");
@@ -230,8 +241,18 @@ describe("AnnotationOverlay", () => {
 		const text = Array.from({ length: 200 }, (_, index) => `line-${String(index).padStart(3, "0")}`).join("\n");
 		const completed: (TextReviewOverlayResult | undefined)[] = [];
 		let opened = 0;
-		const overlay = new AnnotationOverlay(makeTui(20), darkTheme!, getKeybindings() as KeybindingsManager,
-			{ id: "source", kind: "message", text, label: "source" }, { onComplete: result => completed.push(result), onExternalEditor: () => { opened++; } });
+		const overlay = new AnnotationOverlay(
+			makeTui(20),
+			darkTheme!,
+			getKeybindings() as KeybindingsManager,
+			{ id: "source", kind: "message", text, label: "source" },
+			{
+				onComplete: result => completed.push(result),
+				onExternalEditor: () => {
+					opened++;
+				},
+			},
+		);
 		overlay.focused = true;
 		expect(render(overlay)).toContain("line-000");
 		overlay.handleInput(CTRL_E);
@@ -262,7 +283,11 @@ describe("AnnotationOverlay", () => {
 
 	it("shares existing-note chooser bounds and Space edits without completing the review", () => {
 		const completed: (TextReviewOverlayResult | undefined)[] = [];
-		const overlay = makeTextOverlay({ id: "source", kind: "message", text: "source", label: "source" }, result => completed.push(result), 20);
+		const overlay = makeTextOverlay(
+			{ id: "source", kind: "message", text: "source", label: "source" },
+			result => completed.push(result),
+			20,
+		);
 		for (const note of ["first", "middle", "last"]) {
 			overlay.handleInput("a");
 			overlay.handleInput(note);
@@ -281,19 +306,28 @@ describe("AnnotationOverlay", () => {
 	});
 
 	it("types printable submit, delete, cancel and external-editor bindings literally", () => {
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.input.submit": ["j", "enter"],
-			"tui.editor.deleteCharBackward": "k",
-			"tui.select.cancel": "g",
-			"app.editor.external": "h",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.input.submit": ["j", "enter"],
+				"tui.editor.deleteCharBackward": "k",
+				"tui.select.cancel": "g",
+				"app.editor.external": "h",
+			}),
+		);
 		const completed: (TextReviewOverlayResult | undefined)[] = [];
 		let externalEdits = 0;
-		const overlay = new AnnotationOverlay(makeTui(), darkTheme!, getKeybindings() as KeybindingsManager,
-			{ id: "source", kind: "message", text: "source", label: "source" }, {
+		const overlay = new AnnotationOverlay(
+			makeTui(),
+			darkTheme!,
+			getKeybindings() as KeybindingsManager,
+			{ id: "source", kind: "message", text: "source", label: "source" },
+			{
 				onComplete: result => completed.push(result),
-				onExternalEditor: () => { externalEdits++; },
-			});
+				onExternalEditor: () => {
+					externalEdits++;
+				},
+			},
+		);
 		overlay.handleInput("a");
 		const literal = "j/k h l gg G / note";
 		for (const char of literal) overlay.handleInput(char);

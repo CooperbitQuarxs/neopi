@@ -209,9 +209,12 @@ export class DebugLogViewerModel {
 
 	navigationSnapshot(): unknown {
 		return {
-			filter: this.#filterQuery, processFilter: this.#processFilterEnabled,
-			cursor: this.#getCursorToken(), anchor: this.#getAnchorLogIndex(),
-			expanded: [...this.#expandedLogIndices], loadedStart: this.#loadedStartIndex,
+			filter: this.#filterQuery,
+			processFilter: this.#processFilterEnabled,
+			cursor: this.#getCursorToken(),
+			anchor: this.#getAnchorLogIndex(),
+			expanded: [...this.#expandedLogIndices],
+			loadedStart: this.#loadedStartIndex,
 			logCount: this.logCount,
 		};
 	}
@@ -219,21 +222,31 @@ export class DebugLogViewerModel {
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as {
-			filter?: string; processFilter?: boolean; cursor?: CursorToken; anchor?: number;
-			expanded?: number[]; loadedStart?: number; logCount?: number;
+			filter?: string;
+			processFilter?: boolean;
+			cursor?: CursorToken;
+			anchor?: number;
+			expanded?: number[];
+			loadedStart?: number;
+			logCount?: number;
 		};
 		const offset = typeof state.logCount === "number" ? this.logCount - state.logCount : 0;
 		if (typeof state.filter === "string") this.#filterQuery = state.filter;
 		if (typeof state.processFilter === "boolean") this.#processFilterEnabled = state.processFilter;
 		if (typeof state.loadedStart === "number") this.#loadedStartIndex = Math.max(0, state.loadedStart + offset);
 		if (Array.isArray(state.expanded)) {
-			this.#expandedLogIndices = new Set(state.expanded
-				.filter(index => Number.isInteger(index) && index + offset >= 0 && index + offset < this.logCount)
-				.map(index => index + offset));
+			this.#expandedLogIndices = new Set(
+				state.expanded
+					.filter(index => Number.isInteger(index) && index + offset >= 0 && index + offset < this.logCount)
+					.map(index => index + offset),
+			);
 		}
-		const cursor = state.cursor?.kind === "log"
-			? { kind: "log" as const, logIndex: state.cursor.logIndex + offset }
-			: state.cursor?.kind === "load-older" ? state.cursor : undefined;
+		const cursor =
+			state.cursor?.kind === "log"
+				? { kind: "log" as const, logIndex: state.cursor.logIndex + offset }
+				: state.cursor?.kind === "load-older"
+					? state.cursor
+					: undefined;
 		this.#rebuildRows(cursor, typeof state.anchor === "number" ? state.anchor + offset : undefined);
 	}
 
@@ -721,8 +734,10 @@ export class DebugLogViewerComponent implements Component {
 
 	navigationSnapshot(): unknown {
 		return {
-			model: this.#model.navigationSnapshot(), viewport: this.#frame.navigationSnapshot(),
-			filterFocused: this.#search.focused, filterCursor: this.#search.cursor,
+			model: this.#model.navigationSnapshot(),
+			viewport: this.#frame.navigationSnapshot(),
+			filterFocused: this.#search.focused,
+			filterCursor: this.#search.cursor,
 		};
 	}
 
@@ -765,7 +780,8 @@ export class DebugLogViewerComponent implements Component {
 		this.#statusMessage = undefined;
 		if (action) {
 			switch (action.kind) {
-				case "cancel": return this.#onExit();
+				case "cancel":
+					return this.#onExit();
 				case "search":
 					this.#filter.focused = true;
 					return;
@@ -775,9 +791,11 @@ export class DebugLogViewerComponent implements Component {
 					return;
 				case "halfPage":
 				case "page":
-					this.#model.moveCursor(action.delta * Math.max(1, Math.floor(
-						this.#frame.getBodyHeight() / (action.kind === "halfPage" ? 2 : 1),
-					)), false);
+					this.#model.moveCursor(
+						action.delta *
+							Math.max(1, Math.floor(this.#frame.getBodyHeight() / (action.kind === "halfPage" ? 2 : 1))),
+						false,
+					);
 					return;
 				case "boundary":
 					this.#model.moveCursor((action.edge === "first" ? -1 : 1) * this.#model.rows.length, false);
@@ -800,7 +818,8 @@ export class DebugLogViewerComponent implements Component {
 				case "confirm":
 					if (this.#model.cursorRowKind === "load-older") void this.#handleLoadOlder();
 					return;
-				default: return;
+				default:
+					return;
 			}
 		}
 		if (keyData === "o") void this.#handleLoadOlder(this.#frame.getBodyHeight() + 1);

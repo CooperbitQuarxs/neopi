@@ -685,10 +685,11 @@ export class Form implements Component, Focusable, MouseRoutable {
 		}
 		// Context aliases are recognized without routing printable text through
 		// the menu reader: form controls keep every literal editing key.
-		if (this.#fields.length > 1 && (
-			getKeybindings().matches(data, "tui.select.nextContext") ||
-			getKeybindings().matches(data, "tui.select.prevContext")
-		)) {
+		if (
+			this.#fields.length > 1 &&
+			(getKeybindings().matches(data, "tui.select.nextContext") ||
+				getKeybindings().matches(data, "tui.select.prevContext"))
+		) {
 			const action = this.#keys.read(data);
 			if (!action || action === "pending" || action.kind !== "context") return;
 			this.#activeIndex = (this.#activeIndex + action.delta + this.#fields.length) % this.#fields.length;

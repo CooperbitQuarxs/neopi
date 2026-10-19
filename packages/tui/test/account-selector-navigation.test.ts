@@ -6,13 +6,30 @@ import { OAuthSelectorComponent } from "../src/overlays/oauth-selector";
 import type { DescribeContext } from "../src/native/node";
 import { PICKER_KEY } from "../src/native/picker";
 
-beforeAll(async () => { await initTheme(); });
+beforeAll(async () => {
+	await initTheme();
+});
 
 it("logout searches literally and restores bounds without Space logging out", () => {
 	const picked: number[] = [];
 	let cancelled = false;
-	const accounts = Array.from({ length: 20 }, (_, credentialId) => ({ credentialId, provider: "test", label: `account ${credentialId}`, detail: "", type: "oauth" as const, active: credentialId === 0 }));
-	const make = () => new LogoutAccountSelectorComponent("Test", accounts, account => picked.push(account.credentialId), () => { cancelled = true; });
+	const accounts = Array.from({ length: 20 }, (_, credentialId) => ({
+		credentialId,
+		provider: "test",
+		label: `account ${credentialId}`,
+		detail: "",
+		type: "oauth" as const,
+		active: credentialId === 0,
+	}));
+	const make = () =>
+		new LogoutAccountSelectorComponent(
+			"Test",
+			accounts,
+			account => picked.push(account.credentialId),
+			() => {
+				cancelled = true;
+			},
+		);
 	const selector = make();
 	selector.handleInput("G");
 	selector.handleInput("\x05");
@@ -32,8 +49,21 @@ it("logout searches literally and restores bounds without Space logging out", ()
 
 it("reset requires explicit double Enter even after history restoration", () => {
 	const picked: ResetUsageAccount[] = [];
-	const accounts: ResetUsageAccount[] = Array.from({ length: 20 }, (_, credentialId) => ({ label: `account ${credentialId}`, provider: "test", providerLabel: "Test", availableCount: 1, redeemableCount: 1, target: { provider: "test", credentialId }, active: credentialId === 0 }));
-	const make = () => new ResetUsageSelectorComponent(accounts, account => picked.push(account), () => {});
+	const accounts: ResetUsageAccount[] = Array.from({ length: 20 }, (_, credentialId) => ({
+		label: `account ${credentialId}`,
+		provider: "test",
+		providerLabel: "Test",
+		availableCount: 1,
+		redeemableCount: 1,
+		target: { provider: "test", credentialId },
+		active: credentialId === 0,
+	}));
+	const make = () =>
+		new ResetUsageSelectorComponent(
+			accounts,
+			account => picked.push(account),
+			() => {},
+		);
 	const selector = make();
 	selector.handleInput("G");
 	selector.handleInput(" ");
@@ -48,15 +78,59 @@ it("reset requires explicit double Enter even after history restoration", () => 
 	expect(picked[0]?.target.credentialId).toBe(19);
 });
 
-const nativePickerContext: DescribeContext = { cols: 100, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
+const nativePickerContext: DescribeContext = {
+	cols: 100,
+	reduceMotion: false,
+	dark: true,
+	supports: () => true,
+	feature: () => true,
+};
 
 it.each([
-	["provider", (cancel: () => void) => new OAuthSelectorComponent("login", { credentials: { has: () => false }, keys: { source: () => undefined } as never }, () => {}, cancel)],
-	["logout", (cancel: () => void) => new LogoutAccountSelectorComponent("Test", [{ credentialId: 1, provider: "test", label: "account", detail: "", type: "oauth", active: false }], () => {}, cancel)],
-	["reset", (cancel: () => void) => new ResetUsageSelectorComponent([{ label: "account", provider: "test", providerLabel: "Test", availableCount: 1, redeemableCount: 1, target: { provider: "test", credentialId: 1 }, active: false }], () => {}, cancel)],
+	[
+		"provider",
+		(cancel: () => void) =>
+			new OAuthSelectorComponent(
+				"login",
+				{ credentials: { has: () => false }, keys: { source: () => undefined } as never },
+				() => {},
+				cancel,
+			),
+	],
+	[
+		"logout",
+		(cancel: () => void) =>
+			new LogoutAccountSelectorComponent(
+				"Test",
+				[{ credentialId: 1, provider: "test", label: "account", detail: "", type: "oauth", active: false }],
+				() => {},
+				cancel,
+			),
+	],
+	[
+		"reset",
+		(cancel: () => void) =>
+			new ResetUsageSelectorComponent(
+				[
+					{
+						label: "account",
+						provider: "test",
+						providerLabel: "Test",
+						availableCount: 1,
+						redeemableCount: 1,
+						target: { provider: "test", credentialId: 1 },
+						active: false,
+					},
+				],
+				() => {},
+				cancel,
+			),
+	],
 ] as const)("%s native close first leaves its search field, then closes", (_name, make) => {
 	let closed = 0;
-	const selector = make(() => { closed++; });
+	const selector = make(() => {
+		closed++;
+	});
 	selector.handleInput("/");
 	selector.handleInput("hjkl/ g");
 	expect(JSON.stringify(selector.describe(nativePickerContext))).toContain("Back to list");

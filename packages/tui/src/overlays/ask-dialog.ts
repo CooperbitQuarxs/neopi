@@ -574,10 +574,12 @@ export class AskDialogComponent implements Component {
 	#submitView: ScrollView | undefined;
 	#submitLayoutDirty = true;
 	#scrollSequence = 0;
-	#nativeScroll: {
-		target: "options" | "preview" | "review";
-		request: NonNullable<NativeNode["scroll"]>;
-	} | undefined;
+	#nativeScroll:
+		| {
+				target: "options" | "preview" | "review";
+				request: NonNullable<NativeNode["scroll"]>;
+		  }
+		| undefined;
 	#remainingSeconds: number | undefined;
 	#countdown: CountdownTimer | undefined;
 	#promptActive = false;
@@ -973,26 +975,22 @@ export class AskDialogComponent implements Component {
 			);
 		});
 		// Keyed per question: a click aimed at one question's list never lands on the next after it advances.
-		children.push(
-			{
-				...node(
-					"list",
-					{ selected: rows[state.cursorIndex]?.key ?? null, role: "omp.ask.options" },
-					items,
-					`q${this.#currentQuestionIndex()}`,
-				),
-				scroll: this.#nativeScroll?.target === "options" ? this.#nativeScroll.request : undefined,
-			},
-		);
+		children.push({
+			...node(
+				"list",
+				{ selected: rows[state.cursorIndex]?.key ?? null, role: "omp.ask.options" },
+				items,
+				`q${this.#currentQuestionIndex()}`,
+			),
+			scroll: this.#nativeScroll?.target === "options" ? this.#nativeScroll.request : undefined,
+		});
 		const highlighted = rows[state.cursorIndex];
 		const option = highlighted?.kind === "option" ? question.options[highlighted.optionIndex ?? -1] : undefined;
 		if (option?.preview?.trim()) {
-			children.push(
-				{
-					...node("md", { text: replaceTabs(option.preview), role: "omp.ask.preview" }, undefined, "preview"),
-					scroll: this.#nativeScroll?.target === "preview" ? this.#nativeScroll.request : undefined,
-				},
-			);
+			children.push({
+				...node("md", { text: replaceTabs(option.preview), role: "omp.ask.preview" }, undefined, "preview"),
+				scroll: this.#nativeScroll?.target === "preview" ? this.#nativeScroll.request : undefined,
+			});
 		}
 	}
 
@@ -1395,9 +1393,14 @@ export class AskDialogComponent implements Component {
 			const cursorStart = layout.starts[state.cursorIndex] ?? 0;
 			const cursorEnd = layout.starts[state.cursorIndex + 1] ?? layout.totalRows;
 			const nativeTarget = question.options[rows[state.cursorIndex]?.optionIndex ?? -1]?.preview?.trim()
-				? "preview" : "options";
+				? "preview"
+				: "options";
 			if (action.kind === "scroll") {
-				state.scrollOffset = clamp(state.scrollOffset + action.delta, 0, Math.max(0, layout.totalRows - layout.rows));
+				state.scrollOffset = clamp(
+					state.scrollOffset + action.delta,
+					0,
+					Math.max(0, layout.totalRows - layout.rows),
+				);
 				state.manualScroll = true;
 				this.#queueNativeScroll(action, nativeTarget);
 			} else if (action.kind === "page" && cursorEnd - cursorStart > layout.rows) {
@@ -1405,7 +1408,8 @@ export class AskDialogComponent implements Component {
 				// half-page motions still choose other answers; Ctrl+E/Y is free.
 				state.scrollOffset = clamp(
 					state.scrollOffset + action.delta * Math.max(1, layout.rows - 1),
-					cursorStart, cursorEnd - layout.rows,
+					cursorStart,
+					cursorEnd - layout.rows,
 				);
 				state.manualScroll = true;
 				this.#queueNativeScroll(action, nativeTarget);
@@ -1425,9 +1429,12 @@ export class AskDialogComponent implements Component {
 			return;
 		}
 		if (action?.kind === "move" || action?.kind === "boundary") {
-			state.cursorIndex = action.kind === "move"
-				? clamp(state.cursorIndex + action.delta, 0, Math.max(0, rows.length - 1))
-				: action.edge === "first" ? 0 : Math.max(0, rows.length - 1);
+			state.cursorIndex =
+				action.kind === "move"
+					? clamp(state.cursorIndex + action.delta, 0, Math.max(0, rows.length - 1))
+					: action.edge === "first"
+						? 0
+						: Math.max(0, rows.length - 1);
 			state.manualScroll = false;
 			this.#nativeScroll = undefined;
 			this.#requestRender();

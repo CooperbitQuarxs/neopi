@@ -702,8 +702,10 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const editing = input
 			? { row: "name", draft: input.getValue(), cursor: Number(input.debugState().cursor) }
 			: null;
-		const filteredList = this.#active instanceof SelectList && (this.#active.filterFocused || this.#active.getFilter().length > 0);
-		const overlay = filteredList ||
+		const filteredList =
+			this.#active instanceof SelectList && (this.#active.filterFocused || this.#active.getFilter().length > 0);
+		const overlay =
+			filteredList ||
 			this.#screen === "model" ||
 			this.#screen === "thinking" ||
 			this.#screen === "review-mode" ||
@@ -755,7 +757,16 @@ export class AdvisorConfigOverlayComponent implements Component {
 			const order = active.pickerOrder({ providers: false, rest: active.query.trim() ? "Matches" : "All" });
 			const catalogue = active.pickerItems(this.#modelItems);
 			const preview = active.pickerPreview("compact", this.#modelCurrent);
-			const deps = [active, order, catalogue, preview, active.query, active.cursor, active.pickerSelected, active.filterFocused];
+			const deps = [
+				active,
+				order,
+				catalogue,
+				preview,
+				active.query,
+				active.cursor,
+				active.pickerSelected,
+				active.filterFocused,
+			];
 			if (memo && sameDeps(memo.deps, deps)) return memo.node;
 			const sheet = this.#modelSheet(active, order, catalogue, preview);
 			this.#nativeEditor = { deps, node: sheet };
@@ -778,7 +789,10 @@ export class AdvisorConfigOverlayComponent implements Component {
 							items: props.items?.filter(item => item.id !== TOOLS_DONE),
 							actions: [
 								pickerAction("confirm", "Toggle", "enter"),
-								pickerAction("apply", active.filterFocused ? "Back to list" : "Apply", "escape", { primary: true, end: true }),
+								pickerAction("apply", active.filterFocused ? "Back to list" : "Apply", "escape", {
+									primary: true,
+									end: true,
+								}),
 							],
 						}
 					: props,
@@ -893,11 +907,17 @@ export class AdvisorConfigOverlayComponent implements Component {
 						const match = /^advisor:(\d+)$/.exec(event.value);
 						if (match) this.#showDetail(Number(match[1]));
 						else if (event.value === "shared") this.#showInstructionsEditor(-1);
-					} finally { this.#contextOnly = false; }
+					} finally {
+						this.#contextOnly = false;
+					}
 					return;
 				}
 				if (event.act === "close") {
-					if (event.value !== undefined || ("filterFocused" in this.#active && this.#active.filterFocused === true)) this.handleInput("\x1b");
+					if (
+						event.value !== undefined ||
+						("filterFocused" in this.#active && this.#active.filterFocused === true)
+					)
+						this.handleInput("\x1b");
 					else this.#cb.close();
 					return;
 				}
@@ -1108,8 +1128,10 @@ export class AdvisorConfigOverlayComponent implements Component {
 			return;
 		}
 		const active = this.#active;
-		const textFocused = active instanceof Input || active instanceof HookEditorComponent
-			|| ("filterFocused" in active && active.filterFocused === true);
+		const textFocused =
+			active instanceof Input ||
+			active instanceof HookEditorComponent ||
+			("filterFocused" in active && active.filterFocused === true);
 		if (textFocused) {
 			this.#keys.reset();
 			const text = active instanceof Input ? extractPrintableText(data) : undefined;
@@ -1131,27 +1153,53 @@ export class AdvisorConfigOverlayComponent implements Component {
 				else if (active instanceof ModelBrowser) active.handleCancel();
 			} else if (active instanceof SelectList && this.#screen === "detail") {
 				const item = active.getSelectedItem();
-				if (item && ["name", "model", "reviewMode", "reviewInterval", "syncBacklog", "tools", "instructions", "systemPrompt"].includes(item.value)) active.onSelect?.(item);
+				if (
+					item &&
+					[
+						"name",
+						"model",
+						"reviewMode",
+						"reviewInterval",
+						"syncBacklog",
+						"tools",
+						"instructions",
+						"systemPrompt",
+					].includes(item.value)
+				)
+					active.onSelect?.(item);
 			}
 			this.#cb.requestRender();
 			return;
 		}
 		if (this.#screen === "list") {
-			if (action?.kind === "context") { this.#previewFocused = !this.#previewFocused; this.#cb.requestRender(); return; }
+			if (action?.kind === "context") {
+				this.#previewFocused = !this.#previewFocused;
+				this.#cb.requestRender();
+				return;
+			}
 			if (action?.kind === "search") this.#previewFocused = false;
 			if (this.#previewFocused && action && this.#applyPreviewMotion(action)) return;
 		}
 		if (action?.kind === "toggle" && active instanceof SelectList) {
 			if (active.getSelectedItem()?.value === "delete") return;
-			if (this.#screen === "list") { active.handleInput?.(data); return; }
+			if (this.#screen === "list") {
+				active.handleInput?.(data);
+				return;
+			}
 		}
 		if (action && (active instanceof SelectList || active instanceof ModelBrowser)) active.handleNavigation(action);
 		else active.handleInput?.(data);
 	}
 
 	#applyPreviewMotion(action: MenuNavAction): boolean {
-		if (action.kind !== "move" && action.kind !== "scroll" && action.kind !== "halfPage" &&
-			action.kind !== "page" && action.kind !== "boundary") return false;
+		if (
+			action.kind !== "move" &&
+			action.kind !== "scroll" &&
+			action.kind !== "halfPage" &&
+			action.kind !== "page" &&
+			action.kind !== "boundary"
+		)
+			return false;
 		if (this.#previewLayoutDirty) {
 			const total = this.#previewContent(this.#previewWidthLast).length;
 			const rows = this.#bodyRowsLast;
@@ -1163,10 +1211,18 @@ export class AdvisorConfigOverlayComponent implements Component {
 		let next = this.#previewScroll;
 		switch (action.kind) {
 			case "move":
-			case "scroll": next += action.delta; break;
-			case "halfPage": next += action.delta * Math.max(1, Math.floor(this.#previewRowsLast / 2)); break;
-			case "page": next += action.delta * this.#previewRowsLast; break;
-			case "boundary": next = action.edge === "first" ? 0 : this.#previewMaxScroll; break;
+			case "scroll":
+				next += action.delta;
+				break;
+			case "halfPage":
+				next += action.delta * Math.max(1, Math.floor(this.#previewRowsLast / 2));
+				break;
+			case "page":
+				next += action.delta * this.#previewRowsLast;
+				break;
+			case "boundary":
+				next = action.edge === "first" ? 0 : this.#previewMaxScroll;
+				break;
 		}
 		this.#previewScroll = Math.max(0, Math.min(this.#previewMaxScroll, next));
 		this.#cb.requestRender();
@@ -1215,9 +1271,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#previewScroll = start;
 		const window = lines.slice(start, start + contentRows);
 		if (contentRows < rows) {
-			window.push(start + contentRows < lines.length
-				? theme.fg("dim", `  ↓ ${lines.length - contentRows - start} more`)
-				: theme.fg("dim", "  (end)"));
+			window.push(
+				start + contentRows < lines.length
+					? theme.fg("dim", `  ↓ ${lines.length - contentRows - start} more`)
+					: theme.fg("dim", "  (end)"),
+			);
 		}
 		return window;
 	}
@@ -1318,23 +1376,36 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	/** `sheet`: how a list screen describes as a picker over the prefs page. */
 	#setScreen(screen: Screen, active: Component, footerHint: string, sheet?: SelectPickerOptions): void {
-		const context: AdvisorNavigationContext = { screen, index: this.#detailIndex,
-			thinking: screen === "thinking" ? this.#thinking : undefined };
-		const changed = screen !== this.#navigationContext.screen || context.index !== this.#navigationContext.index
-			|| context.thinking?.selector !== this.#navigationContext.thinking?.selector;
-		if (!this.#restoringNavigation && this.#active instanceof SelectList) this.#listStates.set(
-			this.#pageKey(this.#navigationContext, this.#navigationScope),
-			{ navigation: this.#active.navigationSnapshot(), previewScroll: this.#previewScroll, previewFocused: this.#previewFocused },
-		);
-		const previous = changed && !this.#restoringNavigation && !this.#contextOnly ? this.#previousNavigationSnapshot ?? this.navigationSnapshot() : undefined;
+		const context: AdvisorNavigationContext = {
+			screen,
+			index: this.#detailIndex,
+			thinking: screen === "thinking" ? this.#thinking : undefined,
+		};
+		const changed =
+			screen !== this.#navigationContext.screen ||
+			context.index !== this.#navigationContext.index ||
+			context.thinking?.selector !== this.#navigationContext.thinking?.selector;
+		if (!this.#restoringNavigation && this.#active instanceof SelectList)
+			this.#listStates.set(this.#pageKey(this.#navigationContext, this.#navigationScope), {
+				navigation: this.#active.navigationSnapshot(),
+				previewScroll: this.#previewScroll,
+				previewFocused: this.#previewFocused,
+			});
+		const previous =
+			changed && !this.#restoringNavigation && !this.#contextOnly
+				? (this.#previousNavigationSnapshot ?? this.navigationSnapshot())
+				: undefined;
 		this.#previousNavigationSnapshot = undefined;
 		const saved = this.#listStates.get(this.#pageKey(context, this.#scope));
-		if (saved && active instanceof SelectList) active.restoreNavigation(changed ? saved.navigation : { ...saved.navigation, selectedValue: active.getSelectedItem()?.value });
+		if (saved && active instanceof SelectList)
+			active.restoreNavigation(
+				changed ? saved.navigation : { ...saved.navigation, selectedValue: active.getSelectedItem()?.value },
+			);
 		this.#screen = screen;
 		this.#active = active;
 		this.#sheetOptions = sheet;
-		const navigation = screen === "list" ? "h/l, Tab panes · C-e/y view"
-			: screen === "thinking" ? "h/l effort" : "h parent · l open";
+		const navigation =
+			screen === "list" ? "h/l, Tab panes · C-e/y view" : screen === "thinking" ? "h/l effort" : "h parent · l open";
 		this.#footerHint = active instanceof SelectList ? `${footerHint} · ${navigation} · / search` : footerHint;
 		this.#previewScroll = saved?.previewScroll ?? 0;
 		this.#previewFocused = screen === "list" && saved?.previewFocused === true;
@@ -1342,7 +1413,13 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#navigationContext = context;
 		this.#navigationScope = this.#scope;
 		this.#keys.reset();
-		if (previous !== undefined) this.onNavigationVisit?.(screen === "list" ? "" : `${screen}:${context.index}${context.thinking ? `:${context.thinking.selector}` : ""}`, previous);
+		if (previous !== undefined)
+			this.onNavigationVisit?.(
+				screen === "list"
+					? ""
+					: `${screen}:${context.index}${context.thinking ? `:${context.thinking.selector}` : ""}`,
+				previous,
+			);
 		this.#cb.requestRender();
 	}
 
@@ -1421,7 +1498,10 @@ export class AdvisorConfigOverlayComponent implements Component {
 			});
 		const handleInput = list.handleInput.bind(list);
 		list.handleInput = data => {
-			if (list.filterFocused) { handleInput(data); return; }
+			if (list.filterFocused) {
+				handleInput(data);
+				return;
+			}
 			if (matchesKey(data, "space")) {
 				// Space toggles an advisor row; on any action row it is Enter, so
 				// the whole list can be driven without switching keys.
@@ -1505,7 +1585,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 				return;
 			}
 			this.#pendingOperations++;
-			try { await this.#cb.apply(); } finally { this.#pendingOperations--; }
+			try {
+				await this.#cb.apply();
+			} finally {
+				this.#pendingOperations--;
+			}
 			this.#pendingApply = false;
 			this.#showList(selectedValue);
 			return;
@@ -1587,7 +1671,10 @@ export class AdvisorConfigOverlayComponent implements Component {
 		if (selectedField) list.setSelectedIndex(items.findIndex(item => item.value === selectedField));
 		const handleInput = list.handleInput.bind(list);
 		list.handleInput = data => {
-			if (list.filterFocused) { handleInput(data); return; }
+			if (list.filterFocused) {
+				handleInput(data);
+				return;
+			}
 			if (matchesKey(data, "backspace") && list.getSelectedItem()?.value === "systemPrompt") {
 				if (advisor.systemPrompt !== undefined) {
 					delete advisor.systemPrompt;
@@ -1904,7 +1991,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 			}
 			if (selected.has(item.value)) selected.delete(item.value);
 			else selected.add(item.value);
-			this.#showToolsEditor(index, selected, items.findIndex(candidate => candidate.value === item.value));
+			this.#showToolsEditor(
+				index,
+				selected,
+				items.findIndex(candidate => candidate.value === item.value),
+			);
 		};
 		list.onCancel = () => {
 			this.#doc.advisors[index].tools = commitTools(selected, all, this.#deps.defaultToolNames);
@@ -1971,28 +2062,49 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen("instructions", editor, "");
 	}
 
-	dispose(): void { this.#scopeLoadRevision++; this.#active.dispose?.(); }
-	leaveMenu(): void { this.#keys.reset(); }
+	dispose(): void {
+		this.#scopeLoadRevision++;
+		this.#active.dispose?.();
+	}
+	leaveMenu(): void {
+		this.#keys.reset();
+	}
 
 	get blocksMenuHistory(): boolean {
-		return this.#pendingOperations > 0 || (isMenuHistoryParticipant(this.#active) && this.#active.blocksMenuHistory === true);
+		return (
+			this.#pendingOperations > 0 ||
+			(isMenuHistoryParticipant(this.#active) && this.#active.blocksMenuHistory === true)
+		);
 	}
 
 	navigationSnapshot(): AdvisorNavigationSnapshot {
 		return {
-			context: { ...structuredClone(this.#navigationContext), tools: this.#screen === "tools" && this.#tools ? [...this.#tools] : undefined },
-			scope: this.#scope, doc: structuredClone(this.#doc), docOwner: this.#doc, dirty: this.#dirty, pendingApply: this.#pendingApply,
-			previewScroll: this.#previewScroll, previewFocused: this.#previewFocused,
+			context: {
+				...structuredClone(this.#navigationContext),
+				tools: this.#screen === "tools" && this.#tools ? [...this.#tools] : undefined,
+			},
+			scope: this.#scope,
+			doc: structuredClone(this.#doc),
+			docOwner: this.#doc,
+			dirty: this.#dirty,
+			pendingApply: this.#pendingApply,
+			previewScroll: this.#previewScroll,
+			previewFocused: this.#previewFocused,
 			lists: structuredClone([...this.#listStates]),
-			content: this.#active instanceof Input ? { value: this.#active.getValue(), cursor: this.#active.getCursor() }
-				: isMenuHistoryParticipant(this.#active) ? this.#active.navigationSnapshot() : undefined,
+			content:
+				this.#active instanceof Input
+					? { value: this.#active.getValue(), cursor: this.#active.getCursor() }
+					: isMenuHistoryParticipant(this.#active)
+						? this.#active.navigationSnapshot()
+						: undefined,
 		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as AdvisorNavigationSnapshot;
-		if (!state.context || !state.doc || !state.docOwner || (state.scope !== "project" && state.scope !== "user")) return;
+		if (!state.context || !state.doc || !state.docOwner || (state.scope !== "project" && state.scope !== "user"))
+			return;
 		this.#restoringNavigation = true;
 		this.#scopeLoadRevision++;
 		this.#keys.reset();
@@ -2001,7 +2113,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 			this.#navigationScope = state.scope;
 			const draft = structuredClone(state.doc);
 			this.#doc = state.docOwner;
-			for (const key of Object.keys(this.#doc)) if (!Object.hasOwn(draft, key)) Reflect.deleteProperty(this.#doc, key);
+			for (const key of Object.keys(this.#doc))
+				if (!Object.hasOwn(draft, key)) Reflect.deleteProperty(this.#doc, key);
 			Object.assign(this.#doc, draft);
 			this.#dirty = state.dirty;
 			this.#pendingApply = state.pendingApply;
@@ -2010,20 +2123,45 @@ export class AdvisorConfigOverlayComponent implements Component {
 			this.#listStates.clear();
 			for (const [key, value] of state.lists) this.#listStates.set(key, structuredClone(value));
 			switch (state.context.screen) {
-				case "list": this.#showList(); break;
-				case "detail": this.#showDetail(state.context.index); break;
-				case "name": this.#showNameEditor(state.context.index); break;
-				case "model": this.#showModelPicker(state.context.index); break;
+				case "list":
+					this.#showList();
+					break;
+				case "detail":
+					this.#showDetail(state.context.index);
+					break;
+				case "name":
+					this.#showNameEditor(state.context.index);
+					break;
+				case "model":
+					this.#showModelPicker(state.context.index);
+					break;
 				case "thinking":
-					if (state.context.thinking) this.#showThinkingPicker(state.context.index, state.context.thinking.selector, state.context.thinking.efforts);
+					if (state.context.thinking)
+						this.#showThinkingPicker(
+							state.context.index,
+							state.context.thinking.selector,
+							state.context.thinking.efforts,
+						);
 					else this.#showModelPicker(state.context.index);
 					break;
-				case "review-mode": this.#showReviewModePicker(state.context.index); break;
-				case "review-interval": this.#showReviewIntervalEditor(state.context.index); break;
-				case "sync-backlog": this.#showSyncBacklogPicker(state.context.index); break;
-				case "tools": this.#showToolsEditor(state.context.index, new Set(state.context.tools ?? []), 0); break;
-				case "instructions": this.#showInstructionsEditor(state.context.index); break;
-				case "systemPrompt": this.#showSystemPromptEditor(state.context.index); break;
+				case "review-mode":
+					this.#showReviewModePicker(state.context.index);
+					break;
+				case "review-interval":
+					this.#showReviewIntervalEditor(state.context.index);
+					break;
+				case "sync-backlog":
+					this.#showSyncBacklogPicker(state.context.index);
+					break;
+				case "tools":
+					this.#showToolsEditor(state.context.index, new Set(state.context.tools ?? []), 0);
+					break;
+				case "instructions":
+					this.#showInstructionsEditor(state.context.index);
+					break;
+				case "systemPrompt":
+					this.#showSystemPromptEditor(state.context.index);
+					break;
 			}
 			if (this.#active instanceof Input && state.content && typeof state.content === "object") {
 				const input = state.content as { value?: string; cursor?: number };
@@ -2032,7 +2170,9 @@ export class AdvisorConfigOverlayComponent implements Component {
 			} else if (isMenuHistoryParticipant(this.#active)) this.#active.restoreNavigation(state.content);
 			this.#previewScroll = state.previewScroll;
 			this.#previewFocused = state.previewFocused;
-		} finally { this.#restoringNavigation = false; }
+		} finally {
+			this.#restoringNavigation = false;
+		}
 		this.#cb.requestRender();
 	}
 }

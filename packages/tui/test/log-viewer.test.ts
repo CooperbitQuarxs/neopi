@@ -289,7 +289,9 @@ describe("DebugLogViewerModel", () => {
 		const viewer = new DebugLogViewerComponent({
 			deps: { copyToClipboard: value => copied.push(value) },
 			logs: Array.from({ length: 30 }, (_, i) => `entry-${i}`).join("\n"),
-			terminalRows: 14, processStartMs: 0, onExit: () => closed++,
+			terminalRows: 14,
+			processStartMs: 0,
+			onExit: () => closed++,
 		});
 		viewer.render(100);
 		viewer.handleInput("g");

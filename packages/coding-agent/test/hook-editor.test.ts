@@ -85,18 +85,22 @@ function createControllerContext() {
 describe("HookEditorComponent literal text ownership", () => {
 	for (const promptStyle of [false, true]) {
 		it(`types printable shortcut remaps literally in ${promptStyle ? "prompt" : "hook"} mode`, () => {
-			setKeybindings(KeybindingsManager.inMemory({
-				"app.message.followUp": ["ctrl+q", "h"],
-				"app.interrupt": ["escape", "j"],
-				"app.editor.external": ["ctrl+g", "k"],
-				"tui.editor.deleteCharBackward": "l",
-				"tui.editor.submit": "/",
-			}));
+			setKeybindings(
+				KeybindingsManager.inMemory({
+					"app.message.followUp": ["ctrl+q", "h"],
+					"app.interrupt": ["escape", "j"],
+					"app.editor.external": ["ctrl+g", "k"],
+					"tui.editor.deleteCharBackward": "l",
+					"tui.editor.submit": "/",
+				}),
+			);
 			const onSubmit = vi.fn();
 			const onCancel = vi.fn();
 			const externalEditor = vi.fn(async () => null);
 			const component = new HookEditorComponent(createTui(), "Draft", undefined, onSubmit, onCancel, {
-				promptStyle, menuHistory: true, externalEditor,
+				promptStyle,
+				menuHistory: true,
+				externalEditor,
 			});
 			try {
 				for (const key of ["h", "j", "k", "l", " ", "/"]) component.handleInput(key);
@@ -106,26 +110,35 @@ describe("HookEditorComponent literal text ownership", () => {
 				expect(externalEditor).not.toHaveBeenCalled();
 				component.handleInput("\x1b");
 				expect(onCancel).toHaveBeenCalledTimes(1);
-			} finally { component.dispose(); }
+			} finally {
+				component.dispose();
+			}
 		});
 	}
 
 	it("lets a pending character jump consume its printable target before app shortcuts", () => {
-		setKeybindings(KeybindingsManager.inMemory({
-			"app.message.followUp": "h",
-			"tui.editor.jumpForward": "ctrl+]",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"app.message.followUp": "h",
+				"tui.editor.jumpForward": "ctrl+]",
+			}),
+		);
 		const onSubmit = vi.fn();
-		const component = new HookEditorComponent(createTui(), "Draft", "abc h def", onSubmit, vi.fn(), { menuHistory: true });
+		const component = new HookEditorComponent(createTui(), "Draft", "abc h def", onSubmit, vi.fn(), {
+			menuHistory: true,
+		});
 		try {
 			component.handleInput("\x01");
 			component.handleInput("\x1d");
 			component.handleInput("h");
 			expect(component.navigationSnapshot()).toMatchObject({
-				text: "abc h def", cursor: { line: 0, col: 4 },
+				text: "abc h def",
+				cursor: { line: 0, col: 4 },
 			});
 			expect(onSubmit).not.toHaveBeenCalled();
-		} finally { component.dispose(); }
+		} finally {
+			component.dispose();
+		}
 	});
 });
 

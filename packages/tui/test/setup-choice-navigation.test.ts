@@ -19,8 +19,12 @@ function picker(child: NativeChild): SelectList | undefined {
 	return undefined;
 }
 
-beforeAll(async () => { await themeModule.initTheme(); });
-afterEach(() => { vi.restoreAllMocks(); });
+beforeAll(async () => {
+	await themeModule.initTheme();
+});
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 describe("setup choice shortcuts", () => {
 	for (const scene of [themeSetupScene, glyphSetupScene, composerSetupScene]) {
@@ -30,7 +34,10 @@ describe("setup choice shortcuts", () => {
 			spyOn(themeModule, "previewTheme").mockResolvedValue({ success: true });
 			const host = {
 				ctx: { composerShape: "band", symbolPreset: "unicode", colorBlindMode: false, statusLine: undefined },
-				requestRender() {}, finish() {}, setFocus() {}, restoreFocus() {},
+				requestRender() {},
+				finish() {},
+				setFocus() {},
+				restoreFocus() {},
 			} as unknown as SetupSceneHost;
 			const controller = scene.mount(host);
 			try {
@@ -47,7 +54,9 @@ describe("setup choice shortcuts", () => {
 				controller.handleInput?.("\x1b");
 				expect(list.filterFocused).toBe(false);
 				expect(list.getFilter()).toBe("2");
-			} finally { controller.dispose?.(); }
+			} finally {
+				controller.dispose?.();
+			}
 		});
 	}
 });

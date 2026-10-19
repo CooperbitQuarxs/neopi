@@ -8,7 +8,12 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
-import { AgentsHubComponent, type AgentsHubDeps, type HubAgent, parseGeneratedAgentSpec } from "../src/overlays/agents-hub";
+import {
+	AgentsHubComponent,
+	type AgentsHubDeps,
+	type HubAgent,
+	parseGeneratedAgentSpec,
+} from "../src/overlays/agents-hub";
 import { initTheme } from "../src/theme";
 import type { TUI } from "../src/index";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
@@ -60,7 +65,10 @@ const sonnet = buildModel({
 	maxTokens: 8192,
 });
 
-async function createHub(settings: TestSettings, overrides: Partial<AgentsHubDeps> = {}): Promise<{
+async function createHub(
+	settings: TestSettings,
+	overrides: Partial<AgentsHubDeps> = {},
+): Promise<{
 	hub: AgentsHubComponent;
 	strip: () => string;
 	type: (text: string) => void;
@@ -453,10 +461,14 @@ describe("parseGeneratedAgentSpec", () => {
 describe("AgentsHub navigation history", () => {
 	test("body viewport moves one line independently and row motions reveal its selection", async () => {
 		const { hub } = await createHub(new TestSettings(), {
-			loadAgents: async () => Array.from({ length: 40 }, (_, index) => ({
-				name: `worker-${String(index).padStart(2, "0")}`, description: "Worker", systemPrompt: "",
-				source: "project" as const, disabled: false,
-			})),
+			loadAgents: async () =>
+				Array.from({ length: 40 }, (_, index) => ({
+					name: `worker-${String(index).padStart(2, "0")}`,
+					description: "Worker",
+					systemPrompt: "",
+					source: "project" as const,
+					disabled: false,
+				})),
 		});
 		try {
 			hub.handleInput("i");
@@ -465,7 +477,10 @@ describe("AgentsHub navigation history", () => {
 			const first = hub.navigationSnapshot();
 			hub.handleInput("\x05");
 			hub.render(120);
-			expect(hub.navigationSnapshot()).toMatchObject({ selectedRow: first.selectedRow, listViewport: { item: 1, lineOffset: 0 } });
+			expect(hub.navigationSnapshot()).toMatchObject({
+				selectedRow: first.selectedRow,
+				listViewport: { item: 1, lineOffset: 0 },
+			});
 			hub.handleInput("j");
 			hub.render(120);
 			expect(hub.navigationSnapshot().selectedRow).toContain("worker-01");
@@ -474,10 +489,15 @@ describe("AgentsHub navigation history", () => {
 			hub.handleInput("g");
 			hub.handleInput("g");
 			hub.render(120);
-			expect(hub.navigationSnapshot()).toMatchObject({ selectedRow: first.selectedRow, listViewport: { item: 0, lineOffset: 0 } });
+			expect(hub.navigationSnapshot()).toMatchObject({
+				selectedRow: first.selectedRow,
+				listViewport: { item: 0, lineOffset: 0 },
+			});
 			hub.handleInput("\x04");
 			expect(hub.navigationSnapshot().selectedRow).not.toBe(first.selectedRow);
-		} finally { hub.dispose(); }
+		} finally {
+			hub.dispose();
+		}
 	});
 
 	test("non-effort strips choose with j/k and leave on pane or context motion without applying", async () => {
@@ -502,7 +522,9 @@ describe("AgentsHub navigation history", () => {
 			expect(hub.navigationSnapshot()).toMatchObject({ focus: "scope", strip: null });
 			expect(settings.writes).toEqual([]);
 			expect(visits).toEqual([]);
-		} finally { hub.dispose(); }
+		} finally {
+			hub.dispose();
+		}
 	});
 
 	test("pattern draft and caret restore without applying any setting or creating a visit", async () => {
@@ -525,7 +547,10 @@ describe("AgentsHub navigation history", () => {
 			expect(restored.hub.navigationSnapshot().strip).toMatchObject({ kind: "pattern", value: "hjkl / hg" });
 			expect(settings.writes).toEqual([]);
 			expect(visits).toEqual([]);
-		} finally { hub.dispose(); restored.hub.dispose(); }
+		} finally {
+			hub.dispose();
+			restored.hub.dispose();
+		}
 	});
 
 	test("embedded model search restores silently and returns to its retained property context", async () => {
@@ -549,19 +574,31 @@ describe("AgentsHub navigation history", () => {
 			restored.hub.handleInput("\x1b");
 			expect(restored.hub.navigationSnapshot().assigning).toBeDefined();
 			restored.hub.handleInput("h");
-			expect(restored.hub.navigationSnapshot()).toMatchObject({ assigning: undefined, strip: { kind: "chips", property: "model", index: 0 } });
+			expect(restored.hub.navigationSnapshot()).toMatchObject({
+				assigning: undefined,
+				strip: { kind: "chips", property: "model", index: 0 },
+			});
 			expect(visits).toEqual(["assign:dev:model"]);
 			expect(restoredVisits).toEqual([""]);
 			expect(settings.writes).toEqual([]);
-		} finally { hub.dispose(); restored.hub.dispose(); }
+		} finally {
+			hub.dispose();
+			restored.hub.dispose();
+		}
 	});
 
 	test("idle agent description restores as a safe Editor draft without generation or save", async () => {
 		let generationCalls = 0;
 		let saveCalls = 0;
 		const deps: Partial<AgentsHubDeps> = {
-			generateAgent: async () => { generationCalls++; return ""; },
-			saveAgent: async () => { saveCalls++; return ""; },
+			generateAgent: async () => {
+				generationCalls++;
+				return "";
+			},
+			saveAgent: async () => {
+				saveCalls++;
+				return "";
+			},
 		};
 		const { hub, type } = await createHub(new TestSettings(), deps);
 		const restored = await createHub(new TestSettings(), deps);
@@ -574,40 +611,56 @@ describe("AgentsHub navigation history", () => {
 			hub.handleInput("\t");
 			hub.handleInput("\x1b[D");
 			const snapshot = hub.navigationSnapshot();
-			expect(snapshot.create).toMatchObject({ description: "hjkl / draft", scope: "user", editor: { text: "hjkl / draft" } });
+			expect(snapshot.create).toMatchObject({
+				description: "hjkl / draft",
+				scope: "user",
+				editor: { text: "hjkl / draft" },
+			});
 			restored.hub.restoreNavigation(snapshot);
 			expect(restored.hub.navigationSnapshot().create).toEqual(snapshot.create);
 			expect(restored.hub.blocksMenuHistory).toBe(false);
 			expect(visits).toEqual([]);
 			expect(generationCalls).toBe(0);
 			expect(saveCalls).toBe(0);
-		} finally { hub.dispose(); restored.hub.dispose(); }
+		} finally {
+			hub.dispose();
+			restored.hub.dispose();
+		}
 	});
 	test("description typing owns printable shortcut remaps and pending character-jump targets", async () => {
 		let generations = 0;
 		let saves = 0;
 		const { hub } = await createHub(new TestSettings(), {
-			generateAgent: async () => { generations++; return ""; },
-			saveAgent: async () => { saves++; return ""; },
+			generateAgent: async () => {
+				generations++;
+				return "";
+			},
+			saveAgent: async () => {
+				saves++;
+				return "";
+			},
 		});
 		const previous = getKeybindings();
 		try {
 			hub.handleInput("G");
 			hub.handleInput("\r");
-			setKeybindings(KeybindingsManager.inMemory({
-				"tui.select.cancel": ["escape", "h"],
-				"app.message.followUp": ["ctrl+q", "j"],
-				"tui.editor.deleteCharBackward": "k",
-				"tui.editor.submit": "l",
-				"tui.editor.jumpForward": "ctrl+]",
-			}));
+			setKeybindings(
+				KeybindingsManager.inMemory({
+					"tui.select.cancel": ["escape", "h"],
+					"app.message.followUp": ["ctrl+q", "j"],
+					"tui.editor.deleteCharBackward": "k",
+					"tui.editor.submit": "l",
+					"tui.editor.jumpForward": "ctrl+]",
+				}),
+			);
 			for (const key of "hjkl /") hub.handleInput(key);
 			expect(hub.navigationSnapshot().create).toMatchObject({ description: "hjkl /", editor: { text: "hjkl /" } });
 			hub.handleInput("\x01");
 			hub.handleInput("\x1d");
 			hub.handleInput("j");
 			expect(hub.navigationSnapshot().create).toMatchObject({
-				description: "hjkl /", editor: { text: "hjkl /", cursor: { line: 0, col: 1 } },
+				description: "hjkl /",
+				editor: { text: "hjkl /", cursor: { line: 0, col: 1 } },
 			});
 			expect(generations).toBe(0);
 			expect(saves).toBe(0);
@@ -619,19 +672,26 @@ describe("AgentsHub navigation history", () => {
 		}
 	});
 
-
 	test("only explicit generation and save run requests; pending operations block history", async () => {
 		const generation = Promise.withResolvers<string>();
 		const saved = Promise.withResolvers<string>();
 		const reloaded = Promise.withResolvers<HubAgent[]>();
-		const agents: HubAgent[] = [{ name: "dev", description: "Development", systemPrompt: "", source: "project", disabled: false }];
+		const agents: HubAgent[] = [
+			{ name: "dev", description: "Development", systemPrompt: "", source: "project", disabled: false },
+		];
 		let loadCalls = 0;
 		let generationCalls = 0;
 		let saveCalls = 0;
 		const { hub, type } = await createHub(new TestSettings(), {
-			loadAgents: () => ++loadCalls === 1 ? Promise.resolve(agents) : reloaded.promise,
-			generateAgent: () => { generationCalls++; return generation.promise; },
-			saveAgent: () => { saveCalls++; return saved.promise; },
+			loadAgents: () => (++loadCalls === 1 ? Promise.resolve(agents) : reloaded.promise),
+			generateAgent: () => {
+				generationCalls++;
+				return generation.promise;
+			},
+			saveAgent: () => {
+				saveCalls++;
+				return saved.promise;
+			},
 		});
 		try {
 			hub.handleInput("G");
@@ -640,10 +700,13 @@ describe("AgentsHub navigation history", () => {
 			hub.handleInput("\x11");
 			expect(generationCalls).toBe(1);
 			expect(hub.blocksMenuHistory).toBe(true);
-			generation.resolve(JSON.stringify({
-				identifier: "draft-agent", whenToUse: "Use this agent when drafting tasks",
-				systemPrompt: Array.from({ length: 100 }, (_, index) => `Prompt line ${index}`).join("\n"),
-			}));
+			generation.resolve(
+				JSON.stringify({
+					identifier: "draft-agent",
+					whenToUse: "Use this agent when drafting tasks",
+					systemPrompt: Array.from({ length: 100 }, (_, index) => `Prompt line ${index}`).join("\n"),
+				}),
+			);
 			await new Promise<void>(resolve => setImmediate(resolve));
 			expect(hub.blocksMenuHistory).toBe(false);
 			hub.render(120);
@@ -668,15 +731,19 @@ describe("AgentsHub navigation history", () => {
 			expect(hub.navigationSnapshot().create?.preview).toMatchObject({ scrollOffset: 1 });
 			expect(generationCalls).toBe(1);
 			expect(saveCalls).toBe(1);
-		} finally { hub.dispose(); }
+		} finally {
+			hub.dispose();
+		}
 	});
 
 	test("a standalone read-only reload does not block menu history", async () => {
 		const reload = Promise.withResolvers<HubAgent[]>();
-		const agents: HubAgent[] = [{ name: "dev", description: "Development", systemPrompt: "", source: "project", disabled: false }];
+		const agents: HubAgent[] = [
+			{ name: "dev", description: "Development", systemPrompt: "", source: "project", disabled: false },
+		];
 		let loads = 0;
 		const { hub } = await createHub(new TestSettings(), {
-			loadAgents: () => ++loads === 1 ? Promise.resolve(agents) : reload.promise,
+			loadAgents: () => (++loads === 1 ? Promise.resolve(agents) : reload.promise),
 		});
 		try {
 			hub.handleInput("\x12");
@@ -685,7 +752,9 @@ describe("AgentsHub navigation history", () => {
 			reload.resolve(agents);
 			await new Promise<void>(resolve => setImmediate(resolve));
 			expect(hub.blocksMenuHistory).toBe(false);
-		} finally { hub.dispose(); }
+		} finally {
+			hub.dispose();
+		}
 	});
 
 	test("native close first leaves the search field and retains the query", async () => {
@@ -700,6 +769,8 @@ describe("AgentsHub navigation history", () => {
 			expect(hub.navigationSnapshot().search).toMatchObject({ value: "dev", focused: false });
 			hub.handleNativeEvent(close);
 			expect(cancelled()).toBe(true);
-		} finally { hub.dispose(); }
+		} finally {
+			hub.dispose();
+		}
 	});
 });

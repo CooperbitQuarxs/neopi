@@ -29,7 +29,8 @@ function plain(dialog: AskDialogComponent): string {
 }
 function numberedQuestion(count = 30): ExtensionAskDialogQuestion {
 	return {
-		id: "choices", question: "Choose an answer?",
+		id: "choices",
+		question: "Choose an answer?",
 		options: Array.from({ length: count }, (_, index) => {
 			const id = String(index).padStart(2, "0");
 			return { label: `Choice ${id}`, description: `Description ${id}` };
@@ -60,7 +61,9 @@ afterEach(() => {
 describe("ask callback prompt navigation", () => {
 	it("moves by visible answers for half/page keys and clamps normal bounds", () => {
 		const dialog = new AskDialogComponent([numberedQuestion()], {
-			onSubmit: vi.fn(), onCancel: vi.fn(), onPrompt: vi.fn(),
+			onSubmit: vi.fn(),
+			onCancel: vi.fn(),
+			onPrompt: vi.fn(),
 		});
 		const half = Math.max(1, Math.floor(visibleChoices(dialog) / 2));
 		dialog.handleInput("\x04");
@@ -96,7 +99,9 @@ describe("ask callback prompt navigation", () => {
 	it("scrolls physical lines without moving the answer, including offscreen selection", () => {
 		const onSubmit = vi.fn();
 		const dialog = new AskDialogComponent([numberedQuestion()], {
-			onSubmit, onCancel: vi.fn(), onPrompt: vi.fn(),
+			onSubmit,
+			onCancel: vi.fn(),
+			onPrompt: vi.fn(),
 		});
 		expect(plain(dialog)).toContain("Choice 00");
 		dialog.handleInput("\x05");
@@ -117,9 +122,16 @@ describe("ask callback prompt navigation", () => {
 
 	it("keeps page-reading a tall preview while half-page keys can leave it", () => {
 		const preview = `\`\`\`\n${Array.from({ length: 80 }, (_, index) => `preview-${index}`).join("\n")}\n\`\`\``;
-		const dialog = new AskDialogComponent([{
-			id: "preview", question: "Inspect?", options: [{ label: "Plain" }, { label: "Preview", preview }, { label: "After" }],
-		}], { onSubmit: vi.fn(), onCancel: vi.fn(), onPrompt: vi.fn() });
+		const dialog = new AskDialogComponent(
+			[
+				{
+					id: "preview",
+					question: "Inspect?",
+					options: [{ label: "Plain" }, { label: "Preview", preview }, { label: "After" }],
+				},
+			],
+			{ onSubmit: vi.fn(), onCancel: vi.fn(), onPrompt: vi.fn() },
+		);
 		plain(dialog);
 		dialog.handleInput("j");
 		dialog.handleInput("\x1b[6~");
@@ -134,13 +146,23 @@ describe("ask callback prompt navigation", () => {
 	});
 
 	it("switches question/review contexts with h/l, arrows, Tab and Ctrl-N/P", () => {
-		const dialog = new AskDialogComponent([
-			{ ...numberedQuestion(), id: "first" }, { ...numberedQuestion(), id: "second" },
-		], { onSubmit: vi.fn(), onCancel: vi.fn(), onPrompt: vi.fn() });
+		const dialog = new AskDialogComponent(
+			[
+				{ ...numberedQuestion(), id: "first" },
+				{ ...numberedQuestion(), id: "second" },
+			],
+			{ onSubmit: vi.fn(), onCancel: vi.fn(), onPrompt: vi.fn() },
+		);
 		dialog.handleInput("j");
 		for (const [key, tab] of [
-			["l", "1"], ["\x1b[C", "submit"], ["\t", "0"], ["\x0e", "1"],
-			["h", "0"], ["\x1b[D", "submit"], ["\x1b[Z", "1"], ["\x10", "0"],
+			["l", "1"],
+			["\x1b[C", "submit"],
+			["\t", "0"],
+			["\x0e", "1"],
+			["h", "0"],
+			["\x1b[D", "submit"],
+			["\x1b[Z", "1"],
+			["\x10", "0"],
 		]) {
 			dialog.handleInput(key);
 			expect(activeTab(dialog)).toBe(tab);
@@ -150,9 +172,15 @@ describe("ask callback prompt navigation", () => {
 
 	it("uses the shared review viewer motions and retains its viewport across context switches", () => {
 		const onSubmit = vi.fn();
-		const dialog = new AskDialogComponent(Array.from({ length: 40 }, (_, index) => ({
-			id: `q${index}`, header: `Question ${index}`, question: "Choose?", options: [{ label: "Answer" }],
-		})), { onSubmit, onCancel: vi.fn(), onPrompt: vi.fn() });
+		const dialog = new AskDialogComponent(
+			Array.from({ length: 40 }, (_, index) => ({
+				id: `q${index}`,
+				header: `Question ${index}`,
+				question: "Choose?",
+				options: [{ label: "Answer" }],
+			})),
+			{ onSubmit, onCancel: vi.fn(), onPrompt: vi.fn() },
+		);
 		dialog.handleInput("h");
 		expect(plain(dialog)).toContain("40 unanswered");
 		dialog.handleInput("\x05");
@@ -185,11 +213,21 @@ describe("ask callback prompt navigation", () => {
 		const onSubmit = vi.fn();
 		const pending = Promise.withResolvers<string | undefined>();
 		const onPrompt = vi.fn(() => pending.promise);
-		const dialog = new AskDialogComponent([{
-			id: "multi", question: "Choose?", multi: true, options: [{ label: "Option" }],
-		}], { onSubmit, onCancel: vi.fn(), onPrompt });
+		const dialog = new AskDialogComponent(
+			[
+				{
+					id: "multi",
+					question: "Choose?",
+					multi: true,
+					options: [{ label: "Option" }],
+				},
+			],
+			{ onSubmit, onCancel: vi.fn(), onPrompt },
+		);
 		dialog.handleInput(" ");
-		expect(nodes(dialog.describe(CX)).some(node => node.key === "option:0" && prop(node, "tone") === "accent")).toBe(true);
+		expect(nodes(dialog.describe(CX)).some(node => node.key === "option:0" && prop(node, "tone") === "accent")).toBe(
+			true,
+		);
 		dialog.handleInput("G");
 		dialog.handleInput(" ");
 		expect(onPrompt).not.toHaveBeenCalled();
@@ -206,20 +244,31 @@ describe("ask callback prompt navigation", () => {
 	});
 
 	it("routes draft-owned printable bindings before cancel, hide, expand and passthrough", () => {
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": ["escape", "j"],
-			"app.tools.expand": ["alt+e", "h"],
-			"app.ask.hide": "l",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": ["escape", "j"],
+				"app.tools.expand": ["alt+e", "h"],
+				"app.ask.hide": "l",
+			}),
+		);
 		const routed: string[] = [];
 		const passthrough: string[] = [];
 		const onCancel = vi.fn();
-		const dialog = new AskDialogComponent([numberedQuestion()], {
-			onSubmit: vi.fn(), onCancel, onPrompt: vi.fn(),
-		}, {
-			inputGuard: { isBlocked: () => true, handleInput: data => routed.push(data), hint: "Draft owns input" },
-			passthrough: data => { passthrough.push(data); return false; },
-		});
+		const dialog = new AskDialogComponent(
+			[numberedQuestion()],
+			{
+				onSubmit: vi.fn(),
+				onCancel,
+				onPrompt: vi.fn(),
+			},
+			{
+				inputGuard: { isBlocked: () => true, handleInput: data => routed.push(data), hint: "Draft owns input" },
+				passthrough: data => {
+					passthrough.push(data);
+					return false;
+				},
+			},
+		);
 		for (const character of "hjklggG / ") dialog.handleInput(character);
 		expect(routed.join("")).toBe("hjklggG / ");
 		expect(passthrough).toEqual([]);

@@ -7,7 +7,13 @@
  */
 import { type Component, type Focusable, Key, matchesKey, truncateToWidth } from "../index";
 import { theme } from "../theme/theme";
-import { applyMenuMotion, MenuKeyReader, MenuViewport, menuScrollBy, type MenuViewportPosition } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuViewport,
+	menuScrollBy,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 import { formTheme } from "../chrome/form-theme";
 import { bottomBorder, row, topBorder } from "../chrome/overlay-box";
 import { TextFormField } from "../components/form";
@@ -50,7 +56,8 @@ export class MoveOverlay implements Component, Focusable {
 	readonly #keys = new MenuKeyReader();
 	readonly #viewport = new MenuViewport();
 	readonly #menu = new MenuSelection<MoveDirectoryEntry>([], {
-		getKey: entry => entry.value, getSearchText: entry => `${entry.label} ${entry.value}`,
+		getKey: entry => entry.value,
+		getSearchText: entry => `${entry.label} ${entry.value}`,
 	});
 	#focused = false;
 	#pathFocused = true;
@@ -81,7 +88,9 @@ export class MoveOverlay implements Component, Focusable {
 		this.#updateResults();
 	}
 
-	get focused(): boolean { return this.#focused; }
+	get focused(): boolean {
+		return this.#focused;
+	}
 
 	set focused(value: boolean) {
 		this.#focused = value;
@@ -89,18 +98,27 @@ export class MoveOverlay implements Component, Focusable {
 		this.#revision++;
 	}
 
-	get filterFocused(): boolean { return this.#pathFocused; }
+	get filterFocused(): boolean {
+		return this.#pathFocused;
+	}
 
 	navigationSnapshot(): unknown {
 		return {
-			field: this.#field.navigationSnapshot(), pathFocused: this.#pathFocused,
-			selected: this.#menu.selectedKey, viewportTop: this.#viewport.top,
+			field: this.#field.navigationSnapshot(),
+			pathFocused: this.#pathFocused,
+			selected: this.#menu.selectedKey,
+			viewportTop: this.#viewport.top,
 		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
-		const state = snapshot as { field?: unknown; pathFocused?: boolean; selected?: string; viewportTop?: MenuViewportPosition | number };
+		const state = snapshot as {
+			field?: unknown;
+			pathFocused?: boolean;
+			selected?: string;
+			viewportTop?: MenuViewportPosition | number;
+		};
 		this.#field.restoreNavigation(state.field);
 		this.#updateResults();
 		if (typeof state.selected === "string") this.#menu.setSelectedKey(state.selected);
@@ -168,7 +186,8 @@ export class MoveOverlay implements Component, Focusable {
 		const innerWidth = Math.max(1, width - 4);
 		const fieldLines = this.#field.render(innerWidth);
 		const memo = this.#renderMemo;
-		if (memo?.width === width && memo.fieldLines === fieldLines && memo.revision === this.#revision) return memo.lines;
+		if (memo?.width === width && memo.fieldLines === fieldLines && memo.revision === this.#revision)
+			return memo.lines;
 		const lines = [topBorder(width, "Move to directory")];
 		for (const fieldLine of fieldLines) lines.push(row(fieldLine, width));
 		lines.push(row("", width));
@@ -186,7 +205,11 @@ export class MoveOverlay implements Component, Focusable {
 				const label = selected ? theme.fg("accent", item.label) : theme.fg("text", item.label);
 				rows.push(truncateToWidth(`${marker}${label}`, rowWidth));
 			}
-			for (const line of renderScrollableList(rows, { width: innerWidth, totalRows: results.length, scrollOffset: window.rowOffset })) {
+			for (const line of renderScrollableList(rows, {
+				width: innerWidth,
+				totalRows: results.length,
+				scrollOffset: window.rowOffset,
+			})) {
 				lines.push(row(line, width));
 			}
 		}
@@ -204,17 +227,38 @@ export class MoveOverlay implements Component, Focusable {
 		const memo = this.#native;
 		if (memo?.revision === this.#revision) return memo.node;
 		const items = this.#menu.visibleItems.map(item =>
-			node("item", { label: item.label, detail: [span(item.value, "path")] }, undefined, item.value));
-		const list = { ...node("list", {
-			selected: this.#menu.selectedKey ?? null,
-			empty: this.#field.getValue().length > 0 ? [span("No matching directories", "dim")] : undefined,
-			max: { lines: MAX_RESULTS },
-		}, items, "results"), scroll: this.#nativeScroll };
-		const hints = statusHintsRow([span(this.#pathFocused ? "Type path · Tab complete · Esc back to list" : "j/k ↑↓ · Ctrl-u/d · PgUp/Dn · gg/G · Ctrl-e/y · / edit", "dim")], []);
+			node("item", { label: item.label, detail: [span(item.value, "path")] }, undefined, item.value),
+		);
+		const list = {
+			...node(
+				"list",
+				{
+					selected: this.#menu.selectedKey ?? null,
+					empty: this.#field.getValue().length > 0 ? [span("No matching directories", "dim")] : undefined,
+					max: { lines: MAX_RESULTS },
+				},
+				items,
+				"results",
+			),
+			scroll: this.#nativeScroll,
+		};
+		const hints = statusHintsRow(
+			[
+				span(
+					this.#pathFocused
+						? "Type path · Tab complete · Esc back to list"
+						: "j/k ↑↓ · Ctrl-u/d · PgUp/Dn · gg/G · Ctrl-e/y · / edit",
+					"dim",
+				),
+			],
+			[],
+		);
 		const actions = actionBar([
 			actionButton("Accept", "accept", { keys: this.#pathFocused ? "tab" : undefined }),
 			this.#pathFocused ? actionButton("Back to list", "back", { keys: "escape" }) : null,
-			actionButton("Cancel", "cancel", { keys: this.#pathFocused ? undefined : getKeybindings().getKeys("tui.select.cancel")[0] ?? "escape" }),
+			actionButton("Cancel", "cancel", {
+				keys: this.#pathFocused ? undefined : (getKeybindings().getKeys("tui.select.cancel")[0] ?? "escape"),
+			}),
 			actionButton("Confirm", "confirm", { keys: "enter", tone: "accent" }),
 		]);
 		const described = overlayCard("omp.dialog.move", "Move to directory", [this.#field, list, hints, actions]);

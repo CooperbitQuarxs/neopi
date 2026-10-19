@@ -32,7 +32,6 @@ describe("Input component", () => {
 		resetHangulCompatibilityJamoWidthForTests();
 	});
 
-
 	it("restores a bounded caret without splitting emoji or combining graphemes", () => {
 		const input = new Input();
 		input.setValue("a👩‍💻e\u0301z");

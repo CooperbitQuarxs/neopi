@@ -1818,7 +1818,8 @@ export class UsageDashboardComponent implements Component {
 		else if (action?.kind === "context") this.#setView(this.#view === "overview" ? "detail" : "overview");
 		else if (action?.kind === "confirm" || matchesKey(data, "d")) this.#setView("detail");
 		else if (action?.kind === "move" || action?.kind === "scroll") this.#scrollBy(action.delta);
-		else if (action?.kind === "halfPage") this.#scrollBy(action.delta * Math.max(1, Math.floor(this.#lastViewportRows / 2)));
+		else if (action?.kind === "halfPage")
+			this.#scrollBy(action.delta * Math.max(1, Math.floor(this.#lastViewportRows / 2)));
 		else if (action?.kind === "page") this.#scrollBy(action.delta * this.#lastViewportRows);
 		else if (action?.kind === "boundary") {
 			this.#scroll = action.edge === "first" ? 0 : this.#maxScroll;

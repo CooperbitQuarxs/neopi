@@ -5,12 +5,16 @@ import { PlanSaveOverlay, type PlanSaveOverlayResult } from "../src/overlays/pla
 import { initTheme } from "../src/theme";
 
 let previous: KeybindingsManager;
-beforeAll(async () => { await initTheme(false); });
+beforeAll(async () => {
+	await initTheme(false);
+});
 beforeEach(() => {
 	previous = getKeybindings() as KeybindingsManager;
 	setKeybindings(KeybindingsManager.inMemory());
 });
-afterEach(() => { setKeybindings(previous); });
+afterEach(() => {
+	setKeybindings(previous);
+});
 
 test("path input keeps menu letters, slash and Space literal even with a printable submit binding", () => {
 	setKeybindings(KeybindingsManager.inMemory({ "tui.input.submit": "j" }));

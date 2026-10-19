@@ -218,7 +218,9 @@ test("a follow-up turn does not age the previous turn's snapshot across the idle
 });
 
 test("hub uses visual-line viewport scrolling without moving its selected agent", () => {
-	const agents = Array.from({ length: 40 }, (_, index) => agent(`agent-${index}`, 40 - index, { activity: `Task ${index}` }));
+	const agents = Array.from({ length: 40 }, (_, index) =>
+		agent(`agent-${index}`, 40 - index, { activity: `Task ${index}` }),
+	);
 	const hub = createHub(agents);
 	try {
 		hub.render(120);
@@ -238,10 +240,15 @@ test("hub uses visual-line viewport scrolling without moving its selected agent"
 		hub.handleInput("g");
 		hub.handleInput("g");
 		hub.render(120);
-		expect(hub.navigationSnapshot()).toMatchObject({ selectedAgentId: "agent-0", rosterViewport: { item: 0, lineOffset: 0 } });
+		expect(hub.navigationSnapshot()).toMatchObject({
+			selectedAgentId: "agent-0",
+			rosterViewport: { item: 0, lineOffset: 0 },
+		});
 		hub.handleInput("\x04");
 		expect(hub.navigationSnapshot().selectedAgentId).not.toBe("agent-0");
-	} finally { hub.dispose(); }
+	} finally {
+		hub.dispose();
+	}
 });
 
 test("hub search is slash-focused literal input and Esc retains its query", () => {
@@ -258,7 +265,9 @@ test("hub search is slash-focused literal input and Esc retains its query", () =
 		expect(onDone).not.toHaveBeenCalled();
 		hub.handleInput("\x1b");
 		expect(onDone).toHaveBeenCalledTimes(1);
-	} finally { hub.dispose(); }
+	} finally {
+		hub.dispose();
+	}
 });
 
 test("hub pane motion wins over an armed close and unrelated input disarms it", () => {
@@ -277,7 +286,9 @@ test("hub pane motion wins over an armed close and unrelated input disarms it", 
 		expect(onDone).not.toHaveBeenCalled();
 		hub.handleInput("h");
 		expect(onDone).toHaveBeenCalledTimes(1);
-	} finally { hub.dispose(); }
+	} finally {
+		hub.dispose();
+	}
 });
 
 test("hub transcript stays in the same overlay and restores its unsent editor draft silently", () => {
@@ -316,7 +327,10 @@ test("hub transcript stays in the same overlay and restores its unsent editor dr
 		expect(restoredVisit).not.toHaveBeenCalled();
 		expect(showOverlay).not.toHaveBeenCalled();
 		expect(setFocus).not.toHaveBeenCalled();
-	} finally { hub.dispose(); restored.dispose(); }
+	} finally {
+		hub.dispose();
+		restored.dispose();
+	}
 });
 
 test("hub native close respects focused search before closing its root", () => {
@@ -331,5 +345,7 @@ test("hub native close respects focused search before closing its root", () => {
 		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "alpha", focused: false });
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(onDone).toHaveBeenCalledTimes(1);
-	} finally { hub.dispose(); }
+	} finally {
+		hub.dispose();
+	}
 });

@@ -4,7 +4,12 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { TspPickerGroup, TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
 import { plainText } from "../src/native/spans";
-import { ModelHubComponent, type HubEffortRule, type ModelHubRegistry, type ModelHubSource } from "../src/overlays/model-hub";
+import {
+	ModelHubComponent,
+	type HubEffortRule,
+	type ModelHubRegistry,
+	type ModelHubSource,
+} from "../src/overlays/model-hub";
 import { ModelPickerComponent } from "../src/overlays/model-picker";
 import { initTheme } from "../src/theme";
 import type { TUI } from "../src/tui";
@@ -375,15 +380,16 @@ test("the quick picker is an md sheet with the summary below and a task-model to
 
 for (const kind of ["hub", "picker"] as const) {
 	test(`${kind} caller synchronizes filter entry and exit with the shared browser`, () => {
-		const menu = kind === "hub"
-			? openHub({ assign: [], cancel: 0 })
-			: new ModelPickerComponent(
-				ui,
-				source({ default: "demo/demo" }, ["demo/demo"]),
-				{ ...registry(MODELS), refreshIfStale: async () => false },
-				MODELS.map(entry => ({ model: entry })),
-				{ onPick: () => {}, onCancel: () => {} },
-			);
+		const menu =
+			kind === "hub"
+				? openHub({ assign: [], cancel: 0 })
+				: new ModelPickerComponent(
+						ui,
+						source({ default: "demo/demo" }, ["demo/demo"]),
+						{ ...registry(MODELS), refreshIfStale: async () => false },
+						MODELS.map(entry => ({ model: entry })),
+						{ onPick: () => {}, onCancel: () => {} },
+					);
 		menu.handleInput("/");
 		for (const character of "jkggG/ ") menu.handleInput(character);
 		expect(props(menu.describe(withPicker)).query).toBe("jkggG/ ");
@@ -505,7 +511,9 @@ test("hub context switches do not create visits; nested selectors and effort cho
 	const calls = { assign: [] as string[], cancel: 0 };
 	const hub = openHub(calls);
 	const visits: string[] = [];
-	hub.onNavigationVisit = page => { visits.push(page); };
+	hub.onNavigationVisit = page => {
+		visits.push(page);
+	};
 	hub.handleInput("k"); // All → Roles is a context, not a nested page.
 	hub.handleInput("l");
 	const parent = hub.navigationSnapshot();
@@ -569,7 +577,9 @@ test("root-role yank includes configured fallbacks when pasted onto another role
 			onAssign: () => {},
 			onUnassign: () => {},
 			onCancel: () => {},
-			onFallbackChainChange: (role, chain) => { chains[role] = chain; },
+			onFallbackChainChange: (role, chain) => {
+				chains[role] = chain;
+			},
 		},
 	);
 	hubs.push(hub);
@@ -641,14 +651,21 @@ test("effort rule search stays in section and destructive actions target the fil
 	];
 	const hub = new ModelHubComponent(
 		ui,
-		{ ...source({}, []), get effortRules() { return rules; } },
+		{
+			...source({}, []),
+			get effortRules() {
+				return rules;
+			},
+		},
 		registry(MODELS),
 		MODELS.map(entry => ({ model: entry })),
 		{
 			onAssign: () => {},
 			onUnassign: () => {},
 			onCancel: () => {},
-			onEffortRulesChange: next => { rules = next; },
+			onEffortRulesChange: next => {
+				rules = next;
+			},
 		},
 	);
 	hubs.push(hub);
@@ -708,7 +725,9 @@ test("native Close leaves every model-hub search field before closing and names 
 		hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: scope, mods: [] });
 		hub.handleInput("/");
 		for (const char of "jkl") hub.handleInput(char);
-		expect(props(hub.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe("Back to list");
+		expect(props(hub.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe(
+			"Back to list",
+		);
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(calls.cancel).toBe(0);
 		expect(props(hub.describe(withPicker)).query).toBe("jkl");
@@ -750,14 +769,26 @@ test("quick picker native Close leaves literal search, repaints and closes only 
 	let closes = 0;
 	let renders = 0;
 	const picker = new ModelPickerComponent(
-		{ requestRender: () => { renders++; }, terminal: { rows: 40 } } as unknown as TUI,
+		{
+			requestRender: () => {
+				renders++;
+			},
+			terminal: { rows: 40 },
+		} as unknown as TUI,
 		source({}, []),
 		{ ...registry(MODELS), refreshIfStale: async () => false },
 		MODELS.map(entry => ({ model: entry })),
-		{ onPick: () => {}, onCancel: () => { closes++; } },
+		{
+			onPick: () => {},
+			onCancel: () => {
+				closes++;
+			},
+		},
 	);
 	for (const char of "/demo") picker.handleInput(char);
-	expect(props(picker.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe("Back to list");
+	expect(props(picker.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe(
+		"Back to list",
+	);
 	const before = renders;
 	picker.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 	expect(renders).toBeGreaterThan(before);

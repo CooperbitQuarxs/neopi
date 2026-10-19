@@ -77,7 +77,9 @@ function overlayUi(): {
 	const overlayStack: TUI["overlayStack"] = [];
 	const shown: Component[] = [];
 	let focused: Component | null = null;
-	const setFocus = vi.fn<(component: Component | null) => void>(component => { focused = component; });
+	const setFocus = vi.fn<(component: Component | null) => void>(component => {
+		focused = component;
+	});
 	const showOverlay = (component: Component, options?: OverlayOptions): OverlayHandle => {
 		const entry = { component, options, preFocus: null, hidden: false, released: false };
 		overlayStack.push(entry);

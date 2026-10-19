@@ -32,7 +32,14 @@ import type { TspSpan } from "@oh-my-pi/pi-wire";
 import type { NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { col, md, node, span, text } from "../native/describe";
 import { actionBar, actionButton } from "../native/overlay";
-import { applyMenuMotion, MenuKeyReader, MenuSearchField, MenuViewport, menuScrollBy, type MenuViewportPosition } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	MenuSearchField,
+	MenuViewport,
+	menuScrollBy,
+	type MenuViewportPosition,
+} from "../components/menu-navigation";
 import { MenuSelection } from "../components/menu-selection";
 import { fuzzyFilter } from "../fuzzy";
 
@@ -130,7 +137,10 @@ export class BtwHistoryPanel implements Component, Focusable {
 	readonly #listViewport = new MenuViewport();
 	readonly #keys = new MenuKeyReader();
 	readonly #search = new MenuSearchField();
-	readonly #selection = new MenuSelection<BtwHistoryRecord>([], { getKey: record => record.id, getSearchText: record => record.question });
+	readonly #selection = new MenuSelection<BtwHistoryRecord>([], {
+		getKey: record => record.id,
+		getSearchText: record => record.question,
+	});
 	#filtered: { source: readonly BtwHistoryRecord[]; query: string; records: readonly BtwHistoryRecord[] } | undefined;
 	#rowCounts: number[] = [];
 	#listNativeScroll: NativeScroll | undefined;
@@ -214,12 +224,20 @@ export class BtwHistoryPanel implements Component, Focusable {
 
 	navigationSnapshot(): unknown {
 		return {
-			selectedId: this.#selected()?.id, focus: this.#focus, search: this.#search.navigationSnapshot(),
-			listTop: this.#listViewport.top, detail: this.#detail.navigationSnapshot(), followLatest: this.#followLatest,
-			composer: this.#composer ? {
-				recordId: this.#composer.recordId, value: this.#composer.input.getValue(),
-				cursor: this.#composer.input.getCursor(), notice: this.#composer.notice,
-			} : undefined,
+			selectedId: this.#selected()?.id,
+			focus: this.#focus,
+			search: this.#search.navigationSnapshot(),
+			listTop: this.#listViewport.top,
+			detail: this.#detail.navigationSnapshot(),
+			followLatest: this.#followLatest,
+			composer: this.#composer
+				? {
+						recordId: this.#composer.recordId,
+						value: this.#composer.input.getValue(),
+						cursor: this.#composer.input.getCursor(),
+						notice: this.#composer.notice,
+					}
+				: undefined,
 			drafts: [...this.#drafts],
 			copiedId: this.#lastCopiedId,
 		};
@@ -228,8 +246,13 @@ export class BtwHistoryPanel implements Component, Focusable {
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as {
-			selectedId?: string; focus?: "list" | "answer"; search?: unknown; listTop?: MenuViewportPosition | number;
-			detail?: unknown; followLatest?: boolean; copiedId?: string;
+			selectedId?: string;
+			focus?: "list" | "answer";
+			search?: unknown;
+			listTop?: MenuViewportPosition | number;
+			detail?: unknown;
+			followLatest?: boolean;
+			copiedId?: string;
 			composer?: { recordId?: string; value?: string; cursor?: number; notice?: string };
 			drafts?: Array<[string, FollowUpDraft]>;
 		};
@@ -275,7 +298,8 @@ export class BtwHistoryPanel implements Component, Focusable {
 	}
 
 	#visibleRecords(): readonly BtwHistoryRecord[] {
-		if (this.#filtered?.source === this.#records && this.#filtered.query === this.#search.value) return this.#filtered.records;
+		if (this.#filtered?.source === this.#records && this.#filtered.query === this.#search.value)
+			return this.#filtered.records;
 		const records = this.#search.value.trim()
 			? fuzzyFilter(this.#records, this.#search.value, record => `${record.question} ${record.answer}`)
 			: this.#records;
@@ -342,7 +366,10 @@ export class BtwHistoryPanel implements Component, Focusable {
 	}
 
 	#selectedIndex(): number {
-		return Math.max(0, this.#visibleRecords().findIndex(record => record.id === this.#selectedId));
+		return Math.max(
+			0,
+			this.#visibleRecords().findIndex(record => record.id === this.#selectedId),
+		);
 	}
 
 	#selected(): BtwHistoryRecord | undefined {
@@ -552,15 +579,22 @@ export class BtwHistoryPanel implements Component, Focusable {
 			this.#search.focused = true;
 		} else if (action.kind === "context" || action.kind === "horizontal") {
 			this.#search.focused = false;
-			if (this.#records.length > 1) this.#focus = action.kind === "horizontal"
-				? action.delta < 0 ? "list" : "answer"
-				: this.#focus === "list" ? "answer" : "list";
+			if (this.#records.length > 1)
+				this.#focus =
+					action.kind === "horizontal"
+						? action.delta < 0
+							? "list"
+							: "answer"
+						: this.#focus === "list"
+							? "answer"
+							: "list";
 		} else if (action.kind === "confirm" || action.kind === "toggle") {
 			if (record) this.openFollowUp(record.id);
 		} else if (this.#focus === "list") {
 			this.#visibleRecords();
 			if (this.#selectedId) this.#selection.setSelectedKey(this.#selectedId);
-			if (this.#listViewport.top === undefined) this.#listViewport.layout(this.#rowCounts, this.#selectedIndex(), this.#listHeight);
+			if (this.#listViewport.top === undefined)
+				this.#listViewport.layout(this.#rowCounts, this.#selectedIndex(), this.#listHeight);
 			const motion = applyMenuMotion(action, this.#selection, this.#listViewport);
 			if (motion.selectionChanged) this.#select(this.#selection.selectedIndex);
 			if (action.kind === "scroll") {
@@ -597,9 +631,11 @@ export class BtwHistoryPanel implements Component, Focusable {
 			memo.followUpPending === this.#followUpPending &&
 			memo.canFollowUp === canFollowUp &&
 			memo.copied === copied &&
-			memo.scroll === this.#scroll
-			&& memo.query === this.#search.value && memo.queryFocused === this.#search.focused
-			&& memo.queryCursor === this.#search.cursor && memo.listScroll === this.#listNativeScroll
+			memo.scroll === this.#scroll &&
+			memo.query === this.#search.value &&
+			memo.queryFocused === this.#search.focused &&
+			memo.queryCursor === this.#search.cursor &&
+			memo.listScroll === this.#listNativeScroll
 		) {
 			return memo.node;
 		}
@@ -638,7 +674,9 @@ export class BtwHistoryPanel implements Component, Focusable {
 			canFollowUp,
 			copied,
 			scroll: this.#scroll,
-			query: this.#search.value, queryFocused: this.#search.focused, queryCursor: this.#search.cursor,
+			query: this.#search.value,
+			queryFocused: this.#search.focused,
+			queryCursor: this.#search.cursor,
 			listScroll: this.#listNativeScroll,
 			node: described,
 		};
@@ -713,7 +751,12 @@ export class BtwHistoryPanel implements Component, Focusable {
 		return node(
 			"col",
 			{ role: "omp.btw.history", shrink: 0 },
-			[{ ...node("list", { role, selected: this.#selectedId ?? null }, items, "records"), scroll: this.#listNativeScroll }],
+			[
+				{
+					...node("list", { role, selected: this.#selectedId ?? null }, items, "records"),
+					scroll: this.#listNativeScroll,
+				},
+			],
 			"history",
 		);
 	}
@@ -776,7 +819,9 @@ export class BtwHistoryPanel implements Component, Focusable {
 			"col",
 			{ role: "omp.btw.empty", align: "center", gap: "sm" },
 			[
-				text(this.#search.value ? "No matching side questions" : "No side questions yet", { role: "omp.btw.empty.title" }),
+				text(this.#search.value ? "No matching side questions" : "No side questions yet", {
+					role: "omp.btw.empty.title",
+				}),
 				text(
 					[
 						span("Ask one with "),
@@ -824,20 +869,26 @@ export class BtwHistoryPanel implements Component, Focusable {
 		this.#listHeight = Math.max(1, height);
 		const records = this.#visibleRecords();
 		if (records.length === 0) {
-			return new Text(theme.fg("muted", this.#search.value ? "No matching side questions." : "No side questions yet.\n\nUse /btw QUESTION to start one."), 0, 0)
+			return new Text(
+				theme.fg(
+					"muted",
+					this.#search.value
+						? "No matching side questions."
+						: "No side questions yet.\n\nUse /btw QUESTION to start one.",
+				),
+				0,
+				0,
+			)
 				.render(width)
 				.slice(0, height);
 		}
 		const selectedIndex = this.#selectedIndex();
-		if (this.#rowCounts.length !== records.length || this.#rowCounts[0] !== rowSpan) this.#rowCounts = records.map(() => rowSpan);
+		if (this.#rowCounts.length !== records.length || this.#rowCounts[0] !== rowSpan)
+			this.#rowCounts = records.map(() => rowSpan);
 		const window = this.#listViewport.layout(this.#rowCounts, selectedIndex, height);
 		const contentWidth = contentRowWidth(width, records.length * rowSpan, height);
 		const lines: string[] = [];
-		for (
-			let index = window.startIndex;
-			index < window.endIndex;
-			index++
-		) {
+		for (let index = window.startIndex; index < window.endIndex; index++) {
 			const record = records[index]!;
 			const selected = index === selectedIndex;
 			const status = STATUS[getBtwLatestTurn(record).status];
@@ -865,8 +916,10 @@ export class BtwHistoryPanel implements Component, Focusable {
 				);
 			}
 		}
-		const visibleLines = window.lineOffset === 0 && lines.length <= height
-			? lines : lines.slice(window.lineOffset, window.lineOffset + height);
+		const visibleLines =
+			window.lineOffset === 0 && lines.length <= height
+				? lines
+				: lines.slice(window.lineOffset, window.lineOffset + height);
 		return renderScrollableList(padLinesToHeight(visibleLines, height), {
 			width,
 			totalRows: records.length * rowSpan,
@@ -950,7 +1003,15 @@ export class BtwHistoryPanel implements Component, Focusable {
 				this.#turns.length = turns.length;
 			} else {
 				lines.push(
-					...wrapTextWithAnsi(theme.fg("muted", this.#search.value ? "No matching side questions." : "No side questions yet. Use /btw QUESTION to start one."), inner),
+					...wrapTextWithAnsi(
+						theme.fg(
+							"muted",
+							this.#search.value
+								? "No matching side questions."
+								: "No side questions yet. Use /btw QUESTION to start one.",
+						),
+						inner,
+					),
 				);
 			}
 			this.#detailRecord = record;

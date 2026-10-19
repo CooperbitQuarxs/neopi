@@ -2,14 +2,22 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { PluginSelectorComponent } from "../src/overlays/plugin-selector";
 import { initTheme } from "../src/theme/theme";
 
-beforeAll(async () => { await initTheme(false); });
+beforeAll(async () => {
+	await initTheme(false);
+});
 
 function make(mode: "install" | "uninstall") {
 	const selected: string[] = [];
-	const selector = new PluginSelectorComponent(mode, 1, [
-		{ plugin: { name: "alpha", description: "First plugin" }, marketplace: "shop", scope: "user" },
-		{ plugin: { name: "beta", description: "Second plugin" }, marketplace: "shop", scope: "user" },
-	], new Set(), { onSelect: name => selected.push(name), onCancel: () => {} });
+	const selector = new PluginSelectorComponent(
+		mode,
+		1,
+		[
+			{ plugin: { name: "alpha", description: "First plugin" }, marketplace: "shop", scope: "user" },
+			{ plugin: { name: "beta", description: "Second plugin" }, marketplace: "shop", scope: "user" },
+		],
+		new Set(),
+		{ onSelect: name => selected.push(name), onCancel: () => {} },
+	);
 	return { selector, list: selector.getSelectList(), selected };
 }
 
@@ -53,7 +61,13 @@ describe("plugin picker activation policy", () => {
 
 	it("names native uninstall explicitly and still requires confirmation", () => {
 		const { selector, selected } = make("uninstall");
-		const root = selector.describe({ cols: 100, dark: true, reduceMotion: false, supports: () => true, feature: () => true });
+		const root = selector.describe({
+			cols: 100,
+			dark: true,
+			reduceMotion: false,
+			supports: () => true,
+			feature: () => true,
+		});
 		expect(root?.c?.[0]).toMatchObject({ k: "picker", p: { actions: [{ label: "Uninstall" }, { label: "Close" }] } });
 		selector.handleNativeEvent({ type: "action", key: "^picker", act: "confirm", mods: [] });
 		expect(selected).toEqual(["alpha"]);

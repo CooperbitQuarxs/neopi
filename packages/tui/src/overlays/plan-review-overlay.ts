@@ -37,7 +37,13 @@ import { getEditorTheme, getMarkdownTheme, getThemeEpoch, theme } from "../theme
 import { matchesAppExternalEditor, matchesSelectCancel } from "../keybinding-matchers";
 import { extractPrintableText } from "../keys";
 import { MenuSelection } from "../components/menu-selection";
-import { applyMenuMotion, MenuKeyReader, menuScrollBy, type MenuNavAction, MenuViewport } from "../components/menu-navigation";
+import {
+	applyMenuMotion,
+	MenuKeyReader,
+	menuScrollBy,
+	type MenuNavAction,
+	MenuViewport,
+} from "../components/menu-navigation";
 import type { HookSelectorSlider } from "./hook-selector";
 import {
 	bottomBorder,
@@ -261,7 +267,10 @@ export class PlanReviewOverlay implements Component {
 	#mdTheme: MarkdownTheme;
 	#scrollView: ScrollView;
 	readonly #keys = new MenuKeyReader();
-	readonly #tocMenu = new MenuSelection<number>([], { getKey: String, getSearchText: index => this.#sections[index]?.title ?? "" });
+	readonly #tocMenu = new MenuSelection<number>([], {
+		getKey: String,
+		getSearchText: index => this.#sections[index]?.title ?? "",
+	});
 	readonly #tocViewport = new MenuViewport();
 	#tocRows: number[] = [];
 	readonly #actionMenu: MenuSelection<number>;
@@ -364,11 +373,14 @@ export class PlanReviewOverlay implements Component {
 		this.#externalEditorLabel = options.externalEditorLabel;
 		this.#promptTitle = options.promptTitle;
 		this.#selectedIndex = this.#coerceIndex(options.initialIndex ?? 0);
-		this.#actionMenu = new MenuSelection(this.#options.map((_option, index) => index), {
-			getKey: String,
-			getSearchText: index => this.#options[index] ?? "",
-			isDisabled: index => this.#disabled.has(index),
-		});
+		this.#actionMenu = new MenuSelection(
+			this.#options.map((_option, index) => index),
+			{
+				getKey: String,
+				getSearchText: index => this.#options[index] ?? "",
+				isDisabled: index => this.#disabled.has(index),
+			},
+		);
 		this.#actionMenu.setSelectedIndex(this.#selectedIndex);
 		this.#actionRows = this.#options.map(() => 1);
 		if (options.slider && options.slider.segments.length > 0) {
@@ -667,8 +679,10 @@ export class PlanReviewOverlay implements Component {
 		if (!action) {
 			if (this.#focus !== "actions" && keyData === "u") this.#undoLast();
 			else if (this.#focus !== "actions" && keyData === "e") this.#editCurrentAnnotation();
-			else if (this.callbacks.onExternalEditor && matchesAppExternalEditor(keyData)) this.callbacks.onExternalEditor();
-			else if (this.callbacks.onCopyPlan && keyData === "c") void this.callbacks.onCopyPlan(joinPlanSections(this.#sections));
+			else if (this.callbacks.onExternalEditor && matchesAppExternalEditor(keyData))
+				this.callbacks.onExternalEditor();
+			else if (this.callbacks.onCopyPlan && keyData === "c")
+				void this.callbacks.onCopyPlan(joinPlanSections(this.#sections));
 		}
 		if (this.#focus === "actions") this.#handleActions(action);
 		else if (this.#focus === "body") this.#handleBody(action, keyData);
@@ -1315,7 +1329,11 @@ export class PlanReviewOverlay implements Component {
 		const chooser = this.#annotationChooser;
 		if (!chooser || maxRows <= 0) return [];
 		const optionLimit = Number.isFinite(maxRows) ? Math.max(0, Math.floor(maxRows) - 2) : chooser.entries.length;
-		const start = this.#chooserViewport.layout(this.#chooserRows, chooser.selected, Math.max(1, optionLimit)).startIndex;
+		const start = this.#chooserViewport.layout(
+			this.#chooserRows,
+			chooser.selected,
+			Math.max(1, optionLimit),
+		).startIndex;
 		const lines = [theme.bold(theme.fg("accent", "Edit annotation"))];
 		for (let windowIndex = 0; windowIndex < optionLimit; windowIndex++) {
 			const optionIndex = start + windowIndex;

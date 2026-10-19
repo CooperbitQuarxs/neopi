@@ -7,7 +7,9 @@ import { KeybindingsManager } from "../src/app-keybindings";
 import { setKeybindings } from "../src/keybindings";
 import { SPACE_HOLD_MECHANICAL_RUN, SPACE_HOLD_RELEASE_MS, type SpaceHoldHandler } from "../src/space-hold";
 
-beforeAll(async () => { await initTheme(); });
+beforeAll(async () => {
+	await initTheme();
+});
 beforeEach(() => setKeybindings(KeybindingsManager.inMemory()));
 afterEach(() => {
 	setKeybindings(KeybindingsManager.inMemory());
@@ -16,23 +18,40 @@ afterEach(() => {
 });
 
 const records: BtwHistoryRecord[] = Array.from({ length: 40 }, (_, i) => ({
-	id: `question-${i}`, leafId: null, question: `Question ${i}`,
+	id: `question-${i}`,
+	leafId: null,
+	question: `Question ${i}`,
 	answer: Array.from({ length: 50 }, (_, row) => `Answer ${i}, line ${row}`).join("\n\n"),
-	status: "complete", createdAt: i, updatedAt: i,
+	status: "complete",
+	createdAt: i,
+	updatedAt: i,
 }));
 
-function create(options: {
-	onFollowUp?: (record: BtwHistoryRecord, question: string, signal: AbortSignal) => Promise<boolean>;
-	spaceHold?: (input: Input) => SpaceHoldHandler;
-} = {}) {
-	return new BtwHistoryPanel({ records, onClose: () => {}, onCopy: () => {}, onCancel: () => {},
-		canFollowUp: () => true, onFollowUp: options.onFollowUp ?? (async () => true),
-		spaceHold: options.spaceHold, requestRender: () => {}, getHeight: () => 24 });
+function create(
+	options: {
+		onFollowUp?: (record: BtwHistoryRecord, question: string, signal: AbortSignal) => Promise<boolean>;
+		spaceHold?: (input: Input) => SpaceHoldHandler;
+	} = {},
+) {
+	return new BtwHistoryPanel({
+		records,
+		onClose: () => {},
+		onCopy: () => {},
+		onCancel: () => {},
+		canFollowUp: () => true,
+		onFollowUp: options.onFollowUp ?? (async () => true),
+		spaceHold: options.spaceHold,
+		requestRender: () => {},
+		getHeight: () => 24,
+	});
 }
 
 function state(panel: BtwHistoryPanel) {
 	return panel.navigationSnapshot() as {
-		selectedId: string; focus: string; search: { value: string; focused: boolean; cursor: number }; listTop: unknown;
+		selectedId: string;
+		focus: string;
+		search: { value: string; focused: boolean; cursor: number };
+		listTop: unknown;
 		composer?: { recordId: string; value: string; cursor: number };
 	};
 }
@@ -44,7 +63,8 @@ describe("BTW menu navigation and safe history", () => {
 			panel.render(100);
 			panel.handleInput("G");
 			expect(state(panel).selectedId).toBe("question-39");
-			panel.handleInput("g"); panel.handleInput("g");
+			panel.handleInput("g");
+			panel.handleInput("g");
 			panel.render(100);
 			expect(state(panel).selectedId).toBe("question-0");
 			const top = state(panel).listTop;
@@ -57,7 +77,9 @@ describe("BTW menu navigation and safe history", () => {
 			expect(state(panel).search).toMatchObject({ value: "jkG /", focused: true });
 			panel.handleInput("\x1b");
 			expect(state(panel).search).toMatchObject({ value: "jkG /", focused: false });
-		} finally { panel.dispose(); }
+		} finally {
+			panel.dispose();
+		}
 	});
 
 	it("scrolls a narrow two-line row by one visual line and restores that clipped row", () => {
@@ -72,19 +94,25 @@ describe("BTW menu navigation and safe history", () => {
 			reopened.restoreNavigation(panel.navigationSnapshot());
 			reopened.render(32);
 			expect(state(reopened).listTop).toEqual({ item: 0, lineOffset: 1 });
-		} finally { panel.dispose(); reopened.dispose(); }
+		} finally {
+			panel.dispose();
+			reopened.dispose();
+		}
 	});
 
 	it("leaves the filter on Tab before moving to the answer pane", () => {
 		const panel = create();
 		try {
 			panel.render(100);
-			panel.handleInput("/"); panel.handleInput("Question");
+			panel.handleInput("/");
+			panel.handleInput("Question");
 			panel.handleInput("\t");
 			panel.handleInput("j");
 			expect(state(panel)).toMatchObject({ focus: "answer", search: { value: "Question", focused: false } });
 			expect(panel.navigationSnapshot()).toMatchObject({ detail: { scrollOffset: 1 } });
-		} finally { panel.dispose(); }
+		} finally {
+			panel.dispose();
+		}
 	});
 
 	it("restores pane, selection, query caret, and a safe follow-up draft without submitting", () => {
@@ -92,16 +120,22 @@ describe("BTW menu navigation and safe history", () => {
 		const panel = create({ onFollowUp });
 		const reopened = create({ onFollowUp });
 		try {
-			panel.handleInput("/"); panel.handleInput("Question"); panel.handleInput("\x1b[D");
+			panel.handleInput("/");
+			panel.handleInput("Question");
+			panel.handleInput("\x1b[D");
 			panel.handleInput("\x1b");
-			panel.handleInput("j"); panel.handleInput("l");
+			panel.handleInput("j");
+			panel.handleInput("l");
 			panel.openFollowUp("question-1");
-			panel.handleInput("jkG / a safe draft"); panel.handleInput("\x1b[D");
+			panel.handleInput("jkG / a safe draft");
+			panel.handleInput("\x1b[D");
 			const saved = panel.navigationSnapshot();
 			panel.leaveMenu();
 			reopened.restoreNavigation(saved);
 			expect(state(reopened)).toMatchObject({
-				selectedId: "question-1", focus: "answer", search: { value: "Question", cursor: 7, focused: false },
+				selectedId: "question-1",
+				focus: "answer",
+				search: { value: "Question", cursor: 7, focused: false },
 				composer: { recordId: "question-1", value: "jkG / a safe draft", cursor: 17 },
 			});
 			expect(onFollowUp).not.toHaveBeenCalled();
@@ -109,7 +143,10 @@ describe("BTW menu navigation and safe history", () => {
 			expect(state(reopened).composer).toBeUndefined();
 			expect(reopened.openFollowUp("question-1")).toBe(true);
 			expect(state(reopened).composer).toMatchObject({ value: "jkG / a safe draft", cursor: 17 });
-		} finally { panel.dispose(); reopened.dispose(); }
+		} finally {
+			panel.dispose();
+			reopened.dispose();
+		}
 	});
 
 	it("blocks history only while a follow-up submission is pending", async () => {
@@ -126,18 +163,22 @@ describe("BTW menu navigation and safe history", () => {
 			await accepted.promise;
 			expect(panel.blocksMenuHistory).toBe(false);
 			expect(state(panel).composer?.value).toBe("safe question");
-		} finally { panel.dispose(); }
+		} finally {
+			panel.dispose();
+		}
 	});
 
 	it("keeps remapped printable menu actions literal in follow-up drafts", async () => {
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": ["escape", "j"],
-			"tui.input.submit": ["enter", "k"],
-			"tui.editor.deleteCharBackward": ["backspace", "h"],
-			"tui.editor.deleteCharForward": ["delete", "/"],
-			"tui.select.nextContext": ["tab", "g"],
-			"tui.select.prevContext": ["shift+tab", "l"],
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": ["escape", "j"],
+				"tui.input.submit": ["enter", "k"],
+				"tui.editor.deleteCharBackward": ["backspace", "h"],
+				"tui.editor.deleteCharForward": ["delete", "/"],
+				"tui.select.nextContext": ["tab", "g"],
+				"tui.select.prevContext": ["shift+tab", "l"],
+			}),
+		);
 		const accepted = Promise.withResolvers<boolean>();
 		const onFollowUp = vi.fn(() => accepted.promise);
 		const panel = create({ onFollowUp });
@@ -154,15 +195,19 @@ describe("BTW menu navigation and safe history", () => {
 			expect(state(panel).composer).toBeUndefined();
 			panel.openFollowUp("question-0");
 			expect(state(panel).composer?.value).toBe("hjklggG / ");
-		} finally { panel.dispose(); }
+		} finally {
+			panel.dispose();
+		}
 	});
 
 	it("preserves sustained Space, Backspace latching, and non-space release while typing literal actions", () => {
 		vi.useFakeTimers();
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": ["escape", "j"],
-			"tui.input.submit": ["enter", "k"],
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": ["escape", "j"],
+				"tui.input.submit": ["enter", "k"],
+			}),
+		);
 		const events: string[] = [];
 		const onFollowUp = vi.fn(async () => false);
 		const panel = create({
@@ -182,7 +227,8 @@ describe("BTW menu navigation and safe history", () => {
 		};
 		try {
 			panel.openFollowUp("question-0");
-			panel.handleInput("h"); panel.handleInput("i");
+			panel.handleInput("h");
+			panel.handleInput("i");
 			hold();
 			expect(state(panel).composer?.value).toBe("hi");
 			expect(events).toEqual(["start"]);
@@ -202,6 +248,8 @@ describe("BTW menu navigation and safe history", () => {
 			expect(onFollowUp).not.toHaveBeenCalled();
 			panel.handleInput("\x7f");
 			expect(state(panel).composer?.value).toBe("hij");
-		} finally { panel.dispose(); }
+		} finally {
+			panel.dispose();
+		}
 	});
 });

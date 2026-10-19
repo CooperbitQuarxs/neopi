@@ -53,7 +53,13 @@ describe("hook callback prompt navigation", () => {
 				const id = String(index).padStart(2, "0");
 				return `row${id} ${`tail${id}`.repeat(3)}`;
 			});
-			const selector = new HookSelectorComponent("Choose", options, () => {}, () => {}, { maxVisible: 5, outline });
+			const selector = new HookSelectorComponent(
+				"Choose",
+				options,
+				() => {},
+				() => {},
+				{ maxVisible: 5, outline },
+			);
 			const half = Math.max(1, Math.floor(visibleItems(selector) / 2));
 			selector.handleInput("\x04");
 			expect(selected(selector)).toBe(half);
@@ -85,17 +91,24 @@ describe("hook callback prompt navigation", () => {
 	}
 
 	it("focuses / search, types remapped menu keys literally, and closes the field first", () => {
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": ["escape", "j", "space"],
-			"tui.input.submit": ["enter", "k"],
-			"tui.editor.deleteCharBackward": ["backspace", "h"],
-			"tui.editor.deleteCharForward": ["delete", "/"],
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": ["escape", "j", "space"],
+				"tui.input.submit": ["enter", "k"],
+				"tui.editor.deleteCharBackward": ["backspace", "h"],
+				"tui.editor.deleteCharForward": ["delete", "/"],
+			}),
+		);
 		const picks: string[] = [];
 		let cancelled = 0;
 		const selector = new HookSelectorComponent(
-			"Choose", Array.from({ length: 20 }, (_, index) => `Option ${index}`),
-			value => picks.push(value), () => { cancelled++; }, { maxVisible: 4 },
+			"Choose",
+			Array.from({ length: 20 }, (_, index) => `Option ${index}`),
+			value => picks.push(value),
+			() => {
+				cancelled++;
+			},
+			{ maxVisible: 4 },
 		);
 		expect(prop(picker(selector), "query")).toBeNull();
 		selector.handleInput("/");
@@ -117,11 +130,19 @@ describe("hook callback prompt navigation", () => {
 
 	it("never approves with Space and only aliases existing marked checkbox toggles", () => {
 		const picks: string[] = [];
-		const approval = new HookSelectorComponent("Approve?", ["Approve", "Reject"], value => picks.push(value), () => {});
+		const approval = new HookSelectorComponent(
+			"Approve?",
+			["Approve", "Reject"],
+			value => picks.push(value),
+			() => {},
+		);
 		approval.handleInput(" ");
 		expect(picks).toEqual([]);
 		const multi = new HookSelectorComponent(
-			"Choose", ["Option", "Done", "Other"], value => picks.push(value), () => {},
+			"Choose",
+			["Option", "Done", "Other"],
+			value => picks.push(value),
+			() => {},
 			{ selectionMarker: "checkbox", markableCount: 1 },
 		);
 		multi.handleInput(" ");
@@ -137,15 +158,30 @@ describe("hook callback prompt navigation", () => {
 
 	it("uses h/l and context aliases for the existing slider, never for selection", () => {
 		const changed: number[] = [];
-		const selector = new HookSelectorComponent("Choose", ["One", "Two"], () => {}, () => {}, {
-			slider: { segments: [{ label: "A" }, { label: "B" }, { label: "C" }], index: 1, onChange: index => changed.push(index) },
-		});
+		const selector = new HookSelectorComponent(
+			"Choose",
+			["One", "Two"],
+			() => {},
+			() => {},
+			{
+				slider: {
+					segments: [{ label: "A" }, { label: "B" }, { label: "C" }],
+					index: 1,
+					onChange: index => changed.push(index),
+				},
+			},
+		);
 		for (const key of ["h", "l", "\t", "\x1b[Z", "\x0e", "\x10"]) selector.handleInput(key);
 		expect(changed).toEqual([0, 1, 2, 1, 2, 1]);
 	});
 
 	it("keeps fallback native list scrolling independent of selection", () => {
-		const selector = new HookSelectorComponent("Choose", Array.from({ length: 20 }, (_, index) => `Item ${index}`), () => {}, () => {});
+		const selector = new HookSelectorComponent(
+			"Choose",
+			Array.from({ length: 20 }, (_, index) => `Item ${index}`),
+			() => {},
+			() => {},
+		);
 		const cx = { ...CX, supports: (capability: string) => capability !== "picker" };
 		selector.describe(cx);
 		selector.handleInput("\x05");

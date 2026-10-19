@@ -183,11 +183,13 @@ describe("HookInputComponent native sheet", () => {
 describe("HookInputComponent literal text", () => {
 	it("keeps printable interrupt, cancel and submit bindings literal, including Kitty text", () => {
 		const previous = getKeybindings();
-		setKeybindings(KeybindingsManager.inMemory({
-			"app.interrupt": "j",
-			"tui.select.cancel": "k",
-			"tui.input.submit": "s",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"app.interrupt": "j",
+				"tui.select.cancel": "k",
+				"tui.input.submit": "s",
+			}),
+		);
 		const onSubmit = vi.fn();
 		const onCancel = vi.fn();
 		const component = new HookInputComponent("Prompt", undefined, onSubmit, onCancel);
@@ -244,11 +246,13 @@ describe("HookInputComponent literal text", () => {
 
 	it("retains nonprintable submit, field-cancel and application-interrupt bindings", () => {
 		const previous = getKeybindings();
-		setKeybindings(KeybindingsManager.inMemory({
-			"app.interrupt": "alt+x",
-			"tui.select.cancel": "alt+q",
-			"tui.input.submit": "alt+s",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"app.interrupt": "alt+x",
+				"tui.select.cancel": "alt+q",
+				"tui.input.submit": "alt+s",
+			}),
+		);
 		const onSubmit = vi.fn();
 		const onCancel = vi.fn();
 		const component = new HookInputComponent("Prompt", undefined, onSubmit, onCancel);

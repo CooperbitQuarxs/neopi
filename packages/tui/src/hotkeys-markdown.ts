@@ -268,10 +268,16 @@ export class HotkeysSheetComponent implements Component {
 		);
 		const close = actionButton("Close", "close", { keys: "escape" });
 		this.#native = {
-			...col([
-				...sections,
-				actionBar([text([span("j/k scroll · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll", "dim")]), close]),
-			], { gap: "lg" }),
+			...col(
+				[
+					...sections,
+					actionBar([
+						text([span("j/k scroll · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll", "dim")]),
+						close,
+					]),
+				],
+				{ gap: "lg" },
+			),
 			scroll: this.#nativeScroll,
 		};
 		return this.#native;

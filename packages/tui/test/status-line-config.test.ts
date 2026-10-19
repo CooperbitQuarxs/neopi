@@ -250,16 +250,18 @@ describe("status-line editor list", () => {
 
 	it("honors configured reader intents and captures navigation drafts synchronously", () => {
 		const previous = getKeybindings();
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.down": "alt+n",
-			"tui.select.halfPageDown": "alt+d",
-			"tui.select.halfPageUp": "alt+u",
-			"tui.select.scrollDown": "alt+e",
-			"tui.select.scrollUp": "alt+y",
-			"tui.select.first": "alt+g",
-			"tui.select.last": "alt+b",
-			"tui.select.search": "ctrl+f",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.down": "alt+n",
+				"tui.select.halfPageDown": "alt+d",
+				"tui.select.halfPageUp": "alt+u",
+				"tui.select.scrollDown": "alt+e",
+				"tui.select.scrollUp": "alt+y",
+				"tui.select.first": "alt+g",
+				"tui.select.last": "alt+b",
+				"tui.select.search": "ctrl+f",
+			}),
+		);
 		try {
 			const h = setup({ usageReports: MANY_WINDOWS });
 			h.press("\x1bn");
@@ -309,7 +311,9 @@ describe("status-line editor list", () => {
 		const overlay = new StatusLineConfigOverlayComponent({
 			active: () => structuredClone(ACTIVE),
 			usageReports: MANY_WINDOWS,
-			saveDraft: async draft => { drafts.push(structuredClone(draft)); },
+			saveDraft: async draft => {
+				drafts.push(structuredClone(draft));
+			},
 			apply: async () => {},
 			preview: () => {},
 			close: () => {},
@@ -325,7 +329,10 @@ describe("status-line editor list", () => {
 
 	it("cycles an unknown composer to the first or last registered shape without moving", () => {
 		const shapes = getComposerShapeOptions();
-		for (const [key, expected] of [[">", shapes[0]!.value], ["<", shapes.at(-1)!.value]] as const) {
+		for (const [key, expected] of [
+			[">", shapes[0]!.value],
+			["<", shapes.at(-1)!.value],
+		] as const) {
 			const h = setup({}, { ...ACTIVE, composerShape: "unknown-shape" });
 			h.press(key);
 			expect(h.previews.at(-1)?.composerShape).toBe(expected);
@@ -370,11 +377,13 @@ describe("status-line editor templates", () => {
 
 	it("keeps printable bindings literal in search and template fields without applying", () => {
 		const previous = getKeybindings();
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": "j",
-			"tui.input.submit": "s",
-			"tui.select.nextContext": "alt+t",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": "j",
+				"tui.input.submit": "s",
+				"tui.select.nextContext": "alt+t",
+			}),
+		);
 		try {
 			const literal = "js h/l gg G";
 			const search = setup();

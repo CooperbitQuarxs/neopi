@@ -219,11 +219,16 @@ describe("AdvisorConfigOverlayComponent", () => {
 			Object.defineProperty(process.stdout, "rows", { configurable: true, value: scenario.rows });
 			try {
 				const marker = "ADVISOR-LAST-CONTENT";
-				const overlay = make({ advisors: [{
-					name: "reader",
-					instructions: Array.from({ length: scenario.lines }, (_, index) =>
-						index === scenario.lines - 1 ? marker : `Preview line ${index}`).join("\n"),
-				}] });
+				const overlay = make({
+					advisors: [
+						{
+							name: "reader",
+							instructions: Array.from({ length: scenario.lines }, (_, index) =>
+								index === scenario.lines - 1 ? marker : `Preview line ${index}`,
+							).join("\n"),
+						},
+					],
+				});
 				const initial = overlay.render(100);
 				expect(initial).toHaveLength(Math.max(14, scenario.rows));
 				const contentRows = initial.length - 4 - (scenario.overflows ? 1 : 0);
@@ -232,7 +237,9 @@ describe("AdvisorConfigOverlayComponent", () => {
 				overlay.onNavigationVisit = page => visits.push(page);
 				overlay.handleInput("l");
 				overlay.handleInput("\x04");
-				expect(overlay.navigationSnapshot().previewScroll).toBe(scenario.overflows ? Math.max(1, Math.floor(contentRows / 2)) : 0);
+				expect(overlay.navigationSnapshot().previewScroll).toBe(
+					scenario.overflows ? Math.max(1, Math.floor(contentRows / 2)) : 0,
+				);
 				overlay.handleInput("G");
 				const end = overlay.navigationSnapshot().previewScroll;
 				const lastContent = (): string => {

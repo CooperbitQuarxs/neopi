@@ -71,7 +71,6 @@ describe("theme selector picker", () => {
 		selector.handleNativeEvent(act("close"));
 		expect(log).toEqual(["preview:nord", "select:nord", "cancel"]);
 	});
-
 });
 
 describe("short-list native picker search", () => {
@@ -309,7 +308,9 @@ describe("oauth selector picker", () => {
 			"login",
 			auth,
 			id => picked.push(id),
-			() => { closed = true; },
+			() => {
+				closed = true;
+			},
 		);
 		selector.handleInput("G");
 		const last = sheet(selector.describe(pickerCx)).props.selected;
@@ -326,7 +327,12 @@ describe("oauth selector picker", () => {
 		selector.handleInput("\x1b");
 		expect(closed).toBe(false);
 		const snapshot = selector.navigationSnapshot();
-		const restored = new OAuthSelectorComponent("login", auth, () => {}, () => {});
+		const restored = new OAuthSelectorComponent(
+			"login",
+			auth,
+			() => {},
+			() => {},
+		);
 		restored.restoreNavigation(snapshot);
 		expect(restored.navigationSnapshot()).toEqual(snapshot);
 		selector.handleInput("\x1b");

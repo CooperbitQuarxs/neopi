@@ -74,11 +74,18 @@ const ENTRIES: SettingsDisplayEntry[] = [
 ];
 
 const PLUGIN: InstalledPlugin = {
-	name: "hjkl", version: "1", enabled: true, enabledFeatures: null,
+	name: "hjkl",
+	version: "1",
+	enabled: true,
+	enabledFeatures: null,
 	manifest: {
 		settings: {
 			message: { type: "string", default: "" },
-			mode: { type: "enum", values: ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa"], default: "alpha" },
+			mode: {
+				type: "enum",
+				values: ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa"],
+				default: "alpha",
+			},
 		},
 	},
 };
@@ -153,7 +160,10 @@ function harness(initial: Record<string, unknown> = {}, options: HarnessOptions 
 			thinkingLevel: undefined,
 			availableThemes: ["dark", "light", "titanium"],
 			providers: options.providers ?? [],
-			requestRender: () => { rendered(); options.requestRender?.(); },
+			requestRender: () => {
+				rendered();
+				options.requestRender?.();
+			},
 		},
 		{
 			onChange: (path, value) => changes.push([path, value]),
@@ -163,10 +173,15 @@ function harness(initial: Record<string, unknown> = {}, options: HarnessOptions 
 		},
 	);
 	return {
-		selector, values, changes, previews,
+		selector,
+		values,
+		changes,
+		previews,
 		whenRendered: ready => {
 			const pending = Promise.withResolvers<void>();
-			rendered = () => { if (ready(prefs(selector).props)) pending.resolve(); };
+			rendered = () => {
+				if (ready(prefs(selector).props)) pending.resolve();
+			};
 			rendered();
 			return pending.promise;
 		},
@@ -373,6 +388,25 @@ describe("settings as a native prefs page", () => {
 		expect(prefs(selector).props.focus).toBe("display.risky");
 	});
 
+	it("navigates normal-mode rows and sections, toggles with Space, and searches only with slash", () => {
+		const { selector, values } = harness();
+		selector.handleInput("j");
+		expect(prefs(selector).props.focus).toBe("display.colorBlind");
+		selector.handleInput(" ");
+		expect(values.get("display.colorBlind")).toBe(true);
+		selector.handleInput("k");
+		expect(prefs(selector).props.focus).toBe("theme.dark");
+		const originalPage = prefs(selector).props.page;
+		selector.handleInput("l");
+		expect(prefs(selector).props.page).not.toBe(originalPage);
+		selector.handleInput("h");
+		expect(prefs(selector).props.page).toBe(originalPage);
+		selector.handleInput("/");
+		selector.handleInput("color");
+		expect(prefs(selector).props.query).toBe("color");
+		expect(prefs(selector).props.focus).toBe("display.colorBlind");
+	});
+
 	it("keeps global-search text literal and restores its focus and selection", () => {
 		const { selector } = harness();
 		selector.handleInput("j");
@@ -395,7 +429,9 @@ describe("settings as a native prefs page", () => {
 	it("reports nested settings pages and restores them without a fresh visit", () => {
 		const { selector } = harness();
 		const visits: string[] = [];
-		selector.onNavigationVisit = page => { visits.push(page); };
+		selector.onNavigationVisit = page => {
+			visits.push(page);
+		};
 		send(selector, { type: "action", key: "", act: "page", value: "context", mods: [] });
 		send(selector, { type: "action", key: "", act: "edit", value: "compaction.thresholdPercent", mods: [] });
 		const snapshot = selector.navigationSnapshot();
@@ -409,9 +445,15 @@ describe("settings as a native prefs page", () => {
 	it("treats root plugin h/l and Tab as contexts without history visits", async () => {
 		const h = harness({}, { plugins: pluginHost([PLUGIN]) });
 		const visits: string[] = [];
-		h.selector.onNavigationVisit = page => { visits.push(page); };
+		h.selector.onNavigationVisit = page => {
+			visits.push(page);
+		};
 		const pages = prefs(h.selector).props.pages;
-		for (const [key, page] of [["l", pages[0]!.id], ["h", pages.at(-2)!.id], ["\t", pages[0]!.id]] as const) {
+		for (const [key, page] of [
+			["l", pages[0]!.id],
+			["h", pages.at(-2)!.id],
+			["\t", pages[0]!.id],
+		] as const) {
 			send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
 			await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
 			h.selector.handleInput(key);
@@ -422,20 +464,29 @@ describe("settings as a native prefs page", () => {
 
 	it("mirrors filtered plugin rows, retained query and caret, and closes the filter before the page", async () => {
 		let closed = 0;
-		const h = harness({}, {
-			plugins: pluginHost([PLUGIN, { ...PLUGIN, name: "alpha" }]),
-			onCancel: () => { closed++; },
-		});
+		const h = harness(
+			{},
+			{
+				plugins: pluginHost([PLUGIN, { ...PLUGIN, name: "alpha" }]),
+				onCancel: () => {
+					closed++;
+				},
+			},
+		);
 		send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
 		await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
 		for (const key of ["/", "h", "j", "\x01", "\x1b[C"]) h.selector.handleInput(key);
 		expect(prefs(h.selector).props).toMatchObject({
-			query: "hj", cursor: 1, focus: "npm:hjkl",
+			query: "hj",
+			cursor: 1,
+			focus: "npm:hjkl",
 			sections: [{ rows: [{ id: "npm:hjkl" }] }],
 		});
 		send(h.selector, { type: "action", key: "", act: "close", mods: [] });
 		expect(closed).toBe(0);
-		expect(h.selector.navigationSnapshot()).toMatchObject({ plugin: { content: { filter: "hj", filterFocused: false, filterCursor: 1 } } });
+		expect(h.selector.navigationSnapshot()).toMatchObject({
+			plugin: { content: { filter: "hj", filterFocused: false, filterCursor: 1 } },
+		});
 		expect(prefs(h.selector).props.query).toBe("hj");
 		send(h.selector, { type: "action", key: "", act: "close", mods: [] });
 		expect(closed).toBe(1);
@@ -448,18 +499,26 @@ describe("settings as a native prefs page", () => {
 		await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
 		for (const key of ["/", "hj", "\x1b"]) h.selector.handleInput(key);
 		send(h.selector, { type: "activate", key: "", item: "npm:hjkl" });
-		await h.whenRendered(props => props.sections.some(section => section.rows.some(row => row.id === "config:message")));
+		await h.whenRendered(props =>
+			props.sections.some(section => section.rows.some(row => row.id === "config:message")),
+		);
 		for (const key of ["/", "message", "\x01", "\x1b[C", "\x1b[C", "\x1b"]) h.selector.handleInput(key);
 		expect(prefs(h.selector).props).toMatchObject({
-			query: "message", cursor: 2, focus: "config:message",
+			query: "message",
+			cursor: 2,
+			focus: "config:message",
 			sections: [{ rows: [{ id: "config:message" }] }],
 		});
 		const snapshot = h.selector.navigationSnapshot();
 		const restored = harness({}, { plugins });
 		const visits: string[] = [];
-		restored.selector.onNavigationVisit = page => { visits.push(page); };
+		restored.selector.onNavigationVisit = page => {
+			visits.push(page);
+		};
 		restored.selector.restoreNavigation(snapshot);
-		await restored.whenRendered(props => props.sections.some(section => section.rows.some(row => row.id === "config:message")));
+		await restored.whenRendered(props =>
+			props.sections.some(section => section.rows.some(row => row.id === "config:message")),
+		);
 		expect(prefs(restored.selector).props).toMatchObject({ query: "message", cursor: 2, focus: "config:message" });
 		expect(restored.selector.navigationSnapshot()).toEqual(snapshot);
 		expect(visits).toEqual([]);
@@ -471,12 +530,23 @@ describe("settings as a native prefs page", () => {
 
 	it("exits text fields and native enum menus with printable cancel and submit remaps", () => {
 		const previous = getKeybindings();
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": "j", "tui.input.submit": ["s", "enter"], "tui.editor.deleteCharBackward": "k",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": "j",
+				"tui.input.submit": ["s", "enter"],
+				"tui.editor.deleteCharBackward": "k",
+			}),
+		);
 		try {
 			let closed = 0;
-			const h = harness({}, { onCancel: () => { closed++; } });
+			const h = harness(
+				{},
+				{
+					onCancel: () => {
+						closed++;
+					},
+				},
+			);
 			send(h.selector, { type: "action", key: "", act: "page", value: "shell", mods: [] });
 			send(h.selector, { type: "activate", key: "", item: "shell.path" });
 			const literal = "j/k h l gg G / note s";
@@ -494,46 +564,76 @@ describe("settings as a native prefs page", () => {
 			expect(closed).toBe(0);
 			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
 			expect(closed).toBe(1);
-		} finally { setKeybindings(previous); }
+		} finally {
+			setKeybindings(previous);
+		}
 	});
 
 	it("closes a literal plugin field and then its enum filter/menu before the root", async () => {
 		const previous = getKeybindings();
-		setKeybindings(KeybindingsManager.inMemory({
-			"tui.select.cancel": "j", "tui.input.submit": ["s", "enter"], "tui.editor.deleteCharBackward": "k",
-		}));
+		setKeybindings(
+			KeybindingsManager.inMemory({
+				"tui.select.cancel": "j",
+				"tui.input.submit": ["s", "enter"],
+				"tui.editor.deleteCharBackward": "k",
+			}),
+		);
 		try {
 			let closed = 0;
-			const h = harness({}, { plugins: pluginHost([PLUGIN]), onCancel: () => { closed++; } });
+			const h = harness(
+				{},
+				{
+					plugins: pluginHost([PLUGIN]),
+					onCancel: () => {
+						closed++;
+					},
+				},
+			);
 			send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
 			await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
 			send(h.selector, { type: "activate", key: "", item: "npm:hjkl" });
-			await h.whenRendered(props => props.sections.some(section => section.rows.some(row => row.id === "config:message")));
+			await h.whenRendered(props =>
+				props.sections.some(section => section.rows.some(row => row.id === "config:message")),
+			);
 			send(h.selector, { type: "action", key: "", act: "edit", value: "config:message", mods: [] });
 			for (const char of "j/k h l gg G / note s") h.selector.handleInput(char);
-			expect(h.selector.navigationSnapshot()).toMatchObject({ plugin: { content: { submenuId: "config:message", submenu: { value: "j/k h l gg G / note s" } } } });
+			expect(h.selector.navigationSnapshot()).toMatchObject({
+				plugin: { content: { submenuId: "config:message", submenu: { value: "j/k h l gg G / note s" } } },
+			});
 			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
 			expect(h.selector.navigationSnapshot()).toMatchObject({ plugin: { content: { submenuId: null } } });
 			expect(closed).toBe(0);
 			send(h.selector, { type: "action", key: "", act: "edit", value: "config:mode", mods: [] });
 			for (const key of ["/", "b", "e"]) h.selector.handleInput(key);
 			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
-			expect(h.selector.navigationSnapshot()).toMatchObject({ plugin: { content: { submenuId: "config:mode", submenu: { filter: "be", filterFocused: false } } } });
+			expect(h.selector.navigationSnapshot()).toMatchObject({
+				plugin: { content: { submenuId: "config:mode", submenu: { filter: "be", filterFocused: false } } },
+			});
 			send(h.selector, { type: "action", key: "", act: "close", value: "config:mode", mods: [] });
 			expect(h.selector.navigationSnapshot()).toMatchObject({ plugin: { content: { submenuId: null } } });
 			expect(closed).toBe(0);
 			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
 			expect(closed).toBe(1);
-		} finally { setKeybindings(previous); }
+		} finally {
+			setKeybindings(previous);
+		}
 	});
 
 	it("preserves multiselect cursor, query, caret and detached viewport through rebuild and restore", () => {
 		const ids = Array.from({ length: 20 }, (_, index) => `v${String(index).padStart(2, "0")}`);
 		const order: SettingsDisplayEntry = {
-			path: "providers.order", type: "array", defaultValue: ids,
-			ui: { tab: "providers", label: "Order", description: "", ordered: true, options: ids.map(value => ({ value, label: `Option ${value}` })) },
+			path: "providers.order",
+			type: "array",
+			defaultValue: ids,
+			ui: {
+				tab: "providers",
+				label: "Order",
+				description: "",
+				ordered: true,
+				options: ids.map(value => ({ value, label: `Option ${value}` })),
+			},
 		};
-		const entries = ENTRIES.map(entry => entry.path === order.path ? order : entry);
+		const entries = ENTRIES.map(entry => (entry.path === order.path ? order : entry));
 		const h = harness({}, { entries });
 		send(h.selector, { type: "action", key: "", act: "page", value: "providers", mods: [] });
 		send(h.selector, { type: "activate", key: "", item: order.path });
@@ -543,12 +643,17 @@ describe("settings as a native prefs page", () => {
 		h.selector.render(120);
 		const before = h.selector.navigationSnapshot() as { list: { submenu: { list: SelectListNavigationState } } };
 		expect(before.list.submenu.list).toMatchObject({
-			selectedValue: "v19", filter: "option", filterCursor: 2, filterFocused: false,
+			selectedValue: "v19",
+			filter: "option",
+			filterCursor: 2,
+			filterFocused: false,
 			viewportTop: { item: 7, lineOffset: 0 },
 		});
 		for (const key of [" ", " ", "h"]) {
 			h.selector.handleInput(key);
-			expect(h.selector.navigationSnapshot()).toMatchObject({ list: { submenu: { list: before.list.submenu.list } } });
+			expect(h.selector.navigationSnapshot()).toMatchObject({
+				list: { submenu: { list: before.list.submenu.list } },
+			});
 		}
 		expect(h.values.get(order.path)).toEqual([...ids.slice(0, 18), ids[19]!, ids[18]!]);
 		const snapshot = h.selector.navigationSnapshot();
@@ -562,13 +667,17 @@ describe("settings as a native prefs page", () => {
 
 	it("restores provider parent search and makes Space/l inert on clear-all without phantom visits", () => {
 		const limits: SettingsDisplayEntry = {
-			path: "providers.maxInFlightRequests", type: "record", defaultValue: { acme: 3, zeta: 4 },
+			path: "providers.maxInFlightRequests",
+			type: "record",
+			defaultValue: { acme: 3, zeta: 4 },
 			ui: { tab: "providers", label: "Max In-Flight Requests", description: "" },
 		};
 		const providers = ["acme", ...Array.from({ length: 12 }, (_, index) => `other-${index}`), "zeta"];
 		const h = harness({}, { entries: [...ENTRIES, limits], providers });
 		const visits: string[] = [];
-		h.selector.onNavigationVisit = page => { visits.push(page); };
+		h.selector.onNavigationVisit = page => {
+			visits.push(page);
+		};
 		send(h.selector, { type: "action", key: "", act: "page", value: "providers", mods: [] });
 		send(h.selector, { type: "activate", key: "", item: limits.path });
 		for (const key of ["/", "ze", "\x01", "\x1b[C", "\x1b"]) h.selector.handleInput(key);
@@ -594,10 +703,16 @@ describe("settings as a native prefs page", () => {
 		const changed = Promise.withResolvers<void>();
 		const changedStarted = Promise.withResolvers<void>();
 		plugins.manager.setEnabled = () => write.promise;
-		const h = harness({}, {
-			plugins,
-			onPluginsChanged: () => { changedStarted.resolve(); return changed.promise; },
-		});
+		const h = harness(
+			{},
+			{
+				plugins,
+				onPluginsChanged: () => {
+					changedStarted.resolve();
+					return changed.promise;
+				},
+			},
+		);
 		send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
 		await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
 		send(h.selector, { type: "activate", key: "", item: "npm:hjkl" });
@@ -619,18 +734,30 @@ describe("settings as a native prefs page", () => {
 		const plugins = pluginHost([PLUGIN]);
 		const listed = Promise.withResolvers<InstalledPlugin[]>();
 		let lists = 0;
-		plugins.manager.list = () => ++lists === 1 ? Promise.resolve([PLUGIN]) : listed.promise;
+		plugins.manager.list = () => (++lists === 1 ? Promise.resolve([PLUGIN]) : listed.promise);
 		const lateFrame = Promise.withResolvers<void>();
 		let expectLateFrame = false;
-		const h = harness({}, { plugins, requestRender: () => { if (expectLateFrame) lateFrame.resolve(); } });
+		const h = harness(
+			{},
+			{
+				plugins,
+				requestRender: () => {
+					if (expectLateFrame) lateFrame.resolve();
+				},
+			},
+		);
 		const visits: string[] = [];
-		h.selector.onNavigationVisit = page => { visits.push(page); };
+		h.selector.onNavigationVisit = page => {
+			visits.push(page);
+		};
 		send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
 		expect(h.selector.blocksMenuHistory).toBe(false);
 		await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
 		send(h.selector, { type: "activate", key: "", item: "npm:hjkl" });
 		expect(h.selector.blocksMenuHistory).toBe(false);
-		await h.whenRendered(props => props.sections.some(section => section.rows.some(row => row.id === "config:message")));
+		await h.whenRendered(props =>
+			props.sections.some(section => section.rows.some(row => row.id === "config:message")),
+		);
 		h.selector.handleInput("h"); // parent navigation starts a read-only registry reload
 		expect(h.selector.blocksMenuHistory).toBe(false);
 		send(h.selector, { type: "action", key: "", act: "page", value: "appearance", mods: [] });

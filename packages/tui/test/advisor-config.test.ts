@@ -413,11 +413,19 @@ describe("advisor menu navigation and history", () => {
 		const overlay = new AdvisorConfigOverlayComponent(
 			{ terminal: { rows: 14 } } as unknown as TUI,
 			{ ...deps, availableToolNames: ["read", "grep", "glob", "write"] },
-			"project", doc, {
+			"project",
+			doc,
+			{
 				loadDoc: async () => ({ advisors: [] }),
-				save: async () => { events.push("save"); },
-				apply: async () => { events.push("apply"); },
-				close: () => { closed++; },
+				save: async () => {
+					events.push("save");
+				},
+				apply: async () => {
+					events.push("apply");
+				},
+				close: () => {
+					closed++;
+				},
 				requestRender: () => {},
 				notify: () => {},
 				...callbacks,
@@ -441,7 +449,9 @@ describe("advisor menu navigation and history", () => {
 			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "hjkl/ g", filterFocused: false });
 			h.overlay.handleInput("\x1b");
 			expect(h.closed()).toBe(1);
-		} finally { h.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+		}
 	});
 
 	it("retains the name field and its parent filter without submitting on restore", () => {
@@ -466,11 +476,17 @@ describe("advisor menu navigation and history", () => {
 			expect(restored.overlay.navigationSnapshot().content).toEqual(snapshot.content);
 			expect(restoredVisits).toEqual([]);
 			restored.overlay.handleInput("\x1b");
-			expect(restored.overlay.navigationSnapshot()).toMatchObject({ context: { screen: "detail" }, content: { filter: "Name", selectedValue: "name" } });
+			expect(restored.overlay.navigationSnapshot()).toMatchObject({
+				context: { screen: "detail" },
+				content: { filter: "Name", selectedValue: "name" },
+			});
 			expect(visits.map(([page]) => page)).toEqual(["detail:0", "name:0"]);
 			expect(h.events).toEqual([]);
 			expect(restored.events).toEqual([]);
-		} finally { h.overlay.dispose(); restored.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+			restored.overlay.dispose();
+		}
 	});
 	it("keeps printable remapped cancel, submit, and edit keys literal in the name field", () => {
 		const h = make({ advisors: [{ name: "Reviewer" }] });
@@ -478,14 +494,17 @@ describe("advisor menu navigation and history", () => {
 		try {
 			h.overlay.handleInput("\r");
 			h.overlay.handleInput("l");
-			setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, {
-				"tui.select.cancel": ["escape", "h"],
-				"tui.input.submit": ["enter", "j"],
-				"tui.editor.deleteCharBackward": "l",
-			}));
+			setKeybindings(
+				new KeybindingsManager(TUI_KEYBINDINGS, {
+					"tui.select.cancel": ["escape", "h"],
+					"tui.input.submit": ["enter", "j"],
+					"tui.editor.deleteCharBackward": "l",
+				}),
+			);
 			for (const key of ["h", "j", "k", "l", "/", " "]) h.overlay.handleInput(key);
 			expect(h.overlay.navigationSnapshot()).toMatchObject({
-				context: { screen: "name" }, content: { value: "Reviewerhjkl/ " },
+				context: { screen: "name" },
+				content: { value: "Reviewerhjkl/ " },
 			});
 			expect(h.events).toEqual([]);
 			h.overlay.handleInput("\x1b");
@@ -495,7 +514,6 @@ describe("advisor menu navigation and history", () => {
 			h.overlay.dispose();
 		}
 	});
-
 
 	it("restores a multiline safe prompt draft without saving or applying it", () => {
 		const h = make({ advisors: [{ name: "Reviewer", systemPrompt: "" }] });
@@ -514,7 +532,10 @@ describe("advisor menu navigation and history", () => {
 			expect(restored.overlay.navigationSnapshot().content).toEqual(snapshot.content);
 			expect(restored.overlay.blocksMenuHistory).toBe(false);
 			expect(restored.events).toEqual([]);
-		} finally { h.overlay.dispose(); restored.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+			restored.overlay.dispose();
+		}
 	});
 
 	it("restores pending tool checkboxes and keeps their cursor on the next toggle", () => {
@@ -537,13 +558,19 @@ describe("advisor menu navigation and history", () => {
 			expect(restored.overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "write" });
 			expect(restored.overlay.navigationSnapshot().context.tools).not.toContain("write");
 			expect(restored.events).toEqual([]);
-		} finally { h.overlay.dispose(); restored.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+			restored.overlay.dispose();
+		}
 	});
 
 	it("moves the preview independently, preserves root panes as contexts and isolates gg", () => {
 		// The overlay sizes itself from the real terminal, so the preview must overflow any height.
 		const instructions = Array.from({ length: 120 }, (_, index) => `Instruction line ${index}`).join("\n");
-		const h = make({ advisors: [{ name: "Reviewer", instructions }], warnings: Array.from({ length: 40 }, (_, index) => `Warning ${index}`) });
+		const h = make({
+			advisors: [{ name: "Reviewer", instructions }],
+			warnings: Array.from({ length: 40 }, (_, index) => `Warning ${index}`),
+		});
 		const visits: string[] = [];
 		h.overlay.onNavigationVisit = page => visits.push(page);
 		try {
@@ -551,7 +578,11 @@ describe("advisor menu navigation and history", () => {
 			const first = h.overlay.navigationSnapshot();
 			h.overlay.handleInput("l");
 			h.overlay.handleInput("\x05");
-			expect(h.overlay.navigationSnapshot()).toMatchObject({ previewFocused: true, previewScroll: 1, content: first.content });
+			expect(h.overlay.navigationSnapshot()).toMatchObject({
+				previewFocused: true,
+				previewScroll: 1,
+				content: first.content,
+			});
 			h.overlay.handleInput("G");
 			expect(h.overlay.navigationSnapshot().previewScroll).toBeGreaterThan(1);
 			h.overlay.handleInput("g");
@@ -568,13 +599,17 @@ describe("advisor menu navigation and history", () => {
 			h.overlay.handleInput("g");
 			expect(h.overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "advisor:0" });
 			expect(visits).toEqual([]);
-		} finally { h.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+		}
 	});
 
 	it("does not delete on Space or l and retains the old advisor context before explicit deletion", () => {
 		const h = make({ advisors: [{ name: "Reviewer" }] });
 		let previous: unknown;
-		h.overlay.onNavigationVisit = (_page, snapshot) => { previous = snapshot; };
+		h.overlay.onNavigationVisit = (_page, snapshot) => {
+			previous = snapshot;
+		};
 		try {
 			h.overlay.handleInput("\r");
 			h.overlay.handleInput("/");
@@ -586,9 +621,14 @@ describe("advisor menu navigation and history", () => {
 			h.overlay.handleInput("\r");
 			expect(previous).toMatchObject({ doc: { advisors: [{ name: "Reviewer" }] } });
 			h.overlay.restoreNavigation(previous);
-			expect(h.overlay.navigationSnapshot()).toMatchObject({ context: { screen: "detail" }, doc: { advisors: [{ name: "Reviewer" }] } });
+			expect(h.overlay.navigationSnapshot()).toMatchObject({
+				context: { screen: "detail" },
+				doc: { advisors: [{ name: "Reviewer" }] },
+			});
 			expect(h.events).toEqual([]);
-		} finally { h.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+		}
 	});
 
 	it("restores immutable draft data into the original opaque document owner before saving", async () => {
@@ -596,12 +636,15 @@ describe("advisor menu navigation and history", () => {
 		const metadata = new WeakSet([doc]);
 		let saved: WatchdogConfigDoc | undefined;
 		const h = make(doc);
-		const restored = make({ advisors: [{ name: "Other" }] }, {
-			save: async (_scope, candidate) => {
-				if (!metadata.has(candidate)) throw new Error("lost document metadata");
-				saved = candidate;
+		const restored = make(
+			{ advisors: [{ name: "Other" }] },
+			{
+				save: async (_scope, candidate) => {
+					if (!metadata.has(candidate)) throw new Error("lost document metadata");
+					saved = candidate;
+				},
 			},
-		});
+		);
 		try {
 			h.overlay.handleInput(" ");
 			const snapshot = h.overlay.navigationSnapshot();
@@ -613,16 +656,24 @@ describe("advisor menu navigation and history", () => {
 			await new Promise<void>(resolve => setImmediate(resolve));
 			expect(saved).toBe(doc);
 			expect(saved?.advisors[0]?.enabled).toBe(false);
-		} finally { h.overlay.dispose(); restored.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+			restored.overlay.dispose();
+		}
 	});
 
 	it("blocks actual save/apply operations but discards a stale read-only scope result after restore", async () => {
 		const saving = Promise.withResolvers<void>();
 		const applying = Promise.withResolvers<void>();
 		const load = Promise.withResolvers<WatchdogConfigDoc>();
-		const h = make({ advisors: [{ name: "Reviewer" }] }, {
-			save: () => saving.promise, apply: () => applying.promise, loadDoc: () => load.promise,
-		});
+		const h = make(
+			{ advisors: [{ name: "Reviewer" }] },
+			{
+				save: () => saving.promise,
+				apply: () => applying.promise,
+				loadDoc: () => load.promise,
+			},
+		);
 		try {
 			const original = h.overlay.navigationSnapshot();
 			h.overlay.handleInput("/");
@@ -646,17 +697,28 @@ describe("advisor menu navigation and history", () => {
 			applying.resolve();
 			await new Promise<void>(resolve => setImmediate(resolve));
 			expect(h.overlay.blocksMenuHistory).toBe(false);
-		} finally { h.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+		}
 	});
 
 	it("shows native filtered roster results and keeps prefs categories out of the timeline", () => {
 		const h = make({ advisors: [{ name: "Reviewer" }] });
 		const visits: string[] = [];
 		h.overlay.onNavigationVisit = page => visits.push(page);
-		const cx: DescribeContext = { cols: 120, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
+		const cx: DescribeContext = {
+			cols: 120,
+			reduceMotion: false,
+			dark: true,
+			supports: () => true,
+			feature: () => true,
+		};
 		const sheet = () => {
 			const root = h.overlay.describe(cx);
-			const component = root.c?.[0] as unknown as { describe(): NativeNode | null; handleNativeEvent(event: NativeUiEvent): void };
+			const component = root.c?.[0] as unknown as {
+				describe(): NativeNode | null;
+				handleNativeEvent(event: NativeUiEvent): void;
+			};
 			const node = component?.describe();
 			if (node?.k !== "picker") throw new Error("expected a filtered advisor picker");
 			return { component, props: node.p as TspPickerProps };
@@ -676,6 +738,8 @@ describe("advisor menu navigation and history", () => {
 			sheet().component.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 			expect(h.closed()).toBe(1);
 			expect(visits).toEqual([]);
-		} finally { h.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+		}
 	});
 });

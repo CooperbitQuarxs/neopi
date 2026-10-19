@@ -428,20 +428,37 @@ export class TreeView<T, K extends TreeKey = string> implements Component {
 		this.#ensureRows();
 		const safeWidth = Number.isFinite(width) ? Math.max(0, Math.trunc(width)) : Number.POSITIVE_INFINITY;
 		const cached = this.#cache;
-		if (!explicitWindow && cached && !cached.explicitWindow &&
-			cached.width === safeWidth && cached.version === this.#version) return cached.result;
+		if (
+			!explicitWindow &&
+			cached &&
+			!cached.explicitWindow &&
+			cached.width === safeWidth &&
+			cached.version === this.#version
+		)
+			return cached.result;
 
 		const totalRows = this.#rows.length;
 		const maxRows = this.#normalizeBudget(this.#options.maxRows, totalRows);
 		const selectedIndex = this.selectionIndex;
 		const centerSelection = this.#options.centerSelection ?? this.#selectedKey !== undefined;
-		const window = explicitWindow ? undefined : centerSelection && selectedIndex >= 0
-			? centeredViewportRange(selectedIndex, totalRows, maxRows)
-			: viewportRange(totalRows, maxRows, 0);
+		const window = explicitWindow
+			? undefined
+			: centerSelection && selectedIndex >= 0
+				? centeredViewportRange(selectedIndex, totalRows, maxRows)
+				: viewportRange(totalRows, maxRows, 0);
 		const windowStart = explicitWindow ? Math.max(0, Math.min(totalRows, explicitWindow.startIndex)) : window!.start;
-		const windowEnd = explicitWindow ? Math.max(windowStart, Math.min(totalRows, explicitWindow.endIndex)) : window!.end;
-		if (explicitWindow && cached?.explicitWindow && cached.width === safeWidth && cached.version === this.#version &&
-			cached.result.windowStart === windowStart && cached.result.windowEnd === windowEnd) return cached.result;
+		const windowEnd = explicitWindow
+			? Math.max(windowStart, Math.min(totalRows, explicitWindow.endIndex))
+			: window!.end;
+		if (
+			explicitWindow &&
+			cached?.explicitWindow &&
+			cached.width === safeWidth &&
+			cached.version === this.#version &&
+			cached.result.windowStart === windowStart &&
+			cached.result.windowEnd === windowEnd
+		)
+			return cached.result;
 		const windowRows = this.#rows.slice(windowStart, windowEnd);
 		const maxLines = this.#normalizeBudget(this.#options.maxLines, Number.POSITIVE_INFINITY);
 		const lines: string[] = [];
@@ -505,7 +522,12 @@ export class TreeView<T, K extends TreeKey = string> implements Component {
 		}
 
 		let renderedLines: readonly string[] = lines;
-		if (this.#options.scrollbar && (explicitWindow ? windowStart > 0 || windowEnd < totalRows : maxRows < totalRows) && lines.length > 0 && Number.isFinite(safeWidth)) {
+		if (
+			this.#options.scrollbar &&
+			(explicitWindow ? windowStart > 0 || windowEnd < totalRows : maxRows < totalRows) &&
+			lines.length > 0 &&
+			Number.isFinite(safeWidth)
+		) {
 			const viewport = new ScrollView(lines, {
 				height: lines.length,
 				totalRows,

@@ -324,7 +324,6 @@ export class ModelPickerComponent implements Component {
 		this.#tui.requestRender();
 	}
 
-
 	render(width: number): string[] {
 		const termRows = Math.max(16, this.#tui.terminal?.rows || process.stdout.rows || 40);
 		const listBudget = Math.floor(termRows * HEIGHT_FRACTION) - CHROME_ROWS - BROWSER_FRAME_ROWS;
@@ -491,7 +490,8 @@ export class ModelPickerComponent implements Component {
 			{ keys: ["/"], label: "search (@ for quick roles)" },
 		];
 		hints.push(actionHint("tui.select.cancel", "close"));
-		if (this.#hasTaskTarget && !this.#roleMode) hints.push(actionHint("tui.select.nextContext", "session/Task target"));
+		if (this.#hasTaskTarget && !this.#roleMode)
+			hints.push(actionHint("tui.select.nextContext", "session/Task target"));
 		if (this.#taskModeKey !== undefined && !this.#roleMode) {
 			hints.push({ keys: [this.#taskModeKey], label: this.#taskMode ? "session model" : "task model" });
 		}

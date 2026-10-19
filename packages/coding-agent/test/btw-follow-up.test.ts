@@ -100,7 +100,9 @@ async function harness(spaceHoldKeys: readonly KeyId[] = ["space"]) {
 	} as unknown as InteractiveModeContext["session"];
 	const ctx = {
 		openMenu: () => ({
-			mount: (_component: unknown, show: () => unknown) => { show(); },
+			mount: (_component: unknown, show: () => unknown) => {
+				show();
+			},
 			close: () => true,
 		}),
 		ui: {

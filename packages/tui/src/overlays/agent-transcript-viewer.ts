@@ -599,17 +599,28 @@ export class AgentTranscriptViewer implements Component {
 			else if (text !== undefined) this.#editor.typeCharacter(text);
 			else {
 				const kb = getKeybindings();
-				if (kb.matches(data, "tui.select.cancel") || kb.matches(data, "tui.select.nextContext") || kb.matches(data, "tui.select.prevContext")) this.#setFocus("view");
+				if (
+					kb.matches(data, "tui.select.cancel") ||
+					kb.matches(data, "tui.select.nextContext") ||
+					kb.matches(data, "tui.select.prevContext")
+				)
+					this.#setFocus("view");
 				else this.#editor.handleInput(data);
 			}
 			this.#deps.requestRender();
 			return;
 		}
 		for (const key of this.#deps.hubKeys) {
-			if (matchesKey(data, key)) { this.#deps.onHubClose(); return; }
+			if (matchesKey(data, key)) {
+				this.#deps.onHubClose();
+				return;
+			}
 		}
 		for (const key of this.#deps.expandKeys) {
-			if (matchesKey(data, key)) { this.#toggleExpanded(); return; }
+			if (matchesKey(data, key)) {
+				this.#toggleExpanded();
+				return;
+			}
 		}
 		const action = this.#keys.read(data);
 		if (action === undefined || action === "pending") return;
@@ -621,7 +632,10 @@ export class AgentTranscriptViewer implements Component {
 			if (this.#editor) this.#setFocus("editor");
 			return;
 		}
-		if (action.kind === "toggle") { this.#toggleExpanded(); return; }
+		if (action.kind === "toggle") {
+			this.#toggleExpanded();
+			return;
+		}
 		if (this.#browser.handleMenuAction(action)) {
 			const by = menuScrollBy(action);
 			if (by !== undefined) this.#scroll = { by, n: (this.#scroll?.n ?? 0) + 1 };
@@ -812,7 +826,9 @@ export class AgentTranscriptViewer implements Component {
 		}
 		children.push(
 			hintsRow([
-				this.#editor ? { keys: ["tab", "shift+tab"], label: this.#focus === "editor" ? "view" : "message" } : undefined,
+				this.#editor
+					? { keys: ["tab", "shift+tab"], label: this.#focus === "editor" ? "view" : "message" }
+					: undefined,
 				this.#focus === "editor" ? actionHint("tui.input.submit", "send") : undefined,
 				{ keys: [this.#deps.expandKeys[0] ?? "alt+e", "space"], label: "expand" },
 			]),
@@ -879,9 +895,10 @@ export class AgentTranscriptViewer implements Component {
 		const statsLine = this.#statsLine();
 		if (statsLine) lines.push(statsLine);
 		const keys = `${formatKeyHint("escape")}/h:hub  ${formatKeyHint(this.#deps.expandKeys[0] ?? "alt+e")}/Space:expand  j/k:scroll  Ctrl-d/u:half page  gg/G:top/bottom`;
-		const hint = this.#focus === "editor"
-			? `${editorKey("tui.input.submit")}:send · Tab/Esc back to view`
-			: `${keys}${this.#editor ? " · Tab message" : ""}`;
+		const hint =
+			this.#focus === "editor"
+				? `${editorKey("tui.input.submit")}:send · Tab/Esc back to view`
+				: `${keys}${this.#editor ? " · Tab message" : ""}`;
 		lines.push(theme.fg("dim", hint));
 		return lines;
 	}
@@ -919,8 +936,12 @@ export class AgentTranscriptViewer implements Component {
 		return "No messages yet.";
 	}
 
-	get agentId(): string { return this.#deps.agentId; }
-	get blocksMenuHistory(): boolean { return this.#pendingSends > 0; }
+	get agentId(): string {
+		return this.#deps.agentId;
+	}
+	get blocksMenuHistory(): boolean {
+		return this.#pendingSends > 0;
+	}
 
 	navigationSnapshot(): unknown {
 		return {
@@ -934,13 +955,26 @@ export class AgentTranscriptViewer implements Component {
 
 	restoreNavigation(snapshot: unknown): void {
 		if (typeof snapshot !== "object" || snapshot === null) return;
-		const state = snapshot as { focus?: "view" | "editor"; expanded?: boolean; viewport?: unknown; editor?: EditorNavigationState; initialEntryId?: string };
+		const state = snapshot as {
+			focus?: "view" | "editor";
+			expanded?: boolean;
+			viewport?: unknown;
+			editor?: EditorNavigationState;
+			initialEntryId?: string;
+		};
 		if (typeof state.expanded === "boolean") {
 			this.#expanded = state.expanded;
 			this.#builder.setExpanded(state.expanded);
 		}
 		this.#browser.restoreNavigation(state.viewport);
-		if (state.editor && typeof state.editor.text === "string" && typeof state.editor.cursor?.line === "number" && typeof state.editor.cursor?.col === "number" && typeof state.editor.scrollTop === "number") this.#editor?.setState(state.editor);
+		if (
+			state.editor &&
+			typeof state.editor.text === "string" &&
+			typeof state.editor.cursor?.line === "number" &&
+			typeof state.editor.cursor?.col === "number" &&
+			typeof state.editor.scrollTop === "number"
+		)
+			this.#editor?.setState(state.editor);
 		this.#initialEntryId = state.initialEntryId;
 		this.#setFocus(state.focus === "editor" ? "editor" : "view");
 		this.#nativeCache = undefined;

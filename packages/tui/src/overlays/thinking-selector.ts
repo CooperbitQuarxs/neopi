@@ -25,7 +25,9 @@ export class ThinkingSelectorComponent extends OverlayPanel {
 		const thinkingLevels: SelectItem[] = availableLevels.map(getConfiguredThinkingLevelMetadata);
 
 		// Create selector
-		this.#selectList = new SelectList(thinkingLevels, thinkingLevels.length, getSelectListTheme(), { search: "always" });
+		this.#selectList = new SelectList(thinkingLevels, thinkingLevels.length, getSelectListTheme(), {
+			search: "always",
+		});
 
 		// Preselect current level
 		const currentIndex = thinkingLevels.findIndex(item => item.value === currentLevel);

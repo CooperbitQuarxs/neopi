@@ -290,7 +290,6 @@ function entryValue(entry: PluginListEntry): string {
 	return `mkt:${entry.plugin.scope}:${entry.plugin.id}`;
 }
 
-
 /**
  * Shows installed plugins from both registries (npm + marketplace) with
  * enable/disable status, scope tag, and shadow indicator. Selecting an entry
@@ -355,14 +354,7 @@ export class PluginListComponent extends OverlayPanel {
 		this.addChild(this.#selectList);
 		this.addChild(new Spacer(1));
 		this.addChild(
-			new Text(
-				theme.fg(
-					"dim",
-					`${editorKey("tui.select.confirm")} configure · / search · Esc close`,
-				),
-				0,
-				0,
-			),
+			new Text(theme.fg("dim", `${editorKey("tui.select.confirm")} configure · / search · Esc close`), 0, 0),
 		);
 	}
 
@@ -504,9 +496,16 @@ export class PluginListComponent extends OverlayPanel {
 		this.#selectList.handleNavigation(action);
 	}
 
-	get filterFocused(): boolean { return this.#selectList.filterFocused; }
-	navigationSnapshot(): unknown { return this.#selectList.navigationSnapshot(); }
-	restoreNavigation(snapshot: unknown): void { this.#keys.reset(); this.#selectList.restoreNavigation(snapshot); }
+	get filterFocused(): boolean {
+		return this.#selectList.filterFocused;
+	}
+	navigationSnapshot(): unknown {
+		return this.#selectList.navigationSnapshot();
+	}
+	restoreNavigation(snapshot: unknown): void {
+		this.#keys.reset();
+		this.#selectList.restoreNavigation(snapshot);
+	}
 }
 
 // =============================================================================
@@ -625,7 +624,8 @@ export class PluginDetailComponent extends OverlayPanel {
 			},
 			onCancel: this.callbacks.onBack,
 		});
-		this.#settingsList.settingsList.onNavigationVisit = (page, previousSnapshot) => this.onNavigationVisit?.(page, previousSnapshot);
+		this.#settingsList.settingsList.onNavigationVisit = (page, previousSnapshot) =>
+			this.onNavigationVisit?.(page, previousSnapshot);
 		if (this.#pendingNavigation !== undefined) {
 			this.#settingsList.restoreNavigation(this.#pendingNavigation);
 			this.#pendingNavigation = undefined;
@@ -640,17 +640,29 @@ export class PluginDetailComponent extends OverlayPanel {
 		this.#settingsList.handleInput(data);
 	}
 
-	handleNavigation(action: MenuNavAction): void { this.#settingsList?.settingsList.handleNavigation(action); }
-	get hasOpenSubmenu(): boolean { return this.#settingsList?.settingsList.hasOpenSubmenu() ?? false; }
+	handleNavigation(action: MenuNavAction): void {
+		this.#settingsList?.settingsList.handleNavigation(action);
+	}
+	get hasOpenSubmenu(): boolean {
+		return this.#settingsList?.settingsList.hasOpenSubmenu() ?? false;
+	}
 
-	get filterFocused(): boolean { return this.#settingsList?.filterFocused ?? false; }
-	get blocksMenuHistory(): boolean { return this.#settingsList?.blocksMenuHistory ?? false; }
-	navigationSnapshot(): unknown { return this.#settingsList?.navigationSnapshot() ?? this.#pendingNavigation; }
+	get filterFocused(): boolean {
+		return this.#settingsList?.filterFocused ?? false;
+	}
+	get blocksMenuHistory(): boolean {
+		return this.#settingsList?.blocksMenuHistory ?? false;
+	}
+	navigationSnapshot(): unknown {
+		return this.#settingsList?.navigationSnapshot() ?? this.#pendingNavigation;
+	}
 	restoreNavigation(snapshot: unknown): void {
 		if (this.#settingsList) this.#settingsList.restoreNavigation(snapshot);
 		else this.#pendingNavigation = snapshot;
 	}
-	navigateParent(): boolean { return this.#settingsList?.settingsList.navigateParent() ?? false; }
+	navigateParent(): boolean {
+		return this.#settingsList?.settingsList.navigateParent() ?? false;
+	}
 	navigateChild(): void {
 		const list = this.#settingsList?.settingsList;
 		const item = list?.getSelectedItem();
@@ -791,7 +803,8 @@ export class MarketplacePluginDetailComponent extends OverlayPanel {
 			},
 			onCancel: this.callbacks.onBack,
 		});
-		this.#settingsList.settingsList.onNavigationVisit = (page, previousSnapshot) => this.onNavigationVisit?.(page, previousSnapshot);
+		this.#settingsList.settingsList.onNavigationVisit = (page, previousSnapshot) =>
+			this.onNavigationVisit?.(page, previousSnapshot);
 		if (previousNavigation !== undefined) {
 			this.#settingsList.restoreNavigation(previousNavigation);
 			this.#pendingNavigation = this.#configLoaded ? undefined : previousNavigation;
@@ -804,17 +817,29 @@ export class MarketplacePluginDetailComponent extends OverlayPanel {
 		this.#settingsList.handleInput(data);
 	}
 
-	handleNavigation(action: MenuNavAction): void { this.#settingsList?.settingsList.handleNavigation(action); }
-	get hasOpenSubmenu(): boolean { return this.#settingsList?.settingsList.hasOpenSubmenu() ?? false; }
+	handleNavigation(action: MenuNavAction): void {
+		this.#settingsList?.settingsList.handleNavigation(action);
+	}
+	get hasOpenSubmenu(): boolean {
+		return this.#settingsList?.settingsList.hasOpenSubmenu() ?? false;
+	}
 
-	get filterFocused(): boolean { return this.#settingsList?.filterFocused ?? false; }
-	get blocksMenuHistory(): boolean { return this.#settingsList?.blocksMenuHistory ?? false; }
-	navigationSnapshot(): unknown { return this.#pendingNavigation ?? this.#settingsList?.navigationSnapshot(); }
+	get filterFocused(): boolean {
+		return this.#settingsList?.filterFocused ?? false;
+	}
+	get blocksMenuHistory(): boolean {
+		return this.#settingsList?.blocksMenuHistory ?? false;
+	}
+	navigationSnapshot(): unknown {
+		return this.#pendingNavigation ?? this.#settingsList?.navigationSnapshot();
+	}
 	restoreNavigation(snapshot: unknown): void {
 		this.#settingsList?.restoreNavigation(snapshot);
 		this.#pendingNavigation = this.#configLoaded ? undefined : snapshot;
 	}
-	navigateParent(): boolean { return this.#settingsList?.settingsList.navigateParent() ?? false; }
+	navigateParent(): boolean {
+		return this.#settingsList?.settingsList.navigateParent() ?? false;
+	}
 	navigateChild(): void {
 		const list = this.#settingsList?.settingsList;
 		const item = list?.getSelectedItem();
@@ -887,10 +912,19 @@ class ConfigFieldPanel extends OverlayPanel {
 		else this.#field.handleInput(data);
 	}
 
-	get filterFocused(): boolean { return this.#field.filterFocused; }
-	get blocksMenuHistory(): boolean { return this.#field.blocksMenuHistory; }
-	navigationSnapshot(): unknown { return this.#field.navigationSnapshot(); }
-	restoreNavigation(snapshot: unknown): void { this.#keys.reset(); this.#field.restoreNavigation(snapshot); }
+	get filterFocused(): boolean {
+		return this.#field.filterFocused;
+	}
+	get blocksMenuHistory(): boolean {
+		return this.#field.blocksMenuHistory;
+	}
+	navigationSnapshot(): unknown {
+		return this.#field.navigationSnapshot();
+	}
+	restoreNavigation(snapshot: unknown): void {
+		this.#keys.reset();
+		this.#field.restoreNavigation(snapshot);
+	}
 
 	pasteText(text: string): void {
 		this.#field.pasteText(text);
@@ -970,7 +1004,6 @@ export interface PluginSettingsCallbacks {
 	/** Schedules a TUI frame after asynchronous plugin data loads. */
 	requestRender?: () => void;
 }
-
 
 /**
  * Top-level plugin settings component.
@@ -1221,40 +1254,61 @@ export class PluginSettingsComponent extends Container {
 		if (action.kind === "cancel" || (action.kind === "horizontal" && action.delta < 0)) {
 			if (this.atRoot) {
 				if (action.kind === "cancel") this.callbacks.onClose();
-			} else if (!((view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent) && view.navigateParent())) {
+			} else if (
+				!(
+					(view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent) &&
+					view.navigateParent()
+				)
+			) {
 				void this.#showPluginList();
 			}
 			return;
 		}
-		if (action.kind === "horizontal" && action.delta > 0 && (view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent)) {
+		if (
+			action.kind === "horizontal" &&
+			action.delta > 0 &&
+			(view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent)
+		) {
 			view.navigateChild();
 			return;
 		}
 		view?.handleNavigation(action);
 	}
 
-	get atRoot(): boolean { return this.#currentView === "list"; }
+	get atRoot(): boolean {
+		return this.#currentView === "list";
+	}
 	get hasOpenSubmenu(): boolean {
 		const view = this.#viewComponent;
-		return (view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent) && view.hasOpenSubmenu;
+		return (
+			(view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent) &&
+			view.hasOpenSubmenu
+		);
 	}
 
 	get filterFocused(): boolean {
 		const view = this.#viewComponent;
-		return view instanceof PluginListComponent || view instanceof PluginDetailComponent || view instanceof MarketplacePluginDetailComponent
-			? view.filterFocused : false;
+		return view instanceof PluginListComponent ||
+			view instanceof PluginDetailComponent ||
+			view instanceof MarketplacePluginDetailComponent
+			? view.filterFocused
+			: false;
 	}
 
 	get blocksMenuHistory(): boolean {
-		return this.#pendingOperations > 0
-			|| (isMenuHistoryParticipant(this.#viewComponent) && this.#viewComponent.blocksMenuHistory === true);
+		return (
+			this.#pendingOperations > 0 ||
+			(isMenuHistoryParticipant(this.#viewComponent) && this.#viewComponent.blocksMenuHistory === true)
+		);
 	}
 
 	navigationSnapshot(): unknown {
 		return {
 			view: this.#currentView,
 			plugin: this.#currentPlugin?.name,
-			marketplace: this.#currentMarketplacePlugin ? { id: this.#currentMarketplacePlugin.id, scope: this.#currentMarketplacePlugin.scope } : undefined,
+			marketplace: this.#currentMarketplacePlugin
+				? { id: this.#currentMarketplacePlugin.id, scope: this.#currentMarketplacePlugin.scope }
+				: undefined,
 			list: this.#listNavigation,
 			content: isMenuHistoryParticipant(this.#viewComponent) ? this.#viewComponent.navigationSnapshot() : undefined,
 		};
@@ -1263,8 +1317,17 @@ export class PluginSettingsComponent extends Container {
 	restoreNavigation(snapshot: unknown): void {
 		this.#keys.reset();
 		if (typeof snapshot !== "object" || snapshot === null) return;
-		if (!this.#viewComponent) { this.#pendingNavigation = snapshot; return; }
-		const state = snapshot as { view?: string; plugin?: string; marketplace?: { id: string; scope: string }; content?: unknown; list?: unknown };
+		if (!this.#viewComponent) {
+			this.#pendingNavigation = snapshot;
+			return;
+		}
+		const state = snapshot as {
+			view?: string;
+			plugin?: string;
+			marketplace?: { id: string; scope: string };
+			content?: unknown;
+			list?: unknown;
+		};
 		this.#listNavigation = state.list;
 		this.#restoringNavigation = true;
 		try {
@@ -1272,7 +1335,12 @@ export class PluginSettingsComponent extends Container {
 				const entry = this.#entries.find(entry => entry.kind === "npm" && entry.plugin.name === state.plugin);
 				if (entry?.kind === "npm") this.#showPluginDetail(entry.plugin);
 			} else if (state.view === "marketplace-detail") {
-				const entry = this.#entries.find(entry => entry.kind === "marketplace" && entry.plugin.id === state.marketplace?.id && entry.plugin.scope === state.marketplace.scope);
+				const entry = this.#entries.find(
+					entry =>
+						entry.kind === "marketplace" &&
+						entry.plugin.id === state.marketplace?.id &&
+						entry.plugin.scope === state.marketplace.scope,
+				);
 				if (entry?.kind === "marketplace") this.#showMarketplaceDetail(entry.plugin);
 			} else if (this.#currentView !== "list") {
 				this.#pendingNavigation = snapshot;
@@ -1280,7 +1348,9 @@ export class PluginSettingsComponent extends Container {
 				return;
 			}
 			if (isMenuHistoryParticipant(this.#viewComponent)) this.#viewComponent.restoreNavigation(state.content);
-		} finally { this.#restoringNavigation = false; }
+		} finally {
+			this.#restoringNavigation = false;
+		}
 	}
 
 	#wireNavigation(): void {

@@ -79,7 +79,10 @@ export class GitHelpSheet implements Component {
 	#native: NativeNode | undefined;
 	readonly #viewport = new ScrollView([], { height: 1 });
 
-	constructor(close: () => void, readonly back: () => void = close) {
+	constructor(
+		close: () => void,
+		readonly back: () => void = close,
+	) {
 		this.#close = close;
 	}
 

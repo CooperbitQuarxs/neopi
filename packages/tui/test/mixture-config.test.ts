@@ -108,7 +108,6 @@ beforeAll(async () => {
 });
 
 describe("MixtureConfigOverlayComponent", () => {
-
 	it("keeps save separate from apply, then activates the registered mixture with Space", async () => {
 		const h = makeOverlay(graph);
 		h.press("s");
@@ -287,11 +286,12 @@ function navigationDoc(question: "noul" | "choice" | "score" = "noul"): Mixtures
 	mixture.members.push({
 		id: "judge",
 		kind: "verdict",
-		question: question === "choice"
-			? { type: "choice", instructions: "Judge the result", criteria: { agree: "Evidence", back: null } }
-			: question === "score"
-				? { type: "score", instructions: "Judge the result", criteria: ["Weak", "Strong"] }
-				: { type: "noul", instructions: "Judge the result", criteria: { true: "Yes", false: "No" } },
+		question:
+			question === "choice"
+				? { type: "choice", instructions: "Judge the result", criteria: { agree: "Evidence", back: null } }
+				: question === "score"
+					? { type: "score", instructions: "Judge the result", criteria: ["Weak", "Strong"] }
+					: { type: "noul", instructions: "Judge the result", criteria: { true: "Yes", false: "No" } },
 	});
 	return doc;
 }
@@ -338,7 +338,12 @@ const fieldCases: FieldCase[] = [
 	{ path: ["Members", "judge", "Answer template"], edit: "long" },
 	{ path: ["Members", "judge", "Yes criterion"], edit: "long" },
 	{ path: ["Members", "judge", "No criterion"], edit: "long" },
-	{ path: ["Members", "judge", "Options and rubrics", "Add option"], edit: "text", question: "choice", creation: true },
+	{
+		path: ["Members", "judge", "Options and rubrics", "Add option"],
+		edit: "text",
+		question: "choice",
+		creation: true,
+	},
 	{ path: ["Members", "judge", "Options and rubrics", "agree", "Option name"], edit: "text", question: "choice" },
 	{ path: ["Members", "judge", "Options and rubrics", "agree", "Rubric"], edit: "long", question: "choice" },
 	{ path: ["Members", "judge", "Options and rubrics", "back", "Rubric"], edit: "long", question: "choice" },
@@ -369,20 +374,29 @@ describe("mixture menu navigation and history", () => {
 			const doc = navigationDoc(entry.question);
 			const h = makeOverlay(doc);
 			let loads = 0;
-			const restored = makeOverlay({ mixtures: [] }, {
-				loadDoc: async () => { loads++; return { mixtures: [] }; },
-			});
+			const restored = makeOverlay(
+				{ mixtures: [] },
+				{
+					loadDoc: async () => {
+						loads++;
+						return { mixtures: [] };
+					},
+				},
+			);
 			const visits: string[] = [];
 			restored.overlay.onNavigationVisit = page => visits.push(page);
 			try {
 				if (!entry.root) h.press(ENTER);
-				entry.path.forEach((query, index) => h.choose(query,
-					index === entry.path.length - 1 && !entry.creation ? "l" : ENTER));
+				entry.path.forEach((query, index) =>
+					h.choose(query, index === entry.path.length - 1 && !entry.creation ? "l" : ENTER),
+				);
 				if (entry.edit) {
 					h.press("hjkl / draft", "\x1b[D");
-					expect(h.overlay.navigationSnapshot().content).toMatchObject(entry.edit === "text"
-						? { value: expect.stringContaining("hjkl / draft") }
-						: { text: expect.stringContaining("hjkl / draft") });
+					expect(h.overlay.navigationSnapshot().content).toMatchObject(
+						entry.edit === "text"
+							? { value: expect.stringContaining("hjkl / draft") }
+							: { text: expect.stringContaining("hjkl / draft") },
+					);
 				}
 				const snapshot = h.overlay.navigationSnapshot();
 				expect(snapshot.doc).toEqual(doc);
@@ -393,7 +407,10 @@ describe("mixture menu navigation and history", () => {
 				expect(loads).toBe(0);
 				expect(restored.actions).toEqual([]);
 				expect(restored.notices).toEqual([]);
-			} finally { h.overlay.dispose(); restored.overlay.dispose(); }
+			} finally {
+				h.overlay.dispose();
+				restored.overlay.dispose();
+			}
 		});
 	}
 
@@ -410,10 +427,16 @@ describe("mixture menu navigation and history", () => {
 			expect(restored.overlay.navigationSnapshot().doc.mixtures[0]?.description).toBe("hjkl / draft");
 			expect(h.overlay.navigationSnapshot().doc.mixtures[0]?.description).toBeUndefined();
 			expect(restored.overlay.navigationSnapshot().content).toMatchObject({
-				filter: "Description", filterFocused: false, filterCursor: "Description".length - 1, selectedValue: "description",
+				filter: "Description",
+				filterFocused: false,
+				filterCursor: "Description".length - 1,
+				selectedValue: "description",
 			});
 			expect(restored.actions).toEqual([]);
-		} finally { h.overlay.dispose(); restored.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+			restored.overlay.dispose();
+		}
 	});
 
 	it("types remapped printable cancel, submit, and editing keys literally in direct Input fields", () => {
@@ -422,12 +445,14 @@ describe("mixture menu navigation and history", () => {
 		try {
 			h.press(ENTER);
 			h.choose("Name", "l");
-			setKeybindings(KeybindingsManager.inMemory({
-				"tui.select.cancel": ["escape", "h"],
-				"tui.input.submit": ["enter", "j"],
-				"tui.editor.deleteCharBackward": "k",
-				"tui.editor.cursorLeft": "l",
-			}));
+			setKeybindings(
+				KeybindingsManager.inMemory({
+					"tui.select.cancel": ["escape", "h"],
+					"tui.input.submit": ["enter", "j"],
+					"tui.editor.deleteCharBackward": "k",
+					"tui.editor.cursorLeft": "l",
+				}),
+			);
 			h.press("h", "j", "k", "l", "/", " ");
 			expect(h.overlay.navigationSnapshot()).toMatchObject({
 				context: { page: "field", key: "name" },
@@ -436,15 +461,20 @@ describe("mixture menu navigation and history", () => {
 			h.press(ESC);
 			expect(h.overlay.navigationSnapshot().context.page).toBe("mixture");
 			expect(h.actions).toEqual([]);
-		} finally { setKeybindings(previous); h.overlay.dispose(); }
+		} finally {
+			setKeybindings(previous);
+			h.overlay.dispose();
+		}
 	});
 
 	it("keeps normal list motions, context switches, and the gg prefix under one reader", () => {
 		const count = Math.max(40, (process.stdout.rows || 40) * 3);
 		const doc: MixturesConfigDoc = {
 			mixtures: Array.from({ length: count }, (_, index) => ({
-				name: `mix-${String(index).padStart(3, "0")}`, entry: "writer",
-				members: [{ id: "writer", model: "fake/writer", tools: false }], edges: [],
+				name: `mix-${String(index).padStart(3, "0")}`,
+				entry: "writer",
+				members: [{ id: "writer", model: "fake/writer", tools: false }],
+				edges: [],
 			})),
 		};
 		const h = makeOverlay(doc);
@@ -486,14 +516,18 @@ describe("mixture menu navigation and history", () => {
 			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "hjkl/ g", filterFocused: false });
 			h.press(ESC);
 			expect(h.actions).toEqual(["close"]);
-		} finally { h.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+		}
 	});
 
 	it("scrolls the root preview by visual lines, pages, and bounds without relocating selection", () => {
 		const count = Math.max(60, (process.stdout.rows || 40) * 3);
 		const doc = structuredClone(graph);
 		doc.mixtures[0]!.members = Array.from({ length: count }, (_, index) => ({
-			id: `worker-${index}`, model: "fake/writer", tools: false,
+			id: `worker-${index}`,
+			model: "fake/writer",
+			tools: false,
 		}));
 		doc.mixtures[0]!.entry = "worker-0";
 		doc.mixtures[0]!.edges = [];
@@ -527,14 +561,19 @@ describe("mixture menu navigation and history", () => {
 			h.press(HOME, "h");
 			expect(h.overlay.navigationSnapshot()).toMatchObject({ previewFocused: false, previewScroll: 0 });
 			expect(visits).toEqual([]);
-		} finally { h.overlay.dispose(); restored.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+			restored.overlay.dispose();
+		}
 	});
 
 	it("restores a long parent member list with its exact filter caret and viewport", () => {
 		const count = Math.max(60, (process.stdout.rows || 40) * 3);
 		const doc = structuredClone(graph);
 		doc.mixtures[0]!.members = Array.from({ length: count }, (_, index) => ({
-			id: `worker-${String(index).padStart(3, "0")}`, model: "fake/writer", tools: false,
+			id: `worker-${String(index).padStart(3, "0")}`,
+			model: "fake/writer",
+			tools: false,
 		}));
 		doc.mixtures[0]!.entry = "worker-000";
 		const h = makeOverlay(doc);
@@ -553,7 +592,10 @@ describe("mixture menu navigation and history", () => {
 			restored.press("h");
 			restored.overlay.render(120);
 			expect(restored.overlay.navigationSnapshot().content).toEqual(parent);
-		} finally { h.overlay.dispose(); restored.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+			restored.overlay.dispose();
+		}
 	});
 
 	for (const [page, action, property] of [
@@ -576,13 +618,18 @@ describe("mixture menu navigation and history", () => {
 				expect(h.overlay.navigationSnapshot()).toEqual(before);
 				expect(visits).toEqual([]);
 				h.press(ENTER);
-				expect(h.overlay.navigationSnapshot().doc.mixtures[0]?.members[0]).toMatchObject({ [property!]: undefined });
+				expect(h.overlay.navigationSnapshot().doc.mixtures[0]?.members[0]).toMatchObject({
+					[property!]: undefined,
+				});
 				expect(visits).toHaveLength(1);
 				expect(visits[0]?.previous).toMatchObject({ context: before.context, doc: before.doc });
 				restored.overlay.restoreNavigation(visits[0]?.previous);
 				expect(restored.overlay.navigationSnapshot().doc).toEqual(before.doc);
 				expect(restored.actions).toEqual([]);
-			} finally { h.overlay.dispose(); restored.overlay.dispose(); }
+			} finally {
+				h.overlay.dispose();
+				restored.overlay.dispose();
+			}
 		});
 	}
 
@@ -609,7 +656,10 @@ describe("mixture menu navigation and history", () => {
 			restored.overlay.restoreNavigation(confirmation);
 			restored.press(ESC, ENTER);
 			expect(restored.actions).toEqual([]);
-		} finally { h.overlay.dispose(); restored.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+			restored.overlay.dispose();
+		}
 	});
 
 	it("never runs Add edge or Add level while restoring their resulting pages", () => {
@@ -620,7 +670,10 @@ describe("mixture menu navigation and history", () => {
 			h.press(ENTER);
 			h.choose("Edges");
 			h.choose("Add edge", "l");
-			expect(h.overlay.navigationSnapshot()).toMatchObject({ context: { page: "edges" }, doc: { mixtures: [{ edges: graph.mixtures[0]!.edges }] } });
+			expect(h.overlay.navigationSnapshot()).toMatchObject({
+				context: { page: "edges" },
+				doc: { mixtures: [{ edges: graph.mixtures[0]!.edges }] },
+			});
 			h.press(ENTER);
 			expect(h.overlay.navigationSnapshot()).toMatchObject({ context: { page: "edge", position: 1 } });
 			restored.overlay.restoreNavigation(h.overlay.navigationSnapshot());
@@ -630,13 +683,21 @@ describe("mixture menu navigation and history", () => {
 			score.choose("judge");
 			score.choose("Ordered score levels");
 			score.choose("Add level", "l");
-			expect(score.overlay.navigationSnapshot().doc.mixtures[0]?.members.at(-1)).toMatchObject({ question: { criteria: ["Weak", "Strong"] } });
+			expect(score.overlay.navigationSnapshot().doc.mixtures[0]?.members.at(-1)).toMatchObject({
+				question: { criteria: ["Weak", "Strong"] },
+			});
 			score.press(ENTER);
 			const snapshot = score.overlay.navigationSnapshot();
 			restored.overlay.restoreNavigation(snapshot);
-			expect(restored.overlay.navigationSnapshot().doc.mixtures[0]?.members.at(-1)).toMatchObject({ question: { criteria: ["Weak", "Strong", ""] } });
+			expect(restored.overlay.navigationSnapshot().doc.mixtures[0]?.members.at(-1)).toMatchObject({
+				question: { criteria: ["Weak", "Strong", ""] },
+			});
 			expect(restored.actions).toEqual([]);
-		} finally { h.overlay.dispose(); restored.overlay.dispose(); score.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+			restored.overlay.dispose();
+			score.overlay.dispose();
+		}
 	});
 
 	it("restores the new-preset editor continuation and full pasted draft without creating another preset", () => {
@@ -660,18 +721,27 @@ describe("mixture menu navigation and history", () => {
 			expect(restored.overlay.navigationSnapshot().doc.mixtures[0]?.roles).toEqual({ "new-role": text });
 			expect(h.overlay.navigationSnapshot().doc.mixtures[0]?.roles).toEqual({ "new-role": "" });
 			expect(restored.actions).toEqual([]);
-		} finally { h.overlay.dispose(); restored.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+			restored.overlay.dispose();
+		}
 	});
 });
 
 describe("mixture model continuation and pending ownership", () => {
 	it("restores model-to-effort data without assigning, then confirms once back to the cached picker", () => {
 		const model = buildModel({
-			id: "fixture-thinker", name: "Fixture thinker", provider: "anthropic", api: "anthropic-messages",
-			baseUrl: "https://example.test", reasoning: true,
+			id: "fixture-thinker",
+			name: "Fixture thinker",
+			provider: "anthropic",
+			api: "anthropic-messages",
+			baseUrl: "https://example.test",
+			reasoning: true,
 			thinking: { mode: "budget", efforts: [Effort.Low, Effort.High] },
-			input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128_000, maxTokens: 4096,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 4096,
 		});
 		const fixtureDeps = { ...deps, getAvailableModels: () => [model] };
 		const h = makeOverlay(graph, {}, fixtureDeps);
@@ -688,7 +758,8 @@ describe("mixture model continuation and pending ownership", () => {
 			const picker = h.overlay.navigationSnapshot().content;
 			h.press(ENTER);
 			expect(h.overlay.navigationSnapshot().context).toMatchObject({
-				page: "thinking", selector: "anthropic/fixture-thinker",
+				page: "thinking",
+				selector: "anthropic/fixture-thinker",
 			});
 			h.press("l");
 			expect(h.overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "low" });
@@ -711,14 +782,24 @@ describe("mixture model continuation and pending ownership", () => {
 			expect(visits[0]?.previous).toMatchObject({ context: snapshot.context, doc: snapshot.doc });
 			expect(h.overlay.navigationSnapshot().doc.mixtures[0]?.members[0]).toMatchObject({ model: "fake/writer" });
 			expect(restored.actions).toEqual([]);
-		} finally { h.overlay.dispose(); restored.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+			restored.overlay.dispose();
+		}
 	});
 
 	it("keeps the no-effort model confirmation as one explicit assignment and one member-page visit", () => {
 		const model = buildModel({
-			id: "fixture-plain", name: "Fixture plain", provider: "test", api: "ollama-chat",
-			baseUrl: "https://example.test", reasoning: false, input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8192, maxTokens: 1024,
+			id: "fixture-plain",
+			name: "Fixture plain",
+			provider: "test",
+			api: "ollama-chat",
+			baseUrl: "https://example.test",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 8192,
+			maxTokens: 1024,
 		});
 		const h = makeOverlay(graph, {}, { ...deps, getAvailableModels: () => [model] });
 		const visits: Array<{ page: string; previous: unknown }> = [];
@@ -731,11 +812,15 @@ describe("mixture model continuation and pending ownership", () => {
 			h.overlay.onNavigationVisit = (page, previous) => visits.push({ page, previous });
 			h.press(ENTER);
 			expect(h.overlay.navigationSnapshot().context.page).toBe("member");
-			expect(h.overlay.navigationSnapshot().doc.mixtures[0]?.members[0]).toMatchObject({ model: "test/fixture-plain" });
+			expect(h.overlay.navigationSnapshot().doc.mixtures[0]?.members[0]).toMatchObject({
+				model: "test/fixture-plain",
+			});
 			expect(visits).toHaveLength(1);
 			expect(visits[0]?.previous).toMatchObject({ context: before.context, doc: before.doc });
 			expect(h.actions).toEqual([]);
-		} finally { h.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+		}
 	});
 
 	it("blocks actual save, apply, and radio activation promises and restores their UI flags without replay", async () => {
@@ -745,16 +830,27 @@ describe("mixture model continuation and pending ownership", () => {
 		const saved = Promise.withResolvers<void>();
 		const applied = Promise.withResolvers<void>();
 		const activated = Promise.withResolvers<void>();
-		let panel: MixtureConfigOverlayComponent | undefined;
+		let panel: MixtureConfigOverlayComponent | undefined = undefined;
 		let onIdle: (() => void) | undefined;
 		let saves = 0;
 		let applies = 0;
 		let activations = 0;
 		const h = makeOverlay(graph, {
-			save: () => { saves++; return save.promise; },
-			apply: () => { applies++; return apply.promise; },
-			activate: () => { activations++; return activate.promise; },
-			requestRender: () => { if (panel && !panel.blocksMenuHistory) onIdle?.(); },
+			save: () => {
+				saves++;
+				return save.promise;
+			},
+			apply: () => {
+				applies++;
+				return apply.promise;
+			},
+			activate: () => {
+				activations++;
+				return activate.promise;
+			},
+			requestRender: () => {
+				if (panel && !panel.blocksMenuHistory) onIdle?.();
+			},
 		});
 		panel = h.overlay;
 		const restored = makeOverlay({ mixtures: [] });
@@ -792,8 +888,11 @@ describe("mixture model continuation and pending ownership", () => {
 			expect(applies).toBe(1);
 			expect(activations).toBe(1);
 		} finally {
-			save.resolve(); apply.resolve(); activate.resolve();
-			h.overlay.dispose(); restored.overlay.dispose();
+			save.resolve();
+			apply.resolve();
+			activate.resolve();
+			h.overlay.dispose();
+			restored.overlay.dispose();
 		}
 	});
 
@@ -802,12 +901,15 @@ describe("mixture model continuation and pending ownership", () => {
 		const apply = Promise.withResolvers<void>();
 		const applying = Promise.withResolvers<void>();
 		const done = Promise.withResolvers<void>();
-		let panel: MixtureConfigOverlayComponent | undefined;
+		let panel: MixtureConfigOverlayComponent | undefined = undefined;
 		let recording = false;
 		const states: boolean[] = [];
 		const h = makeOverlay(graph, {
 			save: () => save.promise,
-			apply: () => { applying.resolve(); return apply.promise; },
+			apply: () => {
+				applying.resolve();
+				return apply.promise;
+			},
 			requestRender: () => {
 				if (!panel || !recording) return;
 				states.push(panel.blocksMenuHistory);
@@ -830,13 +932,22 @@ describe("mixture model continuation and pending ownership", () => {
 			apply.resolve();
 			await done.promise;
 			expect(h.overlay.blocksMenuHistory).toBe(false);
-		} finally { save.resolve(); apply.resolve(); h.overlay.dispose(); }
+		} finally {
+			save.resolve();
+			apply.resolve();
+			h.overlay.dispose();
+		}
 	});
 
 	it("leaves read-only scope loads unblocked and ignores their result after in-place history restoration", async () => {
 		const load = Promise.withResolvers<MixturesConfigDoc>();
 		let loads = 0;
-		const h = makeOverlay(graph, { loadDoc: () => { loads++; return load.promise; } });
+		const h = makeOverlay(graph, {
+			loadDoc: () => {
+				loads++;
+				return load.promise;
+			},
+		});
 		const visits: string[] = [];
 		h.overlay.onNavigationVisit = page => visits.push(page);
 		try {
@@ -852,24 +963,38 @@ describe("mixture model continuation and pending ownership", () => {
 			expect(h.notices).toEqual([]);
 			expect(h.actions).toEqual([]);
 			expect(visits).toEqual([]);
-		} finally { load.resolve({ mixtures: [] }); h.overlay.dispose(); }
+		} finally {
+			load.resolve({ mixtures: [] });
+			h.overlay.dispose();
+		}
 	});
 
 	it("treats a completed scope switch as context and restores it without loading again", async () => {
 		const loaded = Promise.withResolvers<void>();
 		const userDoc = structuredClone(graph);
 		userDoc.mixtures[0]!.name = "user mixture";
-		let panel: MixtureConfigOverlayComponent | undefined;
+		let panel: MixtureConfigOverlayComponent | undefined = undefined;
 		let loads = 0;
 		const h = makeOverlay(graph, {
-			loadDoc: async () => { loads++; return userDoc; },
-			requestRender: () => { if (panel?.navigationSnapshot().scope === "user") loaded.resolve(); },
+			loadDoc: async () => {
+				loads++;
+				return userDoc;
+			},
+			requestRender: () => {
+				if (panel?.navigationSnapshot().scope === "user") loaded.resolve();
+			},
 		});
 		panel = h.overlay;
 		let restoredLoads = 0;
-		const restored = makeOverlay({ mixtures: [] }, {
-			loadDoc: async () => { restoredLoads++; return { mixtures: [] }; },
-		});
+		const restored = makeOverlay(
+			{ mixtures: [] },
+			{
+				loadDoc: async () => {
+					restoredLoads++;
+					return { mixtures: [] };
+				},
+			},
+		);
 		const visits: string[] = [];
 		h.overlay.onNavigationVisit = page => visits.push(page);
 		try {
@@ -884,6 +1009,9 @@ describe("mixture model continuation and pending ownership", () => {
 			expect(restored.overlay.navigationSnapshot()).toEqual(snapshot);
 			expect(restoredLoads).toBe(0);
 			expect(restored.actions).toEqual([]);
-		} finally { h.overlay.dispose(); restored.overlay.dispose(); }
+		} finally {
+			h.overlay.dispose();
+			restored.overlay.dispose();
+		}
 	});
 });
