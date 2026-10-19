@@ -51,6 +51,10 @@ function mount(initial: IrcLogEntry[], rows = 30, extra: Partial<IrcViewerOption
 			entries.push(next);
 			for (const listener of listeners) listener();
 		},
+		insert: (index: number, next: IrcLogEntry) => {
+			entries.splice(index, 0, next);
+			for (const listener of listeners) listener();
+		},
 		listenerCount: () => listeners.size,
 		renders: () => renders,
 		closed: () => closed,
@@ -136,6 +140,29 @@ describe("IrcViewerComponent", () => {
 		expect(collapsed).toContain("+4 more lines");
 		view.viewer.handleInput("\r");
 		expect(view.screen().join("\n")).toContain("line 5");
+	});
+
+	it("scrolls line by line through an expanded message taller than the screen before moving on", () => {
+		const body = Array.from({ length: 60 }, (_, index) => `row-${index}-end`).join("\n");
+		const view = mount([entry("0-Alpha", "0-Beta", body), entry("0-Beta", "0-Alpha", "next message")], 20);
+		const firstRow = () => {
+			const match = view
+				.screen()
+				.join("\n")
+				.match(/row-(\d+)-end/);
+			return match ? Number(match[1]) : -1;
+		};
+		view.viewer.handleInput("\x1b[H"); // Home
+		view.viewer.handleInput("\r");
+		expect(firstRow()).toBe(0);
+		for (let i = 0; i < 5; i++) view.viewer.handleInput("\x1b[B");
+		expect(firstRow()).toBe(4);
+		view.viewer.handleInput("\x1b[A");
+		expect(firstRow()).toBe(3);
+		for (let i = 0; i < 100; i++) view.viewer.handleInput("\x1b[B");
+		const end = view.screen().join("\n");
+		expect(end).toContain("row-59-end");
+		expect(end).toContain("next message");
 	});
 
 	it("closes on Esc or its own key and drops its subscription on dispose", () => {
@@ -300,6 +327,88 @@ describe("IrcViewerComponent", () => {
 			await Bun.sleep(0);
 			expect(sent).toEqual([["0-Alpha", "nightly", question.message.id]]);
 			expect(view.screen().join("\n")).toContain("Delivered to 0-Alpha.");
+		});
+
+		it("keeps a manually selected reply target when an earlier send completes out of order", () => {
+			const earlier = entry("0-Earlier", "Captain", "slow send");
+			const selected = entry("0-Selected", "Captain", "selected note");
+			const later = entry("0-Later", "Captain", "newer note");
+			const { view, sent } = withReply([selected, later]);
+			view.screen();
+			view.viewer.handleInput("\x1b[H");
+			view.screen();
+			view.insert(0, earlier);
+			// Input can arrive before the requested repaint.
+			view.viewer.handleInput("r");
+			view.type("answer");
+			view.viewer.handleInput("\r");
+			expect(sent).toEqual([["0-Selected", "answer", selected.message.id]]);
+		});
+
+		it("scrolls the expanded message when navigation arrives before repaint", () => {
+			const selected = entry("0-Selected", "Captain", Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n"));
+			const { view, sent } = withReply([selected, entry("0-Later", "Captain", "next")]);
+			view.screen();
+			view.viewer.handleInput("\x1b[H");
+			view.screen();
+			view.viewer.handleInput("\r");
+			view.viewer.handleInput("\x1b[B");
+			view.viewer.handleInput("r");
+			view.type("answer");
+			view.viewer.handleInput("\r");
+			expect(sent).toEqual([["0-Selected", "answer", selected.message.id]]);
+		});
+
+		it("keeps scrolling an expanded selection after an earlier insert before repaint", () => {
+			const selected = entry("0-Selected", "Captain", Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n"));
+			const { view, sent } = withReply([selected, entry("0-Later", "Captain", "next")]);
+			view.screen();
+			view.viewer.handleInput("\x1b[H");
+			view.screen();
+			view.viewer.handleInput("\r");
+			view.screen();
+			view.viewer.handleInput("\x1b[6~");
+			view.viewer.handleInput("\x1b[6~");
+			view.screen();
+			view.insert(0, entry("0-Earlier", "Captain", "slow send"));
+			view.viewer.handleInput("\x1b[B");
+			view.viewer.handleInput("r");
+			view.type("answer");
+			view.viewer.handleInput("\r");
+			expect(sent).toEqual([["0-Selected", "answer", selected.message.id]]);
+		});
+
+		it("selects the preceding message on Up when an insert shifts the expanded viewport before repaint", () => {
+			const selected = entry("0-Selected", "Captain", Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n"));
+			const earlier = entry("0-Earlier", "Captain", "slow send");
+			const { view, sent } = withReply([selected, entry("0-Later", "Captain", "next")]);
+			view.screen();
+			view.viewer.handleInput("\x1b[H");
+			view.screen();
+			view.viewer.handleInput("\r");
+			view.screen();
+			view.insert(0, earlier);
+			view.viewer.handleInput("\x1b[A");
+			view.viewer.handleInput("r");
+			view.type("answer");
+			view.viewer.handleInput("\r");
+			expect(sent).toEqual([["0-Earlier", "answer", earlier.message.id]]);
+		});
+
+		it("scrolls the newest expanded message when End and Up arrive before repaint", () => {
+			const last = entry("0-Last", "Captain", Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n"));
+			const { view, sent } = withReply([entry("0-First", "Captain", "first"), last]);
+			view.screen();
+			view.viewer.handleInput("\r");
+			view.screen();
+			view.viewer.handleInput("\x1b[H");
+			view.screen();
+			view.viewer.handleInput("\x1b[F");
+			view.viewer.handleInput("\x1b[A");
+			view.viewer.handleInput("r");
+			view.type("answer");
+			view.viewer.handleInput("\r");
+			expect(sent).toEqual([["0-Last", "answer", last.message.id]]);
 		});
 
 		it("answers the recipient when the selected message is her own", () => {
