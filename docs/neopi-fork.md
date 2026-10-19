@@ -90,6 +90,16 @@ Queued notices appear with their original `/notice …` text in the pending bar.
 
 Text after the command separator is literal: multiline content, whitespace, shell characters, model mentions, and template expressions are not expanded. `/notice` without non-whitespace text shows `Usage: /notice <text>` without starting a turn. The command is host-only during collaboration, does not target focused subagents or broadcast, and is not an agent tool.
 
+## Delayed composer submissions
+
+`/defer <duration> <input>` submits the remaining input through the normal composer interpreter after the delay. For example, `/defer 10m /compact` runs compaction in ten minutes, while `/defer 10m hi` sends `hi` just like Enter. Busy prompts use the existing session message queue; slash commands keep their normal behavior. Your current draft and its images are not submitted with the deferred input.
+
+Images attached to the `/defer` submission travel with that scheduled input, not your next message. A timer is not a new Enter gesture: during a live call it follows the session input path without retiring or handing off your current speech. If confirmation, a read-only session, or a busy kernel refuses the input, it returns to the composer alongside your newer draft, with a warning and its own attachments preserved.
+
+Durations accept numbers immediately followed by `ms`, `s`, `m`, `h`, `d`, `w`, `M`, or `Y`, including fractions (`.5h`). Units are case-sensitive: `M` means 30 days and `Y` means 365 days, not calendar arithmetic. Zero or negative delays submit immediately.
+
+Scheduling reports an ID. `/defer cancel <id>` cancels that submission, including delivery still waiting on an input hook or command; `/defer cancel all` cancels every pending submission. Deferred input stays bound to the scheduling conversation even if you focus a subagent before it fires. A session change or shutdown cancels both waiting timers and in-flight delivery, so resumed hooks cannot send old input into a new conversation or restore its attachments there. Timers are local to the running conversation and are not persisted across restarts.
+
 ## Iris live voice
 
 Landed from 22–26 Aug 2026.
@@ -145,6 +155,25 @@ Early binary and deployment work is recorded by `da8bb86645`, `e795702ff4`, `643
 ## Advisor behavior
 
 [PR #60](https://github.com/PsychedelicShayna/neopi/pull/60) added per-advisor system-prompt overrides. [PR #63](https://github.com/PsychedelicShayna/neopi/pull/63) separated concern, blocker, and nit delivery boundaries while preserving session safety gates.
+
+## Background issue filing
+
+`/issue <prose>` ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)) files the operator's own words as an issue without taking over the conversation. Everything after `/issue` is ordinary prose; there is no project, type, or label syntax. It runs as a background job on the `issues` model role, which must be assigned explicitly (it never falls back to the active model, and the job disables provider model fallback).
+
+Two agents run in sequence, both visible in the Agent Hub:
+
+1. `IssueTarget-<id>` picks the tracker. It sees the prose plus an inventory merged from the foreground checkout, the `issues.checkouts` override map (`OWNER/REPO` → local path), checkouts found through session history, and `gh repo list`. Only GitHub remotes count (github.com or the configured `GH_HOST`), and a checkout counts only for its `origin`. The agent can select only a repository from that inventory that has a verified local checkout; it never clones. If the target is ambiguous it asks.
+2. `Issue-<id>` starts with its cwd in that checkout, so the target's own `AGENTS.md` chain is loaded. Its tools are pinned to the selected repository:
+   - read-only file tools;
+   - issue search and view, and the live label list;
+   - five sampled historical issues: the newest, the ordinal midpoint, and three random issues between them (all issues when there are five or fewer);
+   - one `issue_publish`.
+
+   Labels must already exist. Publication is exactly-once: repeated calls share one create. A create whose result is uncertain is reconciled against the operator's own issues with the same title and body before anything is retried. When an existing issue owns the subject, the agent returns a drafted amendment instead and posts nothing.
+
+Either agent can end the request with `issue_decline`, for example when the operator replies that nothing should be filed. A declined request files nothing and records the reason.
+
+Questions from either agent appear in the transcript; answer them in the Agent Hub, where the request is kept. Status records (dispatch, question, filed URL with the submitted body and applied labels, existing owner, failure) are display-only: they never start a foreground turn and do not lift holds. While the foreground is mid-turn the status line shows them immediately and the record follows at the next turn.
 
 ## Whole-recording xAI speech input
 

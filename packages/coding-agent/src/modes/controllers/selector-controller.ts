@@ -257,6 +257,8 @@ export class SelectorController {
 	 * focuses it instead of stacking another menu on top.
 	 */
 	#openMenus = new Map<MenuKind, OpenMenu>();
+	/** Closes the open IRC viewer without touching focus; see {@link showIrcViewer}. */
+	#releaseIrcViewer: (() => void) | undefined;
 
 	constructor(private ctx: InteractiveModeContext) {}
 	/** Latest draft plus a cross-reopen write chain: memory updates immediately, disk writes never overlap. */
@@ -3057,20 +3059,41 @@ export class SelectorController {
 	 * Agents gain nothing from it: it reads the bus's operator-only log.
 	 */
 	showIrcViewer(): void {
+		// A control client dismisses an overlay through the handle's own hide,
+		// which skips onClose. Finish that close first, so the key opens a fresh
+		// viewer instead of focusing the vanished one.
+		const open = this.#openMenus.get("irc-viewer")?.component;
+		if (open && !this.ctx.ui.overlayStack.some(entry => entry.component === open)) this.#releaseIrcViewer?.();
 		if (this.#focusOpenMenu("irc-viewer")) return;
 		if (!cfgIrcViewerEnabled.get(this.ctx.settings)) {
 			this.ctx.showStatus("The IRC viewer is disabled (irc.operator.viewerEnabled).");
 			return;
 		}
-		const done = () => {
+		const source = operatorIrcLogSource(() => this.ctx.session);
+		let released = false;
+		const release = () => {
+			if (released) return;
+			released = true;
 			viewer.dispose();
-			menu.handle?.hide();
 			this.#releaseMenu("irc-viewer", menu);
+			if (this.#releaseIrcViewer === release) this.#releaseIrcViewer = undefined;
+		};
+		const done = () => {
+			release();
+			menu.handle?.hide();
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
 		const viewer = new IrcViewerComponent({
-			source: operatorIrcLogSource(() => this.ctx.session),
+			source: {
+				entries: source.entries,
+				// Traffic arriving after an external dismissal releases the hidden viewer.
+				subscribe: listener =>
+					source.subscribe(() => {
+						if (this.ctx.ui.overlayStack.some(entry => entry.component === viewer)) listener();
+						else release();
+					}),
+			},
 			viewerKeys: this.ctx.keybindings.getKeys("app.irc.viewer"),
 			expandKeys: this.ctx.keybindings.getKeys("app.tools.expand"),
 			rows: () => this.ctx.ui.terminal?.rows || process.stdout.rows || 40,
@@ -3082,6 +3105,7 @@ export class SelectorController {
 				: undefined,
 		});
 		const menu = this.#claimMenu("irc-viewer");
+		this.#releaseIrcViewer = release;
 		this.#mountMenu(menu, viewer, () => this.#showFullscreenMenu(viewer));
 	}
 }
