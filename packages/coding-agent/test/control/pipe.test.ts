@@ -6,7 +6,7 @@ import { PassThrough, Writable } from "node:stream";
 import { ctlPipe } from "../../src/cli/ctl-pipe";
 import { HostBudget } from "../../src/control/budget";
 import { ControlClient } from "../../src/control/client";
-import { publishControlEndpoint, type ControlPublication } from "../../src/control/registry";
+import { publishControlEndpoint } from "../../src/control/registry";
 import { ControlServer, type ControlConnection, type ControlConnectionHost } from "../../src/control/server";
 import type { ControlSnapshot } from "../../src/control/types";
 import { supportsRpcProtocolV2 } from "../../src/modes/rpc/rpc-client";
