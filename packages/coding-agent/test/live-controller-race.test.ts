@@ -20,6 +20,8 @@ import { LIVE_INGEST_DEFAULTS, type LiveIngestSettingsSource } from "../src/live
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, type SubagentLifecyclePayload } from "../src/task/types";
 import { EventBus, emitSubagentFrame } from "../src/utils/event-bus";
 import type { LiveClientMessage, LiveServerEvent } from "../src/live/protocol";
+import { Settings } from "../src/config/settings";
+import { RpcLiveBridge } from "../src/modes/rpc/rpc-live";
 
 function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (cause: unknown) => void } {
 	let resolve!: (value: T) => void;
@@ -332,6 +334,43 @@ function makeHarness(options?: {
 }
 
 describe("operator-owned live floor", () => {
+	it("releases held canonical speech through the RPC submit keyword", async () => {
+		const h = makeHarness();
+		Object.assign(h.session, {
+			settings: Settings.isolated({
+				"live.holdMode": true,
+				"live.submitKeyword": "thanks",
+				"live.submitSilenceMs": 5,
+			}),
+		});
+		let fire: ((event: LiveServerEvent) => void) | undefined;
+		const bridge = new RpcLiveBridge(h.session, () => {}, options => new LiveSessionController({
+			...options,
+			createTransport: transportOptions => {
+				fire = transportOptions.callbacks.onEvent;
+				return {
+					async connect() {},
+					async send() {},
+					async close() {},
+					async setMuted() {},
+					pushAudio: () => true,
+					setOutputSuppressed() {},
+				};
+			},
+			createRecorder: () => ({ stop() {} }),
+		}));
+		await bridge.start();
+		try {
+			fire?.({ type: "turn.done", turn: { role: "user", transcript: "fix the cache thanks" } });
+			fire?.(delegation("rpc-held", ""));
+			await wait(70);
+			await settle();
+			expect(h.prompts).toEqual(["fix the cache"]);
+		} finally {
+			await bridge.stop();
+		}
+	});
+
 	for (const update of ["authoritative final", "composer edit"] as const) {
 		it(`retains a prefinal handoff across a quiet-floor ${update}`, async () => {
 			const h = makeHarness({ quietFloorMs: () => 30 });

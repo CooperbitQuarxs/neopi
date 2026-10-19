@@ -138,6 +138,8 @@ export interface LiveSessionControllerOptions {
 	voice?: string;
 	blockDelegateKeyword?: string;
 	holdMode?: () => boolean;
+	/** Headless callers use canonical transcript text instead of an editable composer. */
+	transcriptKeywords?: () => { submit: string; force: string; silenceMs: number };
 	quietFloorMs?: () => number;
 	/** Test seam: quiet time after operator activity before held context sends; defaults to 10000 ms. */
 	speakableIdleMs?: number;
@@ -234,6 +236,8 @@ export class LiveSessionController {
 	#lastComposerWrite = Number.NEGATIVE_INFINITY;
 	#voiceFloorTimer: NodeJS.Timeout | undefined;
 	#deferredVoiceDelegation: Extract<LiveServerEvent, { type: "delegation.created" }> | undefined;
+	readonly #transcriptKeywords: (() => { submit: string; force: string; silenceMs: number }) | undefined;
+	#transcriptKeywordTimer: NodeJS.Timeout | undefined;
 	#suppressedResponse = false;
 
 	readonly #createTransport: (options: ConstructorParameters<typeof CodexLiveTransport>[0]) => LiveTransportLike;
@@ -354,6 +358,7 @@ export class LiveSessionController {
 		this.#delegationDelivery = options.delegationDelivery ?? (() => "steer");
 		this.#relayGates = options.relayGates ?? (() => ({ reasoning: true, progress: true, finalAnswers: true }));
 		this.#holdMode = options.holdMode ?? (() => false);
+		this.#transcriptKeywords = options.transcriptKeywords;
 		this.#quietFloorMs = options.quietFloorMs ?? (() => 0);
 		const speakableIdleMs = options.speakableIdleMs;
 		this.#speakableIdleMs =
@@ -503,6 +508,8 @@ export class LiveSessionController {
 		this.#stopped = true;
 		clearTimeout(this.#voiceFloorTimer);
 		this.#voiceFloorTimer = undefined;
+		clearTimeout(this.#transcriptKeywordTimer);
+		this.#transcriptKeywordTimer = undefined;
 		this.#deferredVoiceDelegation = undefined;
 		clearTimeout(this.#outputSilenceTimer);
 		this.#outputSilenceTimer = undefined;
@@ -1191,6 +1198,27 @@ export class LiveSessionController {
 		this.#holdReleased = false;
 		this.refreshTurnGate(false);
 		this.#markUserActivity();
+		this.#scheduleTranscriptKeyword();
+	}
+
+	#scheduleTranscriptKeyword(): void {
+		clearTimeout(this.#transcriptKeywordTimer);
+		this.#transcriptKeywordTimer = undefined;
+		const keywords = this.#transcriptKeywords?.();
+		if (!keywords || this.#stopped) return;
+		const text = this.#turnsWhere(turn => turn.claim === undefined).map(turn => turn.text).join("\n\n");
+		if (!stripLiveKeyword(text, keywords.force, true).matched &&
+			!stripLiveKeyword(text, keywords.submit, true).matched) return;
+		this.#transcriptKeywordTimer = setTimeout(() => {
+			this.#transcriptKeywordTimer = undefined;
+			const current = this.#transcriptKeywords?.();
+			if (!current || this.#stopped) return;
+			const draft = this.#turnsWhere(turn => turn.claim === undefined).map(turn => turn.text).join("\n\n");
+			if (draft !== text) return;
+			const force = stripLiveKeyword(draft, current.force, true);
+			const submit = force.matched ? force : stripLiveKeyword(draft, current.submit, true);
+			if (submit.matched && submit.text) this.forceDelegateComposer(submit.text);
+		}, Math.max(keywords.silenceMs, this.#quietFloorMs()));
 	}
 
 	#voiceTurnBlocked(): boolean {
