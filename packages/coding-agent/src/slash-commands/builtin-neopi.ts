@@ -2,8 +2,16 @@
  * NeoPi operator commands: `/notice`, `/persona`, `/loadout`, `/repl`, `/kernel`.
  */
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import {
+	currentDeferredDraft,
+	type DetachedDraft,
+	runWithDetachedDraft,
+	runWithoutDetachedDraft,
+} from "@oh-my-pi/pi-tui/draft-scope";
+import { formatVisionMarker } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import type { InteractiveModeContext } from "../modes/types";
+import { deferredSubmissionsFor, DEFER_USAGE, isDeferredSubmissionActive, parseDeferredInput } from "../neopi/defer";
 import { type LoadoutHost, loadoutFeature } from "../neopi/loadout";
 import {
 	PERSONA_SUBCOMMANDS,
@@ -18,7 +26,7 @@ import { parseReplTarget, REPL_TARGETS, type ReplTarget, replTargetLabel } from 
 import noticeTemplate from "../prompts/system/operator-notice.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { buildArgumentCompletions, buildSubcommandInlineHint, ghostHint } from "./builtin-completions";
-import { clearSubmittedText } from "./helpers/draft";
+import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import type { SlashCommandSpec, SubcommandDef, TuiSlashCommandRuntime } from "./types";
 
@@ -214,6 +222,77 @@ function kernelStatus(session: AgentSession): string {
 }
 
 export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
+	{
+		name: "defer",
+		icon: "prompt",
+		description: "Submit composer input after a delay, or cancel a deferred submission",
+		inlineHint: "<duration> <input> | cancel <id|all>",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const { ctx } = runtime;
+			clearSubmittedText(runtime);
+			const schedules = deferredSubmissionsFor(ctx.session);
+			const cancellation = /^cancel\s+(\d+|all)$/.exec(command.args);
+			if (cancellation) {
+				const count = schedules.cancel(cancellation[1] === "all" ? undefined : Number(cancellation[1]));
+				ctx.showStatus(`Cancelled ${count} deferred submission${count === 1 ? "" : "s"}.`);
+				return;
+			}
+			const parsed = parseDeferredInput(command.text.slice(command.name.length + 2).trimStart());
+			if (!parsed) {
+				ctx.showError(DEFER_USAGE);
+				return;
+			}
+			const images = runtime.input?.images ? [...runtime.input.images] : [];
+			const imageLinks = runtime.input?.imageLinks ? [...runtime.input.imageLinks] : images.map(() => undefined);
+			const id = schedules.schedule(
+				parsed.delayMs,
+				() =>
+					runWithoutDetachedDraft(async () => {
+						let returned: DetachedDraft | undefined;
+						try {
+							await runWithDetachedDraft(async () => {
+								const draft = currentDeferredDraft();
+								if (!draft) throw new Error("Missing deferred draft scope");
+								returned = draft;
+								ctx.editor.pendingImages = [...images];
+								ctx.editor.pendingImageLinks = [...imageLinks];
+								ctx.editor.imageLinks = draft.imageLinks;
+								// Enter has already removed the submitted text; only refusal paths put it back.
+								try {
+									await ctx.editor.onSubmit?.(parsed.input);
+								} catch (error) {
+									ctx.editor.setText(parsed.input);
+									ctx.editor.pendingImages = [...images];
+									ctx.editor.pendingImageLinks = [...imageLinks];
+									throw error;
+								}
+							}, "defer");
+						} finally {
+							if (returned && isDeferredSubmissionActive()) {
+								const text =
+									returned.text ||
+									returned.images.map((_, index) => formatVisionMarker("image", index + 1)).join(" ");
+								if (text.trim()) {
+									restoreDetachedDraft(ctx.editor, text, returned.images, returned.imageLinks);
+									ctx.showWarning(
+										"Deferred input was not consumed; returned to the composer beside your current draft.",
+									);
+									ctx.ui.requestRender();
+								}
+							}
+						}
+					}),
+				error => ctx.showError(`Deferred submission failed: ${errorMessage(error)}`),
+			);
+			if (images.length && images.every((image, index) => ctx.editor.pendingImages[index] === image)) {
+				ctx.editor.pendingImages.splice(0, images.length);
+				ctx.editor.pendingImageLinks.splice(0, images.length);
+				ctx.editor.imageLinks = ctx.editor.pendingImageLinks.length ? ctx.editor.pendingImageLinks : undefined;
+			}
+			ctx.showStatus(`Deferred submission ${id} scheduled. Cancel with /defer cancel ${id}.`);
+		},
+	},
 	{
 		name: "notice",
 		icon: "prompt",
