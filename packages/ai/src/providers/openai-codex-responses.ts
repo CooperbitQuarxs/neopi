@@ -1575,6 +1575,8 @@ export async function buildTransformedCodexRequestBody(
 	options: OpenAICodexResponsesOptions | undefined,
 	promptCacheKey = getOpenAIPromptCacheKey(options),
 	inputPrefix?: InputItem[],
+	// Retention candidates are serialization-only: they must not synthesize a user prompt.
+	ensureVisibleInput = true,
 ): Promise<RequestBody> {
 	const input = convertMessages(model, context);
 	const params: RequestBody = {
@@ -1621,7 +1623,7 @@ export async function buildTransformedCodexRequestBody(
 		responsesLite: options?.responsesLite,
 	};
 
-	const body = await transformRequestBody(params, model, codexOptions, { developerMessages });
+	const body = await transformRequestBody(params, model, codexOptions, { developerMessages, ensureVisibleInput });
 	applyCodexStableEffort(model, body, options);
 	return body;
 }

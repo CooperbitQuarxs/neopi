@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Settings } from "../src/config/settings";
 import {
 	cfgLiveBlockDelegateKeyword,
+	cfgLiveDelegationDelivery,
 	cfgLiveForceDelegateKeyword,
 	cfgLiveSubmitKeyword,
 	cfgLiveSubmitSilenceMs,
@@ -16,6 +17,8 @@ describe("live keyword normalization", () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "live-keyword-settings-"));
 		try {
 			const configured = await Settings.loadIsolated({ cwd: dir, agentDir: dir });
+			expect(cfgLiveDelegationDelivery.get(configured)).toBe("steer");
+			cfgLiveDelegationDelivery.set(configured, "followUp");
 			cfgLiveForceDelegateKeyword.set(configured, "send it now");
 			cfgLiveBlockDelegateKeyword.set(configured, "iris only");
 			cfgLiveSubmitKeyword.set(configured, "send off");
@@ -23,6 +26,7 @@ describe("live keyword normalization", () => {
 			await configured.flush();
 			const reloaded = await Settings.loadIsolated({ cwd: dir, agentDir: dir });
 			expect(cfgLiveForceDelegateKeyword.get(reloaded)).toBe("send it now");
+			expect(cfgLiveDelegationDelivery.get(reloaded)).toBe("followUp");
 			expect(cfgLiveBlockDelegateKeyword.get(reloaded)).toBe("iris only");
 			expect(cfgLiveSubmitKeyword.get(reloaded)).toBe("send off");
 			expect(cfgLiveSubmitSilenceMs.get(reloaded)).toBe(2500);

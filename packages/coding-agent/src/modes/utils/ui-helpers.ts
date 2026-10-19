@@ -1341,7 +1341,8 @@ export class UiHelpers {
 		this.ctx.updatePendingMessagesDisplay();
 
 		const restoreQueue = (error: unknown) => {
-			this.ctx.session.clearQueue();
+			// This rollback owns the parked typed prompts, not independently accepted vocal handoffs.
+			this.ctx.session.clearQueue({ userAuthoredOnly: true });
 			this.ctx.compactionQueuedMessages = queuedMessages;
 			this.ctx.updatePendingMessagesDisplay();
 			this.ctx.showError(

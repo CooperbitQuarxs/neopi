@@ -2562,11 +2562,12 @@ describe("compact() remote compaction failure handling", () => {
 					? item.content.filter(isRecord).map(part => (typeof part.text === "string" ? part.text : ""))
 					: [];
 			const wireUsers = requestInput.filter(item => item.role === "user");
-			// The serializer sends user turns without `type`; the summary is a user-role turn on
-			// both transports, and OpenAI also sends developer and hook messages as user-role turns.
+			// User and developer input roles remain distinct on both transports.
 			expect(wireUsers.every(item => item.type === undefined)).toBe(true);
 			expect(JSON.stringify(wireUsers)).toContain("Archived decision: use port 4242.");
-			if (protocol === "v2") expect(JSON.stringify(wireUsers)).toContain("extension hook note");
+			const wireDevelopers = requestInput.filter(item => item.role === "developer");
+			expect(JSON.stringify(wireDevelopers)).toContain("harness developer note");
+			expect(JSON.stringify(wireDevelopers)).toContain("extension hook note");
 
 			const remote = getCompactionV2PreserveData(result.preserveData);
 			const retained = remote?.replacementHistory.slice(0, -1) ?? [];
@@ -2577,42 +2578,94 @@ describe("compact() remote compaction failure handling", () => {
 		},
 	);
 
-	test("retains custom turns the host marks as user-written in V2 replacement history", async () => {
-		const compactionItem = { type: "compaction", encrypted_content: "enc_v2" };
-		const preparation = makePreparation();
-		preparation.settings = { ...preparation.settings, remoteStreamingV2Enabled: true };
-		preparation.messagesToSummarize = [
-			{ role: "user", content: "older plain request", timestamp: 1 },
-			createCustomMessage(
-				"skill-prompt",
-				"run the release skill",
-				true,
-				undefined,
-				new Date(2).toISOString(),
-				"user",
-			),
-			createCustomMessage("notice", "attached file note", false, undefined, new Date(3).toISOString(), "user"),
-		];
-		const model = makeOpenAiModel({ remoteCompaction: { enabled: true, v2StreamingEnabled: true } });
-		const fetchMock: FetchImpl = async () =>
-			sseResponse([
-				{ type: "response.output_item.done", output_index: 0, item: compactionItem },
-				{ type: "response.completed", response: { usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 } } },
+	test.each(["v2", "codex-v2"])(
+		"retains custom and operator turns the host marks as user-written (%s)",
+		async protocol => {
+			const compactionItem = { type: "compaction", encrypted_content: "enc_v2" };
+			const preparation = makePreparation();
+			preparation.settings = { ...preparation.settings, remoteStreamingV2Enabled: true };
+			preparation.messagesToSummarize = [
+				{ role: "user", content: "older plain request", timestamp: 1 },
+				createCustomMessage(
+					"skill-prompt",
+					"run the release skill",
+					true,
+					undefined,
+					new Date(2).toISOString(),
+					"user",
+				),
+				{
+					role: "developer",
+					content: "operator-authored notice",
+					timestamp: 3,
+					attribution: "user",
+					synthetic: true,
+					userInitiated: true,
+				},
+				{
+					role: "developer",
+					content: "automatic harness notice",
+					timestamp: 4,
+					attribution: "agent",
+					synthetic: true,
+				},
+				createCustomMessage("notice", "attached file note", false, undefined, new Date(3).toISOString(), "user"),
+			];
+			const baseModel = makeOpenAiModel({ remoteCompaction: { enabled: true, v2StreamingEnabled: true } });
+			const model: Model =
+				protocol === "codex-v2"
+					? {
+							...baseModel,
+							api: "openai-codex-responses",
+							provider: "openai-codex",
+							baseUrl: "https://chatgpt.example/backend-api",
+							preferWebsockets: false,
+							remoteCompaction: { enabled: true, api: "openai-codex-responses", v2StreamingEnabled: true },
+						}
+					: baseModel;
+			let requestInput: Array<Record<string, unknown>> = [];
+			const fetchMock: FetchImpl = async (_url, init) => {
+				const body: unknown = JSON.parse(String(init?.body));
+				requestInput = isRecord(body) && Array.isArray(body.input) ? body.input.filter(isRecord) : [];
+				return sseResponse([
+					{ type: "response.output_item.done", output_index: 0, item: compactionItem },
+					{
+						type: "response.completed",
+						response: { usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 } },
+					},
+				]);
+			};
+
+			const result = await compact(preparation, model, "test-key", undefined, undefined, {
+				fetch: fetchMock,
+				isUserAuthored: message =>
+					message.role === "user" ||
+					(message.role === "custom" && message.customType === "skill-prompt") ||
+					(message.role === "developer" &&
+						message.synthetic === true &&
+						message.userInitiated === true &&
+						message.attribution === "user"),
+			});
+
+			const retained = getCompactionV2PreserveData(result.preserveData)?.replacementHistory.slice(0, -1) ?? [];
+			const retainedShape = retained.map(item => ({
+				role: item.role,
+				text: Array.isArray(item.content)
+					? item.content
+							.filter(isRecord)
+							.map(part => part.text)
+							.join("")
+					: item.content,
+			}));
+			expect(retainedShape).toEqual([
+				{ role: "user", text: "older plain request" },
+				{ role: "developer", text: "run the release skill" },
+				{ role: "developer", text: "operator-authored notice" },
+				{ role: "user", text: "recent" },
 			]);
-
-		const result = await compact(preparation, model, "test-key", undefined, undefined, {
-			fetch: fetchMock,
-			isUserAuthored: message =>
-				message.role === "user" || (message.role === "custom" && message.customType === "skill-prompt"),
-		});
-
-		const retained = JSON.stringify(
-			getCompactionV2PreserveData(result.preserveData)?.replacementHistory.slice(0, -1),
-		);
-		expect(retained).toContain("older plain request");
-		expect(retained).toContain("run the release skill");
-		expect(retained).not.toContain("attached file note");
-	});
+			for (const item of retained) expect(requestInput).toContainEqual(item);
+		},
+	);
 
 	test("rewrites an oversized trailing tool output before V2 streaming compaction", async () => {
 		const preparation = makePreparation();

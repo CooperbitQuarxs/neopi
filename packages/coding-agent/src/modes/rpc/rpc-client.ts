@@ -214,7 +214,7 @@ function isRpcResponse(value: unknown): value is RpcResponse {
 	return true;
 }
 
-function supportsRpcProtocolV2(value: Record<string, unknown>): boolean {
+export function supportsRpcProtocolV2(value: Record<string, unknown>): boolean {
 	return (
 		value.type === "ready" &&
 		Array.isArray(value.supportedProtocolVersions) &&

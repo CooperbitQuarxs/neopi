@@ -138,7 +138,7 @@ describe("StatusLineComponent effective settings cache", () => {
 			separator: "none",
 			showHookStatus: false,
 		});
-		const firstEffective = component.getEffectiveSettingsForTest();
+		const firstEffective = component.getEffectiveSettings();
 		component.setHookStatus("lint", "lint running");
 		expect(component.render(80)).toEqual([]);
 
@@ -152,7 +152,7 @@ describe("StatusLineComponent effective settings cache", () => {
 			segmentOptions: { path: { maxLength: 12 } },
 		});
 
-		const secondEffective = component.getEffectiveSettingsForTest();
+		const secondEffective = component.getEffectiveSettings();
 		expect(secondEffective).not.toBe(firstEffective);
 		expect(secondEffective.separator).toBe("slash");
 		expect(secondEffective.sessionAccent).toBe(false);
@@ -170,7 +170,7 @@ describe("StatusLineComponent effective settings cache", () => {
 			},
 		});
 
-		const effective = component.getEffectiveSettingsForTest();
+		const effective = component.getEffectiveSettings();
 		expect(effective.segmentOptions.path).toEqual({ abbreviate: true, maxLength: 7, stripWorkPrefix: true });
 		expect(effective.segmentOptions.git?.showBranch).toBe(true);
 		expect(effective.segmentOptions.git?.showStaged).toBe(true);
@@ -180,13 +180,11 @@ describe("StatusLineComponent effective settings cache", () => {
 
 	it("uses custom segment arrays only for the custom preset", () => {
 		const defaultComponent = makeComponent({ preset: "default", leftSegments: ["session_name"], rightSegments: [] });
-		expect(defaultComponent.getEffectiveSettingsForTest().leftSegments).toEqual(
-			STATUS_LINE_PRESETS.default.leftSegments,
-		);
+		expect(defaultComponent.getEffectiveSettings().leftSegments).toEqual(STATUS_LINE_PRESETS.default.leftSegments);
 
 		const customComponent = makeComponent({ preset: "custom", leftSegments: [], rightSegments: [] });
-		expect(customComponent.getEffectiveSettingsForTest().leftSegments).toEqual([]);
-		expect(customComponent.getEffectiveSettingsForTest().rightSegments).toEqual([]);
+		expect(customComponent.getEffectiveSettings().leftSegments).toEqual([]);
+		expect(customComponent.getEffectiveSettings().rightSegments).toEqual([]);
 		expect(customComponent.getTopBorder(120)).toEqual({ content: "", width: 0, revision: 0 });
 	});
 
@@ -199,7 +197,7 @@ describe("StatusLineComponent effective settings cache", () => {
 			sessionAccent: false,
 		});
 
-		const effective = component.getEffectiveSettingsForTest();
+		const effective = component.getEffectiveSettings();
 		expect(effective.leftSegments).toEqual(STATUS_LINE_PRESETS.custom.leftSegments);
 		expect(effective.rightSegments).toEqual(STATUS_LINE_PRESETS.custom.rightSegments);
 
@@ -220,18 +218,18 @@ describe("StatusLineComponent effective settings cache", () => {
 
 	it("keeps plan and hook state dynamic without settings invalidation", () => {
 		const component = makeComponent({ preset: "custom", leftSegments: ["mode"], rightSegments: [] });
-		const effective = component.getEffectiveSettingsForTest();
+		const effective = component.getEffectiveSettings();
 		expect(component.getTopBorder(80).content).toBe("");
 
 		component.setPlanModeStatus({ enabled: true, paused: false });
 		expect(stripVTControlCharacters(component.getTopBorder(80).content)).toContain("Plan");
-		expect(component.getEffectiveSettingsForTest()).toBe(effective);
+		expect(component.getEffectiveSettings()).toBe(effective);
 
 		component.setHookStatus("hook", "hook running");
 		expect(component.render(80)).toEqual(["hook running"]);
 		component.setHookStatus("hook", "hook done");
 		expect(component.render(80)).toEqual(["hook done"]);
-		expect(component.getEffectiveSettingsForTest()).toBe(effective);
+		expect(component.getEffectiveSettings()).toBe(effective);
 	});
 
 	it("renders arbitrary extension statuses in deterministic segment order", () => {
@@ -272,7 +270,7 @@ describe("StatusLineComponent effective settings cache", () => {
 		component.getTopBorder(200);
 
 		expect(STATUS_LINE_PRESETS.default.segmentOptions?.path).toEqual(before);
-		expect(component.getEffectiveSettingsForTest().segmentOptions.path).toEqual(before);
+		expect(component.getEffectiveSettings().segmentOptions.path).toEqual(before);
 	});
 	it("skips git probes when git integration is disabled", async () => {
 		const headSpy = spyOn(vcs, "gitInfo");

@@ -1741,10 +1741,14 @@ export async function compact(
 			remoteHistory = stripOpenAIResponsesOutputOnlyStatusesForReplay(nativeInput);
 			codexBody.input = remoteHistory;
 			for (const message of userMessages) {
+				// Encode the source turn without the normal developer-only request's synthetic user fallback.
 				const userBody = await buildTransformedCodexRequestBody(
 					model,
 					{ messages: [message] },
 					{ responsesLite: model.useResponsesLite },
+					undefined,
+					undefined,
+					false,
 				);
 				retainedUserItems.push(...(userBody.input ?? []));
 			}

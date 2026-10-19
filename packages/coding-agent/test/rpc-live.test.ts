@@ -8,6 +8,7 @@ import { RpcLiveBridge, type RpcLiveSession } from "@oh-my-pi/pi-coding-agent/mo
 import type { RpcLiveFrame } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { readLines, removeWithRetries } from "@oh-my-pi/pi-utils";
+import { cfgLiveDelegationDelivery } from "../src/live/settings";
 
 class FakeLiveSession implements RpcLiveSession {
 	muted = false;
@@ -62,6 +63,16 @@ async function startedBridge(levelsIntervalMs?: number) {
 }
 
 describe("RpcLiveBridge", () => {
+	test("applies handoff delivery setting changes without restarting the call", async () => {
+		const { bridge, live } = await startedBridge();
+		expect(live.options.delegationDelivery?.()).toBe("steer");
+		cfgLiveDelegationDelivery.set(live.options.session.settings, "followUp");
+		expect(live.options.delegationDelivery?.()).toBe("followUp");
+		cfgLiveDelegationDelivery.set(live.options.session.settings, "interrupt");
+		expect(live.options.delegationDelivery?.()).toBe("interrupt");
+		await bridge.stop();
+	});
+
 	test("start forwards options and callbacks as live frames; end is emitted once", async () => {
 		const { bridge, frames, sessions } = harness();
 		const starting = bridge.start({ voice: " cove " });

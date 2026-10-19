@@ -14,6 +14,8 @@ export interface LiveDelegationDetails {
 	operator: string;
 	voice?: string;
 	noteId?: string;
+	/** Queued handoff routing becomes active when this message is consumed, not when it is queued. */
+	delegationId?: string;
 }
 
 export function buildLiveDelegationMessage(

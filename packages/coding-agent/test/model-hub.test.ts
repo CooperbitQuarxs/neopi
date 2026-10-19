@@ -20,6 +20,7 @@ import {
 } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
+import { thinkingLevelGlyph } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
 import { cfgCycleOrder, cfgModelPresets } from "@oh-my-pi/pi-coding-agent/config/model-settings";
@@ -463,6 +464,56 @@ describe("ModelHub", () => {
 			expect(defaultRow).not.toContain("inherit");
 			expect(smolRow).toContain("auto");
 		});
+		test.each(["fixed", "auto"] as const)(
+			"selected role highlights its %s reasoning cell across pane focus",
+			mode => {
+				const model = getBundledModel("openai", "gpt-5.5");
+				if (!model) throw new Error("Expected bundled reasoning model");
+				const settings = Settings.isolated({
+					modelRoles: { default: "openai/gpt-5.5", smol: "openai/gpt-5.5" },
+				});
+				const selection: HubEffortSelection =
+					mode === "auto"
+						? { mode: "auto", allowed: [Effort.Low, Effort.High] }
+						: { mode: "fixed", level: Effort.High };
+				settings.setRoleEffortSelection("default", selection);
+				settings.setRoleEffortSelection("smol", selection);
+				const { hub } = createHub({ models: [model], scoped: true, settings });
+				const glyph = thinkingLevelGlyph(mode === "auto" ? AUTO_THINKING : ThinkingLevel.High, theme);
+				const label = mode === "auto" ? "Auto [low, high]" : "high";
+				const effort = glyph ? `${glyph} ${label}` : label;
+
+				hub.handleInput(UP); // Roles preview; sidebar still owns focus.
+				for (const focusKey of ["", "\n", LEFT]) {
+					if (focusKey) hub.handleInput(focusKey);
+					for (const width of [120, 220]) {
+						const lines = hub.render(width);
+						const selected = lines.find(line => stripVTControlCharacters(line).includes("DEFAULT"));
+						const other = lines.find(line => stripVTControlCharacters(line).includes("SMOL"));
+						expect(selected).toContain(theme.fg("accent", effort));
+						expect(other).toContain(theme.fg("dim", effort));
+					}
+					for (const width of [36, 60, 90]) {
+						const lines = hub.render(width);
+						expect(lines.every(line => Bun.stringWidth(line) <= width)).toBe(true);
+						const selected = lines.find(line => stripVTControlCharacters(line).includes("DEFAULT"));
+						if (selected && stripVTControlCharacters(selected).includes(label)) {
+							expect(selected).toContain(theme.fg("accent", effort));
+						}
+					}
+				}
+				hub.handleInput("\n"); // Return focus to role rows.
+				hub.handleInput(DOWN); // DEFAULT → SMOL.
+				const moved = hub.render(120);
+				expect(moved.find(line => stripVTControlCharacters(line).includes("SMOL"))).toContain(
+					theme.fg("accent", effort),
+				);
+				expect(moved.find(line => stripVTControlCharacters(line).includes("DEFAULT"))).toContain(
+					theme.fg("dim", effort),
+				);
+			},
+		);
+
 		test("thinking-only edits preserve the model and scope from the persisted role layer", () => {
 			// Reasoning models: `t` only opens a strip where a level can apply.
 			const storedModel = getBundledModel("openai", "gpt-5.5");
@@ -1015,6 +1066,36 @@ describe("ModelHub", () => {
 			await Promise.resolve();
 			expect(settings.getGlobalRoleEffortSelection("default")).toEqual({ mode: "fixed", level: ThinkingLevel.Off });
 		});
+		test.each([false, true])("role save scope defaults globally for replacement=%s", replacement => {
+			const model = makeModel("test", "safe-scope-model");
+			const settings = Settings.isolated({ modelRoleStorage: "project" });
+			if (replacement) settings.setProjectModelRole("default", "test/safe-scope-model");
+			const { hub, onAssign } = createHub({ models: [model], scoped: true, settings });
+
+			hub.handleInput(UP);
+			hub.handleInput("\n"); // Focus DEFAULT.
+			hub.handleInput("\n"); // Open selector choice.
+			hub.handleInput("\n"); // Pick model.
+			hub.handleInput("\n"); // Open save-scope chooser.
+			hub.handleInput("\n"); // Accept the default scope without moving.
+
+			expect(onAssign).toHaveBeenCalledTimes(1);
+			expect(onAssign.mock.calls[0]?.[4]).toBe("global");
+		});
+
+		test("role save scope requires an explicit move to select project", () => {
+			const model = makeModel("test", "project-scope-model");
+			const settings = Settings.isolated({ modelRoleStorage: "project" });
+			const { hub, onAssign } = createHub({ models: [model], scoped: true, settings });
+			hub.handleInput(UP);
+			for (let step = 0; step < 4; step++) hub.handleInput("\n");
+			hub.handleInput("\x1b[C");
+			hub.handleInput("\n");
+
+			expect(onAssign).toHaveBeenCalledTimes(1);
+			expect(onAssign.mock.calls[0]?.[4]).toBe("project");
+		});
+
 		test("project storage exposes project and global role actions with callback scopes", () => {
 			const model = makeModel("test", "scoped-role-model");
 			const settings = Settings.isolated({ modelRoleStorage: "project" });
@@ -1027,7 +1108,7 @@ describe("ModelHub", () => {
 			expect(projectStrip).toContain("global default");
 			projectHarness.hub.handleInput("\n");
 			projectHarness.hub.handleInput("\n"); // Confirm inherited effort.
-			expect(projectHarness.onAssign.mock.calls[0]?.[4]).toBe("project");
+			expect(projectHarness.onAssign.mock.calls[0]?.[4]).toBe("global");
 
 			const globalHarness = createHub({ models: [model], scoped: true, settings });
 			globalHarness.hub.handleInput("\n"); // Sidebar → model list.
@@ -1035,7 +1116,7 @@ describe("ModelHub", () => {
 			globalHarness.hub.handleInput(DOWN);
 			globalHarness.hub.handleInput("\n");
 			globalHarness.hub.handleInput("\n"); // Confirm inherited effort.
-			expect(globalHarness.onAssign.mock.calls[0]?.[4]).toBe("global");
+			expect(globalHarness.onAssign.mock.calls[0]?.[4]).toBe("project");
 		});
 		test("shadowed global assignments unassign from the global chip", () => {
 			const globalModel = makeModel("test", "a-global-role-model");
@@ -1052,7 +1133,6 @@ describe("ModelHub", () => {
 			hub.handleInput("\t"); // Sidebar → model list.
 			hub.handleInput(DOWN); // Effective project model → shadowed global model.
 			hub.handleInput("\n");
-			hub.handleInput(DOWN); // Project default → global default.
 			hub.handleInput("\n");
 
 			expect(onUnassign).toHaveBeenCalledWith("default", "global");
@@ -1086,7 +1166,7 @@ describe("ModelHub", () => {
 				projectDefault.hub.handleInput("\n"); // Sidebar → model list.
 				projectDefault.hub.handleInput("\n");
 				projectDefault.hub.handleInput("\n");
-				expect(projectDefault.onUnassign).toHaveBeenCalledWith("default", "project");
+				expect(projectDefault.onUnassign).toHaveBeenCalledWith("default", "global");
 				expect(projectDefault.onAssign).not.toHaveBeenCalled();
 
 				const globalDefault = createHub({ models: [model], scoped: true, settings });
@@ -1094,7 +1174,7 @@ describe("ModelHub", () => {
 				globalDefault.hub.handleInput("\n");
 				globalDefault.hub.handleInput(DOWN);
 				globalDefault.hub.handleInput("\n");
-				expect(globalDefault.onUnassign).toHaveBeenCalledWith("default", "global");
+				expect(globalDefault.onUnassign).toHaveBeenCalledWith("default", "project");
 				expect(globalDefault.onAssign).not.toHaveBeenCalled();
 
 				const projectAutoSelected = createHub({ models: [model], scoped: true, settings });
@@ -1103,7 +1183,7 @@ describe("ModelHub", () => {
 				projectAutoSelected.hub.handleInput(DOWN);
 				projectAutoSelected.hub.handleInput(DOWN);
 				projectAutoSelected.hub.handleInput("\n");
-				expect(projectAutoSelected.onUnassign).toHaveBeenCalledWith("smol", "project");
+				expect(projectAutoSelected.onUnassign).toHaveBeenCalledWith("smol", "global");
 				expect(projectAutoSelected.onAssign).not.toHaveBeenCalled();
 
 				const globalAutoSelected = createHub({ models: [model], scoped: true, settings });
@@ -1113,7 +1193,7 @@ describe("ModelHub", () => {
 				globalAutoSelected.hub.handleInput(DOWN);
 				globalAutoSelected.hub.handleInput(DOWN);
 				globalAutoSelected.hub.handleInput("\n");
-				expect(globalAutoSelected.onUnassign).toHaveBeenCalledWith("smol", "global");
+				expect(globalAutoSelected.onUnassign).toHaveBeenCalledWith("smol", "project");
 				expect(globalAutoSelected.onAssign).not.toHaveBeenCalled();
 			} finally {
 				await fs.rm(root, { recursive: true, force: true });
@@ -1130,6 +1210,7 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN);
+			hub.handleInput(DOWN); // Global smol → project smol.
 			hub.handleInput("\n");
 			hub.handleInput("\n"); // Confirm staged effort.
 
@@ -1155,7 +1236,6 @@ describe("ModelHub", () => {
 			hub.handleInput("\t"); // Sidebar → model list.
 			hub.handleInput(DOWN); // Effective configured model → assignment target.
 			hub.handleInput("\n");
-			hub.handleInput(DOWN); // Project default → global default.
 			hub.handleInput("\n");
 			hub.handleInput("\n"); // Confirm preserved global effort.
 
@@ -1188,7 +1268,8 @@ describe("ModelHub", () => {
 			assignHub.hub.handleInput("\t"); // Sidebar → model list.
 			assignHub.hub.handleInput(DOWN); // gpt-5.5 → gpt-5.6.
 			assignHub.hub.handleInput("\n"); // Open the role strip for gpt-5.6.
-			assignHub.hub.handleInput("\n"); // Assign to "project default" (first chip).
+			assignHub.hub.handleInput(DOWN); // Global default → project default.
+			assignHub.hub.handleInput("\n"); // Assign to project default.
 			assignHub.hub.handleInput("\n"); // Confirm preserved project effort.
 			expect(assignHub.onAssign).toHaveBeenCalledTimes(1);
 			expect(assignHub.onAssign.mock.calls[0]?.[1]).toBe("default");
@@ -1200,7 +1281,8 @@ describe("ModelHub", () => {
 			const classifyHub = createHub({ models: [configuredModel, targetModel], scoped: true, settings });
 			classifyHub.hub.handleInput("\t"); // Sidebar → model list.
 			classifyHub.hub.handleInput("\n"); // Open the role strip for gpt-5.5.
-			classifyHub.hub.handleInput("\n"); // Select "project default" (first chip).
+			classifyHub.hub.handleInput(DOWN); // Global default → project default.
+			classifyHub.hub.handleInput("\n"); // Select project default.
 			expect(classifyHub.onUnassign).toHaveBeenCalledWith("default", "project");
 			expect(classifyHub.onAssign).not.toHaveBeenCalled();
 		});
@@ -2372,6 +2454,7 @@ describe("ModelHub", () => {
 			});
 			hub.handleInput("\n"); // model list
 			hub.handleInput("\n"); // role choices
+			hub.handleInput(DOWN); // Explicitly choose project default.
 			hub.handleInput("\n"); // project default role
 			hub.handleInput("\x1b[C"); // off
 			hub.handleInput("\x1b[C"); // Auto
@@ -2384,6 +2467,7 @@ describe("ModelHub", () => {
 			expect(settings.getProjectRoleEffortSelection("default")).toBeUndefined();
 
 			hub.handleInput("\n"); // select model
+			hub.handleInput(DOWN); // Explicitly choose project default again.
 			hub.handleInput("\n"); // project role opens effort choices
 			hub.handleInput("\x1b[C");
 			hub.handleInput("\x1b[C");

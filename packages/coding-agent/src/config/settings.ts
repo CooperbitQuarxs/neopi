@@ -726,6 +726,8 @@ export class Settings {
 	#modifiedGlobalRoleEfforts = new Set<string>();
 	/** Roles whose model and effort must pass the same conflict check. */
 	#pairedGlobalRoleMutations = new Set<string>();
+	/** Fallback chains whose selectors and effort metadata share one conflict decision. */
+	#pairedGlobalFallbackMutations = new Set<string>();
 	/** On-disk generations and prior values observed before each pending global mutation, keyed like {@link #modified}. */
 	#modifiedPathMutations = new Map<string, PendingYamlMutation>();
 	#modifiedGlobalModelRoleMutations = new Map<string, PendingYamlMutation>();
@@ -2079,14 +2081,13 @@ export class Settings {
 		const previousChains = cfgRetryFallbackChains.get(this);
 		const previousEfforts = cfgFallbackEffortSelections.get(this);
 		for (const setting of [cfgRetryFallbackChains, cfgFallbackEffortSelections]) {
-			this.#captureGlobalMutation(
-				JSON.stringify(setting.segments),
-				this.#modifiedPathMutations,
-				getByPath(this.#global, setting.segments),
-			);
-			this.#modified.set(JSON.stringify(setting.segments), setting.segments);
+			const segments = [...setting.segments, role];
+			const key = JSON.stringify(segments);
+			this.#captureGlobalMutation(key, this.#modifiedPathMutations, getByPath(this.#global, segments));
+			this.#modified.set(key, segments);
 			this.#releaseSoftPin(setting);
 		}
+		this.#pairedGlobalFallbackMutations.add(role);
 		this.#global = staged;
 		this.#persistedMutationGeneration++;
 		this.#rebuildMerged();
@@ -3982,6 +3983,8 @@ export class Settings {
 		const globalRolesAtStart = this.#modelRolesFromLayer(this.#global);
 		const modifiedRoleEfforts = [...this.#modifiedGlobalRoleEfforts];
 		const pairedRoles = new Set(this.#pairedGlobalRoleMutations);
+		const pairedFallbacks = new Set(this.#pairedGlobalFallbackMutations);
+		this.#pairedGlobalFallbackMutations.clear();
 		const modifiedRoleEffortMutations = new Map(this.#modifiedGlobalRoleEffortMutations);
 		const globalEffortsAtStart = getByPath(this.#global, cfgRoleEffortSelections.segments);
 		const effortValuesAtStart: Record<string, unknown> = isRecord(globalEffortsAtStart)
@@ -4013,11 +4016,35 @@ export class Settings {
 				let shouldWrite = false;
 				const writtenPaths: (readonly string[])[] = [];
 
+				const blockedFallbackPaths = new Set<string>();
+				for (const role of pairedFallbacks) {
+					const paths = [cfgRetryFallbackChains, cfgFallbackEffortSelections].map(setting => [
+						...setting.segments,
+						role,
+					]);
+					if (
+						paths.some(
+							segments =>
+								!pendingChangeApplies(
+									modifiedPathMutations.get(JSON.stringify(segments)),
+									segments,
+									current,
+									loaded.generation,
+									[],
+								),
+						)
+					) {
+						for (const segments of paths) blockedFallbackPaths.add(JSON.stringify(segments));
+					}
+				}
 				// Apply pending changes unless a newer file generation also
 				// changed that setting. Disjoint external edits still merge.
 				for (const [modKey, segments] of modifiedPaths) {
 					const mutation = modifiedPathMutations.get(modKey);
-					if (!pendingChangeApplies(mutation, segments, current, loaded.generation, writtenPaths)) {
+					if (
+						blockedFallbackPaths.has(modKey) ||
+						!pendingChangeApplies(mutation, segments, current, loaded.generation, writtenPaths)
+					) {
 						logger.warn("Settings: skipped stale change after external config edit", {
 							path: configPath,
 							setting: segments.join("."),
@@ -4174,6 +4201,29 @@ export class Settings {
 						});
 					}
 				}
+				// A newer paired edit can have one half absorbed by this write while
+				// the other remains dirty. Keep the satisfied half as a no-op mutation
+				// so the next save still validates both records against the same file.
+				for (const role of this.#pairedGlobalFallbackMutations) {
+					const paths = [cfgRetryFallbackChains, cfgFallbackEffortSelections].map(setting => [
+						...setting.segments,
+						role,
+					]);
+					if (paths.every(segments => !this.#modified.has(JSON.stringify(segments)))) {
+						this.#pairedGlobalFallbackMutations.delete(role);
+						continue;
+					}
+					for (const segments of paths) {
+						const modKey = JSON.stringify(segments);
+						if (this.#modified.has(modKey)) continue;
+						writtenGeneration ??= this.#readYamlGeneration(configPath);
+						this.#modified.set(modKey, segments);
+						this.#modifiedPathMutations.set(modKey, {
+							generation: writtenGeneration,
+							baseValue: structuredClone(getByPath(current, segments)),
+						});
+					}
+				}
 				this.#adoptSavedGlobal(current, configPath);
 				// These pending roles were included in this write. Remove each
 				// only if no newer local change arrived while the write was in flight.
@@ -4202,6 +4252,7 @@ export class Settings {
 			const retryGeneration = this.#quarantinedYamlTargets.has(configPath)
 				? this.#readYamlGeneration(configPath)
 				: undefined;
+			for (const role of pairedFallbacks) this.#pairedGlobalFallbackMutations.add(role);
 			// Re-add failed paths for retry, retaining any newer mutation's generation.
 			for (const [p, segments] of modifiedPaths) {
 				this.#modified.set(p, segments);

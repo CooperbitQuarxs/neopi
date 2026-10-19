@@ -140,6 +140,19 @@ describe("config CLI schema coverage", () => {
 		expect(parsed.value).toEqual(["claude-opus-4-6", "gpt-5.3-codex"]);
 	});
 
+	it("accepts provider usage bars in either custom status-line array", async () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		vi.spyOn(process, "exit").mockImplementation((() => {
+			throw new Error("process.exit");
+		}) as typeof process.exit);
+		const segments = ["model", "usage:anthropic:5h", "usage:anthropic:7d:fable", "usage:openai-codex:7d"];
+		for (const key of ["statusLine.leftSegments", "statusLine.rightSegments"]) {
+			await runConfigCommand({ action: "set", key, value: JSON.stringify(segments), flags: { json: true } });
+			await runConfigCommand({ action: "get", key, flags: { json: true } });
+			expect(JSON.parse(String(log.mock.calls.at(-1)?.[0])).value).toEqual(segments);
+		}
+	});
+
 	it("rejects unknown status line segment ids", async () => {
 		vi.spyOn(console, "log").mockImplementation(() => {});
 		vi.spyOn(console, "error").mockImplementation(() => {});

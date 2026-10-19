@@ -11,13 +11,13 @@
  *     post-prompt recovery, but the loop is already done) must be drained when
  *     the session settles.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, AgentBusyError, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
+import { createMockModel, type MockHandler, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import type { PromptTemplate } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
@@ -31,6 +31,12 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { removeSyncWithRetries, Snowflake, withTimeout } from "@oh-my-pi/pi-utils";
 import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
+import { type LiveDelegationDelivery, LiveSessionController } from "../src/live/controller";
+import type { LiveClientMessage, LiveServerEvent } from "../src/live/protocol";
+import { LIVE_DELEGATION_MESSAGE_TYPE } from "../src/session/messages";
+import { buildLiveDelegationMessage } from "../src/live/delegation-note";
+import { UiHelpers } from "../src/modes/utils/ui-helpers";
+import type { CompactionQueuedMessage, InteractiveModeContext } from "../src/modes/types";
 
 const COLLAB_PROMPT_TYPE = "collab-prompt";
 const IMAGE_SOURCE_PATH = "/tmp/private-project/screenshot.png";
@@ -73,6 +79,7 @@ describe("AgentSession queued steer delivery", () => {
 
 	afterEach(async () => {
 		await session?.dispose();
+		vi.restoreAllMocks();
 		removeSyncWithRetries(tempDir);
 	});
 
@@ -82,7 +89,7 @@ describe("AgentSession queued steer delivery", () => {
 	});
 
 	async function createSession(
-		responses: MockResponse[],
+		responses: MockHandler[],
 		promptTemplates: PromptTemplate[] = [],
 	): Promise<SteerHarness> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
@@ -142,6 +149,417 @@ describe("AgentSession queued steer delivery", () => {
 		};
 		return promise;
 	}
+
+	it.each(["steer", "followUp"] as const)(
+		"preserves an accepted vocal %s when post-compaction prompt authentication fails",
+		async mode => {
+			const { session } = await createSession([
+				{ content: ["recovered work"] },
+				{ content: ["recovered follow-up"] },
+				{ content: ["remaining work"] },
+			]);
+			const received = Promise.withResolvers<void>();
+			const unsubscribe = session.subscribe(event => {
+				if (
+					event.type === "message_end" &&
+					event.message.role === "custom" &&
+					event.message.customType === LIVE_DELEGATION_MESSAGE_TYPE
+				)
+					received.resolve();
+			});
+			const checkingCredentials = Promise.withResolvers<void>();
+			const finishCredentials = Promise.withResolvers<void>();
+			vi.spyOn(modelRegistry, "getApiKey").mockImplementationOnce(async () => {
+				checkingCredentials.resolve();
+				await finishCredentials.promise;
+				return undefined;
+			});
+			const queued: CompactionQueuedMessage[] = [{ text: "typed request parked during compaction", mode: "steer" }];
+			const restored = Promise.withResolvers<string>();
+			const ctx = {
+				session,
+				compactionQueuedMessages: [...queued],
+				skillCommands: new Map(),
+				isKnownSlashCommand: () => false,
+				recordLocalSubmission: () => () => {},
+				updatePendingMessagesDisplay() {},
+				showError: (message: string) => restored.resolve(message),
+				loopModeEnabled: false,
+			} as unknown as InteractiveModeContext;
+			const helpers = new UiHelpers(ctx);
+			let onLiveEvent: ((event: LiveServerEvent) => void) | undefined;
+			const speech: string[] = [];
+			const accepted = Promise.withResolvers<void>();
+			const controller = new LiveSessionController({
+				session,
+				delegationDelivery: () => mode,
+				extractAssistantText: () => "",
+				callbacks: {
+					onPhase() {},
+					onLevels() {},
+					onTranscript() {},
+					onTerminal() {},
+					onSpeechSent(text) {
+						speech.push(text);
+						accepted.resolve();
+					},
+				},
+				createTransport: options => {
+					onLiveEvent = options.callbacks.onEvent;
+					return {
+						async connect() {},
+						async send() {},
+						async close() {},
+						async setMuted() {},
+						pushAudio: () => true,
+					};
+				},
+				createRecorder: () => ({ stop() {} }),
+			});
+			await controller.start();
+			try {
+				await helpers.flushCompactionQueue();
+				await withTimeout(checkingCredentials.promise, 2_000, "Post-compaction credential lookup did not start");
+				expect(session.isStreaming).toBe(true);
+				expect(session.agent.state.isStreaming).toBe(false);
+				onLiveEvent?.({ type: "turn.done", turn: { role: "user", transcript: "accepted operator speech" } });
+				onLiveEvent?.({
+					type: "delegation.created",
+					item: { type: "delegation", target: "client", id: "during-auth", content: [] },
+				});
+				await withTimeout(accepted.promise, 2_000, "Vocal handoff was not accepted");
+				expect(controller.pendingUserTurnCount()).toBe(0);
+				expect(session.getQueuedMessages()[mode === "steer" ? "steering" : "followUp"]).toEqual([
+					"accepted operator speech",
+				]);
+				finishCredentials.resolve();
+				expect(
+					await withTimeout(restored.promise, 2_000, "Authentication failure did not reach compaction restore"),
+				).toContain("No API key found");
+				expect(ctx.compactionQueuedMessages).toEqual(queued);
+				// An idle continuation may already have claimed the preserved message. It must
+				// remain owned by the real queue, its in-flight claim, or the recorded transcript.
+				expect([
+					...session.agent.peekSteeringQueue(),
+					...session.agent.peekFollowUpQueue(),
+					...session.agent.peekUndeliveredQueuedMessages(),
+					...session.messages,
+				]).toContainEqual(
+					expect.objectContaining({
+						role: "custom",
+						customType: LIVE_DELEGATION_MESSAGE_TYPE,
+						details: expect.objectContaining({ operator: "accepted operator speech" }),
+					}),
+				);
+				await helpers.flushCompactionQueue();
+				await withTimeout(received.promise, 2_000, "Accepted vocal input was not delivered after recovery");
+				await session.waitForIdle();
+				const delivered = session.messages.filter(
+					message => message.role === "custom" && message.customType === LIVE_DELEGATION_MESSAGE_TYPE,
+				);
+				expect(delivered).toHaveLength(1);
+				expect(delivered[0]).toMatchObject({
+					details: { operator: "accepted operator speech" },
+					attribution: "agent",
+				});
+				expect(speech).toEqual(["accepted operator speech"]);
+			} finally {
+				finishCredentials.resolve();
+				await session.waitForIdle();
+				await controller.stop();
+				unsubscribe();
+			}
+		},
+	);
+
+	it.each(["steer", "followUp"] as const)(
+		"restores queued vocal %s text on Esc without voice-agent prose",
+		async mode => {
+			const { session } = await createSession([{ content: ["active answer"], delayMs: 1_000 }]);
+			const streaming = Promise.withResolvers<void>();
+			const unsubscribe = session.subscribe(event => {
+				if (event.type === "message_start" && event.message.role === "assistant") streaming.resolve();
+			});
+			const run = session.prompt("existing task").catch(() => {});
+			try {
+				await withTimeout(streaming.promise, 2_000, "Active response did not start");
+				const { content, details } = buildLiveDelegationMessage(
+					"canonical operator request",
+					"Iris routing prose",
+					true,
+				);
+				const delivery = session.sendCustomMessageWithReceipt(
+					{ customType: LIVE_DELEGATION_MESSAGE_TYPE, content, details, display: true, attribution: "agent" },
+					{ triggerTurn: true, deliverAs: mode, steeringInterruptMode: "wait" },
+				);
+				void delivery.completed.catch(() => {});
+				await delivery.accepted;
+				expect(session.getQueuedMessages()[mode === "steer" ? "steering" : "followUp"]).toEqual([
+					"canonical operator request",
+				]);
+				const restored = session.clearQueue({ forInterrupt: true });
+				await session.abort({ reason: USER_INTERRUPT_LABEL });
+				expect(restored[mode === "steer" ? "steering" : "followUp"]).toEqual([
+					{ text: "canonical operator request", images: undefined },
+				]);
+				expect(session.agent.hasQueuedMessages()).toBe(false);
+			} finally {
+				unsubscribe();
+				await session.abort({ reason: USER_INTERRUPT_LABEL });
+				await run;
+			}
+		},
+	);
+
+	it("dequeues only canonical operator speech and leaves voice-only provenance unrestorable", async () => {
+		const { session } = await createSession([]);
+		const operator = buildLiveDelegationMessage("spoken request", "Iris routing prose", true);
+		const note = buildLiveDelegationMessage("", "Iris question", true);
+		session.agent.followUp({
+			role: "custom",
+			customType: LIVE_DELEGATION_MESSAGE_TYPE,
+			...operator,
+			display: true,
+			attribution: "agent",
+			timestamp: 1,
+		});
+		session.agent.followUp({
+			role: "custom",
+			customType: LIVE_DELEGATION_MESSAGE_TYPE,
+			...note,
+			display: true,
+			attribution: "agent",
+			timestamp: 2,
+		});
+		expect(session.agent.peekFollowUpQueue()[0]).toMatchObject({ attribution: "agent" });
+		expect(session.getQueuedMessages().followUp).toEqual(["spoken request"]);
+		expect(session.popLastQueuedMessage()).toEqual({ text: "spoken request", images: undefined });
+		expect(session.popLastQueuedMessage()).toBeUndefined();
+		expect(session.clearQueue({ forInterrupt: true })).toEqual({ steering: [], followUp: [] });
+	});
+
+	it("keeps old reasoning and progress on their consumed delegation while a new steer waits", async () => {
+		const oldStarted = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const acceptedOld = Promise.withResolvers<void>();
+		const acceptedNew = Promise.withResolvers<void>();
+		const oldThinking = "Old reasoning still belongs to the first spoken request. ".repeat(6);
+		const newThinking = "New reasoning belongs only to the newly consumed request. ".repeat(6);
+		const oldProgress = "Finishing the first request before consuming the next steer.";
+		const { session, mock } = await createSession([
+			async () => {
+				oldStarted.resolve();
+				await releaseOld.promise;
+				return {
+					content: [
+						{ type: "thinking", thinking: oldThinking },
+						oldProgress,
+						{ type: "toolCall", id: "finish", name: "finish", arguments: {} },
+					],
+				};
+			},
+			{ content: [{ type: "thinking", thinking: newThinking }, "The new request is complete."] },
+		]);
+		const schema = type({});
+		const tool: AgentTool<typeof schema> = {
+			name: "finish",
+			label: "Finish",
+			description: "Finish the current request",
+			parameters: schema,
+			async execute() {
+				return { content: [{ type: "text", text: "First request finished." }], details: {} };
+			},
+		};
+		session.agent.setTools([tool]);
+		const consumed: string[] = [];
+		const unsubscribe = session.subscribe(event => {
+			if (
+				event.type === "message_start" &&
+				event.message.role === "custom" &&
+				event.message.customType === LIVE_DELEGATION_MESSAGE_TYPE
+			) {
+				consumed.push((event.message.details as { operator: string }).operator);
+			}
+		});
+		let onLiveEvent: ((event: LiveServerEvent) => void) | undefined;
+		const sent: LiveClientMessage[] = [];
+		const controller = new LiveSessionController({
+			session,
+			speakableIdleMs: 0,
+			thinkingFlushMs: 0,
+			extractAssistantText: message =>
+				message.content
+					.filter(part => part.type === "text")
+					.map(part => part.text)
+					.join(""),
+			callbacks: {
+				onPhase() {},
+				onLevels() {},
+				onTranscript() {},
+				onTerminal() {},
+				onSpeechSent(text) {
+					if (text === "first spoken request") acceptedOld.resolve();
+					if (text === "new spoken request") acceptedNew.resolve();
+				},
+			},
+			createTransport: options => {
+				onLiveEvent = options.callbacks.onEvent;
+				return {
+					async connect() {},
+					async send(message) {
+						sent.push(message);
+					},
+					async close() {},
+					async setMuted() {},
+					pushAudio: () => true,
+				};
+			},
+			createRecorder: () => ({ stop() {} }),
+		});
+		const handoff = (text: string, id: string) => {
+			onLiveEvent?.({ type: "turn.done", turn: { role: "user", transcript: text } });
+			onLiveEvent?.({
+				type: "delegation.created",
+				item: { type: "delegation", target: "client", id, content: [] },
+			});
+		};
+		await controller.start();
+		try {
+			handoff("first spoken request", "dlg-old");
+			await withTimeout(Promise.all([oldStarted.promise, acceptedOld.promise]), 2_000, "Old request did not start");
+			handoff("new spoken request", "dlg-new");
+			await withTimeout(acceptedNew.promise, 2_000, "New request was not queued");
+			expect(session.isStreaming).toBe(true);
+			expect(consumed).toEqual(["first spoken request"]);
+			expect(session.getQueuedMessages().steering).toEqual(["new spoken request"]);
+			expect(JSON.stringify(mock.calls[0]?.context.messages)).not.toContain("new spoken request");
+		} finally {
+			releaseOld.resolve();
+			await withTimeout(session.waitForIdle(), 2_000, "Queued request did not finish");
+			await controller.stop();
+			unsubscribe();
+		}
+		const routed = sent.filter(message => message.type === "delegation.context.append");
+		const routesFor = (text: string) =>
+			routed
+				.filter(message => message.content.some(part => part.text.includes(text)))
+				.map(message => message.delegation_item_id);
+		expect(routesFor("Old reasoning still belongs")).toEqual(["dlg-old"]);
+		expect(routesFor(oldProgress)).toEqual(["dlg-old"]);
+		expect(routesFor("New reasoning belongs only")).toEqual(["dlg-new"]);
+		expect(routesFor("The new request is complete.")).toEqual(["dlg-new"]);
+		expect(consumed).toEqual(["first spoken request", "new spoken request"]);
+		expect(mock.calls).toHaveLength(2);
+	});
+
+	it.each(["steer", "followUp"] as const)(
+		"delivers a live %s once without aborting the active tool or reasoning turn",
+		async (mode: LiveDelegationDelivery) => {
+			const { session, mock } = await createSession([
+				{ content: [{ type: "toolCall", id: "work", name: "work", arguments: {} }] },
+				{ content: ["active run finished"] },
+				{ content: ["follow-up finished"] },
+			]);
+			const started = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const accepted = Promise.withResolvers<void>();
+			let interrupted = false;
+			const schema = type({});
+			const tool: AgentTool<typeof schema> = {
+				name: "work",
+				label: "Work",
+				description: "Complete the active work",
+				parameters: schema,
+				interruptible: false,
+				async execute(_id, _params, signal) {
+					const onAbort = () => {
+						interrupted = true;
+					};
+					signal?.addEventListener("abort", onAbort, { once: true });
+					started.resolve();
+					try {
+						await release.promise;
+						return { content: [{ type: "text", text: "work completed" }], details: {} };
+					} finally {
+						signal?.removeEventListener("abort", onAbort);
+					}
+				},
+			};
+			session.agent.setTools([tool]);
+			let onLiveEvent: ((event: LiveServerEvent) => void) | undefined;
+			const speech: string[] = [];
+			const voiced: string[] = [];
+			const controller = new LiveSessionController({
+				session,
+				delegationDelivery: () => mode,
+				extractAssistantText: message =>
+					message.content
+						.filter(part => part.type === "text")
+						.map(part => part.text)
+						.join(""),
+				callbacks: {
+					onPhase() {},
+					onLevels() {},
+					onTranscript() {},
+					onTerminal() {},
+					onSpeechSent(text) {
+						speech.push(text);
+						accepted.resolve();
+					},
+				},
+				createTransport: options => {
+					onLiveEvent = options.callbacks.onEvent;
+					return {
+						async connect() {},
+						async send(message) {
+							if (message.type === "session.context.append" || message.type === "delegation.context.append") {
+								voiced.push(message.content.map(part => part.text).join(""));
+							}
+						},
+						async close() {},
+						async setMuted() {},
+						pushAudio: () => true,
+					};
+				},
+				createRecorder: () => ({ stop() {} }),
+			});
+			await controller.start();
+			controller.expectOperatorTurn();
+			const run = session.prompt("finish existing work");
+			try {
+				await withTimeout(started.promise, 2_000, "Active work did not start");
+				onLiveEvent?.({ type: "turn.done", turn: { role: "user", transcript: "new spoken request" } });
+				onLiveEvent?.({
+					type: "delegation.created",
+					item: { type: "delegation", target: "client", id: "live-request", content: [] },
+				});
+				await withTimeout(accepted.promise, 2_000, "Live handoff was not queued");
+				expect(interrupted).toBe(false);
+				expect(session.isStreaming).toBe(true);
+			} finally {
+				release.resolve();
+				await run;
+				await session.waitForIdle();
+				await controller.stop();
+			}
+			expect(interrupted).toBe(false);
+			expect(speech).toEqual(["new spoken request"]);
+			expect(
+				session.messages.filter(message => message.role === "assistant").map(message => message.stopReason),
+			).not.toContain("aborted");
+			const deliveries = session.messages.filter(
+				message => message.role === "custom" && message.customType === LIVE_DELEGATION_MESSAGE_TYPE,
+			);
+			expect(deliveries).toHaveLength(1);
+			expect(mock.calls).toHaveLength(mode === "followUp" ? 3 : 2);
+			const secondContext = JSON.stringify(mock.calls[1]?.context.messages);
+			expect(secondContext.includes("new spoken request")).toBe(mode === "steer");
+			expect(voiced.join("\n")).toContain("active run finished");
+			if (mode === "followUp") expect(voiced.join("\n")).toContain("follow-up finished");
+			if (mode === "followUp")
+				expect(JSON.stringify(mock.calls[2]?.context.messages)).toContain("new spoken request");
+		},
+	);
 
 	it("delivers a collab steer that lands at the run's yield boundary", async () => {
 		const { session, sessionManager, mock } = await createSession([

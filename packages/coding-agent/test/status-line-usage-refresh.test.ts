@@ -172,6 +172,120 @@ describe("StatusLineComponent usage refresh", () => {
 		resetSettingsForTest();
 	});
 
+	it("keeps provider bars and the shared fetch cadence across model switches", async () => {
+		const session = makeSession(async () => usageReport(10));
+		session.state.model = { ...session.state.model!, provider: "anthropic", id: "first" };
+		const fetch = vi.spyOn(statusLineHost, "fetchUsageReports");
+		const component = new StatusLineComponent(session, statusLineHost);
+		component.updateSettings({
+			preset: "custom",
+			leftSegments: ["usage:anthropic:5h"],
+			rightSegments: [],
+			separator: "none",
+		});
+		try {
+			expect(plain(component.getTopBorder(120).content)).toContain("AN 5h …");
+			await refreshUsage(component);
+			expect(plain(component.getTopBorder(120).content)).toContain("AN 5h 10% now");
+			session.state.model = { ...session.state.model!, provider: "openai-codex", id: "second" };
+			component.invalidate();
+			await refreshUsage(component, 60_000);
+			expect(plain(component.getTopBorder(120).content)).toContain("AN 5h 10% 1m");
+			expect(fetch).toHaveBeenCalledTimes(1);
+		} finally {
+			component.dispose();
+			fetch.mockRestore();
+		}
+	});
+
+	it("repaints bar ages while idle without polling outside the shared gate", async () => {
+		const session = makeSession(async () => usageReport(10));
+		const fetch = vi.spyOn(statusLineHost, "fetchUsageReports");
+		const component = new StatusLineComponent(session, statusLineHost);
+		let repaints = 0;
+		component.watchBranch(() => {
+			repaints++;
+		});
+		component.updateSettings({ preset: "custom", leftSegments: ["usage:anthropic:5h"], rightSegments: [] });
+		try {
+			await refreshUsage(component);
+			component.getTopBorder(120);
+			const previous = repaints;
+			vi.advanceTimersByTime(60_000);
+			expect(repaints).toBeGreaterThan(previous);
+			expect(fetch).toHaveBeenCalledTimes(1);
+			expect(plain(component.getTopBorder(120).content)).toContain("AN 5h 10% 1m");
+			component.updateSettings({ preset: "custom", leftSegments: [], rightSegments: [] });
+			const stopped = repaints;
+			vi.advanceTimersByTime(60_000);
+			expect(repaints).toBe(stopped);
+		} finally {
+			component.dispose();
+			fetch.mockRestore();
+		}
+	});
+
+	it.each(["rejected", "null", "undefined", "object"])(
+		"keeps the last provider snapshot after a %s refresh failure",
+		async failure => {
+			let failed = false;
+			const component = new StatusLineComponent(
+				makeSession(async () => {
+					if (failed) {
+						if (failure === "rejected") throw new Error("provider unavailable");
+						return failure === "null" ? null : failure === "undefined" ? undefined : {};
+					}
+					return usageReport(10);
+				}),
+				statusLineHost,
+			);
+			component.updateSettings({ preset: "custom", leftSegments: ["usage:anthropic:5h"], rightSegments: [] });
+			try {
+				await refreshUsage(component);
+				expect(plain(component.getTopBorder(120).content)).toContain("AN 5h 10% now");
+				failed = true;
+				await refreshUsage(component, 300_000);
+				expect(plain(component.getTopBorder(120).content)).toContain("AN 5h 10% 5m");
+			} finally {
+				component.dispose();
+			}
+		},
+	);
+
+	it("marks an unavailable first broker snapshot without retaining a loading placeholder", async () => {
+		const component = new StatusLineComponent(
+			makeSession(async () => null),
+			statusLineHost,
+		);
+		component.updateSettings({ preset: "custom", leftSegments: ["usage:anthropic:5h"], rightSegments: [] });
+		try {
+			expect(plain(component.getTopBorder(120).content)).toContain("AN 5h …");
+			await refreshUsage(component);
+			expect(plain(component.getTopBorder(120).content)).toContain("AN 5h n/a");
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("selects a provider bar using that provider's active account", async () => {
+		const state = { sevenDayPercent: 17, sevenDayResetAt: Date.now() + 60_000 };
+		const component = new StatusLineComponent(
+			makeCodexSession(async () => [
+				...codexUsageReport({ ...state, sevenDayPercent: 90 }, "other-account", "other@example.com"),
+				...codexUsageReport(state),
+			]),
+			statusLineHost,
+		);
+		component.updateSettings({ preset: "custom", leftSegments: ["usage:openai-codex:7d"], rightSegments: [] });
+		try {
+			await refreshUsage(component);
+			expect(plain(component.getTopBorder(120).content)).toContain("OA wk 17% now");
+			expect(plain(component.getTopBorder(120).content)).not.toContain("90%");
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("does not invoke usage fetching synchronously on the render path", async () => {
 		let calls = 0;
 		const component = new StatusLineComponent(

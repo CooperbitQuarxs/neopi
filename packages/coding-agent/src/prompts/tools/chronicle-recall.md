@@ -8,4 +8,6 @@ Use when the user refers to earlier work, a past decision, or "that thing we did
 - `project`/`session`: restrict to one project path substring or session id.
 - `resolution` + `node`: for step-by-step narrowing, ask for `month` (or `week`, `day`, `hour`) to get candidate periods, then call again with `node=<candidate key>` and a finer resolution.
 
+Chronicle recall runs as a cancellable background job and returns the job handle immediately. Findings are delivered automatically when the search finishes; cancel it by writing to `proc://<jobId>/kill`.
+
 Results are canonical atoms: id, event time, project, session, the atom body, and the transcript path plus entry ids that support it. Cite atom ids when relying on them. When no atom is confident the result says so and lists candidate periods plus the single most useful follow-up (a time range or an adjacent event) — ask the user for it instead of guessing.

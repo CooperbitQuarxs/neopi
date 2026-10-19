@@ -416,7 +416,7 @@ export async function transformRequestBody(
 	body: RequestBody,
 	model: Model<"openai-codex-responses">,
 	options: CodexRequestOptions = {},
-	prompt?: { developerMessages: string[] },
+	prompt?: { developerMessages: string[]; ensureVisibleInput?: boolean },
 ): Promise<RequestBody> {
 	body.store = false;
 	body.stream = true;
@@ -465,7 +465,7 @@ export async function transformRequestBody(
 	if (finalInstruction === undefined && typeof body.instructions === "string" && body.instructions.trim().length > 0) {
 		finalInstruction = body.instructions;
 	}
-	if (finalInstruction !== undefined) {
+	if (finalInstruction !== undefined && prompt?.ensureVisibleInput !== false) {
 		const input = Array.isArray(body.input) ? body.input : [];
 		let hasVisibleInput = false;
 		for (const item of input) {

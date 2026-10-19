@@ -2433,10 +2433,15 @@ export function convertMessages(
 					} satisfies ChatCompletionContentPartText);
 				}
 				if (content.length === 0) continue;
-				params.push({
-					role: "user",
-					content,
-				});
+				// Chat developer messages accept text only; keep image-bearing turns intact.
+				if (
+					role === "developer" &&
+					content.every((part): part is ChatCompletionContentPartText => part.type === "text")
+				) {
+					params.push({ role, content });
+				} else {
+					params.push({ role: "user", content });
+				}
 			}
 		} else if (msg.role === "assistant") {
 			const assistantMsg: OpenAICompletionsAssistantMessageParam = {

@@ -31,6 +31,24 @@ export const cfgLiveModelCatalogPath = register({
 	},
 });
 
+export const cfgLiveDelegationDelivery = register({
+	id: "live.delegationDelivery",
+	type: "enum",
+	values: ["steer", "followUp", "interrupt"],
+	default: "steer",
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Handoff Delivery",
+		description: "How vocal handoffs reach the main agent; applies to the next handoff without restarting live mode",
+		options: [
+			{ value: "steer", label: "Steer without cancelling (default)" },
+			{ value: "followUp", label: "Queue for next yield" },
+			{ value: "interrupt", label: "Interrupt and restart" },
+		],
+	},
+});
+
 export const cfgLiveForceDelegateKeyword = register({
 	id: "live.forceDelegateKeyword",
 	type: "string",

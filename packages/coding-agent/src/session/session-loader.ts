@@ -11,7 +11,7 @@ import {
 	resolveImageDataUrl,
 	resolveImageDataUrlSync,
 } from "./blob-store";
-import { buildSessionContext } from "./session-context";
+import { buildSessionContext, walkSessionBranch } from "./session-context";
 import type { FileEntry, RawFileEntry, SessionEntry, SessionHeader } from "./session-entries";
 import { migrateToCurrentVersion } from "./session-migrations";
 import { isExternalizableImagePosition, isPersistenceTruncatedString } from "./session-persistence";
@@ -658,6 +658,38 @@ export function resolveBlobRefsInEntriesSync(entries: FileEntry[], blobStore: Bl
 }
 
 /**
+ * Load complete native selected-branch ancestry and the existing collapsed
+ * display transcript from one snapshot, without creating a writer/lease.
+ * The final journal entry is the authoritative leaf, just as when
+ * SessionManager rebuilds its entry index.
+ * Pre-tree (v1) journals retain their legacy transcript, but return null native
+ * entries because migration invents IDs that cannot serve as stable identities.
+ */
+export async function loadSessionBranchReadOnly(
+	filePath: string,
+): Promise<{ entries: SessionEntry[] | null; leafId: string | null; messages: AgentMessage[] }> {
+	const entries = await loadEntriesFromFile(filePath);
+	const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
+	if (header && (header.version ?? 1) < 2) {
+		migrateToCurrentVersion(entries);
+		return { entries: null, leafId: null, messages: await buildReadOnlySessionMessages(entries) };
+	}
+	migrateToCurrentVersion(entries);
+	const byId = new Map<string, SessionEntry>();
+	let leafId: string | null = null;
+	for (const entry of entries) {
+		if (entry.type === "session") continue;
+		byId.set(entry.id, entry);
+		leafId = entry.id;
+	}
+	return {
+		entries: walkSessionBranch(leafId, byId),
+		leafId,
+		messages: await buildReadOnlySessionMessages(entries),
+	};
+}
+
+/**
  * Read-only transcript view of a session file: load entries, migrate to the
  * current version, resolve blob refs, and build the display transcript along
  * the persisted leaf path (last entry). Uses transcript mode (collapsed to the
@@ -669,6 +701,10 @@ export async function loadSessionMessagesReadOnly(filePath: string): Promise<Age
 	const entries = await loadEntriesFromFile(filePath);
 	if (entries.length === 0) return [];
 	migrateToCurrentVersion(entries);
+	return buildReadOnlySessionMessages(entries);
+}
+
+async function buildReadOnlySessionMessages(entries: FileEntry[]): Promise<AgentMessage[]> {
 	for (const entry of entries) repairTruncatedSnapcompactFrames(entry);
 	const blobs = new BlobStore(getBlobsDir());
 	const sessionEntries = entries.filter((e): e is SessionEntry => e.type !== "session");
