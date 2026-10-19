@@ -141,6 +141,28 @@ afterEach(() => {
 });
 
 describe("Composer side panel: history and geometry", () => {
+	it.each([1, 2, 6])("diffs a %i-line live append beside the dock", async count => {
+		const h = await setup({ entries: 25 });
+		try {
+			const live = new Text("live start", 0, 0);
+			h.transcript.addChild(live);
+			h.composer.setSidePanel(h.panel, RIGHT);
+			await h.scheduler.advance(h.term, 160);
+			h.writes.length = 0;
+			live.setText(["live start", ...Array.from({ length: count }, (_, index) => `append ${index}`)].join("\n"));
+			h.composer.ui.requestRender();
+			await h.settle();
+			const output = h.writes.join("");
+			const rewritten = (output.match(/\r/g) ?? []).length;
+			expect(output).not.toMatch(/\x1b\[(?:2J|3J|J)/);
+			expect(rewritten).toBeLessThanOrEqual(24 + count);
+			expect(h.viewport().some(row => row.includes(`append ${count - 1}`))).toBe(true);
+			expectLedgerOnce(h, 24);
+		} finally {
+			h.composer.stop();
+		}
+	});
+
 	it("keeps the visible suffix of a settled block when newer content retires its head", async () => {
 		const h = await setup();
 		try {
