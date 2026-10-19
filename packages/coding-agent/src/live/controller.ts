@@ -140,6 +140,7 @@ export interface LiveSessionControllerOptions {
 	holdMode?: () => boolean;
 	/** Headless callers use canonical transcript text instead of an editable composer. */
 	transcriptKeywords?: () => { submit: string; force: string; silenceMs: number };
+	composerTextExcludingTurns?: (turns: readonly number[]) => string;
 	quietFloorMs?: () => number;
 	/** Test seam: quiet time after operator activity before held context sends; defaults to 10000 ms. */
 	speakableIdleMs?: number;
@@ -238,6 +239,7 @@ export class LiveSessionController {
 	#deferredVoiceDelegation: Extract<LiveServerEvent, { type: "delegation.created" }> | undefined;
 	readonly #transcriptKeywords: (() => { submit: string; force: string; silenceMs: number }) | undefined;
 	#transcriptKeywordTimer: NodeJS.Timeout | undefined;
+	readonly #composerTextExcludingTurns: ((turns: readonly number[]) => string) | undefined;
 	#suppressedResponse = false;
 
 	readonly #createTransport: (options: ConstructorParameters<typeof CodexLiveTransport>[0]) => LiveTransportLike;
@@ -308,6 +310,7 @@ export class LiveSessionController {
 				dispatchEnabled: boolean;
 				dispatching: boolean;
 				voiceText: string;
+				composerText?: string;
 		  }
 		| undefined;
 	#pendingDelivery: CustomMessageDelivery | undefined;
@@ -359,6 +362,7 @@ export class LiveSessionController {
 		this.#relayGates = options.relayGates ?? (() => ({ reasoning: true, progress: true, finalAnswers: true }));
 		this.#holdMode = options.holdMode ?? (() => false);
 		this.#transcriptKeywords = options.transcriptKeywords;
+		this.#composerTextExcludingTurns = options.composerTextExcludingTurns;
 		this.#quietFloorMs = options.quietFloorMs ?? (() => 0);
 		const speakableIdleMs = options.speakableIdleMs;
 		this.#speakableIdleMs =
@@ -499,6 +503,7 @@ export class LiveSessionController {
 					.join("\n\n")
 					.trim(),
 				pending.forced,
+				turns.map(turn => turn.turn),
 			);
 		} else {
 			this.#pendingDelivery?.cancel();
@@ -629,6 +634,7 @@ export class LiveSessionController {
 	async #handleDelegation(
 		event: Extract<LiveServerEvent, { type: "delegation.created" }>,
 		forced = false,
+		composerText?: string,
 	): Promise<void> {
 		if (this.#seenDelegationIds.has(event.item.id)) return;
 		this.#seenDelegationIds.add(event.item.id);
@@ -658,6 +664,7 @@ export class LiveSessionController {
 					.join("\n\n")
 					.trim(),
 				previousPending?.forced ?? false,
+				accepted.map(turn => turn.turn),
 			);
 		}
 		this.#pendingDelivery = undefined;
@@ -679,6 +686,7 @@ export class LiveSessionController {
 			delivery: this.#delegationDelivery(),
 			turns: claimed.map(turn => turn.turn),
 			voiceText,
+			composerText,
 			dispatchEnabled: false,
 			dispatching: false,
 		};
@@ -720,10 +728,7 @@ export class LiveSessionController {
 			.map(turnNumber => this.#userTurns.get(turnNumber))
 			.filter((turn): turn is UserLedgerTurn => turn !== undefined && turn.claim === generation);
 		if (turns.length === 0 || turns.some(turn => !turn.final)) return;
-		const merged = turns
-			.map(turn => turn.text)
-			.join("\n\n")
-			.trim();
+		const merged = pending.composerText ?? turns.map(turn => turn.text).join("\n\n").trim();
 		if (!merged) return;
 		pending.dispatching = true;
 		const { content, details } = buildLiveDelegationMessage(merged, pending.voiceText, this.#includeVoiceNote());
@@ -757,7 +762,7 @@ export class LiveSessionController {
 				this.#lastRelayedResponse = undefined;
 				this.#thinkingRelayedLength = 0;
 			}
-			this.#acceptSpeech(merged, pending.forced);
+			this.#acceptSpeech(merged, pending.forced, turns.map(turn => turn.turn));
 			await delivery.completed;
 		} catch (cause) {
 			// A newer handoff supersedes this continuation; its delivery owns any error.
@@ -815,9 +820,9 @@ export class LiveSessionController {
 		for (const record of this.#voiceNotes) if (record.consumed) this.#voiceNotes.delete(record);
 	}
 
-	#acceptSpeech(text: string, forced: boolean): void {
+	#acceptSpeech(text: string, forced: boolean, turns?: readonly number[]): void {
 		if (!text) return;
-		this.#callbacks.onSpeechSent?.(text);
+		this.#callbacks.onSpeechSent?.(text, this.#userTurns.size > 0 ? turns : undefined);
 		if (forced) this.#queueSend(buildSessionContextAppend("Operator Message Sent To Main Agent", "commentary"));
 	}
 
@@ -1051,7 +1056,20 @@ export class LiveSessionController {
 		const message = text.trim();
 		if (!message || this.#stopped) return false;
 		const block = stripLiveKeyword(message, this.#blockDelegateKeyword);
-		if (block.matched || this.#turnsWhere(turn => turn.blocked === true).length > 0) {
+		const blocked = this.#turnsWhere(turn => turn.blocked === true);
+		if (blocked.length) {
+			if (Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
+			const primary = this.#composerTextExcludingTurns?.(blocked.map(turn => turn.turn)) ??
+				this.#turnsWhere(turn => !turn.blocked && turn.claim === undefined).map(turn => turn.text).join("\n\n");
+			this.#holdReleased = true;
+			this.#suppressedResponse = false;
+			this.#deferredVoiceDelegation = undefined;
+			this.refreshTurnGate(false);
+			for (const turn of blocked) this.#deliverBlockedTurn(turn);
+			if (primary.trim()) this.#forcePendingComposer(primary.trim());
+			return true;
+		}
+		if (block.matched) {
 			if (Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
 			this.#holdReleased = true;
 			this.#suppressedResponse = false;
@@ -1071,14 +1089,19 @@ export class LiveSessionController {
 		this.refreshTurnGate();
 		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text: message, final: true };
 		this.#putTurn(turn);
+		this.#forcePendingComposer();
+		return true;
+	}
+
+	#forcePendingComposer(composerText?: string): void {
 		void this.#handleDelegation(
 			{
 				type: "delegation.created",
 				item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
 			},
 			true,
+			composerText,
 		).catch(cause => this.#reportFailure(errorFrom(cause)));
-		return true;
 	}
 
 	/** The voice agent finished answering: the turns it answered are its own and must not ride a

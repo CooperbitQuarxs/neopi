@@ -30,6 +30,7 @@ interface Harness {
 	/** Callbacks the controller handed to the live session. */
 	callbacks(): LiveSessionCallbacks;
 	voice(): string | undefined;
+	projectComposer(excludedTurns: readonly number[]): string | undefined;
 	/** Components mounted into or focused away from the composer slot. */
 	layoutChanges: unknown[];
 	/** Latest status-line live state, `null` when hidden. */
@@ -119,6 +120,7 @@ function createHarness(): Harness {
 			return options.callbacks;
 		},
 		voice: () => options?.voice,
+		projectComposer: turns => options?.composerTextExcludingTurns?.(turns),
 		layoutChanges,
 		liveStatus: () => liveStatus,
 		sentToVoice,
@@ -135,6 +137,22 @@ afterEach(() => {
 });
 
 describe("LiveCommandController", () => {
+	it("projects a mixed held draft without blocked speech while preserving typed context and the original editor", async () => {
+		const h = createHarness();
+		cfgLiveSubmitKeyword.set(h.ctx.settings, "thanks");
+		await h.controller.handleCommand();
+		try {
+			h.editor.insertText("typed context:");
+			speak(h, 1, "fix the cache", true);
+			speak(h, 2, "tell me a joke thanks", true);
+			const before = h.editor.getText();
+			expect(h.projectComposer([2])?.trim()).toBe("typed context: fix the cache");
+			expect(h.editor.getText()).toBe(before);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
 	it("force-delegates a hold-mode submit after both silence and the quiet floor regardless of destination", async () => {
 		const h = createHarness();
 		const forced = vi.spyOn(LiveSessionController.prototype, "forceDelegateComposer").mockReturnValue(true);

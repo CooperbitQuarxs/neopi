@@ -334,6 +334,24 @@ function makeHarness(options?: {
 }
 
 describe("operator-owned live floor", () => {
+	it("separates ordinary and blocked held utterances at explicit submission", async () => {
+		const h = makeHarness({ holdMode: () => true, blockDelegateKeyword: "iris only" });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "tell me a joke iris only" } });
+			expect(h.controller.forceDelegateComposer("fix the cache\n\ntell me a joke")).toBe(true);
+			await settle();
+			expect(h.prompts).toEqual(["fix the cache"]);
+			const voiceText = h.sent.filter(message => message.type === "session.context.append")
+				.flatMap(message => message.content.map(item => item.text)).join("\n");
+			expect(voiceText).toContain("tell me a joke");
+			expect(voiceText).not.toContain("fix the cache");
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
 	it("releases held canonical speech through the RPC submit keyword", async () => {
 		const h = makeHarness();
 		Object.assign(h.session, {
