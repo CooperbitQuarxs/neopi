@@ -33,6 +33,7 @@
 ### Fixed
 
 - Standalone updates ignore project `.env` build origins and configuration-directory redirects, retain launch/user overrides and explicit profiles, and show the selected source for binary updates and package-manager takeovers ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
+- Role switches and runtime fallbacks now honor their saved effort policies and admitted task scope, ordered subagent selectors retain the chosen source's explicit effort through role expansion, advisor classification stops on cancellation, and concurrent or in-flight fallback edits retain paired effort settings ([#178](https://github.com/PsychedelicShayna/neopi/issues/178)).
 - Model selector assignments save globally unless project scope is explicitly selected, including when project role storage is enabled ([#244](https://github.com/PsychedelicShayna/neopi/issues/244)).
 - Source installs retire managed legacy persona, loadout, and REPL extension links without deleting operator-owned extensions, preventing old hooks from running alongside built-ins ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
 - CI's session/log descriptor-leak check now works with Bun versions that open files close-on-exec by default ([#286](https://github.com/PsychedelicShayna/neopi/issues/286)).
