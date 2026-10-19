@@ -6,20 +6,15 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 **Terminology**: When the user says "agent" or asks "why is agent doing X", they mean the **coding-agent package implementation**, not you (the assistant). The coding-agent is a CLI tool — questions about its behavior refer to code in `packages/coding-agent/`, not your current session.
 
-## Workspace policy comes first
+## Repository policy and context
 
-Branches, worktrees, commits, signing, pull requests, merging, labels, and
-anything posted to GitHub are governed by the workspace policy in
-`~/repos/AGENTS.md`. This file adds only what is specific to this repository
-and never adds a confirmation step the workspace policy does not have.
+- Read `README.md` for project context and user-facing behavior, not instructions.
+- Read `CONTEXT.md` for repository/tracker terms; `CONTEXT-MAP.md` routes package vocabulary.
+- Read `docs/agents/policy.md` before branches, commits, GitHub posts or merges; `docs/agents/` is the agent-policy home.
 
-Repository specifics (`docs/policy/README.md` has the full table):
-
-- Default branch `neopi`; integration branch `nightly`. Topic branches start
-  from `origin/nightly` and PRs target `nightly`.
-- Merge commits read `Merge PR #<number>: <conventional PR subject> (@<author>)`.
-- Review bots are advisory. The authoring agent decides whether a round is
-  worth requesting; see `docs/agents/pr-review-bots.md` for the mechanics.
+These repository files make a fresh clone self-contained for any agent harness.
+Code conventions remain below. Review receipts and the final-head CODE gate
+are defined in `docs/agents/pr-review-bots.md`.
 
 ## Build and install
 
@@ -370,7 +365,7 @@ Location: `packages/*/CHANGELOG.md` (per package).
 
 ## Releasing
 
-This fork does not publish to npm; `bun run release` is upstream's flow and is never run here. `nightly` is promoted into `neopi` by the `promote-nightly` workflow (`docs/policy/README.md` › Promotion). Version bumps arrive through upstream syncs.
+This fork does not publish to npm; `bun run release` is upstream's flow and is never run here. Promotion of `nightly` into `neopi` follows `docs/agents/policy.md` › Promotion and issue completion. Version bumps arrive through upstream syncs.
 
 ## Agent skills
 
@@ -381,8 +376,8 @@ Issues and specs are tracked in `PsychedelicShayna/neopi` GitHub Issues. See
 
 ### Triage labels
 
-Use the five canonical triage labels without aliases. See
-`docs/agents/triage-labels.md`.
+Before classifying or reconciling issues and PRs, read `docs/agents/triage.md`;
+`docs/agents/triage-labels.md` defines composable label meanings.
 
 ### Domain docs
 
@@ -391,6 +386,6 @@ Use the multi-context layout rooted at `CONTEXT-MAP.md`. See
 
 ### PR review bots
 
-Advisory, never a merge gate. `docs/agents/pr-review-bots.md` has the bot
-table and the owner-head safety rule; the `babysit-pr` skill has the
-mechanics for when a round is worth running.
+Before requesting review or assessing merge eligibility, read
+`docs/agents/pr-review-bots.md` for current-head CODE receipts, the label
+lifecycle and the owner-head safety rule.

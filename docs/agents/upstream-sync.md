@@ -1,6 +1,6 @@
 # Synchronizing an upstream release
 
-Use this procedure for every upstream release integration. Upstream syncs land on the integration branch `nightly` (workspace policy, `~/repos/AGENTS.md` › Upstream forks), never directly on the default branch; `nightly` is promoted to `neopi` on its own schedule. Everywhere below, `$DEFAULT` therefore means `nightly`. GitHub's remote branch is the source of truth. A local checkout is a work surface, not a release baseline.
+Use this procedure for every upstream release integration. Upstream syncs land on the integration branch `nightly` ([repository policy](policy.md) › Branches and worktrees), never directly on the default branch; `nightly` is promoted to `neopi` on its own schedule. Everywhere below, `$DEFAULT` therefore means `nightly`. GitHub's remote branch is the source of truth. A local checkout is a work surface, not a release baseline.
 
 RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` and `AVOID` mean `MUST NOT` and `SHOULD NOT`.
 
