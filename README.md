@@ -2,6 +2,8 @@
 
 A source-built coding harness for long-running, multi-agent work where the operator keeps control.
 
+[NeoCode](https://github.com/PsychedelicShayna/neocode) is NeoPi's graphical frontend. [NeoDeck](https://github.com/PsychedelicShayna/neodeck) is its orchestration and integration frontend for cards, routines, inbox, and messaging. NeoPi itself is the terminal harness and the engine both use.
+
 ## Lineage
 
 NeoPi is a fork of [Oh My Pi](https://github.com/can1357/oh-my-pi) by Can Bölük, itself a fork of [Pi](https://github.com/badlogic/pi-mono) by Mario Zechner. The project is MIT-licensed; see the upstream [README](https://github.com/can1357/oh-my-pi/blob/main/README.md) for the full inherited feature tour.
