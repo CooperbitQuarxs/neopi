@@ -176,7 +176,7 @@ describe("/defer", () => {
 		const h = harness();
 		await h.submit("/defer 5ms /defer 5ms /unknown-nested-command");
 		h.editor.setText("current operator draft");
-		await Bun.sleep(50);
+		await waitUntil(() => h.editor.getExpandedText().includes("/unknown-nested-command"));
 		expect(h.editor.getExpandedText()).toContain("/unknown-nested-command");
 		expect(h.editor.getExpandedText()).toContain("current operator draft");
 		expect(h.mock.calls).toHaveLength(0);
