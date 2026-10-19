@@ -93,6 +93,8 @@ describe("advisor auto thinking level", () => {
 		expect(wire).toEqual([`${model.id}:${Effort.High}`]);
 		expect(classify.mock.calls[0]?.[1].model).toBe(model);
 		expect(classify.mock.calls[0]?.[1].allowedEfforts).toEqual([Effort.Low, Effort.High]);
+		expect(classify.mock.calls[0]?.[1].sessionId).toBe(advisor.sessionId);
+		expect(classify.mock.calls[0]?.[1].sessionId).toBeTruthy();
 
 		s.setThinkingLevel(AUTO_THINKING);
 		expect(advisor.state.thinkingLevel).toBe(Effort.High);
@@ -106,6 +108,28 @@ describe("advisor auto thinking level", () => {
 		expect(setModel).not.toHaveBeenCalled();
 		expect(invalidate?.mock.calls.length ?? 0).toBe(0);
 		expect(s.formatAdvisorHistoryAsText()).toContain(`Thinking Level: ${Effort.Low}`);
+	});
+
+	it("cancels pending classification on disposal without starting an advisor request", async () => {
+		const primary = createMockModel({ handler: { content: ["primary complete"] } });
+		const advisor = createMockModel({ handler: { content: ["advisor ok"] } });
+		const wire = vi.fn(advisor.stream);
+		const s = newSession(primary.stream, {}, wire);
+		const started = Promise.withResolvers<AbortSignal | undefined>();
+		const release = Promise.withResolvers<Effort>();
+		vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockImplementation(async (_input, deps) => {
+			started.resolve(deps.signal);
+			return release.promise;
+		});
+		expect(s.setAdvisorEnabled(true)).toBe(true);
+		await s.agent.prompt("review");
+		const signal = await started.promise;
+		const closing = s.dispose();
+		release.resolve(Effort.High);
+		await closing;
+		expect(signal?.aborted).toBe(true);
+		expect(wire).not.toHaveBeenCalled();
+		session = undefined;
 	});
 
 	it("isolates classifier failures from the review and uses the lowest permitted advisor effort", async () => {

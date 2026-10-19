@@ -487,6 +487,75 @@ describe("Settings", () => {
 				},
 			});
 		});
+		it("rejects both fallback records on conflict while merging edits to different chains", async () => {
+			await writeSettings({
+				retry: {
+					fallbackChains: { default: ["mock/backup"] },
+					fallbackEffortSelections: { default: { "mock/backup": { mode: "fixed", level: Effort.Low } } },
+				},
+			});
+			const stale = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			const winner = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			stale.setFallbackChainAndEfforts("default", ["mock/backup", "mock/new"], {
+				"mock/backup": { mode: "fixed", level: Effort.Low },
+				"mock/new": { mode: "auto" },
+			});
+			winner.setFallbackChainAndEfforts("default", ["mock/backup"], {
+				"mock/backup": { mode: "fixed", level: Effort.High },
+			});
+			stale.setFallbackChainAndEfforts("advisor", ["mock/advisor"], { "mock/advisor": { mode: "auto" } });
+			await winner.flush();
+			await stale.flush();
+			expect(await readSettings()).toMatchObject({
+				retry: {
+					fallbackChains: { default: ["mock/backup"], advisor: ["mock/advisor"] },
+					fallbackEffortSelections: {
+						default: { "mock/backup": { mode: "fixed", level: Effort.High } },
+						advisor: { "mock/advisor": { mode: "auto" } },
+					},
+				},
+			});
+		});
+		it("retains a newer fallback effort edit staged during an atomic write", async () => {
+			await writeSettings({
+				retry: {
+					fallbackChains: { default: ["mock/backup"] },
+					fallbackEffortSelections: { default: { "mock/backup": { mode: "fixed", level: Effort.Low } } },
+				},
+			});
+			const settings = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const rename = fs.promises.rename.bind(fs.promises);
+			let gated = false;
+			vi.spyOn(fs.promises, "rename").mockImplementation(async (source, target) => {
+				if (!gated && String(source).endsWith(".tmp") && String(target) === getConfigPath()) {
+					gated = true;
+					entered.resolve();
+					await release.promise;
+				}
+				await rename(source, target);
+			});
+			settings.setFallbackChainAndEfforts("default", ["mock/backup", "mock/new"], {
+				"mock/backup": { mode: "fixed", level: Effort.Low },
+				"mock/new": { mode: "fixed", level: Effort.Medium },
+			});
+			const saving = settings.flush();
+			await entered.promise;
+			settings.setFallbackChainAndEfforts("default", ["mock/backup", "mock/new"], {
+				"mock/backup": { mode: "fixed", level: Effort.Low },
+				"mock/new": { mode: "fixed", level: Effort.High },
+			});
+			release.resolve();
+			await saving;
+			await settings.flush();
+			expect(await readSettings()).toMatchObject({
+				retry: {
+					fallbackChains: { default: ["mock/backup", "mock/new"] },
+					fallbackEffortSelections: { default: { "mock/new": { mode: "fixed", level: Effort.High } } },
+				},
+			});
+		});
 	});
 
 	describe("status line segment validation", () => {

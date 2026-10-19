@@ -420,6 +420,7 @@ import {
 	VIBE_MODE_CONTEXT_MESSAGE_TYPE,
 } from "./messages";
 import { ModelControls, type ModelControlsHost } from "./model-controls";
+import { formatSessionHistoryMarkdown } from "./session-history-format";
 import {
 	isPrewalkPlanNudge,
 	PrewalkCoordinator,
@@ -1185,6 +1186,8 @@ export class AgentSession implements SettingsScope {
 	// Cursor exec, TUI listeners) is held back. Without this, a client that resumes
 	// on `agent_end` can fire its next `prompt` before #promptWithMessage's finally
 	#promptGeneration = 0;
+	/** Input owned by the admitted turn, including queued requests not emitted to history yet. */
+	#turnEffortContext: { generation: number; request: string; solutionSpace?: string } | undefined;
 	// abort() can finish in a message_end listener before queued settle work runs.
 	#activeAgentPromptGeneration = this.#promptGeneration;
 	/** Bumped by newSession()/switchSession() at the same point they clear the pending IRC/aside
@@ -2043,16 +2046,36 @@ export class AgentSession implements SettingsScope {
 		});
 		this.agent.prepareQueuedMessages = this.#prepareQueuedUserMessages;
 		this.#detachUsageBeforeModelCall = this.agent.addBeforeModelCallHook(async signal => {
-			if (!cfgRetryUsageAwareFallback.get(this.settings)) return;
-			if (this.#usagePreflightReadyForNextModelCall) {
-				const checkedModel = this.#usagePreflightReadyModel;
+			if (cfgRetryUsageAwareFallback.get(this.settings)) {
+				const checkedModel = this.#usagePreflightReadyForNextModelCall ? this.#usagePreflightReadyModel : undefined;
 				this.#usagePreflightReadyForNextModelCall = false;
 				this.#usagePreflightReadyModel = undefined;
-				if (checkedModel === this.model) return;
+				if (checkedModel !== this.model && !(await this.#runUsageAwarePreflight(signal))) {
+					signal?.throwIfAborted();
+					throw new DOMException("Usage preflight cancelled", "AbortError");
+				}
 			}
-			if (!(await this.#runUsageAwarePreflight(signal))) {
+			// Runtime fallback resumes this turn without passing real-user dispatch again.
+			if (
+				this.#recovery.hasActiveRetryFallback &&
+				this.isAutoThinking &&
+				this.#models.autoResolvedThinkingLevel === undefined
+			) {
+				const admitted = this.#turnEffortContext;
+				const context = admitted?.generation === this.#promptGeneration ? admitted : undefined;
+				const request = context
+					? undefined
+					: this.agent.state.messages.findLast(
+							message =>
+								message.role === "user" || (message.role === "custom" && isUserInvokedSkillPrompt(message)),
+						);
+				await this.#models.applyAutoThinkingLevel(
+					context?.request ?? (request ? formatSessionHistoryMarkdown([request]) : ""),
+					this.#promptGeneration,
+					context?.solutionSpace,
+					signal,
+				);
 				signal?.throwIfAborted();
-				throw new DOMException("Usage preflight cancelled", "AbortError");
 			}
 		});
 		const statsHost: SessionStatsTrackerHost = {
@@ -8283,6 +8306,7 @@ export class AgentSession implements SettingsScope {
 		generation: number,
 		signal: AbortSignal | undefined,
 		origin: "direct" | "queued",
+		solutionSpace?: string,
 	): Promise<QueuedMessagePreparation & { baseXdevCatalogDelivered: boolean }> {
 		const sessionGeneration = this.#sessionGeneration;
 		const alreadyDisposing = this.#isDisposed && origin === "direct";
@@ -8381,6 +8405,10 @@ export class AgentSession implements SettingsScope {
 						this.#tools.clearTurnSystemPromptOverride();
 						this.agent.setSystemPrompt(this.#tools.baseSystemPrompt);
 					}
+					this.#turnEffortContext =
+						message.role === "user" || (message.role === "custom" && isUserInvokedSkillPrompt(message))
+							? { generation, request: prompt, solutionSpace }
+							: undefined;
 					return messages;
 				},
 			};
@@ -8522,6 +8550,7 @@ export class AgentSession implements SettingsScope {
 				generation,
 				setupAbort.signal,
 				"direct",
+				options?.solutionSpace,
 			);
 			const preparedMessages = preparation.commit();
 			if (!preparedMessages) return false;
