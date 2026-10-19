@@ -24,6 +24,7 @@ import { createLivePersonaFeature } from "../../live/personas";
 
 import {
 	cfgLiveBlockDelegateKeyword,
+	cfgLiveDelegationDelivery,
 	cfgLiveForceDelegateKeyword,
 	cfgLiveSubmitKeyword,
 	cfgLiveSubmitSilenceMs,
@@ -292,6 +293,7 @@ export class LiveCommandController {
 				return message.customType === "irc:relay" ? settings.ircPeers : settings.ircPrimary;
 			},
 			includeVoiceNote: () => settingsSource.get().includeVoiceNote,
+			delegationDelivery: () => cfgLiveDelegationDelivery.get(this.#ctx.settings),
 			relayGates: () => {
 				const settings = settingsSource.get();
 				return {

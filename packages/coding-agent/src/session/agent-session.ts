@@ -431,6 +431,7 @@ import {
 	isAdvisorCard,
 	isDisplayableQueuedMessage,
 	isHiddenUserCompanion,
+	isRestorableQueuedMessage,
 	isUserAuthoredQueuedMessage,
 	isUserQueuedMessage,
 	queueChipText,
@@ -9706,8 +9707,8 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/** Clear queued messages and return the user-restorable ones (text plus any attached images).
-	 *  Only user-authored messages (plain user turns, `attribution:"user"` custom like `/skill`) are
-	 *  returned for editor restore. Other queued messages stay in the agent-core queues so a continuing
+	 *  User-authored messages and canonical operator speech in live handoffs are returned for editor
+	 *  restore. Other queued messages stay in the agent-core queues so a continuing
 	 *  stream still delivers them — EXCEPT on `forInterrupt` (Esc+abort), where only advisor cards are
 	 *  kept (abort()'s #extractQueuedAdvisorCards preserves them as visible advice) and every other
 	 *  non-user steer (hidden goal/plan/budget, IRC/extension asides) is dropped, so abort()'s
@@ -9715,23 +9716,27 @@ export class AgentSession implements SettingsScope {
 	 *  fires while agent.hasQueuedMessages()). `forInterrupt` also withdraws input the run already
 	 *  dequeued but never recorded — live-steered into the aborted response, or taken for its next
 	 *  model call — and treats it as queued ahead of the rest (it was queued first).
+	 *  Compaction rollback uses `userAuthoredOnly` to leave independently accepted agent handoffs
+	 *  queued rather than discarding speech that rollback does not own; interrupts ignore that option.
 	 *  Plain Alt+Up dequeue preserves those non-user steers. */
-	clearQueue(options?: { forInterrupt?: boolean }): {
+	clearQueue(options?: { forInterrupt?: boolean; userAuthoredOnly?: boolean }): {
 		steering: RestoredQueuedMessage[];
 		followUp: RestoredQueuedMessage[];
 	} {
+		const restorable =
+			options?.userAuthoredOnly && !options.forInterrupt ? isUserAuthoredQueuedMessage : isRestorableQueuedMessage;
 		const withdrawn = options?.forInterrupt ? this.agent.withdrawUndeliveredQueuedMessages() : undefined;
 		const steeringAll = [...(withdrawn?.steering ?? []), ...this.agent.peekSteeringQueue()];
 		const followUpAll = [...(withdrawn?.followUp ?? []), ...this.agent.peekFollowUpQueue()];
 		const steering = steeringAll
-			.filter(isUserAuthoredQueuedMessage)
+			.filter(restorable)
 			.map(message => toRestoredQueuedMessage(message, this.#queuedMessageRawText.get(message)));
 		const followUp = followUpAll
-			.filter(isUserAuthoredQueuedMessage)
+			.filter(restorable)
 			.map(message => toRestoredQueuedMessage(message, this.#queuedMessageRawText.get(message)));
 		const keep: (m: AgentMessage) => boolean = options?.forInterrupt
 			? isAdvisorCard
-			: m => !isUserAuthoredQueuedMessage(m) && !isHiddenUserCompanion(m);
+			: m => !restorable(m) && !isHiddenUserCompanion(m);
 		for (const message of [...steeringAll, ...followUpAll]) {
 			if (!keep(message) && message.role === "custom" && message.customType === "ttsr-injection") {
 				this.#ttsr.releaseDeferredReservationFromDetails(message.details);
@@ -9764,14 +9769,14 @@ export class AgentSession implements SettingsScope {
 	/** Chip texts for the queue display. Steering live steering took for the streaming response
 	 *  stays listed until the transcript records it, when the model actually switches to it. */
 	getQueuedMessages(): { steering: readonly string[]; followUp: readonly string[]; liveSteered: number } {
-		const liveSteered = this.agent.peekLiveSteeredMessages().filter(isUserAuthoredQueuedMessage).length;
+		const liveSteered = this.agent.peekLiveSteeredMessages().filter(isRestorableQueuedMessage).length;
 		return {
 			steering: [...this.agent.peekLiveSteeredMessages(), ...this.agent.peekSteeringQueue()]
-				.filter(isUserAuthoredQueuedMessage)
+				.filter(isRestorableQueuedMessage)
 				.map(message => queueChipText(message, this.#queuedMessageRawText.get(message))),
 			followUp: this.agent
 				.peekFollowUpQueue()
-				.filter(isUserAuthoredQueuedMessage)
+				.filter(isRestorableQueuedMessage)
 				.map(message => queueChipText(message, this.#queuedMessageRawText.get(message))),
 			liveSteered,
 		};
@@ -9848,7 +9853,7 @@ export class AgentSession implements SettingsScope {
 	promoteQueuedMessage(text: string): boolean {
 		const followUp = this.agent.peekFollowUpQueue();
 		const index = this.#findQueuedUserMessage(followUp, text);
-		if (index < 0) return false;
+		if (index < 0 || !isUserAuthoredQueuedMessage(followUp[index])) return false;
 
 		const promoted = followUp.slice(this.#queuedUserGroupStart(followUp, index), index + 1);
 		const message = promoted[promoted.length - 1];
@@ -9873,12 +9878,12 @@ export class AgentSession implements SettingsScope {
 	 */
 	#findQueuedUserMessage(queue: readonly AgentMessage[], text: string): number {
 		let index = queue.findIndex(
-			message => isUserAuthoredQueuedMessage(message) && this.#queuedMessageRawText.get(message) === text,
+			message => isRestorableQueuedMessage(message) && this.#queuedMessageRawText.get(message) === text,
 		);
 		if (index < 0) {
 			index = queue.findIndex(
 				message =>
-					isUserAuthoredQueuedMessage(message) &&
+					isRestorableQueuedMessage(message) &&
 					queueChipText(message, this.#queuedMessageRawText.get(message)) === text,
 			);
 		}
@@ -9903,14 +9908,14 @@ export class AgentSession implements SettingsScope {
 	/**
 	 * Pop the last queued message (steering first, then follow-up).
 	 * Used by dequeue keybinding to restore messages to editor one at a time.
-	 * Steps over agent-authored queued messages (advisor cards, hidden/internal steers).
+	 * Steps over agent-authored queued messages without canonical operator speech.
 	 */
 	popLastQueuedMessage(): RestoredQueuedMessage | undefined {
 		const steering = this.agent.peekSteeringQueue();
 		const followUp = this.agent.peekFollowUpQueue();
 		const lastUserIndex = (queue: readonly AgentMessage[]): number => {
 			for (let i = queue.length - 1; i >= 0; i--) {
-				if (isUserAuthoredQueuedMessage(queue[i])) return i;
+				if (isRestorableQueuedMessage(queue[i])) return i;
 			}
 			return -1;
 		};

@@ -1,24 +1,7 @@
 /**
- * Live controller delegation ownership under barge-in.
- *
- * The classifier test (live-relay-async-settle.test.ts) cannot catch these:
- * they are ownership races between the voice handoff's abort and the torn-down
- * turn's fire-and-forget `agent_end`. Covered here:
- *
- * 1. A late aborted settle must be suppressed — it must not close the newly
- *    claimed delegation (which silenced the genuine turn on the call).
- * 2. Rapid delegations merge: the newest survivor dispatches ONE backend turn
- *    carrying every still-unsent request, in arrival order (the committed
- *    voice contract: merge split turns, barge in on active work).
- * 3. A genuine empty terminal settle still closes unconditionally, so a stale
- *    delegation id can never route later unrelated output into the call.
- * 4. Raw transcript persistence: pre-dedupe, ordered, duplicates survive,
- *    mid-utterance partial flushed on stop, drained before teardown.
- * 5. Fleet feed: crew IRC messages ride the speakable channel, attributed and
- *    session-scoped when no delegation is active; oversized reports truncate
- *    to ONE labeled chunk — never split into unlabeled fragments.
- * 6. Fleet feed: reasoning narration flushes once at a sentence boundary and
- *    never re-sends already-narrated thinking.
+ * Live controller handoff ownership and voice transport boundaries.
+ * Canonical speech is claimed once across steering, follow-up and interrupt delivery;
+ * only explicit interrupt delivery suppresses an obsolete aborted settle.
  */
 
 import { describe, expect, it } from "bun:test";
@@ -30,8 +13,8 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentRegistry } from "../src/registry/agent-registry";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
-import type { CustomMessage } from "../src/session/messages";
-import { LiveSessionController } from "../src/live/controller";
+import { type CustomMessage, LIVE_DELEGATION_MESSAGE_TYPE } from "../src/session/messages";
+import { type LiveDelegationDelivery, LiveSessionController } from "../src/live/controller";
 import { LiveIngest } from "../src/live/ingest";
 import { LIVE_INGEST_DEFAULTS, type LiveIngestSettingsSource } from "../src/live/ingest-settings";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, type SubagentLifecyclePayload } from "../src/task/types";
@@ -91,6 +74,7 @@ function crewMessage(id: string, from: string, message: string): AgentSessionEve
 
 interface DeliveryControl {
 	content: string;
+	options?: { triggerTurn?: boolean; deliverAs?: string; steeringInterruptMode?: string };
 	accepted: boolean;
 	cancelled: boolean;
 	acceptedPromise: Promise<void>;
@@ -118,6 +102,7 @@ interface Harness {
 	fireLive(event: LiveServerEvent): void;
 	fireSession(event: AgentSessionEvent): void;
 	setStreaming(value: boolean): void;
+	setToolRunning(kind: "bash" | "eval", value: boolean): void;
 	nextAbort(): { promise: Promise<void>; resolve: () => void };
 	artifactPath: string;
 }
@@ -131,6 +116,7 @@ function makeHarness(options?: {
 	playbackQueue?: { queuedMs: number; droppedMs: number };
 	blockDelegateKeyword?: string;
 	send?: (message: LiveClientMessage) => Promise<void>;
+	delegationDelivery?: () => LiveDelegationDelivery;
 	ircRelayTransform?: (message: CustomMessage, body: string) => string | undefined;
 	ircRelayAllowed?: (message: CustomMessage) => boolean;
 	relayGates?: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
@@ -145,7 +131,10 @@ function makeHarness(options?: {
 	const sentTurns: Harness["sentTurns"] = [];
 	const abortGates: Array<{ promise: Promise<void>; resolve: () => void }> = [];
 	const deliveries: Harness["deliveries"] = [];
+	const followUps: AgentMessage[] = [];
 	let streaming = false;
+	let bashRunning = false;
+	let evalRunning = false;
 	let sessionSubscriber: ((event: AgentSessionEvent) => void) | undefined;
 	let liveCallbacks: { onEvent(event: LiveServerEvent): void; onOutputLevel(level: number): void } | undefined;
 	const artifactPath =
@@ -154,6 +143,13 @@ function makeHarness(options?: {
 			: join(mkdtempSync(join(tmpdir(), "live-race-")), "t.live-transcript.log");
 
 	const session = {
+		agent: {
+			peekFollowUpQueue: () => followUps,
+			followUp: (message: AgentMessage) => followUps.push(message),
+			clearFollowUpQueue: () => {
+				followUps.length = 0;
+			},
+		},
 		modelRegistry: { authStorage: {} },
 		sessionId: "live-race-test",
 		sessionManager: {
@@ -169,10 +165,10 @@ function makeHarness(options?: {
 			return streaming;
 		},
 		get isBashRunning() {
-			return false;
+			return bashRunning;
 		},
 		get isEvalRunning() {
-			return false;
+			return evalRunning;
 		},
 		abort(abortOptions: Record<string, unknown>) {
 			aborts.push(abortOptions);
@@ -181,11 +177,12 @@ function makeHarness(options?: {
 			streaming = false;
 			return gate.promise;
 		},
-		sendCustomMessageWithReceipt(message: { content: string }) {
+		sendCustomMessageWithReceipt(message: { content: string }, deliveryOptions?: DeliveryControl["options"]) {
 			const acceptedGate = deferred();
 			const completedGate = deferred<boolean>();
 			const delivery: DeliveryControl = {
 				content: message.content,
+				options: deliveryOptions,
 				accepted: false,
 				cancelled: false,
 				accept() {
@@ -245,6 +242,7 @@ function makeHarness(options?: {
 		...(options?.speakableIdleMs !== undefined ? { speakableIdleMs: options.speakableIdleMs } : {}),
 		...(options?.thinkingFlushMs !== undefined ? { thinkingFlushMs: options.thinkingFlushMs } : {}),
 		blockDelegateKeyword: options?.blockDelegateKeyword,
+		delegationDelivery: options?.delegationDelivery,
 		ircRelayTransform: options?.ircRelayTransform,
 		ircRelayAllowed: options?.ircRelayAllowed,
 		relayGates: options?.relayGates,
@@ -292,6 +290,10 @@ function makeHarness(options?: {
 		fireSession: event => sessionSubscriber?.(event),
 		setStreaming: value => {
 			streaming = value;
+		},
+		setToolRunning: (kind, value) => {
+			if (kind === "bash") bashRunning = value;
+			else evalRunning = value;
 		},
 		nextAbort: () => {
 			const gate = abortGates.shift();
@@ -382,6 +384,18 @@ describe("live microphone forwarding", () => {
 	});
 });
 
+function followUpMessage(id: string): CustomMessage {
+	return {
+		role: "custom",
+		customType: LIVE_DELEGATION_MESSAGE_TYPE,
+		content: "queued operator request",
+		display: true,
+		attribution: "agent",
+		details: { delegationId: id },
+		timestamp: 1,
+	};
+}
+
 describe("live controller delegation ownership", () => {
 	it("does not create an empty forced handoff or discard speech awaiting delegation", async () => {
 		const h = makeHarness();
@@ -425,6 +439,166 @@ describe("live controller delegation ownership", () => {
 		await h.controller.stop();
 	});
 
+	it.each(["steer", "followUp", "interrupt"] as const)(
+		"keeps accepted speech exactly once across the streaming boundary in %s mode",
+		async mode => {
+			const h = makeHarness({ delegationDelivery: () => mode });
+			await h.controller.start();
+			h.setStreaming(true);
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "first request" } });
+			h.fireLive(delegation("dlg-first", ""));
+			if (mode === "interrupt") h.nextAbort().resolve();
+			await settle();
+			if (mode === "followUp") h.fireSession({ type: "message_start", message: followUpMessage("dlg-first") });
+			h.setStreaming(false);
+			h.fireSession(agentEnd([assistant("first answer", "stop")]));
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "second request" } });
+			h.fireLive(delegation("dlg-second", ""));
+			await settle();
+			if (mode === "followUp") h.fireSession({ type: "message_start", message: followUpMessage("dlg-second") });
+			expect(h.prompts).toEqual(["first request", "second request"]);
+			expect(h.sentSpeech).toEqual(["first request", "second request"]);
+			expect(h.aborts).toHaveLength(mode === "interrupt" ? 1 : 0);
+			h.fireSession(agentEnd([assistant("second answer", "stop")]));
+			await settle();
+			expect(finalAppends(h.sent).map(item => item.delegation_item_id)).toEqual(["dlg-first", "dlg-second"]);
+			await h.controller.stop();
+		},
+	);
+
+	it("speaks the preceding delegation's answer before a queued follow-up takes over", async () => {
+		let mode: LiveDelegationDelivery = "steer";
+		const h = makeHarness({ delegationDelivery: () => mode });
+		await h.controller.start();
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "first task" } });
+		h.fireLive(delegation("dlg-first", ""));
+		await settle();
+		h.setStreaming(true);
+		mode = "followUp";
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "second task" } });
+		h.fireLive(delegation("dlg-second", ""));
+		await settle();
+		const next = followUpMessage("dlg-second");
+		h.session.agent.followUp(next);
+		h.fireSession({ type: "turn_end", message: assistant("first answer", "stop"), toolResults: [] });
+		h.session.agent.clearFollowUpQueue();
+		h.fireSession({ type: "message_start", message: next });
+		h.fireSession(agentEnd([assistant("second answer", "stop")]));
+		await settle();
+		const answers = finalAppends(h.sent);
+		expect(answers.map(item => item.delegation_item_id)).toEqual(["dlg-first", "dlg-second"]);
+		expect(answers[0]?.text).toContain("first answer");
+		expect(answers[1]?.text).toContain("second answer");
+		await h.controller.stop();
+	});
+
+	it.each(["steer", "followUp", "interrupt"] as const)(
+		"moves unaccepted claims to the newest handoff in %s mode",
+		async mode => {
+			const h = makeHarness({ holdDelivery: true, delegationDelivery: () => mode });
+			await h.controller.start();
+			h.setStreaming(true);
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "A" } });
+			h.fireLive(delegation("dlg-A", ""));
+			if (mode === "interrupt") h.nextAbort().resolve();
+			await settle();
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "B" } });
+			h.fireLive(delegation("dlg-B", ""));
+			await settle();
+			expect(h.deliveries[0]?.cancelled).toBe(true);
+			h.deliveries[1]?.accept();
+			await settle();
+			expect(h.prompts).toEqual(["A\n\nB"]);
+			expect(h.sentSpeech).toEqual(["A\n\nB"]);
+			await h.controller.stop();
+		},
+	);
+
+	it.each(["bash", "eval"] as const)("starts a turn without cancelling standalone %s work", async kind => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.setToolRunning(kind, true);
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "next task" } });
+		h.fireLive(delegation("dlg-tool", ""));
+		await settle();
+		expect(h.aborts).toEqual([]);
+		expect(h.prompts).toEqual(["next task"]);
+		expect(h.deliveries[0]?.options?.triggerTurn).toBe(true);
+		expect(kind === "bash" ? h.session.isBashRunning : h.session.isEvalRunning).toBe(true);
+		await h.controller.stop();
+	});
+
+	it.each(["steer", "followUp"] as const)(
+		"waits for an earlier explicit interrupt before %s delivery",
+		async nextMode => {
+			let mode: LiveDelegationDelivery = "interrupt";
+			const h = makeHarness({ delegationDelivery: () => mode });
+			await h.controller.start();
+			h.setStreaming(true);
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "A" } });
+			h.fireLive(delegation("dlg-A", ""));
+			mode = nextMode;
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "B" } });
+			h.fireLive(delegation("dlg-B", ""));
+			await settle();
+			expect(h.prompts).toEqual([]);
+			expect(h.aborts).toHaveLength(1);
+			h.nextAbort().resolve();
+			await settle();
+			expect(h.prompts).toEqual(["A\n\nB"]);
+			await h.controller.stop();
+		},
+	);
+
+	it("reads the configured delivery mode for each handoff", async () => {
+		let mode: LiveDelegationDelivery = "followUp";
+		const h = makeHarness({ delegationDelivery: () => mode });
+		await h.controller.start();
+		h.setStreaming(true);
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "after you finish" } });
+		h.fireLive(delegation("dlg-follow", ""));
+		await settle();
+		expect(h.deliveries[0]?.options?.deliverAs).toBe("followUp");
+		expect(h.aborts).toEqual([]);
+		mode = "steer";
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "while you work" } });
+		h.fireLive(delegation("dlg-steer", ""));
+		await settle();
+		expect(h.deliveries[1]?.options).toEqual({ triggerTurn: true, steeringInterruptMode: "wait" });
+		await h.controller.stop();
+	});
+
+	it("does not suppress an explicit operator stop after a non-interrupting handoff", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.setStreaming(true);
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "do this" } });
+		h.fireLive(delegation("dlg-stop", ""));
+		await settle();
+		const stopping = h.session.abort({ reason: "Interrupted by user" });
+		h.nextAbort().resolve();
+		await stopping;
+		h.fireSession(agentEnd([assistant("", "aborted")]));
+		h.fireSession(agentEnd([assistant("unrelated later answer", "stop")]));
+		await settle();
+		expect(finalAppends(h.sent)).toEqual([]);
+		expect(h.aborts).toHaveLength(1);
+		await h.controller.stop();
+	});
+
+	it("steers ordinary streaming handoffs without interrupting active work", async () => {
+		const h = makeHarness();
+		await h.controller.start();
+		h.setStreaming(true);
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "also fix the cache" } });
+		h.fireLive(delegation("dlg-steer", "wrong"));
+		await settle();
+		expect(h.aborts).toEqual([]);
+		expect(h.session.isStreaming).toBe(true);
+		expect(h.prompts).toEqual(["also fix the cache"]);
+		expect(h.sentSpeech).toEqual(["also fix the cache"]);
+		await h.controller.stop();
+	});
 	it("forces the current composer draft independently of provider-finalized turns", async () => {
 		const h = makeHarness();
 		await h.controller.start();
@@ -913,9 +1087,7 @@ describe("live controller delegation ownership", () => {
 		h.fireLive(delegation("dlg-duplicate", "wrong one"));
 		h.fireLive(delegation("dlg-duplicate", "wrong two"));
 		await settle();
-		expect(h.aborts).toHaveLength(1);
-		h.nextAbort().resolve();
-		await settle();
+		expect(h.aborts).toEqual([]);
 		expect(h.prompts).toEqual(["do it once"]);
 		expect(h.deliveries).toHaveLength(1);
 	});
@@ -1000,6 +1172,7 @@ describe("live controller delegation ownership", () => {
 	it("sends only B when B arrives after A acceptance", async () => {
 		const h = makeHarness({ holdDelivery: true });
 		await h.controller.start();
+		h.setStreaming(true);
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "A" } });
 		h.fireLive(delegation("dlg-A", "wrong"));
 		await settle();
@@ -1032,7 +1205,7 @@ describe("live controller delegation ownership", () => {
 	});
 
 	it("suppresses the torn-down turn's late aborted settle instead of closing the new delegation", async () => {
-		const h = makeHarness();
+		const h = makeHarness({ delegationDelivery: () => "interrupt" });
 		await h.controller.start();
 		h.setStreaming(true);
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the bug" } });
@@ -1058,7 +1231,7 @@ describe("live controller delegation ownership", () => {
 	});
 
 	it("merges rapid delegations into one prompt owned by the newest survivor", async () => {
-		const h = makeHarness();
+		const h = makeHarness({ holdDelivery: true });
 		await h.controller.start();
 		h.setStreaming(true);
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "first thing" } });
@@ -1067,9 +1240,9 @@ describe("live controller delegation ownership", () => {
 		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "second thing" } });
 		h.fireLive(delegation("dlg-B", "second thing"));
 		await settle();
-		// Coalesced: one real abort for both waiters.
-		expect(h.aborts).toHaveLength(1);
-		h.nextAbort().resolve();
+		expect(h.aborts).toEqual([]);
+		expect(h.deliveries[0]?.cancelled).toBe(true);
+		h.deliveries[1]?.accept();
 		await settle();
 		expect(h.prompts).toEqual(["first thing\n\nsecond thing"]);
 
