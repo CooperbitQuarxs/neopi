@@ -80,7 +80,8 @@ jobs:
               } > "$body"
               url=$(gh pr create --base "$BASE" --head "$branch" \
                  --title "chore(promote): nightly into neopi $date" \
-                 --body-file "$body" --label upstream)
+                 --body-file "$body" --label enhancement \
+                 --label "human: pending" --label "review: codex")
               number=${url##*/}
               [ -n "$number" ] || { echo "::error::could not determine the promotion PR number"; exit 1; }
               echo "number=$number" >> "$GITHUB_OUTPUT"
