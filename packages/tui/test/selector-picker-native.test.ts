@@ -96,7 +96,7 @@ describe("short-list native picker search", () => {
 		expect(sheet(focused).props.actions?.at(-1)?.label).toBe("Back to list");
 		selector.getSelectList().handleInput("h");
 		selector.handleNativeEvent(act("close"));
-		expect(sheet(selector.describe(pickerCx)).props.query).toBe("h");
+		expect(sheet(selector.describe(pickerCx)).props.query).toBeNull();
 		expect(sheet(selector.describe(pickerCx)).props.actions?.at(-1)?.label).toBe("Close");
 		expect(log).not.toContain("cancel");
 		selector.handleNativeEvent(act("close"));

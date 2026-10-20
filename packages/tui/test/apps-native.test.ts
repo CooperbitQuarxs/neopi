@@ -121,7 +121,7 @@ describe("ps-top native", () => {
 			expect(list()?.p).toEqual(initial);
 			component.handleInput("/");
 			for (const key of "web") component.handleInput(key);
-			component.handleInput("\x1b");
+			component.handleInput("\n");
 			expect(nodes(list()?.c).filter(n => n.k === "item")).toHaveLength(1);
 			rendered = Promise.withResolvers<void>();
 			component.handleInput(" ");
@@ -129,6 +129,8 @@ describe("ps-top native", () => {
 			expect(described).toEqual(["web"]);
 			component.handleInput("h"); // Info → process table, rather than a text shortcut.
 			expect(list()).toBeDefined();
+			component.handleInput("\x1b");
+			expect(nodes(list()?.c).filter(n => n.k === "item")).toHaveLength(2);
 			component.handleInput("\x1b");
 			await running;
 		} finally {
