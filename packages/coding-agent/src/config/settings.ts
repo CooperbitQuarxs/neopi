@@ -724,6 +724,8 @@ export class Settings {
 	#modifiedProjectModelRoles = new Set<string>();
 	/** Individual project role effort selections modified during this session. */
 	#modifiedProjectRoleEfforts = new Set<string>();
+	/** Registry setting paths awaiting a project-config save. */
+	#modifiedProjectValues = new Map<string, readonly string[]>();
 	/** Individual global model roles modified during this session (for partial save) */
 	#modifiedGlobalModelRoles = new Set<string>();
 	/** Individual global role efforts changed during this session. */
@@ -1187,6 +1189,19 @@ export class Settings {
 		this.#fireChangesSince(previous);
 	}
 
+	/** Persist a registry setting to this project's config without changing user settings. */
+	writeProjectValue(setting: AnySetting, value: unknown): void {
+		if (value !== undefined) setting.assertWritable(value);
+		const previous = setting.get(this);
+		if (value === undefined) deleteByPath(this.#project, setting.segments);
+		else setByPath(this.#project, setting.segments, structuredClone(value));
+		this.#modifiedProjectValues.set(setting.id, setting.segments);
+		this.#persistedMutationGeneration++;
+		this.#rebuildMerged();
+		this.#fireIfChanged(setting, previous);
+		this.#queueProjectSave();
+	}
+
 	/** Registry plumbing behind `Setting.clearOverride`: drops the runtime override of `setting`. */
 	clearOverrideValue(setting: AnySetting): void {
 		if (setting === cfgModelRoles) {
@@ -1435,7 +1450,11 @@ export class Settings {
 		) {
 			await this.#chainSave();
 		}
-		if (this.#modifiedProjectModelRoles.size > 0 || this.#modifiedProjectRoleEfforts.size > 0) {
+		if (
+			this.#modifiedProjectModelRoles.size > 0 ||
+			this.#modifiedProjectRoleEfforts.size > 0 ||
+			this.#modifiedProjectValues.size > 0
+		) {
 			await this.#saveProjectNow();
 		}
 	}
@@ -4402,6 +4421,11 @@ export class Settings {
 		for (const role of this.#modifiedProjectModelRoles) {
 			setByPath(target, ["modelRoles", role], isRecord(liveRoles) ? liveRoles[role] : undefined);
 		}
+		for (const segments of this.#modifiedProjectValues.values()) {
+			const value = getByPath(this.#project, segments);
+			if (value === undefined) deleteByPath(target, segments);
+			else setByPath(target, segments, value);
+		}
 	}
 
 	#queueProjectSave(): void {
@@ -4428,13 +4452,18 @@ export class Settings {
 		if (
 			this.#savesCancelled ||
 			!this.#persist ||
-			(this.#modifiedProjectModelRoles.size === 0 && this.#modifiedProjectRoleEfforts.size === 0)
+			(this.#modifiedProjectModelRoles.size === 0 &&
+				this.#modifiedProjectRoleEfforts.size === 0 &&
+				this.#modifiedProjectValues.size === 0)
 		)
 			return;
 
 		const projectConfigPath = path.join(getProjectAgentDir(this.#cwd), "config.yml");
 		const modifiedModelRoles = [...this.#modifiedProjectModelRoles];
 		const modifiedRoleEfforts = [...this.#modifiedProjectRoleEfforts];
+		const modifiedValues = new Map(this.#modifiedProjectValues);
+		const projectValues = structuredClone(this.#project);
+		this.#modifiedProjectValues.clear();
 		this.#modifiedProjectRoleEfforts.clear();
 		this.#modifiedProjectModelRoles.clear();
 
@@ -4479,6 +4508,17 @@ export class Settings {
 						mutations.push({ path, operation: "set", value });
 					}
 				}
+				for (const segments of modifiedValues.values()) {
+					const value = getByPath(projectValues, segments);
+					const path = [...segments];
+					if (value === undefined) {
+						deleteByPath(projectSettings, path);
+						mutations.push({ path, operation: "delete" });
+					} else {
+						setByPath(projectSettings, path, value);
+						mutations.push({ path, operation: "set", value });
+					}
+				}
 
 				const canPatchDocument = canPatchLoadedDocument;
 				const source = loaded.generation.kind === "content" ? loaded.generation.source : "";
@@ -4497,6 +4537,7 @@ export class Settings {
 				this.#modifiedProjectModelRoles.add(role);
 			}
 			for (const role of modifiedRoleEfforts) this.#modifiedProjectRoleEfforts.add(role);
+			for (const [id, segments] of modifiedValues) this.#modifiedProjectValues.set(id, segments);
 			throw error;
 		}
 

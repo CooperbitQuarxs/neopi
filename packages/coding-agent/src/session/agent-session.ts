@@ -136,6 +136,7 @@ import {
 import { renderChatCompactionPrompt } from "../chat/chat-system-prompt";
 import { cfgChatInclude } from "../chat/settings";
 import { type ChroniclerHealth, SessionChronicler } from "../chronicler/session-chronicler";
+import { clearSessionCompactionControls } from "./compaction-controls";
 import type { SessionAccountPoolScope } from "../config/account-pools";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { EffortOrigin, EffortSelection } from "../config/effort-policy";
@@ -7398,6 +7399,7 @@ export class AgentSession implements SettingsScope {
 
 	/** Drop mutable tool decisions and directives owned by the previous logical session. */
 	#clearSessionScopedToolState(): void {
+		clearSessionCompactionControls(this.settings);
 		this.agent.clearDeferredToolDirectives();
 		this.#toolChoiceQueue.clear();
 		this.#tools.clearAcpPermissionDecisions();

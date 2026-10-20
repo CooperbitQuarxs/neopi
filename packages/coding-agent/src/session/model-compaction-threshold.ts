@@ -14,44 +14,62 @@ import {
 import type { ContextWindowTiers } from "../config/model-registry";
 import type { ScopeLike } from "../config/registry";
 import type { Settings } from "../config/settings";
+import { sessionCompactionControlKeys } from "./compaction-control-state";
 import {
 	type CompactionSettings,
 	cfgCompaction,
 	cfgCompactionModelThresholds,
 	cfgCompactionModelThresholdsEnabled,
+	cfgCompactionThresholdPercent,
 	cfgCompactionThresholdTokens,
 	cfgExtendedContext,
 } from "./context-settings";
+
+function thresholdOverrideSource(scope: ScopeLike): string | undefined {
+	const settings = "settings" in scope ? scope.settings : scope;
+	for (const setting of [cfgCompactionThresholdTokens, cfgCompactionThresholdPercent]) {
+		const source: string = setting.provenance(scope);
+		const key = setting.id.slice("compaction.".length);
+		if (source === "runtime" && sessionCompactionControlKeys.get(settings)?.has(key)) return source;
+		if (source === "role") return source;
+	}
+	return undefined;
+}
 
 /** The compaction policy in force for `model`: the configured policy with its `compaction.modelThresholds` entry applied. */
 export function resolveModelCompactionSettings(
 	scope: ScopeLike,
 	model: { provider: string; id: string } | null | undefined,
 ): CompactionSettings {
-	if (cfgCompactionThresholdTokens.provenance(scope) === "role") return cfgCompaction.get(scope);
-	const thresholds = cfgCompactionModelThresholdsEnabled.get(scope)
-		? cfgCompactionModelThresholds.get(scope)
-		: undefined;
-	return applyModelCompactionThreshold(cfgCompaction.get(scope), thresholds, model);
+	const configured = cfgCompaction.get(scope);
+	// Ad-hoc session and active-role limits outrank per-model defaults.
+	const thresholdOverride = thresholdOverrideSource(scope);
+	const thresholds =
+		!thresholdOverride && cfgCompactionModelThresholdsEnabled.get(scope)
+			? cfgCompactionModelThresholds.get(scope)
+			: undefined;
+	return applyModelCompactionThreshold(configured, thresholds, model);
 }
 
 /** Where auto-compaction triggers for `model` and which setting decides it, for the model hub preview. */
 export function describeModelCompactionPoint(scope: ScopeLike, model: Model): ModelCompactionPoint {
 	const configured = cfgCompaction.get(scope);
-	const roleBudget = cfgCompactionThresholdTokens.provenance(scope) === "role";
-	const thresholds = cfgCompactionModelThresholdsEnabled.get(scope)
-		? cfgCompactionModelThresholds.get(scope)
-		: undefined;
-	const match = roleBudget ? undefined : matchModelCompactionThreshold(thresholds, model);
-	const settings = roleBudget ? configured : applyModelCompactionThreshold(configured, thresholds, model);
+	const overrideSource = thresholdOverrideSource(scope);
+	const thresholds =
+		!overrideSource && cfgCompactionModelThresholdsEnabled.get(scope)
+			? cfgCompactionModelThresholds.get(scope)
+			: undefined;
+	const match = matchModelCompactionThreshold(thresholds, model);
+	const settings = resolveModelCompactionSettings(scope, model);
 	const contextWindow = model.contextWindow ?? 0;
 	const trigger = settings.enabled && contextWindow > 0 ? resolveTrigger(settings, contextWindow) : undefined;
 	return {
 		tokens: trigger?.tokens,
 		basis: trigger && formatBasis(trigger),
-		source: roleBudget
-			? "role"
-			: (match?.key ?? (configured.thresholdTokens > 0 || configured.thresholdPercent > 0 ? "global" : "default")),
+		source:
+			overrideSource ??
+			match?.key ??
+			(configured.thresholdTokens > 0 || configured.thresholdPercent > 0 ? "global" : "default"),
 		draft: match?.key === `${model.provider}/${model.id}` ? formatCompactionPointInput(match.threshold) : undefined,
 	};
 }
