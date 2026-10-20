@@ -4,6 +4,10 @@ provider "anthropic" {
 	default-model "claude-opus-5-5"
 	env "ANTHROPIC_API_KEY"
 	discovery label="Anthropic"
+	config-options {
+		strings "betas"
+		enum "cache_retention" "none" "short" "long"
+	}
 	web-search "anthropic"
 
 	// Prompt-cache entry lifetimes per retention tier, in seconds; feeds the

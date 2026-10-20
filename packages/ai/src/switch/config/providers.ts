@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { THINKING_EFFORTS, type Effort } from "@oh-my-pi/pi-catalog/effort";
 import { MODEL_KINDS } from "@oh-my-pi/pi-catalog/types";
 import { getProviderDefinition } from "../../registry/registry";
@@ -15,12 +16,6 @@ const KIND_PROTOCOLS = {
 	stt: "openai-transcriptions",
 	video: "openrouter-video",
 } as const;
-const OPTION_NAMES: Readonly<Record<string, readonly string[]>> = {
-	anthropic: ["betas", "cache_retention"],
-	"openai-codex": ["prefer_websockets", "text_verbosity"],
-	openrouter: ["variant"],
-	"kimi-code": ["api_format"],
-};
 
 function headers(fields: ConfigFields, value: unknown, location: string): Record<string, string> {
 	const result = fields.stringTable(value, location);
@@ -223,10 +218,8 @@ export function decodeProvider(context: DecodeContext, value: unknown, location:
 	const timeouts = f.object(row.timeouts ?? {}, `${location}.timeouts`, ["first_event_ms", "idle_ms"]);
 	const glueValue = f.optionalText(row.glue, `${location}.glue`);
 	const glue = glueValue === undefined ? undefined : path.resolve(context.configDir, glueValue);
-	const optionNames = [
-		"headers",
-		...(kind === "catalog" && Object.hasOwn(OPTION_NAMES, catalogId) ? OPTION_NAMES[catalogId] : []),
-	];
+	const optionSchema = kind === "catalog" ? providerEntry(catalogId)?.configOptions : undefined;
+	const optionNames = ["headers", ...(optionSchema ? Object.keys(optionSchema) : [])];
 	const rawOptions = row.options ?? {};
 	const beforeOptions = f.issues.length;
 	const options = f.object(
@@ -240,17 +233,25 @@ export function decodeProvider(context: DecodeContext, value: unknown, location:
 			issue.message = `Unknown provider option; accepted keys: ${optionNames.join(", ")}`;
 		}
 	if (options.headers !== undefined) options.headers = headers(f, options.headers, `${location}.options.headers`);
-	if (kind === "catalog") {
-		if (catalogId === "anthropic") {
-			if (options.betas !== undefined) f.strings(options.betas, `${location}.options.betas`);
-			f.oneOf(options.cache_retention, `${location}.options.cache_retention`, ["none", "short", "long"], true);
-		} else if (catalogId === "openai-codex") {
-			f.boolean(options.prefer_websockets, `${location}.options.prefer_websockets`, true);
-			f.oneOf(options.text_verbosity, `${location}.options.text_verbosity`, ["low", "medium", "high"], true);
-		} else if (catalogId === "openrouter") f.string(options.variant, `${location}.options.variant`, true);
-		else if (catalogId === "kimi-code")
-			f.oneOf(options.api_format, `${location}.options.api_format`, ["openai", "anthropic"], true);
-	}
+	if (optionSchema)
+		for (const [name, schema] of Object.entries(optionSchema)) {
+			const value = options[name];
+			const optionLocation = `${location}.options.${name}`;
+			switch (schema.type) {
+				case "boolean":
+					f.boolean(value, optionLocation, true);
+					break;
+				case "string":
+					f.string(value, optionLocation, true);
+					break;
+				case "strings":
+					if (value !== undefined) f.strings(value, optionLocation);
+					break;
+				case "enum":
+					f.oneOf(value, optionLocation, schema.values, true);
+					break;
+			}
+		}
 	const protocolsRaw = f.object(row.protocols ?? {}, `${location}.protocols`, Object.keys(KIND_PROTOCOLS));
 	const protocols: ProviderConfig["protocols"] = {};
 	for (const name of Object.keys(KIND_PROTOCOLS) as (keyof typeof KIND_PROTOCOLS)[])

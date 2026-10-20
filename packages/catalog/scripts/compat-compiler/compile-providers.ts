@@ -20,6 +20,7 @@ import type {
 	CompiledProviderDiscovery,
 	CompiledSeed,
 	CompiledSeedModel,
+	ProviderOptionSchema,
 	SeedBundlePolicy,
 } from "../../src/compat/types";
 import {
@@ -84,6 +85,7 @@ export const PROVIDER_CATALOG_NODES: ReadonlySet<string> = new Set([
 	"skip-cross-provider-reference-fills",
 	"discovery",
 	"kind-apis",
+	"config-options",
 	"seed",
 ]);
 
@@ -333,6 +335,34 @@ function parseKindApis(node: KdlNodeView): Partial<Record<KindApiKind, Api>> {
 	return kindApis;
 }
 
+function parseConfigOptions(node: KdlNodeView): Record<string, ProviderOptionSchema> {
+	validateProps(node, []);
+	if (node.args.length > 0 || !node.children || node.children.length === 0) malformed(node);
+	const options: Record<string, ProviderOptionSchema> = Object.create(null);
+	for (const child of node.children) {
+		validateProps(child, []);
+		if (child.children) malformed(child);
+		const [name, ...values] = positionalStrings(child);
+		if (!name || Object.hasOwn(options, name)) malformed(child);
+		switch (child.name) {
+			case "boolean":
+			case "string":
+			case "strings":
+				if (values.length > 0) malformed(child);
+				options[name] = { type: child.name };
+				break;
+			case "enum":
+				if (!values.length || values.some(value => !value) || new Set(values).size !== values.length)
+					malformed(child);
+				options[name] = { type: "enum", values };
+				break;
+			default:
+				unexpected(child, "config-options");
+		}
+	}
+	return options;
+}
+
 function parseDiscovery(node: KdlNodeView): CompiledProviderDiscovery {
 	validateProps(node, DISCOVERY_PROPS);
 	if (node.args.length > 0) malformed(node);
@@ -399,6 +429,10 @@ function parseProvider(node: KdlNodeView): ParsedProvider | undefined {
 			case "kind-apis":
 				if (provider.kindApis !== undefined) malformed(child);
 				provider.kindApis = parseKindApis(child);
+				break;
+			case "config-options":
+				if (provider.configOptions !== undefined) malformed(child);
+				provider.configOptions = parseConfigOptions(child);
 				break;
 			case "seed":
 				if (seed !== undefined) malformed(child);

@@ -4,6 +4,10 @@ provider "openai-codex" {
 	default-model "gpt-5.5"
 	env "OPENAI_CODEX_OAUTH_TOKEN"
 	dynamic-models-authoritative #true
+	config-options {
+		boolean "prefer_websockets"
+		enum "text_verbosity" "low" "medium" "high"
+	}
 	kind-apis {
 		image "openai-codex-responses"
 	}
