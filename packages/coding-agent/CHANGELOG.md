@@ -9,6 +9,7 @@
 
 ### Added
 
+- Agents can read `model://` for live model facts, supported reasoning levels, effort policy and provenance, role Auto choices and fallbacks, with observed active effort kept separate from pending Auto ([#150](https://github.com/PsychedelicShayna/neopi/issues/150)).
 - Fill missing model facts from an optional ordered source chain, pin or borrow individual fields, and add unlisted models with a provenance preview through F6 in `/models`; invalid saved fields show warnings without blocking startup, and unresolved facts preserve discovery's conservative request defaults ([#70](https://github.com/PsychedelicShayna/neopi/issues/70)).
 - `/model` opens the rich provider-sidebar picker on recently used models and switches only the current session; `/models` retains role management and `/switch` and Alt+P keep the compact picker ([#55](https://github.com/PsychedelicShayna/neopi/issues/55)).
 - Added optional global and project `settings.toml` overlays with whole-key precedence over YAML, plus `npi config dump-toml` for documented defaults ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).

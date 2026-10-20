@@ -28,6 +28,7 @@ import { IssueProtocolHandler, PrProtocolHandler } from "./issue-pr-protocol";
 import { LocalProtocolHandler } from "./local-protocol";
 import { McpProtocolHandler } from "./mcp-protocol";
 import { MemoryProtocolHandler } from "./memory-protocol";
+import { ModelProtocolHandler } from "./model-protocol";
 import { OmpProtocolHandler } from "./omp-protocol";
 import { extractUriScheme, parseInternalUrl } from "./parse";
 import { ProcProtocolHandler } from "./proc-protocol";
@@ -114,6 +115,7 @@ export class InternalUrlRouter {
 		this.register(new LocalProtocolHandler());
 		this.register(new ProcProtocolHandler());
 		this.register(new CfgProtocolHandler());
+		this.register(new ModelProtocolHandler());
 		this.register(new CompactionProtocolHandler());
 		this.register(new SshProtocolHandler());
 		// Reserved NeoPi-owned security-analysis namespace; vendor adapters normalize into its store.
