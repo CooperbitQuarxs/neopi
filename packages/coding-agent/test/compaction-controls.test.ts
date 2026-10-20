@@ -40,6 +40,21 @@ async function tempDir(): Promise<string> {
 	scratch.push(dir);
 	return dir;
 }
+it("keeps session thresholds above changing role budgets and restores the current role on reset", async () => {
+	const settings = Settings.isolated();
+	cfgCompactionModelThresholds.override(settings, { "test/model": "50%" });
+	settings.setRoleSetting("slow", cfgCompactionThresholdTokens, 120_000);
+	settings.setActiveRole("slow");
+	await runCompactionControl(settings, { action: "set", values: { thresholdPercent: 80 } });
+	expect(resolveModelCompactionSettings(settings, model)).toMatchObject({ thresholdTokens: -1, thresholdPercent: 80 });
+	settings.setRoleSetting("default", cfgCompactionThresholdTokens, 130_000);
+	settings.setActiveRole("default");
+	expect(resolveModelCompactionSettings(settings, model).thresholdPercent).toBe(80);
+	await runCompactionControl(settings, { action: "reset", keys: ["thresholdPercent"] });
+	expect(resolveModelCompactionSettings(settings, model).thresholdTokens).toBe(130_000);
+	settings.setActiveRole(undefined);
+	expect(resolveModelCompactionSettings(settings, model)).toMatchObject({ thresholdTokens: -1, thresholdPercent: 50 });
+});
 
 describe("session compaction controls", () => {
 	it("starts real Settings.init without the feature configured", async () => {

@@ -43,6 +43,7 @@ import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
 import { patchYamlDocument, type YamlPathMutation } from "./yaml-document";
 import {
 	type AnySetting,
+	type Setting,
 	all as allSettings,
 	bindEffects,
 	inheritWarnings,
@@ -55,6 +56,7 @@ import {
 // Registers every setting before any instance is read (definitions live next to their domains).
 import "./all-settings";
 import { cfgModelRoles, cfgModelRoleStorage } from "./model-settings";
+import { cfgRoleSettings } from "./role-settings";
 import {
 	cfgRoleEffortSelections,
 	cfgFallbackEffortSelections,
@@ -110,7 +112,7 @@ function validateRuntimeModelOverrides(overrides: RuntimeModelOverrides): Runtim
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Settings layer that supplies an effective value; see {@link Settings.getProvenance}. */
-export type SettingProvenance = "env" | "runtime" | "overlay" | "project" | "global" | "default";
+export type SettingProvenance = "env" | "runtime" | "role" | "overlay" | "project" | "global" | "default";
 
 /** Raw settings object as stored in YAML */
 export interface RawSettings {
@@ -680,6 +682,8 @@ export class Settings {
 	#overlayShellPathSource: string | undefined;
 	/** Runtime overrides (not persisted) */
 	#overrides: RawSettings = {};
+	/** Session-local role selection. Role defaults never write the global settings layer. */
+	#activeRole: string | null | undefined;
 	/** Active atomic model loadout and the pre-loadout runtime values it shadows. */
 	#runtimeModelOverrides: RuntimeModelOverrides | undefined;
 	#runtimeModelOverrideBaseline:
@@ -959,7 +963,12 @@ export class Settings {
 	 * says is impossible (#13183).
 	 */
 	rawValue(setting: AnySetting): unknown {
-		return configuredValue(this.#mergedView(), setting, this.#cwd);
+		const merged = this.#mergedView();
+		if (setting.roleScoped && configuredValue(this.#overrides, setting, this.#cwd) === undefined) {
+			const roleValue = this.activeRole === undefined ? undefined : this.getRoleSetting(this.activeRole, setting);
+			if (roleValue !== undefined) return roleValue;
+		}
+		return configuredValue(merged, setting, this.#cwd);
 	}
 
 	/**
@@ -968,8 +977,7 @@ export class Settings {
 	 * A configured `null` counts as unset, like in {@link rawValue}.
 	 */
 	isConfigured(setting: AnySetting): boolean {
-		const value = getByPath(this.#mergedView(), setting.segments);
-		return value !== undefined && value !== null;
+		return this.rawValue(setting) !== undefined;
 	}
 
 	/**
@@ -981,6 +989,12 @@ export class Settings {
 		if (!this.isConfigured(setting)) return "default";
 		const segments = setting.segments;
 		if (getByPath(this.#overrides, segments) !== undefined) return "runtime";
+		if (
+			setting.roleScoped &&
+			this.activeRole !== undefined &&
+			this.getRoleSetting(this.activeRole, setting) !== undefined
+		)
+			return "role";
 		if (getByPath(this.#configOverlay, segments) !== undefined) return "overlay";
 		if (getByPath(projectLayerForMerge(this.#project), segments) !== undefined) return "project";
 		if (getByPath(this.#global, segments) !== undefined) return "global";
@@ -1220,6 +1234,11 @@ export class Settings {
 
 	#fireIfChanged(setting: AnySetting, prev: unknown): void {
 		if (!Object.is(setting.get(this), prev)) this.#notifyChange(setting);
+		if (setting === cfgRoleSettings) {
+			for (const affected of allSettings()) {
+				if (affected.roleScoped) this.#notifyChange(affected);
+			}
+		}
 	}
 
 	/** Runs the listeners observing `setting`, then forwards the change to overlay children. */
@@ -1472,6 +1491,7 @@ export class Settings {
 		const layers = { ...cloned.#ownLayers(), overrides: this.#buildOriginalOverrides() };
 		for (const setting of cloned.#settlePins(layers)) cloned.#softPins.delete(setting);
 		cloned.#overrides = layers.overrides;
+		cloned.#activeRole = this.#activeRole;
 		cloned.#rebuildMerged();
 		inheritWarnings(cloned, this);
 		cloned.#validateAll();
@@ -1786,6 +1806,38 @@ export class Settings {
 		if (Object.hasOwn(this.#project, "extensions")) return "project";
 		if (this.#parent && !Object.hasOwn(this.#global, "extensions")) return this.#parent.extensionsSourceLevel();
 		return "user";
+	}
+
+	/** Active model role, inherited by settings overlays unless they select their own role. */
+	get activeRole(): string | undefined {
+		return this.#activeRole === undefined ? this.#parent?.activeRole : (this.#activeRole ?? undefined);
+	}
+
+	/** Apply persistent role defaults without changing any persisted or runtime setting. */
+	setActiveRole(role: string | undefined): void {
+		const next = role ?? null;
+		if (this.#activeRole === next) return;
+		const previous = this.#snapshot();
+		this.#activeRole = next;
+		this.#revision++;
+		this.#fireChangesSince(previous);
+	}
+
+	/** A role's explicit value, or undefined when it inherits the ordinary settings layers. */
+	getRoleSetting<T>(role: string, setting: Setting<T>): T | undefined {
+		if (!setting.roleScoped) return undefined;
+		const value = cfgRoleSettings.get(this)[role]?.[setting.id];
+		return value === null || value === undefined ? undefined : (value as T);
+	}
+
+	/** Persist one role setting. Undefined restores inheritance, including over a lower layer. */
+	setRoleSetting<T>(role: string, setting: Setting<T>, value: T | undefined): void {
+		if (!role.trim()) throw new Error("Model role must have a name");
+		if (!setting.roleScoped) throw new Error(`Setting "${setting.id}" does not support role overrides`);
+		if (value !== undefined) setting.assertRoleWritable(value);
+		const globalEntries = getByPath(this.#global, ["roleSettings", role]);
+		const entries = { ...(isRecord(globalEntries) ? globalEntries : {}), [setting.id]: value ?? null };
+		cfgRoleSettings.setEntry(this, role, entries);
 	}
 
 	#modelRolesFromLayer(layer: RawSettings): Record<string, string> {

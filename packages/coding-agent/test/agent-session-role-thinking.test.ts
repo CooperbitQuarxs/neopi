@@ -16,6 +16,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 import { cfgDefaultThinkingLevel } from "@oh-my-pi/pi-coding-agent/session/settings";
+import { cfgCompactionThresholdTokens } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 
 describe("AgentSession role model thinking behavior", () => {
 	let tempDir: TempDir;
@@ -89,6 +90,29 @@ describe("AgentSession role model thinking behavior", () => {
 			modelRegistry,
 		});
 	}
+
+	it("applies and clears role budgets through the role picker and ordinary model selection", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		await createSession({
+			initialModelId: defaultModel.id,
+			initialThinkingLevel: Effort.High,
+			modelRoles: {
+				default: `${defaultModel.provider}/${defaultModel.id}`,
+				slow: `${slowModel.provider}/${slowModel.id}`,
+			},
+		});
+		cfgCompactionThresholdTokens.set(sessionSettings, 100000);
+		sessionSettings.setRoleSetting("slow", cfgCompactionThresholdTokens, 120000);
+		await session.applyRoleModel({ role: "slow", model: slowModel });
+		expect(cfgCompactionThresholdTokens.get(sessionSettings)).toBe(120000);
+		await session.applyRoleModel({ role: "default", model: defaultModel });
+		expect(cfgCompactionThresholdTokens.get(sessionSettings)).toBe(100000);
+		await session.applyRoleModel({ role: "slow", model: slowModel });
+		await session.setModelTemporary(defaultModel);
+		expect(sessionSettings.activeRole).toBeUndefined();
+		expect(cfgCompactionThresholdTokens.get(sessionSettings)).toBe(100000);
+	});
 
 	it("re-applies explicit role thinking each time that role is selected", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");

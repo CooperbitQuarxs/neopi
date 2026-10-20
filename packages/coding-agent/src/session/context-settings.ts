@@ -185,11 +185,17 @@ export const cfgCompactionThresholdTokens = register({
 	id: "compaction.thresholdTokens",
 	type: "number",
 	default: -1,
+	roleScoped: true,
+	validateRole: value => {
+		if (value !== -1 && !(typeof value === "number" && Number.isSafeInteger(value) && value > 0))
+			throw new Error("Compaction token limit must be a positive safe integer or -1 for the default");
+	},
 	ui: {
 		tab: "context",
 		group: "Compaction",
 		label: "Compaction Token Limit",
 		description: "Fixed token limit for context maintenance; overrides percentage if set",
+		customInput: true,
 		options: [
 			{ value: "default", label: "Default", description: "Use percentage-based threshold" },
 			{ value: "25000", label: "25K tokens", description: "1/8 of a 200K window" },

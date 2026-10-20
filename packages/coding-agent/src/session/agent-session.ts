@@ -12399,6 +12399,7 @@ export class AgentSession implements SettingsScope {
 		const previousUsagePreflightReadyForNextModelCall = this.#usagePreflightReadyForNextModelCall;
 		const previousUsagePreflightReadyModel = this.#usagePreflightReadyModel;
 		const previousModel = this.model;
+		const previousActiveRole = this.settings.activeRole;
 		const previousThinkingLevel = this.thinkingLevel;
 		const previousAutoThinking = this.isAutoThinking;
 		const previousAutoResolvedLevel = this.autoResolvedThinkingLevel();
@@ -12602,6 +12603,7 @@ export class AgentSession implements SettingsScope {
 						(sessionContext.thinkingLevel as ThinkingLevel | undefined))
 					: defaultThinkingLevel;
 			const restoredRole = this.sessionManager.getLastModelChangeRole();
+			this.#models.restoreActiveRole();
 			const restoredOrigin =
 				sessionContext.effortOrigin ??
 				(restoredRole && this.settings.getModelRole(restoredRole) ? "role" : "default");
@@ -12671,6 +12673,7 @@ export class AgentSession implements SettingsScope {
 			}
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
+			this.settings.setActiveRole(previousActiveRole);
 			this.#freshProviderSessionId = previousFreshProviderSessionId;
 			this.#syncAgentSessionId(previousSessionState.sessionId, false);
 			this.#memory.rekeyForCurrentSessionId();

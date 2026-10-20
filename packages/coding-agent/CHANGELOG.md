@@ -10,6 +10,7 @@
 ### Added
 
 - Inspect, propose, set, and reset session compaction policy with `/compact control` or `compaction://`, with explicit project/user persistence and propose-only agent access by default ([#28](https://github.com/PsychedelicShayna/neopi/issues/28)).
+- Give each model role its own persistent token budget and type arbitrary global or role token limits in settings while keeping preset quick picks ([#52](https://github.com/PsychedelicShayna/neopi/issues/52)).
 - Added opt-in session work contracts with `/contract`, policy-gated agent edits, durable provenance, explicit rule promotion, and intact reinjection after compaction or resume ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
 - Configure independent prewalk planning and execution crews with ordered fallbacks in settings, see both resolved models before launch, and retain the execution brief across the handoff ([#30](https://github.com/PsychedelicShayna/neopi/issues/30)).
 - Choose the centered NPI startup banner or the original boxed NeoPi/Pi-tower banner with Startup Branding in Settings > Appearance; new remains the default.
