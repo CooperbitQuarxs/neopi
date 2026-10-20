@@ -130,7 +130,8 @@ function countPromptTokens(context: Context, tokenizer: Tokenizer): number {
 	return anchor.tokens + withMargin(tail);
 }
 
-function countContextTokens(context: Context, tokenizer: Tokenizer): number {
+/** Local prompt count, including only wire-relevant tool definition fields. */
+export function countContextTokens(context: Context, tokenizer: Tokenizer): number {
 	const { systemPrompt, tools, inactiveTools } = context;
 	return (
 		countFraming(systemPrompt, tokenizer, () => [...(systemPrompt ?? [])]) +
