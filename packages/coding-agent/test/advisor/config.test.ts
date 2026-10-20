@@ -366,7 +366,12 @@ describe("WATCHDOG.yml file round-trip", () => {
 
 	it("repairs a copied ID on save instead of collapsing identical advisors", async () => {
 		const file = path.join(tmp, "WATCHDOG.yml");
-		const copied: WatchdogConfigDoc = { advisors: [{ id: "copied", name: "Review" }, { id: "copied", name: "Review" }] };
+		const copied: WatchdogConfigDoc = {
+			advisors: [
+				{ id: "copied", name: "Review" },
+				{ id: "copied", name: "Review" },
+			],
+		};
 		await saveWatchdogConfigFile(file, copied);
 		expect(copied.advisors[0].id).toBe("copied");
 		expect(copied.advisors[1].id).not.toBe("copied");
@@ -377,7 +382,9 @@ describe("WATCHDOG.yml file round-trip", () => {
 		const theme = await getThemeByName("dark");
 		if (!theme) throw new Error("theme unavailable");
 		setThemeInstance(theme);
-		const original: WatchdogConfigDoc = { advisors: [{ id: "original-review", name: "Review" }, { name: "Review-copy" }] };
+		const original: WatchdogConfigDoc = {
+			advisors: [{ id: "original-review", name: "Review" }, { name: "Review-copy" }],
+		};
 		const overlay = new AdvisorConfigOverlayComponent(
 			{} as TUI,
 			{
@@ -416,11 +423,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 			expect(original.advisors[1].id).not.toBe(original.advisors[0].id);
 			await saveWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"), original);
 			const discovered = await discoverAdvisorConfigs(tmp, tmp);
-			expect(discovered.advisors.map(advisor => advisor.name)).toEqual([
-				"Review",
-				"Review (copy) 2",
-				"Review-copy",
-			]);
+			expect(discovered.advisors.map(advisor => advisor.name)).toEqual(["Review", "Review (copy) 2", "Review-copy"]);
 		} finally {
 			overlay.dispose();
 		}
@@ -932,7 +935,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 
 		const saved = await Bun.file(file).text();
 		expect(YAML.parse(saved)).toEqual({
-			advisors: [{ name: "Reviewer", model: "test/winner" }],
+			advisors: [{ id: expect.any(String), name: "Reviewer", model: "test/winner" }],
 		});
 		expect(saved).toContain("# row owner");
 	});
