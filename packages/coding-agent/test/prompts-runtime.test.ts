@@ -3,6 +3,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, prompt, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { runPromptsCommand } from "../src/cli/prompts-cli";
+import { getPromptAsset } from "../src/prompts/catalog";
+import { getPromptAssetKeys } from "../src/prompts/lexicon";
 import { buildSystemPrompt, type BuildSystemPromptOptions } from "../src/system-prompt";
 import { buildLivePromptContext } from "../src/prompts/contexts";
 import { resolveLiveInstructions } from "../src/live/personas";
@@ -58,6 +62,77 @@ describe("built-in prompt runtime boundaries", () => {
 			} finally {
 				resetSettingsForTest();
 			}
+		});
+	});
+
+	it("layers the family adapter after an unchanged baseline and before project context", async () => {
+		await withPromptHome(async cwd => {
+			const base = options(cwd);
+			const baseline = await buildSystemPrompt(base);
+			const opus = getBundledModel("anthropic", "claude-opus-5");
+			const adapted = await buildSystemPrompt({
+				...base,
+				activeModel: opus,
+				includeModelInPrompt: false,
+				contextFiles: [{ path: path.join(cwd, "role.md"), content: "PROJECT ROLE" }],
+			});
+			expect(adapted.systemPrompt[0]).toBe(baseline.systemPrompt[0]);
+			expect(adapted.systemPrompt[1]).toContain("Model adapter: Opus 5");
+			expect(adapted.systemPrompt[1]).toContain("anthropic / opus / 5.0.0");
+			expect(adapted.systemPrompt[1]).toContain("Recommended effort");
+			expect(adapted.systemPrompt.at(-1)).toContain("PROJECT ROLE");
+			for (const activeModel of [
+				{ ...opus, id: "claude-opus-4-8" },
+				{ ...opus, id: "claude-opus-5-5" },
+				getBundledModel("openai", "gpt-4o-mini"),
+			]) {
+				expect((await buildSystemPrompt({ ...base, activeModel })).systemPrompt).toEqual(baseline.systemPrompt);
+			}
+			const hosted = { ...opus, provider: "openrouter", id: "anthropic/claude-opus-5" };
+			expect((await buildSystemPrompt({ ...base, activeModel: hosted })).systemPrompt[1]).toBe(
+				adapted.systemPrompt[1],
+			);
+		});
+	});
+
+	it("unpacks the real adapter, renders lexicon keys, reloads overrides and disables without changing baseline", async () => {
+		await withPromptHome(async (cwd, agentDir) => {
+			const id = "model-families/opus-5.md";
+			const asset = getPromptAsset(id);
+			expect(asset).toBeDefined();
+			const keys = getPromptAssetKeys(asset!);
+			expect(keys.keys.map(key => key.path)).toEqual(["modelClass", "modelFamily", "modelRevision"]);
+			expect(keys.keys.every(key => key.usage === "used")).toBe(true);
+			let errors = "";
+			const run = (action: string, targets: string[] = []) =>
+				runPromptsCommand(
+					{ action, targets, flags: { ...(action === "unpack" ? { only: id } : {}), json: true } },
+					{
+						cwd,
+						agentDir,
+						stdout: () => {},
+						stderr: text => {
+							errors += text;
+						},
+					},
+				);
+			expect(await run("unpack")).toBe(0);
+			const userFile = path.join(agentDir, "builtin-prompts", id);
+			expect(await Bun.file(userFile).text()).toBe(asset!.bundled);
+			const base = options(cwd);
+			const baseline = await buildSystemPrompt(base);
+			const activeModel = getBundledModel("anthropic", "claude-opus-5");
+			await Bun.write(userFile, "user {{modelFamily}} {{modelRevision}}");
+			expect((await buildSystemPrompt({ ...base, activeModel })).systemPrompt[1]).toBe("user opus 5.0.0");
+			await Bun.write(override(cwd, id), "project {{modelClass}}");
+			expect((await buildSystemPrompt({ ...base, activeModel })).systemPrompt[1]).toBe("project anthropic");
+			await Bun.write(override(cwd, id), "");
+			expect(await run("check", [id]), errors).toBe(0);
+			expect((await buildSystemPrompt({ ...base, activeModel })).systemPrompt).toEqual(baseline.systemPrompt);
+			await fs.unlink(override(cwd, id));
+			expect((await buildSystemPrompt({ ...base, activeModel })).systemPrompt[1]).toBe("user opus 5.0.0");
+			await Bun.write(userFile, "{{#if broken}}");
+			await expect(buildSystemPrompt({ ...base, activeModel })).rejects.toThrow(userFile);
 		});
 	});
 

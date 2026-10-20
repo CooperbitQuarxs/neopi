@@ -4422,6 +4422,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				settingsApproval: toolSession.settingsApproval === true,
 				evalPreludes: toolSession.getAdvertisedEvalPreludes?.(),
 				model: getActiveModelString(),
+				activeModel: agent?.state.model ?? model,
 				includeModelInPrompt: cfgIncludeModelInPrompt.get(settings),
 				personality: agentKind === "sub" ? "none" : cfgPersonality.get(settings),
 				subagent: agentKind === "sub",

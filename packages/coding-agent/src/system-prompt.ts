@@ -5,7 +5,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { ToolExample, TSchema } from "@oh-my-pi/pi-ai";
+import type { Model, ToolExample, TSchema } from "@oh-my-pi/pi-ai";
 import { renderToolInventory } from "@oh-my-pi/pi-ai/dialect";
 import type { DelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
 import { $env, getAgentDir, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
@@ -23,6 +23,7 @@ import { loadSkills, type Skill } from "./extensibility/skills";
 import { InternalUrlRouter } from "./internal-urls/router";
 import type { SchemeHost } from "./internal-urls/types";
 import { buildSystemPromptContext } from "./prompts/contexts";
+import { renderModelPreset } from "./prompts/model-presets";
 import activeRepoContextTemplate from "./prompts/system/active-repo-context.md" with { type: "text" };
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
 import defaultPersonality from "./prompts/system/personalities/default.md" with { type: "text" };
@@ -601,6 +602,8 @@ export interface BuildSystemPromptOptions {
 	evalPreludes?: readonly Pick<EvalPreludeDefinition, "name" | "guidance">[];
 	/** Active model identifier (e.g. "anthropic/claude-opus-4") surfaced in the workstation block. */
 	model?: string;
+	/** Resolved active model used to select the KDL behavioral adapter, independent of display settings. */
+	activeModel?: Model;
 	/** Whether to surface `model` in the workstation block. Default: true. */
 	includeModelInPrompt?: boolean;
 	/** Personality preset rendered into the default system prompt. "none" omits the block. Default: "default" */
@@ -1080,6 +1083,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		rendered = renderPromptAsset("system/system-prompt.md", systemPromptTemplate, data, { cwd: resolvedCwd });
 	}
 	const systemPrompt = [rendered];
+	const modelPreset = renderModelPreset(options.activeModel, resolvedCwd);
+	if (modelPreset) systemPrompt.push(modelPreset);
 	for (const prelude of evalPreludes) {
 		const guidance = prelude.guidance?.trim();
 		if (guidance) systemPrompt.push(guidance);

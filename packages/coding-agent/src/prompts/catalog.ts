@@ -1,4 +1,5 @@
 import type { PromptAsset } from "./types";
+import opus5Preset from "./model-families/opus-5.md" with { type: "text" };
 import {
 	bashPromptContextFixture,
 	describePromptContext,
@@ -398,6 +399,23 @@ import asset386 from "../work-contracts/tool.md" with { type: "text" };
 
 /** Static embeds are the release source; agents remain inspectable without changing discovery. */
 export const promptAssets: readonly PromptAsset[] = [
+	{
+		id: "model-families/opus-5.md",
+		relPath: "model-families/opus-5.md",
+		bundled: opus5Preset,
+		scope: "model-family",
+		group: "core",
+		keys: [
+			{ path: "modelClass", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "modelFamily", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "modelRevision", type: "string", required: true, resolution: "session-dependent" },
+		],
+		fixture: { modelClass: "anthropic", modelFamily: "opus", modelRevision: "5.0.0" },
+		consumerHints: [
+			"packages/coding-agent/src/prompts/model-families/opus-5.md",
+			"packages/coding-agent/src/prompts/model-presets.ts",
+		],
+	},
 	{
 		id: "advisor/active-repo-watchdog.md",
 		relPath: "advisor/active-repo-watchdog.md",
