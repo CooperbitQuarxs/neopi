@@ -309,7 +309,7 @@ describe("createTools", () => {
 		expect(names).toContain("rewind");
 	});
 
-	it("keeps context transactions mounted with their operational constraints in the XD inventory", async () => {
+	it("lists context transactions in both inventories without flattening their schemas", async () => {
 		const session = createTestSession({
 			settings: createSettingsWithOverrides({ "checkpoint.enabled": true }),
 			skipPythonPreflight: true,
@@ -335,6 +335,18 @@ describe("createTools", () => {
 		expect(rewind).toContain("context transaction before yielding");
 		expect(rewind).toContain("removes intermediate exploration messages from active context");
 		expect(rewind).toContain("retains your report");
+		const catalogResult = await read.execute("list-all-capabilities", { path: "tool://" });
+		const catalog = catalogResult.content.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
+		for (const name of session.xdev?.mountedNames ?? []) {
+			expect(catalog).toContain(`tool://${encodeURIComponent(name)} [discoverable]:`);
+		}
+		for (const name of ["checkpoint", "rewind"]) {
+			const tool = session.toolRegistry?.get(name);
+			if (!tool?.summary) throw new Error(`Missing summary for ${name}`);
+			expect(catalog).toContain(tool.summary);
+			expect(tool.loadMode).toBe("discoverable");
+			expect(session.isToolActive?.(name)).toBe(false);
+		}
 	});
 
 	it("grants wait to subagents when explicitly requested", async () => {
