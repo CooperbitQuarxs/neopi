@@ -10,6 +10,7 @@
 ### Added
 
 - Generate live personas with a chosen model and explicitly selected default, persona, or prompt-template references, then edit the result before saving ([#219](https://github.com/PsychedelicShayna/neopi/issues/219)).
+- Live calls can silently load recent primary transcript history with a per-persona toggle and token budget in `/persona live` ([#205](https://github.com/PsychedelicShayna/neopi/issues/205)).
 - Named profiles can preload selected persistent memory files before the first turn through `launch-memory.json`; inspect the loaded snapshot with `/launch-profile` ([#65](https://github.com/PsychedelicShayna/neopi/issues/65)).
 - Added optional global and project `settings.toml` overlays with whole-key precedence over YAML, plus `npi config dump-toml` for documented defaults ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
 - Opt-in agent context telemetry now reports checkpoint availability and estimated recent-turn footprint, with pressure-based guidance that respects configured compaction boundaries ([#21](https://github.com/PsychedelicShayna/neopi/issues/21)).

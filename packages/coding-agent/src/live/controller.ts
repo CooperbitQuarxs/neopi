@@ -15,6 +15,8 @@ import {
 	type LiveDelegationDetails,
 	type LiveVoiceNoteEntry,
 } from "./delegation-note";
+import { buildLiveHistorySeed } from "./history-seed";
+import { resolveLiveIngestSettings } from "./ingest-settings";
 import { stripLiveKeyword } from "./keywords";
 import { resolveLiveInstructions } from "./personas";
 import agentFinalMessageTemplate from "./prompts/agent-final-message.md" with { type: "text" };
@@ -448,6 +450,10 @@ export class LiveSessionController {
 		try {
 			const user = currentUser();
 			const instructions = prompt.render(await resolveLiveInstructions(), user);
+			const historySettings = await resolveLiveIngestSettings();
+			const history = historySettings.seedHistory
+				? buildLiveHistorySeed(this.#session.messages, historySettings.seedHistoryTokens)
+				: [];
 			const transport = this.#createTransport({
 				authStorage: this.#session.modelRegistry.authStorage,
 				sessionId: this.#session.sessionId,
@@ -463,6 +469,12 @@ export class LiveSessionController {
 			await transport.connect();
 			if (this.#stopped) {
 				throw this.#failure ?? new Error("The live session stopped while connecting.");
+			}
+			// Seed before queued operator input or microphone capture can begin a live turn.
+			for (const chunk of history) {
+				if (!(await this.#queueSend(buildSessionContextAppend(chunk, "commentary")))) {
+					throw this.#failure ?? new Error("The live session stopped while seeding history.");
+				}
 			}
 			this.#connected = true;
 			const queued = this.#pendingOperatorText;

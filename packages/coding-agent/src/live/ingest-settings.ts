@@ -20,6 +20,8 @@ export interface LiveIngestPersonaSettings {
 	relayProgress: boolean;
 	relayFinalAnswers: boolean;
 	includeVoiceNote: boolean;
+	seedHistory: boolean;
+	seedHistoryTokens: number;
 }
 
 export const LIVE_INGEST_DEFAULTS: Readonly<LiveIngestPersonaSettings> = Object.freeze({
@@ -40,6 +42,8 @@ export const LIVE_INGEST_DEFAULTS: Readonly<LiveIngestPersonaSettings> = Object.
 	relayProgress: true,
 	relayFinalAnswers: true,
 	includeVoiceNote: true,
+	seedHistory: false,
+	seedHistoryTokens: 8_000,
 });
 
 function record(value: unknown): Record<string, unknown> {
@@ -88,6 +92,9 @@ export function normalizeLiveIngestSettings(partial: unknown): LiveIngestPersona
 		if (typeof value !== "boolean") throw new Error(`advisorNotes.${severity}: must be a boolean`);
 		return value;
 	};
+	const seedTokens = source.seedHistoryTokens ?? defaults.seedHistoryTokens;
+	if (!Number.isSafeInteger(seedTokens) || (seedTokens as number) < 128 || (seedTokens as number) > 64_000)
+		throw new Error("seedHistoryTokens: must be an integer between 128 and 64000");
 	return {
 		ircPrimary: boolean("ircPrimary"),
 		ircPeers: boolean("ircPeers"),
@@ -110,6 +117,8 @@ export function normalizeLiveIngestSettings(partial: unknown): LiveIngestPersona
 		relayProgress: boolean("relayProgress"),
 		relayFinalAnswers: boolean("relayFinalAnswers"),
 		includeVoiceNote: boolean("includeVoiceNote"),
+		seedHistory: boolean("seedHistory"),
+		seedHistoryTokens: seedTokens as number,
 	};
 }
 
@@ -316,6 +325,23 @@ export function liveIngestSourceFields(settings: LiveIngestPersonaSettings): Per
 			settings.includeVoiceNote,
 			"Includes voice-agent provenance in delegations; default is on.",
 		),
+		sourceBoolean(
+			"seedHistory",
+			"Seed primary transcript on call start",
+			settings.seedHistory,
+			"Loads recent primary history silently when a call starts; default is off.",
+		),
+		sourceChoice(
+			"seedHistoryTokens",
+			"History seed token budget",
+			settings.seedHistoryTokens,
+			[1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 64_000].map(value => ({
+				value: String(value),
+				label: String(value),
+			})),
+			"Caps startup history including its labels; default is 8000 tokens. Applies to the next call.",
+			"seedHistory",
+		),
 	);
 	return fields;
 }
@@ -328,6 +354,9 @@ export function liveIngestSettingsFromFields(
 	for (const field of fields ?? []) {
 		if (field.kind === "boolean") {
 			switch (field.key) {
+				case "seedHistory":
+					next.seedHistory = field.value;
+					break;
 				case "ircPrimary":
 					next.ircPrimary = field.value;
 					break;
@@ -379,6 +408,7 @@ export function liveIngestSettingsFromFields(
 		else if (field.key === "classifierQuietMs") next.classifierQuietMs = value;
 		else if (field.key === "rescoreIntervalMs") next.rescoreIntervalMs = value;
 		else if (field.key === "startAnnounceQuietMs") next.startAnnounceQuietMs = value;
+		else if (field.key === "seedHistoryTokens") next.seedHistoryTokens = value;
 		else if (field.key.startsWith("voicedSlotsByDepth.")) {
 			const index = Number(field.key.slice("voicedSlotsByDepth.".length));
 			if (Number.isInteger(index) && index >= 0 && index < next.voicedSlotsByDepth.length) {
