@@ -4,6 +4,31 @@ This document describes how the task subsystem discovers agent definitions, merg
 
 It covers runtime behavior as implemented today, including precedence, invalid-definition handling, and spawn/depth constraints that can make an agent effectively unavailable.
 
+## Launch an agent yourself
+
+Run `/agent launch` in the TUI to choose a worker preset or discovered project
+agent, an exact `provider/model` or `@role`, a supported effort, built-in tools,
+orchestration, workspace isolation and a persistent name. The effort picker
+offers only the chosen model's supported values. Both worker presets start a
+managed background task, so a parallel worker does not block the composer.
+Independent workers cannot delegate; `may-delegate` requires the task tool.
+Isolated workers retain their changes without automatically applying them.
+
+The final dialog shows the resolved model and effort, tools, name and API cost
+warning. Cancelling any dialog starts nothing. Initialization and later wake-ups
+can cost money even without useful work; the launcher does not pretend that
+an unknown idle-init price is zero. After launch, `/hub` shows the stable
+identity. Names are fixed; replacing a seat creates a separate identity rather
+than renaming its old transcript. Duplicate worker names receive a numeric suffix
+and require confirmation of that final identity.
+
+The advisor preset creates a session-local advisor with turn or agent-end review
+cadence. It does not replace `/advisor configure`, which still edits saved
+presets. Advisors share their owner's workspace and use advisor-supported tools.
+Routing policies and the persistent-agent lifecycle remain owned by their
+existing subsystems; the launcher does not implement another routing engine.
+
+
 ## Implementation files
 
 - [`src/task/discovery.ts`](../packages/coding-agent/src/task/discovery.ts)

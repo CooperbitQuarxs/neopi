@@ -137,6 +137,14 @@ describe("AgentSession advisor toggle", () => {
 		return advisor;
 	}
 
+	it("adds a named launcher advisor without changing the legacy advisor identity", () => {
+		const legacy = enableAdvisor();
+		session.launchAdvisor({ name: "Spark", model: `${model.provider}/${model.id}:low`, tools: [] });
+		expect(session.getAdvisorAgent()).toBe(legacy);
+		expect(session.getAdvisorStatusOverview().advisors.some(advisor => advisor.name === "Spark")).toBe(true);
+		expect(() => session.launchAdvisor({ name: "Spark", model: `${model.provider}/${model.id}` })).toThrow("already in use");
+	});
+
 	/**
 	 * Persist advisor turns beside a session file the same way the recorder does,
 	 * so the fixture stays valid if the transcript format ever moves.

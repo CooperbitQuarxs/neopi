@@ -119,6 +119,11 @@ export interface StructuredSubagentRequest {
 	context?: string;
 	agent?: string;
 	model?: string | string[];
+	/** Operator launcher restrictions, independent of eval-defined custom tools. */
+	tools?: string[];
+	spawns?: string[] | "*";
+	/** Refuse a spawn hook that changes the operator-confirmed model selector. */
+	confirmedModel?: string;
 	/** Presence, rather than truthiness, makes this the highest-priority schema. */
 	outputSchema?: unknown;
 	schemaMode?: StructuredSubagentSchemaMode;
@@ -438,7 +443,15 @@ export async function resolveEffectiveSubagentPolicy(
 		);
 	}
 
-	const effectiveAgent = planMode ? createPlanModeAgent(agent) : agent;
+	const selectedAgent = {
+		...agent,
+		...(request.tools !== undefined ? { tools: request.tools } : {}),
+		...(request.spawns !== undefined ? { spawns: request.spawns } : {}),
+	};
+	const effectiveAgent = planMode ? createPlanModeAgent(selectedAgent) : selectedAgent;
+	if (planMode && request.tools !== undefined) {
+		effectiveAgent.tools = effectiveAgent.tools?.filter(tool => request.tools!.includes(tool));
+	}
 	try {
 		assertExternalHarnessCapabilities(effectiveAgent);
 	} catch (error) {
@@ -633,7 +646,7 @@ function buildExecutorOptions(
 	const { session } = request;
 	const { skills, autoloadSkills } = resolveAutoloadSkills(session, policy.agent);
 	const localProtocolOptions = sessionLocalProtocolOptions(session);
-	const restrictToolNames = policy.planMode || session.restrictToolNames === true;
+	const restrictToolNames = request.tools !== undefined || policy.planMode || session.restrictToolNames === true;
 	const enableMCP = !restrictToolNames && (session.enableMCP ?? true);
 	return {
 		cwd: session.cwd,
@@ -867,6 +880,12 @@ function describeSalvagedWork(result: SingleResult): string {
  */
 export async function runStructuredSubagent(request: StructuredSubagentRequest): Promise<StructuredSubagentResult> {
 	const policy = await applySpawnHook(request, await resolveEffectiveSubagentPolicy(request));
+	if (
+		request.confirmedModel !== undefined &&
+		(policy.modelOverride?.length !== 1 || policy.modelOverride[0] !== request.confirmedModel)
+	) {
+		throw new StructuredSubagentError("preflight", "The spawn hook changed the confirmed model. Launch again to review it.");
+	}
 	const lease = await leaseArtifacts(request.session, request.invocationKind);
 	let changesApplied: boolean | null = null;
 	let mergeSummary = "";

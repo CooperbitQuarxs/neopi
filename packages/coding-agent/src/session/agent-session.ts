@@ -1026,6 +1026,7 @@ export class AgentSession implements SettingsScope {
 
 	readonly #eval: EvalRunner;
 	readonly #evalToolSession: ToolSession | undefined;
+	readonly #agentLauncherSession: ToolSession;
 	readonly #agentTelemetryHost: AgentTelemetryHost;
 	/**
 	 * AsyncJobManager owned by this session: the async-job domain of the root
@@ -1864,6 +1865,7 @@ export class AgentSession implements SettingsScope {
 			entries: () => this.sessionManager.getBranchView(),
 		};
 		evalToolSession.getAgentTelemetry ??= () => this.getAgentTelemetry();
+		this.#agentLauncherSession = evalToolSession;
 		this.#bash = new BashRunner(bashHost);
 		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
 		const evalHost: EvalRunnerHost = {
@@ -6751,6 +6753,15 @@ export class AgentSession implements SettingsScope {
 	/** Looks up a registered tool by name. */
 	getToolByName(name: string): AgentTool | undefined {
 		return this.#tools.getToolByName(name);
+	}
+
+	/** Canonical spawn context for the operator launcher, without a primary-model turn. */
+	getAgentLauncherSession(): ToolSession {
+		return this.#agentLauncherSession;
+	}
+
+	launchAdvisor(config: AdvisorConfig): void {
+		this.#advisors.launchAdvisor(config);
 	}
 
 	/** Looks up an enabled eval-bridge tool with the session's permission gate applied. */

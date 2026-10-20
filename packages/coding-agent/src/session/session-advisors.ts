@@ -573,6 +573,7 @@ export class SessionAdvisors {
 	#transformProviderContext: ((context: Context, model: Model) => Context | Promise<Context>) | undefined;
 	#advisors: ActiveAdvisor[] = [];
 	#advisorConfigs: AdvisorConfig[] | undefined;
+	#launcherLegacyConfig: AdvisorConfig | undefined;
 	#advisorConfigWarnings: string[];
 	#advisorStatuses = new Map<string, { name: string; status: AdvisorRuntimeStatus }>();
 	#advisorProviderSessionIds = new Map<string, string>();
@@ -1099,11 +1100,12 @@ export class SessionAdvisors {
 	}
 
 	#resolveAdvisorRuntimeDescriptors(emitWarnings: boolean): AdvisorRuntimeDescriptor[] {
-		const legacy = !this.#advisorConfigs?.length;
-		const roster: AdvisorConfig[] = legacy ? [{ name: "default" }] : this.#advisorConfigs!;
+		const legacyRoster = !this.#advisorConfigs?.length;
+		const roster: AdvisorConfig[] = legacyRoster ? [{ name: "default" }] : this.#advisorConfigs!;
 		const descriptors: AdvisorRuntimeDescriptor[] = [];
 		const usedSlugs = new Set<string>();
 		for (const config of roster) {
+			const legacy = legacyRoster || config === this.#launcherLegacyConfig;
 			let slug = legacy ? "" : slugifyAdvisorName(config.name);
 			if (slug) {
 				let candidate = slug;
@@ -2911,10 +2913,26 @@ export class SessionAdvisors {
 		sharedMaxNotesPerUpdate?: number,
 	): number {
 		this.#advisorConfigs = advisors;
+		this.#launcherLegacyConfig = undefined;
 		this.#advisorSharedInstructions = sharedInstructions;
 		this.#advisorSharedMaxNotesPerUpdate = sharedMaxNotesPerUpdate;
 		this.#reconcileAdvisorRuntime(true);
 		return this.#advisors.length;
+	}
+
+	/** Add a session-local operator seat without replacing the configured roster. */
+	launchAdvisor(config: AdvisorConfig): void {
+		const slug = slugifyAdvisorName(config.name);
+		if (
+			this.#advisorConfigs?.some(existing => slugifyAdvisorName(existing.name) === slug) ||
+			this.#advisors.some(existing => slugifyAdvisorName(existing.name) === slug)
+		) {
+			throw new Error(`Advisor name "${config.name}" is already in use.`);
+		}
+		if (!this.#advisorConfigs?.length && this.#advisors.length) this.#launcherLegacyConfig = { name: "default" };
+		const existing = this.#advisorConfigs?.length ? this.#advisorConfigs : this.#launcherLegacyConfig ? [this.#launcherLegacyConfig] : [];
+		this.#advisorConfigs = [...existing, config];
+		this.setAdvisorEnabled(true);
 	}
 
 	/**

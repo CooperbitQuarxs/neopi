@@ -9,6 +9,7 @@
 
 ### Added
 
+- Launch named workers and advisors yourself with `/agent launch`, choose the model, supported effort, tools and orchestration, and confirm the resolved model and cost warning before spawning ([#13](https://github.com/PsychedelicShayna/neopi/issues/13)).
 - Generate live personas with a chosen model and explicitly selected default, persona, or prompt-template references, then edit the result before saving ([#219](https://github.com/PsychedelicShayna/neopi/issues/219)).
 - Live calls can silently load recent primary transcript history with a per-persona toggle and token budget in `/persona live` ([#205](https://github.com/PsychedelicShayna/neopi/issues/205)).
 - Named profiles can preload selected persistent memory files before the first turn through `launch-memory.json`; inspect the loaded snapshot with `/launch-profile` ([#65](https://github.com/PsychedelicShayna/neopi/issues/65)).
