@@ -1,0 +1,802 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+// Subpaths, not the `@oh-my-pi/pi-utils` barrel: the barrel loads the native
+// addon (file-lock), and key-hint formatting runs on addon-free CLI paths
+// (`omp --version`, help) through cli/command-help.ts.
+import { getActiveProfile, getAgentDir, getProfileRootDir } from "@oh-my-pi/pi-utils/dirs";
+import { isEnoent } from "@oh-my-pi/pi-utils/fs-error";
+import * as logger from "@oh-my-pi/pi-utils/logger";
+import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
+import { JSONC, YAML } from "bun";
+import { formatKeyHints } from "./key-hint-format";
+import {
+	canonicalKeyId,
+	type Keybinding,
+	type KeybindingDefinitions,
+	type KeybindingsConfig,
+	type KeyId,
+	setKeybindings,
+	TUI_KEYBINDINGS,
+	KeybindingsManager as TuiKeybindingsManager,
+} from "./keybindings";
+
+/**
+ * Application-level keybindings (coding agent specific).
+ * Values are always `true` — used for declaration merging.
+ */
+interface AppKeybindings {
+	"app.interrupt": true;
+	"app.clear": true;
+	"app.exit": true;
+	"app.suspend": true;
+	"app.display.reset": true;
+	"app.thinking.cycle": true;
+	"app.thinking.toggle": true;
+	"app.model.cycleForward": true;
+	"app.model.cycleBackward": true;
+	"app.model.select": true;
+	"app.model.selectTemporary": true;
+	"app.tools.expand": true;
+	"app.tools.toggleVisibility": true;
+	"app.ask.hide": true;
+	"app.editor.external": true;
+	"app.message.followUp": true;
+	"app.message.chain": true;
+	"app.repl.toggle": true;
+	"app.repl.execute": true;
+	"app.retry": true;
+	"app.message.dequeue": true;
+	"app.clipboard.pasteImage": true;
+	"app.clipboard.pasteTextRaw": true;
+	"app.clipboard.copyLine": true;
+	"app.clipboard.copyPrompt": true;
+	"app.agents.hub": true;
+	"app.irc.viewer": true;
+	"app.session.new": true;
+	"app.session.tree": true;
+	"app.session.fork": true;
+	"app.session.resume": true;
+	"app.session.observe": true;
+	"app.session.togglePath": true;
+	"app.session.toggleSort": true;
+	"app.session.rename": true;
+	"app.session.delete": true;
+	"app.session.deleteNoninvasive": true;
+	"app.tree.previousBranch": true;
+	"app.tree.nextBranch": true;
+	"app.plan.toggle": true;
+	"app.history.search": true;
+	"app.navigation.back": true;
+	"app.navigation.forward": true;
+	"app.stt.toggle": true;
+	"app.dictation.toggle": true;
+	"app.live.toggle": true;
+	"app.live.mute": true;
+	"app.live.destination.cycle": true;
+	"app.sidebar.toggle": true;
+	"app.sidebar.scrollUp": true;
+	"app.sidebar.scrollDown": true;
+}
+
+/** Application action identifier registered alongside the base TUI keybindings. */
+export type AppKeybinding = keyof AppKeybindings;
+
+declare module "./keybindings" {
+	interface Keybindings extends AppKeybindings {}
+}
+
+/**
+ * Resolve default image-paste shortcuts for the current terminal platform.
+ */
+export function getDefaultPasteImageKeys(platform: NodeJS.Platform = process.platform): KeyId[] {
+	if (platform === "win32") return ["ctrl+v", "alt+v"];
+	if (platform === "darwin") return ["ctrl+v", "super+v"];
+	return ["ctrl+v"];
+}
+
+/**
+ * All keybindings definitions: TUI + app-specific.
+ */
+export const KEYBINDINGS = {
+	...TUI_KEYBINDINGS,
+	"app.interrupt": {
+		defaultKeys: "escape",
+		description: "Interrupt current operation",
+	},
+	"app.clear": {
+		defaultKeys: "ctrl+c",
+		description: "Clear screen or cancel",
+	},
+	"app.exit": {
+		defaultKeys: "ctrl+d",
+		description: "Exit application",
+	},
+	"app.suspend": {
+		defaultKeys: "ctrl+z",
+		description: "Suspend application",
+	},
+	"app.display.reset": {
+		defaultKeys: "alt+l",
+		description: "Reset terminal display",
+	},
+	"app.thinking.cycle": {
+		defaultKeys: "shift+tab",
+		description: "Cycle thinking level",
+	},
+	"app.thinking.toggle": {
+		defaultKeys: "ctrl+t",
+		description: "Toggle thinking mode",
+	},
+	"app.model.cycleForward": {
+		defaultKeys: "ctrl+p",
+		description: "Cycle to next model",
+	},
+	"app.model.cycleBackward": {
+		defaultKeys: "shift+ctrl+p",
+		description: "Cycle to previous model",
+	},
+	"app.model.select": {
+		defaultKeys: "alt+m",
+		description: "Select model",
+	},
+	"app.model.selectTemporary": {
+		defaultKeys: "alt+p",
+		description: "Select temporary model for current session",
+	},
+	"app.tools.expand": {
+		// Ctrl+O is menu-history back (app.navigation.back), Vim's jumplist key.
+		defaultKeys: "alt+e",
+		description: "Expand tools",
+	},
+	"app.tools.toggleVisibility": {
+		defaultKeys: "ctrl+shift+o",
+		description: "Show or hide tool activity",
+	},
+	"app.ask.hide": {
+		defaultKeys: "alt+h",
+		description: "Hide or show a pending ask dialog",
+	},
+	"app.editor.external": {
+		defaultKeys: "ctrl+g",
+		description: "Open external editor",
+	},
+	"app.message.followUp": {
+		// Ctrl+Enter is preserved for terminals that deliver it (Kitty/iTerm2/WezTerm/Ghostty),
+		// but Windows Terminal does not emit a distinct event for Ctrl+Enter — Ctrl+Q is listed
+		// first so the default binding works there without remapping (#1903).
+		defaultKeys: ["ctrl+q", "ctrl+enter"],
+		description: "Send follow-up message",
+	},
+	"app.message.chain": {
+		// Not an Enter chord: legacy terminals and tmux send Alt+Enter as ESC CR,
+		// the same bytes many terminals map Shift+Enter (newline) to.
+		defaultKeys: "alt+c",
+		description: "Send through the active post-processing chain",
+	},
+	"app.repl.toggle": {
+		// Alt+R is app.retry; the shifted chord keeps REPL on the same letter.
+		defaultKeys: "alt+shift+r",
+		description: "Toggle REPL mode between the agent and the last kernel",
+	},
+	"app.repl.execute": {
+		// Shares the follow-up chords on purpose: in REPL mode Enter inserts a
+		// newline and there is no follow-up to send, so the "send" keys run the
+		// buffer instead. Ctrl+Q leads for terminals that cannot deliver Ctrl+Enter.
+		defaultKeys: ["ctrl+q", "ctrl+enter"],
+		description: "Run the composer in the REPL kernel (REPL mode only)",
+	},
+	"app.retry": {
+		// F5 leads: it is delivered verbatim by every terminal, unlike modified
+		// Enter chords (Ctrl/Alt/Cmd+Enter), which various terminals swallow or
+		// fold into plain Enter. The idle "F5 to Retry" status row advertises it.
+		defaultKeys: ["f5", "alt+r"],
+		description: "Retry last failed assistant turn",
+	},
+	"app.message.dequeue": {
+		// Shift+Up is listed alongside Alt+Up because macOS Terminal.app consumes Option
+		// for character composition, leaving Alt+Up unreachable there.
+		defaultKeys: ["alt+up", "shift+up"],
+		description: "Dequeue message",
+	},
+	"app.clipboard.pasteImage": {
+		defaultKeys: getDefaultPasteImageKeys(),
+		description: "Paste image or text from clipboard",
+	},
+	"app.clipboard.pasteTextRaw": {
+		defaultKeys: ["ctrl+shift+v", "alt+shift+v"],
+		description: "Paste text from clipboard as raw text (no collapse)",
+	},
+	"app.clipboard.copyLine": {
+		defaultKeys: "alt+shift+l",
+		description: "Copy current line",
+	},
+	"app.clipboard.copyPrompt": {
+		defaultKeys: "alt+shift+c",
+		description: "Copy prompt",
+	},
+	"app.session.new": {
+		defaultKeys: [],
+		description: "Create new session",
+	},
+	"app.session.tree": {
+		defaultKeys: [],
+		description: "Show session tree",
+	},
+	"app.session.fork": {
+		defaultKeys: [],
+		description: "Fork session",
+	},
+	"app.session.resume": {
+		defaultKeys: [],
+		description: "Resume session",
+	},
+	"app.agents.hub": {
+		defaultKeys: "alt+a",
+		description: "Open the agent hub",
+	},
+	"app.irc.viewer": {
+		defaultKeys: "alt+i",
+		description: "Open the IRC communications viewer",
+	},
+	"app.session.observe": {
+		defaultKeys: "ctrl+s",
+		description: "Open the agent hub",
+	},
+	"app.session.togglePath": {
+		defaultKeys: "ctrl+p",
+		description: "Toggle session path display",
+	},
+	"app.session.toggleSort": {
+		defaultKeys: "ctrl+s",
+		description: "Toggle session sort order",
+	},
+	"app.session.rename": {
+		defaultKeys: "ctrl+r",
+		description: "Rename session",
+	},
+	"app.session.delete": {
+		defaultKeys: "ctrl+d",
+		description: "Delete session",
+	},
+	"app.session.deleteNoninvasive": {
+		defaultKeys: "ctrl+backspace",
+		description: "Delete session (non-invasive)",
+	},
+	"app.tree.previousBranch": {
+		defaultKeys: [],
+		description: "Jump to the previous branch in /tree",
+	},
+	"app.tree.nextBranch": {
+		defaultKeys: [],
+		description: "Jump to the next branch in /tree",
+	},
+	"app.plan.toggle": {
+		defaultKeys: "alt+shift+p",
+		description: "Toggle plan mode",
+	},
+	"app.history.search": {
+		defaultKeys: "ctrl+r",
+		description: "Search history",
+	},
+	"app.navigation.back": {
+		defaultKeys: "ctrl+o",
+		description: "Go back to the previously visited menu or the conversation",
+	},
+	"app.navigation.forward": {
+		// Ctrl+I is distinct from Tab only under the Kitty keyboard protocol or
+		// xterm modifyOtherKeys; elsewhere both arrive as 0x09 and Tab keeps its
+		// meaning (context switch, autocomplete). Alt+O works on every terminal.
+		defaultKeys: ["ctrl+i", "alt+o"],
+		description: "Go forward in the menu history",
+	},
+	// =====================================================================
+	// NEVER ALTER. CTRL+SPACE IS A RESERVED ACCESSIBILITY KEYBINDING.
+	// It MUST always route to the fork's xAI batch speech-to-text path below.
+	// NEVER favour upstream (can1357/oh-my-pi) STT/dictation here, under any
+	// circumstances, during any sync. This code is immutable: touch it only to
+	// fix a bug that makes it stop working, and only to the extent necessary.
+	// Owner: PsychedelicShayna. Rationale: docs/agents/upstream-sync.md (fork
+	// features exist for specific reasons; this one is an accessibility path).
+	// =====================================================================
+	"app.stt.toggle": {
+		defaultKeys: "ctrl+space",
+		description: "Record complete audio for xAI transcription (Ctrl+Space, reserved; not remappable)",
+	},
+	"app.dictation.toggle": {
+		defaultKeys: "ctrl+alt+space",
+		description: "Toggle configured dictation (separate from xAI whole-recording input)",
+	},
+	"app.live.toggle": {
+		defaultKeys: "ctrl+l",
+		description: "Start or stop live voice mode (/live)",
+	},
+	"app.live.mute": {
+		defaultKeys: "alt+shift+m",
+		description: "Mute or unmute the microphone during live voice mode",
+	},
+	"app.live.destination.cycle": {
+		defaultKeys: "ctrl+alt+l",
+		description: "Cycle where Enter sends composer text during live voice mode (primary / voice / both)",
+	},
+	"app.sidebar.toggle": {
+		defaultKeys: "alt+t",
+		description: "Side panel views: then t todo, a agents, i IRC (the shown view's key hides it)",
+	},
+	"app.sidebar.scrollUp": {
+		defaultKeys: "alt+shift+up",
+		description: "Scroll the side panel up",
+	},
+	"app.sidebar.scrollDown": {
+		defaultKeys: "alt+shift+down",
+		description: "Scroll the side panel down",
+	},
+} as const satisfies KeybindingDefinitions;
+
+/**
+ * System-reserved keys. Each belongs to exactly one binding: user configuration can neither remap
+ * that binding nor claim the key for another one, and extension shortcuts on it are refused.
+ * Ctrl+Space is the xAI whole-recording escape hatch and must always reach it.
+ */
+export const RESERVED_KEYS = {
+	// IMMUTABLE: see Ctrl+Space notice above
+	"ctrl+space": "app.stt.toggle",
+} as const satisfies Record<string, Keybinding>;
+
+/** Whether `key` (in any spelling `canonicalKeyId` accepts) is a system-reserved key. */
+export function isReservedKey(key: KeyId): boolean {
+	return Object.hasOwn(RESERVED_KEYS, canonicalKeyId(key));
+}
+
+const RESERVED_KEY_OWNERS: ReadonlySet<string> = new Set(Object.values(RESERVED_KEYS));
+
+/** Drop user overrides of reserved-key owners and strip reserved keys from every other binding. */
+function enforceReservedKeys(config: KeybindingsConfig): KeybindingsConfig {
+	const enforced: KeybindingsConfig = {};
+	for (const [id, keys] of Object.entries(config)) {
+		if (RESERVED_KEY_OWNERS.has(id)) {
+			logger.warn("Ignoring keybinding override for a reserved key owner", { keybinding: id });
+			continue;
+		}
+		if (keys === undefined) {
+			enforced[id] = keys;
+			continue;
+		}
+		const list = Array.isArray(keys) ? keys : [keys];
+		const kept = list.filter(key => !isReservedKey(key));
+		if (kept.length !== list.length) {
+			logger.warn("Ignoring reserved key in keybinding override", { keybinding: id, keys: list });
+		}
+		enforced[id] = kept.length === list.length ? keys : kept.length === 1 ? kept[0] : kept;
+	}
+	return enforced;
+}
+
+/**
+ * Migration map from old keybinding names to new namespaced IDs.
+ */
+const KEYBINDING_NAME_MIGRATIONS = {
+	// App-specific (old names)
+	interrupt: "app.interrupt",
+	clear: "app.clear",
+	exit: "app.exit",
+	suspend: "app.suspend",
+	displayReset: "app.display.reset",
+	cycleThinkingLevel: "app.thinking.cycle",
+	cycleModelForward: "app.model.cycleForward",
+	cycleModelBackward: "app.model.cycleBackward",
+	selectModel: "app.model.select",
+	selectModelTemporary: "app.model.selectTemporary",
+	togglePlanMode: "app.plan.toggle",
+	historySearch: "app.history.search",
+	expandTools: "app.tools.expand",
+	toggleThinking: "app.thinking.toggle",
+	externalEditor: "app.editor.external",
+	followUp: "app.message.followUp",
+	retry: "app.retry",
+	dequeue: "app.message.dequeue",
+	pasteImage: "app.clipboard.pasteImage",
+	pasteTextRaw: "app.clipboard.pasteTextRaw",
+	copyLine: "app.clipboard.copyLine",
+	copyPrompt: "app.clipboard.copyPrompt",
+	newSession: "app.session.new",
+	tree: "app.session.tree",
+	fork: "app.session.fork",
+	resume: "app.session.resume",
+	observeSessions: "app.session.observe",
+	toggleSTT: "app.stt.toggle",
+	// TUI editor (old names for backward compatibility)
+	cursorUp: "tui.editor.cursorUp",
+	cursorDown: "tui.editor.cursorDown",
+	cursorLeft: "tui.editor.cursorLeft",
+	cursorRight: "tui.editor.cursorRight",
+	cursorWordLeft: "tui.editor.cursorWordLeft",
+	cursorWordRight: "tui.editor.cursorWordRight",
+	cursorLineStart: "tui.editor.cursorLineStart",
+	cursorLineEnd: "tui.editor.cursorLineEnd",
+	jumpForward: "tui.editor.jumpForward",
+	jumpBackward: "tui.editor.jumpBackward",
+	pageUp: "tui.editor.pageUp",
+	pageDown: "tui.editor.pageDown",
+	deleteCharBackward: "tui.editor.deleteCharBackward",
+	deleteCharForward: "tui.editor.deleteCharForward",
+	deleteWordBackward: "tui.editor.deleteWordBackward",
+	deleteWordForward: "tui.editor.deleteWordForward",
+	deleteToLineStart: "tui.editor.deleteToLineStart",
+	deleteToLineEnd: "tui.editor.deleteToLineEnd",
+	yank: "tui.editor.yank",
+	yankPop: "tui.editor.yankPop",
+	undo: "tui.editor.undo",
+	// TUI input (old names for backward compatibility)
+	newLine: "tui.input.newLine",
+	submit: "tui.input.submit",
+	tab: "tui.input.tab",
+	copy: "tui.input.copy",
+	// TUI select (old names for backward compatibility)
+	selectUp: "tui.select.up",
+	selectDown: "tui.select.down",
+	selectPageUp: "tui.select.pageUp",
+	selectPageDown: "tui.select.pageDown",
+	selectConfirm: "tui.select.confirm",
+	selectCancel: "tui.select.cancel",
+	// Upstream additional migrations
+	toggleSessionNamedFilter: "app.session.togglePath",
+} as const satisfies Record<string, Keybinding>;
+
+/**
+ * Check if a key is a legacy keybinding name.
+ */
+function isLegacyKeybindingName(key: string): key is keyof typeof KEYBINDING_NAME_MIGRATIONS {
+	return key in KEYBINDING_NAME_MIGRATIONS;
+}
+
+function toKeybindingsConfig(value: unknown): KeybindingsConfig {
+	if (typeof value !== "object" || value === null) {
+		return {};
+	}
+
+	const config: KeybindingsConfig = {};
+	for (const [key, val] of Object.entries(value)) {
+		if (val === undefined) {
+			config[key] = undefined;
+		} else if (typeof val === "string") {
+			config[key] = val as KeyId;
+		} else if (Array.isArray(val) && val.every(v => typeof v === "string")) {
+			config[key] = val as KeyId[];
+		}
+	}
+	return config;
+}
+
+/**
+ * Migrate old keybinding names to new namespaced IDs.
+ * Returns both the migrated config and a flag indicating if migration occurred.
+ */
+function migrateKeybindingNames(rawConfig: unknown): {
+	config: KeybindingsConfig;
+	migrated: boolean;
+} {
+	const config = toKeybindingsConfig(rawConfig);
+	const migrated: KeybindingsConfig = {};
+	let didMigrate = false;
+
+	for (const [key, value] of Object.entries(config)) {
+		if (isLegacyKeybindingName(key)) {
+			const newKey = KEYBINDING_NAME_MIGRATIONS[key];
+			migrated[newKey] = value;
+			didMigrate = true;
+		} else {
+			// Already a new-style key
+			migrated[key] = value;
+		}
+	}
+
+	return { config: migrated, migrated: didMigrate };
+}
+
+/**
+ * Order keybindings config to match KEYBINDINGS key order.
+ */
+function orderKeybindingsConfig(config: KeybindingsConfig): KeybindingsConfig {
+	const ordered: KeybindingsConfig = {};
+	for (const key of Object.keys(KEYBINDINGS)) {
+		const value = config[key];
+		if (value !== undefined) {
+			ordered[key] = value;
+		}
+	}
+	// Add any remaining keys that aren't in KEYBINDINGS
+	for (const key of Object.keys(config)) {
+		if (!(key in ordered)) {
+			ordered[key] = config[key];
+		}
+	}
+	return ordered;
+}
+
+const KEYBINDINGS_YML = "keybindings.yml";
+const KEYBINDINGS_YAML = "keybindings.yaml";
+const LEGACY_KEYBINDINGS_JSON = "keybindings.json";
+
+interface KeybindingsConfigPaths {
+	readPath: string;
+	writeBackPath: string;
+}
+
+/** Controls inherited keybinding lookup when creating a manager for a named profile. */
+export interface KeybindingsCreateOptions {
+	/** Default-profile agent directory whose keybindings are merged before profile-specific bindings. */
+	inheritedAgentDir?: string;
+}
+
+/**
+ * Load raw config from a file synchronously.
+ * Returns parsed JSON/YAML or null if file doesn't exist or is invalid.
+ */
+function loadRawConfig(filePath: string): unknown {
+	try {
+		const content = fs.readFileSync(filePath, "utf-8");
+		if (filePath.endsWith(".json")) {
+			return JSONC.parse(content);
+		}
+		if (filePath.endsWith(".yml") || filePath.endsWith(".yaml")) {
+			return YAML.parse(content);
+		}
+		throw new Error(`Unsupported keybindings config extension: ${filePath}`);
+	} catch (error) {
+		if (isEnoent(error)) {
+			return null;
+		}
+		logger.warn("Failed to parse keybindings config", { path: filePath, error: String(error) });
+		return null;
+	}
+}
+
+export function writeKeybindingsConfig(filePath: string, config: KeybindingsConfig): boolean {
+	try {
+		fs.writeFileSync(filePath, stringifyYamlConfig(config), "utf-8");
+		logger.debug("Migrated keybindings config", { path: filePath });
+		return true;
+	} catch (error) {
+		logger.warn("Failed to write migrated keybindings config", { path: filePath, error: String(error) });
+		return false;
+	}
+}
+
+function resolveKeybindingsConfigPaths(agentDir: string): KeybindingsConfigPaths {
+	const ymlPath = path.join(agentDir, KEYBINDINGS_YML);
+	if (fs.existsSync(ymlPath)) {
+		return { readPath: ymlPath, writeBackPath: ymlPath };
+	}
+
+	const yamlPath = path.join(agentDir, KEYBINDINGS_YAML);
+	if (fs.existsSync(yamlPath)) {
+		return { readPath: yamlPath, writeBackPath: yamlPath };
+	}
+
+	const jsonPath = path.join(agentDir, LEGACY_KEYBINDINGS_JSON);
+	if (fs.existsSync(jsonPath)) {
+		return { readPath: jsonPath, writeBackPath: ymlPath };
+	}
+
+	return { readPath: ymlPath, writeBackPath: ymlPath };
+}
+
+function mergeKeybindingsConfig(
+	inheritedConfig: KeybindingsConfig,
+	profileConfig: KeybindingsConfig,
+): KeybindingsConfig {
+	return { ...inheritedConfig, ...profileConfig };
+}
+
+function resolveInheritedAgentDir(agentDir: string, options: KeybindingsCreateOptions): string | undefined {
+	const inheritedAgentDir =
+		options.inheritedAgentDir ?? (getActiveProfile() ? path.join(getProfileRootDir(undefined), "agent") : undefined);
+	if (!inheritedAgentDir) return undefined;
+	if (path.resolve(inheritedAgentDir) === path.resolve(agentDir)) return undefined;
+	return inheritedAgentDir;
+}
+
+function loadMergedKeybindingsConfig(
+	agentDir: string,
+	options: KeybindingsCreateOptions,
+): {
+	config: KeybindingsConfig;
+	profilePath: string;
+	inheritedPath: string | undefined;
+} {
+	const profilePaths = resolveKeybindingsConfigPaths(agentDir);
+	const profile = loadKeybindingsConfig(profilePaths.readPath, profilePaths.writeBackPath);
+	const inheritedAgentDir = resolveInheritedAgentDir(agentDir, options);
+	if (!inheritedAgentDir) {
+		return { config: profile.config, profilePath: profile.persistedPath, inheritedPath: undefined };
+	}
+
+	const inheritedPaths = resolveKeybindingsConfigPaths(inheritedAgentDir);
+	// Read-only: a named-profile process must never write migration output into
+	// the default profile's agent dir. Name migration still applies in-memory;
+	// the on-disk migration happens when the default profile itself launches.
+	const inherited = loadKeybindingsConfig(inheritedPaths.readPath, undefined);
+	return {
+		config: mergeKeybindingsConfig(inherited.config, profile.config),
+		profilePath: profile.persistedPath,
+		inheritedPath: inherited.persistedPath,
+	};
+}
+
+/**
+ * Load and migrate keybindings config.
+ * Legacy JSON is read for compatibility, but successful write-back goes to YAML.
+ */
+function loadKeybindingsConfig(
+	filePath: string,
+	writeBackPath: string | undefined,
+): {
+	config: KeybindingsConfig;
+	persistedPath: string;
+} {
+	const rawConfig = loadRawConfig(filePath);
+
+	if (rawConfig === null) {
+		return { config: {}, persistedPath: filePath };
+	}
+
+	const { config: migratedConfig, migrated } = migrateKeybindingNames(rawConfig);
+	const shouldWriteBack = writeBackPath !== undefined && (migrated || writeBackPath !== filePath);
+	if (shouldWriteBack) {
+		const ordered = orderKeybindingsConfig(migratedConfig);
+		const persistedPath = writeKeybindingsConfig(writeBackPath, ordered) ? writeBackPath : filePath;
+		return { config: migratedConfig, persistedPath };
+	}
+
+	return { config: migratedConfig, persistedPath: filePath };
+}
+
+/** Migrate legacy keybinding names and JSON configuration in an agent directory. */
+function migrateKeybindingsConfigFile(agentDir: string): void {
+	const { readPath, writeBackPath } = resolveKeybindingsConfigPaths(agentDir);
+	loadKeybindingsConfig(readPath, writeBackPath);
+}
+
+const FOLLOW_UP_KEYBINDING: AppKeybinding = "app.message.followUp";
+const WINDOWS_FOLLOW_UP_FALLBACK_KEY: KeyId = "ctrl+q";
+const DEQUEUE_KEYBINDING: AppKeybinding = "app.message.dequeue";
+const MACOS_DEQUEUE_FALLBACK_KEY: KeyId = "shift+up";
+function getFallbackKey(keybinding: Keybinding): KeyId | undefined {
+	if (keybinding === FOLLOW_UP_KEYBINDING) return WINDOWS_FOLLOW_UP_FALLBACK_KEY;
+	if (keybinding === DEQUEUE_KEYBINDING) return MACOS_DEQUEUE_FALLBACK_KEY;
+	return undefined;
+}
+function keyListIncludes(keys: KeyId | KeyId[] | undefined, target: KeyId): boolean {
+	if (keys === undefined) return false;
+	const keyList = Array.isArray(keys) ? keys : [keys];
+	for (const key of keyList) {
+		if (key.toLowerCase() === target) return true;
+	}
+	return false;
+}
+
+function userBindingClaimsKey(config: KeybindingsConfig, target: KeyId, except: Keybinding): boolean {
+	for (const [keybinding, keys] of Object.entries(config)) {
+		if (!(keybinding in KEYBINDINGS)) continue;
+		if (keybinding === except) continue;
+		if (keyListIncludes(keys, target)) return true;
+	}
+	return false;
+}
+
+function removeKey(keys: KeyId[], target: KeyId): KeyId[] {
+	return keys.filter(key => key !== target);
+}
+
+function keyConfigValue(keys: KeyId[]): KeyId | KeyId[] {
+	if (keys.length === 1) {
+		const key = keys[0];
+		if (key !== undefined) return key;
+	}
+	return [...keys];
+}
+
+/**
+ * Manages all keybindings (app + TUI).
+ * Extends the TUI KeybindingsManager with app-specific functionality.
+ */
+export class KeybindingsManager extends TuiKeybindingsManager {
+	#configPath: string | undefined;
+	#inheritedConfigPath: string | undefined;
+	#userBindings: KeybindingsConfig;
+
+	constructor(userBindings: KeybindingsConfig = {}, configPath?: string, inheritedConfigPath?: string) {
+		const enforced = enforceReservedKeys(userBindings);
+		super(KEYBINDINGS, enforced);
+		this.#configPath = configPath;
+		this.#inheritedConfigPath = inheritedConfigPath;
+		this.#userBindings = enforced;
+	}
+
+	/**
+	 * Create from config files at agentDir/keybindings.yml and the default profile.
+	 * Legacy keybindings.json is migrated to keybindings.yml on load.
+	 */
+	static create(agentDir: string = getAgentDir(), options: KeybindingsCreateOptions = {}): KeybindingsManager {
+		const { config: userBindings, profilePath, inheritedPath } = loadMergedKeybindingsConfig(agentDir, options);
+		const manager = new KeybindingsManager(userBindings, profilePath, inheritedPath);
+		// Set globally so getKeybindings() returns this manager
+		setKeybindings(manager);
+		return manager;
+	}
+
+	/**
+	 * Create an in-memory keybindings manager without file persistence.
+	 */
+	static inMemory(userBindings: KeybindingsConfig = {}): KeybindingsManager {
+		return new KeybindingsManager(userBindings);
+	}
+
+	/**
+	 * Reload keybindings from the config files.
+	 */
+	reload(): void {
+		if (!this.#configPath) return;
+		const { config: inheritedConfig } = this.#inheritedConfigPath
+			? KeybindingsManager.#loadFromFile(this.#inheritedConfigPath)
+			: { config: {} };
+		const { config: profileConfig } = KeybindingsManager.#loadFromFile(this.#configPath);
+		this.setUserBindings(mergeKeybindingsConfig(inheritedConfig, profileConfig));
+	}
+
+	/** Write one action's chords into the profile file and reload. */
+	setPersisted(actionId: string, keys: string[]): boolean {
+		if (!this.#configPath) return false;
+		const next = { ...this.#userBindings, [actionId]: keys } as KeybindingsConfig;
+		if (!writeKeybindingsConfig(this.#configPath, next)) return false;
+		this.reload();
+		return true;
+	}
+
+	override setUserBindings(userBindings: KeybindingsConfig): void {
+		const enforced = enforceReservedKeys(userBindings);
+		this.#userBindings = enforced;
+		super.setUserBindings(enforced);
+	}
+
+	override getKeys(keybinding: Keybinding): KeyId[] {
+		const keys = super.getKeys(keybinding);
+		const fallbackKey = getFallbackKey(keybinding);
+		if (fallbackKey === undefined || this.#userBindings[keybinding] !== undefined) return keys;
+		if (!userBindingClaimsKey(this.#userBindings, fallbackKey, keybinding)) return keys;
+		return removeKey(keys, fallbackKey);
+	}
+
+	override getResolvedBindings(): KeybindingsConfig {
+		const resolved = super.getResolvedBindings();
+		resolved[FOLLOW_UP_KEYBINDING] = keyConfigValue(this.getKeys(FOLLOW_UP_KEYBINDING));
+		return resolved;
+	}
+
+	/**
+	 * Get the effective resolved bindings (defaults + user overrides).
+	 */
+	getEffectiveConfig(): KeybindingsConfig {
+		return this.getResolvedBindings();
+	}
+
+	/** Display string for a keybinding's keys (see {@link formatKeyHints}); empty when unbound. */
+	getDisplayString(keybinding: Keybinding): string {
+		return formatKeyHints(this.getKeys(keybinding));
+	}
+
+	/**
+	 * Load user bindings from a file, migrating old names if needed.
+	 */
+	static #loadFromFile(
+		filePath: string,
+		writeBackPath?: string,
+	): { config: KeybindingsConfig; persistedPath: string } {
+		return loadKeybindingsConfig(filePath, writeBackPath);
+	}
+}
+
+export * from "./key-hint-format";
+
+export type { Keybinding, KeybindingsConfig, KeyId };
+export { migrateKeybindingsConfigFile };

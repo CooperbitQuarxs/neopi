@@ -1,0 +1,1100 @@
+/**
+ * Contract: after a deliberate user interrupt the advisor must not auto-resume
+ * the run, but its concerns must survive as visible, persisted transcript cards
+ * so they re-enter context when the user resumes. Internal (non-user) aborts keep
+ * the prior behavior — advisor advice stays in the auto-continue path.
+ *
+ * Five seams:
+ *  1. A concern already steered into the agent queue when the user hits Esc is
+ *     pulled out of the post-abort auto-continue path and re-recorded as advice.
+ *  2. A concern parked hidden (#pendingNextTurnMessages) by the suppressed
+ *     delivery while the turn is still tearing down is reclaimed once idle.
+ *  3. A non-user abort does NOT suppress: a steered advisor card still drives the
+ *     auto-continue, so the gate is keyed to the user interrupt, not any abort.
+ *  4. A user message queued (as a steer) before the interrupt is delivered on
+ *     resume even though the preserved advisor card is the trailing message.
+ *  5. The same queued as a follow-up: continuing from the preserved advisor card
+ *     (which converts to `developer`) would send an invalid provider tail, so the
+ *     follow-up stays queued for the next explicit resume rather than auto-running.
+ */
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { type } from "@oh-my-pi/omptype";
+import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { ToolCall } from "@oh-my-pi/pi-ai";
+import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
+import { LiveIngest } from "@oh-my-pi/pi-coding-agent/live/ingest";
+import { LIVE_INGEST_DEFAULTS, type LiveIngestSettingsSource } from "@oh-my-pi/pi-coding-agent/live/ingest-settings";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { convertToLlm, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { Snowflake, TempDir } from "@oh-my-pi/pi-utils";
+import { cfgAdvisorSyncBacklog } from "@oh-my-pi/pi-coding-agent/advisor/settings";
+
+interface MockYieldDetails {
+	status: "success";
+	data?: unknown;
+	type?: string | string[];
+}
+
+const mockYieldParameters = type({
+	data: "unknown",
+	"type?": "unknown",
+});
+
+const ADVISOR_TYPE = "advisor";
+
+interface ParkedHarness {
+	session: AgentSession;
+	sessionManager: SessionManager;
+	mock: MockModel;
+	/** Resolves the moment the first turn's model stream begins (deterministic
+	 *  "now streaming" signal — no wall-clock polling). */
+	streamStarted: Promise<void>;
+}
+
+interface CompletedAdvisorHarness {
+	session: AgentSession;
+	sessionManager: SessionManager;
+	mock: MockModel;
+	advisorMock: MockModel;
+}
+
+interface AdvisorTestExtensionRunner {
+	hasHandlers(eventType: string): boolean;
+	emitBeforeAgentStart(): Promise<undefined>;
+	emit(event: { type: string; message?: AgentMessage }): Promise<void>;
+}
+
+describe("AgentSession advisor auto-resume suppression", () => {
+	let tempDir: TempDir;
+	let session: AgentSession;
+	const authStorages: AuthStorage[] = [];
+
+	beforeAll(() => {
+		tempDir = TempDir.createSync("@pi-advisor-suppress-");
+	});
+
+	afterEach(async () => {
+		// dispose() aborts the agent, cancelling the parked first-turn stream.
+		try {
+			await session?.dispose();
+		} finally {
+			for (const authStorage of authStorages.splice(0)) authStorage.close();
+		}
+	});
+
+	afterAll(async () => {
+		await tempDir?.remove();
+	});
+
+	/**
+	 * First turn parks open (a 60s mock delay that abort cancels) so a steer/park
+	 * + interrupt can be sequenced while the agent is genuinely streaming. The
+	 * `streamStarted` promise resolves from the mock handler, before the delay, so
+	 * tests await the real stream-begin signal rather than a timer.
+	 */
+	async function createParkedSession(tailResponses: MockResponse[] = []): Promise<ParkedHarness> {
+		const started = Promise.withResolvers<void>();
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [
+				() => {
+					started.resolve();
+					return { content: ["working"], delayMs: 60_000 };
+				},
+				...tailResponses,
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorages.push(authStorage);
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		return { session, sessionManager, mock, streamStarted: started.promise };
+	}
+
+	function isYieldType(value: unknown): value is string | string[] {
+		return (
+			typeof value === "string" ||
+			(Array.isArray(value) && value.length > 0 && value.every(item => typeof item === "string"))
+		);
+	}
+
+	function createMockYieldTool(): AgentTool<typeof mockYieldParameters, MockYieldDetails> {
+		return {
+			name: "yield",
+			label: "Yield",
+			description: "Mock yield tool",
+			parameters: mockYieldParameters,
+			execute: async (_toolCallId, params) => {
+				const details: MockYieldDetails = { status: "success", data: params.data };
+				if (isYieldType(params.type)) details.type = params.type;
+				return {
+					content: [{ type: "text", text: "Result submitted." }],
+					details,
+				};
+			},
+		};
+	}
+
+	function createYieldMockResponse(args: { data: unknown; type?: string | string[] }): MockResponse {
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: `call_yield_${Snowflake.next()}`,
+			name: "yield",
+			arguments: args,
+		};
+		return {
+			content: [toolCall],
+			stopReason: "toolUse",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		};
+	}
+
+	async function createCompletedAdvisorSession(
+		severity: "concern" | "blocker" = "concern",
+		extensionRunner?: AdvisorTestExtensionRunner,
+	): Promise<CompletedAdvisorHarness> {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [
+				{ content: ["EXACT VERDICT"], stopReason: "stop" },
+				{ content: ["CHANGED VERDICT"], stopReason: "stop" },
+			],
+		});
+		const advisorMock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							name: "advise",
+							arguments: { note: "Fixture verdict confirmed", severity },
+						},
+					],
+				},
+			],
+			// Any further review stays silent; the advise-only turn above ends
+			// its own review without a follow-up request.
+			handler: () => ({ content: [], stopReason: "stop" }),
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({ "compaction.enabled": false, "retry.enabled": false });
+		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorages.push(authStorage);
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			advisorTools: [],
+			advisorStreamFn: advisorMock.stream,
+			extensionRunner: extensionRunner as never,
+		});
+		return { session, sessionManager, mock, advisorMock };
+	}
+
+	function advisorCard(content: string) {
+		return {
+			customType: ADVISOR_TYPE,
+			content,
+			display: true,
+			attribution: "agent" as const,
+			details: { notes: [{ note: content, severity: "concern" as const }] },
+		};
+	}
+
+	function isAdvisorCard(message: AgentMessage): message is AgentMessage & { role: "custom"; content: string } {
+		return message.role === "custom" && (message as { customType?: string }).customType === ADVISOR_TYPE;
+	}
+
+	function userMessageText(messages: AgentMessage[]): string[] {
+		const out: string[] = [];
+		for (const message of messages) {
+			if (message.role !== "user") continue;
+			const content = message.content;
+			if (typeof content === "string") {
+				out.push(content);
+			} else {
+				for (const part of content) if (part.type === "text") out.push(part.text);
+			}
+		}
+		return out;
+	}
+
+	function capturePersistedAdvice(sessionManager: SessionManager): string[] {
+		const persisted: string[] = [];
+		sessionManager.onEntryAppended = entry => {
+			if (entry.type === "custom_message" && entry.customType === ADVISOR_TYPE) {
+				persisted.push(typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content));
+			}
+		};
+		return persisted;
+	}
+
+	for (const scenario of ["concern", "blocker", "nit", "nit-continuation", "nit-abort"] as const) {
+		it(`delivers real advisor ${scenario} at its severity boundary`, async () => {
+			const continuation = scenario === "nit-continuation";
+			const abortAtCard = scenario === "nit-abort";
+			const severity = scenario === "concern" || scenario === "blocker" ? scenario : "nit";
+			const cardHookStarted = Promise.withResolvers<void>();
+			const releaseCardHook = Promise.withResolvers<void>();
+			const terminalSeen = Promise.withResolvers<void>();
+			const held = Promise.withResolvers<AbortSignal>();
+			const release = Promise.withResolvers<void>();
+			const advisedSeen = (): boolean =>
+				session
+					.getAdvisorAgent()
+					?.state.messages.some(message => message.role === "toolResult" && message.toolName === "advise") ===
+				true;
+			const aborted = Promise.withResolvers<void>();
+			const note = `Inspect the ${severity} fixture before accepting the result.`;
+			const parameters = type({});
+			const tools: AgentTool[] = [
+				{
+					name: "step",
+					label: "Step",
+					description: "Complete a primary step",
+					parameters,
+					execute: async () => ({ content: [{ type: "text", text: "checkpoint complete" }], details: {} }),
+				},
+				{
+					name: "held",
+					label: "Held",
+					description: "Hold an interruptible tool until explicitly released",
+					parameters,
+					interruptible: true,
+					execute: async (_id, _args, signal) => {
+						if (!signal) throw new Error("Expected a tool signal");
+						held.resolve(signal);
+						const onAbort = () => aborted.resolve();
+						signal.addEventListener("abort", onAbort, { once: true });
+						try {
+							await Promise.race([release.promise, aborted.promise]);
+						} finally {
+							signal.removeEventListener("abort", onAbort);
+						}
+						return {
+							content: [{ type: "text", text: signal.aborted ? "interrupted" : "held complete" }],
+							details: {},
+						};
+					},
+				},
+			];
+			const call = (name: string): MockResponse => ({
+				content: [{ type: "toolCall", name, arguments: {} }],
+				stopReason: "toolUse",
+			});
+			const mock = createMockModel({
+				responses: [
+					call("step"),
+					call("held"),
+					{ content: ["terminal result"], stopReason: "stop" },
+					{ content: ["corrected terminal result"], stopReason: "stop" },
+				],
+			});
+			const advisorMock = createMockModel({
+				responses: [
+					async () => {
+						await held.promise;
+						return {
+							content: [{ type: "toolCall", name: "advise", arguments: { note, severity } }],
+							stopReason: "toolUse",
+						};
+					},
+					async () => {
+						if (!continuation) return { content: [], stopReason: "stop" };
+						await terminalSeen.promise;
+						return {
+							content: [
+								{
+									type: "toolCall",
+									name: "advise",
+									arguments: {
+										note: "The terminal result needs its missing correction.",
+										severity: "blocker",
+									},
+								},
+							],
+							stopReason: "toolUse",
+						};
+					},
+					{ content: [], stopReason: "stop" },
+				],
+			});
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const agent = new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model, systemPrompt: ["Test"], tools },
+				streamFn: mock.stream,
+				convertToLlm,
+				interruptMode: severity === "blocker" ? "wait" : "immediate",
+			});
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.enabled": false,
+				"advisor.syncBacklog": "off",
+			});
+			settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+			const authStorage = await AuthStorage.create(":memory:");
+			authStorages.push(authStorage);
+			authStorage.keys.setRuntime("anthropic", "test-key");
+			const extensionRunner: AdvisorTestExtensionRunner | undefined = abortAtCard
+				? {
+						hasHandlers: eventType => eventType === "message_end",
+						emitBeforeAgentStart: async () => undefined,
+						emit: async event => {
+							if (event.type !== "message_end" || !event.message || !isAdvisorCard(event.message)) return;
+							cardHookStarted.resolve();
+							await releaseCardHook.promise;
+						},
+					}
+				: undefined;
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
+				advisorTools: [],
+				advisorStreamFn: advisorMock.stream,
+				extensionRunner: extensionRunner as never,
+			});
+			const spokenAdvice: string[] = [];
+			const ingestSettings = {
+				get: () => ({ ...LIVE_INGEST_DEFAULTS, subagents: false }),
+				listen: () => () => {},
+			} as unknown as LiveIngestSettingsSource;
+			const liveRegistry = new AgentRegistry();
+			liveRegistry.register({
+				id: "main-live-advisor-test",
+				displayName: "main",
+				kind: "main",
+				session,
+				status: "running",
+			});
+			const liveIngest = new LiveIngest({
+				session,
+				registry: liveRegistry,
+				subagentEventBus: undefined,
+				settings: ingestSettings,
+				sink: {
+					appendSpeakableContext: text => {
+						spokenAdvice.push(text);
+						return true;
+					},
+					appendCommentaryContext: () => {},
+					appendOverflowAlertContext: () => false,
+				},
+				extractAssistantText: () => "",
+			});
+			liveIngest.attach();
+			expect(session.setAdvisorEnabled(true)).toBe(true);
+			agent.subscribe(event => {
+				if (
+					continuation &&
+					event.type === "message_end" &&
+					event.message.role === "assistant" &&
+					event.message.content.some(part => part.type === "text" && part.text === "terminal result")
+				) {
+					cfgAdvisorSyncBacklog.override(settings, "1");
+					terminalSeen.resolve();
+				}
+			});
+			const visibleEvents: string[] = [];
+			const persistedAtEnd: boolean[] = [];
+			session.subscribe(event => {
+				if (event.type === "message_end" && isAdvisorCard(event.message) && event.message.content.includes(note)) {
+					visibleEvents.push("nit-card");
+				}
+				if (event.type === "agent_end" && event.isTerminal !== false) {
+					visibleEvents.push("terminal-end");
+					persistedAtEnd.push(
+						session.sessionManager
+							.getEntries()
+							.some(
+								entry =>
+									entry.type === "custom_message" &&
+									entry.customType === "advisor" &&
+									JSON.stringify(entry.content).includes(note),
+							),
+					);
+				}
+			});
+			const prompt = session.prompt("Run step then held, then finish.");
+			try {
+				const signal = await held.promise;
+				// An advise-only advisor turn ends without another model call, so wait
+				// for the routed note itself rather than the advisor's next request.
+				for (let i = 0; i < 200 && !agent.hasQueuedMessages() && !advisedSeen(); i++) await Bun.sleep(5);
+				if (severity === "blocker") {
+					await aborted.promise;
+					expect(signal.aborted).toBe(true);
+				} else {
+					expect(signal.aborted).toBe(false);
+					expect(mock.calls).toHaveLength(2);
+					expect(agent.state.messages.filter(isAdvisorCard)).toHaveLength(0);
+				}
+				release.resolve();
+				if (abortAtCard) {
+					await cardHookStarted.promise;
+					expect(visibleEvents).toEqual(["nit-card"]);
+					const stopping = session.abort({ reason: USER_INTERRUPT_LABEL });
+					releaseCardHook.resolve();
+					await stopping;
+				}
+				await prompt;
+				await session.waitForIdle();
+				expect(mock.calls).toHaveLength(continuation ? 4 : 3);
+				const nextContext = JSON.stringify(mock.calls[2].context.messages);
+				if (severity === "nit") expect(nextContext).not.toContain(note);
+				else expect(nextContext).toContain(note);
+				expect(
+					agent.state.messages
+						.filter(isAdvisorCard)
+						.map(card => card.content)
+						.join("\n"),
+				).toContain(note);
+				expect(visibleEvents).toEqual(["nit-card", "terminal-end"]);
+				expect(persistedAtEnd).toEqual([true]);
+				if (continuation) {
+					const continuedContext = JSON.stringify(mock.calls[3].context.messages);
+					expect(continuedContext).toContain("The terminal result needs its missing correction.");
+					expect(continuedContext).not.toContain(note);
+				}
+				expect(spokenAdvice.some(text => text.includes(note))).toBe(true);
+			} finally {
+				release.resolve();
+				releaseCardHook.resolve();
+				liveIngest.detach();
+			}
+		});
+	}
+
+	it("preserves a final-yield blocker without starting a hidden post-yield turn", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [
+				createYieldMockResponse({ data: "FINAL RESULT" }),
+				{ content: ["must not run"], stopReason: "stop" },
+			],
+		});
+		const advisorMock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							name: "advise",
+							arguments: { note: "Final yield needs correction", severity: "blocker" },
+						},
+					],
+				},
+			],
+			handler: () => ({ content: [], stopReason: "stop" }),
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [createMockYieldTool()] },
+			streamFn: mock.stream,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			"advisor.syncBacklog": "1",
+			"compaction.enabled": false,
+			"retry.enabled": false,
+		});
+		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorages.push(authStorage);
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			advisorTools: [],
+			advisorStreamFn: advisorMock.stream,
+		});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("yield the final result");
+		expect(await session.waitForAdvisorCatchup(1000)).toBe(true);
+
+		expect(advisorMock.calls).toHaveLength(1);
+		expect(mock.calls).toHaveLength(1);
+		const advisorCards = session.agent.state.messages.filter(isAdvisorCard);
+		expect(advisorCards).toHaveLength(1);
+		expect(advisorCards[0].content).toContain("Final yield needs correction");
+	});
+
+	it("preserves a late advisor concern after a terminal answer without waking the primary", async () => {
+		const { session, sessionManager, mock, advisorMock } = await createCompletedAdvisorSession();
+		const persisted = capturePersistedAdvice(sessionManager);
+
+		await session.prompt("read five fixture files and answer with exactly one line");
+		await session.waitForIdle();
+		expect(mock.calls.length).toBe(1);
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
+
+		const advisorCards = session.agent.state.messages.filter(isAdvisorCard);
+		expect(advisorCards).toHaveLength(1);
+		expect(persisted.at(-1)).toContain("Fixture verdict confirmed");
+		expect(advisorMock.calls.length).toBeGreaterThanOrEqual(1);
+		expect(mock.calls.length).toBe(1);
+	});
+
+	it("does not persist a delayed advisor card after clearing the conversation", async () => {
+		const hookStarted = Promise.withResolvers<void>();
+		const releaseHook = Promise.withResolvers<void>();
+		const extensionRunner: AdvisorTestExtensionRunner = {
+			hasHandlers: eventType => eventType === "message_end",
+			emitBeforeAgentStart: async () => undefined,
+			emit: async event => {
+				if (event.type !== "message_end" || !event.message || !isAdvisorCard(event.message)) return;
+				hookStarted.resolve();
+				await releaseHook.promise;
+			},
+		};
+		const { session, sessionManager } = await createCompletedAdvisorSession("concern", extensionRunner);
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("answer with exactly one line");
+		await hookStarted.promise;
+		try {
+			expect(await session.resetSessionContext()).toBeDefined();
+			const boundary = sessionManager.getEntries().findLastIndex(entry => entry.type === "reset_boundary");
+			expect(boundary).toBeGreaterThanOrEqual(0);
+			releaseHook.resolve();
+			await session.waitForIdle();
+			expect(
+				sessionManager
+					.getEntries()
+					.slice(boundary + 1)
+					.filter(entry => entry.type === "custom_message" && entry.customType === "advisor"),
+			).toEqual([]);
+			expect(session.agent.state.messages.filter(isAdvisorCard)).toEqual([]);
+		} finally {
+			releaseHook.resolve();
+		}
+	});
+
+	it("persists a preserved advisor card immediately but holds catch-up until its hooks settle", async () => {
+		const hookStarted = Promise.withResolvers<void>();
+		const releaseHook = Promise.withResolvers<void>();
+		const extensionRunner: AdvisorTestExtensionRunner = {
+			hasHandlers: eventType => eventType === "message_end",
+			emitBeforeAgentStart: async () => undefined,
+			emit: async event => {
+				if (event.type !== "message_end" || !event.message || !isAdvisorCard(event.message)) return;
+				hookStarted.resolve();
+				await releaseHook.promise;
+			},
+		};
+		const { session, sessionManager, mock } = await createCompletedAdvisorSession("concern", extensionRunner);
+		const persisted = capturePersistedAdvice(sessionManager);
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("answer with exactly one line");
+		await hookStarted.promise;
+
+		// Persistence is committed in emission order and never waits on extension
+		// listeners, so the card is already durable while its hook is still held.
+		expect(persisted.at(-1)).toContain("Fixture verdict confirmed");
+		expect(await session.waitForAdvisorCatchup(0)).toBe(false);
+
+		let catchupSettled = false;
+		const catchup = session.waitForAdvisorCatchup(1000).then(caughtUp => {
+			catchupSettled = true;
+			return caughtUp;
+		});
+		await Promise.resolve();
+		expect(catchupSettled).toBe(false);
+
+		releaseHook.resolve();
+		expect(await catchup).toBe(true);
+		expect(persisted).toHaveLength(1);
+		expect(mock.calls).toHaveLength(1);
+	});
+
+	it("waits for preserved advisor card start hooks before reporting catch-up", async () => {
+		const hookStarted = Promise.withResolvers<void>();
+		const releaseHook = Promise.withResolvers<void>();
+		const extensionRunner: AdvisorTestExtensionRunner = {
+			hasHandlers: eventType => eventType === "message_start",
+			emitBeforeAgentStart: async () => undefined,
+			emit: async event => {
+				if (event.type !== "message_start" || !event.message || !isAdvisorCard(event.message)) return;
+				hookStarted.resolve();
+				await releaseHook.promise;
+			},
+		};
+		const { session, mock } = await createCompletedAdvisorSession("concern", extensionRunner);
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("answer with exactly one line");
+		await hookStarted.promise;
+
+		let catchupSettled = false;
+		const catchup = session.waitForAdvisorCatchup(1000).then(caughtUp => {
+			catchupSettled = true;
+			return caughtUp;
+		});
+		await Promise.resolve();
+		expect(catchupSettled).toBe(false);
+
+		releaseHook.resolve();
+		expect(await catchup).toBe(true);
+		expect(mock.calls).toHaveLength(1);
+	});
+
+	it("steers a late advisor blocker after a terminal answer so the primary corrects it", async () => {
+		const { session, mock } = await createCompletedAdvisorSession("blocker");
+
+		await session.prompt("read five fixture files and answer with exactly one line");
+		await session.waitForIdle();
+		expect(mock.calls.length).toBe(1);
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
+
+		expect(mock.calls.length).toBe(2);
+	});
+
+	it("preserves another late advisor concern after an existing advisor card", async () => {
+		const { session, mock } = await createCompletedAdvisorSession();
+
+		await session.prompt("answer with exactly one line");
+		await session.waitForIdle();
+		session.agent.state.messages.push({
+			role: "custom",
+			...advisorCard("first late concern"),
+			timestamp: Date.now(),
+		});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
+
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(2);
+		expect(mock.calls.length).toBe(1);
+	});
+
+	it("preserves late advice after terminal text with provider metadata blocks", async () => {
+		const { session, mock } = await createCompletedAdvisorSession();
+
+		await session.prompt("answer with exactly one line");
+		await session.waitForIdle();
+		const answer = session.agent.state.messages.at(-1);
+		if (answer?.role !== "assistant") throw new Error("Expected terminal assistant answer");
+		answer.content.push(
+			{ type: "redactedThinking", data: "opaque provider reasoning" },
+			{ type: "fallback", from: { model: "first" }, to: { model: "second" } },
+		);
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
+
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
+		expect(mock.calls.length).toBe(1);
+	});
+
+	it("preserves an advisor concern steered before the user interrupt, without auto-resuming", async () => {
+		const { session, sessionManager, mock, streamStarted } = await createParkedSession();
+		const persisted = capturePersistedAdvice(sessionManager);
+
+		const running = session.prompt("do the thing");
+		await streamStarted;
+
+		// Advisor raises an interrupting concern mid-run: it lands in the steering queue.
+		await session.sendCustomMessage(advisorCard("breaks the build"), { deliverAs: "steer", triggerTurn: true });
+		expect(session.agent.peekSteeringQueue().some(isAdvisorCard)).toBe(true);
+
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+
+		// Pulled out of the auto-continue path and re-recorded as a visible/persisted card.
+		expect(session.agent.peekSteeringQueue()).toEqual([]);
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
+		expect(persisted).toEqual(["breaks the build"]);
+		// No advisor-driven resume: only the original (aborted) turn called the model.
+		expect(mock.calls.length).toBe(1);
+
+		await running.catch(() => {});
+	});
+
+	it("reclaims an advisor concern parked during abort cleanup so it is not lost", async () => {
+		const { session, sessionManager, mock, streamStarted } = await createParkedSession();
+		const persisted = capturePersistedAdvice(sessionManager);
+
+		const running = session.prompt("do the thing");
+		await streamStarted;
+
+		// A suppressed delivery arriving while the turn is still streaming parks the
+		// concern hidden in #pendingNextTurnMessages (the mid-abort race window).
+		await session.sendCustomMessage(advisorCard("parked mid-abort"), { deliverAs: "nextTurn", triggerTurn: false });
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(0);
+		expect(persisted).toEqual([]);
+
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+
+		// Reclaimed and surfaced as a visible/persisted card once the agent settles.
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
+		expect(persisted).toEqual(["parked mid-abort"]);
+		expect(mock.calls.length).toBe(1);
+
+		await running.catch(() => {});
+	});
+
+	it("keeps advisor auto-resume for a non-user (internal) abort", async () => {
+		const { session, mock, streamStarted } = await createParkedSession([{ content: ["resumed after advice"] }]);
+
+		const running = session.prompt("do the thing");
+		await streamStarted;
+
+		await session.sendCustomMessage(advisorCard("keep going"), { deliverAs: "steer", triggerTurn: true });
+		expect(session.agent.peekSteeringQueue().some(isAdvisorCard)).toBe(true);
+
+		// Internal abort (no USER_INTERRUPT_LABEL): the advisor card is NOT extracted;
+		// it stays in the queue and drives a normal auto-continue turn.
+		await session.abort();
+		await session.waitForIdle();
+		await running.catch(() => {});
+
+		expect(session.agent.peekSteeringQueue()).toEqual([]);
+		expect(mock.calls.length).toBe(2);
+	});
+
+	it("reclaims a stranded advisor steer on settle while suppressed, instead of auto-resuming the stopped run", async () => {
+		// Residual edge exposed once interrupting advice is steered (not parked) into a
+		// resumed streaming run: a concern can land in the steer queue past the loop's
+		// final boundary poll and strand. The steer queue otherwise bypasses the
+		// suppression latch in #canAutoContinueForFollowUp, so the idle settle would
+		// auto-resume the run the user stopped. The settle drain must instead reclaim the
+		// stranded advisor steer as visible advice. (A non-user abort is used purely as a
+		// deterministic settle trigger — it neither extracts advisor cards nor clears the
+		// latch — standing in for the natural #endInFlight settle after the resumed turn.)
+		const { session, sessionManager, mock, streamStarted } = await createParkedSession([
+			{ content: ["must not auto-resume"] },
+		]);
+		const persisted = capturePersistedAdvice(sessionManager);
+
+		const running = session.prompt("do the thing");
+		await streamStarted;
+
+		// User interrupt latches suppression.
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+		await running.catch(() => {});
+		expect(mock.calls.length).toBe(1);
+
+		// A concern strands in the steer queue (steered past the resumed turn's last poll).
+		session.agent.steer({
+			role: "custom",
+			customType: ADVISOR_TYPE,
+			content: "stranded tail concern",
+			display: true,
+			attribution: "agent",
+			details: { notes: [{ note: "stranded tail concern", severity: "concern" }] },
+			timestamp: Date.now(),
+		} as AgentMessage);
+		expect(session.agent.peekSteeringQueue().some(isAdvisorCard)).toBe(true);
+
+		// Settle while suppression is still in effect.
+		await session.abort();
+		await session.waitForIdle();
+
+		// Reclaimed as visible/persisted advice; the steer queue is emptied and NO
+		// advisor-only auto-resume turn ran (model still called exactly once).
+		expect(session.agent.peekSteeringQueue()).toEqual([]);
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
+		expect(persisted).toEqual(["stranded tail concern"]);
+		expect(mock.calls.length).toBe(1);
+	});
+
+	it("resumes a queued user steer stranded behind a preserved advisor card", async () => {
+		// Reported bug: typing a message during a run (queued as a steer) then pressing
+		// enter again (empty-submit interrupt) recorded the advisor card but stranded the
+		// user message — nothing resumed the run. The preserved advisor card is the
+		// trailing `custom` message, which #canAutoContinueForFollowUp must look past.
+		const { session, sessionManager, mock, streamStarted } = await createParkedSession([
+			{ content: ["resumed on the steer"] },
+		]);
+		const persisted = capturePersistedAdvice(sessionManager);
+
+		const running = session.prompt("do the thing");
+		await streamStarted;
+
+		await session.sendCustomMessage(advisorCard("breaks the build"), { deliverAs: "steer", triggerTurn: true });
+		await session.prompt("also rename the helper", { streamingBehavior: "steer" });
+
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+		await running.catch(() => {});
+
+		// Advisor card preserved as a visible/persisted card AND the user steer delivered
+		// in exactly one resume turn (no spurious extra call).
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
+		expect(persisted).toEqual(["breaks the build"]);
+		expect(session.agent.peekSteeringQueue()).toEqual([]);
+		expect(mock.calls.length).toBe(2);
+		expect(userMessageText(session.agent.state.messages)).toContain("also rename the helper");
+	});
+
+	it("leaves a queued user follow-up queued behind a preserved advisor card", async () => {
+		// Same stranding, but the user message was queued as a follow-up (Ctrl+Enter).
+		// Only steering resumes safely behind a preserved advisor card: agentLoopContinue
+		// injects steering before the next model call, keeping the request tail valid. A
+		// follow-up would instead resume by continuing from the advisor card (which converts
+		// to `developer`) as the tail — a provider-invalid request — so it is NOT auto-run.
+		// It stays queued for the next explicit user resume.
+		const { session, sessionManager, mock, streamStarted } = await createParkedSession([
+			{ content: ["must not run"] },
+		]);
+		const persisted = capturePersistedAdvice(sessionManager);
+
+		const running = session.prompt("do the thing");
+		await streamStarted;
+
+		await session.sendCustomMessage(advisorCard("missing a guard"), { deliverAs: "steer", triggerTurn: true });
+		await session.prompt("then add the test", { streamingBehavior: "followUp" });
+
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+		await running.catch(() => {});
+
+		// Advisor preserved as a visible/persisted card; the follow-up stays queued and
+		// drives no resume (only the original, aborted turn ever called the model).
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
+		expect(persisted).toEqual(["missing a guard"]);
+		expect(userMessageText([...session.agent.peekFollowUpQueue()])).toContain("then add the test");
+		expect(userMessageText(session.agent.state.messages)).not.toContain("then add the test");
+		expect(mock.calls.length).toBe(1);
+	});
+
+	it("releases a strict final-review wait on user stop and preserves its blocker without restarting the run", async () => {
+		// A strict catch-up wait has no wall-clock cap: only an explicit release
+		// (here a user interrupt) may unblock the boundary. The stop must also
+		// stay authoritative at the boundary flush afterwards: the blocker the
+		// review already delivered is preserved as a visible card, never steered
+		// into a continuation of the run the user just stopped.
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [
+				{ content: ["FINAL ANSWER"], stopReason: "stop" },
+				{ content: ["must not run"], stopReason: "stop" },
+			],
+		});
+		const reviewParked = Promise.withResolvers<void>();
+		const releaseReview = Promise.withResolvers<void>();
+		// An advise-only advisor turn ends the review, so the review is held open
+		// by a sibling tool call in the same turn. `exclusive` runs it after the
+		// advise call settles: the blocker is already routed (buffered at the open
+		// boundary) while this tool parks the strict wait.
+		const parkTool: AgentTool = {
+			name: "read",
+			label: "Read",
+			description: "Parks until released",
+			parameters: type({ "path?": "string" }),
+			concurrency: "exclusive",
+			execute: async () => {
+				reviewParked.resolve();
+				await releaseReview.promise;
+				return { content: [{ type: "text" as const, text: "audit.sql" }] };
+			},
+		};
+		const advisorMock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							name: "advise",
+							arguments: { note: "shipped code deletes the audit table", severity: "blocker" },
+						},
+						{ type: "toolCall", name: "read", arguments: { path: "audit.sql" } },
+					],
+				},
+				{ content: [], stopReason: "stop" },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			"advisor.syncBacklog": "strict",
+			"compaction.enabled": false,
+			"retry.enabled": false,
+		});
+		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorages.push(authStorage);
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			advisorTools: [parkTool],
+			advisorStreamFn: advisorMock.stream,
+		});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+
+		const running = session.prompt("finish the task");
+		// The primary answered; the strict boundary wait is now parked on the
+		// review's sibling tool call. Without a release this would hang forever.
+		await reviewParked.promise;
+
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+		await running.catch(() => {});
+
+		// The explicit stop released the strict wait; the buffered blocker was
+		// preserved as a visible card and did NOT restart the stopped run.
+		expect(mock.calls.length).toBe(1);
+		const cards = session.agent.state.messages.filter(isAdvisorCard);
+		expect(cards.some(card => card.content.includes("deletes the audit table"))).toBe(true);
+
+		// Releasing the parked review afterwards still starts nothing: the note
+		// was already delivered and no new advice arrives.
+		releaseReview.resolve();
+		expect(await session.waitForAdvisorCatchup(1000)).toBe(true);
+		expect(mock.calls.length).toBe(1);
+	});
+
+	it("wakes a turn for an IRC aside stranded across a user interrupt", async () => {
+		const { session, mock, streamStarted } = await createParkedSession([{ content: ["replying to peer"] }]);
+		const running = session.prompt("do the thing");
+		await streamStarted;
+		// IRC arrives mid-turn → queued as a non-interrupting aside.
+		await session.deliverIrcMessage({ id: "m1", from: "peer", to: "me", body: "ping", ts: Date.now() } as IrcMessage);
+		// The user interrupt skips the loop's final aside poll, stranding the aside with no loop to
+		// drain it. The settle drain must wake a turn so the peer still gets a response.
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+		await running.catch(() => {});
+
+		const sawIrc = session.agent.state.messages.some(
+			m => m.role === "custom" && (m as { customType?: string }).customType === "irc:incoming",
+		);
+		expect(sawIrc).toBe(true);
+		expect(mock.calls.length).toBe(2);
+	});
+
+	it("stops an idle IRC wake after a terminal yield", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		let providerCalls = 0;
+		const mock = createMockModel({
+			handler: () => {
+				providerCalls++;
+				if (providerCalls > 1) {
+					throw new Error("terminal yield must not start a second provider call");
+				}
+				return createYieldMockResponse({ data: { ok: true } });
+			},
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [createMockYieldTool()] },
+			streamFn: mock.stream,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorages.push(authStorage);
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		const msg: IrcMessage = { id: "m-yield", from: "peer", to: "me", body: "status?", ts: Date.now() };
+
+		const outcome = await session.deliverIrcMessage(msg);
+		await session.waitForIdle();
+
+		expect(outcome).toBe("woken");
+		expect(providerCalls).toBe(1);
+		expect(mock.calls.length).toBe(1);
+	});
+
+	it("flushes an accepted IRC aside on dispose instead of dropping it", async () => {
+		const { session, streamStarted } = await createParkedSession();
+		const running = session.prompt("do the thing");
+		await streamStarted;
+		await session.deliverIrcMessage({ id: "m1", from: "peer", to: "me", body: "ping", ts: Date.now() } as IrcMessage);
+		// Dispose mid-flight persists the accepted aside to the transcript rather than dropping it.
+		session.beginDispose();
+		const sawIrc = session.agent.state.messages.some(
+			m => m.role === "custom" && (m as { customType?: string }).customType === "irc:incoming",
+		);
+		expect(sawIrc).toBe(true);
+		running.catch(() => {});
+	});
+
+	it("responds to a stranded IRC aside while keeping a blocked follow-up queued", async () => {
+		const { session, mock, streamStarted } = await createParkedSession([{ content: ["replying to peer"] }]);
+		const running = session.prompt("do the thing");
+		await streamStarted;
+		// The user queues a follow-up (Ctrl+Enter) and an IRC ping lands as an aside...
+		await session.prompt("then add the test", { streamingBehavior: "followUp" });
+		await session.deliverIrcMessage({ id: "m2", from: "peer", to: "me", body: "ping", ts: Date.now() } as IrcMessage);
+		// ...then the user interrupts. The IRC must still get a response, but the user's queued
+		// follow-up must NOT auto-run (seam #5) even though the IRC wake turn leaves a valid tail.
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+		await running.catch(() => {});
+
+		const sawIrc = session.agent.state.messages.some(
+			m => m.role === "custom" && (m as { customType?: string }).customType === "irc:incoming",
+		);
+		expect(sawIrc).toBe(true);
+		expect(userMessageText([...session.agent.peekFollowUpQueue()])).toContain("then add the test");
+		expect(userMessageText(session.agent.state.messages)).not.toContain("then add the test");
+		expect(mock.calls.length).toBe(2);
+	});
+});

@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# Install packages/coding-agent/dist/npi (built by ./build.sh).
+#
+# Environment:
+#   NPI_DEST              install path; its file name must be npi (default ~/.local/bin/npi)
+#   PI_CODING_AGENT_DIR   setting it makes this a staged install: the smoke tests run under a
+#                         throwaway HOME, and the live native cache is left alone.
+#   NPI_INSTALL_FORCE=1   explicitly override an active proof-session lock.
+set -euo pipefail
+
+cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+
+die() {
+	printf 'install.sh: error: %s\n' "$*" >&2
+	exit 1
+}
+say() { printf 'install.sh: %s\n' "$*"; }
+# shellcheck source=scripts/npi-build-lib.sh
+source scripts/npi-build-lib.sh
+# shellcheck source=scripts/install-lock.sh
+source scripts/install-lock.sh
+
+dest=$(npi_install_dest)
+# The fork installs only as npi, and `npi update` routing keys on that basename.
+[[ $(basename -- "$dest") == npi ]] || die "install path must be named npi, got $dest"
+npi_install_lock_check "$dest" || exit 1
+
+command -v bun >/dev/null || die "bun is not on PATH"
+
+binary=packages/coding-agent/dist/npi
+version=$(bun -p 'require("./packages/coding-agent/package.json").version')
+
+[[ -x $binary && -f $binary.source ]] || die "$binary is missing or was not built by ./build.sh; run ./build.sh"
+source_id=$(source_id)
+binary_sha=$(sha256sum -- "$binary" | cut -d" " -f1)
+[[ $(<"$binary.source") == "$source_id"$'\n'"$binary_sha" ]] ||
+	die "$binary was not built by ./build.sh from this checkout as it is now; run ./build.sh"
+
+# Stage next to the destination, prove the staged copy runs, then rename over
+# the destination: atomic, and a running npi keeps its old inode instead of
+# failing with ETXTBSY or reading a torn file. A broken build is never installed.
+staging=0
+[[ -n ${PI_CODING_AGENT_DIR:-} ]] && staging=1
+smoke_home=""
+mkdir -p -- "$(dirname -- "$dest")"
+staged=$(mktemp "$dest.new.XXXXXX")
+# The previous binary, kept (as a hard link to its inode) until the installed binary passes
+# its smoke test; any failure after the rename puts it back.
+previous=""
+moved=0
+installed=0
+cleanup() {
+	rm -f -- "$staged"
+	[[ -z $smoke_home ]] || rm -rf -- "$smoke_home"
+	if [[ -n $previous ]]; then
+		if ((installed)); then
+			rm -f -- "$previous"
+		else
+			mv -f -- "$previous" "$dest" && say "restored the previous $dest"
+		fi
+	elif ((moved && !installed)); then
+		# A first install that failed after the rename: no unverified npi.
+		rm -f -- "$dest" && say "removed the incomplete $dest"
+	fi
+}
+trap cleanup EXIT
+if ((staging)); then
+	# The smoke tests extract the native addon; keep that out of the live cache.
+	smoke_home=$(mktemp -d)
+fi
+cp -- "$binary" "$staged"
+chmod 755 -- "$staged"
+run_isolated() {
+	if ((staging)); then
+		env -u PI_CONFIG_DIR -u XDG_CACHE_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME HOME="$smoke_home" "$@"
+	else
+		"$@"
+	fi
+}
+smoke() {
+	local reported
+	reported=$(run_isolated "$1" --version) || die "$1 --version failed"
+	[[ $reported == "npi/$version" ]] || die "$1 reports '$reported', expected npi/$version"
+	run_isolated "$1" --smoke-test >/dev/null || die "$1 --smoke-test failed"
+}
+smoke "$staged"
+if [[ -e $dest ]]; then
+	previous=$(mktemp -u "$dest.old.XXXXXX")
+	ln -- "$dest" "$previous"
+fi
+mv -f -- "$staged" "$dest"
+moved=1
+say "installed $dest"
+
+smoke "$dest"
+installed=1
+say "smoke test passed: $("$dest" --version)"
+
+# Built-ins replace these formerly deployed hooks. Retire only links with the
+# managed extensions/<name> target shape, including links to older checkouts
+# and dangling links. Operator-owned files, directories, and other links stay.
+# An explicit staging agent directory must win over inherited profile names.
+ext_env=()
+((staging)) && ext_env=(env -u OMP_PROFILE -u PI_PROFILE)
+ext_dir=$("${ext_env[@]}" bun -e 'import { getAgentDir } from "@oh-my-pi/pi-utils/dirs"; process.stdout.write(getAgentDir() + "/extensions")')
+for name in neopi-persona neopi-loadout neopi-repl neopi-live-persona \
+	omomp-persona omomp-loadout omomp-repl omomp-live-persona; do
+	entry="$ext_dir/$name"
+	[[ -L $entry ]] || continue
+	target=$(readlink -- "$entry")
+	[[ $target == /* ]] || target="$ext_dir/$target"
+	target=$(realpath -ms -- "$target")
+	[[ $(basename -- "$target") == "$name" && $(basename -- "$(dirname -- "$target")") == extensions ]] || continue
+	rm -- "$entry"
+	say "retired managed extension $entry"
+done
+
+prune_natives() {
+	natives_version=$(bun -p 'require("./packages/natives/package.json").version')
+	# The loader's own resolver: it can differ from pi-utils' cache dir under XDG.
+	natives_dir=$(bun -e 'import { getNativesDir } from "./packages/natives/native/loader-state.js"; process.stdout.write(getNativesDir())')
+	keep=" "
+	for addon in packages/natives/native/pi_natives.*.node; do
+		[[ -f $addon ]] && keep+="$(sha256sum -- "$addon" | cut -c1-16) "
+	done
+	pruned=0
+	shopt -s nullglob
+	for extracted in "$natives_dir/$natives_version"/pi_natives.*.node; do
+		hash=${extracted%.node}
+		hash=${hash##*.}
+		[[ $hash =~ ^[0-9a-f]{16}$ && $keep != *" $hash "* ]] || continue
+		# Selected in the last ten minutes, or mapped by a running process: it may be in use.
+		[[ -z $(find "$extracted" -mmin -10 2>/dev/null) ]] || continue
+		! grep -qsF -- "$extracted" /proc/[0-9]*/maps || continue
+		rm -f -- "$extracted" && pruned=$((pruned + 1))
+	done
+	shopt -u nullglob
+	((pruned == 0)) || say "pruned $pruned native addon(s) extracted by other builds of $natives_version"
+}
+
+# Each build extracts its embedded addon to a content-addressed file, and the
+# runtime never deletes another build's file because that build may be loading
+# it. Prune them here instead, sparing any addon a process has mapped or selected
+# in the last ten minutes (the loader refreshes the mtime of the file it picks);
+# a pruned build re-extracts on its next start. A staged install leaves the live
+# cache alone.
+if ((staging)); then
+	say "staged install: live native cache left untouched"
+else
+	prune_natives
+fi
+
+on_path=$(command -v npi || true)
+if [[ -n $on_path && $(readlink -f -- "$on_path") != $(readlink -f -- "$dest") ]]; then
+	say "warning: 'npi' on PATH is $on_path, not $dest"
+fi
+running=0
+for exe in /proc/[0-9]*/exe; do
+	if [[ $(readlink -- "$exe" 2>/dev/null) == "$dest (deleted)" ]]; then running=$((running + 1)); fi
+done
+if ((running > 0)); then
+	say "note: $running running npi process(es) still use the previous binary until restarted"
+fi

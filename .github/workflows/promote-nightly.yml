@@ -1,0 +1,82 @@
+name: promote-nightly
+
+# Monthly promotion request from integration into the default branch.
+# Opens a sync/promote-<date> PR labelled human: pending; the owner merges.
+
+on:
+   schedule:
+      - cron: "0 6 1 * *" # First day of each month, 06:00 UTC
+   workflow_dispatch:
+
+permissions:
+   contents: write
+   pull-requests: write
+
+concurrency:
+   group: promote-nightly
+   cancel-in-progress: false
+
+jobs:
+   promote:
+      runs-on: ubuntu-latest
+      env:
+         GH_TOKEN: ${{ github.token }}
+         BASE: neopi
+         SOURCE: nightly
+      steps:
+         - uses: actions/checkout@v4
+           with:
+              fetch-depth: 0
+              ref: nightly
+
+         - name: Decide whether there is anything to promote
+           id: diff
+           run: |
+              ahead=$(git rev-list --count "origin/$BASE..origin/$SOURCE")
+              echo "ahead=$ahead" >> "$GITHUB_OUTPUT"
+              echo "$SOURCE is $ahead commits ahead of $BASE"
+
+         - name: Open the promotion PR
+           if: steps.diff.outputs.ahead != '0'
+           id: pr
+           run: |
+              set -euo pipefail
+              date=$(date -u +%Y-%m-%d)
+              branch="sync/promote-$date"
+              existing=$(gh pr list --base "$BASE" --head "$branch" --state open --json number --jq '.[0].number // empty')
+              if [ -n "$existing" ]; then
+                 gh pr edit "$existing" --add-label "human: pending"
+                 echo "number=$existing" >> "$GITHUB_OUTPUT"
+                 exit 0
+              fi
+              git push origin "origin/$SOURCE:refs/heads/$branch"
+              body=$(mktemp)
+              {
+                 echo "> [!NOTE]"
+                 echo "> promote-nightly workflow on behalf of PsychedelicShayna"
+                 echo
+                 echo "## What"
+                 echo
+                 echo "Monthly promotion request from \`$SOURCE\` into \`$BASE\` (${{ steps.diff.outputs.ahead }} commits). The owner reviews and merges this PR; this workflow never merges."
+                 echo
+                 echo "## Why"
+                 echo
+                 echo "Scheduled promotion per \`docs/agents/policy.md\` › Promotion and issue completion. Everything here already merged into \`$SOURCE\` through its own PR."
+                 echo
+                 echo "## Testing"
+                 echo
+                 echo "No new code; each change was verified in its originating PR."
+                 echo
+                 echo "---"
+                 echo
+                 echo "- [ ] \`bun check\` passes (not run: promotion PR)"
+                 echo "- [ ] Tested locally (not run: promotion PR)"
+                 echo "- [ ] CHANGELOG updated (not applicable: promotion PR)"
+              } > "$body"
+              promotion_labels=(--label enhancement --label "human: pending" --label "review: codex")
+              url=$(gh pr create --base "$BASE" --head "$branch" \
+                 --title "chore(promote): nightly into neopi $date" \
+                 --body-file "$body" "${promotion_labels[@]}")
+              number=${url##*/}
+              [ -n "$number" ] || { echo "::error::could not determine the promotion PR number"; exit 1; }
+              echo "number=$number" >> "$GITHUB_OUTPUT"

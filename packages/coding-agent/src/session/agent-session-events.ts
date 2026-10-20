@@ -1,0 +1,121 @@
+import type { AgentEvent, AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
+import type { Effort } from "@oh-my-pi/pi-ai";
+import type { Rule } from "../capability/rule";
+import type { ChatModeSetting } from "../chat/chat-mode";
+import type { RetryErrorUpdate } from "../extensibility/shared-events";
+import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
+import type { GoalModeState } from "../goals/state";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import type { TodoItem } from "@oh-my-pi/pi-tui/tools/todo";
+import type { MixtureSessionEvent } from "../moa/host";
+import type { CustomMessage } from "./messages";
+import type { CacheWarmingRefreshEnd, CacheWarmingRefreshStart } from "./cache-warmer";
+
+/** Session-specific events that extend the core AgentEvent. */
+export type AgentSessionEvent =
+	| Exclude<AgentEvent, { type: "agent_end" } | { type: "agent_start" }>
+	| (Extract<AgentEvent, { type: "agent_start" }> & {
+			/**
+			 * Request handles whose work launched or scheduled this run (#171).
+			 * Absent on runs nobody owns (keyboard prompts, autonomous turns).
+			 */
+			runOwners?: string[];
+			/** 1-based count of runs this session has started, this one included. */
+			agentStarts?: number;
+	  })
+	| (Extract<AgentEvent, { type: "agent_end" }> & {
+			/** False when an async delivery will resume the session before its true final settle. */
+			isTerminal?: boolean;
+			/**
+			 * True when the agent finished its turn: the end is terminal, or the session resumes
+			 * only for queued input or background-job results. False while the agent continues its
+			 * own work (retry, compaction continuation, stop-time reminders).
+			 */
+			yielded?: boolean;
+			/**
+			 * True when this settle carries the turn's final assistant answer, even when
+			 * `isTerminal` is false because a pending async delivery will wake the session
+			 * again. Consumers that relay the answer outward (the live voice relay) key off
+			 * this; UI that tracks run state (the TUI) keeps keying off `isTerminal`.
+			 */
+			hasFinalResponse?: boolean;
+			/**
+			 * True on a non-terminal end whose only possible resume is a background-job result
+			 * (no queued input, no continuation the agent scheduled itself). The wake is not
+			 * guaranteed: a cancelled or suppressed job never delivers one.
+			 */
+			awaitingAsyncWork?: boolean;
+	  })
+	| {
+			type: "auto_compaction_start";
+			reason: "threshold" | "overflow" | "idle" | "incomplete";
+			action: "context-full" | "remote" | "handoff" | "shake" | "snapcompact";
+	  }
+	| {
+			type: "auto_compaction_end";
+			action: "context-full" | "remote" | "handoff" | "shake" | "snapcompact";
+			result: CompactionResult | undefined;
+			aborted: boolean;
+			willRetry: boolean;
+			errorMessage?: string;
+			/** True when compaction was skipped for a benign reason. */
+			skipped?: boolean;
+	  }
+	| {
+			type: "auto_retry_start";
+			attempt: number;
+			maxAttempts: number;
+			delayMs: number;
+			errorMessage: string;
+			errorId?: number;
+	  }
+	| {
+			type: "auto_retry_end";
+			success: boolean;
+			attempt: number;
+			finalError?: string;
+			retryErrors?: RetryErrorUpdate[];
+	  }
+	| ({ type: "cache_warming_start" } & CacheWarmingRefreshStart)
+	| ({ type: "cache_warming_end" } & CacheWarmingRefreshEnd)
+	| { type: "retry_fallback_applied"; from: string; to: string; role: string; reason?: string }
+	| { type: "retry_fallback_succeeded"; model: string; role: string }
+	| { type: "model_changed" }
+	| { type: "config_warnings_changed" }
+	| { type: "advisor_cost_changed" }
+	| { type: "advisor_yielded" }
+	/** A finalized advisor-agent message (the same data the advisor transcript records). Fork seam for live ingest. */
+	| { type: "advisor_message"; advisor: string; slug: string; message: AgentMessage }
+	| { type: "ttsr_triggered"; rules: Rule[] }
+	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
+	| { type: "todo_auto_clear" }
+	| { type: "irc_message"; message: CustomMessage }
+	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string }
+	/** Owners joined a run already streaming (a coalesced continuation) (#171). */
+	| { type: "run_owners_joined"; owners: string[]; agentStarts: number }
+	/** Scheduled work for these owners ended before any run consumed it (#171). */
+	| { type: "run_owners_skipped"; owners: string[]; reason: string }
+	| MixtureSessionEvent
+	| {
+			type: "thinking_level_changed";
+			thinkingLevel: ThinkingLevel | undefined;
+			/** The user-configured selector when it differs from the effective level. */
+			configured?: ConfiguredThinkingLevel;
+			/** The level `auto` resolved to this turn, once classified. */
+			resolved?: Effort;
+	  }
+	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState }
+	/** Live chat-mode change: `mode` is `off` outside chat mode; `include` is comma-joined. */
+	| { type: "chat_mode_changed"; mode: ChatModeSetting; include: string }
+	// Coalesced snapshot of the displayable steering/follow-up queue: emitted
+	// whenever it differs from the last `queue_update` (enqueue, dequeue on
+	// delivery, remove, clear/restore, live-steering adoption/withdrawal, or
+	// session switch), never on a no-op mutation. Mirrors
+	// `AgentSession.getQueuedMessages()`; `liveSteered` counts the leading
+	// `steering` entries already sent into the streaming response, which
+	// `remove_queued_message` cannot reach.
+	| { type: "queue_update"; steering: string[]; followUp: string[]; liveSteered: number };
+
+/** Listener function for agent session events. */
+export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
