@@ -25,10 +25,18 @@ import { CollabQrCodeComponent, collabBrowserLink } from "@oh-my-pi/pi-tui/chrom
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import { formatDumpArchiveReport } from "../session/session-dump-format";
 import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
+import type { AgentSession } from "../session/agent-session";
 
 import { cfgBrowserEnabled, cfgBrowserHeadless } from "../tools/browser/settings";
 import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../commands/settings";
 import { cfgChainingActive, cfgChainingAuto } from "../chains/settings";
+
+function advisorEnabledMessage(session: AgentSession): string {
+	const names = session.getAdvisorStatusOverview().advisors
+		.filter(advisor => advisor.status === "running")
+		.map(advisor => sanitizeDisplayLine(advisor.name));
+	return names.length > 0 ? `Advisor enabled: ${names.join(", ")}.` : "Advisor enabled; no advisors running.";
+}
 
 /** Join hint printed by /collab: compact terminal link + clickable browser deep link. */
 function collabLinkHint(host: CollabHost, heading: string, view = false): string {
@@ -186,7 +194,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				const active = runtime.session.toggleAdvisorEnabled();
 				const configured = runtime.session.isAdvisorEnabled();
 				if (active) {
-					await runtime.output("Advisor enabled.");
+					await runtime.output(advisorEnabledMessage(runtime.session));
 				} else if (configured) {
 					await runtime.output("Advisor setting enabled, but no model is assigned to the 'advisor' role.");
 				} else {
@@ -197,7 +205,9 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			if (verb === "on") {
 				const active = runtime.session.setAdvisorEnabled(true);
 				await runtime.output(
-					active ? "Advisor enabled." : "Advisor setting enabled, but no model is assigned to the 'advisor' role.",
+					active
+						? advisorEnabledMessage(runtime.session)
+						: "Advisor setting enabled, but no model is assigned to the 'advisor' role.",
 				);
 				return commandConsumed();
 			}
@@ -230,7 +240,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				const active = runtime.ctx.session.toggleAdvisorEnabled();
 				const configured = runtime.ctx.session.isAdvisorEnabled();
 				if (active) {
-					runtime.ctx.showStatus("Advisor enabled.");
+					runtime.ctx.showStatus(advisorEnabledMessage(runtime.ctx.session));
 				} else if (configured) {
 					runtime.ctx.showStatus("Advisor setting enabled, but no model is assigned to the 'advisor' role.");
 				} else {
@@ -243,7 +253,9 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			if (verb === "on") {
 				const active = runtime.ctx.session.setAdvisorEnabled(true);
 				runtime.ctx.showStatus(
-					active ? "Advisor enabled." : "Advisor setting enabled, but no model is assigned to the 'advisor' role.",
+					active
+						? advisorEnabledMessage(runtime.ctx.session)
+						: "Advisor setting enabled, but no model is assigned to the 'advisor' role.",
 				);
 				refreshStatusLine(runtime.ctx);
 				clearSubmittedText(runtime);

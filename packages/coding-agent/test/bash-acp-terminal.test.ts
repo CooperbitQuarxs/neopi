@@ -64,6 +64,22 @@ afterEach(() => {
 });
 
 describe("BashTool ACP terminal routing", () => {
+	it("limits host restoration guidance to local PTY commands when the client owns terminals", () => {
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: async () => {
+				throw new Error("description must not allocate a terminal");
+			},
+		};
+		const tool = new BashTool(makeSession(bridge));
+		expect(tool.description).toContain("NEVER source `$OMP_HOST_ENV_FILE` in a client terminal");
+		expect(tool.description).toContain("For local `pty: true` commands only:");
+		bridge.capabilities.terminal = false;
+		expect(tool.description).not.toContain("NEVER source `$OMP_HOST_ENV_FILE` in a client terminal");
+		expect(tool.description).not.toContain("For local `pty: true` commands only:");
+		expect(tool.description).toContain('. "$OMP_HOST_ENV_FILE"');
+	});
+
 	it("emits a live terminal update but releases it before the completed result", async () => {
 		const stubText = "hello from terminal\n";
 

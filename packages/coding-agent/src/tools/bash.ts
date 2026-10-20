@@ -614,8 +614,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	readonly loadMode = "essential";
 	get description(): string {
 		const evalBackends = resolveEvalBackends(this.session);
+		const clientBridge = this.session.getClientBridge?.();
 		const isToolActive = (name: string, fallback: boolean): boolean => this.session.isToolActive?.(name) ?? fallback;
 		return prompt.render(bashDescription, {
+			hasClientTerminal: Boolean(clientBridge?.capabilities.terminal && clientBridge.createTerminal),
 			asyncEnabled: cfgAsyncEnabled.get(this.session.settings),
 			// The deadline an omitted `timeout` resolves to, after the `tools.maxTimeout` cap.
 			defaultTimeoutSec: clampTimeout("bash", undefined, cfgToolsMaxTimeout.get(this.session.settings)),

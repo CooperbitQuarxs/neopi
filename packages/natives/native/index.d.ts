@@ -339,6 +339,8 @@ export declare class LiveWebRtcPeer {
    * frames.
    */
   setMuted(muted: boolean): void
+  /** Silence queued audio and discard new remote audio without muting the microphone. */
+  setOutputSuppressed(suppressed: boolean): void
   /** Close media, the data channel, the peer connection, and speaker playback. */
   close(): Promise<void>
 }

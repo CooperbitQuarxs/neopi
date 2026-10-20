@@ -31,7 +31,8 @@ import {
 	truncateToWidth,
 } from "../index";
 import { getSelectListTheme, theme } from "../theme";
-import { sanitizeDisplayWarnings } from "../render/render-utils";
+import { sanitizeDisplayWarnings, shortenPath } from "../render/render-utils";
+import { sanitizeDisplayLine } from "./extensions/display-text";
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { HookEditorComponent } from "./hook-editor";
@@ -105,6 +106,14 @@ export interface WatchdogConfigDoc {
 	warnings?: string[];
 }
 
+/** Read-only effective roster: edits still belong to individual raw files. */
+export interface EffectiveAdvisorConfig {
+	name: string;
+	enabled?: boolean;
+	sourceFile: string;
+	scope: AdvisorConfigScope;
+}
+
 export interface AdvisorConfigStat {
 	name: string;
 	sessionId?: string;
@@ -122,6 +131,8 @@ export interface AdvisorConfigCallbacks {
 	loadDoc: (scope: AdvisorConfigScope) => Promise<WatchdogConfigDoc>;
 	/** Persist the doc to the scope's file. Must not touch the live advisors. */
 	save: (scope: AdvisorConfigScope, doc: WatchdogConfigDoc) => Promise<void>;
+	/** Reload the effective roster after saving a source file. */
+	getEffectiveRoster?: () => Promise<readonly EffectiveAdvisorConfig[]>;
 	/** Apply the saved configuration to the live advisors (only changed ones restart). */
 	apply: () => Promise<void>;
 	/** Tear down the overlay and restore the editor. */
@@ -156,6 +167,7 @@ export interface AdvisorConfigDeps {
 	syncBacklog?: AdvisorSyncBacklog;
 	/** Formatted advisor-role model shown on the seeded default row (e.g. "anthropic/claude-..."). */
 	defaultModelLabel?: string;
+	effectiveRoster?: readonly EffectiveAdvisorConfig[];
 }
 
 const PREVIEW_WIDTH = 60;
@@ -383,6 +395,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 	#cb: AdvisorConfigCallbacks;
 	#scope: AdvisorConfigScope;
 	#doc: WatchdogConfigDoc;
+	#effectiveRoster: readonly EffectiveAdvisorConfig[];
 	/** Cached usage reports (quota/window/reset) prefetched on overlay open. */
 	#cachedReports: UsageReport[] | null = null;
 	#dirty = false;
@@ -492,6 +505,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#scope = scope;
 		this.#navigationScope = scope;
 		this.#doc = doc;
+		this.#effectiveRoster = deps.effectiveRoster ?? [];
 		this.#ensureRosterVisible();
 		this.#showList();
 		// Prefetch usage reports for quota display; non-fatal if unavailable.
@@ -569,6 +583,19 @@ export class AdvisorConfigOverlayComponent implements Component {
 		pages.push({ id: "shared", label: "Shared instructions", icon: "doc", group: "All advisors" });
 
 		const sections: TspPrefsProps["sections"][number][] = [];
+		if (this.#effectiveRoster.length > 0) {
+			sections.push({
+				id: "effective-roster",
+				title: "Effective roster · all discovered files",
+				rows: this.#effectiveRoster.map((advisor, i) => ({
+					id: `effective:${i}`,
+					label: sanitizeDisplayLine(advisor.name),
+					hint: `${advisor.scope} · ${sanitizeDisplayLine(shortenPath(advisor.sourceFile))}`,
+					disabled: "Read-only overview. Edit the source file to change this advisor.",
+					control: { k: "switch", on: advisor.enabled !== false },
+				})),
+			});
+		}
 		if (doc.warnings?.length) {
 			sections.push({
 				id: "warnings",
@@ -1040,6 +1067,15 @@ export class AdvisorConfigOverlayComponent implements Component {
 		}
 		const list = this.#active;
 		const value = list instanceof SelectList ? (list.getSelectedItem()?.value ?? "") : "";
+		if (value === "effective") {
+			children.push(
+				text([span("Effective roster · all discovered files", "strong")]),
+				...this.#effectiveRoster.map(advisor =>
+					text(this.#effectiveAdvisorLabel(advisor), { wrap: "word" }),
+				),
+				text([span("Read-only overview. Scope below selects the file to edit.", "muted")], { wrap: "word" }),
+			);
+		}
 		const match = /^advisor:(\d+)$/.exec(value);
 		const advisor = match ? this.#doc.advisors[Number(match[1])] : undefined;
 		if (advisor) {
@@ -1295,6 +1331,16 @@ export class AdvisorConfigOverlayComponent implements Component {
 			: [];
 		const list = this.#active;
 		const value = list instanceof SelectList ? (list.getSelectedItem()?.value ?? "") : "";
+		if (value === "effective") {
+			return [
+				...warnings,
+				theme.bold("Effective roster · all discovered files"),
+				"",
+				...this.#effectiveRoster.flatMap(advisor => wrap(this.#effectiveAdvisorLabel(advisor), bodyWidth)),
+				"",
+				...wrap("Read-only overview. Scope below selects the file to edit.", bodyWidth),
+			].map(line => truncateToWidth(line, bodyWidth));
+		}
 		const match = /^advisor:(\d+)$/.exec(value);
 		if (match) {
 			const advisor = this.#doc.advisors[Number(match[1])];
@@ -1464,6 +1510,10 @@ export class AdvisorConfigOverlayComponent implements Component {
 		return advisor.syncBacklog ?? `${this.#deps.syncBacklog ?? "off"} (inherited)`;
 	}
 
+	#effectiveAdvisorLabel(advisor: EffectiveAdvisorConfig): string {
+		return `${sanitizeDisplayLine(advisor.name)} · ${advisor.enabled === false ? "disabled" : "enabled"} · ${advisor.scope} · ${sanitizeDisplayLine(shortenPath(advisor.sourceFile))}`;
+	}
+
 	#showList(selectedValue?: string): void {
 		this.#detailIndex = -1;
 		this.#ensureRosterVisible();
@@ -1472,6 +1522,13 @@ export class AdvisorConfigOverlayComponent implements Component {
 			label: `${advisor.enabled === false ? "○" : "●"} ${advisor.name || "(unnamed)"}`,
 			description: this.#advisorSummary(advisor),
 		}));
+		if (this.#effectiveRoster.length > 0) {
+			items.unshift({
+				value: "effective",
+				label: "Effective roster",
+				description: `${this.#effectiveRoster.length} advisors · all discovered files`,
+			});
+		}
 		items.push({ value: "add", label: "+ Add advisor" });
 		items.push({
 			value: "shared",
@@ -1609,6 +1666,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#pendingOperations++;
 		try {
 			await this.#cb.save(this.#scope, this.#doc);
+			if (this.#cb.getEffectiveRoster) this.#effectiveRoster = await this.#cb.getEffectiveRoster();
 			// The saved file contains only the normalized entries, so the load-time
 			// warnings no longer apply to it.
 			this.#doc.warnings = undefined;
