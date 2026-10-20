@@ -1,46 +1,45 @@
 # NeoPi
 
-> Repositorio privado de Cooperbit para el proyecto **NeoPi** de PsychedelicShayna.
+> Copia privada en Cooperbit del proyecto **NeoPi** de PsychedelicShayna.
 
-## Estado
+## Dónde está el trabajo (léelo primero)
 
-**Pendiente de integración.** Aquí todavía no está el código del proyecto.
+El desarrollo activo **no** está aquí. Está en el repositorio público:
 
-Este repo es el destino privado en Cooperbit del trabajo que vive en el repositorio público de **PsychedelicShayna** — son **sus proyectos** (NeoPi / NeoCode / NeoDeck), con dirección propia. Si te interesa el linaje técnico, el propio GitHub del repo público lo muestra; no hace falta insistir aquí.
+**[https://github.com/PsychedelicShayna/neopi](https://github.com/PsychedelicShayna/neopi)**
 
-- Repositorio público (desarrollo activo): [https://github.com/PsychedelicShayna/neopi](https://github.com/PsychedelicShayna/neopi)
-- Organización: [CooperbitQuarxs](https://github.com/CooperbitQuarxs)
-- Este repo: [CooperbitQuarxs/neopi](https://github.com/CooperbitQuarxs/neopi)
+Ahí conviene mirar:
 
-### Actividad en el repo público (abiertos y cerrados)
+- [Todos los pull requests](https://github.com/PsychedelicShayna/neopi/pulls?q=is%3Apr) (abiertos y cerrados)
+- [Todos los issues](https://github.com/PsychedelicShayna/neopi/issues?q=is%3Aissue) (abiertos y cerrados)
 
-Ahí se ve el volumen real de trabajo:
+Ese es el árbol de desarrollo. PsychedelicShayna trabaja ahí y, cuando una versión de los tres proyectos (NeoPi, NeoCode, NeoDeck) le parezca **suficientemente lista para el equipo**, la publicará en estos repos privados de Cooperbit.
 
-- [Todos los pull requests](https://github.com/PsychedelicShayna/neopi/pulls?q=is%3Apr)
-- [Todos los issues](https://github.com/PsychedelicShayna/neopi/issues?q=is%3Aissue)
+## Qué es este repositorio
 
-## Qué falta aquí
+Espejo / destino de **versiones para el equipo**, no el día a día del desarrollo.
 
-Marcador de posición hasta la primera integración:
+- Hoy: **marcador de posición** (aún sin el código integrado).
+- Después de cada publicación que ella considere lista: el código usable por Cooperbit vive **aquí**.
+- Issues en Cooperbit: más adelante se podrán abrir **aquí** sobre lo ya publicado / en release para el equipo. El tracker de desarrollo y el ruido de WIP siguen en el repo público.
 
-1. **Código** — historial y ramas estables del repo público aún no publicados aquí
-2. **Traducción** — README, descripciones y textos para el equipo en español
-3. **Identidad / ficha del proyecto** — descripción de GitHub, enlaces, temas, presentación Neo*
-4. **Primera publicación** (PR o push) hacia la rama por defecto de este repo
-5. **Protección de ramas** y política de merge
-6. **Automatización de espejo** (línea estable / releases)
-7. **Releases y CI en la org** (si aplica)
+## Pendiente en este lado (Cooperbit)
 
-## Cómo leer esto
+Solo puesta en marcha del destino privado — no significa que el proyecto esté parado:
 
-- El diseño, los issues y los PRs de funcionalidad ocurren en el **repositorio público** enlazado arriba.
-- Este repo privado es para el equipo Cooperbit cuando empecemos a publicar copias aquí.
-- Pendiente ≠ abandonado: es la cola de puesta en marcha de este espejo.
+- Integrar el código desde el repo público
+- Traducción al español de textos orientados al equipo
+- Ficha del proyecto (descripción, enlaces, identidad Neo*)
+- Primera publicación (PR o push) a la rama por defecto
+- Protección de ramas y otras políticas del repositorio
+- Automatización del espejo (línea estable / releases)
+- CI / releases en la org, si aplica
+- Uso del issue tracker de este repo para el equipo (cuando haya algo publicado)
 
 ## Contacto
 
-Sin proyecto ni issues activos aquí todavía; coordinar con quien administre el repo público y esta organización.
+Mientras no haya código ni issues activos aquí, el foco y las preguntas de desarrollo van al **repo público** enlazado arriba.
 
 ---
 
-*Marcador · CooperbitQuarxs/neopi · https://github.com/PsychedelicShayna/neopi*
+*CooperbitQuarxs/neopi · origen de trabajo: https://github.com/PsychedelicShayna/neopi*
