@@ -9,6 +9,7 @@
  */
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import type { Api, ImageContent, Message, Model, TextContent } from "@oh-my-pi/pi-ai";
+import { getSegmenter } from "@oh-my-pi/pi-tui";
 
 export interface HopParts {
 	output?: string;
@@ -57,7 +58,7 @@ function truncationMarker(tokens: number): string {
 /**
  * Keep the head and tail of `text` within `budget` tokens around an omission
  * marker. The result never exceeds `budget`: when not even the marker fits,
- * the text is omitted (`""`).
+ * the text is omitted (`""`). Retained head and tail end at whole graphemes.
  */
 export function truncateToTokens(text: string, budget: number, tokenizer: Tokenizer): string {
 	const tokens = tokenizer.countTokens(text);
@@ -65,9 +66,13 @@ export function truncateToTokens(text: string, budget: number, tokenizer: Tokeni
 	const bare = truncationMarker(tokens);
 	if (tokenizer.countTokens(bare) > budget) return "";
 	let keepChars = Math.floor((text.length * budget) / tokens);
+	const segments = getSegmenter().segment(text);
 	while (keepChars > 1) {
-		const head = text.slice(0, Math.ceil(keepChars / 2));
-		const tail = text.slice(text.length - Math.floor(keepChars / 2));
+		// Round inward without materializing a grapheme array for the whole text.
+		const headEnd = segments.containing(Math.ceil(keepChars / 2))!.index;
+		const tailBoundary = segments.containing(text.length - Math.floor(keepChars / 2) - 1)!;
+		const head = text.slice(0, headEnd);
+		const tail = text.slice(tailBoundary.index + tailBoundary.segment.length);
 		const kept = tokenizer.countTokens(head) + tokenizer.countTokens(tail);
 		const candidate = `${head}\n${truncationMarker(Math.max(0, tokens - kept))}\n${tail}`;
 		if (tokenizer.countTokens(candidate) <= budget) return candidate;

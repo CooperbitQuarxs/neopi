@@ -82,6 +82,20 @@ describe("bounded live history", () => {
 		expect(buildLiveHistorySeed([], 1000)).toEqual([]);
 		expect(buildLiveHistorySeed([user("hello")], 1)).toEqual([]);
 	});
+
+	it("preserves supplementary characters at oversized history truncation boundaries", () => {
+		const chunks = buildLiveHistorySeed([user(`HEAD ${"🛸".repeat(10_000)} TAIL`)], 8000);
+		const text = chunks.join("\n");
+		expect(text.isWellFormed()).toBe(true);
+		expect(text).toContain("HEAD");
+		expect(text).toContain("TAIL");
+		expect(text).toContain("truncated");
+		expect(count(chunks)).toBeLessThanOrEqual(8000);
+		for (const chunk of chunks) {
+			expect(chunk.isWellFormed()).toBe(true);
+			expect(Buffer.byteLength(chunk)).toBeLessThanOrEqual(CONTEXT_CHUNK_BYTES);
+		}
+	});
 });
 
 function harness(
