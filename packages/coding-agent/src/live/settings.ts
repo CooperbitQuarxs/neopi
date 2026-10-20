@@ -3,7 +3,26 @@
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
 import { register } from "../config/registry";
+import { DEFAULT_LIVE_MODEL } from "./protocol";
 import { DEFAULT_LIVE_VOICE, LIVE_VOICE_OPTIONS, LIVE_VOICE_VALUES } from "./voices";
+
+export const cfgLiveModel = register({
+	id: "live.model",
+	type: "string",
+	default: DEFAULT_LIVE_MODEL,
+	validate: value => {
+		if (value === undefined) return;
+		if (typeof value !== "string" || !value || /\s/.test(value)) {
+			throw new Error("Live model must be a nonempty model slug without whitespace");
+		}
+	},
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Model",
+		description: "Codex realtime model slug; applies to the next live call",
+	},
+});
 
 export const cfgLiveVoice = register({
 	id: "live.voice",

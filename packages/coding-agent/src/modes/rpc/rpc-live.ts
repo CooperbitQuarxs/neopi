@@ -10,6 +10,7 @@ import {
 	cfgLiveForceDelegateKeyword,
 	cfgLiveForceUtteranceKeyword,
 	cfgLiveHoldMode,
+	cfgLiveModel,
 	cfgLiveQuietFloorMs,
 	cfgLiveSubmitKeyword,
 	cfgLiveSubmitSilenceMs,
@@ -83,6 +84,7 @@ export class RpcLiveBridge {
 			session: this.#session,
 			extractAssistantText: extractVisibleAssistantText,
 			voice,
+			model: cfgLiveModel.get(this.#session.settings),
 			delegationDelivery: () => cfgLiveDelegationDelivery.get(this.#session.settings),
 			delegationKeywords: () => ({
 				suppress: cfgLiveSuppressDelegateKeyword.get(this.#session.settings),

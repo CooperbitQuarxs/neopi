@@ -28,6 +28,7 @@ import {
 	buildSessionContextAppend,
 	CONTEXT_CHUNK_BYTES,
 	chunkLiveContext,
+	DEFAULT_LIVE_MODEL,
 	type LiveContextChannel,
 	type LiveClientMessage,
 	type LiveServerEvent,
@@ -155,6 +156,8 @@ export interface LiveSessionControllerOptions {
 	relayGates?: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
 	/** Realtime output voice, defaulting to sol. */
 	voice?: string;
+	/** Realtime model slug, defaulting to gpt-live-1-codex. */
+	model?: string;
 	blockDelegateKeyword?: string;
 	delegationKeywords?: () => { suppress: string; force: string };
 	holdMode?: () => boolean;
@@ -244,6 +247,7 @@ export class LiveSessionController {
 	readonly #callbacks: LiveSessionCallbacks;
 	readonly #extractAssistantText: (message: AssistantMessage) => string;
 	readonly #voice: string;
+	readonly #model: string;
 	readonly #speakableIdleMs: number;
 	readonly #blockDelegateKeyword: string;
 	readonly #ircRelayTransform: (message: CustomMessage, body: string) => string | undefined;
@@ -387,6 +391,7 @@ export class LiveSessionController {
 		this.#callbacks = options.callbacks;
 		this.#extractAssistantText = options.extractAssistantText;
 		this.#voice = options.voice?.trim() || DEFAULT_LIVE_VOICE;
+		this.#model = options.model ?? DEFAULT_LIVE_MODEL;
 		this.#blockDelegateKeyword = options.blockDelegateKeyword ?? "";
 		this.#ircRelayTransform = options.ircRelayTransform ?? ((_, body) => body);
 		this.#ircRelayAllowed = options.ircRelayAllowed ?? (() => true);
@@ -459,6 +464,7 @@ export class LiveSessionController {
 				sessionId: this.#session.sessionId,
 				instructions,
 				voice: this.#voice,
+				model: this.#model,
 				callbacks: {
 					onEvent: event => this.#guardEvent(() => this.#handleLiveEvent(event)),
 					onOutputLevel: level => this.#guardEvent(() => this.#handleOutputLevel(level)),

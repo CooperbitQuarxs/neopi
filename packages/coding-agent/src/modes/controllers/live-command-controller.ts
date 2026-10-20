@@ -10,7 +10,7 @@ import {
 import { LiveIngest } from "../../live/ingest";
 import { LIVE_INGEST_DEFAULTS, LiveIngestSettingsSource } from "../../live/ingest-settings";
 import { stripLiveKeyword } from "../../live/keywords";
-import { LIVE_MODEL } from "../../live/protocol";
+import { DEFAULT_LIVE_MODEL } from "../../live/protocol";
 import { vocalizer } from "../../tts/vocalizer";
 import type { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -24,6 +24,7 @@ import { createLivePersonaFeature } from "../../live/personas";
 
 import {
 	cfgLiveBlockDelegateKeyword,
+	cfgLiveModel,
 	cfgLiveDelegationDelivery,
 	cfgLiveForceDelegateKeyword,
 	cfgLiveForceUtteranceKeyword,
@@ -102,6 +103,7 @@ export class LiveCommandController {
 	#destination: LiveInputDestination = "primary";
 	#resumeVocalizer: (() => void) | undefined;
 	#assistantTranscriptComponent: AssistantMessageComponent | undefined;
+	#model = DEFAULT_LIVE_MODEL;
 	#assistantCaption: LiveAssistantCaption | undefined;
 	#assistantTranscriptTurn = 0;
 	#assistantTranscriptStartedAt = 0;
@@ -282,6 +284,7 @@ export class LiveCommandController {
 	}
 
 	async #start(): Promise<void> {
+		this.#model = cfgLiveModel.get(this.#ctx.settings);
 		this.#assistantTranscriptTurn = 0;
 		this.#assistantTranscriptStartedAt = 0;
 		this.#destination = "primary";
@@ -342,6 +345,7 @@ export class LiveCommandController {
 				};
 			},
 			voice: cfgLiveVoice.get(this.#ctx.settings),
+			model: this.#model,
 			blockDelegateKeyword: cfgLiveBlockDelegateKeyword.get(this.#ctx.settings),
 			callbacks: {
 				onPhase: phase => {
@@ -534,7 +538,7 @@ export class LiveCommandController {
 			content: [{ type: "text", text: transcript.text }],
 			api: "openai-codex-responses",
 			provider: "openai-codex",
-			model: LIVE_MODEL,
+			model: this.#model,
 			usage: { ...LIVE_MESSAGE_USAGE },
 			stopReason: "stop",
 			timestamp: this.#assistantTranscriptStartedAt,
