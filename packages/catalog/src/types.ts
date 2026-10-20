@@ -1500,6 +1500,12 @@ export interface CursorModelRoute {
 }
 // Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
+	/** Discovery supplied a text-only placeholder rather than reported input modalities. */
+	discoveryMissingInput?: boolean;
+	/** Discovery used a compatibility default because no context limit was reported. */
+	discoveryMissingContextWindow?: boolean;
+	/** Discovery used a compatibility default because no output limit was reported. */
+	discoveryMissingMaxTokens?: boolean;
 	id: string;
 	/** Role-specific runner capability; omitted for ordinary chat models. */
 	kind?: ModelKind;

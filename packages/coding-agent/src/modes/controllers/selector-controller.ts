@@ -68,6 +68,8 @@ import { resolveAdvisorRoleSelection, resolveModelRoleValue } from "../../config
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { getRoleInfo } from "../../config/model-roles";
 import { settings } from "../../config/settings";
+import { cfgModelFactsEnabled, cfgModelFactsSources, cfgModelFactsOverrides } from "../../config/model-facts";
+import { ModelFactEditorComponent } from "../components/model-fact-editor";
 import type { AnySetting } from "../../config/registry";
 import type { StatusLineSettings } from "@oh-my-pi/pi-tui/status-line/types";
 import { createSettingsHost } from "../../config/settings-ui";
@@ -239,6 +241,7 @@ export type MenuKind =
 	| "model-picker"
 	| "model-hub"
 	| "session-model-hub"
+	| "model-facts"
 	| "agents-dashboard"
 	| "agent-hub"
 	| "irc-viewer"
@@ -1620,6 +1623,12 @@ export class SelectorController {
 						return false;
 					}
 				},
+				onEditFacts: hubOptions.sessionOnly
+					? undefined
+					: (provider, model) => {
+							done();
+							this.#showModelFacts(provider, model?.id);
+						},
 				onAssign: async (
 					model,
 					role,
@@ -1923,6 +1932,57 @@ export class SelectorController {
 		);
 		const menu = this.#claimMenu(menuKind, () => this.#showModelHub(hubOptions));
 		this.#mountMenu(menu, hub, () => this.#showFullscreenMenu(hub));
+	}
+
+	#showModelFacts(provider?: string, modelId?: string): void {
+		if (this.#focusOpenMenu("model-facts")) return;
+		const registry = this.ctx.session.modelRegistry;
+		const providers = new Map<string, Model[]>();
+		for (const id of registry.getDiscoverableProviders()) providers.set(id, []);
+		for (const model of registry.getAll()) {
+			const models = providers.get(model.provider) ?? [];
+			models.push(model);
+			providers.set(model.provider, models);
+		}
+		let closed = false;
+		const done = () => {
+			if (closed) return;
+			closed = true;
+			editor.dispose();
+			menu.handle?.hide();
+			this.#releaseMenu("model-facts", menu);
+			this.#showModelHub({ initialProviderId: provider });
+		};
+		const editor = new ModelFactEditorComponent({
+			providers: [...providers].map(([id, models]) => ({ id, models })),
+			config: registry.getModelFactConfig(),
+			provider,
+			modelId,
+			rows: this.ctx.ui.terminal.rows,
+			preview: async (draft, targetProvider, targetId) => {
+				const preview = await registry.previewModelFacts(targetProvider, targetId, {
+					...draft,
+					overrides: {
+						...draft.overrides,
+						[`${targetProvider}/${targetId}`]: draft.overrides[`${targetProvider}/${targetId}`] ?? {},
+					},
+				});
+				if (!preview) throw new Error("Choose a configured provider to preview an unlisted model.");
+				return preview;
+			},
+			onSave: async config => {
+				cfgModelFactsSources.set(this.ctx.settings, [...config.sources]);
+				cfgModelFactsOverrides.set(this.ctx.settings, config.overrides);
+				cfgModelFactsEnabled.set(this.ctx.settings, config.enabled);
+				await this.ctx.settings.flush();
+				await this.ctx.session.refreshModelFacts();
+				this.ctx.showStatus("Model facts saved");
+			},
+			onClose: done,
+			requestRender: () => this.ctx.ui.requestRender(),
+		});
+		const menu = this.#claimMenu("model-facts", () => this.#showModelFacts(provider, modelId));
+		this.#mountMenu(menu, editor, () => this.#showFullscreenMenu(editor));
 	}
 
 	/** /login round-trip for a locked provider; reopen the hub on that provider only after a successful login. */

@@ -939,9 +939,9 @@ export async function discoverOpenAIModelsList(
 		// headers/baseUrl/cost stay local.
 		const reference = resolveModelReference(id, references) as ModelSpec<Api> | undefined;
 		const referenceCompat = reference?.compat as OpenAICompat | undefined;
-		const input = nativeMetadataForModel?.input ??
-			extractOpenAIModelsListInputCapabilities(item) ??
-			reference?.input ?? ["text"];
+		const reportedInput =
+			nativeMetadataForModel?.input ?? extractOpenAIModelsListInputCapabilities(item) ?? reference?.input;
+		const input = reportedInput ?? ["text"];
 		const limits = isRecord(item.limits) ? item.limits : undefined;
 		const maxInputTokens = toPositiveNumberOrUndefined(limits?.max_input_tokens);
 		const maxOutputTokens = toPositiveNumberOrUndefined(limits?.max_output_tokens);
@@ -1001,6 +1001,9 @@ export async function discoverOpenAIModelsList(
 			reasoning: reference?.reasoning ?? false,
 			thinking: inheritReferenceThinking(undefined, reference, providerConfig.provider),
 			input,
+			discoveryMissingInput: reportedInput === undefined,
+			discoveryMissingContextWindow: reportedContextWindow === null,
+			discoveryMissingMaxTokens: reportedMaxTokens === undefined && reference?.maxTokens == null,
 			...(providerConfig.discovery.type === "lm-studio" ? { imageInputDecoder: "stb" as const } : {}),
 			// Proxy/gateway pricing is provider-specific and rarely matches
 			// upstream bundled catalogs, so keep costs local-unknown even
@@ -1018,7 +1021,9 @@ export async function discoverOpenAIModelsList(
 			compat: {
 				supportsStore: false,
 				supportsDeveloperRole: false,
-				supportsReasoningEffort: referenceCompat?.supportsReasoningEffort ?? false,
+				...(referenceCompat?.supportsReasoningEffort !== undefined
+					? { supportsReasoningEffort: referenceCompat.supportsReasoningEffort }
+					: {}),
 				...(referenceCompat?.reasoningEffortMap ? { reasoningEffortMap: referenceCompat.reasoningEffortMap } : {}),
 				...(referenceCompat?.omitReasoningEffort !== undefined
 					? { omitReasoningEffort: referenceCompat.omitReasoningEffort }

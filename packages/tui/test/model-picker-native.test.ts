@@ -868,3 +868,34 @@ test("quick picker native Close leaves literal search, repaints and closes only 
 	picker.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 	expect(closes).toBe(1);
 });
+
+test("model facts opens from full model configuration but never from the session-only picker", () => {
+	for (const sessionOnly of [false, true]) {
+		const edits: Array<string | undefined> = [];
+		const hub = new ModelHubComponent(
+			ui,
+			source({}, []),
+			registry(MODELS),
+			MODELS.map(model => ({ model })),
+			{
+				onAssign: () => {
+					throw new Error("fact editing must not assign a role");
+				},
+				onUnassign: () => {
+					throw new Error("fact editing must not clear a role");
+				},
+				onCancel: () => {},
+				onEditFacts: provider => edits.push(provider),
+			},
+			{ initialProviderId: "demo", sessionOnly },
+		);
+		hubs.push(hub);
+		expect(props(hub.describe(withPicker)).actions?.some(action => action.id === "modelFacts")).toBe(!sessionOnly);
+		hub.handleInput("\x1b[17~");
+		hub.handleNativeEvent({ type: "action", key: "", act: "modelFacts", mods: [] });
+		expect(edits).toEqual(sessionOnly ? [] : ["demo", "demo"]);
+		hub.handleInput("/");
+		hub.handleInput("\x1b[17~");
+		expect(edits).toHaveLength(sessionOnly ? 0 : 2);
+	}
+});

@@ -291,7 +291,10 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 		if (result.thinking?.unverified) delete result.thinking;
 	}
 	if (patch.thinking !== undefined) result.thinking = patch.thinking;
-	if (patch.input !== undefined) result.input = patch.input;
+	if (patch.input !== undefined) {
+		result.input = patch.input;
+		delete result.discoveryMissingInput;
+	}
 	if (patch.tokenizer !== undefined) result.tokenizer = patch.tokenizer;
 	if (patch.imageInputDecoder !== undefined) result.imageInputDecoder = patch.imageInputDecoder;
 	if (patch.supportsTools !== undefined) result.supportsTools = patch.supportsTools;
@@ -299,8 +302,14 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 		result.promptCache = patch.promptCache;
 		result.promptCacheConfig = patch.promptCache;
 	}
-	if (patch.contextWindow !== undefined) result.contextWindow = patch.contextWindow;
-	if (patch.maxTokens !== undefined) result.maxTokens = patch.maxTokens;
+	if (patch.contextWindow !== undefined) {
+		result.contextWindow = patch.contextWindow;
+		delete result.discoveryMissingContextWindow;
+	}
+	if (patch.maxTokens !== undefined) {
+		result.maxTokens = patch.maxTokens;
+		delete result.discoveryMissingMaxTokens;
+	}
 	if (patch.omitMaxOutputTokens !== undefined) result.omitMaxOutputTokens = patch.omitMaxOutputTokens;
 	if (patch.preferWebsockets !== undefined) result.preferWebsockets = patch.preferWebsockets;
 	if (patch.contextPromotionTarget !== undefined) result.contextPromotionTarget = patch.contextPromotionTarget;

@@ -9,6 +9,7 @@
 
 ### Added
 
+- Fill missing model facts from an optional ordered source chain, pin or borrow individual fields, and add unlisted models with a provenance preview through F6 in `/models` ([#70](https://github.com/PsychedelicShayna/neopi/issues/70)).
 - `/model` opens the rich provider-sidebar picker on recently used models and switches only the current session; `/models` retains role management and `/switch` and Alt+P keep the compact picker ([#55](https://github.com/PsychedelicShayna/neopi/issues/55)).
 - Added optional global and project `settings.toml` overlays with whole-key precedence over YAML, plus `npi config dump-toml` for documented defaults ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
 - Opt-in agent context telemetry now reports checkpoint availability and estimated recent-turn footprint, with pressure-based guidance that respects configured compaction boundaries ([#21](https://github.com/PsychedelicShayna/neopi/issues/21)).

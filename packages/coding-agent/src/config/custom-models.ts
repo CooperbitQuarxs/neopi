@@ -12,7 +12,12 @@ import { type ConfigHeaderResolver, type ConfigHeaderSource, createConfigHeaderR
 import { type ModelPatch, mergeCompat, mergeRemoteCompactionConfig } from "./model-patch";
 import { parseModelString } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import type { ModelOverride, ProviderAuthMode } from "./models-config-schema";
-export interface CustomModelDefinitionLike extends ModelPatch {
+type DiscoveryPlaceholders = Pick<
+	Model<Api>,
+	"discoveryMissingInput" | "discoveryMissingContextWindow" | "discoveryMissingMaxTokens"
+>;
+
+export interface CustomModelDefinitionLike extends ModelPatch, DiscoveryPlaceholders {
 	id: string;
 	api?: Api;
 	baseUrl?: string;
@@ -23,7 +28,7 @@ export interface CustomModelBuildOptions {
 	useDefaults: boolean;
 }
 
-export interface CustomModelOverlay extends ModelPatch {
+export interface CustomModelOverlay extends ModelPatch, DiscoveryPlaceholders {
 	id: string;
 	provider: string;
 	api: Api;
@@ -87,6 +92,9 @@ export function buildCustomModelOverlay(
 		reasoning: modelDef.reasoning,
 		thinking: modelDef.thinking,
 		input: modelDef.input,
+		discoveryMissingInput: modelDef.discoveryMissingInput,
+		discoveryMissingContextWindow: modelDef.discoveryMissingContextWindow,
+		discoveryMissingMaxTokens: modelDef.discoveryMissingMaxTokens,
 		imageInputDecoder: modelDef.imageInputDecoder,
 		tokenizer: modelDef.tokenizer,
 		supportsTools: modelDef.supportsTools,
@@ -135,6 +143,13 @@ export function finalizeCustomModel(model: CustomModelOverlay, options: CustomMo
 		reasoning: resolvedModel.reasoning ?? reference?.reasoning ?? (options.useDefaults ? false : undefined),
 		thinking: inheritReferenceThinking(resolvedModel.thinking, reference, resolvedModel.provider),
 		input: input as ("text" | "image")[],
+		discoveryMissingInput:
+			resolvedModel.discoveryMissingInput ?? (resolvedModel.input == null && reference?.input == null),
+		discoveryMissingContextWindow:
+			resolvedModel.discoveryMissingContextWindow ??
+			(resolvedModel.contextWindow == null && reference?.contextWindow == null),
+		discoveryMissingMaxTokens:
+			resolvedModel.discoveryMissingMaxTokens ?? (resolvedModel.maxTokens == null && reference?.maxTokens == null),
 		imageInputDecoder: resolvedModel.imageInputDecoder,
 		...(supportsTools !== undefined ? { supportsTools } : {}),
 		cost,

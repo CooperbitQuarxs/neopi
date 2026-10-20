@@ -233,6 +233,8 @@ export type ModelRoleSelectionScope = "global" | "project";
 export interface ModelHubCallbacks {
 	/** Select a model without authoring a role or changing saved preferences. */
 	onPick?: (model: Model, selector: string) => void | boolean | Promise<void | boolean>;
+	/** Open fact sources and per-field overrides in the full model configuration UI. */
+	onEditFacts?: (provider?: string, model?: Model) => void;
 	/** Persist a role assignment. */
 	onAssign: (
 		model: Model,
@@ -2900,6 +2902,10 @@ export class ModelHubComponent implements Component {
 			}
 			return;
 		}
+		if (matchesKey(data, "f6")) {
+			this.#editFacts();
+			return;
+		}
 		// Ctrl+←/→ in the Roles view steps through saved model presets, wrapping.
 		if (rolesView && (matchesKey(data, "ctrl+left") || matchesKey(data, "ctrl+right"))) {
 			this.#switchPreset(matchesKey(data, "ctrl+left") ? -1 : 1);
@@ -2994,6 +3000,18 @@ export class ModelHubComponent implements Component {
 		}
 
 		if (action) this.#browser.handleNavigation(action);
+	}
+
+	#editFacts(): void {
+		if (this.#sessionOnly || this.#strip || this.#filterEditing || this.#assigning !== null) return;
+		const entry = this.#activeEntry();
+		const model =
+			entry.kind === "roles"
+				? this.#roleRowModel()
+				: this.#focus === "list"
+					? this.#browser.getSelected()?.model
+					: undefined;
+		this.#callbacks.onEditFacts?.(model?.provider ?? entry.providerId, model);
 	}
 
 	#applyPanelMotion(action: MenuNavAction): boolean {
@@ -3899,6 +3917,10 @@ export class ModelHubComponent implements Component {
 
 	#footerHint(): string {
 		const entry = this.#activeEntry();
+		const facts =
+			!this.#sessionOnly && this.#callbacks.onEditFacts && this.#assigning === null
+				? ` · ${formatKeyHint("f6")} model facts`
+				: "";
 		if (
 			!this.#strip &&
 			!this.#filterEditing &&
@@ -3907,10 +3929,10 @@ export class ModelHubComponent implements Component {
 			this.#isBrowserView(entry) &&
 			!(entry.kind === "provider" && this.#pinnedProviders.some(provider => provider.id === entry.providerId))
 		)
-			return MODEL_SCOPE_HINT;
+			return `${MODEL_SCOPE_HINT}${facts}`;
 		const detail = this.#surfaceFooterHint();
 		if (this.#strip || this.#filterEditing) return detail;
-		return `h/l pane · / search · ${detail}`;
+		return `h/l pane · / search · ${detail}${facts}`;
 	}
 
 	#surfaceFooterHint(): string {
@@ -4917,6 +4939,10 @@ export class ModelHubComponent implements Component {
 						);
 			return [apply, cancel];
 		}
+		const facts =
+			!this.#sessionOnly && !this.#filterEditing && this.#callbacks.onEditFacts
+				? pickerAction("modelFacts", "Model facts", "f6")
+				: undefined;
 		const refresh =
 			entry.kind === "provider" && !entry.locked ? pickerAction("refresh", "Refresh provider", "f5") : undefined;
 		if (this.#assigning !== null) {
@@ -4988,11 +5014,16 @@ export class ModelHubComponent implements Component {
 			return compact([
 				...actions,
 				this.#rolesSearch.value ? pickerAction("clear", "Clear search") : undefined,
+				facts,
 				cancel,
 			]);
 		}
 		if (lockedView) {
-			return entry.oauth ? [pickerAction("login", "Log in", "enter", { primary: true }), cancel] : [cancel];
+			return compact([
+				entry.oauth ? pickerAction("login", "Log in", "enter", { primary: true }) : undefined,
+				facts,
+				cancel,
+			]);
 		}
 		return compact([
 			pickerAction(
@@ -5002,6 +5033,7 @@ export class ModelHubComponent implements Component {
 				this.#browser.pickerSelected ? { primary: true } : { primary: true, disabled: "No model selected" },
 			),
 			refresh,
+			facts,
 			this.#browser.query.length > 0 ? pickerAction("clear", "Clear search") : undefined,
 			cancel,
 		]);
@@ -5435,6 +5467,9 @@ export class ModelHubComponent implements Component {
 				this.#browser.routePickerItem(selected, true);
 				return;
 			}
+			case "modelFacts":
+				this.#editFacts();
+				return;
 			case "refresh":
 				if (entry.kind === "provider" && !entry.locked) {
 					this.#scheduleProviderRefresh(entry.providerId ?? "", { force: true });

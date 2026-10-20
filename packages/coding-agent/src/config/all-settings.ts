@@ -10,6 +10,7 @@ import * as chatSettings from "../chat/settings";
 import * as advisorSettings from "../advisor/settings";
 import * as configModelSettings from "./model-settings";
 import * as effortPolicySettings from "./effort-policy";
+import * as modelFactSettings from "./model-facts";
 import * as roleSettings from "./role-settings";
 import * as routingPolicySettings from "./routing-policies";
 import * as sessionContextSettings from "../session/context-settings";
@@ -57,6 +58,7 @@ import * as telemetrySettings from "../telemetry-settings";
 const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	configModelSettings,
 	effortPolicySettings,
+	modelFactSettings,
 	roleSettings,
 	routingPolicySettings,
 	modesSettings,
