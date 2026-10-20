@@ -17,6 +17,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { daemonRuntimeDir } from "@oh-my-pi/pi-coding-agent/launch/paths";
 import {
+	closeCdpTarget,
 	collectOrphanTargets,
 	forgetSharedTarget,
 	reapOrphanSharedTargets,
@@ -214,5 +215,98 @@ describe("orphan-registry — reap", () => {
 		expect(retryCount).toBe(1);
 		expect(retryClosed).toEqual(["retry-later"]);
 		expect(await Bun.file(path.join(registryDir(scope), `${dead}.json`)).exists()).toBe(false);
+	});
+});
+
+describe("orphan-registry — target close completion", () => {
+	it("waits for an accepted close to disappear from CDP enumeration", async () => {
+		const verifying = Promise.withResolvers<void>();
+		const removed = Promise.withResolvers<void>();
+		let enumerations = 0;
+		const session = {
+			send: async (method: string) => {
+				if (method === "Target.closeTarget") return { success: true };
+				if (method !== "Target.getTargets") throw new Error(`Unexpected CDP method ${method}`);
+				if (++enumerations === 1) {
+					return { targetInfos: [{ targetId: "released" }, { targetId: "unrelated" }] };
+				}
+				verifying.resolve();
+				await removed.promise;
+				return { targetInfos: [{ targetId: "unrelated" }] };
+			},
+			detach: async () => undefined,
+		};
+		const browser = {
+			target: () => ({ createCDPSession: async () => session }),
+		} as unknown as Browser;
+		const closing = closeCdpTarget(browser, "released");
+		try {
+			const first = await Promise.race([
+				closing.then(() => "returned"),
+				verifying.promise.then(() => "verifying"),
+			]);
+			expect(first).toBe("verifying");
+		} finally {
+			removed.resolve();
+			await closing;
+		}
+		expect(await closing).toBe(true);
+	});
+
+	it("reports an accepted close that stays listed past its confirmation budget", async () => {
+		let detached = false;
+		const session = {
+			send: async (method: string) => {
+				if (method === "Target.closeTarget") return { success: true };
+				if (method !== "Target.getTargets") throw new Error(`Unexpected CDP method ${method}`);
+				return { targetInfos: [{ targetId: "released" }, { targetId: "unrelated" }] };
+			},
+			detach: async () => {
+				detached = true;
+			},
+		};
+		const browser = {
+			target: () => ({ createCDPSession: async () => session }),
+		} as unknown as Browser;
+
+		await expect(closeCdpTarget(browser, "released", 0)).rejects.toThrow(
+			'Timed out after 0ms waiting for CDP target "released" to disappear',
+		);
+		expect(detached).toBe(true);
+	});
+
+	it("surfaces failed enumeration after CDP accepts the close", async () => {
+		let detached = false;
+		const session = {
+			send: async (method: string) => {
+				if (method === "Target.closeTarget") return { success: true };
+				throw new Error("CDP target enumeration failed");
+			},
+			detach: async () => {
+				detached = true;
+			},
+		};
+		const browser = {
+			target: () => ({ createCDPSession: async () => session }),
+		} as unknown as Browser;
+
+		await expect(closeCdpTarget(browser, "released")).rejects.toThrow("CDP target enumeration failed");
+		expect(detached).toBe(true);
+	});
+
+	it("confirms a concurrently removed target after CDP rejects its close", async () => {
+		const session = {
+			send: async (method: string) => {
+				if (method === "Target.closeTarget") throw new Error("No target with given id found");
+				if (method !== "Target.getTargets") throw new Error(`Unexpected CDP method ${method}`);
+				return { targetInfos: [{ targetId: "unrelated" }] };
+			},
+			detach: async () => undefined,
+		};
+		const browser = {
+			target: () => ({ createCDPSession: async () => session }),
+		} as unknown as Browser;
+
+		expect(await closeCdpTarget(browser, "released")).toBe(true);
 	});
 });

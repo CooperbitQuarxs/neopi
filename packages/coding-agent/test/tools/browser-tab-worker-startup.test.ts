@@ -910,7 +910,10 @@ describe("browser tabs whose renderer crashed", () => {
 			holdBrowser(browser);
 			const name = `crashed-released-${process.pid}`;
 			const url = `data:text/html,<title>${name}</title>`;
+			const unrelated = await browser.browser.newPage();
+			const unrelatedUrl = `data:text/html,<title>${name}-unrelated</title>`;
 			try {
+				await unrelated.goto(unrelatedUrl);
 				await acquireTab(name, browser, { url, timeoutMs: 30_000 });
 				const tab = getTab(name);
 				if (tab?.backend !== "worker") throw new Error("Expected a worker tab");
@@ -925,8 +928,11 @@ describe("browser tabs whose renderer crashed", () => {
 				const { targetInfos } = await watcher.send("Target.getTargets");
 				await watcher.detach();
 				expect(targetInfos.map(info => info.targetId)).not.toContain(targetId);
+				expect(targetInfos.some(info => info.url === unrelatedUrl)).toBe(true);
+				expect(await unrelated.title()).toBe(`${name}-unrelated`);
 			} finally {
 				await releaseTab(name, { kill: true });
+				await unrelated.close().catch(() => undefined);
 				await releaseBrowser(browser, { kill: true });
 			}
 		},
