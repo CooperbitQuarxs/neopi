@@ -87,3 +87,14 @@ it("starts alternate growth with columns when requested and can fix just one siz
 	]);
 	expect(plan.panes.map(pane => pane.height)).toEqual([10, 10, 10, 10, 10, 10]);
 });
+
+it("reserves the tmux top title without subtracting it from fixed transcript heights", () => {
+	const plan = planMonitorLayout(["%1", "%2"], {
+		...DEFAULT_MONITOR_LAYOUT, rowHeight: 12, columnWidth: 40,
+	}, 80, 40, true);
+	expect([plan.width, plan.height]).toEqual([40, 26]);
+	expect(plan.panes).toEqual([
+		{ id: "%1", x: 0, y: 1, width: 40, height: 12 },
+		{ id: "%2", x: 0, y: 14, width: 40, height: 12 },
+	]);
+});

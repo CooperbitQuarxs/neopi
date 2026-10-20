@@ -30,7 +30,7 @@ export interface MonitorLayoutPlan {
 	width: number;
 	height: number;
 	panes: MonitorPaneGeometry[];
-	/** Checksummed tmux custom layout, preserving pane identity and fill order. */
+	/** Checksummed tmux geometry; restore pane identity using `panes` after applying it. */
 	layout: string;
 }
 
@@ -105,6 +105,7 @@ export function planMonitorLayout(
 	config: MonitorLayoutConfig,
 	width: number,
 	height: number,
+	topTitle = false,
 ): MonitorLayoutPlan {
 	if (paneIds.length === 0) throw new Error("A monitor layout needs at least one pane");
 	if (paneIds.length > monitorWindowCapacity(config)) throw new Error("Monitor window capacity exceeded");
@@ -122,14 +123,16 @@ export function planMonitorLayout(
 			: root.columns * (config.columnWidth + 1) - 1;
 	height =
 		config.rowHeight === "dynamic"
-			? Math.max(height, root.rows * 4 - 1)
+			? Math.max(height - Number(topTitle), root.rows * 4 - 1)
 			: root.rows * (config.rowHeight + 1) - 1;
 	const panes: MonitorPaneGeometry[] = [];
 	const render = (cell: Cell, x: number, y: number, w: number, h: number): string => {
-		const prefix = `${w}x${h},${x},${y}`;
+		// tmux takes the first row's title from its layout cell, but reuses a
+		// separator for later rows. Add that one cell only along the top edge.
+		const prefix = `${w}x${h + Number(topTitle && y === 0)},${x},${y + Number(topTitle && y > 0)}`;
 		if (cell.index !== undefined) {
 			const id = paneIds[cell.index]!;
-			panes[cell.index] = { id, x, y, width: w, height: h };
+			panes[cell.index] = { id, x, y: y + Number(topTitle), width: w, height: h };
 			return `${prefix},${id.slice(1)}`;
 		}
 		const horizontal = cell.axis === "columns";
@@ -157,5 +160,5 @@ export function planMonitorLayout(
 		checksum = ((checksum >> 1) | ((checksum & 1) << 15)) + body.charCodeAt(i);
 		checksum &= 0xffff;
 	}
-	return { width, height, panes, layout: `${checksum.toString(16).padStart(4, "0")},${body}` };
+	return { width, height: height + Number(topTitle), panes, layout: `${checksum.toString(16).padStart(4, "0")},${body}` };
 }
