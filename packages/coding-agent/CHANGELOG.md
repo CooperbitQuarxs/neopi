@@ -52,6 +52,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Host-environment restoration clears runtime-added credentials, and ACP terminal guidance limits the restoration recipe to local PTY commands ([#336](https://github.com/PsychedelicShayna/neopi/issues/336)).
 - OAuth model hooks can deep-clone and rename models without losing the verified standard context limit used by live ingest ([#328](https://github.com/PsychedelicShayna/neopi/issues/328)).
 - `npi update --check` and other ordinary update invocations now accept upstream binary assets while keeping the installed executable named `npi` ([#327](https://github.com/PsychedelicShayna/neopi/issues/327)).
 - Live microphone admission now counts audio waiting for the encoder, so burst overflow is reported instead of silently discarding accepted speech ([#174](https://github.com/PsychedelicShayna/neopi/issues/174)).
