@@ -4,7 +4,7 @@
  * only explicit interrupt delivery suppresses an obsolete aborted settle.
  */
 
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,9 +14,10 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { AgentRegistry } from "../src/registry/agent-registry";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import { type CustomMessage, LIVE_DELEGATION_MESSAGE_TYPE } from "../src/session/messages";
-import { type LiveDelegationDelivery, LiveSessionController } from "../src/live/controller";
+import { type LiveDelegationDelivery, LiveSessionController, type LiveTranscript } from "../src/live/controller";
 import { LiveIngest } from "../src/live/ingest";
 import { LIVE_INGEST_DEFAULTS, type LiveIngestSettingsSource } from "../src/live/ingest-settings";
+import * as livePersonas from "../src/live/personas";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, type SubagentLifecyclePayload } from "../src/task/types";
 import { EventBus, emitSubagentFrame } from "../src/utils/event-bus";
 import type { LiveClientMessage, LiveServerEvent } from "../src/live/protocol";
@@ -100,6 +101,7 @@ interface Harness {
 	sentTurns: Array<readonly number[] | undefined>;
 	audioSent: Float32Array[];
 	outputSuppressed: boolean[];
+	transcripts: Array<LiveTranscript | undefined>;
 	fireOutputLevel(level: number): void;
 	fireMicrophone(samples: Float32Array): void;
 	fireLive(event: LiveServerEvent): void;
@@ -116,6 +118,7 @@ function makeHarness(options?: {
 	thinkingFlushMs?: number;
 	holdMode?: () => boolean;
 	quietFloorMs?: () => number;
+	transcriptKeywords?: () => { submit: string; force: string; silenceMs: number };
 	holdDelivery?: boolean;
 	dropAudio?: boolean;
 	playbackQueue?: { queuedMs: number; droppedMs: number };
@@ -126,6 +129,7 @@ function makeHarness(options?: {
 	ircRelayTransform?: (message: CustomMessage, body: string) => string | undefined;
 	ircRelayAllowed?: (message: CustomMessage) => boolean;
 	relayGates?: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
+	onInstructions?: (instructions: string) => void;
 }): Harness {
 	const sent: LiveClientMessage[] = [];
 	const aborts: Array<Record<string, unknown>> = [];
@@ -133,6 +137,7 @@ function makeHarness(options?: {
 	const speech: Harness["speech"] = [];
 	const audioSent: Float32Array[] = [];
 	const outputSuppressed: boolean[] = [];
+	const transcripts: Harness["transcripts"] = [];
 	let microphoneCallback: ((error: Error | null, samples: Float32Array) => void) | undefined;
 	const sentSpeech: string[] = [];
 	const sentTurns: Harness["sentTurns"] = [];
@@ -255,7 +260,7 @@ function makeHarness(options?: {
 		callbacks: {
 			onPhase() {},
 			onLevels() {},
-			onTranscript() {},
+			onTranscript: transcript => transcripts.push(transcript),
 			onTerminal() {},
 			onUserSpeech: ({ turn, text, final }) => speech.push({ turn, text, final }),
 			onSpeechSent: (text, turns) => {
@@ -270,11 +275,13 @@ function makeHarness(options?: {
 		delegationKeywords: options?.delegationKeywords,
 		holdMode: options?.holdMode,
 		quietFloorMs: options?.quietFloorMs,
+		transcriptKeywords: options?.transcriptKeywords,
 		ircRelayTransform: options?.ircRelayTransform,
 		ircRelayAllowed: options?.ircRelayAllowed,
 		relayGates: options?.relayGates,
 		extractAssistantText: message => (message as unknown as { testText?: string }).testText ?? "",
 		createTransport: transportOptions => {
+			options?.onInstructions?.(transportOptions.instructions);
 			liveCallbacks = transportOptions.callbacks;
 			return {
 				async connect() {},
@@ -315,6 +322,7 @@ function makeHarness(options?: {
 		sentTurns,
 		audioSent,
 		outputSuppressed,
+		transcripts,
 		fireOutputLevel: level => liveCallbacks?.onOutputLevel(level),
 		fireMicrophone: samples => microphoneCallback?.(null, samples),
 		fireLive: event => liveCallbacks?.onEvent(event),
@@ -613,6 +621,230 @@ describe("per-utterance delegation keywords", () => {
 	});
 });
 
+describe("held keyword submission boundaries", () => {
+	const keywords = () => ({ submit: "over", force: "make it so", silenceMs: 40 });
+
+	it("keeps custom persona instructions while adding the submitted-message routing contract", async () => {
+		const persona = vi.spyOn(livePersonas, "resolveLiveInstructions")
+			.mockResolvedValue("Custom Iris persona. Default route: relay every utterance.");
+		let instructions = "";
+		const h = makeHarness({ onInstructions: text => { instructions = text; } });
+		try {
+			await h.controller.start();
+			expect(instructions).toContain("Custom Iris persona.");
+			expect(instructions).toContain('"Operator Submitted Message":');
+			expect(instructions).toContain("overrides default-relay routing");
+			expect(instructions).toContain("you MAY answer directly or delegate");
+		} finally {
+			await h.controller.stop();
+			persona.mockRestore();
+		}
+	});
+
+	it("does not cut off a released Iris reply when the next held draft begins", async () => {
+		const h = makeHarness({ holdMode: () => true });
+		await h.controller.start();
+		try {
+			expect(h.controller.forceDelegateComposer("first request")).toBe(true);
+			await settle();
+			h.fireLive({ type: "output_transcript.added", item: { text: "Here is" } });
+			h.fireOutputLevel(0.5);
+			h.fireLive({ type: "input_transcript.added", item: { text: "next request" } });
+			h.fireLive({ type: "output_transcript.added", item: { text: " the complete answer." } });
+			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "Here is the complete answer." } });
+			expect(h.transcripts.some(item => item?.role === "assistant" && item.final &&
+				item.text === "Here is the complete answer.")).toBe(true);
+			expect(h.outputSuppressed.slice(-2)).not.toContain(true);
+			expect(h.controller.pendingUserTurnCount()).toBe(1);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("answers a submitted request without consuming a newer finalized held draft", async () => {
+		const h = makeHarness({ holdMode: () => true, transcriptKeywords: keywords });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "tell me a joke over" } });
+			await wait(70);
+			await settle();
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "next held request" } });
+			h.fireLive({ type: "output_transcript.added", item: { text: "A complete" } });
+			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "A complete joke" } });
+			expect(h.sentSpeech).toEqual(["tell me a joke"]);
+			expect(h.controller.pendingUserTurnCount()).toBe(1);
+			expect(h.transcripts.some(item => item?.role === "assistant" && item.final)).toBe(true);
+			h.fireLive(delegation("held-next-request", ""));
+			await settle();
+			expect(h.prompts).toEqual([]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	for (const hold of [false, true]) {
+		it(`submits to Iris for routing instead of forcing the primary (hold=${hold})`, async () => {
+			const h = makeHarness({ holdMode: () => hold, transcriptKeywords: keywords });
+			await h.controller.start();
+			try {
+				h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "tell me a joke over" } });
+				h.fireLive(delegation("premature-model-route", ""));
+				await wait(70);
+				await settle();
+				expect(h.prompts).toEqual([]);
+				expect(h.sent.some(message => message.type === "session.context.append" &&
+					message.content.some(item => item.text.includes("tell me a joke")))).toBe(true);
+				h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "A complete joke" } });
+				h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the parser over" } });
+				await wait(70);
+				await settle();
+				h.fireLive(delegation("iris-chose-primary", ""));
+				await settle();
+				expect(h.prompts).toEqual(["fix the parser"]);
+			} finally {
+				await h.controller.stop();
+			}
+		});
+	}
+
+	it("keeps mid-utterance keywords and all three parts in one canonical delivery", async () => {
+		const h = makeHarness({ transcriptKeywords: keywords });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "first part over" } });
+			h.fireLive(delegation("early-first", ""));
+			await wait(10);
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "second part over" } });
+			h.fireLive(delegation("early-second", ""));
+			await wait(10);
+			h.fireLive({ type: "input_transcript.added", item: { text: "third part" } });
+			await wait(60);
+			expect(h.prompts).toEqual([]);
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "third part over" } });
+			await wait(70);
+			await settle();
+			h.fireLive(delegation("one-complete-request", ""));
+			h.fireLive(delegation("duplicate-provider-route", ""));
+			await settle();
+			expect(h.prompts).toEqual(["first part over\n\nsecond part over\n\nthird part"]);
+			expect(h.sentSpeech).toEqual(h.prompts);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("counts ongoing microphone speech as activity before delayed transcripts arrive", async () => {
+		const h = makeHarness({ holdMode: () => true, transcriptKeywords: keywords });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "first part make it so" } });
+			for (let index = 0; index < 4; index++) {
+				await wait(20);
+				h.fireMicrophone(new Float32Array(160).fill(0.2));
+			}
+			expect(h.prompts).toEqual([]);
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "and the rest make it so" } });
+			await wait(70);
+			await settle();
+			expect(h.prompts).toEqual(["first part make it so\n\nand the rest"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("waits for the authoritative final and then re-arms on the next request", async () => {
+		const h = makeHarness({ holdMode: () => true, transcriptKeywords: keywords });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "input_transcript.added", item: { text: "first part make it so" } });
+			await wait(70);
+			expect(h.prompts).toEqual([]);
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "first part make it so but not yet" } });
+			await wait(70);
+			expect(h.prompts).toEqual([]);
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "last part make it so" } });
+			await wait(70);
+			await settle();
+			expect(h.prompts).toEqual(["first part make it so but not yet\n\nlast part"]);
+			h.fireLive({ type: "input_transcript.added", item: { text: "another request" } });
+			h.fireLive(delegation("must-not-leak-the-release", ""));
+			await wait(70);
+			expect(h.prompts).toHaveLength(1);
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "another request over" } });
+			await wait(70);
+			await settle();
+			expect(h.prompts).toHaveLength(1);
+			h.fireLive(delegation("new-submitted-request", ""));
+			await settle();
+			expect(h.prompts[1]).toBe("another request");
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	for (const routing of ["direct address", "blocked"] as const) {
+		it(`keeps ${routing} speech voice-only without poisoning the following submission`, async () => {
+			const h = makeHarness({
+				holdMode: () => true,
+				transcriptKeywords: keywords,
+				blockDelegateKeyword: "do not relay",
+				delegationKeywords: () => ({ suppress: "Iris", force: "relay" }),
+			});
+			await h.controller.start();
+			try {
+				const text = routing === "direct address" ? "Iris, relay a joke over" : "a joke do not relay over";
+				h.fireLive({ type: "turn.done", turn: { role: "user", transcript: text } });
+				h.fireLive(delegation("voice-only-before-submit", ""));
+				await wait(70);
+				await settle();
+				h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "A complete joke" } });
+				expect(h.prompts).toEqual([]);
+				h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "relay the parser fix make it so" } });
+				await wait(70);
+				await settle();
+				expect(h.prompts).toEqual(["relay the parser fix"]);
+			} finally {
+				await h.controller.stop();
+			}
+		});
+	}
+
+	it("honors the longer quiet floor without adding a second submit delay", async () => {
+		const h = makeHarness({ quietFloorMs: () => 80, transcriptKeywords: keywords });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix it make it so" } });
+			await wait(50);
+			expect(h.prompts).toEqual([]);
+			await wait(60);
+			await settle();
+			expect(h.prompts).toEqual(["fix it"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("releases a force-utterance route at submit without turning ordinary submits into forced routes", async () => {
+		const h = makeHarness({
+			holdMode: () => true, transcriptKeywords: keywords,
+			delegationKeywords: () => ({ suppress: "Iris", force: "relay" }),
+		});
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "relay the parser fix over" } });
+			await wait(70);
+			await settle();
+			expect(h.prompts).toEqual(["relay the parser fix"]);
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "tell me a joke over" } });
+			await wait(70);
+			await settle();
+			expect(h.prompts).toHaveLength(1);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+});
+
 describe("operator-owned live floor", () => {
 	it("keeps forced utterances behind hold mode until the explicit composer submit", async () => {
 		const h = makeHarness({
@@ -680,7 +912,7 @@ describe("operator-owned live floor", () => {
 		}
 	});
 
-	it("releases held canonical speech through the RPC submit keyword", async () => {
+	it("releases held canonical speech for Iris to route through the RPC submit keyword", async () => {
 		const h = makeHarness();
 		Object.assign(h.session, {
 			settings: Settings.isolated({
@@ -710,6 +942,9 @@ describe("operator-owned live floor", () => {
 			fire?.({ type: "turn.done", turn: { role: "user", transcript: "fix the cache thanks" } });
 			fire?.(delegation("rpc-held", ""));
 			await wait(70);
+			await settle();
+			expect(h.prompts).toEqual([]);
+			fire?.(delegation("rpc-submitted", ""));
 			await settle();
 			expect(h.prompts).toEqual(["fix the cache"]);
 		} finally {

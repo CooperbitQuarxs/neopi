@@ -105,7 +105,7 @@ export class LiveCommandController {
 	#assistantCaption: LiveAssistantCaption | undefined;
 	#assistantTranscriptTurn = 0;
 	#assistantTranscriptStartedAt = 0;
-	#keywordTimer: NodeJS.Timeout | undefined;
+
 	#keywordSettingsUnsubscribe: Array<() => void> = [];
 
 	constructor(ctx: InteractiveModeContext, createSession?: LiveSessionFactory) {
@@ -137,7 +137,6 @@ export class LiveCommandController {
 	noteComposerActivity(): void {
 		if (this.#editing) return;
 		this.#session?.noteComposerActivity();
-		this.#scheduleKeyword();
 	}
 
 	/** Where Enter sends composer text, or undefined when no call is running. */
@@ -236,57 +235,11 @@ export class LiveCommandController {
 		}
 	}
 
-	#clearKeywordTimer(): void {
-		if (this.#keywordTimer !== undefined) clearTimeout(this.#keywordTimer);
-		this.#keywordTimer = undefined;
-	}
-
-	/** The editor's onChange reports partials, final corrections, and typed edits alike.
-	 * Only the text actually visible after the last write may trigger a keyword. */
-	#scheduleKeyword(): void {
-		this.#clearKeywordTimer();
-		if (!this.#session || this.#ctx.editor.chainLocked) return;
-		const text = this.#ctx.editor.getText();
-		if (
-			!stripLiveKeyword(text, cfgLiveForceDelegateKeyword.get(this.#ctx.settings), true).matched &&
-			!stripLiveKeyword(text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).matched
-		)
-			return;
-		const delay = Math.max(
-			cfgLiveSubmitSilenceMs.get(this.#ctx.settings),
-			cfgLiveQuietFloorMs.get(this.#ctx.settings),
-		);
-		this.#keywordTimer = setTimeout(() => {
-			this.#keywordTimer = undefined;
-			const session = this.#session;
-			if (!session || this.#ctx.editor.chainLocked || this.#ctx.editor.getText() !== text) return;
-			const force = stripLiveKeyword(text, cfgLiveForceDelegateKeyword.get(this.#ctx.settings), true);
-			if (force.matched && force.text) {
-				session.forceDelegateComposer(force.text);
-				return;
-			}
-			const submit = stripLiveKeyword(text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true);
-			if (!submit.matched || !submit.text) return;
-			if (cfgLiveHoldMode.get(this.#ctx.settings)) {
-				session.forceDelegateComposer(submit.text);
-				return;
-			}
-			this.#editing = true;
-			try {
-				this.#ctx.editor.setCollapsedText(submit.text);
-			} finally {
-				this.#editing = false;
-			}
-			this.#ctx.editor.submit();
-		}, delay);
-	}
-
 	async #start(): Promise<void> {
 		this.#assistantTranscriptTurn = 0;
 		this.#assistantTranscriptStartedAt = 0;
 		this.#destination = "primary";
 		this.#showPhase("connecting");
-		this.#clearKeywordTimer();
 		this.#utterance = undefined;
 		this.#committedSpeech.clear();
 		this.#ctx.liveTranscriptContainer.clear();
@@ -311,6 +264,14 @@ export class LiveCommandController {
 			}),
 			holdMode: () => cfgLiveHoldMode.get(this.#ctx.settings),
 			quietFloorMs: () => cfgLiveQuietFloorMs.get(this.#ctx.settings),
+			transcriptKeywords: () => ({
+				submit: cfgLiveSubmitKeyword.get(this.#ctx.settings),
+				force: cfgLiveForceDelegateKeyword.get(this.#ctx.settings),
+				silenceMs: cfgLiveSubmitSilenceMs.get(this.#ctx.settings),
+			}),
+			composerText: expanded => this.#ctx.editor.chainLocked
+				? undefined
+				: expanded ? this.#ctx.editor.getExpandedText() : this.#ctx.editor.getText(),
 			captureComposerExcludingTurns: turns => {
 				const ids = turns.flatMap(turn => {
 					const id = this.#committedSpeech.get(turn);
@@ -374,7 +335,6 @@ export class LiveCommandController {
 				},
 				onSpeechSent: (text, turns, composerReceipts) => {
 					if (this.#session !== session) return;
-					this.#clearKeywordTimer();
 					this.#editing = true;
 					try {
 						if (composerReceipts) this.#ctx.editor.removeUtterances(composerReceipts);
@@ -397,7 +357,7 @@ export class LiveCommandController {
 					} finally {
 						this.#editing = false;
 					}
-					if (turns) this.#scheduleKeyword();
+					session.refreshTurnGate(false);
 					this.#ctx.ui.requestRender();
 				},
 				onTerminal: error => this.#finish(session, error),
@@ -428,11 +388,9 @@ export class LiveCommandController {
 			this.#keywordSettingsUnsubscribe.push(
 				setting.listen(this.#ctx.settings, () => {
 					session.refreshTurnGate();
-					this.#scheduleKeyword();
 				}),
 			);
 		}
-		this.#scheduleKeyword();
 		this.#ctx.ui.requestRender();
 
 		try {
@@ -594,7 +552,6 @@ export class LiveCommandController {
 	#release(): void {
 		for (const unsubscribe of this.#keywordSettingsUnsubscribe) unsubscribe();
 		this.#keywordSettingsUnsubscribe = [];
-		this.#clearKeywordTimer();
 		this.#finalizeAssistantTranscript();
 		this.#ctx.liveTranscriptContainer.clear();
 		this.#assistantCaption = undefined;
