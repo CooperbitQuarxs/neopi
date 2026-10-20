@@ -5,6 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { cfgDisabledProviders } from "@oh-my-pi/pi-coding-agent/config/model-settings";
@@ -259,7 +260,7 @@ describe("runSubprocess per-agent prewalk", () => {
 			const forwarded = spy.mock.calls[0]?.[0];
 			expect(forwarded?.model?.id).toBe(primary.id);
 			expect(forwarded?.prewalk?.target.id).toBe(target.id);
-			expect(forwarded?.prewalk?.thinkingLevel).toBe("low");
+			expect(forwarded?.prewalk?.thinkingLevel).toBe(Effort.Low);
 		},
 	);
 
@@ -286,9 +287,9 @@ describe("runSubprocess per-agent prewalk", () => {
 		expect(result.exitCode).toBe(0);
 		const forwarded = spy.mock.calls[0]?.[0];
 		expect(forwarded?.model?.id).toBe(target.id);
-		expect(forwarded?.thinkingLevel).toBe("high");
+		expect(forwarded?.thinkingLevel).toBe(Effort.High);
 		expect(forwarded?.prewalk?.target.id).toBe(primary.id);
-		expect(forwarded?.prewalk?.thinkingLevel).toBe("low");
+		expect(forwarded?.prewalk?.thinkingLevel).toBe(Effort.Low);
 		expect(progressModels).toContain(`${target.provider}/${target.id}:high`);
 		expect(progressRoutes.some(route => route.includes(`${primary.provider}/${primary.id}:low`))).toBe(true);
 	});
@@ -312,7 +313,7 @@ describe("runSubprocess per-agent prewalk", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(spy.mock.calls[0]?.[0]?.prewalk?.target.id).toBe(target.id);
-		expect(spy.mock.calls[0]?.[0]?.prewalk?.thinkingLevel).toBe("low");
+		expect(spy.mock.calls[0]?.[0]?.prewalk?.thinkingLevel).toBe(Effort.Low);
 	});
 
 	it("uses execution fallbacks after an unavailable explicit frontmatter target", async () => {
@@ -334,7 +335,7 @@ describe("runSubprocess per-agent prewalk", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(spy.mock.calls[0]?.[0]?.prewalk?.target.id).toBe(target.id);
-		expect(spy.mock.calls[0]?.[0]?.prewalk?.thinkingLevel).toBe("low");
+		expect(spy.mock.calls[0]?.[0]?.prewalk?.thinkingLevel).toBe(Effort.Low);
 	});
 
 	it.each(["planner", "execution"] as const)(
@@ -369,9 +370,9 @@ describe("runSubprocess per-agent prewalk", () => {
 			expect(result.exitCode).toBe(0);
 			const forwarded = spy.mock.calls[0]?.[0];
 			expect(forwarded?.model?.id).toBe(phase === "planner" ? target.id : primary.id);
-			expect(forwarded?.thinkingLevel).toBe(phase === "planner" ? "high" : "low");
+			expect(forwarded?.thinkingLevel).toBe(phase === "planner" ? Effort.High : Effort.Low);
 			expect(forwarded?.prewalk?.target.id).toBe(phase === "execution" ? target.id : primary.id);
-			expect(forwarded?.prewalk?.thinkingLevel).toBe(phase === "execution" ? "high" : "low");
+			expect(forwarded?.prewalk?.thinkingLevel).toBe(phase === "execution" ? Effort.High : Effort.Low);
 		},
 	);
 
@@ -404,7 +405,7 @@ describe("runSubprocess per-agent prewalk", () => {
 			expect(result.exitCode).toBe(0);
 			const forwarded = spy.mock.calls[0]?.[0];
 			expect(forwarded?.model?.id).toBe(primary.id);
-			expect(forwarded?.thinkingLevel).toBe("low");
+			expect(forwarded?.thinkingLevel).toBe(Effort.Low);
 			expect(forwarded?.prewalk).toBeUndefined();
 		},
 	);
@@ -523,9 +524,9 @@ describe("runSubprocess per-agent prewalk", () => {
 		});
 
 		expect(result.exitCode).toBe(0);
-		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe("high");
+		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe(Effort.High);
 		expect(spy.mock.calls[0]?.[0]?.prewalk?.target.id).toBe(primary.id);
-		expect(spy.mock.calls[0]?.[0]?.prewalk?.thinkingLevel).toBe("low");
+		expect(spy.mock.calls[0]?.[0]?.prewalk?.thinkingLevel).toBe(Effort.Low);
 	});
 
 	it("skips identical planner and execution selections without discarding the planner", async () => {
@@ -543,7 +544,7 @@ describe("runSubprocess per-agent prewalk", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(spy.mock.calls[0]?.[0]?.model?.id).toBe(target.id);
-		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe("high");
+		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe(Effort.High);
 		expect(spy.mock.calls[0]?.[0]?.prewalk).toBeUndefined();
 	});
 
