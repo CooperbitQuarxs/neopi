@@ -1506,6 +1506,8 @@ export interface Model<TApi extends Api = Api> {
 	discoveryMissingContextWindow?: boolean;
 	/** Discovery used a compatibility default because no output limit was reported. */
 	discoveryMissingMaxTokens?: boolean;
+	/** Discovery conservatively disabled effort until optional facts establish reasoning support. */
+	discoveryMissingReasoningEffort?: boolean;
 	id: string;
 	/** Role-specific runner capability; omitted for ordinary chat models. */
 	kind?: ModelKind;

@@ -1791,9 +1791,11 @@ export class ModelRegistry {
 
 	#applyProviderCompat(compat: ModelSpec<Api>["compat"] | undefined, models: Model<Api>[]): Model<Api>[] {
 		if (!compat) return models;
-		return models.map(model =>
-			buildModel({ ...model, compat: mergeCompat(model.compatConfig, compat) } as ModelSpec<Api>),
-		);
+		return models.map(model => {
+			const spec = { ...model, compat: mergeCompat(model.compatConfig, compat) };
+			if ("supportsReasoningEffort" in compat) delete spec.discoveryMissingReasoningEffort;
+			return buildModel(spec as ModelSpec<Api>);
+		});
 	}
 
 	#normalizeDiscoverableModels(providerConfig: DiscoveryProviderConfig, models: Model<Api>[]): Model<Api>[] {
@@ -2218,8 +2220,8 @@ export class ModelRegistry {
 			// `injectV1: false` additionally splits off its own namespace: rows
 			// cached from the `/v1`-injected URL can hold a different (smaller)
 			// model set and must never satisfy a bare provider's cache read.
-			// Opt-in fact resolution needs presence markers absent from older cached defaults.
-			const facts = this.getModelFactConfig().enabled ? ":facts-v1" : "";
+			// Fact metadata stays opt-in. v2 restores conservative effort defaults in cached rows.
+			const facts = this.getModelFactConfig().enabled ? ":facts-v2" : "";
 			return providerConfig.discovery.injectV1 === false
 				? `${providerConfig.provider}:openai-models-list-bare-context-v3${facts}`
 				: `${providerConfig.provider}:openai-models-list-context-v3${facts}`;
@@ -2351,6 +2353,7 @@ export class ModelRegistry {
 	#discoveryContext(): DiscoveryContext {
 		return {
 			fetch: this.#fetch,
+			modelFactsEnabled: this.getModelFactConfig().enabled,
 			getBearerApiKeyResolver: async provider => {
 				const apiKey = await this.getApiKeyForProvider(provider);
 				if (!isDiscoveryBearerApiKey(apiKey)) {

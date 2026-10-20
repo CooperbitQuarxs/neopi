@@ -14,7 +14,10 @@ import { parseModelString } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import type { ModelOverride, ProviderAuthMode } from "./models-config-schema";
 type DiscoveryPlaceholders = Pick<
 	Model<Api>,
-	"discoveryMissingInput" | "discoveryMissingContextWindow" | "discoveryMissingMaxTokens"
+	| "discoveryMissingInput"
+	| "discoveryMissingContextWindow"
+	| "discoveryMissingMaxTokens"
+	| "discoveryMissingReasoningEffort"
 >;
 
 export interface CustomModelDefinitionLike extends ModelPatch, DiscoveryPlaceholders {
@@ -95,6 +98,7 @@ export function buildCustomModelOverlay(
 		discoveryMissingInput: modelDef.discoveryMissingInput,
 		discoveryMissingContextWindow: modelDef.discoveryMissingContextWindow,
 		discoveryMissingMaxTokens: modelDef.discoveryMissingMaxTokens,
+		discoveryMissingReasoningEffort: modelDef.discoveryMissingReasoningEffort,
 		imageInputDecoder: modelDef.imageInputDecoder,
 		tokenizer: modelDef.tokenizer,
 		supportsTools: modelDef.supportsTools,
@@ -150,6 +154,7 @@ export function finalizeCustomModel(model: CustomModelOverlay, options: CustomMo
 			(resolvedModel.contextWindow == null && reference?.contextWindow == null),
 		discoveryMissingMaxTokens:
 			resolvedModel.discoveryMissingMaxTokens ?? (resolvedModel.maxTokens == null && reference?.maxTokens == null),
+		discoveryMissingReasoningEffort: resolvedModel.discoveryMissingReasoningEffort,
 		imageInputDecoder: resolvedModel.imageInputDecoder,
 		...(supportsTools !== undefined ? { supportsTools } : {}),
 		cost,

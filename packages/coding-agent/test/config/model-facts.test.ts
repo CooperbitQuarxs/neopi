@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -21,7 +21,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/config/model-facts";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { logger, TempDir } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
@@ -375,6 +375,7 @@ describe("model fact setting validation", () => {
 describe("model fact settings initialization", () => {
 	let state: SettingsTestState | undefined;
 	let temp: TempDir;
+	let warningSpy: { mockRestore(): void } | undefined;
 
 	beforeEach(async () => {
 		state = beginSettingsTest();
@@ -385,6 +386,8 @@ describe("model fact settings initialization", () => {
 	});
 
 	afterEach(async () => {
+		warningSpy?.mockRestore();
+		warningSpy = undefined;
 		restoreSettingsTestState(state);
 		state = undefined;
 		AgentStorage.close();
@@ -418,18 +421,56 @@ describe("model fact settings initialization", () => {
 		expect(cfgModelFactsEnabled.get(settings)).toBe(true);
 	});
 
-	it("rejects malformed persisted settings instead of silently returning defaults", async () => {
+	for (const enabled of [false, true]) {
+		it(`loads invalid persisted fields with warnings when model facts are ${enabled ? "enabled" : "disabled"}`, async () => {
+			const warn = spyOn(logger, "warn").mockImplementation(() => {});
+			warningSpy = warn;
+			await Bun.write(
+				temp.join("agent", "config.yml"),
+				YAML.stringify({
+					modelFacts: {
+						enabled,
+						sources: ["openrouter", 12, "stencil"],
+						overrides: {
+							"custom/grok-4.7": { contextWindow: "nope", maxTokens: 2048, reasoning: "yes" },
+							"custom/other": { contextWindow: 8192 },
+						},
+					},
+				}),
+			);
+			const settings = await Settings.init({ cwd: temp.join("project"), agentDir: temp.join("agent") });
+			const parsed = getModelFactConfig(settings);
+			expect(parsed.enabled).toBe(enabled);
+			expect(parsed.sources).toEqual(["openrouter", "stencil"]);
+			expect(parsed.overrides).toEqual({
+				"custom/grok-4.7": { maxTokens: 2048 },
+				"custom/other": { contextWindow: 8192 },
+			});
+			const target = model("custom", "grok-4.7", { contextWindow: 4096 });
+			const [resolved] = applyModelFacts([target], [], parsed);
+			expect(resolved?.model.contextWindow).toBe(4096);
+			expect(resolved?.model.maxTokens).toBe(enabled ? 2048 : null);
+			expect(resolved?.issues).toContain(
+				"Invalid model facts: custom/grok-4.7.contextWindow must be a positive integer or null",
+			);
+			expect(warn).toHaveBeenCalledWith("Settings: ignoring invalid model fact", {
+				issue: "Invalid model facts: custom/grok-4.7.contextWindow must be a positive integer or null",
+			});
+		});
+	}
+
+	it("loads malformed fact containers and enable flags without preventing startup", async () => {
+		warningSpy = spyOn(logger, "warn").mockImplementation(() => {});
 		await Bun.write(
 			temp.join("agent", "config.yml"),
-			YAML.stringify({
-				modelFacts: {
-					sources: ["openrouter", 12],
-				},
-			}),
+			YAML.stringify({ modelFacts: { enabled: "yes", sources: "stencil", overrides: [] } }),
 		);
-		await expect(Settings.init({ cwd: temp.join("project"), agentDir: temp.join("agent") })).rejects.toThrow(
-			"Invalid model facts",
-		);
+		const settings = await Settings.init({ cwd: temp.join("project"), agentDir: temp.join("agent") });
+		const parsed = getModelFactConfig(settings);
+		expect(parsed.enabled).toBe(false);
+		expect(parsed.sources).toEqual([]);
+		expect(parsed.overrides).toEqual({});
+		expect(parsed.issues).toHaveLength(3);
 	});
 
 	it("rejects invalid editor writes before changing the effective override record", () => {

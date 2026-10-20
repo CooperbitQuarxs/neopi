@@ -130,6 +130,84 @@ describe("registry model fact projection", () => {
 		expect(reasoningRequest(model).reasoning_effort).toBeUndefined();
 	});
 
+	for (const reasoning of [false, true]) {
+		test(`preserves paired nightly compat snapshots without resolved facts, reasoning ${reasoning}`, async () => {
+			const id = "unknown-hunt-model";
+			await Bun.write(
+				path.join(dir, "models.yml"),
+				JSON.stringify({
+					providers: {
+						"hunt-neutral": {
+							api: "openai-completions",
+							baseUrl: "https://neutral.invalid/v1",
+							auth: "none",
+							discovery: { type: "openai-models-list" },
+							...(reasoning ? { modelOverrides: { [id]: { reasoning: true } } } : {}),
+						},
+					},
+				}),
+			);
+			// c7f0c532e4's generic discovery supplies these sparse compat defaults.
+			const baseline = buildModel({
+				...neutral,
+				id,
+				provider: "hunt-neutral",
+				baseUrl: "https://neutral.invalid/v1",
+				reasoning,
+				compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false },
+			});
+			const snapshot = (model: Model<Api>): string =>
+				JSON.stringify({ compatConfig: model.compatConfig, compat: model.compat });
+			for (const enabled of [false, true]) {
+				const scope = Settings.isolated();
+				cfgModelFactsEnabled.set(scope, enabled);
+				cfgModelFactsSources.set(scope, []);
+				const registry = new ModelRegistry(auth, path.join(dir, "models.yml"), {
+					settings: scope,
+					fetch: async () => Response.json({ data: [{ id }] }),
+				});
+				await registry.refreshProvider("hunt-neutral", "online");
+				const discovered = registry.find("hunt-neutral", id);
+				if (!discovered) throw new Error("discovered hunt model missing");
+				expect(snapshot(discovered)).toBe(snapshot(baseline));
+				expect(reasoningRequest(discovered)).toEqual({ model: id, messages: [], stream: true });
+				if (!enabled) {
+					expect(discovered).not.toHaveProperty("discoveryMissingInput");
+					expect(discovered).not.toHaveProperty("discoveryMissingContextWindow");
+					expect(discovered).not.toHaveProperty("discoveryMissingMaxTokens");
+					expect(discovered).not.toHaveProperty("discoveryMissingReasoningEffort");
+				}
+			}
+		});
+	}
+
+	for (const level of ["provider", "model"]) {
+		test(`preserves the operator's ${level}-level effort policy when source facts resolve`, async () => {
+			const compat = { supportsReasoningEffort: false };
+			await Bun.write(
+				path.join(dir, "models.yml"),
+				JSON.stringify({
+					providers: {
+						"fact-target": {
+							api: "openai-completions",
+							baseUrl: neutral.baseUrl,
+							auth: "none",
+							discovery: { type: "openai-models-list" },
+							...(level === "provider" ? { compat } : { modelOverrides: { [neutral.id]: { compat } } }),
+						},
+					},
+				}),
+			);
+			const { registry } = createRegistry();
+			await registry.refreshProvider("fact-target", "online");
+			const resolved = registry.find("fact-target", neutral.id);
+			if (!resolved) throw new Error("fact target missing");
+			expect(resolved.contextWindow).toBe(500_000);
+			expect(resolved.thinking?.efforts).toContain(Effort.High);
+			expect(reasoningRequest(resolved).reasoning_effort).toBeUndefined();
+		});
+	}
+
 	test("enabling fact resolution refreshes pre-feature discovery defaults without invalidating the disabled cache", async () => {
 		const { registry, scope, requests } = createRegistry(false);
 		await registry.refreshProvider("fact-target", "online");

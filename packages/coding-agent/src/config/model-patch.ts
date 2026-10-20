@@ -329,6 +329,7 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 		};
 	}
 	let compat: ModelSpec<Api>["compat"];
+	if (patch.compat && "supportsReasoningEffort" in patch.compat) delete result.discoveryMissingReasoningEffort;
 	if (transport === "merge") {
 		if (patch.headers || patch.resolveHeaders) {
 			result.headers = undefined;

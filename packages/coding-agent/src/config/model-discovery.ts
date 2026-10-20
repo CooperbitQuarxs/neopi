@@ -191,6 +191,8 @@ export interface DiscoveryProviderConfig {
 export interface DiscoveryContext {
 	/** Injected fetch implementation (tests stub this). */
 	fetch: FetchImpl;
+	/** Opt-in presence metadata for fact resolution; ordinary discovery keeps its existing shape. */
+	modelFactsEnabled?: boolean;
 	/**
 	 * Resolve a provider's bearer credential for `Authorization: Bearer …`.
 	 * Returns undefined when no key is stored or it is a local/no-auth
@@ -1001,9 +1003,16 @@ export async function discoverOpenAIModelsList(
 			reasoning: reference?.reasoning ?? false,
 			thinking: inheritReferenceThinking(undefined, reference, providerConfig.provider),
 			input,
-			discoveryMissingInput: reportedInput === undefined,
-			discoveryMissingContextWindow: reportedContextWindow === null,
-			discoveryMissingMaxTokens: reportedMaxTokens === undefined && reference?.maxTokens == null,
+			...(ctx.modelFactsEnabled
+				? {
+						discoveryMissingInput: reportedInput === undefined,
+						discoveryMissingContextWindow: reportedContextWindow === null,
+						discoveryMissingMaxTokens: reportedMaxTokens === undefined && reference?.maxTokens == null,
+						discoveryMissingReasoningEffort:
+							referenceCompat?.supportsReasoningEffort === undefined &&
+							(!providerConfig.compat || !("supportsReasoningEffort" in providerConfig.compat)),
+					}
+				: {}),
 			...(providerConfig.discovery.type === "lm-studio" ? { imageInputDecoder: "stb" as const } : {}),
 			// Proxy/gateway pricing is provider-specific and rarely matches
 			// upstream bundled catalogs, so keep costs local-unknown even
@@ -1021,9 +1030,7 @@ export async function discoverOpenAIModelsList(
 			compat: {
 				supportsStore: false,
 				supportsDeveloperRole: false,
-				...(referenceCompat?.supportsReasoningEffort !== undefined
-					? { supportsReasoningEffort: referenceCompat.supportsReasoningEffort }
-					: {}),
+				supportsReasoningEffort: referenceCompat?.supportsReasoningEffort ?? false,
 				...(referenceCompat?.reasoningEffortMap ? { reasoningEffortMap: referenceCompat.reasoningEffortMap } : {}),
 				...(referenceCompat?.omitReasoningEffort !== undefined
 					? { omitReasoningEffort: referenceCompat.omitReasoningEffort }

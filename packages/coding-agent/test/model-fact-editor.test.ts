@@ -101,6 +101,16 @@ async function save(editor: ModelFactEditorComponent): Promise<void> {
 }
 
 describe("model fact editor", () => {
+	test("shows ignored persisted-field warnings in the facts preview", async () => {
+		const preview = resolution();
+		preview.issues = ["Invalid model facts: local/listed.contextWindow must be a positive integer or null"];
+		const editor = create({ preview: () => preview });
+		await Promise.resolve();
+		expect(text(editor)).toContain(
+			"Warning: Invalid model facts: local/listed.contextWindow must be a positive integer or null",
+		);
+	});
+
 	test("adds an unlisted model, writes literal facts, and saves a detached settings snapshot", async () => {
 		const original = config();
 		const saved: ModelFactConfig[] = [];

@@ -4,7 +4,7 @@ import { THINKING_EFFORTS, type Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getReferenceCandidateIds } from "@oh-my-pi/pi-catalog/identity";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import type { Api, Model, ModelCost, ThinkingConfig } from "@oh-my-pi/pi-catalog/types";
-import { isRecord } from "@oh-my-pi/pi-utils";
+import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { register, type ScopeLike } from "./registry";
 
 export interface ModelFactValues {
@@ -39,6 +39,8 @@ export interface ModelFactConfig {
 	enabled: boolean;
 	sources: readonly string[];
 	overrides: ModelFactOverrides;
+	/** Invalid persisted fields are ignored but remain visible in the facts preview. */
+	issues?: readonly string[];
 }
 
 export interface ModelFactSourceSnapshot {
@@ -226,36 +228,102 @@ export function validateModelFactOverrides(value: unknown): asserts value is Mod
 	}
 }
 
+function parseModelFactSources(value: unknown): { sources: readonly string[]; issues: string[] } {
+	if (value === undefined) return { sources: DEFAULT_MODEL_FACT_CONFIG.sources, issues: [] };
+	const sources: string[] = [];
+	const issues: string[] = [];
+	if (!Array.isArray(value)) {
+		return { sources, issues: ["Invalid model facts: sources must be an array of nonempty source names"] };
+	}
+	for (const source of value) {
+		try {
+			validateModelFactSources([source]);
+			if (sources.includes(source)) invalid(`sources contains duplicate ${source}`);
+			sources.push(source);
+		} catch (error) {
+			issues.push(error instanceof Error ? error.message : String(error));
+		}
+	}
+	return { sources, issues };
+}
+
+function parseModelFactOverrides(value: unknown): { overrides: ModelFactOverrides; issues: string[] } {
+	const overrides: ModelFactOverrides = {};
+	const issues: string[] = [];
+	if (value === undefined) return { overrides, issues };
+	if (!isRecord(value)) {
+		return { overrides, issues: ["Invalid model facts: overrides must be a provider/model record"] };
+	}
+	for (const [key, override] of Object.entries(value)) {
+		try {
+			if (!exactModelKey(key)) invalid(`override key ${key} must be provider/model`);
+			if (!isRecord(override)) invalid(`${key} must be a field override object`);
+		} catch (error) {
+			issues.push(error instanceof Error ? error.message : String(error));
+			continue;
+		}
+		const valid: ModelFactOverride = {};
+		for (const [field, literal] of Object.entries(override)) {
+			try {
+				const entry = { [key]: { [field]: literal } };
+				validateModelFactOverrides(entry);
+				Object.assign(valid, entry[key]);
+			} catch (error) {
+				issues.push(error instanceof Error ? error.message : String(error));
+			}
+		}
+		overrides[key] = valid;
+	}
+	return { overrides, issues };
+}
+
+function warnModelFactIssues(issues: readonly string[]): void {
+	for (const issue of issues) logger.warn("Settings: ignoring invalid model fact", { issue });
+}
+
 export const cfgModelFactsEnabled = register({
 	id: "modelFacts.enabled",
 	type: "boolean",
 	default: false,
 	validate: value => {
-		if (value !== undefined && typeof value !== "boolean") invalid("enabled must be boolean");
+		if (value !== undefined && typeof value !== "boolean")
+			warnModelFactIssues(["Invalid model facts: enabled must be boolean"]);
 	},
 });
 export const cfgModelFactsSources = register({
 	id: "modelFacts.sources",
 	type: "array",
 	default: DEFAULT_MODEL_FACT_CONFIG.sources,
-	validate: value => {
-		if (value !== undefined) validateModelFactSources(value);
+	validate: value => warnModelFactIssues(parseModelFactSources(value).issues),
+	normalize: value => {
+		validateModelFactSources(value);
+		return value;
 	},
 });
 export const cfgModelFactsOverrides = register({
 	id: "modelFacts.overrides",
 	type: "record",
 	default: DEFAULT_MODEL_FACT_CONFIG.overrides,
-	validate: value => {
-		if (value !== undefined) validateModelFactOverrides(value);
+	validate: value => warnModelFactIssues(parseModelFactOverrides(value).issues),
+	normalize: value => {
+		validateModelFactOverrides(value);
+		return value;
 	},
 });
 
 export function getModelFactConfig(scope: ScopeLike): ModelFactConfig {
+	const settings = "settings" in scope ? scope.settings : scope;
+	const { sources, issues } = parseModelFactSources(settings.rawValue(cfgModelFactsSources));
+	const parsed = parseModelFactOverrides(settings.rawValue(cfgModelFactsOverrides));
+	issues.push(...parsed.issues);
+	const enabled = settings.rawValue(cfgModelFactsEnabled);
+	if (enabled !== undefined && typeof enabled !== "boolean")
+		issues.push("Invalid model facts: enabled must be boolean");
 	return {
-		enabled: cfgModelFactsEnabled.get(scope),
-		sources: cfgModelFactsSources.get(scope),
-		overrides: cfgModelFactsOverrides.get(scope),
+		enabled: enabled === true,
+		sources,
+		overrides: parsed.overrides,
+		...(issues.length > 0 ? { issues } : {}),
 	};
 }
 
@@ -475,9 +543,17 @@ function resolveWithContext(
 	const thinking =
 		efforts === target.thinking?.efforts ? target.thinking : thinkingWithEfforts(target, efforts, effortSource);
 	// Capability changes must also refresh the target provider's derived wire policy.
+	const spec = toModelSpec(target);
+	if (target.discoveryMissingReasoningEffort && values.reasoning && thinking !== target.thinking && spec.compat) {
+		const { supportsReasoningEffort: _defaultEffort, ...compat } = spec.compat as NonNullable<
+			Model<"openai-completions">["compatConfig"]
+		>;
+		spec.compat = compat;
+		delete spec.discoveryMissingReasoningEffort;
+	}
 	const model =
 		values.reasoning !== target.reasoning || thinking !== target.thinking
-			? buildModel({ ...toModelSpec(target), ...facts, thinking })
+			? buildModel({ ...spec, ...facts, thinking })
 			: { ...target };
 	// These are field-level operator/source facts, not new catalog defaults.
 	Object.assign(model, facts);
@@ -518,7 +594,7 @@ export function applyModelFacts(
 				if (hasFact(model, field))
 					provenance[field] = { kind: "provider", provider: model.provider, model: model.id };
 			}
-			return { model, provenance, issues: [] };
+			return { model, provenance, issues: config.issues ?? [] };
 		});
 	const targets = [...models];
 	const keys = new Set(models.map(keyOf));
@@ -536,10 +612,11 @@ export function applyModelFacts(
 		...indexed,
 		sources: config.sources.flatMap(source => indexed.sources.filter(snapshot => snapshot.source === source)),
 	};
-	return targets.map(model =>
-		resolveWithContext(model, context, config.overrides, {
+	return targets.map(model => {
+		const resolved = resolveWithContext(model, context, config.overrides, {
 			missingFields: options.missingFields?.get(keyOf(model)),
 			matches: options.matches,
-		}),
-	);
+		});
+		return config.issues?.length ? { ...resolved, issues: [...config.issues, ...resolved.issues] } : resolved;
+	});
 }
