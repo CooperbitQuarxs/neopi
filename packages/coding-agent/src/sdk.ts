@@ -2548,6 +2548,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				return session.getPromptCacheKeyForModel(model) ?? session.agent.sessionId;
 			},
 			getToolByName: name => session?.getToolByName(name),
+			getEnabledToolNames: () =>
+				session?.getEnabledToolNames() ?? [...new Set([...activeToolNames, ...(toolSession.xdev?.mountedNames ?? [])])],
 			getToolForEvalBridge: name => session?.getToolForEvalBridge(name),
 			getEvalBridgeToolNames: () => session?.getEvalBridgeToolNames() ?? [],
 			getCodeModeDirectToolNames: () => session?.getCodeModeDirectToolNames(),
