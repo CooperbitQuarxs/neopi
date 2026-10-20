@@ -483,7 +483,10 @@ function formatOptionNotes(result: { selectedOptions: string[]; optionNotes?: As
 	return (result.optionNotes ?? [])
 		.map(entry => {
 			const selected = result.selectedOptions.includes(entry.option) ? "selected" : "not selected";
-			const note = entry.note.split("\n").map(line => `  ${line}`).join("\n");
+			const note = entry.note
+				.split("\n")
+				.map(line => `  ${line}`)
+				.join("\n");
 			return `Note on option ${JSON.stringify(entry.option)} (${selected}):\n${note}`;
 		})
 		.join("\n");

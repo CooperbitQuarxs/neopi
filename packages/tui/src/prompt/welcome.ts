@@ -409,7 +409,9 @@ export class WelcomeComponent implements Component {
 
 	#renderLines(termWidth: number): string[] {
 		if (this.branding === "classic") {
-			return renderClassicWelcome(termWidth, this.version, this.#currentLogoFrame(), width => this.#renderTip(width));
+			return renderClassicWelcome(termWidth, this.version, this.#currentLogoFrame(), width =>
+				this.#renderTip(width),
+			);
 		}
 		// Content keeps a column clear on each side; everything centers in the full width.
 		const room = termWidth - 2;

@@ -23,8 +23,9 @@ export function toolCatalogListing(session: ToolSession): string {
 	return [
 		`# Enabled tools (${tools.length})`,
 		"",
-		...tools.map(tool =>
-			`- tool://${encodeURIComponent(tool.name)} [${tool.loadMode ?? "essential"}]: ${toolSummary(tool).replace(/\s+/g, " ").trim()}`,
+		...tools.map(
+			tool =>
+				`- tool://${encodeURIComponent(tool.name)} [${tool.loadMode ?? "essential"}]: ${toolSummary(tool).replace(/\s+/g, " ").trim()}`,
 		),
 		"",
 		"Read tool://<name> for docs, JSON schema, examples, and restrictions. This catalog is read-only; use existing tool invocation paths to execute.",
@@ -38,7 +39,7 @@ export function toolCatalogDocs(session: ToolSession, name: string): string {
 	// Only top-level tools get harness intent injection. Mounted/Code Mode tools
 	// retain their own schema, exactly as their existing dispatch paths expect.
 	const wireTool = session.isToolActive?.(name)
-		? normalizeTools([tool], { injectIntent: cfgToolsIntentTracing.get(session.settings) })?.[0] ?? tool
+		? (normalizeTools([tool], { injectIntent: cfgToolsIntentTracing.get(session.settings) })?.[0] ?? tool)
 		: tool;
 	const approval = tool.approval;
 	const approvalDescription =
@@ -46,7 +47,7 @@ export function toolCatalogDocs(session: ToolSession, name: string): string {
 			? "Argument-dependent"
 			: typeof approval === "object"
 				? JSON.stringify(approval)
-				: approval ?? "exec";
+				: (approval ?? "exec");
 	return [
 		`# ${tool.name}`,
 		"",

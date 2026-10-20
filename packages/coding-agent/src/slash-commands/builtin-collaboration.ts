@@ -32,8 +32,9 @@ import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../comm
 import { cfgChainingActive, cfgChainingAuto } from "../chains/settings";
 
 function advisorEnabledMessage(session: AgentSession): string {
-	const names = session.getAdvisorStatusOverview().advisors
-		.filter(advisor => advisor.status === "running")
+	const names = session
+		.getAdvisorStatusOverview()
+		.advisors.filter(advisor => advisor.status === "running")
 		.map(advisor => sanitizeDisplayLine(advisor.name));
 	return names.length > 0 ? `Advisor enabled: ${names.join(", ")}.` : "Advisor enabled; no advisors running.";
 }

@@ -457,148 +457,145 @@ describe("AgentSession queued steer delivery", () => {
 		["C", "B", "before stop"],
 		["B", "C", "at stop"],
 		["C", "B", "at stop"],
-	] as const)(
-		"routes A/C/B when %s arrives first and %s arrives %s",
-		async (first, second, arrival) => {
-			// The outer yield drain batches late steering before queued follow-ups in one request.
-			const batchedAtYield = first === "B" && arrival === "at stop";
-			const started = Promise.withResolvers<void>();
-			const release = Promise.withResolvers<void>();
-			const answersDelivered = Promise.withResolvers<void>();
-			const accepted = new Map(
-				["request A", "request B", "request C"].map(text => [text, Promise.withResolvers<void>()]),
-			);
-			const { session, mock } = await createSession([
-				async () => {
-					started.resolve();
-					await release.promise;
-					return { content: ["answer A"] };
+	] as const)("routes A/C/B when %s arrives first and %s arrives %s", async (first, second, arrival) => {
+		// The outer yield drain batches late steering before queued follow-ups in one request.
+		const batchedAtYield = first === "B" && arrival === "at stop";
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const answersDelivered = Promise.withResolvers<void>();
+		const accepted = new Map(
+			["request A", "request B", "request C"].map(text => [text, Promise.withResolvers<void>()]),
+		);
+		const { session, mock } = await createSession([
+			async () => {
+				started.resolve();
+				await release.promise;
+				return { content: ["answer A"] };
+			},
+			{ content: [batchedAtYield ? "answer C and answer B" : "answer C"] },
+			{ content: ["answer B"] },
+		]);
+		const consumed: LiveDelegationDetails[] = [];
+		let handoffAtStop: (() => Promise<void>) | undefined;
+		let boundaryHandoff: Promise<void> | undefined;
+		const unsubscribe = session.subscribe(event => {
+			if (
+				event.type === "message_start" &&
+				event.message.role === "custom" &&
+				event.message.customType === LIVE_DELEGATION_MESSAGE_TYPE
+			) {
+				const details = event.message.details as LiveDelegationDetails;
+				consumed.push({ operator: details.operator, delegationId: details.delegationId });
+			}
+			if (event.type === "turn_end" && event.message.role === "assistant" && handoffAtStop) {
+				const handoff = handoffAtStop;
+				handoffAtStop = undefined;
+				// Deliver after the controller sees turn_end but before the loop drains input.
+				boundaryHandoff = Promise.resolve().then(handoff);
+				void boundaryHandoff.catch(() => {});
+			}
+		});
+		let onLiveEvent: ((event: LiveServerEvent) => void) | undefined;
+		let delivery: LiveDelegationDelivery = "steer";
+		const sent: LiveClientMessage[] = [];
+		const receipts: string[] = [];
+		const controller = new LiveSessionController({
+			session,
+			delegationDelivery: () => delivery,
+			extractAssistantText: message =>
+				message.content
+					.filter(part => part.type === "text")
+					.map(part => part.text)
+					.join(""),
+			callbacks: {
+				onPhase() {},
+				onLevels() {},
+				onTranscript() {},
+				onTerminal() {},
+				onSpeechSent(text) {
+					receipts.push(text);
+					accepted.get(text)?.resolve();
 				},
-				{ content: [batchedAtYield ? "answer C and answer B" : "answer C"] },
-				{ content: ["answer B"] },
-			]);
-			const consumed: LiveDelegationDetails[] = [];
-			let handoffAtStop: (() => Promise<void>) | undefined;
-			let boundaryHandoff: Promise<void> | undefined;
-			const unsubscribe = session.subscribe(event => {
-				if (
-					event.type === "message_start" &&
-					event.message.role === "custom" &&
-					event.message.customType === LIVE_DELEGATION_MESSAGE_TYPE
-				) {
-					const details = event.message.details as LiveDelegationDetails;
-					consumed.push({ operator: details.operator, delegationId: details.delegationId });
-				}
-				if (event.type === "turn_end" && event.message.role === "assistant" && handoffAtStop) {
-					const handoff = handoffAtStop;
-					handoffAtStop = undefined;
-					// Deliver after the controller sees turn_end but before the loop drains input.
-					boundaryHandoff = Promise.resolve().then(handoff);
-					void boundaryHandoff.catch(() => {});
-				}
-			});
-			let onLiveEvent: ((event: LiveServerEvent) => void) | undefined;
-			let delivery: LiveDelegationDelivery = "steer";
-			const sent: LiveClientMessage[] = [];
-			const receipts: string[] = [];
-			const controller = new LiveSessionController({
-				session,
-				delegationDelivery: () => delivery,
-				extractAssistantText: message =>
-					message.content
-						.filter(part => part.type === "text")
-						.map(part => part.text)
-						.join(""),
-				callbacks: {
-					onPhase() {},
-					onLevels() {},
-					onTranscript() {},
-					onTerminal() {},
-					onSpeechSent(text) {
-						receipts.push(text);
-						accepted.get(text)?.resolve();
+			},
+			createTransport: options => {
+				onLiveEvent = options.callbacks.onEvent;
+				return {
+					async connect() {},
+					async send(message) {
+						sent.push(message);
+						if (
+							message.type === "delegation.context.append" &&
+							message.delegation_item_id === "dlg-B" &&
+							message.content.some(part => part.text.includes("answer B"))
+						) {
+							answersDelivered.resolve();
+						}
 					},
-				},
-				createTransport: options => {
-					onLiveEvent = options.callbacks.onEvent;
-					return {
-						async connect() {},
-						async send(message) {
-							sent.push(message);
-							if (
-								message.type === "delegation.context.append" &&
-								message.delegation_item_id === "dlg-B" &&
-								message.content.some(part => part.text.includes("answer B"))
-							) {
-								answersDelivered.resolve();
-							}
-						},
-						async close() {},
-						async setMuted() {},
-						pushAudio: () => true,
-					};
-				},
-				createRecorder: () => ({ stop() {} }),
+					async close() {},
+					async setMuted() {},
+					pushAudio: () => true,
+				};
+			},
+			createRecorder: () => ({ stop() {} }),
+		});
+		const handoff = async (name: "A" | "B" | "C") => {
+			delivery = name === "B" ? "followUp" : "steer";
+			onLiveEvent?.({ type: "turn.done", turn: { role: "user", transcript: `request ${name}` } });
+			onLiveEvent?.({
+				type: "delegation.created",
+				item: { type: "delegation", target: "client", id: `dlg-${name}`, content: [] },
 			});
-			const handoff = async (name: "A" | "B" | "C") => {
-				delivery = name === "B" ? "followUp" : "steer";
-				onLiveEvent?.({ type: "turn.done", turn: { role: "user", transcript: `request ${name}` } });
-				onLiveEvent?.({
-					type: "delegation.created",
-					item: { type: "delegation", target: "client", id: `dlg-${name}`, content: [] },
-				});
-				await withTimeout(accepted.get(`request ${name}`)!.promise, 2_000, `Handoff ${name} was not accepted`);
-			};
-			await controller.start();
-			try {
-				await handoff("A");
-				await withTimeout(started.promise, 2_000, "Request A did not start");
-				await handoff(first);
-				if (arrival === "before stop") await handoff(second);
-				else handoffAtStop = () => handoff(second);
-				expect(consumed).toEqual([{ operator: "request A", delegationId: "dlg-A" }]);
-				expect(session.getQueuedMessages()).toMatchObject({
-					steering: first === "C" || arrival === "before stop" ? ["request C"] : [],
-					followUp: first === "B" || arrival === "before stop" ? ["request B"] : [],
-				});
-			} finally {
-				release.resolve();
-				await withTimeout(session.waitForIdle(), 2_000, "Handoffs did not finish");
-				await boundaryHandoff;
-				await withTimeout(answersDelivered.promise, 2_000, "Final handoff answer was not delivered");
-				await controller.stop();
-				unsubscribe();
-			}
-			expect(receipts).toEqual(["request A", `request ${first}`, `request ${second}`]);
-			expect(consumed).toEqual([
-				{ operator: "request A", delegationId: "dlg-A" },
-				{ operator: "request C", delegationId: "dlg-C" },
-				{ operator: "request B", delegationId: "dlg-B" },
-			]);
-			for (const name of ["A", "C", "B"]) {
-				const answers = sent.filter(
-					message =>
-						message.type === "delegation.context.append" &&
-						message.content.some(part => part.text.includes(`answer ${name}`)),
-				);
-				expect(
-					answers.map(message => message.type === "delegation.context.append" && message.delegation_item_id),
-				).toEqual(batchedAtYield && name !== "A" ? ["dlg-C", "dlg-B"] : [`dlg-${name}`]);
-			}
-			expect(mock.calls).toHaveLength(batchedAtYield ? 2 : 3);
-			expect(JSON.stringify(mock.calls[0]?.context.messages)).not.toContain("request C");
-			expect(JSON.stringify(mock.calls[1]?.context.messages)).toContain("request C");
-			if (batchedAtYield) {
-				expect(JSON.stringify(mock.calls[1]?.context.messages)).toContain("request B");
-			} else {
-				expect(JSON.stringify(mock.calls[1]?.context.messages)).not.toContain("request B");
-				expect(JSON.stringify(mock.calls[2]?.context.messages)).toContain("request B");
-			}
+			await withTimeout(accepted.get(`request ${name}`)!.promise, 2_000, `Handoff ${name} was not accepted`);
+		};
+		await controller.start();
+		try {
+			await handoff("A");
+			await withTimeout(started.promise, 2_000, "Request A did not start");
+			await handoff(first);
+			if (arrival === "before stop") await handoff(second);
+			else handoffAtStop = () => handoff(second);
+			expect(consumed).toEqual([{ operator: "request A", delegationId: "dlg-A" }]);
+			expect(session.getQueuedMessages()).toMatchObject({
+				steering: first === "C" || arrival === "before stop" ? ["request C"] : [],
+				followUp: first === "B" || arrival === "before stop" ? ["request B"] : [],
+			});
+		} finally {
+			release.resolve();
+			await withTimeout(session.waitForIdle(), 2_000, "Handoffs did not finish");
+			await boundaryHandoff;
+			await withTimeout(answersDelivered.promise, 2_000, "Final handoff answer was not delivered");
+			await controller.stop();
+			unsubscribe();
+		}
+		expect(receipts).toEqual(["request A", `request ${first}`, `request ${second}`]);
+		expect(consumed).toEqual([
+			{ operator: "request A", delegationId: "dlg-A" },
+			{ operator: "request C", delegationId: "dlg-C" },
+			{ operator: "request B", delegationId: "dlg-B" },
+		]);
+		for (const name of ["A", "C", "B"]) {
+			const answers = sent.filter(
+				message =>
+					message.type === "delegation.context.append" &&
+					message.content.some(part => part.text.includes(`answer ${name}`)),
+			);
 			expect(
-				session.messages.filter(message => message.role === "assistant").map(message => message.stopReason),
-			).toEqual(batchedAtYield ? ["stop", "stop"] : ["stop", "stop", "stop"]);
-		},
-	);
+				answers.map(message => message.type === "delegation.context.append" && message.delegation_item_id),
+			).toEqual(batchedAtYield && name !== "A" ? ["dlg-C", "dlg-B"] : [`dlg-${name}`]);
+		}
+		expect(mock.calls).toHaveLength(batchedAtYield ? 2 : 3);
+		expect(JSON.stringify(mock.calls[0]?.context.messages)).not.toContain("request C");
+		expect(JSON.stringify(mock.calls[1]?.context.messages)).toContain("request C");
+		if (batchedAtYield) {
+			expect(JSON.stringify(mock.calls[1]?.context.messages)).toContain("request B");
+		} else {
+			expect(JSON.stringify(mock.calls[1]?.context.messages)).not.toContain("request B");
+			expect(JSON.stringify(mock.calls[2]?.context.messages)).toContain("request B");
+		}
+		expect(
+			session.messages.filter(message => message.role === "assistant").map(message => message.stopReason),
+		).toEqual(batchedAtYield ? ["stop", "stop"] : ["stop", "stop", "stop"]);
+	});
 
 	it.each(["steer", "followUp"] as const)(
 		"delivers a live %s once without aborting the active tool or reasoning turn",

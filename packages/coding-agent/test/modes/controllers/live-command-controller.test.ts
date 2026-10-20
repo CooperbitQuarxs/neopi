@@ -157,7 +157,9 @@ describe("LiveCommandController", () => {
 						fire = transportOptions.callbacks.onEvent;
 						return {
 							async connect() {},
-							async send(message: LiveClientMessage) { sent.push(message); },
+							async send(message: LiveClientMessage) {
+								sent.push(message);
+							},
 							async close() {},
 							async setMuted() {},
 							setOutputSuppressed() {},
@@ -189,8 +191,12 @@ describe("LiveCommandController", () => {
 				expect(prompts).toEqual(["fix the parser"]);
 				expect(h.editor.getText().trim()).toBe("");
 				if (mode === "edited address") {
-					expect(sent.filter(message => "content" in message)
-						.flatMap(message => message.content.map(item => item.text)).join("\n")).not.toContain(original);
+					expect(
+						sent
+							.filter(message => "content" in message)
+							.flatMap(message => message.content.map(item => item.text))
+							.join("\n"),
+					).not.toContain(original);
 				}
 				expect(live?.pendingUserTurnCount()).toBe(0);
 			} finally {
@@ -227,7 +233,9 @@ describe("LiveCommandController", () => {
 					fire = transportOptions.callbacks.onEvent;
 					return {
 						async connect() {},
-						async send() { await voiceSend.promise; },
+						async send() {
+							await voiceSend.promise;
+						},
 						async close() {},
 						async setMuted() {},
 						setOutputSuppressed() {},

@@ -50,7 +50,8 @@ export function validateRoutingPolicies(value: unknown): void {
 			const label = `routingPolicies.${name}.slots.${slotName}`;
 			if (!NAME.test(slotName) || !isRecord(slot)) throw new Error(`${label} is not a named slot`);
 			if (typeof slot.model !== "string" || !slot.model.trim()) throw new Error(`${label}.model is required`);
-			if (typeof slot.boundary !== "string" || !slot.boundary.trim()) throw new Error(`${label}.boundary is required`);
+			if (typeof slot.boundary !== "string" || !slot.boundary.trim())
+				throw new Error(`${label}.boundary is required`);
 			const suffix = parseSelectorSuffix(slot.model);
 			const effort = slot.effort ?? (suffix ? slot.model.slice(slot.model.lastIndexOf(":") + 1) : undefined);
 			if (!THINKING_EFFORTS.some(candidate => candidate === effort)) {
@@ -67,7 +68,10 @@ export function validateRoutingPolicies(value: unknown): void {
 }
 
 /** Copy only missing fields. No shared references survive into a delivered assignment. */
-export function fillRoutingPolicy<T extends RoutingPolicyFields>(settings: Settings, fields: T): T & RoutingPolicyFields {
+export function fillRoutingPolicy<T extends RoutingPolicyFields>(
+	settings: Settings,
+	fields: T,
+): T & RoutingPolicyFields {
 	const result: T & RoutingPolicyFields = structuredClone(fields);
 	if (fields.policy === undefined) return result;
 	const policies = cfgRoutingPolicies.get(settings);
@@ -75,7 +79,8 @@ export function fillRoutingPolicy<T extends RoutingPolicyFields>(settings: Setti
 	const policy = Object.hasOwn(policies, fields.policy) ? policies[fields.policy] : undefined;
 	if (!policy) throw new Error(`Unknown routing policy "${fields.policy}". Declare it in routingPolicies first.`);
 	const slotName = fields.slot ?? (Object.keys(policy.slots).length === 1 ? Object.keys(policy.slots)[0] : undefined);
-	if (!slotName) throw new Error(`Routing policy "${fields.policy}" requires a slot: ${Object.keys(policy.slots).join(", ")}`);
+	if (!slotName)
+		throw new Error(`Routing policy "${fields.policy}" requires a slot: ${Object.keys(policy.slots).join(", ")}`);
 	const slot = Object.hasOwn(policy.slots, slotName) ? policy.slots[slotName] : undefined;
 	if (!slot) throw new Error(`Unknown slot "${slotName}" in routing policy "${fields.policy}".`);
 	const suffix = parseSelectorSuffix(slot.model);
