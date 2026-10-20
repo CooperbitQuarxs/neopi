@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
-import { AuthStorage } from "@oh-my-pi/pi-ai";
+import { AuthStorage, type Context } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { createAgentSession } from "../src/sdk";
@@ -87,7 +87,7 @@ async function harness(manager: SessionManager, root: string) {
 }
 
 describe("session work contracts", () => {
-	test("SDK request preparation reserves the complete block after context transforms", async () => {
+	test("SDK request preparation budgets wire tool definitions, not runtime session state", async () => {
 		const root = await temp();
 		const manager = SessionManager.inMemory(root);
 		const h = await harness(manager, root);
@@ -99,29 +99,29 @@ describe("session work contracts", () => {
 			sessionManager: manager,
 			modelRegistry: new ModelRegistry(auth, path.join(root, "models.json")),
 			settings: Settings.isolated({}),
-			model,
+			model: { ...model, contextWindow: 200_000 },
 			disableExtensionDiscovery: true,
 			promptTemplates: [],
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			toolNames: [],
+			toolNames: ["read", "bash", "edit"],
 			restrictToolNames: true,
 			skipPythonPreflight: true,
 		});
 		try {
 			const unchangedRequest = await session.agent.buildSideRequestContext([]);
-			expect(JSON.stringify(unchangedRequest)).toBe(
-				JSON.stringify({ systemPrompt: session.systemPrompt, messages: [], tools: [] }),
-			);
+			expect(unchangedRequest.systemPrompt).toEqual(session.systemPrompt);
+			expect(unchangedRequest.messages).toEqual([]);
+			expect(unchangedRequest.tools?.map(tool => tool.name)).toEqual(["read", "bash", "edit"]);
 			expect(readContracts(manager).agentAllowed).toBe(false);
-			await h.command("set lane Keep the lane free.");
+			await h.command('set lane "The funnel publishes; the lane stays free."');
 			const request = await session.agent.buildSideRequestContext([]);
-			expect(request.systemPrompt?.at(-1)).toContain("Keep the lane free.");
-			expect(session.systemPrompt.join("\n")).not.toContain("Keep the lane free.");
+			expect(request.systemPrompt?.at(-1)).toContain("The funnel publishes; the lane stays free.");
+			expect(session.systemPrompt.join("\n")).not.toContain("The funnel publishes; the lane stays free.");
 			await h.command("disable lane");
 			expect((await session.agent.buildSideRequestContext([])).systemPrompt?.join("\n")).not.toContain(
-				"Keep the lane free.",
+				"The funnel publishes; the lane stays free.",
 			);
 		} finally {
 			await session.dispose();
@@ -247,6 +247,22 @@ describe("session work contracts", () => {
 		expect(context.systemPrompt?.at(-1)).toContain(text);
 	});
 
+	test("an empty contract journal never injects or checks a context budget", () => {
+		const manager = SessionManager.inMemory();
+		const tokenizer = new Tokenizer(model);
+		const countTokens = spyOn(tokenizer, "countTokens");
+		const countMessages = spyOn(tokenizer, "countMessages");
+		try {
+			const context = { systemPrompt: ["Existing policy".repeat(100)], messages: [] };
+			expect(injectWorkContracts(context, { ...model, contextWindow: 1 }, manager, tokenizer)).toBe(context);
+			expect(countTokens).not.toHaveBeenCalled();
+			expect(countMessages).not.toHaveBeenCalled();
+		} finally {
+			countTokens.mockRestore();
+			countMessages.mockRestore();
+		}
+	});
+
 	test("unknown context windows keep contracts intact without reserving an invented budget", async () => {
 		const root = await temp();
 		const manager = SessionManager.inMemory(root);
@@ -277,15 +293,35 @@ describe("session work contracts", () => {
 		}
 	});
 
+	test.each(["system", "messages", "tools", "inactiveTools"] as const)(
+		"short clauses still fail visibly when existing %s fill the context",
+		async part => {
+			const root = await temp();
+			const manager = SessionManager.inMemory(root);
+			const h = await harness(manager, root);
+			await h.command("set lane The funnel publishes; the lane stays free.");
+			const text = "Existing context fills the window. ".repeat(50_000);
+			const context: Context = { messages: [] };
+			if (part === "system") context.systemPrompt = [text];
+			else if (part === "messages") context.messages = [{ role: "user", content: text, timestamp: 1 }];
+			else context[part] = [{ name: "existing", description: text, parameters: { type: "object" } }];
+			expect(() =>
+				injectWorkContracts(context, { ...model, contextWindow: 200_000 }, manager, new Tokenizer(model)),
+			).toThrow("No contract text was truncated");
+			expect(context.systemPrompt).toEqual(part === "system" ? [text] : undefined);
+		},
+	);
+
 	test("budget overflow surfaces instead of dropping or trimming contract text", async () => {
 		const root = await temp();
 		const manager = SessionManager.inMemory(root);
 		const h = await harness(manager, root);
-		await h.command(`set lane ${"Keep the lane free. ".repeat(100)}`);
+		const text = "Keep the lane free. ".repeat(50_000).trim();
+		await h.command(`set lane ${text}`);
 		expect(() =>
-			injectWorkContracts({ messages: [] }, { ...model, contextWindow: 10 }, manager, new Tokenizer(model)),
+			injectWorkContracts({ messages: [] }, { ...model, contextWindow: 200_000 }, manager, new Tokenizer(model)),
 		).toThrow("No contract text was truncated");
-		expect(readContracts(manager).clauses.get("lane")?.text).toBe("Keep the lane free. ".repeat(100).trim());
+		expect(readContracts(manager).clauses.get("lane")?.text).toBe(text);
 	});
 
 	test("invalid persisted contracts fail visibly rather than silently disappear", () => {

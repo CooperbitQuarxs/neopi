@@ -218,7 +218,11 @@ describe("named routing policies", () => {
 		const theme = (await getThemeByName("dark"))!;
 		const preview = Bun.stripANSI(
 			tool
-				.renderCall({ agent: "policy:funnel/scout", task: "Investigate." }, { expanded: false, isPartial: false }, theme)
+				.renderCall(
+					{ agent: "policy:funnel/scout", task: "Investigate." },
+					{ expanded: false, isPartial: false },
+					theme,
+				)
 				.render(160)
 				.join("\n"),
 		);

@@ -583,6 +583,42 @@ For the numeric sampling settings, a negative value (normally `-1`) means "use t
 | `tier.advisor`      | enum   | `none`    | `inherit`, `none`, `auto`, `default`, `flex`, `scale`, `priority`, `ultrafast`. Applied to the advisor model's family.                                                                                                                                                                      |
 | `personality`       | enum   | `default` | `default`, `friendly`, `pragmatic`, `none`. A user-level `<agent dir>/PERSONALITY.md` replaces the selected preset's text; `none` still omits the block. See [system-prompt-customization](./system-prompt-customization.md).                                                  |
 
+#### Role-scoped request settings
+
+Set `roleSettings.<role>` to a mapping of setting ids to values. Role names
+match `modelRoles`; changing a role's assigned model keeps its settings.
+The supported request settings are `temperature`, `topP`, `topK`, `minP`,
+`presencePenalty`, `repetitionPenalty`, `textVerbosity`, `omitThinking`,
+`tier.openai`, `tier.anthropic`, and `tier.google`.
+
+```yaml
+temperature: 0.9
+roleSettings:
+  precise:
+    temperature: 0
+    topP: 0.3
+    textVerbosity: high
+    omitThinking: true
+    tier.openai: none
+  provider:
+    temperature: -1
+```
+
+An omitted entry inherits the current global or project value. A concrete
+entry overrides it while that role is active. For numeric sampling, `-1`
+explicitly requests the provider default, so the `provider` role above omits
+temperature rather than sending the global `0.9`. For a service tier, `none`
+likewise omits the wire parameter. `textVerbosity` and `omitThinking` use their
+existing enum and boolean values.
+
+Choosing a role in the quick picker applies its settings. Switching roles
+or selecting a model without a role removes the previous role's values,
+without overwriting global or project settings. Explicit session overrides
+still take precedence. Provider and model capability checks still apply;
+setting a role value cannot enable an unsupported wire parameter.
+These entries are configurable in the settings file; this does not add a
+role-configurator UI.
+
 ### Retry and fallback
 
 ```yaml
@@ -857,6 +893,25 @@ memory:
 | `autolearn.minToolCalls`      | number  | `5`           | Minimum completed tool calls in a primary turn before automatic capture is eligible.                                                                                                                                                                               |
 
 A positive `compaction.thresholdTokens` wins over `thresholdPercent`. A fixed trigger (this or an `f` model entry) at or past the model's context window, for example where a provider caps the window lower, compacts at the window less the reserve, like the reserve-based default; the `/models` preview marks it `capped by window`. Otherwise, a positive percentage is clamped to 1–99%; non-positive percentages use the reserve-based threshold.
+
+Give a model role a persistent absolute-token budget under `roleSettings`. The key inside
+each role is the dotted setting id. Selecting that role applies the budget without
+changing the global value, and assigning another model to the role keeps the budget:
+
+```yaml
+compaction:
+  thresholdTokens: 100000
+roleSettings:
+  slow:
+    compaction.thresholdTokens: 120000
+```
+
+In `/settings` → Context → Compaction, both **Compaction Token Limit** and each role's
+**token budget** offer presets and **Custom...** for typed integer counts such as
+`120000`. Choose **Inherit** or clear a role's custom field to use the global default.
+Roles without a budget keep the global threshold. Session-only overrides take priority
+over a role budget. A fixed token budget still respects the active model's actual
+context window and reserve.
 
 `compaction` has additional tuning keys (idle compaction, supersede/drop heuristics) visible in `omp config list`. See [Compaction](./compaction.md) for the full strategy reference.
 
