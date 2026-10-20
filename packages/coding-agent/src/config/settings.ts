@@ -65,6 +65,7 @@ import {
 } from "./effort-policy";
 import { cfgRetryFallbackChains } from "../session/settings";
 import { cfgShellPath } from "../exec/settings";
+import { overlaySettingsToml, readSettingsToml, SETTINGS_TOML } from "./settings-toml";
 
 export interface RuntimeModelOverrides {
 	modelRoles: Record<string, string>;
@@ -208,11 +209,13 @@ function yamlMigrationMutations(source: string, settings: RawSettings): YamlPath
 type MainYamlReadResult = {
 	settings: RawSettings | null;
 	configPath: string | null;
+	toml?: RawSettings;
 };
 
 type ProjectSettingsReadResult = {
 	settings: RawSettings;
 	fileSettings: RawSettings;
+	toml: RawSettings;
 	shellPathSource: string | undefined;
 	/** Files that supplied merged project-level settings items. */
 	sourcePaths: string[];
@@ -380,6 +383,8 @@ function projectLayerForMerge(project: RawSettings): RawSettings {
 interface OwnLayers {
 	global: RawSettings;
 	project: RawSettings;
+	globalToml?: RawSettings;
+	projectToml?: RawSettings;
 	configOverlay: RawSettings;
 	overrides: RawSettings;
 }
@@ -391,6 +396,7 @@ export type OverlayLayers = Readonly<Pick<OwnLayers, "global" | "overrides">>;
 interface LayerRefresh {
 	layer: "global" | "project" | "configOverlay";
 	settings: RawSettings;
+	toml?: RawSettings;
 	source: string;
 	commit(): void;
 }
@@ -666,6 +672,8 @@ export class Settings {
 	#global: RawSettings = {};
 	/** Project settings from .claude/settings.yml etc */
 	#project: RawSettings = {};
+	#globalToml: RawSettings = {};
+	#projectToml: RawSettings = {};
 	/** Last successfully loaded native .omp/config.yml contents. */
 	#projectFileSettings: RawSettings = {};
 	/** Logical config paths whose malformed targets were moved aside. */
@@ -996,8 +1004,11 @@ export class Settings {
 		)
 			return "role";
 		if (getByPath(this.#configOverlay, segments) !== undefined) return "overlay";
-		if (getByPath(projectLayerForMerge(this.#project), segments) !== undefined) return "project";
-		if (getByPath(this.#global, segments) !== undefined) return "global";
+		if (
+			getByPath(projectLayerForMerge(overlaySettingsToml(this.#project, this.#projectToml)), segments) !== undefined
+		)
+			return "project";
+		if (getByPath(overlaySettingsToml(this.#global, this.#globalToml), segments) !== undefined) return "global";
 		return this.#parent?.getProvenance(setting) ?? "default";
 	}
 
@@ -1346,9 +1357,11 @@ export class Settings {
 			}
 		};
 		for (const filename of MAIN_CONFIG_FILENAMES) addFile(path.join(this.#agentDir, filename));
+		addFile(path.join(this.#agentDir, SETTINGS_TOML));
 		const projectCwd = path.resolve(this.#cwd);
 		const projectConfigDir = getProjectAgentDir(projectCwd);
 		addFile(path.join(projectConfigDir, "config.yml"));
+		addFile(path.join(projectConfigDir, SETTINGS_TOML));
 		addFile(path.join(projectConfigDir, "settings.json"));
 		addFile(path.join(projectCwd, ".claude", "settings.json"));
 		for (const file of this.#projectSourcePaths) addFile(file);
@@ -1471,6 +1484,7 @@ export class Settings {
 		if (this.#parent) {
 			cloned = (await this.#parent.cloneForCwd(cwd)).overlay();
 			cloned.#project = structuredClone(this.#project);
+			cloned.#projectToml = structuredClone(this.#projectToml);
 		} else {
 			cloned = new Settings({
 				cwd,
@@ -1485,6 +1499,7 @@ export class Settings {
 			cloned.#overlayShellPathSource = this.#overlayShellPathSource;
 		}
 		cloned.#global = structuredClone(this.#global);
+		cloned.#globalToml = structuredClone(this.#globalToml);
 		cloned.#configOverlay = structuredClone(this.#configOverlay);
 		// A soft-pinned default yields to a value the clone's own scope configures.
 		cloned.#softPins = new Set(this.#softPins);
@@ -1573,6 +1588,7 @@ export class Settings {
 				refreshed.push({
 					layer: "global",
 					settings,
+					toml: globalResult.value.toml,
 					source: configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]),
 					commit: () => {
 						this.#configPath = configPath;
@@ -1585,6 +1601,7 @@ export class Settings {
 				refreshed.push({
 					layer: "project",
 					settings: project.settings,
+					toml: project.toml,
 					source: project.sourcePaths.join(", ") || getProjectAgentDir(this.#cwd),
 					commit: () => this.#commitProjectRead(project),
 				});
@@ -1608,6 +1625,8 @@ export class Settings {
 			const adopted: LayerRefresh[] = [];
 			for (const refresh of refreshed) {
 				const trial: OwnLayers = { ...layers, [refresh.layer]: refresh.settings };
+				if (refresh.layer === "global") trial.globalToml = refresh.toml;
+				if (refresh.layer === "project") trial.projectToml = refresh.toml;
 				if (keepLastGood && !this.#acceptsLayers(trial, refresh.source)) continue;
 				layers = trial;
 				adopted.push(refresh);
@@ -1619,6 +1638,8 @@ export class Settings {
 			for (const refresh of adopted) refresh.commit();
 			this.#global = layers.global;
 			this.#project = layers.project;
+			this.#globalToml = layers.globalToml ?? {};
+			this.#projectToml = layers.projectToml ?? {};
 			this.#configOverlay = layers.configOverlay;
 			this.#overrides = layers.overrides;
 			for (const setting of settled) this.#softPins.delete(setting);
@@ -1681,6 +1702,8 @@ export class Settings {
 			const candidate: OwnLayers = {
 				global: this.#global,
 				project: project?.settings ?? this.#project,
+				globalToml: this.#globalToml,
+				projectToml: project?.toml ?? this.#projectToml,
 				configOverlay: this.#configOverlay,
 				overrides:
 					this.#savedRuntimeModelRoleOverrides.size === 0 ? this.#overrides : this.#buildOriginalOverrides(),
@@ -1750,7 +1773,7 @@ export class Settings {
 	 * reports its parent's layer with the overlay's own writes merged on top.
 	 */
 	getGlobalSettings(): RawSettings {
-		const own = structuredClone(this.#global);
+		const own = structuredClone(overlaySettingsToml(this.#global, this.#globalToml));
 		return this.#parent ? this.#deepMerge(this.#parent.getGlobalSettings(), own) : own;
 	}
 
@@ -1761,7 +1784,7 @@ export class Settings {
 	 * likewise reports its parent's layer under its own.
 	 */
 	getProjectSettings(): RawSettings {
-		const own = structuredClone(this.#project);
+		const own = structuredClone(overlaySettingsToml(this.#project, this.#projectToml));
 		return this.#parent ? this.#deepMerge(this.#parent.getProjectSettings(), own) : own;
 	}
 
@@ -1782,9 +1805,11 @@ export class Settings {
 		if (Object.hasOwn(this.#configOverlay, "shellPath")) {
 			return this.#overlayShellPathSource ?? "the active config overlay";
 		}
+		if (Object.hasOwn(this.#projectToml, "shellPath")) return path.join(getProjectAgentDir(this.#cwd), SETTINGS_TOML);
 		if (Object.hasOwn(this.#project, "shellPath")) {
 			return this.#projectShellPathSource ?? "the active project configuration";
 		}
+		if (Object.hasOwn(this.#globalToml, "shellPath")) return path.join(this.#agentDir, SETTINGS_TOML);
 		if (this.#parent && !Object.hasOwn(this.#global, "shellPath")) return this.#parent.#shellPathSource();
 		return this.#configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
 	}
@@ -1803,8 +1828,10 @@ export class Settings {
 	extensionsSourceLevel(): "user" | "project" {
 		if (Object.hasOwn(this.#overrides, "extensions")) return "user";
 		if (Object.hasOwn(this.#configOverlay, "extensions")) return "user";
+		if (Object.hasOwn(this.#projectToml, "extensions")) return "project";
 		if (Object.hasOwn(this.#project, "extensions")) return "project";
-		if (this.#parent && !Object.hasOwn(this.#global, "extensions")) return this.#parent.extensionsSourceLevel();
+		if (this.#parent && !Object.hasOwn(this.#global, "extensions") && !Object.hasOwn(this.#globalToml, "extensions"))
+			return this.#parent.extensionsSourceLevel();
 		return "user";
 	}
 
@@ -2111,7 +2138,10 @@ export class Settings {
 
 	/** Get one role's persisted fallback effort metadata without including config overlays. */
 	getGlobalFallbackEffortSelections(role: string): Record<string, EffortSelection> | undefined {
-		const entries = getByPath(this.#global, cfgFallbackEffortSelections.segments);
+		const entries = getByPath(
+			overlaySettingsToml(this.#global, this.#globalToml),
+			cfgFallbackEffortSelections.segments,
+		);
 		return (
 			((isRecord(entries) ? entries[role] : undefined) as Record<string, EffortSelection> | undefined) ??
 			this.#parent?.getGlobalFallbackEffortSelections(role)
@@ -2220,7 +2250,7 @@ export class Settings {
 	}
 
 	getProjectRoleEffortSelection(role: string): EffortSelection | undefined {
-		const values = getByPath(this.#project, ["roleEffortSelections"]);
+		const values = getByPath(overlaySettingsToml(this.#project, this.#projectToml), ["roleEffortSelections"]);
 		return (
 			((isRecord(values) ? values[role] : undefined) as EffortSelection | undefined) ??
 			this.#parent?.getProjectRoleEffortSelection(role)
@@ -2228,7 +2258,7 @@ export class Settings {
 	}
 
 	getGlobalRoleEffortSelection(role: string): EffortSelection | undefined {
-		const values = getByPath(this.#global, ["roleEffortSelections"]);
+		const values = getByPath(overlaySettingsToml(this.#global, this.#globalToml), ["roleEffortSelections"]);
 		return (
 			((isRecord(values) ? values[role] : undefined) as EffortSelection | undefined) ??
 			this.#parent?.getGlobalRoleEffortSelection(role)
@@ -2247,7 +2277,7 @@ export class Settings {
 	 * Get a model role from only the global settings layer (an {@link overlay}'s own, else its parent's).
 	 */
 	getGlobalModelRole(role: ModelRole | string): string | undefined {
-		const modelId = this.#modelRolesFromLayer(this.#global)[role];
+		const modelId = this.#modelRolesFromLayer(overlaySettingsToml(this.#global, this.#globalToml))[role];
 		return modelId || this.#parent?.getGlobalModelRole(role);
 	}
 
@@ -2255,7 +2285,7 @@ export class Settings {
 	 * Get a model role from only the current project settings layer (an {@link overlay}'s own, else its parent's).
 	 */
 	getProjectModelRole(role: ModelRole | string): string | undefined {
-		const modelId = this.#modelRolesFromLayer(this.#project)[role];
+		const modelId = this.#modelRolesFromLayer(overlaySettingsToml(this.#project, this.#projectToml))[role];
 		return modelId || this.#parent?.getProjectModelRole(role);
 	}
 
@@ -2273,8 +2303,9 @@ export class Settings {
 	getModelRoleProvenance(role: ModelRole | string): SettingProvenance {
 		if (this.#modelRoleLayerOwns(this.#overrides, role)) return "runtime";
 		if (this.#modelRoleLayerOwns(this.#configOverlay, role)) return "overlay";
-		if (this.#modelRoleLayerOwns(projectLayerForMerge(this.#project), role)) return "project";
-		if (this.#modelRoleLayerOwns(this.#global, role)) return "global";
+		if (this.#modelRoleLayerOwns(projectLayerForMerge(overlaySettingsToml(this.#project, this.#projectToml)), role))
+			return "project";
+		if (this.#modelRoleLayerOwns(overlaySettingsToml(this.#global, this.#globalToml), role)) return "global";
 		return this.#parent?.getModelRoleProvenance(role) ?? "default";
 	}
 
@@ -2301,8 +2332,12 @@ export class Settings {
 		const layers = [
 			{ layer: this.#overrides, source: "runtime", tombstone: true },
 			{ layer: this.#configOverlay, source: "overlay", tombstone: true },
-			{ layer: projectLayerForMerge(this.#project), source: "project", tombstone: false },
-			{ layer: this.#global, source: "global", tombstone: false },
+			{
+				layer: projectLayerForMerge(overlaySettingsToml(this.#project, this.#projectToml)),
+				source: "project",
+				tombstone: false,
+			},
+			{ layer: overlaySettingsToml(this.#global, this.#globalToml), source: "global", tombstone: false },
 		] as const;
 		for (const { layer, source, tombstone } of layers) {
 			const presets = getByPath(layer, ["modelPresets"]);
@@ -2805,22 +2840,25 @@ export class Settings {
 
 	async #readExistingMainYaml(quarantineInvalid: boolean): Promise<MainYamlReadResult> {
 		if (!this.#configPath) return { settings: null, configPath: null };
+		const toml = await readSettingsToml(this.#agentDir);
 		for (const filename of MAIN_CONFIG_FILENAMES) {
 			const configPath = path.join(this.#agentDir, filename);
 			const loaded = quarantineInvalid
 				? await this.#loadYamlIfPresentForStartup(configPath)
 				: this.#unwrapYamlLoadResult(configPath, await this.#loadYamlIfPresent(configPath, false));
-			if (loaded) return { settings: loaded, configPath };
+			if (loaded) return { settings: loaded, configPath, toml };
 		}
 		return {
 			settings: null,
 			configPath: path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]),
+			toml,
 		};
 	}
 
 	async #loadExistingMainYaml(): Promise<RawSettings | null> {
 		const result = await this.#readExistingMainYaml(true);
 		this.#configPath = result.configPath;
+		this.#globalToml = result.toml ?? {};
 		return result.settings;
 	}
 
@@ -2901,6 +2939,7 @@ export class Settings {
 		return {
 			settings: this.#migrateRawSettings(merged, quarantineInvalid),
 			fileSettings: structuredClone(nativeProject),
+			toml: await readSettingsToml(projectConfigDir),
 			shellPathSource,
 			sourcePaths,
 			warningsSeen,
@@ -2916,6 +2955,7 @@ export class Settings {
 	/** Adopts the read-side state of a project read whose layer is being committed. */
 	#commitProjectRead(result: ProjectSettingsReadResult): void {
 		this.#projectFileSettings = result.fileSettings;
+		this.#projectToml = result.toml;
 		this.#projectShellPathSource = result.shellPathSource;
 		this.#projectSourcePaths = result.sourcePaths;
 		this.#projectSettingsWarningsSeen = result.warningsSeen;
@@ -4558,6 +4598,8 @@ export class Settings {
 		return {
 			global: this.#global,
 			project: this.#project,
+			globalToml: this.#globalToml,
+			projectToml: this.#projectToml,
 			configOverlay: this.#configOverlay,
 			overrides: this.#overrides,
 		};
@@ -4565,7 +4607,10 @@ export class Settings {
 
 	/** `layers` (global, project, `--config` overlay, runtime) merged in precedence order. */
 	#mergeOwnLayers(layers: OwnLayers): RawSettings {
-		let merged = this.#deepMerge(this.#deepMerge({}, layers.global), projectLayerForMerge(layers.project));
+		let merged = this.#deepMerge(
+			this.#deepMerge({}, overlaySettingsToml(layers.global, layers.globalToml)),
+			projectLayerForMerge(overlaySettingsToml(layers.project, layers.projectToml)),
+		);
 		merged = this.#deepMerge(merged, layers.configOverlay);
 		return this.#deepMerge(merged, layers.overrides);
 	}

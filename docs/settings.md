@@ -38,6 +38,22 @@ The canonical global file is YAML at `config.yml`; `config.yaml` is accepted as 
 - Empty YAML (or YAML `null`) is treated as an empty settings mapping. Other non-mapping top levels are invalid. On writable startup, `omp` moves a syntactically invalid or non-mapping persistent settings file to a uniquely named `.broken-*` backup and exits with the original error and backup path. A `--config` overlay with a bare array/scalar is also a hard error, but is not moved.
 - Invalid values for ordinary schema entries warn and read as their schema defaults. Settings with explicit validators, such as per-agent compaction triggers or provider concurrency limits, can reject the configuration instead. Unknown keys in hand-written files are not a substitute for a registered setting.
 
+### Optional TOML overlay
+
+Place `settings.toml` beside the global `config.yml` or `config.yaml`, or in the current project's `.omp/` directory. NeoPi never creates or populates this file automatically. Missing, empty, and comment-only files leave YAML settings unchanged.
+
+For each **top-level key**, a TOML value replaces the entire YAML value at that scope. Tables and arrays are not deep-merged or concatenated. For example, `[compaction]` with only `enabled = false` discards the YAML `compaction` table's other entries; those entries fall back to lower scopes or schema defaults. Project settings still override global settings, and explicit `--config` YAML overlays and runtime overrides retain their existing precedence.
+
+Generate a documented, reproducible defaults file without reading your current settings:
+
+```bash
+npi config dump-toml > settings.defaults.toml
+```
+
+The output includes every registered setting and its schema default. Unset values remain comments because TOML cannot represent `null` or `undefined`. Review it before copying it to `settings.toml`; a fully populated overlay pins defaults and replaces matching YAML keys. Regenerate it after upgrades to see new settings. Invalid TOML is a hard error naming the file, never a silent fallback. Live settings reloads watch both TOML paths.
+
+The settings panel and `config set`/`reset` continue writing YAML. Edit or remove the corresponding TOML top-level key to let those YAML changes take effect. TOML is never converted to YAML automatically.
+
 ## Reading and writing settings
 
 Use the interactive `/settings` panel inside a session, or the `omp config` command from a shell. The CLI reads effective values including setting environment variables. The panel shows and edits merged settings-layer values, not environment-supplied values; descriptions note active env overrides so env credentials are never pre-filled or persisted. Ordinary persistent writes land in the **global** file; model-selector role changes are the exception when `modelRoleStorage: project` (see [Where writes go](#where-writes-go)).
@@ -71,6 +87,7 @@ This only controls the startup splash animation. It does not rerun setup or chan
 | `omp config reset <key>`       | Delete the global key, allowing another configured layer or the schema default to apply. Prints the resulting effective value, masking non-empty credentials as `********`; JSON omits a credential's `value` and emits `{ key, redacted: true }`. |
 | `omp config path`              | Print the active agent directory (honors `PI_CODING_AGENT_DIR`).                                                                                                                                                                                                                                  |
 | `omp config init-xdg`          | On Linux and macOS, create the `omp` directories under the effective XDG data, state, and cache homes. It does not move existing files or set the XDG environment variables. Other platforms exit non-zero.                                                                                       |
+| `npi config dump-toml`         | Write documented registry defaults as TOML to stdout without loading user settings. Redirect to a file to regenerate it. |
 
 `omp config` with no subcommand lists settings. `--help` or `-h` displays command help. The `--json` flag is accepted by `list`, `get`, `set`, and `reset`.
 

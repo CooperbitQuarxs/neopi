@@ -53,6 +53,15 @@ afterEach(async () => {
 });
 
 describe("config CLI schema coverage", () => {
+	it("dumps defaults as TOML even when user settings are invalid", async () => {
+		const agentDir = testAgentDir!.path();
+		await Bun.write(path.join(agentDir, "settings.toml"), "broken = [");
+		const result = await runCliProcess(["config", "dump-toml"], { PI_CODING_AGENT_DIR: agentDir });
+		expect(result.exitCode).toBe(0);
+		expect(Bun.TOML.parse(result.output)).toMatchObject({ compaction: { enabled: true } });
+		expect(result.output).toContain("# compaction.enabled (boolean)");
+		expect(await Bun.file(path.join(agentDir, "agent.db")).exists()).toBe(false);
+	});
 	it("renders record settings as JSON and with record type in text output", async () => {
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 

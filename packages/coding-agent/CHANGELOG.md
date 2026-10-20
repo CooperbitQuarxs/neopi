@@ -9,6 +9,7 @@
 
 ### Added
 
+- Added optional global and project `settings.toml` overlays with whole-key precedence over YAML, plus `npi config dump-toml` for documented defaults ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
 - Opt-in agent context telemetry now reports checkpoint availability and estimated recent-turn footprint, with pressure-based guidance that respects configured compaction boundaries ([#21](https://github.com/PsychedelicShayna/neopi/issues/21)).
 - Inspect, propose, set, and reset session compaction policy with `/compact control` or `compaction://`, with explicit project/user persistence and propose-only agent access by default ([#28](https://github.com/PsychedelicShayna/neopi/issues/28)).
 - Give each model role its own persistent token budget and type arbitrary global or role token limits in settings while keeping preset quick picks ([#52](https://github.com/PsychedelicShayna/neopi/issues/52)).
