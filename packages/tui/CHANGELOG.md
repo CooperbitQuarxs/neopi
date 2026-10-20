@@ -38,6 +38,7 @@
 ### Fixed
 
 - Cloned advisors stay visible after applying when another advisor has the same normalized copy name ([#322](https://github.com/PsychedelicShayna/neopi/issues/322)).
+- Advisor configuration confirms searches with Enter, retains parent filters through field editing, and clears search before native Close or Apply leaves a picker ([#416](https://github.com/PsychedelicShayna/neopi/issues/416)).
 - Escape and native Close clear confirmed search filters before leaving Git or a picker; Vim search now handles collections, POSIX classes, lazy repetition, noncapturing groups and lookaround without silently literalizing unsupported atoms ([#416](https://github.com/PsychedelicShayna/neopi/issues/416)).
 - Closing a settings choice or leaving its page through menu history restores the uncommitted preview, and Space still toggles chain steps with normal menu navigation enabled ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Session pickers honor remapped cancel keys, annotation source editors retain their configured shortcuts, and aborted agent transcripts drop stale message-editor focus and send hints ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).

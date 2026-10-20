@@ -439,7 +439,7 @@ describe("advisor menu navigation and history", () => {
 		return { overlay, events, closed: () => closed };
 	}
 
-	it("keeps literal filter keys and first Esc in the field, including short lists", () => {
+	it("clears literal search before closing, including short lists", () => {
 		const doc: WatchdogConfigDoc = { advisors: [{ name: "Reviewer" }] };
 		const h = make(doc);
 		try {
@@ -451,7 +451,7 @@ describe("advisor menu navigation and history", () => {
 			expect(doc.advisors[0]?.enabled).toBeUndefined();
 			h.overlay.handleInput("\x1b");
 			expect(h.closed()).toBe(0);
-			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "hjkl/ g", filterFocused: false });
+			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "", filterFocused: false });
 			h.overlay.handleInput("\x1b");
 			expect(h.closed()).toBe(1);
 		} finally {
@@ -470,7 +470,11 @@ describe("advisor menu navigation and history", () => {
 			h.overlay.handleInput("\r");
 			h.overlay.handleInput("/");
 			h.overlay.handleInput("Name");
-			h.overlay.handleInput("\x1b");
+			h.overlay.handleInput("\r");
+			expect(h.overlay.navigationSnapshot()).toMatchObject({
+				context: { screen: "detail" },
+				content: { filter: "Name", filterFocused: false, selectedValue: "name" },
+			});
 			h.overlay.handleInput("l");
 			h.overlay.handleInput("hjkl / draft");
 			h.overlay.handleInput("\x1b[D");
@@ -527,7 +531,7 @@ describe("advisor menu navigation and history", () => {
 			h.overlay.handleInput("\r");
 			h.overlay.handleInput("/");
 			h.overlay.handleInput("System prompt");
-			h.overlay.handleInput("\x1b");
+			h.overlay.handleInput("\r");
 			h.overlay.handleInput("l");
 			h.overlay.pasteText("hello\nhjkl / world");
 			h.overlay.handleInput("\x1b[D");
@@ -550,7 +554,7 @@ describe("advisor menu navigation and history", () => {
 			h.overlay.handleInput("\r");
 			h.overlay.handleInput("/");
 			h.overlay.handleInput("Tools");
-			h.overlay.handleInput("\x1b");
+			h.overlay.handleInput("\r");
 			h.overlay.handleInput("l");
 			h.overlay.handleInput("j");
 			h.overlay.handleInput("j");
@@ -682,7 +686,7 @@ describe("advisor menu navigation and history", () => {
 			const original = h.overlay.navigationSnapshot();
 			h.overlay.handleInput("/");
 			h.overlay.handleInput("Scope");
-			h.overlay.handleInput("\x1b");
+			h.overlay.handleInput("\r");
 			h.overlay.handleInput("\r");
 			expect(h.overlay.blocksMenuHistory).toBe(false);
 			h.overlay.restoreNavigation(original);
@@ -706,10 +710,59 @@ describe("advisor menu navigation and history", () => {
 		}
 	});
 
-	it("shows native filtered roster results and keeps prefs categories out of the timeline", () => {
+	it.each(["focused picker", "confirmed picker", "confirmed prefs"])(
+		"shows native roster search and clears it before closing through %s",
+		mode => {
+			const h = make({ advisors: [{ name: "Reviewer" }] });
+			const visits: string[] = [];
+			h.overlay.onNavigationVisit = page => visits.push(page);
+			const cx: DescribeContext = {
+				cols: 120,
+				reduceMotion: false,
+				dark: true,
+				supports: () => true,
+				feature: () => true,
+			};
+			const sheet = () => {
+				const root = h.overlay.describe(cx);
+				const component = root.c?.[0] as unknown as {
+					describe(): NativeNode | null;
+					handleNativeEvent(event: NativeUiEvent): void;
+				};
+				const node = component?.describe();
+				if (node?.k !== "picker") throw new Error("expected a filtered advisor picker");
+				return { component, props: node.p as TspPickerProps };
+			};
+			try {
+				h.overlay.handleNativeEvent({ type: "action", key: "", act: "page", value: "advisor:0", mods: [] });
+				expect(visits).toEqual([]);
+				h.overlay.handleInput("h");
+				visits.length = 0;
+				h.overlay.handleInput("/");
+				expect(sheet().props.query).toBe("");
+				h.overlay.handleInput("Reviewer");
+				expect(sheet().props.query).toBe("Reviewer");
+				if (mode !== "focused picker") h.overlay.handleInput("\r");
+				expect(sheet().props.actions?.find(action => action.id === "close")?.label).toBe(
+					mode === "focused picker" ? "Back to list" : "Clear search",
+				);
+				if (mode === "confirmed prefs")
+					h.overlay.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+				else sheet().component.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+				expect(h.closed()).toBe(0);
+				expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "", filterFocused: false });
+				expect(h.overlay.describe(cx).c).toEqual([]);
+				h.overlay.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+				expect(h.closed()).toBe(1);
+				expect(visits).toEqual([]);
+			} finally {
+				h.overlay.dispose();
+			}
+		},
+	);
+
+	it("clears a confirmed native tools search before applying the selection", () => {
 		const h = make({ advisors: [{ name: "Reviewer" }] });
-		const visits: string[] = [];
-		h.overlay.onNavigationVisit = page => visits.push(page);
 		const cx: DescribeContext = {
 			cols: 120,
 			reduceMotion: false,
@@ -717,31 +770,27 @@ describe("advisor menu navigation and history", () => {
 			supports: () => true,
 			feature: () => true,
 		};
-		const sheet = () => {
-			const root = h.overlay.describe(cx);
-			const component = root.c?.[0] as unknown as {
-				describe(): NativeNode | null;
+		try {
+			h.overlay.handleNativeEvent({ type: "action", key: "", act: "field", value: "tools", mods: [] });
+			h.overlay.handleInput("/");
+			h.overlay.handleInput("write");
+			h.overlay.handleInput("\r");
+			const component = h.overlay.describe(cx).c?.[0] as unknown as {
+				describe(): NativeNode;
 				handleNativeEvent(event: NativeUiEvent): void;
 			};
-			const node = component?.describe();
-			if (node?.k !== "picker") throw new Error("expected a filtered advisor picker");
-			return { component, props: node.p as TspPickerProps };
-		};
-		try {
-			h.overlay.handleNativeEvent({ type: "action", key: "", act: "page", value: "advisor:0", mods: [] });
-			expect(visits).toEqual([]);
-			h.overlay.handleInput("h");
-			visits.length = 0;
-			h.overlay.handleInput("/");
-			h.overlay.handleInput("Reviewer");
-			expect(sheet().props.query).toBe("Reviewer");
-			expect(sheet().props.actions?.find(action => action.id === "close")?.label).toBe("Back to list");
-			sheet().component.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
-			expect(h.closed()).toBe(0);
-			expect(sheet().props.query).toBe("Reviewer");
-			sheet().component.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
-			expect(h.closed()).toBe(1);
-			expect(visits).toEqual([]);
+			expect(component.describe().k).toBe("picker");
+			expect((component.describe().p as TspPickerProps).actions?.find(action => action.id === "apply")?.label).toBe(
+				"Clear search",
+			);
+			component.handleNativeEvent({ type: "action", key: "", act: "apply", mods: [] });
+			expect(h.overlay.navigationSnapshot()).toMatchObject({
+				context: { screen: "tools" },
+				content: { filter: "", filterFocused: false },
+			});
+			component.handleNativeEvent({ type: "action", key: "", act: "apply", mods: [] });
+			expect(h.overlay.navigationSnapshot().context.screen).toBe("detail");
+			expect(h.events).toEqual([]);
 		} finally {
 			h.overlay.dispose();
 		}

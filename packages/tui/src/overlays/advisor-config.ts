@@ -842,10 +842,15 @@ export class AdvisorConfigOverlayComponent implements Component {
 							items: props.items?.filter(item => item.id !== TOOLS_DONE),
 							actions: [
 								pickerAction("confirm", "Toggle", "enter"),
-								pickerAction("apply", active.filterFocused ? "Back to list" : "Apply", "escape", {
-									primary: true,
-									end: true,
-								}),
+								pickerAction(
+									"apply",
+									active.filterFocused ? "Back to list" : view.query ? "Clear search" : "Apply",
+									"escape",
+									{
+										primary: true,
+										end: true,
+									},
+								),
 							],
 						}
 					: props,
@@ -927,7 +932,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		} else if (active instanceof SelectList) {
 			// The tools list applies on cancel, like its Esc.
 			if (picked.kind === "action" && picked.act === "apply") {
-				if (active.filterFocused) active.handleInput("\x1b");
+				if (active.filterFocused || active.getFilter()) active.handleInput("\x1b");
 				else active.onCancel?.();
 			} else routeSelectListPicker(active, event);
 		}
@@ -968,7 +973,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 				if (event.act === "close") {
 					if (
 						event.value !== undefined ||
-						("filterFocused" in this.#active && this.#active.filterFocused === true)
+						("filterFocused" in this.#active && this.#active.filterFocused === true) ||
+						(this.#active instanceof SelectList && this.#active.getFilter().length > 0)
 					)
 						this.handleInput("\x1b");
 					else this.#cb.close();
