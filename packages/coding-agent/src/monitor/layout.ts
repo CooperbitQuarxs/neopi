@@ -160,5 +160,10 @@ export function planMonitorLayout(
 		checksum = ((checksum >> 1) | ((checksum & 1) << 15)) + body.charCodeAt(i);
 		checksum &= 0xffff;
 	}
-	return { width, height: height + Number(topTitle), panes, layout: `${checksum.toString(16).padStart(4, "0")},${body}` };
+	return {
+		width,
+		height: height + Number(topTitle),
+		panes,
+		layout: `${checksum.toString(16).padStart(4, "0")},${body}`,
+	};
 }

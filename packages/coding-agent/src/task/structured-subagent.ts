@@ -373,7 +373,9 @@ export async function resolveEffectiveSubagentPolicy(
 			selector = routing.agent ?? spawnPolicy.defaultAgent;
 		}
 	} catch (error) {
-		throw new StructuredSubagentError("preflight", error instanceof Error ? error.message : String(error), { cause: error });
+		throw new StructuredSubagentError("preflight", error instanceof Error ? error.message : String(error), {
+			cause: error,
+		});
 	}
 	const selectorShaped = isAgentModelSelector(selector);
 	const planMode = request.session.getPlanModeState?.()?.enabled === true;

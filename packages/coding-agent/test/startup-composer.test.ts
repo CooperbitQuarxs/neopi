@@ -320,7 +320,9 @@ describe("Composer prepaint", () => {
 	});
 
 	it("rejects an unknown startup branding choice through the settings writer", () => {
-		expect(() => cfgStartupBranding.override(settings, "unknown" as never)).toThrow("Invalid value for startupBranding");
+		expect(() => cfgStartupBranding.override(settings, "unknown" as never)).toThrow(
+			"Invalid value for startupBranding",
+		);
 		expect(cfgStartupBranding.get(settings)).toBe("new");
 	});
 

@@ -132,7 +132,9 @@ describe("tool:// enabled catalog", () => {
 	it("routes through read and denies catalog writes at the ordinary approval gate", async () => {
 		const { session, counts } = fixture();
 		const result = await new ReadTool(session).execute("catalog-read", { path: "tool://checkpoint" });
-		expect(result.content.some(block => block.type === "text" && block.text.includes("Summary for checkpoint"))).toBe(true);
+		expect(result.content.some(block => block.type === "text" && block.text.includes("Summary for checkpoint"))).toBe(
+			true,
+		);
 		expect(
 			resolveApproval(new WriteTool(session), { path: "tool://checkpoint", content: "{}" }, "always-ask"),
 		).toMatchObject({ policy: "deny", source: "tool" });
@@ -153,6 +155,8 @@ describe("tool:// enabled catalog", () => {
 	it("rejects missing sessions and unsupported subpaths instead of invoking", async () => {
 		const router = new InternalUrlRouter();
 		await expect(router.resolve("tool://")).rejects.toThrow("requires a session");
-		await expect(router.resolve("tool://read/execute", { session: fixture().session })).rejects.toThrow("Use tool://");
+		await expect(router.resolve("tool://read/execute", { session: fixture().session })).rejects.toThrow(
+			"Use tool://",
+		);
 	});
 });

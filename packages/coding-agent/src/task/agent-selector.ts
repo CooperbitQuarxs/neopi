@@ -27,11 +27,7 @@ import { formatModelString, resolveModelOverride } from "../config/model-resolve
 import { getKnownRoleIds } from "../config/model-roles";
 import type { Settings } from "../config/settings";
 import { parseSelectorSuffix } from "../config/model-selector-suffix";
-import {
-	type ConfiguredThinkingLevel,
-	concreteThinkingLevel,
-	toReasoningEffort,
-} from "@oh-my-pi/pi-tui/thinking";
+import { type ConfiguredThinkingLevel, concreteThinkingLevel, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
 
 /** The registry surfaces selector validation needs; tests can stub them. */
 export type AgentSelectorModelRegistry = Pick<ModelRegistry, "getAvailable" | "hasConfiguredAuth">;

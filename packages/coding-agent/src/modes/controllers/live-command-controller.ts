@@ -328,8 +328,9 @@ export class LiveCommandController {
 						turns: [...this.#committedSpeech.keys()].filter(turn => !voiceOnlyTurns.includes(turn)),
 					},
 					voiceOnlyTurns,
-					text: force.matched ? force.text :
-						stripLiveKeyword(captured.text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).text,
+					text: force.matched
+						? force.text
+						: stripLiveKeyword(captured.text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).text,
 				};
 			},
 			relayGates: () => {

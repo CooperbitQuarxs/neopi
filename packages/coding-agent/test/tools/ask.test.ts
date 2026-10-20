@@ -113,14 +113,17 @@ describe("AskTool option notes", () => {
 			const context = createContext({
 				askDialog: async questions => {
 					let submitted: ExtensionAskDialogResult | undefined;
-					const onPrompt = vi.fn()
+					const onPrompt = vi
+						.fn()
 						.mockResolvedValueOnce("First caveat")
 						.mockResolvedValueOnce("Second caveat")
 						.mockResolvedValueOnce("Why not B")
 						.mockResolvedValueOnce("Why not C")
 						.mockResolvedValueOnce("Question context");
 					const dialog = new AskDialogComponent(questions, {
-						onSubmit: result => { submitted = result; },
+						onSubmit: result => {
+							submitted = result;
+						},
 						onCancel: vi.fn(),
 						onPrompt,
 					});
@@ -144,9 +147,22 @@ describe("AskTool option notes", () => {
 					return submitted;
 				},
 			});
-			const result = await tool.execute("option-notes", {
-				questions: [{ id: "choice", question: "Choose?", multi, options: [{ label: "A" }, { label: "B" }, { label: "C" }] }],
-			}, undefined, undefined, context);
+			const result = await tool.execute(
+				"option-notes",
+				{
+					questions: [
+						{
+							id: "choice",
+							question: "Choose?",
+							multi,
+							options: [{ label: "A" }, { label: "B" }, { label: "C" }],
+						},
+					],
+				},
+				undefined,
+				undefined,
+				context,
+			);
 			expect(result.details).toMatchObject({ selectedOptions: ["A"], note: "Question context", optionNotes });
 			const content = result.content[0];
 			expect(content?.type).toBe("text");
@@ -155,7 +171,9 @@ describe("AskTool option notes", () => {
 			expect(content.text).toContain('Note on option "B" (not selected):\n  Why not B');
 			expect(content.text).toContain('Note on option "C" (not selected):\n  Why not C');
 			expect(content.text).toContain("Second caveat");
-			const rendered = stripAnsi(askToolRenderer.renderResult(result, { expanded: true }, darkTheme).render(100).join("\n"));
+			const rendered = stripAnsi(
+				askToolRenderer.renderResult(result, { expanded: true }, darkTheme).render(100).join("\n"),
+			);
 			expect(rendered).toContain("Why not B");
 			expect(rendered).toContain("Why not C");
 			const native = JSON.stringify(askToolRenderer.describeResult(result));
@@ -169,27 +187,42 @@ describe("AskTool option notes", () => {
 	it("numbers option-note images across question boundaries without leaking images into details", async () => {
 		const image: ai.ImageContent = { type: "image", mimeType: "image/png", data: TINY_PNG_BASE64 };
 		const tool = new AskTool(createSession());
-		const result = await tool.execute("option-images", {
-			questions: [
-				{ id: "one", question: "First?", options: [{ label: "A" }, { label: "B" }] },
-				{ id: "two", question: "Second?", options: [{ label: "C" }] },
-			],
-		}, undefined, undefined, createContext({
-			askDialog: async () => ({
-				kind: "submit",
-				results: [
-					{
-						id: "one", question: "First?", options: ["A", "B"], multi: false, selectedOptions: ["A"],
-						note: "Context [Image #1]", noteImages: [image],
-						optionNotes: [{ option: "B", note: "Avoid [Image #1]", images: [image] }],
-					},
-					{
-						id: "two", question: "Second?", options: ["C"], multi: false, selectedOptions: ["C"],
-						optionNotes: [{ option: "C", note: "Prefer [Image #1]", images: [image] }],
-					},
+		const result = await tool.execute(
+			"option-images",
+			{
+				questions: [
+					{ id: "one", question: "First?", options: [{ label: "A" }, { label: "B" }] },
+					{ id: "two", question: "Second?", options: [{ label: "C" }] },
 				],
+			},
+			undefined,
+			undefined,
+			createContext({
+				askDialog: async () => ({
+					kind: "submit",
+					results: [
+						{
+							id: "one",
+							question: "First?",
+							options: ["A", "B"],
+							multi: false,
+							selectedOptions: ["A"],
+							note: "Context [Image #1]",
+							noteImages: [image],
+							optionNotes: [{ option: "B", note: "Avoid [Image #1]", images: [image] }],
+						},
+						{
+							id: "two",
+							question: "Second?",
+							options: ["C"],
+							multi: false,
+							selectedOptions: ["C"],
+							optionNotes: [{ option: "C", note: "Prefer [Image #1]", images: [image] }],
+						},
+					],
+				}),
 			}),
-		}));
+		);
 		expect(result.details?.results).toMatchObject([
 			{ note: "Context [Image #1]", optionNotes: [{ option: "B", note: "Avoid [Image #2]" }] },
 			{ optionNotes: [{ option: "C", note: "Prefer [Image #3]" }] },
@@ -200,7 +233,9 @@ describe("AskTool option notes", () => {
 		if (content?.type !== "text") throw new Error("Expected text");
 		expect(content.text).toContain('Note on option "B" (not selected):\n  Avoid [Image #2]');
 		expect(content.text).toContain('Note on option "C" (selected):\n  Prefer [Image #3]');
-		const rendered = stripAnsi(askToolRenderer.renderResult(result, { expanded: true }, darkTheme).render(100).join("\n"));
+		const rendered = stripAnsi(
+			askToolRenderer.renderResult(result, { expanded: true }, darkTheme).render(100).join("\n"),
+		);
 		expect(rendered).toContain("Avoid [Image #2]");
 		expect(JSON.stringify(askToolRenderer.describeResult(result))).toContain("Prefer [Image #3]");
 	});

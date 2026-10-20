@@ -413,7 +413,8 @@ export class TmuxMonitorManager {
 	async #resizeWindow(windowId: string, width: number, height: number): Promise<void> {
 		// tmux cannot represent an unlimited number of physical cells. Do not turn
 		// this hard limit (or any other CLI failure) into implicit window overflow.
-		if (width > 32767 || height > 32767) throw new TmuxMonitorError("Monitor layout exceeds tmux's 32767-cell window limit");
+		if (width > 32767 || height > 32767)
+			throw new TmuxMonitorError("Monitor layout exceeds tmux's 32767-cell window limit");
 		await this.#tmux(["resize-window", "-t", windowId, "-x", String(width), "-y", String(height)]);
 	}
 
@@ -465,9 +466,7 @@ export class TmuxMonitorManager {
 		await this.#tmux(["select-layout", "-t", windowId, plan.layout]);
 		// select-layout restores geometry, not the pane ids encoded in a saved
 		// layout. Restore identity explicitly so split history cannot change fill order.
-		const positions = await this.#tmux([
-			"list-panes", "-t", windowId, "-F", "#{pane_id} #{pane_left},#{pane_top}",
-		]);
+		const positions = await this.#tmux(["list-panes", "-t", windowId, "-F", "#{pane_id} #{pane_left},#{pane_top}"]);
 		const byPosition = new Map<string, string>();
 		const byId = new Map<string, string>();
 		for (const line of positions.trim().split("\n")) {

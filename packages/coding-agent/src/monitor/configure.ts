@@ -5,11 +5,7 @@ import { MONITOR_SETTINGS } from "./settings";
 
 const CUSTOM = "Custom…";
 
-async function editSetting(
-	ctx: InteractiveModeContext,
-	ui: ExtensionUIContext,
-	setting: AnySetting,
-): Promise<void> {
+async function editSetting(ctx: InteractiveModeContext, ui: ExtensionUIContext, setting: AnySetting): Promise<void> {
 	const metadata = setting.ui;
 	if (!metadata) return;
 	const current = setting.get(ctx.settings);
@@ -64,7 +60,9 @@ async function editSetting(
 export async function configureAgentMonitor(ctx: InteractiveModeContext): Promise<void> {
 	const ui = ctx.getToolUIContext();
 	if (!ui) {
-		ctx.showError("Monitor configuration needs the interactive UI; the same controls are in /settings → Agent monitor.");
+		ctx.showError(
+			"Monitor configuration needs the interactive UI; the same controls are in /settings → Agent monitor.",
+		);
 		return;
 	}
 	for (;;) {

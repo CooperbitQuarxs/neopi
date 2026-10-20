@@ -423,7 +423,10 @@ function describeAnswer(question: ExtensionAskDialogQuestion, state: QuestionSta
 	const note = noteForSubmittedAnswer(question, state)?.trim();
 	if (note) spans.push(span("  ✎ ", "dim"), span(normalizedInlineInput(note), "em"));
 	for (const entry of state.optionNotes) {
-		spans.push(span(`  ✎ ${normalizedInlineInput(entry.option)}: `, "dim"), span(normalizedInlineInput(entry.note), "em"));
+		spans.push(
+			span(`  ✎ ${normalizedInlineInput(entry.option)}: `, "dim"),
+			span(normalizedInlineInput(entry.note), "em"),
+		);
 	}
 	return spans;
 }
@@ -500,8 +503,11 @@ function renderRowLabel(
 	const marker = `${theme.fg(checked ? "success" : "dim", optionMarker(theme, question.multi, checked))} `;
 	const cursor = selected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
 	const label = renderInlineMarkdown(rowItem.label, mdTheme, t => theme.fg(color, t));
-	const hasOptionNotes = rowItem.kind === "option" && state.optionNotes.some(entry => entry.option === question.options[rowItem.optionIndex ?? -1]?.label);
-	const noteMarker = (state.note && state.noteRowKey === rowItem.key) || hasOptionNotes ? theme.fg("success", "  ✎ note") : "";
+	const hasOptionNotes =
+		rowItem.kind === "option" &&
+		state.optionNotes.some(entry => entry.option === question.options[rowItem.optionIndex ?? -1]?.label);
+	const noteMarker =
+		(state.note && state.noteRowKey === rowItem.key) || hasOptionNotes ? theme.fg("success", "  ✎ note") : "";
 	// `width` is already the inner content width supplied by OverlayPanel; when
 	// a scrollbar is needed, renderRows() calls this again with one less column.
 	// Keep the cursor, option marker, first wrapped label line, and optional
@@ -1082,7 +1088,10 @@ export class AskDialogComponent implements Component {
 			title: question?.multi ? `${enterLabel}  enter · Toggle  space` : `${enterLabel}  enter`,
 		});
 		const note = actionButton("Note", "note", { keys: "n", title: "Add a note to the highlighted answer  n" });
-		const optionNote = actionButton("Option note", "option-note", { keys: "a", title: "Add option note  a · Edit latest  A" });
+		const optionNote = actionButton("Option note", "option-note", {
+			keys: "a",
+			title: "Add option note  a · Edit latest  A",
+		});
 		return actionBar([...lead, null, optionNote, note, skip, submit]);
 	}
 

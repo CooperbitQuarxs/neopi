@@ -155,10 +155,7 @@ export function validateSwitchConfig(
 				"A catalog Plan must name its account when the provider has multiple credentials",
 			);
 		const meters = plan.meters ?? [];
-		if (
-			plan.attribution === "declared" &&
-			(!plan.meters || !plan.size || meters.some(meter => !plan.size?.[meter]))
-		)
+		if (plan.attribution === "declared" && (!plan.meters || !plan.size || meters.some(meter => !plan.size?.[meter])))
 			issue(
 				fields,
 				"E-PLAN-SIZE",

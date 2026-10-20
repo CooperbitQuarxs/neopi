@@ -258,10 +258,12 @@ export class LiveSessionController {
 	#holdReleased = false;
 	#lastComposerWrite = Number.NEGATIVE_INFINITY;
 	#voiceFloorTimer: NodeJS.Timeout | undefined;
-	#deferredVoiceDelegation: {
-		event: Extract<LiveServerEvent, { type: "delegation.created" }>;
-		directAnswerTurn?: number;
-	} | undefined;
+	#deferredVoiceDelegation:
+		| {
+				event: Extract<LiveServerEvent, { type: "delegation.created" }>;
+				directAnswerTurn?: number;
+		  }
+		| undefined;
 	readonly #transcriptKeywords: (() => { submit: string; force: string; silenceMs: number }) | undefined;
 	#transcriptKeywordTimer: NodeJS.Timeout | undefined;
 	readonly #captureComposerExcludingTurns: ((turns: readonly number[]) => LiveComposerSubmission) | undefined;
@@ -528,7 +530,10 @@ export class LiveSessionController {
 		if (pending?.dispatching && this.#pendingDelivery && !this.#pendingDelivery.cancel()) {
 			const turns = this.#deleteTurns(turn => turn.claim === pending.generation);
 			this.#acceptSpeech(
-				turns.map(turn => turn.text).join("\n\n").trim(),
+				turns
+					.map(turn => turn.text)
+					.join("\n\n")
+					.trim(),
 				pending.forced,
 				turns,
 			);
@@ -669,8 +674,11 @@ export class LiveSessionController {
 		if (this.#seenDelegationIds.has(event.item.id)) return;
 		this.#seenDelegationIds.add(event.item.id);
 		const latest = this.#latestUtterance;
-		if (latest?.final && this.#isDirectAddress(latest.text) &&
-			!this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined).length) {
+		if (
+			latest?.final &&
+			this.#isDirectAddress(latest.text) &&
+			!this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined).length
+		) {
 			this.#rejectDirectDelegation(event.item.id, latest.text);
 			return;
 		}
@@ -690,9 +698,8 @@ export class LiveSessionController {
 
 		const voiceText = joinDelegationContent(event.item.content);
 		// A claimed turn belongs to an earlier handoff; it cannot authorize superseding it.
-		const newOperatorWork = this.#turnsWhere(
-			turn => this.#mayDelegateTurn(turn) && turn.claim === undefined,
-		).length > 0;
+		const newOperatorWork =
+			this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined).length > 0;
 		if (!newOperatorWork) {
 			this.#dispatchVoiceOnly(voiceText);
 			return;
@@ -710,7 +717,10 @@ export class LiveSessionController {
 			// from the composer here.
 			const accepted = this.#deleteTurns(turn => turn.claim === previousGeneration);
 			this.#acceptSpeech(
-				accepted.map(turn => turn.text).join("\n\n").trim(),
+				accepted
+					.map(turn => turn.text)
+					.join("\n\n")
+					.trim(),
 				previousPending?.forced ?? false,
 				accepted,
 			);
@@ -721,7 +731,8 @@ export class LiveSessionController {
 		}
 		if (generation !== this.#delegationGeneration) return;
 		const claimed = this.#turnsWhere(
-			turn => this.#mayDelegateTurn(turn) &&
+			turn =>
+				this.#mayDelegateTurn(turn) &&
 				(turn.claim === undefined || turn.claim === this.#pendingDelegation?.generation),
 		);
 		if (claimed.length === 0) return;
@@ -776,7 +787,10 @@ export class LiveSessionController {
 			.map(turnNumber => this.#userTurns.get(turnNumber))
 			.filter((turn): turn is UserLedgerTurn => turn !== undefined && turn.claim === generation);
 		if (turns.length === 0 || turns.some(turn => !turn.final)) return;
-		const merged = turns.map(turn => turn.text).join("\n\n").trim();
+		const merged = turns
+			.map(turn => turn.text)
+			.join("\n\n")
+			.trim();
 		if (!merged) return;
 		pending.dispatching = true;
 		const { content, details } = buildLiveDelegationMessage(merged, pending.voiceText, this.#includeVoiceNote());
@@ -1146,8 +1160,12 @@ export class LiveSessionController {
 		const voiceOnly = this.#turnsWhere(turn => turn.final && !this.#mayDelegateTurn(turn));
 		if (voiceOnly.length) {
 			if (Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
-			const primary: LiveComposerSubmission = this.#captureComposerExcludingTurns?.(voiceOnly.map(turn => turn.turn)) ?? {
-				text: this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined).map(turn => turn.text).join("\n\n"),
+			const primary: LiveComposerSubmission = this.#captureComposerExcludingTurns?.(
+				voiceOnly.map(turn => turn.turn),
+			) ?? {
+				text: this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined)
+					.map(turn => turn.text)
+					.join("\n\n"),
 			};
 			const preserved = primary.voiceOnlyTurns ?? voiceOnly.map(turn => turn.turn);
 			if (!this.retireComposerSpeech(preserved)) return false;
@@ -1171,7 +1189,11 @@ export class LiveSessionController {
 			void this.sendOperatorText(block.text, "voice").then(delivered => {
 				if (!delivered) return;
 				const removed = this.#deleteTurns(turn => turns.includes(turn));
-				if (removed.length) this.#callbacks.onSpeechSent?.(block.text, removed.map(turn => turn.turn));
+				if (removed.length)
+					this.#callbacks.onSpeechSent?.(
+						block.text,
+						removed.map(turn => turn.turn),
+					);
 			});
 			return true;
 		}
@@ -1321,26 +1343,33 @@ export class LiveSessionController {
 		this.#transcriptKeywordTimer = undefined;
 		const keywords = this.#transcriptKeywords?.();
 		if (!keywords || this.#stopped) return;
-		const text = this.#turnsWhere(turn => turn.claim === undefined).map(turn => turn.text).join("\n\n");
-		if (!stripLiveKeyword(text, keywords.force, true).matched &&
-			!stripLiveKeyword(text, keywords.submit, true).matched) return;
-		this.#transcriptKeywordTimer = setTimeout(() => {
-			this.#transcriptKeywordTimer = undefined;
-			const current = this.#transcriptKeywords?.();
-			if (!current || this.#stopped) return;
-			const draft = this.#turnsWhere(turn => turn.claim === undefined).map(turn => turn.text).join("\n\n");
-			if (draft !== text) return;
-			const force = stripLiveKeyword(draft, current.force, true);
-			const submit = force.matched ? force : stripLiveKeyword(draft, current.submit, true);
-			if (submit.matched && submit.text) this.forceDelegateComposer(submit.text);
-		}, Math.max(keywords.silenceMs, this.#quietFloorMs()));
+		const text = this.#turnsWhere(turn => turn.claim === undefined)
+			.map(turn => turn.text)
+			.join("\n\n");
+		if (
+			!stripLiveKeyword(text, keywords.force, true).matched &&
+			!stripLiveKeyword(text, keywords.submit, true).matched
+		)
+			return;
+		this.#transcriptKeywordTimer = setTimeout(
+			() => {
+				this.#transcriptKeywordTimer = undefined;
+				const current = this.#transcriptKeywords?.();
+				if (!current || this.#stopped) return;
+				const draft = this.#turnsWhere(turn => turn.claim === undefined)
+					.map(turn => turn.text)
+					.join("\n\n");
+				if (draft !== text) return;
+				const force = stripLiveKeyword(draft, current.force, true);
+				const submit = force.matched ? force : stripLiveKeyword(draft, current.submit, true);
+				if (submit.matched && submit.text) this.forceDelegateComposer(submit.text);
+			},
+			Math.max(keywords.silenceMs, this.#quietFloorMs()),
+		);
 	}
 
 	#voiceTurnBlocked(): boolean {
-		return (
-			(this.#holdMode() && !this.#holdReleased) ||
-			Date.now() < this.#lastComposerWrite + this.#quietFloorMs()
-		);
+		return (this.#holdMode() && !this.#holdReleased) || Date.now() < this.#lastComposerWrite + this.#quietFloorMs();
 	}
 
 	/** Apply settings immediately, including native RTP playback (which bypasses JS transcript events). */
@@ -1640,8 +1669,9 @@ export class LiveSessionController {
 				current.claim = undefined;
 				pending.turns = pending.turns.filter(turn => turn !== current.turn);
 				if (pending.turns.length > 0) {
-					void this.#dispatchPendingDelegation(pending.generation)
-						.catch(cause => this.#reportFailure(errorFrom(cause)));
+					void this.#dispatchPendingDelegation(pending.generation).catch(cause =>
+						this.#reportFailure(errorFrom(cause)),
+					);
 				} else {
 					this.#pendingDelivery?.cancel();
 					this.#delegationGeneration += 1;
@@ -1692,13 +1722,20 @@ export class LiveSessionController {
 		if (final && pendingGeneration !== undefined) {
 			void this.#dispatchPendingDelegation(pendingGeneration).catch(cause => this.#reportFailure(errorFrom(cause)));
 		}
-		if (final && current.claim === undefined && stripLiveKeyword(current.text, this.#delegationKeywords().force).matched) {
+		if (
+			final &&
+			current.claim === undefined &&
+			stripLiveKeyword(current.text, this.#delegationKeywords().force).matched
+		) {
 			// Re-enter the same event boundary: hold/quiet-floor gating owns this handoff too.
 			current.forcedDelegationId = `keyword-${current.turn}`;
-			this.#handleLiveEvent({
-				type: "delegation.created",
-				item: { type: "delegation", target: "client", id: current.forcedDelegationId, content: [] },
-			}, false);
+			this.#handleLiveEvent(
+				{
+					type: "delegation.created",
+					item: { type: "delegation", target: "client", id: current.forcedDelegationId, content: [] },
+				},
+				false,
+			);
 		}
 	}
 
@@ -1717,10 +1754,9 @@ export class LiveSessionController {
 		const template = operatorTypedMessageTemplate;
 		const labelBytes = Buffer.byteLength(prompt.render(template, { message: "", delegationRejected: true }), "utf8");
 		for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
-			void this.#queueSend(this.#voiceContext(
-				delegationId,
-				prompt.render(template, { message: part, delegationRejected: true }),
-			));
+			void this.#queueSend(
+				this.#voiceContext(delegationId, prompt.render(template, { message: part, delegationRejected: true })),
+			);
 		}
 	}
 
