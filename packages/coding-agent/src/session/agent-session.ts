@@ -141,11 +141,8 @@ import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mod
 import type { EffortOrigin, EffortSelection } from "../config/effort-policy";
 import type { ModelRegistry } from "../config/model-registry";
 import {
-	DEFAULT_PREWALK_TARGET,
 	disabledProviderIds,
-	getModelMatchPreferences,
 	type ResolvedModelRoleValue,
-	resolveCliModel,
 	resolveModelOverride,
 	resolveSessionModelSelector,
 	sessionModelDiscoveryProviders,
@@ -435,6 +432,7 @@ import {
 	type PrewalkCoordinatorHost,
 	type PrewalkRestartResult,
 } from "./prewalk";
+import { getPrewalkPatterns, resolvePrewalkCrewSelection } from "./prewalk-crew";
 import {
 	isAdvisorCard,
 	isDisplayableQueuedMessage,
@@ -520,6 +518,10 @@ import {
 	cfgExternalThinking,
 	cfgPowerSleepPrevention,
 	cfgPrewalkEnabled,
+	cfgPrewalkPlanner,
+	cfgPrewalkPlannerFallbacks,
+	cfgPrewalkExecution,
+	cfgPrewalkExecutionFallbacks,
 	cfgProviderAppendOnlyContext,
 	cfgProvidersCacheWarming,
 	cfgProvidersCacheRetention,
@@ -1900,6 +1902,7 @@ export class AgentSession implements SettingsScope {
 			configuredThinkingLevel: () => this.configuredThinkingLevel(),
 			restoreThinkingLevel: level => this.#models.restoreThinkingLevel(level),
 			resolveDefaultPrewalk: () => this.#resolveDefaultPrewalk(),
+			resolvePlanningCrew: () => resolvePrewalkCrewSelection(this.settings, this.#modelRegistry, "planner"),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			setModelTemporary: (model, thinkingLevel, options) =>
 				this.#models.setModelTemporary(model, thinkingLevel, options, "automatic"),
@@ -2790,33 +2793,42 @@ export class AgentSession implements SettingsScope {
 			}
 			if (this.#prewalk.state) return;
 			const prewalk = this.#resolveDefaultPrewalk();
-			if (prewalk) this.#prewalk.arm(prewalk.target, prewalk.thinkingLevel);
+			if (prewalk) this.#armConfiguredPrewalk(prewalk);
+		});
+		const refreshCrew = (): void => {
+			if (!cfgPrewalkEnabled.get(this.settings)) return;
+			this.#prewalk.disarm();
+			const prewalk = this.#resolveDefaultPrewalk();
+			if (prewalk) this.#armConfiguredPrewalk(prewalk);
+		};
+		cfgPrewalkPlanner.listen(this, refreshCrew);
+		cfgPrewalkPlannerFallbacks.listen(this, refreshCrew);
+		cfgPrewalkExecution.listen(this, refreshCrew);
+		cfgPrewalkExecutionFallbacks.listen(this, refreshCrew);
+	}
+
+	#armConfiguredPrewalk(prewalk: Prewalk): void {
+		if (getPrewalkPatterns(this.settings, "planner").length === 0) {
+			this.#prewalk.arm(prewalk.target, prewalk.thinkingLevel);
+			return;
+		}
+		void this.#prewalk.armConfigured(prewalk).catch(error => {
+			this.emitNotice("warning", `Prewalk not armed: ${String(error)}.`, "prewalk");
 		});
 	}
 
 	/** Resolve the configured startup/new-session handoff using the settings-change selection path. */
 	#resolveDefaultPrewalk(): Prewalk | undefined {
-		const scoped = this.scopedModels.map(entry => entry.model);
-		const resolved = resolveCliModel({
-			cliModel: DEFAULT_PREWALK_TARGET,
-			modelRegistry: this.#modelRegistry,
-			availableModels: scoped.length > 0 ? scoped : undefined,
-			settings: this.settings,
-			preferences: getModelMatchPreferences(this.settings),
-		});
-		const target = resolved.model;
-		const problem = !target
-			? (resolved.error ?? `model "${DEFAULT_PREWALK_TARGET}" not found`)
-			: cfgDisabledProviders.get(this.settings).includes(target.provider)
-				? `provider "${target.provider}" is disabled`
-				: !this.#modelRegistry.hasConfiguredAuth(target)
-					? `no API key for ${target.provider}/${target.id}`
-					: undefined;
-		if (!target || problem) {
-			this.emitNotice("warning", `Prewalk not armed: ${problem}.`, "prewalk");
+		if (
+			getPrewalkPatterns(this.settings, "planner").length > 0 &&
+			!resolvePrewalkCrewSelection(this.settings, this.#modelRegistry, "planner")
+		) {
+			this.emitNotice("warning", "Prewalk not armed: planning crew unavailable.", "prewalk");
 			return undefined;
 		}
-		return { target, thinkingLevel: resolved.thinkingLevel };
+		const prewalk = resolvePrewalkCrewSelection(this.settings, this.#modelRegistry, "execution");
+		if (!prewalk) this.emitNotice("warning", "Prewalk not armed: execution crew unavailable.", "prewalk");
+		return prewalk;
 	}
 
 	/**

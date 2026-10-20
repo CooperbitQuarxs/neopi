@@ -95,6 +95,7 @@ import { type ArtifactManager, writeArtifact } from "../session/artifacts";
 import { ASYNC_RESULT_MESSAGE_TYPE } from "../session/async-job-delivery";
 import type { AuthStorage } from "../session/auth-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
+import { getPrewalkPatterns, resolvePrewalkCrewSelection } from "../session/prewalk-crew";
 import { hasConversationalHistory, PendingSessionManager, SessionManager } from "../session/session-manager";
 import { truncateTail } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import {
@@ -4571,14 +4572,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				configuredModelPatterns.length === 1
 					? resolveSubagentInheritedRetryFallbackChain(subagentSettings, modelRegistry, inheritedFallbackRole)
 					: undefined;
-			const {
-				model,
-				thinkingLevel: resolvedThinkingLevel,
-				explicitThinkingLevel,
-				authFallbackUsed,
-				warning: modelResolutionWarning,
-				matchedPattern,
-			} = await awaitAbortable(
+			const ordinaryModelResolution = await awaitAbortable(
 				resolveModelOverrideWithAuthFallback(
 					modelPatterns,
 					options.parentActiveModelPattern,
@@ -4587,6 +4581,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					id,
 				),
 			);
+			let model = ordinaryModelResolution.model;
+			const {
+				thinkingLevel: resolvedThinkingLevel,
+				explicitThinkingLevel,
+				authFallbackUsed,
+				warning: modelResolutionWarning,
+				matchedPattern,
+			} = ordinaryModelResolution;
 			if (modelResolutionWarning) {
 				logger.warn("Subagent model resolution warning", {
 					warning: modelResolutionWarning,
@@ -4600,6 +4602,41 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					resolvedProvider: model.provider,
 					resolvedModel: model.id,
 				});
+			}
+			const agentPrewalk = resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(settings));
+			const settingsPrewalk = cfgTaskAgentPrewalk.get(settings)[agent.name]?.trim();
+			const prewalkPattern = resolveAgentPrewalkPattern({
+				settingsOverride: settingsPrewalk,
+				agentPrewalk,
+			});
+			let prewalk: Prewalk | undefined;
+			let planner: Prewalk | undefined;
+			if (prewalkPattern) {
+				await awaitAbortable(modelRegistry.awaitBackgroundRefresh());
+				// Boolean enablement uses the configured crew. Explicit agent/settings
+				// strings replace only its execution selector, keeping its fallbacks.
+				const executionOverride =
+					settingsPrewalk && !["on", "true"].includes(settingsPrewalk.toLowerCase())
+						? settingsPrewalk
+						: typeof agentPrewalk === "string"
+							? agentPrewalk.trim() || undefined
+							: undefined;
+				const execution = resolvePrewalkCrewSelection(settings, modelRegistry, "execution", executionOverride);
+				const plannerConfigured = getPrewalkPatterns(settings, "planner").length > 0;
+				const resolvedPlanner = plannerConfigured
+					? resolvePrewalkCrewSelection(settings, modelRegistry, "planner")
+					: undefined;
+				if (!execution || (plannerConfigured && !resolvedPlanner)) {
+					logger.warn("Subagent prewalk crew unavailable; keeping ordinary task model", {
+						agent: agent.name,
+						phase: !execution ? "execution" : "planner",
+						pattern: prewalkPattern,
+					});
+				} else {
+					prewalk = execution;
+					planner = resolvedPlanner;
+					if (planner) model = planner.target;
+				}
 			}
 			// The exact-name `task.agentServiceTierOverrides` entry dispatch resolved
 			// for this agent. The session evaluates it against its final model —
@@ -4616,19 +4653,20 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 								resolvedModel,
 								inheritedSubagentServiceTiers(settings, options.parentServiceTier),
 							);
+			const retryModelPatterns = planner ? getPrewalkPatterns(settings, "planner") : modelPatterns;
 			const retryFallbackRole = installSubagentRetryFallbackChain({
 				settings: subagentSettings,
 				id,
-				candidates: resolveSubagentRetryFallbackCandidates(modelPatterns, modelRegistry, subagentSettings),
-				inheritedFallbackChain: inheritedRetryFallbackChain,
-				inheritedFallbackRole,
+				candidates: resolveSubagentRetryFallbackCandidates(retryModelPatterns, modelRegistry, subagentSettings),
+				inheritedFallbackChain: planner ? undefined : inheritedRetryFallbackChain,
+				inheritedFallbackRole: planner ? undefined : inheritedFallbackRole,
 				model,
-				authFallbackUsed,
+				authFallbackUsed: planner ? false : authFallbackUsed,
 			});
 			if (retryFallbackRole) {
 				logger.debug("Configured subagent runtime model fallback chain", {
 					role: retryFallbackRole,
-					requested: modelPatterns,
+					requested: retryModelPatterns,
 				});
 			}
 			if (model?.contextWindow && model.contextWindow > 0) {
@@ -4679,23 +4717,31 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					? resolveTaskEffortLevel(model, options.effort as "lo" | "med" | "hi", spawnEffortCeiling)
 					: replacementEffort;
 			const origin: EffortOrigin =
-				effortLevel !== undefined || callerLevel !== undefined ? "caller" : role ? "role" : "default";
+				planner?.thinkingLevel !== undefined || effortLevel !== undefined || callerLevel !== undefined
+					? "caller"
+					: role
+						? "role"
+						: "default";
 			const selection: EffortSelection | undefined =
-				effortLevel !== undefined
-					? { mode: "fixed", level: effortLevel }
-					: callerLevel !== undefined && callerLevel !== "auto"
-						? { mode: "fixed", level: callerLevel }
-						: callerLevel === "auto"
-							? { mode: "auto" }
-							: savedRoleSelection?.mode !== "inherit"
-								? savedRoleSelection
-								: thinkingLevel === "auto" || resolvedThinkingLevel === "auto"
-									? { mode: "auto" }
-									: thinkingLevel !== undefined
-										? { mode: "fixed", level: thinkingLevel }
-										: resolvedThinkingLevel !== undefined
-											? { mode: "fixed", level: resolvedThinkingLevel }
-											: undefined;
+				planner?.thinkingLevel !== undefined
+					? planner.thinkingLevel === "auto"
+						? { mode: "auto" }
+						: { mode: "fixed", level: planner.thinkingLevel }
+					: effortLevel !== undefined
+						? { mode: "fixed", level: effortLevel }
+						: callerLevel !== undefined && callerLevel !== "auto"
+							? { mode: "fixed", level: callerLevel }
+							: callerLevel === "auto"
+								? { mode: "auto" }
+								: savedRoleSelection?.mode !== "inherit"
+									? savedRoleSelection
+									: thinkingLevel === "auto" || resolvedThinkingLevel === "auto"
+										? { mode: "auto" }
+										: thinkingLevel !== undefined
+											? { mode: "fixed", level: thinkingLevel }
+											: resolvedThinkingLevel !== undefined
+												? { mode: "fixed", level: resolvedThinkingLevel }
+												: undefined;
 			let decision: EffortDecision | undefined;
 			if (model && mode === "replacement") {
 				try {
@@ -4740,7 +4786,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					);
 				}
 			}
-			const effectiveThinkingLevel =
+			const ordinaryThinkingLevel =
 				mode === "replacement"
 					? selection?.mode === "auto" || callerLevel === "auto"
 						? "auto"
@@ -4750,6 +4796,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 								(explicitThinkingLevel ? resolvedThinkingLevel : (thinkingLevel ?? resolvedThinkingLevel)))
 					: (effortLevel ??
 						(explicitThinkingLevel ? resolvedThinkingLevel : (thinkingLevel ?? resolvedThinkingLevel)));
+			const effectiveThinkingLevel = planner?.thinkingLevel ?? ordinaryThinkingLevel;
 			const effortDisclosure = decision?.disclosure;
 			if (model) {
 				const displayLevel =
@@ -4776,38 +4823,25 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			closeUnadoptedSessionManager = () => {
 				void sessionManagerPromise.then(manager => manager.close()).catch(() => {});
 			};
-			// Per-agent prewalk: the agent definition's `prewalk` frontmatter or the
-			// `task.agentPrewalk` settings override hands the subagent off to a
-			// fast/cheap target at its first edit/write — the same mechanism as the
-			// session-level --prewalk. The bundled generic `task` agent has no
-			// frontmatter default; the `task.prewalk` toggle (default off) arms it.
-			// Resolution failures skip prewalk instead of failing the spawn.
-			let prewalk: Prewalk | undefined;
-			const prewalkPattern = resolveAgentPrewalkPattern({
-				settingsOverride: cfgTaskAgentPrewalk.get(settings)[agent.name],
-				agentPrewalk: resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(settings)),
-			});
-			if (prewalkPattern) {
-				await awaitAbortable(modelRegistry.awaitBackgroundRefresh());
-				const resolvedPrewalk = resolveModelOverride([prewalkPattern], modelRegistry, settings);
-				const target = resolvedPrewalk.model;
-				if (!target || !modelRegistry.hasConfiguredAuth(target)) {
-					logger.warn("Subagent prewalk target unavailable; skipping prewalk", {
-						agent: agent.name,
-						pattern: prewalkPattern,
-						warning: resolvedPrewalk.warning,
-					});
-				} else if (prewalkWouldBeNoop(model, effectiveThinkingLevel, target, resolvedPrewalk.thinkingLevel)) {
-					// Same model AND same effective thinking level: switching would only
-					// inject the plan/checklist nudges for no gain — skip. An effort-only
-					// delta on the same model still arms (it is a real cheapening hand-off).
-					logger.debug("Subagent prewalk target matches starting model and thinking level; skipping prewalk", {
-						agent: agent.name,
-						pattern: prewalkPattern,
-					});
-				} else {
-					prewalk = { target, thinkingLevel: resolvedPrewalk.thinkingLevel };
-				}
+			if (prewalk && prewalkWouldBeNoop(model, effectiveThinkingLevel, prewalk.target, prewalk.thinkingLevel)) {
+				// Equal model and effort need no planning nudges. An effort-only
+				// handoff on the same model still arms prewalk.
+				logger.debug("Subagent prewalk crew matches starting model and thinking level; skipping prewalk", {
+					agent: agent.name,
+					pattern: prewalkPattern,
+				});
+				prewalk = undefined;
+			}
+			if (prewalk) {
+				const targetIdentity = formatModelStringWithRouting(prewalk.target);
+				const executionTarget =
+					prewalk.thinkingLevel === undefined
+						? targetIdentity
+						: formatModelSelectorValue(targetIdentity, prewalk.thinkingLevel);
+				const note = `Prewalk execution: ${executionTarget}`;
+				progress.resolvedModelRoute = progress.resolvedModelRoute
+					? `${progress.resolvedModelRoute}\n${note}`
+					: note;
 			}
 
 			const restrictToolNames = options.restrictToolNames === true;

@@ -126,6 +126,15 @@ export interface Prewalk {
 	thinkingLevel?: ConfiguredThinkingLevel;
 }
 
+/** Persisted planning output supplied to the execution model without hidden reasoning. */
+export interface PrewalkPlanHandoff {
+	version: 1;
+	planner: { provider: string; id: string; thinkingLevel?: ConfiguredThinkingLevel };
+	execution: { provider: string; id: string; thinkingLevel?: ConfiguredThinkingLevel };
+	plan: string;
+	createdAt: number;
+}
+
 /**
  * PlanYolo starts in read-only plan mode, auto-approves the proposal, then
  * switches to a target model for implementation.

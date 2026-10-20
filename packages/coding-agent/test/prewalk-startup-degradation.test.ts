@@ -8,10 +8,11 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildSessionOptions } from "@oh-my-pi/pi-coding-agent/main";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
-import { cfgPrewalkEnabled } from "@oh-my-pi/pi-coding-agent/session/settings";
+import { cfgPrewalkEnabled, cfgPrewalkExecution } from "@oh-my-pi/pi-coding-agent/session/settings";
 
 // Regression for #6064: prewalk is an optional, off-by-default optimization.
 // A missing key (or unresolvable target) for the prewalk hand-off model must
@@ -118,5 +119,100 @@ describe("prewalk startup degradation", () => {
 
 		expect(options.prewalk?.target.provider).toBe(model.provider);
 		expect(options.prewalk?.target.id).toBe(model.id);
+	});
+
+	test("resolves independent crews and discloses them before the first prompt", async () => {
+		const planner = getBundledModel("anthropic", "claude-opus-4-6");
+		const execution = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!planner || !execution) throw new Error("expected bundled crew models");
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const settings = Settings.isolated({
+			"prewalk.enabled": true,
+			"prewalk.planner": "anthropic/not-a-model",
+			"prewalk.plannerFallbacks": ["@slow:high"],
+			"prewalk.execution": "anthropic/not-a-model",
+			"prewalk.executionFallbacks": [`${execution.provider}/${execution.id}:low`],
+		});
+		settings.setModelRole("slow", `${planner.provider}/${planner.id}`);
+		const options = await buildSessionOptions(
+			parseArgs([]),
+			[],
+			SessionManager.inMemory(tempDir),
+			modelRegistry,
+			settings,
+		);
+		const notices: string[] = [];
+		const { session } = await createAgentSession({
+			...options,
+			cwd: tempDir,
+			agentDir: tempDir,
+			model: execution,
+			settings,
+			authStorage,
+			modelRegistry,
+			disableExtensionDiscovery: true,
+			bindProcessState: false,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			rules: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			onPrewalkCrew: message => notices.push(message),
+		});
+		try {
+			expect(session.model?.id).toBe(planner.id);
+			expect(session.configuredThinkingLevel()).toBe("high");
+			expect(session.getPrewalkState()?.target.id).toBe(execution.id);
+			expect(session.getPrewalkState()?.thinkingLevel).toBe("low");
+			expect(notices).toEqual([
+				`Prewalk crew: plan anthropic/${planner.id}:high → execute anthropic/${execution.id}:low.`,
+			]);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("--prewalk-into overrides execution without changing planner settings or global roles", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("expected bundled model");
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const settings = Settings.isolated({
+			"prewalk.planner": "anthropic/claude-opus-4-6:high",
+			"prewalk.execution": "anthropic/not-a-model",
+		});
+		const before = settings.getModelRoles();
+		const options = await buildSessionOptions(
+			parseArgs(["--prewalk-into", `${model.provider}/${model.id}:low`]),
+			[],
+			SessionManager.inMemory(tempDir),
+			modelRegistry,
+			settings,
+		);
+		expect(options.prewalk?.target.id).toBe(model.id);
+		expect(options.prewalk?.thinkingLevel).toBe("low");
+		expect(options.prewalkPlannerPatterns).toEqual(["anthropic/claude-opus-4-6:high"]);
+		expect(cfgPrewalkExecution.get(settings)).toBe("anthropic/not-a-model");
+		expect(settings.getModelRoles()).toEqual(before);
+	});
+
+	test("configured crews remain inactive by default and under --no-prewalk", async () => {
+		const settings = Settings.isolated({
+			"prewalk.planner": "anthropic/claude-opus-4-6:high",
+			"prewalk.execution": "anthropic/claude-sonnet-4-5:low",
+		});
+		for (const args of [[], ["--no-prewalk"]]) {
+			const options = await buildSessionOptions(
+				parseArgs(args),
+				[],
+				SessionManager.inMemory(tempDir),
+				modelRegistry,
+				settings,
+			);
+			expect(options.prewalk).toBeUndefined();
+			expect(options.prewalkPlannerPatterns).toBeUndefined();
+		}
 	});
 });
