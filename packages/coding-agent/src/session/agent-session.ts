@@ -246,12 +246,7 @@ import {
 } from "@oh-my-pi/pi-tui/thinking";
 import { isAttachmentOnlyTitleInput, isLowSignalTitleInput } from "../tiny/text";
 import type { ImageAttachmentEntry, ToolSession } from "../tools";
-import {
-	listEnabledTools,
-	type ToolCatalogSession,
-	toolCatalogDocs,
-	toolCatalogListing,
-} from "../tools/tool-catalog";
+import { listEnabledTools, type ToolCatalogSession, toolCatalogDocs, toolCatalogListing } from "../tools/tool-catalog";
 import { toolSummary } from "../tools/xdev";
 import { resolveApproval } from "../tools/approval";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
@@ -956,6 +951,7 @@ export class AgentSession implements SettingsScope {
 	#runStartedAt: number | undefined;
 	/** The last `agent_end` that {@link #settleAgentEnd} published; a failed maintenance pass settles any other. */
 	#settledAgentEnd: AgentEndEvent | undefined;
+	#humanToolInvocation = false;
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 	#sessionChangeCallbacks = new Set<(origin: SessionChangeOrigin) => void>();
 	#observedSessionId: string | undefined;
@@ -3473,7 +3469,7 @@ export class AgentSession implements SettingsScope {
 
 	/** Emit an event to all listeners */
 	#emit(event: AgentSessionEvent): void {
-		if (event.type === "agent_end" && event.isTerminal !== false) {
+		if (event.type === "agent_end" && event.isTerminal !== false && !this.#humanToolInvocation) {
 			const sessionGeneration = this.#sessionGeneration;
 			const promptSequence = this.#promptSequence;
 			this.#advisors.onPrimaryRunEnd();
@@ -4644,6 +4640,12 @@ export class AgentSession implements SettingsScope {
 
 		// Check auto-retry and auto-compaction after agent completes
 		if (event.type === "agent_end") {
+			if (this.#humanToolInvocation) {
+				this.#lastAssistantMessage = undefined;
+				await this.settleInFlightMessagePersistence();
+				await this.#settleAgentEnd(event, this.agent.state.messages, { hasFinalResponse: false });
+				return;
+			}
 			const settledMessages = event.messages;
 			const activeMessages = this.agent.state.messages;
 			// TTSR retry work runs concurrently and clears the live flag before
@@ -6767,6 +6769,29 @@ export class AgentSession implements SettingsScope {
 	getToolCatalogDocs(name?: string): string {
 		const source = this.#toolCatalogSource();
 		return name ? toolCatalogDocs(source, name, "report") : toolCatalogListing(source);
+	}
+
+	/** Live enabled instance, including mounted and Code Mode tools, with permission decoration. */
+	getToolCatalogTool(name: string): AgentTool | undefined {
+		return this.#tools.getToolForEvalBridge(name);
+	}
+
+	/** Human calls use the agent dispatch and journal but never request a model continuation. */
+	async invokeTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+		if (this.#isDisposed) throw new Error("Session is disposed");
+		if (this.#humanToolInvocation || this.isBusyForSnapshot) {
+			throw new Error("Wait for the current operation to finish before invoking a tool.");
+		}
+		const tool = this.getToolCatalogTool(name);
+		if (!tool) throw new Error(`Tool '${name}' is not enabled. Use /tool: to browse enabled tools.`);
+		signal?.throwIfAborted();
+		this.#humanToolInvocation = true;
+		try {
+			await this.agent.executeTool(tool, args, signal);
+			await this.#drainInFlightEventHandlers();
+		} finally {
+			this.#humanToolInvocation = false;
+		}
 	}
 
 	/** Names of dynamic tools mounted under `xd://`. */
