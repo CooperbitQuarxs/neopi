@@ -41,6 +41,8 @@ export interface UiEnum<T extends readonly string[]> extends UiBase {
 export interface UiNumber extends UiBase {
 	/** Submenu options. Without options, a numeric setting has no UI representation (intentional hide). */
 	options?: ReadonlyArray<SubmenuOption>;
+	/** Keep preset choices and add a field for arbitrary numeric input. */
+	customInput?: true;
 }
 
 export interface UiString extends UiBase {
@@ -90,6 +92,10 @@ export type ProtocolHost = "rpc" | "acp";
 interface DefinitionBase {
 	/** Dotted setting path as written in config files, e.g. `"lsp.diagnosticsOnWrite"`. */
 	id: string;
+	/** May be overridden by a persistent roleSettings entry while that role is active. */
+	roleScoped?: true;
+	/** Additional constraints for a role value, without rejecting legacy global configuration. */
+	validateRole?: (value: unknown) => void;
 	/**
 	 * Marks a credential: never printed or exported without an explicit request. Drives both CLI
 	 * redaction and settings-panel masking (together with `ui.secret`, see {@link Setting.isCredential}).
@@ -497,6 +503,11 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 		return this.definition.type;
 	}
 
+	/** Whether persistent model-role overrides are supported for this setting. */
+	get roleScoped(): boolean {
+		return this.definition.roleScoped === true;
+	}
+
 	/** Allowed values for enum settings. */
 	get enumValues(): readonly string[] | undefined {
 		return this.definition.type === "enum" ? this.definition.values : undefined;
@@ -670,6 +681,12 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 			const expected = this.enumValues ? `one of ${this.enumValues.join(", ")}` : `a ${this.definition.type}`;
 			throw new Error(`Invalid value for ${this.id}: ${Bun.inspect(value)} (expected ${expected})`);
 		}
+	}
+
+	/** Validate an explicit role value using its ordinary and role-only constraints. */
+	assertRoleWritable(value: unknown): void {
+		this.assertWritable(value);
+		this.definition.validateRole?.(value);
 	}
 
 	/**
