@@ -137,6 +137,7 @@ import {
 	sessionPersonaHost,
 } from "../../neopi/persona-config";
 import { LIVE_INGEST_DEFAULTS, liveIngestSourceFields } from "../../live/ingest-settings";
+import { createLivePersonaGeneration } from "../../live/persona-generation";
 import { createAgentsHubDeps } from "../agents-hub-deps";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { collapseSharedUsageReports } from "@oh-my-pi/pi-tui/overlays/usage-display";
@@ -1246,6 +1247,12 @@ export class SelectorController {
 					...(scope === "live"
 						? {
 								protocolLinesText: liveClientProtocolTemplate,
+								generation: createLivePersonaGeneration({
+									registry: this.ctx.session.modelRegistry,
+									browserSource: createModelBrowserSource(this.ctx.settings),
+									templates: this.ctx.session.promptTemplates,
+									sessionId: this.ctx.session.sessionId,
+								}),
 								protocolMarker: "<client-protocol>",
 								newEntrySources: () => ({
 									fields: liveIngestSourceFields(LIVE_INGEST_DEFAULTS),
