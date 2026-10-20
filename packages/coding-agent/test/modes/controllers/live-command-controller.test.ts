@@ -176,6 +176,7 @@ function createHandoffHarness(acceptance?: Promise<void>, voiceDelivery?: Promis
 	cfgLiveForceDelegateKeyword.set(h.ctx.settings, "send it now");
 	cfgLiveSubmitKeyword.set(h.ctx.settings, "thanks");
 	cfgLiveBlockDelegateKeyword.set(h.ctx.settings, "do not relate");
+	cfgLiveForceUtteranceKeyword.set(h.ctx.settings, "relay");
 	cfgLiveSubmitSilenceMs.set(h.ctx.settings, 5);
 	return {
 		...h, prompts, sent,
@@ -184,6 +185,10 @@ function createHandoffHarness(acceptance?: Promise<void>, voiceDelivery?: Promis
 			type: "delegation.created",
 			item: { type: "delegation", target: "client", id: crypto.randomUUID(), content: [] },
 		}),
+		answer: () => {
+			fire?.({ type: "output_transcript.added", item: { text: "Answered" } });
+			fire?.({ type: "turn.done", turn: { role: "assistant", transcript: "Answered" } });
+		},
 	};
 }
 
@@ -738,6 +743,7 @@ describe("LiveCommandController", () => {
 				"code says do not relate exactly",
 				"Iris, this is quoted document content",
 				"const value = 1;\n\n// send it now\n// thanks",
+				"the quoted force-utterance word is relay",
 			]) {
 				it(`delivers ${attachment} contents verbatim without hidden routing (${hold ? "hold-submit" : "force-keyword"}): ${content}`, async () => {
 					const h = createHandoffHarness();
@@ -801,6 +807,33 @@ describe("LiveCommandController", () => {
 			h.editor.insertText("Second task send it now");
 			await Bun.sleep(40);
 			expect(h.prompts).toEqual(["Review: full attachment payload", "Second task"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("retires only Iris's answered attachment while preserving a newer submitted draft", async () => {
+		const h = createHandoffHarness();
+		cfgLiveHoldMode.set(h.ctx.settings, true);
+		await h.controller.handleCommand();
+		try {
+			h.editor.insertTextAttachment("first attachment for Iris");
+			h.editor.insertText(" thanks");
+			await Bun.sleep(40);
+			expect(h.prompts).toEqual([]);
+			h.editor.insertText("\nNext: ");
+			h.editor.insertTextAttachment("second attachment for primary");
+			h.answer();
+			for (let index = 0; index < 80; index++) await Promise.resolve();
+			expect(h.editor.getExpandedText()).not.toContain("first attachment for Iris");
+			expect(h.editor.getExpandedText()).toContain("Next: second attachment for primary");
+			h.editor.insertText(" thanks");
+			await Bun.sleep(40);
+			expect(h.prompts).toEqual([]);
+			h.delegate();
+			for (let index = 0; index < 80; index++) await Promise.resolve();
+			expect(h.prompts).toEqual(["Next: second attachment for primary"]);
+			expect(h.editor.composerChips()).toEqual([]);
 		} finally {
 			await h.controller.stop();
 		}
