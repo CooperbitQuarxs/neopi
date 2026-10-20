@@ -632,6 +632,10 @@ describe("browser tabs whose renderer crashed", () => {
 		async () => {
 			let requests = 0;
 			const started = Promise.withResolvers<void>();
+			const waiting = Promise.withResolvers<void>();
+			const finished = Promise.withResolvers<void>();
+			const gate = { open: false, entered: waiting.resolve, finished: finished.resolve };
+			const gateName = `__browserCrashGate_${crypto.randomUUID()}`;
 			const server = Bun.serve({
 				port: 0,
 				fetch: request => {
@@ -644,6 +648,7 @@ describe("browser tabs whose renderer crashed", () => {
 			const name = `crashed-continuation-${process.pid}`;
 			const url = `data:text/html,<title>${name}</title>`;
 			try {
+				Object.defineProperty(globalThis, gateName, { configurable: true, value: gate });
 				// An inline worker runs the code in this process, where closing the tab does not stop it. Worker
 				// threads failing to start is what puts a tab on one.
 				const RealWorker = globalThis.Worker;
@@ -661,17 +666,34 @@ describe("browser tabs whose renderer crashed", () => {
 				}
 				expect(getTab(name)).toMatchObject({ worker: { mode: "inline" } });
 				const run = runInTab(name, {
-					code: `await fetch("http://127.0.0.1:${server.port}/started"); await wait(2_000); await fetch("http://127.0.0.1:${server.port}/after-crash");`,
+					code: `
+						const crashGate = globalThis[${JSON.stringify(gateName)}];
+						try {
+							await fetch("http://127.0.0.1:${server.port}/started");
+							await wait(() => { crashGate.entered(); return crashGate.open; }, { interval: 10 });
+							await fetch("http://127.0.0.1:${server.port}/after-crash");
+						} finally {
+							crashGate.finished();
+						}
+					`,
 					timeoutMs: 10_000,
 					session,
 				}).catch((error: unknown) => error);
 				await started.promise;
+				// Enter the real run-scoped wait before crashing. A fixed sleep can expire while the test is
+				// still attaching its crash watcher, making a legitimate pre-crash request look uncancelled.
+				await waiting.promise;
 				await crashRenderer(browser, url);
 				expect(String(await run)).toContain("the tab could not be reattached and was closed");
-				// A run left going reaches the second fetch two seconds after it started; nothing marks that it did not.
-				await Bun.sleep(2_500);
+				expect(getTab(name)).toBeUndefined();
+				// Let an uncancelled wait continue, then observe the code's own completion rather than guess
+				// how long it needs. If cancellation broke, its awaited fetch is counted before this settles.
+				gate.open = true;
+				await finished.promise;
 				expect(requests).toBe(0);
 			} finally {
+				gate.open = true;
+				Reflect.deleteProperty(globalThis, gateName);
 				await releaseTab(name, { kill: true });
 				if ("browser" in browser && browser.browser.connected) await releaseBrowser(browser, { kill: true });
 				server.stop(true);
