@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { logger } from "@oh-my-pi/pi-utils";
 import { retireManagedExtensions } from "../src/neopi/retire-extensions";
 
 let dir: string;
@@ -12,7 +13,29 @@ beforeEach(async () => {
 	await fs.mkdir(extensions, { recursive: true });
 });
 afterEach(async () => {
+	vi.restoreAllMocks();
 	await fs.rm(dir, { recursive: true, force: true });
+});
+
+test("startup succeeds with no extensions directory and records completion", async () => {
+	await fs.rmdir(extensions);
+	await expect(retireManagedExtensions(path.join(dir, "agent"))).resolves.toBeUndefined();
+	expect(await Bun.file(path.join(dir, "agent/.neopi-extensions-retired")).text()).toBe("1\n");
+});
+
+test("filesystem failure logs without rejecting startup and remains retryable", async () => {
+	const warning = spyOn(logger, "warn").mockImplementation(() => {});
+	await fs.rmdir(extensions);
+	await Bun.write(extensions, "not a directory");
+	await expect(retireManagedExtensions(path.join(dir, "agent"))).resolves.toBeUndefined();
+	expect(warning).toHaveBeenCalledTimes(1);
+	expect(warning.mock.calls[0]?.[0]).toBe("Failed to retire managed fork extensions");
+	expect(await Bun.file(path.join(dir, "agent/.neopi-extensions-retired")).exists()).toBe(false);
+	await fs.unlink(extensions);
+	await fs.mkdir(extensions);
+	await fs.symlink(path.join(dir, "old/extensions/neopi-persona"), path.join(extensions, "neopi-persona"));
+	await retireManagedExtensions(path.join(dir, "agent"));
+	expect(await fs.readdir(extensions)).toEqual([]);
 });
 
 test("startup retires managed absolute, relative, dangling and legacy links only", async () => {

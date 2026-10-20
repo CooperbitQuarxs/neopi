@@ -25,6 +25,7 @@ test("source installation stages and smoke-tests the native binary", async () =>
 	temporary.push(dir);
 	await Bun.write(path.join(dir, "install.sh"), Bun.file(path.join(root, "install.sh")));
 	await Bun.write(path.join(dir, "scripts/npi-build-lib.sh"), Bun.file(path.join(root, "scripts/npi-build-lib.sh")));
+	await Bun.write(path.join(dir, "scripts/install-lock.sh"), Bun.file(path.join(root, "scripts/install-lock.sh")));
 	await Bun.write(path.join(dir, "packages/coding-agent/package.json"), '{"version":"1.0.0"}');
 	const binary = path.join(dir, "packages/coding-agent/dist/npi");
 	await Bun.write(binary, '#!/bin/sh\n[ "$1" != --version ] || echo npi/1.0.0\nexit 0\n');

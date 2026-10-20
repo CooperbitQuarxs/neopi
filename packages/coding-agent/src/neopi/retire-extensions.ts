@@ -5,9 +5,10 @@ import { getAgentDir, hasFsCode, isEnoent, logger } from "@oh-my-pi/pi-utils";
 const names = ["persona", "loadout", "repl", "live-persona"].flatMap(name => [`neopi-${name}`, `omomp-${name}`]);
 
 /** Retire the former installer's links before discovery can import them. */
-export async function retireManagedExtensions(agentDir: string = getAgentDir()): Promise<void> {
-	const marker = Bun.file(path.join(agentDir, ".neopi-extensions-retired"));
+export async function retireManagedExtensions(agentDir?: string): Promise<void> {
 	try {
+		agentDir ??= getAgentDir();
+		const marker = Bun.file(path.join(agentDir, ".neopi-extensions-retired"));
 		if (await marker.exists()) return;
 		const extensionsDir = path.join(agentDir, "extensions");
 		for (const name of names) {
