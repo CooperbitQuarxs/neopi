@@ -68,6 +68,8 @@ Each store is schema-v1 JSON written atomically with a `.bak` of the previous fi
 
 `/persona live` opens the same editor for the live voice model. The bundled default is read-only; clone it to customize. A new live persona starts from the default instructions.
 
+Choose **Generate live persona** to select a generator model, then reference prompts with Space, then describe the persona and press Enter. The reference pool includes the default live template, all custom live and session personas, and discovered prompt templates. Nothing is selected automatically. Use the default template alone, existing prompts alone, or both. Generation opens the new entry in the existing editor with Name selected. Its instructions and context sources remain editable, and Save & apply persists it without changing any running voice session. Esc cancels generation or returns to the preceding step.
+
 Both scopes take the same subcommands: `set <name>`, `off` (live: back to the default), `list`, `show <name>`, `status`, `clone <source> <name>`, and `delete <name>`. For example, `/persona set reviewer` or `/persona live set iris`. Changing the active persona invalidates the prompt cache, so switch deliberately.
 
 The session persona is selected per session id. `AgentSession` applies it while preparing each turn, before extension `before_agent_start` handlers, so extensions see and may further change the persona prompt. A persona that cannot apply (missing file, literal not found) leaves the base prompt in place and shows a warning.
