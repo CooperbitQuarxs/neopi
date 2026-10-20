@@ -22,6 +22,8 @@ export interface FileLockOptions {
 	/**
 	 * Use a cooperative PID lease that can fence a dead or SIGSTOPped owner.
 	 * Callers must check `isOwner()` before publishing protected work.
+	 * Ordinary and cooperative callers exclude each other on the same resource.
+	 * Ordinary callers never take over a stopped cooperative owner.
 	 */
 	takeoverStoppedOwner?: boolean;
 }
@@ -59,7 +61,37 @@ function tryAcquireLock(lockPath: string): NativeFileLock | null {
 
 /** Acquire an exclusive lease without waiting; `null` while another holder owns it. */
 export function tryAcquireFileLock(filePath: string): FileLockHandle | null {
-	return tryAcquireLock(getLockPath(filePath));
+	const lockPath = getLockPath(filePath);
+	// Ordinary owners keep the claim until release. Cooperative owners hold it
+	// while changing metadata, then retain their per-owner capability instead.
+	const claim = tryAcquireLock(`${lockPath}.claim`);
+	if (!claim) return null;
+	let retained = false;
+	try {
+		const owner = readCooperativeOwnerSync(lockPath);
+		if (owner && !owner.released) {
+			// Without a capability, legacy ownership cannot be disproved here.
+			if (!owner.capability) return null;
+			const identity = fs.statSync(lockPath, { bigint: true });
+			const probe = tryAcquireLock(cooperativeCapabilityPath(owner, identity));
+			if (!probe) return null;
+			probe.release();
+		}
+		const lock = tryAcquireLock(lockPath);
+		if (!lock) return null;
+		retained = true;
+		return {
+			release: () => {
+				try {
+					lock.release();
+				} finally {
+					claim.release();
+				}
+			},
+		};
+	} finally {
+		if (!retained) claim.release();
+	}
 }
 
 interface CooperativeOwner {
@@ -120,7 +152,9 @@ async function readCooperativeOwner(lockPath: string): Promise<CooperativeOwner 
 
 function readCooperativeOwnerSync(lockPath: string): CooperativeOwner | undefined {
 	try {
-		return parseCooperativeOwner(fs.readFileSync(lockPath, "utf8"), lockPath);
+		const text = fs.readFileSync(lockPath, "utf8");
+		// Native flock backends leave an empty lock file, not owner metadata.
+		return text.length === 0 ? undefined : parseCooperativeOwner(text, lockPath);
 	} catch (error) {
 		if (isEnoent(error)) return undefined;
 		throw error;
@@ -242,7 +276,7 @@ export async function acquireFileLock(filePath: string, options: FileLockOptions
 
 	for (let attempt = 0; attempt < opts.retries; attempt++) {
 		opts.signal?.throwIfAborted();
-		const lock = opts.takeoverStoppedOwner ? await tryAcquireCooperativeLock(filePath) : tryAcquireLock(lockPath);
+		const lock = opts.takeoverStoppedOwner ? await tryAcquireCooperativeLock(filePath) : tryAcquireFileLock(filePath);
 		if (lock) return lock;
 		if (attempt + 1 < opts.retries) await scheduler.wait(opts.retryDelayMs, { signal: opts.signal });
 	}
@@ -257,15 +291,14 @@ export async function acquireFileLock(filePath: string, options: FileLockOptions
 	);
 }
 
-function acquireLockSync(filePath: string, options: FileLockOptions = {}): NativeFileLock {
+function acquireLockSync(filePath: string, options: FileLockOptions = {}): FileLockHandle {
 	const opts = { ...DEFAULT_OPTIONS, ...options };
-	const lockPath = getLockPath(filePath);
 	if (!Number.isInteger(opts.retries) || opts.retries < 1)
 		throw new RangeError("Lock retries must be a positive integer");
 
 	for (let attempt = 0; attempt < opts.retries; attempt++) {
 		opts.signal?.throwIfAborted();
-		const lock = tryAcquireLock(lockPath);
+		const lock = tryAcquireFileLock(filePath);
 		if (lock) return lock;
 		if (attempt + 1 < opts.retries && opts.retryDelayMs > 0) Bun.sleepSync(opts.retryDelayMs);
 	}
