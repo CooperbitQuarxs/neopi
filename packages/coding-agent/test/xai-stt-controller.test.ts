@@ -35,7 +35,10 @@ describe("independent xAI whole-recording input", () => {
 		await fs.rm(tmp, { recursive: true, force: true });
 	});
 
-	function setup(transcribe: XaiSTTControllerDependencies["transcribe"]) {
+	function setup(
+		transcribe: XaiSTTControllerDependencies["transcribe"],
+		createCapture?: XaiSTTControllerDependencies["createCapture"],
+	) {
 		let text = "Existing draft. ";
 		const editor = {
 			get text() {
@@ -47,15 +50,16 @@ describe("independent xAI whole-recording input", () => {
 			submit: vi.fn(),
 		};
 		const options = { showWarning: vi.fn(), showStatus: vi.fn(), onStateChange: vi.fn() };
+		const stopCapture = vi.fn();
 		controller = new XaiSTTController({
 			settings,
 			transcribe,
 			createCapture(callback) {
 				onAudio = callback;
-				return { stop() {} };
+				return createCapture ? createCapture(callback) : { stop: stopCapture };
 			},
 		});
-		return { editor, options, controller };
+		return { editor, options, controller, stopCapture };
 	}
 
 	it("keeps speech and long pauses in one WAV until the second toggle, regardless of configured dictation", async () => {
@@ -157,5 +161,144 @@ describe("independent xAI whole-recording input", () => {
 		expect(options.showWarning).toHaveBeenCalledWith(expect.stringContaining(retainedPath));
 		expect(editor.text).toBe("Existing draft. ");
 		expect(controller.state).toBe("idle");
+	});
+
+	it("routes overlapping transcripts to their own destinations without retiring newer capture", async () => {
+		const first = Promise.withResolvers<string>();
+		const second = Promise.withResolvers<string>();
+		const requests: { audio: Blob; signal: AbortSignal }[] = [];
+		const { editor, options, controller } = setup((audio, signal) => {
+			requests.push({ audio, signal });
+			return requests.length === 1 ? first.promise : second.promise;
+		});
+		const nextEditor = { insertText: vi.fn(), submit: vi.fn() };
+		const nextOptions = { showWarning: vi.fn(), showStatus: vi.fn(), onStateChange: vi.fn() };
+		await controller.toggle(editor, options);
+		onAudio!(null, new Float32Array([0.25]));
+		const firstStop = controller.toggle(editor, options);
+		await controller.toggle(nextEditor, nextOptions);
+		expect(controller.state).toBe("recording");
+		onAudio!(null, new Float32Array([0.5]));
+		const secondStop = controller.toggle(nextEditor, nextOptions);
+		expect(requests).toHaveLength(2);
+		await controller.toggle(nextEditor, nextOptions);
+		expect(controller.state).toBe("recording");
+		const stateChanges = nextOptions.onStateChange.mock.calls.length;
+		second.resolve("Second thought.");
+		await secondStop;
+		expect(nextEditor.insertText).toHaveBeenCalledWith("Second thought.");
+		expect(editor.text).toBe("Existing draft. ");
+		expect(controller.state).toBe("recording");
+		expect(nextOptions.onStateChange).toHaveBeenCalledTimes(stateChanges);
+		first.resolve("First thought.");
+		await firstStop;
+		expect(editor.text).toBe("Existing draft. First thought.");
+		expect(controller.state).toBe("recording");
+		expect(requests.every(request => !request.signal.aborted)).toBe(true);
+		const firstWav = new DataView(await requests[0]!.audio.arrayBuffer());
+		const secondWav = new DataView(await requests[1]!.audio.arrayBuffer());
+		expect(firstWav.getInt16(44, true)).toBe(8192);
+		expect(secondWav.getInt16(44, true)).toBe(16384);
+	});
+
+	it("keeps a newer microphone alive after an older provider failure", async () => {
+		const pending = Promise.withResolvers<string>();
+		const { editor, options, controller, stopCapture } = setup(() => pending.promise);
+		await controller.toggle(editor, options);
+		onAudio!(null, new Float32Array([0.25]));
+		const stopped = controller.toggle(editor, options);
+		await controller.toggle(editor, options);
+		expect(controller.state).toBe("recording");
+		pending.reject(new Error("Older request failed"));
+		await stopped;
+		expect(controller.state).toBe("recording");
+		expect(stopCapture).toHaveBeenCalledTimes(1);
+		expect(options.showWarning).toHaveBeenCalledWith(expect.stringContaining("Older request failed"));
+		onAudio!(null, new Float32Array([0.5]));
+		onAudio!(new Error("New microphone failed"), new Float32Array());
+		expect(stopCapture).toHaveBeenCalledTimes(2);
+		expect(controller.state).toBe("idle");
+		const files = await fs.readdir(path.join(tmp, "stt-recordings"));
+		expect(files).toHaveLength(2);
+	});
+
+	it("aborts every pending request and active capture on disposal without late insertion", async () => {
+		const first = Promise.withResolvers<string>();
+		const second = Promise.withResolvers<string>();
+		const signals: AbortSignal[] = [];
+		const { editor, options, controller, stopCapture } = setup((_audio, signal) => {
+			signals.push(signal);
+			return signals.length === 1 ? first.promise : second.promise;
+		});
+		await controller.toggle(editor, options);
+		onAudio!(null, new Float32Array([0.25]));
+		const firstStop = controller.toggle(editor, options);
+		await controller.toggle(editor, options);
+		onAudio!(null, new Float32Array([0.5]));
+		const secondStop = controller.toggle(editor, options);
+		expect(signals).toHaveLength(2);
+		await controller.toggle(editor, options);
+		const stateChanges = options.onStateChange.mock.calls.length;
+		controller.dispose();
+		expect(signals.every(signal => signal.aborted)).toBe(true);
+		expect(stopCapture).toHaveBeenCalledTimes(3);
+		first.resolve("Never insert this.");
+		second.reject(new Error("Disposed provider"));
+		await Promise.all([firstStop, secondStop]);
+		await controller.toggle(editor, options);
+		expect(controller.state).toBe("idle");
+		expect(editor.text).toBe("Existing draft. ");
+		expect(editor.submit).not.toHaveBeenCalled();
+		expect(options.showWarning).not.toHaveBeenCalled();
+		expect(options.onStateChange).toHaveBeenCalledTimes(stateChanges);
+		expect(await fs.readdir(path.join(tmp, "stt-recordings"))).toHaveLength(0);
+	});
+
+	it("clears pending state after an older request settles following a failed newer capture", async () => {
+		const pending = Promise.withResolvers<string>();
+		const createCapture = vi
+			.fn()
+			.mockImplementationOnce(() => ({ stop() {} }))
+			.mockImplementationOnce(() => {
+				throw new Error("Microphone unavailable");
+			});
+		const { editor, options, controller } = setup(() => pending.promise, createCapture);
+		const newerOptions = { showWarning: vi.fn(), showStatus: vi.fn(), onStateChange: vi.fn() };
+		await controller.toggle(editor, options);
+		onAudio!(null, new Float32Array([0.25]));
+		const stopped = controller.toggle(editor, options);
+		await controller.toggle(editor, newerOptions);
+		expect(newerOptions.showWarning).toHaveBeenCalledWith("Microphone unavailable");
+		expect(controller.state).toBe("transcribing");
+		const olderStateChanges = options.onStateChange.mock.calls.length;
+		pending.resolve("Original speech.");
+		await stopped;
+		expect(editor.text).toBe("Existing draft. Original speech.");
+		expect(controller.state).toBe("idle");
+		expect(newerOptions.onStateChange).toHaveBeenLastCalledWith("idle");
+		expect(options.onStateChange).toHaveBeenCalledTimes(olderStateChanges);
+	});
+
+	it("remains transcribing when the newest request finishes before an older request", async () => {
+		const first = Promise.withResolvers<string>();
+		const second = Promise.withResolvers<string>();
+		let requests = 0;
+		const { editor, options, controller } = setup(() => (++requests === 1 ? first.promise : second.promise));
+		const newerOptions = { showWarning: vi.fn(), showStatus: vi.fn(), onStateChange: vi.fn() };
+		await controller.toggle(editor, options);
+		onAudio!(null, new Float32Array([0.25]));
+		const firstStop = controller.toggle(editor, options);
+		await controller.toggle(editor, newerOptions);
+		onAudio!(null, new Float32Array([0.5]));
+		const secondStop = controller.toggle(editor, newerOptions);
+		const olderStateChanges = options.onStateChange.mock.calls.length;
+		second.resolve("Second speech.");
+		await secondStop;
+		expect(controller.state).toBe("transcribing");
+		first.resolve("First speech.");
+		await firstStop;
+		expect(controller.state).toBe("idle");
+		expect(newerOptions.onStateChange).toHaveBeenLastCalledWith("idle");
+		expect(options.onStateChange).toHaveBeenCalledTimes(olderStateChanges);
 	});
 });

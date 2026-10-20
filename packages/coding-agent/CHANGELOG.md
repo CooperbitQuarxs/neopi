@@ -53,6 +53,9 @@
 
 - Live microphone admission now counts audio waiting for the encoder, so burst overflow is reported instead of silently discarding accepted speech ([#174](https://github.com/PsychedelicShayna/neopi/issues/174)).
 - Live speaker playback stays open through device priming, and completed delegations no longer replay held tool progress after their final answer ([#175](https://github.com/PsychedelicShayna/neopi/issues/175)).
+- Ctrl+Space xAI speech input cancels configured dictation immediately without losing the draft, and held shortcut repeats no longer activate configured Space dictation ([#225](https://github.com/PsychedelicShayna/neopi/issues/225)).
+- Ctrl+Space can start the next recording while an earlier transcript is pending; speech follows composer replacements and waits safely in the next draft while a post-processing chain runs ([#225](https://github.com/PsychedelicShayna/neopi/issues/225)).
+- `npi ctl` and the `ctl` tool remain reachable when live monitor panes fill their connection budget or rejected clients stop reading ([#404](https://github.com/PsychedelicShayna/neopi/issues/404)).
 - Live session pipes pause stdin when their control socket is blocked, and session transcript reads return null timestamps instead of failing on missing or malformed message dates ([#367](https://github.com/PsychedelicShayna/neopi/issues/367)).
 - Control state labels pending steering and follow-up messages together; the first queued follow-up warns each calling session that steering usually reaches an automated agent sooner ([#333](https://github.com/PsychedelicShayna/neopi/issues/333)).
 - Rule toggles in `/status` immediately update the running session's prompt, rulebook, and TTSR matching without restarting ([#4](https://github.com/PsychedelicShayna/neopi/issues/4)).

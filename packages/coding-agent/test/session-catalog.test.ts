@@ -213,7 +213,16 @@ describe("read-only session catalog", () => {
 
 	test("read preserves visible messages with missing, malformed, or out-of-range timestamps", async () => {
 		const f = await fixture();
-		const timestamps = [undefined, "not-a-date", null, {}, true, 8_640_000_000_000_001, 0, "2026-06-01T00:00:00.000Z"];
+		const timestamps = [
+			undefined,
+			"not-a-date",
+			null,
+			{},
+			true,
+			8_640_000_000_000_001,
+			0,
+			"2026-06-01T00:00:00.000Z",
+		];
 		const file = await session(
 			path.join(f.root, "isolated"),
 			"bad-message-dates",
@@ -246,7 +255,9 @@ describe("read-only session catalog", () => {
 				{ type: "session", version: 1, id: "legacy", cwd: f.cwd, timestamp: "2026-06-01T00:00:00.000Z" },
 				{ type: "message", message: { role: "user", content: "missing date" } },
 				{ type: "message", message: { role: "assistant", content: "bad date", timestamp: "not-a-date" } },
-			].map(record => JSON.stringify(record)).join("\n") + "\n",
+			]
+				.map(record => JSON.stringify(record))
+				.join("\n") + "\n",
 		);
 		expect((await readSessionCatalog(file)).messages).toEqual([
 			{ role: "user", text: "missing date", timestamp: null },

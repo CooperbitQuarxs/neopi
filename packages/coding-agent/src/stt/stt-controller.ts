@@ -113,6 +113,7 @@ export class STTController {
 	/** Start dictating into `editor`, reporting to `options` until the capture ends. A no-op while a
 	 *  capture is starting, recording, or transcribing. */
 	async start(editor: SttTarget, options: SttCallbacks): Promise<void> {
+		if (this.#disposed) return;
 		if (this.#state === "transcribing") options.showStatus("Transcription in progress...");
 		if (this.#toggling || this.#state !== "idle") return;
 		await this.#transition(options, () => this.#start(editor, options));
@@ -140,6 +141,7 @@ export class STTController {
 		this.#toggling = true;
 		try {
 			await step();
+			if (this.#disposed) return;
 			if (this.#stopAfterStart && this.#state === "recording") {
 				this.#stopAfterStart = false;
 				await this.#stop(options);
@@ -189,14 +191,18 @@ export class STTController {
 			// (memoized in the worker) and it is hot by the time recording stops.
 			// Only a genuine first-use download blocks (its progress shows in the
 			// download HUD), so we never record silently against missing weights.
-			if (await isSttModelCached(modelKey)) {
+			const cached = await isSttModelCached(modelKey);
+			if (this.#disposed) return null;
+			if (cached) {
 				this.#warmModel(modelKey);
 			} else {
 				await downloadSttModel(modelKey);
 			}
+			if (this.#disposed) return null;
 			this.#resolvedModelKey = modelKey;
 			return modelKey;
 		} catch (err) {
+			if (this.#disposed) return null;
 			const msg = err instanceof Error ? err.message : "Failed to setup STT dependencies";
 			options.showWarning(msg);
 			logger.error("STT dependency setup failed", { error: msg });
@@ -232,7 +238,7 @@ export class STTController {
 		}
 
 		let modelKey = await this.#ensureDeps(options, this.#resolveModelKey(model));
-		if (!modelKey) return;
+		if (this.#disposed || !modelKey) return;
 		model = this.#resolveModel();
 		if (model?.api === "openai-transcriptions" || model?.api === "xai-stt") {
 			this.#startBuffered(editor, options, model);
@@ -245,7 +251,7 @@ export class STTController {
 		const startModelKey = this.#resolveModelKey(model);
 		if (startModelKey !== modelKey) {
 			modelKey = await this.#ensureDeps(options, startModelKey);
-			if (!modelKey) return;
+			if (this.#disposed || !modelKey) return;
 		}
 		await this.#startStreaming(editor, options, modelKey);
 	}
@@ -353,6 +359,7 @@ export class STTController {
 						requestModel = { ...model, baseUrl: transport.baseURL, headers: transport.headers };
 					}
 				}
+				if (this.#disposed) return;
 				const result = await transcribeAudio(
 					requestModel,
 					{
@@ -547,17 +554,29 @@ export class STTController {
 	}
 
 	dispose(): void {
+		if (this.#disposed) return;
+		const editor = this.#streamEditor;
+		const callbacks = this.#streamCallbacks;
 		this.#disposed = true;
 		this.#holdOwned = false;
 		if (this.#streamAbort) {
 			this.#streamAbort.abort();
 			this.#streamAbort = null;
 		}
-		this.#stream?.cancel();
+		try {
+			this.#stream?.cancel();
+		} catch {
+			// A failed provider cancel must not leave the microphone or composer owned.
+		}
 		try {
 			this.#streamRecorder?.stop();
 		} catch {
 			// best effort cleanup
+		}
+		try {
+			editor?.clearVolatileText();
+		} catch (error) {
+			logger.debug("stt: retired editor cleanup failed", { error: String(error) });
 		}
 		this.#cleanupStream();
 		this.#cleanupCloud();
@@ -565,5 +584,6 @@ export class STTController {
 		this.#retainedCloudFiles.length = 0;
 		this.#state = "idle";
 		this.#resolvedModelKey = null;
+		callbacks?.onStateChange("idle");
 	}
 }
