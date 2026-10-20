@@ -6730,7 +6730,7 @@ export class AgentSession implements SettingsScope {
 
 	getToolCatalogDocs(name?: string): string {
 		const source = this.#toolCatalogSource();
-		return name ? toolCatalogDocs(source, name) : toolCatalogListing(source);
+		return name ? toolCatalogDocs(source, name, "report") : toolCatalogListing(source);
 	}
 
 	/** Names of dynamic tools mounted under `xd://`. */

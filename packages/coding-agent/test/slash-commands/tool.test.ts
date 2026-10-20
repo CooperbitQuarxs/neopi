@@ -86,7 +86,7 @@ describe("/tool: catalog", () => {
 		h.registry.set(h.device.name, { ...h.device, description: "Replacement docs" });
 		await executeBuiltinSlashCommand(`/tool:${h.device.name}`, h.runtime);
 		expect(h.reports[0]).toContain("Replacement docs");
-		expect(() => h.session.getToolCatalogDocs("inactive")).toThrow("not enabled");
+		expect(h.session.getToolCatalogDocs("inactive")).toContain('No enabled tool named "inactive"');
 	});
 
 	it("consumes extra arguments without treating them as execution or prose", async () => {
