@@ -52,6 +52,7 @@
 ### Fixed
 
 - Forced live handoffs now tell the voice agent the exact composer text already sent to the main agent, without asking it to relay the request again ([#181](https://github.com/PsychedelicShayna/neopi/issues/181)).
+- `npi update --check` and other ordinary update invocations now accept upstream binary assets while keeping the installed executable named `npi` ([#327](https://github.com/PsychedelicShayna/neopi/issues/327)).
 - Live microphone admission now counts audio waiting for the encoder, so burst overflow is reported instead of silently discarding accepted speech ([#174](https://github.com/PsychedelicShayna/neopi/issues/174)).
 - Live speaker playback stays open through device priming, and completed delegations no longer replay held tool progress after their final answer ([#175](https://github.com/PsychedelicShayna/neopi/issues/175)).
 - Ctrl+Space xAI speech input cancels configured dictation immediately without losing the draft, and held shortcut repeats no longer activate configured Space dictation ([#225](https://github.com/PsychedelicShayna/neopi/issues/225)).
