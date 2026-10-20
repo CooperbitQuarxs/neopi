@@ -12,6 +12,7 @@ import { getThemeByName, initTheme, theme, type Theme } from "@oh-my-pi/pi-tui/t
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { AskTool } from "@oh-my-pi/pi-coding-agent/tools/ask";
 import { askToolRenderer } from "@oh-my-pi/pi-tui/tools/ask";
+import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
@@ -97,6 +98,112 @@ beforeAll(async () => {
 	const loadedTheme = await getThemeByName("dark");
 	if (!loadedTheme) throw new Error("Expected dark theme");
 	darkTheme = loadedTheme;
+});
+
+describe("AskTool option notes", () => {
+	for (const multi of [false, true]) {
+		it(`delivers repeated and unselected option notes with the answer (${multi ? "multi" : "single"})`, async () => {
+			const tool = new AskTool(createSession());
+			const optionNotes = [
+				{ option: "A", note: "First caveat" },
+				{ option: "A", note: "Second caveat" },
+				{ option: "B", note: "Why not B" },
+				{ option: "C", note: "Why not C" },
+			];
+			const context = createContext({
+				askDialog: async questions => {
+					let submitted: ExtensionAskDialogResult | undefined;
+					const onPrompt = vi.fn()
+						.mockResolvedValueOnce("First caveat")
+						.mockResolvedValueOnce("Second caveat")
+						.mockResolvedValueOnce("Why not B")
+						.mockResolvedValueOnce("Why not C")
+						.mockResolvedValueOnce("Question context");
+					const dialog = new AskDialogComponent(questions, {
+						onSubmit: result => { submitted = result; },
+						onCancel: vi.fn(),
+						onPrompt,
+					});
+					const key = async (input: string) => {
+						dialog.handleInput(input);
+						await Promise.resolve();
+						await Promise.resolve();
+					};
+					await key("a");
+					await key("a");
+					await key("\x1b[B");
+					await key("a");
+					await key("\x1b[B");
+					await key("a");
+					await key("\x1b[A");
+					await key("\x1b[A");
+					await key("n");
+					if (multi) await key(" ");
+					await key("\n");
+					expect(submitted?.kind).toBe("submit");
+					return submitted;
+				},
+			});
+			const result = await tool.execute("option-notes", {
+				questions: [{ id: "choice", question: "Choose?", multi, options: [{ label: "A" }, { label: "B" }, { label: "C" }] }],
+			}, undefined, undefined, context);
+			expect(result.details).toMatchObject({ selectedOptions: ["A"], note: "Question context", optionNotes });
+			const content = result.content[0];
+			expect(content?.type).toBe("text");
+			if (content?.type !== "text") throw new Error("Expected text");
+			expect(content.text).toContain('Note on option "A" (selected):\n  First caveat');
+			expect(content.text).toContain('Note on option "B" (not selected):\n  Why not B');
+			expect(content.text).toContain('Note on option "C" (not selected):\n  Why not C');
+			expect(content.text).toContain("Second caveat");
+			const rendered = stripAnsi(askToolRenderer.renderResult(result, { expanded: true }, darkTheme).render(100).join("\n"));
+			expect(rendered).toContain("Why not B");
+			expect(rendered).toContain("Why not C");
+			const native = JSON.stringify(askToolRenderer.describeResult(result));
+			expect(native).toContain("Why not B");
+			expect(native).toContain("Why not C");
+			expect(native).toContain("Second caveat");
+			expect(rendered).toContain("Second caveat");
+		});
+	}
+
+	it("numbers option-note images across question boundaries without leaking images into details", async () => {
+		const image: ai.ImageContent = { type: "image", mimeType: "image/png", data: TINY_PNG_BASE64 };
+		const tool = new AskTool(createSession());
+		const result = await tool.execute("option-images", {
+			questions: [
+				{ id: "one", question: "First?", options: [{ label: "A" }, { label: "B" }] },
+				{ id: "two", question: "Second?", options: [{ label: "C" }] },
+			],
+		}, undefined, undefined, createContext({
+			askDialog: async () => ({
+				kind: "submit",
+				results: [
+					{
+						id: "one", question: "First?", options: ["A", "B"], multi: false, selectedOptions: ["A"],
+						note: "Context [Image #1]", noteImages: [image],
+						optionNotes: [{ option: "B", note: "Avoid [Image #1]", images: [image] }],
+					},
+					{
+						id: "two", question: "Second?", options: ["C"], multi: false, selectedOptions: ["C"],
+						optionNotes: [{ option: "C", note: "Prefer [Image #1]", images: [image] }],
+					},
+				],
+			}),
+		}));
+		expect(result.details?.results).toMatchObject([
+			{ note: "Context [Image #1]", optionNotes: [{ option: "B", note: "Avoid [Image #2]" }] },
+			{ optionNotes: [{ option: "C", note: "Prefer [Image #3]" }] },
+		]);
+		expect(result.content.filter(block => block.type === "image")).toHaveLength(3);
+		expect(JSON.stringify(result.details)).not.toContain(TINY_PNG_BASE64);
+		const content = result.content[0];
+		if (content?.type !== "text") throw new Error("Expected text");
+		expect(content.text).toContain('Note on option "B" (not selected):\n  Avoid [Image #2]');
+		expect(content.text).toContain('Note on option "C" (selected):\n  Prefer [Image #3]');
+		const rendered = stripAnsi(askToolRenderer.renderResult(result, { expanded: true }, darkTheme).render(100).join("\n"));
+		expect(rendered).toContain("Avoid [Image #2]");
+		expect(JSON.stringify(askToolRenderer.describeResult(result))).toContain("Prefer [Image #3]");
+	});
 });
 
 describe("AskTool cancellation", () => {
