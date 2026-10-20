@@ -21,7 +21,11 @@ import {
 	type WatchdogConfigDoc,
 } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
-export { ADVISOR_REVIEW_MODES, ADVISOR_SYNC_BACKLOG_MODES, slugifyAdvisorName } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+export {
+	ADVISOR_REVIEW_MODES,
+	ADVISOR_SYNC_BACKLOG_MODES,
+	slugifyAdvisorName,
+} from "@oh-my-pi/pi-tui/overlays/advisor-config";
 export type { AdvisorReviewMode, AdvisorSyncBacklog } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
 const WATCHDOG_ADVISOR_KEYS = [
@@ -257,11 +261,11 @@ function filterAdvisorTools(tools: string[] | undefined, sourcePath: string): st
 
 /**
  * Discover advisor configs from `WATCHDOG.yml`/`WATCHDOG.yaml` files on the same
- * user + project search path as `WATCHDOG.md`. Advisors are keyed by slug; a
- * more-specific file (project leaf > project ancestor > user) replaces an earlier
- * entry with the same slug. Top-level `instructions` across all files concatenate
- * into the shared baseline. A malformed file is logged and skipped — never
- * thrown — so a bad project config can't kill the session.
+ * user + project search path as `WATCHDOG.md`. Persisted IDs distinguish even
+ * identically named advisors; legacy entries retain name-slug precedence until
+ * first save. More-specific files replace an earlier entry with the same key.
+ * Top-level instructions concatenate into the shared baseline. Malformed files
+ * are logged and skipped so a bad project config cannot kill the session.
  */
 export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Promise<DiscoveredAdvisors> {
 	let unsafeToReconcile = false;
@@ -635,7 +639,16 @@ function resolveWatchdogAdvisorOrigin(
 			candidate => watchdogAdvisorFingerprint(candidate.map.toJS(document)) === origin.fingerprint,
 		);
 		if (exact.length === 1) return exact[0];
-		if (exact.length > 1) return undefined;
+		if (exact.length > 1) {
+			const sameNameOrigins = origins.filter(candidate => candidate.name === origin.name);
+			const unchangedOrder =
+				candidates.length === sameNameOrigins.length &&
+				candidates.every(
+					(candidate, index) =>
+						watchdogAdvisorFingerprint(candidate.map.toJS(document)) === sameNameOrigins[index].fingerprint,
+				);
+			return unchangedOrder ? candidates[origin.occurrence] : undefined;
+		}
 	}
 	const baselineCount = origins.filter(candidate => candidate.name === origin.name).length;
 	if (candidates.length !== baselineCount) return undefined;
@@ -783,14 +796,22 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 		if (matches.has(advisor)) continue;
 		const resolved =
 			resolvedOrigins.find(
-				candidate => !claimedOrigins.has(candidate.origin) && advisor.id !== undefined && candidate.origin.base.id === advisor.id,
+				candidate =>
+					!claimedOrigins.has(candidate.origin) &&
+					advisor.id !== undefined &&
+					candidate.origin.base.id === advisor.id,
 			) ??
 			resolvedOrigins.find(
-				candidate => !claimedOrigins.has(candidate.origin) && candidate.origin.base.id === undefined && candidate.origin.name === advisor.name,
+				candidate =>
+					!claimedOrigins.has(candidate.origin) &&
+					candidate.origin.base.id === undefined &&
+					candidate.origin.name === advisor.name,
 			) ??
 			(() => {
 				const positional = resolvedOrigins[index];
-				return positional && positional.origin.base.id === undefined && !claimedOrigins.has(positional.origin) ? positional : undefined;
+				return positional && positional.origin.base.id === undefined && !claimedOrigins.has(positional.origin)
+					? positional
+					: undefined;
 			})();
 		if (!resolved) continue;
 		matches.set(advisor, resolved);
@@ -825,11 +846,6 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 	return document.toString({ lineWidth: 0 });
 }
 
-/**
- * Write an editable doc under the file lock. Known fields are patched into the
- * latest document so comments, future fields, and disjoint edits survive. The
- * file is removed only when the resulting document is empty.
- */
 function ensureAdvisorIds(doc: WatchdogConfigDoc): void {
 	const used = new Set<string>();
 	for (const advisor of doc.advisors) {
@@ -838,6 +854,11 @@ function ensureAdvisorIds(doc: WatchdogConfigDoc): void {
 	}
 }
 
+/**
+ * Write an editable doc under the file lock. Known fields are patched into the
+ * latest document so comments, future fields, and disjoint edits survive. The
+ * file is removed only when the resulting document is empty.
+ */
 export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConfigDoc): Promise<void> {
 	const storedBaseline = watchdogBaselines.get(doc);
 	const baseline = storedBaseline?.filePath === filePath ? storedBaseline : undefined;

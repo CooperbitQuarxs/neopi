@@ -29,7 +29,7 @@ Model selection depends on the roster:
 
 - Without any discovered `WATCHDOG.yml` advisor entries, OMP creates the legacy/default advisor and resolves the `advisor` role.
 - With a roster, each enabled entry uses its explicit `model` when present, otherwise the `advisor` role. An unresolvable entry is reported as `no_model` without preventing other entries from running.
-- `advisors[].enabled: false` keeps an entry visible as paused but does not build its runtime.
+- Without a role activation set, `advisors[].enabled: false` keeps an entry visible as paused but does not build its runtime.
 
 Example:
 
@@ -46,6 +46,30 @@ Model selectors use normal role/model resolution, including provider-prefixed id
 A configured `modelRoles.advisor` wins without silently falling back when it is invalid. When unset, advisor-role resolution uses a configured `slow` role, then the built-in slow priority chain; it does not simply inherit the primary model.
 
 Without an effort suffix, advisors request `medium`, clamped to the model's supported range. `:auto` follows the primary agent's resolved effort at review boundaries rather than running a separate advisor classifier. Models without controllable effort inherit their normal reasoning behavior.
+
+### Role activation sets
+
+Each saved roster advisor has a hidden `id`. New advisors and clones get fresh IDs, even when their other fields match. Existing entries receive IDs on their first save in `/advisor configure`. Renaming preserves the ID. Copy the persisted ID from `WATCHDOG.yml` when declaring a role activation set.
+
+Store the set alongside the role's other settings in the user settings file or the project's `.omp/config.yml`:
+
+```yaml
+roleSettings:
+  slow:
+    advisor.activationSet:
+      - 0198ad12-6751-7455-b102-45e8fe384b9e
+```
+
+User-scoped sets can reference user advisors only. Project-scoped sets can reference any advisor visible in that project. A missing or out-of-scope reference produces a warning and is skipped without failing the role switch.
+
+Activation precedence is:
+
+1. The global/session advisor switch must be on. A role never turns that switch on.
+2. An explicit role activation set selects exactly its listed advisors, including entries whose own `enabled` flag is false. `[]` selects none.
+3. Without a set, each advisor's own `enabled` flag decides, including the legacy default when no roster exists. Omit the setting or use `null` to restore this behavior.
+
+Switching roles stops old-only advisors and starts new-only advisors. Advisors selected by both roles keep their running context and pending reviews. `/advisor status` explains the current activation policy. Activation-set editing belongs to the role editor, not the model picker.
+
 
 ### Backup reviewer
 
@@ -368,8 +392,9 @@ advisors:
 Fields:
 
 - `instructions` (top level): shared prompt prepended to every advisor's system prompt alongside `WATCHDOG.md`. Concatenated across all discovered `WATCHDOG.yml` files.
-- `advisors[].name`: human label; slugified for the session id and its `__advisor.<slug>.jsonl` filename. Duplicate slugs across files are resolved by the same specificity rule as `WATCHDOG.md` discovery (project leaf > project ancestor > user).
-- `advisors[].enabled`: optional per-advisor switch, default `true`. `false` leaves the advisor visible as paused in status/configuration.
+- `advisors[].id`: hidden persistent identity assigned at creation or a legacy entry's first save. Distinct IDs keep identical configurations separate; renames preserve references.
+- `advisors[].name`: human label, slugified for transcript filenames. Entries without persisted IDs retain legacy slug precedence until their first save.
+- `advisors[].enabled`: optional per-advisor switch, default `true`. Without a role activation set, `false` leaves the advisor paused. An explicit set replaces this flag.
 - `advisors[].includeThinking`: optional per-advisor **Read primary reasoning stream** switch, default `true`. When enabled, readable primary thinking appears in escaped `<primary-thinking>` blocks in advisor updates; `false` omits thinking while retaining assistant text and tool activity. Redacted or unavailable reasoning is never forwarded. Human hide-thinking controls do not affect this setting.
 - `advisors[].model`: optional model selector with optional `:level` thinking suffix (e.g. `x-ai/grok-code-fast:high`). Omitted → the advisor uses `modelRoles.advisor`.
 - `advisors[].tools`: optional list of built-in tool names to grant. Omitted → `read`/`grep`/`glob`, plus `recall` when the active memory backend provides it; explicit `[]` → no investigative tools. Any name in [`BUILTIN_TOOL_NAMES`](../packages/coding-agent/src/tools/builtin-names.ts) is accepted, including mutating tools. Legacy aliases (`search`→`grep`, `find`→`glob`) are normalized. Unknown names are dropped with a warning; if that leaves a nonempty input with no valid names, the implementation currently treats the result as omitted and uses the default subset.
@@ -395,13 +420,13 @@ A continuation an advisor delivery itself starts — a steer while the primary i
 
 ### Discovery locations
 
-`WATCHDOG.yml`/`WATCHDOG.yaml` share the same user + project search path as `WATCHDOG.md`: the user-level `<active agent dir>/WATCHDOG.yml` plus every `WATCHDOG.yml`/`.omp/WATCHDOG.yml` encountered while walking from `cwd` up to the repository root (or the home directory when no repo root is found). All discovered files are loaded together; a more-specific file (project leaf > project ancestor > user) replaces an earlier entry with the same advisor slug.
+`WATCHDOG.yml`/`WATCHDOG.yaml` share the same user and project search path as `WATCHDOG.md`: the user-level `<active agent dir>/WATCHDOG.yml` plus every `WATCHDOG.yml`/`.omp/WATCHDOG.yml` encountered while walking from `cwd` up to the repository root, or the home directory when no repo root is found. All discovered files load together. A more-specific file replaces an earlier entry with the same persisted ID, or the same name slug for legacy entries without IDs.
 
 For compatibility, a `$HOME/WATCHDOG.yml` or `$HOME/.omp/WATCHDOG.yml` found by the ancestor walk remains **project scope**, not user scope. It applies to non-repository sessions beneath `$HOME`; inside a repository the walk stops at its root and does not reach `$HOME` unless that is the root itself. User scope specifically means the active agent directory. This display distinction does not change which rosters load.
 
 The main session watches these roster locations, including files created later in an existing or new `.omp` directory. Creating, editing, removing, or atomically replacing a file rediscovers the merged roster after a short debounce. Unchanged advisors keep their context; new or changed advisors start from the current transcript, and removed or disabled advisors stop. If the advisor subsystem is off, only its stored roster changes; the edit does not enable it. An unreadable file or malformed YAML leaves the previous live roster running, with a logged warning, until a subsequent valid edit.
 
-At the same directory depth, `.yml` candidates precede `.yaml` candidates, and `.omp/<filename>` precedes the standalone `<filename>`. Later entries win slug collisions; top-level instructions still concatenate.
+At the same directory depth, `.yml` candidates precede `.yaml` candidates, and `.omp/<filename>` precedes the standalone `<filename>`. Later entries win identity collisions; top-level instructions still concatenate.
 ## Subagents
 
 Subagents run unadvised by default; advisors are opted in **per agent** instead of via a blanket toggle:
