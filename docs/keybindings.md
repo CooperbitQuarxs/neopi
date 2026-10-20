@@ -99,7 +99,7 @@ Native TSP lists and pickers retain selection, filtering, and history. Their ter
 
 ### Menu search
 
-Ordinary patterns keep fuzzy matching. A pattern beginning with `/` selects **Vim very-magic syntax by default**: type `//` from navigation (the first slash focuses search; the second becomes the pattern prefix). `re:` selects the same dialect explicitly. Confirm with Enter, then use `j`/`k` to navigate matches. Invalid expressions show an inline error and match nothing.
+Ordinary patterns keep fuzzy matching. A pattern beginning with `/` selects the supported **Vim search syntax, very-magic by default**: type `//` from navigation (the first slash focuses search; the second becomes the pattern prefix). `re:` selects the same dialect explicitly. Confirm with Enter, then use `j`/`k` to navigate matches. Invalid or unsupported expressions show an inline error and match nothing.
 
 | Pattern text | Meaning |
 | --- | --- |
@@ -109,6 +109,16 @@ Ordinary patterns keep fuzzy matching. A pattern beginning with `/` selects **Vi
 | `/\CVoice` / `/\cVoice` | Case-sensitive / case-insensitive matching (the default is insensitive) |
 
 Very-magic mode treats punctuation such as `|`, `()`, `+`, `?`, and `{n,m}` as operators without backslashes. `<` / `>` mark word start/end; `\d`, `\w`, and `\s` remain character classes. Escape punctuation to match it literally. Use `\m` inside a pattern for Vim's default-magic dialect (`/\m\(live\|voice\)`); `\M` and `\V` select nomagic and very-nomagic modes. These menu patterns do not change the ECMAScript `re:` syntax used by saved model selectors.
+
+Supported search atoms:
+
+- Literal text, dot, anchors, alternation, capturing and noncapturing groups (`%(` in very-magic, `\%(` in default-magic), backreferences `\1`–`\9`, and word boundaries. Default-magic `^` / `$` are literal away from branch boundaries.
+- Greedy and lazy repetition: `*`, `+`, `?` / `=`, `{n,m}` and `{-}` / `{-n,m}` in very-magic; the corresponding Vim backslash forms in default-magic.
+- Vim character classes `\a`, `\l`, `\u`, `\d`, `\x`, `\o`, `\h`, `\w`, `\s`, `\p` and their uppercase complements; `\l` and `\u` remain case-specific. Collections support ranges, negation and POSIX classes (`alnum`, `alpha`, `blank`, `cntrl`, `digit`, `graph`, `lower`, `print`, `punct`, `space`, `upper`, `xdigit`, `return`, `tab`, `escape`, `backspace`). Collection escapes follow Vim: `[\d]` matches a literal `d`, not a digit.
+- Postfix lookaround (`@=`, `@!`, `@<=`, `@<!` in very-magic; `\@…` in default-magic), case flags, magic switches, and `\zs` / `\ze` for row membership. Menu search tests whether a row matches; it does not expose match-span boundaries.
+
+This is not a complete Vim engine. Unknown atoms, numeric/positional `%` atoms, atomic `@>` groups, conjunction/replacement atoms, and collating/equivalence collections are rejected rather than silently interpreted as literal letters.
+
 
 ## Side panel views
 
