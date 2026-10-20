@@ -54,7 +54,8 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 	readonly name = "checkpoint";
 	readonly approval = "read" as const;
 	readonly label = "Checkpoint";
-	readonly summary = "Create a git-based checkpoint to save and restore session state";
+	readonly summary =
+		"Start a non-nestable context transaction by saving the conversation boundary; rewind before yielding to replace intermediate exploration messages with a report";
 	readonly description: string;
 	readonly parameters = checkpointSchema;
 	readonly strict = true;
@@ -90,7 +91,8 @@ export class RewindTool implements AgentTool<typeof rewindSchema, RewindToolDeta
 	readonly name = "rewind";
 	readonly approval = "read" as const;
 	readonly label = "Rewind";
-	readonly summary = "Rewind to a previously created checkpoint";
+	readonly summary =
+		"Close the active context transaction before yielding; rewind removes intermediate exploration messages from active context and retains your report";
 	readonly description: string;
 	readonly parameters = rewindSchema;
 	readonly strict = true;

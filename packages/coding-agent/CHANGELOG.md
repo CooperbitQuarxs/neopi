@@ -54,6 +54,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Checkpoint and rewind inventories now describe the context transaction, report replacement, and requirement to rewind before yielding instead of a git-based save point ([#16](https://github.com/PsychedelicShayna/neopi/issues/16)).
 - Moving a session during a fork now waits for inherited artifacts to finish copying, so they stay available in the moved session ([#257](https://github.com/PsychedelicShayna/neopi/issues/257)).
 - Releasing a recovered headless browser tab now waits until its page disappears from CDP targets without closing unrelated tabs ([#293](https://github.com/PsychedelicShayna/neopi/issues/293)).
 - Browser crash-cancellation checks no longer mistake work sent before the renderer crashes for an uncancelled continuation ([#290](https://github.com/PsychedelicShayna/neopi/issues/290)).
