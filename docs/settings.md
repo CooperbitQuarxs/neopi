@@ -889,6 +889,7 @@ theme:
 symbolPreset: unicode # unicode, nerd, ascii
 colorBlindMode: false
 symbolBrandGlyph: theme # temporary; theme, pi, fae-pi, md-axis-z, diamond
+startupBranding: new # new, classic
 symbolEffortGlyphs: theme # temporary; theme, poimandres, nerd
 
 statusLine:
@@ -913,6 +914,7 @@ tui:
 | `symbolPreset`              | enum    | `unicode`        | `unicode`, `nerd`, `ascii`.                                               |
 | `colorBlindMode`            | boolean | `false`          | Use blue instead of green for diff additions.                             |
 | `symbolBrandGlyph`          | enum    | `theme`          | Temporary: `theme`, `pi`, `fae-pi`, `md-axis-z`, `diamond`.               |
+| `startupBranding`           | enum    | `new`            | `new` centers the NPI wordmark; `classic` uses the original boxed NeoPi/Pi-tower banner. |
 | `symbolEffortGlyphs`        | enum    | `theme`          | Temporary: `theme`, `poimandres`, `nerd` thinking-level glyphs.           |
 | `showHardwareCursor`        | boolean | `true`           | Show the terminal hardware cursor.                                        |
 | `statusLine.preset`         | enum    | `default`        | `default`, `minimal`, `compact`, `full`, `nerd`, `ascii`, `custom`.       |

@@ -392,6 +392,7 @@ import {
 	cfgSpellingAutocomplete,
 	cfgSpellingAutocorrect,
 	cfgSpellingTypoDetection,
+	cfgStartupBranding,
 	cfgStartupChangelogMode,
 	cfgStartupQuiet,
 	cfgStatusLineCompactThinkingLevel,
@@ -450,6 +451,7 @@ import {
  */
 const cfgLiveUiSettings = combine({
 	showHardwareCursor: cfgShowHardwareCursor,
+	startupBranding: cfgStartupBranding,
 	"tui.maxInlineImages": cfgTuiMaxInlineImages,
 	"tui.resizeScrollback": cfgTuiResizeScrollback,
 	"tui.imeSafeCursor": cfgTuiImeSafeCursor,
@@ -3648,6 +3650,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Live-setting composer preferences; `quiet` is startup-only and `composerShape` flows through {@link syncComposerShape}. */
 	#liveComposerPreferences(): Omit<ComposerPreferences, "quiet" | "composerShape"> {
 		return {
+			startupBranding: cfgStartupBranding.get(this.settings),
 			showHardwareCursor: cfgShowHardwareCursor.get(this.settings),
 			maxInlineImages: cfgTuiMaxInlineImages.get(this.settings),
 			resizeScrollback: cfgTuiResizeScrollback.get(this.settings),
@@ -3690,6 +3693,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (
 			any(
 				"showHardwareCursor",
+				"startupBranding",
 				"tui.maxInlineImages",
 				"tui.resizeScrollback",
 				"tui.imeSafeCursor",
