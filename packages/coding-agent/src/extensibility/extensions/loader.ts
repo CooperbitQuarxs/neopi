@@ -27,6 +27,7 @@ import type { ExecOptions } from "../../exec/exec";
 import { execCommand } from "../../exec/exec";
 // Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
 import * as PiCodingAgent from "../../index";
+import { retireManagedExtensions } from "../../neopi/retire-extensions";
 import type { SendUserMessageOptions } from "../../session/agent-session";
 import type { CustomMessagePayload } from "../../session/messages";
 import type { FileDeleteFallbackHandler, FileWriteFallbackHandler } from "../../tools/file-write-fallback";
@@ -588,6 +589,7 @@ export async function discoverExtensionPaths(
 	disabledExtensionIds?: string[],
 	options: DiscoverExtensionPathOptions = {},
 ): Promise<string[]> {
+	await retireManagedExtensions();
 	const allPaths: string[] = [];
 	const seen = new Set<string>();
 	const disabled = new Set(disabledExtensionIds ?? []);

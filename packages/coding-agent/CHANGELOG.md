@@ -9,6 +9,7 @@
 
 ### Added
 
+- Browse every enabled session tool with `tool://` and read its schema, examples, and restrictions at `tool://<name>` without invoking it ([#15](https://github.com/PsychedelicShayna/neopi/issues/15)).
 - Added opt-in provider quota and context-pressure notice cards with configurable thresholds, cache age, reset times, and separately gated agent delivery ([#27](https://github.com/PsychedelicShayna/neopi/issues/27)).
 - Ask answers can carry several notes on any option, selected or not, alongside the existing answer note ([#321](https://github.com/PsychedelicShayna/neopi/issues/321)).
 - Added configurable direct-address (`Iris`) and per-utterance force (`relay`) live keywords: leading addresses refuse primary handoffs, mentions elsewhere remain delegable, and forced utterances send the exact operator text once; editing the composer determines the final handoff even when speech originally addressed Iris ([#40](https://github.com/PsychedelicShayna/neopi/issues/40)).
@@ -55,6 +56,7 @@
 ### Fixed
 
 - Checkpoint and rewind inventories now describe the context transaction, report replacement, and requirement to rewind before yielding instead of a git-based save point ([#16](https://github.com/PsychedelicShayna/neopi/issues/16)).
+- Startup now retires the old managed persona, loadout, REPL, and live-persona extension links once, without requiring a source install or changing saved state and user extensions ([#75](https://github.com/PsychedelicShayna/neopi/issues/75)).
 - Moving a session during a fork now waits for inherited artifacts to finish copying, so they stay available in the moved session ([#257](https://github.com/PsychedelicShayna/neopi/issues/257)).
 - Releasing a recovered headless browser tab now waits until its page disappears from CDP targets without closing unrelated tabs ([#293](https://github.com/PsychedelicShayna/neopi/issues/293)).
 - Browser crash-cancellation checks no longer mistake work sent before the renderer crashes for an uncancelled continuation ([#290](https://github.com/PsychedelicShayna/neopi/issues/290)).
@@ -83,6 +85,7 @@
 - Live session attachment now negotiates protocol-v2 chunking and respects slow stdout consumers ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
 - Role switches and runtime fallbacks now honor their saved effort policies and admitted task scope, ordered subagent selectors retain the chosen source's explicit effort through role expansion, advisor classification stops on cancellation, and concurrent or in-flight fallback edits retain paired effort settings ([#178](https://github.com/PsychedelicShayna/neopi/issues/178)).
 - Model selector assignments save globally unless project scope is explicitly selected, including when project role storage is enabled ([#244](https://github.com/PsychedelicShayna/neopi/issues/244)).
+- Recall with an adjacent-event hint searches both recollections concurrently, without changing returned evidence or exceeding two in-flight ranking requests per recall ([#268](https://github.com/PsychedelicShayna/neopi/issues/268)).
 - Source installs retire managed legacy persona, loadout, and REPL extension links without deleting operator-owned extensions, preventing old hooks from running alongside built-ins ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
 - CI's session/log descriptor-leak check now works with Bun versions that open files close-on-exec by default ([#286](https://github.com/PsychedelicShayna/neopi/issues/286)).
 - Saved images in Agent Hub transcripts of advisors and aborted agents, and in `/monitor` panes, now render as images instead of a wrong-size `[Image: … 800x600]` placeholder ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).

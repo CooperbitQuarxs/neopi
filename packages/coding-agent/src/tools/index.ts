@@ -170,6 +170,7 @@ export * from "./wait";
 export type { VibeToolDetails } from "@oh-my-pi/pi-tui/tools/vibe";
 export * from "./write";
 export * from "./xdev";
+export * from "./tool-catalog";
 export * from "./yield";
 
 /** Tool type (AgentTool from pi-ai) */
@@ -393,6 +394,8 @@ export interface ToolSession {
 	getCodeModeDirectToolNames?: () => readonly string[] | undefined;
 	/** Return whether a built-in tool is active in this turn's tool set. */
 	isToolActive?: (name: string) => boolean;
+	/** Enabled names across top-level, mounted, and Code Mode tools, from the live session registry. */
+	getEnabledToolNames?: () => readonly string[];
 	/** Update the active built-in tool predicate when a session changes tools mid-run. */
 	setActiveToolNames?: (names: Iterable<string>) => void;
 	/** Canonical map containing every registered tool exactly once. */
