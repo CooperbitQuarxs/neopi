@@ -23,6 +23,6 @@ Record proposals in a persistent working file with URL, observed `updatedAt`,
 labels, proposed additions/removals, evidence and uncertainty. Re-read changed
 records before applying state deltas. The initial reconciliation includes open
 and closed issues/PRs; subsequent at-least-daily passes cover all open work and
-changed closed/merged records. An assignment may separate proposal from application;
+changed closed/merged records. Each pass also checks open issues against merged PR bodies (`Fixes`/`Closes`) and upstream changelog entries since the last sync, closing those fixed by our own merges with the PR and nightly SHA as evidence, and commenting "fixed upstream in <version>, lands with the next sync" on those fixed upstream. An assignment may separate proposal from application;
 apply only within its authority. The [publication seat](issue-funnel.md) has its
 own queue and amendment boundaries. No scheduler is installed by these docs.

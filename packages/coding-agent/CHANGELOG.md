@@ -9,6 +9,7 @@
 
 ### Added
 
+- Ask answers can carry several notes on any option, selected or not, alongside the existing answer note ([#321](https://github.com/PsychedelicShayna/neopi/issues/321)).
 - Added configurable direct-address (`Iris`) and per-utterance force (`relay`) live keywords: leading addresses refuse primary handoffs, mentions elsewhere remain delegable, and forced utterances send the exact operator text once; editing the composer determines the final handoff even when speech originally addressed Iris ([#40](https://github.com/PsychedelicShayna/neopi/issues/40)).
 - Added Live Hold Mode and a configurable quiet floor in settings: keep speech in the composer until a trailing submit phrase forces a main-agent handoff, and reserve breathing room before voice responses or delegation ([#269](https://github.com/PsychedelicShayna/neopi/issues/269)).
 - Added persistent named routing policies with per-slot model, explicit effort, specialist and role boundary; task and Eval spawns can reference declared slots with a resolved routing preview ([#8](https://github.com/PsychedelicShayna/neopi/issues/8)).
@@ -52,6 +53,8 @@
 ### Fixed
 
 - The advisor editor shows the effective roster with enabled states and source files, including ancestor and `.omp` rosters; enabling advisors names the reviewers that started ([#206](https://github.com/PsychedelicShayna/neopi/issues/206)).
+- OAuth model hooks can deep-clone and rename models without losing the verified standard context limit used by live ingest ([#328](https://github.com/PsychedelicShayna/neopi/issues/328)).
+- `npi update --check` and other ordinary update invocations now accept upstream binary assets while keeping the installed executable named `npi` ([#327](https://github.com/PsychedelicShayna/neopi/issues/327)).
 - Live microphone admission now counts audio waiting for the encoder, so burst overflow is reported instead of silently discarding accepted speech ([#174](https://github.com/PsychedelicShayna/neopi/issues/174)).
 - Live speaker playback stays open through device priming, and completed delegations no longer replay held tool progress after their final answer ([#175](https://github.com/PsychedelicShayna/neopi/issues/175)).
 - Ctrl+Space xAI speech input cancels configured dictation immediately without losing the draft, and held shortcut repeats no longer activate configured Space dictation ([#225](https://github.com/PsychedelicShayna/neopi/issues/225)).

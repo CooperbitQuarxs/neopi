@@ -263,14 +263,13 @@ function contextWindowKey(model: { provider: string; id: string }): string {
 }
 
 /**
- * Provenance a `modifyModels` input row carries into the shallow copies a hook
- * makes from it. An own enumerable symbol key is what `{ ...row }` copies and
- * what `structuredClone`, `JSON.stringify` and `Object.keys` ignore, so a copy
- * with a new provider/id still names its source row; the registry strips it
- * from every returned row before publishing.
+ * Provenance a `modifyModels` input row carries through spreads, structured
+ * clones and JSON round trips, even when the hook renames or reorders rows.
+ * Store only the snapshot index: an object reference would itself be cloned,
+ * losing the WeakMap-backed capacity. Strip the bookkeeping before publishing.
  */
-const MODIFIER_SOURCE: unique symbol = Symbol("modelModifierSource");
-type ModifierRow = Model<Api> & { [MODIFIER_SOURCE]?: Model<Api> };
+const MODIFIER_SOURCE = "__npiModelModifierSource";
+type ModifierRow = Model<Api> & { [MODIFIER_SOURCE]?: number };
 
 /** The context window a model runs with by default, and the larger one extended context opts it into. */
 export interface ContextWindowTiers {
@@ -1144,7 +1143,7 @@ export class ModelRegistry {
 				);
 				for (let index = 0; index < snapshot.length; index++) {
 					this.#carryStandardWindow(projected[index], snapshot[index]);
-					(snapshot[index] as ModifierRow)[MODIFIER_SOURCE] = snapshot[index];
+					(snapshot[index] as ModifierRow)[MODIFIER_SOURCE] = index;
 					if (projected[index].resolveHeaders) snapshot[index].resolveHeaders = projected[index].resolveHeaders;
 				}
 				const sourcesByKey = new Map(snapshot.map(model => [contextWindowKey(model), model]));
@@ -1159,7 +1158,7 @@ export class ModelRegistry {
 				// Rows of other providers pass through untouched; rebuilding a
 				// full catalog on every projection costs more than it can fix.
 				projected = modifyModels(snapshot, credential).map(returned => {
-					const model = this.#claimModifierRow(returned, sourcesByKey);
+					const model = this.#claimModifierRow(returned, sourcesByKey, snapshot);
 					const withHeaders =
 						model.resolveHeaders && model.headers
 							? {
@@ -1195,14 +1194,19 @@ export class ModelRegistry {
 	 * Resolves the verified capacity of a row a modifier returned and strips the
 	 * provenance it carried in. A snapshot row keeps its stamp even when renamed
 	 * in place; an unstamped row inherits from the snapshot row of the same
-	 * provider/id, else from the row it was spread from so long as the hook left
+	 * provider/id, else from its clone-safe snapshot index so long as the hook left
 	 * that row's `contextWindow` alone. A copy whose capacity the hook rewrote
 	 * declares a fresh capacity, exactly like a synthesized spec, because the
 	 * registry cannot tell a widened standard tier from an extended one.
 	 */
-	#claimModifierRow(row: ModifierRow, sourcesByKey: ReadonlyMap<string, Model<Api>>): Model<Api> {
-		const origin = row[MODIFIER_SOURCE];
-		if (origin !== undefined) delete row[MODIFIER_SOURCE];
+	#claimModifierRow(
+		row: ModifierRow,
+		sourcesByKey: ReadonlyMap<string, Model<Api>>,
+		snapshot: readonly Model<Api>[],
+	): Model<Api> {
+		const sourceIndex = row[MODIFIER_SOURCE];
+		const origin = sourceIndex === undefined ? undefined : snapshot[sourceIndex];
+		if (sourceIndex !== undefined) delete row[MODIFIER_SOURCE];
 		if (this.#standardWindows.has(row)) return row;
 		const source =
 			sourcesByKey.get(contextWindowKey(row)) ?? (origin?.contextWindow === row.contextWindow ? origin : undefined);
