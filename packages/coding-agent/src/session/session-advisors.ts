@@ -1101,7 +1101,7 @@ export class SessionAdvisors {
 	}
 
 	#resolveAdvisorRuntimeDescriptors(emitWarnings: boolean): AdvisorRuntimeDescriptor[] {
-		const legacy = !this.#advisorConfigs?.length;
+		const legacy = this.#advisorConfigs === undefined;
 		const activation = cfgAdvisorActivation.get(this.#host.settings);
 		const selected = activation.ids === null ? undefined : new Set(activation.ids);
 		const roster: AdvisorConfig[] =
@@ -2929,7 +2929,7 @@ export class SessionAdvisors {
 	 * @returns the number of advisors active after the call.
 	 */
 	applyAdvisorConfigs(
-		advisors: AdvisorConfig[],
+		advisors: AdvisorConfig[] | undefined,
 		sharedInstructions: string | undefined,
 		sharedMaxNotesPerUpdate?: number,
 	): number {

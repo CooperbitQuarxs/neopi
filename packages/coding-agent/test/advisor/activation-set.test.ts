@@ -114,6 +114,8 @@ describe("role-bound advisor activation", () => {
 		settings.setRoleSetting("quiet", cfgAdvisorActivationSet, []);
 		settings.setActiveRole("quiet");
 		const active = start(settings, []);
+		// No files means the legacy default is available after clearing the role set.
+		active.applyAdvisorConfigs(undefined, undefined);
 		expect(active.isAdvisorActive()).toBe(false);
 		expect(active.getAdvisorStatusOverview().advisors).toEqual([]);
 		expect(active.formatAdvisorStatus()).toContain("Selected advisors: none");

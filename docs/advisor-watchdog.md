@@ -132,7 +132,7 @@ Slash commands:
 | `/advisor status`    | Show each advisor's runtime state, model, context usage, token usage, and cost.                                                      |
 | `/advisor dump`      | In the TUI, copy the compact transcript (all active advisors when a roster is present) to the clipboard; other hosts return the text. |
 | `/advisor dump raw`  | Copy/return the full dump, including system prompt, tools, thinking, and calls.                                                      |
-| `/advisor configure` | Open the interactive TUI editor for project- or user-level `WATCHDOG.yml`. Non-TUI command hosts report that the editor is TUI-only. |
+| `/advisor configure` | List every discovered advisor file, then edit the selected file's advisors. Non-TUI command hosts report that the editor is TUI-only. |
 
 Enabling advisors (including a toggle to on) names the runtimes that started; paused and unresolved entries are not announced as running.
 
@@ -349,11 +349,13 @@ Later project files sit closer to the end of the advisor prompt, so narrower dir
 
 `WATCHDOG.yml` (or `WATCHDOG.yaml`) is the advisor roster. Each named entry can set its own enabled state, model, tools, and specialization prompt; `WATCHDOG.md` supplies shared review guidance.
 
-Discovery and `/advisor configure` use the same per-entry validation: malformed entries are skipped with named warnings while healthy advisors remain usable. Invalid YAML or a non-mapping document is skipped with a file warning. Problems appear in an aggregated startup/editor warning and remain visible inside the editor after switching project/user scope. Saving the editor document writes only valid entries.
+Discovery and `/advisor configure` use the same per-entry validation: malformed entries are skipped with named warnings while healthy advisors remain usable. Invalid YAML or a non-mapping document is skipped with a file warning. Problems appear in an aggregated startup warning and remain visible in the selected file's editor. Saving the editor document writes only valid entries.
 
-The editor's Project scope targets the repository-root `WATCHDOG.yml` (cwd when outside a repository); User scope targets the active agent directory. It edits an existing `.yaml` in place when no `.yml` exists at that scope, rather than creating a competing file.
+The editor opens with every discovered user, ancestor, `.omp`, and launch-directory file in load order. Each row shows its exact path. Hover or select a row to preview that file's advisor names and enabled states; Enter opens its per-advisor editor. Esc from that editor returns to the file list. When no files exist, the list offers the repository-root file, or cwd outside a repository, so a roster can still be created.
 
-The editor also opens on a read-only **Effective roster** overview showing every winning entry across all discovered files, its enabled/disabled state, scope, and source path. Native settings show the same overview above the editable fields. Saving refreshes the overview; reopening picks up external edits. The overview does not merge entries into the file being edited or rewrite other rosters. To change an ancestor or `.omp` roster not targeted by the two scope buttons, edit its displayed source file.
+Space toggles the whole highlighted file, persisting top-level `enabled: false` without changing its entries. Disabled files remain editable and contribute neither advisors nor shared instructions or budgets. Turning all discovered files off does not create a replacement default advisor. Press `a` to apply the saved configuration; the existing file watcher can also pick it up. Re-enabling a file restores its entries with their own enabled states intact.
+
+Below the file list, bulk actions disable all files and entries, enable all files and entries, or invert effective enabled states. Inverting a disabled file enables its entries, since none were active. Bulk actions save each source file, and `a` applies the result. Advisor activation sets still decide which eligible advisors run for the primary role.
 
 On an advisor row or its detail page, `c` clones every field into a new entry in the same file and opens the copy for editing. The name starts as `<name> (copy)` with a number added if needed. `Delete` opens a confirmation naming the advisor and its source file. Cancel is selected first; `Esc` cancels, and Space never confirms deletion. Deletion is not a menu row. These edits still require Save to persist and Apply to update the live advisors.
 
@@ -393,6 +395,7 @@ advisors:
 
 Fields:
 
+- `enabled` (top level): optional whole-file switch, default `true`. `false` excludes the file's advisors, shared instructions, and budget while preserving its editable entries.
 - `instructions` (top level): shared prompt prepended to every advisor's system prompt alongside `WATCHDOG.md`. Concatenated across all discovered `WATCHDOG.yml` files.
 - `advisors[].id`: hidden persistent identity assigned at creation or a legacy entry's first save. Distinct IDs keep identical configurations separate; renames preserve references.
 - `advisors[].name`: human label, slugified for transcript filenames. Entries without persisted IDs retain legacy slug precedence until their first save.

@@ -4,6 +4,7 @@
 
 ### Added
 
+- `/advisor configure` lists every loaded file with an advisor preview, whole-file toggles, exact-file editing, and bulk enabled-state actions ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
 - New and cloned advisors receive separate hidden identities so role activation sets remain attached after renames ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 - Numeric settings can offer a Custom input alongside preset quick picks, including global and role-scoped context budgets ([#52](https://github.com/PsychedelicShayna/neopi/issues/52)).
 - `/advisor configure` clones the selected advisor with `c`; deletion requires the Delete key and a named, cancel-first confirmation ([#322](https://github.com/PsychedelicShayna/neopi/issues/322)).

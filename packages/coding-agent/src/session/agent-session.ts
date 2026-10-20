@@ -14682,7 +14682,7 @@ export class AgentSession implements SettingsScope {
 	 * @returns the number of advisors active after the rebuild.
 	 */
 	applyAdvisorConfigs(
-		advisors: AdvisorConfig[],
+		advisors: AdvisorConfig[] | undefined,
 		sharedInstructions: string | undefined,
 		sharedMaxNotesPerUpdate?: number,
 	): number {
