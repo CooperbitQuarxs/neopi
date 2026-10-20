@@ -566,6 +566,42 @@ For the numeric sampling settings, a negative value (normally `-1`) means "use t
 | `tier.advisor`      | enum   | `none`    | `inherit`, `none`, `auto`, `default`, `flex`, `scale`, `priority`, `ultrafast`. Applied to the advisor model's family.                                                                                                                                                                      |
 | `personality`       | enum   | `default` | `default`, `friendly`, `pragmatic`, `none`. A user-level `<agent dir>/PERSONALITY.md` replaces the selected preset's text; `none` still omits the block. See [system-prompt-customization](./system-prompt-customization.md).                                                  |
 
+#### Role-scoped request settings
+
+Set `roleSettings.<role>` to a mapping of setting ids to values. Role names
+match `modelRoles`; changing a role's assigned model keeps its settings.
+The supported request settings are `temperature`, `topP`, `topK`, `minP`,
+`presencePenalty`, `repetitionPenalty`, `textVerbosity`, `omitThinking`,
+`tier.openai`, `tier.anthropic`, and `tier.google`.
+
+```yaml
+temperature: 0.9
+roleSettings:
+  precise:
+    temperature: 0
+    topP: 0.3
+    textVerbosity: high
+    omitThinking: true
+    tier.openai: none
+  provider:
+    temperature: -1
+```
+
+An omitted entry inherits the current global or project value. A concrete
+entry overrides it while that role is active. For numeric sampling, `-1`
+explicitly requests the provider default, so the `provider` role above omits
+temperature rather than sending the global `0.9`. For a service tier, `none`
+likewise omits the wire parameter. `textVerbosity` and `omitThinking` use their
+existing enum and boolean values.
+
+Choosing a role in the quick picker applies its settings. Switching roles
+or selecting a model without a role removes the previous role's values,
+without overwriting global or project settings. Explicit session overrides
+still take precedence. Provider and model capability checks still apply;
+setting a role value cannot enable an unsupported wire parameter.
+These entries are configurable in the settings file; this does not add a
+role-configurator UI.
+
 ### Retry and fallback
 
 ```yaml

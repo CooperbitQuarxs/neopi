@@ -2843,18 +2843,11 @@ export class AgentSession implements SettingsScope {
 		cfgSteeringMode.listen(this, mode => this.agent.setSteeringMode(mode));
 		cfgFollowUpMode.listen(this, mode => this.agent.setFollowUpMode(mode));
 		cfgInterruptMode.listen(this, mode => this.agent.setInterruptMode(mode));
-		cfgSampling.listen(this, sampling => {
-			this.agent.temperature = sampling.temperature;
-			this.agent.topP = sampling.topP;
-			this.agent.topK = sampling.topK;
-			this.agent.minP = sampling.minP;
-			this.agent.presencePenalty = sampling.presencePenalty;
-			this.agent.repetitionPenalty = sampling.repetitionPenalty;
-			this.agent.hideThinkingSummary = sampling.hideThinkingSummary;
-		});
+		cfgSampling.listen(this, sampling => this.#applySamplingSettings(sampling));
 		cfgTierOpenai.listen(this, tier => this.setServiceTierFamily("openai", serviceTierSettingToTier(tier)));
 		cfgTierAnthropic.listen(this, tier => this.setServiceTierFamily("anthropic", serviceTierSettingToTier(tier)));
 		cfgTierGoogle.listen(this, tier => this.setServiceTierFamily("google", serviceTierSettingToTier(tier)));
+		this.#applyActiveRoleRequestSettings();
 		cfgAdvisorRuntimeInputs.listen(this, (next, previous) => {
 			// A budget/tier edit rebuilds a running advisor (both are part of its
 			// runtime signature) without overriding a session-only `/advisor` toggle.
@@ -2870,6 +2863,34 @@ export class AgentSession implements SettingsScope {
 		});
 		this.#skillfulApplied = cfgSkillful.get(this.settings);
 		cfgSkillful.listen(this, skillful => this.#applySkillful(skillful));
+	}
+
+	#applySamplingSettings(sampling: SimpleStreamOptions): void {
+		this.agent.temperature = sampling.temperature;
+		this.agent.topP = sampling.topP;
+		this.agent.topK = sampling.topK;
+		this.agent.minP = sampling.minP;
+		this.agent.presencePenalty = sampling.presencePenalty;
+		this.agent.repetitionPenalty = sampling.repetitionPenalty;
+		this.agent.hideThinkingSummary = sampling.hideThinkingSummary;
+	}
+
+	/** Restored roles predate listeners and can otherwise retain the previous session's request values. */
+	#applyActiveRoleRequestSettings(): void {
+		const activeRole = this.settings.activeRole;
+		if (activeRole === undefined) return;
+		if (cfgSampling.sources.some(setting => this.settings.getRoleSetting(activeRole, setting) !== undefined)) {
+			this.#applySamplingSettings(cfgSampling.get(this));
+		}
+		if (this.settings.getRoleSetting(activeRole, cfgTierOpenai) !== undefined) {
+			this.setServiceTierFamily("openai", serviceTierSettingToTier(cfgTierOpenai.get(this)));
+		}
+		if (this.settings.getRoleSetting(activeRole, cfgTierAnthropic) !== undefined) {
+			this.setServiceTierFamily("anthropic", serviceTierSettingToTier(cfgTierAnthropic.get(this)));
+		}
+		if (this.settings.getRoleSetting(activeRole, cfgTierGoogle) !== undefined) {
+			this.setServiceTierFamily("google", serviceTierSettingToTier(cfgTierGoogle.get(this)));
+		}
 	}
 
 	/** Keeps workspace roots, the auto-QA prompt note, and the held power assertion in step with live settings. */
@@ -12618,6 +12639,7 @@ export class AgentSession implements SettingsScope {
 			this.#models.restoreServiceTiers(
 				hasServiceTierEntry ? (sessionContext.serviceTier ?? {}) : configuredServiceTierByFamily,
 			);
+			this.#applyActiveRoleRequestSettings();
 
 			if (switchingToDifferentSession) {
 				await this.#memory.resetContextForNewTranscript();
