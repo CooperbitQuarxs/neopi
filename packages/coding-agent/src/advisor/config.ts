@@ -74,6 +74,8 @@ export type AdvisorRuntimeStatus = "running" | "paused" | "quota_exhausted" | "e
  */
 export interface DiscoveredAdvisors {
 	advisors: AdvisorConfig[];
+	/** Winning source for each advisor slug; display metadata only, never a new discovery policy. */
+	sources: ReadonlyMap<string, { path: string; scope: AdvisorConfigScope }>;
 	sharedInstructions: string | undefined;
 	sharedMaxNotesPerUpdate?: number;
 	/**
@@ -283,6 +285,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 		},
 	});
 	const advisors = new Map<string, AdvisorConfig>();
+	const sources = new Map<string, { path: string; scope: AdvisorConfigScope }>();
 	const sharedParts: string[] = [];
 	let sharedMaxNotesPerUpdate: number | undefined;
 	const warnings: string[] = [];
@@ -322,6 +325,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 
 		for (const entry of entries) {
 			const slug = slugifyAdvisorName(entry.name);
+			sources.set(slug, { path: item.path, scope: item.level });
 			const entryInstructions = entry.instructions?.trim()
 				? (await expandAtImports(entry.instructions, item.path)).trim() || undefined
 				: undefined;
@@ -348,6 +352,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 
 	return {
 		advisors: [...advisors.values()],
+		sources,
 		sharedInstructions: sharedParts.length > 0 ? sharedParts.join("\n\n") : undefined,
 		sharedMaxNotesPerUpdate,
 		warnings,

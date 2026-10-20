@@ -34,9 +34,10 @@ import {
 	resolveAdvisorConfigEditPath,
 	resolveAdvisorMaxNotesPerUpdate,
 	saveWatchdogConfigFile,
+	slugifyAdvisorName,
 } from "../../advisor";
 import { reset as resetCapabilities } from "../../capability";
-import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import type { AdvisorConfigScope, EffectiveAdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { type ChainConfigDeps, ChainConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/chain-config";
 import type { ChainConfigScope } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import {
@@ -800,6 +801,14 @@ export class SelectorController {
 			}
 			const dirs = { projectDir, agentDir };
 			const initialDoc = await loadWatchdogConfigFile(await resolveAdvisorConfigEditPath(initialScope, dirs));
+			const getEffectiveRoster = async (): Promise<EffectiveAdvisorConfig[]> => {
+				const discovered = await discoverAdvisorConfigs(cwd, agentDir);
+				return discovered.advisors.map(advisor => {
+					const source = discovered.sources.get(slugifyAdvisorName(advisor.name))!;
+					return { name: advisor.name, enabled: advisor.enabled, sourceFile: source.path, scope: source.scope };
+				});
+			};
+			const effectiveRoster = await getEffectiveRoster();
 			if (this.#openMenus.get(menu.kind) !== menu) return;
 			if (initialDoc.warnings?.length) {
 				this.ctx.showWarning(`WATCHDOG.yml: ${sanitizeDisplayWarnings(initialDoc.warnings).join("; ")}`);
@@ -820,6 +829,7 @@ export class SelectorController {
 			);
 			const defaultAdvisorModel = advisorRoleSel?.model;
 			const deps: AdvisorConfigDeps = {
+				effectiveRoster,
 				getDefaultSystemPrompt: (advisor, doc) => {
 					const maxNotesPerUpdate = resolveAdvisorMaxNotesPerUpdate(
 						advisor.maxNotesPerUpdate,
@@ -851,6 +861,7 @@ export class SelectorController {
 					: undefined,
 			};
 			const overlay = new AdvisorConfigOverlayComponent(this.ctx.ui, deps, initialScope, initialDoc, {
+				getEffectiveRoster,
 				loadDoc: async scope => loadWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs)),
 				save: async (scope, doc) => {
 					await saveWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs), doc);

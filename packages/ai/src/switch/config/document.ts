@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import * as path from "node:path";
 import { MODEL_KINDS } from "@oh-my-pi/pi-catalog/types";
 import { isLoopbackHost, isExactOrigin } from "../network";
 import { decodeDials } from "../slug";
@@ -8,7 +9,7 @@ import { validateCidr, KEY_NAME } from "../validation";
 import { type DecodeContext, secretReference, warning } from "./context";
 import type { ConfigFields } from "./fields";
 import { decodeProvider } from "./providers";
-import type { EndpointConfig, PlanConfig, SwitchConfig, VirtualModelConfig } from "./types";
+import type { EndpointConfig, PlanConfig, ProviderConfig, SwitchConfig, VirtualModelConfig } from "./types";
 
 const VIRTUAL_ID = /^[a-z0-9][a-z0-9._/-]{0,127}$/;
 const FAILOVER = ["429", "5xx", "connect", "timeout", "reauth", "model-missing", "plan-exhausted", "draining"] as const;
@@ -280,7 +281,11 @@ export function decodePlan(context: DecodeContext, value: unknown, location: str
 	};
 }
 
-export function decodeSwitchDocument(context: DecodeContext, value: unknown): Omit<SwitchConfig, "sources" | "digest"> {
+export function decodeSwitchDocument(
+	context: DecodeContext,
+	value: unknown,
+	fragmentProviders: readonly ProviderConfig[] = [],
+): Omit<SwitchConfig, "sources" | "digest"> {
 	const f = context.fields;
 	const row = f.object(value, "switch.toml", ["switch", "admin", "notify", "provider", "plan", "endpoint", "model"]);
 	const settings = f.object(row.switch ?? {}, "switch", [
@@ -330,23 +335,27 @@ export function decodeSwitchDocument(context: DecodeContext, value: unknown): Om
 			minIntervalS: f.num(sink.min_interval_s, `notify[${index}].min_interval_s`, 60, 0, true),
 		};
 	});
-	const providers = f
-		.array(row.provider, "provider")
-		.map((item, index) => decodeProvider(context, item, `provider[${index}]`));
+	const providers = [
+		...f
+			.array(row.provider, "provider", fragmentProviders.length > 0)
+			.map((item, index) => decodeProvider(context, item, `provider[${index}]`)),
+		...fragmentProviders,
+	];
 	const plans = f.array(row.plan, "plan", true).map((item, index) => decodePlan(context, item, `plan[${index}]`));
 	const models = f
 		.array(row.model, "model", true)
 		.map((item, index) => virtualModel(context, item, `model[${index}]`));
 	const providerIds = new Set(providers.map(provider => provider.id));
 	const virtualIds = new Set(models.map(model => model.id));
+	const stateDir = f.text(
+		settings.state_dir,
+		"switch.state_dir",
+		process.env.STATE_DIRECTORY || `${context.configDir}/state`,
+	);
 	return {
 		switch: {
 			name: f.text(settings.name, "switch.name", "npi-switch"),
-			stateDir: f.text(
-				settings.state_dir,
-				"switch.state_dir",
-				process.env.STATE_DIRECTORY || `${context.configDir}/state`,
-			),
+			stateDir,
 			drainMs: f.num(settings.drain_ms, "switch.drain_ms", 20_000, 0, true),
 			metersTtlS: f.num(settings.meters_ttl_s, "switch.meters_ttl_s", 60, 0, true),
 			metersMinS: f.num(settings.meters_min_s, "switch.meters_min_s", 10, 0, true),
@@ -368,7 +377,7 @@ export function decodeSwitchDocument(context: DecodeContext, value: unknown): Om
 						socket: f.flag(adminRaw.socket, "admin.socket", true),
 						corsOrigins: f.strings(adminRaw.cors_origins, "admin.cors_origins", true),
 						allowRemote: f.flag(adminRaw.allow_remote, "admin.allow_remote", false),
-						backupDir: f.text(adminRaw.backup_dir, "admin.backup_dir", "backups"),
+						backupDir: path.resolve(stateDir, f.text(adminRaw.backup_dir, "admin.backup_dir", "backups")),
 						tokens,
 					},
 				}

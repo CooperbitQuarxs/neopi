@@ -1010,6 +1010,14 @@ stale_burn_floor = 4                      # the assumed burn rate is at least th
 warn_at     = [80, 95]                    # plan-level Meter thresholds for operator events; default [switch].warn_at
 ```
 
+The current backend rejects API-key-backed catalog Plans with
+`E-PLAN-PROVIDER`: provider usage reports cannot yet be safely attributed to
+those credential rows. Catalog Plans must resolve to an OAuth account;
+organization-only selectors are supported. For `attribution = "declared"`,
+`meters` must be explicit and every listed Meter must have a `size`, otherwise
+loading fails with `E-PLAN-SIZE`. Omitting `meters` still selects every reported
+Meter for proportional and token attribution.
+
 A provider with at least one `[[plan]]` is **planned**: every Attempt to it
 is pinned to one of its Plans (§12.3, §12.9). A planned provider's
 credentials that no Plan selects are never used by the switch

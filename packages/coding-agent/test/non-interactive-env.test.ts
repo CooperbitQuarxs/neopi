@@ -204,6 +204,7 @@ it("restores launcher editor and credentials for interactive children without un
 			"OMP_HOST_SUDO_ASKPASS",
 			"OMP_HOST_TERM",
 			"HOST_ENV_COMMAND_SECRET",
+			"HOST_ENV_RUNTIME_SECRET",
 			"OMP_HOST_OVERLAY_KEYS",
 			"MallocStackLogging",
 			"MallocStackLoggingNoCompact",
@@ -215,16 +216,23 @@ it("restores launcher editor and credentials for interactive children without un
 			`import { getShellConfig } from ${JSON.stringify(path.resolve(import.meta.dir, "../../utils/src/procmgr.ts"))};`,
 			'process.env.EDITOR = "true"; process.env.TERM = "dumb";',
 			'const overlay = { HOST_ENV_COMMAND_SECRET: "command-secret" };',
+			"await getHostEnvForTools();",
+			'Bun.env.HOST_ENV_RUNTIME_SECRET = "runtime-secret";',
+			"const runtimeHost = await getHostEnvForTools();",
 			"const host = await getHostEnvForTools(overlay);",
-			"const env = { ...getShellConfig().env, ...buildNonInteractiveEnv(host), ...overlay };",
+			"const env = { ...getShellConfig().env, ...buildNonInteractiveEnv(host), ...overlay, HOST_ENV_RUNTIME_SECRET: Bun.env.HOST_ENV_RUNTIME_SECRET };",
 			`const run = async restored => {`,
 			`	const child = Bun.spawn(["/bin/sh", "-c", restored ? '. "$OMP_HOST_ENV_FILE"; exec "$@"' : 'exec "$@"', "probe", process.execPath, "--no-env-file", "--eval", ${JSON.stringify(probe)}], { env, stdout: "pipe", stderr: "pipe" });`,
 			"	const output = await new Response(child.stdout).text();",
 			"	if (await child.exited !== 0) throw new Error(await new Response(child.stderr).text());",
 			"	return JSON.parse(output);",
 			"};",
+			"const overlayHost = env.OMP_HOST_OVERLAY_KEYS;",
+			"env.OMP_HOST_OVERLAY_KEYS = runtimeHost.OMP_HOST_OVERLAY_KEYS;",
+			"const runtimeRestored = await run(true);",
+			"env.OMP_HOST_OVERLAY_KEYS = overlayHost;",
 			"const stat = await Bun.file(host.OMP_HOST_ENV_FILE).stat();",
-			"console.log(JSON.stringify({ tool: await run(false), restored: await run(true), file: host.OMP_HOST_ENV_FILE, mode: stat.mode & 0o777, editor: host.OMP_HOST_EDITOR, term: host.OMP_HOST_TERM }));",
+			"console.log(JSON.stringify({ tool: await run(false), restored: await run(true), runtimeRestored, file: host.OMP_HOST_ENV_FILE, mode: stat.mode & 0o777, editor: host.OMP_HOST_EDITOR, term: host.OMP_HOST_TERM }));",
 		].join("\n");
 		const literal = "spaces 'quotes' $dollars `backticks`\nand a newline";
 		const child = Bun.spawn([process.execPath, "--no-install", "--eval", script], {
@@ -266,6 +274,9 @@ it("restores launcher editor and credentials for interactive children without un
 		expect(result.tool.VISUAL).toBe("true");
 		expect(result.tool.SSH_ASKPASS).toBe(NON_INTERACTIVE_ENV.SSH_ASKPASS);
 		expect(result.tool.TERM).toBe("xterm-256color");
+		expect(result.tool.HOST_ENV_RUNTIME_SECRET).toBe("runtime-secret");
+		expect(result.runtimeRestored.HOST_ENV_RUNTIME_SECRET).toBeNull();
+		expect(result.runtimeRestored.HOST_ENV_COMMAND_SECRET).toBe("command-secret");
 		expect(result.restored).toEqual({
 			EDITOR: "nvim",
 			VISUAL: "",
@@ -293,6 +304,7 @@ it("restores launcher editor and credentials for interactive children without un
 			OMP_HOST_SUDO_ASKPASS: null,
 			OMP_HOST_TERM: null,
 			HOST_ENV_COMMAND_SECRET: null,
+			HOST_ENV_RUNTIME_SECRET: null,
 			OMP_HOST_OVERLAY_KEYS: null,
 			MallocStackLogging: null,
 			MallocStackLoggingNoCompact: null,

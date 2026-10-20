@@ -65,6 +65,16 @@ export async function resolvePlans(
 			continue;
 		}
 		const row = matches[0];
+		if (row.credential.type === "api_key")
+			throw new SwitchError(422, "validation", "Catalog Plans require a matchable OAuth account identity", {
+				issues: [
+					{
+						code: "E-PLAN-PROVIDER",
+						path: `plan[${index}].account`,
+						message: "API-key-backed catalog Plans cannot safely attribute provider usage reports",
+					},
+				],
+			});
 		const fingerprint = await storage.keys.fingerprintPinned(row.id, canonicalProvider);
 		if (!fingerprint) {
 			const reason = "The selected stored credential is unavailable";
@@ -77,16 +87,12 @@ export async function resolvePlans(
 			binding: { provider: canonicalProvider, credentialId: row.id, fingerprint },
 			resolution: "resolved",
 			accountLabel: redact(row),
-			...(row.credential.type === "oauth"
-				? {
-						identity: {
-							...(row.credential.email ? { email: row.credential.email } : {}),
-							...(row.credential.accountId ? { account_id: row.credential.accountId } : {}),
-							...(row.credential.projectId ? { project_id: row.credential.projectId } : {}),
-							...(row.credential.orgId ? { org_id: row.credential.orgId } : {}),
-						},
-					}
-				: {}),
+			identity: {
+				...(row.credential.email ? { email: row.credential.email } : {}),
+				...(row.credential.accountId ? { account_id: row.credential.accountId } : {}),
+				...(row.credential.projectId ? { project_id: row.credential.projectId } : {}),
+				...(row.credential.orgId ? { org_id: row.credential.orgId } : {}),
+			},
 		});
 	}
 	for (let i = 0; i < plans.length; i++)
