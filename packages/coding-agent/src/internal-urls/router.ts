@@ -21,6 +21,7 @@ import { AgentProtocolHandler } from "./agent-protocol";
 import { ArtifactProtocolHandler } from "./artifact-protocol";
 import { AttachmentProtocolHandler } from "./attachment-protocol";
 import { CfgProtocolHandler } from "./cfg-protocol";
+import { CompactionProtocolHandler } from "./compaction-protocol";
 import { ConflictProtocolHandler } from "./conflict-protocol";
 import { HistoryProtocolHandler } from "./history-protocol";
 import { IssueProtocolHandler, PrProtocolHandler } from "./issue-pr-protocol";
@@ -113,6 +114,7 @@ export class InternalUrlRouter {
 		this.register(new LocalProtocolHandler());
 		this.register(new ProcProtocolHandler());
 		this.register(new CfgProtocolHandler());
+		this.register(new CompactionProtocolHandler());
 		this.register(new SshProtocolHandler());
 		// Reserved NeoPi-owned security-analysis namespace; vendor adapters normalize into its store.
 		this.register(new SecurityProtocolHandler());

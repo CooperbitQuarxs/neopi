@@ -286,6 +286,19 @@ export const cfgCompactionKeepRecentTokens = register({
 
 export const cfgCompactionAutoContinue = register({ id: "compaction.autoContinue", type: "boolean", default: true });
 
+export const cfgCompactionAgentControl = register({
+	id: "compaction.agentControl",
+	type: "enum",
+	values: ["read-only", "propose-only", "write"] as const,
+	default: "propose-only",
+	ui: {
+		tab: "context",
+		group: "Compaction",
+		label: "Agent Compaction Controls",
+		description: "Allow agents to inspect, propose, or apply compaction changes. Proposals never change settings.",
+	},
+});
+
 export const cfgCompactionRemoteEndpoint = register({
 	id: "compaction.remoteEndpoint",
 	type: "string",
