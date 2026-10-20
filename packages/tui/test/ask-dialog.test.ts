@@ -427,6 +427,32 @@ describe("AskDialogComponent", () => {
 		expect(onCancel).toHaveBeenCalledTimes(1);
 	});
 
+	it("edits or removes the latest option note without replacing earlier notes", async () => {
+		const onSubmit = vi.fn();
+		const onPrompt = vi.fn()
+			.mockResolvedValueOnce("Keep")
+			.mockResolvedValueOnce("Draft")
+			.mockResolvedValueOnce("Revised")
+			.mockResolvedValueOnce("")
+			.mockResolvedValueOnce(undefined);
+		const component = new AskDialogComponent(
+			[{ id: "q", question: "Choose?", options: [{ label: "A" }, { label: "B" }] }],
+			{ onSubmit, onCancel: vi.fn(), onPrompt },
+		);
+		for (const key of ["a", "a", "A", "A", "a"]) {
+			component.handleInput(key);
+			await Promise.resolve();
+			await Promise.resolve();
+		}
+		expect(onPrompt.mock.calls[2][1]).toBe("Draft");
+		expect(onPrompt.mock.calls[3][1]).toBe("Revised");
+		component.handleInput(DOWN);
+		component.handleInput(ENTER);
+		expect(onSubmit.mock.calls[0][0].results[0]).toMatchObject({
+			selectedOptions: ["B"], optionNotes: [{ option: "A", note: "Keep" }],
+		});
+	});
+
 	it("n on an option calls onPrompt and stores note with marker", async () => {
 		const onPrompt = vi.fn().mockReturnValue(Promise.resolve("My Custom Note"));
 		const onSubmit = vi.fn();
