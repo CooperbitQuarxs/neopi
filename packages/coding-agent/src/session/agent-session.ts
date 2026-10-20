@@ -477,7 +477,6 @@ import {
 } from "./session-maintenance";
 import {
 	cleanupEmptyMoveSession,
-	copySessionArtifacts,
 	extractSessionInit,
 	type PersistedSessionInit,
 	type SessionManager,
@@ -10796,7 +10795,7 @@ export class AgentSession implements SettingsScope {
 				// No file means fork() is a no-op. Otherwise invalidate admitted
 				// prompt setup before the asynchronous identity rewrite begins.
 				if (previousSessionFile) this.#promptGeneration++;
-				forkResult = await this.sessionManager.fork();
+				forkResult = await this.sessionManager.fork({ copyArtifacts: true });
 			} catch (error) {
 				this.#bash.finishSessionTransition(bashTransition, false);
 				throw error;
@@ -10810,8 +10809,6 @@ export class AgentSession implements SettingsScope {
 			// The fork clones the transcript and keeps this recovery state running
 			// under a fresh id, so the work already produced is still this session's.
 			this.#recovery.reanchorServedAttribution(previousSessionId);
-
-			await copySessionArtifacts(forkResult.oldSessionFile, forkResult.newSessionFile);
 
 			// Update agent session ID
 			this.#freshProviderSessionId = undefined;

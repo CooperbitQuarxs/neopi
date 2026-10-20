@@ -1013,8 +1013,8 @@ export class SessionManager {
 	 */
 	#sessionClaim: { sessionId: string; release: (() => void) | undefined } | undefined;
 	/**
-	 * The background artifact copy a move or branch to `sessionFile` started (see
-	 * {@link #moveOffSessionFile}, {@link createBranchedSession}). Never rejects.
+	 * The artifact copy a move or fork to `sessionFile` started (see
+	 * {@link #moveOffSessionFile}, {@link fork}, {@link createBranchedSession}). Never rejects.
 	 */
 	#pendingArtifactCopy: { sessionFile: string; done: Promise<void> } | undefined;
 
@@ -2515,9 +2515,12 @@ export class SessionManager {
 
 	/**
 	 * Fork the current session into a new file with the same entries.
+	 * Optionally copy artifacts, keeping relocation and artifact reads behind the copy.
 	 * @returns the old and new session file paths, or undefined when not persisting.
 	 */
-	async fork(): Promise<{ oldSessionFile: string; newSessionFile: string } | undefined> {
+	async fork(
+		options?: { copyArtifacts?: boolean },
+	): Promise<{ oldSessionFile: string; newSessionFile: string } | undefined> {
 		if (!this.#persist || !this.#sessionFile) return undefined;
 
 		const oldSessionFile = this.#sessionFile;
@@ -2556,13 +2559,24 @@ export class SessionManager {
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
 		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
+		const newSessionFile = this.#sessionFile;
+		if (options?.copyArtifacts) {
+			this.#pendingArtifactCopy = {
+				sessionFile: newSessionFile,
+				done: copySessionArtifacts(oldSessionFile, newSessionFile),
+			};
+		}
 
 		await this.#rewriteAtomically();
-		return { oldSessionFile, newSessionFile: this.#sessionFile };
+		if (options?.copyArtifacts) await this.#pendingArtifactCopy?.done;
+		return { oldSessionFile, newSessionFile };
 	}
 
 	/** Move the session to a new working directory. */
 	async moveTo(newCwd: string, targetSessionDir?: string): Promise<void> {
+		// A fork may still be filling this session's artifact directory. Relocate
+		// only after that copy settles, or it will write into the abandoned path.
+		await this.#pendingArtifactCopy?.done;
 		const resolvedCwd = path.resolve(newCwd);
 		const resolvedTargetDir = targetSessionDir ? path.resolve(targetSessionDir) : undefined;
 		const managedRoot = resolveManagedSessionRoot(this.#sessionDir, this.#cwd);

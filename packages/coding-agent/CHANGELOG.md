@@ -53,6 +53,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Moving a session during a fork now waits for inherited artifacts to finish copying, so they stay available in the moved session ([#257](https://github.com/PsychedelicShayna/neopi/issues/257)).
 - Releasing a recovered headless browser tab now waits until its page disappears from CDP targets without closing unrelated tabs ([#293](https://github.com/PsychedelicShayna/neopi/issues/293)).
 - Browser crash-cancellation checks no longer mistake work sent before the renderer crashes for an uncancelled continuation ([#290](https://github.com/PsychedelicShayna/neopi/issues/290)).
 - The advisor editor shows the effective roster with enabled states and source files, including ancestor and `.omp` rosters; enabling advisors names the reviewers that started ([#206](https://github.com/PsychedelicShayna/neopi/issues/206)).
