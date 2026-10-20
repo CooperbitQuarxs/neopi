@@ -50,6 +50,8 @@ Switching applies from that point forward with a redraw. It does not delete or r
 
 Introduced as extensions on 11 Aug 2026 and made built-in commands on 28 Sep 2026. The `extensions/` directory, its installer, and the build and install deployment hooks are gone; state files are unchanged.
 
+Before extension discovery, startup runs a one-time migration in the active agent directory to unlink the former managed `neopi-*` and `omomp-*` extension links. Only links targeting `extensions/<same-name>` are retired, including dangling links to old checkouts. Real directories, custom links, backups, quarantine markers, and saved command state stay untouched. Completion is recorded in `.neopi-extensions-retired`; installing a binary no longer performs this migration.
+
 | Command | State file (agent dir) |
 | --- | --- |
 | `/persona` | `neopi-persona.json` |
