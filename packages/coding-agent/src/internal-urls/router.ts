@@ -34,6 +34,7 @@ import { RuleProtocolHandler } from "./rule-protocol";
 import { SecurityProtocolHandler } from "./security-protocol";
 import { SkillProtocolHandler } from "./skill-protocol";
 import { SshProtocolHandler } from "./ssh-protocol";
+import { ToolProtocolHandler } from "./tool-protocol";
 import type {
 	InternalResource,
 	InternalUrl,
@@ -121,6 +122,7 @@ export class InternalUrlRouter {
 		this.register(resourceFallback);
 		this.register(new OmpProtocolHandler());
 		this.register(new XdProtocolHandler());
+		this.register(new ToolProtocolHandler());
 		this.register(new AttachmentProtocolHandler());
 		this.register(new ConflictProtocolHandler());
 		this.#builtinSchemes = new Set(this.#handlers.keys());
