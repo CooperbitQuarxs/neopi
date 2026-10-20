@@ -39,6 +39,7 @@ import {
 	type Fetch,
 	fetchBuild,
 	type UpdateChannel,
+	UPSTREAM_BINARY_NAME,
 } from "./build-service";
 import {
 	DEFAULT_NPM_REGISTRY,
@@ -50,8 +51,6 @@ import {
 
 import { cfgUpdateChannel } from "../modes/settings";
 
-// Non-prompt update arguments retain the upstream distribution contract.
-const UPSTREAM_BINARY_NAME = "omp";
 const LOCAL_VERSION_PREFIX = `${APP_NAME}/`;
 const UPSTREAM_VERSION_PREFIX = `${UPSTREAM_BINARY_NAME}/`;
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
