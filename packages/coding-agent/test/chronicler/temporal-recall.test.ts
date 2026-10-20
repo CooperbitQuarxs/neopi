@@ -178,6 +178,85 @@ describe("chronicle recall", () => {
 		expect(result.results).toHaveLength(1);
 	});
 
+	it("searches the query and adjacent-event hint together within one shared ranking limit", async () => {
+		await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/alpha",
+			sessionId: ALPHA,
+			batches: [
+				Array.from({ length: 12 }, (_, index) => ({
+					title: `Recall candidate ${index}`,
+					eventTime: `2026-09-02T10:00:${String(index).padStart(2, "0")}.000Z`,
+					body: `Stored detail ${index}. ${repeat("saved route detail", 8)}`,
+				})),
+			],
+		});
+		await index({ ...CONFIG, hopTokens: 200, terminalAtoms: 32 });
+		const bothSearches = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const started = new Set<string>();
+		let active = 0;
+		let maxActive = 0;
+		const ranker: NodeRanker = {
+			kind: "model",
+			async score(query, candidates, signal) {
+				active++;
+				maxActive = Math.max(maxActive, active);
+				try {
+					if (!started.has(query)) {
+						started.add(query);
+						if (started.size === 2) bothSearches.resolve();
+						await release.promise;
+					}
+					await Bun.sleep(5);
+					signal?.throwIfAborted();
+					return { scores: candidates.map(() => 0.9) };
+				} finally {
+					active--;
+				}
+			},
+		};
+		const search = recall({ query: "saved detail", hint: "adjacent event", ranker, budget: 1 });
+		const overlapped = await Promise.race([
+			bothSearches.promise.then(() => true),
+			Bun.sleep(1_000).then(() => false),
+		]);
+		release.resolve();
+		const result = await search;
+
+		expect(overlapped).toBe(true);
+		expect(maxActive).toBe(2);
+		expect(result.results).toHaveLength(1);
+		expect(result.trace.some(step => step.search === "hint" && step.action === "anchor")).toBe(true);
+	});
+
+	it("cancels and drains the hint search when the query search fails", async () => {
+		await writeParaphraseCorpus();
+		const hintStarted = Promise.withResolvers<void>();
+		const failure = new Error("query ranking failed");
+		let hintAborted = false;
+		const ranker: NodeRanker = {
+			kind: "model",
+			async score(query, _candidates, signal) {
+				if (query === "failing query") {
+					await hintStarted.promise;
+					throw failure;
+				}
+				if (!signal) throw new Error("expected a hint cancellation signal");
+				const aborted = Promise.withResolvers<never>();
+				const abort = () => {
+					hintAborted = true;
+					aborted.reject(signal.reason);
+				};
+				signal.addEventListener("abort", abort, { once: true });
+				hintStarted.resolve();
+				if (signal.aborted) abort();
+				return aborted.promise;
+			},
+		};
+		await expect(recall({ query: "failing query", hint: "adjacent event", ranker })).rejects.toBe(failure);
+		expect(hintAborted).toBe(true);
+	});
+
 	it("keeps concurrent recall queries and results isolated", async () => {
 		const written = await writeParaphraseCorpus();
 		const release = Promise.withResolvers<void>();
