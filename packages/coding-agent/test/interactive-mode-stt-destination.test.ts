@@ -87,6 +87,7 @@ describe("xAI main-composer destination ownership", () => {
 		});
 		const prompt = vi.spyOn(session, "prompt").mockImplementation(async () => {
 			sent.resolve();
+			return true;
 		});
 		mode.editor.setText("Original draft");
 		mode.editor.handleInput("\x1bc");
@@ -127,7 +128,7 @@ describe("xAI main-composer destination ownership", () => {
 				options.onStepDone?.(step, 0, "Rewritten original");
 				return "Rewritten original";
 			});
-			const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined);
+			const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
 			const submit = mode.editor.onSubmit!;
 			mode.editor.onSubmit = async text => {
 				try {
@@ -179,7 +180,7 @@ describe("xAI main-composer destination ownership", () => {
 			opened.resolve();
 			return await picked.promise;
 		});
-		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined);
+		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
 		const submit = mode.editor.onSubmit!;
 		mode.editor.onSubmit = async text => {
 			try {
@@ -216,6 +217,7 @@ describe("xAI main-composer destination ownership", () => {
 		});
 		const prompt = vi.spyOn(session, "prompt").mockImplementation(async text => {
 			if (text === "NEW SPEECH") speechSent.resolve();
+			return true;
 		});
 		mode.editor.setText("Original draft");
 		mode.editor.handleInput("\x1bc");

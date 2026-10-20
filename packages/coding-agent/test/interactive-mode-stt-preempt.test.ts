@@ -14,7 +14,7 @@ import * as capture from "../src/stt/shared-audio-capture";
 import * as asr from "../src/stt/asr-client";
 import * as downloader from "../src/stt/downloader";
 import { STTController } from "../src/stt/stt-controller";
-import { Input, type InputListener } from "@oh-my-pi/pi-tui";
+import { Input, type TUI } from "@oh-my-pi/pi-tui";
 import { cfgSttEnabled } from "../src/stt/settings";
 import * as xai from "../src/stt/xai-stt";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -40,7 +40,7 @@ describe("fork-owned Ctrl+Space: xAI preempts configured dictation", () => {
 	let audio: capture.AudioSink[];
 	let closed: number[];
 	let toggles: Promise<void>[];
-	let listeners: InputListener[];
+	let listeners: Parameters<TUI["addInputListener"]>[0][];
 	let throwOnStop: boolean;
 
 	async function pressXai(): Promise<void> {
@@ -184,10 +184,10 @@ describe("fork-owned Ctrl+Space: xAI preempts configured dictation", () => {
 			vi.spyOn(downloader, "downloadSttModel").mockResolvedValue(undefined);
 			const stopped = Promise.withResolvers<string>();
 			let partial: ((text: string) => void) | undefined;
-			let segment: ((text: string) => void) | undefined;
+			let segment: ((text: string, ...indices: number[]) => void) | undefined;
 			vi.spyOn(asr.sttClient, "startStream").mockImplementation((_key, options) => {
-				partial = options.onPartial;
-				segment = options.onSegment;
+				partial = options?.onPartial;
+				segment = options?.onSegment;
 				return {
 					pushAudio() {},
 					stop: () => stopped.promise,

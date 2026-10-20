@@ -237,7 +237,7 @@ describe("read-only session catalog", () => {
 		const result = await readSessionCatalog(file);
 		const expected = timestamps.map((_timestamp, index) => ({
 			entryId: `m${index}`,
-			role: "user",
+			role: "user" as const,
 			text: `message ${index}`,
 			timestamp: index < 6 ? null : index === 6 ? "1970-01-01T00:00:00.000Z" : "2026-06-01T00:00:00.000Z",
 		}));

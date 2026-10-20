@@ -217,7 +217,10 @@ describe("named routing policies", () => {
 		const originalFallbacks = cfgRetryFallbackChains.get(input.session.settings);
 		const theme = (await getThemeByName("dark"))!;
 		const preview = Bun.stripANSI(
-			tool.renderCall({ agent: "policy:funnel/scout", task: "Investigate." }, {}, theme).render(160).join("\n"),
+			tool
+				.renderCall({ agent: "policy:funnel/scout", task: "Investigate." }, { expanded: false, isPartial: false }, theme)
+				.render(160)
+				.join("\n"),
 		);
 		expect(preview).toContain("example/investigator");
 		expect(preview).toContain("effort: medium");
