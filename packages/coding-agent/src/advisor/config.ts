@@ -25,6 +25,7 @@ export { ADVISOR_REVIEW_MODES, ADVISOR_SYNC_BACKLOG_MODES, slugifyAdvisorName } 
 export type { AdvisorReviewMode, AdvisorSyncBacklog } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
 const WATCHDOG_ADVISOR_KEYS = [
+	"id",
 	"name",
 	"model",
 	"tools",
@@ -108,6 +109,7 @@ function assertAdvisorCadence(advisor: AdvisorConfig): void {
 
 const advisorEntrySchema = type({
 	name: "string",
+	"id?": "string > 0",
 	"model?": "string",
 	"tools?": "string[]",
 	"reviewMode?": "'turn' | 'agent-end'",
@@ -124,6 +126,7 @@ type AdvisorYamlEntry = typeof advisorEntrySchema.infer;
 
 function editableAdvisorConfig(entry: AdvisorYamlEntry): AdvisorConfig {
 	const advisor: AdvisorConfig = { name: entry.name };
+	if (entry.id !== undefined) advisor.id = entry.id;
 	if (entry.model?.trim()) advisor.model = entry.model;
 	if (entry.tools !== undefined) advisor.tools = [...entry.tools];
 	if (entry.reviewMode !== undefined) advisor.reviewMode = entry.reviewMode;
@@ -316,7 +319,9 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 			const entryInstructions = entry.instructions?.trim()
 				? (await expandAtImports(entry.instructions, item.path)).trim() || undefined
 				: undefined;
-			advisors.set(slug, {
+			advisors.set(entry.id ? `id:${entry.id}` : `name:${slug}`, {
+				id: entry.id,
+				sourceScope: item.level,
 				name: entry.name,
 				model: entry.model?.trim() || undefined,
 				tools: filterAdvisorTools(entry.tools, item.path),
@@ -509,6 +514,7 @@ export function appendYamlString(lines: string[], indent: string, key: string, v
 
 export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 	const lines: string[] = [];
+	ensureAdvisorIds(doc);
 	if (doc.instructions?.trim()) appendYamlString(lines, "", "instructions", doc.instructions);
 	if (
 		typeof doc.maxNotesPerUpdate === "number" &&
@@ -522,6 +528,7 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 		for (const advisor of doc.advisors) {
 			assertAdvisorCadence(advisor);
 			lines.push(`  - name: ${YAML.stringify(advisor.name)}`);
+			lines.push(`    id: ${YAML.stringify(advisor.id!)}`);
 			if (advisor.model?.trim()) lines.push(`    model: ${YAML.stringify(advisor.model)}`);
 			if (advisor.tools !== undefined) {
 				if (advisor.tools.length === 0) {
@@ -562,6 +569,7 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 
 function watchdogAdvisorValues(advisor: AdvisorConfig): Record<(typeof WATCHDOG_ADVISOR_KEYS)[number], unknown> {
 	return {
+		id: advisor.id,
 		name: advisor.name,
 		model: advisor.model?.trim() ? advisor.model : undefined,
 		tools: advisor.tools === undefined ? undefined : [...advisor.tools],
@@ -612,6 +620,12 @@ function resolveWatchdogAdvisorOrigin(
 	origins: readonly WatchdogAdvisorOrigin[],
 ): { index: number; map: YAMLMap<unknown, unknown> } | undefined {
 	const candidates: { index: number; map: YAMLMap<unknown, unknown> }[] = [];
+	if (origin.base.id) {
+		for (const [index, item] of sequence.items.entries()) {
+			if (isMap(item) && item.get("id") === origin.base.id) return { index, map: item };
+		}
+		return undefined;
+	}
 	for (const [index, item] of sequence.items.entries()) {
 		if (isMap(item) && watchdogAdvisorMapValues(document, item)?.name === origin.name)
 			candidates.push({ index, map: item });
@@ -769,11 +783,14 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 		if (matches.has(advisor)) continue;
 		const resolved =
 			resolvedOrigins.find(
-				candidate => !claimedOrigins.has(candidate.origin) && candidate.origin.name === advisor.name,
+				candidate => !claimedOrigins.has(candidate.origin) && advisor.id !== undefined && candidate.origin.base.id === advisor.id,
+			) ??
+			resolvedOrigins.find(
+				candidate => !claimedOrigins.has(candidate.origin) && candidate.origin.base.id === undefined && candidate.origin.name === advisor.name,
 			) ??
 			(() => {
 				const positional = resolvedOrigins[index];
-				return positional && !claimedOrigins.has(positional.origin) ? positional : undefined;
+				return positional && positional.origin.base.id === undefined && !claimedOrigins.has(positional.origin) ? positional : undefined;
 			})();
 		if (!resolved) continue;
 		matches.set(advisor, resolved);
@@ -813,9 +830,18 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
  * latest document so comments, future fields, and disjoint edits survive. The
  * file is removed only when the resulting document is empty.
  */
+function ensureAdvisorIds(doc: WatchdogConfigDoc): void {
+	const used = new Set<string>();
+	for (const advisor of doc.advisors) {
+		if (!advisor.id || used.has(advisor.id)) advisor.id = crypto.randomUUID();
+		used.add(advisor.id);
+	}
+}
+
 export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConfigDoc): Promise<void> {
 	const storedBaseline = watchdogBaselines.get(doc);
 	const baseline = storedBaseline?.filePath === filePath ? storedBaseline : undefined;
+	ensureAdvisorIds(doc);
 	await withFileLock(filePath, async () => {
 		let source = "";
 		try {
