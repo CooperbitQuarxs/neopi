@@ -8,7 +8,7 @@ import { RpcLiveBridge, type RpcLiveSession } from "@oh-my-pi/pi-coding-agent/mo
 import type { RpcLiveFrame } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { readLines, removeWithRetries } from "@oh-my-pi/pi-utils";
-import { cfgLiveDelegationDelivery } from "../src/live/settings";
+import { cfgLiveDelegationDelivery, cfgLiveModel } from "../src/live/settings";
 
 class FakeLiveSession implements RpcLiveSession {
 	muted = false;
@@ -101,6 +101,23 @@ describe("RpcLiveBridge", () => {
 		const starting = bridge.start();
 		sessions[0]!.started.resolve();
 		expect(await starting).toEqual({ voice: "sol" });
+	});
+
+	test("uses the configured model on the next call without changing the active call", async () => {
+		const { bridge, sessions } = harness();
+		const first = bridge.start();
+		const live = sessions[0]!;
+		expect(live.options.model).toBe("gpt-live-1-codex");
+		cfgLiveModel.set(live.options.session.settings, "custom-live-model");
+		expect(live.options.model).toBe("gpt-live-1-codex");
+		live.started.resolve();
+		await first;
+		await bridge.stop();
+		const next = bridge.start();
+		expect(sessions[1]!.options.model).toBe("custom-live-model");
+		sessions[1]!.started.resolve();
+		await next;
+		await bridge.stop();
 	});
 
 	test("a second start fails while connecting, active, or closing", async () => {

@@ -1,10 +1,11 @@
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { runPauseScreen } from "@oh-my-pi/pi-tui/overlays/pause-screen";
+import { cfgLiveModel } from "../live/settings";
 import { clearSubmittedText } from "./helpers/draft";
 import { shutdownHandlerTui } from "./builtin-lifecycle";
 import { configureAgentMonitor } from "../monitor/configure";
 import { agentMonitorFor, startAgentMonitor, stopAgentMonitor } from "../monitor/controller";
-import { commandConsumed, errorMessage, usage } from "./helpers/parse";
+import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import type { SlashCommandSpec } from "./types";
 
 export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
@@ -61,9 +62,28 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "live",
 		icon: "voice",
-		description: "Start Codex-backed realtime voice mode",
-		handleTui: async (_command, runtime) => {
+		description: "Start Codex-backed realtime voice mode or choose its model",
+		allowArgs: true,
+		inlineHint: "[model [slug]]",
+		subcommands: [{ name: "model", description: "Show or set the model for the next live call", usage: "[slug]" }],
+		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);
+			const { verb, rest } = parseSubcommand(command.args);
+			if (verb === "model") {
+				try {
+					if (rest) cfgLiveModel.set(runtime.ctx.settings, rest);
+					runtime.ctx.showStatus(
+						`Live model: ${cfgLiveModel.get(runtime.ctx.settings)}${rest ? " (applies to the next live call)" : ""}`,
+					);
+				} catch (error) {
+					runtime.ctx.showError(errorMessage(error));
+				}
+				return;
+			}
+			if (verb) {
+				runtime.ctx.showError("Usage: /live [model [slug]]");
+				return;
+			}
 			await runtime.ctx.handleLiveCommand();
 		},
 	},

@@ -56,6 +56,7 @@ export interface LiveTransportOptions {
 	sessionId: string;
 	instructions: string;
 	voice: string;
+	model: string;
 	callbacks: LiveTransportCallbacks;
 	signal?: AbortSignal;
 }
@@ -213,7 +214,7 @@ export class CodexLiveTransport {
 			headers,
 			body: JSON.stringify({
 				sdp: offer,
-				session: buildLiveSessionPayload(this.#options.instructions, this.#options.voice),
+				session: buildLiveSessionPayload(this.#options.instructions, this.#options.voice, this.#options.model),
 			}),
 			signal: this.#options.signal,
 		});

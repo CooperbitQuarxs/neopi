@@ -14,6 +14,7 @@ import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import {
 	cfgLiveBlockDelegateKeyword,
+	cfgLiveModel,
 	cfgLiveForceDelegateKeyword,
 	cfgLiveForceUtteranceKeyword,
 	cfgLiveSuppressDelegateKeyword,
@@ -325,6 +326,41 @@ describe("LiveCommandController", () => {
 		try {
 			await h.controller.handleCommand();
 			expect(h.voice()).toBe("vale");
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("forwards the configured model through the controller to the transport", async () => {
+		let model: string | undefined;
+		const h = createHarness(
+			options =>
+				new LiveSessionController({
+					...options,
+					session: {
+						...options.session,
+						modelRegistry: { authStorage: {} },
+						sessionId: "configured-live-model",
+					} as unknown as LiveSessionControllerOptions["session"],
+					createTransport: options => {
+						model = options.model;
+						return {
+							async connect() {},
+							async send() {},
+							async close() {},
+							async setMuted() {},
+							pushAudio: () => true,
+						};
+					},
+					createRecorder: () => ({ stop() {} }),
+				}),
+		);
+		cfgLiveModel.set(h.ctx.settings, "custom-live-model");
+		try {
+			await h.controller.handleCommand();
+			expect(model).toBe("custom-live-model");
+			cfgLiveModel.set(h.ctx.settings, "next-live-model");
+			expect(model).toBe("custom-live-model");
 		} finally {
 			await h.controller.stop();
 		}
