@@ -3317,6 +3317,7 @@ export class Editor implements Component, Focusable {
 	#volatileDropped = false;
 	/** Id of the utterance being shown. Speech it leaves in the draft is tracked under this id. */
 	#utteranceId = 1;
+	#nextComposerReceipt = -1;
 	/** Committed or adopted speech still in the draft, as offsets into {@link #spanBase}. */
 	#speechSpans: SpeechSpan[] = [];
 	/** Draft text the {@link #speechSpans} offsets refer to. */
@@ -3474,6 +3475,36 @@ export class Editor implements Component, Focusable {
 		return this.#speechSpans.some(span => span.id === id) ? id : undefined;
 	}
 
+	/** Capture submitted draft ranges, excluding unchanged protected utterances. */
+	captureTextWithoutUtterances(ids: readonly number[]): { text: string; receipt: number; excludedIds: number[] } {
+		this.#reconcileVolatile();
+		const full = this.#draft();
+		this.#reconcileSpans(full);
+		const excluded = this.#removableSpeechSpans(ids, full);
+		const receipt = this.#nextComposerReceipt--;
+		let start = 0;
+		let text = "";
+		const capture = (end: number): void => {
+			if (end <= start) return;
+			const part = full.slice(start, end);
+			text += part;
+			this.#speechSpans.push({ id: receipt, start, end, text: part });
+		};
+		for (let index = excluded.length - 1; index >= 0; index--) {
+			const span = excluded[index]!;
+			capture(span.start);
+			start = Math.max(start, span.end);
+		}
+		capture(full.length);
+		return { text, receipt, excludedIds: excluded.map(span => span.id) };
+	}
+
+	#removableSpeechSpans(ids: readonly number[], full: string): SpeechSpan[] {
+		return this.#speechSpans
+			.filter(span => ids.includes(span.id) && full.slice(span.start, span.end) === span.text)
+			.sort((a, b) => b.start - a.start);
+	}
+
 	/**
 	 * Remove the speech committed under the given utterance ids as one undoable edit, leaving
 	 * the volatile preview intact. Only spans still holding exactly the spoken text are removed,
@@ -3484,9 +3515,7 @@ export class Editor implements Component, Focusable {
 		this.#reconcileVolatile();
 		let full = this.#state.lines.join("\n");
 		this.#reconcileSpans(full);
-		const targets = this.#speechSpans
-			.filter(span => ids.includes(span.id) && full.slice(span.start, span.end) === span.text)
-			.sort((a, b) => b.start - a.start);
+		const targets = this.#removableSpeechSpans(ids, full);
 		if (targets.length === 0) return 0;
 		this.#exitHistoryForEditing();
 		this.#recordUndoState();

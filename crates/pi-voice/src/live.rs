@@ -115,6 +115,7 @@ pub struct LivePeerCore {
 	started:          AtomicBool,
 	closing:          AtomicBool,
 	muted:            AtomicBool,
+	output_suppressed: AtomicBool,
 	failure_reported: AtomicBool,
 	queued_samples:   AtomicUsize,
 }
@@ -130,6 +131,7 @@ impl LivePeerCore {
 			started: AtomicBool::new(false),
 			closing: AtomicBool::new(false),
 			muted: AtomicBool::new(false),
+			output_suppressed: AtomicBool::new(false),
 			failure_reported: AtomicBool::new(false),
 			queued_samples: AtomicUsize::new(0),
 		}
@@ -148,6 +150,7 @@ impl LivePeerCore {
 		}
 
 		let playback = PlaybackStream::start(OUTPUT_SAMPLE_RATE)?;
+		playback.set_gain(if self.output_suppressed.load(Ordering::Acquire) { 0.0 } else { 1.0 })?;
 		let playback_tx = playback.writer()?;
 		let mut media_engine = MediaEngine::default();
 		let capability = opus_capability();
@@ -280,8 +283,18 @@ impl LivePeerCore {
 			.as_ref()
 			.map(|resources| resources.input_tx.clone())
 			.ok_or_else(|| "Native live WebRTC peer has not started".to_owned())?;
-		let sample_count = samples.len().min(MAX_QUEUED_INPUT_SAMPLES);
-		let retained = &samples[samples.len() - sample_count..];
+		self.queue_input_audio(&input_tx, samples)
+	}
+
+	fn queue_input_audio(
+		&self,
+		input_tx: &flume::Sender<InputCommand>,
+		samples: &[f32],
+	) -> VoiceResult<bool> {
+		let sample_count = samples.len();
+		if sample_count > MAX_QUEUED_INPUT_SAMPLES {
+			return Ok(false);
+		}
 		let queued = self
 			.queued_samples
 			.fetch_add(sample_count, Ordering::AcqRel);
@@ -291,10 +304,7 @@ impl LivePeerCore {
 				.fetch_sub(sample_count, Ordering::AcqRel);
 			return Ok(false);
 		}
-		if input_tx
-			.send(InputCommand::Audio(retained.to_vec()))
-			.is_err()
-		{
+		if input_tx.send(InputCommand::Audio(samples.to_vec())).is_err() {
 			self
 				.queued_samples
 				.fetch_sub(sample_count, Ordering::AcqRel);
@@ -316,6 +326,15 @@ impl LivePeerCore {
 			input_tx
 				.send(InputCommand::Muted(muted))
 				.map_err(|_| "Native live audio input is closed".to_owned())?;
+		}
+		Ok(())
+	}
+
+	/// Silence already queued audio at render time and discard new remote audio.
+	pub fn set_output_suppressed(&self, suppressed: bool) -> VoiceResult<()> {
+		self.output_suppressed.store(suppressed, Ordering::Release);
+		if let Some(resources) = self.resources.lock().as_ref() {
+			resources.playback.set_gain(if suppressed { 0.0 } else { 1.0 })?;
 		}
 		Ok(())
 	}
@@ -536,37 +555,31 @@ async fn run_input_audio(
 				};
 				match command {
 					InputCommand::Audio(samples) => {
-						if let Some(core) = core.upgrade() {
-							core.queued_samples.fetch_sub(samples.len(), Ordering::AcqRel);
-						}
 						if muted {
+							if let Some(core) = core.upgrade() {
+								core.queued_samples.fetch_sub(samples.len(), Ordering::AcqRel);
+							}
 							continue;
 						}
-						if samples.len() >= MAX_QUEUED_INPUT_SAMPLES {
-							pending.clear();
-							pending.extend_from_slice(&samples[samples.len() - MAX_QUEUED_INPUT_SAMPLES..]);
-							continue;
-						}
-						let overflow = pending
-							.len()
-							.saturating_add(samples.len())
-							.saturating_sub(MAX_QUEUED_INPUT_SAMPLES);
-						if overflow > 0 {
-							pending.drain(..overflow);
-						}
+						// Admission counts both the channel and this encoder backlog.
+						// Moving a chunk here does not free capacity or discard audio.
 						pending.extend_from_slice(&samples);
 					},
 					InputCommand::Muted(next_muted) => {
 						muted = next_muted;
+						if let Some(core) = core.upgrade() {
+							core.queued_samples.fetch_sub(pending.len(), Ordering::AcqRel);
+						}
 						pending.clear();
 					},
 					InputCommand::Close => break,
 				}
 			},
 			_ = ticker.tick() => {
+				let mut consumed = 0;
 				let mut frame = [0.0f32; INPUT_FRAME_SAMPLES];
 				if !muted {
-					let consumed = pending.len().min(INPUT_FRAME_SAMPLES);
+					consumed = pending.len().min(INPUT_FRAME_SAMPLES);
 					frame[..consumed].copy_from_slice(&pending[..consumed]);
 					if consumed > 0 {
 						pending.copy_within(consumed.., 0);
@@ -582,6 +595,9 @@ async fn run_input_audio(
 						return;
 					},
 				};
+				if let Some(core) = core.upgrade() {
+					core.queued_samples.fetch_sub(consumed, Ordering::AcqRel);
+				}
 				let sample = Sample {
 					data: Bytes::copy_from_slice(&encoded[..encoded_len]),
 					duration: INPUT_FRAME_DURATION,
@@ -690,6 +706,9 @@ async fn receive_output_audio(
 }
 
 fn write_output(playback_tx: &PlaybackWriter, samples: &[f32], core: &Weak<LivePeerCore>) -> bool {
+	if core.upgrade().is_none_or(|core| core.output_suppressed.load(Ordering::Acquire)) {
+		return true;
+	}
 	match playback_tx.write(samples) {
 		Ok(()) => true,
 		Err(error) => {
@@ -711,6 +730,11 @@ struct OutputLevel {
 
 impl OutputLevel {
 	fn observe(&mut self, decoded: &[f32], core: &Weak<LivePeerCore>) {
+		if core.upgrade().is_none_or(|core| core.output_suppressed.load(Ordering::Acquire)) {
+			self.sum_squares = 0.0;
+			self.samples = 0;
+			return;
+		}
 		let mut offset = 0;
 		while offset < decoded.len() {
 			let take = (OUTPUT_LEVEL_SAMPLES - self.samples).min(decoded.len() - offset);
@@ -728,5 +752,81 @@ impl OutputLevel {
 				self.samples = 0;
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::{future::Future, task::Poll};
+
+	use super::*;
+
+	fn test_core() -> Arc<LivePeerCore> {
+		Arc::new(LivePeerCore::new(LiveCallbacks {
+			event:   Box::new(|_| {}),
+			level:   Box::new(|_| {}),
+			failure: Box::new(|error| panic!("{error}")),
+		}))
+	}
+
+	#[tokio::test(start_paused = true)]
+	async fn queued_burst_stays_admitted_until_encoded_or_muted() {
+		let core = test_core();
+		let (tx, rx) = flume::unbounded();
+		let track = Arc::new(TrackLocalStaticSample::new(
+			opus_capability(),
+			"audio".to_owned(),
+			"admission-test".to_owned(),
+		));
+		let mut input = Box::pin(run_input_audio(track, rx.clone(), Arc::downgrade(&core)));
+		let chunk = vec![0.25; MAX_QUEUED_INPUT_SAMPLES / 2];
+		assert!(core.queue_input_audio(&tx, &chunk).unwrap());
+		assert!(core.queue_input_audio(&tx, &chunk).unwrap());
+
+		// Run the actual consumer until it parks on the next encoder tick.
+		std::future::poll_fn(|cx| {
+			assert!(input.as_mut().poll(cx).is_pending());
+			Poll::Ready(())
+		})
+		.await;
+		assert!(rx.is_empty(), "the burst moved into encoder-pending storage");
+		assert_eq!(core.queued_samples.load(Ordering::Acquire), MAX_QUEUED_INPUT_SAMPLES);
+		assert!(!core.queue_input_audio(&tx, &[0.5; INPUT_FRAME_SAMPLES]).unwrap());
+
+		tokio::select! {
+			_ = &mut input => panic!("input consumer stopped"),
+			_ = tokio::time::sleep(INPUT_FRAME_DURATION * 3) => {},
+		}
+		assert!(core.queued_samples.load(Ordering::Acquire) < MAX_QUEUED_INPUT_SAMPLES);
+		assert!(core.queue_input_audio(&tx, &[0.5; INPUT_FRAME_SAMPLES]).unwrap());
+
+		tx.send(InputCommand::Muted(true)).unwrap();
+		std::future::poll_fn(|cx| {
+			assert!(input.as_mut().poll(cx).is_pending());
+			Poll::Ready(())
+		})
+		.await;
+		assert_eq!(core.queued_samples.load(Ordering::Acquire), 0);
+
+		tx.send(InputCommand::Close).unwrap();
+		input.await;
+	}
+
+	#[test]
+	fn oversized_input_is_rejected_without_truncation() {
+		let core = test_core();
+		let (tx, rx) = flume::unbounded();
+		assert!(!core.queue_input_audio(&tx, &vec![0.25; MAX_QUEUED_INPUT_SAMPLES + 1]).unwrap());
+		assert!(rx.is_empty());
+		assert_eq!(core.queued_samples.load(Ordering::Acquire), 0);
+	}
+
+	#[test]
+	fn closed_input_releases_admission_reservation() {
+		let core = test_core();
+		let (tx, rx) = flume::unbounded();
+		drop(rx);
+		assert!(core.queue_input_audio(&tx, &[0.25; INPUT_FRAME_SAMPLES]).is_err());
+		assert_eq!(core.queued_samples.load(Ordering::Acquire), 0);
 	}
 }

@@ -9,6 +9,9 @@
 
 ### Added
 
+- Added configurable direct-address (`Iris`) and per-utterance force (`relay`) live keywords: leading addresses refuse primary handoffs, mentions elsewhere remain delegable, and forced utterances send the exact operator text once; editing the composer determines the final handoff even when speech originally addressed Iris ([#40](https://github.com/PsychedelicShayna/neopi/issues/40)).
+- Added Live Hold Mode and a configurable quiet floor in settings: keep speech in the composer until a trailing submit phrase forces a main-agent handoff, and reserve breathing room before voice responses or delegation ([#269](https://github.com/PsychedelicShayna/neopi/issues/269)).
+- Added persistent named routing policies with per-slot model, explicit effort, specialist and role boundary; task and Eval spawns can reference declared slots with a resolved routing preview ([#8](https://github.com/PsychedelicShayna/neopi/issues/8)).
 - GitHub now publishes platform binaries for every stable and nightly push, with manual stable builds available from Actions → CI → Run workflow.
 - Added NeoDeck's `deck-*` role namespace and configurable `deck-inbox` role in the model picker and RPC catalog, defaulting to GPT-6 Luna ([#277](https://github.com/PsychedelicShayna/neopi/issues/277)).
 - Proof sessions can hold destination-specific install locks for up to 60 minutes; installs report active or expired holds and support an explicit force override.
@@ -48,6 +51,8 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Live microphone admission now counts audio waiting for the encoder, so burst overflow is reported instead of silently discarding accepted speech ([#174](https://github.com/PsychedelicShayna/neopi/issues/174)).
+- Live speaker playback stays open through device priming, and completed delegations no longer replay held tool progress after their final answer ([#175](https://github.com/PsychedelicShayna/neopi/issues/175)).
 - Ctrl+Space xAI speech input cancels configured dictation immediately without losing the draft, and held shortcut repeats no longer activate configured Space dictation ([#225](https://github.com/PsychedelicShayna/neopi/issues/225)).
 - Ctrl+Space can start the next recording while an earlier transcript is pending; speech follows composer replacements and waits safely in the next draft while a post-processing chain runs ([#225](https://github.com/PsychedelicShayna/neopi/issues/225)).
 - `npi ctl` and the `ctl` tool remain reachable when live monitor panes fill their connection budget or rejected clients stop reading ([#404](https://github.com/PsychedelicShayna/neopi/issues/404)).
@@ -62,6 +67,7 @@
 - Live vocal handoffs steer without cancelling by default, offer queue-for-yield or explicit interrupt delivery, restore queued speech on Esc, and speak the preceding task's answer before a follow-up ([#218](https://github.com/PsychedelicShayna/neopi/issues/218)).
 - Accepted vocal requests stay queued when a typed post-compaction prompt fails, instead of being lost during rollback ([#218](https://github.com/PsychedelicShayna/neopi/issues/218)).
 - Queued vocal steering keeps the current request's reasoning and progress on its original voice route until the new handoff is actually consumed ([#371](https://github.com/PsychedelicShayna/neopi/issues/371)).
+- Rapid vocal handoffs preserve each request's spoken answer and route across yield boundaries, and co-batched requests each receive the combined answer ([#374](https://github.com/PsychedelicShayna/neopi/issues/374)).
 - Session discovery keeps listing files whose creation timestamp is missing or malformed ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
 - Live session attachment now negotiates protocol-v2 chunking and respects slow stdout consumers ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
 - Role switches and runtime fallbacks now honor their saved effort policies and admitted task scope, ordered subagent selectors retain the chosen source's explicit effort through role expansion, advisor classification stops on cancellation, and concurrent or in-flight fallback edits retain paired effort settings ([#178](https://github.com/PsychedelicShayna/neopi/issues/178)).

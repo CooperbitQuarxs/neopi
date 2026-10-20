@@ -49,6 +49,62 @@ export const cfgLiveDelegationDelivery = register({
 	},
 });
 
+export const cfgLiveSuppressDelegateKeyword = register({
+	id: "live.suppressDelegateKeyword",
+	type: "string",
+	default: "Iris",
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Direct-Address Keyword",
+		description: "Leading address that rejects handoffs to the main agent; case/punctuation insensitive (empty disables)",
+	},
+});
+
+export const cfgLiveForceUtteranceKeyword = register({
+	id: "live.forceUtteranceKeyword",
+	type: "string",
+	default: "relay",
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Force-Utterance Keyword",
+		description: "Phrase anywhere in finalized speech that requires a canonical main-agent handoff; direct address wins (empty disables)",
+	},
+});
+
+export const cfgLiveHoldMode = register({
+	id: "live.holdMode",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Hold Mode",
+		description: "Keep the floor until a trailing submit or force-delegate phrase sends the composer to the main agent",
+	},
+});
+
+export const cfgLiveQuietFloorMs = register({
+	id: "live.quietFloorMs",
+	type: "number",
+	default: 0,
+	validate: value => {
+		if (typeof value === "number" && value < 0) throw new Error("Live quiet floor must not be negative");
+	},
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Quiet Floor (ms)",
+		description: "Minimum quiet after every composer write before voice responses or delegation; 0 disables",
+		options: [
+			{ value: "0", label: "Disabled (default)" },
+			{ value: "2000", label: "2000 ms" },
+			{ value: "5000", label: "5000 ms" },
+			{ value: "10000", label: "10000 ms" },
+		],
+	},
+});
 export const cfgLiveForceDelegateKeyword = register({
 	id: "live.forceDelegateKeyword",
 	type: "string",
