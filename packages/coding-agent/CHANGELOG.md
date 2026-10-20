@@ -10,6 +10,7 @@
 ### Added
 
 - Named profiles can preload selected persistent memory files before the first turn through `launch-memory.json`; inspect the loaded snapshot with `/launch-profile` ([#65](https://github.com/PsychedelicShayna/neopi/issues/65)).
+- Fill missing model facts from an optional ordered source chain, pin or borrow individual fields, and add unlisted models with a provenance preview through F6 in `/models`; invalid saved fields show warnings without blocking startup, and unresolved facts preserve discovery's conservative request defaults ([#70](https://github.com/PsychedelicShayna/neopi/issues/70)).
 - `/model` opens the rich provider-sidebar picker on recently used models and switches only the current session; `/models` retains role management and `/switch` and Alt+P keep the compact picker ([#55](https://github.com/PsychedelicShayna/neopi/issues/55)).
 - Create and rename regex or provider-prefix fallback chains directly in the model hub, including regex keys without a slash ([#248](https://github.com/PsychedelicShayna/neopi/issues/248)).
 - Added optional global and project `settings.toml` overlays with whole-key precedence over YAML, plus `npi config dump-toml` for documented defaults ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).

@@ -32,6 +32,58 @@ Legacy behavior still present:
 - If both YAML files are missing and `models.json` exists at the same location, it is migrated to `models.yml`.
 - Explicit `.json` / `.jsonc` config paths are still supported when passed programmatically to `ModelRegistry`.
 
+## Optional model-fact sources and field overrides
+
+Open `/models` and press F6 to edit model facts. The session-only `/model`
+picker does not expose settings edits. Choose a provider and model, or type an
+unlisted model ID under a configured provider. Each field accepts a literal,
+a reference to that field on another `provider/model`, or Automatic. The preview
+shows the resolved value and its source before saving. Esc leaves the current
+field, then closes the editor without saving.
+
+This feature is disabled by default. Its settings live in `config.yml`, not
+`models.yml`:
+
+```yaml
+modelFacts:
+  enabled: true
+  sources: [openrouter, stencil]
+  overrides:
+    xai-oauth/grok-4.7:
+      cost:
+        from: xai/grok-4.7
+      efforts:
+        from: xai/grok-4.7
+    my-provider/unlisted-model:
+      contextWindow: 128000
+      maxTokens: 16384
+      input: [text, image]
+```
+
+`sources` is an ordered, replaceable list. `openrouter` uses its public catalog
+without requiring an API key; `stencil` uses the shared models.dev mirror at
+`catalog.stencil.so`. Other names use the registered provider's existing
+discovery, credentials and cache, including extension-only providers. Failed
+sources contribute no new facts. Offline refreshes do not fetch public catalogs.
+
+For each model, the first matching source with a missing field supplies it.
+Nonzero provider prices and known limits remain unchanged unless a field
+override replaces them. An authoritative effort ladder corrects a provider's
+false "no reasoning" report. A discovery text-only placeholder can receive
+input modalities from a source; explicitly reported text-only input stays put.
+The fields are `cost`, `contextWindow`, `maxTokens`, `input`, `reasoning`, and
+`efforts`. Price literals use rates per million tokens. Borrowing a field does
+not copy another model's endpoint, credentials, other facts or wire-model IDs.
+
+An override entry also registers an unlisted model using its target provider's
+transport. It does not create a provider or copy the referenced provider's route.
+Provider provenance means the registry's existing provider row, including its
+catalog and KDL corrections. Source, literal override and exact-reference
+provenance are reported separately; unavailable facts remain unknown.
+Per-model compatibility and transport policy still belongs in the catalog's KDL
+rules. The shared fact-resolution API is also the prerequisite for the
+agent-facing lookup tracked in [#150](https://github.com/PsychedelicShayna/neopi/issues/150).
+
 ## `models.yml` / `models.yaml` shape
 
 ```yaml

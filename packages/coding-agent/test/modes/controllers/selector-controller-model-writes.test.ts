@@ -9,6 +9,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { type RawSettings, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
+import * as factEditorModule from "@oh-my-pi/pi-coding-agent/modes/components/model-fact-editor";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
@@ -53,7 +54,7 @@ describe("SelectorController model hub writes", () => {
 			agent: new Agent({ initialState: { model: initial, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.inMemory(),
 			settings,
-			modelRegistry: new ModelRegistry(authStorage),
+			modelRegistry: new ModelRegistry(authStorage, undefined, { settings }),
 			obfuscator: new SecretObfuscator([]),
 		});
 		session = live;
@@ -100,6 +101,7 @@ describe("SelectorController model hub writes", () => {
 		controller.showModelSelector({ sessionOnly: true });
 		expect(options?.sessionOnly).toBe(true);
 		expect(options?.pinnedProviders).toEqual([]);
+		expect(callbacks?.onEditFacts).toBeUndefined();
 		expect(await callbacks?.onPick?.(model("claude-sonnet-4-5"), "anthropic/claude-sonnet-4-5")).toBe(true);
 		await settings.flush();
 		expect(showError).not.toHaveBeenCalled();
@@ -107,6 +109,41 @@ describe("SelectorController model hub writes", () => {
 		expect(settings.getModelRole("default")).toBe("anthropic/claude-opus-4-5");
 		expect(settings.getModelRole("smol")).toBe("anthropic/claude-sonnet-4-5");
 		expect(await Bun.file(configPath).text()).toBe(original);
+	});
+
+	it("opens the fact editor from full models and saves facts without changing role assignments", async () => {
+		const agentDir = tempDir.join("agent");
+		const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+		const initial = model("claude-sonnet-4-5");
+		settings.setModelRole("default", `anthropic/${initial.id}`);
+		const { controller } = start(settings, initial);
+		let options: factEditorModule.ModelFactEditorOptions | undefined;
+		vi.spyOn(factEditorModule, "ModelFactEditorComponent").mockImplementation(function (
+			value: factEditorModule.ModelFactEditorOptions,
+		) {
+			options = value;
+			return { dispose: () => {} };
+		} as never);
+		if (!session) throw new Error("session missing");
+		const refresh = vi.spyOn(session, "refreshModelFacts").mockResolvedValue();
+		openModelHub(controller).onEditFacts?.("anthropic", initial);
+		if (!options) throw new Error("fact editor was not opened");
+		expect(options.provider).toBe("anthropic");
+		expect(options.modelId).toBe(initial.id);
+		await options.onSave({
+			enabled: true,
+			sources: ["extension-only"],
+			overrides: { [`anthropic/${initial.id}`]: { contextWindow: 96_000 } },
+		});
+		expect(refresh).toHaveBeenCalledTimes(1);
+		expect(settings.getModelRole("default")).toBe(`anthropic/${initial.id}`);
+		const saved = YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text()) as RawSettings;
+		expect(saved.modelFacts).toEqual({
+			enabled: true,
+			sources: ["extension-only"],
+			overrides: { [`anthropic/${initial.id}`]: { contextWindow: 96_000 } },
+		});
+		options.onClose();
 	});
 	it("saves only the edited fallback chain, never the chains a --config overlay supplies", async () => {
 		const agentDir = tempDir.join("agent");
