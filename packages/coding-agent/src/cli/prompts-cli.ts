@@ -418,6 +418,7 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 									{},
 								),
 								localHelpers: [...new Set(peers.flatMap(peer => peer.localHelpers ?? []))],
+								partials: Object.assign({}, ...peers.map(peer => peer.partials)),
 								consumerHints: [],
 							};
 				checks.set(file, { asset: contract, text: scope === "agent-body" ? agentBody(text) : text });
@@ -481,6 +482,7 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 												{},
 											),
 											localHelpers: [...new Set(peers.flatMap(peer => peer.localHelpers ?? []))],
+											partials: Object.assign({}, ...peers.map(peer => peer.partials)),
 										};
 							checks.set(asset.id, {
 								asset: contract,
@@ -500,10 +502,16 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 			const diagnostics: PromptDiagnostic[] = [];
 			for (const [file, check] of checks) {
 				try {
+					const partials: Record<string, string> = {};
+					for (const [name, id] of Object.entries(check.asset.partials ?? {})) {
+						const partial = assets.find(asset => asset.id === id);
+						if (partial) partials[name] = inspect(partial).text;
+					}
 					diagnostics.push(
 						...(options.validate ?? validatePrompt)(check.asset, check.text, {
 							file,
 							fixture,
+							partials,
 							runtime: flags.runtime,
 							strict: flags.strict,
 							strictWarnings: flags["strict-warnings"],

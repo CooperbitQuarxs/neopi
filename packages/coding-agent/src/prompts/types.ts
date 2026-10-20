@@ -18,6 +18,8 @@ export interface PromptAsset {
 	keys: PromptContextKey[];
 	fixture: Record<string, unknown>;
 	localHelpers?: string[];
+	/** Partial names exposed by the consumer, mapped to catalog asset ids. */
+	partials?: Record<string, string>;
 	consumerHints: string[];
 	inspectionOnly?: boolean;
 }

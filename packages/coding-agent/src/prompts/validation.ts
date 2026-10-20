@@ -12,6 +12,8 @@ export interface ValidatePromptOptions {
 	runtime?: boolean;
 	strict?: boolean;
 	strictWarnings?: boolean;
+	/** Resolved partial sources for the selected override directory. */
+	partials?: Record<string, string>;
 }
 
 function nearest(name: string, candidates: Iterable<string>): string[] {
@@ -87,6 +89,11 @@ export function validatePrompt(
 	const diagnostics: PromptDiagnostic[] = [];
 	const file = options.file ?? asset.relPath;
 	const helpers = new Set([...globalPromptHelpers(), ...(asset.localHelpers ?? [])]);
+	const partials: Record<string, string> = {};
+	for (const [name, id] of Object.entries(asset.partials ?? {})) {
+		const source = options.partials?.[name] ?? promptAssets.find(candidate => candidate.id === id)?.bundled;
+		if (source !== undefined) partials[name] = source;
+	}
 	function report(
 		ref: PromptReference,
 		code: string,
@@ -136,7 +143,8 @@ export function validatePrompt(
 	}
 	for (const ref of references) {
 		if (ref.kind === "partial") {
-			report(ref, "unknown-partial", `Partial '${ref.name}' is not exposed in scope '${asset.scope}'.`);
+			if (!Object.hasOwn(partials, ref.name))
+				report(ref, "unknown-partial", `Partial '${ref.name}' is not exposed in scope '${asset.scope}'.`);
 			continue;
 		}
 		if (ref.kind === "helper") {
@@ -190,8 +198,14 @@ export function validatePrompt(
 				`'${root}' is ${key.type}.`,
 			);
 	}
+	const fixture = { ...asset.fixture, ...options.fixture };
 	for (const key of asset.keys) {
-		if (!key.required || key.resolution !== "runtime-only" || hasValue(options.fixture ?? {}, key.path)) continue;
+		if (
+			!key.required ||
+			key.resolution !== "runtime-only" ||
+			hasValue(options.runtime ? (options.fixture ?? {}) : fixture, key.path)
+		)
+			continue;
 		diagnostics.push({
 			code: "missing-required-runtime",
 			severity: options.runtime ? "error" : "note",
@@ -210,7 +224,7 @@ export function validatePrompt(
 	}
 	if (!diagnostics.some(item => item.severity === "error")) {
 		try {
-			prompt.render(text, { ...asset.fixture, ...options.fixture });
+			prompt.render(text, fixture, { partials });
 		} catch (error) {
 			diagnostics.push({
 				code: "render-error",

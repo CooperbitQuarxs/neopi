@@ -3649,6 +3649,7 @@ export const promptAssets: readonly PromptAsset[] = [
 		relPath: "moa/envelopes/defend.md",
 		bundled: asset171,
 		scope: "feature:moa/envelopes/defend",
+		partials: { "moa-parts": "moa/envelopes/moa-parts.md" },
 		group: "core",
 		keys: [
 			{
@@ -3762,6 +3763,7 @@ export const promptAssets: readonly PromptAsset[] = [
 		relPath: "moa/envelopes/disagree.md",
 		bundled: asset172,
 		scope: "feature:moa/envelopes/disagree",
+		partials: { "moa-parts": "moa/envelopes/moa-parts.md" },
 		group: "core",
 		keys: [
 			{
@@ -3988,6 +3990,7 @@ export const promptAssets: readonly PromptAsset[] = [
 		relPath: "moa/envelopes/handoff.md",
 		bundled: asset174,
 		scope: "feature:moa/envelopes/handoff",
+		partials: { "moa-parts": "moa/envelopes/moa-parts.md" },
 		group: "core",
 		keys: [
 			{
@@ -4101,6 +4104,7 @@ export const promptAssets: readonly PromptAsset[] = [
 		relPath: "moa/envelopes/judge.md",
 		bundled: asset175,
 		scope: "feature:moa/envelopes/judge",
+		partials: { "moa-parts": "moa/envelopes/moa-parts.md" },
 		group: "core",
 		keys: [
 			{
@@ -4214,6 +4218,7 @@ export const promptAssets: readonly PromptAsset[] = [
 		relPath: "moa/envelopes/limit.md",
 		bundled: asset176,
 		scope: "feature:moa/envelopes/limit",
+		partials: { "moa-parts": "moa/envelopes/moa-parts.md" },
 		group: "core",
 		keys: [
 			{

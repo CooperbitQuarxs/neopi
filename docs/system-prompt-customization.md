@@ -165,11 +165,15 @@ the same contract for one template. Live identity exposes only `username` and
 
 `npi prompts check` validates installed overrides or supplied files, asset ids,
 and globs. It also accepts agent prompt bodies with `--agents` or `--scope
-agent-body`. `--fixture <json>` supplies representative context; `--runtime`
-requires declared runtime-only values rather than merely noting their absence.
+agent-body`. `--fixture <json>` supplies representative context. Static checks
+use canned values, including live identity, without reporting missing runtime
+values that the canned fixture already supplies. `--runtime` requires explicit
+fixture values for declared runtime-only keys.
 `--strict-warnings` turns warnings into errors. Validation checks syntax,
-registered helper availability, scope, declared paths and a dry render without
-changing the runtime engine's permissive `strict: false` setting.
+registered helper and scoped partial availability, declared paths and a dry
+render without changing the runtime engine's permissive `strict: false` setting.
+MOA envelope partials resolve from the selected override directory, with bundled
+fallbacks for files that have not been unpacked.
 
 Diagnostics identify the file, line, column, expression and scope, with the
 expected type and nearby names where available. Exit codes are `0` for no

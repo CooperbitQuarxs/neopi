@@ -91,12 +91,13 @@ describe("built-in prompt validation", () => {
 		expect(diagnostics[0]).toMatchObject({ code: "compile-error", file: "broken.md", line: 2, scope: "test" });
 	});
 
-	it("notes missing required runtime data and requires it with --runtime", () => {
+	it("uses canned runtime data silently for static checks but requires explicit runtime fixtures", () => {
 		const target = asset({
 			keys: [{ path: "roster", type: "string", required: true, resolution: "runtime-only" }],
 			fixture: { roster: "fixture" },
 		});
-		expect(validatePrompt(target, "{{roster}}")[0]).toMatchObject({
+		expect(validatePrompt(target, "{{roster}}")).toEqual([]);
+		expect(validatePrompt({ ...target, fixture: {} }, "{{roster}}")[0]).toMatchObject({
 			code: "missing-required-runtime",
 			severity: "note",
 		});
@@ -165,16 +166,7 @@ describe("generated prompt lexicon", () => {
 	it("every shipped reference belongs to its exposed scope contract", () => {
 		const invalid = promptAssets.flatMap(target =>
 			validatePrompt(target, target.bundled)
-				.filter(item =>
-					[
-						"unknown-variable",
-						"unknown-helper",
-						"wrong-scope",
-						"bad-type-path",
-						"compile-error",
-						"render-error",
-					].includes(item.code),
-				)
+				.filter(item => item.severity === "error")
 				.map(item => ({ asset: target.id, code: item.code, expression: item.expression, message: item.message })),
 		);
 		expect(invalid).toEqual([]);

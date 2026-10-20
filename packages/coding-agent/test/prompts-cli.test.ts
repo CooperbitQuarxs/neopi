@@ -12,6 +12,7 @@ import {
 } from "../src/cli/prompts-cli";
 import { commands } from "../src/cli-commands";
 import Prompts from "../src/commands/prompts";
+import { promptAssets } from "../src/prompts/catalog";
 import type { PromptAsset, PromptDiagnostic } from "../src/prompts/types";
 
 const assets: readonly PromptAsset[] = [
@@ -305,6 +306,56 @@ describe("prompts inspection", () => {
 });
 
 describe("prompts check", () => {
+	it("checks a full unmodified unpack without errors or runtime notes", async () => {
+		const dir = path.join(scratch, "full-catalog");
+		expect((await run("unpack", { include: "all", dir }, [], { assets: promptAssets })).code).toBe(0);
+		const result = await run("check", { dir }, [], { assets: promptAssets });
+		const checked = result.json() as CheckResult;
+		expect(checked.checked).toHaveLength(promptAssets.length);
+		expect(checked.diagnostics).toEqual([]);
+		expect(result.code).toBe(0);
+	});
+
+	it("resolves envelope partials from the checked directory without exposing them to other scopes", async () => {
+		const dir = path.join(scratch, "partials");
+		const envelope = "moa/envelopes/handoff.md";
+		const partial = path.join(dir, "moa/envelopes/moa-parts.md");
+		expect((await run("unpack", { include: "all", dir }, [], { assets: promptAssets })).code).toBe(0);
+		expect((await run("check", { dir }, [envelope], { assets: promptAssets })).code).toBe(0);
+		await Bun.write(partial, "{{#if x}}");
+		const broken = await run("check", { dir }, [envelope], { assets: promptAssets });
+		expect(broken.code).toBe(1);
+		expect((broken.json() as CheckResult).diagnostics).toEqual([
+			expect.objectContaining({ code: "render-error" }),
+		]);
+		await Bun.write(partial, "{{x.output}}");
+		expect((await run("check", { dir }, [envelope], { assets: promptAssets })).code).toBe(0);
+		const system = "system/system-prompt.md";
+		await Bun.write(path.join(dir, system), "{{> moa-parts}}");
+		const wrongScope = await run("check", { dir }, [system], { assets: promptAssets });
+		expect(wrongScope.code).toBe(1);
+		expect((wrongScope.json() as CheckResult).diagnostics).toEqual([
+			expect.objectContaining({ code: "unknown-partial" }),
+		]);
+	});
+
+	it("requires explicit live identity only for runtime checking, not canned static renders", async () => {
+		const live = "live/live-instructions.md";
+		expect((await run("check", {}, [live], { assets: promptAssets })).json()).toMatchObject({
+			diagnostics: [],
+		});
+		const runtime = await run("check", { runtime: true }, [live], { assets: promptAssets });
+		expect(runtime.code).toBe(1);
+		expect((runtime.json() as CheckResult).diagnostics).toHaveLength(2);
+		expect(
+			(
+				await run("check", { runtime: true, fixture: '{"username":"alex","firstName":"Alex"}' }, [live], {
+					assets: promptAssets,
+				})
+			).code,
+		).toBe(0);
+	});
+
 	it("checks bundled ids and dry-renders against supplied JSON fixtures", async () => {
 		expect((await run("check", {}, [assets[2].id])).code).toBe(0);
 		let observed: unknown;
