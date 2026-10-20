@@ -66,6 +66,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Stopping a live call while its persona or settings load no longer leaves a transport connected after cancellation ([#482](https://github.com/PsychedelicShayna/neopi/issues/482)).
 - Token-bounded text, including live transcript history, keeps emoji and combining characters intact at truncation boundaries ([#205](https://github.com/PsychedelicShayna/neopi/issues/205)).
 - Short work contracts no longer block ordinary messages by counting tool runtime state as prompt tokens; genuinely oversized contexts still fail without truncating clauses ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
 - Session work contracts remain intact when a model's context-window size is unknown, without assuming a token budget ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).

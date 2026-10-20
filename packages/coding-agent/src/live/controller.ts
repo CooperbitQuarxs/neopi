@@ -464,6 +464,11 @@ export class LiveSessionController {
 					onOutputLevel: level => this.#guardEvent(() => this.#handleOutputLevel(level)),
 				},
 			});
+			// Stop may have finished while persona/settings loaded, before it could own this transport.
+			if (this.#stopped) {
+				await transport.close();
+				throw this.#failure ?? new Error("The live session stopped while loading settings.");
+			}
 			this.#transport = transport;
 			this.refreshTurnGate();
 			await transport.connect();
