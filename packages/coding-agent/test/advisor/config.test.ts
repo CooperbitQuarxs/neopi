@@ -30,7 +30,43 @@ describe("discoverAdvisorConfigs", () => {
 
 	afterEach(async () => {
 		await fsp.rm(tmp, { recursive: true, force: true });
+		vi.restoreAllMocks();
 		await fsp.rm(agentDir, { recursive: true, force: true });
+	});
+
+	it("reports winning source files without hiding user, ancestor, native, or disabled advisors", async () => {
+		const cwd = path.join(tmp, "nested", "leaf");
+		const userFile = path.join(agentDir, "WATCHDOG.yaml");
+		const rootFile = path.join(tmp, "WATCHDOG.yml");
+		const nativeFile = path.join(tmp, ".omp", "WATCHDOG.yml");
+		const leafFile = path.join(cwd, "WATCHDOG.yaml");
+		await Bun.write(userFile, "advisors:\n  - name: User\n    enabled: false\n  - name: Shared\n");
+		await Bun.write(rootFile, "advisors:\n  - name: Ancestor\n  - name: Shared\n");
+		await Bun.write(nativeFile, "advisors:\n  - name: Native\n");
+		await Bun.write(leafFile, "advisors:\n  - name: Shared\n    enabled: false\n");
+
+		const result = await discoverAdvisorConfigs(cwd, agentDir);
+		expect(result.advisors.map(advisor => advisor.name)).toEqual(["User", "Shared", "Native", "Ancestor"]);
+		expect(result.advisors.find(advisor => advisor.name === "Shared")?.enabled).toBe(false);
+		expect([...result.sources]).toEqual([
+			["user", { path: userFile, scope: "user" }],
+			["shared", { path: leafFile, scope: "project" }],
+			["native", { path: nativeFile, scope: "project" }],
+			["ancestor", { path: rootFile, scope: "project" }],
+		]);
+	});
+
+	it("keeps a home ancestor file in project scope outside repositories", async () => {
+		await fsp.rm(path.join(tmp, ".git"), { recursive: true });
+		vi.spyOn(os, "homedir").mockReturnValue(tmp);
+		const cwd = path.join(tmp, "nested");
+		await fsp.mkdir(cwd);
+		const homeFile = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(homeFile, "advisors:\n  - name: Velvet\n");
+
+		const result = await discoverAdvisorConfigs(cwd, agentDir);
+		expect(result.advisors.map(advisor => advisor.name)).toEqual(["Velvet"]);
+		expect(result.sources.get("velvet")).toEqual({ path: homeFile, scope: "project" });
 	});
 
 	it("parses advisors, the model thinking suffix, cadence, tool filtering, and shared instructions", async () => {
