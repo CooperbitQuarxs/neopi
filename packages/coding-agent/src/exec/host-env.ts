@@ -14,8 +14,9 @@ let toolHostEnv: Promise<Record<string, string>> | undefined;
 /** Lazily persist the launcher's env, never the sanitized tool env or project dotenv. */
 export async function getHostEnvForTools(overlay?: Record<string, string>): Promise<Record<string, string>> {
 	const env = await (toolHostEnv ??= createHostEnvForTools());
-	if (!overlay) return env;
-	const keys = Object.keys(overlay).filter(key => !(key in hostEnv) && SHELL_ENV_NAME.test(key));
+	const keys = [...new Set([...Object.keys(process.env), ...Object.keys(overlay ?? {})])].filter(
+		key => !(key in hostEnv) && SHELL_ENV_NAME.test(key),
+	);
 	if (keys.length === 0) return env;
 	return { ...env, OMP_HOST_OVERLAY_KEYS: keys.join(" ") };
 }
