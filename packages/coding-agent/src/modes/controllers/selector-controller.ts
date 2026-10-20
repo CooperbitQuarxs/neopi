@@ -1608,7 +1608,8 @@ export class SelectorController {
 			{
 				onPick: async (model, selector) => {
 					const tokens = this.ctx.session.getContextUsage()?.tokens ?? 0;
-					const overContext = model.contextWindow > 0 && tokens > model.contextWindow;
+					const contextWindow = model.contextWindow ?? 0;
+					const overContext = contextWindow > 0 && tokens > contextWindow;
 					try {
 						if (overContext) done();
 						await this.#applySessionModel(model, selector, undefined, overContext);
