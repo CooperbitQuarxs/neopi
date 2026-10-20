@@ -75,6 +75,10 @@ export type AdvisorSyncBacklog = (typeof ADVISOR_SYNC_BACKLOG_MODES)[number];
 
 /** One advisor declared in `WATCHDOG.yml`; its instructions specialize the shared baseline. */
 export interface AdvisorConfig {
+	/** Hidden persistent identity. Legacy rows receive one on their first save. */
+	id?: string;
+	/** Discovery metadata, never serialized as part of an advisor entry. */
+	sourceScope?: AdvisorConfigScope;
 	name: string;
 	/** Model selector with an optional `:level` thinking suffix, resolved like any other model override. */
 	model?: string;
@@ -1514,7 +1518,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#ensureRosterVisible(): void {
-		if (this.#doc.advisors.length === 0) this.#doc.advisors.push({ name: "default" });
+		if (this.#doc.advisors.length === 0) this.#doc.advisors.push({ id: crypto.randomUUID(), name: "default" });
 	}
 
 	#hasSyntheticDefaultAdvisor(doc: WatchdogConfigDoc): boolean {
@@ -1632,7 +1636,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	async #onListSelect(value: string, selectedValue?: string): Promise<void> {
 		if (value === "add") {
-			this.#doc.advisors.push({ name: `Advisor ${this.#doc.advisors.length + 1}` });
+			this.#doc.advisors.push({ id: crypto.randomUUID(), name: `Advisor ${this.#doc.advisors.length + 1}` });
 			this.#dirty = true;
 			this.#showDetail(this.#doc.advisors.length - 1);
 			return;
@@ -1789,6 +1793,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	#cloneAdvisor(index: number): void {
 		const advisor = structuredClone(this.#doc.advisors[index]);
+		advisor.id = crypto.randomUUID();
 		const base = `${advisor.name} (copy)`;
 		const existingSlugs = new Set(this.#doc.advisors.map(entry => slugifyAdvisorName(entry.name)));
 		advisor.name = base;
