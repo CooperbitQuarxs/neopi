@@ -72,7 +72,7 @@ function alternatingGrid(count: number, firstAxis: "rows" | "columns"): Cell {
 	for (let start = 1; start < count;) {
 		const edgeLength = axis === "rows" ? root.columns : root.rows;
 		const children: Cell[] = [];
-		for (let end = Math.min(start + edgeLength, count); start < end; start++) {
+		for (const end = Math.min(start + edgeLength, count); start < end; start++) {
 			children.push({ index: start, rows: 1, columns: 1 });
 		}
 		const edge = strip(children, axis === "rows" ? "columns" : "rows");
