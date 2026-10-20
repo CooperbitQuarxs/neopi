@@ -61,7 +61,20 @@ async function fixture(layout: Partial<MonitorLayoutConfig> = { maxRows: 2, maxC
 	const root = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "npi-monitor-tmux-")));
 	const socket = path.basename(root);
 	const tmux = (args: string[]) => runTmux(socket, root, args);
-	const seed = await tmux(["-f", "/dev/null", "new-session", "-d", "-x", "122", "-y", "43", "-s", "user", "sleep", "1000"]);
+	const seed = await tmux([
+		"-f",
+		"/dev/null",
+		"new-session",
+		"-d",
+		"-x",
+		"122",
+		"-y",
+		"43",
+		"-s",
+		"user",
+		"sleep",
+		"1000",
+	]);
 	if (seed.exitCode !== 0) throw new Error("private tmux server did not start");
 	cleanups.push(async () => {
 		await tmux(["kill-server"]);
@@ -208,110 +221,167 @@ interface PaneGeometry {
 	height: number;
 }
 
-async function geometry(tmux: (args: string[]) => Promise<{ stdout: string }>, session: string): Promise<PaneGeometry[]> {
-	const out = await tmux(["list-panes", "-s", "-t", session, "-F",
-		"#{@npi_agent} #{window_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"]);
-	return out.stdout.trim().split("\n").map(line => {
-		const [agent, window, x, y, width, height] = line.split(" ");
-		return { agent: agent!, window: window!, x: Number(x), y: Number(y), width: Number(width), height: Number(height) };
-	}).sort((a, b) => a.agent.localeCompare(b.agent));
+async function geometry(
+	tmux: (args: string[]) => Promise<{ stdout: string }>,
+	session: string,
+): Promise<PaneGeometry[]> {
+	const out = await tmux([
+		"list-panes",
+		"-s",
+		"-t",
+		session,
+		"-F",
+		"#{@npi_agent} #{window_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}",
+	]);
+	return out.stdout
+		.trim()
+		.split("\n")
+		.map(line => {
+			const [agent, window, x, y, width, height] = line.split(" ");
+			return {
+				agent: agent!,
+				window: window!,
+				x: Number(x),
+				y: Number(y),
+				width: Number(width),
+				height: Number(height),
+			};
+		})
+		.sort((a, b) => a.agent.localeCompare(b.agent));
 }
 
-it.skipIf(!tmuxPath)("keeps 2×infinite rows-first in one equalized grid beyond the old six-pane cap", async () => {
-	const { monitor, create, tmux } = await fixture({});
-	const manager = create();
-	cleanups.push(() => manager.stop());
-	await manager.start();
-	for (const id of ["A", "B", "C", "D", "E", "F", "G", "H"]) {
-		monitor.targetList.push(target(id));
+it.skipIf(!tmuxPath)(
+	"keeps 2×infinite rows-first in one equalized grid beyond the old six-pane cap",
+	async () => {
+		const { monitor, create, tmux } = await fixture({});
+		const manager = create();
+		cleanups.push(() => manager.stop());
+		await manager.start();
+		for (const id of ["A", "B", "C", "D", "E", "F", "G", "H"]) {
+			monitor.targetList.push(target(id));
+			await manager.refresh();
+		}
+		const status = manager.status();
+		expect(status.panes).toHaveLength(8);
+		const panes = await geometry(tmux, status.sessionId);
+		expect(new Set(panes.map(pane => pane.window)).size).toBe(1);
+		expect(new Set(panes.map(pane => pane.x)).size).toBe(4);
+		expect(new Set(panes.map(pane => pane.y)).size).toBe(2);
+		for (let i = 0; i < 8; i += 2) {
+			expect(panes[i]!.x).toBe(panes[i + 1]!.x);
+			expect(panes[i]!.y).toBeLessThan(panes[i + 1]!.y);
+		}
+		expect(
+			Math.max(...panes.map(pane => pane.width)) - Math.min(...panes.map(pane => pane.width)),
+		).toBeLessThanOrEqual(1);
+		expect(
+			Math.max(...panes.map(pane => pane.height)) - Math.min(...panes.map(pane => pane.height)),
+		).toBeLessThanOrEqual(1);
+	},
+	30_000,
+);
+
+it.skipIf(!tmuxPath)(
+	"makes rows=1 full-height columns without overflowing a small terminal",
+	async () => {
+		const { monitor, create, tmux } = await fixture({ maxRows: 1 });
+		const manager = create();
+		cleanups.push(() => manager.stop());
+		const status = await manager.start();
+		await tmux(["resize-window", "-t", status.sessionId, "-x", "12", "-y", "12"]);
+		monitor.targetList = "ABCDEFGH".split("").map(id => target(id));
 		await manager.refresh();
-	}
-	const status = manager.status();
-	expect(status.panes).toHaveLength(8);
-	const panes = await geometry(tmux, status.sessionId);
-	expect(new Set(panes.map(pane => pane.window)).size).toBe(1);
-	expect(new Set(panes.map(pane => pane.x)).size).toBe(4);
-	expect(new Set(panes.map(pane => pane.y)).size).toBe(2);
-	for (let i = 0; i < 8; i += 2) {
-		expect(panes[i]!.x).toBe(panes[i + 1]!.x);
-		expect(panes[i]!.y).toBeLessThan(panes[i + 1]!.y);
-	}
-	expect(Math.max(...panes.map(pane => pane.width)) - Math.min(...panes.map(pane => pane.width))).toBeLessThanOrEqual(1);
-	expect(Math.max(...panes.map(pane => pane.height)) - Math.min(...panes.map(pane => pane.height))).toBeLessThanOrEqual(1);
-}, 30_000);
+		expect(manager.status().panes).toHaveLength(8);
+		const panes = await geometry(tmux, status.sessionId);
+		expect(new Set(panes.map(pane => pane.window)).size).toBe(1);
+		expect(new Set(panes.map(pane => pane.x)).size).toBe(8);
+		expect(new Set(panes.map(pane => pane.y)).size).toBe(1);
+		expect(new Set(panes.map(pane => pane.height)).size).toBe(1);
+	},
+	30_000,
+);
 
-it.skipIf(!tmuxPath)("makes rows=1 full-height columns without overflowing a small terminal", async () => {
-	const { monitor, create, tmux } = await fixture({ maxRows: 1 });
-	const manager = create();
-	cleanups.push(() => manager.stop());
-	const status = await manager.start();
-	await tmux(["resize-window", "-t", status.sessionId, "-x", "12", "-y", "12"]);
-	monitor.targetList = "ABCDEFGH".split("").map(id => target(id));
-	await manager.refresh();
-	expect(manager.status().panes).toHaveLength(8);
-	const panes = await geometry(tmux, status.sessionId);
-	expect(new Set(panes.map(pane => pane.window)).size).toBe(1);
-	expect(new Set(panes.map(pane => pane.x)).size).toBe(8);
-	expect(new Set(panes.map(pane => pane.y)).size).toBe(1);
-	expect(new Set(panes.map(pane => pane.height)).size).toBe(1);
-}, 30_000);
+it.skipIf(!tmuxPath)(
+	"opens another window only after filling both finite limits",
+	async () => {
+		const { monitor, create, tmux } = await fixture({ maxRows: 2, maxColumns: 2 });
+		const manager = create();
+		cleanups.push(() => manager.stop());
+		monitor.targetList = "ABCD".split("").map(id => target(id));
+		const status = await manager.start();
+		expect(new Set(status.panes.map(pane => pane.windowId)).size).toBe(1);
+		monitor.targetList.push(target("E"));
+		await manager.refresh();
+		const panes = await geometry(tmux, status.sessionId);
+		expect(panes).toHaveLength(5);
+		expect(new Set(panes.slice(0, 4).map(pane => pane.window)).size).toBe(1);
+		expect(panes[4]!.window).not.toBe(panes[0]!.window);
+	},
+	30_000,
+);
 
-it.skipIf(!tmuxPath)("opens another window only after filling both finite limits", async () => {
-	const { monitor, create, tmux } = await fixture({ maxRows: 2, maxColumns: 2 });
-	const manager = create();
-	cleanups.push(() => manager.stop());
-	monitor.targetList = "ABCD".split("").map(id => target(id));
-	const status = await manager.start();
-	expect(new Set(status.panes.map(pane => pane.windowId)).size).toBe(1);
-	monitor.targetList.push(target("E"));
-	await manager.refresh();
-	const panes = await geometry(tmux, status.sessionId);
-	expect(panes).toHaveLength(5);
-	expect(new Set(panes.slice(0, 4).map(pane => pane.window)).size).toBe(1);
-	expect(panes[4]!.window).not.toBe(panes[0]!.window);
-}, 30_000);
+it.skipIf(!tmuxPath)(
+	"preserves fixed cell dimensions and mirrors columns-first agent order",
+	async () => {
+		const { monitor, create, tmux } = await fixture({
+			maxRows: 2,
+			maxColumns: 2,
+			fillOrder: "columns-first",
+			direction: "up-left",
+			columnWidth: 40,
+			rowHeight: 12,
+		});
+		const manager = create();
+		cleanups.push(() => manager.stop());
+		monitor.targetList = "ABCD".split("").map(id => target(id));
+		const status = await manager.start();
+		const panes = await geometry(tmux, status.sessionId);
+		expect(panes).toHaveLength(4);
+		expect(panes.map(pane => pane.width)).toEqual([40, 40, 40, 40]);
+		// The title uses its own row, not a cell from the fixed transcript height.
+		expect(panes.map(pane => pane.height)).toEqual([12, 12, 12, 12]);
+		expect(panes[0]!.x).toBeGreaterThan(panes[1]!.x);
+		expect(panes[0]!.y).toBeGreaterThan(panes[2]!.y);
+	},
+	30_000,
+);
 
-it.skipIf(!tmuxPath)("preserves fixed cell dimensions and mirrors columns-first agent order", async () => {
-	const { monitor, create, tmux } = await fixture({
-		maxRows: 2, maxColumns: 2, fillOrder: "columns-first", direction: "up-left",
-		columnWidth: 40, rowHeight: 12,
-	});
-	const manager = create();
-	cleanups.push(() => manager.stop());
-	monitor.targetList = "ABCD".split("").map(id => target(id));
-	const status = await manager.start();
-	const panes = await geometry(tmux, status.sessionId);
-	expect(panes).toHaveLength(4);
-	expect(panes.map(pane => pane.width)).toEqual([40, 40, 40, 40]);
-	// The title uses its own row, not a cell from the fixed transcript height.
-	expect(panes.map(pane => pane.height)).toEqual([12, 12, 12, 12]);
-	expect(panes[0]!.x).toBeGreaterThan(panes[1]!.x);
-	expect(panes[0]!.y).toBeGreaterThan(panes[2]!.y);
-}, 30_000);
+it.skipIf(!tmuxPath)(
+	"fills the new alternate edge before growing the next axis",
+	async () => {
+		const { monitor, create, tmux } = await fixture({ maxRows: "infinite", growth: "alternate" });
+		const manager = create();
+		cleanups.push(() => manager.stop());
+		monitor.targetList = "ABCDEFG".split("").map(id => target(id));
+		const status = await manager.start();
+		const panes = await geometry(tmux, status.sessionId);
+		expect(panes).toHaveLength(7);
+		expect(new Set(panes.map(pane => pane.window)).size).toBe(1);
+		expect(panes[4]!.y).toBe(panes[5]!.y);
+		expect(panes[4]!.x).toBeLessThan(panes[5]!.x);
+		expect(panes[6]!.x).toBeGreaterThan(panes[5]!.x);
+		expect(panes[6]!.height).toBeGreaterThan(panes[0]!.height * 2);
+	},
+	30_000,
+);
 
-it.skipIf(!tmuxPath)("fills the new alternate edge before growing the next axis", async () => {
-	const { monitor, create, tmux } = await fixture({ maxRows: "infinite", growth: "alternate" });
-	const manager = create();
-	cleanups.push(() => manager.stop());
-	monitor.targetList = "ABCDEFG".split("").map(id => target(id));
-	const status = await manager.start();
-	const panes = await geometry(tmux, status.sessionId);
-	expect(panes).toHaveLength(7);
-	expect(new Set(panes.map(pane => pane.window)).size).toBe(1);
-	expect(panes[4]!.y).toBe(panes[5]!.y);
-	expect(panes[4]!.x).toBeLessThan(panes[5]!.x);
-	expect(panes[6]!.x).toBeGreaterThan(panes[5]!.x);
-	expect(panes[6]!.height).toBeGreaterThan(panes[0]!.height * 2);
-}, 30_000);
-
-it.skipIf(!tmuxPath)("supports the smallest positive fixed dimensions without implicit overflow", async () => {
-	const { monitor, create, tmux } = await fixture({ maxRows: 2, columnWidth: 1, rowHeight: 1 });
-	const manager = create();
-	cleanups.push(() => manager.stop());
-	monitor.targetList = "ABCD".split("").map(id => target(id));
-	const status = await manager.start();
-	const panes = await geometry(tmux, status.sessionId);
-	expect(panes).toHaveLength(4);
-	expect(new Set(panes.map(pane => pane.window)).size).toBe(1);
-	expect(panes.map(pane => [pane.width, pane.height])).toEqual([[1, 1], [1, 1], [1, 1], [1, 1]]);
-}, 30_000);
+it.skipIf(!tmuxPath)(
+	"supports the smallest positive fixed dimensions without implicit overflow",
+	async () => {
+		const { monitor, create, tmux } = await fixture({ maxRows: 2, columnWidth: 1, rowHeight: 1 });
+		const manager = create();
+		cleanups.push(() => manager.stop());
+		monitor.targetList = "ABCD".split("").map(id => target(id));
+		const status = await manager.start();
+		const panes = await geometry(tmux, status.sessionId);
+		expect(panes).toHaveLength(4);
+		expect(new Set(panes.map(pane => pane.window)).size).toBe(1);
+		expect(panes.map(pane => [pane.width, pane.height])).toEqual([
+			[1, 1],
+			[1, 1],
+			[1, 1],
+			[1, 1],
+		]);
+	},
+	30_000,
+);

@@ -63,7 +63,8 @@ it("configures presets, custom values and sentinels through the monitor menu", a
 			select: async (title: string, choices: Array<{ label: string }>) => {
 				const step = steps[index];
 				if (!step) return undefined;
-				if (title.startsWith("Agent monitor")) return choices.find(choice => choice.label.startsWith(`${step.field} ·`))?.label;
+				if (title.startsWith("Agent monitor"))
+					return choices.find(choice => choice.label.startsWith(`${step.field} ·`))?.label;
 				if (!step.input) index++;
 				return step.value;
 			},
@@ -74,7 +75,12 @@ it("configures presets, custom values and sentinels through the monitor menu", a
 	expect(index).toBe(steps.length);
 	expect(errors).toEqual([]);
 	expect(readMonitorLayout(settings)).toEqual({
-		maxRows: 19, maxColumns: "infinite", rowHeight: 23, columnWidth: 97,
-		fillOrder: "columns-first", growth: "alternate", direction: "up-left",
+		maxRows: 19,
+		maxColumns: "infinite",
+		rowHeight: 23,
+		columnWidth: 97,
+		fillOrder: "columns-first",
+		growth: "alternate",
+		direction: "up-left",
 	});
 });

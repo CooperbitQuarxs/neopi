@@ -74,24 +74,21 @@ describe("native file-lock ownership", () => {
 		},
 	);
 
-	test.skipIf(process.platform !== "linux")(
-		"simultaneous mixed-mode attempts have exactly one owner",
-		async () => {
-			const target = path.join(await mkRoot(), "mixed-race");
-			const cooperative = acquireFileLock(target, { retries: 1, takeoverStoppedOwner: true });
-			const ordinary = acquireFileLock(target, { retries: 1 });
-			const results = await Promise.allSettled([cooperative, ordinary]);
-			try {
-				expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
-				const rejected = results.find(result => result.status === "rejected");
-				expect(rejected?.status === "rejected" && rejected.reason).toBeInstanceOf(FileLockContentionError);
-			} finally {
-				for (const result of results) {
-					if (result.status === "fulfilled") result.value.release();
-				}
+	test.skipIf(process.platform !== "linux")("simultaneous mixed-mode attempts have exactly one owner", async () => {
+		const target = path.join(await mkRoot(), "mixed-race");
+		const cooperative = acquireFileLock(target, { retries: 1, takeoverStoppedOwner: true });
+		const ordinary = acquireFileLock(target, { retries: 1 });
+		const results = await Promise.allSettled([cooperative, ordinary]);
+		try {
+			expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+			const rejected = results.find(result => result.status === "rejected");
+			expect(rejected?.status === "rejected" && rejected.reason).toBeInstanceOf(FileLockContentionError);
+		} finally {
+			for (const result of results) {
+				if (result.status === "fulfilled") result.value.release();
 			}
-		},
-	);
+		}
+	});
 
 	test("a cancelled waiter never enters its critical section or releases the current owner", async () => {
 		const root = await mkRoot();

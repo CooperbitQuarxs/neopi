@@ -24,11 +24,15 @@ beforeEach(async () => {
 	storage = new AuthStorage(credentials);
 	const fields = new ConfigFields();
 	config = {
-		...decodeSwitchDocument({ fields, warnings: [], configDir: directory, source: "switch.toml", secrets: [] }, {
-			provider: [{ id: "anthropic" }],
-			plan: [{ id: "team", provider: "anthropic", account: { org_id: "org-team" }, meters: ["weekly"] }],
-		}),
-		sources: [], digest: "meter-test",
+		...decodeSwitchDocument(
+			{ fields, warnings: [], configDir: directory, source: "switch.toml", secrets: [] },
+			{
+				provider: [{ id: "anthropic" }],
+				plan: [{ id: "team", provider: "anthropic", account: { org_id: "org-team" }, meters: ["weekly"] }],
+			},
+		),
+		sources: [],
+		digest: "meter-test",
 	};
 	fields.finish();
 });
@@ -48,26 +52,44 @@ test.each([
 	["missing", "", "failed"],
 ] as const)("organization-only meter identity from %s (%s) is %s", async (source, orgId, expected) => {
 	await credentials.upsertAuthCredential("anthropic", {
-		type: "oauth", access: "test-access", refresh: "test-refresh", expires: Date.now() + 3_600_000,
+		type: "oauth",
+		access: "test-access",
+		refresh: "test-refresh",
+		expires: Date.now() + 3_600_000,
 		orgId: "org-team",
 	});
 	const { plans } = await resolvePlans(config, storage);
 	const database = await SwitchDatabase.open(path.join(directory, "state"));
 	store = new SwitchStore(database, {
-		config, generation: "generation", plans,
-		modelReferenceKnown: () => true, observeUsage: () => {},
+		config,
+		generation: "generation",
+		plans,
+		modelReferenceKnown: () => true,
+		observeUsage: () => {},
 	});
 	store.markReady();
 	const report: UsageReport = {
-		provider: "anthropic", fetchedAt: Date.now(),
+		provider: "anthropic",
+		fetchedAt: Date.now(),
 		...(source === "metadata" ? { metadata: { orgId } } : {}),
-		limits: [{
-			id: "weekly", label: "Weekly", scope: { provider: "anthropic", ...(source === "scope" ? { orgId } : {}) },
-			amount: { unit: "percent", usedFraction: 0.2 },
-		}],
+		limits: [
+			{
+				id: "weekly",
+				label: "Weekly",
+				scope: { provider: "anthropic", ...(source === "scope" ? { orgId } : {}) },
+				amount: { unit: "percent", usedFraction: 0.2 },
+			},
+		],
 	};
 	vi.spyOn(storage.usage, "reports").mockResolvedValue([report]);
-	const cache = new SwitchMeterCache(store, storage, () => plans, () => "generation", 60, 1);
+	const cache = new SwitchMeterCache(
+		store,
+		storage,
+		() => plans,
+		() => "generation",
+		60,
+		1,
+	);
 	try {
 		expect((await cache.refresh()).get("team")).toBe(expected);
 	} finally {

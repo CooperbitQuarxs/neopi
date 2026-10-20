@@ -402,8 +402,9 @@ export class CodexLiveTransport {
 	/** Gate native RTP playback, independently of transcript/data-channel events. */
 	setOutputSuppressed(suppressed: boolean): void {
 		this.#outputSuppressed = suppressed;
-		(this.#peer as (LiveWebRtcPeer & { setOutputSuppressed(suppressed: boolean): void }) | undefined)
-			?.setOutputSuppressed(suppressed);
+		(
+			this.#peer as (LiveWebRtcPeer & { setOutputSuppressed(suppressed: boolean): void }) | undefined
+		)?.setOutputSuppressed(suppressed);
 	}
 
 	/** Stop sideband signaling and the native WebRTC media peer. Safe to call repeatedly. */

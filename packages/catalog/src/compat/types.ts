@@ -649,9 +649,7 @@ export interface CompiledSeed {
 }
 
 /** Value validation for an optional provider configuration option. */
-export type ProviderOptionSchema =
-	| { type: "boolean" | "string" | "strings" }
-	| { type: "enum"; values: string[] };
+export type ProviderOptionSchema = { type: "boolean" | "string" | "strings" } | { type: "enum"; values: string[] };
 
 /**
  * One model provider's catalog entry: the non-code half of what the runtime

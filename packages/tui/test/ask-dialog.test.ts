@@ -429,7 +429,8 @@ describe("AskDialogComponent", () => {
 
 	it("edits or removes the latest option note without replacing earlier notes", async () => {
 		const onSubmit = vi.fn();
-		const onPrompt = vi.fn()
+		const onPrompt = vi
+			.fn()
 			.mockResolvedValueOnce("Keep")
 			.mockResolvedValueOnce("Draft")
 			.mockResolvedValueOnce("Revised")
@@ -449,7 +450,8 @@ describe("AskDialogComponent", () => {
 		component.handleInput(DOWN);
 		component.handleInput(ENTER);
 		expect(onSubmit.mock.calls[0][0].results[0]).toMatchObject({
-			selectedOptions: ["B"], optionNotes: [{ option: "A", note: "Keep" }],
+			selectedOptions: ["B"],
+			optionNotes: [{ option: "A", note: "Keep" }],
 		});
 	});
 

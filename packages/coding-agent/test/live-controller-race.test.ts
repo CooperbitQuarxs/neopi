@@ -348,7 +348,9 @@ describe("per-utterance delegation keywords", () => {
 			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
 			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris, tell me a joke" } });
 			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "what is the weather iris only" } });
-			expect(h.controller.forceDelegateComposer("fix the cache\n\nIris, tell me a joke\n\nwhat is the weather")).toBe(true);
+			expect(
+				h.controller.forceDelegateComposer("fix the cache\n\nIris, tell me a joke\n\nwhat is the weather"),
+			).toBe(true);
 			await settle();
 			expect(h.prompts).toEqual(["fix the cache"]);
 		} finally {
@@ -387,8 +389,12 @@ describe("per-utterance delegation keywords", () => {
 			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris, tell me a joke" } });
 			await wait(70);
 			await settle();
-			expect(h.sent.some(message => "content" in message &&
-				message.content.some(item => item.text.includes("Iris, tell me a joke")))).toBe(true);
+			expect(
+				h.sent.some(
+					message =>
+						"content" in message && message.content.some(item => item.text.includes("Iris, tell me a joke")),
+				),
+			).toBe(true);
 			expect(h.prompts).toEqual([]);
 		} finally {
 			await h.controller.stop();
@@ -406,8 +412,12 @@ describe("per-utterance delegation keywords", () => {
 				h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Iris, tell me a joke" } });
 				await settle();
 				expect(h.prompts).toEqual(earlierPrimary ? ["fix the parser"] : []);
-				expect(h.sent.some(message => "content" in message &&
-					message.content.some(item => item.text.includes("Iris, tell me a joke")))).toBe(true);
+				expect(
+					h.sent.some(
+						message =>
+							"content" in message && message.content.some(item => item.text.includes("Iris, tell me a joke")),
+					),
+				).toBe(true);
 				h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "A joke" } });
 				await settle();
 				expect(h.controller.pendingUserTurnCount()).toBe(0);
@@ -442,8 +452,10 @@ describe("per-utterance delegation keywords", () => {
 			expect(h.prompts).toEqual(["fix the parser"]);
 			expect(h.controller.forceDelegateComposer("Iris, tell me a different joke")).toBe(true);
 			await settle();
-			const contexts = h.sent.filter(message => "content" in message)
-				.flatMap(message => message.content.map(item => item.text)).join("\n");
+			const contexts = h.sent
+				.filter(message => "content" in message)
+				.flatMap(message => message.content.map(item => item.text))
+				.join("\n");
 			expect(contexts).toContain("Iris, tell me a different joke");
 			expect(h.prompts).toEqual(["fix the parser"]);
 		} finally {
@@ -460,8 +472,13 @@ describe("per-utterance delegation keywords", () => {
 			h.fireSession(agentEnd([assistant("Parser fixed without a provider handoff", "stop")]));
 			await settle();
 			expect(h.sent.filter(message => message.type === "delegation.context.append")).toEqual([]);
-			expect(h.sent.some(message => message.type === "session.context.append" &&
-				message.content.some(item => item.text.includes("Parser fixed without a provider handoff")))).toBe(true);
+			expect(
+				h.sent.some(
+					message =>
+						message.type === "session.context.append" &&
+						message.content.some(item => item.text.includes("Parser fixed without a provider handoff")),
+				),
+			).toBe(true);
 		} finally {
 			await h.controller.stop();
 		}
@@ -521,7 +538,6 @@ describe("per-utterance delegation keywords", () => {
 		}
 	});
 
-
 	it("refuses leading direct-address handoffs without retiring the canonical utterance", async () => {
 		const h = makeHarness({ delegationKeywords: defaults });
 		await h.controller.start();
@@ -533,7 +549,9 @@ describe("per-utterance delegation keywords", () => {
 			expect(h.sentSpeech).toEqual([]);
 			expect(h.controller.pendingUserTurnCount()).toBe(1);
 			const correction = h.sent.find(message => message.type === "delegation.context.append");
-			expect(correction && "content" in correction ? correction.content.map(item => item.text).join("") : "").toContain("respond directly");
+			expect(
+				correction && "content" in correction ? correction.content.map(item => item.text).join("") : "",
+			).toContain("respond directly");
 			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "Here is a joke" } });
 			h.fireLive(delegation("late-addressed", "Do not wake the primary with this paraphrase"));
 			await settle();
@@ -572,7 +590,10 @@ describe("per-utterance delegation keywords", () => {
 		try {
 			h.fireLive({ type: "input_transcript.added", item: { text: "please RELAY the cache fix" } });
 			expect(h.prompts).toEqual([]);
-			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "please RELAY the cache fix after checking its tests" } });
+			h.fireLive({
+				type: "turn.done",
+				turn: { role: "user", transcript: "please RELAY the cache fix after checking its tests" },
+			});
 			await settle();
 			expect(h.prompts).toEqual(["please RELAY the cache fix after checking its tests"]);
 			h.fireLive(delegation("late-forced", "model paraphrase"));
@@ -670,8 +691,10 @@ describe("operator-owned live floor", () => {
 			expect(h.controller.forceDelegateComposer("fix the cache\n\ntell me a joke")).toBe(true);
 			await settle();
 			expect(h.prompts).toEqual(["fix the cache"]);
-			const voiceText = h.sent.filter(message => message.type === "session.context.append")
-				.flatMap(message => message.content.map(item => item.text)).join("\n");
+			const voiceText = h.sent
+				.filter(message => message.type === "session.context.append")
+				.flatMap(message => message.content.map(item => item.text))
+				.join("\n");
 			expect(voiceText).toContain("tell me a joke");
 			expect(voiceText).not.toContain("fix the cache");
 		} finally {
@@ -689,21 +712,26 @@ describe("operator-owned live floor", () => {
 			}),
 		});
 		let fire: ((event: LiveServerEvent) => void) | undefined;
-		const bridge = new RpcLiveBridge(h.session, () => {}, options => new LiveSessionController({
-			...options,
-			createTransport: transportOptions => {
-				fire = transportOptions.callbacks.onEvent;
-				return {
-					async connect() {},
-					async send() {},
-					async close() {},
-					async setMuted() {},
-					pushAudio: () => true,
-					setOutputSuppressed() {},
-				};
-			},
-			createRecorder: () => ({ stop() {} }),
-		}));
+		const bridge = new RpcLiveBridge(
+			h.session,
+			() => {},
+			options =>
+				new LiveSessionController({
+					...options,
+					createTransport: transportOptions => {
+						fire = transportOptions.callbacks.onEvent;
+						return {
+							async connect() {},
+							async send() {},
+							async close() {},
+							async setMuted() {},
+							pushAudio: () => true,
+							setOutputSuppressed() {},
+						};
+					},
+					createRecorder: () => ({ stop() {} }),
+				}),
+		);
 		await bridge.start();
 		try {
 			fire?.({ type: "turn.done", turn: { role: "user", transcript: "fix the cache thanks" } });
@@ -819,7 +847,11 @@ describe("operator-owned live floor", () => {
 			expect(h.sentSpeech).toEqual([]);
 			await wait(60);
 			await settle();
-			expect(h.sent.some(message => "content" in message && message.content.some(item => item.text.includes("tell me a joke")))).toBe(true);
+			expect(
+				h.sent.some(
+					message => "content" in message && message.content.some(item => item.text.includes("tell me a joke")),
+				),
+			).toBe(true);
 			expect(h.sentSpeech).toEqual([]);
 		} finally {
 			await h.controller.stop();

@@ -72,7 +72,7 @@ function alternatingGrid(count: number, firstAxis: "rows" | "columns"): Cell {
 	for (let start = 1; start < count;) {
 		const edgeLength = axis === "rows" ? root.columns : root.rows;
 		const children: Cell[] = [];
-		for (let end = Math.min(start + edgeLength, count); start < end; start++) {
+		for (const end = Math.min(start + edgeLength, count); start < end; start++) {
 			children.push({ index: start, rows: 1, columns: 1 });
 		}
 		const edge = strip(children, axis === "rows" ? "columns" : "rows");
@@ -160,5 +160,10 @@ export function planMonitorLayout(
 		checksum = ((checksum >> 1) | ((checksum & 1) << 15)) + body.charCodeAt(i);
 		checksum &= 0xffff;
 	}
-	return { width, height: height + Number(topTitle), panes, layout: `${checksum.toString(16).padStart(4, "0")},${body}` };
+	return {
+		width,
+		height: height + Number(topTitle),
+		panes,
+		layout: `${checksum.toString(16).padStart(4, "0")},${body}`,
+	};
 }

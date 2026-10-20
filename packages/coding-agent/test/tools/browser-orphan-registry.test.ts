@@ -241,10 +241,7 @@ describe("orphan-registry — target close completion", () => {
 		} as unknown as Browser;
 		const closing = closeCdpTarget(browser, "released");
 		try {
-			const first = await Promise.race([
-				closing.then(() => "returned"),
-				verifying.promise.then(() => "verifying"),
-			]);
+			const first = await Promise.race([closing.then(() => "returned"), verifying.promise.then(() => "verifying")]);
 			expect(first).toBe("verifying");
 		} finally {
 			removed.resolve();

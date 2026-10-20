@@ -81,7 +81,8 @@ export const cfgMonitorFillOrder = register({
 		tab: "interaction",
 		group: "Agent monitor",
 		label: "Monitor fill order",
-		description: "Fill rows down each column first, or columns across each row first; also chooses the first alternate growth axis",
+		description:
+			"Fill rows down each column first, or columns across each row first; also chooses the first alternate growth axis",
 		options: [
 			{ value: "rows-first", label: "Rows first", description: "Fill a column before moving to the next column" },
 			{ value: "columns-first", label: "Columns first", description: "Fill a row before moving to the next row" },
@@ -98,10 +99,19 @@ export const cfgMonitorGrowth = register({
 		tab: "interaction",
 		group: "Agent monitor",
 		label: "Monitor growth",
-		description: "Alternate takes effect when both counts are infinite: fill each new edge before growing the other axis",
+		description:
+			"Alternate takes effect when both counts are infinite: fill each new edge before growing the other axis",
 		options: [
-			{ value: "fallback", label: "Fallback", description: "Switch axis only when the preferred finite count is full" },
-			{ value: "alternate", label: "Alternate", description: "With both counts infinite, alternate complete rows and columns" },
+			{
+				value: "fallback",
+				label: "Fallback",
+				description: "Switch axis only when the preferred finite count is full",
+			},
+			{
+				value: "alternate",
+				label: "Alternate",
+				description: "With both counts infinite, alternate complete rows and columns",
+			},
 		],
 	},
 });

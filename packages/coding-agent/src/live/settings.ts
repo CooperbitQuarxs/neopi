@@ -57,7 +57,8 @@ export const cfgLiveSuppressDelegateKeyword = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Direct-Address Keyword",
-		description: "Leading address that rejects handoffs to the main agent; case/punctuation insensitive (empty disables)",
+		description:
+			"Leading address that rejects handoffs to the main agent; case/punctuation insensitive (empty disables)",
 	},
 });
 
@@ -69,7 +70,8 @@ export const cfgLiveForceUtteranceKeyword = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Force-Utterance Keyword",
-		description: "Phrase anywhere in finalized speech that requires a canonical main-agent handoff; direct address wins (empty disables)",
+		description:
+			"Phrase anywhere in finalized speech that requires a canonical main-agent handoff; direct address wins (empty disables)",
 	},
 });
 
@@ -81,7 +83,8 @@ export const cfgLiveHoldMode = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Hold Mode",
-		description: "Keep the floor until a trailing submit or force-delegate phrase sends the composer to the main agent",
+		description:
+			"Keep the floor until a trailing submit or force-delegate phrase sends the composer to the main agent",
 	},
 });
 

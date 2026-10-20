@@ -2518,9 +2518,9 @@ export class SessionManager {
 	 * Optionally copy artifacts, keeping relocation and artifact reads behind the copy.
 	 * @returns the old and new session file paths, or undefined when not persisting.
 	 */
-	async fork(
-		options?: { copyArtifacts?: boolean },
-	): Promise<{ oldSessionFile: string; newSessionFile: string } | undefined> {
+	async fork(options?: {
+		copyArtifacts?: boolean;
+	}): Promise<{ oldSessionFile: string; newSessionFile: string } | undefined> {
 		if (!this.#persist || !this.#sessionFile) return undefined;
 
 		const oldSessionFile = this.#sessionFile;

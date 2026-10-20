@@ -27,15 +27,12 @@ describe("advisor activation announcements", () => {
 	for (const verb of ["on", "toggle"]) {
 		it(`names the started advisors for ${verb} in text hosts`, async () => {
 			const messages: string[] = [];
-			await advisorCommand.handle?.(
-				{ name: "advisor", args: verb, text: `/advisor ${verb}` },
-				{
-					session: session(),
-					output: text => {
-						messages.push(text);
-					},
-				} as SlashCommandRuntime,
-			);
+			await advisorCommand.handle?.({ name: "advisor", args: verb, text: `/advisor ${verb}` }, {
+				session: session(),
+				output: text => {
+					messages.push(text);
+				},
+			} as SlashCommandRuntime);
 			expect(messages).toEqual(["Advisor enabled: Velvet, Architecture."]);
 		});
 

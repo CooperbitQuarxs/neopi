@@ -83,7 +83,63 @@ export const cfgPrewalkEnabled = register({
 		group: "Prewalk",
 		label: "Enable Prewalk",
 		description:
-			"Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first edit/write after the plan nudge's todo list exists — the strong model plans, commits the todos, and starts the implementation before handing off. Overridable per session with --prewalk / --no-prewalk.",
+			"Plan with the configured planning crew, then hand off to the execution crew at the first edit/write after the todo list exists. Off by default; --prewalk / --no-prewalk override this session.",
+	},
+});
+
+export const cfgPrewalkPlanner = register({
+	id: "prewalk.planner",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Planning Selector",
+		description:
+			"Role alias or provider/model:effort for planning. Empty keeps the active model. Applies only when prewalk is enabled.",
+	},
+});
+
+export const cfgPrewalkExecution = register({
+	id: "prewalk.execution",
+	type: "string",
+	default: "@smol",
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Execution Selector",
+		description:
+			"Role alias or provider/model:effort for execution. --prewalk-into overrides this selector for one session.",
+	},
+});
+
+export const cfgPrewalkPlannerFallbacks = register({
+	id: "prewalk.plannerFallbacks",
+	type: "array",
+	default: EMPTY_STRING_ARRAY,
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Planning Fallbacks",
+		description:
+			"Ordered role aliases or provider/model:effort selectors tried when the planning selector is unavailable.",
+		editor: "json",
+		ordered: true,
+	},
+});
+
+export const cfgPrewalkExecutionFallbacks = register({
+	id: "prewalk.executionFallbacks",
+	type: "array",
+	default: EMPTY_STRING_ARRAY,
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Execution Fallbacks",
+		description:
+			"Ordered role aliases or provider/model:effort selectors tried when the execution selector is unavailable.",
+		editor: "json",
+		ordered: true,
 	},
 });
 

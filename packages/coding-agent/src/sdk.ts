@@ -218,6 +218,7 @@ import {
 import { DateCwdReminderInjector } from "./session/date-cwd-reminder";
 import { createInterruptedToolResults, createInterruptedTurnAbortMessage } from "./session/exit-diagnostics";
 import { recoverInlineSloppyEdit } from "./session/inline-edit-recovery";
+import { describePrewalkCrew, getPrewalkPatterns } from "./session/prewalk-crew";
 import {
 	type CustomMessage,
 	convertToLlm,
@@ -668,6 +669,10 @@ export interface CreateAgentSessionOptions {
 	deferredPrewalk?: { target: string; patterns: string[] };
 	/** Host-owned display sink for non-fatal startup prewalk warnings. */
 	onPrewalkWarning?: (warning: string) => void;
+	/** Fully expanded planning selectors, resolved after extension providers register. */
+	prewalkPlannerPatterns?: string[];
+	/** Host-owned display sink for the resolved planning and execution crew. */
+	onPrewalkCrew?: (message: string) => void;
 	/** Force read-only plan mode at start, auto-approve on the model's first resolve call, then switch to execute. */
 	planYolo?: PlanYolo;
 
@@ -2551,7 +2556,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			},
 			getToolByName: name => session?.getToolByName(name),
 			getEnabledToolNames: () =>
-				session?.getEnabledToolNames() ?? [...new Set([...activeToolNames, ...(toolSession.xdev?.mountedNames ?? [])])],
+				session?.getEnabledToolNames() ?? [
+					...new Set([...activeToolNames, ...(toolSession.xdev?.mountedNames ?? [])]),
+				],
 			getToolForEvalBridge: name => session?.getToolForEvalBridge(name),
 			getEvalBridgeToolNames: () => session?.getEvalBridgeToolNames() ?? [],
 			getCodeModeDirectToolNames: () => session?.getCodeModeDirectToolNames(),
@@ -3619,6 +3626,37 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		}
 
+		if (prewalk) {
+			const patterns =
+				options.prewalkPlannerPatterns ?? (isSubagentSession ? [] : getPrewalkPatterns(settings, "planner"));
+			if (patterns.length > 0) {
+				const discoveryInFlight = runtimeDiscoveryPromise;
+				const selection = await resolvePrewalkTarget(
+					patterns,
+					"planning crew",
+					modelRegistry,
+					modelMatchPreferences,
+					disabledProviderIds(settings),
+					{ beforeRefresh: discoveryInFlight ? () => discoveryInFlight : undefined },
+				);
+				if (selection.prewalk) {
+					model = selection.prewalk.target;
+					startupThinkingOverride = selection.prewalk.thinkingLevel;
+					startupRoleSelection = undefined;
+					startupAutoSelection = startupThinkingOverride === AUTO_THINKING ? { mode: "auto" } : undefined;
+					thinkingOrigin = "role";
+					initialRetryFallback = undefined;
+					adoptThinkingForModel(model);
+				} else {
+					prewalk = undefined;
+					for (const warning of selection.warnings) {
+						logger.warn("Prewalk planner unavailable", { warning });
+						options.onPrewalkWarning?.(warning);
+					}
+				}
+			}
+		}
+
 		if (model) {
 			const selectedModel = model;
 			const refreshedModel = await logger.time("refreshInitialModelMetadata", () =>
@@ -3628,6 +3666,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				model = refreshedModel;
 				adoptThinkingForModel(refreshedModel);
 			}
+		}
+		if (prewalk && model) {
+			const message = describePrewalkCrew({ target: model, thinkingLevel }, prewalk);
+			logger.info(message);
+			options.onPrewalkCrew?.(message);
 		}
 
 		// A first-turn user tail has no assistant metadata to copy. Once startup

@@ -190,10 +190,12 @@ describe("live commands over RPC", () => {
 	test("reports fixture startup stderr when stdout ends before ready", async () => {
 		const frames: Array<Record<string, unknown>> = [{ type: "live_phase", phase: "connecting" }];
 		const output = frames.values();
-		await expect(receiveReady(
-			async () => output.next().value,
-			Promise.resolve("Cannot find module './tool-views.generated.js'"),
-		)).rejects.toThrow("RPC live fixture exited before ready: Cannot find module './tool-views.generated.js'");
+		await expect(
+			receiveReady(
+				async () => output.next().value,
+				Promise.resolve("Cannot find module './tool-views.generated.js'"),
+			),
+		).rejects.toThrow("RPC live fixture exited before ready: Cannot find module './tool-views.generated.js'");
 	});
 
 	test("start/mute/stop wire shapes; frames bypass set_event_filter; stdin end stops the session", async () => {

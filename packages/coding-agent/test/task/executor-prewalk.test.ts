@@ -1,14 +1,13 @@
 /**
- * Per-agent prewalk resolution in `runSubprocess`: the agent definition's
- * `prewalk` frontmatter and the `task.agentPrewalk` settings override decide
- * whether the spawned session gets a `prewalk` hand-off config, which target
- * model it resolves to, and when the hand-off is skipped (override off,
- * target identical to the starting model).
+ * Per-agent prewalk resolution in `runSubprocess`: configured planner/execution
+ * crews, frontmatter and settings execution overrides, authenticated fallback
+ * selection, progress attribution, and disabled/noop compatibility.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { cfgDisabledProviders } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { LoadExtensionsResult } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
@@ -16,6 +15,12 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import {
+	cfgPrewalkExecution,
+	cfgPrewalkExecutionFallbacks,
+	cfgPrewalkPlanner,
+	cfgPrewalkPlannerFallbacks,
+} from "@oh-my-pi/pi-coding-agent/session/settings";
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -108,6 +113,7 @@ function createModelRegistry(models: Model[]): ModelRegistry {
 		refresh: async () => {},
 		awaitBackgroundRefresh: async () => {},
 		getAvailable: () => models,
+		getAll: () => models,
 		getApiKey: async () => "test-key",
 		hasConfiguredAuth: () => true,
 	} as unknown as ModelRegistry;
@@ -141,12 +147,14 @@ describe("runSubprocess per-agent prewalk", () => {
 	});
 
 	it("resolves a frontmatter prewalk pattern to a target for the spawned session", async () => {
+		const settings = Settings.isolated();
+		cfgPrewalkExecution.set(settings, `${primary.provider}/${primary.id}`);
 		const spy = vi
 			.spyOn(sdkModule, "createAgentSession")
 			.mockResolvedValue(createSessionResult(yieldEmittingSession()));
 
 		const result = await runSubprocess({
-			...baseOptions("subagent-prewalk-frontmatter", Settings.isolated()),
+			...baseOptions("subagent-prewalk-frontmatter", settings),
 			agent: {
 				...baseAgent,
 				model: [`${primary.provider}/${primary.id}`],
@@ -227,8 +235,183 @@ describe("runSubprocess per-agent prewalk", () => {
 		expect(forwarded?.prewalk?.target.id).toBe(target.id);
 	});
 
+	it.each(["frontmatter", "agent-setting", "task-setting"] as const)(
+		"uses configured execution for boolean enablement through %s",
+		async enablement => {
+			const settings = Settings.isolated();
+			cfgPrewalkExecution.set(settings, `${target.provider}/${target.id}:low`);
+			if (enablement === "agent-setting") cfgTaskAgentPrewalk.set(settings, { task: "on" });
+			if (enablement === "task-setting") cfgTaskPrewalk.set(settings, true);
+			const spy = vi
+				.spyOn(sdkModule, "createAgentSession")
+				.mockResolvedValue(createSessionResult(yieldEmittingSession()));
+
+			const result = await runSubprocess({
+				...baseOptions(`subagent-prewalk-configured-${enablement}`, settings),
+				agent: {
+					...baseAgent,
+					model: [`${primary.provider}/${primary.id}`],
+					prewalk: enablement === "frontmatter" ? true : undefined,
+				},
+			});
+
+			expect(result.exitCode).toBe(0);
+			const forwarded = spy.mock.calls[0]?.[0];
+			expect(forwarded?.model?.id).toBe(primary.id);
+			expect(forwarded?.prewalk?.target.id).toBe(target.id);
+			expect(forwarded?.prewalk?.thinkingLevel).toBe("low");
+		},
+	);
+
+	it("starts on the configured planner and publishes both crew selections", async () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("plan-crew", `${target.provider}/${target.id}:high`);
+		cfgPrewalkPlanner.set(settings, "@plan-crew");
+		cfgPrewalkExecution.set(settings, `${primary.provider}/${primary.id}:low`);
+		const progressModels: string[] = [];
+		const progressRoutes: string[] = [];
+		const spy = vi
+			.spyOn(sdkModule, "createAgentSession")
+			.mockResolvedValue(createSessionResult(yieldEmittingSession()));
+
+		const result = await runSubprocess({
+			...baseOptions("subagent-prewalk-independent-crew", settings),
+			agent: { ...baseAgent, model: [`${primary.provider}/${primary.id}:low`], prewalk: true },
+			onProgress: progress => {
+				if (progress.resolvedModel) progressModels.push(progress.resolvedModel);
+				if (progress.resolvedModelRoute) progressRoutes.push(progress.resolvedModelRoute);
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const forwarded = spy.mock.calls[0]?.[0];
+		expect(forwarded?.model?.id).toBe(target.id);
+		expect(forwarded?.thinkingLevel).toBe("high");
+		expect(forwarded?.prewalk?.target.id).toBe(primary.id);
+		expect(forwarded?.prewalk?.thinkingLevel).toBe("low");
+		expect(progressModels).toContain(`${target.provider}/${target.id}:high`);
+		expect(progressRoutes.some(route => route.includes(`${primary.provider}/${primary.id}:low`))).toBe(true);
+	});
+
+	it("lets a settings string override both frontmatter and the configured execution selector", async () => {
+		const settings = Settings.isolated();
+		cfgPrewalkExecution.set(settings, "missing/configured-executor");
+		cfgTaskAgentPrewalk.set(settings, { task: `${target.provider}/${target.id}:low` });
+		const spy = vi
+			.spyOn(sdkModule, "createAgentSession")
+			.mockResolvedValue(createSessionResult(yieldEmittingSession()));
+
+		const result = await runSubprocess({
+			...baseOptions("subagent-prewalk-explicit-settings-target", settings),
+			agent: {
+				...baseAgent,
+				model: [`${primary.provider}/${primary.id}`],
+				prewalk: `${primary.provider}/${primary.id}`,
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(spy.mock.calls[0]?.[0]?.prewalk?.target.id).toBe(target.id);
+		expect(spy.mock.calls[0]?.[0]?.prewalk?.thinkingLevel).toBe("low");
+	});
+
+	it("uses execution fallbacks after an unavailable explicit frontmatter target", async () => {
+		const settings = Settings.isolated();
+		cfgPrewalkExecution.set(settings, `${primary.provider}/${primary.id}`);
+		cfgPrewalkExecutionFallbacks.set(settings, [`${target.provider}/${target.id}:low`]);
+		const spy = vi
+			.spyOn(sdkModule, "createAgentSession")
+			.mockResolvedValue(createSessionResult(yieldEmittingSession()));
+
+		const result = await runSubprocess({
+			...baseOptions("subagent-prewalk-explicit-fallback", settings),
+			agent: {
+				...baseAgent,
+				model: [`${primary.provider}/${primary.id}`],
+				prewalk: "missing/explicit-executor",
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(spy.mock.calls[0]?.[0]?.prewalk?.target.id).toBe(target.id);
+		expect(spy.mock.calls[0]?.[0]?.prewalk?.thinkingLevel).toBe("low");
+	});
+
+	it.each(["planner", "execution"] as const)(
+		"skips missing, unauthenticated and disabled %s candidates before using its fallback",
+		async phase => {
+			const settings = Settings.isolated();
+			const unavailable = { ...target, id: "unauthenticated-crew" };
+			const disabled = { ...target, provider: "disabled-crew-provider", id: "disabled-crew" };
+			const registry = createModelRegistry([primary, target, unavailable, disabled]);
+			vi.spyOn(registry, "hasConfiguredAuth").mockImplementation(model => model.id !== unavailable.id);
+			cfgDisabledProviders.set(settings, [disabled.provider]);
+			settings.setModelRole("crew-fallback", `${target.provider}/${target.id}:high`);
+			const selectors = ["missing/crew", `${disabled.provider}/${disabled.id}`, "@crew-fallback"];
+			if (phase === "planner") {
+				cfgPrewalkPlanner.set(settings, `${unavailable.provider}/${unavailable.id}`);
+				cfgPrewalkPlannerFallbacks.set(settings, selectors);
+				cfgPrewalkExecution.set(settings, `${primary.provider}/${primary.id}:low`);
+			} else {
+				cfgPrewalkExecution.set(settings, `${unavailable.provider}/${unavailable.id}`);
+				cfgPrewalkExecutionFallbacks.set(settings, selectors);
+			}
+			const spy = vi
+				.spyOn(sdkModule, "createAgentSession")
+				.mockResolvedValue(createSessionResult(yieldEmittingSession()));
+
+			const result = await runSubprocess({
+				...baseOptions(`subagent-prewalk-${phase}-fallback`, settings),
+				modelRegistry: registry,
+				agent: { ...baseAgent, model: [`${primary.provider}/${primary.id}:low`], prewalk: true },
+			});
+
+			expect(result.exitCode).toBe(0);
+			const forwarded = spy.mock.calls[0]?.[0];
+			expect(forwarded?.model?.id).toBe(phase === "planner" ? target.id : primary.id);
+			expect(forwarded?.thinkingLevel).toBe(phase === "planner" ? "high" : "low");
+			expect(forwarded?.prewalk?.target.id).toBe(phase === "execution" ? target.id : primary.id);
+			expect(forwarded?.prewalk?.thinkingLevel).toBe(phase === "execution" ? "high" : "low");
+		},
+	);
+
+	it.each(["planner", "execution"] as const)(
+		"retains the ordinary task model when the configured %s has no authenticated candidate",
+		async phase => {
+			const settings = Settings.isolated();
+			cfgPrewalkPlanner.set(settings, `${target.provider}/${target.id}:high`);
+			cfgPrewalkExecution.set(settings, `${primary.provider}/${primary.id}:low`);
+			const unavailable = { ...target, id: "unauthenticated-crew" };
+			const registry = createModelRegistry([primary, target, unavailable]);
+			vi.spyOn(registry, "hasConfiguredAuth").mockImplementation(model => model.id !== unavailable.id);
+			if (phase === "planner") {
+				cfgPrewalkPlanner.set(settings, "missing/planner");
+				cfgPrewalkPlannerFallbacks.set(settings, [`${unavailable.provider}/${unavailable.id}`]);
+			} else {
+				cfgPrewalkExecution.set(settings, "missing/executor");
+				cfgPrewalkExecutionFallbacks.set(settings, [`${unavailable.provider}/${unavailable.id}`]);
+			}
+			const spy = vi
+				.spyOn(sdkModule, "createAgentSession")
+				.mockResolvedValue(createSessionResult(yieldEmittingSession()));
+
+			const result = await runSubprocess({
+				...baseOptions(`subagent-prewalk-${phase}-unavailable`, settings),
+				modelRegistry: registry,
+				agent: { ...baseAgent, model: [`${primary.provider}/${primary.id}:low`], prewalk: true },
+			});
+
+			expect(result.exitCode).toBe(0);
+			const forwarded = spy.mock.calls[0]?.[0];
+			expect(forwarded?.model?.id).toBe(primary.id);
+			expect(forwarded?.thinkingLevel).toBe("low");
+			expect(forwarded?.prewalk).toBeUndefined();
+		},
+	);
+
 	it("task.agentPrewalk 'off' disables a frontmatter-enabled prewalk", async () => {
 		const settings = Settings.isolated();
+		cfgPrewalkPlanner.set(settings, `${target.provider}/${target.id}:high`);
 		cfgTaskAgentPrewalk.set(settings, { task: "off" });
 		const spy = vi
 			.spyOn(sdkModule, "createAgentSession")
@@ -245,6 +428,7 @@ describe("runSubprocess per-agent prewalk", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(spy.mock.calls[0]?.[0]?.prewalk).toBeUndefined();
+		expect(spy.mock.calls[0]?.[0]?.model?.id).toBe(primary.id);
 	});
 
 	it("task.agentPrewalk 'on' enables prewalk for an agent without frontmatter", async () => {
@@ -284,6 +468,8 @@ describe("runSubprocess per-agent prewalk", () => {
 	it("task.prewalk defaults off and leaves other bundled agents alone when on", async () => {
 		const settings = Settings.isolated();
 		settings.setModelRole("smol", `${target.provider}/${target.id}`);
+		cfgPrewalkPlanner.set(settings, `${target.provider}/${target.id}:high`);
+		cfgPrewalkExecution.set(settings, `${primary.provider}/${primary.id}:low`);
 		const spy = vi
 			.spyOn(sdkModule, "createAgentSession")
 			.mockResolvedValue(createSessionResult(yieldEmittingSession()));
@@ -295,6 +481,7 @@ describe("runSubprocess per-agent prewalk", () => {
 		expect(offByDefault.exitCode).toBe(0);
 		expect(spy.mock.calls[0]?.[0]?.prewalk).toBeUndefined();
 
+		expect(spy.mock.calls[0]?.[0]?.model?.id).toBe(primary.id);
 		cfgTaskPrewalk.set(settings, true);
 		const otherAgent = await runSubprocess({
 			...baseOptions("subagent-prewalk-setting-other-agent", settings),
@@ -302,6 +489,7 @@ describe("runSubprocess per-agent prewalk", () => {
 		});
 		expect(otherAgent.exitCode).toBe(0);
 		expect(spy.mock.calls[1]?.[0]?.prewalk).toBeUndefined();
+		expect(spy.mock.calls[1]?.[0]?.model?.id).toBe(primary.id);
 	});
 
 	it("skips prewalk when the target resolves to the starting model", async () => {
@@ -321,6 +509,44 @@ describe("runSubprocess per-agent prewalk", () => {
 		expect(result.exitCode).toBe(0);
 		expect(spy.mock.calls[0]?.[0]?.prewalk).toBeUndefined();
 	});
+
+	it("arms an effort-only execution handoff on the same model", async () => {
+		const settings = Settings.isolated();
+		cfgPrewalkExecution.set(settings, `${primary.provider}/${primary.id}:low`);
+		const spy = vi
+			.spyOn(sdkModule, "createAgentSession")
+			.mockResolvedValue(createSessionResult(yieldEmittingSession()));
+
+		const result = await runSubprocess({
+			...baseOptions("subagent-prewalk-effort-only", settings),
+			agent: { ...baseAgent, model: [`${primary.provider}/${primary.id}:high`], prewalk: true },
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe("high");
+		expect(spy.mock.calls[0]?.[0]?.prewalk?.target.id).toBe(primary.id);
+		expect(spy.mock.calls[0]?.[0]?.prewalk?.thinkingLevel).toBe("low");
+	});
+
+	it("skips identical planner and execution selections without discarding the planner", async () => {
+		const settings = Settings.isolated();
+		cfgPrewalkPlanner.set(settings, `${target.provider}/${target.id}:high`);
+		cfgPrewalkExecution.set(settings, `${target.provider}/${target.id}:high`);
+		const spy = vi
+			.spyOn(sdkModule, "createAgentSession")
+			.mockResolvedValue(createSessionResult(yieldEmittingSession()));
+
+		const result = await runSubprocess({
+			...baseOptions("subagent-prewalk-identical-crew", settings),
+			agent: { ...baseAgent, model: [`${primary.provider}/${primary.id}:low`], prewalk: true },
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(spy.mock.calls[0]?.[0]?.model?.id).toBe(target.id);
+		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe("high");
+		expect(spy.mock.calls[0]?.[0]?.prewalk).toBeUndefined();
+	});
+
 	it("keeps the todo tool active for a prewalk-armed subagent (the todo gate needs it)", async () => {
 		const session = yieldEmittingSession(["read", "todo", "yield"]);
 		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));

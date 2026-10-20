@@ -1070,9 +1070,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		if (value === "effective") {
 			children.push(
 				text([span("Effective roster · all discovered files", "strong")]),
-				...this.#effectiveRoster.map(advisor =>
-					text(this.#effectiveAdvisorLabel(advisor), { wrap: "word" }),
-				),
+				...this.#effectiveRoster.map(advisor => text(this.#effectiveAdvisorLabel(advisor), { wrap: "word" })),
 				text([span("Read-only overview. Scope below selects the file to edit.", "muted")], { wrap: "word" }),
 			);
 		}

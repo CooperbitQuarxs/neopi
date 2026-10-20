@@ -152,7 +152,9 @@ export async function loadSwitchConfig(
 							...rows.map((row, index) => decodeProvider(context, row, `${pathname}.provider[${index}]`)),
 						);
 					else
-						fragmentPlans.push(...rows.map((row, index) => decodePlan(context, row, `${pathname}.plan[${index}]`)));
+						fragmentPlans.push(
+							...rows.map((row, index) => decodePlan(context, row, `${pathname}.plan[${index}]`)),
+						);
 				}
 			}
 			context.source = mainPath;

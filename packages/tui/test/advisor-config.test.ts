@@ -760,17 +760,23 @@ describe("advisor effective roster display", () => {
 		];
 		const doc: WatchdogConfigDoc = { advisors: [{ name: "Local" }] };
 		let saved: WatchdogConfigDoc | undefined;
-		const overlay = new AdvisorConfigOverlayComponent({} as TUI, { ...deps, effectiveRoster: roster }, "project", doc, {
-			loadDoc: async () => ({ advisors: [] }),
-			save: async (_scope, value) => {
-				saved = structuredClone(value);
+		const overlay = new AdvisorConfigOverlayComponent(
+			{} as TUI,
+			{ ...deps, effectiveRoster: roster },
+			"project",
+			doc,
+			{
+				loadDoc: async () => ({ advisors: [] }),
+				save: async (_scope, value) => {
+					saved = structuredClone(value);
+				},
+				getEffectiveRoster: async () => roster.filter(advisor => advisor.name !== "Velvet"),
+				apply: async () => {},
+				close: () => {},
+				requestRender: () => {},
+				notify: () => {},
 			},
-			getEffectiveRoster: async () => roster.filter(advisor => advisor.name !== "Velvet"),
-			apply: async () => {},
-			close: () => {},
-			requestRender: () => {},
-			notify: () => {},
-		});
+		);
 		try {
 			const rendered = Bun.stripANSI(overlay.render(180).join("\n"));
 			expect(rendered).toContain("Velvet · enabled · project · /workspace/WATCHDOG.yml");
