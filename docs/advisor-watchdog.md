@@ -353,7 +353,7 @@ The editor opens with every discovered user, ancestor, `.omp`, and launch-direct
 
 Space toggles the whole highlighted file, persisting top-level `enabled: false` without changing its entries. Disabled files remain editable and contribute neither advisors nor shared instructions or budgets. Turning all discovered files off does not create a replacement default advisor. Press `a` to apply the saved configuration; the existing file watcher can also pick it up. Re-enabling a file restores its entries with their own enabled states intact.
 
-Below the file list, bulk actions disable all entries, enable all files and entries, or invert effective enabled states. Inverting a disabled file enables its entries, since none were active. Bulk actions save each source file, and `a` applies the result. Advisor activation sets still decide which eligible advisors run for the primary role.
+Below the file list, bulk actions disable all files and entries, enable all files and entries, or invert effective enabled states. Inverting a disabled file enables its entries, since none were active. Bulk actions save each source file, and `a` applies the result. Advisor activation sets still decide which eligible advisors run for the primary role.
 
 On an advisor row or its detail page, `c` clones every field into a new entry in the same file and opens the copy for editing. The name starts as `<name> (copy)` with a number added if needed. `Delete` opens a confirmation naming the advisor and its source file. Cancel is selected first; `Esc` cancels, and Space never confirms deletion. Deletion is not a menu row. These edits still require Save to persist and Apply to update the live advisors.
 

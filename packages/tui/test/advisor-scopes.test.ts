@@ -129,6 +129,7 @@ describe("advisor file scopes", () => {
 		const f = fixture();
 		f.activate("disable");
 		await settle();
+		expect([...f.disk.values()].every(doc => doc.enabled === false)).toBe(true);
 		expect([...f.disk.values()].flatMap(doc => doc.advisors).every(advisor => advisor.enabled === false)).toBe(true);
 		f.action("toggle"); // First selected row remains the disable action, not a file.
 		await settle();
@@ -162,6 +163,19 @@ describe("advisor file scopes", () => {
 		f.overlay.restoreNavigation(snapshot);
 		expect(strip(f.overlay)).toContain("/project/WATCHDOG.yml");
 		expect(strip(f.overlay)).toContain("Root");
+	});
+
+	it("bulk switches also disable or invert an implicit default without explicit advisor rows", async () => {
+		const f = fixture({ advisors: [] });
+		f.activate("invert");
+		await settle();
+		expect(f.disk.get(f.files[0].path)?.enabled).toBe(false);
+		f.activate("invert");
+		await settle();
+		expect(f.disk.get(f.files[0].path)?.enabled).toBeUndefined();
+		f.activate("disable");
+		await settle();
+		expect(f.disk.get(f.files[0].path)?.enabled).toBe(false);
 	});
 
 	it("scrolls long file previews without moving the file selection and restores the reading position", () => {

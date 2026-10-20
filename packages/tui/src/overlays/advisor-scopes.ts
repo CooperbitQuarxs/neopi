@@ -187,7 +187,10 @@ export class AdvisorScopeOverlayComponent implements Component {
 			for (const file of this.#files) {
 				const doc = await this.#cb.loadFile(file.path);
 				const fileEnabled = doc.enabled !== false;
-				if (value === "enable" || value === "invert") doc.enabled = undefined;
+				doc.enabled =
+					value === "disable" || (value === "invert" && doc.advisors.length === 0 && fileEnabled)
+						? false
+						: undefined;
 				for (const advisor of doc.advisors) {
 					advisor.enabled =
 						value === "disable"
