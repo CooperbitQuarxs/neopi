@@ -5,7 +5,7 @@
  * registry, large commands are accepted, `serve` answers once and leaves no
  * half-installed service, and every declared control-only command routes.
  */
-import { afterEach, beforeAll, afterAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, afterAll, describe, expect, test, vi } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import * as net from "node:net";
 import { tmpdir } from "node:os";
@@ -29,6 +29,12 @@ import { type SubagentLifecyclePayload, TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "
 import { EventBus } from "../../src/utils/event-bus";
 import type { ControlSnapshot } from "../../src/control/types";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
+import { LiveSessionController } from "../../src/live/controller";
+import { LiveCommandController } from "../../src/modes/controllers/live-command-controller";
+import type { InteractiveModeContext } from "../../src/modes/types";
+import { Container } from "@oh-my-pi/pi-tui/tui";
+import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
+import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 
 describe("control host", () => {
 	let tempDir: TempDir;
@@ -49,6 +55,7 @@ describe("control host", () => {
 
 	afterEach(async () => {
 		for (const extra of extraClients.splice(0)) extra.close();
+		vi.restoreAllMocks();
 		client?.close();
 		client = undefined;
 		await host?.close();
@@ -114,6 +121,126 @@ describe("control host", () => {
 			sessionFile,
 		} satisfies SubagentLifecyclePayload);
 	}
+
+	test("real Settings.init accepts a configuration without live settings", async () => {
+		const settingsPath = join(import.meta.dir, "../../src/config/settings.ts");
+		const child = Bun.spawn(
+			[
+				process.execPath,
+				"--eval",
+				`import { Settings } from ${JSON.stringify(settingsPath)}; await Settings.init({ inMemory: true, cwd: ${JSON.stringify(tempDir.path())}, agentDir: ${JSON.stringify(tempDir.path())} });`,
+			],
+			{ cwd: tempDir.path(), stdout: "ignore", stderr: "pipe" },
+		);
+		const stderr = await new Response(child.stderr).text();
+		expect({ exitCode: await child.exited, stderr }).toEqual({ exitCode: 0, stderr: "" });
+	});
+
+	test("control connections share the TUI-owned live call without owning its lifetime", async () => {
+		const { host, client } = await start();
+		let created = 0;
+		const startLive = vi.fn(async () => {});
+		const stopLive = vi.fn(async () => {});
+		const stopRecorder = vi.fn(() => {});
+		const createRecorder = vi.fn(() => ({ stop: stopRecorder }));
+		const voices: Array<string | undefined> = [];
+		const owner = new LiveCommandController(
+			{
+				session: session!,
+				settings: session!.settings,
+				editor: new CustomEditor(getEditorTheme()),
+				liveTranscriptContainer: new Container(),
+				statusLine: { setLiveStatus: () => {} },
+				ui: { requestRender: () => {} },
+				keybindings: { getKeys: () => [] },
+				showError: () => {},
+				showStatus: () => {},
+				extractAssistantText: () => "",
+			} as unknown as InteractiveModeContext,
+			options => {
+				created++;
+				voices.push(options.voice);
+				return new LiveSessionController({
+					...options,
+					createTransport: () => ({
+						connect: startLive,
+						close: stopLive,
+						async send() {},
+						async setMuted() {},
+						setOutputSuppressed() {},
+						pushAudio: () => true,
+					}),
+					createRecorder,
+				});
+			},
+		);
+		try {
+			await owner.handleCommand();
+			// A connection may cache its handler before the TUI finishes attaching.
+			expect((await client.request({ type: "get_state" })).success).toBe(true);
+			host.liveBridge = owner;
+			expect(await client.request({ type: "live_mute", muted: true })).toMatchObject({
+				success: true,
+				data: { muted: true },
+			});
+			expect(await client.request({ type: "live_start" })).toMatchObject({
+				success: false,
+				error: "A live session is already active",
+			});
+			client.close();
+			expect(owner.active).toBe(true);
+			expect(stopLive).not.toHaveBeenCalled();
+			const next = await connectAnother("live reconnect");
+			expect(await next.request({ type: "live_mute", muted: false })).toMatchObject({
+				success: true,
+				data: { muted: false },
+			});
+			expect((await next.request({ type: "live_stop" })).success).toBe(true);
+			expect(owner.active).toBe(false);
+			expect(startLive).toHaveBeenCalledTimes(1);
+			expect(stopLive).toHaveBeenCalledTimes(1);
+			expect(created).toBe(1);
+			expect(createRecorder).toHaveBeenCalledTimes(1);
+			expect(stopRecorder).toHaveBeenCalledTimes(1);
+			expect(await next.request({ type: "live_mute" })).toMatchObject({
+				success: false,
+				error: "No live session is active",
+			});
+			expect(await next.request({ type: "live_start", voice: " cove " })).toMatchObject({
+				success: true,
+				data: { voice: "cove" },
+			});
+			expect(voices.at(-1)).toBe("cove");
+			expect(created).toBe(2);
+			await owner.handleCommand();
+			expect(owner.active).toBe(false);
+			startLive.mockRejectedValueOnce(new Error("transport unavailable"));
+			expect(await next.request({ type: "live_start" })).toMatchObject({
+				success: false,
+				error: "transport unavailable",
+			});
+			expect(owner.active).toBe(false);
+			expect(stopLive).toHaveBeenCalledTimes(3);
+			host.liveBridge = undefined;
+			expect(await next.request({ type: "live_start" })).toMatchObject({
+				success: false,
+				error: "Live voice is unavailable on this transport",
+			});
+		} finally {
+			await owner.stop();
+		}
+	});
+
+	test("live commands stay unavailable when the session has no live owner", async () => {
+		const { client } = await start();
+		for (const type of ["live_start", "live_mute"] as const) {
+			expect(await client.request({ type })).toMatchObject({
+				success: false,
+				error: "Live voice is unavailable on this transport",
+			});
+		}
+		expect((await client.request({ type: "live_stop" })).success).toBe(true);
+	});
 
 	test("hello and state carry the root session's RPC state, without the dump fields", async () => {
 		const { client, hello } = await start();

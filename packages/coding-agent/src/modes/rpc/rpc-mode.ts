@@ -76,7 +76,7 @@ import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
 import { RpcBtwController } from "./rpc-btw";
 import { RpcGoalController } from "./rpc-goal";
-import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
+import { RpcLiveBridge, type RpcLiveControl, type RpcLiveSessionFactory } from "./rpc-live";
 import { RpcOutputWriter } from "./rpc-output";
 import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } from "./rpc-plan-mode";
 import { RpcExtensionUserMessageTracker, RpcPromptResults, watchAndReportPromptResult } from "./rpc-prompt-results";
@@ -1473,7 +1473,7 @@ export interface RpcCommandHandlerContext {
 	/** Side questions (`/btw`) over RPC. */
 	btw?: RpcBtwController;
 	/** GPT live voice over RPC. */
-	liveBridge?: RpcLiveBridge;
+	liveBridge?: RpcLiveControl;
 	/** Response size cap used to fit restored queue payloads into one frame. */
 	maxResponseBytes?: () => number;
 }
@@ -1509,7 +1509,6 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 		goalController,
 		goalTurnScheduled,
 		btw,
-		liveBridge,
 	} = ctx;
 	// Without a frame encoder (control sockets) no response-size cap applies.
 	const maxResponseBytes = (): number => ctx.maxResponseBytes?.() ?? Number.MAX_SAFE_INTEGER;
@@ -1921,6 +1920,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			}
 
 			case "live_start": {
+				const liveBridge = ctx.liveBridge;
 				if (!liveBridge) return error(id, "live_start", "Live voice is unavailable on this transport");
 				try {
 					return success(id, "live_start", await liveBridge.start({ voice: command.voice }));
@@ -1930,11 +1930,12 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			}
 
 			case "live_stop": {
-				await liveBridge?.stop();
+				await ctx.liveBridge?.stop();
 				return success(id, "live_stop");
 			}
 
 			case "live_mute": {
+				const liveBridge = ctx.liveBridge;
 				if (!liveBridge) return error(id, "live_mute", "Live voice is unavailable on this transport");
 				try {
 					return success(id, "live_mute", liveBridge.setMuted(command.muted));
@@ -2599,6 +2600,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	});
 	// Live frames go straight to `output`, so `set_event_filter` (session events only) never drops them.
 	const liveBridge = new RpcLiveBridge(session, output, createLiveSession);
+	const controlHost = controlHostFor(session);
+	if (controlHost) controlHost.liveBridge = liveBridge;
 	const subagentRegistry = subagentEventBus ? new RpcSubagentRegistry(subagentEventBus, output) : undefined;
 	// One tracker for both surfaces, so control snapshots report the same activeRole as get_state.
 	const rpcRoles = controlHostFor(session)?.roles ?? new RpcRoles(session, launchModel);
@@ -3069,6 +3072,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	hostToolBridge.close("RPC client disconnected before host tool execution completed");
 	hostUriBridge.clear("RPC client disconnected before host URI request completed");
 	toolApprovalBridge.close("RPC client disconnected before tool approval response completed");
+	if (controlHost?.liveBridge === liveBridge) controlHost.liveBridge = undefined;
 	await liveBridge.stop();
 	await inputDispatcher.drain();
 	await shutdownCoordinator.drain();

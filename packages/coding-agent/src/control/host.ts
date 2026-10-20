@@ -14,6 +14,7 @@ import { lookup } from "../config/registry";
 import { readSetting, unsetSetting, writeSetting } from "./settings-adapter";
 import { RpcPromptResults } from "../modes/rpc/rpc-prompt-results";
 import { RpcRoles } from "../modes/rpc/rpc-roles";
+import type { RpcLiveControl } from "../modes/rpc/rpc-live";
 import { RPC_CAPABILITIES } from "../modes/rpc/rpc-capabilities";
 import type { RpcCommand, RpcSubagentSubscriptionLevel } from "../modes/rpc/rpc-types";
 import type { AgentSession } from "../session/agent-session";
@@ -136,6 +137,8 @@ export class ControlHost {
 	/** Narrow per-agent capabilities for monitor panes (#345). */
 	readonly monitor: ControlMonitorService;
 	presenter: ControlPresenter | undefined;
+	/** Attached by the session's mode. Control connections never own a separate call. */
+	liveBridge: RpcLiveControl | undefined;
 	publication: ControlPublication | undefined;
 	readonly #options: ControlHostOptions;
 	readonly #connections = new Set<ControlConnection>();
@@ -563,9 +566,13 @@ export class ControlHost {
 		const bridges = this.#bridges.get(connection);
 		if (!bridges) throw new Error("control bridges were not installed");
 		const { createRpcCommandHandler } = await import("../modes/rpc/rpc-mode");
+		const host = this;
 		const handler = createRpcCommandHandler({
 			session,
 			output,
+			get liveBridge() {
+				return host.liveBridge;
+			},
 			success,
 			error,
 			promptResults: this.promptResults,
