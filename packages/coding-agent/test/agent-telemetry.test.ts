@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -55,6 +55,8 @@ function fixture(settings = Settings.isolated()) {
 	const toolSession: ToolSession = {
 		cwd: process.cwd(),
 		hasUI: false,
+		getSessionFile: () => manager.getSessionFile() ?? null,
+		getSessionSpawns: () => null,
 		settings,
 		agentRegistry: registry,
 		getAgentId: () => "Root",
@@ -62,7 +64,7 @@ function fixture(settings = Settings.isolated()) {
 	const agent = new Agent({
 		initialState: {
 			model: mock.model,
-			thinkingLevel: "medium",
+			thinkingLevel: ThinkingLevel.Medium,
 			messages: [previous],
 			systemPrompt: ["test"],
 			tools: [],
@@ -74,7 +76,7 @@ function fixture(settings = Settings.isolated()) {
 		sessionManager: manager,
 		settings,
 		modelRegistry: new ModelRegistry(auth),
-		thinkingLevel: "medium",
+		thinkingLevel: ThinkingLevel.Medium,
 		toolSession,
 	});
 	sessions.push(session);
@@ -106,6 +108,7 @@ function telemetryFrom(messages: AgentMessage[]): AgentContextTelemetry {
 	);
 	expect(notices).toHaveLength(1);
 	const notice = notices[0]!;
+	if (notice.role !== "custom") throw new Error("Expected custom notice");
 	if (typeof notice.content !== "string") throw new Error("Expected text notice");
 	const line = notice.content.split("\n").find(value => value.startsWith("{"));
 	if (!line) throw new Error("Missing structured telemetry");
@@ -116,8 +119,7 @@ function modelText(message: Message): string {
 	return typeof message.content === "string"
 		? message.content
 		: message.content
-				.filter(block => block.type === "text")
-				.map(block => block.text)
+				.flatMap(block => (block.type === "text" ? [block.text] : []))
 				.join("\n");
 }
 
@@ -144,7 +146,9 @@ describe("agent-visible runtime telemetry", () => {
 		});
 		const messages: AgentMessage[] = [previous, { role: "user", content: "continue", timestamp: 123 }];
 		const record = telemetryFrom(session.prepareAgentTelemetry(messages));
-		expect(record).toEqual(toolSession.getAgentTelemetry?.());
+		const snapshot = toolSession.getAgentTelemetry?.();
+		if (!snapshot) throw new Error("Expected local telemetry snapshot");
+		expect(record).toEqual(snapshot);
 		expect(record.model).toEqual({ provider: session.model!.provider, id: session.model!.id, effort: null });
 		expect(record.context).toEqual({
 			usedTokens: session.getContextUsage()!.tokens,
