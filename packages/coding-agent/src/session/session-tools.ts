@@ -24,6 +24,7 @@ import { MEMORY_BACKEND_TOOL_NAMES } from "../memory-backend/tool-names";
 import { invalidateToolSchemaMetadata } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { MemoryBackendStartOptions, MemoryPromptPreparation } from "../memory-backend/types";
 import type { AgentDefinition } from "../task/types";
+import { resolveModelPreset } from "../prompts/model-presets";
 import evalPreludeNoticePrompt from "../prompts/system/eval-prelude-notice.md" with { type: "text" };
 import sessionAgentNoticePrompt from "../prompts/system/session-agent-notice.md" with { type: "text" };
 import toolRosterNoticePrompt from "../prompts/system/tool-roster-notice.md" with { type: "text" };
@@ -880,7 +881,9 @@ export class SessionTools {
 			cfgInlineToolDescriptors.get(this.#host.settings),
 			activeModel.id,
 		);
-		return `delegation-bias:${resolveDelegationBias(activeModel)}|inline-descriptors:${inlineDescriptors}`;
+		const preset = resolveModelPreset(activeModel);
+		const presetKey = preset ? `${preset.id}:${JSON.stringify(preset.context)}` : "";
+		return `delegation-bias:${resolveDelegationBias(activeModel)}|inline-descriptors:${inlineDescriptors}|model-preset:${presetKey}`;
 	}
 
 	/** Rebuilds model-dependent tool prompts after a model change. */

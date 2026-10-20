@@ -209,6 +209,23 @@ those characters reach the model literally. Internal values such as `cwd`, `skil
 
 The opt-in `SYSTEM_TEMPLATE.md`, explicit template options, and `builtin-prompts` overrides compile Handlebars. An explicit malformed or empty system template fails clearly and is never downgraded to plain text. Discovered empty `SYSTEM_TEMPLATE.md` files are skipped. Malformed templates discovered by `buildSystemPrompt()` warn and fall back to the bundled prompt; CLI-discovered source is forwarded as explicit SDK input and therefore fails on malformed Handlebars. Core `builtin-prompts` overrides fail closed at their next rebuild.
 
+## Model-family adapters
+
+The system prompt layers the global baseline, a KDL-selected model-family adapter, then project and role context. The initial adapter targets Opus 5 exactly, not Opus 4.8, Opus 5.5, or other families. Its text documents the scope-expansion failure mode and recommended effort without changing the operator's effort setting or ranking models. The wording is original; no Senpi prompt files are copied.
+
+Inspect and customize it through the same prompt tools:
+
+```sh
+npi prompts keys model-families/opus-5.md
+npi prompts lexicon
+npi prompts unpack --only 'model-families/*'
+npi prompts check model-families/opus-5.md
+```
+
+Edit `~/.omp/agent/builtin-prompts/model-families/opus-5.md`, or unpack with `--project` for a project override. The lexicon exposes `modelClass`, `modelFamily`, and `modelRevision` from catalog classification. Project overrides win over user overrides; rebuilds reload edits, including after model switches.
+
+To disable the adapter, leave its effective override file empty. The adapter block disappears and the global baseline remains byte-for-byte unchanged. `npi prompts reset model-families/opus-5.md` removes a user override and restores the shipped adapter. Use `--project` to reset a project override.
+
 ## Recipes
 
 ### Add rules to the default prompt
