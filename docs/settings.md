@@ -877,6 +877,25 @@ memory:
 
 A positive `compaction.thresholdTokens` wins over `thresholdPercent`. A fixed trigger (this or an `f` model entry) at or past the model's context window, for example where a provider caps the window lower, compacts at the window less the reserve, like the reserve-based default; the `/models` preview marks it `capped by window`. Otherwise, a positive percentage is clamped to 1–99%; non-positive percentages use the reserve-based threshold.
 
+Give a model role a persistent absolute-token budget under `roleSettings`. The key inside
+each role is the dotted setting id. Selecting that role applies the budget without
+changing the global value, and assigning another model to the role keeps the budget:
+
+```yaml
+compaction:
+  thresholdTokens: 100000
+roleSettings:
+  slow:
+    compaction.thresholdTokens: 120000
+```
+
+In `/settings` → Context → Compaction, both **Compaction Token Limit** and each role's
+**token budget** offer presets and **Custom...** for typed integer counts such as
+`120000`. Choose **Inherit** or clear a role's custom field to use the global default.
+Roles without a budget keep the global threshold. Session-only overrides take priority
+over a role budget. A fixed token budget still respects the active model's actual
+context window and reserve.
+
 `compaction` has additional tuning keys (idle compaction, supersede/drop heuristics) visible in `omp config list`. See [Compaction](./compaction.md) for the full strategy reference.
 
 Per-model compaction limits apply to the models they match. A token count is the base the usual policy scales: omp treats it as the model's window when computing the threshold, so with defaults it compacts at the base minus the reserve (85% for bases above ~109k) and with `compaction.thresholdPercent: 80` at 80% of it; a global `compaction.thresholdTokens` does not apply to that model. Prefix the count with `f` (`f400k`, stored as `"f400000"`) to make it the exact trigger instead. A percentage entry replaces both `compaction.threshold*` settings and scales the real window. Requests and overflow handling still use the real window. The `/models` preview shows where each model compacts; to set a limit, select a role or fallback row in the **Roles** view and press `k` (or click **Compaction limit**), then type `400k`, `f400k`, `1M`, or `80%` (empty input resets). That writes the exact `provider/model-id` key to the global config. By hand:

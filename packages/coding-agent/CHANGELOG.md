@@ -9,6 +9,7 @@
 
 ### Added
 
+- Give each model role its own persistent token budget and type arbitrary global or role token limits in settings while keeping preset quick picks ([#52](https://github.com/PsychedelicShayna/neopi/issues/52)).
 - Added opt-in session work contracts with `/contract`, policy-gated agent edits, durable provenance, explicit rule promotion, and intact reinjection after compaction or resume ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
 - Set per-role sampling, response verbosity, thinking-summary and service-tier overrides without changing global defaults; omitted values inherit and numeric `-1` explicitly requests the provider default ([#53](https://github.com/PsychedelicShayna/neopi/issues/53)).
 - Configure independent prewalk planning and execution crews with ordered fallbacks in settings, see both resolved models before launch, and retain the execution brief across the handoff ([#30](https://github.com/PsychedelicShayna/neopi/issues/30)).

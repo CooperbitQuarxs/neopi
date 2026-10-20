@@ -343,6 +343,38 @@ describe("settings as a native prefs page", () => {
 		expect(row(prefs(selector).props, "theme.dark").control).toMatchObject({ value: "light" });
 	});
 
+	it("accepts arbitrary numeric budgets through Custom and retains presets and cancellation", () => {
+		const path = "compaction.thresholdTokens";
+		const entry: SettingsDisplayEntry = {
+			path,
+			type: "number",
+			defaultValue: -1,
+			ui: {
+				tab: "context",
+				label: "Token budget",
+				description: "Fixed token budget",
+				customInput: true,
+				options: [
+					{ value: "default", label: "Default" },
+					{ value: "100000", label: "100K" },
+				],
+			},
+		};
+		const { selector, values } = harness({}, { entries: [entry] });
+		send(selector, { type: "action", key: "", act: "page", value: "context", mods: [] });
+		send(selector, { type: "change", key: "", item: path, value: "__custom_number__" });
+		for (const ch of "120000") selector.handleInput(ch);
+		selector.handleInput(ENTER);
+		expect(values.get(path)).toBe(120000);
+		send(selector, { type: "change", key: "", item: path, value: "100000" });
+		expect(values.get(path)).toBe(100000);
+		send(selector, { type: "change", key: "", item: path, value: "__custom_number__" });
+		selector.handleInput("\x1b");
+		expect(values.get(path)).toBe(100000);
+		send(selector, { type: "change", key: "", item: path, value: "default" });
+		expect(values.get(path)).toBe(-1);
+	});
+
 	it("shows the text editor's draft and cursor while the keys edit it, and submits a pointer change", () => {
 		const { selector, values } = harness();
 		send(selector, { type: "action", key: "", act: "page", value: "shell", mods: [] });

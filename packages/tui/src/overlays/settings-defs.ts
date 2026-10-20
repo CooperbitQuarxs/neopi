@@ -133,6 +133,7 @@ export type AnyUiMetadata = UiBase & {
 	secret?: boolean;
 	ordered?: boolean;
 	editor?: "json";
+	customInput?: true;
 };
 
 /** Structural schema entries supplied by the application host. */
@@ -195,6 +196,7 @@ type OptionList = ReadonlyArray<SubmenuOption>;
 export interface SubmenuSettingDef extends BaseSettingDef {
 	type: "submenu";
 	options: OptionList;
+	customInput?: true;
 	onPreview?: (value: string) => void;
 	onPreviewCancel?: (originalValue: string) => void;
 }
@@ -265,7 +267,7 @@ function entryToSettingDef(entry: SettingsDisplayEntry): SettingDef | null {
 	if (schemaType === "number") {
 		// Numbers without options are intentionally hidden from the UI.
 		if (!options || options === "runtime") return null;
-		return { ...base, type: "submenu", options };
+		return { ...base, type: "submenu", options, customInput: ui.customInput };
 	}
 
 	if (schemaType === "string") {
@@ -348,7 +350,8 @@ export function numericOption(value: string): number | undefined {
  * settings page. Returns the steps (number → label), else `undefined`.
  */
 export function numberSteps(def: SettingDef): Record<string, string> | undefined {
-	if (def.schemaType !== "number" || def.type !== "submenu" || def.options.length < 2) return undefined;
+	if (def.schemaType !== "number" || def.type !== "submenu" || def.customInput || def.options.length < 2)
+		return undefined;
 	const labels: Record<string, string> = {};
 	for (const option of def.options) {
 		const n = numericOption(option.value);

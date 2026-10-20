@@ -19,6 +19,7 @@ import {
 	cfgCompaction,
 	cfgCompactionModelThresholds,
 	cfgCompactionModelThresholdsEnabled,
+	cfgCompactionThresholdTokens,
 	cfgExtendedContext,
 } from "./context-settings";
 
@@ -27,6 +28,7 @@ export function resolveModelCompactionSettings(
 	scope: ScopeLike,
 	model: { provider: string; id: string } | null | undefined,
 ): CompactionSettings {
+	if (cfgCompactionThresholdTokens.provenance(scope) === "role") return cfgCompaction.get(scope);
 	const thresholds = cfgCompactionModelThresholdsEnabled.get(scope)
 		? cfgCompactionModelThresholds.get(scope)
 		: undefined;
@@ -36,17 +38,20 @@ export function resolveModelCompactionSettings(
 /** Where auto-compaction triggers for `model` and which setting decides it, for the model hub preview. */
 export function describeModelCompactionPoint(scope: ScopeLike, model: Model): ModelCompactionPoint {
 	const configured = cfgCompaction.get(scope);
+	const roleBudget = cfgCompactionThresholdTokens.provenance(scope) === "role";
 	const thresholds = cfgCompactionModelThresholdsEnabled.get(scope)
 		? cfgCompactionModelThresholds.get(scope)
 		: undefined;
-	const match = matchModelCompactionThreshold(thresholds, model);
-	const settings = applyModelCompactionThreshold(configured, thresholds, model);
+	const match = roleBudget ? undefined : matchModelCompactionThreshold(thresholds, model);
+	const settings = roleBudget ? configured : applyModelCompactionThreshold(configured, thresholds, model);
 	const contextWindow = model.contextWindow ?? 0;
 	const trigger = settings.enabled && contextWindow > 0 ? resolveTrigger(settings, contextWindow) : undefined;
 	return {
 		tokens: trigger?.tokens,
 		basis: trigger && formatBasis(trigger),
-		source: match?.key ?? (configured.thresholdTokens > 0 || configured.thresholdPercent > 0 ? "global" : "default"),
+		source: roleBudget
+			? "role"
+			: (match?.key ?? (configured.thresholdTokens > 0 || configured.thresholdPercent > 0 ? "global" : "default")),
 		draft: match?.key === `${model.provider}/${model.id}` ? formatCompactionPointInput(match.threshold) : undefined,
 	};
 }
