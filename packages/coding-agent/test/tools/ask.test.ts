@@ -172,7 +172,10 @@ describe("AskTool option notes", () => {
 			expect(content.text).toContain('Note on option "C" (not selected):\n  Why not C');
 			expect(content.text).toContain("Second caveat");
 			const rendered = stripAnsi(
-				askToolRenderer.renderResult(result, { expanded: true, isPartial: false }, darkTheme).render(100).join("\n"),
+				askToolRenderer
+					.renderResult(result, { expanded: true, isPartial: false }, darkTheme)
+					.render(100)
+					.join("\n"),
 			);
 			expect(rendered).toContain("Why not B");
 			expect(rendered).toContain("Why not C");

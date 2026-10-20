@@ -118,9 +118,7 @@ function telemetryFrom(messages: AgentMessage[]): AgentContextTelemetry {
 function modelText(message: Message): string {
 	return typeof message.content === "string"
 		? message.content
-		: message.content
-				.flatMap(block => (block.type === "text" ? [block.text] : []))
-				.join("\n");
+		: message.content.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
 }
 
 describe("agent-visible runtime telemetry", () => {
