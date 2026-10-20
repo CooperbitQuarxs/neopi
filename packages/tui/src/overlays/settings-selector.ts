@@ -1748,12 +1748,14 @@ export class SettingsSelectorComponent implements Component {
 
 	#getSubmenuCurrentValue(path: string, value: unknown): string {
 		const rawValue = String(value ?? "");
-		if (path === "compaction.thresholdPercent" && (rawValue === "-1" || rawValue === "")) {
+		const def = getSettingDef(this.#context.settings.entries, path);
+		if (
+			def?.schemaType === "number" &&
+			def.type === "submenu" &&
+			(rawValue === "-1" || rawValue === "") &&
+			def.options.some(option => option.value === "default")
+		)
 			return "default";
-		}
-		if (path === "compaction.thresholdTokens" && (rawValue === "-1" || rawValue === "")) {
-			return "default";
-		}
 		return rawValue;
 	}
 
