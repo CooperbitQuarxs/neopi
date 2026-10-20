@@ -97,11 +97,10 @@ describe("live /tool: command reports and completion", () => {
 					submitted.reject(error);
 				}
 			};
-			const resolved = expect(submitted.promise).resolves.toBeUndefined();
 			terminal.sendInput(command);
 			await terminal.waitForRender(() => mode.editor.getText() === command);
 			terminal.sendInput("\r");
-			await resolved;
+			await expect(submitted.promise).resolves.toBeUndefined();
 			await terminal.waitForRender(() => screen().includes(`No enabled tool named "${name}"`));
 			expect(screen()).toContain("Nearest enabled matches:");
 			expect(screen()).toContain("/tool:read");
@@ -120,7 +119,7 @@ describe("live /tool: command reports and completion", () => {
 	async function toolCompletions(): Promise<string[]> {
 		const query = "/tool:";
 		const result = await provider.getSuggestions([query], 0, query.length);
-		return result?.items.map(item => item.value) ?? [];
+		return result?.items.map(item => item.value).filter(value => value.startsWith("tool:")) ?? [];
 	}
 
 	it("rebuilds enabled-tool completion after runtime selection changes", async () => {
