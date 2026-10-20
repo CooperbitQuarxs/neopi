@@ -25,6 +25,7 @@ import {
 	cfgTopP,
 } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 const numericSettings = [cfgTemperature, cfgTopP, cfgTopK, cfgMinP, cfgPresencePenalty, cfgRepetitionPenalty];
@@ -52,7 +53,7 @@ async function requestPayload(
 		},
 	};
 	const stream = settingsAware ? createSettingsAwareStreamFn(settings) : streamSimple;
-	await stream(model, context, options).result();
+	await (await stream(model, context, options)).result();
 	if (!body) throw new Error("Provider did not build a request payload");
 	return body;
 }
@@ -163,7 +164,7 @@ describe("role-scoped sampling and request settings", () => {
 		settings.setModelRole("precise", "openai/gpt-4o-mini");
 		settings.setRoleSetting("precise", cfgTemperature, -1);
 		settings.setRoleSetting("precise", cfgTierOpenai, "none");
-		const sessionManager = SessionManager.inMemory();
+		const sessionManager = SessionManager.create(process.cwd(), temp.path());
 		sessionManager.appendModelChange("openai/gpt-4o-mini", "precise");
 		session = new AgentSession({
 			agent: new Agent({
@@ -173,8 +174,19 @@ describe("role-scoped sampling and request settings", () => {
 			settings,
 			sessionManager,
 			modelRegistry,
+			serviceTierByFamily: { openai: "priority" },
 		});
 		await Promise.resolve();
+		expect(session.agent.temperature).toBeUndefined();
+		expect(session.serviceTierByFamily.openai).toBeUndefined();
+
+		sessionManager.appendMessage(createAssistantMessage("done"));
+		session.setServiceTierFamily("openai", "priority");
+		session.agent.temperature = 0.8;
+		await sessionManager.flush();
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persisted role session");
+		expect(await session.switchSession(sessionFile)).toBe(true);
 		expect(session.agent.temperature).toBeUndefined();
 		expect(session.serviceTierByFamily.openai).toBeUndefined();
 	});
