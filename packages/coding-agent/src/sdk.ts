@@ -43,6 +43,7 @@ import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { DEFAULT_FRAME_DATA_BYTES_BUDGET, frameDataBytesBudget } from "@oh-my-pi/snapcompact";
+import { type LaunchProfileMemory, renderLaunchProfileMemory, setSessionLaunchProfile } from "./neopi/launch-profile";
 import {
 	discoverAdvisorConfigs,
 	discoverWatchdogFiles,
@@ -684,6 +685,8 @@ export interface CreateAgentSessionOptions {
 	customSystemPrompt?: string;
 	/** Already-loaded text appended through the bundled system prompt templates. */
 	appendSystemPrompt?: string;
+	/** Explicitly selected persistent memory, snapshotted before the first turn. */
+	launchProfileMemory?: LaunchProfileMemory;
 	/**
 	 * `customSystemPrompt` or `systemPromptTemplate` came from a discovered
 	 * SYSTEM.md / SYSTEM_TEMPLATE.md rather than an explicit flag. Chat mode
@@ -1814,6 +1817,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const agentDir = options.agentDir ?? getAgentDir();
 	const eventBus = options.eventBus ?? new EventBus();
 	const subagentEventBus = options.subagentEventBus ?? new EventBus();
+	const launchProfilePrompt = renderLaunchProfileMemory(options.launchProfileMemory);
 
 	registerSshCleanup();
 	registerEvalCleanup();
@@ -4264,7 +4268,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						config: liveChatMode,
 						customPrompt: options.systemPromptDiscovered ? undefined : options.customSystemPrompt,
 						appendPrompt: composeAppendPrompt(
-							memoryInstructions ? [memoryInstructions] : [],
+							[memoryInstructions, launchProfilePrompt].filter((part): part is string => part !== undefined),
 							options.appendSystemPromptDiscovered ? undefined : options.appendSystemPrompt,
 						),
 						contextFiles,
@@ -4298,6 +4302,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					});
 			const appendParts: string[] = [];
 			if (memoryInstructions) appendParts.push(memoryInstructions);
+			if (launchProfilePrompt) appendParts.push(launchProfilePrompt);
 			if (autoLearnInstructions) appendParts.push(autoLearnInstructions);
 			// List each mounted MCP tool once. A routed tool that the xd:// catalog
 			// would list carries its catalog summary on the route line and gets no
@@ -5993,6 +5998,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			await session.initializeCodeMode();
 		} catch (error) {
 			logger.warn("Code Mode initialization at session startup failed", { error: String(error) });
+		}
+
+		if (launchProfilePrompt !== undefined) {
+			sessionManager.appendCustomEntry("launch-profile", launchProfilePrompt);
+			setSessionLaunchProfile(session, launchProfilePrompt);
 		}
 
 		startupCleanup.move();
