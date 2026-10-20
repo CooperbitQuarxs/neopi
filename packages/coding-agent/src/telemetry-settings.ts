@@ -114,6 +114,7 @@ export const cfgUsageNoticesContextPercent = register({
 });
 
 function validatePercent(value: unknown): void {
+	if (value === undefined) return;
 	if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
 		throw new Error("Notice thresholds must be between 0 and 100 percent");
 	}
