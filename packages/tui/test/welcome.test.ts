@@ -88,7 +88,7 @@ describe("WelcomeComponent", () => {
 
 		// The lockup is one block: the logo's bar starts it, the wordmark row ends it.
 		const bar = rows.find(row => row.includes("████████████")) ?? "";
-		const word = rows.find(row => row.includes("▄▀▀▄")) ?? "";
+		const word = rows.find(row => row.includes("█▀▀▄")) ?? "";
 		expectCentered(indent(bar), columns - visibleWidth(word));
 
 		// Each tip line centers on its own.
@@ -109,14 +109,14 @@ describe("WelcomeComponent", () => {
 
 		// The lockup needs 12 logo + 4 gap + 15 wordmark columns inside the 2-column margin.
 		const fits = rows(33);
-		const word = fits.find(row => row.includes("▄▀▀▄"));
+		const word = fits.find(row => row.includes("█▀▀▄"));
 		const version = fits.find(row => row.includes("v1.0.0"));
 		expect(fits.some(row => row.includes("████████████"))).toBe(true);
-		expect(version?.indexOf("v1.0.0")).toBe(word?.indexOf("▄▀▀▄"));
+		expect(version?.indexOf("v1.0.0")).toBe(word?.indexOf("█▀▀▄"));
 
 		const narrow = rows(32).join("\n");
 		expect(narrow).toContain("████████████");
-		expect(narrow).not.toContain("▄▀▀▄");
+		expect(narrow).not.toContain("█▀▀▄");
 		expect(narrow).not.toContain("v1.0.0");
 	});
 });
