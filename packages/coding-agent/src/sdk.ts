@@ -4549,7 +4549,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {
 			const withContext = await extensionRunner.emitContext(messages, signal);
 			const wrapped = wrapSteeringForModel(withContext);
-			return session ? session.prepareUsageNotices(session.prepareAgentTelemetry(wrapped), signal) : wrapped;
+			return session ? session.prepareAgentTelemetry(wrapped) : wrapped;
 		};
 		// Per-request provider-context transforms. Obfuscate FIRST so secrets are
 		// redacted from text before snapcompact rasterizes it into PNG frames. Clamp

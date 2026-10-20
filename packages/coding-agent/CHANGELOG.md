@@ -9,7 +9,6 @@
 
 ### Added
 
-- Added opt-in provider quota and context-pressure notice cards with configurable thresholds, cache age, reset times, and separately gated agent delivery ([#27](https://github.com/PsychedelicShayna/neopi/issues/27)).
 - Ask answers can carry several notes on any option, selected or not, alongside the existing answer note ([#321](https://github.com/PsychedelicShayna/neopi/issues/321)).
 - Added configurable direct-address (`Iris`) and per-utterance force (`relay`) live keywords: leading addresses refuse primary handoffs, mentions elsewhere remain delegable, and forced utterances send the exact operator text once; editing the composer determines the final handoff even when speech originally addressed Iris ([#40](https://github.com/PsychedelicShayna/neopi/issues/40)).
 - Added Live Hold Mode and a configurable quiet floor in settings: keep speech in the composer until a trailing submit phrase forces a main-agent handoff, and reserve breathing room before voice responses or delegation ([#269](https://github.com/PsychedelicShayna/neopi/issues/269)).

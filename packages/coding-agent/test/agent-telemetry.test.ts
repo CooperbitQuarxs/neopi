@@ -243,12 +243,7 @@ describe("agent-visible runtime telemetry", () => {
 		const mock = createMockModel({
 			handler: { content: ["done"], usage: { input: 100, output: 10, totalTokens: 110 } },
 		});
-		const settings = Settings.isolated({
-			"telemetry.agent_context": "minimal",
-			"telemetry.threshold_events": true,
-			"usageNotices.enabled": true,
-			"compaction.enabled": false,
-		});
+		const settings = Settings.isolated({ "telemetry.agent_context": "minimal", "compaction.enabled": false });
 		const modelRegistry = new ModelRegistry(auth, path.join(temp.path(), "models.yml"));
 		vi.spyOn(modelRegistry, "getApiKey").mockResolvedValue("test-key");
 		const { session } = await createAgentSession({
@@ -276,24 +271,6 @@ describe("agent-visible runtime telemetry", () => {
 		sessions.push(session);
 		session.agent.streamFn = mock.stream;
 		session.agent.getApiKey = () => "test-key";
-		const usageRead = vi.spyOn(session, "fetchUsageReports").mockResolvedValue([
-			{
-				provider: mock.model.provider,
-				fetchedAt: Date.now() - 10_000,
-				limits: [
-					{
-						id: "5h",
-						label: "5 hours",
-						scope: { provider: mock.model.provider },
-						amount: { usedFraction: 0.95, unit: "percent" },
-					},
-				],
-			},
-		]);
-		const humanNotices: string[] = [];
-		session.subscribe(event => {
-			if (event.type === "notice" && event.source === "usage") humanNotices.push(event.message);
-		});
 		await session.prompt("first");
 		await session.prompt("second");
 		expect(mock.calls).toHaveLength(2);
@@ -303,17 +280,6 @@ describe("agent-visible runtime telemetry", () => {
 			).toHaveLength(1);
 		}
 		expect(modelText(mock.calls[1]!.context.messages.at(-1)!)).toContain('"output":10');
-		expect(usageRead).toHaveBeenCalledTimes(1);
-		expect(humanNotices).toHaveLength(1);
-		expect(modelText(mock.calls[0]!.context.messages.at(-1)!)).toContain('"type":"usage_threshold_events"');
-		expect(
-			mock.calls[1]!.context.messages.some(message =>
-				modelText(message).includes('"type":"usage_threshold_events"'),
-			),
-		).toBe(false);
-		expect(
-			session.messages.some(message => message.role === "custom" && message.customType === "agent-usage-notices"),
-		).toBe(false);
 		expect(
 			session.messages.some(
 				message => message.role === "custom" && message.customType === "agent-runtime-telemetry",
