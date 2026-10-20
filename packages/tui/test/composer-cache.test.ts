@@ -39,7 +39,12 @@ describe("composer startup cache", () => {
 	it("round-trips per-project speculation and serves settings-derived rows to projects without their own", () => {
 		const project = path.join(root, "project");
 		const other = path.join(root, "other");
-		const preferences = { ...COMPOSER_DEFAULTS, composerShape: "rail", autocompleteMaxVisible: 7 };
+		const preferences = {
+			...COMPOSER_DEFAULTS,
+			startupBranding: "classic" as const,
+			composerShape: "rail",
+			autocompleteMaxVisible: 7,
+		};
 		const theme = { symbolPreset: "ascii" as const, colorBlindMode: true, darkTheme: "dark", lightTheme: "light" };
 		const status = statusFor(ThinkingLevel.High);
 

@@ -114,6 +114,7 @@ export function applyStartupComposerPreferences(update: PrepaintComposerPreferen
 	if (!pending) return;
 	const preferences: ComposerPreferences = {
 		quiet: update.quiet,
+		startupBranding: update.startupBranding,
 		composerShape: update.composerShape,
 		showHardwareCursor: update.showHardwareCursor,
 		maxInlineImages: update.maxInlineImages,

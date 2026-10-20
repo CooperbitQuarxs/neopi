@@ -31,6 +31,38 @@ describe("WelcomeComponent", () => {
 		});
 	});
 
+	it("defaults to the new banner and switches the same component to classic and back", () => {
+		vi.spyOn(Math, "random").mockReturnValue(0.5);
+		const welcome = new WelcomeComponent("1.0.0");
+		const initial = welcome.render(140);
+		expect(initial).toEqual(new WelcomeComponent("1.0.0", "new").render(140));
+		expect(Bun.stripANSI(initial.join("\n"))).not.toContain("Welcome back!");
+		const initialNative = welcome.describe({} as never);
+
+		welcome.setBranding("classic");
+		const classic = welcome.render(140).map(line => Bun.stripANSI(line));
+		expect(classic[0]).toContain("NeoPi v1.0.0");
+		expect(classic.join("\n")).toContain("Welcome back!");
+		expect(classic.join("\n")).toContain("for prompt actions");
+		expect(classic.find(line => line.includes("████████████"))?.indexOf("████████████")).toBe(8);
+		const tower = classic.slice(4, 9).map(line => line.slice(8, 20));
+		expect(tower).toEqual(["████████████", "   ██  ██   ", "   ██  ██   ", "   ▒▒  ██   ", "       ██   "]);
+		const classicNative = welcome.describe({} as never);
+		expect(classicNative).not.toBe(initialNative);
+		expect(classicNative.c?.[0]).toMatchObject({ key: "grid", p: { role: "omp.welcome.grid" } });
+
+		welcome.setBranding("new");
+		expect(welcome.render(140)).toEqual(initial);
+		expect(welcome.describe({} as never)).toEqual(initialNative);
+	});
+
+	it("keeps classic branding inside narrow terminal widths", () => {
+		const welcome = new WelcomeComponent("1.0.0", "classic");
+		for (const width of [4, 6, 12, 20, 36, 50, 80, 140]) {
+			for (const line of welcome.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
+	});
+
 	it("selects standard tip when preset is not unicode", () => {
 		vi.spyOn(theme, "getSymbolPreset").mockReturnValue("nerd");
 

@@ -28,7 +28,7 @@ import { postmortem } from "@oh-my-pi/pi-utils";
 import { CustomEditor } from "./custom-editor";
 import type { WordCompletionMethod } from "./word-completion";
 import { type AnimationFrame, TranscriptContainer } from "../chrome/transcript-container";
-import { WelcomeComponent } from "./welcome";
+import { type StartupBranding, WelcomeComponent } from "./welcome";
 import { ensureThemeSync, getEditorTheme, theme } from "../theme/theme";
 
 const DOUBLE_INTERRUPT_MS = 500;
@@ -36,6 +36,7 @@ const DOUBLE_INTERRUPT_MS = 500;
 /** Live settings that affect the composer before and after session adoption. */
 export interface ComposerPreferences {
 	readonly quiet: boolean;
+	readonly startupBranding: StartupBranding;
 	readonly composerShape: string;
 	readonly showHardwareCursor: boolean;
 	readonly maxInlineImages: number;
@@ -50,6 +51,7 @@ export interface ComposerPreferences {
 /** Settings-schema-compatible defaults used when constructing a dependency-free composer. */
 export const COMPOSER_DEFAULTS: ComposerPreferences = {
 	quiet: false,
+	startupBranding: "new",
 	composerShape: "band",
 	showHardwareCursor: true,
 	maxInlineImages: 8,
@@ -1125,6 +1127,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			this.#welcome = undefined;
 		} else {
 			this.#ensureWelcome();
+			this.#welcome?.setBranding(this.#preferences.startupBranding);
 			this.#welcome?.invalidate();
 			if (wasQuiet && this.#started) this.playWelcomeIntro();
 		}
@@ -1231,7 +1234,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	}
 
 	#ensureWelcome(): void {
-		this.#welcome ??= new WelcomeComponent(this.#version);
+		this.#welcome ??= new WelcomeComponent(this.#version, this.#preferences.startupBranding);
 	}
 
 	#rebuildHeader(): void {
