@@ -53,6 +53,7 @@
 ### Fixed
 
 - Releasing a recovered headless browser tab now waits until its page disappears from CDP targets without closing unrelated tabs ([#293](https://github.com/PsychedelicShayna/neopi/issues/293)).
+- Browser crash-cancellation checks no longer mistake work sent before the renderer crashes for an uncancelled continuation ([#290](https://github.com/PsychedelicShayna/neopi/issues/290)).
 - The advisor editor shows the effective roster with enabled states and source files, including ancestor and `.omp` rosters; enabling advisors names the reviewers that started ([#206](https://github.com/PsychedelicShayna/neopi/issues/206)).
 - Host-environment restoration clears runtime-added credentials, and ACP terminal guidance limits the restoration recipe to local PTY commands ([#336](https://github.com/PsychedelicShayna/neopi/issues/336)).
 - OAuth model hooks can deep-clone and rename models without losing the verified standard context limit used by live ingest ([#328](https://github.com/PsychedelicShayna/neopi/issues/328)).
