@@ -13,6 +13,28 @@ Package-specific references:
 - [MCP server/tool authoring](../../docs/mcp-server-tool-authoring.md)
 - [DEVELOPMENT](./DEVELOPMENT.md)
 
+## Session work contracts
+
+`/contract` manages operational clauses for the current session. No clauses or agent permissions are enabled by default. Active clauses are stored in the session journal and injected in a reserved system-prompt block on each provider request, including continuations and mixture members. Compaction and resume retain them; `/new` starts empty. They do not replace sticky `RULES.md` or assignment tracking.
+
+```text
+/contract list
+/contract set lane The funnel publishes; the lane stays free.
+/contract show lane
+/contract edit lane
+/contract disable lane
+/contract enable lane
+/contract remove lane
+```
+
+`edit` opens the multi-line editor, or accepts replacement text after the id. `set` creates or replaces a clause. IDs use letters, digits, underscores and hyphens, at most 64 characters. List/show include the clause's activation, author, timestamps, originating user turn, agent tool-call ids, and promotion paths. Mutation events remain in the journal even after removal.
+
+The agent's `contract` tool is inactive and denied by policy until you explicitly run `/contract policy on`. `/contract policy off` revokes that permission without disabling the clauses. The tool and command share the same request schema and journal. Commands also accept JSON, for example `/contract {"action":"set","id":"lane","text":"Keep the lane free."}`.
+
+Only `/contract promote lane user` or `/contract promote lane project` copies a clause to an always-apply rule. User rules go in the configured agent directory's `rules/`, normally `~/.omp/agent/rules/`; project rules go in `.omp/rules/`. Promotion never overwrites an existing rule, leaves the session clause unchanged, and cannot be performed by the agent tool. Run `/reload` or start a new session to load the persistent copy.
+
+The reserved block is added after context pruning, never sliced to fit a budget. If the estimated request cannot fit with the complete block, the request fails visibly with instructions to compact context or edit/disable clauses. Nothing silently drops contract text.
+
 ## Memory backends
 
 The agent supports three mutually-exclusive memory backends, selected via the `memory.backend` setting (Settings → Memory tab, or `~/.omp/config.yml`):
