@@ -81,11 +81,11 @@ async function ownedTargets(scope: SharedTargetScope): Promise<string[]> {
 	return Array.isArray(targets) ? targets.filter((id): id is string => typeof id === "string") : [];
 }
 
-/** How the stub's CDP close behaves: never answers, fails fast, or fails after a gate. */
+/** How the stub's CDP close behaves: stalled, rejected, gated, or accepted without removing its target. */
 interface WedgeOptions {
 	/** Whether the handle carries the shared-daemon scope (`false` = private launch). */
 	shared?: boolean;
-	close?: "hang" | "fail" | "gate";
+	close?: "hang" | "fail" | "gate" | "listed";
 	/** Held by a `gate` close until the test releases it. */
 	gate?: Promise<void>;
 	/** Fires when a `gate` close starts, so the test can interleave a release. */
@@ -94,11 +94,16 @@ interface WedgeOptions {
 	onTerminate?: () => void;
 }
 
-/** Handle for a shared Chromium whose CDP endpoint answers nothing: every call hangs. */
+/** Shared Chromium handle with an unconfirmed or stalled page close. */
 function makeWedgeHandle(scope: SharedTargetScope, options: WedgeOptions = {}): BrowserHandle {
 	const { shared = true, close = "hang", gate, entered } = options;
 	const session = {
-		send: async (): Promise<never> => {
+		send: async (method: string) => {
+			if (close === "listed") {
+				if (method === "Target.closeTarget") return { success: true };
+				if (method === "Target.getTargets") return { targetInfos: [{ targetId: TARGET_ID }] };
+				throw new Error(`Unexpected CDP method ${method}`);
+			}
 			if (close === "fail") throw new Error("CDP target session unavailable");
 			if (close === "gate") {
 				entered?.();
@@ -241,6 +246,23 @@ describe("browser cleanup — timed-out target close in a shared browser", () =>
 		expect(await ownedTargets(scope)).toEqual([TARGET_ID]);
 		expect(healthCheck).toHaveBeenCalledTimes(1);
 		expect(healthCheck.mock.calls[0]?.[0]).toEqual(scope);
+	});
+
+	it("rejects release when an accepted target close stays listed until its deadline", async () => {
+		const scope = trackedScope();
+		const healthCheck = spyOn(sharedDaemon, "stopSharedBrowserIfUnreachable").mockResolvedValue(false);
+		await recordSharedTarget(scope, TARGET_ID);
+		const tab = makeWedgeTab(scope, { close: "listed" });
+		getTabsMapForTest().set("logos-b2b", tab);
+
+		await expect(releaseTab("logos-b2b", { timeoutMs: 60 })).rejects.toThrow("Timed out after 60ms");
+
+		expect(getTabsMapForTest().has("logos-b2b")).toBe(false);
+		expect(await ownedTargets(scope)).toEqual([TARGET_ID]);
+		expect(tab.browser.refCount).toBe(1);
+		if (!("browser" in tab.browser)) throw new Error("Expected Puppeteer browser");
+		expect(tab.browser.browser.connected).toBe(true);
+		expect(healthCheck).toHaveBeenCalledTimes(1);
 	});
 
 	it("forgets the retained target once the browser it belonged to is stopped", async () => {
