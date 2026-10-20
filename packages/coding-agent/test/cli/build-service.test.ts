@@ -7,9 +7,9 @@ import {
 	parseBuildAnswer,
 	resolveBuildHost,
 } from "@oh-my-pi/pi-coding-agent/cli/build-service";
-import { VERSION } from "@oh-my-pi/pi-utils";
+import { APP_NAME, VERSION } from "@oh-my-pi/pi-utils";
 
-const fileName = "npi-darwin-arm64";
+const fileName = "omp-darwin-arm64";
 const sha = (text: string) => Bun.SHA256.hash(text, "hex");
 
 /** A well-formed `latest` answer, with `overrides` merged over the top level. */
@@ -17,7 +17,7 @@ function answer(overrides: Record<string, unknown> = {}): Record<string, unknown
 	return {
 		build: { id: "20261011-120000-abcdef0", version: "18.8.9", channel: "stable" },
 		file: { name: fileName, platform: "macos", arch: "arm64", kind: "binary", size: 205_765_664, sha256: sha("new") },
-		download: "https://r2.test/omp/18.8.9/npi-darwin-arm64?X-Amz-Signature=x",
+		download: "https://r2.test/omp/18.8.9/omp-darwin-arm64?X-Amz-Signature=x",
 		patch: {
 			format: "file",
 			from: "20261001-120000-1234567",
@@ -37,7 +37,7 @@ describe("build service answers", () => {
 		expect(parsed).toEqual({
 			version: "18.8.9",
 			file: { name: fileName, size: 205_765_664, sha256: sha("new") },
-			download: "https://r2.test/omp/18.8.9/npi-darwin-arm64?X-Amz-Signature=x",
+			download: "https://r2.test/omp/18.8.9/omp-darwin-arm64?X-Amz-Signature=x",
 			patch: {
 				fromSha256: sha("old"),
 				fromVersion: "18.8.8",
@@ -55,8 +55,8 @@ describe("build service answers", () => {
 		);
 		expect(() => parseBuildAnswer(answer(file({ sha256: "abc" })), fileName)).toThrow("invalid sha256");
 		expect(() => parseBuildAnswer(answer(file({ size: 0 })), fileName)).toThrow("invalid size");
-		expect(() => parseBuildAnswer(answer(file({ name: "npi-darwin-x64" })), fileName)).toThrow(
-			"npi-darwin-x64 is not npi-darwin-arm64",
+		expect(() => parseBuildAnswer(answer(file({ name: "omp-darwin-x64" })), fileName)).toThrow(
+			"omp-darwin-x64 is not omp-darwin-arm64",
 		);
 		expect(() => parseBuildAnswer(answer({ download: "http://r2.test/omp" }), fileName)).toThrow("no HTTPS download");
 		expect(() => parseBuildAnswer(answer({ build: { version: "latest" } }), fileName)).toThrow("no valid version");
@@ -79,19 +79,19 @@ describe("build service targets", () => {
 	it("maps platform, architecture, and libc to the service target and release file name", () => {
 		expect(resolveBuildHost("darwin", "arm64", false)).toEqual({
 			target: "macos-arm64",
-			fileName: "npi-darwin-arm64",
+			fileName: "omp-darwin-arm64",
 		});
 		expect(resolveBuildHost("linux", "x64", true)).toEqual({
 			target: "linux-musl-x86_64",
-			fileName: "npi-linux-musl-x64",
+			fileName: "omp-linux-musl-x64",
 		});
 		expect(resolveBuildHost("linux", "arm64", false)).toEqual({
 			target: "linux-arm64",
-			fileName: "npi-linux-arm64",
+			fileName: "omp-linux-arm64",
 		});
 		expect(resolveBuildHost("win32", "x64", false)).toEqual({
 			target: "windows-x86_64",
-			fileName: "npi-windows-x64.exe",
+			fileName: "omp-windows-x64.exe",
 		});
 	});
 
@@ -118,6 +118,19 @@ describe("build service targets", () => {
 
 describe("fetchBuild", () => {
 	const host: BuildHost = { target: "macos-arm64", fileName };
+
+	it("accepts the upstream asset with a resolved host while retaining the local executable name", async () => {
+		const build = await fetchBuild(
+			{ channel: "stable" },
+			{
+				host: resolveBuildHost("darwin", "arm64", false),
+				fetchImpl: async () => Response.json(answer()),
+			},
+		);
+
+		expect(build.file.name).toBe("omp-darwin-arm64");
+		expect(APP_NAME).toBe("npi");
+	});
 
 	it("asks for the channel's newest build, naming the installed version", async () => {
 		const requests: Array<{ url: string; userAgent: string | null; signal: AbortSignal | null | undefined }> = [];
