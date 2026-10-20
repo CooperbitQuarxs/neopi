@@ -81,7 +81,7 @@ export const cfgLiveHoldMode = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Hold Mode",
-		description: "Keep the floor until a trailing submit or force-delegate phrase sends the composer to the main agent",
+		description: "Hold unsent speech until submit or force-delegate; an admitted voice reply keeps playing",
 	},
 });
 
@@ -96,7 +96,7 @@ export const cfgLiveQuietFloorMs = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Quiet Floor (ms)",
-		description: "Minimum quiet after every composer write before voice responses or delegation; 0 disables",
+		description: "Minimum quiet after microphone speech or composer writes before a new reply or handoff; 0 disables",
 		options: [
 			{ value: "0", label: "Disabled (default)" },
 			{ value: "2000", label: "2000 ms" },
@@ -138,7 +138,7 @@ export const cfgLiveSubmitKeyword = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Submit Keyword",
-		description: "Phrase at the end of composer text that submits after the configured silence (empty disables)",
+		description: "Trailing phrase releases a complete request for the voice agent to answer or delegate after silence (empty disables)",
 	},
 });
 
@@ -153,7 +153,7 @@ export const cfgLiveSubmitSilenceMs = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Submit Silence (ms)",
-		description: "Silence after the last composer write before a trailing submit or force-delegate keyword runs",
+		description: "Quiet after microphone speech and composer writes before a trailing keyword runs; speech must be finalized",
 		options: [
 			{ value: "0", label: "Immediately" },
 			{ value: "500", label: "500 ms" },
