@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "bun:
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -164,9 +165,9 @@ describe("prewalk startup degradation", () => {
 		});
 		try {
 			expect(session.model?.id).toBe(planner.id);
-			expect(session.configuredThinkingLevel()).toBe("high");
+			expect(session.configuredThinkingLevel()).toBe(Effort.High);
 			expect(session.getPrewalkState()?.target.id).toBe(execution.id);
-			expect(session.getPrewalkState()?.thinkingLevel).toBe("low");
+			expect(session.getPrewalkState()?.thinkingLevel).toBe(Effort.Low);
 			expect(notices).toEqual([
 				`Prewalk crew: plan anthropic/${planner.id}:high → execute anthropic/${execution.id}:low.`,
 			]);
@@ -192,7 +193,7 @@ describe("prewalk startup degradation", () => {
 			settings,
 		);
 		expect(options.prewalk?.target.id).toBe(model.id);
-		expect(options.prewalk?.thinkingLevel).toBe("low");
+		expect(options.prewalk?.thinkingLevel).toBe(Effort.Low);
 		expect(options.prewalkPlannerPatterns).toEqual(["anthropic/claude-opus-4-6:high"]);
 		expect(cfgPrewalkExecution.get(settings)).toBe("anthropic/not-a-model");
 		expect(settings.getModelRoles()).toEqual(before);

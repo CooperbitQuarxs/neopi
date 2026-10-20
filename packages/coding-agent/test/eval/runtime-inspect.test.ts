@@ -21,6 +21,8 @@ function session(getter: ToolSession["getAgentTelemetry"]): ToolSession {
 	return {
 		cwd: process.cwd(),
 		hasUI: false,
+		getSessionFile: () => null,
+		getSessionSpawns: () => null,
 		getAgentTelemetry: getter,
 		getToolForEvalBridge: () => {
 			throw new ToolError("runtime.inspect must not invoke a provider tool");
