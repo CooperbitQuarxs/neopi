@@ -167,6 +167,9 @@ import asset158 from "../live/prompts/operator-shared-message.md" with { type: "
 import asset159 from "../live/prompts/operator-typed-message.md" with { type: "text" };
 import asset160 from "../live/prompts/subagent-importance.md" with { type: "text" };
 import asset161 from "../live/prompts/voice-agent-note.md" with { type: "text" };
+import livePersonaGenerationSystem from "../live/prompts/generate-persona.md" with { type: "text" };
+import livePersonaGenerationUser from "../live/prompts/generate-persona-user.md" with { type: "text" };
+import livePrimaryHistory from "../live/prompts/primary-history.md" with { type: "text" };
 import asset162 from "./memories/consolidation_system.md" with { type: "text" };
 import asset163 from "./memories/consolidation.md" with { type: "text" };
 import asset164 from "./memories/read-path.md" with { type: "text" };
@@ -3356,6 +3359,46 @@ export const promptAssets: readonly PromptAsset[] = [
 		],
 	},
 	{
+		id: "live/generate-persona.md",
+		relPath: "live/generate-persona.md",
+		bundled: livePersonaGenerationSystem,
+		scope: "feature:live/generate-persona",
+		group: "feature",
+		keys: [],
+		fixture: {},
+		consumerHints: [
+			"packages/coding-agent/src/live/prompts/generate-persona.md",
+			"packages/coding-agent/src/live/persona-generation.ts",
+		],
+	},
+	{
+		id: "live/generate-persona-user.md",
+		relPath: "live/generate-persona-user.md",
+		bundled: livePersonaGenerationUser,
+		scope: "feature:live/generate-persona-user",
+		group: "feature",
+		keys: [
+			{ path: "description", type: "string", resolution: "session-dependent" },
+			{
+				path: "references",
+				type: "object[]",
+				resolution: "session-dependent",
+				children: [
+					{ path: "label", type: "string", resolution: "session-dependent" },
+					{ path: "instructions", type: "string", resolution: "session-dependent" },
+				],
+			},
+		],
+		fixture: {
+			description: "A patient cartographer.",
+			references: [{ label: "Selected persona", instructions: "Speak in short, clear sentences." }],
+		},
+		consumerHints: [
+			"packages/coding-agent/src/live/prompts/generate-persona-user.md",
+			"packages/coding-agent/src/live/persona-generation.ts",
+		],
+	},
+	{
 		id: "live/live-client-protocol.md",
 		relPath: "live/live-client-protocol.md",
 		bundled: asset156,
@@ -3412,6 +3455,19 @@ export const promptAssets: readonly PromptAsset[] = [
 		consumerHints: [
 			"packages/coding-agent/src/live/prompts/operator-typed-message.md",
 			"packages/coding-agent/src/live/controller.ts",
+		],
+	},
+	{
+		id: "live/primary-history.md",
+		relPath: "live/primary-history.md",
+		bundled: livePrimaryHistory,
+		scope: "feature:live/primary-history",
+		group: "feature",
+		keys: [{ path: "message", type: "string", resolution: "session-dependent" }],
+		fixture: { message: "Operator: Continue the parser repair." },
+		consumerHints: [
+			"packages/coding-agent/src/live/prompts/primary-history.md",
+			"packages/coding-agent/src/live/history-seed.ts",
 		],
 	},
 	{

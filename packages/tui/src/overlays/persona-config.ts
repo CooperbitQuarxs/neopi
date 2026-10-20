@@ -14,6 +14,8 @@
  * with a mode, inline or file source, and literal) and `live` (instruction
  * sets for the live voice model, including an immutable built-in default).
  */
+import type { Model } from "@oh-my-pi/pi-ai";
+import { buildBrowserItems, ModelBrowser, type ModelBrowserSource } from "./model-browser";
 import {
 	type Component,
 	extractPrintableText,
@@ -104,6 +106,26 @@ export interface PersonaConfigCallbacks {
 	requestRender: () => void;
 }
 
+export interface PersonaGenerationReference {
+	id: string;
+	label: string;
+}
+
+export interface PersonaGenerationRequest {
+	model: Model;
+	references: string[];
+	description: string;
+	doc: PersonaConfigDoc;
+	signal: AbortSignal;
+}
+
+export interface PersonaGenerationDeps {
+	getAvailableModels: () => Model[];
+	browserSource: ModelBrowserSource;
+	references: (doc: PersonaConfigDoc) => Promise<PersonaGenerationReference[]>;
+	generate: (request: PersonaGenerationRequest) => Promise<string>;
+}
+
 export interface PersonaConfigDeps {
 	variant: PersonaConfigVariant;
 	externalEditor?: (text: string) => Promise<string | null>;
@@ -114,6 +136,8 @@ export interface PersonaConfigDeps {
 	protocolMarker?: string;
 	/** `live` variant only: defaults for a newly created entry. */
 	newEntrySources?: () => { fields: PersonaSourceField[]; raw: unknown };
+	/** Optional live-persona generation; no generation runs until explicitly submitted. */
+	generation?: PersonaGenerationDeps;
 }
 
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -130,7 +154,18 @@ function wrap(text: string, width: number): string[] {
 	return Bun.wrapAnsi(replaceTabs(text), Math.max(1, width), { trim: false }).split("\n");
 }
 
-type Screen = "list" | "detail" | "sources" | "name" | "content" | "path" | "literal" | "mode";
+type Screen =
+	| "list"
+	| "detail"
+	| "sources"
+	| "name"
+	| "content"
+	| "path"
+	| "literal"
+	| "mode"
+	| "generator"
+	| "references"
+	| "description";
 
 interface PersonaNavigationContext {
 	screen: Screen;
@@ -152,6 +187,7 @@ interface PersonaNavigationSnapshot {
 	previewFocused: boolean;
 	lists: [string, PersonaListState][];
 	content: unknown;
+	generation?: { model?: Model; references: PersonaGenerationReference[]; selected: string[]; description: string };
 }
 
 export class PersonaConfigOverlayComponent implements Component {
@@ -184,6 +220,11 @@ export class PersonaConfigOverlayComponent implements Component {
 	#navigationContext: PersonaNavigationContext = { screen: "list" };
 	#creation: PersonaNavigationContext["creation"];
 	#restoringNavigation = false;
+	#generationModel: Model | undefined;
+	#generationReferences: PersonaGenerationReference[] = [];
+	#generationSelected = new Set<string>();
+	#generationDescription = "";
+	#generationAbort: AbortController | undefined;
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
 	#bodyRowsLast = 3;
@@ -267,6 +308,15 @@ export class PersonaConfigOverlayComponent implements Component {
 	// ───────────────────────────── input ─────────────────────────────
 
 	handleInput(data: string): void {
+		if (this.#generationAbort) {
+			if (matchesKey(data, "escape")) {
+				this.#generationAbort.abort();
+				this.#generationAbort = undefined;
+				if (this.#screen === "generator") this.#showGenerator();
+				else this.#showDescription();
+			}
+			return;
+		}
 		if (this.#saving) return;
 		if (data.startsWith("\x1b[<")) {
 			this.#keys.reset();
@@ -329,6 +379,15 @@ export class PersonaConfigOverlayComponent implements Component {
 		}
 		if (action?.kind === "toggle" && active instanceof SelectList) {
 			const item = active.getSelectedItem();
+			if (this.#screen === "references") {
+				if (item?.value.startsWith("reference:")) {
+					const id = item.value.slice("reference:".length);
+					if (this.#generationSelected.has(id)) this.#generationSelected.delete(id);
+					else this.#generationSelected.add(id);
+					this.#showReferences(item.value);
+				}
+				return;
+			}
 			if (item?.value === "delete") return;
 			if (this.#screen === "list") {
 				const match = /^entry:(\d+)$/.exec(item?.value ?? "");
@@ -539,7 +598,7 @@ export class PersonaConfigOverlayComponent implements Component {
 	 * the footer until the next screen change.
 	 */
 	#flash(text: string, tone: "success" | "warning" = "warning"): void {
-		this.#footerNote = { text, tone };
+		this.#footerNote = { text: replaceTabs(text), tone };
 		this.#cb.requestRender();
 	}
 
@@ -629,6 +688,8 @@ export class PersonaConfigOverlayComponent implements Component {
 			description: this.#pendingDelete === index ? undefined : this.#entrySummary(entry),
 		}));
 		items.push({ value: "add", label: `+ New ${this.#noun}` });
+		if (this.#deps.variant === "live" && this.#deps.generation)
+			items.push({ value: "generate", label: "Generate live persona" });
 		items.push({ value: "save", label: "Save & apply" });
 		items.push({ value: "close", label: "Close" });
 
@@ -703,6 +764,12 @@ export class PersonaConfigOverlayComponent implements Component {
 	}
 
 	#onListSelect(value: string): void {
+		if (value === "generate") {
+			this.#generationSelected.clear();
+			this.#generationDescription = "";
+			this.#showGenerator();
+			return;
+		}
 		if (value === "add") {
 			this.#showNewEntryEditor();
 			return;
@@ -758,6 +825,117 @@ export class PersonaConfigOverlayComponent implements Component {
 		};
 		input.onEscape = () => this.#showList("add");
 		this.#setScreen("name", input, `Name the new ${this.#noun} · Enter create · Esc cancel`);
+	}
+
+	#showGenerator(): void {
+		const deps = this.#deps.generation;
+		if (!deps) return this.#showList();
+		const picker = new ModelBrowser(deps.browserSource, {});
+		picker.setItems(buildBrowserItems(deps.getAvailableModels()));
+		picker.onActivate = item => {
+			this.#generationModel = item.model;
+			const controller = new AbortController();
+			this.#generationAbort = controller;
+			this.#flash("Loading references · Esc cancel", "success");
+			void deps
+				.references(this.#doc)
+				.then(references => {
+					if (controller.signal.aborted) return;
+					this.#generationAbort = undefined;
+					this.#generationReferences = references;
+					this.#showReferences();
+				})
+				.catch(error => {
+					if (controller.signal.aborted) return;
+					this.#generationAbort = undefined;
+					this.#flash(error instanceof Error ? error.message : String(error));
+				});
+		};
+		picker.onCancel = () => this.#showList("generate");
+		this.#setScreen("generator", picker, "Select Generator Model · Enter choose · Esc back · / search");
+	}
+
+	#showReferences(selectedValue?: string): void {
+		const items: SelectItem[] = this.#generationReferences.map(reference => ({
+			value: `reference:${reference.id}`,
+			label: `${this.#generationSelected.has(reference.id) ? "☑" : "☐"} ${reference.label}`,
+		}));
+		items.push({ value: "continue", label: "Continue to Describe Persona" });
+		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
+		if (selectedValue)
+			list.setSelectedIndex(
+				Math.max(
+					0,
+					items.findIndex(item => item.value === selectedValue),
+				),
+			);
+		list.onSelect = item => {
+			if (item.value !== "continue") {
+				const id = item.value.slice("reference:".length);
+				if (this.#generationSelected.has(id)) this.#generationSelected.delete(id);
+				else this.#generationSelected.add(id);
+				this.#showReferences(item.value);
+			} else if (this.#generationSelected.size === 0) {
+				this.#flash("Select at least one reference, including the default template if desired.");
+			} else this.#showDescription();
+		};
+		list.onCancel = () => this.#showGenerator();
+		this.#setScreen("references", list, "Select Reference Models · Space toggle · Enter continue · Esc generator");
+	}
+
+	#showDescription(): void {
+		const input = new Input();
+		input.setValue(this.#generationDescription);
+		input.onEscape = () => {
+			this.#generationDescription = input.getValue();
+			this.#showReferences("continue");
+		};
+		input.onSubmit = description => {
+			this.#generationDescription = description;
+			const deps = this.#deps.generation;
+			const model = this.#generationModel;
+			if (!description.trim()) return this.#flash("Describe the persona to generate.");
+			if (!deps || !model) return this.#showGenerator();
+			const controller = new AbortController();
+			this.#generationAbort = controller;
+			this.#flash("Generating persona · Esc cancel", "success");
+			void deps
+				.generate({
+					model,
+					references: [...this.#generationSelected],
+					description,
+					doc: structuredClone(this.#doc),
+					signal: controller.signal,
+				})
+				.then(content => {
+					if (controller.signal.aborted) return;
+					this.#generationAbort = undefined;
+					if (!content.trim()) {
+						this.#flash("Generator returned empty instructions.");
+						return;
+					}
+					const fresh = this.#deps.newEntrySources?.();
+					this.#doc.entries.push({
+						name: this.#uniqueName("generated-persona"),
+						mode: "replace",
+						sourceKind: "inline",
+						content,
+						path: "",
+						literal: "",
+						inheritToTasks: false,
+						sources: fresh?.fields,
+						sourcesRaw: fresh?.raw,
+					});
+					this.#dirty = true;
+					this.#showDetail(this.#doc.entries.length - 1, "name");
+				})
+				.catch(error => {
+					if (controller.signal.aborted) return;
+					this.#generationAbort = undefined;
+					this.#flash(error instanceof Error ? error.message : String(error));
+				});
+		};
+		this.#setScreen("description", input, "Describe Persona · Enter generate · Esc references");
 	}
 
 	// ───────────────────────────── detail ────────────────────────────
@@ -1078,7 +1256,11 @@ export class PersonaConfigOverlayComponent implements Component {
 	}
 
 	get blocksMenuHistory(): boolean {
-		return this.#saving || (isMenuHistoryParticipant(this.#active) && this.#active.blocksMenuHistory === true);
+		return (
+			this.#saving ||
+			this.#generationAbort !== undefined ||
+			(isMenuHistoryParticipant(this.#active) && this.#active.blocksMenuHistory === true)
+		);
 	}
 
 	navigationSnapshot(): PersonaNavigationSnapshot {
@@ -1089,6 +1271,12 @@ export class PersonaConfigOverlayComponent implements Component {
 			previewScroll: this.#previewScroll,
 			previewFocused: this.#previewFocused,
 			lists: structuredClone([...this.#listStates]),
+			generation: {
+				model: this.#generationModel,
+				references: structuredClone(this.#generationReferences),
+				selected: [...this.#generationSelected],
+				description: this.#generationDescription,
+			},
 			content:
 				this.#active instanceof Input
 					? { value: this.#active.getValue(), cursor: this.#active.getCursor() }
@@ -1099,6 +1287,7 @@ export class PersonaConfigOverlayComponent implements Component {
 	}
 
 	restoreNavigation(snapshot: unknown): void {
+		if (this.#generationAbort) return;
 		if (typeof snapshot !== "object" || snapshot === null) return;
 		const state = snapshot as PersonaNavigationSnapshot;
 		if (!state.context || !state.doc || !Array.isArray(state.doc.entries)) return;
@@ -1113,8 +1302,21 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#closeArmed = false;
 			this.#entryIndex = state.context.entryIndex;
 			this.#creation = state.context.creation;
+			this.#generationModel = state.generation?.model;
+			this.#generationReferences = structuredClone(state.generation?.references ?? []);
+			this.#generationSelected = new Set(state.generation?.selected);
+			this.#generationDescription = state.generation?.description ?? "";
 			const index = state.context.entryIndex;
 			switch (state.context.screen) {
+				case "generator":
+					this.#showGenerator();
+					break;
+				case "references":
+					this.#showReferences();
+					break;
+				case "description":
+					this.#showDescription();
+					break;
 				case "detail":
 					if (index !== undefined) this.#showDetail(index);
 					else this.#showList();

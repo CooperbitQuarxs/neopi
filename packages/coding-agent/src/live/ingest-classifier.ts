@@ -114,7 +114,7 @@ function textOf(content: unknown): string {
 }
 
 /** Render the captured primary conversation without promoting assistant/agent prose to operator evidence. */
-export function renderClassifierProse(messages: readonly AgentMessage[]): ClassifierProse {
+export function renderClassifierProse(messages: readonly AgentMessage[], numbered = true): ClassifierProse {
 	const blocks: string[] = [];
 	let subject: string | undefined;
 	let historyComplete = true;
@@ -167,7 +167,7 @@ export function renderClassifierProse(messages: readonly AgentMessage[]): Classi
 		for (const { label, text, operator } of authored) {
 			if (!text) continue;
 			if (operator && subject === undefined) subject = text.slice(0, 300);
-			blocks.push(`[-${blocks.length + 1}] ${label}: ${text}`);
+			blocks.push(`${numbered ? `[-${blocks.length + 1}] ` : ""}${label}: ${text}`);
 		}
 	}
 	return { blocks, subject, historyComplete };
