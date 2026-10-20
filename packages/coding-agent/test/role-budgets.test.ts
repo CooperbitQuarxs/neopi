@@ -53,7 +53,7 @@ describe("role context budgets", () => {
 		const settings = Settings.isolated();
 		const host = createSettingsHost(settings);
 		const path = "roleSettings.slow.compaction.thresholdTokens";
-		expect(host.entries.find(entry => entry.path === path)?.ui?.customInput).toBe(true);
+		expect(host.entries.find(entry => entry.path === path)?.ui).toMatchObject({ customInput: true });
 		host.set("compaction.thresholdTokens", 100000);
 		host.set(path, 120000);
 		settings.setActiveRole("slow");

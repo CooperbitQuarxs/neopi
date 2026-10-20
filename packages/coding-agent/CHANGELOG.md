@@ -9,6 +9,7 @@
 
 ### Added
 
+- Opt-in agent context telemetry now reports checkpoint availability and estimated recent-turn footprint, with pressure-based guidance that respects configured compaction boundaries ([#21](https://github.com/PsychedelicShayna/neopi/issues/21)).
 - Inspect, propose, set, and reset session compaction policy with `/compact control` or `compaction://`, with explicit project/user persistence and propose-only agent access by default ([#28](https://github.com/PsychedelicShayna/neopi/issues/28)).
 - Give each model role its own persistent token budget and type arbitrary global or role token limits in settings while keeping preset quick picks ([#52](https://github.com/PsychedelicShayna/neopi/issues/52)).
 - Added opt-in session work contracts with `/contract`, policy-gated agent edits, durable provenance, explicit rule promotion, and intact reinjection after compaction or resume ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
