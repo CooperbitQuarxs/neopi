@@ -79,8 +79,10 @@ describe("role context budgets", () => {
 		expect(cfgCompaction.get(settings).thresholdTokens).toBe(120000);
 		await settings.flush();
 		const saved = YAML.parse(await Bun.file(path.join(options.agentDir, "config.yml")).text());
-		expect(saved.compaction.thresholdTokens).toBe(100000);
-		expect(saved.roleSettings.slow["compaction.thresholdTokens"]).toBe(120000);
+		expect(saved).toMatchObject({
+			compaction: { thresholdTokens: 100000 },
+			roleSettings: { slow: { "compaction.thresholdTokens": 120000 } },
+		});
 		resetSettingsForTest();
 		const reloaded = await Settings.init(options);
 		expect(reloaded.activeRole).toBeUndefined();
@@ -96,7 +98,9 @@ describe("role context budgets", () => {
 		cfgCompactionThresholdTokens.set(settings, 100000);
 		settings.setRoleSetting("slow", cfgCompactionThresholdTokens, 120000);
 		const seen: number[] = [];
-		const stop = cfgCompactionThresholdTokens.listen(settings, value => seen.push(value));
+		const stop = cfgCompactionThresholdTokens.listen(settings, value => {
+			seen.push(value);
+		});
 		settings.setActiveRole("slow");
 		await Bun.sleep(0);
 		expect(seen.at(-1)).toBe(120000);
