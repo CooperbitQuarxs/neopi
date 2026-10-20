@@ -21,7 +21,11 @@ import {
 	type WatchdogConfigDoc,
 } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
-export { ADVISOR_REVIEW_MODES, ADVISOR_SYNC_BACKLOG_MODES, slugifyAdvisorName } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+export {
+	ADVISOR_REVIEW_MODES,
+	ADVISOR_SYNC_BACKLOG_MODES,
+	slugifyAdvisorName,
+} from "@oh-my-pi/pi-tui/overlays/advisor-config";
 export type { AdvisorReviewMode, AdvisorSyncBacklog } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
 const WATCHDOG_ADVISOR_KEYS = [
@@ -78,6 +82,8 @@ export interface DiscoveredAdvisors {
 	advisors: AdvisorConfig[];
 	/** Winning source for each advisor slug; display metadata only, never a new discovery policy. */
 	sources: ReadonlyMap<string, { path: string; scope: AdvisorConfigScope }>;
+	/** Every readable candidate in discovery load order, including disabled and malformed files. */
+	files: { path: string; scope: AdvisorConfigScope; enabled?: boolean }[];
 	sharedInstructions: string | undefined;
 	sharedMaxNotesPerUpdate?: number;
 	/**
@@ -88,6 +94,14 @@ export interface DiscoveredAdvisors {
 	warnings: string[];
 	/** A present file was unreadable or malformed; keep the prior live roster during hot reload. */
 	unsafeToReconcile: boolean;
+}
+
+/** Keep the legacy default for empty enabled files, but never synthesize it when every file is off. */
+export function advisorRosterForRuntime(discovered: DiscoveredAdvisors): AdvisorConfig[] | undefined {
+	return discovered.advisors.length > 0 ||
+		(discovered.files.length > 0 && discovered.files.every(file => file.enabled === false))
+		? discovered.advisors
+		: undefined;
 }
 
 const reviewIntervalSchema = type("1 <= number.integer <= 9007199254740991");
@@ -156,12 +170,17 @@ function parseWatchdogDoc(
 	doc: Record<string, unknown>,
 	path: string,
 ): {
+	enabled: boolean | undefined;
 	instructions: string | undefined;
 	entries: AdvisorYamlEntry[];
 	sharedMaxNotesPerUpdate: number | undefined;
 	warnings: string[];
 } {
 	const warnings: string[] = [];
+	const enabled = typeof doc.enabled === "boolean" ? doc.enabled : undefined;
+	if (doc.enabled !== undefined && enabled === undefined) {
+		warnings.push(`${path}: enabled must be a boolean — ignored`);
+	}
 	const rawInstructions = doc.instructions;
 	const instructions = typeof rawInstructions === "string" ? rawInstructions : undefined;
 	if (rawInstructions !== undefined && instructions === undefined) {
@@ -188,7 +207,7 @@ function parseWatchdogDoc(
 		}
 		entries.push(result);
 	}
-	return { instructions, entries, sharedMaxNotesPerUpdate, warnings };
+	return { enabled, instructions, entries, sharedMaxNotesPerUpdate, warnings };
 }
 
 /** Resolve the non-blocker budget from advisor, shared, and settings precedence. */
@@ -274,6 +293,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 			logger.warn("Skipped config candidate", { path: filePath, ...rejection });
 		},
 	});
+	const files: DiscoveredAdvisors["files"] = items.map(item => ({ path: item.path, scope: item.level }));
 	const advisors = new Map<string, AdvisorConfig>();
 	const sources = new Map<string, { path: string; scope: AdvisorConfigScope }>();
 	const sharedParts: string[] = [];
@@ -284,7 +304,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 		logger.warn("Advisor config", { ...context, error: message });
 	};
 
-	for (const item of items) {
+	for (const [index, item] of items.entries()) {
 		let parsed: unknown;
 		try {
 			parsed = YAML.parse(item.content);
@@ -299,12 +319,15 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 			continue;
 		}
 		const {
+			enabled,
 			instructions,
 			entries,
 			sharedMaxNotesPerUpdate: docSharedMaxNotes,
 			warnings: docWarnings,
 		} = parseWatchdogDoc(parsed as Record<string, unknown>, item.path);
 		for (const message of docWarnings) warn(message, { path: item.path });
+		if (enabled !== undefined) files[index].enabled = enabled;
+		if (enabled === false) continue;
 
 		if (instructions?.trim()) {
 			const expanded = (await expandAtImports(instructions, item.path)).trim();
@@ -345,6 +368,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 	return {
 		advisors: [...advisors.values()],
 		sources,
+		files,
 		sharedInstructions: sharedParts.length > 0 ? sharedParts.join("\n\n") : undefined,
 		sharedMaxNotesPerUpdate,
 		warnings,
@@ -468,13 +492,14 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 		watchdogRepairDocs.add(doc);
 		return doc;
 	}
-	const { instructions, entries, sharedMaxNotesPerUpdate, warnings } = parseWatchdogDoc(
+	const { enabled, instructions, entries, sharedMaxNotesPerUpdate, warnings } = parseWatchdogDoc(
 		parsed as Record<string, unknown>,
 		filePath,
 	);
 	for (const message of warnings) logger.warn("Advisor config", { path: filePath, error: message });
 	const advisors = entries.map(editableAdvisorConfig);
 	const doc: WatchdogConfigDoc = { advisors };
+	if (enabled !== undefined) doc.enabled = enabled;
 	if (instructions?.trim()) doc.instructions = instructions;
 	if (sharedMaxNotesPerUpdate !== undefined) doc.maxNotesPerUpdate = sharedMaxNotesPerUpdate;
 	if (warnings.length > 0) doc.warnings = warnings;
@@ -515,6 +540,7 @@ export function appendYamlString(lines: string[], indent: string, key: string, v
 export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 	const lines: string[] = [];
 	ensureAdvisorIds(doc);
+	if (doc.enabled !== undefined) lines.push(`enabled: ${doc.enabled}`);
 	if (doc.instructions?.trim()) appendYamlString(lines, "", "instructions", doc.instructions);
 	if (
 		typeof doc.maxNotesPerUpdate === "number" &&
@@ -688,6 +714,7 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 	const document = parseYamlMappingDocument(source);
 	const root = yamlDocumentRoot(document);
 	const topLevelValues = {
+		enabled: doc.enabled,
 		instructions: doc.instructions?.trim() ? doc.instructions : undefined,
 		maxNotesPerUpdate:
 			typeof doc.maxNotesPerUpdate === "number" &&
@@ -698,6 +725,7 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 	};
 	const baseTopLevelValues = baseline
 		? {
+				enabled: baseline.doc.enabled,
 				instructions: baseline.doc.instructions?.trim() ? baseline.doc.instructions : undefined,
 				maxNotesPerUpdate: baseline.doc.maxNotesPerUpdate,
 			}
@@ -705,6 +733,7 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 	const currentInstructions = root.get("instructions");
 	const currentMaxNotesPerUpdate = root.get("maxNotesPerUpdate");
 	const currentTopLevelValues = {
+		enabled: typeof root.get("enabled") === "boolean" ? (root.get("enabled") as boolean) : undefined,
 		instructions:
 			typeof currentInstructions === "string" && currentInstructions.trim() ? currentInstructions : undefined,
 		maxNotesPerUpdate:
@@ -714,7 +743,7 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 				? Math.trunc(currentMaxNotesPerUpdate)
 				: undefined,
 	};
-	for (const key of ["instructions", "maxNotesPerUpdate"] as const) {
+	for (const key of ["enabled", "instructions", "maxNotesPerUpdate"] as const) {
 		if (baseTopLevelValues && Bun.deepEquals(topLevelValues[key], baseTopLevelValues[key])) continue;
 		if (baseTopLevelValues && !Bun.deepEquals(currentTopLevelValues[key], baseTopLevelValues[key])) {
 			continue;
@@ -783,14 +812,22 @@ function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?
 		if (matches.has(advisor)) continue;
 		const resolved =
 			resolvedOrigins.find(
-				candidate => !claimedOrigins.has(candidate.origin) && advisor.id !== undefined && candidate.origin.base.id === advisor.id,
+				candidate =>
+					!claimedOrigins.has(candidate.origin) &&
+					advisor.id !== undefined &&
+					candidate.origin.base.id === advisor.id,
 			) ??
 			resolvedOrigins.find(
-				candidate => !claimedOrigins.has(candidate.origin) && candidate.origin.base.id === undefined && candidate.origin.name === advisor.name,
+				candidate =>
+					!claimedOrigins.has(candidate.origin) &&
+					candidate.origin.base.id === undefined &&
+					candidate.origin.name === advisor.name,
 			) ??
 			(() => {
 				const positional = resolvedOrigins[index];
-				return positional && positional.origin.base.id === undefined && !claimedOrigins.has(positional.origin) ? positional : undefined;
+				return positional && positional.origin.base.id === undefined && !claimedOrigins.has(positional.origin)
+					? positional
+					: undefined;
 			})();
 		if (!resolved) continue;
 		matches.set(advisor, resolved);

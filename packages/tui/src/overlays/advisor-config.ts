@@ -103,6 +103,8 @@ export type AdvisorConfigScope = "project" | "user";
 
 /** Editable raw contents of one `WATCHDOG.yml`, without cross-level merging or `@import` expansion, for exact round trips. */
 export interface WatchdogConfigDoc {
+	/** False disables the entire file without changing its advisor entries. */
+	enabled?: boolean;
 	instructions?: string;
 	maxNotesPerUpdate?: number;
 	advisors: AdvisorConfig[];
@@ -172,6 +174,8 @@ export interface AdvisorConfigDeps {
 	/** Formatted advisor-role model shown on the seeded default row (e.g. "anthropic/claude-..."). */
 	defaultModelLabel?: string;
 	effectiveRoster?: readonly EffectiveAdvisorConfig[];
+	/** Exact file selected by the scope-first parent; disables the old two-scope switch. */
+	filePath?: string;
 	/** Resolved files edited by each scope, including WATCHDOG.yaml when present. */
 	configFiles?: Record<AdvisorConfigScope, string>;
 }
@@ -557,14 +561,16 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const bodyRows = Math.max(3, height - 4);
 		this.#bodyRowsLast = bodyRows;
 		const state = this.#dirty ? "  ● unsaved" : this.#pendingApply ? "  ◐ saved, not applied" : "";
-		const title = `Advisor configuration · ${this.#scope}${state}`;
+		const title = `Advisor configuration · ${sanitizeDisplayLine(this.#deps.filePath ?? this.#scope)}${state}`;
 		this.#split.setNarrowPane(this.#screen === "list" ? undefined : "left");
 		this.#split.setSplitAt(this.#screen === "list" ? 0 : Number.MAX_SAFE_INTEGER);
 		this.#split.setHeight(bodyRows);
 		const geometry = this.#split.measure(width);
 		const isSplit = geometry.mode === "split";
 		const leftWidth = geometry.left?.width ?? 0;
-		this.#frameTop.setLines([isSplit ? topBorderSplit(width, title, leftWidth) : topBorder(width, title)]);
+		this.#frameTop.setLines([
+			isSplit && !this.#deps.filePath ? topBorderSplit(width, title, leftWidth) : topBorder(width, title),
+		]);
 		this.#frameDivider.setLines([isSplit ? dividerSplit(width, leftWidth) : divider(width)]);
 		this.#frameFooter.setLines([row(theme.fg("dim", this.#footerHint), width)]);
 		this.#frameBottom.setLines([bottomBorder(width)]);
@@ -729,7 +735,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		}
 		sections.push({
 			id: "file",
-			title: `WATCHDOG.yml · ${this.#scope}`,
+			title: sanitizeDisplayLine(this.#deps.filePath ?? `WATCHDOG.yml · ${this.#scope}`),
 			rows: [
 				{
 					id: "save",
@@ -744,12 +750,16 @@ export class AdvisorConfigOverlayComponent implements Component {
 					hint: "Create a new advisor entry, then set its model, tools and instructions.",
 					control: { k: "action", label: "Add", act: "add" },
 				},
-				{
-					id: "scope",
-					label: "Scope",
-					hint: `Editing the ${this.#scope} file. Switch to the ${this.#otherScope()} file.`,
-					control: { k: "action", label: `Open ${this.#otherScope()}`, act: "scope" },
-				},
+				...(this.#deps.filePath
+					? []
+					: [
+							{
+								id: "scope",
+								label: "Scope",
+								hint: `Editing the ${this.#scope} file. Switch to the ${this.#otherScope()} file.`,
+								control: { k: "action" as const, label: `Open ${this.#otherScope()}`, act: "scope" },
+							},
+						]),
 			],
 		});
 
@@ -1040,7 +1050,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#describeCard(): NativeNode {
-		const title = `Advisor configuration · ${this.#scope}${this.#dirty ? "  ● unsaved" : ""}`;
+		const title = `Advisor configuration · ${sanitizeDisplayLine(this.#deps.filePath ?? this.#scope)}${this.#dirty ? "  ● unsaved" : ""}`;
 		const preview = this.#screen === "list" ? this.#describePreview() : undefined;
 		if (this.#nativeHints?.screen !== this.#screen) {
 			const hints = screenHints(this.#screen);
@@ -1057,7 +1067,9 @@ export class AdvisorConfigOverlayComponent implements Component {
 		) {
 			return prev.node;
 		}
-		const head: TspSpan[] = [span(`Advisor configuration · ${this.#scope}`)];
+		const head: TspSpan[] = [
+			span(`Advisor configuration · ${sanitizeDisplayLine(this.#deps.filePath ?? this.#scope)}`),
+		];
 		if (this.#dirty) head.push(span("  ● unsaved", "warning"));
 		const body: NativeNode = preview
 			? node(
@@ -1575,7 +1587,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 			label: "Shared instructions",
 			description: previewLineOrNone(this.#doc.instructions),
 		});
-		items.push({ value: "scope", label: `Scope: ${this.#scope}`, description: `→ ${this.#otherScope()}` });
+		if (!this.#deps.filePath)
+			items.push({ value: "scope", label: `Scope: ${this.#scope}`, description: `→ ${this.#otherScope()}` });
 		items.push({ value: "save", label: "Save & apply" });
 		items.push({ value: "close", label: "Close" });
 
@@ -1646,6 +1659,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			return;
 		}
 		if (value === "scope") {
+			if (this.#deps.filePath) return;
 			if (this.#dirty) {
 				this.#cb.notify('Unsaved changes — "Save & apply" or Close before switching scope.');
 				return;
@@ -1811,7 +1825,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		if (!advisor) return;
 		const fromList = this.#screen === "list";
 		const cancel = () => (fromList ? this.#showList(`advisor:${index}`) : this.#showDetail(index));
-		const file = this.#deps.configFiles?.[this.#scope] ?? `${this.#scope} WATCHDOG.yml`;
+		const file = this.#deps.filePath ?? this.#deps.configFiles?.[this.#scope] ?? `${this.#scope} WATCHDOG.yml`;
 		const title = `Delete "${sanitizeDisplayLine(advisor.name)}"?`;
 		const subtitle = `From ${sanitizeDisplayLine(shortenPath(file))}. Save to persist; apply to update live advisors.`;
 		const list = new SelectList(

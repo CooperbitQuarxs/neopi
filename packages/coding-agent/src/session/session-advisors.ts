@@ -1099,7 +1099,7 @@ export class SessionAdvisors {
 	}
 
 	#resolveAdvisorRuntimeDescriptors(emitWarnings: boolean): AdvisorRuntimeDescriptor[] {
-		const legacy = !this.#advisorConfigs?.length;
+		const legacy = this.#advisorConfigs === undefined;
 		const roster: AdvisorConfig[] = legacy ? [{ name: "default" }] : this.#advisorConfigs!;
 		const descriptors: AdvisorRuntimeDescriptor[] = [];
 		const usedSlugs = new Set<string>();
@@ -2906,7 +2906,7 @@ export class SessionAdvisors {
 	 * @returns the number of advisors active after the call.
 	 */
 	applyAdvisorConfigs(
-		advisors: AdvisorConfig[],
+		advisors: AdvisorConfig[] | undefined,
 		sharedInstructions: string | undefined,
 		sharedMaxNotesPerUpdate?: number,
 	): number {
