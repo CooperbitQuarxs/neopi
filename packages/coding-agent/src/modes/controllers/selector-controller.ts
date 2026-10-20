@@ -178,7 +178,7 @@ import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-
 import { cfgAdvisorSyncBacklog } from "../../advisor/settings";
 import { cfgBranchSummaryEnabled } from "../../session/context-settings";
 import { cfgCycleOrder, cfgDisabledProviders, cfgModelRoleStorage } from "../../config/model-settings";
-import { cfgDefaultThinkingLevel } from "../../session/settings";
+import { cfgDefaultThinkingLevel, cfgRetryFallbackChains } from "../../session/settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "../../config/effort-policy";
 import {
 	cfgComposerShape,
@@ -1810,6 +1810,23 @@ export class SelectorController {
 							chain.length > 0
 								? `${roleInfo?.tag ?? roleInfo?.name ?? role} fallbacks: ${chain.join(" → ")}`
 								: `${roleInfo?.tag ?? roleInfo?.name ?? role} fallbacks cleared`,
+						);
+						hub?.refreshAfterExternalMutation();
+						return true;
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return false;
+					}
+				},
+				onFallbackChainKeyChange: (previousKey, key) => {
+					try {
+						const chain = cfgRetryFallbackChains.get(this.ctx.settings)[previousKey];
+						if (!chain) return false;
+						this.ctx.settings.setFallbackChainAndEfforts(
+							key,
+							chain,
+							this.ctx.settings.getGlobalFallbackEffortSelections(previousKey) ?? {},
+							previousKey,
 						);
 						hub?.refreshAfterExternalMutation();
 						return true;
