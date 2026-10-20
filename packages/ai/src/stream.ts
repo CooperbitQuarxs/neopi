@@ -1184,11 +1184,11 @@ type SamplingOptions = Pick<
 >;
 
 /**
- * Drop explicit sampling parameters before any provider builds its payload
- * when the model's resolved `compat.supportsSamplingParams` is `false`. The
- * catalog's class rules assign that per model lineage on every compat record,
- * and an explicit compat override still wins, so this one check covers every
- * provider.
+ * Drop explicit sampling parameters before any provider builds its payload.
+ * Model-wide `supportsSamplingParams: false` disables all sampling; an
+ * endpoint's `unsupportedSamplingParams` list disables only those options.
+ * Both capabilities come from the catalog's resolved rules and explicit
+ * compat overrides.
  */
 function withSupportedSamplingParams<T extends SamplingOptions>(model: Model<Api>, options: T): T {
 	if (
@@ -1203,15 +1203,25 @@ function withSupportedSamplingParams<T extends SamplingOptions>(model: Model<Api
 		return options;
 	}
 	const compat = model.compat;
-	if (!compat || !("supportsSamplingParams" in compat) || compat.supportsSamplingParams !== false) return options;
-	const supported = { ...options };
-	delete supported.temperature;
-	delete supported.topP;
-	delete supported.topK;
-	delete supported.minP;
-	delete supported.presencePenalty;
-	delete supported.repetitionPenalty;
-	delete supported.frequencyPenalty;
+	if (!compat) return options;
+	if ("supportsSamplingParams" in compat && compat.supportsSamplingParams === false) {
+		const supported = { ...options };
+		delete supported.temperature;
+		delete supported.topP;
+		delete supported.topK;
+		delete supported.minP;
+		delete supported.presencePenalty;
+		delete supported.repetitionPenalty;
+		delete supported.frequencyPenalty;
+		return supported;
+	}
+	if (!("unsupportedSamplingParams" in compat)) return options;
+	let supported = options;
+	for (const key of compat.unsupportedSamplingParams ?? []) {
+		if (supported[key] === undefined) continue;
+		if (supported === options) supported = { ...options };
+		delete supported[key];
+	}
 	return supported;
 }
 

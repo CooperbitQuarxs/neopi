@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Omit unsupported top-K, min-P and penalty parameters on first-party OpenAI endpoints while preserving supported sampling options and compatible-proxy extensions ([#53](https://github.com/PsychedelicShayna/neopi/issues/53)).
 - Fixed switch provider-fragment connections, state-relative backups, organization-only meter matching, and bounded dashboard event replay; invalid catalog Plans and incomplete model additions now fail before serving ([#329](https://github.com/PsychedelicShayna/neopi/issues/329)).
 - Preserved text-only developer-message roles in OpenAI Chat Completions and Responses requests when the configured provider supports them; image-bearing turns retain their previous user-role representation ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
 - Codex V2 compaction retains authored developer turns without duplicating them as synthetic user prompts ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
