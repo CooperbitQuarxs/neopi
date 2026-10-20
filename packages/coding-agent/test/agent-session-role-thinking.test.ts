@@ -104,11 +104,11 @@ describe("AgentSession role model thinking behavior", () => {
 		});
 		cfgCompactionThresholdTokens.set(sessionSettings, 100000);
 		sessionSettings.setRoleSetting("slow", cfgCompactionThresholdTokens, 120000);
-		await session.applyRoleModel({ role: "slow", model: slowModel });
+		await session.applyRoleModel({ role: "slow", model: slowModel, explicitThinkingLevel: false });
 		expect(cfgCompactionThresholdTokens.get(sessionSettings)).toBe(120000);
-		await session.applyRoleModel({ role: "default", model: defaultModel });
+		await session.applyRoleModel({ role: "default", model: defaultModel, explicitThinkingLevel: false });
 		expect(cfgCompactionThresholdTokens.get(sessionSettings)).toBe(100000);
-		await session.applyRoleModel({ role: "slow", model: slowModel });
+		await session.applyRoleModel({ role: "slow", model: slowModel, explicitThinkingLevel: false });
 		await session.setModelTemporary(defaultModel);
 		expect(sessionSettings.activeRole).toBeUndefined();
 		expect(cfgCompactionThresholdTokens.get(sessionSettings)).toBe(100000);
