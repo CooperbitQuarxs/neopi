@@ -13,6 +13,8 @@ import { getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
 import { isEnoent, isEnotdir } from "@oh-my-pi/pi-utils";
 import {
 	APP_NAME,
+	getActiveProfile,
+	getAgentDir,
 	directoryIsMissing,
 	getLogPath,
 	getProjectDir,
@@ -28,6 +30,7 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reset as resetCapabilities } from "./capability";
 import { readChatModeEntry, resolveChatMode } from "./chat/chat-mode";
 import { consumeDeferredInput, isDeferredSubmissionActive } from "./neopi/defer";
+import { loadLaunchProfileMemory } from "./neopi/launch-profile";
 import {
 	type Args,
 	reportInvalidFlagValues,
@@ -1511,6 +1514,8 @@ export async function buildSessionOptions(
 		cwd: parsed.cwd ?? getProjectDir(),
 		autoApprove: parsed.autoApprove ?? false,
 	};
+	const launchProfileMemory = await loadLaunchProfileMemory(getActiveProfile(), getAgentDir());
+	if (launchProfileMemory !== undefined) options.launchProfileMemory = launchProfileMemory;
 	const restoringSession = Boolean(parsed.continue || parsed.resume || isForeignSessionImport(parsed));
 	// Chat mode strips coding-agent context. Resolved first: it decides whether
 	// discovered SYSTEM.md / APPEND_SYSTEM.md apply at all.

@@ -6,6 +6,7 @@ import { APP_NAME, logger, setProjectDir } from "@oh-my-pi/pi-utils";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import { rebindMemoryBackendForCwd } from "../hindsight/backend";
 import { memoryStatsUnavailableMessage, resolveMemoryBackend } from "../memory-backend";
+import { getSessionLaunchProfile } from "../neopi/launch-profile";
 import type { FreshSessionResult, HandoffResult } from "../session/agent-session";
 import { COMPACT_MODES, parseCompactArgs } from "../session/compact-modes";
 import { runCompactionControl } from "../session/compaction-controls";
@@ -135,6 +136,14 @@ async function relocateHeadlessSession(
 }
 
 export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
+	{
+		name: "launch-profile",
+		description: "Show the launch profile and its preloaded memory snapshot",
+		handle: async (_command, runtime) => {
+			await runtime.output(getSessionLaunchProfile(runtime.session) ?? "No launch profile memory was preloaded.");
+			return commandConsumed();
+		},
+	},
 	{
 		name: "ssh",
 		icon: "host",
