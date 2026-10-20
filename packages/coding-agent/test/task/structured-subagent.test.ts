@@ -524,6 +524,31 @@ describe("structured subagent primitive", () => {
 		await fs.rm(settled.artifactsDir, { recursive: true, force: true });
 	});
 
+	it("refuses a spawn hook that changes an operator-confirmed model before dispatch", async () => {
+		mockDiscovery();
+		const childSession = session();
+		childSession.emitBeforeSubagentSpawn = async () => ({ model: "openai/gpt-4o" });
+		const run = vi.spyOn(executorModule, "runSubprocess");
+		await expect(runStructuredSubagent(request({
+			session: childSession,
+			model: "anthropic/claude-opus-4-5:low",
+			confirmedModel: "anthropic/claude-opus-4-5:low",
+		}))).rejects.toThrow("changed the confirmed model");
+		expect(run).not.toHaveBeenCalled();
+	});
+
+	it("keeps launcher tool restrictions in plan mode without mutating discovered definitions", async () => {
+		mockDiscovery();
+		const policy = await resolveEffectiveSubagentPolicy(request({
+			session: session({ planMode: true }),
+			tools: ["read", "write"],
+			spawns: [],
+		}));
+		expect(policy.effectiveAgent.tools).toEqual(["read"]);
+		expect(policy.effectiveAgent.spawns).toBeUndefined();
+		expect(AGENT.tools).toEqual(["read", "write", "ast_grep"]);
+	});
+
 	it("rejects dispatch before leasing artifacts when an extension blocks the spawn", async () => {
 		mockDiscovery();
 		const blockedSession = session();
