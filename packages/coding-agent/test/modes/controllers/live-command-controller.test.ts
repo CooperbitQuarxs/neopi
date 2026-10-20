@@ -146,6 +146,7 @@ function createHarness(factory?: (options: LiveSessionControllerOptions) => Live
 /** Exercise composer capture through real live routing and primary acceptance. */
 function createHandoffHarness(acceptance?: Promise<void>, voiceDelivery?: Promise<void>) {
 	const prompts: string[] = [];
+	const sent: LiveClientMessage[] = [];
 	let fire: ((event: LiveServerEvent) => void) | undefined;
 	const h = createHarness(options => new LiveSessionController({
 		...options,
@@ -153,7 +154,7 @@ function createHandoffHarness(acceptance?: Promise<void>, voiceDelivery?: Promis
 			fire = transportOptions.callbacks.onEvent;
 			return {
 				async connect() {},
-				async send() { await voiceDelivery; },
+				async send(message: LiveClientMessage) { sent.push(message); await voiceDelivery; },
 				async close() {},
 				async setMuted() {},
 				setOutputSuppressed() {},
@@ -176,7 +177,14 @@ function createHandoffHarness(acceptance?: Promise<void>, voiceDelivery?: Promis
 	cfgLiveSubmitKeyword.set(h.ctx.settings, "thanks");
 	cfgLiveBlockDelegateKeyword.set(h.ctx.settings, "do not relate");
 	cfgLiveSubmitSilenceMs.set(h.ctx.settings, 5);
-	return { ...h, prompts, speech: (text: string) => fire?.({ type: "turn.done", turn: { role: "user", transcript: text } }) };
+	return {
+		...h, prompts, sent,
+		speech: (text: string) => fire?.({ type: "turn.done", turn: { role: "user", transcript: text } }),
+		delegate: () => fire?.({
+			type: "delegation.created",
+			item: { type: "delegation", target: "client", id: crypto.randomUUID(), content: [] },
+		}),
+	};
 }
 
 
@@ -742,6 +750,14 @@ describe("LiveCommandController", () => {
 						expect(h.prompts).toEqual([]);
 						h.editor.insertText(hold ? "\nTHANKS!" : "\nSEND... IT, NOW!");
 						await Bun.sleep(40);
+						if (hold) {
+							expect(h.prompts).toEqual([]);
+							const submitted = h.sent.filter(message => message.type === "session.context.append")
+								.flatMap(message => message.content.map(item => item.text));
+							expect(submitted).toContain(`"Operator Submitted Message":\n\n${content}`);
+							h.delegate();
+							for (let index = 0; index < 80; index++) await Promise.resolve();
+						}
 						expect(h.prompts).toEqual([content]);
 					} finally {
 						await h.controller.stop();

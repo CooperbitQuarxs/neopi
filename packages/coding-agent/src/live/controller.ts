@@ -911,7 +911,7 @@ export class LiveSessionController {
 			scope === "turns" || this.#userTurns.size > 0 || receipts ? ids : undefined,
 			receipts,
 		);
-		if (forced) this.#queueSend(buildSessionContextAppend("Operator Message Sent To Main Agent", "commentary"));
+		if (forced) void this.sendOperatorText(text, "both");
 		this.#scheduleTranscriptKeyword();
 	}
 
@@ -1174,7 +1174,11 @@ export class LiveSessionController {
 	#submitComposer(text: string, forced: boolean): boolean {
 		const message = text.trim();
 		if (!message || this.#stopped) return false;
-		const block = stripLiveKeyword(message, this.#blockDelegateKeyword);
+		const keywords = this.#transcriptKeywords?.();
+		const visible = this.#composerText?.(false) ?? message;
+		const force = stripLiveKeyword(visible, keywords?.force ?? "", true);
+		const routingText = force.matched ? force.text : stripLiveKeyword(visible, keywords?.submit ?? "", true).text;
+		const block = stripLiveKeyword(routingText, this.#blockDelegateKeyword);
 		const voiceOnly = this.#turnsWhere(turn => turn.final && !this.#mayDelegateTurn(turn));
 		const lastTurn = this.#tailTurn();
 		if ((voiceOnly.length || block.matched) && Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
@@ -1184,7 +1188,7 @@ export class LiveSessionController {
 			? captured?.text.trim() ??
 				this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined)
 					.map(turn => turn.text).join("\n\n").trim()
-			: block.matched ? block.text : message;
+			: captured?.text.trim() ?? (block.matched ? block.text : message);
 		if (!this.retireComposerSpeech(preserved)) return false;
 		this.#holdReleased = true;
 		// A pre-submit response/route belongs to the old draft, not this released request.
@@ -1202,24 +1206,24 @@ export class LiveSessionController {
 			if (preserved.includes(turn.turn)) this.#deliverBlockedTurn(turn);
 		}
 		if (voiceOnly.length) {
-			if (primary) this.#offerPendingComposer(primary, forced, captured?.receipt);
+			if (primary) this.#offerPendingComposer(primary, forced, captured?.receipt, captured?.routingText);
 		} else if (block.matched) {
 			const turn: UserLedgerTurn = {
-				turn: ++this.#userLedgerTurn, text: primary, final: true, blocked: true, composerReceipt: captured?.receipt,
+				turn: ++this.#userLedgerTurn, text: primary, routingText, final: true, blocked: true, composerReceipt: captured?.receipt,
 			};
 			this.#putTurn(turn);
 			this.#deliverBlockedTurn(turn);
 		} else {
-			this.#offerPendingComposer(primary, forced, captured?.receipt);
+			this.#offerPendingComposer(primary, forced, captured?.receipt, captured?.routingText ?? routingText);
 		}
 		return true;
 	}
 
-	#offerPendingComposer(text: string, forced: boolean, composerReceipt?: LiveComposerReceipt): void {
-		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text, final: true, composerReceipt };
+	#offerPendingComposer(text: string, forced: boolean, composerReceipt?: LiveComposerReceipt, routingText?: string): void {
+		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text, routingText, final: true, composerReceipt };
 		this.#putTurn(turn);
 		this.#latestUtterance = turn;
-		if (forced || stripLiveKeyword(text, this.#delegationKeywords().force).matched) {
+		if (forced || stripLiveKeyword(routingText ?? text, this.#delegationKeywords().force).matched) {
 			this.#releasedReplyTurns = [];
 			void this.#handleDelegation(
 				{
