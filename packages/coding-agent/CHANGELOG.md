@@ -66,6 +66,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Control-socket clients can start, mute, and stop the session's existing live voice call without ending it when they disconnect ([#483](https://github.com/PsychedelicShayna/neopi/issues/483)).
 - Short work contracts no longer block ordinary messages by counting tool runtime state as prompt tokens; genuinely oversized contexts still fail without truncating clauses ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
 - Session work contracts remain intact when a model's context-window size is unknown, without assuming a token budget ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
 - Restored clean coding-agent type checks by updating test fixtures to current contracts without changing STT assertions or shipped code ([#458](https://github.com/PsychedelicShayna/neopi/issues/458)).

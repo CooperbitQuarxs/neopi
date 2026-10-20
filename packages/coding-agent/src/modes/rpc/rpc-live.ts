@@ -34,6 +34,9 @@ export interface RpcLiveStartOptions {
 	voice?: string;
 }
 
+/** Commands shared by the session's live owner across stdio, TUI, and control sockets. */
+export type RpcLiveControl = Pick<RpcLiveBridge, "start" | "stop" | "setMuted">;
+
 /** Visible assistant text: text blocks only, no thinking or tool calls. Shared with interactive mode. */
 export function extractVisibleAssistantText(message: AssistantMessage): string {
 	let text = "";
