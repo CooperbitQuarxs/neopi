@@ -146,7 +146,7 @@ describe("advisor sync backlog picker", () => {
 
 		// A real edit must survive: the seeded row is no longer synthetic, so the
 		// save must not collapse the roster to empty (which would delete the file).
-		expect(saved?.advisors).toEqual([{ name: "default", syncBacklog: "strict" }]);
+		expect(saved?.advisors).toEqual([{ id: expect.any(String), name: "default", syncBacklog: "strict" }]);
 	});
 
 	it("edits cadence from the native prefs page, saving defaults and inherit as omitted fields", async () => {
@@ -210,7 +210,7 @@ describe("advisor sync backlog picker", () => {
 		overlay.handleInput("\x1b"); // Roster.
 		overlay.handleInput("s");
 		await Bun.sleep(0);
-		expect(saved?.advisors).toEqual([{ name: "default", includeThinking: false }]);
+		expect(saved?.advisors).toEqual([{ id: expect.any(String), name: "default", includeThinking: false }]);
 	});
 
 	it("toggles the highlighted advisor with Space and saves it with s, all from the list", async () => {
@@ -795,11 +795,27 @@ describe("advisor menu navigation and history", () => {
 			h.overlay.dispose();
 		}
 	});
+	it("assigns a hidden identity immediately when adding an advisor", () => {
+		const doc: WatchdogConfigDoc = { advisors: [{ id: "existing-advisor", name: "Reviewer" }] };
+		const h = make(doc);
+		try {
+			h.overlay.handleNativeEvent({ type: "action", key: "", act: "add", mods: [] });
+			const created = doc.advisors[1];
+			expect(created.id).toBeTruthy();
+			expect(created.id).not.toBe(doc.advisors[0].id);
+			expect(Bun.stripANSI(h.overlay.render(120).join("\n"))).not.toContain(created.id!);
+			expect(h.events).toEqual([]);
+		} finally {
+			h.overlay.dispose();
+		}
+	});
+
 	it("clones every field into an independent editable entry without saving or applying", () => {
 		const doc: WatchdogConfigDoc = {
 			instructions: "shared",
 			advisors: [
 				{
+					id: "original-advisor",
 					name: "Reviewer",
 					model: "provider/model:high",
 					tools: ["read", "write"],
@@ -818,7 +834,8 @@ describe("advisor menu navigation and history", () => {
 		const h = make(doc);
 		try {
 			h.overlay.handleInput("c");
-			expect(doc.advisors).toEqual([original, { ...original, name: "Reviewer (copy)" }]);
+			expect(doc.advisors).toEqual([original, { ...original, id: expect.any(String), name: "Reviewer (copy)" }]);
+			expect(doc.advisors[1].id).not.toBe(original.id);
 			expect(h.overlay.navigationSnapshot().context).toMatchObject({ screen: "detail", index: 1 });
 			h.overlay.handleInput("\r"); // Edit the copy's name.
 			h.overlay.handleInput(" variant");

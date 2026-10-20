@@ -140,7 +140,7 @@ describe("discoverAdvisorConfigs", () => {
 		doc.advisors.push({ name: "Repaired", enabled: false });
 		await saveWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"), doc);
 		expect(await loadWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"))).toEqual({
-			advisors: [{ name: "Repaired", enabled: false }],
+			advisors: [{ id: expect.any(String), name: "Repaired", enabled: false }],
 		});
 	});
 
@@ -330,11 +330,114 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect(loaded).toEqual(doc);
 	});
 
+	it("assigns distinct IDs to identical legacy advisors on first save and preserves them on rename", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(file, "advisors:\n  - name: Review\n  - name: Review\n");
+		const loaded = await loadWatchdogConfigFile(file);
+		expect(loaded.advisors.every(advisor => advisor.id === undefined)).toBe(true);
+		await saveWatchdogConfigFile(file, loaded);
+		const [first, second] = loaded.advisors;
+		expect(first.id).toBeTruthy();
+		expect(second.id).toBeTruthy();
+		expect(first.id).not.toBe(second.id);
+		first.name = "Renamed";
+		await saveWatchdogConfigFile(file, loaded);
+		const reloaded = await loadWatchdogConfigFile(file);
+		expect(reloaded.advisors.map(advisor => advisor.id)).toEqual([first.id, second.id]);
+		expect((await discoverAdvisorConfigs(tmp, tmp)).advisors.map(advisor => advisor.id)).toEqual([
+			first.id,
+			second.id,
+		]);
+	});
+
+	it("matches persisted IDs after a concurrent rename without dropping a disjoint edit", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await saveWatchdogConfigFile(file, { advisors: [{ name: "Review" }] });
+		const winner = await loadWatchdogConfigFile(file);
+		const stale = await loadWatchdogConfigFile(file);
+		winner.advisors[0].name = "Renamed";
+		await saveWatchdogConfigFile(file, winner);
+		stale.advisors[0].enabled = false;
+		await saveWatchdogConfigFile(file, stale);
+		expect((await loadWatchdogConfigFile(file)).advisors).toEqual([
+			{ id: winner.advisors[0].id, name: "Renamed", enabled: false },
+		]);
+	});
+
+	it("repairs a copied ID on save instead of collapsing identical advisors", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		const copied: WatchdogConfigDoc = {
+			advisors: [
+				{ id: "copied", name: "Review" },
+				{ id: "copied", name: "Review" },
+			],
+		};
+		await saveWatchdogConfigFile(file, copied);
+		expect(copied.advisors[0].id).toBe("copied");
+		expect(copied.advisors[1].id).not.toBe("copied");
+		expect((await discoverAdvisorConfigs(tmp, tmp)).advisors).toHaveLength(2);
+	});
+
+	for (const secondName of ["Second", "First"]) {
+		it(`repairs on-disk duplicate IDs without redirecting edits with second name ${secondName}`, async () => {
+			const file = path.join(tmp, "WATCHDOG.yml");
+			await Bun.write(
+				file,
+				`advisors:\n  - id: dup\n    name: First\n    enabled: true\n    futureId: first\n  - id: dup\n    name: ${secondName}\n    enabled: false\n    futureId: second\n`,
+			);
+			const discovered = await discoverAdvisorConfigs(tmp, tmp);
+			expect(discovered.advisors).toHaveLength(2);
+			expect(discovered.warnings).toHaveLength(1);
+			expect(discovered.warnings[0]).toContain('duplicate id "dup"');
+
+			const loaded = await loadWatchdogConfigFile(file);
+			expect(loaded.warnings?.[0]).toContain('duplicate id "dup"');
+			await saveWatchdogConfigFile(file, loaded);
+			const repaired = await loadWatchdogConfigFile(file);
+			expect(repaired.advisors).toEqual(loaded.advisors);
+			expect(repaired.advisors[0].id).toBe("dup");
+			expect(repaired.advisors[1].id).not.toBe("dup");
+			expect(repaired.warnings).toBeUndefined();
+
+			loaded.advisors[0].enabled = false;
+			await saveWatchdogConfigFile(file, loaded);
+			const reloaded = await loadWatchdogConfigFile(file);
+			expect(reloaded.advisors).toEqual([
+				{ id: loaded.advisors[0].id, name: "First", enabled: false },
+				{ id: loaded.advisors[1].id, name: secondName, enabled: false },
+			]);
+			expect(YAML.parse(await Bun.file(file).text())).toEqual({
+				advisors: [
+					{ ...reloaded.advisors[0], futureId: "first" },
+					{ ...reloaded.advisors[1], futureId: "second" },
+				],
+			});
+		});
+	}
+
+	it("repairs duplicate IDs on indistinguishable rows by their unchanged occurrence order", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(file, "advisors:\n  - id: dup\n    name: Review\n  - id: dup\n    name: Review\n");
+		const loaded = await loadWatchdogConfigFile(file);
+		await saveWatchdogConfigFile(file, loaded);
+		expect((await loadWatchdogConfigFile(file)).advisors).toEqual(loaded.advisors);
+		expect(loaded.advisors[0].id).toBe("dup");
+		expect(loaded.advisors[1].id).not.toBe("dup");
+		loaded.advisors[0].enabled = false;
+		await saveWatchdogConfigFile(file, loaded);
+		expect((await loadWatchdogConfigFile(file)).advisors).toEqual([
+			{ id: "dup", name: "Review", enabled: false },
+			{ id: loaded.advisors[1].id, name: "Review" },
+		]);
+	});
+
 	it("keeps all advisors after cloning a name whose copy slug is already occupied", async () => {
 		const theme = await getThemeByName("dark");
 		if (!theme) throw new Error("theme unavailable");
 		setThemeInstance(theme);
-		const original: WatchdogConfigDoc = { advisors: [{ name: "Review" }, { name: "Review-copy" }] };
+		const original: WatchdogConfigDoc = {
+			advisors: [{ id: "original-review", name: "Review" }, { name: "Review-copy" }],
+		};
 		const overlay = new AdvisorConfigOverlayComponent(
 			{} as TUI,
 			{
@@ -369,13 +472,11 @@ describe("WATCHDOG.yml file round-trip", () => {
 		);
 		try {
 			overlay.handleInput("c");
+			expect(original.advisors[1].id).toBeTruthy();
+			expect(original.advisors[1].id).not.toBe(original.advisors[0].id);
 			await saveWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"), original);
 			const discovered = await discoverAdvisorConfigs(tmp, tmp);
-			expect(discovered.advisors.map(advisor => advisor.name)).toEqual([
-				"Review",
-				"Review (copy) 2",
-				"Review-copy",
-			]);
+			expect(discovered.advisors.map(advisor => advisor.name)).toEqual(["Review", "Review (copy) 2", "Review-copy"]);
 		} finally {
 			overlay.dispose();
 		}
@@ -434,7 +535,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 	it("creates an absent project configuration directory for a new WATCHDOG file", async () => {
 		const file = path.join(tmp, ".omp", "WATCHDOG.yml");
 		await saveWatchdogConfigFile(file, { advisors: [{ name: "New" }] });
-		expect((await loadWatchdogConfigFile(file)).advisors).toEqual([{ name: "New" }]);
+		expect((await loadWatchdogConfigFile(file)).advisors).toEqual([{ id: expect.any(String), name: "New" }]);
 	});
 
 	it("updates the target of a WATCHDOG symlink without replacing the link", async () => {
@@ -570,9 +671,9 @@ describe("WATCHDOG.yml file round-trip", () => {
 		await saveWatchdogConfigFile(file, loaded);
 		expect(await Bun.file(file).text()).not.toContain("systemPrompt:");
 		expect((await loadWatchdogConfigFile(file)).advisors).toEqual([
-			{ name: "Custom", instructions: "Append specialization" },
-			{ name: "Empty" },
-			{ name: "Default" },
+			{ id: expect.any(String), name: "Custom", instructions: "Append specialization" },
+			{ id: expect.any(String), name: "Empty" },
+			{ id: expect.any(String), name: "Default" },
 		]);
 		expect((await discoverAdvisorConfigs(tmp, tmp)).advisors.map(advisor => advisor.systemPrompt)).toEqual([
 			undefined,
@@ -640,7 +741,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 
 		const saved = await Bun.file(file).text();
 		expect(YAML.parse(saved)).toEqual({
-			advisors: [{ name: "Reviewer", futureId: "second", enabled: false }],
+			advisors: [{ id: expect.any(String), name: "Reviewer", futureId: "second", enabled: false }],
 		});
 		expect(saved).toContain("# second duplicate");
 		expect(saved).not.toContain("# first duplicate");
@@ -656,7 +757,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 
 		const saved = await Bun.file(file).text();
 		expect(YAML.parse(saved)).toEqual({
-			advisors: [{ name: "Reviewer", model: "test/new", futureId: "keep" }],
+			advisors: [{ id: expect.any(String), name: "Reviewer", model: "test/new", futureId: "keep" }],
 		});
 		expect(saved).toContain("# cloned");
 	});
@@ -684,7 +785,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect(saved).toContain("# aliased row");
 		expect(YAML.parse(saved)).toEqual({
 			template: { name: "Reviewer", model: "test/old", futureId: "keep" },
-			advisors: [{ name: "Reviewer", model: "test/new", futureId: "keep" }],
+			advisors: [{ id: expect.any(String), name: "Reviewer", model: "test/new", futureId: "keep" }],
 		});
 	});
 
@@ -712,6 +813,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 
 		expect((await loadWatchdogConfigFile(file)).advisors).toEqual([
 			{
+				id: expect.any(String),
 				name: "Reviewer",
 				model: "test/shared",
 				reviewMode: "agent-end",
@@ -719,7 +821,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 				syncBacklog: "5",
 				includeThinking: false,
 			},
-			{ name: "Untouched", model: "test/shared", enabled: false },
+			{ id: expect.any(String), name: "Untouched", model: "test/shared", enabled: false },
 		]);
 		expect(await Bun.file(file).text()).toContain("*reviewModel");
 	});
@@ -746,7 +848,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect(saved).toContain("# roster alias");
 		expect(YAML.parse(saved)).toEqual({
 			sharedRoster: [{ name: "Reviewer", model: "test/old", futureId: "keep" }],
-			advisors: [{ name: "Reviewer", model: "test/new", futureId: "keep" }],
+			advisors: [{ id: expect.any(String), name: "Reviewer", model: "test/new", futureId: "keep" }],
 		});
 	});
 
@@ -773,7 +875,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect(normalized).toContain("# valid future field");
 		expect(normalized).not.toContain("Broken");
 		expect(YAML.parse(normalized)).toEqual({
-			advisors: [{ name: "Valid", futureId: "keep", enabled: false }],
+			advisors: [{ id: expect.any(String), name: "Valid", futureId: "keep", enabled: false }],
 		});
 		expect((await loadWatchdogConfigFile(file)).warnings).toBeUndefined();
 
@@ -797,8 +899,8 @@ describe("WATCHDOG.yml file round-trip", () => {
 
 		expect(YAML.parse(await Bun.file(file).text())).toEqual({
 			advisors: [
-				{ name: "Repaired", enabled: false },
-				{ name: "Concurrent", model: "test/external" },
+				{ id: expect.any(String), name: "Repaired", enabled: false },
+				{ id: expect.any(String), name: "Concurrent", model: "test/external" },
 			],
 		});
 	});
@@ -825,7 +927,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect(YAML.parse(saved)).toEqual({
 			advisors: [
 				{ name: "Reviewer", futureId: "inserted" },
-				{ name: "Reviewer", futureId: "original", enabled: false },
+				{ id: expect.any(String), name: "Reviewer", futureId: "original", enabled: false },
 			],
 		});
 		expect(saved).toContain("# inserted row");
@@ -845,7 +947,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 
 		const saved = await Bun.file(file).text();
 		expect(YAML.parse(saved)).toEqual({
-			advisors: [{ name: "Reviewer", model: "test/winner", enabled: false }],
+			advisors: [{ id: expect.any(String), name: "Reviewer", model: "test/winner", enabled: false }],
 		});
 		expect(saved).toContain("# model owner");
 	});
@@ -869,7 +971,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect(YAML.parse(saved)).toEqual({
 			instructions: "winner",
 			maxNotesPerUpdate: 7,
-			advisors: [{ name: "Reviewer" }],
+			advisors: [{ id: expect.any(String), name: "Reviewer" }],
 		});
 		expect(saved).toContain("# shared owner");
 	});
@@ -886,7 +988,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 
 		const saved = await Bun.file(file).text();
 		expect(YAML.parse(saved)).toEqual({
-			advisors: [{ name: "Reviewer", model: "test/winner" }],
+			advisors: [{ id: expect.any(String), name: "Reviewer", model: "test/winner" }],
 		});
 		expect(saved).toContain("# row owner");
 	});
@@ -916,7 +1018,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		staleAfterRename.advisors[0].enabled = false;
 		await saveWatchdogConfigFile(file, staleAfterRename);
 		expect(YAML.parse(await Bun.file(file).text())).toEqual({
-			advisors: [{ name: "Renamed", futureId: "keep" }],
+			advisors: [{ id: expect.any(String), name: "Renamed", futureId: "keep" }],
 		});
 
 		const deleteWinner = await loadWatchdogConfigFile(file);
