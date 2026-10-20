@@ -1,5 +1,6 @@
 import type { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import type { Context, Model } from "@oh-my-pi/pi-ai";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { ReadonlySessionManager } from "../session/session-manager";
 import { readContracts, renderContractBlock } from "./store";
@@ -16,14 +17,21 @@ export function injectWorkContracts(
 	if (!block) return context;
 	const text = obfuscator?.obfuscates() ? obfuscator.obfuscate(block) : block;
 	const systemPrompt = [...(context.systemPrompt ?? []), text];
-	const requiredTokens =
-		tokenizer.countTokens(systemPrompt) +
-		tokenizer.countMessages(context.messages) +
-		tokenizer.countTokens(JSON.stringify([context.tools ?? [], context.inactiveTools ?? []]));
-	if (model.contextWindow > 0 && requiredTokens >= model.contextWindow) {
-		throw new Error(
-			`Session work contracts cannot fit intact in the context budget (${requiredTokens} estimated tokens, ${model.contextWindow} available). Compact context or edit/disable clauses with /contract. No contract text was truncated.`,
-		);
+	if (model.contextWindow === null) {
+		logger.debug("Skipping work contract budget sizing because the model context window is unknown", {
+			provider: model.provider,
+			model: model.id,
+		});
+	} else if (model.contextWindow > 0) {
+		const requiredTokens =
+			tokenizer.countTokens(systemPrompt) +
+			tokenizer.countMessages(context.messages) +
+			tokenizer.countTokens(JSON.stringify([context.tools ?? [], context.inactiveTools ?? []]));
+		if (requiredTokens >= model.contextWindow) {
+			throw new Error(
+				`Session work contracts cannot fit intact in the context budget (${requiredTokens} estimated tokens, ${model.contextWindow} available). Compact context or edit/disable clauses with /contract. No contract text was truncated.`,
+			);
+		}
 	}
 	return { ...context, systemPrompt };
 }
