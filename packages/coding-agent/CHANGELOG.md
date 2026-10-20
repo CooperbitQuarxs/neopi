@@ -58,6 +58,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Session work contracts remain intact when a model's context-window size is unknown, without assuming a token budget ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
 - The centered startup banner now reads NPI instead of OMP.
 - Checkpoint and rewind inventories now describe the context transaction, report replacement, and requirement to rewind before yielding instead of a git-based save point ([#16](https://github.com/PsychedelicShayna/neopi/issues/16)).
 - Startup now retires the old managed persona, loadout, REPL, and live-persona extension links once, without requiring a source install or changing saved state and user extensions ([#75](https://github.com/PsychedelicShayna/neopi/issues/75)).

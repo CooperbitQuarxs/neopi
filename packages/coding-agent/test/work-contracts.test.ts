@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,6 +8,7 @@ import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { createAgentSession } from "../src/sdk";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { logger } from "@oh-my-pi/pi-utils";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -244,6 +245,36 @@ describe("session work contracts", () => {
 		await h.command(JSON.stringify({ action: "set", id: "literal", text }));
 		const context = injectWorkContracts({ messages: [] }, model, manager, new Tokenizer(model));
 		expect(context.systemPrompt?.at(-1)).toContain(text);
+	});
+
+	test("unknown context windows keep contracts intact without reserving an invented budget", async () => {
+		const root = await temp();
+		const manager = SessionManager.inMemory(root);
+		const h = await harness(manager, root);
+		const text = "Keep the lane free. ".repeat(100).trim();
+		await h.command(`set lane ${text}`);
+		const unknownWindowModel = { ...model, contextWindow: null };
+		const tokenizer = new Tokenizer(unknownWindowModel);
+		const countTokens = spyOn(tokenizer, "countTokens");
+		const countMessages = spyOn(tokenizer, "countMessages");
+		const debug = spyOn(logger, "debug").mockImplementation(() => {});
+		try {
+			const base = { systemPrompt: ["Base policy"], messages: [] };
+			const injected = injectWorkContracts(base, unknownWindowModel, manager, tokenizer);
+			expect(injected.systemPrompt?.[0]).toBe("Base policy");
+			expect(injected.systemPrompt?.at(-1)).toContain(text);
+			expect(base.systemPrompt).toEqual(["Base policy"]);
+			expect(countTokens).not.toHaveBeenCalled();
+			expect(countMessages).not.toHaveBeenCalled();
+			expect(debug).toHaveBeenCalledWith(
+				"Skipping work contract budget sizing because the model context window is unknown",
+				{ provider: model.provider, model: model.id },
+			);
+		} finally {
+			countTokens.mockRestore();
+			countMessages.mockRestore();
+			debug.mockRestore();
+		}
 	});
 
 	test("budget overflow surfaces instead of dropping or trimming contract text", async () => {
