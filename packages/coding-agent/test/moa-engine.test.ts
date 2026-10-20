@@ -1712,6 +1712,28 @@ describe("hop fitting", () => {
 		if (truncated) expect(truncated).toContain("[… truncated");
 	});
 
+	it.each(["🛸", "e\u0301", "👩🏽‍🚀", "🇩🇪"])("keeps whole graphemes when truncating %s", grapheme => {
+		const tokenizer = new Tokenizer();
+		const text = `HEAD ${grapheme.repeat(10_000)} TAIL`;
+		for (const budget of [127, 8000]) {
+			const truncated = truncateToTokens(text, budget, tokenizer);
+			expect(truncated.isWellFormed()).toBe(true);
+			expect(tokenizer.countTokens(truncated)).toBeLessThanOrEqual(budget);
+			if (tokenizer.countTokens(text) <= budget) {
+				expect(truncated).toBe(text);
+				continue;
+			}
+			const [head, marker, tail] = truncated.split("\n");
+			expect(head).toStartWith("HEAD ");
+			expect(tail).toEndWith(" TAIL");
+			expect(marker).toContain("truncated");
+			const headBody = head!.slice(5);
+			const tailBody = tail!.slice(0, -5);
+			expect(headBody).toBe(grapheme.repeat(Math.floor(headBody.length / grapheme.length)));
+			expect(tailBody).toBe(grapheme.repeat(Math.floor(tailBody.length / grapheme.length)));
+		}
+	});
+
 	it("hands a tight editor a request that fits its window, with the draft truncated", async () => {
 		const tight = DRAFT_THEN_EDIT_TOML.replace('model = "fake/editor"', 'model = "tight/editor"');
 		await ensureFixture(tight);
