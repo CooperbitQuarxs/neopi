@@ -54,6 +54,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Startup now retires the old managed persona, loadout, REPL, and live-persona extension links once, without requiring a source install or changing saved state and user extensions ([#75](https://github.com/PsychedelicShayna/neopi/issues/75)).
 - Moving a session during a fork now waits for inherited artifacts to finish copying, so they stay available in the moved session ([#257](https://github.com/PsychedelicShayna/neopi/issues/257)).
 - Releasing a recovered headless browser tab now waits until its page disappears from CDP targets without closing unrelated tabs ([#293](https://github.com/PsychedelicShayna/neopi/issues/293)).
 - Browser crash-cancellation checks no longer mistake work sent before the renderer crashes for an uncancelled continuation ([#290](https://github.com/PsychedelicShayna/neopi/issues/290)).
