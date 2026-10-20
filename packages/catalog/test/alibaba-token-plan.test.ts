@@ -1,0 +1,205 @@
+import { describe, expect, test } from "bun:test";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
+import {
+	ALIBABA_TOKEN_PLAN_BASE_URL,
+	alibabaTokenPlanModelManagerOptions,
+} from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
+import type { FetchImpl } from "@oh-my-pi/pi-catalog/types";
+import { serializeAlibabaTokenPlanCredential } from "@oh-my-pi/pi-catalog/wire/alibaba-token-plan";
+
+describe("QwenCloud Token Plan provider", () => {
+	test("builds the curated preview contract from the static fallback seed", () => {
+		const preview = seedModels<"openai-completions">("alibaba-token-plan").find(
+			model => model.id === "qwen3.8-max-preview",
+		);
+		if (!preview) throw new Error("Qwen3.8 Max Preview missing from the provider seed");
+		expect(buildModel(preview)).toMatchObject({
+			reasoning: true,
+			input: ["text", "image"],
+			contextWindow: 983_616,
+			maxTokens: 131_072,
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Low, Effort.High, Effort.XHigh],
+				requiresEffort: true,
+			},
+			compat: {
+				thinkingFormat: "qwen",
+				supportsReasoningEffort: true,
+				supportsDeveloperRole: false,
+			},
+		});
+	});
+
+	test("discovers subscribed chat models from the native models endpoint", async () => {
+		let requestedUrl = "";
+		let authorization = "";
+		const fetchMock: FetchImpl = (input, init) => {
+			requestedUrl = String(input);
+			authorization = new Headers(init?.headers).get("Authorization") ?? "";
+			return Promise.resolve(
+				Response.json({
+					data: [
+						{
+							id: "qwen3.7-plus",
+							name: "server metadata must not replace curated metadata",
+							owned_by: "qwencloud",
+							context_length: 262_144,
+							max_completion_tokens: 16_384,
+						},
+						{ id: "deepseek-v4-flash", owned_by: "qwencloud" },
+						{ id: "deepseek-v4-flash-0731", owned_by: "qwencloud" },
+						{ id: "deepseek-v4-pro-0813", owned_by: "qwencloud" },
+						{ id: "kimi-k2.7-code", owned_by: "qwencloud" },
+						{ id: "MiniMax-M2.5", owned_by: "qwencloud" },
+						{ id: "qwen3.6-plus", owned_by: "qwencloud" },
+						{ id: "qwen3.8-max", owned_by: "qwencloud" },
+						{ id: "qwen3.8-flash", owned_by: "qwencloud" },
+						{ id: "deepseek-v3.2", owned_by: "qwencloud" },
+						{ id: "glm-5.1", owned_by: "qwencloud" },
+						{ id: "glm-5", owned_by: "qwencloud" },
+						{ id: "kimi-k2.6", owned_by: "qwencloud" },
+						{ id: "kimi-k2.5", owned_by: "qwencloud" },
+						{ id: "future-chat-model", owned_by: "qwencloud" },
+						{ id: "fun-asr", owned_by: "qwencloud" },
+						{ id: "qwen-image-2.0-pro", owned_by: "qwencloud" },
+						{ id: "qwen-audio-3.0-tts-plus", owned_by: "qwencloud" },
+						{ id: "happyhorse-1.1-t2v", owned_by: "qwencloud" },
+						{ id: "text-embedding-v4", owned_by: "qwencloud" },
+						{ id: "wan2.7-image", owned_by: "qwencloud" },
+					],
+				}),
+			);
+		};
+
+		const apiKey = `  ${serializeAlibabaTokenPlanCredential("sk-sp-test", "session_id=test")}  `;
+		const options = alibabaTokenPlanModelManagerOptions({ apiKey, fetch: fetchMock });
+		const models = await options.fetchDynamicModels?.();
+
+		expect(requestedUrl).toBe(`${ALIBABA_TOKEN_PLAN_BASE_URL}/models`);
+		expect(authorization).toBe("Bearer sk-sp-test");
+		const modelIds = new Set(models?.map(model => model.id) ?? []);
+		expect(modelIds.has("future-chat-model")).toBe(true);
+		for (const id of [
+			"fun-asr",
+			"qwen-image-2.0-pro",
+			"qwen-audio-3.0-tts-plus",
+			"happyhorse-1.1-t2v",
+			"text-embedding-v4",
+			"wan2.7-image",
+		]) {
+			expect(modelIds.has(id)).toBe(false);
+		}
+		const expectedLimits = [
+			["qwen3.6-plus", 1_000_000, 65_536],
+			["qwen3.8-max", 1_000_000, 131_072],
+			["qwen3.8-flash", 1_000_000, 131_072],
+			["deepseek-v4-flash", 1_000_000, 384_000],
+			["deepseek-v4-flash-0731", 1_000_000, 384_000],
+			["deepseek-v4-pro-0813", 1_000_000, 384_000],
+			["deepseek-v3.2", 131_072, 65_536],
+			["glm-5.1", 202_752, 128_000],
+			["glm-5", 202_752, 16_384],
+			["kimi-k2.7-code", 262_144, 262_144],
+			["kimi-k2.6", 262_144, 262_144],
+			["kimi-k2.5", 262_144, 98_304],
+			["MiniMax-M2.5", 196_608, 32_768],
+		] as const;
+		for (const [id, contextWindow, maxTokens] of expectedLimits) {
+			expect(models?.find(model => model.id === id)).toMatchObject({ contextWindow, maxTokens });
+		}
+		for (const id of ["deepseek-v4-flash", "deepseek-v4-flash-0731", "deepseek-v4-pro-0813"]) {
+			expect(models?.find(model => model.id === id)).toMatchObject({
+				reasoning: true,
+				thinking: {
+					mode: "effort",
+					efforts: ["high", "max"],
+				},
+			});
+		}
+		expect(models?.find(model => model.id === "future-chat-model")).toMatchObject({
+			contextWindow: null,
+			maxTokens: null,
+		});
+		expect(models?.find(model => model.id === "qwen3.7-plus")).toMatchObject({
+			reasoning: true,
+			input: ["text", "image"],
+			contextWindow: 1_000_000,
+			maxTokens: 64_000,
+		});
+		expect(models?.find(model => model.id === "qwen3.8-max")).toMatchObject({
+			reasoning: true,
+			input: ["text", "image"],
+			contextWindow: 1_000_000,
+			maxTokens: 131_072,
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Low, Effort.Medium, Effort.XHigh],
+				defaultLevel: Effort.XHigh,
+			},
+			compat: {
+				supportsReasoningEffort: true,
+				whenThinking: {
+					thinkingFormat: "openai",
+					extraBody: { enable_thinking: true },
+				},
+			},
+		});
+		const flash = models?.find(model => model.id === "qwen3.8-flash");
+		if (!flash) throw new Error("qwen3.8-flash missing from discovery");
+		expect(buildModel(flash)).toMatchObject({
+			reasoning: true,
+			input: ["text", "image"],
+			contextWindow: 1_000_000,
+			maxTokens: 131_072,
+			compat: {
+				supportsReasoningEffort: true,
+				replayReasoningContent: true,
+				whenThinking: {
+					thinkingFormat: "openai",
+					extraBody: { enable_thinking: true },
+				},
+			},
+		});
+		expect(options.dynamicModelsAuthoritative).toBe(true);
+	});
+
+	test("routes discovery to the credential's region when it is China (Beijing)", async () => {
+		let requestedUrl = "";
+		const fetchMock: FetchImpl = input => {
+			requestedUrl = String(input);
+			return Promise.resolve(Response.json({ data: [{ id: "qwen3.7-plus", owned_by: "qwencloud" }] }));
+		};
+
+		const apiKey = serializeAlibabaTokenPlanCredential(
+			"sk-sp-beijing",
+			"",
+			"https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+		);
+		const options = alibabaTokenPlanModelManagerOptions({ apiKey, fetch: fetchMock });
+		const models = await options.fetchDynamicModels?.();
+
+		expect(requestedUrl).toBe("https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models");
+		expect(models?.[0]).toMatchObject({
+			id: "qwen3.7-plus",
+			baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+		});
+	});
+
+	test("rejects malformed compound credentials before model discovery", () => {
+		let fetched = false;
+		const fetchMock: FetchImpl = () => {
+			fetched = true;
+			return Promise.resolve(Response.json({ data: [] }));
+		};
+
+		const options = alibabaTokenPlanModelManagerOptions({
+			apiKey: '  {"token":"sk-sp-test","cookie":"session=secret"',
+			fetch: fetchMock,
+		});
+		expect(options.fetchDynamicModels).toBeUndefined();
+		expect(fetched).toBe(false);
+	});
+});

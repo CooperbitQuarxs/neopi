@@ -1,0 +1,246 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { mkdir } from "node:fs/promises";
+import * as path from "node:path";
+import { Agent } from "@oh-my-pi/pi-agent-core";
+import type { Model } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { type RawSettings, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
+import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import * as modelHubModule from "@oh-my-pi/pi-tui/overlays/model-hub";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { YAML } from "bun";
+import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../../helpers/settings-test-state";
+
+const model = (id: string) => getBundledModel("anthropic", id) as Model;
+
+// Settings writes made through the model hub, driven through the controller's real hub callbacks.
+describe("SelectorController model hub writes", () => {
+	let tempDir: TempDir;
+	let authStorage: AuthStorage;
+	let session: AgentSession | undefined;
+	let state: SettingsTestState | undefined;
+
+	beforeEach(async () => {
+		state = beginSettingsTest();
+		tempDir = TempDir.createSync("@pi-selector-model-writes-");
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
+		authStorage.keys.setRuntime("anthropic", "test-key");
+	});
+
+	afterEach(async () => {
+		restoreSettingsTestState(state);
+		state = undefined;
+		await session?.dispose();
+		session = undefined;
+		authStorage.close();
+		AgentStorage.close();
+		// SQLite keeps agent.db open until GC finalizes its statements; Windows cannot delete an open file.
+		Bun.gc(true);
+		tempDir.removeSync();
+	});
+
+	function start(settings: Settings, initial: Model): { controller: SelectorController; showError: () => unknown } {
+		const live = new AgentSession({
+			agent: new Agent({ initialState: { model: initial, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry: new ModelRegistry(authStorage),
+			obfuscator: new SecretObfuscator([]),
+		});
+		session = live;
+		const showError = vi.fn();
+		const controller = new SelectorController(
+			createInteractiveModeContext({
+				session: live,
+				settings,
+				ui: { showOverlay: () => ({ hide: () => {}, setHidden: () => {}, isHidden: () => false }) },
+				keybindings: { getKeys: () => [], getDisplayString: () => "" },
+				showError,
+			}),
+		);
+		return { controller, showError };
+	}
+
+	function openModelHub(controller: SelectorController): modelHubModule.ModelHubCallbacks {
+		let callbacks: modelHubModule.ModelHubCallbacks | undefined;
+		vi.spyOn(modelHubModule, "ModelHubComponent").mockImplementation(function (...args: unknown[]) {
+			callbacks = args[4] as modelHubModule.ModelHubCallbacks;
+			return { refreshAfterExternalMutation: () => {}, dispose: () => {} };
+		} as never);
+		controller.showModelSelector();
+		if (!callbacks) throw new Error("model hub was not opened");
+		return callbacks;
+	}
+
+	it("saves only the edited fallback chain, never the chains a --config overlay supplies", async () => {
+		const agentDir = tempDir.join("agent");
+		const overlayPath = tempDir.join("overlay.yml");
+		await Bun.write(
+			overlayPath,
+			YAML.stringify({
+				retry: {
+					fallbackChains: { smol: ["overlay/cheap"] },
+					fallbackEffortSelections: {
+						smol: { "overlay/cheap": { mode: "inherit" } },
+						slow: { "user/slow-fallback": { mode: "inherit" } },
+					},
+				},
+			}),
+		);
+		// The global instance, as in the app: the hub's status text reads the global settings.
+		const settings = await Settings.init({ agentDir, cwd: tempDir.path(), configFiles: [overlayPath] });
+		const { controller, showError } = start(settings, model("claude-sonnet-4-5"));
+
+		openModelHub(controller).onFallbackChainChange?.("slow", ["user/slow-fallback"]);
+		await settings.flush();
+
+		expect(showError).not.toHaveBeenCalled();
+		const saved = YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text()) as RawSettings;
+		expect(saved).toEqual({ retry: { fallbackChains: { slow: ["user/slow-fallback"] } } });
+	});
+
+	it("preserves other persisted chains and drops emptied effort selections when editing a chain", async () => {
+		const agentDir = tempDir.join("agent");
+		await mkdir(agentDir, { recursive: true });
+		await Bun.write(
+			path.join(agentDir, "config.yml"),
+			YAML.stringify({
+				retry: {
+					fallbackChains: { default: ["user/default"], slow: ["user/old"] },
+					fallbackEffortSelections: {
+						default: { "user/default": { mode: "inherit" } },
+						slow: { "user/old": { mode: "inherit" } },
+					},
+				},
+			}),
+		);
+		const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+		const { controller, showError } = start(settings, model("claude-sonnet-4-5"));
+
+		const hub = openModelHub(controller);
+		hub.onFallbackChainChange?.("slow", ["user/new"]);
+		await settings.flush();
+
+		expect(showError).not.toHaveBeenCalled();
+		const saved = YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text()) as RawSettings;
+		expect(saved).toEqual({
+			retry: {
+				fallbackChains: { default: ["user/default"], slow: ["user/new"] },
+				fallbackEffortSelections: { default: { "user/default": { mode: "inherit" } } },
+			},
+		});
+
+		// The hub is still open (the mock never closes it); a second showModelSelector
+		// refocuses the registered menu instead of mounting a new one.
+		hub.onFallbackChainChange?.("slow", []);
+		await settings.flush();
+		expect(YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text())).toEqual({
+			retry: {
+				fallbackChains: { default: ["user/default"] },
+				fallbackEffortSelections: { default: { "user/default": { mode: "inherit" } } },
+			},
+		});
+	});
+
+	it.each(["default", "smol"])(
+		"saves an unscoped %s assignment globally without touching project roles",
+		async role => {
+			const agentDir = tempDir.join("agent");
+			const projectPath = tempDir.join(".omp", "config.yml");
+			const project = { modelRoles: { [role]: "anthropic/claude-opus-4-5" } };
+			await Bun.write(projectPath, YAML.stringify(project));
+			await Bun.write(path.join(agentDir, "config.yml"), YAML.stringify({ modelRoleStorage: "project" }));
+			const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+			const { controller, showError } = start(settings, model("claude-opus-4-5"));
+
+			await openModelHub(controller).onAssign(
+				model("claude-sonnet-4-5"),
+				role,
+				undefined,
+				"anthropic/claude-sonnet-4-5",
+			);
+			await settings.flush();
+
+			expect(showError).not.toHaveBeenCalled();
+			const saved = YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text()) as RawSettings;
+			expect(saved).toEqual({
+				modelRoleStorage: "project",
+				modelRoles: { [role]: "anthropic/claude-sonnet-4-5" },
+			});
+			expect(YAML.parse(await Bun.file(projectPath).text())).toEqual(project);
+			expect(session?.model?.id).toBe("claude-opus-4-5");
+		},
+	);
+
+	it("writes an explicitly project-scoped assignment only to the project layer", async () => {
+		const agentDir = tempDir.join("agent");
+		const globalPath = path.join(agentDir, "config.yml");
+		const global = { modelRoleStorage: "project", modelRoles: { smol: "anthropic/claude-opus-4-5" } };
+		await Bun.write(globalPath, YAML.stringify(global));
+		const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+		const { controller, showError } = start(settings, model("claude-opus-4-5"));
+
+		await openModelHub(controller).onAssign(
+			model("claude-sonnet-4-5"),
+			"smol",
+			undefined,
+			"anthropic/claude-sonnet-4-5",
+			"project",
+		);
+		await settings.flush();
+
+		expect(showError).not.toHaveBeenCalled();
+		expect(YAML.parse(await Bun.file(globalPath).text())).toEqual(global);
+		const project = YAML.parse(await Bun.file(tempDir.join(".omp", "config.yml")).text()) as RawSettings;
+		expect(project).toEqual({ modelRoles: { smol: "anthropic/claude-sonnet-4-5" } });
+	});
+
+	it("switches the session to the project default when its already-assigned chip is picked", async () => {
+		const agentDir = tempDir.join("agent");
+		await Bun.write(
+			tempDir.join(".omp", "config.yml"),
+			YAML.stringify({ modelRoles: { default: "anthropic/claude-opus-4-5" } }),
+		);
+		const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+		// The session moved off the configured default earlier (an in-session pick).
+		const { controller, showError } = start(settings, model("claude-sonnet-4-5"));
+
+		// The hub shows the project default as assigned, so picking it sends unassign.
+		await openModelHub(controller).onUnassign("default");
+
+		expect(showError).not.toHaveBeenCalled();
+		expect(session?.model?.id).toBe("claude-opus-4-5");
+	});
+
+	it("refreshes the open hub once a confirmed compaction point has moved the model to its extended window", async () => {
+		const settings = await Settings.init({ agentDir: tempDir.join("agent"), cwd: tempDir.path() });
+		const { controller, showError } = start(settings, model("claude-sonnet-4-5"));
+		const registry = session!.modelRegistry;
+		const terra = registry.find("openai", "gpt-5.6-terra");
+		if (!terra) throw new Error("Expected bundled gpt-5.6-terra");
+		const refreshed = Promise.withResolvers<number | null | undefined>();
+		vi.spyOn(modelHubModule, "ModelHubComponent").mockImplementation(function (...args: unknown[]) {
+			const callbacks = args[4] as modelHubModule.ModelHubCallbacks;
+			queueMicrotask(() => {
+				expect(callbacks.onCompactionPointChange?.(terra, "400k", true)).toBeUndefined();
+			});
+			return {
+				// The window the hub would re-read when it refreshes.
+				refreshAfterExternalMutation: () =>
+					refreshed.resolve(registry.find("openai", "gpt-5.6-terra")?.contextWindow),
+				dispose: () => {},
+			};
+		} as never);
+		controller.showModelSelector();
+
+		expect(await refreshed.promise).toBe(1_050_000);
+		expect(showError).not.toHaveBeenCalled();
+	});
+});
