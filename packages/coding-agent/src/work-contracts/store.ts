@@ -4,6 +4,8 @@ import type { SessionEntry } from "../session/session-entries";
 import type { ReadonlySessionManager } from "../session/session-manager";
 import blockTemplate from "./block.md" with { type: "text" };
 
+const renderBlock = prompt.compile(blockTemplate);
+
 export const CONTRACT_ENTRY = "work-contract";
 export const contractRequestSchema = type({
 	action: "'list' | 'show' | 'set' | 'edit' | 'enable' | 'disable' | 'remove' | 'promote' | 'policy'",
@@ -40,7 +42,9 @@ export interface ContractEvent {
 
 export function requireContractId(id: string | undefined): string {
 	if (!id || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(id)) {
-		throw new Error("Contract id must be 1–64 letters, digits, underscores or hyphens, starting with a letter or digit.");
+		throw new Error(
+			"Contract id must be 1–64 letters, digits, underscores or hyphens, starting with a letter or digit.",
+		);
 	}
 	return id;
 }
@@ -75,7 +79,8 @@ export function applyContractEvent(state: ContractState, event: ContractEvent): 
 		return;
 	}
 	if (request.action === "promote") {
-		if (provenance.actor !== "user") throw new Error("Rule promotion requires an explicit /contract promote command.");
+		if (provenance.actor !== "user")
+			throw new Error("Rule promotion requires an explicit /contract promote command.");
 		if (!event.promotedPath) throw new Error("Missing promoted rule path.");
 		current.promotions.push(event.promotedPath);
 	} else if (request.action === "enable" || request.action === "disable") {
@@ -105,7 +110,9 @@ export function contractTurnId(entries: readonly SessionEntry[]): string | null 
 }
 
 export function renderContractBlock(state: ContractState): string | undefined {
-	const clauses = [...state.clauses.values()].filter(clause => clause.active).sort((a, b) => a.id.localeCompare(b.id, "en"));
+	const clauses = [...state.clauses.values()]
+		.filter(clause => clause.active)
+		.sort((a, b) => a.id.localeCompare(b.id, "en"));
 	if (clauses.length === 0) return undefined;
-	return prompt(blockTemplate, { clauses });
+	return renderBlock({ clauses });
 }
