@@ -14,6 +14,7 @@ import { cfgEditFuzzyMatch } from "@oh-my-pi/pi-coding-agent/edit/settings";
 import { cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgSearxngEndpoint } from "@oh-my-pi/pi-coding-agent/web/settings";
 import type { InternalWriteResult } from "@oh-my-pi/pi-coding-agent/internal-urls/types";
+import { cfgCompactionThresholdTokens } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 
 function sessionWith(settings: Settings, caller: Partial<ToolSession> = {}): ToolSession {
 	return { settings, hasUI: true, settingsApproval: true, taskDepth: 0, ...caller } as unknown as ToolSession;
@@ -40,6 +41,16 @@ describe("CfgProtocolHandler", () => {
 		const leaf = await read("cfg://Advisor.SyncBacklog", settings);
 		expect(leaf.content).toStartWith('advisor.syncBacklog: "3"');
 		expect(leaf.content).toContain("source: session override");
+	});
+
+	it("reports the active role as the source of an effective context budget", async () => {
+		const settings = Settings.isolated();
+		cfgCompactionThresholdTokens.set(settings, 100000);
+		settings.setRoleSetting("slow", cfgCompactionThresholdTokens, 120000);
+		settings.setActiveRole("slow");
+		const resource = await read("cfg://compaction/thresholdTokens", settings);
+		expect(resource.content).toStartWith("compaction.thresholdTokens: 120000");
+		expect(resource.content).toContain("source: active role");
 	});
 
 	it("redacts credential values", async () => {

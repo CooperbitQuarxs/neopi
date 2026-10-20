@@ -186,6 +186,70 @@ function createSettingsTextField(
 	});
 }
 
+const CUSTOM_NUMBER_OPTION = "__custom_number__";
+
+/** A numeric preset picker with an explicit free-entry choice. */
+class NumericSettingsField extends Container {
+	#field: SelectFormField | TextFormField;
+
+	constructor(
+		def: SettingDef & { type: "submenu" },
+		options: readonly SubmenuOption[],
+		currentValue: string,
+		onSubmit: (value: string) => void,
+		onCancel: () => void,
+		requestRender?: () => void,
+	) {
+		super();
+		this.#field = createSettingsSelectField(
+			def.label,
+			def.description,
+			options,
+			options.some(option => option.value === currentValue) ? currentValue : CUSTOM_NUMBER_OPTION,
+			value => {
+				if (value !== CUSTOM_NUMBER_OPTION) {
+					onSubmit(value);
+					return;
+				}
+				this.#field = createSettingsTextField(
+					def.label,
+					"Enter a token count, such as 120000. Clear the field to inherit the default.",
+					Number(currentValue) > 0 ? currentValue : "",
+					false,
+					input => {
+						if (input.trim() && !Number.isFinite(Number(input))) throw new Error("Enter a finite number.");
+						onSubmit(input.trim());
+					},
+					onCancel,
+					requestRender,
+				);
+				this.clear();
+				this.addChild(this.#field);
+				requestRender?.();
+			},
+			onCancel,
+			undefined,
+			undefined,
+			undefined,
+			requestRender,
+		);
+		this.addChild(this.#field);
+	}
+
+	select(value: string): void {
+		if (this.#field instanceof SelectFormField)
+			this.#field.selectList.handleNativeEvent({ type: "activate", key: "", item: value });
+	}
+
+	handleInput(data: string): void {
+		this.#field.handleInput(data);
+	}
+
+	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
+		if (this.#field instanceof SelectFormField) this.#field.routeMouse(event, line, col);
+	}
+}
+
 /**
  * Single-choice setting field backed by the shared select form field.
  * Preserves the current selection, live async previews, footer previews,
@@ -1234,6 +1298,8 @@ export class SettingsSelectorComponent implements Component {
 				const field = list.openSubmenuFor(id);
 				if (field instanceof SelectFormField) {
 					field.selectList.handleNativeEvent({ type: "activate", key: "", item: choice });
+				} else if (field instanceof NumericSettingsField) {
+					field.select(choice);
 				}
 				return;
 			}
@@ -1702,6 +1768,11 @@ export class SettingsSelectorComponent implements Component {
 			return this.#context.availableThemes.map(t => ({ value: t, label: t }));
 		}
 		if (def.path === "composer.shape") return getComposerShapeOptions();
+		if (def.customInput)
+			return [
+				{ value: CUSTOM_NUMBER_OPTION, label: "Custom...", description: "Type an arbitrary number" },
+				...def.options,
+			];
 		return def.options;
 	}
 
@@ -1713,6 +1784,21 @@ export class SettingsSelectorComponent implements Component {
 		currentValue: string,
 		done: (value?: string) => void,
 	): Component {
+		if (def.customInput) {
+			return new NumericSettingsField(
+				def,
+				this.#submenuOptions(def),
+				currentValue,
+				value => {
+					if (value === "") this.#context.settings.unset(def.path);
+					else this.#setSettingValue(def.path, value);
+					this.#callbacks.onChange(def.path, this.#context.settings.get(def.path));
+					done(this.#getSubmenuCurrentValue(def.path, this.#context.settings.get(def.path)));
+				},
+				() => done(),
+				this.#context.requestRender,
+			);
+		}
 		const options = this.#submenuOptions(def);
 		// Preview handlers
 		let onPreview: ((value: string) => void | Promise<void>) | undefined;
@@ -1909,10 +1995,8 @@ export class SettingsSelectorComponent implements Component {
 	#setSettingValue(path: string, value: string): void {
 		const currentValue = this.#context.settings.get(path);
 		const schemaType = getSettingDef(this.#context.settings.entries, path)?.schemaType;
-		if (path === "compaction.thresholdPercent" && value === "default") {
-			this.#context.settings.set(path, -1);
-		} else if (path === "compaction.thresholdTokens" && value === "default") {
-			this.#context.settings.set(path, -1);
+		if (schemaType === "number") {
+			this.#context.settings.set(path, value === "default" ? -1 : Number(value));
 		} else if (schemaType === "array") {
 			let parsed: unknown;
 			try {
