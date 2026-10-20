@@ -1,5 +1,4 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model } from "@oh-my-pi/pi-ai";
 import {
 	addAssistantUsage,
@@ -15,9 +14,8 @@ import type { AgentRegistry } from "../registry/agent-registry";
 import { cfgTelemetryAgentContext, cfgTelemetryThresholdEvents, cfgTelemetryToolResults } from "../telemetry-settings";
 import type { AgentSession } from "./agent-session";
 import { readToolExecutionStart } from "./exit-diagnostics";
-import { resolveModelCompactionSettings } from "./model-compaction-threshold";
+import { getSessionCompactionBoundaries } from "./context-usage-runtime";
 import type { SessionEntry } from "./session-entries";
-import { resolveSpeculationLeadTokens } from "./speculation-lead";
 
 export interface AgentContextTelemetry {
 	type: "agent_context";
@@ -29,7 +27,14 @@ export interface AgentContextTelemetry {
 		speculationStartsAtTokens: number | null;
 		state: "idle" | "running" | "armed" | "compacting";
 	};
-	checkpoint: { active: boolean };
+	checkpoint: { active: boolean; available: boolean };
+	/** Local token estimate for retained messages from the latest user message onward. */
+	recentTurnFootprint: {
+		tokens: number;
+		messages: number;
+		scope: "latest_user_turn";
+		estimated: true;
+	} | null;
 	/** One completed model request, not the cumulative session ledger. */
 	previousTurn: AgentUsage | null;
 	fleet: { running: number; idle: number; parked: number; aborted: number };
@@ -51,6 +56,7 @@ export interface AgentTelemetryHost {
 	session: Pick<
 		AgentSession,
 		| "messages"
+		| "agent"
 		| "model"
 		| "thinkingLevel"
 		| "getContextUsage"
@@ -58,6 +64,7 @@ export interface AgentTelemetryHost {
 		| "compactionSpeculation"
 		| "autoCompactionEnabled"
 		| "getCheckpointState"
+		| "getEnabledToolNames"
 		| "getAdvisorCost"
 	>;
 	settings: Settings;
@@ -75,13 +82,25 @@ export function inspectAgentTelemetry(
 	const model: Model | undefined = session.model;
 	if (!model) return undefined;
 	const context = session.getContextUsage();
-	const policy = resolveModelCompactionSettings(settings, model);
+	const boundaries = context ? getSessionCompactionBoundaries(settings, context.contextWindow, model) : null;
 	const threshold =
-		context && context.contextWindow > 0 ? resolveThresholdTokens(context.contextWindow, policy) : null;
+		boundaries && context ? Math.round((boundaries.thresholdPercent / 100) * context.contextWindow) : null;
 	const speculationStartsAt =
-		threshold === null ? null : Math.max(0, threshold - resolveSpeculationLeadTokens(threshold));
+		boundaries?.speculationPercent != null && context
+			? Math.round((boundaries.speculationPercent / 100) * context.contextWindow)
+			: null;
 	const previous = session.messages.findLast(message => message.role === "assistant");
 	const checkpointActive = session.getCheckpointState() !== undefined;
+	const enabledTools = session.getEnabledToolNames();
+	const checkpointAvailable =
+		!checkpointActive && enabledTools.includes("checkpoint") && enabledTools.includes("rewind");
+	const turnStart = session.messages.findLastIndex(message => message.role === "user");
+	let turnTokens = 0;
+	if (turnStart !== -1) {
+		for (let index = turnStart; index < session.messages.length; index++) {
+			turnTokens += session.agent.tokenizer.countMessage(session.messages[index]!);
+		}
+	}
 	const refs =
 		registry?.list().filter(ref => {
 			if (ref.kind !== "main" && ref.kind !== "sub" && ref.kind !== "advisor") return false;
@@ -101,12 +120,21 @@ export function inspectAgentTelemetry(
 				}
 			: null,
 		compaction: {
-			enabled: session.autoCompactionEnabled,
+			enabled: session.autoCompactionEnabled && boundaries !== null,
 			thresholdTokens: threshold,
 			speculationStartsAtTokens: speculationStartsAt,
 			state: session.isCompacting ? "compacting" : session.compactionSpeculation,
 		},
-		checkpoint: { active: checkpointActive },
+		checkpoint: { active: checkpointActive, available: checkpointAvailable },
+		recentTurnFootprint:
+			turnStart === -1
+				? null
+				: {
+						tokens: turnTokens,
+						messages: session.messages.length - turnStart,
+						scope: "latest_user_turn",
+						estimated: true,
+					},
 		previousTurn: previous ? agentUsageFromMessages([previous]) : null,
 		fleet,
 	};
@@ -115,15 +143,14 @@ export function inspectAgentTelemetry(
 		session.autoCompactionEnabled &&
 		context &&
 		threshold !== null &&
-		speculationStartsAt !== null &&
-		context.tokens >= speculationStartsAt
+		context.tokens >= (speculationStartsAt ?? threshold)
 	) {
 		record.events = [
 			{
 				type: "approaching_compaction",
 				headroomTokens: Math.max(0, threshold - context.tokens),
 				estimated: true,
-				checkpointAvailable: checkpointActive,
+				checkpointAvailable,
 			},
 		];
 	}

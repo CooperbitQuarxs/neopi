@@ -31,7 +31,8 @@ function fixture(values: Record<string, unknown> = {}) {
 		model: { provider: "test", id: "model", effort: null },
 		context: { usedTokens: 20_000, limitTokens: 100_000, percent: 20, estimated: true },
 		compaction: { enabled: true, thresholdTokens: 85_000, speculationStartsAtTokens: 75_000, state: "idle" },
-		checkpoint: { active: false },
+		checkpoint: { active: false, available: false },
+		recentTurnFootprint: null,
 		previousTurn: null,
 		fleet: { running: 0, idle: 0, parked: 0, aborted: 0 },
 	};

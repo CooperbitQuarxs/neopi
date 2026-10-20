@@ -18,6 +18,45 @@
 - `checkpoint` and `rewind` are a safety pair: when either name is explicitly requested while the feature is enabled, registration automatically includes the other.
 - In an ordinary `tools.xdev` session, discoverable built-ins may be presented as `xd://checkpoint`; an explicitly requested tool remains top-level.
 
+## Context-pressure decisions
+
+Pressure guidance is opt-in through the existing `telemetry.agent_context`
+setting, `minimal` or `full`. It remains off by default, independently of
+`checkpoint.enabled`. `runtime.inspect()` exposes the same local snapshot.
+
+The agent receives estimated `context.usedTokens`, `limitTokens`, and `percent`;
+resolved `compaction.thresholdTokens` and `speculationStartsAtTokens`; and
+`checkpoint.active` and `available`. Availability requires both checkpoint tools
+in the enabled tool catalog, including discoverable `xd://` tools, and no active
+checkpoint. A disabled setting or a restricted subagent cannot claim availability.
+Disabled compaction has null boundaries; disabled or unavailable speculation has
+a null speculation boundary.
+
+`recentTurnFootprint` estimates retained message tokens from the latest user
+message through the current point, including intermediate tool calls and results.
+It reports the message count and `scope: "latest_user_turn"`, or null when no user
+turn remains in active context. It is not the sum of billed input tokens, which
+would repeatedly count the conversation prefix. After rewind, it counts only
+retained messages. It does not predict the next excursion or promise exact
+provider capacity. Tokenization, cache handling, images and future output vary.
+
+Compare estimated occupancy plus the expected excursion footprint with the
+earliest non-null boundary. These are illustrative estimates, not measurements:
+
+- At 136K of a 200K window, speculation beginning at 144K leaves about 8K.
+  A recent similar turn retained about 12K, so checkpoint before another such
+  excursion if available. A planned 40–60K survey crosses that boundary too.
+- At 40K used with the same 144K boundary, an expected 4K lookup stays below it.
+  Context pressure alone does not justify a checkpoint.
+- With speculation off and compaction at 170K, compare against 170K instead.
+  With all compaction off, there is no compaction boundary to cross; the context
+  window still limits retained exploration.
+
+These numbers guide the agent, not an automatic checkpoint or compaction trigger.
+An active checkpoint still forbids nesting and MUST rewind before yielding,
+regardless of occupancy.
+
+
 ## Inputs
 
 | Field | Type | Required | Description |
@@ -75,7 +114,7 @@ You are in an active checkpoint. You MUST call rewind with your investigation fi
 - The tool body has no local `try/catch`; unexpected exceptions propagate.
 
 ## Notes
-- Despite the summary string `Create a git-based checkpoint to save and restore session state`, the implementation does not call git and does not snapshot filesystem state.
+- Checkpoint saves conversation state, not a git or filesystem snapshot.
 - Captured state is conversation/session metadata only:
   - in-memory message count
   - persisted checkpoint tool-result entry ID in the session tree

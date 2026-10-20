@@ -118,9 +118,7 @@ function telemetryFrom(messages: AgentMessage[]): AgentContextTelemetry {
 function modelText(message: Message): string {
 	return typeof message.content === "string"
 		? message.content
-		: message.content
-				.flatMap(block => (block.type === "text" ? [block.text] : []))
-				.join("\n");
+		: message.content.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
 }
 
 describe("agent-visible runtime telemetry", () => {
@@ -176,6 +174,7 @@ describe("agent-visible runtime telemetry", () => {
 		const { session } = fixture(
 			Settings.isolated({
 				"telemetry.threshold_events": true,
+				"compaction.methodOrder": ["soft"],
 				"compaction.thresholdPercent": 85,
 			}),
 		);
@@ -196,6 +195,79 @@ describe("agent-visible runtime telemetry", () => {
 		const { session } = fixture(Settings.isolated({ "telemetry.agent_context": "minimal" }));
 		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 84_000, contextWindow: 100_000, percent: 84 });
 		expect(telemetryFrom(session.prepareAgentTelemetry([])).events).toBeUndefined();
+	});
+
+	it("counts the latest retained user turn, not repeated provider input usage", () => {
+		const { session, previous } = fixture(Settings.isolated({ "telemetry.agent_context": "minimal" }));
+		const user: AgentMessage = { role: "user", content: "inspect the branch", timestamp: 1 };
+		const result: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "read-1",
+			toolName: "read",
+			content: [{ type: "text", text: "large intermediate output ".repeat(500) }],
+			isError: false,
+			timestamp: 2,
+		};
+		session.agent.replaceMessages([previous, user, completedRequest(), result]);
+		const record = telemetryFrom(session.prepareAgentTelemetry(session.messages));
+		expect(record.recentTurnFootprint).toMatchObject({
+			scope: "latest_user_turn",
+			messages: 3,
+			estimated: true,
+		});
+		const footprint = record.recentTurnFootprint!.tokens;
+		expect(footprint).toBeGreaterThan(1_000);
+		expect(footprint).toBeLessThan(record.previousTurn!.input);
+		// Rewind retains the report, not the intermediate tool output.
+		session.agent.replaceMessages([previous, user, createAssistantMessage("retained report")]);
+		expect(session.getAgentTelemetry()!.recentTurnFootprint!.tokens).toBeLessThan(footprint);
+		session.agent.replaceMessages([previous]);
+		expect(session.getAgentTelemetry()!.recentTurnFootprint).toBeNull();
+	});
+
+	it("reports checkpoint availability from the enabled pair, including discoverable tools", () => {
+		const { session } = fixture(Settings.isolated({ "telemetry.agent_context": "minimal" }));
+		const names = vi.spyOn(session, "getEnabledToolNames").mockReturnValue(["write", "checkpoint", "rewind"]);
+		expect(session.getActiveToolNames()).toEqual([]);
+		expect(session.getAgentTelemetry()!.checkpoint).toEqual({ active: false, available: true });
+		session.setCheckpointState({ checkpointEntryId: null, checkpointMessageCount: 1, startedAt: "now" });
+		expect(session.getAgentTelemetry()!.checkpoint).toEqual({ active: true, available: false });
+		session.setCheckpointState(undefined);
+		names.mockReturnValue(["write", "checkpoint"]);
+		expect(session.getAgentTelemetry()!.checkpoint.available).toBe(false);
+		names.mockReturnValue([]);
+		expect(session.getAgentTelemetry()!.checkpoint.available).toBe(false);
+	});
+
+	it.each([
+		{ "compaction.enabled": false },
+		{ "compaction.asyncEnabled": false },
+		{ "compaction.methodOrder": ["shake"] },
+	])("does not advertise nonexistent speculative boundaries for %j", overrides => {
+		const { session } = fixture(Settings.isolated({ "telemetry.agent_context": "minimal", ...overrides }));
+		const record = telemetryFrom(session.prepareAgentTelemetry([]));
+		expect(record.compaction.speculationStartsAtTokens).toBeNull();
+		if (overrides["compaction.enabled"] === false) {
+			expect(record.compaction.enabled).toBe(false);
+			expect(record.compaction.thresholdTokens).toBeNull();
+		} else {
+			expect(record.compaction.thresholdTokens).toBeGreaterThan(0);
+		}
+	});
+
+	it("announces available checkpoints before starting one, never while one is active", () => {
+		const { session } = fixture(
+			Settings.isolated({
+				"telemetry.threshold_events": true,
+				"compaction.thresholdPercent": 85,
+				"compaction.methodOrder": ["soft"],
+			}),
+		);
+		vi.spyOn(session, "getEnabledToolNames").mockReturnValue(["checkpoint", "rewind"]);
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 84_000, contextWindow: 100_000, percent: 84 });
+		expect(session.getAgentTelemetry()!.events?.[0]?.checkpointAvailable).toBe(true);
+		session.setCheckpointState({ checkpointEntryId: null, checkpointMessageCount: 1, startedAt: "now" });
+		expect(session.getAgentTelemetry()!.events?.[0]?.checkpointAvailable).toBe(false);
 	});
 
 	it("adds full shared usage, cache share, cost splits and root-scoped occupancy only when requested", () => {
@@ -252,6 +324,8 @@ describe("agent-visible runtime telemetry", () => {
 			"telemetry.threshold_events": true,
 			"usageNotices.enabled": true,
 			"compaction.enabled": false,
+			"checkpoint.enabled": true,
+			"tools.xdev": true,
 		});
 		const modelRegistry = new ModelRegistry(auth, path.join(temp.path(), "models.yml"));
 		vi.spyOn(modelRegistry, "getApiKey").mockResolvedValue("test-key");
@@ -275,9 +349,11 @@ describe("agent-visible runtime telemetry", () => {
 			enableLsp: false,
 			skipPythonPreflight: true,
 			preloadedCustomToolPaths: [],
-			toolNames: [],
 		});
 		sessions.push(session);
+		expect(session.getActiveToolNames()).not.toContain("checkpoint");
+		expect(session.getEnabledToolNames()).toContain("checkpoint");
+		expect(session.getAgentTelemetry()!.checkpoint).toEqual({ active: false, available: true });
 		session.agent.streamFn = mock.stream;
 		session.agent.getApiKey = () => "test-key";
 		const usageRead = vi.spyOn(session, "fetchUsageReports").mockResolvedValue([
