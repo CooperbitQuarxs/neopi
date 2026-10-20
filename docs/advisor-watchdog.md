@@ -108,6 +108,8 @@ Slash commands:
 | `/advisor dump raw`  | Copy/return the full dump, including system prompt, tools, thinking, and calls.                                                      |
 | `/advisor configure` | Open the interactive TUI editor for project- or user-level `WATCHDOG.yml`. Non-TUI command hosts report that the editor is TUI-only. |
 
+Enabling advisors (including a toggle to on) names the runtimes that started; paused and unresolved entries are not announced as running.
+
 If the subsystem is enabled but no legacy/default or roster model resolves, status reports the configured advisors as inactive/`no_model`.
 
 Entries left at `no_model` during startup are retried after background model discovery settles, so a model that arrives late in the catalog can start without a manual toggle.
@@ -325,6 +327,8 @@ Discovery and `/advisor configure` use the same per-entry validation: malformed 
 
 The editor's Project scope targets the repository-root `WATCHDOG.yml` (cwd when outside a repository); User scope targets the active agent directory. It edits an existing `.yaml` in place when no `.yml` exists at that scope, rather than creating a competing file.
 
+The editor also opens on a read-only **Effective roster** overview showing every winning entry across all discovered files, its enabled/disabled state, scope, and source path. Native settings show the same overview above the editable fields. Saving refreshes the overview; reopening picks up external edits. The overview does not merge entries into the file being edited or rewrite other rosters. To change an ancestor or `.omp` roster not targeted by the two scope buttons, edit its displayed source file.
+
 Example:
 
 ```yaml
@@ -390,6 +394,8 @@ A continuation an advisor delivery itself starts — a steer while the primary i
 ### Discovery locations
 
 `WATCHDOG.yml`/`WATCHDOG.yaml` share the same user + project search path as `WATCHDOG.md`: the user-level `<active agent dir>/WATCHDOG.yml` plus every `WATCHDOG.yml`/`.omp/WATCHDOG.yml` encountered while walking from `cwd` up to the repository root (or the home directory when no repo root is found). All discovered files are loaded together; a more-specific file (project leaf > project ancestor > user) replaces an earlier entry with the same advisor slug.
+
+For compatibility, a `$HOME/WATCHDOG.yml` or `$HOME/.omp/WATCHDOG.yml` found by the ancestor walk remains **project scope**, not user scope. It applies to non-repository sessions beneath `$HOME`; inside a repository the walk stops at its root and does not reach `$HOME` unless that is the root itself. User scope specifically means the active agent directory. This display distinction does not change which rosters load.
 
 The main session watches these roster locations, including files created later in an existing or new `.omp` directory. Creating, editing, removing, or atomically replacing a file rediscovers the merged roster after a short debounce. Unchanged advisors keep their context; new or changed advisors start from the current transcript, and removed or disabled advisors stop. If the advisor subsystem is off, only its stored roster changes; the edit does not enable it. An unreadable file or malformed YAML leaves the previous live roster running, with a logged warning, until a subsequent valid edit.
 

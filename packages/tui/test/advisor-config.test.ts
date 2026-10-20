@@ -4,12 +4,13 @@ import * as path from "node:path";
 import type { TUI } from "../src/index";
 import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "../src/keybindings";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../src/native/node";
-import type { TspPickerProps } from "@oh-my-pi/pi-wire";
+import type { TspPickerProps, TspPrefsProps } from "@oh-my-pi/pi-wire";
 import {
 	AdvisorConfigOverlayComponent,
 	type AdvisorConfigDeps,
 	type AdvisorConfigCallbacks,
 	type WatchdogConfigDoc,
+	type EffectiveAdvisorConfig,
 } from "../src/overlays/advisor-config";
 import { getThemeByName, setThemeInstance } from "../src/theme";
 
@@ -740,6 +741,62 @@ describe("advisor menu navigation and history", () => {
 			expect(visits).toEqual([]);
 		} finally {
 			h.overlay.dispose();
+		}
+	});
+});
+
+describe("advisor effective roster display", () => {
+	beforeAll(async () => {
+		const theme = await getThemeByName("dark");
+		if (!theme) throw new Error("theme unavailable");
+		setThemeInstance(theme);
+	});
+
+	it("shows ancestor and user sources in both renderers without copying them into the edited file", async () => {
+		const roster: EffectiveAdvisorConfig[] = [
+			{ name: "Velvet", sourceFile: "/workspace/WATCHDOG.yml", scope: "project" },
+			{ name: "Native", sourceFile: "/workspace/.omp/WATCHDOG.yaml", scope: "project", enabled: false },
+			{ name: "User", sourceFile: path.join(os.homedir(), ".omp/agent/WATCHDOG.yml"), scope: "user" },
+		];
+		const doc: WatchdogConfigDoc = { advisors: [{ name: "Local" }] };
+		let saved: WatchdogConfigDoc | undefined;
+		const overlay = new AdvisorConfigOverlayComponent({} as TUI, { ...deps, effectiveRoster: roster }, "project", doc, {
+			loadDoc: async () => ({ advisors: [] }),
+			save: async (_scope, value) => {
+				saved = structuredClone(value);
+			},
+			getEffectiveRoster: async () => roster.filter(advisor => advisor.name !== "Velvet"),
+			apply: async () => {},
+			close: () => {},
+			requestRender: () => {},
+			notify: () => {},
+		});
+		try {
+			const rendered = Bun.stripANSI(overlay.render(180).join("\n"));
+			expect(rendered).toContain("Velvet · enabled · project · /workspace/WATCHDOG.yml");
+			expect(rendered).toContain("Native · disabled · project · /workspace/.omp/WATCHDOG.yaml");
+			expect(rendered).toContain("User · enabled · user · ~/.omp/agent/WATCHDOG.yml");
+			const props = overlay.describe({
+				cols: 180,
+				dark: true,
+				reduceMotion: false,
+				supports: () => true,
+				feature: () => true,
+			}).p as TspPrefsProps;
+			const rows = props.sections.find(section => section.id === "effective-roster")?.rows;
+			expect(rows?.map(row => ({ name: row.label, source: row.hint, control: row.control }))).toEqual([
+				{ name: "Velvet", source: "project · /workspace/WATCHDOG.yml", control: { k: "switch", on: true } },
+				{ name: "Native", source: "project · /workspace/.omp/WATCHDOG.yaml", control: { k: "switch", on: false } },
+				{ name: "User", source: "user · ~/.omp/agent/WATCHDOG.yml", control: { k: "switch", on: true } },
+			]);
+			expect(rows?.every(row => row.disabled)).toBe(true);
+			overlay.handleInput(" "); // The overview is informational, never a toggle.
+			overlay.handleInput("s");
+			await Bun.sleep(0);
+			expect(saved).toEqual({ advisors: [{ name: "Local" }] });
+			expect(Bun.stripANSI(overlay.render(180).join("\n"))).not.toContain("Velvet");
+		} finally {
+			overlay.dispose();
 		}
 	});
 });
