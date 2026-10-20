@@ -54,6 +54,8 @@ import {
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { createAutoresearchExtension } from "./autoresearch";
+import { createWorkContractsExtension } from "./work-contracts";
+import { injectWorkContracts } from "./work-contracts/context";
 import { loadCapability, reset as resetCapabilities } from "./capability";
 import {
 	MAIN_AGENT_RULE_NAME,
@@ -2895,6 +2897,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 			inlineExtensions.push(...(options.extensions ?? []));
 			inlineExtensions.push(createAutoresearchExtension);
+			inlineExtensions.push(createWorkContractsExtension(agentDir));
 			if (customTools.length > 0) {
 				inlineExtensions.push(createCustomToolsExtension(customTools, customToolSourcePaths));
 			}
@@ -4650,6 +4653,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			transformed = await blobBroker.decorateContext(transformed, transformModel);
 			// Byte budget after decoration: URL/file-referenced images carry no inline bytes.
 			transformed = clampProviderContextImageBytes(transformed, transformModel);
+			transformed = injectWorkContracts(transformed, transformModel, sessionManager, agent.tokenizer, obfuscator);
 			// Keep per-request volatility out of the system prompt: the date/cwd
 			// reminder rides on the first user turn so open-weight providers keep
 			// their tool-schema prefix cache (#7404). Chat mode sends it only when
