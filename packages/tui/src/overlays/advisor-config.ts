@@ -172,6 +172,20 @@ export interface AdvisorConfigDeps {
 	configFiles?: Record<AdvisorConfigScope, string>;
 }
 
+/**
+ * Normalize an advisor name into a filesystem-/id-safe slug used for its
+ * transcript filename and session id: lowercase, non-alphanumerics collapsed to
+ * `-`, leading/trailing `-` trimmed. Falls back to `"advisor"` when nothing
+ * survives; callers dedupe collisions.
+ */
+export function slugifyAdvisorName(name: string): string {
+	const slug = name
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return slug || "advisor";
+}
+
 const PREVIEW_WIDTH = 60;
 
 /**
@@ -1776,8 +1790,9 @@ export class AdvisorConfigOverlayComponent implements Component {
 	#cloneAdvisor(index: number): void {
 		const advisor = structuredClone(this.#doc.advisors[index]);
 		const base = `${advisor.name} (copy)`;
+		const existingSlugs = new Set(this.#doc.advisors.map(entry => slugifyAdvisorName(entry.name)));
 		advisor.name = base;
-		for (let suffix = 2; this.#doc.advisors.some(entry => entry.name === advisor.name); suffix++) {
+		for (let suffix = 2; existingSlugs.has(slugifyAdvisorName(advisor.name)); suffix++) {
 			advisor.name = `${base} ${suffix}`;
 		}
 		this.#previousNavigationSnapshot = this.navigationSnapshot();

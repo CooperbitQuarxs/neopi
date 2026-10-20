@@ -804,6 +804,27 @@ describe("advisor menu navigation and history", () => {
 		}
 	});
 
+	it.each(["Reviewer-copy", "REVIEWER / COPY", "Reviewer (copy)"])(
+		"skips canonical copy identities already occupied by %s",
+		existingName => {
+			const doc: WatchdogConfigDoc = {
+				advisors: [{ name: "Reviewer" }, { name: existingName }, { name: "reviewer-copy-2" }],
+			};
+			const h = make(doc);
+			try {
+				h.overlay.handleInput("c");
+				expect(doc.advisors.map(advisor => advisor.name)).toEqual([
+					"Reviewer",
+					"Reviewer (copy) 3",
+					existingName,
+					"reviewer-copy-2",
+				]);
+			} finally {
+				h.overlay.dispose();
+			}
+		},
+	);
+
 	it("requires Delete and a cancel-first named confirmation, preserving save/apply semantics", () => {
 		const doc: WatchdogConfigDoc = { advisors: [{ name: "Reviewer" }, { name: "Other" }] };
 		const h = make(doc);
