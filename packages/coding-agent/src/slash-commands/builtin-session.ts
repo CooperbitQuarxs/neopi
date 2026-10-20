@@ -37,6 +37,7 @@ import { StatsNotice } from "@oh-my-pi/pi-tui/overlays/stats-notice";
 import { handleTodoAcp } from "./helpers/todo";
 import { buildUsageReportText } from "./helpers/usage-report";
 import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
+import { parseHumanToolArguments, parseHumanToolCommand } from "./tool-arguments";
 
 async function handleUsageResetCommand(
 	arg: string,
@@ -510,22 +511,37 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "tool",
 		icon: "tools",
-		description: "Inspect enabled tool docs and schemas without invoking",
+		description: "Inspect enabled tools, or invoke with JSON or key=value arguments",
 		allowArgs: true,
 		handle: async ({ args }, runtime) => {
-			if (/\s/.test(args)) {
-				return usage("Use /tool: or /tool:<name>. Tool inspection takes no arguments.", runtime);
+			const { name, argumentsText: rest } = parseHumanToolCommand(args);
+			if (!rest) {
+				await runtime.output(runtime.session.getToolCatalogDocs(name || undefined));
+				return commandConsumed();
 			}
-			await runtime.output(runtime.session.getToolCatalogDocs(args || undefined));
+			const invoke = async (): Promise<void> => {
+				try {
+					await runtime.session.invokeTool(name, parseHumanToolArguments(rest), runtime.signal);
+				} catch (error) {
+					await runtime.output(errorMessage(error));
+				}
+			};
+			if (runtime.runCommandInBackground) runtime.runCommandInBackground(invoke);
+			else await invoke();
 			return commandConsumed();
 		},
-		handleTui: ({ args }, runtime) => {
-			if (/\s/.test(args)) {
-				runtime.ctx.showError("Use /tool: or /tool:<name>. Tool inspection takes no arguments.");
-			} else {
-				runtime.ctx.handleToolCatalogCommand(args || undefined);
-			}
+		handleTui: async ({ args }, runtime) => {
+			const { name, argumentsText: rest } = parseHumanToolCommand(args);
 			clearSubmittedText(runtime);
+			if (!rest) {
+				runtime.ctx.handleToolCatalogCommand(name || undefined);
+				return;
+			}
+			try {
+				await runtime.ctx.session.invokeTool(name, parseHumanToolArguments(rest));
+			} catch (error) {
+				runtime.ctx.showError(errorMessage(error));
+			}
 		},
 	},
 	{

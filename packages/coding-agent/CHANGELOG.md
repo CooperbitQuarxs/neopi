@@ -9,6 +9,7 @@
 
 ### Added
 
+- Invoke enabled tools directly with `/tool:<name> {"field":"value"}` or `field=value`, with schema field completion, argument hints, ordinary approval prompts and result cards, and Esc cancellation. A name alone still opens docs; use `{}` for a zero-argument call. `/force` still only hints the next model turn ([#14](https://github.com/PsychedelicShayna/neopi/issues/14)).
 - Inspect enabled tools with `/tool:` and `/tool:<name>`, with slash completion and the same live docs and schemas as `tool://`, without invoking them ([#15](https://github.com/PsychedelicShayna/neopi/issues/15)).
 - Choose the centered NPI startup banner or the original boxed NeoPi/Pi-tower banner with Startup Branding in Settings > Appearance; new remains the default.
 - Browse every enabled session tool with `tool://` and read its schema, examples, and restrictions at `tool://<name>` without invoking it ([#15](https://github.com/PsychedelicShayna/neopi/issues/15)).

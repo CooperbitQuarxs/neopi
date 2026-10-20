@@ -79,7 +79,10 @@ describe("live /tool: command reports and completion", () => {
 	});
 
 	function screen(): string {
-		return terminal.getViewport().map(row => Bun.stripANSI(row).trimEnd()).join("\n");
+		return terminal
+			.getViewport()
+			.map(row => Bun.stripANSI(row).trimEnd())
+			.join("\n");
 	}
 
 	it.each(["missing", "disabled", "xd://read", "raed"])(
@@ -115,6 +118,70 @@ describe("live /tool: command reports and completion", () => {
 			await terminal.waitForRender(() => mode.editor.getText() === "draft after report");
 		},
 	);
+
+	it("Enter invokes directly, renders the ordinary result card, and replays it", async () => {
+		const stream = vi.spyOn(session.agent, "streamFn").mockImplementation(() => {
+			throw new Error("Unexpected provider call");
+		});
+		const command = "/tool:read {}";
+		const onSubmit = mode.editor.onSubmit!;
+		const submitted = Promise.withResolvers<void>();
+		mode.editor.onSubmit = async text => {
+			try {
+				await onSubmit(text);
+				submitted.resolve();
+			} catch (error) {
+				submitted.reject(error);
+			}
+		};
+		terminal.sendInput(command);
+		await terminal.waitForRender(() => mode.editor.getText() === command);
+		terminal.sendInput("\r");
+		await submitted.promise;
+		await terminal.waitForRender(() => screen().includes("executed"));
+		expect(execute).toHaveBeenCalledTimes(1);
+		expect(session.messages.at(-1)).toMatchObject({ role: "toolResult", toolName: "read" });
+		expect(mode.pendingTools.size).toBe(0);
+		mode.rebuildChatFromMessages({ reuseSettledComponents: false });
+		await terminal.waitForRender(() => screen().includes("executed"));
+		expect(screen()).toContain("read");
+		expect(stream).not.toHaveBeenCalled();
+		terminal.sendInput("next draft");
+		await terminal.waitForRender(() => mode.editor.getText() === "next draft");
+	});
+
+	it("Esc cancels a human call and leaves the composer usable", async () => {
+		const started = Promise.withResolvers<void>();
+		const tool = session.getToolCatalogTool("mission")!;
+		vi.spyOn(tool, "execute").mockImplementation(async (_id, _args, signal) => {
+			const stopped = Promise.withResolvers<void>();
+			signal!.addEventListener("abort", () => stopped.resolve(), { once: true });
+			started.resolve();
+			await stopped.promise;
+			signal!.throwIfAborted();
+			return { content: [] };
+		});
+		const onSubmit = mode.editor.onSubmit!;
+		const submitted = Promise.withResolvers<void>();
+		mode.editor.onSubmit = async text => {
+			try {
+				await onSubmit(text);
+				submitted.resolve();
+			} catch (error) {
+				submitted.reject(error);
+			}
+		};
+		terminal.sendInput("/tool:mission {}");
+		await terminal.waitForRender(() => mode.editor.getText() === "/tool:mission {}");
+		terminal.sendInput("\r");
+		await started.promise;
+		terminal.sendInput("\x1b");
+		await submitted.promise;
+		expect(session.isStreaming).toBe(false);
+		expect(session.messages.at(-1)).toMatchObject({ role: "toolResult", isError: true });
+		terminal.sendInput("draft after cancel");
+		await terminal.waitForRender(() => mode.editor.getText() === "draft after cancel");
+	});
 
 	async function toolCompletions(): Promise<string[]> {
 		const query = "/tool:";
