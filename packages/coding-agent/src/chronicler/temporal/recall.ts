@@ -9,7 +9,7 @@
  * resolved against their canonical committed batch before they are returned.
  */
 import * as path from "node:path";
-import { mapWithConcurrencyLimit } from "../../task/parallel";
+import { mapWithConcurrencyLimit, Semaphore } from "../../task/parallel";
 import { localParts, localStamp, spanWithin, type TimeBound, type TimeSpan } from "./calendar";
 import { type CanonicalAtomResult, type ChronicleAtom, readCanonicalAtom } from "./corpus";
 import type { NodeRanker, RankCandidate } from "./rank";
@@ -261,6 +261,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 
 	let rankerFallback = false;
 	const hopTokens = manifest?.config?.hopTokens ?? 1000;
+	const rankSlots = new Semaphore(2);
 	/**
 	 * A recollection (query or hint) longer than its share of one hop is
 	 * clipped for ranking, and the clip is recorded in the trace.
@@ -290,7 +291,9 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		search: "query" | "hint",
 		hop: number,
 		key: string,
+		signal = options.signal,
 	): Promise<number[]> => {
+		signal?.throwIfAborted();
 		const base = rankQueryTokens(query);
 		const room = hopTokens - base;
 		const bounded = candidates.map(candidate => {
@@ -336,12 +339,18 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 						`chronicle rank request of ${payload} tokens exceeds the ${hopTokens}-token hop ceiling`,
 					);
 				}
-				const outcome = await options.ranker.score(query, request, signal);
-				return { indexes, outcome };
+				await rankSlots.acquire(signal);
+				try {
+					signal.throwIfAborted();
+					const outcome = await options.ranker.score(query, request, signal);
+					return { indexes, outcome };
+				} finally {
+					rankSlots.release();
+				}
 			},
-			options.signal,
+			signal,
 		);
-		options.signal?.throwIfAborted();
+		signal?.throwIfAborted();
 		for (const result of ranked.results) {
 			if (!result) continue;
 			const { indexes, outcome } = result;
@@ -369,7 +378,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		score,
 	});
 
-	const descend = async (query: string, search: "query" | "hint"): Promise<SearchState> => {
+	const descend = async (query: string, search: "query" | "hint", signal: AbortSignal): Promise<SearchState> => {
 		const state: SearchState = { atoms: new Map(), periods: [], pool: new Map() };
 		type Item = { key: string; score: number; parent: string | null; ref?: ViewChildRef };
 		let frontier: Item[] = [{ key: start.key, score: 1, parent: null }];
@@ -377,7 +386,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		let lastCollapsed = false;
 		let hops = 0;
 		while (frontier.length > 0 && hops < MAX_HOPS) {
-			options.signal?.throwIfAborted();
+			signal.throwIfAborted();
 			frontier.sort((a, b) => b.score - a.score);
 			const confident = [...state.atoms.values()]
 				.map(atom => atom.score)
@@ -416,6 +425,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 					search,
 					hops,
 					node.key,
+					signal,
 				);
 				trace.push({
 					search,
@@ -460,6 +470,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 				search,
 				hops,
 				node.key,
+				signal,
 			);
 			trace.push({
 				search,
@@ -574,13 +585,24 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		return current;
 	};
 	const query = boundQuery(options.query, "query");
-	const primary = await descend(query, "query");
+	const searches: { query: string; search: "query" | "hint" }[] = [{ query, search: "query" }];
+	if (options.hint?.trim() && resolution === "atom") {
+		searches.push({ query: boundQuery(options.hint, "hint"), search: "hint" });
+	}
+	const descents = await mapWithConcurrencyLimit(
+		searches,
+		2,
+		({ query, search }, _index, signal) => descend(query, search, signal),
+		options.signal,
+	);
+	options.signal?.throwIfAborted();
+	const primary = descents.results[0]!;
+	const hinted = descents.results[1];
 
 	let adjacent: ScoredAtom[] = [];
 	let anchor: ScoredAtom | undefined;
 	let anchorWindowCenter = 0;
-	if (options.hint?.trim() && resolution === "atom") {
-		const hinted = await descend(boundQuery(options.hint, "hint"), "hint");
+	if (hinted) {
 		anchor = [...hinted.atoms.values()].sort((a, b) => b.score - a.score)[0];
 		let anchorTime = anchor ? Date.parse(anchor.entry.eventTime) : 0;
 		if (anchor && anchor.score >= ATOM_MIN) {
