@@ -136,6 +136,7 @@ import {
 import { renderChatCompactionPrompt } from "../chat/chat-system-prompt";
 import { cfgChatInclude } from "../chat/settings";
 import { type ChroniclerHealth, SessionChronicler } from "../chronicler/session-chronicler";
+import { clearSessionCompactionControls } from "./compaction-controls";
 import type { SessionAccountPoolScope } from "../config/account-pools";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { EffortOrigin, EffortSelection } from "../config/effort-policy";
@@ -2843,18 +2844,11 @@ export class AgentSession implements SettingsScope {
 		cfgSteeringMode.listen(this, mode => this.agent.setSteeringMode(mode));
 		cfgFollowUpMode.listen(this, mode => this.agent.setFollowUpMode(mode));
 		cfgInterruptMode.listen(this, mode => this.agent.setInterruptMode(mode));
-		cfgSampling.listen(this, sampling => {
-			this.agent.temperature = sampling.temperature;
-			this.agent.topP = sampling.topP;
-			this.agent.topK = sampling.topK;
-			this.agent.minP = sampling.minP;
-			this.agent.presencePenalty = sampling.presencePenalty;
-			this.agent.repetitionPenalty = sampling.repetitionPenalty;
-			this.agent.hideThinkingSummary = sampling.hideThinkingSummary;
-		});
+		cfgSampling.listen(this, sampling => this.#applySamplingSettings(sampling));
 		cfgTierOpenai.listen(this, tier => this.setServiceTierFamily("openai", serviceTierSettingToTier(tier)));
 		cfgTierAnthropic.listen(this, tier => this.setServiceTierFamily("anthropic", serviceTierSettingToTier(tier)));
 		cfgTierGoogle.listen(this, tier => this.setServiceTierFamily("google", serviceTierSettingToTier(tier)));
+		this.#applyActiveRoleRequestSettings();
 		cfgAdvisorRuntimeInputs.listen(this, (next, previous) => {
 			// A budget/tier edit rebuilds a running advisor (both are part of its
 			// runtime signature) without overriding a session-only `/advisor` toggle.
@@ -2870,6 +2864,34 @@ export class AgentSession implements SettingsScope {
 		});
 		this.#skillfulApplied = cfgSkillful.get(this.settings);
 		cfgSkillful.listen(this, skillful => this.#applySkillful(skillful));
+	}
+
+	#applySamplingSettings(sampling: SimpleStreamOptions): void {
+		this.agent.temperature = sampling.temperature;
+		this.agent.topP = sampling.topP;
+		this.agent.topK = sampling.topK;
+		this.agent.minP = sampling.minP;
+		this.agent.presencePenalty = sampling.presencePenalty;
+		this.agent.repetitionPenalty = sampling.repetitionPenalty;
+		this.agent.hideThinkingSummary = sampling.hideThinkingSummary;
+	}
+
+	/** Restored roles predate listeners and can otherwise retain the previous session's request values. */
+	#applyActiveRoleRequestSettings(): void {
+		const activeRole = this.settings.activeRole;
+		if (activeRole === undefined) return;
+		if (cfgSampling.sources.some(setting => this.settings.getRoleSetting(activeRole, setting) !== undefined)) {
+			this.#applySamplingSettings(cfgSampling.get(this));
+		}
+		if (this.settings.getRoleSetting(activeRole, cfgTierOpenai) !== undefined) {
+			this.setServiceTierFamily("openai", serviceTierSettingToTier(cfgTierOpenai.get(this)));
+		}
+		if (this.settings.getRoleSetting(activeRole, cfgTierAnthropic) !== undefined) {
+			this.setServiceTierFamily("anthropic", serviceTierSettingToTier(cfgTierAnthropic.get(this)));
+		}
+		if (this.settings.getRoleSetting(activeRole, cfgTierGoogle) !== undefined) {
+			this.setServiceTierFamily("google", serviceTierSettingToTier(cfgTierGoogle.get(this)));
+		}
 	}
 
 	/** Keeps workspace roots, the auto-QA prompt note, and the held power assertion in step with live settings. */
@@ -7377,6 +7399,7 @@ export class AgentSession implements SettingsScope {
 
 	/** Drop mutable tool decisions and directives owned by the previous logical session. */
 	#clearSessionScopedToolState(): void {
+		clearSessionCompactionControls(this.settings);
 		this.agent.clearDeferredToolDirectives();
 		this.#toolChoiceQueue.clear();
 		this.#tools.clearAcpPermissionDecisions();
@@ -12397,6 +12420,7 @@ export class AgentSession implements SettingsScope {
 		const previousUsagePreflightReadyForNextModelCall = this.#usagePreflightReadyForNextModelCall;
 		const previousUsagePreflightReadyModel = this.#usagePreflightReadyModel;
 		const previousModel = this.model;
+		const previousActiveRole = this.settings.activeRole;
 		const previousThinkingLevel = this.thinkingLevel;
 		const previousAutoThinking = this.isAutoThinking;
 		const previousAutoResolvedLevel = this.autoResolvedThinkingLevel();
@@ -12600,6 +12624,7 @@ export class AgentSession implements SettingsScope {
 						(sessionContext.thinkingLevel as ThinkingLevel | undefined))
 					: defaultThinkingLevel;
 			const restoredRole = this.sessionManager.getLastModelChangeRole();
+			this.#models.restoreActiveRole();
 			const restoredOrigin =
 				sessionContext.effortOrigin ??
 				(restoredRole && this.settings.getModelRole(restoredRole) ? "role" : "default");
@@ -12616,6 +12641,7 @@ export class AgentSession implements SettingsScope {
 			this.#models.restoreServiceTiers(
 				hasServiceTierEntry ? (sessionContext.serviceTier ?? {}) : configuredServiceTierByFamily,
 			);
+			this.#applyActiveRoleRequestSettings();
 
 			if (switchingToDifferentSession) {
 				await this.#memory.resetContextForNewTranscript();
@@ -12669,6 +12695,7 @@ export class AgentSession implements SettingsScope {
 			}
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
+			this.settings.setActiveRole(previousActiveRole);
 			this.#freshProviderSessionId = previousFreshProviderSessionId;
 			this.#syncAgentSessionId(previousSessionState.sessionId, false);
 			this.#memory.rekeyForCurrentSessionId();

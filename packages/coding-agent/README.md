@@ -35,6 +35,24 @@ Only `/contract promote lane user` or `/contract promote lane project` copies a 
 
 The reserved block is added after context pruning, never sliced to fit a budget. If the estimated request cannot fit with the complete block, the request fails visibly with instructions to compact context or edit/disable clauses. Nothing silently drops contract text.
 
+## Session compaction controls
+
+`/compact control` shows resolved compaction settings and trigger boundaries without compacting. Bare `/compact` and its existing mode/focus arguments still compact immediately.
+
+```text
+/compact control {"action":"set","values":{"thresholdTokens":90000,"asyncEnabled":false}}
+/compact control {"action":"propose","values":{"thresholdPercent":80}}
+/compact control {"action":"reset"}
+/compact control {"action":"set","scope":"project","values":{"reserveTokens":20000}}
+```
+
+The same JSON request is accepted by the agent's `write` tool at `compaction://`; `read compaction://` inspects it. Actions are `show`, `propose`, `set` and `reset`. Proposals validate the request but change nothing. `compaction.agentControl` defaults to `propose-only`; `read-only` disallows proposals and `write` explicitly allows agent changes. The agent cannot change that permission through this API.
+
+Controls include `enabled`, `thresholdPercent`, `thresholdTokens`, `reserveTokens`, `keepRecentTokens`, `methodOrder`, `asyncEnabled`, `midTurnEnabled` and `autoContinue`. Percent thresholds accept 1 through 99 or -1 for default; token thresholds accept positive integers or -1 for default. Reserve and retained tokens accept non-negative integers. Method order accepts distinct `remote`, `snapcompact`, `handoff`, `shake` and `soft` entries. An empty order disables automatic methods. Setting one threshold resets its competing threshold to -1.
+Resetting either threshold resets the pair, so the other half of an ad-hoc threshold cannot hide the configured policy.
+
+The default scope is `session`. It never writes config files, takes precedence over per-model thresholds, survives compaction, and clears at a logical session reset, switch, or tree navigation. Restarting does not retain it. `reset` restores settings-layer values; optional `keys` limits the reset. Scopes `project` and `user` persist to their own config files; resetting those scopes removes their keys instead. Persisted changes still obey existing environment, runtime, role and per-model precedence. The inspection result reports the current settings and actual trigger, so a shadowed write is visible.
+
 ## Memory backends
 
 The agent supports three mutually-exclusive memory backends, selected via the `memory.backend` setting (Settings → Memory tab, or `~/.omp/config.yml`):

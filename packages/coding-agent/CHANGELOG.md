@@ -10,7 +10,10 @@
 ### Added
 
 - Opt-in agent context telemetry now reports checkpoint availability and estimated recent-turn footprint, with pressure-based guidance that respects configured compaction boundaries ([#21](https://github.com/PsychedelicShayna/neopi/issues/21)).
+- Inspect, propose, set, and reset session compaction policy with `/compact control` or `compaction://`, with explicit project/user persistence and propose-only agent access by default ([#28](https://github.com/PsychedelicShayna/neopi/issues/28)).
+- Give each model role its own persistent token budget and type arbitrary global or role token limits in settings while keeping preset quick picks ([#52](https://github.com/PsychedelicShayna/neopi/issues/52)).
 - Added opt-in session work contracts with `/contract`, policy-gated agent edits, durable provenance, explicit rule promotion, and intact reinjection after compaction or resume ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
+- Set per-role sampling, response verbosity, thinking-summary and service-tier overrides without changing global defaults; omitted values inherit and numeric `-1` explicitly requests the provider default ([#53](https://github.com/PsychedelicShayna/neopi/issues/53)).
 - Configure independent prewalk planning and execution crews with ordered fallbacks in settings, see both resolved models before launch, and retain the execution brief across the handoff ([#30](https://github.com/PsychedelicShayna/neopi/issues/30)).
 - Choose the centered NPI startup banner or the original boxed NeoPi/Pi-tower banner with Startup Branding in Settings > Appearance; new remains the default.
 - Browse every enabled session tool with `tool://` and read its schema, examples, and restrictions at `tool://<name>` without invoking it ([#15](https://github.com/PsychedelicShayna/neopi/issues/15)).
@@ -59,6 +62,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Short work contracts no longer block ordinary messages by counting tool runtime state as prompt tokens; genuinely oversized contexts still fail without truncating clauses ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
 - Session work contracts remain intact when a model's context-window size is unknown, without assuming a token budget ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
 - Restored clean coding-agent type checks by updating test fixtures to current contracts without changing STT assertions or shipped code ([#458](https://github.com/PsychedelicShayna/neopi/issues/458)).
 - The centered startup banner now reads NPI instead of OMP.

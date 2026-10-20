@@ -192,6 +192,18 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"supports-obfuscation-opt-out": wire("supportsObfuscationOptOut", ["openai-responses"]),
 	"harmony-leak-mitigation": wire("harmonyLeakMitigation", ["openai-responses"]),
 	"supports-penalty-and-stop-params": wire("supportsPenaltyAndStopParams", OAI),
+	"unsupported-sampling-params": {
+		...wire("unsupportedSamplingParams", OAI, "array", [
+			"temperature",
+			"topP",
+			"topK",
+			"minP",
+			"presencePenalty",
+			"repetitionPenalty",
+			"frequencyPenalty",
+		]),
+		emptyArray: true,
+	},
 	"supports-prompt-cache-breakpoints": wire("supportsPromptCacheBreakpoints", OAI),
 	"supports-prompt-cache-key": wire("supportsPromptCacheKey", ["openai"]),
 	"supports-reasoning-effort": wire("supportsReasoningEffort", OAI),

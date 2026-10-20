@@ -304,6 +304,7 @@ export const cfgProseOnlyThinking = register({
 
 export const cfgOmitThinking = register({
 	id: "omitThinking",
+	roleScoped: true,
 	type: "boolean",
 	default: false,
 	ui: {
@@ -500,6 +501,7 @@ export const cfgPersonality = register({
 // Sampling
 export const cfgTemperature = register({
 	id: "temperature",
+	roleScoped: true,
 	type: "number",
 	default: -1,
 	ui: {
@@ -520,6 +522,7 @@ export const cfgTemperature = register({
 
 export const cfgTopP = register({
 	id: "topP",
+	roleScoped: true,
 	type: "number",
 	default: -1,
 	ui: {
@@ -540,6 +543,7 @@ export const cfgTopP = register({
 
 export const cfgTopK = register({
 	id: "topK",
+	roleScoped: true,
 	type: "number",
 	default: -1,
 	ui: {
@@ -560,6 +564,7 @@ export const cfgTopK = register({
 export const cfgMinP = register({
 	id: "minP",
 	type: "number",
+	roleScoped: true,
 	default: -1,
 	ui: {
 		tab: "model",
@@ -577,6 +582,7 @@ export const cfgMinP = register({
 
 export const cfgPresencePenalty = register({
 	id: "presencePenalty",
+	roleScoped: true,
 	type: "number",
 	default: -1,
 	ui: {
@@ -596,6 +602,7 @@ export const cfgPresencePenalty = register({
 
 export const cfgRepetitionPenalty = register({
 	id: "repetitionPenalty",
+	roleScoped: true,
 	type: "number",
 	default: -1,
 	ui: {
@@ -640,6 +647,7 @@ export const cfgSampling = combine(
 
 export const cfgTextVerbosity = register({
 	id: "textVerbosity",
+	roleScoped: true,
 	type: "enum",
 	values: ["low", "medium", "high"] as const,
 	default: "medium",
@@ -658,6 +666,7 @@ export const cfgTextVerbosity = register({
 
 export const cfgTierOpenai = register({
 	id: "tier.openai",
+	roleScoped: true,
 	type: "enum",
 	values: SERVICE_TIER_OPENAI_VALUES,
 	default: "none",
@@ -673,6 +682,7 @@ export const cfgTierOpenai = register({
 
 export const cfgTierAnthropic = register({
 	id: "tier.anthropic",
+	roleScoped: true,
 	type: "enum",
 	values: SERVICE_TIER_ANTHROPIC_VALUES,
 	default: "none",
@@ -688,6 +698,7 @@ export const cfgTierAnthropic = register({
 
 export const cfgTierGoogle = register({
 	id: "tier.google",
+	roleScoped: true,
 	type: "enum",
 	values: SERVICE_TIER_GOOGLE_VALUES,
 	default: "none",
