@@ -280,7 +280,7 @@ describe("ModelPicker", () => {
 		expect(onCancel).toHaveBeenCalledTimes(1);
 	});
 
-	test.each(["/\\<live\\>\\|\\<voice\\>", "re:\\<live\\>\\|\\<voice\\>"])(
+	test.each(["/<live>|<voice>", "re:<live>|<voice>"])(
 		"filters with Vim regex %s and confirms editing separately from picking",
 		query => {
 			const live = makeModel("test", "live");
@@ -306,7 +306,7 @@ describe("ModelPicker", () => {
 		},
 	);
 
-	test.each(["/\\(", "re:\\("])("invalid Vim regex %s shows an error and cannot pick a row", query => {
+	test.each(["/(", "re:("])("invalid Vim regex %s shows an error and cannot pick a row", query => {
 		const { picker, onPick } = createPicker({ models: [makeModel("test", "live")], scoped: true });
 		picker.handleInput("/");
 		for (const ch of query) picker.handleInput(ch);

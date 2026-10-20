@@ -132,7 +132,7 @@ describe("settings layout", () => {
 		expect(nextRendered).toContain("Preview:");
 	});
 
-	it.each(["/\\<live\\>\\|\\<voice\\>", "re:\\<live\\>\\|\\<voice\\>"])(
+	it.each(["/<live>|<voice>", "re:<live>|<voice>"])(
 		"searches settings with Vim alternation and boundaries using %s",
 		async query => {
 			await setTheme("dark");
@@ -165,7 +165,7 @@ describe("settings layout", () => {
 		},
 	);
 
-	it.each(["/\\(", "re:\\("])("shows invalid settings regex %s without activating rows", async query => {
+	it.each(["/(", "re:("])("shows invalid settings regex %s without activating rows", async query => {
 		await setTheme("dark");
 		let changes = 0;
 		const selector = new SettingsSelectorComponent(

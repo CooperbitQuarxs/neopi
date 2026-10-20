@@ -99,16 +99,16 @@ Native TSP lists and pickers retain selection, filtering, and history. Their ter
 
 ### Menu search
 
-Ordinary patterns keep fuzzy matching. A pattern beginning with `/` selects **Vim pattern syntax, magic by default**: type `//` from navigation (the first slash focuses search; the second becomes the pattern prefix). `re:` selects the same dialect explicitly. Confirm with Enter, then use `j`/`k` to navigate matches. Invalid expressions show an inline error and match nothing.
+Ordinary patterns keep fuzzy matching. A pattern beginning with `/` selects **Vim very-magic syntax by default**: type `//` from navigation (the first slash focuses search; the second becomes the pattern prefix). `re:` selects the same dialect explicitly. Confirm with Enter, then use `j`/`k` to navigate matches. Invalid expressions show an inline error and match nothing.
 
 | Pattern text | Meaning |
 | --- | --- |
-| `/live\|voice` or `re:live\|voice` | Match either `live` or `voice` |
-| `/\<voice\>` | Match the whole word `voice`, not `revoice` |
-| `/^\(live\|voice\)\s\d\+$` | Group/alternate, whitespace, one or more digits |
+| `/live\|voice` or `re:live\|voice` | Match either `live` or `voice` (the pattern contains a bare pipe) |
+| `/<voice>` | Match the whole word `voice`, not `revoice` |
+| `/^(live\|voice)\s\d+$` | Bare groups/alternation, whitespace, one or more digits |
 | `/\CVoice` / `/\cVoice` | Case-sensitive / case-insensitive matching (the default is insensitive) |
 
-In default magic mode, `.`, `*`, `[]`, `^`, and `$` are magic. Write `\+`, `\?`, `\|`, `\(` / `\)`, and `\{n,m}` for repetition, alternation, groups, and counted repetition; their unescaped forms are literal. `\<` / `\>` mark word start/end; `\d`, `\w`, and `\s` are character classes. These menu patterns do not change the ECMAScript `re:` syntax used by saved model selectors.
+Very-magic mode treats punctuation such as `|`, `()`, `+`, `?`, and `{n,m}` as operators without backslashes. `<` / `>` mark word start/end; `\d`, `\w`, and `\s` remain character classes. Escape punctuation to match it literally. Use `\m` inside a pattern for Vim's default-magic dialect (`/\m\(live\|voice\)`); `\M` and `\V` select nomagic and very-nomagic modes. These menu patterns do not change the ECMAScript `re:` syntax used by saved model selectors.
 
 ## Side panel views
 

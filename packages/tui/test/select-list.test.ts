@@ -457,13 +457,13 @@ describe("SelectList", () => {
 		);
 		list.onSelect = item => activated.push(item.value);
 		list.handleInput("/");
-		list.handleInput(String.raw`/\<live\>\|\<voice\>`);
+		list.handleInput("/<live>|<voice>");
 		const selected = list.getSelectedItem()?.value;
 		list.handleInput("\x1b[B");
 		expect(list.getSelectedItem()?.value).toBe(selected);
 		list.handleInput("\r");
 		expect(list.filterFocused).toBe(false);
-		expect(list.navigationState().filter).toBe(String.raw`/\<live\>\|\<voice\>`);
+		expect(list.navigationState().filter).toBe("/<live>|<voice>");
 		expect(activated).toEqual([]);
 		list.handleInput("j");
 		expect(list.getSelectedItem()?.value).toBe("Voice");

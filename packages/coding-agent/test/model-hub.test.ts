@@ -2321,7 +2321,7 @@ describe("ModelHub", () => {
 	});
 
 	describe("provider scopes and search", () => {
-		test.each(["/\\<live\\>\\|\\<voice\\>", "re:\\<live\\>\\|\\<voice\\>"])(
+		test.each(["/<live>|<voice>", "re:<live>|<voice>"])(
 			"models accepts Vim regex %s without activating while editing",
 			query => {
 				const { hub, onAssign } = createHub({
@@ -2351,7 +2351,7 @@ describe("ModelHub", () => {
 			},
 		);
 
-		test.each(["/\\(", "re:\\("])("models reports invalid regex %s with no selectable rows", query => {
+		test.each(["/(", "re:("])("models reports invalid regex %s with no selectable rows", query => {
 			const { hub, onAssign } = createHub({ models: [makeModel("test", "live")], scoped: true });
 			hub.handleInput("/");
 			for (const ch of query) hub.handleInput(ch);

@@ -30,7 +30,7 @@ function literal(character: string): string {
 /** Translate Vim's magic switches and atoms, rather than treating Vim escapes as JS escapes. */
 function translateVimRegex(pattern: string): RegExp {
 	let source = "";
-	let mode: "magic" | "nomagic" | "veryMagic" | "veryNomagic" = "magic";
+	let mode: "magic" | "nomagic" | "veryMagic" | "veryNomagic" = "veryMagic";
 	let ignoreCase = true;
 	for (let index = 0; index < pattern.length; index++) {
 		let character = pattern[index]!;
@@ -47,10 +47,6 @@ function translateVimRegex(pattern: string): RegExp {
 				mode = character === "v" ? "veryMagic" : character === "V" ? "veryNomagic" : character === "m" ? "magic" : "nomagic";
 				continue;
 			}
-			if (character === "<" || character === ">") {
-				source += character === "<" ? "(?<!\\w)(?=\\w)" : "(?<=\\w)(?!\\w)";
-				continue;
-			}
 			if (/[dDwWsSnrt1-9]/.test(character)) {
 				source += `\\${character}`;
 				continue;
@@ -61,6 +57,10 @@ function translateVimRegex(pattern: string): RegExp {
 			: mode === "magic" ? ".*[]^$".includes(character)
 				: mode === "nomagic" ? "^$".includes(character) : false;
 		const magic = escaped ? !normallyMagic : normallyMagic;
+		if ((character === "<" || character === ">") && magic) {
+			source += character === "<" ? "(?<!\\w)(?=\\w)" : "(?<=\\w)(?!\\w)";
+			continue;
+		}
 		if (character === "[" && magic) {
 			let collection = "[";
 			if (pattern[index + 1] === "^") collection += pattern[++index];
