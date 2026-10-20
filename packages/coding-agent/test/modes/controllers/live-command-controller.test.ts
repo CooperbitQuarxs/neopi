@@ -372,7 +372,7 @@ describe("LiveCommandController", () => {
 		await h.controller.handleCommand();
 		try {
 			h.controller.cycleDestination();
-			speak(h, 1, "fix the cache. THANKS!", false);
+			speak(h, 1, "fix the cache. THANKS!", true);
 			await Bun.sleep(25);
 			expect(forced).not.toHaveBeenCalled();
 			expect(h.submitted).toEqual([]);
@@ -571,7 +571,7 @@ describe("LiveCommandController", () => {
 			await h.controller.handleCommand();
 			if (destination !== "primary") h.controller.cycleDestination();
 			if (destination === "both") h.controller.cycleDestination();
-			speak(h, 1, "ship the corrected code SEND OFF", false);
+			speak(h, 1, "ship the corrected code SEND OFF", true);
 			await Bun.sleep(50);
 			expect(h.editor.getText()).toBe("");
 			expect(h.submitted).toEqual(["ship the corrected code"]);
@@ -588,7 +588,7 @@ describe("LiveCommandController", () => {
 		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 20);
 		await h.controller.handleCommand();
 		try {
-			speak(h, 1, "Ship this, SEND... OFF!", false);
+			speak(h, 1, "Ship this, SEND... OFF!", true);
 			await Bun.sleep(50);
 			expect(h.submitted).toEqual(["Ship this,"]);
 			expect(h.editor.getText()).toBe("");
@@ -633,13 +633,14 @@ describe("LiveCommandController", () => {
 		try {
 			cfgLiveSubmitKeyword.set(h.ctx.settings, "send off");
 			cfgLiveSubmitSilenceMs.set(h.ctx.settings, 20);
-			speak(h, 1, "review this sendoff", false);
+			speak(h, 1, "review this sendoff", true);
 			await Bun.sleep(50);
 			expect(h.submitted).toEqual(["review this"]);
 			cfgLiveSubmitKeyword.set(h.ctx.settings, "");
-			speak(h, 2, "review again SHIP IT", false);
+			speak(h, 2, "review again SHIP IT", true);
 			await Bun.sleep(30);
 			expect(h.submitted).toEqual(["review this"]);
+			expect(h.editor.getText()).toBe("review again SHIP IT");
 			cfgLiveSubmitKeyword.set(h.ctx.settings, "ship it");
 			await Bun.sleep(50);
 			expect(h.submitted).toEqual(["review this", "review again"]);
@@ -678,7 +679,7 @@ describe("LiveCommandController", () => {
 			speak(h, 1, "fix the cache send it now later", false);
 			await Bun.sleep(45);
 			expect(forced).not.toHaveBeenCalled();
-			speak(h, 1, "fix the cache SEND... IT, NOW!", false);
+			speak(h, 1, "fix the cache SEND... IT, NOW!", true);
 			await Bun.sleep(50);
 			expect(forced).toHaveBeenCalledTimes(1);
 			expect(forced).toHaveBeenCalledWith("fix the cache");
