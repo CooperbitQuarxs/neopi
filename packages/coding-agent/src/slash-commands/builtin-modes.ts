@@ -26,6 +26,7 @@ import { describeLoopLimitRuntime } from "../modes/loop-limit";
 import type { InteractiveModeContext } from "../modes/types";
 import ratchetKickoffPrompt from "../prompts/ratchet-kickoff.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
+import { describePrewalkCrew, getPrewalkPatterns, resolvePrewalkCrewSelection } from "../session/prewalk-crew";
 import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata } from "@oh-my-pi/pi-tui/thinking";
 import { noThinkingMessage, resolveThinkingArgument } from "./helpers/effort";
 import { commandConsumed, errorMessage, usage } from "./helpers/parse";
@@ -810,7 +811,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		acpDescription: "Arm, restart, or cancel prewalk",
 		acpInputHint: "[restart|off]",
 		subcommands: [
-			{ name: "restart", description: "Return to @default and re-arm the handoff to @smol" },
+			{ name: "restart", description: "Return to the planning crew and re-arm the execution handoff" },
 			{ name: "off", description: "Cancel this session's handoff without changing the active model" },
 		],
 		handle: async (command, runtime) => {
@@ -826,15 +827,18 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				);
 				return commandConsumed();
 			}
-			const target = resolveSessionModelSelector("@smol", runtime.session, runtime.settings);
-			if (target.error || !target.model) {
-				return usage(target.error ?? 'Model "@smol" not found', runtime);
-			}
-			if (!runtime.session.modelRegistry.hasConfiguredAuth(target.model)) {
-				return usage(`No API key for ${target.model.provider}/${target.model.id}`, runtime);
-			}
-			if (arg === "restart") {
-				const source = resolveSessionModelSelector("@default", runtime.session, runtime.settings);
+			const execution = resolvePrewalkCrewSelection(runtime.settings, runtime.session.modelRegistry, "execution");
+			if (!execution) return usage("Prewalk execution crew unavailable.", runtime);
+			const target = { model: execution.target, thinkingLevel: execution.thinkingLevel };
+			const configuredPlanner = getPrewalkPatterns(runtime.settings, "planner").length > 0;
+			const planner = configuredPlanner
+				? resolvePrewalkCrewSelection(runtime.settings, runtime.session.modelRegistry, "planner")
+				: undefined;
+			if (configuredPlanner && !planner) return usage("Prewalk planning crew unavailable.", runtime);
+			if (arg === "restart" || (planner && !runtime.session.getPrewalkState())) {
+				const source = planner
+					? { model: planner.target, thinkingLevel: planner.thinkingLevel, error: undefined }
+					: resolveSessionModelSelector("@default", runtime.session, runtime.settings);
 				if (source.error || !source.model) {
 					return usage(source.error ?? 'Model "@default" not found', runtime);
 				}
@@ -848,11 +852,10 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					target.thinkingLevel,
 				);
 				if (result === "rejected") return commandConsumed();
-				const restartSource = `${source.model.provider}/${source.model.id}`;
 				await runtime.output(
 					result === "armed"
-						? `Prewalk restarted: using @default (${restartSource}) for planning, then switching to @smol (${target.model.provider}/${target.model.id}) at the next edit/write (todo-gated).`
-						: `Prewalk reset: using @default (${restartSource}); @smol resolves to the same model and thinking level, so no handoff was armed.`,
+						? `Prewalk restarted: ${describePrewalkCrew({ target: source.model, thinkingLevel: source.thinkingLevel }, execution)} Handoff at the next edit/write (todo-gated).`
+						: `Prewalk reset: planning and execution resolve to the same model and thinking level; no handoff was armed.`,
 				);
 				return commandConsumed();
 			}

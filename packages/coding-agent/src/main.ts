@@ -51,12 +51,10 @@ import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
-	DEFAULT_PREWALK_TARGET,
 	disabledProviderIds,
 	expandRoleAlias,
 	getModelMatchPreferences,
 	resolveCliModel,
-	resolveConfiguredModelPatterns,
 	resolveModelRoleValue,
 	resolveModelScope,
 	type ScopedModel,
@@ -195,6 +193,7 @@ import {
 	cfgHideThinkingBlock,
 	cfgOmitThinking,
 	cfgPrewalkEnabled,
+	cfgPrewalkExecution,
 } from "./session/settings";
 import { cfgDisabledProviders, cfgEnabledModels } from "./config/model-settings";
 import { cfgTaskAgentIdleTtlMs } from "./task/settings";
@@ -202,6 +201,7 @@ import { cfgSkillsIncludeSkills } from "./extensibility/settings";
 import { cfgMcpIncludeServers } from "./mcp/settings";
 import { cfgChatInclude, cfgChatMode } from "./chat/settings";
 import { cfgWorkspaceAdditionalDirectories } from "./session/context-settings";
+import { getPrewalkPatterns } from "./session/prewalk-crew";
 
 type RunAcpMode = (createSession: AcpSessionFactory) => Promise<never>;
 type RunPrintMode = (session: AgentSession, options: PrintModeOptions) => Promise<number>;
@@ -1771,29 +1771,20 @@ export async function buildSessionOptions(
 			? true
 			: !restoringSession && cfgPrewalkEnabled.get(activeSettings);
 	if (prewalkEnabled) {
-		const target = parsed.prewalkInto ?? DEFAULT_PREWALK_TARGET;
-		let targetPatterns: string[];
-
-		if (parsed.prewalkInto === undefined) {
-			// Preserve the existing default-prewalk behavior; this PR only needs
-			// pre-override role semantics for an explicit target.
-			targetPatterns = [expandRoleAlias(DEFAULT_PREWALK_TARGET, activeSettings)];
-		} else {
-			// `--model` mutates only the session default role. Resolve explicit
-			// prewalk aliases against the pre-mutation default while leaving all
-			// other role lookups live.
-			const preModelOverrideRoleLookup = {
-				getModelRole: (role: string) =>
-					role === "default" ? preModelOverrideDefaultRole : activeSettings.getModelRole(role),
-			};
-
-			// Bare `default` is a backwards-compatible special selector handled
-			// by expandRoleAlias rather than the prefixed role-alias grammar.
-			const targetSelector =
-				target.trim() === "default" ? expandRoleAlias(target, preModelOverrideRoleLookup) : target;
-			const configuredPatterns = resolveConfiguredModelPatterns(targetSelector, preModelOverrideRoleLookup);
-			targetPatterns = configuredPatterns.length > 0 ? configuredPatterns : [targetSelector];
-		}
+		const target = parsed.prewalkInto ?? cfgPrewalkExecution.get(activeSettings);
+		// --model changes the default role for this session, not the meaning of
+		// an explicit crew alias chosen alongside it.
+		const preModelOverrideRoleLookup = {
+			getModelRole: (role: string) =>
+				role === "default" ? preModelOverrideDefaultRole : activeSettings.getModelRole(role),
+		};
+		const targetPatterns = getPrewalkPatterns(activeSettings, "execution", target, preModelOverrideRoleLookup);
+		options.prewalkPlannerPatterns = getPrewalkPatterns(
+			activeSettings,
+			"planner",
+			undefined,
+			preModelOverrideRoleLookup,
+		);
 
 		const selection = await resolvePrewalkTarget(
 			targetPatterns,
@@ -2508,6 +2499,10 @@ export async function runRootCommand(
 		sessionOptions.onPrewalkWarning = warning => {
 			if (isInteractive) notifs.push({ kind: "warn", message: warning });
 			else process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
+		};
+		sessionOptions.onPrewalkCrew = message => {
+			if (isInteractive) notifs.push({ kind: "info", message });
+			else process.stderr.write(`${message}\n`);
 		};
 
 		// OTEL: unless `telemetry.otlpExportEnabled` is off, register global OTLP
