@@ -36,6 +36,10 @@ Solo puesta en marcha del destino privado — no significa que el proyecto esté
 - CI / releases en la org, si aplica
 - Uso del issue tracker de este repo para el equipo (cuando haya algo publicado)
 
+## Licencia
+
+El código está bajo licencia **MIT** (ver [LICENSE](./LICENSE)). Se conservan los avisos de copyright del código heredado y de PsychedelicShayna.
+
 ## Contacto
 
 Mientras no haya código ni issues activos aquí, el foco y las preguntas de desarrollo van al **repo público** enlazado arriba.
