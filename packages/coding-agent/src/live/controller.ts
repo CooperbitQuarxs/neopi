@@ -260,7 +260,6 @@ export class LiveSessionController {
 	readonly #holdMode: () => boolean;
 	readonly #quietFloorMs: () => number;
 	#holdReleased = false;
-	#replyReleased = false;
 	#lastComposerWrite = Number.NEGATIVE_INFINITY;
 	#voiceFloorTimer: NodeJS.Timeout | undefined;
 	#deferredVoiceDelegation: {
@@ -1009,7 +1008,6 @@ export class LiveSessionController {
 	#noteResponseStart(): void {
 		if (this.#responding) return;
 		this.#responding = true;
-		this.#replyReleased = false;
 		// The response consumes the context sent before it; context sent during it counts for the next.
 		const fromContext = this.#contextSinceResponse;
 		this.#contextSinceResponse = false;
@@ -1185,7 +1183,6 @@ export class LiveSessionController {
 			: block.matched ? block.text : message;
 		if (!this.retireComposerSpeech(preserved)) return false;
 		this.#holdReleased = true;
-		this.#replyReleased = true;
 		// A pre-submit response/route belongs to the old draft, not this released request.
 		this.#suppressedResponse = false;
 		this.#deferredVoiceDelegation = undefined;
@@ -1404,7 +1401,7 @@ export class LiveSessionController {
 	/** Holding the next input must not close native playback in the middle of an admitted reply. */
 	#voiceOutputBlocked(): boolean {
 		return this.#voiceTurnBlocked() && !this.#responding &&
-			!this.#replyReleased && !this.#contextSinceResponse && this.#outputLevel <= OUTPUT_ACTIVE_LEVEL;
+			this.#releasedReplyTurns === undefined && !this.#contextSinceResponse && this.#outputLevel <= OUTPUT_ACTIVE_LEVEL;
 	}
 
 	/** Apply settings immediately, including native RTP playback (which bypasses JS transcript events). */
