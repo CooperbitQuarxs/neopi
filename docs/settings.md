@@ -1070,7 +1070,11 @@ full records add more collection and serialization overhead than minimal ones.
 | --- | --- | --- | --- |
 | `telemetry.agent_context` | `off`, `minimal`, `full` | `off` | Controls automatic context telemetry supplied to the agent. |
 | `telemetry.tool_results` | `off`, `summary`, `full` | `off` | Independently controls telemetry attached to the latest completed tool-result batch. |
-| `telemetry.threshold_events` | boolean | `false` | Enables optional approaching-compaction notices at runtime boundaries. |
+| `telemetry.threshold_events` | boolean | `false` | Enables approaching-compaction notices and agent delivery of enabled usage notices at model boundaries. |
+| `usageNotices.enabled` | boolean | `false` | Shows quota and context-pressure threshold crossings as human notice cards. |
+| `usageNotices.quotaPercent` | 0–100 | `80` | Used quota percentage that triggers a notice. |
+| `usageNotices.remainingPercent` | 0–100 | `10` | Remaining quota percentage at or below which a window triggers a notice. |
+| `usageNotices.contextPercent` | 0–100 | `80` | Estimated context occupancy percentage that triggers a notice. |
 
 `minimal` context telemetry includes the resolved provider, model, and effort;
 estimated current context usage and limit; compaction threshold and state;
@@ -1095,6 +1099,27 @@ approaching-compaction notice in the speculation lead band. It includes estimate
 remaining token headroom and checkpoint availability. Usage and headroom are
 estimates of current occupancy, not token-precise predictions of when compaction
 will occur.
+
+Enable "Usage and Context Notices" in `/settings` under Providers, Privacy.
+Quota and remaining thresholds apply to each reported window for the active
+provider. Context notices include the estimated token delta since the previous
+model boundary, the compaction threshold, and remaining headroom. A crossing
+appears once until usage recovers below the threshold or a quota window resets.
+
+Quota cards include the provider, window, used and remaining percentages, reset
+timestamp, and cache age in milliseconds. Missing reports and stale cached reports
+also produce a notice with an action to inspect `/usage`. Unsupported providers
+are reported as unavailable rather than guessed. Notices use the normal auth usage
+report path and its five-minute per-credential cache. They never invalidate it,
+consume a saved reset, or force a refresh. The existing usage dashboard refreshes
+can update that same snapshot. No additional model request is made for notices.
+
+Human notices do not grant the agent telemetry access. Only
+`telemetry.threshold_events: true` supplies these crossings to the agent, even
+when `telemetry.agent_context` or `telemetry.tool_results` is enabled. The injected
+record is transient and is not saved in conversation history. Turn
+`usageNotices.enabled` off in settings to stop both human and agent usage notices.
+
 
 ### Other groups
 

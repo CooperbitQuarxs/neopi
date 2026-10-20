@@ -301,6 +301,7 @@ import {
 	injectAgentTelemetry,
 	inspectAgentTelemetry,
 } from "./agent-telemetry";
+import { UsageNotices } from "./usage-notices";
 import type {
 	AgentSessionConfig,
 	AgentSessionDisposeOptions,
@@ -840,6 +841,7 @@ export class AgentSession implements SettingsScope {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
+	#usageNotices = new UsageNotices();
 	/** Serializes receipt-backed preparation through acceptance, not turn completion. */
 	#customMessageReceiptPreparation: Promise<void> = Promise.resolve();
 	/** Session-start policy, independent of the selected project memory backend. */
@@ -13590,6 +13592,17 @@ export class AgentSession implements SettingsScope {
 		return injectAgentTelemetry(messages, this.#agentTelemetryHost);
 	}
 
+	/** Optional human notices and independently gated agent projection at model boundaries. */
+	async prepareUsageNotices(messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> {
+		return this.#usageNotices.prepare(
+			messages,
+			this.settings,
+			() => inspectAgentTelemetry(this.#agentTelemetryHost),
+			() => this.fetchUsageReports(signal),
+			notice => this.emitNotice("warning", JSON.stringify(notice), "usage"),
+		);
+	}
+
 	/**
 	 * Monotonic counter that changes whenever the in-flight pending context
 	 * snapshot is set or cleared. Status-line context memoization keys on this so
@@ -13619,6 +13632,7 @@ export class AgentSession implements SettingsScope {
 		// Every fresh usage snapshot doubles as the salvage-sweep heartbeat: the
 		// status line calls this every 5 minutes while the TUI is open.
 		if (reports) this.#maybeScheduleResetSweep(reports);
+		this.#usageNotices.observe(reports);
 		return reports;
 	}
 
