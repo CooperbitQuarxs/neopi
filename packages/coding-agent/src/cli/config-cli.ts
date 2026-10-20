@@ -12,12 +12,13 @@ import { type AnySetting, lookup } from "../config/registry";
 import { Settings, settings } from "../config/settings";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { initXdg } from "./commands/init-xdg";
+import { dumpSettingsToml } from "../config/settings-toml";
 
 // =============================================================================
 // Types
 // =============================================================================
 
-export type ConfigAction = "list" | "get" | "set" | "reset" | "path" | "init-xdg";
+export type ConfigAction = "list" | "get" | "set" | "reset" | "path" | "init-xdg" | "dump-toml";
 
 export interface ConfigCommandArgs {
 	action: ConfigAction;
@@ -63,7 +64,7 @@ function findSettingDef(path: string): CliSettingDef | undefined {
 // Argument Parser
 // =============================================================================
 
-const VALID_ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg"];
+const VALID_ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg", "dump-toml"];
 
 /**
  * Parse config subcommand arguments.
@@ -161,6 +162,10 @@ function getTypeDisplay(def: CliSettingDef): string {
 // =============================================================================
 
 export async function runConfigCommand(cmd: ConfigCommandArgs): Promise<void> {
+	if (cmd.action === "dump-toml") {
+		await writeStdout(dumpSettingsToml());
+		return;
+	}
 	await Settings.init();
 
 	switch (cmd.action) {
@@ -412,6 +417,7 @@ ${chalk.bold("Commands:")}
   reset <key>        Remove a setting from config.yml so its default applies
   path               Print the config directory path
   init-xdg           Initialize XDG Base Directory structure
+  dump-toml          Print documented defaults as TOML
 
 ${chalk.bold("Options:")}
   --json             Output as JSON

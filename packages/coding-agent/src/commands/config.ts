@@ -7,7 +7,7 @@ import { configHelp as commandHelp } from "../cli/command-help";
 import { type ConfigAction, type ConfigCommandArgs, runConfigCommand } from "../cli/config-cli";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
-const ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg"];
+const ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg", "dump-toml"];
 
 export default class Config extends Command {
 	static description = commandHelp.description;
@@ -46,7 +46,7 @@ export default class Config extends Command {
 			},
 		};
 
-		await initTheme();
+		if (action !== "dump-toml") await initTheme();
 		await runConfigCommand(cmd);
 	}
 }
