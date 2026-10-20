@@ -455,7 +455,7 @@ export class PsTopComponent implements Component {
 					compact([
 						this.#describeHead(),
 						this.#view === "table" && search,
-						this.#view === "table" && queryError && text([span(queryError, "error")]),
+						this.#view === "table" && queryError !== undefined && text([span(queryError, "error")]),
 						{ ...body, scroll: this.#nativeScroll },
 						statusVisible &&
 							this.#statusText !== "" &&
