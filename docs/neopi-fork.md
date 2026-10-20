@@ -68,6 +68,8 @@ Each store is schema-v1 JSON written atomically with a `.bak` of the previous fi
 
 `/persona live` opens the same editor for the live voice model. The bundled default is read-only; clone it to customize. A new live persona starts from the default instructions.
 
+The live pane's Sources settings include **Seed primary transcript on call start**, off by default, and **History seed token budget**, default 8000 tokens with a range of 128 to 64000. Both persist per persona, including the bundled default, and apply on the next call. Seeding copies the current session's recent authored prose in chronological order, retaining role/provenance labels and summaries but excluding tool output, image payloads, and private reasoning. Whole recent blocks are preferred; an oversized latest block keeps its beginning and end with a truncation marker. Each transport chunk is labelled as silent history, is not spoken, and does not request delegation. Labels count toward the token budget.
+
 Both scopes take the same subcommands: `set <name>`, `off` (live: back to the default), `list`, `show <name>`, `status`, `clone <source> <name>`, and `delete <name>`. For example, `/persona set reviewer` or `/persona live set iris`. Changing the active persona invalidates the prompt cache, so switch deliberately.
 
 The session persona is selected per session id. `AgentSession` applies it while preparing each turn, before extension `before_agent_start` handlers, so extensions see and may further change the persona prompt. A persona that cannot apply (missing file, literal not found) leaves the base prompt in place and shows a warning.
