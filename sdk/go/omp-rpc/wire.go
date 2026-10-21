@@ -4419,8 +4419,13 @@ type SubagentSnapshot struct {
 	Assignment  *string        `json:"assignment,omitempty"`
 	SessionFile *string        `json:"sessionFile,omitempty"`
 	// Raw `AgentProgress` record.
-	Progress         map[string]json.RawMessage `json:"progress,omitempty"`
-	ParentToolCallID *string                    `json:"parentToolCallId,omitempty"`
+	Progress              map[string]json.RawMessage `json:"progress,omitempty"`
+	ParentToolCallID      *string                    `json:"parentToolCallId,omitempty"`
+	ResolvedModel         *string                    `json:"resolvedModel,omitempty"`
+	ResolvedModelIdentity *string                    `json:"resolvedModelIdentity,omitempty"`
+	ResolvedThinkingLevel *ConfiguredThinkingLevel   `json:"resolvedThinkingLevel,omitempty"`
+	FastModeEnabled       *bool                      `json:"fastModeEnabled,omitempty"`
+	FastModeActive        *bool                      `json:"fastModeActive,omitempty"`
 }
 
 func (v *SubagentSnapshot) UnmarshalJSON(data []byte) error {
@@ -4442,6 +4447,11 @@ func (v *SubagentSnapshot) decodeFrom(raw map[string]json.RawMessage) error {
 	d.optional("sessionFile", &out.SessionFile)
 	d.optional("progress", &out.Progress)
 	d.optional("parentToolCallId", &out.ParentToolCallID)
+	d.optional("resolvedModel", &out.ResolvedModel)
+	d.optional("resolvedModelIdentity", &out.ResolvedModelIdentity)
+	d.optional("resolvedThinkingLevel", &out.ResolvedThinkingLevel)
+	d.optional("fastModeEnabled", &out.FastModeEnabled)
+	d.optional("fastModeActive", &out.FastModeActive)
 	if d.err != nil {
 		return d.err
 	}
@@ -10321,6 +10331,30 @@ type SteerSubagentCommand struct {
 // SteerSubagent sends "steer_subagent": Send a message to a running subagent as its user.
 func (c Commands) SteerSubagent(ctx context.Context, p SteerSubagentCommand) error {
 	return c.call(ctx, "steer_subagent", p, 0, nil)
+}
+
+// SetSubagentThinkingLevelCommand holds the parameters of "set_subagent_thinking_level".
+type SetSubagentThinkingLevelCommand struct {
+	SubagentID string        `json:"subagentId"`
+	Level      ThinkingLevel `json:"level"`
+}
+
+// SetSubagentThinkingLevel sends "set_subagent_thinking_level": Set a running subagent's thinking level from its next request, preserving it across restore.
+func (c Commands) SetSubagentThinkingLevel(ctx context.Context, p SetSubagentThinkingLevelCommand) error {
+	return c.call(ctx, "set_subagent_thinking_level", p, 0, nil)
+}
+
+// SetSubagentFastCommand holds the parameters of "set_subagent_fast".
+type SetSubagentFastCommand struct {
+	SubagentID string `json:"subagentId"`
+	Enabled    bool   `json:"enabled"`
+}
+
+// SetSubagentFast sends "set_subagent_fast": Enable or disable fast mode only for a running subagent, from its next request.
+func (c Commands) SetSubagentFast(ctx context.Context, p SetSubagentFastCommand) (FastModeResult, error) {
+	var out FastModeResult
+	err := c.call(ctx, "set_subagent_fast", p, 0, &out)
+	return out, err
 }
 
 // LiveStartCommand holds the parameters of "live_start".

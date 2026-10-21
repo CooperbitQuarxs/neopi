@@ -33,6 +33,8 @@ export const RPC_COMMAND_TYPES = [
 	"get_subagent_messages",
 	"cancel_subagent",
 	"steer_subagent",
+	"set_subagent_thinking_level",
+	"set_subagent_fast",
 	"set_model",
 	"cycle_model",
 	"get_available_models",

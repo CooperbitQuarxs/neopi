@@ -1062,6 +1062,16 @@ export class RpcClient {
 		this.#getData(await this.#send({ type: "steer_subagent", subagentId, message }));
 	}
 
+	/** Change a running subagent's thinking level from its next provider request. */
+	async setSubagentThinkingLevel(subagentId: string, level: ThinkingLevel): Promise<void> {
+		this.#getData(await this.#send({ type: "set_subagent_thinking_level", subagentId, level }));
+	}
+
+	/** Enable or disable fast mode only for the selected running subagent. */
+	async setSubagentFast(subagentId: string, enabled: boolean): Promise<{ enabled: boolean; active: boolean }> {
+		return this.#getData(await this.#send({ type: "set_subagent_fast", subagentId, enabled }));
+	}
+
 	/**
 	 * Set model by provider and ID.
 	 */

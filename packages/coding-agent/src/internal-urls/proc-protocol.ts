@@ -22,6 +22,7 @@ import {
 import type { ProcReadDetails } from "@oh-my-pi/pi-tui/tools/proc-render";
 import procPromptDoc from "../prompts/internal-urls/proc.md" with { type: "text" };
 import type { ToolSession } from "../tools";
+import { describeSubagentFacts } from "../registry/subagent-facts";
 import type {
 	InternalResource,
 	InternalUrl,
@@ -121,24 +122,26 @@ export class ProcProtocolHandler implements ProtocolHandler {
 			: { services: [], error: undefined };
 		if (!id) {
 			const now = Date.now();
+			const snapshots = snapshotJobs(session, jobs, { includeResults: true });
+			const agents = runningAgentsOutsideJobs(session);
 			const rows = [
-				...jobs.map(job => {
+				...jobs.map((job, index) => {
 					const duration =
 						job.endTime === undefined
 							? `up ${formatDuration(now - job.startTime)}`
 							: `in ${formatDuration(job.endTime - job.startTime)}`;
-					return `${job.id} [${job.type}] ${job.status} ${duration} — ${job.label.replace(/\s+/g, " ")}`;
+					return `${job.id} [${job.type}]${describeSubagentFacts(snapshots[index]!)} ${job.status} ${duration} — ${job.label.replace(/\s+/g, " ")}`;
 				}),
-				...runningAgentsOutsideJobs(session).map(
+				...agents.map(
 					agent =>
-						`${agent.id} [task] running up ${formatDuration(agent.ageMs)} — ${agent.activity ?? "agent"}${agentStaleNote(agent)}`,
+						`${agent.id} [task]${describeSubagentFacts(agent)} running up ${formatDuration(agent.ageMs)} — ${agent.activity ?? "agent"}${agentStaleNote(agent)}`,
 				),
 				...services.map(service => serviceStatus(service)),
 				...(servicesError ? [`Services unavailable (daemon broker): ${servicesError}`] : []),
 			];
 			return textResource(url, rows.join("\n") || "No background jobs or services.", undefined, true, {
-				jobs: snapshotJobs(session, jobs, { includeResults: true }),
-				agents: runningAgentsOutsideJobs(session),
+				jobs: snapshots,
+				agents,
 				daemons: services,
 			});
 		}

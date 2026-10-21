@@ -1308,6 +1308,55 @@ Failure responses:
   an abort or a usage-limit preflight denial lands first) →
   `error: "Subagent refused the message: <reason>"`
 
+### Changing a running subagent's thinking level
+
+`set_subagent_thinking_level` selects the level on that subagent's own session,
+without interrupting its current turn or provider request. Its next provider
+request uses the new level, including the next step of the current turn.
+
+```json
+{ "id": "req_2", "type": "set_subagent_thinking_level", "subagentId": "OmpWorker", "level": "high" }
+{ "id": "req_2", "type": "response", "command": "set_subagent_thinking_level", "success": true }
+```
+
+The command accepts `off` and the subagent model's supported effort levels,
+within its existing session effort ceiling. Unsupported levels fail with the
+available choices rather than silently clamping to another level. The same
+ownership and running-state restrictions as `steer_subagent` apply; an unknown or finished id returns
+`Subagent not running: <id>`.
+
+The change appends a `thinking_level_change` entry to the subagent's session
+file. Restart recovery and cold revival resume at that selection. It does not
+change the parent session's level or the global default.
+
+### Changing a running subagent's fast mode
+
+`set_subagent_fast` changes only the selected running subagent's service tier,
+from its next provider request. It does not abort the current request, change
+the parent or siblings, or update a global setting. The tier is recorded as a
+`service_tier_change` entry and survives revival and restart.
+
+```json
+{ "id": "req_3", "type": "set_subagent_fast", "subagentId": "OmpWorker", "enabled": true }
+{ "id": "req_3", "type": "response", "command": "set_subagent_fast", "success": true, "data": { "enabled": true, "active": true } }
+```
+
+`enabled` reports the selected fast preference. `active` reports whether the
+current model/provider can actually honor it, including a provider fallback
+that temporarily disabled fast requests. A provider without a supported fast
+selection returns an error. Invalid ids follow the same rules as the thinking
+command, and `enabled` must be a boolean.
+
+`get_subagents` reads each owned live session's `resolvedModel`,
+`resolvedModelIdentity`, `resolvedThinkingLevel`, `fastModeEnabled` and
+`fastModeActive` when queried. These are current values, not launch snapshots.
+Task/job listings and peer rosters also report current model and effort.
+
+In the Agent Hub, focus a subagent's transcript to cycle its effort with the
+existing Shift+Tab binding or run `/fast [on|ultra|off|status]`. These controls
+target the focused session. Model switching and other mutation commands remain
+unavailable in that view.
+
 ### Side questions (`/btw`)
 
 `btw` asks the TUI's `/btw` side question: one ephemeral model turn over the

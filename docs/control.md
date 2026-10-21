@@ -12,6 +12,8 @@ npi ctl %3 slash "/fast on"
 npi ctl %3 action app.model.select
 npi ctl %3 keys escape
 npi ctl %3 dialog_answer <id> '{"index":0}'
+npi ctl %3 rpc set_subagent_thinking_level '{"subagentId":"Worker","level":"high"}'
+npi ctl %3 rpc set_subagent_fast '{"subagentId":"Worker","enabled":true}'
 ```
 
 Read `state` before a write. Pass `if` revisions on draft and surface commands. A stale revision is `conflict` and the pane shows `⌁ <label> backed off`. Retry only after re-reading state. Do not use `tmux send-keys` on npi panes.
@@ -24,7 +26,7 @@ The `hello`, `get_status`, and `state` snapshots carry `session`: the same RPC s
 
 Control snapshots and subscribed `queue_update` events include an exact oldest prefix of each queue: at most 256 entries and 43,690 text characters per queue. The combined queues reserve at most half of a protocol-v1 frame even with worst-case JSON escaping. They stop before the first entry that would exceed either budget; no returned queue-chip text is shortened, so it remains valid for `remove_queued_message` and `promote_queued_message`. `queuedMessageCount` and `liveSteered` remain exact even when not all entries fit. RPC `get_state` keeps the full queue; `dequeue` can retrieve a full queued message.
 
-`get_subagents`, `get_subagent_messages`, `cancel_subagent`, `steer_subagent`, and `set_subagent_subscription` use the process's live subagent registry. Every connection sees the same roster, including subagents that started before it connected. `set_subagent_subscription` is per connection: lifecycle and progress frames (and, at `events`, raw subagent events) go only to connections that asked for them.
+`get_subagents`, `get_subagent_messages`, `cancel_subagent`, `steer_subagent`, `set_subagent_thinking_level`, `set_subagent_fast`, and `set_subagent_subscription` use the process's live subagent registry. Every connection sees the same roster, including subagents that started before it connected. `set_subagent_subscription` is per connection: lifecycle and progress frames (and, at `events`, raw subagent events) go only to connections that asked for them. Thinking-level and fast-mode changes apply to the selected running subagent's next provider request and persist across restart without changing the parent or global defaults. `get_subagents` reports the live model, effort and fast enabled/active state, including edits made from the focused Agent Hub view.
 
 Disable publishing with `--no-control-socket` or `control.enabled=false`.
 

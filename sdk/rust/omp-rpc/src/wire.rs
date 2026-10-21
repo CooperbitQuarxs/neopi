@@ -3994,6 +3994,16 @@ pub struct SubagentSnapshot {
 	pub progress: Option<Map<String, Value>>,
 	#[serde(rename = "parentToolCallId", default, skip_serializing_if = "Option::is_none")]
 	pub parent_tool_call_id: Option<String>,
+	#[serde(rename = "resolvedModel", default, skip_serializing_if = "Option::is_none")]
+	pub resolved_model: Option<String>,
+	#[serde(rename = "resolvedModelIdentity", default, skip_serializing_if = "Option::is_none")]
+	pub resolved_model_identity: Option<String>,
+	#[serde(rename = "resolvedThinkingLevel", default, skip_serializing_if = "Option::is_none")]
+	pub resolved_thinking_level: Option<ConfiguredThinkingLevel>,
+	#[serde(rename = "fastModeEnabled", default, skip_serializing_if = "Option::is_none")]
+	pub fast_mode_enabled: Option<bool>,
+	#[serde(rename = "fastModeActive", default, skip_serializing_if = "Option::is_none")]
+	pub fast_mode_active: Option<bool>,
 }
 
 /// Incremental subagent transcript read.
@@ -6332,6 +6342,20 @@ pub struct SteerSubagentParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetSubagentThinkingLevelParams {
+	#[serde(rename = "subagentId")]
+	pub subagent_id: String,
+	pub level: ThinkingLevel,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetSubagentFastParams {
+	#[serde(rename = "subagentId")]
+	pub subagent_id: String,
+	pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveStartParams {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub voice: Option<String>,
@@ -8204,6 +8228,43 @@ impl Command for SteerSubagentCommand {
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		let _ = data;
 		Ok(())
+	}
+}
+
+/// Set a running subagent's thinking level from its next request, preserving it across restore.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetSubagentThinkingLevelCommand {
+	#[serde(rename = "subagentId")]
+	pub subagent_id: String,
+	pub level: ThinkingLevel,
+}
+
+impl Command for SetSubagentThinkingLevelCommand {
+	const NAME: &'static str = "set_subagent_thinking_level";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Enable or disable fast mode only for a running subagent, from its next request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetSubagentFastCommand {
+	#[serde(rename = "subagentId")]
+	pub subagent_id: String,
+	pub enabled: bool,
+}
+
+impl Command for SetSubagentFastCommand {
+	const NAME: &'static str = "set_subagent_fast";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = FastModeResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<FastModeResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
 	}
 }
 

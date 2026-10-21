@@ -409,6 +409,11 @@ export const stateDefs = {
 		lastUpdate: "number.integer",
 		"progress?": doc(JSON_OBJECT, "Raw `AgentProgress` record."),
 		"parentToolCallId?": "string",
+		"resolvedModel?": "string",
+		"resolvedModelIdentity?": "string",
+		"resolvedThinkingLevel?": "ConfiguredThinkingLevel",
+		"fastModeEnabled?": "boolean",
+		"fastModeActive?": "boolean",
 	},
 	SubagentMessages: doc(
 		{

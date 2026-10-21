@@ -1167,6 +1167,11 @@ class SubagentSnapshot:
     progress: JsonObject | None = None
     """Raw `AgentProgress` record."""
     parent_tool_call_id: str | None = None
+    resolved_model: str | None = None
+    resolved_model_identity: str | None = None
+    resolved_thinking_level: ConfiguredThinkingLevel | None = None
+    fast_mode_enabled: bool | None = None
+    fast_mode_active: bool | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -3035,6 +3040,11 @@ def parse_subagent_snapshot(value: object, path: str = "SubagentSnapshot") -> Su
         session_file=optional(payload, "sessionFile", decode_str, path),
         progress=optional(payload, "progress", decode_json_object, path),
         parent_tool_call_id=optional(payload, "parentToolCallId", decode_str, path),
+        resolved_model=optional(payload, "resolvedModel", decode_str, path),
+        resolved_model_identity=optional(payload, "resolvedModelIdentity", decode_str, path),
+        resolved_thinking_level=optional(payload, "resolvedThinkingLevel", _decode_configured_thinking_level, path),
+        fast_mode_enabled=optional(payload, "fastModeEnabled", decode_bool, path),
+        fast_mode_active=optional(payload, "fastModeActive", decode_bool, path),
     )
 
 
@@ -4560,6 +4570,20 @@ class WireClient:
         params["subagentId"] = subagent_id
         params["message"] = message
         self._command("steer_subagent", params)
+
+    def set_subagent_thinking_level(self, subagent_id: str, level: ThinkingLevel) -> None:
+        """Set a running subagent's thinking level from its next request, preserving it across restore."""
+        params: dict[str, object] = {}
+        params["subagentId"] = subagent_id
+        params["level"] = level
+        self._command("set_subagent_thinking_level", params)
+
+    def set_subagent_fast(self, subagent_id: str, *, enabled: bool) -> FastModeResult:
+        """Enable or disable fast mode only for a running subagent, from its next request."""
+        params: dict[str, object] = {}
+        params["subagentId"] = subagent_id
+        params["enabled"] = enabled
+        return parse_fast_mode_result(self._command("set_subagent_fast", params), "set_subagent_fast")
 
     def live_start(self, *, voice: str | None = None, instructions: str | None = None) -> str:
         """Start a live voice session bound to this session; returns the voice in use."""
