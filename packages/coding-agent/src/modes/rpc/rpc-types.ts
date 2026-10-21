@@ -7,6 +7,7 @@
 import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode, ToolTier } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessageEvent, Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ChatModeSetting, ChatModeState } from "../../chat/chat-mode";
 import type { ChroniclerHealth } from "../../chronicler/session-chronicler";
@@ -81,6 +82,8 @@ export type RpcCommand =
 	| { id?: string; type: "get_subagent_messages"; subagentId?: string; sessionFile?: string; fromByte?: number }
 	| { id?: string; type: "cancel_subagent"; subagentId: string }
 	| { id?: string; type: "steer_subagent"; subagentId: string; message: string }
+	| { id?: string; type: "set_subagent_thinking_level"; subagentId: string; level: ThinkingLevel }
+	| { id?: string; type: "set_subagent_fast"; subagentId: string; enabled: boolean }
 	// Live voice (GPT live bound to this session)
 	| { id?: string; type: "live_start"; voice?: string }
 	| { id?: string; type: "live_stop" }
@@ -481,6 +484,11 @@ export interface RpcSubagentSnapshot {
 	lastUpdate: number;
 	progress?: AgentProgress;
 	parentToolCallId?: string;
+	resolvedModel?: string;
+	resolvedModelIdentity?: string;
+	resolvedThinkingLevel?: ConfiguredThinkingLevel;
+	fastModeEnabled?: boolean;
+	fastModeActive?: boolean;
 }
 
 export interface RpcSubagentMessagesResult {
@@ -612,6 +620,14 @@ export type RpcResponse =
 			data: { cancelled: boolean };
 	  }
 	| { id?: string; type: "response"; command: "steer_subagent"; success: true }
+	| { id?: string; type: "response"; command: "set_subagent_thinking_level"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_subagent_fast";
+			success: true;
+			data: { enabled: boolean; active: boolean };
+	  }
 
 	// Model
 	| {

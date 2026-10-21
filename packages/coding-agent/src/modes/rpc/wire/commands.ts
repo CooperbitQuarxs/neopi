@@ -239,6 +239,17 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		params: { subagentId: "string", message: "string" },
 	},
 	{
+		name: "set_subagent_thinking_level",
+		doc: "Set a running subagent's thinking level from its next request, preserving it across restore.",
+		params: { subagentId: "string", level: "ThinkingLevel" },
+	},
+	{
+		name: "set_subagent_fast",
+		doc: "Enable or disable fast mode only for a running subagent, from its next request.",
+		params: { subagentId: "string", enabled: "boolean" },
+		result: "FastModeResult",
+	},
+	{
 		name: "live_start",
 		doc: "Start a live voice session bound to this session; returns the voice in use.",
 		params: { "voice?": "string", "instructions?": "string" },

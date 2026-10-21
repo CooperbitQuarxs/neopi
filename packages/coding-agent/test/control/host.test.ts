@@ -10,8 +10,14 @@ import { mkdtempSync } from "node:fs";
 import * as net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { AgentRegistry } from "../../src/registry/agent-registry";
+import { runSubagentFastCommand } from "../../src/registry/subagent-controls";
+import { InputController } from "../../src/modes/controllers/input-controller";
+import type { InteractiveModeContext } from "../../src/modes/types";
+import type { RpcSubagentSnapshot } from "../../src/modes/rpc/rpc-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
@@ -221,6 +227,82 @@ describe("control host", () => {
 		expect((reply.data as { subagents: { id: string }[] }).subagents.map(subagent => subagent.id)).toEqual([
 			"EarlySub",
 		]);
+	});
+
+	test("roundtrips selected-agent effort and fast edits between control and focused view", async () => {
+		const bus = new EventBus();
+		const { client } = await start({}, { subagentEventBus: bus });
+		const child = createSession();
+		const sibling = createSession();
+		extraSessions.push(child, sibling);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled test model");
+		await child.setModelTemporary(model, ThinkingLevel.Low);
+		await sibling.setModelTemporary(model, ThinkingLevel.Low);
+		const parentLevel = session!.thinkingLevel;
+		const id = "ThinkingSub";
+		const ref = AgentRegistry.global().register({
+			id,
+			displayName: id,
+			kind: "sub",
+			session: child,
+			sessionFile: join(tempDir.path(), `${id}.jsonl`),
+			status: "running",
+		});
+		try {
+			emitStarted(bus, id);
+			const reply = await client.request({
+				type: "set_subagent_thinking_level",
+				subagentId: id,
+				level: ThinkingLevel.High,
+			});
+			expect(reply.success).toBe(true);
+			expect(child.thinkingLevel).toBe(ThinkingLevel.High);
+			expect(session!.thinkingLevel).toBe(parentLevel);
+			const enabled = await client.request({ type: "set_subagent_fast", subagentId: id, enabled: true });
+			expect(enabled.success).toBe(true);
+			expect(enabled.data).toEqual({ enabled: true, active: child.isFastModeActive() });
+			const list = async () => {
+				const reply = await client.request({ type: "get_subagents" });
+				return (reply.data as { subagents: RpcSubagentSnapshot[] }).subagents.find(agent => agent.id === id);
+			};
+			expect(await list()).toMatchObject({
+				resolvedModelIdentity: `${model.provider}/${model.id}`,
+				resolvedThinkingLevel: ThinkingLevel.High,
+				fastModeEnabled: true,
+				fastModeActive: child.isFastModeActive(),
+			});
+			// The focused view uses these same session controls, not the root session.
+			const focused = {
+				session,
+				viewSession: child,
+				focusedAgentId: id,
+				statusLine: { invalidate() {} },
+				updateEditorBorderColor() {},
+				showStatus() {},
+			} as unknown as InteractiveModeContext;
+			new InputController(focused).cycleThinkingLevel();
+			runSubagentFastCommand(child, "off");
+			expect(child.thinkingLevel).not.toBe(ThinkingLevel.High);
+			expect(await list()).toMatchObject({
+				resolvedThinkingLevel: child.thinkingLevel,
+				fastModeEnabled: false,
+				fastModeActive: false,
+			});
+			expect(session!.thinkingLevel).toBe(parentLevel);
+			expect(session!.isFastModeEnabled()).toBe(false);
+			expect(sibling.thinkingLevel).toBe(ThinkingLevel.Low);
+			expect(sibling.isFastModeEnabled()).toBe(false);
+			const missing = await client.request({
+				type: "set_subagent_thinking_level",
+				subagentId: "Missing",
+				level: ThinkingLevel.High,
+			});
+			expect(missing.success).toBe(false);
+			expect(missing.error).toContain("Subagent not running: Missing");
+		} finally {
+			AgentRegistry.global().unregister(ref.id);
+		}
 	});
 
 	test("subagent frames reach only connections that subscribed, at their own level", async () => {

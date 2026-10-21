@@ -26,6 +26,7 @@ import { describeLoopLimitRuntime } from "../modes/loop-limit";
 import type { InteractiveModeContext } from "../modes/types";
 import ratchetKickoffPrompt from "../prompts/ratchet-kickoff.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
+import { FAST_USAGE, formatFastModeStatus, runFastCommand } from "../session/fast-command";
 import { describePrewalkCrew, getPrewalkPatterns, resolvePrewalkCrewSelection } from "../session/prewalk-crew";
 import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata } from "@oh-my-pi/pi-tui/thinking";
 import { noThinkingMessage, resolveThinkingArgument } from "./helpers/effort";
@@ -118,42 +119,6 @@ async function runWithDetachedModeDraft(
 			editor.imageLinks = editor.pendingImageLinks.length > 0 ? editor.pendingImageLinks : undefined;
 		}
 		runtime.ctx.showError(error instanceof Error ? error.message : String(error));
-	}
-}
-
-/** `/fast status` label for the active model: "ultra" for the Ultrafast tier, "on" for priority, else "off". */
-function formatFastModeStatus(session: AgentSession): string {
-	if (session.isUltrafastModeEnabled()) return "ultra";
-	return session.isFastModeEnabled() ? "on" : "off";
-}
-
-const FAST_USAGE = "Usage: /fast [on|ultra|off|status]";
-
-/**
- * `/fast [on|ultra|off|status]` for the active model: `on` selects the
- * family's `priority` tier, `ultra` the OpenAI `ultrafast` tier, `off` clears
- * either. Bare invocation toggles between off and priority. Returns the
- * user-facing reply, or `undefined` for an unknown argument.
- */
-function runFastCommand(arg: string, session: AgentSession): string | undefined {
-	switch (arg) {
-		case "":
-		case "toggle":
-			return `Fast mode ${session.toggleFastMode() ? "enabled" : "disabled"}.`;
-		case "on":
-			return session.setFastMode(true) ? "Fast mode enabled." : "Fast mode is unavailable for the current model.";
-		case "ultra":
-		case "ultrafast":
-			return session.setUltrafastMode(true)
-				? "Ultrafast mode enabled."
-				: "Ultrafast is unavailable for the current model.";
-		case "off":
-			session.setFastMode(false);
-			return "Fast mode disabled.";
-		case "status":
-			return `Fast mode is ${formatFastModeStatus(session)}.`;
-		default:
-			return undefined;
 	}
 }
 
@@ -575,17 +540,18 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "status", description: "Show fast mode status" },
 		],
 		allowArgs: true,
-		getTuiAutocompleteDescription: runtime => `Fast: ${formatFastModeStatus(runtime.ctx.session)}`,
+		getTuiAutocompleteDescription: runtime =>
+			`Fast: ${formatFastModeStatus(runtime.ctx.focusedAgentId ? runtime.ctx.viewSession : runtime.ctx.session)}`,
 		handle: async (command, runtime) => {
-			const message = runFastCommand(command.args.trim().toLowerCase(), runtime.session);
-			if (message === undefined) return usage(FAST_USAGE, runtime);
-			await runtime.output(message);
+			const result = runFastCommand(command.args.trim().toLowerCase(), runtime.session);
+			if (result === undefined) return usage(FAST_USAGE, runtime);
+			await runtime.output(result.message);
 			return commandConsumed();
 		},
 		handleTui: (command, runtime) => {
-			const message = runFastCommand(command.args.trim().toLowerCase(), runtime.ctx.session);
+			const result = runFastCommand(command.args.trim().toLowerCase(), runtime.ctx.session);
 			refreshStatusLine(runtime.ctx);
-			runtime.ctx.showStatus(message ?? FAST_USAGE);
+			runtime.ctx.showStatus(result?.message ?? FAST_USAGE);
 			clearSubmittedText(runtime);
 		},
 	},

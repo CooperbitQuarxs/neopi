@@ -5,6 +5,8 @@
  */
 
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import * as path from "node:path";
+import { describeSubagentFacts, getLiveSubagentFacts, type LiveSubagentFacts } from "../registry/subagent-facts";
 
 import type { AsyncJob, AsyncJobDetails, AsyncJobManager, AsyncJobType } from "./job-manager";
 
@@ -105,6 +107,7 @@ export function runningAgentsOutsideJobs(session: ToolSession): AgentActivitySna
 			ageMs: Math.max(0, now - ref.createdAt),
 			live: registry.isRunning(ref),
 			...(acceptedAt !== undefined ? { acceptedAt } : {}),
+			...(ref.session ? getLiveSubagentFacts(ref.session) : {}),
 		});
 	}
 	return out;
@@ -131,7 +134,9 @@ function describeAgents(agents: AgentActivitySnapshot[]): string[] {
 	for (const agent of agents) {
 		const parent = agent.parentId ? ` (spawned by \`${agent.parentId}\`)` : "";
 		const activity = agent.activity ? ` — ${agent.activity}` : "";
-		lines.push(`- \`${agent.id}\`${parent} — up ${formatDuration(agent.ageMs)}${activity}${agentStaleNote(agent)}`);
+		lines.push(
+			`- \`${agent.id}\`${parent}${describeSubagentFacts(agent)} — up ${formatDuration(agent.ageMs)}${activity}${agentStaleNote(agent)}`,
+		);
 	}
 	lines.push(
 		"",
@@ -156,6 +161,25 @@ interface TrackedJobLike {
 	resultText?: string;
 	errorText?: string;
 	structured?: StructuredSubagentOutput;
+}
+
+function liveTaskFacts(session: ToolSession, job: TrackedJobLike, agentId: string): LiveSubagentFacts | undefined {
+	if (job.type !== "task" || job.status !== "running") return undefined;
+	const parentFile = session.getSessionFile?.();
+	const parentId = session.getAgentId?.();
+	if (!parentFile || !parentId) return undefined;
+	const ref = session.agentRegistry?.get(agentId);
+	// Registry ids are process-global; only the caller's exact child transcript
+	// can replace this job's retained progress.
+	if (
+		ref?.kind !== "sub" ||
+		ref.status !== "running" ||
+		!ref.session ||
+		ref.parentId !== parentId ||
+		ref.sessionFile !== path.join(parentFile.slice(0, -6), `${agentId}.jsonl`)
+	)
+		return undefined;
+	return getLiveSubagentFacts(ref.session);
 }
 
 export function snapshotJobs(
@@ -218,6 +242,7 @@ export function snapshotJobs(
 			...(resolvedModel ? { resolvedModel } : {}),
 			...(resolvedModelIdentity ? { resolvedModelIdentity } : {}),
 			...(resolvedThinkingLevel !== undefined ? { resolvedThinkingLevel } : {}),
+			...liveTaskFacts(session, latest, current?.agentId ?? latest.id),
 			...(advisor ? { advisor: true } : {}),
 			...(completionPercent !== undefined && latest.status === "running" ? { completionPercent } : {}),
 			...(!resultConsumed && options.includeResults !== false && latest.resultText
@@ -284,7 +309,7 @@ export function buildJobResult(
 					: ` — delivery ${alreadyConsumed.has(j.id) ? "delivered" : "pending"}`;
 			const agent = j.agentUrlId ? ` — agent://${j.agentUrlId}` : "";
 			lines.push(
-				`- \`${j.id}\` [${j.type}] — ${j.status} — ${j.label.replace(/\s+/g, " ")}${exit}${artifact}${capture}${delivery}${agent}`,
+				`- \`${j.id}\` [${j.type}]${describeSubagentFacts(j)} — ${j.status} — ${j.label.replace(/\s+/g, " ")}${exit}${artifact}${capture}${delivery}${agent}`,
 			);
 		}
 	} else if (completed.length > 0) {
@@ -292,6 +317,8 @@ export function buildJobResult(
 		for (const j of completed) {
 			lines.push(`### ${j.id} [${j.type}] — ${j.status}`);
 			lines.push(`Label: ${j.label}`);
+			const facts = describeSubagentFacts(j);
+			if (facts) lines.push(facts.trimStart());
 			if (j.status !== "cancelled") {
 				lines.push(
 					alreadyConsumed.has(j.id)
@@ -328,7 +355,7 @@ export function buildJobResult(
 	if (op !== "jobs" && running.length > 0) {
 		lines.push(`## Still Running (${running.length})\n`);
 		for (const j of running) {
-			lines.push(`- \`${j.id}\` [${j.type}] — ${j.label}`);
+			lines.push(`- \`${j.id}\` [${j.type}]${describeSubagentFacts(j)} — ${j.label}`);
 		}
 	}
 

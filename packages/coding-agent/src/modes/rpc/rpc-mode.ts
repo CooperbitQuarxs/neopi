@@ -43,6 +43,7 @@ import { type Theme, theme } from "@oh-my-pi/pi-tui/theme";
 import { discoverMixtures, mixturesConfigFilePath } from "../../moa/config";
 import { checkMixture, readMixtureDefinitionFile, saveMixtureDefinition } from "../../moa/registration";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
+import { setSubagentFast, setSubagentThinkingLevel } from "../../registry/subagent-controls";
 import {
 	type WordCompletionEngine,
 	type WordCompletionMethod,
@@ -948,6 +949,17 @@ export async function handleRpcSteerSubagent(
 	} finally {
 		unsubscribe();
 	}
+}
+
+/** Change only the owned running subagent; AgentSession persists the next-request selection. */
+export function handleRpcSetSubagentThinkingLevel(
+	subagentRegistry: Pick<RpcSubagentRegistry, "getSubagents">,
+	subagentId: string,
+	level: ThinkingLevel,
+): string | undefined {
+	const owned = resolveOwnedLiveSubagent(subagentRegistry, subagentId);
+	if (!owned) return `Subagent not running: ${subagentId}`;
+	return setSubagentThinkingLevel(owned.session, level);
 }
 
 export async function handleRpcSessionChange(
@@ -2046,6 +2058,38 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				}
 				const failure = await handleRpcSteerSubagent(subagentRegistry, command.subagentId, command.message);
 				return failure ? error(id, "steer_subagent", failure) : success(id, "steer_subagent");
+			}
+
+			case "set_subagent_thinking_level": {
+				if (!subagentRegistry) {
+					return error(id, command.type, "Subagent event bus is unavailable");
+				}
+				if (typeof command.subagentId !== "string" || command.subagentId.length === 0) {
+					return error(id, command.type, "`subagentId` must be a non-empty string.");
+				}
+				const failure = handleRpcSetSubagentThinkingLevel(subagentRegistry, command.subagentId, command.level);
+				return failure ? error(id, command.type, failure) : success(id, command.type);
+			}
+
+			case "set_subagent_fast": {
+				if (!subagentRegistry) {
+					return error(id, command.type, "Subagent event bus is unavailable");
+				}
+				if (typeof command.subagentId !== "string" || command.subagentId.length === 0) {
+					return error(id, command.type, "`subagentId` must be a non-empty string.");
+				}
+				if (typeof command.enabled !== "boolean") {
+					return error(id, command.type, "`enabled` must be a boolean.");
+				}
+				const owned = resolveOwnedLiveSubagent(subagentRegistry, command.subagentId);
+				if (!owned) return error(id, command.type, `Subagent not running: ${command.subagentId}`);
+				if (!setSubagentFast(owned.session, command.enabled)) {
+					return error(id, command.type, "Fast mode is unavailable for the subagent's current model.");
+				}
+				return success(id, command.type, {
+					enabled: owned.session.isFastModeEnabled(),
+					active: owned.session.isFastModeActive(),
+				});
 			}
 
 			// =================================================================

@@ -23,6 +23,7 @@ import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import type { AgentRef } from "../registry/agent-registry";
 import { AgentRegistry } from "../registry/agent-registry";
 import { ensurePersistedRoster } from "../registry/persisted-agents";
+import { describeSubagentFacts, getLiveSubagentFacts } from "../registry/subagent-facts";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
 import {
 	bashExecutionToText,
@@ -103,6 +104,7 @@ interface IndexEntry {
 	kind: string;
 	parent: string;
 	lastActivity: string;
+	configuration?: string;
 }
 
 function jsonFence(text: string): string {
@@ -486,6 +488,11 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			kind: ref.kind,
 			parent: ref.parentId ?? "—",
 			lastActivity: formatAgo(ref.lastActivity),
+			configuration: describeSubagentFacts(
+				(ref.session ? getLiveSubagentFacts(ref.session) : undefined) ?? {
+					resolvedModel: ref.history?.resolvedModel,
+				},
+			).trimStart(),
 		}));
 		// Merge on-disk transcripts for agents absent from the registry.
 		const registered = new Set(refs.map(ref => ref.id));
@@ -500,9 +507,11 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			lines.push("No agents registered.");
 			return `${lines.join("\n")}\n`;
 		}
-		lines.push("| id | status | kind | parent | last activity |", "|---|---|---|---|---|");
+		lines.push("| id | status | kind | parent | last activity | configuration |", "|---|---|---|---|---|---|");
 		for (const entry of entries) {
-			lines.push(`| ${entry.id} | ${entry.status} | ${entry.kind} | ${entry.parent} | ${entry.lastActivity} |`);
+			lines.push(
+				`| ${entry.id} | ${entry.status} | ${entry.kind} | ${entry.parent} | ${entry.lastActivity} | ${entry.configuration ?? ""} |`,
+			);
 		}
 		lines.push("", "Read a transcript with `read history://<id>`.");
 		return `${lines.join("\n")}\n`;

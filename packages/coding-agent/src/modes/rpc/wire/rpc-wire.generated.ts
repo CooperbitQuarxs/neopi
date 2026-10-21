@@ -924,6 +924,11 @@ export interface SubagentSnapshot {
 	/** Raw `AgentProgress` record. */
 	progress?: Record<string, unknown>;
 	parentToolCallId?: string;
+	resolvedModel?: string;
+	resolvedModelIdentity?: string;
+	resolvedThinkingLevel?: ConfiguredThinkingLevel;
+	fastModeEnabled?: boolean;
+	fastModeActive?: boolean;
 }
 
 /** Incremental subagent transcript read. */
@@ -2113,6 +2118,16 @@ export interface SteerSubagentParams {
 	message: string;
 }
 
+export interface SetSubagentThinkingLevelParams {
+	subagentId: string;
+	level: ThinkingLevel;
+}
+
+export interface SetSubagentFastParams {
+	subagentId: string;
+	enabled: boolean;
+}
+
 export interface LiveStartParams {
 	voice?: string;
 	instructions?: string;
@@ -2335,6 +2350,8 @@ export interface RpcWireCommands {
 	get_subagent_messages: { params: GetSubagentMessagesParams; result: SubagentMessages };
 	cancel_subagent: { params: CancelSubagentParams; result: CancelSubagentResult };
 	steer_subagent: { params: SteerSubagentParams; result: undefined };
+	set_subagent_thinking_level: { params: SetSubagentThinkingLevelParams; result: undefined };
+	set_subagent_fast: { params: SetSubagentFastParams; result: FastModeResult };
 	live_start: { params: LiveStartParams; result: LiveStartResult };
 	live_stop: { params: undefined; result: undefined };
 	live_mute: { params: LiveMuteParams; result: LiveMuteResult };

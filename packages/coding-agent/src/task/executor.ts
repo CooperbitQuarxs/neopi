@@ -100,6 +100,7 @@ import { hasConversationalHistory, PendingSessionManager, SessionManager } from 
 import { truncateTail } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import {
 	type ConfiguredThinkingLevel,
+	parseConfiguredThinkingLevel,
 	prewalkWouldBeNoop,
 	resolveTaskEffortLevel,
 	type TaskEffort,
@@ -109,6 +110,7 @@ import { resolveEvalBackends } from "../tools/eval-backends";
 import { isIrcEnabled } from "../irc/messaging";
 import { LIST_STATUS_ORDER } from "@oh-my-pi/pi-tui/tools/irc";
 import { DEFAULT_PEER_ROSTER_LIMIT } from "@oh-my-pi/pi-tui/tools/irc";
+import { getLiveSubagentFacts, type LiveSubagentFacts } from "../registry/subagent-facts";
 import { normalizeSchema } from "../tools/jtd-to-json-schema";
 import { buildOutputValidator, summarizeValidationFailure } from "../tools/output-schema-validator";
 import { ToolAbortError } from "../tools/tool-errors";
@@ -379,7 +381,7 @@ function installSubagentRetryFallbackChain(args: {
 	return role;
 }
 
-export interface IrcPeerRosterRow {
+export interface IrcPeerRosterRow extends Partial<LiveSubagentFacts> {
 	id: string;
 	displayName: string;
 	kind: string;
@@ -418,6 +420,7 @@ export function collectIrcPeerRoster(
 		kind: peer.kind,
 		status: peer.status,
 		activity: peer.activity,
+		...(peer.session ? getLiveSubagentFacts(peer.session) : {}),
 	}));
 	let parkedCount = 0;
 	for (const ref of registry.list()) {
@@ -4080,6 +4083,20 @@ function trackSubagentSettings(session: AgentSession, capture: WarmReviveCapture
 	});
 }
 
+/** Persisted control edits outrank the spawn selector's effort suffix on every revival. */
+export function restoredSubagentThinkingOptions(
+	manager: SessionManager,
+): Pick<CreateAgentSessionOptions, "thinkingLevel" | "thinkingOrigin" | "autoSelection"> {
+	const entry = manager.getBranch().findLast(entry => entry.type === "thinking_level_change");
+	if (!entry || entry.type !== "thinking_level_change") return {};
+	return {
+		thinkingLevel:
+			parseConfiguredThinkingLevel(entry.configured) ?? parseConfiguredThinkingLevel(entry.thinkingLevel ?? "off"),
+		thinkingOrigin: entry.effortOrigin,
+		autoSelection: entry.autoSelection,
+	};
+}
+
 /**
  * Lifecycle reviver for a parked subagent: park closed the JSONL writer, so reopening takes the
  * single-writer lock cleanly and restores the full message history (createAgentSession →
@@ -4120,6 +4137,7 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 					reopened,
 					expectedAgentRef,
 				),
+				...restoredSubagentThinkingOptions(reopened),
 				oauthAccountPools: Object.hasOwn(agentAccountPools, capture.agentName)
 					? agentAccountPools[capture.agentName]
 					: undefined,
