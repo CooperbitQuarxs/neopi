@@ -7,12 +7,12 @@ export async function createHostedStatsDocument(readAsset: (path: string) => Pro
 	]);
 	if (!/<script[^>]+src=["'](?:\/|\.\/)?index\.js["']/.test(html) || !css || !script ||
 		css.startsWith("<") || script.startsWith("<")) throw new Error("Hosted stats client assets are incomplete");
-	const policy = "default-src 'none'; script-src 'unsafe-inline' data:; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'";
+	const policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'";
 	const document = html
 		.replace("<head>", `<head><meta name="neopi-stats-hosted" content="1"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="${policy}">`)
-		.replace(/<link[^>]+href=["'](?:\/|\.\/)?index\.css["'][^>]*>/, `<style>${css.replaceAll("</style", "<\\/style")}</style>`)
+		.replace(/<link[^>]+href=["'](?:\/|\.\/)?index\.css["'][^>]*>/, () => `<style>${css.replace(/<\/style/gi, "<\\/style")}</style>`)
 		.replace(/<script[^>]+src=["'](?:\/|\.\/)?index\.js["'][^>]*><\/script>/,
-			`<script type="module" src="data:text/javascript;base64,${Buffer.from(script).toString("base64")}"></script>`);
+			() => `<script type="module">${script.replace(/<\/script/gi, "<\\/script")}</script>`);
 	return new Response(document, { headers: {
 		"Content-Type": "text/html; charset=utf-8",
 		"Cache-Control": "no-store",

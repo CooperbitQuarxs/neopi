@@ -9,7 +9,7 @@ const children: Array<Subprocess<"pipe", "pipe", "pipe">> = [];
 const HOST_TOKEN = "hosted-stats-test-token-not-a-user-credential";
 const clientFiles = {
 	"index.html": '<!doctype html><html><head><link rel="stylesheet" href="index.css"></head><body><script type="module" src="/index.js"></script></body></html>',
-	"index.js": 'document.documentElement.dataset.loaded = "true";',
+	"index.js": 'document.documentElement.dataset.loaded = "true"; globalThis.fixture = "</script>"; globalThis.replacement = "$&";',
 	"index.css": "body { color: blue; }",
 	"styles.css": "body { color: blue; }",
 	"favicon.ico": await Bun.file(path.resolve(import.meta.dir, "../src/client/favicon.ico")).bytes(),
@@ -128,7 +128,9 @@ test("managed dashboard keeps credentials out of its document and closes only it
 	expect(document.status).toBe(200);
 	const html = await document.text();
 	expect(html).toContain('name="neopi-stats-hosted"');
-	expect(html).toContain("data:text/javascript;base64,");
+	expect(html).toContain('<script type="module">document.documentElement.dataset.loaded');
+	expect(html).toContain('globalThis.fixture = "<\\/script>";');
+	expect(html).toContain('globalThis.replacement = "$&";');
 	expect(html).toContain("<style>body { color: blue; }</style>");
 	expect(html).not.toContain("hosted-stats-test-token");
 	// Never send the action header: no paid judge is started by this boundary test.
