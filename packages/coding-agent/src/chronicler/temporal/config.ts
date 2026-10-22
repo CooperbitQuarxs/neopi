@@ -58,7 +58,7 @@ export function recallDefaultsFromSettings(settings: Settings): RecallDefaults {
 	};
 }
 
-/** The configured ranker; a model ranker falls back to lexical when no summary model resolves. */
+/** The configured ranker; a model ranker falls back to lexical when no recall model resolves. */
 export function resolveRanker(
 	settings: Settings,
 	modelRegistry: ModelRegistry | undefined,
@@ -66,6 +66,6 @@ export function resolveRanker(
 ): NodeRanker {
 	const kind = override ?? cfgChroniclerRecallRanker.get(settings);
 	if (kind === "lexical" || !modelRegistry) return lexicalRanker;
-	const client = resolveChronicleModelClient(settings, modelRegistry);
+	const client = resolveChronicleModelClient(settings, modelRegistry, "chronicler-recall");
 	return client ? createModelRanker(client) : lexicalRanker;
 }

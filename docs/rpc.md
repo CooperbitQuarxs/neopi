@@ -677,8 +677,8 @@ role:
 }
 ```
 
-- `roles` follows the carousel order: non-hidden built-ins in their fixed
-  order, then roles introduced by `cycleOrder`, `modelRoles` and `modelTags`.
+- `roles` includes every built-in in its fixed order, then roles introduced
+  by `cycleOrder`, `modelRoles` and `modelTags`, including roles marked hidden.
 - `section` is `"chat"`, or `"kind"` for the non-chat model-kind roles
   (`image`, `web`, `speech`, `dictation`, `judge`); hosts that only pick chat
   models filter on it.
@@ -686,6 +686,10 @@ role:
   that exist only through configuration.
 - `namespace` is `"deck"` for every `deck-*` role, built-in or configured, and absent for other roles. The built-in `deck-inbox` chat role defaults to `openai-codex/gpt-6-luna`; consumers can register further `deck-*` roles through the ordinary [role settings](./models.md#neodeck-roles).
 - `tag` is absent for custom roles, which have no built-in tag.
+- `description` is the effective `modelTags.<id>.description` override or the
+  built-in default. Custom roles have no default description. An empty string
+  deliberately clears the description. In `/models`, `D` edits this metadata
+  and the selected role's description appears above its rows.
 - `configured` is the raw `modelRoles` selector (lists joined with `", "`),
   absent when the role is not configured.
 - `patterns` is the effective pattern chain for `@<id>`: nested role aliases

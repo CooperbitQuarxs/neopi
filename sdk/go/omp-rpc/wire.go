@@ -2105,16 +2105,17 @@ func (v *RoleResolution) decodeFrom(raw map[string]json.RawMessage) error {
 }
 
 type RoleInfo struct {
-	ID         string          `json:"id"`
-	Alias      string          `json:"alias"`
-	Name       string          `json:"name"`
-	Section    RoleInfoSection `json:"section"`
-	Source     RoleInfoSource  `json:"source"`
-	Patterns   []string        `json:"patterns"`
-	Hidden     bool            `json:"hidden"`
-	Tag        *string         `json:"tag,omitempty"`
-	Configured *string         `json:"configured,omitempty"`
-	Resolved   *RoleResolution `json:"resolved,omitempty"`
+	ID          string          `json:"id"`
+	Alias       string          `json:"alias"`
+	Name        string          `json:"name"`
+	Section     RoleInfoSection `json:"section"`
+	Source      RoleInfoSource  `json:"source"`
+	Patterns    []string        `json:"patterns"`
+	Hidden      bool            `json:"hidden"`
+	Description *string         `json:"description,omitempty"`
+	Tag         *string         `json:"tag,omitempty"`
+	Configured  *string         `json:"configured,omitempty"`
+	Resolved    *RoleResolution `json:"resolved,omitempty"`
 }
 
 func (v *RoleInfo) UnmarshalJSON(data []byte) error {
@@ -2131,6 +2132,7 @@ func (v *RoleInfo) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("source", &out.Source)
 	d.required("patterns", &out.Patterns)
 	d.required("hidden", &out.Hidden)
+	d.optional("description", &out.Description)
 	d.optional("tag", &out.Tag)
 	d.optional("configured", &out.Configured)
 	d.optional("resolved", &out.Resolved)

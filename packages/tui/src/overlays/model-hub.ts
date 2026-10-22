@@ -257,6 +257,8 @@ export interface ModelHubCallbacks {
 	onContextRulesChange?: (rules: HubContextRule[]) => boolean | void;
 	/** Clear a configured role back to auto-selection. */
 	onUnassign: (role: string, scope?: ModelRoleSelectionScope) => void;
+	/** Persist the selected role's description. Return false to retain its draft. */
+	onRoleDescriptionChange?: (role: string, description: string) => boolean | void;
 	/** Persist a chain and its per-entry effort selections as one mutation. */
 	onFallbackChainChange?: (
 		role: string,
@@ -368,6 +370,12 @@ type StripState =
 			input: Input;
 	  }
 	| {
+			kind: "name";
+			purpose: "description";
+			role: string;
+			input: Input;
+	  }
+	| {
 			kind: "effortLevels";
 			item?: ModelBrowserItem;
 			selector?: string;
@@ -456,6 +464,7 @@ type RolesAction =
 	| "new"
 	| "thinking"
 	| "compaction"
+	| "description"
 	| "save"
 	| "nextPreset"
 	| "prevPreset";
@@ -465,6 +474,7 @@ const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
 	x: "clear",
 	f: "fallback",
 	c: "cycle",
+	D: "description",
 	"[": "earlier",
 	"]": "later",
 	n: "new",
@@ -1016,7 +1026,7 @@ export class ModelHubComponent implements Component {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	#visibleRoleIds(): string[] {
-		return this.#settings.knownRoleIds.filter(role => !this.#settings.getRoleInfo(role).hidden);
+		return [...this.#settings.knownRoleIds];
 	}
 
 	/** Resolve every known role: configured values first, auto-selection for the rest. */
@@ -2732,6 +2742,14 @@ export class ModelHubComponent implements Component {
 		this.#strip = { kind: "name", purpose, input };
 	}
 
+	#openDescriptionStrip(role: string): void {
+		if (!this.#callbacks.onRoleDescriptionChange) return;
+		const input = new Input();
+		input.focused = true;
+		input.setValue(this.#settings.getRoleInfo(role).description ?? "");
+		this.#strip = { kind: "name", purpose: "description", role, input };
+	}
+
 	/** The model a Roles row resolves to (assigned role or fallback), whose compaction point `m` edits. */
 	#roleRowModel(): Model | undefined {
 		const row = this.#rolesRows[this.#roleIndex];
@@ -2768,6 +2786,13 @@ export class ModelHubComponent implements Component {
 				: Math.min(this.#effortIndex, rules.length);
 			this.#strip = null;
 			this.#assigning = null;
+			this.#frame.chipRanges = [];
+			this.#refreshAfterMutation();
+			return;
+		}
+		if (strip.purpose === "description") {
+			if (this.#callbacks.onRoleDescriptionChange?.(strip.role, strip.input.getValue().trim()) === false) return;
+			this.#strip = null;
 			this.#frame.chipRanges = [];
 			this.#refreshAfterMutation();
 			return;
@@ -3390,6 +3415,9 @@ export class ModelHubComponent implements Component {
 			case "pick":
 				if (row) this.#activateRolesRow(row);
 				return;
+			case "description":
+				if (role) this.#openDescriptionStrip(role);
+				return;
 			case "clear":
 				if (role) this.#unassignRole(role);
 				else if (row?.kind === "fallback") this.#removeFallback(row);
@@ -3724,9 +3752,12 @@ export class ModelHubComponent implements Component {
 			case "recent":
 				text = `Recently used models${scopedSuffix}`;
 				break;
-			case "roles":
-				text = `Model roles — ${formatKeyHint("f")} adds a retry fallback, cleared roles fall back to auto-selection`;
+			case "roles": {
+				const row = this.#rolesRows[this.#roleIndex];
+				text = row && "role" in row ? (this.#settings.getRoleInfo(row.role).description ?? "") : "";
+				text = sanitizeDisplayWarning(text);
 				break;
+			}
 			case "effort":
 				text = this.#contextRulesView() ? CONTEXT_RULE_DESCRIPTION : EFFORT_RULE_DESCRIPTION;
 				break;
@@ -4015,6 +4046,7 @@ export class ModelHubComponent implements Component {
 		if (strip) {
 			if (strip.kind === "name") {
 				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent · h/l pane`;
+				if (strip.purpose === "description") return `${enter} save description · ${cancel} leave field`;
 				if (strip.purpose === "compaction") {
 					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · ${cancel} leave field`;
 				}
@@ -4090,7 +4122,7 @@ export class ModelHubComponent implements Component {
 				this.#presets().names.length > 0 ? ` · ${formatKeyHints(["ctrl+left", "ctrl+right"])} preset` : "";
 			const yank =
 				row?.kind === "role" && (this.#fallbackChains()[row.role]?.length ?? 0) > 0 ? "yank chain" : "yank model";
-			return `${upDown} rows · ${enter} pick · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} ${yank} · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
+			return `${upDown} rows · ${enter} pick · D description · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} ${yank} · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth
@@ -4144,13 +4176,15 @@ export class ModelHubComponent implements Component {
 					? `${strip.model.id} limit:`
 					: strip.purpose === "contextRule"
 						? `${strip.selector} limit:`
-						: strip.purpose === "preset"
-							? "Preset name:"
-							: "New role name:";
+						: strip.purpose === "description"
+							? `${strip.role} description:`
+							: strip.purpose === "preset"
+								? "Preset name:"
+								: "New role name:";
 			const label = theme.fg("accent", labelText);
 			// A compaction point is at most a few characters (`1500k`, `12.5%`); a
 			// narrow field leaves the row for its notice.
-			const maxInputWidth = strip.purpose === "compaction" ? 10 : 32;
+			const maxInputWidth = strip.purpose === "compaction" ? 10 : strip.purpose === "description" ? width : 32;
 			const inputWidth = Math.max(8, Math.min(maxInputWidth, width - visibleWidth(labelText) - 24));
 			const inputLine = strip.input.render(inputWidth)[0] ?? "";
 			let hint: string;
@@ -4159,6 +4193,8 @@ export class ModelHubComponent implements Component {
 				hint = theme.fg(notice.style, notice.text);
 			} else if (strip.purpose === "contextRule") {
 				hint = theme.fg("dim", "400k base · f400k fixed · 80% · empty resets");
+			} else if (strip.purpose === "description") {
+				hint = "";
 			} else {
 				hint = theme.fg("dim", "(letters, digits, - and _)");
 			}
@@ -5014,8 +5050,16 @@ export class ModelHubComponent implements Component {
 								{ primary: true },
 							)
 						: pickerAction(
-								strip.purpose === "preset" ? "presetName" : "roleName",
-								strip.purpose === "preset" ? "Save preset" : "Create role",
+								strip.purpose === "description"
+									? "roleDescription"
+									: strip.purpose === "preset"
+										? "presetName"
+										: "roleName",
+								strip.purpose === "description"
+									? "Save description"
+									: strip.purpose === "preset"
+										? "Save preset"
+										: "Create role",
 								"enter",
 								{ primary: true },
 							)
@@ -5073,6 +5117,9 @@ export class ModelHubComponent implements Component {
 					const assigned = this.#roles[row.role];
 					actions.push(
 						roleAction("pick", "Pick model", "enter", true),
+						this.#callbacks.onRoleDescriptionChange
+							? roleAction("description", "Description", "shift+d")
+							: undefined,
 						roleAction("fallback", "Add fallback", "f"),
 						assigned && !assigned.autoSelected ? roleAction("clear", "Clear", "x") : undefined,
 						this.#roleThinkingTarget(row.role) ? roleAction("thinking", "Thinking", "t") : undefined,
@@ -5149,11 +5196,13 @@ export class ModelHubComponent implements Component {
 				label: [
 					span(
 						strip.kind === "name"
-							? strip.purpose === "preset"
-								? "Preset name "
-								: strip.purpose === "contextRule"
-									? `${strip.selector} limit `
-									: "New role name "
+							? strip.purpose === "contextRule"
+								? `${strip.selector} limit `
+								: strip.purpose === "description"
+									? `${strip.role} description `
+									: strip.purpose === "preset"
+										? "Preset name "
+										: "New role name "
 							: strip.target === "rule"
 								? `Model ${this.#contextRulesView() ? "context" : "effort"} pattern `
 								: strip.target === "role"
@@ -5550,6 +5599,9 @@ export class ModelHubComponent implements Component {
 			case "presetName":
 				this.#submitPresetName();
 				return;
+			case "roleDescription":
+				this.#submitNameStrip();
+				return;
 			case "compactionPoint":
 				this.#submitNameStrip();
 				return;
@@ -5626,6 +5678,9 @@ export class ModelHubComponent implements Component {
 					],
 					"compactionPoint",
 				);
+			}
+			if (strip.purpose === "description") {
+				return row([text([span(`${strip.role} description:`, "accent")]), col([strip.input], { grow: 1 })]);
 			}
 			const preset = strip.purpose === "preset";
 			return node(

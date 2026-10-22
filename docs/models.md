@@ -635,12 +635,30 @@ Model roles assign model selectors to workloads. Configure them under `modelRole
 
 Built-in roles are grouped in the model picker:
 
-- **Chat roles:** `default`, `smol`, `slow`, `vision`, `plan`, `commit`, `tiny`, `memory`, `task`, `advisor`, `chronicler`, `chronicler-summary`, `effort`, `prose`, and `issues`. The `tiny` and `memory` roles accept both ordinary chat models and `tiny` catalog models. The `effort` chat role selects the dedicated replacement-mode Auto classifier. `issues` runs `/issue`; it has no fallback, so `/issue` refuses until it is assigned rather than borrowing the active model.
+- **Chat roles:** `default`, `smol`, `slow`, `vision`, `plan`, `agent-author`, `compaction`, `commit`, `tiny`, `memory`, `task`, `advisor`, `chronicler`, `chronicler-summary`, `chronicler-recall`, `classifier`, `effort`, `prose`, `issues`, and `deck-inbox`. The `tiny` and `memory` roles accept both ordinary chat models and `tiny` catalog models. The `effort` chat role selects the dedicated replacement-mode Auto classifier. `issues` runs `/issue`; it has no fallback, so `/issue` refuses until it is assigned rather than borrowing the active model.
 - **Model-kind roles:** `image`, `web`, `speech`, `dictation`, and `judge`. These select image generation, search/grounded chat, text-to-speech, speech-to-text, and other judgment runners respectively. The `judge` role also accepts tiny and chat models; replacement-mode Auto thinking uses `effort`, not `judge`.
 
 `vision` and `image` are different workloads: `vision` selects a chat model for image analysis, such as `read screenshot.png?q=...`; `image` selects a model with catalog kind `image` for `generate_image`. Assigning a model to `vision` does not give it image-input support: image questions additionally check that the model can send image input to its provider.
 
 The `tiny` role selects lightweight models for background work such as session titles; when unset, it resolves through `@smol`. The `memory` role resolves through `@tiny` when unset. See [model settings](./settings.md#models) for configuration and fallback-chain examples.
+
+Every role is listed in **Roles**, even if its tag metadata says `hidden: true`.
+Built-in roles have short default descriptions; custom roles have none until you
+write one. `D` edits the selected role's description in
+`modelTags.<role>.description`. The top row shows it on one truncated line.
+An empty description hides the text without restoring the default.
+
+The `agent-author` role creates agent definitions in the agents hub. Until assigned,
+agent creation keeps using the foreground model. The `compaction` role overrides
+the summarizer used by soft compaction without switching the foreground model.
+Until assigned, compaction keeps its existing model-specific and active-model
+fallback order.
+
+Chronicler uses `chronicler-summary`, tagged CHRONSUM, for background summaries,
+and `chronicler-recall`, tagged CHRONREC, for interactive recall ranking.
+Until assigned, recall follows the effective summary model and thinking suffix.
+Set `modelRoles.chronicler-recall` independently to make recall faster without
+changing summary quality. Both roles appear in **Roles** and RPC listings.
 
 #### NeoDeck roles
 

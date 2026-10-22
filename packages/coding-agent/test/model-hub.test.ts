@@ -24,6 +24,7 @@ import { CURSOR_MARKER, getKeybindings, setKeybindings, type TUI } from "@oh-my-
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { thinkingLevelGlyph } from "@oh-my-pi/pi-tui/render/render-utils";
 
+import { getKnownRoleIds, getRoleInfo, setRoleDescription } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { cfgCycleOrder, cfgModelPresets } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { cfgContextRules } from "../src/config/context-policy";
@@ -198,6 +199,9 @@ function createHub(options: {
 			onSavePreset: options.callbacks?.onSavePreset,
 			onSwitchPreset: options.callbacks?.onSwitchPreset,
 			onFallbackChainChange: options.callbacks?.onFallbackChainChange ?? onFallbackChainChange,
+			onRoleDescriptionChange:
+				options.callbacks?.onRoleDescriptionChange ??
+				((role, description) => setRoleDescription(role, description, settings)),
 			onEffortRulesChange:
 				options.callbacks?.onEffortRulesChange ?? (rules => cfgEffortRules.override(settings, rules)),
 			onContextRulesChange:
@@ -240,6 +244,41 @@ describe("ModelHub", () => {
 		if (!testTheme) {
 			throw new Error("Failed to load dark theme for ModelHub tests");
 		}
+	});
+
+	test("roles marked hidden remain listed and D edits the selected description", () => {
+		const settings = Settings.isolated({
+			modelTags: { smol: { name: "My fast model", hidden: true }, private: { name: "Private", hidden: true } },
+		});
+		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true, terminalRows: 80 });
+		hub.handleInput(UP);
+		hub.handleInput("\n");
+		expect(normalize(hub.render(220))).toContain("Private");
+		expect(normalize(hub.render(220))).toContain("The main model for conversations and coding.");
+		hub.handleInput(DOWN);
+		expect(normalize(hub.render(220))).toContain(getRoleInfo("smol", settings).description!);
+		hub.handleInput("D");
+		hub.handleInput("\x01");
+		hub.handleInput("\x0b");
+		for (const ch of "Quick answers only") hub.handleInput(ch);
+		hub.handleInput("\n");
+		expect(getRoleInfo("smol", settings).description).toBe("Quick answers only");
+		expect(normalize(hub.render(220))).toContain("Quick answers only");
+		expect(getRoleInfo("smol", settings)).toMatchObject({ name: "My fast model", hidden: true });
+	});
+
+	test("role descriptions stay on one truncated header line", () => {
+		const settings = Settings.isolated({
+			modelTags: {
+				default: { name: "Default", description: `Header start\n${"long description ".repeat(50)}Header end` },
+			},
+		});
+		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true });
+		hub.handleInput(UP);
+		const lines = hub.render(120).map(line => stripVTControlCharacters(line));
+		expect(lines.filter(line => line.includes("Header start"))).toHaveLength(1);
+		expect(lines.join("\n")).not.toContain("Header end");
+		expect(lines.every(line => Bun.stringWidth(line) <= 120)).toBe(true);
 	});
 
 	afterEach(() => {
@@ -1131,7 +1170,8 @@ describe("ModelHub", () => {
 					.render(220)
 					.map(line => stripVTControlCharacters(line))
 					.find(line => line.includes("❯")) ?? "";
-			for (let step = 0; step < 20 && !selected().includes("DICTATION"); step++) hub.handleInput(DOWN);
+			for (let step = 0; step < getKnownRoleIds(settings).length && !selected().includes("DICTATION"); step++)
+				hub.handleInput(DOWN);
 			expect(selected()).toContain("DICTATION");
 
 			expect(footerLine(hub.render(220))).not.toContain("t thinking");
