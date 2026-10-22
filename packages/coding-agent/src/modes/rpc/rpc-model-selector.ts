@@ -113,5 +113,10 @@ export async function getRpcModelSelector(session: AgentSession, query: string):
 	await session.modelRegistry.awaitBackgroundRefresh();
 	const source = createModelBrowserSource(session.settings, model => session.effectiveServiceTier(model));
 	source.effectiveContextWindowFor = model => resolveEffectiveContextWindow(session, model);
-	return queryModelSelector(source, session.modelRegistry, session.scopedModels.map(entry => entry.model), query);
+	return queryModelSelector(
+		source,
+		session.modelRegistry,
+		session.scopedModels.map(entry => entry.model),
+		query,
+	);
 }

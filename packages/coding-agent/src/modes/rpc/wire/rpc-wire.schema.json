@@ -208,6 +208,72 @@
 				"clientOmit": []
 			},
 			{
+				"name": "get_models_configuration",
+				"doc": "Read the native provider catalog, scoped model roles, and effort rules.",
+				"params": null,
+				"result": "GetModelsConfigurationResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_model_role_configuration",
+				"doc": "Save or clear one scoped role selector and effort atomically, rejecting a stale expected value.",
+				"params": "SetModelRoleConfigurationParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_model_role_storage",
+				"doc": "Choose native global or project role storage, rejecting a stale preference.",
+				"params": "SetModelRoleStorageParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_effort_rules",
+				"doc": "Save or clear native implicit effort rules in one scope, rejecting a stale expected value.",
+				"params": "SetEffortRulesParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_provider_api_key",
+				"doc": "Upsert a key in the native credential store without replacing other accounts.",
+				"params": "SetProviderApiKeyParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "cancel_login",
+				"doc": "Cancel this connection's active login request.",
+				"params": "CancelLoginParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "get_usage",
 				"doc": "Read provider usage reports.",
 				"params": "GetUsageParams",
@@ -2736,6 +2802,116 @@
 				"items",
 				"roles",
 				"error"
+			]
+		},
+		"ModelEffortSelection": {
+			"type": "object",
+			"properties": {
+				"mode": {
+					"enum": [
+						"fixed",
+						"auto",
+						"inherit"
+					],
+					"type": "string"
+				},
+				"level": {
+					"$ref": "#/$defs/ThinkingLevel"
+				},
+				"allowed": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"selector": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"mode"
+			]
+		},
+		"ModelEffortRule": {
+			"type": "object",
+			"properties": {
+				"selector": {
+					"type": "string"
+				},
+				"allowed": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				}
+			},
+			"required": [
+				"selector",
+				"allowed"
+			]
+		},
+		"ModelRoleConfigurationValue": {
+			"type": "object",
+			"properties": {
+				"selector": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"effort": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ModelEffortSelection"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"selector",
+				"effort"
+			]
+		},
+		"ModelEffortRuleScopes": {
+			"type": "object",
+			"properties": {
+				"global": {
+					"anyOf": [
+						{
+							"type": "array",
+							"items": {
+								"$ref": "#/$defs/ModelEffortRule"
+							}
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"project": {
+					"anyOf": [
+						{
+							"type": "array",
+							"items": {
+								"$ref": "#/$defs/ModelEffortRule"
+							}
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"global",
+				"project"
 			]
 		},
 		"ProviderUsageReport": {
@@ -6196,6 +6372,17 @@
 				"type"
 			]
 		},
+		"ModelsConfigurationChangedEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "models_configuration_changed"
+				}
+			},
+			"required": [
+				"type"
+			]
+		},
 		"ConfigWarningsChangedEvent": {
 			"type": "object",
 			"properties": {
@@ -6491,6 +6678,9 @@
 				},
 				{
 					"$ref": "#/$defs/ModelChangedEvent"
+				},
+				{
+					"$ref": "#/$defs/ModelsConfigurationChangedEvent"
 				},
 				{
 					"$ref": "#/$defs/ConfigWarningsChangedEvent"
@@ -7255,6 +7445,12 @@
 				},
 				"timeout": {
 					"type": "integer"
+				},
+				"secret": {
+					"type": "boolean"
+				},
+				"loginId": {
+					"type": "string"
 				}
 			},
 			"required": [
@@ -7364,6 +7560,9 @@
 				},
 				"notifyType": {
 					"$ref": "#/$defs/NotifyType"
+				},
+				"loginId": {
+					"type": "string"
 				}
 			},
 			"required": [
@@ -7497,6 +7696,9 @@
 					"description": "Short loopback redirect to `url`; the truncation-safe copy target."
 				},
 				"instructions": {
+					"type": "string"
+				},
+				"loginId": {
 					"type": "string"
 				}
 			},
@@ -8376,6 +8578,191 @@
 			"required": [
 				"role",
 				"model"
+			]
+		},
+		"GetModelsConfigurationResult": {
+			"type": "object",
+			"properties": {
+				"providers": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {},
+						"additionalProperties": {}
+					}
+				},
+				"models": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {},
+						"additionalProperties": {}
+					}
+				},
+				"roles": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {},
+						"additionalProperties": {}
+					}
+				},
+				"roleStorage": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"effortMode": {
+					"enum": [
+						"replacement",
+						"legacy"
+					],
+					"type": "string"
+				},
+				"effortRules": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/ModelEffortRule"
+					}
+				},
+				"effortRulesProvenance": {
+					"type": "string"
+				},
+				"effortRuleScopes": {
+					"$ref": "#/$defs/ModelEffortRuleScopes"
+				},
+				"effortChoices": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				}
+			},
+			"required": [
+				"providers",
+				"models",
+				"roles",
+				"roleStorage",
+				"effortMode",
+				"effortRules",
+				"effortRulesProvenance",
+				"effortRuleScopes",
+				"effortChoices"
+			]
+		},
+		"SetModelRoleConfigurationParams": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"scope": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"expected": {
+					"$ref": "#/$defs/ModelRoleConfigurationValue"
+				},
+				"selector": {
+					"type": "string"
+				},
+				"effort": {
+					"$ref": "#/$defs/ModelEffortSelection"
+				}
+			},
+			"required": [
+				"role",
+				"scope",
+				"expected"
+			]
+		},
+		"SetModelRoleStorageParams": {
+			"type": "object",
+			"properties": {
+				"value": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"expected": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				}
+			},
+			"required": [
+				"value",
+				"expected"
+			]
+		},
+		"SetEffortRulesParams": {
+			"type": "object",
+			"properties": {
+				"scope": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"expected": {
+					"anyOf": [
+						{
+							"type": "array",
+							"items": {
+								"$ref": "#/$defs/ModelEffortRule"
+							}
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"rules": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/ModelEffortRule"
+					}
+				}
+			},
+			"required": [
+				"scope",
+				"expected"
+			]
+		},
+		"SetProviderApiKeyParams": {
+			"type": "object",
+			"properties": {
+				"providerId": {
+					"type": "string"
+				},
+				"apiKey": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"providerId",
+				"apiKey"
+			]
+		},
+		"CancelLoginParams": {
+			"type": "object",
+			"properties": {
+				"loginId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"loginId"
 			]
 		},
 		"GetUsageParams": {

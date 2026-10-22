@@ -13,6 +13,8 @@ export const RPC_CAPABILITIES: readonly string[] = [
 	"get_usage", // #105
 	"get_roles", // #104
 	"model_selector", // Read-only native /switch query and row facts.
+	"models_configuration", // Native model hub configuration and scoped role writes.
+	"cancellable_login", // Native auth prompts and request-scoped cancellation.
 	"set_chat_mode", // #109
 	"tool_approval_request", // #102
 	"set_mode", // #103

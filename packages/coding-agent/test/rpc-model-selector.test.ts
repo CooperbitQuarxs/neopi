@@ -18,8 +18,15 @@ import { getRpcModelSelector, queryModelSelector } from "../src/modes/rpc/rpc-mo
 
 function model(provider: string, id: string): Model {
 	return buildModel({
-		provider, id, name: id, api: "ollama-chat", baseUrl: "https://example.invalid",
-		reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 4096,
+		provider,
+		id,
+		name: id,
+		api: "ollama-chat",
+		baseUrl: "https://example.invalid",
+		reasoning: false,
+		input: ["text"],
+		contextWindow: 128000,
+		maxTokens: 4096,
 		cost: { input: 2, output: 8, cacheRead: 0, cacheWrite: 0 },
 	});
 }
@@ -41,7 +48,9 @@ describe("read-only native model selector", () => {
 		const manager = SessionManager.inMemory();
 		const session = new AgentSession({
 			agent: new Agent({ initialState: { model: selected, systemPrompt: ["Test"], tools: [], messages: [] } }),
-			sessionManager: manager, settings, modelRegistry,
+			sessionManager: manager,
+			settings,
+			modelRegistry,
 			scopedModels: [{ model: selected }],
 		});
 		try {
@@ -62,7 +71,10 @@ describe("read-only native model selector", () => {
 
 	test("plain queries retain native fuzzy matching and provider/role/MRU order", () => {
 		const models = [model("alpha", "example-2"), model("beta", "example-2"), model("alpha", "unrelated")];
-		const settings = Settings.isolated({ modelRoles: { default: "beta/example-2" }, modelProviderOrder: ["beta", "alpha"] });
+		const settings = Settings.isolated({
+			modelRoles: { default: "beta/example-2" },
+			modelProviderOrder: ["beta", "alpha"],
+		});
 		const source: ModelBrowserSource = {
 			...createModelBrowserSource(settings),
 			mruOrder: ["alpha/unrelated"],
@@ -75,11 +87,14 @@ describe("read-only native model selector", () => {
 		picker.setItems(scope.items);
 		for (const query of ["", "example", "exmp2", "beta", "no-such-model"]) {
 			picker.setQuery(query);
-			expect(queryModelSelector(source, catalog, [], query).items.map(item => item.selector))
-				.toEqual((picker.queryMatches ?? scope.items).map(item => item.selector));
+			expect(queryModelSelector(source, catalog, [], query).items.map(item => item.selector)).toEqual(
+				(picker.queryMatches ?? scope.items).map(item => item.selector),
+			);
 		}
-		expect(queryModelSelector(source, catalog, [], "example").items.map(item => item.selector))
-			.toEqual(["beta/example-2", "alpha/example-2"]);
+		expect(queryModelSelector(source, catalog, [], "example").items.map(item => item.selector)).toEqual([
+			"beta/example-2",
+			"alpha/example-2",
+		]);
 	});
 
 	test("the enabled session scope excludes other concrete models and preserves role aliases", () => {
@@ -89,8 +104,10 @@ describe("read-only native model selector", () => {
 		const before = settings.getModelRoles();
 		const result = queryModelSelector(createModelBrowserSource(settings), registry([active, excluded]), [active], "");
 		expect(result.items.map(item => item.selector)).toEqual(["native/enabled"]);
-		expect(result.roles.find(item => item.selector === "@reviewer"))
-			.toMatchObject({ id: "reviewer", resolvedSelector: "native/enabled" });
+		expect(result.roles.find(item => item.selector === "@reviewer")).toMatchObject({
+			id: "reviewer",
+			resolvedSelector: "native/enabled",
+		});
 		expect(settings.getModelRoles()).toEqual(before);
 	});
 
@@ -104,14 +121,22 @@ describe("read-only native model selector", () => {
 		]);
 		const settings = Settings.isolated({ modelRoles: { default: "native/measured" } });
 		const source: ModelBrowserSource = {
-			...createModelBrowserSource(settings), modelPerf: perf,
-			serviceTierFor: () => "priority", effectiveContextWindowFor: () => 50000,
+			...createModelBrowserSource(settings),
+			modelPerf: perf,
+			serviceTierFor: () => "priority",
+			effectiveContextWindowFor: () => 50000,
 		};
 		const result = queryModelSelector(source, registry([selected]), [], "");
 		expect(result.items[0]?.facts).toEqual({
-			intelligence: 43, ttftMs: 150, tokensPerSecond: 90, contextWindow: 128000,
-			effectiveContextWindow: 50000, inputCostPerMillion: 2, outputCostPerMillion: 8,
-			performanceSource: "measured", serviceTier: "priority",
+			intelligence: 43,
+			ttftMs: 150,
+			tokensPerSecond: 90,
+			contextWindow: 128000,
+			effectiveContextWindow: 50000,
+			inputCostPerMillion: 2,
+			outputCostPerMillion: 8,
+			performanceSource: "measured",
+			serviceTier: "priority",
 		});
 		expect(result.roles.find(item => item.selector === "@default")?.facts).toEqual(result.items[0]?.facts);
 	});
@@ -124,11 +149,17 @@ describe("read-only native model selector", () => {
 			["native/fallback@priority", { samples: 1, tps: 80, ttftMs: 200 }],
 		]);
 		const source: ModelBrowserSource = { ...createModelBrowserSource(settings), modelPerf: perf };
-		expect(queryModelSelector(source, registry([selected]), [], "").items[0]?.facts)
-			.toMatchObject({ tokensPerSecond: 80, ttftMs: 200, serviceTier: "priority" });
+		expect(queryModelSelector(source, registry([selected]), [], "").items[0]?.facts).toMatchObject({
+			tokensPerSecond: 80,
+			ttftMs: 200,
+			serviceTier: "priority",
+		});
 		perf.set("native/fallback", { samples: 5, tps: 50, ttftMs: 700 });
-		expect(queryModelSelector(source, registry([selected]), [], "").items[0]?.facts)
-			.toMatchObject({ tokensPerSecond: 50, ttftMs: 700, serviceTier: null });
+		expect(queryModelSelector(source, registry([selected]), [], "").items[0]?.facts).toMatchObject({
+			tokensPerSecond: 50,
+			ttftMs: 700,
+			serviceTier: null,
+		});
 	});
 
 	test("absent catalog and measured metrics remain unknown, while actual free costs remain zero", () => {
@@ -138,8 +169,13 @@ describe("read-only native model selector", () => {
 		const source = createModelBrowserSource(Settings.isolated({}));
 		const result = queryModelSelector(source, registry([selected]), [], "");
 		expect(result.items[0]?.facts).toMatchObject({
-			intelligence: null, ttftMs: null, tokensPerSecond: null,
-			inputCostPerMillion: 0, outputCostPerMillion: 0, performanceSource: null, serviceTier: null,
+			intelligence: null,
+			ttftMs: null,
+			tokensPerSecond: null,
+			inputCostPerMillion: 0,
+			outputCostPerMillion: 0,
+			performanceSource: null,
+			serviceTier: null,
 		});
 	});
 });

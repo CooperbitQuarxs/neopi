@@ -461,6 +461,28 @@ export interface ModelSelectorResult {
 	error: string | null;
 }
 
+export interface ModelEffortSelection {
+	mode: "fixed" | "auto" | "inherit";
+	level?: ThinkingLevel;
+	allowed?: string[];
+	selector?: string;
+}
+
+export interface ModelEffortRule {
+	selector: string;
+	allowed: string[];
+}
+
+export interface ModelRoleConfigurationValue {
+	selector: string | null;
+	effort: ModelEffortSelection | null;
+}
+
+export interface ModelEffortRuleScopes {
+	global: ModelEffortRule[] | null;
+	project: ModelEffortRule[] | null;
+}
+
 export interface ProviderUsageReport {
 	provider: string;
 	fetchedAt: number;
@@ -1451,6 +1473,10 @@ export interface ModelChangedEvent {
 	type: "model_changed";
 }
 
+export interface ModelsConfigurationChangedEvent {
+	type: "models_configuration_changed";
+}
+
 export interface ConfigWarningsChangedEvent {
 	type: "config_warnings_changed";
 }
@@ -1518,7 +1544,7 @@ export interface QueueUpdateEvent {
 }
 
 /** A session event, discriminated by `type`; `set_event_filter` selects which are sent. */
-export type RpcAgentEvent = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
+export type RpcAgentEvent = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
 
 /** First frame after startup; transport fields are absent on servers without protocol v2. */
 export interface ReadyEvent {
@@ -1759,6 +1785,8 @@ export interface InputUiRequest {
 	title: string;
 	placeholder?: string;
 	timeout?: number;
+	secret?: boolean;
+	loginId?: string;
 }
 
 export interface EditorUiRequest {
@@ -1793,6 +1821,7 @@ export interface NotifyUiRequest {
 	method: "notify";
 	message: string;
 	notifyType?: NotifyType;
+	loginId?: string;
 }
 
 export interface SetStatusUiRequest {
@@ -1834,6 +1863,7 @@ export interface OpenUrlUiRequest {
 	/** Short loopback redirect to `url`; the truncation-safe copy target. */
 	launchUrl?: string;
 	instructions?: string;
+	loginId?: string;
 }
 
 /** Extension UI request, discriminated by `method`. */
@@ -2087,6 +2117,46 @@ export interface SetRoleResult {
 	role: string;
 	model: ModelInfo;
 	thinkingLevel?: ThinkingLevel;
+}
+
+export interface GetModelsConfigurationResult {
+	providers: Record<string, unknown>[];
+	models: Record<string, unknown>[];
+	roles: Record<string, unknown>[];
+	roleStorage: "global" | "project";
+	effortMode: "replacement" | "legacy";
+	effortRules: ModelEffortRule[];
+	effortRulesProvenance: string;
+	effortRuleScopes: ModelEffortRuleScopes;
+	effortChoices: string[];
+}
+
+export interface SetModelRoleConfigurationParams {
+	role: string;
+	scope: "global" | "project";
+	expected: ModelRoleConfigurationValue;
+	selector?: string;
+	effort?: ModelEffortSelection;
+}
+
+export interface SetModelRoleStorageParams {
+	value: "global" | "project";
+	expected: "global" | "project";
+}
+
+export interface SetEffortRulesParams {
+	scope: "global" | "project";
+	expected: ModelEffortRule[] | null;
+	rules?: ModelEffortRule[];
+}
+
+export interface SetProviderApiKeyParams {
+	providerId: string;
+	apiKey: string;
+}
+
+export interface CancelLoginParams {
+	loginId: string;
 }
 
 export interface GetUsageParams {
@@ -2464,6 +2534,12 @@ export interface RpcWireCommands {
 	get_roles: { params: undefined; result: RolesResult };
 	query_model_selector: { params: QueryModelSelectorParams; result: ModelSelectorResult };
 	set_role: { params: SetRoleParams; result: SetRoleResult };
+	get_models_configuration: { params: undefined; result: GetModelsConfigurationResult };
+	set_model_role_configuration: { params: SetModelRoleConfigurationParams; result: undefined };
+	set_model_role_storage: { params: SetModelRoleStorageParams; result: undefined };
+	set_effort_rules: { params: SetEffortRulesParams; result: undefined };
+	set_provider_api_key: { params: SetProviderApiKeyParams; result: undefined };
+	cancel_login: { params: CancelLoginParams; result: undefined };
 	get_usage: { params: GetUsageParams; result: GetUsageResult };
 	set_approval_handler: { params: SetApprovalHandlerParams; result: SetApprovalHandlerResult };
 	set_chat_mode: { params: SetChatModeParams; result: ChatModeState };

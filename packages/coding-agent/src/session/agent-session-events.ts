@@ -82,6 +82,7 @@ export type AgentSessionEvent =
 	| { type: "retry_fallback_applied"; from: string; to: string; role: string; reason?: string }
 	| { type: "retry_fallback_succeeded"; model: string; role: string }
 	| { type: "model_changed" }
+	| { type: "models_configuration_changed" }
 	| { type: "config_warnings_changed" }
 	| { type: "advisor_cost_changed" }
 	| { type: "advisor_yielded" }

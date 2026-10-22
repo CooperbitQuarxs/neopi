@@ -62,6 +62,10 @@ export const stateDefs = {
 		facts: "ModelSelectorFacts",
 	},
 	ModelSelectorResult: { items: "ModelSelectorItem[]", roles: "ModelSelectorItem[]", error: "string | null" },
+	ModelEffortSelection: { mode: "'fixed' | 'auto' | 'inherit'", "level?": "ThinkingLevel", "allowed?": "string[]", "selector?": "string" },
+	ModelEffortRule: { selector: "string", allowed: "string[]" },
+	ModelRoleConfigurationValue: { selector: "string | null", effort: "ModelEffortSelection | null" },
+	ModelEffortRuleScopes: { global: "ModelEffortRule[] | null", project: "ModelEffortRule[] | null" },
 	ProviderUsageReport: {
 		provider: "string",
 		fetchedAt: "number",

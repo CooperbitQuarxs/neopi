@@ -2882,6 +2882,39 @@ pub struct ModelSelectorResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelEffortSelection {
+	pub mode: ModelEffortSelectionMode,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub level: Option<ThinkingLevel>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub allowed: Option<Vec<String>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub selector: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelEffortRule {
+	pub selector: String,
+	pub allowed: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelRoleConfigurationValue {
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub selector: Option<String>,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub effort: Option<ModelEffortSelection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelEffortRuleScopes {
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub global: Option<Vec<ModelEffortRule>>,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub project: Option<Vec<ModelEffortRule>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderUsageReport {
 	pub provider: String,
 	#[serde(rename = "fetchedAt")]
@@ -4939,6 +4972,9 @@ pub struct RetryFallbackSucceededEvent {
 pub struct ModelChangedEvent {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelsConfigurationChangedEvent {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConfigWarningsChangedEvent {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5043,6 +5079,7 @@ pub enum RpcAgentEvent {
 	RetryFallbackApplied(RetryFallbackAppliedEvent),
 	RetryFallbackSucceeded(RetryFallbackSucceededEvent),
 	ModelChanged(ModelChangedEvent),
+	ModelsConfigurationChanged(ModelsConfigurationChangedEvent),
 	ConfigWarningsChanged(ConfigWarningsChangedEvent),
 	AdvisorCostChanged(AdvisorCostChangedEvent),
 	AdvisorYielded(AdvisorYieldedEvent),
@@ -5092,6 +5129,7 @@ impl RpcAgentEvent {
 			Some("retry_fallback_applied") => |value| serde_json::from_value(value).map(Self::RetryFallbackApplied),
 			Some("retry_fallback_succeeded") => |value| serde_json::from_value(value).map(Self::RetryFallbackSucceeded),
 			Some("model_changed") => |value| serde_json::from_value(value).map(Self::ModelChanged),
+			Some("models_configuration_changed") => |value| serde_json::from_value(value).map(Self::ModelsConfigurationChanged),
 			Some("config_warnings_changed") => |value| serde_json::from_value(value).map(Self::ConfigWarningsChanged),
 			Some("advisor_cost_changed") => |value| serde_json::from_value(value).map(Self::AdvisorCostChanged),
 			Some("advisor_yielded") => |value| serde_json::from_value(value).map(Self::AdvisorYielded),
@@ -5143,6 +5181,7 @@ impl Serialize for RpcAgentEvent {
 			Self::RetryFallbackApplied(member) => serialize_tagged(member, &[("type", "retry_fallback_applied")], serializer),
 			Self::RetryFallbackSucceeded(member) => serialize_tagged(member, &[("type", "retry_fallback_succeeded")], serializer),
 			Self::ModelChanged(member) => serialize_tagged(member, &[("type", "model_changed")], serializer),
+			Self::ModelsConfigurationChanged(member) => serialize_tagged(member, &[("type", "models_configuration_changed")], serializer),
 			Self::ConfigWarningsChanged(member) => serialize_tagged(member, &[("type", "config_warnings_changed")], serializer),
 			Self::AdvisorCostChanged(member) => serialize_tagged(member, &[("type", "advisor_cost_changed")], serializer),
 			Self::AdvisorYielded(member) => serialize_tagged(member, &[("type", "advisor_yielded")], serializer),
@@ -5592,6 +5631,10 @@ pub struct InputUiRequest {
 	pub placeholder: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub timeout: Option<i64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub secret: Option<bool>,
+	#[serde(rename = "loginId", default, skip_serializing_if = "Option::is_none")]
+	pub login_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5627,6 +5670,8 @@ pub struct NotifyUiRequest {
 	pub message: String,
 	#[serde(rename = "notifyType", default, skip_serializing_if = "Option::is_none")]
 	pub notify_type: Option<NotifyType>,
+	#[serde(rename = "loginId", default, skip_serializing_if = "Option::is_none")]
+	pub login_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5670,6 +5715,8 @@ pub struct OpenUrlUiRequest {
 	pub launch_url: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub instructions: Option<String>,
+	#[serde(rename = "loginId", default, skip_serializing_if = "Option::is_none")]
+	pub login_id: Option<String>,
 }
 
 /// Extension UI request, discriminated by `method`.
@@ -6150,7 +6197,7 @@ impl RpcNotification {
 			Some("session_info_update") => |value| serde_json::from_value(value).map(Self::SessionInfoUpdate),
 			Some("config_update") => |value| serde_json::from_value(value).map(Self::ConfigUpdate),
 			Some("rpc_frame_error") => |value| serde_json::from_value(value).map(Self::RpcFrameError),
-			Some("advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
+			Some("advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -6210,7 +6257,7 @@ impl RpcServerFrame {
 		let decode: fn(Value) -> Result<Self, serde_json::Error> = match value.get("type").and_then(Value::as_str) {
 			Some("response") => |value| serde_json::from_value(value).map(Self::Response),
 			Some("host_tool_call" | "host_tool_cancel" | "host_uri_request" | "host_uri_cancel") => |value| serde_json::from_value(value).map(Self::RpcHostRequest),
-			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
+			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -6364,6 +6411,65 @@ pub struct SetRoleResult {
 	pub model: ModelInfo,
 	#[serde(rename = "thinkingLevel", default, skip_serializing_if = "Option::is_none")]
 	pub thinking_level: Option<ThinkingLevel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetModelsConfigurationResult {
+	pub providers: Vec<Map<String, Value>>,
+	pub models: Vec<Map<String, Value>>,
+	pub roles: Vec<Map<String, Value>>,
+	#[serde(rename = "roleStorage")]
+	pub role_storage: GetModelsConfigurationResultRoleStorage,
+	#[serde(rename = "effortMode")]
+	pub effort_mode: GetModelsConfigurationResultEffortMode,
+	#[serde(rename = "effortRules")]
+	pub effort_rules: Vec<ModelEffortRule>,
+	#[serde(rename = "effortRulesProvenance")]
+	pub effort_rules_provenance: String,
+	#[serde(rename = "effortRuleScopes")]
+	pub effort_rule_scopes: ModelEffortRuleScopes,
+	#[serde(rename = "effortChoices")]
+	pub effort_choices: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRoleConfigurationParams {
+	pub role: String,
+	pub scope: SetModelRoleConfigurationParamsScope,
+	pub expected: ModelRoleConfigurationValue,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub selector: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub effort: Option<ModelEffortSelection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRoleStorageParams {
+	pub value: SetModelRoleStorageParamsValue,
+	pub expected: SetModelRoleStorageParamsExpected,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetEffortRulesParams {
+	pub scope: SetEffortRulesParamsScope,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub expected: Option<Vec<ModelEffortRule>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub rules: Option<Vec<ModelEffortRule>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetProviderApiKeyParams {
+	#[serde(rename = "providerId")]
+	pub provider_id: String,
+	#[serde(rename = "apiKey")]
+	pub api_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelLoginParams {
+	#[serde(rename = "loginId")]
+	pub login_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -7125,6 +7231,27 @@ impl RoleInfoSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ModelEffortSelectionMode {
+	#[serde(rename = "fixed")]
+	Fixed,
+	#[serde(rename = "auto")]
+	Auto,
+	#[serde(rename = "inherit")]
+	Inherit,
+}
+
+impl ModelEffortSelectionMode {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Fixed => "fixed",
+			Self::Auto => "auto",
+			Self::Inherit => "inherit",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MixtureModelMemberShow {
 	#[serde(rename = "always")]
 	Always,
@@ -7775,6 +7902,114 @@ impl HostUriResultContentType {
 	}
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GetModelsConfigurationResultRoleStorage {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl GetModelsConfigurationResultRoleStorage {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GetModelsConfigurationResultEffortMode {
+	#[serde(rename = "replacement")]
+	Replacement,
+	#[serde(rename = "legacy")]
+	Legacy,
+}
+
+impl GetModelsConfigurationResultEffortMode {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Replacement => "replacement",
+			Self::Legacy => "legacy",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SetModelRoleConfigurationParamsScope {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl SetModelRoleConfigurationParamsScope {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SetModelRoleStorageParamsValue {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl SetModelRoleStorageParamsValue {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SetModelRoleStorageParamsExpected {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl SetModelRoleStorageParamsExpected {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SetEffortRulesParamsScope {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl SetEffortRulesParamsScope {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
 /// Untagged union: the first variant that decodes wins.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -8224,6 +8459,120 @@ impl Command for SetRoleCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<SetRoleResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Read the native provider catalog, scoped model roles, and effort rules.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GetModelsConfigurationCommand {}
+
+impl Command for GetModelsConfigurationCommand {
+	const NAME: &'static str = "get_models_configuration";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = GetModelsConfigurationResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<GetModelsConfigurationResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Save or clear one scoped role selector and effort atomically, rejecting a stale expected value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRoleConfigurationCommand {
+	pub role: String,
+	pub scope: SetModelRoleConfigurationParamsScope,
+	pub expected: ModelRoleConfigurationValue,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub selector: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub effort: Option<ModelEffortSelection>,
+}
+
+impl Command for SetModelRoleConfigurationCommand {
+	const NAME: &'static str = "set_model_role_configuration";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Choose native global or project role storage, rejecting a stale preference.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRoleStorageCommand {
+	pub value: SetModelRoleStorageParamsValue,
+	pub expected: SetModelRoleStorageParamsExpected,
+}
+
+impl Command for SetModelRoleStorageCommand {
+	const NAME: &'static str = "set_model_role_storage";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Save or clear native implicit effort rules in one scope, rejecting a stale expected value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetEffortRulesCommand {
+	pub scope: SetEffortRulesParamsScope,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub expected: Option<Vec<ModelEffortRule>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub rules: Option<Vec<ModelEffortRule>>,
+}
+
+impl Command for SetEffortRulesCommand {
+	const NAME: &'static str = "set_effort_rules";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Upsert a key in the native credential store without replacing other accounts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetProviderApiKeyCommand {
+	#[serde(rename = "providerId")]
+	pub provider_id: String,
+	#[serde(rename = "apiKey")]
+	pub api_key: String,
+}
+
+impl Command for SetProviderApiKeyCommand {
+	const NAME: &'static str = "set_provider_api_key";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Cancel this connection's active login request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelLoginCommand {
+	#[serde(rename = "loginId")]
+	pub login_id: String,
+}
+
+impl Command for CancelLoginCommand {
+	const NAME: &'static str = "cancel_login";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
 	}
 }
 
