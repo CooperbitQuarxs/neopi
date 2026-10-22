@@ -97,6 +97,7 @@ import {
 	visitEntriesFromFile,
 } from "./session-loader";
 import { setMessageEntryId } from "./message-entry-ids";
+import { SessionJournalEvents, type SessionJournalEvent, type SessionJournalIdentity } from "./session-journal-events";
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
 import {
 	computeDefaultSessionDir,
@@ -775,6 +776,8 @@ interface AtomicEntryBatch {
  * revision); the title slot and header are small and compared by value.
  */
 interface SessionBodyStamp {
+	sessionId: string;
+	pendingEntries: SessionEntry[] | undefined;
 	entries: readonly SessionEntry[];
 	entryCount: number;
 	lastEntry: SessionEntry | undefined;
@@ -933,11 +936,32 @@ export class SessionManager {
 	 */
 	#draftOnlySessionCleanupArmed = false;
 
-	/**
-	 * Collab replication tap: invoked for every appended entry with the
-	 * in-memory (pre-blob-externalization) entry, so inline images survive.
-	 */
-	onEntryAppended?: (entry: SessionEntry) => void;
+	readonly #entryListeners = new Set<(entry: SessionEntry) => void>();
+	readonly #journal = new SessionJournalEvents(() => ({
+		sessionId: this.#sessionId,
+		sessionFile: this.#sessionFile ?? null,
+		leafId: this.#index.leafId(),
+	}));
+
+	/** Observe live appends without replacing CollabHost or another observer. */
+	subscribeEntries(listener: (entry: SessionEntry) => void): () => void {
+		this.#entryListeners.add(listener);
+		return () => this.#entryListeners.delete(listener);
+	}
+
+	/** Register before reading the initial native snapshot. */
+	subscribeJournal(listener: (event: SessionJournalEvent) => void): () => void {
+		return this.#journal.subscribe(listener);
+	}
+
+	getJournalIdentity(): SessionJournalIdentity {
+		return this.#journal.identity();
+	}
+
+	isEntryDurable(id: string): boolean {
+		const entry = this.#index.get(id);
+		return entry !== undefined && this.#journal.isDurable(entry);
+	}
 
 	#turnBudgetTotal: number | null = null;
 	#turnBudgetHard = false;
@@ -1323,6 +1347,7 @@ export class SessionManager {
 		this.#rememberBreadcrumb(this.#cwd, to);
 		this.#claimSession();
 		this.#notifyPersistenceNotice({ reason, from, to });
+		this.#journal.loaded([]);
 		return to;
 	}
 
@@ -1531,7 +1556,7 @@ export class SessionManager {
 				throw this.#latchIndeterminate(operationError, recoveryErrors);
 			}
 		}
-		this.#recordFullRewrite(body.bytes);
+		this.#recordFullRewrite(body.bytes, body.stamp);
 	}
 
 	#appendWriter(): SessionStorageWriter {
@@ -1549,12 +1574,17 @@ export class SessionManager {
 	#lineFor(entry: FileEntry): string {
 		return `${stringifyJson(prepareEntryForPersistence(entry, this.#blobs)) ?? "null"}\n`;
 	}
-	#recordDurableAppend(line: string): void {
+	#recordDurableAppend(line: string, entry: SessionEntry): void {
 		this.#expectedDiskSize = (this.#expectedDiskSize ?? 0) + Buffer.byteLength(line, "utf8");
+		if (this.#index.get(entry.id) === entry) this.#journal.committed(entry);
 	}
 
-	#recordFullRewrite(bytes: number): void {
+	#recordFullRewrite(bytes: number, stamp: SessionBodyStamp): void {
 		this.#expectedDiskSize = bytes;
+		if (stamp.sessionId !== this.#sessionId || !stamp.pendingEntries) return;
+		for (const entry of stamp.pendingEntries) {
+			if (this.#index.get(entry.id) === entry) this.#journal.committed(entry);
+		}
 	}
 
 	/**
@@ -1610,12 +1640,16 @@ export class SessionManager {
 		const entries = this.#entries;
 		const lines = [titleLine, headerLine];
 		let bytes = Buffer.byteLength(titleLine, "utf8") + Buffer.byteLength(headerLine, "utf8");
+		let pendingEntries: SessionEntry[] | undefined;
 		for (const entry of entries) {
 			const line = this.#lineFor(entry);
 			bytes += Buffer.byteLength(line, "utf8");
 			lines.push(line);
+			if (!this.#journal.isDurable(entry)) (pendingEntries ??= []).push(entry);
 		}
 		const stamp: SessionBodyStamp = {
+			sessionId: this.#sessionId,
+			pendingEntries,
 			entries,
 			entryCount: entries.length,
 			lastEntry: entries.at(-1),
@@ -1700,7 +1734,7 @@ export class SessionManager {
 					// A newer deferred publish owns the durability record now;
 					// this body is no longer on the backend, so record nothing.
 					if (generation !== this.#deferredPublishGen) return;
-					this.#recordFullRewrite(bytes);
+					this.#recordFullRewrite(bytes, stamp);
 					const entries = this.#entries;
 					const bodyIsCurrent =
 						stamp.entries === entries &&
@@ -1729,7 +1763,7 @@ export class SessionManager {
 				});
 				return;
 			}
-			this.#recordFullRewrite(body.bytes);
+			this.#recordFullRewrite(body.bytes, body.stamp);
 			// Only mark the manager current when writing the active session path.
 			// Mid-move writes update the live relocation path; `#sessionFile` is
 			// still the pre-repoint source until moveTo repoints it.
@@ -1817,7 +1851,7 @@ export class SessionManager {
 					}
 					try {
 						if (textMatchesLines(await this.#storage.readText(sessionFile), body.lines)) {
-							this.#recordFullRewrite(body.bytes);
+							this.#recordFullRewrite(body.bytes, body.stamp);
 						}
 					} catch {
 						// Preserve the publish error when durable state cannot be read back.
@@ -1825,7 +1859,7 @@ export class SessionManager {
 					throw error;
 				}
 				if (this.#diskEpoch !== epoch) return false;
-				this.#recordFullRewrite(body.bytes);
+				this.#recordFullRewrite(body.bytes, body.stamp);
 			} while (this.#atomicRewriteDirty);
 			return true;
 		} finally {
@@ -1921,10 +1955,11 @@ export class SessionManager {
 		// opens a fresh append handle and the entry still lands.
 		try {
 			const writer = this.#appendWriter();
+			const sessionId = this.#sessionId;
 			const line = this.#lineFor(entry);
 			if (writer.appendSync && !this.#storage.defersSyncPublish) {
 				writer.appendSync(line);
-				this.#recordDurableAppend(line);
+				this.#recordDurableAppend(line, entry);
 			} else {
 				// A backend that only queues the publish (indexed) has no synchronous
 				// durability, so the durable size may advance only once it confirms
@@ -1934,7 +1969,9 @@ export class SessionManager {
 				if (writer.appendSync) writer.appendSync(line);
 				const confirmed = writer.appendSync ? writer.flush() : writer.append(line);
 				void confirmed
-					.then(() => this.#recordDurableAppend(line))
+					.then(() => {
+						if (sessionId === this.#sessionId) this.#recordDurableAppend(line, entry);
+					})
 					.catch(err => {
 						this.#fileIsCurrent = false;
 						this.#rewriteRequired = true;
@@ -1992,7 +2029,7 @@ export class SessionManager {
 				if (!sessionFile) return;
 				try {
 					await this.#appendWriter().append(line);
-					this.#recordDurableAppend(line);
+					this.#recordDurableAppend(line, entry);
 					await this.#storage.updateSessionTitle(sessionFile, update);
 					if (this.#diskEpoch === epoch) this.#fileIsCurrent = true;
 				} catch {
@@ -2008,12 +2045,11 @@ export class SessionManager {
 	}
 
 	#notifyEntryAppended(entry: SessionEntry): void {
-		const callback = this.onEntryAppended;
-		if (callback) {
+		for (const callback of this.#entryListeners) {
 			try {
 				callback(entry);
 			} catch (err) {
-				logger.warn("collab entry hook failed", { error: String(err) });
+				logger.warn("Session entry observer failed", { error: String(err) });
 			}
 		}
 	}
@@ -2081,6 +2117,7 @@ export class SessionManager {
 			this.#sessionFile = undefined;
 		}
 		this.#syncLease();
+		this.#journal.loaded([]);
 
 		return this.#sessionFile;
 	}
@@ -2096,6 +2133,7 @@ export class SessionManager {
 		if (repairedUsage > 0) logger.warn("Loaded assistant messages with incomplete usage", { count: repairedUsage });
 		this.#index.rebuild(entries);
 		this.#reservedEntryIds.clear();
+		this.#journal.state();
 	}
 
 	#freshEntryFields(reservedId?: string): { id: string; parentId: string | null; timestamp: string } {
@@ -2135,6 +2173,7 @@ export class SessionManager {
 			batch.externalLeafChanged = true;
 			batch.externalLeafId = id;
 		}
+		this.#journal.state();
 	}
 
 	#recordEntry(entry: SessionEntry): void {
@@ -2156,6 +2195,7 @@ export class SessionManager {
 		this.#appendToSessionFile(entry);
 		if (batch) batch.deferredNotifications.push(entry);
 		else this.#notifyEntryAppended(entry);
+		this.#journal.state();
 	}
 
 	#rollbackAtomicEntryBatch(batch: AtomicEntryBatch): void {
@@ -2173,6 +2213,7 @@ export class SessionManager {
 		this.#entries = retained;
 		this.#index.rebuild(retained);
 		this.#index.setLeaf(restoredLeaf && this.#index.has(restoredLeaf) ? restoredLeaf : null);
+		this.#journal.state();
 	}
 
 	#draftPath(): string | null {
@@ -2342,6 +2383,7 @@ export class SessionManager {
 			this.#noteDiskFailure(error);
 		}
 		if (this.#sessionFile) this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
+		this.#journal.state();
 	}
 
 	/**
@@ -2488,6 +2530,8 @@ export class SessionManager {
 		this.#artifactManagerSessionFile = null;
 
 		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) this.#rewriteRequired = true;
+		if (!migrated) this.#journal.loaded(this.#entries);
+		else this.#journal.loaded([]);
 	}
 
 	/**
@@ -2756,6 +2800,7 @@ export class SessionManager {
 				this.#artifactManagerSessionFile = null;
 				// Path is repointed; hot-path appends may use `#sessionFile` again.
 				this.#sessionFileRelocating = null;
+				this.#journal.state();
 			}
 
 			this.#cwd = resolvedCwd;
@@ -3567,6 +3612,7 @@ export class SessionManager {
 		this.#index.detachBranchView();
 		this.#recordEntry(entry);
 		this.#index.setLeaf(activeLeafId);
+		this.#journal.state();
 		return entry.id;
 	}
 
@@ -3591,6 +3637,7 @@ export class SessionManager {
 		};
 		this.#recordEntry(entry);
 		if (activeLeafId !== owner.parentId) this.#index.setLeaf(activeLeafId);
+		this.#journal.state();
 		return entry.id;
 	}
 
@@ -4073,10 +4120,12 @@ export class SessionManager {
 			this.#sessionFile = undefined;
 			this.#fileIsCurrent = false;
 			this.#rewriteRequired = false;
+			this.#journal.loaded([]);
 			return undefined;
 		}
 
 		this.#sessionFile = newSessionFile;
+		this.#journal.loaded([]);
 		this.#syncLease();
 		if (options?.copyArtifacts && sourceSessionFile) {
 			this.#pendingArtifactCopy = {
