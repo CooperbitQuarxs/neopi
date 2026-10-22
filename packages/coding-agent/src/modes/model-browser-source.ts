@@ -11,7 +11,7 @@ import {
 	cfgFallbackEffortSelections,
 	matchEffortRule,
 } from "../config/effort-policy";
-import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { getSupportedThinkingLevels } from "@oh-my-pi/pi-catalog/model-thinking";
 import { describeModelCompactionPoint } from "../session/model-compaction-threshold";
 
 import {
@@ -91,7 +91,7 @@ export function createModelBrowserSource(
 		permittedEfforts: model => {
 			const rule =
 				cfgEffortPolicyMode.get(settings) === "replacement" ? matchEffortRule(settings, model) : undefined;
-			return getSupportedEfforts(model).filter(effort => !rule || rule.allowed.includes(effort));
+			return getSupportedThinkingLevels(model).filter(effort => !rule || rule.allowed.includes(effort));
 		},
 		getProjectRoleEffortSelection: role => settings.getProjectRoleEffortSelection(role),
 		getGlobalRoleEffortSelection: role => settings.getGlobalRoleEffortSelection(role),

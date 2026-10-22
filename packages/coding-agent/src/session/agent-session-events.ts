@@ -1,6 +1,6 @@
 import type { AgentEvent, AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
-import type { Effort } from "@oh-my-pi/pi-ai";
+import type { ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import type { Rule } from "../capability/rule";
 import type { ChatModeSetting } from "../chat/chat-mode";
 import type { RetryErrorUpdate } from "../extensibility/shared-events";
@@ -103,7 +103,7 @@ export type AgentSessionEvent =
 			/** The user-configured selector when it differs from the effective level. */
 			configured?: ConfiguredThinkingLevel;
 			/** The level `auto` resolved to this turn, once classified. */
-			resolved?: Effort;
+			resolved?: ThinkingEffort;
 	  }
 	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState }
 	/** Live chat-mode change: `mode` is `off` outside chat mode; `include` is comma-joined. */

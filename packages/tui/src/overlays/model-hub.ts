@@ -22,8 +22,8 @@ import type {
 } from "@oh-my-pi/pi-wire";
 import type { KeysApi, Model } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
-import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
+import { getSupportedEfforts, getSupportedThinkingLevels } from "@oh-my-pi/pi-catalog/model-thinking";
+import { Effort, THINKING_CHOICES, THINKING_EFFORTS, type ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { MODEL_KINDS, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { Component, TUI } from "../tui";
@@ -88,10 +88,10 @@ import { EffortToggle } from "./effort-toggle";
 export type HubEffortSelection =
 	| { mode: "inherit" }
 	| { mode: "fixed"; level: ThinkingLevel }
-	| { mode: "auto"; allowed?: Effort[]; selector?: string };
+	| { mode: "auto"; allowed?: ThinkingEffort[]; selector?: string };
 export interface HubEffortRule {
 	selector: string;
-	allowed: Effort[];
+	allowed: ThinkingEffort[];
 }
 
 /**
@@ -187,7 +187,7 @@ export interface ModelHubSource extends ModelBrowserSource {
 	getModelRoleSource(role: string): "global" | "project" | "default";
 	readonly effortRules: readonly HubEffortRule[];
 	/** The policy resolver supplies actual supported levels intersected with the winning global rule. */
-	permittedEfforts(model: Model): readonly Effort[];
+	permittedEfforts(model: Model): readonly ThinkingEffort[];
 	getProjectRoleEffortSelection(role: string): HubEffortSelection | undefined;
 	getGlobalRoleEffortSelection(role: string): HubEffortSelection | undefined;
 	getRoleEffortSelection(role: string): HubEffortSelection | undefined;
@@ -2133,8 +2133,19 @@ export class ModelHubComponent implements Component {
 				? this.#settings.effortRules[options.ruleIndex]
 				: this.#settings.effortRules.find(entry => entry.selector === options.pendingRuleSelector);
 		const isRule = options.ruleIndex !== undefined || options.pendingRuleSelector !== undefined;
-		let levels: readonly Effort[];
-		if (!isRule && options.item && isPatternSelector(options.item.selector)) {
+		let levels: readonly ThinkingEffort[];
+		if (isRule) {
+			const selector = options.item?.selector ?? rule?.selector ?? options.pendingRuleSelector;
+			const matchesSelector = selector ? compilePatternSelectorMatcher(selector) : undefined;
+			const models = options.item
+				? [options.item.model]
+				: this.#registry.getAll("all").filter(model => matchesSelector?.(`${model.provider}/${model.id}`));
+			levels = THINKING_CHOICES.filter(effort =>
+				effort !== "off" && selector && isPatternSelector(selector)
+					? true
+					: models.some(model => getSupportedThinkingLevels(model).includes(effort)),
+			);
+		} else if (options.item && isPatternSelector(options.item.selector)) {
 			const selector = options.item.selector;
 			const matchesSelector = compilePatternSelectorMatcher(selector);
 			const models =
@@ -2144,17 +2155,24 @@ export class ModelHubComponent implements Component {
 					matchesSelector(`${model.provider}/${model.id}`) &&
 					(!options.role || this.#settings.getRoleInfo(options.role).accepts(model)),
 			);
-			levels = THINKING_EFFORTS.filter(effort =>
+			levels = THINKING_CHOICES.filter(effort =>
 				matches.some(model => this.#settings.permittedEfforts(model).includes(effort)),
 			);
 		} else {
-			levels = isRule
-				? options.item
-					? getSupportedEfforts(options.item.model)
-					: THINKING_EFFORTS
-				: options.item
-					? this.#settings.permittedEfforts(options.item.model)
-					: THINKING_EFFORTS;
+			const matchesSelector = options.selector ? compilePatternSelectorMatcher(options.selector) : undefined;
+			levels = options.item
+				? this.#settings.permittedEfforts(options.item.model)
+				: THINKING_CHOICES.filter(
+						effort =>
+							effort !== "off" ||
+							this.#registry
+								.getAll("all")
+								.some(
+									model =>
+										matchesSelector?.(`${model.provider}/${model.id}`) &&
+										getSupportedThinkingLevels(model).includes("off"),
+								),
+					);
 		}
 		const saved =
 			rule?.allowed ?? (options.baseSelection?.mode === "auto" ? options.baseSelection.allowed : undefined);

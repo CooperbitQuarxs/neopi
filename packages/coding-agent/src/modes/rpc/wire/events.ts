@@ -257,7 +257,7 @@ export const eventDefs = {
 			type: "'thinking_level_changed'",
 			"thinkingLevel?": "ThinkingLevel",
 			"configured?": doc("ConfiguredThinkingLevel", "The user's selector when it differs from the effective level."),
-			"resolved?": doc("Effort", "The level `auto` resolved to this turn, once classified."),
+			"resolved?": doc("ThinkingEffort", "The level `auto` resolved to this turn, once classified."),
 		},
 		"The effective thinking level changed.",
 	),

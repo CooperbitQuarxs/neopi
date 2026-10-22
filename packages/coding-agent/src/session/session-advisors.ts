@@ -41,6 +41,7 @@ import * as AIError from "@oh-my-pi/pi-ai/error";
 import { extractProviderRetryHint } from "@oh-my-pi/pi-ai/utils/retry-after";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import type { ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import { extractHttpStatusFromError, logger, prompt } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import {
@@ -1614,7 +1615,7 @@ export class SessionAdvisors {
 									: undefined;
 							const candidates = decision?.candidates;
 							if (decision?.disclosure) this.#host.emitNotice("warning", decision.disclosure, "effort-policy");
-							let effort: Effort | undefined;
+							let effort: ThinkingEffort | undefined;
 							try {
 								effort = await classifyDifficulty(
 									{ request: currentAdvisorInput },
@@ -2930,7 +2931,11 @@ export class SessionAdvisors {
 			throw new Error(`Advisor name "${config.name}" is already in use.`);
 		}
 		if (!this.#advisorConfigs?.length && this.#advisors.length) this.#launcherLegacyConfig = { name: "default" };
-		const existing = this.#advisorConfigs?.length ? this.#advisorConfigs : this.#launcherLegacyConfig ? [this.#launcherLegacyConfig] : [];
+		const existing = this.#advisorConfigs?.length
+			? this.#advisorConfigs
+			: this.#launcherLegacyConfig
+				? [this.#launcherLegacyConfig]
+				: [];
 		this.#advisorConfigs = [...existing, config];
 		this.setAdvisorEnabled(true);
 	}
