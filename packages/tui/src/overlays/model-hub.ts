@@ -2951,16 +2951,15 @@ export class ModelHubComponent implements Component {
 			if (!this.#externalEditPending && !this.#assignmentPending) {
 				const entry = this.#activeEntry();
 				const editingCompaction = this.#strip?.kind === "name" && this.#strip.purpose === "compaction";
-				const section =
-					editingCompaction
-						? "context"
-						: entry.kind === "roles"
-							? "roles"
-							: entry.kind === "effort"
-								? entry.id === "context"
-									? "context"
-									: "effort"
-								: "overrides";
+				const section = editingCompaction
+					? "context"
+					: entry.kind === "roles"
+						? "roles"
+						: entry.kind === "effort"
+							? entry.id === "context"
+								? "context"
+								: "effort"
+							: "overrides";
 				const row = this.#rolesRows[this.#roleIndex];
 				const source =
 					section === "roles" &&
