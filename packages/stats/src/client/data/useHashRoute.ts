@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { type DashboardSection, SECTIONS } from "../app/nav";
 import type { TimeRange } from "../types";
 import { TIME_RANGES } from "./range";
+import { navigateStatsHash } from "../host-transport";
 
 export interface HashRoute {
 	section: DashboardSection;
@@ -38,7 +39,7 @@ export function useHashRoute() {
 		window.addEventListener("popstate", onHashChange);
 		// Canonicalize a missing/partial hash without adding a history entry.
 		const canonical = buildHash(parseHash(window.location.hash));
-		if (window.location.hash !== canonical) history.replaceState(null, "", canonical);
+		if (window.location.hash !== canonical) navigateStatsHash(canonical, true);
 		return () => {
 			window.removeEventListener("hashchange", onHashChange);
 			window.removeEventListener("popstate", onHashChange);
@@ -48,7 +49,7 @@ export function useHashRoute() {
 	const navigate = useCallback((next: HashRoute) => {
 		setRoute(next);
 		const hash = buildHash(next);
-		if (window.location.hash !== hash) history.pushState(null, "", hash);
+		if (window.location.hash !== hash) navigateStatsHash(hash);
 	}, []);
 
 	const setSection = useCallback(

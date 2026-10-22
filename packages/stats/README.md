@@ -55,6 +55,32 @@ console.log(stats.overall.totalCost);
 console.log(stats.byModel[0].avgTokensPerSecond);
 ```
 
+### Authenticated hosts
+
+Launch `npi stats --headless` with a random `NEOPI_STATS_HOST_TOKEN` of at least
+32 characters in the child environment. It binds an owned ephemeral loopback
+listener and prints one JSON line, `{"type":"neopi_stats_ready","version":1,"port":12345}`,
+after the native assets and listener are ready. Keep stdin open while using it.
+Closing stdin or sending SIGTERM stops this child without finding or reclaiming
+another dashboard's listener. Normal `npi stats` behavior is unchanged.
+
+Every hosted HTTP request requires `Authorization: Bearer <host token>`. Keep
+that token in the host process, never in a URL, document, or browser message.
+`GET /embed` returns the complete native dashboard as one document. Render it in
+a sandbox with scripts but without same-origin access. Its API and SSE requests
+use a MessageChannel instead of network access. The parent must accept
+`neopi-stats-request` version 1 only from that exact frame, validate the fixed
+native API path and method, and carry it through its authenticated environment
+transport. Each request transfers one MessagePort. Send `headers` with status and
+headers, then one `chunk` with Uint8Array bytes per `pull`, followed by `end`;
+`error` carries a message. A `cancel` message closes the upstream request.
+
+The host still enforces its read and operation scopes on every request.
+Forward the native `X-Omp-Stats-Action` header unchanged for judgment actions;
+do not synthesize it. The native dashboard retains its confirmation, cost,
+judge-provider and cancellation behavior. Loading, indexing and native errors
+come from the same `/api/events` stream as the standalone dashboard.
+
 ## API Endpoints
 
 | Endpoint | Description |
