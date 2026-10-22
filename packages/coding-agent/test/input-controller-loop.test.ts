@@ -54,9 +54,9 @@ function createLoopContext(options: {
 			this.clearDraft();
 		},
 		setCollapsedText: vi.fn(),
-	} as unknown as InteractiveModeContext["editor"];
+	};
 	const ctx = {
-		editor,
+		editor: editor as unknown as InteractiveModeContext["editor"],
 		slashCommandNames,
 		isKnownSlashCommand: (text: string) => slashCommandNames.has(text.slice(1).split(/\s+/, 1)[0]!),
 		ui: { requestRender: vi.fn() },
