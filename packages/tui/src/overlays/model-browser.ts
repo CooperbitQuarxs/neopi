@@ -61,11 +61,13 @@ export type ModelRole =
 	| "compaction"
 	| "commit"
 	| "tiny"
+	| "title"
 	| "memory"
 	| "task"
 	| "advisor"
 	| "chronicler"
 	| "chronicler-summary"
+	| "chronicler-recall"
 	| "classifier"
 	| "effort"
 	| "prose"
@@ -86,11 +88,13 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"compaction",
 	"commit",
 	"tiny",
+	"title",
 	"memory",
 	"task",
 	"advisor",
 	"chronicler",
 	"chronicler-summary",
+	"chronicler-recall",
 	"classifier",
 	"effort",
 	"prose",
@@ -112,11 +116,13 @@ export const CHAT_MODEL_ROLE_IDS: ModelRole[] = [
 	"compaction",
 	"commit",
 	"tiny",
+	"title",
 	"memory",
 	"task",
 	"advisor",
 	"chronicler",
 	"chronicler-summary",
+	"chronicler-recall",
 	"classifier",
 	"effort",
 	"prose",

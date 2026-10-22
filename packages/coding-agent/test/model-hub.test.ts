@@ -2161,6 +2161,7 @@ describe("ModelHub", () => {
 			const { hub, onFallbackChainChange } = createHub({ models: [a], scoped: true, settings });
 
 			enterRolesView(hub);
+			hub.handleInput("G"); // Bring model-keyed chains into view regardless of the built-in role count.
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("test/*");
 			expect(rendered).toContain("↳ test/model-a");
@@ -2223,6 +2224,7 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models, scoped: true, settings });
 
 			enterRolesView(hub);
+			hub.handleInput("G"); // Bring model-keyed chains into view regardless of the built-in role count.
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("re:^test/model-a$");
 			expect(rendered).toContain("↳ re:^test/model-b$");

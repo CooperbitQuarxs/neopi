@@ -68,7 +68,16 @@ export const lexicalRanker: NodeRanker = {
 	},
 };
 
-export function createModelRanker(client: ChronicleModelClient): NodeRanker {
+export interface RankResponsePolicy {
+	minTokens: number;
+	tokensPerCandidate: number;
+	paddingTokens: number;
+}
+
+export function createModelRanker(
+	client: ChronicleModelClient,
+	response: RankResponsePolicy = { minTokens: 256, tokensPerCandidate: 24, paddingTokens: 64 },
+): NodeRanker {
 	return {
 		kind: "model",
 		async score(query, candidates, signal) {
@@ -78,7 +87,10 @@ export function createModelRanker(client: ChronicleModelClient): NodeRanker {
 					await client.complete(
 						prompt.render(rankSystemTemplate, {}),
 						prompt.render(rankInputTemplate, { query, candidates }),
-						Math.max(256, candidates.length * 24 + 64),
+						Math.max(
+							response.minTokens,
+							candidates.length * response.tokensPerCandidate + response.paddingTokens,
+						),
 						signal,
 					),
 				);
