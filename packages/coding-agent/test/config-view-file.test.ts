@@ -51,13 +51,14 @@ describe("configuration view file mapping", () => {
 		);
 	});
 
-	test("prefers the supported settings overlay and ignores unsupported same-name TOML files", async () => {
+	test("selects canonical or legacy main settings TOML and ignores unsupported TOML families", async () => {
 		const { dir, files } = await fixture();
 		await Bun.write(path.join(dir, "user/settings.toml"), "");
 		expect(await resolveConfigViewFile({ kind: "settings" }, files)).toBe(path.join(dir, "user/settings.toml"));
+		await fs.rm(path.join(dir, "user/settings.toml"));
 		await Bun.write(path.join(dir, "user/config.toml"), "");
 		expect(await resolveConfigViewFile({ kind: "models", section: "roles" }, files)).toBe(
-			path.join(dir, "user/settings.toml"),
+			path.join(dir, "user/config.toml"),
 		);
 		await Bun.write(path.join(dir, "custom-models.toml"), "");
 		expect(await resolveConfigViewFile({ kind: "models", section: "overrides" }, files)).toBe(
@@ -66,6 +67,13 @@ describe("configuration view file mapping", () => {
 		const watchdog = path.join(dir, "WATCHDOG.yaml");
 		await Bun.write(path.join(dir, "WATCHDOG.toml"), "");
 		expect(await resolveConfigViewFile({ kind: "advisor", filePath: watchdog }, files)).toBe(watchdog);
+	});
+
+	test("rejects simultaneous canonical and legacy main settings TOML", async () => {
+		const { dir, files } = await fixture();
+		await Bun.write(path.join(dir, "user/settings.toml"), "");
+		await Bun.write(path.join(dir, "user/config.toml"), "");
+		await expect(resolveConfigViewFile({ kind: "settings" }, files)).rejects.toThrow("Conflicting settings files");
 	});
 
 	test("preserves selected agent definitions and handles bundled agents without a source", async () => {
@@ -85,18 +93,16 @@ describe("configuration view file mapping", () => {
 });
 
 for (const scope of ["global", "project"] as const) {
-	for (const toml of [false, true]) {
-		test(`Ctrl-G edits the loaded ${scope} ${toml ? "settings.toml overlay" : "YAML file"} and refreshes the view`, async () => {
+	for (const toml of [undefined, "settings.toml", "config.toml"] as const) {
+		test(`Ctrl-G edits the loaded ${scope} ${toml ?? "YAML file"} and refreshes the view`, async () => {
 			const { dir, files } = await fixture();
 			const agentDir = path.join(dir, "agent");
 			const cwd = path.join(dir, "project");
 			await fs.mkdir(cwd, { recursive: true });
 			const configDir = scope === "global" ? agentDir : path.join(cwd, ".omp");
 			const yamlPath = path.join(configDir, "config.yml");
-			const tomlPath = path.join(configDir, "settings.toml");
+			const tomlPath = path.join(configDir, toml ?? "config.toml");
 			await Bun.write(yamlPath, "colorBlindMode: false\n");
-			// This tempting companion is not supported by the current settings loader.
-			await Bun.write(path.join(configDir, "config.toml"), "colorBlindMode = false\n");
 			if (toml) await Bun.write(tomlPath, "colorBlindMode = false\n");
 			const settings = await Settings.loadIsolated({ cwd, agentDir });
 			const rendered = Promise.withResolvers<void>();
