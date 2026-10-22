@@ -2706,7 +2706,7 @@ export class AgentSession implements SettingsScope {
 		cfgProviderAppendOnlyContext.listen(this, () => this.#syncAppendOnlyContext(this.model));
 		cfgModelRoles.listen(this, () => this.#advisors.reconcileModelRoles());
 		this.addDisposer(observeThemesConfiguration(this.settings, () => this.#emit({ type: "themes_configuration_changed" })));
-		this.addDisposer(settings.onPersistedLayersChange(() => this.#emit({ type: "models_configuration_changed" })));
+		this.addDisposer(this.settings.onPersistedLayersChange(() => this.#emit({ type: "models_configuration_changed" })));
 		for (const setting of [cfgModelRoles, cfgRoleEffortSelections, cfgEffortRules]) {
 			setting.listen(this, () => this.#emit({ type: "models_configuration_changed" }));
 		}
