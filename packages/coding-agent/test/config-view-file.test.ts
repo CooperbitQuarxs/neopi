@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveConfigViewFile, type ConfigViewFiles } from "../src/config/config-view-file";
 import { resetSettingsForTest, Settings } from "../src/config/settings";
+import type { TspPrefsProps } from "@oh-my-pi/pi-wire";
+import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { createSettingsHost } from "../src/config/settings-ui";
+import { createPluginSettingsHost } from "../src/extensibility/plugins/settings-host";
 
 const root = path.join(os.homedir(), ".cache/npi-canary/config-view-tests");
 const directories: string[] = [];
@@ -25,6 +30,10 @@ afterEach(async () => {
 	for (const dir of directories.splice(0)) await fs.rm(dir, { recursive: true, force: true });
 });
 
+beforeAll(async () => {
+	await initTheme(false);
+});
+
 describe("configuration view file mapping", () => {
 	test("maps global/project settings and model sections to their real storage files", async () => {
 		const { dir, files } = await fixture();
@@ -42,23 +51,21 @@ describe("configuration view file mapping", () => {
 		);
 	});
 
-	test("opens same-name TOML companions and existing settings.toml without creating files", async () => {
+	test("prefers the supported settings overlay and ignores unsupported same-name TOML files", async () => {
 		const { dir, files } = await fixture();
 		await Bun.write(path.join(dir, "user/settings.toml"), "");
 		expect(await resolveConfigViewFile({ kind: "settings" }, files)).toBe(path.join(dir, "user/settings.toml"));
 		await Bun.write(path.join(dir, "user/config.toml"), "");
 		expect(await resolveConfigViewFile({ kind: "models", section: "roles" }, files)).toBe(
-			path.join(dir, "user/config.toml"),
+			path.join(dir, "user/settings.toml"),
 		);
 		await Bun.write(path.join(dir, "custom-models.toml"), "");
 		expect(await resolveConfigViewFile({ kind: "models", section: "overrides" }, files)).toBe(
-			path.join(dir, "custom-models.toml"),
+			path.join(dir, "custom-models.yml"),
 		);
 		const watchdog = path.join(dir, "WATCHDOG.yaml");
 		await Bun.write(path.join(dir, "WATCHDOG.toml"), "");
-		expect(await resolveConfigViewFile({ kind: "advisor", filePath: watchdog }, files)).toBe(
-			path.join(dir, "WATCHDOG.toml"),
-		);
+		expect(await resolveConfigViewFile({ kind: "advisor", filePath: watchdog }, files)).toBe(watchdog);
 	});
 
 	test("preserves selected agent definitions and handles bundled agents without a source", async () => {
@@ -76,3 +83,63 @@ describe("configuration view file mapping", () => {
 		expect(await Bun.file(path.join(dir, "agent/config.toml")).exists()).toBe(false);
 	});
 });
+
+for (const scope of ["global", "project"] as const) {
+	for (const toml of [false, true]) {
+		test(`Ctrl-G edits the loaded ${scope} ${toml ? "settings.toml overlay" : "YAML file"} and refreshes the view`, async () => {
+			const { dir, files } = await fixture();
+			const agentDir = path.join(dir, "agent");
+			const cwd = path.join(dir, "project");
+			await fs.mkdir(cwd, { recursive: true });
+			const configDir = scope === "global" ? agentDir : path.join(cwd, ".omp");
+			const yamlPath = path.join(configDir, "config.yml");
+			const tomlPath = path.join(configDir, "settings.toml");
+			await Bun.write(yamlPath, "colorBlindMode: false\n");
+			// This tempting companion is not supported by the current settings loader.
+			await Bun.write(path.join(configDir, "config.toml"), "colorBlindMode = false\n");
+			if (toml) await Bun.write(tomlPath, "colorBlindMode = false\n");
+			const settings = await Settings.loadIsolated({ cwd, agentDir });
+			const rendered = Promise.withResolvers<void>();
+			let selectedPath: string | undefined;
+			const view = new SettingsSelectorComponent(
+				{
+					settings: createSettingsHost(settings),
+					plugins: createPluginSettingsHost(cwd),
+					availableThinkingLevels: [],
+					thinkingLevel: undefined,
+					availableThemes: ["dark"],
+					providers: [],
+					requestRender: () => rendered.resolve(),
+				},
+				{
+					onChange: () => {},
+					onCancel: () => {},
+					onOpenConfigFile: async () => {
+						selectedPath = await resolveConfigViewFile({ kind: "settings", scope }, { ...files, settings });
+						if (!selectedPath) throw new Error("Missing settings file");
+						await Bun.write(
+							selectedPath,
+							selectedPath.endsWith(".toml") ? "colorBlindMode = true\n" : "colorBlindMode: true\n",
+						);
+						await settings.reloadFromDisk();
+					},
+				},
+			);
+			const displayedSwitch = () => {
+				const props = view.describe({
+					cols: 120,
+					dark: true,
+					reduceMotion: false,
+					supports: () => true,
+					feature: () => true,
+				}).p as TspPrefsProps;
+				return props.sections.flatMap(section => section.rows).find(row => row.id === "colorBlindMode")?.control;
+			};
+			expect(displayedSwitch()).toMatchObject({ k: "switch", on: false });
+			view.handleInput("\x07");
+			await rendered.promise;
+			expect(selectedPath).toBe(toml ? tomlPath : yamlPath);
+			expect(displayedSwitch()).toMatchObject({ k: "switch", on: true });
+		});
+	}
+}
