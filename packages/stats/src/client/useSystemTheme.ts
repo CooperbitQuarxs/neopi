@@ -7,9 +7,13 @@ const STORAGE_KEY = "omp-stats-theme";
 const DARK_SCHEME_QUERY = "(prefers-color-scheme: dark)";
 
 function readStoredPreference(): ThemePreference {
-	if (typeof localStorage === "undefined") return "system";
-	const stored = localStorage.getItem(STORAGE_KEY);
-	return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+	try {
+		const stored = localStorage.getItem(STORAGE_KEY);
+		return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+	} catch {
+		// Sandboxed host documents have no origin storage. Their preference lives in this view.
+		return "system";
+	}
 }
 
 function getSystemTheme(): SystemTheme {
@@ -48,7 +52,7 @@ if (typeof window !== "undefined") {
 
 export function setThemePreference(next: ThemePreference): void {
 	preference = next;
-	if (typeof localStorage !== "undefined") localStorage.setItem(STORAGE_KEY, next);
+	try { localStorage.setItem(STORAGE_KEY, next); } catch { /* Origin storage is optional. */ }
 	applyResolvedTheme();
 	emit();
 }

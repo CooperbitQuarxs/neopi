@@ -17,6 +17,7 @@ import type {
 	TimeRange,
 	ToolDashboardStats,
 } from "./types";
+import { statsFetch } from "./host-transport";
 
 const API_BASE = "/api";
 
@@ -64,7 +65,7 @@ async function fetchJson<T>(endpoint: string, options?: RequestInit, previous?: 
 		headers.set("If-None-Match", etag);
 		init = { ...options, headers };
 	}
-	const res = await fetch(endpoint, init);
+	const res = await statsFetch(endpoint, init);
 	if (res.status === 304 && etag) return previous as T;
 	if (!res.ok) {
 		throw new ApiError(res.status, endpoint, await readErrorMessage(res, endpoint));
