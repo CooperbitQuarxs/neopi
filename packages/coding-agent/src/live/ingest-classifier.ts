@@ -90,6 +90,8 @@ export interface ClassifierResult {
 	scores: Map<string, number>;
 	depthWeights?: Map<number, number>;
 	alerts?: Map<string, { authorized: boolean; reason: string }>;
+	/** Failed attempt detail retained for the ingestion warning and logs. */
+	failure?: string;
 }
 
 export interface ClassifierProse {
@@ -376,19 +378,22 @@ export async function classifySubagentImportance(
 		if (deps.signal.aborted) return result;
 		deps.onPromptStart?.();
 		await agent.prompt([{ role: "user", content: [{ type: "text", text: finalJson }], timestamp: Date.now() }]);
-		if (deps.signal.aborted || timedOut || agent.state.error) return result;
+		if (deps.signal.aborted) return result;
+		if (timedOut) return { ...result, failure: "classifier attempt timed out" };
+		if (agent.state.error) return { ...result, failure: agent.state.error };
 		const reply = [...agent.state.messages].reverse().find(message => message.role === "assistant");
-		if (!reply || reply.role !== "assistant" || reply.stopReason === "aborted" || reply.stopReason === "error")
-			return result;
+		if (!reply || reply.role !== "assistant") return { ...result, failure: "classifier returned no assistant reply" };
+		if (reply.stopReason === "aborted" || reply.stopReason === "error")
+			return { ...result, failure: reply.errorMessage ?? `classifier response ${reply.stopReason}` };
 		return (
 			parseClassifierReply(
 				textOf(reply.content.filter(block => block.type === "text")),
 				input,
 				JSON.parse(finalJson).authorizationHistoryComplete === true,
-			) ?? result
+			) ?? { ...result, failure: "classifier reply was not a JSON object" }
 		);
-	} catch {
-		return result;
+	} catch (error) {
+		return { ...result, failure: error instanceof Error ? error.message : String(error) };
 	} finally {
 		cancelTimeout();
 		deps.signal.removeEventListener("abort", abort);

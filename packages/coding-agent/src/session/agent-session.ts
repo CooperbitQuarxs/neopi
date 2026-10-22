@@ -482,7 +482,12 @@ import {
 	type PersistedSessionInit,
 	type SessionManager,
 } from "./session-manager";
-import { assertTreeNavigationExpected, TreeNavigationError, type TreeNavigationExpected, type TreeNavigationState } from "./tree-navigation";
+import {
+	assertTreeNavigationExpected,
+	TreeNavigationError,
+	type TreeNavigationExpected,
+	type TreeNavigationState,
+} from "./tree-navigation";
 import { SessionMemory, type SessionMemoryHost } from "./session-memory";
 import { buildSessionMetadata } from "./session-metadata";
 import { SessionProviderBoundary, type SessionProviderBoundaryHost } from "./session-provider-boundary";
@@ -5793,8 +5798,12 @@ export class AgentSession implements SettingsScope {
 
 	#assertTreeNavigationIdle(): void {
 		if (
-			this.isBusyForSnapshot || this.hasAdmittedSubmission || this.#abortInProgress ||
-			this.#postPromptTasks.size > 0 || this.#inFlightEventHandlers.size > 0 || this.hasPendingAsyncWork()
+			this.isBusyForSnapshot ||
+			this.hasAdmittedSubmission ||
+			this.#abortInProgress ||
+			this.#postPromptTasks.size > 0 ||
+			this.#inFlightEventHandlers.size > 0 ||
+			this.hasPendingAsyncWork()
 		) {
 			throw new TreeNavigationError("session_busy", "The native session still has work in progress");
 		}
@@ -5834,11 +5843,13 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#treeNavigationState(expected: TreeNavigationExpected | undefined): TreeNavigationState | undefined {
-		return expected ? {
-			sessionId: this.sessionId,
-			sessionFile: this.sessionFile,
-			leafId: this.sessionManager.getLeafId(),
-		} : undefined;
+		return expected
+			? {
+					sessionId: this.sessionId,
+					sessionFile: this.sessionFile,
+					leafId: this.sessionManager.getLeafId(),
+				}
+			: undefined;
 	}
 
 	/** Register cleanup on session ID changes, including whether an existing session was loaded. */
@@ -13275,7 +13286,12 @@ export class AgentSession implements SettingsScope {
 		if (options.expected) {
 			await this.#suspendChroniclerForTransition();
 			this.#assertTreeNavigationIdle();
-			assertTreeNavigationExpected(options.expected, this.sessionId, this.sessionFile, this.sessionManager.getLeafId());
+			assertTreeNavigationExpected(
+				options.expected,
+				this.sessionId,
+				this.sessionFile,
+				this.sessionManager.getLeafId(),
+			);
 		}
 		if (this.#remoteTreeCancelled) {
 			return { cancelled: true, aborted: true, navigationState: this.#treeNavigationState(options.expected) };
@@ -13332,7 +13348,11 @@ export class AgentSession implements SettingsScope {
 			const toolCallId = targetEntry.message.toolCallId;
 			const questions = this.#recoverAskReanswerQuestions(targetEntry.parentId, toolCallId);
 			if (questions) {
-				return { cancelled: false, reopenAsk: { toolCallId, questions }, navigationState: this.#treeNavigationState(options.expected) };
+				return {
+					cancelled: false,
+					reopenAsk: { toolCallId, questions },
+					navigationState: this.#treeNavigationState(options.expected),
+				};
 			}
 			// Original arguments couldn't be recovered (corrupted/legacy session
 			// data) — fall through to a plain leaf move so navigation still works.
@@ -13437,7 +13457,12 @@ export class AgentSession implements SettingsScope {
 		}
 		if (options.expected) {
 			this.#assertTreeNavigationIdle();
-			assertTreeNavigationExpected(options.expected, this.sessionId, this.sessionFile, this.sessionManager.getLeafId());
+			assertTreeNavigationExpected(
+				options.expected,
+				this.sessionId,
+				this.sessionFile,
+				this.sessionManager.getLeafId(),
+			);
 		}
 
 		// All cancellation/no-op exits are behind us. Invalidate prompt setup
@@ -13603,14 +13628,25 @@ export class AgentSession implements SettingsScope {
 	resumeAfterAskReanswer(remote?: { expected: TreeNavigationExpected; resumeToken: string }): void {
 		if (remote) {
 			this.#assertNoRemoteTreeAdmission();
-			if (this.isSessionTransitioning) throw new TreeNavigationError("session_busy", "The native session is changing");
+			if (this.isSessionTransitioning)
+				throw new TreeNavigationError("session_busy", "The native session is changing");
 			this.#assertTreeNavigationIdle();
-			assertTreeNavigationExpected(remote.expected, this.sessionId, this.sessionFile, this.sessionManager.getLeafId());
+			assertTreeNavigationExpected(
+				remote.expected,
+				this.sessionId,
+				this.sessionFile,
+				this.sessionManager.getLeafId(),
+			);
 			const pending = this.#treeReanswerResume;
 			if (!pending || pending.token !== remote.resumeToken || pending.generation !== this.#promptGeneration) {
 				throw new TreeNavigationError("invalid_resume", "No matching committed ask re-answer is awaiting resume");
 			}
-			assertTreeNavigationExpected(pending.expected, this.sessionId, this.sessionFile, this.sessionManager.getLeafId());
+			assertTreeNavigationExpected(
+				pending.expected,
+				this.sessionId,
+				this.sessionFile,
+				this.sessionManager.getLeafId(),
+			);
 			this.#treeReanswerResume = undefined;
 		}
 		this.#scheduleAgentContinue({

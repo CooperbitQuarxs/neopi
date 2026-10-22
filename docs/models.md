@@ -635,12 +635,30 @@ Model roles assign model selectors to workloads. Configure them under `modelRole
 
 Built-in roles are grouped in the model picker:
 
-- **Chat roles:** `default`, `smol`, `slow`, `vision`, `plan`, `commit`, `tiny`, `memory`, `task`, `advisor`, `chronicler`, `chronicler-summary`, `effort`, `prose`, and `issues`. The `tiny` and `memory` roles accept both ordinary chat models and `tiny` catalog models. The `effort` chat role selects the dedicated replacement-mode Auto classifier. `issues` runs `/issue`; it has no fallback, so `/issue` refuses until it is assigned rather than borrowing the active model.
+- **Chat roles:** `default`, `smol`, `slow`, `vision`, `plan`, `agent-author`, `compaction`, `commit`, `tiny`, `title`, `memory`, `task`, `advisor`, `chronicler`, `chronicler-summary`, `chronicler-recall`, `classifier`, `effort`, `prose`, `issues`, and `deck-inbox`. The `tiny`, `title`, and `memory` roles accept both ordinary chat models and `tiny` catalog models. The `effort` chat role selects the dedicated replacement-mode Auto classifier. `issues` runs `/issue`; it has no fallback, so `/issue` refuses until it is assigned rather than borrowing the active model.
 - **Model-kind roles:** `image`, `web`, `speech`, `dictation`, and `judge`. These select image generation, search/grounded chat, text-to-speech, speech-to-text, and other judgment runners respectively. The `judge` role also accepts tiny and chat models; replacement-mode Auto thinking uses `effort`, not `judge`.
 
 `vision` and `image` are different workloads: `vision` selects a chat model for image analysis, such as `read screenshot.png?q=...`; `image` selects a model with catalog kind `image` for `generate_image`. Assigning a model to `vision` does not give it image-input support: image questions additionally check that the model can send image input to its provider.
 
-The `tiny` role selects lightweight models for background work such as session titles; when unset, it resolves through `@smol`. The `memory` role resolves through `@tiny` when unset. See [model settings](./settings.md#models) for configuration and fallback-chain examples.
+The `tiny` role selects lightweight models for background work; when unset, it resolves through `@smol`. The `memory` and `title` roles resolve through `@tiny` when unset. `title` generates session titles and `/rename` suggestions; assigning it does not change unrelated tiny tasks such as subagent labels. With `title.generator: fork`, automatic titles still use the foreground model, with `title` used only if that fork falls back to the title-model path. Local title prewarming follows the title assignment too. See [model settings](./settings.md#models) for configuration and fallback-chain examples.
+
+Every role is listed in **Roles**, even if its tag metadata says `hidden: true`.
+Built-in roles have short default descriptions; custom roles have none until you
+write one. `D` edits the selected role's description in
+`modelTags.<role>.description`. The top row shows it on one truncated line.
+An empty description hides the text without restoring the default.
+
+The `agent-author` role creates agent definitions in the agents hub. Until assigned,
+agent creation keeps using the foreground model. The `compaction` role overrides
+the summarizer used by soft compaction without switching the foreground model.
+Until assigned, compaction keeps its existing model-specific and active-model
+fallback order.
+
+Chronicler uses `chronicler-summary`, tagged CHRONSUM, for background summaries,
+and `chronicler-recall`, tagged CHRONREC, for interactive recall ranking.
+Until assigned, recall follows the effective summary model and thinking suffix.
+Set `modelRoles.chronicler-recall` independently to make recall faster without
+changing summary quality. Both roles appear in **Roles** and RPC listings.
 
 #### NeoDeck roles
 
@@ -673,11 +691,33 @@ If a role points at another role, the target model still inherits normally and a
 
 ### Effort controls in `/models`
 
-The **Effort rules** sidebar edits global `effort.rules`: pick an exact catalog model or enter a `provider/model` glob, then toggle its allowed concrete levels. An exact rule wins over any glob even if listed later; among globs, the first matching row wins and can be reordered. These are implicit-effort restrictions, not model metadata or limits on explicit supported caller/manual levels.
+The **Effort rules** sidebar edits global `effort.rules`: pick an exact catalog model or enter a `provider/model` glob or `re:` regular expression, then toggle its allowed concrete levels. Exact rules win over regexes, then globs. The first matching row within a kind wins; pattern rows can be reordered. These rules apply to implicit effort choices in sessions and subagents, including saved fixed defaults, not only Auto. Explicit supported caller/manual efforts bypass the rules, and legacy mode ignores them. The judge path currently skips the implicit rule resolver when its selection is absent or Inherit.
 
 Assign a role in **Roles** or from a model row and select **Inherit**, **Off**, a fixed supported level, or **Auto**. Auto opens a multi-select of permitted levels and saves its model-bound `{ mode: "auto", allowed, selector }` preference in `roleEffortSelections`; a role's fixed or Inherit selection uses `{ mode: "fixed", level }` or `{ mode: "inherit" }`. When `modelRoleStorage: project`, choose project or global for the role and its effort metadata; otherwise it saves globally. Fallback rows have their own effort strips, including Auto sets, persisted as `retry.fallbackEffortSelections` beside the global chain. The `effort` classifier role itself offers no Auto option: it needs concrete enabled reasoning. Edits to a role model and its effort selection are saved together, and failed saves keep the draft open.
 
 In the default `effort.mode: replacement`, implicit role/fallback choices are intersected with the target model's capabilities and winning global rule. A constrained fixed level adjusts to the nearest permitted level below it or, if necessary, the lowest permitted level, with a warning. An empty permitted intersection yields an actionable error instead of silent promotion. `effort.mode: legacy` restores the old `lo|med|hi` task hints and `task.maxEffort` ceiling; the replacement wire accepts only concrete levels when enabled. See [Thinking and effort policy](./settings.md#thinking-and-effort-policy).
+
+### Context rules in `/models`
+
+The **Context rules** sidebar uses the same exact-model picker, glob/regex editor, search, and pattern ordering as Effort rules. Both editors save global rule arrays; project and `--config` layers can replace those arrays through the usual Settings precedence. Context rules apply to every session model use, including subagents and explicit effort selections. They do not rewrite the provider's catalog capabilities.
+
+Each `context.rules` entry has a `selector` and a `limit`. The limit uses the model row's **N** syntax: `400k` is a context base to which the configured compaction reserve or percentage applies, `f400k` is a fixed compaction trigger, and `80%` scales the model's window. The editor normalizes token shorthand to integers. Empty input removes a rule.
+
+Session compaction controls and active-role or per-agent budgets take priority. Next come the existing N-key `compaction.modelThresholds` entries, then context rules, then global compaction policy. Rules use exact > regex > glob precedence, with listed order breaking ties within a kind. An existing per-model prefix limit also outranks a context rule. Unlike an N edit, a context rule does not opt a model into extended context; bases above its active capacity are capped.
+
+The model column shows the resolved maintenance budget. An accent-colored `*` marks a value different from the catalog context. The preview retains **Context** for catalog capacity and shows **Effective context \*** separately. A token-base limit displays that base; a fixed or percentage limit displays the resolved trigger. The actual compaction point can be lower than a token base because it still reserves space. Disabled compaction displays the full active window.
+
+```yaml
+context:
+  rules:
+    - selector: test/model
+      limit: 100000
+    - selector: 're:^test/large-'
+      limit: f200000
+    - selector: test/*
+      limit: 80%
+```
+
 
 ### Model presets
 

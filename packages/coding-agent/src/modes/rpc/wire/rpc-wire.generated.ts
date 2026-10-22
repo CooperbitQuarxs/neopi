@@ -420,6 +420,7 @@ export interface RoleInfo {
 	source: "builtin" | "configured";
 	patterns: string[];
 	hidden: boolean;
+	description?: string;
 	tag?: string;
 	configured?: string;
 	resolved?: RoleResolution;
@@ -904,6 +905,16 @@ export interface AvailableSlashCommand {
 export interface SessionEntries {
 	entries: Record<string, unknown>[];
 	leafId: string | null;
+}
+
+export interface JournalPage {
+	entries: Record<string, unknown>[];
+	sessionId: string;
+	sessionFile: string;
+	leafId: string | null;
+	totalEntries: number;
+	/** Opaque cursor for the next page; absent on the last page. */
+	nextCursor?: string;
 }
 
 /** Raw session tree roots. */
@@ -2112,6 +2123,13 @@ export interface GetEntriesParams {
 	since?: string;
 }
 
+export interface GetEntriesPageParams {
+	scope?: "journal" | "branch";
+	direction?: "forward" | "backward";
+	cursor?: string;
+	limit?: number;
+}
+
 export interface NavigateTreeParams {
 	targetId: string;
 	expectedSessionId: string;
@@ -2421,6 +2439,7 @@ export interface RpcWireCommands {
 	set_ask_dialog: { params: SetAskDialogParams; result: SetAskDialogResult };
 	get_available_commands: { params: undefined; result: GetAvailableCommandsResult };
 	get_entries: { params: GetEntriesParams; result: SessionEntries };
+	get_entries_page: { params: GetEntriesPageParams; result: JournalPage };
 	get_tree: { params: undefined; result: SessionTree };
 	navigate_tree: { params: NavigateTreeParams; result: NavigateTreeResult };
 	resume_tree: { params: ResumeTreeParams; result: ResumeTreeResult };

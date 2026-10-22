@@ -17,9 +17,9 @@ function createSettings(model: Model<Api>) {
 	});
 }
 
-function createRegistry(model: Model<Api>) {
+function createRegistry(model: Model<Api>, availableModels: Model<Api>[] = [model]) {
 	return {
-		getAvailable: (kind = "chat") => (kind === "all" ? [model] : []),
+		getAvailable: (kind = "chat") => (kind === "all" ? availableModels : []),
 		getApiKey: async () => "test-key",
 		resolver: vi.fn(() => async () => "test-key"),
 	} as never;
@@ -30,6 +30,20 @@ afterEach(() => {
 });
 
 describe("task label generation", () => {
+	it("keeps task labels on tiny when session titles have a different assignment", async () => {
+		const tiny = getModelOrThrow("claude-haiku-4-5");
+		const title = getModelOrThrow("claude-sonnet-4-5");
+		const settings = Settings.isolated({
+			modelRoles: { tiny: `${tiny.provider}/${tiny.id}`, title: `${title.provider}/${title.id}` },
+		});
+		const registry = createRegistry(tiny, [tiny, title]);
+		const complete = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title>Inspect auth</title>" }],
+		} as never);
+		expect(await generateTaskLabel("Inspect the auth handler", registry, settings)).toBe("Inspect auth");
+		expect(complete.mock.calls[0]?.[0].id).toBe(tiny.id);
+	});
 	it("settles when its executor cancellation signal aborts an in-flight title request", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const controller = new AbortController();

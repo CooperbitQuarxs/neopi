@@ -177,6 +177,17 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		params: { "since?": "string" },
 		result: "SessionEntries",
 	},
+	{
+		name: "get_entries_page",
+		doc: "Read one canonical native journal or selected-branch page.",
+		params: {
+			"scope?": "'journal' | 'branch'",
+			"direction?": "'forward' | 'backward'",
+			"cursor?": "string",
+			"limit?": "number.integer",
+		},
+		result: "JournalPage",
+	},
 	{ name: "get_tree", doc: "Read the raw session tree.", result: "SessionTree" },
 	{
 		name: "navigate_tree",
@@ -196,7 +207,12 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	{
 		name: "resume_tree",
 		doc: "Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript.",
-		params: { resumeToken: "string", expectedSessionId: "string", expectedSessionFile: "string | null", expectedLeafId: "string | null" },
+		params: {
+			resumeToken: "string",
+			expectedSessionId: "string",
+			expectedSessionFile: "string | null",
+			expectedLeafId: "string | null",
+		},
 		result: { resumed: "true" },
 	},
 	{

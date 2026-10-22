@@ -42,42 +42,82 @@ export interface RpcResumeTreeResult {
 }
 
 const optionNote = { option: "string", note: "string" } as const;
-const answerFields = {
-	"question?": "string", "options?": "string[]", "multi?": "boolean",
-	"selectedOptions?": "string[]", "customInput?": "string", "note?": "string",
-	"optionNotes?": [optionNote, "[]"], "timedOut?": "boolean",
+const answerMetadata = {
+	"customInput?": "string",
+	"note?": "string",
+	"optionNotes?": [optionNote, "[]"],
+	"timedOut?": "boolean",
 } as const;
 const reanswerSchema = type({
-	content: [[{ type: "'text'", text: "string", "textSignature?": "string" }, "|", {
-		type: "'image'", data: "string", mimeType: "string",
-	}], "[]"],
+	content: [
+		[
+			{ type: "'text'", text: "string", "textSignature?": "string" },
+			"|",
+			{
+				type: "'image'",
+				data: "string",
+				mimeType: "string",
+			},
+		],
+		"[]",
+	],
 	"details?": {
-		...answerFields,
-		"results?": [{ ...answerFields, id: "string", question: "string", options: "string[]", multi: "boolean", selectedOptions: "string[]" }, "[]"],
-		"chatRedirect?": "boolean", "questions?": "string[]",
+		...answerMetadata,
+		"question?": "string",
+		"options?": "string[]",
+		"multi?": "boolean",
+		"selectedOptions?": "string[]",
+		"results?": [
+			{
+				...answerMetadata,
+				id: "string",
+				question: "string",
+				options: "string[]",
+				multi: "boolean",
+				selectedOptions: "string[]",
+			},
+			"[]",
+		],
+		"chatRedirect?": "boolean",
+		"questions?": "string[]",
 	},
 	"isError?": "boolean",
 });
 
 function validateExpected(options: TreeNavigationExpected): void {
 	if (
-		typeof options.expectedSessionId !== "string" || !options.expectedSessionId ||
-		!(options.expectedSessionFile === null || (typeof options.expectedSessionFile === "string" && options.expectedSessionFile.length > 0)) ||
-		!(options.expectedLeafId === null || (typeof options.expectedLeafId === "string" && options.expectedLeafId.length > 0))
+		typeof options.expectedSessionId !== "string" ||
+		!options.expectedSessionId ||
+		!(
+			options.expectedSessionFile === null ||
+			(typeof options.expectedSessionFile === "string" && options.expectedSessionFile.length > 0)
+		) ||
+		!(
+			options.expectedLeafId === null ||
+			(typeof options.expectedLeafId === "string" && options.expectedLeafId.length > 0)
+		)
 	) {
-		throw new TreeNavigationError("invalid_request", "Expected native session ID, session file and leaf are required");
+		throw new TreeNavigationError(
+			"invalid_request",
+			"Expected native session ID, session file and leaf are required",
+		);
 	}
 }
 
 /** Same owner and same native navigation operation for headless and terminal control clients. */
-export async function navigateRpcTree(session: AgentSession, options: RpcNavigateTreeOptions): Promise<RpcNavigateTreeResult> {
+export async function navigateRpcTree(
+	session: AgentSession,
+	options: RpcNavigateTreeOptions,
+): Promise<RpcNavigateTreeResult> {
 	validateExpected(options);
 	if (
-		typeof options.targetId !== "string" || !options.targetId ||
+		typeof options.targetId !== "string" ||
+		!options.targetId ||
 		(options.summarize !== undefined && typeof options.summarize !== "boolean") ||
 		(options.customInstructions !== undefined && typeof options.customInstructions !== "string") ||
 		(options.allowAskReopen !== undefined && typeof options.allowAskReopen !== "boolean") ||
-		(options.reanswerAskResult !== undefined && (!options.allowAskReopen || !reanswerSchema.allows(options.reanswerAskResult)))
+		(options.reanswerAskResult !== undefined &&
+			(!options.allowAskReopen || !reanswerSchema.allows(options.reanswerAskResult)))
 	) {
 		throw new TreeNavigationError("invalid_request", "Invalid native tree navigation options");
 	}
@@ -93,7 +133,13 @@ export async function navigateRpcTree(session: AgentSession, options: RpcNavigat
 	const { leafId } = state;
 	return {
 		...state,
-		outcome: result.cancelled ? "cancelled" : result.reopenAsk ? "ask_reopen" : leafId === options.expectedLeafId ? "unchanged" : "navigated",
+		outcome: result.cancelled
+			? "cancelled"
+			: result.reopenAsk
+				? "ask_reopen"
+				: leafId === options.expectedLeafId
+					? "unchanged"
+					: "navigated",
 		cancelled: result.cancelled,
 		aborted: result.aborted,
 		editorText: result.editorText,

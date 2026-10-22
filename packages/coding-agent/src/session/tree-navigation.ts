@@ -22,7 +22,10 @@ export type TreeNavigationErrorCode =
 	| "invalid_resume";
 
 export class TreeNavigationError extends Error {
-	constructor(readonly code: TreeNavigationErrorCode, message: string) {
+	constructor(
+		readonly code: TreeNavigationErrorCode,
+		message: string,
+	) {
 		super(message);
 		this.name = "TreeNavigationError";
 	}

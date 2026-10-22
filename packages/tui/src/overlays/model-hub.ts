@@ -94,6 +94,16 @@ export interface HubEffortRule {
 	allowed: ThinkingEffort[];
 }
 
+export interface HubContextRule {
+	selector: string;
+	limit: number | string;
+}
+
+const EFFORT_RULE_DESCRIPTION =
+	"Not Auto-only: implicit efforts in sessions and subagents, including saved fixed defaults. Caller/manual efforts bypass rules; legacy mode ignores them.";
+const CONTEXT_RULE_DESCRIPTION =
+	"All session model uses, including subagents and explicit efforts. Session/role/agent overrides > N model limits > context rules > global policy. * marks the effective maintenance budget; catalog context stays in the preview.";
+
 /**
  * Selector kinds the hub can author. `re:` opts a selector into a native
  * ECMAScript regular expression; everything else keeps its existing literal or
@@ -186,6 +196,7 @@ export interface ModelHubSource extends ModelBrowserSource {
 	getGlobalModelRole(role: string): string | undefined;
 	getModelRoleSource(role: string): "global" | "project" | "default";
 	readonly effortRules: readonly HubEffortRule[];
+	readonly contextRules?: readonly HubContextRule[];
 	/** The policy resolver supplies actual supported levels intersected with the winning global rule. */
 	permittedEfforts(model: Model): readonly ThinkingEffort[];
 	getProjectRoleEffortSelection(role: string): HubEffortSelection | undefined;
@@ -242,8 +253,12 @@ export interface ModelHubCallbacks {
 	) => void | boolean | Promise<void | boolean>;
 	/** Return false to retain the draft if persistence fails. */
 	onEffortRulesChange?: (rules: HubEffortRule[]) => boolean | void;
+	/** Validate and normalize typed limits before persisting; false keeps the draft open. */
+	onContextRulesChange?: (rules: HubContextRule[]) => boolean | void;
 	/** Clear a configured role back to auto-selection. */
 	onUnassign: (role: string, scope?: ModelRoleSelectionScope) => void;
+	/** Persist the selected role's description. Return false to retain its draft. */
+	onRoleDescriptionChange?: (role: string, description: string) => boolean | void;
 	/** Persist a chain and its per-entry effort selections as one mutation. */
 	onFallbackChainChange?: (
 		role: string,
@@ -285,6 +300,11 @@ export interface ModelHubCallbacks {
 	 */
 	previewCompactionPoint?: (model: Model, input: string) => string | undefined;
 	onCancel: () => void;
+	/** Edit the file backing the active config view and reload it before resolving. */
+	onOpenConfigFile?: (
+		section: "roles" | "effort" | "context" | "overrides",
+		scope?: ModelRoleSelectionScope,
+	) => Promise<void>;
 }
 
 /** Why {@link ModelHubCallbacks.onCompactionPointChange} kept the field open. */
@@ -346,6 +366,18 @@ type StripState =
 			/** Footer text input naming a new role, or saving a model preset. */
 			kind: "name";
 			purpose: "role" | "preset";
+			input: Input;
+	  }
+	| {
+			kind: "name";
+			purpose: "contextRule";
+			selector: string;
+			input: Input;
+	  }
+	| {
+			kind: "name";
+			purpose: "description";
+			role: string;
 			input: Input;
 	  }
 	| {
@@ -437,6 +469,7 @@ type RolesAction =
 	| "new"
 	| "thinking"
 	| "compaction"
+	| "description"
 	| "save"
 	| "nextPreset"
 	| "prevPreset";
@@ -446,6 +479,7 @@ const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
 	x: "clear",
 	f: "fallback",
 	c: "cycle",
+	D: "description",
 	"[": "earlier",
 	"]": "later",
 	n: "new",
@@ -616,6 +650,7 @@ export class ModelHubComponent implements Component {
 	#recentSearchCount = 0;
 	#searchTotal = 0;
 	#activeEntryId = "all";
+	#externalEditPending = false;
 	/** Snap the sidebar viewport to the active entry on the next render; wheel panning leaves it free. */
 	#sidebarFollowActive = true;
 	#sidebarHover: number | null = null;
@@ -835,6 +870,10 @@ export class ModelHubComponent implements Component {
 		};
 	}
 
+	get blocksMenuHistory(): boolean {
+		return this.#externalEditPending;
+	}
+
 	navigationSnapshot(): ModelHubNavigation {
 		const row = this.#rolesRows[this.#roleIndex];
 		return {
@@ -886,7 +925,7 @@ export class ModelHubComponent implements Component {
 		);
 		this.#roleLastIndex = this.#roleIndex;
 		this.#roleViewport.setTop(state.roleTop);
-		const rules = this.#settings.effortRules;
+		const rules = this.#rules();
 		const effortIndex =
 			state.effortKey === "newExact"
 				? rules.length
@@ -997,7 +1036,7 @@ export class ModelHubComponent implements Component {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	#visibleRoleIds(): string[] {
-		return this.#settings.knownRoleIds.filter(role => !this.#settings.getRoleInfo(role).hidden);
+		return [...this.#settings.knownRoleIds];
 	}
 
 	/** Resolve every known role: configured values first, auto-selection for the rest. */
@@ -1183,6 +1222,12 @@ export class ModelHubComponent implements Component {
 			...this.#fixedEntries,
 			{ id: "sep:effort", kind: "separator", label: "" },
 			{ id: "effort", kind: "effort", label: "Effort rules", annotation: String(this.#settings.effortRules.length) },
+			{
+				id: "context",
+				kind: "effort",
+				label: "Context rules",
+				annotation: String(this.#settings.contextRules?.length ?? 0),
+			},
 		];
 		if (providers.length > 0) {
 			entries.push({ id: "sep:providers", kind: "separator", label: "" }, ...providers);
@@ -1666,7 +1711,8 @@ export class ModelHubComponent implements Component {
 			} else if (target.kind === "fallbackKey") {
 				this.#openFallbackKeyStrip(item);
 			} else if (target.kind === "effortRule") {
-				this.#openEffortLevels({ item, pendingRuleSelector: item.selector });
+				if (this.#contextRulesView()) this.#openContextLimit(item.selector);
+				else this.#openEffortLevels({ item, pendingRuleSelector: item.selector });
 			} else {
 				const old = target.index === null ? undefined : this.#fallbackChains()[target.role]?.[target.index];
 				const parsed = old ? this.#parseFallbackEntry(old) : undefined;
@@ -1960,8 +2006,11 @@ export class ModelHubComponent implements Component {
 		}
 		this.#configError = undefined;
 		if (strip.target === "rule") {
-			const index = this.#settings.effortRules.findIndex(rule => rule.selector === selector);
-			this.#openEffortLevels({ ruleIndex: index < 0 ? undefined : index, pendingRuleSelector: selector });
+			if (this.#contextRulesView()) this.#openContextLimit(selector);
+			else {
+				const index = this.#settings.effortRules.findIndex(rule => rule.selector === selector);
+				this.#openEffortLevels({ ruleIndex: index < 0 ? undefined : index, pendingRuleSelector: selector });
+			}
 		} else if (strip.target === "role" && strip.role) {
 			const models =
 				this.#scopedModels.length > 0 ? this.#scopedModels.map(entry => entry.model) : this.#registry.getAll("all");
@@ -2011,6 +2060,32 @@ export class ModelHubComponent implements Component {
 		else this.#openSelectorPattern("fallback", target);
 	}
 
+	#contextRulesView(): boolean {
+		return this.#activeEntry().id === "context";
+	}
+
+	#rules(): readonly (HubEffortRule | HubContextRule)[] {
+		return this.#contextRulesView() ? (this.#settings.contextRules ?? []) : this.#settings.effortRules;
+	}
+
+	#saveRules(rules: (HubEffortRule | HubContextRule)[]): boolean | void {
+		return this.#contextRulesView()
+			? this.#callbacks.onContextRulesChange?.(rules.filter((rule): rule is HubContextRule => "limit" in rule))
+			: this.#callbacks.onEffortRulesChange?.(rules.filter((rule): rule is HubEffortRule => "allowed" in rule));
+	}
+
+	#openContextLimit(selector: string): void {
+		const input = new Input();
+		const previous = this.#settings.contextRules?.find(rule => rule.selector === selector);
+		if (previous) input.setValue(String(previous.limit));
+		input.focused = true;
+		this.#strip = { kind: "name", purpose: "contextRule", selector, input };
+	}
+
+	#ruleValue(rule: HubEffortRule | HubContextRule): string {
+		return "limit" in rule ? String(rule.limit) : rule.allowed.join(", ");
+	}
+
 	#handleEffortRulesInput(data: string): void {
 		if (this.#focus === "scope") {
 			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n" || matchesKey(data, "space"))
@@ -2018,7 +2093,7 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		this.#syncEffortSelection();
-		const count = this.#settings.effortRules.length;
+		const count = this.#rules().length;
 		if (this.#effortIndex < 0) return;
 		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
 			this.#filterEditing = false;
@@ -2027,14 +2102,15 @@ export class ModelHubComponent implements Component {
 				this.#browser.setQuery("");
 				this.#setCandidateItems(this.#availableItems);
 			} else if (this.#effortIndex === count + 1) this.#openSelectorPattern("rule");
+			else if (this.#contextRulesView()) this.#openContextLimit(this.#rules()[this.#effortIndex].selector);
 			else this.#openEffortLevels({ ruleIndex: this.#effortIndex });
 		} else if (
 			this.#effortIndex < count &&
 			(matchesKey(data, "backspace") || matchesKey(data, "delete") || extractPrintableText(data) === "x")
 		) {
-			const rules = [...this.#settings.effortRules];
+			const rules = [...this.#rules()];
 			rules.splice(this.#effortIndex, 1);
-			this.#callbacks.onEffortRulesChange?.(rules);
+			this.#saveRules(rules);
 			this.#effortIndex = Math.min(this.#effortIndex, rules.length);
 			this.#refreshAfterMutation();
 		} else if (
@@ -2045,7 +2121,7 @@ export class ModelHubComponent implements Component {
 				extractPrintableText(data) === "]")
 		) {
 			const delta = matchesKey(data, "shift+up") || extractPrintableText(data) === "[" ? -1 : 1;
-			const rules = [...this.#settings.effortRules];
+			const rules = [...this.#rules()];
 			// Only listed order within one pattern kind decides precedence: a regex
 			// always outranks a glob, and exact rules outrank both, so a move hops
 			// over rules of any other kind instead of pretending to reorder them.
@@ -2055,28 +2131,28 @@ export class ModelHubComponent implements Component {
 			while (next >= 0 && next < count && selectorKind(rules[next]?.selector ?? "") !== kind) next += delta;
 			if (next < 0 || next >= count) return;
 			[rules[this.#effortIndex], rules[next]] = [rules[next], rules[this.#effortIndex]];
-			this.#callbacks.onEffortRulesChange?.(rules);
+			this.#saveRules(rules);
 			this.#effortIndex = next;
 			this.#refreshAfterMutation();
 		}
 	}
 
 	#effortRowKey(index: number): string {
-		const rule = this.#settings.effortRules[index];
-		return rule ? `rule:${rule.selector}` : index === this.#settings.effortRules.length ? "newExact" : "newPattern";
+		const rule = this.#rules()[index];
+		return rule ? `rule:${rule.selector}` : index === this.#rules().length ? "newExact" : "newPattern";
 	}
 
 	#effortRowText(index: number): string {
-		const rules = this.#settings.effortRules;
+		const rules = this.#rules();
 		const rule = rules[index];
 		if (!rule) return index === rules.length ? "+ Pick exact model…" : "+ Enter glob or re: regex…";
 		const kind = selectorKind(rule.selector);
 		const prefix = kind === "exact" ? "exact" : `${index + 1}. ${kind}`;
-		return `${prefix}  ${rule.selector}  [${rule.allowed.join(", ")}]`;
+		return `${prefix}  ${rule.selector}  [${this.#ruleValue(rule)}]`;
 	}
 
 	#syncEffortSelection(): readonly number[] {
-		const count = this.#settings.effortRules.length + 2;
+		const count = this.#rules().length + 2;
 		if (this.#effortRows.length !== count) this.#effortRows = Array.from({ length: count }, (_, index) => index);
 		this.#effortSelection.setItems(this.#effortRows, String(this.#effortIndex));
 		this.#effortSelection.setQuery(this.#effortSearch.value);
@@ -2085,9 +2161,15 @@ export class ModelHubComponent implements Component {
 		return this.#effortSelection.visibleItems;
 	}
 
+	#ruleHeaderRows = 3;
 	#renderEffortRules(width: number, rows: number): string[] {
 		const indices = this.#syncEffortSelection();
-		const window = Math.max(1, rows - 3);
+		const description = Bun.wrapAnsi(
+			this.#contextRulesView() ? CONTEXT_RULE_DESCRIPTION : EFFORT_RULE_DESCRIPTION,
+			Math.max(1, width - 2),
+		).split("\n");
+		this.#ruleHeaderRows = description.length + 2;
+		const window = Math.max(1, rows - this.#ruleHeaderRows - 1);
 		this.#effortVisibleCount = window;
 		if (this.#effortIndex !== this.#effortLastIndex) this.#effortViewport.reveal();
 		this.#effortLastIndex = this.#effortIndex;
@@ -2099,9 +2181,10 @@ export class ModelHubComponent implements Component {
 		this.#effortScrollStart = view.startIndex;
 		const lines = [
 			theme.fg("muted", " Exact rules win, then regex, then glob — each in listed order"),
+			...description.map(line => theme.fg("muted", ` ${line}`)),
 			this.#effortSearch.render(width, { muted: value => theme.fg("muted", value) }),
 		];
-		if (indices.length === 0) lines.push(theme.fg("muted", " No matching effort rules"));
+		if (indices.length === 0) lines.push(theme.fg("muted", " No matching rules"));
 		const body: string[] = [];
 		for (let row = view.startIndex; row < view.endIndex; row++) {
 			const index = indices[row];
@@ -2669,6 +2752,14 @@ export class ModelHubComponent implements Component {
 		this.#strip = { kind: "name", purpose, input };
 	}
 
+	#openDescriptionStrip(role: string): void {
+		if (!this.#callbacks.onRoleDescriptionChange) return;
+		const input = new Input();
+		input.focused = true;
+		input.setValue(this.#settings.getRoleInfo(role).description ?? "");
+		this.#strip = { kind: "name", purpose: "description", role, input };
+	}
+
 	/** The model a Roles row resolves to (assigned role or fallback), whose compaction point `m` edits. */
 	#roleRowModel(): Model | undefined {
 		const row = this.#rolesRows[this.#roleIndex];
@@ -2692,6 +2783,30 @@ export class ModelHubComponent implements Component {
 	#submitNameStrip(): void {
 		const strip = this.#strip;
 		if (strip?.kind !== "name") return;
+		if (strip.purpose === "contextRule") {
+			const rules = [...(this.#settings.contextRules ?? [])].filter(rule => rule.selector !== strip.selector);
+			const value = strip.input.getValue().trim();
+			if (value) rules.push({ selector: strip.selector, limit: value });
+			// Keep existing pattern order when editing a rule.
+			const previous = this.#settings.contextRules?.findIndex(rule => rule.selector === strip.selector) ?? -1;
+			if (value && previous >= 0) rules.splice(previous, 0, rules.pop()!);
+			if (this.#callbacks.onContextRulesChange?.(rules) === false) return;
+			this.#effortIndex = value
+				? rules.findIndex(rule => rule.selector === strip.selector)
+				: Math.min(this.#effortIndex, rules.length);
+			this.#strip = null;
+			this.#assigning = null;
+			this.#frame.chipRanges = [];
+			this.#refreshAfterMutation();
+			return;
+		}
+		if (strip.purpose === "description") {
+			if (this.#callbacks.onRoleDescriptionChange?.(strip.role, strip.input.getValue().trim()) === false) return;
+			this.#strip = null;
+			this.#frame.chipRanges = [];
+			this.#refreshAfterMutation();
+			return;
+		}
 		if (strip.purpose === "compaction") {
 			const value = strip.input.getValue();
 			const result = this.#callbacks.onCompactionPointChange?.(strip.model, value, compactionConfirmPending(strip));
@@ -2832,6 +2947,38 @@ export class ModelHubComponent implements Component {
 
 	#handleInput(rawData: string): void {
 		this.#nativeVersion++;
+		if (matchesKey(rawData, "ctrl+g") && !this.#keys.read(rawData) && this.#callbacks.onOpenConfigFile) {
+			if (!this.#externalEditPending && !this.#assignmentPending) {
+				const entry = this.#activeEntry();
+				const editingCompaction = this.#strip?.kind === "name" && this.#strip.purpose === "compaction";
+				const section =
+					editingCompaction
+						? "context"
+						: entry.kind === "roles"
+							? "roles"
+							: entry.kind === "effort"
+								? entry.id === "context"
+									? "context"
+									: "effort"
+								: "overrides";
+				const row = this.#rolesRows[this.#roleIndex];
+				const source =
+					section === "roles" &&
+					this.#strip?.kind !== "name" &&
+					this.#settings.modelRoleStorage === "project" &&
+					row?.kind === "role"
+						? this.#settings.getModelRoleSource(row.role)
+						: "global";
+				const scope = source === "project" ? "project" : "global";
+				this.#externalEditPending = true;
+				void this.#callbacks.onOpenConfigFile(section, scope).finally(() => {
+					this.#externalEditPending = false;
+					this.#refreshAfterMutation();
+					this.#tui.requestRender();
+				});
+			}
+			return;
+		}
 		if (this.#assignmentPending) {
 			if (matchesSelectCancel(rawData)) this.#callbacks.onCancel();
 			return;
@@ -3310,6 +3457,9 @@ export class ModelHubComponent implements Component {
 			case "pick":
 				if (row) this.#activateRolesRow(row);
 				return;
+			case "description":
+				if (role) this.#openDescriptionStrip(role);
+				return;
 			case "clear":
 				if (role) this.#unassignRole(role);
 				else if (row?.kind === "fallback") this.#removeFallback(row);
@@ -3463,7 +3613,7 @@ export class ModelHubComponent implements Component {
 			} else if (entry.kind === "effort" && this.#assigning === null) {
 				this.#focus = "list";
 				const indices = this.#syncEffortSelection();
-				const index = indices[bodyLine - 2 + this.#effortScrollStart];
+				const index = indices[bodyLine - this.#ruleHeaderRows + this.#effortScrollStart];
 				if (index !== undefined) {
 					if (this.#effortIndex === index) this.#handleEffortRulesInput("\r");
 					else this.#effortIndex = index;
@@ -3607,7 +3757,10 @@ export class ModelHubComponent implements Component {
 			const cancel = editorKey("tui.select.cancel");
 			if (this.#assigning.kind === "effortRule") {
 				return truncateToWidth(
-					theme.fg("accent", ` New exact effort rule — ${enter} picks model, ${cancel} cancels`),
+					theme.fg(
+						"accent",
+						` New exact ${this.#contextRulesView() ? "context" : "effort"} rule · ${enter} picks model, ${cancel} cancels`,
+					),
 					width,
 				);
 			}
@@ -3641,11 +3794,14 @@ export class ModelHubComponent implements Component {
 			case "recent":
 				text = `Recently used models${scopedSuffix}`;
 				break;
-			case "roles":
-				text = `Model roles — ${formatKeyHint("f")} adds a retry fallback, cleared roles fall back to auto-selection`;
+			case "roles": {
+				const row = this.#rolesRows[this.#roleIndex];
+				text = row && "role" in row ? (this.#settings.getRoleInfo(row.role).description ?? "") : "";
+				text = sanitizeDisplayWarning(text);
 				break;
+			}
 			case "effort":
-				text = "Global implicit effort rules — exact wins, then regex, then glob, each in listed order";
+				text = this.#contextRulesView() ? CONTEXT_RULE_DESCRIPTION : EFFORT_RULE_DESCRIPTION;
 				break;
 			case "provider":
 				if (entry.locked) {
@@ -3917,7 +4073,7 @@ export class ModelHubComponent implements Component {
 			return MODEL_SCOPE_HINT;
 		const detail = this.#surfaceFooterHint();
 		if (this.#strip || this.#filterEditing) return detail;
-		return `h/l pane · / search · ${detail}`;
+		return `h/l pane · / search · ${detail}${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}`;
 	}
 
 	#surfaceFooterHint(): string {
@@ -3932,9 +4088,11 @@ export class ModelHubComponent implements Component {
 		if (strip) {
 			if (strip.kind === "name") {
 				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent · h/l pane`;
+				if (strip.purpose === "description") return `${enter} save description · ${cancel} leave field`;
 				if (strip.purpose === "compaction") {
 					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · ${cancel} leave field`;
 				}
+				if (strip.purpose === "contextRule") return `${enter} save context limit · ${cancel} leave field`;
 				if (strip.purpose === "preset") {
 					return `${enter} save preset · ${cancel} leave field`;
 				}
@@ -3942,7 +4100,7 @@ export class ModelHubComponent implements Component {
 			}
 			if (strip.kind === "pattern")
 				return strip.input.focused
-					? `${enter} continue to effort · ${cancel} leave field`
+					? `${enter} continue to ${strip.target === "rule" && this.#contextRulesView() ? "limit" : "effort"} · ${cancel} leave field`
 					: `/ edit · ${enter} continue · ${cancel} parent · h/l pane`;
 			if (strip.kind === "effortLevels")
 				return `h/l ${leftRight} effort · ${formatKeyHint("space")} toggle · ${enter} save · ${cancel} discard`;
@@ -4006,7 +4164,7 @@ export class ModelHubComponent implements Component {
 				this.#presets().names.length > 0 ? ` · ${formatKeyHints(["ctrl+left", "ctrl+right"])} preset` : "";
 			const yank =
 				row?.kind === "role" && (this.#fallbackChains()[row.role]?.length ?? 0) > 0 ? "yank chain" : "yank model";
-			return `${upDown} rows · ${enter} pick · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} ${yank} · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
+			return `${upDown} rows · ${enter} pick · D description · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} ${yank} · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth
@@ -4058,19 +4216,27 @@ export class ModelHubComponent implements Component {
 			const labelText =
 				strip.purpose === "compaction"
 					? `${strip.model.id} limit:`
-					: strip.purpose === "preset"
-						? "Preset name:"
-						: "New role name:";
+					: strip.purpose === "contextRule"
+						? `${strip.selector} limit:`
+						: strip.purpose === "description"
+							? `${strip.role} description:`
+							: strip.purpose === "preset"
+								? "Preset name:"
+								: "New role name:";
 			const label = theme.fg("accent", labelText);
 			// A compaction point is at most a few characters (`1500k`, `12.5%`); a
 			// narrow field leaves the row for its notice.
-			const maxInputWidth = strip.purpose === "compaction" ? 10 : 32;
+			const maxInputWidth = strip.purpose === "compaction" ? 10 : strip.purpose === "description" ? width : 32;
 			const inputWidth = Math.max(8, Math.min(maxInputWidth, width - visibleWidth(labelText) - 24));
 			const inputLine = strip.input.render(inputWidth)[0] ?? "";
 			let hint: string;
 			if (strip.purpose === "compaction") {
 				const notice = compactionNotice(strip, this.#callbacks.previewCompactionPoint);
 				hint = theme.fg(notice.style, notice.text);
+			} else if (strip.purpose === "contextRule") {
+				hint = theme.fg("dim", "400k base · f400k fixed · 80% · empty resets");
+			} else if (strip.purpose === "description") {
+				hint = "";
 			} else {
 				hint = theme.fg("dim", "(letters, digits, - and _)");
 			}
@@ -4080,7 +4246,7 @@ export class ModelHubComponent implements Component {
 			const label = theme.fg(
 				"accent",
 				strip.target === "rule"
-					? "Model effort pattern:"
+					? `Model ${this.#contextRulesView() ? "context" : "effort"} pattern:`
 					: strip.target === "role"
 						? "Role model pattern:"
 						: "Fallback model pattern:",
@@ -4298,7 +4464,7 @@ export class ModelHubComponent implements Component {
 						selected: this.#effortIndex < 0 ? null : String(this.#effortIndex),
 						virtual: true,
 						grow: 1,
-						aria: "Effort rules",
+						aria: this.#contextRulesView() ? "Context rules" : "Effort rules",
 					},
 					items,
 					"effortRules",
@@ -4338,7 +4504,9 @@ export class ModelHubComponent implements Component {
 			if (assigning.kind === "fallbackKey") {
 				spans = [span("New fallback chain — pick the model it protects", "accent")];
 			} else if (assigning.kind === "effortRule") {
-				spans = [span("New exact effort rule — pick a model", "accent")];
+				spans = [
+					span(`New exact ${this.#contextRulesView() ? "context" : "effort"} rule · pick a model`, "accent"),
+				];
 			} else {
 				const info = this.#settings.getRoleInfo(assigning.role);
 				const label = info.tag ?? info.name ?? assigning.role;
@@ -4621,12 +4789,12 @@ export class ModelHubComponent implements Component {
 			focus: strip ? "strip" : this.#focus === "scope" ? "scopes" : "list",
 		};
 		if (entry.kind === "effort" && this.#assigning === null) {
-			const rules = this.#settings.effortRules;
+			const rules = this.#rules();
 			const indices = this.#syncEffortSelection();
 			const items: TspPickerItem[] = rules.map((rule, index) => ({
 				id: `effort:${index}`,
 				label: rule.selector,
-				detail: `${selectorKind(rule.selector)} · ${rule.allowed.join(", ")}`,
+				detail: `${selectorKind(rule.selector)} · ${this.#ruleValue(rule)}`,
 				mono: true,
 			}));
 			items.push(
@@ -4639,7 +4807,7 @@ export class ModelHubComponent implements Component {
 					noun: "rules",
 					query: this.#effortSearch.value,
 					cursor: this.#effortSearch.cursor,
-					placeholder: "Search effort rules…",
+					placeholder: this.#contextRulesView() ? "Search context rules…" : "Search effort rules…",
 					items,
 					order: indices.map(index => `effort:${index}`),
 					selected: this.#effortIndex < 0 ? null : `effort:${this.#effortIndex}`,
@@ -4743,7 +4911,8 @@ export class ModelHubComponent implements Component {
 		const assigning = this.#assigning;
 		if (assigning !== null) {
 			if (assigning.kind === "fallbackKey") return "New fallback chain — pick the model it protects";
-			if (assigning.kind === "effortRule") return "New exact effort rule — pick a model";
+			if (assigning.kind === "effortRule")
+				return `New exact ${this.#contextRulesView() ? "context" : "effort"} rule · pick a model`;
 			const info = this.#settings.getRoleInfo(assigning.role);
 			const label = info.tag ?? info.name ?? assigning.role;
 			const verb =
@@ -4758,6 +4927,7 @@ export class ModelHubComponent implements Component {
 		if (entry.kind === "provider" && entry.providerId && this.#refreshingProviders.has(entry.providerId)) {
 			return `${entry.label} · refreshing model list…`;
 		}
+		if (entry.kind === "effort") return this.#contextRulesView() ? CONTEXT_RULE_DESCRIPTION : EFFORT_RULE_DESCRIPTION;
 		const presets = rolesView ? this.#presets() : undefined;
 		if (presets && presets.names.length > 0) {
 			return [
@@ -4787,6 +4957,15 @@ export class ModelHubComponent implements Component {
 					scopes.push({ id: entry.id, label: "Roles", icon: "sparkles", count: this.#visibleRoleIds().length });
 					break;
 				case "effort":
+					if (entry.id === "context") {
+						scopes.push({
+							id: entry.id,
+							label: "Context rules",
+							icon: "sliders",
+							count: this.#settings.contextRules?.length ?? 0,
+						});
+						break;
+					}
 					scopes.push({
 						id: entry.id,
 						label: "Effort rules",
@@ -4913,8 +5092,16 @@ export class ModelHubComponent implements Component {
 								{ primary: true },
 							)
 						: pickerAction(
-								strip.purpose === "preset" ? "presetName" : "roleName",
-								strip.purpose === "preset" ? "Save preset" : "Create role",
+								strip.purpose === "description"
+									? "roleDescription"
+									: strip.purpose === "preset"
+										? "presetName"
+										: "roleName",
+								strip.purpose === "description"
+									? "Save description"
+									: strip.purpose === "preset"
+										? "Save preset"
+										: "Create role",
 								"enter",
 								{ primary: true },
 							)
@@ -4927,7 +5114,9 @@ export class ModelHubComponent implements Component {
 									: strip.kind === "effortLevels"
 										? "Save efforts"
 										: strip.kind === "pattern"
-											? "Continue to effort"
+											? this.#contextRulesView()
+												? "Continue to limit"
+												: "Continue to effort"
 											: strip.kind === "selectorChoice"
 												? "Select"
 												: "Assign / clear",
@@ -4970,6 +5159,9 @@ export class ModelHubComponent implements Component {
 					const assigned = this.#roles[row.role];
 					actions.push(
 						roleAction("pick", "Pick model", "enter", true),
+						this.#callbacks.onRoleDescriptionChange
+							? roleAction("description", "Description", "shift+d")
+							: undefined,
 						roleAction("fallback", "Add fallback", "f"),
 						assigned && !assigned.autoSelected ? roleAction("clear", "Clear", "x") : undefined,
 						this.#roleThinkingTarget(row.role) ? roleAction("thinking", "Thinking", "t") : undefined,
@@ -5046,11 +5238,15 @@ export class ModelHubComponent implements Component {
 				label: [
 					span(
 						strip.kind === "name"
-							? strip.purpose === "preset"
-								? "Preset name "
-								: "New role name "
+							? strip.purpose === "contextRule"
+								? `${strip.selector} limit `
+								: strip.purpose === "description"
+									? `${strip.role} description `
+									: strip.purpose === "preset"
+										? "Preset name "
+										: "New role name "
 							: strip.target === "rule"
-								? "Model effort pattern "
+								? `Model ${this.#contextRulesView() ? "context" : "effort"} pattern `
 								: strip.target === "role"
 									? "Role model pattern "
 									: "Fallback model pattern ",
@@ -5445,6 +5641,9 @@ export class ModelHubComponent implements Component {
 			case "presetName":
 				this.#submitPresetName();
 				return;
+			case "roleDescription":
+				this.#submitNameStrip();
+				return;
 			case "compactionPoint":
 				this.#submitNameStrip();
 				return;
@@ -5522,14 +5721,33 @@ export class ModelHubComponent implements Component {
 					"compactionPoint",
 				);
 			}
+			if (strip.purpose === "description") {
+				return row([text([span(`${strip.role} description:`, "accent")]), col([strip.input], { grow: 1 })]);
+			}
 			const preset = strip.purpose === "preset";
 			return node(
 				"row",
 				{ gap: "sm", align: "center" },
 				[
-					text([span(preset ? "Preset name:" : "New role name:", "accent")]),
+					text([
+						span(
+							preset
+								? "Preset name:"
+								: strip.purpose === "contextRule"
+									? `${strip.selector} limit:`
+									: "New role name:",
+							"accent",
+						),
+					]),
 					col([strip.input], { grow: 1 }),
-					text([span("(letters, digits, - and _)", "dim")]),
+					text([
+						span(
+							strip.purpose === "contextRule"
+								? "400k base · f400k fixed · 80% · empty resets"
+								: "(letters, digits, - and _)",
+							"dim",
+						),
+					]),
 				],
 				preset ? "presetName" : "roleName",
 			);
@@ -5539,7 +5757,7 @@ export class ModelHubComponent implements Component {
 				text([
 					span(
 						strip.target === "rule"
-							? "Model effort pattern:"
+							? `Model ${this.#contextRulesView() ? "context" : "effort"} pattern:`
 							: strip.target === "role"
 								? "Role model pattern:"
 								: "Fallback model pattern:",

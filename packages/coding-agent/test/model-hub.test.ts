@@ -24,8 +24,11 @@ import { CURSOR_MARKER, getKeybindings, setKeybindings, type TUI } from "@oh-my-
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { thinkingLevelGlyph } from "@oh-my-pi/pi-tui/render/render-utils";
 
+import { getKnownRoleIds, getRoleInfo, setRoleDescription } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { cfgCycleOrder, cfgModelPresets } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
+import { cfgContextRules } from "../src/config/context-policy";
+import { parseCompactionPointInput } from "../src/config/compaction-threshold";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { HubEffortSelection } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { cfgRetryFallbackChains } from "@oh-my-pi/pi-coding-agent/session/settings";
@@ -195,9 +198,30 @@ function createHub(options: {
 			onCycleOrderChange: options.callbacks?.onCycleOrderChange,
 			onSavePreset: options.callbacks?.onSavePreset,
 			onSwitchPreset: options.callbacks?.onSwitchPreset,
+			onOpenConfigFile: options.callbacks?.onOpenConfigFile,
+			onCompactionPointChange: options.callbacks?.onCompactionPointChange,
 			onFallbackChainChange: options.callbacks?.onFallbackChainChange ?? onFallbackChainChange,
+			onRoleDescriptionChange:
+				options.callbacks?.onRoleDescriptionChange ??
+				((role, description) => setRoleDescription(role, description, settings)),
 			onEffortRulesChange:
 				options.callbacks?.onEffortRulesChange ?? (rules => cfgEffortRules.override(settings, rules)),
+			onContextRulesChange:
+				options.callbacks?.onContextRulesChange ??
+				(rules => {
+					try {
+						cfgContextRules.override(
+							settings,
+							rules.map(rule => ({
+								selector: rule.selector,
+								limit: typeof rule.limit === "number" ? rule.limit : parseCompactionPointInput(rule.limit)!,
+							})),
+						);
+						return true;
+					} catch {
+						return false;
+					}
+				}),
 			onCancel: options.callbacks?.onCancel ?? onCancel,
 		},
 		options.hub,
@@ -222,6 +246,41 @@ describe("ModelHub", () => {
 		if (!testTheme) {
 			throw new Error("Failed to load dark theme for ModelHub tests");
 		}
+	});
+
+	test("roles marked hidden remain listed and D edits the selected description", () => {
+		const settings = Settings.isolated({
+			modelTags: { smol: { name: "My fast model", hidden: true }, private: { name: "Private", hidden: true } },
+		});
+		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true, terminalRows: 80 });
+		hub.handleInput(UP);
+		hub.handleInput("\n");
+		expect(normalize(hub.render(220))).toContain("Private");
+		expect(normalize(hub.render(220))).toContain("The main model for conversations and coding.");
+		hub.handleInput(DOWN);
+		expect(normalize(hub.render(220))).toContain(getRoleInfo("smol", settings).description!);
+		hub.handleInput("D");
+		hub.handleInput("\x01");
+		hub.handleInput("\x0b");
+		for (const ch of "Quick answers only") hub.handleInput(ch);
+		hub.handleInput("\n");
+		expect(getRoleInfo("smol", settings).description).toBe("Quick answers only");
+		expect(normalize(hub.render(220))).toContain("Quick answers only");
+		expect(getRoleInfo("smol", settings)).toMatchObject({ name: "My fast model", hidden: true });
+	});
+
+	test("role descriptions stay on one truncated header line", () => {
+		const settings = Settings.isolated({
+			modelTags: {
+				default: { name: "Default", description: `Header start\n${"long description ".repeat(50)}Header end` },
+			},
+		});
+		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true });
+		hub.handleInput(UP);
+		const lines = hub.render(120).map(line => stripVTControlCharacters(line));
+		expect(lines.filter(line => line.includes("Header start"))).toHaveLength(1);
+		expect(lines.join("\n")).not.toContain("Header end");
+		expect(lines.every(line => Bun.stringWidth(line) <= 120)).toBe(true);
 	});
 
 	afterEach(() => {
@@ -720,6 +779,7 @@ describe("ModelHub", () => {
 				// Sidebar order: Roles, All models, Effort rules, alpha, beta, delta-local, gamma.
 				// Hop down onto the keyless provider, which schedules its refresh.
 				hub.handleInput(DOWN); // All models → Effort rules
+				hub.handleInput(DOWN); // Effort rules → Context rules
 				hub.handleInput(DOWN); // all → alpha
 				hub.handleInput(DOWN); // alpha → beta
 				hub.handleInput(DOWN); // beta → delta-local
@@ -791,10 +851,12 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // All models → locked anthropic
 			expect(normalize(hub.render(220))).toContain("anthropic has no credentials configured");
 
 			hub.handleInput(UP); // locked provider → Effort rules
+			hub.handleInput(UP); // Context rules → Effort rules
 			hub.handleInput(UP); // Effort rules → All models
 			hub.handleInput("/");
 			hub.handleInput("t");
@@ -1110,7 +1172,8 @@ describe("ModelHub", () => {
 					.render(220)
 					.map(line => stripVTControlCharacters(line))
 					.find(line => line.includes("❯")) ?? "";
-			for (let step = 0; step < 20 && !selected().includes("DICTATION"); step++) hub.handleInput(DOWN);
+			for (let step = 0; step < getKnownRoleIds(settings).length && !selected().includes("DICTATION"); step++)
+				hub.handleInput(DOWN);
 			expect(selected()).toContain("DICTATION");
 
 			expect(footerLine(hub.render(220))).not.toContain("t thinking");
@@ -2120,6 +2183,7 @@ describe("ModelHub", () => {
 			const { hub, onFallbackChainChange } = createHub({ models: [a], scoped: true, settings });
 
 			enterRolesView(hub);
+			hub.handleInput("G"); // Bring model-keyed chains into view regardless of the built-in role count.
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("test/*");
 			expect(rendered).toContain("↳ test/model-a");
@@ -2182,6 +2246,7 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models, scoped: true, settings });
 
 			enterRolesView(hub);
+			hub.handleInput("G"); // Bring model-keyed chains into view regardless of the built-in role count.
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("re:^test/model-a$");
 			expect(rendered).toContain("↳ re:^test/model-b$");
@@ -2371,6 +2436,7 @@ describe("ModelHub", () => {
 
 			// All models → Effort rules → custom-provider → openrouter.
 			hub.handleInput(DOWN);
+			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN);
 			expect(normalize(hub.render(220))).toContain("openrouter ·");
@@ -2404,6 +2470,7 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN); // openrouter scope
 			hub.handleInput("/");
@@ -2425,6 +2492,7 @@ describe("ModelHub", () => {
 			hub.handleInput(ESC);
 			hub.handleInput(LEFT); // switch focus to sidebar
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // skips custom-provider (0 matches), lands on openrouter
 			expect(normalize(hub.render(220))).toContain("openrouter ·");
 		});
@@ -2481,6 +2549,7 @@ describe("ModelHub", () => {
 			// Left returns to the sidebar: Down hops to the first provider.
 			hub.handleInput(LEFT);
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN);
 			expect(normalize(hub.render(220))).toContain("prov-a ·");
 		});
@@ -2500,6 +2569,7 @@ describe("ModelHub", () => {
 			// 120ms setTimeout (no injection seam), and the fetch completion is
 			// a promise chain — fake timers cannot drive the mixed path.
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // All models → prov-a, schedules the refresh
 			await Bun.sleep(140);
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
@@ -2528,6 +2598,7 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // schedules catalog-only refresh
 			hub.handleInput("\x1b[15~"); // F5 before the 120ms debounce fires
 			await Bun.sleep(40);
@@ -2548,6 +2619,7 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN);
 			await Bun.sleep(140);
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
@@ -2574,6 +2646,7 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // All models → prov-a
 			await Bun.sleep(140);
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
@@ -2599,6 +2672,7 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN);
 			await Bun.sleep(140);
 			expect(normalize(hub.render(220))).toContain("refreshing model list");
@@ -2619,6 +2693,7 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // All models → locked anthropic (separator skipped)
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("anthropic has no credentials configured");
@@ -2628,6 +2703,73 @@ describe("ModelHub", () => {
 			expect(onLoginRequest).toHaveBeenCalledWith("anthropic");
 		});
 	});
+	describe("context rule editor", () => {
+		test.each(["test/*", "re:^test/"])("authors %s limits through the shared pattern editor", selector => {
+			const settings = Settings.isolated();
+			const { hub } = createHub({ models: [makeModel("test", "model")], scoped: true, settings });
+			hub.handleInput(DOWN);
+			expect(normalize(hub.render(100))).toContain("Not Auto-only");
+			expect(normalize(hub.render(100))).toContain("Caller/manual efforts bypass rules");
+			hub.handleInput(DOWN);
+			const description = normalize(hub.render(100));
+			expect(description).toContain("including subagents and explicit efforts");
+			expect(description).toContain("N model limits > context rules");
+			hub.handleInput("\n");
+			hub.handleInput(DOWN);
+			hub.handleInput("\n");
+			for (const key of selector) hub.handleInput(key);
+			hub.handleInput("\n");
+			for (const key of "50k") hub.handleInput(key);
+			hub.handleInput("\n");
+			expect(cfgContextRules.get(settings)).toEqual([{ selector, limit: 50_000 }]);
+			hub.handleInput("\n");
+			hub.handleInput("\x15");
+			for (const key of "bad") hub.handleInput(key);
+			hub.handleInput("\n");
+			expect(cfgContextRules.get(settings)).toEqual([{ selector, limit: 50_000 }]);
+			hub.handleInput("\x15");
+			for (const key of "f40000") hub.handleInput(key);
+			hub.handleInput("\n");
+			expect(cfgContextRules.get(settings)).toEqual([{ selector, limit: "f40000" }]);
+			hub.handleInput("x");
+			expect(cfgContextRules.get(settings)).toEqual([]);
+		});
+
+		test("picks exact models and cancels a draft without persisting it", () => {
+			const settings = Settings.isolated();
+			const { hub } = createHub({ models: [makeModel("test", "model")], scoped: true, settings });
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN);
+			hub.handleInput("\n");
+			hub.handleInput("\n");
+			hub.handleInput("\n");
+			expect(footerLine(hub.render(220))).toContain("test/model limit");
+			for (const key of "40k") hub.handleInput(key);
+			hub.handleInput(ESC);
+			hub.handleInput(ESC);
+			expect(cfgContextRules.get(settings)).toEqual([]);
+		});
+
+		test("reorders patterns within their kind and retains exact precedence", () => {
+			const settings = Settings.isolated({
+				"context.rules": [
+					{ selector: "test/*", limit: 50_000 },
+					{ selector: "test/model", limit: 60_000 },
+					{ selector: "*/model", limit: 70_000 },
+				],
+			});
+			const { hub } = createHub({ models: [makeModel("test", "model")], scoped: true, settings });
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN);
+			hub.handleInput("\n");
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN);
+			hub.handleInput("[");
+			expect(cfgContextRules.get(settings).map(rule => rule.selector)).toEqual(["*/model", "test/model", "test/*"]);
+			expect(normalize(hub.render(220))).toContain("exact test/model");
+		});
+	});
+
 	describe("effort policy editors", () => {
 		test.each([false, true])(
 			"exact effort rules offer native off only when requiresEffort=%s permits it",
@@ -2920,4 +3062,72 @@ describe("ModelHub", () => {
 			]);
 		});
 	});
+});
+
+test("Ctrl-G routes roles, effort, context and catalog files and refreshes after editing", async () => {
+	const settings = Settings.isolated({});
+	const calls: string[] = [];
+	const updated = Promise.withResolvers<void>();
+	const { hub } = createHub({
+		models: [makeModel("test", "one")],
+		settings,
+		callbacks: {
+			onOpenConfigFile: async (section, scope) => {
+				calls.push(`${section}:${scope}`);
+				if (section === "roles") {
+					settings.setModelRole("new-role", "test/one");
+					updated.resolve();
+				}
+			},
+		},
+	});
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+	hub.handleInput("\x07");
+	await updated.promise;
+	await Bun.sleep(0);
+	expect(normalize(hub.render(140))).toContain("new-role");
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "effort" });
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "context" });
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "all" });
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	expect(calls).toEqual(["roles:global", "effort:global", "context:global", "overrides:global"]);
+});
+
+test("an existing menu Ctrl-G binding wins over opening the model config", () => {
+	const previous = getKeybindings();
+	const open = vi.fn(async () => {});
+	setKeybindings(new KeybindingsManager({ "tui.select.cancel": ["ctrl+g"] }));
+	try {
+		const { hub, onCancel } = createHub({ models: [], callbacks: { onOpenConfigFile: open } });
+		hub.handleInput("\x07");
+		expect(open).not.toHaveBeenCalled();
+		expect(onCancel).toHaveBeenCalledTimes(1);
+	} finally {
+		setKeybindings(previous);
+	}
+});
+
+test("Ctrl-G opens global settings for a project role's per-model compaction editor", async () => {
+	const open = vi.fn(async () => {});
+	const settings = Settings.isolated({ modelRoleStorage: "project" });
+	settings.setProjectModelRole("default", "test/one");
+	const { hub } = createHub({
+		models: [makeModel("test", "one")],
+		settings,
+		callbacks: {
+			onOpenConfigFile: open,
+			onCompactionPointChange: () => undefined,
+		},
+	});
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+	hub.handleInput("m");
+	expect(footerLine(hub.render(140))).toContain("one limit:");
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	expect(open).toHaveBeenCalledWith("context", "global");
 });

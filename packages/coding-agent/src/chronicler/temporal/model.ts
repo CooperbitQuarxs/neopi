@@ -1,7 +1,6 @@
 /**
- * One-shot text completions for temporal summaries and recall ranking,
- * resolved through the `chronicler-summary` role (which falls back to the
- * `chronicler` capture role, then the `slow` chain).
+ * One-shot completions for temporal summaries and recall ranking.
+ * Recall has an independent role, falling back to the effective summary role.
  */
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Api, type ApiKey, completeSimple, type Model, retryTransientCompletion } from "@oh-my-pi/pi-ai";
@@ -12,7 +11,11 @@ import {
 	toReasoningEffort,
 } from "@oh-my-pi/pi-tui/thinking";
 import type { ModelRegistry } from "../../config/model-registry";
-import { formatModelString, resolveChronicleSummaryRoleSelection } from "../../config/model-resolver";
+import {
+	formatModelString,
+	resolveChronicleRecallRoleSelection,
+	resolveChronicleSummaryRoleSelection,
+} from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 
 export interface ChronicleModelClient {
@@ -59,13 +62,17 @@ export function createModelClient(
 	};
 }
 
-/** Resolve the summary role to a client, or undefined when no model is available. */
+/** Resolve a workload's role to a client, or undefined when no model is available. */
 export function resolveChronicleModelClient(
 	settings: Settings,
 	modelRegistry: ModelRegistry,
+	role: "chronicler-summary" | "chronicler-recall" = "chronicler-summary",
 	sessionId: string = Bun.randomUUIDv7(),
 ): ChronicleModelClient | undefined {
-	const selection = resolveChronicleSummaryRoleSelection(settings, modelRegistry.getAvailable());
+	const selection =
+		role === "chronicler-recall"
+			? resolveChronicleRecallRoleSelection(settings, modelRegistry.getAvailable())
+			: resolveChronicleSummaryRoleSelection(settings, modelRegistry.getAvailable());
 	if (!selection) return undefined;
 	const requested = concreteThinkingLevel(selection.thinkingLevel) ?? ThinkingLevel.Medium;
 	const thinking = resolveThinkingLevelForModel(selection.model, requested) ?? ThinkingLevel.Inherit;

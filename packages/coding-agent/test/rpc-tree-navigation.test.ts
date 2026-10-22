@@ -5,12 +5,18 @@ import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import * as compaction from "@oh-my-pi/pi-agent-core/compaction";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
-import { createRpcCommandHandler, RpcInputDispatcher, type RpcCommandHandlerContext } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
+import {
+	createRpcCommandHandler,
+	RpcInputDispatcher,
+	type RpcCommandHandlerContext,
+} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
 import { navigateRpcTree, resumeRpcTree } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-tree";
 import type { RpcCommand, RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { parseSessionEntries } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { assistantMsg } from "./utilities";
@@ -22,19 +28,25 @@ afterEach(async () => {
 });
 
 async function fixture(options: { persisted?: boolean; extension?: ExtensionRunner } = {}) {
-	let root: string | undefined;
-	if (options.persisted) {
-		const scratch = path.join(os.homedir(), ".cache", "npi-canary");
-		await fs.mkdir(scratch, { recursive: true });
-		root = await fs.mkdtemp(path.join(scratch, "rpc-tree-"));
-		const ownedRoot = root;
-		cleanup.push(() => fs.rm(ownedRoot, { recursive: true, force: true }));
-	}
-	const manager = root ? SessionManager.create(root, root) : SessionManager.inMemory();
-	const agent = new Agent({ initialState: { model: getBundledModel("anthropic", "claude-sonnet-4-5")!, systemPrompt: ["Test"], tools: [] } });
+	const scratch = path.join(os.homedir(), ".cache", "npi-canary");
+	await fs.mkdir(scratch, { recursive: true });
+	const root = await fs.mkdtemp(path.join(scratch, "rpc-tree-"));
+	cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+	const authStorage = await AuthStorage.create(path.join(root, "auth.db"));
+	cleanup.push(async () => {
+		authStorage.close();
+	});
+	authStorage.keys.setRuntime("anthropic", "test-key");
+	const modelRegistry = new ModelRegistry(authStorage, path.join(root, "models.yml"));
+	const manager = options.persisted ? SessionManager.create(root, root) : SessionManager.inMemory();
+	const agent = new Agent({
+		initialState: { model: getBundledModel("anthropic", "claude-sonnet-4-5")!, systemPrompt: ["Test"], tools: [] },
+	});
 	const session = new AgentSession({
-		agent, sessionManager: manager, settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
-		modelRegistry: { getApiKey: async () => "test-key", resolver: () => "test-key" } as never,
+		agent,
+		sessionManager: manager,
+		settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
+		modelRegistry,
 		extensionRunner: options.extension,
 	});
 	cleanup.push(() => session.dispose());
@@ -44,13 +56,20 @@ async function fixture(options: { persisted?: boolean; extension?: ExtensionRunn
 		error: (id, command, error, code) => ({ id, type: "response", command, success: false, error, code }),
 	};
 	const handle = createRpcCommandHandler(ctx as RpcCommandHandlerContext);
-	const expected = () => ({ expectedSessionId: session.sessionId, expectedSessionFile: session.sessionFile ?? null, expectedLeafId: manager.getLeafId() });
+	const expected = () => ({
+		expectedSessionId: session.sessionId,
+		expectedSessionFile: session.sessionFile ?? null,
+		expectedLeafId: manager.getLeafId(),
+	});
 	const user = (text: string) => manager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
 	return { session, agent, manager, expected, user, handle, root };
 }
 
 function treeHook(callback: () => Promise<unknown>): ExtensionRunner {
-	return { hasHandlers: (event: string) => event === "session_before_tree", emit: callback } as unknown as ExtensionRunner;
+	return {
+		hasHandlers: (event: string) => event === "session_before_tree",
+		emit: callback,
+	} as unknown as ExtensionRunner;
 }
 
 describe("native RPC tree navigation", () => {
@@ -58,14 +77,31 @@ describe("native RPC tree navigation", () => {
 		const f = await fixture({ persisted: true });
 		f.user("root");
 		const ancestor = f.manager.appendMessage(assistantMsg("ancestor"));
-		const images = [{ type: "image" as const, data: "QQ==", mimeType: "image/png" }, { type: "image" as const, data: "Qg==", mimeType: "image/jpeg" }];
+		const images = [
+			{ type: "image" as const, data: "QQ==", mimeType: "image/png" },
+			{ type: "image" as const, data: "Qg==", mimeType: "image/jpeg" },
+		];
 		const draft = "compare [Image #1, 1x1] with [Image #2, 2x2]";
-		const target = f.manager.appendMessage({ role: "user", content: [{ type: "text", text: draft }, ...images], timestamp: Date.now() });
+		const target = f.manager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: draft }, ...images],
+			timestamp: Date.now(),
+		});
 		const oldReply = f.manager.appendMessage(assistantMsg("original reply"));
 		const before = f.expected();
 		const ids = f.manager.getEntries().map(entry => entry.id);
 		const response = await f.handle({ type: "navigate_tree", targetId: target, ...before });
-		expect(response).toMatchObject({ success: true, data: { outcome: "navigated", sessionId: before.expectedSessionId, sessionFile: before.expectedSessionFile, leafId: ancestor, editorText: draft, editorImages: images } });
+		expect(response).toMatchObject({
+			success: true,
+			data: {
+				outcome: "navigated",
+				sessionId: before.expectedSessionId,
+				sessionFile: before.expectedSessionFile,
+				leafId: ancestor,
+				editorText: draft,
+				editorImages: images,
+			},
+		});
 		if (!("data" in response)) throw new Error("Missing navigation result");
 		expect(response.data).not.toHaveProperty("sessionContext");
 		expect(f.manager.getEntries().map(entry => entry.id)).toEqual(ids);
@@ -73,7 +109,9 @@ describe("native RPC tree navigation", () => {
 		const sibling = f.user("alternate draft");
 		expect(f.manager.getEntry(sibling)?.parentId).toBe(ancestor);
 		await f.manager.flush();
-		const persistedIds = parseSessionEntries(await Bun.file(f.session.sessionFile!).text()).flatMap(entry => "id" in entry ? [entry.id] : []);
+		const persistedIds = parseSessionEntries(await Bun.file(f.session.sessionFile!).text()).flatMap(entry =>
+			"id" in entry ? [entry.id] : [],
+		);
 		expect(persistedIds).toContain(oldReply);
 		expect(persistedIds).toContain(sibling);
 		expect(f.session.sessionFile).toBe(before.expectedSessionFile!);
@@ -83,7 +121,11 @@ describe("native RPC tree navigation", () => {
 		const f = await fixture();
 		f.user("root");
 		const target = f.manager.appendMessage(assistantMsg("leaf"));
-		expect(await navigateRpcTree(f.session, { targetId: target, ...f.expected() })).toMatchObject({ outcome: "unchanged", cancelled: false, leafId: target });
+		expect(await navigateRpcTree(f.session, { targetId: target, ...f.expected() })).toMatchObject({
+			outcome: "unchanged",
+			cancelled: false,
+			leafId: target,
+		});
 	});
 
 	test("rejects stale session IDs, files and leaves as typed errors before mutation", async () => {
@@ -95,11 +137,20 @@ describe("native RPC tree navigation", () => {
 			[{ expectedSessionFile: "/different/copy.jsonl" }, "session_changed"],
 			[{ expectedLeafId: target }, "leaf_changed"],
 		] as const) {
-			expect(await f.handle({ type: "navigate_tree", targetId: target, ...f.expected(), ...change })).toMatchObject({ success: false, code });
+			expect(await f.handle({ type: "navigate_tree", targetId: target, ...f.expected(), ...change })).toMatchObject({
+				success: false,
+				code,
+			});
 			expect(f.manager.getLeafId()).toBe(leaf);
-			expect(f.manager.getEntry(target)).toMatchObject({ type: "message", message: { role: "user", content: "root" } });
+			expect(f.manager.getEntry(target)).toMatchObject({
+				type: "message",
+				message: { role: "user", content: "root" },
+			});
 		}
-		expect(await f.handle({ type: "navigate_tree", targetId: "missing", ...f.expected() })).toMatchObject({ success: false, code: "invalid_target" });
+		expect(await f.handle({ type: "navigate_tree", targetId: "missing", ...f.expected() })).toMatchObject({
+			success: false,
+			code: "invalid_target",
+		});
 	});
 
 	test("distinguishes a copied journal even when its durable session and entry IDs match", async () => {
@@ -113,7 +164,10 @@ describe("native RPC tree navigation", () => {
 		await f.manager.setSessionFile(copy);
 		expect(f.session.sessionId).toBe(before.expectedSessionId);
 		expect(f.manager.getLeafId()).toBe(before.expectedLeafId);
-		expect(await f.handle({ type: "navigate_tree", targetId: target, ...before })).toMatchObject({ success: false, code: "session_changed" });
+		expect(await f.handle({ type: "navigate_tree", targetId: target, ...before })).toMatchObject({
+			success: false,
+			code: "session_changed",
+		});
 	});
 
 	test("refuses an active turn without aborting it", async () => {
@@ -122,12 +176,18 @@ describe("native RPC tree navigation", () => {
 		f.manager.appendMessage(assistantMsg("leaf"));
 		const started = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
-		vi.spyOn(f.agent, "continue").mockImplementation(async () => { started.resolve(); await release.promise; });
+		vi.spyOn(f.agent, "continue").mockImplementation(async () => {
+			started.resolve();
+			await release.promise;
+		});
 		const abort = vi.spyOn(f.session, "abort");
 		f.session.resumeAfterAskReanswer();
 		try {
 			await started.promise;
-			expect(await f.handle({ type: "navigate_tree", targetId: target, ...f.expected() })).toMatchObject({ success: false, code: "session_busy" });
+			expect(await f.handle({ type: "navigate_tree", targetId: target, ...f.expected() })).toMatchObject({
+				success: false,
+				code: "session_busy",
+			});
 			expect(abort).not.toHaveBeenCalled();
 		} finally {
 			release.resolve();
@@ -138,17 +198,28 @@ describe("native RPC tree navigation", () => {
 	test("reserves native admission across awaited hooks and refuses concurrent replacement or input", async () => {
 		const reached = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
-		const f = await fixture({ extension: treeHook(async () => { reached.resolve(); await release.promise; return { cancel: true }; }) });
+		const f = await fixture({
+			extension: treeHook(async () => {
+				reached.resolve();
+				await release.promise;
+				return { cancel: true };
+			}),
+		});
 		const target = f.user("root");
 		const leaf = f.manager.appendMessage(assistantMsg("leaf"));
 		const navigation = f.handle({ type: "navigate_tree", targetId: target, ...f.expected() });
 		try {
 			await reached.promise;
-			expect(await f.handle({ type: "navigate_tree", targetId: target, ...f.expected() })).toMatchObject({ success: false, code: "session_busy" });
+			expect(await f.handle({ type: "navigate_tree", targetId: target, ...f.expected() })).toMatchObject({
+				success: false,
+				code: "session_busy",
+			});
 			await expect(f.session.newSession()).rejects.toMatchObject({ code: "session_busy" });
 			await expect(f.session.prompt("must not start")).rejects.toMatchObject({ code: "session_busy" });
 			expect(f.manager.getLeafId()).toBe(leaf);
-		} finally { release.resolve(); }
+		} finally {
+			release.resolve();
+		}
 		expect(await navigation).toMatchObject({ success: true, data: { outcome: "cancelled", leafId: leaf } });
 		expect(f.session.isSessionTransitioning).toBe(false);
 	});
@@ -156,7 +227,12 @@ describe("native RPC tree navigation", () => {
 	test("rechecks the leaf under admission after an awaited native hook", async () => {
 		const reached = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
-		const f = await fixture({ extension: treeHook(async () => { reached.resolve(); await release.promise; }) });
+		const f = await fixture({
+			extension: treeHook(async () => {
+				reached.resolve();
+				await release.promise;
+			}),
+		});
 		const target = f.user("root");
 		f.manager.appendMessage(assistantMsg("leaf"));
 		const navigation = f.handle({ type: "navigate_tree", targetId: target, ...f.expected() });
@@ -170,7 +246,12 @@ describe("native RPC tree navigation", () => {
 	test("rechecks native identity after an awaited hook rather than navigating a replacement", async () => {
 		const reached = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
-		const f = await fixture({ extension: treeHook(async () => { reached.resolve(); await release.promise; }) });
+		const f = await fixture({
+			extension: treeHook(async () => {
+				reached.resolve();
+				await release.promise;
+			}),
+		});
 		const target = f.user("root");
 		f.manager.appendMessage(assistantMsg("leaf"));
 		const navigation = f.handle({ type: "navigate_tree", targetId: target, ...f.expected() });
@@ -188,7 +269,11 @@ describe("native RPC tree navigation", () => {
 		f.manager.appendMessage(assistantMsg("leaf"));
 		const before = f.expected();
 		const ids = f.manager.getEntries().map(entry => entry.id);
-		expect(await navigateRpcTree(f.session, { targetId: target, summarize: true, ...before })).toMatchObject({ outcome: "cancelled", cancelled: true, leafId: before.expectedLeafId });
+		expect(await navigateRpcTree(f.session, { targetId: target, summarize: true, ...before })).toMatchObject({
+			outcome: "cancelled",
+			cancelled: true,
+			leafId: before.expectedLeafId,
+		});
 		expect(f.manager.getEntries().map(entry => entry.id)).toEqual(ids);
 	});
 
@@ -199,7 +284,11 @@ describe("native RPC tree navigation", () => {
 		f.user("abandoned");
 		f.manager.appendMessage(assistantMsg("leaf"));
 		const result = await navigateRpcTree(f.session, { targetId: target, summarize: true, ...f.expected() });
-		expect(result.summaryEntry).toMatchObject({ type: "branch_summary", parentId: target, summary: "Native branch summary" });
+		expect(result.summaryEntry).toMatchObject({
+			type: "branch_summary",
+			parentId: target,
+			summary: "Native branch summary",
+		});
 		expect(result.leafId).toBe(result.summaryEntry?.id ?? null);
 	});
 
@@ -219,47 +308,82 @@ describe("native RPC tree navigation", () => {
 		const navigation = Promise.withResolvers<object>();
 		const aborted = Promise.withResolvers<object>();
 		const background: Promise<void>[] = [];
-		const dispatcher = new RpcInputDispatcher({ deps: {
-			handleCommand: f.handle,
-			output: frame => {
-				if ("id" in frame && frame.id === "tree") navigation.resolve(frame);
-				if ("id" in frame && frame.id === "abort") aborted.resolve(frame);
+		const dispatcher = new RpcInputDispatcher({
+			deps: {
+				handleCommand: f.handle,
+				output: frame => {
+					if ("id" in frame && frame.id === "tree") navigation.resolve(frame);
+					if ("id" in frame && frame.id === "abort") aborted.resolve(frame);
+				},
+				errorResponse: (id, command, error) => ({ id, type: "response", command, success: false, error }),
+				trackBackgroundTask: task => {
+					background.push(task);
+				},
+				pendingExtensionRequests: new Map(),
+				onHostToolResult: () => {},
+				onHostToolUpdate: () => {},
+				onHostUriResult: () => {},
+				onToolApprovalResponse: () => {},
+				onPlanProposalResponse: () => {},
 			},
-			errorResponse: (id, command, error) => ({ id, type: "response", command, success: false, error }),
-			trackBackgroundTask: task => { background.push(task); },
-			pendingExtensionRequests: new Map(),
-			onHostToolResult: () => {}, onHostToolUpdate: () => {}, onHostUriResult: () => {},
-			onToolApprovalResponse: () => {}, onPlanProposalResponse: () => {},
-		} });
+		});
 		dispatcher.dispatch({ id: "tree", type: "navigate_tree", targetId: target, summarize: true, ...before });
 		await reached.promise;
 		dispatcher.dispatch({ id: "abort", type: "abort" });
 		try {
 			expect(await aborted.promise).toMatchObject({ success: true });
-			expect(await navigation.promise).toMatchObject({ success: true, data: { outcome: "cancelled", cancelled: true, aborted: true, leafId: before.expectedLeafId } });
+			expect(await navigation.promise).toMatchObject({
+				success: true,
+				data: { outcome: "cancelled", cancelled: true, aborted: true, leafId: before.expectedLeafId },
+			});
 		} finally {
 			release.resolve();
 			await dispatcher.drain();
 			await Promise.all(background);
 		}
 		expect(f.session.isSessionTransitioning).toBe(false);
-		expect(await navigateRpcTree(f.session, { targetId: target, ...f.expected() })).toMatchObject({ outcome: "navigated", editorText: "root" });
+		expect(await navigateRpcTree(f.session, { targetId: target, ...f.expected() })).toMatchObject({
+			outcome: "navigated",
+			editorText: "root",
+		});
 	});
 
 	test("probes ask, commits a sibling answer, and resumes only after explicit acknowledgement", async () => {
 		const f = await fixture();
 		f.user("deploy");
-		const questions = [{ id: "target", question: "Where?", options: [{ label: "staging" }, { label: "production" }] }];
-		const call = f.manager.appendMessage({ ...assistantMsg(""), content: [{ type: "toolCall", id: "ask-1", name: "ask", arguments: { questions } }], stopReason: "toolUse" });
-		const oldAnswer = f.manager.appendMessage({ role: "toolResult", toolName: "ask", toolCallId: "ask-1", content: [{ type: "text", text: "staging" }], isError: false, timestamp: Date.now() });
+		const questions = [
+			{ id: "target", question: "Where?", options: [{ label: "staging" }, { label: "production" }] },
+		];
+		const call = f.manager.appendMessage({
+			...assistantMsg(""),
+			content: [{ type: "toolCall", id: "ask-1", name: "ask", arguments: { questions } }],
+			stopReason: "toolUse",
+		});
+		const oldAnswer = f.manager.appendMessage({
+			role: "toolResult",
+			toolName: "ask",
+			toolCallId: "ask-1",
+			content: [{ type: "text", text: "staging" }],
+			isError: false,
+			timestamp: Date.now(),
+		});
 		const oldLeaf = f.manager.appendMessage(assistantMsg("old continuation"));
 		const continuing = vi.spyOn(f.agent, "continue").mockResolvedValue(undefined);
 		const probe = await navigateRpcTree(f.session, { targetId: oldAnswer, allowAskReopen: true, ...f.expected() });
-		expect(probe).toMatchObject({ outcome: "ask_reopen", leafId: oldLeaf, reopenAsk: { toolCallId: "ask-1", questions } });
+		expect(probe).toMatchObject({
+			outcome: "ask_reopen",
+			leafId: oldLeaf,
+			reopenAsk: { toolCallId: "ask-1", questions },
+		});
 		expect(probe.resumeToken).toBeUndefined();
 		const committed = await navigateRpcTree(f.session, {
-			targetId: oldAnswer, allowAskReopen: true, ...f.expected(),
-			reanswerAskResult: { content: [{ type: "text", text: "production" }], details: { question: "Where?", selectedOptions: ["production"] } },
+			targetId: oldAnswer,
+			allowAskReopen: true,
+			...f.expected(),
+			reanswerAskResult: {
+				content: [{ type: "text", text: "production" }],
+				details: { question: "Where?", selectedOptions: ["production"] },
+			},
 		});
 		expect(committed).toMatchObject({ outcome: "navigated", askReanswerCommitted: true });
 		expect(committed.resumeToken).toBeString();
@@ -278,16 +402,38 @@ describe("native RPC tree navigation", () => {
 	test("a committed resume token cannot start a turn in a replacement session", async () => {
 		const f = await fixture();
 		f.user("deploy");
-		f.manager.appendMessage({ ...assistantMsg(""), content: [{ type: "toolCall", id: "ask-1", name: "ask", arguments: { questions: [{ id: "target", question: "Where?", options: [{ label: "staging" }] }] } }], stopReason: "toolUse" });
-		const target = f.manager.appendMessage({ role: "toolResult", toolName: "ask", toolCallId: "ask-1", content: [{ type: "text", text: "staging" }], isError: false, timestamp: Date.now() });
+		f.manager.appendMessage({
+			...assistantMsg(""),
+			content: [
+				{
+					type: "toolCall",
+					id: "ask-1",
+					name: "ask",
+					arguments: { questions: [{ id: "target", question: "Where?", options: [{ label: "staging" }] }] },
+				},
+			],
+			stopReason: "toolUse",
+		});
+		const target = f.manager.appendMessage({
+			role: "toolResult",
+			toolName: "ask",
+			toolCallId: "ask-1",
+			content: [{ type: "text", text: "staging" }],
+			isError: false,
+			timestamp: Date.now(),
+		});
 		const committed = await navigateRpcTree(f.session, {
-			targetId: target, allowAskReopen: true, ...f.expected(),
+			targetId: target,
+			allowAskReopen: true,
+			...f.expected(),
 			reanswerAskResult: { content: [{ type: "text", text: "replacement answer" }] },
 		});
 		const continuing = vi.spyOn(f.agent, "continue").mockResolvedValue(undefined);
 		await f.manager.newSession();
 		const replacement = f.expected();
-		expect(await f.handle({ type: "resume_tree", resumeToken: committed.resumeToken!, ...replacement })).toMatchObject({ success: false, code: "session_changed" });
+		expect(
+			await f.handle({ type: "resume_tree", resumeToken: committed.resumeToken!, ...replacement }),
+		).toMatchObject({ success: false, code: "session_changed" });
 		expect(f.expected()).toEqual(replacement);
 		expect(continuing).not.toHaveBeenCalled();
 	});
@@ -295,7 +441,13 @@ describe("native RPC tree navigation", () => {
 	test("rejects malformed re-answers before writing a branch", async () => {
 		const f = await fixture();
 		const target = f.user("root");
-		const command = { type: "navigate_tree", targetId: target, ...f.expected(), allowAskReopen: true, reanswerAskResult: { content: [{ type: "text", text: 42 }] } } as unknown as RpcCommand;
+		const command = {
+			type: "navigate_tree",
+			targetId: target,
+			...f.expected(),
+			allowAskReopen: true,
+			reanswerAskResult: { content: [{ type: "text", text: 42 }] },
+		} as unknown as RpcCommand;
 		expect(await f.handle(command)).toMatchObject({ success: false, code: "invalid_request" });
 		expect(f.manager.getLeafId()).toBe(target);
 	});

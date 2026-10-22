@@ -48,6 +48,7 @@ Behavior notes:
 | `plan_proposal_cancel` | A pending plan proposal that resolves without a host answer is announced with a `plan_proposal_cancel` frame, and a later `plan_proposal_response` for it fails with `code: "proposal_cancelled"`. See [`plan_proposal_cancel`](#plan_proposal_cancel). |
 | `prompt_entry_ids` | `prompt`, `steer`, `follow_up` and `abort_and_prompt` responses carry `data.userEntryId`, the id of the session entry their message is written as, and every `get_messages_page` message carries the `entryId` of its entry. See [Entry ids](#entry-ids). |
 | `session_tree_navigation` | Guarded native same-file `navigate_tree`, restored drafts and images, and explicit `resume_tree` acknowledgement for ask re-answers. See [Native tree navigation](#native-tree-navigation). |
+| `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
 
 ### Session lease
 
@@ -189,6 +190,7 @@ Important edge behavior from runtime:
 - `{ id?, type: "set_ask_dialog", enabled: boolean }`
 - `{ id?, type: "get_available_commands" }`
 - `{ id?, type: "get_entries", since?: string }`
+- `{ id?, type: "get_entries_page", scope?: "journal" | "branch", direction?: "forward" | "backward", cursor?: string, limit?: number }`
 - `{ id?, type: "get_tree" }`
 - `{ id?, type: "navigate_tree", targetId: string, expectedSessionId: string, expectedSessionFile: string | null, expectedLeafId: string | null, summarize?: boolean, customInstructions?: string, allowAskReopen?: boolean, reanswerAskResult?: TreeAskReanswer }`
 - `{ id?, type: "resume_tree", resumeToken: string, expectedSessionId: string, expectedSessionFile: string | null, expectedLeafId: string | null }`
@@ -680,8 +682,8 @@ role:
 }
 ```
 
-- `roles` follows the carousel order: non-hidden built-ins in their fixed
-  order, then roles introduced by `cycleOrder`, `modelRoles` and `modelTags`.
+- `roles` includes every built-in in its fixed order, then roles introduced
+  by `cycleOrder`, `modelRoles` and `modelTags`, including roles marked hidden.
 - `section` is `"chat"`, or `"kind"` for the non-chat model-kind roles
   (`image`, `web`, `speech`, `dictation`, `judge`); hosts that only pick chat
   models filter on it.
@@ -689,6 +691,10 @@ role:
   that exist only through configuration.
 - `namespace` is `"deck"` for every `deck-*` role, built-in or configured, and absent for other roles. The built-in `deck-inbox` chat role defaults to `openai-codex/gpt-6-luna`; consumers can register further `deck-*` roles through the ordinary [role settings](./models.md#neodeck-roles).
 - `tag` is absent for custom roles, which have no built-in tag.
+- `description` is the effective `modelTags.<id>.description` override or the
+  built-in default. Custom roles have no default description. An empty string
+  deliberately clears the description. In `/models`, `D` edits this metadata
+  and the selected role's description appears above its rows.
 - `configured` is the raw `modelRoles` selector (lists joined with `", "`),
   absent when the role is not configured.
 - `patterns` is the effective pattern chain for `@<id>`: nested role aliases
@@ -1273,6 +1279,47 @@ Generated Python, Rust and Go clients carry the same contracts. Control clients
 send the same RPC commands to the existing terminal owner through `npi ctl pipe`;
 no second writer or session file is created.
 
+### Native journal pages
+
+`get_entries_page` returns `{ entries, sessionId, sessionFile, leafId, totalEntries, nextCursor? }`.
+`sessionFile` is the canonical absolute path. `entries` contains native `SessionEntry`
+records, including tool output, custom records, compaction, branch summaries and reset
+boundaries. Nothing is folded into model context or reduced to visible message text.
+The header is not an entry. `totalEntries` counts entries in the selected scope.
+
+The defaults are `scope: "journal"`, `direction: "forward"` and `limit: 100`.
+Limits range from 1 to 256. `branch` selects the current native leaf's ancestry.
+`journal` includes alternate branches in append order. A backward page starts at the
+newest end, but entries within every page remain chronological. Pass `nextCursor`
+with the same scope and direction to continue, and stop when it is absent.
+
+A journal cursor pins the initial prefix and snapshot leaf. Appends and pointer-only
+leaf changes do not extend or invalidate that walk. A branch cursor pins the active
+leaf and fails with `code: "leaf_changed"` if it changes, including after an append.
+Restart branch paging instead of combining pages from different leaves.
+Session/file changes and a missing or replaced prefix boundary fail with
+`stale_cursor`. Invalid cursors or changed scope/direction fail with `invalid_cursor`;
+invalid limits/options fail with `invalid_request`.
+An owner applying or rolling back a session/transcript transition returns
+`session_busy` rather than mixing identities. Ordinary streaming does not block
+journal reads.
+
+Pages use the same 768 KiB soft budget as message paging. Entries are never split
+or truncated. An oversized entry travels alone with negotiated protocol v2 chunking,
+or returns the existing transport-limit failure when it cannot fit. Legacy history
+without persisted IDs fails with `legacy_history_identity_required`, including a
+running owner whose pre-tree migration has not yet persisted. Reading does not
+trigger migration or persistence. An owner without a journal file returns
+`session_unavailable`.
+
+For a stopped session, `npi sessions entries --json --scope branch --direction backward
+--limit 100 /absolute/session.jsonl` uses the same page format and cursor options.
+Its leaf is the last persisted entry, not an unpersisted pointer-only move in a
+running owner. Live owners must be read over RPC/control. CLI failures emit
+`{ "error": { "code": "...", "message": "..." } }` on stdout even with a nonzero exit.
+Unreadable or malformed journals return `session_unavailable`, not partial history.
+Existing `get_entries`, `get_tree`, `get_messages` and `get_messages_page` keep their
+previous semantics.
 ### Pi-compatible history/tree commands with OMP-native entry payloads
 
 The commands and reconciliation semantics below are Pi-compatible, but the
