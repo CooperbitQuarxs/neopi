@@ -300,6 +300,11 @@ export interface ModelHubCallbacks {
 	 */
 	previewCompactionPoint?: (model: Model, input: string) => string | undefined;
 	onCancel: () => void;
+	/** Edit the file backing the active config view and reload it before resolving. */
+	onOpenConfigFile?: (
+		section: "roles" | "effort" | "context" | "overrides",
+		scope?: ModelRoleSelectionScope,
+	) => Promise<void>;
 }
 
 /** Why {@link ModelHubCallbacks.onCompactionPointChange} kept the field open. */
@@ -645,6 +650,7 @@ export class ModelHubComponent implements Component {
 	#recentSearchCount = 0;
 	#searchTotal = 0;
 	#activeEntryId = "all";
+	#externalEditPending = false;
 	/** Snap the sidebar viewport to the active entry on the next render; wheel panning leaves it free. */
 	#sidebarFollowActive = true;
 	#sidebarHover: number | null = null;
@@ -862,6 +868,10 @@ export class ModelHubComponent implements Component {
 			yankedFallback: structuredClone(state.yankedFallback),
 			presetCursor: state.presetCursor ? { ...state.presetCursor } : undefined,
 		};
+	}
+
+	get blocksMenuHistory(): boolean {
+		return this.#externalEditPending;
 	}
 
 	navigationSnapshot(): ModelHubNavigation {
@@ -2937,6 +2947,38 @@ export class ModelHubComponent implements Component {
 
 	#handleInput(rawData: string): void {
 		this.#nativeVersion++;
+		if (matchesKey(rawData, "ctrl+g") && !this.#keys.read(rawData) && this.#callbacks.onOpenConfigFile) {
+			if (!this.#externalEditPending && !this.#assignmentPending) {
+				const entry = this.#activeEntry();
+				const editingCompaction = this.#strip?.kind === "name" && this.#strip.purpose === "compaction";
+				const section =
+					editingCompaction
+						? "context"
+						: entry.kind === "roles"
+							? "roles"
+							: entry.kind === "effort"
+								? entry.id === "context"
+									? "context"
+									: "effort"
+								: "overrides";
+				const row = this.#rolesRows[this.#roleIndex];
+				const source =
+					section === "roles" &&
+					this.#strip?.kind !== "name" &&
+					this.#settings.modelRoleStorage === "project" &&
+					row?.kind === "role"
+						? this.#settings.getModelRoleSource(row.role)
+						: "global";
+				const scope = source === "project" ? "project" : "global";
+				this.#externalEditPending = true;
+				void this.#callbacks.onOpenConfigFile(section, scope).finally(() => {
+					this.#externalEditPending = false;
+					this.#refreshAfterMutation();
+					this.#tui.requestRender();
+				});
+			}
+			return;
+		}
 		if (this.#assignmentPending) {
 			if (matchesSelectCancel(rawData)) this.#callbacks.onCancel();
 			return;
@@ -4031,7 +4073,7 @@ export class ModelHubComponent implements Component {
 			return MODEL_SCOPE_HINT;
 		const detail = this.#surfaceFooterHint();
 		if (this.#strip || this.#filterEditing) return detail;
-		return `h/l pane · / search · ${detail}`;
+		return `h/l pane · / search · ${detail}${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}`;
 	}
 
 	#surfaceFooterHint(): string {

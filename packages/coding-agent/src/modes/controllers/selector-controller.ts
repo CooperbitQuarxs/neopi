@@ -1,6 +1,7 @@
 import { trackMountedDialog } from "../../control/dialogs";
 import { cfgControlSecretInput } from "../../control/settings";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
 import liveClientProtocolTemplate from "../../live/prompts/live-client-protocol.md" with { type: "text" };
 import { renderChatAdvisorPrompt } from "../../chat/chat-system-prompt";
@@ -139,7 +140,8 @@ import {
 import { LIVE_INGEST_DEFAULTS, liveIngestSourceFields } from "../../live/ingest-settings";
 import { createLivePersonaGeneration } from "../../live/persona-generation";
 import { createAgentsHubDeps } from "../agents-hub-deps";
-import { getEditorCommand, openInEditor } from "../../utils/external-editor";
+import { getEditorCommand, openInEditor, openEditorOnPath, withExternalEditor } from "../../utils/external-editor";
+import { type ConfigViewTarget, resolveConfigViewFile } from "../../config/config-view-file";
 import { collapseSharedUsageReports } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-tui/overlays/agent-hub";
@@ -633,6 +635,24 @@ export class SelectorController {
 		this.ctx.ui.requestRender();
 	}
 
+	async #openConfigFile(target: ConfigViewTarget, reload?: () => Promise<void>): Promise<void> {
+		await withExternalEditor(this.ctx, async command => {
+			await this.ctx.settings.flush();
+			const filePath = await resolveConfigViewFile(target, {
+				settings: this.ctx.settings,
+				models: this.ctx.session.modelRegistry,
+			});
+			if (!filePath) {
+				this.ctx.showWarning("This built-in configuration has no backing file.");
+				return;
+			}
+			await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+			const code = await openEditorOnPath(command, filePath);
+			await reload?.();
+			if (code !== 0) this.ctx.showWarning(`External editor exited with code ${code}. Saved changes were reloaded.`);
+		});
+	}
+
 	showSettingsSelector(): void {
 		if (this.#focusOpenMenu("settings")) return;
 		const menu = this.#claimMenu("settings", () => this.showSettingsSelector());
@@ -655,7 +675,7 @@ export class SelectorController {
 						providers: [...new Set(this.ctx.session.getAvailableModels().map(model => model.provider))].sort(
 							(a, b) => a.localeCompare(b),
 						),
-						settings: createSettingsHost(),
+						settings: createSettingsHost(this.ctx.settings),
 						plugins: createPluginSettingsHost(getProjectDir()),
 						model: this.ctx.session.model,
 						imageBudget: this.ctx.ui.imageBudget,
@@ -664,6 +684,8 @@ export class SelectorController {
 					},
 					{
 						onChange: (id, value) => this.handleSettingChange(id, value),
+						onOpenConfigFile: () =>
+							this.#openConfigFile({ kind: "settings" }, () => this.ctx.settings.reloadFromDisk()),
 						onThemePreview: async themeName => {
 							const result = await previewTheme(themeName);
 							if (result.success) {
@@ -865,6 +887,8 @@ export class SelectorController {
 			};
 			const overlay = new AdvisorConfigOverlayComponent(this.ctx.ui, deps, initialScope, initialDoc, {
 				getEffectiveRoster,
+				openConfigFile: async scope =>
+					this.#openConfigFile({ kind: "advisor", filePath: await resolveAdvisorConfigEditPath(scope, dirs) }),
 				loadDoc: async scope => loadWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs)),
 				save: async (scope, doc) => {
 					await saveWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs), doc);
@@ -1388,15 +1412,18 @@ export class SelectorController {
 		try {
 			hub = await AgentsHubComponent.create(
 				this.ctx.ui,
-				createAgentsHubDeps(
-					getProjectDir(),
-					this.ctx.settings,
-					this.ctx.session.modelRegistry,
-					() => this.ctx.session.effectiveExtensionRoots,
-					activeModelPattern,
-					defaultModelPattern,
-					model => this.ctx.session.effectiveServiceTier(model),
-				),
+				{
+					...createAgentsHubDeps(
+						getProjectDir(),
+						this.ctx.settings,
+						this.ctx.session.modelRegistry,
+						() => this.ctx.session.effectiveExtensionRoots,
+						activeModelPattern,
+						defaultModelPattern,
+						model => this.ctx.session.effectiveServiceTier(model),
+					),
+					openConfigFile: agent => this.#openConfigFile({ kind: "agent", filePath: agent.filePath }),
+				},
 				{ onCancel: () => done() },
 			);
 		} catch (error) {
@@ -1613,6 +1640,11 @@ export class SelectorController {
 			this.ctx.session.modelRegistry,
 			this.ctx.session.scopedModels,
 			{
+				onOpenConfigFile: (section, scope) =>
+					this.#openConfigFile({ kind: "models", section, scope }, async () => {
+						await this.ctx.settings.reloadFromDisk();
+						await this.ctx.session.modelRegistry.refresh("offline");
+					}),
 				onAssign: async (
 					model,
 					role,
