@@ -81,8 +81,39 @@ Provider provenance means the registry's existing provider row, including its
 catalog and KDL corrections. Source, literal override and exact-reference
 provenance are reported separately; unavailable facts remain unknown.
 Per-model compatibility and transport policy still belongs in the catalog's KDL
-rules. The shared fact-resolution API is also the prerequisite for the
-agent-facing lookup tracked in [#150](https://github.com/PsychedelicShayna/neopi/issues/150).
+rules. The agent-facing lookup below consumes this same fact resolution.
+
+## Agent model information
+
+Agents can read `model://` for the active model, or provide an exact model,
+pattern or role selector:
+
+- `model://@task` resolves the current task role, including project overrides.
+- `model://openai/*` queries matching available models.
+- `model://?selector=openai%2F*%3Ahigh` inspects an explicit effort override.
+
+Reserved URL characters belong in the encoded `selector` query. Effort suffixes
+are selector input, not read-tool line selectors. The JSON response reports
+match count and truncation for broad patterns instead of injecting a catalog
+table into every prompt.
+
+Supported model efforts, implicit operator restrictions, role Auto choices and
+explicit caller overrides are separate fields. A supported explicit level can
+bypass an implicit restriction; it cannot make an unsupported level available.
+Role resolution reports which configured selector and project/global source
+applied, along with applicable configured fallback alternatives.
+
+The actual reasoning field describes an observed concrete choice only for the
+active model. Auto remains `pending-auto` until classification has produced a
+concrete result, even though the runtime holds a provisional wire default.
+Queries for models that have not run do not invent a future Auto result.
+
+Technical characteristics and field provenance come from the live registry and
+the configured fact sources above. Identity includes its maintained catalog
+rule location. Technical fields without fact provenance are `null`; unverified
+effort guesses are not reported as supported levels. Missing descriptive or
+quality information is explicitly unknown. The lookup exposes no credentials,
+headers or provider endpoint URLs, and does not spawn an agent or change settings.
 
 ## `models.yml` / `models.yaml` shape
 

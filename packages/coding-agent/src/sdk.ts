@@ -2596,6 +2596,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						? startupAutoSelection
 						: undefined,
 			}),
+			getActualThinkingLevel: () => {
+				if (session) return session.isAutoThinking ? session.autoResolvedThinkingLevel() : session.thinkingLevel;
+				return thinkingLevel === AUTO_THINKING ? undefined : agent?.state.thinkingLevel;
+			},
 			onEffortDisclosure: message => session?.emitNotice("warning", message, "effort-policy"),
 			getServiceTierByFamily: () => session?.serviceTierByFamily,
 			getImageAttachments: () => session?.getImageAttachments() ?? [],

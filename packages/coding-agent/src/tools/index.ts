@@ -1,6 +1,12 @@
 import type { AgentContextTelemetry } from "../session/agent-telemetry";
 
-import type { AgentOptions, AgentTelemetryConfig, AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentOptions,
+	AgentTelemetryConfig,
+	AgentTool,
+	AgentToolContext,
+	ThinkingLevel,
+} from "@oh-my-pi/pi-agent-core";
 import type { EditStore } from "@oh-my-pi/pi-natives";
 import type { FetchImpl, ImageContent, Model, ServiceTierByFamily, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -453,6 +459,8 @@ export interface ToolSession {
 		origin: EffortOrigin;
 		selection?: EffortSelection;
 	};
+	/** Concrete active effort; undefined while Auto is pending, never its provisional wire default. */
+	getActualThinkingLevel?: () => ThinkingLevel | undefined;
 	/** Surface direct-call effort adjustments even when an eval helper returns only its answer. */
 	onEffortDisclosure?: (message: string) => void;
 	/** Get the session's live per-family service tiers (undefined = none). Source of truth for subagent `tier.subagent: inherit`. */
