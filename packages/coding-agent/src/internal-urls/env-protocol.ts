@@ -1,4 +1,6 @@
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import envDoc from "../prompts/internal-urls/env.md" with { type: "text" };
 import { isSecretEnvValue } from "../secrets";
 import { sessionEnvironment } from "../session/environment";
@@ -44,7 +46,8 @@ export class EnvProtocolHandler implements ProtocolHandler {
 	};
 
 	promptDoc(): string {
-		return envDoc.trim();
+		const { text } = resolvePromptAsset("internal-urls/env.md", envDoc);
+		return (text === envDoc ? text : renderPrompt(text)).trim();
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {

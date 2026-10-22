@@ -167,7 +167,7 @@ function createHandoffHarness(acceptance?: Promise<void>, voiceDelivery?: Promis
 	Object.assign(h.ctx.session, {
 		sessionId: "composer-attachment-handoff",
 		modelRegistry: { authStorage: {} },
-		sessionManager: { allocateArtifactPath: async () => ({}) },
+		sessionManager: { getCwd: () => process.cwd(), allocateArtifactPath: async () => ({}) },
 		agent: { peekFollowUpQueue: () => [] },
 		sendCustomMessageWithReceipt(message: { content: string }) {
 			prompts.push(message.content);
@@ -228,7 +228,7 @@ describe("LiveCommandController", () => {
 		Object.assign(h.ctx.session, {
 			sessionId: "three-keyword-fragments",
 			modelRegistry: { authStorage: {} },
-			sessionManager: { allocateArtifactPath: async () => ({}) },
+			sessionManager: { getCwd: () => process.cwd(), allocateArtifactPath: async () => ({}) },
 			agent: { peekFollowUpQueue: () => [] },
 			sendCustomMessageWithReceipt(message: { content: string }) {
 				prompts.push(message.content);
@@ -301,7 +301,7 @@ describe("LiveCommandController", () => {
 			Object.assign(h.ctx.session, {
 				sessionId: `authoritative-composer-${mode}`,
 				modelRegistry: { authStorage: {} },
-				sessionManager: { allocateArtifactPath: async () => ({}) },
+				sessionManager: { getCwd: () => process.cwd(), allocateArtifactPath: async () => ({}) },
 				agent: { peekFollowUpQueue: () => [] },
 				sendCustomMessageWithReceipt(message: { content: string }) {
 					prompts.push(message.content);
@@ -378,7 +378,7 @@ describe("LiveCommandController", () => {
 		Object.assign(h.ctx.session, {
 			sessionId: "accepted-edited-composer",
 			modelRegistry: { authStorage: {} },
-			sessionManager: { allocateArtifactPath: async () => ({}) },
+			sessionManager: { getCwd: () => process.cwd(), allocateArtifactPath: async () => ({}) },
 			agent: { peekFollowUpQueue: () => [] },
 			sendCustomMessageWithReceipt(message: { content: string }) {
 				prompts.push(message.content);
@@ -468,6 +468,7 @@ describe("LiveCommandController", () => {
 						...options.session,
 						modelRegistry: { authStorage: {} },
 						sessionId: "configured-live-model",
+						sessionManager: { getCwd: () => process.cwd() },
 					} as unknown as LiveSessionControllerOptions["session"],
 					createTransport: options => {
 						model = options.model;

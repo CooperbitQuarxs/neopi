@@ -62,6 +62,7 @@ describe("dictation during a live call", () => {
 		const session = {
 			modelRegistry: { authStorage: {} },
 			sessionId: "concurrent-input-test",
+			sessionManager: { getCwd: () => process.cwd() },
 			subscribe: () => () => {},
 		} as unknown as AgentSession;
 		const live = new LiveSessionController({

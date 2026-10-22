@@ -1,4 +1,6 @@
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { lookupModelInfo } from "../config/model-info";
 import modelDoc from "../prompts/internal-urls/model.md" with { type: "text" };
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, SchemeSpec } from "./types";
@@ -9,7 +11,8 @@ export class ModelProtocolHandler implements ProtocolHandler {
 	readonly spec: SchemeSpec = { backing: "virtual", selectors: "none", immutable: true };
 
 	promptDoc(): string {
-		return modelDoc.trim();
+		const { text } = resolvePromptAsset("internal-urls/model.md", modelDoc);
+		return (text === modelDoc ? text : renderPrompt(text)).trim();
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {

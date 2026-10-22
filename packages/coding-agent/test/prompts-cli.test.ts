@@ -75,7 +75,7 @@ let agentDir: string;
 beforeEach(async () => {
 	const cache = path.join(os.homedir(), ".cache", "npi-canary");
 	await fs.mkdir(cache, { recursive: true });
-	scratch = await fs.mkdtemp(path.join(cache, "prompts-cli-"));
+	scratch = await fs.mkdtemp(path.join(await fs.realpath(cache), "prompts-cli-"));
 	cwd = path.join(scratch, "project");
 	agentDir = path.join(scratch, "profile", "agent");
 	await fs.mkdir(cwd, { recursive: true });

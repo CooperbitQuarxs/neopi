@@ -134,11 +134,13 @@ import asset124 from "./internal-urls/agent.md" with { type: "text" };
 import asset125 from "./internal-urls/artifact.md" with { type: "text" };
 import asset126 from "./internal-urls/cfg.md" with { type: "text" };
 import asset127 from "./internal-urls/compaction.md" with { type: "text" };
+import internalEnvironment from "./internal-urls/env.md" with { type: "text" };
 import asset128 from "./internal-urls/history.md" with { type: "text" };
 import asset129 from "./internal-urls/issue.md" with { type: "text" };
 import asset130 from "./internal-urls/local.md" with { type: "text" };
 import asset131 from "./internal-urls/mcp.md" with { type: "text" };
 import asset132 from "./internal-urls/memory.md" with { type: "text" };
+import internalModel from "./internal-urls/model.md" with { type: "text" };
 import asset133 from "./internal-urls/omp.md" with { type: "text" };
 import asset134 from "./internal-urls/proc.md" with { type: "text" };
 import asset135 from "./internal-urls/rule.md" with { type: "text" };
@@ -2885,6 +2887,19 @@ export const promptAssets: readonly PromptAsset[] = [
 		],
 	},
 	{
+		id: "internal-urls/env.md",
+		relPath: "internal-urls/env.md",
+		bundled: internalEnvironment,
+		scope: "feature:internal-urls/env",
+		group: "core",
+		keys: [],
+		fixture: {},
+		consumerHints: [
+			"packages/coding-agent/src/prompts/internal-urls/env.md",
+			"packages/coding-agent/src/internal-urls/env-protocol.ts",
+		],
+	},
+	{
 		id: "internal-urls/history.md",
 		relPath: "internal-urls/history.md",
 		bundled: asset128,
@@ -2921,6 +2936,19 @@ export const promptAssets: readonly PromptAsset[] = [
 		consumerHints: [
 			"packages/coding-agent/src/prompts/internal-urls/local.md",
 			"packages/coding-agent/src/internal-urls/local-protocol.ts",
+		],
+	},
+	{
+		id: "internal-urls/model.md",
+		relPath: "internal-urls/model.md",
+		bundled: internalModel,
+		scope: "feature:internal-urls/model",
+		group: "core",
+		keys: [],
+		fixture: {},
+		consumerHints: [
+			"packages/coding-agent/src/prompts/internal-urls/model.md",
+			"packages/coding-agent/src/internal-urls/model-protocol.ts",
 		],
 	},
 	{
@@ -6362,6 +6390,10 @@ export const promptAssets: readonly PromptAsset[] = [
 					{ path: "kind", type: "string", required: true, resolution: "session-dependent" },
 					{ path: "status", type: "string", required: true, resolution: "session-dependent" },
 					{ path: "activity", type: "string", required: false, resolution: "session-dependent" },
+					{ path: "resolvedModelIdentity", type: "string", required: false, resolution: "session-dependent" },
+					{ path: "resolvedThinkingLevel", type: "string", required: false, resolution: "session-dependent" },
+					{ path: "fastModeEnabled", type: "boolean", required: false, resolution: "session-dependent" },
+					{ path: "fastModeActive", type: "boolean", required: false, resolution: "session-dependent" },
 				],
 			},
 			{ path: "ircParkedCount", type: "number", required: true, resolution: "session-dependent" },
@@ -6385,6 +6417,10 @@ export const promptAssets: readonly PromptAsset[] = [
 					kind: "Example kind",
 					status: "Example status",
 					activity: "Example activity",
+					resolvedModelIdentity: "openai/example",
+					resolvedThinkingLevel: "high",
+					fastModeEnabled: true,
+					fastModeActive: true,
 				},
 			],
 			ircParkedCount: 2,

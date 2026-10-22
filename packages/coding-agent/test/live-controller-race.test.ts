@@ -165,6 +165,7 @@ function makeHarness(options?: {
 		modelRegistry: { authStorage: {} },
 		sessionId: "live-race-test",
 		sessionManager: {
+			getCwd: () => process.cwd(),
 			allocateArtifactPath: async () => (artifactPath ? { id: "t", path: artifactPath } : {}),
 		},
 		subscribe(callback: (event: AgentSessionEvent) => void) {

@@ -37,7 +37,6 @@ import type { ControlSnapshot } from "../../src/control/types";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { LiveSessionController } from "../../src/live/controller";
 import { LiveCommandController } from "../../src/modes/controllers/live-command-controller";
-import type { InteractiveModeContext } from "../../src/modes/types";
 import { Container } from "@oh-my-pi/pi-tui/tui";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";

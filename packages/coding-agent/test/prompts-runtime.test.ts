@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, prompt, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { runPromptsCommand } from "../src/cli/prompts-cli";
+import { EnvProtocolHandler } from "../src/internal-urls/env-protocol";
+import { ModelProtocolHandler } from "../src/internal-urls/model-protocol";
 import { getPromptAsset } from "../src/prompts/catalog";
 import { getPromptAssetKeys } from "../src/prompts/lexicon";
 import { buildSystemPrompt, type BuildSystemPromptOptions } from "../src/system-prompt";
@@ -205,6 +207,25 @@ describe("built-in prompt runtime boundaries", () => {
 				"Hello Alexandra / alexandra",
 			);
 			expect(prompt.render(raw, buildLivePromptContext("shayna", "Shayna"))).toBe("Hello Shayna / shayna");
+		});
+	});
+	it("unpacks and reloads the environment and model protocol guidance", async () => {
+		await withPromptHome(async (cwd, agentDir) => {
+			for (const [id, handler] of [
+				["internal-urls/env.md", new EnvProtocolHandler()],
+				["internal-urls/model.md", new ModelProtocolHandler()],
+			] as const) {
+				expect(await runPromptsCommand(
+					{ action: "unpack", targets: [], flags: { only: id, json: true } },
+					{ cwd, agentDir, stdout: () => {}, stderr: () => {} },
+				)).toBe(0);
+				const file = path.join(agentDir, "builtin-prompts", id);
+				expect(await Bun.file(file).text()).toBe(getPromptAsset(id)!.bundled);
+				await Bun.write(file, "custom protocol guidance");
+				expect(handler.promptDoc()).toBe("custom protocol guidance");
+				await Bun.write(file, "updated protocol guidance");
+				expect(handler.promptDoc()).toBe("updated protocol guidance");
+			}
 		});
 	});
 });

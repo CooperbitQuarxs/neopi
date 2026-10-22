@@ -31,6 +31,7 @@ describe("live startup cancellation", () => {
 					messages: [],
 					modelRegistry: { authStorage: {} },
 					sessionId: "startup-cancellation-test",
+					sessionManager: { getCwd: () => process.cwd() },
 					subscribe: () => () => {},
 				} as unknown as AgentSession,
 				callbacks: { onPhase() {}, onLevels() {}, onTranscript() {}, onTerminal: terminal },

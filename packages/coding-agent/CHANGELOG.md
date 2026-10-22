@@ -81,6 +81,8 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Prompt unpacking and validation include live submitted-message routing, environment/model lookup guidance, and current subagent model, effort and fast-mode fields ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
+
 - Unmodified prompt unpacks now check clean, including MOA envelope partials and canned live identity ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
 - Stopping a live call while its persona or settings load no longer leaves a transport connected after cancellation ([#482](https://github.com/PsychedelicShayna/neopi/issues/482)).
 - Token-bounded text, including live transcript history, keeps emoji and combining characters intact at truncation boundaries ([#205](https://github.com/PsychedelicShayna/neopi/issues/205)).
