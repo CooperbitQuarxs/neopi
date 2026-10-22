@@ -535,6 +535,9 @@ continues to describe the active transcript window.
 `approvalMode` reports the effective native tool policy, including the
 process-local auto-approve override. Reading it does not change permissions.
 Per-tool policies and safety checks still apply.
+`approval_mode_changed` announces native approval-setting changes, including
+watched file reloads. Re-read state after the event; it is not a policy mutation
+request or confirmation that a GUI preference was applied.
 
 `tokensPerSecond` is a number when output throughput is available and `null`
 otherwise. `fastModeEnabled` reports the session's selected model-family tier

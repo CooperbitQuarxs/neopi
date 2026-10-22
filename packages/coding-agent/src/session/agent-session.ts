@@ -571,6 +571,7 @@ import {
 	cfgDevAutoqaConsent,
 	cfgTodoEnabled,
 	cfgToolsApproval,
+	cfgToolsApprovalMode,
 } from "../tools/settings";
 import { cfgTtsrJudge } from "../export/ttsr-settings";
 
@@ -2704,6 +2705,7 @@ export class AgentSession implements SettingsScope {
 		// Re-evaluate append-only context mode when the setting changes at runtime.
 		cfgProviderAppendOnlyContext.listen(this, () => this.#syncAppendOnlyContext(this.model));
 		cfgModelRoles.listen(this, () => this.#advisors.reconcileModelRoles());
+		cfgToolsApprovalMode.listen(this, () => this.#emit({ type: "approval_mode_changed" }));
 		// Re-derive the active model's effective context window when the
 		// extended-context setting flips at runtime, or a per-model compaction
 		// point moves past (or back inside) a standard window or is switched on/off: the registry

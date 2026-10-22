@@ -18,6 +18,7 @@ import { buildRpcSessionState, CONTROL_QUEUE_LIMIT } from "../../src/modes/rpc/r
 import { AgentSession } from "../../src/session/agent-session";
 import type { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
+import { cfgToolsApprovalMode } from "../../src/tools/settings";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 describe("control snapshot queue", () => {
@@ -130,6 +131,20 @@ describe("control snapshot queue", () => {
 	test("state reports the process auto-approve override rather than the saved policy", async () => {
 		const { hello } = await startWithQueue(undefined, [], true);
 		expect(hello.session!.approvalMode).toBe("yolo");
+	});
+
+	test("idle native permission changes notify observers and change subsequent snapshots", async () => {
+		const { client } = await startWithQueue();
+		const observed: string[] = [];
+		const unsubscribe = session!.subscribe(event => observed.push(event.type));
+		try {
+			cfgToolsApprovalMode.set(session!.settings, "write");
+			expect(observed).toContain("approval_mode_changed");
+			const state = (await client.request({ type: "state" })).data as ControlSnapshot;
+			expect(state.session!.approvalMode).toBe("write");
+		} finally {
+			unsubscribe();
+		}
 	});
 
 	test("busy summary names both delivery paths and counts steering plus follow-up", async () => {
