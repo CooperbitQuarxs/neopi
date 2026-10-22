@@ -93,6 +93,7 @@
 - CI formatting checks pass for native RPC model configuration, telemetry, themes and hosted stats sources ([#543](https://github.com/PsychedelicShayna/neopi/issues/543), [#548](https://github.com/PsychedelicShayna/neopi/issues/548)).
 - CI login coverage follows native secret OAuth prompts and verifies that logging out one account leaves other accounts authenticated ([#545](https://github.com/PsychedelicShayna/neopi/issues/545)).
 - Skill-list CI checks no longer reuse settings from an earlier test ([#349](https://github.com/PsychedelicShayna/neopi/issues/349)).
+- Service-completion CI checks wait for actual delivery before asserting session ownership and acknowledgment ([#300](https://github.com/PsychedelicShayna/neopi/issues/300)).
 - Ctrl-G opens the configuration file the view actually loads, ignoring unsupported TOML companions until their loaders support them ([#521](https://github.com/PsychedelicShayna/neopi/issues/521)).
 - Live subagent importance ranking now tries classifier fallbacks after a failed or empty primary response, even when authorization checks have already succeeded ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).
 - Live classifier failures now identify the model and failure reason in the warning and logs instead of silently discarding provider errors ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).
