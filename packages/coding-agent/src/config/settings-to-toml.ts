@@ -26,11 +26,14 @@ export function convertSettingsYamlToToml(source: string): TomlConversion {
 		throw new Error(`/: invalid YAML (${document.errors.map(error => error.code).join(", ")}); no TOML was written`);
 	}
 	const report = (pointer: string, message: string) => diagnostics.push({ path: pointer || "/", message });
+	const ancestors = new Set<unknown>();
 	if (document.commentBefore || document.comment) report("/", "YAML comments are not carried over");
 	function inspect(node: unknown, pointer: string): void {
 		if (!isNode(node)) return;
 		if (node.commentBefore || node.comment) report(pointer, "YAML comments are not carried over");
 		if (isAlias(node)) {
+			if (ancestors.has(node.resolve(document)))
+				throw new Error(`${pointer}: cyclic YAML aliases cannot be represented`);
 			report(pointer, "YAML alias expanded; shared reference identity is not carried over");
 			return;
 		}
@@ -51,6 +54,7 @@ export function convertSettingsYamlToToml(source: string): TomlConversion {
 		if ((isScalar(node) || isMap(node) || isSeq(node)) && node.anchor)
 			report(pointer, "YAML anchor syntax is not carried over");
 		if (isScalar(node) && node.value === null) report(pointer, "Explicit null encoded with NeoPi null-path metadata");
+		ancestors.add(node);
 		if (isMap(node)) {
 			for (const pair of node.items) {
 				if (!isScalar(pair.key) || typeof pair.key.value !== "string") {
@@ -61,14 +65,21 @@ export function convertSettingsYamlToToml(source: string): TomlConversion {
 				inspect(pair.value, child);
 			}
 		} else if (isSeq(node)) node.items.forEach((entry, index) => inspect(entry, `${pointer}/${index}`));
+		ancestors.delete(node);
 	}
 	inspect(document.contents, "");
 	if (document.warnings.length)
 		throw new Error("/: YAML has unsupported or ambiguous constructs; no TOML was written");
 	if (document.contents !== null && !isMap(document.contents))
 		throw new Error("/: settings YAML must contain a mapping at the document root");
-	// The same yaml parser options as Settings preserve the current merge-key and scalar semantics.
-	const parsed: unknown = document.toJS();
+	// The AST reports source-level losses; Bun owns the effective settings
+	// values, including merge-key expansion, exactly as in Settings.
+	let parsed: unknown;
+	try {
+		parsed = Bun.YAML.parse(source);
+	} catch {
+		throw new Error("/: the settings YAML reader rejected this document; no TOML was written");
+	}
 	const content = stringifySettingsToml((parsed ?? {}) as Record<string, unknown>);
 	return { content, diagnostics };
 }
