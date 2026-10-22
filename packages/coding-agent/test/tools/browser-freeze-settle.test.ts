@@ -720,6 +720,25 @@ describe("browser settle — lifecycle freeze via CDP", () => {
 			expect(getTabsMapForTest().has("settle-join")).toBe(false);
 		});
 
+		it("recreates a tab reused after eviction instead of resurrecting state", async () => {
+			mockCmuxSocket();
+			// No pre-attached surface: each open mints an owned split, so
+			// the two generations land on distinct targets.
+			const browser = await acquireBrowser(
+				{ kind: "cmux", socketPath: "/tmp/omp-test-settle-recreate.sock" },
+				{ cwd: "/tmp" },
+			);
+			const first = await acquireTab("settle-gone", browser, { timeoutMs: 1_000, ownerSessionId: "session-A" });
+			expect(await releaseTabsForOwner("session-A", { kill: false })).toBe(1);
+			expect(getTabsMapForTest().has("settle-gone")).toBe(false);
+
+			const second = await acquireTab("settle-gone", browser, { timeoutMs: 1_000, ownerSessionId: "session-A" });
+			expect(second.created).toBe(true);
+			expect(second.tab.targetId).not.toBe(first.tab.targetId);
+			expect(second.tab.frozen).toBe(false);
+			expect(second.tab.ownerSessionId).toBe("session-A");
+		});
+
 		it("settle is a no-op for unknown owners", async () => {
 			expect(await freezeTabsForOwner("session-nobody")).toBe(0);
 			expect(await releaseIdleTabsForOwner("session-nobody", { idleMs: 0 })).toBe(0);
@@ -798,30 +817,6 @@ describe("browser settle — lifecycle freeze via CDP", () => {
 			expect(second.tab.frozen).toBe(false);
 			expect(second.tab.persist).toBe(true);
 		}, 120_000);
-
-		it("recreates a tab reused after eviction instead of resurrecting state", async () => {
-			// Worker-tab release→recreate cannot run in this environment
-			// (Bun worker re-spawn fails even on the clean tree); the
-			// eviction→recreate shape is backend-independent — a missing
-			// name always takes the create path — so pin it on cmux while
-			// the worker half is covered by removal assertions above.
-			mockCmuxSocket();
-			// No pre-attached surface: each open mints an owned split, so
-			// the two generations land on distinct targets.
-			const browser = await acquireBrowser(
-				{ kind: "cmux", socketPath: "/tmp/omp-test-settle-recreate.sock" },
-				{ cwd: "/tmp" },
-			);
-			const first = await acquireTab("settle-gone", browser, { timeoutMs: 1_000, ownerSessionId: "session-A" });
-			expect(await releaseTabsForOwner("session-A", { kill: false })).toBe(1);
-			expect(getTabsMapForTest().has("settle-gone")).toBe(false);
-
-			const second = await acquireTab("settle-gone", browser, { timeoutMs: 1_000, ownerSessionId: "session-A" });
-			expect(second.created).toBe(true);
-			expect(second.tab.targetId).not.toBe(first.tab.targetId);
-			expect(second.tab.frozen).toBe(false);
-			expect(second.tab.ownerSessionId).toBe("session-A");
-		});
 
 		it("revalidates candidates mid-drain: reuse during an earlier close is honored", async () => {
 			const browser = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
