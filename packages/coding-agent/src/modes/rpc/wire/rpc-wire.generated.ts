@@ -420,6 +420,7 @@ export interface RoleInfo {
 	source: "builtin" | "configured";
 	patterns: string[];
 	hidden: boolean;
+	description?: string;
 	tag?: string;
 	configured?: string;
 	resolved?: RoleResolution;

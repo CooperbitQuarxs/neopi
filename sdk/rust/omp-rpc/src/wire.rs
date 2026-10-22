@@ -2804,6 +2804,8 @@ pub struct RoleInfo {
 	pub patterns: Vec<String>,
 	pub hidden: bool,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub tag: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub configured: Option<String>,

@@ -74,6 +74,9 @@ describe("RpcRoles", () => {
 			expect(role.section).toBe(KIND_ROLE_IDS.some(id => id === role.id) ? "kind" : "chat");
 			expect(role.patterns).toEqual(resolveConfiguredModelPatterns([`@${role.id}`], settings));
 		}
+		expect(roles.find(role => role.id === "agent-author")?.description).toContain("agent definitions");
+		expect(roles.find(role => role.id === "compaction")?.description).toContain("compaction");
+		expect(roles.find(role => role.id === "reviewer")?.description).toBeUndefined();
 	});
 
 	test("deck-inbox is a built-in chat role with the subscription Luna default", () => {
