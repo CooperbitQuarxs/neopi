@@ -482,6 +482,12 @@ import {
 	type PersistedSessionInit,
 	type SessionManager,
 } from "./session-manager";
+import {
+	assertTreeNavigationExpected,
+	TreeNavigationError,
+	type TreeNavigationExpected,
+	type TreeNavigationState,
+} from "./tree-navigation";
 import { SessionMemory, type SessionMemoryHost } from "./session-memory";
 import { buildSessionMetadata } from "./session-metadata";
 import { SessionProviderBoundary, type SessionProviderBoundaryHost } from "./session-provider-boundary";
@@ -1224,6 +1230,10 @@ export class AgentSession implements SettingsScope {
 	#sessionTransitionSettled: Promise<void> | undefined;
 	#resolveSessionTransition: (() => void) | undefined;
 	#sessionTransitionDepth = 0;
+	/** Only remote tree requests reserve admission; ordinary TUI/extension transitions retain their behavior. */
+	#remoteTreeAdmission = false;
+	#remoteTreeCancelled = false;
+	#treeReanswerResume: { token: string; expected: TreeNavigationExpected; generation: number } | undefined;
 	/** Chronicler stays suspended until the outermost transition settles, so a nested transition cannot resume it while an outer one is still pending. */
 	#chroniclerSuspendedByTransition = false;
 	/** Each using declaration disposes one depth, so nested transitions reuse this token. */
@@ -3293,6 +3303,7 @@ export class AgentSession implements SettingsScope {
 	}
 
 	async #admitSubmission<T>(work: () => Promise<T>): Promise<T> {
+		this.#assertNoRemoteTreeAdmission();
 		this.#admittedSubmissionCount++;
 		try {
 			return await work();
@@ -5182,6 +5193,10 @@ export class AgentSession implements SettingsScope {
 		});
 		this.#schedulePostPromptTask(
 			async signal => {
+				if (this.#remoteTreeAdmission) {
+					this.#skipAgentContinue("session-unavailable", request);
+					return;
+				}
 				// Defense in depth: if compaction/handoff slipped onto the post-prompt queue
 				// alongside us (e.g. via a scheduler we don't own), refuse to start a fresh
 				// streaming turn — agent.continue() here would race the handoff's session
@@ -5776,12 +5791,78 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#beginSessionTransition(): Disposable {
+		if (this.#remoteTreeAdmission && this.isSessionTransitioning) {
+			throw new TreeNavigationError("session_busy", "A remote tree navigation is in progress");
+		}
+		this.#treeReanswerResume = undefined;
 		if (this.#sessionTransitionDepth++ === 0) {
 			const settled = Promise.withResolvers<void>();
 			this.#sessionTransitionSettled = settled.promise;
 			this.#resolveSessionTransition = settled.resolve;
 		}
 		return this.#sessionTransitionScope;
+	}
+
+	#assertNoRemoteTreeAdmission(): void {
+		if (this.#remoteTreeAdmission) {
+			throw new TreeNavigationError("session_busy", "A remote tree navigation is in progress");
+		}
+	}
+
+	#assertTreeNavigationIdle(): void {
+		if (
+			this.isBusyForSnapshot ||
+			this.hasAdmittedSubmission ||
+			this.#abortInProgress ||
+			this.#postPromptTasks.size > 0 ||
+			this.#inFlightEventHandlers.size > 0 ||
+			this.hasPendingAsyncWork()
+		) {
+			throw new TreeNavigationError("session_busy", "The native session still has work in progress");
+		}
+	}
+
+	#admitRemoteTree(expected: TreeNavigationExpected | undefined): Disposable | undefined {
+		if (!expected) return undefined;
+		if (this.isSessionTransitioning || this.#remoteTreeAdmission) {
+			throw new TreeNavigationError("session_busy", "The native session is changing");
+		}
+		this.#assertTreeNavigationIdle();
+		assertTreeNavigationExpected(expected, this.sessionId, this.sessionFile, this.sessionManager.getLeafId());
+		this.#remoteTreeAdmission = true;
+		this.#remoteTreeCancelled = false;
+		return {
+			[Symbol.dispose]: () => {
+				this.#branchSummaryAbortController = undefined;
+				this.#remoteTreeAdmission = false;
+				this.#remoteTreeCancelled = false;
+			},
+		};
+	}
+
+	#treeResumeToken(expected: TreeNavigationExpected | undefined, committed: boolean): string | undefined {
+		if (!expected || !committed) return undefined;
+		const token = crypto.randomUUID();
+		this.#treeReanswerResume = {
+			token,
+			expected: {
+				expectedSessionId: this.sessionId,
+				expectedSessionFile: this.sessionFile ?? null,
+				expectedLeafId: this.sessionManager.getLeafId(),
+			},
+			generation: this.#promptGeneration,
+		};
+		return token;
+	}
+
+	#treeNavigationState(expected: TreeNavigationExpected | undefined): TreeNavigationState | undefined {
+		return expected
+			? {
+					sessionId: this.sessionId,
+					sessionFile: this.sessionFile,
+					leafId: this.sessionManager.getLeafId(),
+				}
+			: undefined;
 	}
 
 	/** Register cleanup on session ID changes, including whether an existing session was loaded. */
@@ -7083,6 +7164,7 @@ export class AgentSession implements SettingsScope {
 
 	/** Compact the active session history. */
 	compact(customInstructions?: string, options?: CompactOptions): Promise<CompactionResult> {
+		this.#assertNoRemoteTreeAdmission();
 		return this.#maintenance.compact(customInstructions, options);
 	}
 
@@ -10544,6 +10626,10 @@ export class AgentSession implements SettingsScope {
 		 */
 		drainSubscribers?: boolean;
 	}): Promise<void> {
+		if (this.#remoteTreeAdmission) {
+			this.abortBranchSummary();
+			return;
+		}
 		const userInterrupt = options?.reason === USER_INTERRUPT_LABEL;
 		this.#pendingAbortErrorId = userInterrupt ? AIError.create(AIError.Flag.UserInterrupt) : undefined;
 		if (userInterrupt) this.#advisors.autoResumeSuppressed = true;
@@ -11384,6 +11470,7 @@ export class AgentSession implements SettingsScope {
 	 * Cancel in-progress branch summarization.
 	 */
 	abortBranchSummary(): void {
+		if (this.#remoteTreeAdmission) this.#remoteTreeCancelled = true;
 		this.#branchSummaryAbortController?.abort();
 	}
 
@@ -11411,6 +11498,7 @@ export class AgentSession implements SettingsScope {
 	 * @returns The handoff document text, or undefined if cancelled/failed
 	 */
 	handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
+		this.#assertNoRemoteTreeAdmission();
 		return this.#maintenance.handoff(customInstructions, options);
 	}
 
@@ -11922,6 +12010,7 @@ export class AgentSession implements SettingsScope {
 		onChunk?: (chunk: string) => void,
 		options?: { excludeFromContext?: boolean; useUserShell?: boolean; pty?: BashPtyOptions },
 	): Promise<BashResult> {
+		this.#assertNoRemoteTreeAdmission();
 		return this.#bash.executeBash(command, onChunk, options);
 	}
 
@@ -11962,6 +12051,7 @@ export class AgentSession implements SettingsScope {
 		onChunk?: (chunk: string) => void,
 		options?: { excludeFromContext?: boolean; reset?: boolean; alias?: string },
 	): Promise<ExecutorBackendResult> {
+		this.#assertNoRemoteTreeAdmission();
 		return this.#eval.execute(language, code, onChunk, options);
 	}
 
@@ -13157,6 +13247,8 @@ export class AgentSession implements SettingsScope {
 		targetId: string,
 		options: {
 			summarize?: boolean;
+			/** Remote callers reserve native mutation admission and compare identity under that reservation. */
+			expected?: TreeNavigationExpected;
 			customInstructions?: string;
 			/**
 			 * Opts into the two-phase `ask` toolResult re-answer protocol
@@ -13205,13 +13297,30 @@ export class AgentSession implements SettingsScope {
 		 * pre-rebuild UI (issue #6483).
 		 */
 		askReanswerCommitted?: boolean;
+		resumeToken?: string;
+		navigationState?: TreeNavigationState;
 	}> {
+		using _admission = this.#admitRemoteTree(options.expected);
 		using _transition = this.#beginSessionTransition();
 		await this.#bash.flushPending();
+		if (options.expected) {
+			await this.#suspendChroniclerForTransition();
+			this.#assertTreeNavigationIdle();
+			assertTreeNavigationExpected(
+				options.expected,
+				this.sessionId,
+				this.sessionFile,
+				this.sessionManager.getLeafId(),
+			);
+		}
+		if (this.#remoteTreeCancelled) {
+			return { cancelled: true, aborted: true, navigationState: this.#treeNavigationState(options.expected) };
+		}
 		const oldLeafId = this.sessionManager.getLeafId();
 
 		const targetEntry = this.sessionManager.getEntry(targetId);
 		if (!targetEntry) {
+			if (options.expected) throw new TreeNavigationError("invalid_target", `Entry ${targetId} not found`);
 			throw new Error(`Entry ${targetId} not found`);
 		}
 		const targetIsAskResult =
@@ -13219,6 +13328,9 @@ export class AgentSession implements SettingsScope {
 			targetEntry.message.role === "toolResult" &&
 			targetEntry.message.toolName === "ask";
 		const targetIsUserMessage = targetEntry.type === "message" && targetEntry.message.role === "user";
+		if (options.expected && options.reanswerAskResult && !targetIsAskResult) {
+			throw new TreeNavigationError("invalid_request", "A re-answer requires an ask tool result target");
+		}
 
 		// No-op if already at target — except for a user message, which always
 		// rewinds PAST itself (leaf → parent, text → editor), so a leaf user
@@ -13231,7 +13343,7 @@ export class AgentSession implements SettingsScope {
 		// `reopenAsk` / branch the new answer instead of silently reporting a
 		// no-op (chatgpt-codex review on #5895).
 		if (targetId === oldLeafId && !targetIsUserMessage && !(options.allowAskReopen && targetIsAskResult)) {
-			return { cancelled: false };
+			return { cancelled: false, navigationState: this.#treeNavigationState(options.expected) };
 		}
 
 		// Model required for summarization
@@ -13256,7 +13368,11 @@ export class AgentSession implements SettingsScope {
 			const toolCallId = targetEntry.message.toolCallId;
 			const questions = this.#recoverAskReanswerQuestions(targetEntry.parentId, toolCallId);
 			if (questions) {
-				return { cancelled: false, reopenAsk: { toolCallId, questions } };
+				return {
+					cancelled: false,
+					reopenAsk: { toolCallId, questions },
+					navigationState: this.#treeNavigationState(options.expected),
+				};
 			}
 			// Original arguments couldn't be recovered (corrupted/legacy session
 			// data) — fall through to a plain leaf move so navigation still works.
@@ -13305,7 +13421,7 @@ export class AgentSession implements SettingsScope {
 			})) as SessionBeforeTreeResult | undefined;
 
 			if (result?.cancel) {
-				return { cancelled: true };
+				return { cancelled: true, navigationState: this.#treeNavigationState(options.expected) };
 			}
 
 			if (result?.summary && options.summarize) {
@@ -13341,7 +13457,7 @@ export class AgentSession implements SettingsScope {
 			});
 			this.#branchSummaryAbortController = undefined;
 			if (result.aborted) {
-				return { cancelled: true, aborted: true };
+				return { cancelled: true, aborted: true, navigationState: this.#treeNavigationState(options.expected) };
 			}
 			if (result.error) {
 				throw new Error(result.error);
@@ -13354,6 +13470,19 @@ export class AgentSession implements SettingsScope {
 		} else if (hookSummary) {
 			summaryText = hookSummary.summary;
 			summaryDetails = hookSummary.details;
+		}
+
+		if (this.#remoteTreeCancelled) {
+			return { cancelled: true, aborted: true, navigationState: this.#treeNavigationState(options.expected) };
+		}
+		if (options.expected) {
+			this.#assertTreeNavigationIdle();
+			assertTreeNavigationExpected(
+				options.expected,
+				this.sessionId,
+				this.sessionFile,
+				this.sessionManager.getLeafId(),
+			);
 		}
 
 		// All cancellation/no-op exits are behind us. Invalidate prompt setup
@@ -13491,6 +13620,8 @@ export class AgentSession implements SettingsScope {
 				summaryEntry,
 				sessionContext: rawContext,
 				askReanswerCommitted: isAskReanswerCompletion,
+				resumeToken: this.#treeResumeToken(options.expected, isAskReanswerCompletion),
+				navigationState: this.#treeNavigationState(options.expected),
 			};
 		}
 		return {
@@ -13500,6 +13631,8 @@ export class AgentSession implements SettingsScope {
 			summaryEntry,
 			sessionContext: stateContext,
 			askReanswerCommitted: isAskReanswerCompletion,
+			resumeToken: this.#treeResumeToken(options.expected, isAskReanswerCompletion),
+			navigationState: this.#treeNavigationState(options.expected),
 		};
 	}
 
@@ -13512,8 +13645,34 @@ export class AgentSession implements SettingsScope {
 	 * (issue #6483). The scheduled continue honors the same disposed/compacting
 	 * guards as every other post-prompt continuation.
 	 */
-	resumeAfterAskReanswer(): void {
-		this.#scheduleAgentContinue({ source: "ask-reanswer" });
+	resumeAfterAskReanswer(remote?: { expected: TreeNavigationExpected; resumeToken: string }): void {
+		if (remote) {
+			this.#assertNoRemoteTreeAdmission();
+			if (this.isSessionTransitioning)
+				throw new TreeNavigationError("session_busy", "The native session is changing");
+			this.#assertTreeNavigationIdle();
+			assertTreeNavigationExpected(
+				remote.expected,
+				this.sessionId,
+				this.sessionFile,
+				this.sessionManager.getLeafId(),
+			);
+			const pending = this.#treeReanswerResume;
+			if (!pending || pending.token !== remote.resumeToken || pending.generation !== this.#promptGeneration) {
+				throw new TreeNavigationError("invalid_resume", "No matching committed ask re-answer is awaiting resume");
+			}
+			assertTreeNavigationExpected(
+				pending.expected,
+				this.sessionId,
+				this.sessionFile,
+				this.sessionManager.getLeafId(),
+			);
+			this.#treeReanswerResume = undefined;
+		}
+		this.#scheduleAgentContinue({
+			source: "ask-reanswer",
+			...(remote ? { generation: this.#promptGeneration } : {}),
+		});
 	}
 
 	/**

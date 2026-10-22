@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { parse } from "yaml";
 import { parseConfigArgs, runConfigCommand } from "../src/cli/config-cli";
-import { resetSettingsForTest, Settings } from "../src/config/settings";
+import { Settings } from "../src/config/settings";
 import { overlaySettingsToml, parseSettingsToml, stringifySettingsToml } from "../src/config/settings-toml";
 import {
 	convertMainSettingsToToml,
@@ -11,21 +11,25 @@ import {
 	convertSettingsYamlToToml,
 } from "../src/config/settings-to-toml";
 import { writeFileAtomically } from "../src/utils/atomic-file";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
-let root: string;
+let root = "";
 let agentDir: string;
 let cwd: string;
+let state: SettingsTestState | undefined;
 beforeEach(async () => {
-	root = await fs.mkdtemp(path.join(process.env.HOME!, ".cache/npi-canary/toml-codec-test-"));
+	state = beginSettingsTest();
+	const cacheDir = path.join(process.env.HOME!, ".cache/npi-canary");
+	await fs.mkdir(cacheDir, { recursive: true });
+	root = await fs.mkdtemp(path.join(cacheDir, "toml-codec-test-"));
 	agentDir = path.join(root, "agent");
 	cwd = path.join(root, "project");
 	await fs.mkdir(agentDir, { recursive: true });
 	await fs.mkdir(cwd, { recursive: true });
-	resetSettingsForTest();
 });
 afterEach(async () => {
-	resetSettingsForTest();
-	await fs.rm(root, { recursive: true, force: true });
+	restoreSettingsTestState(state);
+	if (root) await fs.rm(root, { recursive: true, force: true });
 });
 
 describe("full settings TOML codec", () => {
@@ -149,9 +153,16 @@ describe("on-demand full YAML conversion", () => {
 			expect(String(failure)).not.toContain("private-value");
 		}
 	});
-	it("preserves date-looking strings and current YAML merge-key semantics", () => {
+	it("preserves date-looking strings and Bun's effective YAML merge-key expansion", async () => {
 		const source = "day: 2026-10-22\nbase: &base {one: 1}\nchild: {<<: *base, two: 2}\n";
-		expect(parseSettingsToml(convertSettingsYamlToToml(source).content)).toEqual(parse(source));
+		const sourcePath = path.join(agentDir, "config.yml");
+		await Bun.write(sourcePath, source);
+		const before = await Settings.loadReadOnly({ agentDir, cwd });
+		const result = await convertSettingsFileToToml(sourcePath);
+		const decoded = parseSettingsToml(await Bun.file(result.targetPath).text());
+		expect(decoded).toEqual({ day: "2026-10-22", base: { one: 1 }, child: { one: 1, two: 2 } });
+		expect(decoded).toEqual(before.getGlobalSettings());
+		expect((await Settings.loadReadOnly({ agentDir, cwd })).getGlobalSettings()).toEqual(before.getGlobalSettings());
 	});
 	it("converts user and project settings and honors config.yaml when config.yml is absent", async () => {
 		await Bun.write(path.join(agentDir, "config.yaml"), "unknown: {user: yes}\n");
@@ -233,20 +244,64 @@ describe("on-demand full YAML conversion", () => {
 		const log = spyOn(console, "log").mockImplementation(() => {});
 		const error = spyOn(console, "error").mockImplementation(() => {});
 		try {
-			const command = parseConfigArgs(["config", "to-toml", source, "--force"])!;
+			const command = parseConfigArgs(["config", "to-toml", source, "--force", "--yes"])!;
 			expect(command.flags.force).toBe(true);
+			expect(command.flags.yes).toBe(true);
 			await runConfigCommand(command);
 			expect(parseSettingsToml(await Bun.file(path.join(agentDir, "config.toml")).text())).toEqual({
 				unknown: "private-value",
 			});
 			expect(log.mock.calls.flat().join(" ")).toContain("Converted");
 			expect(error.mock.calls.flat().join(" ")).toContain("comments");
+			expect(error.mock.calls.flat().join(" ")).toContain("still write YAML");
+			expect(error.mock.calls.flat().join(" ")).toContain("revert on reload");
 			expect([...log.mock.calls, ...error.mock.calls].flat().join(" ")).not.toContain("private-value");
 		} finally {
 			log.mockRestore();
 			error.mockRestore();
 		}
 	});
+	it.each([{ flags: [] }, { flags: ["--force"] }])(
+		"does not write without explicit acknowledgment, including %j",
+		async ({ flags }) => {
+			const source = path.join(agentDir, "config.yml");
+			const target = path.join(agentDir, "config.toml");
+			await Bun.write(source, "value: new\n");
+			if (flags.length) await Bun.write(target, 'value = "existing"\n');
+			const error = spyOn(console, "error").mockImplementation(() => {});
+			const exitCode = process.exitCode ?? 0;
+			try {
+				await runConfigCommand(parseConfigArgs(["config", "to-toml", source, ...flags])!);
+				expect(process.exitCode).toBe(1);
+				expect(error.mock.calls.flat().join(" ")).toContain("--yes");
+				expect(error.mock.calls.flat().join(" ")).toContain("still write YAML");
+				if (flags.length) expect(await Bun.file(target).text()).toBe('value = "existing"\n');
+				else expect(await Bun.file(target).exists()).toBe(false);
+				expect(await Bun.file(source).text()).toBe("value: new\n");
+			} finally {
+				process.exitCode = exitCode;
+				error.mockRestore();
+			}
+		},
+	);
+	it.each(["--help", "-h"])(
+		"prints the conversion limitation on %s without converting, even with --yes",
+		async flag => {
+			const source = path.join(agentDir, "config.yml");
+			await Bun.write(source, "value: example\n");
+			const log = spyOn(console, "log").mockImplementation(() => {});
+			try {
+				await runConfigCommand(parseConfigArgs(["config", "to-toml", source, flag, "--yes"])!);
+				const help = log.mock.calls.flat().join(" ");
+				expect(help).toContain("still write YAML");
+				expect(help).toContain("revert on reload");
+				expect(help).toContain("--yes");
+				expect(await Bun.file(path.join(agentDir, "config.toml")).exists()).toBe(false);
+			} finally {
+				log.mockRestore();
+			}
+		},
+	);
 	it("atomically refuses publication over an existing file", async () => {
 		const target = path.join(root, "atomic.toml");
 		await writeFileAtomically(target, "first", { noReplace: true });

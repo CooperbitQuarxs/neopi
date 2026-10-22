@@ -340,6 +340,28 @@
 				"clientOmit": []
 			},
 			{
+				"name": "navigate_tree",
+				"doc": "Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken.",
+				"params": "NavigateTreeParams",
+				"result": "NavigateTreeResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "resume_tree",
+				"doc": "Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript.",
+				"params": "ResumeTreeParams",
+				"result": "ResumeTreeResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "set_todos",
 				"doc": "Replace the session's todo phases.",
 				"params": "SetTodosParams",
@@ -4296,6 +4318,225 @@
 				"leafId"
 			],
 			"description": "Raw session tree roots."
+		},
+		"TreeAskOptionNote": {
+			"type": "object",
+			"properties": {
+				"option": {
+					"type": "string"
+				},
+				"note": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"option",
+				"note"
+			]
+		},
+		"TreeAskQuestionResult": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"question": {
+					"type": "string"
+				},
+				"options": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"multi": {
+					"type": "boolean"
+				},
+				"selectedOptions": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"customInput": {
+					"type": "string"
+				},
+				"note": {
+					"type": "string"
+				},
+				"optionNotes": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/TreeAskOptionNote"
+					}
+				},
+				"timedOut": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"id",
+				"question",
+				"options",
+				"multi",
+				"selectedOptions"
+			]
+		},
+		"TreeAskDetails": {
+			"type": "object",
+			"properties": {
+				"question": {
+					"type": "string"
+				},
+				"options": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"multi": {
+					"type": "boolean"
+				},
+				"selectedOptions": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"customInput": {
+					"type": "string"
+				},
+				"note": {
+					"type": "string"
+				},
+				"optionNotes": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/TreeAskOptionNote"
+					}
+				},
+				"timedOut": {
+					"type": "boolean"
+				},
+				"results": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/TreeAskQuestionResult"
+					}
+				},
+				"chatRedirect": {
+					"type": "boolean"
+				},
+				"questions": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				}
+			}
+		},
+		"TreeAskReanswer": {
+			"type": "object",
+			"properties": {
+				"content": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/UserContent"
+					}
+				},
+				"details": {
+					"$ref": "#/$defs/TreeAskDetails"
+				},
+				"isError": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"content"
+			]
+		},
+		"TreeAskReopen": {
+			"type": "object",
+			"properties": {
+				"toolCallId": {
+					"type": "string"
+				},
+				"questions": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/AskQuestion"
+					}
+				}
+			},
+			"required": [
+				"toolCallId",
+				"questions"
+			]
+		},
+		"NavigateTreeResult": {
+			"type": "object",
+			"properties": {
+				"sessionId": {
+					"type": "string"
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"outcome": {
+					"enum": [
+						"navigated",
+						"unchanged",
+						"cancelled",
+						"ask_reopen"
+					],
+					"type": "string"
+				},
+				"cancelled": {
+					"type": "boolean"
+				},
+				"sessionFile": {
+					"type": "string"
+				},
+				"aborted": {
+					"type": "boolean"
+				},
+				"editorText": {
+					"type": "string"
+				},
+				"editorImages": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/ImageContent"
+					}
+				},
+				"summaryEntry": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {}
+				},
+				"reopenAsk": {
+					"$ref": "#/$defs/TreeAskReopen"
+				},
+				"askReanswerCommitted": {
+					"type": "boolean"
+				},
+				"resumeToken": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"sessionId",
+				"leafId",
+				"outcome",
+				"cancelled"
+			]
 		},
 		"SubagentSnapshot": {
 			"type": "object",
@@ -8368,6 +8609,103 @@
 					"type": "integer"
 				}
 			}
+		},
+		"NavigateTreeParams": {
+			"type": "object",
+			"properties": {
+				"targetId": {
+					"type": "string"
+				},
+				"expectedSessionId": {
+					"type": "string"
+				},
+				"expectedSessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"expectedLeafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"summarize": {
+					"type": "boolean"
+				},
+				"customInstructions": {
+					"type": "string"
+				},
+				"allowAskReopen": {
+					"type": "boolean"
+				},
+				"reanswerAskResult": {
+					"$ref": "#/$defs/TreeAskReanswer"
+				}
+			},
+			"required": [
+				"targetId",
+				"expectedSessionId",
+				"expectedSessionFile",
+				"expectedLeafId"
+			]
+		},
+		"ResumeTreeParams": {
+			"type": "object",
+			"properties": {
+				"resumeToken": {
+					"type": "string"
+				},
+				"expectedSessionId": {
+					"type": "string"
+				},
+				"expectedSessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"expectedLeafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"resumeToken",
+				"expectedSessionId",
+				"expectedSessionFile",
+				"expectedLeafId"
+			]
+		},
+		"ResumeTreeResult": {
+			"type": "object",
+			"properties": {
+				"resumed": {
+					"const": true
+				}
+			},
+			"required": [
+				"resumed"
+			]
 		},
 		"SetTodosParams": {
 			"type": "object",

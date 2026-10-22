@@ -195,6 +195,32 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	},
 	{ name: "get_tree", doc: "Read the raw session tree.", result: "SessionTree" },
 	{
+		name: "navigate_tree",
+		doc: "Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken.",
+		params: {
+			targetId: "string",
+			expectedSessionId: "string",
+			expectedSessionFile: "string | null",
+			expectedLeafId: "string | null",
+			"summarize?": "boolean",
+			"customInstructions?": "string",
+			"allowAskReopen?": "boolean",
+			"reanswerAskResult?": "TreeAskReanswer",
+		},
+		result: "NavigateTreeResult",
+	},
+	{
+		name: "resume_tree",
+		doc: "Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript.",
+		params: {
+			resumeToken: "string",
+			expectedSessionId: "string",
+			expectedSessionFile: "string | null",
+			expectedLeafId: "string | null",
+		},
+		result: { resumed: "true" },
+	},
+	{
 		name: "set_todos",
 		doc: "Replace the session's todo phases.",
 		params: { phases: "TodoPhase[]" },

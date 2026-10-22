@@ -4487,6 +4487,208 @@ func (v *SessionTree) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type TreeAskOptionNote struct {
+	Option string `json:"option"`
+	Note   string `json:"note"`
+}
+
+func (v *TreeAskOptionNote) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskOptionNote", v.decodeFrom)
+}
+
+func (v *TreeAskOptionNote) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskOptionNote
+	d := fieldDecoder{raw: raw, owner: "TreeAskOptionNote"}
+	d.required("option", &out.Option)
+	d.required("note", &out.Note)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type TreeAskQuestionResult struct {
+	ID              string              `json:"id"`
+	Question        string              `json:"question"`
+	Options         []string            `json:"options"`
+	Multi           bool                `json:"multi"`
+	SelectedOptions []string            `json:"selectedOptions"`
+	CustomInput     *string             `json:"customInput,omitempty"`
+	Note            *string             `json:"note,omitempty"`
+	OptionNotes     []TreeAskOptionNote `json:"optionNotes,omitempty"`
+	TimedOut        *bool               `json:"timedOut,omitempty"`
+}
+
+func (v *TreeAskQuestionResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskQuestionResult", v.decodeFrom)
+}
+
+func (v *TreeAskQuestionResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskQuestionResult
+	d := fieldDecoder{raw: raw, owner: "TreeAskQuestionResult"}
+	d.required("id", &out.ID)
+	d.required("question", &out.Question)
+	d.required("options", &out.Options)
+	d.required("multi", &out.Multi)
+	d.required("selectedOptions", &out.SelectedOptions)
+	d.optional("customInput", &out.CustomInput)
+	d.optional("note", &out.Note)
+	d.optional("optionNotes", &out.OptionNotes)
+	d.optional("timedOut", &out.TimedOut)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type TreeAskDetails struct {
+	Question        *string                 `json:"question,omitempty"`
+	Options         []string                `json:"options,omitempty"`
+	Multi           *bool                   `json:"multi,omitempty"`
+	SelectedOptions []string                `json:"selectedOptions,omitempty"`
+	CustomInput     *string                 `json:"customInput,omitempty"`
+	Note            *string                 `json:"note,omitempty"`
+	OptionNotes     []TreeAskOptionNote     `json:"optionNotes,omitempty"`
+	TimedOut        *bool                   `json:"timedOut,omitempty"`
+	Results         []TreeAskQuestionResult `json:"results,omitempty"`
+	ChatRedirect    *bool                   `json:"chatRedirect,omitempty"`
+	Questions       []string                `json:"questions,omitempty"`
+}
+
+func (v *TreeAskDetails) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskDetails", v.decodeFrom)
+}
+
+func (v *TreeAskDetails) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskDetails
+	d := fieldDecoder{raw: raw, owner: "TreeAskDetails"}
+	d.optional("question", &out.Question)
+	d.optional("options", &out.Options)
+	d.optional("multi", &out.Multi)
+	d.optional("selectedOptions", &out.SelectedOptions)
+	d.optional("customInput", &out.CustomInput)
+	d.optional("note", &out.Note)
+	d.optional("optionNotes", &out.OptionNotes)
+	d.optional("timedOut", &out.TimedOut)
+	d.optional("results", &out.Results)
+	d.optional("chatRedirect", &out.ChatRedirect)
+	d.optional("questions", &out.Questions)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type TreeAskReanswer struct {
+	Content []UserContent   `json:"content"`
+	Details *TreeAskDetails `json:"details,omitempty"`
+	IsError *bool           `json:"isError,omitempty"`
+}
+
+func (v *TreeAskReanswer) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskReanswer", v.decodeFrom)
+}
+
+func (v *TreeAskReanswer) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskReanswer
+	d := fieldDecoder{raw: raw, owner: "TreeAskReanswer"}
+	d.required("content", &out.Content)
+	d.optional("details", &out.Details)
+	d.optional("isError", &out.IsError)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type TreeAskReopen struct {
+	ToolCallID string        `json:"toolCallId"`
+	Questions  []AskQuestion `json:"questions"`
+}
+
+func (v *TreeAskReopen) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskReopen", v.decodeFrom)
+}
+
+func (v *TreeAskReopen) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskReopen
+	d := fieldDecoder{raw: raw, owner: "TreeAskReopen"}
+	d.required("toolCallId", &out.ToolCallID)
+	d.required("questions", &out.Questions)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type NavigateTreeResult struct {
+	SessionID            string                     `json:"sessionId"`
+	LeafID               *string                    `json:"leafId"`
+	Outcome              NavigateTreeResultOutcome  `json:"outcome"`
+	Cancelled            bool                       `json:"cancelled"`
+	SessionFile          *string                    `json:"sessionFile,omitempty"`
+	Aborted              *bool                      `json:"aborted,omitempty"`
+	EditorText           *string                    `json:"editorText,omitempty"`
+	EditorImages         []ImageContent             `json:"editorImages,omitempty"`
+	SummaryEntry         map[string]json.RawMessage `json:"summaryEntry,omitempty"`
+	ReopenAsk            *TreeAskReopen             `json:"reopenAsk,omitempty"`
+	AskReanswerCommitted *bool                      `json:"askReanswerCommitted,omitempty"`
+	ResumeToken          *string                    `json:"resumeToken,omitempty"`
+}
+
+func (v *NavigateTreeResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "NavigateTreeResult", v.decodeFrom)
+}
+
+func (v *NavigateTreeResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out NavigateTreeResult
+	d := fieldDecoder{raw: raw, owner: "NavigateTreeResult"}
+	d.required("sessionId", &out.SessionID)
+	d.nullable("leafId", &out.LeafID)
+	d.required("outcome", &out.Outcome)
+	d.required("cancelled", &out.Cancelled)
+	d.optional("sessionFile", &out.SessionFile)
+	d.optional("aborted", &out.Aborted)
+	d.optional("editorText", &out.EditorText)
+	d.optional("editorImages", &out.EditorImages)
+	d.optional("summaryEntry", &out.SummaryEntry)
+	d.optional("reopenAsk", &out.ReopenAsk)
+	d.optional("askReanswerCommitted", &out.AskReanswerCommitted)
+	d.optional("resumeToken", &out.ResumeToken)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type NavigateTreeResultOutcome string
+
+const (
+	NavigateTreeResultOutcomeNavigated NavigateTreeResultOutcome = "navigated"
+	NavigateTreeResultOutcomeUnchanged NavigateTreeResultOutcome = "unchanged"
+	NavigateTreeResultOutcomeCancelled NavigateTreeResultOutcome = "cancelled"
+	NavigateTreeResultOutcomeAskReopen NavigateTreeResultOutcome = "ask_reopen"
+)
+
+func (v *NavigateTreeResultOutcome) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "NavigateTreeResultOutcome")
+	if err != nil {
+		return err
+	}
+	switch value := NavigateTreeResultOutcome(s); value {
+	case NavigateTreeResultOutcomeNavigated, NavigateTreeResultOutcomeUnchanged, NavigateTreeResultOutcomeCancelled, NavigateTreeResultOutcomeAskReopen:
+		*v = value
+		return nil
+	}
+	return unknownValue("NavigateTreeResultOutcome", s)
+}
+
 type SubagentSnapshot struct {
 	ID          string         `json:"id"`
 	Index       int64          `json:"index"`
@@ -9650,6 +9852,28 @@ func (v *GetAvailableCommandsResult) decodeFrom(raw map[string]json.RawMessage) 
 	return nil
 }
 
+type ResumeTreeResult struct{}
+
+func (v *ResumeTreeResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ResumeTreeResult", v.decodeFrom)
+}
+
+func (v *ResumeTreeResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ResumeTreeResult
+	d := fieldDecoder{raw: raw, owner: "ResumeTreeResult"}
+	d.constant("resumed", true)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v ResumeTreeResult) MarshalJSON() ([]byte, error) {
+	type plain ResumeTreeResult
+	return encodeObject(plain(v), `"resumed":true`, nil)
+}
+
 type SetTodosResult struct {
 	TodoPhases []TodoPhase `json:"todoPhases"`
 }
@@ -10521,6 +10745,40 @@ func (v *GetEntriesPageCommandDirection) UnmarshalJSON(data []byte) error {
 func (c Commands) GetTree(ctx context.Context) (SessionTree, error) {
 	var out SessionTree
 	err := c.call(ctx, "get_tree", nil, 0, &out)
+	return out, err
+}
+
+// NavigateTreeCommand holds the parameters of "navigate_tree".
+type NavigateTreeCommand struct {
+	TargetID            string           `json:"targetId"`
+	ExpectedSessionID   string           `json:"expectedSessionId"`
+	ExpectedSessionFile *string          `json:"expectedSessionFile"`
+	ExpectedLeafID      *string          `json:"expectedLeafId"`
+	Summarize           *bool            `json:"summarize,omitempty"`
+	CustomInstructions  *string          `json:"customInstructions,omitempty"`
+	AllowAskReopen      *bool            `json:"allowAskReopen,omitempty"`
+	ReanswerAskResult   *TreeAskReanswer `json:"reanswerAskResult,omitempty"`
+}
+
+// NavigateTree sends "navigate_tree": Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken.
+func (c Commands) NavigateTree(ctx context.Context, p NavigateTreeCommand) (NavigateTreeResult, error) {
+	var out NavigateTreeResult
+	err := c.call(ctx, "navigate_tree", p, 0, &out)
+	return out, err
+}
+
+// ResumeTreeCommand holds the parameters of "resume_tree".
+type ResumeTreeCommand struct {
+	ResumeToken         string  `json:"resumeToken"`
+	ExpectedSessionID   string  `json:"expectedSessionId"`
+	ExpectedSessionFile *string `json:"expectedSessionFile"`
+	ExpectedLeafID      *string `json:"expectedLeafId"`
+}
+
+// ResumeTree sends "resume_tree": Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript.
+func (c Commands) ResumeTree(ctx context.Context, p ResumeTreeCommand) (ResumeTreeResult, error) {
+	var out ResumeTreeResult
+	err := c.call(ctx, "resume_tree", p, 0, &out)
 	return out, err
 }
 

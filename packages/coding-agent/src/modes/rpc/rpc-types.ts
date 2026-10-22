@@ -26,6 +26,12 @@ import type { MixtureConfigScope, MixtureDefinition } from "@oh-my-pi/pi-tui/ove
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import type { LivePhase } from "../../live/controller";
 import type { RpcMessagesPage } from "./rpc-messages";
+import type {
+	RpcNavigateTreeOptions,
+	RpcNavigateTreeResult,
+	RpcResumeTreeOptions,
+	RpcResumeTreeResult,
+} from "./rpc-tree";
 import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
 import type { RpcModel } from "./rpc-model";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
@@ -77,6 +83,8 @@ export type RpcCommand =
 	| { id?: string; type: "snapshot_session_journal" }
 	| ({ id?: string; type: "get_entries_page" } & RpcJournalPageOptions)
 	| { id?: string; type: "get_tree" }
+	| ({ id?: string; type: "navigate_tree" } & RpcNavigateTreeOptions)
+	| ({ id?: string; type: "resume_tree" } & RpcResumeTreeOptions)
 	| { id?: string; type: "set_todos"; phases: TodoPhase[] }
 	| { id?: string; type: "set_host_tools"; tools: RpcHostToolDefinition[] }
 	| { id?: string; type: "set_host_uri_schemes"; schemes: RpcHostUriSchemeDefinition[] }
@@ -581,6 +589,8 @@ export type RpcResponse =
 			success: true;
 			data: { tree: SessionTreeNode[]; leafId: string | null };
 	  }
+	| { id?: string; type: "response"; command: "navigate_tree"; success: true; data: RpcNavigateTreeResult }
+	| { id?: string; type: "response"; command: "resume_tree"; success: true; data: RpcResumeTreeResult }
 	| { id?: string; type: "response"; command: "set_todos"; success: true; data: { todoPhases: TodoPhase[] } }
 	| { id?: string; type: "response"; command: "set_host_tools"; success: true; data: { toolNames: string[] } }
 	| { id?: string; type: "response"; command: "set_host_uri_schemes"; success: true; data: { schemes: string[] } }

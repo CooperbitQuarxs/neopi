@@ -77,7 +77,7 @@ function createRealSession(overrides: Record<string, unknown> = {}): {
 		}),
 		sessionManager,
 		settings: Settings.isolated({ "compaction.enabled": false, ...overrides }),
-		modelRegistry: {} as never,
+		modelRegistry: { getAvailable: () => [] } as never,
 	});
 	return { session, sessionManager };
 }

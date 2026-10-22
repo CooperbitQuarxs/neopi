@@ -56,10 +56,12 @@ The settings panel and `config set`/`reset` continue writing YAML. Edit or remov
 
 #### Convert your existing settings
 
+Conversion requires `--yes` because `config.toml` takes precedence immediately while `/settings` and `config set`/`reset` still write YAML. Those saved changes can be masked by TOML and appear to revert on reload. Until format-aware saves are available, edit `config.toml` directly or remove it to return to YAML. The converter prints this warning before writing; `--force` does not acknowledge it.
+
 ```bash
-npi config to-toml                         # user and current project main settings, when present
-npi config to-toml /path/to/config.yaml     # one explicit main settings file
-npi config to-toml /path/to/config.yml --force
+npi config to-toml --yes                         # user and current project main settings, when present
+npi config to-toml /path/to/config.yaml --yes     # one explicit main settings file
+npi config to-toml /path/to/config.yml --force --yes
 ```
 
 Conversion writes the replacement-extension sibling `config.toml` with private permissions, leaving YAML bytes unchanged. It carries the full parsed YAML, including unknown extension keys, credentials, nested tables, mixed arrays, arrays of tables and multiline text. It does not add registry defaults. Existing TOML is never overwritten without `--force`. A legacy `settings.toml` must be reconciled or moved first, because creating a second overlay would be ambiguous.
@@ -114,7 +116,7 @@ This only controls the startup splash animation. It does not rerun setup or chan
 | `omp config path`              | Print the active agent directory (honors `PI_CODING_AGENT_DIR`).                                                                                                                                                                                                                                  |
 | `omp config init-xdg`          | On Linux and macOS, create the `omp` directories under the effective XDG data, state, and cache homes. It does not move existing files or set the XDG environment variables. Other platforms exit non-zero.                                                                                       |
 | `npi config dump-toml`         | Write documented registry defaults as TOML to stdout without loading user settings. Redirect to a file to regenerate it. |
-| `npi config to-toml [file] [--force]` | Convert full user and current project main YAML settings, or one explicit `config.yml`/`config.yaml`, to private `config.toml` siblings. Report unsupported values and lost YAML syntax. |
+| `npi config to-toml [file] --yes [--force]` | Convert full user and current project main YAML settings, or one explicit `config.yml`/`config.yaml`, to private `config.toml` siblings after acknowledging the YAML-save limitation. Report unsupported values and lost YAML syntax. |
 
 `omp config` with no subcommand lists settings. `--help` or `-h` displays command help. The `--json` flag is accepted by `list`, `get`, `set`, and `reset`.
 
