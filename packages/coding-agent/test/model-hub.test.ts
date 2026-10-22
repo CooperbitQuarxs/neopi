@@ -468,6 +468,57 @@ describe("ModelHub", () => {
 			expect(defaultRow).not.toContain("inherit");
 			expect(smolRow).toContain("auto");
 		});
+		test.each([
+			[120_000, "120k"],
+			["60%", "60%"],
+			["f120000", "f120k"],
+		] as const)("shows configured compaction %s beside the effort summary", (entry, label) => {
+			const model = getBundledModel("openai", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled reasoning model");
+			const selector = `${model.provider}/${model.id}`;
+			const settings = Settings.isolated({
+				modelRoles: { default: selector, smol: selector },
+				"compaction.modelThresholds": { [selector]: entry },
+				"compaction.modelThresholdsEnabled": false,
+			});
+			settings.setRoleEffortSelection("default", { mode: "auto", allowed: [Effort.Low, Effort.High] });
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			hub.handleInput(UP);
+			const lines = hub.render(220).map(line => stripVTControlCharacters(line));
+			const defaultRow = lines.find(line => line.includes("DEFAULT"));
+			const smolRow = lines.find(line => line.includes("SMOL"));
+			expect(defaultRow).toContain("Auto [low, high]");
+			expect(defaultRow).toContain(`compact ${label}`);
+			expect(smolRow).toContain(`compact ${label}`);
+			const native = hub.describe({
+				cols: 220,
+				reduceMotion: false,
+				dark: true,
+				supports: () => true,
+				feature: () => true,
+			});
+			if (native.k !== "picker" || !native.p) throw new Error("Expected model hub picker");
+			expect(native.p.items?.find(item => item.id === "role:default")?.facts?.compaction).toBe(`compact ${label}`);
+			for (const width of [36, 60, 90]) {
+				expect(hub.render(width).every(line => Bun.stringWidth(line) <= width)).toBe(true);
+			}
+		});
+
+		test("real settings initialization without model limits renders no compaction summary", async () => {
+			const root = await fs.mkdtemp(path.join(os.homedir(), ".cache/npi-canary/model-limit-"));
+			try {
+				const settings = await Settings.init({ cwd: root, agentDir: root, inMemory: true });
+				const model = makeModel("test", "no-limit");
+				settings.setModelRole("default", "test/no-limit");
+				const { hub } = createHub({ models: [model], scoped: true, settings });
+				hub.handleInput(UP);
+				const lines = hub.render(220).map(line => stripVTControlCharacters(line));
+				expect(lines.find(line => line.includes("DEFAULT"))).toContain("no-limit");
+				expect(lines.some(line => line.includes("compact "))).toBe(false);
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		});
 		test.each(["fixed", "auto"] as const)(
 			"selected role highlights its %s reasoning cell across pane focus",
 			mode => {

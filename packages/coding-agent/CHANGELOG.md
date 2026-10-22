@@ -72,6 +72,7 @@
 ### Fixed
 
 - Per-model effort limits now offer `off` when the model supports disabling reasoning and apply allowed off selections to sessions and Auto effort ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).
+- Model settings rows now show configured compaction limits beside the effort summary, preserving token or percentage notation ([#499](https://github.com/PsychedelicShayna/neopi/issues/499)).
 - Native addon cache keys now distinguish compiler, wrapper and Cargo build/profile environment overrides.
 - Stopping a live call while its persona or settings load no longer leaves a transport connected after cancellation ([#482](https://github.com/PsychedelicShayna/neopi/issues/482)).
 - Token-bounded text, including live transcript history, keeps emoji and combining characters intact at truncation boundaries ([#205](https://github.com/PsychedelicShayna/neopi/issues/205)).
