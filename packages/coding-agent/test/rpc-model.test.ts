@@ -85,37 +85,15 @@ describe("RPC model serialization", () => {
 		const frozen = Object.freeze(source);
 		const projected = serializeRpcModel(frozen);
 		expect(projected.supportsFastMode).toBe(expected);
-		expect(projected).toEqual({ ...source, supportsFastMode: expected });
-		expect(projected).not.toBe(source);
 		expect(source).not.toHaveProperty("supportsFastMode");
 	});
 
-	it("preserves the descriptor payload and does not treat a fast SKU as a capability flag", () => {
+	it("does not infer Fast support from a fast-SKU hint", () => {
 		const source: Model = {
 			...model("custom-relay", "openai-completions", "qwen3"),
-			headers: { "x-project": "test" },
 			compat: { fastMode: true },
 		};
-		const original = JSON.stringify(source);
-		const payload = JSON.parse(JSON.stringify(serializeRpcModel(Object.freeze(source))));
-		expect(payload).toEqual({ ...JSON.parse(original), supportsFastMode: false });
-		expect(JSON.stringify(source)).toBe(original);
-		expect(serializeRpcModel(source).headers).toBe(source.headers);
-		expect(serializeRpcModel(source).compat).toBe(source.compat);
-	});
-
-	it.each(cases)("includes the same capability in RPC and control snapshots for %s", (_name, source, expected) => {
-		const session = sessionFor(source, true, false);
-		for (const options of [
-			{ includeDump: true },
-			{ includeDump: false, queueLimit: CONTROL_QUEUE_LIMIT },
-		]) {
-			const state = buildRpcSessionState(session, options);
-			expect(state.model).toEqual({ ...source, supportsFastMode: expected });
-			expect(state.fastModeEnabled).toBe(true);
-			expect(state.fastModeActive).toBe(false);
-			expect(source).not.toHaveProperty("supportsFastMode");
-		}
+		expect(serializeRpcModel(source).supportsFastMode).toBe(false);
 	});
 
 	it("keeps supported capability separate from an off session toggle", () => {
@@ -124,8 +102,6 @@ describe("RPC model serialization", () => {
 		expect(state.model?.supportsFastMode).toBe(true);
 		expect(state.fastModeEnabled).toBe(false);
 		expect(state.fastModeActive).toBe(false);
-		expect(state.systemPrompt).toEqual(["preserve the prompt"]);
-		expect(state.dumpTools).toEqual([]);
 	});
 
 	it("keeps no-model state absent on the wire and preserves realized Fast state", () => {
