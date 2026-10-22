@@ -125,7 +125,7 @@ const ROLE_DESCRIPTIONS: Record<ModelRole, string> = {
 	advisor: "Reviews the active agent's work and offers a second opinion.",
 	chronicler: "Captures session events for the Chronicler.",
 	"chronicler-summary": "Writes Chronicler summaries and ranks recall results.",
-	classifier: "Classifies live input and decides how it should be handled.",
+	classifier: "Ranks live subagents for spoken updates and checks operator authorization for flagged model-and-effort deployments.",
 	effort: "Chooses reasoning effort for adaptive effort selection.",
 	prose: "Default model for prose chains.",
 	issues: "Drafts and files issues through /issue.",
