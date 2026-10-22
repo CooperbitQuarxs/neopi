@@ -531,6 +531,109 @@ describe("settings as a native prefs page", () => {
 		expect(row(prefs(selector).props, "display.colorBlind")).toBeDefined();
 	});
 
+	for (const sectionFocused of [false, true]) {
+		for (const { name, keys } of [
+			{ name: "an empty pattern", keys: ["/", "\x1b"] },
+			{ name: "a dotted draft", keys: ["/", ".", ".", ".", "\x1b"] },
+			{ name: "a confirmed pattern", keys: ["/", "c", "o", "l", "o", "r", ENTER, "\x1b"] },
+		]) {
+			it(`restores the original tab, ${sectionFocused ? "section sidebar" : "setting selection"}, and tab cycling after Esc clears ${name}`, () => {
+				let closed = 0;
+				const { selector, changes } = harness(
+					{},
+					{
+						entries: [
+							...ENTRIES,
+							{
+								path: "compaction.enabled",
+								type: "boolean",
+								defaultValue: true,
+								ui: { tab: "context", group: "Compaction", label: "Automatic compaction", description: "" },
+							},
+							{
+								path: "context.keepRecent",
+								type: "boolean",
+								defaultValue: true,
+								ui: { tab: "context", group: "Retention", label: "Keep recent messages", description: "" },
+							},
+						],
+						onCancel: () => {
+							closed++;
+						},
+					},
+				);
+				for (const key of ["l", "l", "l", "j"]) selector.handleInput(key);
+				expect(prefs(selector).props.page).toBe("context");
+				expect(prefs(selector).props.focus).toBe("compaction.enabled");
+				if (sectionFocused) {
+					selector.handleInput("\t");
+					selector.handleInput("j");
+					expect(prefs(selector).props.focus).toBe("retention");
+				}
+				const before = prefs(selector).props;
+				const beforeRender = selector.render(180).map(line => Bun.stripANSI(line));
+				expect(before.sections.map(section => section.id)).toEqual(["compaction", "retention"]);
+				expect(beforeRender.some(line => /Compaction\s+│/.test(line))).toBe(true);
+
+				for (const key of keys) selector.handleInput(key);
+				const after = prefs(selector).props;
+				const afterRender = selector.render(180).map(line => Bun.stripANSI(line));
+				expect(closed).toBe(0);
+				expect(changes).toEqual([]);
+				expect(after.query).toBeUndefined();
+				expect(after.page).toBe("context");
+				expect(after.sections).toEqual(before.sections);
+				expect(after.sections.every(section => section.page === undefined)).toBe(true);
+				expect(afterRender.join("\n")).not.toMatch(/\d+ match/);
+
+				selector.handleInput("l");
+				expect(prefs(selector).props.page).toBe("memory");
+				selector.handleInput("h");
+				expect(prefs(selector).props.page).toBe("context");
+				expect(prefs(selector).props.sections).toEqual(before.sections);
+
+				expect(after.focus).toBe(before.focus);
+				expect(afterRender).toEqual(beforeRender);
+			});
+		}
+	}
+
+	it("confirms a focused search pattern with Enter without activating the matched setting", () => {
+		const { selector, changes, values } = harness();
+		selector.handleInput("/");
+		const initialRows = prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id));
+		for (const key of "/^color/") selector.handleInput(key);
+		expect(prefs(selector).props.query).toBe("/^color/");
+		expect(prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id))).toEqual(initialRows);
+		expect(Bun.stripANSI(selector.render(180).at(-2) ?? "")).toContain("confirm search");
+
+		selector.handleInput(ENTER);
+		const confirmed = prefs(selector).props;
+		expect(confirmed.query).toBe("/^color/");
+		expect(confirmed.sections.flatMap(section => section.rows.map(row => row.id))).toEqual(["display.colorBlind"]);
+		expect(confirmed.focus).toBe("display.colorBlind");
+		expect(confirmed.editing).toBeNull();
+		expect(values.get("display.colorBlind")).toBe(false);
+		expect(changes).toEqual([]);
+		expect(Bun.stripANSI(selector.render(180).at(-2) ?? "")).not.toContain("confirm search");
+
+		selector.handleInput(ENTER);
+		expect(values.get("display.colorBlind")).toBe(true);
+		expect(changes).toEqual([["display.colorBlind", true]]);
+	});
+
+	it("shows Vim half-page, page, and boundary motions in the bottom footer after confirming search", () => {
+		const { selector } = harness();
+		for (const key of ["/", "e", ENTER]) selector.handleInput(key);
+		expect(prefs(selector).props.sections.flatMap(section => section.rows).length).toBeGreaterThan(1);
+		const footer = Bun.stripANSI(selector.render(240).at(-2) ?? "");
+		expect(footer).not.toContain("confirm search");
+		expect(footer).toContain("j/k");
+		expect(footer).toMatch(/Ctrl-(?:u\/d|d\/u) half/);
+		expect(footer).toContain("PgUp/PgDn page");
+		expect(footer).toContain("gg/G");
+	});
+
 	it("discards an unconfirmed global-search draft on leave and restores confirmed results", () => {
 		const { selector } = harness();
 		selector.handleInput("/");

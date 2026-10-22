@@ -39,7 +39,7 @@ import {
 	type SettingsDisplayEntry,
 } from "./settings-defs";
 import type { TspPrefsControl, TspPrefsProps } from "@oh-my-pi/pi-wire";
-import { prefsSectionId } from "../components/settings-list";
+import { prefsSectionId, type SettingsListNavigationState } from "../components/settings-list";
 import { getCurrentThemeName, getSelectListTheme, getSettingsListTheme, theme } from "../theme/theme";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../thinking";
 import { getTabBarTheme } from "../chrome/shared";
@@ -818,6 +818,7 @@ export class SettingsSelectorComponent implements Component {
 	#pendingPluginWrites = 0;
 	#currentTabId: SettingTab | "plugins" = "appearance";
 	#preSearchTabId: SettingTab | "plugins" = "appearance";
+	#preSearchList: SettingsListNavigationState | undefined;
 	#searchQuery = "";
 	/** Single-line editor backing the search banner (cursor, word ops, paste). */
 	readonly #search = new MenuSearchField();
@@ -906,7 +907,7 @@ export class SettingsSelectorComponent implements Component {
 		if (this.#searchList) {
 			return this.#search.focused
 				? `${confirm} confirm search · ${cancel} clear search`
-				: `j/k select · / search · ${tab} jump tabs · ${cancel} clear search`;
+				: `j/k select · Ctrl-u/d half · PgUp/PgDn page · gg/G ends · / search · ${tab} jump tabs · ${cancel} clear search`;
 		}
 		if (this.#currentTabId === "plugins") {
 			return this.#pluginComponent?.atRoot
@@ -1512,6 +1513,7 @@ export class SettingsSelectorComponent implements Component {
 	/** Swap the tab content for the global search result list. */
 	#startSearch(initialQuery: string): void {
 		this.#preSearchTabId = this.#currentTabId;
+		this.#preSearchList = this.#currentList?.navigationSnapshot();
 		this.#searchCorpora = null;
 		this.#search.setValue(initialQuery);
 		this.#search.focused = true;
@@ -1607,6 +1609,8 @@ export class SettingsSelectorComponent implements Component {
 		const selected = jumpToSelection ? this.#searchList.getSelectedItem() : undefined;
 		const selectedDef = selected ? getSettingDef(this.#context.settings.entries, selected.id) : undefined;
 		const targetTab: SettingTab | "plugins" = selectedDef?.tab ?? this.#preSearchTabId;
+		const previousList = this.#preSearchList;
+		this.#preSearchList = undefined;
 
 		this.#searchQuery = "";
 		this.#search.setValue("");
@@ -1617,6 +1621,7 @@ export class SettingsSelectorComponent implements Component {
 		this.#tabs = getSettingsTabs();
 		this.#tabBar.setTabs(this.#tabs, targetTab);
 		this.#switchToTab(targetTab);
+		if (!jumpToSelection && previousList) this.#currentList?.restoreNavigation(previousList);
 		if (selectedDef) {
 			this.#currentList?.selectItem(selectedDef.path);
 		}
@@ -2274,6 +2279,7 @@ export class SettingsSelectorComponent implements Component {
 		return {
 			tab: this.#currentTabId,
 			preSearchTab: this.#preSearchTabId,
+			preSearchList: this.#preSearchList,
 			searching: this.#searchList !== null,
 			query: this.#searchQuery,
 			search: this.#search.navigationSnapshot(),
@@ -2298,6 +2304,7 @@ export class SettingsSelectorComponent implements Component {
 		const state = snapshot as {
 			tab?: string;
 			preSearchTab?: string;
+			preSearchList?: SettingsListNavigationState;
 			searching?: boolean;
 			query?: string;
 			search?: unknown;
@@ -2318,6 +2325,7 @@ export class SettingsSelectorComponent implements Component {
 				this.#startSearch(state.query ?? "");
 				if (typeof state.preSearchTab === "string")
 					this.#preSearchTabId = state.preSearchTab as SettingTab | "plugins";
+				if (state.preSearchList !== undefined) this.#preSearchList = state.preSearchList;
 				this.#search.focused = state.searchFocused === true;
 				if (typeof state.searchCursor === "number") this.#search.input.setCursor(state.searchCursor);
 				if (state.search !== undefined) this.#search.restoreNavigation(state.search);

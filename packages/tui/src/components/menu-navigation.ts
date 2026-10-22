@@ -205,7 +205,7 @@ export class MenuSearchField {
 		const error = compileMenuRegex(this.value)?.error;
 		const hint = error
 			? ` · Invalid regex: ${error}`
-			: this.focused ? " · Enter confirm · Esc clear" : " · / search · Esc clear";
+			: this.focused ? " · Enter confirm · Esc clear" : " · j/k · Ctrl-d/u half · gg/G · / search · Esc clear";
 		const fieldWidth = Math.max(0, columns - visibleWidth(prefix) - visibleWidth(hint));
 		const value = this.focused
 			? (this.#input.render(fieldWidth)[0] ?? "")

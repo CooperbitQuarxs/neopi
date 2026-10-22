@@ -104,10 +104,14 @@ afterEach(() => {
 	for (const hub of hubs.splice(0)) hub.dispose();
 });
 
-function openHub(calls: { assign: string[]; cancel: number }, models: Model[] = MODELS): ModelHubComponent {
+function openHub(
+	calls: { assign: string[]; cancel: number },
+	models: Model[] = MODELS,
+	overrides: Partial<ModelHubSource> = {},
+): ModelHubComponent {
 	const hub = new ModelHubComponent(
 		ui,
-		source({ default: "demo/demo" }, ["demo/demo"]),
+		{ ...source({ default: "demo/demo" }, ["demo/demo"]), ...overrides },
 		registry(models),
 		// A `--models` scope skips the background online refresh.
 		models.map(entry => ({ model: entry })),
@@ -610,6 +614,146 @@ test("a provider scope and its counts change only after the model search is conf
 	expect(p.scopes?.find(scope => scope.id === "provider:demo")?.count).toBe(0);
 });
 
+for (const scope of ["all", "roles", "effort"] as const) {
+	test(`/models ${scope} keeps a dots draft unfiltered, confirms no matches and restores on Esc`, () => {
+		const calls = { assign: [] as string[], cancel: 0 };
+		const hub = openHub(calls, MODELS, {
+			effortRules: [
+				{ selector: "demo/first", allowed: [] },
+				{ selector: "demo/needle", allowed: [] },
+			],
+		});
+		hub.handleNativeEvent({ type: "select", key: "scopes", item: scope });
+		const initial = props(hub.describe(withPicker));
+		expect(initial.order?.length).toBeGreaterThan(0);
+		hub.handleInput("/");
+		const dots = ".".repeat(12);
+		for (let index = 0; index < dots.length; index++) {
+			hub.handleInput(".");
+			const draft = props(hub.describe(withPicker));
+			expect(draft.query).toBe(dots.slice(0, index + 1));
+			expect(draft.order).toEqual(initial.order);
+			expect(draft.selected).toBe(initial.selected);
+		}
+		expect(props(hub.describe(withPicker)).query).toBe(dots);
+		expect(hub.navigationSnapshot().filterFocused).toBe(true);
+		hub.handleInput("\r");
+		const confirmed = props(hub.describe(withPicker));
+		expect(confirmed.query).toBe(dots);
+		expect(confirmed.order?.filter(entry => typeof entry === "string")).toEqual([]);
+		expect(confirmed.selected).toBeNull();
+		expect(confirmed.strip).toBeNull();
+		expect(hub.navigationSnapshot().filterFocused).toBe(false);
+		expect(calls).toEqual({ assign: [], cancel: 0 });
+		hub.handleInput("\x1b");
+		const cleared = props(hub.describe(withPicker));
+		expect(cleared.scope).toBe(scope);
+		expect(cleared.query).toBe(scope === "roles" ? null : "");
+		expect(cleared.order).toEqual(initial.order);
+		expect(hub.navigationSnapshot().filterFocused).toBe(false);
+		expect(calls).toEqual({ assign: [], cancel: 0 });
+	});
+}
+
+for (const [scope, query] of [
+	["all", "claude"],
+	["roles", "default"],
+	["effort", "needle"],
+	["provider:anthropic", "claude"],
+	["provider:demo", "demo"],
+	["provider:openai", "gpt"],
+] as const) {
+	test(`/models ${scope} search owns arrows and Tab, then Enter leaves editing without activating`, () => {
+		const calls = { assign: [] as string[], cancel: 0 };
+		const hub = openHub(calls, MODELS, {
+			effortRules: [
+				{ selector: "demo/first", allowed: [] },
+				{ selector: "demo/needle", allowed: [] },
+			],
+		});
+		hub.handleNativeEvent({ type: "select", key: "scopes", item: scope });
+		const initial = props(hub.describe(withPicker));
+		hub.handleInput("/");
+		for (const key of query) hub.handleInput(key);
+		for (const key of ["\x1b[A", "\x1b[B", "\t", "\x04", "\x1b[1;3C"]) {
+			hub.handleInput(key);
+			const draft = props(hub.describe(withPicker));
+			expect(draft.query).toBe(query);
+			expect(draft.order).toEqual(initial.order);
+			expect(draft.selected).toBe(initial.selected);
+			expect(draft.scope).toBe(scope);
+			expect(draft.tab).toBe(initial.tab);
+			expect(draft.focus).toBe("list");
+			expect(hub.navigationSnapshot().filterFocused).toBe(true);
+		}
+		hub.handleInput("\x1b[D");
+		expect(props(hub.describe(withPicker)).cursor).toBe(query.length - 1);
+		hub.handleInput("\x1b[C");
+		expect(props(hub.describe(withPicker)).cursor).toBe(query.length);
+		hub.handleInput("\r");
+		const confirmed = props(hub.describe(withPicker));
+		expect(confirmed.scope).toBe(scope);
+		expect(confirmed.query).toBe(query);
+		expect(confirmed.order?.filter(entry => typeof entry === "string").length).toBeGreaterThan(0);
+		expect(confirmed.strip).toBeNull();
+		expect(confirmed.actions?.some(action => action.id === "searchConfirm")).toBe(false);
+		expect(hub.navigationSnapshot().filterFocused).toBe(false);
+		expect(hub.navigationSnapshot().assigning).toBeNull();
+		expect(calls).toEqual({ assign: [], cancel: 0 });
+		hub.handleInput("j");
+		expect(props(hub.describe(withPicker)).query).toBe(query);
+	});
+}
+
+test("/models confirmed pattern restores working Vim motions and normal footer hints", () => {
+	const calls = { assign: [] as string[], cancel: 0 };
+	const models = Array.from({ length: 40 }, (_, index) => model("test", `model-${String(index).padStart(2, "0")}`));
+	const hub = openHub(calls, models);
+	hub.handleInput("/");
+	for (const key of "/^model-/") hub.handleInput(key);
+	const hints = (): string[] => {
+		const footer = plainText(hub.render(240).at(-2) ?? "");
+		const subtitle = props(hub.describe(withPicker)).subtitle;
+		return [footer, typeof subtitle === "string" ? subtitle : (subtitle?.map(part => part.t).join("") ?? "")];
+	};
+	for (const hint of hints()) {
+		expect(hint).toContain("Enter confirm");
+		expect(hint).toContain("Esc clear");
+		expect(hint).not.toContain("j/k");
+		expect(hint).not.toMatch(/Ctrl-[du]\/[du]/i);
+	}
+	hub.handleInput("\r");
+	hub.render(240);
+	const confirmed = props(hub.describe(withPicker));
+	const order = confirmed.order?.filter((entry): entry is string => typeof entry === "string") ?? [];
+	expect(order).toHaveLength(models.length);
+	const first = order[0];
+	expect(confirmed.selected).toBe(first);
+	hub.handleInput("j");
+	expect(props(hub.describe(withPicker)).selected).not.toBe(first);
+	hub.handleInput("k");
+	expect(props(hub.describe(withPicker)).selected).toBe(first);
+	hub.handleInput("\x04");
+	expect(props(hub.describe(withPicker)).selected).not.toBe(first);
+	hub.handleInput("\x15");
+	expect(props(hub.describe(withPicker)).selected).toBe(first);
+	hub.handleInput("G");
+	expect(props(hub.describe(withPicker)).selected).toBe(order.at(-1));
+	hub.handleInput("g");
+	hub.handleInput("g");
+	expect(props(hub.describe(withPicker)).selected).toBe(first);
+	expect(props(hub.describe(withPicker)).query).toBe("/^model-/");
+	expect(calls).toEqual({ assign: [], cancel: 0 });
+	for (const hint of hints()) {
+		expect(hint).toContain("j/k");
+		expect(hint).toContain("/ search");
+		expect(hint).toContain("gg/G");
+		expect(hint).toMatch(/Ctrl-(?:u\/d|d\/u)/i);
+		expect(hint).not.toContain("Enter confirm");
+		expect(hint).not.toContain("Esc clear");
+	}
+});
+
 test("shows a non-default service tier's own speed aggregate", () => {
 	const perf = new Map([
 		["openai/gpt-5.6", { samples: 4, tps: 25, ttftMs: 500 }],
@@ -832,8 +976,13 @@ test("effort rules share paging, jumps and independent viewport scrolling", () =
 	expect(hub.navigationSnapshot().effortTop).toEqual(first.effortTop);
 });
 
-test("Roles and model scopes keep separate queries while switching panes", () => {
-	const hub = openHub({ assign: [], cancel: 0 });
+test("Roles, models and effort rules keep separate confirmed queries while switching panes", () => {
+	const hub = openHub({ assign: [], cancel: 0 }, MODELS, {
+		effortRules: [
+			{ selector: "demo/first", allowed: [] },
+			{ selector: "demo/needle", allowed: [] },
+		],
+	});
 	hub.handleInput("/");
 	for (const key of "sonnet") hub.handleInput(key);
 	hub.handleInput("\n");
@@ -850,6 +999,39 @@ test("Roles and model scopes keep separate queries while switching panes", () =>
 	hub.handleInput("j");
 	expect(props(hub.describe(withPicker)).scope).toBe("all");
 	expect(props(hub.describe(withPicker)).query).toBe("sonnet");
+	hub.handleInput("j");
+	expect(props(hub.describe(withPicker)).scope).toBe("effort");
+	expect(props(hub.describe(withPicker)).query).toBe("");
+	const unfiltered = props(hub.describe(withPicker)).order;
+	hub.handleInput("/");
+	for (const key of "needle") hub.handleInput(key);
+	expect(props(hub.describe(withPicker)).query).toBe("needle");
+	expect(props(hub.describe(withPicker)).order).toEqual(unfiltered);
+	expect(hub.navigationSnapshot().effortQuery).toBe("");
+	hub.handleInput("\r");
+	expect(props(hub.describe(withPicker)).scope).toBe("effort");
+	expect(props(hub.describe(withPicker)).order).toEqual(["effort:1"]);
+	expect(hub.navigationSnapshot().filterFocused).toBe(false);
+	expect(hub.navigationSnapshot().strip).toBeNull();
+	expect(hub.navigationSnapshot().browser.query).toBe("sonnet");
+	expect(hub.navigationSnapshot().rolesQuery).toBe("default");
+	expect(hub.navigationSnapshot().effortQuery).toBe("needle");
+	hub.handleInput("h");
+	hub.handleInput("k");
+	expect(props(hub.describe(withPicker)).scope).toBe("all");
+	expect(props(hub.describe(withPicker)).query).toBe("sonnet");
+	hub.handleInput("k");
+	expect(props(hub.describe(withPicker)).scope).toBe("roles");
+	expect(props(hub.describe(withPicker)).query).toBe("default");
+	hub.handleInput("j");
+	hub.handleInput("j");
+	expect(props(hub.describe(withPicker)).scope).toBe("effort");
+	expect(props(hub.describe(withPicker)).query).toBe("needle");
+	hub.handleInput("\x1b");
+	expect(props(hub.describe(withPicker)).query).toBe("");
+	expect(props(hub.describe(withPicker)).order).toEqual(unfiltered);
+	expect(hub.navigationSnapshot().browser.query).toBe("sonnet");
+	expect(hub.navigationSnapshot().rolesQuery).toBe("default");
 });
 
 test("effort rule search stays in section and destructive actions target the filtered source row", () => {
