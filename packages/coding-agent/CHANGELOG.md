@@ -9,6 +9,8 @@
 
 ### Added
 
+- Inspect, add, edit and delete model overrides and custom models in `/models`, with schema-driven field editors and unknown-field preservation ([#522](https://github.com/PsychedelicShayna/neopi/issues/522)).
+
 - Set model context limits with exact, glob, or regex rules in `/models`, and see the effective maintenance window separately from catalog capacity ([#511](https://github.com/PsychedelicShayna/neopi/issues/511)).
 
 - Choose a separate `title` model for session titles and `/rename` suggestions; until set it follows `tiny`, and explicit fork-mode titling still uses the foreground model ([#515](https://github.com/PsychedelicShayna/neopi/issues/515)).

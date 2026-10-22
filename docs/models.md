@@ -2,6 +2,34 @@
 
 This document describes how the coding-agent currently loads models, applies overrides, resolves credentials, and chooses models at runtime.
 
+## Editing models in the TUI
+
+Open `/models` and choose **Model overrides**, beside Effort rules and Context
+rules. This lists every explicit override and custom model in the active models
+config, including entries that are not in the current catalog.
+
+Select an entry to inspect its fields. Enter opens a field, object, array, or
+choice. All fields recognized by the native config schema are editable, including
+compatibility flags, thinking controls, pricing, headers and remote compaction.
+Records have an **Add key** row and arrays an **Add item** row. Use `x` to unset a
+known field or remove an array item, `t` to choose a union or free-value type, and
+`s` or **Save entry** to persist the draft. Esc leaves a field, goes back through
+nested fields, then discards an unsaved entry. `/` searches the current list.
+Unknown fields stay visible as read-only values and survive saves.
+
+Use **New override** or **New custom model** to add an entry. New custom models
+use the selected provider's existing endpoint, authentication and default API
+unless a model field overrides it. The config validator reports missing provider
+requirements without writing an invalid draft. From the entry list, `x` offers
+deletion with confirmation.
+
+Explicit model overrides take precedence over custom model definitions,
+discovery and catalog values. Custom definitions replace matching catalog or
+discovered entries. Saving uses the shared config writer and a local catalog
+refresh, without online discovery. Unrelated edits made on disk are retained;
+overlapping stale edits are rejected rather than overwritten.
+
+
 ## What controls model behavior
 
 Primary implementation files:
