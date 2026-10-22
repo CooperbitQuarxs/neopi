@@ -1939,6 +1939,91 @@ func (v *ApprovalHandler) UnmarshalJSON(data []byte) error {
 	return unknownValue("ApprovalHandler", s)
 }
 
+type ApprovalMode string
+
+const (
+	ApprovalModeAlwaysAsk ApprovalMode = "always-ask"
+	ApprovalModeWrite     ApprovalMode = "write"
+	ApprovalModeYolo      ApprovalMode = "yolo"
+)
+
+func (v *ApprovalMode) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "ApprovalMode")
+	if err != nil {
+		return err
+	}
+	switch value := ApprovalMode(s); value {
+	case ApprovalModeAlwaysAsk, ApprovalModeWrite, ApprovalModeYolo:
+		*v = value
+		return nil
+	}
+	return unknownValue("ApprovalMode", s)
+}
+
+type SessionUsage struct {
+	Input                  float64                      `json:"input"`
+	Output                 float64                      `json:"output"`
+	CacheRead              float64                      `json:"cacheRead"`
+	CacheWrite             float64                      `json:"cacheWrite"`
+	TotalTokens            float64                      `json:"totalTokens"`
+	OrchestrationInput     float64                      `json:"orchestrationInput"`
+	OrchestrationOutput    float64                      `json:"orchestrationOutput"`
+	OrchestrationCacheRead float64                      `json:"orchestrationCacheRead"`
+	PremiumRequests        float64                      `json:"premiumRequests"`
+	Cost                   float64                      `json:"cost"`
+	SubagentCost           float64                      `json:"subagentCost"`
+	AdvisorCost            float64                      `json:"advisorCost"`
+	AdvisorCostState       SessionUsageAdvisorCostState `json:"advisorCostState"`
+}
+
+func (v *SessionUsage) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SessionUsage", v.decodeFrom)
+}
+
+func (v *SessionUsage) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SessionUsage
+	d := fieldDecoder{raw: raw, owner: "SessionUsage"}
+	d.required("input", &out.Input)
+	d.required("output", &out.Output)
+	d.required("cacheRead", &out.CacheRead)
+	d.required("cacheWrite", &out.CacheWrite)
+	d.required("totalTokens", &out.TotalTokens)
+	d.required("orchestrationInput", &out.OrchestrationInput)
+	d.required("orchestrationOutput", &out.OrchestrationOutput)
+	d.required("orchestrationCacheRead", &out.OrchestrationCacheRead)
+	d.required("premiumRequests", &out.PremiumRequests)
+	d.required("cost", &out.Cost)
+	d.required("subagentCost", &out.SubagentCost)
+	d.required("advisorCost", &out.AdvisorCost)
+	d.required("advisorCostState", &out.AdvisorCostState)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type SessionUsageAdvisorCostState string
+
+const (
+	SessionUsageAdvisorCostStateReady       SessionUsageAdvisorCostState = "ready"
+	SessionUsageAdvisorCostStateRestoring   SessionUsageAdvisorCostState = "restoring"
+	SessionUsageAdvisorCostStateUnavailable SessionUsageAdvisorCostState = "unavailable"
+)
+
+func (v *SessionUsageAdvisorCostState) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SessionUsageAdvisorCostState")
+	if err != nil {
+		return err
+	}
+	switch value := SessionUsageAdvisorCostState(s); value {
+	case SessionUsageAdvisorCostStateReady, SessionUsageAdvisorCostStateRestoring, SessionUsageAdvisorCostStateUnavailable:
+		*v = value
+		return nil
+	}
+	return unknownValue("SessionUsageAdvisorCostState", s)
+}
+
 type ChatModeSetting string
 
 const (
@@ -4024,6 +4109,8 @@ type SessionState struct {
 	InterruptMode         InterruptMode    `json:"interruptMode"`
 	SessionFile           *string          `json:"sessionFile,omitempty"`
 	SessionName           *string          `json:"sessionName,omitempty"`
+	ApprovalMode          *ApprovalMode    `json:"approvalMode,omitempty"`
+	SessionUsage          *SessionUsage    `json:"sessionUsage,omitempty"`
 	AutoCompactionEnabled bool             `json:"autoCompactionEnabled"`
 	FastModeEnabled       bool             `json:"fastModeEnabled"`
 	FastModeActive        bool             `json:"fastModeActive"`
@@ -4074,6 +4161,8 @@ func (v *SessionState) decodeFrom(raw map[string]json.RawMessage) error {
 	d.defaulted("interruptMode", &out.InterruptMode, `"immediate"`)
 	d.optional("sessionFile", &out.SessionFile)
 	d.optional("sessionName", &out.SessionName)
+	d.optional("approvalMode", &out.ApprovalMode)
+	d.optional("sessionUsage", &out.SessionUsage)
 	d.defaulted("autoCompactionEnabled", &out.AutoCompactionEnabled, `false`)
 	d.defaulted("fastModeEnabled", &out.FastModeEnabled, `false`)
 	d.defaulted("fastModeActive", &out.FastModeActive, `false`)
@@ -5390,6 +5479,28 @@ func (v *ChatModeChangedEvent) decodeFrom(raw map[string]json.RawMessage) error 
 func (v ChatModeChangedEvent) MarshalJSON() ([]byte, error) {
 	type plain ChatModeChangedEvent
 	return encodeObject(plain(v), `"type":"chat_mode_changed"`, nil)
+}
+
+type ApprovalModeChangedEvent struct{}
+
+func (v *ApprovalModeChangedEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ApprovalModeChangedEvent", v.decodeFrom)
+}
+
+func (v *ApprovalModeChangedEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ApprovalModeChangedEvent
+	d := fieldDecoder{raw: raw, owner: "ApprovalModeChangedEvent"}
+	d.constant("type", "approval_mode_changed")
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v ApprovalModeChangedEvent) MarshalJSON() ([]byte, error) {
+	type plain ApprovalModeChangedEvent
+	return encodeObject(plain(v), `"type":"approval_mode_changed"`, nil)
 }
 
 type MixtureHopEndEvent struct {
@@ -7134,6 +7245,7 @@ func (AdvisorMessageEvent) isRpcAgentEvent()             {}
 func (RunOwnersJoinedEvent) isRpcAgentEvent()            {}
 func (RunOwnersSkippedEvent) isRpcAgentEvent()           {}
 func (ChatModeChangedEvent) isRpcAgentEvent()            {}
+func (ApprovalModeChangedEvent) isRpcAgentEvent()        {}
 func (MixtureHopEndEvent) isRpcAgentEvent()              {}
 func (MixtureDecisionEvent) isRpcAgentEvent()            {}
 func (MixtureLimitEvent) isRpcAgentEvent()               {}
@@ -7200,6 +7312,8 @@ func (v *RpcAgentEvent) decodeFrom(raw map[string]json.RawMessage) error {
 		value, err = decodeVariant[RunOwnersSkippedEvent](raw)
 	case "chat_mode_changed":
 		value, err = decodeVariant[ChatModeChangedEvent](raw)
+	case "approval_mode_changed":
+		value, err = decodeVariant[ApprovalModeChangedEvent](raw)
 	case "mixture_hop_end":
 		value, err = decodeVariant[MixtureHopEndEvent](raw)
 	case "mixture_decision":
@@ -9263,6 +9377,7 @@ func (AdvisorMessageEvent) isRpcNotification()             {}
 func (RunOwnersJoinedEvent) isRpcNotification()            {}
 func (RunOwnersSkippedEvent) isRpcNotification()           {}
 func (ChatModeChangedEvent) isRpcNotification()            {}
+func (ApprovalModeChangedEvent) isRpcNotification()        {}
 func (MixtureHopEndEvent) isRpcNotification()              {}
 func (MixtureDecisionEvent) isRpcNotification()            {}
 func (MixtureLimitEvent) isRpcNotification()               {}
@@ -9360,6 +9475,8 @@ func (v *RpcNotification) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[RunOwnersSkippedEvent](raw)
 	case "chat_mode_changed":
 		value, err = decodeVariant[ChatModeChangedEvent](raw)
+	case "approval_mode_changed":
+		value, err = decodeVariant[ApprovalModeChangedEvent](raw)
 	case "mixture_hop_end":
 		value, err = decodeVariant[MixtureHopEndEvent](raw)
 	case "mixture_decision":
@@ -9483,6 +9600,7 @@ func (AdvisorMessageEvent) isRpcServerFrame()             {}
 func (RunOwnersJoinedEvent) isRpcServerFrame()            {}
 func (RunOwnersSkippedEvent) isRpcServerFrame()           {}
 func (ChatModeChangedEvent) isRpcServerFrame()            {}
+func (ApprovalModeChangedEvent) isRpcServerFrame()        {}
 func (MixtureHopEndEvent) isRpcServerFrame()              {}
 func (MixtureDecisionEvent) isRpcServerFrame()            {}
 func (MixtureLimitEvent) isRpcServerFrame()               {}
@@ -9590,6 +9708,8 @@ func (v *RpcServerFrame) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[RunOwnersSkippedEvent](raw)
 	case "chat_mode_changed":
 		value, err = decodeVariant[ChatModeChangedEvent](raw)
+	case "approval_mode_changed":
+		value, err = decodeVariant[ApprovalModeChangedEvent](raw)
 	case "mixture_hop_end":
 		value, err = decodeVariant[MixtureHopEndEvent](raw)
 	case "mixture_decision":
@@ -10622,10 +10742,15 @@ func (c Commands) OpenSession(ctx context.Context, p OpenSessionCommand) (OpenSe
 	return out, err
 }
 
+// GetStateCommand holds the parameters of "get_state".
+type GetStateCommand struct {
+	IncludeDump *bool `json:"includeDump,omitempty"`
+}
+
 // GetState sends "get_state": Snapshot the session state.
-func (c Commands) GetState(ctx context.Context) (SessionState, error) {
+func (c Commands) GetState(ctx context.Context, p GetStateCommand) (SessionState, error) {
 	var out SessionState
-	err := c.call(ctx, "get_state", nil, 0, &out)
+	err := c.call(ctx, "get_state", p, 0, &out)
 	return out, err
 }
 

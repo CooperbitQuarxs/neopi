@@ -91,6 +91,11 @@ _APPROVAL_HANDLER_VALUES: Final[frozenset[str]] = frozenset({"host", "ui"})
 _decode_approval_handler = cast("Decoder[ApprovalHandler]", literal(_APPROVAL_HANDLER_VALUES))
 
 
+ApprovalMode: TypeAlias = Literal["always-ask", "write", "yolo"]
+_APPROVAL_MODE_VALUES: Final[frozenset[str]] = frozenset({"always-ask", "write", "yolo"})
+_decode_approval_mode = cast("Decoder[ApprovalMode]", literal(_APPROVAL_MODE_VALUES))
+
+
 ChatModeSetting: TypeAlias = Literal["off", "chat", "erp", "raw"]
 _CHAT_MODE_SETTING_VALUES: Final[frozenset[str]] = frozenset({"off", "chat", "erp", "raw"})
 _decode_chat_mode_setting = cast("Decoder[ChatModeSetting]", literal(_CHAT_MODE_SETTING_VALUES))
@@ -628,6 +633,23 @@ class ModelInfo:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class SessionUsage:
+    input: float
+    output: float
+    cache_read: float
+    cache_write: float
+    total_tokens: float
+    orchestration_input: float
+    orchestration_output: float
+    orchestration_cache_read: float
+    premium_requests: float
+    cost: float
+    subagent_cost: float
+    advisor_cost: float
+    advisor_cost_state: Literal["ready", "restoring", "unavailable"]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class ChatModeState:
     mode: ChatModeSetting
     include: str
@@ -1010,6 +1032,8 @@ class SessionState:
     interrupt_mode: InterruptMode = "immediate"
     session_file: str | None = None
     session_name: str | None = None
+    approval_mode: ApprovalMode | None = None
+    session_usage: SessionUsage | None = None
     auto_compaction_enabled: bool = False
     fast_mode_enabled: bool = False
     fast_mode_active: bool = False
@@ -1412,6 +1436,11 @@ class ChatModeChangedEvent:
     type: Literal["chat_mode_changed"] = "chat_mode_changed"
     mode: ChatModeSetting
     include: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ApprovalModeChangedEvent:
+    type: Literal["approval_mode_changed"] = "approval_mode_changed"
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2356,7 +2385,7 @@ UsageLimitState: TypeAlias = UsageLimitLowPriority | UsageLimitWrapUp
 MixtureAnswer: TypeAlias = MixtureChoiceAnswer | MixtureNoulAnswer | MixtureScoreAnswer
 
 
-RpcAgentEvent: TypeAlias = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
+RpcAgentEvent: TypeAlias = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | ApprovalModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
 """A session event, discriminated by `type`; `set_event_filter` selects which are sent."""
 
 
@@ -2574,6 +2603,25 @@ def parse_model_info(value: object, path: str = "ModelInfo") -> ModelInfo:
         priority=optional(payload, "priority", decode_int, path),
         thinking=optional(payload, "thinking", parse_thinking_config, path),
         compat=optional(payload, "compat", decode_json_object, path),
+    )
+
+
+def parse_session_usage(value: object, path: str = "SessionUsage") -> SessionUsage:
+    payload = expect_object(value, path)
+    return SessionUsage(
+        input=required(payload, "input", decode_float, path),
+        output=required(payload, "output", decode_float, path),
+        cache_read=required(payload, "cacheRead", decode_float, path),
+        cache_write=required(payload, "cacheWrite", decode_float, path),
+        total_tokens=required(payload, "totalTokens", decode_float, path),
+        orchestration_input=required(payload, "orchestrationInput", decode_float, path),
+        orchestration_output=required(payload, "orchestrationOutput", decode_float, path),
+        orchestration_cache_read=required(payload, "orchestrationCacheRead", decode_float, path),
+        premium_requests=required(payload, "premiumRequests", decode_float, path),
+        cost=required(payload, "cost", decode_float, path),
+        subagent_cost=required(payload, "subagentCost", decode_float, path),
+        advisor_cost=required(payload, "advisorCost", decode_float, path),
+        advisor_cost_state=required(payload, "advisorCostState", cast('Decoder[Literal["ready", "restoring", "unavailable"]]', literal(frozenset({"ready", "restoring", "unavailable"}))), path),
     )
 
 
@@ -3031,6 +3079,8 @@ def parse_session_state(value: object, path: str = "SessionState") -> SessionSta
         interrupt_mode=defaulted(payload, "interruptMode", _decode_interrupt_mode, path, "immediate"),
         session_file=optional(payload, "sessionFile", decode_str, path),
         session_name=optional(payload, "sessionName", decode_str, path),
+        approval_mode=optional(payload, "approvalMode", _decode_approval_mode, path),
+        session_usage=optional(payload, "sessionUsage", parse_session_usage, path),
         auto_compaction_enabled=defaulted(payload, "autoCompactionEnabled", decode_bool, path, False),
         fast_mode_enabled=defaulted(payload, "fastModeEnabled", decode_bool, path, False),
         fast_mode_active=defaulted(payload, "fastModeActive", decode_bool, path, False),
@@ -3488,6 +3538,13 @@ def parse_chat_mode_changed_event(value: object, path: str = "ChatModeChangedEve
     return ChatModeChangedEvent(
         mode=required(payload, "mode", _decode_chat_mode_setting, path),
         include=required(payload, "include", decode_str, path),
+    )
+
+
+def parse_approval_mode_changed_event(value: object, path: str = "ApprovalModeChangedEvent") -> ApprovalModeChangedEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["approval_mode_changed"]]', literal(frozenset({"approval_mode_changed"}))), path)
+    return ApprovalModeChangedEvent(
     )
 
 
@@ -4614,6 +4671,7 @@ _RPC_AGENT_EVENT_CASES: Final[dict[str, Decoder[RpcAgentEvent]]] = {
         "run_owners_joined": parse_run_owners_joined_event,
         "run_owners_skipped": parse_run_owners_skipped_event,
         "chat_mode_changed": parse_chat_mode_changed_event,
+        "approval_mode_changed": parse_approval_mode_changed_event,
         "mixture_hop_end": parse_mixture_hop_end_event,
         "mixture_decision": parse_mixture_decision_event,
         "mixture_limit": parse_mixture_limit_event,
@@ -4678,6 +4736,7 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "run_owners_joined": parse_rpc_agent_event,
         "run_owners_skipped": parse_rpc_agent_event,
         "chat_mode_changed": parse_rpc_agent_event,
+        "approval_mode_changed": parse_rpc_agent_event,
         "mixture_hop_end": parse_rpc_agent_event,
         "mixture_decision": parse_rpc_agent_event,
         "mixture_limit": parse_rpc_agent_event,
@@ -4785,9 +4844,11 @@ class WireClient:
             params["modelId"] = model_id
         return parse_open_session_result(self._command("open_session", params), "open_session")
 
-    def get_state(self) -> SessionState:
+    def get_state(self, include_dump: bool | None = None) -> SessionState:
         """Snapshot the session state."""
         params: dict[str, object] = {}
+        if include_dump is not None:
+            params["includeDump"] = include_dump
         return parse_session_state(self._command("get_state", params), "get_state")
 
     def create_mixture(self, scope: MixtureConfigScope, definition: Mapping[str, JsonValue]) -> CreateMixtureResult:
@@ -5378,6 +5439,10 @@ class WireClient:
         """Subscribe to `chat_mode_changed` frames."""
         return self._listen("chat_mode_changed", listener)
 
+    def on_approval_mode_changed(self, listener: Callable[[ApprovalModeChangedEvent], None]) -> Callable[[], None]:
+        """Subscribe to `approval_mode_changed` frames."""
+        return self._listen("approval_mode_changed", listener)
+
     def on_mixture_hop_end(self, listener: Callable[[MixtureHopEndEvent], None]) -> Callable[[], None]:
         """Subscribe to `mixture_hop_end` frames."""
         return self._listen("mixture_hop_end", listener)
@@ -5539,6 +5604,8 @@ __all__ = [
     "AgentStartEvent",
     "AnthropicServerToolContent",
     "ApprovalHandler",
+    "ApprovalMode",
+    "ApprovalModeChangedEvent",
     "AskAnswer",
     "AskOption",
     "AskQuestion",
@@ -5743,6 +5810,7 @@ __all__ = [
     "SessionState",
     "SessionStats",
     "SessionTree",
+    "SessionUsage",
     "SetApprovalHandlerResult",
     "SetEditorTextUiRequest",
     "SetModeResult",
@@ -5814,6 +5882,7 @@ __all__ = [
     "parse_agent_message",
     "parse_agent_start_event",
     "parse_anthropic_server_tool_content",
+    "parse_approval_mode_changed_event",
     "parse_ask_answer",
     "parse_ask_option",
     "parse_ask_question",
@@ -5989,6 +6058,7 @@ __all__ = [
     "parse_session_state",
     "parse_session_stats",
     "parse_session_tree",
+    "parse_session_usage",
     "parse_set_approval_handler_result",
     "parse_set_editor_text_ui_request",
     "parse_set_mode_result",

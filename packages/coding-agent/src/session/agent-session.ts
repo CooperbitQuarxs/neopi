@@ -578,6 +578,7 @@ import {
 	cfgDevAutoqaConsent,
 	cfgTodoEnabled,
 	cfgToolsApproval,
+	cfgToolsApprovalMode,
 } from "../tools/settings";
 import { cfgTtsrJudge } from "../export/ttsr-settings";
 
@@ -975,6 +976,7 @@ export class AgentSession implements SettingsScope {
 	readonly #chronicler: SessionChronicler;
 	/** Resolves once the resume-time advisor spend backfill settles. */
 	#advisorCostRestore: Promise<void> = Promise.resolve();
+	#advisorCostRestoreState: "ready" | "restoring" | "unavailable" = "ready";
 	#goalTurnCounter = 0;
 	#planReferenceSent = false;
 	#planReferencePath = "local://PLAN.md";
@@ -2714,6 +2716,7 @@ export class AgentSession implements SettingsScope {
 		// Re-evaluate append-only context mode when the setting changes at runtime.
 		cfgProviderAppendOnlyContext.listen(this, () => this.#syncAppendOnlyContext(this.model));
 		cfgModelRoles.listen(this, () => this.#advisors.reconcileModelRoles());
+		cfgToolsApprovalMode.listen(this, () => this.#emit({ type: "approval_mode_changed" }));
 		this.addDisposer(
 			this.settings.onPersistedLayersChange(() => this.#emit({ type: "models_configuration_changed" })),
 		);
@@ -14882,6 +14885,15 @@ export class AgentSession implements SettingsScope {
 		return this.#advisors.getAdvisorStatusOverview();
 	}
 
+	/** Effective tool approval policy, including the process-local auto-approve override. */
+	getApprovalMode() {
+		return this.#tools.getApprovalMode();
+	}
+
+	get advisorCostRestoreState() {
+		return this.#advisorCostRestoreState;
+	}
+
 	/** Return cumulative cost recorded for the current session's advisor activity. */
 	getAdvisorCost(): number {
 		return this.#advisors.getAdvisorCost();
@@ -14895,8 +14907,10 @@ export class AgentSession implements SettingsScope {
 	 */
 	beginInitialAdvisorCostRestore(): void {
 		let stale = false;
+		this.#advisorCostRestoreState = "restoring";
 		const unregisterSessionChange = this.registerSessionChangeCallback(() => {
 			stale = true;
+			this.#advisorCostRestoreState = "unavailable";
 		});
 		const snapshot = this.#advisors.beginCostRestoreSnapshot();
 		const providersBySlug = new Map<string, Set<string>>();
@@ -14909,9 +14923,16 @@ export class AgentSession implements SettingsScope {
 			.then(costs => {
 				if (stale || this.isDisposed) return;
 				this.restoreInitialAdvisorCosts(costs, snapshot.costsAtSnapshot, providersBySlug);
+				this.#advisorCostRestoreState = "ready";
 				this.#emit({ type: "advisor_cost_changed" });
 			})
-			.catch(err => logger.debug("advisor cost restore failed", { err: String(err) }))
+			.catch(err => {
+				if (!stale && !this.isDisposed) {
+					this.#advisorCostRestoreState = "unavailable";
+					logger.debug("advisor cost restore failed", { err: String(err) });
+					this.#emit({ type: "advisor_cost_changed" });
+				}
+			})
 			.finally(() => {
 				snapshot.release();
 				unregisterSessionChange();

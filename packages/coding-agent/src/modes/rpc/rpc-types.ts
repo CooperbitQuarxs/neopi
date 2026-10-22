@@ -45,6 +45,7 @@ import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { BtwHistoryRecord } from "../../session/btw-history";
+import type { UsageStatistics } from "../../session/session-entries";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -70,7 +71,7 @@ export type RpcCommand =
 	| { id?: string; type: "open_session"; sessionDir: string; provider?: string; modelId?: string }
 
 	// State
-	| { id?: string; type: "get_state" }
+	| { id?: string; type: "get_state"; includeDump?: boolean }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
 	| RpcSetChatModeCommand
 	| { id?: string; type: "set_mode"; mode: RpcMode; planFilePath?: string }
@@ -201,6 +202,13 @@ export interface RpcSessionState {
 	sessionFile?: string;
 	sessionId: string;
 	sessionName?: string;
+	/** Effective tool policy, including the process-local auto-approve override. */
+	approvalMode?: ApprovalMode;
+	/** All journal branches, including compacted history and completed task spend. */
+	sessionUsage?: UsageStatistics & {
+		advisorCost: number;
+		advisorCostState: "ready" | "restoring" | "unavailable";
+	};
 	/** Capture ownership, last committed progress, and automatic recovery diagnostics. */
 	chronicler: ChroniclerHealth;
 	autoCompactionEnabled: boolean;

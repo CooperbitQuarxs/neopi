@@ -382,6 +382,24 @@ export interface ModelInfo {
 
 export type ApprovalHandler = "host" | "ui";
 
+export type ApprovalMode = "always-ask" | "write" | "yolo";
+
+export interface SessionUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	orchestrationInput: number;
+	orchestrationOutput: number;
+	orchestrationCacheRead: number;
+	premiumRequests: number;
+	cost: number;
+	subagentCost: number;
+	advisorCost: number;
+	advisorCostState: "ready" | "restoring" | "unavailable";
+}
+
 export type ChatModeSetting = "off" | "chat" | "erp" | "raw";
 
 export interface ChatModeState {
@@ -777,6 +795,8 @@ export interface SessionState {
 	interruptMode?: InterruptMode;
 	sessionFile?: string;
 	sessionName?: string;
+	approvalMode?: ApprovalMode;
+	sessionUsage?: SessionUsage;
 	autoCompactionEnabled?: boolean;
 	fastModeEnabled?: boolean;
 	fastModeActive?: boolean;
@@ -1151,6 +1171,10 @@ export interface ChatModeChangedEvent {
 	type: "chat_mode_changed";
 	mode: ChatModeSetting;
 	include: string;
+}
+
+export interface ApprovalModeChangedEvent {
+	type: "approval_mode_changed";
 }
 
 export interface MixtureHopEndEvent {
@@ -1544,7 +1568,7 @@ export interface QueueUpdateEvent {
 }
 
 /** A session event, discriminated by `type`; `set_event_filter` selects which are sent. */
-export type RpcAgentEvent = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
+export type RpcAgentEvent = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | ApprovalModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
 
 /** First frame after startup; transport fields are absent on servers without protocol v2. */
 export interface ReadyEvent {
@@ -2086,6 +2110,10 @@ export interface OpenSessionParams {
 	modelId?: string;
 }
 
+export interface GetStateParams {
+	includeDump?: boolean;
+}
+
 export interface CreateMixtureParams {
 	scope: MixtureConfigScope;
 	definition: MixtureDefinition;
@@ -2527,7 +2555,7 @@ export interface RpcWireCommands {
 	abort_and_restore_queue: { params: undefined; result: AbortAndRestoreQueueResult };
 	new_session: { params: NewSessionParams; result: CancellationResult };
 	open_session: { params: OpenSessionParams; result: OpenSessionResult };
-	get_state: { params: undefined; result: SessionState };
+	get_state: { params: GetStateParams; result: SessionState };
 	create_mixture: { params: CreateMixtureParams; result: CreateMixtureResult };
 	list_mixtures: { params: undefined; result: ListMixturesResult };
 	select_mixture: { params: SelectMixtureParams; result: ModelInfo };

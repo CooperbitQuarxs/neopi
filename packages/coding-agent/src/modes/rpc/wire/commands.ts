@@ -95,7 +95,12 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		result: "OpenSessionResult",
 	},
 
-	{ name: "get_state", doc: "Snapshot the session state.", result: "SessionState" },
+	{
+		name: "get_state",
+		doc: "Snapshot the session state.",
+		params: { "includeDump?": "boolean" },
+		result: "SessionState",
+	},
 	{
 		name: "create_mixture",
 		doc: "Save and register a mixture.",

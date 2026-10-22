@@ -2714,6 +2714,54 @@ impl ApprovalHandler {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ApprovalMode {
+	#[serde(rename = "always-ask")]
+	AlwaysAsk,
+	#[serde(rename = "write")]
+	Write,
+	#[serde(rename = "yolo")]
+	Yolo,
+}
+
+impl ApprovalMode {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::AlwaysAsk => "always-ask",
+			Self::Write => "write",
+			Self::Yolo => "yolo",
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionUsage {
+	pub input: f64,
+	pub output: f64,
+	#[serde(rename = "cacheRead")]
+	pub cache_read: f64,
+	#[serde(rename = "cacheWrite")]
+	pub cache_write: f64,
+	#[serde(rename = "totalTokens")]
+	pub total_tokens: f64,
+	#[serde(rename = "orchestrationInput")]
+	pub orchestration_input: f64,
+	#[serde(rename = "orchestrationOutput")]
+	pub orchestration_output: f64,
+	#[serde(rename = "orchestrationCacheRead")]
+	pub orchestration_cache_read: f64,
+	#[serde(rename = "premiumRequests")]
+	pub premium_requests: f64,
+	pub cost: f64,
+	#[serde(rename = "subagentCost")]
+	pub subagent_cost: f64,
+	#[serde(rename = "advisorCost")]
+	pub advisor_cost: f64,
+	#[serde(rename = "advisorCostState")]
+	pub advisor_cost_state: SessionUsageAdvisorCostState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ChatModeSetting {
 	#[serde(rename = "off")]
 	Off,
@@ -3818,6 +3866,10 @@ pub struct SessionState {
 	pub session_file: Option<String>,
 	#[serde(rename = "sessionName", default, skip_serializing_if = "Option::is_none")]
 	pub session_name: Option<String>,
+	#[serde(rename = "approvalMode", default, skip_serializing_if = "Option::is_none")]
+	pub approval_mode: Option<ApprovalMode>,
+	#[serde(rename = "sessionUsage", default, skip_serializing_if = "Option::is_none")]
+	pub session_usage: Option<SessionUsage>,
 	#[serde(rename = "autoCompactionEnabled", default = "default_session_state_auto_compaction_enabled")]
 	pub auto_compaction_enabled: bool,
 	#[serde(rename = "fastModeEnabled", default = "default_session_state_fast_mode_enabled")]
@@ -4496,6 +4548,9 @@ pub struct ChatModeChangedEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalModeChangedEvent {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MixtureHopEndEvent {
 	pub details: MixtureHopTrace,
 }
@@ -5052,6 +5107,7 @@ pub enum RpcAgentEvent {
 	RunOwnersJoined(RunOwnersJoinedEvent),
 	RunOwnersSkipped(RunOwnersSkippedEvent),
 	ChatModeChanged(ChatModeChangedEvent),
+	ApprovalModeChanged(ApprovalModeChangedEvent),
 	MixtureHopEnd(MixtureHopEndEvent),
 	MixtureDecision(MixtureDecisionEvent),
 	MixtureLimit(MixtureLimitEvent),
@@ -5104,6 +5160,7 @@ impl RpcAgentEvent {
 			Some("run_owners_joined") => |value| serde_json::from_value(value).map(Self::RunOwnersJoined),
 			Some("run_owners_skipped") => |value| serde_json::from_value(value).map(Self::RunOwnersSkipped),
 			Some("chat_mode_changed") => |value| serde_json::from_value(value).map(Self::ChatModeChanged),
+			Some("approval_mode_changed") => |value| serde_json::from_value(value).map(Self::ApprovalModeChanged),
 			Some("mixture_hop_end") => |value| serde_json::from_value(value).map(Self::MixtureHopEnd),
 			Some("mixture_decision") => |value| serde_json::from_value(value).map(Self::MixtureDecision),
 			Some("mixture_limit") => |value| serde_json::from_value(value).map(Self::MixtureLimit),
@@ -5156,6 +5213,7 @@ impl Serialize for RpcAgentEvent {
 			Self::RunOwnersJoined(member) => serialize_tagged(member, &[("type", "run_owners_joined")], serializer),
 			Self::RunOwnersSkipped(member) => serialize_tagged(member, &[("type", "run_owners_skipped")], serializer),
 			Self::ChatModeChanged(member) => serialize_tagged(member, &[("type", "chat_mode_changed")], serializer),
+			Self::ApprovalModeChanged(member) => serialize_tagged(member, &[("type", "approval_mode_changed")], serializer),
 			Self::MixtureHopEnd(member) => serialize_tagged(member, &[("type", "mixture_hop_end")], serializer),
 			Self::MixtureDecision(member) => serialize_tagged(member, &[("type", "mixture_decision")], serializer),
 			Self::MixtureLimit(member) => serialize_tagged(member, &[("type", "mixture_limit")], serializer),
@@ -6197,7 +6255,7 @@ impl RpcNotification {
 			Some("session_info_update") => |value| serde_json::from_value(value).map(Self::SessionInfoUpdate),
 			Some("config_update") => |value| serde_json::from_value(value).map(Self::ConfigUpdate),
 			Some("rpc_frame_error") => |value| serde_json::from_value(value).map(Self::RpcFrameError),
-			Some("advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
+			Some("advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -6257,7 +6315,7 @@ impl RpcServerFrame {
 		let decode: fn(Value) -> Result<Self, serde_json::Error> = match value.get("type").and_then(Value::as_str) {
 			Some("response") => |value| serde_json::from_value(value).map(Self::Response),
 			Some("host_tool_call" | "host_tool_cancel" | "host_uri_request" | "host_uri_cancel") => |value| serde_json::from_value(value).map(Self::RpcHostRequest),
-			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
+			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -6370,6 +6428,12 @@ pub struct OpenSessionParams {
 	pub provider: Option<String>,
 	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
 	pub model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetStateParams {
+	#[serde(rename = "includeDump", default, skip_serializing_if = "Option::is_none")]
+	pub include_dump: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -7151,6 +7215,27 @@ impl AssistantErrorEventReason {
 		match self {
 			Self::Aborted => "aborted",
 			Self::Error => "error",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SessionUsageAdvisorCostState {
+	#[serde(rename = "ready")]
+	Ready,
+	#[serde(rename = "restoring")]
+	Restoring,
+	#[serde(rename = "unavailable")]
+	Unavailable,
+}
+
+impl SessionUsageAdvisorCostState {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Ready => "ready",
+			Self::Restoring => "restoring",
+			Self::Unavailable => "unavailable",
 		}
 	}
 }
@@ -8357,7 +8442,10 @@ impl Command for OpenSessionCommand {
 
 /// Snapshot the session state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct GetStateCommand {}
+pub struct GetStateCommand {
+	#[serde(rename = "includeDump", default, skip_serializing_if = "Option::is_none")]
+	pub include_dump: Option<bool>,
+}
 
 impl Command for GetStateCommand {
 	const NAME: &'static str = "get_state";

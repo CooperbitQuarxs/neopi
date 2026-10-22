@@ -133,7 +133,7 @@
 			{
 				"name": "get_state",
 				"doc": "Snapshot the session state.",
-				"params": null,
+				"params": "GetStateParams",
 				"result": "SessionState",
 				"nullable": false,
 				"unwrap": null,
@@ -2439,6 +2439,78 @@
 			],
 			"type": "string"
 		},
+		"ApprovalMode": {
+			"enum": [
+				"always-ask",
+				"write",
+				"yolo"
+			],
+			"type": "string"
+		},
+		"SessionUsage": {
+			"type": "object",
+			"properties": {
+				"input": {
+					"type": "number"
+				},
+				"output": {
+					"type": "number"
+				},
+				"cacheRead": {
+					"type": "number"
+				},
+				"cacheWrite": {
+					"type": "number"
+				},
+				"totalTokens": {
+					"type": "number"
+				},
+				"orchestrationInput": {
+					"type": "number"
+				},
+				"orchestrationOutput": {
+					"type": "number"
+				},
+				"orchestrationCacheRead": {
+					"type": "number"
+				},
+				"premiumRequests": {
+					"type": "number"
+				},
+				"cost": {
+					"type": "number"
+				},
+				"subagentCost": {
+					"type": "number"
+				},
+				"advisorCost": {
+					"type": "number"
+				},
+				"advisorCostState": {
+					"enum": [
+						"ready",
+						"restoring",
+						"unavailable"
+					],
+					"type": "string"
+				}
+			},
+			"required": [
+				"input",
+				"output",
+				"cacheRead",
+				"cacheWrite",
+				"totalTokens",
+				"orchestrationInput",
+				"orchestrationOutput",
+				"orchestrationCacheRead",
+				"premiumRequests",
+				"cost",
+				"subagentCost",
+				"advisorCost",
+				"advisorCostState"
+			]
+		},
 		"ChatModeSetting": {
 			"enum": [
 				"off",
@@ -3969,6 +4041,12 @@
 				"sessionName": {
 					"type": "string"
 				},
+				"approvalMode": {
+					"$ref": "#/$defs/ApprovalMode"
+				},
+				"sessionUsage": {
+					"$ref": "#/$defs/SessionUsage"
+				},
 				"autoCompactionEnabled": {
 					"type": "boolean",
 					"default": false
@@ -5276,6 +5354,17 @@
 				"type",
 				"mode",
 				"include"
+			]
+		},
+		"ApprovalModeChangedEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "approval_mode_changed"
+				}
+			},
+			"required": [
+				"type"
 			]
 		},
 		"MixtureHopEndEvent": {
@@ -6603,6 +6692,9 @@
 				},
 				{
 					"$ref": "#/$defs/ChatModeChangedEvent"
+				},
+				{
+					"$ref": "#/$defs/ApprovalModeChangedEvent"
 				},
 				{
 					"$ref": "#/$defs/MixtureHopEndEvent"
@@ -8477,6 +8569,14 @@
 			"required": [
 				"sessionDir"
 			]
+		},
+		"GetStateParams": {
+			"type": "object",
+			"properties": {
+				"includeDump": {
+					"type": "boolean"
+				}
+			}
 		},
 		"CreateMixtureParams": {
 			"type": "object",

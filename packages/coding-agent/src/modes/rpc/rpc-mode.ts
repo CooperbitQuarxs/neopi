@@ -1853,7 +1853,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					activeRole: rpcRoles.activeRole(),
 					// A scheduled goal continuation will start a turn: not settled.
 					scheduledTurn: goalTurnScheduled,
-					includeDump: true,
+					includeDump: command.includeDump !== false,
 				});
 				return success(id, "get_state", state);
 			}
