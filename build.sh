@@ -80,8 +80,10 @@ native_inputs() {
 	printf '%s\n' "$version" "$addon_name" "${RUSTFLAGS:-}" "${CARGO_ENCODED_RUSTFLAGS:-}" \
 		"${OMP_NATIVE_CARGO_PROFILE:-}" "${OMP_NATIVE_BUILD_BACKEND:-}" "${RUSTC_LINKER:-}" \
 		"${OMP_NATIVE_FEATURES:-}" "${CFLAGS:-}" "${CXXFLAGS:-}" "${LDFLAGS:-}" "${PCRE2_SYS_STATIC:-}"
-	# Target linkers reach the embedded relay's rustc through crates/pi-natives/build.rs.
-	env | grep -E '^CARGO_TARGET_[A-Z0-9_]+_LINKER=' | sort || true
+	# Cargo overrides can change the compiler, wrapper or generated code.
+	# Target linkers also reach the embedded relay through crates/pi-natives/build.rs.
+	env | grep -E '^(RUSTC(_WRAPPER|_WORKSPACE_WRAPPER)?|CARGO_PROFILE_[A-Z0-9_]+|CARGO_BUILD_[A-Z0-9_]+|CARGO_TARGET_[A-Z0-9_]+_LINKER)=' |
+		LC_ALL=C sort || true
 	# A Bazel rc (scripts/bazel-natives.ts) can change flags and toolchains.
 	printf 'bazelrc %s\n' "${OMP_BAZEL_RC:-}"
 	if [[ -n ${OMP_BAZEL_RC:-} && -f $OMP_BAZEL_RC ]]; then
@@ -106,7 +108,7 @@ native_inputs() {
 # differ even between machines with the same rustc and architecture.
 host_fingerprint=$(
 	host_os=$(uname -sm) && host_id=$(cat /etc/machine-id) &&
-		host_rust=$(rustc -vV) && host_bun=$(bun --version) &&
+		host_rust=$("${RUSTC:-${CARGO_BUILD_RUSTC:-rustc}}" -vV) && host_bun=$(bun --version) &&
 		host_cc=$(cc --version) && host_ld=$(ld --version) && host_libc=$(ldd --version) &&
 		printf '%s\n' "$host_os" "$addon_name" "$host_id" "$host_rust" "$host_bun" "$host_cc" "$host_ld" "$host_libc"
 ) || die "could not fingerprint the native build host"
