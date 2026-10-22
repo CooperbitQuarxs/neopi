@@ -9,6 +9,7 @@
 
 ### Added
 
+- Navigate the native session tree over RPC or terminal control without forking its file; receive restored drafts, images and native summary/ask outcomes with guarded branch preconditions ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
 - Inspect, add, edit and delete model overrides and custom models in `/models`, with schema-driven field editors and unknown-field preservation ([#522](https://github.com/PsychedelicShayna/neopi/issues/522)).
 
 - Convert complete user and project main settings to `config.toml` with `npi config to-toml`, preserving unknown keys and explicit clears while reporting unsupported YAML values ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).

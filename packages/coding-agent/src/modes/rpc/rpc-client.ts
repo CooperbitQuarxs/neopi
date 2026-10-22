@@ -29,6 +29,12 @@ import {
 	type RpcMessagesPage,
 	type RpcMessagesPageOptions,
 } from "./rpc-messages";
+import type {
+	RpcNavigateTreeOptions,
+	RpcNavigateTreeResult,
+	RpcResumeTreeOptions,
+	RpcResumeTreeResult,
+} from "./rpc-tree";
 import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
 import type {
 	RpcAbortAndRestoreQueueResult,
@@ -1172,6 +1178,16 @@ export class RpcClient {
 	async getTree(): Promise<{ tree: SessionTreeNode[]; leafId: string | null }> {
 		const response = await this.#send({ type: "get_tree" });
 		return this.#getData<{ tree: SessionTreeNode[]; leafId: string | null }>(response);
+	}
+
+	/** Navigate the native tree in the same file. Rebuild the transcript before acknowledging a returned resumeToken. */
+	async navigateTree(options: RpcNavigateTreeOptions): Promise<RpcNavigateTreeResult> {
+		return this.#getData<RpcNavigateTreeResult>(await this.#send({ ...options, type: "navigate_tree" }));
+	}
+
+	/** Acknowledge a committed ask re-answer after consuming its navigation result. */
+	async resumeTree(options: RpcResumeTreeOptions): Promise<RpcResumeTreeResult> {
+		return this.#getData<RpcResumeTreeResult>(await this.#send({ ...options, type: "resume_tree" }));
 	}
 
 	/**
