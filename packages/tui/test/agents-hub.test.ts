@@ -313,6 +313,114 @@ function pickerProps(hub: AgentsHubComponent): TspPickerProps {
 	return root.p;
 }
 
+describe("AgentsHub external configuration editing", () => {
+	test("Ctrl-G awaits the host editor, reloads definitions, and preserves the selected source", async () => {
+		const editing = Promise.withResolvers<void>();
+		const agents: HubAgent[] = [
+			{ name: "dev", description: "Project", systemPrompt: "", source: "project", disabled: false },
+			{
+				name: "dev",
+				description: "User",
+				systemPrompt: "",
+				source: "user",
+				filePath: "/agents/dev.md",
+				disabled: false,
+			},
+		];
+		const opened: HubAgent[] = [];
+		let loads = 0;
+		const { hub } = await createHub(new TestSettings(), {
+			loadAgents: async () => {
+				loads++;
+				return agents.map(agent => ({ ...agent }));
+			},
+			openConfigFile: agent => {
+				opened.push(agent);
+				return editing.promise;
+			},
+		});
+		try {
+			hub.handleNativeEvent({ type: "select", key: "", item: "agent:user:dev" });
+			expect(pickerProps(hub).actions?.find(action => action.id === "edit-file")?.keys).toEqual(["ctrl", "g"]);
+			hub.handleInput("\x07");
+			expect(opened.map(agent => agent.filePath)).toEqual(["/agents/dev.md"]);
+			expect(loads).toBe(1);
+			expect(hub.blocksMenuHistory).toBe(true);
+			hub.handleInput("\x07");
+			expect(opened).toHaveLength(1);
+			agents.push({ name: "new", description: "", systemPrompt: "", source: "user", disabled: false });
+			editing.resolve();
+			await Bun.sleep(0);
+			expect(loads).toBe(2);
+			expect(pickerProps(hub).items?.some(item => item.id === "agent:user:new")).toBe(true);
+			expect(pickerProps(hub).selected).toBe("agent:user:dev");
+			expect(hub.blocksMenuHistory).toBe(false);
+		} finally {
+			hub.dispose();
+		}
+	});
+
+	test("native edit-file delegates source-less builtins to the host", async () => {
+		const opened: HubAgent[] = [];
+		const { hub } = await createHub(new TestSettings(), {
+			openConfigFile: async agent => {
+				opened.push(agent);
+			},
+		});
+		try {
+			hub.handleNativeEvent({ type: "select", key: "", item: "agent:bundled:scout" });
+			hub.handleNativeEvent({ type: "action", key: "", act: "edit-file", mods: [] });
+			await Bun.sleep(0);
+			expect(opened).toHaveLength(1);
+			expect(opened[0]?.name).toBe("scout");
+			expect(opened[0]?.filePath).toBeUndefined();
+		} finally {
+			hub.dispose();
+		}
+	});
+
+	test("host editing failures show a notice and leave navigation usable", async () => {
+		const { hub } = await createHub(new TestSettings(), {
+			openConfigFile: async () => {
+				throw new Error("No editor configured");
+			},
+		});
+		try {
+			hub.handleInput("\x07");
+			await Bun.sleep(0);
+			expect(pickerProps(hub).subtitle).toBe("No editor configured");
+			expect(hub.blocksMenuHistory).toBe(false);
+			hub.handleInput("j");
+			expect(pickerProps(hub).selected).toBe("agent:bundled:scout");
+		} finally {
+			hub.dispose();
+		}
+	});
+
+	test("editing is absent without a callback and does not claim search or property input", async () => {
+		const without = await createHub(new TestSettings());
+		let opens = 0;
+		const { hub } = await createHub(new TestSettings(), {
+			openConfigFile: async () => {
+				opens++;
+			},
+		});
+		try {
+			expect(pickerProps(without.hub).actions?.some(action => action.id === "edit-file")).toBe(false);
+			without.hub.handleInput("\x07");
+			hub.handleInput("/");
+			hub.handleInput("\x07");
+			hub.handleInput("\x1b");
+			hub.handleInput("\r");
+			hub.handleInput("\x07");
+			expect(opens).toBe(0);
+		} finally {
+			without.hub.dispose();
+			hub.dispose();
+		}
+	});
+});
+
 /** The described node keyed `key` and its key path (the `key` its native events carry). */
 function findKeyed(root: NativeNode, key: string): { node: NativeNode; path: string } | undefined {
 	const walk = (node: NativeNode, path: string[]): { node: NativeNode; path: string } | undefined => {
