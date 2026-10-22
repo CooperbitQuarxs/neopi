@@ -9,6 +9,7 @@
 
 ### Added
 
+- Read complete native journal or selected-branch history in bounded RPC/control pages or with `npi sessions entries --json`, preserving tool output, compaction, reset and custom records ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
 - Set model context limits with exact, glob, or regex rules in `/models`, and see the effective maintenance window separately from catalog capacity ([#511](https://github.com/PsychedelicShayna/neopi/issues/511)).
 
 - Choose a separate `title` model for session titles and `/rename` suggestions; until set it follows `tiny`, and explicit fork-mode titling still uses the foreground model ([#515](https://github.com/PsychedelicShayna/neopi/issues/515)).

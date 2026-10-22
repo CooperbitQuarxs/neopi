@@ -40,6 +40,7 @@ npi sessions list --json --cwd /path/to/project
 npi sessions list --json --all
 npi sessions list --json --session-dir /legacy/session-dir
 npi sessions read --json /absolute/session.jsonl --max-messages 200
+npi sessions entries --json --scope branch --direction backward --limit 100 /absolute/session.jsonl
 npi ctl pipe <instance-id> --label neocode
 ```
 
@@ -118,6 +119,16 @@ capabilities, not a version-number guess. History synchronization should read
 without a message cap and verify the saved leaf remains in the selected ancestry
 before appending new native entries; changed branches must not silently replace
 an existing host transcript.
+
+`session_journal` advertises canonical journal paging over RPC/control and the
+read-only `sessions entries` command. Prefer it for complete native history:
+`sessions read` remains the existing collapsed transcript export. `sessions entries`
+accepts `--scope journal|branch`, `--direction forward|backward`, `--cursor` and
+`--limit` and returns the [native journal page](./rpc.md#native-journal-pages).
+It never starts an agent, claims a writer lease, or rewrites a journal. Use the live
+owner's `get_entries_page` when attached; a disk reader can only observe the
+persisted leaf. JSON failures are stdout `{ "error": { "code": "...", "message": "..." } }`
+documents with a nonzero exit status.
 
 ## Monitor connections
 
