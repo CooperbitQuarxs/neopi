@@ -16,6 +16,16 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
  * persisted under before the turn starts.
  */
 const messageEntryIds = new WeakMap<AgentMessage, string>();
+const messageEntrySources = new WeakMap<AgentMessage, AgentMessage>();
+
+/** Keep a display-only clone tied to its native message before an entry ID exists. */
+export function linkMessageEntrySource(display: AgentMessage, native: AgentMessage): void {
+	messageEntrySources.set(display, getMessageEntrySource(native));
+}
+
+export function getMessageEntrySource(message: AgentMessage): AgentMessage {
+	return messageEntrySources.get(message) ?? message;
+}
 
 /** Record `entryId` as the session entry behind `message`. Returns `entryId`. */
 export function setMessageEntryId(message: AgentMessage, entryId: string): string {

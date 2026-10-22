@@ -4266,6 +4266,43 @@ impl NotifyType {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JournalStateEvent {
+	#[serde(rename = "sessionId")]
+	pub session_id: String,
+	#[serde(rename = "sessionFile", deserialize_with = "Deserialize::deserialize")]
+	pub session_file: Option<String>,
+	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
+	pub leaf_id: Option<String>,
+	pub reason: JournalStateEventReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JournalEntryEvent {
+	#[serde(rename = "sessionId")]
+	pub session_id: String,
+	#[serde(rename = "sessionFile", deserialize_with = "Deserialize::deserialize")]
+	pub session_file: Option<String>,
+	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
+	pub leaf_id: Option<String>,
+	pub entry: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MessagePersistedEvent {
+	#[serde(rename = "sessionId")]
+	pub session_id: String,
+	#[serde(rename = "sessionFile", deserialize_with = "Deserialize::deserialize")]
+	pub session_file: Option<String>,
+	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
+	pub leaf_id: Option<String>,
+	/// Shared by the start, updates, and end of one message; unique per process.
+	#[serde(rename = "messageId")]
+	pub message_id: String,
+	#[serde(rename = "entryId")]
+	pub entry_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdvisorMessageEvent {
 	pub advisor: String,
 	pub slug: String,
@@ -4841,6 +4878,9 @@ pub struct QueueUpdateEvent {
 /// A session event, discriminated by `type`; `set_event_filter` selects which are sent.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RpcAgentEvent {
+	JournalState(JournalStateEvent),
+	JournalEntry(JournalEntryEvent),
+	MessagePersisted(MessagePersistedEvent),
 	AdvisorMessage(AdvisorMessageEvent),
 	RunOwnersJoined(RunOwnersJoinedEvent),
 	RunOwnersSkipped(RunOwnersSkippedEvent),
@@ -4892,6 +4932,9 @@ impl RpcAgentEvent {
 	/// Decodes from JSON, dispatching on `type`.
 	pub fn from_value(value: Value) -> Result<Self, serde_json::Error> {
 		let decode: fn(Value) -> Result<Self, serde_json::Error> = match value.get("type").and_then(Value::as_str) {
+			Some("journal_state") => |value| serde_json::from_value(value).map(Self::JournalState),
+			Some("journal_entry") => |value| serde_json::from_value(value).map(Self::JournalEntry),
+			Some("message_persisted") => |value| serde_json::from_value(value).map(Self::MessagePersisted),
 			Some("advisor_message") => |value| serde_json::from_value(value).map(Self::AdvisorMessage),
 			Some("run_owners_joined") => |value| serde_json::from_value(value).map(Self::RunOwnersJoined),
 			Some("run_owners_skipped") => |value| serde_json::from_value(value).map(Self::RunOwnersSkipped),
@@ -4943,6 +4986,9 @@ impl RpcAgentEvent {
 impl Serialize for RpcAgentEvent {
 	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
 		match self {
+			Self::JournalState(member) => serialize_tagged(member, &[("type", "journal_state")], serializer),
+			Self::JournalEntry(member) => serialize_tagged(member, &[("type", "journal_entry")], serializer),
+			Self::MessagePersisted(member) => serialize_tagged(member, &[("type", "message_persisted")], serializer),
 			Self::AdvisorMessage(member) => serialize_tagged(member, &[("type", "advisor_message")], serializer),
 			Self::RunOwnersJoined(member) => serialize_tagged(member, &[("type", "run_owners_joined")], serializer),
 			Self::RunOwnersSkipped(member) => serialize_tagged(member, &[("type", "run_owners_skipped")], serializer),
@@ -5979,7 +6025,7 @@ impl RpcNotification {
 			Some("session_info_update") => |value| serde_json::from_value(value).map(Self::SessionInfoUpdate),
 			Some("config_update") => |value| serde_json::from_value(value).map(Self::ConfigUpdate),
 			Some("rpc_frame_error") => |value| serde_json::from_value(value).map(Self::RpcFrameError),
-			Some("advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
+			Some("journal_state" | "journal_entry" | "message_persisted" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -6039,7 +6085,7 @@ impl RpcServerFrame {
 		let decode: fn(Value) -> Result<Self, serde_json::Error> = match value.get("type").and_then(Value::as_str) {
 			Some("response") => |value| serde_json::from_value(value).map(Self::Response),
 			Some("host_tool_call" | "host_tool_cancel" | "host_uri_request" | "host_uri_cancel") => |value| serde_json::from_value(value).map(Self::RpcHostRequest),
-			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
+			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "journal_state" | "journal_entry" | "message_persisted" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -7159,6 +7205,27 @@ impl LogoutAccountType {
 		match self {
 			Self::ApiKey => "api_key",
 			Self::Oauth => "oauth",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum JournalStateEventReason {
+	#[serde(rename = "snapshot")]
+	Snapshot,
+	#[serde(rename = "identity")]
+	Identity,
+	#[serde(rename = "leaf")]
+	Leaf,
+}
+
+impl JournalStateEventReason {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Snapshot => "snapshot",
+			Self::Identity => "identity",
+			Self::Leaf => "leaf",
 		}
 	}
 }

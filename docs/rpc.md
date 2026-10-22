@@ -47,6 +47,7 @@ Behavior notes:
 | `session_lease` | A process holds an exclusive lifetime lease on every session file it writes, so two processes never append to one transcript. `--session <file>` onto a file another process holds fails at startup with a `startup_error` stderr line; `switch_session` and `branch` onto one fail with `code: "session_in_use"` (see [Session lease](#session-lease)). |
 | `plan_proposal_cancel` | A pending plan proposal that resolves without a host answer is announced with a `plan_proposal_cancel` frame, and a later `plan_proposal_response` for it fails with `code: "proposal_cancelled"`. See [`plan_proposal_cancel`](#plan_proposal_cancel). |
 | `prompt_entry_ids` | `prompt`, `steer`, `follow_up` and `abort_and_prompt` responses carry `data.userEntryId`, the id of the session entry their message is written as, and every `get_messages_page` message carries the `entryId` of its entry. See [Entry ids](#entry-ids). |
+| `session_journal_events` | Native journal commits, active-leaf changes, session identity changes and durable streaming-message associations. See [Native journal events](#native-journal-events). |
 
 ### Session lease
 
@@ -432,6 +433,39 @@ Local-only slash commands may emit `command_output` frames before completing. Th
 - A message that never reaches the session writes no entry: a prompt that fails or is dropped before the turn starts (its `prompt_result` reports `agentInvoked: false` or `status: "error"`), or a queued steer/follow-up cancelled before the queue delivers it. Such unused reservations are released; a session change also releases any remaining reservations.
 
 Each `get_messages_page` message carries `entryId`, including custom messages (`custom_message` entries), the compaction summary (`compaction` entry) and branch summaries (`branch_summary` entry). Context the session injects per turn without persisting it (for example Vibe-mode context) has no entry and no `entryId`.
+
+### Native journal events
+
+Stdio RPC and control owners advertise `session_journal_events` and emit:
+
+- `journal_state` with `reason: "snapshot" | "identity" | "leaf"`.
+- `journal_entry` with the complete canonical native `entry`, only after storage acknowledges persistence.
+- `message_persisted` with the streaming `messageId` and canonical journal `entryId`.
+
+Every frame carries `sessionId`, canonical absolute `sessionFile` and `leafId`.
+`sessionFile` is `null` for an in-memory owner. The leaf describes the running
+owner's current branch, including pointer-only tree navigation. A leaf change
+alone does not claim that a new entry or a pointer change was persisted.
+
+Observers subscribe before the initial `journal_state` snapshot. Attach with
+`npi ctl pipe` or control `subscribe` before requesting native journal pages.
+Buffer notifications while fetching the initial pages, deduplicate entries by
+their native IDs and discard the old binding when either session ID or file
+changes. Restart branch paging when the leaf changes. The initial state frame
+contains identity, not a second copy of the journal.
+
+Live `message_start`, updates and `message_end` remain unsaved output until a
+`message_persisted` frame associates them with a journal entry. A process-local
+`msg-N`, an accepted prompt's reserved `userEntryId`, or a completed stream is
+not a durability receipt. Failed or intentionally skipped persistence produces
+no association. Recovery announces entries only after native persistence succeeds.
+Messages already present in the initial history use their native entry IDs;
+they need no live-message association.
+
+All three frame types respect `set_event_filter`. Protocol v2 uses the existing
+chunking limits for large entries without truncation. The TypeScript client
+exposes them through `onJournalEvent`; existing `onEvent` and `onSessionEvent`
+listeners retain their event types. Consumers must ignore unknown event kinds.
 
 ### Yield vs settled
 

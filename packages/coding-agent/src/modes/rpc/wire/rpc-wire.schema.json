@@ -4521,6 +4521,141 @@
 			],
 			"type": "string"
 		},
+		"JournalStateEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "journal_state"
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"reason": {
+					"enum": [
+						"snapshot",
+						"identity",
+						"leaf"
+					],
+					"type": "string"
+				}
+			},
+			"required": [
+				"type",
+				"sessionId",
+				"sessionFile",
+				"leafId",
+				"reason"
+			]
+		},
+		"JournalEntryEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "journal_entry"
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"entry": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {}
+				}
+			},
+			"required": [
+				"type",
+				"sessionId",
+				"sessionFile",
+				"leafId",
+				"entry"
+			]
+		},
+		"MessagePersistedEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "message_persisted"
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"messageId": {
+					"type": "string",
+					"description": "Shared by the start, updates, and end of one message; unique per process."
+				},
+				"entryId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"type",
+				"sessionId",
+				"sessionFile",
+				"leafId",
+				"messageId",
+				"entryId"
+			]
+		},
 		"AdvisorMessageEvent": {
 			"type": "object",
 			"properties": {
@@ -5910,6 +6045,15 @@
 		},
 		"RpcAgentEvent": {
 			"anyOf": [
+				{
+					"$ref": "#/$defs/JournalStateEvent"
+				},
+				{
+					"$ref": "#/$defs/JournalEntryEvent"
+				},
+				{
+					"$ref": "#/$defs/MessagePersistedEvent"
+				},
 				{
 					"$ref": "#/$defs/AdvisorMessageEvent"
 				},

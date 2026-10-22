@@ -2632,6 +2632,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	);
 	const promptResults = new RpcPromptResults(session, output, goalTurnScheduled);
 	const sessionEvents = new RpcSessionEventForwarder(output);
+	sessionEvents.observeJournal(session);
 	const settleWatcher = new RpcSessionSettleWatcher(session, output, goalTurnScheduled);
 
 	const pendingExtensionRequests = new RpcPendingExtensionRequests();

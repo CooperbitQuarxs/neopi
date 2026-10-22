@@ -35,6 +35,7 @@ import { type SubagentLifecyclePayload, TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "
 import { EventBus } from "../../src/utils/event-bus";
 import type { ControlSnapshot } from "../../src/control/types";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
+import { makeAssistantMessage } from "../session-manager/helpers";
 
 describe("control host", () => {
 	let tempDir: TempDir;
@@ -69,7 +70,7 @@ describe("control host", () => {
 		await tempDir.remove();
 	});
 
-	function createSession(settings: Record<string, unknown> = {}): AgentSession {
+	function createSession(settings: Record<string, unknown> = {}, manager = SessionManager.inMemory(tempDir.path())): AgentSession {
 		const model = createMockModel({ provider: "anthropic", responses: [] });
 		return new AgentSession({
 			agent: new Agent({
@@ -77,7 +78,7 @@ describe("control host", () => {
 				initialState: { model, systemPrompt: [], tools: [] },
 				streamFn: model.stream,
 			}),
-			sessionManager: SessionManager.inMemory(tempDir.path()),
+			sessionManager: manager,
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, ...settings }),
 			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
 		});
@@ -356,12 +357,51 @@ describe("control host", () => {
 		const before = session!.sessionId;
 		expect(host.revisions.generation).toBe(1);
 		await session!.newSession();
-		// The first ordinary session event after the transition observes it.
-		session!.emitNotice("info", "after transition");
 		expect(session!.sessionId).not.toBe(before);
 		expect(host.revisions.generation).toBe(2);
 		const [entry] = await readControlEntries({ dir });
 		expect(entry?.meta.sessionId).toBe(session!.sessionId);
+	});
+
+	test("a terminal-owned message reaches an attached observer with its durable entry ID", async () => {
+		const manager = SessionManager.create(tempDir.path(), tempDir.join("attached-journal"));
+		await manager.ensureOnDisk();
+		session = createSession({}, manager);
+		dir = tempDir.join("attached-control");
+		host = new ControlHost({ session, role: "tui", dir, tmuxPane: null });
+		await host.start();
+		const publication = host.publication;
+		if (!publication) throw new Error("control host did not publish");
+		const frames: Record<string, unknown>[] = [];
+		const persisted = Promise.withResolvers<Record<string, unknown>>();
+		client = new ControlClient({
+			metadata: publication.metadata(), label: "journal-reader", kind: "cli",
+			onFrame: frame => {
+				frames.push(frame);
+				if (frame.type === "message_persisted") persisted.resolve(frame);
+			},
+		});
+		await client.connect();
+		await client.request({ type: "subscribe", events: "all" });
+		expect(frames.find(frame => frame.type === "journal_state")).toEqual({
+			type: "journal_state", reason: "snapshot", ...manager.getJournalIdentity(),
+		});
+		const message = makeAssistantMessage();
+		session.agent.emitExternalEvent({ type: "message_start", message });
+		session.agent.emitExternalEvent({ type: "message_end", message });
+		const receipt = await persisted.promise;
+		expect(receipt).toMatchObject({ type: "message_persisted", messageId: "msg-1", ...manager.getJournalIdentity() });
+		expect(manager.isEntryDurable(String(receipt.entryId))).toBe(true);
+		expect(frames.find(frame => frame.type === "journal_entry")).toMatchObject({
+			sessionId: manager.getSessionId(), sessionFile: manager.getJournalIdentity().sessionFile,
+			entry: { id: receipt.entryId, type: "message" },
+		});
+		manager.resetLeaf();
+		await client.request({ type: "get_entries" });
+		expect(frames).toContainEqual({ type: "journal_state", reason: "leaf", ...manager.getJournalIdentity() });
+		await session.newSession();
+		await client.request({ type: "get_state" });
+		expect(frames).toContainEqual({ type: "journal_state", reason: "identity", ...manager.getJournalIdentity() });
 	});
 
 	test("a command larger than one physical frame is chunked and accepted, not rate limited", async () => {

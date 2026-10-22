@@ -4830,6 +4830,123 @@ func (v *NotifyType) UnmarshalJSON(data []byte) error {
 	return unknownValue("NotifyType", s)
 }
 
+type JournalStateEvent struct {
+	SessionID   string                  `json:"sessionId"`
+	SessionFile *string                 `json:"sessionFile"`
+	LeafID      *string                 `json:"leafId"`
+	Reason      JournalStateEventReason `json:"reason"`
+}
+
+func (v *JournalStateEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JournalStateEvent", v.decodeFrom)
+}
+
+func (v *JournalStateEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JournalStateEvent
+	d := fieldDecoder{raw: raw, owner: "JournalStateEvent"}
+	d.constant("type", "journal_state")
+	d.required("sessionId", &out.SessionID)
+	d.nullable("sessionFile", &out.SessionFile)
+	d.nullable("leafId", &out.LeafID)
+	d.required("reason", &out.Reason)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v JournalStateEvent) MarshalJSON() ([]byte, error) {
+	type plain JournalStateEvent
+	return encodeObject(plain(v), `"type":"journal_state"`, nil)
+}
+
+type JournalStateEventReason string
+
+const (
+	JournalStateEventReasonSnapshot JournalStateEventReason = "snapshot"
+	JournalStateEventReasonIdentity JournalStateEventReason = "identity"
+	JournalStateEventReasonLeaf     JournalStateEventReason = "leaf"
+)
+
+func (v *JournalStateEventReason) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "JournalStateEventReason")
+	if err != nil {
+		return err
+	}
+	switch value := JournalStateEventReason(s); value {
+	case JournalStateEventReasonSnapshot, JournalStateEventReasonIdentity, JournalStateEventReasonLeaf:
+		*v = value
+		return nil
+	}
+	return unknownValue("JournalStateEventReason", s)
+}
+
+type JournalEntryEvent struct {
+	SessionID   string                     `json:"sessionId"`
+	SessionFile *string                    `json:"sessionFile"`
+	LeafID      *string                    `json:"leafId"`
+	Entry       map[string]json.RawMessage `json:"entry"`
+}
+
+func (v *JournalEntryEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JournalEntryEvent", v.decodeFrom)
+}
+
+func (v *JournalEntryEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JournalEntryEvent
+	d := fieldDecoder{raw: raw, owner: "JournalEntryEvent"}
+	d.constant("type", "journal_entry")
+	d.required("sessionId", &out.SessionID)
+	d.nullable("sessionFile", &out.SessionFile)
+	d.nullable("leafId", &out.LeafID)
+	d.required("entry", &out.Entry)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v JournalEntryEvent) MarshalJSON() ([]byte, error) {
+	type plain JournalEntryEvent
+	return encodeObject(plain(v), `"type":"journal_entry"`, nil)
+}
+
+type MessagePersistedEvent struct {
+	SessionID   string  `json:"sessionId"`
+	SessionFile *string `json:"sessionFile"`
+	LeafID      *string `json:"leafId"`
+	// Shared by the start, updates, and end of one message; unique per process.
+	MessageID string `json:"messageId"`
+	EntryID   string `json:"entryId"`
+}
+
+func (v *MessagePersistedEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "MessagePersistedEvent", v.decodeFrom)
+}
+
+func (v *MessagePersistedEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out MessagePersistedEvent
+	d := fieldDecoder{raw: raw, owner: "MessagePersistedEvent"}
+	d.constant("type", "message_persisted")
+	d.required("sessionId", &out.SessionID)
+	d.nullable("sessionFile", &out.SessionFile)
+	d.nullable("leafId", &out.LeafID)
+	d.required("messageId", &out.MessageID)
+	d.required("entryId", &out.EntryID)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v MessagePersistedEvent) MarshalJSON() ([]byte, error) {
+	type plain MessagePersistedEvent
+	return encodeObject(plain(v), `"type":"message_persisted"`, nil)
+}
+
 type AdvisorMessageEvent struct {
 	Advisor string       `json:"advisor"`
 	Slug    string       `json:"slug"`
@@ -6656,6 +6773,9 @@ type RpcAgentEventVariant interface {
 	isRpcAgentEvent()
 }
 
+func (JournalStateEvent) isRpcAgentEvent()           {}
+func (JournalEntryEvent) isRpcAgentEvent()           {}
+func (MessagePersistedEvent) isRpcAgentEvent()       {}
 func (AdvisorMessageEvent) isRpcAgentEvent()         {}
 func (RunOwnersJoinedEvent) isRpcAgentEvent()        {}
 func (RunOwnersSkippedEvent) isRpcAgentEvent()       {}
@@ -6717,6 +6837,12 @@ func (v *RpcAgentEvent) decodeFrom(raw map[string]json.RawMessage) error {
 	}
 	var value RpcAgentEventVariant
 	switch tag {
+	case "journal_state":
+		value, err = decodeVariant[JournalStateEvent](raw)
+	case "journal_entry":
+		value, err = decodeVariant[JournalEntryEvent](raw)
+	case "message_persisted":
+		value, err = decodeVariant[MessagePersistedEvent](raw)
 	case "advisor_message":
 		value, err = decodeVariant[AdvisorMessageEvent](raw)
 	case "run_owners_joined":
@@ -8774,6 +8900,9 @@ func (CommandOutputEvent) isRpcNotification()           {}
 func (SessionInfoUpdateEvent) isRpcNotification()       {}
 func (ConfigUpdateEvent) isRpcNotification()            {}
 func (RpcFrameErrorEvent) isRpcNotification()           {}
+func (JournalStateEvent) isRpcNotification()            {}
+func (JournalEntryEvent) isRpcNotification()            {}
+func (MessagePersistedEvent) isRpcNotification()        {}
 func (AdvisorMessageEvent) isRpcNotification()          {}
 func (RunOwnersJoinedEvent) isRpcNotification()         {}
 func (RunOwnersSkippedEvent) isRpcNotification()        {}
@@ -8866,6 +8995,12 @@ func (v *RpcNotification) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[ConfigUpdateEvent](raw)
 	case "rpc_frame_error":
 		value, err = decodeVariant[RpcFrameErrorEvent](raw)
+	case "journal_state":
+		value, err = decodeVariant[JournalStateEvent](raw)
+	case "journal_entry":
+		value, err = decodeVariant[JournalEntryEvent](raw)
+	case "message_persisted":
+		value, err = decodeVariant[MessagePersistedEvent](raw)
 	case "advisor_message":
 		value, err = decodeVariant[AdvisorMessageEvent](raw)
 	case "run_owners_joined":
@@ -8991,6 +9126,9 @@ func (CommandOutputEvent) isRpcServerFrame()           {}
 func (SessionInfoUpdateEvent) isRpcServerFrame()       {}
 func (ConfigUpdateEvent) isRpcServerFrame()            {}
 func (RpcFrameErrorEvent) isRpcServerFrame()           {}
+func (JournalStateEvent) isRpcServerFrame()            {}
+func (JournalEntryEvent) isRpcServerFrame()            {}
+func (MessagePersistedEvent) isRpcServerFrame()        {}
 func (AdvisorMessageEvent) isRpcServerFrame()          {}
 func (RunOwnersJoinedEvent) isRpcServerFrame()         {}
 func (RunOwnersSkippedEvent) isRpcServerFrame()        {}
@@ -9093,6 +9231,12 @@ func (v *RpcServerFrame) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[ConfigUpdateEvent](raw)
 	case "rpc_frame_error":
 		value, err = decodeVariant[RpcFrameErrorEvent](raw)
+	case "journal_state":
+		value, err = decodeVariant[JournalStateEvent](raw)
+	case "journal_entry":
+		value, err = decodeVariant[JournalEntryEvent](raw)
+	case "message_persisted":
+		value, err = decodeVariant[MessagePersistedEvent](raw)
 	case "advisor_message":
 		value, err = decodeVariant[AdvisorMessageEvent](raw)
 	case "run_owners_joined":

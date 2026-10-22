@@ -32,6 +32,7 @@ import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { BtwHistoryRecord } from "../../session/btw-history";
+import type { SessionJournalEvent, SessionJournalIdentity } from "../../session/session-journal-events";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -860,15 +861,23 @@ export type RpcDeltaMessageUpdateFrame = Omit<
 	assistantMessageEvent: WithoutPartial<AssistantMessageEvent>;
 };
 
+/** Links live output to its canonical journal entry only after successful persistence. */
+export type RpcMessagePersistedFrame = SessionJournalIdentity & {
+	type: "message_persisted";
+	messageId: string;
+	entryId: string;
+};
+export type RpcJournalEventFrame = SessionJournalEvent | RpcMessagePersistedFrame;
+
 /** Session event as written to stdout by default: message lifecycle events carry a `messageId`. */
 export type RpcAgentSessionEventFrame =
 	| Exclude<AgentSessionEvent, { type: RpcMessageEventType }>
 	| RpcMessageEventFrame;
 
 /** Every session event shape RPC mode can write, including the opt-in `messageUpdates: "delta"` projection. */
-export type RpcProjectedSessionEventFrame = RpcAgentSessionEventFrame | RpcDeltaMessageUpdateFrame;
+export type RpcProjectedSessionEventFrame = RpcAgentSessionEventFrame | RpcDeltaMessageUpdateFrame | RpcJournalEventFrame;
 
-export type RpcSessionEventFrame = RpcAgentSessionEventFrame | RpcSubagentFrame;
+export type RpcSessionEventFrame = RpcAgentSessionEventFrame | RpcSubagentFrame | RpcJournalEventFrame;
 
 // ============================================================================
 // Extension UI Events (stdout)

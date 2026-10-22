@@ -21,5 +21,6 @@ export const RPC_CAPABILITIES: readonly string[] = [
 	"prompt_entry_ids", // #117
 	"session_catalog", // #355
 	"session_history_identity", // Native selected-branch transcript identities.
+	"session_journal_events", // Confirmed journal entries, native leaf and session identity notifications.
 	"control_pipe", // #355
 ];

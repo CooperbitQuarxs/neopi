@@ -3,7 +3,11 @@
  * `messageId` and applies the host's `set_event_filter` selection.
  */
 import type { AssistantMessageEvent } from "@oh-my-pi/pi-ai";
-import type { AgentSessionEvent } from "../../session/agent-session";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
+import { getMessageEntryId, getMessageEntrySource } from "../../session/message-entry-ids";
+import type { SessionManager } from "../../session/session-manager";
+import type { SessionJournalEvent } from "../../session/session-journal-events";
 import type {
 	RpcAgentSessionEventFrame,
 	RpcDeltaMessageUpdateFrame,
@@ -29,10 +33,67 @@ export class RpcSessionEventForwarder {
 	#messageCount = 0;
 	/** Ids of started, unfinished messages. External records (advisor cards, IRC) nest inside a streaming reply. */
 	#openMessageIds: string[] = [];
+	#manager: SessionManager | undefined;
+	#unsubscribeJournal: (() => void) | undefined;
+	#unsubscribePersistence: (() => void) | undefined;
+	#endedMessages = new WeakMap<AgentMessage, { messageId: string; generation: number }>();
+	#bindingGeneration = 0;
+	readonly #pendingEntryMessages = new Map<string, string>();
 	readonly #output: (frame: RpcProjectedSessionEventFrame) => void;
 
 	constructor(output: (frame: RpcProjectedSessionEventFrame) => void) {
 		this.#output = output;
+	}
+
+	/** Subscribe first, then publish identity before the host requests its history snapshot. */
+	observeJournal(session: Pick<AgentSession, "sessionManager" | "subscribeMessagePersistenceSettled">): void {
+		this.dispose();
+		const manager = session.sessionManager;
+		this.#manager = manager;
+		this.#unsubscribeJournal = manager.subscribeJournal(event => this.#journalEvent(event));
+		this.#unsubscribePersistence = session.subscribeMessagePersistenceSettled(message => {
+			const ended = this.#endedMessages.get(message);
+			this.#endedMessages.delete(message);
+			if (!ended || ended.generation !== this.#bindingGeneration) return;
+			const entryId = getMessageEntryId(message);
+			if (!entryId) return;
+			this.#pendingEntryMessages.set(entryId, ended.messageId);
+			this.#associateEntry(entryId);
+		});
+		this.#emit({ type: "journal_state", reason: "snapshot", ...manager.getJournalIdentity() });
+	}
+
+	dispose(): void {
+		this.#unsubscribeJournal?.();
+		this.#unsubscribeJournal = undefined;
+		this.#unsubscribePersistence?.();
+		this.#unsubscribePersistence = undefined;
+		this.#manager = undefined;
+		this.#invalidateBinding();
+	}
+
+	#invalidateBinding(): void {
+		this.#bindingGeneration++;
+		this.#openMessageIds.length = 0;
+		this.#pendingEntryMessages.clear();
+		this.#endedMessages = new WeakMap();
+	}
+
+	#journalEvent(event: SessionJournalEvent): void {
+		if (event.type === "journal_state" && event.reason === "identity") this.#invalidateBinding();
+		this.#emit(event);
+		if (event.type === "journal_entry") this.#associateEntry(event.entry.id);
+	}
+
+	#associateEntry(entryId: string): void {
+		const messageId = this.#pendingEntryMessages.get(entryId);
+		if (!messageId || !this.#manager?.isEntryDurable(entryId)) return;
+		this.#pendingEntryMessages.delete(entryId);
+		this.#emit({ type: "message_persisted", ...this.#manager.getJournalIdentity(), messageId, entryId });
+	}
+
+	#emit(frame: RpcProjectedSessionEventFrame): void {
+		if (!this.#filter || this.#filter.has(frame.type)) this.#output(frame);
 	}
 
 	/** Forward only the listed event types; `null` forwards everything. Returns the active selection. */
@@ -43,7 +104,11 @@ export class RpcSessionEventForwarder {
 	}
 
 	forward(event: AgentSessionEvent): void {
+		const generation = this.#bindingGeneration;
 		const frame = this.#stamp(event);
+		if (event.type === "message_end" && frame.type === "message_end" && this.#manager) {
+			this.#endedMessages.set(getMessageEntrySource(event.message), { messageId: frame.messageId, generation });
+		}
 		if (this.#filter && !this.#filter.has(frame.type)) return;
 		if (frame.type === "message_update" && this.#messageUpdates === "delta") {
 			this.#output({

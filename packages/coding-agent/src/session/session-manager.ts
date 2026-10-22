@@ -777,6 +777,7 @@ interface AtomicEntryBatch {
  */
 interface SessionBodyStamp {
 	sessionId: string;
+	sessionFile: string | undefined;
 	pendingEntries: SessionEntry[] | undefined;
 	entries: readonly SessionEntry[];
 	entryCount: number;
@@ -1581,7 +1582,7 @@ export class SessionManager {
 
 	#recordFullRewrite(bytes: number, stamp: SessionBodyStamp): void {
 		this.#expectedDiskSize = bytes;
-		if (stamp.sessionId !== this.#sessionId || !stamp.pendingEntries) return;
+		if (stamp.sessionId !== this.#sessionId || stamp.sessionFile !== this.#sessionFile || !stamp.pendingEntries) return;
 		for (const entry of stamp.pendingEntries) {
 			if (this.#index.get(entry.id) === entry) this.#journal.committed(entry);
 		}
@@ -1649,6 +1650,7 @@ export class SessionManager {
 		}
 		const stamp: SessionBodyStamp = {
 			sessionId: this.#sessionId,
+			sessionFile: this.#sessionFile,
 			pendingEntries,
 			entries,
 			entryCount: entries.length,
@@ -1956,6 +1958,7 @@ export class SessionManager {
 		try {
 			const writer = this.#appendWriter();
 			const sessionId = this.#sessionId;
+			const sessionFile = this.#sessionFile;
 			const line = this.#lineFor(entry);
 			if (writer.appendSync && !this.#storage.defersSyncPublish) {
 				writer.appendSync(line);
@@ -1970,7 +1973,7 @@ export class SessionManager {
 				const confirmed = writer.appendSync ? writer.flush() : writer.append(line);
 				void confirmed
 					.then(() => {
-						if (sessionId === this.#sessionId) this.#recordDurableAppend(line, entry);
+						if (sessionId === this.#sessionId && sessionFile === this.#sessionFile) this.#recordDurableAppend(line, entry);
 					})
 					.catch(err => {
 						this.#fileIsCurrent = false;
