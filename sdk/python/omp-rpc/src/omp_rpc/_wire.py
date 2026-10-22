@@ -101,6 +101,11 @@ _SESSION_MODE_VALUES: Final[frozenset[str]] = frozenset({"default", "plan"})
 _decode_session_mode = cast("Decoder[SessionMode]", literal(_SESSION_MODE_VALUES))
 
 
+ModelSelectorPerformanceSource: TypeAlias = Literal["measured", "catalog"]
+_MODEL_SELECTOR_PERFORMANCE_SOURCE_VALUES: Final[frozenset[str]] = frozenset({"measured", "catalog"})
+_decode_model_selector_performance_source = cast("Decoder[ModelSelectorPerformanceSource]", literal(_MODEL_SELECTOR_PERFORMANCE_SOURCE_VALUES))
+
+
 MixtureConfigScope: TypeAlias = Literal["project", "user"]
 _MIXTURE_CONFIG_SCOPE_VALUES: Final[frozenset[str]] = frozenset({"project", "user"})
 _decode_mixture_config_scope = cast("Decoder[MixtureConfigScope]", literal(_MIXTURE_CONFIG_SCOPE_VALUES))
@@ -691,6 +696,37 @@ class RoleInfo:
 class RolesResult:
     roles: tuple[RoleInfo, ...]
     active_role: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelSelectorFacts:
+    intelligence: float | None
+    ttft_ms: float | None
+    tokens_per_second: float | None
+    context_window: float | None
+    effective_context_window: float | None
+    input_cost_per_million: float | None
+    output_cost_per_million: float | None
+    performance_source: ModelSelectorPerformanceSource | None
+    service_tier: str | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelSelectorItem:
+    selector: str
+    provider: str
+    id: str
+    name: str
+    resolved_selector: str | None
+    facts: ModelSelectorFacts
+    description: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelSelectorResult:
+    items: tuple[ModelSelectorItem, ...]
+    roles: tuple[ModelSelectorItem, ...]
+    error: str | None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2652,6 +2688,43 @@ def parse_roles_result(value: object, path: str = "RolesResult") -> RolesResult:
     return RolesResult(
         roles=required(payload, "roles", array(parse_role_info), path),
         active_role=optional(payload, "activeRole", decode_str, path),
+    )
+
+
+def parse_model_selector_facts(value: object, path: str = "ModelSelectorFacts") -> ModelSelectorFacts:
+    payload = expect_object(value, path)
+    return ModelSelectorFacts(
+        intelligence=required(payload, "intelligence", nullable(decode_float), path),
+        ttft_ms=required(payload, "ttftMs", nullable(decode_float), path),
+        tokens_per_second=required(payload, "tokensPerSecond", nullable(decode_float), path),
+        context_window=required(payload, "contextWindow", nullable(decode_float), path),
+        effective_context_window=required(payload, "effectiveContextWindow", nullable(decode_float), path),
+        input_cost_per_million=required(payload, "inputCostPerMillion", nullable(decode_float), path),
+        output_cost_per_million=required(payload, "outputCostPerMillion", nullable(decode_float), path),
+        performance_source=required(payload, "performanceSource", nullable(_decode_model_selector_performance_source), path),
+        service_tier=required(payload, "serviceTier", nullable(decode_str), path),
+    )
+
+
+def parse_model_selector_item(value: object, path: str = "ModelSelectorItem") -> ModelSelectorItem:
+    payload = expect_object(value, path)
+    return ModelSelectorItem(
+        selector=required(payload, "selector", decode_str, path),
+        provider=required(payload, "provider", decode_str, path),
+        id=required(payload, "id", decode_str, path),
+        name=required(payload, "name", decode_str, path),
+        resolved_selector=required(payload, "resolvedSelector", nullable(decode_str), path),
+        facts=required(payload, "facts", parse_model_selector_facts, path),
+        description=optional(payload, "description", decode_str, path),
+    )
+
+
+def parse_model_selector_result(value: object, path: str = "ModelSelectorResult") -> ModelSelectorResult:
+    payload = expect_object(value, path)
+    return ModelSelectorResult(
+        items=required(payload, "items", array(parse_model_selector_item), path),
+        roles=required(payload, "roles", array(parse_model_selector_item), path),
+        error=required(payload, "error", nullable(decode_str), path),
     )
 
 
@@ -4814,6 +4887,12 @@ class WireClient:
         params["expected"] = expected
         return parse_themes_configuration(self._command("update_theme", params), "update_theme")
 
+    def query_model_selector(self, query: str) -> ModelSelectorResult:
+        """Query native /switch ordering, scoped candidates, role aliases and model facts without selecting."""
+        params: dict[str, object] = {}
+        params["query"] = query
+        return parse_model_selector_result(self._command("query_model_selector", params), "query_model_selector")
+
     def set_role(self, role: str) -> SetRoleResult:
         """Select a model role."""
         params: dict[str, object] = {}
@@ -5693,6 +5772,10 @@ __all__ = [
     "ModelEffortSelection",
     "ModelInfo",
     "ModelRoleConfigurationValue",
+    "ModelSelectorFacts",
+    "ModelSelectorItem",
+    "ModelSelectorPerformanceSource",
+    "ModelSelectorResult",
     "ModelsConfigurationChangedEvent",
     "NavigateTreeResult",
     "NegotiateProtocolResult",
@@ -5945,6 +6028,9 @@ __all__ = [
     "parse_model_effort_selection",
     "parse_model_info",
     "parse_model_role_configuration_value",
+    "parse_model_selector_facts",
+    "parse_model_selector_item",
+    "parse_model_selector_result",
     "parse_models_configuration_changed_event",
     "parse_navigate_tree_result",
     "parse_negotiate_protocol_result",

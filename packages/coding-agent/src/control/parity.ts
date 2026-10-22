@@ -47,6 +47,7 @@ export const RPC_COMMAND_TYPES = [
 	"get_roles",
 	"get_themes_configuration",
 	"update_theme",
+	"query_model_selector",
 	"set_role",
 	"get_models_configuration",
 	"set_model_role_configuration",

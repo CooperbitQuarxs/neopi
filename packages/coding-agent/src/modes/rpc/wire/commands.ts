@@ -117,6 +117,12 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		result: "ThemesConfiguration",
 	},
 	{
+		name: "query_model_selector",
+		doc: "Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.",
+		params: { query: "string" },
+		result: "ModelSelectorResult",
+	},
+	{
 		name: "set_role",
 		doc: "Select a model role.",
 		params: { role: "string" },

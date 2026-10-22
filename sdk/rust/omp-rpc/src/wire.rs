@@ -2842,6 +2842,67 @@ pub struct RolesResult {
 	pub active_role: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ModelSelectorPerformanceSource {
+	#[serde(rename = "measured")]
+	Measured,
+	#[serde(rename = "catalog")]
+	Catalog,
+}
+
+impl ModelSelectorPerformanceSource {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Measured => "measured",
+			Self::Catalog => "catalog",
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelSelectorFacts {
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub intelligence: Option<f64>,
+	#[serde(rename = "ttftMs", deserialize_with = "Deserialize::deserialize")]
+	pub ttft_ms: Option<f64>,
+	#[serde(rename = "tokensPerSecond", deserialize_with = "Deserialize::deserialize")]
+	pub tokens_per_second: Option<f64>,
+	#[serde(rename = "contextWindow", deserialize_with = "Deserialize::deserialize")]
+	pub context_window: Option<f64>,
+	#[serde(rename = "effectiveContextWindow", deserialize_with = "Deserialize::deserialize")]
+	pub effective_context_window: Option<f64>,
+	#[serde(rename = "inputCostPerMillion", deserialize_with = "Deserialize::deserialize")]
+	pub input_cost_per_million: Option<f64>,
+	#[serde(rename = "outputCostPerMillion", deserialize_with = "Deserialize::deserialize")]
+	pub output_cost_per_million: Option<f64>,
+	#[serde(rename = "performanceSource", deserialize_with = "Deserialize::deserialize")]
+	pub performance_source: Option<ModelSelectorPerformanceSource>,
+	#[serde(rename = "serviceTier", deserialize_with = "Deserialize::deserialize")]
+	pub service_tier: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelSelectorItem {
+	pub selector: String,
+	pub provider: String,
+	pub id: String,
+	pub name: String,
+	#[serde(rename = "resolvedSelector", deserialize_with = "Deserialize::deserialize")]
+	pub resolved_selector: Option<String>,
+	pub facts: ModelSelectorFacts,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelSelectorResult {
+	pub items: Vec<ModelSelectorItem>,
+	pub roles: Vec<ModelSelectorItem>,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelEffortSelection {
 	pub mode: ModelEffortSelectionMode,
@@ -6373,6 +6434,11 @@ pub struct UpdateThemeParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QueryModelSelectorParams {
+	pub query: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetRoleParams {
 	pub role: String,
 }
@@ -8470,6 +8536,22 @@ impl Command for UpdateThemeCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<ThemesConfiguration>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QueryModelSelectorCommand {
+	pub query: String,
+}
+
+impl Command for QueryModelSelectorCommand {
+	const NAME: &'static str = "query_model_selector";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ModelSelectorResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<ModelSelectorResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
 	}
 }
 

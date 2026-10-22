@@ -2271,6 +2271,115 @@ func (v *RolesResult) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type ModelSelectorPerformanceSource string
+
+const (
+	ModelSelectorPerformanceSourceMeasured ModelSelectorPerformanceSource = "measured"
+	ModelSelectorPerformanceSourceCatalog  ModelSelectorPerformanceSource = "catalog"
+)
+
+func (v *ModelSelectorPerformanceSource) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "ModelSelectorPerformanceSource")
+	if err != nil {
+		return err
+	}
+	switch value := ModelSelectorPerformanceSource(s); value {
+	case ModelSelectorPerformanceSourceMeasured, ModelSelectorPerformanceSourceCatalog:
+		*v = value
+		return nil
+	}
+	return unknownValue("ModelSelectorPerformanceSource", s)
+}
+
+type ModelSelectorFacts struct {
+	Intelligence           *float64                        `json:"intelligence"`
+	TtftMs                 *float64                        `json:"ttftMs"`
+	TokensPerSecond        *float64                        `json:"tokensPerSecond"`
+	ContextWindow          *float64                        `json:"contextWindow"`
+	EffectiveContextWindow *float64                        `json:"effectiveContextWindow"`
+	InputCostPerMillion    *float64                        `json:"inputCostPerMillion"`
+	OutputCostPerMillion   *float64                        `json:"outputCostPerMillion"`
+	PerformanceSource      *ModelSelectorPerformanceSource `json:"performanceSource"`
+	ServiceTier            *string                         `json:"serviceTier"`
+}
+
+func (v *ModelSelectorFacts) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelSelectorFacts", v.decodeFrom)
+}
+
+func (v *ModelSelectorFacts) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelSelectorFacts
+	d := fieldDecoder{raw: raw, owner: "ModelSelectorFacts"}
+	d.nullable("intelligence", &out.Intelligence)
+	d.nullable("ttftMs", &out.TtftMs)
+	d.nullable("tokensPerSecond", &out.TokensPerSecond)
+	d.nullable("contextWindow", &out.ContextWindow)
+	d.nullable("effectiveContextWindow", &out.EffectiveContextWindow)
+	d.nullable("inputCostPerMillion", &out.InputCostPerMillion)
+	d.nullable("outputCostPerMillion", &out.OutputCostPerMillion)
+	d.nullable("performanceSource", &out.PerformanceSource)
+	d.nullable("serviceTier", &out.ServiceTier)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ModelSelectorItem struct {
+	Selector         string             `json:"selector"`
+	Provider         string             `json:"provider"`
+	ID               string             `json:"id"`
+	Name             string             `json:"name"`
+	ResolvedSelector *string            `json:"resolvedSelector"`
+	Facts            ModelSelectorFacts `json:"facts"`
+	Description      *string            `json:"description,omitempty"`
+}
+
+func (v *ModelSelectorItem) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelSelectorItem", v.decodeFrom)
+}
+
+func (v *ModelSelectorItem) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelSelectorItem
+	d := fieldDecoder{raw: raw, owner: "ModelSelectorItem"}
+	d.required("selector", &out.Selector)
+	d.required("provider", &out.Provider)
+	d.required("id", &out.ID)
+	d.required("name", &out.Name)
+	d.nullable("resolvedSelector", &out.ResolvedSelector)
+	d.required("facts", &out.Facts)
+	d.optional("description", &out.Description)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ModelSelectorResult struct {
+	Items []ModelSelectorItem `json:"items"`
+	Roles []ModelSelectorItem `json:"roles"`
+	Error *string             `json:"error"`
+}
+
+func (v *ModelSelectorResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelSelectorResult", v.decodeFrom)
+}
+
+func (v *ModelSelectorResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelSelectorResult
+	d := fieldDecoder{raw: raw, owner: "ModelSelectorResult"}
+	d.required("items", &out.Items)
+	d.required("roles", &out.Roles)
+	d.nullable("error", &out.Error)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type ModelEffortSelection struct {
 	Mode     ModelEffortSelectionMode `json:"mode"`
 	Level    *ThinkingLevel           `json:"level,omitempty"`
@@ -10717,6 +10826,18 @@ func (v *UpdateThemeCommandScope) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	return unknownValue("UpdateThemeCommandScope", s)
+}
+
+// QueryModelSelectorCommand holds the parameters of "query_model_selector".
+type QueryModelSelectorCommand struct {
+	Query string `json:"query"`
+}
+
+// QueryModelSelector sends "query_model_selector": Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.
+func (c Commands) QueryModelSelector(ctx context.Context, p QueryModelSelectorCommand) (ModelSelectorResult, error) {
+	var out ModelSelectorResult
+	err := c.call(ctx, "query_model_selector", p, 0, &out)
+	return out, err
 }
 
 // SetRoleCommand holds the parameters of "set_role".
