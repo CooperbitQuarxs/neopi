@@ -636,11 +636,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		}
 
 		const search = this.#section === "activity" ? this.#activitySearch : this.#agentFilter;
-		const before = search.value;
+		const before = search.query;
 		const field = search.handleInput(keyData);
 		if (field !== "pass") {
 			this.#keys.reset();
-			if (search.value !== before) {
+			if (search.query !== before) {
 				if (this.#section === "activity") {
 					this.#activityFollow = false;
 					this.#refreshActivityRows();
@@ -1670,11 +1670,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				"list",
 				{
 					selected,
-					filter: this.#activitySearch.value || undefined,
+					filter: this.#activitySearch.query || undefined,
 					virtual: true,
 					grow: 1,
 					empty: [
-						span(this.#activitySearch.value ? "No matching activity" : "No agent activity recorded yet", "muted"),
+						span(this.#activitySearch.query ? "No matching activity" : "No agent activity recorded yet", "muted"),
 					],
 				},
 				this.#activityRows.map(activity => this.#describeActivityItem(activity)),
@@ -1742,7 +1742,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			}
 			ordered = refs.sort((a, b) => rowOrder.get(a)! - rowOrder.get(b)!);
 		}
-		const query = this.#agentFilter.value;
+		const query = this.#agentFilter.query;
 		const rosterRows =
 			query.length > 0
 				? ordered.filter(ref => fuzzyMatch(query, `${ref.id} ${ref.displayName ?? ""}`).matches)
@@ -1858,7 +1858,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		let rows = this.#activity.query({
 			agentIds: this.#activityAgentIds(),
 			kinds,
-			search: this.#activitySearch.value,
+			search: this.#activitySearch.query,
 			limit: 2_000,
 		});
 		if (this.#activityFilter === "errors") rows = rows.filter(row => row.status === "error");
@@ -1913,7 +1913,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const budget = Math.max(0, contentRows - body.length);
 		if (this.#activityRows.length === 0 && budget > 0) {
 			body.push(
-				theme.fg("muted", this.#activitySearch.value ? "No matching activity" : "No agent activity recorded yet"),
+				theme.fg("muted", this.#activitySearch.query ? "No matching activity" : "No agent activity recorded yet"),
 			);
 		} else if (budget > 0) {
 			const selected = Math.min(this.#selectedActivityRow, this.#activityRows.length - 1);
@@ -2577,6 +2577,8 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	}
 
 	leaveMenu(): void {
+		this.#agentFilter.focused = false;
+		this.#activitySearch.focused = false;
 		this.#keys.reset();
 		this.#disarmCloseTap();
 	}

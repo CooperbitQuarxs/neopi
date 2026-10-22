@@ -40,6 +40,7 @@
 
 ### Fixed
 
+- Menu search applies patterns only after Enter, keeps navigation keys in the field while typing, and preserves punctuation with working `/pattern/` regex searches ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).
 - Cloned advisors stay visible after applying when another advisor has the same normalized copy name ([#322](https://github.com/PsychedelicShayna/neopi/issues/322)).
 - Advisor configuration confirms searches with Enter, retains parent filters through field editing, and clears search before native Close or Apply leaves a picker ([#416](https://github.com/PsychedelicShayna/neopi/issues/416)).
 - Escape and native Close clear confirmed search filters before leaving Git or a picker; Vim search now handles collections, POSIX classes, lazy repetition, noncapturing groups and lookaround without silently literalizing unsupported atoms ([#416](https://github.com/PsychedelicShayna/neopi/issues/416)).

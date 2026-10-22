@@ -184,7 +184,10 @@ describe("AgentsHub layout", () => {
 		type("sco");
 		let rendered = strip();
 		expect(rendered).toContain("scout");
-		expect(rendered).not.toContain("dev");
+		expect(rendered).toContain("dev");
+		hub.handleInput("\r");
+		expect(strip()).not.toContain("dev");
+		hub.handleInput("/");
 		for (const key of "hjkl") hub.handleInput(key);
 		rendered = strip();
 		expect(rendered).toContain("Search: scohjkl");
@@ -362,6 +365,7 @@ describe("AgentsHub picker", () => {
 		const { hub, type } = await createHub(settings);
 		hub.handleInput("/");
 		type("dev");
+		hub.handleInput("\r");
 		hub.handleNativeEvent({ type: "action", key: "", act: "toggle", mods: [] });
 		expect(settings.lists.get("task.disabledAgents")).toEqual(["dev"]);
 		expect(pickerProps(hub).query).toBe("dev");

@@ -218,7 +218,7 @@ class TreeList implements Component {
 	#nodeById: Map<string, TreeSelectorNode> = new Map();
 	#parentById: Map<string, string | null> = new Map();
 	#filterMode: FilterMode;
-	/** The search field; its value is the fuzzy query. */
+	/** The search field; its confirmed query drives the fuzzy filter. */
 	readonly #search = new MenuSearchField();
 	readonly searchInput = this.#search.input;
 	readonly #keys = new MenuKeyReader();
@@ -365,6 +365,7 @@ class TreeList implements Component {
 	}
 
 	leaveMenu(): void {
+		this.#search.focused = false;
 		this.#keys.reset();
 	}
 
@@ -784,7 +785,7 @@ class TreeList implements Component {
 	}
 
 	getSearchQuery(): string {
-		return this.searchInput.getValue();
+		return this.#search.query;
 	}
 
 	getFilterMode(): FilterMode {
@@ -850,7 +851,7 @@ class TreeList implements Component {
 			order: this.#pickerOrder.order,
 			selected: this.#tree.selectedKey ?? null,
 			current: this.currentLeafId === null ? [] : [this.currentLeafId],
-			query: this.getSearchQuery(),
+			query: this.#search.value,
 			cursor: this.searchInput.getCursor(),
 			filterMode: this.#filterMode,
 			total: allRows.length,
@@ -1417,7 +1418,7 @@ class TreeList implements Component {
 	}
 
 	clearSearch(): void {
-		this.searchInput.setValue("");
+		this.#search.setValue("");
 		this.#applyFilter();
 	}
 

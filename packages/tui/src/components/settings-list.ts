@@ -167,6 +167,7 @@ export interface SettingsListNavigationState {
 	filter: string;
 	filterFocused: boolean;
 	filterCursor: number;
+	filterDraft?: string;
 	sectionFocused: boolean;
 	viewportTop: MenuViewportPosition | number | undefined;
 	submenuId: string | null;
@@ -278,6 +279,7 @@ export class SettingsList implements Component {
 			filter: this.#filterQuery,
 			filterFocused: this.#search.focused,
 			filterCursor: this.#search.cursor,
+			...(this.#search.focused ? { filterDraft: this.#search.value } : {}),
 			sectionFocused: this.#sectionFocus,
 			viewportTop: this.#viewport.top,
 			submenuId: this.#submenuItemId,
@@ -288,6 +290,7 @@ export class SettingsList implements Component {
 	}
 
 	leaveMenu(): void {
+		this.#search.focused = false;
 		if (isMenuHistoryLeaver(this.#submenuComponent)) this.#submenuComponent.leaveMenu();
 	}
 
@@ -298,6 +301,7 @@ export class SettingsList implements Component {
 			filter?: string;
 			filterFocused?: boolean;
 			filterCursor?: number;
+			filterDraft?: string;
 			sectionFocused?: boolean;
 			viewportTop?: MenuViewportPosition | number;
 			submenuId?: string;
@@ -314,7 +318,8 @@ export class SettingsList implements Component {
 			this.#syncSelectionState();
 			this.#sectionFocus = state.sectionFocused === true && this.hasSectionFocusTargets();
 			this.#search.restoreNavigation({
-				value: this.#filterQuery,
+				value: state.filterDraft ?? this.#filterQuery,
+				query: this.#filterQuery,
 				focused: state.filterFocused === true && this.#options.typeToSearch !== false,
 				cursor: state.filterCursor,
 			});
@@ -697,13 +702,13 @@ export class SettingsList implements Component {
 	}
 
 	#handleSearchInput(data: string): boolean {
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const result = this.#search.handleInput(data);
 		if (result === "exited") this.#keys.reset();
 		if (result === "pass") return false;
-		if (this.#search.value !== before) {
-			if (this.#search.value.trim()) this.#sectionFocus = false;
-			this.#selection.setQuery(this.#search.value, false);
+		if (this.#search.query !== before) {
+			if (this.#search.query.trim()) this.#sectionFocus = false;
+			this.#selection.setQuery(this.#search.query, false);
 			this.#viewport.reveal();
 			this.#syncSelectionState();
 			this.#notifySelection();

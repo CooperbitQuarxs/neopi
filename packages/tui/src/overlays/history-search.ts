@@ -237,16 +237,6 @@ export class HistorySearchComponent extends OverlayPanel {
 			getSearchText: entry => entry.prompt,
 		});
 		this.#searchInput = this.#search.input;
-		this.#searchInput.onSubmit = () => {
-			this.#flushPendingSearch();
-			const selected = this.#menu.selectedItem;
-			if (selected) {
-				this.#onSelect(selected.prompt);
-			}
-		};
-		this.#searchInput.onEscape = () => {
-			this.#search.focused = false;
-		};
 
 		this.#resultsList = new HistoryResultsList(this.#menu, this.#viewport);
 
@@ -296,6 +286,7 @@ export class HistorySearchComponent extends OverlayPanel {
 	}
 
 	leaveMenu(): void {
+		this.#search.focused = false;
 		this.#cancelPendingSearch();
 	}
 
@@ -323,11 +314,11 @@ export class HistorySearchComponent extends OverlayPanel {
 	}
 
 	handleInput(keyData: string): void {
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const field = this.#search.handleInput(keyData);
 		if (field !== "pass") {
 			this.#keys.reset();
-			if (this.#search.value !== before) this.#scheduleResults();
+			if (this.#search.query !== before) this.#scheduleResults();
 			return;
 		}
 		if (matchesKey(keyData, "ctrl+c")) {
@@ -419,8 +410,8 @@ export class HistorySearchComponent extends OverlayPanel {
 				"list",
 				{
 					selected: selected ? nativeEntryKey(selected) : null,
-					filter: query || undefined,
-					empty: query ? "No matching history" : "No history yet",
+					filter: this.#search.query || undefined,
+					empty: this.#search.query ? "No matching history" : "No history yet",
 					max: { lines: MAX_VISIBLE },
 					virtual: true,
 				},
@@ -462,7 +453,7 @@ export class HistorySearchComponent extends OverlayPanel {
 	): NativeNode {
 		let rows = this.#pickerItems;
 		if (rows?.items !== items) {
-			const tokens = queryTokens(query.trim());
+			const tokens = queryTokens(this.#search.query);
 			rows = { items, rows: items.map(entry => historyPickerItem(entry, tokens)) };
 			this.#pickerItems = rows;
 		}
@@ -507,7 +498,7 @@ export class HistorySearchComponent extends OverlayPanel {
 				if (ev.act === "close") this.#escape();
 				else if (ev.act === "insert") this.handleInput("\r");
 				else if (ev.act === "clear") {
-					this.#searchInput.setValue("");
+					this.#search.setValue("");
 					this.#updateResults();
 				}
 				return;
@@ -540,7 +531,7 @@ export class HistorySearchComponent extends OverlayPanel {
 	 * other changes debounce when a repaint hook is wired.
 	 */
 	#scheduleResults(): void {
-		const rawQuery = this.#searchInput.getValue();
+		const rawQuery = this.#search.query;
 		const query = compileMenuRegex(rawQuery) ? rawQuery : rawQuery.trim();
 		if (query === this.#resultsQuery) {
 			this.#cancelPendingSearch();
@@ -574,7 +565,7 @@ export class HistorySearchComponent extends OverlayPanel {
 
 	#updateResults(): void {
 		this.#cancelPendingSearch();
-		const rawQuery = this.#searchInput.getValue();
+		const rawQuery = this.#search.query;
 		const regex = compileMenuRegex(rawQuery);
 		const query = regex ? rawQuery : rawQuery.trim();
 		this.#resultsQuery = query;

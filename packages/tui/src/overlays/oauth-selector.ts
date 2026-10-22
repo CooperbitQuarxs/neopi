@@ -290,9 +290,9 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		return text;
 	}
 
-	/** Applies the search field's value to the filter; clears any stale status. */
+	/** Applies the confirmed search query to the filter; clears any stale status. */
 	#syncSearchQuery(): void {
-		this.#menu.setQuery(this.#search.value, false);
+		this.#menu.setQuery(this.#search.query, false);
 		this.#viewport.reveal();
 		this.#statusMessage = undefined;
 		this.#updateList();
@@ -387,21 +387,22 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		const state = snapshot as { selectedKey?: string; search?: unknown; viewportTop?: MenuViewportPosition | number };
 		this.#navigationKeys.reset();
 		this.#search.restoreNavigation(state.search);
-		this.#menu.setQuery(this.#search.value, false);
+		this.#menu.setQuery(this.#search.query, false);
 		if (typeof state.selectedKey === "string") this.#menu.setSelectedKey(state.selectedKey);
 		this.#viewport.setTop(state.viewportTop);
 		this.#updateList();
 	}
 
 	leaveMenu(): void {
+		this.#search.focused = false;
 		this.stopValidation();
 	}
 
 	handleInput(data: string): void {
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
-			if (this.#search.value !== before) this.#syncSearchQuery();
+			if (this.#search.query !== before) this.#syncSearchQuery();
 			else this.#updateList();
 			return;
 		}

@@ -348,23 +348,32 @@ interface PreparedQuery {
 	/** `buildAlphanumericSwapQueries` of each token, index-aligned with `tokens`. */
 	tokenSwaps: string[][];
 	compact: string;
+	/** Punctuation-bearing words retain their literal spelling instead of disappearing. */
+	literals: string[];
 }
 
 function prepareQuery(query: string): PreparedQuery | null {
 	const normalized = normalizeForSearch(query);
-	if (normalized.length === 0) return null;
-	const tokens = normalized.split(" ");
+	const literals = query.toLowerCase().split(/\s+/).filter(token => /[^\p{Letter}\p{Mark}\p{Number}]/u.test(token));
+	if (normalized.length === 0 && literals.length === 0) return null;
+	const tokens = normalized ? normalized.split(" ") : [];
 	return {
 		normalized,
 		tokens,
 		tokenSwaps: tokens.map(buildAlphanumericSwapQueries),
 		compact: normalized.replaceAll(" ", ""),
+		literals,
 	};
 }
 
 function fuzzyMatchCore(pq: PreparedQuery | null, index: SearchIndex): FuzzyMatch {
 	if (pq === null) {
 		return { matches: true, score: 0 };
+	}
+	if (pq.literals.length > 0) {
+		const raw = index.raw.toLowerCase();
+		if (!pq.literals.every(literal => raw.includes(literal))) return { matches: false, score: 0 };
+		if (pq.tokens.length === 0) return { matches: true, score: 0 };
 	}
 
 	if (index.words.length === 0) {
@@ -532,9 +541,7 @@ export function fuzzyRank<T>(items: readonly T[], query: string, getText: (item:
 		return items.map(item => ({ item, score: 0 }));
 	}
 
-	// A non-blank query that normalizes to empty (pure punctuation) matches
-	// everything with score 0, but still calls getText per item — consumers rely
-	// on its side effects (see fuzzy-cache.test.ts).
+	// Literal punctuation constraints are checked against each candidate's raw text.
 	return rankIndexed(items, prepareQuery(query), i => buildSearchIndex(getText(items[i]!), i < INDEX_CACHE_MAX));
 }
 

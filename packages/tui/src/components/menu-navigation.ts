@@ -116,6 +116,7 @@ export interface MenuSearchState {
 	value: string;
 	focused: boolean;
 	cursor: number;
+	query?: string;
 }
 
 export interface MenuSearchTheme {
@@ -123,16 +124,18 @@ export interface MenuSearchTheme {
 }
 
 /**
- * A menu's literal search field. Hosts route focused input here before menu
- * shortcuts, refilter on "edited", and delegate "pass" to list navigation.
- * "edited" also covers caret-only editing so hosts repaint the field.
+ * A menu's draft search field. Hosts refilter when `query` changes, repaint
+ * on "edited", and delegate only "pass" to navigation. The draft reaches
+ * the matcher only after Enter; losing focus discards unconfirmed edits.
  */
 export class MenuSearchField {
 	readonly #input = new Input();
+	#query = "";
 
 	constructor(value = "", focused = false) {
 		this.#input.prompt = "";
 		this.#input.setValue(value);
+		this.#query = value;
 		this.#input.focused = focused;
 	}
 
@@ -146,11 +149,17 @@ export class MenuSearchField {
 	}
 
 	set focused(value: boolean) {
+		if (!value && this.#input.focused && this.value !== this.#query) this.#input.setValue(this.#query);
 		this.#input.focused = value;
 	}
 
 	get value(): string {
 		return this.#input.getValue();
+	}
+
+	/** Confirmed pattern used for filtering, never the in-progress draft. */
+	get query(): string {
+		return this.#query;
 	}
 
 	get cursor(): number {
@@ -159,6 +168,7 @@ export class MenuSearchField {
 
 	setValue(value: string): void {
 		this.#input.setValue(value);
+		this.#query = value;
 	}
 
 	handleInput(data: string): "edited" | "exited" | "pass" {
@@ -180,6 +190,7 @@ export class MenuSearchField {
 			return "exited";
 		}
 		if (matchesKey(data, "enter") || kb.matches(data, "tui.select.confirm") || data === "\n") {
+			this.#query = this.value;
 			this.focused = false;
 			return "exited";
 		}
@@ -203,16 +214,17 @@ export class MenuSearchField {
 	}
 
 	navigationSnapshot(): MenuSearchState {
-		return { value: this.value, focused: this.focused, cursor: this.cursor };
+		return { value: this.value, query: this.query, focused: this.focused, cursor: this.cursor };
 	}
 
 	restoreNavigation(snapshot: unknown): void {
 		if (typeof snapshot !== "object" || snapshot === null) return;
 		const state = snapshot as Partial<MenuSearchState>;
 		if (typeof state.value !== "string") return;
-		this.setValue(state.value);
-		if (typeof state.cursor === "number") this.#input.setCursor(state.cursor);
+		this.setValue(typeof state.query === "string" ? state.query : state.focused ? "" : state.value);
 		this.focused = state.focused === true;
+		if (this.focused) this.#input.setValue(state.value);
+		if (typeof state.cursor === "number") this.#input.setCursor(state.cursor);
 	}
 }
 

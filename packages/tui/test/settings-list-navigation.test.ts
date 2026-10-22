@@ -63,7 +63,8 @@ describe("SettingsList host-decoded navigation", () => {
 		field.handleInput("/");
 		expect(field.filterFocused).toBe(true);
 		field.handleInput("jkgG/ ");
-		expect(field.settingsList.getSearchQuery()).toBe("jkgG/ ");
+		expect(field.settingsList.getSearchQuery()).toBe("");
+		expect(field.settingsList.navigationSnapshot().filterDraft).toBe("jkgG/ ");
 		field.handleInput("\x1b");
 		expect(field.filterFocused).toBe(false);
 		field.settingsList.clearSearch();

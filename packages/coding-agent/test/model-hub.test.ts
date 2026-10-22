@@ -649,6 +649,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput("/");
 			for (const ch of "free") hub.handleInput(ch);
+			hub.handleInput("\n");
 
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("All models 1");
@@ -738,7 +739,7 @@ describe("ModelHub", () => {
 			// Roles owns its own search rather than switching to the model catalog.
 			hub.handleInput("/");
 			hub.handleInput("t");
-			expect(hub.navigationSnapshot()).toMatchObject({ entry: "roles", rolesQuery: "t", focus: "list" });
+			expect(hub.navigationSnapshot()).toMatchObject({ entry: "roles", rolesQuery: "", rolesValue: "t", focus: "list" });
 			expect(footerLine(hub.render(220))).toContain("Search · Enter confirm · Esc clear");
 			hub.handleInput(ESC);
 			expect(hub.navigationSnapshot().filterFocused).toBe(false);
@@ -2444,8 +2445,8 @@ describe("ModelHub", () => {
 				const rendered = normalize(hub.render(220));
 				expect(rendered).toContain("test/live");
 				expect(rendered).toContain("test/voice");
-				expect(rendered).not.toContain("lively");
-				expect(rendered).not.toContain("voicemail");
+				expect(rendered).toContain("lively");
+				expect(rendered).toContain("voicemail");
 				for (const key of [DOWN, UP, "\x1b[5~", "\x1b[6~", "\t"]) hub.handleInput(key);
 				expect(hub.navigationSnapshot().filterFocused).toBe(true);
 				expect(hub.navigationSnapshot().strip).toBeNull();
@@ -2453,6 +2454,7 @@ describe("ModelHub", () => {
 				expect(hub.navigationSnapshot().filterFocused).toBe(false);
 				expect(hub.navigationSnapshot().strip).toBeNull();
 				expect(normalize(hub.render(220))).not.toContain("lively");
+				expect(normalize(hub.render(220))).not.toContain("voicemail");
 				expect(onAssign).not.toHaveBeenCalled();
 				hub.handleInput("\n");
 				expect(footerLine(hub.render(220))).toContain("live →");
@@ -2463,11 +2465,11 @@ describe("ModelHub", () => {
 			const { hub, onAssign } = createHub({ models: [makeModel("test", "live")], scoped: true });
 			hub.handleInput("/");
 			for (const ch of query) hub.handleInput(ch);
+			hub.handleInput("\n");
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toMatch(/invalid.*(?:regex|pattern)|(?:regex|pattern).*error/i);
 			expect(rendered).toContain("No matching models");
 			expect(rendered).not.toContain("test/live");
-			hub.handleInput("\n");
 			hub.handleInput("\n");
 			expect(onAssign).not.toHaveBeenCalled();
 			expect(hub.navigationSnapshot().strip).toBeNull();
@@ -2519,6 +2521,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // openrouter scope
 			hub.handleInput("/");
 			for (const ch of "does-not-exist") hub.handleInput(ch);
+			hub.handleInput("\n");
 
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("All available models");
@@ -2557,7 +2560,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput("/");
 			for (const ch of "target") hub.handleInput(ch);
-			expect(sidebarIndexOf("zzz-provider")).toBeLessThan(sidebarIndexOf("aaa-provider"));
+			expect(sidebarIndexOf("aaa-provider")).toBeLessThan(sidebarIndexOf("zzz-provider"));
 
 			// Enter returns to normal mode without clearing the query.
 			hub.handleInput("\n");

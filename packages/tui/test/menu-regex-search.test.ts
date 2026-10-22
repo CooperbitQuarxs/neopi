@@ -43,8 +43,24 @@ describe("menu regex search", () => {
 		[String.raw`/\M^a\.b$`, "axb", true],
 		[String.raw`/\<voice\>`, "<voice>", true],
 		[String.raw`/\<voice\>`, "voice", false],
+		[String.raw`/^claude/`, "claude-opus", true],
+		[String.raw`/^claude/`, "provider/claude-opus", false],
+		[String.raw`/a\//`, "a/", true],
+		[String.raw`/a\/`, "a/", true],
 	])("translates %s against %s", (pattern, text, expected) => {
 		expect(fuzzyMatch(pattern, text).matches).toBe(expected);
+	});
+
+	it("matches delimited regex and retains punctuation in ordinary patterns", () => {
+		const texts = ["claude-opus", "gpt-1000", "literal .{1000}", "..."];
+		for (const query of ["/^claude/", "re:^claude"]) {
+			expect(fuzzyFilter(texts, query, text => text)).toEqual(["claude-opus"]);
+		}
+		for (const query of [".{1000}", "..."]) {
+			expect(fuzzyFilter(texts, query, text => text)).toEqual(texts.filter(text => text.includes(query)));
+			expect(new FuzzyCorpus(texts, text => text).rank(query).map(row => row.item))
+				.toEqual(texts.filter(text => text.includes(query)));
+		}
 	});
 
 	it("keeps ordinary fuzzy search unchanged", () => {

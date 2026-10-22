@@ -7,12 +7,23 @@ export interface MenuRegex {
 let cachedQuery: string | undefined;
 let cachedRegex: MenuRegex | undefined;
 
-/** Ordinary patterns stay fuzzy; `/` and `re:` opt into the same Vim dialect. */
+/** Ordinary patterns stay fuzzy; `/pattern/`, `/pattern`, and `re:` use Vim regex. */
 export function compileMenuRegex(query: string): MenuRegex | undefined {
 	if (query === cachedQuery) return cachedRegex;
 	cachedQuery = query;
 	cachedRegex = undefined;
-	const pattern = query.startsWith("/") ? query.slice(1) : query.startsWith("re:") ? query.slice(3) : undefined;
+	let pattern: string | undefined;
+	if (query.startsWith("/")) {
+		let end = query.length;
+		if (end > 1 && query.endsWith("/")) {
+			let backslashes = 0;
+			for (let index = end - 2; index >= 1 && query[index] === "\\"; index--) backslashes++;
+			if (backslashes % 2 === 0) end--;
+		}
+		pattern = query.slice(1, end);
+	} else if (query.startsWith("re:")) {
+		pattern = query.slice(3);
+	}
 	if (pattern === undefined) return undefined;
 	try {
 		cachedRegex = { regex: translateVimRegex(pattern) };

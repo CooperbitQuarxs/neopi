@@ -16,7 +16,6 @@ import type { Component } from "../tui";
 import { FuzzyCorpus, fuzzyRank } from "../fuzzy";
 import { compileMenuRegex } from "../menu-search";
 import { ScrollView } from "../components/scroll-view";
-import { extractPrintableText } from "../keys";
 import type { SgrMouseEvent } from "../mouse";
 import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
 import { formatNumber, sanitizeText } from "@oh-my-pi/pi-utils";
@@ -678,6 +677,8 @@ export class ModelItemRanker {
 	/** Rank by text relevance, user affinity, and MRU/version order. */
 	rank(query: string): ModelBrowserItem[] {
 		if (!query.trim()) return [...this.items];
+		const pattern = compileMenuRegex(query);
+		if (pattern) return this.items.filter(item => !!pattern.regex && modelMatchesRegex(item, pattern.regex));
 		const queryKey = compactModelSearchText(query);
 		// Exact and contiguous matches stay ahead of fuzzy-only candidates; affinity
 		// breaks ties before fuzzy quality and the normal MRU/version ordering, and
@@ -871,6 +872,11 @@ export function modelSearchText({ provider, id, model }: ModelBrowserItem): stri
 	return isFreeModel(model) ? `${base} free` : base;
 }
 
+/** Regex anchors apply to either the model id or the full searchable selector. */
+export function modelMatchesRegex(item: ModelBrowserItem, regex: RegExp): boolean {
+	return regex.test(item.id) || regex.test(modelSearchText(item));
+}
+
 /** Provider-supplied blurb, flattened to a single renderable detail-line cell. */
 function formatDescription(description: string): string {
 	return replaceTabs(sanitizeText(description))
@@ -955,6 +961,7 @@ export interface ModelBrowserOptions {
 
 export interface ModelBrowserNavigation {
 	query: string;
+	value: string;
 	cursor: number;
 	filterFocused: boolean;
 	selected: string | undefined;
@@ -1182,11 +1189,17 @@ export class ModelBrowser implements Component {
 		return LIST_ROW_START + this.#maxVisible + DETAIL_ROWS;
 	}
 
+	/** Confirmed filter, unchanged while its search field is being edited. */
 	get query(): string {
+		return this.#search.query;
+	}
+
+	/** Editable search text, including an unconfirmed draft. */
+	get value(): string {
 		return this.#search.value;
 	}
 
-	/** Caret into {@link query} (UTF-16 offset), for native picker `cursor`. */
+	/** Caret into {@link value} (UTF-16 offset), for native picker `cursor`. */
 	get cursor(): number {
 		return this.#search.cursor;
 	}
@@ -1208,6 +1221,7 @@ export class ModelBrowser implements Component {
 	navigationSnapshot(): ModelBrowserNavigation {
 		return {
 			query: this.query,
+			value: this.value,
 			cursor: this.cursor,
 			filterFocused: this.#search.focused,
 			selected: this.getSelected()?.selector,
@@ -1219,7 +1233,12 @@ export class ModelBrowser implements Component {
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as Partial<ModelBrowserNavigation>;
 		if (typeof state.query !== "string") return;
-		this.#search.restoreNavigation({ value: state.query, cursor: state.cursor, focused: state.filterFocused });
+		this.#search.restoreNavigation({
+			value: state.value ?? state.query,
+			query: state.query,
+			cursor: state.cursor,
+			focused: state.filterFocused,
+		});
 		this.#applyQuery("reset-changed-prefix");
 		this.onQueryChange?.(state.query);
 		if (typeof state.selected === "string") this.#menu.setSelectedKey(state.selected);
@@ -1272,6 +1291,12 @@ export class ModelBrowser implements Component {
 	 */
 	#filterItems(items: readonly ModelBrowserItem[], query: string): readonly ModelBrowserItem[] {
 		if (this.#preserveQueryOrder) {
+			const pattern = compileMenuRegex(query);
+			if (pattern) {
+				return this.#insertSeparator(
+					items.filter(item => !this.#isDisabled(item) && !!pattern.regex && modelMatchesRegex(item, pattern.regex)),
+				);
+			}
 			const base = items.filter(item => !this.#isDisabled(item));
 			return this.#insertSeparator(
 				query.trim() ? fuzzyRank(base, query, modelSearchText).map(result => result.item) : base,
@@ -1382,7 +1407,7 @@ export class ModelBrowser implements Component {
 	}
 
 	#applyQuery(selection: "clamp" | "reset-changed-prefix" = "clamp"): void {
-		const query = this.#search.value;
+		const query = this.#search.query;
 		const previousItems = this.#menu.visibleItems;
 		const previousSelectedIndex = this.#menu.selectedIndex;
 		const previousSelected = previousItems[previousSelectedIndex];
@@ -1414,12 +1439,13 @@ export class ModelBrowser implements Component {
 	handleInput(data: string): void {
 		if (this.#search.focused) {
 			const before = this.query;
-			const result = this.#search.handleInput(data);
+			this.#search.handleInput(data);
 			if (this.query !== before) {
 				this.#applyQuery("reset-changed-prefix");
 				this.onQueryChange?.(this.query);
 			}
-			if (result !== "pass" || extractPrintableText(data) !== undefined) return;
+			this.#keys.reset();
+			return;
 		}
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
@@ -1456,6 +1482,7 @@ export class ModelBrowser implements Component {
 		if (this.query || this.#search.focused) {
 			this.setQuery("");
 			this.focusFilter(false);
+			this.onQueryChange?.("");
 		} else this.onCancel?.();
 	}
 

@@ -255,7 +255,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 		const state = snapshot as { selectedKey?: string; search?: unknown; viewportTop?: MenuViewportPosition | number };
 		this.#search.restoreNavigation(state.search);
 		this.#menu.cancelConfirmation();
-		this.#menu.setQuery(this.#search.value);
+		this.#menu.setQuery(this.#search.query);
 		if (state.selectedKey !== undefined) this.#menu.setSelectedKey(state.selectedKey);
 		this.#viewport.setTop(state.viewportTop);
 		this.#nativeItems = undefined;
@@ -264,11 +264,11 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 	}
 
 	handleInput(data: string): void {
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
-			if (this.#search.value !== before) {
-				this.#menu.setQuery(this.#search.value);
+			if (this.#search.query !== before) {
+				this.#menu.setQuery(this.#search.query);
 				this.#viewport.reveal();
 				this.#nativeItems = undefined;
 				this.#pickerItems = undefined;

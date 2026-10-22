@@ -151,6 +151,7 @@ export interface SelectListNavigationState {
 	viewportTop: MenuViewportPosition | number | undefined;
 	filterFocused?: boolean;
 	filterCursor?: number;
+	filterDraft?: string;
 }
 
 type SelectItemLayout =
@@ -247,16 +248,20 @@ export class SelectList implements Component, MouseRoutable {
 			viewportTop: this.#viewport.top,
 			filterFocused: this.#search.focused,
 			filterCursor: this.#search.cursor,
+			...(this.#search.focused ? { filterDraft: this.#search.value } : {}),
 		};
 	}
 
 	/** Reapply selection, field focus/caret, and viewport without activating a row. */
 	restoreNavigationState(state: SelectListNavigationState): void {
-		this.#search.focused = state.filterFocused === true;
 		this.#keys.reset();
-		this.#search.setValue(state.filter);
-		if (state.filterCursor !== undefined) this.#search.input.setCursor(state.filterCursor);
-		this.#setFilter(this.#search.value, false);
+		this.#search.restoreNavigation({
+			value: state.filterDraft ?? state.filter,
+			query: state.filter,
+			focused: state.filterFocused === true,
+			cursor: state.filterCursor ?? state.filter.length,
+		});
+		this.#setFilter(this.#search.query, false);
 		if (state.selectedValue !== undefined) this.#selection.setSelectedKey(state.selectedValue);
 		this.#viewport.setTop(state.viewportTop);
 	}
@@ -276,6 +281,7 @@ export class SelectList implements Component, MouseRoutable {
 			viewportTop: state.viewportTop,
 			filterFocused: state.filterFocused === true,
 			filterCursor: typeof state.filterCursor === "number" ? state.filterCursor : undefined,
+			filterDraft: typeof state.filterDraft === "string" ? state.filterDraft : undefined,
 		});
 	}
 
@@ -287,7 +293,7 @@ export class SelectList implements Component, MouseRoutable {
 	/** Replace the filter text (caret to end) and refilter. */
 	setFilter(filter: string): void {
 		this.#search.setValue(filter);
-		this.#setFilter(this.#search.value, true);
+		this.#setFilter(this.#search.query, true);
 	}
 
 	/** Replace controlled items while retaining the selected value when possible. */
@@ -326,7 +332,7 @@ export class SelectList implements Component, MouseRoutable {
 			items: this.#selection.visibleItems,
 			selected: this.#selection.selectedKey ?? null,
 			pending: this.#selection.pendingKey ?? null,
-			query: this.#selection.query,
+			query: this.#search.value,
 			cursor: this.#search.cursor,
 		};
 	}
@@ -600,9 +606,9 @@ export class SelectList implements Component, MouseRoutable {
 
 	/** Focused search owns every key; Enter confirms the pattern and Esc clears it. */
 	#handleFilterInput(rawData: string): void {
-		const before = this.#search.value;
+		const before = this.#search.query;
 		this.#search.handleInput(rawData);
-		if (this.#search.value !== before) this.#setFilter(this.#search.value, true);
+		if (this.#search.query !== before) this.#setFilter(this.#search.query, true);
 	}
 
 	#renderItem(

@@ -631,13 +631,6 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		this.#selectCurrentSession();
 		this.#searchInput = this.#search.input;
 
-		// Handle Enter in search input - select current item
-		this.#searchInput.onSubmit = () => {
-			const selected = this.#menu.selectedItem;
-			if (selected) {
-				this.onSelect?.(selected);
-			}
-		};
 	}
 
 	get filterFocused(): boolean {
@@ -664,7 +657,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		this.dispose();
 		this.#search.restoreNavigation(state.search);
 		this.#restoredSelected = typeof state.selected === "string" ? state.selected : undefined;
-		this.#filterSessions(this.#search.value);
+		this.#filterSessions(this.#search.query);
 		if (Array.isArray(state.order)) {
 			const byPath = new Map(this.#allSessions.map(session => [session.path, session]));
 			const ordered: T[] = [];
@@ -724,7 +717,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		this.#showCwd = showCwd;
 		if (pinnedIds !== undefined) this.#pinnedIds = pinnedIds;
 		this.#menu.setSelectedIndex(0);
-		this.#filterSessions(this.#searchInput.getValue());
+		this.#filterSessions(this.#search.query);
 		this.#selectCurrentSession();
 	}
 
@@ -845,7 +838,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		for (const match of this.#fuzzyRanked) base.push(match.session);
 		const composed = prioritizeTitleMatches(
 			this.#historyIds.length > 0 ? mergeSessionRanking(this.#allSessions, base, this.#historyIds) : base,
-			tokenizeSessionQuery(this.#searchInput.getValue()),
+			tokenizeSessionQuery(this.#search.query),
 			this.#literalRanked,
 		);
 		// The fuzzy scan and the history merge only clamp the cursor so an arrow
@@ -872,7 +865,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		if (!matcher || trimmed.length < HISTORY_MERGE_MIN_QUERY || compileMenuRegex(query)?.error) return;
 		this.#historyMergeTimer = setTimeout(() => {
 			this.#historyMergeTimer = undefined;
-			if (this.#searchInput.getValue() !== query) return;
+			if (this.#search.query !== query) return;
 			if (this.#selectionMoved) return;
 			const historyIds = matcher(compileMenuRegex(query) ? query : trimmed);
 			if (historyIds.length === 0) return;
@@ -884,6 +877,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 
 	/** Cancel pending async search work; idempotent, called on every picker exit path. */
 	dispose(): void {
+		this.#search.focused = false;
 		this.#scanGeneration++;
 		if (this.#scanTimer !== undefined) {
 			clearTimeout(this.#scanTimer);
@@ -902,7 +896,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		this.#datasetVersion++;
 		this.#allSessions.splice(index, 1);
 		// Re-filter to update the composed result set
-		this.#filterSessions(this.#searchInput.getValue());
+		this.#filterSessions(this.#search.query);
 		// Adjust selection if we deleted the last item or beyond
 		if (this.#menu.selectedIndex >= this.#menu.visibleItems.length) {
 			this.#menu.setSelectedIndex(Math.max(0, this.#menu.visibleItems.length - 1));
@@ -965,7 +959,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	/** Empty the search query (the empty state's "Clear search"). */
 	clearSearch(): void {
 		this.#restoredSelected = undefined;
-		this.#searchInput.setValue("");
+		this.#search.setValue("");
 		this.#filterSessions("");
 	}
 
@@ -1006,7 +1000,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			return view;
 		}
 		const visible = this.#menu.visibleItems;
-		const tokens = tokenizeSessionQuery(query);
+		const tokens = tokenizeSessionQuery(this.#search.query);
 		const order: (string | TspPickerGroup)[] = [];
 		let hits: Record<string, (readonly [number, number])[]> | undefined;
 		if (tokens.length === 0) {
@@ -1029,7 +1023,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			for (const session of visible) {
 				order.push(session.path);
 				const label = catalogue.byPath.get(session.path)?.label;
-				if (typeof label !== "string" || compileMenuRegex(query)) continue;
+				if (typeof label !== "string" || compileMenuRegex(this.#search.query)) continue;
 				const ranges = pickerHits(label, tokens);
 				if (ranges.length > 0) (hits ??= {})[session.path] = ranges;
 			}
@@ -1109,7 +1103,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 
 	/** Paths of the visible sessions the prompt-history merge surfaced for the current query. */
 	#historyFlagged(): string {
-		if (this.#historyIds.length === 0 || tokenizeSessionQuery(this.#searchInput.getValue()).length === 0) return "";
+		if (this.#historyIds.length === 0 || tokenizeSessionQuery(this.#search.query).length === 0) return "";
 		const ids = new Set(this.#historyIds);
 		const paths: string[] = [];
 		for (const session of this.#menu.visibleItems) if (ids.has(session.id)) paths.push(session.path);
@@ -1170,7 +1164,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			this.#itemsNative = items;
 		}
 		const selected = this.#menu.selectedKey;
-		const query = this.#searchInput.getValue();
+		const query = this.#search.query;
 		const memo = this.#listNative;
 		if (
 			memo?.items === items.items &&
@@ -1389,20 +1383,20 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			sinceLastErase = now - this.#lastEraseKeyAt;
 			this.#lastEraseKeyAt = now;
 		}
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
 			this.#keys.reset();
-			if (this.#search.value !== before) {
+			if (this.#search.query !== before) {
 				this.#restoredSelected = undefined;
-				this.#filterSessions(this.#search.value);
+				this.#filterSessions(this.#search.query);
 			}
 			return;
 		}
 		if (isErase) {
 			// A focused query always owns erasing. Only a fresh Delete in the
 			// list with an empty query may request the destructive confirmation.
-			if (isDelete && !this.#search.value && sinceLastErase >= SESSION_DELETE_REARM_MS) this.requestDelete();
+			if (isDelete && !this.#search.query && sinceLastErase >= SESSION_DELETE_REARM_MS) this.requestDelete();
 			return;
 		}
 		if (matchesKey(data, "ctrl+c")) {
