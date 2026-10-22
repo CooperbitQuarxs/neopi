@@ -40,6 +40,8 @@ export async function generateTaskLabel(
 			undefined,
 			TASK_LABEL_SYSTEM_PROMPT,
 			signal,
+			undefined,
+			"tiny",
 		);
 		if (!label || labelEchoesHandle(sessionId, label)) return null;
 		return label;

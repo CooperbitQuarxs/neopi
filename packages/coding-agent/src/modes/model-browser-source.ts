@@ -12,7 +12,8 @@ import {
 	matchEffortRule,
 } from "../config/effort-policy";
 import { getSupportedThinkingLevels } from "@oh-my-pi/pi-catalog/model-thinking";
-import { describeModelCompactionPoint } from "../session/model-compaction-threshold";
+import { describeModelCompactionPoint, resolveEffectiveContextWindow } from "../session/model-compaction-threshold";
+import { cfgContextRules } from "../config/context-policy";
 
 import {
 	cfgCycleOrder,
@@ -88,6 +89,10 @@ export function createModelBrowserSource(
 		get effortRules() {
 			return cfgEffortRules.get(settings);
 		},
+		get contextRules() {
+			return cfgContextRules.get(settings);
+		},
+		effectiveContextWindowFor: model => resolveEffectiveContextWindow(settings, model),
 		permittedEfforts: model => {
 			const rule =
 				cfgEffortPolicyMode.get(settings) === "replacement" ? matchEffortRule(settings, model) : undefined;

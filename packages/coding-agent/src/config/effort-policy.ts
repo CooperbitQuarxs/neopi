@@ -4,7 +4,12 @@ import { Effort, THINKING_CHOICES, type ThinkingEffort } from "@oh-my-pi/pi-cata
 import { getSupportedThinkingLevels, requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import { logger } from "@oh-my-pi/pi-utils";
 import { register } from "./registry";
-import { compileSelectorRegex, isRegexSelectorPattern, matchesSelectorPattern } from "./selector-pattern";
+import {
+	compileSelectorRegex,
+	isRegexSelectorPattern,
+	matchesSelectorPattern,
+	matchModelSelectorRule,
+} from "./selector-pattern";
 import { cfgProvidersAutoThinkingMaxEffort } from "../session/settings";
 import type { Settings } from "./settings";
 
@@ -186,25 +191,7 @@ function isPatternSelector(selector: string): boolean {
 
 /** Exact provider/model identifiers beat regex rules, then globs; patterns retain declaration order within a tier. */
 export function matchEffortRule(settings: Settings, model: Model): EffortRule | undefined {
-	const rules = cfgEffortRules.get(settings);
-	const identity = `${model.provider}/${model.id}`;
-	const exact = rules.find(
-		rule =>
-			!isRegexSelectorPattern(rule.selector) &&
-			!isPatternSelector(rule.selector) &&
-			rule.selector.toLowerCase() === identity.toLowerCase(),
-	);
-	if (exact) return exact;
-	const regex = rules.find(
-		rule => isRegexSelectorPattern(rule.selector) && matchesSelectorPattern(rule.selector, identity),
-	);
-	if (regex) return regex;
-	return rules.find(
-		rule =>
-			!isRegexSelectorPattern(rule.selector) &&
-			isPatternSelector(rule.selector) &&
-			matchesSelectorPattern(rule.selector.toLowerCase(), identity.toLowerCase()),
-	);
+	return matchModelSelectorRule(cfgEffortRules.get(settings), model);
 }
 
 export interface EffortDecision {

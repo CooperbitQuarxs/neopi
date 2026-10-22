@@ -52,6 +52,37 @@ afterEach(() => {
 });
 
 describe("title generator", () => {
+	it("uses the title assignment without changing the tiny model", async () => {
+		const tiny = getModelOrThrow("claude-haiku-4-5");
+		const titleModel = getModelOrThrow("claude-sonnet-4-5");
+		const settings = Settings.isolated({
+			modelRoles: { tiny: `${tiny.provider}/${tiny.id}`, title: `${titleModel.provider}/${titleModel.id}` },
+		});
+		const complete = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title>Chosen title model</title>" }],
+		} as never);
+		expect(
+			await generateSessionTitle("Investigate the resolver", createRegistry(tiny, [tiny, titleModel]), settings),
+		).toBe("Chosen title model");
+		expect(complete.mock.calls[0]?.[0].id).toBe(titleModel.id);
+		expect(settings.getModelRole("tiny")).toBe(`${tiny.provider}/${tiny.id}`);
+	});
+
+	it("uses a local title assignment even when tiny is remote", async () => {
+		const local = getModelFor("local", "lfm2.5-230m");
+		const tiny = getModelOrThrow("claude-haiku-4-5");
+		const settings = Settings.isolated({
+			modelRoles: { title: `${local.provider}/${local.id}`, tiny: `${tiny.provider}/${tiny.id}` },
+		});
+		const generate = vi.spyOn(tinyTitleClient, "generate").mockResolvedValue("Local title");
+		const complete = vi.spyOn(ai, "completeSimple");
+		expect(
+			await generateSessionTitle("Investigate the resolver", createRegistry(tiny, [tiny, local]), settings),
+		).toBe("Local title");
+		expect(generate).toHaveBeenCalledWith(local.id, "Investigate the resolver");
+		expect(complete).not.toHaveBeenCalled();
+	});
 	it("returns the marker-wrapped title without forcing a tool call", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
