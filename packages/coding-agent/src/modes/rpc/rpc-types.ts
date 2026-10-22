@@ -58,7 +58,7 @@ export type RpcCommand =
 	| { id?: string; type: "open_session"; sessionDir: string; provider?: string; modelId?: string }
 
 	// State
-	| { id?: string; type: "get_state" }
+	| { id?: string; type: "get_state"; includeDump?: boolean }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
 	| RpcSetChatModeCommand
 	| { id?: string; type: "set_mode"; mode: RpcMode; planFilePath?: string }

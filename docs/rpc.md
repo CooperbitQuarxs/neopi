@@ -520,6 +520,10 @@ The response always succeeds, even when the withdrawn input is too large for one
 
 ### `get_state` payload
 
+Use `{ "type": "get_state", "includeDump": false }` for repeated status reads
+that do not need `systemPrompt` and `dumpTools`. Omitting the option preserves
+the full response.
+
 `sessionUsage` is the native journal index's cumulative usage across all branches,
 including messages before compaction and completed task results. Its `cost` already
 includes `subagentCost`; do not add that field again. `advisorCost` is separate.

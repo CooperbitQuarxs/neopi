@@ -107,6 +107,7 @@ describe("RPC model serialization", () => {
 		expect(state.model?.supportsFastMode).toBe(true);
 		expect(state.fastModeEnabled).toBe(false);
 		expect(state.fastModeActive).toBe(false);
+		expect(state.systemPrompt).toEqual(["preserve the prompt"]);
 	});
 
 	it("keeps no-model state absent on the wire and preserves realized Fast state", () => {
@@ -115,5 +116,8 @@ describe("RPC model serialization", () => {
 		expect(JSON.parse(JSON.stringify(state))).not.toHaveProperty("model");
 		expect(state.fastModeEnabled).toBe(true);
 		expect(state.fastModeActive).toBe(true);
+		expect(state).not.toHaveProperty("systemPrompt");
+		expect(state).not.toHaveProperty("dumpTools");
+		expect(state.sessionUsage?.cost).toBe(0);
 	});
 });
