@@ -4,6 +4,8 @@ import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+import { buildLivePromptContext } from "../prompts/contexts";
 import type { AgentSession } from "../session/agent-session";
 import type { CustomMessageDelivery } from "../session/agent-session";
 import type { AgentSessionEvent } from "../session/agent-session-events";
@@ -214,7 +216,7 @@ function microphoneLevel(samples: Float32Array): number {
 	return clampLevel(Math.sqrt(sumSquares / samples.length));
 }
 
-function currentUser(): { username: string; firstName: string } {
+export function currentUser(): { username: string; firstName: string } {
 	let username = "user";
 	try {
 		const candidate = os.userInfo().username.trim();
@@ -223,7 +225,7 @@ function currentUser(): { username: string; firstName: string } {
 		// Sandboxed runtimes may not expose OS account information.
 	}
 	const firstPart = username.split(/[._\-\s]+/).find(part => part.length > 0);
-	return { username, firstName: firstPart ?? "there" };
+	return buildLivePromptContext(username, firstPart ?? "there");
 }
 
 /** How one `agent_end` settle drives the voice relay. */
@@ -467,12 +469,24 @@ export class LiveSessionController {
 
 		try {
 			const user = currentUser();
-			const instructions = prompt.render(sessionInstructionsTemplate, {
-				personaInstructions: prompt.render(await resolveLiveInstructions(), user),
-			});
+			const instructions = renderPromptAsset(
+				"live/session-instructions.md",
+				sessionInstructionsTemplate,
+				{
+					personaInstructions: prompt.render(
+						await resolveLiveInstructions(undefined, this.#session.sessionManager.getCwd()),
+						user,
+					),
+				},
+				{ cwd: this.#session.sessionManager.getCwd() },
+			);
 			const historySettings = await resolveLiveIngestSettings();
 			const history = historySettings.seedHistory
-				? buildLiveHistorySeed(this.#session.messages, historySettings.seedHistoryTokens)
+				? buildLiveHistorySeed(
+						this.#session.messages,
+						historySettings.seedHistoryTokens,
+						this.#session.sessionManager.getCwd(),
+					)
 				: [];
 			const transport = this.#createTransport({
 				authStorage: this.#session.modelRegistry.authStorage,
@@ -1084,7 +1098,12 @@ export class LiveSessionController {
 				const text = this.#extractAssistantText(message).trim();
 				if (!text) continue;
 				this.#lastRelayedResponse = message;
-				const finalContext = prompt.render(agentFinalMessageTemplate, { message: text });
+				const finalContext = renderPromptAsset(
+					"live/agent-final-message.md",
+					agentFinalMessageTemplate,
+					{ message: text },
+					{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+				);
 				// The operator asked for this answer: deliver it now. The speakable hold is for
 				// unsolicited context only; holding a final answer delays it until the next handoff.
 				this.#contextSinceResponse = true;
@@ -1119,11 +1138,28 @@ export class LiveSessionController {
 				message && message !== this.#lastRelayedResponse ? this.#extractAssistantText(message).trim() : "";
 			if (text && message) {
 				this.#lastRelayedResponse = message;
-				const labelBytes = Buffer.byteLength(prompt.render(agentFinalMessageTemplate, { message: "" }), "utf8");
+				const labelBytes = Buffer.byteLength(
+					renderPromptAsset(
+						"live/agent-final-message.md",
+						agentFinalMessageTemplate,
+						{ message: "" },
+						{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+					),
+					"utf8",
+				);
 				this.#contextSinceResponse = true;
 				this.refreshTurnGate(false);
 				for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
-					this.#queueSend(buildSessionContextAppend(prompt.render(agentFinalMessageTemplate, { message: part })));
+					this.#queueSend(
+						buildSessionContextAppend(
+							renderPromptAsset(
+								"live/agent-final-message.md",
+								agentFinalMessageTemplate,
+								{ message: part },
+								{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+							),
+						),
+					);
 				}
 			}
 		}
@@ -1144,6 +1180,7 @@ export class LiveSessionController {
 	sendOperatorText(text: string, audience: "voice" | "both"): Promise<boolean> {
 		const message = text.trim();
 		if (!message || this.#stopped) return Promise.resolve(false);
+		const templateId = audience === "voice" ? "live/operator-typed-message.md" : "live/operator-shared-message.md";
 		const template = audience === "voice" ? operatorTypedMessageTemplate : operatorSharedMessageTemplate;
 		// A typed prompt makes the voice agent answer it, not the speech around it.
 		if (audience === "voice") {
@@ -1152,10 +1189,26 @@ export class LiveSessionController {
 		}
 		const channel = audience === "voice" ? undefined : "commentary";
 		// Every chunk carries the routing label: the voice agent routes each context item by it.
-		const labelBytes = Buffer.byteLength(prompt.render(template, { message: "" }), "utf8");
+		const labelBytes = Buffer.byteLength(
+			renderPromptAsset(
+				templateId,
+				template,
+				{ message: "" },
+				{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+			),
+			"utf8",
+		);
 		const deliveries: Promise<boolean>[] = [];
 		for (const part of chunkLiveContext(message, CONTEXT_CHUNK_BYTES - labelBytes)) {
-			const context = buildSessionContextAppend(prompt.render(template, { message: part }), channel);
+			const context = buildSessionContextAppend(
+				renderPromptAsset(
+					templateId,
+					template,
+					{ message: part },
+					{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+				),
+				channel,
+			);
 			if (this.#connected) {
 				deliveries.push(this.#queueSend(context));
 			} else {
@@ -1274,9 +1327,24 @@ export class LiveSessionController {
 		this.#releasedReplyTurns = [turn.turn];
 		// This context is the submitted speech itself, not narration of unrelated context.
 		this.#contextSinceResponse = false;
-		const labelBytes = Buffer.byteLength(prompt.render(operatorSubmittedMessageTemplate, { message: "" }), "utf8");
+		const labelBytes = Buffer.byteLength(
+			renderPromptAsset(
+				"live/operator-submitted-message.md",
+				operatorSubmittedMessageTemplate,
+				{ message: "" },
+				{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+			),
+			"utf8",
+		);
 		for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
-			void this.#queueSend(buildSessionContextAppend(prompt.render(operatorSubmittedMessageTemplate, { message: part })));
+			void this.#queueSend(buildSessionContextAppend(
+				renderPromptAsset(
+					"live/operator-submitted-message.md",
+					operatorSubmittedMessageTemplate,
+					{ message: part },
+					{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+				),
+			));
 		}
 	}
 
@@ -1831,11 +1899,26 @@ export class LiveSessionController {
 		this.#answeredTurns = this.#turnsWhere(
 			turn => turn.final && this.#isDirectAddress(turn.routingText ?? turn.text) && turn.claim === undefined,
 		).map(turn => turn.turn);
-		const template = operatorTypedMessageTemplate;
-		const labelBytes = Buffer.byteLength(prompt.render(template, { message: "", delegationRejected: true }), "utf8");
+		const labelBytes = Buffer.byteLength(
+			renderPromptAsset(
+				"live/operator-typed-message.md",
+				operatorTypedMessageTemplate,
+				{ message: "", delegationRejected: true },
+				{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+			),
+			"utf8",
+		);
 		for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
 			void this.#queueSend(
-				this.#voiceContext(delegationId, prompt.render(template, { message: part, delegationRejected: true })),
+				this.#voiceContext(
+					delegationId,
+					renderPromptAsset(
+						"live/operator-typed-message.md",
+						operatorTypedMessageTemplate,
+						{ message: part, delegationRejected: true },
+						{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+					),
+				),
 			);
 		}
 	}

@@ -1,3 +1,4 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { scheduler } from "node:timers/promises";
 import {
 	Agent,
@@ -41,7 +42,7 @@ import * as AIError from "@oh-my-pi/pi-ai/error";
 import { extractProviderRetryHint } from "@oh-my-pi/pi-ai/utils/retry-after";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
-import { extractHttpStatusFromError, logger, prompt } from "@oh-my-pi/pi-utils";
+import { extractHttpStatusFromError, logger } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import {
 	ADVISOR_DEFAULT_TOOL_NAMES,
@@ -253,7 +254,6 @@ export function planAdvisorUsageLimitWait(args: {
  * {@link ADVISOR_BOUNDARY_GUIDANCE_TURNS} primary turns: strong guidance, not
  * per-delivery noise.
  */
-const ADVISOR_BOUNDARY_GUIDANCE = advisorBoundaryGuidance.trim();
 const ADVISOR_BOUNDARY_GUIDANCE_TURNS = 50;
 
 /**
@@ -1415,11 +1415,16 @@ export class SessionAdvisors {
 			const systemPrompt = [
 				config.systemPrompt ??
 					(this.#chatMode
-						? renderChatAdvisorPrompt(this.#chatMode, budgetPerUpdate)
-						: prompt.render(advisorSystemPrompt, {
-								max_notes_per_update: budgetPerUpdate,
-								include_thinking: config.includeThinking !== false,
-							})),
+						? renderChatAdvisorPrompt(this.#chatMode, budgetPerUpdate, this.#host.sessionManager.getCwd())
+						: renderPromptAsset(
+								"advisor/system.md",
+								advisorSystemPrompt,
+								{
+									max_notes_per_update: budgetPerUpdate,
+									include_thinking: config.includeThinking !== false,
+								},
+								{ cwd: this.#host.sessionManager.getCwd() },
+							)),
 			];
 			if (this.#advisorContextPrompt) systemPrompt.push(this.#advisorContextPrompt);
 			if (this.#advisorMemoryPrompt) systemPrompt.push(this.#advisorMemoryPrompt);
@@ -1943,7 +1948,9 @@ export class SessionAdvisors {
 			this.#advisorPrimaryTurnsCompleted - this.#advisorBoundaryGuidanceLastTurn >= ADVISOR_BOUNDARY_GUIDANCE_TURNS;
 		if (showGuidance) this.#advisorBoundaryGuidanceLastTurn = this.#advisorPrimaryTurnsCompleted;
 		const batch = formatAdvisorBatchContent(notes, { currentTurn: this.#advisorPrimaryTurnsCompleted });
-		const content = showGuidance ? `${ADVISOR_BOUNDARY_GUIDANCE}\n${batch}` : batch;
+		const content = showGuidance
+			? `${resolvePromptAsset("advisor/boundary-guidance.md", advisorBoundaryGuidance, { cwd: this.#host.sessionManager.getCwd(), kind: "notice" }).text.trim()}\n${batch}`
+			: batch;
 		// Snapshot the shared policy inputs once: they cannot change while this
 		// synchronous flush runs. `streaming` is forced false — the primary's turn
 		// IS final even though the loop still reports streaming during the
@@ -2700,6 +2707,7 @@ export class SessionAdvisors {
 					undefined,
 					signal,
 					{
+						cwd: this.#host.sessionManager.getCwd(),
 						thinkingLevel: advisorCompactionThinkingLevel,
 						convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
 						isUserAuthored: isUserAuthoredMessage,

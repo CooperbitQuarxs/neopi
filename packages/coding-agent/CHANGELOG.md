@@ -12,6 +12,8 @@
 - Change a running subagent's reasoning level and fast mode through RPC, `npi ctl`, or its focused Agent Hub view without interrupting its turn; selections survive restart, and agent listings show current model and effort ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
 - Choose the model for the next live call with `live.model` in Settings or `/live model <slug>`; `/live model` shows the configured slug and the default remains `gpt-live-1-codex`.
 - Launch named workers and advisors yourself with `/agent launch`, choose the model, supported effort, tools and orchestration, and confirm the resolved model and cost warning before spawning ([#13](https://github.com/PsychedelicShayna/neopi/issues/13)).
+- Opus 5 now receives an inspectable model-family adapter with scope discipline and effort guidance; customize or disable it independently through `npi prompts` ([#23](https://github.com/PsychedelicShayna/neopi/issues/23)).
+- Inspect, unpack, override and reset embedded prompt templates with `npi prompts`, browse the interpolation lexicon, and validate overrides with file-and-line diagnostics ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
 - Generate live personas with a chosen model and explicitly selected default, persona, or prompt-template references, then edit the result before saving ([#219](https://github.com/PsychedelicShayna/neopi/issues/219)).
 - Live calls can silently load recent primary transcript history with a per-persona toggle and token budget in `/persona live` ([#205](https://github.com/PsychedelicShayna/neopi/issues/205)).
 - Named profiles can preload selected persistent memory files before the first turn through `launch-memory.json`; inspect the loaded snapshot with `/launch-profile` ([#65](https://github.com/PsychedelicShayna/neopi/issues/65)).
@@ -78,6 +80,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Unmodified prompt unpacks now check clean, including MOA envelope partials and canned live identity ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
 - Stopping a live call while its persona or settings load no longer leaves a transport connected after cancellation ([#482](https://github.com/PsychedelicShayna/neopi/issues/482)).
 - Token-bounded text, including live transcript history, keeps emoji and combining characters intact at truncation boundaries ([#205](https://github.com/PsychedelicShayna/neopi/issues/205)).
 - Control-socket clients can start, mute, and stop the session's existing live voice call without ending it when they disconnect ([#483](https://github.com/PsychedelicShayna/neopi/issues/483)).
