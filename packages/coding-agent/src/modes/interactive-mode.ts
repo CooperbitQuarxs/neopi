@@ -16,6 +16,7 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
+import { toolWireSchema } from "@oh-my-pi/pi-ai";
 import { controlHostFor } from "../control/host";
 import { attachTuiPresenter } from "../control/tui-presenter";
 import { trackMountedDialog } from "../control/dialogs";
@@ -166,6 +167,7 @@ import {
 import type { ShakeMode } from "../session/shake-types";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
+import { getToolArgumentCompletions, getToolArgumentInlineHint } from "../slash-commands/tool-arguments";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type SttState } from "../stt";
 import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
@@ -2834,7 +2836,25 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		}
 
-		return [...builtinCommands, ...hookCommands, ...customCommands, ...skillCommandList];
+		const toolCommands: SlashCommand[] = [
+			{ name: "tool:", description: "Browse enabled tools without invoking them" },
+			...this.session.getToolCatalogEntries().map(tool => ({
+				name: `tool:${tool.name}`,
+				description: tool.description,
+				icon: getSlashCommandTypeIcon("tools"),
+				iconName: "tools" as const,
+				getArgumentCompletions: (text: string) => {
+					const liveTool = this.session.getToolCatalogTool(tool.name);
+					return liveTool ? getToolArgumentCompletions(toolWireSchema(liveTool), text) : null;
+				},
+				getInlineHint: (text: string) => {
+					const liveTool = this.session.getToolCatalogTool(tool.name);
+					return liveTool ? getToolArgumentInlineHint(toolWireSchema(liveTool), text) : null;
+				},
+			})),
+		];
+
+		return [...builtinCommands, ...hookCommands, ...customCommands, ...skillCommandList, ...toolCommands];
 	}
 
 	/** Reload session skills and the `/skill:<name>` command list. */
@@ -7917,6 +7937,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleToolsCommand(): void {
 		this.#commandController.handleToolsCommand();
+	}
+
+	handleToolCatalogCommand(name?: string): void {
+		this.#commandController.handleToolCatalogCommand(name);
 	}
 
 	handleContextCommand(): void {

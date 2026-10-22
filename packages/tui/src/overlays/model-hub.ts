@@ -37,6 +37,7 @@ import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "..
 import { hintsRow, type NativeHint } from "../native/overlay";
 import { plainText } from "../native/spans";
 import { isNativeRendering } from "../native/state";
+import { compileMenuRegex } from "../menu-search";
 import { Input } from "../components/input";
 import {
 	applyMenuMotion,
@@ -1367,7 +1368,11 @@ export class ModelHubComponent implements Component {
 	#buildRolesRows(): void {
 		const rows: RolesRow[] = [];
 		const chains = this.#fallbackChains();
-		const query = this.#rolesSearch.value.trim().toLowerCase();
+		const rawQuery = this.#rolesSearch.value;
+		const regex = compileMenuRegex(rawQuery);
+		const query = rawQuery.trim().toLowerCase();
+		const matchesText = (value: string | undefined): boolean =>
+			value !== undefined && (regex ? !!regex.regex?.test(value) : value.toLowerCase().includes(query));
 		const matches = (role: string): boolean => {
 			if (!query) return true;
 			const info = this.#settings.getRoleInfo(role);
@@ -1380,7 +1385,7 @@ export class ModelHubComponent implements Component {
 				assignment?.model.provider,
 				this.#settings.getModelRole(role),
 				...(chains[role] ?? []),
-			].some(value => value?.toLowerCase().includes(query));
+			].some(matchesText);
 		};
 		const appendRoles = (roles: ReadonlyArray<string>): void => {
 			for (const role of roles) {
@@ -1408,7 +1413,7 @@ export class ModelHubComponent implements Component {
 			.filter(key => key.includes("/") || selectorKind(key) === "regex")
 			.sort();
 		for (const key of modelKeys) {
-			if (query && ![key, ...(chains[key] ?? [])].some(value => value.toLowerCase().includes(query))) continue;
+			if (query && ![key, ...(chains[key] ?? [])].some(matchesText)) continue;
 			const chain = chains[key] ?? [];
 			rows.push({ kind: "chainKey", role: key });
 			for (let i = 0; i < chain.length; i++) {
@@ -3133,6 +3138,23 @@ export class ModelHubComponent implements Component {
 			this.#callbacks.onCancel();
 			return;
 		}
+		if (!this.#strip) {
+			const kind = this.#assigning === null ? this.#activeEntry().kind : undefined;
+			const search = kind === "roles" ? this.#rolesSearch : kind === "effort" ? this.#effortSearch : undefined;
+			if (search?.value) {
+				search.setValue("");
+				search.focused = false;
+				if (kind === "roles") this.#buildRolesRows();
+				else this.#syncEffortSelection();
+				return;
+			}
+			if (!search && this.#browser.query) {
+				this.#browser.setQuery("");
+				this.#browser.focusFilter(false);
+				this.#onQueryChanged("");
+				return;
+			}
+		}
 		if (this.#filterEditing) {
 			this.#filterEditing = false;
 			this.#browser.focusFilter(false);
@@ -4026,7 +4048,7 @@ export class ModelHubComponent implements Component {
 				return `j/k save scope · ${enter}/Space set · h/l pane · Tab context · ${cancel} cancel`;
 			return `h/l ${leftRight} effort · ${enter}/Space apply · ${cancel} keep`;
 		}
-		if (this.#filterEditing) return "Search · Esc back to list";
+		if (this.#filterEditing) return "Search · Enter confirm · Esc clear";
 		if (this.#sessionOnly && this.#isBrowserView(this.#activeEntry())) {
 			return `${enter} use for session · ${upDown} models · ${left} providers · ${cancel} close`;
 		}
@@ -4367,6 +4389,8 @@ export class ModelHubComponent implements Component {
 				node("item", { label: this.#effortRowText(index) }, undefined, String(index)),
 			);
 			children.push(this.#effortSearch.input);
+			const queryError = compileMenuRegex(this.#effortSearch.value)?.error;
+			if (queryError) children.push(text([span(queryError, "error")]));
 			children.push(
 				node(
 					"list",
@@ -4498,7 +4522,14 @@ export class ModelHubComponent implements Component {
 			items,
 			"roles",
 		);
-		return [tabs, this.#rolesSearch.input, list, this.#describeCycle(cycleOrder)];
+		const queryError = compileMenuRegex(this.#rolesSearch.value)?.error;
+		return [
+			tabs,
+			this.#rolesSearch.input,
+			...(queryError ? [text([span(queryError, "error")])] : []),
+			list,
+			this.#describeCycle(cycleOrder),
+		];
 	}
 
 	#describeRolesRow(rowDef: RolesRow, index: number, cycleOrder: readonly string[]): NativeNode {
@@ -4656,9 +4687,15 @@ export class ModelHubComponent implements Component {
 				: this.#focus === "scope"
 					? this.#footerHint()
 					: "j/k rows · h/l pane · / search · gg/G ends · Ctrl-u/d half";
+		const queryError = compileMenuRegex(
+			entry.kind === "effort" && this.#assigning === null
+				? this.#effortSearch.value
+				: rolesView ? this.#rolesSearch.value : this.#browser.query,
+		)?.error;
 		const props: TspPickerProps = {
 			title: this.#sessionOnly ? "Session model" : "Models",
 			subtitle: [
+				...(queryError ? [span(queryError, "error")] : []),
 				...(typeof subtitle === "string" ? [span(subtitle)] : (subtitle ?? [])),
 				span(` · ${plainText(navigation)}`, "dim"),
 			],
