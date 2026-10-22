@@ -192,6 +192,17 @@ cache_prune() (
 	done < <(find "$cache_dir" -maxdepth 1 -type f -name '*.meta' -printf '%T@ %f\n' | sort -rn)
 )
 
+record_native_phase() {
+	$cache_enabled || return 0
+	(
+		flock 9
+		printf '{"event":"%s","key":"%s","duration":%d,"stored":%s,"exit_code":%d}\n' \
+			"$cache_status" "$input_key" "$((SECONDS-cache_started))" "$cache_stored" "$1" >&9
+	) 9>>"$cache_dir/ledger.jsonl" || say "could not append native cache ledger"
+}
+# Record failed builds too, without letting a ledger error mask the build error.
+trap 'record_native_phase "$?"' EXIT
+
 # The binary build embeds every addon variant present; build.sh can vouch only
 # for the host one. Anything else is stale output from another build.
 shopt -s nullglob
@@ -248,16 +259,13 @@ if $cache_enabled; then
 			say "native cache store failed; keeping the local addon"
 		fi
 	fi
-	# One record per native build phase, including cheap local-current seeding.
-	(
-		flock 9
-		printf '{"event":"%s","key":"%s","duration":%d,"stored":%s}\n' \
-			"$cache_status" "$input_key" "$((SECONDS-cache_started))" "$cache_stored" >&9
-	) 9>>"$cache_dir/ledger.jsonl" || say "could not append native cache ledger"
+	record_native_phase 0
+	trap - EXIT
 	flock -u "$cache_lock"
 	exec {cache_lock}>&-
 	cache_prune || say "native cache eviction failed"
 fi
+trap - EXIT
 
 # install.sh refuses a binary built from other sources than the checkout holds,
 # so record the tree this build starts from; a failed build leaves no record.

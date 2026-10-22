@@ -71,8 +71,9 @@ The key hashes native source and build-driver bytes, compiler settings including
 SHA-256 and the native release version before writing a checkout-local stamp.
 The cache keeps eight recently stored addons, skipping entries in use.
 `ledger.jsonl` records each native build phase as `hit`, `miss`, or `store`,
-with its key, duration in seconds, and whether it published an addon. A current
-local addon can seed an empty cache without compiling Rust.
+with its key, duration in seconds, exit code, and whether it published an addon.
+Failed native builds are recorded too. A current local addon can seed an empty
+cache without compiling Rust.
 
 `build.sh` and `install.sh` support Linux. On macOS, run the same steps by hand:
 
