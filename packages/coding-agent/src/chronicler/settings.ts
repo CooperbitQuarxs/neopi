@@ -185,7 +185,7 @@ export const cfgChroniclerRecallRanker = register({
 		group: "Chronicler",
 		label: "Recall ranker",
 		description:
-			"Rank branches with the chronicler-summary model or deterministic lexical coverage. Model ranking falls back to lexical when unavailable.",
+			"Rank branches with the chronicler-recall model or deterministic lexical coverage. Model ranking falls back to lexical when unavailable.",
 	},
 });
 export const cfgChroniclerRecallNeighborhoodMinutes = numberSetting(

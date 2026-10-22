@@ -103,7 +103,7 @@ export function rankResponsePolicyFromSettings(settings: Settings): RankResponse
 	};
 }
 
-/** Model ranking falls back to lexical scoring when no summary model resolves. */
+/** Model ranking falls back to lexical scoring when no recall model resolves. */
 export function resolveRanker(
 	settings: Settings,
 	modelRegistry: ModelRegistry | undefined,
@@ -111,6 +111,6 @@ export function resolveRanker(
 ): NodeRanker {
 	const kind = override ?? cfg.cfgChroniclerRecallRanker.get(settings);
 	if (kind === "lexical" || !modelRegistry) return lexicalRanker;
-	const client = resolveChronicleModelClient(settings, modelRegistry);
+	const client = resolveChronicleModelClient(settings, modelRegistry, "chronicler-recall");
 	return client ? createModelRanker(client, rankResponsePolicyFromSettings(settings)) : lexicalRanker;
 }

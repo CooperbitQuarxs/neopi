@@ -74,6 +74,24 @@ describe("RpcRoles", () => {
 			expect(role.section).toBe(KIND_ROLE_IDS.some(id => id === role.id) ? "kind" : "chat");
 			expect(role.patterns).toEqual(resolveConfiguredModelPatterns([`@${role.id}`], settings));
 		}
+		expect(roles.find(role => role.id === "agent-author")?.description).toContain("agent definitions");
+		expect(roles.find(role => role.id === "compaction")?.description).toContain("compaction");
+		expect(roles.find(role => role.id === "reviewer")?.description).toBeUndefined();
+	});
+
+	test("recall is listed with its description and follows summaries until assigned", () => {
+		settings.setModelRole("chronicler-summary", "anthropic/claude-haiku-4-5:low");
+		const roles = new RpcRoles(session);
+		expect(roles.list().roles.find(role => role.id === "chronicler-recall")).toMatchObject({
+			tag: "CHRONREC",
+			description: "Ranks Chronicler recall results while you wait.",
+			resolved: { modelId: "claude-haiku-4-5", thinkingLevel: "low" },
+		});
+		settings.setModelRole("chronicler-recall", "anthropic/claude-sonnet-4-5:high");
+		expect(roles.list().roles.find(role => role.id === "chronicler-recall")?.resolved).toMatchObject({
+			modelId: "claude-sonnet-4-5",
+			thinkingLevel: "high",
+		});
 	});
 
 	test("deck-inbox is a built-in chat role with the subscription Luna default", () => {

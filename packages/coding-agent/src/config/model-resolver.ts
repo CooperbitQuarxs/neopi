@@ -1153,6 +1153,7 @@ const ROLE_PRIORITY_ALIAS: Partial<Record<ModelRole, keyof typeof MODEL_PRIO>> =
 	advisor: "slow",
 	chronicler: "slow",
 	"chronicler-summary": "slow",
+	"chronicler-recall": "slow",
 	classifier: "slow",
 	prose: "smol",
 	memory: "smol",
@@ -1167,10 +1168,12 @@ interface ConfiguredRoleFallback {
 
 const ROLE_CONFIGURED_FALLBACK: Partial<Record<ModelRole, ConfiguredRoleFallback>> = {
 	advisor: { role: "slow", configuredOnly: true },
+	"agent-author": { role: "default", configuredOnly: false },
 	classifier: { role: "slow", configuredOnly: true },
 	memory: { role: "tiny", configuredOnly: false },
-	// Temporal summaries and recall ranking follow the capture role unless configured.
+	// Summaries follow capture; recall follows summaries unless independently configured.
 	"chronicler-summary": { role: "chronicler", configuredOnly: false },
+	"chronicler-recall": { role: "chronicler-summary", configuredOnly: false },
 	tiny: { role: "smol", configuredOnly: false },
 	// Chain steps default to @prose; unset, it follows the user's own fast model.
 	prose: { role: "smol", configuredOnly: false },
@@ -1868,12 +1871,24 @@ export function resolveChroniclerRoleSelection(
 	return resolved.model ? { model: resolved.model, thinkingLevel: resolved.thinkingLevel } : undefined;
 }
 
-/** Resolve the temporal summary/ranking role; unset, it follows the `chronicler` role. */
+/** Resolve temporal summaries; unset, they follow the `chronicler` role. */
 export function resolveChronicleSummaryRoleSelection(
 	settings: Settings,
 	availableModels: Model<Api>[],
 ): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
 	const resolved = resolveModelRoleValue(formatModelRoleAlias("chronicler-summary"), availableModels, {
+		settings,
+		matchPreferences: getModelMatchPreferences(settings),
+	});
+	return resolved.model ? { model: resolved.model, thinkingLevel: resolved.thinkingLevel } : undefined;
+}
+
+/** Recall follows the complete effective summary role until independently configured. */
+export function resolveChronicleRecallRoleSelection(
+	settings: Settings,
+	availableModels: Model<Api>[],
+): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
+	const resolved = resolveModelRoleValue(formatModelRoleAlias("chronicler-recall"), availableModels, {
 		settings,
 		matchPreferences: getModelMatchPreferences(settings),
 	});
