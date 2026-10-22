@@ -545,6 +545,7 @@ import { cfgInterruptMode } from "../modes/settings";
 import { cfgFollowUpMode } from "../modes/settings";
 import { cfgSteeringMode } from "../modes/settings";
 import { cfgDisabledProviders, cfgModelRoles } from "../config/model-settings";
+import { cfgModelFactsEnabled, cfgModelFactsSources, cfgModelFactsOverrides } from "../config/model-facts";
 import { cfgEvalToolsEnabled } from "../eval/settings";
 import { cfgExtensions, type SkillsSettings } from "../extensibility/settings";
 import {
@@ -2714,6 +2715,9 @@ export class AgentSession implements SettingsScope {
 		cfgExtendedContext.listen(this, () => this.#reapplyContextWindowPolicy());
 		cfgCompactionModelThresholds.listen(this, () => this.#reapplyContextWindowPolicy());
 		cfgCompactionModelThresholdsEnabled.listen(this, () => this.#reapplyContextWindowPolicy());
+		cfgModelFactsEnabled.listen(this, () => this.#reapplyContextWindowPolicy(true));
+		cfgModelFactsSources.listen(this, () => this.#reapplyContextWindowPolicy(true));
+		cfgModelFactsOverrides.listen(this, () => this.#reapplyContextWindowPolicy(true));
 		cfgBrowserEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("browser.enabled", enabled));
 		cfgComputerEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("computer.enabled", enabled));
 		cfgRatchetEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("ratchet.enabled", enabled));
@@ -11627,14 +11631,20 @@ export class AgentSession implements SettingsScope {
 		return true;
 	}
 
+	/** Refresh configured fact sources and bind their resolved metadata without changing the selected role. */
+	async refreshModelFacts(): Promise<void> {
+		await this.#modelRegistry.refresh("online-if-uncached");
+		await this.#reapplyContextWindowPolicy(true);
+	}
+
 	/**
 	 * Rebuild the model catalog after an `extendedContext` toggle or a
-	 * `compaction.modelThresholds` edit and rebind the active model when its
-	 * effective context window changed. Same-model rebinds skip provider-session
+	 * `compaction.modelThresholds` edit, or a model-fact setting, and rebind the active model when its
+	 * effective context window changed or its other facts need refreshing. Same-model rebinds skip provider-session
 	 * resets (`modelsAreEqual` sees no change), so this only refreshes metadata
 	 * consumers (compaction thresholds, context display).
 	 */
-	async #reapplyContextWindowPolicy(): Promise<void> {
+	async #reapplyContextWindowPolicy(forceMetadata = false): Promise<void> {
 		// Refit the bound row right away (the agent's model resolver applies this
 		// session's settings to its known tiers), so a prompt started before the
 		// catalog rebuild settles already runs with the new window.
@@ -11649,7 +11659,7 @@ export class AgentSession implements SettingsScope {
 			// Compare against the window bound before the refit so dependent state
 			// still reconciles once even though the refit already moved the row.
 			const baseline = previousModel && modelsAreEqual(previousModel, currentModel) ? previousModel : currentModel;
-			if (updated && updated.contextWindow !== baseline.contextWindow) {
+			if (updated && (forceMetadata || updated.contextWindow !== baseline.contextWindow)) {
 				await this.#setModelWithProviderSessionReset(updated);
 			}
 		} catch (error) {

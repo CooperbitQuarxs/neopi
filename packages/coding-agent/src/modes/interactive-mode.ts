@@ -8334,7 +8334,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		void this.#selectorController.showGitTui(revision);
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean }): void {
+	showModelSelector(options?: { temporaryOnly?: boolean; sessionOnly?: boolean }): void {
 		this.#selectorController.showModelSelector(options);
 	}
 
