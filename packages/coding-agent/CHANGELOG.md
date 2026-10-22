@@ -79,6 +79,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Ctrl-G opens the configuration file the view actually loads, ignoring unsupported TOML companions until their loaders support them ([#521](https://github.com/PsychedelicShayna/neopi/issues/521)).
 - Live subagent importance ranking now tries classifier fallbacks after a failed or empty primary response, even when authorization checks have already succeeded ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).
 - Live classifier failures now identify the model and failure reason in the warning and logs instead of silently discarding provider errors ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).
 - Per-model effort limits now offer `off` when the model supports disabling reasoning and apply allowed off selections to sessions and Auto effort ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).

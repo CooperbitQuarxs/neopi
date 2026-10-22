@@ -11,7 +11,7 @@ export interface ConfigViewFiles {
 	models: { getConfigFile(): string };
 }
 
-/** One mapping for every config view. Existing TOML companions win over YAML. */
+/** Map each view to files its current loader actually reads. */
 export async function resolveConfigViewFile(
 	target: ConfigViewTarget,
 	files: ConfigViewFiles,
@@ -33,14 +33,9 @@ export async function resolveConfigViewFile(
 			break;
 	}
 	if (!filePath) return undefined;
-	if (/\.ya?ml$/i.test(filePath)) {
-		const toml = filePath.replace(/\.ya?ml$/i, ".toml");
-		if (await Bun.file(toml).exists()) return toml;
-		// The existing settings overlay predates same-name config.toml support.
-		if (settingsFile) {
-			const overlay = path.join(path.dirname(filePath), SETTINGS_TOML);
-			if (await Bun.file(overlay).exists()) return overlay;
-		}
+	if (settingsFile) {
+		const overlay = path.join(path.dirname(filePath), SETTINGS_TOML);
+		if (await Bun.file(overlay).exists()) return overlay;
 	}
 	return filePath;
 }
