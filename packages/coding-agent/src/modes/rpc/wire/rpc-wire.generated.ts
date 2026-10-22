@@ -907,6 +907,16 @@ export interface SessionEntries {
 	leafId: string | null;
 }
 
+export interface JournalPage {
+	entries: Record<string, unknown>[];
+	sessionId: string;
+	sessionFile: string;
+	leafId: string | null;
+	totalEntries: number;
+	/** Opaque cursor for the next page; absent on the last page. */
+	nextCursor?: string;
+}
+
 /** Raw session tree roots. */
 export interface SessionTree {
 	tree: Record<string, unknown>[];
@@ -2056,6 +2066,13 @@ export interface GetEntriesParams {
 	since?: string;
 }
 
+export interface GetEntriesPageParams {
+	scope?: "journal" | "branch";
+	direction?: "forward" | "backward";
+	cursor?: string;
+	limit?: number;
+}
+
 export interface SetTodosParams {
 	phases: TodoPhase[];
 }
@@ -2343,6 +2360,7 @@ export interface RpcWireCommands {
 	set_ask_dialog: { params: SetAskDialogParams; result: SetAskDialogResult };
 	get_available_commands: { params: undefined; result: GetAvailableCommandsResult };
 	get_entries: { params: GetEntriesParams; result: SessionEntries };
+	get_entries_page: { params: GetEntriesPageParams; result: JournalPage };
 	get_tree: { params: undefined; result: SessionTree };
 	set_todos: { params: SetTodosParams; result: SetTodosResult };
 	set_host_tools: { params: SetHostToolsParams; result: SetHostToolsResult };

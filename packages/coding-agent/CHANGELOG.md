@@ -11,6 +11,8 @@
 
 - Inspect, add, edit and delete model overrides and custom models in `/models`, with schema-driven field editors and unknown-field preservation ([#522](https://github.com/PsychedelicShayna/neopi/issues/522)).
 
+- Open the backing file from `/settings`, `/advisor configure`, `/agents`, and `/models` with Ctrl-G, then see saved edits without restarting ([#521](https://github.com/PsychedelicShayna/neopi/issues/521)).
+- Read complete native journal or selected-branch history in bounded RPC/control pages or with `npi sessions entries --json`, preserving tool output, compaction, reset and custom records ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
 - Set model context limits with exact, glob, or regex rules in `/models`, and see the effective maintenance window separately from catalog capacity ([#511](https://github.com/PsychedelicShayna/neopi/issues/511)).
 
 - Choose a separate `title` model for session titles and `/rename` suggestions; until set it follows `tiny`, and explicit fork-mode titling still uses the foreground model ([#515](https://github.com/PsychedelicShayna/neopi/issues/515)).
@@ -79,6 +81,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Ctrl-G opens the configuration file the view actually loads, ignoring unsupported TOML companions until their loaders support them ([#521](https://github.com/PsychedelicShayna/neopi/issues/521)).
 - Live subagent importance ranking now tries classifier fallbacks after a failed or empty primary response, even when authorization checks have already succeeded ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).
 - Live classifier failures now identify the model and failure reason in the warning and logs instead of silently discarding provider errors ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).
 - Per-model effort limits now offer `off` when the model supports disabling reasoning and apply allowed off selections to sessions and Auto effort ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).

@@ -626,6 +626,11 @@ export class ModelRegistry {
 		}
 	}
 
+	/** The configured models file, including custom SDK locations. */
+	getConfigFile(): string {
+		return this.#modelsConfigFile.path();
+	}
+
 	/**
 	 * Rebuild the catalog after a policy-affecting setting change (e.g.
 	 * `extendedContext`). Forces the static reload past the models.yml mtime

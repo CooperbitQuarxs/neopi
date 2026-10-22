@@ -201,6 +201,8 @@ function createHub(options: {
 			onCycleOrderChange: options.callbacks?.onCycleOrderChange,
 			onSavePreset: options.callbacks?.onSavePreset,
 			onSwitchPreset: options.callbacks?.onSwitchPreset,
+			onOpenConfigFile: options.callbacks?.onOpenConfigFile,
+			onCompactionPointChange: options.callbacks?.onCompactionPointChange,
 			onFallbackChainChange: options.callbacks?.onFallbackChainChange ?? onFallbackChainChange,
 			onRoleDescriptionChange:
 				options.callbacks?.onRoleDescriptionChange ??
@@ -292,9 +294,11 @@ describe("ModelHub", () => {
 	});
 
 	test("opens schema-driven model overrides beside the rule sections and returns to normal navigation", () => {
+		const open = vi.fn(async () => {});
 		const { hub } = createHub({
 			models: [],
 			scoped: true,
+			callbacks: { onOpenConfigFile: open },
 			registry: {
 				modelConfig: {
 					list: () => [
@@ -310,6 +314,9 @@ describe("ModelHub", () => {
 		hub.handleInput(DOWN);
 		hub.handleInput(DOWN);
 		expect(normalize(hub.render(160))).toContain("local/private");
+		expect(normalize(hub.render(160))).toContain("Ctrl+G config file");
+		hub.handleInput("\x07");
+		expect(open).toHaveBeenCalledWith("overrides", "global");
 		hub.handleInput("\r");
 		hub.handleInput("\r");
 		expect(normalize(hub.render(160))).toContain("future");
@@ -2216,7 +2223,7 @@ describe("ModelHub", () => {
 			const { hub, onFallbackChainChange } = createHub({ models: [a], scoped: true, settings });
 
 			enterRolesView(hub);
-			hub.handleInput("G"); // Reveal the model-keyed chains below the expanded role inventory.
+			hub.handleInput("G"); // Bring model-keyed chains into view regardless of the built-in role count.
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("test/*");
 			expect(rendered).toContain("↳ test/model-a");
@@ -2279,7 +2286,7 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models, scoped: true, settings });
 
 			enterRolesView(hub);
-			hub.handleInput("G"); // Reveal the model-keyed chains below the expanded role inventory.
+			hub.handleInput("G"); // Bring model-keyed chains into view regardless of the built-in role count.
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("re:^test/model-a$");
 			expect(rendered).toContain("↳ re:^test/model-b$");
@@ -3105,4 +3112,72 @@ describe("ModelHub", () => {
 			]);
 		});
 	});
+});
+
+test("Ctrl-G routes roles, effort, context and catalog files and refreshes after editing", async () => {
+	const settings = Settings.isolated({});
+	const calls: string[] = [];
+	const updated = Promise.withResolvers<void>();
+	const { hub } = createHub({
+		models: [makeModel("test", "one")],
+		settings,
+		callbacks: {
+			onOpenConfigFile: async (section, scope) => {
+				calls.push(`${section}:${scope}`);
+				if (section === "roles") {
+					settings.setModelRole("new-role", "test/one");
+					updated.resolve();
+				}
+			},
+		},
+	});
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+	hub.handleInput("\x07");
+	await updated.promise;
+	await Bun.sleep(0);
+	expect(normalize(hub.render(140))).toContain("new-role");
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "effort" });
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "context" });
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "all" });
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	expect(calls).toEqual(["roles:global", "effort:global", "context:global", "overrides:global"]);
+});
+
+test("an existing menu Ctrl-G binding wins over opening the model config", () => {
+	const previous = getKeybindings();
+	const open = vi.fn(async () => {});
+	setKeybindings(new KeybindingsManager({ "tui.select.cancel": ["ctrl+g"] }));
+	try {
+		const { hub, onCancel } = createHub({ models: [], callbacks: { onOpenConfigFile: open } });
+		hub.handleInput("\x07");
+		expect(open).not.toHaveBeenCalled();
+		expect(onCancel).toHaveBeenCalledTimes(1);
+	} finally {
+		setKeybindings(previous);
+	}
+});
+
+test("Ctrl-G opens global settings for a project role's per-model compaction editor", async () => {
+	const open = vi.fn(async () => {});
+	const settings = Settings.isolated({ modelRoleStorage: "project" });
+	settings.setProjectModelRole("default", "test/one");
+	const { hub } = createHub({
+		models: [makeModel("test", "one")],
+		settings,
+		callbacks: {
+			onOpenConfigFile: open,
+			onCompactionPointChange: () => undefined,
+		},
+	});
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+	hub.handleInput("m");
+	expect(footerLine(hub.render(140))).toContain("one limit:");
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	expect(open).toHaveBeenCalledWith("context", "global");
 });
