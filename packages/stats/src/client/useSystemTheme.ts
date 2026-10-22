@@ -52,7 +52,11 @@ if (typeof window !== "undefined") {
 
 export function setThemePreference(next: ThemePreference): void {
 	preference = next;
-	try { localStorage.setItem(STORAGE_KEY, next); } catch { /* Origin storage is optional. */ }
+	try {
+		localStorage.setItem(STORAGE_KEY, next);
+	} catch {
+		/* Origin storage is optional. */
+	}
 	applyResolvedTheme();
 	emit();
 }

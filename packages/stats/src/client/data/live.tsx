@@ -106,7 +106,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 				onerror: () => setConnected(false),
 				onmessage: data => receive(JSON.parse(data) as LiveStatus),
 			});
-			return () => { close(); setConnected(false); };
+			return () => {
+				close();
+				setConnected(false);
+			};
 		}
 		const source = new EventSource("/api/events");
 		source.onopen = () => setConnected(true);

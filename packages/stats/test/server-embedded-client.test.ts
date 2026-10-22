@@ -8,8 +8,10 @@ const tempDirs: string[] = [];
 const children: Array<Subprocess<"pipe", "pipe", "pipe">> = [];
 const HOST_TOKEN = "hosted-stats-test-token-not-a-user-credential";
 const clientFiles = {
-	"index.html": '<!doctype html><html><head><link rel="stylesheet" href="index.css"></head><body><script type="module" src="/index.js"></script></body></html>',
-	"index.js": 'document.documentElement.dataset.loaded = "true"; globalThis.fixture = "</script>"; globalThis.replacement = "$&";',
+	"index.html":
+		'<!doctype html><html><head><link rel="stylesheet" href="index.css"></head><body><script type="module" src="/index.js"></script></body></html>',
+	"index.js":
+		'document.documentElement.dataset.loaded = "true"; globalThis.fixture = "</script>"; globalThis.replacement = "$&";',
 	"index.css": "body { color: blue; }",
 	"styles.css": "body { color: blue; }",
 	"favicon.ico": await Bun.file(path.resolve(import.meta.dir, "../src/client/favicon.ico")).bytes(),
@@ -37,9 +39,10 @@ async function startEmbeddedDashboard(hosted = false) {
 	);
 	await Bun.write(
 		entrypoint,
-		hosted ? `import { runHostedStats } from ${JSON.stringify(path.resolve(import.meta.dir, "../../coding-agent/src/cli/stats-host.ts"))};
-await runHostedStats();` :
-		`import { startServer } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/server.ts"))};
+		hosted
+			? `import { runHostedStats } from ${JSON.stringify(path.resolve(import.meta.dir, "../../coding-agent/src/cli/stats-host.ts"))};
+await runHostedStats();`
+			: `import { startServer } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/server.ts"))};
 const server = await startServer(0);
 process.stdout.write(JSON.stringify({ url: "http://" + server.hostname + ":" + server.port }));`,
 	);
@@ -73,7 +76,7 @@ process.stdout.write(JSON.stringify({ url: "http://" + server.hostname + ":" + s
 		throw new Error(`Dashboard failed to start: ${await new Response(child.stderr).text()}`);
 	}
 	const readyMessage = JSON.parse(new TextDecoder().decode(ready.value));
-	const url = hosted ? `http://127.0.0.1:${readyMessage.port}` : readyMessage.url as string;
+	const url = hosted ? `http://127.0.0.1:${readyMessage.port}` : (readyMessage.url as string);
 	return { url, tmpDir, child, readyMessage };
 }
 
