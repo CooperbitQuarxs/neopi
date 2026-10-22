@@ -40,6 +40,7 @@ Behavior notes:
 | --- | --- |
 | `get_usage` | The `get_usage` command returns account-level provider usage reports. See [Session](#session). |
 | `get_roles` | `get_roles` / `set_role` commands and `get_state.activeRole` ([payloads](#get_roles-and-set_role-payloads)) |
+| `themes_configuration` | `get_themes_configuration`, scoped `update_theme`, and `themes_configuration_changed`. |
 | `set_chat_mode` | Live chat-mode switching: the `set_chat_mode` command, `get_state.chatMode`, the `chat_mode_changed` event, and the `/chat` builtin in `get_available_commands`. |
 | `tool_approval_request` | `set_approval_handler` and the typed `tool_approval_request` / `tool_approval_response` / `tool_approval_cancel` frames; see [Tool Approval Sub-Protocol](#tool-approval-sub-protocol) |
 | `set_mode` | `set_mode` command, `get_state` `mode`/`planMode`, `mode_changed` event, and the `plan_proposal_request`/`plan_proposal_response` round trip. See [Plan Mode Sub-Protocol](#plan-mode-sub-protocol). |
@@ -651,6 +652,24 @@ branch to a different model) clears it. A retry fallback does not: the fallback
 model is part of the role's chain. A resumed session reports the role recorded
 with its last model change, except `default`, which is also what a direct model
 pick records.
+
+### Shared native themes
+
+`get_themes_configuration` discovers installed native theme names and returns
+`selection.dark` and `selection.light`. Each has its effective name, the explicit
+`global` and `project` values or `null`, and resolved semantic `colors`.
+
+Send `update_theme` with `appearance: "dark" | "light"`, `scope: "global" | "project"`,
+`name` and `expected`. Both names are strings or `null`. `expected` must match the
+last read value in that scope. A mismatch returns error code `conflict`; refresh
+and let the user choose again. A null `name` removes that scope's override.
+Project values take precedence over global values. Native configuration overlays
+can still determine the effective value, which is always returned after a write.
+
+Connected terminal and RPC sessions emit `themes_configuration_changed` when an
+effective theme setting changes. Re-read the configuration after that event and
+on reconnection. Themes remain native configuration; a client should not write
+configuration files or substitute a bundled theme inventory.
 
 ### `get_roles` and `set_role` payloads
 

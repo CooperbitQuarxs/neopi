@@ -42,6 +42,8 @@ export const RPC_COMMAND_TYPES = [
 	"create_mixture",
 	"select_mixture",
 	"get_roles",
+	"get_themes_configuration",
+	"update_theme",
 	"set_role",
 	"set_thinking_level",
 	"cycle_thinking_level",

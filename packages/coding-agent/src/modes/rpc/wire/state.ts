@@ -10,6 +10,16 @@ import { absentAs, doc, type WireDefs } from "./dsl";
 const JSON_OBJECT = "Record<string, unknown>";
 
 export const stateDefs = {
+	ThemeSelection: {
+		effective: "string",
+		global: "string | null",
+		project: "string | null",
+		colors: "Record<string, string>",
+	},
+	ThemesConfiguration: {
+		themes: "string[]",
+		selection: { dark: "ThemeSelection", light: "ThemeSelection" },
+	},
 	ApprovalHandler: "'host' | 'ui'",
 	ChatModeSetting: "'off' | 'chat' | 'erp' | 'raw'",
 	ChatModeState: { mode: "ChatModeSetting", include: "string" },

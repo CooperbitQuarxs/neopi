@@ -2703,6 +2703,8 @@ export class AgentSession implements SettingsScope {
 		// Re-evaluate append-only context mode when the setting changes at runtime.
 		cfgProviderAppendOnlyContext.listen(this, () => this.#syncAppendOnlyContext(this.model));
 		cfgModelRoles.listen(this, () => this.#advisors.reconcileModelRoles());
+		cfgThemeDark.listen(this, () => this.#emit({ type: "themes_configuration_changed" }));
+		cfgThemeLight.listen(this, () => this.#emit({ type: "themes_configuration_changed" }));
 		// Re-derive the active model's effective context window when the
 		// extended-context setting flips at runtime, or a per-model compaction
 		// point moves past (or back inside) a standard window or is switched on/off: the registry

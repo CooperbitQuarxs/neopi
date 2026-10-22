@@ -239,6 +239,7 @@ export const eventDefs = {
 	},
 	RetryFallbackSucceededEvent: { type: "'retry_fallback_succeeded'", model: "string", role: "string" },
 	ModelChangedEvent: { type: "'model_changed'" },
+	ThemesConfigurationChangedEvent: { type: "'themes_configuration_changed'" },
 	ConfigWarningsChangedEvent: { type: "'config_warnings_changed'" },
 	AdvisorCostChangedEvent: { type: "'advisor_cost_changed'" },
 	AdvisorYieldedEvent: { type: "'advisor_yielded'" },
