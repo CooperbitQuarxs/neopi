@@ -9,7 +9,7 @@ import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 import { cfgCompactionEnabled } from "@oh-my-pi/pi-coding-agent/session/context-settings";
-import { cfgEnabledModels, cfgModelRoleStorage } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { cfgEnabledModels, cfgModelRoles, cfgModelRoleStorage } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { cfgEffortRules } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 
@@ -417,6 +417,38 @@ describe("Settings.reloadForCwd", () => {
 			expect((await first).status).toBe("conflict");
 			expect((await second).status).toBe("applied");
 			expect(cfgCompactionEnabled.get(settings)).toBe(true);
+		});
+
+		it("notifies raw scope edits hidden by a project without looping on equal reloads", async () => {
+			const globalPath = path.join(agentDir, "config.yml");
+			const projectPath = path.join(scopedProject, ".omp", "config.yml");
+			await Bun.write(globalPath, "modelRoles:\n  smol: anthropic/global-first\n");
+			await Bun.write(projectPath, "modelRoles:\n  smol: anthropic/project\n");
+			const settings = await Settings.loadIsolated({ cwd: scopedProject, agentDir });
+			let scopesChanged = 0;
+			let effectiveChanged = 0;
+			const stopScopes = settings.onPersistedLayersChange(() => { scopesChanged++; });
+			const stopEffective = settings.onEffectiveChange([cfgModelRoles], () => { effectiveChanged++; });
+			await Bun.write(globalPath, "modelRoles:\n  smol: anthropic/global-second\n");
+			await settings.reloadFromDisk();
+			expect(settings.getGlobalModelRole("smol")).toBe("anthropic/global-second");
+			expect(settings.getModelRole("smol")).toBe("anthropic/project");
+			expect(scopesChanged).toBe(1);
+			expect(effectiveChanged).toBe(0);
+			await settings.reloadFromDisk();
+			expect(scopesChanged).toBe(1);
+			cfgCompactionEnabled.override(settings, false);
+			expect(scopesChanged).toBe(1);
+			await Bun.write(projectPath, "modelRoles: {}\n");
+			await settings.reloadFromDisk();
+			expect(settings.getModelRole("smol")).toBe("anthropic/global-second");
+			expect(scopesChanged).toBe(2);
+			expect(effectiveChanged).toBe(1);
+			stopScopes();
+			stopEffective();
+			await Bun.write(globalPath, "modelRoles:\n  smol: anthropic/global-third\n");
+			await settings.reloadFromDisk();
+			expect(scopesChanged).toBe(2);
 		});
 
 		it("reports project roles over global role fallbacks", async () => {

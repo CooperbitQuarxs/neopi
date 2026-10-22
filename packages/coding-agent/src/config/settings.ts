@@ -725,6 +725,8 @@ export class Settings {
 	readonly warnState: WarnState = { invalid: new Map(), items: new Map() };
 	/** Change listeners bucketed by the `slot` of the setting they observe ({@link onEffectiveChange}). */
 	#changeListeners: (Set<SettingChangeListener> | undefined)[] = [];
+	#persistedLayerListeners = new Set<() => void>();
+	#persistedLayerSnapshot?: RawSettings[];
 	/** Forwarders of every change into live {@link overlay} children. */
 	#childForwarders = new Set<SettingChangeListener>();
 	/** Instance this overlay reads through to ({@link overlay}); overlays never persist or write back. */
@@ -1260,6 +1262,7 @@ export class Settings {
 			const setting = settings[i];
 			if (!settingValuesEqual(setting.get(this), previous[i])) this.#notifyChange(setting);
 		}
+		this.#notifyPersistedLayersChange();
 	}
 
 	#fireIfChanged(setting: AnySetting, prev: unknown): void {
@@ -1288,6 +1291,40 @@ export class Settings {
 		return () => {
 			for (const source of sources) this.#changeListeners[source.slot]?.delete(listener);
 		};
+	}
+
+	/**
+	 * Observe adopted native layers even when a higher scope hides their values.
+	 * Equal reloads and runtime overrides do not emit; no file writer is added.
+	 */
+	onPersistedLayersChange(listener: () => void): () => void {
+		if (this.#persistedLayerListeners.size === 0)
+			this.#persistedLayerSnapshot = structuredClone(this.#persistedLayers());
+		this.#persistedLayerListeners.add(listener);
+		const stopParent = this.#parent?.onPersistedLayersChange(listener);
+		return () => {
+			stopParent?.();
+			this.#persistedLayerListeners.delete(listener);
+			if (this.#persistedLayerListeners.size === 0) this.#persistedLayerSnapshot = undefined;
+		};
+	}
+
+	#persistedLayers(): RawSettings[] {
+		return [this.#global, this.#globalToml, this.#project, this.#projectToml, this.#configOverlay];
+	}
+
+	#notifyPersistedLayersChange(): void {
+		if (this.#persistedLayerListeners.size === 0) return;
+		const layers = this.#persistedLayers();
+		if (Bun.deepEquals(layers, this.#persistedLayerSnapshot)) return;
+		this.#persistedLayerSnapshot = structuredClone(layers);
+		for (const listener of Array.from(this.#persistedLayerListeners)) {
+			try {
+				listener();
+			} catch (error) {
+				logger.warn("Settings: persisted-layer listener failed", { error: String(error) });
+			}
+		}
 	}
 
 	/** Set once this instance is discarded; background saves become no-ops. */
