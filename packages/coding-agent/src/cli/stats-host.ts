@@ -1,5 +1,4 @@
 import { closeDb, startServer } from "@oh-my-pi/omp-stats";
-import { openStandaloneJudge } from "../judgment/standalone";
 
 /** A host owns this process by keeping stdin open. No browser or existing listener is touched. */
 export async function runHostedStats(): Promise<void> {
@@ -18,7 +17,10 @@ export async function runHostedStats(): Promise<void> {
 	try {
 		const server = await startServer(0, "127.0.0.1", {
 			hostToken,
-			judge: async () => (await openStandaloneJudge(process.cwd(), "stats_frustration")).judge,
+			judge: async () => {
+				const { openStandaloneJudge } = await import("../judgment/standalone");
+				return (await openStandaloneJudge(process.cwd(), "stats_frustration")).judge;
+			},
 		});
 		closeServer = server.stop;
 		if (!stopping) process.stdout.write(`${JSON.stringify({ type: "neopi_stats_ready", version: 1, port: server.port })}\n`);
