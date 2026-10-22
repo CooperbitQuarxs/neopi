@@ -3451,7 +3451,8 @@ export class InputController {
 	}
 
 	async openExternalEditor(): Promise<void> {
-		const editorCmd = getEditorCommand();
+		const env = this.ctx.session.environment.snapshot();
+		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
 			this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
 			return;
@@ -3462,7 +3463,7 @@ export class InputController {
 
 		try {
 			this.ctx.ui.stop();
-			const result = await openInEditor(editorCmd, draft, { extension: ".omp.md" });
+			const result = await openInEditor(editorCmd, draft, { extension: ".omp.md", env });
 			if (result !== null) {
 				const message = extractExternalEditorMessage(result);
 				if (message === null) this.ctx.showWarning("External editor context marker was removed; draft unchanged.");
