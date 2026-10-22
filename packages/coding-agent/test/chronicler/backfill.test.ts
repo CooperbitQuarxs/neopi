@@ -132,7 +132,7 @@ describe("npi chronicle backfill", () => {
 
 	async function backfill(
 		flags: Partial<ChronicleBackfillFlags>,
-		options: { enabled?: boolean } = {},
+		options: { enabled?: boolean; settings?: Readonly<Record<string, unknown>> } = {},
 	): Promise<number> {
 		return runChronicleBackfill(
 			{ sessions: [], all: false, dryRun: false, concurrency: 2, force: false, ...flags },
@@ -141,7 +141,8 @@ describe("npi chronicle backfill", () => {
 				sessionsRoot,
 				stdout: line => stdout.push(line),
 				stderr: line => stderr.push(line),
-				loadSettings: async (_cwd, overrides) => settingsFor(overrides, options.enabled ?? true),
+				loadSettings: async (_cwd, overrides) =>
+					settingsFor({ ...options.settings, ...overrides }, options.enabled ?? true),
 				openModelRegistry: async () => {
 					registryOpens++;
 					return modelRegistry;
@@ -204,6 +205,25 @@ describe("npi chronicle backfill", () => {
 		// 80 entries exceed one 60-entry pass, so the walk continued past the first batch.
 		expect(batches.length).toBeGreaterThan(1);
 		expect(stdout.at(-1)).toContain("complete 1");
+	});
+
+	it("uses configured backfill deadlines when flags are absent and lets flags override them", async () => {
+		const { file, ids } = await storedSession(2);
+		const settings = {
+			"chronicler.backfill.timeoutMs": 0,
+			"chronicler.backfill.drainMs": 0,
+			"chronicler.backfill.pollMs": 1,
+			"chronicler.backfill.concurrency": 1,
+			"chronicler.backfill.scanConcurrency": 1,
+		};
+		expect(await backfill({ sessions: [file], concurrency: undefined }, { settings })).toBe(0);
+		expect(await readCommittedChroniclerBatches(chroniclerRoot(file))).toHaveLength(0);
+
+		expect(await backfill({ sessions: [file], timeout: "10s", drain: "10s", concurrency: 2 }, { settings })).toBe(0);
+		const batches = await readCommittedChroniclerBatches(chroniclerRoot(file));
+		expect(batches.flatMap(batch => batch.checkpoint.entries.map(entry => entry.id)).toSorted()).toEqual(
+			ids.toSorted(),
+		);
 	});
 
 	it("resumes an interrupted backfill without recapturing committed entries", async () => {

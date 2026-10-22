@@ -10,6 +10,12 @@ import { getAgentDir, getModelDbPath, getProjectDir, getSessionsDir } from "@oh-
 import { CliUsageError } from "@oh-my-pi/pi-utils/cli";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import {
+	cfgChroniclerBackfillConcurrency,
+	cfgChroniclerBackfillDrainMs,
+	cfgChroniclerBackfillScanConcurrency,
+	cfgChroniclerBackfillTimeoutMs,
+} from "../chronicler/backfill-settings";
+import {
 	type BackfillCoverage,
 	type BackfillOutcome,
 	type HeadlessBackfillResult,
@@ -38,7 +44,7 @@ export interface ChronicleBackfillFlags {
 	minSize?: string;
 	all: boolean;
 	dryRun: boolean;
-	concurrency: number;
+	concurrency?: number;
 	drain?: string;
 	timeout?: string;
 	force: boolean;
@@ -56,11 +62,6 @@ export interface ChronicleBackfillDeps {
 	openModelRegistry(settings: Settings): Promise<ModelRegistry>;
 	buildObfuscator(cwd: string, settings: Settings): Promise<SecretObfuscator | undefined>;
 }
-
-export const DEFAULT_BACKFILL_CONCURRENCY = 4;
-const DEFAULT_TIMEOUT_MS = 2 * 60 * 60_000;
-const DEFAULT_DRAIN_MS = 10 * 60_000;
-const SCAN_CONCURRENCY = 8;
 
 const DURATION_UNITS_MS: Readonly<Record<string, number>> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 };
 const SIZE_UNITS: Readonly<Record<string, number>> = {
@@ -157,16 +158,24 @@ async function resolveSessionFiles(flags: ChronicleBackfillFlags, deps: Chronicl
 	return [...files];
 }
 
-async function selectSessions(flags: ChronicleBackfillFlags, deps: ChronicleBackfillDeps): Promise<Selection> {
+async function selectSessions(
+	flags: ChronicleBackfillFlags,
+	deps: ChronicleBackfillDeps,
+	settings: Settings,
+): Promise<Selection> {
 	const since = flags.since === undefined ? undefined : parseBackfillDate(flags.since, "since");
 	const until = flags.until === undefined ? undefined : parseBackfillDate(flags.until, "until");
 	const minSize = flags.minSize === undefined ? undefined : parseBackfillSize(flags.minSize);
 	const files = await resolveSessionFiles(flags, deps);
 
-	const scanned = await mapWithConcurrencyLimitAllSettled(files, SCAN_CONCURRENCY, async file => {
-		const [coverage, stat] = await Promise.all([readStoredSessionCoverage(file), fs.stat(file)]);
-		return { ...coverage, size: stat.size, modifiedMs: stat.mtimeMs } satisfies Candidate;
-	});
+	const scanned = await mapWithConcurrencyLimitAllSettled(
+		files,
+		cfgChroniclerBackfillScanConcurrency.get(settings),
+		async file => {
+			const [coverage, stat] = await Promise.all([readStoredSessionCoverage(file), fs.stat(file)]);
+			return { ...coverage, size: stat.size, modifiedMs: stat.mtimeMs } satisfies Candidate;
+		},
+	);
 
 	const candidates: Candidate[] = [];
 	let unreadable = 0;
@@ -214,20 +223,21 @@ export async function runChronicleBackfill(
 	if (flags.sessions.length === 0 && !flags.project && !flags.all) {
 		throw new CliUsageError("Select sessions by id or path, --project <dir>, or --all");
 	}
-	if (!Number.isSafeInteger(flags.concurrency) || flags.concurrency < 1) {
+	if (flags.concurrency !== undefined && (!Number.isSafeInteger(flags.concurrency) || flags.concurrency < 1)) {
 		throw new CliUsageError("--concurrency must be a positive integer");
 	}
-	const timeoutMs = flags.timeout === undefined ? DEFAULT_TIMEOUT_MS : parseBackfillDuration(flags.timeout, "timeout");
-	const drainMs = flags.drain === undefined ? DEFAULT_DRAIN_MS : parseBackfillDuration(flags.drain, "drain");
+	const timeoutOverride = flags.timeout === undefined ? undefined : parseBackfillDuration(flags.timeout, "timeout");
+	const drainOverride = flags.drain === undefined ? undefined : parseBackfillDuration(flags.drain, "drain");
 	const overrides = flags.force ? { [cfgChroniclerEnabled.id]: true } : undefined;
 
 	const baseSettings = await deps.loadSettings(deps.cwd, overrides);
+	const concurrency = flags.concurrency ?? cfgChroniclerBackfillConcurrency.get(baseSettings);
 	if (!flags.dryRun && !cfgChroniclerEnabled.get(baseSettings)) {
 		deps.stderr("chronicler.enabled is false in the effective settings; refusing. Pass --force to backfill anyway.");
 		return 2;
 	}
 
-	const { candidates, unreadable } = await selectSessions(flags, deps);
+	const { candidates, unreadable } = await selectSessions(flags, deps, baseSettings);
 	const covered = candidates.filter(candidate => !candidate.legacy && uncovered(candidate) === 0);
 	const pending = candidates.filter(candidate => candidate.legacy || uncovered(candidate) > 0);
 
@@ -249,7 +259,7 @@ export async function runChronicleBackfill(
 	// Opened once, on the first session that actually reaches capture.
 	let registry: Promise<ModelRegistry> | undefined;
 
-	const results = await mapWithConcurrencyLimitAllSettled(pending, flags.concurrency, async candidate => {
+	const results = await mapWithConcurrencyLimitAllSettled(pending, concurrency, async candidate => {
 		const id = candidate.sessionId;
 		if (candidate.legacy) {
 			deps.stdout(`${id}  ${OUTCOME_LABEL.legacy}  ${shortenPath(candidate.cwd)}`);
@@ -259,6 +269,8 @@ export async function runChronicleBackfill(
 			`${id}  start  ${describeCoverage(candidate)}, ${candidate.beats} beats  ${shortenPath(candidate.cwd)}`,
 		);
 		const settings = await deps.loadSettings(candidate.cwd, overrides);
+		const timeoutMs = timeoutOverride ?? cfgChroniclerBackfillTimeoutMs.get(settings);
+		const drainMs = drainOverride ?? cfgChroniclerBackfillDrainMs.get(settings);
 		registry ??= deps.openModelRegistry(baseSettings);
 		const result = await runHeadlessBackfill({
 			sessionFile: candidate.sessionFile,
