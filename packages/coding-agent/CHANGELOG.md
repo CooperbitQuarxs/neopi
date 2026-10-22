@@ -87,6 +87,7 @@
 ### Fixed
 
 - CI checks no longer depend on workstation-only test paths or outdated fixtures; fork releases retain Linux, macOS and Windows smoke checks without upstream package publishers ([#536](https://github.com/PsychedelicShayna/neopi/issues/536)).
+- Nightly Rust formatting checks pass for native live-audio controls ([#541](https://github.com/PsychedelicShayna/neopi/issues/541)).
 - Ctrl-G opens the configuration file the view actually loads, ignoring unsupported TOML companions until their loaders support them ([#521](https://github.com/PsychedelicShayna/neopi/issues/521)).
 - Live subagent importance ranking now tries classifier fallbacks after a failed or empty primary response, even when authorization checks have already succeeded ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).
 - Live classifier failures now identify the model and failure reason in the warning and logs instead of silently discarding provider errors ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).
