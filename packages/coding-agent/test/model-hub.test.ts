@@ -8,7 +8,7 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { getSupportedEfforts, getSupportedThinkingLevels } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -2578,6 +2578,37 @@ describe("ModelHub", () => {
 		});
 	});
 	describe("effort policy editors", () => {
+		test.each([false, true])(
+			"exact effort rules offer native off only when requiresEffort=%s permits it",
+			requiresEffort => {
+				const model: Model = {
+					...makeModel("test", "native-reasoning"),
+					reasoning: true,
+					thinking: { mode: "effort", efforts: [Effort.Low, Effort.High], requiresEffort },
+				};
+				const settings = Settings.isolated({});
+				cfgEffortRules.set(settings, [{ selector: "test/native-reasoning", allowed: [Effort.Low, Effort.High] }]);
+				const { hub } = createHub({ models: [model], scoped: true, settings });
+				hub.handleInput(DOWN);
+				hub.handleInput("\n");
+				hub.handleInput("\n");
+				const footer = footerLine(hub.render(220));
+				if (requiresEffort) {
+					expect(footer).not.toContain(" off");
+				} else {
+					expect(footer).toContain(`${theme.status.disabled} off`);
+					hub.handleInput(" ");
+					hub.handleInput("\n");
+					expect(cfgEffortRules.get(settings)[0]?.allowed).toEqual(["off", Effort.Low, Effort.High]);
+					hub.handleInput("\n");
+					expect(footerLine(hub.render(220))).toContain(`${theme.status.enabled} off`);
+					hub.handleInput(" ");
+					hub.handleInput("\n");
+					expect(cfgEffortRules.get(settings)[0]?.allowed).toEqual([Effort.Low, Effort.High]);
+				}
+			},
+		);
+
 		test("Auto edits a sparse set, cancels atomically, and saves in the selected role scope", () => {
 			const model = getBundledModel("openai", "gpt-5.5");
 			if (!model) throw new Error("Expected bundled reasoning model");
@@ -2617,6 +2648,8 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN);
 			hub.handleInput("\n");
+			hub.handleInput(" ");
+			hub.handleInput(DOWN);
 			hub.handleInput(" ");
 			hub.handleInput(DOWN);
 			hub.handleInput(" ");
@@ -2664,7 +2697,7 @@ describe("ModelHub", () => {
 			expect(onAssign.mock.calls[0]?.[3]).toBe("openai/gpt-5.?");
 			expect(onAssign.mock.calls[0]?.[5]).toEqual({
 				mode: "auto",
-				allowed: [...getSupportedEfforts(model)],
+				allowed: [...getSupportedThinkingLevels(model)],
 				selector: "openai/gpt-5.?",
 			});
 		});
@@ -2688,7 +2721,7 @@ describe("ModelHub", () => {
 			expect(onAssign.mock.calls[0]?.[3]).toBe("re:^openai/gpt-5\\.5$");
 			expect(onAssign.mock.calls[0]?.[5]).toEqual({
 				mode: "auto",
-				allowed: [...getSupportedEfforts(model)],
+				allowed: [...getSupportedThinkingLevels(model)],
 				selector: "re:^openai/gpt-5\\.5$",
 			});
 		});
@@ -2719,7 +2752,7 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			for (const ch of "openai/*") hub.handleInput(ch);
 			hub.handleInput("\n"); // enabled-level editor
-			for (let i = 0; i < 6; i++) {
+			for (let i = 0; i < 7; i++) {
 				hub.handleInput(" ");
 				hub.handleInput(DOWN);
 			}
@@ -2727,7 +2760,8 @@ describe("ModelHub", () => {
 			expect(cfgEffortRules.get(settings)).toEqual([]);
 			expect(normalize(hub.render(220))).toContain("at least one");
 			hub.handleInput("g");
-			hub.handleInput("g"); // return to minimal; bounded movement does not wrap
+			hub.handleInput("g"); // return to off; bounded movement does not wrap
+			hub.handleInput(DOWN); // minimal
 			hub.handleInput(" "); // permit just minimal
 			hub.handleInput("\n");
 			expect(cfgEffortRules.get(settings)).toEqual([{ selector: "openai/*", allowed: [Effort.Minimal] }]);
@@ -2793,6 +2827,8 @@ describe("ModelHub", () => {
 			expect(normalize(hub.render(220))).toContain("Invalid regular expression");
 			hub.handleInput(")"); // close the group and retry from the same strip
 			hub.handleInput("\n"); // enabled-level editor
+			hub.handleInput(" "); // exclude off
+			hub.handleInput(DOWN);
 			hub.handleInput(" "); // exclude minimal
 			hub.handleInput("\n");
 			expect(cfgEffortRules.get(settings)).toEqual([

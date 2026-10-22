@@ -5,6 +5,7 @@ import {
 	clampThinkingLevelForModel,
 	defaultSupportedEffort,
 	getSupportedEfforts,
+	getSupportedThinkingLevels,
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
 	minimumSupportedEffort,
@@ -39,6 +40,31 @@ function createModel<TApi extends Api>(overrides: {
 }
 
 describe("model thinking derivation", () => {
+	it("offers native off for Haiku 5.5 but not mandatory or adaptive-only reasoning", () => {
+		const haiku = createModel({ id: "claude-haiku-5-5", api: "anthropic-messages", provider: "anthropic" });
+		expect(getSupportedThinkingLevels(haiku)).toEqual(["off", ...getSupportedEfforts(haiku)]);
+		const mandatory = { ...haiku, thinking: { ...haiku.thinking!, requiresEffort: true } };
+		expect(getSupportedThinkingLevels(mandatory)).not.toContain("off");
+		expect(
+			getSupportedThinkingLevels({
+				...mandatory,
+				thinking: { ...mandatory.thinking, suppressWhenOff: true },
+			}),
+		).toContain("off");
+		expect(
+			getSupportedThinkingLevels({
+				...haiku,
+				compat: { ...haiku.compat, disabledThinking: "adaptive" },
+			}),
+		).not.toContain("off");
+		expect(
+			getSupportedThinkingLevels({
+				...haiku,
+				compat: { ...haiku.compat, disabledThinking: "between-tools" },
+			}),
+		).not.toContain("off");
+	});
+
 	it("stores supported efforts for Codex mini in model metadata", () => {
 		const model = createModel({
 			id: "gpt-5.1-codex-mini",

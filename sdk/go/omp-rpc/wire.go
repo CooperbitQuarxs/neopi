@@ -1721,6 +1721,31 @@ func (v *Effort) UnmarshalJSON(data []byte) error {
 	return unknownValue("Effort", s)
 }
 
+type ThinkingEffort string
+
+const (
+	ThinkingEffortOff     ThinkingEffort = "off"
+	ThinkingEffortMinimal ThinkingEffort = "minimal"
+	ThinkingEffortLow     ThinkingEffort = "low"
+	ThinkingEffortMedium  ThinkingEffort = "medium"
+	ThinkingEffortHigh    ThinkingEffort = "high"
+	ThinkingEffortXhigh   ThinkingEffort = "xhigh"
+	ThinkingEffortMax     ThinkingEffort = "max"
+)
+
+func (v *ThinkingEffort) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "ThinkingEffort")
+	if err != nil {
+		return err
+	}
+	switch value := ThinkingEffort(s); value {
+	case ThinkingEffortOff, ThinkingEffortMinimal, ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXhigh, ThinkingEffortMax:
+		*v = value
+		return nil
+	}
+	return unknownValue("ThinkingEffort", s)
+}
+
 // Thinking selector; `inherit` defers to a higher-level selector.
 type ThinkingLevel string
 
@@ -6534,7 +6559,7 @@ type ThinkingLevelChangedEvent struct {
 	// The user's selector when it differs from the effective level.
 	Configured *ConfiguredThinkingLevel `json:"configured,omitempty"`
 	// The level `auto` resolved to this turn, once classified.
-	Resolved *Effort `json:"resolved,omitempty"`
+	Resolved *ThinkingEffort `json:"resolved,omitempty"`
 }
 
 func (v *ThinkingLevelChangedEvent) UnmarshalJSON(data []byte) error {

@@ -83,6 +83,7 @@ import type {
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
 import { type Effort, serviceTierFamily, streamSimple } from "@oh-my-pi/pi-ai";
+import type { ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
@@ -6599,7 +6600,7 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/** The level `auto` resolved to for the current turn (undefined until classified). */
-	autoResolvedThinkingLevel(): Effort | undefined {
+	autoResolvedThinkingLevel(): ThinkingEffort | undefined {
 		return this.#models.autoResolvedThinkingLevel;
 	}
 
