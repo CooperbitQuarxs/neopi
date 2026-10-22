@@ -240,7 +240,6 @@ describe("AnnotationOverlay", () => {
 	it("moves only the visual body on Ctrl-e/y and keeps annotation text literal", () => {
 		const text = Array.from({ length: 200 }, (_, index) => `line-${String(index).padStart(3, "0")}`).join("\n");
 		const completed: (TextReviewOverlayResult | undefined)[] = [];
-		let opened = 0;
 		const overlay = new AnnotationOverlay(
 			makeTui(20),
 			darkTheme!,
@@ -248,16 +247,12 @@ describe("AnnotationOverlay", () => {
 			{ id: "source", kind: "message", text, label: "source" },
 			{
 				onComplete: result => completed.push(result),
-				onExternalEditor: () => {
-					opened++;
-				},
 			},
 		);
 		overlay.focused = true;
 		expect(render(overlay)).toContain("line-000");
 		overlay.handleInput(CTRL_E);
 		expect(render(overlay)).not.toContain("line-000");
-		expect(opened).toBe(0); // a configured editor key cannot steal normal viewport motion
 		overlay.handleInput("\x19");
 		expect(render(overlay)).toContain("line-000");
 		overlay.handleInput(CTRL_E);
@@ -628,8 +623,11 @@ describe("AnnotationOverlay", () => {
 		expect(overlay.getAnnotations()).toEqual([expect.objectContaining({ note: "external\neditor" })]);
 	});
 
-	it("opens the source editor on the global external-editor key and names that key", () => {
-		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "escape", "app.editor.external": "ctrl+g" }));
+	it.each([
+		["ctrl+e", CTRL_E],
+		["ctrl+g", "\x07"],
+	] as const)("opens the source editor on %s ahead of menu motions and names that key", (key, input) => {
+		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "escape", "app.editor.external": key }));
 		const opened: string[] = [];
 		const overlay = new AnnotationOverlay(
 			makeTui(),
@@ -645,8 +643,8 @@ describe("AnnotationOverlay", () => {
 			},
 		);
 		overlay.focused = true;
-		expect(render(overlay)).toContain(`${formatKeyHint("ctrl+g")} editor`);
-		overlay.handleInput("\x07");
+		expect(render(overlay)).toContain(`${formatKeyHint(key)} editor`);
+		overlay.handleInput(input);
 		expect(opened).toEqual(["source"]);
 		expect(overlay.reviewFilePath()).toBe("src/value.ts");
 	});

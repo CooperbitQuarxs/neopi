@@ -16,7 +16,9 @@ afterEach(async () => {
 
 it("round-trips live.model through config YAML and builds the configured session", async () => {
 	state = beginSettingsTest();
-	root = await fs.mkdtemp(path.join(process.env.HOME!, ".cache/npi-canary/live-model-test-"));
+	const cacheDir = path.join(process.env.HOME!, ".cache/npi-canary");
+	await fs.mkdir(cacheDir, { recursive: true });
+	root = await fs.mkdtemp(path.join(cacheDir, "live-model-test-"));
 	const agentDir = path.join(root, "agent");
 	const cwd = path.join(root, "project");
 	await fs.mkdir(cwd);

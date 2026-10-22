@@ -1440,11 +1440,7 @@ export class LiveIngest {
 					continue;
 				}
 				for (let repeat = 0; repeat < (captured.length ? 3 : 1); repeat++) {
-					if (
-						controller.signal.aborted ||
-						sourceEpoch !== this.#sourceEpoch ||
-						(repeat > 0 && !remaining.size)
-					)
+					if (controller.signal.aborted || sourceEpoch !== this.#sourceEpoch || (repeat > 0 && !remaining.size))
 						break;
 					if (attempts++)
 						await new Promise<void>(resolve => {

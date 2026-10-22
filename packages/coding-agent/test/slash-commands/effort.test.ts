@@ -5,6 +5,7 @@ import type { Model } from "@oh-my-pi/pi-catalog/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ModelControls, type ModelControlsHost } from "@oh-my-pi/pi-coding-agent/session/model-controls";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import {
 	BUILTIN_SLASH_COMMANDS,
@@ -46,8 +47,9 @@ function harness(options: { reasoning?: boolean; efforts?: readonly Effort[]; ce
 			agent: { setThinkingLevel: () => {}, setDisableReasoning: () => {} },
 			settings: Settings.isolated({}),
 			model: () => model,
+			modelRegistry: { getAvailable: () => [model] },
 			promptGeneration: () => 0,
-			sessionManager: { appendThinkingLevelChange: () => Promise.resolve() },
+			sessionManager: SessionManager.inMemory(),
 			clearInheritedProviderPromptCacheKey: () => {},
 			clearActiveRetryFallback: () => {},
 			emit: () => {},

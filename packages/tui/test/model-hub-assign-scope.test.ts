@@ -119,22 +119,30 @@ function startWebAssign(key: (data: string) => void): void {
 	key("h"); // return to provider scopes without changing the pending assignment
 }
 
+function hopToProvider(hub: ModelHubComponent, provider: string): void {
+	const target = `provider:${provider}`;
+	const visited = new Set<string>();
+	for (;;) {
+		const entry = hub.navigationSnapshot().entry;
+		if (entry === target) return;
+		if (visited.has(entry)) throw new Error(`Cannot reach provider scope ${provider}`);
+		visited.add(entry);
+		hub.handleInput(DOWN);
+	}
+}
+
 beforeAll(async () => {
 	await initTheme(false);
 });
 
 describe("model hub assign mode scope filtering (#12692)", () => {
 	test("a provider hop while assigning `web` never offers models the role rejects", () => {
-		const { body, key } = createHub();
+		const { hub, body, key } = createHub();
 		startWebAssign(key);
+		expect(hub.navigationSnapshot().assigning).toMatchObject({ kind: "role", role: "web" });
 
-		// Rules are above providers; scope hopping must still reapply role acceptance.
-		key(DOWN); // Roles → All models
-		key(DOWN); // All models → Effort rules
-		key(DOWN); // Effort rules → Context rules
-		key(DOWN); // Context rules → Model overrides
-		key(DOWN); // Model overrides → google
-		key(DOWN); // google → litellm
+		// Scope hopping must reapply role acceptance regardless of the rules sections above providers.
+		hopToProvider(hub, "litellm");
 
 		const rendered = body();
 		// Post-fix: litellm's chat-only model is filtered out of assign mode.
@@ -142,14 +150,10 @@ describe("model hub assign mode scope filtering (#12692)", () => {
 	});
 
 	test("hopping to an eligible provider while assigning still offers its accepted model", () => {
-		const { body, key } = createHub();
+		const { hub, body, key } = createHub();
 		startWebAssign(key);
-
-		key(DOWN); // Roles → All models
-		key(DOWN); // All models → Effort rules
-		key(DOWN); // Effort rules → Context rules
-		key(DOWN); // Context rules → Model overrides
-		key(DOWN); // Model overrides → google
+		expect(hub.navigationSnapshot().assigning).toMatchObject({ kind: "role", role: "web" });
+		hopToProvider(hub, "google");
 
 		const rendered = body();
 		expect(rendered).toContain("web-search-pro");
@@ -157,14 +161,9 @@ describe("model hub assign mode scope filtering (#12692)", () => {
 	});
 
 	test("outside assign mode the litellm provider scope still lists its model", () => {
-		const { body, key } = createHub();
-		// From the initial All-models scope hop straight to the litellm provider
-		// without entering assign mode; the accepts filter must not apply.
-		key(DOWN); // All models → Effort rules
-		key(DOWN); // Effort rules → Context rules
-		key(DOWN); // Context rules → Model overrides
-		key(DOWN); // Model overrides → google
-		key(DOWN); // google → litellm
+		const { hub, body } = createHub();
+		// Without a pending role assignment, the accepts filter must not apply.
+		hopToProvider(hub, "litellm");
 
 		const rendered = body();
 		expect(rendered).toContain("chat-only");

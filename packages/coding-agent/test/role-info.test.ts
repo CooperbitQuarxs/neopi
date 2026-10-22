@@ -16,6 +16,7 @@ import {
 	setRoleDescription,
 } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { beginSettingsTest, restoreSettingsTestState } from "./helpers/settings-test-state";
 
 function makeModel(id: string, metadata: Partial<Pick<Model, "api" | "kind" | "webSearch">> = {}): Model {
 	return buildModel({
@@ -95,7 +96,10 @@ describe("getRoleInfo", () => {
 });
 
 test("built-in descriptions and custom role metadata survive real settings initialization", async () => {
-	const root = await fs.mkdtemp(path.join(os.homedir(), ".cache/npi-canary/role-description-"));
+	const cacheDir = path.join(os.homedir(), ".cache/npi-canary");
+	await fs.mkdir(cacheDir, { recursive: true });
+	const root = await fs.mkdtemp(path.join(cacheDir, "role-description-"));
+	const state = beginSettingsTest();
 	try {
 		const settings = await Settings.init({ cwd: root, agentDir: path.join(root, "agent") });
 		for (const role of MODEL_ROLE_IDS) expect(getRoleInfo(role, settings).description?.length).toBeGreaterThan(0);
@@ -108,6 +112,7 @@ test("built-in descriptions and custom role metadata survive real settings initi
 		setRoleDescription("default", "", settings);
 		expect(getRoleInfo("default", settings).description).toBe("");
 	} finally {
+		restoreSettingsTestState(state);
 		await fs.rm(root, { recursive: true, force: true });
 	}
 });
