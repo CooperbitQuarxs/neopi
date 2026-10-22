@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Embed the full native stats dashboard in an authenticated host, including live indexing, sessions and traces, without sharing credentials with the dashboard ([#520](https://github.com/PsychedelicShayna/neopi/issues/520)).
+
 ## [18.9.0] - 2026-10-11
 
 ### Fixed
