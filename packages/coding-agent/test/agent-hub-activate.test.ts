@@ -195,10 +195,10 @@ describe("Agent hub Enter activation", () => {
 		hub.handleInput("h");
 		hub.handleInput("/");
 		for (const key of "hjkl") hub.handleInput(key);
-		expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("/hjkl");
+		expect(hub.navigationSnapshot()).toMatchObject({ agentFilter: { value: "hjkl", focused: true } });
 		hub.handleInput("\x1b");
 		expect(doneCalls()).toBe(0);
-		expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("/hjkl");
+		expect(hub.navigationSnapshot()).toMatchObject({ agentFilter: { value: "hjkl", focused: false } });
 		hub.handleInput("\x1b");
 		expect(doneCalls()).toBe(1);
 		hub.dispose();

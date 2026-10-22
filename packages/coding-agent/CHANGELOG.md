@@ -10,6 +10,18 @@
 ### Added
 
 - Hosts can launch a private stats dashboard with `npi stats --headless`, receive JSON readiness, and stop it by closing stdin without opening a browser ([#520](https://github.com/PsychedelicShayna/neopi/issues/520)).
+- Navigate the native session tree over RPC or terminal control without forking its file; receive restored drafts, images and native summary/ask outcomes with guarded branch preconditions ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
+- Inspect, add, edit and delete model overrides and custom models in `/models`, with schema-driven field editors and unknown-field preservation ([#522](https://github.com/PsychedelicShayna/neopi/issues/522)).
+
+- Convert complete user and project main settings to `config.toml` with `npi config to-toml --yes`, preserving unknown keys and explicit clears while reporting unsupported YAML values; conversion warns that menu saves still write YAML until format-aware saves arrive ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
+- Open the backing file from `/settings`, `/advisor configure`, `/agents`, and `/models` with Ctrl-G, then see saved edits without restarting ([#521](https://github.com/PsychedelicShayna/neopi/issues/521)).
+- Read complete native journal or selected-branch history in bounded RPC/control pages or with `npi sessions entries --json`, preserving tool output, compaction, reset and custom records ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
+- Set model context limits with exact, glob, or regex rules in `/models`, and see the effective maintenance window separately from catalog capacity ([#511](https://github.com/PsychedelicShayna/neopi/issues/511)).
+
+- Choose a separate `title` model for session titles and `/rename` suggestions; until set it follows `tiny`, and explicit fork-mode titling still uses the foreground model ([#515](https://github.com/PsychedelicShayna/neopi/issues/515)).
+- Configure Chronicler capture thresholds, prompt word targets, recall search limits, indexing budgets, and on-demand backfill timing in Settings > Memory > Chronicler ([#510](https://github.com/PsychedelicShayna/neopi/issues/510)).
+- Assign Chronicler recall its own `chronicler-recall` model, shown as CHRONREC; until set, it follows the summary model and effort ([#509](https://github.com/PsychedelicShayna/neopi/issues/509)).
+- Every model role is visible in `/models`, with editable descriptions on `D` and dedicated agent-creation and compaction roles; RPC clients receive the descriptions too ([#508](https://github.com/PsychedelicShayna/neopi/issues/508)).
 - RPC model lists and session snapshots now report native Fast mode support separately from the requested and active session toggles ([NeoCode #129](https://github.com/PsychedelicShayna/neocode/issues/129)).
 - Linux source builds reuse verified native addons across worktrees through a shared cache; set `NPI_NATIVE_CACHE=off` to disable it.
 - Change a running subagent's reasoning level and fast mode through RPC, `npi ctl`, or its focused Agent Hub view without interrupting its turn; selections survive restart, and agent listings show current model and effort ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
@@ -72,6 +84,10 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- CI checks no longer depend on workstation-only test paths or outdated fixtures; fork releases retain Linux, macOS and Windows smoke checks without upstream package publishers ([#536](https://github.com/PsychedelicShayna/neopi/issues/536)).
+- Ctrl-G opens the configuration file the view actually loads, ignoring unsupported TOML companions until their loaders support them ([#521](https://github.com/PsychedelicShayna/neopi/issues/521)).
+- Live subagent importance ranking now tries classifier fallbacks after a failed or empty primary response, even when authorization checks have already succeeded ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).
+- Live classifier failures now identify the model and failure reason in the warning and logs instead of silently discarding provider errors ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).
 - Per-model effort limits now offer `off` when the model supports disabling reasoning and apply allowed off selections to sessions and Auto effort ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).
 - Model settings rows now show configured compaction limits beside the effort summary, preserving token or percentage notation ([#499](https://github.com/PsychedelicShayna/neopi/issues/499)).
 - Native addon cache keys now distinguish compiler, wrapper and Cargo build/profile environment overrides.

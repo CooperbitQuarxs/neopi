@@ -1235,8 +1235,9 @@ describe("Agent hub row ordering", () => {
 			expect(open).toHaveBeenCalledWith("Worker", "entry-42");
 			expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("Agent Hub  ·  Worker");
 			hub.handleInput("\x1b");
+			const wasFollowing = hub.navigationSnapshot().activityFollow;
 			hub.handleInput(" ");
-			expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("paused");
+			expect(hub.navigationSnapshot().activityFollow).toBe(!wasFollowing);
 			hub.handleInput("1");
 			expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("Roster");
 		} finally {

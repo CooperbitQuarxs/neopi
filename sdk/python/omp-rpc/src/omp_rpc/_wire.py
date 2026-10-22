@@ -661,6 +661,7 @@ class RoleInfo:
     source: Literal["builtin", "configured"]
     patterns: tuple[str, ...]
     hidden: bool
+    description: str | None = None
     tag: str | None = None
     configured: str | None = None
     resolved: RoleResolution | None = None
@@ -1151,10 +1152,84 @@ class SessionEntries:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class JournalPage:
+    entries: tuple[JsonObject, ...]
+    session_id: str
+    session_file: str
+    leaf_id: str | None
+    total_entries: int
+    next_cursor: str | None = None
+    """Opaque cursor for the next page; absent on the last page."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class SessionTree:
     """Raw session tree roots."""
     tree: tuple[JsonObject, ...]
     leaf_id: str | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TreeAskOptionNote:
+    option: str
+    note: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TreeAskQuestionResult:
+    id: str
+    question: str
+    options: tuple[str, ...]
+    multi: bool
+    selected_options: tuple[str, ...]
+    custom_input: str | None = None
+    note: str | None = None
+    option_notes: tuple[TreeAskOptionNote, ...] | None = None
+    timed_out: bool | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TreeAskDetails:
+    question: str | None = None
+    options: tuple[str, ...] | None = None
+    multi: bool | None = None
+    selected_options: tuple[str, ...] | None = None
+    custom_input: str | None = None
+    note: str | None = None
+    option_notes: tuple[TreeAskOptionNote, ...] | None = None
+    timed_out: bool | None = None
+    results: tuple[TreeAskQuestionResult, ...] | None = None
+    chat_redirect: bool | None = None
+    questions: tuple[str, ...] | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TreeAskReanswer:
+    content: tuple[UserContent, ...]
+    details: TreeAskDetails | None = None
+    is_error: bool | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TreeAskReopen:
+    tool_call_id: str
+    questions: tuple[AskQuestion, ...]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class NavigateTreeResult:
+    session_id: str
+    leaf_id: str | None
+    outcome: Literal["navigated", "unchanged", "cancelled", "ask_reopen"]
+    cancelled: bool
+    session_file: str | None = None
+    aborted: bool | None = None
+    editor_text: str | None = None
+    editor_images: tuple[ImageContent, ...] | None = None
+    summary_entry: JsonObject | None = None
+    reopen_ask: TreeAskReopen | None = None
+    ask_reanswer_committed: bool | None = None
+    resume_token: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2156,6 +2231,11 @@ class SetModeResult:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ResumeTreeResult:
+    resumed: Literal[True] = True
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class LogoutResult:
     remaining_source: str | None = None
 
@@ -2459,6 +2539,7 @@ def parse_role_info(value: object, path: str = "RoleInfo") -> RoleInfo:
         source=required(payload, "source", cast('Decoder[Literal["builtin", "configured"]]', literal(frozenset({"builtin", "configured"}))), path),
         patterns=required(payload, "patterns", array(decode_str), path),
         hidden=required(payload, "hidden", decode_bool, path),
+        description=optional(payload, "description", decode_str, path),
         tag=optional(payload, "tag", decode_str, path),
         configured=optional(payload, "configured", decode_str, path),
         resolved=optional(payload, "resolved", parse_role_resolution, path),
@@ -3022,11 +3103,98 @@ def parse_session_entries(value: object, path: str = "SessionEntries") -> Sessio
     )
 
 
+def parse_journal_page(value: object, path: str = "JournalPage") -> JournalPage:
+    payload = expect_object(value, path)
+    return JournalPage(
+        entries=required(payload, "entries", array(decode_json_object), path),
+        session_id=required(payload, "sessionId", decode_str, path),
+        session_file=required(payload, "sessionFile", decode_str, path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        total_entries=required(payload, "totalEntries", decode_int, path),
+        next_cursor=optional(payload, "nextCursor", decode_str, path),
+    )
+
+
 def parse_session_tree(value: object, path: str = "SessionTree") -> SessionTree:
     payload = expect_object(value, path)
     return SessionTree(
         tree=required(payload, "tree", array(decode_json_object), path),
         leaf_id=required(payload, "leafId", nullable(decode_str), path),
+    )
+
+
+def parse_tree_ask_option_note(value: object, path: str = "TreeAskOptionNote") -> TreeAskOptionNote:
+    payload = expect_object(value, path)
+    return TreeAskOptionNote(
+        option=required(payload, "option", decode_str, path),
+        note=required(payload, "note", decode_str, path),
+    )
+
+
+def parse_tree_ask_question_result(value: object, path: str = "TreeAskQuestionResult") -> TreeAskQuestionResult:
+    payload = expect_object(value, path)
+    return TreeAskQuestionResult(
+        id=required(payload, "id", decode_str, path),
+        question=required(payload, "question", decode_str, path),
+        options=required(payload, "options", array(decode_str), path),
+        multi=required(payload, "multi", decode_bool, path),
+        selected_options=required(payload, "selectedOptions", array(decode_str), path),
+        custom_input=optional(payload, "customInput", decode_str, path),
+        note=optional(payload, "note", decode_str, path),
+        option_notes=optional(payload, "optionNotes", array(parse_tree_ask_option_note), path),
+        timed_out=optional(payload, "timedOut", decode_bool, path),
+    )
+
+
+def parse_tree_ask_details(value: object, path: str = "TreeAskDetails") -> TreeAskDetails:
+    payload = expect_object(value, path)
+    return TreeAskDetails(
+        question=optional(payload, "question", decode_str, path),
+        options=optional(payload, "options", array(decode_str), path),
+        multi=optional(payload, "multi", decode_bool, path),
+        selected_options=optional(payload, "selectedOptions", array(decode_str), path),
+        custom_input=optional(payload, "customInput", decode_str, path),
+        note=optional(payload, "note", decode_str, path),
+        option_notes=optional(payload, "optionNotes", array(parse_tree_ask_option_note), path),
+        timed_out=optional(payload, "timedOut", decode_bool, path),
+        results=optional(payload, "results", array(parse_tree_ask_question_result), path),
+        chat_redirect=optional(payload, "chatRedirect", decode_bool, path),
+        questions=optional(payload, "questions", array(decode_str), path),
+    )
+
+
+def parse_tree_ask_reanswer(value: object, path: str = "TreeAskReanswer") -> TreeAskReanswer:
+    payload = expect_object(value, path)
+    return TreeAskReanswer(
+        content=required(payload, "content", array(parse_user_content), path),
+        details=optional(payload, "details", parse_tree_ask_details, path),
+        is_error=optional(payload, "isError", decode_bool, path),
+    )
+
+
+def parse_tree_ask_reopen(value: object, path: str = "TreeAskReopen") -> TreeAskReopen:
+    payload = expect_object(value, path)
+    return TreeAskReopen(
+        tool_call_id=required(payload, "toolCallId", decode_str, path),
+        questions=required(payload, "questions", array(parse_ask_question), path),
+    )
+
+
+def parse_navigate_tree_result(value: object, path: str = "NavigateTreeResult") -> NavigateTreeResult:
+    payload = expect_object(value, path)
+    return NavigateTreeResult(
+        session_id=required(payload, "sessionId", decode_str, path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        outcome=required(payload, "outcome", cast('Decoder[Literal["navigated", "unchanged", "cancelled", "ask_reopen"]]', literal(frozenset({"navigated", "unchanged", "cancelled", "ask_reopen"}))), path),
+        cancelled=required(payload, "cancelled", decode_bool, path),
+        session_file=optional(payload, "sessionFile", decode_str, path),
+        aborted=optional(payload, "aborted", decode_bool, path),
+        editor_text=optional(payload, "editorText", decode_str, path),
+        editor_images=optional(payload, "editorImages", array(parse_image_content), path),
+        summary_entry=optional(payload, "summaryEntry", decode_json_object, path),
+        reopen_ask=optional(payload, "reopenAsk", parse_tree_ask_reopen, path),
+        ask_reanswer_committed=optional(payload, "askReanswerCommitted", decode_bool, path),
+        resume_token=optional(payload, "resumeToken", decode_str, path),
     )
 
 
@@ -4189,6 +4357,13 @@ def parse_set_mode_result(value: object, path: str = "SetModeResult") -> SetMode
     )
 
 
+def parse_resume_tree_result(value: object, path: str = "ResumeTreeResult") -> ResumeTreeResult:
+    payload = expect_object(value, path)
+    required(payload, "resumed", cast('Decoder[Literal[True]]', _wire_literal(True)), path)
+    return ResumeTreeResult(
+    )
+
+
 def parse_logout_result(value: object, path: str = "LogoutResult") -> LogoutResult:
     payload = expect_object(value, path)
     return LogoutResult(
@@ -4530,10 +4705,49 @@ class WireClient:
             params["since"] = since
         return parse_session_entries(self._command("get_entries", params), "get_entries")
 
+    def get_entries_page(self, *, scope: Literal["journal", "branch"] | None = None, direction: Literal["forward", "backward"] | None = None, cursor: str | None = None, limit: int | None = None) -> JournalPage:
+        """Read one canonical native journal or selected-branch page."""
+        params: dict[str, object] = {}
+        if scope is not None:
+            params["scope"] = scope
+        if direction is not None:
+            params["direction"] = direction
+        if cursor is not None:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = limit
+        return parse_journal_page(self._command("get_entries_page", params), "get_entries_page")
+
     def get_tree(self) -> SessionTree:
         """Read the raw session tree."""
         params: dict[str, object] = {}
         return parse_session_tree(self._command("get_tree", params), "get_tree")
+
+    def navigate_tree(self, target_id: str, expected_session_id: str, expected_session_file: str | None, expected_leaf_id: str | None, *, summarize: bool | None = None, custom_instructions: str | None = None, allow_ask_reopen: bool | None = None, reanswer_ask_result: Mapping[str, JsonValue] | None = None) -> NavigateTreeResult:
+        """Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken."""
+        params: dict[str, object] = {}
+        params["targetId"] = target_id
+        params["expectedSessionId"] = expected_session_id
+        params["expectedSessionFile"] = expected_session_file
+        params["expectedLeafId"] = expected_leaf_id
+        if summarize is not None:
+            params["summarize"] = summarize
+        if custom_instructions is not None:
+            params["customInstructions"] = custom_instructions
+        if allow_ask_reopen is not None:
+            params["allowAskReopen"] = allow_ask_reopen
+        if reanswer_ask_result is not None:
+            params["reanswerAskResult"] = dict(reanswer_ask_result)
+        return parse_navigate_tree_result(self._command("navigate_tree", params), "navigate_tree")
+
+    def resume_tree(self, resume_token: str, expected_session_id: str, expected_session_file: str | None, expected_leaf_id: str | None) -> ResumeTreeResult:
+        """Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript."""
+        params: dict[str, object] = {}
+        params["resumeToken"] = resume_token
+        params["expectedSessionId"] = expected_session_id
+        params["expectedSessionFile"] = expected_session_file
+        params["expectedLeafId"] = expected_leaf_id
+        return parse_resume_tree_result(self._command("resume_tree", params), "resume_tree")
 
     def set_subagent_subscription(self, level: SubagentSubscriptionLevel) -> SubagentSubscriptionLevel:
         """Select which subagent frames are forwarded."""
@@ -5169,6 +5383,7 @@ __all__ = [
     "InputUiRequest",
     "InterruptMode",
     "IrcMessageEvent",
+    "JournalPage",
     "ListMixturesResult",
     "LiveEndEvent",
     "LiveLevelsEvent",
@@ -5231,6 +5446,7 @@ __all__ = [
     "ModelCost",
     "ModelCycleResult",
     "ModelInfo",
+    "NavigateTreeResult",
     "NegotiateProtocolResult",
     "NoticeEvent",
     "NotifyType",
@@ -5253,6 +5469,7 @@ __all__ = [
     "RedactedThinkingContent",
     "RemoveQueuedMessageResult",
     "RestoredQueuedMessage",
+    "ResumeTreeResult",
     "RetryFallbackAppliedEvent",
     "RetryFallbackSucceededEvent",
     "RoleInfo",
@@ -5319,6 +5536,11 @@ __all__ = [
     "ToolLoadMode",
     "ToolResultMessage",
     "ToolStreamUpdateEvent",
+    "TreeAskDetails",
+    "TreeAskOptionNote",
+    "TreeAskQuestionResult",
+    "TreeAskReanswer",
+    "TreeAskReopen",
     "TtsrTriggeredEvent",
     "TurnEndEvent",
     "TurnStartEvent",
@@ -5412,6 +5634,7 @@ __all__ = [
     "parse_image_content",
     "parse_input_ui_request",
     "parse_irc_message_event",
+    "parse_journal_page",
     "parse_list_mixtures_result",
     "parse_live_end_event",
     "parse_live_levels_event",
@@ -5465,6 +5688,7 @@ __all__ = [
     "parse_model_cost",
     "parse_model_cycle_result",
     "parse_model_info",
+    "parse_navigate_tree_result",
     "parse_negotiate_protocol_result",
     "parse_notice_event",
     "parse_notification",
@@ -5484,6 +5708,7 @@ __all__ = [
     "parse_redacted_thinking_content",
     "parse_remove_queued_message_result",
     "parse_restored_queued_message",
+    "parse_resume_tree_result",
     "parse_retry_fallback_applied_event",
     "parse_retry_fallback_succeeded_event",
     "parse_role_info",
@@ -5537,6 +5762,11 @@ __all__ = [
     "parse_tool_execution_update_event",
     "parse_tool_result_message",
     "parse_tool_stream_update_event",
+    "parse_tree_ask_details",
+    "parse_tree_ask_option_note",
+    "parse_tree_ask_question_result",
+    "parse_tree_ask_reanswer",
+    "parse_tree_ask_reopen",
     "parse_ttsr_triggered_event",
     "parse_turn_end_event",
     "parse_turn_start_event",

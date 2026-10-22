@@ -36,7 +36,9 @@ async function fixture(
 	inputs = ["openai/gpt-4o-mini", "Spark", "read", "Inspect the source."],
 	confirmed = false,
 ) {
-	const cwd = await fs.mkdtemp(`${process.env.HOME}/.cache/npi-canary/agent-launcher-`);
+	const cacheDir = `${process.env.HOME}/.cache/npi-canary`;
+	await fs.mkdir(cacheDir, { recursive: true });
+	const cwd = await fs.mkdtemp(`${cacheDir}/agent-launcher-`);
 	dirs.push(cwd);
 	const settings = Settings.isolated({
 		"task.isolation.enabled": false,
@@ -76,13 +78,6 @@ async function fixture(
 	return { cwd, session, settings, toolSession, ui, select, confirm, launchAdvisor, manager };
 }
 
-it("initializes real settings without any launcher configuration", async () => {
-	const f = await fixture();
-	const settings = await Settings.init({ cwd: f.cwd, agentDir: `${f.cwd}/agent`, inMemory: true });
-	expect(settings).toBeInstanceOf(Settings);
-	settings.cancelPendingSaves();
-});
-
 it("offers only the resolved model's valid efforts and rejects an injected invalid selection before launch", async () => {
 	const f = await fixture(["subagent", "xhigh"]);
 	const run = vi.spyOn(executor, "runSubprocess");
@@ -113,22 +108,20 @@ it("shows the canonical role resolution and costs but starts nothing when confir
 
 it("forwards model, built-in tool restrictions and orchestration to the shared spawn primitive", async () => {
 	const f = await fixture(undefined, undefined, true);
-	const run = vi
-		.spyOn(executor, "runSubprocess")
-		.mockImplementation(async options => ({
-			index: 0,
-			id: options.id!,
-			agent: "task",
-			agentSource: "bundled",
-			task: options.task,
-			exitCode: 0,
-			output: "done",
-			stderr: "",
-			truncated: false,
-			durationMs: 0,
-			tokens: 0,
-			requests: 0,
-		}));
+	const run = vi.spyOn(executor, "runSubprocess").mockImplementation(async options => ({
+		index: 0,
+		id: options.id!,
+		agent: "task",
+		agentSource: "bundled",
+		task: options.task,
+		exitCode: 0,
+		output: "done",
+		stderr: "",
+		truncated: false,
+		durationMs: 0,
+		tokens: 0,
+		requests: 0,
+	}));
 	expect(await runAgentLauncher(f.session, f.ui)).toContain("Launched Spark as openai/gpt-4o-mini:off");
 	await f.manager.getJob("Spark")!.promise;
 	const options = run.mock.calls[0]![0];

@@ -47,6 +47,8 @@ Behavior notes:
 | `session_lease` | A process holds an exclusive lifetime lease on every session file it writes, so two processes never append to one transcript. `--session <file>` onto a file another process holds fails at startup with a `startup_error` stderr line; `switch_session` and `branch` onto one fail with `code: "session_in_use"` (see [Session lease](#session-lease)). |
 | `plan_proposal_cancel` | A pending plan proposal that resolves without a host answer is announced with a `plan_proposal_cancel` frame, and a later `plan_proposal_response` for it fails with `code: "proposal_cancelled"`. See [`plan_proposal_cancel`](#plan_proposal_cancel). |
 | `prompt_entry_ids` | `prompt`, `steer`, `follow_up` and `abort_and_prompt` responses carry `data.userEntryId`, the id of the session entry their message is written as, and every `get_messages_page` message carries the `entryId` of its entry. See [Entry ids](#entry-ids). |
+| `session_tree_navigation` | Guarded native same-file `navigate_tree`, restored drafts and images, and explicit `resume_tree` acknowledgement for ask re-answers. See [Native tree navigation](#native-tree-navigation). |
+| `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
 
 ### Session lease
 
@@ -188,7 +190,10 @@ Important edge behavior from runtime:
 - `{ id?, type: "set_ask_dialog", enabled: boolean }`
 - `{ id?, type: "get_available_commands" }`
 - `{ id?, type: "get_entries", since?: string }`
+- `{ id?, type: "get_entries_page", scope?: "journal" | "branch", direction?: "forward" | "backward", cursor?: string, limit?: number }`
 - `{ id?, type: "get_tree" }`
+- `{ id?, type: "navigate_tree", targetId: string, expectedSessionId: string, expectedSessionFile: string | null, expectedLeafId: string | null, summarize?: boolean, customInstructions?: string, allowAskReopen?: boolean, reanswerAskResult?: TreeAskReanswer }`
+- `{ id?, type: "resume_tree", resumeToken: string, expectedSessionId: string, expectedSessionFile: string | null, expectedLeafId: string | null }`
 - `{ id?, type: "set_todos", phases: TodoPhase[] }`
 - `{ id?, type: "set_host_tools", tools: RpcHostToolDefinition[] }`
 - `{ id?, type: "set_host_uri_schemes", schemes: RpcHostUriSchemeDefinition[] }`
@@ -677,8 +682,8 @@ role:
 }
 ```
 
-- `roles` follows the carousel order: non-hidden built-ins in their fixed
-  order, then roles introduced by `cycleOrder`, `modelRoles` and `modelTags`.
+- `roles` includes every built-in in its fixed order, then roles introduced
+  by `cycleOrder`, `modelRoles` and `modelTags`, including roles marked hidden.
 - `section` is `"chat"`, or `"kind"` for the non-chat model-kind roles
   (`image`, `web`, `speech`, `dictation`, `judge`); hosts that only pick chat
   models filter on it.
@@ -686,6 +691,10 @@ role:
   that exist only through configuration.
 - `namespace` is `"deck"` for every `deck-*` role, built-in or configured, and absent for other roles. The built-in `deck-inbox` chat role defaults to `openai-codex/gpt-6-luna`; consumers can register further `deck-*` roles through the ordinary [role settings](./models.md#neodeck-roles).
 - `tag` is absent for custom roles, which have no built-in tag.
+- `description` is the effective `modelTags.<id>.description` override or the
+  built-in default. Custom roles have no default description. An empty string
+  deliberately clears the description. In `/models`, `D` edits this metadata
+  and the selected role's description appears above its rows.
 - `configured` is the raw `modelRoles` selector (lists joined with `", "`),
   absent when the role is not configured.
 - `patterns` is the effective pattern chain for `@<id>`: nested role aliases
@@ -1203,6 +1212,114 @@ Command discovery is intentionally an OMP dialect: Pi's `get_commands` (a
 not served because OMP's richer catalog (builtins/custom/MCP/file commands,
 broader `source` enum, no Pi `sourceInfo`) is not wire-compatible with it.
 
+### Native tree navigation
+
+Gate these commands on `session_tree_navigation`. `navigate_tree` runs the same
+native operation as `/tree`, preserving the session file and alternate branches.
+It does not call `branch`, which creates another file.
+
+Every request must supply the native `expectedSessionId`, `expectedSessionFile`
+and `expectedLeafId` it observed. Use `null` for an unsaved session file or a
+root leaf. NeoPi compares the normalized file path as well as the ID, since a
+copied journal can retain its original IDs. It checks these values under native
+mutation admission and again after asynchronous preparation. A busy session or
+transition returns `code: "session_busy"` without interrupting another turn.
+A changed session or leaf returns `session_changed` or `leaf_changed`.
+
+Success returns:
+
+```ts
+{
+  sessionId: string;
+  sessionFile?: string;
+  leafId: string | null;
+  outcome: "navigated" | "unchanged" | "cancelled" | "ask_reopen";
+  cancelled: boolean;
+  aborted?: boolean;
+  editorText?: string;
+  editorImages?: ImageContent[];
+  summaryEntry?: BranchSummaryEntry;
+  reopenAsk?: { toolCallId: string; questions: AskQuestion[] };
+  askReanswerCommitted?: boolean;
+  resumeToken?: string;
+}
+```
+
+Selecting a user request moves to its parent and returns the native draft and
+its ordered images. Selecting another entry normally lands on it. An already
+selected non-user leaf reports `unchanged`. Native extension cancellation
+reports `cancelled`. `summarize` and `customInstructions` use NeoPi's summarizer,
+and a cancelled summary returns `cancelled: true, aborted: true` without moving
+the leaf. The ordinary `abort` command can cancel pending remote navigation,
+including its summary. Navigation starts in input order but settles in the
+background so cancellation remains reachable. No internal `sessionContext` is
+sent on the wire.
+
+For native ask re-answering, send `allowAskReopen: true`. A probe returns
+`outcome: "ask_reopen"` with `reopenAsk`, without moving the leaf or claiming
+navigation happened. Display those questions and submit the fresh answer in
+another `navigate_tree` request to the same target with current preconditions.
+`reanswerAskResult` contains native `content` text/image blocks, optional
+`details: AskToolDetails` and optional `isError`. The original answer remains
+on its branch; NeoPi appends a sibling answer.
+
+A committed re-answer returns `askReanswerCommitted: true` and an opaque
+`resumeToken`, but does not start the agent. First consume this result and
+rebuild the transcript. Then send `resume_tree` with that token and the
+returned session identity and leaf. It calls native `resumeAfterAskReanswer`
+and returns `{ resumed: true }`. Tokens are in-memory, single-use and bound to
+the committed native session file, ID, leaf and prompt generation. A replacement
+or intervening navigation invalidates them. Invalid or consumed tokens return
+`invalid_resume`; stale identity and leaf preconditions retain their named
+errors. Invalid targets return `invalid_target`, and malformed request fields
+return `invalid_request`.
+
+The TypeScript SDK exposes `navigateTree(options)` and `resumeTree(options)`.
+Generated Python, Rust and Go clients carry the same contracts. Control clients
+send the same RPC commands to the existing terminal owner through `npi ctl pipe`;
+no second writer or session file is created.
+
+### Native journal pages
+
+`get_entries_page` returns `{ entries, sessionId, sessionFile, leafId, totalEntries, nextCursor? }`.
+`sessionFile` is the canonical absolute path. `entries` contains native `SessionEntry`
+records, including tool output, custom records, compaction, branch summaries and reset
+boundaries. Nothing is folded into model context or reduced to visible message text.
+The header is not an entry. `totalEntries` counts entries in the selected scope.
+
+The defaults are `scope: "journal"`, `direction: "forward"` and `limit: 100`.
+Limits range from 1 to 256. `branch` selects the current native leaf's ancestry.
+`journal` includes alternate branches in append order. A backward page starts at the
+newest end, but entries within every page remain chronological. Pass `nextCursor`
+with the same scope and direction to continue, and stop when it is absent.
+
+A journal cursor pins the initial prefix and snapshot leaf. Appends and pointer-only
+leaf changes do not extend or invalidate that walk. A branch cursor pins the active
+leaf and fails with `code: "leaf_changed"` if it changes, including after an append.
+Restart branch paging instead of combining pages from different leaves.
+Session/file changes and a missing or replaced prefix boundary fail with
+`stale_cursor`. Invalid cursors or changed scope/direction fail with `invalid_cursor`;
+invalid limits/options fail with `invalid_request`.
+An owner applying or rolling back a session/transcript transition returns
+`session_busy` rather than mixing identities. Ordinary streaming does not block
+journal reads.
+
+Pages use the same 768 KiB soft budget as message paging. Entries are never split
+or truncated. An oversized entry travels alone with negotiated protocol v2 chunking,
+or returns the existing transport-limit failure when it cannot fit. Legacy history
+without persisted IDs fails with `legacy_history_identity_required`, including a
+running owner whose pre-tree migration has not yet persisted. Reading does not
+trigger migration or persistence. An owner without a journal file returns
+`session_unavailable`.
+
+For a stopped session, `npi sessions entries --json --scope branch --direction backward
+--limit 100 /absolute/session.jsonl` uses the same page format and cursor options.
+Its leaf is the last persisted entry, not an unpersisted pointer-only move in a
+running owner. Live owners must be read over RPC/control. CLI failures emit
+`{ "error": { "code": "...", "message": "..." } }` on stdout even with a nonzero exit.
+Unreadable or malformed journals return `session_unavailable`, not partial history.
+Existing `get_entries`, `get_tree`, `get_messages` and `get_messages_page` keep their
+previous semantics.
 ### Pi-compatible history/tree commands with OMP-native entry payloads
 
 The commands and reconciliation semantics below are Pi-compatible, but the

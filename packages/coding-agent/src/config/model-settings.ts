@@ -9,6 +9,7 @@ import type { cfgDefaultThinkingLevel } from "../session/settings";
 /** Display metadata for one model tag. */
 export interface ModelTagDef {
 	name: string;
+	description?: string;
 	color?: string;
 	/** If true, the role is functional but not shown in the model selector UI. */
 	hidden?: boolean;
