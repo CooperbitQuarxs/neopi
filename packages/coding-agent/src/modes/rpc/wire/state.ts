@@ -40,6 +40,10 @@ export const stateDefs = {
 		hidden: "boolean",
 	},
 	RolesResult: { roles: "RoleInfo[]", "activeRole?": "string" },
+	ModelEffortSelection: { mode: "'fixed' | 'auto' | 'inherit'", "level?": "ThinkingLevel", "allowed?": "string[]", "selector?": "string" },
+	ModelEffortRule: { selector: "string", allowed: "string[]" },
+	ModelRoleConfigurationValue: { selector: "string | null", effort: "ModelEffortSelection | null" },
+	ModelEffortRuleScopes: { global: "ModelEffortRule[] | null", project: "ModelEffortRule[] | null" },
 	ProviderUsageReport: {
 		provider: "string",
 		fetchedAt: "number",

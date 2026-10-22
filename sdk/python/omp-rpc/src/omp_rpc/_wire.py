@@ -674,6 +674,32 @@ class RolesResult:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ModelEffortSelection:
+    mode: Literal["fixed", "auto", "inherit"]
+    level: ThinkingLevel | None = None
+    allowed: tuple[str, ...] | None = None
+    selector: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelEffortRule:
+    selector: str
+    allowed: tuple[str, ...]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelRoleConfigurationValue:
+    selector: str | None
+    effort: ModelEffortSelection | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelEffortRuleScopes:
+    global_: tuple[ModelEffortRule, ...] | None
+    project: tuple[ModelEffortRule, ...] | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class ProviderUsageReport:
     provider: str
     fetched_at: float
@@ -1705,6 +1731,11 @@ class ModelChangedEvent:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ModelsConfigurationChangedEvent:
+    type: Literal["models_configuration_changed"] = "models_configuration_changed"
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class ConfigWarningsChangedEvent:
     type: Literal["config_warnings_changed"] = "config_warnings_changed"
 
@@ -2032,6 +2063,8 @@ class InputUiRequest:
     title: str
     placeholder: str | None = None
     timeout: int | None = None
+    secret: bool | None = None
+    login_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2070,6 +2103,7 @@ class NotifyUiRequest:
     method: Literal["notify"] = "notify"
     message: str
     notify_type: NotifyType | None = None
+    login_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2116,6 +2150,7 @@ class OpenUrlUiRequest:
     launch_url: str | None = None
     """Short loopback redirect to `url`; the truncation-safe copy target."""
     instructions: str | None = None
+    login_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2130,6 +2165,8 @@ class ExtensionUiRequest(ExtensionUiRequestMixin):
     timeout: int | None = None
     message: str | None = None
     placeholder: str | None = None
+    secret: bool | None = None
+    login_id: str | None = None
     prefill: str | None = None
     prompt_style: bool | None = None
     questions: tuple[AskQuestion, ...] | None = None
@@ -2214,6 +2251,19 @@ class SetRoleResult:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class GetModelsConfigurationResult:
+    providers: tuple[JsonObject, ...]
+    models: tuple[JsonObject, ...]
+    roles: tuple[JsonObject, ...]
+    role_storage: Literal["global", "project"]
+    effort_mode: Literal["replacement", "legacy"]
+    effort_rules: tuple[ModelEffortRule, ...]
+    effort_rules_provenance: str
+    effort_rule_scopes: ModelEffortRuleScopes
+    effort_choices: tuple[str, ...]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class GetUsageResult:
     generated_at: int
     reports: tuple[ProviderUsageReport, ...]
@@ -2270,7 +2320,7 @@ UsageLimitState: TypeAlias = UsageLimitLowPriority | UsageLimitWrapUp
 MixtureAnswer: TypeAlias = MixtureChoiceAnswer | MixtureNoulAnswer | MixtureScoreAnswer
 
 
-RpcAgentEvent: TypeAlias = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
+RpcAgentEvent: TypeAlias = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
 """A session event, discriminated by `type`; `set_event_filter` selects which are sent."""
 
 
@@ -2551,6 +2601,40 @@ def parse_roles_result(value: object, path: str = "RolesResult") -> RolesResult:
     return RolesResult(
         roles=required(payload, "roles", array(parse_role_info), path),
         active_role=optional(payload, "activeRole", decode_str, path),
+    )
+
+
+def parse_model_effort_selection(value: object, path: str = "ModelEffortSelection") -> ModelEffortSelection:
+    payload = expect_object(value, path)
+    return ModelEffortSelection(
+        mode=required(payload, "mode", cast('Decoder[Literal["fixed", "auto", "inherit"]]', literal(frozenset({"fixed", "auto", "inherit"}))), path),
+        level=optional(payload, "level", _decode_thinking_level, path),
+        allowed=optional(payload, "allowed", array(decode_str), path),
+        selector=optional(payload, "selector", decode_str, path),
+    )
+
+
+def parse_model_effort_rule(value: object, path: str = "ModelEffortRule") -> ModelEffortRule:
+    payload = expect_object(value, path)
+    return ModelEffortRule(
+        selector=required(payload, "selector", decode_str, path),
+        allowed=required(payload, "allowed", array(decode_str), path),
+    )
+
+
+def parse_model_role_configuration_value(value: object, path: str = "ModelRoleConfigurationValue") -> ModelRoleConfigurationValue:
+    payload = expect_object(value, path)
+    return ModelRoleConfigurationValue(
+        selector=required(payload, "selector", nullable(decode_str), path),
+        effort=required(payload, "effort", nullable(parse_model_effort_selection), path),
+    )
+
+
+def parse_model_effort_rule_scopes(value: object, path: str = "ModelEffortRuleScopes") -> ModelEffortRuleScopes:
+    payload = expect_object(value, path)
+    return ModelEffortRuleScopes(
+        global_=required(payload, "global", nullable(array(parse_model_effort_rule)), path),
+        project=required(payload, "project", nullable(array(parse_model_effort_rule)), path),
     )
 
 
@@ -3744,6 +3828,13 @@ def parse_model_changed_event(value: object, path: str = "ModelChangedEvent") ->
     )
 
 
+def parse_models_configuration_changed_event(value: object, path: str = "ModelsConfigurationChangedEvent") -> ModelsConfigurationChangedEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["models_configuration_changed"]]', literal(frozenset({"models_configuration_changed"}))), path)
+    return ModelsConfigurationChangedEvent(
+    )
+
+
 def parse_config_warnings_changed_event(value: object, path: str = "ConfigWarningsChangedEvent") -> ConfigWarningsChangedEvent:
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["config_warnings_changed"]]', literal(frozenset({"config_warnings_changed"}))), path)
@@ -4118,6 +4209,8 @@ def parse_input_ui_request(value: object, path: str = "InputUiRequest") -> Input
         title=required(payload, "title", decode_str, path),
         placeholder=optional(payload, "placeholder", decode_str, path),
         timeout=optional(payload, "timeout", decode_int, path),
+        secret=optional(payload, "secret", decode_bool, path),
+        login_id=optional(payload, "loginId", decode_str, path),
     )
 
 
@@ -4162,6 +4255,7 @@ def parse_notify_ui_request(value: object, path: str = "NotifyUiRequest") -> Not
         id=required(payload, "id", decode_str, path),
         message=required(payload, "message", decode_str, path),
         notify_type=optional(payload, "notifyType", _decode_notify_type, path),
+        login_id=optional(payload, "loginId", decode_str, path),
     )
 
 
@@ -4217,6 +4311,7 @@ def parse_open_url_ui_request(value: object, path: str = "OpenUrlUiRequest") -> 
         url=required(payload, "url", decode_str, path),
         launch_url=optional(payload, "launchUrl", decode_str, path),
         instructions=optional(payload, "instructions", decode_str, path),
+        login_id=optional(payload, "loginId", decode_str, path),
     )
 
 
@@ -4232,6 +4327,8 @@ def parse_extension_ui_request(value: object, path: str = "ExtensionUiRequest") 
         timeout=optional(payload, "timeout", decode_int, path),
         message=optional(payload, "message", decode_str, path),
         placeholder=optional(payload, "placeholder", decode_str, path),
+        secret=optional(payload, "secret", decode_bool, path),
+        login_id=optional(payload, "loginId", decode_str, path),
         prefill=optional(payload, "prefill", decode_str, path),
         prompt_style=optional(payload, "promptStyle", decode_bool, path),
         questions=optional(payload, "questions", array(parse_ask_question), path),
@@ -4331,6 +4428,21 @@ def parse_set_role_result(value: object, path: str = "SetRoleResult") -> SetRole
         role=required(payload, "role", decode_str, path),
         model=required(payload, "model", parse_model_info, path),
         thinking_level=optional(payload, "thinkingLevel", _decode_thinking_level, path),
+    )
+
+
+def parse_get_models_configuration_result(value: object, path: str = "GetModelsConfigurationResult") -> GetModelsConfigurationResult:
+    payload = expect_object(value, path)
+    return GetModelsConfigurationResult(
+        providers=required(payload, "providers", array(decode_json_object), path),
+        models=required(payload, "models", array(decode_json_object), path),
+        roles=required(payload, "roles", array(decode_json_object), path),
+        role_storage=required(payload, "roleStorage", cast('Decoder[Literal["global", "project"]]', literal(frozenset({"global", "project"}))), path),
+        effort_mode=required(payload, "effortMode", cast('Decoder[Literal["replacement", "legacy"]]', literal(frozenset({"replacement", "legacy"}))), path),
+        effort_rules=required(payload, "effortRules", array(parse_model_effort_rule), path),
+        effort_rules_provenance=required(payload, "effortRulesProvenance", decode_str, path),
+        effort_rule_scopes=required(payload, "effortRuleScopes", parse_model_effort_rule_scopes, path),
+        effort_choices=required(payload, "effortChoices", array(decode_str), path),
     )
 
 
@@ -4454,6 +4566,7 @@ _RPC_AGENT_EVENT_CASES: Final[dict[str, Decoder[RpcAgentEvent]]] = {
         "retry_fallback_applied": parse_retry_fallback_applied_event,
         "retry_fallback_succeeded": parse_retry_fallback_succeeded_event,
         "model_changed": parse_model_changed_event,
+        "models_configuration_changed": parse_models_configuration_changed_event,
         "config_warnings_changed": parse_config_warnings_changed_event,
         "advisor_cost_changed": parse_advisor_cost_changed_event,
         "advisor_yielded": parse_advisor_yielded_event,
@@ -4517,6 +4630,7 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "retry_fallback_applied": parse_rpc_agent_event,
         "retry_fallback_succeeded": parse_rpc_agent_event,
         "model_changed": parse_rpc_agent_event,
+        "models_configuration_changed": parse_rpc_agent_event,
         "config_warnings_changed": parse_rpc_agent_event,
         "advisor_cost_changed": parse_rpc_agent_event,
         "advisor_yielded": parse_rpc_agent_event,
@@ -4631,6 +4745,52 @@ class WireClient:
         params: dict[str, object] = {}
         params["role"] = role
         return parse_set_role_result(self._command("set_role", params), "set_role")
+
+    def get_models_configuration(self) -> GetModelsConfigurationResult:
+        """Read the native provider catalog, scoped model roles, and effort rules."""
+        params: dict[str, object] = {}
+        return parse_get_models_configuration_result(self._command("get_models_configuration", params), "get_models_configuration")
+
+    def set_model_role_configuration(self, role: str, scope: Literal["global", "project"], expected: Mapping[str, JsonValue], *, selector: str | None = None, effort: Mapping[str, JsonValue] | None = None) -> None:
+        """Save or clear one scoped role selector and effort atomically, rejecting a stale expected value."""
+        params: dict[str, object] = {}
+        params["role"] = role
+        params["scope"] = scope
+        params["expected"] = dict(expected)
+        if selector is not None:
+            params["selector"] = selector
+        if effort is not None:
+            params["effort"] = dict(effort)
+        self._command("set_model_role_configuration", params)
+
+    def set_model_role_storage(self, value: Literal["global", "project"], expected: Literal["global", "project"]) -> None:
+        """Choose native global or project role storage, rejecting a stale preference."""
+        params: dict[str, object] = {}
+        params["value"] = value
+        params["expected"] = expected
+        self._command("set_model_role_storage", params)
+
+    def set_effort_rules(self, scope: Literal["global", "project"], expected: Sequence[Mapping[str, JsonValue]] | None, *, rules: Sequence[Mapping[str, JsonValue]] | None = None) -> None:
+        """Save or clear native implicit effort rules in one scope, rejecting a stale expected value."""
+        params: dict[str, object] = {}
+        params["scope"] = scope
+        params["expected"] = list(expected) if expected is not None else None
+        if rules is not None:
+            params["rules"] = list(rules)
+        self._command("set_effort_rules", params)
+
+    def set_provider_api_key(self, provider_id: str, api_key: str) -> None:
+        """Upsert a key in the native credential store without replacing other accounts."""
+        params: dict[str, object] = {}
+        params["providerId"] = provider_id
+        params["apiKey"] = api_key
+        self._command("set_provider_api_key", params)
+
+    def cancel_login(self, login_id: str) -> None:
+        """Cancel this connection's active login request."""
+        params: dict[str, object] = {}
+        params["loginId"] = login_id
+        self._command("cancel_login", params)
 
     def get_usage(self, *, provider: str | None = None, refresh: bool | None = None, redact: bool | None = None) -> GetUsageResult:
         """Read provider usage reports."""
@@ -5239,6 +5399,10 @@ class WireClient:
         """Subscribe to `model_changed` frames."""
         return self._listen("model_changed", listener)
 
+    def on_models_configuration_changed(self, listener: Callable[[ModelsConfigurationChangedEvent], None]) -> Callable[[], None]:
+        """Subscribe to `models_configuration_changed` frames."""
+        return self._listen("models_configuration_changed", listener)
+
     def on_config_warnings_changed(self, listener: Callable[[ConfigWarningsChangedEvent], None]) -> Callable[[], None]:
         """Subscribe to `config_warnings_changed` frames."""
         return self._listen("config_warnings_changed", listener)
@@ -5368,6 +5532,7 @@ __all__ = [
     "FileMentionItem",
     "FileMentionMessage",
     "FollowUpResult",
+    "GetModelsConfigurationResult",
     "GetUsageResult",
     "Goal",
     "GoalModeState",
@@ -5445,7 +5610,12 @@ __all__ = [
     "ModelChangedEvent",
     "ModelCost",
     "ModelCycleResult",
+    "ModelEffortRule",
+    "ModelEffortRuleScopes",
+    "ModelEffortSelection",
     "ModelInfo",
+    "ModelRoleConfigurationValue",
+    "ModelsConfigurationChangedEvent",
     "NavigateTreeResult",
     "NegotiateProtocolResult",
     "NoticeEvent",
@@ -5622,6 +5792,7 @@ __all__ = [
     "parse_file_mention_item",
     "parse_file_mention_message",
     "parse_follow_up_result",
+    "parse_get_models_configuration_result",
     "parse_get_usage_result",
     "parse_goal",
     "parse_goal_mode_state",
@@ -5687,7 +5858,12 @@ __all__ = [
     "parse_model_changed_event",
     "parse_model_cost",
     "parse_model_cycle_result",
+    "parse_model_effort_rule",
+    "parse_model_effort_rule_scopes",
+    "parse_model_effort_selection",
     "parse_model_info",
+    "parse_model_role_configuration_value",
+    "parse_models_configuration_changed_event",
     "parse_navigate_tree_result",
     "parse_negotiate_protocol_result",
     "parse_notice_event",

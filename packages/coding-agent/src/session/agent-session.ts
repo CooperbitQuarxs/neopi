@@ -551,6 +551,7 @@ import { cfgInterruptMode } from "../modes/settings";
 import { cfgFollowUpMode } from "../modes/settings";
 import { cfgSteeringMode } from "../modes/settings";
 import { cfgDisabledProviders, cfgModelRoles } from "../config/model-settings";
+import { cfgEffortRules, cfgRoleEffortSelections } from "../config/effort-policy";
 import { cfgEvalToolsEnabled } from "../eval/settings";
 import { cfgExtensions, type SkillsSettings } from "../extensibility/settings";
 import {
@@ -2713,6 +2714,10 @@ export class AgentSession implements SettingsScope {
 		// Re-evaluate append-only context mode when the setting changes at runtime.
 		cfgProviderAppendOnlyContext.listen(this, () => this.#syncAppendOnlyContext(this.model));
 		cfgModelRoles.listen(this, () => this.#advisors.reconcileModelRoles());
+		this.addDisposer(this.settings.onPersistedLayersChange(() => this.#emit({ type: "models_configuration_changed" })));
+		for (const setting of [cfgModelRoles, cfgRoleEffortSelections, cfgEffortRules]) {
+			setting.listen(this, () => this.#emit({ type: "models_configuration_changed" }));
+		}
 		// Re-derive the active model's effective context window when the
 		// extended-context setting flips at runtime, or a per-model compaction
 		// point moves past (or back inside) a standard window or is switched on/off: the registry

@@ -9,6 +9,7 @@
 
 ### Added
 
+- Manage native model roles and effort rules from RPC clients with scoped conflict detection, provider catalog discovery and cancellable account login ([#507](https://github.com/PsychedelicShayna/neopi/issues/507)).
 - Hosts can launch a private stats dashboard with `npi stats --headless`, receive JSON readiness, and stop it by closing stdin without opening a browser ([#520](https://github.com/PsychedelicShayna/neopi/issues/520)).
 - Navigate the native session tree over RPC or terminal control without forking its file; receive restored drafts, images and native summary/ask outcomes with guarded branch preconditions ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
 - Inspect, add, edit and delete model overrides and custom models in `/models`, with schema-driven field editors and unknown-field preservation ([#522](https://github.com/PsychedelicShayna/neopi/issues/522)).

@@ -40,6 +40,8 @@ Behavior notes:
 | --- | --- |
 | `get_usage` | The `get_usage` command returns account-level provider usage reports. See [Session](#session). |
 | `get_roles` | `get_roles` / `set_role` commands and `get_state.activeRole` ([payloads](#get_roles-and-set_role-payloads)) |
+| `models_configuration` | Native provider/model catalog and scoped role/effort configuration, with expected-value write conflicts. |
+| `cancellable_login` | Login prompts can request secret input; `cancel_login` cancels only a login owned by the same connection. |
 | `set_chat_mode` | Live chat-mode switching: the `set_chat_mode` command, `get_state.chatMode`, the `chat_mode_changed` event, and the `/chat` builtin in `get_available_commands`. |
 | `tool_approval_request` | `set_approval_handler` and the typed `tool_approval_request` / `tool_approval_response` / `tool_approval_cancel` frames; see [Tool Approval Sub-Protocol](#tool-approval-sub-protocol) |
 | `set_mode` | `set_mode` command, `get_state` `mode`/`planMode`, `mode_changed` event, and the `plan_proposal_request`/`plan_proposal_response` round trip. See [Plan Mode Sub-Protocol](#plan-mode-sub-protocol). |
@@ -49,6 +51,19 @@ Behavior notes:
 | `prompt_entry_ids` | `prompt`, `steer`, `follow_up` and `abort_and_prompt` responses carry `data.userEntryId`, the id of the session entry their message is written as, and every `get_messages_page` message carries the `entryId` of its entry. See [Entry ids](#entry-ids). |
 | `session_tree_navigation` | Guarded native same-file `navigate_tree`, restored drafts and images, and explicit `resume_tree` acknowledgement for ask re-answers. See [Native tree navigation](#native-tree-navigation). |
 | `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
+
+### Native models configuration
+
+`get_models_configuration` returns safe native model facts, inference providers and auth sources, effective role resolutions, persisted `global` and `project` selector/effort pairs, and effective/scoped effort rules. `contextWindow` remains a model capability; `effectiveContextWindow` comes from the native maintenance-budget resolver, including session/role overrides, model limits and context rules. Model secrets, transport headers and raw settings are not included. Provider identity and login methods come from the native registry rather than a host inventory.
+
+`set_model_role_configuration` takes `role`, `scope`, optional single `selector`, optional native `effort`, and `expected`, the previous scoped `{selector, effort}` pair with unset fields represented as `null`. Omitting the selector clears that scope. It uses the model hub's Settings transaction; project writes are rejected when native role storage is global. `set_effort_rules` takes `scope`, optional ordered `rules`, and the prior scoped list as `expected`, or `null` for an unset layer. Omitting `rules` clears the layer. Both await persistence and reject stale snapshots with `configuration_conflict`. Patterns, `re:` expressions and effort choices, including `off`, retain native semantics. These commands do not edit fallback chains or model facts.
+
+`set_model_role_storage` takes `value` and the previous `expected` preference, each `global` or `project`. It uses the native setting owner and persistence receipt without deleting either scope's saved roles. Configuration writes consume the applied/conflict decision made under the native YAML lock; matching a value after saving is not proof that a stale transaction won.
+
+Model-role and effort changes emit `models_configuration_changed`, including adopted raw scope changes hidden by a higher layer and native settings-file notifications from another client. Equal disk reloads do not emit. Hosts should reread configuration instead of resolving patterns themselves. Role definitions change configuration, not another session's explicit current model selection.
+
+`set_provider_api_key` upserts a key through the native credential pool without replacing other accounts. `get_logout_accounts` and `logout` retain account-specific removal. `login` requires a unique request ID and runs without blocking later commands. Its `extension_ui_request` frames include `loginId`; input frames may set `secret: true`. Answer them through `extension_ui_response`. `cancel_login` takes that login request ID, aborts the native flow and cancels its outstanding input. Disconnect also aborts the flow. A cancelled login never reports a saved credential.
+
 
 ### Session lease
 
