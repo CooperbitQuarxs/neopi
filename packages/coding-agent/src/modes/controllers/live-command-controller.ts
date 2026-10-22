@@ -21,6 +21,7 @@ import { chipLabel, chipLabelKind, COMPOSER_TOKEN_REGEX } from "@oh-my-pi/pi-tui
 import type { InteractiveModeContext } from "../types";
 import { createAssistantMessageComponent } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 import { createLivePersonaFeature } from "../../live/personas";
+import type { RpcLiveStartOptions } from "../rpc/rpc-live";
 
 import {
 	cfgLiveBlockDelegateKeyword,
@@ -135,6 +136,23 @@ export class LiveCommandController {
 		await this.#session?.toggleMute();
 	}
 
+	/** Start through RPC without toggling an already active TUI call off. */
+	async start(options: RpcLiveStartOptions = {}): Promise<{ voice: string }> {
+		if (this.active) throw new Error("A live session is already active");
+		const voice = options.voice?.trim() || cfgLiveVoice.get(this.#ctx.settings);
+		const error = await this.#start(voice);
+		if (error) throw error;
+		return { voice };
+	}
+
+	/** Set or toggle the same microphone controlled by the TUI mute action. */
+	setMuted(muted?: boolean): { muted: boolean } {
+		const session = this.#session;
+		if (!session) throw new Error("No live session is active");
+		if (muted === undefined || muted !== session.muted) session.toggleMute();
+		return { muted: session.muted };
+	}
+
 	/** Composer edits count as operator activity: voice-triggering context waits until they settle. */
 	noteComposerActivity(): void {
 		if (this.#editing) return;
@@ -237,7 +255,7 @@ export class LiveCommandController {
 		}
 	}
 
-	async #start(): Promise<void> {
+	async #start(voice: string = cfgLiveVoice.get(this.#ctx.settings)): Promise<Error | undefined> {
 		this.#model = cfgLiveModel.get(this.#ctx.settings);
 		this.#assistantTranscriptTurn = 0;
 		this.#assistantTranscriptStartedAt = 0;
@@ -311,7 +329,7 @@ export class LiveCommandController {
 					finalAnswers: settings.relayFinalAnswers,
 				};
 			},
-			voice: cfgLiveVoice.get(this.#ctx.settings),
+			voice,
 			model: this.#model,
 			blockDelegateKeyword: cfgLiveBlockDelegateKeyword.get(this.#ctx.settings),
 			callbacks: {
@@ -399,16 +417,18 @@ export class LiveCommandController {
 
 		try {
 			await settingsSource.refresh();
-			if (this.#session !== session) return;
+			if (this.#session !== session) return new Error("Live session stopped during startup");
 			await this.#maybeNoticeProtocolLines(session);
-			if (this.#session !== session) return;
+			if (this.#session !== session) return new Error("Live session stopped during startup");
 			await session.start();
 			if (this.#session === session) ingest.attach();
+			else return new Error("Live session stopped during startup");
 		} catch (cause) {
 			if (this.#session === session) {
 				await session.stop();
 				this.#finish(session, errorFrom(cause));
 			}
+			return errorFrom(cause);
 		}
 	}
 

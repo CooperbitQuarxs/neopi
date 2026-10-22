@@ -2736,6 +2736,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editor.disableSubmit = false;
 		const controlHost = controlHostFor(this.session);
 		if (controlHost) {
+			controlHost.liveBridge = this.#liveCommandController;
 			attachTuiPresenter(controlHost, {
 				session: this.session,
 				editor: this.editor,
@@ -6942,6 +6943,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Stop the shared tool-spinner ticker: a live block missed by per-component
 		// stopAnimation would otherwise keep an 80ms interval pinning the process.
 		stopSharedSpinnerTicker();
+		const controlHost = controlHostFor(this.session);
+		if (controlHost?.liveBridge === this.#liveCommandController) controlHost.liveBridge = undefined;
 		this.#liveCommandController.dispose();
 		this.#clearJudgmentBatchProgress();
 		this.#downloadActivityHud.dispose();

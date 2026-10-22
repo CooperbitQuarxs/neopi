@@ -75,6 +75,7 @@
 
 - Stopping a live call while its persona or settings load no longer leaves a transport connected after cancellation ([#482](https://github.com/PsychedelicShayna/neopi/issues/482)).
 - Token-bounded text, including live transcript history, keeps emoji and combining characters intact at truncation boundaries ([#205](https://github.com/PsychedelicShayna/neopi/issues/205)).
+- Control-socket clients can start, mute, and stop the session's existing live voice call without ending it when they disconnect ([#483](https://github.com/PsychedelicShayna/neopi/issues/483)).
 - Short work contracts no longer block ordinary messages by counting tool runtime state as prompt tokens; genuinely oversized contexts still fail without truncating clauses ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
 - Session work contracts remain intact when a model's context-window size is unknown, without assuming a token budget ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
 - Restored clean coding-agent type checks by updating test fixtures to current contracts without changing STT assertions or shipped code ([#458](https://github.com/PsychedelicShayna/neopi/issues/458)).
