@@ -14,10 +14,22 @@ describe("native theme configuration", () => {
 		const settings = Settings.isolated({});
 		cfgThemeDark.set(settings, "dark");
 		cfgThemeLight.set(settings, "light");
-		const result = await updateTheme(settings, { type: "update_theme", appearance: "dark", scope: "project", name: "light", expected: null });
+		const result = await updateTheme(settings, {
+			type: "update_theme",
+			appearance: "dark",
+			scope: "project",
+			name: "light",
+			expected: null,
+		});
 		expect(result.selection.dark).toMatchObject({ effective: "light", global: "dark", project: "light" });
 		expect(result.selection.light.effective).toBe("light");
-		const restored = await updateTheme(settings, { type: "update_theme", appearance: "dark", scope: "project", name: null, expected: "light" });
+		const restored = await updateTheme(settings, {
+			type: "update_theme",
+			appearance: "dark",
+			scope: "project",
+			name: null,
+			expected: "light",
+		});
 		expect(restored.selection.dark).toMatchObject({ effective: "dark", global: "dark", project: null });
 		expect(restored.selection.dark.colors).not.toEqual(result.selection.dark.colors);
 	});
@@ -25,14 +37,30 @@ describe("native theme configuration", () => {
 	test("stale writes do not overwrite another client's scoped selection", async () => {
 		const settings = Settings.isolated({});
 		cfgThemeDark.set(settings, "dark");
-		await expect(updateTheme(settings, { type: "update_theme", appearance: "dark", scope: "global", name: "light", expected: null })).rejects.toBeInstanceOf(RpcThemeConflict);
+		await expect(
+			updateTheme(settings, {
+				type: "update_theme",
+				appearance: "dark",
+				scope: "global",
+				name: "light",
+				expected: null,
+			}),
+		).rejects.toBeInstanceOf(RpcThemeConflict);
 		expect(cfgThemeDark.get(settings)).toBe("dark");
 	});
 
 	test("rejects paths and absent definitions without modifying either slot", async () => {
 		const settings = Settings.isolated({});
 		const before = await getThemesConfiguration(settings);
-		await expect(updateTheme(settings, { type: "update_theme", appearance: "dark", scope: "project", name: "../../config", expected: null })).rejects.toThrow("Unknown native theme");
+		await expect(
+			updateTheme(settings, {
+				type: "update_theme",
+				appearance: "dark",
+				scope: "project",
+				name: "../../config",
+				expected: null,
+			}),
+		).rejects.toThrow("Unknown native theme");
 		const after = await getThemesConfiguration(settings);
 		expect(after.selection).toEqual(before.selection);
 		expect(after.themes).toContain(after.selection.light.effective);
@@ -51,19 +79,43 @@ describe("native theme configuration", () => {
 			await fs.mkdir(cwd, { recursive: true });
 			const writer = await Settings.loadIsolated({ cwd, agentDir });
 			instances.push(writer);
-			await updateTheme(writer, { type: "update_theme", appearance: "dark", scope: "global", name: "dark", expected: null });
-			await updateTheme(writer, { type: "update_theme", appearance: "dark", scope: "project", name: "dark", expected: null });
+			await updateTheme(writer, {
+				type: "update_theme",
+				appearance: "dark",
+				scope: "global",
+				name: "dark",
+				expected: null,
+			});
+			await updateTheme(writer, {
+				type: "update_theme",
+				appearance: "dark",
+				scope: "project",
+				name: "dark",
+				expected: null,
+			});
 			const reader = await Settings.loadIsolated({ cwd, agentDir });
 			instances.push(reader);
 			let changes = 0;
 			stop = observeThemesConfiguration(reader, () => changes++);
-			await updateTheme(writer, { type: "update_theme", appearance: "dark", scope: "global", name: "light", expected: "dark" });
+			await updateTheme(writer, {
+				type: "update_theme",
+				appearance: "dark",
+				scope: "global",
+				name: "light",
+				expected: "dark",
+			});
 			await reader.reloadFromDisk();
 			expect(changes).toBe(1);
 			const hidden = await getThemesConfiguration(reader);
 			expect(hidden.selection.dark).toMatchObject({ effective: "dark", global: "light", project: "dark" });
 			expect(changes).toBe(1);
-			await updateTheme(writer, { type: "update_theme", appearance: "dark", scope: "project", name: null, expected: "dark" });
+			await updateTheme(writer, {
+				type: "update_theme",
+				appearance: "dark",
+				scope: "project",
+				name: null,
+				expected: "dark",
+			});
 			await reader.reloadFromDisk();
 			expect(changes).toBe(2);
 			const revealed = await getThemesConfiguration(reader);

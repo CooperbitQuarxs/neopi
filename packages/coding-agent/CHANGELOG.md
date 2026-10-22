@@ -90,7 +90,7 @@
 
 - CI checks no longer depend on workstation-only test paths or outdated fixtures; fork releases retain Linux, macOS and Windows smoke checks without upstream package publishers ([#536](https://github.com/PsychedelicShayna/neopi/issues/536)).
 - Nightly Rust formatting checks pass for native live-audio controls ([#541](https://github.com/PsychedelicShayna/neopi/issues/541)).
-- CI formatting checks pass for the native RPC model configuration and hosted stats dashboard sources ([#543](https://github.com/PsychedelicShayna/neopi/issues/543)).
+- CI formatting checks pass for native RPC model configuration, telemetry, themes and hosted stats sources ([#543](https://github.com/PsychedelicShayna/neopi/issues/543), [#548](https://github.com/PsychedelicShayna/neopi/issues/548)).
 - CI login coverage follows native secret OAuth prompts and verifies that logging out one account leaves other accounts authenticated ([#545](https://github.com/PsychedelicShayna/neopi/issues/545)).
 - Skill-list CI checks no longer reuse settings from an earlier test ([#349](https://github.com/PsychedelicShayna/neopi/issues/349)).
 - Ctrl-G opens the configuration file the view actually loads, ignoring unsupported TOML companions until their loaders support them ([#521](https://github.com/PsychedelicShayna/neopi/issues/521)).
