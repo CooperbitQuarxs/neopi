@@ -2172,16 +2172,17 @@ func (v *RoleResolution) decodeFrom(raw map[string]json.RawMessage) error {
 }
 
 type RoleInfo struct {
-	ID         string          `json:"id"`
-	Alias      string          `json:"alias"`
-	Name       string          `json:"name"`
-	Section    RoleInfoSection `json:"section"`
-	Source     RoleInfoSource  `json:"source"`
-	Patterns   []string        `json:"patterns"`
-	Hidden     bool            `json:"hidden"`
-	Tag        *string         `json:"tag,omitempty"`
-	Configured *string         `json:"configured,omitempty"`
-	Resolved   *RoleResolution `json:"resolved,omitempty"`
+	ID          string          `json:"id"`
+	Alias       string          `json:"alias"`
+	Name        string          `json:"name"`
+	Section     RoleInfoSection `json:"section"`
+	Source      RoleInfoSource  `json:"source"`
+	Patterns    []string        `json:"patterns"`
+	Hidden      bool            `json:"hidden"`
+	Description *string         `json:"description,omitempty"`
+	Tag         *string         `json:"tag,omitempty"`
+	Configured  *string         `json:"configured,omitempty"`
+	Resolved    *RoleResolution `json:"resolved,omitempty"`
 }
 
 func (v *RoleInfo) UnmarshalJSON(data []byte) error {
@@ -2198,6 +2199,7 @@ func (v *RoleInfo) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("source", &out.Source)
 	d.required("patterns", &out.Patterns)
 	d.required("hidden", &out.Hidden)
+	d.optional("description", &out.Description)
 	d.optional("tag", &out.Tag)
 	d.optional("configured", &out.Configured)
 	d.optional("resolved", &out.Resolved)
@@ -4586,6 +4588,36 @@ func (v *SessionEntries) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type JournalPage struct {
+	Entries      []map[string]json.RawMessage `json:"entries"`
+	SessionID    string                       `json:"sessionId"`
+	SessionFile  string                       `json:"sessionFile"`
+	LeafID       *string                      `json:"leafId"`
+	TotalEntries int64                        `json:"totalEntries"`
+	// Opaque cursor for the next page; absent on the last page.
+	NextCursor *string `json:"nextCursor,omitempty"`
+}
+
+func (v *JournalPage) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JournalPage", v.decodeFrom)
+}
+
+func (v *JournalPage) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JournalPage
+	d := fieldDecoder{raw: raw, owner: "JournalPage"}
+	d.required("entries", &out.Entries)
+	d.required("sessionId", &out.SessionID)
+	d.required("sessionFile", &out.SessionFile)
+	d.nullable("leafId", &out.LeafID)
+	d.required("totalEntries", &out.TotalEntries)
+	d.optional("nextCursor", &out.NextCursor)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 // Raw session tree roots.
 type SessionTree struct {
 	Tree   []map[string]json.RawMessage `json:"tree"`
@@ -4606,6 +4638,208 @@ func (v *SessionTree) decodeFrom(raw map[string]json.RawMessage) error {
 	}
 	*v = out
 	return nil
+}
+
+type TreeAskOptionNote struct {
+	Option string `json:"option"`
+	Note   string `json:"note"`
+}
+
+func (v *TreeAskOptionNote) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskOptionNote", v.decodeFrom)
+}
+
+func (v *TreeAskOptionNote) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskOptionNote
+	d := fieldDecoder{raw: raw, owner: "TreeAskOptionNote"}
+	d.required("option", &out.Option)
+	d.required("note", &out.Note)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type TreeAskQuestionResult struct {
+	ID              string              `json:"id"`
+	Question        string              `json:"question"`
+	Options         []string            `json:"options"`
+	Multi           bool                `json:"multi"`
+	SelectedOptions []string            `json:"selectedOptions"`
+	CustomInput     *string             `json:"customInput,omitempty"`
+	Note            *string             `json:"note,omitempty"`
+	OptionNotes     []TreeAskOptionNote `json:"optionNotes,omitempty"`
+	TimedOut        *bool               `json:"timedOut,omitempty"`
+}
+
+func (v *TreeAskQuestionResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskQuestionResult", v.decodeFrom)
+}
+
+func (v *TreeAskQuestionResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskQuestionResult
+	d := fieldDecoder{raw: raw, owner: "TreeAskQuestionResult"}
+	d.required("id", &out.ID)
+	d.required("question", &out.Question)
+	d.required("options", &out.Options)
+	d.required("multi", &out.Multi)
+	d.required("selectedOptions", &out.SelectedOptions)
+	d.optional("customInput", &out.CustomInput)
+	d.optional("note", &out.Note)
+	d.optional("optionNotes", &out.OptionNotes)
+	d.optional("timedOut", &out.TimedOut)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type TreeAskDetails struct {
+	Question        *string                 `json:"question,omitempty"`
+	Options         []string                `json:"options,omitempty"`
+	Multi           *bool                   `json:"multi,omitempty"`
+	SelectedOptions []string                `json:"selectedOptions,omitempty"`
+	CustomInput     *string                 `json:"customInput,omitempty"`
+	Note            *string                 `json:"note,omitempty"`
+	OptionNotes     []TreeAskOptionNote     `json:"optionNotes,omitempty"`
+	TimedOut        *bool                   `json:"timedOut,omitempty"`
+	Results         []TreeAskQuestionResult `json:"results,omitempty"`
+	ChatRedirect    *bool                   `json:"chatRedirect,omitempty"`
+	Questions       []string                `json:"questions,omitempty"`
+}
+
+func (v *TreeAskDetails) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskDetails", v.decodeFrom)
+}
+
+func (v *TreeAskDetails) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskDetails
+	d := fieldDecoder{raw: raw, owner: "TreeAskDetails"}
+	d.optional("question", &out.Question)
+	d.optional("options", &out.Options)
+	d.optional("multi", &out.Multi)
+	d.optional("selectedOptions", &out.SelectedOptions)
+	d.optional("customInput", &out.CustomInput)
+	d.optional("note", &out.Note)
+	d.optional("optionNotes", &out.OptionNotes)
+	d.optional("timedOut", &out.TimedOut)
+	d.optional("results", &out.Results)
+	d.optional("chatRedirect", &out.ChatRedirect)
+	d.optional("questions", &out.Questions)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type TreeAskReanswer struct {
+	Content []UserContent   `json:"content"`
+	Details *TreeAskDetails `json:"details,omitempty"`
+	IsError *bool           `json:"isError,omitempty"`
+}
+
+func (v *TreeAskReanswer) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskReanswer", v.decodeFrom)
+}
+
+func (v *TreeAskReanswer) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskReanswer
+	d := fieldDecoder{raw: raw, owner: "TreeAskReanswer"}
+	d.required("content", &out.Content)
+	d.optional("details", &out.Details)
+	d.optional("isError", &out.IsError)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type TreeAskReopen struct {
+	ToolCallID string        `json:"toolCallId"`
+	Questions  []AskQuestion `json:"questions"`
+}
+
+func (v *TreeAskReopen) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskReopen", v.decodeFrom)
+}
+
+func (v *TreeAskReopen) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskReopen
+	d := fieldDecoder{raw: raw, owner: "TreeAskReopen"}
+	d.required("toolCallId", &out.ToolCallID)
+	d.required("questions", &out.Questions)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type NavigateTreeResult struct {
+	SessionID            string                     `json:"sessionId"`
+	LeafID               *string                    `json:"leafId"`
+	Outcome              NavigateTreeResultOutcome  `json:"outcome"`
+	Cancelled            bool                       `json:"cancelled"`
+	SessionFile          *string                    `json:"sessionFile,omitempty"`
+	Aborted              *bool                      `json:"aborted,omitempty"`
+	EditorText           *string                    `json:"editorText,omitempty"`
+	EditorImages         []ImageContent             `json:"editorImages,omitempty"`
+	SummaryEntry         map[string]json.RawMessage `json:"summaryEntry,omitempty"`
+	ReopenAsk            *TreeAskReopen             `json:"reopenAsk,omitempty"`
+	AskReanswerCommitted *bool                      `json:"askReanswerCommitted,omitempty"`
+	ResumeToken          *string                    `json:"resumeToken,omitempty"`
+}
+
+func (v *NavigateTreeResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "NavigateTreeResult", v.decodeFrom)
+}
+
+func (v *NavigateTreeResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out NavigateTreeResult
+	d := fieldDecoder{raw: raw, owner: "NavigateTreeResult"}
+	d.required("sessionId", &out.SessionID)
+	d.nullable("leafId", &out.LeafID)
+	d.required("outcome", &out.Outcome)
+	d.required("cancelled", &out.Cancelled)
+	d.optional("sessionFile", &out.SessionFile)
+	d.optional("aborted", &out.Aborted)
+	d.optional("editorText", &out.EditorText)
+	d.optional("editorImages", &out.EditorImages)
+	d.optional("summaryEntry", &out.SummaryEntry)
+	d.optional("reopenAsk", &out.ReopenAsk)
+	d.optional("askReanswerCommitted", &out.AskReanswerCommitted)
+	d.optional("resumeToken", &out.ResumeToken)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type NavigateTreeResultOutcome string
+
+const (
+	NavigateTreeResultOutcomeNavigated NavigateTreeResultOutcome = "navigated"
+	NavigateTreeResultOutcomeUnchanged NavigateTreeResultOutcome = "unchanged"
+	NavigateTreeResultOutcomeCancelled NavigateTreeResultOutcome = "cancelled"
+	NavigateTreeResultOutcomeAskReopen NavigateTreeResultOutcome = "ask_reopen"
+)
+
+func (v *NavigateTreeResultOutcome) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "NavigateTreeResultOutcome")
+	if err != nil {
+		return err
+	}
+	switch value := NavigateTreeResultOutcome(s); value {
+	case NavigateTreeResultOutcomeNavigated, NavigateTreeResultOutcomeUnchanged, NavigateTreeResultOutcomeCancelled, NavigateTreeResultOutcomeAskReopen:
+		*v = value
+		return nil
+	}
+	return unknownValue("NavigateTreeResultOutcome", s)
 }
 
 type SubagentSnapshot struct {
@@ -6533,6 +6767,50 @@ func (v ModelChangedEvent) MarshalJSON() ([]byte, error) {
 	return encodeObject(plain(v), `"type":"model_changed"`, nil)
 }
 
+type ThemesConfigurationChangedEvent struct{}
+
+func (v *ThemesConfigurationChangedEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ThemesConfigurationChangedEvent", v.decodeFrom)
+}
+
+func (v *ThemesConfigurationChangedEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ThemesConfigurationChangedEvent
+	d := fieldDecoder{raw: raw, owner: "ThemesConfigurationChangedEvent"}
+	d.constant("type", "themes_configuration_changed")
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v ThemesConfigurationChangedEvent) MarshalJSON() ([]byte, error) {
+	type plain ThemesConfigurationChangedEvent
+	return encodeObject(plain(v), `"type":"themes_configuration_changed"`, nil)
+}
+
+type ModelsConfigurationChangedEvent struct{}
+
+func (v *ModelsConfigurationChangedEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelsConfigurationChangedEvent", v.decodeFrom)
+}
+
+func (v *ModelsConfigurationChangedEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelsConfigurationChangedEvent
+	d := fieldDecoder{raw: raw, owner: "ModelsConfigurationChangedEvent"}
+	d.constant("type", "models_configuration_changed")
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v ModelsConfigurationChangedEvent) MarshalJSON() ([]byte, error) {
+	type plain ModelsConfigurationChangedEvent
+	return encodeObject(plain(v), `"type":"models_configuration_changed"`, nil)
+}
+
 type ConfigWarningsChangedEvent struct{}
 
 func (v *ConfigWarningsChangedEvent) UnmarshalJSON(data []byte) error {
@@ -6832,47 +7110,49 @@ type RpcAgentEventVariant interface {
 	isRpcAgentEvent()
 }
 
-func (AdvisorMessageEvent) isRpcAgentEvent()         {}
-func (RunOwnersJoinedEvent) isRpcAgentEvent()        {}
-func (RunOwnersSkippedEvent) isRpcAgentEvent()       {}
-func (ChatModeChangedEvent) isRpcAgentEvent()        {}
-func (MixtureHopEndEvent) isRpcAgentEvent()          {}
-func (MixtureDecisionEvent) isRpcAgentEvent()        {}
-func (MixtureLimitEvent) isRpcAgentEvent()           {}
-func (MixtureCheckpointEvent) isRpcAgentEvent()      {}
-func (MixtureRunEndEvent) isRpcAgentEvent()          {}
-func (AgentStartEvent) isRpcAgentEvent()             {}
-func (AgentEndEvent) isRpcAgentEvent()               {}
-func (TurnStartEvent) isRpcAgentEvent()              {}
-func (TurnEndEvent) isRpcAgentEvent()                {}
-func (MessageStartEvent) isRpcAgentEvent()           {}
-func (MessageUpdateEvent) isRpcAgentEvent()          {}
-func (MessageEndEvent) isRpcAgentEvent()             {}
-func (ToolExecutionStartEvent) isRpcAgentEvent()     {}
-func (ToolExecutionUpdateEvent) isRpcAgentEvent()    {}
-func (ToolStreamUpdateEvent) isRpcAgentEvent()       {}
-func (ToolExecutionEndEvent) isRpcAgentEvent()       {}
-func (AutoCompactionStartEvent) isRpcAgentEvent()    {}
-func (AutoCompactionEndEvent) isRpcAgentEvent()      {}
-func (AutoRetryStartEvent) isRpcAgentEvent()         {}
-func (AutoRetryEndEvent) isRpcAgentEvent()           {}
-func (CacheWarmingStartEvent) isRpcAgentEvent()      {}
-func (CacheWarmingEndEvent) isRpcAgentEvent()        {}
-func (RetryFallbackAppliedEvent) isRpcAgentEvent()   {}
-func (RetryFallbackSucceededEvent) isRpcAgentEvent() {}
-func (ModelChangedEvent) isRpcAgentEvent()           {}
-func (ConfigWarningsChangedEvent) isRpcAgentEvent()  {}
-func (AdvisorCostChangedEvent) isRpcAgentEvent()     {}
-func (AdvisorYieldedEvent) isRpcAgentEvent()         {}
-func (TtsrTriggeredEvent) isRpcAgentEvent()          {}
-func (TodoReminderEvent) isRpcAgentEvent()           {}
-func (TodoAutoClearEvent) isRpcAgentEvent()          {}
-func (IrcMessageEvent) isRpcAgentEvent()             {}
-func (NoticeEvent) isRpcAgentEvent()                 {}
-func (ThinkingLevelChangedEvent) isRpcAgentEvent()   {}
-func (GoalUpdatedEvent) isRpcAgentEvent()            {}
-func (QueueUpdateEvent) isRpcAgentEvent()            {}
-func (UnknownNotification) isRpcAgentEvent()         {}
+func (AdvisorMessageEvent) isRpcAgentEvent()             {}
+func (RunOwnersJoinedEvent) isRpcAgentEvent()            {}
+func (RunOwnersSkippedEvent) isRpcAgentEvent()           {}
+func (ChatModeChangedEvent) isRpcAgentEvent()            {}
+func (MixtureHopEndEvent) isRpcAgentEvent()              {}
+func (MixtureDecisionEvent) isRpcAgentEvent()            {}
+func (MixtureLimitEvent) isRpcAgentEvent()               {}
+func (MixtureCheckpointEvent) isRpcAgentEvent()          {}
+func (MixtureRunEndEvent) isRpcAgentEvent()              {}
+func (AgentStartEvent) isRpcAgentEvent()                 {}
+func (AgentEndEvent) isRpcAgentEvent()                   {}
+func (TurnStartEvent) isRpcAgentEvent()                  {}
+func (TurnEndEvent) isRpcAgentEvent()                    {}
+func (MessageStartEvent) isRpcAgentEvent()               {}
+func (MessageUpdateEvent) isRpcAgentEvent()              {}
+func (MessageEndEvent) isRpcAgentEvent()                 {}
+func (ToolExecutionStartEvent) isRpcAgentEvent()         {}
+func (ToolExecutionUpdateEvent) isRpcAgentEvent()        {}
+func (ToolStreamUpdateEvent) isRpcAgentEvent()           {}
+func (ToolExecutionEndEvent) isRpcAgentEvent()           {}
+func (AutoCompactionStartEvent) isRpcAgentEvent()        {}
+func (AutoCompactionEndEvent) isRpcAgentEvent()          {}
+func (AutoRetryStartEvent) isRpcAgentEvent()             {}
+func (AutoRetryEndEvent) isRpcAgentEvent()               {}
+func (CacheWarmingStartEvent) isRpcAgentEvent()          {}
+func (CacheWarmingEndEvent) isRpcAgentEvent()            {}
+func (RetryFallbackAppliedEvent) isRpcAgentEvent()       {}
+func (RetryFallbackSucceededEvent) isRpcAgentEvent()     {}
+func (ModelChangedEvent) isRpcAgentEvent()               {}
+func (ModelsConfigurationChangedEvent) isRpcAgentEvent() {}
+func (ThemesConfigurationChangedEvent) isRpcAgentEvent() {}
+func (ConfigWarningsChangedEvent) isRpcAgentEvent()      {}
+func (AdvisorCostChangedEvent) isRpcAgentEvent()         {}
+func (AdvisorYieldedEvent) isRpcAgentEvent()             {}
+func (TtsrTriggeredEvent) isRpcAgentEvent()              {}
+func (TodoReminderEvent) isRpcAgentEvent()               {}
+func (TodoAutoClearEvent) isRpcAgentEvent()              {}
+func (IrcMessageEvent) isRpcAgentEvent()                 {}
+func (NoticeEvent) isRpcAgentEvent()                     {}
+func (ThinkingLevelChangedEvent) isRpcAgentEvent()       {}
+func (GoalUpdatedEvent) isRpcAgentEvent()                {}
+func (QueueUpdateEvent) isRpcAgentEvent()                {}
+func (UnknownNotification) isRpcAgentEvent()             {}
 
 func (v RpcAgentEvent) MarshalJSON() ([]byte, error) {
 	return encodeVariant("RpcAgentEvent", v.Value)
@@ -6951,6 +7231,10 @@ func (v *RpcAgentEvent) decodeFrom(raw map[string]json.RawMessage) error {
 		value, err = decodeVariant[RetryFallbackSucceededEvent](raw)
 	case "model_changed":
 		value, err = decodeVariant[ModelChangedEvent](raw)
+	case "models_configuration_changed":
+		value, err = decodeVariant[ModelsConfigurationChangedEvent](raw)
+	case "themes_configuration_changed":
+		value, err = decodeVariant[ThemesConfigurationChangedEvent](raw)
 	case "config_warnings_changed":
 		value, err = decodeVariant[ConfigWarningsChangedEvent](raw)
 	case "advisor_cost_changed":
@@ -8939,66 +9223,68 @@ type RpcNotificationVariant interface {
 	isRpcNotification()
 }
 
-func (ReadyEvent) isRpcNotification()                   {}
-func (PromptResultEvent) isRpcNotification()            {}
-func (SessionSettledEvent) isRpcNotification()          {}
-func (ExtensionError) isRpcNotification()               {}
-func (ExtensionUiRequest) isRpcNotification()           {}
-func (AvailableCommandsUpdateEvent) isRpcNotification() {}
-func (SubagentLifecycleEvent) isRpcNotification()       {}
-func (SubagentProgressEvent) isRpcNotification()        {}
-func (SubagentEvent) isRpcNotification()                {}
-func (LivePhaseEvent) isRpcNotification()               {}
-func (LiveLevelsEvent) isRpcNotification()              {}
-func (LiveTranscriptEvent) isRpcNotification()          {}
-func (LiveEndEvent) isRpcNotification()                 {}
-func (BtwDeltaEvent) isRpcNotification()                {}
-func (BtwRecordEvent) isRpcNotification()               {}
-func (CommandOutputEvent) isRpcNotification()           {}
-func (SessionInfoUpdateEvent) isRpcNotification()       {}
-func (ConfigUpdateEvent) isRpcNotification()            {}
-func (RpcFrameErrorEvent) isRpcNotification()           {}
-func (AdvisorMessageEvent) isRpcNotification()          {}
-func (RunOwnersJoinedEvent) isRpcNotification()         {}
-func (RunOwnersSkippedEvent) isRpcNotification()        {}
-func (ChatModeChangedEvent) isRpcNotification()         {}
-func (MixtureHopEndEvent) isRpcNotification()           {}
-func (MixtureDecisionEvent) isRpcNotification()         {}
-func (MixtureLimitEvent) isRpcNotification()            {}
-func (MixtureCheckpointEvent) isRpcNotification()       {}
-func (MixtureRunEndEvent) isRpcNotification()           {}
-func (AgentStartEvent) isRpcNotification()              {}
-func (AgentEndEvent) isRpcNotification()                {}
-func (TurnStartEvent) isRpcNotification()               {}
-func (TurnEndEvent) isRpcNotification()                 {}
-func (MessageStartEvent) isRpcNotification()            {}
-func (MessageUpdateEvent) isRpcNotification()           {}
-func (MessageEndEvent) isRpcNotification()              {}
-func (ToolExecutionStartEvent) isRpcNotification()      {}
-func (ToolExecutionUpdateEvent) isRpcNotification()     {}
-func (ToolStreamUpdateEvent) isRpcNotification()        {}
-func (ToolExecutionEndEvent) isRpcNotification()        {}
-func (AutoCompactionStartEvent) isRpcNotification()     {}
-func (AutoCompactionEndEvent) isRpcNotification()       {}
-func (AutoRetryStartEvent) isRpcNotification()          {}
-func (AutoRetryEndEvent) isRpcNotification()            {}
-func (CacheWarmingStartEvent) isRpcNotification()       {}
-func (CacheWarmingEndEvent) isRpcNotification()         {}
-func (RetryFallbackAppliedEvent) isRpcNotification()    {}
-func (RetryFallbackSucceededEvent) isRpcNotification()  {}
-func (ModelChangedEvent) isRpcNotification()            {}
-func (ConfigWarningsChangedEvent) isRpcNotification()   {}
-func (AdvisorCostChangedEvent) isRpcNotification()      {}
-func (AdvisorYieldedEvent) isRpcNotification()          {}
-func (TtsrTriggeredEvent) isRpcNotification()           {}
-func (TodoReminderEvent) isRpcNotification()            {}
-func (TodoAutoClearEvent) isRpcNotification()           {}
-func (IrcMessageEvent) isRpcNotification()              {}
-func (NoticeEvent) isRpcNotification()                  {}
-func (ThinkingLevelChangedEvent) isRpcNotification()    {}
-func (GoalUpdatedEvent) isRpcNotification()             {}
-func (QueueUpdateEvent) isRpcNotification()             {}
-func (UnknownNotification) isRpcNotification()          {}
+func (ReadyEvent) isRpcNotification()                      {}
+func (PromptResultEvent) isRpcNotification()               {}
+func (SessionSettledEvent) isRpcNotification()             {}
+func (ExtensionError) isRpcNotification()                  {}
+func (ExtensionUiRequest) isRpcNotification()              {}
+func (AvailableCommandsUpdateEvent) isRpcNotification()    {}
+func (SubagentLifecycleEvent) isRpcNotification()          {}
+func (SubagentProgressEvent) isRpcNotification()           {}
+func (SubagentEvent) isRpcNotification()                   {}
+func (LivePhaseEvent) isRpcNotification()                  {}
+func (LiveLevelsEvent) isRpcNotification()                 {}
+func (LiveTranscriptEvent) isRpcNotification()             {}
+func (LiveEndEvent) isRpcNotification()                    {}
+func (BtwDeltaEvent) isRpcNotification()                   {}
+func (BtwRecordEvent) isRpcNotification()                  {}
+func (CommandOutputEvent) isRpcNotification()              {}
+func (SessionInfoUpdateEvent) isRpcNotification()          {}
+func (ConfigUpdateEvent) isRpcNotification()               {}
+func (RpcFrameErrorEvent) isRpcNotification()              {}
+func (AdvisorMessageEvent) isRpcNotification()             {}
+func (RunOwnersJoinedEvent) isRpcNotification()            {}
+func (RunOwnersSkippedEvent) isRpcNotification()           {}
+func (ChatModeChangedEvent) isRpcNotification()            {}
+func (MixtureHopEndEvent) isRpcNotification()              {}
+func (MixtureDecisionEvent) isRpcNotification()            {}
+func (MixtureLimitEvent) isRpcNotification()               {}
+func (MixtureCheckpointEvent) isRpcNotification()          {}
+func (MixtureRunEndEvent) isRpcNotification()              {}
+func (AgentStartEvent) isRpcNotification()                 {}
+func (AgentEndEvent) isRpcNotification()                   {}
+func (TurnStartEvent) isRpcNotification()                  {}
+func (TurnEndEvent) isRpcNotification()                    {}
+func (MessageStartEvent) isRpcNotification()               {}
+func (MessageUpdateEvent) isRpcNotification()              {}
+func (MessageEndEvent) isRpcNotification()                 {}
+func (ToolExecutionStartEvent) isRpcNotification()         {}
+func (ToolExecutionUpdateEvent) isRpcNotification()        {}
+func (ToolStreamUpdateEvent) isRpcNotification()           {}
+func (ToolExecutionEndEvent) isRpcNotification()           {}
+func (AutoCompactionStartEvent) isRpcNotification()        {}
+func (AutoCompactionEndEvent) isRpcNotification()          {}
+func (AutoRetryStartEvent) isRpcNotification()             {}
+func (AutoRetryEndEvent) isRpcNotification()               {}
+func (CacheWarmingStartEvent) isRpcNotification()          {}
+func (CacheWarmingEndEvent) isRpcNotification()            {}
+func (RetryFallbackAppliedEvent) isRpcNotification()       {}
+func (RetryFallbackSucceededEvent) isRpcNotification()     {}
+func (ModelChangedEvent) isRpcNotification()               {}
+func (ModelsConfigurationChangedEvent) isRpcNotification() {}
+func (ThemesConfigurationChangedEvent) isRpcNotification() {}
+func (ConfigWarningsChangedEvent) isRpcNotification()      {}
+func (AdvisorCostChangedEvent) isRpcNotification()         {}
+func (AdvisorYieldedEvent) isRpcNotification()             {}
+func (TtsrTriggeredEvent) isRpcNotification()              {}
+func (TodoReminderEvent) isRpcNotification()               {}
+func (TodoAutoClearEvent) isRpcNotification()              {}
+func (IrcMessageEvent) isRpcNotification()                 {}
+func (NoticeEvent) isRpcNotification()                     {}
+func (ThinkingLevelChangedEvent) isRpcNotification()       {}
+func (GoalUpdatedEvent) isRpcNotification()                {}
+func (QueueUpdateEvent) isRpcNotification()                {}
+func (UnknownNotification) isRpcNotification()             {}
 
 func (v RpcNotification) MarshalJSON() ([]byte, error) {
 	return encodeVariant("RpcNotification", v.Value)
@@ -9108,6 +9394,10 @@ func (v *RpcNotification) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[RetryFallbackSucceededEvent](raw)
 	case "model_changed":
 		value, err = decodeVariant[ModelChangedEvent](raw)
+	case "models_configuration_changed":
+		value, err = decodeVariant[ModelsConfigurationChangedEvent](raw)
+	case "themes_configuration_changed":
+		value, err = decodeVariant[ThemesConfigurationChangedEvent](raw)
 	case "config_warnings_changed":
 		value, err = decodeVariant[ConfigWarningsChangedEvent](raw)
 	case "advisor_cost_changed":
@@ -9151,71 +9441,73 @@ type RpcServerFrameVariant interface {
 	isRpcServerFrame()
 }
 
-func (RpcResponse) isRpcServerFrame()                  {}
-func (HostToolCallRequest) isRpcServerFrame()          {}
-func (HostToolCancelRequest) isRpcServerFrame()        {}
-func (HostUriRequest) isRpcServerFrame()               {}
-func (HostUriCancelRequest) isRpcServerFrame()         {}
-func (ReadyEvent) isRpcServerFrame()                   {}
-func (PromptResultEvent) isRpcServerFrame()            {}
-func (SessionSettledEvent) isRpcServerFrame()          {}
-func (ExtensionError) isRpcServerFrame()               {}
-func (ExtensionUiRequest) isRpcServerFrame()           {}
-func (AvailableCommandsUpdateEvent) isRpcServerFrame() {}
-func (SubagentLifecycleEvent) isRpcServerFrame()       {}
-func (SubagentProgressEvent) isRpcServerFrame()        {}
-func (SubagentEvent) isRpcServerFrame()                {}
-func (LivePhaseEvent) isRpcServerFrame()               {}
-func (LiveLevelsEvent) isRpcServerFrame()              {}
-func (LiveTranscriptEvent) isRpcServerFrame()          {}
-func (LiveEndEvent) isRpcServerFrame()                 {}
-func (BtwDeltaEvent) isRpcServerFrame()                {}
-func (BtwRecordEvent) isRpcServerFrame()               {}
-func (CommandOutputEvent) isRpcServerFrame()           {}
-func (SessionInfoUpdateEvent) isRpcServerFrame()       {}
-func (ConfigUpdateEvent) isRpcServerFrame()            {}
-func (RpcFrameErrorEvent) isRpcServerFrame()           {}
-func (AdvisorMessageEvent) isRpcServerFrame()          {}
-func (RunOwnersJoinedEvent) isRpcServerFrame()         {}
-func (RunOwnersSkippedEvent) isRpcServerFrame()        {}
-func (ChatModeChangedEvent) isRpcServerFrame()         {}
-func (MixtureHopEndEvent) isRpcServerFrame()           {}
-func (MixtureDecisionEvent) isRpcServerFrame()         {}
-func (MixtureLimitEvent) isRpcServerFrame()            {}
-func (MixtureCheckpointEvent) isRpcServerFrame()       {}
-func (MixtureRunEndEvent) isRpcServerFrame()           {}
-func (AgentStartEvent) isRpcServerFrame()              {}
-func (AgentEndEvent) isRpcServerFrame()                {}
-func (TurnStartEvent) isRpcServerFrame()               {}
-func (TurnEndEvent) isRpcServerFrame()                 {}
-func (MessageStartEvent) isRpcServerFrame()            {}
-func (MessageUpdateEvent) isRpcServerFrame()           {}
-func (MessageEndEvent) isRpcServerFrame()              {}
-func (ToolExecutionStartEvent) isRpcServerFrame()      {}
-func (ToolExecutionUpdateEvent) isRpcServerFrame()     {}
-func (ToolStreamUpdateEvent) isRpcServerFrame()        {}
-func (ToolExecutionEndEvent) isRpcServerFrame()        {}
-func (AutoCompactionStartEvent) isRpcServerFrame()     {}
-func (AutoCompactionEndEvent) isRpcServerFrame()       {}
-func (AutoRetryStartEvent) isRpcServerFrame()          {}
-func (AutoRetryEndEvent) isRpcServerFrame()            {}
-func (CacheWarmingStartEvent) isRpcServerFrame()       {}
-func (CacheWarmingEndEvent) isRpcServerFrame()         {}
-func (RetryFallbackAppliedEvent) isRpcServerFrame()    {}
-func (RetryFallbackSucceededEvent) isRpcServerFrame()  {}
-func (ModelChangedEvent) isRpcServerFrame()            {}
-func (ConfigWarningsChangedEvent) isRpcServerFrame()   {}
-func (AdvisorCostChangedEvent) isRpcServerFrame()      {}
-func (AdvisorYieldedEvent) isRpcServerFrame()          {}
-func (TtsrTriggeredEvent) isRpcServerFrame()           {}
-func (TodoReminderEvent) isRpcServerFrame()            {}
-func (TodoAutoClearEvent) isRpcServerFrame()           {}
-func (IrcMessageEvent) isRpcServerFrame()              {}
-func (NoticeEvent) isRpcServerFrame()                  {}
-func (ThinkingLevelChangedEvent) isRpcServerFrame()    {}
-func (GoalUpdatedEvent) isRpcServerFrame()             {}
-func (QueueUpdateEvent) isRpcServerFrame()             {}
-func (UnknownNotification) isRpcServerFrame()          {}
+func (RpcResponse) isRpcServerFrame()                     {}
+func (HostToolCallRequest) isRpcServerFrame()             {}
+func (HostToolCancelRequest) isRpcServerFrame()           {}
+func (HostUriRequest) isRpcServerFrame()                  {}
+func (HostUriCancelRequest) isRpcServerFrame()            {}
+func (ReadyEvent) isRpcServerFrame()                      {}
+func (PromptResultEvent) isRpcServerFrame()               {}
+func (SessionSettledEvent) isRpcServerFrame()             {}
+func (ExtensionError) isRpcServerFrame()                  {}
+func (ExtensionUiRequest) isRpcServerFrame()              {}
+func (AvailableCommandsUpdateEvent) isRpcServerFrame()    {}
+func (SubagentLifecycleEvent) isRpcServerFrame()          {}
+func (SubagentProgressEvent) isRpcServerFrame()           {}
+func (SubagentEvent) isRpcServerFrame()                   {}
+func (LivePhaseEvent) isRpcServerFrame()                  {}
+func (LiveLevelsEvent) isRpcServerFrame()                 {}
+func (LiveTranscriptEvent) isRpcServerFrame()             {}
+func (LiveEndEvent) isRpcServerFrame()                    {}
+func (BtwDeltaEvent) isRpcServerFrame()                   {}
+func (BtwRecordEvent) isRpcServerFrame()                  {}
+func (CommandOutputEvent) isRpcServerFrame()              {}
+func (SessionInfoUpdateEvent) isRpcServerFrame()          {}
+func (ConfigUpdateEvent) isRpcServerFrame()               {}
+func (RpcFrameErrorEvent) isRpcServerFrame()              {}
+func (AdvisorMessageEvent) isRpcServerFrame()             {}
+func (RunOwnersJoinedEvent) isRpcServerFrame()            {}
+func (RunOwnersSkippedEvent) isRpcServerFrame()           {}
+func (ChatModeChangedEvent) isRpcServerFrame()            {}
+func (MixtureHopEndEvent) isRpcServerFrame()              {}
+func (MixtureDecisionEvent) isRpcServerFrame()            {}
+func (MixtureLimitEvent) isRpcServerFrame()               {}
+func (MixtureCheckpointEvent) isRpcServerFrame()          {}
+func (MixtureRunEndEvent) isRpcServerFrame()              {}
+func (AgentStartEvent) isRpcServerFrame()                 {}
+func (AgentEndEvent) isRpcServerFrame()                   {}
+func (TurnStartEvent) isRpcServerFrame()                  {}
+func (TurnEndEvent) isRpcServerFrame()                    {}
+func (MessageStartEvent) isRpcServerFrame()               {}
+func (MessageUpdateEvent) isRpcServerFrame()              {}
+func (MessageEndEvent) isRpcServerFrame()                 {}
+func (ToolExecutionStartEvent) isRpcServerFrame()         {}
+func (ToolExecutionUpdateEvent) isRpcServerFrame()        {}
+func (ToolStreamUpdateEvent) isRpcServerFrame()           {}
+func (ToolExecutionEndEvent) isRpcServerFrame()           {}
+func (AutoCompactionStartEvent) isRpcServerFrame()        {}
+func (AutoCompactionEndEvent) isRpcServerFrame()          {}
+func (AutoRetryStartEvent) isRpcServerFrame()             {}
+func (AutoRetryEndEvent) isRpcServerFrame()               {}
+func (CacheWarmingStartEvent) isRpcServerFrame()          {}
+func (CacheWarmingEndEvent) isRpcServerFrame()            {}
+func (RetryFallbackAppliedEvent) isRpcServerFrame()       {}
+func (RetryFallbackSucceededEvent) isRpcServerFrame()     {}
+func (ModelChangedEvent) isRpcServerFrame()               {}
+func (ModelsConfigurationChangedEvent) isRpcServerFrame() {}
+func (ThemesConfigurationChangedEvent) isRpcServerFrame() {}
+func (ConfigWarningsChangedEvent) isRpcServerFrame()      {}
+func (AdvisorCostChangedEvent) isRpcServerFrame()         {}
+func (AdvisorYieldedEvent) isRpcServerFrame()             {}
+func (TtsrTriggeredEvent) isRpcServerFrame()              {}
+func (TodoReminderEvent) isRpcServerFrame()               {}
+func (TodoAutoClearEvent) isRpcServerFrame()              {}
+func (IrcMessageEvent) isRpcServerFrame()                 {}
+func (NoticeEvent) isRpcServerFrame()                     {}
+func (ThinkingLevelChangedEvent) isRpcServerFrame()       {}
+func (GoalUpdatedEvent) isRpcServerFrame()                {}
+func (QueueUpdateEvent) isRpcServerFrame()                {}
+func (UnknownNotification) isRpcServerFrame()             {}
 
 func (v RpcServerFrame) MarshalJSON() ([]byte, error) {
 	return encodeVariant("RpcServerFrame", v.Value)
@@ -9335,6 +9627,10 @@ func (v *RpcServerFrame) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[RetryFallbackSucceededEvent](raw)
 	case "model_changed":
 		value, err = decodeVariant[ModelChangedEvent](raw)
+	case "models_configuration_changed":
+		value, err = decodeVariant[ModelsConfigurationChangedEvent](raw)
+	case "themes_configuration_changed":
+		value, err = decodeVariant[ThemesConfigurationChangedEvent](raw)
 	case "config_warnings_changed":
 		value, err = decodeVariant[ConfigWarningsChangedEvent](raw)
 	case "advisor_cost_changed":
@@ -9699,6 +9995,28 @@ func (v *GetAvailableCommandsResult) decodeFrom(raw map[string]json.RawMessage) 
 	}
 	*v = out
 	return nil
+}
+
+type ResumeTreeResult struct{}
+
+func (v *ResumeTreeResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ResumeTreeResult", v.decodeFrom)
+}
+
+func (v *ResumeTreeResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ResumeTreeResult
+	d := fieldDecoder{raw: raw, owner: "ResumeTreeResult"}
+	d.constant("resumed", true)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v ResumeTreeResult) MarshalJSON() ([]byte, error) {
+	type plain ResumeTreeResult
+	return encodeObject(plain(v), `"resumed":true`, nil)
 }
 
 type SetTodosResult struct {
@@ -10713,10 +11031,99 @@ func (c Commands) GetEntries(ctx context.Context, p GetEntriesCommand) (SessionE
 	return out, err
 }
 
+// GetEntriesPageCommand holds the parameters of "get_entries_page".
+type GetEntriesPageCommand struct {
+	Scope     *GetEntriesPageCommandScope     `json:"scope,omitempty"`
+	Direction *GetEntriesPageCommandDirection `json:"direction,omitempty"`
+	Cursor    *string                         `json:"cursor,omitempty"`
+	Limit     *int64                          `json:"limit,omitempty"`
+}
+
+// GetEntriesPage sends "get_entries_page": Read one canonical native journal or selected-branch page.
+func (c Commands) GetEntriesPage(ctx context.Context, p GetEntriesPageCommand) (JournalPage, error) {
+	var out JournalPage
+	err := c.call(ctx, "get_entries_page", p, 0, &out)
+	return out, err
+}
+
+type GetEntriesPageCommandScope string
+
+const (
+	GetEntriesPageCommandScopeJournal GetEntriesPageCommandScope = "journal"
+	GetEntriesPageCommandScopeBranch  GetEntriesPageCommandScope = "branch"
+)
+
+func (v *GetEntriesPageCommandScope) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "GetEntriesPageCommandScope")
+	if err != nil {
+		return err
+	}
+	switch value := GetEntriesPageCommandScope(s); value {
+	case GetEntriesPageCommandScopeJournal, GetEntriesPageCommandScopeBranch:
+		*v = value
+		return nil
+	}
+	return unknownValue("GetEntriesPageCommandScope", s)
+}
+
+type GetEntriesPageCommandDirection string
+
+const (
+	GetEntriesPageCommandDirectionForward  GetEntriesPageCommandDirection = "forward"
+	GetEntriesPageCommandDirectionBackward GetEntriesPageCommandDirection = "backward"
+)
+
+func (v *GetEntriesPageCommandDirection) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "GetEntriesPageCommandDirection")
+	if err != nil {
+		return err
+	}
+	switch value := GetEntriesPageCommandDirection(s); value {
+	case GetEntriesPageCommandDirectionForward, GetEntriesPageCommandDirectionBackward:
+		*v = value
+		return nil
+	}
+	return unknownValue("GetEntriesPageCommandDirection", s)
+}
+
 // GetTree sends "get_tree": Read the raw session tree.
 func (c Commands) GetTree(ctx context.Context) (SessionTree, error) {
 	var out SessionTree
 	err := c.call(ctx, "get_tree", nil, 0, &out)
+	return out, err
+}
+
+// NavigateTreeCommand holds the parameters of "navigate_tree".
+type NavigateTreeCommand struct {
+	TargetID            string           `json:"targetId"`
+	ExpectedSessionID   string           `json:"expectedSessionId"`
+	ExpectedSessionFile *string          `json:"expectedSessionFile"`
+	ExpectedLeafID      *string          `json:"expectedLeafId"`
+	Summarize           *bool            `json:"summarize,omitempty"`
+	CustomInstructions  *string          `json:"customInstructions,omitempty"`
+	AllowAskReopen      *bool            `json:"allowAskReopen,omitempty"`
+	ReanswerAskResult   *TreeAskReanswer `json:"reanswerAskResult,omitempty"`
+}
+
+// NavigateTree sends "navigate_tree": Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken.
+func (c Commands) NavigateTree(ctx context.Context, p NavigateTreeCommand) (NavigateTreeResult, error) {
+	var out NavigateTreeResult
+	err := c.call(ctx, "navigate_tree", p, 0, &out)
+	return out, err
+}
+
+// ResumeTreeCommand holds the parameters of "resume_tree".
+type ResumeTreeCommand struct {
+	ResumeToken         string  `json:"resumeToken"`
+	ExpectedSessionID   string  `json:"expectedSessionId"`
+	ExpectedSessionFile *string `json:"expectedSessionFile"`
+	ExpectedLeafID      *string `json:"expectedLeafId"`
+}
+
+// ResumeTree sends "resume_tree": Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript.
+func (c Commands) ResumeTree(ctx context.Context, p ResumeTreeCommand) (ResumeTreeResult, error) {
+	var out ResumeTreeResult
+	err := c.call(ctx, "resume_tree", p, 0, &out)
 	return out, err
 }
 

@@ -437,6 +437,7 @@ export interface RoleInfo {
 	source: "builtin" | "configured";
 	patterns: string[];
 	hidden: boolean;
+	description?: string;
 	tag?: string;
 	configured?: string;
 	resolved?: RoleResolution;
@@ -945,10 +946,77 @@ export interface SessionEntries {
 	leafId: string | null;
 }
 
+export interface JournalPage {
+	entries: Record<string, unknown>[];
+	sessionId: string;
+	sessionFile: string;
+	leafId: string | null;
+	totalEntries: number;
+	/** Opaque cursor for the next page; absent on the last page. */
+	nextCursor?: string;
+}
+
 /** Raw session tree roots. */
 export interface SessionTree {
 	tree: Record<string, unknown>[];
 	leafId: string | null;
+}
+
+export interface TreeAskOptionNote {
+	option: string;
+	note: string;
+}
+
+export interface TreeAskQuestionResult {
+	id: string;
+	question: string;
+	options: string[];
+	multi: boolean;
+	selectedOptions: string[];
+	customInput?: string;
+	note?: string;
+	optionNotes?: TreeAskOptionNote[];
+	timedOut?: boolean;
+}
+
+export interface TreeAskDetails {
+	question?: string;
+	options?: string[];
+	multi?: boolean;
+	selectedOptions?: string[];
+	customInput?: string;
+	note?: string;
+	optionNotes?: TreeAskOptionNote[];
+	timedOut?: boolean;
+	results?: TreeAskQuestionResult[];
+	chatRedirect?: boolean;
+	questions?: string[];
+}
+
+export interface TreeAskReanswer {
+	content: UserContent[];
+	details?: TreeAskDetails;
+	isError?: boolean;
+}
+
+export interface TreeAskReopen {
+	toolCallId: string;
+	questions: AskQuestion[];
+}
+
+export interface NavigateTreeResult {
+	sessionId: string;
+	leafId: string | null;
+	outcome: "navigated" | "unchanged" | "cancelled" | "ask_reopen";
+	cancelled: boolean;
+	sessionFile?: string;
+	aborted?: boolean;
+	editorText?: string;
+	editorImages?: ImageContent[];
+	summaryEntry?: Record<string, unknown>;
+	reopenAsk?: TreeAskReopen;
+	askReanswerCommitted?: boolean;
+	resumeToken?: string;
 }
 
 export interface SubagentSnapshot {
@@ -1396,6 +1464,10 @@ export interface ThemesConfigurationChangedEvent {
 	type: "themes_configuration_changed";
 }
 
+export interface ModelsConfigurationChangedEvent {
+	type: "models_configuration_changed";
+}
+
 export interface ConfigWarningsChangedEvent {
 	type: "config_warnings_changed";
 }
@@ -1463,7 +1535,7 @@ export interface QueueUpdateEvent {
 }
 
 /** A session event, discriminated by `type`; `set_event_filter` selects which are sent. */
-export type RpcAgentEvent = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
+export type RpcAgentEvent = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ThemesConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
 
 /** First frame after startup; transport fields are absent on servers without protocol v2. */
 export interface ReadyEvent {
@@ -2149,6 +2221,35 @@ export interface GetEntriesParams {
 	since?: string;
 }
 
+export interface GetEntriesPageParams {
+	scope?: "journal" | "branch";
+	direction?: "forward" | "backward";
+	cursor?: string;
+	limit?: number;
+}
+
+export interface NavigateTreeParams {
+	targetId: string;
+	expectedSessionId: string;
+	expectedSessionFile: string | null;
+	expectedLeafId: string | null;
+	summarize?: boolean;
+	customInstructions?: string;
+	allowAskReopen?: boolean;
+	reanswerAskResult?: TreeAskReanswer;
+}
+
+export interface ResumeTreeParams {
+	resumeToken: string;
+	expectedSessionId: string;
+	expectedSessionFile: string | null;
+	expectedLeafId: string | null;
+}
+
+export interface ResumeTreeResult {
+	resumed: true;
+}
+
 export interface SetTodosParams {
 	phases: TodoPhase[];
 }
@@ -2444,7 +2545,10 @@ export interface RpcWireCommands {
 	set_ask_dialog: { params: SetAskDialogParams; result: SetAskDialogResult };
 	get_available_commands: { params: undefined; result: GetAvailableCommandsResult };
 	get_entries: { params: GetEntriesParams; result: SessionEntries };
+	get_entries_page: { params: GetEntriesPageParams; result: JournalPage };
 	get_tree: { params: undefined; result: SessionTree };
+	navigate_tree: { params: NavigateTreeParams; result: NavigateTreeResult };
+	resume_tree: { params: ResumeTreeParams; result: ResumeTreeResult };
 	set_todos: { params: SetTodosParams; result: SetTodosResult };
 	set_host_tools: { params: SetHostToolsParams; result: SetHostToolsResult };
 	set_host_uri_schemes: { params: SetHostUriSchemesParams; result: SetHostUriSchemesResult };

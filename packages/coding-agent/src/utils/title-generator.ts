@@ -1,5 +1,5 @@
 /**
- * Generate session titles using a smol, fast model.
+ * Generate session titles using the title role, which follows tiny until set.
  */
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as os from "node:os";
@@ -118,22 +118,28 @@ const LEADING_THINKING_FENCE_RE = /^\s*```(?:thinking|reasoning)\b[\s\S]*?```\s*
 const LEADING_PROSE_THINKING_PREAMBLE_RE =
 	/^[ \t]*(?:(?:here(?:['’]s| is)[ \t]+(?:a|the|my)[ \t]+)|my[ \t]+)?(?:thinking|thought|reasoning)[ \t]+process[ \t]*:?[ \t]*(?:\r?\n|$)/i;
 
-function getTitleModels(registry: ModelRegistry, settings: Settings, currentModel?: Model<Api>): Model<Api>[] {
+function getTitleModels(
+	registry: ModelRegistry,
+	settings: Settings,
+	currentModel?: Model<Api>,
+	role: "title" | "tiny" = "title",
+): Model<Api>[] {
 	// A mixture never titles a session: it only runs as the primary agent's model.
-	const availableModels = roleCandidatePool("tiny", settings, registry).filter(model => !isMixtureModel(model));
+	const availableModels = roleCandidatePool(role, settings, registry).filter(model => !isMixtureModel(model));
 	const sessionModel = currentModel && !isMixtureModel(currentModel) ? currentModel : undefined;
 	if (availableModels.length === 0) return [];
 
-	const models = collectOnlineTinyCandidates(["tiny", "commit", "smol"], settings, availableModels).map(
-		candidate => candidate.model,
-	);
+	const models = collectOnlineTinyCandidates(
+		role === "title" ? ["title", "tiny", "commit", "smol"] : ["tiny", "commit", "smol"],
+		settings,
+		availableModels,
+	).map(candidate => candidate.model);
 	if (
 		sessionModel &&
 		(models.length === 0 || cfgRetryModelFallback.get(settings) !== false) &&
 		!models.some(model => formatModelStringWithRouting(model) === formatModelStringWithRouting(sessionModel))
 	) {
-		// Append the session model and expand its own chain separately — never merge it
-		// into the tiny/commit/smol role collection (that would apply role defaults).
+		// Append the session model separately, without applying title-role defaults.
 		const seen = new Set(models.map(formatModelStringWithRouting));
 		for (const model of expandOnlineTinyModelFallbacks(sessionModel, settings, availableModels)) {
 			const key = formatModelStringWithRouting(model);
@@ -150,7 +156,7 @@ function getTitleModels(registry: ModelRegistry, settings: Settings, currentMode
  *
  * @param firstMessage The first user message
  * @param registry Model registry
- * @param settings Settings used to resolve the smol role
+ * @param settings Settings used to resolve the title role
  * @param sessionId Optional session id for sticky API key selection
  * @param currentModel Current model (used to derive title model)
  * @param metadataResolver Optional resolver evaluated after credential selection
@@ -161,6 +167,7 @@ function getTitleModels(registry: ModelRegistry, settings: Settings, currentMode
  * @param signal Session-lifecycle cancellation for background title requests
  * @param credentialSourceSessionId Optional foreground session whose selected
  *   OAuth credential should seed an isolated title-request session.
+ * @param role Workload role; task labels retain tiny rather than the session-title assignment.
  */
 export async function generateSessionTitle(
 	firstMessage: string,
@@ -172,6 +179,7 @@ export async function generateSessionTitle(
 	customSystemPrompt?: string,
 	signal?: AbortSignal,
 	credentialSourceSessionId?: string,
+	role: "title" | "tiny" = "title",
 ): Promise<string | null> {
 	// Defer titling for greetings / acknowledgements / empty input. The default
 	// tiny title model can't reliably decline trivial input, so this happens
@@ -182,7 +190,7 @@ export async function generateSessionTitle(
 		return null;
 	}
 
-	const models = getTitleModels(registry, settings, currentModel);
+	const models = getTitleModels(registry, settings, currentModel, role);
 	const firstModel = models[0];
 	if (!firstModel) {
 		logger.warn("title-generator: no title model found", { sessionId, reason: "no-title-model" });

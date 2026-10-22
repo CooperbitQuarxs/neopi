@@ -30,6 +30,13 @@ import {
 	type RpcMessagesPageOptions,
 } from "./rpc-messages";
 import type {
+	RpcNavigateTreeOptions,
+	RpcNavigateTreeResult,
+	RpcResumeTreeOptions,
+	RpcResumeTreeResult,
+} from "./rpc-tree";
+import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
+import type {
 	RpcAbortAndRestoreQueueResult,
 	RpcAvailableCommandsUpdateFrame,
 	RpcApprovalHandler,
@@ -1159,12 +1166,28 @@ export class RpcClient {
 		return this.#getData<{ entries: SessionEntry[]; leafId: string | null }>(response);
 	}
 
+	/** Read one complete-entry page without folding compaction or dropping alternate branches. */
+	async getEntriesPage(options: RpcJournalPageOptions = {}): Promise<RpcJournalPage> {
+		const response = await this.#send({ type: "get_entries_page", ...options });
+		return this.#getData<RpcJournalPage>(response);
+	}
+
 	/**
 	 * Pi-compatible raw session tree plus the current leaf id.
 	 */
 	async getTree(): Promise<{ tree: SessionTreeNode[]; leafId: string | null }> {
 		const response = await this.#send({ type: "get_tree" });
 		return this.#getData<{ tree: SessionTreeNode[]; leafId: string | null }>(response);
+	}
+
+	/** Navigate the native tree in the same file. Rebuild the transcript before acknowledging a returned resumeToken. */
+	async navigateTree(options: RpcNavigateTreeOptions): Promise<RpcNavigateTreeResult> {
+		return this.#getData<RpcNavigateTreeResult>(await this.#send({ ...options, type: "navigate_tree" }));
+	}
+
+	/** Acknowledge a committed ask re-answer after consuming its navigation result. */
+	async resumeTree(options: RpcResumeTreeOptions): Promise<RpcResumeTreeResult> {
+		return this.#getData<RpcResumeTreeResult>(await this.#send({ ...options, type: "resume_tree" }));
 	}
 
 	/**

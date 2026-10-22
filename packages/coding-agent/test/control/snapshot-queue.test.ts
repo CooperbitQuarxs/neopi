@@ -94,7 +94,7 @@ describe("control snapshot queue", () => {
 
 	test("busy summary names both delivery paths and counts steering plus follow-up", async () => {
 		const { client } = await startWithQueue(undefined, ["later"]);
-		await session!.steer("change course");
+		session!.agent.steer({ role: "user", content: "change course", timestamp: Date.now() });
 		const state = (await client.request({ type: "state" })).data as ControlSnapshot;
 		expect(state.busy.pendingSteerAndFollowUp).toBe(2);
 		expect(state.busy).not.toHaveProperty("queued");

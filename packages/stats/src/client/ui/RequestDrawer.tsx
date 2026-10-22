@@ -13,6 +13,7 @@ import {
 import { useQuery } from "../data/query";
 import { buildHash, parseHash } from "../data/useHashRoute";
 import { type RequestStatus, requestStatus } from "../data/view-models";
+import { statsLocationHash } from "../host-transport";
 import type { RequestDetails } from "../types";
 import { Badge, type Tone } from "./Badge";
 import { Drawer, KeyValues } from "./Drawer";
@@ -65,7 +66,7 @@ export function RequestDrawer({ id, onClose }: RequestDrawerProps) {
 							data-size="sm"
 							data-variant="ghost"
 							href={buildHash({
-								...parseHash(window.location.hash),
+								...parseHash(statsLocationHash()),
 								section: "traces",
 								session: details.sessionFile,
 							})}

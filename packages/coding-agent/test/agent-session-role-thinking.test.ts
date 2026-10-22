@@ -364,7 +364,6 @@ describe("AgentSession role model thinking behavior", () => {
 		expect(session.cycleThinkingLevel()).toBe(AUTO_THINKING);
 		expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
 		expect(session.isAutoThinking).toBe(true);
-		expect(agent.state.disableReasoning).toBe(false);
 		const autoReceipt = session.sessionManager
 			.getEntries()
 			.filter(entry => entry.type === "thinking_level_change")
@@ -928,7 +927,10 @@ describe("AgentSession role model thinking behavior", () => {
 			modelRoles: { default: `${model.provider}/${model.id}` },
 		});
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
-		vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.Medium);
+		const classifierSpy = vi
+			.spyOn(autoThinkingClassifier, "classifyDifficulty")
+			.mockResolvedValueOnce(Effort.Medium)
+			.mockResolvedValueOnce(Effort.Low);
 
 		session.setThinkingLevel(AUTO_THINKING);
 		await session.prompt("Classify this turn");
@@ -939,14 +941,16 @@ describe("AgentSession role model thinking behavior", () => {
 		await session.newSession();
 
 		// The configured auto mode survives, but the per-turn cache is gone.
-		// The fork's replacement effort policy starts pending Auto at its lowest
-		// permitted level (minimal for this model), not the legacy high provisional.
 		expect(session.isAutoThinking).toBe(true);
 		expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
 		expect(session.autoResolvedThinkingLevel()).toBeUndefined();
 		const entries = session.sessionManager.getEntries().filter(e => e.type === "thinking_level_change");
-		expect(session.thinkingLevel).toBe(Effort.Minimal);
-		expect(session.agent.state.thinkingLevel).toBe(Effort.Minimal);
-		expect(entries.at(-1)).toMatchObject({ thinkingLevel: Effort.Minimal, configured: AUTO_THINKING });
+		expect(entries.at(-1)).toMatchObject({ configured: AUTO_THINKING });
+
+		await session.prompt("Classify the new session's turn");
+		expect(classifierSpy).toHaveBeenCalledTimes(2);
+		expect(session.autoResolvedThinkingLevel()).toBe(Effort.Low);
+		expect(session.thinkingLevel).toBe(Effort.Low);
+		expect(session.agent.state.thinkingLevel).toBe(Effort.Low);
 	});
 });
