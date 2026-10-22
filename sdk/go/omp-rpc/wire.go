@@ -2202,6 +2202,115 @@ func (v *RolesResult) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type ModelEffortSelection struct {
+	Mode     ModelEffortSelectionMode `json:"mode"`
+	Level    *ThinkingLevel           `json:"level,omitempty"`
+	Allowed  []string                 `json:"allowed,omitempty"`
+	Selector *string                  `json:"selector,omitempty"`
+}
+
+func (v *ModelEffortSelection) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelEffortSelection", v.decodeFrom)
+}
+
+func (v *ModelEffortSelection) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelEffortSelection
+	d := fieldDecoder{raw: raw, owner: "ModelEffortSelection"}
+	d.required("mode", &out.Mode)
+	d.optional("level", &out.Level)
+	d.optional("allowed", &out.Allowed)
+	d.optional("selector", &out.Selector)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ModelEffortSelectionMode string
+
+const (
+	ModelEffortSelectionModeFixed   ModelEffortSelectionMode = "fixed"
+	ModelEffortSelectionModeAuto    ModelEffortSelectionMode = "auto"
+	ModelEffortSelectionModeInherit ModelEffortSelectionMode = "inherit"
+)
+
+func (v *ModelEffortSelectionMode) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "ModelEffortSelectionMode")
+	if err != nil {
+		return err
+	}
+	switch value := ModelEffortSelectionMode(s); value {
+	case ModelEffortSelectionModeFixed, ModelEffortSelectionModeAuto, ModelEffortSelectionModeInherit:
+		*v = value
+		return nil
+	}
+	return unknownValue("ModelEffortSelectionMode", s)
+}
+
+type ModelEffortRule struct {
+	Selector string   `json:"selector"`
+	Allowed  []string `json:"allowed"`
+}
+
+func (v *ModelEffortRule) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelEffortRule", v.decodeFrom)
+}
+
+func (v *ModelEffortRule) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelEffortRule
+	d := fieldDecoder{raw: raw, owner: "ModelEffortRule"}
+	d.required("selector", &out.Selector)
+	d.required("allowed", &out.Allowed)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ModelRoleConfigurationValue struct {
+	Selector *string               `json:"selector"`
+	Effort   *ModelEffortSelection `json:"effort"`
+}
+
+func (v *ModelRoleConfigurationValue) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelRoleConfigurationValue", v.decodeFrom)
+}
+
+func (v *ModelRoleConfigurationValue) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelRoleConfigurationValue
+	d := fieldDecoder{raw: raw, owner: "ModelRoleConfigurationValue"}
+	d.nullable("selector", &out.Selector)
+	d.nullable("effort", &out.Effort)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ModelEffortRuleScopes struct {
+	Global  []ModelEffortRule `json:"global"`
+	Project []ModelEffortRule `json:"project"`
+}
+
+func (v *ModelEffortRuleScopes) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelEffortRuleScopes", v.decodeFrom)
+}
+
+func (v *ModelEffortRuleScopes) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelEffortRuleScopes
+	d := fieldDecoder{raw: raw, owner: "ModelEffortRuleScopes"}
+	d.nullable("global", &out.Global)
+	d.nullable("project", &out.Project)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type ProviderUsageReport struct {
 	Provider     string                       `json:"provider"`
 	FetchedAt    float64                      `json:"fetchedAt"`
@@ -7743,6 +7852,8 @@ type InputUiRequest struct {
 	Title       string  `json:"title"`
 	Placeholder *string `json:"placeholder,omitempty"`
 	Timeout     *int64  `json:"timeout,omitempty"`
+	Secret      *bool   `json:"secret,omitempty"`
+	LoginID     *string `json:"loginId,omitempty"`
 }
 
 func (v *InputUiRequest) UnmarshalJSON(data []byte) error {
@@ -7758,6 +7869,8 @@ func (v *InputUiRequest) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("title", &out.Title)
 	d.optional("placeholder", &out.Placeholder)
 	d.optional("timeout", &out.Timeout)
+	d.optional("secret", &out.Secret)
+	d.optional("loginId", &out.LoginID)
 	if d.err != nil {
 		return d.err
 	}
@@ -7866,6 +7979,7 @@ type NotifyUiRequest struct {
 	ID         string      `json:"id"`
 	Message    string      `json:"message"`
 	NotifyType *NotifyType `json:"notifyType,omitempty"`
+	LoginID    *string     `json:"loginId,omitempty"`
 }
 
 func (v *NotifyUiRequest) UnmarshalJSON(data []byte) error {
@@ -7880,6 +7994,7 @@ func (v *NotifyUiRequest) decodeFrom(raw map[string]json.RawMessage) error {
 	d.constant("method", "notify")
 	d.required("message", &out.Message)
 	d.optional("notifyType", &out.NotifyType)
+	d.optional("loginId", &out.LoginID)
 	if d.err != nil {
 		return d.err
 	}
@@ -8016,6 +8131,7 @@ type OpenUrlUiRequest struct {
 	// Short loopback redirect to `url`; the truncation-safe copy target.
 	LaunchURL    *string `json:"launchUrl,omitempty"`
 	Instructions *string `json:"instructions,omitempty"`
+	LoginID      *string `json:"loginId,omitempty"`
 }
 
 func (v *OpenUrlUiRequest) UnmarshalJSON(data []byte) error {
@@ -8031,6 +8147,7 @@ func (v *OpenUrlUiRequest) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("url", &out.URL)
 	d.optional("launchUrl", &out.LaunchURL)
 	d.optional("instructions", &out.Instructions)
+	d.optional("loginId", &out.LoginID)
 	if d.err != nil {
 		return d.err
 	}
@@ -9324,6 +9441,81 @@ func (v *SetRoleResult) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type GetModelsConfigurationResult struct {
+	Providers             []map[string]json.RawMessage            `json:"providers"`
+	Models                []map[string]json.RawMessage            `json:"models"`
+	Roles                 []map[string]json.RawMessage            `json:"roles"`
+	RoleStorage           GetModelsConfigurationResultRoleStorage `json:"roleStorage"`
+	EffortMode            GetModelsConfigurationResultEffortMode  `json:"effortMode"`
+	EffortRules           []ModelEffortRule                       `json:"effortRules"`
+	EffortRulesProvenance string                                  `json:"effortRulesProvenance"`
+	EffortRuleScopes      ModelEffortRuleScopes                   `json:"effortRuleScopes"`
+	EffortChoices         []string                                `json:"effortChoices"`
+}
+
+func (v *GetModelsConfigurationResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "GetModelsConfigurationResult", v.decodeFrom)
+}
+
+func (v *GetModelsConfigurationResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out GetModelsConfigurationResult
+	d := fieldDecoder{raw: raw, owner: "GetModelsConfigurationResult"}
+	d.required("providers", &out.Providers)
+	d.required("models", &out.Models)
+	d.required("roles", &out.Roles)
+	d.required("roleStorage", &out.RoleStorage)
+	d.required("effortMode", &out.EffortMode)
+	d.required("effortRules", &out.EffortRules)
+	d.required("effortRulesProvenance", &out.EffortRulesProvenance)
+	d.required("effortRuleScopes", &out.EffortRuleScopes)
+	d.required("effortChoices", &out.EffortChoices)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type GetModelsConfigurationResultRoleStorage string
+
+const (
+	GetModelsConfigurationResultRoleStorageGlobal  GetModelsConfigurationResultRoleStorage = "global"
+	GetModelsConfigurationResultRoleStorageProject GetModelsConfigurationResultRoleStorage = "project"
+)
+
+func (v *GetModelsConfigurationResultRoleStorage) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "GetModelsConfigurationResultRoleStorage")
+	if err != nil {
+		return err
+	}
+	switch value := GetModelsConfigurationResultRoleStorage(s); value {
+	case GetModelsConfigurationResultRoleStorageGlobal, GetModelsConfigurationResultRoleStorageProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("GetModelsConfigurationResultRoleStorage", s)
+}
+
+type GetModelsConfigurationResultEffortMode string
+
+const (
+	GetModelsConfigurationResultEffortModeReplacement GetModelsConfigurationResultEffortMode = "replacement"
+	GetModelsConfigurationResultEffortModeLegacy      GetModelsConfigurationResultEffortMode = "legacy"
+)
+
+func (v *GetModelsConfigurationResultEffortMode) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "GetModelsConfigurationResultEffortMode")
+	if err != nil {
+		return err
+	}
+	switch value := GetModelsConfigurationResultEffortMode(s); value {
+	case GetModelsConfigurationResultEffortModeReplacement, GetModelsConfigurationResultEffortModeLegacy:
+		*v = value
+		return nil
+	}
+	return unknownValue("GetModelsConfigurationResultEffortMode", s)
+}
+
 type GetUsageResult struct {
 	GeneratedAt int64                 `json:"generatedAt"`
 	Reports     []ProviderUsageReport `json:"reports"`
@@ -10090,6 +10282,151 @@ func (c Commands) SetRole(ctx context.Context, p SetRoleCommand) (SetRoleResult,
 	var out SetRoleResult
 	err := c.call(ctx, "set_role", p, 0, &out)
 	return out, err
+}
+
+// GetModelsConfiguration sends "get_models_configuration": Read the native provider catalog, scoped model roles, and effort rules.
+func (c Commands) GetModelsConfiguration(ctx context.Context) (GetModelsConfigurationResult, error) {
+	var out GetModelsConfigurationResult
+	err := c.call(ctx, "get_models_configuration", nil, 0, &out)
+	return out, err
+}
+
+// SetModelRoleConfigurationCommand holds the parameters of "set_model_role_configuration".
+type SetModelRoleConfigurationCommand struct {
+	Role     string                                `json:"role"`
+	Scope    SetModelRoleConfigurationCommandScope `json:"scope"`
+	Expected ModelRoleConfigurationValue           `json:"expected"`
+	Selector *string                               `json:"selector,omitempty"`
+	Effort   *ModelEffortSelection                 `json:"effort,omitempty"`
+}
+
+// SetModelRoleConfiguration sends "set_model_role_configuration": Save or clear one scoped role selector and effort atomically, rejecting a stale expected value.
+func (c Commands) SetModelRoleConfiguration(ctx context.Context, p SetModelRoleConfigurationCommand) error {
+	return c.call(ctx, "set_model_role_configuration", p, 0, nil)
+}
+
+type SetModelRoleConfigurationCommandScope string
+
+const (
+	SetModelRoleConfigurationCommandScopeGlobal  SetModelRoleConfigurationCommandScope = "global"
+	SetModelRoleConfigurationCommandScopeProject SetModelRoleConfigurationCommandScope = "project"
+)
+
+func (v *SetModelRoleConfigurationCommandScope) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SetModelRoleConfigurationCommandScope")
+	if err != nil {
+		return err
+	}
+	switch value := SetModelRoleConfigurationCommandScope(s); value {
+	case SetModelRoleConfigurationCommandScopeGlobal, SetModelRoleConfigurationCommandScopeProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("SetModelRoleConfigurationCommandScope", s)
+}
+
+// SetModelRoleStorageCommand holds the parameters of "set_model_role_storage".
+type SetModelRoleStorageCommand struct {
+	Value    SetModelRoleStorageCommandValue    `json:"value"`
+	Expected SetModelRoleStorageCommandExpected `json:"expected"`
+}
+
+// SetModelRoleStorage sends "set_model_role_storage": Choose native global or project role storage, rejecting a stale preference.
+func (c Commands) SetModelRoleStorage(ctx context.Context, p SetModelRoleStorageCommand) error {
+	return c.call(ctx, "set_model_role_storage", p, 0, nil)
+}
+
+type SetModelRoleStorageCommandValue string
+
+const (
+	SetModelRoleStorageCommandValueGlobal  SetModelRoleStorageCommandValue = "global"
+	SetModelRoleStorageCommandValueProject SetModelRoleStorageCommandValue = "project"
+)
+
+func (v *SetModelRoleStorageCommandValue) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SetModelRoleStorageCommandValue")
+	if err != nil {
+		return err
+	}
+	switch value := SetModelRoleStorageCommandValue(s); value {
+	case SetModelRoleStorageCommandValueGlobal, SetModelRoleStorageCommandValueProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("SetModelRoleStorageCommandValue", s)
+}
+
+type SetModelRoleStorageCommandExpected string
+
+const (
+	SetModelRoleStorageCommandExpectedGlobal  SetModelRoleStorageCommandExpected = "global"
+	SetModelRoleStorageCommandExpectedProject SetModelRoleStorageCommandExpected = "project"
+)
+
+func (v *SetModelRoleStorageCommandExpected) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SetModelRoleStorageCommandExpected")
+	if err != nil {
+		return err
+	}
+	switch value := SetModelRoleStorageCommandExpected(s); value {
+	case SetModelRoleStorageCommandExpectedGlobal, SetModelRoleStorageCommandExpectedProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("SetModelRoleStorageCommandExpected", s)
+}
+
+// SetEffortRulesCommand holds the parameters of "set_effort_rules".
+type SetEffortRulesCommand struct {
+	Scope    SetEffortRulesCommandScope `json:"scope"`
+	Expected []ModelEffortRule          `json:"expected"`
+	Rules    []ModelEffortRule          `json:"rules,omitempty"`
+}
+
+// SetEffortRules sends "set_effort_rules": Save or clear native implicit effort rules in one scope, rejecting a stale expected value.
+func (c Commands) SetEffortRules(ctx context.Context, p SetEffortRulesCommand) error {
+	return c.call(ctx, "set_effort_rules", p, 0, nil)
+}
+
+type SetEffortRulesCommandScope string
+
+const (
+	SetEffortRulesCommandScopeGlobal  SetEffortRulesCommandScope = "global"
+	SetEffortRulesCommandScopeProject SetEffortRulesCommandScope = "project"
+)
+
+func (v *SetEffortRulesCommandScope) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SetEffortRulesCommandScope")
+	if err != nil {
+		return err
+	}
+	switch value := SetEffortRulesCommandScope(s); value {
+	case SetEffortRulesCommandScopeGlobal, SetEffortRulesCommandScopeProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("SetEffortRulesCommandScope", s)
+}
+
+// SetProviderAPIKeyCommand holds the parameters of "set_provider_api_key".
+type SetProviderAPIKeyCommand struct {
+	ProviderID string `json:"providerId"`
+	APIKey     string `json:"apiKey"`
+}
+
+// SetProviderAPIKey sends "set_provider_api_key": Upsert a key in the native credential store without replacing other accounts.
+func (c Commands) SetProviderAPIKey(ctx context.Context, p SetProviderAPIKeyCommand) error {
+	return c.call(ctx, "set_provider_api_key", p, 0, nil)
+}
+
+// CancelLoginCommand holds the parameters of "cancel_login".
+type CancelLoginCommand struct {
+	LoginID string `json:"loginId"`
+}
+
+// CancelLogin sends "cancel_login": Cancel this connection's active login request.
+func (c Commands) CancelLogin(ctx context.Context, p CancelLoginCommand) error {
+	return c.call(ctx, "cancel_login", p, 0, nil)
 }
 
 // GetUsageCommand holds the parameters of "get_usage".
