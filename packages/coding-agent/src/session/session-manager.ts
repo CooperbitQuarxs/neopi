@@ -747,6 +747,7 @@ interface SessionManagerStateSnapshot {
 	hasTitleSlot: boolean;
 	onDisk: boolean;
 	needsRewrite: boolean;
+	entryIdsNeedPersistence: boolean;
 	draftOnlySessionCleanupArmed: boolean;
 	fallbackRuntimeOnly: boolean;
 	header: SessionHeader;
@@ -917,6 +918,8 @@ export class SessionManager {
 	#fileIsCurrent = false;
 	/** In-memory entries diverged from disk (load-migration/sanitize) → next persist must full-rewrite. */
 	#rewriteRequired = false;
+	/** A pre-tree load minted IDs that cannot be advertised as durable before a successful native rewrite. */
+	#entryIdsNeedPersistence = false;
 	/** Malformed records the loader skipped for the current session file; reported by `/dump anon`. */
 	#loadedMalformedRecords = 0;
 	/** Byte length this manager last loaded or durably wrote; `null` means the path was absent. */
@@ -1582,8 +1585,9 @@ export class SessionManager {
 
 	#recordFullRewrite(bytes: number, stamp: SessionBodyStamp): void {
 		this.#expectedDiskSize = bytes;
-		if (stamp.sessionId !== this.#sessionId || stamp.sessionFile !== this.#sessionFile || !stamp.pendingEntries) return;
-		for (const entry of stamp.pendingEntries) {
+		if (stamp.sessionId !== this.#sessionId || stamp.sessionFile !== this.#sessionFile) return;
+		this.#entryIdsNeedPersistence = false;
+		for (const entry of stamp.pendingEntries ?? []) {
 			if (this.#index.get(entry.id) === entry) this.#journal.committed(entry);
 		}
 	}
@@ -2098,6 +2102,7 @@ export class SessionManager {
 		this.#reservedEntryIds.clear();
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = false;
+		this.#entryIdsNeedPersistence = false;
 		this.#loadedMalformedRecords = 0;
 		this.#forceFileCreation = false;
 		this.#draftOnlySessionCleanupArmed = false;
@@ -2311,6 +2316,7 @@ export class SessionManager {
 			expectedDiskSize: this.#expectedDiskSize,
 			onDisk: this.#fileIsCurrent,
 			needsRewrite: this.#rewriteRequired,
+			entryIdsNeedPersistence: this.#entryIdsNeedPersistence,
 			draftOnlySessionCleanupArmed: this.#draftOnlySessionCleanupArmed,
 			fallbackRuntimeOnly: this.#fallbackRuntimeOnly,
 			// Entries are snapshotted by reference (switch/reload replaces the
@@ -2355,6 +2361,7 @@ export class SessionManager {
 		this.#expectedDiskSize = snapshot.expectedDiskSize;
 		this.#fileIsCurrent = snapshot.onDisk;
 		this.#rewriteRequired = snapshot.needsRewrite;
+		this.#entryIdsNeedPersistence = snapshot.entryIdsNeedPersistence;
 		this.#forceFileCreation = snapshot.onDisk;
 		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#fallbackRuntimeOnly = snapshot.fallbackRuntimeOnly;
@@ -2492,6 +2499,7 @@ export class SessionManager {
 			return;
 		}
 
+		const entryIdsNeedPersistence = ((fileEntries[0] as SessionHeader).version ?? 1) < 2;
 		const migrated = migrateToCurrentVersion(fileEntries);
 		await resolveBlobRefsInEntries(fileEntries, this.#blobs);
 		// loadEntriesFromFile guarantees entries[0] is a valid session header.
@@ -2527,6 +2535,7 @@ export class SessionManager {
 		this.#hasTitleSlot = titleSlot !== undefined;
 		this.#fileIsCurrent = true;
 		this.#rewriteRequired = migrated || loaded.malformedRecords > 0;
+		this.#entryIdsNeedPersistence = entryIdsNeedPersistence;
 		this.#loadedMalformedRecords = loaded.malformedRecords;
 		this.#forceFileCreation = true;
 		this.#artifactManager = null;
@@ -3563,6 +3572,11 @@ export class SessionManager {
 	 */
 	snapshotForReplication(): { header: SessionHeader; entries: readonly SessionEntry[] } {
 		return { header: this.#header, entries: this.#entries };
+	}
+
+	/** False while pre-tree IDs exist in memory but have never been persisted. */
+	hasDurableEntryIds(): boolean {
+		return !this.#entryIdsNeedPersistence;
 	}
 
 	/**

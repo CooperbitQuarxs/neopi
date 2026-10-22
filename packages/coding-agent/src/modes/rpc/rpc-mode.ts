@@ -75,6 +75,7 @@ import { RPC_CAPABILITIES } from "./rpc-capabilities";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
+import { readLiveJournalPage, RpcJournalError } from "./rpc-journal";
 import { RpcBtwController } from "./rpc-btw";
 import { RpcGoalController } from "./rpc-goal";
 import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
@@ -1920,6 +1921,20 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				return success(id, "snapshot_session_journal", sessionEvents.snapshotJournal(session));
 			}
 
+			case "get_entries_page": {
+				if (session.isSessionTransitioning)
+					return error(id, "get_entries_page", "Native session transition is still applying", "session_busy");
+				try {
+					return success(id, "get_entries_page", readLiveJournalPage(session.sessionManager, command));
+				} catch (err) {
+					return error(
+						id,
+						"get_entries_page",
+						err instanceof Error ? err.message : String(err),
+						err instanceof RpcJournalError ? err.code : "session_unavailable",
+					);
+				}
+			}
 			case "get_tree": {
 				return success(id, "get_tree", {
 					tree: session.sessionManager.getTree(),

@@ -35,12 +35,21 @@ export interface IndexConfig {
 	terminalAtoms: number;
 	leadTokens: number;
 	shortNames: boolean;
+	/** Optional policy fields preserve direct callers' established defaults. */
+	titleChars?: number;
+	slugChars?: number;
+	overviewShare?: number;
+	overviewHopShare?: number;
+	overviewMinTokens?: number;
+	summaryWordsPerToken?: number;
+	summaryMinWords?: number;
+	summaryResponseMinTokens?: number;
+	summaryResponseMultiplier?: number;
+	summaryResponsePaddingTokens?: number;
 }
 
 /** Floor for one routing entry (key, label, period, count, description). */
 export const MIN_ROUTE_TOKENS = 48;
-const TITLE_ROUTE_CHARS = 160;
-const MAX_SLUG = 60;
 
 /** One atom as a terminal bucket enumerates it: bounded routing text plus its full locator. */
 export interface AtomEntry {
@@ -97,19 +106,28 @@ export function clipText(text: string, maxChars: number): { text: string; remain
 }
 
 export function overviewTokens(config: IndexConfig): number {
-	return Math.max(40, Math.min(Math.floor(config.summaryTokens * 0.3), Math.floor(config.hopTokens / 3)));
+	return Math.min(
+		config.hopTokens,
+		Math.max(
+			config.overviewMinTokens ?? 40,
+			Math.min(
+				Math.floor(config.summaryTokens * (config.overviewShare ?? 0.3)),
+				Math.floor(config.hopTokens * (config.overviewHopShare ?? 1 / 3)),
+			),
+		),
+	);
 }
 
 export function maxFanout(config: IndexConfig): number {
 	return Math.max(2, Math.floor((config.hopTokens - overviewTokens(config)) / MIN_ROUTE_TOKENS));
 }
 
-function slugify(title: string): string {
+function slugify(title: string, maxChars: number): string {
 	const slug = title
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-+|-+$/g, "")
-		.slice(0, MAX_SLUG)
+		.slice(0, maxChars)
 		.replace(/-+$/g, "");
 	return slug.length > 0 ? slug : "atom";
 }
@@ -119,11 +137,15 @@ function compactUtc(iso: string): string {
 }
 
 /** `<UTC time>-<slug>-<id tail>.md`; the id tail is the random end of the atom id. */
-export function stubName(atom: Pick<ChronicleAtom, "id" | "title" | "eventTime">, shortNames: boolean): string {
+export function stubName(
+	atom: Pick<ChronicleAtom, "id" | "title" | "eventTime">,
+	shortNames: boolean,
+	slugChars = 60,
+): string {
 	const tail = atom.id.replace(/[^0-9A-Za-z]/g, "").slice(-12) || "atom";
 	return shortNames
 		? `${compactUtc(atom.eventTime)}-${tail}.md`
-		: `${compactUtc(atom.eventTime)}-${slugify(atom.title)}-${tail}.md`;
+		: `${compactUtc(atom.eventTime)}-${slugify(atom.title, slugChars)}-${tail}.md`;
 }
 
 function leadOf(body: string, maxChars: number): { lead: string; remainder: number } {
@@ -136,8 +158,8 @@ function leadOf(body: string, maxChars: number): { lead: string; remainder: numb
 }
 
 export function atomEntry(atom: ChronicleAtom, parts: LocalParts, config: IndexConfig): AtomEntry {
-	const stub = stubName(atom, config.shortNames);
-	const title = clipText(atom.title, TITLE_ROUTE_CHARS);
+	const stub = stubName(atom, config.shortNames, config.slugChars);
+	const title = clipText(atom.title, config.titleChars ?? 160);
 	const header = `- \`${atom.id}\` ${pad2(parts.hour)}:${pad2(parts.minute)} ${atom.kind} — ${title.text}${
 		title.remainder > 0 ? "…" : ""
 	} (${path.basename(atom.project) || atom.project || "?"}, session ${atom.sessionId.slice(0, 8)}) [${stub}]`;

@@ -29,6 +29,7 @@ import {
 	type RpcMessagesPage,
 	type RpcMessagesPageOptions,
 } from "./rpc-messages";
+import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
 import type {
 	RpcAbortAndRestoreQueueResult,
 	RpcAvailableCommandsUpdateFrame,
@@ -1188,6 +1189,11 @@ export class RpcClient {
 		return this.#getData<SessionJournalIdentity>(response);
 	}
 
+	/** Read one complete-entry page without folding compaction or dropping alternate branches. */
+	async getEntriesPage(options: RpcJournalPageOptions = {}): Promise<RpcJournalPage> {
+		const response = await this.#send({ type: "get_entries_page", ...options });
+		return this.#getData<RpcJournalPage>(response);
+	}
 	/**
 	 * Pi-compatible raw session tree plus the current leaf id.
 	 */

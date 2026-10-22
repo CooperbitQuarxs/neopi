@@ -15,6 +15,7 @@ import {
 	resolveAgentPrewalkPattern,
 	resolveConfiguredModelPatterns,
 	resolveModelOverride,
+	resolveModelRoleValue,
 } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import agentCreationArchitectPrompt from "../prompts/system/agent-creation-architect.md" with { type: "text" };
@@ -146,8 +147,11 @@ export function createAgentsHubDeps(
 				activeModelPattern ?? defaultModelPattern ?? settings.getModelRole("default"),
 				settings,
 			);
+			const author = settings.getModelRole("agent-author")
+				? resolveModelRoleValue("@agent-author", modelRegistry.getAvailable(), { settings })
+				: undefined;
 			const { model } = resolveModelOverride(patterns, modelRegistry, settings);
-			const selectedModel = model ?? modelRegistry.getAvailable()[0];
+			const selectedModel = author ? author.model : (model ?? modelRegistry.getAvailable()[0]);
 			if (!selectedModel) throw new Error("No available model to generate agent specification.");
 			const { session } = await createAgentSession({
 				cwd,
@@ -155,6 +159,7 @@ export function createAgentsHubDeps(
 				modelRegistry,
 				settings,
 				model: selectedModel,
+				thinkingLevel: author?.thinkingLevel,
 				systemPrompt: [prompt.render(agentCreationArchitectPrompt, {})],
 				hasUI: false,
 				enableLsp: false,

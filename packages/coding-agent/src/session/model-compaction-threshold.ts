@@ -14,6 +14,7 @@ import {
 import type { ContextWindowTiers } from "../config/model-registry";
 import type { ScopeLike } from "../config/registry";
 import type { Settings } from "../config/settings";
+import { matchContextRule } from "../config/context-policy";
 import { sessionCompactionControlKeys } from "./compaction-control-state";
 import {
 	type CompactionSettings,
@@ -36,19 +37,34 @@ function thresholdOverrideSource(scope: ScopeLike): string | undefined {
 	return undefined;
 }
 
-/** The compaction policy in force for `model`: the configured policy with its `compaction.modelThresholds` entry applied. */
+const appliedContextRules = new WeakMap<CompactionSettings, WeakMap<object, CompactionSettings>>();
+
+/** Resolve session/role/agent overrides, then per-model limits, context rules, and the global policy. */
 export function resolveModelCompactionSettings(
 	scope: ScopeLike,
 	model: { provider: string; id: string } | null | undefined,
 ): CompactionSettings {
 	const configured = cfgCompaction.get(scope);
-	// Ad-hoc session and active-role limits outrank per-model defaults.
-	const thresholdOverride = thresholdOverrideSource(scope);
-	const thresholds =
-		!thresholdOverride && cfgCompactionModelThresholdsEnabled.get(scope)
-			? cfgCompactionModelThresholds.get(scope)
-			: undefined;
-	return applyModelCompactionThreshold(configured, thresholds, model);
+	// Session/role/agent overrides win, then N limits, then context rules.
+	const enabled = !thresholdOverrideSource(scope) && cfgCompactionModelThresholdsEnabled.get(scope);
+	const thresholds = enabled ? cfgCompactionModelThresholds.get(scope) : undefined;
+	if (!enabled || !model || matchModelCompactionThreshold(thresholds, model)) {
+		return applyModelCompactionThreshold(configured, thresholds, model);
+	}
+	const rule = matchContextRule(scope, model);
+	if (!rule) return configured;
+	let applied = appliedContextRules.get(configured);
+	if (!applied) {
+		applied = new WeakMap();
+		appliedContextRules.set(configured, applied);
+	}
+	const cached = applied.get(rule);
+	if (cached) return cached;
+	const threshold = parseModelCompactionEntry(rule.limit);
+	if (!threshold) return configured;
+	const result = applyCompactionThresholdPair(configured, threshold);
+	applied.set(rule, result);
+	return result;
 }
 
 /** Where auto-compaction triggers for `model` and which setting decides it, for the model hub preview. */
@@ -60,6 +76,10 @@ export function describeModelCompactionPoint(scope: ScopeLike, model: Model): Mo
 			? cfgCompactionModelThresholds.get(scope)
 			: undefined;
 	const match = matchModelCompactionThreshold(thresholds, model);
+	const rule =
+		!overrideSource && cfgCompactionModelThresholdsEnabled.get(scope) && !match
+			? matchContextRule(scope, model)
+			: undefined;
 	const settings = resolveModelCompactionSettings(scope, model);
 	const contextWindow = model.contextWindow ?? 0;
 	const trigger = settings.enabled && contextWindow > 0 ? resolveTrigger(settings, contextWindow) : undefined;
@@ -70,10 +90,22 @@ export function describeModelCompactionPoint(scope: ScopeLike, model: Model): Mo
 		source:
 			overrideSource ??
 			match?.key ??
+			(rule ? `context rule ${rule.selector}` : undefined) ??
 			(configured.thresholdTokens > 0 || configured.thresholdPercent > 0 ? "global" : "default"),
 		draft: match?.key === `${model.provider}/${model.id}` ? formatCompactionPointInput(match.threshold) : undefined,
 		limit: configuredLimit ? formatCompactionPointInput(configuredLimit.threshold) : undefined,
 	};
+}
+
+/** Effective maintenance budget, not a provider capability override. Token bases retain the configured reserve policy. */
+export function resolveEffectiveContextWindow(scope: ScopeLike, model: Model): number {
+	const window = model.contextWindow ?? 0;
+	if (window <= 0) return window;
+	const policy = resolveModelCompactionSettings(scope, model);
+	if (!policy.enabled) return window;
+	if (policy.baseWindowTokens && policy.thresholdTokens <= 0) return Math.min(window, policy.baseWindowTokens);
+	if (policy.thresholdTokens > 0 || policy.thresholdPercent > 0) return resolveThresholdTokens(window, policy);
+	return window;
 }
 
 /** A window size as the hub's one-line notices show it: `272K`, `1.05M`. */
@@ -137,7 +169,7 @@ interface ModelCompactionEntryPlan {
  * Plan `entry` (as `parseCompactionPointInput` persists it) for `model`, decoded
  * and applied exactly as the runtime does ({@link parseModelCompactionEntry},
  * {@link applyCompactionThresholdPair}). With no entry, the model falls back to
- * whatever else matches it: a `…*` prefix entry, else the configured policy.
+ * whatever else matches it: a `…*` prefix entry, then a context rule, else the configured policy.
  */
 function planModelCompactionEntry(
 	settings: Settings,
@@ -147,11 +179,17 @@ function planModelCompactionEntry(
 ): ModelCompactionEntryPlan {
 	const configured = cfgCompaction.get(settings);
 	let threshold: CompactionThresholdPair | undefined;
+	let contextRule = false;
 	if (entry !== undefined) {
 		threshold = parseModelCompactionEntry(entry);
 	} else if (cfgCompactionModelThresholdsEnabled.get(settings)) {
 		const { [`${model.provider}/${model.id}`]: _removed, ...others } = cfgCompactionModelThresholds.get(settings);
 		threshold = matchModelCompactionThreshold(others, model)?.threshold;
+		if (!threshold) {
+			const rule = matchContextRule(settings, model);
+			threshold = rule && parseModelCompactionEntry(rule.limit);
+			contextRule = rule !== undefined;
+		}
 	}
 	const applied = threshold ? applyCompactionThresholdPair(configured, threshold) : configured;
 	const tokens = threshold && threshold.thresholdTokens > 0 ? threshold.thresholdTokens : undefined;
@@ -159,7 +197,10 @@ function planModelCompactionEntry(
 	// A base stands in for the window, so it needs a window at least that large;
 	// a fixed trigger needs room above it.
 	const opensExtended =
-		tiers !== undefined && tokens !== undefined && (fixed ? tokens >= tiers.standard : tokens > tiers.standard);
+		!contextRule &&
+		tiers !== undefined &&
+		tokens !== undefined &&
+		(fixed ? tokens >= tiers.standard : tokens > tiers.standard);
 	const window = tiers
 		? opensExtended || cfgExtendedContext.get(settings)
 			? tiers.extended

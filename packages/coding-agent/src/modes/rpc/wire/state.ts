@@ -30,6 +30,7 @@ export const stateDefs = {
 		id: "string",
 		alias: "string",
 		name: "string",
+		"description?": "string",
 		"tag?": "string",
 		section: "'chat' | 'kind'",
 		source: "'builtin' | 'configured'",
@@ -396,6 +397,14 @@ export const stateDefs = {
 		"OMP-native session entries in append order.",
 	),
 	JournalIdentity: { sessionId: "string", sessionFile: "string | null", leafId: "string | null" },
+	JournalPage: {
+		entries: `${JSON_OBJECT}[]`,
+		sessionId: "string",
+		sessionFile: "string",
+		leafId: "string | null",
+		totalEntries: "number.integer",
+		"nextCursor?": doc("string", "Opaque cursor for the next page; absent on the last page."),
+	},
 	SessionTree: doc({ tree: `${JSON_OBJECT}[]`, leafId: "string | null" }, "Raw session tree roots."),
 	SubagentSnapshot: {
 		id: "string",

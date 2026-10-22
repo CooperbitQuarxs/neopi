@@ -76,4 +76,63 @@ describe("SettingsList host-decoded navigation", () => {
 			submenu: { value: "active jkgG/ " },
 		});
 	});
+
+	it("history restores a cursor without firing selection entry actions", () => {
+		const previews: string[] = [];
+		const list = new SettingsList(
+			[
+				{ id: "first", label: "First", currentValue: "" },
+				{ id: "second", label: "Second", currentValue: "" },
+			],
+			4,
+			settingsTheme,
+			() => {},
+			() => {},
+		);
+		const first = list.navigationSnapshot();
+		list.onSelectionChange = item => {
+			if (item) previews.push(item.id);
+		};
+		list.handleInput("j");
+		expect(previews).toEqual(["second"]);
+		list.restoreNavigation(first);
+		expect(list.getSelectedItem()?.id).toBe("first");
+		expect(previews).toEqual(["second"]);
+		list.handleInput("j");
+		expect(previews).toEqual(["second", "second"]);
+	});
+
+	it("history never cycles a setting whose old submenu no longer exists", () => {
+		const changed: string[] = [];
+		const list = new SettingsList(
+			[
+				{
+					id: "mode",
+					label: "Mode",
+					currentValue: "off",
+					submenu: () =>
+						new SettingsList(
+							[],
+							4,
+							settingsTheme,
+							() => {},
+							() => {},
+						),
+				},
+			],
+			4,
+			settingsTheme,
+			(_id, value) => {
+				changed.push(value);
+			},
+			() => {},
+		);
+		list.handleInput("\r");
+		const nested = list.navigationSnapshot();
+		list.setItems([{ id: "mode", label: "Mode", currentValue: "off", values: ["off", "on"] }]);
+		list.restoreNavigation(nested);
+		expect(list.hasOpenSubmenu()).toBe(false);
+		expect(list.getSelectedItem()?.currentValue).toBe("off");
+		expect(changed).toEqual([]);
+	});
 });

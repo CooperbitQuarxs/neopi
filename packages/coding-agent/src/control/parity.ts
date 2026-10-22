@@ -23,6 +23,7 @@ export const RPC_COMMAND_TYPES = [
 	"get_available_commands",
 	"get_entries",
 	"snapshot_session_journal",
+	"get_entries_page",
 	"get_tree",
 	"set_todos",
 	"set_host_tools",

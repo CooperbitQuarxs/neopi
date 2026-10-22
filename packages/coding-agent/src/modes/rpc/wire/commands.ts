@@ -182,6 +182,17 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		doc: "Emit native journal identity and current unsaved assistant before responding, without replacing subscriptions.",
 		result: "JournalIdentity",
 	},
+	{
+		name: "get_entries_page",
+		doc: "Read one canonical native journal or selected-branch page.",
+		params: {
+			"scope?": "'journal' | 'branch'",
+			"direction?": "'forward' | 'backward'",
+			"cursor?": "string",
+			"limit?": "number.integer",
+		},
+		result: "JournalPage",
+	},
 	{ name: "get_tree", doc: "Read the raw session tree.", result: "SessionTree" },
 	{
 		name: "set_todos",

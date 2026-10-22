@@ -661,6 +661,7 @@ class RoleInfo:
     source: Literal["builtin", "configured"]
     patterns: tuple[str, ...]
     hidden: bool
+    description: str | None = None
     tag: str | None = None
     configured: str | None = None
     resolved: RoleResolution | None = None
@@ -1155,6 +1156,17 @@ class JournalIdentity:
     session_id: str
     session_file: str | None
     leaf_id: str | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JournalPage:
+    entries: tuple[JsonObject, ...]
+    session_id: str
+    session_file: str
+    leaf_id: str | None
+    total_entries: int
+    next_cursor: str | None = None
+    """Opaque cursor for the next page; absent on the last page."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2500,6 +2512,7 @@ def parse_role_info(value: object, path: str = "RoleInfo") -> RoleInfo:
         source=required(payload, "source", cast('Decoder[Literal["builtin", "configured"]]', literal(frozenset({"builtin", "configured"}))), path),
         patterns=required(payload, "patterns", array(decode_str), path),
         hidden=required(payload, "hidden", decode_bool, path),
+        description=optional(payload, "description", decode_str, path),
         tag=optional(payload, "tag", decode_str, path),
         configured=optional(payload, "configured", decode_str, path),
         resolved=optional(payload, "resolved", parse_role_resolution, path),
@@ -3069,6 +3082,18 @@ def parse_journal_identity(value: object, path: str = "JournalIdentity") -> Jour
         session_id=required(payload, "sessionId", decode_str, path),
         session_file=required(payload, "sessionFile", nullable(decode_str), path),
         leaf_id=required(payload, "leafId", nullable(decode_str), path),
+    )
+
+
+def parse_journal_page(value: object, path: str = "JournalPage") -> JournalPage:
+    payload = expect_object(value, path)
+    return JournalPage(
+        entries=required(payload, "entries", array(decode_json_object), path),
+        session_id=required(payload, "sessionId", decode_str, path),
+        session_file=required(payload, "sessionFile", decode_str, path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        total_entries=required(payload, "totalEntries", decode_int, path),
+        next_cursor=optional(payload, "nextCursor", decode_str, path),
     )
 
 
@@ -4629,6 +4654,19 @@ class WireClient:
         params: dict[str, object] = {}
         return parse_journal_identity(self._command("snapshot_session_journal", params), "snapshot_session_journal")
 
+    def get_entries_page(self, *, scope: Literal["journal", "branch"] | None = None, direction: Literal["forward", "backward"] | None = None, cursor: str | None = None, limit: int | None = None) -> JournalPage:
+        """Read one canonical native journal or selected-branch page."""
+        params: dict[str, object] = {}
+        if scope is not None:
+            params["scope"] = scope
+        if direction is not None:
+            params["direction"] = direction
+        if cursor is not None:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = limit
+        return parse_journal_page(self._command("get_entries_page", params), "get_entries_page")
+
     def get_tree(self) -> SessionTree:
         """Read the raw session tree."""
         params: dict[str, object] = {}
@@ -5282,6 +5320,7 @@ __all__ = [
     "IrcMessageEvent",
     "JournalEntryEvent",
     "JournalIdentity",
+    "JournalPage",
     "JournalStateEvent",
     "ListMixturesResult",
     "LiveEndEvent",
@@ -5529,6 +5568,7 @@ __all__ = [
     "parse_irc_message_event",
     "parse_journal_entry_event",
     "parse_journal_identity",
+    "parse_journal_page",
     "parse_journal_state_event",
     "parse_list_mixtures_result",
     "parse_live_end_event",

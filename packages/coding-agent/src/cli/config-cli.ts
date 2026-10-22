@@ -13,12 +13,13 @@ import { Settings, settings } from "../config/settings";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { initXdg } from "./commands/init-xdg";
 import { dumpSettingsToml } from "../config/settings-toml";
+import { convertMainSettingsToToml } from "../config/settings-to-toml";
 
 // =============================================================================
 // Types
 // =============================================================================
 
-export type ConfigAction = "list" | "get" | "set" | "reset" | "path" | "init-xdg" | "dump-toml";
+export type ConfigAction = "list" | "get" | "set" | "reset" | "path" | "init-xdg" | "dump-toml" | "to-toml";
 
 export interface ConfigCommandArgs {
 	action: ConfigAction;
@@ -26,6 +27,7 @@ export interface ConfigCommandArgs {
 	value?: string;
 	flags: {
 		json?: boolean;
+		force?: boolean;
 	};
 }
 // =============================================================================
@@ -64,7 +66,7 @@ function findSettingDef(path: string): CliSettingDef | undefined {
 // Argument Parser
 // =============================================================================
 
-const VALID_ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg", "dump-toml"];
+const VALID_ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg", "dump-toml", "to-toml"];
 
 /**
  * Parse config subcommand arguments.
@@ -96,11 +98,16 @@ export function parseConfigArgs(args: string[]): ConfigCommandArgs | undefined {
 		const arg = args[i];
 		if (arg === "--json") {
 			result.flags.json = true;
+		} else if (arg === "--force" && action === "to-toml") {
+			result.flags.force = true;
 		} else if (!arg.startsWith("-")) {
 			positionalArgs.push(arg);
 		}
 	}
 
+	if (action === "to-toml" && positionalArgs.length > 1) {
+		throw new Error("Usage: npi config to-toml [config.yml|config.yaml] [--force]");
+	}
 	if (positionalArgs.length > 0) {
 		result.key = positionalArgs[0];
 	}
@@ -164,6 +171,21 @@ function getTypeDisplay(def: CliSettingDef): string {
 export async function runConfigCommand(cmd: ConfigCommandArgs): Promise<void> {
 	if (cmd.action === "dump-toml") {
 		await writeStdout(dumpSettingsToml());
+		return;
+	}
+	if (cmd.action === "to-toml") {
+		try {
+			const results = await convertMainSettingsToToml({ file: cmd.key, force: cmd.flags.force });
+			for (const result of results) {
+				console.log(`Converted ${result.sourcePath} -> ${result.targetPath}`);
+				for (const diagnostic of result.diagnostics) {
+					console.error(`${result.sourcePath} ${diagnostic.path}: ${diagnostic.message}`);
+				}
+			}
+		} catch (error) {
+			console.error(error instanceof Error ? error.message : "TOML conversion failed");
+			process.exitCode = 1;
+		}
 		return;
 	}
 	await Settings.init();
@@ -418,9 +440,11 @@ ${chalk.bold("Commands:")}
   path               Print the config directory path
   init-xdg           Initialize XDG Base Directory structure
   dump-toml          Print documented defaults as TOML
+  to-toml [file]     Convert user/project main YAML settings to config.toml
 
 ${chalk.bold("Options:")}
   --json             Output as JSON
+  --force            Replace existing config.toml during explicit conversion
 
 ${chalk.bold("Examples:")}
   ${APP_NAME} config list

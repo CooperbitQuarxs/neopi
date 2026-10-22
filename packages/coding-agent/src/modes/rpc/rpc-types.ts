@@ -26,6 +26,7 @@ import type { MixtureConfigScope, MixtureDefinition } from "@oh-my-pi/pi-tui/ove
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import type { LivePhase } from "../../live/controller";
 import type { RpcMessagesPage } from "./rpc-messages";
+import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
 import type { RpcModel } from "./rpc-model";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcUsageResult } from "./rpc-usage";
@@ -74,6 +75,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
 	| { id?: string; type: "snapshot_session_journal" }
+	| ({ id?: string; type: "get_entries_page" } & RpcJournalPageOptions)
 	| { id?: string; type: "get_tree" }
 	| { id?: string; type: "set_todos"; phases: TodoPhase[] }
 	| { id?: string; type: "set_host_tools"; tools: RpcHostToolDefinition[] }
@@ -571,6 +573,7 @@ export type RpcResponse =
 			data: { entries: SessionEntry[]; leafId: string | null };
 	  }
 	| { id?: string; type: "response"; command: "snapshot_session_journal"; success: true; data: SessionJournalIdentity }
+	| { id?: string; type: "response"; command: "get_entries_page"; success: true; data: RpcJournalPage }
 	| {
 			id?: string;
 			type: "response";

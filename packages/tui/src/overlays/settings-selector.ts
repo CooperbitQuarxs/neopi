@@ -798,6 +798,8 @@ export interface SettingsCallbacks {
 	onPluginsChanged?: () => void | Promise<void>;
 	/** Called when settings panel is closed */
 	onCancel: () => void;
+	/** Edit the persisted settings file, then re-read it before resolving. */
+	onOpenConfigFile?: () => Promise<void>;
 }
 
 /**
@@ -831,6 +833,7 @@ export class SettingsSelectorComponent implements Component {
 	#searchCorpora: { tab: SettingTab; corpus: FuzzyCorpus<SettingItem> }[] | null = null;
 	#textInputActive = false;
 	#restoringNavigation = false;
+	#externalEditPending = false;
 	readonly #menuKeys = new MenuKeyReader();
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	#hasSectionJump = false;
@@ -916,7 +919,7 @@ export class SettingsSelectorComponent implements Component {
 			return `${editorKeys("tui.select.up", "tui.select.down")} to jump sections · ${tab}/${confirm} to settings · ${switchTabs} · ${cancel} to close`;
 		}
 		const nav = this.#hasSectionJump ? `${tab} to jump sections · ${switchTabs}` : `${tab} to switch tabs`;
-		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · / search · ${cancel} to close`;
+		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · / search · ${cancel} to close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}`;
 	}
 
 	/** Single-line search banner: accent icon, editable query with live cursor, right-aligned match count. */
@@ -2144,6 +2147,17 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (matchesKey(data, "ctrl+g") && !this.#menuKeys.read(data) && this.#callbacks.onOpenConfigFile) {
+			if (!this.#externalEditPending) {
+				this.#externalEditPending = true;
+				void this.#callbacks.onOpenConfigFile().finally(() => {
+					this.#externalEditPending = false;
+					this.#refreshItems();
+					this.#context.requestRender?.();
+				});
+			}
+			return;
+		}
 		// SGR mouse reports (the fullscreen overlay enables tracking).
 		if (data.startsWith("\x1b[<")) {
 			this.#menuKeys.reset();
@@ -2246,6 +2260,7 @@ export class SettingsSelectorComponent implements Component {
 	get blocksMenuHistory(): boolean {
 		const list = this.#searchList ?? this.#currentList;
 		return (
+			this.#externalEditPending ||
 			list?.blocksMenuHistory === true ||
 			this.#pendingPluginWrites > 0 ||
 			this.#pluginComponent?.blocksMenuHistory === true ||
