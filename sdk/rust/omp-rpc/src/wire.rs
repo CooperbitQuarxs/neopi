@@ -2819,6 +2819,39 @@ pub struct RolesResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelEffortSelection {
+	pub mode: ModelEffortSelectionMode,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub level: Option<ThinkingLevel>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub allowed: Option<Vec<String>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub selector: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelEffortRule {
+	pub selector: String,
+	pub allowed: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelRoleConfigurationValue {
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub selector: Option<String>,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub effort: Option<ModelEffortSelection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelEffortRuleScopes {
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub global: Option<Vec<ModelEffortRule>>,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub project: Option<Vec<ModelEffortRule>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderUsageReport {
 	pub provider: String,
 	#[serde(rename = "fetchedAt")]
@@ -5421,6 +5454,10 @@ pub struct InputUiRequest {
 	pub placeholder: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub timeout: Option<i64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub secret: Option<bool>,
+	#[serde(rename = "loginId", default, skip_serializing_if = "Option::is_none")]
+	pub login_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5456,6 +5493,8 @@ pub struct NotifyUiRequest {
 	pub message: String,
 	#[serde(rename = "notifyType", default, skip_serializing_if = "Option::is_none")]
 	pub notify_type: Option<NotifyType>,
+	#[serde(rename = "loginId", default, skip_serializing_if = "Option::is_none")]
+	pub login_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5499,6 +5538,8 @@ pub struct OpenUrlUiRequest {
 	pub launch_url: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub instructions: Option<String>,
+	#[serde(rename = "loginId", default, skip_serializing_if = "Option::is_none")]
+	pub login_id: Option<String>,
 }
 
 /// Extension UI request, discriminated by `method`.
@@ -6188,6 +6229,59 @@ pub struct SetRoleResult {
 	pub model: ModelInfo,
 	#[serde(rename = "thinkingLevel", default, skip_serializing_if = "Option::is_none")]
 	pub thinking_level: Option<ThinkingLevel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetModelsConfigurationResult {
+	pub providers: Vec<Map<String, Value>>,
+	pub models: Vec<Map<String, Value>>,
+	pub roles: Vec<Map<String, Value>>,
+	#[serde(rename = "roleStorage")]
+	pub role_storage: GetModelsConfigurationResultRoleStorage,
+	#[serde(rename = "effortMode")]
+	pub effort_mode: GetModelsConfigurationResultEffortMode,
+	#[serde(rename = "effortRules")]
+	pub effort_rules: Vec<ModelEffortRule>,
+	#[serde(rename = "effortRulesProvenance")]
+	pub effort_rules_provenance: String,
+	#[serde(rename = "effortRuleScopes")]
+	pub effort_rule_scopes: ModelEffortRuleScopes,
+	#[serde(rename = "effortChoices")]
+	pub effort_choices: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRoleConfigurationParams {
+	pub role: String,
+	pub scope: SetModelRoleConfigurationParamsScope,
+	pub expected: ModelRoleConfigurationValue,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub selector: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub effort: Option<ModelEffortSelection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetEffortRulesParams {
+	pub scope: SetEffortRulesParamsScope,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub expected: Option<Vec<ModelEffortRule>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub rules: Option<Vec<ModelEffortRule>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetProviderApiKeyParams {
+	#[serde(rename = "providerId")]
+	pub provider_id: String,
+	#[serde(rename = "apiKey")]
+	pub api_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelLoginParams {
+	#[serde(rename = "loginId")]
+	pub login_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -6900,6 +6994,27 @@ impl RoleInfoSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ModelEffortSelectionMode {
+	#[serde(rename = "fixed")]
+	Fixed,
+	#[serde(rename = "auto")]
+	Auto,
+	#[serde(rename = "inherit")]
+	Inherit,
+}
+
+impl ModelEffortSelectionMode {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Fixed => "fixed",
+			Self::Auto => "auto",
+			Self::Inherit => "inherit",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MixtureModelMemberShow {
 	#[serde(rename = "always")]
 	Always,
@@ -7526,6 +7641,78 @@ impl HostUriResultContentType {
 	}
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GetModelsConfigurationResultRoleStorage {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl GetModelsConfigurationResultRoleStorage {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GetModelsConfigurationResultEffortMode {
+	#[serde(rename = "replacement")]
+	Replacement,
+	#[serde(rename = "legacy")]
+	Legacy,
+}
+
+impl GetModelsConfigurationResultEffortMode {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Replacement => "replacement",
+			Self::Legacy => "legacy",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SetModelRoleConfigurationParamsScope {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl SetModelRoleConfigurationParamsScope {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SetEffortRulesParamsScope {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl SetEffortRulesParamsScope {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
 /// Untagged union: the first variant that decodes wins.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -7923,6 +8110,102 @@ impl Command for SetRoleCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<SetRoleResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Read the native provider catalog, scoped model roles, and effort rules.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GetModelsConfigurationCommand {}
+
+impl Command for GetModelsConfigurationCommand {
+	const NAME: &'static str = "get_models_configuration";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = GetModelsConfigurationResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<GetModelsConfigurationResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Save or clear one scoped role selector and effort atomically, rejecting a stale expected value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRoleConfigurationCommand {
+	pub role: String,
+	pub scope: SetModelRoleConfigurationParamsScope,
+	pub expected: ModelRoleConfigurationValue,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub selector: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub effort: Option<ModelEffortSelection>,
+}
+
+impl Command for SetModelRoleConfigurationCommand {
+	const NAME: &'static str = "set_model_role_configuration";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Save or clear native implicit effort rules in one scope, rejecting a stale expected value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetEffortRulesCommand {
+	pub scope: SetEffortRulesParamsScope,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub expected: Option<Vec<ModelEffortRule>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub rules: Option<Vec<ModelEffortRule>>,
+}
+
+impl Command for SetEffortRulesCommand {
+	const NAME: &'static str = "set_effort_rules";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Upsert a key in the native credential store without replacing other accounts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetProviderApiKeyCommand {
+	#[serde(rename = "providerId")]
+	pub provider_id: String,
+	#[serde(rename = "apiKey")]
+	pub api_key: String,
+}
+
+impl Command for SetProviderApiKeyCommand {
+	const NAME: &'static str = "set_provider_api_key";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Cancel this connection's active login request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelLoginCommand {
+	#[serde(rename = "loginId")]
+	pub login_id: String,
+}
+
+impl Command for CancelLoginCommand {
+	const NAME: &'static str = "cancel_login";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
 	}
 }
 

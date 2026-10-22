@@ -28,6 +28,7 @@ import type { LivePhase } from "../../live/controller";
 import type { RpcMessagesPage } from "./rpc-messages";
 import type { RpcModel } from "./rpc-model";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
+import type { RpcSetModelRoleConfiguration, RpcSetEffortRules } from "./rpc-models-configuration";
 import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
@@ -99,6 +100,11 @@ export type RpcCommand =
 	| { id?: string; type: "select_mixture"; name: string }
 	| { id?: string; type: "get_roles" }
 	| { id?: string; type: "set_role"; role: string }
+	| { id?: string; type: "get_models_configuration" }
+	| ({ id?: string; type: "set_model_role_configuration" } & RpcSetModelRoleConfiguration)
+	| ({ id?: string; type: "set_effort_rules" } & RpcSetEffortRules)
+	| { id?: string; type: "set_provider_api_key"; providerId: string; apiKey: string }
+	| { id?: string; type: "cancel_login"; loginId: string }
 
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
@@ -695,6 +701,8 @@ export type RpcResponse =
 			success: true;
 			data: RpcSetRoleResult;
 	  }
+	| { id?: string; type: "response"; command: "get_models_configuration"; success: true; data: object }
+	| { id?: string; type: "response"; command: "set_model_role_configuration" | "set_effort_rules" | "set_provider_api_key" | "cancel_login"; success: true }
 
 	// Thinking
 	| { id?: string; type: "response"; command: "set_thinking_level"; success: true }
@@ -907,6 +915,8 @@ export type RpcExtensionUIRequest =
 			method: "input";
 			title: string;
 			placeholder?: string;
+			secret?: boolean;
+			loginId?: string;
 			timeout?: number;
 	  }
 	| {
