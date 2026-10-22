@@ -71,6 +71,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Model settings rows now show configured compaction limits beside the effort summary, preserving token or percentage notation ([#499](https://github.com/PsychedelicShayna/neopi/issues/499)).
 - Native addon cache keys now distinguish compiler, wrapper and Cargo build/profile environment overrides.
 - Stopping a live call while its persona or settings load no longer leaves a transport connected after cancellation ([#482](https://github.com/PsychedelicShayna/neopi/issues/482)).
 - Token-bounded text, including live transcript history, keeps emoji and combining characters intact at truncation boundaries ([#205](https://github.com/PsychedelicShayna/neopi/issues/205)).
