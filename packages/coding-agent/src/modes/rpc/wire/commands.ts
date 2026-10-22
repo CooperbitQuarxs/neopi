@@ -131,12 +131,28 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	{
 		name: "get_models_configuration",
 		doc: "Read the native provider catalog, scoped model roles, and effort rules.",
-		result: { providers: "Record<string, unknown>[]", models: "Record<string, unknown>[]", roles: "Record<string, unknown>[]", roleStorage: "'global' | 'project'", effortMode: "'replacement' | 'legacy'", effortRules: "ModelEffortRule[]", effortRulesProvenance: "string", effortRuleScopes: "ModelEffortRuleScopes", effortChoices: "string[]" },
+		result: {
+			providers: "Record<string, unknown>[]",
+			models: "Record<string, unknown>[]",
+			roles: "Record<string, unknown>[]",
+			roleStorage: "'global' | 'project'",
+			effortMode: "'replacement' | 'legacy'",
+			effortRules: "ModelEffortRule[]",
+			effortRulesProvenance: "string",
+			effortRuleScopes: "ModelEffortRuleScopes",
+			effortChoices: "string[]",
+		},
 	},
 	{
 		name: "set_model_role_configuration",
 		doc: "Save or clear one scoped role selector and effort atomically, rejecting a stale expected value.",
-		params: { role: "string", scope: "'global' | 'project'", "selector?": "string", "effort?": "ModelEffortSelection", expected: "ModelRoleConfigurationValue" },
+		params: {
+			role: "string",
+			scope: "'global' | 'project'",
+			"selector?": "string",
+			"effort?": "ModelEffortSelection",
+			expected: "ModelRoleConfigurationValue",
+		},
 	},
 	{
 		name: "set_model_role_storage",
