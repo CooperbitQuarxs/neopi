@@ -10,6 +10,7 @@
 ### Added
 
 - RPC model lists and session snapshots now report native Fast mode support separately from the requested and active session toggles ([NeoCode #129](https://github.com/PsychedelicShayna/neocode/issues/129)).
+- Linux source builds reuse verified native addons across worktrees through a shared cache; set `NPI_NATIVE_CACHE=off` to disable it.
 - Change a running subagent's reasoning level and fast mode through RPC, `npi ctl`, or its focused Agent Hub view without interrupting its turn; selections survive restart, and agent listings show current model and effort ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
 - Choose the model for the next live call with `live.model` in Settings or `/live model <slug>`; `/live model` shows the configured slug and the default remains `gpt-live-1-codex`.
 - Launch named workers and advisors yourself with `/agent launch`, choose the model, supported effort, tools and orchestration, and confirm the resolved model and cost warning before spawning ([#13](https://github.com/PsychedelicShayna/neopi/issues/13)).
@@ -70,6 +71,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Native addon cache keys now distinguish compiler, wrapper and Cargo build/profile environment overrides.
 - Stopping a live call while its persona or settings load no longer leaves a transport connected after cancellation ([#482](https://github.com/PsychedelicShayna/neopi/issues/482)).
 - Token-bounded text, including live transcript history, keeps emoji and combining characters intact at truncation boundaries ([#205](https://github.com/PsychedelicShayna/neopi/issues/205)).
 - Short work contracts no longer block ordinary messages by counting tool runtime state as prompt tokens; genuinely oversized contexts still fail without truncating clauses ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).

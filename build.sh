@@ -60,8 +60,11 @@ stamp="$native_dir/.$addon_name.stamp"
 # Current addons report the version through a post-link stamp, not the
 # pre-upstream per-release __piNativesV* symbol.
 has_release() {
-	bun -e 'process.exit(require(process.argv[1]).__piNativesBuildVersion?.() === process.argv[2] ? 0 : 1)' \
-		"$(realpath -- "$1")" "$version"
+	local reported
+	# A loader failure can exit Bun before our JS runs, even with exit code 0.
+	# Require the version output as evidence that the addon actually loaded.
+	reported=$(bun -e 'process.stdout.write(String(require(process.argv[1]).__piNativesBuildVersion?.()))' \
+		"$(realpath -- "$1")") && [[ $reported == "$version" ]]
 }
 
 # Everything the addon is compiled from, the scripts and configs that drive that
@@ -69,27 +72,138 @@ has_release() {
 native_inputs() {
 	local paths=(
 		crates Cargo.toml Cargo.lock rust-toolchain.toml .cargo
-		build.sh scripts/npi-build-lib.sh package.json bun.lock packages/natives/package.json packages/natives/scripts
-		scripts/bazel-natives.ts scripts/host-detect.ts
+		package.json bun.lock packages/natives/package.json
+		packages/natives/scripts/build-bindings.ts
+		scripts/bazel-natives.ts scripts/host-detect.ts scripts/stamp-native-version.ts
 		BUILD.bazel MODULE.bazel MODULE.bazel.lock .bazelrc .bazelversion bazel
 	)
 	printf '%s\n' "$version" "$addon_name" "${RUSTFLAGS:-}" "${CARGO_ENCODED_RUSTFLAGS:-}" \
-		"${OMP_NATIVE_CARGO_PROFILE:-}" "${OMP_NATIVE_BUILD_BACKEND:-}" "${RUSTC_LINKER:-}"
-	# Target linkers reach the embedded relay's rustc through crates/pi-natives/build.rs.
-	env | grep -E '^CARGO_TARGET_[A-Z0-9_]+_LINKER=' | sort || true
+		"${OMP_NATIVE_CARGO_PROFILE:-}" "${OMP_NATIVE_BUILD_BACKEND:-}" "${RUSTC_LINKER:-}" \
+		"${OMP_NATIVE_FEATURES:-}" "${CFLAGS:-}" "${CXXFLAGS:-}" "${LDFLAGS:-}" "${PCRE2_SYS_STATIC:-}"
+	# Cargo overrides can change the compiler, wrapper or generated code.
+	# Target linkers also reach the embedded relay through crates/pi-natives/build.rs.
+	env | grep -E '^(RUSTC(_WRAPPER|_WORKSPACE_WRAPPER)?|CARGO_PROFILE_[A-Z0-9_]+|CARGO_BUILD_[A-Z0-9_]+|CARGO_TARGET_[A-Z0-9_]+_LINKER)=' |
+		LC_ALL=C sort || true
 	# A Bazel rc (scripts/bazel-natives.ts) can change flags and toolchains.
 	printf 'bazelrc %s\n' "${OMP_BAZEL_RC:-}"
-	if [[ -n ${OMP_BAZEL_RC:-} && -f $OMP_BAZEL_RC ]]; then sha256sum <"$OMP_BAZEL_RC"; fi
-	git rev-parse "${paths[@]/#/HEAD:}"
-	git diff --no-ext-diff --no-textconv --no-color --binary HEAD -- "${paths[@]}"
-	untracked_digest "${paths[@]}"
+	if [[ -n ${OMP_BAZEL_RC:-} && -f $OMP_BAZEL_RC ]]; then
+		sha256sum <"$OMP_BAZEL_RC" || return 1
+	fi
+	# Hash working-tree bytes, not HEAD plus a diff: committing identical inputs
+	# must not change the key. Deleted tracked files have an explicit marker.
+	git ls-files -z --cached --others --exclude-standard -- "${paths[@]}" |
+		LC_ALL=C sort -zu | while IFS= read -r -d '' path; do
+			printf '%s\0' "$path"
+			if [[ -L $path ]]; then
+				printf 'link %s\0' "$(readlink -- "$path")"
+			elif [[ -f $path ]]; then
+				sha256sum <"$path" || exit 1
+			else
+				printf 'missing\0'
+			fi
+		done
 }
 
-# The stamp pins the inputs and the identity of the addon file they produced, so
-# a copied, symlinked, or hand-rebuilt addon is never trusted.
+# Include host identity because system libraries and target-cpu=native can
+# differ even between machines with the same rustc and architecture.
+host_fingerprint=$(
+	host_os=$(uname -sm) && host_id=$(cat /etc/machine-id) &&
+		host_rust=$("${RUSTC:-${CARGO_BUILD_RUSTC:-rustc}}" -vV) && host_bun=$(bun --version) &&
+		host_cc=$(cc --version) && host_ld=$(ld --version) && host_libc=$(ldd --version) &&
+		printf '%s\n' "$host_os" "$addon_name" "$host_id" "$host_rust" "$host_bun" "$host_cc" "$host_ld" "$host_libc"
+) || die "could not fingerprint the native build host"
+input_key=$( { native_inputs || exit 1; printf '%s\n' "$host_fingerprint"; } | sha256sum | cut -d' ' -f1)
+
+# Keep file identity AND content in the checkout stamp. A copied or manually
+# rebuilt addon cannot seed the cache just because its version still matches.
 expected_stamp() {
-	printf '%s\n%s\n' "$(native_inputs | sha256sum | cut -d' ' -f1)" "$(stat -c '%s %i %Y' "$addon")"
+	printf '%s\n%s\n%s\n' "$input_key" "$(stat -c '%s %i %y %z' "$addon")" \
+		"$(sha256sum <"$addon" | cut -d' ' -f1)"
 }
+
+cache_dir=${NPI_NATIVE_CACHE:-/mnt/alias/m2/agents/native-cache}
+cache_started=$SECONDS
+cache_status=hit
+cache_stored=false
+cache_enabled=false
+if [[ $cache_dir != off ]]; then
+	if mkdir -p -- "$cache_dir" && exec {cache_lock}>"$cache_dir/$input_key.lock" && flock "$cache_lock"; then
+		cache_enabled=true
+	else
+		say "native cache unavailable; using the normal build path"
+	fi
+fi
+
+# The caller holds the entry lock for both reads and publication. Metadata is
+# published last, so an interrupted store can never look like a complete entry.
+cache_valid() {
+	local recorded_key recorded_hash
+	[[ -f $cache_dir/$input_key.node && ! -L $cache_dir/$input_key.node &&
+		-f $cache_dir/$input_key.meta && ! -L $cache_dir/$input_key.meta ]] || return 1
+	{
+		IFS= read -r recorded_key
+		IFS= read -r recorded_hash
+	} <"$cache_dir/$input_key.meta"
+	[[ $recorded_key == "$input_key" && $recorded_hash == "$(sha256sum <"$cache_dir/$input_key.node" | cut -d' ' -f1)" ]]
+}
+
+cache_restore() {
+	local temporary
+	cache_valid || return 1
+	mkdir -p -- "$native_dir" || return 1
+	temporary=$(mktemp "$native_dir/.restore.XXXXXX.node") || return 1
+	if cp -- "$cache_dir/$input_key.node" "$temporary" && has_release "$temporary" &&
+		mv -f -- "$temporary" "$addon"; then
+		expected_stamp >"$stamp" || return 1
+		say "native addon restored from cache: $input_key"
+	else
+		rm -f -- "$temporary"
+		return 1
+	fi
+}
+
+cache_store() (
+	local temporary
+	temporary=$(mktemp -d "$cache_dir/.store.XXXXXX") || return 1
+	trap 'rm -rf -- "$temporary"' EXIT
+	cp -- "$addon" "$temporary/addon" || return 1
+	{
+		printf '%s\n%s\n' "$input_key" "$(sha256sum <"$temporary/addon" | cut -d' ' -f1)"
+		printf 'commit %s\ntime %s\nhost\n%s\n' "$(git rev-parse HEAD)" "$(date -u +%FT%TZ)" "$host_fingerprint"
+	} >"$temporary/metadata"
+	mv -f -- "$temporary/addon" "$cache_dir/$input_key.node" || return 1
+	mv -f -- "$temporary/metadata" "$cache_dir/$input_key.meta"
+)
+
+# Keep the eight most recently stored entries. Never evict an entry another
+# build holds, and never unlink lock files: waiters must share the same inode.
+cache_prune() (
+	local count=0 candidate entry_lock
+	exec {prune_lock}>"$cache_dir/.prune.lock"
+	flock "$prune_lock"
+	while read -r _ candidate; do
+		((count+=1))
+		((count > 8)) || continue
+		candidate=${candidate%.meta}
+		[[ $candidate =~ ^[0-9a-f]{64}$ && $candidate != "$input_key" ]] || continue
+		(
+			exec {entry_lock}>"$cache_dir/$candidate.lock"
+			flock -n "$entry_lock" || exit 0
+			rm -f -- "$cache_dir/$candidate.node" "$cache_dir/$candidate.meta"
+		)
+	done < <(find "$cache_dir" -maxdepth 1 -type f -name '*.meta' -printf '%T@ %f\n' | sort -rn)
+)
+
+record_native_phase() {
+	$cache_enabled || return 0
+	(
+		flock 9
+		printf '{"event":"%s","key":"%s","duration":%d,"stored":%s,"exit_code":%d}\n' \
+			"$cache_status" "$input_key" "$((SECONDS-cache_started))" "$cache_stored" "$1" >&9
+	) 9>>"$cache_dir/ledger.jsonl" || say "could not append native cache ledger"
+}
+# Record failed builds too, without letting a ledger error mask the build error.
+trap 'record_native_phase "$?"' EXIT
 
 # The binary build embeds every addon variant present; build.sh can vouch only
 # for the host one. Anything else is stale output from another build.
@@ -115,7 +229,17 @@ elif [[ ! -f $stamp ]] || [[ $(<"$stamp") != "$(expected_stamp)" ]]; then
 	reason="$addon was not built by build.sh from the current native inputs"
 fi
 
+if [[ -n $reason ]] && $cache_enabled && [[ ${NPI_FORCE_NATIVE:-} != 1 ]]; then
+	if cache_restore; then
+		reason=""
+	else
+		cache_status=miss
+		say "native cache miss or verification failed: $input_key; using the normal rebuild"
+	fi
+fi
+
 if [[ -n $reason ]]; then
+	cache_status=miss
 	say "rebuilding the native addon: $reason"
 	[[ -d target ]] || say "no cargo target/ in this checkout: this is a full native build (expect 10+ minutes)"
 	rm -f -- "$stamp"
@@ -126,6 +250,24 @@ if [[ -n $reason ]]; then
 else
 	say "native addon is current: $addon"
 fi
+
+if $cache_enabled; then
+	if ! cache_valid || [[ $cache_status == miss ]]; then
+		if cache_store; then
+			cache_stored=true
+			[[ $cache_status == miss ]] || cache_status=store
+			say "native addon stored in cache: $input_key"
+		else
+			say "native cache store failed; keeping the local addon"
+		fi
+	fi
+	record_native_phase 0
+	trap - EXIT
+	flock -u "$cache_lock"
+	exec {cache_lock}>&-
+	cache_prune || say "native cache eviction failed"
+fi
+trap - EXIT
 
 # install.sh refuses a binary built from other sources than the checkout holds,
 # so record the tree this build starts from; a failed build leaves no record.
