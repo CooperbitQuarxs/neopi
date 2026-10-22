@@ -460,6 +460,7 @@ const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
 const ROLE_PICKER_COLUMNS: readonly TspPickerColumn[] = [
 	{ id: "model", head: "Model", format: "text", priority: 2 },
 	{ id: "thinking", head: "Thinking", format: "dim", priority: 1 },
+	{ id: "compaction", head: "Compaction", format: "dim", priority: 1 },
 ];
 
 /** Kind tab labels (sentence case; acronyms stay upper). */
@@ -721,7 +722,13 @@ export class ModelHubComponent implements Component {
 	#catalogRefreshing = false;
 	#kindTabsMemo: { candidates: readonly ModelBrowserItem[]; tabs: TspPickerProps["tabs"] } | undefined;
 	#pickerRoleItems:
-		| { rows: readonly RolesRow[]; roles: RoleAssignments; cycle: string; items: readonly TspPickerItem[] }
+		| {
+				rows: readonly RolesRow[];
+				roles: RoleAssignments;
+				cycle: string;
+				revision: number;
+				items: readonly TspPickerItem[];
+		  }
 		| undefined;
 	#pickerRolePreview:
 		| {
@@ -3731,7 +3738,10 @@ export class ModelHubComponent implements Component {
 						: policy?.mode === "fixed"
 							? `  ${policy.level}`
 							: "";
-				let line = ` ${cursor} ${branch} ${selector}${theme.fg("dim", suffix)}`;
+				const model = this.#resolveFallbackEntry(rowDef.role, rowDef.chainIndex)?.item.model;
+				const limit = model && this.#settings.compactionPointFor?.(model)?.limit;
+				const compaction = limit ? `  compact ${limit}` : "";
+				let line = ` ${cursor} ${branch} ${selector}${theme.fg("dim", suffix + compaction)}`;
 				line = this.#finishRolesRow(line, width, hovered);
 				body.push(line);
 				continue;
@@ -3783,8 +3793,10 @@ export class ModelHubComponent implements Component {
 			const cycleIndex = cycleOrder.indexOf(role);
 			const cycleStyled = cycleIndex >= 0 ? theme.fg("accent", `${theme.icon.loop} ${cycleIndex + 1}`) : "";
 
+			const limit = assignment && this.#settings.compactionPointFor?.(assignment.model)?.limit;
+			const compactionStyled = limit ? theme.fg("dim", `compact ${limit}`) : "";
 			let line = ` ${cursor} ${dot} ${tagStyled}  ${value}`;
-			const right = [levelStyled, cycleStyled].filter(part => part.length > 0).join("  ");
+			const right = [levelStyled, compactionStyled, cycleStyled].filter(part => part.length > 0).join("  ");
 			const rightWidth = visibleWidth(right);
 			const lineWidth = visibleWidth(line);
 			if (rightWidth > 0 && lineWidth + rightWidth + 2 <= width) {
@@ -4419,8 +4431,19 @@ export class ModelHubComponent implements Component {
 					key,
 				);
 			}
-			case "fallback":
-				return node("item", { label: [span("  ↳ ", "dim"), span(rowDef.selector, "muted")] }, undefined, key);
+			case "fallback": {
+				const model = this.#resolveFallbackEntry(rowDef.role, rowDef.chainIndex)?.item.model;
+				const limit = model && this.#settings.compactionPointFor?.(model)?.limit;
+				return node(
+					"item",
+					{
+						label: [span("  ↳ ", "dim"), span(rowDef.selector, "muted")],
+						value: limit ? [span(`compact ${limit}`, "dim")] : undefined,
+					},
+					undefined,
+					key,
+				);
+			}
 			case "role":
 				break;
 		}
@@ -4447,6 +4470,11 @@ export class ModelHubComponent implements Component {
 			detail = assignment
 				? [span(`auto → ${assignment.model.provider}/${assignment.model.id}`, "dim")]
 				: [span("—", "dim")];
+		}
+		const limit = assignment && this.#settings.compactionPointFor?.(assignment.model)?.limit;
+		if (limit) {
+			if (value.length > 0) value.push(span("  "));
+			value.push(span(`compact ${limit}`, "dim"));
 		}
 		// Quick-cycle membership badge (`⟳ 2` = second stop of the ctrl+p cycle).
 		const cycleIndex = cycleOrder.indexOf(role);
@@ -5079,7 +5107,14 @@ export class ModelHubComponent implements Component {
 		const cycleOrder = this.#cycleOrder();
 		const cycle = cycleOrder.join("\0");
 		const memo = this.#pickerRoleItems;
-		if (memo?.rows === this.#rolesRows && memo.roles === this.#roles && memo.cycle === cycle) return memo.items;
+		const revision = this.#settings.revision;
+		if (
+			memo?.rows === this.#rolesRows &&
+			memo.roles === this.#roles &&
+			memo.cycle === cycle &&
+			memo.revision === revision
+		)
+			return memo.items;
 		const items: TspPickerItem[] = [];
 		this.#rolesRows.forEach((row, index) => {
 			const id = rolesRowKey(row, index);
@@ -5095,9 +5130,19 @@ export class ModelHubComponent implements Component {
 				case "chainKey":
 					items.push({ id, label: row.role, mono: true, icon: "git-branch", detail: "fallback chain" });
 					return;
-				case "fallback":
-					items.push({ id, label: row.selector, mono: true, depth: 1, detail: `fallback ${row.chainIndex + 1}` });
+				case "fallback": {
+					const model = this.#resolveFallbackEntry(row.role, row.chainIndex)?.item.model;
+					const limit = model && this.#settings.compactionPointFor?.(model)?.limit;
+					items.push({
+						id,
+						label: row.selector,
+						mono: true,
+						depth: 1,
+						detail: `fallback ${row.chainIndex + 1}`,
+						...(limit ? { facts: { compaction: `compact ${limit}` } } : {}),
+					});
 					return;
+				}
 				case "role":
 					break;
 			}
@@ -5111,6 +5156,8 @@ export class ModelHubComponent implements Component {
 				if (assignment.thinkingLevel !== ThinkingLevel.Inherit) {
 					facts.thinking = getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label;
 				}
+				const limit = this.#settings.compactionPointFor?.(assignment.model)?.limit;
+				if (limit) facts.compaction = `compact ${limit}`;
 			} else {
 				facts.model = "—";
 			}
@@ -5134,7 +5181,7 @@ export class ModelHubComponent implements Component {
 					: {}),
 			});
 		});
-		this.#pickerRoleItems = { rows: this.#rolesRows, roles: this.#roles, cycle, items };
+		this.#pickerRoleItems = { rows: this.#rolesRows, roles: this.#roles, cycle, revision, items };
 		return items;
 	}
 
