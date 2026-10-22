@@ -35,11 +35,19 @@ import type {
 import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
 import type { RpcModel } from "./rpc-model";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
+import type { RpcModelSelectorResult } from "./rpc-model-selector";
+import type {
+	RpcModelsConfiguration,
+	RpcSetModelRoleConfiguration,
+	RpcSetEffortRules,
+} from "./rpc-models-configuration";
 import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { BtwHistoryRecord } from "../../session/btw-history";
 import type { SessionJournalEvent, SessionJournalIdentity } from "../../session/session-journal-events";
+import type { RpcThemesCommand, RpcThemesConfiguration } from "./rpc-themes-configuration";
+import type { UsageStatistics } from "../../session/session-entries";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -51,6 +59,7 @@ export type RpcMessageUpdates = "full" | "delta";
 export type RpcCommand =
 	// Protocol
 	| { id?: string; type: "negotiate_protocol"; protocolVersion: number }
+	| RpcThemesCommand
 
 	// Prompting
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
@@ -65,7 +74,7 @@ export type RpcCommand =
 	| { id?: string; type: "open_session"; sessionDir: string; provider?: string; modelId?: string }
 
 	// State
-	| { id?: string; type: "get_state" }
+	| { id?: string; type: "get_state"; includeDump?: boolean }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
 	| RpcSetChatModeCommand
 	| { id?: string; type: "set_mode"; mode: RpcMode; planFilePath?: string }
@@ -110,7 +119,14 @@ export type RpcCommand =
 	| { id?: string; type: "list_mixtures" }
 	| { id?: string; type: "select_mixture"; name: string }
 	| { id?: string; type: "get_roles" }
+	| { id?: string; type: "query_model_selector"; query: string }
 	| { id?: string; type: "set_role"; role: string }
+	| { id?: string; type: "get_models_configuration" }
+	| ({ id?: string; type: "set_model_role_configuration" } & RpcSetModelRoleConfiguration)
+	| ({ id?: string; type: "set_effort_rules" } & RpcSetEffortRules)
+	| { id?: string; type: "set_model_role_storage"; value: "global" | "project"; expected: "global" | "project" }
+	| { id?: string; type: "set_provider_api_key"; providerId: string; apiKey: string }
+	| { id?: string; type: "cancel_login"; loginId: string }
 
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
@@ -190,6 +206,13 @@ export interface RpcSessionState {
 	sessionFile?: string;
 	sessionId: string;
 	sessionName?: string;
+	/** Effective tool policy, including the process-local auto-approve override. */
+	approvalMode?: ApprovalMode;
+	/** All journal branches, including compacted history and completed task spend. */
+	sessionUsage?: UsageStatistics & {
+		advisorCost: number;
+		advisorCostState: "ready" | "restoring" | "unavailable";
+	};
 	/** Capture ownership, last committed progress, and automatic recovery diagnostics. */
 	chronicler: ChroniclerHealth;
 	autoCompactionEnabled: boolean;
@@ -519,6 +542,8 @@ export interface RpcSubagentMessagesResult {
 
 // Success responses with data
 export type RpcResponse =
+	| { id?: string; type: "response"; command: "get_themes_configuration"; success: true; data: RpcThemesConfiguration }
+	| { id?: string; type: "response"; command: "update_theme"; success: true; data: RpcThemesConfiguration }
 	// Protocol
 	| {
 			id?: string;
@@ -707,10 +732,29 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
+			command: "query_model_selector";
+			success: true;
+			data: RpcModelSelectorResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
 			command: "set_role";
 			success: true;
 			data: RpcSetRoleResult;
 	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_models_configuration";
+			success: true;
+			data: Awaited<ReturnType<RpcModelsConfiguration["read"]>>;
+	  }
+	| { id?: string; type: "response"; command: "set_model_role_configuration"; success: true }
+	| { id?: string; type: "response"; command: "set_model_role_storage"; success: true }
+	| { id?: string; type: "response"; command: "set_effort_rules"; success: true }
+	| { id?: string; type: "response"; command: "set_provider_api_key"; success: true }
+	| { id?: string; type: "response"; command: "cancel_login"; success: true }
 
 	// Thinking
 	| { id?: string; type: "response"; command: "set_thinking_level"; success: true }
@@ -935,6 +979,8 @@ export type RpcExtensionUIRequest =
 			method: "input";
 			title: string;
 			placeholder?: string;
+			secret?: boolean;
+			loginId?: string;
 			timeout?: number;
 	  }
 	| {

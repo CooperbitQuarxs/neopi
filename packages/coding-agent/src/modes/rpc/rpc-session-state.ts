@@ -10,6 +10,7 @@ import { serializeRpcModel } from "./rpc-model";
 import { rpcPlanModeState } from "./rpc-plan-mode";
 import { isRpcSessionSettled, type RpcScheduledTurnProbe } from "./rpc-session-settle";
 import type { RpcSessionState } from "./rpc-types";
+import { rpcSessionTelemetry } from "./rpc-session-telemetry";
 
 export interface RpcSessionStateOptions {
 	/** Role the current model was selected through; omit for sessions without RPC roles. */
@@ -73,6 +74,7 @@ export function buildRpcSessionState(session: AgentSession, options: RpcSessionS
 		sessionFile: session.sessionFile,
 		sessionId: session.sessionId,
 		sessionName: session.sessionName,
+		...rpcSessionTelemetry(session),
 		chronicler: session.chroniclerHealth,
 		autoCompactionEnabled: session.autoCompactionEnabled,
 		queuedMessageCount: session.queuedMessageCount,

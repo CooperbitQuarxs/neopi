@@ -10,6 +10,11 @@
 ### Added
 
 - Attached graphical clients can observe native journal commits, tree-leaf and session changes without polling, immediately recover an in-flight reply on reconnect, and match streamed replies to durable journal IDs ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
+- RPC clients can discover native themes, read resolved colors and change dark or light selections in user or project scope without replacing the other scope. Theme setting changes emit an invalidation event for connected clients ([#526](https://github.com/PsychedelicShayna/neopi/issues/526)).
+- RPC and control session snapshots report recorded journal-wide spend, advisor restoration state, cache counters and effective approval policy for graphical session status ([NeoCode #141](https://github.com/PsychedelicShayna/neocode/issues/141)).
+- Query native `/switch` matches and measured model facts over RPC or terminal control without changing the selected model ([NeoCode #138](https://github.com/PsychedelicShayna/neocode/issues/138)).
+- Manage native model roles and effort rules from RPC clients with scoped conflict detection, provider catalog discovery and cancellable account login ([#507](https://github.com/PsychedelicShayna/neopi/issues/507)).
+- Hosts can launch a private stats dashboard with `npi stats --headless`, receive JSON readiness, and stop it by closing stdin without opening a browser ([#520](https://github.com/PsychedelicShayna/neopi/issues/520)).
 - Navigate the native session tree over RPC or terminal control without forking its file; receive restored drafts, images and native summary/ask outcomes with guarded branch preconditions ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
 - Inspect, add, edit and delete model overrides and custom models in `/models`, with schema-driven field editors and unknown-field preservation ([#522](https://github.com/PsychedelicShayna/neopi/issues/522)).
 
@@ -85,6 +90,10 @@
 ### Fixed
 
 - CI checks no longer depend on workstation-only test paths or outdated fixtures; fork releases retain Linux, macOS and Windows smoke checks without upstream package publishers ([#536](https://github.com/PsychedelicShayna/neopi/issues/536)).
+- Nightly Rust formatting checks pass for native live-audio controls ([#541](https://github.com/PsychedelicShayna/neopi/issues/541)).
+- CI formatting checks pass for the native RPC model configuration and hosted stats dashboard sources ([#543](https://github.com/PsychedelicShayna/neopi/issues/543)).
+- CI login coverage follows native secret OAuth prompts and verifies that logging out one account leaves other accounts authenticated ([#545](https://github.com/PsychedelicShayna/neopi/issues/545)).
+- Skill-list CI checks no longer reuse settings from an earlier test ([#349](https://github.com/PsychedelicShayna/neopi/issues/349)).
 - Ctrl-G opens the configuration file the view actually loads, ignoring unsupported TOML companions until their loaders support them ([#521](https://github.com/PsychedelicShayna/neopi/issues/521)).
 - Live subagent importance ranking now tries classifier fallbacks after a failed or empty primary response, even when authorization checks have already succeeded ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).
 - Live classifier failures now identify the model and failure reason in the warning and logs instead of silently discarding provider errors ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).

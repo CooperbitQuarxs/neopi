@@ -33,6 +33,7 @@ import { isFilesystemSourcePath } from "../tools/path-utils";
 import { supportsExternalThinking } from "../tools/think";
 import { ToolAbortError } from "../tools/tool-errors";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { resolveApprovalFromContext, type ApprovalMode } from "../tools/approval";
 import { isMountableUnderXdev, listXdevTools, type XdevState, xdevDocsFor, xdevEntries } from "../tools/xdev";
 import { type EditMode } from "@oh-my-pi/pi-tui/tools/edit";
 import { resolveEditMode } from "../utils/edit-mode";
@@ -1060,6 +1061,13 @@ export class SessionTools {
 				};
 			},
 		}) as T;
+	}
+
+	getApprovalMode(): ApprovalMode {
+		return resolveApprovalFromContext({
+			settings: this.#host.settings,
+			autoApprove: this.#autoApprove,
+		}).approvalMode;
 	}
 
 	#isExplicitAutoApproveMode(): boolean {

@@ -23,6 +23,7 @@ import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type R
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { RpcModel } from "./rpc-model";
+import type { RpcModelSelectorResult } from "./rpc-model-selector";
 import {
 	RPC_MESSAGES_PAGE_BUSY_ERROR,
 	RPC_MESSAGES_PAGE_STALE_ERROR,
@@ -1161,6 +1162,12 @@ export class RpcClient {
 	async getRoles(): Promise<RpcRolesResult> {
 		const response = await this.#send({ type: "get_roles" });
 		return this.#getData<RpcRolesResult>(response);
+	}
+
+	/** Read the native picker's matches and facts without selecting or starting a turn. */
+	async queryModelSelector(query: string): Promise<RpcModelSelectorResult> {
+		const response = await this.#send({ type: "query_model_selector", query });
+		return this.#getData<RpcModelSelectorResult>(response);
 	}
 
 	/**

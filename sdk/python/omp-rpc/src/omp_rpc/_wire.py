@@ -91,6 +91,11 @@ _APPROVAL_HANDLER_VALUES: Final[frozenset[str]] = frozenset({"host", "ui"})
 _decode_approval_handler = cast("Decoder[ApprovalHandler]", literal(_APPROVAL_HANDLER_VALUES))
 
 
+ApprovalMode: TypeAlias = Literal["always-ask", "write", "yolo"]
+_APPROVAL_MODE_VALUES: Final[frozenset[str]] = frozenset({"always-ask", "write", "yolo"})
+_decode_approval_mode = cast("Decoder[ApprovalMode]", literal(_APPROVAL_MODE_VALUES))
+
+
 ChatModeSetting: TypeAlias = Literal["off", "chat", "erp", "raw"]
 _CHAT_MODE_SETTING_VALUES: Final[frozenset[str]] = frozenset({"off", "chat", "erp", "raw"})
 _decode_chat_mode_setting = cast("Decoder[ChatModeSetting]", literal(_CHAT_MODE_SETTING_VALUES))
@@ -99,6 +104,11 @@ _decode_chat_mode_setting = cast("Decoder[ChatModeSetting]", literal(_CHAT_MODE_
 SessionMode: TypeAlias = Literal["default", "plan"]
 _SESSION_MODE_VALUES: Final[frozenset[str]] = frozenset({"default", "plan"})
 _decode_session_mode = cast("Decoder[SessionMode]", literal(_SESSION_MODE_VALUES))
+
+
+ModelSelectorPerformanceSource: TypeAlias = Literal["measured", "catalog"]
+_MODEL_SELECTOR_PERFORMANCE_SOURCE_VALUES: Final[frozenset[str]] = frozenset({"measured", "catalog"})
+_decode_model_selector_performance_source = cast("Decoder[ModelSelectorPerformanceSource]", literal(_MODEL_SELECTOR_PERFORMANCE_SOURCE_VALUES))
 
 
 MixtureConfigScope: TypeAlias = Literal["project", "user"]
@@ -623,6 +633,43 @@ class ModelInfo:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ThemeSelection:
+    effective: str
+    global_: str | None
+    project: str | None
+    colors: dict[str, str]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ThemeSelections:
+    dark: ThemeSelection
+    light: ThemeSelection
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ThemesConfiguration:
+    themes: tuple[str, ...]
+    selection: ThemeSelections
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SessionUsage:
+    input: float
+    output: float
+    cache_read: float
+    cache_write: float
+    total_tokens: float
+    orchestration_input: float
+    orchestration_output: float
+    orchestration_cache_read: float
+    premium_requests: float
+    cost: float
+    subagent_cost: float
+    advisor_cost: float
+    advisor_cost_state: Literal["ready", "restoring", "unavailable"]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class ChatModeState:
     mode: ChatModeSetting
     include: str
@@ -671,6 +718,63 @@ class RoleInfo:
 class RolesResult:
     roles: tuple[RoleInfo, ...]
     active_role: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelSelectorFacts:
+    intelligence: float | None
+    ttft_ms: float | None
+    tokens_per_second: float | None
+    context_window: float | None
+    effective_context_window: float | None
+    input_cost_per_million: float | None
+    output_cost_per_million: float | None
+    performance_source: ModelSelectorPerformanceSource | None
+    service_tier: str | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelSelectorItem:
+    selector: str
+    provider: str
+    id: str
+    name: str
+    resolved_selector: str | None
+    facts: ModelSelectorFacts
+    description: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelSelectorResult:
+    items: tuple[ModelSelectorItem, ...]
+    roles: tuple[ModelSelectorItem, ...]
+    error: str | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelEffortSelection:
+    mode: Literal["fixed", "auto", "inherit"]
+    level: ThinkingLevel | None = None
+    allowed: tuple[str, ...] | None = None
+    selector: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelEffortRule:
+    selector: str
+    allowed: tuple[str, ...]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelRoleConfigurationValue:
+    selector: str | None
+    effort: ModelEffortSelection | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelEffortRuleScopes:
+    global_: tuple[ModelEffortRule, ...] | None
+    project: tuple[ModelEffortRule, ...] | None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -948,6 +1052,8 @@ class SessionState:
     interrupt_mode: InterruptMode = "immediate"
     session_file: str | None = None
     session_name: str | None = None
+    approval_mode: ApprovalMode | None = None
+    session_usage: SessionUsage | None = None
     auto_compaction_enabled: bool = False
     fast_mode_enabled: bool = False
     fast_mode_active: bool = False
@@ -1389,6 +1495,11 @@ class ChatModeChangedEvent:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ApprovalModeChangedEvent:
+    type: Literal["approval_mode_changed"] = "approval_mode_changed"
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class MixtureHopEndEvent:
     type: Literal["mixture_hop_end"] = "mixture_hop_end"
     details: MixtureHopTrace
@@ -1746,6 +1857,16 @@ class ModelChangedEvent:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ThemesConfigurationChangedEvent:
+    type: Literal["themes_configuration_changed"] = "themes_configuration_changed"
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelsConfigurationChangedEvent:
+    type: Literal["models_configuration_changed"] = "models_configuration_changed"
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class ConfigWarningsChangedEvent:
     type: Literal["config_warnings_changed"] = "config_warnings_changed"
 
@@ -2073,6 +2194,8 @@ class InputUiRequest:
     title: str
     placeholder: str | None = None
     timeout: int | None = None
+    secret: bool | None = None
+    login_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2111,6 +2234,7 @@ class NotifyUiRequest:
     method: Literal["notify"] = "notify"
     message: str
     notify_type: NotifyType | None = None
+    login_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2157,6 +2281,7 @@ class OpenUrlUiRequest:
     launch_url: str | None = None
     """Short loopback redirect to `url`; the truncation-safe copy target."""
     instructions: str | None = None
+    login_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2171,6 +2296,8 @@ class ExtensionUiRequest(ExtensionUiRequestMixin):
     timeout: int | None = None
     message: str | None = None
     placeholder: str | None = None
+    secret: bool | None = None
+    login_id: str | None = None
     prefill: str | None = None
     prompt_style: bool | None = None
     questions: tuple[AskQuestion, ...] | None = None
@@ -2255,6 +2382,19 @@ class SetRoleResult:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class GetModelsConfigurationResult:
+    providers: tuple[JsonObject, ...]
+    models: tuple[JsonObject, ...]
+    roles: tuple[JsonObject, ...]
+    role_storage: Literal["global", "project"]
+    effort_mode: Literal["replacement", "legacy"]
+    effort_rules: tuple[ModelEffortRule, ...]
+    effort_rules_provenance: str
+    effort_rule_scopes: ModelEffortRuleScopes
+    effort_choices: tuple[str, ...]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class GetUsageResult:
     generated_at: int
     reports: tuple[ProviderUsageReport, ...]
@@ -2311,7 +2451,7 @@ UsageLimitState: TypeAlias = UsageLimitLowPriority | UsageLimitWrapUp
 MixtureAnswer: TypeAlias = MixtureChoiceAnswer | MixtureNoulAnswer | MixtureScoreAnswer
 
 
-RpcAgentEvent: TypeAlias = JournalStateEvent | JournalEntryEvent | MessagePersistedEvent | AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
+RpcAgentEvent: TypeAlias = JournalStateEvent | JournalEntryEvent | MessagePersistedEvent | AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | ApprovalModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ThemesConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
 """A session event, discriminated by `type`; `set_event_filter` selects which are sent."""
 
 
@@ -2532,6 +2672,51 @@ def parse_model_info(value: object, path: str = "ModelInfo") -> ModelInfo:
     )
 
 
+def parse_theme_selection(value: object, path: str = "ThemeSelection") -> ThemeSelection:
+    payload = expect_object(value, path)
+    return ThemeSelection(
+        effective=required(payload, "effective", decode_str, path),
+        global_=required(payload, "global", nullable(decode_str), path),
+        project=required(payload, "project", nullable(decode_str), path),
+        colors=required(payload, "colors", record(decode_str), path),
+    )
+
+
+def parse_theme_selections(value: object, path: str = "ThemeSelections") -> ThemeSelections:
+    payload = expect_object(value, path)
+    return ThemeSelections(
+        dark=required(payload, "dark", parse_theme_selection, path),
+        light=required(payload, "light", parse_theme_selection, path),
+    )
+
+
+def parse_themes_configuration(value: object, path: str = "ThemesConfiguration") -> ThemesConfiguration:
+    payload = expect_object(value, path)
+    return ThemesConfiguration(
+        themes=required(payload, "themes", array(decode_str), path),
+        selection=required(payload, "selection", parse_theme_selections, path),
+    )
+
+
+def parse_session_usage(value: object, path: str = "SessionUsage") -> SessionUsage:
+    payload = expect_object(value, path)
+    return SessionUsage(
+        input=required(payload, "input", decode_float, path),
+        output=required(payload, "output", decode_float, path),
+        cache_read=required(payload, "cacheRead", decode_float, path),
+        cache_write=required(payload, "cacheWrite", decode_float, path),
+        total_tokens=required(payload, "totalTokens", decode_float, path),
+        orchestration_input=required(payload, "orchestrationInput", decode_float, path),
+        orchestration_output=required(payload, "orchestrationOutput", decode_float, path),
+        orchestration_cache_read=required(payload, "orchestrationCacheRead", decode_float, path),
+        premium_requests=required(payload, "premiumRequests", decode_float, path),
+        cost=required(payload, "cost", decode_float, path),
+        subagent_cost=required(payload, "subagentCost", decode_float, path),
+        advisor_cost=required(payload, "advisorCost", decode_float, path),
+        advisor_cost_state=required(payload, "advisorCostState", cast('Decoder[Literal["ready", "restoring", "unavailable"]]', literal(frozenset({"ready", "restoring", "unavailable"}))), path),
+    )
+
+
 def parse_chat_mode_state(value: object, path: str = "ChatModeState") -> ChatModeState:
     payload = expect_object(value, path)
     return ChatModeState(
@@ -2592,6 +2777,77 @@ def parse_roles_result(value: object, path: str = "RolesResult") -> RolesResult:
     return RolesResult(
         roles=required(payload, "roles", array(parse_role_info), path),
         active_role=optional(payload, "activeRole", decode_str, path),
+    )
+
+
+def parse_model_selector_facts(value: object, path: str = "ModelSelectorFacts") -> ModelSelectorFacts:
+    payload = expect_object(value, path)
+    return ModelSelectorFacts(
+        intelligence=required(payload, "intelligence", nullable(decode_float), path),
+        ttft_ms=required(payload, "ttftMs", nullable(decode_float), path),
+        tokens_per_second=required(payload, "tokensPerSecond", nullable(decode_float), path),
+        context_window=required(payload, "contextWindow", nullable(decode_float), path),
+        effective_context_window=required(payload, "effectiveContextWindow", nullable(decode_float), path),
+        input_cost_per_million=required(payload, "inputCostPerMillion", nullable(decode_float), path),
+        output_cost_per_million=required(payload, "outputCostPerMillion", nullable(decode_float), path),
+        performance_source=required(payload, "performanceSource", nullable(_decode_model_selector_performance_source), path),
+        service_tier=required(payload, "serviceTier", nullable(decode_str), path),
+    )
+
+
+def parse_model_selector_item(value: object, path: str = "ModelSelectorItem") -> ModelSelectorItem:
+    payload = expect_object(value, path)
+    return ModelSelectorItem(
+        selector=required(payload, "selector", decode_str, path),
+        provider=required(payload, "provider", decode_str, path),
+        id=required(payload, "id", decode_str, path),
+        name=required(payload, "name", decode_str, path),
+        resolved_selector=required(payload, "resolvedSelector", nullable(decode_str), path),
+        facts=required(payload, "facts", parse_model_selector_facts, path),
+        description=optional(payload, "description", decode_str, path),
+    )
+
+
+def parse_model_selector_result(value: object, path: str = "ModelSelectorResult") -> ModelSelectorResult:
+    payload = expect_object(value, path)
+    return ModelSelectorResult(
+        items=required(payload, "items", array(parse_model_selector_item), path),
+        roles=required(payload, "roles", array(parse_model_selector_item), path),
+        error=required(payload, "error", nullable(decode_str), path),
+    )
+
+
+def parse_model_effort_selection(value: object, path: str = "ModelEffortSelection") -> ModelEffortSelection:
+    payload = expect_object(value, path)
+    return ModelEffortSelection(
+        mode=required(payload, "mode", cast('Decoder[Literal["fixed", "auto", "inherit"]]', literal(frozenset({"fixed", "auto", "inherit"}))), path),
+        level=optional(payload, "level", _decode_thinking_level, path),
+        allowed=optional(payload, "allowed", array(decode_str), path),
+        selector=optional(payload, "selector", decode_str, path),
+    )
+
+
+def parse_model_effort_rule(value: object, path: str = "ModelEffortRule") -> ModelEffortRule:
+    payload = expect_object(value, path)
+    return ModelEffortRule(
+        selector=required(payload, "selector", decode_str, path),
+        allowed=required(payload, "allowed", array(decode_str), path),
+    )
+
+
+def parse_model_role_configuration_value(value: object, path: str = "ModelRoleConfigurationValue") -> ModelRoleConfigurationValue:
+    payload = expect_object(value, path)
+    return ModelRoleConfigurationValue(
+        selector=required(payload, "selector", nullable(decode_str), path),
+        effort=required(payload, "effort", nullable(parse_model_effort_selection), path),
+    )
+
+
+def parse_model_effort_rule_scopes(value: object, path: str = "ModelEffortRuleScopes") -> ModelEffortRuleScopes:
+    payload = expect_object(value, path)
+    return ModelEffortRuleScopes(
+        global_=required(payload, "global", nullable(array(parse_model_effort_rule)), path),
+        project=required(payload, "project", nullable(array(parse_model_effort_rule)), path),
     )
 
 
@@ -2915,6 +3171,8 @@ def parse_session_state(value: object, path: str = "SessionState") -> SessionSta
         interrupt_mode=defaulted(payload, "interruptMode", _decode_interrupt_mode, path, "immediate"),
         session_file=optional(payload, "sessionFile", decode_str, path),
         session_name=optional(payload, "sessionName", decode_str, path),
+        approval_mode=optional(payload, "approvalMode", _decode_approval_mode, path),
+        session_usage=optional(payload, "sessionUsage", parse_session_usage, path),
         auto_compaction_enabled=defaulted(payload, "autoCompactionEnabled", decode_bool, path, False),
         fast_mode_enabled=defaulted(payload, "fastModeEnabled", decode_bool, path, False),
         fast_mode_active=defaulted(payload, "fastModeActive", decode_bool, path, False),
@@ -3418,6 +3676,13 @@ def parse_chat_mode_changed_event(value: object, path: str = "ChatModeChangedEve
     )
 
 
+def parse_approval_mode_changed_event(value: object, path: str = "ApprovalModeChangedEvent") -> ApprovalModeChangedEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["approval_mode_changed"]]', literal(frozenset({"approval_mode_changed"}))), path)
+    return ApprovalModeChangedEvent(
+    )
+
+
 def parse_mixture_hop_end_event(value: object, path: str = "MixtureHopEndEvent") -> MixtureHopEndEvent:
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["mixture_hop_end"]]', literal(frozenset({"mixture_hop_end"}))), path)
@@ -3832,6 +4097,20 @@ def parse_model_changed_event(value: object, path: str = "ModelChangedEvent") ->
     )
 
 
+def parse_themes_configuration_changed_event(value: object, path: str = "ThemesConfigurationChangedEvent") -> ThemesConfigurationChangedEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["themes_configuration_changed"]]', literal(frozenset({"themes_configuration_changed"}))), path)
+    return ThemesConfigurationChangedEvent(
+    )
+
+
+def parse_models_configuration_changed_event(value: object, path: str = "ModelsConfigurationChangedEvent") -> ModelsConfigurationChangedEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["models_configuration_changed"]]', literal(frozenset({"models_configuration_changed"}))), path)
+    return ModelsConfigurationChangedEvent(
+    )
+
+
 def parse_config_warnings_changed_event(value: object, path: str = "ConfigWarningsChangedEvent") -> ConfigWarningsChangedEvent:
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["config_warnings_changed"]]', literal(frozenset({"config_warnings_changed"}))), path)
@@ -4206,6 +4485,8 @@ def parse_input_ui_request(value: object, path: str = "InputUiRequest") -> Input
         title=required(payload, "title", decode_str, path),
         placeholder=optional(payload, "placeholder", decode_str, path),
         timeout=optional(payload, "timeout", decode_int, path),
+        secret=optional(payload, "secret", decode_bool, path),
+        login_id=optional(payload, "loginId", decode_str, path),
     )
 
 
@@ -4250,6 +4531,7 @@ def parse_notify_ui_request(value: object, path: str = "NotifyUiRequest") -> Not
         id=required(payload, "id", decode_str, path),
         message=required(payload, "message", decode_str, path),
         notify_type=optional(payload, "notifyType", _decode_notify_type, path),
+        login_id=optional(payload, "loginId", decode_str, path),
     )
 
 
@@ -4305,6 +4587,7 @@ def parse_open_url_ui_request(value: object, path: str = "OpenUrlUiRequest") -> 
         url=required(payload, "url", decode_str, path),
         launch_url=optional(payload, "launchUrl", decode_str, path),
         instructions=optional(payload, "instructions", decode_str, path),
+        login_id=optional(payload, "loginId", decode_str, path),
     )
 
 
@@ -4320,6 +4603,8 @@ def parse_extension_ui_request(value: object, path: str = "ExtensionUiRequest") 
         timeout=optional(payload, "timeout", decode_int, path),
         message=optional(payload, "message", decode_str, path),
         placeholder=optional(payload, "placeholder", decode_str, path),
+        secret=optional(payload, "secret", decode_bool, path),
+        login_id=optional(payload, "loginId", decode_str, path),
         prefill=optional(payload, "prefill", decode_str, path),
         prompt_style=optional(payload, "promptStyle", decode_bool, path),
         questions=optional(payload, "questions", array(parse_ask_question), path),
@@ -4422,6 +4707,21 @@ def parse_set_role_result(value: object, path: str = "SetRoleResult") -> SetRole
     )
 
 
+def parse_get_models_configuration_result(value: object, path: str = "GetModelsConfigurationResult") -> GetModelsConfigurationResult:
+    payload = expect_object(value, path)
+    return GetModelsConfigurationResult(
+        providers=required(payload, "providers", array(decode_json_object), path),
+        models=required(payload, "models", array(decode_json_object), path),
+        roles=required(payload, "roles", array(decode_json_object), path),
+        role_storage=required(payload, "roleStorage", cast('Decoder[Literal["global", "project"]]', literal(frozenset({"global", "project"}))), path),
+        effort_mode=required(payload, "effortMode", cast('Decoder[Literal["replacement", "legacy"]]', literal(frozenset({"replacement", "legacy"}))), path),
+        effort_rules=required(payload, "effortRules", array(parse_model_effort_rule), path),
+        effort_rules_provenance=required(payload, "effortRulesProvenance", decode_str, path),
+        effort_rule_scopes=required(payload, "effortRuleScopes", parse_model_effort_rule_scopes, path),
+        effort_choices=required(payload, "effortChoices", array(decode_str), path),
+    )
+
+
 def parse_get_usage_result(value: object, path: str = "GetUsageResult") -> GetUsageResult:
     payload = expect_object(value, path)
     return GetUsageResult(
@@ -4520,6 +4820,7 @@ _RPC_AGENT_EVENT_CASES: Final[dict[str, Decoder[RpcAgentEvent]]] = {
         "run_owners_joined": parse_run_owners_joined_event,
         "run_owners_skipped": parse_run_owners_skipped_event,
         "chat_mode_changed": parse_chat_mode_changed_event,
+        "approval_mode_changed": parse_approval_mode_changed_event,
         "mixture_hop_end": parse_mixture_hop_end_event,
         "mixture_decision": parse_mixture_decision_event,
         "mixture_limit": parse_mixture_limit_event,
@@ -4545,6 +4846,8 @@ _RPC_AGENT_EVENT_CASES: Final[dict[str, Decoder[RpcAgentEvent]]] = {
         "retry_fallback_applied": parse_retry_fallback_applied_event,
         "retry_fallback_succeeded": parse_retry_fallback_succeeded_event,
         "model_changed": parse_model_changed_event,
+        "models_configuration_changed": parse_models_configuration_changed_event,
+        "themes_configuration_changed": parse_themes_configuration_changed_event,
         "config_warnings_changed": parse_config_warnings_changed_event,
         "advisor_cost_changed": parse_advisor_cost_changed_event,
         "advisor_yielded": parse_advisor_yielded_event,
@@ -4586,6 +4889,7 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "run_owners_joined": parse_rpc_agent_event,
         "run_owners_skipped": parse_rpc_agent_event,
         "chat_mode_changed": parse_rpc_agent_event,
+        "approval_mode_changed": parse_rpc_agent_event,
         "mixture_hop_end": parse_rpc_agent_event,
         "mixture_decision": parse_rpc_agent_event,
         "mixture_limit": parse_rpc_agent_event,
@@ -4611,6 +4915,8 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "retry_fallback_applied": parse_rpc_agent_event,
         "retry_fallback_succeeded": parse_rpc_agent_event,
         "model_changed": parse_rpc_agent_event,
+        "models_configuration_changed": parse_rpc_agent_event,
+        "themes_configuration_changed": parse_rpc_agent_event,
         "config_warnings_changed": parse_rpc_agent_event,
         "advisor_cost_changed": parse_rpc_agent_event,
         "advisor_yielded": parse_rpc_agent_event,
@@ -4692,9 +4998,11 @@ class WireClient:
             params["modelId"] = model_id
         return parse_open_session_result(self._command("open_session", params), "open_session")
 
-    def get_state(self) -> SessionState:
+    def get_state(self, include_dump: bool | None = None) -> SessionState:
         """Snapshot the session state."""
         params: dict[str, object] = {}
+        if include_dump is not None:
+            params["includeDump"] = include_dump
         return parse_session_state(self._command("get_state", params), "get_state")
 
     def create_mixture(self, scope: MixtureConfigScope, definition: Mapping[str, JsonValue]) -> CreateMixtureResult:
@@ -4720,11 +5028,77 @@ class WireClient:
         params: dict[str, object] = {}
         return parse_roles_result(self._command("get_roles", params), "get_roles")
 
+    def get_themes_configuration(self) -> ThemesConfiguration:
+        """Read native theme discovery and scoped selections."""
+        params: dict[str, object] = {}
+        return parse_themes_configuration(self._command("get_themes_configuration", params), "get_themes_configuration")
+
+    def update_theme(self, appearance: Literal["dark", "light"], scope: Literal["global", "project"], name: str | None, expected: str | None) -> ThemesConfiguration:
+        """Set or inherit one native theme slot with an expected scoped value."""
+        params: dict[str, object] = {}
+        params["appearance"] = appearance
+        params["scope"] = scope
+        params["name"] = name
+        params["expected"] = expected
+        return parse_themes_configuration(self._command("update_theme", params), "update_theme")
+
+    def query_model_selector(self, query: str) -> ModelSelectorResult:
+        """Query native /switch ordering, scoped candidates, role aliases and model facts without selecting."""
+        params: dict[str, object] = {}
+        params["query"] = query
+        return parse_model_selector_result(self._command("query_model_selector", params), "query_model_selector")
+
     def set_role(self, role: str) -> SetRoleResult:
         """Select a model role."""
         params: dict[str, object] = {}
         params["role"] = role
         return parse_set_role_result(self._command("set_role", params), "set_role")
+
+    def get_models_configuration(self) -> GetModelsConfigurationResult:
+        """Read the native provider catalog, scoped model roles, and effort rules."""
+        params: dict[str, object] = {}
+        return parse_get_models_configuration_result(self._command("get_models_configuration", params), "get_models_configuration")
+
+    def set_model_role_configuration(self, role: str, scope: Literal["global", "project"], expected: Mapping[str, JsonValue], *, selector: str | None = None, effort: Mapping[str, JsonValue] | None = None) -> None:
+        """Save or clear one scoped role selector and effort atomically, rejecting a stale expected value."""
+        params: dict[str, object] = {}
+        params["role"] = role
+        params["scope"] = scope
+        params["expected"] = dict(expected)
+        if selector is not None:
+            params["selector"] = selector
+        if effort is not None:
+            params["effort"] = dict(effort)
+        self._command("set_model_role_configuration", params)
+
+    def set_model_role_storage(self, value: Literal["global", "project"], expected: Literal["global", "project"]) -> None:
+        """Choose native global or project role storage, rejecting a stale preference."""
+        params: dict[str, object] = {}
+        params["value"] = value
+        params["expected"] = expected
+        self._command("set_model_role_storage", params)
+
+    def set_effort_rules(self, scope: Literal["global", "project"], expected: Sequence[Mapping[str, JsonValue]] | None, *, rules: Sequence[Mapping[str, JsonValue]] | None = None) -> None:
+        """Save or clear native implicit effort rules in one scope, rejecting a stale expected value."""
+        params: dict[str, object] = {}
+        params["scope"] = scope
+        params["expected"] = list(expected) if expected is not None else None
+        if rules is not None:
+            params["rules"] = list(rules)
+        self._command("set_effort_rules", params)
+
+    def set_provider_api_key(self, provider_id: str, api_key: str) -> None:
+        """Upsert a key in the native credential store without replacing other accounts."""
+        params: dict[str, object] = {}
+        params["providerId"] = provider_id
+        params["apiKey"] = api_key
+        self._command("set_provider_api_key", params)
+
+    def cancel_login(self, login_id: str) -> None:
+        """Cancel this connection's active login request."""
+        params: dict[str, object] = {}
+        params["loginId"] = login_id
+        self._command("cancel_login", params)
 
     def get_usage(self, *, provider: str | None = None, refresh: bool | None = None, redact: bool | None = None) -> GetUsageResult:
         """Read provider usage reports."""
@@ -5250,6 +5624,10 @@ class WireClient:
         """Subscribe to `chat_mode_changed` frames."""
         return self._listen("chat_mode_changed", listener)
 
+    def on_approval_mode_changed(self, listener: Callable[[ApprovalModeChangedEvent], None]) -> Callable[[], None]:
+        """Subscribe to `approval_mode_changed` frames."""
+        return self._listen("approval_mode_changed", listener)
+
     def on_mixture_hop_end(self, listener: Callable[[MixtureHopEndEvent], None]) -> Callable[[], None]:
         """Subscribe to `mixture_hop_end` frames."""
         return self._listen("mixture_hop_end", listener)
@@ -5350,6 +5728,14 @@ class WireClient:
         """Subscribe to `model_changed` frames."""
         return self._listen("model_changed", listener)
 
+    def on_models_configuration_changed(self, listener: Callable[[ModelsConfigurationChangedEvent], None]) -> Callable[[], None]:
+        """Subscribe to `models_configuration_changed` frames."""
+        return self._listen("models_configuration_changed", listener)
+
+    def on_themes_configuration_changed(self, listener: Callable[[ThemesConfigurationChangedEvent], None]) -> Callable[[], None]:
+        """Subscribe to `themes_configuration_changed` frames."""
+        return self._listen("themes_configuration_changed", listener)
+
     def on_config_warnings_changed(self, listener: Callable[[ConfigWarningsChangedEvent], None]) -> Callable[[], None]:
         """Subscribe to `config_warnings_changed` frames."""
         return self._listen("config_warnings_changed", listener)
@@ -5407,6 +5793,8 @@ __all__ = [
     "AgentStartEvent",
     "AnthropicServerToolContent",
     "ApprovalHandler",
+    "ApprovalMode",
+    "ApprovalModeChangedEvent",
     "AskAnswer",
     "AskOption",
     "AskQuestion",
@@ -5479,6 +5867,7 @@ __all__ = [
     "FileMentionItem",
     "FileMentionMessage",
     "FollowUpResult",
+    "GetModelsConfigurationResult",
     "GetUsageResult",
     "Goal",
     "GoalModeState",
@@ -5560,7 +5949,16 @@ __all__ = [
     "ModelChangedEvent",
     "ModelCost",
     "ModelCycleResult",
+    "ModelEffortRule",
+    "ModelEffortRuleScopes",
+    "ModelEffortSelection",
     "ModelInfo",
+    "ModelRoleConfigurationValue",
+    "ModelSelectorFacts",
+    "ModelSelectorItem",
+    "ModelSelectorPerformanceSource",
+    "ModelSelectorResult",
+    "ModelsConfigurationChangedEvent",
     "NavigateTreeResult",
     "NegotiateProtocolResult",
     "NoticeEvent",
@@ -5605,6 +6003,7 @@ __all__ = [
     "SessionState",
     "SessionStats",
     "SessionTree",
+    "SessionUsage",
     "SetApprovalHandlerResult",
     "SetEditorTextUiRequest",
     "SetModeResult",
@@ -5631,6 +6030,10 @@ __all__ = [
     "SubagentStatus",
     "SubagentSubscriptionLevel",
     "TextContent",
+    "ThemeSelection",
+    "ThemeSelections",
+    "ThemesConfiguration",
+    "ThemesConfigurationChangedEvent",
     "ThinkingConfig",
     "ThinkingContent",
     "ThinkingEffort",
@@ -5676,6 +6079,7 @@ __all__ = [
     "parse_agent_message",
     "parse_agent_start_event",
     "parse_anthropic_server_tool_content",
+    "parse_approval_mode_changed_event",
     "parse_ask_answer",
     "parse_ask_option",
     "parse_ask_question",
@@ -5737,6 +6141,7 @@ __all__ = [
     "parse_file_mention_item",
     "parse_file_mention_message",
     "parse_follow_up_result",
+    "parse_get_models_configuration_result",
     "parse_get_usage_result",
     "parse_goal",
     "parse_goal_mode_state",
@@ -5806,7 +6211,15 @@ __all__ = [
     "parse_model_changed_event",
     "parse_model_cost",
     "parse_model_cycle_result",
+    "parse_model_effort_rule",
+    "parse_model_effort_rule_scopes",
+    "parse_model_effort_selection",
     "parse_model_info",
+    "parse_model_role_configuration_value",
+    "parse_model_selector_facts",
+    "parse_model_selector_item",
+    "parse_model_selector_result",
+    "parse_models_configuration_changed_event",
     "parse_navigate_tree_result",
     "parse_negotiate_protocol_result",
     "parse_notice_event",
@@ -5846,6 +6259,7 @@ __all__ = [
     "parse_session_state",
     "parse_session_stats",
     "parse_session_tree",
+    "parse_session_usage",
     "parse_set_approval_handler_result",
     "parse_set_editor_text_ui_request",
     "parse_set_mode_result",
@@ -5865,6 +6279,10 @@ __all__ = [
     "parse_subagent_progress_payload",
     "parse_subagent_snapshot",
     "parse_text_content",
+    "parse_theme_selection",
+    "parse_theme_selections",
+    "parse_themes_configuration",
+    "parse_themes_configuration_changed_event",
     "parse_thinking_config",
     "parse_thinking_content",
     "parse_thinking_level_changed_event",

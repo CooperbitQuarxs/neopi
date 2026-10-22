@@ -82,7 +82,10 @@ export type AgentSessionEvent =
 	| { type: "retry_fallback_applied"; from: string; to: string; role: string; reason?: string }
 	| { type: "retry_fallback_succeeded"; model: string; role: string }
 	| { type: "model_changed" }
+	| { type: "themes_configuration_changed" }
+	| { type: "models_configuration_changed" }
 	| { type: "config_warnings_changed" }
+	| { type: "approval_mode_changed" }
 	| { type: "advisor_cost_changed" }
 	| { type: "advisor_yielded" }
 	/** A finalized advisor-agent message (the same data the advisor transcript records). Fork seam for live ingest. */
