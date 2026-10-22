@@ -1,4 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { AgentStorage } from "../src/session/agent-storage";
+import { observeThemesConfiguration } from "../src/modes/themes-configuration";
+import { beginSettingsTest, restoreSettingsTestState } from "./helpers/settings-test-state";
 import { Settings } from "../src/config/settings";
 import { cfgThemeDark, cfgThemeLight } from "../src/modes/settings";
 import { getThemesConfiguration, RpcThemeConflict, updateTheme } from "../src/modes/rpc/rpc-themes-configuration";
@@ -30,5 +36,44 @@ describe("native theme configuration", () => {
 		const after = await getThemesConfiguration(settings);
 		expect(after.selection).toEqual(before.selection);
 		expect(after.themes).toContain(after.selection.light.effective);
+	});
+	test("invalidates a shadowed user edit on disk reload and reveals it after project inheritance", async () => {
+		const state = beginSettingsTest();
+		const scratch = path.join(os.homedir(), ".cache", "npi-canary");
+		await fs.mkdir(scratch, { recursive: true });
+		const root = await fs.mkdtemp(path.join(scratch, "native-theme-scopes-"));
+		const cwd = path.join(root, "project");
+		const agentDir = path.join(root, "agent");
+		const instances: Settings[] = [];
+		let stop: (() => void) | undefined;
+		try {
+			delete process.env.PI_CONFIG_FILES;
+			await fs.mkdir(cwd, { recursive: true });
+			const writer = await Settings.loadIsolated({ cwd, agentDir });
+			instances.push(writer);
+			await updateTheme(writer, { type: "update_theme", appearance: "dark", scope: "global", name: "dark", expected: null });
+			await updateTheme(writer, { type: "update_theme", appearance: "dark", scope: "project", name: "dark", expected: null });
+			const reader = await Settings.loadIsolated({ cwd, agentDir });
+			instances.push(reader);
+			let changes = 0;
+			stop = observeThemesConfiguration(reader, () => changes++);
+			await updateTheme(writer, { type: "update_theme", appearance: "dark", scope: "global", name: "light", expected: "dark" });
+			await reader.reloadFromDisk();
+			expect(changes).toBe(1);
+			const hidden = await getThemesConfiguration(reader);
+			expect(hidden.selection.dark).toMatchObject({ effective: "dark", global: "light", project: "dark" });
+			expect(changes).toBe(1);
+			await updateTheme(writer, { type: "update_theme", appearance: "dark", scope: "project", name: null, expected: "dark" });
+			await reader.reloadFromDisk();
+			expect(changes).toBe(2);
+			const revealed = await getThemesConfiguration(reader);
+			expect(revealed.selection.dark).toMatchObject({ effective: "light", global: "light", project: null });
+		} finally {
+			stop?.();
+			for (const settings of instances) settings.cancelPendingSaves();
+			AgentStorage.close();
+			restoreSettingsTestState(state);
+			await fs.rm(root, { recursive: true, force: true });
+		}
 	});
 });
