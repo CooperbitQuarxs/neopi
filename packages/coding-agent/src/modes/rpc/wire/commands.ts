@@ -110,6 +110,12 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	{ name: "select_mixture", doc: "Select a registered mixture.", params: { name: "string" }, result: "ModelInfo" },
 	{ name: "get_roles", doc: "List model roles.", result: "RolesResult" },
 	{
+		name: "query_model_selector",
+		doc: "Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.",
+		params: { query: "string" },
+		result: "ModelSelectorResult",
+	},
+	{
 		name: "set_role",
 		doc: "Select a model role.",
 		params: { role: "string" },

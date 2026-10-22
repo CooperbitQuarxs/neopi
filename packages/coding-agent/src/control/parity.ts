@@ -45,6 +45,7 @@ export const RPC_COMMAND_TYPES = [
 	"create_mixture",
 	"select_mixture",
 	"get_roles",
+	"query_model_selector",
 	"set_role",
 	"set_thinking_level",
 	"cycle_thinking_level",

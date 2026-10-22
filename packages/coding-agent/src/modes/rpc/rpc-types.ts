@@ -35,6 +35,7 @@ import type {
 import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
 import type { RpcModel } from "./rpc-model";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
+import type { RpcModelSelectorResult } from "./rpc-model-selector";
 import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
@@ -108,6 +109,7 @@ export type RpcCommand =
 	| { id?: string; type: "list_mixtures" }
 	| { id?: string; type: "select_mixture"; name: string }
 	| { id?: string; type: "get_roles" }
+	| { id?: string; type: "query_model_selector"; query: string }
 	| { id?: string; type: "set_role"; role: string }
 
 	// Thinking
@@ -700,6 +702,13 @@ export type RpcResponse =
 			command: "get_roles";
 			success: true;
 			data: RpcRolesResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "query_model_selector";
+			success: true;
+			data: RpcModelSelectorResult;
 	  }
 	| {
 			id?: string;
