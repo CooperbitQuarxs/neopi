@@ -124,7 +124,10 @@ describe("EventController mixed assistant text/tool rendering", () => {
 				void releaseProvider.promise.then(() => {
 					primary.content = [{ type: "text", text: "PRIMARY_QUIET_PARTIAL CONTINUED_AND_COMPLETED" }];
 					stream.push({
-						type: "text_delta", contentIndex: 0, delta: " CONTINUED_AND_COMPLETED", partial: primary,
+						type: "text_delta",
+						contentIndex: 0,
+						delta: " CONTINUED_AND_COMPLETED",
+						partial: primary,
 					});
 					stream.push({ type: "done", reason: "stop", message: primary });
 				});
@@ -134,7 +137,11 @@ describe("EventController mixed assistant text/tool rendering", () => {
 		const handled: Promise<void>[] = [];
 		const stopUi = agent.subscribe(event => {
 			handled.push(controller.dispatchSessionEvent(event));
-			if (event.type === "message_update" && event.message.responseId === primary.responseId) firstDelta.resolve();
+			if (
+				event.type === "message_update" &&
+				event.message.role === "assistant" &&
+				event.message.responseId === primary.responseId
+			) firstDelta.resolve();
 		});
 		const manager = SessionManager.inMemory();
 		const frames: RpcProjectedSessionEventFrame[] = [];
@@ -145,9 +152,13 @@ describe("EventController mixed assistant text/tool rendering", () => {
 		try {
 			await firstDelta.promise;
 			const quietMessage = agent.state.streamMessage;
-			expect(quietMessage).not.toBeNull();
+			if (!quietMessage || quietMessage.role !== "assistant") throw new Error("Missing active assistant");
 			const custom: CustomMessage = {
-				role: "custom", customType: "external-snapshot-card", content: "CUSTOM_CARD_VISIBLE", display: true, timestamp: 2,
+				role: "custom",
+				customType: "external-snapshot-card",
+				content: "CUSTOM_CARD_VISIBLE",
+				display: true,
+				timestamp: 2,
 			};
 			agent.emitExternalEvent({ type: "message_start", message: custom });
 			agent.emitExternalEvent({ type: "message_end", message: custom });
@@ -156,11 +167,16 @@ describe("EventController mixed assistant text/tool rendering", () => {
 			expect(agent.state.streamMessage).toBe(quietMessage);
 			stopLive = agent.subscribe(event => forwarder.forward(event));
 			forwarder.observeJournal({
-				sessionManager: manager, agent, isSessionTransitioning: false, obfuscator: undefined,
+				sessionManager: manager,
+				agent,
+				isSessionTransitioning: false,
+				obfuscator: undefined,
 				subscribeMessagePersistenceSettled: () => () => {},
 			});
 			const snapshot = frames.find(frame => frame.type === "message_start");
-			if (!snapshot || snapshot.type !== "message_start") throw new Error("Missing quiet native assistant snapshot");
+			if (!snapshot || snapshot.type !== "message_start" || snapshot.message.role !== "assistant") {
+				throw new Error("Missing quiet native assistant snapshot");
+			}
 			expect(snapshot).toMatchObject({ snapshot: true, message: { responseId: primary.responseId } });
 			expect(snapshot.message).toBe(quietMessage);
 			expect(snapshot.message.content).toEqual([{ type: "text", text: "PRIMARY_QUIET_PARTIAL" }]);
@@ -171,12 +187,22 @@ describe("EventController mixed assistant text/tool rendering", () => {
 			await run;
 			await Promise.all(handled.splice(0));
 			expect(agent.state.streamMessage).toBeNull();
-			expect(agent.state.messages.some(message => message.role === "assistant" && message.responseId === primary.responseId)).toBe(true);
+			expect(
+				agent.state.messages.some(
+					message => message.role === "assistant" && message.responseId === primary.responseId,
+				),
+			).toBe(true);
 			expect(agent.state.messages).toContain(custom);
-			const messageFrames = frames.filter(frame => frame.type === "message_start" ||
-				frame.type === "message_update" || frame.type === "message_end");
-			expect(messageFrames.every(frame => "messageId" in frame && frame.messageId === snapshot.messageId)).toBe(true);
-			expect(messageFrames.at(-1)).toMatchObject({ type: "message_end", message: { responseId: primary.responseId } });
+			const messageFrames = frames.filter(
+				frame => frame.type === "message_start" || frame.type === "message_update" || frame.type === "message_end",
+			);
+			expect(messageFrames.every(frame => "messageId" in frame && frame.messageId === snapshot.messageId)).toBe(
+				true,
+			);
+			expect(messageFrames.at(-1)).toMatchObject({
+				type: "message_end",
+				message: { responseId: primary.responseId },
+			});
 			const finished = chatContainer.render(120).map(line => Bun.stripANSI(line));
 			expect(finished.some(line => line.includes("CONTINUED_AND_COMPLETED"))).toBe(true);
 			expect(finished.some(line => line.includes("CUSTOM_CARD_VISIBLE"))).toBe(true);

@@ -7,7 +7,11 @@ import type { RpcProjectedSessionEventFrame } from "../src/modes/rpc/rpc-types";
 import type { SessionJournalEvent } from "../src/session/session-journal-events";
 import { SessionManager } from "../src/session/session-manager";
 import { linkMessageEntrySource } from "../src/session/message-entry-ids";
-import { MemorySessionStorage, type SessionStorageWriteOptions, type SessionStorageWriter } from "../src/session/session-storage";
+import {
+	MemorySessionStorage,
+	type SessionStorageWriteOptions,
+	type SessionStorageWriter,
+} from "../src/session/session-storage";
 import { makeAssistantMessage } from "./session-manager/helpers";
 
 class RefusingStorage extends MemorySessionStorage {
@@ -24,7 +28,10 @@ class RefusingStorage extends MemorySessionStorage {
 
 class GatedStorage extends MemorySessionStorage {
 	readonly publish = Promise.withResolvers<void>();
-	override openWriter(file: string, options?: { flags?: "a" | "w"; onError?: (error: Error) => void }): SessionStorageWriter {
+	override openWriter(
+		file: string,
+		options?: { flags?: "a" | "w"; onError?: (error: Error) => void },
+	): SessionStorageWriter {
 		const inner = super.openWriter(file, options);
 		let queued = Promise.resolve();
 		return {
@@ -35,8 +42,14 @@ class GatedStorage extends MemorySessionStorage {
 				});
 				return queued;
 			},
-			flush: async () => { await queued; await inner.flush(); },
-			close: async () => { await queued; await inner.close(); },
+			flush: async () => {
+				await queued;
+				await inner.flush();
+			},
+			close: async () => {
+				await queued;
+				await inner.close();
+			},
 			isOpen: () => inner.isOpen(),
 			getError: () => inner.getError(),
 		};
@@ -58,11 +71,18 @@ function transport(manager: SessionManager, streamMessage: AgentMessage | null =
 		},
 	};
 	forwarder.observeJournal(source);
-	return { frames, forwarder, source, settle: (message: AgentMessage) => { for (const listener of settled) listener(message); } };
+	return {
+		frames,
+		forwarder,
+		source,
+		settle: (message: AgentMessage) => {
+			for (const listener of settled) listener(message);
+		},
+	};
 }
 
 function committed(events: readonly SessionJournalEvent[]): string[] {
-	return events.flatMap(event => event.type === "journal_entry" ? [event.entry.id] : []);
+	return events.flatMap(event => (event.type === "journal_entry" ? [event.entry.id] : []));
 }
 
 describe("native journal notifications", () => {
@@ -70,7 +90,9 @@ describe("native journal notifications", () => {
 		const manager = SessionManager.inMemory();
 		const first: string[] = [];
 		const second: string[] = [];
-		manager.subscribeEntries(() => { throw new Error("observer disconnected"); });
+		manager.subscribeEntries(() => {
+			throw new Error("observer disconnected");
+		});
 		const stop = manager.subscribeEntries(entry => first.push(entry.id));
 		manager.subscribeEntries(entry => second.push(entry.id));
 		const a = manager.appendCustomEntry("first");
@@ -110,11 +132,14 @@ describe("native journal notifications", () => {
 		let id = "";
 		const forwarder = new RpcSessionEventForwarder(frame => {
 			frames.push(frame);
-			if (frame.type === "journal_state" && frame.reason === "snapshot") id = manager.appendCustomEntry("during snapshot");
+			if (frame.type === "journal_state" && frame.reason === "snapshot")
+				id = manager.appendCustomEntry("during snapshot");
 		});
 		forwarder.observeJournal({
-			sessionManager: manager, agent: { state: { streamMessage: null } },
-			isSessionTransitioning: false, obfuscator: undefined,
+			sessionManager: manager,
+			agent: { state: { streamMessage: null } },
+			isSessionTransitioning: false,
+			obfuscator: undefined,
 			subscribeMessagePersistenceSettled: () => () => {},
 		});
 		expect(frames.filter(frame => frame.type === "journal_entry")).toMatchObject([{ entry: { id } }]);
@@ -124,7 +149,11 @@ describe("native journal notifications", () => {
 		manager.branch(id);
 		expect(frames.at(-1)).toMatchObject({ type: "journal_state", reason: "leaf", leafId: id });
 		await manager.newSession();
-		expect(frames.at(-1)).toMatchObject({ type: "journal_state", reason: "identity", ...manager.getJournalIdentity() });
+		expect(frames.at(-1)).toMatchObject({
+			type: "journal_state",
+			reason: "identity",
+			...manager.getJournalIdentity(),
+		});
 		expect(manager.getSessionId()).not.toBe(original.sessionId);
 		forwarder.dispose();
 		await manager.close();
@@ -172,7 +201,9 @@ describe("native journal notifications", () => {
 		const entryId = manager.appendMessage(message);
 		live.settle(message);
 		expect(manager.isEntryDurable(entryId)).toBe(false);
-		expect(live.frames.some(frame => frame.type === "journal_entry" || frame.type === "message_persisted")).toBe(false);
+		expect(live.frames.some(frame => frame.type === "journal_entry" || frame.type === "message_persisted")).toBe(
+			false,
+		);
 		storage.publish.resolve();
 		await manager.flush();
 		expect(live.frames.filter(frame => frame.type === "message_persisted")).toEqual([
@@ -191,7 +222,11 @@ describe("native journal notifications", () => {
 		const live = transport(manager, partial);
 		const first = live.frames.find(frame => frame.type === "message_start");
 		expect(first).toMatchObject({
-			type: "message_start", snapshot: true, messageId: "msg-1", message: partial, ...manager.getJournalIdentity(),
+			type: "message_start",
+			snapshot: true,
+			messageId: "msg-1",
+			message: partial,
+			...manager.getJournalIdentity(),
 		});
 		expect(first && "entryId" in first).toBe(false);
 		live.forwarder.snapshotJournal(live.source);
@@ -199,7 +234,8 @@ describe("native journal notifications", () => {
 		const updated = { ...partial, content: [{ type: "text" as const, text: "quiet partial, continued" }] };
 		live.source.agent.state.streamMessage = updated;
 		live.forwarder.forward({
-			type: "message_update", message: updated,
+			type: "message_update",
+			message: updated,
 			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: ", continued", partial: updated },
 		});
 		const beforeDelayedStart = live.frames.length;
@@ -209,9 +245,17 @@ describe("native journal notifications", () => {
 		live.forwarder.forward({ type: "message_end", message: updated });
 		const entryId = manager.appendMessage(updated);
 		live.settle(updated);
-		expect(live.frames.filter(frame => frame.type === "message_start" || frame.type === "message_update" ||
-			frame.type === "message_end" || frame.type === "message_persisted").map(frame => "messageId" in frame ? frame.messageId : undefined))
-			.toEqual(["msg-1", "msg-1", "msg-1", "msg-1", "msg-1"]);
+		expect(
+			live.frames
+				.filter(
+					frame =>
+						frame.type === "message_start" ||
+						frame.type === "message_update" ||
+						frame.type === "message_end" ||
+						frame.type === "message_persisted",
+				)
+				.map(frame => ("messageId" in frame ? frame.messageId : undefined)),
+		).toEqual(["msg-1", "msg-1", "msg-1", "msg-1", "msg-1"]);
 		expect(live.frames.at(-1)).toMatchObject({ type: "message_persisted", entryId });
 		live.forwarder.dispose();
 		await manager.close();
@@ -223,8 +267,10 @@ describe("native journal notifications", () => {
 			const partial = makeAssistantMessage();
 			const newer = { ...partial, content: [{ type: "text" as const, text: "newer output" }] };
 			const source = {
-				sessionManager: manager, agent: { state: { streamMessage: partial as AgentMessage | null } },
-				isSessionTransitioning: false, obfuscator: undefined,
+				sessionManager: manager,
+				agent: { state: { streamMessage: partial as AgentMessage | null } },
+				isSessionTransitioning: false,
+				obfuscator: undefined,
 				subscribeMessagePersistenceSettled: () => () => {},
 			};
 			const frames: RpcProjectedSessionEventFrame[] = [];
@@ -234,11 +280,20 @@ describe("native journal notifications", () => {
 				if (frame.type !== "journal_state" || frame.reason !== "snapshot" || !interleave) return;
 				interleave = false;
 				source.agent.state.streamMessage = end ? null : newer;
-				forwarder.forward(end
-					? { type: "message_end", message: newer }
-					: { type: "message_update", message: newer, assistantMessageEvent: {
-						type: "text_delta", contentIndex: 0, delta: "newer output", partial: newer,
-					} });
+				forwarder.forward(
+					end
+						? { type: "message_end", message: newer }
+						: {
+								type: "message_update",
+								message: newer,
+								assistantMessageEvent: {
+									type: "text_delta",
+									contentIndex: 0,
+									delta: "newer output",
+									partial: newer,
+								},
+							},
+				);
 			});
 			forwarder.observeJournal(source);
 			expect(frames.some(frame => frame.type === "message_start")).toBe(false);
@@ -256,8 +311,10 @@ describe("native journal notifications", () => {
 		const before = manager.getSessionId();
 		const oldAssistant = makeAssistantMessage();
 		const source = {
-			sessionManager: manager, agent: { state: { streamMessage: oldAssistant as AgentMessage | null } },
-			isSessionTransitioning: false, obfuscator: undefined,
+			sessionManager: manager,
+			agent: { state: { streamMessage: oldAssistant as AgentMessage | null } },
+			isSessionTransitioning: false,
+			obfuscator: undefined,
 			subscribeMessagePersistenceSettled: () => () => {},
 		};
 		const frames: RpcProjectedSessionEventFrame[] = [];
@@ -295,7 +352,11 @@ describe("native journal notifications", () => {
 		});
 		const text = "λ".repeat(800_000);
 		const id = manager.appendCustomEntry("complete", { text });
-		expect(events.find(event => "entry" in event)).toEqual({ type: "journal_entry", ...manager.getJournalIdentity(), entry: manager.getEntry(id) });
+		expect(events).toContainEqual({
+			type: "journal_entry",
+			...manager.getJournalIdentity(),
+			entry: manager.getEntry(id),
+		});
 		unsubscribe();
 		await manager.close();
 	});

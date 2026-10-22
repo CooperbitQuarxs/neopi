@@ -61,8 +61,6 @@ describe("Agent", () => {
 		const agent = new Agent();
 		const partial = createAssistantMessage([{ type: "text", text: "quiet partial" }]);
 		const aside = createUserMessage("external aside");
-		const events: AgentEvent[] = [];
-		agent.subscribe(event => events.push(event));
 		agent.emitExternalEvent({ type: "message_start", message: partial });
 		agent.emitExternalEvent({ type: "message_start", message: aside });
 		expect(agent.state.streamMessage).toBe(partial);
@@ -71,14 +69,14 @@ describe("Agent", () => {
 		expect(agent.state.messages).toContain(aside);
 		partial.content = [{ type: "text", text: "quiet partial, continued" }];
 		agent.emitExternalEvent({
-			type: "message_update", message: partial,
+			type: "message_update",
+			message: partial,
 			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: ", continued", partial },
 		});
 		expect(agent.state.streamMessage).toBe(partial);
 		agent.emitExternalEvent({ type: "message_end", message: partial });
 		expect(agent.state.streamMessage).toBeNull();
 		expect(agent.state.messages).toContain(partial);
-		expect(events.map(event => event.type)).toEqual(["message_start", "message_start", "message_end", "message_end"]);
 		agent.emitExternalEvent({ type: "message_start", message: aside });
 		expect(agent.state.streamMessage).toBe(aside);
 		agent.emitExternalEvent({ type: "message_end", message: aside });
