@@ -31,3 +31,27 @@ export function matchesSelectorPattern(pattern: string, selector: string): boole
 	if (isGlobSelectorPattern(pattern)) return new Bun.Glob(pattern).match(selector);
 	return pattern === selector;
 }
+
+/** Exact ids outrank regexes, then globs. Declaration order breaks ties within each kind. */
+export function matchModelSelectorRule<T extends { selector: string }>(
+	rules: readonly T[],
+	model: { provider: string; id: string },
+): T | undefined {
+	const identity = `${model.provider}/${model.id}`;
+	const exact = rules.find(
+		rule =>
+			!isRegexSelectorPattern(rule.selector) &&
+			!isGlobSelectorPattern(rule.selector) &&
+			rule.selector.toLowerCase() === identity.toLowerCase(),
+	);
+	if (exact) return exact;
+	const regex = rules.find(
+		rule => isRegexSelectorPattern(rule.selector) && matchesSelectorPattern(rule.selector, identity),
+	);
+	if (regex) return regex;
+	return rules.find(
+		rule =>
+			isGlobSelectorPattern(rule.selector) &&
+			matchesSelectorPattern(rule.selector.toLowerCase(), identity.toLowerCase()),
+	);
+}

@@ -1,3 +1,4 @@
+export { cfgContextRules } from "../config/context-policy";
 import {
 	type AgentCompactionThresholdOverride,
 	validateModelCompactionThresholds,
