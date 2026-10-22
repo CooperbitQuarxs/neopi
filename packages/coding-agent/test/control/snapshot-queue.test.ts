@@ -5,6 +5,7 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
@@ -52,6 +53,7 @@ describe("control snapshot queue", () => {
 	async function startWithQueue(
 		steering?: string[],
 		followUp: string[] = [],
+		autoApprove = false,
 	): Promise<{ client: ControlClient; hello: ControlSnapshot }> {
 		const model = createMockModel({ provider: "anthropic", responses: [] });
 		session = new AgentSession({
@@ -61,8 +63,13 @@ describe("control snapshot queue", () => {
 				streamFn: model.stream,
 			}),
 			sessionManager: SessionManager.inMemory(tempDir.path()),
-			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"retry.enabled": false,
+				"tools.approvalMode": "always-ask",
+			}),
 			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
+			autoApprove,
 		});
 		if (steering)
 			vi.spyOn(session, "getQueuedMessages").mockReturnValue({
@@ -91,6 +98,39 @@ describe("control snapshot queue", () => {
 		...Array.from({ length: CONTROL_QUEUE_LIMIT.entries + 10 }, (_, i) => `steer ${i}`),
 		"q".repeat(MAX_RPC_REASSEMBLED_BYTES + 1),
 	];
+
+	test("state retains journal-wide cost after leaving a branch and keeps native permission separate", async () => {
+		const { client } = await startWithQueue();
+		const manager = session!.sessionManager;
+		const root = manager.appendMessage({ role: "user", content: "root", timestamp: 1 });
+		const message: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "recorded before compaction" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "test",
+			stopReason: "stop",
+			timestamp: 2,
+			usage: {
+				input: 25, output: 5, cacheRead: 75, cacheWrite: 0, totalTokens: 105,
+				cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 },
+			},
+		};
+		manager.appendMessage(message);
+		manager.branch(root);
+		// The active in-memory transcript has none of the billed response.
+		expect(session!.messages).toHaveLength(0);
+		const state = (await client.request({ type: "state" })).data as ControlSnapshot;
+		expect(state.session!.sessionUsage).toMatchObject({
+			input: 25, cacheRead: 75, cost: 6, advisorCost: 0, advisorCostState: "ready",
+		});
+		expect(state.session!.approvalMode).toBe("always-ask");
+	});
+
+	test("state reports the process auto-approve override rather than the saved policy", async () => {
+		const { hello } = await startWithQueue(undefined, [], true);
+		expect(hello.session!.approvalMode).toBe("yolo");
+	});
 
 	test("busy summary names both delivery paths and counts steering plus follow-up", async () => {
 		const { client } = await startWithQueue(undefined, ["later"]);

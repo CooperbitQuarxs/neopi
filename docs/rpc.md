@@ -520,6 +520,18 @@ The response always succeeds, even when the withdrawn input is too large for one
 
 ### `get_state` payload
 
+`sessionUsage` is the native journal index's cumulative usage across all branches,
+including messages before compaction and completed task results. Its `cost` already
+includes `subagentCost`; do not add that field again. `advisorCost` is separate.
+Only combine it with journal cost when `advisorCostState` is `ready`. During
+resume it may be `restoring`, or `unavailable` if restoration failed. These are
+recorded costs, not a bill estimate for unfinished child runs. `get_session_stats`
+continues to describe the active transcript window.
+
+`approvalMode` reports the effective native tool policy, including the
+process-local auto-approve override. Reading it does not change permissions.
+Per-tool policies and safety checks still apply.
+
 `tokensPerSecond` is a number when output throughput is available and `null`
 otherwise. `fastModeEnabled` reports the session's selected model-family tier
 (`priority` or `ultrafast`), while `fastModeActive` reports the actual computed
