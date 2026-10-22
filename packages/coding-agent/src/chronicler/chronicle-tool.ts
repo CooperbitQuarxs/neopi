@@ -4,6 +4,14 @@ import chronicleDescription from "../prompts/chronicler/chronicle-tool.md" with 
 import finishDescription from "../prompts/chronicler/finish-tool.md" with { type: "text" };
 import readDescription from "../prompts/chronicler/read-tool.md" with { type: "text" };
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { prompt } from "@oh-my-pi/pi-utils";
+import type { ScopeLike } from "../config/registry";
+import {
+	cfgChroniclerCaptureCarryChars,
+	cfgChroniclerCaptureReadPageSize,
+	cfgChroniclerCaptureReadPageMax,
+	cfgChroniclerCaptureReadTitleChars,
+} from "./capture-settings";
 import {
 	type BeatRecord,
 	type CaptureBatch,
@@ -24,26 +32,43 @@ const chronicleSchema = type({
 	"uncertainty?": "string",
 });
 const finishSchema = type({ carry: type({ sources: "string[]", text: "string" }).or("null") });
-const readSchema = type({
-	"id?": "string",
-	"offset?": type("number.integer >= 0").describe("Metadata page offset; omit id to list beats."),
-	"limit?": type("1 <= number.integer <= 100").describe("Metadata page size; default 50."),
-});
+function createReadSchema(maximum: number) {
+	return type({
+		"id?": "string",
+		"offset?": type("number.integer >= 0").describe("Metadata page offset; omit id to list beats."),
+		"limit?": type("number.integer >= 1")
+			.atMost(maximum)
+			.describe("Metadata page size; bounded by the configured maximum."),
+	});
+}
+const readSchema = createReadSchema(cfgChroniclerCaptureReadPageMax.default);
 
 const chronicleDefinition = {
 	name: "chronicle",
 	description: chronicleDescription,
 	parameters: chronicleSchema,
 } as const;
-const finishDefinition = {
-	name: "finish_chronicle",
-	description: finishDescription,
-	parameters: finishSchema,
-} as const;
-const readDefinition = { name: "read_chronicle", description: readDescription, parameters: readSchema } as const;
-
-/** Budget the actual tool surfaces without constructing an executable capture batch. */
-export const CHRONICLER_TOOL_SCHEMAS = [chronicleDefinition, finishDefinition, readDefinition] as const;
+export function getChroniclerToolSchemas(scope?: ScopeLike) {
+	const carryChars = scope ? cfgChroniclerCaptureCarryChars.get(scope) : cfgChroniclerCaptureCarryChars.default;
+	const pageMax = scope ? cfgChroniclerCaptureReadPageMax.get(scope) : cfgChroniclerCaptureReadPageMax.default;
+	const pageSize = Math.min(
+		scope ? cfgChroniclerCaptureReadPageSize.get(scope) : cfgChroniclerCaptureReadPageSize.default,
+		pageMax,
+	);
+	return [
+		chronicleDefinition,
+		{
+			name: "finish_chronicle",
+			description: prompt.render(finishDescription, { carryChars }),
+			parameters: finishSchema,
+		},
+		{
+			name: "read_chronicle",
+			description: prompt.render(readDescription, { pageSize, pageMax }),
+			parameters: createReadSchema(pageMax),
+		},
+	] as const;
+}
 
 export interface ChronicleDetails {
 	id: string;
@@ -134,10 +159,10 @@ export class ChronicleTool implements AgentTool<typeof chronicleSchema, Chronicl
 }
 
 export class FinishChronicleTool implements AgentTool<typeof finishSchema, FinishChronicleDetails> {
-	readonly name = finishDefinition.name;
+	readonly name = "finish_chronicle";
 	readonly label = "Finish Chronicle";
-	readonly description = finishDefinition.description;
-	readonly parameters = finishDefinition.parameters;
+	readonly description: string;
+	readonly parameters = finishSchema;
 	readonly strict = false;
 	readonly intent = "omit" as const;
 
@@ -145,7 +170,10 @@ export class FinishChronicleTool implements AgentTool<typeof finishSchema, Finis
 		_store: ChroniclerStore,
 		private readonly batch: CaptureBatch,
 		private readonly knownSources: ReadonlyMap<string, CaptureSource>,
-	) {}
+		private readonly scope?: ScopeLike,
+	) {
+		this.description = getChroniclerToolSchemas(scope)[1].description;
+	}
 
 	async execute(
 		_id: string,
@@ -155,7 +183,11 @@ export class FinishChronicleTool implements AgentTool<typeof finishSchema, Finis
 		assertMutable(this.batch, signal);
 		let carry: CaptureBatch["carry"] = null;
 		if (args.carry) {
-			if (args.carry.text.length > 8000) throw new ToolError("Pending carry may not exceed 8,000 characters.");
+			const limit = this.scope
+				? cfgChroniclerCaptureCarryChars.get(this.scope)
+				: cfgChroniclerCaptureCarryChars.default;
+			if (args.carry.text.length > limit)
+				throw new ToolError(`Pending carry may not exceed ${limit.toLocaleString("en-US")} characters.`);
 			const text = args.carry.text.trim();
 			if (text) {
 				validateSources(args.carry.sources, this.knownSources);
@@ -172,10 +204,10 @@ export class FinishChronicleTool implements AgentTool<typeof finishSchema, Finis
 }
 
 export class ReadChronicleTool implements AgentTool<typeof readSchema, ReadChronicleDetails> {
-	readonly name = readDefinition.name;
+	readonly name = "read_chronicle";
 	readonly label = "Read Chronicle";
-	readonly description = readDefinition.description;
-	readonly parameters = readDefinition.parameters;
+	readonly description: string;
+	readonly parameters: typeof readSchema;
 	readonly strict = false;
 	readonly intent = "omit" as const;
 
@@ -183,7 +215,12 @@ export class ReadChronicleTool implements AgentTool<typeof readSchema, ReadChron
 		private readonly store: ChroniclerStore,
 		private readonly batch: CaptureBatch,
 		private readonly obfuscator?: { obfuscate(text: string): string },
-	) {}
+		private readonly scope?: ScopeLike,
+	) {
+		const definition = getChroniclerToolSchemas(scope)[2];
+		this.description = definition.description;
+		this.parameters = definition.parameters;
+	}
 
 	async execute(
 		_id: string,
@@ -204,10 +241,27 @@ export class ReadChronicleTool implements AgentTool<typeof readSchema, ReadChron
 			details = { id: beat.id, sources: [...beat.sources] };
 		} else {
 			const offset = args.offset ?? 0;
-			const limit = args.limit ?? 50;
-			if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
-				throw new ToolError("offset must be a nonnegative integer; limit must be an integer from 1 through 100.");
+			const maximum = this.scope
+				? cfgChroniclerCaptureReadPageMax.get(this.scope)
+				: cfgChroniclerCaptureReadPageMax.default;
+			const defaultSize = this.scope
+				? cfgChroniclerCaptureReadPageSize.get(this.scope)
+				: cfgChroniclerCaptureReadPageSize.default;
+			const limit = args.limit ?? Math.min(defaultSize, maximum);
+			if (
+				!Number.isSafeInteger(offset) ||
+				offset < 0 ||
+				!Number.isSafeInteger(limit) ||
+				limit < 1 ||
+				limit > maximum
+			) {
+				throw new ToolError(
+					`offset must be a nonnegative integer; limit must be an integer from 1 through ${maximum}.`,
+				);
 			}
+			const titleChars = this.scope
+				? cfgChroniclerCaptureReadTitleChars.get(this.scope)
+				: cfgChroniclerCaptureReadTitleChars.default;
 			const committed = this.store.beats;
 			const beats: Pick<BeatRecord, "id" | "title" | "kind" | "eventTime">[] = [];
 			const end = Math.min(committed.length, offset + limit);
@@ -217,7 +271,7 @@ export class ReadChronicleTool implements AgentTool<typeof readSchema, ReadChron
 				const title = this.obfuscator?.obfuscate(beat.title) ?? beat.title;
 				beats.push({
 					id: beat.id,
-					title: title.length > 240 ? `${title.slice(0, 239)}…` : title,
+					title: title.length > titleChars ? `${title.slice(0, titleChars - 1)}…` : title,
 					kind: beat.kind,
 					eventTime: beat.eventTime,
 				});

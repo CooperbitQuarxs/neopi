@@ -3,11 +3,7 @@
  */
 import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
-import {
-	createChronicleBackfillDeps,
-	DEFAULT_BACKFILL_CONCURRENCY,
-	runChronicleBackfill,
-} from "../cli/chronicle-backfill-cli";
+import { createChronicleBackfillDeps, runChronicleBackfill } from "../cli/chronicle-backfill-cli";
 
 export default class ChronicleBackfill extends Command {
 	static description =
@@ -33,11 +29,12 @@ export default class ChronicleBackfill extends Command {
 		}),
 		concurrency: Flags.integer({
 			char: "j",
-			description: `Sessions captured at once (default ${DEFAULT_BACKFILL_CONCURRENCY})`,
-			default: DEFAULT_BACKFILL_CONCURRENCY,
+			description: "Sessions captured at once (defaults to Chronicler backfill settings)",
 		}),
-		timeout: Flags.string({ description: "Per-session capture budget before the final drain (default 2h)" }),
-		drain: Flags.string({ description: "Per-session final drain budget (default 10m)" }),
+		timeout: Flags.string({
+			description: "Per-session capture budget before final drain (defaults to Chronicler settings)",
+		}),
+		drain: Flags.string({ description: "Per-session final drain budget (defaults to Chronicler settings)" }),
 		force: Flags.boolean({ description: "Run even when chronicler.enabled is false", default: false }),
 	};
 

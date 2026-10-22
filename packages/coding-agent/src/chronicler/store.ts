@@ -22,6 +22,8 @@ import * as path from "node:path";
 import { logger, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { writeArtifact } from "../session/artifacts";
+import type { ScopeLike } from "../config/registry";
+import { cfgChroniclerCaptureCarryChars, cfgChroniclerCaptureIndexSourceIds } from "./capture-settings";
 
 /** Keep staged-file writes and directory publication separately observable. */
 export const chroniclerStoreIO = {
@@ -128,8 +130,6 @@ const INDEX_FILE = "INDEX.md";
 const STATE_FILE = "state.json";
 const STAGING_PREFIX = ".pending-";
 const MAX_SLUG = 60;
-const MAX_CARRY_CHARS = 8000;
-const MAX_INDEX_SOURCE_IDS = 6;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BEAT_FILE_RE = /^[0-9A-Za-z][0-9A-Za-z._-]*\.md$/;
@@ -326,6 +326,7 @@ export class ChroniclerStore {
 		meta: { sessionId: string; project: string; model: string },
 		hooks: ChroniclerStoreHooks = {},
 		readOnlySnapshot = false,
+		private readonly settings?: ScopeLike,
 	) {
 		this.#root = rootDir;
 		this.#beatsDir = path.join(rootDir, "beats");
@@ -700,8 +701,11 @@ export class ChroniclerStore {
 			const text = typeof batch.carry.text === "string" ? batch.carry.text.trim() : "";
 			const sources = stringArray(batch.carry.sources ?? []);
 			if (!sources) throw new Error(`Chronicler batch ${batch.id}: carry sources must be nonempty strings`);
-			if (text.length > MAX_CARRY_CHARS) {
-				throw new Error(`Chronicler batch ${batch.id}: carry text exceeds ${MAX_CARRY_CHARS} characters`);
+			const maxCarry = this.settings
+				? cfgChroniclerCaptureCarryChars.get(this.settings)
+				: cfgChroniclerCaptureCarryChars.default;
+			if (text.length > maxCarry) {
+				throw new Error(`Chronicler batch ${batch.id}: carry text exceeds ${maxCarry} characters`);
 			}
 			for (const source of sources) {
 				if (!known.has(source)) {
@@ -1156,7 +1160,10 @@ export class ChroniclerStore {
 		}
 		lines.push("| Event time | Title | Kind | Sources | Topics | Beat |", "| --- | --- | --- | --- | --- | --- |");
 		for (const record of rows) {
-			const shown = record.sources.slice(0, MAX_INDEX_SOURCE_IDS).map(id => `\`${escapeCell(id)}\``);
+			const sourceLimit = this.settings
+				? cfgChroniclerCaptureIndexSourceIds.get(this.settings)
+				: cfgChroniclerCaptureIndexSourceIds.default;
+			const shown = record.sources.slice(0, sourceLimit).map(id => `\`${escapeCell(id)}\``);
 			const overflow = record.sources.length - shown.length;
 			const sources = `${record.sources.length} (${shown.join(", ")}${overflow > 0 ? `, +${overflow} more` : ""})`;
 			const topics = record.topics.map(topic => `\`${escapeCell(topic)}\``).join(", ") || "—";
