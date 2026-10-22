@@ -60,8 +60,11 @@ stamp="$native_dir/.$addon_name.stamp"
 # Current addons report the version through a post-link stamp, not the
 # pre-upstream per-release __piNativesV* symbol.
 has_release() {
-	bun -e 'process.exit(require(process.argv[1]).__piNativesBuildVersion?.() === process.argv[2] ? 0 : 1)' \
-		"$(realpath -- "$1")" "$version"
+	local reported
+	# A loader failure can exit Bun before our JS runs, even with exit code 0.
+	# Require the version output as evidence that the addon actually loaded.
+	reported=$(bun -e 'process.stdout.write(String(require(process.argv[1]).__piNativesBuildVersion?.()))' \
+		"$(realpath -- "$1")") && [[ $reported == "$version" ]]
 }
 
 # Everything the addon is compiled from, the scripts and configs that drive that
@@ -81,7 +84,9 @@ native_inputs() {
 	env | grep -E '^CARGO_TARGET_[A-Z0-9_]+_LINKER=' | sort || true
 	# A Bazel rc (scripts/bazel-natives.ts) can change flags and toolchains.
 	printf 'bazelrc %s\n' "${OMP_BAZEL_RC:-}"
-	if [[ -n ${OMP_BAZEL_RC:-} && -f $OMP_BAZEL_RC ]]; then sha256sum <"$OMP_BAZEL_RC"; fi
+	if [[ -n ${OMP_BAZEL_RC:-} && -f $OMP_BAZEL_RC ]]; then
+		sha256sum <"$OMP_BAZEL_RC" || return 1
+	fi
 	# Hash working-tree bytes, not HEAD plus a diff: committing identical inputs
 	# must not change the key. Deleted tracked files have an explicit marker.
 	git ls-files -z --cached --others --exclude-standard -- "${paths[@]}" |
@@ -90,7 +95,7 @@ native_inputs() {
 			if [[ -L $path ]]; then
 				printf 'link %s\0' "$(readlink -- "$path")"
 			elif [[ -f $path ]]; then
-				sha256sum <"$path"
+				sha256sum <"$path" || exit 1
 			else
 				printf 'missing\0'
 			fi
@@ -99,10 +104,13 @@ native_inputs() {
 
 # Include host identity because system libraries and target-cpu=native can
 # differ even between machines with the same rustc and architecture.
-host_fingerprint=$(printf '%s\n' "$(uname -sm)" "$addon_name" \
-	"$(cat /etc/machine-id)" "$(rustc -vV)" "$(bun --version)" \
-	"$(cc --version)" "$(ld --version)" "$(ldd --version)")
-input_key=$( { native_inputs; printf '%s\n' "$host_fingerprint"; } | sha256sum | cut -d' ' -f1)
+host_fingerprint=$(
+	host_os=$(uname -sm) && host_id=$(cat /etc/machine-id) &&
+		host_rust=$(rustc -vV) && host_bun=$(bun --version) &&
+		host_cc=$(cc --version) && host_ld=$(ld --version) && host_libc=$(ldd --version) &&
+		printf '%s\n' "$host_os" "$addon_name" "$host_id" "$host_rust" "$host_bun" "$host_cc" "$host_ld" "$host_libc"
+) || die "could not fingerprint the native build host"
+input_key=$( { native_inputs || exit 1; printf '%s\n' "$host_fingerprint"; } | sha256sum | cut -d' ' -f1)
 
 # Keep file identity AND content in the checkout stamp. A copied or manually
 # rebuilt addon cannot seed the cache just because its version still matches.
@@ -144,7 +152,7 @@ cache_restore() {
 	temporary=$(mktemp "$native_dir/.restore.XXXXXX.node") || return 1
 	if cp -- "$cache_dir/$input_key.node" "$temporary" && has_release "$temporary" &&
 		mv -f -- "$temporary" "$addon"; then
-		expected_stamp >"$stamp"
+		expected_stamp >"$stamp" || return 1
 		say "native addon restored from cache: $input_key"
 	else
 		rm -f -- "$temporary"
