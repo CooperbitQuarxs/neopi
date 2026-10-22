@@ -39,6 +39,7 @@ export interface RpcRoleInfo {
 	/** Selector form, e.g. `@smol`. */
 	alias: string;
 	name: string;
+	description?: string;
 	/** Built-in short tag; absent for custom roles. */
 	tag?: string;
 	section: "chat" | "kind";
@@ -154,6 +155,7 @@ export class RpcRoles {
 				id,
 				alias,
 				name: info.name,
+				...(info.description !== undefined ? { description: info.description } : {}),
 				...(info.tag ? { tag: info.tag } : {}),
 				section: info.section,
 				source: MODEL_ROLE_IDS.some(builtin => builtin === id) ? "builtin" : "configured",

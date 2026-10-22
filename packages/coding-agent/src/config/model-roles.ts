@@ -64,6 +64,8 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	slow: { tag: "SLOW", name: "Thinking", color: "accent", section: "chat", accepts: acceptsChat },
 	vision: { tag: "VISION", name: "Vision", color: "error", section: "chat", accepts: acceptsChat },
 	plan: { tag: "PLAN", name: "Architect", color: "muted", section: "chat", accepts: acceptsChat },
+	"agent-author": { tag: "AUTHOR", name: "Agent author", color: "muted", section: "chat", accepts: acceptsChat },
+	compaction: { tag: "COMPACT", name: "Compaction", color: "muted", section: "chat", accepts: acceptsChat },
 	commit: { tag: "COMMIT", name: "Commit", color: "dim", section: "chat", accepts: acceptsChat },
 	tiny: { tag: "TINY", name: "Tiny", color: "dim", section: "chat", accepts: acceptsTinyOrChat },
 	memory: { tag: "MEMORY", name: "Memory", color: "dim", section: "chat", accepts: acceptsTinyOrChat },
@@ -108,6 +110,35 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	judge: { tag: "JUDGE", name: "Judge", color: "muted", section: "kind", accepts: acceptsJudge },
 };
 
+const ROLE_DESCRIPTIONS: Record<ModelRole, string> = {
+	default: "The main model for conversations and coding.",
+	smol: "Fast model for quick tasks and small background jobs.",
+	slow: "Reasoning model for thorough analysis.",
+	vision: "Reads images when the active model cannot.",
+	plan: "Writes and reviews plans in plan mode.",
+	"agent-author": "Creates agent definitions in the agents hub.",
+	compaction: "Summarizes session history during soft compaction.",
+	commit: "Writes commit messages.",
+	tiny: "Small model for lightweight background jobs.",
+	memory: "Extracts and consolidates persistent memories.",
+	task: "Default model for delegated agent tasks.",
+	advisor: "Reviews the active agent's work and offers a second opinion.",
+	chronicler: "Captures session events for the Chronicler.",
+	"chronicler-summary": "Writes Chronicler summaries and ranks recall results.",
+	classifier: "Ranks live subagents for spoken updates and checks operator authorization for flagged model-and-effort deployments.",
+	effort: "Chooses reasoning effort for adaptive effort selection.",
+	prose: "Default model for prose chains.",
+	issues: "Drafts and files issues through /issue.",
+	"deck-inbox": "Classifies NeoDeck inbox items and chooses their destination.",
+	image: "Generates and edits images.",
+	web: "Searches the web.",
+	speech: "Reads text aloud.",
+	dictation: "Transcribes speech to text.",
+	judge: "Evaluates answers against criteria.",
+};
+
+for (const role of MODEL_ROLE_IDS) MODEL_ROLES[role].description = ROLE_DESCRIPTIONS[role];
+
 export type RoleInfo = ModelRoleInfo;
 
 /** Whether a role belongs to the non-chat model-kind section. */
@@ -132,7 +163,7 @@ export function roleCandidatePool(role: string, settings: Settings, registry: Mo
  * entries across settings.
  */
 export function getKnownRoleIds(settings: Settings): string[] {
-	const roles: string[] = MODEL_ROLE_IDS.filter(role => !MODEL_ROLES[role].hidden);
+	const roles: string[] = [...MODEL_ROLE_IDS];
 	const seen = new Set<string>(roles);
 	const addRole = (role: string) => {
 		if (seen.has(role)) return;
@@ -161,6 +192,7 @@ export function getRoleInfo(role: string, settings: Settings): RoleInfo {
 			tag: builtIn?.tag,
 			name: configured.name || builtIn?.name || role,
 			color: configured.color && isValidThemeColor(configured.color) ? configured.color : builtIn?.color,
+			description: configured.description ?? builtIn?.description,
 			hidden: configured.hidden ?? builtIn?.hidden,
 			accepts: builtIn?.accepts ?? acceptsChat,
 			section: builtIn?.section ?? "chat",
@@ -170,4 +202,15 @@ export function getRoleInfo(role: string, settings: Settings): RoleInfo {
 	if (builtIn) return builtIn;
 
 	return { name: role, color: "muted", accepts: acceptsChat, section: "chat" };
+}
+
+/** Save a description without replacing the role's name, color, or visibility metadata. */
+export function setRoleDescription(role: string, description: string, settings: Settings): void {
+	const tags = cfgModelTags.get(settings);
+	const metadata = Object.hasOwn(tags, role) ? tags[role] : undefined;
+	cfgModelTags.setEntry(settings, role, {
+		...metadata,
+		name: metadata?.name ?? getRoleInfo(role, settings).name,
+		description,
+	});
 }

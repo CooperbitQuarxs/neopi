@@ -57,6 +57,8 @@ export type ModelRole =
 	| "slow"
 	| "vision"
 	| "plan"
+	| "agent-author"
+	| "compaction"
 	| "commit"
 	| "tiny"
 	| "memory"
@@ -80,6 +82,8 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"slow",
 	"vision",
 	"plan",
+	"agent-author",
+	"compaction",
 	"commit",
 	"tiny",
 	"memory",
@@ -104,6 +108,8 @@ export const CHAT_MODEL_ROLE_IDS: ModelRole[] = [
 	"slow",
 	"vision",
 	"plan",
+	"agent-author",
+	"compaction",
 	"commit",
 	"tiny",
 	"memory",
@@ -130,6 +136,7 @@ export interface ModelBrowserPerf {
 export interface ModelBrowserRoleInfo {
 	tag?: string;
 	name: string;
+	description?: string;
 	color?: ThemeColor;
 	hidden?: boolean;
 	section: "chat" | "kind";

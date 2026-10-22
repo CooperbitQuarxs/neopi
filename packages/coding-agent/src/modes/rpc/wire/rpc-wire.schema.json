@@ -2468,6 +2468,9 @@
 				"hidden": {
 					"type": "boolean"
 				},
+				"description": {
+					"type": "string"
+				},
 				"tag": {
 					"type": "string"
 				},
