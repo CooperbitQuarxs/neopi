@@ -35,6 +35,12 @@ import type {
 import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
 import type { RpcModel } from "./rpc-model";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
+import type { RpcModelSelectorResult } from "./rpc-model-selector";
+import type {
+	RpcModelsConfiguration,
+	RpcSetModelRoleConfiguration,
+	RpcSetEffortRules,
+} from "./rpc-models-configuration";
 import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
@@ -109,7 +115,14 @@ export type RpcCommand =
 	| { id?: string; type: "list_mixtures" }
 	| { id?: string; type: "select_mixture"; name: string }
 	| { id?: string; type: "get_roles" }
+	| { id?: string; type: "query_model_selector"; query: string }
 	| { id?: string; type: "set_role"; role: string }
+	| { id?: string; type: "get_models_configuration" }
+	| ({ id?: string; type: "set_model_role_configuration" } & RpcSetModelRoleConfiguration)
+	| ({ id?: string; type: "set_effort_rules" } & RpcSetEffortRules)
+	| { id?: string; type: "set_model_role_storage"; value: "global" | "project"; expected: "global" | "project" }
+	| { id?: string; type: "set_provider_api_key"; providerId: string; apiKey: string }
+	| { id?: string; type: "cancel_login"; loginId: string }
 
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
@@ -712,10 +725,29 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
+			command: "query_model_selector";
+			success: true;
+			data: RpcModelSelectorResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
 			command: "set_role";
 			success: true;
 			data: RpcSetRoleResult;
 	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_models_configuration";
+			success: true;
+			data: Awaited<ReturnType<RpcModelsConfiguration["read"]>>;
+	  }
+	| { id?: string; type: "response"; command: "set_model_role_configuration"; success: true }
+	| { id?: string; type: "response"; command: "set_model_role_storage"; success: true }
+	| { id?: string; type: "response"; command: "set_effort_rules"; success: true }
+	| { id?: string; type: "response"; command: "set_provider_api_key"; success: true }
+	| { id?: string; type: "response"; command: "cancel_login"; success: true }
 
 	// Thinking
 	| { id?: string; type: "response"; command: "set_thinking_level"; success: true }
@@ -928,6 +960,8 @@ export type RpcExtensionUIRequest =
 			method: "input";
 			title: string;
 			placeholder?: string;
+			secret?: boolean;
+			loginId?: string;
 			timeout?: number;
 	  }
 	| {

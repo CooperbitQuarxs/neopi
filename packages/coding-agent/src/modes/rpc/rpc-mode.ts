@@ -15,7 +15,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { MessageOrigin, Model } from "@oh-my-pi/pi-ai";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
@@ -58,7 +57,6 @@ import { findMostRecentNonEmptySession } from "../../session/session-listing";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
-import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import type { EventBus } from "../../utils/event-bus";
 import { selectRpcEntries } from "./rpc-compat";
@@ -88,6 +86,8 @@ import { RpcExtensionUserMessageTracker, RpcPromptResults, watchAndReportPromptR
 import type { RpcPromptTicket } from "./rpc-prompt-results";
 import { controlHostFor } from "../../control/host";
 import { RpcRoles } from "./rpc-roles";
+import { getRpcModelSelector } from "./rpc-model-selector";
+import { RpcModelsCommands } from "./rpc-models-commands";
 import { setRpcChatMode } from "./rpc-chat-mode";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
 import { sessionLeaseErrorCode } from "./rpc-session-lease";
@@ -487,6 +487,7 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
 	"predict_word",
 	"live_start",
 	"btw_cancel",
+	"login",
 ]);
 
 /**
@@ -1528,6 +1529,20 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 		btw,
 		liveBridge,
 	} = ctx;
+	const modelsCommands = new RpcModelsCommands({
+		session,
+		output,
+		pending: pendingExtensionRequests,
+		input: (title, placeholder, secret, loginId, signal) =>
+			requestRpcDialog(
+				pendingExtensionRequests,
+				frame => output({ ...frame, loginId }),
+				{ signal, timeout: 600_000 },
+				undefined,
+				{ method: "input", title, placeholder, secret, loginId, timeout: 600_000 },
+				response => parseValueDialogResponse(response, undefined),
+			),
+	});
 	// Without a frame encoder (control sockets) no response-size cap applies.
 	const maxResponseBytes = (): number => ctx.maxResponseBytes?.() ?? Number.MAX_SAFE_INTEGER;
 	const wordPredictor = new RpcWordPredictor();
@@ -1648,6 +1663,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 	return async (command: RpcCommand): Promise<RpcResponse> => {
 		const id = command.id;
 		if (!ctx.inputGate) inputGate.accept(command);
+		if (modelsCommands.accepts(command)) return modelsCommands.handle(command);
 
 		switch (command.type) {
 			case "negotiate_protocol":
@@ -2234,6 +2250,11 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				return success(id, "get_roles", rpcRoles.list());
 			}
 
+			case "query_model_selector": {
+				if (typeof command.query !== "string") return error(id, command.type, "A string query is required");
+				return success(id, command.type, await getRpcModelSelector(session, command.query));
+			}
+
 			case "set_role": {
 				const result = await rpcRoles.setRole(command.role);
 				if (!result.ok) return error(id, "set_role", result.message, result.code);
@@ -2439,106 +2460,6 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			// =================================================================
 			// Login
 			// =================================================================
-
-			case "get_login_providers": {
-				const providers = getOAuthProviders().map(provider => ({
-					id: provider.id,
-					name: provider.name,
-					available: provider.available,
-					authenticated:
-						session.modelRegistry.authStorage.keys.source(provider.storeCredentialsAs ?? provider.id) !==
-						undefined,
-				}));
-				return success(id, "get_login_providers", { providers });
-			}
-
-			case "login": {
-				const knownProvider = getOAuthProviders().find(p => p.id === command.providerId);
-				if (!knownProvider) {
-					return error(id, "login", `Unknown OAuth provider: ${command.providerId}`);
-				}
-				const uiCtx = createUiContext(pendingExtensionRequests, output);
-				// Track whether onAuth has fired. Providers that require interactive
-				// input before a browser URL cannot be satisfied headlessly; after
-				// onAuth, prompt input is the pasted OAuth code/redirect URL path.
-				let authEmitted = false;
-				try {
-					await session.modelRegistry.authStorage.oauth.login(command.providerId, {
-						onAuth: info => {
-							authEmitted = true;
-							output({
-								type: "extension_ui_request",
-								id: Snowflake.next() as string,
-								method: "open_url",
-								url: info.url,
-								launchUrl: info.launchUrl,
-								instructions: info.instructions,
-							} as RpcExtensionUIRequest);
-						},
-						onProgress: message => {
-							uiCtx.notify(message, "info");
-						},
-						onPrompt: async prompt => {
-							if (prompt.secret) {
-								throw new Error(
-									`Provider '${command.providerId}' requires secret input, ` +
-										"which is not supported in RPC mode. Use the terminal UI to log in.",
-								);
-							}
-							if (!authEmitted) {
-								// onPrompt called before any auth URL — provider requires
-								// interactive input that cannot be satisfied headlessly.
-								return Promise.reject(
-									new Error(
-										`Provider '${command.providerId}' requires interactive prompts ` +
-											"which are not supported in RPC mode. Use the terminal UI to log in.",
-									),
-								);
-							}
-							return (await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 })) ?? "";
-						},
-					});
-					// Provider-scoped online refresh so the just-persisted credential
-					// re-runs discovery instead of reusing a fresh authoritative cache
-					// row (#5780).
-					await session.modelRegistry.refreshProvider(
-						knownProvider.storeCredentialsAs ?? knownProvider.id,
-						"online",
-					);
-					return success(id, "login", { providerId: command.providerId });
-				} catch (err: unknown) {
-					return error(id, "login", err instanceof Error ? err.message : String(err));
-				}
-			}
-
-			case "get_logout_accounts": {
-				// An absent provider would list every provider's credentials.
-				if (typeof command.providerId !== "string") {
-					return error(id, "get_logout_accounts", "providerId must be a string");
-				}
-				const accounts = await listLogoutAccounts(
-					session.modelRegistry.authStorage,
-					command.providerId,
-					session.sessionId,
-				);
-				return success(id, "get_logout_accounts", { accounts });
-			}
-
-			case "logout": {
-				if (typeof command.providerId !== "string" || !Number.isInteger(command.credentialId)) {
-					return error(id, "logout", "providerId must be a string and credentialId an integer");
-				}
-				const { removed, remainingSource } = await logoutCredential(
-					session.modelRegistry,
-					command.providerId,
-					command.credentialId,
-					session.sessionId,
-				);
-				if (!removed) {
-					return error(id, "logout", `Credential ${command.credentialId} is not stored for ${command.providerId}`);
-				}
-				return success(id, "logout", { remainingSource });
-			}
 
 			// =================================================================
 			// Side questions (/btw)

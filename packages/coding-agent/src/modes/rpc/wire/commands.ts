@@ -115,10 +115,62 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	{ name: "select_mixture", doc: "Select a registered mixture.", params: { name: "string" }, result: "ModelInfo" },
 	{ name: "get_roles", doc: "List model roles.", result: "RolesResult" },
 	{
+		name: "query_model_selector",
+		doc: "Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.",
+		params: { query: "string" },
+		result: "ModelSelectorResult",
+	},
+	{
 		name: "set_role",
 		doc: "Select a model role.",
 		params: { role: "string" },
 		result: { role: "string", model: "ModelInfo", "thinkingLevel?": "ThinkingLevel" },
+	},
+	{
+		name: "get_models_configuration",
+		doc: "Read the native provider catalog, scoped model roles, and effort rules.",
+		result: {
+			providers: "Record<string, unknown>[]",
+			models: "Record<string, unknown>[]",
+			roles: "Record<string, unknown>[]",
+			roleStorage: "'global' | 'project'",
+			effortMode: "'replacement' | 'legacy'",
+			effortRules: "ModelEffortRule[]",
+			effortRulesProvenance: "string",
+			effortRuleScopes: "ModelEffortRuleScopes",
+			effortChoices: "string[]",
+		},
+	},
+	{
+		name: "set_model_role_configuration",
+		doc: "Save or clear one scoped role selector and effort atomically, rejecting a stale expected value.",
+		params: {
+			role: "string",
+			scope: "'global' | 'project'",
+			"selector?": "string",
+			"effort?": "ModelEffortSelection",
+			expected: "ModelRoleConfigurationValue",
+		},
+	},
+	{
+		name: "set_model_role_storage",
+		doc: "Choose native global or project role storage, rejecting a stale preference.",
+		params: { value: "'global' | 'project'", expected: "'global' | 'project'" },
+	},
+	{
+		name: "set_effort_rules",
+		doc: "Save or clear native implicit effort rules in one scope, rejecting a stale expected value.",
+		params: { scope: "'global' | 'project'", "rules?": "ModelEffortRule[]", expected: "ModelEffortRule[] | null" },
+	},
+	{
+		name: "set_provider_api_key",
+		doc: "Upsert a key in the native credential store without replacing other accounts.",
+		params: { providerId: "string", apiKey: "string" },
+	},
+	{
+		name: "cancel_login",
+		doc: "Cancel this connection's active login request.",
+		params: { loginId: "string" },
 	},
 	{
 		name: "get_usage",

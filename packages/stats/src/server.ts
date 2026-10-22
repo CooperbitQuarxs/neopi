@@ -20,6 +20,7 @@ import {
 import { initDb } from "./db";
 import { decodeEmbeddedClientArchive, hasEmbeddedClientArchive } from "./embedded-client";
 import embeddedClientArchiveTxt from "./embedded-client.generated.txt";
+import { createHostedStatsDocument } from "./hosted-client";
 import {
 	cancelFrustrationRun,
 	estimateFrustrationRun,
@@ -367,13 +368,16 @@ export function formatStatsDashboardUrl(hostname: string, port: number): string 
 	return `http://${urlHostname}:${port}`;
 }
 
-function createDashboardServer(port: number, hostname: string): Server<undefined> {
+function createDashboardServer(port: number, hostname: string, hostToken?: string): Server<undefined> {
 	const server = Bun.serve({
 		port,
 		hostname,
 		async fetch(req, server) {
 			const url = new URL(req.url);
 			const path = url.pathname;
+			if (hostToken && req.headers.get("authorization") !== `Bearer ${hostToken}`) {
+				return new Response("Unauthorized", { status: 401 });
+			}
 
 			// The identity header lets another NeoPi session's reuse probe positively
 			// recognize this dashboard without allowing cross-origin API reads.
@@ -397,6 +401,8 @@ function createDashboardServer(port: number, hostname: string): Server<undefined
 
 				if (path.startsWith("/api/")) {
 					response = await handleApi(req);
+				} else if (path === "/embed" && hostToken) {
+					response = await createHostedStatsDocument(handleStatic);
 				} else {
 					response = await handleStatic(path);
 				}
@@ -494,6 +500,8 @@ let liveServers = 0;
 export interface StartServerOptions {
 	/** Host judge for the Frustration dashboard's judge runs; replaces any previously registered one. */
 	judge?: StatsJudgeProvider;
+	/** Private host transport secret. Hosted servers must use loopback and an ephemeral port. */
+	hostToken?: string;
 }
 
 export async function startServer(
@@ -501,6 +509,9 @@ export async function startServer(
 	hostname = STATS_DASHBOARD_HOSTNAME,
 	options: StartServerOptions = {},
 ): Promise<StatsServerHandle> {
+	if (options.hostToken && (port !== 0 || hostname !== "127.0.0.1")) {
+		throw new Error("Hosted stats requires 127.0.0.1 and port 0");
+	}
 	if (options.judge) setStatsJudgeProvider(options.judge);
 	const activeKey = `${hostname}:${port}`;
 	if (port !== 0) {
@@ -508,6 +519,7 @@ export async function startServer(
 		if (active) return active;
 	}
 	await ensureClientBuild();
+	if (options.hostToken) await createHostedStatsDocument(handleStatic);
 	const preparation = await prepareStatsPort(port, hostname);
 	if (preparation === "reuse") {
 		return { hostname, port, stop: () => {} };
@@ -532,7 +544,7 @@ export async function startServer(
 	};
 
 	try {
-		return register(createDashboardServer(port, hostname));
+		return register(createDashboardServer(port, hostname, options.hostToken));
 	} catch (error) {
 		if (!(error instanceof Error && "code" in error && error.code === "EADDRINUSE")) throw error;
 
@@ -542,7 +554,7 @@ export async function startServer(
 		}
 
 		try {
-			return register(createDashboardServer(port, hostname));
+			return register(createDashboardServer(port, hostname, options.hostToken));
 		} catch (retryError) {
 			throw new Error(`Failed to start stats dashboard on ${hostname}:${port} after reclaiming it.`, {
 				cause: retryError,

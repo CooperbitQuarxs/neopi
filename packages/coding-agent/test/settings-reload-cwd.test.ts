@@ -9,7 +9,9 @@ import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 import { cfgCompactionEnabled } from "@oh-my-pi/pi-coding-agent/session/context-settings";
-import { cfgEnabledModels, cfgModelRoleStorage } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { cfgEnabledModels, cfgModelRoles, cfgModelRoleStorage } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { cfgEffortRules } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 
 it("applies project role mutations over active runtime overrides", () => {
 	const settings = Settings.isolated({});
@@ -334,6 +336,157 @@ describe("Settings.reloadForCwd", () => {
 					smol: "anthropic/smol",
 				},
 			});
+		});
+
+		it("rejects a stale project role and effort as one pair without replacing the newer save", async () => {
+			const first = await Settings.loadIsolated({ cwd: startDir, agentDir });
+			const second = await Settings.loadIsolated({ cwd: startDir, agentDir });
+			first.setRoleModelAndEffort("smol", "anthropic/first", { mode: "fixed", level: ThinkingLevel.Low }, "project");
+			second.setRoleModelAndEffort(
+				"smol",
+				"anthropic/stale",
+				{ mode: "fixed", level: ThinkingLevel.High },
+				"project",
+			);
+			await first.flush();
+			await second.flush();
+			expect(second.getProjectModelRole("smol")).toBe("anthropic/first");
+			expect(second.getProjectRoleEffortSelection("smol")).toEqual({ mode: "fixed", level: ThinkingLevel.Low });
+			const persisted = YAML.parse(await Bun.file(path.join(startDir, ".omp", "config.yml")).text());
+			expect(persisted).toMatchObject({
+				modelRoles: { smol: "anthropic/first" },
+				roleEffortSelections: { smol: { mode: "fixed", level: "low" } },
+			});
+		});
+
+		it("keeps non-overlapping project setting writes while dropping a stale overlapping setting", async () => {
+			const first = await Settings.loadIsolated({ cwd: startDir, agentDir });
+			const second = await Settings.loadIsolated({ cwd: startDir, agentDir });
+			first.writeProjectValue(cfgCompactionEnabled, false);
+			second.writeProjectValue(cfgCompactionEnabled, true);
+			second.writeProjectValue(cfgEffortRules, [{ selector: "anthropic/*", allowed: ["off", ThinkingLevel.Low] }]);
+			await first.flush();
+			await second.flush();
+			const persisted = YAML.parse(await Bun.file(path.join(startDir, ".omp", "config.yml")).text());
+			expect(persisted).toMatchObject({
+				compaction: { enabled: false },
+				effort: { rules: [{ selector: "anthropic/*", allowed: ["off", "low"] }] },
+			});
+			expect(cfgCompactionEnabled.get(second)).toBe(false);
+			expect(cfgEffortRules.get(second)).toEqual([{ selector: "anthropic/*", allowed: ["off", ThinkingLevel.Low] }]);
+		});
+
+		for (const scope of ["global", "project"] as const) {
+			it(`reports a stale ${scope} receipt as conflict even when the winner wrote the requested value`, async () => {
+				const first = await Settings.loadIsolated({ cwd: startDir, agentDir });
+				const stale = await Settings.loadIsolated({ cwd: startDir, agentDir });
+				const write = (settings: Settings) =>
+					scope === "project"
+						? settings.writeProjectValue(cfgCompactionEnabled, false)
+						: cfgCompactionEnabled.set(settings, false);
+				expect((await first.persistWithReceipt(() => write(first))).status).toBe("applied");
+				const receipt = await stale.persistWithReceipt(() => write(stale));
+				expect(receipt).toEqual({ status: "conflict", conflicts: [`${scope}:compaction.enabled`] });
+				expect(cfgCompactionEnabled.get(stale)).toBe(false);
+			});
+
+			it(`preserves disjoint ${scope} writes and returns an applied receipt for each`, async () => {
+				const first = await Settings.loadIsolated({ cwd: startDir, agentDir });
+				const second = await Settings.loadIsolated({ cwd: startDir, agentDir });
+				const rules = [{ selector: "anthropic/*", allowed: ["off" as const] }];
+				const one = await first.persistWithReceipt(() =>
+					scope === "project"
+						? first.writeProjectValue(cfgCompactionEnabled, false)
+						: cfgCompactionEnabled.set(first, false),
+				);
+				const two = await second.persistWithReceipt(() =>
+					scope === "project"
+						? second.writeProjectValue(cfgEffortRules, rules)
+						: cfgEffortRules.set(second, rules),
+				);
+				expect(one.status).toBe("applied");
+				expect(two.status).toBe("applied");
+				await second.reloadFromDisk();
+				expect(cfgCompactionEnabled.get(second)).toBe(false);
+				expect(cfgEffortRules.get(second)).toEqual(rules);
+			});
+
+			it(`rejects a stale paired ${scope} role transaction atomically`, async () => {
+				const first = await Settings.loadIsolated({ cwd: startDir, agentDir });
+				const stale = await Settings.loadIsolated({ cwd: startDir, agentDir });
+				await first.persistWithReceipt(() =>
+					first.setRoleModelAndEffort(
+						"smol",
+						"anthropic/winner",
+						{ mode: "fixed", level: ThinkingLevel.Low },
+						scope,
+					),
+				);
+				const receipt = await stale.persistWithReceipt(() =>
+					stale.setRoleModelAndEffort(
+						"smol",
+						"anthropic/winner",
+						{ mode: "fixed", level: ThinkingLevel.High },
+						scope,
+					),
+				);
+				expect(receipt.status).toBe("conflict");
+				expect(receipt.conflicts).toContain(`${scope}:modelRoles.smol`);
+				expect(receipt.conflicts).toContain(`${scope}:roleEffortSelections.smol`);
+				expect(scope === "project" ? stale.getProjectModelRole("smol") : stale.getGlobalModelRole("smol")).toBe(
+					"anthropic/winner",
+				);
+				expect(
+					scope === "project"
+						? stale.getProjectRoleEffortSelection("smol")
+						: stale.getGlobalRoleEffortSelection("smol"),
+				).toEqual({ mode: "fixed", level: ThinkingLevel.Low });
+			});
+		}
+
+		it("does not credit a same-process pending intent superseded before its lock decision", async () => {
+			const settings = await Settings.loadIsolated({ cwd: startDir, agentDir });
+			const first = settings.persistWithReceipt(() => cfgCompactionEnabled.set(settings, false));
+			const second = settings.persistWithReceipt(() => cfgCompactionEnabled.set(settings, true));
+			expect((await first).status).toBe("conflict");
+			expect((await second).status).toBe("applied");
+			expect(cfgCompactionEnabled.get(settings)).toBe(true);
+		});
+
+		it("notifies raw scope edits hidden by a project without looping on equal reloads", async () => {
+			const globalPath = path.join(agentDir, "config.yml");
+			const projectPath = path.join(scopedProject, ".omp", "config.yml");
+			await Bun.write(globalPath, "modelRoles:\n  smol: anthropic/global-first\n");
+			await Bun.write(projectPath, "modelRoles:\n  smol: anthropic/project\n");
+			const settings = await Settings.loadIsolated({ cwd: scopedProject, agentDir });
+			let scopesChanged = 0;
+			let effectiveChanged = 0;
+			const stopScopes = settings.onPersistedLayersChange(() => {
+				scopesChanged++;
+			});
+			const stopEffective = settings.onEffectiveChange([cfgModelRoles], () => {
+				effectiveChanged++;
+			});
+			await Bun.write(globalPath, "modelRoles:\n  smol: anthropic/global-second\n");
+			await settings.reloadFromDisk();
+			expect(settings.getGlobalModelRole("smol")).toBe("anthropic/global-second");
+			expect(settings.getModelRole("smol")).toBe("anthropic/project");
+			expect(scopesChanged).toBe(1);
+			expect(effectiveChanged).toBe(0);
+			await settings.reloadFromDisk();
+			expect(scopesChanged).toBe(1);
+			cfgCompactionEnabled.override(settings, false);
+			expect(scopesChanged).toBe(1);
+			await Bun.write(projectPath, "modelRoles: {}\n");
+			await settings.reloadFromDisk();
+			expect(settings.getModelRole("smol")).toBe("anthropic/global-second");
+			expect(scopesChanged).toBe(2);
+			expect(effectiveChanged).toBe(1);
+			stopScopes();
+			stopEffective();
+			await Bun.write(globalPath, "modelRoles:\n  smol: anthropic/global-third\n");
+			await settings.reloadFromDisk();
+			expect(scopesChanged).toBe(2);
 		});
 
 		it("reports project roles over global role fallbacks", async () => {

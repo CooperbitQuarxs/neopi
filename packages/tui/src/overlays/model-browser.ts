@@ -1170,6 +1170,11 @@ export class ModelBrowser implements Component {
 		this.#perf = perf;
 	}
 
+	/** Raw row performance using the same session-tier fallback as the native preview. */
+	measuredPerformance(item: ModelBrowserItem): { perf: ModelBrowserPerf; tier?: string } | undefined {
+		return this.#perfFor(item);
+	}
+
 	setMaxVisible(rows: number): void {
 		// No selection snap here: hosts call this on every render, and it must
 		// not undo wheel panning. render() re-clamps the window.
