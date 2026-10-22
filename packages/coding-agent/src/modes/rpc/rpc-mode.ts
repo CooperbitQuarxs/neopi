@@ -1530,12 +1530,18 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 		liveBridge,
 	} = ctx;
 	const modelsCommands = new RpcModelsCommands({
-		session, output, pending: pendingExtensionRequests,
-		input: (title, placeholder, secret, loginId, signal) => requestRpcDialog(
-			pendingExtensionRequests, frame => output({ ...frame, loginId }), { signal, timeout: 600_000 }, undefined,
-			{ method: "input", title, placeholder, secret, loginId, timeout: 600_000 },
-			response => parseValueDialogResponse(response, undefined),
-		),
+		session,
+		output,
+		pending: pendingExtensionRequests,
+		input: (title, placeholder, secret, loginId, signal) =>
+			requestRpcDialog(
+				pendingExtensionRequests,
+				frame => output({ ...frame, loginId }),
+				{ signal, timeout: 600_000 },
+				undefined,
+				{ method: "input", title, placeholder, secret, loginId, timeout: 600_000 },
+				response => parseValueDialogResponse(response, undefined),
+			),
 	});
 	// Without a frame encoder (control sockets) no response-size cap applies.
 	const maxResponseBytes = (): number => ctx.maxResponseBytes?.() ?? Number.MAX_SAFE_INTEGER;
@@ -2256,7 +2262,6 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				return success(id, "set_role", result.data);
 			}
 
-
 			// =================================================================
 			// Thinking
 			// =================================================================
@@ -2455,7 +2460,6 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			// =================================================================
 			// Login
 			// =================================================================
-
 
 			// =================================================================
 			// Side questions (/btw)

@@ -4,10 +4,14 @@ import { closeDb, startServer } from "@oh-my-pi/omp-stats";
 export async function runHostedStats(): Promise<void> {
 	const hostToken = process.env.NEOPI_STATS_HOST_TOKEN;
 	delete process.env.NEOPI_STATS_HOST_TOKEN;
-	if (!hostToken || hostToken.length < 32) throw new Error("Managed stats requires NEOPI_STATS_HOST_TOKEN of at least 32 characters");
+	if (!hostToken || hostToken.length < 32)
+		throw new Error("Managed stats requires NEOPI_STATS_HOST_TOKEN of at least 32 characters");
 	const done = Promise.withResolvers<void>();
 	let stopping = false;
-	const stop = () => { stopping = true; done.resolve(); };
+	const stop = () => {
+		stopping = true;
+		done.resolve();
+	};
 	process.once("SIGTERM", stop);
 	process.once("SIGINT", stop);
 	process.stdin.once("end", stop);
@@ -23,7 +27,8 @@ export async function runHostedStats(): Promise<void> {
 			},
 		});
 		closeServer = server.stop;
-		if (!stopping) process.stdout.write(`${JSON.stringify({ type: "neopi_stats_ready", version: 1, port: server.port })}\n`);
+		if (!stopping)
+			process.stdout.write(`${JSON.stringify({ type: "neopi_stats_ready", version: 1, port: server.port })}\n`);
 		await done.promise;
 	} finally {
 		closeServer?.();

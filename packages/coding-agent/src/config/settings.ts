@@ -1048,7 +1048,8 @@ export class Settings {
 		const prev = setting.get(this);
 		// Re-setting the persisted global value is a no-op for config.yml: staging it would still
 		// queue a full re-read, rewrite, fsync, and rename of the file.
-		const persistGlobal = layer === "global" && (this.#activeReceipt !== undefined || !this.#globalWriteIsNoop(setting.segments, value));
+		const persistGlobal =
+			layer === "global" && (this.#activeReceipt !== undefined || !this.#globalWriteIsNoop(setting.segments, value));
 		if (layer === "global") {
 			if (persistGlobal) this.#stageGlobal(setting.segments, value);
 			this.#releaseSoftPin(setting);
@@ -1089,8 +1090,9 @@ export class Settings {
 		if (value !== undefined) setting.assertWritable({ [key]: value });
 		const record = getByPath(this.#global, setting.segments);
 		// An entry re-set to its persisted value stages nothing (no config.yml rewrite).
-		const staged = this.#activeReceipt !== undefined || (
-			value !== undefined
+		const staged =
+			this.#activeReceipt !== undefined ||
+			(value !== undefined
 				? !this.#globalWriteIsNoop([...setting.segments, key], value)
 				: isRecord(record) && Object.hasOwn(record, key));
 		if (!staged && !this.#softPins.has(setting)) return;
@@ -1525,7 +1527,11 @@ export class Settings {
 		else receipts.delete(key);
 	}
 
-	#conflictReceipt(receipts: ReadonlyMap<string, PendingSettingsReceipt>, scope: "global" | "project", segments: readonly string[]): void {
+	#conflictReceipt(
+		receipts: ReadonlyMap<string, PendingSettingsReceipt>,
+		scope: "global" | "project",
+		segments: readonly string[],
+	): void {
 		receipts.get(JSON.stringify(segments))?.conflicts.add(`${scope}:${segments.join(".")}`);
 	}
 
@@ -4209,7 +4215,9 @@ export class Settings {
 
 		const configPath = this.#configPath;
 		const modifiedPaths = [...this.#modified];
-		const pathValuesAtStart = new Map(modifiedPaths.map(([key, segments]) => [key, structuredClone(getByPath(this.#global, segments))]));
+		const pathValuesAtStart = new Map(
+			modifiedPaths.map(([key, segments]) => [key, structuredClone(getByPath(this.#global, segments))]),
+		);
 		const modifiedModelRoles = [...this.#modifiedGlobalModelRoles];
 		const modifiedPathMutations = new Map(this.#modifiedPathMutations);
 		const modifiedModelRoleMutations = new Map(this.#modifiedGlobalModelRoleMutations);
@@ -4315,16 +4323,24 @@ export class Settings {
 				const currentRoleValues: Record<string, unknown> = isRecord(currentRoles) ? currentRoles : {};
 				const currentEfforts = getByPath(current, cfgRoleEffortSelections.segments);
 				const currentEffortValues: Record<string, unknown> = isRecord(currentEfforts) ? currentEfforts : {};
-				const canApplyMutation = (mutation: PendingYamlMutation | undefined, value: unknown, segments: readonly string[]): boolean =>
+				const canApplyMutation = (
+					mutation: PendingYamlMutation | undefined,
+					value: unknown,
+					segments: readonly string[],
+				): boolean =>
 					mutation !== undefined &&
 					mutation.generation.kind !== "unreadable" &&
 					(receipts.has(JSON.stringify(segments))
 						? Bun.deepEquals(value, mutation.baseValue)
-						: yamlGenerationsMatch(mutation.generation, loaded.generation) || Bun.deepEquals(value, mutation.baseValue));
+						: yamlGenerationsMatch(mutation.generation, loaded.generation) ||
+							Bun.deepEquals(value, mutation.baseValue));
 				const pairCanApply = (role: string): boolean =>
 					!pairedRoles.has(role) ||
 					(canApplyMutation(modifiedModelRoleMutations.get(role), currentRoleValues[role], ["modelRoles", role]) &&
-						canApplyMutation(modifiedRoleEffortMutations.get(role), currentEffortValues[role], ["roleEffortSelections", role]));
+						canApplyMutation(modifiedRoleEffortMutations.get(role), currentEffortValues[role], [
+							"roleEffortSelections",
+							role,
+						]));
 				const rolesToApply = modifiedModelRoles.filter(role => {
 					if (
 						pairCanApply(role) &&
@@ -4342,7 +4358,10 @@ export class Settings {
 				const effortsToApply = modifiedRoleEfforts.filter(role => {
 					if (
 						pairCanApply(role) &&
-						canApplyMutation(modifiedRoleEffortMutations.get(role), currentEffortValues[role], ["roleEffortSelections", role])
+						canApplyMutation(modifiedRoleEffortMutations.get(role), currentEffortValues[role], [
+							"roleEffortSelections",
+							role,
+						])
 					) {
 						return true;
 					}
@@ -4677,13 +4696,18 @@ export class Settings {
 					const pending = pendingMutations.get(JSON.stringify(segments));
 					return pending !== undefined && Bun.deepEquals(getByPath(projectSettings, segments), pending.baseValue);
 				};
-				const blockedRoles = new Set([...pairedRoles].filter(role =>
-					!applies(["modelRoles", role]) || !applies(["roleEffortSelections", role]),
-				));
+				const blockedRoles = new Set(
+					[...pairedRoles].filter(
+						role => !applies(["modelRoles", role]) || !applies(["roleEffortSelections", role]),
+					),
+				);
 				const appliedPaths = new Set<string>();
 				const accept = (segments: readonly string[], role?: string): boolean => {
 					if ((role !== undefined && blockedRoles.has(role)) || !applies(segments)) {
-						logger.warn("Settings: skipped stale project change after external config edit", { path: projectConfigPath, setting: segments.join(".") });
+						logger.warn("Settings: skipped stale project change after external config edit", {
+							path: projectConfigPath,
+							setting: segments.join("."),
+						});
 						this.#conflictReceipt(receipts, "project", segments);
 						return false;
 					}
@@ -4744,7 +4768,10 @@ export class Settings {
 				this.#projectFileSettings = structuredClone(projectSettings);
 				for (const [key, pending] of this.#modifiedProjectMutations) {
 					if (appliedPaths.has(key)) {
-						this.#modifiedProjectMutations.set(key, { ...pending, baseValue: structuredClone(getByPath(projectSettings, pending.segments)) });
+						this.#modifiedProjectMutations.set(key, {
+							...pending,
+							baseValue: structuredClone(getByPath(projectSettings, pending.segments)),
+						});
 					}
 				}
 				this.#quarantinedYamlTargets.delete(projectConfigPath);
@@ -4772,8 +4799,14 @@ export class Settings {
 		this.#commitProjectRead(project);
 		this.#project = project.settings;
 		for (const role of modifiedModelRoles) {
-			if (!this.#modifiedProjectModelRoles.has(role) && this.#savedRuntimeModelRoleOverrides.has(role) &&
-				Bun.deepEquals(getByPath(this.#overrides, ["modelRoles", role]), getByPath(projectValues, ["modelRoles", role]))) {
+			if (
+				!this.#modifiedProjectModelRoles.has(role) &&
+				this.#savedRuntimeModelRoleOverrides.has(role) &&
+				Bun.deepEquals(
+					getByPath(this.#overrides, ["modelRoles", role]),
+					getByPath(projectValues, ["modelRoles", role]),
+				)
+			) {
 				this.#updateRuntimeModelRoleOverride(role, this.getProjectModelRole(role));
 			}
 		}

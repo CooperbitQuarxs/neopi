@@ -4,7 +4,7 @@ export const isHostedDashboard = () => document.querySelector('meta[name="neopi-
 let hostedHash: string | undefined;
 export function statsLocationHash(): string {
 	if (!isHostedDashboard()) return window.location.hash;
-	return hostedHash ??= window.location.hash;
+	return (hostedHash ??= window.location.hash);
 }
 
 /** srcdoc inherits the host's base URL. Keep fragment links inside the native document. */
@@ -59,9 +59,16 @@ export function statsFetch(path: string, options: RequestInit = {}): Promise<Res
 				return;
 			}
 			const stream = new ReadableStream<Uint8Array>({
-				start(value) { controller = value; },
-				pull() { channel.port1.postMessage({ type: "pull" }); },
-				cancel() { channel.port1.postMessage({ type: "cancel" }); close(); },
+				start(value) {
+					controller = value;
+				},
+				pull() {
+					channel.port1.postMessage({ type: "pull" });
+				},
+				cancel() {
+					channel.port1.postMessage({ type: "cancel" });
+					close();
+				},
 			});
 			result.resolve(new Response(stream, { status: data.status, headers: data.headers }));
 		} else if (data.type === "chunk") {
@@ -76,11 +83,17 @@ export function statsFetch(path: string, options: RequestInit = {}): Promise<Res
 			close();
 		}
 	};
-	window.parent.postMessage({
-		type: "neopi-stats-request", version: 1, path,
-		method: options.method ?? "GET",
-		headers: Object.fromEntries(new Headers(options.headers)),
-	}, "*", [channel.port2]);
+	window.parent.postMessage(
+		{
+			type: "neopi-stats-request",
+			version: 1,
+			path,
+			method: options.method ?? "GET",
+			headers: Object.fromEntries(new Headers(options.headers)),
+		},
+		"*",
+		[channel.port2],
+	);
 	options.signal?.addEventListener("abort", abort, { once: true });
 	if (options.signal?.aborted) abort();
 	return result.promise;
@@ -110,11 +123,17 @@ export function connectHostedEvents(callbacks: {
 					while ((end = pending.indexOf("\n\n")) >= 0) {
 						const event = pending.slice(0, end);
 						pending = pending.slice(end + 2);
-						const data = event.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
+						const data = event
+							.split("\n")
+							.filter(line => line.startsWith("data:"))
+							.map(line => line.slice(5).trimStart())
+							.join("\n");
 						if (data) callbacks.onmessage(data);
 					}
 				}
-			} finally { await reader.cancel(); }
+			} finally {
+				await reader.cancel();
+			}
 		} catch {
 			if (abort.signal.aborted) return;
 		}
@@ -124,5 +143,8 @@ export function connectHostedEvents(callbacks: {
 		}
 	};
 	void connect();
-	return () => { abort.abort(); clearTimeout(retry); };
+	return () => {
+		abort.abort();
+		clearTimeout(retry);
+	};
 }

@@ -2714,7 +2714,9 @@ export class AgentSession implements SettingsScope {
 		// Re-evaluate append-only context mode when the setting changes at runtime.
 		cfgProviderAppendOnlyContext.listen(this, () => this.#syncAppendOnlyContext(this.model));
 		cfgModelRoles.listen(this, () => this.#advisors.reconcileModelRoles());
-		this.addDisposer(this.settings.onPersistedLayersChange(() => this.#emit({ type: "models_configuration_changed" })));
+		this.addDisposer(
+			this.settings.onPersistedLayersChange(() => this.#emit({ type: "models_configuration_changed" })),
+		);
 		for (const setting of [cfgModelRoles, cfgRoleEffortSelections, cfgEffortRules]) {
 			setting.listen(this, () => this.#emit({ type: "models_configuration_changed" }));
 		}
