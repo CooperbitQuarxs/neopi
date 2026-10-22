@@ -114,7 +114,8 @@ describe("SelectList", () => {
 		expect(selected).toEqual(["a"]);
 		list.handleInput("/");
 		list.handleInput(" ");
-		expect(list.navigationState().filter).toBe(" ");
+		expect(list.navigationState().filterDraft).toBe(" ");
+		expect(list.navigationState().filter).toBe("");
 		expect(selected).toEqual(["a"]);
 	});
 
@@ -313,7 +314,8 @@ describe("SelectList", () => {
 		expect(list.debugState().filterText).toBe("");
 		list.handleInput("/");
 		for (const key of "og/hjkl") list.handleInput(key);
-		expect(list.debugState().filterText).toBe("og/hjkl");
+		expect(list.navigationState().filterDraft).toBe("og/hjkl");
+		expect(list.debugState().filterText).toBe("");
 		list.handleInput("\x1b");
 		expect(cancelled).toBe(0);
 		expect(list.debugState()).toMatchObject({ filterText: "", filterFocused: false });
@@ -323,6 +325,7 @@ describe("SelectList", () => {
 		list.handleInput("/");
 		list.handleInput("o");
 		list.handleInput("g");
+		list.handleInput("\r");
 
 		const rendered = list.render(80).join("\n");
 		expect(rendered).toContain("OpenCode Go");
@@ -442,7 +445,8 @@ describe("SelectList", () => {
 		reopened.restoreNavigation(list.navigationSnapshot());
 		expect(reopened.filterFocused).toBe(true);
 		reopened.handleInput("lph");
-		expect(reopened.navigationState().filter).toBe("alpha");
+		expect(reopened.navigationState().filterDraft).toBe("alpha");
+		expect(reopened.navigationState().filter).toBe("");
 		expect(activated).toBe(false);
 		reopened.handleInput("\r");
 		expect(reopened.filterFocused).toBe(false);

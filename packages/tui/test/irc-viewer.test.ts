@@ -117,6 +117,7 @@ describe("IrcViewerComponent", () => {
 			entry("0-Delta", "0-Alpha", "delta to alpha"),
 		]);
 		view.type("/alpha");
+		expect(view.screen().join("\n")).toContain("gamma to delta");
 		view.viewer.handleInput("\r");
 		const screen = view.screen().join("\n");
 		expect(screen).toContain("alpha to beta");
@@ -237,7 +238,7 @@ describe("IrcViewerComponent", () => {
 			selectedIndex: 0,
 			top: saved.top,
 			follow: false,
-			filter: { ...field, focused: false },
+			filter: { ...field, query: field.value, focused: false },
 		});
 		expect(visits).toEqual([]);
 		view.viewer.dispose();
@@ -274,7 +275,7 @@ describe("IrcViewerComponent", () => {
 		expect(view.viewer.navigationSnapshot().draft.focused).toBe(false);
 		view.viewer.handleInput("\x1b");
 		expect(view.viewer.navigationSnapshot().compose).toBeUndefined();
-		expect(view.viewer.navigationSnapshot().draft).toEqual({ ...saved.draft, focused: false });
+		expect(view.viewer.navigationSnapshot().draft).toEqual({ ...saved.draft, query: saved.draft.value, focused: false });
 		expect(visits).toEqual([]);
 		expect(view.closed()).toBe(0);
 		expect(sent).toEqual([]);

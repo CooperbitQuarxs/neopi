@@ -71,6 +71,22 @@ describe("literal menu search fields", () => {
 		expect(restored.cursor).toBe(4);
 	});
 
+	it("keeps draft and confirmed patterns separate and discards edits on blur", () => {
+		const field = new MenuSearchField("old");
+		field.focused = true;
+		field.handleInput(" draft");
+		expect(field.value).toBe("old draft");
+		expect(field.query).toBe("old");
+		field.focused = false;
+		expect(field.value).toBe("old");
+		field.focused = true;
+		field.handleInput(" confirmed");
+		field.handleInput("\r");
+		expect(field.query).toBe("old confirmed");
+		field.handleInput("\x1b");
+		expect(field.query).toBe("");
+	});
+
 	it("renders only the search hint when its empty field is not focused", () => {
 		const field = new MenuSearchField();
 		expect(field.render(80, theme)).toBe("/ search");

@@ -145,8 +145,8 @@ export class IrcViewerComponent implements Component {
 	}
 
 	#visible(): readonly IrcLogEntry[] {
-		const query = this.#filter.value.trim();
-		const regex = compileMenuRegex(this.#filter.value);
+		const query = this.#filter.query.trim();
+		const regex = compileMenuRegex(this.#filter.query);
 		if (regex) {
 			return regex.regex
 				? this.#options.source.entries().filter(entry =>
@@ -285,7 +285,7 @@ export class IrcViewerComponent implements Component {
 						: theme.fg("dim", counts);
 
 		const hints = this.#filter.focused
-			? "enter apply · esc leave field"
+			? "enter apply · esc clear"
 			: this.#compose
 				? this.#draft.focused
 					? "enter send · Tab view · esc leave field"
@@ -354,11 +354,10 @@ export class IrcViewerComponent implements Component {
 	}
 
 	#handleFilterInput(data: string): boolean {
+		const before = this.#filter.query;
 		const result = this.#filter.handleInput(data);
-		if (result === "pass") {
-			if (!matchesKey(data, "enter") && data !== "\n") return false;
-			this.#filter.focused = false;
-		} else if (result === "edited") {
+		if (result === "pass") return false;
+		if (this.#filter.query !== before) {
 			this.#follow = true;
 			this.#revealSelection = true;
 		}
@@ -380,9 +379,16 @@ export class IrcViewerComponent implements Component {
 		this.#options.requestRender();
 	}
 
+	#blurDraft(): void {
+		const cursor = this.#draft.cursor;
+		this.#draft.setValue(this.#draft.value);
+		this.#draft.input.setCursor(cursor);
+		this.#draft.focused = false;
+	}
+
 	#leaveReply(): void {
 		this.#compose = undefined;
-		this.#draft.focused = false;
+		this.#blurDraft();
 		this.#keys.reset();
 		this.#options.requestRender();
 	}
@@ -398,7 +404,7 @@ export class IrcViewerComponent implements Component {
 			// Esc leaves the composer field without discarding its draft.
 			if (matchesKey(data, "escape") || (extractPrintableText(data) === undefined
 				&& getKeybindings().matches(data, "tui.select.cancel"))) {
-				this.#draft.focused = false;
+				this.#blurDraft();
 			} else if (this.#draft.handleInput(data) === "pass") {
 				return false;
 			}
@@ -456,13 +462,16 @@ export class IrcViewerComponent implements Component {
 		} else if (this.#options.viewerKeys.some(key => matchesKey(data, key))) {
 			this.#options.onClose();
 		} else if (action?.kind === "context") {
-			if (this.#compose) this.#draft.focused = !this.#draft.focused;
+			if (this.#compose) {
+				if (this.#draft.focused) this.#blurDraft();
+				else this.#draft.focused = true;
+			}
 			this.#filter.focused = false;
 			this.#keys.reset();
 			this.#options.requestRender();
 		} else if (action?.kind === "search") {
 			this.#filter.focused = true;
-			this.#draft.focused = false;
+			this.#blurDraft();
 			this.#keys.reset();
 			this.#options.requestRender();
 		} else if (data === "r" && this.#options.reply && !this.#compose && !this.#sending) {

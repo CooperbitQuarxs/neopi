@@ -592,7 +592,7 @@ export class ExtensionDashboard implements Component {
 	restoreNavigation(snapshot: unknown): void {
 		if (typeof snapshot !== "object" || snapshot === null) return;
 		const state = snapshot as Partial<ExtensionDashboardNavigation>;
-		if (typeof state.list?.search.value === "string") this.#state.searchQuery = state.list.search.value;
+		if (typeof state.list?.search.query === "string") this.#state.searchQuery = state.list.search.query;
 		if (typeof state.provider === "string") {
 			this.#tabBar.setActiveById(state.provider);
 			this.#selectProviderById(state.provider);

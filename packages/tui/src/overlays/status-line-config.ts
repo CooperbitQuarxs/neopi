@@ -420,7 +420,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 			selected: this.#selected,
 			top: this.#viewport.top?.item ?? 0,
 			focus: this.#focus,
-			query: this.#search.value,
+			query: this.#search.query,
 		};
 	}
 
@@ -476,9 +476,9 @@ export class StatusLineConfigOverlayComponent implements Component {
 	// ── List model ────────────────────────────────────────────────────────
 
 	#matches(row: StatusLineWidgetRow): boolean {
-		const regex = compileMenuRegex(this.#search.value);
+		const regex = compileMenuRegex(this.#search.query);
 		if (regex) return !!regex.regex && [row.id, segmentLabel(row.id)].some(text => regex.regex!.test(text));
-		const query = this.#search.value.trim().toLowerCase();
+		const query = this.#search.query.trim().toLowerCase();
 		if (!query) return true;
 		return row.id.toLowerCase().includes(query) || segmentLabel(row.id).toLowerCase().includes(query);
 	}
@@ -707,6 +707,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 	 */
 	leaveMenu(): void {
 		if (this.#closed) return;
+		this.#search.focused = false;
 		this.#closed = true;
 		this.#prompt = undefined;
 		this.#persist();
@@ -843,16 +844,16 @@ export class StatusLineConfigOverlayComponent implements Component {
 	}
 
 	#handleSearchInput(data: string): void {
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const result = this.#search.handleInput(data);
-		if (result === "exited") {
-			this.#setFocus("list");
-			return;
-		}
 		if (result === "pass") return;
-		const query = sanitizeDisplaySingleLine(this.#search.value);
-		if (query !== this.#search.value) this.#search.setValue(query);
-		if (query === before) {
+		const draft = sanitizeDisplaySingleLine(this.#search.value);
+		if (draft !== this.#search.value) this.#search.input.setValue(draft);
+		if (result === "exited") {
+			this.#search.setValue(draft);
+			this.#setFocus("list");
+		}
+		if (this.#search.query === before) {
 			this.#cb.requestRender();
 			return;
 		}

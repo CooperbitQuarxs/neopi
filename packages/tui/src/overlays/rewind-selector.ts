@@ -210,9 +210,9 @@ export class RewindSelectorComponent implements Component {
 	#entries: TranscriptEntry[];
 	/** True while older history is still unreplayed. */
 	#truncated = false;
-	/** A retained query keeps its filtered projection after Esc leaves the field. */
+	/** The transcript projection follows only the confirmed query. */
 	get #filter(): string | undefined {
-		return this.#search.focused || this.#search.value.length > 0 ? this.#search.value : undefined;
+		return this.#search.query || undefined;
 	}
 	/** Main transcript rows from the last frame; the filter matches what is on screen. */
 	#mainRows: readonly (readonly string[])[] = [];
@@ -320,6 +320,7 @@ export class RewindSelectorComponent implements Component {
 	}
 
 	leaveMenu(): void {
+		this.#search.focused = false;
 		this.#stopSlide();
 		this.#keys.reset();
 	}
@@ -540,11 +541,11 @@ export class RewindSelectorComponent implements Component {
 			});
 			return;
 		}
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
 			this.#keys.reset();
-			if (this.#search.value !== before) {
+			if (this.#search.query !== before) {
 				if (!isNativeRendering() && this.#mainRows.length === 0) this.#ensureGeometry();
 				this.#filterChanged();
 			} else this.deps.requestRender();
@@ -994,14 +995,14 @@ export class RewindSelectorComponent implements Component {
 	describe(_cx: DescribeContext): NativeNode {
 		const filter = this.#filter;
 		const columns = filter === undefined ? this.#stripColumns() : [];
-		const memo = `${this.#selected}|${this.#activeVariant}|${this.#siblingSelected}|${this.#truncated}|${columns.length}|${filter ?? "\0"}|${this.#search.focused}`;
+		const memo = `${this.#selected}|${this.#activeVariant}|${this.#siblingSelected}|${this.#truncated}|${columns.length}|${filter ?? "\0"}|${this.#search.focused}|${this.#search.value}|${this.#search.cursor}`;
 		if (this.#bar?.memo === memo && this.#bar.targets === this.#targets) return this.#bar.node;
 
 		const title = text([span(`${theme.icon.rewind} `, "accent"), span("Rewind", "strong")], { wrap: "none" });
 		const upDown = actionHint(["tui.select.up", "tui.select.down"], "step");
 		const rewind = actionButton("Rewind here", "rewind", { keys: "enter", tone: "accent" });
 		let children: NativeChild[];
-		if (filter === undefined) {
+		if (filter === undefined && !this.#search.focused) {
 			const column = columns[this.#activeVariant - 1];
 			const at = column ? this.#siblingSelected : this.#selected;
 			const of = column ? column.targets.length : this.#targets.length;
@@ -1023,7 +1024,7 @@ export class RewindSelectorComponent implements Component {
 			children = [
 				title,
 				this.#search.input,
-				...(compileMenuRegex(filter)?.error ? [text([span(compileMenuRegex(filter)!.error!, "error")])] : []),
+				...(compileMenuRegex(this.#search.value)?.error ? [text([span(compileMenuRegex(this.#search.value)!.error!, "error")])] : []),
 				text(
 					[
 						matches.length === 0
@@ -1034,7 +1035,7 @@ export class RewindSelectorComponent implements Component {
 				),
 				hintsRow(
 					this.#search.focused
-						? [upDown, { keys: ["escape"], label: "back to list" }]
+						? [{ keys: ["enter"], label: "confirm search" }, { keys: ["escape"], label: "clear search" }]
 						: [
 								upDown,
 								{ keys: ["h", "l", "left", "right"], label: "user turns" },
@@ -1131,7 +1132,9 @@ export class RewindSelectorComponent implements Component {
 				lines: composed.lines,
 				anchor: this.#outlineAnchor(composed),
 			},
-			footer: [theme.fg("dim", `${position}${keys}`)],
+			footer: this.#search.focused
+				? [this.#search.render(chromeWidth, { muted: text => theme.fg("dim", text) })]
+				: [theme.fg("dim", `${position}${keys}`)],
 		};
 	}
 
@@ -1165,7 +1168,7 @@ export class RewindSelectorComponent implements Component {
 				: theme.fg("dim", `${selected >= 0 ? selected + 1 : "-"}/${matches.length}`);
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const keys = this.#search.focused
-			? `${upDown} step · PgUp/Dn page · Enter rewind · Esc back to list`
+			? "Enter confirm search · Esc clear search"
 			: `j/k ${upDown} step · h/l user turns · Ctrl-u/d half · PgUp/Dn · gg/G · Ctrl-e/y view · Enter rewind · Esc close`;
 		return {
 			header: [this.#header()],

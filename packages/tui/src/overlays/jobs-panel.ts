@@ -211,7 +211,7 @@ export class JobsSheet implements Component {
 			this.#search.render(width, { muted: text => text }),
 		];
 		const window = this.#viewport.layout(this.#rowCounts, this.#selection.selectedIndex, this.#listRows());
-		if (jobs.length === 0) lines.push(this.#search.value ? " No matching jobs" : " No background jobs");
+		if (jobs.length === 0) lines.push(this.#search.query ? "No matching jobs" : "No background jobs");
 		for (let index = window.startIndex; index < window.endIndex; index++) {
 			const job = jobs[index]!;
 			const cursor = job === selected ? ">" : " ";
@@ -257,9 +257,9 @@ export class JobsSheet implements Component {
 	}
 
 	handleInput(data: string): void {
-		const before = this.#search.value;
+		const before = this.#search.query;
 		if (this.#search.handleInput(data) !== "pass") {
-			if (this.#search.value !== before) this.#viewport.reveal();
+			if (this.#search.query !== before) this.#viewport.reveal();
 			this.#keys.reset();
 			return;
 		}
@@ -330,8 +330,8 @@ export class JobsSheet implements Component {
 	#current(): { jobs: readonly JobsPanelJob[]; selected: JobsPanelJob | undefined } {
 		const { running, recent } = this.#source.load();
 		const all = [...running, ...recent];
-		const jobs = this.#search.value.trim()
-			? fuzzyFilter(all, this.#search.value, job => `${job.label} ${job.id} ${job.type} ${job.status}`)
+		const jobs = this.#search.query.trim()
+			? fuzzyFilter(all, this.#search.query, job => `${job.label} ${job.id} ${job.type} ${job.status}`)
 			: all;
 		this.#selection.setItems(jobs, this.#selectedId);
 		const selected = this.#selection.selectedItem;

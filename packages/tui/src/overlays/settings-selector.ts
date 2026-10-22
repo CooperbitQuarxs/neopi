@@ -1088,7 +1088,7 @@ export class SettingsSelectorComponent implements Component {
 			lead: searchError
 				? `Invalid regex: ${searchError}`
 				: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
-			query: searching ? this.#searchQuery : pluginPage?.query,
+			query: searching ? this.#search.value : pluginPage?.query,
 			cursor: searching ? this.#search.input.getCursor() : pluginPage?.cursor,
 			sections,
 			focus,
@@ -1203,9 +1203,11 @@ export class SettingsSelectorComponent implements Component {
 		if (event.type === "action" && event.act === "close" && event.value === undefined) {
 			const list = this.#searchList ?? this.#currentList;
 			if (
-				(this.#searchList && this.#search.focused) ||
+				(this.#searchList && (this.#search.focused || this.#searchQuery.length > 0)) ||
 				list?.filterFocused ||
-				this.#pluginComponent?.filterFocused
+				list?.hasSearchQuery() ||
+				this.#pluginComponent?.filterFocused ||
+				this.#pluginComponent?.prefsPage()?.query
 			) {
 				this.handleInput(ESCAPE);
 				return;
@@ -1511,7 +1513,7 @@ export class SettingsSelectorComponent implements Component {
 	#startSearch(initialQuery: string): void {
 		this.#preSearchTabId = this.#currentTabId;
 		this.#searchCorpora = null;
-		this.#search.input.setValue(initialQuery);
+		this.#search.setValue(initialQuery);
 		this.#search.focused = true;
 		const list = new SettingsList(
 			[],
@@ -2157,6 +2159,11 @@ export class SettingsSelectorComponent implements Component {
 			return;
 		}
 
+		if (this.#searchList && this.#search.focused) {
+			this.#menuKeys.reset();
+			this.#handleSearchModeInput(data, this.#searchList);
+			return;
+		}
 		// Text-input submenus take every byte: arrow keys must reach the
 		// cursor and Tab must not switch tabs.
 		if (this.#textInputActive) {
@@ -2184,11 +2191,6 @@ export class SettingsSelectorComponent implements Component {
 			return;
 		}
 
-		if (this.#searchList && this.#search.focused) {
-			this.#menuKeys.reset();
-			this.#handleSearchModeInput(data, this.#searchList);
-			return;
-		}
 
 		const action = this.#menuKeys.read(data);
 		if (action === "pending") return;
@@ -2222,11 +2224,11 @@ export class SettingsSelectorComponent implements Component {
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
 			this.#menuKeys.reset();
-			if (field === "exited" && !this.#search.value) {
+			if (field === "exited" && !this.#search.query) {
 				this.#endSearch(false);
 				return;
 			}
-			if (this.#search.value !== this.#searchQuery) this.#setSearchQuery(this.#search.value);
+			if (this.#search.query !== this.#searchQuery) this.#setSearchQuery(this.#search.query);
 			return;
 		}
 		const action = this.#menuKeys.read(data);
@@ -2274,6 +2276,7 @@ export class SettingsSelectorComponent implements Component {
 			preSearchTab: this.#preSearchTabId,
 			searching: this.#searchList !== null,
 			query: this.#searchQuery,
+			search: this.#search.navigationSnapshot(),
 			searchFocused: this.#search.focused,
 			searchCursor: this.#search.input.getCursor(),
 			list: listSnapshot,
@@ -2284,6 +2287,7 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	leaveMenu(): void {
+		this.#search.focused = false;
 		(this.#searchList ?? this.#currentList)?.leaveMenu();
 		if (isMenuHistoryLeaver(this.#pluginComponent)) this.#pluginComponent.leaveMenu();
 	}
@@ -2296,6 +2300,7 @@ export class SettingsSelectorComponent implements Component {
 			preSearchTab?: string;
 			searching?: boolean;
 			query?: string;
+			search?: unknown;
 			searchFocused?: boolean;
 			searchCursor?: number;
 			list?: unknown;
@@ -2315,6 +2320,7 @@ export class SettingsSelectorComponent implements Component {
 					this.#preSearchTabId = state.preSearchTab as SettingTab | "plugins";
 				this.#search.focused = state.searchFocused === true;
 				if (typeof state.searchCursor === "number") this.#search.input.setCursor(state.searchCursor);
+				if (state.search !== undefined) this.#search.restoreNavigation(state.search);
 			}
 			(this.#searchList ?? this.#currentList)?.restoreNavigation(state.list);
 			if (isMenuHistoryParticipant(this.#pluginComponent)) this.#pluginComponent.restoreNavigation(state.plugin);

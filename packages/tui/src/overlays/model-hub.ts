@@ -66,6 +66,7 @@ import {
 	ModelBrowser,
 	type ModelBrowserItem,
 	type ModelBrowserNavigation,
+	modelMatchesRegex,
 	modelSearchText,
 	providerMark,
 	thinkingDotToken,
@@ -416,8 +417,10 @@ interface ModelHubPageNavigation {
 	roleTab: RoleTab;
 	filterFocused: boolean;
 	rolesQuery: string;
+	rolesValue: string;
 	rolesCursor: number;
 	effortQuery: string;
+	effortValue: string;
 	effortCursor: number;
 	roleKey: string | undefined;
 	roleTop: MenuViewportPosition | undefined;
@@ -850,9 +853,11 @@ export class ModelHubComponent implements Component {
 			modelKind: this.#modelKindTab,
 			roleTab: this.#roleTab,
 			filterFocused: this.#filterEditing,
-			rolesQuery: this.#rolesSearch.value,
+			rolesQuery: this.#rolesSearch.query,
+			rolesValue: this.#rolesSearch.value,
 			rolesCursor: this.#rolesSearch.cursor,
-			effortQuery: this.#effortSearch.value,
+			effortQuery: this.#effortSearch.query,
+			effortValue: this.#effortSearch.value,
 			effortCursor: this.#effortSearch.cursor,
 			roleKey: row ? rolesRowKey(row, this.#roleIndex) : undefined,
 			roleTop: this.#roleViewport.top ? { ...this.#roleViewport.top } : undefined,
@@ -878,11 +883,17 @@ export class ModelHubComponent implements Component {
 		this.#modelKindTab = MODEL_KIND_TABS.includes(state.modelKind ?? "all") ? (state.modelKind ?? "all") : "all";
 		this.#roleTab = state.roleTab && ROLE_TABS.includes(state.roleTab) ? state.roleTab : "all";
 		this.#assigning = state.assigning ? { ...state.assigning } : null;
-		this.#rolesSearch.restoreNavigation({ value: state.rolesQuery ?? "", cursor: state.rolesCursor, focused: false });
+		this.#rolesSearch.restoreNavigation({
+			value: state.rolesValue ?? state.rolesQuery ?? "",
+			query: state.rolesQuery ?? "",
+			cursor: state.rolesCursor,
+			focused: state.filterFocused === true && state.entry === "roles" && !state.assigning,
+		});
 		this.#effortSearch.restoreNavigation({
-			value: state.effortQuery ?? "",
+			value: state.effortValue ?? state.effortQuery ?? "",
+			query: state.effortQuery ?? "",
 			cursor: state.effortCursor,
-			focused: false,
+			focused: state.filterFocused === true && state.entry === "effort" && !state.assigning,
 		});
 		this.#buildRolesRows();
 		this.#setActiveEntry(state.entry);
@@ -1368,7 +1379,7 @@ export class ModelHubComponent implements Component {
 	#buildRolesRows(): void {
 		const rows: RolesRow[] = [];
 		const chains = this.#fallbackChains();
-		const rawQuery = this.#rolesSearch.value;
+		const rawQuery = this.#rolesSearch.query;
 		const regex = compileMenuRegex(rawQuery);
 		const query = rawQuery.trim().toLowerCase();
 		const matchesText = (value: string | undefined): boolean =>
@@ -1499,6 +1510,10 @@ export class ModelHubComponent implements Component {
 		if (this.#browserCatalog === this.#availableItems && this.#browser.query === query) {
 			const ranked = this.#browser.queryMatches;
 			if (ranked) return ranked;
+		}
+		const pattern = compileMenuRegex(query);
+		if (pattern) {
+			return this.#availableItems.filter(item => !!pattern.regex && modelMatchesRegex(item, pattern.regex));
 		}
 		let cached = this.#catalogCorpus;
 		if (cached?.items !== this.#availableItems) {
@@ -2159,7 +2174,7 @@ export class ModelHubComponent implements Component {
 		const count = this.#settings.effortRules.length + 2;
 		if (this.#effortRows.length !== count) this.#effortRows = Array.from({ length: count }, (_, index) => index);
 		this.#effortSelection.setItems(this.#effortRows, String(this.#effortIndex));
-		this.#effortSelection.setQuery(this.#effortSearch.value);
+		this.#effortSelection.setQuery(this.#effortSearch.query);
 		if (this.#effortIndex >= 0) this.#effortSelection.setSelectedKey(String(this.#effortIndex));
 		this.#effortIndex = this.#effortSelection.selectedItem ?? -1;
 		return this.#effortSelection.visibleItems;
@@ -2885,7 +2900,7 @@ export class ModelHubComponent implements Component {
 		const strip = this.#strip;
 		const fieldFocused =
 			this.#filterEditing || ((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused);
-		if (fieldFocused && extractPrintableText(rawData) !== undefined) {
+		if (this.#filterEditing || (fieldFocused && extractPrintableText(rawData) !== undefined)) {
 			this.#handleInput(rawData);
 			return;
 		}
@@ -2913,9 +2928,9 @@ export class ModelHubComponent implements Component {
 				return;
 			}
 			const search = rolesSearching ? this.#rolesSearch : this.#effortSearch;
-			const before = search.value;
-			const result = search.handleInput(rawData);
-			if (before !== search.value) {
+			const before = search.query;
+			search.handleInput(rawData);
+			if (before !== search.query) {
 				if (rolesSearching) {
 					this.#roleIndex = 0;
 					this.#roleViewport.setTop(0);
@@ -2926,7 +2941,8 @@ export class ModelHubComponent implements Component {
 					this.#syncEffortSelection();
 				}
 			}
-			if (result !== "pass" || extractPrintableText(rawData) !== undefined) return;
+			this.#keys.reset();
+			return;
 		}
 		const data = rawData;
 		const action = this.#keys.read(data);
@@ -3138,10 +3154,14 @@ export class ModelHubComponent implements Component {
 			this.#callbacks.onCancel();
 			return;
 		}
+		if (this.#filterEditing) {
+			this.#handleInput("\x1b");
+			return;
+		}
 		if (!this.#strip) {
 			const kind = this.#assigning === null ? this.#activeEntry().kind : undefined;
 			const search = kind === "roles" ? this.#rolesSearch : kind === "effort" ? this.#effortSearch : undefined;
-			if (search?.value) {
+			if (search?.query) {
 				search.setValue("");
 				search.focused = false;
 				if (kind === "roles") this.#buildRolesRows();
@@ -3154,11 +3174,6 @@ export class ModelHubComponent implements Component {
 				this.#onQueryChanged("");
 				return;
 			}
-		}
-		if (this.#filterEditing) {
-			this.#filterEditing = false;
-			this.#browser.focusFilter(false);
-			return;
 		}
 		const strip = this.#strip;
 		if ((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused) {
@@ -4708,7 +4723,7 @@ export class ModelHubComponent implements Component {
 				? this.#rolesSearch.value || this.#filterEditing
 					? this.#rolesSearch.value
 					: null
-				: this.#browser.query,
+				: this.#browser.value,
 			cursor: rolesView ? this.#rolesSearch.cursor : this.#browser.cursor,
 			placeholder: rolesView ? "Search roles and fallback chains…" : "/ search models…",
 			scopes: this.#pickerScopes(),
@@ -4741,7 +4756,7 @@ export class ModelHubComponent implements Component {
 					order: indices.map(index => `effort:${index}`),
 					selected: this.#effortIndex < 0 ? null : `effort:${this.#effortIndex}`,
 					total: rules.length,
-					actions: this.#strip
+					actions: this.#strip || this.#filterEditing
 						? props.actions
 						: compact([
 								this.#effortIndex >= 0
@@ -4986,7 +5001,7 @@ export class ModelHubComponent implements Component {
 		return {
 			...CLOSE_ACTION,
 			label: this.#filterEditing
-				? "Back to list"
+				? "Clear search"
 				: textFocused
 					? "Leave field"
 					: strip || this.#assigning
@@ -5000,6 +5015,7 @@ export class ModelHubComponent implements Component {
 		const strip = this.#strip;
 		const cancel = this.#pickerCancelAction();
 		if (this.#assignmentPending) return [cancel];
+		if (this.#filterEditing) return [pickerAction("searchConfirm", "Search", "enter", { primary: true }), cancel];
 		if (strip) {
 			const apply =
 				strip.kind === "name"
@@ -5437,6 +5453,16 @@ export class ModelHubComponent implements Component {
 		}
 		// Same gate as the keys: only cancel works while an assignment applies.
 		if (this.#assignmentPending) return;
+		if (this.#filterEditing) {
+			if (
+				event.kind === "activate" ||
+				(event.kind === "action" &&
+					["searchConfirm", "assign", "roles:pick", "effort:edit"].includes(event.act))
+			) {
+				this.#handleInput("\r");
+			}
+			return;
+		}
 		const entry = this.#activeEntry();
 		const rolesView = entry.kind === "roles" && this.#assigning === null;
 		if (event.kind !== "action") {

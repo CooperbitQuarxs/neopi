@@ -101,14 +101,16 @@ Native TSP lists and pickers retain selection, filtering, and history. Their ter
 
 ### Menu search
 
-Ordinary patterns keep fuzzy matching. A pattern beginning with `/` selects the supported **Vim search syntax, very-magic by default**: type `//` from navigation (the first slash focuses search; the second becomes the pattern prefix). `re:` selects the same dialect explicitly. Confirm with Enter, then use `j`/`k` to navigate matches. Invalid or unsupported expressions show an inline error and match nothing.
+Press `/` to enter pattern mode. Nothing filters until Enter confirms the draft and returns to navigation. Arrows, Tab and Ctrl-keys stay in the field while typing; they cannot switch panes or move results. Esc cancels and clears the search. Leaving the field without Enter discards its edits.
+
+Ordinary patterns use fuzzy matching, but punctuation-bearing words match their literal spelling rather than losing punctuation: `.{1000}` does not search for `1000`. Use `/pattern/` for **Vim search syntax, very-magic by default**. From navigation, type `//^claude/` then Enter: the first slash opens the field, and `/^claude/` is the pattern. The existing `/pattern` and `re:pattern` forms use the same dialect. Invalid or unsupported expressions show an inline error and match nothing.
 
 | Pattern text | Meaning |
 | --- | --- |
-| `/live\|voice` or `re:live\|voice` | Match either `live` or `voice` (the pattern contains a bare pipe) |
-| `/<voice>` | Match the whole word `voice`, not `revoice` |
-| `/^(live\|voice)\s\d+$` | Bare groups/alternation, whitespace, one or more digits |
-| `/\CVoice` / `/\cVoice` | Case-sensitive / case-insensitive matching (the default is insensitive) |
+| `/live\|voice/` or `re:live\|voice` | Match either `live` or `voice` (the pattern contains a bare pipe) |
+| `/<voice>/` | Match the whole word `voice`, not `revoice` |
+| `/^(live\|voice)\s\d+$/` | Bare groups/alternation, whitespace, one or more digits |
+| `/\CVoice/` / `/\cVoice/` | Case-sensitive / case-insensitive matching (the default is insensitive) |
 
 Very-magic mode treats punctuation such as `|`, `()`, `+`, `?`, and `{n,m}` as operators without backslashes. `<` / `>` mark word start/end; `\d`, `\w`, and `\s` remain character classes. Escape punctuation to match it literally. Use `\m` inside a pattern for Vim's default-magic dialect (`/\m\(live\|voice\)`); `\M` and `\V` select nomagic and very-nomagic modes. These menu patterns do not change the ECMAScript `re:` syntax used by saved model selectors.
 

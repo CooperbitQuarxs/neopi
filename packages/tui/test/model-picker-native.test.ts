@@ -126,6 +126,23 @@ function openHub(calls: { assign: string[]; cancel: number }, models: Model[] = 
 	return hub;
 }
 
+function openQuickPicker(calls: { assign: string[]; cancel: number }, models: Model[] = MODELS): ModelPickerComponent {
+	return new ModelPickerComponent(
+		ui,
+		source({ default: "demo/demo" }, ["demo/demo"]),
+		{ ...registry(models), refreshIfStale: async () => false },
+		models.map(entry => ({ model: entry })),
+		{
+			onPick: (_model, selector) => calls.assign.push(selector),
+			onPickTask: (_model, selector) => calls.assign.push(`task:${selector}`),
+			onCancel: () => {
+				calls.cancel++;
+			},
+		},
+		{ currentSelector: "demo/demo", taskModeKeys: ["alt+p"] },
+	);
+}
+
 function props(root: NativeNode): TspPickerProps {
 	expect(root.k).toBe("picker");
 	return root.p as TspPickerProps;
@@ -275,6 +292,7 @@ test("typing changes the order, hits, counts and head total but never the catalo
 	const hub = openHub({ assign: [], cancel: 0 });
 	hub.handleInput("/");
 	for (const ch of "sonnet") hub.handleInput(ch);
+	hub.handleInput("\r");
 	const after = props(hub.describe(withPicker));
 	expect(after.query).toBe("sonnet");
 	expect(after.order).toEqual(["anthropic/claude-sonnet-5-5"]);
@@ -471,6 +489,126 @@ for (const kind of ["hub", "picker"] as const) {
 		expect(props(menu.describe(withPicker)).query).toBe("jkggG/ x");
 	});
 }
+
+for (const kind of ["hub", "picker"] as const) {
+	test(`${kind} raw search keys keep punctuation and navigation modal until confirmation`, () => {
+		const calls = { assign: [] as string[], cancel: 0 };
+		const models = [...MODELS, model("test", "model-1000")];
+		const menu = kind === "hub" ? openHub(calls, models) : openQuickPicker(calls, models);
+		const initial = props(menu.describe(withPicker));
+		for (const key of "/.{1000}") menu.handleInput(key);
+		for (const key of ["\x1b[A", "\x1b[B", "\t", "\x04", "\x10", "\x1b[1;5C", "\x1b[1;3C"]) menu.handleInput(key);
+		let p = props(menu.describe(withPicker));
+		expect(p.query).toBe(".{1000}");
+		expect(p.cursor).toBe(7);
+		expect(p.order).toEqual(initial.order);
+		expect(p.scopes).toEqual(initial.scopes);
+		expect(p.scope).toBe(initial.scope);
+		expect(p.selected).toBe(initial.selected);
+		expect(p.title).toBe(initial.title);
+		expect(p.tab).toBe(initial.tab);
+		expect(p.actions?.find(action => action.id === "searchConfirm")?.keys).toEqual(["enter"]);
+		menu.handleInput("\x1b[D");
+		expect(props(menu.describe(withPicker)).cursor).toBe(6);
+		menu.handleInput("\x1b[C");
+		expect(props(menu.describe(withPicker)).cursor).toBe(7);
+		menu.handleInput("\r");
+		p = props(menu.describe(withPicker));
+		expect(p.query).toBe(".{1000}");
+		expect(p.order).toEqual([]);
+		expect(p.selected).toBeNull();
+		expect(p.actions?.some(action => action.id === "searchConfirm")).toBe(false);
+		expect(calls.assign).toEqual([]);
+		expect(p.strip ?? null).toBeNull();
+		expect(plainText(menu.render(120).join("\n"))).not.toContain("model-1000");
+		menu.handleInput("/");
+		menu.handleInput("\x15");
+		for (const key of "/^claude/") menu.handleInput(key);
+		expect(props(menu.describe(withPicker)).order).toEqual([]);
+		menu.handleInput("\r");
+		p = props(menu.describe(withPicker));
+		expect(p.query).toBe("/^claude/");
+		const matches = p.order?.filter(entry => typeof entry === "string");
+		expect(matches).toHaveLength(2);
+		expect(matches).toEqual(expect.arrayContaining(["anthropic/claude-sonnet-5-5", "anthropic/claude-opus-5"]));
+		if (kind === "hub") {
+			expect(p.scopes?.find(scope => scope.id === "provider:anthropic")?.count).toBe(2);
+			expect(p.scopes?.find(scope => scope.id === "provider:test")?.count).toBe(0);
+		}
+		const selected = p.selected;
+		menu.handleInput("\x1b[B");
+		expect(props(menu.describe(withPicker)).selected).not.toBe(selected);
+		expect(calls.assign).toEqual([]);
+		menu.handleInput("/");
+		menu.handleInput("x");
+		menu.handleInput("\x1b");
+		p = props(menu.describe(withPicker));
+		expect(p.query).toBe("");
+		expect(p.order?.filter(entry => typeof entry === "string")).toHaveLength(models.length);
+		expect(calls.cancel).toBe(0);
+		menu.handleInput("\x1b");
+		expect(calls.cancel).toBe(1);
+	});
+
+	test(`${kind} native picker confirmation commits its search instead of activating a row`, () => {
+		const calls = { assign: [] as string[], cancel: 0 };
+		const menu = kind === "hub" ? openHub(calls) : openQuickPicker(calls);
+		const initial = props(menu.describe(withPicker));
+		for (const key of "/sonnet") menu.handleInput(key);
+		menu.handleNativeEvent({ type: "select", key: "", item: "openai/gpt-5.6" });
+		menu.handleNativeEvent({ type: "action", key: "", act: kind === "hub" ? "scope" : "task", value: "roles", mods: [] });
+		expect(props(menu.describe(withPicker)).selected).toBe(initial.selected);
+		expect(props(menu.describe(withPicker)).scope).toBe(initial.scope);
+		expect(props(menu.describe(withPicker)).title).toBe(initial.title);
+		menu.handleNativeEvent({ type: "action", key: "", act: "searchConfirm", mods: [] });
+		const filtered = props(menu.describe(withPicker));
+		expect(filtered.order).toEqual(["anthropic/claude-sonnet-5-5"]);
+		expect(calls.assign).toEqual([]);
+		expect(filtered.strip ?? null).toBeNull();
+		menu.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+		expect(props(menu.describe(withPicker)).query).toBe("");
+		expect(calls.cancel).toBe(0);
+	});
+}
+
+test("quick role search changes mode only when Enter confirms the leading at-sign", () => {
+	const calls = { assign: [] as string[], cancel: 0 };
+	const picker = openQuickPicker(calls);
+	const initial = props(picker.describe(withPicker));
+	for (const key of "/@default") picker.handleInput(key);
+	let p = props(picker.describe(withPicker));
+	expect(p.noun).toBe("models");
+	expect(p.order).toEqual(initial.order);
+	expect(p.query).toBe("@default");
+	picker.handleInput("\t");
+	expect(props(picker.describe(withPicker)).title).toBe("Switch model");
+	picker.handleInput("\r");
+	p = props(picker.describe(withPicker));
+	expect(p.noun).toBe("roles");
+	expect(p.order).toEqual([]);
+	expect(calls.assign).toEqual([]);
+	picker.handleInput("/");
+	picker.handleInput("\x1b");
+	expect(props(picker.describe(withPicker)).noun).toBe("models");
+	expect(props(picker.describe(withPicker)).query).toBe("");
+});
+
+test("a provider scope and its counts change only after the model search is confirmed", () => {
+	const hub = openHub({ assign: [], cancel: 0 });
+	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "provider:demo", mods: [] });
+	const initial = props(hub.describe(withPicker));
+	for (const key of "/sonnet") hub.handleInput(key);
+	let p = props(hub.describe(withPicker));
+	expect(p.query).toBe("sonnet");
+	expect(p.scope).toBe("provider:demo");
+	expect(p.order).toEqual(initial.order);
+	expect(p.scopes).toEqual(initial.scopes);
+	hub.handleInput("\r");
+	p = props(hub.describe(withPicker));
+	expect(p.scope).toBe("all");
+	expect(p.order).toEqual(["anthropic/claude-sonnet-5-5"]);
+	expect(p.scopes?.find(scope => scope.id === "provider:demo")?.count).toBe(0);
+});
 
 test("shows a non-default service tier's own speed aggregate", () => {
 	const perf = new Map([
@@ -742,12 +880,13 @@ test("effort rule search stays in section and destructive actions target the fil
 	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "effort", mods: [] });
 	hub.handleInput("/");
 	for (const key of "needle") hub.handleInput(key);
+	expect(props(hub.describe(withPicker)).order).toContain("effort:0");
+	hub.handleInput("\n");
 	let p = props(hub.describe(withPicker));
 	expect(p.scope).toBe("effort");
 	expect(p.query).toBe("needle");
 	expect(p.order).toEqual(["effort:1"]);
 	expect(p.selected).toBe("effort:1");
-	hub.handleInput("\n");
 	const filtered = hub.navigationSnapshot();
 	rules = rules.toReversed();
 	hub.restoreNavigation(filtered);
@@ -796,7 +935,7 @@ test("native Close leaves every model-hub search field before closing and names 
 		hub.handleInput("/");
 		for (const char of "jkl") hub.handleInput(char);
 		expect(props(hub.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe(
-			"Back to list",
+			"Clear search",
 		);
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(calls.cancel).toBe(0);
@@ -857,7 +996,7 @@ test("quick picker native Close leaves literal search, repaints and closes only 
 	);
 	for (const char of "/demo") picker.handleInput(char);
 	expect(props(picker.describe(withPicker)).actions?.find(action => action.id === "close")?.label).toBe(
-		"Back to list",
+		"Clear search",
 	);
 	const before = renders;
 	picker.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });

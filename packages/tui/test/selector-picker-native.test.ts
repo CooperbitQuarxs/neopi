@@ -303,6 +303,8 @@ describe("oauth selector picker", () => {
 		expect(first.query).toBe("");
 		selector.handleInput("/");
 		selector.handleInput(providers[1]!.name.slice(0, 3));
+		expect(sheet(selector.describe(pickerCx)).props.order).toEqual(first.order);
+		selector.handleInput("\r");
 		const typed = sheet(selector.describe(pickerCx)).props;
 		expect(typed.items).toBe(first.items);
 		expect(typed.order?.length).toBeLessThan(providers.length);

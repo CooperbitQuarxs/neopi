@@ -223,7 +223,7 @@ for (const kind of ["npm", "marketplace"] as const) {
 			},
 		});
 		await repaint.promise;
-		for (const key of ["/", "hj", "\x1b"]) panel.handleInput(key);
+		for (const key of ["/", "hj", "\r"]) panel.handleInput(key);
 		repaint = Promise.withResolvers<void>();
 		panel.handlePrefsEvent({ type: "activate", key: "", item: kind === "npm" ? "npm:hjkl" : "mkt:user:hjkl@tests" });
 		await repaint.promise;

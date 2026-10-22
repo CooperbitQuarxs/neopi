@@ -610,9 +610,9 @@ export class HookSelectorComponent extends OverlayPanel {
 		return `${theme.fg("dim", `  (${count})  `)}${field}`;
 	}
 
-	/** Applies the search field's value to the filter. */
+	/** Applies the confirmed search query to the filter. */
 	#syncSearchQuery(): void {
-		this.#menu.setQuery(this.#search.value, false);
+		this.#menu.setQuery(this.#search.query, false);
 		this.#viewport.setTop(undefined);
 		this.#updateList();
 	}
@@ -637,11 +637,11 @@ export class HookSelectorComponent extends OverlayPanel {
 
 	handleInput(rawData: string): void {
 		this.#resetCountdown();
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const result = this.#search.handleInput(rawData);
 		if (result !== "pass") {
 			this.#keys.reset();
-			if (this.#search.value !== before) this.#syncSearchQuery();
+			if (this.#search.query !== before) this.#syncSearchQuery();
 			else this.#updateList();
 			return;
 		}
@@ -708,7 +708,7 @@ export class HookSelectorComponent extends OverlayPanel {
 	#describePicker(): NativeNode {
 		const items = this.#menu.visibleItems;
 		const selected = this.#menu.selectedKey;
-		const query = this.#menu.query;
+		const query = this.#search.value;
 		const cursor = this.#search.cursor;
 		const memo = this.#pickerMemo;
 		if (
@@ -739,7 +739,7 @@ export class HookSelectorComponent extends OverlayPanel {
 			preview: "none",
 			...pickerQuery(this.#search.focused || query.length > 0 ? this.#search.input : null),
 			items: this.#pickerItems,
-			...(query.length > 0 ? { order: items.map(filtered => String(filtered.index)) } : {}),
+			...(this.#menu.query.length > 0 ? { order: items.map(filtered => String(filtered.index)) } : {}),
 			selected: selected ?? null,
 			...(checkbox ? { current: [...this.#checkedIndices].map(String) } : {}),
 			total: this.#options.length,

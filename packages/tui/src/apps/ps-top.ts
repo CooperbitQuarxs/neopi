@@ -170,11 +170,11 @@ export class PsTopComponent implements Component {
 	}
 
 	#applyFilter(): void {
-		this.#filteredQuery = this.#search.value;
-		this.#reports = this.#search.value.trim()
+		this.#filteredQuery = this.#search.query;
+		this.#reports = this.#search.query.trim()
 			? this.#sourceReports.map(report => ({
 					...report,
-					daemons: fuzzyFilter(report.daemons, this.#search.value, row => tableCells(row).join(" ")),
+					daemons: fuzzyFilter(report.daemons, this.#search.query, row => tableCells(row).join(" ")),
 				}))
 			: this.#sourceReports;
 		this.#flat = this.#reports.flatMap(report => report.daemons.map(row => ({ scope: report.scope, row })));
@@ -279,9 +279,9 @@ export class PsTopComponent implements Component {
 	// -- input -----------------------------------------------------------------
 
 	handleInput(data: string): void {
-		const before = this.#search.value;
+		const before = this.#search.query;
 		if (this.#search.handleInput(data) !== "pass") {
-			if (this.#search.value !== before) this.#applyFilter();
+			if (this.#search.query !== before) this.#applyFilter();
 			this.#ui.requestRender();
 			return;
 		}
@@ -421,7 +421,7 @@ export class PsTopComponent implements Component {
 	 * mirrors the keys. Info and logs replace the list.
 	 */
 	describe(cx?: DescribeContext): NativeNode {
-		if (this.#filteredQuery !== this.#search.value) this.#applyFilter();
+		if (this.#filteredQuery !== this.#search.query) this.#applyFilter();
 		const statusVisible = Date.now() - this.#statusAt < STATUS_TTL_MS;
 		const search = cx ? this.#search.input.describe(cx) : text(this.#search.value);
 		const queryError = compileMenuRegex(this.#search.value)?.error;
