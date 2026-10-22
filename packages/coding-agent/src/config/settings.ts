@@ -237,6 +237,15 @@ type ConfigOverlayReadResult = {
 	shellPathSource: string | undefined;
 };
 
+export interface SettingsMutationReceipt {
+	status: "applied" | "conflict";
+	conflicts: string[];
+}
+
+interface PendingSettingsReceipt {
+	conflicts: Set<string>;
+}
+
 export interface SettingsOptions {
 	/** Current working directory for project settings discovery */
 	cwd?: string;
@@ -737,6 +746,11 @@ export class Settings {
 	/** Native-file values observed before pending project writes, checked again under its write lock. */
 	#modifiedProjectMutations = new Map<string, { segments: readonly string[]; baseValue: unknown }>();
 	#pairedProjectRoleMutations = new Set<string>();
+	#activeReceipt?: PendingSettingsReceipt;
+	#globalReceipts = new Map<string, PendingSettingsReceipt>();
+	#projectReceipts = new Map<string, PendingSettingsReceipt>();
+	#globalInFlightReceipts = new Map<string, PendingSettingsReceipt>();
+	#projectInFlightReceipts = new Map<string, PendingSettingsReceipt>();
 	/** Individual global model roles modified during this session (for partial save) */
 	#modifiedGlobalModelRoles = new Set<string>();
 	/** Individual global role efforts changed during this session. */
@@ -1032,7 +1046,7 @@ export class Settings {
 		const prev = setting.get(this);
 		// Re-setting the persisted global value is a no-op for config.yml: staging it would still
 		// queue a full re-read, rewrite, fsync, and rename of the file.
-		const persistGlobal = layer === "global" && !this.#globalWriteIsNoop(setting.segments, value);
+		const persistGlobal = layer === "global" && (this.#activeReceipt !== undefined || !this.#globalWriteIsNoop(setting.segments, value));
 		if (layer === "global") {
 			if (persistGlobal) this.#stageGlobal(setting.segments, value);
 			this.#releaseSoftPin(setting);
@@ -1051,12 +1065,12 @@ export class Settings {
 	 */
 	unsetGlobalValue(setting: AnySetting): void {
 		const current = getByPath(this.#global, setting.segments);
-		if (current === undefined && !this.#softPins.has(setting)) return;
+		if (current === undefined && !this.#softPins.has(setting) && !this.#activeReceipt) return;
 		const prev = setting.get(this);
 		this.#releaseSoftPin(setting);
-		if (current !== undefined) this.#stageGlobal(setting.segments, undefined);
+		if (current !== undefined || this.#activeReceipt) this.#stageGlobal(setting.segments, undefined);
 		this.#rebuildMerged();
-		if (current !== undefined) this.#queueSave();
+		if (current !== undefined || this.#activeReceipt) this.#queueSave();
 		this.#fireIfChanged(setting, prev);
 	}
 
@@ -1073,10 +1087,10 @@ export class Settings {
 		if (value !== undefined) setting.assertWritable({ [key]: value });
 		const record = getByPath(this.#global, setting.segments);
 		// An entry re-set to its persisted value stages nothing (no config.yml rewrite).
-		const staged =
+		const staged = this.#activeReceipt !== undefined || (
 			value !== undefined
 				? !this.#globalWriteIsNoop([...setting.segments, key], value)
-				: isRecord(record) && Object.hasOwn(record, key);
+				: isRecord(record) && Object.hasOwn(record, key));
 		if (!staged && !this.#softPins.has(setting)) return;
 		const prev = setting.get(this);
 		this.#releaseSoftPin(setting);
@@ -1102,7 +1116,7 @@ export class Settings {
 		const list = getByPath(this.#global, setting.segments);
 		const base: readonly unknown[] = Array.isArray(list) ? list : (setting.default as readonly unknown[]);
 		const present = base.includes(item);
-		if (present === member && !this.#softPins.has(setting)) return;
+		if (present === member && !this.#softPins.has(setting) && !this.#activeReceipt) return;
 		let next = [...base];
 		if (present !== member) next = member ? [...base, item] : base.filter(entry => entry !== item);
 		this.writeValue(setting, next, "global");
@@ -1113,6 +1127,7 @@ export class Settings {
 	 * a setting, or one entry of a record setting — for the next save.
 	 */
 	#stageGlobal(segments: readonly string[], value: unknown): void {
+		this.#trackReceipt("global", segments);
 		const key = JSON.stringify(segments);
 		this.#captureGlobalMutation(key, this.#modifiedPathMutations, getByPath(this.#global, segments));
 		if (value === undefined) deleteByPath(this.#global, segments);
@@ -1439,6 +1454,40 @@ export class Settings {
 		}
 		// Sources may have appeared, moved, or vanished; re-target the watchers.
 		this.#syncFileWatchers();
+	}
+
+	/**
+	 * Persist one validated native mutation and return the decision made under
+	 * the YAML write lock. A stale intent remains a conflict even when another
+	 * writer saved an identical value. Existing setters retain their signatures.
+	 */
+	async persistWithReceipt(mutate: () => void): Promise<SettingsMutationReceipt> {
+		if (this.#activeReceipt) throw new Error("Settings persistence receipts cannot be nested");
+		const receipt: PendingSettingsReceipt = { conflicts: new Set() };
+		this.#activeReceipt = receipt;
+		try {
+			mutate();
+		} finally {
+			this.#activeReceipt = undefined;
+		}
+		await this.flush();
+		return { status: receipt.conflicts.size > 0 ? "conflict" : "applied", conflicts: [...receipt.conflicts] };
+	}
+
+	#trackReceipt(scope: "global" | "project", segments: readonly string[]): void {
+		const receipts = scope === "global" ? this.#globalReceipts : this.#projectReceipts;
+		const inFlight = scope === "global" ? this.#globalInFlightReceipts : this.#projectInFlightReceipts;
+		const key = JSON.stringify(segments);
+		const previous = receipts.get(key);
+		const committing = inFlight.get(key);
+		if (committing && committing !== this.#activeReceipt) committing.conflicts.add(`${scope}:${segments.join(".")}`);
+		if (previous && previous !== this.#activeReceipt) previous.conflicts.add(`${scope}:${segments.join(".")}`);
+		if (this.#activeReceipt) receipts.set(key, this.#activeReceipt);
+		else receipts.delete(key);
+	}
+
+	#conflictReceipt(receipts: ReadonlyMap<string, PendingSettingsReceipt>, scope: "global" | "project", segments: readonly string[]): void {
+		receipts.get(JSON.stringify(segments))?.conflicts.add(`${scope}:${segments.join(".")}`);
 	}
 
 	/**
@@ -1959,6 +2008,7 @@ export class Settings {
 	}
 
 	#captureProjectMutation(segments: readonly string[]): void {
+		this.#trackReceipt("project", segments);
 		const key = JSON.stringify(segments);
 		if (!this.#modifiedProjectMutations.has(key)) {
 			this.#modifiedProjectMutations.set(key, {
@@ -2000,8 +2050,9 @@ export class Settings {
 		const prev = cfgModelRoles.get(this);
 		// Re-setting the persisted role (or clearing an absent one) stages no config.yml rewrite;
 		// the runtime-override sync below still applies.
-		if (!this.#globalWriteIsNoop(["modelRoles", role], modelId)) {
+		if (this.#activeReceipt || !this.#globalWriteIsNoop(["modelRoles", role], modelId)) {
 			const current = this.#modelRolesFromLayer(this.#global);
+			this.#trackReceipt("global", ["modelRoles", role]);
 			this.#captureGlobalMutation(role, this.#modifiedGlobalModelRoleMutations, current[role]);
 			if (modelId === undefined) {
 				delete current[role];
@@ -2127,6 +2178,8 @@ export class Settings {
 			this.#queueProjectSave();
 			return;
 		}
+		this.#trackReceipt("global", ["modelRoles", role]);
+		this.#trackReceipt("global", ["roleEffortSelections", role]);
 		this.#captureGlobalMutation(
 			role,
 			this.#modifiedGlobalModelRoleMutations,
@@ -4106,6 +4159,7 @@ export class Settings {
 
 		const configPath = this.#configPath;
 		const modifiedPaths = [...this.#modified];
+		const pathValuesAtStart = new Map(modifiedPaths.map(([key, segments]) => [key, structuredClone(getByPath(this.#global, segments))]));
 		const modifiedModelRoles = [...this.#modifiedGlobalModelRoles];
 		const modifiedPathMutations = new Map(this.#modifiedPathMutations);
 		const modifiedModelRoleMutations = new Map(this.#modifiedGlobalModelRoleMutations);
@@ -4116,6 +4170,9 @@ export class Settings {
 		this.#pairedGlobalFallbackMutations.clear();
 		const modifiedRoleEffortMutations = new Map(this.#modifiedGlobalRoleEffortMutations);
 		const globalEffortsAtStart = getByPath(this.#global, cfgRoleEffortSelections.segments);
+		const receipts = new Map(this.#globalReceipts);
+		for (const [key, receipt] of receipts) this.#globalInFlightReceipts.set(key, receipt);
+		this.#globalReceipts.clear();
 		const effortValuesAtStart: Record<string, unknown> = isRecord(globalEffortsAtStart)
 			? { ...globalEffortsAtStart }
 			: {};
@@ -4172,15 +4229,17 @@ export class Settings {
 					const mutation = modifiedPathMutations.get(modKey);
 					if (
 						blockedFallbackPaths.has(modKey) ||
+						(receipts.has(modKey) && !Bun.deepEquals(getByPath(current, segments), mutation?.baseValue)) ||
 						!pendingChangeApplies(mutation, segments, current, loaded.generation, writtenPaths)
 					) {
 						logger.warn("Settings: skipped stale change after external config edit", {
 							path: configPath,
 							setting: segments.join("."),
 						});
+						this.#conflictReceipt(receipts, "global", segments);
 						continue;
 					}
-					const value = getByPath(this.#global, segments);
+					const value = pathValuesAtStart.get(modKey);
 					if (value === undefined) deleteByPath(current, segments);
 					else setByPath(current, segments, value);
 					writtenPaths.push(segments);
@@ -4206,19 +4265,20 @@ export class Settings {
 				const currentRoleValues: Record<string, unknown> = isRecord(currentRoles) ? currentRoles : {};
 				const currentEfforts = getByPath(current, cfgRoleEffortSelections.segments);
 				const currentEffortValues: Record<string, unknown> = isRecord(currentEfforts) ? currentEfforts : {};
-				const canApplyMutation = (mutation: PendingYamlMutation | undefined, value: unknown): boolean =>
+				const canApplyMutation = (mutation: PendingYamlMutation | undefined, value: unknown, segments: readonly string[]): boolean =>
 					mutation !== undefined &&
 					mutation.generation.kind !== "unreadable" &&
-					(yamlGenerationsMatch(mutation.generation, loaded.generation) ||
-						Bun.deepEquals(value, mutation.baseValue));
+					(receipts.has(JSON.stringify(segments))
+						? Bun.deepEquals(value, mutation.baseValue)
+						: yamlGenerationsMatch(mutation.generation, loaded.generation) || Bun.deepEquals(value, mutation.baseValue));
 				const pairCanApply = (role: string): boolean =>
 					!pairedRoles.has(role) ||
-					(canApplyMutation(modifiedModelRoleMutations.get(role), currentRoleValues[role]) &&
-						canApplyMutation(modifiedRoleEffortMutations.get(role), currentEffortValues[role]));
+					(canApplyMutation(modifiedModelRoleMutations.get(role), currentRoleValues[role], ["modelRoles", role]) &&
+						canApplyMutation(modifiedRoleEffortMutations.get(role), currentEffortValues[role], ["roleEffortSelections", role]));
 				const rolesToApply = modifiedModelRoles.filter(role => {
 					if (
 						pairCanApply(role) &&
-						canApplyMutation(modifiedModelRoleMutations.get(role), currentRoleValues[role])
+						canApplyMutation(modifiedModelRoleMutations.get(role), currentRoleValues[role], ["modelRoles", role])
 					) {
 						return true;
 					}
@@ -4226,12 +4286,13 @@ export class Settings {
 						path: configPath,
 						setting: `modelRoles.${role}`,
 					});
+					this.#conflictReceipt(receipts, "global", ["modelRoles", role]);
 					return false;
 				});
 				const effortsToApply = modifiedRoleEfforts.filter(role => {
 					if (
 						pairCanApply(role) &&
-						canApplyMutation(modifiedRoleEffortMutations.get(role), currentEffortValues[role])
+						canApplyMutation(modifiedRoleEffortMutations.get(role), currentEffortValues[role], ["roleEffortSelections", role])
 					) {
 						return true;
 					}
@@ -4239,6 +4300,7 @@ export class Settings {
 						path: configPath,
 						setting: `roleEffortSelections.${role}`,
 					});
+					this.#conflictReceipt(receipts, "global", ["roleEffortSelections", role]);
 					return false;
 				});
 				const latestEfforts = getByPath(this.#global, cfgRoleEffortSelections.segments);
@@ -4280,6 +4342,9 @@ export class Settings {
 					}
 					setByPath(current, cfgRoleEffortSelections.segments, mergedEfforts);
 					shouldWrite = true;
+				}
+				for (const [key, receipt] of receipts) {
+					if (this.#globalInFlightReceipts.get(key) === receipt) this.#globalInFlightReceipts.delete(key);
 				}
 				if (shouldWrite) {
 					const changedPaths = [
@@ -4375,6 +4440,9 @@ export class Settings {
 				}
 			});
 		} catch (error) {
+			for (const [key, receipt] of receipts) {
+				if (!this.#globalReceipts.has(key)) this.#globalReceipts.set(key, receipt);
+			}
 			logger.warn("Settings: save failed", { error: String(error) });
 			// A quarantined file is now missing by our own action, not because
 			// another writer superseded the mutation. Retry against that state.
@@ -4530,6 +4598,9 @@ export class Settings {
 		const projectValues = structuredClone(this.#project);
 		const pendingMutations = new Map(this.#modifiedProjectMutations);
 		const pairedRoles = new Set(this.#pairedProjectRoleMutations);
+		const receipts = new Map(this.#projectReceipts);
+		for (const [key, receipt] of receipts) this.#projectInFlightReceipts.set(key, receipt);
+		this.#projectReceipts.clear();
 		this.#modifiedProjectMutations.clear();
 		this.#pairedProjectRoleMutations.clear();
 		this.#modifiedProjectValues.clear();
@@ -4563,6 +4634,7 @@ export class Settings {
 				const accept = (segments: readonly string[], role?: string): boolean => {
 					if ((role !== undefined && blockedRoles.has(role)) || !applies(segments)) {
 						logger.warn("Settings: skipped stale project change after external config edit", { path: projectConfigPath, setting: segments.join(".") });
+						this.#conflictReceipt(receipts, "project", segments);
 						return false;
 					}
 					appliedPaths.add(JSON.stringify(segments));
@@ -4610,6 +4682,9 @@ export class Settings {
 
 				const canPatchDocument = canPatchLoadedDocument;
 				const source = loaded.generation.kind === "content" ? loaded.generation.source : "";
+				for (const [key, receipt] of receipts) {
+					if (this.#projectInFlightReceipts.get(key) === receipt) this.#projectInFlightReceipts.delete(key);
+				}
 				await this.#writeYamlAtomically(
 					writePath,
 					projectSettings,
@@ -4635,6 +4710,9 @@ export class Settings {
 				if (!this.#modifiedProjectMutations.has(key)) this.#modifiedProjectMutations.set(key, pending);
 			}
 			for (const role of pairedRoles) this.#pairedProjectRoleMutations.add(role);
+			for (const [key, receipt] of receipts) {
+				if (!this.#projectReceipts.has(key)) this.#projectReceipts.set(key, receipt);
+			}
 			throw error;
 		}
 

@@ -367,6 +367,58 @@ describe("Settings.reloadForCwd", () => {
 			expect(cfgEffortRules.get(second)).toEqual([{ selector: "anthropic/*", allowed: ["off", "low"] }]);
 		});
 
+		for (const scope of ["global", "project"] as const) {
+			it(`reports a stale ${scope} receipt as conflict even when the winner wrote the requested value`, async () => {
+				const first = await Settings.loadIsolated({ cwd: startDir, agentDir });
+				const stale = await Settings.loadIsolated({ cwd: startDir, agentDir });
+				const write = (settings: Settings) => scope === "project"
+					? settings.writeProjectValue(cfgCompactionEnabled, false)
+					: cfgCompactionEnabled.set(settings, false);
+				expect((await first.persistWithReceipt(() => write(first))).status).toBe("applied");
+				const receipt = await stale.persistWithReceipt(() => write(stale));
+				expect(receipt).toEqual({ status: "conflict", conflicts: [`${scope}:compaction.enabled`] });
+				expect(cfgCompactionEnabled.get(stale)).toBe(false);
+			});
+
+			it(`preserves disjoint ${scope} writes and returns an applied receipt for each`, async () => {
+				const first = await Settings.loadIsolated({ cwd: startDir, agentDir });
+				const second = await Settings.loadIsolated({ cwd: startDir, agentDir });
+				const rules = [{ selector: "anthropic/*", allowed: ["off" as const] }];
+				const one = await first.persistWithReceipt(() => scope === "project"
+					? first.writeProjectValue(cfgCompactionEnabled, false)
+					: cfgCompactionEnabled.set(first, false));
+				const two = await second.persistWithReceipt(() => scope === "project"
+					? second.writeProjectValue(cfgEffortRules, rules)
+					: cfgEffortRules.set(second, rules));
+				expect(one.status).toBe("applied");
+				expect(two.status).toBe("applied");
+				await second.reloadFromDisk();
+				expect(cfgCompactionEnabled.get(second)).toBe(false);
+				expect(cfgEffortRules.get(second)).toEqual(rules);
+			});
+
+			it(`rejects a stale paired ${scope} role transaction atomically`, async () => {
+				const first = await Settings.loadIsolated({ cwd: startDir, agentDir });
+				const stale = await Settings.loadIsolated({ cwd: startDir, agentDir });
+				await first.persistWithReceipt(() => first.setRoleModelAndEffort("smol", "anthropic/winner", { mode: "fixed", level: ThinkingLevel.Low }, scope));
+				const receipt = await stale.persistWithReceipt(() => stale.setRoleModelAndEffort("smol", "anthropic/winner", { mode: "fixed", level: ThinkingLevel.High }, scope));
+				expect(receipt.status).toBe("conflict");
+				expect(receipt.conflicts).toContain(`${scope}:modelRoles.smol`);
+				expect(receipt.conflicts).toContain(`${scope}:roleEffortSelections.smol`);
+				expect(scope === "project" ? stale.getProjectModelRole("smol") : stale.getGlobalModelRole("smol")).toBe("anthropic/winner");
+				expect(scope === "project" ? stale.getProjectRoleEffortSelection("smol") : stale.getGlobalRoleEffortSelection("smol")).toEqual({ mode: "fixed", level: ThinkingLevel.Low });
+			});
+		}
+
+		it("does not credit a same-process pending intent superseded before its lock decision", async () => {
+			const settings = await Settings.loadIsolated({ cwd: startDir, agentDir });
+			const first = settings.persistWithReceipt(() => cfgCompactionEnabled.set(settings, false));
+			const second = settings.persistWithReceipt(() => cfgCompactionEnabled.set(settings, true));
+			expect((await first).status).toBe("conflict");
+			expect((await second).status).toBe("applied");
+			expect(cfgCompactionEnabled.get(settings)).toBe(true);
+		});
+
 		it("reports project roles over global role fallbacks", async () => {
 			await Bun.write(path.join(agentDir, "config.yml"), "modelRoles:\n  default: anthropic/global\n");
 			await Bun.write(path.join(scopedProject, ".omp", "config.yml"), "modelRoles:\n  default: anthropic/project\n");
