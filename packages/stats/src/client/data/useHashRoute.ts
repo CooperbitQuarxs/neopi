@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { type DashboardSection, SECTIONS } from "../app/nav";
 import type { TimeRange } from "../types";
 import { TIME_RANGES } from "./range";
-import { navigateStatsHash } from "../host-transport";
+import { navigateStatsHash, statsLocationHash } from "../host-transport";
 
 export interface HashRoute {
 	section: DashboardSection;
@@ -31,15 +31,15 @@ export function buildHash({ section, range, session }: HashRoute): string {
  * `hashchange` round trip.
  */
 export function useHashRoute() {
-	const [route, setRoute] = useState(() => parseHash(window.location.hash));
+	const [route, setRoute] = useState(() => parseHash(statsLocationHash()));
 
 	useEffect(() => {
-		const onHashChange = () => setRoute(parseHash(window.location.hash));
+		const onHashChange = () => setRoute(parseHash(statsLocationHash()));
 		window.addEventListener("hashchange", onHashChange);
 		window.addEventListener("popstate", onHashChange);
 		// Canonicalize a missing/partial hash without adding a history entry.
-		const canonical = buildHash(parseHash(window.location.hash));
-		if (window.location.hash !== canonical) navigateStatsHash(canonical, true);
+		const canonical = buildHash(parseHash(statsLocationHash()));
+		if (statsLocationHash() !== canonical) navigateStatsHash(canonical, true);
 		return () => {
 			window.removeEventListener("hashchange", onHashChange);
 			window.removeEventListener("popstate", onHashChange);
@@ -49,7 +49,7 @@ export function useHashRoute() {
 	const navigate = useCallback((next: HashRoute) => {
 		setRoute(next);
 		const hash = buildHash(next);
-		if (window.location.hash !== hash) navigateStatsHash(hash);
+		if (statsLocationHash() !== hash) navigateStatsHash(hash);
 	}, []);
 
 	const setSection = useCallback(

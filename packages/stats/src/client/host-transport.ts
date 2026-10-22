@@ -1,10 +1,19 @@
 /** Embedded dashboards keep authentication in the host. Only API bytes cross the port. */
 export const isHostedDashboard = () => document.querySelector('meta[name="neopi-stats-hosted"]') !== null;
 
+let hostedHash: string | undefined;
+export function statsLocationHash(): string {
+	if (!isHostedDashboard()) return window.location.hash;
+	return hostedHash ??= window.location.hash;
+}
+
 /** srcdoc inherits the host's base URL. Keep fragment links inside the native document. */
 export function navigateStatsHash(hash: string, replace = false): void {
-	if (isHostedDashboard()) window.location.hash = hash;
-	else if (replace) history.replaceState(null, "", hash);
+	if (isHostedDashboard()) {
+		hostedHash = hash;
+		// Embedded routes must not add entries to the host's joint navigation history.
+		window.dispatchEvent(new Event("hashchange"));
+	} else if (replace) history.replaceState(null, "", hash);
 	else history.pushState(null, "", hash);
 }
 
