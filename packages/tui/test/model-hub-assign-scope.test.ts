@@ -131,7 +131,9 @@ describe("model hub assign mode scope filtering (#12692)", () => {
 		// Rules are above providers; scope hopping must still reapply role acceptance.
 		key(DOWN); // Roles → All models
 		key(DOWN); // All models → Effort rules
-		key(DOWN); // Effort rules → google
+		key(DOWN); // Effort rules → Context rules
+		key(DOWN); // Context rules → Model overrides
+		key(DOWN); // Model overrides → google
 		key(DOWN); // google → litellm
 
 		const rendered = body();
@@ -145,7 +147,9 @@ describe("model hub assign mode scope filtering (#12692)", () => {
 
 		key(DOWN); // Roles → All models
 		key(DOWN); // All models → Effort rules
-		key(DOWN); // Effort rules → google
+		key(DOWN); // Effort rules → Context rules
+		key(DOWN); // Context rules → Model overrides
+		key(DOWN); // Model overrides → google
 
 		const rendered = body();
 		expect(rendered).toContain("web-search-pro");
@@ -157,7 +161,9 @@ describe("model hub assign mode scope filtering (#12692)", () => {
 		// From the initial All-models scope hop straight to the litellm provider
 		// without entering assign mode; the accepts filter must not apply.
 		key(DOWN); // All models → Effort rules
-		key(DOWN); // Effort rules → google
+		key(DOWN); // Effort rules → Context rules
+		key(DOWN); // Context rules → Model overrides
+		key(DOWN); // Model overrides → google
 		key(DOWN); // google → litellm
 
 		const rendered = body();
