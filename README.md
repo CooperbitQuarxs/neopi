@@ -59,6 +59,21 @@ bun install --frozen-lockfile
 ./install.sh   # atomic install to ~/.local/bin/npi (NPI_DEST overrides), smoke test
 ```
 
+Linux builds reuse verified native addons across worktrees on the same host.
+`NPI_NATIVE_CACHE` selects the shared cache directory, defaulting to
+`/mnt/alias/m2/agents/native-cache`. Set `NPI_NATIVE_CACHE=off` to use only the
+checkout's addon and the normal rebuild path. `NPI_FORCE_NATIVE=1` bypasses
+both local freshness and cache restoration, then stores the new addon.
+An unavailable cache falls back to the normal build.
+
+The key hashes native source and build-driver bytes, compiler settings including
+`OMP_NATIVE_FEATURES`, and the host/toolchain fingerprint. Cache hits verify
+SHA-256 and the native release version before writing a checkout-local stamp.
+The cache keeps eight recently stored addons, skipping entries in use.
+`ledger.jsonl` records each native build phase as `hit`, `miss`, or `store`,
+with its key, duration in seconds, and whether it published an addon. A current
+local addon can seed an empty cache without compiling Rust.
+
 `build.sh` and `install.sh` support Linux. On macOS, run the same steps by hand:
 
 ```sh
