@@ -4005,6 +4005,98 @@ pub struct SessionTree {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreeAskOptionNote {
+	pub option: String,
+	pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreeAskQuestionResult {
+	pub id: String,
+	pub question: String,
+	pub options: Vec<String>,
+	pub multi: bool,
+	#[serde(rename = "selectedOptions")]
+	pub selected_options: Vec<String>,
+	#[serde(rename = "customInput", default, skip_serializing_if = "Option::is_none")]
+	pub custom_input: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub note: Option<String>,
+	#[serde(rename = "optionNotes", default, skip_serializing_if = "Option::is_none")]
+	pub option_notes: Option<Vec<TreeAskOptionNote>>,
+	#[serde(rename = "timedOut", default, skip_serializing_if = "Option::is_none")]
+	pub timed_out: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreeAskDetails {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub question: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub options: Option<Vec<String>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub multi: Option<bool>,
+	#[serde(rename = "selectedOptions", default, skip_serializing_if = "Option::is_none")]
+	pub selected_options: Option<Vec<String>>,
+	#[serde(rename = "customInput", default, skip_serializing_if = "Option::is_none")]
+	pub custom_input: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub note: Option<String>,
+	#[serde(rename = "optionNotes", default, skip_serializing_if = "Option::is_none")]
+	pub option_notes: Option<Vec<TreeAskOptionNote>>,
+	#[serde(rename = "timedOut", default, skip_serializing_if = "Option::is_none")]
+	pub timed_out: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub results: Option<Vec<TreeAskQuestionResult>>,
+	#[serde(rename = "chatRedirect", default, skip_serializing_if = "Option::is_none")]
+	pub chat_redirect: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub questions: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreeAskReanswer {
+	pub content: Vec<UserContent>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub details: Option<TreeAskDetails>,
+	#[serde(rename = "isError", default, skip_serializing_if = "Option::is_none")]
+	pub is_error: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreeAskReopen {
+	#[serde(rename = "toolCallId")]
+	pub tool_call_id: String,
+	pub questions: Vec<AskQuestion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NavigateTreeResult {
+	#[serde(rename = "sessionId")]
+	pub session_id: String,
+	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
+	pub leaf_id: Option<String>,
+	pub outcome: NavigateTreeResultOutcome,
+	pub cancelled: bool,
+	#[serde(rename = "sessionFile", default, skip_serializing_if = "Option::is_none")]
+	pub session_file: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub aborted: Option<bool>,
+	#[serde(rename = "editorText", default, skip_serializing_if = "Option::is_none")]
+	pub editor_text: Option<String>,
+	#[serde(rename = "editorImages", default, skip_serializing_if = "Option::is_none")]
+	pub editor_images: Option<Vec<ImageContent>>,
+	#[serde(rename = "summaryEntry", default, skip_serializing_if = "Option::is_none")]
+	pub summary_entry: Option<Map<String, Value>>,
+	#[serde(rename = "reopenAsk", default, skip_serializing_if = "Option::is_none")]
+	pub reopen_ask: Option<TreeAskReopen>,
+	#[serde(rename = "askReanswerCommitted", default, skip_serializing_if = "Option::is_none")]
+	pub ask_reanswer_committed: Option<bool>,
+	#[serde(rename = "resumeToken", default, skip_serializing_if = "Option::is_none")]
+	pub resume_token: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SubagentSnapshot {
 	pub id: String,
 	pub index: i64,
@@ -6284,6 +6376,43 @@ pub struct GetEntriesParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NavigateTreeParams {
+	#[serde(rename = "targetId")]
+	pub target_id: String,
+	#[serde(rename = "expectedSessionId")]
+	pub expected_session_id: String,
+	#[serde(rename = "expectedSessionFile", deserialize_with = "Deserialize::deserialize")]
+	pub expected_session_file: Option<String>,
+	#[serde(rename = "expectedLeafId", deserialize_with = "Deserialize::deserialize")]
+	pub expected_leaf_id: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub summarize: Option<bool>,
+	#[serde(rename = "customInstructions", default, skip_serializing_if = "Option::is_none")]
+	pub custom_instructions: Option<String>,
+	#[serde(rename = "allowAskReopen", default, skip_serializing_if = "Option::is_none")]
+	pub allow_ask_reopen: Option<bool>,
+	#[serde(rename = "reanswerAskResult", default, skip_serializing_if = "Option::is_none")]
+	pub reanswer_ask_result: Option<TreeAskReanswer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResumeTreeParams {
+	#[serde(rename = "resumeToken")]
+	pub resume_token: String,
+	#[serde(rename = "expectedSessionId")]
+	pub expected_session_id: String,
+	#[serde(rename = "expectedSessionFile", deserialize_with = "Deserialize::deserialize")]
+	pub expected_session_file: Option<String>,
+	#[serde(rename = "expectedLeafId", deserialize_with = "Deserialize::deserialize")]
+	pub expected_leaf_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResumeTreeResult {
+	pub resumed: LitTrue,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetTodosParams {
 	pub phases: Vec<TodoPhase>,
 }
@@ -7141,6 +7270,30 @@ impl<'de> Deserialize<'de> for LitCompleted {
 			Ok(Self)
 		} else {
 			Err(D::Error::custom(format!("expected \"completed\", got {value}")))
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NavigateTreeResultOutcome {
+	#[serde(rename = "navigated")]
+	Navigated,
+	#[serde(rename = "unchanged")]
+	Unchanged,
+	#[serde(rename = "cancelled")]
+	Cancelled,
+	#[serde(rename = "ask_reopen")]
+	AskReopen,
+}
+
+impl NavigateTreeResultOutcome {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Navigated => "navigated",
+			Self::Unchanged => "unchanged",
+			Self::Cancelled => "cancelled",
+			Self::AskReopen => "ask_reopen",
 		}
 	}
 }
@@ -8109,6 +8262,60 @@ impl Command for GetTreeCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<SessionTree>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NavigateTreeCommand {
+	#[serde(rename = "targetId")]
+	pub target_id: String,
+	#[serde(rename = "expectedSessionId")]
+	pub expected_session_id: String,
+	#[serde(rename = "expectedSessionFile", deserialize_with = "Deserialize::deserialize")]
+	pub expected_session_file: Option<String>,
+	#[serde(rename = "expectedLeafId", deserialize_with = "Deserialize::deserialize")]
+	pub expected_leaf_id: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub summarize: Option<bool>,
+	#[serde(rename = "customInstructions", default, skip_serializing_if = "Option::is_none")]
+	pub custom_instructions: Option<String>,
+	#[serde(rename = "allowAskReopen", default, skip_serializing_if = "Option::is_none")]
+	pub allow_ask_reopen: Option<bool>,
+	#[serde(rename = "reanswerAskResult", default, skip_serializing_if = "Option::is_none")]
+	pub reanswer_ask_result: Option<TreeAskReanswer>,
+}
+
+impl Command for NavigateTreeCommand {
+	const NAME: &'static str = "navigate_tree";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = NavigateTreeResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<NavigateTreeResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResumeTreeCommand {
+	#[serde(rename = "resumeToken")]
+	pub resume_token: String,
+	#[serde(rename = "expectedSessionId")]
+	pub expected_session_id: String,
+	#[serde(rename = "expectedSessionFile", deserialize_with = "Deserialize::deserialize")]
+	pub expected_session_file: Option<String>,
+	#[serde(rename = "expectedLeafId", deserialize_with = "Deserialize::deserialize")]
+	pub expected_leaf_id: Option<String>,
+}
+
+impl Command for ResumeTreeCommand {
+	const NAME: &'static str = "resume_tree";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ResumeTreeResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<ResumeTreeResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
 	}
 }
 

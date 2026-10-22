@@ -47,6 +47,7 @@ Behavior notes:
 | `session_lease` | A process holds an exclusive lifetime lease on every session file it writes, so two processes never append to one transcript. `--session <file>` onto a file another process holds fails at startup with a `startup_error` stderr line; `switch_session` and `branch` onto one fail with `code: "session_in_use"` (see [Session lease](#session-lease)). |
 | `plan_proposal_cancel` | A pending plan proposal that resolves without a host answer is announced with a `plan_proposal_cancel` frame, and a later `plan_proposal_response` for it fails with `code: "proposal_cancelled"`. See [`plan_proposal_cancel`](#plan_proposal_cancel). |
 | `prompt_entry_ids` | `prompt`, `steer`, `follow_up` and `abort_and_prompt` responses carry `data.userEntryId`, the id of the session entry their message is written as, and every `get_messages_page` message carries the `entryId` of its entry. See [Entry ids](#entry-ids). |
+| `session_tree_navigation` | Guarded native same-file `navigate_tree`, restored drafts and images, and explicit `resume_tree` acknowledgement for ask re-answers. See [Native tree navigation](#native-tree-navigation). |
 
 ### Session lease
 
@@ -189,6 +190,8 @@ Important edge behavior from runtime:
 - `{ id?, type: "get_available_commands" }`
 - `{ id?, type: "get_entries", since?: string }`
 - `{ id?, type: "get_tree" }`
+- `{ id?, type: "navigate_tree", targetId: string, expectedSessionId: string, expectedSessionFile: string | null, expectedLeafId: string | null, summarize?: boolean, customInstructions?: string, allowAskReopen?: boolean, reanswerAskResult?: TreeAskReanswer }`
+- `{ id?, type: "resume_tree", resumeToken: string, expectedSessionId: string, expectedSessionFile: string | null, expectedLeafId: string | null }`
 - `{ id?, type: "set_todos", phases: TodoPhase[] }`
 - `{ id?, type: "set_host_tools", tools: RpcHostToolDefinition[] }`
 - `{ id?, type: "set_host_uri_schemes", schemes: RpcHostUriSchemeDefinition[] }`
@@ -1202,6 +1205,73 @@ Command discovery is intentionally an OMP dialect: Pi's `get_commands` (a
 `RpcSlashCommand[]` projection over extensions → prompt templates → skills) is
 not served because OMP's richer catalog (builtins/custom/MCP/file commands,
 broader `source` enum, no Pi `sourceInfo`) is not wire-compatible with it.
+
+### Native tree navigation
+
+Gate these commands on `session_tree_navigation`. `navigate_tree` runs the same
+native operation as `/tree`, preserving the session file and alternate branches.
+It does not call `branch`, which creates another file.
+
+Every request must supply the native `expectedSessionId`, `expectedSessionFile`
+and `expectedLeafId` it observed. Use `null` for an unsaved session file or a
+root leaf. NeoPi compares the normalized file path as well as the ID, since a
+copied journal can retain its original IDs. It checks these values under native
+mutation admission and again after asynchronous preparation. A busy session or
+transition returns `code: "session_busy"` without interrupting another turn.
+A changed session or leaf returns `session_changed` or `leaf_changed`.
+
+Success returns:
+
+```ts
+{
+  sessionId: string;
+  sessionFile?: string;
+  leafId: string | null;
+  outcome: "navigated" | "unchanged" | "cancelled" | "ask_reopen";
+  cancelled: boolean;
+  aborted?: boolean;
+  editorText?: string;
+  editorImages?: ImageContent[];
+  summaryEntry?: BranchSummaryEntry;
+  reopenAsk?: { toolCallId: string; questions: AskQuestion[] };
+  askReanswerCommitted?: boolean;
+  resumeToken?: string;
+}
+```
+
+Selecting a user request moves to its parent and returns the native draft and
+its ordered images. Selecting another entry normally lands on it. An already
+selected non-user leaf reports `unchanged`. Native extension cancellation
+reports `cancelled`. `summarize` and `customInstructions` use NeoPi's summarizer,
+and a cancelled summary returns `cancelled: true, aborted: true` without moving
+the leaf. The ordinary `abort` command can cancel pending remote navigation,
+including its summary. Navigation starts in input order but settles in the
+background so cancellation remains reachable. No internal `sessionContext` is
+sent on the wire.
+
+For native ask re-answering, send `allowAskReopen: true`. A probe returns
+`outcome: "ask_reopen"` with `reopenAsk`, without moving the leaf or claiming
+navigation happened. Display those questions and submit the fresh answer in
+another `navigate_tree` request to the same target with current preconditions.
+`reanswerAskResult` contains native `content` text/image blocks, optional
+`details: AskToolDetails` and optional `isError`. The original answer remains
+on its branch; NeoPi appends a sibling answer.
+
+A committed re-answer returns `askReanswerCommitted: true` and an opaque
+`resumeToken`, but does not start the agent. First consume this result and
+rebuild the transcript. Then send `resume_tree` with that token and the
+returned session identity and leaf. It calls native `resumeAfterAskReanswer`
+and returns `{ resumed: true }`. Tokens are in-memory, single-use and bound to
+the committed native session file, ID, leaf and prompt generation. A replacement
+or intervening navigation invalidates them. Invalid or consumed tokens return
+`invalid_resume`; stale identity and leaf preconditions retain their named
+errors. Invalid targets return `invalid_target`, and malformed request fields
+return `invalid_request`.
+
+The TypeScript SDK exposes `navigateTree(options)` and `resumeTree(options)`.
+Generated Python, Rust and Go clients carry the same contracts. Control clients
+send the same RPC commands to the existing terminal owner through `npi ctl pipe`;
+no second writer or session file is created.
 
 ### Pi-compatible history/tree commands with OMP-native entry payloads
 
