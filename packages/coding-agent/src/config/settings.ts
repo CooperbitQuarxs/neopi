@@ -1748,6 +1748,13 @@ export class Settings {
 		return this.#agentDir;
 	}
 
+	/** File edited by the configuration UI for a persisted scope. */
+	getConfigFile(scope: "global" | "project" = "global"): string {
+		return scope === "project"
+			? path.join(getProjectAgentDir(this.#cwd), "config.yml")
+			: (this.#configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]));
+	}
+
 	/** Resolved absolute paths of the config overlays supplied to this instance. */
 	getConfigFiles(): readonly string[] {
 		return [...this.#configFiles];

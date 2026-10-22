@@ -196,6 +196,7 @@ function createHub(options: {
 			onCycleOrderChange: options.callbacks?.onCycleOrderChange,
 			onSavePreset: options.callbacks?.onSavePreset,
 			onSwitchPreset: options.callbacks?.onSwitchPreset,
+			onOpenConfigFile: options.callbacks?.onOpenConfigFile,
 			onFallbackChainChange: options.callbacks?.onFallbackChainChange ?? onFallbackChainChange,
 			onRoleDescriptionChange:
 				options.callbacks?.onRoleDescriptionChange ??
@@ -2960,4 +2961,49 @@ describe("ModelHub", () => {
 			]);
 		});
 	});
+});
+
+test("Ctrl-G routes roles, effort and catalog files and refreshes after editing", async () => {
+	const settings = Settings.isolated({});
+	const calls: string[] = [];
+	const updated = Promise.withResolvers<void>();
+	const { hub } = createHub({
+		models: [makeModel("test", "one")],
+		settings,
+		callbacks: {
+			onOpenConfigFile: async (section, scope) => {
+				calls.push(`${section}:${scope}`);
+				if (section === "roles") {
+					settings.setModelRole("new-role", "test/one");
+					updated.resolve();
+				}
+			},
+		},
+	});
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+	hub.handleInput("\x07");
+	await updated.promise;
+	await Bun.sleep(0);
+	expect(normalize(hub.render(140))).toContain("new-role");
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "effort" });
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "all" });
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	expect(calls).toEqual(["roles:global", "effort:global", "overrides:global"]);
+});
+
+test("an existing menu Ctrl-G binding wins over opening the model config", () => {
+	const previous = getKeybindings();
+	const open = vi.fn(async () => {});
+	setKeybindings(new KeybindingsManager({ "tui.select.cancel": ["ctrl+g"] }));
+	try {
+		const { hub, onCancel } = createHub({ models: [], callbacks: { onOpenConfigFile: open } });
+		hub.handleInput("\x07");
+		expect(open).not.toHaveBeenCalled();
+		expect(onCancel).toHaveBeenCalledTimes(1);
+	} finally {
+		setKeybindings(previous);
+	}
 });
