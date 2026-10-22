@@ -307,6 +307,17 @@
 				"clientOmit": []
 			},
 			{
+				"name": "get_entries_page",
+				"doc": "Read one canonical native journal or selected-branch page.",
+				"params": "GetEntriesPageParams",
+				"result": "JournalPage",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "get_tree",
 				"doc": "Read the raw session tree.",
 				"params": null,
@@ -4170,6 +4181,49 @@
 				"leafId"
 			],
 			"description": "OMP-native session entries in append order."
+		},
+		"JournalPage": {
+			"type": "object",
+			"properties": {
+				"entries": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {},
+						"additionalProperties": {}
+					}
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"type": "string"
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"totalEntries": {
+					"type": "integer"
+				},
+				"nextCursor": {
+					"type": "string",
+					"description": "Opaque cursor for the next page; absent on the last page."
+				}
+			},
+			"required": [
+				"entries",
+				"sessionId",
+				"sessionFile",
+				"leafId",
+				"totalEntries"
+			]
 		},
 		"SessionTree": {
 			"type": "object",
@@ -8072,6 +8126,31 @@
 			"properties": {
 				"since": {
 					"type": "string"
+				}
+			}
+		},
+		"GetEntriesPageParams": {
+			"type": "object",
+			"properties": {
+				"scope": {
+					"enum": [
+						"journal",
+						"branch"
+					],
+					"type": "string"
+				},
+				"direction": {
+					"enum": [
+						"forward",
+						"backward"
+					],
+					"type": "string"
+				},
+				"cursor": {
+					"type": "string"
+				},
+				"limit": {
+					"type": "integer"
 				}
 			}
 		},
