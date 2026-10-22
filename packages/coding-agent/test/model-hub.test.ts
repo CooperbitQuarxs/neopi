@@ -16,6 +16,7 @@ import {
 	type ModelHubCallbacks,
 	ModelHubComponent,
 	type ModelHubOptions,
+	type ModelHubRegistry,
 	resetProviderAutoRefreshGuard,
 } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
@@ -81,6 +82,7 @@ interface RegistryOverrides {
 	getDiscoverableProviders?: () => string[];
 	getProviderDiscoveryState?: (providerId: string) => unknown;
 	find?: (provider: string, id: string) => Model | undefined;
+	modelConfig?: ModelHubRegistry["modelConfig"];
 }
 
 function makeRegistry(models: () => Model[], overrides: RegistryOverrides = {}): ModelRegistry {
@@ -89,6 +91,7 @@ function makeRegistry(models: () => Model[], overrides: RegistryOverrides = {}):
 		refresh: overrides.refresh ?? (async () => {}),
 		refreshProvider: overrides.refreshProvider ?? (async () => {}),
 		getError: () => undefined,
+		modelConfig: overrides.modelConfig,
 		getAvailable: overrides.getAvailable ?? models,
 		getAll,
 		// Mirrors the production lookup's case-insensitivity (alias/variant
@@ -288,6 +291,40 @@ describe("ModelHub", () => {
 		for (const hub of openHubs.splice(0)) {
 			hub.dispose();
 		}
+	});
+
+	test("opens schema-driven model overrides beside the rule sections and returns to normal navigation", () => {
+		const open = vi.fn(async () => {});
+		const { hub } = createHub({
+			models: [],
+			scoped: true,
+			callbacks: { onOpenConfigFile: open },
+			registry: {
+				modelConfig: {
+					list: () => [
+						{ provider: "local", id: "private", kind: "override", fields: { name: "Private", future: true } },
+					],
+					schema: () => ({ type: "object", properties: { name: { type: "string" } } }),
+					save: async () => {},
+					remove: async () => {},
+				},
+			},
+		});
+		hub.handleInput(DOWN);
+		hub.handleInput(DOWN);
+		hub.handleInput(DOWN);
+		expect(normalize(hub.render(160))).toContain("local/private");
+		expect(normalize(hub.render(160))).toContain("Ctrl+G config file");
+		hub.handleInput("\x07");
+		expect(open).toHaveBeenCalledWith("overrides", "global");
+		hub.handleInput("\r");
+		hub.handleInput("\r");
+		expect(normalize(hub.render(160))).toContain("future");
+		expect(normalize(hub.render(160))).toContain("read-only");
+		hub.handleInput("\x1b");
+		hub.handleInput("\x1b");
+		hub.handleInput(UP);
+		expect(normalize(hub.render(160))).toContain("context rules");
 	});
 
 	test("keeps the mixture provider available with zero models and opens its creation action", () => {
@@ -782,6 +819,7 @@ describe("ModelHub", () => {
 				// Hop down onto the keyless provider, which schedules its refresh.
 				hub.handleInput(DOWN); // All models → Effort rules
 				hub.handleInput(DOWN); // Effort rules → Context rules
+				hub.handleInput(DOWN); // Context rules → Model overrides
 				hub.handleInput(DOWN); // all → alpha
 				hub.handleInput(DOWN); // alpha → beta
 				hub.handleInput(DOWN); // beta → delta-local
@@ -854,10 +892,12 @@ describe("ModelHub", () => {
 
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // All models → locked anthropic
 			expect(normalize(hub.render(220))).toContain("anthropic has no credentials configured");
 
 			hub.handleInput(UP); // locked provider → Effort rules
+			hub.handleInput(UP); // Model overrides → Context rules
 			hub.handleInput(UP); // Context rules → Effort rules
 			hub.handleInput(UP); // Effort rules → All models
 			hub.handleInput("/");
@@ -2439,6 +2479,7 @@ describe("ModelHub", () => {
 			// All models → Effort rules → custom-provider → openrouter.
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN);
 			expect(normalize(hub.render(220))).toContain("openrouter ·");
@@ -2473,6 +2514,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN); // openrouter scope
 			hub.handleInput("/");
@@ -2495,6 +2537,7 @@ describe("ModelHub", () => {
 			hub.handleInput(LEFT); // switch focus to sidebar
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // skips custom-provider (0 matches), lands on openrouter
 			expect(normalize(hub.render(220))).toContain("openrouter ·");
 		});
@@ -2552,6 +2595,7 @@ describe("ModelHub", () => {
 			hub.handleInput(LEFT);
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN);
 			expect(normalize(hub.render(220))).toContain("prov-a ·");
 		});
@@ -2572,6 +2616,7 @@ describe("ModelHub", () => {
 			// a promise chain — fake timers cannot drive the mixed path.
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // All models → prov-a, schedules the refresh
 			await Bun.sleep(140);
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
@@ -2601,6 +2646,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // schedules catalog-only refresh
 			hub.handleInput("\x1b[15~"); // F5 before the 120ms debounce fires
 			await Bun.sleep(40);
@@ -2622,6 +2668,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN);
 			await Bun.sleep(140);
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
@@ -2649,6 +2696,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // All models → prov-a
 			await Bun.sleep(140);
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
@@ -2675,6 +2723,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN);
 			await Bun.sleep(140);
 			expect(normalize(hub.render(220))).toContain("refreshing model list");
@@ -2696,6 +2745,7 @@ describe("ModelHub", () => {
 
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // All models → locked anthropic (separator skipped)
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("anthropic has no credentials configured");

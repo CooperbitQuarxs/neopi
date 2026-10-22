@@ -84,6 +84,7 @@ import {
 } from "./hub-frame";
 import { renderSegmentTrack } from "../chrome/segment-track";
 import { EffortToggle } from "./effort-toggle";
+import { ModelOverridesPanel, type ModelOverridesHost } from "./model-overrides";
 
 export type HubEffortSelection =
 	| { mode: "inherit" }
@@ -215,6 +216,7 @@ export interface ModelHubSource extends ModelBrowserSource {
 /** Catalog capabilities required by the model hub. */
 export interface ModelHubRegistry extends ModelBrowserRegistry {
 	readonly authStorage: { readonly keys: Pick<KeysApi, "source"> };
+	readonly modelConfig?: Pick<ModelOverridesHost, "list" | "schema" | "save" | "remove">;
 	getDiscoverableProviders(): string[];
 	getProviderDiscoveryState(provider: string):
 		| {
@@ -225,7 +227,7 @@ export interface ModelHubRegistry extends ModelBrowserRegistry {
 		  }
 		| undefined;
 	find(provider: string, id: string): Model | undefined;
-	refresh(strategy: "online"): Promise<void>;
+	refresh(strategy: "online" | "offline"): Promise<void>;
 	refreshProvider(
 		provider: string,
 		strategy: "online",
@@ -319,7 +321,9 @@ export interface ModelHubOptions {
 	pinnedProviders?: ReadonlyArray<{ id: string; label: string; action: { label: string; onSelect: () => void } }>;
 }
 
-interface SidebarEntry extends HubSidebarEntry<"recent" | "roles" | "effort" | "all" | "separator" | "provider"> {
+interface SidebarEntry extends HubSidebarEntry<
+	"recent" | "roles" | "effort" | "overrides" | "all" | "separator" | "provider"
+> {
 	providerId?: string;
 	locked?: boolean;
 	oauth?: boolean;
@@ -686,6 +690,34 @@ export class ModelHubComponent implements Component {
 	#rolesVisibleCount = 0;
 
 	#assigning: AssignTarget | null = null;
+	#overridesPanel?: ModelOverridesPanel;
+
+	#overrides(): ModelOverridesPanel {
+		return (this.#overridesPanel ??= new ModelOverridesPanel({
+			list: () => {
+				if (!this.#registry.modelConfig) throw new Error("Model config editing is unavailable.");
+				return this.#registry.modelConfig.list();
+			},
+			schema: kind => this.#registry.modelConfig?.schema(kind) ?? {},
+			save: async (entry, original) => {
+				if (!this.#registry.modelConfig) throw new Error("Model config editing is unavailable.");
+				await this.#registry.modelConfig.save(entry, original);
+				await this.#registry.refresh("offline");
+			},
+			remove: async entry => {
+				if (!this.#registry.modelConfig) throw new Error("Model config editing is unavailable.");
+				await this.#registry.modelConfig.remove(entry);
+				await this.#registry.refresh("offline");
+			},
+			changed: () => {
+				this.#syncFromRegistryState();
+				this.#requestRender();
+			},
+			back: () => {
+				this.#focus = "scope";
+			},
+		}));
+	}
 	#strip: StripState | null = null;
 	#assignmentPending = false;
 	/**
@@ -714,6 +746,10 @@ export class ModelHubComponent implements Component {
 				? this.#pinnedProviders.find(provider => provider.id === entry.providerId)
 				: undefined;
 		this.#pinnedActionLine = null;
+		if (entry.kind === "overrides" && this.#assigning === null) {
+			lines.push(...this.#overrides().render(width, rows - 1));
+			return lines.slice(0, rows);
+		}
 		if (entry.kind === "effort" && this.#assigning === null) {
 			lines.push(...this.#renderEffortRules(width, rows - 1));
 		} else if (entry.kind === "roles" && this.#assigning === null) {
@@ -1048,6 +1084,7 @@ export class ModelHubComponent implements Component {
 	/** Rebuild items, roles, and the sidebar from the registry's in-memory state. */
 	#syncFromRegistryState(): void {
 		this.#nativeVersion++;
+		this.#overridesPanel?.reload();
 		// A background rebuild (provider refresh, mutation) must not yank the
 		// sidebar viewport: remember the focused entry's screen row so it — or
 		// its nearest survivor — stays put after #buildSidebar reshuffles entries.
@@ -1228,6 +1265,7 @@ export class ModelHubComponent implements Component {
 				label: "Context rules",
 				annotation: String(this.#settings.contextRules?.length ?? 0),
 			},
+			{ id: "overrides", kind: "overrides", label: "Model overrides" },
 		];
 		if (providers.length > 0) {
 			entries.push({ id: "sep:providers", kind: "separator", label: "" }, ...providers);
@@ -1293,6 +1331,7 @@ export class ModelHubComponent implements Component {
 		this.#pinnedActionFocused = false;
 		this.#applyScope();
 		const entry = this.#activeEntry();
+		if (entry.kind === "overrides") this.#overridesPanel?.reload();
 		// Hops must never steal arrow focus: landing on a scope keeps provider
 		// navigation active. Diving into the roles rows is explicit (Enter, →,
 		// or a click on the Roles entry).
@@ -2987,6 +3026,24 @@ export class ModelHubComponent implements Component {
 			this.#handleStripInput(rawData);
 			return;
 		}
+		if (this.#activeEntry().kind === "overrides" && this.#assigning === null) {
+			const panel = this.#overrides();
+			if (this.#focus === "list" || panel.editing) {
+				if (!panel.editing && (matchesKey(rawData, "tab") || matchesKey(rawData, "left") || rawData === "h")) {
+					this.#focus = "scope";
+				} else panel.handleInput(rawData);
+				return;
+			}
+			if (
+				matchesKey(rawData, "enter") ||
+				matchesKey(rawData, "right") ||
+				matchesKey(rawData, "tab") ||
+				rawData === "l"
+			) {
+				this.#focus = "list";
+				return;
+			}
+		}
 		const rolesSearching = this.#activeEntry().kind === "roles" && this.#assigning === null;
 		const effortSearching = this.#activeEntry().kind === "effort" && this.#assigning === null;
 		if (this.#filterEditing) {
@@ -3522,6 +3579,11 @@ export class ModelHubComponent implements Component {
 			event.col,
 		);
 		const entry = this.#activeEntry();
+		if (overBody && entry.kind === "overrides" && this.#assigning === null) {
+			if (event.leftClick) this.#focus = "list";
+			this.#overrides().routeMouse(event, bodyLine - 1, event.col);
+			return true;
+		}
 
 		// Footer strip chips (columns stay in frame coordinates).
 		if (footerColumn !== undefined && this.#strip) {
@@ -3647,10 +3709,10 @@ export class ModelHubComponent implements Component {
 		this.#filterEditing = false;
 		if (this.#strip) this.#closeStrip();
 		const already = clicked.id === this.#activeEntryId;
-		if (clicked.kind === "roles" || clicked.kind === "effort") this.#assigning = null;
+		if (clicked.kind === "roles" || clicked.kind === "effort" || clicked.kind === "overrides") this.#assigning = null;
 		this.#setActiveEntry(clicked.id);
 		// A click on settings deliberately dives into its rows.
-		if (clicked.kind === "roles" || clicked.kind === "effort") this.#focus = "list";
+		if (clicked.kind === "roles" || clicked.kind === "effort" || clicked.kind === "overrides") this.#focus = "list";
 		if (already && clicked.kind === "provider" && clicked.locked) {
 			this.#requestLogin(clicked);
 		}
@@ -4061,6 +4123,8 @@ export class ModelHubComponent implements Component {
 
 	#footerHint(): string {
 		const entry = this.#activeEntry();
+		if (entry.kind === "overrides" && this.#assigning === null)
+			return `${this.#overrides().hint}${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}`;
 		if (
 			!this.#strip &&
 			!this.#filterEditing &&
@@ -4324,11 +4388,11 @@ export class ModelHubComponent implements Component {
 
 	/** A `picker` is its own sheet: the backend mounts it in `layer` without an `overlay` wrapper. */
 	nativeSheet(cx: DescribeContext): boolean {
-		return cx.supports("picker");
+		return cx.supports("picker") && (this.#activeEntry().kind !== "overrides" || this.#assigning !== null);
 	}
 
 	describe(cx: DescribeContext): NativeNode {
-		const usePicker = cx.supports("picker");
+		const usePicker = this.nativeSheet(cx);
 		const cached = this.#nativeCache;
 		if (cached?.version === this.#nativeVersion && cached.picker === usePicker) return cached.node;
 		if (usePicker) {
@@ -4365,6 +4429,16 @@ export class ModelHubComponent implements Component {
 		// Same gate as the mouse router: nothing is interactive while an assignment applies.
 		if (this.#assignmentPending) return;
 		const target = event.key.slice(event.key.lastIndexOf("/") + 1);
+		if (
+			this.#activeEntry().kind === "overrides" &&
+			this.#assigning === null &&
+			event.key.includes("modelOverrides")
+		) {
+			this.#focus = "list";
+			this.#overrides().handleNativeEvent(event);
+			this.#requestRender();
+			return;
+		}
 		if (event.type === "action") {
 			const entry = this.#activeEntry();
 			if (target !== "login" || event.act !== "login") return;
@@ -4448,6 +4522,7 @@ export class ModelHubComponent implements Component {
 	#describeBody(): NativeNode {
 		const children: NativeChild[] = [this.#describeStatus()];
 		const entry = this.#activeEntry();
+		if (entry.kind === "overrides" && this.#assigning === null) return this.#overrides().describe();
 		if (entry.kind === "roles" && this.#assigning === null) {
 			children.push(...this.#describeRolesView());
 		} else if (entry.kind === "effort" && this.#assigning === null) {
