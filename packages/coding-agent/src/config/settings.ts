@@ -734,6 +734,9 @@ export class Settings {
 	#modifiedProjectRoleEfforts = new Set<string>();
 	/** Registry setting paths awaiting a project-config save. */
 	#modifiedProjectValues = new Map<string, readonly string[]>();
+	/** Native-file values observed before pending project writes, checked again under its write lock. */
+	#modifiedProjectMutations = new Map<string, { segments: readonly string[]; baseValue: unknown }>();
+	#pairedProjectRoleMutations = new Set<string>();
 	/** Individual global model roles modified during this session (for partial save) */
 	#modifiedGlobalModelRoles = new Set<string>();
 	/** Individual global role efforts changed during this session. */
@@ -1203,6 +1206,7 @@ export class Settings {
 	/** Persist a registry setting to this project's config without changing user settings. */
 	writeProjectValue(setting: AnySetting, value: unknown): void {
 		if (value !== undefined) setting.assertWritable(value);
+		this.#captureProjectMutation(setting.segments);
 		const previous = setting.get(this);
 		if (value === undefined) deleteByPath(this.#project, setting.segments);
 		else setByPath(this.#project, setting.segments, structuredClone(value));
@@ -1954,8 +1958,19 @@ export class Settings {
 		return overrides;
 	}
 
+	#captureProjectMutation(segments: readonly string[]): void {
+		const key = JSON.stringify(segments);
+		if (!this.#modifiedProjectMutations.has(key)) {
+			this.#modifiedProjectMutations.set(key, {
+				segments,
+				baseValue: structuredClone(getByPath(this.#projectFileSettings, segments)),
+			});
+		}
+	}
+
 	#setProjectModelRoleValue(role: ModelRole | string, modelId: string | null): void {
 		const prev = cfgModelRoles.get(this);
+		this.#captureProjectMutation(["modelRoles", role]);
 		const projectRoles = getByPath(this.#project, ["modelRoles"]);
 		const current: Record<string, unknown> = isRecord(projectRoles) ? { ...projectRoles } : {};
 		current[role] = modelId;
@@ -2097,6 +2112,9 @@ export class Settings {
 		const previousRoles = cfgModelRoles.get(this);
 		const previousEfforts = cfgRoleEffortSelections.get(this);
 		if (scope === "project") {
+			this.#captureProjectMutation(["modelRoles", role]);
+			this.#captureProjectMutation(["roleEffortSelections", role]);
+			this.#pairedProjectRoleMutations.add(role);
 			this.#project = staged;
 			this.#modifiedProjectModelRoles.add(role);
 			this.#modifiedProjectRoleEfforts.add(role);
@@ -4461,6 +4479,13 @@ export class Settings {
 		for (const role of this.#modifiedProjectModelRoles) {
 			setByPath(target, ["modelRoles", role], isRecord(liveRoles) ? liveRoles[role] : undefined);
 		}
+		const liveEfforts = getByPath(this.#project, ["roleEffortSelections"]);
+		for (const role of this.#modifiedProjectRoleEfforts) {
+			const segments = ["roleEffortSelections", role];
+			const value = isRecord(liveEfforts) ? liveEfforts[role] : undefined;
+			if (value === undefined) deleteByPath(target, segments);
+			else setByPath(target, segments, value);
+		}
 		for (const segments of this.#modifiedProjectValues.values()) {
 			const value = getByPath(this.#project, segments);
 			if (value === undefined) deleteByPath(target, segments);
@@ -4503,6 +4528,10 @@ export class Settings {
 		const modifiedRoleEfforts = [...this.#modifiedProjectRoleEfforts];
 		const modifiedValues = new Map(this.#modifiedProjectValues);
 		const projectValues = structuredClone(this.#project);
+		const pendingMutations = new Map(this.#modifiedProjectMutations);
+		const pairedRoles = new Set(this.#pairedProjectRoleMutations);
+		this.#modifiedProjectMutations.clear();
+		this.#pairedProjectRoleMutations.clear();
 		this.#modifiedProjectValues.clear();
 		this.#modifiedProjectRoleEfforts.clear();
 		this.#modifiedProjectModelRoles.clear();
@@ -4523,10 +4552,27 @@ export class Settings {
 					loaded.settings ??
 					(this.#quarantinedYamlTargets.has(projectConfigPath) ? structuredClone(this.#projectFileSettings) : {});
 
-				const projectRoles = getByPath(this.#project, ["modelRoles"]);
+				const applies = (segments: readonly string[]): boolean => {
+					const pending = pendingMutations.get(JSON.stringify(segments));
+					return pending !== undefined && Bun.deepEquals(getByPath(projectSettings, segments), pending.baseValue);
+				};
+				const blockedRoles = new Set([...pairedRoles].filter(role =>
+					!applies(["modelRoles", role]) || !applies(["roleEffortSelections", role]),
+				));
+				const appliedPaths = new Set<string>();
+				const accept = (segments: readonly string[], role?: string): boolean => {
+					if ((role !== undefined && blockedRoles.has(role)) || !applies(segments)) {
+						logger.warn("Settings: skipped stale project change after external config edit", { path: projectConfigPath, setting: segments.join(".") });
+						return false;
+					}
+					appliedPaths.add(JSON.stringify(segments));
+					return true;
+				};
+				const projectRoles = getByPath(projectValues, ["modelRoles"]);
 				const mutations: YamlPathMutation[] = [...(migrationMutations ?? [])];
 				for (const role of modifiedModelRoles) {
 					const path = ["modelRoles", role];
+					if (!accept(path, role)) continue;
 					const value = isRecord(projectRoles) ? projectRoles[role] : undefined;
 					if (value === undefined) {
 						deleteByPath(projectSettings, path);
@@ -4536,9 +4582,10 @@ export class Settings {
 						mutations.push({ path, operation: "set", value });
 					}
 				}
-				const roleEfforts = getByPath(this.#project, ["roleEffortSelections"]);
+				const roleEfforts = getByPath(projectValues, ["roleEffortSelections"]);
 				for (const role of modifiedRoleEfforts) {
 					const path = ["roleEffortSelections", role];
+					if (!accept(path, role)) continue;
 					const value = isRecord(roleEfforts) ? roleEfforts[role] : undefined;
 					if (value === undefined) {
 						deleteByPath(projectSettings, path);
@@ -4551,6 +4598,7 @@ export class Settings {
 				for (const segments of modifiedValues.values()) {
 					const value = getByPath(projectValues, segments);
 					const path = [...segments];
+					if (!accept(path)) continue;
 					if (value === undefined) {
 						deleteByPath(projectSettings, path);
 						mutations.push({ path, operation: "delete" });
@@ -4569,6 +4617,11 @@ export class Settings {
 					canPatchDocument ? mutations : undefined,
 				);
 				this.#projectFileSettings = structuredClone(projectSettings);
+				for (const [key, pending] of this.#modifiedProjectMutations) {
+					if (appliedPaths.has(key)) {
+						this.#modifiedProjectMutations.set(key, { ...pending, baseValue: structuredClone(getByPath(projectSettings, pending.segments)) });
+					}
+				}
 				this.#quarantinedYamlTargets.delete(projectConfigPath);
 			});
 			invalidateCapabilityFsCache(projectConfigPath);
@@ -4578,10 +4631,26 @@ export class Settings {
 			}
 			for (const role of modifiedRoleEfforts) this.#modifiedProjectRoleEfforts.add(role);
 			for (const [id, segments] of modifiedValues) this.#modifiedProjectValues.set(id, segments);
+			for (const [key, pending] of pendingMutations) {
+				if (!this.#modifiedProjectMutations.has(key)) this.#modifiedProjectMutations.set(key, pending);
+			}
+			for (const role of pairedRoles) this.#pairedProjectRoleMutations.add(role);
 			throw error;
 		}
 
+		const previous = this.#snapshot();
+		const project = await this.#readProjectSettings(false);
+		this.#applyPendingProjectWrites(project.settings);
+		this.#commitProjectRead(project);
+		this.#project = project.settings;
+		for (const role of modifiedModelRoles) {
+			if (!this.#modifiedProjectModelRoles.has(role) && this.#savedRuntimeModelRoleOverrides.has(role) &&
+				Bun.deepEquals(getByPath(this.#overrides, ["modelRoles", role]), getByPath(projectValues, ["modelRoles", role]))) {
+				this.#updateRuntimeModelRoleOverride(role, this.getProjectModelRole(role));
+			}
+		}
 		this.#rebuildMerged();
+		this.#fireChangesSince(previous);
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────

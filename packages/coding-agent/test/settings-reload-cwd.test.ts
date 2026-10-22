@@ -10,6 +10,8 @@ import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } f
 
 import { cfgCompactionEnabled } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { cfgEnabledModels, cfgModelRoleStorage } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { cfgEffortRules } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 
 it("applies project role mutations over active runtime overrides", () => {
 	const settings = Settings.isolated({});
@@ -334,6 +336,35 @@ describe("Settings.reloadForCwd", () => {
 					smol: "anthropic/smol",
 				},
 			});
+		});
+
+		it("rejects a stale project role and effort as one pair without replacing the newer save", async () => {
+			const first = await Settings.loadIsolated({ cwd: startDir, agentDir });
+			const second = await Settings.loadIsolated({ cwd: startDir, agentDir });
+			first.setRoleModelAndEffort("smol", "anthropic/first", { mode: "fixed", level: ThinkingLevel.Low }, "project");
+			second.setRoleModelAndEffort("smol", "anthropic/stale", { mode: "fixed", level: ThinkingLevel.High }, "project");
+			await first.flush();
+			await second.flush();
+			expect(second.getProjectModelRole("smol")).toBe("anthropic/first");
+			expect(second.getProjectRoleEffortSelection("smol")).toEqual({ mode: "fixed", level: ThinkingLevel.Low });
+			const persisted = YAML.parse(await Bun.file(path.join(startDir, ".omp", "config.yml")).text());
+			expect(persisted.modelRoles.smol).toBe("anthropic/first");
+			expect(persisted.roleEffortSelections.smol).toEqual({ mode: "fixed", level: "low" });
+		});
+
+		it("keeps non-overlapping project setting writes while dropping a stale overlapping setting", async () => {
+			const first = await Settings.loadIsolated({ cwd: startDir, agentDir });
+			const second = await Settings.loadIsolated({ cwd: startDir, agentDir });
+			first.writeProjectValue(cfgCompactionEnabled, false);
+			second.writeProjectValue(cfgCompactionEnabled, true);
+			second.writeProjectValue(cfgEffortRules, [{ selector: "anthropic/*", allowed: ["off", "low"] }]);
+			await first.flush();
+			await second.flush();
+			const persisted = YAML.parse(await Bun.file(path.join(startDir, ".omp", "config.yml")).text());
+			expect(persisted.compaction.enabled).toBe(false);
+			expect(persisted.effort.rules).toEqual([{ selector: "anthropic/*", allowed: ["off", "low"] }]);
+			expect(cfgCompactionEnabled.get(second)).toBe(false);
+			expect(cfgEffortRules.get(second)).toEqual([{ selector: "anthropic/*", allowed: ["off", "low"] }]);
 		});
 
 		it("reports project roles over global role fallbacks", async () => {
