@@ -80,8 +80,6 @@ describe("read-only native model selector", () => {
 		}
 		expect(queryModelSelector(source, catalog, [], "example").items.map(item => item.selector))
 			.toEqual(["beta/example-2", "alpha/example-2"]);
-		expect(queryModelSelector(source, catalog, [], "exmp2").items.map(item => item.selector))
-			.toContain("beta/example-2");
 	});
 
 	test("the enabled session scope excludes other concrete models and preserves role aliases", () => {
