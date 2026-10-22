@@ -96,13 +96,17 @@ export class RpcModelsConfiguration {
 					permittedEfforts: supportedThinkingLevels.filter(level => !rule || rule.allowed.includes(level)),
 				};
 			}),
-			roles: new RpcRoles(this.session).list().roles.map(role => ({
-				id: role.id, name: role.name, alias: role.alias, hidden: role.hidden,
-				configured: role.configured ?? null, resolved: role.resolved ?? null,
-				provenance: settings.getModelRoleProvenance(role.id),
-				effort: settings.getRoleEffortSelection(role.id) ?? null,
-				global: this.#roleValue(role.id, "global"), project: this.#roleValue(role.id, "project"),
-			})),
+			roles: new RpcRoles(this.session).list().roles.map(role => {
+				const info = getRoleInfo(role.id, settings);
+				return {
+					id: role.id, name: role.name, alias: role.alias, hidden: role.hidden,
+					...("description" in info && typeof info.description === "string" ? { description: info.description } : {}),
+					configured: role.configured ?? null, resolved: role.resolved ?? null,
+					provenance: settings.getModelRoleProvenance(role.id),
+					effort: settings.getRoleEffortSelection(role.id) ?? null,
+					global: this.#roleValue(role.id, "global"), project: this.#roleValue(role.id, "project"),
+				};
+			}),
 			roleStorage: cfgModelRoleStorage.get(settings),
 			effortMode: cfgEffortPolicyMode.get(settings),
 			effortRules: cfgEffortRules.get(settings),
@@ -127,8 +131,9 @@ export class RpcModelsConfiguration {
 			if (!result.model) throw new RpcModelsConfigurationError("invalid_value", "Selector does not resolve to a compatible native model");
 		}
 		if (input.role === "default" && (this.session.isStreaming || this.session.isCompacting)) throw new RpcModelsConfigurationError("session_busy", "Cannot change the default role while streaming or compacting");
-		settings.setRoleModelAndEffort(input.role, input.selector, input.effort, input.scope);
-		await settings.flush();
+		const receipt = await settings.persistWithReceipt(() => settings.setRoleModelAndEffort(input.role, input.selector, input.effort, input.scope));
+		if (receipt.status === "conflict")
+			throw new RpcModelsConfigurationError("configuration_conflict", "Another native mutation superseded this scoped role. Refresh before saving.");
 	}
 
 	async setEffortRules(input: RpcSetEffortRules): Promise<void> {
@@ -136,9 +141,12 @@ export class RpcModelsConfiguration {
 		await settings.reloadFromDisk();
 		if (input.scope !== "global" && input.scope !== "project") throw new RpcModelsConfigurationError("invalid_value", "Effort rule scope must be global or project");
 		if (!isDeepStrictEqual(input.expected, this.#effortRules(input.scope))) throw new RpcModelsConfigurationError("configuration_conflict", "Effort rules changed in another client. Refresh before saving.");
-		if (input.scope === "project") settings.writeProjectValue(cfgEffortRules, input.rules);
-		else if (input.rules === undefined) cfgEffortRules.unset(settings);
-		else cfgEffortRules.set(settings, input.rules);
-		await settings.flush();
+		const receipt = await settings.persistWithReceipt(() => {
+			if (input.scope === "project") settings.writeProjectValue(cfgEffortRules, input.rules);
+			else if (input.rules === undefined) cfgEffortRules.unset(settings);
+			else cfgEffortRules.set(settings, input.rules);
+		});
+		if (receipt.status === "conflict")
+			throw new RpcModelsConfigurationError("configuration_conflict", "Another native mutation superseded these scoped effort rules. Refresh before saving.");
 	}
 }

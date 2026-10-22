@@ -1527,7 +1527,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 	const modelsCommands = new RpcModelsCommands({
 		session, output, pending: pendingExtensionRequests,
 		input: (title, placeholder, secret, loginId, signal) => requestRpcDialog(
-			pendingExtensionRequests, output, { signal, timeout: 600_000 }, undefined,
+			pendingExtensionRequests, frame => output({ ...frame, loginId }), { signal, timeout: 600_000 }, undefined,
 			{ method: "input", title, placeholder, secret, loginId, timeout: 600_000 },
 			response => parseValueDialogResponse(response, undefined),
 		),
