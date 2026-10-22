@@ -186,6 +186,17 @@
 				"clientOmit": []
 			},
 			{
+				"name": "query_model_selector",
+				"doc": "Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.",
+				"params": "QueryModelSelectorParams",
+				"result": "ModelSelectorResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "set_role",
 				"doc": "Select a model role.",
 				"params": "SetRoleParams",
@@ -2605,6 +2616,192 @@
 			},
 			"required": [
 				"roles"
+			]
+		},
+		"ModelSelectorPerformanceSource": {
+			"enum": [
+				"measured",
+				"catalog"
+			],
+			"type": "string"
+		},
+		"ModelSelectorFacts": {
+			"type": "object",
+			"properties": {
+				"intelligence": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"ttftMs": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"tokensPerSecond": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"contextWindow": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"effectiveContextWindow": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"inputCostPerMillion": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"outputCostPerMillion": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"performanceSource": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ModelSelectorPerformanceSource"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"serviceTier": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"intelligence",
+				"ttftMs",
+				"tokensPerSecond",
+				"contextWindow",
+				"effectiveContextWindow",
+				"inputCostPerMillion",
+				"outputCostPerMillion",
+				"performanceSource",
+				"serviceTier"
+			]
+		},
+		"ModelSelectorItem": {
+			"type": "object",
+			"properties": {
+				"selector": {
+					"type": "string"
+				},
+				"provider": {
+					"type": "string"
+				},
+				"id": {
+					"type": "string"
+				},
+				"name": {
+					"type": "string"
+				},
+				"resolvedSelector": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"facts": {
+					"$ref": "#/$defs/ModelSelectorFacts"
+				},
+				"description": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"selector",
+				"provider",
+				"id",
+				"name",
+				"resolvedSelector",
+				"facts"
+			]
+		},
+		"ModelSelectorResult": {
+			"type": "object",
+			"properties": {
+				"items": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/ModelSelectorItem"
+					}
+				},
+				"roles": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/ModelSelectorItem"
+					}
+				},
+				"error": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"items",
+				"roles",
+				"error"
 			]
 		},
 		"ModelEffortSelection": {
@@ -8341,6 +8538,17 @@
 			},
 			"required": [
 				"name"
+			]
+		},
+		"QueryModelSelectorParams": {
+			"type": "object",
+			"properties": {
+				"query": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"query"
 			]
 		},
 		"SetRoleParams": {

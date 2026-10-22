@@ -40,6 +40,7 @@ Behavior notes:
 | --- | --- |
 | `get_usage` | The `get_usage` command returns account-level provider usage reports. See [Session](#session). |
 | `get_roles` | `get_roles` / `set_role` commands and `get_state.activeRole` ([payloads](#get_roles-and-set_role-payloads)) |
+| `model_selector` | Read-only `query_model_selector` returns native `/switch` matches, ordering, role aliases and row facts. |
 | `models_configuration` | Native provider/model catalog and scoped role/effort configuration, with expected-value write conflicts. |
 | `cancellable_login` | Login prompts can request secret input; `cancel_login` cancels only a login owned by the same connection. |
 | `set_chat_mode` | Live chat-mode switching: the `set_chat_mode` command, `get_state.chatMode`, the `chat_mode_changed` event, and the `/chat` builtin in `get_available_commands`. |
@@ -671,6 +672,30 @@ branch to a different model) clears it. A retry fallback does not: the fallback
 model is part of the role's chain. A resumed session reports the role recorded
 with its last model change, except `default`, which is also what a direct model
 pick records.
+
+### Native model selector query
+
+Send `{"type":"query_model_selector","query":"example"}` to read the native
+`/switch` filter without selecting a model or starting a turn. The same command
+is available through terminal control. Check the `model_selector` capability
+before using it.
+
+The result contains `items`, `roles` and `error`. `items` is the native picker's
+ordered concrete model list after applying the session's enabled scope and
+query. `roles` contains visible, resolved chat-role aliases, filtered by the
+same native browser. Each row carries its selectable `selector`, native
+`provider`, `id`, `name`, optional `description`, `resolvedSelector` and `facts`.
+Keep role aliases intact when selecting them so the session follows the role.
+Clients must not apply another text filter or reorder native matches.
+
+Facts include `intelligence`, measured `ttftMs`, `tokensPerSecond`, catalog
+`contextWindow`, native `effectiveContextWindow`, `inputCostPerMillion` and
+`outputCostPerMillion`. Missing values are `null`, not zero. Performance uses
+the session's service tier when measured, then the standard aggregate, then the
+fastest measured tier. Catalog throughput is used only when measured throughput
+is unavailable. `performanceSource` and `serviceTier` identify those values.
+Effective context is the native maintenance budget, not a provider capability.
+`error` reports an unavailable catalog while preserving any usable scoped rows.
 
 ### `get_roles` and `set_role` payloads
 

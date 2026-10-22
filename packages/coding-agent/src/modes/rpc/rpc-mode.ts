@@ -86,6 +86,7 @@ import { RpcExtensionUserMessageTracker, RpcPromptResults, watchAndReportPromptR
 import type { RpcPromptTicket } from "./rpc-prompt-results";
 import { controlHostFor } from "../../control/host";
 import { RpcRoles } from "./rpc-roles";
+import { getRpcModelSelector } from "./rpc-model-selector";
 import { RpcModelsCommands } from "./rpc-models-commands";
 import { setRpcChatMode } from "./rpc-chat-mode";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
@@ -2241,6 +2242,11 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			case "get_roles": {
 				await session.modelRegistry.awaitBackgroundRefresh();
 				return success(id, "get_roles", rpcRoles.list());
+			}
+
+			case "query_model_selector": {
+				if (typeof command.query !== "string") return error(id, command.type, "A string query is required");
+				return success(id, command.type, await getRpcModelSelector(session, command.query));
 			}
 
 			case "set_role": {

@@ -431,6 +431,36 @@ export interface RolesResult {
 	activeRole?: string;
 }
 
+export type ModelSelectorPerformanceSource = "measured" | "catalog";
+
+export interface ModelSelectorFacts {
+	intelligence: number | null;
+	ttftMs: number | null;
+	tokensPerSecond: number | null;
+	contextWindow: number | null;
+	effectiveContextWindow: number | null;
+	inputCostPerMillion: number | null;
+	outputCostPerMillion: number | null;
+	performanceSource: ModelSelectorPerformanceSource | null;
+	serviceTier: string | null;
+}
+
+export interface ModelSelectorItem {
+	selector: string;
+	provider: string;
+	id: string;
+	name: string;
+	resolvedSelector: string | null;
+	facts: ModelSelectorFacts;
+	description?: string;
+}
+
+export interface ModelSelectorResult {
+	items: ModelSelectorItem[];
+	roles: ModelSelectorItem[];
+	error: string | null;
+}
+
 export interface ModelEffortSelection {
 	mode: "fixed" | "auto" | "inherit";
 	level?: ThinkingLevel;
@@ -2075,6 +2105,10 @@ export interface SelectMixtureParams {
 	name: string;
 }
 
+export interface QueryModelSelectorParams {
+	query: string;
+}
+
 export interface SetRoleParams {
 	role: string;
 }
@@ -2498,6 +2532,7 @@ export interface RpcWireCommands {
 	list_mixtures: { params: undefined; result: ListMixturesResult };
 	select_mixture: { params: SelectMixtureParams; result: ModelInfo };
 	get_roles: { params: undefined; result: RolesResult };
+	query_model_selector: { params: QueryModelSelectorParams; result: ModelSelectorResult };
 	set_role: { params: SetRoleParams; result: SetRoleResult };
 	get_models_configuration: { params: undefined; result: GetModelsConfigurationResult };
 	set_model_role_configuration: { params: SetModelRoleConfigurationParams; result: undefined };
