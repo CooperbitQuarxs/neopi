@@ -9,6 +9,7 @@
 
 ### Added
 
+- Choose a separate `title` model for session titles and `/rename` suggestions; until set it follows `tiny`, and explicit fork-mode titling still uses the foreground model ([#515](https://github.com/PsychedelicShayna/neopi/issues/515)).
 - Configure Chronicler capture thresholds, prompt word targets, recall search limits, indexing budgets, and on-demand backfill timing in Settings > Memory > Chronicler ([#510](https://github.com/PsychedelicShayna/neopi/issues/510)).
 - Assign Chronicler recall its own `chronicler-recall` model, shown as CHRONREC; until set, it follows the summary model and effort ([#509](https://github.com/PsychedelicShayna/neopi/issues/509)).
 - Every model role is visible in `/models`, with editable descriptions on `D` and dedicated agent-creation and compaction roles; RPC clients receive the descriptions too ([#508](https://github.com/PsychedelicShayna/neopi/issues/508)).
