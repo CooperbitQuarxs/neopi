@@ -30,6 +30,7 @@ export const stateDefs = {
 		id: "string",
 		alias: "string",
 		name: "string",
+		"description?": "string",
 		"tag?": "string",
 		section: "'chat' | 'kind'",
 		source: "'builtin' | 'configured'",

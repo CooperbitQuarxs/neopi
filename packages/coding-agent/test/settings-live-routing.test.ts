@@ -12,6 +12,7 @@ import { cfgTaskAgentModelOverrides } from "@oh-my-pi/pi-coding-agent/task/setti
 import { logger, TempDir } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { cfgEffortRules } from "../src/config/effort-policy";
 
 const routing = (model: string, reservePct = 10, priority = 1) => ({
 	modelRoles: { smol: `anthropic/${model}`, slow: "anthropic/strong" },
@@ -74,6 +75,13 @@ describe("live routing config files", () => {
 		settings.startWatching();
 		return settings;
 	}
+
+	it("initializes real settings when no effort rules are configured", async () => {
+		const file = tempDir.join("settings.yml");
+		await Bun.write(file, "{}\n");
+		await start(file);
+		expect(cfgEffortRules.get(settings)).toEqual([]);
+	});
 
 	it("applies atomic overlay edits to subsequent model selection, fallbacks and account health", async () => {
 		const file = tempDir.join("routing.yml");

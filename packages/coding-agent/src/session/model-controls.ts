@@ -12,7 +12,7 @@ import {
 	isAnthropicFastModeFallbackDisabled,
 } from "@oh-my-pi/pi-ai/providers/anthropic-state";
 import { isFireworksFastModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
-import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
+import { THINKING_EFFORTS, type ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -84,7 +84,7 @@ export class ModelControls {
 	/** Hard per-session effort ceiling (e.g. a task spawn's `task.maxEffort` cap); recovery paths re-clamp to it. */
 	readonly #thinkingLevelCeiling: Effort | undefined;
 	#autoThinking = false;
-	#autoResolvedLevel: Effort | undefined;
+	#autoResolvedLevel: ThinkingEffort | undefined;
 	#effortOrigin: EffortOrigin;
 	#autoSelection: EffortSelection | undefined;
 	#effortRevision = 0;
@@ -188,7 +188,7 @@ export class ModelControls {
 	}
 
 	/** Last concrete effort selected by automatic classification. */
-	get autoResolvedThinkingLevel(): Effort | undefined {
+	get autoResolvedThinkingLevel(): ThinkingEffort | undefined {
 		return this.#autoResolvedLevel;
 	}
 
@@ -259,7 +259,7 @@ export class ModelControls {
 	restoreThinkingSnapshot(
 		level: ThinkingLevel | undefined,
 		auto: boolean,
-		resolved: Effort | undefined,
+		resolved: ThinkingEffort | undefined,
 		origin: EffortOrigin,
 		selection: EffortSelection | undefined,
 		requested: ConfiguredThinkingLevel | undefined,
@@ -831,7 +831,7 @@ export class ModelControls {
 		const revision = this.#effortRevision;
 
 		let explicitMax = false;
-		let resolved: Effort | undefined;
+		let resolved: ThinkingEffort | undefined;
 		if (this.#host.magicKeywordEnabled("ultrathink") && containsMagicKeyword(promptText, "ultrathink")) {
 			// The user explicitly asked for maximum thinking; bypass the classifier
 			// (and the `providers.autoThinkingMaxEffort` ceiling) and jump straight
@@ -902,7 +902,7 @@ export class ModelControls {
 				: (resolved ?? this.#autoResolvedLevel ?? resolveProvisionalAutoLevel(model)),
 			this.#thinkingLevelCeiling,
 		);
-		if (effort === undefined) return;
+		if (effort === undefined || effort === ThinkingLevel.Inherit) return;
 		const shouldPersistResolution = this.#autoResolvedLevel === undefined || this.#thinkingLevel !== effort;
 		this.#autoResolvedLevel = effort;
 		this.#thinkingLevel = effort;

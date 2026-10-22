@@ -1721,6 +1721,31 @@ func (v *Effort) UnmarshalJSON(data []byte) error {
 	return unknownValue("Effort", s)
 }
 
+type ThinkingEffort string
+
+const (
+	ThinkingEffortOff     ThinkingEffort = "off"
+	ThinkingEffortMinimal ThinkingEffort = "minimal"
+	ThinkingEffortLow     ThinkingEffort = "low"
+	ThinkingEffortMedium  ThinkingEffort = "medium"
+	ThinkingEffortHigh    ThinkingEffort = "high"
+	ThinkingEffortXhigh   ThinkingEffort = "xhigh"
+	ThinkingEffortMax     ThinkingEffort = "max"
+)
+
+func (v *ThinkingEffort) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "ThinkingEffort")
+	if err != nil {
+		return err
+	}
+	switch value := ThinkingEffort(s); value {
+	case ThinkingEffortOff, ThinkingEffortMinimal, ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXhigh, ThinkingEffortMax:
+		*v = value
+		return nil
+	}
+	return unknownValue("ThinkingEffort", s)
+}
+
 // Thinking selector; `inherit` defers to a higher-level selector.
 type ThinkingLevel string
 
@@ -2080,16 +2105,17 @@ func (v *RoleResolution) decodeFrom(raw map[string]json.RawMessage) error {
 }
 
 type RoleInfo struct {
-	ID         string          `json:"id"`
-	Alias      string          `json:"alias"`
-	Name       string          `json:"name"`
-	Section    RoleInfoSection `json:"section"`
-	Source     RoleInfoSource  `json:"source"`
-	Patterns   []string        `json:"patterns"`
-	Hidden     bool            `json:"hidden"`
-	Tag        *string         `json:"tag,omitempty"`
-	Configured *string         `json:"configured,omitempty"`
-	Resolved   *RoleResolution `json:"resolved,omitempty"`
+	ID          string          `json:"id"`
+	Alias       string          `json:"alias"`
+	Name        string          `json:"name"`
+	Section     RoleInfoSection `json:"section"`
+	Source      RoleInfoSource  `json:"source"`
+	Patterns    []string        `json:"patterns"`
+	Hidden      bool            `json:"hidden"`
+	Description *string         `json:"description,omitempty"`
+	Tag         *string         `json:"tag,omitempty"`
+	Configured  *string         `json:"configured,omitempty"`
+	Resolved    *RoleResolution `json:"resolved,omitempty"`
 }
 
 func (v *RoleInfo) UnmarshalJSON(data []byte) error {
@@ -2106,6 +2132,7 @@ func (v *RoleInfo) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("source", &out.Source)
 	d.required("patterns", &out.Patterns)
 	d.required("hidden", &out.Hidden)
+	d.optional("description", &out.Description)
 	d.optional("tag", &out.Tag)
 	d.optional("configured", &out.Configured)
 	d.optional("resolved", &out.Resolved)
@@ -6564,7 +6591,7 @@ type ThinkingLevelChangedEvent struct {
 	// The user's selector when it differs from the effective level.
 	Configured *ConfiguredThinkingLevel `json:"configured,omitempty"`
 	// The level `auto` resolved to this turn, once classified.
-	Resolved *Effort `json:"resolved,omitempty"`
+	Resolved *ThinkingEffort `json:"resolved,omitempty"`
 }
 
 func (v *ThinkingLevelChangedEvent) UnmarshalJSON(data []byte) error {

@@ -69,6 +69,11 @@ _EFFORT_VALUES: Final[frozenset[str]] = frozenset({"minimal", "low", "medium", "
 _decode_effort = cast("Decoder[Effort]", literal(_EFFORT_VALUES))
 
 
+ThinkingEffort: TypeAlias = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+_THINKING_EFFORT_VALUES: Final[frozenset[str]] = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max"})
+_decode_thinking_effort = cast("Decoder[ThinkingEffort]", literal(_THINKING_EFFORT_VALUES))
+
+
 ThinkingLevel: TypeAlias = Literal["inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"]
 """Thinking selector; `inherit` defers to a higher-level selector."""
 _THINKING_LEVEL_VALUES: Final[frozenset[str]] = frozenset({"inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"})
@@ -656,6 +661,7 @@ class RoleInfo:
     source: Literal["builtin", "configured"]
     patterns: tuple[str, ...]
     hidden: bool
+    description: str | None = None
     tag: str | None = None
     configured: str | None = None
     resolved: RoleResolution | None = None
@@ -1690,7 +1696,7 @@ class ThinkingLevelChangedEvent:
     thinking_level: ThinkingLevel | None = None
     configured: ConfiguredThinkingLevel | None = None
     """The user's selector when it differs from the effective level."""
-    resolved: Effort | None = None
+    resolved: ThinkingEffort | None = None
     """The level `auto` resolved to this turn, once classified."""
 
 
@@ -2465,6 +2471,7 @@ def parse_role_info(value: object, path: str = "RoleInfo") -> RoleInfo:
         source=required(payload, "source", cast('Decoder[Literal["builtin", "configured"]]', literal(frozenset({"builtin", "configured"}))), path),
         patterns=required(payload, "patterns", array(decode_str), path),
         hidden=required(payload, "hidden", decode_bool, path),
+        description=optional(payload, "description", decode_str, path),
         tag=optional(payload, "tag", decode_str, path),
         configured=optional(payload, "configured", decode_str, path),
         resolved=optional(payload, "resolved", parse_role_resolution, path),
@@ -3664,7 +3671,7 @@ def parse_thinking_level_changed_event(value: object, path: str = "ThinkingLevel
     return ThinkingLevelChangedEvent(
         thinking_level=optional(payload, "thinkingLevel", _decode_thinking_level, path),
         configured=optional(payload, "configured", _decode_configured_thinking_level, path),
-        resolved=optional(payload, "resolved", _decode_effort, path),
+        resolved=optional(payload, "resolved", _decode_thinking_effort, path),
     )
 
 
@@ -5333,6 +5340,7 @@ __all__ = [
     "TextContent",
     "ThinkingConfig",
     "ThinkingContent",
+    "ThinkingEffort",
     "ThinkingLevel",
     "ThinkingLevelChangedEvent",
     "ThinkingLevelCycleResult",

@@ -10,6 +10,7 @@
 ### Added
 
 - Read complete native journal or selected-branch history in bounded RPC/control pages or with `npi sessions entries --json`, preserving tool output, compaction, reset and custom records ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
+- Every model role is visible in `/models`, with editable descriptions on `D` and dedicated agent-creation and compaction roles; RPC clients receive the descriptions too ([#508](https://github.com/PsychedelicShayna/neopi/issues/508)).
 - RPC model lists and session snapshots now report native Fast mode support separately from the requested and active session toggles ([NeoCode #129](https://github.com/PsychedelicShayna/neocode/issues/129)).
 - Linux source builds reuse verified native addons across worktrees through a shared cache; set `NPI_NATIVE_CACHE=off` to disable it.
 - Change a running subagent's reasoning level and fast mode through RPC, `npi ctl`, or its focused Agent Hub view without interrupting its turn; selections survive restart, and agent listings show current model and effort ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
@@ -72,6 +73,8 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Per-model effort limits now offer `off` when the model supports disabling reasoning and apply allowed off selections to sessions and Auto effort ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).
+- Model settings rows now show configured compaction limits beside the effort summary, preserving token or percentage notation ([#499](https://github.com/PsychedelicShayna/neopi/issues/499)).
 - Native addon cache keys now distinguish compiler, wrapper and Cargo build/profile environment overrides.
 - Stopping a live call while its persona or settings load no longer leaves a transport connected after cancellation ([#482](https://github.com/PsychedelicShayna/neopi/issues/482)).
 - Token-bounded text, including live transcript history, keeps emoji and combining characters intact at truncation boundaries ([#205](https://github.com/PsychedelicShayna/neopi/issues/205)).

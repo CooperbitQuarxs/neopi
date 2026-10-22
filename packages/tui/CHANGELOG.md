@@ -4,6 +4,7 @@
 
 ### Added
 
+- Model effort-rule editors now let you include or exclude native `off` reasoning levels ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).
 - Numeric settings can offer a Custom input alongside preset quick picks, including global and role-scoped context budgets ([#52](https://github.com/PsychedelicShayna/neopi/issues/52)).
 - Ask supports `a` to add a note to any highlighted option and `A` to edit or clear its latest note; notes survive selection changes and appear in answer review ([#321](https://github.com/PsychedelicShayna/neopi/issues/321)).
 - The chain configurator's chain screen toggles the highlighted step on or off with Space, shows `[x]`/`[ ]` on each step row, and counts only enabled steps in its summaries ([#365](https://github.com/PsychedelicShayna/neopi/issues/365)).

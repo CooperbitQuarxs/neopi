@@ -1167,6 +1167,7 @@ interface ConfiguredRoleFallback {
 
 const ROLE_CONFIGURED_FALLBACK: Partial<Record<ModelRole, ConfiguredRoleFallback>> = {
 	advisor: { role: "slow", configuredOnly: true },
+	"agent-author": { role: "default", configuredOnly: false },
 	classifier: { role: "slow", configuredOnly: true },
 	memory: { role: "tiny", configuredOnly: false },
 	// Temporal summaries and recall ranking follow the capture role unless configured.

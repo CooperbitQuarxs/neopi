@@ -63,6 +63,7 @@ export function describeModelCompactionPoint(scope: ScopeLike, model: Model): Mo
 	const settings = resolveModelCompactionSettings(scope, model);
 	const contextWindow = model.contextWindow ?? 0;
 	const trigger = settings.enabled && contextWindow > 0 ? resolveTrigger(settings, contextWindow) : undefined;
+	const configuredLimit = matchModelCompactionThreshold(cfgCompactionModelThresholds.get(scope), model);
 	return {
 		tokens: trigger?.tokens,
 		basis: trigger && formatBasis(trigger),
@@ -71,6 +72,7 @@ export function describeModelCompactionPoint(scope: ScopeLike, model: Model): Mo
 			match?.key ??
 			(configured.thresholdTokens > 0 || configured.thresholdPercent > 0 ? "global" : "default"),
 		draft: match?.key === `${model.provider}/${model.id}` ? formatCompactionPointInput(match.threshold) : undefined,
+		limit: configuredLimit ? formatCompactionPointInput(configuredLimit.threshold) : undefined,
 	};
 }
 

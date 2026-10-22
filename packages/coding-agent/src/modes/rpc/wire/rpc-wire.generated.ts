@@ -327,6 +327,8 @@ export type AssistantMessageEvent = AssistantStartEvent | AssistantTextStartEven
 
 export type Effort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export type ThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 /** Thinking selector; `inherit` defers to a higher-level selector. */
 export type ThinkingLevel = "inherit" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -418,6 +420,7 @@ export interface RoleInfo {
 	source: "builtin" | "configured";
 	patterns: string[];
 	hidden: boolean;
+	description?: string;
 	tag?: string;
 	configured?: string;
 	resolved?: RoleResolution;
@@ -1408,7 +1411,7 @@ export interface ThinkingLevelChangedEvent {
 	/** The user's selector when it differs from the effective level. */
 	configured?: ConfiguredThinkingLevel;
 	/** The level `auto` resolved to this turn, once classified. */
-	resolved?: Effort;
+	resolved?: ThinkingEffort;
 }
 
 /** Goal mode changed, by a host `goal` command or the agent's `goal` tool. */

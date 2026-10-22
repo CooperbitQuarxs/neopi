@@ -2,10 +2,10 @@ import { describe, expect, it } from "bun:test";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { serializeRpcModel } from "../src/modes/rpc/rpc-model";
-import { buildRpcSessionState, CONTROL_QUEUE_LIMIT } from "../src/modes/rpc/rpc-session-state";
+import { buildRpcSessionState } from "../src/modes/rpc/rpc-session-state";
 import type { AgentSession } from "../src/session/agent-session";
 
-function model(provider: string, api: Api, id: string, serviceTiers?: string[]): Model {
+function model<TApi extends Api>(provider: string, api: TApi, id: string, serviceTiers?: string[]): Model<TApi> {
 	return buildModel({
 		id,
 		name: id,
@@ -77,7 +77,7 @@ function sessionFor(selectedModel: Model | undefined, fastModeEnabled: boolean, 
 		systemPrompt: ["preserve the prompt"],
 		agent: { state: { tools: [] } },
 	};
-	return session as AgentSession;
+	return session as unknown as AgentSession;
 }
 
 describe("RPC model serialization", () => {
@@ -89,9 +89,10 @@ describe("RPC model serialization", () => {
 	});
 
 	it("does not infer Fast support from a fast-SKU hint", () => {
+		const base = model("custom-relay", "openai-completions", "qwen3");
 		const source: Model = {
-			...model("custom-relay", "openai-completions", "qwen3"),
-			compat: { fastMode: true },
+			...base,
+			compat: { ...base.compat, fastMode: true },
 		};
 		expect(serializeRpcModel(source).supportsFastMode).toBe(false);
 	});

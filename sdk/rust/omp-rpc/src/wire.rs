@@ -2517,6 +2517,39 @@ impl Effort {
 	}
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ThinkingEffort {
+	#[serde(rename = "off")]
+	Off,
+	#[serde(rename = "minimal")]
+	Minimal,
+	#[serde(rename = "low")]
+	Low,
+	#[serde(rename = "medium")]
+	Medium,
+	#[serde(rename = "high")]
+	High,
+	#[serde(rename = "xhigh")]
+	Xhigh,
+	#[serde(rename = "max")]
+	Max,
+}
+
+impl ThinkingEffort {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Off => "off",
+			Self::Minimal => "minimal",
+			Self::Low => "low",
+			Self::Medium => "medium",
+			Self::High => "high",
+			Self::Xhigh => "xhigh",
+			Self::Max => "max",
+		}
+	}
+}
+
 /// Thinking selector; `inherit` defers to a higher-level selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ThinkingLevel {
@@ -2770,6 +2803,8 @@ pub struct RoleInfo {
 	pub source: RoleInfoSource,
 	pub patterns: Vec<String>,
 	pub hidden: bool,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub tag: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4798,7 +4833,7 @@ pub struct ThinkingLevelChangedEvent {
 	pub configured: Option<ConfiguredThinkingLevel>,
 	/// The level `auto` resolved to this turn, once classified.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub resolved: Option<Effort>,
+	pub resolved: Option<ThinkingEffort>,
 }
 
 /// Goal mode changed, by a host `goal` command or the agent's `goal` tool.

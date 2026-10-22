@@ -57,6 +57,8 @@ export type ModelRole =
 	| "slow"
 	| "vision"
 	| "plan"
+	| "agent-author"
+	| "compaction"
 	| "commit"
 	| "tiny"
 	| "memory"
@@ -80,6 +82,8 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"slow",
 	"vision",
 	"plan",
+	"agent-author",
+	"compaction",
 	"commit",
 	"tiny",
 	"memory",
@@ -104,6 +108,8 @@ export const CHAT_MODEL_ROLE_IDS: ModelRole[] = [
 	"slow",
 	"vision",
 	"plan",
+	"agent-author",
+	"compaction",
 	"commit",
 	"tiny",
 	"memory",
@@ -130,6 +136,7 @@ export interface ModelBrowserPerf {
 export interface ModelBrowserRoleInfo {
 	tag?: string;
 	name: string;
+	description?: string;
 	color?: ThemeColor;
 	hidden?: boolean;
 	section: "chat" | "kind";
@@ -159,6 +166,8 @@ export interface ModelCompactionPoint {
 	source: string;
 	/** The model's own exact entry as editable text (`90k`, `80%`); absent when it has none. */
 	draft?: string;
+	/** Configured per-model limit, independent of temporary overrides or whether it is enabled. */
+	limit?: string;
 }
 
 /** Host-provided preferences and model-role resolution for the browser. */

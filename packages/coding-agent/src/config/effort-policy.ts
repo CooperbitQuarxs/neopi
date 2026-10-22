@@ -1,6 +1,7 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { Effort, THINKING_EFFORTS, type Model } from "@oh-my-pi/pi-ai";
-import { getSupportedEfforts, requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
+import type { Model } from "@oh-my-pi/pi-ai";
+import { Effort, THINKING_CHOICES, type ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
+import { getSupportedThinkingLevels, requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import { logger } from "@oh-my-pi/pi-utils";
 import { register } from "./registry";
 import { compileSelectorRegex, isRegexSelectorPattern, matchesSelectorPattern } from "./selector-pattern";
@@ -10,18 +11,18 @@ import type { Settings } from "./settings";
 /** Only choices without a deliberate caller/manual override are subject to these rules. */
 export interface EffortRule {
 	selector: string;
-	allowed: Effort[];
+	allowed: ThinkingEffort[];
 }
 
 export type EffortSelection =
 	| { mode: "fixed"; level: ThinkingLevel }
-	| { mode: "auto"; allowed?: Effort[]; selector?: string }
+	| { mode: "auto"; allowed?: ThinkingEffort[]; selector?: string }
 	| { mode: "inherit" };
 
 export type EffortOrigin = "caller" | "manual" | "role" | "fallback" | "inherited" | "default";
 
-function assertEfforts(raw: unknown, label: string): asserts raw is Effort[] {
-	if (!Array.isArray(raw) || raw.length === 0 || raw.some(value => !THINKING_EFFORTS.includes(value))) {
+function assertEfforts(raw: unknown, label: string): asserts raw is ThinkingEffort[] {
+	if (!Array.isArray(raw) || raw.length === 0 || raw.some(value => !THINKING_CHOICES.includes(value))) {
 		throw new Error(`${label} must contain one or more supported thinking effort names`);
 	}
 	if (new Set(raw).size !== raw.length) throw new Error(`${label} cannot contain duplicate efforts`);
@@ -149,16 +150,16 @@ export const cfgFallbackEffortSelections = register({
 
 export class EffortPolicyError extends Error {
 	readonly model: string;
-	readonly supported: readonly Effort[];
-	readonly permitted: readonly Effort[];
+	readonly supported: readonly ThinkingEffort[];
+	readonly permitted: readonly ThinkingEffort[];
 	readonly selector: string | undefined;
 	readonly alternatives: readonly string[];
 	readonly requested?: string;
 	readonly origin?: EffortOrigin;
 	constructor(
 		model: Model,
-		supported: readonly Effort[],
-		permitted: readonly Effort[],
+		supported: readonly ThinkingEffort[],
+		permitted: readonly ThinkingEffort[],
 		selector?: string,
 		alternatives: readonly string[] = [],
 		requested?: string,
@@ -208,7 +209,7 @@ export function matchEffortRule(settings: Settings, model: Model): EffortRule | 
 
 export interface EffortDecision {
 	level: ThinkingLevel | undefined;
-	candidates: Effort[];
+	candidates: ThinkingEffort[];
 	disclosure?: string;
 	rule?: EffortRule;
 	origin: EffortOrigin;
@@ -222,8 +223,8 @@ export function resolveImplicitEffort(
 	origin: EffortOrigin = "default",
 	options?: { alternatives?: readonly string[] },
 ): EffortDecision {
-	const modelEfforts = getSupportedEfforts(model);
-	const supported = THINKING_EFFORTS.filter(effort => modelEfforts.includes(effort));
+	const modelLevels = getSupportedThinkingLevels(model);
+	const supported = THINKING_CHOICES.filter(effort => modelLevels.includes(effort));
 	const rule = cfgEffortPolicyMode.get(settings) === "replacement" ? matchEffortRule(settings, model) : undefined;
 	const explicitFixed =
 		selection?.mode === "fixed" &&
@@ -237,7 +238,7 @@ export function resolveImplicitEffort(
 			? matchesSelectorPattern(selection.selector, `${model.provider}/${model.id}`)
 			: matchesSelectorPattern(selection.selector.toLowerCase(), `${model.provider}/${model.id}`.toLowerCase()));
 	const activeSelection = staleAuto ? { mode: "auto" as const } : selection;
-	if (activeSelection?.mode === "fixed" && activeSelection.level === ThinkingLevel.Off) {
+	if (activeSelection?.mode === "fixed" && activeSelection.level === ThinkingLevel.Off && explicitFixed) {
 		return { level: ThinkingLevel.Off, candidates: permitted, rule, origin };
 	}
 	// An implicit selection on a model without a controllable effort surface has
@@ -260,7 +261,12 @@ export function resolveImplicitEffort(
 				origin,
 			);
 		}
-		return { level: undefined, candidates: permitted, rule, origin };
+		return {
+			level: permitted.length === 1 && permitted[0] === ThinkingLevel.Off ? ThinkingLevel.Off : undefined,
+			candidates: permitted,
+			rule,
+			origin,
+		};
 	}
 	if (activeSelection?.mode === "fixed" && (origin === "caller" || origin === "manual")) {
 		if (activeSelection.level !== ThinkingLevel.Inherit)
@@ -281,7 +287,7 @@ export function resolveImplicitEffort(
 						? savedAuto.includes(effort)
 						: authoredLegacyAutoCeiling
 							? authoredLegacyAutoCeiling === "max" ||
-								THINKING_EFFORTS.indexOf(effort) <= THINKING_EFFORTS.indexOf(Effort.XHigh)
+								THINKING_CHOICES.indexOf(effort) <= THINKING_CHOICES.indexOf(Effort.XHigh)
 							: true,
 				)
 			: permitted;
@@ -306,10 +312,10 @@ export function resolveImplicitEffort(
 					? `Saved Auto efforts for ${selection.selector} were not applied to ${model.provider}/${model.id}; edit this model's Auto set to save new choices.`
 					: undefined,
 		};
-	const requested = activeSelection?.mode === "fixed" ? (activeSelection.level as Effort) : undefined;
+	const requested = activeSelection?.mode === "fixed" ? (activeSelection.level as ThinkingEffort) : undefined;
 	if (!requested) return { level: undefined, candidates, rule, origin };
-	const index = THINKING_EFFORTS.indexOf(requested);
-	const level = [...candidates].reverse().find(effort => THINKING_EFFORTS.indexOf(effort) <= index) ?? candidates[0];
+	const index = THINKING_CHOICES.indexOf(requested);
+	const level = [...candidates].reverse().find(effort => THINKING_CHOICES.indexOf(effort) <= index) ?? candidates[0];
 	return {
 		level,
 		candidates,

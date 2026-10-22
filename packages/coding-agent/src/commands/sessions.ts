@@ -48,9 +48,19 @@ export default class Sessions extends Command {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			if (this.argv.includes("entries") && json) {
-				process.stdout.write(`${JSON.stringify({
-					error: { code: error instanceof RpcJournalError ? error.code : parsed ? "session_unavailable" : "invalid_request", message },
-				})}\n`);
+				process.stdout.write(
+					`${JSON.stringify({
+						error: {
+							code:
+								error instanceof RpcJournalError
+									? error.code
+									: parsed
+										? "session_unavailable"
+										: "invalid_request",
+							message,
+						},
+					})}\n`,
+				);
 				process.exitCode = 1;
 				return;
 			}

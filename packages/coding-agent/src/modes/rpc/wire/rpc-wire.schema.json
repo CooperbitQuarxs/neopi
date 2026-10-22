@@ -2119,6 +2119,18 @@
 			],
 			"type": "string"
 		},
+		"ThinkingEffort": {
+			"enum": [
+				"off",
+				"minimal",
+				"low",
+				"medium",
+				"high",
+				"xhigh",
+				"max"
+			],
+			"type": "string"
+		},
 		"ThinkingLevel": {
 			"enum": [
 				"inherit",
@@ -2466,6 +2478,9 @@
 				},
 				"hidden": {
 					"type": "boolean"
+				},
+				"description": {
+					"type": "string"
 				},
 				"tag": {
 					"type": "string"
@@ -5884,7 +5899,7 @@
 					"description": "The user's selector when it differs from the effective level."
 				},
 				"resolved": {
-					"$ref": "#/$defs/Effort",
+					"$ref": "#/$defs/ThinkingEffort",
 					"description": "The level `auto` resolved to this turn, once classified."
 				}
 			},

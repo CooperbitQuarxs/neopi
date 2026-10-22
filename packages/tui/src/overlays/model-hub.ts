@@ -22,8 +22,8 @@ import type {
 } from "@oh-my-pi/pi-wire";
 import type { KeysApi, Model } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
-import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
+import { getSupportedEfforts, getSupportedThinkingLevels } from "@oh-my-pi/pi-catalog/model-thinking";
+import { Effort, THINKING_CHOICES, THINKING_EFFORTS, type ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { MODEL_KINDS, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { Component, TUI } from "../tui";
@@ -88,10 +88,10 @@ import { EffortToggle } from "./effort-toggle";
 export type HubEffortSelection =
 	| { mode: "inherit" }
 	| { mode: "fixed"; level: ThinkingLevel }
-	| { mode: "auto"; allowed?: Effort[]; selector?: string };
+	| { mode: "auto"; allowed?: ThinkingEffort[]; selector?: string };
 export interface HubEffortRule {
 	selector: string;
-	allowed: Effort[];
+	allowed: ThinkingEffort[];
 }
 
 /**
@@ -187,7 +187,7 @@ export interface ModelHubSource extends ModelBrowserSource {
 	getModelRoleSource(role: string): "global" | "project" | "default";
 	readonly effortRules: readonly HubEffortRule[];
 	/** The policy resolver supplies actual supported levels intersected with the winning global rule. */
-	permittedEfforts(model: Model): readonly Effort[];
+	permittedEfforts(model: Model): readonly ThinkingEffort[];
 	getProjectRoleEffortSelection(role: string): HubEffortSelection | undefined;
 	getGlobalRoleEffortSelection(role: string): HubEffortSelection | undefined;
 	getRoleEffortSelection(role: string): HubEffortSelection | undefined;
@@ -244,6 +244,8 @@ export interface ModelHubCallbacks {
 	onEffortRulesChange?: (rules: HubEffortRule[]) => boolean | void;
 	/** Clear a configured role back to auto-selection. */
 	onUnassign: (role: string, scope?: ModelRoleSelectionScope) => void;
+	/** Persist the selected role's description. Return false to retain its draft. */
+	onRoleDescriptionChange?: (role: string, description: string) => boolean | void;
 	/** Persist a chain and its per-entry effort selections as one mutation. */
 	onFallbackChainChange?: (
 		role: string,
@@ -349,6 +351,12 @@ type StripState =
 			input: Input;
 	  }
 	| {
+			kind: "name";
+			purpose: "description";
+			role: string;
+			input: Input;
+	  }
+	| {
 			kind: "effortLevels";
 			item?: ModelBrowserItem;
 			selector?: string;
@@ -437,6 +445,7 @@ type RolesAction =
 	| "new"
 	| "thinking"
 	| "compaction"
+	| "description"
 	| "save"
 	| "nextPreset"
 	| "prevPreset";
@@ -446,6 +455,7 @@ const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
 	x: "clear",
 	f: "fallback",
 	c: "cycle",
+	D: "description",
 	"[": "earlier",
 	"]": "later",
 	n: "new",
@@ -460,6 +470,7 @@ const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
 const ROLE_PICKER_COLUMNS: readonly TspPickerColumn[] = [
 	{ id: "model", head: "Model", format: "text", priority: 2 },
 	{ id: "thinking", head: "Thinking", format: "dim", priority: 1 },
+	{ id: "compaction", head: "Compaction", format: "dim", priority: 1 },
 ];
 
 /** Kind tab labels (sentence case; acronyms stay upper). */
@@ -721,7 +732,13 @@ export class ModelHubComponent implements Component {
 	#catalogRefreshing = false;
 	#kindTabsMemo: { candidates: readonly ModelBrowserItem[]; tabs: TspPickerProps["tabs"] } | undefined;
 	#pickerRoleItems:
-		| { rows: readonly RolesRow[]; roles: RoleAssignments; cycle: string; items: readonly TspPickerItem[] }
+		| {
+				rows: readonly RolesRow[];
+				roles: RoleAssignments;
+				cycle: string;
+				revision: number;
+				items: readonly TspPickerItem[];
+		  }
 		| undefined;
 	#pickerRolePreview:
 		| {
@@ -990,7 +1007,7 @@ export class ModelHubComponent implements Component {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	#visibleRoleIds(): string[] {
-		return this.#settings.knownRoleIds.filter(role => !this.#settings.getRoleInfo(role).hidden);
+		return [...this.#settings.knownRoleIds];
 	}
 
 	/** Resolve every known role: configured values first, auto-selection for the rest. */
@@ -2126,8 +2143,19 @@ export class ModelHubComponent implements Component {
 				? this.#settings.effortRules[options.ruleIndex]
 				: this.#settings.effortRules.find(entry => entry.selector === options.pendingRuleSelector);
 		const isRule = options.ruleIndex !== undefined || options.pendingRuleSelector !== undefined;
-		let levels: readonly Effort[];
-		if (!isRule && options.item && isPatternSelector(options.item.selector)) {
+		let levels: readonly ThinkingEffort[];
+		if (isRule) {
+			const selector = options.item?.selector ?? rule?.selector ?? options.pendingRuleSelector;
+			const matchesSelector = selector ? compilePatternSelectorMatcher(selector) : undefined;
+			const models = options.item
+				? [options.item.model]
+				: this.#registry.getAll("all").filter(model => matchesSelector?.(`${model.provider}/${model.id}`));
+			levels = THINKING_CHOICES.filter(effort =>
+				effort !== "off" && selector && isPatternSelector(selector)
+					? true
+					: models.some(model => getSupportedThinkingLevels(model).includes(effort)),
+			);
+		} else if (options.item && isPatternSelector(options.item.selector)) {
 			const selector = options.item.selector;
 			const matchesSelector = compilePatternSelectorMatcher(selector);
 			const models =
@@ -2137,17 +2165,24 @@ export class ModelHubComponent implements Component {
 					matchesSelector(`${model.provider}/${model.id}`) &&
 					(!options.role || this.#settings.getRoleInfo(options.role).accepts(model)),
 			);
-			levels = THINKING_EFFORTS.filter(effort =>
+			levels = THINKING_CHOICES.filter(effort =>
 				matches.some(model => this.#settings.permittedEfforts(model).includes(effort)),
 			);
 		} else {
-			levels = isRule
-				? options.item
-					? getSupportedEfforts(options.item.model)
-					: THINKING_EFFORTS
-				: options.item
-					? this.#settings.permittedEfforts(options.item.model)
-					: THINKING_EFFORTS;
+			const matchesSelector = options.selector ? compilePatternSelectorMatcher(options.selector) : undefined;
+			levels = options.item
+				? this.#settings.permittedEfforts(options.item.model)
+				: THINKING_CHOICES.filter(
+						effort =>
+							effort !== "off" ||
+							this.#registry
+								.getAll("all")
+								.some(
+									model =>
+										matchesSelector?.(`${model.provider}/${model.id}`) &&
+										getSupportedThinkingLevels(model).includes("off"),
+								),
+					);
 		}
 		const saved =
 			rule?.allowed ?? (options.baseSelection?.mode === "auto" ? options.baseSelection.allowed : undefined);
@@ -2644,6 +2679,14 @@ export class ModelHubComponent implements Component {
 		this.#strip = { kind: "name", purpose, input };
 	}
 
+	#openDescriptionStrip(role: string): void {
+		if (!this.#callbacks.onRoleDescriptionChange) return;
+		const input = new Input();
+		input.focused = true;
+		input.setValue(this.#settings.getRoleInfo(role).description ?? "");
+		this.#strip = { kind: "name", purpose: "description", role, input };
+	}
+
 	/** The model a Roles row resolves to (assigned role or fallback), whose compaction point `m` edits. */
 	#roleRowModel(): Model | undefined {
 		const row = this.#rolesRows[this.#roleIndex];
@@ -2667,6 +2710,13 @@ export class ModelHubComponent implements Component {
 	#submitNameStrip(): void {
 		const strip = this.#strip;
 		if (strip?.kind !== "name") return;
+		if (strip.purpose === "description") {
+			if (this.#callbacks.onRoleDescriptionChange?.(strip.role, strip.input.getValue().trim()) === false) return;
+			this.#strip = null;
+			this.#frame.chipRanges = [];
+			this.#refreshAfterMutation();
+			return;
+		}
 		if (strip.purpose === "compaction") {
 			const value = strip.input.getValue();
 			const result = this.#callbacks.onCompactionPointChange?.(strip.model, value, compactionConfirmPending(strip));
@@ -3285,6 +3335,9 @@ export class ModelHubComponent implements Component {
 			case "pick":
 				if (row) this.#activateRolesRow(row);
 				return;
+			case "description":
+				if (role) this.#openDescriptionStrip(role);
+				return;
 			case "clear":
 				if (role) this.#unassignRole(role);
 				else if (row?.kind === "fallback") this.#removeFallback(row);
@@ -3616,9 +3669,12 @@ export class ModelHubComponent implements Component {
 			case "recent":
 				text = `Recently used models${scopedSuffix}`;
 				break;
-			case "roles":
-				text = `Model roles — ${formatKeyHint("f")} adds a retry fallback, cleared roles fall back to auto-selection`;
+			case "roles": {
+				const row = this.#rolesRows[this.#roleIndex];
+				text = row && "role" in row ? (this.#settings.getRoleInfo(row.role).description ?? "") : "";
+				text = sanitizeDisplayWarning(text);
 				break;
+			}
 			case "effort":
 				text = "Global implicit effort rules — exact wins, then regex, then glob, each in listed order";
 				break;
@@ -3731,7 +3787,10 @@ export class ModelHubComponent implements Component {
 						: policy?.mode === "fixed"
 							? `  ${policy.level}`
 							: "";
-				let line = ` ${cursor} ${branch} ${selector}${theme.fg("dim", suffix)}`;
+				const model = this.#resolveFallbackEntry(rowDef.role, rowDef.chainIndex)?.item.model;
+				const limit = model && this.#settings.compactionPointFor?.(model)?.limit;
+				const compaction = limit ? `  compact ${limit}` : "";
+				let line = ` ${cursor} ${branch} ${selector}${theme.fg("dim", suffix + compaction)}`;
 				line = this.#finishRolesRow(line, width, hovered);
 				body.push(line);
 				continue;
@@ -3783,8 +3842,10 @@ export class ModelHubComponent implements Component {
 			const cycleIndex = cycleOrder.indexOf(role);
 			const cycleStyled = cycleIndex >= 0 ? theme.fg("accent", `${theme.icon.loop} ${cycleIndex + 1}`) : "";
 
+			const limit = assignment && this.#settings.compactionPointFor?.(assignment.model)?.limit;
+			const compactionStyled = limit ? theme.fg("dim", `compact ${limit}`) : "";
 			let line = ` ${cursor} ${dot} ${tagStyled}  ${value}`;
-			const right = [levelStyled, cycleStyled].filter(part => part.length > 0).join("  ");
+			const right = [levelStyled, compactionStyled, cycleStyled].filter(part => part.length > 0).join("  ");
 			const rightWidth = visibleWidth(right);
 			const lineWidth = visibleWidth(line);
 			if (rightWidth > 0 && lineWidth + rightWidth + 2 <= width) {
@@ -3902,6 +3963,7 @@ export class ModelHubComponent implements Component {
 		if (strip) {
 			if (strip.kind === "name") {
 				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent · h/l pane`;
+				if (strip.purpose === "description") return `${enter} save description · ${cancel} leave field`;
 				if (strip.purpose === "compaction") {
 					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · ${cancel} leave field`;
 				}
@@ -3976,7 +4038,7 @@ export class ModelHubComponent implements Component {
 				this.#presets().names.length > 0 ? ` · ${formatKeyHints(["ctrl+left", "ctrl+right"])} preset` : "";
 			const yank =
 				row?.kind === "role" && (this.#fallbackChains()[row.role]?.length ?? 0) > 0 ? "yank chain" : "yank model";
-			return `${upDown} rows · ${enter} pick · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} ${yank} · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
+			return `${upDown} rows · ${enter} pick · D description · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} ${yank} · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth
@@ -4028,19 +4090,23 @@ export class ModelHubComponent implements Component {
 			const labelText =
 				strip.purpose === "compaction"
 					? `${strip.model.id} limit:`
-					: strip.purpose === "preset"
-						? "Preset name:"
-						: "New role name:";
+					: strip.purpose === "description"
+						? `${strip.role} description:`
+						: strip.purpose === "preset"
+							? "Preset name:"
+							: "New role name:";
 			const label = theme.fg("accent", labelText);
 			// A compaction point is at most a few characters (`1500k`, `12.5%`); a
 			// narrow field leaves the row for its notice.
-			const maxInputWidth = strip.purpose === "compaction" ? 10 : 32;
+			const maxInputWidth = strip.purpose === "compaction" ? 10 : strip.purpose === "description" ? width : 32;
 			const inputWidth = Math.max(8, Math.min(maxInputWidth, width - visibleWidth(labelText) - 24));
 			const inputLine = strip.input.render(inputWidth)[0] ?? "";
 			let hint: string;
 			if (strip.purpose === "compaction") {
 				const notice = compactionNotice(strip, this.#callbacks.previewCompactionPoint);
 				hint = theme.fg(notice.style, notice.text);
+			} else if (strip.purpose === "description") {
+				hint = "";
 			} else {
 				hint = theme.fg("dim", "(letters, digits, - and _)");
 			}
@@ -4419,8 +4485,19 @@ export class ModelHubComponent implements Component {
 					key,
 				);
 			}
-			case "fallback":
-				return node("item", { label: [span("  ↳ ", "dim"), span(rowDef.selector, "muted")] }, undefined, key);
+			case "fallback": {
+				const model = this.#resolveFallbackEntry(rowDef.role, rowDef.chainIndex)?.item.model;
+				const limit = model && this.#settings.compactionPointFor?.(model)?.limit;
+				return node(
+					"item",
+					{
+						label: [span("  ↳ ", "dim"), span(rowDef.selector, "muted")],
+						value: limit ? [span(`compact ${limit}`, "dim")] : undefined,
+					},
+					undefined,
+					key,
+				);
+			}
 			case "role":
 				break;
 		}
@@ -4447,6 +4524,11 @@ export class ModelHubComponent implements Component {
 			detail = assignment
 				? [span(`auto → ${assignment.model.provider}/${assignment.model.id}`, "dim")]
 				: [span("—", "dim")];
+		}
+		const limit = assignment && this.#settings.compactionPointFor?.(assignment.model)?.limit;
+		if (limit) {
+			if (value.length > 0) value.push(span("  "));
+			value.push(span(`compact ${limit}`, "dim"));
 		}
 		// Quick-cycle membership badge (`⟳ 2` = second stop of the ctrl+p cycle).
 		const cycleIndex = cycleOrder.indexOf(role);
@@ -4867,8 +4949,16 @@ export class ModelHubComponent implements Component {
 								{ primary: true },
 							)
 						: pickerAction(
-								strip.purpose === "preset" ? "presetName" : "roleName",
-								strip.purpose === "preset" ? "Save preset" : "Create role",
+								strip.purpose === "description"
+									? "roleDescription"
+									: strip.purpose === "preset"
+										? "presetName"
+										: "roleName",
+								strip.purpose === "description"
+									? "Save description"
+									: strip.purpose === "preset"
+										? "Save preset"
+										: "Create role",
 								"enter",
 								{ primary: true },
 							)
@@ -4924,6 +5014,9 @@ export class ModelHubComponent implements Component {
 					const assigned = this.#roles[row.role];
 					actions.push(
 						roleAction("pick", "Pick model", "enter", true),
+						this.#callbacks.onRoleDescriptionChange
+							? roleAction("description", "Description", "shift+d")
+							: undefined,
 						roleAction("fallback", "Add fallback", "f"),
 						assigned && !assigned.autoSelected ? roleAction("clear", "Clear", "x") : undefined,
 						this.#roleThinkingTarget(row.role) ? roleAction("thinking", "Thinking", "t") : undefined,
@@ -5000,9 +5093,11 @@ export class ModelHubComponent implements Component {
 				label: [
 					span(
 						strip.kind === "name"
-							? strip.purpose === "preset"
-								? "Preset name "
-								: "New role name "
+							? strip.purpose === "description"
+								? `${strip.role} description `
+								: strip.purpose === "preset"
+									? "Preset name "
+									: "New role name "
 							: strip.target === "rule"
 								? "Model effort pattern "
 								: strip.target === "role"
@@ -5079,7 +5174,14 @@ export class ModelHubComponent implements Component {
 		const cycleOrder = this.#cycleOrder();
 		const cycle = cycleOrder.join("\0");
 		const memo = this.#pickerRoleItems;
-		if (memo?.rows === this.#rolesRows && memo.roles === this.#roles && memo.cycle === cycle) return memo.items;
+		const revision = this.#settings.revision;
+		if (
+			memo?.rows === this.#rolesRows &&
+			memo.roles === this.#roles &&
+			memo.cycle === cycle &&
+			memo.revision === revision
+		)
+			return memo.items;
 		const items: TspPickerItem[] = [];
 		this.#rolesRows.forEach((row, index) => {
 			const id = rolesRowKey(row, index);
@@ -5095,9 +5197,19 @@ export class ModelHubComponent implements Component {
 				case "chainKey":
 					items.push({ id, label: row.role, mono: true, icon: "git-branch", detail: "fallback chain" });
 					return;
-				case "fallback":
-					items.push({ id, label: row.selector, mono: true, depth: 1, detail: `fallback ${row.chainIndex + 1}` });
+				case "fallback": {
+					const model = this.#resolveFallbackEntry(row.role, row.chainIndex)?.item.model;
+					const limit = model && this.#settings.compactionPointFor?.(model)?.limit;
+					items.push({
+						id,
+						label: row.selector,
+						mono: true,
+						depth: 1,
+						detail: `fallback ${row.chainIndex + 1}`,
+						...(limit ? { facts: { compaction: `compact ${limit}` } } : {}),
+					});
 					return;
+				}
 				case "role":
 					break;
 			}
@@ -5111,6 +5223,8 @@ export class ModelHubComponent implements Component {
 				if (assignment.thinkingLevel !== ThinkingLevel.Inherit) {
 					facts.thinking = getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label;
 				}
+				const limit = this.#settings.compactionPointFor?.(assignment.model)?.limit;
+				if (limit) facts.compaction = `compact ${limit}`;
 			} else {
 				facts.model = "—";
 			}
@@ -5134,7 +5248,7 @@ export class ModelHubComponent implements Component {
 					: {}),
 			});
 		});
-		this.#pickerRoleItems = { rows: this.#rolesRows, roles: this.#roles, cycle, items };
+		this.#pickerRoleItems = { rows: this.#rolesRows, roles: this.#roles, cycle, revision, items };
 		return items;
 	}
 
@@ -5380,6 +5494,9 @@ export class ModelHubComponent implements Component {
 			case "presetName":
 				this.#submitPresetName();
 				return;
+			case "roleDescription":
+				this.#submitNameStrip();
+				return;
 			case "compactionPoint":
 				this.#submitNameStrip();
 				return;
@@ -5456,6 +5573,9 @@ export class ModelHubComponent implements Component {
 					],
 					"compactionPoint",
 				);
+			}
+			if (strip.purpose === "description") {
+				return row([text([span(`${strip.role} description:`, "accent")]), col([strip.input], { grow: 1 })]);
 			}
 			const preset = strip.purpose === "preset";
 			return node(

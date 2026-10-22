@@ -1922,7 +1922,9 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					return success(id, "get_entries_page", readLiveJournalPage(session.sessionManager, command));
 				} catch (err) {
 					return error(
-						id, "get_entries_page", err instanceof Error ? err.message : String(err),
+						id,
+						"get_entries_page",
+						err instanceof Error ? err.message : String(err),
 						err instanceof RpcJournalError ? err.code : "session_unavailable",
 					);
 				}

@@ -37,7 +37,10 @@ export type RpcJournalErrorCode =
 	| "legacy_history_identity_required"
 	| "session_unavailable";
 export class RpcJournalError extends Error {
-	constructor(message: string, readonly code: RpcJournalErrorCode) {
+	constructor(
+		message: string,
+		readonly code: RpcJournalErrorCode,
+	) {
 		super(message);
 		this.name = "RpcJournalError";
 	}
@@ -64,7 +67,12 @@ interface JournalCursor {
 
 function decodeCursor(cursor: string): JournalCursor {
 	const invalid = () => new RpcJournalError("Invalid native journal cursor", "invalid_cursor");
-	if (typeof cursor !== "string" || !cursor.length || cursor.length > MAX_CURSOR_CHARS || !/^[A-Za-z0-9_-]+$/.test(cursor))
+	if (
+		typeof cursor !== "string" ||
+		!cursor.length ||
+		cursor.length > MAX_CURSOR_CHARS ||
+		!/^[A-Za-z0-9_-]+$/.test(cursor)
+	)
 		throw invalid();
 	const bytes = Buffer.from(cursor, "base64url");
 	if (bytes.toString("base64url") !== cursor) throw invalid();
@@ -77,16 +85,25 @@ function decodeCursor(cursor: string): JournalCursor {
 	if (!isRecord(value)) throw invalid();
 	const { version, scope, direction, sessionId, sessionFile, leafId, totalEntries, boundaryId, offset } = value;
 	if (
-		version !== 1 || (scope !== "journal" && scope !== "branch") ||
+		version !== 1 ||
+		(scope !== "journal" && scope !== "branch") ||
 		(direction !== "forward" && direction !== "backward") ||
-		typeof sessionId !== "string" || !sessionId.length ||
-		typeof sessionFile !== "string" || !sessionFile.length ||
+		typeof sessionId !== "string" ||
+		!sessionId.length ||
+		typeof sessionFile !== "string" ||
+		!sessionFile.length ||
 		!(leafId === null || (typeof leafId === "string" && leafId.length > 0)) ||
 		!(boundaryId === null || (typeof boundaryId === "string" && boundaryId.length > 0)) ||
-		typeof totalEntries !== "number" || !Number.isSafeInteger(totalEntries) || totalEntries < 0 ||
-		typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 || offset > totalEntries ||
+		typeof totalEntries !== "number" ||
+		!Number.isSafeInteger(totalEntries) ||
+		totalEntries < 0 ||
+		typeof offset !== "number" ||
+		!Number.isSafeInteger(offset) ||
+		offset < 0 ||
+		offset > totalEntries ||
 		(totalEntries === 0) !== (boundaryId === null)
-	) throw invalid();
+	)
+		throw invalid();
 	return { version, scope, direction, sessionId, sessionFile, leafId, totalEntries, boundaryId, offset };
 }
 
@@ -119,13 +136,21 @@ export function pageRpcJournal(snapshot: JournalSnapshot, options: RpcJournalPag
 			throw new RpcJournalError("Native journal identity changed", "stale_cursor");
 		if (scope === "branch" && cursor.leafId !== snapshot.leafId)
 			throw new RpcJournalError("Native branch leaf changed", "leaf_changed");
-		if (entries.length < cursor.totalEntries ||
-			(cursor.totalEntries > 0 && entries[cursor.totalEntries - 1]?.id !== cursor.boundaryId))
+		if (
+			entries.length < cursor.totalEntries ||
+			(cursor.totalEntries > 0 && entries[cursor.totalEntries - 1]?.id !== cursor.boundaryId)
+		)
 			throw new RpcJournalError("Native journal prefix changed", "stale_cursor");
 	} else {
 		cursor = {
-			version: 1, scope, direction, sessionId, sessionFile, leafId: snapshot.leafId,
-			totalEntries: entries.length, boundaryId: entries.at(-1)?.id ?? null,
+			version: 1,
+			scope,
+			direction,
+			sessionId,
+			sessionFile,
+			leafId: snapshot.leafId,
+			totalEntries: entries.length,
+			boundaryId: entries.at(-1)?.id ?? null,
 			offset: direction === "forward" ? 0 : entries.length,
 		};
 	}
@@ -144,7 +169,11 @@ export function pageRpcJournal(snapshot: JournalSnapshot, options: RpcJournalPag
 	if (direction === "backward") page.reverse();
 	const more = direction === "forward" ? offset < cursor.totalEntries : offset > 0;
 	return {
-		entries: page, sessionId, sessionFile, leafId: cursor.leafId, totalEntries: cursor.totalEntries,
+		entries: page,
+		sessionId,
+		sessionFile,
+		leafId: cursor.leafId,
+		totalEntries: cursor.totalEntries,
 		...(more ? { nextCursor: Buffer.from(JSON.stringify({ ...cursor, offset }), "utf8").toString("base64url") } : {}),
 	};
 }
@@ -154,14 +183,22 @@ export function readLiveJournalPage(manager: SessionManager, options: RpcJournal
 	if (!file) throw new RpcJournalError("Session has no native journal file", "session_unavailable");
 	if (!manager.hasDurableEntryIds())
 		throw new RpcJournalError("Legacy session has no durable entry identities", "legacy_history_identity_required");
-	return pageRpcJournal({
-		sessionId: manager.getSessionId(), sessionFile: canonicalSessionFile(file), leafId: manager.getLeafId(),
-		entries: options.scope === "branch" ? manager.getBranchView() : manager.snapshotForReplication().entries,
-	}, options);
+	return pageRpcJournal(
+		{
+			sessionId: manager.getSessionId(),
+			sessionFile: canonicalSessionFile(file),
+			leafId: manager.getLeafId(),
+			entries: options.scope === "branch" ? manager.getBranchView() : manager.snapshotForReplication().entries,
+		},
+		options,
+	);
 }
 
 /** Read persisted records without a SessionManager, writer lease, agent, or file migration. */
-export async function readSessionJournalPage(file: string, options: RpcJournalPageOptions = {}): Promise<RpcJournalPage> {
+export async function readSessionJournalPage(
+	file: string,
+	options: RpcJournalPageOptions = {},
+): Promise<RpcJournalPage> {
 	const sessionFile = canonicalSessionFile(file);
 	const loaded = await loadSessionFile(sessionFile, undefined, { throwIfMissing: true });
 	const header = loaded.entries[0];
@@ -177,12 +214,19 @@ export async function readSessionJournalPage(file: string, options: RpcJournalPa
 		entries.push(entry);
 	}
 	const leafId = entries.at(-1)?.id ?? null;
-	const selected = options.scope === "branch"
-		? walkSessionBranch(leafId, new Map(entries.map(entry => [entry.id, entry])))
-		: entries;
+	const selected =
+		options.scope === "branch"
+			? walkSessionBranch(leafId, new Map(entries.map(entry => [entry.id, entry])))
+			: entries;
 	const blobs = new BlobStore(getBlobsDir());
-	return pageRpcJournal({
-		sessionId: header.id, sessionFile, leafId, entries: selected,
-		resolveEntry: entry => resolveBlobRefsInEntriesSync([entry], blobs),
-	}, options);
+	return pageRpcJournal(
+		{
+			sessionId: header.id,
+			sessionFile,
+			leafId,
+			entries: selected,
+			resolveEntry: entry => resolveBlobRefsInEntriesSync([entry], blobs),
+		},
+		options,
+	);
 }
