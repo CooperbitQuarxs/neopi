@@ -22,6 +22,7 @@ import type { SessionEntry, SessionTreeNode } from "../../session/session-entrie
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
+import type { RpcModel } from "./rpc-model";
 import {
 	RPC_MESSAGES_PAGE_BUSY_ERROR,
 	RPC_MESSAGES_PAGE_STALE_ERROR,
@@ -1095,9 +1096,9 @@ export class RpcClient {
 	/**
 	 * Get list of available models.
 	 */
-	async getAvailableModels(): Promise<ModelInfo[]> {
+	async getAvailableModels(): Promise<RpcModel[]> {
 		const response = await this.#send({ type: "get_available_models" });
-		return this.#getData<{ models: ModelInfo[] }>(response).models;
+		return this.#getData<{ models: RpcModel[] }>(response).models;
 	}
 
 	/** Create and immediately register a mixture in this RPC session's workspace. */

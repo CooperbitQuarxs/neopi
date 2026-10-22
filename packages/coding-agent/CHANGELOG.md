@@ -9,6 +9,7 @@
 
 ### Added
 
+- RPC model lists and session snapshots now report native Fast mode support separately from the requested and active session toggles ([NeoCode #129](https://github.com/PsychedelicShayna/neocode/issues/129)).
 - Change a running subagent's reasoning level and fast mode through RPC, `npi ctl`, or its focused Agent Hub view without interrupting its turn; selections survive restart, and agent listings show current model and effort ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
 - Choose the model for the next live call with `live.model` in Settings or `/live model <slug>`; `/live model` shows the configured slug and the default remains `gpt-live-1-codex`.
 - Launch named workers and advisors yourself with `/agent launch`, choose the model, supported effort, tools and orchestration, and confirm the resolved model and cost warning before spawning ([#13](https://github.com/PsychedelicShayna/neopi/issues/13)).
