@@ -67,8 +67,12 @@ both local freshness and cache restoration, then stores the new addon.
 An unavailable cache falls back to the normal build.
 
 The key hashes native source and build-driver bytes, compiler settings including
-`OMP_NATIVE_FEATURES`, and the host/toolchain fingerprint. Cache hits verify
-SHA-256 and the native release version before writing a checkout-local stamp.
+`OMP_NATIVE_FEATURES`, and the host/toolchain fingerprint. It includes `RUSTC`,
+`RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `CARGO_PROFILE_*` and `CARGO_BUILD_*`
+overrides. Compiler fingerprinting uses `RUSTC`, then `CARGO_BUILD_RUSTC`, then
+`rustc` on PATH. `RUSTDOCFLAGS` is excluded because this build does not run rustdoc.
+Cache hits verify SHA-256 and the native release version before writing a
+checkout-local stamp.
 The cache keeps eight recently stored addons, skipping entries in use.
 `ledger.jsonl` records each native build phase as `hit`, `miss`, or `store`,
 with its key, duration in seconds, exit code, and whether it published an addon.
