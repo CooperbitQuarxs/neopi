@@ -78,6 +78,7 @@ import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } f
 import { RpcBtwController } from "./rpc-btw";
 import { RpcGoalController } from "./rpc-goal";
 import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
+import { serializeRpcModel } from "./rpc-model";
 import { RpcOutputWriter } from "./rpc-output";
 import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } from "./rpc-plan-mode";
 import { RpcExtensionUserMessageTracker, RpcPromptResults, watchAndReportPromptResult } from "./rpc-prompt-results";
@@ -2115,7 +2116,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 
 			case "get_available_models": {
 				await session.modelRegistry.awaitBackgroundRefresh();
-				const models = session.getAvailableModels();
+				const models = session.getAvailableModels().map(serializeRpcModel);
 				return success(id, "get_available_models", { models });
 			}
 

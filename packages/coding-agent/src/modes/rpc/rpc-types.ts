@@ -26,6 +26,7 @@ import type { MixtureConfigScope, MixtureDefinition } from "@oh-my-pi/pi-tui/ove
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import type { LivePhase } from "../../live/controller";
 import type { RpcMessagesPage } from "./rpc-messages";
+import type { RpcModel } from "./rpc-model";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
@@ -167,7 +168,7 @@ export type RpcCommand =
 // ============================================================================
 
 export interface RpcSessionState {
-	model?: Model;
+	model?: RpcModel;
 	thinkingLevel: ThinkingLevel | undefined;
 	isStreaming: boolean;
 	isCompacting: boolean;
@@ -649,7 +650,7 @@ export type RpcResponse =
 			type: "response";
 			command: "get_available_models";
 			success: true;
-			data: { models: Model[] };
+			data: { models: RpcModel[] };
 	  }
 	| {
 			id?: string;

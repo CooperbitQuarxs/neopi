@@ -6,6 +6,7 @@ import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import type { AgentSession } from "../../session/agent-session";
 import { calculateTokensPerSecond } from "../../utils/token-rate";
 import { MAX_RPC_FRAME_BYTES } from "./rpc-frame";
+import { serializeRpcModel } from "./rpc-model";
 import { rpcPlanModeState } from "./rpc-plan-mode";
 import { isRpcSessionSettled, type RpcScheduledTurnProbe } from "./rpc-session-settle";
 import type { RpcSessionState } from "./rpc-types";
@@ -60,8 +61,9 @@ export function copyQueue(entries: readonly string[], limit: QueueLimit | undefi
 
 export function buildRpcSessionState(session: AgentSession, options: RpcSessionStateOptions): RpcSessionState {
 	const queuedMessages = session.getQueuedMessages();
+	const model = session.model;
 	return {
-		model: session.model,
+		model: model ? serializeRpcModel(model) : undefined,
 		thinkingLevel: session.thinkingLevel,
 		isStreaming: session.isStreaming,
 		isCompacting: session.isCompacting,
