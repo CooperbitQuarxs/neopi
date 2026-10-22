@@ -10,6 +10,7 @@ import { RpcPendingExtensionRequests } from "@oh-my-pi/pi-coding-agent/modes/rpc
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { cfgCompactionEnabled, cfgCompactionThresholdTokens } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 describe("native model configuration", () => {
@@ -70,6 +71,24 @@ describe("native model configuration", () => {
 		expect(result.models[0]).toMatchObject({ provider: "anthropic", id: "claude-sonnet-4-5", available: true });
 		expect(result.providers.find(provider => provider.id === "anthropic")).toMatchObject({ authenticated: true, mark: { icon: "provider:anthropic" } });
 		expect(JSON.stringify(result)).not.toContain("fixture-key-never-returned");
+	});
+
+	test("catalog reports the native effective budget separately from model capability", async () => {
+		cfgCompactionEnabled.override(settings, true);
+		cfgCompactionThresholdTokens.override(settings, 50000);
+		const result = await configuration.read();
+		expect(result.models[0]?.effectiveContextWindow).toBe(50000);
+		expect(result.models[0]?.contextWindow).toBe(session.model?.contextWindow);
+	});
+
+	test("role storage can be changed through its owner without dropping either saved scope", async () => {
+		await configuration.setRole({ role: "reviewer", scope: "global", selector: "anthropic/claude-sonnet-4-5", expected: { selector: null, effort: null } });
+		await configuration.setRole({ role: "reviewer", scope: "project", selector: "re:^anthropic/", expected: { selector: null, effort: null } });
+		await configuration.setRoleStorage({ value: "global", expected: "project" });
+		expect(cfgModelRoleStorage.get(settings)).toBe("global");
+		expect(settings.getGlobalModelRole("reviewer")).toBe("anthropic/claude-sonnet-4-5");
+		expect(settings.getProjectModelRole("reviewer")).toBe("re:^anthropic/");
+		await expect(configuration.setRoleStorage({ value: "project", expected: "project" })).rejects.toMatchObject({ code: "configuration_conflict" });
 	});
 
 	test("login cancellation is connection-owned and disconnect aborts the remaining flow", async () => {

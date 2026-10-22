@@ -126,6 +126,11 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		params: { role: "string", scope: "'global' | 'project'", "selector?": "string", "effort?": "ModelEffortSelection", expected: "ModelRoleConfigurationValue" },
 	},
 	{
+		name: "set_model_role_storage",
+		doc: "Choose native global or project role storage, rejecting a stale preference.",
+		params: { value: "'global' | 'project'", expected: "'global' | 'project'" },
+	},
+	{
 		name: "set_effort_rules",
 		doc: "Save or clear native implicit effort rules in one scope, rejecting a stale expected value.",
 		params: { scope: "'global' | 'project'", "rules?": "ModelEffortRule[]", expected: "ModelEffortRule[] | null" },

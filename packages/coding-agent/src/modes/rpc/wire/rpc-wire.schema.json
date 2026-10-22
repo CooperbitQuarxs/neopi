@@ -219,6 +219,17 @@
 				"clientOmit": []
 			},
 			{
+				"name": "set_model_role_storage",
+				"doc": "Choose native global or project role storage, rejecting a stale preference.",
+				"params": "SetModelRoleStorageParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "set_effort_rules",
 				"doc": "Save or clear native implicit effort rules in one scope, rejecting a stale expected value.",
 				"params": "SetEffortRulesParams",
@@ -8147,6 +8158,29 @@
 			"required": [
 				"role",
 				"scope",
+				"expected"
+			]
+		},
+		"SetModelRoleStorageParams": {
+			"type": "object",
+			"properties": {
+				"value": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"expected": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				}
+			},
+			"required": [
+				"value",
 				"expected"
 			]
 		},

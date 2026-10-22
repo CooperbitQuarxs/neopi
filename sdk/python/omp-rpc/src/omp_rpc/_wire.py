@@ -4574,6 +4574,13 @@ class WireClient:
             params["effort"] = dict(effort)
         self._command("set_model_role_configuration", params)
 
+    def set_model_role_storage(self, value: Literal["global", "project"], expected: Literal["global", "project"]) -> None:
+        """Choose native global or project role storage, rejecting a stale preference."""
+        params: dict[str, object] = {}
+        params["value"] = value
+        params["expected"] = expected
+        self._command("set_model_role_storage", params)
+
     def set_effort_rules(self, scope: Literal["global", "project"], expected: Sequence[Mapping[str, JsonValue]] | None, *, rules: Sequence[Mapping[str, JsonValue]] | None = None) -> None:
         """Save or clear native implicit effort rules in one scope, rejecting a stale expected value."""
         params: dict[str, object] = {}

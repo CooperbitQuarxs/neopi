@@ -13,6 +13,7 @@ import { cfgDisabledProviders, cfgModelRoleStorage } from "../../config/model-se
 import { getRoleInfo } from "../../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../../config/model-resolver";
 import type { AgentSession } from "../../session/agent-session";
+import { resolveEffectiveContextWindow } from "../../session/model-compaction-threshold";
 import { RpcRoles } from "./rpc-roles";
 import { serializeRpcModel } from "./rpc-model";
 
@@ -79,7 +80,7 @@ export class RpcModelsConfiguration {
 				authenticated: modelRegistry.authStorage.keys.source(id) !== undefined,
 				authSource: modelRegistry.authStorage.keys.describe(id, this.session.sessionId) ?? null,
 				disabled: disabled.has(id),
-				available: all.some(model => model.provider === id && available.has(`${id}/${model.id}`)),
+				available: !disabled.has(id) && all.some(model => model.provider === id && available.has(`${id}/${model.id}`)),
 				loginProviders: oauth.filter(provider => (provider.storeCredentialsAs ?? provider.id) === id).map(provider => ({ id: provider.id, name: provider.name, available: provider.available })),
 				envVars: providerEntry(id)?.envVars ?? [],
 				discovery: modelRegistry.getProviderDiscoveryState(id) ?? null,
@@ -91,6 +92,7 @@ export class RpcModelsConfiguration {
 					provider: model.provider, id: model.id, name: model.name, kind: modelKind(model),
 					available: !disabled.has(model.provider) && available.has(`${model.provider}/${model.id}`),
 					contextWindow: model.contextWindow, maxTokens: model.maxTokens, reasoning: model.reasoning,
+					effectiveContextWindow: resolveEffectiveContextWindow(this.session, model),
 					cost: model.cost, supportsFastMode: serializeRpcModel(model).supportsFastMode,
 					supportedThinkingLevels,
 					permittedEfforts: supportedThinkingLevels.filter(level => !rule || rule.allowed.includes(level)),
@@ -134,6 +136,16 @@ export class RpcModelsConfiguration {
 		const receipt = await settings.persistWithReceipt(() => settings.setRoleModelAndEffort(input.role, input.selector, input.effort, input.scope));
 		if (receipt.status === "conflict")
 			throw new RpcModelsConfigurationError("configuration_conflict", "Another native mutation superseded this scoped role. Refresh before saving.");
+	}
+
+	async setRoleStorage(input: { value: "global" | "project"; expected: "global" | "project" }): Promise<void> {
+		const { settings } = this.session;
+		await settings.reloadFromDisk();
+		if (cfgModelRoleStorage.get(settings) !== input.expected)
+			throw new RpcModelsConfigurationError("configuration_conflict", "Native role storage changed in another client. Refresh before saving.");
+		const receipt = await settings.persistWithReceipt(() => cfgModelRoleStorage.set(settings, input.value));
+		if (receipt.status === "conflict")
+			throw new RpcModelsConfigurationError("configuration_conflict", "Another native mutation superseded this role-storage preference. Refresh before saving.");
 	}
 
 	async setEffortRules(input: RpcSetEffortRules): Promise<void> {

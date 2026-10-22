@@ -10325,6 +10325,57 @@ func (v *SetModelRoleConfigurationCommandScope) UnmarshalJSON(data []byte) error
 	return unknownValue("SetModelRoleConfigurationCommandScope", s)
 }
 
+// SetModelRoleStorageCommand holds the parameters of "set_model_role_storage".
+type SetModelRoleStorageCommand struct {
+	Value    SetModelRoleStorageCommandValue    `json:"value"`
+	Expected SetModelRoleStorageCommandExpected `json:"expected"`
+}
+
+// SetModelRoleStorage sends "set_model_role_storage": Choose native global or project role storage, rejecting a stale preference.
+func (c Commands) SetModelRoleStorage(ctx context.Context, p SetModelRoleStorageCommand) error {
+	return c.call(ctx, "set_model_role_storage", p, 0, nil)
+}
+
+type SetModelRoleStorageCommandValue string
+
+const (
+	SetModelRoleStorageCommandValueGlobal  SetModelRoleStorageCommandValue = "global"
+	SetModelRoleStorageCommandValueProject SetModelRoleStorageCommandValue = "project"
+)
+
+func (v *SetModelRoleStorageCommandValue) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SetModelRoleStorageCommandValue")
+	if err != nil {
+		return err
+	}
+	switch value := SetModelRoleStorageCommandValue(s); value {
+	case SetModelRoleStorageCommandValueGlobal, SetModelRoleStorageCommandValueProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("SetModelRoleStorageCommandValue", s)
+}
+
+type SetModelRoleStorageCommandExpected string
+
+const (
+	SetModelRoleStorageCommandExpectedGlobal  SetModelRoleStorageCommandExpected = "global"
+	SetModelRoleStorageCommandExpectedProject SetModelRoleStorageCommandExpected = "project"
+)
+
+func (v *SetModelRoleStorageCommandExpected) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SetModelRoleStorageCommandExpected")
+	if err != nil {
+		return err
+	}
+	switch value := SetModelRoleStorageCommandExpected(s); value {
+	case SetModelRoleStorageCommandExpectedGlobal, SetModelRoleStorageCommandExpectedProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("SetModelRoleStorageCommandExpected", s)
+}
+
 // SetEffortRulesCommand holds the parameters of "set_effort_rules".
 type SetEffortRulesCommand struct {
 	Scope    SetEffortRulesCommandScope `json:"scope"`

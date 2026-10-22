@@ -103,6 +103,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_models_configuration" }
 	| ({ id?: string; type: "set_model_role_configuration" } & RpcSetModelRoleConfiguration)
 	| ({ id?: string; type: "set_effort_rules" } & RpcSetEffortRules)
+	| { id?: string; type: "set_model_role_storage"; value: "global" | "project"; expected: "global" | "project" }
 	| { id?: string; type: "set_provider_api_key"; providerId: string; apiKey: string }
 	| { id?: string; type: "cancel_login"; loginId: string }
 
@@ -702,7 +703,7 @@ export type RpcResponse =
 			data: RpcSetRoleResult;
 	  }
 	| { id?: string; type: "response"; command: "get_models_configuration"; success: true; data: object }
-	| { id?: string; type: "response"; command: "set_model_role_configuration" | "set_effort_rules" | "set_provider_api_key" | "cancel_login"; success: true }
+	| { id?: string; type: "response"; command: "set_model_role_configuration" | "set_model_role_storage" | "set_effort_rules" | "set_provider_api_key" | "cancel_login"; success: true }
 
 	// Thinking
 	| { id?: string; type: "response"; command: "set_thinking_level"; success: true }

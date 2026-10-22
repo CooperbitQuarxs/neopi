@@ -6262,6 +6262,12 @@ pub struct SetModelRoleConfigurationParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRoleStorageParams {
+	pub value: SetModelRoleStorageParamsValue,
+	pub expected: SetModelRoleStorageParamsExpected,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetEffortRulesParams {
 	pub scope: SetEffortRulesParamsScope,
 	#[serde(deserialize_with = "Deserialize::deserialize")]
@@ -7696,6 +7702,42 @@ impl SetModelRoleConfigurationParamsScope {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SetModelRoleStorageParamsValue {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl SetModelRoleStorageParamsValue {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SetModelRoleStorageParamsExpected {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl SetModelRoleStorageParamsExpected {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SetEffortRulesParamsScope {
 	#[serde(rename = "global")]
 	Global,
@@ -8141,6 +8183,24 @@ pub struct SetModelRoleConfigurationCommand {
 
 impl Command for SetModelRoleConfigurationCommand {
 	const NAME: &'static str = "set_model_role_configuration";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Choose native global or project role storage, rejecting a stale preference.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRoleStorageCommand {
+	pub value: SetModelRoleStorageParamsValue,
+	pub expected: SetModelRoleStorageParamsExpected,
+}
+
+impl Command for SetModelRoleStorageCommand {
+	const NAME: &'static str = "set_model_role_storage";
 	const TIMEOUT_MS: Option<u64> = None;
 	type Output = ();
 

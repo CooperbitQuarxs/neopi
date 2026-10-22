@@ -2033,6 +2033,11 @@ export interface SetModelRoleConfigurationParams {
 	effort?: ModelEffortSelection;
 }
 
+export interface SetModelRoleStorageParams {
+	value: "global" | "project";
+	expected: "global" | "project";
+}
+
 export interface SetEffortRulesParams {
 	scope: "global" | "project";
 	expected: ModelEffortRule[] | null;
@@ -2395,6 +2400,7 @@ export interface RpcWireCommands {
 	set_role: { params: SetRoleParams; result: SetRoleResult };
 	get_models_configuration: { params: undefined; result: GetModelsConfigurationResult };
 	set_model_role_configuration: { params: SetModelRoleConfigurationParams; result: undefined };
+	set_model_role_storage: { params: SetModelRoleStorageParams; result: undefined };
 	set_effort_rules: { params: SetEffortRulesParams; result: undefined };
 	set_provider_api_key: { params: SetProviderApiKeyParams; result: undefined };
 	cancel_login: { params: CancelLoginParams; result: undefined };

@@ -5,8 +5,8 @@ import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpe
 import type { RpcCommand, RpcResponse, RpcExtensionUIResponse } from "./rpc-types";
 import { RpcModelsConfiguration, RpcModelsConfigurationError } from "./rpc-models-configuration";
 
-type ModelsCommand = Extract<RpcCommand, { type: "get_models_configuration" | "set_model_role_configuration" | "set_effort_rules" | "set_provider_api_key" | "cancel_login" | "get_login_providers" | "login" | "get_logout_accounts" | "logout" }>;
-const COMMANDS = new Set(["get_models_configuration", "set_model_role_configuration", "set_effort_rules", "set_provider_api_key", "cancel_login", "get_login_providers", "login", "get_logout_accounts", "logout"]);
+type ModelsCommand = Extract<RpcCommand, { type: "get_models_configuration" | "set_model_role_configuration" | "set_model_role_storage" | "set_effort_rules" | "set_provider_api_key" | "cancel_login" | "get_login_providers" | "login" | "get_logout_accounts" | "logout" }>;
+const COMMANDS = new Set(["get_models_configuration", "set_model_role_configuration", "set_model_role_storage", "set_effort_rules", "set_provider_api_key", "cancel_login", "get_login_providers", "login", "get_logout_accounts", "logout"]);
 
 interface PendingLogin {
 	resolve(response: RpcExtensionUIResponse): void;
@@ -38,6 +38,7 @@ export class RpcModelsCommands {
 			switch (command.type) {
 				case "get_models_configuration": return success(await this.#configuration.read());
 				case "set_model_role_configuration": await this.#configuration.setRole(command); return success();
+				case "set_model_role_storage": await this.#configuration.setRoleStorage(command); return success();
 				case "set_effort_rules": await this.#configuration.setEffortRules(command); return success();
 				case "set_provider_api_key": {
 					if (typeof command.providerId !== "string" || !session.modelRegistry.hasProvider(command.providerId)) throw new Error("Unknown native inference provider");

@@ -45,6 +45,7 @@ export const RPC_COMMAND_TYPES = [
 	"set_role",
 	"get_models_configuration",
 	"set_model_role_configuration",
+	"set_model_role_storage",
 	"set_effort_rules",
 	"set_provider_api_key",
 	"cancel_login",
