@@ -103,6 +103,8 @@ Native TSP lists and pickers retain selection, filtering, and history. Their ter
 
 Press `/` to enter pattern mode. Nothing filters until Enter confirms the draft and returns to navigation. Arrows, Tab and Ctrl-keys stay in the field while typing; they cannot switch panes or move results. Esc cancels and clears the search. Leaving the field without Enter discards its edits.
 
+In settings, Esc restores the tab, section sidebar focus, selected setting and scroll position from before `/`. After confirmation, the footer shows normal navigation, including half-page and boundary motions, instead of pattern-entry hints.
+
 Ordinary patterns use fuzzy matching, but punctuation-bearing words match their literal spelling rather than losing punctuation: `.{1000}` does not search for `1000`. Use `/pattern/` for **Vim search syntax, very-magic by default**. From navigation, type `//^claude/` then Enter: the first slash opens the field, and `/^claude/` is the pattern. The existing `/pattern` and `re:pattern` forms use the same dialect. Invalid or unsupported expressions show an inline error and match nothing.
 
 | Pattern text | Meaning |

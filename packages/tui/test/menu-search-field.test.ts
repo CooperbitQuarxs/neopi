@@ -94,6 +94,19 @@ describe("literal menu search fields", () => {
 		expect(field.render(80, theme)).toContain("Search:");
 	});
 
+	it("shows normal navigation motions after confirming a pattern", () => {
+		const field = new MenuSearchField("", true);
+		field.handleInput("voice");
+		field.handleInput("\r");
+		const confirmed = field.render(160, theme);
+		expect(confirmed).toContain("Ctrl-d/u");
+		expect(confirmed).toContain("gg/G");
+		expect(confirmed).toContain("j/k");
+		expect(confirmed).not.toContain("Enter confirm");
+		field.focused = true;
+		expect(field.render(160, theme)).toContain("Enter confirm");
+	});
+
 	it("renders bounded search hints without raw tabs", () => {
 		const field = new MenuSearchField("a\tb long query");
 		for (const width of [0, 4, 12, 40]) {

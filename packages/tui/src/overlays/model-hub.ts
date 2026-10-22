@@ -4026,7 +4026,19 @@ export class ModelHubComponent implements Component {
 			return `${MODEL_SCOPE_HINT}${facts}`;
 		const detail = this.#surfaceFooterHint();
 		if (this.#strip || this.#filterEditing) return detail;
-		return `h/l pane · / search · ${detail}${facts}`;
+		const query =
+			this.#assigning === null && entry.kind === "roles"
+				? this.#rolesSearch.query
+				: this.#assigning === null && entry.kind === "effort"
+					? this.#effortSearch.query
+					: this.#browser.query;
+		const motions =
+			this.#focus === "list" &&
+			query &&
+			(this.#isBrowserView(entry) || entry.kind === "roles" || entry.kind === "effort")
+				? "gg/G ends · Ctrl-u/d half · "
+				: "";
+		return `h/l pane · / search · ${motions}${detail}${facts}`;
 	}
 
 	#surfaceFooterHint(): string {
