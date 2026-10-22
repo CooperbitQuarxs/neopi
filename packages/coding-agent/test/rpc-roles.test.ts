@@ -94,6 +94,18 @@ describe("RpcRoles", () => {
 		});
 	});
 
+	test("title follows tiny until assigned and advertises the fork-mode exception", () => {
+		settings.setModelRole("tiny", "anthropic/claude-haiku-4-5:low");
+		const roles = new RpcRoles(session);
+		expect(roles.list().roles.find(role => role.id === "title")).toMatchObject({
+			tag: "TITLE",
+			description: "Generates session titles and /rename suggestions; fork mode uses the foreground model instead.",
+			resolved: { modelId: "claude-haiku-4-5", thinkingLevel: "low" },
+		});
+		settings.setModelRole("title", "anthropic/claude-sonnet-4-5");
+		expect(roles.list().roles.find(role => role.id === "title")?.resolved?.modelId).toBe("claude-sonnet-4-5");
+	});
+
 	test("deck-inbox is a built-in chat role with the subscription Luna default", () => {
 		const luna = createMockModel({ provider: "openai-codex", id: "gpt-6-luna" }).model;
 		vi.spyOn(modelRegistry, "getAvailable").mockImplementation(() => [luna]);

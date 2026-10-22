@@ -111,6 +111,17 @@ describe("InteractiveMode tiny-title prewarm", () => {
 		expect(prewarm).toHaveBeenCalledWith("lfm2.5-230m");
 	});
 
+	it("prewarms the local title override instead of a remote tiny role", async () => {
+		session.settings.setModelRole("tiny", "anthropic/claude-haiku-4-5");
+		session.settings.setModelRole("title", "local/lfm2.5-230m");
+		const prewarm = vi.spyOn(tinyTitleClient, "prewarm").mockImplementation(() => {});
+		await mode.init();
+		const immediate = Promise.withResolvers<void>();
+		setImmediate(immediate.resolve);
+		await immediate.promise;
+		expect(prewarm).toHaveBeenCalledWith("lfm2.5-230m");
+	});
+
 	it("does not prewarm when the session is already named", async () => {
 		session.settings.setModelRole("tiny", "local/lfm2.5-230m");
 		vi.spyOn(mode.sessionManager, "getSessionName").mockReturnValue("resumed-session");

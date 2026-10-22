@@ -84,7 +84,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Agent monitor",
 	],
 	context: ["General", "Compaction", "Rules (TTSR)", "Experimental"],
-	memory: ["General", "Auto-Learn", "Mnemopi", "Hindsight", "Sharpshooter"],
+	memory: ["General", "Chronicler", "Auto-Learn", "Mnemopi", "Hindsight", "Sharpshooter"],
 	files: ["Editing", "Reading", "Read Summaries", "LSP"],
 	shell: ["Bash", "Eval & Runtimes"],
 	tools: [

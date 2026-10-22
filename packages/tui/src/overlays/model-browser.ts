@@ -61,6 +61,7 @@ export type ModelRole =
 	| "compaction"
 	| "commit"
 	| "tiny"
+	| "title"
 	| "memory"
 	| "task"
 	| "advisor"
@@ -87,6 +88,7 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"compaction",
 	"commit",
 	"tiny",
+	"title",
 	"memory",
 	"task",
 	"advisor",
@@ -114,6 +116,7 @@ export const CHAT_MODEL_ROLE_IDS: ModelRole[] = [
 	"compaction",
 	"commit",
 	"tiny",
+	"title",
 	"memory",
 	"task",
 	"advisor",

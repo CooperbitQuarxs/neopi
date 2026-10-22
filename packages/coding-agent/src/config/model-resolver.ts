@@ -1158,6 +1158,7 @@ const ROLE_PRIORITY_ALIAS: Partial<Record<ModelRole, keyof typeof MODEL_PRIO>> =
 	prose: "smol",
 	memory: "smol",
 	tiny: "smol",
+	title: "smol",
 };
 
 interface ConfiguredRoleFallback {
@@ -1175,6 +1176,7 @@ const ROLE_CONFIGURED_FALLBACK: Partial<Record<ModelRole, ConfiguredRoleFallback
 	"chronicler-summary": { role: "chronicler", configuredOnly: false },
 	"chronicler-recall": { role: "chronicler-summary", configuredOnly: false },
 	tiny: { role: "smol", configuredOnly: false },
+	title: { role: "tiny", configuredOnly: false },
 	// Chain steps default to @prose; unset, it follows the user's own fast model.
 	prose: { role: "smol", configuredOnly: false },
 };

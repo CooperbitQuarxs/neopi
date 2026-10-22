@@ -38,7 +38,8 @@ import {
 	shouldDisableReasoning,
 	toReasoningEffort,
 } from "@oh-my-pi/pi-tui/thinking";
-import { CHRONICLER_TOOL_SCHEMAS, ChronicleTool, FinishChronicleTool, ReadChronicleTool } from "./chronicle-tool";
+import { getChroniclerToolSchemas, ChronicleTool, FinishChronicleTool, ReadChronicleTool } from "./chronicle-tool";
+import * as captureSettings from "./capture-settings";
 import type { ChronicleEntry } from "./render";
 import { renderChronicleDelta } from "./render";
 import { type CaptureBatch, type CaptureSource, ChroniclerStore, isChroniclerCorruption } from "./store";
@@ -160,27 +161,17 @@ type AttemptOutcome =
 
 /** Chronicler model transcript, recorded per binding beneath the session dir. */
 const RECORDER_FILENAME = "chronicler/__chronicler.jsonl";
-/** At most this many unseen entries materialize into one capture pass. */
-const MAX_PREFIX_ENTRIES = 60;
-/** At most this many committed beats are listed in the framing before trimming. */
-const MAX_BEAT_LISTING = 200;
-/** willContinue-true wakes defer until this many unseen serialized chars accrue. */
-const UNSEEN_FLUSH_CHARS = 80_000;
-/** Generic working budget when the model reports no usable context window. */
-const GENERIC_BUDGET_TOKENS = 32_000;
-/** Fraction of a known positive context window a capture pass may fill. */
-const CONTEXT_BUDGET_FRACTION = 0.7;
-/** Consecutive failed attempts in one capture burst before reconciliation. */
-const MAX_CONSECUTIVE_FAILURES = 3;
-/** Backoff before each retry of the same unseen prefix. */
-const RETRY_BACKOFF_MS = [2_000, 4_000];
-/** Autonomous recovery is exponential but never waits more than one minute. */
-const MAX_RECOVERY_BACKOFF_MS = 60_000;
-const OWNERSHIP_CHECK_MS = 60_000;
-/** Abort a model attempt after this long without any streamed assistant event. */
-const STREAM_STALL_MS = 60 * 60 * 1_000;
-/** Hard per-attempt deadline, slightly beyond the resettable idle watchdog. */
-const ATTEMPT_DEADLINE_MS = 65 * 60 * 1_000;
+export function renderChroniclerSystemPrompt(
+	descriptor: { sessionId: string; cwd: string },
+	settings: Settings,
+): string {
+	return prompt.render(systemTemplate, {
+		...descriptor,
+		materialCriteria: captureSettings.cfgChroniclerCaptureMaterialCriteria.get(settings),
+		minWords: captureSettings.cfgChroniclerCaptureMinWords.get(settings).toLocaleString("en-US"),
+		maxWords: captureSettings.cfgChroniclerCaptureMaxWords.get(settings).toLocaleString("en-US"),
+	});
+}
 
 const chroniclerTimerIO = {
 	setTimeout: (callback: () => void, delayMs: number): Timer => setTimeout(callback, delayMs),
@@ -188,10 +179,6 @@ const chroniclerTimerIO = {
 };
 
 export const __sessionChroniclerInternalsForTesting = { chroniclerTimerIO };
-/** Default drain deadline for model work at shutdown. */
-const DEFAULT_DRAIN_MS = 20_000;
-/** Recent persisted-message identities kept for the turn-end rendezvous. */
-const SETTLED_KEY_LIMIT = 32;
 
 export class SessionChronicler {
 	readonly #host: SessionChroniclerHost;
@@ -234,8 +221,9 @@ export class SessionChronicler {
 		this.#host = host;
 		// Synchronous (not the microtask-coalesced Setting.listen): a disable must revoke an
 		// in-flight publication before the caller's next await.
-		this.#settingsUnsub = host.settings.onEffectiveChange([cfgChroniclerEnabled, cfgModelRoles], () =>
-			this.#onSettingChange(),
+		this.#settingsUnsub = host.settings.onEffectiveChange(
+			[cfgChroniclerEnabled, cfgModelRoles, ...captureSettings.chroniclerCaptureSettings],
+			() => this.#onSettingChange(),
 		);
 		// An idle resumed on-disk session must catch up its backlog without
 		// requiring another user turn, so scan once at construction.
@@ -398,7 +386,9 @@ export class SessionChronicler {
 	 * and the only remaining wait is an already-started publication, so a provider
 	 * that ignores its abort cannot extend shutdown.
 	 */
-	async drain(timeoutMs: number = DEFAULT_DRAIN_MS): Promise<void> {
+	async drain(
+		timeoutMs: number = captureSettings.cfgChroniclerCaptureDrainMs.get(this.#host.settings),
+	): Promise<void> {
 		this.beginStop();
 
 		const deadline = Promise.withResolvers<void>();
@@ -574,7 +564,7 @@ export class SessionChronicler {
 			return;
 		}
 		this.#settled.set(key, [message]);
-		while (this.#settled.size > SETTLED_KEY_LIMIT) {
+		while (this.#settled.size > captureSettings.cfgChroniclerCaptureSettledKeys.get(this.#host.settings)) {
 			const oldest = this.#settled.keys().next().value;
 			if (oldest === undefined) break;
 			this.#settled.delete(oldest);
@@ -710,7 +700,12 @@ export class SessionChronicler {
 			const unseen = scan.entries.filter(entry => !processed.has(entry.id));
 			if (unseen.length === 0) return;
 
-			if (!scan.forceFlush && this.#serializedChars(unseen) < UNSEEN_FLUSH_CHARS) return;
+			if (
+				!scan.forceFlush &&
+				this.#serializedChars(unseen) <
+					captureSettings.cfgChroniclerCaptureUnseenFlushChars.get(this.#host.settings)
+			)
+				return;
 
 			const outcome = await this.#capturePass(binding, unseen, scan.entryIds);
 			if (outcome !== "committed") return;
@@ -752,14 +747,15 @@ export class SessionChronicler {
 			}
 
 			attempt += 1;
-			if (attempt >= MAX_CONSECUTIVE_FAILURES) {
+			if (attempt >= captureSettings.cfgChroniclerCaptureAttempts.get(this.#host.settings)) {
 				this.#requestRetry(`Capture failed after ${attempt} attempts: ${outcome.error}`);
 				return "halted";
 			}
 			// A failed attempt is never retained as if committed: rebuild the model
 			// conversation from committed framing before retrying the same prefix.
 			this.#rebuildConversation(binding);
-			const backoff = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
+			const delays = captureSettings.cfgChroniclerCaptureRetryBackoffMs.get(this.#host.settings);
+			const backoff = delays[Math.min(attempt - 1, delays.length - 1)];
 			if (!this.#stopping) {
 				this.#status = "retrying";
 				this.#error = outcome.error;
@@ -800,8 +796,8 @@ export class SessionChronicler {
 			const knownSources = this.#buildKnownSources(binding, batch);
 			binding.agent.setTools([
 				new ChronicleTool(binding.store, batch, knownSources),
-				new FinishChronicleTool(binding.store, batch, knownSources),
-				new ReadChronicleTool(binding.store, batch, this.#host.obfuscator),
+				new FinishChronicleTool(binding.store, batch, knownSources, this.#host.settings),
+				new ReadChronicleTool(binding.store, batch, this.#host.obfuscator, this.#host.settings),
 			]);
 
 			const request: AgentMessage = {
@@ -817,12 +813,14 @@ export class SessionChronicler {
 				watchdog = chroniclerTimerIO.setTimeout(() => {
 					stalled = true;
 					binding.agent.abort("Chronicler stream stalled");
-				}, STREAM_STALL_MS);
+				}, captureSettings.cfgChroniclerCaptureStreamStallMs.get(this.#host.settings));
 			};
 			const stopWatching = binding.agent.subscribe(event => {
 				if (event.type === "message_update") armWatchdog();
 			});
-			binding.agent.setDeadline(Date.now() + ATTEMPT_DEADLINE_MS);
+			binding.agent.setDeadline(
+				Date.now() + captureSettings.cfgChroniclerCaptureDeadlineMs.get(this.#host.settings),
+			);
 			armWatchdog();
 			try {
 				await Promise.race([
@@ -919,7 +917,7 @@ export class SessionChronicler {
 	): PrefixSelection {
 		const tokenizer = binding.agent.tokenizer;
 		const systemTokens = tokenizer.countTokens(binding.systemText);
-		const toolTokens = estimateToolSchemaTokens(CHRONICLER_TOOL_SCHEMAS, tokenizer);
+		const toolTokens = estimateToolSchemaTokens(getChroniclerToolSchemas(this.#host.settings), tokenizer);
 		const budget = this.#budgetTokens(binding.model);
 		const carry = this.#resolvableCarry(binding, ownedIds);
 		const beats = binding.store.beats;
@@ -930,8 +928,14 @@ export class SessionChronicler {
 			const storedLocal = tokenizer.countMessages(stored, { excludeEncryptedReasoning: true });
 			const storedProvider = estimateTranscriptTokens(stored, tokenizer, { excludeEncryptedReasoning: true });
 
-			let prefixCount = Math.min(MAX_PREFIX_ENTRIES, unseen.length);
-			let listingCount = Math.min(MAX_BEAT_LISTING, beats.length);
+			let prefixCount = Math.min(
+				captureSettings.cfgChroniclerCapturePrefixEntries.get(this.#host.settings),
+				unseen.length,
+			);
+			let listingCount = Math.min(
+				captureSettings.cfgChroniclerCaptureBeatListing.get(this.#host.settings),
+				beats.length,
+			);
 
 			while (true) {
 				const entries = unseen.slice(0, prefixCount);
@@ -973,9 +977,9 @@ export class SessionChronicler {
 	#budgetTokens(model: Model<Api>): number {
 		const window = model.contextWindow;
 		if (typeof window === "number" && Number.isFinite(window) && window > 0) {
-			return Math.floor(window * CONTEXT_BUDGET_FRACTION);
+			return Math.floor(window * captureSettings.cfgChroniclerCaptureContextFraction.get(this.#host.settings));
 		}
-		return GENERIC_BUDGET_TOKENS;
+		return captureSettings.cfgChroniclerCaptureFallbackTokens.get(this.#host.settings);
 	}
 
 	/**
@@ -1001,7 +1005,9 @@ export class SessionChronicler {
 	): string {
 		// The delta is rendered without an obfuscator: the whole framed request is
 		// obfuscated once by the caller, so a secret spanning fragments is caught.
-		const rendered = renderChronicleDelta(entries, { includeThinking: true });
+		const rendered = renderChronicleDelta(entries, {
+			includeThinking: captureSettings.cfgChroniclerCaptureIncludeThinking.get(this.#host.settings),
+		});
 		const message = rendered[0];
 		const block = message?.role === "user" && Array.isArray(message.content) ? message.content[0] : undefined;
 		const delta = block?.type === "text" ? block.text : "";
@@ -1076,7 +1082,10 @@ export class SessionChronicler {
 		const storeRoot = `${descriptor.artifactsDir}/chronicler`;
 		let lease: FileLockHandle;
 		try {
-			lease = await acquireFileLock(storeRoot, { retries: 1, takeoverStoppedOwner: true });
+			lease = await acquireFileLock(storeRoot, {
+				retries: captureSettings.cfgChroniclerCaptureLeaseRetries.get(this.#host.settings),
+				takeoverStoppedOwner: true,
+			});
 		} catch (error) {
 			if (gen !== this.#generation) return undefined;
 			if (!(error instanceof FileLockContentionError)) throw error;
@@ -1089,6 +1098,8 @@ export class SessionChronicler {
 				storeRoot,
 				{ sessionId: descriptor.sessionId, project: descriptor.cwd, model: selection.modelString },
 				{ warn: message => this.#host.emitNotice("warning", message, "chronicler") },
+				false,
+				this.#host.settings,
 			);
 			await store.open();
 			if (this.#generation !== gen) return undefined;
@@ -1130,10 +1141,7 @@ export class SessionChronicler {
 			() => descriptor.cwd,
 			RECORDER_FILENAME,
 		);
-		const renderedSystem = prompt.render(systemTemplate, {
-			sessionId: descriptor.sessionId,
-			cwd: descriptor.cwd,
-		});
+		const renderedSystem = renderChroniclerSystemPrompt(descriptor, this.#host.settings);
 		const systemText = this.#host.obfuscator?.obfuscate(renderedSystem) ?? renderedSystem;
 		const agent = this.#buildAgent(descriptor, selection, systemText);
 		// Ordinary revocation still owns the billed completion until this binding
@@ -1275,7 +1283,16 @@ export class SessionChronicler {
 			this.#host.emitNotice("warning", `Chronicler recovery pending: ${reason}`, "chronicler");
 		}
 		if (this.#retryTimer !== undefined) return;
-		const delay = Math.min(RETRY_BACKOFF_MS[0] * 2 ** Math.min(this.#retryAttempt++, 5), MAX_RECOVERY_BACKOFF_MS);
+		const settings = this.#host.settings;
+		const base = captureSettings.cfgChroniclerCaptureRetryBackoffMs.get(settings)[0];
+		const exponent = Math.min(
+			this.#retryAttempt++,
+			captureSettings.cfgChroniclerCaptureRecoveryExponent.get(settings),
+		);
+		const delay = Math.min(
+			base * captureSettings.cfgChroniclerCaptureRecoveryMultiplier.get(settings) ** exponent,
+			captureSettings.cfgChroniclerCaptureRecoveryMaxMs.get(settings),
+		);
 		this.#retryAt = Date.now() + delay;
 		this.#retryTimer = chroniclerTimerIO.setTimeout(() => {
 			this.#retryTimer = undefined;
@@ -1291,13 +1308,13 @@ export class SessionChronicler {
 			this.#ownershipTimer = undefined;
 			if (this.#binding !== binding || this.#generation !== binding.gen) return;
 			if (this.#ownsLease(binding)) this.#watchOwnership(binding);
-		}, OWNERSHIP_CHECK_MS);
+		}, captureSettings.cfgChroniclerCaptureOwnershipCheckMs.get(this.#host.settings));
 		this.#ownershipTimer.unref?.();
 	}
 
 	/** Interruptible sleep; resolves false when the generation is revoked. */
 	async #sleep(ms: number, gen: number): Promise<boolean> {
-		const step = 50;
+		const step = captureSettings.cfgChroniclerCaptureSleepPollMs.get(this.#host.settings);
 		let waited = 0;
 		while (waited < ms) {
 			if (this.#generation !== gen) return false;
