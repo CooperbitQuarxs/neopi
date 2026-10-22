@@ -181,6 +181,8 @@ import { cfgBranchSummaryEnabled } from "../../session/context-settings";
 import { cfgCycleOrder, cfgDisabledProviders, cfgModelRoleStorage } from "../../config/model-settings";
 import { cfgDefaultThinkingLevel } from "../../session/settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "../../config/effort-policy";
+import { cfgContextRules } from "../../config/context-policy";
+import { parseCompactionPointInput } from "../../config/compaction-threshold";
 import {
 	cfgComposerShape,
 	cfgStatusLineCompactThinkingLevel,
@@ -1697,6 +1699,23 @@ export class SelectorController {
 					try {
 						cfgEffortRules.set(this.ctx.settings, rules);
 						this.ctx.showStatus(`Implicit effort rules: ${rules.length}`);
+						hub?.refreshAfterExternalMutation();
+						return true;
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return false;
+					}
+				},
+				onContextRulesChange: rules => {
+					try {
+						cfgContextRules.set(
+							this.ctx.settings,
+							rules.map(rule => ({
+								selector: rule.selector,
+								limit: typeof rule.limit === "number" ? rule.limit : parseCompactionPointInput(rule.limit)!,
+							})),
+						);
+						this.ctx.showStatus(`Context rules: ${rules.length}`);
 						hub?.refreshAfterExternalMutation();
 						return true;
 					} catch (error) {
