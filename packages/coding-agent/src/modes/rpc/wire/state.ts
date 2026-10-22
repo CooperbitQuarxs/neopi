@@ -10,6 +10,17 @@ import { absentAs, doc, type WireDefs } from "./dsl";
 const JSON_OBJECT = "Record<string, unknown>";
 
 export const stateDefs = {
+	ThemeSelection: {
+		effective: "string",
+		global: "string | null",
+		project: "string | null",
+		colors: "Record<string, string>",
+	},
+	ThemeSelections: { dark: "ThemeSelection", light: "ThemeSelection" },
+	ThemesConfiguration: {
+		themes: "string[]",
+		selection: "ThemeSelections",
+	},
 	ApprovalHandler: "'host' | 'ui'",
 	ApprovalMode: "'always-ask' | 'write' | 'yolo'",
 	SessionUsage: {

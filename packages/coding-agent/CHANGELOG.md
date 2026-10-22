@@ -9,6 +9,7 @@
 
 ### Added
 
+- RPC clients can discover native themes, read resolved colors and change dark or light selections in user or project scope without replacing the other scope. Theme setting changes emit an invalidation event for connected clients ([#526](https://github.com/PsychedelicShayna/neopi/issues/526)).
 - RPC and control session snapshots report recorded journal-wide spend, advisor restoration state, cache counters and effective approval policy for graphical session status ([NeoCode #141](https://github.com/PsychedelicShayna/neocode/issues/141)).
 - Query native `/switch` matches and measured model facts over RPC or terminal control without changing the selected model ([NeoCode #138](https://github.com/PsychedelicShayna/neocode/issues/138)).
 - Manage native model roles and effort rules from RPC clients with scoped conflict detection, provider catalog discovery and cancellable account login ([#507](https://github.com/PsychedelicShayna/neopi/issues/507)).

@@ -550,6 +550,7 @@ import type { UsageLimitState } from "./usage-limit";
 import { cfgInterruptMode } from "../modes/settings";
 import { cfgFollowUpMode } from "../modes/settings";
 import { cfgSteeringMode } from "../modes/settings";
+import { observeThemesConfiguration } from "../modes/themes-configuration";
 import { cfgDisabledProviders, cfgModelRoles } from "../config/model-settings";
 import { cfgEffortRules, cfgRoleEffortSelections } from "../config/effort-policy";
 import { cfgEvalToolsEnabled } from "../eval/settings";
@@ -2716,6 +2717,7 @@ export class AgentSession implements SettingsScope {
 		// Re-evaluate append-only context mode when the setting changes at runtime.
 		cfgProviderAppendOnlyContext.listen(this, () => this.#syncAppendOnlyContext(this.model));
 		cfgModelRoles.listen(this, () => this.#advisors.reconcileModelRoles());
+		this.addDisposer(observeThemesConfiguration(this.settings, () => this.#emit({ type: "themes_configuration_changed" })));
 		cfgToolsApprovalMode.listen(this, () => this.#emit({ type: "approval_mode_changed" }));
 		this.addDisposer(
 			this.settings.onPersistedLayersChange(() => this.#emit({ type: "models_configuration_changed" })),

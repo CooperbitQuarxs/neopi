@@ -2695,6 +2695,28 @@ pub struct ModelInfo {
 	pub compat: Option<Map<String, Value>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemeSelection {
+	pub effective: String,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub global: Option<String>,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub project: Option<String>,
+	pub colors: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemeSelections {
+	pub dark: ThemeSelection,
+	pub light: ThemeSelection,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemesConfiguration {
+	pub themes: Vec<String>,
+	pub selection: ThemeSelections,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ApprovalHandler {
 	#[serde(rename = "host")]
@@ -5027,6 +5049,9 @@ pub struct RetryFallbackSucceededEvent {
 pub struct ModelChangedEvent {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemesConfigurationChangedEvent {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelsConfigurationChangedEvent {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5136,6 +5161,7 @@ pub enum RpcAgentEvent {
 	RetryFallbackSucceeded(RetryFallbackSucceededEvent),
 	ModelChanged(ModelChangedEvent),
 	ModelsConfigurationChanged(ModelsConfigurationChangedEvent),
+	ThemesConfigurationChanged(ThemesConfigurationChangedEvent),
 	ConfigWarningsChanged(ConfigWarningsChangedEvent),
 	AdvisorCostChanged(AdvisorCostChangedEvent),
 	AdvisorYielded(AdvisorYieldedEvent),
@@ -5187,6 +5213,7 @@ impl RpcAgentEvent {
 			Some("retry_fallback_succeeded") => |value| serde_json::from_value(value).map(Self::RetryFallbackSucceeded),
 			Some("model_changed") => |value| serde_json::from_value(value).map(Self::ModelChanged),
 			Some("models_configuration_changed") => |value| serde_json::from_value(value).map(Self::ModelsConfigurationChanged),
+			Some("themes_configuration_changed") => |value| serde_json::from_value(value).map(Self::ThemesConfigurationChanged),
 			Some("config_warnings_changed") => |value| serde_json::from_value(value).map(Self::ConfigWarningsChanged),
 			Some("advisor_cost_changed") => |value| serde_json::from_value(value).map(Self::AdvisorCostChanged),
 			Some("advisor_yielded") => |value| serde_json::from_value(value).map(Self::AdvisorYielded),
@@ -5240,6 +5267,7 @@ impl Serialize for RpcAgentEvent {
 			Self::RetryFallbackSucceeded(member) => serialize_tagged(member, &[("type", "retry_fallback_succeeded")], serializer),
 			Self::ModelChanged(member) => serialize_tagged(member, &[("type", "model_changed")], serializer),
 			Self::ModelsConfigurationChanged(member) => serialize_tagged(member, &[("type", "models_configuration_changed")], serializer),
+			Self::ThemesConfigurationChanged(member) => serialize_tagged(member, &[("type", "themes_configuration_changed")], serializer),
 			Self::ConfigWarningsChanged(member) => serialize_tagged(member, &[("type", "config_warnings_changed")], serializer),
 			Self::AdvisorCostChanged(member) => serialize_tagged(member, &[("type", "advisor_cost_changed")], serializer),
 			Self::AdvisorYielded(member) => serialize_tagged(member, &[("type", "advisor_yielded")], serializer),
@@ -6255,7 +6283,7 @@ impl RpcNotification {
 			Some("session_info_update") => |value| serde_json::from_value(value).map(Self::SessionInfoUpdate),
 			Some("config_update") => |value| serde_json::from_value(value).map(Self::ConfigUpdate),
 			Some("rpc_frame_error") => |value| serde_json::from_value(value).map(Self::RpcFrameError),
-			Some("advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
+			Some("advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "themes_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -6315,7 +6343,7 @@ impl RpcServerFrame {
 		let decode: fn(Value) -> Result<Self, serde_json::Error> = match value.get("type").and_then(Value::as_str) {
 			Some("response") => |value| serde_json::from_value(value).map(Self::Response),
 			Some("host_tool_call" | "host_tool_cancel" | "host_uri_request" | "host_uri_cancel") => |value| serde_json::from_value(value).map(Self::RpcHostRequest),
-			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
+			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "themes_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -6457,6 +6485,16 @@ pub struct ListMixturesResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SelectMixtureParams {
 	pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateThemeParams {
+	pub appearance: UpdateThemeParamsAppearance,
+	pub scope: UpdateThemeParamsScope,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub name: Option<String>,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub expected: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -7988,6 +8026,42 @@ impl HostUriResultContentType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum UpdateThemeParamsAppearance {
+	#[serde(rename = "dark")]
+	Dark,
+	#[serde(rename = "light")]
+	Light,
+}
+
+impl UpdateThemeParamsAppearance {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Dark => "dark",
+			Self::Light => "light",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum UpdateThemeParamsScope {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl UpdateThemeParamsScope {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GetModelsConfigurationResultRoleStorage {
 	#[serde(rename = "global")]
 	Global,
@@ -8515,6 +8589,41 @@ impl Command for GetRolesCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<RolesResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Read native theme discovery and scoped selections.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GetThemesConfigurationCommand {}
+
+impl Command for GetThemesConfigurationCommand {
+	const NAME: &'static str = "get_themes_configuration";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ThemesConfiguration;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<ThemesConfiguration>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Set or inherit one native theme slot with an expected scoped value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateThemeCommand {
+	pub appearance: UpdateThemeParamsAppearance,
+	pub scope: UpdateThemeParamsScope,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub name: Option<String>,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub expected: Option<String>,
+}
+
+impl Command for UpdateThemeCommand {
+	const NAME: &'static str = "update_theme";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ThemesConfiguration;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<ThemesConfiguration>(data.unwrap_or_else(|| Value::Object(Map::new())))
 	}
 }
 

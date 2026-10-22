@@ -633,6 +633,26 @@ class ModelInfo:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ThemeSelection:
+    effective: str
+    global_: str | None
+    project: str | None
+    colors: dict[str, str]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ThemeSelections:
+    dark: ThemeSelection
+    light: ThemeSelection
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ThemesConfiguration:
+    themes: tuple[str, ...]
+    selection: ThemeSelections
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class SessionUsage:
     input: float
     output: float
@@ -1796,6 +1816,11 @@ class ModelChangedEvent:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ThemesConfigurationChangedEvent:
+    type: Literal["themes_configuration_changed"] = "themes_configuration_changed"
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class ModelsConfigurationChangedEvent:
     type: Literal["models_configuration_changed"] = "models_configuration_changed"
 
@@ -2385,7 +2410,7 @@ UsageLimitState: TypeAlias = UsageLimitLowPriority | UsageLimitWrapUp
 MixtureAnswer: TypeAlias = MixtureChoiceAnswer | MixtureNoulAnswer | MixtureScoreAnswer
 
 
-RpcAgentEvent: TypeAlias = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | ApprovalModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
+RpcAgentEvent: TypeAlias = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | ApprovalModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ThemesConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
 """A session event, discriminated by `type`; `set_event_filter` selects which are sent."""
 
 
@@ -2603,6 +2628,32 @@ def parse_model_info(value: object, path: str = "ModelInfo") -> ModelInfo:
         priority=optional(payload, "priority", decode_int, path),
         thinking=optional(payload, "thinking", parse_thinking_config, path),
         compat=optional(payload, "compat", decode_json_object, path),
+    )
+
+
+def parse_theme_selection(value: object, path: str = "ThemeSelection") -> ThemeSelection:
+    payload = expect_object(value, path)
+    return ThemeSelection(
+        effective=required(payload, "effective", decode_str, path),
+        global_=required(payload, "global", nullable(decode_str), path),
+        project=required(payload, "project", nullable(decode_str), path),
+        colors=required(payload, "colors", record(decode_str), path),
+    )
+
+
+def parse_theme_selections(value: object, path: str = "ThemeSelections") -> ThemeSelections:
+    payload = expect_object(value, path)
+    return ThemeSelections(
+        dark=required(payload, "dark", parse_theme_selection, path),
+        light=required(payload, "light", parse_theme_selection, path),
+    )
+
+
+def parse_themes_configuration(value: object, path: str = "ThemesConfiguration") -> ThemesConfiguration:
+    payload = expect_object(value, path)
+    return ThemesConfiguration(
+        themes=required(payload, "themes", array(decode_str), path),
+        selection=required(payload, "selection", parse_theme_selections, path),
     )
 
 
@@ -3958,6 +4009,13 @@ def parse_model_changed_event(value: object, path: str = "ModelChangedEvent") ->
     )
 
 
+def parse_themes_configuration_changed_event(value: object, path: str = "ThemesConfigurationChangedEvent") -> ThemesConfigurationChangedEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["themes_configuration_changed"]]', literal(frozenset({"themes_configuration_changed"}))), path)
+    return ThemesConfigurationChangedEvent(
+    )
+
+
 def parse_models_configuration_changed_event(value: object, path: str = "ModelsConfigurationChangedEvent") -> ModelsConfigurationChangedEvent:
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["models_configuration_changed"]]', literal(frozenset({"models_configuration_changed"}))), path)
@@ -4698,6 +4756,7 @@ _RPC_AGENT_EVENT_CASES: Final[dict[str, Decoder[RpcAgentEvent]]] = {
         "retry_fallback_succeeded": parse_retry_fallback_succeeded_event,
         "model_changed": parse_model_changed_event,
         "models_configuration_changed": parse_models_configuration_changed_event,
+        "themes_configuration_changed": parse_themes_configuration_changed_event,
         "config_warnings_changed": parse_config_warnings_changed_event,
         "advisor_cost_changed": parse_advisor_cost_changed_event,
         "advisor_yielded": parse_advisor_yielded_event,
@@ -4763,6 +4822,7 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "retry_fallback_succeeded": parse_rpc_agent_event,
         "model_changed": parse_rpc_agent_event,
         "models_configuration_changed": parse_rpc_agent_event,
+        "themes_configuration_changed": parse_rpc_agent_event,
         "config_warnings_changed": parse_rpc_agent_event,
         "advisor_cost_changed": parse_rpc_agent_event,
         "advisor_yielded": parse_rpc_agent_event,
@@ -4873,6 +4933,20 @@ class WireClient:
         """List model roles."""
         params: dict[str, object] = {}
         return parse_roles_result(self._command("get_roles", params), "get_roles")
+
+    def get_themes_configuration(self) -> ThemesConfiguration:
+        """Read native theme discovery and scoped selections."""
+        params: dict[str, object] = {}
+        return parse_themes_configuration(self._command("get_themes_configuration", params), "get_themes_configuration")
+
+    def update_theme(self, appearance: Literal["dark", "light"], scope: Literal["global", "project"], name: str | None, expected: str | None) -> ThemesConfiguration:
+        """Set or inherit one native theme slot with an expected scoped value."""
+        params: dict[str, object] = {}
+        params["appearance"] = appearance
+        params["scope"] = scope
+        params["name"] = name
+        params["expected"] = expected
+        return parse_themes_configuration(self._command("update_theme", params), "update_theme")
 
     def query_model_selector(self, query: str) -> ModelSelectorResult:
         """Query native /switch ordering, scoped candidates, role aliases and model facts without selecting."""
@@ -5547,6 +5621,10 @@ class WireClient:
         """Subscribe to `models_configuration_changed` frames."""
         return self._listen("models_configuration_changed", listener)
 
+    def on_themes_configuration_changed(self, listener: Callable[[ThemesConfigurationChangedEvent], None]) -> Callable[[], None]:
+        """Subscribe to `themes_configuration_changed` frames."""
+        return self._listen("themes_configuration_changed", listener)
+
     def on_config_warnings_changed(self, listener: Callable[[ConfigWarningsChangedEvent], None]) -> Callable[[], None]:
         """Subscribe to `config_warnings_changed` frames."""
         return self._listen("config_warnings_changed", listener)
@@ -5837,6 +5915,10 @@ __all__ = [
     "SubagentStatus",
     "SubagentSubscriptionLevel",
     "TextContent",
+    "ThemeSelection",
+    "ThemeSelections",
+    "ThemesConfiguration",
+    "ThemesConfigurationChangedEvent",
     "ThinkingConfig",
     "ThinkingContent",
     "ThinkingEffort",
@@ -6078,6 +6160,10 @@ __all__ = [
     "parse_subagent_progress_payload",
     "parse_subagent_snapshot",
     "parse_text_content",
+    "parse_theme_selection",
+    "parse_theme_selections",
+    "parse_themes_configuration",
+    "parse_themes_configuration_changed_event",
     "parse_thinking_config",
     "parse_thinking_content",
     "parse_thinking_level_changed_event",

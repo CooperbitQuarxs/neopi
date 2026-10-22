@@ -380,6 +380,23 @@ export interface ModelInfo {
 	compat?: Record<string, unknown>;
 }
 
+export interface ThemeSelection {
+	effective: string;
+	global: string | null;
+	project: string | null;
+	colors: Record<string, string>;
+}
+
+export interface ThemeSelections {
+	dark: ThemeSelection;
+	light: ThemeSelection;
+}
+
+export interface ThemesConfiguration {
+	themes: string[];
+	selection: ThemeSelections;
+}
+
 export type ApprovalHandler = "host" | "ui";
 
 export type ApprovalMode = "always-ask" | "write" | "yolo";
@@ -1497,6 +1514,10 @@ export interface ModelChangedEvent {
 	type: "model_changed";
 }
 
+export interface ThemesConfigurationChangedEvent {
+	type: "themes_configuration_changed";
+}
+
 export interface ModelsConfigurationChangedEvent {
 	type: "models_configuration_changed";
 }
@@ -1568,7 +1589,7 @@ export interface QueueUpdateEvent {
 }
 
 /** A session event, discriminated by `type`; `set_event_filter` selects which are sent. */
-export type RpcAgentEvent = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | ApprovalModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
+export type RpcAgentEvent = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | ApprovalModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ThemesConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
 
 /** First frame after startup; transport fields are absent on servers without protocol v2. */
 export interface ReadyEvent {
@@ -2133,6 +2154,13 @@ export interface SelectMixtureParams {
 	name: string;
 }
 
+export interface UpdateThemeParams {
+	appearance: "dark" | "light";
+	scope: "global" | "project";
+	name: string | null;
+	expected: string | null;
+}
+
 export interface QueryModelSelectorParams {
 	query: string;
 }
@@ -2560,6 +2588,8 @@ export interface RpcWireCommands {
 	list_mixtures: { params: undefined; result: ListMixturesResult };
 	select_mixture: { params: SelectMixtureParams; result: ModelInfo };
 	get_roles: { params: undefined; result: RolesResult };
+	get_themes_configuration: { params: undefined; result: ThemesConfiguration };
+	update_theme: { params: UpdateThemeParams; result: ThemesConfiguration };
 	query_model_selector: { params: QueryModelSelectorParams; result: ModelSelectorResult };
 	set_role: { params: SetRoleParams; result: SetRoleResult };
 	get_models_configuration: { params: undefined; result: GetModelsConfigurationResult };

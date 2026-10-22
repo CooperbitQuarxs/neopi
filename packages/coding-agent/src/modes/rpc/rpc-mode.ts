@@ -100,6 +100,7 @@ import {
 	resolveOwnedLiveSubagent,
 } from "./rpc-subagents";
 import { getRpcUsage, RpcUsageUnavailableError } from "./rpc-usage";
+import { getThemesConfiguration, updateTheme, RpcThemeConflict } from "./rpc-themes-configuration";
 import { isRpcApprovalHandler, isRpcToolApprovalResponse, RpcToolApprovalBridge } from "./rpc-tool-approval";
 import type {
 	RpcAbortAndRestoreQueueResult,
@@ -2244,6 +2245,16 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				await session.setModel(model);
 				return success(id, "select_mixture", model);
 			}
+
+			case "get_themes_configuration":
+				return success(id, command.type, await getThemesConfiguration(session.settings));
+			case "update_theme":
+				try {
+					return success(id, command.type, await updateTheme(session.settings, command));
+				} catch (cause) {
+					if (cause instanceof RpcThemeConflict) return error(id, command.type, cause.message, "conflict");
+					throw cause;
+				}
 
 			case "get_roles": {
 				await session.modelRegistry.awaitBackgroundRefresh();

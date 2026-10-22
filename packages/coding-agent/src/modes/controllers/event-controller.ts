@@ -416,6 +416,9 @@ export class EventController {
 				this.ctx.statusLine.invalidate();
 				this.ctx.ui.requestRender();
 			},
+			themes_configuration_changed: async () => {
+				this.ctx.ui.requestRender();
+			},
 			advisor_cost_changed: async () => {
 				this.ctx.statusLine.invalidate();
 				this.ctx.ui.requestRender();

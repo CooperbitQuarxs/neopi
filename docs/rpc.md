@@ -40,6 +40,7 @@ Behavior notes:
 | --- | --- |
 | `get_usage` | The `get_usage` command returns account-level provider usage reports. See [Session](#session). |
 | `get_roles` | `get_roles` / `set_role` commands and `get_state.activeRole` ([payloads](#get_roles-and-set_role-payloads)) |
+| `themes_configuration` | `get_themes_configuration`, scoped `update_theme`, and `themes_configuration_changed`. |
 | `model_selector` | Read-only `query_model_selector` returns native `/switch` matches, ordering, role aliases and row facts. |
 | `models_configuration` | Native provider/model catalog and scoped role/effort configuration, with expected-value write conflicts. |
 | `cancellable_login` | Login prompts can request secret input; `cancel_login` cancels only a login owned by the same connection. |
@@ -692,6 +693,24 @@ model is part of the role's chain. A resumed session reports the role recorded
 with its last model change, except `default`, which is also what a direct model
 pick records.
 
+### Shared native themes
+
+`get_themes_configuration` discovers installed native theme names and returns
+`selection.dark` and `selection.light`. Each has its effective name, the explicit
+`global` and `project` values or `null`, and resolved semantic `colors`.
+
+Send `update_theme` with `appearance: "dark" | "light"`, `scope: "global" | "project"`,
+`name` and `expected`. Both names are strings or `null`. `expected` must match the
+last read value in that scope. A mismatch returns error code `conflict`; refresh
+and let the user choose again. A null `name` removes that scope's override.
+Project values take precedence over global values. Native configuration overlays
+can still determine the effective value, which is always returned after a write.
+
+Connected terminal and RPC sessions emit `themes_configuration_changed` when an
+effective theme setting changes. Re-read the configuration after that event and
+on reconnection. Themes remain native configuration; a client should not write
+configuration files or substitute a bundled theme inventory.
+
 ### Native model selector query
 
 Send `{"type":"query_model_selector","query":"example"}` to read the native
@@ -715,7 +734,6 @@ fastest measured tier. Catalog throughput is used only when measured throughput
 is unavailable. `performanceSource` and `serviceTier` identify those values.
 Effective context is the native maintenance budget, not a provider capability.
 `error` reports an unavailable catalog while preserving any usable scoped rows.
-
 ### `get_roles` and `set_role` payloads
 
 Advertised by the `get_roles` capability. `get_roles` lists every known model

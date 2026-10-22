@@ -45,6 +45,7 @@ import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { BtwHistoryRecord } from "../../session/btw-history";
+import type { RpcThemesCommand, RpcThemesConfiguration } from "./rpc-themes-configuration";
 import type { UsageStatistics } from "../../session/session-entries";
 
 // ============================================================================
@@ -57,6 +58,7 @@ export type RpcMessageUpdates = "full" | "delta";
 export type RpcCommand =
 	// Protocol
 	| { id?: string; type: "negotiate_protocol"; protocolVersion: number }
+	| RpcThemesCommand
 
 	// Prompting
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
@@ -538,6 +540,8 @@ export interface RpcSubagentMessagesResult {
 
 // Success responses with data
 export type RpcResponse =
+	| { id?: string; type: "response"; command: "get_themes_configuration"; success: true; data: RpcThemesConfiguration }
+	| { id?: string; type: "response"; command: "update_theme"; success: true; data: RpcThemesConfiguration }
 	// Protocol
 	| {
 			id?: string;
