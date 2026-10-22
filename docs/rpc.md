@@ -47,6 +47,7 @@ Behavior notes:
 | `session_lease` | A process holds an exclusive lifetime lease on every session file it writes, so two processes never append to one transcript. `--session <file>` onto a file another process holds fails at startup with a `startup_error` stderr line; `switch_session` and `branch` onto one fail with `code: "session_in_use"` (see [Session lease](#session-lease)). |
 | `plan_proposal_cancel` | A pending plan proposal that resolves without a host answer is announced with a `plan_proposal_cancel` frame, and a later `plan_proposal_response` for it fails with `code: "proposal_cancelled"`. See [`plan_proposal_cancel`](#plan_proposal_cancel). |
 | `prompt_entry_ids` | `prompt`, `steer`, `follow_up` and `abort_and_prompt` responses carry `data.userEntryId`, the id of the session entry their message is written as, and every `get_messages_page` message carries the `entryId` of its entry. See [Entry ids](#entry-ids). |
+| `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
 
 ### Session lease
 
@@ -188,6 +189,7 @@ Important edge behavior from runtime:
 - `{ id?, type: "set_ask_dialog", enabled: boolean }`
 - `{ id?, type: "get_available_commands" }`
 - `{ id?, type: "get_entries", since?: string }`
+- `{ id?, type: "get_entries_page", scope?: "journal" | "branch", direction?: "forward" | "backward", cursor?: string, limit?: number }`
 - `{ id?, type: "get_tree" }`
 - `{ id?, type: "set_todos", phases: TodoPhase[] }`
 - `{ id?, type: "set_host_tools", tools: RpcHostToolDefinition[] }`
@@ -1202,6 +1204,48 @@ Command discovery is intentionally an OMP dialect: Pi's `get_commands` (a
 `RpcSlashCommand[]` projection over extensions → prompt templates → skills) is
 not served because OMP's richer catalog (builtins/custom/MCP/file commands,
 broader `source` enum, no Pi `sourceInfo`) is not wire-compatible with it.
+
+### Native journal pages
+
+`get_entries_page` returns `{ entries, sessionId, sessionFile, leafId, totalEntries, nextCursor? }`.
+`sessionFile` is the canonical absolute path. `entries` contains native `SessionEntry`
+records, including tool output, custom records, compaction, branch summaries and reset
+boundaries. Nothing is folded into model context or reduced to visible message text.
+The header is not an entry. `totalEntries` counts entries in the selected scope.
+
+The defaults are `scope: "journal"`, `direction: "forward"` and `limit: 100`.
+Limits range from 1 to 256. `branch` selects the current native leaf's ancestry.
+`journal` includes alternate branches in append order. A backward page starts at the
+newest end, but entries within every page remain chronological. Pass `nextCursor`
+with the same scope and direction to continue, and stop when it is absent.
+
+A journal cursor pins the initial prefix and snapshot leaf. Appends and pointer-only
+leaf changes do not extend or invalidate that walk. A branch cursor pins the active
+leaf and fails with `code: "leaf_changed"` if it changes, including after an append.
+Restart branch paging instead of combining pages from different leaves.
+Session/file changes and a missing or replaced prefix boundary fail with
+`stale_cursor`. Invalid cursors or changed scope/direction fail with `invalid_cursor`;
+invalid limits/options fail with `invalid_request`.
+An owner applying or rolling back a session/transcript transition returns
+`session_busy` rather than mixing identities. Ordinary streaming does not block
+journal reads.
+
+Pages use the same 768 KiB soft budget as message paging. Entries are never split
+or truncated. An oversized entry travels alone with negotiated protocol v2 chunking,
+or returns the existing transport-limit failure when it cannot fit. Legacy history
+without persisted IDs fails with `legacy_history_identity_required`, including a
+running owner whose pre-tree migration has not yet persisted. Reading does not
+trigger migration or persistence. An owner without a journal file returns
+`session_unavailable`.
+
+For a stopped session, `npi sessions entries --json --scope branch --direction backward
+--limit 100 /absolute/session.jsonl` uses the same page format and cursor options.
+Its leaf is the last persisted entry, not an unpersisted pointer-only move in a
+running owner. Live owners must be read over RPC/control. CLI failures emit
+`{ "error": { "code": "...", "message": "..." } }` on stdout even with a nonzero exit.
+Unreadable or malformed journals return `session_unavailable`, not partial history.
+Existing `get_entries`, `get_tree`, `get_messages` and `get_messages_page` keep their
+previous semantics.
 
 ### Pi-compatible history/tree commands with OMP-native entry payloads
 

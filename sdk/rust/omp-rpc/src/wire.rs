@@ -3963,6 +3963,22 @@ pub struct SessionEntries {
 	pub leaf_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JournalPage {
+	pub entries: Vec<Map<String, Value>>,
+	#[serde(rename = "sessionId")]
+	pub session_id: String,
+	#[serde(rename = "sessionFile")]
+	pub session_file: String,
+	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
+	pub leaf_id: Option<String>,
+	#[serde(rename = "totalEntries")]
+	pub total_entries: i64,
+	/// Opaque cursor for the next page; absent on the last page.
+	#[serde(rename = "nextCursor", default, skip_serializing_if = "Option::is_none")]
+	pub next_cursor: Option<String>,
+}
+
 /// Raw session tree roots.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionTree {
@@ -6251,6 +6267,18 @@ pub struct GetEntriesParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetEntriesPageParams {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub scope: Option<GetEntriesPageParamsScope>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub direction: Option<GetEntriesPageParamsDirection>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub cursor: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetTodosParams {
 	pub phases: Vec<TodoPhase>,
 }
@@ -7501,6 +7529,42 @@ pub enum StringOrStringList {
 	StringList(Vec<String>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GetEntriesPageParamsScope {
+	#[serde(rename = "journal")]
+	Journal,
+	#[serde(rename = "branch")]
+	Branch,
+}
+
+impl GetEntriesPageParamsScope {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Journal => "journal",
+			Self::Branch => "branch",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GetEntriesPageParamsDirection {
+	#[serde(rename = "forward")]
+	Forward,
+	#[serde(rename = "backward")]
+	Backward,
+}
+
+impl GetEntriesPageParamsDirection {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Forward => "forward",
+			Self::Backward => "backward",
+		}
+	}
+}
+
 fn default_queued_messages_state_live_steered() -> i64 {
 	serde_json::from_str("0").expect("valid wire default")
 }
@@ -8062,6 +8126,29 @@ impl Command for GetEntriesCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<SessionEntries>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Read one canonical native journal or selected-branch page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GetEntriesPageCommand {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub scope: Option<GetEntriesPageParamsScope>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub direction: Option<GetEntriesPageParamsDirection>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub cursor: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub limit: Option<i64>,
+}
+
+impl Command for GetEntriesPageCommand {
+	const NAME: &'static str = "get_entries_page";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = JournalPage;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<JournalPage>(data.unwrap_or_else(|| Value::Object(Map::new())))
 	}
 }
 

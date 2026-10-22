@@ -4385,6 +4385,36 @@ func (v *SessionEntries) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type JournalPage struct {
+	Entries      []map[string]json.RawMessage `json:"entries"`
+	SessionID    string                       `json:"sessionId"`
+	SessionFile  string                       `json:"sessionFile"`
+	LeafID       *string                      `json:"leafId"`
+	TotalEntries int64                        `json:"totalEntries"`
+	// Opaque cursor for the next page; absent on the last page.
+	NextCursor *string `json:"nextCursor,omitempty"`
+}
+
+func (v *JournalPage) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JournalPage", v.decodeFrom)
+}
+
+func (v *JournalPage) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JournalPage
+	d := fieldDecoder{raw: raw, owner: "JournalPage"}
+	d.required("entries", &out.Entries)
+	d.required("sessionId", &out.SessionID)
+	d.required("sessionFile", &out.SessionFile)
+	d.nullable("leafId", &out.LeafID)
+	d.required("totalEntries", &out.TotalEntries)
+	d.optional("nextCursor", &out.NextCursor)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 // Raw session tree roots.
 type SessionTree struct {
 	Tree   []map[string]json.RawMessage `json:"tree"`
@@ -10220,6 +10250,61 @@ func (c Commands) GetEntries(ctx context.Context, p GetEntriesCommand) (SessionE
 	var out SessionEntries
 	err := c.call(ctx, "get_entries", p, 0, &out)
 	return out, err
+}
+
+// GetEntriesPageCommand holds the parameters of "get_entries_page".
+type GetEntriesPageCommand struct {
+	Scope     *GetEntriesPageCommandScope     `json:"scope,omitempty"`
+	Direction *GetEntriesPageCommandDirection `json:"direction,omitempty"`
+	Cursor    *string                         `json:"cursor,omitempty"`
+	Limit     *int64                          `json:"limit,omitempty"`
+}
+
+// GetEntriesPage sends "get_entries_page": Read one canonical native journal or selected-branch page.
+func (c Commands) GetEntriesPage(ctx context.Context, p GetEntriesPageCommand) (JournalPage, error) {
+	var out JournalPage
+	err := c.call(ctx, "get_entries_page", p, 0, &out)
+	return out, err
+}
+
+type GetEntriesPageCommandScope string
+
+const (
+	GetEntriesPageCommandScopeJournal GetEntriesPageCommandScope = "journal"
+	GetEntriesPageCommandScopeBranch  GetEntriesPageCommandScope = "branch"
+)
+
+func (v *GetEntriesPageCommandScope) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "GetEntriesPageCommandScope")
+	if err != nil {
+		return err
+	}
+	switch value := GetEntriesPageCommandScope(s); value {
+	case GetEntriesPageCommandScopeJournal, GetEntriesPageCommandScopeBranch:
+		*v = value
+		return nil
+	}
+	return unknownValue("GetEntriesPageCommandScope", s)
+}
+
+type GetEntriesPageCommandDirection string
+
+const (
+	GetEntriesPageCommandDirectionForward  GetEntriesPageCommandDirection = "forward"
+	GetEntriesPageCommandDirectionBackward GetEntriesPageCommandDirection = "backward"
+)
+
+func (v *GetEntriesPageCommandDirection) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "GetEntriesPageCommandDirection")
+	if err != nil {
+		return err
+	}
+	switch value := GetEntriesPageCommandDirection(s); value {
+	case GetEntriesPageCommandDirectionForward, GetEntriesPageCommandDirectionBackward:
+		*v = value
+		return nil
+	}
+	return unknownValue("GetEntriesPageCommandDirection", s)
 }
 
 // GetTree sends "get_tree": Read the raw session tree.

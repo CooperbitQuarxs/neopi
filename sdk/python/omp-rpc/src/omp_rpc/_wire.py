@@ -1146,6 +1146,17 @@ class SessionEntries:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class JournalPage:
+    entries: tuple[JsonObject, ...]
+    session_id: str
+    session_file: str
+    leaf_id: str | None
+    total_entries: int
+    next_cursor: str | None = None
+    """Opaque cursor for the next page; absent on the last page."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class SessionTree:
     """Raw session tree roots."""
     tree: tuple[JsonObject, ...]
@@ -3017,6 +3028,18 @@ def parse_session_entries(value: object, path: str = "SessionEntries") -> Sessio
     )
 
 
+def parse_journal_page(value: object, path: str = "JournalPage") -> JournalPage:
+    payload = expect_object(value, path)
+    return JournalPage(
+        entries=required(payload, "entries", array(decode_json_object), path),
+        session_id=required(payload, "sessionId", decode_str, path),
+        session_file=required(payload, "sessionFile", decode_str, path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        total_entries=required(payload, "totalEntries", decode_int, path),
+        next_cursor=optional(payload, "nextCursor", decode_str, path),
+    )
+
+
 def parse_session_tree(value: object, path: str = "SessionTree") -> SessionTree:
     payload = expect_object(value, path)
     return SessionTree(
@@ -4525,6 +4548,19 @@ class WireClient:
             params["since"] = since
         return parse_session_entries(self._command("get_entries", params), "get_entries")
 
+    def get_entries_page(self, *, scope: Literal["journal", "branch"] | None = None, direction: Literal["forward", "backward"] | None = None, cursor: str | None = None, limit: int | None = None) -> JournalPage:
+        """Read one canonical native journal or selected-branch page."""
+        params: dict[str, object] = {}
+        if scope is not None:
+            params["scope"] = scope
+        if direction is not None:
+            params["direction"] = direction
+        if cursor is not None:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = limit
+        return parse_journal_page(self._command("get_entries_page", params), "get_entries_page")
+
     def get_tree(self) -> SessionTree:
         """Read the raw session tree."""
         params: dict[str, object] = {}
@@ -5164,6 +5200,7 @@ __all__ = [
     "InputUiRequest",
     "InterruptMode",
     "IrcMessageEvent",
+    "JournalPage",
     "ListMixturesResult",
     "LiveEndEvent",
     "LiveLevelsEvent",
@@ -5406,6 +5443,7 @@ __all__ = [
     "parse_image_content",
     "parse_input_ui_request",
     "parse_irc_message_event",
+    "parse_journal_page",
     "parse_list_mixtures_result",
     "parse_live_end_event",
     "parse_live_levels_event",

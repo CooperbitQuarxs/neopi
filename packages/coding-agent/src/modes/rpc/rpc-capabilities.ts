@@ -21,5 +21,6 @@ export const RPC_CAPABILITIES: readonly string[] = [
 	"prompt_entry_ids", // #117
 	"session_catalog", // #355
 	"session_history_identity", // Native selected-branch transcript identities.
+	"session_journal", // Canonical journal paging over RPC, control and the read-only CLI.
 	"control_pipe", // #355
 ];
