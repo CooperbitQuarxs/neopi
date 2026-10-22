@@ -3996,6 +3996,16 @@ pub struct SessionEntries {
 	pub leaf_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JournalIdentity {
+	#[serde(rename = "sessionId")]
+	pub session_id: String,
+	#[serde(rename = "sessionFile", deserialize_with = "Deserialize::deserialize")]
+	pub session_file: Option<String>,
+	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
+	pub leaf_id: Option<String>,
+}
+
 /// Raw session tree roots.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionTree {
@@ -4295,7 +4305,7 @@ pub struct MessagePersistedEvent {
 	pub session_file: Option<String>,
 	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
 	pub leaf_id: Option<String>,
-	/// Shared by the start, updates, and end of one message; unique per process.
+	/// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
 	#[serde(rename = "messageId")]
 	pub message_id: String,
 	#[serde(rename = "entryId")]
@@ -4619,9 +4629,18 @@ pub struct TurnEndEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MessageStartEvent {
 	pub message: AgentMessage,
-	/// Shared by the start, updates, and end of one message; unique per process.
+	/// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
 	#[serde(rename = "messageId", default, skip_serializing_if = "Option::is_none")]
 	pub message_id: Option<String>,
+	/// True for the current unsaved assistant at an ordered native snapshot boundary.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub snapshot: Option<bool>,
+	#[serde(rename = "sessionId", default, skip_serializing_if = "Option::is_none")]
+	pub session_id: Option<String>,
+	#[serde(rename = "sessionFile", default, skip_serializing_if = "Option::is_none")]
+	pub session_file: Option<String>,
+	#[serde(rename = "leafId", default, skip_serializing_if = "Option::is_none")]
+	pub leaf_id: Option<String>,
 	#[serde(rename = "requestModelProvider", default, skip_serializing_if = "Option::is_none")]
 	pub request_model_provider: Option<String>,
 	#[serde(rename = "requestModelId", default, skip_serializing_if = "Option::is_none")]
@@ -4639,7 +4658,7 @@ pub struct MessageUpdateEvent {
 	pub message: AgentMessage,
 	#[serde(rename = "assistantMessageEvent")]
 	pub assistant_message_event: AssistantMessageEvent,
-	/// Shared by the start, updates, and end of one message; unique per process.
+	/// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
 	#[serde(rename = "messageId", default, skip_serializing_if = "Option::is_none")]
 	pub message_id: Option<String>,
 	#[serde(rename = "requestModelProvider", default, skip_serializing_if = "Option::is_none")]
@@ -4657,7 +4676,7 @@ pub struct MessageUpdateEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MessageEndEvent {
 	pub message: AgentMessage,
-	/// Shared by the start, updates, and end of one message; unique per process.
+	/// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
 	#[serde(rename = "messageId", default, skip_serializing_if = "Option::is_none")]
 	pub message_id: Option<String>,
 	#[serde(rename = "requestModelProvider", default, skip_serializing_if = "Option::is_none")]
@@ -8162,6 +8181,20 @@ impl Command for GetEntriesCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<SessionEntries>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Emit native journal identity and current unsaved assistant before responding, without replacing subscriptions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SnapshotSessionJournalCommand {}
+
+impl Command for SnapshotSessionJournalCommand {
+	const NAME: &'static str = "snapshot_session_journal";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = JournalIdentity;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<JournalIdentity>(data.unwrap_or_else(|| Value::Object(Map::new())))
 	}
 }
 

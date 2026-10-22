@@ -456,7 +456,7 @@ import {
 	type SessionAdvisorsHost,
 } from "./session-advisors";
 import type { BuildSessionContextOptions, SessionContext } from "./session-context";
-import { getMessageEntryId, linkMessageEntrySource, setMessageEntryId } from "./message-entry-ids";
+import { clearLiveMessageId, getMessageEntryId, linkMessageEntrySource, observeLiveMessageId, setMessageEntryId } from "./message-entry-ids";
 import { buildSessionContext, getRestorableSessionModels, isTranscriptEntry } from "./session-context";
 import type { CacheWarmer, CacheWarmingMode, CacheWarmingStatus } from "./cache-warmer";
 import { isUserRequestEntry, transcriptEntryMessage, userTurnDraft } from "@oh-my-pi/pi-tui/chat/transcript-entry";
@@ -3469,6 +3469,9 @@ export class AgentSession implements SettingsScope {
 
 	/** Emit an event to all listeners */
 	#emit(event: AgentSessionEvent): void {
+		if (event.type === "message_start" || event.type === "message_update" || event.type === "message_end")
+			observeLiveMessageId(this.sessionManager, event.message, event.type === "message_end");
+		else if (event.type === "agent_end") clearLiveMessageId(this.sessionManager);
 		if (event.type === "agent_end" && event.isTerminal !== false) {
 			const sessionGeneration = this.#sessionGeneration;
 			const promptSequence = this.#promptSequence;

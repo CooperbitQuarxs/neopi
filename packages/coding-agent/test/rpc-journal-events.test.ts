@@ -43,18 +43,22 @@ class GatedStorage extends MemorySessionStorage {
 	}
 }
 
-function transport(manager: SessionManager) {
+function transport(manager: SessionManager, streamMessage: AgentMessage | null = null) {
 	const frames: RpcProjectedSessionEventFrame[] = [];
 	const settled = new Set<(message: AgentMessage) => void>();
 	const forwarder = new RpcSessionEventForwarder(frame => frames.push(frame));
-	forwarder.observeJournal({
+	const source = {
 		sessionManager: manager,
-		subscribeMessagePersistenceSettled(listener) {
+		agent: { state: { streamMessage } },
+		isSessionTransitioning: false,
+		obfuscator: undefined,
+		subscribeMessagePersistenceSettled(listener: (message: AgentMessage) => void) {
 			settled.add(listener);
 			return () => settled.delete(listener);
 		},
-	});
-	return { frames, forwarder, settle: (message: AgentMessage) => { for (const listener of settled) listener(message); } };
+	};
+	forwarder.observeJournal(source);
+	return { frames, forwarder, source, settle: (message: AgentMessage) => { for (const listener of settled) listener(message); } };
 }
 
 function committed(events: readonly SessionJournalEvent[]): string[] {
@@ -108,7 +112,11 @@ describe("native journal notifications", () => {
 			frames.push(frame);
 			if (frame.type === "journal_state" && frame.reason === "snapshot") id = manager.appendCustomEntry("during snapshot");
 		});
-		forwarder.observeJournal({ sessionManager: manager, subscribeMessagePersistenceSettled: () => () => {} });
+		forwarder.observeJournal({
+			sessionManager: manager, agent: { state: { streamMessage: null } },
+			isSessionTransitioning: false, obfuscator: undefined,
+			subscribeMessagePersistenceSettled: () => () => {},
+		});
 		expect(frames.filter(frame => frame.type === "journal_entry")).toMatchObject([{ entry: { id } }]);
 		const original = manager.getJournalIdentity();
 		manager.resetLeaf();
@@ -171,6 +179,103 @@ describe("native journal notifications", () => {
 			{ type: "message_persisted", ...manager.getJournalIdentity(), messageId: "msg-1", entryId },
 		]);
 		live.forwarder.dispose();
+		await manager.close();
+	});
+
+	test("quiet live snapshots and repeat reads retain one native stream ID through updates and durability", async () => {
+		await using dir = await TempDir.create("@journal-events-quiet-");
+		const manager = SessionManager.create(dir.path(), dir.path(), new MemorySessionStorage());
+		await manager.ensureOnDisk();
+		const partial = makeAssistantMessage();
+		partial.content = [{ type: "text", text: "quiet partial" }];
+		const live = transport(manager, partial);
+		const first = live.frames.find(frame => frame.type === "message_start");
+		expect(first).toMatchObject({
+			type: "message_start", snapshot: true, messageId: "msg-1", message: partial, ...manager.getJournalIdentity(),
+		});
+		expect(first && "entryId" in first).toBe(false);
+		live.forwarder.snapshotJournal(live.source);
+		expect(live.frames.filter(frame => frame.type === "message_start")).toHaveLength(2);
+		const updated = { ...partial, content: [{ type: "text" as const, text: "quiet partial, continued" }] };
+		live.source.agent.state.streamMessage = updated;
+		live.forwarder.forward({
+			type: "message_update", message: updated,
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: ", continued", partial: updated },
+		});
+		const beforeDelayedStart = live.frames.length;
+		live.forwarder.forward({ type: "message_start", message: partial });
+		expect(live.frames).toHaveLength(beforeDelayedStart);
+		live.source.agent.state.streamMessage = null;
+		live.forwarder.forward({ type: "message_end", message: updated });
+		const entryId = manager.appendMessage(updated);
+		live.settle(updated);
+		expect(live.frames.filter(frame => frame.type === "message_start" || frame.type === "message_update" ||
+			frame.type === "message_end" || frame.type === "message_persisted").map(frame => "messageId" in frame ? frame.messageId : undefined))
+			.toEqual(["msg-1", "msg-1", "msg-1", "msg-1", "msg-1"]);
+		expect(live.frames.at(-1)).toMatchObject({ type: "message_persisted", entryId });
+		live.forwarder.dispose();
+		await manager.close();
+	});
+
+	test("a newer update or end during identity snapshot publication prevents an older assistant snapshot", async () => {
+		for (const end of [false, true]) {
+			const manager = SessionManager.inMemory();
+			const partial = makeAssistantMessage();
+			const newer = { ...partial, content: [{ type: "text" as const, text: "newer output" }] };
+			const source = {
+				sessionManager: manager, agent: { state: { streamMessage: partial as AgentMessage | null } },
+				isSessionTransitioning: false, obfuscator: undefined,
+				subscribeMessagePersistenceSettled: () => () => {},
+			};
+			const frames: RpcProjectedSessionEventFrame[] = [];
+			let interleave = true;
+			const forwarder = new RpcSessionEventForwarder(frame => {
+				frames.push(frame);
+				if (frame.type !== "journal_state" || frame.reason !== "snapshot" || !interleave) return;
+				interleave = false;
+				source.agent.state.streamMessage = end ? null : newer;
+				forwarder.forward(end
+					? { type: "message_end", message: newer }
+					: { type: "message_update", message: newer, assistantMessageEvent: {
+						type: "text_delta", contentIndex: 0, delta: "newer output", partial: newer,
+					} });
+			});
+			forwarder.observeJournal(source);
+			expect(frames.some(frame => frame.type === "message_start")).toBe(false);
+			expect(frames.at(-1)).toMatchObject({ type: end ? "message_end" : "message_update", message: newer });
+			forwarder.dispose();
+			await manager.close();
+		}
+	});
+
+	test("a native owner replacement during snapshot publication never attaches the old assistant", async () => {
+		await using dir = await TempDir.create("@journal-events-snapshot-owner-");
+		const manager = SessionManager.create(dir.path(), dir.path(), new MemorySessionStorage());
+		const root = manager.appendCustomEntry("root");
+		await manager.ensureOnDisk();
+		const before = manager.getSessionId();
+		const oldAssistant = makeAssistantMessage();
+		const source = {
+			sessionManager: manager, agent: { state: { streamMessage: oldAssistant as AgentMessage | null } },
+			isSessionTransitioning: false, obfuscator: undefined,
+			subscribeMessagePersistenceSettled: () => () => {},
+		};
+		const frames: RpcProjectedSessionEventFrame[] = [];
+		let replace = true;
+		const forwarder = new RpcSessionEventForwarder(frame => {
+			frames.push(frame);
+			if (frame.type !== "journal_state" || frame.reason !== "snapshot" || !replace) return;
+			replace = false;
+			manager.createBranchedSession(root);
+			source.agent.state.streamMessage = null;
+		});
+		forwarder.observeJournal(source);
+		expect(manager.getSessionId()).not.toBe(before);
+		expect(frames.some(frame => frame.type === "message_start")).toBe(false);
+		expect(frames).toContainEqual({ type: "journal_state", reason: "identity", ...manager.getJournalIdentity() });
+		forwarder.snapshotJournal(source);
+		expect(frames.some(frame => frame.type === "message_start")).toBe(false);
+		forwarder.dispose();
 		await manager.close();
 	});
 

@@ -189,6 +189,7 @@ Important edge behavior from runtime:
 - `{ id?, type: "set_ask_dialog", enabled: boolean }`
 - `{ id?, type: "get_available_commands" }`
 - `{ id?, type: "get_entries", since?: string }`
+- `{ id?, type: "snapshot_session_journal" }`
 - `{ id?, type: "get_tree" }`
 - `{ id?, type: "set_todos", phases: TodoPhase[] }`
 - `{ id?, type: "set_host_tools", tools: RpcHostToolDefinition[] }`
@@ -441,6 +442,7 @@ Stdio RPC and control owners advertise `session_journal_events` and emit:
 - `journal_state` with `reason: "snapshot" | "identity" | "leaf"`.
 - `journal_entry` with the complete canonical native `entry`, only after storage acknowledges persistence.
 - `message_persisted` with the streaming `messageId` and canonical journal `entryId`.
+- `message_start` with `snapshot: true`, the current unsaved assistant `message` and its streaming `messageId`, when an assistant is already in flight at the snapshot boundary.
 
 Every frame carries `sessionId`, canonical absolute `sessionFile` and `leafId`.
 `sessionFile` is `null` for an in-memory owner. The leaf describes the running
@@ -454,6 +456,23 @@ their native IDs and discard the old binding when either session ID or file
 changes. Restart branch paging when the leaf changes. The initial state frame
 contains identity, not a second copy of the journal.
 
+For a new watcher on an already connected runtime, register the local event
+listener, then send `snapshot_session_journal` before reading history pages.
+The command emits `journal_state` and any current assistant snapshot before
+its response. Its response data is `{ sessionId, sessionFile, leafId }`.
+It never replaces subscriptions or restarts a stream. Repeated snapshots and
+new control connections reuse the native owner's current `messageId` across
+stdio/control updates, end and persistence receipt.
+The snapshot reads the native in-flight assistant directly, so a quiet reply
+appears immediately without waiting for another delta. It is unsaved output,
+not a journal entry. No assistant frame is emitted when none is in flight.
+Native session transitions return `session_busy`.
+
+Snapshot frames carry the same canonical identity fields. An intervening
+newer message event or owner/leaf change suppresses an older captured snapshot.
+The client's ordered event stream remains authoritative; a snapshot is never
+published after a newer event with stale content.
+
 Live `message_start`, updates and `message_end` remain unsaved output until a
 `message_persisted` frame associates them with a journal entry. A process-local
 `msg-N`, an accepted prompt's reserved `userEntryId`, or a completed stream is
@@ -462,10 +481,11 @@ no association. Recovery announces entries only after native persistence succeed
 Messages already present in the initial history use their native entry IDs;
 they need no live-message association.
 
-All three frame types respect `set_event_filter`. Protocol v2 uses the existing
+These frames respect `set_event_filter`, including `message_start` for snapshots. Protocol v2 uses the existing
 chunking limits for large entries without truncation. The TypeScript client
-exposes them through `onJournalEvent`; existing `onEvent` and `onSessionEvent`
-listeners retain their event types. Consumers must ignore unknown event kinds.
+exposes journal notifications and assistant snapshots through `onJournalEvent`;
+existing `onEvent` and `onSessionEvent` listeners retain their event types.
+Consumers must ignore unknown event kinds.
 
 ### Yield vs settled
 
@@ -1147,7 +1167,7 @@ Extension runner errors are emitted separately as:
 
 `message_update` includes streaming deltas in `assistantMessageEvent` (text/thinking/toolcall deltas).
 
-`message_start`, `message_update`, and `message_end` carry a `messageId` string assigned by RPC mode. One message keeps the same id from its start through every update to its end; ids are unique within the process. Records injected mid-stream (advisor cards, IRC messages) get their own id and do not disturb the id of the reply streaming around them.
+`message_start`, `message_update`, and `message_end` carry a live `messageId` string. One message keeps its ID across the native owner's stdio and control observers, including a new attachment's in-flight snapshot. IDs are scoped to that owner process, not journal identities. Records injected mid-stream, such as advisor cards and IRC messages, get their own IDs and do not disturb the reply streaming around them.
 
 `set_event_filter` restricts which session event frames are written: pass the event `type` strings to forward, or `null` to forward everything (the default). The response echoes the active selection as `{ events, messageUpdates }`. The filter applies to all events emitted through the session subscription, not just the common types listed above; every other outbound category (responses, `prompt_result`, `session_settled`, extension UI and host tool/URI requests, plan mode frames, `extension_error`, `available_commands_update`, subagent frames, side-question frames, builtin slash-command side channels, and session-persistence and `btw-history` `notice` frames) is unaffected by this filter. Hosts that fail closed on unknown event kinds can pin the set they understand here instead of breaking when NeoPi adds an event.
 

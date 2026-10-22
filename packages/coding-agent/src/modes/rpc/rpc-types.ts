@@ -73,6 +73,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
+	| { id?: string; type: "snapshot_session_journal" }
 	| { id?: string; type: "get_tree" }
 	| { id?: string; type: "set_todos"; phases: TodoPhase[] }
 	| { id?: string; type: "set_host_tools"; tools: RpcHostToolDefinition[] }
@@ -569,6 +570,7 @@ export type RpcResponse =
 			success: true;
 			data: { entries: SessionEntry[]; leafId: string | null };
 	  }
+	| { id?: string; type: "response"; command: "snapshot_session_journal"; success: true; data: SessionJournalIdentity }
 	| {
 			id?: string;
 			type: "response";
@@ -850,6 +852,10 @@ export type RpcMessageEventType = "message_start" | "message_update" | "message_
  */
 export type RpcMessageEventFrame = Extract<AgentSessionEvent, { type: RpcMessageEventType }> & { messageId: string };
 
+/** Current native unsaved assistant, sent at an ordered subscription/snapshot boundary. */
+export type RpcMessageSnapshotFrame = Extract<RpcMessageEventFrame, { type: "message_start" }> &
+	SessionJournalIdentity & { snapshot: true };
+
 type WithoutPartial<T> = T extends unknown ? Omit<T, "partial"> : never;
 
 /** Raw-protocol opt-in projection; terminal subtype fields are preserved. */
@@ -867,7 +873,7 @@ export type RpcMessagePersistedFrame = SessionJournalIdentity & {
 	messageId: string;
 	entryId: string;
 };
-export type RpcJournalEventFrame = SessionJournalEvent | RpcMessagePersistedFrame;
+export type RpcJournalEventFrame = SessionJournalEvent | RpcMessagePersistedFrame | RpcMessageSnapshotFrame;
 
 /** Session event as written to stdout by default: message lifecycle events carry a `messageId`. */
 export type RpcAgentSessionEventFrame =

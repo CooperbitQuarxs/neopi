@@ -906,6 +906,12 @@ export interface SessionEntries {
 	leafId: string | null;
 }
 
+export interface JournalIdentity {
+	sessionId: string;
+	sessionFile: string | null;
+	leafId: string | null;
+}
+
 /** Raw session tree roots. */
 export interface SessionTree {
 	tree: Record<string, unknown>[];
@@ -1029,7 +1035,7 @@ export interface MessagePersistedEvent {
 	sessionId: string;
 	sessionFile: string | null;
 	leafId: string | null;
-	/** Shared by the start, updates, and end of one message; unique per process. */
+	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
 	messageId: string;
 	entryId: string;
 }
@@ -1240,8 +1246,13 @@ export interface TurnEndEvent {
 export interface MessageStartEvent {
 	type: "message_start";
 	message: AgentMessage;
-	/** Shared by the start, updates, and end of one message; unique per process. */
+	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
 	messageId?: string;
+	/** True for the current unsaved assistant at an ordered native snapshot boundary. */
+	snapshot?: boolean;
+	sessionId?: string;
+	sessionFile?: string | null;
+	leafId?: string | null;
 	requestModelProvider?: string;
 	requestModelId?: string;
 	requestReasoning?: Effort;
@@ -1253,7 +1264,7 @@ export interface MessageUpdateEvent {
 	type: "message_update";
 	message: AgentMessage;
 	assistantMessageEvent: AssistantMessageEvent;
-	/** Shared by the start, updates, and end of one message; unique per process. */
+	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
 	messageId?: string;
 	requestModelProvider?: string;
 	requestModelId?: string;
@@ -1265,7 +1276,7 @@ export interface MessageUpdateEvent {
 export interface MessageEndEvent {
 	type: "message_end";
 	message: AgentMessage;
-	/** Shared by the start, updates, and end of one message; unique per process. */
+	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
 	messageId?: string;
 	requestModelProvider?: string;
 	requestModelId?: string;
@@ -2368,6 +2379,7 @@ export interface RpcWireCommands {
 	set_ask_dialog: { params: SetAskDialogParams; result: SetAskDialogResult };
 	get_available_commands: { params: undefined; result: GetAvailableCommandsResult };
 	get_entries: { params: GetEntriesParams; result: SessionEntries };
+	snapshot_session_journal: { params: undefined; result: JournalIdentity };
 	get_tree: { params: undefined; result: SessionTree };
 	set_todos: { params: SetTodosParams; result: SetTodosResult };
 	set_host_tools: { params: SetHostToolsParams; result: SetHostToolsResult };

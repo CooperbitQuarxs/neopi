@@ -4410,6 +4410,29 @@ func (v *SessionEntries) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type JournalIdentity struct {
+	SessionID   string  `json:"sessionId"`
+	SessionFile *string `json:"sessionFile"`
+	LeafID      *string `json:"leafId"`
+}
+
+func (v *JournalIdentity) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JournalIdentity", v.decodeFrom)
+}
+
+func (v *JournalIdentity) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JournalIdentity
+	d := fieldDecoder{raw: raw, owner: "JournalIdentity"}
+	d.required("sessionId", &out.SessionID)
+	d.nullable("sessionFile", &out.SessionFile)
+	d.nullable("leafId", &out.LeafID)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 // Raw session tree roots.
 type SessionTree struct {
 	Tree   []map[string]json.RawMessage `json:"tree"`
@@ -4917,7 +4940,7 @@ type MessagePersistedEvent struct {
 	SessionID   string  `json:"sessionId"`
 	SessionFile *string `json:"sessionFile"`
 	LeafID      *string `json:"leafId"`
-	// Shared by the start, updates, and end of one message; unique per process.
+	// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
 	MessageID string `json:"messageId"`
 	EntryID   string `json:"entryId"`
 }
@@ -5962,8 +5985,13 @@ func (v TurnEndEvent) MarshalJSON() ([]byte, error) {
 
 type MessageStartEvent struct {
 	Message AgentMessage `json:"message"`
-	// Shared by the start, updates, and end of one message; unique per process.
-	MessageID                     *string `json:"messageId,omitempty"`
+	// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
+	MessageID *string `json:"messageId,omitempty"`
+	// True for the current unsaved assistant at an ordered native snapshot boundary.
+	Snapshot                      *bool   `json:"snapshot,omitempty"`
+	SessionID                     *string `json:"sessionId,omitempty"`
+	SessionFile                   *string `json:"sessionFile,omitempty"`
+	LeafID                        *string `json:"leafId,omitempty"`
 	RequestModelProvider          *string `json:"requestModelProvider,omitempty"`
 	RequestModelID                *string `json:"requestModelId,omitempty"`
 	RequestReasoning              *Effort `json:"requestReasoning,omitempty"`
@@ -5981,6 +6009,10 @@ func (v *MessageStartEvent) decodeFrom(raw map[string]json.RawMessage) error {
 	d.constant("type", "message_start")
 	d.required("message", &out.Message)
 	d.optional("messageId", &out.MessageID)
+	d.optional("snapshot", &out.Snapshot)
+	d.optional("sessionId", &out.SessionID)
+	d.optional("sessionFile", &out.SessionFile)
+	d.optional("leafId", &out.LeafID)
 	d.optional("requestModelProvider", &out.RequestModelProvider)
 	d.optional("requestModelId", &out.RequestModelID)
 	d.optional("requestReasoning", &out.RequestReasoning)
@@ -6001,7 +6033,7 @@ func (v MessageStartEvent) MarshalJSON() ([]byte, error) {
 type MessageUpdateEvent struct {
 	Message               AgentMessage          `json:"message"`
 	AssistantMessageEvent AssistantMessageEvent `json:"assistantMessageEvent"`
-	// Shared by the start, updates, and end of one message; unique per process.
+	// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
 	MessageID                     *string `json:"messageId,omitempty"`
 	RequestModelProvider          *string `json:"requestModelProvider,omitempty"`
 	RequestModelID                *string `json:"requestModelId,omitempty"`
@@ -6040,7 +6072,7 @@ func (v MessageUpdateEvent) MarshalJSON() ([]byte, error) {
 
 type MessageEndEvent struct {
 	Message AgentMessage `json:"message"`
-	// Shared by the start, updates, and end of one message; unique per process.
+	// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
 	MessageID                     *string `json:"messageId,omitempty"`
 	RequestModelProvider          *string `json:"requestModelProvider,omitempty"`
 	RequestModelID                *string `json:"requestModelId,omitempty"`
@@ -10388,6 +10420,13 @@ type GetEntriesCommand struct {
 func (c Commands) GetEntries(ctx context.Context, p GetEntriesCommand) (SessionEntries, error) {
 	var out SessionEntries
 	err := c.call(ctx, "get_entries", p, 0, &out)
+	return out, err
+}
+
+// SnapshotSessionJournal sends "snapshot_session_journal": Emit native journal identity and current unsaved assistant before responding, without replacing subscriptions.
+func (c Commands) SnapshotSessionJournal(ctx context.Context) (JournalIdentity, error) {
+	var out JournalIdentity
+	err := c.call(ctx, "snapshot_session_journal", nil, 0, &out)
 	return out, err
 }
 

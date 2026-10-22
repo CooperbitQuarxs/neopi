@@ -177,6 +177,11 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		params: { "since?": "string" },
 		result: "SessionEntries",
 	},
+	{
+		name: "snapshot_session_journal",
+		doc: "Emit native journal identity and current unsaved assistant before responding, without replacing subscriptions.",
+		result: "JournalIdentity",
+	},
 	{ name: "get_tree", doc: "Read the raw session tree.", result: "SessionTree" },
 	{
 		name: "set_todos",

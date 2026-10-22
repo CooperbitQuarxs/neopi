@@ -1151,6 +1151,13 @@ class SessionEntries:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class JournalIdentity:
+    session_id: str
+    session_file: str | None
+    leaf_id: str | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class SessionTree:
     """Raw session tree roots."""
     tree: tuple[JsonObject, ...]
@@ -1273,7 +1280,7 @@ class MessagePersistedEvent:
     session_file: str | None
     leaf_id: str | None
     message_id: str
-    """Shared by the start, updates, and end of one message; unique per process."""
+    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
     entry_id: str
 
 
@@ -1505,7 +1512,12 @@ class MessageStartEvent:
     type: Literal["message_start"] = "message_start"
     message: AgentMessage
     message_id: str | None = None
-    """Shared by the start, updates, and end of one message; unique per process."""
+    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
+    snapshot: bool | None = None
+    """True for the current unsaved assistant at an ordered native snapshot boundary."""
+    session_id: str | None = None
+    session_file: str | None = None
+    leaf_id: str | None = None
     request_model_provider: str | None = None
     request_model_id: str | None = None
     request_reasoning: Effort | None = None
@@ -1519,7 +1531,7 @@ class MessageUpdateEvent:
     message: AgentMessage
     assistant_message_event: AssistantMessageEvent
     message_id: str | None = None
-    """Shared by the start, updates, and end of one message; unique per process."""
+    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
     request_model_provider: str | None = None
     request_model_id: str | None = None
     request_reasoning: Effort | None = None
@@ -1532,7 +1544,7 @@ class MessageEndEvent:
     type: Literal["message_end"] = "message_end"
     message: AgentMessage
     message_id: str | None = None
-    """Shared by the start, updates, and end of one message; unique per process."""
+    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
     request_model_provider: str | None = None
     request_model_id: str | None = None
     request_reasoning: Effort | None = None
@@ -3051,6 +3063,15 @@ def parse_session_entries(value: object, path: str = "SessionEntries") -> Sessio
     )
 
 
+def parse_journal_identity(value: object, path: str = "JournalIdentity") -> JournalIdentity:
+    payload = expect_object(value, path)
+    return JournalIdentity(
+        session_id=required(payload, "sessionId", decode_str, path),
+        session_file=required(payload, "sessionFile", nullable(decode_str), path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+    )
+
+
 def parse_session_tree(value: object, path: str = "SessionTree") -> SessionTree:
     payload = expect_object(value, path)
     return SessionTree(
@@ -3464,6 +3485,10 @@ def parse_message_start_event(value: object, path: str = "MessageStartEvent") ->
     return MessageStartEvent(
         message=required(payload, "message", parse_agent_message, path),
         message_id=optional(payload, "messageId", decode_str, path),
+        snapshot=optional(payload, "snapshot", decode_bool, path),
+        session_id=optional(payload, "sessionId", decode_str, path),
+        session_file=optional(payload, "sessionFile", nullable(decode_str), path),
+        leaf_id=optional(payload, "leafId", nullable(decode_str), path),
         request_model_provider=optional(payload, "requestModelProvider", decode_str, path),
         request_model_id=optional(payload, "requestModelId", decode_str, path),
         request_reasoning=optional(payload, "requestReasoning", _decode_effort, path),
@@ -4599,6 +4624,11 @@ class WireClient:
             params["since"] = since
         return parse_session_entries(self._command("get_entries", params), "get_entries")
 
+    def snapshot_session_journal(self) -> JournalIdentity:
+        """Emit native journal identity and current unsaved assistant before responding, without replacing subscriptions."""
+        params: dict[str, object] = {}
+        return parse_journal_identity(self._command("snapshot_session_journal", params), "snapshot_session_journal")
+
     def get_tree(self) -> SessionTree:
         """Read the raw session tree."""
         params: dict[str, object] = {}
@@ -5251,6 +5281,7 @@ __all__ = [
     "InterruptMode",
     "IrcMessageEvent",
     "JournalEntryEvent",
+    "JournalIdentity",
     "JournalStateEvent",
     "ListMixturesResult",
     "LiveEndEvent",
@@ -5497,6 +5528,7 @@ __all__ = [
     "parse_input_ui_request",
     "parse_irc_message_event",
     "parse_journal_entry_event",
+    "parse_journal_identity",
     "parse_journal_state_event",
     "parse_list_mixtures_result",
     "parse_live_end_event",

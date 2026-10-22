@@ -1914,6 +1914,12 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				}
 			}
 
+			case "snapshot_session_journal": {
+				if (session.isSessionTransitioning)
+					return error(id, "snapshot_session_journal", "Native session transition is still applying", "session_busy");
+				return success(id, "snapshot_session_journal", sessionEvents.snapshotJournal(session));
+			}
+
 			case "get_tree": {
 				return success(id, "get_tree", {
 					tree: session.sessionManager.getTree(),
@@ -2632,7 +2638,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	);
 	const promptResults = new RpcPromptResults(session, output, goalTurnScheduled);
 	const sessionEvents = new RpcSessionEventForwarder(output);
-	sessionEvents.observeJournal(session);
 	const settleWatcher = new RpcSessionSettleWatcher(session, output, goalTurnScheduled);
 
 	const pendingExtensionRequests = new RpcPendingExtensionRequests();
@@ -2952,6 +2957,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		settleWatcher.observe(event);
 		planMode.observe(event);
 	});
+	sessionEvents.observeJournal(session);
 	await goalController.reconcile();
 	await goalController.settled();
 

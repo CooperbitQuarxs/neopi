@@ -6,7 +6,7 @@
 import { absentAs, doc, type WireDefs } from "./dsl";
 
 const JSON_OBJECT = "Record<string, unknown>";
-const MESSAGE_ID = doc("string", "Shared by the start, updates, and end of one message; unique per process.");
+const MESSAGE_ID = doc("string", "Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.");
 const JOURNAL_IDENTITY = { sessionId: "string", sessionFile: "string | null", leafId: "string | null" };
 const MIXTURE_TRACE_HEADER = {
 	v: "number.integer",
@@ -138,6 +138,10 @@ export const eventDefs = {
 		type: "'message_start'",
 		message: "AgentMessage",
 		"messageId?": MESSAGE_ID,
+		"snapshot?": doc("boolean", "True for the current unsaved assistant at an ordered native snapshot boundary."),
+		"sessionId?": "string",
+		"sessionFile?": "string | null",
+		"leafId?": "string | null",
 		"requestModelProvider?": "string",
 		"requestModelId?": "string",
 		"requestReasoning?": "Effort",

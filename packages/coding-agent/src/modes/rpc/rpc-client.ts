@@ -68,6 +68,7 @@ import type {
 	RpcToolApprovalRequest,
 	RpcToolApprovalResponse,
 } from "./rpc-types";
+import type { SessionJournalIdentity } from "../../session/session-journal-events";
 import type { RpcUsageRequest, RpcUsageResult } from "./rpc-usage";
 
 /** Distributive Omit that works with union types */
@@ -248,6 +249,9 @@ function isRpcJournalEvent(value: unknown): value is RpcJournalEventFrame {
 	if (value.type === "journal_state")
 		return value.reason === "snapshot" || value.reason === "identity" || value.reason === "leaf";
 	if (value.type === "journal_entry") return isRecord(value.entry) && typeof value.entry.id === "string";
+	if (value.type === "message_start")
+		return value.snapshot === true && typeof value.messageId === "string" &&
+			isRecord(value.message) && value.message.role === "assistant";
 	return value.type === "message_persisted" && typeof value.messageId === "string" && typeof value.entryId === "string";
 }
 
@@ -1176,6 +1180,12 @@ export class RpcClient {
 	async getEntries(since?: string): Promise<{ entries: SessionEntry[]; leafId: string | null }> {
 		const response = await this.#send({ type: "get_entries", since });
 		return this.#getData<{ entries: SessionEntry[]; leafId: string | null }>(response);
+	}
+
+	/** Emit an ordered native identity/current-assistant snapshot to existing observers before resolving. */
+	async snapshotSessionJournal(): Promise<SessionJournalIdentity> {
+		const response = await this.#send({ type: "snapshot_session_journal" });
+		return this.#getData<SessionJournalIdentity>(response);
 	}
 
 	/**

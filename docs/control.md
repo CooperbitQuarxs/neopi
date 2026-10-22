@@ -109,6 +109,10 @@ Subscribe before fetching initial native pages and buffer those events while
 reconciling the snapshot. An owner changing session ID or canonical file
 invalidates the old binding. These are notifications from the existing writer,
 not a request to open the journal for writing. See [Native journal events](./rpc.md#native-journal-events).
+On an existing connection, use `snapshot_session_journal` after installing a new
+watcher and before paging. It emits the current native unsaved assistant as
+`message_start` with `snapshot: true` and the same ID future live events use,
+then replies. This does not create another writer or subscription.
 
 Stdin EOF sends `bye` and exits successfully; it detaches without stopping or
 aborting the owner. Owner socket closure also exits successfully. Resolution or
