@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { parse } from "yaml";
 import { parseConfigArgs, runConfigCommand } from "../src/cli/config-cli";
-import { resetSettingsForTest, Settings } from "../src/config/settings";
+import { Settings } from "../src/config/settings";
 import { overlaySettingsToml, parseSettingsToml, stringifySettingsToml } from "../src/config/settings-toml";
 import {
 	convertMainSettingsToToml,
@@ -11,21 +11,25 @@ import {
 	convertSettingsYamlToToml,
 } from "../src/config/settings-to-toml";
 import { writeFileAtomically } from "../src/utils/atomic-file";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
-let root: string;
+let root = "";
 let agentDir: string;
 let cwd: string;
+let state: SettingsTestState | undefined;
 beforeEach(async () => {
-	root = await fs.mkdtemp(path.join(process.env.HOME!, ".cache/npi-canary/toml-codec-test-"));
+	state = beginSettingsTest();
+	const cacheDir = path.join(process.env.HOME!, ".cache/npi-canary");
+	await fs.mkdir(cacheDir, { recursive: true });
+	root = await fs.mkdtemp(path.join(cacheDir, "toml-codec-test-"));
 	agentDir = path.join(root, "agent");
 	cwd = path.join(root, "project");
 	await fs.mkdir(agentDir, { recursive: true });
 	await fs.mkdir(cwd, { recursive: true });
-	resetSettingsForTest();
 });
 afterEach(async () => {
-	resetSettingsForTest();
-	await fs.rm(root, { recursive: true, force: true });
+	restoreSettingsTestState(state);
+	if (root) await fs.rm(root, { recursive: true, force: true });
 });
 
 describe("full settings TOML codec", () => {

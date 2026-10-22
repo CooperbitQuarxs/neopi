@@ -564,7 +564,9 @@ describe("ModelHub", () => {
 		});
 
 		test("real settings initialization without model limits renders no compaction summary", async () => {
-			const root = await fs.mkdtemp(path.join(os.homedir(), ".cache/npi-canary/model-limit-"));
+			const parent = path.join(os.homedir(), ".cache/npi-canary");
+			await fs.mkdir(parent, { recursive: true });
+			const root = await fs.mkdtemp(path.join(parent, "model-limit-"));
 			try {
 				const settings = await Settings.init({ cwd: root, agentDir: root, inMemory: true });
 				const model = makeModel("test", "no-limit");

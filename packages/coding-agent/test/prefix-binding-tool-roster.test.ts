@@ -112,7 +112,7 @@ function newSession(
 		agent,
 		sessionManager: options.sessionManager ?? SessionManager.inMemory(),
 		settings: Settings.isolated({ "compaction.enabled": false }),
-		modelRegistry: { getApiKey: async () => "test-key" } as never,
+		modelRegistry: { getAvailable: () => [model], getApiKey: async () => "test-key" } as never,
 		toolRegistry,
 		builtInToolNames: ["read", "bash"],
 		providerPromptCacheKeySource: options.forkPromptCacheKey ? "fork" : undefined,
