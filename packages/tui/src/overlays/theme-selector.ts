@@ -99,8 +99,6 @@ export class ThemeSelectorComponent extends OverlayPanel {
 
 	restoreNavigation(snapshot: unknown): void {
 		this.#selectList.restoreNavigation(snapshot);
-		const selected = this.#selectList.getSelectedItem();
-		if (selected) this.#onPreview(selected.value);
 	}
 
 	leaveMenu(): void {

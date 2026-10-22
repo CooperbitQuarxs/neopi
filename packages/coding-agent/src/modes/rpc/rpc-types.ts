@@ -26,9 +26,20 @@ import type { MixtureConfigScope, MixtureDefinition } from "@oh-my-pi/pi-tui/ove
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import type { LivePhase } from "../../live/controller";
 import type { RpcMessagesPage } from "./rpc-messages";
+import type {
+	RpcNavigateTreeOptions,
+	RpcNavigateTreeResult,
+	RpcResumeTreeOptions,
+	RpcResumeTreeResult,
+} from "./rpc-tree";
+import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
 import type { RpcModel } from "./rpc-model";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
-import type { RpcSetModelRoleConfiguration, RpcSetEffortRules } from "./rpc-models-configuration";
+import type {
+	RpcModelsConfiguration,
+	RpcSetModelRoleConfiguration,
+	RpcSetEffortRules,
+} from "./rpc-models-configuration";
 import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
@@ -73,7 +84,10 @@ export type RpcCommand =
 	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
+	| ({ id?: string; type: "get_entries_page" } & RpcJournalPageOptions)
 	| { id?: string; type: "get_tree" }
+	| ({ id?: string; type: "navigate_tree" } & RpcNavigateTreeOptions)
+	| ({ id?: string; type: "resume_tree" } & RpcResumeTreeOptions)
 	| { id?: string; type: "set_todos"; phases: TodoPhase[] }
 	| { id?: string; type: "set_host_tools"; tools: RpcHostToolDefinition[] }
 	| { id?: string; type: "set_host_uri_schemes"; schemes: RpcHostUriSchemeDefinition[] }
@@ -575,6 +589,7 @@ export type RpcResponse =
 			success: true;
 			data: { entries: SessionEntry[]; leafId: string | null };
 	  }
+	| { id?: string; type: "response"; command: "get_entries_page"; success: true; data: RpcJournalPage }
 	| {
 			id?: string;
 			type: "response";
@@ -582,6 +597,8 @@ export type RpcResponse =
 			success: true;
 			data: { tree: SessionTreeNode[]; leafId: string | null };
 	  }
+	| { id?: string; type: "response"; command: "navigate_tree"; success: true; data: RpcNavigateTreeResult }
+	| { id?: string; type: "response"; command: "resume_tree"; success: true; data: RpcResumeTreeResult }
 	| { id?: string; type: "response"; command: "set_todos"; success: true; data: { todoPhases: TodoPhase[] } }
 	| { id?: string; type: "response"; command: "set_host_tools"; success: true; data: { toolNames: string[] } }
 	| { id?: string; type: "response"; command: "set_host_uri_schemes"; success: true; data: { schemes: string[] } }
@@ -702,8 +719,18 @@ export type RpcResponse =
 			success: true;
 			data: RpcSetRoleResult;
 	  }
-	| { id?: string; type: "response"; command: "get_models_configuration"; success: true; data: object }
-	| { id?: string; type: "response"; command: "set_model_role_configuration" | "set_model_role_storage" | "set_effort_rules" | "set_provider_api_key" | "cancel_login"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_models_configuration";
+			success: true;
+			data: Awaited<ReturnType<RpcModelsConfiguration["read"]>>;
+	  }
+	| { id?: string; type: "response"; command: "set_model_role_configuration"; success: true }
+	| { id?: string; type: "response"; command: "set_model_role_storage"; success: true }
+	| { id?: string; type: "response"; command: "set_effort_rules"; success: true }
+	| { id?: string; type: "response"; command: "set_provider_api_key"; success: true }
+	| { id?: string; type: "response"; command: "cancel_login"; success: true }
 
 	// Thinking
 	| { id?: string; type: "response"; command: "set_thinking_level"; success: true }

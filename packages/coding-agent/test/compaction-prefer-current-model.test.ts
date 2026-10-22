@@ -103,6 +103,42 @@ describe("compaction prefers the current session model over modelRoles.default",
 		expect(compactSpy.mock.calls[0]?.[5]?.promptCacheKey).toBe(promptCacheKey);
 	});
 
+	it("uses the compaction role when set without switching the foreground model", async () => {
+		const currentModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const summaryModel = getBundledModel("openai", "gpt-5")!;
+		const settings = Settings.isolated({
+			"compaction.keepRecentTokens": 1,
+			"compaction.methodOrder": ["soft"],
+			modelRoles: { compaction: `${summaryModel.provider}/${summaryModel.id}` },
+		});
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
+		authStorage.keys.setRuntime(currentModel.provider, "test-key");
+		authStorage.keys.setRuntime(summaryModel.provider, "test-key");
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model: currentModel, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		session.subscribe(() => {});
+		for (let i = 0; i < 2; i++) {
+			for (const message of [userMsg(`question ${i}`), assistantMsg(`answer ${i}`)]) {
+				session.agent.appendMessage(message);
+				session.sessionManager.appendMessage(message);
+			}
+		}
+		const compact = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: "summary",
+			shortSummary: "short",
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: 1,
+		}));
+		await session.compact();
+		expect(compact.mock.calls[0]?.[1].id).toBe(summaryModel.id);
+		expect(session.model?.id).toBe(currentModel.id);
+	});
+
 	it("falls back when the authenticated Bedrock candidate cannot resolve AWS credentials", async () => {
 		const currentModel = getBundledModel("amazon-bedrock", "global.anthropic.claude-opus-4-6-v1");
 		const fallbackModel = getBundledModel("anthropic", "claude-sonnet-4-5");

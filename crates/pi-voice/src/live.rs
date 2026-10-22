@@ -109,15 +109,15 @@ struct LiveResources {
 /// remote Opus audio to the default speaker. Owned as an `Arc` by the N-API
 /// `LiveWebRtcPeer` wrapper.
 pub struct LivePeerCore {
-	callbacks:        LiveCallbacks,
-	resources:        Mutex<Option<LiveResources>>,
-	signal_tx:        watch::Sender<PeerSignal>,
-	started:          AtomicBool,
-	closing:          AtomicBool,
-	muted:            AtomicBool,
+	callbacks:         LiveCallbacks,
+	resources:         Mutex<Option<LiveResources>>,
+	signal_tx:         watch::Sender<PeerSignal>,
+	started:           AtomicBool,
+	closing:           AtomicBool,
+	muted:             AtomicBool,
 	output_suppressed: AtomicBool,
-	failure_reported: AtomicBool,
-	queued_samples:   AtomicUsize,
+	failure_reported:  AtomicBool,
+	queued_samples:    AtomicUsize,
 }
 
 impl LivePeerCore {
@@ -150,7 +150,11 @@ impl LivePeerCore {
 		}
 
 		let playback = PlaybackStream::start(OUTPUT_SAMPLE_RATE)?;
-		playback.set_gain(if self.output_suppressed.load(Ordering::Acquire) { 0.0 } else { 1.0 })?;
+		playback.set_gain(if self.output_suppressed.load(Ordering::Acquire) {
+			0.0
+		} else {
+			1.0
+		})?;
 		let playback_tx = playback.writer()?;
 		let mut media_engine = MediaEngine::default();
 		let capability = opus_capability();
@@ -304,7 +308,10 @@ impl LivePeerCore {
 				.fetch_sub(sample_count, Ordering::AcqRel);
 			return Ok(false);
 		}
-		if input_tx.send(InputCommand::Audio(samples.to_vec())).is_err() {
+		if input_tx
+			.send(InputCommand::Audio(samples.to_vec()))
+			.is_err()
+		{
 			self
 				.queued_samples
 				.fetch_sub(sample_count, Ordering::AcqRel);
@@ -334,7 +341,9 @@ impl LivePeerCore {
 	pub fn set_output_suppressed(&self, suppressed: bool) -> VoiceResult<()> {
 		self.output_suppressed.store(suppressed, Ordering::Release);
 		if let Some(resources) = self.resources.lock().as_ref() {
-			resources.playback.set_gain(if suppressed { 0.0 } else { 1.0 })?;
+			resources
+				.playback
+				.set_gain(if suppressed { 0.0 } else { 1.0 })?;
 		}
 		Ok(())
 	}
@@ -706,7 +715,10 @@ async fn receive_output_audio(
 }
 
 fn write_output(playback_tx: &PlaybackWriter, samples: &[f32], core: &Weak<LivePeerCore>) -> bool {
-	if core.upgrade().is_none_or(|core| core.output_suppressed.load(Ordering::Acquire)) {
+	if core
+		.upgrade()
+		.is_none_or(|core| core.output_suppressed.load(Ordering::Acquire))
+	{
 		return true;
 	}
 	match playback_tx.write(samples) {
@@ -730,7 +742,10 @@ struct OutputLevel {
 
 impl OutputLevel {
 	fn observe(&mut self, decoded: &[f32], core: &Weak<LivePeerCore>) {
-		if core.upgrade().is_none_or(|core| core.output_suppressed.load(Ordering::Acquire)) {
+		if core
+			.upgrade()
+			.is_none_or(|core| core.output_suppressed.load(Ordering::Acquire))
+		{
 			self.sum_squares = 0.0;
 			self.samples = 0;
 			return;
@@ -791,14 +806,22 @@ mod tests {
 		.await;
 		assert!(rx.is_empty(), "the burst moved into encoder-pending storage");
 		assert_eq!(core.queued_samples.load(Ordering::Acquire), MAX_QUEUED_INPUT_SAMPLES);
-		assert!(!core.queue_input_audio(&tx, &[0.5; INPUT_FRAME_SAMPLES]).unwrap());
+		assert!(
+			!core
+				.queue_input_audio(&tx, &[0.5; INPUT_FRAME_SAMPLES])
+				.unwrap()
+		);
 
 		tokio::select! {
 			_ = &mut input => panic!("input consumer stopped"),
 			_ = tokio::time::sleep(INPUT_FRAME_DURATION * 3) => {},
 		}
 		assert!(core.queued_samples.load(Ordering::Acquire) < MAX_QUEUED_INPUT_SAMPLES);
-		assert!(core.queue_input_audio(&tx, &[0.5; INPUT_FRAME_SAMPLES]).unwrap());
+		assert!(
+			core
+				.queue_input_audio(&tx, &[0.5; INPUT_FRAME_SAMPLES])
+				.unwrap()
+		);
 
 		tx.send(InputCommand::Muted(true)).unwrap();
 		std::future::poll_fn(|cx| {
@@ -816,7 +839,11 @@ mod tests {
 	fn oversized_input_is_rejected_without_truncation() {
 		let core = test_core();
 		let (tx, rx) = flume::unbounded();
-		assert!(!core.queue_input_audio(&tx, &vec![0.25; MAX_QUEUED_INPUT_SAMPLES + 1]).unwrap());
+		assert!(
+			!core
+				.queue_input_audio(&tx, &vec![0.25; MAX_QUEUED_INPUT_SAMPLES + 1])
+				.unwrap()
+		);
 		assert!(rx.is_empty());
 		assert_eq!(core.queued_samples.load(Ordering::Acquire), 0);
 	}
@@ -826,7 +853,11 @@ mod tests {
 		let core = test_core();
 		let (tx, rx) = flume::unbounded();
 		drop(rx);
-		assert!(core.queue_input_audio(&tx, &[0.25; INPUT_FRAME_SAMPLES]).is_err());
+		assert!(
+			core
+				.queue_input_audio(&tx, &[0.25; INPUT_FRAME_SAMPLES])
+				.is_err()
+		);
 		assert_eq!(core.queued_samples.load(Ordering::Acquire), 0);
 	}
 }

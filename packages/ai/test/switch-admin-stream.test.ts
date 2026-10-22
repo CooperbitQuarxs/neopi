@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
+import { removeWithRetries } from "../../utils/src/temp";
 import { AdminAuthentication } from "../src/switch/admin-auth";
 import { adminEventsStream } from "../src/switch/admin-stream";
 import type { AdminConfig, SwitchConfig } from "../src/switch/config/types";
@@ -10,7 +12,7 @@ import { SwitchStore } from "../src/switch/store";
 
 const token = "Bearer replay-test-token";
 const actor = { name: "operator", role: "read" } as const;
-let directory: string;
+let directory = "";
 let database: SwitchDatabase;
 let store: SwitchStore;
 let config: SwitchConfig;
@@ -18,7 +20,7 @@ let admin: AdminConfig;
 let authentication: AdminAuthentication;
 
 beforeEach(async () => {
-	const scratch = "/home/shayna/.cache/npi-canary";
+	const scratch = path.join(os.homedir(), ".cache", "npi-canary");
 	await fs.mkdir(scratch, { recursive: true });
 	directory = await fs.mkdtemp(path.join(scratch, "switch-stream-329-"));
 	admin = {
@@ -64,7 +66,10 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	store?.shutdown();
-	await fs.rm(directory, { recursive: true, force: true });
+	if (directory) {
+		await removeWithRetries(directory);
+		directory = "";
+	}
 });
 
 function retainChanges(count: number): void {

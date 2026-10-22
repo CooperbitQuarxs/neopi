@@ -123,3 +123,33 @@ export async function openEditorOnPath(editorCmd: string, filePath: string): Pro
 	});
 	return child.exited;
 }
+
+export interface ExternalEditorHost {
+	ui: {
+		stop(): void;
+		start(): void;
+		requestRender(force?: boolean): void;
+	};
+	showWarning(message: string): void;
+}
+
+/** Shared composer/config editor lifecycle, including restoration after launch failures. */
+export async function withExternalEditor(
+	host: ExternalEditorHost,
+	edit: (command: string) => Promise<void>,
+): Promise<void> {
+	const command = getEditorCommand();
+	if (!command) {
+		host.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
+		return;
+	}
+	try {
+		host.ui.stop();
+		await edit(command);
+	} catch (error) {
+		host.showWarning(`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`);
+	} finally {
+		host.ui.start();
+		host.ui.requestRender(true);
+	}
+}

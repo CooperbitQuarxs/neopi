@@ -73,6 +73,9 @@ import { RPC_CAPABILITIES } from "./rpc-capabilities";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
+import { navigateRpcTree, resumeRpcTree } from "./rpc-tree";
+import { TreeNavigationError } from "../../session/tree-navigation";
+import { readLiveJournalPage, RpcJournalError } from "./rpc-journal";
 import { RpcBtwController } from "./rpc-btw";
 import { RpcGoalController } from "./rpc-goal";
 import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
@@ -535,6 +538,7 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 		command.type === "prompt" ||
 		command.type === "steer" ||
 		command.type === "follow_up" ||
+		command.type === "navigate_tree" ||
 		command.type === "steer_subagent"
 	) {
 		const task = (async () => {
@@ -1923,11 +1927,43 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				}
 			}
 
+			case "get_entries_page": {
+				if (session.isSessionTransitioning)
+					return error(id, "get_entries_page", "Native session transition is still applying", "session_busy");
+				try {
+					return success(id, "get_entries_page", readLiveJournalPage(session.sessionManager, command));
+				} catch (err) {
+					return error(
+						id,
+						"get_entries_page",
+						err instanceof Error ? err.message : String(err),
+						err instanceof RpcJournalError ? err.code : "session_unavailable",
+					);
+				}
+			}
+
 			case "get_tree": {
 				return success(id, "get_tree", {
 					tree: session.sessionManager.getTree(),
 					leafId: session.sessionManager.getLeafId(),
 				});
+			}
+
+			case "navigate_tree":
+			case "resume_tree": {
+				try {
+					const result =
+						command.type === "navigate_tree"
+							? await navigateRpcTree(session, command)
+							: resumeRpcTree(session, command);
+					if (command.type === "navigate_tree" && "outcome" in result && result.outcome === "navigated") {
+						inputGate.commitSessionChange(command);
+					}
+					return success(id, command.type, result);
+				} catch (err) {
+					if (!(err instanceof TreeNavigationError)) throw err;
+					return error(id, command.type, err.message, err.code);
+				}
 			}
 
 			case "set_todos": {
