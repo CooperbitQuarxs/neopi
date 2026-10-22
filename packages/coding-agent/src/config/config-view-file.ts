@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { SETTINGS_TOML } from "./settings-toml";
+import { resolveSettingsTomlPath } from "./settings-toml";
 
 export type ConfigViewTarget =
 	| { kind: "settings"; scope?: "global" | "project" }
@@ -34,8 +34,8 @@ export async function resolveConfigViewFile(
 	}
 	if (!filePath) return undefined;
 	if (settingsFile) {
-		const overlay = path.join(path.dirname(filePath), SETTINGS_TOML);
-		if (await Bun.file(overlay).exists()) return overlay;
+		const overlay = await resolveSettingsTomlPath(path.dirname(filePath));
+		if (overlay) return overlay;
 	}
 	return filePath;
 }
