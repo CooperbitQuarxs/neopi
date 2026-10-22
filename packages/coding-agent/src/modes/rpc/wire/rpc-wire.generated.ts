@@ -380,6 +380,23 @@ export interface ModelInfo {
 	compat?: Record<string, unknown>;
 }
 
+export interface ThemeSelection {
+	effective: string;
+	global: string | null;
+	project: string | null;
+	colors: Record<string, string>;
+}
+
+export interface ThemeSelections {
+	dark: ThemeSelection;
+	light: ThemeSelection;
+}
+
+export interface ThemesConfiguration {
+	themes: string[];
+	selection: ThemeSelections;
+}
+
 export type ApprovalHandler = "host" | "ui";
 
 export type ChatModeSetting = "off" | "chat" | "erp" | "raw";
@@ -1375,6 +1392,10 @@ export interface ModelChangedEvent {
 	type: "model_changed";
 }
 
+export interface ThemesConfigurationChangedEvent {
+	type: "themes_configuration_changed";
+}
+
 export interface ConfigWarningsChangedEvent {
 	type: "config_warnings_changed";
 }
@@ -2003,6 +2024,13 @@ export interface SelectMixtureParams {
 	name: string;
 }
 
+export interface UpdateThemeParams {
+	appearance: "dark" | "light";
+	scope: "global" | "project";
+	name: string | null;
+	expected: string | null;
+}
+
 export interface SetRoleParams {
 	role: string;
 }
@@ -2397,6 +2425,8 @@ export interface RpcWireCommands {
 	list_mixtures: { params: undefined; result: ListMixturesResult };
 	select_mixture: { params: SelectMixtureParams; result: ModelInfo };
 	get_roles: { params: undefined; result: RolesResult };
+	get_themes_configuration: { params: undefined; result: ThemesConfiguration };
+	update_theme: { params: UpdateThemeParams; result: ThemesConfiguration };
 	set_role: { params: SetRoleParams; result: SetRoleResult };
 	get_models_configuration: { params: undefined; result: GetModelsConfigurationResult };
 	set_model_role_configuration: { params: SetModelRoleConfigurationParams; result: undefined };

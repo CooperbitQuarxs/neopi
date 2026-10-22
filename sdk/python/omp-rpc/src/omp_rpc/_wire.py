@@ -623,6 +623,26 @@ class ModelInfo:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ThemeSelection:
+    effective: str
+    global_: str | None
+    project: str | None
+    colors: dict[str, str]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ThemeSelections:
+    dark: ThemeSelection
+    light: ThemeSelection
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ThemesConfiguration:
+    themes: tuple[str, ...]
+    selection: ThemeSelections
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class ChatModeState:
     mode: ChatModeSetting
     include: str
@@ -2453,6 +2473,32 @@ def parse_model_info(value: object, path: str = "ModelInfo") -> ModelInfo:
         priority=optional(payload, "priority", decode_int, path),
         thinking=optional(payload, "thinking", parse_thinking_config, path),
         compat=optional(payload, "compat", decode_json_object, path),
+    )
+
+
+def parse_theme_selection(value: object, path: str = "ThemeSelection") -> ThemeSelection:
+    payload = expect_object(value, path)
+    return ThemeSelection(
+        effective=required(payload, "effective", decode_str, path),
+        global_=required(payload, "global", nullable(decode_str), path),
+        project=required(payload, "project", nullable(decode_str), path),
+        colors=required(payload, "colors", record(decode_str), path),
+    )
+
+
+def parse_theme_selections(value: object, path: str = "ThemeSelections") -> ThemeSelections:
+    payload = expect_object(value, path)
+    return ThemeSelections(
+        dark=required(payload, "dark", parse_theme_selection, path),
+        light=required(payload, "light", parse_theme_selection, path),
+    )
+
+
+def parse_themes_configuration(value: object, path: str = "ThemesConfiguration") -> ThemesConfiguration:
+    payload = expect_object(value, path)
+    return ThemesConfiguration(
+        themes=required(payload, "themes", array(decode_str), path),
+        selection=required(payload, "selection", parse_theme_selections, path),
     )
 
 
@@ -4551,6 +4597,20 @@ class WireClient:
         params: dict[str, object] = {}
         return parse_roles_result(self._command("get_roles", params), "get_roles")
 
+    def get_themes_configuration(self) -> ThemesConfiguration:
+        """Read native theme discovery and scoped selections."""
+        params: dict[str, object] = {}
+        return parse_themes_configuration(self._command("get_themes_configuration", params), "get_themes_configuration")
+
+    def update_theme(self, appearance: Literal["dark", "light"], scope: Literal["global", "project"], name: str | None, expected: str | None) -> ThemesConfiguration:
+        """Set or inherit one native theme slot with an expected scoped value."""
+        params: dict[str, object] = {}
+        params["appearance"] = appearance
+        params["scope"] = scope
+        params["name"] = name
+        params["expected"] = expected
+        return parse_themes_configuration(self._command("update_theme", params), "update_theme")
+
     def set_role(self, role: str) -> SetRoleResult:
         """Select a model role."""
         params: dict[str, object] = {}
@@ -5450,6 +5510,9 @@ __all__ = [
     "SubagentStatus",
     "SubagentSubscriptionLevel",
     "TextContent",
+    "ThemeSelection",
+    "ThemeSelections",
+    "ThemesConfiguration",
     "ThinkingConfig",
     "ThinkingContent",
     "ThinkingEffort",
@@ -5677,6 +5740,9 @@ __all__ = [
     "parse_subagent_progress_payload",
     "parse_subagent_snapshot",
     "parse_text_content",
+    "parse_theme_selection",
+    "parse_theme_selections",
+    "parse_themes_configuration",
     "parse_thinking_config",
     "parse_thinking_content",
     "parse_thinking_level_changed_event",

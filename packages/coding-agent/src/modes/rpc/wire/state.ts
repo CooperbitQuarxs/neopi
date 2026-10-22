@@ -16,9 +16,10 @@ export const stateDefs = {
 		project: "string | null",
 		colors: "Record<string, string>",
 	},
+	ThemeSelections: { dark: "ThemeSelection", light: "ThemeSelection" },
 	ThemesConfiguration: {
 		themes: "string[]",
-		selection: { dark: "ThemeSelection", light: "ThemeSelection" },
+		selection: "ThemeSelections",
 	},
 	ApprovalHandler: "'host' | 'ui'",
 	ChatModeSetting: "'off' | 'chat' | 'erp' | 'raw'",

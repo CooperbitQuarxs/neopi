@@ -2695,6 +2695,28 @@ pub struct ModelInfo {
 	pub compat: Option<Map<String, Value>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemeSelection {
+	pub effective: String,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub global: Option<String>,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub project: Option<String>,
+	pub colors: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemeSelections {
+	pub dark: ThemeSelection,
+	pub light: ThemeSelection,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemesConfiguration {
+	pub themes: Vec<String>,
+	pub selection: ThemeSelections,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ApprovalHandler {
 	#[serde(rename = "host")]
@@ -4801,6 +4823,11 @@ pub struct RetryFallbackSucceededEvent {
 pub struct ModelChangedEvent {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemesConfigurationChangedEvent {
+	pub r#type: LitThemesConfigurationChanged,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConfigWarningsChangedEvent {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -6219,6 +6246,16 @@ pub struct SelectMixtureParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateThemeParams {
+	pub appearance: UpdateThemeParamsAppearance,
+	pub scope: UpdateThemeParamsScope,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub name: Option<String>,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub expected: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetRoleParams {
 	pub role: String,
 }
@@ -7605,6 +7642,27 @@ impl MixtureDecisionJudgeKind {
 	}
 }
 
+/// The constant `"themes_configuration_changed"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LitThemesConfigurationChanged;
+
+impl Serialize for LitThemesConfigurationChanged {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str("themes_configuration_changed")
+	}
+}
+
+impl<'de> Deserialize<'de> for LitThemesConfigurationChanged {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		if value.as_str() == Some("themes_configuration_changed") {
+			Ok(Self)
+		} else {
+			Err(D::Error::custom(format!("expected \"themes_configuration_changed\", got {value}")))
+		}
+	}
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SubagentLifecyclePayloadRunKind {
 	#[serde(rename = "spawn")]
@@ -7643,6 +7701,42 @@ impl HostUriResultContentType {
 			Self::TextMarkdown => "text/markdown",
 			Self::ApplicationJson => "application/json",
 			Self::TextPlain => "text/plain",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum UpdateThemeParamsAppearance {
+	#[serde(rename = "dark")]
+	Dark,
+	#[serde(rename = "light")]
+	Light,
+}
+
+impl UpdateThemeParamsAppearance {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Dark => "dark",
+			Self::Light => "light",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum UpdateThemeParamsScope {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl UpdateThemeParamsScope {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
 		}
 	}
 }
@@ -8136,6 +8230,41 @@ impl Command for GetRolesCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<RolesResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Read native theme discovery and scoped selections.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GetThemesConfigurationCommand {}
+
+impl Command for GetThemesConfigurationCommand {
+	const NAME: &'static str = "get_themes_configuration";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ThemesConfiguration;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<ThemesConfiguration>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Set or inherit one native theme slot with an expected scoped value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateThemeCommand {
+	pub appearance: UpdateThemeParamsAppearance,
+	pub scope: UpdateThemeParamsScope,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub name: Option<String>,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub expected: Option<String>,
+}
+
+impl Command for UpdateThemeCommand {
+	const NAME: &'static str = "update_theme";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ThemesConfiguration;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<ThemesConfiguration>(data.unwrap_or_else(|| Value::Object(Map::new())))
 	}
 }
 

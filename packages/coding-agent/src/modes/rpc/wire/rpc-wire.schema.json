@@ -186,6 +186,28 @@
 				"clientOmit": []
 			},
 			{
+				"name": "get_themes_configuration",
+				"doc": "Read native theme discovery and scoped selections.",
+				"params": null,
+				"result": "ThemesConfiguration",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "update_theme",
+				"doc": "Set or inherit one native theme slot with an expected scoped value.",
+				"params": "UpdateThemeParams",
+				"result": "ThemesConfiguration",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "set_role",
 				"doc": "Select a model role.",
 				"params": "SetRoleParams",
@@ -2387,6 +2409,80 @@
 				"maxTokens"
 			],
 			"description": "Model descriptor: the client-relevant subset of the server's model record."
+		},
+		"ThemeSelection": {
+			"type": "object",
+			"properties": {
+				"effective": {
+					"type": "string"
+				},
+				"global": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"project": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"colors": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"type": "string"
+					}
+				}
+			},
+			"required": [
+				"effective",
+				"global",
+				"project",
+				"colors"
+			]
+		},
+		"ThemeSelections": {
+			"type": "object",
+			"properties": {
+				"dark": {
+					"$ref": "#/$defs/ThemeSelection"
+				},
+				"light": {
+					"$ref": "#/$defs/ThemeSelection"
+				}
+			},
+			"required": [
+				"dark",
+				"light"
+			]
+		},
+		"ThemesConfiguration": {
+			"type": "object",
+			"properties": {
+				"themes": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"selection": {
+					"$ref": "#/$defs/ThemeSelections"
+				}
+			},
+			"required": [
+				"themes",
+				"selection"
+			]
 		},
 		"ApprovalHandler": {
 			"enum": [
@@ -5877,6 +5973,17 @@
 				"type"
 			]
 		},
+		"ThemesConfigurationChangedEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "themes_configuration_changed"
+				}
+			},
+			"required": [
+				"type"
+			]
+		},
 		"ConfigWarningsChangedEvent": {
 			"type": "object",
 			"properties": {
@@ -8029,6 +8136,51 @@
 			},
 			"required": [
 				"name"
+			]
+		},
+		"UpdateThemeParams": {
+			"type": "object",
+			"properties": {
+				"appearance": {
+					"enum": [
+						"dark",
+						"light"
+					],
+					"type": "string"
+				},
+				"scope": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"name": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"expected": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"appearance",
+				"scope",
+				"name",
+				"expected"
 			]
 		},
 		"SetRoleParams": {

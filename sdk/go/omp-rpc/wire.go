@@ -1919,6 +1919,73 @@ func (v *ModelInfo) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type ThemeSelection struct {
+	Effective string            `json:"effective"`
+	Global    *string           `json:"global"`
+	Project   *string           `json:"project"`
+	Colors    map[string]string `json:"colors"`
+}
+
+func (v *ThemeSelection) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ThemeSelection", v.decodeFrom)
+}
+
+func (v *ThemeSelection) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ThemeSelection
+	d := fieldDecoder{raw: raw, owner: "ThemeSelection"}
+	d.required("effective", &out.Effective)
+	d.nullable("global", &out.Global)
+	d.nullable("project", &out.Project)
+	d.required("colors", &out.Colors)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ThemeSelections struct {
+	Dark  ThemeSelection `json:"dark"`
+	Light ThemeSelection `json:"light"`
+}
+
+func (v *ThemeSelections) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ThemeSelections", v.decodeFrom)
+}
+
+func (v *ThemeSelections) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ThemeSelections
+	d := fieldDecoder{raw: raw, owner: "ThemeSelections"}
+	d.required("dark", &out.Dark)
+	d.required("light", &out.Light)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ThemesConfiguration struct {
+	Themes    []string        `json:"themes"`
+	Selection ThemeSelections `json:"selection"`
+}
+
+func (v *ThemesConfiguration) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ThemesConfiguration", v.decodeFrom)
+}
+
+func (v *ThemesConfiguration) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ThemesConfiguration
+	d := fieldDecoder{raw: raw, owner: "ThemesConfiguration"}
+	d.required("themes", &out.Themes)
+	d.required("selection", &out.Selection)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type ApprovalHandler string
 
 const (
@@ -10270,6 +10337,68 @@ func (c Commands) GetRoles(ctx context.Context) (RolesResult, error) {
 	var out RolesResult
 	err := c.call(ctx, "get_roles", nil, 0, &out)
 	return out, err
+}
+
+// GetThemesConfiguration sends "get_themes_configuration": Read native theme discovery and scoped selections.
+func (c Commands) GetThemesConfiguration(ctx context.Context) (ThemesConfiguration, error) {
+	var out ThemesConfiguration
+	err := c.call(ctx, "get_themes_configuration", nil, 0, &out)
+	return out, err
+}
+
+// UpdateThemeCommand holds the parameters of "update_theme".
+type UpdateThemeCommand struct {
+	Appearance UpdateThemeCommandAppearance `json:"appearance"`
+	Scope      UpdateThemeCommandScope      `json:"scope"`
+	Name       *string                      `json:"name"`
+	Expected   *string                      `json:"expected"`
+}
+
+// UpdateTheme sends "update_theme": Set or inherit one native theme slot with an expected scoped value.
+func (c Commands) UpdateTheme(ctx context.Context, p UpdateThemeCommand) (ThemesConfiguration, error) {
+	var out ThemesConfiguration
+	err := c.call(ctx, "update_theme", p, 0, &out)
+	return out, err
+}
+
+type UpdateThemeCommandAppearance string
+
+const (
+	UpdateThemeCommandAppearanceDark  UpdateThemeCommandAppearance = "dark"
+	UpdateThemeCommandAppearanceLight UpdateThemeCommandAppearance = "light"
+)
+
+func (v *UpdateThemeCommandAppearance) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "UpdateThemeCommandAppearance")
+	if err != nil {
+		return err
+	}
+	switch value := UpdateThemeCommandAppearance(s); value {
+	case UpdateThemeCommandAppearanceDark, UpdateThemeCommandAppearanceLight:
+		*v = value
+		return nil
+	}
+	return unknownValue("UpdateThemeCommandAppearance", s)
+}
+
+type UpdateThemeCommandScope string
+
+const (
+	UpdateThemeCommandScopeGlobal  UpdateThemeCommandScope = "global"
+	UpdateThemeCommandScopeProject UpdateThemeCommandScope = "project"
+)
+
+func (v *UpdateThemeCommandScope) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "UpdateThemeCommandScope")
+	if err != nil {
+		return err
+	}
+	switch value := UpdateThemeCommandScope(s); value {
+	case UpdateThemeCommandScopeGlobal, UpdateThemeCommandScopeProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("UpdateThemeCommandScope", s)
 }
 
 // SetRoleCommand holds the parameters of "set_role".
