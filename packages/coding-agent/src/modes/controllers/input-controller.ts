@@ -257,19 +257,19 @@ export class InputController {
 	/** Set by `app.repl.execute` so the next submit runs in the REPL kernel. */
 	#replNextSubmit = false;
 
-	/** Resolve the current tiny role at use time so project/session reloads cannot leave a stale model. */
-	#resolveTinyTitleLocalModelKey(): string | undefined {
+	/** Resolve the title role at use time so project/session reloads cannot leave a stale model. */
+	#resolveTitleLocalModelKey(): string | undefined {
 		const model = resolveModelRoleValue(
-			formatModelRoleAlias("tiny"),
-			roleCandidatePool("tiny", this.ctx.settings, this.ctx.session.modelRegistry),
+			formatModelRoleAlias("title"),
+			roleCandidatePool("title", this.ctx.settings, this.ctx.session.modelRegistry),
 			{ settings: this.ctx.settings },
 		).model;
 		return model?.api === "local-inference" && isTinyLocalModelKey(model.id) ? model.id : undefined;
 	}
 
-	/** Prewarm only the local worker selected by the current tiny role. */
+	/** Prewarm only the local worker selected by the current title role. */
 	prewarmTinyTitleModel(): void {
-		const modelKey = this.#resolveTinyTitleLocalModelKey();
+		const modelKey = this.#resolveTitleLocalModelKey();
 		if (modelKey) tinyTitleClient.prewarm(modelKey);
 	}
 
