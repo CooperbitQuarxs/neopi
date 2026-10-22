@@ -65,7 +65,7 @@ import {
 } from "./effort-policy";
 import { cfgRetryFallbackChains } from "../session/settings";
 import { cfgShellPath } from "../exec/settings";
-import { overlaySettingsToml, readSettingsToml, SETTINGS_TOML } from "./settings-toml";
+import { CONFIG_TOML, overlaySettingsToml, readSettingsToml, SETTINGS_TOML } from "./settings-toml";
 
 export interface RuntimeModelOverrides {
 	modelRoles: Record<string, string>;
@@ -1358,10 +1358,12 @@ export class Settings {
 		};
 		for (const filename of MAIN_CONFIG_FILENAMES) addFile(path.join(this.#agentDir, filename));
 		addFile(path.join(this.#agentDir, SETTINGS_TOML));
+		addFile(path.join(this.#agentDir, CONFIG_TOML));
 		const projectCwd = path.resolve(this.#cwd);
 		const projectConfigDir = getProjectAgentDir(projectCwd);
 		addFile(path.join(projectConfigDir, "config.yml"));
 		addFile(path.join(projectConfigDir, SETTINGS_TOML));
+		addFile(path.join(projectConfigDir, CONFIG_TOML));
 		addFile(path.join(projectConfigDir, "settings.json"));
 		addFile(path.join(projectCwd, ".claude", "settings.json"));
 		for (const file of this.#projectSourcePaths) addFile(file);
@@ -1808,15 +1810,19 @@ export class Settings {
 
 	/** Where the effective `shellPath` comes from, for error messages; an overlay defers to its parent. */
 	#shellPathSource(): string {
+		const tomlSource = (directory: string) => {
+			const canonical = path.join(directory, CONFIG_TOML);
+			return fs.existsSync(canonical) ? canonical : path.join(directory, SETTINGS_TOML);
+		};
 		if (Object.hasOwn(this.#overrides, "shellPath")) return "the runtime settings override";
 		if (Object.hasOwn(this.#configOverlay, "shellPath")) {
 			return this.#overlayShellPathSource ?? "the active config overlay";
 		}
-		if (Object.hasOwn(this.#projectToml, "shellPath")) return path.join(getProjectAgentDir(this.#cwd), SETTINGS_TOML);
+		if (Object.hasOwn(this.#projectToml, "shellPath")) return tomlSource(getProjectAgentDir(this.#cwd));
 		if (Object.hasOwn(this.#project, "shellPath")) {
 			return this.#projectShellPathSource ?? "the active project configuration";
 		}
-		if (Object.hasOwn(this.#globalToml, "shellPath")) return path.join(this.#agentDir, SETTINGS_TOML);
+		if (Object.hasOwn(this.#globalToml, "shellPath")) return tomlSource(this.#agentDir);
 		if (this.#parent && !Object.hasOwn(this.#global, "shellPath")) return this.#parent.#shellPathSource();
 		return this.#configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
 	}

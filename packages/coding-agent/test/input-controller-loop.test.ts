@@ -1,4 +1,5 @@
 import { describe, expect, it, type Mock, vi } from "bun:test";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 type Spy = Mock<(...args: unknown[]) => unknown>;
@@ -27,20 +28,35 @@ function createLoopContext(options: {
 	const pauseLoop = vi.fn(() => {
 		loopPrompt = undefined;
 	});
+	let editorText = "";
 	const editor = {
-		pendingImages: [],
-		pendingImageLinks: [],
+		pendingImages: [] as ImageContent[],
+		pendingImageLinks: [] as (string | undefined)[],
 		imageLinks: undefined,
 		addToHistory: vi.fn(),
 		clearSubmittedDraft: vi.fn(),
-		setText: vi.fn(),
-		getText: () => "",
-		getExpandedText: () => "",
-		clearDraft: vi.fn(),
+		setText(text: string) {
+			editorText = text;
+		},
+		getText: () => editorText,
+		getExpandedText: () => editorText,
+		setDraft(text: string, images?: ImageContent[]) {
+			editorText = text;
+			this.pendingImages = [...(images ?? [])];
+			this.pendingImageLinks = this.pendingImages.map(() => undefined);
+		},
+		clearDraft() {
+			editorText = "";
+			this.pendingImages = [];
+			this.pendingImageLinks = [];
+		},
+		clearDraftForRecall() {
+			this.clearDraft();
+		},
 		setCollapsedText: vi.fn(),
-	} as unknown as InteractiveModeContext["editor"];
+	};
 	const ctx = {
-		editor,
+		editor: editor as unknown as InteractiveModeContext["editor"],
 		slashCommandNames,
 		isKnownSlashCommand: (text: string) => slashCommandNames.has(text.slice(1).split(/\s+/, 1)[0]!),
 		ui: { requestRender: vi.fn() },

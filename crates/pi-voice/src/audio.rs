@@ -286,7 +286,8 @@ impl PlaybackStream {
 		Ok(stream)
 	}
 
-	/// Register the producer before a backend can synchronously prime its buffers.
+	/// Register the producer before a backend can synchronously prime its
+	/// buffers.
 	fn prepare(sample_rate: u32) -> VoiceResult<(Self, DeviceConfig, PlaybackFill)> {
 		let sample_rate = audio_sample_rate(sample_rate)?;
 		let state = Arc::new(PlaybackState::new());
@@ -317,11 +318,7 @@ impl PlaybackStream {
 			);
 		});
 
-		Ok((
-			Self { device: None, writer: Some(writer), state, queue },
-			config,
-			fill,
-		))
+		Ok((Self { device: None, writer: Some(writer), state, queue }, config, fill))
 	}
 
 	/// Clone the producer endpoint used by the remote-audio decoder.
@@ -523,7 +520,9 @@ mod tests {
 		}
 
 		let writer = stream.writer().unwrap();
-		writer.write(&[0.5; 16]).expect("priming must not close the writer");
+		writer
+			.write(&[0.5; 16])
+			.expect("priming must not close the writer");
 		fill(&mut output);
 		assert_eq!(output, [0.5; 16]);
 		assert!(!stream.state.drained.load(Ordering::Acquire));
