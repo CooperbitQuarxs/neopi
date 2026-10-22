@@ -4,13 +4,18 @@
 
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { configHelp as commandHelp } from "../cli/command-help";
-import { type ConfigAction, type ConfigCommandArgs, runConfigCommand } from "../cli/config-cli";
+import {
+	type ConfigAction,
+	type ConfigCommandArgs,
+	runConfigCommand,
+	TOML_CONVERSION_WARNING,
+} from "../cli/config-cli";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
-const ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg", "dump-toml"];
+const ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg", "dump-toml", "to-toml"];
 
 export default class Config extends Command {
-	static description = commandHelp.description;
+	static description = `${commandHelp.description}\n\n${TOML_CONVERSION_WARNING}`;
 	static args = {
 		action: Args.string({
 			description: "Config action",
@@ -30,6 +35,8 @@ export default class Config extends Command {
 
 	static flags = {
 		json: Flags.boolean({ description: "Output JSON" }),
+		yes: Flags.boolean({ description: "Acknowledge the TOML/YAML save limitation before to-toml writes files" }),
+		force: Flags.boolean({ description: "Allow to-toml to replace existing config.toml files" }),
 	};
 
 	async run(): Promise<void> {
@@ -43,10 +50,12 @@ export default class Config extends Command {
 			value,
 			flags: {
 				json: flags.json,
+				yes: flags.yes,
+				force: flags.force,
 			},
 		};
 
-		if (action !== "dump-toml") await initTheme();
+		if (action !== "dump-toml" && action !== "to-toml") await initTheme();
 		await runConfigCommand(cmd);
 	}
 }

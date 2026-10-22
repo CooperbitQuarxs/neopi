@@ -135,11 +135,13 @@ describe("control snapshot queue", () => {
 
 	test("idle native permission changes notify observers and change subsequent snapshots", async () => {
 		const { client } = await startWithQueue();
-		const observed: string[] = [];
-		const unsubscribe = session!.subscribe(event => observed.push(event.type));
+		const changed = Promise.withResolvers<void>();
+		const unsubscribe = session!.subscribe(event => {
+			if (event.type === "approval_mode_changed") changed.resolve();
+		});
 		try {
-			cfgToolsApprovalMode.set(session!.settings, "write");
-			expect(observed).toContain("approval_mode_changed");
+			cfgToolsApprovalMode.override(session!.settings, "write");
+			await changed.promise;
 			const state = (await client.request({ type: "state" })).data as ControlSnapshot;
 			expect(state.session!.approvalMode).toBe("write");
 		} finally {
@@ -149,7 +151,7 @@ describe("control snapshot queue", () => {
 
 	test("busy summary names both delivery paths and counts steering plus follow-up", async () => {
 		const { client } = await startWithQueue(undefined, ["later"]);
-		await session!.steer("change course");
+		session!.agent.steer({ role: "user", content: "change course", timestamp: Date.now() });
 		const state = (await client.request({ type: "state" })).data as ControlSnapshot;
 		expect(state.busy.pendingSteerAndFollowUp).toBe(2);
 		expect(state.busy).not.toHaveProperty("queued");

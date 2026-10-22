@@ -2714,6 +2714,54 @@ impl ApprovalHandler {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ApprovalMode {
+	#[serde(rename = "always-ask")]
+	AlwaysAsk,
+	#[serde(rename = "write")]
+	Write,
+	#[serde(rename = "yolo")]
+	Yolo,
+}
+
+impl ApprovalMode {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::AlwaysAsk => "always-ask",
+			Self::Write => "write",
+			Self::Yolo => "yolo",
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionUsage {
+	pub input: f64,
+	pub output: f64,
+	#[serde(rename = "cacheRead")]
+	pub cache_read: f64,
+	#[serde(rename = "cacheWrite")]
+	pub cache_write: f64,
+	#[serde(rename = "totalTokens")]
+	pub total_tokens: f64,
+	#[serde(rename = "orchestrationInput")]
+	pub orchestration_input: f64,
+	#[serde(rename = "orchestrationOutput")]
+	pub orchestration_output: f64,
+	#[serde(rename = "orchestrationCacheRead")]
+	pub orchestration_cache_read: f64,
+	#[serde(rename = "premiumRequests")]
+	pub premium_requests: f64,
+	pub cost: f64,
+	#[serde(rename = "subagentCost")]
+	pub subagent_cost: f64,
+	#[serde(rename = "advisorCost")]
+	pub advisor_cost: f64,
+	#[serde(rename = "advisorCostState")]
+	pub advisor_cost_state: SessionUsageAdvisorCostState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ChatModeSetting {
 	#[serde(rename = "off")]
 	Off,
@@ -2803,6 +2851,8 @@ pub struct RoleInfo {
 	pub source: RoleInfoSource,
 	pub patterns: Vec<String>,
 	pub hidden: bool,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub tag: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3722,6 +3772,10 @@ pub struct SessionState {
 	pub session_file: Option<String>,
 	#[serde(rename = "sessionName", default, skip_serializing_if = "Option::is_none")]
 	pub session_name: Option<String>,
+	#[serde(rename = "approvalMode", default, skip_serializing_if = "Option::is_none")]
+	pub approval_mode: Option<ApprovalMode>,
+	#[serde(rename = "sessionUsage", default, skip_serializing_if = "Option::is_none")]
+	pub session_usage: Option<SessionUsage>,
 	#[serde(rename = "autoCompactionEnabled", default = "default_session_state_auto_compaction_enabled")]
 	pub auto_compaction_enabled: bool,
 	#[serde(rename = "fastModeEnabled", default = "default_session_state_fast_mode_enabled")]
@@ -3996,12 +4050,120 @@ pub struct SessionEntries {
 	pub leaf_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JournalPage {
+	pub entries: Vec<Map<String, Value>>,
+	#[serde(rename = "sessionId")]
+	pub session_id: String,
+	#[serde(rename = "sessionFile")]
+	pub session_file: String,
+	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
+	pub leaf_id: Option<String>,
+	#[serde(rename = "totalEntries")]
+	pub total_entries: i64,
+	/// Opaque cursor for the next page; absent on the last page.
+	#[serde(rename = "nextCursor", default, skip_serializing_if = "Option::is_none")]
+	pub next_cursor: Option<String>,
+}
+
 /// Raw session tree roots.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionTree {
 	pub tree: Vec<Map<String, Value>>,
 	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
 	pub leaf_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreeAskOptionNote {
+	pub option: String,
+	pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreeAskQuestionResult {
+	pub id: String,
+	pub question: String,
+	pub options: Vec<String>,
+	pub multi: bool,
+	#[serde(rename = "selectedOptions")]
+	pub selected_options: Vec<String>,
+	#[serde(rename = "customInput", default, skip_serializing_if = "Option::is_none")]
+	pub custom_input: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub note: Option<String>,
+	#[serde(rename = "optionNotes", default, skip_serializing_if = "Option::is_none")]
+	pub option_notes: Option<Vec<TreeAskOptionNote>>,
+	#[serde(rename = "timedOut", default, skip_serializing_if = "Option::is_none")]
+	pub timed_out: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreeAskDetails {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub question: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub options: Option<Vec<String>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub multi: Option<bool>,
+	#[serde(rename = "selectedOptions", default, skip_serializing_if = "Option::is_none")]
+	pub selected_options: Option<Vec<String>>,
+	#[serde(rename = "customInput", default, skip_serializing_if = "Option::is_none")]
+	pub custom_input: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub note: Option<String>,
+	#[serde(rename = "optionNotes", default, skip_serializing_if = "Option::is_none")]
+	pub option_notes: Option<Vec<TreeAskOptionNote>>,
+	#[serde(rename = "timedOut", default, skip_serializing_if = "Option::is_none")]
+	pub timed_out: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub results: Option<Vec<TreeAskQuestionResult>>,
+	#[serde(rename = "chatRedirect", default, skip_serializing_if = "Option::is_none")]
+	pub chat_redirect: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub questions: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreeAskReanswer {
+	pub content: Vec<UserContent>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub details: Option<TreeAskDetails>,
+	#[serde(rename = "isError", default, skip_serializing_if = "Option::is_none")]
+	pub is_error: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreeAskReopen {
+	#[serde(rename = "toolCallId")]
+	pub tool_call_id: String,
+	pub questions: Vec<AskQuestion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NavigateTreeResult {
+	#[serde(rename = "sessionId")]
+	pub session_id: String,
+	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
+	pub leaf_id: Option<String>,
+	pub outcome: NavigateTreeResultOutcome,
+	pub cancelled: bool,
+	#[serde(rename = "sessionFile", default, skip_serializing_if = "Option::is_none")]
+	pub session_file: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub aborted: Option<bool>,
+	#[serde(rename = "editorText", default, skip_serializing_if = "Option::is_none")]
+	pub editor_text: Option<String>,
+	#[serde(rename = "editorImages", default, skip_serializing_if = "Option::is_none")]
+	pub editor_images: Option<Vec<ImageContent>>,
+	#[serde(rename = "summaryEntry", default, skip_serializing_if = "Option::is_none")]
+	pub summary_entry: Option<Map<String, Value>>,
+	#[serde(rename = "reopenAsk", default, skip_serializing_if = "Option::is_none")]
+	pub reopen_ask: Option<TreeAskReopen>,
+	#[serde(rename = "askReanswerCommitted", default, skip_serializing_if = "Option::is_none")]
+	pub ask_reanswer_committed: Option<bool>,
+	#[serde(rename = "resumeToken", default, skip_serializing_if = "Option::is_none")]
+	pub resume_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -4290,6 +4452,9 @@ pub struct ChatModeChangedEvent {
 	pub mode: ChatModeSetting,
 	pub include: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalModeChangedEvent {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MixtureHopEndEvent {
@@ -4845,6 +5010,7 @@ pub enum RpcAgentEvent {
 	RunOwnersJoined(RunOwnersJoinedEvent),
 	RunOwnersSkipped(RunOwnersSkippedEvent),
 	ChatModeChanged(ChatModeChangedEvent),
+	ApprovalModeChanged(ApprovalModeChangedEvent),
 	MixtureHopEnd(MixtureHopEndEvent),
 	MixtureDecision(MixtureDecisionEvent),
 	MixtureLimit(MixtureLimitEvent),
@@ -4896,6 +5062,7 @@ impl RpcAgentEvent {
 			Some("run_owners_joined") => |value| serde_json::from_value(value).map(Self::RunOwnersJoined),
 			Some("run_owners_skipped") => |value| serde_json::from_value(value).map(Self::RunOwnersSkipped),
 			Some("chat_mode_changed") => |value| serde_json::from_value(value).map(Self::ChatModeChanged),
+			Some("approval_mode_changed") => |value| serde_json::from_value(value).map(Self::ApprovalModeChanged),
 			Some("mixture_hop_end") => |value| serde_json::from_value(value).map(Self::MixtureHopEnd),
 			Some("mixture_decision") => |value| serde_json::from_value(value).map(Self::MixtureDecision),
 			Some("mixture_limit") => |value| serde_json::from_value(value).map(Self::MixtureLimit),
@@ -4947,6 +5114,7 @@ impl Serialize for RpcAgentEvent {
 			Self::RunOwnersJoined(member) => serialize_tagged(member, &[("type", "run_owners_joined")], serializer),
 			Self::RunOwnersSkipped(member) => serialize_tagged(member, &[("type", "run_owners_skipped")], serializer),
 			Self::ChatModeChanged(member) => serialize_tagged(member, &[("type", "chat_mode_changed")], serializer),
+			Self::ApprovalModeChanged(member) => serialize_tagged(member, &[("type", "approval_mode_changed")], serializer),
 			Self::MixtureHopEnd(member) => serialize_tagged(member, &[("type", "mixture_hop_end")], serializer),
 			Self::MixtureDecision(member) => serialize_tagged(member, &[("type", "mixture_decision")], serializer),
 			Self::MixtureLimit(member) => serialize_tagged(member, &[("type", "mixture_limit")], serializer),
@@ -5979,7 +6147,7 @@ impl RpcNotification {
 			Some("session_info_update") => |value| serde_json::from_value(value).map(Self::SessionInfoUpdate),
 			Some("config_update") => |value| serde_json::from_value(value).map(Self::ConfigUpdate),
 			Some("rpc_frame_error") => |value| serde_json::from_value(value).map(Self::RpcFrameError),
-			Some("advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
+			Some("advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -6039,7 +6207,7 @@ impl RpcServerFrame {
 		let decode: fn(Value) -> Result<Self, serde_json::Error> = match value.get("type").and_then(Value::as_str) {
 			Some("response") => |value| serde_json::from_value(value).map(Self::Response),
 			Some("host_tool_call" | "host_tool_cancel" | "host_uri_request" | "host_uri_cancel") => |value| serde_json::from_value(value).map(Self::RpcHostRequest),
-			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
+			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -6152,6 +6320,12 @@ pub struct OpenSessionParams {
 	pub provider: Option<String>,
 	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
 	pub model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetStateParams {
+	#[serde(rename = "includeDump", default, skip_serializing_if = "Option::is_none")]
+	pub include_dump: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -6281,6 +6455,55 @@ pub struct GetAvailableCommandsResult {
 pub struct GetEntriesParams {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub since: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetEntriesPageParams {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub scope: Option<GetEntriesPageParamsScope>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub direction: Option<GetEntriesPageParamsDirection>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub cursor: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NavigateTreeParams {
+	#[serde(rename = "targetId")]
+	pub target_id: String,
+	#[serde(rename = "expectedSessionId")]
+	pub expected_session_id: String,
+	#[serde(rename = "expectedSessionFile", deserialize_with = "Deserialize::deserialize")]
+	pub expected_session_file: Option<String>,
+	#[serde(rename = "expectedLeafId", deserialize_with = "Deserialize::deserialize")]
+	pub expected_leaf_id: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub summarize: Option<bool>,
+	#[serde(rename = "customInstructions", default, skip_serializing_if = "Option::is_none")]
+	pub custom_instructions: Option<String>,
+	#[serde(rename = "allowAskReopen", default, skip_serializing_if = "Option::is_none")]
+	pub allow_ask_reopen: Option<bool>,
+	#[serde(rename = "reanswerAskResult", default, skip_serializing_if = "Option::is_none")]
+	pub reanswer_ask_result: Option<TreeAskReanswer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResumeTreeParams {
+	#[serde(rename = "resumeToken")]
+	pub resume_token: String,
+	#[serde(rename = "expectedSessionId")]
+	pub expected_session_id: String,
+	#[serde(rename = "expectedSessionFile", deserialize_with = "Deserialize::deserialize")]
+	pub expected_session_file: Option<String>,
+	#[serde(rename = "expectedLeafId", deserialize_with = "Deserialize::deserialize")]
+	pub expected_leaf_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResumeTreeResult {
+	pub resumed: LitTrue,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -6825,6 +7048,27 @@ impl AssistantErrorEventReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SessionUsageAdvisorCostState {
+	#[serde(rename = "ready")]
+	Ready,
+	#[serde(rename = "restoring")]
+	Restoring,
+	#[serde(rename = "unavailable")]
+	Unavailable,
+}
+
+impl SessionUsageAdvisorCostState {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Ready => "ready",
+			Self::Restoring => "restoring",
+			Self::Unavailable => "unavailable",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ChroniclerHealthStatus {
 	#[serde(rename = "off")]
 	Off,
@@ -7141,6 +7385,30 @@ impl<'de> Deserialize<'de> for LitCompleted {
 			Ok(Self)
 		} else {
 			Err(D::Error::custom(format!("expected \"completed\", got {value}")))
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NavigateTreeResultOutcome {
+	#[serde(rename = "navigated")]
+	Navigated,
+	#[serde(rename = "unchanged")]
+	Unchanged,
+	#[serde(rename = "cancelled")]
+	Cancelled,
+	#[serde(rename = "ask_reopen")]
+	AskReopen,
+}
+
+impl NavigateTreeResultOutcome {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Navigated => "navigated",
+			Self::Unchanged => "unchanged",
+			Self::Cancelled => "cancelled",
+			Self::AskReopen => "ask_reopen",
 		}
 	}
 }
@@ -7534,6 +7802,42 @@ pub enum StringOrStringList {
 	StringList(Vec<String>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GetEntriesPageParamsScope {
+	#[serde(rename = "journal")]
+	Journal,
+	#[serde(rename = "branch")]
+	Branch,
+}
+
+impl GetEntriesPageParamsScope {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Journal => "journal",
+			Self::Branch => "branch",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GetEntriesPageParamsDirection {
+	#[serde(rename = "forward")]
+	Forward,
+	#[serde(rename = "backward")]
+	Backward,
+}
+
+impl GetEntriesPageParamsDirection {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Forward => "forward",
+			Self::Backward => "backward",
+		}
+	}
+}
+
 fn default_queued_messages_state_live_steered() -> i64 {
 	serde_json::from_str("0").expect("valid wire default")
 }
@@ -7837,7 +8141,10 @@ impl Command for OpenSessionCommand {
 
 /// Snapshot the session state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct GetStateCommand {}
+pub struct GetStateCommand {
+	#[serde(rename = "includeDump", default, skip_serializing_if = "Option::is_none")]
+	pub include_dump: Option<bool>,
+}
 
 impl Command for GetStateCommand {
 	const NAME: &'static str = "get_state";
@@ -8098,6 +8405,29 @@ impl Command for GetEntriesCommand {
 	}
 }
 
+/// Read one canonical native journal or selected-branch page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GetEntriesPageCommand {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub scope: Option<GetEntriesPageParamsScope>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub direction: Option<GetEntriesPageParamsDirection>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub cursor: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub limit: Option<i64>,
+}
+
+impl Command for GetEntriesPageCommand {
+	const NAME: &'static str = "get_entries_page";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = JournalPage;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<JournalPage>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
 /// Read the raw session tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct GetTreeCommand {}
@@ -8109,6 +8439,60 @@ impl Command for GetTreeCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<SessionTree>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NavigateTreeCommand {
+	#[serde(rename = "targetId")]
+	pub target_id: String,
+	#[serde(rename = "expectedSessionId")]
+	pub expected_session_id: String,
+	#[serde(rename = "expectedSessionFile", deserialize_with = "Deserialize::deserialize")]
+	pub expected_session_file: Option<String>,
+	#[serde(rename = "expectedLeafId", deserialize_with = "Deserialize::deserialize")]
+	pub expected_leaf_id: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub summarize: Option<bool>,
+	#[serde(rename = "customInstructions", default, skip_serializing_if = "Option::is_none")]
+	pub custom_instructions: Option<String>,
+	#[serde(rename = "allowAskReopen", default, skip_serializing_if = "Option::is_none")]
+	pub allow_ask_reopen: Option<bool>,
+	#[serde(rename = "reanswerAskResult", default, skip_serializing_if = "Option::is_none")]
+	pub reanswer_ask_result: Option<TreeAskReanswer>,
+}
+
+impl Command for NavigateTreeCommand {
+	const NAME: &'static str = "navigate_tree";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = NavigateTreeResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<NavigateTreeResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResumeTreeCommand {
+	#[serde(rename = "resumeToken")]
+	pub resume_token: String,
+	#[serde(rename = "expectedSessionId")]
+	pub expected_session_id: String,
+	#[serde(rename = "expectedSessionFile", deserialize_with = "Deserialize::deserialize")]
+	pub expected_session_file: Option<String>,
+	#[serde(rename = "expectedLeafId", deserialize_with = "Deserialize::deserialize")]
+	pub expected_leaf_id: Option<String>,
+}
+
+impl Command for ResumeTreeCommand {
+	const NAME: &'static str = "resume_tree";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ResumeTreeResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<ResumeTreeResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
 	}
 }
 

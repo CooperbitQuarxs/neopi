@@ -74,8 +74,10 @@ describe("queued user delivery policy", () => {
 		const events: BeforeAgentStartEvent[] = [];
 		const delivered: AgentMessage[] = [];
 		const manager = SessionManager.inMemory();
-		// Only credential lookup is needed; requests use the local scripted provider.
-		const registry = { getApiKey: async () => "test-key" } as unknown as ModelRegistry;
+		const registry = {
+			getAvailable: () => [model],
+			getApiKey: async () => "test-key",
+		} as unknown as ModelRegistry;
 		let beforePrepare: (() => Promise<void>) | undefined;
 		const extensions = [
 			extension("policy", async event => {

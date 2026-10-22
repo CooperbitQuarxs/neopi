@@ -133,7 +133,7 @@
 			{
 				"name": "get_state",
 				"doc": "Snapshot the session state.",
-				"params": null,
+				"params": "GetStateParams",
 				"result": "SessionState",
 				"nullable": false,
 				"unwrap": null,
@@ -307,10 +307,43 @@
 				"clientOmit": []
 			},
 			{
+				"name": "get_entries_page",
+				"doc": "Read one canonical native journal or selected-branch page.",
+				"params": "GetEntriesPageParams",
+				"result": "JournalPage",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "get_tree",
 				"doc": "Read the raw session tree.",
 				"params": null,
 				"result": "SessionTree",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "navigate_tree",
+				"doc": "Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken.",
+				"params": "NavigateTreeParams",
+				"result": "NavigateTreeResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "resume_tree",
+				"doc": "Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript.",
+				"params": "ResumeTreeParams",
+				"result": "ResumeTreeResult",
 				"nullable": false,
 				"unwrap": null,
 				"timeoutMs": null,
@@ -2329,6 +2362,78 @@
 			],
 			"type": "string"
 		},
+		"ApprovalMode": {
+			"enum": [
+				"always-ask",
+				"write",
+				"yolo"
+			],
+			"type": "string"
+		},
+		"SessionUsage": {
+			"type": "object",
+			"properties": {
+				"input": {
+					"type": "number"
+				},
+				"output": {
+					"type": "number"
+				},
+				"cacheRead": {
+					"type": "number"
+				},
+				"cacheWrite": {
+					"type": "number"
+				},
+				"totalTokens": {
+					"type": "number"
+				},
+				"orchestrationInput": {
+					"type": "number"
+				},
+				"orchestrationOutput": {
+					"type": "number"
+				},
+				"orchestrationCacheRead": {
+					"type": "number"
+				},
+				"premiumRequests": {
+					"type": "number"
+				},
+				"cost": {
+					"type": "number"
+				},
+				"subagentCost": {
+					"type": "number"
+				},
+				"advisorCost": {
+					"type": "number"
+				},
+				"advisorCostState": {
+					"enum": [
+						"ready",
+						"restoring",
+						"unavailable"
+					],
+					"type": "string"
+				}
+			},
+			"required": [
+				"input",
+				"output",
+				"cacheRead",
+				"cacheWrite",
+				"totalTokens",
+				"orchestrationInput",
+				"orchestrationOutput",
+				"orchestrationCacheRead",
+				"premiumRequests",
+				"cost",
+				"subagentCost",
+				"advisorCost",
+				"advisorCostState"
+			]
+		},
 		"ChatModeSetting": {
 			"enum": [
 				"off",
@@ -2467,6 +2572,9 @@
 				},
 				"hidden": {
 					"type": "boolean"
+				},
+				"description": {
+					"type": "string"
 				},
 				"tag": {
 					"type": "string"
@@ -3560,6 +3668,12 @@
 				"sessionName": {
 					"type": "string"
 				},
+				"approvalMode": {
+					"$ref": "#/$defs/ApprovalMode"
+				},
+				"sessionUsage": {
+					"$ref": "#/$defs/SessionUsage"
+				},
 				"autoCompactionEnabled": {
 					"type": "boolean",
 					"default": false
@@ -4168,6 +4282,49 @@
 			],
 			"description": "OMP-native session entries in append order."
 		},
+		"JournalPage": {
+			"type": "object",
+			"properties": {
+				"entries": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {},
+						"additionalProperties": {}
+					}
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"type": "string"
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"totalEntries": {
+					"type": "integer"
+				},
+				"nextCursor": {
+					"type": "string",
+					"description": "Opaque cursor for the next page; absent on the last page."
+				}
+			},
+			"required": [
+				"entries",
+				"sessionId",
+				"sessionFile",
+				"leafId",
+				"totalEntries"
+			]
+		},
 		"SessionTree": {
 			"type": "object",
 			"properties": {
@@ -4195,6 +4352,225 @@
 				"leafId"
 			],
 			"description": "Raw session tree roots."
+		},
+		"TreeAskOptionNote": {
+			"type": "object",
+			"properties": {
+				"option": {
+					"type": "string"
+				},
+				"note": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"option",
+				"note"
+			]
+		},
+		"TreeAskQuestionResult": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"question": {
+					"type": "string"
+				},
+				"options": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"multi": {
+					"type": "boolean"
+				},
+				"selectedOptions": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"customInput": {
+					"type": "string"
+				},
+				"note": {
+					"type": "string"
+				},
+				"optionNotes": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/TreeAskOptionNote"
+					}
+				},
+				"timedOut": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"id",
+				"question",
+				"options",
+				"multi",
+				"selectedOptions"
+			]
+		},
+		"TreeAskDetails": {
+			"type": "object",
+			"properties": {
+				"question": {
+					"type": "string"
+				},
+				"options": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"multi": {
+					"type": "boolean"
+				},
+				"selectedOptions": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"customInput": {
+					"type": "string"
+				},
+				"note": {
+					"type": "string"
+				},
+				"optionNotes": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/TreeAskOptionNote"
+					}
+				},
+				"timedOut": {
+					"type": "boolean"
+				},
+				"results": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/TreeAskQuestionResult"
+					}
+				},
+				"chatRedirect": {
+					"type": "boolean"
+				},
+				"questions": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				}
+			}
+		},
+		"TreeAskReanswer": {
+			"type": "object",
+			"properties": {
+				"content": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/UserContent"
+					}
+				},
+				"details": {
+					"$ref": "#/$defs/TreeAskDetails"
+				},
+				"isError": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"content"
+			]
+		},
+		"TreeAskReopen": {
+			"type": "object",
+			"properties": {
+				"toolCallId": {
+					"type": "string"
+				},
+				"questions": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/AskQuestion"
+					}
+				}
+			},
+			"required": [
+				"toolCallId",
+				"questions"
+			]
+		},
+		"NavigateTreeResult": {
+			"type": "object",
+			"properties": {
+				"sessionId": {
+					"type": "string"
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"outcome": {
+					"enum": [
+						"navigated",
+						"unchanged",
+						"cancelled",
+						"ask_reopen"
+					],
+					"type": "string"
+				},
+				"cancelled": {
+					"type": "boolean"
+				},
+				"sessionFile": {
+					"type": "string"
+				},
+				"aborted": {
+					"type": "boolean"
+				},
+				"editorText": {
+					"type": "string"
+				},
+				"editorImages": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/ImageContent"
+					}
+				},
+				"summaryEntry": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {}
+				},
+				"reopenAsk": {
+					"$ref": "#/$defs/TreeAskReopen"
+				},
+				"askReanswerCommitted": {
+					"type": "boolean"
+				},
+				"resumeToken": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"sessionId",
+				"leafId",
+				"outcome",
+				"cancelled"
+			]
 		},
 		"SubagentSnapshot": {
 			"type": "object",
@@ -4605,6 +4981,17 @@
 				"type",
 				"mode",
 				"include"
+			]
+		},
+		"ApprovalModeChangedEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "approval_mode_changed"
+				}
+			},
+			"required": [
+				"type"
 			]
 		},
 		"MixtureHopEndEvent": {
@@ -5921,6 +6308,9 @@
 				},
 				{
 					"$ref": "#/$defs/ChatModeChangedEvent"
+				},
+				{
+					"$ref": "#/$defs/ApprovalModeChangedEvent"
 				},
 				{
 					"$ref": "#/$defs/MixtureHopEndEvent"
@@ -7781,6 +8171,14 @@
 				"sessionDir"
 			]
 		},
+		"GetStateParams": {
+			"type": "object",
+			"properties": {
+				"includeDump": {
+					"type": "boolean"
+				}
+			}
+		},
 		"CreateMixtureParams": {
 			"type": "object",
 			"properties": {
@@ -8071,6 +8469,128 @@
 					"type": "string"
 				}
 			}
+		},
+		"GetEntriesPageParams": {
+			"type": "object",
+			"properties": {
+				"scope": {
+					"enum": [
+						"journal",
+						"branch"
+					],
+					"type": "string"
+				},
+				"direction": {
+					"enum": [
+						"forward",
+						"backward"
+					],
+					"type": "string"
+				},
+				"cursor": {
+					"type": "string"
+				},
+				"limit": {
+					"type": "integer"
+				}
+			}
+		},
+		"NavigateTreeParams": {
+			"type": "object",
+			"properties": {
+				"targetId": {
+					"type": "string"
+				},
+				"expectedSessionId": {
+					"type": "string"
+				},
+				"expectedSessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"expectedLeafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"summarize": {
+					"type": "boolean"
+				},
+				"customInstructions": {
+					"type": "string"
+				},
+				"allowAskReopen": {
+					"type": "boolean"
+				},
+				"reanswerAskResult": {
+					"$ref": "#/$defs/TreeAskReanswer"
+				}
+			},
+			"required": [
+				"targetId",
+				"expectedSessionId",
+				"expectedSessionFile",
+				"expectedLeafId"
+			]
+		},
+		"ResumeTreeParams": {
+			"type": "object",
+			"properties": {
+				"resumeToken": {
+					"type": "string"
+				},
+				"expectedSessionId": {
+					"type": "string"
+				},
+				"expectedSessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"expectedLeafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"resumeToken",
+				"expectedSessionId",
+				"expectedSessionFile",
+				"expectedLeafId"
+			]
+		},
+		"ResumeTreeResult": {
+			"type": "object",
+			"properties": {
+				"resumed": {
+					"const": true
+				}
+			},
+			"required": [
+				"resumed"
+			]
 		},
 		"SetTodosParams": {
 			"type": "object",

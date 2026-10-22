@@ -110,6 +110,8 @@ function terminalConfigHash(config: IndexConfig): string {
 			config.terminalAtoms,
 			config.hopTokens,
 			config.shortNames,
+			config.titleChars ?? 160,
+			config.slugChars ?? 60,
 		]),
 	);
 }
@@ -124,6 +126,14 @@ function interiorConfigHash(config: IndexConfig): string {
 			config.summaryTokens,
 			config.hopTokens,
 			config.terminalAtoms,
+			config.overviewShare ?? 0.3,
+			config.overviewHopShare ?? 1 / 3,
+			config.overviewMinTokens ?? 40,
+			config.summaryWordsPerToken ?? 0.7,
+			config.summaryMinWords ?? 8,
+			config.summaryResponseMinTokens ?? 512,
+			config.summaryResponseMultiplier ?? 2,
+			config.summaryResponsePaddingTokens ?? 256,
 		]),
 	);
 }

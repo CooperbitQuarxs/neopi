@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import {
 	resolveChronicleSummaryRoleSelection,
@@ -6,8 +9,14 @@ import {
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { getRoleInfo } from "@oh-my-pi/pi-coding-agent/config/model-roles";
+import {
+	getKnownRoleIds,
+	getRoleInfo,
+	MODEL_ROLE_IDS,
+	setRoleDescription,
+} from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { beginSettingsTest, restoreSettingsTestState } from "./helpers/settings-test-state";
 
 function makeModel(id: string, metadata: Partial<Pick<Model, "api" | "kind" | "webSearch">> = {}): Model {
 	return buildModel({
@@ -84,6 +93,28 @@ describe("getRoleInfo", () => {
 		expect(info).toMatchObject({ name: "Pictures", color: "warning", section: "kind" });
 		expect(fixtures.filter(info.accepts)).toEqual([image]);
 	});
+});
+
+test("built-in descriptions and custom role metadata survive real settings initialization", async () => {
+	const cacheDir = path.join(os.homedir(), ".cache/npi-canary");
+	await fs.mkdir(cacheDir, { recursive: true });
+	const root = await fs.mkdtemp(path.join(cacheDir, "role-description-"));
+	const state = beginSettingsTest();
+	try {
+		const settings = await Settings.init({ cwd: root, agentDir: path.join(root, "agent") });
+		for (const role of MODEL_ROLE_IDS) expect(getRoleInfo(role, settings).description?.length).toBeGreaterThan(0);
+		expect(getRoleInfo("owner-role", settings).description).toBeUndefined();
+		setRoleDescription("owner-role", "My own role", settings);
+		await settings.flush();
+		const loaded = await Settings.loadReadOnly({ cwd: root, agentDir: path.join(root, "agent") });
+		expect(getRoleInfo("owner-role", loaded).description).toBe("My own role");
+		expect(getKnownRoleIds(loaded)).toContain("owner-role");
+		setRoleDescription("default", "", settings);
+		expect(getRoleInfo("default", settings).description).toBe("");
+	} finally {
+		restoreSettingsTestState(state);
+		await fs.rm(root, { recursive: true, force: true });
+	}
 });
 
 test("chronicler selection is independent and unset capture uses the slow priority chain", () => {
