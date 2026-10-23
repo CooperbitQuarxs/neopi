@@ -52,16 +52,18 @@ npi config dump-toml > settings.defaults.toml
 
 The output includes every registered setting and its schema default. Unset defaults remain comments. Review it before copying it to `config.toml`; a fully populated overlay pins defaults and replaces matching YAML keys. Regenerate it after upgrades to see new settings. Invalid TOML is a hard error naming the file, never a silent fallback. Live settings reloads watch both TOML filenames in user and project directories.
 
-The settings panel and `config set`/`reset` continue writing YAML. Edit or remove the corresponding TOML top-level key to let those YAML changes take effect. TOML is never converted to YAML automatically.
+The settings panel, `config set`/`reset`, and other Settings setters save to the selected TOML file when one exists at the edited scope, and to YAML otherwise. Global and project saves use the existing lock, atomic replacement, expected-value checks and conflict receipts. A TOML file appearing or disappearing after a settings load rejects the pending save; reload before retrying. YAML bytes stay untouched during a TOML save.
+
+Saves preserve untouched TOML top-level keys, their comments and formatting. An edited top-level table is rewritten as an inline table: its internal comments, quoting, spacing and table layout are not retained. Standalone comments are retained, though their position relative to rewritten keys can change. Explicit-clear metadata is regenerated. Editing a nested key absent from TOML copies its effective YAML top-level table first, so sibling values remain intact. Clearing a whole top-level key writes an explicit null marker instead of exposing the YAML value underneath.
 
 #### Convert your existing settings
 
-Conversion requires `--yes` because `config.toml` takes precedence immediately while `/settings` and `config set`/`reset` still write YAML. Those saved changes can be masked by TOML and appear to revert on reload. Until format-aware saves are available, edit `config.toml` directly or remove it to return to YAML. The converter prints this warning before writing; `--force` does not acknowledge it.
+Conversion is explicit and takes effect immediately. Subsequent settings saves use TOML, so no YAML-save warning or `--yes` acknowledgment is needed.
 
 ```bash
-npi config to-toml --yes                         # user and current project main settings, when present
-npi config to-toml /path/to/config.yaml --yes     # one explicit main settings file
-npi config to-toml /path/to/config.yml --force --yes
+npi config to-toml                         # user and current project main settings, when present
+npi config to-toml /path/to/config.yaml     # one explicit main settings file
+npi config to-toml /path/to/config.yml --force
 ```
 
 Conversion writes the replacement-extension sibling `config.toml` with private permissions, leaving YAML bytes unchanged. It carries the full parsed YAML, including unknown extension keys, credentials, nested tables, mixed arrays, arrays of tables and multiline text. It does not add registry defaults. Existing TOML is never overwritten without `--force`. A legacy `settings.toml` must be reconciled or moved first, because creating a second overlay would be ambiguous.
@@ -111,12 +113,12 @@ This only controls the startup splash animation. It does not rerun setup or chan
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `omp config list`              | Print every setting grouped by tab, with its current value and type. `--json` emits an object keyed by setting path with `{ value, type, description }`. Configured credential fields are masked as `********` in human output; in JSON their `value` is omitted and `redacted: true` is emitted. |
 | `omp config get <key>`         | Print the effective value of one key. Unknown keys exit non-zero. `--json` emits `{ key, value, type, description }`. This is an explicit single-key request, so credential values are returned unmasked.                                                                                         |
-| `omp config set <key> <value>` | Parse `<value>` against the key's schema type, write it to the global main YAML file, and print the value written. When another source still supplies the effective value, it says which instead (`--json`: `overriddenBy` is the env var name, or `project`, `overlay`, or `runtime`; `fallbackEnv` names a fallback env var used while the saved value is blank). |
-| `omp config reset <key>`       | Delete the global key, allowing another configured layer or the schema default to apply. Prints the resulting effective value, masking non-empty credentials as `********`; JSON omits a credential's `value` and emits `{ key, redacted: true }`. |
+| `omp config set <key> <value>` | Parse `<value>` against the key's schema type, write it to the selected global TOML or YAML file, and print the value written. When another source still supplies the effective value, it says which instead (`--json`: `overriddenBy` is the env var name, or `project`, `overlay`, or `runtime`; `fallbackEnv` names a fallback env var used while the saved value is blank). |
+| `omp config reset <key>`       | Clear the global key, masking underlying YAML when saving to TOML and allowing another scope or the schema default to apply. Prints the resulting effective value, masking non-empty credentials as `********`; JSON omits a credential's `value` and emits `{ key, redacted: true }`. |
 | `omp config path`              | Print the active agent directory (honors `PI_CODING_AGENT_DIR`).                                                                                                                                                                                                                                  |
 | `omp config init-xdg`          | On Linux and macOS, create the `omp` directories under the effective XDG data, state, and cache homes. It does not move existing files or set the XDG environment variables. Other platforms exit non-zero.                                                                                       |
 | `npi config dump-toml`         | Write documented registry defaults as TOML to stdout without loading user settings. Redirect to a file to regenerate it. |
-| `npi config to-toml [file] --yes [--force]` | Convert full user and current project main YAML settings, or one explicit `config.yml`/`config.yaml`, to private `config.toml` siblings after acknowledging the YAML-save limitation. Report unsupported values and lost YAML syntax. |
+| `npi config to-toml [file] [--force]` | Convert full user and current project main YAML settings, or one explicit `config.yml`/`config.yaml`, to private `config.toml` siblings. Report unsupported values and lost YAML syntax. |
 
 `omp config` with no subcommand lists settings. `--help` or `-h` displays command help. The `--json` flag is accepted by `list`, `get`, `set`, and `reset`.
 

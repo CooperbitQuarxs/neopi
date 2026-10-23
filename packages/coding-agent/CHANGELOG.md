@@ -10,6 +10,7 @@
 ### Added
 
 - Say "computer" to start optional local wake-word dictation, hear a configurable chirp, and submit the complete request after silence or an end word. Wake listening is off by default ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
+- Choose `local/kokoro-paced` for local speech with measured synthesis pacing, configurable phrase boundaries, and idle time between segments; local `tts` file generation now segments long input too ([#552](https://github.com/PsychedelicShayna/neopi/issues/552)).
 - RPC clients can discover native themes, read resolved colors and change dark or light selections in user or project scope without replacing the other scope. Theme setting changes emit an invalidation event for connected clients ([#526](https://github.com/PsychedelicShayna/neopi/issues/526)).
 - RPC and control session snapshots report recorded journal-wide spend, advisor restoration state, cache counters and effective approval policy for graphical session status ([NeoCode #141](https://github.com/PsychedelicShayna/neocode/issues/141)).
 - Query native `/switch` matches and measured model facts over RPC or terminal control without changing the selected model ([NeoCode #138](https://github.com/PsychedelicShayna/neocode/issues/138)).
@@ -18,7 +19,8 @@
 - Navigate the native session tree over RPC or terminal control without forking its file; receive restored drafts, images and native summary/ask outcomes with guarded branch preconditions ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
 - Inspect, add, edit and delete model overrides and custom models in `/models`, with schema-driven field editors and unknown-field preservation ([#522](https://github.com/PsychedelicShayna/neopi/issues/522)).
 
-- Convert complete user and project main settings to `config.toml` with `npi config to-toml --yes`, preserving unknown keys and explicit clears while reporting unsupported YAML values; conversion warns that menu saves still write YAML until format-aware saves arrive ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
+- Convert complete user and project main settings to `config.toml` with `npi config to-toml`, preserving unknown keys and explicit clears while reporting unsupported YAML values ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
+- Settings saves now update an existing global or project TOML file, preserve unrelated comments, and reject stale edits; YAML-only settings keep their existing save behavior ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
 - Open the backing file from `/settings`, `/advisor configure`, `/agents`, and `/models` with Ctrl-G, then see saved edits without restarting ([#521](https://github.com/PsychedelicShayna/neopi/issues/521)).
 - Read complete native journal or selected-branch history in bounded RPC/control pages or with `npi sessions entries --json`, preserving tool output, compaction, reset and custom records ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
 - Set model context limits with exact, glob, or regex rules in `/models`, and see the effective maintenance window separately from catalog capacity ([#511](https://github.com/PsychedelicShayna/neopi/issues/511)).
@@ -89,6 +91,8 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Extension package discovery now honors user and project main-settings TOML overrides and explicit clears ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
+- Invalid effort and context rules block only matching models; unknown saved effort names are dropped without lifting limits or preventing unrelated task spawns ([#539](https://github.com/PsychedelicShayna/neopi/issues/539)).
 - CI checks no longer depend on workstation-only test paths or outdated fixtures; fork releases retain Linux, macOS and Windows smoke checks without upstream package publishers ([#536](https://github.com/PsychedelicShayna/neopi/issues/536)).
 - Nightly Rust formatting checks pass for native live-audio controls ([#541](https://github.com/PsychedelicShayna/neopi/issues/541)).
 - CI formatting checks pass for native RPC model configuration, telemetry, themes and hosted stats sources ([#543](https://github.com/PsychedelicShayna/neopi/issues/543), [#548](https://github.com/PsychedelicShayna/neopi/issues/548)).
