@@ -9,6 +9,7 @@
 
 ### Added
 
+- Use `/voice on` for session-local wake-word requests and spoken replies, optionally rewritten before speech; `/voice off` restores saved speech preferences ([#554](https://github.com/PsychedelicShayna/neopi/issues/554)).
 - Say "computer" to start optional local wake-word dictation, hear a configurable chirp, and submit the complete request after silence or an end word. Wake listening is off by default ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
 - Choose `local/kokoro-paced` for local speech with measured synthesis pacing, configurable phrase boundaries, and idle time between segments; local `tts` file generation now segments long input too ([#552](https://github.com/PsychedelicShayna/neopi/issues/552)).
 - RPC clients can discover native themes, read resolved colors and change dark or light selections in user or project scope without replacing the other scope. Theme setting changes emit an invalidation event for connected clients ([#526](https://github.com/PsychedelicShayna/neopi/issues/526)).
