@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Auth broker credentials, account policies and usage reserves now honor main-settings TOML overrides and explicit clears ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
 - Auto judgments now honor an allowed `off` selection by disabling reasoning in their requests ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).
 - Omit unsupported top-K, min-P and penalty parameters on first-party OpenAI endpoints while preserving supported sampling options and compatible-proxy extensions ([#53](https://github.com/PsychedelicShayna/neopi/issues/53)).
 - Fixed switch provider-fragment connections, state-relative backups, organization-only meter matching, and bounded dashboard event replay; invalid catalog Plans and incomplete model additions now fail before serving ([#329](https://github.com/PsychedelicShayna/neopi/issues/329)).
