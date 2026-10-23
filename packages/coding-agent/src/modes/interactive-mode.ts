@@ -171,6 +171,7 @@ import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type
 import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
 import { transcribeXaiAudio } from "../stt/xai-stt";
 import { XaiSTTController } from "../stt/xai-stt-controller";
+import { WakeListener } from "../stt/wake-listener";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
 import { labelEchoesHandle } from "../task/label";
@@ -433,7 +434,15 @@ import { cfgGoalContinuationModes, cfgGoalEnabled } from "../goals/settings";
 import { goalContinuationActivity, goalFromModeData } from "../goals/state";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../plan-mode/settings";
 import { cfgStreamRedactPatterns } from "../stream/settings";
-import { cfgSttEnabled, cfgSttLanguage } from "../stt/settings";
+import {
+	cfgSttEnabled,
+	cfgSttLanguage,
+	cfgWakeEnabled,
+	cfgWakeSilenceMs,
+	cfgWakeCancelMs,
+	cfgWakeEndWord,
+	cfgWakeChirpPath,
+} from "../stt/settings";
 import { combine, type SettingValueOf } from "../config/registry";
 import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
 import { cfgTierAdvisor } from "../session/settings";
@@ -1864,6 +1873,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #uiHelpers: UiHelpers;
 	#sttController: STTController | undefined;
 	#xaiSttController: XaiSTTController | undefined;
+	#wakeListener: WakeListener | undefined;
 	#micCursor: MicCursor | undefined;
 	// Fork: the main-composer destination outlives extension editor replacements.
 	readonly #xaiComposerDestination = {
@@ -2606,6 +2616,34 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Subscribe to agent events
 		this.#subscribeToAgent();
+		const syncWakeListener = (): void => {
+			this.#wakeListener?.stop();
+			this.#wakeListener = undefined;
+			if (!cfgWakeEnabled.get(this.settings)) return;
+			this.#wakeListener = new WakeListener({
+				settings: this.settings,
+				controller: new STTController({
+					settings: this.settings,
+					registry: this.session.modelRegistry,
+					getSessionId: () => this.session.sessionId,
+				}),
+				submit: async text => {
+					this.editor.commitVolatileText(text);
+					this.editor.submit();
+				},
+				status: text => this.showStatus(text),
+				warning: text => this.showWarning(text),
+			});
+			void this.#wakeListener.start();
+		};
+		this.#eventBusUnsubscribers.push(
+			cfgWakeEnabled.listen(this.settings, syncWakeListener),
+			cfgWakeSilenceMs.listen(this.settings, syncWakeListener),
+			cfgWakeCancelMs.listen(this.settings, syncWakeListener),
+			cfgWakeEndWord.listen(this.settings, syncWakeListener),
+			cfgWakeChirpPath.listen(this.settings, syncWakeListener),
+		);
+		syncWakeListener();
 
 		this.#eventBusUnsubscribers.push(
 			this.session.subscribe(event => {
@@ -6947,6 +6985,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#cancelGoalContinuation();
 		clearInterval(this.#jobsSheetTimer);
 		this.#jobsSheetTimer = undefined;
+		this.#wakeListener?.stop();
+		this.#wakeListener = undefined;
 		if (this.#sttController) {
 			this.#sttController.dispose();
 			this.#sttController = undefined;

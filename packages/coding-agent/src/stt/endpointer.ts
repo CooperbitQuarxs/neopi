@@ -59,7 +59,7 @@ export const DEFAULT_ENDPOINTER_CONFIG: EndpointerConfig = {
 export type EndpointerEvent = { kind: "partial"; audio: Float32Array } | { kind: "segment"; audio: Float32Array };
 
 /** Append-growable Float32 buffer (amortized O(1) push, no per-frame realloc). */
-class FloatBuffer {
+export class FloatBuffer {
 	#data = new Float32Array(0);
 	#len = 0;
 
@@ -89,7 +89,7 @@ class FloatBuffer {
 }
 
 /** Fixed-capacity ring keeping the most recent `capacity` samples. */
-class FloatRing {
+export class FloatRing {
 	readonly #data: Float32Array;
 	#start = 0;
 	#len = 0;
@@ -128,6 +128,12 @@ class FloatRing {
 		if (end > cap) target.push(this.#data.subarray(0, end - cap));
 	}
 
+	snapshot(): Float32Array {
+		const target = new FloatBuffer();
+		this.copyInto(target);
+		return target.take();
+	}
+
 	reset(): void {
 		this.#start = 0;
 		this.#len = 0;
@@ -140,6 +146,25 @@ function rms(frame: Float32Array): number {
 	return Math.sqrt(sum / Math.max(1, frame.length));
 }
 
+/** Shared adaptive level gate for streaming dictation and wake listening. */
+export class SpeechLevelGate {
+	#noiseFloor: number;
+	constructor(readonly config = DEFAULT_ENDPOINTER_CONFIG) {
+		this.#noiseFloor = config.minThreshold;
+	}
+	accept(frame: Float32Array): boolean {
+		const energy = rms(frame);
+		const voiced = energy > Math.max(this.config.minThreshold, this.#noiseFloor * this.config.energyRatio);
+		if (!voiced) {
+			this.#noiseFloor = this.#noiseFloor * (1 - this.config.floorAttack) + energy * this.config.floorAttack;
+		}
+		return voiced;
+	}
+	reset(): void {
+		this.#noiseFloor = this.config.minThreshold;
+	}
+}
+
 export class StreamEndpointer {
 	readonly #cfg: EndpointerConfig;
 	readonly #frameSamples: number;
@@ -149,7 +174,7 @@ export class StreamEndpointer {
 	readonly #leftover: Float32Array;
 	#leftoverLen = 0;
 	#inSpeech = false;
-	#noiseFloor: number;
+	readonly #level: SpeechLevelGate;
 	#silenceMs = 0;
 	#segmentMs = 0;
 	#msSincePartial = 0;
@@ -165,7 +190,7 @@ export class StreamEndpointer {
 		this.#preRollSamples = Math.max(0, Math.round((this.#cfg.sampleRate * this.#cfg.preRollMs) / 1000));
 		this.#leftover = new Float32Array(this.#frameSamples);
 		this.#preRoll = new FloatRing(this.#preRollSamples);
-		this.#noiseFloor = this.#cfg.minThreshold;
+		this.#level = new SpeechLevelGate(this.#cfg);
 	}
 
 	/** Feed newly-captured samples; returns ordered partial/segment events. */
@@ -212,15 +237,7 @@ export class StreamEndpointer {
 	}
 
 	#processFrame(frame: Float32Array, events: EndpointerEvent[]): void {
-		const energy = rms(frame);
-		const threshold = Math.max(this.#cfg.minThreshold, this.#noiseFloor * this.#cfg.energyRatio);
-		const voiced = energy > threshold;
-		// Track ambient noise on non-speech frames only, so loud speech never
-		// inflates the floor (which would make the tail of an utterance read as
-		// silence and clip the segment short).
-		if (!voiced) {
-			this.#noiseFloor = this.#noiseFloor * (1 - this.#cfg.floorAttack) + energy * this.#cfg.floorAttack;
-		}
+		const voiced = this.#level.accept(frame);
 
 		if (!this.#inSpeech) {
 			this.#preRoll.push(frame);
@@ -302,6 +319,6 @@ export class StreamEndpointer {
 		this.#segmentMs = 0;
 		this.#msSincePartial = 0;
 		this.#partialDirty = false;
-		this.#noiseFloor = this.#cfg.minThreshold;
+		this.#level.reset();
 	}
 }

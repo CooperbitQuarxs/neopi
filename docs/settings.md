@@ -1138,6 +1138,11 @@ searxng:
 | `stt.enabled`                       | boolean | `false`   | Enable microphone speech-to-text; choose the recognition model with `modelRoles.dictation`.                                                                                                                                                                                                                                                                                                                                           |
 | `stt.language`                      | string  | `en`      | Source language hint for speech-to-text.                                                                                                                                                                                                                                                                                                                                                                                               |
 | `stt.submitTrigger`                 | enum    | `never`   | When completed dictation auto-submits: `never`, `release`, `release-complete`, or `say-submit`.                                                                                                                                                                                                                                                                                                                                        |
+| `stt.wake.enabled` | boolean | `false` | Listen locally for "computer", chirp, record a complete request, then submit through the dictation role. Toggle under `/settings` → Interaction → Speech. Independent of manual `stt.enabled`; off never opens the wake microphone. |
+| `stt.wake.silenceMs` | number | `2000` | Silence ending a request, clamped to 200–30000 ms. |
+| `stt.wake.cancelMs` | number | `3000` | Cancel if no speech follows activation, clamped to 2000–5000 ms. |
+| `stt.wake.endWord` | string | `""` | Optional single word ending a request, removed from the submitted text. Empty uses silence only. May be "computer". |
+| `stt.wake.chirpPath` | string | `""` | Custom PCM16 mono WAV, at most two seconds. Empty uses a generated tone. |
 | `providers.openaiWebsockets`        | enum    | `auto`    | `auto`, `off`, `on`.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `providers.streamFirstEventTimeoutSeconds` | number | `-1` | First stream-event watchdog: `-1` uses provider/env defaults, `0` disables, positive values set seconds. |
 | `providers.streamIdleTimeoutSeconds` | number | `-1` | Maximum silence between stream events, with the same `-1`/`0` conventions. |
@@ -1158,6 +1163,15 @@ searxng:
 | `secrets.enabled`                   | boolean | `false`   | Enable configured secret obfuscation and built-in credential-shaped token redaction before provider requests. See [Secret obfuscation](./secrets.md).                                                                                                                                                                                                                                                                                  |
 
 Provider credentials and custom model definitions are configured separately — see [Providers](./providers.md) and [Models](./models.md).
+
+Wake listening uses the existing local Parakeet downloader and worker. It first checks
+adaptive audio level, then speech-band energy, and only decodes gated windows to
+recognize the keyword. The keyword check stays local even when the dictation role
+uses xAI. The full request is transcribed once after recording, not in live segments.
+Pre-roll and audio arriving during keyword decoding are retained.
+Wake submissions use the existing
+dictation editor-submit path, including any text already in the composer.
+Turning wake listening off stops its capture and cancels pending recognition.
 
 #### Saved reset auto-consumption
 
