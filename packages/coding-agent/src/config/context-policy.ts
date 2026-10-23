@@ -5,7 +5,8 @@ import {
 	compileSelectorRegex,
 	isGlobSelectorPattern,
 	isRegexSelectorPattern,
-	matchModelSelectorRule,
+	matchValidatedModelSelectorRule,
+	validateConfiguredModelRules,
 } from "./selector-pattern";
 import type { ScopeLike } from "./registry";
 
@@ -19,6 +20,7 @@ export const cfgContextRules = register({
 	id: "context.rules",
 	type: "array",
 	default: [] as ContextRule[],
+	validateConfigured: validateConfiguredModelRules,
 	validate(raw) {
 		if (raw === undefined) return;
 		if (!Array.isArray(raw)) throw new Error("Context rules must be an ordered list");
@@ -48,5 +50,8 @@ export const cfgContextRules = register({
 });
 
 export function matchContextRule(scope: ScopeLike, model: { provider: string; id: string }): ContextRule | undefined {
-	return matchModelSelectorRule(cfgContextRules.get(scope), model);
+	return matchValidatedModelSelectorRule(cfgContextRules.get(scope), model, rule => {
+		cfgContextRules.definition.validate?.([rule]);
+		return rule;
+	});
 }

@@ -55,3 +55,27 @@ export function matchModelSelectorRule<T extends { selector: string }>(
 			matchesSelectorPattern(rule.selector.toLowerCase(), identity.toLowerCase()),
 	);
 }
+
+/** Keep invalid payloads local to their matching models without relaxing write-time validation. */
+export function validateConfiguredModelRules(raw: unknown): void {
+	if (raw !== undefined && !Array.isArray(raw)) throw new Error("Model rules must be an ordered list");
+}
+
+export function matchValidatedModelSelectorRule<T extends { selector: string }>(
+	rules: readonly T[],
+	model: { provider: string; id: string },
+	validate: (rule: T) => T,
+): T | undefined {
+	const matching: T[] = [];
+	const seen = new Set<string>();
+	for (const rule of rules) {
+		// An absent or malformed selector cannot identify a model to block.
+		if (!rule || typeof rule.selector !== "string" || !rule.selector.trim()) continue;
+		if (!matchModelSelectorRule([rule], model)) continue;
+		const key = rule.selector.toLowerCase();
+		if (seen.has(key)) throw new Error(`Duplicate model rule ${rule.selector}`);
+		seen.add(key);
+		matching.push(validate(rule));
+	}
+	return matchModelSelectorRule(matching, model);
+}

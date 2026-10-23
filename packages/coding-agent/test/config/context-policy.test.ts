@@ -1,12 +1,13 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { logger } from "@oh-my-pi/pi-utils";
 import { cfgContextRules, matchContextRule } from "../../src/config/context-policy";
-import { cfgEffortRules, resolveImplicitEffort } from "../../src/config/effort-policy";
+import { cfgEffortRules, cfgRoleEffortSelections, resolveImplicitEffort } from "../../src/config/effort-policy";
 import { Settings, resetSettingsForTest } from "../../src/config/settings";
 import { cfgCompactionModelThresholds, cfgCompactionThresholdTokens } from "../../src/session/context-settings";
 import {
@@ -37,6 +38,7 @@ const model = buildModel({
 });
 const scratch: string[] = [];
 afterEach(async () => {
+	vi.restoreAllMocks();
 	resetSettingsForTest();
 	for (const dir of scratch.splice(0)) await fs.rm(dir, { recursive: true, force: true });
 });
@@ -55,6 +57,68 @@ describe("context rules", () => {
 		const settings = await Settings.init({ cwd: dir, agentDir: dir, inMemory: true });
 		expect(cfgContextRules.get(settings)).toEqual([]);
 		expect(resolveEffectiveContextWindow(settings, model)).toBe(200_000);
+	});
+
+	test("loads unknown effort names without widening rules or blocking unrelated models", async () => {
+		const dir = await directory();
+		await Bun.write(
+			path.join(dir, "config.yml"),
+			JSON.stringify({
+				effort: {
+					rules: [
+						{ selector: "test/broken", allowed: ["future-effort"] },
+						{ selector: "test/reasoner", allowed: ["future-effort", "low"] },
+					],
+				},
+				context: { rules: [{ selector: "test/broken", limit: "invalid" }] },
+				roleEffortSelections: { smol: { mode: "auto", allowed: ["future-effort", "low"] } },
+			}),
+		);
+		const warning = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		const settings = await Settings.loadReadOnly({ cwd: dir, agentDir: dir });
+		expect(resolveImplicitEffort(settings, model).candidates).toEqual([Effort.Low]);
+		expect(resolveImplicitEffort(settings, model).candidates).toEqual([Effort.Low]);
+		expect(warning).toHaveBeenCalledTimes(1);
+		expect(warning.mock.calls[0]?.[0]).toContain("test/reasoner");
+		const broken = { ...model, id: "broken" };
+		expect(() => resolveImplicitEffort(settings, broken)).toThrow("Effort rule test/broken");
+		expect(() => resolveEffectiveContextWindow(settings, broken)).toThrow(
+			"Invalid context rule limit for test/broken",
+		);
+		expect(resolveEffectiveContextWindow(settings, model)).toBe(200_000);
+		const unrelated = { ...model, provider: "other" };
+		expect(resolveImplicitEffort(settings, unrelated).candidates).toContain(Effort.High);
+		expect(resolveImplicitEffort(settings, model, settings.getRoleEffortSelection("smol")).candidates).toEqual([
+			Effort.Low,
+		]);
+		expect(() =>
+			cfgRoleEffortSelections.assertWritable({
+				smol: { mode: "auto", allowed: ["future-effort"] },
+			}),
+		).toThrow("supported thinking effort names");
+	});
+
+	test("rejects unknown efforts on UI writes and blocks invalid matching patterns despite an exact rule", async () => {
+		const dir = await directory();
+		await Bun.write(
+			path.join(dir, "config.yml"),
+			JSON.stringify({
+				effort: {
+					rules: [
+						{ selector: "test/reasoner", allowed: ["high"] },
+						{ selector: "test/*", allowed: ["future-effort"] },
+					],
+				},
+			}),
+		);
+		const settings = await Settings.loadReadOnly({ cwd: dir, agentDir: dir });
+		expect(() => resolveImplicitEffort(settings, model)).toThrow("Effort rule test/*");
+		expect(() =>
+			cfgEffortRules.assertWritable([{ selector: "test/reasoner", allowed: ["low", "future-effort"] }]),
+		).toThrow("supported thinking effort names");
+		expect(() => cfgContextRules.assertWritable([{ selector: "test/reasoner", limit: "invalid" }])).toThrow(
+			"Invalid context rule limit",
+		);
 	});
 
 	test("uses exact over regex over glob, retaining order within a tier", () => {
