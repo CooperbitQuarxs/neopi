@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Settings, settings } from "../src/config/settings";
 import { FloatRing } from "../src/stt/endpointer";
-import { cfgWakeEnabled } from "../src/stt/settings";
+import { cfgWakeEnabled, cfgWakeSuppressWhileSpeaking } from "../src/stt/settings";
 import type { AudioSink } from "../src/stt/shared-audio-capture";
 import { STTController } from "../src/stt/stt-controller";
 import { stripWakeWords, WakeListener } from "../src/stt/wake-listener";
 import { type KeywordDetector, speechBandAccepts, WakeRecorder } from "../src/stt/wake-recorder";
 import { decodePcm16Wav, encodePcm16Wav } from "../src/stt/wav";
+import { StreamingAudioPlayer } from "../src/tts/streaming-player";
+import { vocalizer } from "../src/tts/vocalizer";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 // Generated with espeak-ng -v en-us -s 145, resampled to 16 kHz PCM16 with ffmpeg.
@@ -302,6 +304,63 @@ describe("wake microphone ownership", () => {
 		expect(capture).toHaveBeenCalledTimes(1);
 		expect(stop).toHaveBeenCalledTimes(1);
 	});
+	it("interrupts speech before the chirp when playback suppression is off", async () => {
+		cfgWakeEnabled.set(settings, true);
+		cfgWakeSuppressWhileSpeaking.set(settings, false);
+		let onAudio: AudioSink | undefined;
+		let playing = true;
+		const events: string[] = [];
+		const clear = vi.spyOn(vocalizer, "clear").mockImplementation(() => {
+			events.push("stop speech");
+			playing = false;
+		});
+		const chirped = Promise.withResolvers<void>();
+		vi.spyOn(StreamingAudioPlayer.prototype, "start").mockImplementation(() => {
+			events.push("chirp");
+		});
+		vi.spyOn(StreamingAudioPlayer.prototype, "write").mockImplementation(() => {});
+		vi.spyOn(StreamingAudioPlayer.prototype, "end").mockImplementation(() => chirped.promise);
+		const detect = vi.fn(async () => match);
+		const warning = vi.fn();
+		const listener = new WakeListener({
+			settings,
+			controller: new STTController(),
+			capture: (_rate, callback) => {
+				onAudio = callback;
+				return { stop() {} };
+			},
+			prepare: async () => {},
+			detector: { detect },
+			isSpeechPlaying: () => playing,
+			submit: async () => {},
+			status: () => {},
+			warning,
+		});
+		try {
+			await listener.start();
+			onAudio?.(null, await fixture("computer"));
+			onAudio?.(null, silence(1000));
+			await settle();
+			expect(detect).toHaveBeenCalledTimes(1);
+			expect(clear).toHaveBeenCalledTimes(1);
+			expect(events).toEqual(["stop speech", "chirp"]);
+			// Chirp audio remains excluded even with playback suppression off.
+			onAudio?.(null, await fixture("computer"));
+			onAudio?.(null, silence(5000));
+			await settle();
+			expect(detect).toHaveBeenCalledTimes(1);
+			chirped.resolve();
+			await settle();
+			onAudio?.(null, await fixture("request"));
+			onAudio?.(null, silence(2200));
+			await settle();
+			expect(warning).not.toHaveBeenCalled();
+		} finally {
+			chirped.resolve();
+			listener.stop();
+		}
+	});
+
 	it("does not detect computer in microphone frames during speech playback or its echo tail", async () => {
 		cfgWakeEnabled.set(settings, true);
 		let onAudio: AudioSink | undefined;
