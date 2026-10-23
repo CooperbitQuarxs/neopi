@@ -138,6 +138,7 @@ export class Vocalizer {
 	#ducked = false;
 	/** Active scopes that suppress local TTS while another speech surface owns audio. */
 	#suspensions = 0;
+	#turnInterrupted = false;
 	/** Available rewrite slots; blocks queue when exhausted. */
 	#rewriteSlots = MAX_REWRITES_IN_FLIGHT;
 	#slotWaiters: Array<() => void> = [];
@@ -172,6 +173,17 @@ export class Vocalizer {
 		};
 	}
 
+	/** Silence this turn, including text deltas that have not arrived yet. */
+	interruptTurn(): void {
+		this.#turnInterrupted = true;
+		this.clear();
+	}
+
+	/** The session calls this at the next agent turn boundary. */
+	beginTurn(): void {
+		this.#turnInterrupted = false;
+	}
+
 	/**
 	 * Stream a delta of assistant text into the pipeline. No-op when
 	 * vocalization is disabled. The synthesis session (worker, player) is only
@@ -182,7 +194,7 @@ export class Vocalizer {
 	 */
 	pushDelta(text: string): void {
 		const speechSettings = this.#modelSource?.settings ?? settings;
-		if (this.#suspensions > 0 || !cfgSpeechEnabled.get(speechSettings)) return;
+		if (this.#turnInterrupted || this.#suspensions > 0 || !cfgSpeechEnabled.get(speechSettings)) return;
 		if (!text) return;
 		if (this.#enhanced || (!this.#speakable && this.#enhancer && cfgSpeechEnhanced.get(speechSettings))) {
 			this.#pushEnhanced(text);

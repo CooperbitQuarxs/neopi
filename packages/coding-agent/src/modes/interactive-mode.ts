@@ -2629,11 +2629,11 @@ export class InteractiveMode implements InteractiveModeContext {
 				getSessionId: () => this.session.sessionId,
 			}),
 			request: async text => {
-				if (this.liveCallActive || this.session.isStreaming)
-					throw new Error("This session is busy; try again when its turn ends");
+				if (this.liveCallActive) throw new Error("End the live call before using local voice");
 				const sessionId = this.session.sessionId;
 				const previous = this.session.messages.at(-1);
-				await this.session.prompt(text, { throwOnDrop: true });
+				await this.session.prompt(text, { throwOnDrop: true, streamingBehavior: "steer" });
+				await this.session.waitForIdle();
 				if (this.session.sessionId !== sessionId) return;
 				const reply = this.session.messages.at(-1);
 				if (!reply || reply === previous || reply.role !== "assistant" || reply.stopReason !== "stop") return;
