@@ -175,6 +175,49 @@ export class STTController {
 		return resolveRoleChain("dictation", this.#settings, pool)[0]?.model;
 	}
 
+	/** Transcribe a complete wake recording once, using the same dictation role. */
+	async transcribeRecording(audio: Float32Array, signal: AbortSignal): Promise<string> {
+		const model = this.#resolveModel();
+		if (model?.api === "openai-transcriptions" || model?.api === "xai-stt") {
+			const file = new WavFileRecorder();
+			try {
+				file.append(audio);
+				return await this.#transcribeFile(model, file.finalize(), signal);
+			} finally {
+				file.dispose();
+			}
+		}
+		if (model && model.api !== "local-inference") throw new Error(`Unsupported speech-to-text API: ${model.api}`);
+		const key = this.#resolveModelKey(model);
+		await downloadSttModel(key, undefined, { signal });
+		return sttClient.transcribe(key, audio, { language: cfgSttLanguage.get(this.#settings), signal });
+	}
+
+	async #transcribeFile(model: Model<Api>, recordingPath: string, signal: AbortSignal): Promise<string> {
+		if (!this.#registry) throw new Error("No dictation model registry");
+		const language = cfgSttLanguage.get(this.#settings);
+		let requestModel = model;
+		if (model.api === "xai-stt") {
+			const transport = await resolveXAIHttpTransport(this.#registry, model.provider as XAIHttpProvider, model.id);
+			if (transport.baseURL !== model.baseUrl || transport.headers !== model.headers) {
+				requestModel = { ...model, baseUrl: transport.baseURL, headers: transport.headers };
+			}
+		}
+		signal.throwIfAborted();
+		const result = await transcribeAudio(
+			requestModel,
+			{
+				audio: Bun.file(recordingPath),
+				mimeType: "audio/wav",
+				fileName: "dictation.wav",
+				responseFormat: "json",
+				...(language && { language }),
+			},
+			{ apiKey: this.#registry.resolver(requestModel, this.#getSessionId?.()), signal },
+		);
+		return result.text.trim();
+	}
+
 	#resolveModelKey(model = this.#resolveModel()): SttModelKey {
 		return resolveSttModelSpec(model?.id).key;
 	}
@@ -347,34 +390,7 @@ export class STTController {
 				this.#cloudFile = null;
 				this.#retainedCloudFiles.push(file);
 				if (this.#retainedCloudFiles.length > 5) this.#retainedCloudFiles.shift()?.dispose();
-				const language = cfgSttLanguage.get(this.#settings);
-				let requestModel = model;
-				if (model.api === "xai-stt") {
-					const transport = await resolveXAIHttpTransport(
-						this.#registry,
-						model.provider as XAIHttpProvider,
-						model.id,
-					);
-					if (transport.baseURL !== model.baseUrl || transport.headers !== model.headers) {
-						requestModel = { ...model, baseUrl: transport.baseURL, headers: transport.headers };
-					}
-				}
-				if (this.#disposed) return;
-				const result = await transcribeAudio(
-					requestModel,
-					{
-						audio: Bun.file(recordingPath),
-						mimeType: "audio/wav",
-						fileName: "dictation.wav",
-						responseFormat: "json",
-						...(language && { language }),
-					},
-					{
-						apiKey: this.#registry.resolver(requestModel, this.#getSessionId?.()),
-						signal: abort.signal,
-					},
-				);
-				finalText = result.text.trim();
+				finalText = await this.#transcribeFile(model, recordingPath, abort.signal);
 			}
 		} catch (err) {
 			failed = true;
