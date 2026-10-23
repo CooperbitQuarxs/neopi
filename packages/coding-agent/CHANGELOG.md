@@ -88,6 +88,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Invalid effort and context rules block only matching models; unknown saved effort names are dropped without lifting limits or preventing unrelated task spawns ([#539](https://github.com/PsychedelicShayna/neopi/issues/539)).
 - CI checks no longer depend on workstation-only test paths or outdated fixtures; fork releases retain Linux, macOS and Windows smoke checks without upstream package publishers ([#536](https://github.com/PsychedelicShayna/neopi/issues/536)).
 - Nightly Rust formatting checks pass for native live-audio controls ([#541](https://github.com/PsychedelicShayna/neopi/issues/541)).
 - CI formatting checks pass for native RPC model configuration, telemetry, themes and hosted stats sources ([#543](https://github.com/PsychedelicShayna/neopi/issues/543), [#548](https://github.com/PsychedelicShayna/neopi/issues/548)).

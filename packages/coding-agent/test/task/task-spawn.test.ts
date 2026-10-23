@@ -119,6 +119,42 @@ describe("task spawn routing", () => {
 		AgentRegistry.resetGlobalForTests();
 	});
 
+	it("spawns an unmatched model when another model has an invalid saved effort rule", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [{ ...taskAgent, model: ["openai/gpt-4.1-mini"] }],
+			projectAgentsDir: null,
+		});
+		const run = vi
+			.spyOn(executorModule, "runSubprocess")
+			.mockImplementation(async options => makeResult(options.id ?? "?"));
+		const manager = createManager();
+		const root = `${process.env.HOME}/.cache/npi-canary`;
+		await fs.mkdir(root, { recursive: true });
+		const dir = await fs.mkdtemp(`${root}/effort-rule-spawn-`);
+		try {
+			await Bun.write(
+				`${dir}/config.yml`,
+				JSON.stringify({
+					effort: { rules: [{ selector: "anthropic/claude-haiku-5-5", allowed: ["future-effort"] }] },
+					context: { rules: [{ selector: "anthropic/claude-haiku-5-5", limit: "invalid" }] },
+				}),
+			);
+			const session = createSession({ manager });
+			session.settings = await Settings.loadReadOnly({ cwd: dir, agentDir: dir });
+			const tool = await TaskTool.create(session);
+			const result = await tool.execute("tc-invalid-unmatched-rule", {
+				agent: "task",
+				name: "Unaffected",
+				task: "Do the thing.",
+			} as TaskParams);
+			expect(getFirstText(result)).toContain("Spawned agent `Unaffected`");
+			await manager.getJob(result.details!.async!.jobId)!.promise;
+			expect(run).toHaveBeenCalledTimes(1);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("returns immediately on spawn and delivers the follow-up hint when the job completes", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
 			agents: [{ ...taskAgent, model: ["anthropic/claude-sonnet-4"] }],
