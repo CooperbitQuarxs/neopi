@@ -1143,6 +1143,7 @@ searxng:
 | `stt.wake.cancelMs` | number | `3000` | Cancel if no speech follows activation, clamped to 2000–5000 ms. |
 | `stt.wake.endWord` | string | `""` | Optional single word ending a request, removed from the submitted text. Empty uses silence only. May be "computer". |
 | `stt.wake.chirpPath` | string | `""` | Custom PCM16 mono WAV, at most two seconds. Empty uses a generated tone. |
+| `stt.wake.playbackTailMs` | number | `300` | Ignore microphone frames during assistant speech and for this many milliseconds afterward, clamped to 0–3000. The readiness chirp has no tail delay. |
 | `providers.openaiWebsockets`        | enum    | `auto`    | `auto`, `off`, `on`.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `providers.streamFirstEventTimeoutSeconds` | number | `-1` | First stream-event watchdog: `-1` uses provider/env defaults, `0` disables, positive values set seconds. |
 | `providers.streamIdleTimeoutSeconds` | number | `-1` | Maximum silence between stream events, with the same `-1`/`0` conventions. |
@@ -1172,6 +1173,11 @@ Pre-roll and audio arriving during keyword decoding are retained.
 Wake submissions use the existing
 dictation editor-submit path, including any text already in the composer.
 Turning wake listening off stops its capture and cancels pending recognition.
+Assistant speech pauses wake detection and clears pending detection audio. Its
+configurable echo tail prevents a spoken reply from waking the listener again.
+The readiness chirp is excluded from recording and speech activity; request
+capture and its silence/misactivation clocks start as soon as the chirp finishes,
+without discarding the first syllable behind an echo-tail delay.
 
 #### Saved reset auto-consumption
 

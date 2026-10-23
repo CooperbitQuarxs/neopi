@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Settings, settings } from "../src/config/settings";
 import { FloatRing } from "../src/stt/endpointer";
 import { cfgWakeEnabled } from "../src/stt/settings";
+import type { AudioSink } from "../src/stt/shared-audio-capture";
 import { STTController } from "../src/stt/stt-controller";
 import { stripWakeWords, WakeListener } from "../src/stt/wake-listener";
 import { type KeywordDetector, speechBandAccepts, WakeRecorder } from "../src/stt/wake-recorder";
@@ -24,7 +25,7 @@ function setup(detector: KeywordDetector = { detect: async () => match }, silenc
 		cancel: vi.fn(),
 		error: vi.fn(),
 	};
-	const recorder = new WakeRecorder(detector, { silenceMs, cancelMs: 3000, endWord }, callbacks);
+	const recorder = new WakeRecorder(detector, { silenceMs, cancelMs: 3000, endWord, playbackTailMs: 0 }, callbacks);
 	return { recorder, ...callbacks };
 }
 async function activate(recorder: WakeRecorder) {
@@ -133,6 +134,78 @@ describe("wake recorder", () => {
 		expect(submit).not.toHaveBeenCalled();
 	});
 
+	it("excludes chirp audio and starts misactivation timing only after playback", async () => {
+		const played = Promise.withResolvers<void>();
+		const callbacks = {
+			chirp: vi.fn(() => played.promise),
+			submit: vi.fn(async (_audio: Float32Array) => {}),
+			cancel: vi.fn(),
+			error: vi.fn(),
+		};
+		const recorder = new WakeRecorder(
+			{ detect: async () => match },
+			{ silenceMs: 2000, cancelMs: 3000, endWord: "", playbackTailMs: 300 },
+			callbacks,
+		);
+		await activate(recorder);
+		expect(callbacks.chirp).toHaveBeenCalledTimes(1);
+		const chirp = Float32Array.from({ length: 16000 }, (_, i) => 0.1 * Math.sin((2 * Math.PI * 880 * i) / 16000));
+		recorder.push(chirp);
+		recorder.push(silence(5000));
+		expect(callbacks.cancel).not.toHaveBeenCalled();
+		expect(callbacks.submit).not.toHaveBeenCalled();
+		played.resolve();
+		await settle();
+		recorder.push(silence(2980));
+		expect(callbacks.cancel).not.toHaveBeenCalled();
+		recorder.push(silence(20));
+		expect(callbacks.cancel).toHaveBeenCalledTimes(1);
+		expect(callbacks.submit).not.toHaveBeenCalled();
+		recorder.dispose();
+	});
+
+	it("keeps the first request word beginning immediately after the readiness chirp", async () => {
+		const played = Promise.withResolvers<void>();
+		const submitted: Float32Array[] = [];
+		const recorder = new WakeRecorder(
+			{ detect: async () => match },
+			{ silenceMs: 2000, cancelMs: 3000, endWord: "", playbackTailMs: 300 },
+			{
+				chirp: () => played.promise,
+				submit: async audio => {
+					submitted.push(audio);
+				},
+				cancel: () => {},
+				error: error => {
+					throw error;
+				},
+			},
+		);
+		await activate(recorder);
+		played.resolve();
+		await settle();
+		const request = await fixture("request");
+		recorder.push(request);
+		recorder.push(silence(2200));
+		await settle();
+		expect(submitted).toHaveLength(1);
+		const activation = await fixture("computer");
+		const start = Math.ceil(activation.length / 320) * 320 + 16000;
+		expect(Array.from(submitted[0]!.subarray(start, start + request.length))).toEqual(Array.from(request));
+		recorder.dispose();
+	});
+
+	it("invalidates a pending keyword result when assistant playback begins", async () => {
+		const pending = Promise.withResolvers<{ matched: boolean; trailingSpeech: boolean }>();
+		const { recorder, chirp } = setup({ detect: () => pending.promise });
+		await activate(recorder);
+		recorder.push(await fixture("computer"), true);
+		pending.resolve(match);
+		await settle();
+		expect(chirp).not.toHaveBeenCalled();
+		recorder.dispose();
+	});
+
 	it("retains ordered samples after 72 hours of 20 ms ring writes", () => {
 		const ring = new FloatRing(64000);
 		const frame = new Float32Array(320);
@@ -228,5 +301,41 @@ describe("wake microphone ownership", () => {
 		listener.stop();
 		expect(capture).toHaveBeenCalledTimes(1);
 		expect(stop).toHaveBeenCalledTimes(1);
+	});
+	it("does not detect computer in microphone frames during speech playback or its echo tail", async () => {
+		cfgWakeEnabled.set(settings, true);
+		let onAudio: AudioSink | undefined;
+		let playing = true;
+		const detect = vi.fn(async () => ({ matched: false, trailingSpeech: false }));
+		const listener = new WakeListener({
+			settings,
+			controller: new STTController(),
+			capture: (_rate, callback) => {
+				onAudio = callback;
+				return { stop() {} };
+			},
+			prepare: async () => {},
+			detector: { detect },
+			isSpeechPlaying: () => playing,
+			submit: async () => {},
+			status: () => {},
+			warning: () => {},
+		});
+		await listener.start();
+		onAudio?.(null, await fixture("computer"));
+		onAudio?.(null, silence(2000));
+		await settle();
+		expect(detect).not.toHaveBeenCalled();
+		playing = false;
+		const echo = Float32Array.from({ length: 4800 }, (_, i) => 0.1 * Math.sin((2 * Math.PI * 1000 * i) / 16000));
+		onAudio?.(null, echo);
+		onAudio?.(null, silence(2000));
+		await settle();
+		expect(detect).not.toHaveBeenCalled();
+		onAudio?.(null, await fixture("computer"));
+		onAudio?.(null, silence(1000));
+		await settle();
+		expect(detect).toHaveBeenCalledTimes(1);
+		listener.stop();
 	});
 });

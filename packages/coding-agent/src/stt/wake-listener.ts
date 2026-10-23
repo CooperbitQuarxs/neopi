@@ -1,10 +1,18 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { createStreamingPlayer, type StreamingAudioPlayer } from "../tts/streaming-player";
+import { vocalizer } from "../tts/vocalizer";
 import { sttClient } from "./asr-client";
 import { downloadSttModel } from "./downloader";
 import { DEFAULT_STT_MODEL_KEY } from "./models";
-import { cfgWakeCancelMs, cfgWakeChirpPath, cfgWakeEnabled, cfgWakeEndWord, cfgWakeSilenceMs } from "./settings";
+import {
+	cfgWakeCancelMs,
+	cfgWakeChirpPath,
+	cfgWakeEnabled,
+	cfgWakeEndWord,
+	cfgWakeSilenceMs,
+	cfgWakePlaybackTailMs,
+} from "./settings";
 import { sharedAudioCapture } from "./shared-audio-capture";
 import type { STTController } from "./stt-controller";
 import { decodePcm16Wav } from "./wav";
@@ -50,6 +58,7 @@ export interface WakeListenerDependencies {
 	capture?: typeof sharedAudioCapture;
 	detector?: KeywordDetector;
 	prepare?: (signal: AbortSignal) => Promise<void>;
+	isSpeechPlaying?: () => boolean;
 }
 
 /** Owns microphone, detector cancellation and speaker lifetime for one enabled session. */
@@ -91,9 +100,10 @@ export class WakeListener {
 					silenceMs: bounded(cfgWakeSilenceMs.get(this.deps.settings), 200, 30000, 2000),
 					cancelMs: bounded(cfgWakeCancelMs.get(this.deps.settings), 2000, 5000, 3000),
 					endWord,
+					playbackTailMs: bounded(cfgWakePlaybackTailMs.get(this.deps.settings), 0, 3000, 300),
 				},
 				{
-					chirp: () => {
+					chirp: async () => {
 						this.deps.status("Wake word heard; recording request");
 						this.#player?.stop();
 						const player = createStreamingPlayer();
@@ -101,7 +111,7 @@ export class WakeListener {
 						try {
 							player.start(chirp.sampleRate);
 							player.write(chirp.samples);
-							void player.end().catch(error => this.#warn(error));
+							await player.end();
 						} catch (error) {
 							this.#warn(error);
 						}
@@ -123,7 +133,7 @@ export class WakeListener {
 				if (error) {
 					this.#warn(error);
 					this.stop();
-				} else recorder.push(samples);
+				} else recorder.push(samples, this.deps.isSpeechPlaying?.() ?? vocalizer.isSpeaking());
 			});
 			this.deps.status("Listening for computer");
 		} catch (error) {

@@ -12,6 +12,7 @@ export interface WakeRecorderOptions {
 	silenceMs: number;
 	cancelMs: number;
 	endWord: string;
+	playbackTailMs: number;
 }
 
 /** Spectral energy estimate using a 300–3400 Hz bandpass, after the level gate. */
@@ -52,21 +53,36 @@ export class WakeRecorder {
 	readonly #audio = new FloatBuffer();
 	readonly #candidate = new FloatBuffer();
 	#pendingSpeech = false;
+	#chirping = false;
+	#playbackSuppressed = false;
+	#tailSamples = 0;
 
 	constructor(
 		readonly detector: KeywordDetector,
 		readonly options: WakeRecorderOptions,
 		readonly callbacks: {
-			chirp(): void;
+			chirp(): void | Promise<void>;
 			submit(audio: Float32Array): Promise<void>;
 			cancel(): void;
 			error(error: unknown): void;
 		},
 	) {}
 
-	push(samples: Float32Array): void {
+	push(samples: Float32Array, speechPlaying = false): void {
 		if (this.#abort.signal.aborted) return;
-		for (let offset = 0; offset < samples.length;) {
+		if (speechPlaying) {
+			if (!this.#playbackSuppressed) this.#reset();
+			this.#playbackSuppressed = true;
+			this.#tailSamples = Math.round(this.options.playbackTailMs * 16);
+			this.#filled = 0;
+			this.#level.reset();
+			return;
+		}
+		this.#playbackSuppressed = false;
+		if (this.#chirping) return;
+		const skipped = Math.min(samples.length, this.#tailSamples);
+		this.#tailSamples -= skipped;
+		for (let offset = skipped; offset < samples.length;) {
 			const count = Math.min(this.#frame.length - this.#filled, samples.length - offset);
 			this.#frame.set(samples.subarray(offset, offset + count), this.#filled);
 			this.#filled += count;
@@ -123,13 +139,23 @@ export class WakeRecorder {
 				if (recording) {
 					await this.#finish();
 				} else {
-					this.#recording = true;
 					this.#audio.reset();
 					this.#audio.push(this.#candidate.take());
-					this.#elapsed = this.#silence = 0;
-					this.#speech = detected.trailingSpeech || this.#pendingSpeech;
+					const earlySpeech = detected.trailingSpeech || this.#pendingSpeech;
+					this.#chirping = true;
+					try {
+						await this.callbacks.chirp();
+					} finally {
+						this.#chirping = false;
+					}
+					if (this.#abort.signal.aborted || generation !== this.#generation) return;
+					this.#recording = true;
+					this.#elapsed = this.#silence = this.#cadence = 0;
+					this.#speech = earlySpeech;
+					this.#gated = false;
+					this.#filled = 0;
+					this.#level.reset();
 					this.#ring.reset();
-					this.callbacks.chirp();
 				}
 			})
 			.catch(error => {

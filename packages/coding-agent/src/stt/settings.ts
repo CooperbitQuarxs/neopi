@@ -103,3 +103,21 @@ export const cfgWakeChirpPath = register({
 			"Path to a PCM16 mono WAV activation sound. Empty plays a generated short tone; no recording is bundled.",
 	},
 });
+
+export const cfgWakePlaybackTailMs = register({
+	id: "stt.wake.playbackTailMs",
+	type: "number",
+	default: 300,
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Wake playback echo tail",
+		description:
+			"Ignore microphone audio during assistant speech and for this many milliseconds afterward. Clamped to 0–3000. The readiness chirp has no tail delay.",
+		options: [
+			{ value: "150", label: "150 ms" },
+			{ value: "300", label: "300 ms" },
+			{ value: "500", label: "500 ms" },
+		],
+	},
+});

@@ -442,6 +442,7 @@ import {
 	cfgWakeCancelMs,
 	cfgWakeEndWord,
 	cfgWakeChirpPath,
+	cfgWakePlaybackTailMs,
 } from "../stt/settings";
 import { combine, type SettingValueOf } from "../config/registry";
 import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
@@ -2642,6 +2643,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			cfgWakeCancelMs.listen(this.settings, syncWakeListener),
 			cfgWakeEndWord.listen(this.settings, syncWakeListener),
 			cfgWakeChirpPath.listen(this.settings, syncWakeListener),
+			cfgWakePlaybackTailMs.listen(this.settings, syncWakeListener),
 		);
 		syncWakeListener();
 
