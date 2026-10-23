@@ -73,6 +73,15 @@ export const TTS_LOCAL_MODELS = [
 		description: "Kokoro-82M neural TTS — SoTA on-device quality, multi-voice, fully local",
 		voices: KOKORO_VOICES,
 	},
+	{
+		key: "kokoro-paced",
+		repo: "onnx-community/Kokoro-82M-v1.0-ONNX",
+		dtype: "q8",
+		sampleRate: 24_000,
+		label: "Kokoro-82M, paced",
+		description: "Local Kokoro with measured synthesis pacing and idle time between spoken segments",
+		voices: KOKORO_VOICES,
+	},
 ] as const satisfies readonly TtsLocalModelSpec[];
 
 export type TtsLocalModelKey = (typeof TTS_LOCAL_MODELS)[number]["key"];
