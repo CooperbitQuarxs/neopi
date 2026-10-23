@@ -43,12 +43,21 @@ import { resolveRoleChain } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { type Settings, settings } from "../config/settings";
 import { DEFAULT_TTS_VOICE, TTS_LOCAL_MODELS } from "./models";
+import { createPacedSpeechStream, SpeechPacer, speechTimingEstimate } from "./paced-stream";
 import { SpeakableStream } from "./speakable";
 import { BlockAccumulator, type SpeechEnhancer } from "./speech-enhancer";
 import { createStreamingPlayer, DUCK_GAIN } from "./streaming-player";
 import { type TtsStreamHandle, ttsClient } from "./tts-client";
 
-import { cfgSpeechEnabled, cfgSpeechEnhanced, cfgSpeechSpeed, cfgSpeechVoice } from "./settings";
+import {
+	cfgSpeechEnabled,
+	cfgSpeechEnhanced,
+	cfgSpeechSpeed,
+	cfgSpeechVoice,
+	cfgTtsPacing,
+	speechPacingMargin,
+	speechSegmentOptions,
+} from "./settings";
 
 /** Quiet time on the delta stream before the buffered partial is spoken. */
 const IDLE_FLUSH_MS = 1000;
@@ -173,7 +182,7 @@ export class Vocalizer {
 			this.#pushEnhanced(text);
 			return;
 		}
-		this.#speakable ??= new SpeakableStream();
+		this.#speakable ??= this.#createSpeakable();
 		const speakable = this.#speakable;
 		this.#pushSegments(speakable.push(text));
 		this.#armIdle(() => {
@@ -295,7 +304,7 @@ export class Vocalizer {
 		this.#liveAborts.add(abort);
 		return {
 			blocks: new BlockAccumulator(),
-			speakable: new SpeakableStream(),
+			speakable: this.#createSpeakable(),
 			pending: [],
 			pendingChars: 0,
 			dispatchedFirst: false,
@@ -362,6 +371,15 @@ export class Vocalizer {
 
 	// --- Shared synthesis/playback tail --------------------------------------
 
+	#createSpeakable(): SpeakableStream {
+		const source = this.#modelSource;
+		return new SpeakableStream(
+			source && resolveLocalSpeechModelId(source) === "kokoro-paced"
+				? speechSegmentOptions(source.settings)
+				: undefined,
+		);
+	}
+
 	/** Mechanical mode: feed ready segments, opening the session lazily. */
 	#pushSegments(segments: string[]): void {
 		if (segments.length === 0) return;
@@ -383,7 +401,15 @@ export class Vocalizer {
 		const sessionSettings = source?.settings ?? settings;
 		const voice = cfgSpeechVoice.get(sessionSettings) || DEFAULT_TTS_VOICE;
 		const speed = cfgSpeechSpeed.get(sessionSettings);
-		const handle = ttsClient.synthesizeStream(modelKey, { voice, speed, signal: abort.signal });
+		const handle =
+			modelKey === "kokoro-paced"
+				? createPacedSpeechStream({
+						synthesize: text => ttsClient.synthesize(modelKey, text, { voice, speed, signal: abort.signal }),
+						pacer: new SpeechPacer(speechTimingEstimate, speechPacingMargin(sessionSettings)),
+						enabled: cfgTtsPacing.get(sessionSettings),
+						signal: abort.signal,
+					})
+				: ttsClient.synthesizeStream(modelKey, { voice, speed, signal: abort.signal });
 		const player = this.#createPlayer();
 		player.setGain(this.#ducked ? DUCK_GAIN : 1);
 		this.#liveAborts.add(abort);

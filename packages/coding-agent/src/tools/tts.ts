@@ -14,11 +14,12 @@ import { settings, type Settings } from "../config/settings";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
 import ttsDescription from "../prompts/tools/tts.md" with { type: "text" };
 import { DEFAULT_TTS_VOICE, KOKORO_VOICES } from "../tts/models";
+import { synthesizeSegments } from "../tts/segmented-synthesis";
 import { ttsClient } from "../tts/tts-client";
 import { encodeWav } from "../tts/wav";
 import { formatPathRelativeToCwd, resolveToCwd } from "./path-utils";
 
-import { cfgTtsLocalSpeed, cfgTtsLocalVoice } from "../tts/settings";
+import { cfgTtsLocalSpeed, cfgTtsLocalVoice, speechSegmentOptions } from "../tts/settings";
 
 // Built-in voices per xAI Tier-1 docs (2026-05-16). xAI also accepts custom voice IDs,
 // so the schema does NOT enum-restrict voice_id; this constant only drives the description.
@@ -142,7 +143,12 @@ async function synthesizeLocal(
 ): Promise<AgentToolResult<TtsToolDetails, TtsSchemaType>> {
 	const voice = readLocalVoice(settingsInstance);
 	const speed = cfgTtsLocalSpeed.get(settingsInstance);
-	const audio = await ttsClient.synthesize(model.id, params.text, { voice, speed, signal });
+	const audio = await synthesizeSegments(
+		params.text,
+		speechSegmentOptions(settingsInstance),
+		segment => ttsClient.synthesize(model.id, segment, { voice, speed, signal }),
+		signal,
+	);
 	if (!audio) {
 		return {
 			isError: true,

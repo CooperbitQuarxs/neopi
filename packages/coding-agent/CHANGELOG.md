@@ -9,6 +9,7 @@
 
 ### Added
 
+- Choose `local/kokoro-paced` for local speech with measured synthesis pacing, configurable phrase boundaries, and idle time between segments; local `tts` file generation now segments long input too ([#552](https://github.com/PsychedelicShayna/neopi/issues/552)).
 - RPC clients can discover native themes, read resolved colors and change dark or light selections in user or project scope without replacing the other scope. Theme setting changes emit an invalidation event for connected clients ([#526](https://github.com/PsychedelicShayna/neopi/issues/526)).
 - RPC and control session snapshots report recorded journal-wide spend, advisor restoration state, cache counters and effective approval policy for graphical session status ([NeoCode #141](https://github.com/PsychedelicShayna/neocode/issues/141)).
 - Query native `/switch` matches and measured model facts over RPC or terminal control without changing the selected model ([NeoCode #138](https://github.com/PsychedelicShayna/neocode/issues/138)).

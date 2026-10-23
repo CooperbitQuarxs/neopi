@@ -3,6 +3,8 @@
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
 import { register } from "../config/registry";
+import type { Settings } from "../config/settings";
+import { type SpeechSegmentOptions } from "./segmenter";
 import {
 	DEFAULT_TTS_SPEED,
 	DEFAULT_TTS_VOICE,
@@ -108,3 +110,150 @@ export const cfgSpeechSpeed = register({
 		options: TTS_SPEED_OPTIONS,
 	},
 });
+
+export const cfgTtsPacing = register({
+	id: "tts.pacing",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Paced Kokoro: pacing",
+		description: "Idle between synthesis segments while buffered speech plays. Only affects the Kokoro, paced engine",
+	},
+});
+export const cfgTtsPacingMargin = register({
+	id: "tts.pacingMarginMs",
+	type: "number",
+	default: 350,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Paced Kokoro: safety margin",
+		description:
+			"Start synthesis this many milliseconds before its predicted deadline. Increase if playback has gaps",
+	},
+});
+export const cfgTtsSegmentMin = register({
+	id: "tts.segmentMinChars",
+	type: "number",
+	default: 80,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Paced Kokoro: minimum segment",
+		description: "Minimum characters before a preferred boundary, except the first segment or the final remainder",
+	},
+});
+export const cfgTtsSegmentMax = register({
+	id: "tts.segmentMaxChars",
+	type: "number",
+	default: 240,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Paced Kokoro: maximum segment",
+		description: "Character target, clamped to 40–280. Quotes, parentheses and indivisible words can extend past it",
+	},
+});
+export const cfgTtsSegmentFirst = register({
+	id: "tts.segmentFirstChars",
+	type: "number",
+	default: 80,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Paced Kokoro: first segment",
+		description: "Short first-segment character target for fast initial speech, capped at the maximum segment length",
+	},
+});
+export const cfgTtsSegmentWords = register({
+	id: "tts.segmentMaxWords",
+	type: "number",
+	default: 40,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Paced Kokoro: hard word target",
+		description: "Fallback word-count target when no preferred anchor fits. Enclosed clauses stay together",
+	},
+});
+export const cfgTtsSegmentSentences = register({
+	id: "tts.segmentSentences",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Paced Kokoro: sentence boundaries",
+		description: "Prefer full-stop sentence endings before all other boundary rules",
+	},
+});
+export const cfgTtsSegmentCommas = register({
+	id: "tts.segmentCommas",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Paced Kokoro: comma boundaries",
+		description: "Prefer commas after sentence endings in the boundary ladder",
+	},
+});
+export const cfgTtsSegmentConjunctions = register({
+	id: "tts.segmentConjunctions",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Paced Kokoro: conjunction boundaries",
+		description: "Cut before and, or, or because when no sentence or comma boundary fits",
+	},
+});
+export const cfgTtsSegmentPunctuation = register({
+	id: "tts.segmentPunctuation",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Paced Kokoro: other punctuation",
+		description:
+			"Use colon, semicolon, exclamation, question and closing quote/parenthesis boundaries before word cuts",
+	},
+});
+export const cfgTtsSegmentEllipsis = register({
+	id: "tts.segmentEllipsis",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Paced Kokoro: ellipsis boundaries",
+		description: "Treat a run of dots as one sentence ending. When disabled, only a single dot ends a sentence",
+	},
+});
+
+function bounded(value: number, fallback: number, min: number, max: number): number {
+	return Number.isFinite(value) ? Math.max(min, Math.min(max, Math.round(value))) : fallback;
+}
+
+export function speechSegmentOptions(settings: Settings): SpeechSegmentOptions {
+	const maxChars = bounded(cfgTtsSegmentMax.get(settings), 240, 40, 280);
+	return {
+		minChars: bounded(cfgTtsSegmentMin.get(settings), 80, 1, maxChars),
+		maxChars,
+		firstChars: bounded(cfgTtsSegmentFirst.get(settings), 80, 12, maxChars),
+		maxWords: bounded(cfgTtsSegmentWords.get(settings), 40, 1, 100),
+		sentences: cfgTtsSegmentSentences.get(settings),
+		commas: cfgTtsSegmentCommas.get(settings),
+		conjunctions: cfgTtsSegmentConjunctions.get(settings),
+		punctuation: cfgTtsSegmentPunctuation.get(settings),
+		ellipsis: cfgTtsSegmentEllipsis.get(settings),
+	};
+}
+
+export function speechPacingMargin(settings: Settings): number {
+	return bounded(cfgTtsPacingMargin.get(settings), 350, 0, 10000);
+}
