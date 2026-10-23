@@ -6,6 +6,7 @@ import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui
 import { createPluginSettingsHost } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/settings-host";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
+import type { TspPrefsProps } from "@oh-my-pi/pi-wire";
 
 import { cfgHindsightApiToken } from "@oh-my-pi/pi-coding-agent/hindsight/settings";
 import { cfgMemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/settings";
@@ -70,31 +71,38 @@ function focusMemoryTab(comp: SettingsSelectorComponent): void {
 	}
 }
 
+function settingRows(comp: SettingsSelectorComponent): string[] {
+	const page = comp.describe({
+		cols: 120,
+		reduceMotion: false,
+		dark: true,
+		supports: () => true,
+		feature: () => true,
+	});
+	const props = page.p as TspPrefsProps;
+	return props.sections.flatMap(section => section.rows.map(row => row.id));
+}
+
 describe("SettingsSelectorComponent memory tab", () => {
 	it("reveals condition-gated Hindsight rows the moment memory.backend changes via the submenu", () => {
 		cfgMemoryBackend.set(settings, "off");
 		const comp = createSelector();
 		focusMemoryTab(comp);
-		// Width 70 keeps the flat single-column layout (the wide split layout
-		// shows only the active section's rows, covered by the sidebar test).
-		const before = comp.render(70).join("\n");
-		expect(before).toContain("Memory Backend");
-		expect(before).not.toContain("Hindsight API URL");
-		expect(before).not.toContain("Hindsight API Token");
+		expect(settingRows(comp)).toContain("memory.backend");
+		expect(settingRows(comp)).not.toContain("hindsight.apiUrl");
+		expect(settingRows(comp)).not.toContain("hindsight.apiToken");
 
-		// Memory Backend is the only visible row, so it's already selected at index 0.
-		// Enter opens the SelectSubmenu pre-positioned on "off"; navigate to "hindsight" (index 2) and confirm.
+		// The backend row starts selected. Open its choices and select Hindsight.
 		comp.handleInput("\n");
 		comp.handleInput("\x1b[B");
 		comp.handleInput("\x1b[B");
 		comp.handleInput("\n");
 
 		expect(cfgMemoryBackend.get(settings)).toBe("hindsight");
-		const after = comp.render(70).join("\n");
-		expect(after).toContain("Memory Backend");
-		expect(after).toContain("Hindsight API URL");
-		expect(after).toContain("Hindsight API Token");
-		expect(after).toContain("Hindsight Auto Recall");
+		expect(settingRows(comp)).toContain("memory.backend");
+		expect(settingRows(comp)).toContain("hindsight.apiUrl");
+		expect(settingRows(comp)).toContain("hindsight.apiToken");
+		expect(settingRows(comp)).toContain("hindsight.autoRecall");
 	});
 
 	it("saves a pasted Hindsight API token from its settings row", () => {
@@ -104,12 +112,12 @@ describe("SettingsSelectorComponent memory tab", () => {
 
 		comp.handleInput("/");
 		for (const ch of "hindsight api token") comp.handleInput(ch);
+		comp.handleInput("\n"); // Apply the search pattern before inspecting its result.
 		const row = comp.render(120).join("\n");
 		expect(row).toContain("Hindsight API Token");
 		expect(row).toContain("••••••••");
 		expect(row).not.toContain("saved-secret-token");
 
-		comp.handleInput("\n");
 		comp.handleInput("\n"); // Open the row after confirming its search pattern.
 		expect(comp.render(120).join("\n")).not.toContain("saved-secret-token");
 		comp.handleInput("\n");
@@ -131,8 +139,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 		cfgMemoryBackend.set(settings, "hindsight");
 		const comp = createSelector();
 		focusMemoryTab(comp);
-		// Width 70 keeps the flat layout so all sections' rows render inline.
-		expect(comp.render(70).join("\n")).toContain("Hindsight API URL");
+		expect(settingRows(comp)).toContain("hindsight.apiUrl");
 
 		// Open Memory Backend → SelectSubmenu pre-selects the current value
 		// ("hindsight" at index 2) → step up twice to reach "off" → Enter confirms.
@@ -142,10 +149,9 @@ describe("SettingsSelectorComponent memory tab", () => {
 		comp.handleInput("\n");
 
 		expect(cfgMemoryBackend.get(settings)).toBe("off");
-		const after = comp.render(70).join("\n");
-		expect(after).toContain("Memory Backend");
-		expect(after).not.toContain("Hindsight API URL");
-		expect(after).not.toContain("Hindsight Auto Recall");
+		expect(settingRows(comp)).toContain("memory.backend");
+		expect(settingRows(comp)).not.toContain("hindsight.apiUrl");
+		expect(settingRows(comp)).not.toContain("hindsight.autoRecall");
 	});
 
 	it("leaves the global settings search field on Escape before closing the selector", () => {
@@ -154,23 +160,15 @@ describe("SettingsSelectorComponent memory tab", () => {
 			cancelCount++;
 		});
 
-		// Explicit search focus starts cross-tab filtering with a query and match count.
+		// Typing changes the search draft; Enter applies it and Escape discards it.
 		comp.handleInput("/");
 		comp.handleInput("b");
-		const strip = plainText;
-		const searching = comp.render(120).map(strip).join("\n");
-		const banner =
-			comp
-				.render(120)
-				.map(strip)
-				.find(line => /\d+ match/.test(line)) ?? "";
-		expect(banner).toContain(" b ");
-		expect(searching).toMatch(/\d+ match/);
+		expect(comp.navigationSnapshot()).toMatchObject({ query: "", search: { value: "b" }, searchFocused: true });
 
 		// First Escape clears the query and returns to the ordinary tab.
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(0);
-		expect(comp.render(120).map(strip).join("\n")).not.toMatch(/\d+ match/);
+		expect(comp.navigationSnapshot()).toMatchObject({ query: "", searchFocused: false });
 
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(1);
@@ -180,6 +178,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 		const comp = createSelector();
 		comp.handleInput("/");
 		for (const ch of "fetch provider") comp.handleInput(ch);
+		comp.handleInput("\r");
 
 		const strip = plainText;
 		const rendered = comp.render(120).map(strip).join("\n");
@@ -197,26 +196,19 @@ describe("SettingsSelectorComponent memory tab", () => {
 
 	it("supports editor hotkeys in the global search bar", () => {
 		const comp = createSelector();
-		const strip = plainText;
-		const banner = (): string =>
-			comp
-				.render(120)
-				.map(strip)
-				.find(line => /\d+ match/.test(line)) ?? "";
 
 		// alt+backspace deletes the trailing word from the query.
 		comp.handleInput("/");
 		for (const ch of "image provider") comp.handleInput(ch);
 		comp.handleInput("\x1b\x7f");
-		expect(banner()).toContain("image");
-		expect(banner()).not.toContain("provider");
+		expect(comp.navigationSnapshot()).toMatchObject({ search: { value: expect.stringMatching(/^image\s*$/) } });
 
 		// Arrow keys move the cursor; typing inserts mid-query instead of appending.
 		comp.handleInput("\x15"); // ctrl+u clears the rest of the query
 		for (const ch of "model") comp.handleInput(ch);
 		for (let i = 0; i < 5; i++) comp.handleInput("\x1b[D");
 		comp.handleInput("x");
-		expect(banner()).toContain("xmodel");
+		expect(comp.navigationSnapshot()).toMatchObject({ search: { value: "xmodel" }, searchCursor: 1 });
 	});
 
 	it("delegates Escape to an open settings submenu before closing the selector", () => {

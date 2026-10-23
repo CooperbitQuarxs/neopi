@@ -106,6 +106,7 @@ interface HarnessOptions {
 	onPluginsChanged?: () => void | Promise<void>;
 	onCancel?: () => void;
 	requestRender?: () => void;
+	onOpenConfigFile?: () => Promise<void>;
 }
 
 function pluginHost(installed: InstalledPlugin[] = []): PluginSettingsHost {
@@ -171,6 +172,7 @@ function harness(initial: Record<string, unknown> = {}, options: HarnessOptions 
 			onThemePreview: name => void previews.push(name),
 			onPluginsChanged: options.onPluginsChanged,
 			onCancel: options.onCancel ?? (() => {}),
+			onOpenConfigFile: options.onOpenConfigFile,
 		},
 	);
 	return {
@@ -1000,4 +1002,52 @@ describe("settings as a native prefs page", () => {
 		expect(h.selector.blocksMenuHistory).toBe(false);
 		expect(visits).toHaveLength(count);
 	});
+});
+
+it("Ctrl-G reloads the settings rows after editing and ignores repeated launches", async () => {
+	const edited = Promise.withResolvers<void>();
+	let opens = 0;
+	const h = harness(
+		{},
+		{
+			onOpenConfigFile: async () => {
+				opens++;
+				await edited.promise;
+				h.values.set("display.colorBlind", true);
+			},
+		},
+	);
+	const rendered = h.whenRendered(props => row(props, "display.colorBlind").changed === true);
+	h.selector.handleInput("\x07");
+	h.selector.handleInput("\x07");
+	expect(opens).toBe(1);
+	edited.resolve();
+	await rendered;
+	expect(h.changes).toEqual([]);
+	expect(h.values.get("display.colorBlind")).toBe(true);
+});
+
+it("an existing menu Ctrl-G binding wins over opening the settings file", () => {
+	const previous = getKeybindings();
+	let opened = false;
+	let cancelled = false;
+	setKeybindings(new KeybindingsManager({ "tui.select.cancel": ["ctrl+g"] }));
+	try {
+		const h = harness(
+			{},
+			{
+				onOpenConfigFile: async () => {
+					opened = true;
+				},
+				onCancel: () => {
+					cancelled = true;
+				},
+			},
+		);
+		h.selector.handleInput("\x07");
+		expect(opened).toBe(false);
+		expect(cancelled).toBe(true);
+	} finally {
+		setKeybindings(previous);
+	}
 });

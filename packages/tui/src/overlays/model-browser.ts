@@ -57,13 +57,17 @@ export type ModelRole =
 	| "slow"
 	| "vision"
 	| "plan"
+	| "agent-author"
+	| "compaction"
 	| "commit"
 	| "tiny"
+	| "title"
 	| "memory"
 	| "task"
 	| "advisor"
 	| "chronicler"
 	| "chronicler-summary"
+	| "chronicler-recall"
 	| "classifier"
 	| "effort"
 	| "prose"
@@ -80,13 +84,17 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"slow",
 	"vision",
 	"plan",
+	"agent-author",
+	"compaction",
 	"commit",
 	"tiny",
+	"title",
 	"memory",
 	"task",
 	"advisor",
 	"chronicler",
 	"chronicler-summary",
+	"chronicler-recall",
 	"classifier",
 	"effort",
 	"prose",
@@ -104,13 +112,17 @@ export const CHAT_MODEL_ROLE_IDS: ModelRole[] = [
 	"slow",
 	"vision",
 	"plan",
+	"agent-author",
+	"compaction",
 	"commit",
 	"tiny",
+	"title",
 	"memory",
 	"task",
 	"advisor",
 	"chronicler",
 	"chronicler-summary",
+	"chronicler-recall",
 	"classifier",
 	"effort",
 	"prose",
@@ -130,6 +142,7 @@ export interface ModelBrowserPerf {
 export interface ModelBrowserRoleInfo {
 	tag?: string;
 	name: string;
+	description?: string;
 	color?: ThemeColor;
 	hidden?: boolean;
 	section: "chat" | "kind";
@@ -159,6 +172,8 @@ export interface ModelCompactionPoint {
 	source: string;
 	/** The model's own exact entry as editable text (`90k`, `80%`); absent when it has none. */
 	draft?: string;
+	/** Configured per-model limit, independent of temporary overrides or whether it is enabled. */
+	limit?: string;
 }
 
 /** Host-provided preferences and model-role resolution for the browser. */
@@ -184,6 +199,8 @@ export interface ModelBrowserSource extends ModelRoleLookup {
 	resolveRoleValue(value: string | undefined, models: Model[], roleLookup?: ModelRoleLookup): ResolvedModelRoleValue;
 	/** Auto-compaction point for `model`; absent hosts show no compaction row in the preview. */
 	compactionPointFor?(model: Model): ModelCompactionPoint | undefined;
+	/** Resolved maintenance budget; the catalog capability stays available in the preview. */
+	effectiveContextWindowFor?(model: Model): number;
 }
 
 /** Read-only catalog surface consumed by model browsers. */
@@ -890,10 +907,11 @@ function formatDescription(description: string): string {
  * instead of drifting with the number's width. The ascii preset's `ctx:`
  * label is a prefix form — strip the colon for suffix placement.
  */
-function formatContext(model: Model): string {
-	const ctx = model.contextWindow ?? 0;
-	if (ctx <= 0) return "";
-	return `${formatNumber(ctx).toLowerCase()} ${theme.icon.context.replace(/:$/, "")}`;
+function formatContext(model: Model, effective = model.contextWindow ?? 0): string {
+	if (effective <= 0) return "";
+	const changed = effective !== model.contextWindow;
+	const label = `${formatNumber(effective).toLowerCase()}${changed ? "*" : ""} ${theme.icon.context.replace(/:$/, "")}`;
+	return changed ? theme.fg("accent", label) : label;
 }
 
 /** `118t/s` average output speed; one decimal below 10 t/s. */
@@ -1158,6 +1176,11 @@ export class ModelBrowser implements Component {
 	setPerfStats(perf: ReadonlyMap<string, ModelBrowserPerf>): void {
 		if (perf !== this.#perf) this.#bumpPickerEpoch();
 		this.#perf = perf;
+	}
+
+	/** Raw row performance using the same session-tier fallback as the native preview. */
+	measuredPerformance(item: ModelBrowserItem): { perf: ModelBrowserPerf; tier?: string } | undefined {
+		return this.#perfFor(item);
 	}
 
 	setMaxVisible(rows: number): void {
@@ -1573,7 +1596,7 @@ export class ModelBrowser implements Component {
 		const cached = this.#metricCells.get(item);
 		if (cached?.model === item.model && cached.theme === theme) return cached;
 		const intelligence = formatIntelligence(item.model);
-		const ctx = formatContext(item.model);
+		const ctx = formatContext(item.model, this.#settings.effectiveContextWindowFor?.(item.model));
 		const cost = formatCostPair(item.model);
 		const cells: MetricCells = {
 			model: item.model,
@@ -1719,6 +1742,7 @@ export class ModelBrowser implements Component {
 	}
 
 	render(width: number): string[] {
+		this.#syncContextRevision();
 		const lines: string[] = [];
 
 		lines.push(this.#search.render(width, { muted: value => theme.fg("muted", value) }));
@@ -1820,12 +1844,21 @@ export class ModelBrowser implements Component {
 		this.#pickerEpoch++;
 	}
 
+	#contextRevision = -1;
+	#syncContextRevision(): void {
+		if (this.#contextRevision === this.#settings.revision) return;
+		this.#contextRevision = this.#settings.revision;
+		this.#metricCells = new WeakMap();
+		this.#bumpPickerEpoch();
+	}
+
 	/**
 	 * `col[search row, list, detail]`: the query field (the embedded `Input`),
 	 * every visible model as a keyed `item` (the terminal virtualizes and
 	 * scrolls), and the selection's facts and role chips.
 	 */
 	describe(): NativeNode {
+		this.#syncContextRevision();
 		this.#nativeSearch ??= row([text([span(theme.symbol("icon.search"), "muted")]), this.#search.input], {
 			gap: "sm",
 			align: "center",
@@ -1907,7 +1940,7 @@ export class ModelBrowser implements Component {
 		const metrics = [
 			formatIntelligence(item.model),
 			this.#perfCell(item, "full"),
-			formatContext(item.model),
+			formatContext(item.model, this.#settings.effectiveContextWindowFor?.(item.model)),
 			formatCostPair(item.model),
 		].filter(Boolean);
 		const overContext = this.isOverContext(item);
@@ -2019,6 +2052,7 @@ export class ModelBrowser implements Component {
 	 * role moving) keeps the last whole `items` and patches it.
 	 */
 	pickerItems(catalogue: readonly ModelBrowserItem[]): ModelPickerCatalogue {
+		this.#syncContextRevision();
 		const memo = this.#pickerItems;
 		if (memo?.catalogue === catalogue && memo.epoch === this.#pickerEpoch && memo.roles === this.#roles) {
 			return memo.value;
@@ -2077,7 +2111,13 @@ export class ModelBrowser implements Component {
 			.replace(/\s*t\/s\s*/, " ")
 			.trim();
 		if (speed) facts.speed = speed;
-		if (model.contextWindow) facts.ctx = model.contextWindow;
+		const effectiveContext = this.#settings.effectiveContextWindowFor?.(model) ?? model.contextWindow;
+		if (effectiveContext) {
+			facts.ctx =
+				effectiveContext !== model.contextWindow
+					? `${formatNumber(effectiveContext).toLowerCase()}*`
+					: effectiveContext;
+		}
 		facts.price = pickerPrice(model);
 		const badges: { text: string; tone?: "accent" | "warning" | "success"; title?: string }[] = [];
 		if (this.isOverContext(item)) {
@@ -2312,6 +2352,12 @@ export class ModelBrowser implements Component {
 			if (v) facts.push({ k: [span(k, "muted")], v: [span(v, "mono")] });
 		};
 		fact("Context", ctx > 0 ? ctx.toLocaleString("en-US") : undefined);
+		const effectiveContext = this.#settings.effectiveContextWindowFor?.(model);
+		if (effectiveContext !== undefined && effectiveContext !== ctx)
+			fact(
+				"Effective context *",
+				`${effectiveContext.toLocaleString("en-US")} · maintenance budget; Context is catalog`,
+			);
 		const compaction = this.#settings.compactionPointFor?.(model);
 		if (compaction) {
 			const value =

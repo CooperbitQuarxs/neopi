@@ -40,7 +40,7 @@ The canonical global file is YAML at `config.yml`; `config.yaml` is accepted as 
 
 ### Optional TOML overlay
 
-Place `settings.toml` beside the global `config.yml` or `config.yaml`, or in the current project's `.omp/` directory. NeoPi never creates or populates this file automatically. Missing, empty, and comment-only files leave YAML settings unchanged.
+Place `config.toml` beside the global `config.yml` or `config.yaml`, or in the current project's `.omp/` directory. The legacy name `settings.toml` still works when `config.toml` is absent. Having both is an error, even if one is empty. Missing, empty, and comment-only files leave YAML settings unchanged. TOML-only main settings also load without YAML.
 
 For each **top-level key**, a TOML value replaces the entire YAML value at that scope. Tables and arrays are not deep-merged or concatenated. For example, `[compaction]` with only `enabled = false` discards the YAML `compaction` table's other entries; those entries fall back to lower scopes or schema defaults. Project settings still override global settings, and explicit `--config` YAML overlays and runtime overrides retain their existing precedence.
 
@@ -50,9 +50,37 @@ Generate a documented, reproducible defaults file without reading your current s
 npi config dump-toml > settings.defaults.toml
 ```
 
-The output includes every registered setting and its schema default. Unset values remain comments because TOML cannot represent `null` or `undefined`. Review it before copying it to `settings.toml`; a fully populated overlay pins defaults and replaces matching YAML keys. Regenerate it after upgrades to see new settings. Invalid TOML is a hard error naming the file, never a silent fallback. Live settings reloads watch both TOML paths.
+The output includes every registered setting and its schema default. Unset defaults remain comments. Review it before copying it to `config.toml`; a fully populated overlay pins defaults and replaces matching YAML keys. Regenerate it after upgrades to see new settings. Invalid TOML is a hard error naming the file, never a silent fallback. Live settings reloads watch both TOML filenames in user and project directories.
 
 The settings panel and `config set`/`reset` continue writing YAML. Edit or remove the corresponding TOML top-level key to let those YAML changes take effect. TOML is never converted to YAML automatically.
+
+#### Convert your existing settings
+
+Conversion requires `--yes` because `config.toml` takes precedence immediately while `/settings` and `config set`/`reset` still write YAML. Those saved changes can be masked by TOML and appear to revert on reload. Until format-aware saves are available, edit `config.toml` directly or remove it to return to YAML. The converter prints this warning before writing; `--force` does not acknowledge it.
+
+```bash
+npi config to-toml --yes                         # user and current project main settings, when present
+npi config to-toml /path/to/config.yaml --yes     # one explicit main settings file
+npi config to-toml /path/to/config.yml --force --yes
+```
+
+Conversion writes the replacement-extension sibling `config.toml` with private permissions, leaving YAML bytes unchanged. It carries the full parsed YAML, including unknown extension keys, credentials, nested tables, mixed arrays, arrays of tables and multiline text. It does not add registry defaults. Existing TOML is never overwritten without `--force`. A legacy `settings.toml` must be reconciled or moved first, because creating a second overlay would be ambiguous.
+
+The converter reports dropped YAML comments and expanded anchors/aliases by path without printing values. It rejects cycles, multiple documents, non-string mapping keys, unsupported tags, date/time values, and integers or string control characters that the installed reader cannot recover exactly. Date-looking YAML strings remain strings. Quoting and block-scalar style are normalized. Every emitted document is parsed with `Bun.TOML.parse` and checked against the complete parsed YAML before publication. Tabs use literal TOML tabs because this Bun version swaps the `\t` and `\f` escapes. NUL, form feed, other unsupported control characters and unpaired surrogates are reported rather than changed.
+
+TOML has no native null. NeoPi reserves `[__npi]` with `version = 1` and `null_paths`, a list of JSON Pointer paths, to preserve explicit clears. Null object entries are omitted and recorded; null array slots use an empty-string placeholder plus a recorded path. Escape `~` as `~0` and `/` as `~1` in each path segment. Decoding restores nulls before applying top-level precedence, so a YAML value cannot reappear under a TOML clear. For example:
+
+```toml
+[roleSettings.custom]
+
+[__npi]
+version = 1
+null_paths = ["/roleSettings/custom/temperature"]
+```
+
+This clears the custom role's temperature rather than inheriting its YAML value. Removing that entire top-level TOML override and its null paths restores YAML fallback. `__npi` in source YAML is a conversion conflict, not a key the converter silently removes. Undefined/unset values are not null and are rejected by the general writer.
+
+This converter currently covers main settings only. Other YAML families, independent configuration readers and format-aware menu saves are later phases of [#34](https://github.com/PsychedelicShayna/neopi/issues/34). Until menu saves become format-aware, edit TOML directly to change an overlaid key.
 
 ## Reading and writing settings
 
@@ -88,6 +116,7 @@ This only controls the startup splash animation. It does not rerun setup or chan
 | `omp config path`              | Print the active agent directory (honors `PI_CODING_AGENT_DIR`).                                                                                                                                                                                                                                  |
 | `omp config init-xdg`          | On Linux and macOS, create the `omp` directories under the effective XDG data, state, and cache homes. It does not move existing files or set the XDG environment variables. Other platforms exit non-zero.                                                                                       |
 | `npi config dump-toml`         | Write documented registry defaults as TOML to stdout without loading user settings. Redirect to a file to regenerate it. |
+| `npi config to-toml [file] --yes [--force]` | Convert full user and current project main YAML settings, or one explicit `config.yml`/`config.yaml`, to private `config.toml` siblings after acknowledging the YAML-save limitation. Report unsupported values and lost YAML syntax. |
 
 `omp config` with no subcommand lists settings. `--help` or `-h` displays command help. The `--json` flag is accepted by `list`, `get`, `set`, and `reset`.
 
@@ -451,9 +480,18 @@ enabledModels:
   - claude-sonnet-4-5
 ```
 
-Built-in chat roles are `default`, `smol`, `slow`, `vision`, `plan`, `commit`, `tiny`, `memory`, `task`, `advisor`, `chronicler`, `chronicler-summary`, `effort`, and `prose`. The `tiny` and `memory` roles accept both `tiny` catalog models and ordinary chat models. Built-in model-kind roles are `image`, `web`, `speech`, `dictation`, and `judge`; they select image, search/grounded-chat, TTS, STT, and judgment runners respectively. `judge` also accepts tiny and chat models, which is why aliases such as `@tiny` are valid fallbacks. The separate `effort` chat role classifies Auto effort and requires a concrete reasoning level; it does not use the `judge` role or the active session model as a fallback. Catalog kinds are `chat`, `tiny`, `image`, `tts`, `stt`, `search`, and `judge`; a custom model with no `kind` remains a chat model.
+Built-in chat roles are `default`, `smol`, `slow`, `vision`, `plan`, `agent-author`, `compaction`, `commit`, `tiny`, `title`, `memory`, `task`, `advisor`, `chronicler`, `chronicler-summary`, `chronicler-recall`, `classifier`, `effort`, `prose`, `issues`, and `deck-inbox`. The `tiny`, `title`, and `memory` roles accept both `tiny` catalog models and ordinary chat models. Built-in model-kind roles are `image`, `web`, `speech`, `dictation`, and `judge`; they select image, search/grounded-chat, TTS, STT, and judgment runners respectively. `judge` also accepts tiny and chat models, which is why aliases such as `@tiny` are valid fallbacks. The separate `effort` chat role classifies Auto effort and requires a concrete reasoning level; it does not use the `judge` role or the active session model as a fallback. Catalog kinds are `chat`, `tiny`, `image`, `tts`, `stt`, `search`, and `judge`; a custom model with no `kind` remains a chat model.
 
 Open `/models` and enter the **Roles** view to assign roles and edit their fallback rows. Chat roles and model-kind roles appear in separate capability sections, and the picker filters assignments to models accepted by the selected role. List the same catalog directly with `omp models --kind chat`, `omp models --kind tiny`, `omp models --kind image`, `omp models --kind tts`, `omp models --kind stt`, `omp models --kind search`, or `omp models --kind judge`; use `--kind all` for everything.
+
+`modelRoles.title` selects session titles and `/rename` suggestions independently
+of other tiny jobs. Until assigned it follows `tiny`. Explicit
+`title.generator: fork` still uses the foreground model for automatic titles;
+its fallback title-model request uses `title`.
+
+Every role appears in **Roles**, including tags marked hidden. Built-ins have
+default descriptions; custom roles do not. `D` edits
+`modelTags.<role>.description`, shown above the role rows and returned by RPC.
 
 NeoDeck's `deck-*` roles use the same settings and editor. The built-in `deck-inbox` chat role classifies inbox items and chooses where they go, defaulting to `openai-codex/gpt-6-luna` (GPT-6 Luna for ChatGPT-subscription users). Override `modelRoles.deck-inbox` globally or per project and configure `retry.fallbackChains.deck-inbox` normally. See [NeoDeck roles](./models.md#neodeck-roles) for namespace membership and consumer registration.
 

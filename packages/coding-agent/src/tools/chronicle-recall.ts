@@ -3,7 +3,12 @@ import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { cfgChroniclerRecallEnabled } from "../chronicler/settings";
 import { parseTimeBound } from "../chronicler/temporal/calendar";
-import { recallDefaultsFromSettings, resolveRanker, resolveViewRoot } from "../chronicler/temporal/config";
+import {
+	recallDefaultsFromSettings,
+	recallFormatFromSettings,
+	resolveRanker,
+	resolveViewRoot,
+} from "../chronicler/temporal/config";
 import { formatRecallResult } from "../chronicler/temporal/format";
 import { recallChronicle } from "../chronicler/temporal/recall";
 import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
@@ -92,11 +97,12 @@ export class ChronicleRecallTool implements AgentTool<typeof chronicleRecallSche
 					budget: params.budget ?? defaults.budget,
 					beam: defaults.beam,
 					neighborhoodMinutes: defaults.neighborhoodMinutes,
+					policy: defaults.policy,
 					ranker,
 					signal: jobSignal,
 					onProgress: text => reportProgress(text, asyncDetails),
 				});
-				return formatRecallResult(result);
+				return formatRecallResult(result, recallFormatFromSettings(settings));
 			},
 			{ ownerId },
 		);

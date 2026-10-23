@@ -135,6 +135,8 @@ export interface AdvisorConfigStat {
 export interface AdvisorConfigCallbacks {
 	/** Load a scope's `WATCHDOG.yml` into an editable doc (empty when absent). */
 	loadDoc: (scope: AdvisorConfigScope) => Promise<WatchdogConfigDoc>;
+	/** Open the selected scope's backing file externally and resolve when editing finishes. */
+	openConfigFile?: (scope: AdvisorConfigScope) => Promise<void>;
 	/** Persist the doc to the scope's file. Must not touch the live advisors. */
 	save: (scope: AdvisorConfigScope, doc: WatchdogConfigDoc) => Promise<void>;
 	/** Reload the effective roster after saving a source file. */
@@ -756,7 +758,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 							{
 								id: "scope",
 								label: "Scope",
-								hint: `Editing the ${this.#scope} file. Switch to the ${this.#otherScope()} file.`,
+								hint: `Editing the ${this.#scope} file. Switch to the ${this.#otherScope()} file.${this.#cb.openConfigFile ? " Ctrl-G edits this file externally." : ""}`,
 								control: { k: "action" as const, label: `Open ${this.#otherScope()}`, act: "scope" },
 							},
 						]),
@@ -1060,6 +1062,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const preview = this.#screen === "list" ? this.#describePreview() : undefined;
 		if (this.#nativeHints?.screen !== this.#screen) {
 			const hints = screenHints(this.#screen);
+			if (this.#cb.openConfigFile && (this.#screen === "list" || this.#screen === "detail"))
+				hints.push({ keys: ["ctrl+g"], label: "edit config file" });
 			this.#nativeHints = { screen: this.#screen, node: hints.length > 0 ? hintsRow(hints) : undefined };
 		}
 		const hints = this.#nativeHints.node;
@@ -1236,6 +1240,17 @@ export class AdvisorConfigOverlayComponent implements Component {
 		}
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
+		if (
+			!action &&
+			this.#cb.openConfigFile &&
+			(this.#screen === "list" || this.#screen === "detail") &&
+			matchesKey(data, "ctrl+g")
+		) {
+			void this.#openConfigFile().catch(err => {
+				this.#cb.notify(`Advisor config: ${err instanceof Error ? err.message : String(err)}`);
+			});
+			return;
+		}
 		if (action?.kind === "horizontal") {
 			if (this.#screen === "list") this.#previewFocused = action.delta > 0;
 			else if (this.#screen === "thinking" && active instanceof SelectList && this.#thinking) {
@@ -1511,6 +1526,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const navigation =
 			screen === "list" ? "h/l, Tab panes · C-e/y view" : screen === "thinking" ? "h/l effort" : "h parent · l open";
 		this.#footerHint = active instanceof SelectList ? `${footerHint} · ${navigation} · / search` : footerHint;
+		if (this.#cb.openConfigFile && (screen === "list" || screen === "detail"))
+			this.#footerHint += " · Ctrl-G edit config file";
 		this.#previewScroll = saved?.previewScroll ?? 0;
 		this.#previewFocused = screen === "list" && saved?.previewFocused === true;
 		this.#previewLayoutDirty = true;
@@ -1717,6 +1734,40 @@ export class AdvisorConfigOverlayComponent implements Component {
 		}
 		const match = /^advisor:(\d+)$/.exec(value);
 		if (match) this.#showDetail(Number(match[1]));
+	}
+
+	async #openConfigFile(): Promise<void> {
+		if (!this.#cb.openConfigFile || this.#pendingOperations > 0) return;
+		if (this.#dirty) {
+			this.#cb.notify('Unsaved changes. "Save & apply" or Close before editing the config file.');
+			return;
+		}
+		const scope = this.#scope;
+		const screen = this.#screen;
+		const index = this.#detailIndex;
+		const selectedValue = this.#active instanceof SelectList ? this.#active.getSelectedItem()?.value : undefined;
+		const revision = ++this.#scopeLoadRevision;
+		this.#pendingOperations++;
+		try {
+			await this.#cb.openConfigFile(scope);
+			const doc = await this.#cb.loadDoc(scope);
+			const roster = await this.#cb.getEffectiveRoster?.();
+			if (revision !== this.#scopeLoadRevision) return;
+			this.#doc = doc;
+			this.#scope = scope;
+			if (roster) this.#effectiveRoster = roster;
+			this.#pendingApply = true;
+			if (doc.warnings?.length) {
+				const message = `WATCHDOG.yml: ${sanitizeDisplayWarnings(doc.warnings).join("; ")}`;
+				if (this.#cb.warn) this.#cb.warn(message);
+				else this.#cb.notify(message);
+			}
+			if (screen === "detail") this.#showDetail(index, selectedValue);
+			else this.#showList(selectedValue);
+		} finally {
+			this.#pendingOperations--;
+			this.#cb.requestRender();
+		}
 	}
 
 	/** Write the current scope's doc to disk without touching the live advisors. */

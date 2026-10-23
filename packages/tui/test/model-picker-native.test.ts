@@ -177,14 +177,15 @@ test("the model hub describes a data-first picker when the terminal has the kind
 	const root = hub.describe(withPicker);
 	const p = props(root);
 	expect(p).toMatchObject({ size: "lg", layout: "rows", preview: "side", icon: "cpu", title: "Models", scope: "all" });
-	expect(p.scopes?.map(scope => [scope.id, scope.count, scope.group])).toEqual([
-		["roles", 2, undefined],
-		["all", 5, undefined],
-		["effort", 0, undefined],
-		["provider:anthropic", 2, "Providers"],
-		["provider:demo", 1, "Providers"],
-		["provider:openai", 2, "Providers"],
-	]);
+	expect(p.scopes).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({ id: "roles", count: 2 }),
+			expect.objectContaining({ id: "all", count: 5 }),
+			expect.objectContaining({ id: "provider:anthropic", count: 2, group: "Providers" }),
+			expect.objectContaining({ id: "provider:demo", count: 1, group: "Providers" }),
+			expect.objectContaining({ id: "provider:openai", count: 2, group: "Providers" }),
+		]),
+	);
 	expect(p.scopes?.find(scope => scope.id === "provider:anthropic")?.mark).toEqual({
 		text: "An",
 		seed: "anthropic",

@@ -22,12 +22,21 @@ import type { SessionEntry, SessionTreeNode } from "../../session/session-entrie
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
+import type { RpcModel } from "./rpc-model";
+import type { RpcModelSelectorResult } from "./rpc-model-selector";
 import {
 	RPC_MESSAGES_PAGE_BUSY_ERROR,
 	RPC_MESSAGES_PAGE_STALE_ERROR,
 	type RpcMessagesPage,
 	type RpcMessagesPageOptions,
 } from "./rpc-messages";
+import type {
+	RpcNavigateTreeOptions,
+	RpcNavigateTreeResult,
+	RpcResumeTreeOptions,
+	RpcResumeTreeResult,
+} from "./rpc-tree";
+import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
 import type {
 	RpcAbortAndRestoreQueueResult,
 	RpcAvailableCommandsUpdateFrame,
@@ -1095,9 +1104,9 @@ export class RpcClient {
 	/**
 	 * Get list of available models.
 	 */
-	async getAvailableModels(): Promise<ModelInfo[]> {
+	async getAvailableModels(): Promise<RpcModel[]> {
 		const response = await this.#send({ type: "get_available_models" });
-		return this.#getData<{ models: ModelInfo[] }>(response).models;
+		return this.#getData<{ models: RpcModel[] }>(response).models;
 	}
 
 	/** Create and immediately register a mixture in this RPC session's workspace. */
@@ -1132,6 +1141,12 @@ export class RpcClient {
 		return this.#getData<RpcRolesResult>(response);
 	}
 
+	/** Read the native picker's matches and facts without selecting or starting a turn. */
+	async queryModelSelector(query: string): Promise<RpcModelSelectorResult> {
+		const response = await this.#send({ type: "query_model_selector", query });
+		return this.#getData<RpcModelSelectorResult>(response);
+	}
+
 	/**
 	 * Select a model role for the session, as `--model @<role>` does at launch.
 	 */
@@ -1158,12 +1173,28 @@ export class RpcClient {
 		return this.#getData<{ entries: SessionEntry[]; leafId: string | null }>(response);
 	}
 
+	/** Read one complete-entry page without folding compaction or dropping alternate branches. */
+	async getEntriesPage(options: RpcJournalPageOptions = {}): Promise<RpcJournalPage> {
+		const response = await this.#send({ type: "get_entries_page", ...options });
+		return this.#getData<RpcJournalPage>(response);
+	}
+
 	/**
 	 * Pi-compatible raw session tree plus the current leaf id.
 	 */
 	async getTree(): Promise<{ tree: SessionTreeNode[]; leafId: string | null }> {
 		const response = await this.#send({ type: "get_tree" });
 		return this.#getData<{ tree: SessionTreeNode[]; leafId: string | null }>(response);
+	}
+
+	/** Navigate the native tree in the same file. Rebuild the transcript before acknowledging a returned resumeToken. */
+	async navigateTree(options: RpcNavigateTreeOptions): Promise<RpcNavigateTreeResult> {
+		return this.#getData<RpcNavigateTreeResult>(await this.#send({ ...options, type: "navigate_tree" }));
+	}
+
+	/** Acknowledge a committed ask re-answer after consuming its navigation result. */
+	async resumeTree(options: RpcResumeTreeOptions): Promise<RpcResumeTreeResult> {
+		return this.#getData<RpcResumeTreeResult>(await this.#send({ ...options, type: "resume_tree" }));
 	}
 
 	/**

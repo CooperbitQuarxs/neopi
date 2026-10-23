@@ -439,7 +439,7 @@ describe("advisor menu navigation and history", () => {
 		return { overlay, events, closed: () => closed };
 	}
 
-	it("clears literal search before closing, including short lists", () => {
+	it("cancels literal search before closing, including short lists", () => {
 		const doc: WatchdogConfigDoc = { advisors: [{ name: "Reviewer" }] };
 		const h = make(doc);
 		try {
@@ -447,7 +447,11 @@ describe("advisor menu navigation and history", () => {
 			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filterFocused: false });
 			h.overlay.handleInput("/");
 			h.overlay.handleInput("hjkl/ g");
-			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "hjkl/ g", filterFocused: true });
+			expect(h.overlay.navigationSnapshot().content).toMatchObject({
+				filter: "",
+				filterDraft: "hjkl/ g",
+				filterFocused: true,
+			});
 			expect(doc.advisors[0]?.enabled).toBeUndefined();
 			h.overlay.handleInput("\x1b");
 			expect(h.closed()).toBe(0);
@@ -1030,6 +1034,112 @@ describe("advisor effective roster display", () => {
 			expect(Bun.stripANSI(overlay.render(180).join("\n"))).not.toContain("Velvet");
 		} finally {
 			overlay.dispose();
+		}
+	});
+});
+
+describe("advisor config file shortcut", () => {
+	beforeAll(async () => {
+		const theme = await getThemeByName("dark");
+		if (!theme) throw new Error("theme unavailable");
+		setThemeInstance(theme);
+	});
+
+	const make = (callbacks: Partial<AdvisorConfigCallbacks> = {}) =>
+		new AdvisorConfigOverlayComponent(
+			{} as TUI,
+			deps,
+			"user",
+			{ advisors: [{ name: "Before" }] },
+			{
+				loadDoc: async () => ({ advisors: [] }),
+				save: async () => {},
+				apply: async () => {},
+				close: () => {},
+				requestRender: () => {},
+				notify: () => {},
+				...callbacks,
+			},
+		);
+
+	it("reloads the selected scope and effective roster after external editing", async () => {
+		const calls: string[] = [];
+		const roster: EffectiveAdvisorConfig[] = [
+			{ name: "Effective after", sourceFile: "/workspace/WATCHDOG.yml", scope: "project" },
+		];
+		const overlay = make({
+			openConfigFile: async scope => {
+				calls.push(`open:${scope}`);
+			},
+			loadDoc: async scope => {
+				calls.push(`load:${scope}`);
+				return { advisors: [{ name: "After" }] };
+			},
+			getEffectiveRoster: async () => {
+				calls.push("roster");
+				return roster;
+			},
+		});
+		try {
+			overlay.handleInput("\x07");
+			await Bun.sleep(0);
+			expect(calls).toEqual(["open:user", "load:user", "roster"]);
+			expect(overlay.navigationSnapshot()).toMatchObject({
+				scope: "user",
+				context: { screen: "list" },
+				doc: { advisors: [{ name: "After" }] },
+			});
+			overlay.handleInput("g");
+			overlay.handleInput("g");
+			expect(Bun.stripANSI(overlay.render(180).join("\n"))).toContain("Effective after");
+		} finally {
+			overlay.dispose();
+		}
+	});
+
+	it("does not discard unsaved overlay edits", async () => {
+		let opened = false;
+		const notices: string[] = [];
+		const overlay = make({
+			openConfigFile: async () => {
+				opened = true;
+			},
+			notify: message => {
+				notices.push(message);
+			},
+		});
+		try {
+			overlay.handleInput(" ");
+			overlay.handleInput("\x07");
+			await Bun.sleep(0);
+			expect(opened).toBe(false);
+			expect(notices).toEqual(['Unsaved changes. "Save & apply" or Close before editing the config file.']);
+			expect(overlay.navigationSnapshot().doc.advisors[0]?.enabled).toBe(false);
+		} finally {
+			overlay.dispose();
+		}
+	});
+
+	it("leaves Ctrl-G assigned to an existing overlay action", () => {
+		const previous = getKeybindings();
+		let opened = false;
+		let closed = false;
+		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.cancel": "ctrl+g" }));
+		const overlay = make({
+			openConfigFile: async () => {
+				opened = true;
+			},
+			close: () => {
+				closed = true;
+			},
+		});
+		try {
+			overlay.handleInput("\x07");
+			expect(opened).toBe(false);
+			expect(closed).toBe(true);
+		} finally {
+			overlay.dispose();
+			setKeybindings(previous);
 		}
 	});
 });

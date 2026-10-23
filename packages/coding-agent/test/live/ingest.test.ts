@@ -105,6 +105,7 @@ function harness(
 	registry.register({ id: "main", displayName: "main", kind: "main", session, status: "running" });
 	const bus = new EventBus();
 	const spoken: Array<{ text: string; kind: string; guard: () => boolean; settle?: () => void }> = [];
+	const notices: string[] = [];
 	const commentary: string[] = [];
 	const overflow: Array<{
 		render: () => { text: string; receiptId: number };
@@ -135,6 +136,7 @@ function harness(
 		settings,
 		sink: sink as any,
 		catalogIo,
+		notify: (_level, text) => notices.push(text),
 		extractAssistantText: m =>
 			m.content
 				.filter(b => b.type === "text")
@@ -222,6 +224,7 @@ function harness(
 		registry,
 		session,
 		spoken,
+		notices,
 		commentary,
 		overflow,
 		settings,
@@ -472,6 +475,102 @@ describe("live ingest", () => {
 		expect(calls[1].journal.some(row => row.id === "journal-b-0")).toBe(false);
 		expect(calls[1].journal.at(-1)?.id).toBe("journal-b-512");
 		h.ingest.detach();
+	});
+	test.each(["empty", "error", "authorized"] as const)(
+		"ranks subagents through the configured fallback when the primary returns %s without scores",
+		async failure => {
+			const luna = getBundledModel("openai-codex", "gpt-6-luna")!;
+			const haiku = getBundledModel("anthropic", "claude-haiku-4-5")!;
+			const settings = Settings.isolated({
+				modelRoles: { classifier: "openai-codex/gpt-6-luna:medium" },
+				"retry.fallbackChains": { classifier: ["anthropic/claude-haiku-4-5"] },
+			});
+			const attempted: string[] = [];
+			const io = { stat: async () => ({ mtimeMs: 1, size: 5 }), readFile: async () => catalog() };
+			const h = harness(
+				{ classifierQuietMs: 2_000, voicedSlotsByDepth: [1], effortAlerts: failure === "authorized" },
+				async (input, options) => {
+					attempted.push(options.selection.model.id);
+					if (options.selection.model.id === luna.id) {
+						if (failure === "error") throw new Error("classifier request failed");
+						return {
+							scores: new Map(),
+							alerts: new Map(
+								input.alertCandidates.map(candidate => [
+									candidate.token,
+									{ authorized: true, reason: "explicit operator approval" },
+								]),
+							),
+						};
+					}
+					return { scores: new Map(input.agents.map(agent => [agent.token, agent.token === "B" ? 1 : 0])) };
+				},
+				io,
+				{ settings, models: [luna, haiku] },
+			);
+			const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+			try {
+				h.ingest.attach();
+				await flush();
+				h.child("one");
+				h.child("two");
+				const first = h.start("A", "one", 1, "openai-codex/gpt-6-astra", "max");
+				const second = h.start("B", "two", 1, "openai-codex/gpt-6-astra", "max");
+				await flush();
+				await h.advance(6_000);
+				await flush();
+				expect(attempted).toEqual([luna.id, haiku.id]);
+				expect(h.notices).toEqual([]);
+				expect(warn).toHaveBeenCalledWith("live ingest: classifier attempt failed", {
+					model: "openai-codex/gpt-6-luna",
+					reason:
+						failure === "error" ? "classifier request failed" : "response contained no usable importance scores",
+					agents: 2,
+					alertCandidates: failure === "authorized" ? 2 : 0,
+				});
+				h.terminal(first, "completed", "low priority result");
+				h.terminal(second, "completed", "high priority result");
+				expect(h.spoken.some(item => item.text.includes("low priority result"))).toBe(false);
+				expect(h.spoken.some(item => item.text.includes("high priority result"))).toBe(true);
+				expect(h.spoken.some(item => item.text.startsWith("Red alert:"))).toBe(false);
+			} finally {
+				h.ingest.detach();
+				warn.mockRestore();
+			}
+		},
+	);
+	test("retains the primary failure in the warning after every classifier candidate fails", async () => {
+		const haiku = getBundledModel("anthropic", "claude-haiku-4-5")!;
+		const settings = Settings.isolated({
+			modelRoles: { classifier: "anthropic/claude-haiku-4-5" },
+			"retry.fallbackChains": { classifier: [] },
+		});
+		const h = harness(
+			{ classifierQuietMs: 0 },
+			async () => ({ scores: new Map(), failure: "provider rejected\trequest\n\u001b[31moffline\u001b[0m" }),
+			undefined,
+			{ settings, models: [haiku] },
+		);
+		const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		try {
+			h.ingest.attach();
+			h.child("one");
+			h.start("A", "one", 1, "sol", "high");
+			await h.advance(0);
+			await flush();
+			expect(warn).toHaveBeenCalledWith("live ingest: classifier attempt failed", {
+				model: "anthropic/claude-haiku-4-5",
+				reason: "provider rejected\trequest\n\u001b[31moffline\u001b[0m",
+				agents: 1,
+				alertCandidates: 0,
+			});
+			expect(h.notices).toEqual([
+				"Live ingest: classifier unavailable; tracking subagents in start order. anthropic/claude-haiku-4-5: provider rejected request offline",
+			]);
+		} finally {
+			h.ingest.detach();
+			warn.mockRestore();
+		}
 	});
 	test("retries three times per classifier model and authorizes on the fallback", async () => {
 		const sonnet = getBundledModel("anthropic", "claude-sonnet-4-5")!;

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
+import { removeWithRetries } from "../../utils/src/temp";
 import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
 import type { UsageReport } from "../src/usage";
 import { decodeSwitchDocument } from "../src/switch/config/document";
@@ -11,13 +13,13 @@ import { SwitchMeterCache } from "../src/switch/meter-cache";
 import { resolvePlans } from "../src/switch/plans";
 import { SwitchStore } from "../src/switch/store";
 
-let directory: string;
+let directory = "";
 let credentials: SqliteAuthCredentialStore;
 let storage: AuthStorage;
 let store: SwitchStore | undefined;
 let config: SwitchConfig;
 beforeEach(async () => {
-	const scratch = "/home/shayna/.cache/npi-canary";
+	const scratch = path.join(os.homedir(), ".cache", "npi-canary");
 	await fs.mkdir(scratch, { recursive: true });
 	directory = await fs.mkdtemp(path.join(scratch, "switch-meter-329-"));
 	credentials = await SqliteAuthCredentialStore.open(path.join(directory, "auth.db"));
@@ -40,8 +42,11 @@ afterEach(async () => {
 	vi.restoreAllMocks();
 	store?.shutdown();
 	store = undefined;
-	storage.close();
-	await fs.rm(directory, { recursive: true, force: true });
+	storage?.close();
+	if (directory) {
+		await removeWithRetries(directory);
+		directory = "";
+	}
 });
 
 test.each([

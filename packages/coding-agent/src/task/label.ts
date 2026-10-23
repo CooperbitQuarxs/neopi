@@ -40,6 +40,8 @@ export async function generateTaskLabel(
 			undefined,
 			renderPromptAsset("system/task-label.md", taskLabelSystemPrompt, {}, { cwd }),
 			signal,
+			undefined,
+			"tiny",
 		);
 		if (!label || labelEchoesHandle(sessionId, label)) return null;
 		return label;

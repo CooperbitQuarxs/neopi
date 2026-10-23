@@ -1,16 +1,21 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
+import { removeWithRetries } from "../../utils/src/temp";
 import { loadSwitchConfig } from "../src/switch/config/load";
 
-let directory: string;
+let directory = "";
 beforeEach(async () => {
-	const scratch = "/home/shayna/.cache/npi-canary";
+	const scratch = path.join(os.homedir(), ".cache", "npi-canary");
 	await fs.mkdir(scratch, { recursive: true });
 	directory = await fs.mkdtemp(path.join(scratch, "switch-config-329-"));
 });
 afterEach(async () => {
-	await fs.rm(directory, { recursive: true, force: true });
+	if (directory) {
+		await removeWithRetries(directory);
+		directory = "";
+	}
 });
 
 test("endpoint connections resolve providers declared only in providers.d", async () => {
@@ -53,9 +58,9 @@ test.each([
 		`
 provider = []
 [switch]
-state_dir = "${stateDir}"
+state_dir = ${JSON.stringify(stateDir)}
 [admin]
-${configured ? `backup_dir = "${configured === "absolute" ? absolute : configured}"` : ""}
+${configured ? `backup_dir = ${JSON.stringify(configured === "absolute" ? absolute : configured)}` : ""}
 [[admin.token]]
 name = "owner"
 secret = "private-test-token"

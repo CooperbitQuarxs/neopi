@@ -2,6 +2,7 @@ import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt
 import { trackMountedDialog } from "../../control/dialogs";
 import { cfgControlSecretInput } from "../../control/settings";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
 import bundledLiveClientProtocolTemplate from "../../live/prompts/live-client-protocol.md" with { type: "text" };
 import { renderChatAdvisorPrompt } from "../../chat/chat-system-prompt";
@@ -66,7 +67,7 @@ import {
 } from "../../config/model-presets";
 import { resolveAdvisorRoleSelection, resolveModelRoleValue } from "../../config/model-resolver";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
-import { getRoleInfo } from "../../config/model-roles";
+import { getRoleInfo, setRoleDescription } from "../../config/model-roles";
 import { settings } from "../../config/settings";
 import { cfgModelFactsEnabled, cfgModelFactsSources, cfgModelFactsOverrides } from "../../config/model-facts";
 import { ModelFactEditorComponent } from "../components/model-fact-editor";
@@ -142,7 +143,8 @@ import {
 import { LIVE_INGEST_DEFAULTS, liveIngestSourceFields } from "../../live/ingest-settings";
 import { createLivePersonaGeneration } from "../../live/persona-generation";
 import { createAgentsHubDeps } from "../agents-hub-deps";
-import { getEditorCommand, openInEditor } from "../../utils/external-editor";
+import { getEditorCommand, openInEditor, openEditorOnPath, withExternalEditor } from "../../utils/external-editor";
+import { type ConfigViewTarget, resolveConfigViewFile } from "../../config/config-view-file";
 import { collapseSharedUsageReports } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-tui/overlays/agent-hub";
@@ -184,6 +186,8 @@ import { cfgBranchSummaryEnabled } from "../../session/context-settings";
 import { cfgCycleOrder, cfgDisabledProviders, cfgModelRoleStorage } from "../../config/model-settings";
 import { cfgDefaultThinkingLevel, cfgRetryFallbackChains } from "../../session/settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "../../config/effort-policy";
+import { cfgContextRules } from "../../config/context-policy";
+import { parseCompactionPointInput } from "../../config/compaction-threshold";
 import {
 	cfgComposerShape,
 	cfgStatusLineCompactThinkingLevel,
@@ -636,6 +640,29 @@ export class SelectorController {
 		this.ctx.ui.requestRender();
 	}
 
+	async #openConfigFile(target: ConfigViewTarget, reload?: () => Promise<void>): Promise<void> {
+		const env = this.ctx.session.environment.snapshot();
+		await withExternalEditor(
+			this.ctx,
+			async command => {
+				await this.ctx.settings.flush();
+				const filePath = await resolveConfigViewFile(target, {
+					settings: this.ctx.settings,
+					models: this.ctx.session.modelRegistry,
+				});
+				if (!filePath) {
+					this.ctx.showWarning("This built-in configuration has no backing file.");
+					return;
+				}
+				await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+				const code = await openEditorOnPath(command, filePath, env);
+				await reload?.();
+				if (code !== 0) this.ctx.showWarning(`External editor exited with code ${code}. Saved changes were reloaded.`);
+			},
+			env,
+		);
+	}
+
 	showSettingsSelector(): void {
 		if (this.#focusOpenMenu("settings")) return;
 		const menu = this.#claimMenu("settings", () => this.showSettingsSelector());
@@ -658,7 +685,7 @@ export class SelectorController {
 						providers: [...new Set(this.ctx.session.getAvailableModels().map(model => model.provider))].sort(
 							(a, b) => a.localeCompare(b),
 						),
-						settings: createSettingsHost(),
+						settings: createSettingsHost(this.ctx.settings),
 						plugins: createPluginSettingsHost(getProjectDir()),
 						model: this.ctx.session.model,
 						imageBudget: this.ctx.ui.imageBudget,
@@ -667,6 +694,8 @@ export class SelectorController {
 					},
 					{
 						onChange: (id, value) => this.handleSettingChange(id, value),
+						onOpenConfigFile: () =>
+							this.#openConfigFile({ kind: "settings" }, () => this.ctx.settings.reloadFromDisk()),
 						onThemePreview: async themeName => {
 							const result = await previewTheme(themeName);
 							if (result.success) {
@@ -874,6 +903,7 @@ export class SelectorController {
 					: undefined,
 			};
 			const overlay = new AdvisorScopeOverlayComponent(this.ctx.ui, deps, files, {
+				openFile: filePath => this.#openConfigFile({ kind: "advisor", filePath }),
 				loadFile: loadWatchdogConfigFile,
 				saveFile: async (filePath, doc) => {
 					await saveWatchdogConfigFile(filePath, doc);
@@ -1405,15 +1435,18 @@ export class SelectorController {
 		try {
 			hub = await AgentsHubComponent.create(
 				this.ctx.ui,
-				createAgentsHubDeps(
-					getProjectDir(),
-					this.ctx.settings,
-					this.ctx.session.modelRegistry,
-					() => this.ctx.session.effectiveExtensionRoots,
-					activeModelPattern,
-					defaultModelPattern,
-					model => this.ctx.session.effectiveServiceTier(model),
-				),
+				{
+					...createAgentsHubDeps(
+						getProjectDir(),
+						this.ctx.settings,
+						this.ctx.session.modelRegistry,
+						() => this.ctx.session.effectiveExtensionRoots,
+						activeModelPattern,
+						defaultModelPattern,
+						model => this.ctx.session.effectiveServiceTier(model),
+					),
+					openConfigFile: agent => this.#openConfigFile({ kind: "agent", filePath: agent.filePath }),
+				},
 				{ onCancel: () => done() },
 			);
 		} catch (error) {
@@ -1651,6 +1684,13 @@ export class SelectorController {
 							done();
 							this.#showModelFacts(provider, model?.id);
 						},
+				onOpenConfigFile: hubOptions.sessionOnly
+					? undefined
+					: (section, scope) =>
+							this.#openConfigFile({ kind: "models", section, scope }, async () => {
+								await this.ctx.settings.reloadFromDisk();
+								await this.ctx.session.modelRegistry.refresh("offline");
+							}),
 				onAssign: async (
 					model,
 					role,
@@ -1737,6 +1777,23 @@ export class SelectorController {
 					try {
 						cfgEffortRules.set(this.ctx.settings, rules);
 						this.ctx.showStatus(`Implicit effort rules: ${rules.length}`);
+						hub?.refreshAfterExternalMutation();
+						return true;
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return false;
+					}
+				},
+				onContextRulesChange: rules => {
+					try {
+						cfgContextRules.set(
+							this.ctx.settings,
+							rules.map(rule => ({
+								selector: rule.selector,
+								limit: typeof rule.limit === "number" ? rule.limit : parseCompactionPointInput(rule.limit)!,
+							})),
+						);
+						this.ctx.showStatus(`Context rules: ${rules.length}`);
 						hub?.refreshAfterExternalMutation();
 						return true;
 					} catch (error) {
@@ -1860,6 +1917,15 @@ export class SelectorController {
 							previousKey,
 						);
 						hub?.refreshAfterExternalMutation();
+						return true;
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return false;
+					}
+				},
+				onRoleDescriptionChange: (role, description) => {
+					try {
+						setRoleDescription(role, description, this.ctx.settings);
 						return true;
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));

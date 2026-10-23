@@ -7,10 +7,10 @@ function score(value: number): string {
 	return value.toFixed(2);
 }
 
-export function formatTraceStep(step: TraceStep): string {
+export function formatTraceStep(step: TraceStep, candidateLimit = 8): string {
 	const where = step.node || "root";
 	const candidates = step.candidates
-		?.slice(0, 8)
+		?.slice(0, candidateLimit)
 		.map(candidate => `${candidate.label} ${score(candidate.score)}`)
 		.join("; ");
 	return `[${step.search}#${step.hop}] ${step.action} ${where}${candidates ? ` — ${candidates}` : ""}${
@@ -18,7 +18,10 @@ export function formatTraceStep(step: TraceStep): string {
 	}`;
 }
 
-export function formatRecallResult(result: RecallResult, options: { traceLimit?: number } = {}): string {
+export function formatRecallResult(
+	result: RecallResult,
+	options: { traceLimit?: number; traceCandidates?: number } = {},
+): string {
 	const lines: string[] = [];
 	const view = result.view;
 	const flags = [
@@ -69,7 +72,7 @@ export function formatRecallResult(result: RecallResult, options: { traceLimit?:
 	const limit = options.traceLimit ?? 24;
 	if (result.trace.length > 0) {
 		lines.push("", `Trace (${result.trace.length} steps${result.trace.length > limit ? `, first ${limit}` : ""}):`);
-		for (const step of result.trace.slice(0, limit)) lines.push(formatTraceStep(step));
+		for (const step of result.trace.slice(0, limit)) lines.push(formatTraceStep(step, options.traceCandidates));
 	}
 	return lines.join("\n");
 }

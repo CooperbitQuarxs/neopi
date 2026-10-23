@@ -903,7 +903,10 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		request.confirmedModel !== undefined &&
 		(policy.modelOverride?.length !== 1 || policy.modelOverride[0] !== request.confirmedModel)
 	) {
-		throw new StructuredSubagentError("preflight", "The spawn hook changed the confirmed model. Launch again to review it.");
+		throw new StructuredSubagentError(
+			"preflight",
+			"The spawn hook changed the confirmed model. Launch again to review it.",
+		);
 	}
 	const lease = await leaseArtifacts(request.session, request.invocationKind);
 	let changesApplied: boolean | null = null;

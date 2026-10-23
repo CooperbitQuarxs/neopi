@@ -13,15 +13,9 @@ import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
  * select the lowest permitted candidate without expanding the allowed set.
  */
 import type { AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core";
-import {
-	type ChoiceQuestion,
-	Effort,
-	judgeQuestions,
-	type Model,
-	renderQuestion,
-	THINKING_EFFORTS,
-} from "@oh-my-pi/pi-ai";
-import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { type ChoiceQuestion, Effort, judgeQuestions, type Model, renderQuestion } from "@oh-my-pi/pi-ai";
+import { getSupportedEfforts, getSupportedThinkingLevels } from "@oh-my-pi/pi-catalog/model-thinking";
+import type { ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import type { ModelRegistry } from "../config/model-registry";
 import { cfgEffortPolicyMode, resolveImplicitEffort } from "../config/effort-policy";
 import bundledEffortQuestionInstructions from "../prompts/system/auto-thinking-effort-question.md" with { type: "text" };
@@ -106,7 +100,7 @@ export interface ClassifyDifficultyDeps {
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 	onUsage?: (usage: JudgmentUsage) => void;
 	/** Policy-resolved sparse candidates for this selection, not an ordinal ceiling. */
-	allowedEfforts?: readonly Effort[];
+	allowedEfforts?: readonly ThinkingEffort[];
 	sessionManager?: EffortContextSession;
 	onContextFallback?: (reason: string) => void;
 	onEffortDisclosure?: (message: string) => void;
@@ -127,12 +121,12 @@ function autoEffortCeiling(deps: ClassifyDifficultyDeps): Effort {
 export async function classifyDifficulty(
 	input: DifficultyInput,
 	deps: ClassifyDifficultyDeps,
-): Promise<Effort | undefined> {
+): Promise<ThinkingEffort | undefined> {
 	if (cfgEffortPolicyMode.get(deps.settings) === "replacement") {
-		const supported = getSupportedEfforts(deps.model);
+		const supported = getSupportedThinkingLevels(deps.model);
 		const allowed =
 			deps.allowedEfforts ?? resolveImplicitEffort(deps.settings, deps.model, { mode: "auto" }).candidates;
-		const candidates = THINKING_EFFORTS.filter(effort => supported.includes(effort) && allowed.includes(effort));
+		const candidates = supported.filter(effort => allowed.includes(effort));
 		if (!candidates.length) {
 			throw new Error(
 				`No permitted Auto effort for ${deps.model.provider}/${deps.model.id}; supported: ${supported.join(", ") || "none"}; permitted: ${allowed.join(", ") || "none"}`,
@@ -148,13 +142,15 @@ export async function classifyDifficulty(
 		const criteria = Object.fromEntries(
 			candidates.map(effort => [
 				effort,
-				effort === Effort.Minimal
-					? resolvePromptAsset("system/auto-thinking-minimal-criterion.md", minimalCriterion, {
-							cwd: deps.sessionManager?.getCwd?.(),
-						}).text.trim()
-					: QUESTIONS.level.criteria[effort as Level],
+				effort === "off"
+					? QUESTIONS.off.criteria.off
+					: effort === Effort.Minimal
+						? resolvePromptAsset("system/auto-thinking-minimal-criterion.md", minimalCriterion, {
+								cwd: deps.sessionManager?.getCwd?.(),
+							}).text.trim()
+						: QUESTIONS.level.criteria[effort as Level],
 			]),
-		) as Record<Effort, string>;
+		) as Record<ThinkingEffort, string>;
 		const question: ChoiceQuestion = {
 			type: "choice",
 			instructions: solutionSpace
@@ -174,7 +170,7 @@ export async function classifyDifficulty(
 			onEffortDisclosure: deps.onEffortDisclosure,
 		});
 		const { answers } = await judge.judge({ state, questions: { effort: question } }, { signal: deps.signal });
-		const chosen = answers.effort.choice as Effort;
+		const chosen = answers.effort.choice as ThinkingEffort;
 		if (!candidates.includes(chosen)) throw new Error(`@effort returned an unpermitted level: ${chosen}`);
 		return chosen;
 	}

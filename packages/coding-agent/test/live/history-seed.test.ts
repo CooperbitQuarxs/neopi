@@ -153,7 +153,9 @@ function harness(
 describe("live startup history delivery", () => {
 	it("starts with real Settings.init and absent seed configuration without sending history", async () => {
 		const state = beginSettingsTest();
-		const dir = await fs.mkdtemp(path.join(process.env.HOME!, ".cache/npi-canary/live-seed-settings-"));
+		const cacheDir = path.join(process.env.HOME!, ".cache/npi-canary");
+		await fs.mkdir(cacheDir, { recursive: true });
+		const dir = await fs.mkdtemp(path.join(cacheDir, "live-seed-settings-"));
 		try {
 			const settings = await Settings.init({ cwd: dir, agentDir: dir });
 			expect(settings).toBeDefined();

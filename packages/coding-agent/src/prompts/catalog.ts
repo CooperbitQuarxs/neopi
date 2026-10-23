@@ -1262,8 +1262,8 @@ export const promptAssets: readonly PromptAsset[] = [
 		bundled: asset35,
 		scope: "feature:chronicler/finish-tool",
 		group: "core",
-		keys: [],
-		fixture: {},
+		keys: [{ path: "carryChars", type: "number", required: true, resolution: "session-dependent" }],
+		fixture: { carryChars: 8_000 },
 		consumerHints: [
 			"packages/coding-agent/src/prompts/chronicler/finish-tool.md",
 			"packages/coding-agent/src/chronicler/chronicle-tool.ts",
@@ -1275,8 +1275,11 @@ export const promptAssets: readonly PromptAsset[] = [
 		bundled: asset36,
 		scope: "feature:chronicler/read-tool",
 		group: "core",
-		keys: [],
-		fixture: {},
+		keys: [
+			{ path: "pageSize", type: "number", required: true, resolution: "session-dependent" },
+			{ path: "pageMax", type: "number", required: true, resolution: "session-dependent" },
+		],
+		fixture: { pageSize: 50, pageMax: 100 },
 		consumerHints: [
 			"packages/coding-agent/src/prompts/chronicler/read-tool.md",
 			"packages/coding-agent/src/chronicler/chronicle-tool.ts",
@@ -1291,8 +1294,17 @@ export const promptAssets: readonly PromptAsset[] = [
 		keys: [
 			{ path: "sessionId", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "cwd", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "materialCriteria", type: "number", required: true, resolution: "session-dependent" },
+			{ path: "minWords", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "maxWords", type: "string", required: true, resolution: "session-dependent" },
 		],
-		fixture: { sessionId: "example-1", cwd: "/workspace/example" },
+		fixture: {
+			sessionId: "example-1",
+			cwd: "/workspace/example",
+			materialCriteria: 2,
+			minWords: "150",
+			maxWords: "1,200",
+		},
 		consumerHints: [
 			"packages/coding-agent/src/prompts/chronicler/system.md",
 			"packages/coding-agent/src/chronicler/session-chronicler.ts",

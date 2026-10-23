@@ -6,6 +6,7 @@
 
 - `/advisor configure` lists every loaded file with an advisor preview, whole-file toggles, exact-file editing, and bulk enabled-state actions ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
 - New and cloned advisors receive separate hidden identities so role activation sets remain attached after renames ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
+- Model effort-rule editors now let you include or exclude native `off` reasoning levels ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).
 - Numeric settings can offer a Custom input alongside preset quick picks, including global and role-scoped context budgets ([#52](https://github.com/PsychedelicShayna/neopi/issues/52)).
 - `/advisor configure` clones the selected advisor with `c`; deletion requires the Delete key and a named, cancel-first confirmation ([#322](https://github.com/PsychedelicShayna/neopi/issues/322)).
 - Ask supports `a` to add a note to any highlighted option and `A` to edit or clear its latest note; notes survive selection changes and appear in answer review ([#321](https://github.com/PsychedelicShayna/neopi/issues/321)).
@@ -45,6 +46,7 @@
 - Cloned advisors stay visible after applying when another advisor has the same normalized copy name ([#322](https://github.com/PsychedelicShayna/neopi/issues/322)).
 - Advisor configuration confirms searches with Enter, retains parent filters through field editing, and clears search before native Close or Apply leaves a picker ([#416](https://github.com/PsychedelicShayna/neopi/issues/416)).
 - Escape and native Close clear confirmed search filters before leaving Git or a picker; Vim search now handles collections, POSIX classes, lazy repetition, noncapturing groups and lookaround without silently literalizing unsupported atoms ([#416](https://github.com/PsychedelicShayna/neopi/issues/416)).
+- Menu history restores theme and settings cursors without replaying previews or changing a setting whose former submenu disappeared ([#513](https://github.com/PsychedelicShayna/neopi/issues/513)).
 - Closing a settings choice or leaving its page through menu history restores the uncommitted preview, and Space still toggles chain steps with normal menu navigation enabled ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Session pickers honor remapped cancel keys, annotation source editors retain their configured shortcuts, and aborted agent transcripts drop stale message-editor focus and send hints ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - Tree row-navigation remaps take precedence over the built-in Alt-Up/Down turn shortcuts ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).

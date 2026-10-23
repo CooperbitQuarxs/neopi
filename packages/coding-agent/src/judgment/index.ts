@@ -24,7 +24,6 @@ import {
 	chatTextBackend,
 	createNativeJudge,
 	Effort,
-	THINKING_EFFORTS,
 	isJudgmentApi,
 	type Judge,
 	type JudgeOptions,
@@ -44,6 +43,7 @@ import {
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import type { ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
 import { MAX_THINKING_SUFFIX_OPTIONS, splitThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
@@ -464,7 +464,7 @@ export class ChainJudge implements Judge {
 	):
 		| {
 				reasoning?: Effort;
-				resolveReasoning?: (text: TextPrompt, options: JudgeOptions) => Promise<Effort>;
+				resolveReasoning?: (text: TextPrompt, options: JudgeOptions) => Promise<ThinkingEffort>;
 		  }
 		| undefined {
 		if (cfgEffortPolicyMode.get(this.#deps.settings) === "legacy" || !selection || selection.mode === "inherit")
@@ -497,7 +497,7 @@ export class ChainJudge implements Judge {
 					throw new Error("@effort returned no concrete level");
 				} catch (error) {
 					if (options.signal?.aborted || isAbortOrTimeout(error)) throw error;
-					const lowest = THINKING_EFFORTS.find(effort => decision.candidates.includes(effort));
+					const lowest = decision.candidates[0];
 					if (!lowest) throw error;
 					this.#deps.onEffortDisclosure?.(
 						`@judge Auto classification failed: ${String(error)}. Using lowest permitted effort ${lowest}.`,

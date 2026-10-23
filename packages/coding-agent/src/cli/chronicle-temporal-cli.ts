@@ -4,13 +4,16 @@
  */
 import { getAgentDir, getProjectDir } from "@oh-my-pi/pi-utils";
 import { CliUsageError } from "@oh-my-pi/pi-utils/cli";
-import { cfgChroniclerRecallRanker } from "../chronicler/settings";
+import { cfgChroniclerIndexDiagnosticLimit, cfgChroniclerRecallRanker } from "../chronicler/settings";
 import { parseTimeBound, type TimeBound } from "../chronicler/temporal/calendar";
 import {
 	indexConfigFromSettings,
+	indexConcurrencyFromSettings,
 	recallDefaultsFromSettings,
+	recallFormatFromSettings,
 	resolveRanker,
 	resolveViewRoot,
+	summaryPolicyFromSettings,
 } from "../chronicler/temporal/config";
 import { formatRecallResult } from "../chronicler/temporal/format";
 import { type IndexReport, indexChronicle } from "../chronicler/temporal/indexer";
@@ -68,7 +71,7 @@ async function withRegistry<T>(settings: Settings, agentDir: string, run: (regis
 	}
 }
 
-export function formatIndexReport(report: IndexReport): string {
+export function formatIndexReport(report: IndexReport, limit = 50): string {
 	const n = report.nodes;
 	const lines = [
 		`Chronicle view ${report.dryRun ? "(dry run) " : ""}at ${report.root}`,
@@ -80,25 +83,25 @@ export function formatIndexReport(report: IndexReport): string {
 	const pending = report.changes.filter(change => change.outcome !== "generated");
 	if (pending.length > 0) {
 		lines.push("", "Not regenerated:");
-		for (const change of pending.slice(0, 50)) {
+		for (const change of pending.slice(0, limit)) {
 			lines.push(
 				`- ${change.key || "root"} (${change.level}): ${change.outcome}${change.reason ? ` [${change.reason}]` : ""}${change.detail ? ` — ${change.detail}` : ""}`,
 			);
 		}
-		if (pending.length > 50) lines.push(`  … ${pending.length - 50} more (use --json)`);
+		if (pending.length > limit) lines.push(`  … ${pending.length - limit} more (use --json)`);
 	}
 	if (report.canonical.length > 0) {
 		lines.push("", `Canonical diagnostics (${report.canonical.length}; atoms untouched):`);
-		for (const diagnostic of report.canonical.slice(0, 50)) {
+		for (const diagnostic of report.canonical.slice(0, limit)) {
 			lines.push(
 				`- ${diagnostic.kind}: ${diagnostic.atomId ? `${diagnostic.atomId} ` : ""}${diagnostic.path} — ${diagnostic.detail}`,
 			);
 		}
-		if (report.canonical.length > 50) lines.push(`  … ${report.canonical.length - 50} more (use --json)`);
+		if (report.canonical.length > limit) lines.push(`  … ${report.canonical.length - limit} more (use --json)`);
 	}
 	if (report.derived.length > 0) {
 		lines.push("", `Derived view problems (${report.derived.length}):`);
-		for (const problem of report.derived.slice(0, 50)) lines.push(`- ${problem.key || "root"}: ${problem.detail}`);
+		for (const problem of report.derived) lines.push(`- ${problem.key || "root"}: ${problem.detail}`);
 	}
 	return lines.join("\n");
 }
@@ -115,7 +118,8 @@ export async function runChronicleIndex(flags: ChronicleIndexFlags): Promise<num
 			agentDir,
 			root: resolveViewRoot(settings, agentDir),
 			config,
-			summarizer: client ? createSummarizer(client) : undefined,
+			summarizer: client ? createSummarizer(client, summaryPolicyFromSettings(settings)) : undefined,
+			concurrency: indexConcurrencyFromSettings(settings),
 			rebuild: flags.rebuild,
 			dryRun: flags.dryRun,
 			since,
@@ -124,7 +128,9 @@ export async function runChronicleIndex(flags: ChronicleIndexFlags): Promise<num
 		});
 	});
 	if (!flags.json) process.stderr.write("\r\x1b[2K");
-	process.stdout.write(`${flags.json ? JSON.stringify(report, null, 2) : formatIndexReport(report)}\n`);
+	process.stdout.write(
+		`${flags.json ? JSON.stringify(report, null, 2) : formatIndexReport(report, cfgChroniclerIndexDiagnosticLimit.get(settings))}\n`,
+	);
 	return report.nodes.failed > 0 ? 1 : 0;
 }
 
@@ -155,12 +161,13 @@ export async function runChronicleRecall(flags: ChronicleRecallFlags): Promise<n
 			budget: flags.budget ?? defaults.budget,
 			beam: flags.beam ?? defaults.beam,
 			neighborhoodMinutes: defaults.neighborhoodMinutes,
+			policy: defaults.policy,
 			ranker: resolveRanker(settings, registry, flags.ranker as "model" | "lexical" | undefined),
 		});
 	const wantsModel = (flags.ranker ?? cfgChroniclerRecallRanker.get(settings)) === "model";
 	const result = wantsModel ? await withRegistry(settings, agentDir, run) : await run(undefined);
 	process.stdout.write(
-		`${flags.json ? JSON.stringify(result, null, 2) : formatRecallResult(result, { traceLimit: 200 })}\n`,
+		`${flags.json ? JSON.stringify(result, null, 2) : formatRecallResult(result, recallFormatFromSettings(settings, true))}\n`,
 	);
 	return 0;
 }

@@ -1,6 +1,6 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
-import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import type { Effort, ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import type { ModelIdentity } from "@oh-my-pi/pi-catalog/compat/types";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import {
@@ -59,7 +59,7 @@ export interface ModelInfoSettingSource {
 }
 
 export interface ModelInfoEffortDecision {
-	candidates: readonly Effort[];
+	candidates: readonly ThinkingEffort[];
 	resolvedLevel?: ThinkingLevel;
 	rule?: EffortRule;
 	disclosure?: string;

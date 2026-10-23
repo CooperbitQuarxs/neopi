@@ -136,6 +136,7 @@ import {
 	validateProviderConfiguration,
 } from "./models-config";
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
+import { ModelConfigEditor } from "./model-config-editor";
 import { Settings, settings } from "./settings";
 
 import { cfgDisabledProviders } from "./model-settings";
@@ -366,6 +367,11 @@ export class ModelRegistry {
 	#warnedCompatKeys = new Set<string>();
 	#configWarnings: string[] = [];
 	#modelsConfigFile: ConfigFile<ModelsConfig>;
+	#modelConfigEditor?: ModelConfigEditor;
+
+	get modelConfig(): ModelConfigEditor {
+		return (this.#modelConfigEditor ??= new ModelConfigEditor(this.#modelsConfigFile));
+	}
 	#lastStaticLoadMtime: number | null = null;
 	#registeredProviderSources: Set<string> = new Set();
 	#providerDiscoveryStates: Map<string, ProviderDiscoveryState> = new Map();
@@ -630,6 +636,11 @@ export class ModelRegistry {
 				this.#credentialScopedCacheHydration = undefined;
 			}
 		}
+	}
+
+	/** The configured models file, including custom SDK locations. */
+	getConfigFile(): string {
+		return this.#modelsConfigFile.path();
 	}
 
 	/**

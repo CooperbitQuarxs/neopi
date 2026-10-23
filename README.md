@@ -59,6 +59,26 @@ bun install --frozen-lockfile
 ./install.sh   # atomic install to ~/.local/bin/npi (NPI_DEST overrides), smoke test
 ```
 
+Linux builds reuse verified native addons across worktrees on the same host.
+`NPI_NATIVE_CACHE` selects the shared cache directory, defaulting to
+`/mnt/alias/m2/agents/native-cache`. Set `NPI_NATIVE_CACHE=off` to use only the
+checkout's addon and the normal rebuild path. `NPI_FORCE_NATIVE=1` bypasses
+both local freshness and cache restoration, then stores the new addon.
+An unavailable cache falls back to the normal build.
+
+The key hashes native source and build-driver bytes, compiler settings including
+`OMP_NATIVE_FEATURES`, and the host/toolchain fingerprint. It includes `RUSTC`,
+`RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `CARGO_PROFILE_*` and `CARGO_BUILD_*`
+overrides. Compiler fingerprinting uses `RUSTC`, then `CARGO_BUILD_RUSTC`, then
+`rustc` on PATH. `RUSTDOCFLAGS` is excluded because this build does not run rustdoc.
+Cache hits verify SHA-256 and the native release version before writing a
+checkout-local stamp.
+The cache keeps eight recently stored addons, skipping entries in use.
+`ledger.jsonl` records each native build phase as `hit`, `miss`, or `store`,
+with its key, duration in seconds, exit code, and whether it published an addon.
+Failed native builds are recorded too. A current local addon can seed an empty
+cache without compiling Rust.
+
 `build.sh` and `install.sh` support Linux. On macOS, run the same steps by hand:
 
 ```sh
@@ -93,9 +113,8 @@ Tags derive from `packages/coding-agent/package.json`: stable builds use
 `v<version>-nightly.<short-sha>.<run-id>.<attempt>`. Repeated builds get new tags;
 existing releases and tags are never overwritten or deleted. Release assets
 include all platform binaries, the browser relay extension, legal notices and
-`SHA256SUMS.txt`. Ordinary fork builds publish to GitHub without enabling the
-inherited npm, build.stencil.so or Homebrew publishers; those jobs retain their
-existing pre-tagged-release conditions and validation gate.
+`SHA256SUMS.txt`. The fork publishes only to GitHub; the inherited npm,
+build.stencil.so and upstream Homebrew publishing jobs have been removed.
 
 The workflow must reach the default branch before GitHub exposes its manual
 dispatch controls. After the first merge into `nightly`, watch that push's
@@ -103,6 +122,26 @@ dispatch controls. After the first merge into `nightly`, watch that push's
 After promotion to `neopi`, check that its push publishes a stable release
 marked **Latest**. Builds run in GitHub Actions; a local `./build.sh` does not
 publish a release or change your installed binary automatically.
+
+### CI checks and platform coverage
+
+GitHub's checks summary counts the jobs created by `.github/workflows/ci.yml`,
+including separate matrix jobs. PRs run Linux validation and reuse cached Linux
+native addons. Pushes to `nightly` and `neopi` also validate Rust, build the
+remaining native targets, and cross-compile eight release binaries on Linux:
+Linux glibc and musl on x64 and ARM64, macOS on Intel and Apple Silicon, and
+Windows on x64 and ARM64.
+
+Every release binary then runs `--version` and `--smoke-test` on its target
+platform. macOS uses macOS runners and verifies the code signature; Windows
+uses Windows runners; musl uses Alpine containers. These are startup and worker
+smoke checks, not the full TypeScript test suite on every OS.
+
+The three boxes in `.github/PULL_REQUEST_TEMPLATE.md` are the author's manual
+verification notes, not CI jobs or required status checks. Leave an unchecked
+box with a reason when that check was not run. Keep useful validation red until
+its underlying failure is repaired; an obsolete publisher is different from a
+failing regression test.
 
 ## Updating
 

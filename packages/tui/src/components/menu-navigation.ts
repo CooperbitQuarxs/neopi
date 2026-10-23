@@ -428,7 +428,9 @@ export function applyMenuMotion(
  * a snapshot when the menu closes and hands it back right after reopening.
  * Nested navigation captures the previous snapshot, builds the new page,
  * then notifies the host. The empty page id names the root. Restoration
- * must not notify the host or create another visit.
+ * must not notify the host, create another visit, or invoke selection/entry
+ * actions that preview or apply settings. Restore the view without replaying
+ * the action that originally opened it.
  */
 export interface MenuHistoryParticipant {
 	navigationSnapshot(): unknown;

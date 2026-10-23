@@ -26,11 +26,27 @@ import type { MixtureConfigScope, MixtureDefinition } from "@oh-my-pi/pi-tui/ove
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import type { LivePhase } from "../../live/controller";
 import type { RpcMessagesPage } from "./rpc-messages";
+import type {
+	RpcNavigateTreeOptions,
+	RpcNavigateTreeResult,
+	RpcResumeTreeOptions,
+	RpcResumeTreeResult,
+} from "./rpc-tree";
+import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
+import type { RpcModel } from "./rpc-model";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
+import type { RpcModelSelectorResult } from "./rpc-model-selector";
+import type {
+	RpcModelsConfiguration,
+	RpcSetModelRoleConfiguration,
+	RpcSetEffortRules,
+} from "./rpc-models-configuration";
 import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { BtwHistoryRecord } from "../../session/btw-history";
+import type { RpcThemesCommand, RpcThemesConfiguration } from "./rpc-themes-configuration";
+import type { UsageStatistics } from "../../session/session-entries";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -42,6 +58,7 @@ export type RpcMessageUpdates = "full" | "delta";
 export type RpcCommand =
 	// Protocol
 	| { id?: string; type: "negotiate_protocol"; protocolVersion: number }
+	| RpcThemesCommand
 
 	// Prompting
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
@@ -56,7 +73,7 @@ export type RpcCommand =
 	| { id?: string; type: "open_session"; sessionDir: string; provider?: string; modelId?: string }
 
 	// State
-	| { id?: string; type: "get_state" }
+	| { id?: string; type: "get_state"; includeDump?: boolean }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
 	| RpcSetChatModeCommand
 	| { id?: string; type: "set_mode"; mode: RpcMode; planFilePath?: string }
@@ -71,7 +88,10 @@ export type RpcCommand =
 	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
+	| ({ id?: string; type: "get_entries_page" } & RpcJournalPageOptions)
 	| { id?: string; type: "get_tree" }
+	| ({ id?: string; type: "navigate_tree" } & RpcNavigateTreeOptions)
+	| ({ id?: string; type: "resume_tree" } & RpcResumeTreeOptions)
 	| { id?: string; type: "set_todos"; phases: TodoPhase[] }
 	| { id?: string; type: "set_host_tools"; tools: RpcHostToolDefinition[] }
 	| { id?: string; type: "set_host_uri_schemes"; schemes: RpcHostUriSchemeDefinition[] }
@@ -97,7 +117,14 @@ export type RpcCommand =
 	| { id?: string; type: "list_mixtures" }
 	| { id?: string; type: "select_mixture"; name: string }
 	| { id?: string; type: "get_roles" }
+	| { id?: string; type: "query_model_selector"; query: string }
 	| { id?: string; type: "set_role"; role: string }
+	| { id?: string; type: "get_models_configuration" }
+	| ({ id?: string; type: "set_model_role_configuration" } & RpcSetModelRoleConfiguration)
+	| ({ id?: string; type: "set_effort_rules" } & RpcSetEffortRules)
+	| { id?: string; type: "set_model_role_storage"; value: "global" | "project"; expected: "global" | "project" }
+	| { id?: string; type: "set_provider_api_key"; providerId: string; apiKey: string }
+	| { id?: string; type: "cancel_login"; loginId: string }
 
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
@@ -167,7 +194,7 @@ export type RpcCommand =
 // ============================================================================
 
 export interface RpcSessionState {
-	model?: Model;
+	model?: RpcModel;
 	thinkingLevel: ThinkingLevel | undefined;
 	isStreaming: boolean;
 	isCompacting: boolean;
@@ -177,6 +204,13 @@ export interface RpcSessionState {
 	sessionFile?: string;
 	sessionId: string;
 	sessionName?: string;
+	/** Effective tool policy, including the process-local auto-approve override. */
+	approvalMode?: ApprovalMode;
+	/** All journal branches, including compacted history and completed task spend. */
+	sessionUsage?: UsageStatistics & {
+		advisorCost: number;
+		advisorCostState: "ready" | "restoring" | "unavailable";
+	};
 	/** Capture ownership, last committed progress, and automatic recovery diagnostics. */
 	chronicler: ChroniclerHealth;
 	autoCompactionEnabled: boolean;
@@ -506,6 +540,8 @@ export interface RpcSubagentMessagesResult {
 
 // Success responses with data
 export type RpcResponse =
+	| { id?: string; type: "response"; command: "get_themes_configuration"; success: true; data: RpcThemesConfiguration }
+	| { id?: string; type: "response"; command: "update_theme"; success: true; data: RpcThemesConfiguration }
 	// Protocol
 	| {
 			id?: string;
@@ -567,6 +603,7 @@ export type RpcResponse =
 			success: true;
 			data: { entries: SessionEntry[]; leafId: string | null };
 	  }
+	| { id?: string; type: "response"; command: "get_entries_page"; success: true; data: RpcJournalPage }
 	| {
 			id?: string;
 			type: "response";
@@ -574,6 +611,8 @@ export type RpcResponse =
 			success: true;
 			data: { tree: SessionTreeNode[]; leafId: string | null };
 	  }
+	| { id?: string; type: "response"; command: "navigate_tree"; success: true; data: RpcNavigateTreeResult }
+	| { id?: string; type: "response"; command: "resume_tree"; success: true; data: RpcResumeTreeResult }
 	| { id?: string; type: "response"; command: "set_todos"; success: true; data: { todoPhases: TodoPhase[] } }
 	| { id?: string; type: "response"; command: "set_host_tools"; success: true; data: { toolNames: string[] } }
 	| { id?: string; type: "response"; command: "set_host_uri_schemes"; success: true; data: { schemes: string[] } }
@@ -649,7 +688,7 @@ export type RpcResponse =
 			type: "response";
 			command: "get_available_models";
 			success: true;
-			data: { models: Model[] };
+			data: { models: RpcModel[] };
 	  }
 	| {
 			id?: string;
@@ -690,10 +729,29 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
+			command: "query_model_selector";
+			success: true;
+			data: RpcModelSelectorResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
 			command: "set_role";
 			success: true;
 			data: RpcSetRoleResult;
 	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_models_configuration";
+			success: true;
+			data: Awaited<ReturnType<RpcModelsConfiguration["read"]>>;
+	  }
+	| { id?: string; type: "response"; command: "set_model_role_configuration"; success: true }
+	| { id?: string; type: "response"; command: "set_model_role_storage"; success: true }
+	| { id?: string; type: "response"; command: "set_effort_rules"; success: true }
+	| { id?: string; type: "response"; command: "set_provider_api_key"; success: true }
+	| { id?: string; type: "response"; command: "cancel_login"; success: true }
 
 	// Thinking
 	| { id?: string; type: "response"; command: "set_thinking_level"; success: true }
@@ -906,6 +964,8 @@ export type RpcExtensionUIRequest =
 			method: "input";
 			title: string;
 			placeholder?: string;
+			secret?: boolean;
+			loginId?: string;
 			timeout?: number;
 	  }
 	| {

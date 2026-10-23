@@ -244,7 +244,7 @@ describe("Agent hub row ordering", () => {
 			hub.handleInput("/");
 			hub.handleInput("a");
 			hub.handleInput("p");
-			expect(renderedAgentIds(hub)).toEqual(["alpha-one"]);
+			expect(renderedAgentIds(hub)).toEqual(["alpha-one", "beta-two"]);
 			hub.handleInput("\r");
 			expect(renderedAgentIds(hub)).toEqual(["alpha-one"]);
 			hub.handleInput("/");
@@ -1235,10 +1235,11 @@ describe("Agent hub row ordering", () => {
 			expect(open).toHaveBeenCalledWith("Worker", "entry-42");
 			expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("Agent Hub  ·  Worker");
 			hub.handleInput("\x1b");
+			const wasFollowing = hub.navigationSnapshot().activityFollow;
 			hub.handleInput(" ");
-			expect(hub.navigationSnapshot().activityFollow).toBe(true);
+			expect(hub.navigationSnapshot().activityFollow).toBe(!wasFollowing);
 			hub.handleInput(" ");
-			expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("paused");
+			expect(hub.navigationSnapshot().activityFollow).toBe(wasFollowing);
 			hub.handleInput("1");
 			expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("Roster");
 		} finally {

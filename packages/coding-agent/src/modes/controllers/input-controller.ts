@@ -78,7 +78,7 @@ import { EnhancedPasteController } from "../../utils/enhanced-paste";
 import {
 	extractExternalEditorMessage,
 	formatExternalEditorDraft,
-	getEditorCommand,
+	withExternalEditor,
 	openInEditor,
 } from "../../utils/external-editor";
 import { resendProgramStatus } from "../../utils/run-status";
@@ -258,19 +258,19 @@ export class InputController {
 	/** Set by `app.repl.execute` so the next submit runs in the REPL kernel. */
 	#replNextSubmit = false;
 
-	/** Resolve the current tiny role at use time so project/session reloads cannot leave a stale model. */
-	#resolveTinyTitleLocalModelKey(): string | undefined {
+	/** Resolve the title role at use time so project/session reloads cannot leave a stale model. */
+	#resolveTitleLocalModelKey(): string | undefined {
 		const model = resolveModelRoleValue(
-			formatModelRoleAlias("tiny"),
-			roleCandidatePool("tiny", this.ctx.settings, this.ctx.session.modelRegistry),
+			formatModelRoleAlias("title"),
+			roleCandidatePool("title", this.ctx.settings, this.ctx.session.modelRegistry),
 			{ settings: this.ctx.settings },
 		).model;
 		return model?.api === "local-inference" && isTinyLocalModelKey(model.id) ? model.id : undefined;
 	}
 
-	/** Prewarm only the local worker selected by the current tiny role. */
+	/** Prewarm only the local worker selected by the current title role. */
 	prewarmTinyTitleModel(): void {
-		const modelKey = this.#resolveTinyTitleLocalModelKey();
+		const modelKey = this.#resolveTitleLocalModelKey();
 		if (modelKey) tinyTitleClient.prewarm(modelKey);
 	}
 
@@ -3462,31 +3462,20 @@ export class InputController {
 
 	async openExternalEditor(): Promise<void> {
 		const env = this.ctx.session.environment.snapshot();
-		const editorCmd = getEditorCommand(env);
-		if (!editorCmd) {
-			this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
-			return;
-		}
-
-		const currentText = this.ctx.editor.getExpandedText?.() ?? this.ctx.editor.getText();
-		const draft = formatExternalEditorDraft(this.ctx.ui.getVisibleScreenRows(), currentText);
-
-		try {
-			this.ctx.ui.stop();
-			const result = await openInEditor(editorCmd, draft, { extension: ".omp.md", env });
-			if (result !== null) {
-				const message = extractExternalEditorMessage(result);
-				if (message === null) this.ctx.showWarning("External editor context marker was removed; draft unchanged.");
-				else this.ctx.editor.setText(message);
-			}
-		} catch (error) {
-			this.ctx.showWarning(
-				`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		} finally {
-			this.ctx.ui.start();
-			this.ctx.ui.requestRender();
-		}
+		await withExternalEditor(
+			this.ctx,
+			async editorCmd => {
+				const currentText = this.ctx.editor.getExpandedText?.() ?? this.ctx.editor.getText();
+				const draft = formatExternalEditorDraft(this.ctx.ui.getVisibleScreenRows(), currentText);
+				const result = await openInEditor(editorCmd, draft, { extension: ".omp.md", env });
+				if (result !== null) {
+					const message = extractExternalEditorMessage(result);
+					if (message === null) this.ctx.showWarning("External editor context marker was removed; draft unchanged.");
+					else this.ctx.editor.setText(message);
+				}
+			},
+			env,
+		);
 	}
 
 	registerExtensionShortcuts(): void {

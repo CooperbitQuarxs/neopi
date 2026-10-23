@@ -9,6 +9,7 @@ import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { openStandaloneJudge } from "../judgment/standalone";
 import { openPath } from "../utils/open";
+import { runHostedStats } from "./stats-host";
 
 /**
  * Single-line TTY progress bar. On a non-TTY stream we just stay quiet -
@@ -61,6 +62,7 @@ export interface StatsCommandArgs {
 	host: string;
 	json: boolean;
 	summary: boolean;
+	headless?: boolean;
 }
 
 // =============================================================================
@@ -68,6 +70,11 @@ export interface StatsCommandArgs {
 // =============================================================================
 
 export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
+	if (cmd.headless) {
+		if (cmd.json || cmd.summary) throw new Error("--headless cannot be combined with --json or --summary");
+		await runHostedStats();
+		return;
+	}
 	// Lazy import to avoid loading stats module when not needed
 	const {
 		closeDb,

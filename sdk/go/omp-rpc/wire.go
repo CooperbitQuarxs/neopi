@@ -1721,6 +1721,31 @@ func (v *Effort) UnmarshalJSON(data []byte) error {
 	return unknownValue("Effort", s)
 }
 
+type ThinkingEffort string
+
+const (
+	ThinkingEffortOff     ThinkingEffort = "off"
+	ThinkingEffortMinimal ThinkingEffort = "minimal"
+	ThinkingEffortLow     ThinkingEffort = "low"
+	ThinkingEffortMedium  ThinkingEffort = "medium"
+	ThinkingEffortHigh    ThinkingEffort = "high"
+	ThinkingEffortXhigh   ThinkingEffort = "xhigh"
+	ThinkingEffortMax     ThinkingEffort = "max"
+)
+
+func (v *ThinkingEffort) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "ThinkingEffort")
+	if err != nil {
+		return err
+	}
+	switch value := ThinkingEffort(s); value {
+	case ThinkingEffortOff, ThinkingEffortMinimal, ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXhigh, ThinkingEffortMax:
+		*v = value
+		return nil
+	}
+	return unknownValue("ThinkingEffort", s)
+}
+
 // Thinking selector; `inherit` defers to a higher-level selector.
 type ThinkingLevel string
 
@@ -1894,6 +1919,73 @@ func (v *ModelInfo) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type ThemeSelection struct {
+	Effective string            `json:"effective"`
+	Global    *string           `json:"global"`
+	Project   *string           `json:"project"`
+	Colors    map[string]string `json:"colors"`
+}
+
+func (v *ThemeSelection) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ThemeSelection", v.decodeFrom)
+}
+
+func (v *ThemeSelection) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ThemeSelection
+	d := fieldDecoder{raw: raw, owner: "ThemeSelection"}
+	d.required("effective", &out.Effective)
+	d.nullable("global", &out.Global)
+	d.nullable("project", &out.Project)
+	d.required("colors", &out.Colors)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ThemeSelections struct {
+	Dark  ThemeSelection `json:"dark"`
+	Light ThemeSelection `json:"light"`
+}
+
+func (v *ThemeSelections) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ThemeSelections", v.decodeFrom)
+}
+
+func (v *ThemeSelections) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ThemeSelections
+	d := fieldDecoder{raw: raw, owner: "ThemeSelections"}
+	d.required("dark", &out.Dark)
+	d.required("light", &out.Light)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ThemesConfiguration struct {
+	Themes    []string        `json:"themes"`
+	Selection ThemeSelections `json:"selection"`
+}
+
+func (v *ThemesConfiguration) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ThemesConfiguration", v.decodeFrom)
+}
+
+func (v *ThemesConfiguration) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ThemesConfiguration
+	d := fieldDecoder{raw: raw, owner: "ThemesConfiguration"}
+	d.required("themes", &out.Themes)
+	d.required("selection", &out.Selection)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type ApprovalHandler string
 
 const (
@@ -1912,6 +2004,91 @@ func (v *ApprovalHandler) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	return unknownValue("ApprovalHandler", s)
+}
+
+type ApprovalMode string
+
+const (
+	ApprovalModeAlwaysAsk ApprovalMode = "always-ask"
+	ApprovalModeWrite     ApprovalMode = "write"
+	ApprovalModeYolo      ApprovalMode = "yolo"
+)
+
+func (v *ApprovalMode) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "ApprovalMode")
+	if err != nil {
+		return err
+	}
+	switch value := ApprovalMode(s); value {
+	case ApprovalModeAlwaysAsk, ApprovalModeWrite, ApprovalModeYolo:
+		*v = value
+		return nil
+	}
+	return unknownValue("ApprovalMode", s)
+}
+
+type SessionUsage struct {
+	Input                  float64                      `json:"input"`
+	Output                 float64                      `json:"output"`
+	CacheRead              float64                      `json:"cacheRead"`
+	CacheWrite             float64                      `json:"cacheWrite"`
+	TotalTokens            float64                      `json:"totalTokens"`
+	OrchestrationInput     float64                      `json:"orchestrationInput"`
+	OrchestrationOutput    float64                      `json:"orchestrationOutput"`
+	OrchestrationCacheRead float64                      `json:"orchestrationCacheRead"`
+	PremiumRequests        float64                      `json:"premiumRequests"`
+	Cost                   float64                      `json:"cost"`
+	SubagentCost           float64                      `json:"subagentCost"`
+	AdvisorCost            float64                      `json:"advisorCost"`
+	AdvisorCostState       SessionUsageAdvisorCostState `json:"advisorCostState"`
+}
+
+func (v *SessionUsage) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SessionUsage", v.decodeFrom)
+}
+
+func (v *SessionUsage) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SessionUsage
+	d := fieldDecoder{raw: raw, owner: "SessionUsage"}
+	d.required("input", &out.Input)
+	d.required("output", &out.Output)
+	d.required("cacheRead", &out.CacheRead)
+	d.required("cacheWrite", &out.CacheWrite)
+	d.required("totalTokens", &out.TotalTokens)
+	d.required("orchestrationInput", &out.OrchestrationInput)
+	d.required("orchestrationOutput", &out.OrchestrationOutput)
+	d.required("orchestrationCacheRead", &out.OrchestrationCacheRead)
+	d.required("premiumRequests", &out.PremiumRequests)
+	d.required("cost", &out.Cost)
+	d.required("subagentCost", &out.SubagentCost)
+	d.required("advisorCost", &out.AdvisorCost)
+	d.required("advisorCostState", &out.AdvisorCostState)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type SessionUsageAdvisorCostState string
+
+const (
+	SessionUsageAdvisorCostStateReady       SessionUsageAdvisorCostState = "ready"
+	SessionUsageAdvisorCostStateRestoring   SessionUsageAdvisorCostState = "restoring"
+	SessionUsageAdvisorCostStateUnavailable SessionUsageAdvisorCostState = "unavailable"
+)
+
+func (v *SessionUsageAdvisorCostState) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SessionUsageAdvisorCostState")
+	if err != nil {
+		return err
+	}
+	switch value := SessionUsageAdvisorCostState(s); value {
+	case SessionUsageAdvisorCostStateReady, SessionUsageAdvisorCostStateRestoring, SessionUsageAdvisorCostStateUnavailable:
+		*v = value
+		return nil
+	}
+	return unknownValue("SessionUsageAdvisorCostState", s)
 }
 
 type ChatModeSetting string
@@ -2080,16 +2257,17 @@ func (v *RoleResolution) decodeFrom(raw map[string]json.RawMessage) error {
 }
 
 type RoleInfo struct {
-	ID         string          `json:"id"`
-	Alias      string          `json:"alias"`
-	Name       string          `json:"name"`
-	Section    RoleInfoSection `json:"section"`
-	Source     RoleInfoSource  `json:"source"`
-	Patterns   []string        `json:"patterns"`
-	Hidden     bool            `json:"hidden"`
-	Tag        *string         `json:"tag,omitempty"`
-	Configured *string         `json:"configured,omitempty"`
-	Resolved   *RoleResolution `json:"resolved,omitempty"`
+	ID          string          `json:"id"`
+	Alias       string          `json:"alias"`
+	Name        string          `json:"name"`
+	Section     RoleInfoSection `json:"section"`
+	Source      RoleInfoSource  `json:"source"`
+	Patterns    []string        `json:"patterns"`
+	Hidden      bool            `json:"hidden"`
+	Description *string         `json:"description,omitempty"`
+	Tag         *string         `json:"tag,omitempty"`
+	Configured  *string         `json:"configured,omitempty"`
+	Resolved    *RoleResolution `json:"resolved,omitempty"`
 }
 
 func (v *RoleInfo) UnmarshalJSON(data []byte) error {
@@ -2106,6 +2284,7 @@ func (v *RoleInfo) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("source", &out.Source)
 	d.required("patterns", &out.Patterns)
 	d.required("hidden", &out.Hidden)
+	d.optional("description", &out.Description)
 	d.optional("tag", &out.Tag)
 	d.optional("configured", &out.Configured)
 	d.optional("resolved", &out.Resolved)
@@ -2170,6 +2349,224 @@ func (v *RolesResult) decodeFrom(raw map[string]json.RawMessage) error {
 	d := fieldDecoder{raw: raw, owner: "RolesResult"}
 	d.required("roles", &out.Roles)
 	d.optional("activeRole", &out.ActiveRole)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ModelSelectorPerformanceSource string
+
+const (
+	ModelSelectorPerformanceSourceMeasured ModelSelectorPerformanceSource = "measured"
+	ModelSelectorPerformanceSourceCatalog  ModelSelectorPerformanceSource = "catalog"
+)
+
+func (v *ModelSelectorPerformanceSource) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "ModelSelectorPerformanceSource")
+	if err != nil {
+		return err
+	}
+	switch value := ModelSelectorPerformanceSource(s); value {
+	case ModelSelectorPerformanceSourceMeasured, ModelSelectorPerformanceSourceCatalog:
+		*v = value
+		return nil
+	}
+	return unknownValue("ModelSelectorPerformanceSource", s)
+}
+
+type ModelSelectorFacts struct {
+	Intelligence           *float64                        `json:"intelligence"`
+	TtftMs                 *float64                        `json:"ttftMs"`
+	TokensPerSecond        *float64                        `json:"tokensPerSecond"`
+	ContextWindow          *float64                        `json:"contextWindow"`
+	EffectiveContextWindow *float64                        `json:"effectiveContextWindow"`
+	InputCostPerMillion    *float64                        `json:"inputCostPerMillion"`
+	OutputCostPerMillion   *float64                        `json:"outputCostPerMillion"`
+	PerformanceSource      *ModelSelectorPerformanceSource `json:"performanceSource"`
+	ServiceTier            *string                         `json:"serviceTier"`
+}
+
+func (v *ModelSelectorFacts) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelSelectorFacts", v.decodeFrom)
+}
+
+func (v *ModelSelectorFacts) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelSelectorFacts
+	d := fieldDecoder{raw: raw, owner: "ModelSelectorFacts"}
+	d.nullable("intelligence", &out.Intelligence)
+	d.nullable("ttftMs", &out.TtftMs)
+	d.nullable("tokensPerSecond", &out.TokensPerSecond)
+	d.nullable("contextWindow", &out.ContextWindow)
+	d.nullable("effectiveContextWindow", &out.EffectiveContextWindow)
+	d.nullable("inputCostPerMillion", &out.InputCostPerMillion)
+	d.nullable("outputCostPerMillion", &out.OutputCostPerMillion)
+	d.nullable("performanceSource", &out.PerformanceSource)
+	d.nullable("serviceTier", &out.ServiceTier)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ModelSelectorItem struct {
+	Selector         string             `json:"selector"`
+	Provider         string             `json:"provider"`
+	ID               string             `json:"id"`
+	Name             string             `json:"name"`
+	ResolvedSelector *string            `json:"resolvedSelector"`
+	Facts            ModelSelectorFacts `json:"facts"`
+	Description      *string            `json:"description,omitempty"`
+}
+
+func (v *ModelSelectorItem) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelSelectorItem", v.decodeFrom)
+}
+
+func (v *ModelSelectorItem) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelSelectorItem
+	d := fieldDecoder{raw: raw, owner: "ModelSelectorItem"}
+	d.required("selector", &out.Selector)
+	d.required("provider", &out.Provider)
+	d.required("id", &out.ID)
+	d.required("name", &out.Name)
+	d.nullable("resolvedSelector", &out.ResolvedSelector)
+	d.required("facts", &out.Facts)
+	d.optional("description", &out.Description)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ModelSelectorResult struct {
+	Items []ModelSelectorItem `json:"items"`
+	Roles []ModelSelectorItem `json:"roles"`
+	Error *string             `json:"error"`
+}
+
+func (v *ModelSelectorResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelSelectorResult", v.decodeFrom)
+}
+
+func (v *ModelSelectorResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelSelectorResult
+	d := fieldDecoder{raw: raw, owner: "ModelSelectorResult"}
+	d.required("items", &out.Items)
+	d.required("roles", &out.Roles)
+	d.nullable("error", &out.Error)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ModelEffortSelection struct {
+	Mode     ModelEffortSelectionMode `json:"mode"`
+	Level    *ThinkingLevel           `json:"level,omitempty"`
+	Allowed  []string                 `json:"allowed,omitempty"`
+	Selector *string                  `json:"selector,omitempty"`
+}
+
+func (v *ModelEffortSelection) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelEffortSelection", v.decodeFrom)
+}
+
+func (v *ModelEffortSelection) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelEffortSelection
+	d := fieldDecoder{raw: raw, owner: "ModelEffortSelection"}
+	d.required("mode", &out.Mode)
+	d.optional("level", &out.Level)
+	d.optional("allowed", &out.Allowed)
+	d.optional("selector", &out.Selector)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ModelEffortSelectionMode string
+
+const (
+	ModelEffortSelectionModeFixed   ModelEffortSelectionMode = "fixed"
+	ModelEffortSelectionModeAuto    ModelEffortSelectionMode = "auto"
+	ModelEffortSelectionModeInherit ModelEffortSelectionMode = "inherit"
+)
+
+func (v *ModelEffortSelectionMode) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "ModelEffortSelectionMode")
+	if err != nil {
+		return err
+	}
+	switch value := ModelEffortSelectionMode(s); value {
+	case ModelEffortSelectionModeFixed, ModelEffortSelectionModeAuto, ModelEffortSelectionModeInherit:
+		*v = value
+		return nil
+	}
+	return unknownValue("ModelEffortSelectionMode", s)
+}
+
+type ModelEffortRule struct {
+	Selector string   `json:"selector"`
+	Allowed  []string `json:"allowed"`
+}
+
+func (v *ModelEffortRule) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelEffortRule", v.decodeFrom)
+}
+
+func (v *ModelEffortRule) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelEffortRule
+	d := fieldDecoder{raw: raw, owner: "ModelEffortRule"}
+	d.required("selector", &out.Selector)
+	d.required("allowed", &out.Allowed)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ModelRoleConfigurationValue struct {
+	Selector *string               `json:"selector"`
+	Effort   *ModelEffortSelection `json:"effort"`
+}
+
+func (v *ModelRoleConfigurationValue) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelRoleConfigurationValue", v.decodeFrom)
+}
+
+func (v *ModelRoleConfigurationValue) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelRoleConfigurationValue
+	d := fieldDecoder{raw: raw, owner: "ModelRoleConfigurationValue"}
+	d.nullable("selector", &out.Selector)
+	d.nullable("effort", &out.Effort)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type ModelEffortRuleScopes struct {
+	Global  []ModelEffortRule `json:"global"`
+	Project []ModelEffortRule `json:"project"`
+}
+
+func (v *ModelEffortRuleScopes) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelEffortRuleScopes", v.decodeFrom)
+}
+
+func (v *ModelEffortRuleScopes) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelEffortRuleScopes
+	d := fieldDecoder{raw: raw, owner: "ModelEffortRuleScopes"}
+	d.nullable("global", &out.Global)
+	d.nullable("project", &out.Project)
 	if d.err != nil {
 		return d.err
 	}
@@ -3779,6 +4176,8 @@ type SessionState struct {
 	InterruptMode         InterruptMode    `json:"interruptMode"`
 	SessionFile           *string          `json:"sessionFile,omitempty"`
 	SessionName           *string          `json:"sessionName,omitempty"`
+	ApprovalMode          *ApprovalMode    `json:"approvalMode,omitempty"`
+	SessionUsage          *SessionUsage    `json:"sessionUsage,omitempty"`
 	AutoCompactionEnabled bool             `json:"autoCompactionEnabled"`
 	FastModeEnabled       bool             `json:"fastModeEnabled"`
 	FastModeActive        bool             `json:"fastModeActive"`
@@ -3829,6 +4228,8 @@ func (v *SessionState) decodeFrom(raw map[string]json.RawMessage) error {
 	d.defaulted("interruptMode", &out.InterruptMode, `"immediate"`)
 	d.optional("sessionFile", &out.SessionFile)
 	d.optional("sessionName", &out.SessionName)
+	d.optional("approvalMode", &out.ApprovalMode)
+	d.optional("sessionUsage", &out.SessionUsage)
 	d.defaulted("autoCompactionEnabled", &out.AutoCompactionEnabled, `false`)
 	d.defaulted("fastModeEnabled", &out.FastModeEnabled, `false`)
 	d.defaulted("fastModeActive", &out.FastModeActive, `false`)
@@ -4385,6 +4786,36 @@ func (v *SessionEntries) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type JournalPage struct {
+	Entries      []map[string]json.RawMessage `json:"entries"`
+	SessionID    string                       `json:"sessionId"`
+	SessionFile  string                       `json:"sessionFile"`
+	LeafID       *string                      `json:"leafId"`
+	TotalEntries int64                        `json:"totalEntries"`
+	// Opaque cursor for the next page; absent on the last page.
+	NextCursor *string `json:"nextCursor,omitempty"`
+}
+
+func (v *JournalPage) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JournalPage", v.decodeFrom)
+}
+
+func (v *JournalPage) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JournalPage
+	d := fieldDecoder{raw: raw, owner: "JournalPage"}
+	d.required("entries", &out.Entries)
+	d.required("sessionId", &out.SessionID)
+	d.required("sessionFile", &out.SessionFile)
+	d.nullable("leafId", &out.LeafID)
+	d.required("totalEntries", &out.TotalEntries)
+	d.optional("nextCursor", &out.NextCursor)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 // Raw session tree roots.
 type SessionTree struct {
 	Tree   []map[string]json.RawMessage `json:"tree"`
@@ -4405,6 +4836,208 @@ func (v *SessionTree) decodeFrom(raw map[string]json.RawMessage) error {
 	}
 	*v = out
 	return nil
+}
+
+type TreeAskOptionNote struct {
+	Option string `json:"option"`
+	Note   string `json:"note"`
+}
+
+func (v *TreeAskOptionNote) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskOptionNote", v.decodeFrom)
+}
+
+func (v *TreeAskOptionNote) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskOptionNote
+	d := fieldDecoder{raw: raw, owner: "TreeAskOptionNote"}
+	d.required("option", &out.Option)
+	d.required("note", &out.Note)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type TreeAskQuestionResult struct {
+	ID              string              `json:"id"`
+	Question        string              `json:"question"`
+	Options         []string            `json:"options"`
+	Multi           bool                `json:"multi"`
+	SelectedOptions []string            `json:"selectedOptions"`
+	CustomInput     *string             `json:"customInput,omitempty"`
+	Note            *string             `json:"note,omitempty"`
+	OptionNotes     []TreeAskOptionNote `json:"optionNotes,omitempty"`
+	TimedOut        *bool               `json:"timedOut,omitempty"`
+}
+
+func (v *TreeAskQuestionResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskQuestionResult", v.decodeFrom)
+}
+
+func (v *TreeAskQuestionResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskQuestionResult
+	d := fieldDecoder{raw: raw, owner: "TreeAskQuestionResult"}
+	d.required("id", &out.ID)
+	d.required("question", &out.Question)
+	d.required("options", &out.Options)
+	d.required("multi", &out.Multi)
+	d.required("selectedOptions", &out.SelectedOptions)
+	d.optional("customInput", &out.CustomInput)
+	d.optional("note", &out.Note)
+	d.optional("optionNotes", &out.OptionNotes)
+	d.optional("timedOut", &out.TimedOut)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type TreeAskDetails struct {
+	Question        *string                 `json:"question,omitempty"`
+	Options         []string                `json:"options,omitempty"`
+	Multi           *bool                   `json:"multi,omitempty"`
+	SelectedOptions []string                `json:"selectedOptions,omitempty"`
+	CustomInput     *string                 `json:"customInput,omitempty"`
+	Note            *string                 `json:"note,omitempty"`
+	OptionNotes     []TreeAskOptionNote     `json:"optionNotes,omitempty"`
+	TimedOut        *bool                   `json:"timedOut,omitempty"`
+	Results         []TreeAskQuestionResult `json:"results,omitempty"`
+	ChatRedirect    *bool                   `json:"chatRedirect,omitempty"`
+	Questions       []string                `json:"questions,omitempty"`
+}
+
+func (v *TreeAskDetails) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskDetails", v.decodeFrom)
+}
+
+func (v *TreeAskDetails) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskDetails
+	d := fieldDecoder{raw: raw, owner: "TreeAskDetails"}
+	d.optional("question", &out.Question)
+	d.optional("options", &out.Options)
+	d.optional("multi", &out.Multi)
+	d.optional("selectedOptions", &out.SelectedOptions)
+	d.optional("customInput", &out.CustomInput)
+	d.optional("note", &out.Note)
+	d.optional("optionNotes", &out.OptionNotes)
+	d.optional("timedOut", &out.TimedOut)
+	d.optional("results", &out.Results)
+	d.optional("chatRedirect", &out.ChatRedirect)
+	d.optional("questions", &out.Questions)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type TreeAskReanswer struct {
+	Content []UserContent   `json:"content"`
+	Details *TreeAskDetails `json:"details,omitempty"`
+	IsError *bool           `json:"isError,omitempty"`
+}
+
+func (v *TreeAskReanswer) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskReanswer", v.decodeFrom)
+}
+
+func (v *TreeAskReanswer) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskReanswer
+	d := fieldDecoder{raw: raw, owner: "TreeAskReanswer"}
+	d.required("content", &out.Content)
+	d.optional("details", &out.Details)
+	d.optional("isError", &out.IsError)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type TreeAskReopen struct {
+	ToolCallID string        `json:"toolCallId"`
+	Questions  []AskQuestion `json:"questions"`
+}
+
+func (v *TreeAskReopen) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskReopen", v.decodeFrom)
+}
+
+func (v *TreeAskReopen) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskReopen
+	d := fieldDecoder{raw: raw, owner: "TreeAskReopen"}
+	d.required("toolCallId", &out.ToolCallID)
+	d.required("questions", &out.Questions)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type NavigateTreeResult struct {
+	SessionID            string                     `json:"sessionId"`
+	LeafID               *string                    `json:"leafId"`
+	Outcome              NavigateTreeResultOutcome  `json:"outcome"`
+	Cancelled            bool                       `json:"cancelled"`
+	SessionFile          *string                    `json:"sessionFile,omitempty"`
+	Aborted              *bool                      `json:"aborted,omitempty"`
+	EditorText           *string                    `json:"editorText,omitempty"`
+	EditorImages         []ImageContent             `json:"editorImages,omitempty"`
+	SummaryEntry         map[string]json.RawMessage `json:"summaryEntry,omitempty"`
+	ReopenAsk            *TreeAskReopen             `json:"reopenAsk,omitempty"`
+	AskReanswerCommitted *bool                      `json:"askReanswerCommitted,omitempty"`
+	ResumeToken          *string                    `json:"resumeToken,omitempty"`
+}
+
+func (v *NavigateTreeResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "NavigateTreeResult", v.decodeFrom)
+}
+
+func (v *NavigateTreeResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out NavigateTreeResult
+	d := fieldDecoder{raw: raw, owner: "NavigateTreeResult"}
+	d.required("sessionId", &out.SessionID)
+	d.nullable("leafId", &out.LeafID)
+	d.required("outcome", &out.Outcome)
+	d.required("cancelled", &out.Cancelled)
+	d.optional("sessionFile", &out.SessionFile)
+	d.optional("aborted", &out.Aborted)
+	d.optional("editorText", &out.EditorText)
+	d.optional("editorImages", &out.EditorImages)
+	d.optional("summaryEntry", &out.SummaryEntry)
+	d.optional("reopenAsk", &out.ReopenAsk)
+	d.optional("askReanswerCommitted", &out.AskReanswerCommitted)
+	d.optional("resumeToken", &out.ResumeToken)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type NavigateTreeResultOutcome string
+
+const (
+	NavigateTreeResultOutcomeNavigated NavigateTreeResultOutcome = "navigated"
+	NavigateTreeResultOutcomeUnchanged NavigateTreeResultOutcome = "unchanged"
+	NavigateTreeResultOutcomeCancelled NavigateTreeResultOutcome = "cancelled"
+	NavigateTreeResultOutcomeAskReopen NavigateTreeResultOutcome = "ask_reopen"
+)
+
+func (v *NavigateTreeResultOutcome) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "NavigateTreeResultOutcome")
+	if err != nil {
+		return err
+	}
+	switch value := NavigateTreeResultOutcome(s); value {
+	case NavigateTreeResultOutcomeNavigated, NavigateTreeResultOutcomeUnchanged, NavigateTreeResultOutcomeCancelled, NavigateTreeResultOutcomeAskReopen:
+		*v = value
+		return nil
+	}
+	return unknownValue("NavigateTreeResultOutcome", s)
 }
 
 type SubagentSnapshot struct {
@@ -4913,6 +5546,28 @@ func (v *ChatModeChangedEvent) decodeFrom(raw map[string]json.RawMessage) error 
 func (v ChatModeChangedEvent) MarshalJSON() ([]byte, error) {
 	type plain ChatModeChangedEvent
 	return encodeObject(plain(v), `"type":"chat_mode_changed"`, nil)
+}
+
+type ApprovalModeChangedEvent struct{}
+
+func (v *ApprovalModeChangedEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ApprovalModeChangedEvent", v.decodeFrom)
+}
+
+func (v *ApprovalModeChangedEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ApprovalModeChangedEvent
+	d := fieldDecoder{raw: raw, owner: "ApprovalModeChangedEvent"}
+	d.constant("type", "approval_mode_changed")
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v ApprovalModeChangedEvent) MarshalJSON() ([]byte, error) {
+	type plain ApprovalModeChangedEvent
+	return encodeObject(plain(v), `"type":"approval_mode_changed"`, nil)
 }
 
 type MixtureHopEndEvent struct {
@@ -6332,6 +6987,50 @@ func (v ModelChangedEvent) MarshalJSON() ([]byte, error) {
 	return encodeObject(plain(v), `"type":"model_changed"`, nil)
 }
 
+type ThemesConfigurationChangedEvent struct{}
+
+func (v *ThemesConfigurationChangedEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ThemesConfigurationChangedEvent", v.decodeFrom)
+}
+
+func (v *ThemesConfigurationChangedEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ThemesConfigurationChangedEvent
+	d := fieldDecoder{raw: raw, owner: "ThemesConfigurationChangedEvent"}
+	d.constant("type", "themes_configuration_changed")
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v ThemesConfigurationChangedEvent) MarshalJSON() ([]byte, error) {
+	type plain ThemesConfigurationChangedEvent
+	return encodeObject(plain(v), `"type":"themes_configuration_changed"`, nil)
+}
+
+type ModelsConfigurationChangedEvent struct{}
+
+func (v *ModelsConfigurationChangedEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelsConfigurationChangedEvent", v.decodeFrom)
+}
+
+func (v *ModelsConfigurationChangedEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelsConfigurationChangedEvent
+	d := fieldDecoder{raw: raw, owner: "ModelsConfigurationChangedEvent"}
+	d.constant("type", "models_configuration_changed")
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v ModelsConfigurationChangedEvent) MarshalJSON() ([]byte, error) {
+	type plain ModelsConfigurationChangedEvent
+	return encodeObject(plain(v), `"type":"models_configuration_changed"`, nil)
+}
+
 type ConfigWarningsChangedEvent struct{}
 
 func (v *ConfigWarningsChangedEvent) UnmarshalJSON(data []byte) error {
@@ -6534,7 +7233,7 @@ type ThinkingLevelChangedEvent struct {
 	// The user's selector when it differs from the effective level.
 	Configured *ConfiguredThinkingLevel `json:"configured,omitempty"`
 	// The level `auto` resolved to this turn, once classified.
-	Resolved *Effort `json:"resolved,omitempty"`
+	Resolved *ThinkingEffort `json:"resolved,omitempty"`
 }
 
 func (v *ThinkingLevelChangedEvent) UnmarshalJSON(data []byte) error {
@@ -6631,47 +7330,50 @@ type RpcAgentEventVariant interface {
 	isRpcAgentEvent()
 }
 
-func (AdvisorMessageEvent) isRpcAgentEvent()         {}
-func (RunOwnersJoinedEvent) isRpcAgentEvent()        {}
-func (RunOwnersSkippedEvent) isRpcAgentEvent()       {}
-func (ChatModeChangedEvent) isRpcAgentEvent()        {}
-func (MixtureHopEndEvent) isRpcAgentEvent()          {}
-func (MixtureDecisionEvent) isRpcAgentEvent()        {}
-func (MixtureLimitEvent) isRpcAgentEvent()           {}
-func (MixtureCheckpointEvent) isRpcAgentEvent()      {}
-func (MixtureRunEndEvent) isRpcAgentEvent()          {}
-func (AgentStartEvent) isRpcAgentEvent()             {}
-func (AgentEndEvent) isRpcAgentEvent()               {}
-func (TurnStartEvent) isRpcAgentEvent()              {}
-func (TurnEndEvent) isRpcAgentEvent()                {}
-func (MessageStartEvent) isRpcAgentEvent()           {}
-func (MessageUpdateEvent) isRpcAgentEvent()          {}
-func (MessageEndEvent) isRpcAgentEvent()             {}
-func (ToolExecutionStartEvent) isRpcAgentEvent()     {}
-func (ToolExecutionUpdateEvent) isRpcAgentEvent()    {}
-func (ToolStreamUpdateEvent) isRpcAgentEvent()       {}
-func (ToolExecutionEndEvent) isRpcAgentEvent()       {}
-func (AutoCompactionStartEvent) isRpcAgentEvent()    {}
-func (AutoCompactionEndEvent) isRpcAgentEvent()      {}
-func (AutoRetryStartEvent) isRpcAgentEvent()         {}
-func (AutoRetryEndEvent) isRpcAgentEvent()           {}
-func (CacheWarmingStartEvent) isRpcAgentEvent()      {}
-func (CacheWarmingEndEvent) isRpcAgentEvent()        {}
-func (RetryFallbackAppliedEvent) isRpcAgentEvent()   {}
-func (RetryFallbackSucceededEvent) isRpcAgentEvent() {}
-func (ModelChangedEvent) isRpcAgentEvent()           {}
-func (ConfigWarningsChangedEvent) isRpcAgentEvent()  {}
-func (AdvisorCostChangedEvent) isRpcAgentEvent()     {}
-func (AdvisorYieldedEvent) isRpcAgentEvent()         {}
-func (TtsrTriggeredEvent) isRpcAgentEvent()          {}
-func (TodoReminderEvent) isRpcAgentEvent()           {}
-func (TodoAutoClearEvent) isRpcAgentEvent()          {}
-func (IrcMessageEvent) isRpcAgentEvent()             {}
-func (NoticeEvent) isRpcAgentEvent()                 {}
-func (ThinkingLevelChangedEvent) isRpcAgentEvent()   {}
-func (GoalUpdatedEvent) isRpcAgentEvent()            {}
-func (QueueUpdateEvent) isRpcAgentEvent()            {}
-func (UnknownNotification) isRpcAgentEvent()         {}
+func (AdvisorMessageEvent) isRpcAgentEvent()             {}
+func (RunOwnersJoinedEvent) isRpcAgentEvent()            {}
+func (RunOwnersSkippedEvent) isRpcAgentEvent()           {}
+func (ChatModeChangedEvent) isRpcAgentEvent()            {}
+func (ApprovalModeChangedEvent) isRpcAgentEvent()        {}
+func (MixtureHopEndEvent) isRpcAgentEvent()              {}
+func (MixtureDecisionEvent) isRpcAgentEvent()            {}
+func (MixtureLimitEvent) isRpcAgentEvent()               {}
+func (MixtureCheckpointEvent) isRpcAgentEvent()          {}
+func (MixtureRunEndEvent) isRpcAgentEvent()              {}
+func (AgentStartEvent) isRpcAgentEvent()                 {}
+func (AgentEndEvent) isRpcAgentEvent()                   {}
+func (TurnStartEvent) isRpcAgentEvent()                  {}
+func (TurnEndEvent) isRpcAgentEvent()                    {}
+func (MessageStartEvent) isRpcAgentEvent()               {}
+func (MessageUpdateEvent) isRpcAgentEvent()              {}
+func (MessageEndEvent) isRpcAgentEvent()                 {}
+func (ToolExecutionStartEvent) isRpcAgentEvent()         {}
+func (ToolExecutionUpdateEvent) isRpcAgentEvent()        {}
+func (ToolStreamUpdateEvent) isRpcAgentEvent()           {}
+func (ToolExecutionEndEvent) isRpcAgentEvent()           {}
+func (AutoCompactionStartEvent) isRpcAgentEvent()        {}
+func (AutoCompactionEndEvent) isRpcAgentEvent()          {}
+func (AutoRetryStartEvent) isRpcAgentEvent()             {}
+func (AutoRetryEndEvent) isRpcAgentEvent()               {}
+func (CacheWarmingStartEvent) isRpcAgentEvent()          {}
+func (CacheWarmingEndEvent) isRpcAgentEvent()            {}
+func (RetryFallbackAppliedEvent) isRpcAgentEvent()       {}
+func (RetryFallbackSucceededEvent) isRpcAgentEvent()     {}
+func (ModelChangedEvent) isRpcAgentEvent()               {}
+func (ModelsConfigurationChangedEvent) isRpcAgentEvent() {}
+func (ThemesConfigurationChangedEvent) isRpcAgentEvent() {}
+func (ConfigWarningsChangedEvent) isRpcAgentEvent()      {}
+func (AdvisorCostChangedEvent) isRpcAgentEvent()         {}
+func (AdvisorYieldedEvent) isRpcAgentEvent()             {}
+func (TtsrTriggeredEvent) isRpcAgentEvent()              {}
+func (TodoReminderEvent) isRpcAgentEvent()               {}
+func (TodoAutoClearEvent) isRpcAgentEvent()              {}
+func (IrcMessageEvent) isRpcAgentEvent()                 {}
+func (NoticeEvent) isRpcAgentEvent()                     {}
+func (ThinkingLevelChangedEvent) isRpcAgentEvent()       {}
+func (GoalUpdatedEvent) isRpcAgentEvent()                {}
+func (QueueUpdateEvent) isRpcAgentEvent()                {}
+func (UnknownNotification) isRpcAgentEvent()             {}
 
 func (v RpcAgentEvent) MarshalJSON() ([]byte, error) {
 	return encodeVariant("RpcAgentEvent", v.Value)
@@ -6700,6 +7402,8 @@ func (v *RpcAgentEvent) decodeFrom(raw map[string]json.RawMessage) error {
 		value, err = decodeVariant[RunOwnersSkippedEvent](raw)
 	case "chat_mode_changed":
 		value, err = decodeVariant[ChatModeChangedEvent](raw)
+	case "approval_mode_changed":
+		value, err = decodeVariant[ApprovalModeChangedEvent](raw)
 	case "mixture_hop_end":
 		value, err = decodeVariant[MixtureHopEndEvent](raw)
 	case "mixture_decision":
@@ -6750,6 +7454,10 @@ func (v *RpcAgentEvent) decodeFrom(raw map[string]json.RawMessage) error {
 		value, err = decodeVariant[RetryFallbackSucceededEvent](raw)
 	case "model_changed":
 		value, err = decodeVariant[ModelChangedEvent](raw)
+	case "models_configuration_changed":
+		value, err = decodeVariant[ModelsConfigurationChangedEvent](raw)
+	case "themes_configuration_changed":
+		value, err = decodeVariant[ThemesConfigurationChangedEvent](raw)
 	case "config_warnings_changed":
 		value, err = decodeVariant[ConfigWarningsChangedEvent](raw)
 	case "advisor_cost_changed":
@@ -7718,6 +8426,8 @@ type InputUiRequest struct {
 	Title       string  `json:"title"`
 	Placeholder *string `json:"placeholder,omitempty"`
 	Timeout     *int64  `json:"timeout,omitempty"`
+	Secret      *bool   `json:"secret,omitempty"`
+	LoginID     *string `json:"loginId,omitempty"`
 }
 
 func (v *InputUiRequest) UnmarshalJSON(data []byte) error {
@@ -7733,6 +8443,8 @@ func (v *InputUiRequest) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("title", &out.Title)
 	d.optional("placeholder", &out.Placeholder)
 	d.optional("timeout", &out.Timeout)
+	d.optional("secret", &out.Secret)
+	d.optional("loginId", &out.LoginID)
 	if d.err != nil {
 		return d.err
 	}
@@ -7841,6 +8553,7 @@ type NotifyUiRequest struct {
 	ID         string      `json:"id"`
 	Message    string      `json:"message"`
 	NotifyType *NotifyType `json:"notifyType,omitempty"`
+	LoginID    *string     `json:"loginId,omitempty"`
 }
 
 func (v *NotifyUiRequest) UnmarshalJSON(data []byte) error {
@@ -7855,6 +8568,7 @@ func (v *NotifyUiRequest) decodeFrom(raw map[string]json.RawMessage) error {
 	d.constant("method", "notify")
 	d.required("message", &out.Message)
 	d.optional("notifyType", &out.NotifyType)
+	d.optional("loginId", &out.LoginID)
 	if d.err != nil {
 		return d.err
 	}
@@ -7991,6 +8705,7 @@ type OpenUrlUiRequest struct {
 	// Short loopback redirect to `url`; the truncation-safe copy target.
 	LaunchURL    *string `json:"launchUrl,omitempty"`
 	Instructions *string `json:"instructions,omitempty"`
+	LoginID      *string `json:"loginId,omitempty"`
 }
 
 func (v *OpenUrlUiRequest) UnmarshalJSON(data []byte) error {
@@ -8006,6 +8721,7 @@ func (v *OpenUrlUiRequest) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("url", &out.URL)
 	d.optional("launchUrl", &out.LaunchURL)
 	d.optional("instructions", &out.Instructions)
+	d.optional("loginId", &out.LoginID)
 	if d.err != nil {
 		return d.err
 	}
@@ -8730,66 +9446,69 @@ type RpcNotificationVariant interface {
 	isRpcNotification()
 }
 
-func (ReadyEvent) isRpcNotification()                   {}
-func (PromptResultEvent) isRpcNotification()            {}
-func (SessionSettledEvent) isRpcNotification()          {}
-func (ExtensionError) isRpcNotification()               {}
-func (ExtensionUiRequest) isRpcNotification()           {}
-func (AvailableCommandsUpdateEvent) isRpcNotification() {}
-func (SubagentLifecycleEvent) isRpcNotification()       {}
-func (SubagentProgressEvent) isRpcNotification()        {}
-func (SubagentEvent) isRpcNotification()                {}
-func (LivePhaseEvent) isRpcNotification()               {}
-func (LiveLevelsEvent) isRpcNotification()              {}
-func (LiveTranscriptEvent) isRpcNotification()          {}
-func (LiveEndEvent) isRpcNotification()                 {}
-func (BtwDeltaEvent) isRpcNotification()                {}
-func (BtwRecordEvent) isRpcNotification()               {}
-func (CommandOutputEvent) isRpcNotification()           {}
-func (SessionInfoUpdateEvent) isRpcNotification()       {}
-func (ConfigUpdateEvent) isRpcNotification()            {}
-func (RpcFrameErrorEvent) isRpcNotification()           {}
-func (AdvisorMessageEvent) isRpcNotification()          {}
-func (RunOwnersJoinedEvent) isRpcNotification()         {}
-func (RunOwnersSkippedEvent) isRpcNotification()        {}
-func (ChatModeChangedEvent) isRpcNotification()         {}
-func (MixtureHopEndEvent) isRpcNotification()           {}
-func (MixtureDecisionEvent) isRpcNotification()         {}
-func (MixtureLimitEvent) isRpcNotification()            {}
-func (MixtureCheckpointEvent) isRpcNotification()       {}
-func (MixtureRunEndEvent) isRpcNotification()           {}
-func (AgentStartEvent) isRpcNotification()              {}
-func (AgentEndEvent) isRpcNotification()                {}
-func (TurnStartEvent) isRpcNotification()               {}
-func (TurnEndEvent) isRpcNotification()                 {}
-func (MessageStartEvent) isRpcNotification()            {}
-func (MessageUpdateEvent) isRpcNotification()           {}
-func (MessageEndEvent) isRpcNotification()              {}
-func (ToolExecutionStartEvent) isRpcNotification()      {}
-func (ToolExecutionUpdateEvent) isRpcNotification()     {}
-func (ToolStreamUpdateEvent) isRpcNotification()        {}
-func (ToolExecutionEndEvent) isRpcNotification()        {}
-func (AutoCompactionStartEvent) isRpcNotification()     {}
-func (AutoCompactionEndEvent) isRpcNotification()       {}
-func (AutoRetryStartEvent) isRpcNotification()          {}
-func (AutoRetryEndEvent) isRpcNotification()            {}
-func (CacheWarmingStartEvent) isRpcNotification()       {}
-func (CacheWarmingEndEvent) isRpcNotification()         {}
-func (RetryFallbackAppliedEvent) isRpcNotification()    {}
-func (RetryFallbackSucceededEvent) isRpcNotification()  {}
-func (ModelChangedEvent) isRpcNotification()            {}
-func (ConfigWarningsChangedEvent) isRpcNotification()   {}
-func (AdvisorCostChangedEvent) isRpcNotification()      {}
-func (AdvisorYieldedEvent) isRpcNotification()          {}
-func (TtsrTriggeredEvent) isRpcNotification()           {}
-func (TodoReminderEvent) isRpcNotification()            {}
-func (TodoAutoClearEvent) isRpcNotification()           {}
-func (IrcMessageEvent) isRpcNotification()              {}
-func (NoticeEvent) isRpcNotification()                  {}
-func (ThinkingLevelChangedEvent) isRpcNotification()    {}
-func (GoalUpdatedEvent) isRpcNotification()             {}
-func (QueueUpdateEvent) isRpcNotification()             {}
-func (UnknownNotification) isRpcNotification()          {}
+func (ReadyEvent) isRpcNotification()                      {}
+func (PromptResultEvent) isRpcNotification()               {}
+func (SessionSettledEvent) isRpcNotification()             {}
+func (ExtensionError) isRpcNotification()                  {}
+func (ExtensionUiRequest) isRpcNotification()              {}
+func (AvailableCommandsUpdateEvent) isRpcNotification()    {}
+func (SubagentLifecycleEvent) isRpcNotification()          {}
+func (SubagentProgressEvent) isRpcNotification()           {}
+func (SubagentEvent) isRpcNotification()                   {}
+func (LivePhaseEvent) isRpcNotification()                  {}
+func (LiveLevelsEvent) isRpcNotification()                 {}
+func (LiveTranscriptEvent) isRpcNotification()             {}
+func (LiveEndEvent) isRpcNotification()                    {}
+func (BtwDeltaEvent) isRpcNotification()                   {}
+func (BtwRecordEvent) isRpcNotification()                  {}
+func (CommandOutputEvent) isRpcNotification()              {}
+func (SessionInfoUpdateEvent) isRpcNotification()          {}
+func (ConfigUpdateEvent) isRpcNotification()               {}
+func (RpcFrameErrorEvent) isRpcNotification()              {}
+func (AdvisorMessageEvent) isRpcNotification()             {}
+func (RunOwnersJoinedEvent) isRpcNotification()            {}
+func (RunOwnersSkippedEvent) isRpcNotification()           {}
+func (ChatModeChangedEvent) isRpcNotification()            {}
+func (ApprovalModeChangedEvent) isRpcNotification()        {}
+func (MixtureHopEndEvent) isRpcNotification()              {}
+func (MixtureDecisionEvent) isRpcNotification()            {}
+func (MixtureLimitEvent) isRpcNotification()               {}
+func (MixtureCheckpointEvent) isRpcNotification()          {}
+func (MixtureRunEndEvent) isRpcNotification()              {}
+func (AgentStartEvent) isRpcNotification()                 {}
+func (AgentEndEvent) isRpcNotification()                   {}
+func (TurnStartEvent) isRpcNotification()                  {}
+func (TurnEndEvent) isRpcNotification()                    {}
+func (MessageStartEvent) isRpcNotification()               {}
+func (MessageUpdateEvent) isRpcNotification()              {}
+func (MessageEndEvent) isRpcNotification()                 {}
+func (ToolExecutionStartEvent) isRpcNotification()         {}
+func (ToolExecutionUpdateEvent) isRpcNotification()        {}
+func (ToolStreamUpdateEvent) isRpcNotification()           {}
+func (ToolExecutionEndEvent) isRpcNotification()           {}
+func (AutoCompactionStartEvent) isRpcNotification()        {}
+func (AutoCompactionEndEvent) isRpcNotification()          {}
+func (AutoRetryStartEvent) isRpcNotification()             {}
+func (AutoRetryEndEvent) isRpcNotification()               {}
+func (CacheWarmingStartEvent) isRpcNotification()          {}
+func (CacheWarmingEndEvent) isRpcNotification()            {}
+func (RetryFallbackAppliedEvent) isRpcNotification()       {}
+func (RetryFallbackSucceededEvent) isRpcNotification()     {}
+func (ModelChangedEvent) isRpcNotification()               {}
+func (ModelsConfigurationChangedEvent) isRpcNotification() {}
+func (ThemesConfigurationChangedEvent) isRpcNotification() {}
+func (ConfigWarningsChangedEvent) isRpcNotification()      {}
+func (AdvisorCostChangedEvent) isRpcNotification()         {}
+func (AdvisorYieldedEvent) isRpcNotification()             {}
+func (TtsrTriggeredEvent) isRpcNotification()              {}
+func (TodoReminderEvent) isRpcNotification()               {}
+func (TodoAutoClearEvent) isRpcNotification()              {}
+func (IrcMessageEvent) isRpcNotification()                 {}
+func (NoticeEvent) isRpcNotification()                     {}
+func (ThinkingLevelChangedEvent) isRpcNotification()       {}
+func (GoalUpdatedEvent) isRpcNotification()                {}
+func (QueueUpdateEvent) isRpcNotification()                {}
+func (UnknownNotification) isRpcNotification()             {}
 
 func (v RpcNotification) MarshalJSON() ([]byte, error) {
 	return encodeVariant("RpcNotification", v.Value)
@@ -8849,6 +9568,8 @@ func (v *RpcNotification) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[RunOwnersSkippedEvent](raw)
 	case "chat_mode_changed":
 		value, err = decodeVariant[ChatModeChangedEvent](raw)
+	case "approval_mode_changed":
+		value, err = decodeVariant[ApprovalModeChangedEvent](raw)
 	case "mixture_hop_end":
 		value, err = decodeVariant[MixtureHopEndEvent](raw)
 	case "mixture_decision":
@@ -8899,6 +9620,10 @@ func (v *RpcNotification) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[RetryFallbackSucceededEvent](raw)
 	case "model_changed":
 		value, err = decodeVariant[ModelChangedEvent](raw)
+	case "models_configuration_changed":
+		value, err = decodeVariant[ModelsConfigurationChangedEvent](raw)
+	case "themes_configuration_changed":
+		value, err = decodeVariant[ThemesConfigurationChangedEvent](raw)
 	case "config_warnings_changed":
 		value, err = decodeVariant[ConfigWarningsChangedEvent](raw)
 	case "advisor_cost_changed":
@@ -8942,71 +9667,74 @@ type RpcServerFrameVariant interface {
 	isRpcServerFrame()
 }
 
-func (RpcResponse) isRpcServerFrame()                  {}
-func (HostToolCallRequest) isRpcServerFrame()          {}
-func (HostToolCancelRequest) isRpcServerFrame()        {}
-func (HostUriRequest) isRpcServerFrame()               {}
-func (HostUriCancelRequest) isRpcServerFrame()         {}
-func (ReadyEvent) isRpcServerFrame()                   {}
-func (PromptResultEvent) isRpcServerFrame()            {}
-func (SessionSettledEvent) isRpcServerFrame()          {}
-func (ExtensionError) isRpcServerFrame()               {}
-func (ExtensionUiRequest) isRpcServerFrame()           {}
-func (AvailableCommandsUpdateEvent) isRpcServerFrame() {}
-func (SubagentLifecycleEvent) isRpcServerFrame()       {}
-func (SubagentProgressEvent) isRpcServerFrame()        {}
-func (SubagentEvent) isRpcServerFrame()                {}
-func (LivePhaseEvent) isRpcServerFrame()               {}
-func (LiveLevelsEvent) isRpcServerFrame()              {}
-func (LiveTranscriptEvent) isRpcServerFrame()          {}
-func (LiveEndEvent) isRpcServerFrame()                 {}
-func (BtwDeltaEvent) isRpcServerFrame()                {}
-func (BtwRecordEvent) isRpcServerFrame()               {}
-func (CommandOutputEvent) isRpcServerFrame()           {}
-func (SessionInfoUpdateEvent) isRpcServerFrame()       {}
-func (ConfigUpdateEvent) isRpcServerFrame()            {}
-func (RpcFrameErrorEvent) isRpcServerFrame()           {}
-func (AdvisorMessageEvent) isRpcServerFrame()          {}
-func (RunOwnersJoinedEvent) isRpcServerFrame()         {}
-func (RunOwnersSkippedEvent) isRpcServerFrame()        {}
-func (ChatModeChangedEvent) isRpcServerFrame()         {}
-func (MixtureHopEndEvent) isRpcServerFrame()           {}
-func (MixtureDecisionEvent) isRpcServerFrame()         {}
-func (MixtureLimitEvent) isRpcServerFrame()            {}
-func (MixtureCheckpointEvent) isRpcServerFrame()       {}
-func (MixtureRunEndEvent) isRpcServerFrame()           {}
-func (AgentStartEvent) isRpcServerFrame()              {}
-func (AgentEndEvent) isRpcServerFrame()                {}
-func (TurnStartEvent) isRpcServerFrame()               {}
-func (TurnEndEvent) isRpcServerFrame()                 {}
-func (MessageStartEvent) isRpcServerFrame()            {}
-func (MessageUpdateEvent) isRpcServerFrame()           {}
-func (MessageEndEvent) isRpcServerFrame()              {}
-func (ToolExecutionStartEvent) isRpcServerFrame()      {}
-func (ToolExecutionUpdateEvent) isRpcServerFrame()     {}
-func (ToolStreamUpdateEvent) isRpcServerFrame()        {}
-func (ToolExecutionEndEvent) isRpcServerFrame()        {}
-func (AutoCompactionStartEvent) isRpcServerFrame()     {}
-func (AutoCompactionEndEvent) isRpcServerFrame()       {}
-func (AutoRetryStartEvent) isRpcServerFrame()          {}
-func (AutoRetryEndEvent) isRpcServerFrame()            {}
-func (CacheWarmingStartEvent) isRpcServerFrame()       {}
-func (CacheWarmingEndEvent) isRpcServerFrame()         {}
-func (RetryFallbackAppliedEvent) isRpcServerFrame()    {}
-func (RetryFallbackSucceededEvent) isRpcServerFrame()  {}
-func (ModelChangedEvent) isRpcServerFrame()            {}
-func (ConfigWarningsChangedEvent) isRpcServerFrame()   {}
-func (AdvisorCostChangedEvent) isRpcServerFrame()      {}
-func (AdvisorYieldedEvent) isRpcServerFrame()          {}
-func (TtsrTriggeredEvent) isRpcServerFrame()           {}
-func (TodoReminderEvent) isRpcServerFrame()            {}
-func (TodoAutoClearEvent) isRpcServerFrame()           {}
-func (IrcMessageEvent) isRpcServerFrame()              {}
-func (NoticeEvent) isRpcServerFrame()                  {}
-func (ThinkingLevelChangedEvent) isRpcServerFrame()    {}
-func (GoalUpdatedEvent) isRpcServerFrame()             {}
-func (QueueUpdateEvent) isRpcServerFrame()             {}
-func (UnknownNotification) isRpcServerFrame()          {}
+func (RpcResponse) isRpcServerFrame()                     {}
+func (HostToolCallRequest) isRpcServerFrame()             {}
+func (HostToolCancelRequest) isRpcServerFrame()           {}
+func (HostUriRequest) isRpcServerFrame()                  {}
+func (HostUriCancelRequest) isRpcServerFrame()            {}
+func (ReadyEvent) isRpcServerFrame()                      {}
+func (PromptResultEvent) isRpcServerFrame()               {}
+func (SessionSettledEvent) isRpcServerFrame()             {}
+func (ExtensionError) isRpcServerFrame()                  {}
+func (ExtensionUiRequest) isRpcServerFrame()              {}
+func (AvailableCommandsUpdateEvent) isRpcServerFrame()    {}
+func (SubagentLifecycleEvent) isRpcServerFrame()          {}
+func (SubagentProgressEvent) isRpcServerFrame()           {}
+func (SubagentEvent) isRpcServerFrame()                   {}
+func (LivePhaseEvent) isRpcServerFrame()                  {}
+func (LiveLevelsEvent) isRpcServerFrame()                 {}
+func (LiveTranscriptEvent) isRpcServerFrame()             {}
+func (LiveEndEvent) isRpcServerFrame()                    {}
+func (BtwDeltaEvent) isRpcServerFrame()                   {}
+func (BtwRecordEvent) isRpcServerFrame()                  {}
+func (CommandOutputEvent) isRpcServerFrame()              {}
+func (SessionInfoUpdateEvent) isRpcServerFrame()          {}
+func (ConfigUpdateEvent) isRpcServerFrame()               {}
+func (RpcFrameErrorEvent) isRpcServerFrame()              {}
+func (AdvisorMessageEvent) isRpcServerFrame()             {}
+func (RunOwnersJoinedEvent) isRpcServerFrame()            {}
+func (RunOwnersSkippedEvent) isRpcServerFrame()           {}
+func (ChatModeChangedEvent) isRpcServerFrame()            {}
+func (ApprovalModeChangedEvent) isRpcServerFrame()        {}
+func (MixtureHopEndEvent) isRpcServerFrame()              {}
+func (MixtureDecisionEvent) isRpcServerFrame()            {}
+func (MixtureLimitEvent) isRpcServerFrame()               {}
+func (MixtureCheckpointEvent) isRpcServerFrame()          {}
+func (MixtureRunEndEvent) isRpcServerFrame()              {}
+func (AgentStartEvent) isRpcServerFrame()                 {}
+func (AgentEndEvent) isRpcServerFrame()                   {}
+func (TurnStartEvent) isRpcServerFrame()                  {}
+func (TurnEndEvent) isRpcServerFrame()                    {}
+func (MessageStartEvent) isRpcServerFrame()               {}
+func (MessageUpdateEvent) isRpcServerFrame()              {}
+func (MessageEndEvent) isRpcServerFrame()                 {}
+func (ToolExecutionStartEvent) isRpcServerFrame()         {}
+func (ToolExecutionUpdateEvent) isRpcServerFrame()        {}
+func (ToolStreamUpdateEvent) isRpcServerFrame()           {}
+func (ToolExecutionEndEvent) isRpcServerFrame()           {}
+func (AutoCompactionStartEvent) isRpcServerFrame()        {}
+func (AutoCompactionEndEvent) isRpcServerFrame()          {}
+func (AutoRetryStartEvent) isRpcServerFrame()             {}
+func (AutoRetryEndEvent) isRpcServerFrame()               {}
+func (CacheWarmingStartEvent) isRpcServerFrame()          {}
+func (CacheWarmingEndEvent) isRpcServerFrame()            {}
+func (RetryFallbackAppliedEvent) isRpcServerFrame()       {}
+func (RetryFallbackSucceededEvent) isRpcServerFrame()     {}
+func (ModelChangedEvent) isRpcServerFrame()               {}
+func (ModelsConfigurationChangedEvent) isRpcServerFrame() {}
+func (ThemesConfigurationChangedEvent) isRpcServerFrame() {}
+func (ConfigWarningsChangedEvent) isRpcServerFrame()      {}
+func (AdvisorCostChangedEvent) isRpcServerFrame()         {}
+func (AdvisorYieldedEvent) isRpcServerFrame()             {}
+func (TtsrTriggeredEvent) isRpcServerFrame()              {}
+func (TodoReminderEvent) isRpcServerFrame()               {}
+func (TodoAutoClearEvent) isRpcServerFrame()              {}
+func (IrcMessageEvent) isRpcServerFrame()                 {}
+func (NoticeEvent) isRpcServerFrame()                     {}
+func (ThinkingLevelChangedEvent) isRpcServerFrame()       {}
+func (GoalUpdatedEvent) isRpcServerFrame()                {}
+func (QueueUpdateEvent) isRpcServerFrame()                {}
+func (UnknownNotification) isRpcServerFrame()             {}
 
 func (v RpcServerFrame) MarshalJSON() ([]byte, error) {
 	return encodeVariant("RpcServerFrame", v.Value)
@@ -9076,6 +9804,8 @@ func (v *RpcServerFrame) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[RunOwnersSkippedEvent](raw)
 	case "chat_mode_changed":
 		value, err = decodeVariant[ChatModeChangedEvent](raw)
+	case "approval_mode_changed":
+		value, err = decodeVariant[ApprovalModeChangedEvent](raw)
 	case "mixture_hop_end":
 		value, err = decodeVariant[MixtureHopEndEvent](raw)
 	case "mixture_decision":
@@ -9126,6 +9856,10 @@ func (v *RpcServerFrame) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[RetryFallbackSucceededEvent](raw)
 	case "model_changed":
 		value, err = decodeVariant[ModelChangedEvent](raw)
+	case "models_configuration_changed":
+		value, err = decodeVariant[ModelsConfigurationChangedEvent](raw)
+	case "themes_configuration_changed":
+		value, err = decodeVariant[ThemesConfigurationChangedEvent](raw)
 	case "config_warnings_changed":
 		value, err = decodeVariant[ConfigWarningsChangedEvent](raw)
 	case "advisor_cost_changed":
@@ -9299,6 +10033,81 @@ func (v *SetRoleResult) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type GetModelsConfigurationResult struct {
+	Providers             []map[string]json.RawMessage            `json:"providers"`
+	Models                []map[string]json.RawMessage            `json:"models"`
+	Roles                 []map[string]json.RawMessage            `json:"roles"`
+	RoleStorage           GetModelsConfigurationResultRoleStorage `json:"roleStorage"`
+	EffortMode            GetModelsConfigurationResultEffortMode  `json:"effortMode"`
+	EffortRules           []ModelEffortRule                       `json:"effortRules"`
+	EffortRulesProvenance string                                  `json:"effortRulesProvenance"`
+	EffortRuleScopes      ModelEffortRuleScopes                   `json:"effortRuleScopes"`
+	EffortChoices         []string                                `json:"effortChoices"`
+}
+
+func (v *GetModelsConfigurationResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "GetModelsConfigurationResult", v.decodeFrom)
+}
+
+func (v *GetModelsConfigurationResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out GetModelsConfigurationResult
+	d := fieldDecoder{raw: raw, owner: "GetModelsConfigurationResult"}
+	d.required("providers", &out.Providers)
+	d.required("models", &out.Models)
+	d.required("roles", &out.Roles)
+	d.required("roleStorage", &out.RoleStorage)
+	d.required("effortMode", &out.EffortMode)
+	d.required("effortRules", &out.EffortRules)
+	d.required("effortRulesProvenance", &out.EffortRulesProvenance)
+	d.required("effortRuleScopes", &out.EffortRuleScopes)
+	d.required("effortChoices", &out.EffortChoices)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type GetModelsConfigurationResultRoleStorage string
+
+const (
+	GetModelsConfigurationResultRoleStorageGlobal  GetModelsConfigurationResultRoleStorage = "global"
+	GetModelsConfigurationResultRoleStorageProject GetModelsConfigurationResultRoleStorage = "project"
+)
+
+func (v *GetModelsConfigurationResultRoleStorage) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "GetModelsConfigurationResultRoleStorage")
+	if err != nil {
+		return err
+	}
+	switch value := GetModelsConfigurationResultRoleStorage(s); value {
+	case GetModelsConfigurationResultRoleStorageGlobal, GetModelsConfigurationResultRoleStorageProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("GetModelsConfigurationResultRoleStorage", s)
+}
+
+type GetModelsConfigurationResultEffortMode string
+
+const (
+	GetModelsConfigurationResultEffortModeReplacement GetModelsConfigurationResultEffortMode = "replacement"
+	GetModelsConfigurationResultEffortModeLegacy      GetModelsConfigurationResultEffortMode = "legacy"
+)
+
+func (v *GetModelsConfigurationResultEffortMode) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "GetModelsConfigurationResultEffortMode")
+	if err != nil {
+		return err
+	}
+	switch value := GetModelsConfigurationResultEffortMode(s); value {
+	case GetModelsConfigurationResultEffortModeReplacement, GetModelsConfigurationResultEffortModeLegacy:
+		*v = value
+		return nil
+	}
+	return unknownValue("GetModelsConfigurationResultEffortMode", s)
+}
+
 type GetUsageResult struct {
 	GeneratedAt int64                 `json:"generatedAt"`
 	Reports     []ProviderUsageReport `json:"reports"`
@@ -9415,6 +10224,28 @@ func (v *GetAvailableCommandsResult) decodeFrom(raw map[string]json.RawMessage) 
 	}
 	*v = out
 	return nil
+}
+
+type ResumeTreeResult struct{}
+
+func (v *ResumeTreeResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ResumeTreeResult", v.decodeFrom)
+}
+
+func (v *ResumeTreeResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ResumeTreeResult
+	d := fieldDecoder{raw: raw, owner: "ResumeTreeResult"}
+	d.constant("resumed", true)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v ResumeTreeResult) MarshalJSON() ([]byte, error) {
+	type plain ResumeTreeResult
+	return encodeObject(plain(v), `"resumed":true`, nil)
 }
 
 type SetTodosResult struct {
@@ -10009,10 +10840,15 @@ func (c Commands) OpenSession(ctx context.Context, p OpenSessionCommand) (OpenSe
 	return out, err
 }
 
+// GetStateCommand holds the parameters of "get_state".
+type GetStateCommand struct {
+	IncludeDump *bool `json:"includeDump,omitempty"`
+}
+
 // GetState sends "get_state": Snapshot the session state.
-func (c Commands) GetState(ctx context.Context) (SessionState, error) {
+func (c Commands) GetState(ctx context.Context, p GetStateCommand) (SessionState, error) {
 	var out SessionState
-	err := c.call(ctx, "get_state", nil, 0, &out)
+	err := c.call(ctx, "get_state", p, 0, &out)
 	return out, err
 }
 
@@ -10055,6 +10891,80 @@ func (c Commands) GetRoles(ctx context.Context) (RolesResult, error) {
 	return out, err
 }
 
+// GetThemesConfiguration sends "get_themes_configuration": Read native theme discovery and scoped selections.
+func (c Commands) GetThemesConfiguration(ctx context.Context) (ThemesConfiguration, error) {
+	var out ThemesConfiguration
+	err := c.call(ctx, "get_themes_configuration", nil, 0, &out)
+	return out, err
+}
+
+// UpdateThemeCommand holds the parameters of "update_theme".
+type UpdateThemeCommand struct {
+	Appearance UpdateThemeCommandAppearance `json:"appearance"`
+	Scope      UpdateThemeCommandScope      `json:"scope"`
+	Name       *string                      `json:"name"`
+	Expected   *string                      `json:"expected"`
+}
+
+// UpdateTheme sends "update_theme": Set or inherit one native theme slot with an expected scoped value.
+func (c Commands) UpdateTheme(ctx context.Context, p UpdateThemeCommand) (ThemesConfiguration, error) {
+	var out ThemesConfiguration
+	err := c.call(ctx, "update_theme", p, 0, &out)
+	return out, err
+}
+
+type UpdateThemeCommandAppearance string
+
+const (
+	UpdateThemeCommandAppearanceDark  UpdateThemeCommandAppearance = "dark"
+	UpdateThemeCommandAppearanceLight UpdateThemeCommandAppearance = "light"
+)
+
+func (v *UpdateThemeCommandAppearance) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "UpdateThemeCommandAppearance")
+	if err != nil {
+		return err
+	}
+	switch value := UpdateThemeCommandAppearance(s); value {
+	case UpdateThemeCommandAppearanceDark, UpdateThemeCommandAppearanceLight:
+		*v = value
+		return nil
+	}
+	return unknownValue("UpdateThemeCommandAppearance", s)
+}
+
+type UpdateThemeCommandScope string
+
+const (
+	UpdateThemeCommandScopeGlobal  UpdateThemeCommandScope = "global"
+	UpdateThemeCommandScopeProject UpdateThemeCommandScope = "project"
+)
+
+func (v *UpdateThemeCommandScope) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "UpdateThemeCommandScope")
+	if err != nil {
+		return err
+	}
+	switch value := UpdateThemeCommandScope(s); value {
+	case UpdateThemeCommandScopeGlobal, UpdateThemeCommandScopeProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("UpdateThemeCommandScope", s)
+}
+
+// QueryModelSelectorCommand holds the parameters of "query_model_selector".
+type QueryModelSelectorCommand struct {
+	Query string `json:"query"`
+}
+
+// QueryModelSelector sends "query_model_selector": Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.
+func (c Commands) QueryModelSelector(ctx context.Context, p QueryModelSelectorCommand) (ModelSelectorResult, error) {
+	var out ModelSelectorResult
+	err := c.call(ctx, "query_model_selector", p, 0, &out)
+	return out, err
+}
+
 // SetRoleCommand holds the parameters of "set_role".
 type SetRoleCommand struct {
 	Role string `json:"role"`
@@ -10065,6 +10975,151 @@ func (c Commands) SetRole(ctx context.Context, p SetRoleCommand) (SetRoleResult,
 	var out SetRoleResult
 	err := c.call(ctx, "set_role", p, 0, &out)
 	return out, err
+}
+
+// GetModelsConfiguration sends "get_models_configuration": Read the native provider catalog, scoped model roles, and effort rules.
+func (c Commands) GetModelsConfiguration(ctx context.Context) (GetModelsConfigurationResult, error) {
+	var out GetModelsConfigurationResult
+	err := c.call(ctx, "get_models_configuration", nil, 0, &out)
+	return out, err
+}
+
+// SetModelRoleConfigurationCommand holds the parameters of "set_model_role_configuration".
+type SetModelRoleConfigurationCommand struct {
+	Role     string                                `json:"role"`
+	Scope    SetModelRoleConfigurationCommandScope `json:"scope"`
+	Expected ModelRoleConfigurationValue           `json:"expected"`
+	Selector *string                               `json:"selector,omitempty"`
+	Effort   *ModelEffortSelection                 `json:"effort,omitempty"`
+}
+
+// SetModelRoleConfiguration sends "set_model_role_configuration": Save or clear one scoped role selector and effort atomically, rejecting a stale expected value.
+func (c Commands) SetModelRoleConfiguration(ctx context.Context, p SetModelRoleConfigurationCommand) error {
+	return c.call(ctx, "set_model_role_configuration", p, 0, nil)
+}
+
+type SetModelRoleConfigurationCommandScope string
+
+const (
+	SetModelRoleConfigurationCommandScopeGlobal  SetModelRoleConfigurationCommandScope = "global"
+	SetModelRoleConfigurationCommandScopeProject SetModelRoleConfigurationCommandScope = "project"
+)
+
+func (v *SetModelRoleConfigurationCommandScope) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SetModelRoleConfigurationCommandScope")
+	if err != nil {
+		return err
+	}
+	switch value := SetModelRoleConfigurationCommandScope(s); value {
+	case SetModelRoleConfigurationCommandScopeGlobal, SetModelRoleConfigurationCommandScopeProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("SetModelRoleConfigurationCommandScope", s)
+}
+
+// SetModelRoleStorageCommand holds the parameters of "set_model_role_storage".
+type SetModelRoleStorageCommand struct {
+	Value    SetModelRoleStorageCommandValue    `json:"value"`
+	Expected SetModelRoleStorageCommandExpected `json:"expected"`
+}
+
+// SetModelRoleStorage sends "set_model_role_storage": Choose native global or project role storage, rejecting a stale preference.
+func (c Commands) SetModelRoleStorage(ctx context.Context, p SetModelRoleStorageCommand) error {
+	return c.call(ctx, "set_model_role_storage", p, 0, nil)
+}
+
+type SetModelRoleStorageCommandValue string
+
+const (
+	SetModelRoleStorageCommandValueGlobal  SetModelRoleStorageCommandValue = "global"
+	SetModelRoleStorageCommandValueProject SetModelRoleStorageCommandValue = "project"
+)
+
+func (v *SetModelRoleStorageCommandValue) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SetModelRoleStorageCommandValue")
+	if err != nil {
+		return err
+	}
+	switch value := SetModelRoleStorageCommandValue(s); value {
+	case SetModelRoleStorageCommandValueGlobal, SetModelRoleStorageCommandValueProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("SetModelRoleStorageCommandValue", s)
+}
+
+type SetModelRoleStorageCommandExpected string
+
+const (
+	SetModelRoleStorageCommandExpectedGlobal  SetModelRoleStorageCommandExpected = "global"
+	SetModelRoleStorageCommandExpectedProject SetModelRoleStorageCommandExpected = "project"
+)
+
+func (v *SetModelRoleStorageCommandExpected) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SetModelRoleStorageCommandExpected")
+	if err != nil {
+		return err
+	}
+	switch value := SetModelRoleStorageCommandExpected(s); value {
+	case SetModelRoleStorageCommandExpectedGlobal, SetModelRoleStorageCommandExpectedProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("SetModelRoleStorageCommandExpected", s)
+}
+
+// SetEffortRulesCommand holds the parameters of "set_effort_rules".
+type SetEffortRulesCommand struct {
+	Scope    SetEffortRulesCommandScope `json:"scope"`
+	Expected []ModelEffortRule          `json:"expected"`
+	Rules    []ModelEffortRule          `json:"rules,omitempty"`
+}
+
+// SetEffortRules sends "set_effort_rules": Save or clear native implicit effort rules in one scope, rejecting a stale expected value.
+func (c Commands) SetEffortRules(ctx context.Context, p SetEffortRulesCommand) error {
+	return c.call(ctx, "set_effort_rules", p, 0, nil)
+}
+
+type SetEffortRulesCommandScope string
+
+const (
+	SetEffortRulesCommandScopeGlobal  SetEffortRulesCommandScope = "global"
+	SetEffortRulesCommandScopeProject SetEffortRulesCommandScope = "project"
+)
+
+func (v *SetEffortRulesCommandScope) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SetEffortRulesCommandScope")
+	if err != nil {
+		return err
+	}
+	switch value := SetEffortRulesCommandScope(s); value {
+	case SetEffortRulesCommandScopeGlobal, SetEffortRulesCommandScopeProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("SetEffortRulesCommandScope", s)
+}
+
+// SetProviderAPIKeyCommand holds the parameters of "set_provider_api_key".
+type SetProviderAPIKeyCommand struct {
+	ProviderID string `json:"providerId"`
+	APIKey     string `json:"apiKey"`
+}
+
+// SetProviderAPIKey sends "set_provider_api_key": Upsert a key in the native credential store without replacing other accounts.
+func (c Commands) SetProviderAPIKey(ctx context.Context, p SetProviderAPIKeyCommand) error {
+	return c.call(ctx, "set_provider_api_key", p, 0, nil)
+}
+
+// CancelLoginCommand holds the parameters of "cancel_login".
+type CancelLoginCommand struct {
+	LoginID string `json:"loginId"`
+}
+
+// CancelLogin sends "cancel_login": Cancel this connection's active login request.
+func (c Commands) CancelLogin(ctx context.Context, p CancelLoginCommand) error {
+	return c.call(ctx, "cancel_login", p, 0, nil)
 }
 
 // GetUsageCommand holds the parameters of "get_usage".
@@ -10222,10 +11277,99 @@ func (c Commands) GetEntries(ctx context.Context, p GetEntriesCommand) (SessionE
 	return out, err
 }
 
+// GetEntriesPageCommand holds the parameters of "get_entries_page".
+type GetEntriesPageCommand struct {
+	Scope     *GetEntriesPageCommandScope     `json:"scope,omitempty"`
+	Direction *GetEntriesPageCommandDirection `json:"direction,omitempty"`
+	Cursor    *string                         `json:"cursor,omitempty"`
+	Limit     *int64                          `json:"limit,omitempty"`
+}
+
+// GetEntriesPage sends "get_entries_page": Read one canonical native journal or selected-branch page.
+func (c Commands) GetEntriesPage(ctx context.Context, p GetEntriesPageCommand) (JournalPage, error) {
+	var out JournalPage
+	err := c.call(ctx, "get_entries_page", p, 0, &out)
+	return out, err
+}
+
+type GetEntriesPageCommandScope string
+
+const (
+	GetEntriesPageCommandScopeJournal GetEntriesPageCommandScope = "journal"
+	GetEntriesPageCommandScopeBranch  GetEntriesPageCommandScope = "branch"
+)
+
+func (v *GetEntriesPageCommandScope) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "GetEntriesPageCommandScope")
+	if err != nil {
+		return err
+	}
+	switch value := GetEntriesPageCommandScope(s); value {
+	case GetEntriesPageCommandScopeJournal, GetEntriesPageCommandScopeBranch:
+		*v = value
+		return nil
+	}
+	return unknownValue("GetEntriesPageCommandScope", s)
+}
+
+type GetEntriesPageCommandDirection string
+
+const (
+	GetEntriesPageCommandDirectionForward  GetEntriesPageCommandDirection = "forward"
+	GetEntriesPageCommandDirectionBackward GetEntriesPageCommandDirection = "backward"
+)
+
+func (v *GetEntriesPageCommandDirection) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "GetEntriesPageCommandDirection")
+	if err != nil {
+		return err
+	}
+	switch value := GetEntriesPageCommandDirection(s); value {
+	case GetEntriesPageCommandDirectionForward, GetEntriesPageCommandDirectionBackward:
+		*v = value
+		return nil
+	}
+	return unknownValue("GetEntriesPageCommandDirection", s)
+}
+
 // GetTree sends "get_tree": Read the raw session tree.
 func (c Commands) GetTree(ctx context.Context) (SessionTree, error) {
 	var out SessionTree
 	err := c.call(ctx, "get_tree", nil, 0, &out)
+	return out, err
+}
+
+// NavigateTreeCommand holds the parameters of "navigate_tree".
+type NavigateTreeCommand struct {
+	TargetID            string           `json:"targetId"`
+	ExpectedSessionID   string           `json:"expectedSessionId"`
+	ExpectedSessionFile *string          `json:"expectedSessionFile"`
+	ExpectedLeafID      *string          `json:"expectedLeafId"`
+	Summarize           *bool            `json:"summarize,omitempty"`
+	CustomInstructions  *string          `json:"customInstructions,omitempty"`
+	AllowAskReopen      *bool            `json:"allowAskReopen,omitempty"`
+	ReanswerAskResult   *TreeAskReanswer `json:"reanswerAskResult,omitempty"`
+}
+
+// NavigateTree sends "navigate_tree": Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken.
+func (c Commands) NavigateTree(ctx context.Context, p NavigateTreeCommand) (NavigateTreeResult, error) {
+	var out NavigateTreeResult
+	err := c.call(ctx, "navigate_tree", p, 0, &out)
+	return out, err
+}
+
+// ResumeTreeCommand holds the parameters of "resume_tree".
+type ResumeTreeCommand struct {
+	ResumeToken         string  `json:"resumeToken"`
+	ExpectedSessionID   string  `json:"expectedSessionId"`
+	ExpectedSessionFile *string `json:"expectedSessionFile"`
+	ExpectedLeafID      *string `json:"expectedLeafId"`
+}
+
+// ResumeTree sends "resume_tree": Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript.
+func (c Commands) ResumeTree(ctx context.Context, p ResumeTreeCommand) (ResumeTreeResult, error) {
+	var out ResumeTreeResult
+	err := c.call(ctx, "resume_tree", p, 0, &out)
 	return out, err
 }
 

@@ -323,7 +323,11 @@ export class SettingsList implements Component {
 				focused: state.filterFocused === true && this.#options.typeToSearch !== false,
 				cursor: state.filterCursor,
 			});
-			if (typeof state.submenuId === "string" && this.selectItem(state.submenuId)) {
+			if (
+				typeof state.submenuId === "string" &&
+				this.selectItem(state.submenuId) &&
+				this.getSelectedItem()?.submenu
+			) {
 				this.#activateItem();
 				// #activateItem reassigns the submenu that the reset above narrowed to null.
 				const submenu = this.#submenuComponent as Component | null;
@@ -497,7 +501,7 @@ export class SettingsList implements Component {
 		const item = this.getSelectedItem();
 		if (item?.id === this.#lastNotifiedSelectionId) return;
 		this.#lastNotifiedSelectionId = item?.id;
-		this.onSelectionChange?.(item);
+		if (!this.#restoring) this.onSelectionChange?.(item);
 	}
 
 	/** Resize the visible viewport (fullscreen hosts call this every render). */

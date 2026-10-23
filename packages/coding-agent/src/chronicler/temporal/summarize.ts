@@ -55,11 +55,19 @@ export interface ChronicleSummarizer {
 	): Promise<SummaryOutput>;
 }
 
-function words(tokens: number): number {
-	return Math.max(8, Math.floor(tokens * 0.7));
+export interface SummaryPolicy {
+	wordsPerToken: number;
+	minWords: number;
+	responseMinTokens?: number;
+	responseMultiplier?: number;
+	responsePaddingTokens?: number;
 }
 
-export function createSummarizer(client: ChronicleModelClient): ChronicleSummarizer {
+export function createSummarizer(
+	client: ChronicleModelClient,
+	policy: SummaryPolicy = { wordsPerToken: 0.7, minWords: 8 },
+): ChronicleSummarizer {
+	const words = (tokens: number): number => Math.max(policy.minWords, Math.floor(tokens * policy.wordsPerToken));
 	return {
 		identity: client.identity,
 		async summarize(node, children, budget, signal) {
@@ -73,8 +81,10 @@ export function createSummarizer(client: ChronicleModelClient): ChronicleSummari
 				children: children.map(child => ({ ...child, projects: child.projects.join(", ") || "none" })),
 			});
 			const maxTokens = Math.max(
-				512,
-				(budget.overviewTokens + budget.childCeilingTokens * children.length) * 2 + 256,
+				policy.responseMinTokens ?? 512,
+				Math.ceil(
+					(budget.overviewTokens + budget.childCeilingTokens * children.length) * (policy.responseMultiplier ?? 2),
+				) + (policy.responsePaddingTokens ?? 256),
 			);
 			const reply = parseJsonObject(await client.complete(system, input, maxTokens, signal));
 			if (typeof reply.overview !== "string" || !Array.isArray(reply.children)) {

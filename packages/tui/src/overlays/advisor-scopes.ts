@@ -10,6 +10,7 @@ import {
 import { bottomBorder, divider, row, topBorder } from "../chrome/overlay-box";
 import { routeSgrMouseInput } from "../mouse";
 import { truncateToWidth } from "../utils";
+import { matchesKey } from "../keys";
 import { getSelectListTheme, theme } from "../theme";
 import { node, text } from "../native/describe";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
@@ -37,9 +38,11 @@ export interface AdvisorConfigFile {
 	doc: WatchdogConfigDoc;
 }
 
-export interface AdvisorScopeCallbacks extends Omit<AdvisorConfigCallbacks, "loadDoc" | "save"> {
+export interface AdvisorScopeCallbacks extends Omit<AdvisorConfigCallbacks, "loadDoc" | "save" | "openConfigFile"> {
 	loadFile: (path: string) => Promise<WatchdogConfigDoc>;
 	saveFile: (path: string, doc: WatchdogConfigDoc) => Promise<void>;
+	/** Edit the exact discovered file, not a scope's default path. */
+	openFile?: (path: string) => Promise<void>;
 }
 
 interface ScopeNavigationSnapshot {
@@ -173,6 +176,14 @@ export class AdvisorScopeOverlayComponent implements Component {
 		this.#cb.notify("Saved file state. Press a to apply it to live advisors.");
 	}
 
+	async #openSelectedFile(): Promise<void> {
+		const file = this.#selectedFile();
+		if (!file || !this.#cb.openFile) return;
+		await this.#cb.openFile(file.path);
+		file.doc = await this.#cb.loadFile(file.path);
+		this.#pendingApply = true;
+	}
+
 	async #select(value: string): Promise<void> {
 		if (value === "close") {
 			this.#cb.close();
@@ -216,7 +227,16 @@ export class AdvisorScopeOverlayComponent implements Component {
 			doc,
 			{
 				...this.#cb,
-				loadDoc: () => this.#cb.loadFile(file.path),
+				openConfigFile: this.#cb.openFile
+					? async () => {
+							await this.#cb.openFile?.(file.path);
+							this.#pendingApply = true;
+						}
+					: undefined,
+				loadDoc: async () => {
+					file.doc = await this.#cb.loadFile(file.path);
+					return file.doc;
+				},
 				save: async (_scope, next) => {
 					await this.#write(file, next);
 				},
@@ -255,7 +275,7 @@ export class AdvisorScopeOverlayComponent implements Component {
 			divider(width),
 			row(
 				truncateToWidth(
-					"j/k move · h/l or Tab panes · / filter · Space toggle file · Enter edit · a apply · Esc close",
+					`j/k move · h/l or Tab panes · / filter · Space toggle file · Enter edit${this.#cb.openFile ? " · Ctrl-G edit config file" : ""} · a apply · Esc close`,
 					width - 4,
 				),
 				width,
@@ -280,6 +300,7 @@ export class AdvisorScopeOverlayComponent implements Component {
 						pickerAction("confirm", "Edit", "enter", { primary: true }),
 						pickerAction("toggle", "Toggle file", "space"),
 						pickerAction("apply", "Apply", "a"),
+						...(this.#cb.openFile ? [pickerAction("edit-file", "Edit config file", "ctrl+g")] : []),
 						CLOSE_ACTION,
 					],
 				},
@@ -325,6 +346,10 @@ export class AdvisorScopeOverlayComponent implements Component {
 		}
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
+		if (!action && this.#cb.openFile && matchesKey(data, "ctrl+g")) {
+			this.#run(() => this.#openSelectedFile());
+			return;
+		}
 		if (action?.kind === "horizontal" || action?.kind === "context") {
 			this.#previewFocused = action.kind === "horizontal" ? action.delta > 0 : !this.#previewFocused;
 			this.#cb.requestRender();
@@ -370,6 +395,7 @@ export class AdvisorScopeOverlayComponent implements Component {
 		if (picked?.kind === "action") {
 			if (picked.act === "toggle") this.#run(() => this.#toggle());
 			else if (picked.act === "apply") this.#run(() => this.#select("apply"));
+			else if (picked.act === "edit-file" && this.#cb.openFile) this.#run(() => this.#openSelectedFile());
 			else routeSelectListPicker(this.#list, event);
 		} else if (picked) routeSelectListPicker(this.#list, event);
 		else this.#list.handleNativeEvent(event);

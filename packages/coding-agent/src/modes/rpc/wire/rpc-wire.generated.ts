@@ -327,6 +327,8 @@ export type AssistantMessageEvent = AssistantStartEvent | AssistantTextStartEven
 
 export type Effort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export type ThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 /** Thinking selector; `inherit` defers to a higher-level selector. */
 export type ThinkingLevel = "inherit" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -378,7 +380,42 @@ export interface ModelInfo {
 	compat?: Record<string, unknown>;
 }
 
+export interface ThemeSelection {
+	effective: string;
+	global: string | null;
+	project: string | null;
+	colors: Record<string, string>;
+}
+
+export interface ThemeSelections {
+	dark: ThemeSelection;
+	light: ThemeSelection;
+}
+
+export interface ThemesConfiguration {
+	themes: string[];
+	selection: ThemeSelections;
+}
+
 export type ApprovalHandler = "host" | "ui";
+
+export type ApprovalMode = "always-ask" | "write" | "yolo";
+
+export interface SessionUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	orchestrationInput: number;
+	orchestrationOutput: number;
+	orchestrationCacheRead: number;
+	premiumRequests: number;
+	cost: number;
+	subagentCost: number;
+	advisorCost: number;
+	advisorCostState: "ready" | "restoring" | "unavailable";
+}
 
 export type ChatModeSetting = "off" | "chat" | "erp" | "raw";
 
@@ -418,6 +455,7 @@ export interface RoleInfo {
 	source: "builtin" | "configured";
 	patterns: string[];
 	hidden: boolean;
+	description?: string;
 	tag?: string;
 	configured?: string;
 	resolved?: RoleResolution;
@@ -426,6 +464,58 @@ export interface RoleInfo {
 export interface RolesResult {
 	roles: RoleInfo[];
 	activeRole?: string;
+}
+
+export type ModelSelectorPerformanceSource = "measured" | "catalog";
+
+export interface ModelSelectorFacts {
+	intelligence: number | null;
+	ttftMs: number | null;
+	tokensPerSecond: number | null;
+	contextWindow: number | null;
+	effectiveContextWindow: number | null;
+	inputCostPerMillion: number | null;
+	outputCostPerMillion: number | null;
+	performanceSource: ModelSelectorPerformanceSource | null;
+	serviceTier: string | null;
+}
+
+export interface ModelSelectorItem {
+	selector: string;
+	provider: string;
+	id: string;
+	name: string;
+	resolvedSelector: string | null;
+	facts: ModelSelectorFacts;
+	description?: string;
+}
+
+export interface ModelSelectorResult {
+	items: ModelSelectorItem[];
+	roles: ModelSelectorItem[];
+	error: string | null;
+}
+
+export interface ModelEffortSelection {
+	mode: "fixed" | "auto" | "inherit";
+	level?: ThinkingLevel;
+	allowed?: string[];
+	selector?: string;
+}
+
+export interface ModelEffortRule {
+	selector: string;
+	allowed: string[];
+}
+
+export interface ModelRoleConfigurationValue {
+	selector: string | null;
+	effort: ModelEffortSelection | null;
+}
+
+export interface ModelEffortRuleScopes {
+	global: ModelEffortRule[] | null;
+	project: ModelEffortRule[] | null;
 }
 
 export interface ProviderUsageReport {
@@ -722,6 +812,8 @@ export interface SessionState {
 	interruptMode?: InterruptMode;
 	sessionFile?: string;
 	sessionName?: string;
+	approvalMode?: ApprovalMode;
+	sessionUsage?: SessionUsage;
 	autoCompactionEnabled?: boolean;
 	fastModeEnabled?: boolean;
 	fastModeActive?: boolean;
@@ -904,10 +996,77 @@ export interface SessionEntries {
 	leafId: string | null;
 }
 
+export interface JournalPage {
+	entries: Record<string, unknown>[];
+	sessionId: string;
+	sessionFile: string;
+	leafId: string | null;
+	totalEntries: number;
+	/** Opaque cursor for the next page; absent on the last page. */
+	nextCursor?: string;
+}
+
 /** Raw session tree roots. */
 export interface SessionTree {
 	tree: Record<string, unknown>[];
 	leafId: string | null;
+}
+
+export interface TreeAskOptionNote {
+	option: string;
+	note: string;
+}
+
+export interface TreeAskQuestionResult {
+	id: string;
+	question: string;
+	options: string[];
+	multi: boolean;
+	selectedOptions: string[];
+	customInput?: string;
+	note?: string;
+	optionNotes?: TreeAskOptionNote[];
+	timedOut?: boolean;
+}
+
+export interface TreeAskDetails {
+	question?: string;
+	options?: string[];
+	multi?: boolean;
+	selectedOptions?: string[];
+	customInput?: string;
+	note?: string;
+	optionNotes?: TreeAskOptionNote[];
+	timedOut?: boolean;
+	results?: TreeAskQuestionResult[];
+	chatRedirect?: boolean;
+	questions?: string[];
+}
+
+export interface TreeAskReanswer {
+	content: UserContent[];
+	details?: TreeAskDetails;
+	isError?: boolean;
+}
+
+export interface TreeAskReopen {
+	toolCallId: string;
+	questions: AskQuestion[];
+}
+
+export interface NavigateTreeResult {
+	sessionId: string;
+	leafId: string | null;
+	outcome: "navigated" | "unchanged" | "cancelled" | "ask_reopen";
+	cancelled: boolean;
+	sessionFile?: string;
+	aborted?: boolean;
+	editorText?: string;
+	editorImages?: ImageContent[];
+	summaryEntry?: Record<string, unknown>;
+	reopenAsk?: TreeAskReopen;
+	askReanswerCommitted?: boolean;
+	resumeToken?: string;
 }
 
 export interface SubagentSnapshot {
@@ -1029,6 +1188,10 @@ export interface ChatModeChangedEvent {
 	type: "chat_mode_changed";
 	mode: ChatModeSetting;
 	include: string;
+}
+
+export interface ApprovalModeChangedEvent {
+	type: "approval_mode_changed";
 }
 
 export interface MixtureHopEndEvent {
@@ -1351,6 +1514,14 @@ export interface ModelChangedEvent {
 	type: "model_changed";
 }
 
+export interface ThemesConfigurationChangedEvent {
+	type: "themes_configuration_changed";
+}
+
+export interface ModelsConfigurationChangedEvent {
+	type: "models_configuration_changed";
+}
+
 export interface ConfigWarningsChangedEvent {
 	type: "config_warnings_changed";
 }
@@ -1398,7 +1569,7 @@ export interface ThinkingLevelChangedEvent {
 	/** The user's selector when it differs from the effective level. */
 	configured?: ConfiguredThinkingLevel;
 	/** The level `auto` resolved to this turn, once classified. */
-	resolved?: Effort;
+	resolved?: ThinkingEffort;
 }
 
 /** Goal mode changed, by a host `goal` command or the agent's `goal` tool. */
@@ -1418,7 +1589,7 @@ export interface QueueUpdateEvent {
 }
 
 /** A session event, discriminated by `type`; `set_event_filter` selects which are sent. */
-export type RpcAgentEvent = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
+export type RpcAgentEvent = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | ApprovalModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ThemesConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
 
 /** First frame after startup; transport fields are absent on servers without protocol v2. */
 export interface ReadyEvent {
@@ -1659,6 +1830,8 @@ export interface InputUiRequest {
 	title: string;
 	placeholder?: string;
 	timeout?: number;
+	secret?: boolean;
+	loginId?: string;
 }
 
 export interface EditorUiRequest {
@@ -1693,6 +1866,7 @@ export interface NotifyUiRequest {
 	method: "notify";
 	message: string;
 	notifyType?: NotifyType;
+	loginId?: string;
 }
 
 export interface SetStatusUiRequest {
@@ -1734,6 +1908,7 @@ export interface OpenUrlUiRequest {
 	/** Short loopback redirect to `url`; the truncation-safe copy target. */
 	launchUrl?: string;
 	instructions?: string;
+	loginId?: string;
 }
 
 /** Extension UI request, discriminated by `method`. */
@@ -1956,6 +2131,10 @@ export interface OpenSessionParams {
 	modelId?: string;
 }
 
+export interface GetStateParams {
+	includeDump?: boolean;
+}
+
 export interface CreateMixtureParams {
 	scope: MixtureConfigScope;
 	definition: MixtureDefinition;
@@ -1975,6 +2154,17 @@ export interface SelectMixtureParams {
 	name: string;
 }
 
+export interface UpdateThemeParams {
+	appearance: "dark" | "light";
+	scope: "global" | "project";
+	name: string | null;
+	expected: string | null;
+}
+
+export interface QueryModelSelectorParams {
+	query: string;
+}
+
 export interface SetRoleParams {
 	role: string;
 }
@@ -1983,6 +2173,46 @@ export interface SetRoleResult {
 	role: string;
 	model: ModelInfo;
 	thinkingLevel?: ThinkingLevel;
+}
+
+export interface GetModelsConfigurationResult {
+	providers: Record<string, unknown>[];
+	models: Record<string, unknown>[];
+	roles: Record<string, unknown>[];
+	roleStorage: "global" | "project";
+	effortMode: "replacement" | "legacy";
+	effortRules: ModelEffortRule[];
+	effortRulesProvenance: string;
+	effortRuleScopes: ModelEffortRuleScopes;
+	effortChoices: string[];
+}
+
+export interface SetModelRoleConfigurationParams {
+	role: string;
+	scope: "global" | "project";
+	expected: ModelRoleConfigurationValue;
+	selector?: string;
+	effort?: ModelEffortSelection;
+}
+
+export interface SetModelRoleStorageParams {
+	value: "global" | "project";
+	expected: "global" | "project";
+}
+
+export interface SetEffortRulesParams {
+	scope: "global" | "project";
+	expected: ModelEffortRule[] | null;
+	rules?: ModelEffortRule[];
+}
+
+export interface SetProviderApiKeyParams {
+	providerId: string;
+	apiKey: string;
+}
+
+export interface CancelLoginParams {
+	loginId: string;
 }
 
 export interface GetUsageParams {
@@ -2051,6 +2281,35 @@ export interface GetAvailableCommandsResult {
 
 export interface GetEntriesParams {
 	since?: string;
+}
+
+export interface GetEntriesPageParams {
+	scope?: "journal" | "branch";
+	direction?: "forward" | "backward";
+	cursor?: string;
+	limit?: number;
+}
+
+export interface NavigateTreeParams {
+	targetId: string;
+	expectedSessionId: string;
+	expectedSessionFile: string | null;
+	expectedLeafId: string | null;
+	summarize?: boolean;
+	customInstructions?: string;
+	allowAskReopen?: boolean;
+	reanswerAskResult?: TreeAskReanswer;
+}
+
+export interface ResumeTreeParams {
+	resumeToken: string;
+	expectedSessionId: string;
+	expectedSessionFile: string | null;
+	expectedLeafId: string | null;
+}
+
+export interface ResumeTreeResult {
+	resumed: true;
 }
 
 export interface SetTodosParams {
@@ -2324,12 +2583,21 @@ export interface RpcWireCommands {
 	abort_and_restore_queue: { params: undefined; result: AbortAndRestoreQueueResult };
 	new_session: { params: NewSessionParams; result: CancellationResult };
 	open_session: { params: OpenSessionParams; result: OpenSessionResult };
-	get_state: { params: undefined; result: SessionState };
+	get_state: { params: GetStateParams; result: SessionState };
 	create_mixture: { params: CreateMixtureParams; result: CreateMixtureResult };
 	list_mixtures: { params: undefined; result: ListMixturesResult };
 	select_mixture: { params: SelectMixtureParams; result: ModelInfo };
 	get_roles: { params: undefined; result: RolesResult };
+	get_themes_configuration: { params: undefined; result: ThemesConfiguration };
+	update_theme: { params: UpdateThemeParams; result: ThemesConfiguration };
+	query_model_selector: { params: QueryModelSelectorParams; result: ModelSelectorResult };
 	set_role: { params: SetRoleParams; result: SetRoleResult };
+	get_models_configuration: { params: undefined; result: GetModelsConfigurationResult };
+	set_model_role_configuration: { params: SetModelRoleConfigurationParams; result: undefined };
+	set_model_role_storage: { params: SetModelRoleStorageParams; result: undefined };
+	set_effort_rules: { params: SetEffortRulesParams; result: undefined };
+	set_provider_api_key: { params: SetProviderApiKeyParams; result: undefined };
+	cancel_login: { params: CancelLoginParams; result: undefined };
 	get_usage: { params: GetUsageParams; result: GetUsageResult };
 	set_approval_handler: { params: SetApprovalHandlerParams; result: SetApprovalHandlerResult };
 	set_chat_mode: { params: SetChatModeParams; result: ChatModeState };
@@ -2340,7 +2608,10 @@ export interface RpcWireCommands {
 	set_ask_dialog: { params: SetAskDialogParams; result: SetAskDialogResult };
 	get_available_commands: { params: undefined; result: GetAvailableCommandsResult };
 	get_entries: { params: GetEntriesParams; result: SessionEntries };
+	get_entries_page: { params: GetEntriesPageParams; result: JournalPage };
 	get_tree: { params: undefined; result: SessionTree };
+	navigate_tree: { params: NavigateTreeParams; result: NavigateTreeResult };
+	resume_tree: { params: ResumeTreeParams; result: ResumeTreeResult };
 	set_todos: { params: SetTodosParams; result: SetTodosResult };
 	set_host_tools: { params: SetHostToolsParams; result: SetHostToolsResult };
 	set_host_uri_schemes: { params: SetHostUriSchemesParams; result: SetHostUriSchemesResult };

@@ -3486,6 +3486,8 @@ export class SessionMaintenance {
 			candidates.push(model);
 		};
 
+		addCandidate(resolveRoleModelFull(settings, "compaction", availableModels, preferredModel ?? undefined).model);
+
 		if (preferredModel) {
 			addCandidate(resolveCompactionConfiguredTarget(preferredModel, availableModels));
 		}

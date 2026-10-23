@@ -8,7 +8,7 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { getSupportedEfforts, getSupportedThinkingLevels } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -16,6 +16,7 @@ import {
 	type ModelHubCallbacks,
 	ModelHubComponent,
 	type ModelHubOptions,
+	type ModelHubRegistry,
 	resetProviderAutoRefreshGuard,
 } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
@@ -24,8 +25,11 @@ import { CURSOR_MARKER, getKeybindings, setKeybindings, type TUI } from "@oh-my-
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { thinkingLevelGlyph } from "@oh-my-pi/pi-tui/render/render-utils";
 
+import { getKnownRoleIds, getRoleInfo, setRoleDescription } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { cfgCycleOrder, cfgModelPresets } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
+import { cfgContextRules } from "../src/config/context-policy";
+import { parseCompactionPointInput } from "../src/config/compaction-threshold";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { HubEffortSelection } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { cfgRetryFallbackChains } from "@oh-my-pi/pi-coding-agent/session/settings";
@@ -78,6 +82,7 @@ interface RegistryOverrides {
 	getDiscoverableProviders?: () => string[];
 	getProviderDiscoveryState?: (providerId: string) => unknown;
 	find?: (provider: string, id: string) => Model | undefined;
+	modelConfig?: ModelHubRegistry["modelConfig"];
 }
 
 function makeRegistry(models: () => Model[], overrides: RegistryOverrides = {}): ModelRegistry {
@@ -86,6 +91,7 @@ function makeRegistry(models: () => Model[], overrides: RegistryOverrides = {}):
 		refresh: overrides.refresh ?? (async () => {}),
 		refreshProvider: overrides.refreshProvider ?? (async () => {}),
 		getError: () => undefined,
+		modelConfig: overrides.modelConfig,
 		getAvailable: overrides.getAvailable ?? models,
 		getAll,
 		// Mirrors the production lookup's case-insensitivity (alias/variant
@@ -191,10 +197,13 @@ function createHub(options: {
 			},
 			onUnassign: options.callbacks?.onUnassign ?? onUnassign,
 			onLoginRequest: options.callbacks?.onLoginRequest ?? onLoginRequest,
+			onEditFacts: options.callbacks?.onEditFacts,
 			onDefineMixture: options.callbacks?.onDefineMixture,
 			onCycleOrderChange: options.callbacks?.onCycleOrderChange,
 			onSavePreset: options.callbacks?.onSavePreset,
 			onSwitchPreset: options.callbacks?.onSwitchPreset,
+			onOpenConfigFile: options.callbacks?.onOpenConfigFile,
+			onCompactionPointChange: options.callbacks?.onCompactionPointChange,
 			onFallbackChainChange: options.callbacks?.onFallbackChainChange ?? onFallbackChainChange,
 			onFallbackChainKeyChange:
 				options.callbacks?.onFallbackChainKeyChange ??
@@ -209,8 +218,27 @@ function createHub(options: {
 					cfgFallbackEffortSelections.override(settings, efforts);
 					return true;
 				}),
+			onRoleDescriptionChange:
+				options.callbacks?.onRoleDescriptionChange ??
+				((role, description) => setRoleDescription(role, description, settings)),
 			onEffortRulesChange:
 				options.callbacks?.onEffortRulesChange ?? (rules => cfgEffortRules.override(settings, rules)),
+			onContextRulesChange:
+				options.callbacks?.onContextRulesChange ??
+				(rules => {
+					try {
+						cfgContextRules.override(
+							settings,
+							rules.map(rule => ({
+								selector: rule.selector,
+								limit: typeof rule.limit === "number" ? rule.limit : parseCompactionPointInput(rule.limit)!,
+							})),
+						);
+						return true;
+					} catch {
+						return false;
+					}
+				}),
 			onCancel: options.callbacks?.onCancel ?? onCancel,
 		},
 		options.hub,
@@ -237,11 +265,136 @@ describe("ModelHub", () => {
 		}
 	});
 
+	test("roles marked hidden remain listed and D edits the selected description", () => {
+		const settings = Settings.isolated({
+			modelTags: { smol: { name: "My fast model", hidden: true }, private: { name: "Private", hidden: true } },
+		});
+		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true, terminalRows: 80 });
+		hub.handleInput(UP);
+		hub.handleInput("\n");
+		expect(normalize(hub.render(220))).toContain("Private");
+		expect(normalize(hub.render(220))).toContain("The main model for conversations and coding.");
+		hub.handleInput(DOWN);
+		expect(normalize(hub.render(220))).toContain(getRoleInfo("smol", settings).description!);
+		hub.handleInput("D");
+		hub.handleInput("\x01");
+		hub.handleInput("\x0b");
+		for (const ch of "Quick answers only") hub.handleInput(ch);
+		hub.handleInput("\n");
+		expect(getRoleInfo("smol", settings).description).toBe("Quick answers only");
+		expect(normalize(hub.render(220))).toContain("Quick answers only");
+		expect(getRoleInfo("smol", settings)).toMatchObject({ name: "My fast model", hidden: true });
+	});
+
+	test("role descriptions stay on one truncated header line", () => {
+		const settings = Settings.isolated({
+			modelTags: {
+				default: { name: "Default", description: `Header start\n${"long description ".repeat(50)}Header end` },
+			},
+		});
+		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true });
+		hub.handleInput(UP);
+		const lines = hub.render(120).map(line => stripVTControlCharacters(line));
+		expect(lines.filter(line => line.includes("Header start"))).toHaveLength(1);
+		expect(lines.join("\n")).not.toContain("Header end");
+		expect(lines.every(line => Bun.stringWidth(line) <= 120)).toBe(true);
+	});
+
 	afterEach(() => {
 		resetProviderAutoRefreshGuard();
 		for (const hub of openHubs.splice(0)) {
 			hub.dispose();
 		}
+	});
+
+	test("session-only picking hides context and override editing along with effort rules and model facts", () => {
+		const open = vi.fn(async () => {});
+		const facts = vi.fn();
+		const { hub } = createHub({
+			models: [makeModel("test", "model")],
+			scoped: true,
+			hub: { sessionOnly: true },
+			callbacks: { onOpenConfigFile: open, onEditFacts: facts },
+		});
+		const native = hub.describe({
+			cols: 220,
+			reduceMotion: false,
+			dark: true,
+			supports: () => true,
+			feature: () => true,
+		});
+		if (native.k !== "picker" || !native.p) throw new Error("Expected session model picker");
+		const scopes = native.p.scopes?.map(scope => scope.id);
+		expect(scopes).toContain("recent");
+		expect(scopes).toContain("all");
+		for (const scope of ["roles", "effort", "context", "overrides"]) expect(scopes).not.toContain(scope);
+		expect(footerLine(hub.render(220))).not.toContain("config file");
+		expect(footerLine(hub.render(220))).not.toContain("model facts");
+		hub.handleInput("\x07");
+		hub.handleInput("\x1b[17~");
+		expect(open).not.toHaveBeenCalled();
+		expect(facts).not.toHaveBeenCalled();
+	});
+
+	test.each(["roles", "effort", "context", "all"])(
+		"confirmed %s search keeps motion, model facts and config file hints",
+		async entry => {
+			const open = vi.fn(async () => {});
+			const facts = vi.fn();
+			const { hub } = createHub({
+				models: [makeModel("test", "model")],
+				scoped: true,
+				callbacks: { onOpenConfigFile: open, onEditFacts: facts },
+			});
+			hub.handleNativeEvent({ type: "select", key: "scopes", item: entry });
+			hub.handleInput("/");
+			hub.handleInput(".");
+			hub.handleInput("\n");
+			const footer = footerLine(hub.render(320));
+			expect(footer).toContain("gg/G ends");
+			expect(footer).toContain("Ctrl-u/d half");
+			expect(footer).toContain("model facts");
+			expect(footer).toContain("Ctrl+G config file");
+			hub.handleInput("\x1b[17~");
+			expect(facts).toHaveBeenCalledTimes(1);
+			hub.handleInput("\x07");
+			await Bun.sleep(0);
+			expect(open).toHaveBeenCalledWith(entry === "all" ? "overrides" : entry, "global");
+		},
+	);
+
+	test("opens schema-driven model overrides beside the rule sections and returns to normal navigation", () => {
+		const open = vi.fn(async () => {});
+		const { hub } = createHub({
+			models: [],
+			scoped: true,
+			callbacks: { onOpenConfigFile: open },
+			registry: {
+				modelConfig: {
+					list: () => [
+						{ provider: "local", id: "private", kind: "override", fields: { name: "Private", future: true } },
+					],
+					schema: () => ({ type: "object", properties: { name: { type: "string" } } }),
+					save: async () => {},
+					remove: async () => {},
+				},
+			},
+		});
+		hub.handleInput(DOWN);
+		hub.handleInput(DOWN);
+		hub.handleInput(DOWN);
+		expect(normalize(hub.render(160))).toContain("local/private");
+		expect(normalize(hub.render(160))).toContain("Ctrl+G config file");
+		hub.handleInput("\x07");
+		expect(open).toHaveBeenCalledWith("overrides", "global");
+		hub.handleInput("\r");
+		hub.handleInput("\r");
+		expect(normalize(hub.render(160))).toContain("future");
+		expect(normalize(hub.render(160))).toContain("read-only");
+		hub.handleInput("\x1b");
+		hub.handleInput("\x1b");
+		hub.handleInput(UP);
+		expect(normalize(hub.render(160))).toContain("context rules");
 	});
 
 	test("keeps the mixture provider available with zero models and opens its creation action", () => {
@@ -481,6 +634,59 @@ describe("ModelHub", () => {
 			expect(defaultRow).not.toContain("inherit");
 			expect(smolRow).toContain("auto");
 		});
+		test.each([
+			[120_000, "120k"],
+			["60%", "60%"],
+			["f120000", "f120k"],
+		] as const)("shows configured compaction %s beside the effort summary", (entry, label) => {
+			const model = getBundledModel("openai", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled reasoning model");
+			const selector = `${model.provider}/${model.id}`;
+			const settings = Settings.isolated({
+				modelRoles: { default: selector, smol: selector },
+				"compaction.modelThresholds": { [selector]: entry },
+				"compaction.modelThresholdsEnabled": false,
+			});
+			settings.setRoleEffortSelection("default", { mode: "auto", allowed: [Effort.Low, Effort.High] });
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			hub.handleInput(UP);
+			const lines = hub.render(220).map(line => stripVTControlCharacters(line));
+			const defaultRow = lines.find(line => line.includes("DEFAULT"));
+			const smolRow = lines.find(line => line.includes("SMOL"));
+			expect(defaultRow).toContain("Auto [low, high]");
+			expect(defaultRow).toContain(`compact ${label}`);
+			expect(smolRow).toContain(`compact ${label}`);
+			const native = hub.describe({
+				cols: 220,
+				reduceMotion: false,
+				dark: true,
+				supports: () => true,
+				feature: () => true,
+			});
+			if (native.k !== "picker" || !native.p) throw new Error("Expected model hub picker");
+			expect(native.p.items?.find(item => item.id === "role:default")?.facts?.compaction).toBe(`compact ${label}`);
+			for (const width of [36, 60, 90]) {
+				expect(hub.render(width).every(line => Bun.stringWidth(line) <= width)).toBe(true);
+			}
+		});
+
+		test("real settings initialization without model limits renders no compaction summary", async () => {
+			const parent = path.join(os.homedir(), ".cache/npi-canary");
+			await fs.mkdir(parent, { recursive: true });
+			const root = await fs.mkdtemp(path.join(parent, "model-limit-"));
+			try {
+				const settings = await Settings.init({ cwd: root, agentDir: root, inMemory: true });
+				const model = makeModel("test", "no-limit");
+				settings.setModelRole("default", "test/no-limit");
+				const { hub } = createHub({ models: [model], scoped: true, settings });
+				hub.handleInput(UP);
+				const lines = hub.render(220).map(line => stripVTControlCharacters(line));
+				expect(lines.find(line => line.includes("DEFAULT"))).toContain("no-limit");
+				expect(lines.some(line => line.includes("compact "))).toBe(false);
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		});
 		test.each(["fixed", "auto"] as const)(
 			"selected role highlights its %s reasoning cell across pane focus",
 			mode => {
@@ -683,6 +889,8 @@ describe("ModelHub", () => {
 				// Sidebar order: Roles, All models, Effort rules, alpha, beta, delta-local, gamma.
 				// Hop down onto the keyless provider, which schedules its refresh.
 				hub.handleInput(DOWN); // All models → Effort rules
+				hub.handleInput(DOWN); // Effort rules → Context rules
+				hub.handleInput(DOWN); // Context rules → Model overrides
 				hub.handleInput(DOWN); // all → alpha
 				hub.handleInput(DOWN); // alpha → beta
 				hub.handleInput(DOWN); // beta → delta-local
@@ -754,10 +962,14 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // All models → locked anthropic
 			expect(normalize(hub.render(220))).toContain("anthropic has no credentials configured");
 
 			hub.handleInput(UP); // locked provider → Effort rules
+			hub.handleInput(UP); // Model overrides → Context rules
+			hub.handleInput(UP); // Context rules → Effort rules
 			hub.handleInput(UP); // Effort rules → All models
 			hub.handleInput("/");
 			hub.handleInput("t");
@@ -1073,7 +1285,8 @@ describe("ModelHub", () => {
 					.render(220)
 					.map(line => stripVTControlCharacters(line))
 					.find(line => line.includes("❯")) ?? "";
-			for (let step = 0; step < 20 && !selected().includes("DICTATION"); step++) hub.handleInput(DOWN);
+			for (let step = 0; step < getKnownRoleIds(settings).length && !selected().includes("DICTATION"); step++)
+				hub.handleInput(DOWN);
 			expect(selected()).toContain("DICTATION");
 
 			expect(footerLine(hub.render(220))).not.toContain("t thinking");
@@ -2187,6 +2400,7 @@ describe("ModelHub", () => {
 			const { hub, onFallbackChainChange } = createHub({ models: [a], scoped: true, settings });
 
 			enterRolesView(hub);
+			hub.handleInput("G"); // Bring model-keyed chains into view regardless of the built-in role count.
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("test/*");
 			expect(rendered).toContain("↳ test/model-a");
@@ -2249,6 +2463,7 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models, scoped: true, settings });
 
 			enterRolesView(hub);
+			hub.handleInput("G"); // Bring model-keyed chains into view regardless of the built-in role count.
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("re:^test/model-a$");
 			expect(rendered).toContain("↳ re:^test/model-b$");
@@ -2483,6 +2698,8 @@ describe("ModelHub", () => {
 
 			// All models → Effort rules → custom-provider → openrouter.
 			hub.handleInput(DOWN);
+			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN);
 			expect(normalize(hub.render(220))).toContain("openrouter ·");
@@ -2517,6 +2734,8 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN); // openrouter scope
 			hub.handleInput("/");
@@ -2539,6 +2758,8 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			hub.handleInput(LEFT); // switch focus to sidebar
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // skips custom-provider (0 matches), lands on openrouter
 			expect(normalize(hub.render(220))).toContain("openrouter ·");
 		});
@@ -2597,6 +2818,8 @@ describe("ModelHub", () => {
 			// Left returns to the sidebar: Down hops to the first provider.
 			hub.handleInput(LEFT);
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN);
 			expect(normalize(hub.render(220))).toContain("prov-a ·");
 		});
@@ -2616,6 +2839,8 @@ describe("ModelHub", () => {
 			// 120ms setTimeout (no injection seam), and the fetch completion is
 			// a promise chain — fake timers cannot drive the mixed path.
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // All models → prov-a, schedules the refresh
 			await Bun.sleep(140);
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
@@ -2644,6 +2869,8 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // schedules catalog-only refresh
 			hub.handleInput("\x1b[15~"); // F5 before the 120ms debounce fires
 			await Bun.sleep(40);
@@ -2664,6 +2891,8 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN);
 			await Bun.sleep(140);
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
@@ -2690,6 +2919,8 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // All models → prov-a
 			await Bun.sleep(140);
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
@@ -2715,6 +2946,8 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN);
 			await Bun.sleep(140);
 			expect(normalize(hub.render(220))).toContain("refreshing model list");
@@ -2735,6 +2968,8 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			hub.handleInput(DOWN); // All models → Effort rules
+			hub.handleInput(DOWN); // Effort rules → Context rules
+			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // All models → locked anthropic (separator skipped)
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("anthropic has no credentials configured");
@@ -2744,7 +2979,105 @@ describe("ModelHub", () => {
 			expect(onLoginRequest).toHaveBeenCalledWith("anthropic");
 		});
 	});
+	describe("context rule editor", () => {
+		test.each(["test/*", "re:^test/"])("authors %s limits through the shared pattern editor", selector => {
+			const settings = Settings.isolated();
+			const { hub } = createHub({ models: [makeModel("test", "model")], scoped: true, settings });
+			hub.handleInput(DOWN);
+			expect(normalize(hub.render(100))).toContain("Not Auto-only");
+			expect(normalize(hub.render(100))).toContain("Caller/manual efforts bypass rules");
+			hub.handleInput(DOWN);
+			const description = normalize(hub.render(100));
+			expect(description).toContain("including subagents and explicit efforts");
+			expect(description).toContain("N model limits > context rules");
+			hub.handleInput("\n");
+			hub.handleInput(DOWN);
+			hub.handleInput("\n");
+			for (const key of selector) hub.handleInput(key);
+			hub.handleInput("\n");
+			for (const key of "50k") hub.handleInput(key);
+			hub.handleInput("\n");
+			expect(cfgContextRules.get(settings)).toEqual([{ selector, limit: 50_000 }]);
+			hub.handleInput("\n");
+			hub.handleInput("\x15");
+			for (const key of "bad") hub.handleInput(key);
+			hub.handleInput("\n");
+			expect(cfgContextRules.get(settings)).toEqual([{ selector, limit: 50_000 }]);
+			hub.handleInput("\x15");
+			for (const key of "f40000") hub.handleInput(key);
+			hub.handleInput("\n");
+			expect(cfgContextRules.get(settings)).toEqual([{ selector, limit: "f40000" }]);
+			hub.handleInput("x");
+			expect(cfgContextRules.get(settings)).toEqual([]);
+		});
+
+		test("picks exact models and cancels a draft without persisting it", () => {
+			const settings = Settings.isolated();
+			const { hub } = createHub({ models: [makeModel("test", "model")], scoped: true, settings });
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN);
+			hub.handleInput("\n");
+			hub.handleInput("\n");
+			hub.handleInput("\n");
+			expect(footerLine(hub.render(220))).toContain("test/model limit");
+			for (const key of "40k") hub.handleInput(key);
+			hub.handleInput(ESC);
+			hub.handleInput(ESC);
+			expect(cfgContextRules.get(settings)).toEqual([]);
+		});
+
+		test("reorders patterns within their kind and retains exact precedence", () => {
+			const settings = Settings.isolated({
+				"context.rules": [
+					{ selector: "test/*", limit: 50_000 },
+					{ selector: "test/model", limit: 60_000 },
+					{ selector: "*/model", limit: 70_000 },
+				],
+			});
+			const { hub } = createHub({ models: [makeModel("test", "model")], scoped: true, settings });
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN);
+			hub.handleInput("\n");
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN);
+			hub.handleInput("[");
+			expect(cfgContextRules.get(settings).map(rule => rule.selector)).toEqual(["*/model", "test/model", "test/*"]);
+			expect(normalize(hub.render(220))).toContain("exact test/model");
+		});
+	});
+
 	describe("effort policy editors", () => {
+		test.each([false, true])(
+			"exact effort rules offer native off only when requiresEffort=%s permits it",
+			requiresEffort => {
+				const model: Model = {
+					...makeModel("test", "native-reasoning"),
+					reasoning: true,
+					thinking: { mode: "effort", efforts: [Effort.Low, Effort.High], requiresEffort },
+				};
+				const settings = Settings.isolated({});
+				cfgEffortRules.set(settings, [{ selector: "test/native-reasoning", allowed: [Effort.Low, Effort.High] }]);
+				const { hub } = createHub({ models: [model], scoped: true, settings });
+				hub.handleInput(DOWN);
+				hub.handleInput("\n");
+				hub.handleInput("\n");
+				const footer = footerLine(hub.render(220));
+				if (requiresEffort) {
+					expect(footer).not.toContain(" off");
+				} else {
+					expect(footer).toContain(`${theme.status.disabled} off`);
+					hub.handleInput(" ");
+					hub.handleInput("\n");
+					expect(cfgEffortRules.get(settings)[0]?.allowed).toEqual(["off", Effort.Low, Effort.High]);
+					hub.handleInput("\n");
+					expect(footerLine(hub.render(220))).toContain(`${theme.status.enabled} off`);
+					hub.handleInput(" ");
+					hub.handleInput("\n");
+					expect(cfgEffortRules.get(settings)[0]?.allowed).toEqual([Effort.Low, Effort.High]);
+				}
+			},
+		);
+
 		test("Auto edits a sparse set, cancels atomically, and saves in the selected role scope", () => {
 			const model = getBundledModel("openai", "gpt-5.5");
 			if (!model) throw new Error("Expected bundled reasoning model");
@@ -2784,6 +3117,8 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN);
 			hub.handleInput("\n");
+			hub.handleInput(" ");
+			hub.handleInput(DOWN);
 			hub.handleInput(" ");
 			hub.handleInput(DOWN);
 			hub.handleInput(" ");
@@ -2831,7 +3166,7 @@ describe("ModelHub", () => {
 			expect(onAssign.mock.calls[0]?.[3]).toBe("openai/gpt-5.?");
 			expect(onAssign.mock.calls[0]?.[5]).toEqual({
 				mode: "auto",
-				allowed: [...getSupportedEfforts(model)],
+				allowed: [...getSupportedThinkingLevels(model)],
 				selector: "openai/gpt-5.?",
 			});
 		});
@@ -2855,7 +3190,7 @@ describe("ModelHub", () => {
 			expect(onAssign.mock.calls[0]?.[3]).toBe("re:^openai/gpt-5\\.5$");
 			expect(onAssign.mock.calls[0]?.[5]).toEqual({
 				mode: "auto",
-				allowed: [...getSupportedEfforts(model)],
+				allowed: [...getSupportedThinkingLevels(model)],
 				selector: "re:^openai/gpt-5\\.5$",
 			});
 		});
@@ -2886,7 +3221,7 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			for (const ch of "openai/*") hub.handleInput(ch);
 			hub.handleInput("\n"); // enabled-level editor
-			for (let i = 0; i < 6; i++) {
+			for (let i = 0; i < 7; i++) {
 				hub.handleInput(" ");
 				hub.handleInput(DOWN);
 			}
@@ -2894,7 +3229,8 @@ describe("ModelHub", () => {
 			expect(cfgEffortRules.get(settings)).toEqual([]);
 			expect(normalize(hub.render(220))).toContain("at least one");
 			hub.handleInput("g");
-			hub.handleInput("g"); // return to minimal; bounded movement does not wrap
+			hub.handleInput("g"); // return to off; bounded movement does not wrap
+			hub.handleInput(DOWN); // minimal
 			hub.handleInput(" "); // permit just minimal
 			hub.handleInput("\n");
 			expect(cfgEffortRules.get(settings)).toEqual([{ selector: "openai/*", allowed: [Effort.Minimal] }]);
@@ -2960,6 +3296,8 @@ describe("ModelHub", () => {
 			expect(normalize(hub.render(220))).toContain("Invalid regular expression");
 			hub.handleInput(")"); // close the group and retry from the same strip
 			hub.handleInput("\n"); // enabled-level editor
+			hub.handleInput(" "); // exclude off
+			hub.handleInput(DOWN);
 			hub.handleInput(" "); // exclude minimal
 			hub.handleInput("\n");
 			expect(cfgEffortRules.get(settings)).toEqual([
@@ -3000,4 +3338,72 @@ describe("ModelHub", () => {
 			]);
 		});
 	});
+});
+
+test("Ctrl-G routes roles, effort, context and catalog files and refreshes after editing", async () => {
+	const settings = Settings.isolated({});
+	const calls: string[] = [];
+	const updated = Promise.withResolvers<void>();
+	const { hub } = createHub({
+		models: [makeModel("test", "one")],
+		settings,
+		callbacks: {
+			onOpenConfigFile: async (section, scope) => {
+				calls.push(`${section}:${scope}`);
+				if (section === "roles") {
+					settings.setModelRole("new-role", "test/one");
+					updated.resolve();
+				}
+			},
+		},
+	});
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+	hub.handleInput("\x07");
+	await updated.promise;
+	await Bun.sleep(0);
+	expect(normalize(hub.render(140))).toContain("new-role");
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "effort" });
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "context" });
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "all" });
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	expect(calls).toEqual(["roles:global", "effort:global", "context:global", "overrides:global"]);
+});
+
+test("an existing menu Ctrl-G binding wins over opening the model config", () => {
+	const previous = getKeybindings();
+	const open = vi.fn(async () => {});
+	setKeybindings(new KeybindingsManager({ "tui.select.cancel": ["ctrl+g"] }));
+	try {
+		const { hub, onCancel } = createHub({ models: [], callbacks: { onOpenConfigFile: open } });
+		hub.handleInput("\x07");
+		expect(open).not.toHaveBeenCalled();
+		expect(onCancel).toHaveBeenCalledTimes(1);
+	} finally {
+		setKeybindings(previous);
+	}
+});
+
+test("Ctrl-G opens global settings for a project role's per-model compaction editor", async () => {
+	const open = vi.fn(async () => {});
+	const settings = Settings.isolated({ modelRoleStorage: "project" });
+	settings.setProjectModelRole("default", "test/one");
+	const { hub } = createHub({
+		models: [makeModel("test", "one")],
+		settings,
+		callbacks: {
+			onOpenConfigFile: open,
+			onCompactionPointChange: () => undefined,
+		},
+	});
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+	hub.handleInput("m");
+	expect(footerLine(hub.render(140))).toContain("one limit:");
+	hub.handleInput("\x07");
+	await Bun.sleep(0);
+	expect(open).toHaveBeenCalledWith("context", "global");
 });
