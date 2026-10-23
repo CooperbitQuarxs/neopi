@@ -104,6 +104,19 @@ export const cfgWakeChirpPath = register({
 	},
 });
 
+export const cfgWakeSuppressWhileSpeaking = register({
+	id: "stt.wake.suppressWhileSpeaking",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Suppress wake word while speaking",
+		description:
+			'On prevents NeoPi\'s own speech triggering the wake word through speakers. Off lets you interrupt by saying "computer", but needs headphones or echo cancellation.',
+	},
+});
+
 export const cfgWakePlaybackTailMs = register({
 	id: "stt.wake.playbackTailMs",
 	type: "number",
@@ -113,7 +126,7 @@ export const cfgWakePlaybackTailMs = register({
 		group: "Speech",
 		label: "Wake playback echo tail",
 		description:
-			"Ignore microphone audio during assistant speech and for this many milliseconds afterward. Clamped to 0–3000. The readiness chirp has no tail delay.",
+			"With wake suppression enabled, ignore microphone audio for this many milliseconds after assistant speech. Clamped to 0–3000. The readiness chirp has no tail delay.",
 		options: [
 			{ value: "150", label: "150 ms" },
 			{ value: "300", label: "300 ms" },

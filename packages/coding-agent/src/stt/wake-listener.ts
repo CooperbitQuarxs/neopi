@@ -13,6 +13,7 @@ import {
 	cfgWakeEndWord,
 	cfgWakeSilenceMs,
 	cfgWakePlaybackTailMs,
+	cfgWakeSuppressWhileSpeaking,
 } from "./settings";
 import { sharedAudioCapture } from "./shared-audio-capture";
 import type { STTController } from "./stt-controller";
@@ -109,6 +110,7 @@ export class WakeListener {
 				},
 				{
 					chirp: async () => {
+						if (this.deps.isSpeechPlaying?.() ?? vocalizer.isSpeaking()) vocalizer.clear();
 						this.deps.status("Wake word heard; recording request");
 						this.#player?.stop();
 						const player = createStreamingPlayer();
@@ -138,7 +140,10 @@ export class WakeListener {
 				if (error) {
 					this.#warn(error);
 					this.stop();
-				} else recorder.push(samples, this.deps.isSpeechPlaying?.() ?? vocalizer.isSpeaking());
+				} else {
+					const suppress = cfgWakeSuppressWhileSpeaking.get(this.deps.settings);
+					recorder.push(samples, suppress && (this.deps.isSpeechPlaying?.() ?? vocalizer.isSpeaking()));
+				}
 			});
 			this.deps.status("Listening for computer");
 			return true;
