@@ -28,7 +28,6 @@ export interface ConfigCommandArgs {
 	flags: {
 		json?: boolean;
 		force?: boolean;
-		yes?: boolean;
 		help?: boolean;
 	};
 }
@@ -46,9 +45,6 @@ type CliSettingDef = {
 
 /** Printed instead of a credential value in human output only. */
 const REDACTED = "********";
-
-export const TOML_CONVERSION_WARNING =
-	"Warning: config.toml overrides YAML immediately. /settings and config set/reset still write YAML, so their changes can be masked by TOML and appear to revert on reload. Until TOML saves are supported, edit config.toml directly or remove it to return to YAML.";
 
 function toSettingDef(setting: AnySetting): CliSettingDef {
 	const ui = setting.ui;
@@ -105,8 +101,6 @@ export function parseConfigArgs(args: string[]): ConfigCommandArgs | undefined {
 			result.flags.json = true;
 		} else if (arg === "--force" && action === "to-toml") {
 			result.flags.force = true;
-		} else if (arg === "--yes" && action === "to-toml") {
-			result.flags.yes = true;
 		} else if ((arg === "--help" || arg === "-h") && action === "to-toml") {
 			result.flags.help = true;
 		} else if (!arg.startsWith("-")) {
@@ -115,7 +109,7 @@ export function parseConfigArgs(args: string[]): ConfigCommandArgs | undefined {
 	}
 
 	if (action === "to-toml" && positionalArgs.length > 1) {
-		throw new Error("Usage: npi config to-toml [config.yml|config.yaml] --yes [--force]");
+		throw new Error("Usage: npi config to-toml [config.yml|config.yaml] [--force]");
 	}
 	if (positionalArgs.length > 0) {
 		result.key = positionalArgs[0];
@@ -185,12 +179,6 @@ export async function runConfigCommand(cmd: ConfigCommandArgs): Promise<void> {
 	if (cmd.action === "to-toml") {
 		if (cmd.flags.help) {
 			printConfigHelp();
-			return;
-		}
-		console.error(TOML_CONVERSION_WARNING);
-		if (!cmd.flags.yes) {
-			console.error("No files written. Run again with --yes to acknowledge this limitation and convert.");
-			process.exitCode = 1;
 			return;
 		}
 		try {
@@ -455,18 +443,15 @@ ${chalk.bold("Commands:")}
   list               List all settings with current values
   get <key>          Get a specific setting value
   set <key> <value>  Set a setting value
-  reset <key>        Remove a setting from config.yml so its default applies
+  reset <key>        Clear a setting in the active config so its default applies
   path               Print the config directory path
   init-xdg           Initialize XDG Base Directory structure
   dump-toml          Print documented defaults as TOML
-  to-toml [file] --yes  Convert user/project main YAML settings to config.toml
+  to-toml [file]      Convert user/project main YAML settings to config.toml
 
 ${chalk.bold("Options:")}
   --json             Output as JSON
   --force            Replace existing config.toml during explicit conversion
-  --yes              Acknowledge the TOML/YAML save limitation and write TOML
-
-${TOML_CONVERSION_WARNING}
 
 ${chalk.bold("Examples:")}
   ${APP_NAME} config list

@@ -7,7 +7,9 @@ export const SETTINGS_TOML = "settings.toml";
 export const CONFIG_TOML = "config.toml";
 
 /** Read the canonical sibling, or the legacy overlay, but never combine both. */
-async function settingsTomlSource(directory: string): Promise<{ filePath: string; content: string } | undefined> {
+export async function settingsTomlSource(
+	directory: string,
+): Promise<{ filePath: string; content: string } | undefined> {
 	const sources: { filePath: string; content: string }[] = [];
 	for (const filename of [CONFIG_TOML, SETTINGS_TOML]) {
 		const filePath = path.join(directory, filename);
@@ -41,10 +43,15 @@ export async function readSettingsToml(directory: string): Promise<Record<string
 	}
 }
 
-export function parseSettingsToml(content: string): Record<string, unknown> {
-	const parsed: unknown = Bun.TOML.parse(content);
-	if (!isRecord(parsed)) throw new Error("Expected a settings table");
-	return decodeSettingsToml(parsed);
+export function parseSettingsToml(content: string, filePath?: string): Record<string, unknown> {
+	try {
+		const parsed: unknown = Bun.TOML.parse(content);
+		if (!isRecord(parsed)) throw new Error("Expected a settings table");
+		return decodeSettingsToml(parsed);
+	} catch (error) {
+		if (filePath) throw new Error(`Settings config is invalid: ${filePath}: ${String(error)}`);
+		throw error;
+	}
 }
 
 /** Top-level keys, including tables and arrays, replace their YAML counterparts wholesale. */
@@ -236,6 +243,94 @@ export function stringifySettingsToml(settings: Record<string, unknown>): string
 		throw new Error("TOML reader cannot recover the complete configuration exactly; no file was written");
 	}
 	return content;
+}
+
+/**
+ * Replace changed top-level keys only. Untouched statements keep their original
+ * bytes; edited tables become inline tables and lose their internal formatting.
+ */
+export function patchSettingsToml(source: string, settings: Record<string, unknown>): string {
+	const previous = parseSettingsToml(source);
+	const changed = new Set(
+		[...new Set([...Object.keys(previous), ...Object.keys(settings)])].filter(
+			key => !isDeepStrictEqual(previous[key], settings[key]),
+		),
+	);
+	if (changed.size === 0) return source;
+	// Reuse the encoder, including its explicit-clear metadata and fidelity check.
+	const encoded = Bun.TOML.parse(stringifySettingsToml(settings));
+	changed.add("__npi");
+	const replacement = Object.entries(encoded)
+		.filter(([key]) => changed.has(key))
+		.map(([key, value]) => `${tomlString(key, false)} = ${tomlValue(value)}\n`)
+		.join("");
+	let retained = "";
+	let tableKey: string | undefined;
+	for (const statement of tomlStatements(source)) {
+		const trimmed = statement.trimStart();
+		if (!trimmed || trimmed.startsWith("#")) {
+			retained += statement;
+			continue;
+		}
+		let key = tableKey;
+		if (trimmed.startsWith("[")) {
+			key = Object.keys(Bun.TOML.parse(statement))[0];
+			tableKey = key;
+		} else if (key === undefined) {
+			key = Object.keys(Bun.TOML.parse(statement))[0];
+		}
+		if (key === undefined || !changed.has(key)) retained += statement;
+	}
+	const content = replacement + retained;
+	if (!isDeepStrictEqual(parseSettingsToml(content), settings)) {
+		throw new Error("TOML edit cannot preserve the complete configuration; no file was written");
+	}
+	return content;
+}
+
+/** Statement boundaries outside strings, comments, arrays and inline tables. */
+function* tomlStatements(source: string): Generator<string> {
+	let start = 0;
+	let quote = "";
+	let triple = false;
+	let comment = false;
+	let depth = 0;
+	for (let i = 0; i < source.length; i++) {
+		const char = source[i];
+		if (comment) {
+			if (char !== "\n") continue;
+			comment = false;
+		} else if (quote) {
+			if (quote === '"' && char === "\\") {
+				i++;
+				continue;
+			}
+			if (char === quote) {
+				if (!triple) quote = "";
+				else if (source.slice(i, i + 3) === quote.repeat(3)) {
+					// Four/five closing quotes include one/two literal quotes.
+					while (source[i + 3] === quote) i++;
+					i += 2;
+					quote = "";
+				}
+			}
+			continue;
+		} else if (char === '"' || char === "'") {
+			quote = char;
+			triple = source.slice(i, i + 3) === char.repeat(3);
+			if (triple) i += 2;
+			continue;
+		} else if (char === "#") {
+			comment = true;
+			continue;
+		} else if (char === "[" || char === "{") depth++;
+		else if (char === "]" || char === "}") depth--;
+		if (char === "\n" && depth === 0) {
+			yield source.slice(start, i + 1);
+			start = i + 1;
+		}
+	}
+	if (start < source.length) yield source.slice(start);
 }
 
 /** Registry defaults only: never export user values, environment overrides, or credentials. */
