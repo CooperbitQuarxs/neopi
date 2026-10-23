@@ -10,6 +10,7 @@ import { STTController } from "../src/stt/stt-controller";
 import { decodePcm16Wav } from "../src/stt/wav";
 import { cfgSpeechEnabled, cfgVoiceEnabled } from "../src/tts/settings";
 import * as player from "../src/tts/streaming-player";
+import { vocalizer } from "../src/tts/vocalizer";
 
 const settle = async () => {
 	for (let i = 0; i < 32; i++) await Promise.resolve();
@@ -34,6 +35,7 @@ describe("session local voice", () => {
 	});
 	afterEach(async () => {
 		for (const mode of modes.splice(0)) mode.disable();
+		vocalizer.beginTurn();
 		vi.restoreAllMocks();
 		await fs.rm(directory, { recursive: true, force: true });
 	});
@@ -58,6 +60,7 @@ describe("session local voice", () => {
 			async (_text: string, _instruction: string, _signal: AbortSignal) => "A shorter reply.",
 		);
 		const warning = vi.fn();
+		const clearSpeech = vi.fn();
 		const mode = new LocalVoiceMode({
 			settings,
 			controller,
@@ -68,7 +71,7 @@ describe("session local voice", () => {
 			speak,
 			postprocess,
 			isSpeechPlaying: () => playing,
-			clearSpeech() {},
+			clearSpeech,
 			status() {},
 			warning,
 		});
@@ -94,6 +97,7 @@ describe("session local voice", () => {
 			postprocess,
 			detect,
 			warning,
+			clearSpeech,
 			push,
 			wake,
 			utterance,
@@ -169,6 +173,52 @@ describe("session local voice", () => {
 		await flow.utterance();
 		expect(flow.request).toHaveBeenCalledTimes(2);
 	});
+
+	it.each(["generation", "postprocess", "playback"])(
+		"rearms and interrupts pending %s on a second wake",
+		async phase => {
+			const flow = setup(
+				Settings.isolated({
+					"stt.wake.suppressWhileSpeaking": false,
+					"voice.postprocess": phase === "postprocess" ? "Shorten" : "",
+				}),
+			);
+			const reply = Promise.withResolvers<string>();
+			const playback = Promise.withResolvers<void>();
+			let firstSignal: AbortSignal | undefined;
+			if (phase === "generation") flow.request.mockImplementationOnce(() => reply.promise);
+			if (phase === "postprocess") {
+				flow.postprocess.mockImplementationOnce((_text, _instruction, signal) => {
+					firstSignal = signal;
+					return reply.promise;
+				});
+			}
+			if (phase === "playback") {
+				flow.speak.mockImplementationOnce(async (_text, signal) => {
+					firstSignal = signal;
+					flow.setPlaying(true);
+					await playback.promise;
+				});
+			}
+			await flow.mode.enable();
+			await flow.utterance();
+			expect(flow.request).toHaveBeenCalledTimes(1);
+			const clears = flow.clearSpeech.mock.calls.length;
+			await flow.wake();
+			expect(flow.clearSpeech.mock.calls.length).toBeGreaterThan(clears);
+			if (firstSignal) expect(firstSignal.aborted).toBe(true);
+			flow.setPlaying(false);
+			flow.push(await fixture("request"));
+			flow.push(silence(3000));
+			await settle();
+			expect(flow.request).toHaveBeenCalledTimes(2);
+			reply.resolve("obsolete reply");
+			playback.resolve();
+			await settle();
+			expect(flow.speak).toHaveBeenCalledTimes(phase === "playback" ? 2 : 1);
+			expect(flow.warning).not.toHaveBeenCalled();
+		},
+	);
 
 	it("turning off during postprocessing discards late speech", async () => {
 		const flow = setup(Settings.isolated({ "voice.postprocess": "Translate" }));

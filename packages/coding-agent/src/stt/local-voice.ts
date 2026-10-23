@@ -17,7 +17,7 @@ export class LocalVoiceMode {
 	readonly settings: Settings;
 	#listener: WakeListener | undefined;
 	#abort: AbortController | undefined;
-	#busy = false;
+	#replyAbort: AbortController | undefined;
 
 	constructor(readonly deps: LocalVoiceDependencies) {
 		this.settings = deps.settings.overlay({ "voice.enabled": false, "stt.wake.enabled": true });
@@ -35,10 +35,14 @@ export class LocalVoiceMode {
 		const listener = new WakeListener({
 			...this.deps,
 			settings: this.settings,
-			submit: text => this.#request(text, abort.signal),
-			isSpeechPlaying: () => this.#busy || (this.deps.isSpeechPlaying?.() ?? false),
+			submit: async text => {
+				void this.#request(text);
+			},
+			isSpeechPlaying: () => !!this.#replyAbort || this.deps.isSpeechPlaying(),
+			activated: () => this.#interruptReply(),
 			stopped: () => {
 				abort.abort();
+				this.#interruptReply();
 				if (this.#abort === abort) cfgVoiceEnabled.override(this.settings, false);
 			},
 		});
@@ -51,6 +55,7 @@ export class LocalVoiceMode {
 	disable(): void {
 		const wasEnabled = this.enabled;
 		cfgVoiceEnabled.override(this.settings, false);
+		this.#interruptReply();
 		this.#abort?.abort();
 		this.#abort = undefined;
 		this.#listener?.stop();
@@ -58,9 +63,18 @@ export class LocalVoiceMode {
 		if (wasEnabled) this.deps.clearSpeech();
 	}
 
-	async #request(text: string, signal: AbortSignal): Promise<void> {
-		if (!this.enabled || signal.aborted || this.#busy) return;
-		this.#busy = true;
+	#interruptReply(): void {
+		this.#replyAbort?.abort();
+		this.#replyAbort = undefined;
+		this.deps.clearSpeech();
+	}
+
+	async #request(text: string): Promise<void> {
+		if (!this.enabled || this.#abort?.signal.aborted) return;
+		this.#interruptReply();
+		const abort = new AbortController();
+		this.#replyAbort = abort;
+		const signal = abort.signal;
 		try {
 			const reply = await this.deps.request(text);
 			if (!reply || signal.aborted) return;
@@ -77,7 +91,7 @@ export class LocalVoiceMode {
 		} catch (error) {
 			if (!signal.aborted) this.deps.warning(error instanceof Error ? error.message : String(error));
 		} finally {
-			this.#busy = false;
+			if (this.#replyAbort === abort) this.#replyAbort = undefined;
 		}
 	}
 }

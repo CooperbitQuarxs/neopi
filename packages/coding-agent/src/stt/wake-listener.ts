@@ -60,6 +60,8 @@ export interface WakeListenerDependencies {
 	capture?: typeof sharedAudioCapture;
 	detector?: KeywordDetector;
 	prepare?: (signal: AbortSignal) => Promise<void>;
+	/** Runs on activation before the readiness chirp. */
+	activated?: () => void;
 	isSpeechPlaying?: () => boolean;
 	/** Called after a microphone error, allowing the owner to leave voice mode. */
 	stopped?: () => void;
@@ -110,7 +112,8 @@ export class WakeListener {
 				},
 				{
 					chirp: async () => {
-						if (this.deps.isSpeechPlaying?.() ?? vocalizer.isSpeaking()) vocalizer.clear();
+						this.deps.activated?.();
+						vocalizer.interruptTurn();
 						this.deps.status("Wake word heard; recording request");
 						this.#player?.stop();
 						const player = createStreamingPlayer();

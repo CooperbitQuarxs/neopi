@@ -245,6 +245,7 @@ describe("wake microphone ownership", () => {
 	});
 	afterEach(() => {
 		restoreSettingsTestState(state);
+		vocalizer.beginTurn();
 		vi.restoreAllMocks();
 	});
 
