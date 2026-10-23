@@ -172,6 +172,8 @@ import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
 import { transcribeXaiAudio } from "../stt/xai-stt";
 import { XaiSTTController } from "../stt/xai-stt-controller";
 import { WakeListener } from "../stt/wake-listener";
+import { LocalVoiceMode } from "../stt/local-voice";
+import { SpeechEnhancer } from "../tts/speech-enhancer";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
 import { labelEchoesHandle } from "../task/label";
@@ -1875,6 +1877,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#sttController: STTController | undefined;
 	#xaiSttController: XaiSTTController | undefined;
 	#wakeListener: WakeListener | undefined;
+	#localVoice: LocalVoiceMode | undefined;
+	#syncWakeListener: (() => void) | undefined;
 	#micCursor: MicCursor | undefined;
 	// Fork: the main-composer destination outlives extension editor replacements.
 	readonly #xaiComposerDestination = {
@@ -2617,9 +2621,53 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Subscribe to agent events
 		this.#subscribeToAgent();
+		this.#localVoice = new LocalVoiceMode({
+			settings: this.settings,
+			controller: new STTController({
+				settings: this.settings,
+				registry: this.session.modelRegistry,
+				getSessionId: () => this.session.sessionId,
+			}),
+			request: async text => {
+				if (this.liveCallActive || this.session.isStreaming)
+					throw new Error("This session is busy; try again when its turn ends");
+				const sessionId = this.session.sessionId;
+				const previous = this.session.messages.at(-1);
+				await this.session.prompt(text, { throwOnDrop: true });
+				if (this.session.sessionId !== sessionId) return;
+				const reply = this.session.messages.at(-1);
+				if (!reply || reply === previous || reply.role !== "assistant" || reply.stopReason !== "stop") return;
+				return reply.content
+					.filter(block => block.type === "text")
+					.map(block => block.text)
+					.join("");
+			},
+			speak: (text, signal) =>
+				vocalizer.speakReply(
+					text,
+					{
+						settings: this.settings,
+						registry: this.session.modelRegistry,
+						sessionId: this.session.sessionId,
+					},
+					signal,
+				),
+			postprocess: (text, instruction, signal) =>
+				new SpeechEnhancer({
+					settings: this.settings,
+					registry: this.session.modelRegistry,
+					sessionId: this.session.sessionId,
+					metadataResolver: provider => this.session.agent.metadataForProvider(provider),
+				}).postprocess(text, instruction, signal),
+			isSpeechPlaying: () => vocalizer.isSpeaking(),
+			clearSpeech: () => vocalizer.clear(),
+			status: text => this.showStatus(text),
+			warning: text => this.showWarning(text),
+		});
 		const syncWakeListener = (): void => {
 			this.#wakeListener?.stop();
 			this.#wakeListener = undefined;
+			if (this.localVoiceActive) return;
 			if (!cfgWakeEnabled.get(this.settings)) return;
 			this.#wakeListener = new WakeListener({
 				settings: this.settings,
@@ -2646,6 +2694,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			cfgWakePlaybackTailMs.listen(this.settings, syncWakeListener),
 		);
 		syncWakeListener();
+		this.#syncWakeListener = syncWakeListener;
 
 		this.#eventBusUnsubscribers.push(
 			this.session.subscribe(event => {
@@ -5012,6 +5061,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Reconcile mode state from session entries on resume/switch. */
 	async #reconcileModeFromSession(options?: { preserveActiveGoal?: boolean }): Promise<void> {
+		this.#localVoice?.disable();
+		this.#syncWakeListener?.();
 		const vibeScopeAlreadySuspended = this.#vibeScopeSuspendedForSwitch;
 		this.#vibeScopeSuspendedForSwitch = false;
 		this.#guidedGoalInterviewActive = false;
@@ -6989,6 +7040,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#jobsSheetTimer = undefined;
 		this.#wakeListener?.stop();
 		this.#wakeListener = undefined;
+		this.#localVoice?.disable();
+		this.#localVoice = undefined;
+		this.#syncWakeListener = undefined;
 		if (this.#sttController) {
 			this.#sttController.dispose();
 			this.#sttController = undefined;
@@ -8200,8 +8254,43 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.showStatus(`Recording to ${this.#recorder.path} · /record again to stop`);
 	}
 
+	get localVoiceActive(): boolean {
+		return this.#localVoice?.enabled ?? false;
+	}
+
+	async handleLocalVoiceCommand(args = ""): Promise<void> {
+		const command = args.trim().toLowerCase();
+		if (!["", "on", "off", "status"].includes(command)) {
+			this.showWarning("Usage: /voice [on|off|status]");
+			return;
+		}
+		if (command === "status") {
+			this.showStatus(`Local voice: ${this.localVoiceActive ? "on" : "off"} for this session`);
+			return;
+		}
+		const enable = command === "on" || (command === "" && !this.localVoiceActive);
+		if (enable) {
+			if (this.liveCallActive) {
+				this.showWarning("Stop live mode before enabling local voice");
+				return;
+			}
+			this.#wakeListener?.stop();
+			this.#wakeListener = undefined;
+			vocalizer.clear();
+			await this.#localVoice?.enable();
+		} else {
+			this.#localVoice?.disable();
+		}
+		this.#syncWakeListener?.();
+		this.showStatus(`Local voice: ${this.localVoiceActive ? "on" : "off"} for this session`);
+	}
+
 	/** Start or stop the Codex-backed realtime voice surface. */
 	async handleLiveCommand(): Promise<void> {
+		if (this.localVoiceActive) {
+			this.showWarning("Turn local voice off with /voice off before starting live mode");
+			return;
+		}
 		await this.#liveCommandController.handleCommand();
 	}
 

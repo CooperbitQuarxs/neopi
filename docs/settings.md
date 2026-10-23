@@ -1146,6 +1146,8 @@ searxng:
 | `stt.wake.endWord` | string | `""` | Optional single word ending a request, removed from the submitted text. Empty uses silence only. May be "computer". |
 | `stt.wake.chirpPath` | string | `""` | Custom PCM16 mono WAV, at most two seconds. Empty uses a generated tone. |
 | `stt.wake.playbackTailMs` | number | `300` | Ignore microphone frames during assistant speech and for this many milliseconds afterward, clamped to 0–3000. The readiness chirp has no tail delay. |
+| `voice.enabled` | boolean | `false` | Session-private runtime setting controlled by `/voice [on|off|status]`. Saved values never opt another session in. |
+| `voice.postprocess` | string | `""` | Optional instruction for rewriting the complete spoken reply through the existing tiny/smol role. Empty speaks the reply verbatim; failures fall back to verbatim. |
 | `providers.openaiWebsockets`        | enum    | `auto`    | `auto`, `off`, `on`.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `providers.streamFirstEventTimeoutSeconds` | number | `-1` | First stream-event watchdog: `-1` uses provider/env defaults, `0` disables, positive values set seconds. |
 | `providers.streamIdleTimeoutSeconds` | number | `-1` | Maximum silence between stream events, with the same `-1`/`0` conventions. |
@@ -1180,6 +1182,26 @@ configurable echo tail prevents a spoken reply from waking the listener again.
 The readiness chirp is excluded from recording and speech activity; request
 capture and its silence/misactivation clocks start as soon as the chirp finishes,
 without discarding the first syllable behind an echo-tail delay.
+
+`/voice on` enables the wake → request → agent → spoken reply flow for this
+session only. It does not edit saved settings or the composer. `/voice off`
+stops it, and switching sessions turns it off. Only one wake listener can own
+the microphone; another session receives an ownership notice rather than
+opening a second capture.
+
+Voice mode works with saved `stt.wake.enabled` and `speech.enabled` both off.
+Turning it off restores their ordinary behavior. Choose request recognition
+through `modelRoles.dictation` and reply synthesis through `modelRoles.speech`,
+including `local/kokoro-paced` or cloud speech. Keyword recognition stays local.
+The optional `voice.postprocess` instruction can summarize, translate, or clean
+up the reply. Its template is `src/prompts/system/voice-postprocess.md`; the
+existing tiny/smol role runs it once per reply.
+
+Wake detection stays suppressed during the agent turn, postprocessing and
+playback, followed by the configured echo tail. Voice mode and upstream live
+mode cannot run together. Named addressing such as "computer alpha" is not
+implemented; it needs one microphone owner routing to sessions over the
+control socket.
 
 #### Saved reset auto-consumption
 

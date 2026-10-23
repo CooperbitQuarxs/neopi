@@ -13,6 +13,26 @@ import {
 	TTS_SPEED_OPTIONS,
 } from "./models";
 
+/** Session voice controller owns an isolated runtime override; never persist the toggle. */
+export const cfgVoiceEnabled = register({
+	id: "voice.enabled",
+	type: "boolean",
+	default: false,
+});
+
+export const cfgVoicePostprocess = register({
+	id: "voice.postprocess",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Local voice reply instruction",
+		description:
+			"Optional tiny/smol prompt for the complete spoken reply. Empty speaks verbatim. Use /voice to enable this session.",
+	},
+});
+
 export const cfgTtsLocalVoice = register({
 	id: "tts.localVoice",
 	type: "enum",

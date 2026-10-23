@@ -4,6 +4,7 @@ import { createStreamingPlayer, type StreamingAudioPlayer } from "../tts/streami
 import { vocalizer } from "../tts/vocalizer";
 import { sttClient } from "./asr-client";
 import { downloadSttModel } from "./downloader";
+import { acquireMicrophoneLease, type MicrophoneLease } from "./microphone-lease";
 import { DEFAULT_STT_MODEL_KEY } from "./models";
 import {
 	cfgWakeCancelMs,
@@ -59,6 +60,8 @@ export interface WakeListenerDependencies {
 	detector?: KeywordDetector;
 	prepare?: (signal: AbortSignal) => Promise<void>;
 	isSpeechPlaying?: () => boolean;
+	/** Called after a microphone error, allowing the owner to leave voice mode. */
+	stopped?: () => void;
 }
 
 /** Owns microphone, detector cancellation and speaker lifetime for one enabled session. */
@@ -67,17 +70,19 @@ export class WakeListener {
 	#capture: { stop(): void } | undefined;
 	#recorder: WakeRecorder | undefined;
 	#player: StreamingAudioPlayer | undefined;
+	#lease: MicrophoneLease | undefined;
 
 	constructor(readonly deps: WakeListenerDependencies) {}
 
-	async start(): Promise<void> {
-		if (!cfgWakeEnabled.get(this.deps.settings) || this.#abort) return;
+	async start(): Promise<boolean> {
+		if (!cfgWakeEnabled.get(this.deps.settings) || this.#abort) return false;
 		const abort = new AbortController();
 		this.#abort = abort;
 		try {
+			this.#lease = acquireMicrophoneLease();
 			await (this.deps.prepare?.(abort.signal) ??
 				downloadSttModel(DEFAULT_STT_MODEL_KEY, undefined, { signal: abort.signal }));
-			if (abort.signal.aborted) return;
+			if (abort.signal.aborted) return false;
 			const soundPath = cfgWakeChirpPath.get(this.deps.settings).trim();
 			let chirp: { samples: Float32Array; sampleRate: number };
 			if (soundPath) {
@@ -89,7 +94,7 @@ export class WakeListener {
 					samples[i] = 0.1 * Math.sin((2 * Math.PI * 880 * i) / 16000) * Math.sin((Math.PI * i) / samples.length);
 				chirp = { samples, sampleRate: 16000 };
 			}
-			if (abort.signal.aborted) return;
+			if (abort.signal.aborted) return false;
 			const endWord = cfgWakeEndWord.get(this.deps.settings).trim();
 			if (endWord && words(endWord).length !== 1) throw new Error("Wake end word must be one word");
 			const bounded = (value: number, min: number, max: number, fallback: number) =>
@@ -136,12 +141,14 @@ export class WakeListener {
 				} else recorder.push(samples, this.deps.isSpeechPlaying?.() ?? vocalizer.isSpeaking());
 			});
 			this.deps.status("Listening for computer");
+			return true;
 		} catch (error) {
 			if (!abort.signal.aborted) {
 				this.#warn(error);
 				this.stop();
 			}
 		}
+		return false;
 	}
 
 	#warn(error: unknown): void {
@@ -159,5 +166,8 @@ export class WakeListener {
 		this.#player = undefined;
 		this.#capture?.stop();
 		this.#capture = undefined;
+		this.#lease?.release();
+		this.#lease = undefined;
+		this.deps.stopped?.();
 	}
 }

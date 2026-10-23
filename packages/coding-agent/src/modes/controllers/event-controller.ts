@@ -1484,6 +1484,7 @@ export class EventController {
 	 * live (the final message is spoken at turn end).
 	 */
 	#vocalizeDelta(event: Extract<AgentSessionEvent, { type: "message_update" }>): void {
+		if (this.ctx.localVoiceActive) return;
 		if (!cfgSpeechEnabled.get(settings)) return;
 		const mode = cfgSpeechMode.get(settings);
 		const delta = event.assistantMessageEvent;
@@ -1500,6 +1501,7 @@ export class EventController {
 	 * sure the live buffer's trailing partial gets flushed.
 	 */
 	#handleTurnEnd(event: Extract<AgentSessionEvent, { type: "turn_end" }>): void {
+		if (this.ctx.localVoiceActive) return;
 		if (!cfgSpeechEnabled.get(settings)) return;
 		if (cfgSpeechMode.get(settings) !== "yield") {
 			vocalizer.flush();
