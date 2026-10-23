@@ -1,0 +1,1017 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowLeft, ArrowUpCircle, Loader2, Pencil, Plus, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
+import type {
+	ListSkillsResponse,
+	MarketplacePluginUpdate,
+	MarketplaceUpdatesResponse,
+	SkillDetailResponse,
+	SkillSummary,
+} from "@npi-deck/protocol";
+
+import { Layout } from "@/components/Layout";
+import { Button } from "@/components/ui/Button";
+import { Markdown } from "@/lib/markdown";
+import { marketplaceApi } from "@/lib/marketplace-api";
+import { skillsApi } from "@/lib/skills-api";
+import { useStore } from "@/lib/store";
+import { cn } from "@/lib/utils";
+
+type LevelFilter = "all" | "user" | "project";
+
+/** Upgrade key: a plugin can be installed (and outdated) in both scopes. */
+const updateKey = (u: Pick<MarketplacePluginUpdate, "pluginId" | "scope">) => `${u.pluginId}:${u.scope}`;
+
+/** The authoring form in the detail column: a new skill, or an edit of the selected one. */
+type EditorState = { mode: "create" } | { mode: "edit"; detail: SkillDetailResponse };
+
+/**
+ * Cockpit for every skill `omp` discovers — across `native`, `claude-plugins`,
+ * `claude`, `codex`, and the other discovery providers. Native sits at the top
+ * by default; the source filter rail surfaces all other providers.
+ */
+export function SkillsView() {
+	const [data, setData] = useState<ListSkillsResponse | null>(null);
+	const [loading, setLoading] = useState(true);
+	const [error, setError] = useState<string | undefined>();
+	const [search, setSearch] = useState("");
+	const [providerFilter, setProviderFilter] = useState<string | "all">("all");
+	const [levelFilter, setLevelFilter] = useState<LevelFilter>("all");
+	const [selectedId, setSelectedId] = useState<string | undefined>();
+	const [detail, setDetail] = useState<SkillDetailResponse | null>(null);
+	const [detailLoading, setDetailLoading] = useState(false);
+	const [detailError, setDetailError] = useState<string | undefined>();
+	// On narrow screens (< lg) the list and detail can't share a column, so
+	// they stack as a master/detail navigation: list visible until the user
+	// picks a row, then we slide to detail with a back affordance. At lg+ the
+	// CSS grid renders them side-by-side and this flag is inert.
+	const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+	// Marketplace plugin updates. Loaded from the cached catalogs on open; the
+	// "Check for updates" button re-fetches every marketplace from its source.
+	// Nothing upgrades without a click on that plugin's Upgrade button.
+	const [updates, setUpdates] = useState<MarketplaceUpdatesResponse | null>(null);
+	const [checking, setChecking] = useState(false);
+	const [upgrading, setUpgrading] = useState<string | undefined>();
+	const [updateError, setUpdateError] = useState<string | undefined>();
+	const [upgradeNotice, setUpgradeNotice] = useState<string | undefined>();
+	const [editor, setEditor] = useState<EditorState | null>(null);
+	// Bumped after a save so the detail refetches even when no watcher event arrives.
+	const [detailNonce, setDetailNonce] = useState(0);
+	const [actionError, setActionError] = useState<string | undefined>();
+
+	const refresh = useCallback(async (): Promise<void> => {
+		try {
+			const next = await skillsApi.list();
+			setData(next);
+			setError(undefined);
+		} catch (e) {
+			setError(String((e as Error).message ?? e));
+		} finally {
+			setLoading(false);
+		}
+	}, []);
+
+	useEffect(() => {
+		void refresh();
+	}, [refresh]);
+
+	useEffect(() => {
+		let cancelled = false;
+		marketplaceApi
+			.updates()
+			.then((next) => {
+				if (!cancelled) setUpdates(next);
+			})
+			.catch((e) => {
+				if (!cancelled) setUpdateError(String((e as Error).message ?? e));
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
+	const checkForUpdates = useCallback(async (): Promise<void> => {
+		setChecking(true);
+		setUpdateError(undefined);
+		setUpgradeNotice(undefined);
+		try {
+			setUpdates(await marketplaceApi.checkForUpdates());
+		} catch (e) {
+			setUpdateError(String((e as Error).message ?? e));
+		} finally {
+			setChecking(false);
+		}
+	}, []);
+
+	const upgrade = useCallback(
+		async (u: MarketplacePluginUpdate): Promise<void> => {
+			setUpgrading(updateKey(u));
+			setUpdateError(undefined);
+			setUpgradeNotice(undefined);
+			try {
+				const res = await marketplaceApi.upgrade(u.pluginId, { scope: u.scope });
+				const version = res.upgraded[0]?.version ?? u.to;
+				setUpdates((prev) =>
+					prev ? { ...prev, updates: prev.updates.filter((x) => updateKey(x) !== updateKey(u)) } : prev,
+				);
+				setUpgradeNotice(`Upgraded ${u.name} to ${version}`);
+				void refresh();
+			} catch (e) {
+				setUpdateError(String((e as Error).message ?? e));
+			} finally {
+				setUpgrading(undefined);
+			}
+		},
+		[refresh],
+	);
+
+	/** First outdated scope per plugin, for the skill rows and detail pane. */
+	const updateByPlugin = useMemo(() => {
+		const m = new Map<string, MarketplacePluginUpdate>();
+		for (const u of updates?.updates ?? []) if (!m.has(u.pluginId)) m.set(u.pluginId, u);
+		return m;
+	}, [updates]);
+	const updateCount = updates?.updates.length ?? 0;
+	const updateBusy = checking || upgrading !== undefined;
+
+	const skillsChangeCounter = useStore((s) => s.skillsChangeCounter);
+	useEffect(() => {
+		if (skillsChangeCounter === 0) return;
+		void refresh();
+	}, [skillsChangeCounter, refresh]);
+
+	const filtered = useMemo(() => {
+		const skills = data?.skills ?? [];
+		const q = search.trim().toLowerCase();
+		return skills.filter((s) => {
+			if (providerFilter !== "all" && s.provider !== providerFilter) return false;
+			if (levelFilter !== "all" && s.level !== levelFilter) return false;
+			if (!q) return true;
+			const hay = [
+				s.name,
+				s.dirName,
+				s.providerLabel,
+				s.pluginName ?? "",
+				s.frontmatter.description ?? "",
+				(s.frontmatter.triggers ?? []).join(" "),
+				(s.frontmatter.tags ?? []).join(" "),
+			]
+				.join(" ")
+				.toLowerCase();
+			return hay.includes(q);
+		});
+	}, [data, search, providerFilter, levelFilter]);
+
+	const selected = filtered.find((s) => s.id === selectedId) ?? filtered[0];
+
+	useEffect(() => {
+		if (!selected) {
+			setDetail(null);
+			setDetailError(undefined);
+			return;
+		}
+		let cancelled = false;
+		setDetailLoading(true);
+		setDetailError(undefined);
+		skillsApi
+			.detail(selected.id)
+			.then((d) => {
+				if (cancelled) return;
+				setDetail(d);
+			})
+			.catch((e) => {
+				if (cancelled) return;
+				setDetailError(String((e as Error).message ?? e));
+			})
+			.finally(() => {
+				if (cancelled) return;
+				setDetailLoading(false);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [selected?.id, skillsChangeCounter, detailNonce]);
+
+	const openCreate = (): void => {
+		setActionError(undefined);
+		setEditor({ mode: "create" });
+		setMobileDetailOpen(true);
+	};
+
+	const deleteSelected = async (skill: SkillSummary): Promise<void> => {
+		const dir = skill.skillPath.replace(/[\\/]SKILL\.md$/, "");
+		if (!window.confirm(`Delete skill "${skill.name}"? This removes ${dir} and everything in it.`)) return;
+		setActionError(undefined);
+		try {
+			await skillsApi.remove(skill.id);
+			setSelectedId(undefined);
+			setMobileDetailOpen(false);
+			await refresh();
+		} catch (e) {
+			setActionError(String((e as Error).message ?? e));
+		}
+	};
+
+	const saved = async (summary: SkillSummary, created: boolean): Promise<void> => {
+		setEditor(null);
+		if (created) {
+			// Show the new skill even if the current filters would hide it.
+			setSearch("");
+			setProviderFilter("all");
+			setLevelFilter("all");
+		}
+		setSelectedId(summary.id);
+		setDetailNonce((n) => n + 1);
+		await refresh();
+	};
+
+	return (
+		<Layout
+			sidebar={
+				<SkillsSidebar
+					skills={data?.skills ?? []}
+					providerFilter={providerFilter}
+					onProviderFilter={setProviderFilter}
+					levelFilter={levelFilter}
+					onLevelFilter={setLevelFilter}
+					updates={
+						<UpdatesSection
+							updates={updates}
+							error={updateError}
+							notice={upgradeNotice}
+							checking={checking}
+							upgrading={upgrading}
+							onUpgrade={(u) => void upgrade(u)}
+						/>
+					}
+				/>
+			}
+			inspector={<SkillInspector skill={selected} detail={detail} />}
+			main={
+				<div className="flex h-full min-h-0 flex-col">
+					<div className="flex h-10 shrink-0 items-center gap-2 border-b border-line bg-paper px-3">
+						<div className="meta">Skills</div>
+						<div className="text-xs text-ink-3">
+							{loading ? "loading..." : `${filtered.length} / ${data?.skills.length ?? 0}`}
+						</div>
+						{updateCount > 0 ? (
+							<span
+								data-testid="skills-update-count"
+								className="rounded bg-accent-soft/50 px-1.5 py-0.5 font-mono text-2xs uppercase tracking-meta text-accent"
+							>
+								{updateCount === 1 ? "1 update" : `${updateCount} updates`}
+							</span>
+						) : null}
+						<div className="flex-1" />
+						<button
+							type="button"
+							onClick={() => void checkForUpdates()}
+							disabled={updateBusy}
+							title="Fetch every marketplace from its source and compare with the installed plugins. Nothing is upgraded."
+							className="flex shrink-0 items-center gap-1.5 rounded-md border border-line bg-paper-2 px-2 py-1 text-xs text-ink-2 transition-colors hover:bg-paper-3 hover:text-ink disabled:opacity-60"
+						>
+							{checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+							<span className="hidden sm:inline">{checking ? "Checking..." : "Check for updates"}</span>
+						</button>
+						<Button variant="outline" size="sm" onClick={openCreate} disabled={editor?.mode === "create"}>
+							<Plus className="h-3.5 w-3.5" /> New skill
+						</Button>
+						<div className="flex items-center gap-2 rounded-md border border-line bg-paper-2 px-2 py-1 text-xs">
+							<Search className="h-3.5 w-3.5 text-ink-3" />
+							<input
+								value={search}
+								onChange={(e) => setSearch(e.target.value)}
+								placeholder="Search name, description, triggers, tags"
+								className="w-full bg-transparent text-ink placeholder:text-ink-4 focus:outline-none sm:w-72"
+							/>
+						</div>
+					</div>
+
+					{error || actionError ? (
+						<div className="mx-3 mt-2 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+							{error ?? actionError}
+						</div>
+					) : null}
+
+					<div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+						<div
+							className={cn(
+								"min-h-0 overflow-y-auto border-line lg:block lg:border-r",
+								mobileDetailOpen ? "hidden" : "block",
+							)}
+						>
+							{loading && !data ? (
+								<div className="px-3 py-6 text-center text-sm text-ink-3">Loading skills...</div>
+							) : null}
+							{!loading && filtered.length === 0 ? (
+								<EmptyState total={data?.skills.length ?? 0} />
+							) : null}
+							{filtered.map((s) => (
+								<SkillRow
+									key={s.id}
+									skill={s}
+									active={selected?.id === s.id}
+									update={s.pluginId ? updateByPlugin.get(s.pluginId) : undefined}
+									onClick={() => {
+										if (editor && !window.confirm("Discard the skill you are editing?")) return;
+										setEditor(null);
+										setSelectedId(s.id);
+										setMobileDetailOpen(true);
+									}}
+								/>
+							))}
+						</div>
+
+						<div
+							className={cn(
+								"min-h-0 overflow-y-auto lg:block",
+								mobileDetailOpen ? "block" : "hidden",
+							)}
+						>
+							{editor ? (
+								<SkillEditor
+									key={editor.mode === "edit" ? editor.detail.id : "new"}
+									editor={editor}
+									onCancel={() => {
+										setEditor(null);
+										if (editor.mode === "create") setMobileDetailOpen(false);
+									}}
+									onSaved={(summary) => void saved(summary, editor.mode === "create")}
+								/>
+							) : !selected ? null : (
+								<SkillDetailPane
+									skill={selected}
+									detail={detail}
+									loading={detailLoading}
+									error={detailError}
+									update={selected.pluginId ? updateByPlugin.get(selected.pluginId) : undefined}
+									upgrading={upgrading}
+									upgradeDisabled={updateBusy}
+									onUpgrade={(u) => void upgrade(u)}
+									onBack={() => setMobileDetailOpen(false)}
+									onEdit={
+										selected.editable && detail?.id === selected.id
+											? () => {
+													setActionError(undefined);
+													setEditor({ mode: "edit", detail });
+												}
+											: undefined
+									}
+									onDelete={selected.editable ? () => void deleteSelected(selected) : undefined}
+								/>
+							)}
+						</div>
+					</div>
+				</div>
+			}
+		/>
+	);
+}
+
+function SkillRow({
+	skill,
+	active,
+	update,
+	onClick,
+}: {
+	skill: SkillSummary;
+	active: boolean;
+	update: MarketplacePluginUpdate | undefined;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			className={cn(
+				"flex w-full flex-col items-start gap-1 border-b border-line px-3 py-2 text-left transition-colors",
+				active ? "bg-accent-soft/30" : "hover:bg-paper-3",
+				!skill.enabled && "opacity-60",
+			)}
+		>
+			<div className="flex w-full items-center gap-2">
+				<Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" />
+				<span className="truncate text-sm font-medium text-ink">{skill.name}</span>
+				{update ? (
+					<span
+						title={`${update.pluginId}: ${update.from} → ${update.to}`}
+						className="ml-auto shrink-0 rounded bg-accent-soft/50 px-1.5 py-0.5 font-mono text-2xs uppercase tracking-meta text-accent"
+					>
+						update
+					</span>
+				) : null}
+				{!skill.enabled ? (
+					<span className={cn("rounded bg-paper-3 px-1.5 py-0.5 font-mono text-2xs uppercase tracking-meta text-ink-3", !update && "ml-auto")}>
+						hidden
+					</span>
+				) : null}
+			</div>
+			<div className="flex w-full items-center gap-2 font-mono text-2xs text-ink-3">
+				<ProviderBadge provider={skill.provider} label={skill.providerLabel} />
+				<span className="uppercase tracking-meta">{skill.level}</span>
+				{skill.pluginName ? (
+					<>
+						<span className="text-ink-4">·</span>
+						<span className="truncate">{skill.pluginName}</span>
+					</>
+				) : null}
+			</div>
+			{skill.frontmatter.description ? (
+				<div className="line-clamp-2 text-xs text-ink-3">{skill.frontmatter.description}</div>
+			) : null}
+		</button>
+	);
+}
+
+function ProviderBadge({ provider, label }: { provider: string; label: string }) {
+	// Color tag native distinctly; everything else gets a muted treatment.
+	const tone = provider === "native" ? "bg-accent-soft/50 text-accent" : "bg-paper-3 text-ink-2";
+	return (
+		<span className={cn("rounded px-1.5 py-0.5 font-mono text-2xs uppercase tracking-meta", tone)}>
+			{label}
+		</span>
+	);
+}
+
+function SkillDetailPane({
+	skill,
+	detail,
+	loading,
+	error,
+	update,
+	upgrading,
+	upgradeDisabled,
+	onUpgrade,
+	onBack,
+	onEdit,
+	onDelete,
+}: {
+	skill: SkillSummary;
+	detail: SkillDetailResponse | null;
+	loading: boolean;
+	error: string | undefined;
+	update: MarketplacePluginUpdate | undefined;
+	upgrading: string | undefined;
+	upgradeDisabled: boolean;
+	onUpgrade: (u: MarketplacePluginUpdate) => void;
+	onBack?: () => void;
+	/** Present only for editable skills once their detail has loaded. */
+	onEdit?: () => void;
+	onDelete?: () => void;
+}) {
+	return (
+		<div className="flex h-full flex-col">
+			<div className="border-b border-line px-4 py-3">
+				<div className="flex items-center gap-2">
+					{onBack ? (
+						<button
+							type="button"
+							onClick={onBack}
+							aria-label="Back to skill list"
+							className="-ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-3 transition-colors hover:bg-paper-3 hover:text-ink lg:hidden"
+						>
+							<ArrowLeft className="h-4 w-4" />
+						</button>
+					) : null}
+					<Sparkles className="h-4 w-4 text-accent" />
+					<h1 className="text-base font-medium text-ink">{skill.name}</h1>
+					<div className="ml-auto flex items-center gap-2">
+						{onEdit ? (
+							<Button variant="ghost" size="sm" onClick={onEdit} aria-label={`Edit ${skill.name}`}>
+								<Pencil className="h-3.5 w-3.5" /> Edit
+							</Button>
+						) : null}
+						{onDelete ? (
+							<Button variant="ghost" size="sm" onClick={onDelete} aria-label={`Delete ${skill.name}`} className="text-danger">
+								<Trash2 className="h-3.5 w-3.5" /> Delete
+							</Button>
+						) : null}
+						<ProviderBadge provider={skill.provider} label={skill.providerLabel} />
+						<span className="font-mono text-2xs uppercase tracking-meta text-ink-3">
+							{skill.level}
+						</span>
+						{!skill.editable ? (
+							<span
+								className="font-mono text-2xs uppercase tracking-meta text-ink-4"
+								title="The deck edits OMP user skills under the agent dir only. Edit this one where it lives."
+							>
+								read-only
+							</span>
+						) : null}
+					</div>
+				</div>
+				<div className="mt-1 font-mono text-2xs text-ink-3">
+					{skill.pluginId ? (
+						<>
+							<span className="text-ink-4">from plugin</span> {skill.pluginId}
+						</>
+					) : (
+						<>
+							<span className="text-ink-4">from</span> {skill.providerLabel}
+							<span className="text-ink-4"> · dir</span> {skill.dirName}
+						</>
+					)}
+				</div>
+				{update ? (
+					<div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-accent/30 bg-accent-soft/20 px-2 py-1.5 text-xs">
+						<ArrowUpCircle className="h-3.5 w-3.5 shrink-0 text-accent" />
+						<span className="text-ink-2">
+							Plugin update available:{" "}
+							<span className="font-mono">
+								{update.from} → {update.to}
+							</span>{" "}
+							<span className="font-mono text-2xs uppercase tracking-meta text-ink-3">{update.scope}</span>
+						</span>
+						<UpgradeButton
+							update={update}
+							busy={upgrading === updateKey(update)}
+							disabled={upgradeDisabled}
+							onUpgrade={onUpgrade}
+							className="ml-auto"
+						/>
+					</div>
+				) : null}
+				{skill.frontmatter.description ? (
+					<p className="mt-2 text-sm text-ink-2">{skill.frontmatter.description}</p>
+				) : null}
+				{(skill.frontmatter.triggers?.length ?? 0) > 0 ? (
+					<TagRow label="triggers" values={skill.frontmatter.triggers ?? []} />
+				) : null}
+				{(skill.frontmatter.tags?.length ?? 0) > 0 ? (
+					<TagRow label="tags" values={skill.frontmatter.tags ?? []} />
+				) : null}
+			</div>
+
+			{error ? (
+				<div className="m-3 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+					{error}
+				</div>
+			) : null}
+
+			{loading && !detail ? (
+				<div className="flex items-center gap-2 px-4 py-3 text-sm text-ink-3">
+					<Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading SKILL.md...
+				</div>
+			) : null}
+
+			{detail ? (
+				<div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+					<Markdown relativeLinks="unavailable">{detail.body}</Markdown>
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+/**
+ * Create or edit form. A new skill's name becomes its directory under the
+ * agent dir's `skills/` and cannot change afterwards; the server validates
+ * name and description with NeoPi's own rules and reports the first problem.
+ */
+function SkillEditor({
+	editor,
+	onCancel,
+	onSaved,
+}: {
+	editor: EditorState;
+	onCancel: () => void;
+	onSaved: (summary: SkillSummary) => void;
+}) {
+	const editing = editor.mode === "edit" ? editor.detail : undefined;
+	const [name, setName] = useState(editing?.name ?? "");
+	const [description, setDescription] = useState(editing?.frontmatter.description ?? "");
+	const [body, setBody] = useState(editing ? editing.body.replace(/^\n+/, "") : "");
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | undefined>();
+
+	const save = async (e: React.FormEvent): Promise<void> => {
+		e.preventDefault();
+		setSaving(true);
+		setError(undefined);
+		try {
+			const summary = editing
+				? await skillsApi.update(editing.id, { description, body, revision: editing.revision })
+				: await skillsApi.create({ name, description, body });
+			onSaved(summary);
+		} catch (err) {
+			setError(String((err as Error).message ?? err));
+		} finally {
+			setSaving(false);
+		}
+	};
+
+	return (
+		<form className="flex h-full flex-col" onSubmit={(e) => void save(e)} aria-label={editing ? `Edit ${editing.name}` : "New skill"}>
+			<div className="flex items-center gap-2 border-b border-line px-4 py-3">
+				<Sparkles className="h-4 w-4 text-accent" />
+				<h1 className="text-base font-medium text-ink">{editing ? `Edit ${editing.name}` : "New skill"}</h1>
+				<div className="ml-auto flex items-center gap-2">
+					<Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
+						Cancel
+					</Button>
+					<Button type="submit" variant="primary" size="sm" disabled={saving || !name.trim() || !description.trim()}>
+						{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+						{editing ? "Save" : "Create"}
+					</Button>
+				</div>
+			</div>
+			<div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3 text-sm">
+				{error ? (
+					<div role="alert" className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+						{error}
+					</div>
+				) : null}
+				<label className="block">
+					<span className="font-mono text-2xs uppercase tracking-meta text-ink-4">name</span>
+					<input
+						className="field mt-1 w-full px-2 py-1 font-mono"
+						value={name}
+						onChange={(e) => setName(e.target.value)}
+						readOnly={Boolean(editing)}
+						placeholder="my-skill"
+						autoFocus={!editing}
+						spellCheck={false}
+					/>
+					<span className="mt-1 block text-2xs text-ink-3">
+						{editing
+							? `Fixed: the skill lives in ${editing.skillPath.replace(/[\\/]SKILL\.md$/, "")}.`
+							: "Lowercase letters, digits and single hyphens, up to 64 characters. It becomes the skill's directory under the agent dir's skills/."}
+					</span>
+				</label>
+				<label className="block">
+					<span className="font-mono text-2xs uppercase tracking-meta text-ink-4">description</span>
+					<textarea
+						className="field mt-1 min-h-20 w-full p-2"
+						value={description}
+						onChange={(e) => setDescription(e.target.value)}
+						placeholder="What the skill does and when the agent should reach for it."
+					/>
+					<span className={cn("mt-1 block text-2xs", description.length > 1024 ? "text-danger" : "text-ink-3")}>
+						{description.length} / 1024. The agent sees this in its skill list at session start.
+					</span>
+				</label>
+				<label className="block">
+					<span className="font-mono text-2xs uppercase tracking-meta text-ink-4">SKILL.md body (markdown)</span>
+					<textarea
+						className="field mt-1 min-h-80 w-full p-2 font-mono text-xs"
+						value={body}
+						onChange={(e) => setBody(e.target.value)}
+						placeholder="Instructions the agent receives when it invokes the skill."
+						spellCheck={false}
+					/>
+					{editing ? (
+						<span className="mt-1 block text-2xs text-ink-3">Other frontmatter keys in SKILL.md are kept as they are.</span>
+					) : null}
+				</label>
+			</div>
+		</form>
+	);
+}
+
+function TagRow({ label, values }: { label: string; values: readonly string[] }) {
+	return (
+		<div className="mt-2 flex flex-wrap items-center gap-1">
+			<span className="font-mono text-2xs uppercase tracking-meta text-ink-4">{label}</span>
+			{values.map((v) => (
+				<span
+					key={v}
+					className="rounded bg-paper-3 px-1.5 py-0.5 font-mono text-2xs text-ink-2"
+				>
+					{v}
+				</span>
+			))}
+		</div>
+	);
+}
+
+function EmptyState({ total }: { total: number }) {
+	return (
+		<div className="flex h-full flex-col items-center justify-center px-6 py-10 text-center">
+			<Sparkles className="h-6 w-6 text-ink-4" />
+			<div className="mt-3 text-sm text-ink-2">
+				{total === 0 ? "No skills discovered" : "No skills match the current filters"}
+			</div>
+			<div className="mt-1 max-w-xs text-xs text-ink-3">
+				{total === 0
+					? "Author one with New skill, drop a SKILL.md into ~/.omp/agent/skills/<name>/, or install a marketplace plugin."
+					: "Try clearing the source / level filters or the search box."}
+			</div>
+		</div>
+	);
+}
+
+function SkillsSidebar({
+	skills,
+	providerFilter,
+	onProviderFilter,
+	levelFilter,
+	onLevelFilter,
+	updates,
+}: {
+	skills: SkillSummary[];
+	providerFilter: string | "all";
+	onProviderFilter: (p: string | "all") => void;
+	levelFilter: LevelFilter;
+	onLevelFilter: (l: LevelFilter) => void;
+	updates: React.ReactNode;
+}) {
+	const providers = useMemo(() => {
+		const m = new Map<string, { label: string; count: number; priority: number }>();
+		for (const s of skills) {
+			const cur = m.get(s.provider);
+			if (cur) cur.count += 1;
+			else m.set(s.provider, { label: s.providerLabel, count: 1, priority: providerPriority(s.provider) });
+		}
+		return Array.from(m.entries())
+			.map(([id, v]) => ({ id, ...v }))
+			.sort((a, b) => a.priority - b.priority || a.label.localeCompare(b.label));
+	}, [skills]);
+
+	const levelCounts = useMemo(
+		() => ({
+			all: skills.length,
+			user: skills.filter((s) => s.level === "user").length,
+			project: skills.filter((s) => s.level === "project").length,
+		}),
+		[skills],
+	);
+
+	return (
+		<div className="flex h-full min-h-0 flex-col overflow-y-auto">
+			<div className="border-b border-line px-3 py-2">
+				<div className="meta">Skills</div>
+				<div className="mt-0.5 text-xs text-ink-3">
+					Every skill <span className="text-ink-2">omp</span> can reach — native, marketplace, and
+					sibling agent-tool configs. Enable/disable lives on the owning plugin or provider.
+				</div>
+			</div>
+
+			<div className="border-b border-line px-3 py-2">
+				<div className="font-mono text-2xs uppercase tracking-meta text-ink-4">Source</div>
+				<FilterRow
+					label="all"
+					count={skills.length}
+					active={providerFilter === "all"}
+					onClick={() => onProviderFilter("all")}
+				/>
+				{providers.map((p) => (
+					<FilterRow
+						key={p.id}
+						label={p.label}
+						count={p.count}
+						active={providerFilter === p.id}
+						onClick={() => onProviderFilter(p.id)}
+						highlight={p.id === "native"}
+					/>
+				))}
+			</div>
+
+			<div className="border-b border-line px-3 py-2">
+				<div className="font-mono text-2xs uppercase tracking-meta text-ink-4">Level</div>
+				<FilterRow label="all" count={levelCounts.all} active={levelFilter === "all"} onClick={() => onLevelFilter("all")} />
+				<FilterRow label="user" count={levelCounts.user} active={levelFilter === "user"} onClick={() => onLevelFilter("user")} />
+				<FilterRow label="project" count={levelCounts.project} active={levelFilter === "project"} onClick={() => onLevelFilter("project")} />
+			</div>
+
+			{updates}
+		</div>
+	);
+}
+
+/**
+ * Marketplace plugins whose catalog is ahead of the installed copy, each with
+ * its own Upgrade button. Upgrades are per plugin and per scope; nothing here
+ * upgrades on its own.
+ */
+function UpdatesSection({
+	updates,
+	error,
+	notice,
+	checking,
+	upgrading,
+	onUpgrade,
+}: {
+	updates: MarketplaceUpdatesResponse | null;
+	error: string | undefined;
+	notice: string | undefined;
+	checking: boolean;
+	upgrading: string | undefined;
+	onUpgrade: (u: MarketplacePluginUpdate) => void;
+}) {
+	const busy = checking || upgrading !== undefined;
+	const checkedAt = updates ? new Date(updates.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+	return (
+		<div className="min-h-0 px-3 py-2" data-testid="skills-updates">
+			<div className="font-mono text-2xs uppercase tracking-meta text-ink-4">Plugin updates</div>
+			{error ? <div className="mt-1 break-words font-mono text-2xs text-danger">{error}</div> : null}
+			{notice ? <div className="mt-1 text-xs text-success">{notice}</div> : null}
+			{!updates ? (
+				<div className="mt-1 text-xs text-ink-3">{checking ? "Checking..." : "Not checked yet."}</div>
+			) : updates.updates.length === 0 ? (
+				<div className="mt-1 text-xs text-ink-3">
+					Installed plugins match their{" "}
+					{!updates.refreshed ? "cached catalogs" : updates.refreshErrors.length > 0 ? "catalogs" : "sources"} ({checkedAt}).
+					{updates.refreshed ? null : " Check for updates to fetch the sources."}
+				</div>
+			) : (
+				<ul className="mt-1 space-y-1">
+					{updates.updates.map((u) => (
+						<li key={updateKey(u)} className="flex items-center gap-2 rounded-md px-2 py-1 text-xs hover:bg-paper-3">
+							<div className="min-w-0 flex-1">
+								<div className="truncate text-ink" title={u.pluginId}>
+									{u.name}
+									<span className="text-ink-4">@{u.marketplace}</span>
+								</div>
+								<div className="font-mono text-2xs text-ink-3">
+									{u.from} → {u.to} <span className="uppercase tracking-meta text-ink-4">{u.scope}</span>
+								</div>
+							</div>
+							<UpgradeButton update={u} busy={upgrading === updateKey(u)} disabled={busy} onUpgrade={onUpgrade} />
+						</li>
+					))}
+				</ul>
+			)}
+			{updates && updates.updates.length > 0 && !updates.refreshed ? (
+				<div className="mt-1 text-2xs text-ink-4">From cached catalogs ({checkedAt}); check for updates to fetch the sources.</div>
+			) : null}
+			{(updates?.refreshErrors ?? []).map((e) => (
+				<div key={e.marketplace} className="mt-1 break-words text-2xs text-danger" title={e.error}>
+					Couldn't fetch {e.marketplace}; compared its cached catalog instead.
+				</div>
+			))}
+		</div>
+	);
+}
+
+function UpgradeButton({
+	update,
+	busy,
+	disabled,
+	onUpgrade,
+	className,
+}: {
+	update: MarketplacePluginUpdate;
+	busy: boolean;
+	disabled: boolean;
+	onUpgrade: (u: MarketplacePluginUpdate) => void;
+	className?: string;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={() => onUpgrade(update)}
+			disabled={disabled}
+			aria-label={`Upgrade ${update.pluginId} (${update.scope}) to ${update.to}`}
+			className={cn(
+				"flex shrink-0 items-center gap-1 rounded-md border border-accent/40 px-2 py-0.5 text-2xs font-medium text-accent transition-colors hover:bg-accent-soft/40 disabled:opacity-50",
+				className,
+			)}
+		>
+			{busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <ArrowUpCircle className="h-3 w-3" />}
+			{busy ? "Upgrading..." : "Upgrade"}
+		</button>
+	);
+}
+
+function FilterRow({
+	label,
+	count,
+	active,
+	onClick,
+	highlight,
+}: {
+	label: string;
+	count: number;
+	active: boolean;
+	onClick: () => void;
+	highlight?: boolean;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			className={cn(
+				"flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-sm transition-colors",
+				active
+					? "bg-accent-soft/40 text-ink"
+					: highlight
+						? "text-accent hover:bg-paper-3"
+						: "text-ink-2 hover:bg-paper-3",
+			)}
+		>
+			<span className="truncate">{label}</span>
+			<span className={cn("font-mono text-2xs", active ? "text-ink-2" : "text-ink-3")}>{count}</span>
+		</button>
+	);
+}
+
+function SkillInspector({
+	skill,
+	detail,
+}: {
+	skill: SkillSummary | undefined;
+	detail: SkillDetailResponse | null;
+}) {
+	if (!skill) {
+		return <div className="px-3 py-4 text-xs text-ink-3">Pick a skill to inspect.</div>;
+	}
+	return (
+		<div className="flex h-full flex-col">
+			<div className="border-b border-line px-3 py-2">
+				<div className="meta">Inspector</div>
+				<div className="mt-0.5 text-xs text-ink-3">SKILL.md frontmatter + co-located files.</div>
+			</div>
+			<div className="space-y-3 overflow-y-auto px-3 py-3 text-xs">
+				<DefRow k="name" v={<span className="font-mono">{skill.name}</span>} />
+				<DefRow k="dir" v={<span className="font-mono">{skill.dirName}</span>} />
+				<DefRow k="provider" v={<span className="font-mono">{skill.providerLabel} ({skill.provider})</span>} />
+				<DefRow k="level" v={<span className="font-mono uppercase">{skill.level}</span>} />
+				{skill.pluginId ? (
+					<DefRow k="plugin" v={<span className="font-mono">{skill.pluginId}</span>} />
+				) : null}
+				<DefRow
+					k="enabled"
+					v={
+						<span className={cn("font-mono", skill.enabled ? "text-success" : "text-ink-3")}>
+							{skill.enabled ? "yes" : "hidden (frontmatter)"}
+						</span>
+					}
+				/>
+				{skill.frontmatter.model ? (
+					<DefRow k="model" v={<span className="font-mono">{skill.frontmatter.model}</span>} />
+				) : null}
+				<DefRow k="path" v={<span className="break-all font-mono text-2xs">{skill.skillPath}</span>} />
+
+				{detail && detail.files.length > 0 ? (
+					<div>
+						<div className="font-mono text-2xs uppercase tracking-meta text-ink-4">
+							Bundled files ({detail.files.filter((f) => f.kind === "file").length})
+						</div>
+						<div className="mt-1 text-2xs text-ink-4">
+							Reachable on demand — not auto-injected into the agent's context.
+						</div>
+						<ul className="mt-2 space-y-0.5 font-mono text-2xs">
+							{detail.files.map((f) => (
+								<li
+									key={f.relPath}
+									className={cn(
+										"flex items-baseline gap-2",
+										f.kind === "dir" ? "text-ink-2" : "text-ink-3",
+									)}
+								>
+									<span className="truncate">{f.relPath}</span>
+									{f.kind === "file" && typeof f.size === "number" ? (
+										<span className="ml-auto shrink-0 text-ink-4">{formatBytes(f.size)}</span>
+									) : null}
+								</li>
+							))}
+						</ul>
+					</div>
+				) : null}
+			</div>
+		</div>
+	);
+}
+
+function DefRow({ k, v }: { k: string; v: React.ReactNode }) {
+	return (
+		<div>
+			<div className="font-mono text-2xs uppercase tracking-meta text-ink-4">{k}</div>
+			<div className="mt-0.5 text-ink-2">{v}</div>
+		</div>
+	);
+}
+
+function formatBytes(n: number): string {
+	if (n < 1024) return `${n}B`;
+	if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}K`;
+	return `${(n / (1024 * 1024)).toFixed(1)}M`;
+}
+
+function providerPriority(provider: string): number {
+	switch (provider) {
+		case "native":
+			return 0;
+		case "claude-plugins":
+			return 1;
+		case "claude":
+			return 2;
+		case "codex":
+			return 3;
+		case "opencode":
+			return 4;
+		case "cursor":
+			return 5;
+		case "windsurf":
+			return 6;
+		case "cline":
+			return 7;
+		case "gemini":
+			return 8;
+		case "agents":
+			return 9;
+		case "custom":
+			return 10;
+		default:
+			return 100;
+	}
+}

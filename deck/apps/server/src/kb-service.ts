@@ -1,0 +1,1345 @@
+/**
+ * KB Cockpit backend.
+ *
+ * Walks the user's Karpathy-style llm-wiki at `~/kb` (or `NPI_DECK_KB_ROOT`),
+ * caches an inventory of every reachable markdown file, and resolves
+ * `[[wikilinks]]` against it. The deck cockpit's `/kb` view + graph view
+ * consume the output of this service.
+ *
+ * Design highlights (per docs/proposals/kb-cockpit.md):
+ * - Top-level skip set matches orphan-census.py's conventions, PLUS the
+ *   user-approved `projects/` exclusion. Mixed-signal projects/ tree stays
+ *   out of v1.
+ * - Symlinks/junctions (e.g. `cryptocracy/`) are followed once, by tracking
+ *   visited absolute paths to break cycles.
+ * - Wikilink resolution is stem-first with subpath fallback; code blocks
+ *   are stripped before extraction so regex-literal noise (`[[:alpha:]]`)
+ *   doesn't leak into the link table.
+ * - YAML frontmatter parsing uses the `yaml` package — kb files have real
+ *   arrays / nested objects and a header-grep approach is insufficient.
+ *
+ * The service is read-only at v1; T-36 introduces PUT/POST. The watcher
+ * (T-34 bottom) fires `kb_changed` on any mutation so subsequent reads see
+ * fresh data after `rebuildIndex()` is called by the watcher.
+ */
+
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { link, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { createInterface } from "node:readline";
+
+import YAML from "yaml";
+
+import type {
+	KbBacklink,
+	KbBacklinksResponse,
+	KbFileResponse,
+	KbGraphEdge,
+	KbGraphNode,
+	KbGraphResponse,
+	KbTreeEntry,
+	KbTreeResponse,
+	KbWikilink,
+	KbSearchMatchKind,
+	KbSearchResponse,
+	KbSearchResult,
+} from "@npi-deck/protocol";
+
+import { KB_IGNORE_FILE, KbIgnore } from "./kb-ignore.ts";
+import { logger } from "./log.ts";
+import { spawnOwned, terminateOwned } from "./owned-process.ts";
+
+const log = logger("kb");
+
+async function historyGit(root: string, args: string[]): Promise<string> {
+	const proc = spawnOwned(["git", ...args], {
+		cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+		env: { GIT_TERMINAL_PROMPT: "0" },
+	});
+	let timedOut = false;
+	const timer = setTimeout(() => { timedOut = true; void terminateOwned(proc); }, 5000);
+	const readOutput = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
+		const reader = stream.getReader();
+		const decoder = new TextDecoder();
+		let bytes = 0;
+		let text = "";
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) return text + decoder.decode();
+				bytes += value.byteLength;
+				if (bytes > 1024 * 1024) throw new Error("Git history output exceeds 1 MiB");
+				text += decoder.decode(value, { stream: true });
+			}
+		} finally { reader.releaseLock(); }
+	};
+	try {
+		const [stdout, stderr, code] = await Promise.all([readOutput(proc.stdout), readOutput(proc.stderr), proc.exited]);
+		if (timedOut) throw new Error("Git history timed out");
+		if (code !== 0) throw new Error(`Git history failed: ${stderr.trim()}`);
+		return stdout;
+	} finally {
+		clearTimeout(timer);
+		if (proc.exitCode === null) await terminateOwned(proc);
+	}
+}
+
+// Top-level (anywhere in the tree) directory names to skip. Mirrors the
+// canonical set in my-org-new/scripts/orphan-census.py — vendor-noise
+// directories that nobody wants in a knowledge graph. To add your own
+// (e.g. a personal `drafts/` folder, a `private/` subtree), either list
+// them in a gitignore-syntax `.kbignore` at the kb root (see kb-ignore.ts;
+// re-read whenever the index rebuilds, so edits apply without a restart)
+// or set `NPI_DECK_KB_EXCLUDE_DIRS` to a comma-separated list of names and
+// restart.
+//
+// The list is intentionally minimal by default: npi-deck shows your kb the
+// way you organized it on disk. This set and the env override apply before
+// `.kbignore`, so a `!` pattern there cannot re-include them.
+const SKIP_DIR_NAMES = new Set<string>([
+	".git",
+	".github",
+	"node_modules",
+	"target",
+	".venv",
+	"venv",
+	"__pycache__",
+	"dist",
+	"build",
+	".next",
+	".nuxt",
+	".idea",
+	".vscode",
+	...parseExcludeDirsFromEnv(),
+]);
+
+function parseExcludeDirsFromEnv(): string[] {
+	const raw = process.env.NPI_DECK_KB_EXCLUDE_DIRS;
+	if (!raw) return [];
+	return raw
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+}
+
+// Skill-creator and related .agents/skills dirs we don't want surfaced.
+const SKIP_PATH_FRAGMENTS = [".agents/skills"];
+
+// Ambiguous stems that should never resolve by stem-match alone. Force the
+// author to use a subpath. Mirrors orphan-census.py's `AMBIGUOUS_STEMS`.
+const AMBIGUOUS_STEMS = new Set<string>([
+	"readme",
+	"index",
+	"profile",
+	"skill",
+	"summary",
+	"notes",
+]);
+
+// Search match kinds, ranked by precedence. Lower rank = stronger match.
+// Used to pick the "best" kind to show in the result UI when a file
+// matches multiple ways.
+const KIND_RANK: Record<KbSearchMatchKind, number> = {
+	stem: 0,
+	title: 1,
+	tag: 2,
+	body: 3,
+};
+
+/**
+ * Build a single-line snippet centered on a body match. Avoids walking
+ * across line boundaries so the snippet reads cleanly even when the hit
+ * is mid-paragraph. Capped at SNIPPET_WIDTH chars with ellipsis on either
+ * side.
+ */
+function makeSnippet(text: string, matchIdx: number, matchLen: number): string {
+	const SNIPPET_WIDTH = 160;
+	const lineStart = Math.max(0, text.lastIndexOf("\n", matchIdx) + 1);
+	const lineEnd = text.indexOf("\n", matchIdx);
+	const end = lineEnd === -1 ? text.length : lineEnd;
+	const line = text.slice(lineStart, end);
+	if (line.length <= SNIPPET_WIDTH) return line.trim();
+	const relIdx = matchIdx - lineStart;
+	const half = Math.floor((SNIPPET_WIDTH - matchLen) / 2);
+	const from = Math.max(0, relIdx - half);
+	const to = Math.min(line.length, from + SNIPPET_WIDTH);
+	const prefix = from > 0 ? "…" : "";
+	const suffix = to < line.length ? "…" : "";
+	return (prefix + line.slice(from, to) + suffix).trim();
+}
+// Wikilink: `[[target|label]]`. Target may include `dir/path` and `#anchor`.
+// We deliberately exclude `]` and `|` from the target capture so labels work.
+const WIKILINK_RE = /\[\[([^\]|\n]+?)(?:\|([^\]\n]+?))?\]\]/g;
+
+// Fenced code blocks and inline backtick spans — wikilinks inside them are
+// almost always documentation/regex noise (`[[:alpha:]]`), not real links.
+const FENCED_CODE_RE = /```[\s\S]*?(?:```|$)/g;
+const INLINE_CODE_RE = /`[^`\n]+`/g;
+
+// Cap the graph payload at v1 so a runaway kb doesn't blow the wire. Sized
+// generously for the current ~600-node kb with headroom for several years
+// of growth. Bumping this is safe; the UI surfaces a `truncated` warning.
+const GRAPH_MAX_NODES = 10_000;
+
+interface GraphCache {
+	generation: number;
+	nodes: KbGraphNode[];
+	edges: KbGraphEdge[];
+	backlinks: Map<string, KbBacklink[]>;
+	unresolvedCount: number;
+	byPath: Map<string, KbGraphNode>;
+	/** Bounded per-note substring signatures; candidates are verified against disk. */
+	bodyFilters: Map<string, Uint32Array>;
+}
+interface FileRecord {
+	relPath: string; // forward-slash kb-relative
+	absPath: string;
+	dir: string; // forward-slash relative dir, "" for root
+	stem: string; // lowercase filename stem (no .md)
+	title: string;
+	tags: string[];
+	size: number;
+	mtime: Date;
+}
+
+/** A note that no other note links to. */
+export interface KbOrphan {
+	path: string;
+	title: string;
+	/** Resolved links from this note to other notes. 0 means it is isolated. */
+	outbound: number;
+}
+
+/** Result of `KbService.getOrphanCensus`. */
+export interface KbOrphanCensus {
+	root: string;
+	/** Notes the census covered: the index after the skip set and `.kbignore`. */
+	notes: number;
+	/** Every orphan, sorted by path. */
+	orphans: KbOrphan[];
+	/** Wikilinks that resolve to no indexed note. */
+	unresolvedLinks: number;
+}
+
+export interface KbServiceOptions {
+	root: string;
+}
+
+export class KbService {
+	readonly root: string;
+	private records: FileRecord[] = [];
+	private byRelPath = new Map<string, FileRecord>();
+	private byStem = new Map<string, FileRecord[]>();
+	private indexReady = false;
+	private indexPromise: Promise<void> | undefined;
+	private graphCache: GraphCache | undefined;
+	private graphPromise: Promise<GraphCache> | undefined;
+	private generation = 0;
+	/** `.kbignore` rules; undefined until first use after an invalidate. */
+	private ignoreRules: KbIgnore | undefined;
+
+	constructor(opts: KbServiceOptions) {
+		// Always store the root as an absolute path with native separators.
+		this.root = path.resolve(opts.root);
+	}
+
+	/** Lazy build on first request; subsequent calls reuse the cache. */
+	async ensureIndex(): Promise<void> {
+		while (!this.indexReady) {
+			const pending = this.indexPromise ??= this.buildIndex();
+			try {
+				await pending;
+			} finally {
+				if (this.indexPromise === pending) this.indexPromise = undefined;
+			}
+		}
+	}
+
+	/**
+	 * Invalidate cache + rebuild on next request. Called by the watcher,
+	 * which also covers edits to `.kbignore` itself: its rules are re-read
+	 * on next use.
+	 */
+	invalidate(): void {
+		this.indexReady = false;
+		this.graphCache = undefined;
+		this.generation++;
+		this.ignoreRules = undefined;
+	}
+
+	/**
+	 * Should a watcher event at `rel` (kb-relative) be dropped? Directory-only
+	 * rules need the current entry type because Windows also reports parent
+	 * directory changes. Missing or unreadable ambiguous entries refresh.
+	 * `.kbignore` itself always counts.
+	 */
+	isWatchEventIgnored(rel: string): boolean {
+		const clean = normalizeRel(rel);
+		if (!clean || clean === KB_IGNORE_FILE) return false;
+		const fileIgnored = this.pathIsExcluded(clean, false);
+		const dirIgnored = this.pathIsExcluded(clean, true);
+		if (fileIgnored === dirIgnored) return fileIgnored;
+		const abs = this.resolveAbs(clean);
+		if (!abs) return false;
+		try {
+			const entry = statSync(abs, { throwIfNoEntry: false });
+			if (!entry) return false;
+			return entry.isDirectory() ? dirIgnored : fileIgnored;
+		} catch {
+			// An unknown entry type must not hide a potentially visible change.
+			return false;
+		}
+	}
+
+	/**
+	 * Status for the read-only welcome panel: does the kb root exist, and
+	 * how many indexed files does it have?
+	 */
+	async getStatus(): Promise<{ root: string; exists: boolean; fileCount: number }> {
+		await this.ensureIndex();
+		return {
+			root: this.root,
+			exists: existsSync(this.root),
+			fileCount: this.records.length,
+		};
+	}
+
+
+	/**
+	 * Return a single directory listing. `subpath` is forward-slash relative
+	 * to the kb root; empty / "/" means root. Returns `undefined` if the
+	 * path doesn't exist or escapes the kb root.
+	 */
+	async getTree(subpath: string = ""): Promise<KbTreeResponse | undefined> {
+		await this.ensureIndex();
+		const cleanRel = normalizeRel(subpath);
+		// Reject traversal into any path whose segments include an excluded
+		// directory — keeps `/api/kb/tree?path=projects` 404 even though
+		// `projects` exists on disk.
+		if (this.pathIsExcluded(cleanRel, true)) return undefined;
+		const absDir = this.resolveAbs(cleanRel);
+		if (!absDir) return undefined;
+		if (!(await this.safeExisting(absDir))) return undefined;
+		try {
+			const st = await stat(absDir);
+			if (!st.isDirectory()) return undefined;
+		} catch {
+			return undefined;
+		}
+
+		let entries;
+		try {
+			entries = await readdir(absDir, { withFileTypes: true });
+		} catch (err) {
+			log.warn(`readdir failed at ${absDir}`, err);
+			return { path: cleanRel, dirs: [], files: [] };
+		}
+
+		const dirs: KbTreeEntry[] = [];
+		const files: KbTreeEntry[] = [];
+		for (const entry of entries) {
+			if (this.shouldSkip(entry.name, joinRel(cleanRel, entry.name))) continue;
+			const relPath = joinRel(cleanRel, entry.name);
+			const abs = path.join(absDir, entry.name);
+
+			if (entry.isDirectory() || entry.isSymbolicLink()) {
+				let isDir = entry.isDirectory();
+				let isSymlink = entry.isSymbolicLink();
+				if (isSymlink) {
+					try {
+						const st = await stat(abs); // follows
+						isDir = st.isDirectory();
+					} catch {
+						continue;
+					}
+				}
+				if (!isDir) continue;
+				if (this.rules().ignoresEntry(relPath, true)) continue;
+				const mdCount = this.recursiveMdCount(relPath);
+				const item: KbTreeEntry = {
+					name: entry.name,
+					path: relPath,
+					kind: "dir",
+					mdCount,
+				};
+				if (isSymlink) item.symlink = true;
+				dirs.push(item);
+				continue;
+			}
+
+			if (!entry.isFile()) continue;
+			if (!entry.name.toLowerCase().endsWith(".md")) continue;
+			if (this.rules().ignoresEntry(relPath, false)) continue;
+			let st;
+			try {
+				st = await stat(abs);
+			} catch {
+				continue;
+			}
+			files.push({
+				name: entry.name,
+				path: relPath,
+				kind: "file",
+				size: st.size,
+				mtime: st.mtime.toISOString(),
+			});
+		}
+
+		// Stable ordering: dirs by name asc; files by name asc. Future: surface
+		// hubs first within a dir — out of v1.
+		dirs.sort((a, b) => a.name.localeCompare(b.name));
+		files.sort((a, b) => a.name.localeCompare(b.name));
+		return { path: cleanRel, dirs, files };
+	}
+
+	/**
+	 * Read a single file's parsed body. `subpath` is forward-slash
+	 * relative; must end in `.md` (caller usually clicked a tree entry).
+	 * Returns undefined when the path is missing, isn't a file, or escapes
+	 * the kb root.
+	 */
+	async getFile(subpath: string): Promise<KbFileResponse | undefined> {
+		await this.ensureIndex();
+		const cleanRel = normalizeRel(subpath);
+		if (!cleanRel) return undefined;
+		if (this.pathIsExcluded(cleanRel, false)) return undefined;
+		const abs = this.resolveAbs(cleanRel);
+		if (!abs) return undefined;
+		if (!(await this.safeExisting(abs))) return undefined;
+
+		let raw: string;
+		let st;
+		try {
+			st = await stat(abs);
+			if (!st.isFile()) return undefined;
+			raw = await readFile(abs, "utf8");
+		} catch {
+			return undefined;
+		}
+
+		const { frontmatter, frontmatterError, body } = parseFrontmatter(raw);
+		const sourceDir = path.posix.dirname(cleanRel);
+		const outgoingLinks = this.extractWikilinks(body, sourceDir === "." ? "" : sourceDir);
+		const bodyForRender = this.rewriteBodyForRender(body, sourceDir === "." ? "" : sourceDir);
+
+		const resp: KbFileResponse = {
+			path: cleanRel,
+			absolutePath: abs,
+			frontmatter,
+			body,
+			rawContent: raw,
+			bodyForRender,
+			outgoingLinks,
+			size: st.size,
+			mtime: st.mtime.toISOString(),
+		};
+		if (frontmatterError) resp.frontmatterError = frontmatterError;
+		return resp;
+	}
+
+	/** Git records authorship without inventing agent activity for untracked notes. */
+	async getHistory(subpath: string) {
+		const file = await this.getFile(subpath);
+		if (!file) return undefined;
+		try {
+			await historyGit(this.root, ["rev-parse", "--show-toplevel"]);
+		} catch {
+			return { available: false, entries: [] };
+		}
+		const stdout = await historyGit(this.root, ["--literal-pathspecs", "log", "--follow", "-n", "40", "--format=%H%x00%aI%x00%an%x00%s%x00", "--", file.path]);
+		const fields = stdout.split("\0");
+		const entries = [];
+		for (let i = 0; i + 3 < fields.length; i += 4) {
+			entries.push({ id: fields[i]!.trim(), at: fields[i + 1]!, actor: fields[i + 2]!, kind: "committed" as const, text: fields[i + 3]! });
+		}
+		return { available: true, entries };
+	}
+
+	/**
+	 * Atomic write at `subpath`. `mode` controls the create-vs-update
+	 * semantics:
+	 *  - "update" (PUT): destination must already exist. Returns
+	 *    `{ kind: "not-found" }` otherwise.
+	 *  - "create" (POST): destination must NOT exist. Returns
+	 *    `{ kind: "conflict" }` otherwise. Creates parent dirs.
+	 *
+	 * Frontmatter is validated by re-running parseFrontmatter on the incoming
+	 * content. Invalid YAML returns `{ kind: "invalid-frontmatter", message }`
+	 * so the editor can surface the parser's complaint. A private complete temp
+	 * file is renamed for updates or hard-linked exclusively for creates.
+	 */
+	async saveFile(
+		subpath: string,
+		content: string,
+		mode: "update" | "create",
+	): Promise<
+		| { kind: "ok"; response: KbFileResponse }
+		| { kind: "not-found" }
+		| { kind: "conflict" }
+		| { kind: "invalid-path" }
+		| { kind: "invalid-frontmatter"; message: string }
+	> {
+		await this.ensureIndex();
+		const cleanRel = normalizeRel(subpath);
+		if (!cleanRel) return { kind: "invalid-path" };
+		if (this.pathIsExcluded(cleanRel, false)) return { kind: "invalid-path" };
+		const abs = this.resolveAbs(cleanRel);
+		if (!abs) return { kind: "invalid-path" };
+		if (!cleanRel.toLowerCase().endsWith(".md")) return { kind: "invalid-path" };
+
+		// Frontmatter validation: if the content claims a frontmatter block,
+		// it has to be parseable YAML before we'll write.
+		const { frontmatterError } = parseFrontmatter(content);
+		if (frontmatterError) return { kind: "invalid-frontmatter", message: frontmatterError };
+
+		const exists = existsSync(abs);
+		if (mode === "update" && !exists) return { kind: "not-found" };
+		if (mode === "create" && exists) return { kind: "conflict" };
+
+		// Ensure parent dir exists for create. Update is a no-op since the
+		// existence check above guarantees the dir.
+		if (mode === "create") {
+			const parent = path.dirname(abs);
+			try {
+				await mkdir(parent, { recursive: true });
+			} catch (err) {
+				log.error(`mkdir failed at ${parent}`, err);
+				return { kind: "invalid-path" };
+			}
+		}
+
+		// Same-directory staging keeps publication atomic. A link cannot replace
+		// an existing destination, even when concurrent creators passed preflight.
+		const dir = path.dirname(abs);
+		const tmp = path.join(dir, `.${path.basename(abs)}.${crypto.randomUUID()}.tmp`);
+		try {
+			await writeFile(tmp, content, { encoding: "utf8", flag: "wx" });
+			if (mode === "create") await link(tmp, abs);
+			else await rename(tmp, abs);
+		} catch (err) {
+			if (mode === "create" && (err as NodeJS.ErrnoException).code === "EEXIST") return { kind: "conflict" };
+			log.error(`atomic save failed at ${abs}`, err);
+			throw err;
+		} finally {
+			await rm(tmp, { force: true });
+		}
+
+		// Force a fresh index next read so the new file (or new content)
+		// affects wikilink resolution everywhere. The watcher will also fire
+		// but we don't want to race it.
+		this.invalidate();
+
+		const response = await this.getFile(cleanRel);
+		if (!response) {
+			// Shouldn't happen — we just wrote it — but guard anyway.
+			return { kind: "invalid-path" };
+		}
+		return { kind: "ok", response };
+	}
+
+	/**
+	 * Full wiki-link graph + frontmatter-tag aggregation. Built lazily on
+	 * first request and cached until the watcher invalidates the index.
+	 * Initialization reads visible bodies once, also building search signatures.
+	 *
+	 * Caps the response at GRAPH_MAX_NODES; sets `truncated: true` when the
+	 * cap fires so the UI can warn the user.
+	 */
+	async getGraph(): Promise<KbGraphResponse> {
+		return shapeGraphResponse(await this.indexedGraph());
+	}
+
+	async getBacklinks(subpath: string): Promise<KbBacklinksResponse | undefined> {
+		await this.ensureIndex();
+		const cleanRel = normalizeRel(subpath);
+		if (!cleanRel) return undefined;
+		if (this.pathIsExcluded(cleanRel, false)) return undefined;
+		if (!this.byRelPath.has(cleanRel)) return undefined;
+		const graph = await this.indexedGraph();
+		const backlinks = graph.backlinks.get(cleanRel) ?? [];
+		return { path: cleanRel, backlinks };
+	}
+
+	/**
+	 * Orphan census (T-41): every indexed note that no other note links to.
+	 * It covers exactly what the cockpit indexes, so the skip set,
+	 * `NPI_DECK_KB_EXCLUDE_DIRS` and `.kbignore` apply, and a link from an
+	 * excluded note does not rescue its target. Links from a note to itself
+	 * count on neither side.
+	 */
+	async getOrphanCensus(): Promise<KbOrphanCensus> {
+		const graph = await this.indexedGraph();
+		const linked = new Set<string>();
+		const outbound = new Map<string, number>();
+		for (const edge of graph.edges) {
+			if (edge.source === edge.target) continue;
+			linked.add(edge.target);
+			outbound.set(edge.source, (outbound.get(edge.source) ?? 0) + 1);
+		}
+		const orphans = graph.nodes
+			.filter((node) => !linked.has(node.path))
+			.map((node) => ({ path: node.path, title: node.title, outbound: outbound.get(node.path) ?? 0 }))
+			.sort((a, b) => a.path.localeCompare(b.path));
+		return {
+			root: this.root,
+			notes: graph.nodes.length,
+			orphans,
+			unresolvedLinks: graph.unresolvedCount,
+		};
+	}
+
+	/**
+	 * Hybrid scored search across cached metadata and literal body candidates.
+	 * Scoring layers:
+	 *
+	 *   stem   filename matches the query (100 exact, 80 prefix, 60 contains)
+	 *   title  frontmatter `name` matches (60 exact, 40 prefix, 25 contains)
+	 *   tag    one of `frontmatter.tags` matches (50 exact, 20 contains)
+	 *   body   substring hit in the body (10 base + 1 per extra hit, capped)
+	 *
+	 * Body candidates come from bounded per-note 1/2/3-code-unit signatures
+	 * built during graph initialization. Hash collisions only add disk reads;
+	 * exact hits and the original 160-char snippet are verified on disk.
+	 */
+	async search(query: string, limit: number, entryOnly = false): Promise<KbSearchResponse> {
+		for (;;) {
+			await this.ensureIndex();
+			const q = query.trim().toLowerCase();
+			if (!q) return { query, results: [], totalMatches: 0, truncated: false };
+			const cap = Math.max(1, Math.min(limit | 0 || 20, 100));
+			// Full-text and reverse navigation share one single-flight initialization.
+			const graph = entryOnly ? this.graphCache : await this.indexedGraph();
+			const generation = this.generation;
+			if (graph && graph.generation !== generation) continue;
+
+			type Acc = { score: number; matchKind: KbSearchMatchKind; snippet: string };
+			const scored = new Map<string, Acc>();
+
+			const bump = (relPath: string, score: number, kind: KbSearchMatchKind, snippet: string): void => {
+				const prev = scored.get(relPath);
+				if (!prev) {
+					scored.set(relPath, { score, matchKind: kind, snippet });
+					return;
+				}
+				prev.score += score;
+				// Promote to a stronger match kind if this one outranks the existing.
+				if (KIND_RANK[kind] < KIND_RANK[prev.matchKind]) {
+					prev.matchKind = kind;
+				}
+				if (!prev.snippet && snippet) prev.snippet = snippet;
+			};
+
+			// Pass 1 — stem / title / tag against the cached index. No disk reads.
+			for (const r of this.records) {
+				const stem = r.stem; // already lowercased
+				if (stem === q) bump(r.relPath, 100, "stem", "");
+				else if (stem.startsWith(q)) bump(r.relPath, 80, "stem", "");
+				else if (stem.includes(q)) bump(r.relPath, 60, "stem", "");
+			}
+
+			// Header metadata is indexed once; entry searches never open note bodies.
+			for (const node of this.records) {
+				const title = node.title.toLowerCase();
+				if (title === q) bump(node.relPath, 60, "title", "");
+				else if (title.startsWith(q)) bump(node.relPath, 40, "title", "");
+				else if (title.includes(q)) bump(node.relPath, 25, "title", "");
+				for (const tag of node.tags) {
+					const t = tag.toLowerCase();
+					if (t === q) bump(node.relPath, 50, "tag", "");
+					else if (t.includes(q)) bump(node.relPath, 20, "tag", "");
+				}
+			}
+
+			// Inspect compact signatures, not every body. Verify possible matches
+			// on disk so collisions never change literal search semantics.
+			for (const relPath of entryOnly ? [] : bodyCandidates(graph!.bodyFilters, q)) {
+				const r = this.byRelPath.get(relPath);
+				if (!r || !(await this.safeExisting(r.absPath))) continue;
+				let raw: string;
+				try { raw = await readFile(r.absPath, "utf8"); } catch { continue; }
+				const lc = raw.toLowerCase();
+				const first = lc.indexOf(q);
+				if (first < 0) continue;
+				let extra = 0;
+				let cursor = lc.indexOf(q, first + q.length);
+				while (cursor >= 0 && extra < 20) {
+					extra += 1;
+					cursor = lc.indexOf(q, cursor + q.length);
+				}
+				bump(r.relPath, 10 + extra, "body", makeSnippet(raw, first, q.length));
+			}
+
+			// Materialize results sorted by score desc, then path asc for stability.
+			const all: KbSearchResult[] = [];
+			for (const [relPath, acc] of scored) {
+				const record = this.byRelPath.get(relPath);
+				if (!record) continue;
+				const node = graph?.byPath.get(relPath);
+				const dir = record.dir.split("/")[0] ?? "";
+				all.push({
+					path: relPath,
+					title: node?.title ?? record.title,
+					dir,
+					score: acc.score,
+					matchKind: acc.matchKind,
+					snippet: acc.snippet,
+				});
+			}
+			all.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+			// A watcher event during candidate reads must not publish mixed generations.
+			if (generation !== this.generation) continue;
+			const truncated = all.length > cap;
+			const results = truncated ? all.slice(0, cap) : all;
+			return { query, results, totalMatches: all.length, truncated };
+		}
+	}
+
+	/**
+	 * Walk every record, parse its body, extract wikilinks, build:
+	 *   - nodes[]: one per file with degree counts + tags
+	 *   - edges[]: one per resolved wikilink (deduplicated per source+target pair)
+	 *   - backlinks: target → KbBacklink[]
+	 *
+	 * Unresolved wikilinks bump the global counter only; they don't get a
+	 * placeholder node (the UI can prompt-create via the existing flow).
+	 * Complete reverse navigation necessarily reads all visible bodies once
+	 * per generation: an inbound link can occur in any note. The same pass
+	 * builds search signatures; subsequent hops reuse edges, not body content.
+	 */
+	private async buildGraph(): Promise<GraphCache> {
+		const t0 = performance.now();
+		const generation = this.generation;
+		const records = this.records;
+		const nodes = new Map<string, KbGraphNode>();
+		const edges: KbGraphEdge[] = [];
+		const backlinks = new Map<string, KbBacklink[]>();
+		const edgeSeen = new Set<string>();
+		const bodyFilters = new Map<string, Uint32Array>();
+		let unresolvedCount = 0;
+
+		// Pass 1: seed nodes (so unreached files still appear as orphans).
+		for (const r of records) {
+			const dir = r.dir.split("/")[0] ?? "";
+			nodes.set(r.relPath, {
+				id: r.relPath,
+				path: r.relPath,
+				title: r.title,
+				dir,
+				inbound: 0,
+				outbound: 0,
+				tags: r.tags,
+			});
+		}
+
+		// Read each file in parallel batches; parse metadata and wikilinks and
+		// index literal search candidates. Limit concurrent full-body reads to
+		// 32 rather than opening an unbounded number of files.
+		const CHUNK = 32;
+		for (let i = 0; i < records.length; i += CHUNK) {
+			const chunk = records.slice(i, i + CHUNK);
+			const reads = await Promise.all(
+				chunk.map((r) =>
+					readFile(r.absPath, "utf8").then(
+						(raw) => ({ r, raw }),
+						() => ({ r, raw: undefined as string | undefined }),
+					),
+				),
+			);
+			for (const { r, raw } of reads) {
+				if (raw === undefined) continue;
+				bodyFilters.set(r.relPath, indexBody(raw.toLowerCase()));
+			const { frontmatter, body } = parseFrontmatter(raw);
+			const node = nodes.get(r.relPath);
+			if (!node) continue;
+			if (typeof frontmatter.name === "string" && (frontmatter.name as string).trim()) {
+				node.title = (frontmatter.name as string).trim();
+			}
+			if (Array.isArray(frontmatter.tags)) {
+				node.tags = (frontmatter.tags as unknown[]).filter((t): t is string => typeof t === "string");
+			}
+
+			const sourceDir = r.dir;
+			const wikilinks = this.extractWikilinks(body, sourceDir);
+			for (const wl of wikilinks) {
+				if (!wl.resolved) {
+					unresolvedCount += 1;
+					continue;
+				}
+				const key = `${r.relPath}\0${wl.resolved}`;
+				if (edgeSeen.has(key)) continue;
+				edgeSeen.add(key);
+				edges.push({ source: r.relPath, target: wl.resolved });
+				node.outbound += 1;
+				const targetNode = nodes.get(wl.resolved);
+				if (targetNode) targetNode.inbound += 1;
+
+				const list = backlinks.get(wl.resolved) ?? [];
+				list.push({
+					source: r.relPath,
+					label: wl.label,
+					snippet: extractSnippet(body, wl.raw),
+				});
+				backlinks.set(wl.resolved, list);
+			}
+			}
+		}
+
+		const ms = (performance.now() - t0).toFixed(1);
+		log.info(`built kb graph: ${nodes.size} nodes, ${edges.length} edges, ${unresolvedCount} unresolved (${ms}ms)`);
+		return {
+			generation,
+			nodes: Array.from(nodes.values()),
+			edges,
+			backlinks,
+			unresolvedCount,
+			byPath: nodes,
+			bodyFilters,
+		};
+	}
+	// ─── internals ───────────────────────────────────────────────────────
+	/** Reuse one graph build across concurrent readers and navigation hops. */
+	private async indexedGraph(): Promise<GraphCache> {
+		for (;;) {
+			await this.ensureIndex();
+			if (this.graphCache) return this.graphCache;
+			const pending = this.graphPromise ??= this.buildGraph();
+			try {
+				const graph = await pending;
+				if (graph.generation !== this.generation) continue;
+				return this.graphCache = graph;
+			} finally {
+				if (this.graphPromise === pending) this.graphPromise = undefined;
+			}
+		}
+	}
+
+	async getLinks(subpath: string): Promise<{ path: string; links: KbWikilink[] } | undefined> {
+		const note = await this.getFile(subpath);
+		return note ? { path: note.path, links: note.outgoingLinks } : undefined;
+	}
+
+	/** Parse unsaved note links through the same code/frontmatter and resolution rules. */
+	async linksInContent(content: string, sourcePath: string): Promise<KbWikilink[]> {
+		await this.ensureIndex();
+		const dir = path.posix.dirname(normalizeRel(sourcePath));
+		return this.extractWikilinks(parseFrontmatter(content).body, dir === "." ? "" : dir);
+	}
+
+	/** Reads follow configured junctions; write authority is checked separately. */
+	private async safeExisting(abs: string): Promise<boolean> {
+		try {
+			const logical = normalizeRel(path.relative(this.root, abs));
+			if (!this.resolveAbs(logical)) return false;
+			const root = await realpath(this.root);
+			const target = await realpath(abs);
+			const physical = target === root || target.startsWith(`${root}${path.sep}`)
+				? normalizeRel(path.relative(root, target)) : logical;
+			const directory = (await stat(target)).isDirectory();
+			return !this.pathIsExcluded(logical, directory) && !this.pathIsExcluded(physical, directory);
+		} catch {
+			return false;
+		}
+	}
+
+	private async buildIndex(): Promise<void> {
+		const t0 = performance.now();
+		const generation = this.generation;
+		const records: FileRecord[] = [];
+		const byRelPath = new Map<string, FileRecord>();
+		const byStem = new Map<string, FileRecord[]>();
+
+		if (!existsSync(this.root)) {
+			log.warn(`kb root does not exist: ${this.root}`);
+			if (generation === this.generation) { this.records = records; this.byRelPath = byRelPath; this.byStem = byStem; this.indexReady = true; }
+			return;
+		}
+
+		const visited = new Set<string>();
+		await this.walk(this.root, "", visited, records);
+
+		for (const r of records) {
+			byRelPath.set(r.relPath, r);
+			const list = byStem.get(r.stem);
+			if (list) list.push(r);
+			else byStem.set(r.stem, [r]);
+		}
+
+		const ms = (performance.now() - t0).toFixed(1);
+		log.info(`indexed ${records.length} md files under ${this.root} in ${ms}ms`);
+		if (generation !== this.generation) return;
+		this.records = records;
+		this.byRelPath = byRelPath;
+		this.byStem = byStem;
+		this.indexReady = true;
+	}
+
+	private async walk(absDir: string, relDir: string, visited: Set<string>, records: FileRecord[]): Promise<void> {
+		let real;
+		try {
+			real = await realpath(absDir);
+		} catch {
+			return;
+		}
+		if (visited.has(real)) return;
+		if (!(await this.safeExisting(absDir))) return;
+		visited.add(real);
+
+		let entries;
+		try {
+			entries = await readdir(absDir, { withFileTypes: true });
+		} catch (err) {
+			log.warn(`readdir failed: ${absDir}`, err);
+			return;
+		}
+
+		for (const entry of entries) {
+			const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+			if (this.shouldSkip(entry.name, rel)) continue;
+			const abs = path.join(absDir, entry.name);
+
+			if (entry.isDirectory() || entry.isSymbolicLink()) {
+				try {
+					const st = await stat(abs);
+					if (st.isDirectory() && !this.rules().ignoresEntry(rel, true)) {
+						await this.walk(abs, rel, visited, records);
+					}
+				} catch {
+					// stat failure on symlink target; skip silently
+				}
+				continue;
+			}
+
+			if (!entry.isFile()) continue;
+			if (!entry.name.toLowerCase().endsWith(".md")) continue;
+			if (this.rules().ignoresEntry(rel, false)) continue;
+
+			try {
+				const st = await stat(abs);
+				const stem = entry.name.slice(0, -3).toLowerCase();
+				const frontmatter = await readHeader(abs);
+				const name = frontmatter.name ?? frontmatter.title;
+				records.push({
+					relPath: rel,
+					absPath: abs,
+					dir: relDir,
+					stem,
+					title: typeof name === "string" && name.trim() ? name.trim() : stem,
+					tags: Array.isArray(frontmatter.tags) ? frontmatter.tags.filter((tag): tag is string => typeof tag === "string") : [],
+					size: st.size,
+					mtime: st.mtime,
+				});
+			} catch {
+				// best-effort
+			}
+		}
+	}
+
+	private shouldSkip(name: string, rel: string): boolean {
+		if (SKIP_DIR_NAMES.has(name)) return true;
+		for (const frag of SKIP_PATH_FRAGMENTS) {
+			if (rel.includes(frag)) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Is `rel` hidden from the cockpit? The skip set applies to any segment;
+	 * `.kbignore` applies to the path and each ancestor directory. `isDir`
+	 * describes the last segment, for `.kbignore`'s `dir/` patterns.
+	 */
+	private pathIsExcluded(rel: string, isDir: boolean): boolean {
+		if (!rel) return false;
+		for (const seg of rel.split("/")) {
+			if (SKIP_DIR_NAMES.has(seg)) return true;
+		}
+		for (const frag of SKIP_PATH_FRAGMENTS) {
+			if (rel.includes(frag)) return true;
+		}
+		return this.rules().ignores(rel, isDir);
+	}
+
+	/** `.kbignore` at the kb root, read on first use after an invalidate. */
+	private rules(): KbIgnore {
+		if (this.ignoreRules) return this.ignoreRules;
+		let rules = KbIgnore.empty;
+		const file = path.join(this.root, KB_IGNORE_FILE);
+		try {
+			rules = KbIgnore.parse(readFileSync(file, "utf8"));
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+				log.warn(`could not read ${file}; ignoring it`, err);
+			}
+		}
+		this.ignoreRules = rules;
+		return rules;
+	}
+
+	private resolveAbs(rel: string): string | undefined {
+		// Reject any rel that escapes the root via `..` or absolute paths.
+		if (rel.includes("..") || path.isAbsolute(rel)) return undefined;
+		const abs = rel ? path.join(this.root, rel) : this.root;
+		const resolved = path.resolve(abs);
+		const rootResolved = path.resolve(this.root);
+		if (resolved !== rootResolved && !resolved.startsWith(`${rootResolved}${path.sep}`)) return undefined;
+		return resolved;
+	}
+
+	private recursiveMdCount(relDir: string): number {
+		// Cheap O(n) scan against the cached index. n ~ 600 for this kb.
+		if (!relDir) return this.records.length;
+		const prefix = `${relDir}/`;
+		let n = 0;
+		for (const r of this.records) {
+			if (r.relPath.startsWith(prefix)) n++;
+		}
+		return n;
+	}
+
+	private extractWikilinks(body: string, sourceDir: string): KbWikilink[] {
+		const stripped = body.replace(FENCED_CODE_RE, "").replace(INLINE_CODE_RE, "");
+		const out: KbWikilink[] = [];
+		for (const m of stripped.matchAll(WIKILINK_RE)) {
+			const rawTargetMatch = m[1];
+			if (rawTargetMatch === undefined) continue;
+			const rawTarget = rawTargetMatch.trim();
+			const label = (m[2] ?? rawTarget).trim();
+			let target = rawTarget;
+			let anchor: string | null = null;
+			const hashAt = target.indexOf("#");
+			if (hashAt >= 0) {
+				anchor = target.slice(hashAt + 1) || null;
+				target = target.slice(0, hashAt);
+			}
+			target = target.trim();
+			const raw = m[2] !== undefined ? `${target}${anchor ? `#${anchor}` : ""}|${label}` : `${target}${anchor ? `#${anchor}` : ""}`;
+			const link: KbWikilink = {
+				raw,
+				target,
+				label,
+				anchor,
+				resolved: null,
+			};
+			if (!target) {
+				link.unresolvedReason = "no-match";
+				out.push(link);
+				continue;
+			}
+			const resolution = this.resolveTarget(target, sourceDir);
+			if (resolution.resolved) {
+				link.resolved = resolution.resolved;
+			} else {
+				link.unresolvedReason = resolution.reason;
+			}
+			out.push(link);
+		}
+		return out;
+	}
+
+	/**
+	 * Replace `[[name|label]]` syntax with markdown links the web client
+	 * renders via its custom `a` component. Resolved → `[label](kb-link:<path>?anchor=<a>)`;
+	 * unresolved → `[label](kb-unresolved:<target>)`. Wikilinks inside fenced
+	 * code blocks or inline backtick spans are NOT rewritten — they're noise
+	 * (e.g. regex literals like `[[:alpha:]]`).
+	 */
+	private rewriteBodyForRender(body: string, sourceDir: string): string {
+		// Walk the body marking code-block ranges so we can skip them. A single
+		// linear pass is plenty for the scale we see (~9KB per file).
+		const codeRanges = collectCodeRanges(body);
+		let out = "";
+		let cursor = 0;
+		const re = /\[\[([^\]|\n]+?)(?:\|([^\]\n]+?))?\]\]/g;
+		let m: RegExpExecArray | null;
+		while ((m = re.exec(body)) !== null) {
+			const start = m.index;
+			const end = start + m[0].length;
+			// Emit the body up to this match.
+			out += body.slice(cursor, start);
+			cursor = end;
+			if (insideAnyRange(codeRanges, start)) {
+				out += m[0]; // leave wikilinks inside code blocks alone
+				continue;
+			}
+			const rawTargetMatch = m[1];
+			if (rawTargetMatch === undefined) continue;
+			const rawTarget = rawTargetMatch.trim();
+			const labelRaw = (m[2] ?? rawTarget).trim();
+			let target = rawTarget;
+			let anchor: string | null = null;
+			const hashAt = target.indexOf("#");
+			if (hashAt >= 0) {
+				anchor = target.slice(hashAt + 1) || null;
+				target = target.slice(0, hashAt);
+			}
+			target = target.trim();
+			const safeLabel = labelRaw.replace(/[\[\]]/g, "");
+			if (!target) {
+				out += `[${safeLabel}](kb-unresolved:)`;
+				continue;
+			}
+			const { resolved } = this.resolveTarget(target, sourceDir);
+			if (resolved) {
+				const q = anchor ? `?anchor=${encodeURIComponent(anchor)}` : "";
+				out += `[${safeLabel}](kb-link:${encodeURI(resolved)}${q})`;
+			} else {
+				out += `[${safeLabel}](kb-unresolved:${encodeURIComponent(target)})`;
+			}
+		}
+		out += body.slice(cursor);
+		return out;
+	}
+
+	private resolveTarget(
+		target: string,
+		sourceDir: string,
+	): { resolved: string | null; reason?: KbWikilink["unresolvedReason"] } {
+		const normalized = target.replace(/\\/g, "/").replace(/^\/+/, "");
+		// Subpath form: contains a slash → resolve as relative to kb root.
+		if (normalized.includes("/")) {
+			const withExt = normalized.toLowerCase().endsWith(".md") ? normalized : `${normalized}.md`;
+			const rec = this.byRelPath.get(withExt);
+			if (rec) return { resolved: rec.relPath };
+			return { resolved: null, reason: "no-match" };
+		}
+
+		// Stem-only form.
+		const stem = normalized.toLowerCase().endsWith(".md")
+			? normalized.slice(0, -3).toLowerCase()
+			: normalized.toLowerCase();
+		if (AMBIGUOUS_STEMS.has(stem)) {
+			return { resolved: null, reason: "ambiguous-stem" };
+		}
+		const candidates = this.byStem.get(stem);
+		if (!candidates || candidates.length === 0) {
+			return { resolved: null, reason: "no-match" };
+		}
+		const only = candidates[0];
+		if (candidates.length === 1 && only) return { resolved: only.relPath };
+
+		// Tiebreaker: prefer same-directory, then nearest-ancestor, then
+		// alphabetical relPath.
+		const sameDir = candidates.find((c) => c.dir === sourceDir);
+		if (sameDir) return { resolved: sameDir.relPath };
+		const sorted = [...candidates].sort((a, b) => a.relPath.localeCompare(b.relPath));
+		const first = sorted[0];
+		if (first) return { resolved: first.relPath };
+		return { resolved: null, reason: "no-match" };
+	}
+}
+
+// ─── helpers ───────────────────────────────────────────────────────────────
+
+/** At most 8 KiB per note, and approximately one byte per source code unit. */
+function indexBody(text: string): Uint32Array {
+	const bits = new Uint32Array(Math.min(2048, Math.max(8, Math.ceil(text.length / 4))));
+	const width = bits.length * 32;
+	for (let i = 0; i < text.length; i++) {
+		for (let length = 1; length <= 3 && i + length <= text.length; length++) {
+			const bit = gramHash(text, i, length) % width;
+			bits[bit >>> 5]! |= 1 << (bit & 31);
+		}
+	}
+	return bits;
+}
+
+function gramHash(text: string, start: number, length: number): number {
+	let hash = 2166136261 ^ length;
+	for (let offset = 0; offset < length; offset++) hash = Math.imul(hash ^ text.charCodeAt(start + offset), 16777619);
+	return hash >>> 0;
+}
+
+function bodyCandidates(filters: Map<string, Uint32Array>, query: string): string[] {
+	const length = Math.min(3, query.length);
+	const hashes = new Set<number>();
+	for (let i = 0; i + length <= query.length; i++) hashes.add(gramHash(query, i, length));
+	const candidates: string[] = [];
+	for (const [relPath, bits] of filters) {
+		const width = bits.length * 32;
+		let possible = true;
+		for (const hash of hashes) {
+			const bit = hash % width;
+			if (!(bits[bit >>> 5]! & (1 << (bit & 31)))) { possible = false; break; }
+		}
+		if (possible) candidates.push(relPath);
+	}
+	return candidates;
+}
+
+function normalizeRel(p: string): string {
+	if (!p) return "";
+	// Strip leading/trailing slashes, collapse repeated slashes, force forward.
+	return p.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+function joinRel(parent: string, child: string): string {
+	if (!parent) return child;
+	return `${parent}/${child}`;
+}
+
+/** Read only a note's leading YAML, never its body, while building entry metadata. */
+async function readHeader(abs: string): Promise<Record<string, unknown>> {
+	const stream = createReadStream(abs, { encoding: "utf8", highWaterMark: 4096 });
+	const lines = createInterface({ input: stream, crlfDelay: Infinity });
+	const header: string[] = [];
+	try {
+		for await (const line of lines) {
+			if (header.length === 0 && line !== "---") return {};
+			header.push(line);
+			if (header.length > 1 && line.startsWith("---")) {
+				return parseFrontmatter(`${header.join("\n")}\n`).frontmatter;
+			}
+		}
+		return {};
+	} finally {
+		lines.close();
+		stream.destroy();
+	}
+}
+
+/**
+ * Frontmatter parser: extracts the leading `---\n…\n---\n` block (if any),
+ * runs it through `yaml`, and returns `{ frontmatter, frontmatterError,
+ * body }`. Body is the file content with the block stripped (one trailing
+ * newline consumed). When YAML parsing fails we return the raw block as a
+ * string under `frontmatter._raw` with an error message, so the editor can
+ * surface the problem instead of silently dropping the metadata.
+ */
+function parseFrontmatter(text: string): {
+	frontmatter: Record<string, unknown>;
+	frontmatterError?: string;
+	body: string;
+} {
+	if (!text.startsWith("---")) return { frontmatter: {}, body: text };
+	// Find the closing `---` fence. Tolerate both LF and CRLF line endings; on
+	// Windows-saved kb files the closer is `\r\n---` so we search for that
+	// shape first and fall back to bare LF.
+	let openerEnd = 3;
+	if (text[3] === "\r") openerEnd = 4;
+	if (text[openerEnd] === "\n") openerEnd += 1;
+	else return { frontmatter: {}, body: text };
+
+	const closeLF = text.indexOf("\n---", openerEnd);
+	if (closeLF < 0) return { frontmatter: {}, body: text };
+	// Normalize the block to LF before handing to YAML — a trailing `\r`
+	// before the closing fence is what yanks the parser into
+	// "Unexpected scalar at node end" on CRLF files.
+	const rawBlock = text.slice(openerEnd, closeLF).replace(/\r\n/g, "\n").replace(/\r$/, "");
+	let cursor = closeLF + 4;
+	if (text[cursor] === "\r") cursor += 1;
+	if (text[cursor] === "\n") cursor += 1;
+	const body = text.slice(cursor);
+
+	let frontmatter: Record<string, unknown> = {};
+	let frontmatterError: string | undefined;
+	try {
+		const parsed = YAML.parse(rawBlock);
+		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+			frontmatter = parsed as Record<string, unknown>;
+		} else if (parsed !== null) {
+			frontmatter = { _raw: rawBlock };
+			frontmatterError = "frontmatter was not a YAML mapping";
+		}
+	} catch (err) {
+		frontmatter = { _raw: rawBlock };
+		frontmatterError = (err as Error).message;
+	}
+	return frontmatterError ? { frontmatter, frontmatterError, body } : { frontmatter, body };
+}
+
+/**
+ * Collect `(start, end)` ranges in the body that belong to a fenced code
+ * block (``` … ```) or an inline backtick span. Used by `rewriteBodyForRender`
+ * so wikilinks inside code stay verbatim.
+ */
+function collectCodeRanges(text: string): Array<[number, number]> {
+	const ranges: Array<[number, number]> = [];
+	// Fenced blocks first — they consume their content (including stray backticks).
+	const fenceRe = /```[\s\S]*?(?:```|$)/g;
+	let fenceMatch: RegExpExecArray | null;
+	const fenceCovered: Array<[number, number]> = [];
+	while ((fenceMatch = fenceRe.exec(text)) !== null) {
+		const r: [number, number] = [fenceMatch.index, fenceMatch.index + fenceMatch[0].length];
+		ranges.push(r);
+		fenceCovered.push(r);
+	}
+	// Inline spans, skipping anything already inside a fence.
+	const inlineRe = /`[^`\n]+`/g;
+	let inlineMatch: RegExpExecArray | null;
+	while ((inlineMatch = inlineRe.exec(text)) !== null) {
+		const start = inlineMatch.index;
+		if (insideAnyRange(fenceCovered, start)) continue;
+		ranges.push([start, start + inlineMatch[0].length]);
+	}
+	ranges.sort((a, b) => a[0] - b[0]);
+	return ranges;
+}
+
+function insideAnyRange(ranges: Array<[number, number]>, pos: number): boolean {
+	// Linear scan — n is bounded by the number of code spans in one file.
+	for (const [s, e] of ranges) {
+		if (pos >= s && pos < e) return true;
+		if (s > pos) return false;
+	}
+	return false;
+}
+
+/**
+ * Convert the in-memory `GraphCache` to a wire response with the v1
+ * truncation cap applied. Drops orphan nodes only as a last resort — we
+ * sort by inbound+outbound degree desc and keep the top GRAPH_MAX_NODES.
+ */
+function shapeGraphResponse(cache: GraphCache): KbGraphResponse {
+	const total = cache.nodes.length;
+	if (total <= GRAPH_MAX_NODES) {
+		return {
+			nodes: cache.nodes,
+			edges: cache.edges,
+			unresolvedCount: cache.unresolvedCount,
+			totalNodes: total,
+			truncated: false,
+		};
+	}
+	const sortedNodes = [...cache.nodes].sort(
+		(a, b) => b.inbound + b.outbound - (a.inbound + a.outbound),
+	);
+	const keep = new Set(sortedNodes.slice(0, GRAPH_MAX_NODES).map((n) => n.path));
+	const nodes = cache.nodes.filter((n) => keep.has(n.path));
+	const edges = cache.edges.filter((e) => keep.has(e.source) && keep.has(e.target));
+	return {
+		nodes,
+		edges,
+		unresolvedCount: cache.unresolvedCount,
+		totalNodes: total,
+		truncated: true,
+	};
+}
+
+/**
+ * Best-effort snippet for a backlink: return the line containing `raw`, or
+ * an empty string if not found. Lines are 1-indexed in the surrounding
+ * code, but the snippet itself just stands on its own.
+ */
+function extractSnippet(body: string, raw: string): string {
+	const needle = `[[${raw}]]`;
+	const idx = body.indexOf(needle);
+	if (idx < 0) return "";
+	const lineStart = body.lastIndexOf("\n", idx) + 1;
+	const lineEnd = body.indexOf("\n", idx);
+	const end = lineEnd === -1 ? body.length : lineEnd;
+	const line = body.slice(lineStart, end).trim();
+	if (line.length <= 200) return line;
+	// Long line — center the snippet on the wikilink.
+	const lineRelativeIdx = idx - lineStart;
+	const window = 100;
+	const from = Math.max(0, lineRelativeIdx - window);
+	const to = Math.min(line.length, lineRelativeIdx + window);
+	return (from > 0 ? "…" : "") + line.slice(from, to) + (to < line.length ? "…" : "");
+}
+
+
+export function resolveKbRoot(): string {
+	const fromEnv = process.env.NPI_DECK_KB_ROOT;
+	if (fromEnv && fromEnv.trim().length > 0) return path.resolve(fromEnv.trim());
+	return path.join(os.homedir(), "kb");
+}

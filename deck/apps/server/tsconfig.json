@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.neopi.json",
+  "compilerOptions": {
+    "verbatimModuleSyntax": false,
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*"]
+}

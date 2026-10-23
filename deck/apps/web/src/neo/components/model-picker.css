@@ -1,0 +1,52 @@
+.neo-model-picker { min-width: 0; display: inline-flex; }
+.neo-model-trigger { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--neo-line-2); border-radius: var(--r-control); color: rgb(var(--ink-2)); background: var(--neo-card); font-size: 12px; text-align: left; cursor: pointer; }
+.neo-model-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.neo-model-trigger > svg { flex: none; color: rgb(var(--ink-3)); }
+.neo-model-trigger:hover { background: var(--neo-hover); color: rgb(var(--ink)); }
+.neo-model-trigger:focus-visible { outline: 2px solid var(--neo-focus); outline-offset: 2px; }
+.neo-model-trigger:disabled { cursor: not-allowed; opacity: .5; }
+.neo-model-popover { padding: 0; overflow: hidden; }
+.neo-model-switcher { display: flex; flex-direction: column; min-width: 0; max-height: min(600px, 75dvh); background: var(--neo-raised); color: rgb(var(--ink)); }
+.neo-model-search { display: flex; flex: none; align-items: center; gap: 10px; min-height: 46px; padding: 6px 12px; border-bottom: 1px solid var(--neo-line-2); }
+.neo-model-search > svg { color: rgb(var(--ink-3)); flex: none; }
+.neo-model-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: rgb(var(--ink)); font-size: 13px; }
+.neo-model-search input::placeholder { color: rgb(var(--ink-3)); }
+.neo-model-search button { padding: 5px; color: rgb(var(--ink-3)); border-radius: var(--r-control); }
+.neo-model-search button:hover { color: rgb(var(--ink)); background: var(--neo-hover); }
+.neo-model-search button:focus-visible, .neo-model-providers button:focus-visible { outline: 2px solid var(--neo-focus); outline-offset: -2px; }
+.neo-model-body { display: grid; grid-template-columns: 170px minmax(0, 1fr); min-height: 160px; max-height: 430px; overflow: hidden; flex: 1; }
+.neo-model-providers { min-height: 0; overflow: auto; padding: 6px; border-right: 1px solid var(--neo-line-2); }
+.neo-model-providers button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px; border-radius: var(--r-control); text-align: left; font-size: 12px; color: rgb(var(--ink-2)); }
+.neo-model-providers button > span { margin-left: auto; font-size: 11px; color: rgb(var(--ink-3)); font-variant-numeric: tabular-nums; }
+.neo-model-providers button:hover { background: var(--neo-hover); }
+.neo-model-providers button[aria-pressed="true"] { color: rgb(var(--ink)); background: var(--neo-selected); }
+.neo-model-results { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.neo-model-table { min-width: 760px; }
+.neo-model-grid { display: grid; grid-template-columns: minmax(250px, 1fr) 68px 60px 64px 66px 74px 74px; align-items: center; column-gap: 9px; padding: 9px 12px; }
+.neo-model-grid > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; color: rgb(var(--ink-3)); }
+.neo-model-list { height: min(324px, 36dvh); overflow-y: auto; overscroll-behavior: contain; }
+.neo-model-columns { position: sticky; top: 0; z-index: var(--neo-layer-sticky, 10); background: var(--neo-raised); border-bottom: 1px solid var(--neo-line-2); min-height: 34px; }
+.neo-model-columns > span { font-size: 10px; }
+.neo-model-columns > span:first-child { text-align: left; }
+.neo-model-row { height: 54px; cursor: pointer; border-bottom: 1px solid var(--neo-line-1); }
+.neo-model-row[data-active="true"] { background: var(--neo-hover); box-shadow: inset 2px 0 var(--neo-accent); }
+.neo-model-row[aria-selected="true"] { background: var(--neo-selected); }
+.neo-model-row[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+.neo-model-identity { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.neo-model-identity > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: rgb(var(--ink-3)); }
+.neo-model-identity > .neo-model-selector { display: flex; align-items: center; gap: 5px; font-size: 12px; color: rgb(var(--ink)); }
+.neo-model-selector > svg { flex: none; color: var(--neo-accent); }
+.neo-model-message { margin: 0; padding: 12px; color: rgb(var(--ink-3)); font-size: 12px; line-height: 1.5; }
+.neo-model-warning { background: var(--neo-panel); border-bottom: 1px solid var(--neo-line-2); }
+.neo-model-footer { display: flex; flex: none; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 9px 12px; border-top: 1px solid var(--neo-line-2); font-size: 11px; color: rgb(var(--ink-3)); }
+.neo-model-footer > label { display: flex; align-items: center; gap: 8px; color: rgb(var(--ink-2)); }
+.neo-model-footer > span { flex: 1; min-width: 140px; overflow-wrap: anywhere; }
+.neo-model-footer > a { color: rgb(var(--accent)); white-space: nowrap; text-decoration: underline; text-underline-offset: 3px; }
+@media (max-width: 680px) {
+ .neo-model-body { display: flex; flex-direction: column; }
+ .neo-model-providers { display: flex; flex: none; gap: 4px; border-right: 0; border-bottom: 1px solid var(--neo-line-2); overflow: auto; }
+ .neo-model-providers button { width: auto; white-space: nowrap; flex: none; }
+ .neo-model-providers button > span { margin-left: 4px; }
+ .neo-model-switcher { max-height: 75dvh; }
+ .neo-model-footer { gap: 8px; }
+}

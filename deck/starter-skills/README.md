@@ -1,0 +1,43 @@
+# Starter skills
+
+omp-native skills bundled with NPI deck. None is installed unless you opt in to it from Settings → Starters (stored as `NPI_DECK_STARTERS`, e.g. `skills/handoff`). Opting in copies `<name>/` into the NeoPi agent dir's `skills/` right away, and each launch re-copies an opted-in skill that has gone missing (`apps/server/src/starters.ts`). The copy is **never-overwrite**: once a target exists, the user owns it. Opting out stops the copying and leaves an installed copy in place.
+
+Every skill's frontmatter carries a `source:` tag naming it as an npi-deck starter and where it came from; Settings → Starters shows it next to each one.
+
+## Bundled skills
+
+### NPI deck native
+
+- **create-skill** — Author a new omp-native skill. The full author loop using only `omp`'s standard tools (`read`, `write`, `edit`, `bash`). Triggers when the user wants to capture a recurring workflow or formalize a procedure into a `SKILL.md`.
+
+### Imported from `mattpocock/skills`
+
+See [ATTRIBUTION.md](./ATTRIBUTION.md) for the pinned upstream commit, license, and per-file source paths.
+
+- **handoff** — Compact the current conversation into a handoff document for another agent to pick up. Writes to the OS temp dir (never the workspace), includes a `## Suggested skills` section, redacts secrets.
+- **diagnose** — Disciplined diagnosis loop for hard bugs and performance regressions: reproduce → minimise → hypothesise → instrument → fix → regression-test. Phase 1 ("build a fast deterministic feedback loop") is the load-bearing insight. Adapted: Phase 6's hand-off-to-`/improve-codebase-architecture` line rewritten to point at "a task or knowledge article describing what would have prevented the bug" (we don't bundle that skill).
+- **zoom-out** — When the agent lands in an unfamiliar section of code, go up a layer of abstraction and map all relevant modules and callers using the project's domain vocabulary.
+- **prototype** — Build a throwaway prototype that answers a specific question. Routes between two branches: an interactive terminal app for state / business-logic questions ([prototype/LOGIC.md](./prototype/LOGIC.md)), or several radically different UI variations toggleable from one route ([prototype/UI.md](./prototype/UI.md)).
+- **grill-me** — Interview the user relentlessly about a plan or design until reaching shared understanding, resolving each branch of the decision tree.
+
+## Skipped from upstream (and why)
+
+For full context see [ATTRIBUTION.md](./ATTRIBUTION.md) and the task that drove the initial import.
+
+- `caveman` — Overlaps the more-developed `caveman:*` skill family.
+- `write-a-skill` — Overlaps `create-skill` + `skill-creator:skill-creator`.
+- `to-prd`, `to-issues` — Target GitHub issues + a per-repo config we don't run. Adapting them to the NPI deck kanban is a follow-up.
+- `edit-article`, `obsidian-vault`, `scaffold-exercises`, `migrate-to-shoehorn`, `setup-pre-commit`, `git-guardrails-claude-code`, `setup-matt-pocock-skills` — Personal-to-Matt or framework-coupled.
+- `improve-codebase-architecture`, `triage`, `grill-with-docs`, `tdd` — Not bundled; repository vocabulary lives in root `CONTEXT.md` and decisions belong under `docs/agents/adr/` when present.
+- `in-progress/*` — Upstream marks them unstable; wait for graduation.
+
+## Adding a new starter
+
+1. Create `starter-skills/<name>/SKILL.md` with proper frontmatter (`name`, `description`, `source`, optional `tags`). `source` starts with `npi-deck starter` and names the origin, e.g. `npi-deck starter (from mattpocock/skills@b8be62f, MIT)`. See [`create-skill/SKILL.md`](./create-skill/SKILL.md) for the authoring loop.
+2. Ship any co-located scripts / references under the same dir.
+3. **If sourced from a third-party repo**, add a per-file footer pointing at the upstream blob (commit-pinned), add an entry in [ATTRIBUTION.md](./ATTRIBUTION.md), and document any adaptations.
+4. Restart the deck, opt in to the skill in Settings → Starters, and confirm it lands at `~/.omp/agent/skills/<name>/` and appears in `GET /api/skills` with `provider: "native"`.
+
+## Source directory
+
+Set `NPI_DECK_STARTER_SKILLS_DIR=<path>` to override the source directory.

@@ -1,0 +1,73 @@
+name: Windows routine cancellation probe
+
+on:
+  workflow_dispatch:
+  # Run diagnostics from nightly-derived topics without promoting them to main.
+  push:
+    branches:
+      - "ci/windows-routine-probe-run/**"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - name: Install frozen dependencies without lifecycle scripts
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Fetch pinned backend
+        shell: bash
+        run: |
+          pin="$(tr -d '[:space:]' < neopi.pin)"
+          src="$RUNNER_TEMP/neopi-source"
+          git init -q "$src"
+          git -C "$src" remote add origin https://github.com/PsychedelicShayna/neopi.git
+          git -C "$src" fetch -q --depth 1 origin "$pin"
+          git -C "$src" checkout -q --detach FETCH_HEAD
+          echo "NPI_DECK_NEOPI_SOURCE=$src" >> "$GITHUB_ENV"
+          echo "NPI_DECK_HOME=$RUNNER_TEMP/npi-deck-home" >> "$GITHUB_ENV"
+      - name: Prepare pinned backend
+        run: bun scripts/neopi-setup.ts --build-native
+      - name: Pin native backend across private fixture homes
+        shell: bash
+        run: |
+          bun -e 'import {appendFileSync} from "node:fs"; import {resolveBackendSelection} from "./apps/server/src/backend/runtime.ts"; appendFileSync(process.env.GITHUB_ENV!, `NPI_DECK_BACKEND=${resolveBackendSelection()!.path}\n`)'
+      - name: Record source and host
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          bun --version
+          git diff --exit-code HEAD -- apps packages scripts
+      - name: Reproduce unchanged cancellation with the same portable fixtures
+        id: baseline
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(apps/server/src/owned-process.ts apps/server/src/routines/steps/run.ts)
+          trap 'git restore --source=HEAD -- "${files[@]}"' EXIT
+          for file in "${files[@]}"; do
+            git show "a76b395:$file" > "$file"
+          done
+          git diff --exit-code a76b395 -- "${files[@]}"
+          echo "Cancellation source a76b395, current portable fixtures:"
+          git diff --stat HEAD -- "${files[@]}"
+          bun test apps/server/src/routines/foundations.test.ts -t 'deadline kills shell grandchild|run-duration budget preempts'
+      - name: Require an executed failing baseline
+        if: always()
+        shell: bash
+        run: test '${{ steps.baseline.outcome }}' = failure
+      - name: Deadline and duration-budget regressions
+        run: bun test apps/server/src/routines/foundations.test.ts -t 'deadline kills shell grandchild|run-duration budget preempts'
+      - name: Owned process and portable fixture regressions
+        if: always()
+        run: bun test apps/server/src/owned-process.test.ts apps/server/src/owned-process-tree.test.ts apps/server/src/routines/shell-fixture.test.ts

@@ -1,0 +1,2673 @@
+/* ==========================================================================
+   Neo component layer — the NeoPi web language (`/stats`, `/collab`, `/share`)
+   expressed as plain classes the deck can use next to Tailwind utilities.
+   Measurements follow packages/stats/src/client/styles.css in NeoPi; colours
+   come only from the theme tokens in styles.css (never raw values here).
+   Reference: docs/design/neo-design-language.md
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Motion
+   -------------------------------------------------------------------------- */
+@keyframes neo-rise {
+	from {
+		opacity: 0;
+		transform: translateY(6px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+@keyframes neo-fade {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+@keyframes neo-ping {
+	0% {
+		transform: scale(1);
+		opacity: 0.6;
+	}
+	100% {
+		transform: scale(2.4);
+		opacity: 0;
+	}
+}
+
+@keyframes neo-shimmer {
+	from {
+		background-position: 200% 0;
+	}
+	to {
+		background-position: -200% 0;
+	}
+}
+
+@keyframes neo-drawer-in {
+	from {
+		opacity: 0;
+		transform: translateX(16px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+.neo-rise {
+	animation: neo-rise var(--dur-3) var(--ease-out) both;
+	animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.neo-rise,
+	.neo-drawer,
+	.neo-dot[data-pulse="true"]::after,
+	.neo-skeleton {
+		animation: none !important;
+	}
+}
+
+/* --------------------------------------------------------------------------
+   Shell: glass topbar + naked sidebar framing one inset panel.
+   -------------------------------------------------------------------------- */
+.neo-ambient {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	z-index: var(--neo-layer-base);
+	background:
+		radial-gradient(60rem 28rem at 12% -10%, var(--neo-ambient-a), transparent 70%),
+		radial-gradient(50rem 26rem at 95% -12%, var(--neo-ambient-b), transparent 70%);
+}
+
+.neo-topbar {
+	position: relative;
+	z-index: var(--neo-layer-chrome);
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	height: var(--topbar-h);
+	flex: none;
+	padding: 0 14px 0 16px;
+	background: color-mix(in srgb, var(--neo-bg) 72%, transparent);
+	backdrop-filter: blur(14px) saturate(160%);
+	-webkit-backdrop-filter: blur(14px) saturate(160%);
+}
+
+.neo-brand {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	color: rgb(var(--ink));
+	text-decoration: none;
+}
+
+.neo-brand-slash {
+	color: rgb(var(--ink-4));
+	font-weight: 300;
+	font-size: 18px;
+}
+
+.neo-brand-title {
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+.neo-brand-page {
+	font-weight: 500;
+	color: rgb(var(--ink-2));
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.neo-topbar-actions {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.neo-sidebar {
+	width: var(--sidebar-w);
+	flex: none;
+	padding: 6px 10px 10px;
+	overflow-y: auto;
+	scrollbar-width: none;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	z-index: var(--neo-layer-chrome);
+}
+
+.neo-sidebar::-webkit-scrollbar {
+	display: none;
+}
+
+.neo-nav-group {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+}
+
+.neo-nav-heading {
+	font-size: 12px;
+	font-weight: 500;
+	color: rgb(var(--ink-3));
+	padding: 0 10px 3px;
+}
+
+.neo-nav-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	height: 29px;
+	padding: 0 10px;
+	border-radius: var(--r-control);
+	color: rgb(var(--ink-2));
+	font-size: 13.5px;
+	font-weight: 450;
+	text-align: left;
+	text-decoration: none;
+	width: 100%;
+	transition:
+		background var(--dur-1) var(--ease),
+		color var(--dur-1) var(--ease);
+}
+
+.neo-nav-row:hover {
+	background: var(--neo-hover);
+	color: rgb(var(--ink));
+}
+
+.neo-nav-row:active {
+	transform: scale(0.99);
+}
+
+.neo-nav-row[data-active="true"] {
+	background: var(--neo-selected);
+	color: rgb(var(--ink));
+}
+
+.neo-nav-row svg {
+	color: rgb(var(--ink-3));
+	flex: none;
+	transition: color var(--dur-1) var(--ease);
+}
+
+.neo-nav-row[data-active="true"] svg {
+	color: rgb(var(--accent));
+}
+
+.neo-nav-row-label {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.neo-nav-row-count {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: rgb(var(--ink-4));
+	font-variant-numeric: tabular-nums;
+}
+
+.neo-nav-row[data-planned="true"] .neo-nav-row-label {
+	color: rgb(var(--ink-3));
+}
+
+.neo-nav-row[data-planned="true"][data-active="true"] .neo-nav-row-label {
+	color: rgb(var(--ink));
+}
+
+.neo-sidebar-foot {
+	margin-top: auto;
+	padding: 10px;
+	border-radius: var(--r-card);
+	border: 1px solid var(--neo-line-1);
+	background: var(--neo-card);
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	font-size: 11.5px;
+	color: rgb(var(--ink-3));
+}
+
+.neo-panel {
+	position: relative;
+	z-index: var(--neo-layer-raised);
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+	margin: 0 8px 8px 0;
+	background: var(--neo-panel);
+	border-radius: var(--r-panel);
+	border: 1px solid var(--neo-line-1);
+	box-shadow: var(--neo-shadow-1);
+	overflow: clip;
+}
+
+.neo-scrim {
+	position: absolute;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.5);
+	z-index: var(--neo-layer-modal);
+	animation: neo-fade var(--dur-2) var(--ease) both;
+}
+
+/* --------------------------------------------------------------------------
+   Page
+   -------------------------------------------------------------------------- */
+.neo-page {
+	display: flex;
+	flex-direction: column;
+	gap: 20px;
+	padding: 24px var(--gutter) 48px;
+	max-width: 1560px;
+	width: 100%;
+	margin: 0 auto;
+}
+
+.neo-page-header {
+	display: flex;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: 16px;
+	flex-wrap: wrap;
+	padding-bottom: 4px;
+}
+
+.neo-page-title {
+	font-size: 22px;
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	line-height: 1.2;
+	color: rgb(var(--ink));
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.neo-page-description {
+	margin-top: 4px;
+	color: rgb(var(--ink-2));
+	max-width: 72ch;
+	font-size: 13.5px;
+}
+
+.neo-page-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.neo-grid {
+	display: grid;
+	gap: 16px;
+}
+
+.neo-grid-2 {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.neo-grid-3 {
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.neo-grid-main-side {
+	grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+
+@media (max-width: 1100px) {
+	.neo-grid-2,
+	.neo-grid-3,
+	.neo-grid-main-side {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+.neo-section-label {
+	font-size: 12px;
+	font-weight: 500;
+	color: rgb(var(--ink-3));
+	margin-bottom: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   Card: top-lit gradient hairline over one surface step.
+   -------------------------------------------------------------------------- */
+.neo-card {
+	position: relative;
+	border-radius: var(--r-card);
+	border: 1px solid transparent;
+	background:
+		linear-gradient(var(--neo-card), var(--neo-card)) padding-box,
+		linear-gradient(180deg, var(--neo-line-3), var(--neo-line-1) 40%) border-box;
+	box-shadow: var(--neo-shadow-1);
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.neo-card[data-tone="accent"] {
+	background:
+		linear-gradient(var(--neo-card), var(--neo-card)) padding-box,
+		linear-gradient(180deg, var(--neo-accent-line), var(--neo-line-1) 60%) border-box;
+}
+
+.neo-card[data-interactive="true"] {
+	cursor: pointer;
+	transition:
+		transform var(--dur-1) var(--ease),
+		box-shadow var(--dur-2) var(--ease);
+}
+
+.neo-card[data-interactive="true"]:hover {
+	box-shadow: var(--neo-shadow-2);
+	transform: translateY(-1px);
+}
+
+.neo-card-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 14px 16px 0;
+	flex-wrap: wrap;
+}
+
+.neo-card-titles {
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.neo-card-title {
+	font-size: 14px;
+	font-weight: 550;
+	letter-spacing: -0.005em;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: rgb(var(--ink));
+}
+
+.neo-card-description {
+	font-size: 12.5px;
+	color: rgb(var(--ink-3));
+}
+
+.neo-card-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+.neo-card-body {
+	padding: 14px 16px 16px;
+	min-width: 0;
+	flex: 1;
+}
+
+.neo-card-body[data-flush="true"] {
+	padding: 10px 0 0;
+}
+
+.neo-card-footer {
+	border-top: 1px solid var(--neo-line-1);
+	padding: 10px 16px;
+	font-size: 12.5px;
+	color: rgb(var(--ink-3));
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   Stat grid
+   -------------------------------------------------------------------------- */
+.neo-stat-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(var(--stat-min, 170px), 1fr));
+	border-radius: var(--r-card);
+	border: 1px solid transparent;
+	background:
+		linear-gradient(var(--neo-card), var(--neo-card)) padding-box,
+		linear-gradient(180deg, var(--neo-line-3), var(--neo-line-1) 40%) border-box;
+	box-shadow: var(--neo-shadow-1);
+	overflow: hidden;
+}
+
+.neo-stat {
+	position: relative;
+	padding: 14px 16px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+	box-shadow:
+		1px 0 0 var(--neo-line-1),
+		0 1px 0 var(--neo-line-1);
+	text-decoration: none;
+	color: inherit;
+}
+
+a.neo-stat:hover {
+	background: var(--neo-hover);
+}
+
+.neo-stat-label {
+	font-size: 12.5px;
+	font-weight: 500;
+	color: rgb(var(--ink-2));
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.neo-stat-value {
+	font-size: 24px;
+	font-weight: 550;
+	letter-spacing: -0.025em;
+	font-variant-numeric: tabular-nums;
+	line-height: 1.15;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: rgb(var(--ink));
+}
+
+.neo-stat[data-size="sm"] .neo-stat-value {
+	font-size: 18px;
+}
+
+.neo-stat-foot {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	color: rgb(var(--ink-3));
+	min-height: 18px;
+}
+
+/* --------------------------------------------------------------------------
+   Controls
+   -------------------------------------------------------------------------- */
+.neo-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	height: 30px;
+	padding: 0 12px;
+	border-radius: var(--r-control);
+	font-size: 13px;
+	font-weight: 500;
+	white-space: nowrap;
+	border: 1px solid var(--neo-line-2);
+	background: var(--neo-raised);
+	color: rgb(var(--ink));
+	cursor: pointer;
+	text-decoration: none;
+	transition:
+		background var(--dur-1) var(--ease),
+		border-color var(--dur-1) var(--ease),
+		transform var(--dur-1) var(--ease);
+}
+
+.neo-btn > svg {
+	flex: none;
+}
+
+.neo-btn:hover:not(:disabled) {
+	border-color: var(--neo-line-3);
+	background: color-mix(in srgb, var(--neo-raised) 80%, rgb(var(--ink)) 6%);
+}
+
+.neo-btn:active:not(:disabled) {
+	transform: scale(0.97);
+}
+
+.neo-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.neo-btn[data-variant="primary"] {
+	background: rgb(var(--ink));
+	color: var(--neo-ink-inverse);
+	border-color: transparent;
+}
+
+.neo-btn[data-variant="primary"]:hover:not(:disabled) {
+	background: color-mix(in srgb, rgb(var(--ink)) 88%, transparent);
+}
+
+.neo-btn[data-variant="accent"] {
+	background: var(--neo-accent-gradient);
+	color: #fff;
+	border-color: transparent;
+}
+
+.neo-btn[data-variant="ghost"] {
+	background: transparent;
+	border-color: transparent;
+	color: rgb(var(--ink-2));
+}
+
+.neo-btn[data-variant="ghost"]:hover:not(:disabled) {
+	background: var(--neo-hover);
+	color: rgb(var(--ink));
+}
+
+.neo-btn[data-variant="ghost"][data-on="true"] {
+	background: var(--neo-selected);
+	color: rgb(var(--ink));
+}
+
+.neo-btn[data-variant="danger"] {
+	background: var(--neo-bad-soft);
+	color: rgb(var(--danger));
+	border-color: color-mix(in srgb, rgb(var(--danger)) 30%, transparent);
+}
+
+.neo-btn[data-size="sm"] {
+	height: 26px;
+	padding: 0 9px;
+	font-size: 12.5px;
+}
+
+.neo-btn[data-icon="true"] {
+	width: 30px;
+	padding: 0;
+}
+
+.neo-btn[data-icon="true"][data-size="sm"] {
+	width: 26px;
+}
+
+.neo-input {
+	height: 30px;
+	padding: 0 10px;
+	border-radius: var(--r-control);
+	border: 1px solid var(--neo-line-2);
+	background: var(--neo-card);
+	color: rgb(var(--ink));
+	font-size: 13px;
+	min-width: 0;
+	transition: border-color var(--dur-1) var(--ease);
+}
+
+.neo-input::placeholder {
+	color: rgb(var(--ink-3));
+}
+
+.neo-input:hover {
+	border-color: var(--neo-line-3);
+}
+
+.neo-input:focus {
+	outline: none;
+	border-color: var(--neo-focus);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--neo-focus) 18%, transparent);
+}
+
+textarea.neo-input {
+	height: auto;
+	padding: 8px 10px;
+	line-height: 1.5;
+	resize: vertical;
+}
+
+.neo-search {
+	position: relative;
+	display: flex;
+	align-items: center;
+}
+
+.neo-search svg {
+	position: absolute;
+	left: 9px;
+	color: rgb(var(--ink-3));
+	pointer-events: none;
+}
+
+.neo-search .neo-input {
+	padding-left: 30px;
+	width: 100%;
+}
+
+/* Segmented control. */
+.neo-segmented {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	padding: 2px;
+	border-radius: var(--r-control);
+	border: 1px solid var(--neo-line-1);
+	background: var(--neo-card);
+}
+
+.neo-segmented-option {
+	position: relative;
+	z-index: var(--neo-layer-raised);
+	height: 24px;
+	padding: 0 9px;
+	border-radius: 6px;
+	font-size: 12.5px;
+	font-weight: 500;
+	color: rgb(var(--ink-3));
+	white-space: nowrap;
+	cursor: pointer;
+	transition:
+		color var(--dur-1) var(--ease),
+		background var(--dur-1) var(--ease);
+}
+
+.neo-segmented-option:hover {
+	color: rgb(var(--ink));
+}
+
+.neo-segmented-option[data-active="true"] {
+	color: rgb(var(--ink));
+	background: var(--neo-selected);
+}
+
+/* Tabs: underline style for in-card view switches. */
+.neo-tabs {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	border-bottom: 1px solid var(--neo-line-1);
+}
+
+.neo-tab {
+	position: relative;
+	height: 36px;
+	padding: 0 12px;
+	font-size: 13px;
+	font-weight: 500;
+	color: rgb(var(--ink-3));
+	white-space: nowrap;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	transition: color var(--dur-1) var(--ease);
+}
+
+.neo-tab:hover {
+	color: rgb(var(--ink));
+}
+
+.neo-tab[data-active="true"] {
+	color: rgb(var(--ink));
+}
+
+.neo-tab[data-active="true"]::after {
+	content: "";
+	position: absolute;
+	left: 10px;
+	right: 10px;
+	bottom: -1px;
+	height: 2px;
+	border-radius: 2px;
+	background: var(--neo-accent-gradient);
+}
+
+.neo-kbd {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 18px;
+	height: 18px;
+	padding: 0 4px;
+	border-radius: 5px;
+	border: 1px solid var(--neo-line-2);
+	background: var(--neo-card);
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	color: rgb(var(--ink-3));
+}
+
+/* --------------------------------------------------------------------------
+   Badge & dot
+   -------------------------------------------------------------------------- */
+.neo-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	height: 20px;
+	padding: 0 8px;
+	border-radius: var(--r-pill);
+	font-size: 11.5px;
+	font-weight: 500;
+	white-space: nowrap;
+	background: var(--neo-raised);
+	color: rgb(var(--ink-2));
+	border: 1px solid var(--neo-line-1);
+}
+
+.neo-badge[data-tone="ok"] {
+	background: var(--neo-ok-soft);
+	color: rgb(var(--success));
+	border-color: transparent;
+}
+
+.neo-badge[data-tone="warn"] {
+	background: var(--neo-warn-soft);
+	color: rgb(var(--warn));
+	border-color: transparent;
+}
+
+.neo-badge[data-tone="bad"] {
+	background: var(--neo-bad-soft);
+	color: rgb(var(--danger));
+	border-color: transparent;
+}
+
+.neo-badge[data-tone="accent"] {
+	background: rgb(var(--accent-soft));
+	color: rgb(var(--accent));
+	border-color: transparent;
+}
+
+.neo-badge[data-tone="planned"] {
+	background: transparent;
+	color: rgb(var(--ink-3));
+	border: 1px dashed var(--neo-line-3);
+}
+
+.neo-badge[data-mono="true"] {
+	font-family: var(--font-mono);
+	font-size: 11px;
+}
+
+.neo-dot {
+	position: relative;
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: rgb(var(--ink-3));
+	flex-shrink: 0;
+}
+
+.neo-dot[data-tone="ok"],
+.neo-dot[data-tone="live"] {
+	background: var(--neo-live);
+}
+
+.neo-dot[data-tone="warn"] {
+	background: rgb(var(--warn));
+}
+
+.neo-dot[data-tone="bad"] {
+	background: rgb(var(--danger));
+}
+
+.neo-dot[data-tone="accent"] {
+	background: rgb(var(--accent));
+}
+
+.neo-dot[data-pulse="true"]::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border-radius: 50%;
+	background: inherit;
+	animation: neo-ping 1.6s var(--ease-out) infinite;
+}
+
+/* Status chip (topbar): dot + word + dim detail. */
+.neo-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	height: 28px;
+	padding: 0 10px 0 9px;
+	border-radius: var(--r-pill);
+	border: 1px solid var(--neo-line-1);
+	background: var(--neo-card);
+	font-size: 12px;
+	font-weight: 500;
+	color: rgb(var(--ink-2));
+	white-space: nowrap;
+	text-decoration: none;
+}
+
+.neo-chip:hover {
+	border-color: var(--neo-line-3);
+	color: rgb(var(--ink));
+}
+
+.neo-chip-detail {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: rgb(var(--ink-3));
+}
+
+/* --------------------------------------------------------------------------
+   Table
+   -------------------------------------------------------------------------- */
+.neo-table-wrap {
+	overflow-x: auto;
+	min-width: 0;
+}
+
+.neo-table {
+	width: 100%;
+	font-size: 13px;
+	border-collapse: collapse;
+}
+
+.neo-table th {
+	position: sticky;
+	top: 0;
+	z-index: var(--neo-layer-sticky);
+	text-align: left;
+	font-size: 12px;
+	font-weight: 500;
+	color: rgb(var(--ink-3));
+	padding: 8px 12px;
+	white-space: nowrap;
+	background: var(--neo-card);
+	border-bottom: 1px solid var(--neo-line-1);
+	user-select: none;
+}
+
+.neo-table th:first-child,
+.neo-table td:first-child {
+	padding-left: 16px;
+}
+
+.neo-table th:last-child,
+.neo-table td:last-child {
+	padding-right: 16px;
+}
+
+.neo-table td {
+	padding: 9px 12px;
+	border-bottom: 1px solid var(--neo-line-1);
+	vertical-align: middle;
+	white-space: nowrap;
+}
+
+.neo-table tbody tr:last-child td {
+	border-bottom: 0;
+}
+
+.neo-table tbody tr:hover {
+	background: var(--neo-hover);
+}
+
+.neo-table tbody tr[data-clickable="true"] {
+	cursor: pointer;
+}
+
+.neo-table tbody tr[data-selected="true"] {
+	background: var(--neo-selected);
+}
+
+.neo-table [data-align="right"] {
+	text-align: right;
+}
+
+.neo-table td[data-wrap="true"] {
+	white-space: normal;
+}
+
+.neo-cell-primary {
+	font-weight: 500;
+	color: rgb(var(--ink));
+}
+
+.neo-cell-secondary {
+	font-size: 12px;
+	color: rgb(var(--ink-3));
+	font-family: var(--font-mono);
+}
+
+/* Inline proportional meter. */
+.neo-meter {
+	position: relative;
+	height: 4px;
+	border-radius: 2px;
+	background: var(--neo-line-2);
+	overflow: hidden;
+	min-width: 48px;
+}
+
+.neo-meter-fill {
+	position: absolute;
+	inset: 0 auto 0 0;
+	border-radius: 2px;
+	background: var(--neo-accent-gradient);
+}
+
+/* --------------------------------------------------------------------------
+   States
+   -------------------------------------------------------------------------- */
+.neo-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	padding: 40px 16px;
+	text-align: center;
+	color: rgb(var(--ink-3));
+	min-height: 140px;
+}
+
+.neo-empty svg {
+	color: rgb(var(--ink-4));
+	margin-bottom: 4px;
+}
+
+.neo-empty-title {
+	color: rgb(var(--ink-2));
+	font-weight: 500;
+}
+
+.neo-empty-hint {
+	font-size: 12.5px;
+	max-width: 44ch;
+}
+
+.neo-error-state {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 12px 14px;
+	border-radius: var(--r-control);
+	background: var(--neo-bad-soft);
+	color: rgb(var(--danger));
+	font-size: 13px;
+}
+
+.neo-skeleton {
+	border-radius: 6px;
+	background: linear-gradient(90deg, var(--neo-line-1) 0%, var(--neo-line-2) 50%, var(--neo-line-1) 100%);
+	background-size: 200% 100%;
+	animation: neo-shimmer 1.6s linear infinite;
+}
+
+/* --------------------------------------------------------------------------
+   Drawer (right sheet) and key/value grids
+   -------------------------------------------------------------------------- */
+.neo-drawer {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	bottom: 8px;
+	width: min(var(--drawer-w, 560px), calc(100% - 16px));
+	z-index: calc(var(--neo-layer-modal) + 1);
+	display: flex;
+	flex-direction: column;
+	border-radius: var(--r-panel);
+	border: 1px solid var(--neo-line-2);
+	background: var(--neo-overlay);
+	backdrop-filter: blur(20px) saturate(170%);
+	-webkit-backdrop-filter: blur(20px) saturate(170%);
+	box-shadow: var(--neo-shadow-3);
+	animation: neo-drawer-in var(--dur-3) var(--ease-out) both;
+	overflow: hidden;
+}
+
+.neo-drawer-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 16px 16px 12px;
+	border-bottom: 1px solid var(--neo-line-1);
+}
+
+.neo-drawer-title {
+	font-size: 15px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+.neo-drawer-subtitle {
+	font-size: 12.5px;
+	color: rgb(var(--ink-3));
+	margin-top: 2px;
+}
+
+.neo-drawer-body {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+}
+
+.neo-kv {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+	gap: 12px 16px;
+}
+
+.neo-kv-item {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.neo-kv-key {
+	font-size: 12px;
+	color: rgb(var(--ink-3));
+}
+
+.neo-kv-value {
+	font-family: var(--font-mono);
+	font-size: 12.5px;
+	color: rgb(var(--ink));
+	overflow-wrap: anywhere;
+}
+
+.neo-code-block {
+	margin: 0;
+	padding: 12px 14px;
+	border-radius: var(--r-control);
+	border: 1px solid var(--neo-line-1);
+	background: var(--neo-card);
+	font-family: var(--font-mono);
+	font-size: 12px;
+	line-height: 1.55;
+	color: rgb(var(--ink-2));
+	overflow: auto;
+	max-height: 480px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+/* --------------------------------------------------------------------------
+   Type utilities
+   -------------------------------------------------------------------------- */
+.neo-mono {
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+}
+
+.neo-micro {
+	font-size: 11.5px;
+	color: rgb(var(--ink-3));
+}
+
+.neo-gradient-text {
+	background: var(--neo-accent-gradient);
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+}
+
+/* Construction notice used by planned areas: a card with a dashed accent edge. */
+.neo-construction {
+	border-radius: var(--r-card);
+	border: 1px dashed var(--neo-accent-line);
+	background: color-mix(in srgb, var(--neo-card) 85%, rgb(var(--accent)) 4%);
+	padding: 14px 16px;
+	display: flex;
+	gap: 12px;
+	align-items: flex-start;
+	color: rgb(var(--ink-2));
+	font-size: 13px;
+}
+
+.neo-construction svg {
+	flex: none;
+	color: rgb(var(--accent));
+	margin-top: 1px;
+}
+
+/* --------------------------------------------------------------------------
+   Form fields. Sentence-case 12 px labels, help and errors under the control.
+   Validation lives at the field: the control turns red and the message sits
+   beneath it; there is no summary band anywhere.
+   -------------------------------------------------------------------------- */
+.neo-field {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	min-width: 0;
+}
+
+.neo-field-label {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	font-size: 12px;
+	font-weight: 500;
+	color: rgb(var(--ink-2));
+}
+
+.neo-field-label > small {
+	font-size: 11.5px;
+	font-weight: 400;
+	color: rgb(var(--ink-3));
+}
+
+.neo-field-help {
+	font-size: 12px;
+	line-height: 1.45;
+	color: rgb(var(--ink-3));
+}
+
+.neo-field-error {
+	display: flex;
+	align-items: flex-start;
+	gap: 5px;
+	font-size: 12px;
+	line-height: 1.4;
+	color: rgb(var(--danger));
+}
+
+.neo-field-error > svg {
+	flex: none;
+	margin-top: 2px;
+}
+
+.neo-field[data-invalid="true"] .neo-input {
+	border-color: color-mix(in srgb, rgb(var(--danger)) 60%, transparent);
+}
+
+.neo-field[data-invalid="true"] .neo-input:focus {
+	border-color: rgb(var(--danger));
+	box-shadow: 0 0 0 3px color-mix(in srgb, rgb(var(--danger)) 18%, transparent);
+}
+
+.neo-input[data-mono="true"] {
+	font-family: var(--font-mono);
+	font-size: 12.5px;
+}
+
+select.neo-input {
+	appearance: none;
+	padding-right: 28px;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236c6c74' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: right 9px center;
+}
+
+.neo-input[data-size="sm"] {
+	height: 26px;
+	padding: 0 8px;
+	font-size: 12.5px;
+}
+
+.neo-check {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 13px;
+	color: rgb(var(--ink-2));
+	cursor: pointer;
+}
+
+.neo-check input {
+	accent-color: rgb(var(--accent));
+	width: 14px;
+	height: 14px;
+}
+
+.neo-chip-btn {
+	height: 22px;
+	padding: 0 8px;
+	border-radius: var(--r-chip);
+	border: 1px solid var(--neo-line-2);
+	background: var(--neo-raised);
+	font-size: 11.5px;
+	color: rgb(var(--ink-2));
+	cursor: pointer;
+	white-space: nowrap;
+	transition:
+		background var(--dur-1) var(--ease),
+		color var(--dur-1) var(--ease);
+}
+
+.neo-chip-btn:hover {
+	color: rgb(var(--ink));
+	border-color: var(--neo-line-3);
+}
+
+.neo-chip-btn[data-on="true"] {
+	background: var(--neo-selected);
+	color: rgb(var(--ink));
+}
+
+/* --------------------------------------------------------------------------
+   Routine canvas nodes. A node is a card: icon, title, what it does, and a
+   footer that only appears when there is something to say (a problem, a run).
+   -------------------------------------------------------------------------- */
+.neo-node {
+	position: relative;
+	width: 248px;
+	border-radius: var(--r-card);
+	border: 1px solid transparent;
+	background:
+		linear-gradient(var(--neo-card), var(--neo-card)) padding-box,
+		linear-gradient(180deg, var(--neo-line-3), var(--neo-line-1) 40%) border-box;
+	box-shadow: var(--neo-shadow-1);
+	color: rgb(var(--ink));
+	font-size: 12.5px;
+	transition:
+		box-shadow var(--dur-1) var(--ease),
+		border-color var(--dur-1) var(--ease);
+}
+
+.neo-node[data-selected="true"] {
+	background:
+		linear-gradient(var(--neo-card), var(--neo-card)) padding-box,
+		linear-gradient(rgb(var(--accent)), rgb(var(--accent))) border-box;
+	box-shadow:
+		var(--neo-shadow-1),
+		0 0 0 3px color-mix(in srgb, rgb(var(--accent)) 18%, transparent);
+}
+
+.neo-node[data-problem="true"] {
+	background:
+		linear-gradient(var(--neo-card), var(--neo-card)) padding-box,
+		linear-gradient(color-mix(in srgb, rgb(var(--danger)) 70%, transparent), color-mix(in srgb, rgb(var(--danger)) 70%, transparent)) border-box;
+}
+
+.neo-node[data-selected="true"][data-problem="true"] {
+	box-shadow:
+		var(--neo-shadow-1),
+		0 0 0 3px color-mix(in srgb, rgb(var(--danger)) 18%, transparent);
+}
+
+.neo-node[data-run="running"] {
+	background:
+		linear-gradient(var(--neo-card), var(--neo-card)) padding-box,
+		var(--neo-accent-gradient) border-box;
+}
+
+.neo-node[data-run="success"] {
+	background:
+		linear-gradient(var(--neo-card), var(--neo-card)) padding-box,
+		linear-gradient(color-mix(in srgb, rgb(var(--success)) 55%, transparent), color-mix(in srgb, rgb(var(--success)) 55%, transparent)) border-box;
+}
+
+.neo-node[data-run="failed"] {
+	background:
+		linear-gradient(var(--neo-card), var(--neo-card)) padding-box,
+		linear-gradient(color-mix(in srgb, rgb(var(--danger)) 70%, transparent), color-mix(in srgb, rgb(var(--danger)) 70%, transparent)) border-box;
+}
+
+.neo-node[data-run="aborted"] {
+	background:
+		linear-gradient(var(--neo-card), var(--neo-card)) padding-box,
+		linear-gradient(color-mix(in srgb, rgb(var(--warn)) 60%, transparent), color-mix(in srgb, rgb(var(--warn)) 60%, transparent)) border-box;
+}
+
+.neo-node[data-run="skipped"] {
+	opacity: 0.7;
+}
+
+.neo-node-head {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	padding: 10px 12px 0;
+}
+
+.neo-node-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	flex: none;
+	border-radius: 7px;
+	background: var(--neo-raised);
+	border: 1px solid var(--neo-line-1);
+	color: rgb(var(--ink-2));
+}
+
+.neo-node-icon[data-tone="engine"] {
+	color: rgb(var(--thinking));
+}
+
+.neo-node-icon[data-tone="accent"] {
+	color: rgb(var(--accent));
+}
+
+.neo-node-titles {
+	min-width: 0;
+	flex: 1;
+}
+
+.neo-node-title {
+	font-size: 13.5px;
+	font-weight: 550;
+	letter-spacing: -0.01em;
+	line-height: 1.25;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.neo-node-kicker {
+	font-size: 11.5px;
+	color: rgb(var(--ink-3));
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.neo-node-body {
+	padding: 8px 12px 10px;
+	font-size: 12.5px;
+	line-height: 1.45;
+	color: rgb(var(--ink-2));
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+}
+
+.neo-node-body[data-mono="true"] {
+	font-family: var(--font-mono);
+	font-size: 12px;
+}
+
+.neo-node-body[data-empty="true"] {
+	color: rgb(var(--ink-3));
+	font-style: italic;
+}
+
+.neo-node-foot {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 7px 12px;
+	border-top: 1px solid var(--neo-line-1);
+	font-size: 11.5px;
+	color: rgb(var(--ink-3));
+	line-height: 1.35;
+}
+
+.neo-node-foot[data-tone="bad"] {
+	color: rgb(var(--danger));
+}
+
+.neo-node-foot > svg {
+	flex: none;
+}
+
+.neo-node-foot .neo-mono {
+	font-size: 11.5px;
+}
+
+.neo-node-branches {
+	display: flex;
+	justify-content: space-between;
+	padding: 6px 12px;
+	border-top: 1px solid var(--neo-line-1);
+	font-size: 11.5px;
+	color: rgb(var(--ink-3));
+}
+
+/* The trigger is the first thing on the canvas: a pill-shaped start node. */
+.neo-node[data-kind="trigger"] {
+	width: auto;
+	min-width: 200px;
+	max-width: 300px;
+	border-radius: var(--r-pill);
+}
+
+.neo-node[data-kind="trigger"] .neo-node-head {
+	padding: 8px 14px 8px 10px;
+}
+
+.neo-node[data-kind="trigger"] .neo-node-icon {
+	border-radius: 999px;
+	background: var(--neo-accent-gradient);
+	border-color: transparent;
+	color: #fff;
+}
+
+.neo-node[data-kind="trigger"] .neo-node-title {
+	font-size: 13px;
+}
+
+.routine-canvas .react-flow__handle {
+	width: 8px;
+	height: 8px;
+	border: 1px solid var(--neo-line-4);
+	background: var(--neo-card);
+}
+
+.routine-canvas .react-flow__handle[data-handleid="true"] {
+	border-color: rgb(var(--success));
+	background: rgb(var(--success));
+}
+
+.routine-canvas .react-flow__handle[data-handleid="false"] {
+	border-color: rgb(var(--danger));
+	background: rgb(var(--danger));
+}
+
+.routine-canvas .react-flow__node-trigger .react-flow__handle {
+	opacity: 0;
+}
+
+.routine-canvas .react-flow__controls,
+.routine-canvas .react-flow__minimap {
+	border-radius: var(--r-control);
+	overflow: hidden;
+}
+
+.routine-canvas .react-flow__minimap {
+	background: var(--neo-panel) !important;
+	border: 1px solid var(--neo-line-2) !important;
+}
+
+.routine-canvas .react-flow__minimap-node {
+	fill: var(--neo-line-4);
+	stroke: none;
+}
+
+.routine-canvas .react-flow__minimap-mask {
+	fill: color-mix(in srgb, var(--neo-bg) 55%, transparent);
+}
+
+/* Floating canvas chrome: the one place a problem count may sit. */
+.neo-canvas-pill {
+	position: absolute;
+	left: 50%;
+	bottom: 14px;
+	transform: translateX(-50%);
+	z-index: var(--neo-layer-chrome);
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	height: 28px;
+	padding: 0 12px;
+	border-radius: var(--r-pill);
+	border: 1px solid var(--neo-line-2);
+	background: color-mix(in srgb, var(--neo-raised) 90%, transparent);
+	backdrop-filter: blur(10px);
+	font-size: 12.5px;
+	color: rgb(var(--ink-2));
+	box-shadow: var(--neo-shadow-1);
+	cursor: pointer;
+}
+
+.neo-canvas-pill[data-tone="bad"] {
+	color: rgb(var(--danger));
+	border-color: color-mix(in srgb, rgb(var(--danger)) 30%, transparent);
+}
+
+/* The source view: a code block that fills the pane and can be typed into. */
+.neo-source {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	flex: 1;
+	border-radius: var(--r-card);
+	border: 1px solid var(--neo-line-2);
+	background: var(--neo-panel);
+	overflow: hidden;
+}
+
+.neo-source-bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 8px 6px 12px;
+	border-bottom: 1px solid var(--neo-line-1);
+	font-size: 12px;
+	color: rgb(var(--ink-3));
+}
+
+.neo-source textarea {
+	flex: 1;
+	min-height: 320px;
+	width: 100%;
+	resize: none;
+	padding: 12px 14px;
+	background: transparent;
+	color: rgb(var(--ink));
+	font-family: var(--font-mono);
+	font-size: 12.5px;
+	line-height: 1.6;
+	tab-size: 2;
+	outline: none;
+}
+
+.neo-source textarea::placeholder {
+	color: rgb(var(--ink-4));
+}
+
+.neo-source-problems {
+	border-top: 1px solid var(--neo-line-1);
+	padding: 8px 12px;
+	font-size: 12px;
+	color: rgb(var(--danger));
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+.neo-source-problems .neo-mono {
+	color: rgb(var(--ink-3));
+	font-size: 11.5px;
+	margin-right: 6px;
+}
+
+/* --------------------------------------------------------------------------
+   Inbox. A slip is one row: dot, title, first line, kind, when. The compose
+   slip sits at the top of the list and collapses back once captured.
+   -------------------------------------------------------------------------- */
+.neo-slip {
+	display: grid;
+	grid-template-columns: 14px minmax(0, 1fr) auto;
+	gap: 10px;
+	align-items: start;
+	width: 100%;
+	padding: 10px 16px;
+	text-align: left;
+	border-bottom: 1px solid var(--neo-line-1);
+	cursor: pointer;
+	transition: background var(--dur-1) var(--ease);
+}
+
+.neo-slip:last-child {
+	border-bottom: 0;
+}
+
+.neo-slip:hover {
+	background: var(--neo-hover);
+}
+
+.neo-slip[data-active="true"] {
+	background: var(--neo-selected);
+}
+
+.neo-slip[data-settled="true"] .neo-slip-title {
+	color: rgb(var(--ink-3));
+	text-decoration: line-through;
+	text-decoration-color: var(--neo-line-4);
+}
+
+.neo-slip-dot {
+	margin-top: 6px;
+	justify-self: center;
+}
+
+.neo-slip-title {
+	font-size: 13.5px;
+	font-weight: 500;
+	color: rgb(var(--ink));
+	line-height: 1.3;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.neo-slip-line {
+	margin-top: 2px;
+	font-size: 12.5px;
+	color: rgb(var(--ink-3));
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.neo-slip-meta {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 4px;
+	font-size: 11.5px;
+	color: rgb(var(--ink-3));
+	white-space: nowrap;
+}
+
+.neo-slip-compose {
+	border-bottom: 1px solid var(--neo-line-1);
+	background: color-mix(in srgb, var(--neo-card) 70%, var(--neo-raised) 30%);
+	animation: neo-rise var(--dur-3) var(--ease-out) both;
+}
+
+.neo-slip-compose input[data-title] {
+	width: 100%;
+	background: transparent;
+	font-size: 16px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	color: rgb(var(--ink));
+	outline: none;
+}
+
+.neo-slip-compose input[data-title]::placeholder {
+	color: rgb(var(--ink-3));
+	font-weight: 500;
+}
+
+.neo-reader-title {
+	width: 100%;
+	background: transparent;
+	font-size: 18px;
+	font-weight: 600;
+	letter-spacing: -0.015em;
+	line-height: 1.3;
+	color: rgb(var(--ink));
+	outline: none;
+}
+
+.neo-reader-title::placeholder {
+	color: rgb(var(--ink-3));
+}
+
+.neo-intake {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.neo-intake-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-size: 13px;
+	color: rgb(var(--ink-2));
+}
+
+.neo-intake-row > svg {
+	flex: none;
+	color: rgb(var(--ink-3));
+}
+
+.neo-intake-row > span:first-of-type {
+	min-width: 0;
+	flex: 1;
+}
+
+/* --------------------------------------------------------------------------
+   Sortable table, filter bar, drawer footer, switch: the /stats patterns the
+   deck's list pages compose (see components/neo/Table.tsx, controls.tsx).
+   -------------------------------------------------------------------------- */
+.neo-table th[data-sortable="true"] {
+	cursor: pointer;
+}
+
+.neo-table th[data-sortable="true"]:hover,
+.neo-table th[data-sorted] {
+	color: rgb(var(--ink));
+}
+
+.neo-table th .neo-sort-arrow {
+	display: inline-block;
+	margin-left: 4px;
+	opacity: 0.8;
+	vertical-align: -1px;
+}
+
+.neo-table [data-align="center"] {
+	text-align: center;
+}
+
+.neo-table[data-dense="true"] td {
+	padding-top: 6px;
+	padding-bottom: 6px;
+}
+
+.neo-table tbody tr {
+	transition: background var(--dur-1) var(--ease);
+}
+
+.neo-table tbody tr:focus-visible {
+	outline: none;
+	box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--neo-focus) 55%, transparent);
+}
+
+.neo-table tbody tr[data-detail="true"]:hover {
+	background: transparent;
+}
+
+.neo-table tbody tr[data-tone="muted"] td {
+	color: rgb(var(--ink-3));
+}
+
+.neo-table-more {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	gap: 8px;
+	padding: 10px;
+	border-top: 1px solid var(--neo-line-1);
+}
+
+.neo-num {
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+	font-size: 0.93em;
+	letter-spacing: -0.01em;
+}
+
+.neo-muted {
+	color: rgb(var(--ink-2));
+}
+
+.neo-dim {
+	color: rgb(var(--ink-3));
+}
+
+.neo-meter-cell {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 10px;
+}
+
+.neo-meter-cell .neo-meter {
+	width: 64px;
+	flex: none;
+}
+
+.neo-label-cell {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+}
+
+.neo-label-cell > svg {
+	flex: none;
+	color: rgb(var(--ink-3));
+}
+
+/* Filter bar. */
+.neo-toolbar {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+	min-width: 0;
+}
+
+.neo-toolbar-end {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-left: auto;
+}
+
+.neo-search[data-size="sm"] svg {
+	left: 8px;
+}
+
+.neo-search[data-size="sm"] .neo-input {
+	padding-left: 26px;
+}
+
+.neo-search-clear {
+	position: absolute;
+	right: 6px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	border-radius: 5px;
+	color: rgb(var(--ink-3));
+	cursor: pointer;
+}
+
+.neo-search-clear:hover {
+	color: rgb(var(--ink));
+	background: var(--neo-hover);
+}
+
+.neo-search .neo-input::-webkit-search-cancel-button {
+	display: none;
+}
+
+.neo-tab-count {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: rgb(var(--ink-3));
+}
+
+.neo-tab[data-active="true"] .neo-tab-count {
+	color: rgb(var(--ink-2));
+}
+
+/* Counts inside segmented options (`All 500`). */
+.neo-segmented-option .neo-num {
+	margin-left: 4px;
+	color: rgb(var(--ink-3));
+}
+
+.neo-check[data-disabled="true"] {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.neo-switch {
+	position: relative;
+	width: 30px;
+	height: 18px;
+	flex: none;
+	border-radius: var(--r-pill);
+	border: 1px solid var(--neo-line-3);
+	background: var(--neo-raised);
+	cursor: pointer;
+	transition:
+		background var(--dur-2) var(--ease),
+		border-color var(--dur-2) var(--ease);
+}
+
+.neo-switch-knob {
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	background: rgb(var(--ink-3));
+	transition:
+		transform var(--dur-2) var(--ease-out),
+		background var(--dur-2) var(--ease);
+}
+
+.neo-switch[data-on="true"] {
+	background: rgb(var(--accent));
+	border-color: transparent;
+}
+
+.neo-switch[data-on="true"] .neo-switch-knob {
+	transform: translateX(12px);
+	background: #fff;
+}
+
+.neo-switch:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.neo-switch:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--neo-focus) 30%, transparent);
+}
+
+.neo-back {
+	align-self: flex-start;
+	margin-left: -8px;
+	color: rgb(var(--ink-2));
+}
+
+.neo-notice {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 14px;
+	border-radius: var(--r-control);
+	border: 1px solid var(--neo-line-2);
+	background: var(--neo-card);
+	color: rgb(var(--ink-2));
+	font-size: 13px;
+}
+
+.neo-notice[data-tone="ok"] {
+	background: var(--neo-ok-soft);
+	border-color: transparent;
+	color: rgb(var(--success));
+}
+
+.neo-notice[data-tone="warn"] {
+	background: var(--neo-warn-soft);
+	border-color: transparent;
+	color: rgb(var(--warn));
+}
+
+.neo-error-state-message {
+	flex: 1;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.neo-drawer-scrim {
+	position: fixed;
+	inset: 0;
+	z-index: var(--neo-layer-modal);
+	background: rgba(0, 0, 0, 0.35);
+	animation: neo-fade var(--dur-2) var(--ease) both;
+}
+
+.neo-drawer {
+	position: fixed;
+}
+
+.neo-drawer:focus {
+	outline: none;
+}
+
+.neo-drawer-titles {
+	flex: 1;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.neo-drawer-footer {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 12px 16px;
+	border-top: 1px solid var(--neo-line-1);
+	background: var(--neo-card);
+}
+
+.neo-drawer-footer > :first-child {
+	margin-right: auto;
+}
+
+.neo-section-label {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   Timeline (DOM swimlanes, see components/neo/Timeline.tsx)
+   -------------------------------------------------------------------------- */
+.neo-timeline {
+	--neo-timeline-gutter: 188px;
+	display: flex;
+	flex-direction: column;
+	font-size: 12px;
+	min-width: 0;
+	overflow-x: auto;
+}
+
+.neo-timeline-ruler,
+.neo-timeline-lane {
+	display: grid;
+	grid-template-columns: var(--neo-timeline-gutter) minmax(0, 1fr);
+	min-width: 0;
+}
+
+.neo-timeline-ruler {
+	height: 22px;
+	border-bottom: 1px solid var(--neo-line-2);
+	position: sticky;
+	top: 0;
+	z-index: var(--neo-layer-sticky);
+	background: var(--neo-card);
+}
+
+.neo-timeline-lane {
+	min-height: 34px;
+	border-bottom: 1px solid var(--neo-line-1);
+}
+
+.neo-timeline-lane:last-child {
+	border-bottom: 0;
+}
+
+.neo-timeline-lane:hover {
+	background: var(--neo-hover);
+}
+
+.neo-timeline-gutter {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: 1px;
+	padding: 4px 12px 4px 16px;
+	min-width: 0;
+	border-right: 1px solid var(--neo-line-2);
+}
+
+.neo-timeline-lane[data-depth="1"] .neo-timeline-gutter {
+	padding-left: 30px;
+}
+
+.neo-timeline-lane[data-depth="2"] .neo-timeline-gutter {
+	padding-left: 44px;
+}
+
+.neo-timeline-label {
+	font-size: 12.5px;
+	font-weight: 500;
+	color: rgb(var(--ink));
+}
+
+.neo-timeline-sublabel {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: rgb(var(--ink-3));
+}
+
+.neo-timeline-track {
+	position: relative;
+	min-width: 0;
+	overflow: hidden;
+}
+
+.neo-timeline-tick {
+	position: absolute;
+	top: 4px;
+	transform: translateX(-50%);
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	color: rgb(var(--ink-3));
+	white-space: nowrap;
+}
+
+.neo-timeline-tick:first-child {
+	transform: none;
+	padding-left: 6px;
+}
+
+.neo-timeline-grid {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 1px;
+	background: var(--neo-line-1);
+	pointer-events: none;
+}
+
+.neo-timeline-span {
+	position: absolute;
+	top: 7px;
+	height: 20px;
+	min-width: 3px;
+	border-radius: 4px;
+	display: flex;
+	align-items: center;
+	padding: 0 6px;
+	overflow: hidden;
+	color: var(--neo-ink-inverse);
+	font-size: 11px;
+	font-weight: 500;
+	line-height: 1;
+	cursor: default;
+	text-align: left;
+	transition: box-shadow var(--dur-1) var(--ease);
+}
+
+button.neo-timeline-span {
+	cursor: pointer;
+}
+
+.neo-timeline-span[data-kind="input"] {
+	background: rgb(var(--ink-2));
+}
+
+.neo-timeline-span[data-kind="model"] {
+	background: var(--neo-accent-a);
+}
+
+.neo-timeline-span[data-kind="tool"] {
+	background: rgb(var(--warn));
+}
+
+.neo-timeline-span[data-kind="agent"] {
+	background: var(--neo-accent-b);
+}
+
+.neo-timeline-span[data-kind="background"] {
+	background: rgb(var(--ink-4));
+	color: rgb(var(--ink));
+}
+
+.neo-timeline-span[data-tone="bad"] {
+	box-shadow: inset 3px 0 0 rgb(var(--danger));
+	background: color-mix(in srgb, rgb(var(--danger)) 55%, var(--neo-card));
+	color: rgb(var(--ink));
+}
+
+.neo-timeline-span[data-tone="skipped"] {
+	background: transparent;
+	border: 1px dashed var(--neo-line-4);
+	color: rgb(var(--ink-3));
+}
+
+.neo-timeline-span[data-tone="running"] {
+	background-image: repeating-linear-gradient(-45deg, transparent 0 6px, rgba(255, 255, 255, 0.18) 6px 12px);
+	background-size: 200% 100%;
+	animation: neo-timeline-march 1.2s linear infinite;
+}
+
+@keyframes neo-timeline-march {
+	to {
+		background-position: -34px 0;
+	}
+}
+
+.neo-timeline-span:hover,
+.neo-timeline-span[data-selected="true"] {
+	box-shadow: 0 0 0 2px var(--neo-focus);
+	z-index: var(--neo-layer-raised);
+}
+
+.neo-timeline-span:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 2px var(--neo-focus);
+}
+
+.neo-timeline-span-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.neo-timeline-marker {
+	position: absolute;
+	top: 13px;
+	width: 8px;
+	height: 8px;
+	transform: translateX(-50%) rotate(45deg);
+	background: rgb(var(--ink));
+	border-radius: 1px;
+}
+
+.neo-timeline-legend {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	font-size: 12px;
+	color: rgb(var(--ink-2));
+}
+
+.neo-timeline-legend-item {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.neo-swatch {
+	width: 8px;
+	height: 8px;
+	border-radius: 2px;
+	flex: none;
+}
+
+.neo-swatch[data-kind="input"] {
+	background: rgb(var(--ink-2));
+}
+
+.neo-swatch[data-kind="model"] {
+	background: var(--neo-accent-a);
+}
+
+.neo-swatch[data-kind="tool"] {
+	background: rgb(var(--warn));
+}
+
+.neo-swatch[data-kind="agent"] {
+	background: var(--neo-accent-b);
+}
+
+.neo-swatch[data-kind="background"] {
+	background: rgb(var(--ink-4));
+}
+
+/* --------------------------------------------------------------------------
+   The new deck (src/neo): login, account menu, preview chip, inbox layout.
+   -------------------------------------------------------------------------- */
+.neo-login {
+	position: relative;
+	display: grid;
+	place-items: center;
+	height: 100%;
+	padding: 24px;
+	background: rgb(var(--paper));
+	color: rgb(var(--ink));
+}
+
+.neo-login-card {
+	position: relative;
+	width: min(380px, 100%);
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	padding: 28px 28px 24px;
+	border-radius: var(--r-panel);
+	border: 1px solid var(--neo-line-2);
+	background: var(--neo-panel);
+	box-shadow: var(--neo-shadow-2);
+}
+
+.neo-login-card::before {
+	content: "";
+	position: absolute;
+	inset: 0 0 auto 0;
+	height: 2px;
+	border-radius: var(--r-panel) var(--r-panel) 0 0;
+	background: var(--neo-accent-gradient);
+	opacity: 0.9;
+}
+
+.neo-login-lockup {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 6px;
+}
+
+.neo-login-brand {
+	font-size: 15px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+.neo-login-title {
+	font-size: 22px;
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	line-height: 1.2;
+}
+
+.neo-login-lede {
+	font-size: 13.5px;
+	color: rgb(var(--ink-2));
+	margin: -8px 0 4px;
+}
+
+.neo-login-submit {
+	margin-top: 6px;
+	height: 34px;
+}
+
+.neo-login-preview {
+	display: block;
+	line-height: 1.7;
+	margin-top: 8px;
+	padding-top: 12px;
+	border-top: 1px solid var(--neo-line-1);
+	font-size: 12px;
+	color: rgb(var(--ink-3));
+}
+
+.neo-login-preview .neo-preview {
+	margin-right: 8px;
+	vertical-align: 1px;
+}
+
+.neo-preview {
+	display: inline-flex;
+	align-items: center;
+	height: 18px;
+	padding: 0 6px;
+	border-radius: var(--r-chip);
+	border: 1px solid var(--neo-line-2);
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.01em;
+	color: rgb(var(--ink-3));
+	white-space: nowrap;
+	cursor: help;
+}
+
+.neo-avatar {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 50%;
+	font-weight: 600;
+	line-height: 1;
+	flex: none;
+}
+
+.neo-menu {
+	position: absolute;
+	top: calc(100% + 6px);
+	right: 0;
+	z-index: var(--neo-layer-popover);
+	min-width: 180px;
+	padding: 4px;
+	border-radius: var(--r-card);
+	border: 1px solid var(--neo-line-2);
+	background: var(--neo-overlay);
+	backdrop-filter: blur(20px) saturate(170%);
+	box-shadow: var(--neo-shadow-2);
+	animation: neo-fade var(--dur-1) var(--ease) both;
+}
+
+.neo-menu-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	height: 30px;
+	padding: 0 10px;
+	border-radius: 6px;
+	font-size: 13px;
+	color: rgb(var(--ink-2));
+	text-align: left;
+	cursor: pointer;
+}
+
+.neo-menu-item:hover {
+	background: var(--neo-hover);
+	color: rgb(var(--ink));
+}
+
+.neo-menu-sep {
+	height: 1px;
+	margin: 4px 6px;
+	background: var(--neo-line-1);
+}
+
+
+/* --------------------------------------------------------------------------
+   Shared by every place (src/neo): split layouts, the agent swatch, the
+   model picker and the fixed composer.
+   -------------------------------------------------------------------------- */
+
+/* Master–detail: a fixed list column and the detail beside it, both scrolling
+   inside one bordered card that fills the panel. */
+.neo-split {
+	display: grid;
+	grid-template-columns: var(--split-w, 300px) minmax(0, 1fr);
+	min-height: 0;
+	height: 100%;
+	border: 1px solid var(--neo-line-2);
+	border-radius: var(--r-card);
+	background: var(--neo-card);
+	overflow: hidden;
+}
+
+.neo-split[data-side="true"] {
+	grid-template-columns: var(--split-w, 300px) minmax(0, 1fr) var(--side-w, 360px);
+}
+
+.neo-split-list {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	border-right: 1px solid var(--neo-line-2);
+}
+
+.neo-split-list-head {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 10px;
+	border-bottom: 1px solid var(--neo-line-1);
+}
+
+.neo-split-list-head .neo-segmented {
+	align-self: flex-start;
+}
+
+.neo-split-rows {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.neo-split-group {
+	padding: 10px 10px 4px;
+	font-size: 11.5px;
+	font-weight: 500;
+	color: rgb(var(--ink-3));
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.neo-split-group .neo-num {
+	color: rgb(var(--ink-4));
+}
+
+.neo-split-detail {
+	min-height: 0;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.neo-split-side {
+	min-height: 0;
+	border-left: 1px solid var(--neo-line-2);
+	display: flex;
+	flex-direction: column;
+}
+
+/* A row in a split list: dot, title, when, one sub line. */
+.neo-row {
+	display: grid;
+	grid-template-columns: 10px minmax(0, 1fr) auto;
+	grid-template-rows: auto auto;
+	column-gap: 10px;
+	row-gap: 2px;
+	align-items: center;
+	width: 100%;
+	padding: 8px 10px;
+	border-radius: var(--r-control);
+	text-align: left;
+	cursor: pointer;
+	transition: background var(--dur-1) var(--ease);
+}
+
+.neo-row:hover {
+	background: var(--neo-hover);
+}
+
+.neo-row[data-active="true"] {
+	background: var(--neo-selected);
+}
+
+.neo-row:focus-visible {
+	outline: none;
+	box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--neo-focus) 55%, transparent);
+}
+
+.neo-row-lead {
+	grid-row: 1 / span 2;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.neo-row-title {
+	font-size: 13.5px;
+	font-weight: 500;
+	color: rgb(var(--ink));
+	line-height: 1.3;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.neo-row[data-settled="true"] .neo-row-title {
+	color: rgb(var(--ink-3));
+	font-weight: 400;
+}
+
+.neo-row-when {
+	font-size: 11.5px;
+	color: rgb(var(--ink-3));
+	font-variant-numeric: tabular-nums;
+}
+
+.neo-row-sub {
+	grid-column: 2 / span 2;
+	font-size: 11.5px;
+	color: rgb(var(--ink-3));
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+/* A page that fills the panel with one region (the split or a canvas). */
+.neo-fill {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+	padding: 16px 20px 20px;
+	gap: 14px;
+}
+
+.neo-fill > .neo-page-header {
+	margin: 0;
+}
+
+.neo-fill-body {
+	flex: 1;
+	min-height: 0;
+}
+
+/* Agent swatch */
+.neo-agent-swatch {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12.5px;
+	font-weight: 500;
+	color: rgb(var(--ink));
+}
+
+.neo-agent-swatch > i {
+	width: var(--swatch, 10px);
+	height: var(--swatch, 10px);
+	border-radius: 3px;
+	background: var(--agent);
+	flex: none;
+}
+
+
+/* Composer: 116 px, always. */
+.neo-composer {
+	display: grid;
+	grid-template-rows: minmax(0, 1fr) 36px;
+	height: 116px;
+	flex: none;
+	border-top: 1px solid var(--neo-line-2);
+	background: var(--neo-panel);
+}
+
+.neo-composer-text {
+	width: 100%;
+	min-height: 0;
+	resize: none;
+	padding: 10px 16px 4px;
+	border: 0;
+	background: transparent;
+	font: inherit;
+	font-size: 13.5px;
+	line-height: 20px;
+	color: rgb(var(--ink));
+	outline: none;
+}
+
+.neo-composer-text::placeholder {
+	color: rgb(var(--ink-3));
+}
+
+.neo-composer-bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 10px 0 12px;
+}
+
+.neo-composer-spacer {
+	flex: 1;
+}
+
+.neo-composer-target {
+	height: 24px;
+	gap: 6px;
+	padding: 0 9px 0 8px;
+	cursor: pointer;
+	font-weight: 500;
+	color: rgb(var(--ink));
+}
+
+.neo-composer-arrow {
+	color: rgb(var(--ink-3));
+}
+
+.neo-composer-dot {
+	width: 9px;
+	height: 9px;
+	border-radius: 3px;
+	background: var(--agent);
+}
+
+.neo-composer-hint {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 11.5px;
+	color: rgb(var(--ink-4));
+}
+
+.neo-composer-note {
+	font-size: 12px;
+	color: rgb(var(--warn));
+}
+
+.neo-composer-listening {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+	width: 6px;
+	height: 6px;
+	border-radius: 999px;
+	background: rgb(var(--danger));
+	animation: neo-ping 1.2s ease-out infinite;
+}
+
+.neo-composer[data-disabled] {
+	opacity: 0.6;
+}
+
+@media (max-width: 900px) {
+	.neo-split,
+	.neo-split[data-side="true"] {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.neo-split-list {
+		border-right: 0;
+		border-bottom: 1px solid var(--neo-line-2);
+		max-height: 40%;
+	}
+
+	.neo-split-side {
+		display: none;
+	}
+}

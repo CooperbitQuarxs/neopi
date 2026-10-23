@@ -1,0 +1,714 @@
+# Changelog
+
+All notable changes to NPI deck (a fork of bjb2/omp-deck; entries before the fork use its name). The format is loosely based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+### Changed
+- Pinned NeoPi to nightly `d8c9c98b0f` with all backend features available, including native M2 mixture routing. Native model search now uses NeoPi's own exported types and has a contract check for standalone search, session search and role resolution. Telegram typechecking uses the prepared tree's compiler, like the server. The backend identity contract compares actual tracked Git status, including generated bindings from cold native builds ([#326](https://github.com/PsychedelicShayna/neodeck/pull/326)). GPT-6.1 Sol.
+- Windows routine deadlines and run-duration budgets now terminate the owned descendant tree, including inherited output writers, instead of killing only the shell. Native process handles remain owned through leader exit and output draining; local run steps refuse to start if Windows native ownership is unavailable. POSIX process-group handling is unchanged ([#175](https://github.com/PsychedelicShayna/neodeck/issues/175), [#179](https://github.com/PsychedelicShayna/neodeck/issues/179)).
+- Inbox tickets can now follow a persisted native flow to an explicit GitHub repository. The routing strip configures and pauses that protected default, lists other inbox handlers and previews the same graph without capturing or filing anything. Confirmed issues retain their repository, issue link and receipt identity; replay and acknowledgement repair reuse the existing write. Other kinds do not auto-file. Model-role classification remains unavailable pending NeoPi's contract. Part of [#100](https://github.com/PsychedelicShayna/neodeck/issues/100). GPT-6.1 Sol.
+- Routine conversion now preserves native condition skips, retries, continued failures, per-attempt budgets, signed webhook admission, manual schema declarations and generic event admission. Non-agent V0 processes also convert without changing argv or interpolation. The bundled census is convertible; agent routines and ambiguous originals stay blocked with field-level reasons. Backups, idempotency and guarded restoration remain mandatory. Part of [#163](https://github.com/PsychedelicShayna/neodeck/issues/163). GPT-6.1 Sol.
+- The standalone legacy-state migration script typechecks with a supported structural path type, retaining POSIX, Windows drive and UNC containment checks ([#314](https://github.com/PsychedelicShayna/neodeck/issues/314)). GPT-6.1 Sol.
+- Iteration actions retain the original trigger's event type and event or card identity, including through nested bodies. Ordinary event-driven loops no longer need an explicit operation ID to preview or execute; pass identities and replay protection remain distinct ([#159](https://github.com/PsychedelicShayna/neodeck/issues/159)). GPT-6.1 Sol.
+- Every page shares G navigation, `/` page search, and a keyboard-accessible `?` shortcut guide. Page actions register alongside the global keys, and typing, IME composition and open overlays suppress them. The sidebar teaches the same contract ([#300](https://github.com/PsychedelicShayna/neodeck/issues/300)). GPT-6.1 Sol on behalf of PsychedelicShayna.
+- Board cards and GitHub items open in the shell's docked inspector instead of blocking the page with a modal sheet. Selection moves focus into the inspector, Escape or its close button returns to the selected row, and card assignment and destructive actions stay in its footer ([#294](https://github.com/PsychedelicShayna/neodeck/issues/294)). GPT-6.1 Sol on behalf of PsychedelicShayna.
+- Studio keeps graph kind and preview status visible when its title wraps on narrow canvases. Its empty map directs you to ask an agent for a note, matching Knowledge's agent-authored workflow ([#305](https://github.com/PsychedelicShayna/neodeck/issues/305)). GPT-6.1 Sol on behalf of PsychedelicShayna.
+- Fixed settings choices now stay visible as segments: account access, MCP scope and transport, dictation engine and language, and record entry type. Disabled groups keep their keyboard and pointer actions disabled ([#299](https://github.com/PsychedelicShayna/neodeck/issues/299)). GPT-6.1 Sol on behalf of PsychedelicShayna.
+- Page changes now move keyboard focus into the new content, including after mobile navigation closes. The advertised G G chord opens GitHub instead of re-arming navigation ([#288](https://github.com/PsychedelicShayna/neodeck/issues/288)). GPT-6.1 Sol on behalf of PsychedelicShayna.
+
+- Card-agent lifecycle tests report a worker's terminal error instead of waiting for provider or KB events that a failed worker can never emit. Read-only completion failures now include the worker diagnostic ([#206](https://github.com/PsychedelicShayna/neodeck/issues/206), [#287](https://github.com/PsychedelicShayna/neodeck/issues/287)).
+
+- Development hot reload keeps card-agent recovery in the same module graph as the opened database, avoiding a fatal `db not opened` after server edits. Production startup still opens the database and recovers unfinished cards in the same order ([#262](https://github.com/PsychedelicShayna/neodeck/issues/262)).
+
+- Telegram setup now lives in Integrations, with masked bot credentials, one-use account pairing, per-chat thread and intake choices, polling status, and opt-in needs-you notifications. Streaming replies and inbox capture use the existing live bridge; plan proposals are no longer automatically rejected. Bridge restarts retain the replacement process when an older exit callback arrives late ([#282](https://github.com/PsychedelicShayna/neodeck/pull/282), GPT-6 Astra on behalf of PsychedelicShayna).
+- Inbox capture now has a docked multiline composer with image attachments and Ctrl/Cmd+Enter. Routing names the actual handler and subscribed flows, and every item shows durable board or GitHub filing receipts and routine delivery history. GitHub filing reuses the existing reconciled issue action and has a write-free preview. Unavailable model classification and agent-only destinations are explained instead of reporting preview success. Related to [#237](https://github.com/PsychedelicShayna/neodeck/issues/237).
+- Uploaded Markdown images now render through the development and preview web servers instead of receiving the app's HTML document. Inbox reader navigation and successful capture restore keyboard focus after React commits.
+- Model selection now uses one wide provider-grouped switcher across composers, agents, assignments, Studio and settings. It keeps `@role` policy and effort, shows nullable native facts, supports keyboard navigation, and hides providers for admins as well as members. Native search delegates to NeoPi and explicitly reports an unsupported older backend rather than copying its grammar. By GPT-6.1 Sol ([#267](https://github.com/PsychedelicShayna/neodeck/pull/267)).
+- Board is now an evidence-first view of agent-managed work, with Inbox capture, attention filtering, related cards, persisted activity notes, all assignment attempts and real linked evidence. Per-assignment model/role choices reach NeoPi without rewriting a card's configuration ([#270](https://github.com/PsychedelicShayna/neodeck/pull/270), GPT-6.1 Sol).
+- Studio is a list page and a full-width canvas. `/studio` lists every graph by kind with a sentence on what each kind models; opening one goes to `/studio/<id>`, where the canvas takes the whole panel and the inspector docks to the right only while a node, the graph's settings or its runs are open. Delete and Backspace remove the selected node or connection on Studio and flow canvases. Picking a run paints each node's outcome on the canvas. The New graph menu that rendered under the map's search field is gone; old `/studio?graph=` links redirect. Claude Opus 5.5.
+- Studio preview runs now skip disconnected draft nodes instead of rejecting the whole graph through the routine validator. Execution errors identify the affected node by its title and id and open its inspector. ([#281](https://github.com/PsychedelicShayna/neodeck/pull/281), GPT-6.1 Sol)
+
+- Studio separates Preview run, which walks a graph without acting, from Execute, which asks first and lists each step by what it would do. A graph with a step that has no executor yet cannot be executed. Claude Opus 5.5.
+
+- Skills & tools separates live skills, slash commands, extension discovery, marketplace plugins and sources. Shared `.agent` directories are no longer mislabeled as subagents; usage examples are opt-in rather than mixed into the installed inventory. GPT-6.1 Sol on behalf of PsychedelicShayna.
+- The Neo themes now use NeoProxy's chassis: purple-tinted black surfaces (`#0b0810` page, `#100c16` panel, `#16111d` card) and NeoProxy's ink ramp, so NeoDeck and NeoProxy read as one family. Neo light moves to the matching lilac-grey page. Claude Opus 5.5.
+- Settings uses shared styled fields and portal selectors, clearer inference-provider credential rows, and browser-persistent Deck-only picker visibility. Models has a dedicated workspace for the live catalogue, global role assignments and custom definitions. Role and non-secret setting saves reject stale read snapshots. Project scope and effort-rule editing explicitly require the newer native API ([#274](https://github.com/PsychedelicShayna/neodeck/issues/274)). GPT-6.1 Sol on behalf of PsychedelicShayna.
+- Agents is rebuilt around templates and instances. Templates are definitions with their model, tools, prompt and where they come from, and never show a status; instances are what runs, Main included, with who started them shown as a relationship rather than a kind of agent. Deck-written templates are created, edited and deleted from a full-width template page, and selecting an instance opens a docked inspector with its session, journal, model and the actions NeoPi allows. NeoPi's own definitions and starting an instance from a template stay preview until NeoPi can list and start them. Claude Opus 5.5.
+- Threads treats everyone in a thread as an equal member: Main renders and is addressed like any other agent, the composer's To list (or `@name` / `@all` typed at the start of a draft) picks one member or everyone, and a facts row under the composer shows model, effort, speed, cache hit, context and thread cost. Starting a thread is one page with a searchable location list that takes typed paths, member templates and a first message. The thread menu uses the shared keyboard menu. Claude Opus 5.5.
+
+### Added
+- Native routine flows can now be edited directly in Studio with the production node catalogue, typed connections and configuration fields. Runs expose expandable per-node and per-pass result/input ancestry against their executed graph snapshot. Flow previews return transient, redacted traces without writing run history or dispatching actions. Studio's TOML documents remain separate. ([#162](https://github.com/PsychedelicShayna/neodeck/issues/162), GPT-6.1 Sol)
+- Routine migration now inventories raw YAML/columns, converts supported straight-line V1 actions to executable native graph nodes, and keeps owner-only full-database backups plus an atomic conversion journal. Unsupported controls and malformed data stay on their original routines with field-level reports. Conversion never runs an action; semantic export, guarded restoration and restart-safe reruns are available through the routine migration API. This is a partial cutover for [#163](https://github.com/PsychedelicShayna/neodeck/issues/163). GPT-6.1 Sol.
+- Native graphs and Studio now offer exact-value conditional, comparison and membership gates, typed arithmetic and bounded For each item bodies. Pass addresses and recursive provenance survive persistence, empty loops complete explicitly, all passes share the run's budgets, and preview actions remain write-free. The iteration representation and limits are documented in [graph-iteration.md](docs/graph-iteration.md). ([#159](https://github.com/PsychedelicShayna/neodeck/issues/159), GPT-6.1 Sol)
+- Studio graph documents now persist on the server as TOML, with durable run history and a shared 72-node catalog. Preview runs evaluate local transforms and branches without inference or output actions; explicit execution supports board, inbox, notification and issue actions, and rejects unsupported nodes before dispatch. Routers remain browser-local NeoProxy previews. Existing browser-authored graphs import without discarding their local copy. ([#271](https://github.com/PsychedelicShayna/neodeck/pull/271), GPT-6.1 Sol)
+- The shell follows NeoProxy's compact chrome, with quieter status controls and a sidebar that can be hidden from the hamburger. Desktop visibility persists in this browser; mobile navigation supports Escape and returns keyboard focus. By GPT-6.1 Sol.
+
+- Knowledge now separates a wide note reader from a full-size searchable map, with collection filters, keyboard-accessible map results and live Git history. Project agents remain the only note authors. Implemented by GPT-6 Astra for PsychedelicShayna.
+- Shared layer tokens keep page chrome, menus, modal drawers and nested pickers on one stacking scale. The design guide documents portal and nested-overlay rules. GPT-6.1 Sol.
+- Engine status opens Engine settings instead of a missing route. Every route now has a themed recovery page, including unknown URLs, and legacy settings, advisor, marketplace and run-detail links point to their registered pages. Removed unconfigured NeoProxy links instead of sending them to nonexistent Deck routes. By GPT-6.1 Sol.
+- Agent runtime endpoints now list native session, child and observer instances with their permitted actions. Deck-authored templates persist in SQLite; native template discovery, spawning, equal-participant broadcast and fleet judging remain explicitly unavailable rather than simulated ([#266](https://github.com/PsychedelicShayna/neodeck/pull/266), GPT-6.1 Sol).
+- Studio now edits pipelines, virtual-model routers, classifiers and board flows beside live routines and the knowledge map, with typed connections, a node inspector, editable TOML and per-node run timelines.
+- Knowledge now has a searchable note tree, a linked Markdown reader, and a map toggled with M. Follow backlinks, browse recent notes, or ask an agent to change a note in a prefilled thread.
+- Threads now groups conversations by attention, opens real session transcripts, and keeps each agent's colour and message target visible. Preview threads support several primary agents, removable spawn restrictions, folded tools and spawned-agent depth, and remain available when live sessions cannot load.
+- Usage shows each account's virtual-model budgets, demotion stages, spend history and searchable requests, with shared provider visibility controls.
+- Settings has a fixed section index, live engine/provider/model controls, account drawers and an admin-only Advanced editor for environment variables, NeoPi settings and diagnostics.
+- Skills brings installed skills, marketplace plugins and sources into one page, with SKILL.md drawers, editing, authoring and plugin update checks. Last-used timestamps are marked as preview data.
+- GitHub now reads tracked repositories' real issues, PRs, checks and review comments through the server's authenticated `gh` CLI. The office watchlist replaces project setup, and the six-stage wheel follows labels and GitHub facts without modifying GitHub or starting workers. GitHub App setup stays preview. Implemented by GPT-6.1 Sol.
+- Agents now has a searchable roster, editable restriction templates, spawn and detail drawers, and a judge log with reversible stops. Preview agents sit beside live sessions and their workers.
+- Shared Neo controls now use styled portal menus and listboxes instead of native select popups, including the routine editors embedded in Studio. Dialogs and drawers share nested Escape handling, focus trapping and restoration, with keyboard navigation and type-ahead in pickers. Segmented controls use arrow keys and one tab stop. GPT-6.1 Sol.
+- Studio run histories use toggle buttons with Tab, Enter and Space, rather than advertising a listbox without arrow-key navigation. GPT-6.1 Sol.
+- A new deck, designed from scratch: sign in at `/login`, land in the Inbox with the Today strip, and jump between nine places with `G` + a letter; the old deck stays reachable at `/legacy`.
+- **Inbox redesigned as the office's front door** ([#237](https://github.com/PsychedelicShayna/neodeck/issues/237)). One page in the Neo language: Capture opens a slip at the top of the list (title, optional notes, a label), the captured slip lands in the list with its label and opens on the right, and only slips that still need you are shown ("Show settled" brings the rest back). A slip's ways out are explicit: Make a card, Open in a thread, Done. A Private / Shared switch shows the shared office inbox as planned, and the empty reader explains how a slip moves and where slips come from (this deck, Telegram with live bridge status, GitHub issues and dictation as planned). `/inbox?capture=1` from Home opens the slip directly.
+- **Routine canvas and editor in the Neo language** ([#236](https://github.com/PsychedelicShayna/neodeck/issues/236)). Nodes are cards with a readable title (the step's name, as words), an icon, the action, and what the step does: the prompt, the command, the URL, the path. The trigger is on the canvas as a start node ("Weekdays at 07:00") and opens its own editor when selected. Field labels are sentence-case with help under the control; a validation problem is shown at the field, on the node, and in the save bar with a "show me" link, instead of a red band. The save bar is always visible, the source view is a full-height YAML editor with its problems beneath it, and the add-action menu, triggers, options and step list follow the same language.
+- **Neo design language.** The deck now wears the language NeoPi's `/stats`, `/collab` and `/share` pages share: black chassis, one inset panel, hairline edges, cyan → pink accent, Inter. `Neo` (dark) is the default theme and `Neo light` its twin; Paper, Slate and Horizon stay selectable. Reference: `docs/design/neo-design-language.md`.
+- **New shell and navigation.** A glass topbar with the `NeoPi / deck / Page` lockup, an engine status chip, and a grouped sidebar (Work, Automate, Agents, Library, Connect, Office) with `g` + letter jumps. `/` is a Home page with linked counts and the newest inbox items; chat lives at `/threads` (`/chat` still works).
+- **Planned areas have real pages.** People, GitHub and Flows say what they will be and that they are not built; NeoPi shows the attached engine and the daemon, hosted-thread and dictation plans; Telegram shows live bridge status.
+- Routine editor: the save bar is always visible (it sat below the fold on every tab) and the minimap no longer covers the canvas.
+- A macOS routine-hook probe records native process ownership, output endpoints, signals and EOF for the deadline and duration-budget failures. Run it manually or by pushing a disposable `ci/mac-hook-probe-run/**` branch without promoting nightly to main ([#166](https://github.com/PsychedelicShayna/neodeck/issues/166)).
+- **Inbox-first graph intake** ([#160](https://github.com/PsychedelicShayna/neodeck/issues/160)). Fresh navigation opens Inbox; Chat and Kanban remain one click away. The `inbox: card added` source delivers each committed card once per configured flow/source, keeps the original card in run provenance, and prevents duplicate intake across notifications and restarts.
+- **Reusable native graph actions:** create cards with their stored properties, send to explicit notification channels and file GitHub issues while retaining upstream provenance, durable replay receipts and write-free dry-runs ([#161](https://github.com/PsychedelicShayna/neodeck/issues/161)).
+
+- **Automatic GitHub releases:** main pushes publish stable source-plus-web archives, nightly pushes publish distinct prereleases, and manual CI dispatch can publish any selected ref as stable. Existing releases and tags are never replaced or pruned.
+- **Agents execute assigned cards** (#101). Assignment starts an isolated NeoPi worker immediately, queues behind a configurable global limit of 12, and records the result on the card. Leading YAML preserves arbitrary properties and can select an existing linked worktree, model, role or mechanically read-only research. Owned temporary worktrees are removed after completion or cancellation; linked worktrees survive. Read-only workers restrict native SDK tools and use a Linux filesystem sandbox that fails closed when unavailable. Interrupted runs recover their owned artifacts without replaying possible side effects. UI, chat, inbox promotion, API and routine filing keep card properties without inferring project routing.
+- **Native provenance-carrying routine graphs** (#158). V2 graphs persist and run through the routine API independently of YAML or a canvas. One extensible registry supplies typed ports, configuration validation and node execution. Every output preserves its result and ordered recursive inputs; truthy strings and numbers are never coerced into literal `true`. Generic event sources carry the original event object, invalid connections fail before save or dispatch, and immutable run traces survive definition edits and database reopen. The legacy editors recognize graph routines without rewriting them as single actions or pipelines.
+
+- **Telegram inbox, groups and persistent session bindings** (#103). Authorized DMs file tasks through the inbox into kanban cards, decomposing explicit lists and preserving YAML card properties. Groups require both sender and chat allowlists, with command, mention or reply invocation. Chat/topic bindings, retained sessions and default card properties survive bridge restarts; `/chat` explicitly invokes NeoPi, and reset only detaches the binding. Settings → Messaging explains and configures the bridge. See `docs/telegram-parity.md` for the Hermes capability matrix and justified exclusions.
+- **Explicit knowledge workflows** (#102). Chat agents can open notes, traverse links/backlinks, search entry metadata and write project-scoped knowledge through `kb_read` / `kb_write`. `/kb read` supplies only a requested section; `/kb capture` saves an inbox item into the current project's area; routine KB inputs require explicit wiring. Nothing is injected automatically. Server-derived Git project identity permits own-project notes and linked neighbour edges, but rejects foreign decisions/ADRs, read-only agents and path aliases. The KB cockpit and onboarding no longer offer human note population. Cold entry results preserve indexed titles; full-text queries share compact generation-owned substring signatures with reverse navigation rather than unconditionally reopening every note. Concurrent create requests cannot overwrite an existing note. The routine prompt limit applies after explicitly requested KB inputs.
+- **Canvas-first routines** (#99). Creating or editing a routine opens its visual canvas, with node controls and routine properties alongside it; YAML, raw Deck references and agent prompt expressions require a deliberate Advanced toggle. Card actions expose read-only research, linked worktrees and named scalar properties without exposing their frontmatter or expression plumbing by default. Existing V0 and V1 routines remain editable and runnable without discarding their execution settings, including routines without saved canvas layouts; saving an untouched routine preserves its original source bytes. The editor adapts to narrow screens without making source editing the default.
+- **Author skills from the Skills view** (#32). **New skill** in the Skills header opens a form for a name, a description and the SKILL.md body, and writes `<agent dir>/skills/<name>/SKILL.md` (`POST /api/skills`). OMP user skills get **Edit**, which replaces the description and body and keeps every other frontmatter key and its comments (`PUT /api/skills/:id`), and **Delete**, which removes the skill's directory after a confirmation (`DELETE /api/skills/:id`). The name is fixed once the skill exists. Name and description are checked with NeoPi's own Agent Skills validator (lowercase letters, digits and single hyphens up to 64 characters; a description of at most 1024), so a name can never carry `/` or `..`, and every write is read back through NeoPi's frontmatter parser before it counts. A name is refused when anything already occupies its directory, a dangling symlink included, or another OMP user or project skill uses it. The skills dir must resolve inside the agent dir (the #98 starter guard), each skill directory must resolve to a direct child of it, and SKILL.md must be a regular file; a skill symlinked in from elsewhere lists as `read-only`, and edit and delete refuse it with 409. An edit made against a SKILL.md that changed since the editor loaded it is refused with 409 (the detail now carries a `revision`). Every listed skill carries `editable`; project skills, marketplace plugins and other providers' skills stay read-only and answer 403. New manifest feature `skill-authoring` (`validateAgentSkillFrontmatter`, `parseFrontmatter`, capability `clearCache`), covered by the backend contract.
+- **Fallback-chain editing in the model picker** (#31). The chat's model picker shows, above the model list, the retry fallback chain that covers the active model and where it comes from (the model's own chain, an inherited role or wildcard chain, or the deck's new-chat default). Expanding it lists the model's own chain under `retry.fallbackChains` with move up, move down and remove controls; **Add fallback** turns the model list into a chooser that appends the clicked model, and **Start from these** gives the model its own copy of the inherited chain. Each edit is a single-key `entries` write through `PATCH /api/npi-config` (#86), so NeoPi validates it, other chains in config.yml are kept, an env-locked or invalid value makes the editor read-only with the reason, and open chats reload it at once. `GET /api/sessions/:id/fallback-chain` resolves the chain with NeoPi's own key resolution over the chat's settings (new optional backend feature `fallback-chains`). The editor edits the configured model key the chat resolves for the model (it may carry an effort suffix), else `provider/id`. Behaviour change: the deck's Sol fallback for new chats is now re-applied over each settings reload, so config.yml edits reach those chats instead of being hidden by the deck's runtime override, and it gives way once config.yml has a chain naming the chat's Opus model.
+- **Model roles editor** (#59). Settings → Model roles lists every NeoPi model role: the 17 built-in roles in NeoPi's own order, grouped as chat and model-kind roles, then custom roles that `cycleOrder`, `modelRoles` or `modelTags` introduce. Each row shows NeoPi's name for the role, what it is for, the layer supplying its selector (global, project, runtime, or unset), NeoPi's built-in chain while it is unset, and the model it resolves to now. The picker offers the models NeoPi counts as available for that role, judged by NeoPi's own per-role filter (image models for `image`, search backends for `web`, keyless `local/…` runners for `speech` and `dictation`, mixtures only for chat roles) and labelled from `/api/models`, a thinking level for chat roles, **Unset** to fall back to NeoPi's chain, and a custom selector for aliases (`@slow`), comma lists and models without credentials. A save writes only that role through the #86 path (`PATCH /api/npi-config` with `entries`), so other roles, including ones the deck does not know, stay as they are; live chats reload, and the row reports how many now use the new value and which keep a project or runtime value. The catalog comes from NeoPi's RPC role list (`GET /api/npi-config/model-roles`, optional backend feature `model-roles`). Settings → NeoPi links its `modelRoles` row to the new section instead of the generic record editor. `modelRoles.advisor` is the same key the Advisors view sets.
+- **`npi-deck` launcher** (#68, #72). `bin/npi-deck`, symlinked into `~/.local/bin`, starts the deck from any cwd. It builds the web bundle when stale and refuses a second instance. It runs the server as the systemd user service `npi-deck` in `neopi-deck.slice` with `KillMode=control-group`, so everything the server spawned dies with it, `kill -9` included. Ctrl-C on the launcher stops the unit, and the server stops if the launcher dies. Settings → Restart exits with status 75, which systemd restarts on. `--no-systemd` runs the server as a direct child under `setpriv --pdeathsig KILL`. Each server boot marks its descendants with `NPI_DECK_GEN`, and processes of dead generations are killed at the next boot and when the launcher's server is gone. See docs/install.md#the-npi-deck-launcher.
+- **Deck-hosted subagent tree** (#53). The chat panel shows each live root's nested child status and activity, opens an incremental read-only transcript, and confirms before aborting a child. Root-scoped WebSocket updates follow NeoPi's subagent bus and registry parent chain; transcript and abort routes reject another session's child with 403. Abort tombstones the exact registered agent and stops its work.
+- **Custom providers and models (models.yml) in Settings** (#91). Settings → Models & providers shows the providers NeoPi loads from `models.yml` (base URL, API, auth mode, whether a key is set, header names, discovery, models and overrides) next to an editor for the whole document. Credentials never reach the browser. `<npi-deck-masked:…>` placeholders replace every `apiKey`, every header value under any name (provider, model and model-override headers), every `requestMetadata` value, every `baseUrl` (provider, model and model override) whatever its shape, since a host, path or query can carry a key, and values under credential-like keys. The provider list shows a base URL only as its scheme and `••••••`; typing a new URL over a baseUrl placeholder replaces the stored one. A base URL's userinfo, query values and fragment, and its token-like host labels and path segments (8+ characters with a digit), are also checked for elsewhere in the file, as are the token-like pieces left when any of those components is percent-decoded and split on characters outside `[A-Za-z0-9._~-]` (so `/v1%3Ftoken%3Dsk-…` or `?auth=Bearer%20sk-…` is caught): if one appears in another field, the document and its summary are withheld. Accepted limitation: a credential in a host or path that is shorter than 8 characters or has no digit is not checked, since such words (`v1`, `anthropic`, `openrouter`) recur in provider names and `api` values. They also replace other occurrences of those values. No comment text is shown: every comment appears as `# <npi-deck-comment:…>`, is written back verbatim when saved unchanged as a whole comment, and a comment the user writes or edits is saved as typed. If a credential cannot be masked unambiguously (a short one that also appears elsewhere, one hidden by an escape, a file that is not valid YAML), the document is withheld instead of partly masked. Summaries and NeoPi's messages come from the masked text, and a message that could quote a credential is withheld. On save, a placeholder is restored only as the whole value of an `apiKey`, a header or a `requestMetadata` entry, or, for a baseUrl placeholder, as a whole `baseUrl`. A placeholder anywhere else is refused with 400 before validation: a name, id, provider key, `baseUrl`, a comment, or an alias reaching another field; a comment placeholder anywhere but a whole unchanged comment is refused the same way. The check is repeated against NeoPi's own parse. Placeholders are tied to the running server, so an editor opened before a restart must reload. NeoPi's `ModelsConfigFile` loader (YAML, schema and provider checks) judges each edit as you type and again before writing, and a rejected document leaves the file alone. A save needs the revision the edit started from (409 otherwise); the revision is an HMAC under the same per-process key, so it cannot confirm a guessed credential offline. It writes the new file and the backup to exclusive owner-only temp files in the same directory, syncs them, re-reads and re-hashes the target (409 if it changed), then renames the backup onto `models.yml.bak` (a symlink there is replaced, never written through) and the new file into place, following a symlinked `models.yml` and keeping its permissions. NeoPi has no cross-process lock for `models.yml`, so a write by another process between that re-read and the rename is still overwritten. After the write, the deck's shared model registry re-reads the file, so the picker and every chat list the new models without a restart. The response reports registry errors, defined models it does not list, and providers whose discovery was started. `GET /api/models-config`, `POST /api/models-config/validate` and `PUT /api/models-config`; the manifest's optional `models-config` feature is covered by the backend contract.
+- **NeoPi configuration in Settings** (#86). Settings → NeoPi lists every setting NeoPi registers (535 on the pinned tree), grouped by the registry's own tabs and groups; settings without panel metadata appear under Other, grouped by id prefix. Search spans every tab. Each row shows its provenance (env, project, global or default) and gets a control for its type: toggle, enum select, number and string inputs, a membership or ordered picker for arrays with a fixed vocabulary, a line list for string arrays, key/value rows (text, list or JSON per value, with a whole-record JSON mode) for records such as `modelRoles` and `retry.fallbackChains`, and validated JSON for arrays and records of objects. `GET /api/npi-config` enumerates the registry. `PATCH /api/npi-config` validates the value with the setting's own parser and checks, returns its message as HTTP 400, writes the global `config.yml` through NeoPi, and reloads every live chat's settings. The response and the row report which chats now use the value and which keep a higher layer, such as the deck's runtime model policy. Credentials are write-only and never returned, and a rejected credential value is not echoed; credential records such as `images.urls.credentials` list entry and field names only and are edited per entry (`entries`): fields sent for an entry merge into it, so hidden entries and fields are kept. Keys an active environment variable overrides are read-only and show the reason (HTTP 409 on write). A write NeoPi skips because another process changed the same key returns 409 instead of success. The section shows the file NeoPi reads and saves (`config.yml`, else `config.yaml`). Config load and reload failures return a generic error; the details stay in the server log, and a malformed file is never moved aside by a deck save. Adding or removing entries in an array with a fixed vocabulary keeps the existing order, and the status line segment lists are reorderable. Advisor settings saves use the same bridge reload.
+- **MoA trace cards, mixture chats and live config warnings** (#43, #84). A new chat created on `mixture/<name>` now starts on that mixture instead of silently falling back to the default model. The model picker lists only the mixtures the chat's own workspace defines, and choosing a mixture from another workspace, whether for a new chat or by switching, is refused. `mixture_hop_end`, `mixture_checkpoint`, `mixture_limit` and `mixture_run_end` render as collapsible trace cards keyed by run and sequence, and persisted `mixture_trace` cards restore on reload without duplicates (NeoPi does not persist the run-end card, so it shows live only). `config_warnings_changed` refreshes the session snapshot and the header shows the current configuration warnings in a dismissible list.
+- **Per-chat advisor selection and a quiet advisor panel** (#87). A chat no longer shows an advisor strip or runs advisors until you choose them: the composer's `advisors` button (or `/advisors`) lists the workspace's WATCHDOG roster with nothing pre-selected, and only the checked advisors run in that chat, even ones with `enabled: false`. Every new or resumed deck chat starts with an empty choice, and the chat's `advisor.enabled` is pinned off in its own settings, so the global `advisor.enabled: true` no longer starts roster advisors when a chat opens. The choice lives with the live session, survives WATCHDOG saves and live settings reloads, and never touches the roster files. If a save removes every chosen advisor, the chat stops its advisors; no reload can then start NeoPi's legacy default advisor. The panel appears while advisors run or undismissed notes exist, collapses to a one-line summary, groups notes into blockers, concerns and nits, and polls only while on screen. Dismissing it hides it for that chat until a newer note arrives. `PUT /api/sessions/:id/advisors {advisors}` replaces the old `PATCH {enabled}` switch, and `GET /api/sessions/:id/advisors/roster` lists the choosable roster. The `/advisors` editor states each advisor's enabled state explicitly, including "enabled by default (no `enabled` key)", switches it through `PATCH /api/advisors/watchdog/enabled`, which writes `enabled:` into the file the advisor's effective entry comes from and answers 409 when an external edit kept a different value, and adds new advisors disabled. The panel also refetches when a chat is resubscribed after a reconnect, so a note that arrived offline shows even if the panel was dismissed.
+- **MCP servers in Settings** (#90). Settings → MCP servers lists every Model Context Protocol server NeoPi discovers — user `mcp.json`, project `.omp/mcp.json` or bare `mcp.json`, and other tools' configs — with its source file, scope, transport, command, arguments or URL, timeout and enabled state, plus why a disabled or shadowed row does not run (denylist, `enabled: false`, `disabledExtensions`, provider switch, foreign home opt-in, shadowing). Values fail closed: env and header values never leave the server (a client sees the key and whether a value is stored), a server URL is shown as its scheme only (`https://••••••`, since a host or a short path segment can itself be a credential), and an argument containing a URL is hidden whole. Other arguments are masked heuristically: the value after a key-, token- or password-shaped flag (`--api-key X`, `--api-key=X`) is hidden and everything else is shown as stored. An edit keeps what it was never shown — `value: null` for an env or header key, `{keepIndex}` for an argument (reorder-safe), `url: null` for a URL — and the server restores those from the file. `GET /api/mcp-servers` lists, `POST /api/mcp-servers` adds, `PUT`/`DELETE /api/mcp-servers/:name` edit and remove through NeoPi's own `mcp/config-writer` (name and field validation, atomic write) into the file the row lives in — never another tool's — and `POST /api/mcp-servers/:name/enabled` flips a server wherever it lives: when a NeoPi-owned file defines it, only the entry's `enabled` flag changes, read and written inside NeoPi's per-file lock so a concurrent edit to the entry survives; otherwise NeoPi's user denylist and force-enable list record it. Every listed editable row carries a revision — an HMAC with a process-private key over the stored entry, so it reveals nothing about the values — and an edit or removal must echo it: the check, read, merge and write all run inside NeoPi's own per-file lock, and an entry changed since the page loaded it (say, an env key added in a terminal) answers 409 instead of being overwritten; the page shows the message and reloads. Every write is verified by re-reading the file, a rejected definition leaves it byte-identical, and a malformed `mcp.json` returns a generic error with the details in the server log. Each mutation reconciles every live chat's MCP runtime through NeoPi's own `applyMcpToggleRuntime` (disconnect, reconnect, rebind tools) — with a removal re-resolved in each chat against its own workspace, so a chat whose workspace still defines the server reconnects that definition while one that relied on the removed copy drops it — and reports per chat whether it applied, had no MCP runtime, or failed, so the page never claims more reach than the runtime gave it.
+- **Routine `mcp` steps call MCP tools; Integrations lists servers and tools** (#26). The `mcp` step no longer fails with a V1.5 pointer. It finds the named server the way a chat opened in the routine's cwd would (user and project `mcp.json`, other tools' configs, deny and force-enable lists, `mcp.enableProjectConfig`, `mcp.includeServers`), has NeoPi resolve `!command` values and stored OAuth tokens, connects it for that attempt only, and closes it afterwards. A routine never borrows a live chat's MCP connection: cron and webhook runs usually have no chat, and a chat's runtime belongs to its own workspace and server selection. `args` are templated, then validated against the tool's input schema (a draft-07 `$schema` declaration is accepted) before anything is sent. When the schema cannot be compiled, the call still goes out and stderr says so. The step timeout and run cancel abort the handshake or call and stop the server process. `steps.<id>.stdout` gets the text content, `steps.<id>.json` gets `{ content, structuredContent?, isError? }` with image/audio data replaced by its size, and `isError: true` fails the step with the tool's text. Unknown servers and tools fail with the available names. Credentials from the server's config (env and header values, URL parts, the value after a key-shaped flag, and the resolved values) are replaced with `••••••` in the output, error and JSON, even when the server echoes them. The `/integrations` page replaces its V1.5 stub: `GET /api/integrations/mcp` connects each enabled server for the deck's workspace once (20 s cap), lists its tools with descriptions and input schemas (scrubbed the same way), reports a failed server's scrubbed reason, and links to Settings → MCP servers. There is no curated server catalog. The manifest gains the optional `mcp-calls` feature (NeoPi's `MCPManager`, `connectToServer`, `listTools`, `callTool`, `disconnectServer`), exercised by the backend contract.
+- **Visual mixture editor and MoA run inspector** (#80). The Mixtures view (nav rail, `/mixtures`, and **Manage mixtures** in the model picker) lists every `MIXTURES.toml` NeoPi reads for a workspace (the user file, then each ancestor's `.omp/MIXTURES.toml` and `MIXTURES.toml` down to the workspace, in NeoPi's precedence order, with a shadowed mixture marked with the file it actually runs from) and edits one as a flowchart, a member and connection list, or TOML text; all three edit the same document. NeoPi parses, resolves and validates every edit (`POST /api/mixtures/draft`), and the backend's capability gate is probed feature by feature, so verdict members, routes, terminate, tools, fan-out, extra outgoing edges, cycles, `x.transcript`/`x.tool_trace`, `max_traversals`, budget/wall-clock/`on_limit`/`limit_target` limits, steering and serve are labelled **not runnable on this backend** on the pinned M1 tree before they are even enabled. A definition with validation errors, or a draft NeoPi cannot store as shown, cannot be saved, and nothing is flattened into a simpler graph; a non-runnable definition already on disk survives edits to its neighbours. `PUT /api/mixtures` names the file by an opaque id from that list, never a path. It refuses a `MIXTURES.toml` that is a symlink (dangling or not) or not a regular file, or whose directory resolves outside where the search path puts it, and files above the workspace root are read-only. It writes through an `O_EXCL` 0600 temp file in the same directory, fsynced and renamed over the target, keeping an existing file's mode. It holds NeoPi's cross-process file lock from the hash comparison through the read-back, and rechecks the hash just before the rename; an editor that does not take that lock (NeoPi's own TUI save, a text editor) can still write in the moment between that check and the rename and be overwritten, the same accepted limit as `models.yml` edits. After the save it reads the file back to verify it and re-registers the workspace's mixtures so the picker lists a saved mixture without a restart, including for chats already open there. Keyboard: flowchart members take focus, Enter selects, arrow keys move; members and connections are added through forms; ↑/↓ reorder members; Ctrl+Z/Ctrl+Y/Ctrl+S undo, redo and save. The inspector's new **MoA run** tab (shown for mixture chats) follows the same events as the chat trace cards: the member working now, hop outputs and usage, a progress graph drawn from the workspace's registered definition, and completed, interrupted (abort, error, worker restart), paused, disconnected, reconnected and reset states. Live snapshots now carry the trace cards of the active branch's current conversation (after its latest `/clear` reset boundary; compaction keeps earlier runs, as NeoPi does) plus a terminal card rebuilt from each run's persisted `mixture_run` entries (the lifecycle `run_end` after a committed answer, or the `error` checkpoint after a member failed), so reconnecting rebuilds the panel, and a run that finished or failed while the socket was down shows as completed or interrupted. A failed member hop ends its run as interrupted live too, since NeoPi sends no run end after it. A run that fails before its first hop (a request that does not fit the member's context) has no cards at all; its card is built from the persisted checkpoint's serialized run, and live the bridge sends that card once the failed response ends. Replayed runs stay history until a live event for them arrives (or the chat is streaming on that mixture and the run has not ended). Runs missing from the resubscribed branch, including after tree navigation within the same session file, are dropped and shown as a reset. NeoPi sends no run-start or hop-start event; the panel says so rather than guessing.
+- **Settings: Starters, Workspaces, Notifications and About finished** (#98). No Settings section is a stub any more. **Starters** explains in plain language what starter skills and extensions are and lists each bundled starter with its description and whether it is installed (`GET /api/starters`); see #34 below for opt-in installation. The installer refuses a `skills`/`extensions` dir that resolves outside the agent dir (a symlink elsewhere), and treat any existing entry at a starter's destination, a dangling symlink included, as the user's copy, so the copy never writes through a symlink. **Workspaces** lists, pins and unpins extra session-picker roots (`GET`/`PUT /api/settings/workspaces`, backed by `NPI_DECK_WORKSPACES`); each root must be an existing absolute directory, the running server applies the list at once and the sidebar refreshes, and a root deleted from disk is marked missing. The Env editor's `PATCH /api/settings/env` applies the same checks and normalization to `NPI_DECK_WORKSPACES`. **Notifications** lists every event the server notifies about with what triggers it (routine failures, a routine step shipping a task, an auth failure a subscription login would fix) and switches each off (`GET`/`PUT /api/settings/notifications`, `NPI_DECK_NOTIFICATIONS_DISABLED`); a switched-off kind is dropped before any channel, live. Every notification now carries a `kind`. **About** shows deck version, build, pid, uptime, heartbeat age, browser link, NeoPi backend path/version/commit, data dir, managed `.env` and database path, with a copyable summary. A setting the launching shell exports is shown read-only with the reason, and saving it is refused (409) because the managed `.env` could not override it.
+- **`.kbignore` for the KB cockpit** (#27). A `.kbignore` at the kb root hides paths using gitignore syntax: `#` comments, `!` negation (last match wins), `dir/` for directories only, a leading or middle `/` to anchor at the root, and `*`, `?`, `[...]` and `**` globs. Hidden paths drop out of the tree and directory counts, file reads and saves (`404` / invalid path), search, the graph and backlinks, and wikilinks to them stay unresolved. As in git, a `!` pattern cannot re-include a file inside an excluded directory; exclude `dir/**` instead of `dir/` to carve out exceptions. The built-in skip set and `NPI_DECK_KB_EXCLUDE_DIRS` still apply first and cannot be negated. The watcher drops events under hidden paths, and an edit to `.kbignore` fires `kb_changed`, so new rules apply without a restart. Only the root `.kbignore` is read. The matcher is in-tree (`apps/server/src/kb-ignore.ts`), with no new dependency.
+- **Hide tool calls in chat** (#62). An eye button beside collapse-all in the header switches the chat to prose only: tool cards disappear, and a reply that was nothing but finished tool calls drops out of the transcript (one that failed, was aborted or carries an error stays). A tool that is still running shows as one slim `working <tool> <summary>` row, including a call picked up mid-run after a reconnect, so a busy turn never looks idle. The choice is saved per browser (`localStorage` `npi-deck:tool-calls-hidden`) and applies to the chat view only; transcript files and exports are unchanged. Collapse-all is disabled while tool calls are hidden. Message windowing (#95) pages through the messages actually shown, so "show earlier" adds a page of prose rather than of hidden replies, and toggling while scrolled up keeps the same stretch of the transcript and the message under the reader in place; toggling back restores every card.
+- **KB orphan census routine** (#28, T-41). A bundled routine template, `kb-orphan-census`, lists the KB notes that no other note links to. Like every template it installs disabled from the Routines view (or `POST /api/routine-templates/kb-orphan-census`), and it runs only after you enable it (Mondays at 09:00, server local time) or press Run now. It covers what the KB cockpit indexes, so the skip set, `NPI_DECK_KB_EXCLUDE_DIRS` and `.kbignore` apply, and a link from a hidden note or from a note to itself does not count as a backlink. Findings land in one `investigation` inbox item, split into isolated notes (no links either way) and notes that link out but have no backlinks, listing at most 200 paths by default. The census never edits the KB: you decide per note whether to link it, hide it or delete it. No report is filed when there are no orphans, or while the previous report is still unprocessed. Routines get a read-only deck step action, `kb_orphan_census` (optional `limit`), which returns `root`, `notes`, `orphanCount`, `isolatedCount`, `unresolvedLinks`, `orphans` (`path`, `title`, `outbound`) and `truncated`; the builder offers it under Deck · Read. It fails when the KB root does not exist.
+- **Plugin update checks and per-plugin upgrades in the Skills view** (#29). On open, the Skills view compares installed marketplace plugins with the cached catalogs (`GET /api/marketplace/updates`, no network). **Check for updates** first re-fetches every marketplace from its source (`POST /api/marketplace/updates/check`); a source that cannot be fetched is named and its cached catalog is compared instead. Outdated plugins appear under **Plugin updates** with `from → to` and scope, the header shows the count, their skills carry an `update` tag, and a skill's detail pane offers the same upgrade. **Upgrade** re-installs that plugin at the catalog's version (`POST /api/marketplace/plugins/:id/upgrade`, `{ scope? }`; no scope upgrades every installed scope). No source is fetched until you click Check for updates, and nothing upgrades in the background. Everything goes through NeoPi's `MarketplaceManager` (`updateMarketplace`, `checkForUpdates`, `upgradePlugin`, `upgradePluginAcrossScopes`). The deck's manager now also calls NeoPi's `clearPluginRootsAndCaches` (new manifest entry) after every install, upgrade and uninstall; before, the skills list kept the plugin roots it had already seen, so a plugin installed from the deck after the list had loaded did not show its skills, and an upgraded plugin's skills vanished (the upgrade deletes the old version's directory) until a restart. The backend contract runs this round trip against a local fixture marketplace, including skill discovery following the upgrade. Writes to NeoPi's plugin registries (install, uninstall, add/remove marketplace, refresh, enable, check, upgrade) now run one at a time, so overlapping requests cannot drop each other's registry change. Only user-scope installs are checked; the deck has no project plugin registry.
+
+### Changed
+
+- **Starters are opt-in, per starter, and tagged with their origin** (#34). A fresh deck no longer writes into the NeoPi agent dir, which every `npi` session reads: no starter skill or extension installs unless you opt in to it in Settings → Starters. Opting in copies that starter into the agent dir at once (`PUT /api/starters/:kind/:name`, `{ optedIn }`), and each launch with a backend loaded re-copies an opted-in starter that went missing; the copy still never overwrites anything at the destination. Opting out stops the copying and leaves an installed copy in place. Opt-ins are stored as `NPI_DECK_STARTERS` (`skills/<name>,extensions/<name>`, read-only in the panel when the launching shell exports it). Each of the seven bundled starters carries a `source:` tag (SKILL.md frontmatter; a line in the extension's doc comment), shown in its row. The maintenance gate's settings moved under its own row, and the deck generates `NPI_DECK_ORG_ROOT` only while the maintenance-gate starter is opted in and not disabled. Settings shows the generated root as the key's editable default; a value saved in the Env editor overrides it live and survives opting out, and clearing that value brings the generated root back. A shell-exported value is never touched. With no backend loaded, starters are skipped entirely: nothing is listed, written or installed. `PUT /api/starters/auto-install` is gone, and `NPI_DECK_INSTALL_STARTER_SKILLS`/`_EXTENSIONS` are retired: the deck ignores them and logs a line at launch when either is set. An off value already matches the new default; an on value no longer installs anything, so opt in instead. Copies already in the agent dir stay and show as "installed, not opted in". `migrate-omp-deck` no longer writes the retired keys. `MaintenanceGateState` drops `installedExtensionPresent`/`installedExtensionPath`, which probed `~/.omp` regardless of the agent dir; the starter row shows installed state instead.
+- **The native addon is matched to its sources, not just its version** (#35). Every commit of a NeoPi release carries the same `pi_natives` version sentinel. `scripts/neopi-setup.ts` therefore fingerprints the tree's native inputs and reuses an addon only when it was built from the same fingerprint, for this platform and CPU variant. The inputs are the sources (`packages/natives`, `crates`, Cargo manifest, lock, toolchain and `.cargo`) and the build recipe (`scripts/bazel-natives.ts`, `scripts/host-detect*`, the Bazel files and the root `build:native` script). The fingerprint leaves out the `index.js`/`index.d.ts` bindings the build regenerates, and after `--build-native` it must be unchanged. Evidence comes from the tree's own record for the exact addon bytes, then a record in the other checkout that holds a `--native-dir` candidate, then that checkout's current inputs. The last is reported as `derived (unverified)`, since nobody watched the build. The tree's own sources never vouch for an addon inside it. Once a recorded addon is replaced by other bytes, only a recorded donor addon or `--build-native` can replace it. An addon already in the tree whose sources have since changed is refused; `--build-native` rebuilds it. The accepted fingerprint, platform, CPU variant and addon sha256 go to `<tree>/node_modules/.npi-deck/native-addon.json`. That record is local bookkeeping, not authentication. The backend preflight (boot and Settings → Backend) re-checks the record, including the sha256 of the addon the native loader actually loaded after the SDK import, which can be a fallback candidate. Both setup and preflight check the running Bun against the tree's `engines.bun` (`packages/utils/package.json`, `>=1.3.14` at the pin); `neopi-setup` also checks the `bun` on `PATH`, before it installs anything. **Upgrading:** a tree prepared before this change fails preflight until you re-run `bun scripts/neopi-setup.ts --path <tree> --skip-install --native-dir <donor>` once.
+- **NeoPi pinned to merged `7290c5ab683243072805db0aa6bdbdbb4988a887`** (#84, #71, #72, #70, #46, #48, #5; NeoPi PRs #126, #147, #159). NeoPi keeps one mixture roster per workspace (#126); the deck holds one `MixtureWorkspace` per chat workspace instead of the removed `retainMixtureCatalog`. The shared broker and its LSP/daemon children run in an independent scope without inheriting the spawning deck worker's `NPI_DECK_GEN`, so a second client's broker survives the deck launcher's generation sweep; direct and failed-scope brokers retain the marker. An explicit daemon `spec.env.NPI_DECK_GEN` is not scrubbed by this pin; the deck does not supply one in shared broker specs. The manifest probes `cfgMcpIncludeServers`, `MCPUnknownServerError`, `AgentIdConflictError`, and `BUILD_INFO` as optional capabilities. Preflight checks build identity against the source checkout and marks tracked-dirty trees unpinned; the native-addon sentinel is checked separately. Routine steps map omitted MCP lists to backend defaults, empty lists to `--no-mcp`, and validated literal names to `--mcp`; backends without the capability reject any explicit MCP restriction before spawning. In-process session allowlists use non-persisting settings overrides. Multi-root backends no longer display the legacy background-jobs limitation on later chats. An already-provisioned backend can be prepared with `--skip-install` without contacting a package registry.
+- New deck chats default to **Opus 5.5 at medium**, with **GPT-6 Sol at medium** as their sole model-retry fallback. The deck selects an authenticated provider (Anthropic → GitHub Copilot → OpenRouter for Opus; OpenAI Codex → GitHub Copilot → OpenRouter for Sol), keeps overrides in the new session only, and leaves manual selections, resumed chats, and NeoPi's global configuration untouched. Missing Opus credentials now produce a sign-in error instead of silently starting on another model.
+- Routine agent steps now pass `--no-session`, keeping one-off run transcripts out of the user's NeoPi session store.
+- Invalid or unavailable per-session MCP server names now return HTTP 400 with a specific diagnostic rather than a generic session-creation 500.
+- **Renamed to NPI deck** (#49), version **0.7.0-dev** (the fork's first line; 0.6.1 was the last upstream omp-deck release). The UI header, onboarding, welcome task, page title and Telegram replies say NPI deck. Packages are `@npi-deck/*`. Every `OMP_DECK_*` variable is now `NPI_DECK_*`, with no fallback to the old names. `OMP_BRIDGE_TELEGRAM_ENTRY` is now `NPI_DECK_TELEGRAM_BRIDGE_ENTRY`.
+- **One data dir, `~/.npi-deck`** (`NPI_DECK_HOME` overrides). The managed `.env`, `deck.db`, uploads, the Telegram bridge db, backend trees and run state all live there. `NPI_DECK_DATA_DIR`, the `NPI_DECK_DB` alias and the `~/.config/omp-deck`/`%LOCALAPPDATA%` and `<cwd>/data/deck.db` defaults are gone. The server never reads old `~/.omp-deck` data and does not migrate it on first boot; `bun scripts/migrate-omp-deck.ts` copies it when you ask (#49, #69; see docs/upgrading.md).
+- **Default port 1701.**
+- **Shipped files resolve through `apps/server/src/assets.ts`**, not the process cwd. The server is `startDeck()` in `apps/server/src/deck.ts`; `index.ts` is only the process entry.
+- **The server loads NeoPi at runtime.** `apps/server/src/backend/manifest.ts` lists every SDK export the deck uses (module, export, tier). At boot the server imports them by absolute path from the tree named by `NPI_DECK_BACKEND` or `activeBackend` in `~/.npi-deck/config.yml`, and exits with a diagnostic naming each missing module/export when a required one is absent. `@oh-my-pi` is never in the deck's `node_modules`; `scripts/check-sdk-imports.ts` fails on value imports from it outside `apps/server/src/backend/`.
+- **Server typecheck uses the tree's `tsgo`.** `bun run --filter '@npi-deck/server' typecheck` runs the import check, then the pinned tree's `tsgo` (`scripts/tsgo.ts`).
+- **Plan mode now uses NeoPi's `xd://propose` flow** (#45). The deck preserves its plan artifact, shows approval and revision requests over WebSocket, and restores the mode when a session resumes. The backend contract fixture verifies every plan-mode and advisor export against the pinned tree.
+- The model picker and the new-chat and switch-model guards re-resolve and re-validate a mixture under the target chat's own settings, as NeoPi does at run start, so a mixture those settings invalidate (for example `limits.max_hops` above `moa.hard_max_hops`) is neither listed nor accepted (#80).
+- **One documented install path** (#51). `docs/install.md`, `docs/deployment.md`, `docs/upgrading.md` and the README quickstart describe only a checkout prepared by `scripts/neopi-setup.ts`, the backend list in `~/.npi-deck/config.yml` (with an example), and the `npi-deck` launcher. `bun run dev` is documented as a development server, not a way to run the deck. Gone from the docs: installing the upstream `omp` CLI from the package registry, the Windows Bun one-liner, the "existing omp user" and "fresh install" paths that ended in `bun run dev`, and `bun update @oh-my-pi/pi-coding-agent` as the update step. Updating and rolling back now say that `neopi-setup` registers a newly pinned tree without making it active, so it has to be selected in Settings → Backend. `docs/architecture.md` no longer says production runs the `apps/server/dist` bundle, which nothing runs, or that the SDK is pinned in `apps/server/package.json`.
+
+### Fixed
+
+- Windows fixture cleanup unlinks directory symlinks instead of passing them to bare `rmSync`, and restores the shared skills directory before removing the replacement link. A failed cleanup no longer leaves the following skill test with a dangling root. Backend and routine fixture helpers share the same removal routine, after their existing resource shutdown; errors remain visible and no removal retries are added. GPT-6.1 Sol, [#171](https://github.com/PsychedelicShayna/neodeck/issues/171).
+- Legacy migration publishes self-contained SQLite snapshots instead of WAL-mode main files without their staging sidecars, so macOS readonly opens can read every migrated row. Source writers remain untouched, and staged statements finalize before publication. GPT-6.1 Sol, [#150](https://github.com/PsychedelicShayna/neodeck/issues/150).
+- Knowledge history Git commands now use the owned-process lifecycle, retain their timeout and output limits, and cannot outlive the server through an untracked child process. GPT-6.1 Sol, [#290](https://github.com/PsychedelicShayna/neodeck/issues/290).
+- Read-only card workers start when temporary runtime or worktree paths have symlinked parents. Bubblewrap mounts the same directories by their canonical paths, retaining read-only host access and the existing namespace isolation ([#273](https://github.com/PsychedelicShayna/neodeck/issues/273)).
+- Inbox compose slips focus the title first and keep empty notes ready to edit when switching fields ([#244](https://github.com/PsychedelicShayna/neodeck/issues/244)).
+- Inbox captures retain the current notes even when Capture activates before the editor loses focus ([#235](https://github.com/PsychedelicShayna/neodeck/issues/235)).
+- The SDK contract probe and server types support current NeoPi nightly alongside the documented pin, including role-level settings provenance ([#232](https://github.com/PsychedelicShayna/neodeck/issues/232)).
+- NeoPi setup and backend preflight accept current nightly native version stamps as well as the tested pin's legacy sentinels, while retaining native provenance checks ([#231](https://github.com/PsychedelicShayna/neodeck/issues/231)).
+- Native addon records work when Windows Git and Bun report the same checkout through different short and long path names ([#172](https://github.com/PsychedelicShayna/neodeck/issues/172)).
+- Windows KB watchers no longer broadcast changes for directories excluded by directory-only `.kbignore` rules; edits to `.kbignore` still reload the KB ([#168](https://github.com/PsychedelicShayna/neodeck/issues/168)).
+- Routine and webhook regression fixtures keep quoted executable paths inside Windows batch launchers so Bun's argument escaping cannot prevent their execution ([#174](https://github.com/PsychedelicShayna/neodeck/issues/174)).
+- Marketplace and backend-contract fixture children isolate Windows home selectors before loading NeoPi, keeping default registries in their private fixture ([#169](https://github.com/PsychedelicShayna/neodeck/issues/169)).
+- Legacy-state migration accepts Windows fixture descendants while retaining outside-path and symlink protections ([#167](https://github.com/PsychedelicShayna/neodeck/issues/167)).
+- Mixture saves and removals no longer fail on Windows when directory fsync is unsupported; file contents still sync before replacement ([#170](https://github.com/PsychedelicShayna/neodeck/issues/170)).
+- Real-backend tests establish private home, agent and storage directories before the first SDK import, including on Windows ([#176](https://github.com/PsychedelicShayna/npi-deck/issues/176)).
+- Routine foundation tests retain their runner, database, home and process-generation lease until the body and cleanup finish, even after a test or hook timeout ([#178](https://github.com/PsychedelicShayna/neodeck/issues/178)).
+- Confirmed graph messages replay and resume downstream work even when their notification channel is no longer available (#161).
+- Graph action receipt bindings retain the same credential-safe values on first execution and replay, preventing changed-request failures in downstream actions (#161).
+- Inbox graph simulations use separate run admission so integration with durable inbox intake cannot consume a pending live delivery (#161).
+- Restored typechecking and release publication by removing a duplicate inbox-promotion project field from the protocol.
+- Queued card assignments resume after a server restart; cancellations use the failure column, and deleted outcome columns no longer discard completed runs.
+- Card workers reach protected KB routes on IPv6 listeners, and assignments reject an active column that is also the completion column (#101).
+
+- Linked card worktrees are validated by OS-native canonical directory rather than Git's path spelling, including Windows 8.3 aliases and macOS aliases (#101). Card-run persistence uses connection-owned queries so strict database close can release its writes.
+- Knowledge-protocol tests provision the native SDK before admitting cases, keeping cold backend loading outside per-case hooks without increasing case deadlines (#101).
+- Routine foundation tests isolate each case's database, home and process ownership so an expired cleanup cannot close the next run's database (#185).
+- Native graph traces redact credential-key values in activation events, node configurations and recursively retained output results before persistence (#158). Execution retains original objects, while stored traces and their HTTP responses exclude those credential values without redacting token budgets or usage counters.
+- Oversized recursive graph traces stop at an 8 MiB serialization budget and report a terminal history error instead of blocking on unbounded SQLite payloads (#158).
+- Telegram's in-memory store avoids filesystem setup on Windows, and closing persistent bindings releases database files without waiting for garbage collection (#103).
+- Telegram group intake requires a leading standalone bot mention rather than usernames embedded in prose, URLs or YAML, and preserves accepted task text/caption metadata (#103).
+- Telegram journals authorized task/capture updates before confirming delivery and reuses durable inbox receipts across restarts, preventing lost queued intake and duplicate decomposed cards (#103).
+- Unsupported Telegram attachments now receive their explanation for every captioned command, including `/help`; commands without arguments still run after the notice (#103).
+- **Telegram invocation and session parity** (#103). Add regex wake patterns, per-chat/topic free response and topic allow/ignore controls; sender and group authorization still run first. Retained sessions support title/ID search and number/title selection, and explicit chat refreshes topic-aware typing. Unsupported attachments now receive an explanation before their captions are processed. The Hermes capability matrix states the remaining exclusions without claiming unverified native session or web-approval equivalents.
+- The canvas keeps Save disabled when a legacy routine's command or prompt is blank, while preserving its single-action format and existing execution settings (#99).
+- Advanced mode lets legacy routines edit expression/frontmatter action bodies and keeps inspector/Options working-directory edits synchronized while preserving their single-action topology (#99).
+- Model registry initialization recovers after a failed probe before NeoPi loads, while concurrent probes and successful initialization still share one registry (#148).
+- Database queries are owned by their connection and finalized before strict close, including migration, welcome-task and DAO writes (#171). A per-connection SQL cache covers Bun's uncached overflow beyond 20 distinct statements without evicting statements still held by callers. Test teardown no longer ignores database-file removal failures; no forced GC or removal retries are used. The retained-statement regression checks owned handles on Linux and Darwin and removes the fixture before process exit, rather than requiring WAL sidecar files to disappear on close.
+- Models configuration tests compare the backup's canonical path when the temporary directory is symlinked, including macOS `/var` paths (#146). Verified by GPT-6.1 Sol.
+- Routine tests restore inherited backend-home and database overrides after teardown, including failed setup, so later tests retain the configured NeoPi backend (#151).
+- The pinned NeoPi compiler launcher decodes the generated config's JSON-escaped path and resolves the compiler inside that tree's executable directory, including Windows executable shims (#145). Implemented by Claude Sonnet 5.5 and GPT-6.1 Sol.
+- Routine foundations tests use the operating system's temporary directory instead of `/home/shayna/tmp`, so setup does not depend on the developer's home being writable (#144). Implemented by Claude Sonnet 5.5; verified by GPT-6.1 Sol.
+- **The Skills list shows a skill's new description after SKILL.md changes, and the first skill in a fresh agent dir appears live** (#32). NeoPi caches every SKILL.md it reads, so after an edit on disk the listing kept the old frontmatter until the deck restarted; the skills watcher now drops that cache before each `skills_changed` broadcast. A watched root that did not exist at launch (a fresh `~/.omp/agent/skills/`) used to be skipped for good; it is now watched through its nearest existing parent and armed when it appears, and a root that is deleted goes back to waiting.
+- **Retrying an interrupted `migrate-omp-deck.ts --apply` no longer overwrites deck state** (#69). A run that stopped after installing some files left its staging directory behind, and the retry staged the legacy state again and renamed every file over the deck home, replacing a `deck.db`, `.env` or `onboarding.json` the deck had changed in between. Now every run compares what it would install with what is already there: byte-identical files are skipped, and any other deck state (a changed file, a non-empty WAL or rollback journal, a file the migration would not write) makes `--apply` refuse before anything moves. Files are installed with `link()`, which never replaces an existing entry. `--force` moves the differing files it would write into a new `~/.npi-deck/.omp-deck-migration-replaced/<timestamp>-<random>/` directory, a database together with its WAL and shared-memory files, and installs the legacy copy; before, `--force` had no effect. After a completed migration a plain `--apply` rerun is refused instead of silently doing nothing, and `--apply --force` changes nothing while the deck home still matches the legacy source. The deck home and its staging directory are compared with the legacy paths by real path, so an `NPI_DECK_HOME` that leads into the legacy state, or contains it, through a symlink (the home itself or any ancestor) is refused before either tree is touched; a symlinked home that leads elsewhere still works. Every directory a file is installed into or moved out of must be a real directory inside the deck home, checked at the moment it is used, and the completion marker is never written through a symlink.
+- A subagent lifecycle, progress or tool event that arrives after NeoPi removed the child from its agent registry no longer throws inside the subagent tree and disrupts that root's live updates (#53). A late `completed`, `failed` or `aborted` record settles a child still shown as running; a late start, running progress or tool event is ignored, and none of them re-admits the child as in-flight work. Before, the tree still accepted the removed child through its stored parent and then read the missing registry entry. Lifecycle and progress records now follow one terminal rule, whether or not the registry still holds the child: an aborted child, or one whose registry entry is an aborted tombstone, stays aborted, and a child that already completed or failed keeps that status unless it is later aborted. Before, a late `completed` record overwrote a child the deck had just aborted.
+- **Routine webhooks now verify an HMAC of the request, not a static password** (#115). The receiver used to hash `X-Routine-Signature` and compare it with the stored hash, so the header was the bare secret: anyone who saw one delivery could replay it with any body, forever. This contradicted the 0.3.0 entry, `trigger-webhook.json` and the V1 plan. A delivery now sends `X-Routine-Timestamp: <unix seconds>` and `X-Routine-Signature: sha256=<hex HMAC-SHA256(secret, "<timestamp>.<raw body>")>`. The MAC is recomputed over the exact request bytes and compared in constant time. A timestamp more than five minutes from the deck's clock gets `401 {"error":"timestamp outside replay window"}`. The signature format, timestamp window and signing mode are checked before the body is read, and again, with the MAC, against the registration as it is once the body has arrived, so a rotation or bare-secret refusal during a slow upload, or a timestamp aging out during it, still refuses the delivery. Computing the MAC needs the secret, so `deck.db` now keeps it (`routine_webhook_secrets.signing_key`, migration 006); the API still returns it only once, from Rotate secret. The data dir is now kept at `0700` and `deck.db`, `-wal` and `-shm` at `0600`; files an earlier version left at `0755`/`0644` are narrowed at startup. **Existing senders:** migration 006 marks every existing registration `accept_bare_secret`, so senders of the bare secret keep working. Each such delivery logs a deprecation warning, and the routine's Settings tab shows a warning with the last one. The first bare-secret delivery stores that (hash-verified) secret, so the same sender can switch to HMAC without a rotation, then **Stop accepting the bare secret** (`PATCH /api/routines/:id/webhook {"acceptBareSecret": false}`) turns it off, after a confirmation, for good: `{"acceptBareSecret": true}` answers `409` once a registration has stopped accepting it. New and rotated secrets never accept the bare secret. `GET /api/routines/:id/webhook` reports the path, both flags and last-use times, never the secret or its hash. See `docs/routines-v1-tutorial.md` for a `curl`/`openssl` signing example.
+- A routine run's stored trigger payload is bounded, redacted by key, and holds no request header values (#24). Cron, webhook, event and manual runs, including runs rejected before they start, store their payload through one encoder. At any depth, the value of a key whose name contains `token`, `secret`, `passw`, `pwd`, `api_key`/`api-key`/`apikey`, `auth`, `signature`, `cookie`, `credential`, `session` or `bearer` (any case) is stored as `[redacted]`; values under other keys are stored as sent. The redacted copy is at most 8 KiB and always valid JSON, and a larger one is stored as `{ truncated, bytes, preview }`. Steps still receive the full, unredacted payload. Before, a started run stored its payload unredacted and at any size, and a webhook rejected for a bad signature stored every request header, including the presented `x-routine-signature`, `authorization` and `cookie`, cut at 8 KiB into invalid JSON. A rejected delivery now stores its path and the sorted header names only, never a value.
+- Secret reveal (`GET /api/settings/env/:key?reveal=1`) and `POST /api/server/restart` no longer trust the `Host` header for their loopback check (#79). They now require the TCP peer Bun accepted the connection from to be loopback (127.0.0.0/8, `::1`, or IPv4-mapped 127.x). Before, with `NPI_DECK_HOST` set to `0.0.0.0` or a LAN/Tailscale address, a remote client could send `Host: 127.0.0.1` and read secrets or restart the server. The web dev and preview servers relay every client from a loopback socket with a rewritten `Host`, so on `--host 0.0.0.0` a remote browser passed that check too. Their `/api` and `/ws` proxy now always overwrites `x-npi-deck-proxy-peer` with the real client address. When the peer is loopback and that header is present, the client it names must be loopback as well. A remote client's own copy of the header is ignored. A loopback `Host` is still required as well, so a DNS-rebound page in a local browser stays refused. A request with no known peer is refused.
+- Routine agent steps with `structured_output` now honor `strict` and report each failure plainly (#13). Strict mode (the default) fails a step whose answer is not JSON (`structured_output is not valid JSON: …`) separately from JSON that breaks the supplied schema, which lists each violation with its instance path (`structured_output does not match schema: /name must be string; / must have required property 'id'`). `strict: false` now does what the step schema says: a bad answer still succeeds with the raw answer in `stdout`, and `steps.<id>.json` is set only when the answer matches the schema. Saving a routine now refuses an agent step whose output schema does not compile or uses `$async`, reported at `/steps/<n>/structured_output/schema`; an `$async` validator returns a Promise, which previously would have counted as a pass. Such a schema also fails the step in either mode if it is already saved. Validation runs on a worker thread that is terminated after 2 seconds (`structured_output validation timed out after 2000 ms`, in either mode), so a backtracking `pattern` such as `^(a+)+$` can no longer stall the server. Answers over 256 KiB are refused before they are parsed.
+- Closing a large resumed session no longer times out (#110). The time was NeoPi's chronicler: a resumed session with chronicler enabled starts catching up its backlog with model calls, and NeoPi's dispose waits up to 20 s for that work before it closes the file. `DELETE /api/sessions/:id` waited for the whole dispose, so it ran past Bun's 10 s idle timeout and curl got an empty reply. It now answers `202` at once and the dispose runs in the background. The closing session stops being live immediately (its routes answer `404` and prompts are refused), a repeated `DELETE` answers `202` for the same close, and resuming the same file waits for the close to finish instead of returning the closing session. Resumes of one file now run one at a time, so two at once get the same live session instead of opening it twice. A `DELETE` sent while a resume is still opening the session, including while NeoPi still reads its file (the id comes from the file's header), answers `202`; the session is disposed as soon as it has opened, never goes live, and that resume answers `409`. Shutdown likewise lets no opening session go live: it waits for each open to finish and for that session's dispose. When the dispose ends, every connection subscribed to the session gets `session_disposed` and loses its subscription; other connections get nothing. A session the idle reaper stops now sends the same frame; before, neither path sent one. Shutdown waits for closes still in progress. In the web client, closing a chat drops its subscription at once, so a reconnect during the background close does not resubscribe, and a late `session_disposed` only ends a view that is still live: a chat reopened read-only after the `202` keeps its view instead of being reloaded or replaced.
+- A tab that closes a chat and resumes it keeps streaming it (#11, #2). Closing a chat now unsubscribes the tab's WebSocket at once, so the `session_disposed` the server sends when its slow close finishes no longer reaches a resume of the same chat that answered first; that late frame used to mark the resumed chat read-only and drop it from the tab's reconnect list. A late `unsubscribed` reply no longer drops a newer subscription either, and the closed chat's open dialog and subagent tree are cleared with it, so a reopened chat does not show them. On the server, a subscription belongs to one live session, not just its id: a socket that subscribes again after the chat was closed and reopened is moved onto the reopened session instead of being handed its snapshot while still attached to the old one. Resuming a live chat, including two resumes at once from two tabs, reuses its one NeoPi session and event stream. That now also holds for another path to the same chat: resumes are queued by the file's real path, so a symlink waits for its target, and by the session id in the file's header, so a copy of a live chat's file reuses the live session, waits for a close of it, or waits for an open of it from another file. A session that is live, closing or opening is never started a second time; opening it from a file whose header could not be read answers `409`.
+- Reasoning the provider does not show no longer renders as an empty thinking expander (#96). Readable thinking still expands. An empty OpenAI Responses/Codex reasoning block (GPT-6 Sol writes no summary for many steps) reads "reasoning hidden". Anthropic `redactedThinking` reads "redacted thinking". A turn that reports reasoning tokens but carries no reasoning block (e.g. nous-portal) also reads "reasoning hidden". Each hidden state says why: encrypted with no summary, no text returned, redacted, or tokens without text. When the provider reports it, the turn's reasoning token count is shown. While a turn streams, an empty block shows "waiting for reasoning text".
+- Opening a long existing session no longer freezes the page (#95). The chat mounts only its newest 40 messages, with a "Show earlier" control that keeps the reading position, and never more than 240 at once: messages that arrive while you are scrolled up are counted behind a "N newer messages · jump to latest" control instead of mounted; a read-only transcript fetches only its newest 200 messages (`GET /api/sessions/transcript?limit=`) and loads the rest on request, while session cost still covers the omitted messages. On a 25 MB, 5,650-message session the sidebar open went from 27–40 s to under 1 s. Reading a transcript now uses NeoPi's `SessionManager.openReadOnly`: one file read instead of two, and no session lease. Before, the lease was held until the deck restarted, so `npi --resume` failed with "in use by another NeoPi process" on any session the sidebar had shown.
+- Switching sessions no longer shows or sends to the wrong chat (#97). A read-only transcript or resume that finishes after you moved to another chat no longer pulls you back to it, and a message sent from a read-only chat still goes to that chat if you switch while it resumes. Each chat keeps its own composer draft and attachments, so text typed for one chat is not sent to the next one; a draft lives until its chat is closed, and attached images are held once, as the pasted file (encoded only when sent), under a 64 MiB budget across drafts of chats not on screen. Past it, the least recently used drafts lose their images and those images' `[Image #N]` placeholders but keep their text, and the composer says how many unsent images were dropped when you return. The header's Resume, rename and popover state no longer carries into another chat. Resuming a chat twice while the first resume runs opens it once. A session already running on the server, after a page reload or from another tab, opens live and streams instead of showing its file read-only as if nothing were running (`GET /api/sessions/transcript` reports `live`). A reply that was already streaming when the chat subscribed (reload, reconnect or second tab mid-turn) now lands after its prompt instead of overwriting the previous reply. Slash-command replies the deck or SDK answers itself now end like any other reply, so they no longer stay marked streaming, and one sent while the model is replying no longer splits that reply in two. A run's terminal `agent_end` clears any reply its `message_end` never reached. After a reconnect, a chat the idle reaper stopped meanwhile shows its file read-only with Resume, and the next send resumes it; before, it looked live and prompts were dropped with "session not active" (the server now answers such a subscribe with `session_disposed`).
+- Owned process-group signals now verify the recorded leader or a descendant carrying that spawn's unique marker before signaling the group, including exit callbacks and SIGKILL escalation (#72). Short-lived leaders with surviving children can be journaled through a marked descendant. Synchronous server probes also use a parent-death-protected wrapper; the spawn gate covers both Bun spawn APIs.
+- The `--no-systemd` launcher verifies its worker's original `/proc` start time and process-group ID before signaling the group; if the leader exited, the generation sweep handles surviving marked descendants without risking a recycled PGID (#72).
+- NeoPi extension commands that finish locally now acknowledge the sending WebSocket client instead of leaving Telegram waiting for an `agent_end` that never arrives (#37). Agent-forwarded prompts still wait for the terminal event.
+- OAuth prompt and manual-code replies no longer replace an already-rendered signed-in or error state with "Working…" when the provider completes before the HTTP reply settles (#38).
+- Routine agent NDJSON parsing now treats non-terminal `agent_end` as an advisor pause, retaining incurred usage without accepting a provisional answer. Distinct assistant messages starting in the same millisecond no longer lose usage when their provider omits a response id. Each run persists the NeoPi backend tree it pinned on its first agent step (#48).
+- Launcher-loss shutdown now forces the worker out after three seconds if a routine or SDK teardown hangs; the one-second launcher poll plus cgroup cleanup stay within the five-second no-orphans window (#72, #74). Force-switching a backend and Settings → Restart use the same deadline so a shell grandchild holding its parent's output pipe cannot strand the old generation.
+- An unanswered plan proposal expires 30 seconds after its last reviewer disconnects, allowing a quick reconnect to replay the card; even a connected review expires after ten minutes (#75). Expiration rejects approval without deleting the plan artifact. Concurrent proposal preparation can no longer overwrite a pending decision.
+- Exiting plan mode while an `xd://propose` is still reading its plan file now cancels that proposal the same way it cancels one already awaiting review (#85). Before, the proposal failed with a timing-dependent error, and if plan mode was re-entered before the read finished it came back as the new activation's pending decision. A proposal written while exit is still restoring the session's tools is refused, so no plan card can appear after plan mode is off.
+- The first WebSocket hello now refetches session and workspace lists if bootstrap started REST reads before the worker generation was known; the sidebar no longer stays empty until manually refreshed.
+- Saving different settings at the same time (e.g. from two tabs, or Settings plus the maintenance gate) no longer drops one of them (#16). Writes to the managed `.env` now run one at a time within the server, each reading the previous write's result, and `process.env` receives the updates in the same order. Each write uses its own exclusively created, randomly named temp file before the atomic rename, so saves in the same millisecond no longer share a temp file or fail with `ENOENT`.
+- Values saved to the managed `.env` now read back exactly as saved (#15). Before, a Windows path such as `C:\new-project` came back with a newline in place of `\n`, tabs and carriage returns came back as the literal text `\t` and `\r`, a single-quoted value containing `\n` changed the next time any setting was saved, and a line whose value contained U+2028 or U+2029 was not loaded at all. Double-quoted values are now decoded in one pass that exactly reverses the JSON quoting the deck writes. Any value an older deck wrote that already read back correctly reads back the same. In a hand-written double-quoted value, JSON escapes (`\t`, `\r`, `\b`, `\f`, `\/`, `\uXXXX`) now decode like `\n` always did, while any other escape, such as the `\p` in `"C:\path"`, stays as written; single quotes keep a value verbatim.
+- Agent-step skill and MCP lists now reject glob and CSV syntax before the agent runs, including Bun's leading `!` negation (#5). The routine builder distinguishes omitted (all) from explicit empty (none); removing the final allowed tag cannot silently restore full access. NeoPi's MCP discovery no longer accepts a disabled project server name through a shadowed user server.
+- **OAuth prompt lost before the flow id arrived** (R08, #8). The sign-in modal subscribes before starting the flow and replays the flow's early frames, so a provider that asks a question right away (Ollama) shows it. Closing the modal before the flow id arrives now cancels the flow.
+- Backendless startup now serves the backend picker without trying to install starters through an unloaded SDK (#36). A committed backend switch remains latched until worker exit (#78).
+- Session browsing uses a read-only global scan for project filters instead of repairing NeoPi session backups (#76); model-picker discovery uses read-only settings and cannot migrate user config (#77).
+- A routine with several cron triggers keeps reporting its earliest upcoming fire as the next run after it runs, instead of switching to the first trigger's next fire (#25). Scheduling and post-run updates now compute next-run metadata the same way. Disabling a routine clears its next run, and a manual run of a disabled routine leaves it cleared.
+- An open kanban now refreshes when a routine creates or moves a task or an inbox item is promoted, whether from another tab or a routine step (#18). The task store publishes `tasks_changed` after each committed task or column change, so REST, inbox promotion, routine steps, and deck slash commands all share one notification path. A mutation inside a caller's transaction publishes once when the outermost transaction commits, and publishes nothing if that transaction rolls back. Deleting, adding, or renaming a column now refreshes other open boards too.
+- A disabled routine no longer answers a correctly signed webhook with `202 accepted` while silently running nothing (#17). The receiver now refuses it with `409 Conflict` and `{"error":"routine disabled"}`, so the sender sees the delivery was not acted on. A bad signature still gets `401` first, so an unauthenticated caller cannot learn whether the routine is enabled. The routine is re-read after the request body arrives, so one disabled while its body streams also gets `409`, and one deleted meanwhile gets the same `404` as an unregistered hook; neither refusal marks the webhook secret as used. Disabled routines ignore cron, webhook and event triggers; a manual run still works.
+- Opening a chat whose subagent tree has not arrived yet no longer crashes the page with "Maximum update depth exceeded"; the subagent panel's store selector returned a new empty list on every read.
+
+### Removed
+
+- **Session orientation** (#50). A new deck session is a plain empty thread. The server no longer prepends a prelude to the system prompt or fires `NPI_DECK_AUTO_START` (`/start`) on subscribe. The prelude and `/start` editors in Settings, the `/api/orientation/*` routes, the onboarding "Session greeting" step that wrote `~/.omp/agent/commands/start.md`, the four `kb://system/*.md` stubs onboarding wrote (deck-orientation, working-voice, projects-hub, org-system-hub), and `docs/start-command-template.md` are gone. Files a previous version wrote are left on disk. The maintenance-gate card moved to **Settings → Starters**, served at `/api/starters/maintenance-gate`.
+- **npm distribution** (#51). `bin/omp-deck.mjs`, the `prepack` / `postpack` scripts, and the `bin` / `files` / `bundledDependencies` fields are gone; the root package is `private`. npi-deck runs from a checkout (`bun scripts/neopi-setup.ts`, then the `npi-deck` launcher).
+- **In-app update check** (#51). The daily `registry.npmjs.org/omp-deck` poll, `GET /api/version`, the `VersionInfo` protocol type, the StatusBar update pill, and `OMP_DECK_DISABLE_UPDATE_CHECK`. It could only advertise upstream omp-deck releases. A stale `<dataDir>/update-check.json` is harmless and can be deleted.
+- **Docker** (#51). `Dockerfile`, `docker-compose.yml`, and the CI container smoke job.
+- **Windows launchers** (#51). `Start-OMP-Deck.cmd` and every `scripts/*.ps1` helper, plus the task-seed JSON files only `create-v1-tasks.ps1` read. `Start-OMP-Deck.sh` was replaced by `bin/npi-deck`.
+
+## [0.6.1] — 2026-05-29 — In-app update notification
+
+Small follow-up to v0.6.0. Adds a passive update-check pill in the StatusBar so future releases (this one and onward) become discoverable from inside the deck instead of requiring users to run `npm outdated -g`.
+
+### Added
+
+- **`↑ X.Y.Z available` pill** at the bottom-right of the deck chrome whenever the running version is behind what's published on npm. Click → opens the GitHub release notes in a new tab. The user runs `npm install -g omp-deck@latest` themselves; the deck never auto-updates. (#10)
+- **`GET /api/version`** returns `{ current, latest, updateAvailable, lastCheckedAt, releaseUrl, packageUrl, disabled }`. The pill is just a thin renderer over this.
+- **24-hour cached version check** against `https://registry.npmjs.org/omp-deck`. Same destination as `npm install`; no version-as-fingerprint, no analytics, no extra outbound traffic beyond one ~1 KB request per day.
+- **Kill switch:** `OMP_DECK_DISABLE_UPDATE_CHECK=1` short-circuits the entire feature (no cache read, no network, no pill). Set it in your managed `.env` if you're on a locked-down network or just don't want the chrome.
+- Cache lives at `<dataDir>/update-check.json` and is graceful on every failure mode (registry down, parse error, env disabled, malformed cache, version-compare failure) — the pill simply doesn't render.
+- Semver-aware comparison via `Bun.semver.order` (so `0.10.0 > 0.9.0`, prereleases handled correctly).
+- New protocol type: `VersionInfo`.
+- 10 new tests on the update-check module (33 assertions): disabled-flag handling, cache hits at newer / same / older versions, semver edge cases, registry-error state, first-call empty-state + background refresh, response-shape sanity.
+
+## [0.6.0] — 2026-05-29 — First-run onboarding + provider clarity + reliability fixes
+
+Quality-of-life release driven by three live-demo reports plus a deliberate first-run-experience rewrite.
+
+**For existing users:** see [docs/upgrading.md](./docs/upgrading.md) — the onboarding wizard does NOT trigger for installs with existing sessions or a moved welcome task. Everything you have keeps working.
+
+### Onboarding wizard (#9)
+
+- **Five-step first-run flow** at `/onboarding`, gated by a server-detected `needsOnboarding` flag. Brand-new users get walked through: kb scaffold → provider auth (Claude Pro/Max or ChatGPT Plus/Pro OAuth, or OpenRouter API key) → optional `/start` greeting → handoff to chat.
+- **Returning-user detection** is silent: any existing session OR a welcome task that's not in backlog marks onboarding settled without ever showing the wizard. Existing installs upgrade cleanly.
+- **Welcome task tile** on `SessionPicker` surfaces the seeded `T-1` task even if the user never clicks the Tasks tab.
+- **Skip-but-remind toast** appears on the chat view if onboarding was X-ed out, pointing at `/onboarding` for a re-run.
+- New server module `apps/server/src/onboarding-state.ts` + routes at `/api/onboarding/{state,complete,seed-kb-system}`. Reuses existing endpoints (`/api/kb/init`, `/api/orientation/start`, `/api/settings/env`, `/api/auth/oauth/*`) for the actual work.
+- The wizard's `/start` template is static but the AGENT re-fetches live state on every fire (kb files, `/api/{tasks,routines,inbox}`), so it stays accurate as the deck grows.
+
+### Model-picker clarity (#7)
+
+- **`subscription` badge** in the model picker for genuine consumer-subscription providers (Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot, Cursor, Perplexity Pro/Max, coding plans). Explicit allowlist — not the SDK's broader `getOAuthProviders()` which would have falsely badged Ollama / LM Studio / gateway services as "subscription."
+- **Placeholder API keys suppressed.** `OPENAI_API_KEY=sk-your-XXXXhere` (and other `.env.example` leftovers — `your-api-key`, `<your-key>`, `changeme`, length-too-short keys per prefix family) no longer mark API-key providers as authenticated. The picker hides those rows from the default view instead of letting users click them and get back a 401.
+- **401-recovery notification.** When a chat call returns auth-shaped error (`401`, `incorrect api key`, `unauthorized`) on an API-key provider AND a subscription provider carries the same model id with a real OAuth credential, the deck fires a `warn` notification suggesting the switch.
+
+### OAuth flow lifecycle (#7)
+
+- **5-minute server-side timeout** per OAuth flow. The SDK's own timeout only fires on the loopback callback listener — flows driven by `onPrompt` (e.g. Ollama endpoint input) could sit pending forever, blocking subsequent attempts with `409 already-in-flight`. Now force-cancelled.
+- **Stale-flow eviction** on `POST /:provider/start`. If a duplicate start arrives and the held flow is past the timeout window, evict it inline instead of 409-ing forever.
+- **`abortFlow` helper** drains `promptResolvers` too (latent bug — pre-fix `cancel` only rejected `manualCode`, leaving `onPrompt` deferreds hanging).
+- **OAuth consent button** now uses `variant="primary"` instead of inheriting the low-contrast default ghost variant.
+
+### Cross-platform reliability (#8)
+
+- **Bun executable resolution** falls back to `Bun.which("bun")` when `process.execPath` points at a dead path. Fixes a macOS-reported `posix_spawn ENOENT '~/.bun/bin/bun'` when the user reinstalled Bun via Homebrew / asdf / mise after deck boot. Affects both telegram-bridge spawn and `scheduleRestart`.
+
+### Added
+
+- `docs/upgrading.md` — version-by-version migration notes.
+- README "Global install" section rewritten to explicitly call out: `omp` CLI not required; Bun + Node prereqs; post-boot auth paths (OAuth or API key); and how the deck self-bootstraps `~/.omp/agent/` on first boot.
+- `apps/server/src/credential-quality.ts` with `looksLikePlaceholderKey` (44 unit-test assertions).
+- `apps/server/src/runtime-bun.ts` with `resolveBunExecutable` (4 tests).
+- `apps/server/src/onboarding-state.ts` + `routes-onboarding.ts` (4 tests).
+- `apps/server/src/routes-auth-oauth.test.ts` — 6 tests for the new `abortFlow` cleanup helper.
+- `ModelInfo.isSubscription` field in `@omp-deck/protocol`.
+- `OnboardingState` + `SeedKbSystem*` types in `@omp-deck/protocol`.
+
+## [0.5.0] — 2026-05-28 — Cross-platform CI, Linux container, Mac/Linux launcher
+
+Infrastructure release. v0.4.0 advertised macOS and Linux support but had never been empirically verified — every release was "tested on a Windows box, presumed to work elsewhere." v0.5.0 closes that gap: every push to main now runs the gates on all three platforms under the same Bun version, the Docker image actually boots, and Mac/Linux users get a launcher with parity to the Windows one.
+
+Two real Linux bugs surfaced during the validation work and are fixed in this release.
+
+### Fixed
+
+- **Docker build is now correct end-to-end on Linux.** Two regressions were silently broken before v0.4.0 even though `docs/deployment.md` advertised the path:
+  - `Dockerfile` stages now copy `apps/bridges/telegram/package.json` alongside the four other workspace manifests. The lockfile knows about five workspaces; copying only four made `bun install --frozen-lockfile` fail with "lockfile had changes".
+  - Base image switched from `oven/bun:1.3.14-alpine` to `oven/bun:1.3.14` (Debian-slim, glibc). `@oh-my-pi/pi-natives` ships prebuilt `.node` binaries linked against glibc's `ld-linux-x86-64.so.2`; Alpine's musl libc fails to load them (no `linux-x64-musl` variant exists). Image is ~40 MB larger; the trade is a runtime that actually boots.
+
+### Added
+
+- **`Start-OMP-Deck.sh`** — bash sibling to the Windows `.cmd` launcher. Same shape (start dev server + Vite, write logs, open browser), plus `start` / `stop` / `status` subcommands. Bare invocation runs foreground equivalent to `bun run dev`.
+- **GitHub Actions CI matrix** (`.github/workflows/ci.yml`) — runs `bun install --frozen-lockfile` + `bun run typecheck` + `bun test` + `bun --cwd apps/web run build` on `ubuntu-latest` / `macos-latest` / `windows-latest`. Separate `docker` job builds the image and smoke-tests `/api/health` on every push to `main` and every PR. Catches platform-divergent regressions before release instead of at user-install time.
+
+## [0.4.0] — 2026-05-28 — Plan mode, queued-prompt editing, todo live-sync, docs pass
+
+Mid-cycle release focused on user-visible polish to the chat loop. Plan mode brings TUI parity to the deck so the agent can propose work before it executes. Queued prompts you sent mid-stream can now be edited or cancelled. The Inspector's todo panel updates intra-turn instead of waiting for SDK reminder ticks. Session rename failures surface their error instead of silently reverting. The README was rewritten human-forward and the supporting docs got an accuracy pass.
+
+### Plan mode (T-105)
+
+- **Shift+Tab in the composer** (or **`/plan [on|off]`** from the slash picker) toggles plan mode for the active session. Equivalent to the TUI's `app.plan.toggle`; the slash command is client-virtual — intercepted by the composer and dispatched as a `set_plan_mode` WS frame without round-tripping through the agent.
+- **While active**, the agent gets the SDK's plan-mode system prompt + the `resolve` tool spliced into its active tool set. The SDK's `#enforcePlanModeToolDecision` intercept gates writes. The agent investigates with read-only tools and writes the finalized plan to `local://PLAN.md`.
+- **When the agent calls `resolve apply`**, the deck surfaces a `PlanApproval` inline card in the chat with **Reject** / **Approve** / **Edit & approve**. Approve renames `local://PLAN.md` to `local://<title>.md` and queues a synthetic execute prompt that runs in a new turn with the full tool set restored. Reject exits plan mode cleanly with no rename.
+- **State indicators**: header pill, composer border tint (`accent-plan`), sidebar badge on the active session row.
+- **Robust to reconnect**: pending plan proposals are replayed via the bridge's `subscribePlanModeFrames` mechanism so a page reload mid-approval re-renders the card immediately.
+- New protocol frames: `set_plan_mode`, `plan_response`, `plan_mode_changed`, `plan_proposed`, `plan_proposal_resolved`.
+- New bridge surface: `PlanModeBridge` per-session state machine wrapping `setStandingResolveHandler` from the SDK; composes `resolvePlanTitle` + `renameApprovedPlanFile`.
+- Server-side hardening: `sanitizeFinalPath` rejects path-traversal attempts (`local://../escape.md`) and falls back to the SDK-suggested final path.
+- 15 unit tests covering enter / idempotent re-enter / exit / approve-happy-path / edit-and-approve / title-override / path-traversal-rejection / reject / double-click CAS / cancel-mid-approval / dispose / snapshot-replay.
+- Design doc: `kb://projects/omp-deck/plan-mode-design.md`.
+
+### Queued-prompt edit + cancel
+
+- **Hover any queued bubble** in the chat to reveal Pencil + X buttons. Edit opens an inline textarea (Enter saves, Esc discards, empty save = cancel). Cancel drops the entry without prompting.
+- Bridge maintains a `shadowQueue<QueuedPromptWire[]>` mirrored from the SDK's pending-prompt queue. Each entry carries a stable id the client uses to target a specific entry for cancel/edit.
+- `cancelQueuedById` / `editQueuedById` rebuild the SDK queue (synchronous `popLastQueuedMessage` loop + parallel re-enqueue) preserving order + ids — edits don't re-key the bubble.
+- `queue_state` event re-broadcasts the canonical queue after every mutation; reducer replaces wholesale.
+- `prompt_queued` shadow tracking aligns its text against the SDK's post-expansion store so slash-expanded prompts match on drain.
+- Session snapshot now carries `queuedPrompts`, so a page-reload subscriber sees the queue immediately instead of waiting for the next mutation.
+- Reducer test coverage: queue lifecycle + `queue_state` + snapshot hydration (16 tests in `apps/web/src/lib/reducer.test.ts`).
+
+### Todo panel live-sync (T-106)
+
+- The Inspector's TodoPanel was visibly stale between an agent's `todo_write` call and the SDK's next `todo_reminder` tick (those fire only on reminder cycles, typically at turn boundaries). For long turns with many todo updates the panel showed pre-tick state until the cycle caught up.
+- Bridge now extends the existing `session.subscribe` listener in `attach()` to detect `tool_execution_end` with `toolName=todo_write` and emit a synthetic `todo_phases_set` event carrying `session.getTodoPhases()`. Same pattern as the existing `context_usage` synthesis on `turn_end` / `agent_end` / `compaction_complete`.
+- Reducer handles `todo_phases_set` by calling `normalizeTodoPhases(event.todoPhases)` directly. New event type avoids reusing `todo_reminder`'s quirky single-phase-wrapped-in-array shape.
+- Tests: dedicated `todo-synthesis.test.ts` (5 cases) + 4 reducer cases.
+
+### Session rename — surface failures
+
+- The omp SDK's `setSessionName` performs an atomic-replace on the session journal: write to `.jsonl.tmp`, `fs.rename` over the original. **On Windows** `fs.rename` fails with `EPERM` when the destination is held open — and the live session always holds the journal open. So pressing Enter to rename produced a 500 error the store swallowed via `console.warn`; the input closed; the UI showed the old name with no indication anything had failed.
+- Store: stopped swallowing the rename rejection; lets it propagate.
+- ChatHeader: keeps the input open on failure, renders an inline danger-toned error span next to the rename input with `role=alert` + `aria-describedby`. Successful renames still close as before.
+- Upstream: the underlying Windows EPERM bug is in the SDK's atomic-rename helper — to be raised separately with the omp folks.
+
+### Universal `/plan` slash command discoverability
+
+Removed the composer pill button in favor of the slash-command entry. Plan mode is now discoverable via five surfaces, all keyboard-/touch-friendly:
+
+| Entry point | Where | When useful |
+|---|---|---|
+| `Shift+Tab` | Composer keyboard | Power users (matches TUI muscle memory) |
+| `/plan` | Slash picker | Mouse/touch users; users browsing the picker |
+| Header pill | Top of session pane | Visual state at a glance |
+| Composer border tint | Around the textarea | Peripheral state cue while typing |
+| Sidebar badge | Session row in sidebar | See which session is in plan mode at a glance |
+
+### Fixed
+
+- Fresh-clone `bun run dev` no longer fails on missing `TELEGRAM_BOT_TOKEN`. The root `dev` script was fanning out across every workspace (`--filter='@omp-deck/*'`) and bringing the standalone telegram bridge along with the deck server + web — the bridge's config validator throws if no bot token is set, so first-run users would hit an error before the UI ever came up. The bridge has always been opt-in (Settings → Messaging → Start, or `bun run dev:telegram`); the dev script now restricts itself to `@omp-deck/server` + `@omp-deck/web` to match the documented behavior in `CONTRIBUTING.md`.
+
+### Docs
+
+- README rewritten human-forward — leads with the feeling of using the cockpit (track work as work, ask from anywhere, decide carefully, capture without context-switching, remember across sessions) rather than a feature inventory. Concrete value props as section headers. Tech detail moved to docs links.
+- `docs/tui-parity.md`: plan mode + ask-tool moved from Future to ✓ (both shipped). Themes row adds Horizon. New row for queued-prompt edit/cancel. Todos panel mentions the `todo_phases_set` synthesis. KB cockpit added to the deck-only list.
+- `docs/slash-commands.md`: `/plan` section + scope row + client-virtual mechanism explanation.
+- `docs/architecture.md`: synthetic events expanded (`todo_phases_set`, `prompt_queued` + `queue_state`, plan-mode trio, `ext_ui_dialog` pair). Broadcast frames list updated. Database tables list fleshed out with routines V1 (`routine_step_runs`, `routine_state`), `env_settings`, `bridge_state`. Stale v0.1 build caveat removed.
+- `docs/themes.md`: third theme (Horizon) documented.
+- `docs/configuration.md`: `OMP_DECK_AUTO_START` default corrected from "empty (disabled)" to `/start` (the actual default — it's opt-OUT, not opt-in).
+- `CONTRIBUTING.md`: "No unit-test harness" claim retired — 149+ tests across server, 16+ in web/reducer; coverage is partial but real.
+
+## [0.3.0] — V1 routines, V2 canvas, reliability + notifications, orientation + chat polish
+
+Three big surfaces (V1 routines, V2 canvas builder, reliability + notification stack) land alongside a wave of smaller refinements (kanban polish, ask-tool bridge, starter skills, orientation Settings, queued prompts, kb:// resolution, image paste, app icon).
+
+### Routines V1 — multi-step pipelines
+
+Routines graduate from "single-action cron jobs" to a first-class agent platform: typed step pipelines, multiple trigger sources per routine, shared context across steps, persistent cross-run state, budget caps, and a form-mode visual builder so authoring doesn't require YAML literacy.
+
+- Multi-step pipeline runner at `apps/server/src/routines/v1-runner.ts` dispatching 9 step types: `run`, `agent`, `write`, `http`, `deck`, `mcp` (stubbed for V1.5), `transform`, `wait`, `set_state`. Each step type has its own executor under `apps/server/src/routines/steps/`.
+- `RoutineSpec` is a YAML doc persisted in `routines.spec_yaml` (V1 source of truth) with derived columns (`cron`, `concurrency`, `budget_json`, `tags`, `timezone`) mirrored for query speed. V0 single-action routines keep working — the runner branches on `spec_version`.
+- Per-step persistence in `routine_step_runs` (status, stdout/stderr excerpts, structured JSON output, error, model, tokens in/out, cost micros, duration, retry attempt).
+- Templating engine (`{{ run.id }}`, `{{ run.date }}`, `{{ steps.X.json.field }}`, `{{ steps.X.stdout }}`) at `apps/server/src/routines/template.ts`; value-mode preserves type for single-expression payloads, string-mode for embedded use.
+- Sandboxed `when:` + `transform` evaluator at `apps/server/src/routines/sandbox.ts` using `quickjs-emscripten` with a 100ms wall-clock cap. Secrets redacted at marshal time.
+- Three trigger sources per routine: `cron` (multi-cron supported), `webhook` (`POST /hooks/*` with `X-Routine-Signature: sha256=...` timing-safe HMAC verify), `manual` (`POST /api/routines/:id/run`). `event:` reserved in schema for V1.5.
+- Concurrency policies: `skip` (default), `queue`, `cancel-previous`, `parallel`.
+- Budget enforcer: `max_duration_secs`, `max_llm_cost_usd`, `max_llm_tokens_input/output`, `max_steps_executed`. Hard-aborts with `abort_reason: 'budget'`.
+- Cross-run persistent state: `routine_state` table keyed by `(routine_id, key)`; `state.*` exposed in template + sandbox context; `set_state` step UPSERTs.
+- Per-step `on_failure` (`abort` / `continue` / `retry`) + retry policy (`times`, `backoff: linear | exponential`, `max_delay_secs`, `after_retry`).
+- `deck` step type with discriminated `action` for first-party mutations safer than raw `http`: `create_inbox_item`, `create_task`, `move_task`, `promote_inbox_item_to_task`. Single executor, schema validation, builder shows one form per action.
+- Curated YAML templates under `apps/server/src/templates/`. `GET /api/routine-templates` lists; `POST /api/routine-templates/:slug` installs in disabled state for review. Ships `daily-briefing` as the V1 proof point (7 steps reading deck tasks + inbox, agent summary, deck inbox capture, state persist).
+- Run observability: `/routines/:id/runs/:runId` RunDetailView with polling live updates, step expansion (stdout / stderr / json / error), replay, status pill. `GET /api/routines/:id/metrics` returns total / successCount / successRate30d / p50/p95 duration / mtdCostMicros / last-30 sparkline. WS frames `routine_run_started` / `routine_step_event` / `routine_run_finished`.
+
+### Routines V2 — visual canvas builder
+
+- React Flow surface under `apps/web/src/components/routines/canvas/`. Drag-position persistence into `layout.nodes`; add-step palette; slide-over inspector (inline ≥1100px, drawer <1100px).
+- Edge authoring with `kind: success | true | false`; "if"-flavored nodes. Graph importer round-trips `RoutineSpec` ↔ nodes/edges through `stringifySpec` without data loss.
+- Graph compiler (T-67/T-69) validates duplicate-id, missing-target, self-loop, cycle. Kahn topo-sort orders steps; AND-merges branch edges into downstream `when:` gates while preserving existing predicates. Compile errors gate Save and stamp red rings + floating message strip.
+- Save preview dialog (T-70): modal opens when committing from canvas mode and the compiled YAML differs from the saved spec. LCS line diff with +N / -N summary and per-line gutter. Opt out via `OMP_DECK_CANVAS_SKIP_PREVIEW=1` or `localStorage["omp-deck:canvas-skip-preview"] = "1"`.
+- Run overlay (T-71): `useRunOverlay` fetches recent runs + the selected run's step records and subscribes to the routine WS frames for live paint. StepNode renders pulsing status ring while running, duration / model / tokens / cost badges. Floating `RunOverlayPicker` scrubs through run history.
+- Output preview + replay (T-72): StepInspector grows a "Last run" section with status pill, duration, tabs over stdout / stderr / json / error. "Open in Run Detail" deep-links to `/routines/:id/runs/:runId#step-<stepId>`; `RunDetailView` reads the hash fragment, auto-expands the matching StepCard, scrolls it into view.
+- Form-mode editor (Tier 1) preserved alongside the canvas. Same JSON Schemas Ajv validates against — single source of truth, two renderings. Tabs: Steps / Triggers / Settings / Spec (YAML). Form ↔ YAML round-tripping with line-numbered parse errors on invalid YAML.
+- Agent-step sandbox fix: `runV1Pipeline` now takes `agentSandboxRoot` and lazily `mkdir`s `<dataDir>/routine-runs/<runId>/` on the first agent step; `omp -p` runs there instead of `$HOME`, so the embedded coding agent can't latch onto unrelated files in the user's home as briefing material.
+
+### Reliability + notifications (T-85)
+
+- `build-info` module resolves `serverStartedAt`, `pid`, `version`, `buildSha` at boot. `/api/health` enriched with these + `uptimeSecs`.
+- `WsHub` broadcasts `heartbeat` ServerFrame every 5s via `broadcastBus`.
+- `supervise-deck-server.ps1` wraps the deck server with restart-on-crash, exponential backoff (1s-60s, resets after >30s lifetime), give-up at 10 consecutive quick exits; decisions logged to `.logs/supervisor.log`.
+- Web `ConnectionIndicator` dot in header (green / yellow / red by heartbeat gap), tooltip exposes server identity + uptime.
+- `NotificationService` with pluggable channel registry; default channel failure does not block siblings; envelope stamped with uuid + timestamp; default sound rules (info silent, warn+ audible) overridable.
+- `BrowserNotificationChannel` broadcasts `notification` ServerFrame. Protocol: `notification` + `heartbeat` frames, `NotificationLevel`, `NotificationPayload`.
+- `v1-runner` fires `notify()` on failed / aborted / budget run finalize.
+- Web: store handlers dedupe by id, cap at 50. `audio.ts` plays Web Audio sine-tone sequences per level (no asset files). `NotificationPermissionBanner` shows on first frame when permission is `default` and not dismissed. `NotificationToast` bottom-right stack, max 4, auto-dismiss info/warn, ARIA roles per level, click-through to `actionUrl`.
+- Agent-initiated `move_task` to `s_done` fires a one-shot OS notification ("Agent shipped: <title>"). User-driven and reorder-within-done do not notify.
+- Settings → Notifications panel: browser permission state + request CTA, audio toggle + per-level tone preview, permission-banner reset, server identity card (pid / version / build sha / uptime / heartbeat age), recent activity tail with per-row dismiss.
+
+### Orientation — editable session-shaping artifacts (T-89)
+
+Surfaces the three session-shaping artifacts in the deck UI so non-developers can view and tweak them without touching server source.
+
+- **Prelude** (`OMP_DECK_CONTEXT`) lifted out of the `in-process.ts` constant into a deck-managed override file; bridge reads effective value at `createAgentSession`. Effective on next session create — no server restart.
+- **`/start` command** body + description editable in place; re-read every fire.
+- **Maintenance gate** exposes enable toggle, three numeric knobs (`MIN_OP_MSGS`, `MIN_RELEASE_AGE_MS`, `FIRE_FLOOR_MS`), and the current org-root detection state. The deck server now sets `OMP_DECK_ORG_ROOT` itself so the extension activates regardless of session cwd; honors a `DISABLED` env flag from Settings.
+- New: `orientation-store(+test)`, `routes-orientation`, web `orientation-api`, SettingsView Orientation tab. Protocol types: `PreludeResponse`, `StartCommand`, `MaintenanceGateState`. `env-schema` entries for the gate knobs.
+
+### Chat — queued prompts + `kb://` resolution
+
+- WS frames now default `streamingBehavior` to `followUp` instead of throwing `AgentBusyError` when a prompt arrives mid-turn (the user previously just saw the message vanish).
+- New `clear_queue` client frame + server handler drains the SDK's pending queue and emits a `queue_cleared` event so the web reconciles. `SessionHandle` exposes `isStreamingNow()` + `queuedMessageCount()`.
+- Reducer/store/types track `queuedPrompts` per session; Composer surfaces the queue with a clear affordance; new `QueuedMessage` component renders pending entries inline in the chat.
+- New `KbProtocolHandler` registered on the SDK's process-global `InternalUrlRouter` at server boot, so `read kb://…` from any agent session resolves through the same KB root the REST layer serves (`OMP_DECK_KB_ROOT` or `~/kb`). Singleton must register before the first `createAgentSession`.
+
+### Chat — composer prompt history (T-10)
+
+- `useComposerHistory(cwd)` hook backed by a pure store + localStorage, keyed per workspace cwd. Caret rules mirror a shell: ArrowUp recalls only on the first visual line, ArrowDown only on the last. Cap 100 entries; consecutive duplicates and recall-then-send-unmodified do not pollute history.
+
+### Permission prompts — `ask` tool bridge (T-83)
+
+Bridges the SDK `ask` tool to the deck UI so any extension that opens a permission/selection/input dialog renders inline rather than failing silently.
+
+- `ExtensionUIBridge` implements `ExtensionUIContext` per session and publishes `ext_ui_dialog_open` frames to subscribed WS clients; `ext_ui_dialog_response` from the client settles the SDK promise.
+- `InProcessAgentBridge` passes `hasUI: true` and wires `setToolUIContext` so the SDK actually registers `AskTool`. Disposing a session cancels all pending dialogs.
+- `WsHub` subscribes new connections to UI frames (with replay of pending dialogs for late subscribers) and routes responses.
+- Protocol: `ext_ui_dialog_open` + `ext_ui_dialog_cancel` ServerFrames; `ext_ui_dialog_response` ClientFrame. Strict superset covering select / editor / confirm / input. `KNOWN_TOOLS` gains `ask`.
+- Web `ExtUiDialog` modal renders select (with Recommended / Other), editor (multiline + Ctrl+Enter), input, and confirm dialogs. Store tracks `pendingDialogs` by `sessionId` and exposes `respondToExtUiDialog`; ChatView mounts the modal at the chat surface.
+- Fix: deck initializes the SDK's `theme` global at boot (built-in `dark` JSON via `getThemeByName()` + `setThemeInstance()`). Without this the ask tool dereferenced `undefined` the moment it tried to render any question; symptom was `undefined is not an object (evaluating 'theme.status')` on every invocation.
+
+### Starter skills (T-82)
+
+- Bundles five upstream skills from `mattpocock/skills` (MIT, pinned to `b8be62f`) so they auto-install to `~/.omp/agent/skills/` on first boot via `starter-skills.ts`:
+  - `handoff` — compact a session for the next agent
+  - `diagnose` — 6-phase debugging discipline centered on building a fast feedback loop first
+  - `zoom-out` — go up a layer and map modules/callers in unfamiliar code
+  - `prototype` — throwaway code with two branches (logic prototype as terminal app, UI variants behind a route param)
+  - `grill-me` — walk the decision tree of a plan one question at a time
+- Single adaptation: `diagnose` Phase 6 referenced `/improve-codebase-architecture` (not imported); rewritten in place to "hand off the architectural finding into a task or knowledge article."
+- Provenance: every imported `.md` gets a footer pointing at the exact upstream blob (commit-pinned); `hitl-loop.template.sh` gets the same in a comment header. `starter-skills/ATTRIBUTION.md` is the index + re-sync procedure.
+
+### Kanban polish (T-78 / T-79 / T-80)
+
+- Drag-reorder columns via a dedicated `GripVertical` handle on each column header (the column name still triggers rename). Persisted atomically through `POST /api/task-states/reorder` — rejects payloads that aren't a permutation of the current state ids before any UPDATE.
+- Per-column recency sort: migration `004-state-entered-at.sql` adds `tasks.state_entered_at` (backfilled to `updated_at`) and an index on `(state_id, state_entered_at DESC)`. `createTask` stamps creation time; `moveTask` bumps only when the move actually changes column; same-column drops and body edits leave the timestamp alone. `listTasks` orders each column by `state_entered_at DESC` with `order_in_state` as tiebreaker.
+- Brief date/time stamp on each card top-right (`just now` / `5m` / `5pm` / `MM/DD` / `MM/DD/YY`) via `apps/web/src/lib/time.ts:formatBriefTime`. Anchored by a `<time>` element with the full locale string as tooltip; tracks `updated_at` but does NOT move the card.
+- **Heads-up:** manual within-column ordering no longer persists. Columns auto-sort by when each card last entered the column. Cross-column drag-and-drop is unchanged.
+
+### Tasks — image paste + agent-rendered images
+
+- `POST /api/uploads/image` accepts raw `image/*` bodies or `multipart/form-data`. Content-addressed storage at `<dataDir>/uploads/<yyyy>/<mm>/<sha256-prefix>.<ext>` — re-pasting the same screenshot is a no-op on disk. Served back via `/uploads/*` with immutable caching since the path encodes the bytes.
+- Validation: whitelist of png/jpeg/gif/webp/svg, 10MB cap, traversal-safe display-name sanitization. Rejects empty / unsupported / oversized with 4xx, never 500.
+- `MarkdownEdit` intercepts paste and drop events while editing. Bytes upload asynchronously with a unique placeholder spliced at the caret, rewritten to `![alt](/uploads/...)` on success or pulled on failure. Concurrent pastes don't collide.
+- Agent-written task bodies that include image markdown (absolute URLs or relative `/uploads/...` paths) render inline through the same Markdown component. `.markdown img` gets `max-w-full` / rounded / bordered treatment so a 4K screenshot doesn't blow out the modal.
+
+### Web polish
+
+- App icon + favicon. Vector derivative of the user-supplied stack-of-tiles artwork — five isometric rhombi with a pink → purple → blue gradient, single shared linear-gradient in user space. Ships as `apps/web/public/icon.svg` (canonical), `favicon-32.png`, `apple-touch-icon.png` (180×180 iOS), `icon.png` (512×512). SVG linked first so modern engines get crisp scaling.
+
+### Routines — fixes
+
+- `run` step `readClipped()` switched from `reader.cancel()` to drain-and-discard after hitting the 8KB excerpt cap (T-103). Cancelling closed the read end of the pipe; on Windows the child writer then got EPIPE on its next `print(flush=True)`, Python re-raised as `OSError: [Errno 22] Invalid argument`, and the routine step failed after having collected useful output. Drain-and-discard lets the writer see a clean EOF when it finishes naturally. The 8KB cap itself is unchanged — it was the close that broke things, not the size.
+
+### Tests + hygiene
+
+- Routine-template smoke test iterates `listTemplates()` rather than hardcoding slugs, so local-only templates (gitignored personal routines) get validation coverage in dev without failing CI when absent on clean clones. Only `daily-briefing` is `REQUIRED_SHIPPED`; everything else present is validated against the V1 routine spec schema. Catches typos (unknown step type, missing required field, invalid id regex) before they 500 the install endpoint.
+- Maintenance-gate redesign: replaces 7 overlapping suppression layers with a single release-cursor invariant + 3 floor thresholds. Fires at most once per release segment; one trivial "continue" no longer re-triggers. Defaults raised to be much calmer for long agentic sessions.
+- T-58 cleanup: 5 pre-existing `noUncheckedIndexedAccess` errors fixed in `kb-service.ts` and `KbView.tsx`; both `apps/server` and `apps/web` typecheck clean.
+- `*.tsbuildinfo` added to `.gitignore`; `apps/web/tsconfig.tsbuildinfo` removed from index.
+- Vite `envPrefix` extended to expose `OMP_DECK_*` to the client.
+
+### What's deferred to V1.5
+
+- DnD step reordering on the form-mode editor (canvas surface already supports drag-position)
+- `mcp` step type real implementation (currently stubbed with a clear V1.5 pointer; use `agent` step with `mcp_servers_allowed` for now)
+- Smart-reorder warnings when reordering breaks a downstream context reference
+- `mcp` step form auto-completes (`server` + `tool` dropdowns from installed MCP servers) once the Integrations page ships
+- Workspace MCP integration (Gmail / Calendar / Drive / Docs) for the inbox-triager template
+- Skill / MCP-server allowlist enforcement on `agent` steps (the SDK does not yet expose per-invocation surface restriction)
+- TUI parity: plan mode, inline `!bash` / `$python` execution in composer
+
+### Dependencies
+
+- `apps/server`: `quickjs-emscripten@^0.31.0`, `yaml@^2.9.0`
+- `packages/protocol`: `ajv@^8.17.1`, `ajv-formats@^3.0.1`
+- `apps/web`: `yaml@^2.9.0`, `@xyflow/react@^12.10.2` (canvas), `@dnd-kit/sortable@^10.0.0` (kanban column reorder)
+- SDK pinned at `15.1.7` (no bump this release)
+
+## [0.2.0] — KB Cockpit + Maintenance Gate
+
+Two big surfaces land alongside several smaller refinements.
+
+### Skills cockpit — omp-native pivot
+- `SkillsService` now reads through `loadCapability(skillCapability.id)`, so
+  every skill omp loads is surfaced — `native` (`~/.omp/agent/skills/`),
+  `claude-plugins` (marketplace), `claude` / `codex` / `opencode` config
+  dirs, plus any future provider. The marketplace path is no longer the
+  only source. Default sort puts `native` first; source filter rail in the
+  sidebar replaces the prior plugin-only filter.
+- Detail route switched to opaque server-issued `:id` (base64url of the
+  SKILL.md absolute path) — clients pass it back verbatim.
+- Watcher widens to `~/.omp/agent/skills/`, `<defaultCwd>/.omp/skills/`,
+  and the marketplace cache. Missing roots skipped silently.
+- Mobile master/detail nav: tree visible by default, picking a file slides
+  to viewer with a back arrow.
+- New starter `create-skill` skill bundled in `starter-skills/` and
+  installed to `~/.omp/agent/skills/` on deck boot (idempotent). Zero
+  Claude-Code dependencies — uses only omp's standard tools.
+- Bundled starter installer logs what it copied vs skipped; opt out with
+  `OMP_DECK_INSTALL_STARTER_SKILLS=0`.
+
+### KB Cockpit (new feature)
+Karpathy-style llm-wiki cockpit over `~/kb`. New `/kb` route between
+Skills and Settings (BookOpen icon).
+
+- **Browse**: lazy-loading tree of every markdown file under `OMP_DECK_KB_ROOT`
+  (default `~/kb`). Top-level vendor noise (`.venv`, `node_modules`,
+  `__pycache__`, `dist`, `build`, etc.) excluded automatically. Custom
+  exclusions via `OMP_DECK_KB_EXCLUDE_DIRS=foo,bar,private`.
+- **Read**: markdown viewer with wikilink resolution. `[[stem]]` matches
+  by filename (deterministic same-dir tiebreaker on collision);
+  `[[dir/path]]` is absolute; `[[target|label]]` and `[[target#anchor]]`
+  supported. Unresolved wikilinks render with dotted-underline + tooltip.
+  Code-block contents preserved verbatim so regex literals like
+  `[[:alpha:]]` don't get parsed as wikilinks. URL state `?path=<rel>`
+  drives the open file; browser back/forward works.
+- **Edit**: in-pane textarea editor with Ctrl-S to save, Esc to discard.
+  Atomic write via temp + rename. YAML frontmatter validated on save
+  with the `yaml` package — invalid YAML returns 400 with the parser
+  message in an inline error.
+- **Create**: clicking an unresolved wikilink prompts for a target path
+  (defaults to current file's directory) and POSTs a stub with required
+  frontmatter.
+- **Graph**: Obsidian-style force-directed view (`?view=graph`) via
+  `react-force-graph-2d`. Nodes colored by top-level directory
+  (`native` rust, `cryptocracy` violet, `tools` emerald, `system` amber,
+  `writing` pink, `domains` blue, `music` cyan, `projects` red), sized
+  by inbound degree. Click a node to open the file in a 28rem right-pane
+  preview while the graph stays mounted. Browser-back collapses the
+  preview cleanly. Click-to-isolate per directory in the bottom-left
+  legend; orphans toggle; full-text filter.
+- **Inspector**: frontmatter as a definition list, tag chips, clickable
+  outbound link list, backlinks list with line-bounded snippets, orphan
+  badge when 0 backlinks.
+- **Search**: `GET /api/kb/search?q=<query>` with hybrid scoring across
+  stem (100/80/60), title (60/40/25), tag (50/20), body (10+) with a
+  centered 160-char snippet for body hits. Ctrl-P / Cmd-P opens a
+  quick-open palette anywhere in /kb with debounced search, arrow-key
+  nav, Enter to open. Tree sidebar header gets a clickable Ctrl-P pill
+  for non-keyboard users.
+- **Setup flow**: a missing or empty kb root surfaces a Welcome panel
+  inside `/kb` with a one-click scaffold of a starter `README.md`.
+- **Live updates**: WS `kb_changed` debounced 250ms; the viewer + tree
+  + graph + inspector all refetch on counter change. Disable with
+  `OMP_DECK_WATCH_KB=0`.
+- **Cross-platform**: CRLF-tolerant frontmatter parser, atomic-write
+  uses `rename` (single-drive assumption documented), wikilink
+  resolution normalizes path separators.
+
+### Maintenance gate (new feature)
+Ports the calibrated `maintenance-gate` pattern from
+[vincitamore/opus-extensions](https://github.com/vincitamore/misc/tree/main/opus-extensions)
+as a first-party omp SDK extension, plus the in-bridge wiring that makes
+it actually fire in deck sessions.
+
+- **The extension** (`starter-extensions/maintenance-gate/`): installed
+  to `~/.omp/agent/extensions/maintenance-gate/` on deck boot. Watches
+  `turn_end` events; when ~10+ turns have passed since the last capture
+  pass, synthesizes a follow-up user message containing a markdown
+  "Maintenance check" prompt with the OMP-native signal table:
+
+  | Signal | Action if present |
+  |--------|-------------------|
+  | Reusable insight or pattern | → `knowledge/<subfolder>/<topic>.md` |
+  | Project status changed | → update `context/current-state.md` |
+  | New task identified | → `tasks/<name>.md` |
+  | Question worth preserving | → `queries/<question>.md` |
+  | Feature idea / future project | → `inbox/ideas/<item>.md` |
+  | Decision needed | → `inbox/decisions/<item>.md` |
+  | Bug to investigate | → `inbox/investigations/<item>.md` |
+  | Quick unsorted capture | → `inbox/captures/<item>.md` |
+  | New capability learned | → create a skill |
+
+  Writing into any canonical capture path releases the check
+  automatically; stating the literal phrase "No maintenance needed"
+  also releases. Cadence + throttle constants are env-overridable
+  (`OMP_MAINTENANCE_GATE_TRIVIAL`, `_STALENESS`, `_FIRE_FLOOR_MS`,
+  `_ROOTS`).
+- **Structural org-root detection**: replaces the upstream's hardcoded
+  `documents/opus|materia` substring check with a sniff (`inbox/` +
+  `tasks/` + (`knowledge/` or `context/`) present). Walks up ancestors
+  so deeply-nested sessions still activate against the right org root.
+- **Bridge wiring**: `InProcessAgentBridge` now constructs the session's
+  `ExtensionRunner` and calls `initialize()` with 13 session-bound
+  action callbacks + 8 context-action callbacks. Mirrors the pattern in
+  `modes/acp/acp-agent.ts` and `task/executor.ts`. Without this, the
+  SDK loads extensions but their lifecycle handlers never fire. Now
+  works universally across deck, TUI, and ACP sessions.
+
+### Web polish
+- External links (`http://`, `https://`, `mailto:`) in any markdown
+  surface (chat, kb viewer, skill detail) open in a new tab with
+  `rel="noopener noreferrer"`. In-app wikilinks and relative paths
+  unchanged.
+- Mobile master/detail navigation pattern extended from SkillsView to
+  KbView — list visible by default at `< lg`, picking a row slides to
+  detail with a back arrow.
+- **Horizon** theme — third option in Settings → Appearance (pink-on-deep-
+  navy with mint + peach + cyan syntax bias). Ported from
+  [opus-extensions/omp-themes/horizon.json](https://github.com/vincitamore/misc/tree/main/opus-extensions/omp-themes).
+  Pre-paint script recognizes it so first paint never flashes.
+
+### Server polish
+- CRLF-tolerant YAML frontmatter parsing across kb and skill loaders —
+  fixes "Unexpected scalar at node end" errors on Windows-saved files.
+- All new endpoints debounce + cache aggressively; the watcher
+  invalidates per-source rather than wholesale.
+
+### Internal
+- New top-level dirs: `starter-skills/`, `starter-extensions/`,
+  `docs/proposals/`.
+- New web deps: `react-force-graph-2d` (graph view), `yaml` (server
+  frontmatter).
+- Protocol additions: `SkillSummary` extended; `KbTreeEntry`,
+  `KbFileResponse`, `KbWikilink`, `KbGraphNode/Edge/Response`,
+  `KbBacklink/BacklinksResponse`, `KbSearchResult/Response`,
+  `KbStatusResponse`, `KbInitResponse`, plus `kb_changed` /
+  `skills_changed` server frames.
+- New bundled starter installer pattern: `StarterExtensionsInstaller`
+  mirrors `StarterSkillsInstaller` (idempotent, opt-out via
+  `OMP_DECK_INSTALL_STARTER_EXTENSIONS=0`).
+
+## [0.1.0] — Initial public release
+
+First release. End-to-end verified against a live omp turn.
+
+### Chat
+- Multi-session sidebar with workspace filter.
+- Live streaming text, thinking blocks, tool-call lifecycle with per-tool
+  renderers (`read` / `write` / `edit` / `bash` / `search` / `lsp` / `task` /
+  `web_search` / `eval` / `todo_write` / `generate_image` / `browser` /
+  `ast_grep` / `ast_edit`).
+- Hashline-diff renderer for the `edit` tool.
+- Todos panel from `todo_reminder`.
+- Cost/usage rollup (input/output/cache/reasoning, USD).
+- Image paste / drag / attach with thumbnail strip and `[Image #N]` placeholder.
+- Compaction, retry, and TTSR indicators inline.
+- Slash command picker with four scopes — `deck` (kanban operations),
+  `builtin` (omp SDK), `user`, `project`.
+- Built-in slash command dispatch in-process (no model round-trip) for SDK
+  commands with text-mode handlers: `/context`, `/usage`, `/tools`, `/compact`,
+  `/rename`, `/dump`, `/memory *`, `/mcp *`, etc.
+- Deck-native slash commands: `/task add`, `/task list`, `/task done`,
+  `/task move`. Operate directly on the kanban; zero token cost.
+- `@filepath` mention autocomplete in the composer.
+- Copy buttons on every code block.
+- Context-window indicator with manual `/compact` popover.
+- Streaming caret, blink-on-idle.
+
+### Tasks (kanban)
+- Backlog / Active / Blocked / Done with drag-and-drop.
+- User-configurable columns with reorder + recolor.
+- Human-friendly display IDs (`T-1`, `T-2`, ...) via a monotonic sequence.
+- Promote-from-inbox flow.
+- Live WS broadcast — any mutation (UI, deck slash, agent REST) refetches all
+  open kanbans without polling.
+
+### Routines
+- Cron scheduler (`croner`) for `bash` / `prompt` / `script` actions.
+- Run history with stdout/stderr excerpts.
+- Manual fire-now.
+
+### Inbox
+- Quick-capture with kind taxonomy (email / ticket / idea / decision /
+  investigation / capture).
+- Promote-to-task one-click flow.
+
+### Settings
+- **Env** — masked secret list, replace-or-unset modal, atomic `.env` write
+  to `<dataDir>/.env`, append-only audit log, hot-apply for
+  `LOG_LEVEL` / `OMP_DECK_IDLE_TIMEOUT_MS` / `OMP_DECK_AUTO_START` /
+  `OMP_DECK_DEFAULT_CWD` / `OMP_DECK_WORKSPACES`, restart-required banner with
+  one-click restart.
+- **Messaging** — Telegram credential rows, bridge supervisor with Start /
+  Stop / Restart buttons, live logs panel, status pill (running / stopped /
+  crashed).
+- **Appearance** — Paper (warm cream) and Slate (dark) themes with swatch
+  previews, system-preference following, FOUC-free pre-paint applied before
+  React mounts. `data-theme` attribute on `<html>` swaps every Tailwind color
+  + font token via CSS custom properties.
+
+### Marketplace
+- Three-panel browser over the SDK's `MarketplaceManager`.
+- Suggested empty-state seeds with `anthropics/claude-plugins-official`.
+- Install / uninstall / refresh per plugin or per source.
+- Capability badges (`cmds` / `agents` / `hooks` / `mcp` / `lsp`).
+
+### Native model picker
+- Header label opens a modal listing every SDK model.
+- Available (369) / All (2587) toggle.
+- Provider grouping with the active model's provider floated to the top.
+- Auth gating — picks against an unauthed model surface the SDK error inline.
+
+### Messaging
+- Standalone Telegram bridge in `apps/bridges/telegram/`.
+- Long-poll, allowlist-gated, per-chat session map persisted to SQLite.
+- Image attachments downloaded and forwarded as omp `ImageAttachment`.
+- Debounced `editMessageText` to avoid Telegram rate-limits.
+- Supervised by the deck server — Start / Stop / Restart from the Settings UI.
+
+### First-run UX
+- Auto-start (`OMP_DECK_AUTO_START`) **disabled by default**. Opt in by
+  writing `~/.omp/agent/commands/start.md` and setting the env var.
+- Empty `tasks` table seeds a `T-1: Welcome to omp-deck` backlog task with
+  orientation pointers (nav rail, themes, deck slash commands, docs links).
+
+### Deployment
+- Loopback-only by default. Tailscale Serve, Docker, and SSH-tunnel patterns
+  documented in `docs/deployment.md`.
+- `POST /api/server/restart` graceful restart endpoint.
+
+### Architecture
+- Bun + Hono backend embedding `@oh-my-pi/pi-coding-agent`.
+- `AgentBridge` interface so a subprocess-per-session impl can drop in later.
+- WS event passthrough (`session_event`) with deck-side synthetic events for
+  context-usage, slash-command round-trips, and model swaps.
+- Dep-free `@omp-deck/protocol` package owns the wire types.
