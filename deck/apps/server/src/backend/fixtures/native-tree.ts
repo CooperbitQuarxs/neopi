@@ -1,8 +1,5 @@
 /**
- * Test fixture: a small committed git tree shaped like a NeoPi checkout, enough for
- * scripts/neopi-setup.ts and the backend probe to reach their native-addon checks.
- * `build:native` (scripts/bazel-natives.ts) writes a fake addon carrying the version sentinel
- * and regenerates the tracked bindings (index.js, index.d.ts), as the real host build does.
+ * Test fixture: a small committed NeoPi-shaped tree for backend native-addon checks.
  * No Rust is built.
  */
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
@@ -64,9 +61,6 @@ export function fakeAddon(label: string, format: "legacy" | "stamp" = "legacy", 
 	return `\0${identity}\0${label}\0`;
 }
 
-function bindingsJs(stamp: string): string {
-	return `import { loadNative } from "./loader-state.js";\nexport const bindings = loadNative();\n// generated: ${stamp}\n`;
-}
 
 export function fakeNeoPiTree(root: string, options: FakeTreeOptions = {}): string {
 	const variant = options.variant ?? "modern";
@@ -82,7 +76,7 @@ export function fakeNeoPiTree(root: string, options: FakeTreeOptions = {}): stri
 		JSON.stringify({
 			name: "fake-neopi",
 			private: true,
-			scripts: { "gen:tool-views": "echo tool-views generated", "build:native": "bun scripts/bazel-natives.ts" },
+			scripts: { "build:native": "bun scripts/bazel-natives.ts" },
 		}),
 	);
 	put(root, "packages/coding-agent/package.json", JSON.stringify({ name: "@oh-my-pi/pi-coding-agent" }));
@@ -112,20 +106,9 @@ export function nativeAddonStatus() {
 }
 `,
 	);
-	put(root, "packages/natives/native/index.js", bindingsJs("checked in"));
-	put(root, "packages/natives/native/index.d.ts", "// generated: checked in\n");
-	// Mirrors the real host build: it writes the addon and regenerates the tracked bindings.
-	put(
-		root,
-		"scripts/bazel-natives.ts",
-		`import * as path from "node:path";
-const native = path.join(import.meta.dir, "../packages/natives/native");
-const stamp = String(Date.now());
-await Bun.write(path.join(native, "${names[0]}"), ${JSON.stringify(fakeAddon("built", options.nativeVersionFormat))} + stamp);
-await Bun.write(path.join(native, "index.js"), ${JSON.stringify(bindingsJs("STAMP"))}.replace("STAMP", stamp));
-await Bun.write(path.join(native, "index.d.ts"), "// generated: " + stamp + "\\n");
-`,
-	);
+	put(root, "packages/natives/native/index.js", 'import { loadNative } from "./loader-state.js";\nexport const bindings = loadNative();\n');
+	put(root, "packages/natives/native/index.d.ts", "// generated bindings\n");
+	put(root, "scripts/bazel-natives.ts", "// native build driver\n");
 	put(root, "scripts/host-detect.ts", "export const avx2 = true;\n");
 	put(root, "scripts/stamp-native-version.ts", "// post-link version stamp\n");
 	put(root, "BUILD.bazel", "# natives targets\n");

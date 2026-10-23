@@ -62,7 +62,7 @@ export const settingsApi = {
 	backendStatus(): Promise<BackendStatusResponse> {
 		return req<BackendStatusResponse>("/backend");
 	},
-	probeBackend(id: string): Promise<{ ok: boolean; reason?: string; pinned?: boolean; identity?: { version: string | null; commit: string | null } }> {
+	probeBackend(id: string): Promise<{ ok: boolean; reason?: string; identity?: { version: string | null; commit: string | null } }> {
 		return req("/backend/probe", { method: "POST", body: JSON.stringify({ id }) });
 	},
 	switchBackend(id: string, force = false): Promise<BackendSwitchResponse> {

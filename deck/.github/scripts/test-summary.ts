@@ -1,7 +1,7 @@
 import { appendFileSync } from "node:fs";
 import { escapeAnnotation, markdownText } from "./typecheck.ts";
 
-export function summarizeTests(output: string, outcome: string) {
+export function summarizeTests(output: string, outcome: string, informational = false) {
 	const clean = output.replace(/\x1b\[[0-9;]*m/g, "");
 	const counts: Record<string, number> = {};
 	for (const match of clean.matchAll(/^\s*(\d+)\s+(pass|fail|skip|errors?)\b.*$/gm)) {
@@ -11,7 +11,9 @@ export function summarizeTests(output: string, outcome: string) {
 	const failed = outcome === "failure" || (counts.fail ?? 0) > 0 || (counts.error ?? 0) > 0;
 	let markdown = `## Tests: ${failed ? "FAILED" : outcome.toUpperCase()}\n\n`;
 	markdown += `Outcome: ${markdownText(outcome)}. Passed: ${counts.pass ?? "unavailable"}. Failed: ${counts.fail ?? "unavailable"}. Skipped: ${counts.skip ?? 0}. Errors: ${counts.error ?? 0}.\n\n`;
-	if (failed) markdown += "Nightly test failures are informational, not a passing test result. PRs and stable builds still fail on test errors.\n\n";
+	if (failed) markdown += informational
+		? "Test failures are informational on every deck CI event, not a passing test result.\n\n"
+		: "Nightly test failures are informational, not a passing test result. PRs and stable builds still fail on test errors.\n\n";
 	for (const name of names) markdown += `- ${markdownText(name)}\n`;
 	if (failed && names.length === 0) markdown += "No failed test names were emitted. Inspect the test log for setup, import or runner errors.\n";
 	return { counts, names, failed, markdown };

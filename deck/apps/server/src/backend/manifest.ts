@@ -10,7 +10,7 @@
  *
  * Modules are package specifiers, resolved against the backend tree's own
  * `node_modules` (so subpaths such as `pi-coding-agent/internal-urls` are
- * allowed, per plan C2). The type of each module comes from the pinned tree via
+ * allowed, per plan C2). Module types come from the in-tree workspace packages via
  * `typeof import(...)`; `op()` rejects an export name the module doesn't have
  * at compile time. `files` lists tree-relative files a feature needs that are
  * not imported (the CLI a routine agent step spawns).
@@ -410,7 +410,7 @@ export type OptionalFeatureName = {
 
 type ExportValue<R> = R extends ExportRef<infer M, infer E> ? (E extends keyof ModuleTypes[M] ? ModuleTypes[M][E] : never) : never;
 
-/** The loaded values of one feature, typed from the pinned tree. */
+/** The loaded values of one feature, typed from the in-tree workspace. */
 export type FeatureExports<F extends FeatureName> = {
 	-readonly [K in keyof Manifest[F]["exports"]]: ExportValue<Manifest[F]["exports"][K]>;
 };

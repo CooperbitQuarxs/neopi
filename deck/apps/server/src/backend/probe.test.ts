@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { commitAll, fakeAddon, fakeNeoPiTree, FAKE_PLATFORM, FAKE_VERSION, tempDir, type FakeTreeOptions } from "../../../../scripts/fake-neopi-tree.ts";
+import { commitAll, fakeAddon, fakeNeoPiTree, FAKE_PLATFORM, FAKE_VERSION, tempDir, type FakeTreeOptions } from "./fixtures/native-tree.ts";
 import { spawnOwnedSync } from "../owned-process.ts";
 import { GENERATED_BINDINGS, NATIVE_INPUTS, NATIVE_RECORD, nativeInputsFingerprint, readNativeRecord, sha256, writeNativeRecord } from "./native-addon.ts";
 import { preflight } from "./probe.ts";
@@ -13,7 +13,7 @@ afterEach(() => {
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-/** A fake tree with an addon in place and a record matching it, as neopi-setup leaves it. */
+/** A fake tree with an addon in place and a matching provenance record. */
 function recordedTree(options?: FakeTreeOptions): string {
 	const root = tempDir("npi-deck-probe-tree-");
 	roots.push(root);

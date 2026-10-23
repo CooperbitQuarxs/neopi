@@ -19,7 +19,7 @@ observable contract requiring a core change in the PR or design document.
 Test through the consumer, reuse shared utilities, and keep unrelated upstream
 refactoring out of the change.
 
-Deck compatibility boundaries include the pinned NeoPi SDK (`neopi.pin`),
+Deck compatibility boundaries include the in-tree NeoPi SDK and runtime backend contract,
 multi-session chat and streaming, canvas/cards and front matter, approvals,
 worktree routing, messaging bridges, and launcher/setup behavior. Preserve
 `@npi-deck/*`, `NPI_DECK_*`, installed paths, `npi-deck`, and `npi-deck.service`;

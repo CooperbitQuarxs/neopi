@@ -60,23 +60,23 @@ NPI deck is the cockpit that holds all of that. The chat surface stays at parity
 
 ## Quickstart
 
-NPI deck runs one way: from a git checkout, with a NeoPi source tree prepared by `scripts/neopi-setup.ts` and registered in `~/.npi-deck/config.yml`, started by the `npi-deck` launcher. There is no npm package, Docker image, or Windows launcher, and the deck does not check for updates.
-
-**Prerequisites:** [Bun](https://bun.sh) ≥ 1.3.14 and Git on your `PATH`; a NeoPi checkout that contains the commit in `neopi.pin`; a prebuilt `pi_natives` addon matching that commit's `packages/natives` version (or a Rust toolchain for `--build-native`); and a systemd user manager (or run the launcher with `--no-systemd`). See [docs/install.md](./docs/install.md#prerequisites).
+NPI deck lives under `deck/` in the NeoPi repository. Install dependencies at
+the repository root, stage a matching native addon, and select this checkout
+as the runtime backend:
 
 ```sh
-git clone https://github.com/PsychedelicShayna/neodeck.git
-cd neodeck
-bun install --frozen-lockfile --ignore-scripts
-# prepare the pinned NeoPi tree and register it in ~/.npi-deck/config.yml
-bun scripts/neopi-setup.ts --source /path/to/neopi --native-dir /path/to/prebuilt-natives
-#   no prebuilt addon? replace --native-dir … with --build-native (cold Rust build)
-mkdir -p ~/.local/bin
-ln -s "$PWD/bin/npi-deck" ~/.local/bin/npi-deck   # once
-npi-deck
+git clone https://github.com/PsychedelicShayna/neopi.git
+cd neopi
+bun install --frozen-lockfile
+bun deck/scripts/native-addon.ts --native-dir /path/to/matching-neopi-checkout
+# Or after ./build.sh: bun deck/scripts/native-addon.ts --built
+NPI_DECK_BACKEND="$PWD" bun --cwd=deck run dev
 ```
 
-Without flags, `--source` defaults to `~/source/github/PsychedelicShayna/neopi` (env `NPI_DECK_NEOPI_SOURCE`) and `--native-dir` to `~/source/github/PsychedelicShayna/neopi-sync-v18.3.2` (env `NPI_DECK_NATIVE_DIRS`), the maintainer's layout; pass both unless your checkouts live there, or export `NPI_DECK_NEOPI_SOURCE` and `NPI_DECK_NATIVE_DIRS` once (e.g. in your shell profile) so this run and every later one (pin changes, upgrades, rollbacks) finds them without flags. `neopi-setup` adds a worktree of the commit in `neopi.pin` under `~/.npi-deck/neopi/`, links the matching native addon into it, and records it under `backends` in `~/.npi-deck/config.yml`, making it `activeBackend` if none is set; see [the backend tree](./docs/install.md#neopi-backend-tree) and [config.yml](./docs/install.md#configyml). `npi-deck` builds the web bundle if needed and serves the deck on <http://127.0.0.1:1701> as the systemd user service `npi-deck` in `neopi-deck.slice`; Ctrl-C stops it, and anything the deck spawned dies with it. See [the launcher](./docs/install.md#the-npi-deck-launcher). For working on the deck itself, `bun run dev` starts an unsupervised server on :1701 and the Vite app with hot reload on <http://127.0.0.1:5173>; see [CONTRIBUTING.md](./CONTRIBUTING.md).
+For a supervised server, build with `bun --cwd=deck/apps/web run build`, then
+run `NPI_DECK_BACKEND="$PWD" deck/bin/npi-deck`. Existing state, services and
+backend selection are untouched until you switch them yourself.
+See [the install guide](./docs/install.md) for prerequisites and backend checks.
 
 On first run, the deck creates `~/.omp/agent/` from scratch; its own state lives in `~/.npi-deck/` (override with `NPI_DECK_HOME`). If you already use `omp` in a terminal on this machine, your existing `~/.omp/agent` is picked up automatically — no re-auth.
 
@@ -87,76 +87,17 @@ On first run, the deck creates `~/.omp/agent/` from scratch; its own state lives
 
 That's it — pick a model in the chat surface and send a prompt.
 
-Other env knobs: `NPI_DECK_PORT`, `NPI_DECK_HOST`, `NPI_DECK_DB_PATH`, `NPI_DECK_UPLOADS_ROOT` — see [docs/configuration.md](./docs/configuration.md). For the full step-by-step (prerequisites, `neopi-setup` options, `config.yml`, the launcher, uninstalling), see [docs/install.md](./docs/install.md).
+Other environment settings include `NPI_DECK_PORT`, `NPI_DECK_HOST`, `NPI_DECK_DB_PATH` and `NPI_DECK_UPLOADS_ROOT`. See [configuration](./docs/configuration.md) and [installation](./docs/install.md).
 
 ## Releases
 
-The existing CI workflow publishes a **stable GitHub release on each push to
-`main`**, and a **new prerelease on each push to `nightly`**. Deck-owned typecheck
-errors and failed compiler/guard invocations fail CI and prevent publication.
-Diagnostics inside the pinned NeoPi tree are printed and reported separately
-as informational. Nightly tests remain informational, with failure counts and
-names in each platform's job summary and warning annotations. Tests also run
-after a failed typecheck unless the job is cancelled; that earlier failure
-still fails the job and prevents publication. Workspace typechecks run serially
-with a 4 GiB Node heap limit for the SDK-inclusive Telegram program. A successful
-Ubuntu typecheck, web build and package can publish despite those test failures.
-Stable releases, including manual dispatches, require the Ubuntu tests to pass
-too. Release notes report Ubuntu outcomes and link the CI run. Other matrix
-platforms continue independently; a PR never publishes. Tags derive from the root package version:
-stable uses `v<version>+build.<run_id>.<run_attempt>` (or appends `.build.…`
-when the version already has build metadata), while nightly uses
-`v<version-without-build-metadata>-nightly.<shortsha>.<run_id>.<run_attempt>`.
-The current `-dev` package suffix does not turn a stable-channel GitHub release
-into a prerelease. Stable releases become GitHub's latest; nightlies do not.
+NeoDeck follows NeoPi's repository and release process. Its Ubuntu CI job
+typechecks all four deck workspaces and builds the web application. Compiler
+and web-build failures fail the job. Deck tests report counts and failing names
+without blocking it. Native addons come from NeoPi's existing CI artifact.
 
-**Retention is append-only:** all releases, assets and tags remain available.
-Every nightly push and full workflow rerun has a unique tag, even for the same
-commit. Nothing prunes, replaces or overwrites an earlier release or tag.
-
-To publish a chosen branch, tag or commit as stable, use **Actions → CI → Run
-workflow**, enter its `ref` (default `main`), or run:
-
-```sh
-gh workflow run ci.yml --repo PsychedelicShayna/neodeck --ref main -f ref=main
-# For example, publish nightly's selected commit as stable:
-gh workflow run ci.yml --repo PsychedelicShayna/neodeck --ref main -f ref=nightly
-```
-
-`--ref main` selects the workflow definition; `-f ref=…` selects the source
-resolved once to an immutable commit for every build and the release tag.
-A dispatch is always stable, even when the source ref is `nightly`.
-Until this workflow revision is promoted to `main`, the new form may not be
-visible on the default branch; use `--ref nightly` with the same `-f ref=…`
-after the PR lands there. Publishing needs the job's `contents: write`
-permission to be allowed by repository/organization policy; no extra secret
-or package-registry setup is required. Publishing never installs or restarts
-the local runtime.
-
-### Release archives
-
-`neodeck-checkout.tar.gz` contains tracked sources plus `apps/web/dist` from
-the same Ubuntu CI build, rooted at `neodeck/`; `SHA256SUMS` covers that archive.
-It is **not a standalone binary or installer** and does not bundle dependencies,
-NeoPi or its native addon. GitHub's automatic source archives do not include
-the built web bundle. Keep the [checkout quickstart](#quickstart) and
-[installation prerequisites](docs/install.md#prerequisites): clone the
-repository, check out the release tag, and optionally overlay its matching
-archive before installing dependencies and preparing NeoPi:
-
-```sh
-tag='COPY_THE_RELEASE_TAG'
-git clone https://github.com/PsychedelicShayna/neodeck.git
-cd neodeck
-git checkout --detach "$tag"
-mkdir release-download
-gh release download "$tag" --repo PsychedelicShayna/neodeck \
-  --pattern neodeck-checkout.tar.gz --pattern SHA256SUMS --dir release-download
-(cd release-download && sha256sum -c SHA256SUMS)
-tar -xzf release-download/neodeck-checkout.tar.gz --strip-components=1
-bun install --frozen-lockfile --ignore-scripts
-# Continue the quickstart's neopi-setup and launcher steps.
-```
+Old standalone checkout archives describe the pre-subtree layout and are not
+an installation path for this tree.
 
 ## How it compares
 
@@ -187,7 +128,7 @@ The short version: **Claude Code** is the polished vendor experience for Claude.
 
 ## Docs
 
-- [Install](./docs/install.md) — `neopi-setup`, `config.yml`, the `npi-deck` launcher, uninstall.
+- [Install](./docs/install.md) covers native addons, `config.yml` and the `npi-deck` launcher.
 - [Configuration](./docs/configuration.md) — full env reference + restart semantics.
 - [Deployment](./docs/deployment.md) — Tailscale, SSH-tunnel, hardening checklist.
 - [Slash commands](./docs/slash-commands.md) — deck `/task` + `/plan`, SDK builtins, user/project markdown commands.

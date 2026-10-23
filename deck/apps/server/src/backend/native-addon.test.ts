@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { fakeAddon, fakeNeoPiTree, FAKE_PLATFORM, FAKE_VERSION, tempDir, type FakeTreeOptions } from "../../../../scripts/fake-neopi-tree.ts";
+import { fakeAddon, fakeNeoPiTree, FAKE_PLATFORM, FAKE_VERSION, tempDir, type FakeTreeOptions } from "./fixtures/native-tree.ts";
 import { containsNativeVersion, loadedAddonProblem, nativeInputsFingerprint, sha256, type NativeRecord } from "./native-addon.ts";
 
 const NATIVE = "packages/natives/native";
@@ -75,7 +75,7 @@ describe.skipIf(process.platform === "win32")("native input fingerprint", () => 
 		const before = nativeInputsFingerprint(tree);
 		edit(tree, `${NATIVE}/index.js`, text => `${text}// regenerated\n`);
 		edit(tree, `${NATIVE}/index.d.ts`, text => `${text}// regenerated\n`);
-		edit(tree, "package.json", text => text.replace("echo tool-views generated", "echo other"));
+		edit(tree, "package.json", text => text.replace("fake-neopi", "other-name"));
 		expect(nativeInputsFingerprint(tree)).toBe(before);
 	});
 });

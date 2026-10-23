@@ -233,7 +233,7 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 		return {
 			workerGeneration,
 			running: backend ? { id: selection!.id, path: backend.identity.path, source: selection!.source, version: backend.identity.version, commit: backend.identity.commit } : null,
-			validated: validated ? { id: validated.id, ...validated.result.identity, pinned: validated.result.pinned } : null,
+			validated: validated ? { id: validated.id, ...validated.result.identity } : null,
 			desired,
 			pinned: Boolean(process.env.NPI_DECK_BACKEND?.trim()),
 			...(backendReason || configReason ? { reason: backendReason ?? configReason } : {}),

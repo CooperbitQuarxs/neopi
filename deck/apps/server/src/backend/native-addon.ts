@@ -3,8 +3,8 @@
  *
  * The release identity (current version stamp or legacy sentinel) is shared by every commit of a release, so it
  * cannot tell a stale addon from a matching one. A fingerprint of the native build inputs
- * can: scripts/neopi-setup.ts records, per tree, which addon bytes were built (or reused)
- * for which inputs, platform and CPU variant, and the backend probe re-checks that record.
+ * can: deck/scripts/native-addon.ts records which addon bytes were built or reused
+ * for which inputs, platform and CPU variant. The backend probe re-checks that record.
  *
  * The record is local bookkeeping, not authentication: anyone who can write the tree can
  * write a record. It catches stale and swapped addons, not forged records.
@@ -54,7 +54,7 @@ export interface NativeRecord {
 	sha256: string;
 	packageVersion: string;
 	/**
-	 * `built`: neopi-setup ran build:native on those inputs.
+	 * `built`: a native build or current-tree CI artifact was explicitly recorded.
 	 * `derived`: an unrecorded addon inside a checkout whose inputs were fingerprinted; the
 	 * build itself was not observed.
 	 */
@@ -210,7 +210,7 @@ export function addonProvenance(
 	const recorded = readNativeRecord(owner);
 	if (recorded?.sha256 === bytesSha) return { record: recorded, evidence: "donor-record" };
 	if (!allowDerived) {
-		return `${owner} has no record for these bytes; the addon in this tree changed after it was recorded, so only a recorded build or --build-native can replace it`;
+		return `${owner} has no record for these bytes; the addon in this tree changed after it was recorded, so only a recorded donor or a freshly built addon recorded with --built can replace it`;
 	}
 	const target = addonTarget(path.basename(real));
 	if (!target) return `cannot tell which platform ${real} was built for from its filename`;

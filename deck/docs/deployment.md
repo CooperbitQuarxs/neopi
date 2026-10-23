@@ -5,10 +5,10 @@ loopback-only with network access gated by something else — Tailscale, an SSH
 tunnel, or a reverse proxy with its own auth. Do not bind it to a public
 interface without one of these.
 
-Every pattern here runs the deck the one supported way: a checkout with a
-backend tree prepared by `scripts/neopi-setup.ts` and registered in
-`~/.npi-deck/config.yml`, started by the `npi-deck` launcher. See
-[install.md](./install.md). There is no npm package or container image.
+Deploy from a NeoPi checkout with `deck/` and a recorded native addon.
+Select the repository root with `NPI_DECK_BACKEND` or register it in
+`~/.npi-deck/config.yml`, then start the `npi-deck` launcher.
+See [install.md](./install.md). There is no npm package or container image.
 
 ## Patterns
 
@@ -97,16 +97,14 @@ Before exposing the deck on a network anyone else can reach:
 ## Updating
 
 ```sh
-cd /path/to/npi-deck
+cd /path/to/neopi
 git pull
-bun install --frozen-lockfile --ignore-scripts
-# prepares and registers the tree if neopi.pin moved; the flags can be dropped
-# once NPI_DECK_NEOPI_SOURCE and NPI_DECK_NATIVE_DIRS are exported (install.md)
-bun scripts/neopi-setup.ts --source /path/to/neopi --native-dir /path/to/prebuilt-natives
+bun install --frozen-lockfile
+bun deck/scripts/native-addon.ts --native-dir /path/to/matching-neopi-checkout
+# Or after ./build.sh: bun deck/scripts/native-addon.ts --built
 ```
 
-Then stop the launcher (Ctrl-C) and start `npi-deck` again; it rebuilds the
-web bundle when its sources changed. `neopi-setup` registers a new tree in
-`config.yml` but leaves `activeBackend` on the old one, so after a pin change
-select the new tree in **Settings → Backend**. See
-[upgrading.md](./upgrading.md) for per-version notes and rolling back.
+Then stop and restart the launcher from this checkout with
+`NPI_DECK_BACKEND="$PWD" deck/bin/npi-deck`. It rebuilds changed web sources.
+Switching an existing deployment remains an explicit operator action.
+See [upgrading.md](./upgrading.md) for state compatibility and rollback.

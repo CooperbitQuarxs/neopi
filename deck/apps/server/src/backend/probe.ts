@@ -18,15 +18,13 @@ import {
 } from "./native-addon.ts";
 import type { FeatureName } from "./manifest.ts";
 export type ProbeResult =
-	| { ok: true; pinned: boolean; identity: BackendIdentity; features: Record<FeatureName, FeatureStatus> }
-	| { ok: false; pinned: false; reason: string };
-
-const pin = readFileSync(path.resolve(import.meta.dir, "../../../../neopi.pin"), "utf8").trim();
+	| { ok: true; identity: BackendIdentity; features: Record<FeatureName, FeatureStatus> }
+	| { ok: false; reason: string };
 
 async function inspect(tree: string): Promise<ProbeResult> {
 	const pkg = path.join(tree, "packages/coding-agent/package.json");
 	if (!existsSync(pkg)) throw new Error("not a NeoPi source tree: packages/coding-agent/package.json missing");
-	if (!existsSync(path.join(tree, "node_modules/@oh-my-pi/pi-coding-agent"))) throw new Error("tree not prepared: node_modules missing; run scripts/neopi-setup.ts");
+	if (!existsSync(path.join(tree, "node_modules/@oh-my-pi/pi-coding-agent"))) throw new Error("tree not prepared: node_modules missing; run bun install at the repository root");
 	const engine = bunEngineProblem(tree);
 	if (engine) throw new Error(engine);
 	const packageVersion = (JSON.parse(readFileSync(path.join(tree, "packages/natives/package.json"), "utf8")) as { version: string }).version;
@@ -40,7 +38,7 @@ async function inspect(tree: string): Promise<ProbeResult> {
 	if (!candidate) throw new Error(`tree not prepared: native addon missing (need release ${packageVersion})`);
 	const bytes = readFileSync(candidate);
 	if (!containsNativeVersion(bytes, packageVersion)) throw new Error(`native addon ${candidate} lacks release ${packageVersion} stamp or legacy sentinel`);
-	const fix = `re-run scripts/neopi-setup.ts --path ${tree}`;
+	const fix = `run bun deck/scripts/native-addon.ts from ${tree}; after a fresh native build use --built`;
 	const record = readNativeRecord(tree);
 	if (!record) throw new Error(`native addon ${candidate} has no fingerprint record (${NATIVE_RECORD}); ${fix}`);
 	const inputs = nativeInputsFingerprint(tree);
@@ -62,15 +60,13 @@ async function inspect(tree: string): Promise<ProbeResult> {
 	// The loader falls back through its candidates; check the file it actually loaded.
 	const loaded = await loadedAddonProblem(tree, record, { file: candidate, sha256: candidateSha });
 	if (loaded) throw new Error(`native addon does not match this tree: ${loaded}; ${fix}`);
-	let dirty: boolean | null = null;
 	if (features["build-identity"].available) {
 		const info = values.get("build-identity")?.BUILD_INFO as { version?: unknown; gitSha?: unknown; dirty?: unknown } | undefined;
 		if (info?.gitSha !== commit || info.version !== values.get("core")?.VERSION) {
 			throw new Error(`NeoPi BUILD_INFO disagrees with source tree ${commit}: ${JSON.stringify(info)}`);
 		}
-		dirty = info.dirty === true ? true : info.dirty === false ? false : null;
 	}
-	return { ok: true, pinned: commit === pin && (!features["build-identity"].available || dirty === false), identity: { path: tree, commit, version: typeof values.get("core")?.VERSION === "string" ? values.get("core")!.VERSION as string : null }, features };
+	return { ok: true, identity: { path: tree, commit, version: typeof values.get("core")?.VERSION === "string" ? values.get("core")!.VERSION as string : null }, features };
 }
 
 export async function preflight(tree: string): Promise<ProbeResult> {
@@ -93,7 +89,7 @@ export async function preflight(tree: string): Promise<ProbeResult> {
 		const timer = setTimeout(() => { void terminateOwned(child); }, 25_000);
 		try {
 			const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-			if (code !== 0) return { ok: false, pinned: false, reason: stderr.trim() || stdout.trim() || `probe exited ${code}` };
+			if (code !== 0) return { ok: false, reason: stderr.trim() || stdout.trim() || `probe exited ${code}` };
 			return JSON.parse(stdout) as ProbeResult;
 		} finally { clearTimeout(timer); }
 	} finally { rmSync(root, { recursive: true, force: true }); }

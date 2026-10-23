@@ -460,7 +460,7 @@ export interface BackendStatusResponse {
 	workerGeneration: string;
 	running: { id: string | null; path: string; source: "env" | "config"; version: string | null; commit: string | null } | null;
 	desired: string | null;
-	validated: { id: string | null; path: string; commit: string | null; version: string | null; pinned: boolean } | null;
+	validated: { id: string | null; path: string; commit: string | null; version: string | null } | null;
 	pinned: boolean;
 	reason?: string;
 	backends: Array<{ id: string; kind: "source" | "gateway"; path: string }>;

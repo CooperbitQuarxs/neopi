@@ -525,10 +525,10 @@ Chat is fully store-driven because it needs cross-session state.
 
 ## Where omp lives
 
-The deck loads NeoPi (`@oh-my-pi/pi-coding-agent` and its sibling packages)
-at runtime from the source tree named by `activeBackend` in
-`~/.npi-deck/config.yml`, pinned in `neopi.pin`; it is not a package
-dependency. The deck reads from:
+The deck typechecks against NeoPi's workspace packages in the same repository.
+At runtime it loads the source tree selected by `NPI_DECK_BACKEND` or
+`activeBackend` in `~/.npi-deck/config.yml`. Point that selection at the repository
+root to run the in-tree NeoPi. The deck reads from:
 
 - NeoPi's agent dir (`getAgentDir()`, default `~/.omp/agent/`; `PI_CODING_AGENT_DIR` overrides) — sessions JSONL, auth.db,
   marketplaces.json, installed_plugins.json.

@@ -17,17 +17,16 @@ How to update your install, what changed, what might break, and how to roll back
 npi-deck never auto-updates, never checks for updates, and never replaces user-edited files. Moving legacy omp-deck state (`~/.omp-deck`, `~/.config/omp-deck`) into `~/.npi-deck` is opt-in: `bun scripts/migrate-omp-deck.ts` only reports what it would do until you pass `--apply`. SQLite schema migrations are different: they run automatically on the first boot of a newer deck (see below). Upgrades are an explicit `git pull` you run in your checkout, followed by a launcher restart. There is no npm package, Docker image, or Windows launcher.
 
 ```sh
-cd /path/to/your/npi-deck/checkout
+cd /path/to/neopi
 git pull
-bun install --frozen-lockfile --ignore-scripts
-# prepares and registers the NeoPi tree if neopi.pin moved; the flags can be
-# dropped once NPI_DECK_NEOPI_SOURCE and NPI_DECK_NATIVE_DIRS are exported
-bun scripts/neopi-setup.ts --source /path/to/neopi --native-dir /path/to/prebuilt-natives
+bun install --frozen-lockfile
+bun deck/scripts/native-addon.ts --native-dir /path/to/matching-neopi-checkout
+# Or after ./build.sh: bun deck/scripts/native-addon.ts --built
 # stop the running launcher (Ctrl-C), then:
-npi-deck
+NPI_DECK_BACKEND="$PWD" deck/bin/npi-deck
 ```
 
-The `bun install` step is important after pulling — workspace lockfile changes won't apply without it. `neopi-setup` needs the same NeoPi checkout and addon directory you installed with; export `NPI_DECK_NEOPI_SOURCE` and `NPI_DECK_NATIVE_DIRS` once (see [install.md](./install.md#installing-npi-deck)) so every later run finds them without flags. Without either, it falls back to the maintainer's paths under `~/source/github/PsychedelicShayna/`. Re-running `scripts/neopi-setup.ts` is safe. It registers a newly pinned tree in `~/.npi-deck/config.yml` but does not make it `activeBackend`; switch to it in **Settings → Backend**. The launcher rebuilds the web bundle when its sources changed. If you're skipping a major version, also run a `bun run --filter '@npi-deck/*' typecheck` once to catch any local divergence before booting.
+Install at the NeoPi repository root so the shared lockfile governs every workspace. Restage the native addon when its inputs change. The launcher rebuilds changed web sources. Existing deck data and backend configuration are not moved automatically; see [install.md](./install.md).
 
 The deck:
 
@@ -54,7 +53,7 @@ Unreleased. npi-deck is a hard fork of omp-deck and drops every upstream distrib
 
 - **No npm package.** `omp-deck` from npm, its `omp-deck` CLI shim and its in-app "update available" pill are gone. Remove the global `omp-deck` package with the package manager you installed it with, then install from a checkout as in [install.md](./install.md).
 - **No Docker image and no Windows launcher.** `Dockerfile`, `docker-compose.yml`, `Start-OMP-Deck.cmd` and the `scripts/*.ps1` helpers were deleted. The `npi-deck` launcher (systemd user service, or `--no-systemd`) is the only supported way to run the deck.
-- **NeoPi comes from a source tree**, prepared by `bun scripts/neopi-setup.ts` and registered in `~/.npi-deck/config.yml`; the deck no longer depends on `@oh-my-pi/*` packages.
+- **NeoPi and the deck share a checkout.** The `deck/` subtree uses root workspace packages and the root lockfile. Runtime selection still uses `NPI_DECK_BACKEND` or `config.yml`. Native staging is separate from selecting a backend.
 - **New data dir and env names.** Deck state lives in `~/.npi-deck`, and every `OMP_DECK_*` variable is now `NPI_DECK_*`. Old `~/.omp-deck` data is not read; `bun scripts/migrate-omp-deck.ts` copies it over, renaming the env keys, when you pass `--apply` (without it, the script is a dry run). Stop the deck before applying. The script leaves the old dirs in place and never overwrites deck state (a database or its WAL, uploads, `.env`, …) in `~/.npi-deck`: files byte-identical to the migrated copy are skipped, so an interrupted run can be retried, and anything else makes `--apply` refuse. `--force` moves the differing files into a new `~/.npi-deck/.omp-deck-migration-replaced/<timestamp>-<random>/` directory and installs the legacy copy in their place; files the migration would not write stay where they are. Once a migration has completed, a plain `--apply` rerun is refused, and `--apply --force` re-checks the deck home against the legacy source, changing nothing when they already match. A deck home that reaches the legacy dirs through a symlink, or contains them, is refused, and no file is written through a symlinked directory inside the deck home.
 
 ---
@@ -103,12 +102,12 @@ If a new version breaks something for you, downgrade to the previous one and fil
 ```sh
 git checkout <previous-commit-or-tag>
 bun install --frozen-lockfile --ignore-scripts
-bun scripts/neopi-setup.ts --source /path/to/neopi --native-dir /path/to/prebuilt-natives   # or no flags, with the env vars exported
+bun deck/scripts/native-addon.ts --native-dir /path/to/matching-neopi-checkout
 # stop the running launcher (Ctrl-C), then:
-npi-deck
+NPI_DECK_BACKEND="$PWD" deck/bin/npi-deck
 ```
 
-If the older checkout pins a different NeoPi commit, `neopi-setup` registers (or re-registers) that tree; select it in **Settings → Backend**.
+When rolling back to a checkout before the subtree move, follow that checkout's own install guide. Do not remove its existing backend worktrees or configuration.
 
 **SQLite migrations are forward-only.** Rolling back the checkout doesn't roll back the schema. In practice this hasn't caused user-visible problems because every migration we ship is additive (adding columns or tables, never removing or renaming), so an older deck just ignores the newer fields. If you're worried, snapshot `~/.npi-deck/deck.db` before upgrading.
 

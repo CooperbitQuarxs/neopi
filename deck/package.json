@@ -10,11 +10,6 @@
 	"author": "Bryan Bartley",
 	"license": "MIT",
 	"type": "module",
-	"workspaces": [
-		"apps/*",
-		"apps/bridges/*",
-		"packages/*"
-	],
 	"scripts": {
 		"dev": "bun run --filter '@npi-deck/server' --filter '@npi-deck/web' dev",
 		"dev:server": "bun run --filter '@npi-deck/server' dev",

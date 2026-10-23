@@ -226,8 +226,8 @@ const reasoningShapes: Array<[string, AssistantMsg]> = (() => {
 		["Readable thinking — Anthropic, signed", {
 			role: "assistant", provider: "anthropic", model: "claude-opus-5-5", stopReason: "stop", usage: reasoningUsage(),
 			content: [
-				{ type: "thinking", thinking: "**Checking the pin**\n\nThe backend tree matches neopi.pin, so the contract run is valid.", thinkingSignature: "EqQBCkYIBxgCKkBpreviewsignature" },
-				{ type: "text", text: "The pin matches." },
+				{ type: "thinking", thinking: "**Checking the backend**\n\nThe selected source tree passes the runtime contract.", thinkingSignature: "EqQBCkYIBxgCKkBpreviewsignature" },
+				{ type: "text", text: "The backend contract passes." },
 			],
 		}],
 		["Encrypted, no summary — OpenAI Codex (GPT-6 Sol) live", {

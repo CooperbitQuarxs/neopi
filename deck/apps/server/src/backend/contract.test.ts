@@ -1,25 +1,23 @@
 /**
- * Runs the backend contract fixture against the pinned NeoPi tree (or an
- * explicit NPI_DECK_BACKEND override). The fixture isolates itself in child
+ * Runs the backend contract fixture against the in-tree NeoPi backend or an
+ * explicit NPI_DECK_BACKEND override. The fixture isolates itself in child
  * processes, so importing the tree never touches this test process.
  */
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
 import { expect, test } from "bun:test";
 
-import { listBackends, resolveBackendSelection } from "./runtime.ts";
+import * as path from "node:path";
+import { resolveBackendSelection } from "./runtime.ts";
 
-function fixtureBackend(): string | undefined {
-	if (process.env.NPI_DECK_BACKEND) return resolveBackendSelection()?.path;
-	const pin = readFileSync(path.resolve(import.meta.dir, "../../../../neopi.pin"), "utf8").trim();
-	try { return listBackends().find(entry => entry.id === pin.slice(0, 10))?.path; }
-	catch { return undefined; }
+function fixtureBackend(): string {
+	return process.env.NPI_DECK_BACKEND
+		? resolveBackendSelection()!.path
+		: path.resolve(import.meta.dir, "../../../../../..");
 }
 
 const backendPath = fixtureBackend();
 
 test.skipIf(!backendPath)(
-	"every manifest operation works against the pinned NeoPi tree",
+	"every manifest operation works against the selected NeoPi tree",
 	() => {
 		const proc = Bun.spawnSync([process.execPath, `${import.meta.dir}/contract.ts`, "--json"], {
 			stdout: "pipe",

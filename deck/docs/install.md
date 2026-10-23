@@ -3,43 +3,26 @@
 npi-deck is the web cockpit for NeoPi, a fork of
 [`oh-my-pi`](https://github.com/can1357/oh-my-pi) (`omp`).
 
-There is one supported way to install and run it: a git checkout of the deck,
-a NeoPi source tree prepared by `scripts/neopi-setup.ts` and registered in
-`~/.npi-deck/config.yml`, and the `npi-deck` launcher. There is no npm
-package, Docker image, or Windows launcher, and the deck does not check for or
-install updates.
+NeoDeck lives in the NeoPi repository under `deck/`. One root workspace and
+`bun.lock` supply both applications. The backend picker and launcher still
+support configured NeoPi source trees. Nothing switches an existing installation
+or changes its state until you choose to run the new checkout.
+
+From a NeoPi checkout:
 
 ```sh
-git clone https://github.com/PsychedelicShayna/neodeck.git
-cd neodeck
-bun install --frozen-lockfile --ignore-scripts
-# prepare the pinned NeoPi tree and register it in ~/.npi-deck/config.yml
-bun scripts/neopi-setup.ts --source /path/to/neopi --native-dir /path/to/prebuilt-natives
-#   no prebuilt addon? replace --native-dir … with --build-native (cold Rust build)
-mkdir -p ~/.local/bin
-ln -s "$PWD/bin/npi-deck" ~/.local/bin/npi-deck   # once
-npi-deck                                          # http://127.0.0.1:1701
+bun install --frozen-lockfile
+# Reuse an addon from a checkout with matching native inputs:
+bun deck/scripts/native-addon.ts --native-dir /path/to/matching-neopi-checkout
+# Or after ./build.sh: bun deck/scripts/native-addon.ts --built
+NPI_DECK_BACKEND="$PWD" bun --cwd=deck run dev
 ```
 
-Without flags, `neopi-setup` falls back to the maintainer's layout:
-`--source` defaults to `~/source/github/PsychedelicShayna/neopi` (env
-`NPI_DECK_NEOPI_SOURCE`) and `--native-dir` to
-`~/source/github/PsychedelicShayna/neopi-sync-v18.3.2` (env
-`NPI_DECK_NATIVE_DIRS`, `:`-separated). Pass both unless your checkouts live
-there. `--native-dir` is searched only when the tree has no matching addon
-yet, both directly and under `packages/natives/native`, so a NeoPi checkout
-that has run `build:native` works as the directory.
-
-Every later `neopi-setup` run (a pin change, an upgrade, a rollback) needs the
-same two locations. Export them once, for example in your shell profile, and
-the flags can be left off from then on:
-
-```sh
-export NPI_DECK_NEOPI_SOURCE=/path/to/neopi
-export NPI_DECK_NATIVE_DIRS=/path/to/prebuilt-natives   # `:`-separated for several
-```
-
-An explicit `--source` or `--native-dir` still wins over the variable.
+For a supervised deployment, build the web bundle with
+`bun --cwd=deck/apps/web run build`, then run
+`NPI_DECK_BACKEND="$PWD" deck/bin/npi-deck`. This override pins the launch to
+the repository root. To switch from Settings, register source trees in
+`config.yml` and omit the override.
 
 - [Prerequisites](#prerequisites)
 - [NeoPi backend tree](#neopi-backend-tree)
@@ -56,10 +39,10 @@ An explicit `--source` or `--native-dir` still wins over the variable.
 
 | Tool | Version | Why |
 |---|---|---|
-| [Bun](https://bun.sh) | ≥ 1.3.14 | Runs the deck, the launcher, `neopi-setup` and the web build. |
-| Git | any recent | Clones the deck and adds the NeoPi worktree. |
-| A NeoPi checkout | contains the commit in `neopi.pin` | `neopi-setup` adds its backend tree from it (`--source`). |
-| A prebuilt `pi_natives` addon | built from the same native sources as the tree | `neopi-setup` links it into the tree (`--native-dir`). Without one, `--build-native` builds it, which needs the tree's Rust toolchain. |
+| [Bun](https://bun.sh) | satisfies root `packages/utils/package.json` | Runs NeoPi, the deck and the web build. |
+| Git | any recent | Identifies backend source trees. |
+| A NeoPi checkout | includes `deck/` | Supplies workspace packages directly. |
+| A prebuilt `pi_natives` addon | matching native inputs, platform and CPU variant | `deck/scripts/native-addon.ts --native-dir` stages and records it. Otherwise build with `./build.sh`, then record with `--built`. |
 | A systemd user manager | — | The launcher runs the server as a user service. Without one, pass `--no-systemd`; `setpriv` (util-linux) is then used when present. |
 | A modern browser | recent Chrome / Edge / Firefox / Safari | Renders the deck. WebSocket support is required. |
 
@@ -67,105 +50,51 @@ You do **not** need Node.js — Bun runs everything.
 
 ## NeoPi backend tree
 
-The deck does not install `@oh-my-pi/*` packages. It loads NeoPi from a
-source tree pinned in `neopi.pin`. Prepare that tree once per pin:
+The server and Telegram bridge typecheck directly against NeoPi's workspace
+packages. `deck/tsconfig.base.json` extends the repository's base configuration,
+including its ambient asset types. There is no generated TypeScript configuration
+or separate backend worktree to prepare.
 
-```bash
-bun install --frozen-lockfile --ignore-scripts
-# the pinned commit
-bun scripts/neopi-setup.ts --source /path/to/neopi --native-dir /path/to/prebuilt-natives
-# another commit
-bun scripts/neopi-setup.ts <sha> --source /path/to/neopi --native-dir /path/to/prebuilt-natives
-# an existing NeoPi tree, prepared in place (--source is not used)
-bun scripts/neopi-setup.ts --path DIR --native-dir /path/to/prebuilt-natives
-```
+Run `bun deck/scripts/native-addon.ts --native-dir <matching-checkout>` from
+the repository root to stage a reusable addon. Repeat `--native-dir` to search
+several checkouts. The script does not install dependencies, create worktrees,
+write deck configuration or build native code.
+It links the donor by default; pass `--copy` for an independent copy.
 
-With `NPI_DECK_NEOPI_SOURCE` and `NPI_DECK_NATIVE_DIRS` exported, drop the
-flags.
+Native-input fingerprints, release stamps or legacy sentinels, platform,
+CPU variant and addon SHA-256 checks are unchanged. A recorded donor is
+preferred. An unrecorded donor with matching sources is marked `derived`,
+meaning source equality was observed but the build was not. Unrecorded bytes
+inside the target tree cannot vouch for themselves.
 
-If dependencies are already provisioned in the target tree, pass
-`--skip-install` to avoid any package-manager operation. The script checks that
-the coding-agent workspace link resolves inside that tree; the caller remains
-responsible for matching the tree's lockfile and dependency versions.
+After a fresh build or staging the current CI native artifact, `--built`
+explicitly attests that those bytes came from this tree. Do not use it to
+bless an old or unknown addon. Records live at
+`node_modules/.npi-deck/native-addon.json`. They detect stale or swapped
+addons but are local bookkeeping, not authentication.
 
-The script:
+Check the runtime SDK contract without sending provider requests:
 
-1. Adds a detached worktree at `~/.npi-deck/neopi/<sha>` from the NeoPi
-   checkout (`--source`, or `NPI_DECK_NEOPI_SOURCE`).
-2. Checks the Bun running the script, and the `bun` on `PATH`, against the
-   tree's `engines.bun` (`packages/utils/package.json`, `>=1.3.14` at the pin)
-   and stops on an older Bun.
-3. Runs `bun install --frozen-lockfile --ignore-scripts` unless
-   `--skip-install` was passed, then runs `gen:tool-views` inside the tree.
-4. Provides the `pi_natives` addon. The version sentinel is not enough: every
-   commit of a release carries the same one. The script fingerprints the
-   tree's native inputs and reuses an addon only when it was built from the
-   same fingerprint, for this platform and CPU variant. The inputs are the
-   sources (`packages/natives`, `crates`, `Cargo.toml`, `Cargo.lock`,
-   `rust-toolchain.toml`, `.cargo`) and the build recipe
-   (`scripts/bazel-natives.ts`, `scripts/host-detect*`, `BUILD.bazel`,
-   `MODULE.bazel`, `MODULE.bazel.lock`, `bazel/`, `.bazelrc`, `.bazelversion`,
-   `.bazelignore`, and the root `build:native` script). The fingerprint takes
-   tracked and untracked non-ignored files as they are on disk. It leaves out
-   `packages/natives/native/index.js` and `index.d.ts`, which the build
-   regenerates.
-
-   A cold build can change those tracked generated bindings. NeoPi's
-   `BUILD_INFO` reports that dirtiness; preflight can accept the verified addon
-   without labeling the dirty source tree as a clean match for `neopi.pin`.
-
-   Evidence for a candidate is, in order: this tree's record for those exact
-   bytes, a record in the other checkout that holds the file, or that other
-   checkout's own native inputs. The last kind is reported as
-   `derived (unverified)`: the sources match, but nobody watched the build. An
-   addon inside the tree itself is never vouched for by the tree's own
-   sources. Once an addon recorded for a tree is replaced by other bytes, only
-   a recorded donor addon or `--build-native` can replace it.
-
-   The script searches `--native-dir` (repeatable) or `NPI_DECK_NATIVE_DIRS`
-   (`:`-separated); `--copy` copies the file instead of symlinking it. If
-   nothing matches, including an addon already in the tree that was built
-   from other sources, it prints the `build:native` command and exits.
-   `--build-native` runs that build and checks that the fingerprint is the
-   same afterwards. The accepted addon's fingerprint, platform, CPU variant
-   and file sha256 are written to
-   `<tree>/node_modules/.npi-deck/native-addon.json`.
-
-   The record is local bookkeeping, not authentication. Anyone who can write
-   the tree can write a record, so it catches stale and swapped addons, not
-   forged ones.
-5. Registers the tree under `backends` in `~/.npi-deck/config.yml`, and sets
-   `activeBackend` if it isn't set yet (see [config.yml](#configyml)).
-6. For the pinned commit (or with `--tsconfig`), writes the gitignored
-   `tsconfig.neopi.json`. The server and Telegram bridge extend it to resolve
-   NeoPi sources and ambient asset declarations. Both use that tree's `tsgo`
-   compiler, so typechecking either needs this step first.
-
-`NPI_DECK_HOME` overrides `~/.npi-deck`. Re-running the script is safe. To
-check a tree against everything the deck uses:
-
-```bash
-bun apps/server/src/backend/contract.ts   # isolated; no provider requests
+```sh
+NPI_DECK_BACKEND="$PWD" bun deck/apps/server/src/backend/contract.ts
 ```
 
 ## config.yml
 
-`~/.npi-deck/config.yml` lists the prepared backend trees and names the one the
-deck loads. `neopi-setup` writes it; you rarely edit it by hand:
+`~/.npi-deck/config.yml` lists backend source trees and names the one the deck
+loads when `NPI_DECK_BACKEND` is unset. For example:
 
 ```yaml
 backends:
-  - id: d8c9c98b0f       # 10-character short commit; neopi-setup uses it as the id
+  - id: workspace
     kind: source
-    path: /home/you/.npi-deck/neopi/d8c9c98b0f3097a981d03a6e2d4b8bb6b028ef90
-activeBackend: d8c9c98b0f
+    path: /home/you/repos/neopi
+activeBackend: workspace
 ```
 
 - `kind: source` is the only kind the deck loads; `kind: gateway` is reserved
   and cannot be selected.
-- `activeBackend` is set by the first `neopi-setup` run and changed by
-  **Settings → Backend**. A later `neopi-setup` run registers its tree without
-  switching to it.
+- `activeBackend` names a registered tree. **Settings → Backend** changes it.
 - `NPI_DECK_BACKEND` (a backend id from `config.yml`, or an absolute tree
   path) overrides `activeBackend` for the whole launch, including the source
   shown in Settings; remove it and restart the launcher to switch from the UI.
@@ -177,10 +106,9 @@ remain available. Agent-backed endpoints return HTTP 503 with
 tree. The picker runs an isolated preflight (Bun engine, dependencies, native
 addon version sentinel and recorded fingerprint, required SDK exports, and the
 sha256 of the addon the native loader actually loaded, which can be a
-fallback candidate) before switching. It reports the tree's commit, version
-and whether it matches `neopi.pin`. A tree prepared before the fingerprint
-record existed, or whose native sources changed since, fails preflight until
-`neopi-setup` is re-run for it.
+fallback candidate) before switching. It reports the tree's commit and version.
+A missing record, changed native inputs or different addon bytes fail preflight
+until a matching addon is staged and recorded again.
 
 A normal switch refuses while work is active, listing live sessions and
 prompts without changing the running backend. **Force —
@@ -198,7 +126,7 @@ server process.
 resolves back to the checkout, so it works from any cwd:
 
 ```sh
-ln -s "$PWD/bin/npi-deck" ~/.local/bin/npi-deck
+ln -s "$PWD/deck/bin/npi-deck" ~/.local/bin/npi-deck
 npi-deck [--port N] [--host H] [--unit NAME] [--rebuild] [--no-systemd]
 ```
 
@@ -273,8 +201,8 @@ A quick smoke list:
 1. **Health endpoint**: `curl http://127.0.0.1:1701/api/health` returns `{"ok":true,...}`.
 2. **Web bundle**: opening <http://127.0.0.1:1701> shows the chat view (or
    the kanban — there's no auth, so any route works).
-3. **Backend**: Settings → Backend shows the tree from `config.yml` as active,
-   matching `neopi.pin`.
+3. **Backend**: Settings → Backend shows the selected repository root and its
+   actual commit and version.
 4. **First session**: click "+ new session" in the sidebar, send any prompt.
    You should see streaming text within a couple of seconds.
 5. **Settings**: navigate to `/settings`. The Env section lists
@@ -287,7 +215,7 @@ If any of those fail, see [troubleshooting](#troubleshooting) below.
 Deck state lives in `~/.npi-deck` (`NPI_DECK_HOME` overrides; it is read from
 the environment that starts the deck, not from the managed `.env` inside it):
 
-- **Backend trees and selection**: `neopi/<sha>/` and `config.yml`.
+- **Backend selection**: `config.yml`. Existing legacy backend worktrees are not deleted.
 - **Kanban, routines, inbox**: `deck.db` (`NPI_DECK_DB_PATH` overrides), with
   pasted images under `uploads/`.
 - **Managed env file and audit log**: `.env` and `env-audit.log`.
@@ -336,9 +264,9 @@ the deck and any NeoPi CLI on the machine alike.
 retry usually succeeds. If you're behind a corporate proxy, set
 `BUN_INSTALL_CACHE_DIR` and `HTTPS_PROXY`.
 
-**`neopi-setup` says the commit is not in the source.** Fetch the NeoPi
-checkout, or point `--source` / `NPI_DECK_NEOPI_SOURCE` at one that has the
-commit in `neopi.pin`.
+**Native addon preflight fails.** Restage an addon from a checkout with matching
+native inputs using `deck/scripts/native-addon.ts --native-dir`. If none matches,
+build this tree with `./build.sh`, then record the fresh addon with `--built`.
 
 **Port 1701 is already in use.** Pass `npi-deck --port 1702` (or any free
 port).

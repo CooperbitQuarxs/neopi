@@ -133,31 +133,17 @@ through a PR if needed. Agents leave rulesets and branch protection unchanged.
 
 ## Promotion
 
-`.github/workflows/promote-nightly.yml` runs monthly and on `workflow_dispatch`
-to **open the promotion PR only**, with `human: pending`; the owner merges
-`nightly` into `main`. Automation does not merge into the default branch.
-
-Scheduled/dispatch execution requires the workflow on the default branch.
-The Captain performs the first promotion after it lands on `nightly`; watch the
-first eligible run after it reaches `main`. Default/live installation and
-service changes remain the owner's decision; nightly delivery is authorized above.
-
-NeoDeck fixes stay open until the complete acceptance is promoted to `main`;
-merging a linked PR to `nightly` alone does not close them. Closure mechanics
-are in [triage.md](triage.md#closure).
+The deck follows [NeoPi's promotion and issue-completion policy](../../../docs/agents/policy.md#promotion-and-issue-completion).
+The repository-root promotion workflow opens the `nightly` to `neopi` PR;
+the owner decides whether to merge it. The subtree has no separate promotion
+workflow. Switching a running deck installation remains the owner's decision.
 
 ## Releases
 
-The existing CI workflow publishes a stable GitHub release after each push to
-`main`, a unique prerelease after each push to `nightly`, and a stable release
-from a selected ref on `workflow_dispatch`. The Ubuntu matrix builder supplies
-the source-plus-web archive; PRs do not publish. Releases and tags are
-append-only: never delete or overwrite an existing release, its assets or tag.
-The package-derived tag formats, dispatch commands and archive setup are in
-[README.md › Releases](../../README.md#releases). These tags replace the
-previous proposed date-based fork convention; existing upstream tags remain
-unchanged. Release publication is separate from promotion and live deployment;
-[installation](../install.md) owns runtime setup.
+NeoPi's root workflows own releases. The deck job typechecks and builds the
+web application; it does not publish a separate checkout archive.
+Existing standalone releases and tags remain unchanged. Release publication
+is separate from live deployment; [installation](../install.md) owns runtime setup.
 
 ## Mechanics
 
