@@ -34,3 +34,90 @@ export const cfgSttSubmitTrigger = register({
 		options: STT_SUBMIT_TRIGGER_OPTIONS,
 	},
 });
+
+export const cfgWakeEnabled = register({
+	id: "stt.wake.enabled",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Wake-word listening",
+		description:
+			"Listen locally for computer, then record and submit a complete request. Off closes the wake microphone.",
+	},
+});
+export const cfgWakeSilenceMs = register({
+	id: "stt.wake.silenceMs",
+	type: "number",
+	default: 2000,
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Wake silence timeout",
+		description: "Milliseconds of silence ending a spoken request, clamped to 200–30000.",
+		options: [
+			{ value: "1000", label: "1 second" },
+			{ value: "2000", label: "2 seconds" },
+			{ value: "3000", label: "3 seconds" },
+		],
+	},
+});
+export const cfgWakeCancelMs = register({
+	id: "stt.wake.cancelMs",
+	type: "number",
+	default: 3000,
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Wake misactivation timeout",
+		description: "Cancel without submitting if no speech follows the chirp, clamped to 2000–5000 ms.",
+		options: [
+			{ value: "2000", label: "2 seconds" },
+			{ value: "3000", label: "3 seconds" },
+			{ value: "5000", label: "5 seconds" },
+		],
+	},
+});
+export const cfgWakeEndWord = register({
+	id: "stt.wake.endWord",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Wake end word",
+		description:
+			"Optional spoken word ending a request. Empty uses silence only. Recognized locally; removed before submission.",
+	},
+});
+export const cfgWakeChirpPath = register({
+	id: "stt.wake.chirpPath",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Wake chirp sound",
+		description:
+			"Path to a PCM16 mono WAV activation sound. Empty plays a generated short tone; no recording is bundled.",
+	},
+});
+
+export const cfgWakePlaybackTailMs = register({
+	id: "stt.wake.playbackTailMs",
+	type: "number",
+	default: 300,
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Wake playback echo tail",
+		description:
+			"Ignore microphone audio during assistant speech and for this many milliseconds afterward. Clamped to 0–3000. The readiness chirp has no tail delay.",
+		options: [
+			{ value: "150", label: "150 ms" },
+			{ value: "300", label: "300 ms" },
+			{ value: "500", label: "500 ms" },
+		],
+	},
+});

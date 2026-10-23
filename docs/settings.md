@@ -52,16 +52,18 @@ npi config dump-toml > settings.defaults.toml
 
 The output includes every registered setting and its schema default. Unset defaults remain comments. Review it before copying it to `config.toml`; a fully populated overlay pins defaults and replaces matching YAML keys. Regenerate it after upgrades to see new settings. Invalid TOML is a hard error naming the file, never a silent fallback. Live settings reloads watch both TOML filenames in user and project directories.
 
-The settings panel and `config set`/`reset` continue writing YAML. Edit or remove the corresponding TOML top-level key to let those YAML changes take effect. TOML is never converted to YAML automatically.
+The settings panel, `config set`/`reset`, and other Settings setters save to the selected TOML file when one exists at the edited scope, and to YAML otherwise. Global and project saves use the existing lock, atomic replacement, expected-value checks and conflict receipts. A TOML file appearing or disappearing after a settings load rejects the pending save; reload before retrying. YAML bytes stay untouched during a TOML save.
+
+Saves preserve untouched TOML top-level keys, their comments and formatting. An edited top-level table is rewritten as an inline table: its internal comments, quoting, spacing and table layout are not retained. Standalone comments are retained, though their position relative to rewritten keys can change. Explicit-clear metadata is regenerated. Editing a nested key absent from TOML copies its effective YAML top-level table first, so sibling values remain intact. Clearing a whole top-level key writes an explicit null marker instead of exposing the YAML value underneath.
 
 #### Convert your existing settings
 
-Conversion requires `--yes` because `config.toml` takes precedence immediately while `/settings` and `config set`/`reset` still write YAML. Those saved changes can be masked by TOML and appear to revert on reload. Until format-aware saves are available, edit `config.toml` directly or remove it to return to YAML. The converter prints this warning before writing; `--force` does not acknowledge it.
+Conversion is explicit and takes effect immediately. Subsequent settings saves use TOML, so no YAML-save warning or `--yes` acknowledgment is needed.
 
 ```bash
-npi config to-toml --yes                         # user and current project main settings, when present
-npi config to-toml /path/to/config.yaml --yes     # one explicit main settings file
-npi config to-toml /path/to/config.yml --force --yes
+npi config to-toml                         # user and current project main settings, when present
+npi config to-toml /path/to/config.yaml     # one explicit main settings file
+npi config to-toml /path/to/config.yml --force
 ```
 
 Conversion writes the replacement-extension sibling `config.toml` with private permissions, leaving YAML bytes unchanged. It carries the full parsed YAML, including unknown extension keys, credentials, nested tables, mixed arrays, arrays of tables and multiline text. It does not add registry defaults. Existing TOML is never overwritten without `--force`. A legacy `settings.toml` must be reconciled or moved first, because creating a second overlay would be ambiguous.
@@ -111,12 +113,12 @@ This only controls the startup splash animation. It does not rerun setup or chan
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `omp config list`              | Print every setting grouped by tab, with its current value and type. `--json` emits an object keyed by setting path with `{ value, type, description }`. Configured credential fields are masked as `********` in human output; in JSON their `value` is omitted and `redacted: true` is emitted. |
 | `omp config get <key>`         | Print the effective value of one key. Unknown keys exit non-zero. `--json` emits `{ key, value, type, description }`. This is an explicit single-key request, so credential values are returned unmasked.                                                                                         |
-| `omp config set <key> <value>` | Parse `<value>` against the key's schema type, write it to the global main YAML file, and print the value written. When another source still supplies the effective value, it says which instead (`--json`: `overriddenBy` is the env var name, or `project`, `overlay`, or `runtime`; `fallbackEnv` names a fallback env var used while the saved value is blank). |
-| `omp config reset <key>`       | Delete the global key, allowing another configured layer or the schema default to apply. Prints the resulting effective value, masking non-empty credentials as `********`; JSON omits a credential's `value` and emits `{ key, redacted: true }`. |
+| `omp config set <key> <value>` | Parse `<value>` against the key's schema type, write it to the selected global TOML or YAML file, and print the value written. When another source still supplies the effective value, it says which instead (`--json`: `overriddenBy` is the env var name, or `project`, `overlay`, or `runtime`; `fallbackEnv` names a fallback env var used while the saved value is blank). |
+| `omp config reset <key>`       | Clear the global key, masking underlying YAML when saving to TOML and allowing another scope or the schema default to apply. Prints the resulting effective value, masking non-empty credentials as `********`; JSON omits a credential's `value` and emits `{ key, redacted: true }`. |
 | `omp config path`              | Print the active agent directory (honors `PI_CODING_AGENT_DIR`).                                                                                                                                                                                                                                  |
 | `omp config init-xdg`          | On Linux and macOS, create the `omp` directories under the effective XDG data, state, and cache homes. It does not move existing files or set the XDG environment variables. Other platforms exit non-zero.                                                                                       |
 | `npi config dump-toml`         | Write documented registry defaults as TOML to stdout without loading user settings. Redirect to a file to regenerate it. |
-| `npi config to-toml [file] --yes [--force]` | Convert full user and current project main YAML settings, or one explicit `config.yml`/`config.yaml`, to private `config.toml` siblings after acknowledging the YAML-save limitation. Report unsupported values and lost YAML syntax. |
+| `npi config to-toml [file] [--force]` | Convert full user and current project main YAML settings, or one explicit `config.yml`/`config.yaml`, to private `config.toml` siblings. Report unsupported values and lost YAML syntax. |
 
 `omp config` with no subcommand lists settings. `--help` or `-h` displays command help. The `--json` flag is accepted by `list`, `get`, `set`, and `reset`.
 
@@ -1138,6 +1140,14 @@ searxng:
 | `stt.enabled`                       | boolean | `false`   | Enable microphone speech-to-text; choose the recognition model with `modelRoles.dictation`.                                                                                                                                                                                                                                                                                                                                           |
 | `stt.language`                      | string  | `en`      | Source language hint for speech-to-text.                                                                                                                                                                                                                                                                                                                                                                                               |
 | `stt.submitTrigger`                 | enum    | `never`   | When completed dictation auto-submits: `never`, `release`, `release-complete`, or `say-submit`.                                                                                                                                                                                                                                                                                                                                        |
+| `stt.wake.enabled` | boolean | `false` | Listen locally for "computer", chirp, record a complete request, then submit through the dictation role. Toggle under `/settings` → Interaction → Speech. Independent of manual `stt.enabled`; off never opens the wake microphone. |
+| `stt.wake.silenceMs` | number | `2000` | Silence ending a request, clamped to 200–30000 ms. |
+| `stt.wake.cancelMs` | number | `3000` | Cancel if no speech follows activation, clamped to 2000–5000 ms. |
+| `stt.wake.endWord` | string | `""` | Optional single word ending a request, removed from the submitted text. Empty uses silence only. May be "computer". |
+| `stt.wake.chirpPath` | string | `""` | Custom PCM16 mono WAV, at most two seconds. Empty uses a generated tone. |
+| `stt.wake.playbackTailMs` | number | `300` | Ignore microphone frames during assistant speech and for this many milliseconds afterward, clamped to 0–3000. The readiness chirp has no tail delay. |
+| `voice.enabled` | boolean | `false` | Session-private runtime setting controlled by `/voice [on|off|status]`. Saved values never opt another session in. |
+| `voice.postprocess` | string | `""` | Optional instruction for rewriting the complete spoken reply through the existing tiny/smol role. Empty speaks the reply verbatim; failures fall back to verbatim. |
 | `providers.openaiWebsockets`        | enum    | `auto`    | `auto`, `off`, `on`.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `providers.streamFirstEventTimeoutSeconds` | number | `-1` | First stream-event watchdog: `-1` uses provider/env defaults, `0` disables, positive values set seconds. |
 | `providers.streamIdleTimeoutSeconds` | number | `-1` | Maximum silence between stream events, with the same `-1`/`0` conventions. |
@@ -1158,6 +1168,40 @@ searxng:
 | `secrets.enabled`                   | boolean | `false`   | Enable configured secret obfuscation and built-in credential-shaped token redaction before provider requests. See [Secret obfuscation](./secrets.md).                                                                                                                                                                                                                                                                                  |
 
 Provider credentials and custom model definitions are configured separately — see [Providers](./providers.md) and [Models](./models.md).
+
+Wake listening uses the existing local Parakeet downloader and worker. It first checks
+adaptive audio level, then speech-band energy, and only decodes gated windows to
+recognize the keyword. The keyword check stays local even when the dictation role
+uses xAI. The full request is transcribed once after recording, not in live segments.
+Pre-roll and audio arriving during keyword decoding are retained.
+Wake submissions use the existing
+dictation editor-submit path, including any text already in the composer.
+Turning wake listening off stops its capture and cancels pending recognition.
+Assistant speech pauses wake detection and clears pending detection audio. Its
+configurable echo tail prevents a spoken reply from waking the listener again.
+The readiness chirp is excluded from recording and speech activity; request
+capture and its silence/misactivation clocks start as soon as the chirp finishes,
+without discarding the first syllable behind an echo-tail delay.
+
+`/voice on` enables the wake → request → agent → spoken reply flow for this
+session only. It does not edit saved settings or the composer. `/voice off`
+stops it, and switching sessions turns it off. Only one wake listener can own
+the microphone; another session receives an ownership notice rather than
+opening a second capture.
+
+Voice mode works with saved `stt.wake.enabled` and `speech.enabled` both off.
+Turning it off restores their ordinary behavior. Choose request recognition
+through `modelRoles.dictation` and reply synthesis through `modelRoles.speech`,
+including `local/kokoro-paced` or cloud speech. Keyword recognition stays local.
+The optional `voice.postprocess` instruction can summarize, translate, or clean
+up the reply. Its template is `src/prompts/system/voice-postprocess.md`; the
+existing tiny/smol role runs it once per reply.
+
+Wake detection stays suppressed during the agent turn, postprocessing and
+playback, followed by the configured echo tail. Voice mode and upstream live
+mode cannot run together. Named addressing such as "computer alpha" is not
+implemented; it needs one microphone owner routing to sessions over the
+control socket.
 
 #### Saved reset auto-consumption
 

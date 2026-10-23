@@ -8,7 +8,8 @@ import {
 	compileSelectorRegex,
 	isRegexSelectorPattern,
 	matchesSelectorPattern,
-	matchModelSelectorRule,
+	matchValidatedModelSelectorRule,
+	validateConfiguredModelRules,
 } from "./selector-pattern";
 import { cfgProvidersAutoThinkingMaxEffort } from "../session/settings";
 import type { Settings } from "./settings";
@@ -58,6 +59,14 @@ export function validateEffortSelection(raw: unknown): asserts raw is EffortSele
 	throw new Error("Unknown effort selection mode");
 }
 
+function validateLoadedEffortSelection(raw: unknown): void {
+	if (raw && typeof raw === "object" && "mode" in raw && raw.mode === "auto") {
+		validateEffortSelection({ ...raw, allowed: undefined });
+	} else {
+		validateEffortSelection(raw);
+	}
+}
+
 export const cfgEffortPolicyMode = register({
 	id: "effort.mode",
 	type: "enum",
@@ -87,6 +96,7 @@ export const cfgEffortRules = register({
 	id: "effort.rules",
 	type: "array",
 	default: [] as EffortRule[],
+	validateConfigured: validateConfiguredModelRules,
 	validate(raw) {
 		if (raw === undefined) return;
 		if (!Array.isArray(raw)) throw new Error("Effort rules must be an ordered list");
@@ -123,6 +133,15 @@ export const cfgRoleEffortSelections = register({
 	id: "roleEffortSelections",
 	type: "record",
 	default: {} as Record<string, EffortSelection>,
+	validateConfigured(raw) {
+		if (raw === undefined) return;
+		if (!raw || typeof raw !== "object" || Array.isArray(raw))
+			throw new Error("Role effort selections must be a record");
+		for (const [role, selection] of Object.entries(raw)) {
+			if (!role.trim()) throw new Error("Role effort selection must name a role");
+			validateLoadedEffortSelection(selection);
+		}
+	},
 	validate(raw) {
 		if (raw === undefined) return;
 		if (!raw || typeof raw !== "object" || Array.isArray(raw))
@@ -138,6 +157,19 @@ export const cfgFallbackEffortSelections = register({
 	id: "retry.fallbackEffortSelections",
 	type: "record",
 	default: {} as Record<string, Record<string, EffortSelection>>,
+	validateConfigured(raw) {
+		if (raw === undefined) return;
+		if (!raw || typeof raw !== "object" || Array.isArray(raw))
+			throw new Error("Fallback effort selections must be a record");
+		for (const [chain, entries] of Object.entries(raw)) {
+			if (!chain.trim() || !entries || typeof entries !== "object" || Array.isArray(entries))
+				throw new Error("Fallback effort chain must name a selector");
+			for (const [selector, selection] of Object.entries(entries)) {
+				if (!selector.trim()) throw new Error("Fallback effort entry must name a selector");
+				validateLoadedEffortSelection(selection);
+			}
+		}
+	},
 	validate(raw) {
 		if (raw === undefined) return;
 		if (!raw || typeof raw !== "object" || Array.isArray(raw))
@@ -191,7 +223,36 @@ function isPatternSelector(selector: string): boolean {
 
 /** Exact provider/model identifiers beat regex rules, then globs; patterns retain declaration order within a tier. */
 export function matchEffortRule(settings: Settings, model: Model): EffortRule | undefined {
-	return matchModelSelectorRule(cfgEffortRules.get(settings), model);
+	return matchValidatedModelSelectorRule(cfgEffortRules.get(settings), model, loadEffortRule);
+}
+
+const loadedEffortRules = new WeakMap<EffortRule, EffortRule>();
+
+function loadEffortRule(rule: EffortRule): EffortRule {
+	const cached = loadedEffortRules.get(rule);
+	if (cached) return cached;
+	const allowed = loadAllowedEfforts(rule.allowed, `Effort rule ${rule.selector}`);
+	const loaded = { ...rule, allowed };
+	cfgEffortRules.definition.validate?.([loaded]);
+	loadedEffortRules.set(rule, loaded);
+	return loaded;
+}
+
+const warnedEffortLists = new WeakSet<object>();
+
+function loadAllowedEfforts(raw: unknown, label: string): ThinkingEffort[] {
+	if (!Array.isArray(raw) || raw.some(value => typeof value !== "string")) {
+		assertEfforts(raw, label);
+	}
+	const allowed = raw.filter((value): value is ThinkingEffort => THINKING_CHOICES.includes(value));
+	if (allowed.length !== raw.length && !warnedEffortLists.has(raw)) {
+		warnedEffortLists.add(raw);
+		logger.warn(`${label}: dropped unknown thinking effort names`, {
+			unknown: raw.filter(value => !THINKING_CHOICES.includes(value)),
+		});
+	}
+	assertEfforts(allowed, label);
+	return allowed;
 }
 
 export interface EffortDecision {
@@ -260,7 +321,13 @@ export function resolveImplicitEffort(
 			requireSupportedEffort(model, activeSelection.level as Effort);
 		return { level: activeSelection.level, candidates: [...supported], origin };
 	}
-	const savedAuto = activeSelection?.mode === "auto" ? activeSelection.allowed : undefined;
+	const savedAuto =
+		activeSelection?.mode === "auto" && activeSelection.allowed !== undefined
+			? loadAllowedEfforts(
+					activeSelection.allowed,
+					`Auto effort selection for ${activeSelection.selector ?? `${model.provider}/${model.id}`}`,
+				)
+			: undefined;
 	const authoredLegacyAutoCeiling =
 		activeSelection?.mode === "auto" &&
 		savedAuto === undefined &&

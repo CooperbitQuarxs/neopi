@@ -90,7 +90,7 @@ export interface SettingsTomlConversionResult {
 	diagnostics: TomlConversionDiagnostic[];
 }
 
-/** Explicit conversion only. Existing YAML and menu save destinations remain untouched. */
+/** Explicit conversion only. YAML is retained; later settings saves use the TOML sibling. */
 export async function convertSettingsFileToToml(
 	filePath: string,
 	options: { force?: boolean } = {},

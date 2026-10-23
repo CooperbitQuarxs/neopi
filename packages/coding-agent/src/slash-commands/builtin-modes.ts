@@ -527,6 +527,20 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "voice",
+		description: "Toggle local voice for this session without changing saved settings",
+		allowArgs: true,
+		subcommands: [
+			{ name: "on", description: "Listen for computer and speak replies" },
+			{ name: "off", description: "Stop local voice for this session" },
+			{ name: "status", description: "Show this session's local voice state" },
+		],
+		handleTui: async (command, runtime) => {
+			clearSubmittedText(runtime);
+			await runtime.ctx.handleLocalVoiceCommand(command.args);
+		},
+	},
+	{
 		name: "fast",
 		icon: "fast",
 		description:

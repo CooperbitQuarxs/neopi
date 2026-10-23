@@ -241,4 +241,36 @@ describe("STTController cloud transcription", () => {
 		expect(cloudTranscribe).not.toHaveBeenCalled();
 		expect(editor.commitVolatileText).toHaveBeenCalledWith("local transcript");
 	});
+	it("transcribes a whole wake recording once without opening a second microphone or streaming", async () => {
+		const model = getBundledModel("local", "whisper-base");
+		settings.setModelRole("dictation", "local/whisper-base");
+		vi.spyOn(downloader, "downloadSttModel").mockResolvedValue(undefined);
+		const transcribe = vi.spyOn(asrClient.sttClient, "transcribe").mockResolvedValue("whole request");
+		const stream = vi.spyOn(asrClient.sttClient, "startStream");
+		const capture = vi.fn(() => ({ stop() {} }));
+		controller = new STTController(capture, { settings, registry: registryFor(model) });
+		const audio = new Float32Array([0.1, -0.1, 0.2]);
+		expect(await controller.transcribeRecording(audio, new AbortController().signal)).toBe("whole request");
+		expect(transcribe).toHaveBeenCalledTimes(1);
+		expect(transcribe.mock.calls[0]?.[1]).toBe(audio);
+		expect(stream).not.toHaveBeenCalled();
+		expect(capture).not.toHaveBeenCalled();
+	});
+
+	it("submits the complete wake WAV to the configured cloud dictation model once", async () => {
+		const model = getBundledModel("openai", "whisper-1");
+		settings.setModelRole("dictation", "openai/whisper-1");
+		const transcribe = vi.spyOn(transcription, "transcribeAudio").mockImplementation(async (_model, request) => {
+			const bytes = await readAudioBytes(request.audio);
+			expect(bytes.length).toBe(50);
+			return { text: "whole cloud request", usage: ZERO_USAGE };
+		});
+		const capture = vi.fn(() => ({ stop() {} }));
+		controller = new STTController(capture, { settings, registry: registryFor(model) });
+		expect(
+			await controller.transcribeRecording(new Float32Array([0.1, -0.1, 0.2]), new AbortController().signal),
+		).toBe("whole cloud request");
+		expect(transcribe).toHaveBeenCalledTimes(1);
+		expect(capture).not.toHaveBeenCalled();
+	});
 });

@@ -22,6 +22,7 @@ import { roleCandidatePool } from "../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import speechRewritePrompt from "../prompts/system/speech-rewrite.md" with { type: "text" };
+import voicePostprocessPrompt from "../prompts/system/voice-postprocess.md" with { type: "text" };
 
 const SYSTEM_PROMPT = prompt.render(speechRewritePrompt);
 // Rewrite budget: a paragraph in, a spoken paragraph (usually shorter) out.
@@ -52,7 +53,7 @@ function extractText(content: AssistantMessage["content"]): string {
 }
 
 /**
- * Rewrites one markdown block into spoken prose via the tiny/smol role.
+ * Rewrites markdown blocks or complete replies into spoken prose via the tiny/smol role.
  * Constructed per session by the event controller and handed to the vocalizer.
  */
 export class SpeechEnhancer {
@@ -69,6 +70,21 @@ export class SpeechEnhancer {
 	 * falls back to mechanical normalization.
 	 */
 	async rewrite(block: string, signal?: AbortSignal): Promise<string | null> {
+		return this.#complete(boundBlock(block), SYSTEM_PROMPT, signal);
+	}
+
+	/** Rewrite a complete reply using the configured voice instruction; null requests caller fallback. */
+	async postprocess(text: string, instruction: string, signal?: AbortSignal): Promise<string | null> {
+		if (signal?.aborted) return null;
+		return this.#complete(text, prompt.render(voicePostprocessPrompt, { instruction }), signal, true);
+	}
+
+	async #complete(
+		text: string,
+		systemPrompt: string,
+		signal?: AbortSignal,
+		requireComplete = false,
+	): Promise<string | null> {
 		try {
 			const { settings, registry, sessionId } = this.#deps;
 			// `@tiny` expands a configured `modelRoles.tiny` and otherwise falls
@@ -83,14 +99,16 @@ export class SpeechEnhancer {
 			if (!apiKey) return null;
 			// Resolve metadata after getApiKey so the session-sticky credential is recorded first.
 			const metadata = this.#deps.metadataResolver?.(model.provider);
+			let completionSignal = signal;
 			const response = await retryTransientCompletion(
 				() => {
 					const timeout = AbortSignal.timeout(REWRITE_TIMEOUT_MS);
+					completionSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 					return completeSimple(
 						model,
 						{
-							systemPrompt: [SYSTEM_PROMPT],
-							messages: [{ role: "user", content: boundBlock(block), timestamp: Date.now() }],
+							systemPrompt: [systemPrompt],
+							messages: [{ role: "user", content: text, timestamp: Date.now() }],
 						},
 						{
 							apiKey: registry.resolver(model, sessionId),
@@ -98,7 +116,7 @@ export class SpeechEnhancer {
 							maxTokens: ANSWER_MAX_TOKENS,
 							disableReasoning: true,
 							metadata,
-							signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+							signal: completionSignal,
 						},
 					);
 				},
@@ -108,7 +126,11 @@ export class SpeechEnhancer {
 				logger.debug("speech-enhancer: rewrite errored", { error: response.errorMessage });
 				return null;
 			}
-			return extractText(response.content);
+			if (requireComplete && (response.stopReason !== "stop" || signal?.aborted || completionSignal?.aborted)) {
+				return null;
+			}
+			const result = extractText(response.content);
+			return requireComplete ? result || null : result;
 		} catch (error) {
 			if (!signal?.aborted) {
 				logger.debug("speech-enhancer: rewrite failed", {
