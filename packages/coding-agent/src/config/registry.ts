@@ -114,10 +114,12 @@ interface DefinitionBase {
 	 */
 	protocolDefault?: readonly ProtocolHost[];
 	/**
-	 * Rejects a malformed configured value with a descriptive error. Runs on every load/reload and
-	 * before every write, so a typo fails loudly instead of silently reading as the default.
+	 * Rejects a malformed configured value with a descriptive error. Runs before every write and
+	 * on load/reload unless `validateConfigured` defers individual entries to their consumer.
 	 */
 	validate?: (raw: unknown) => void;
+	/** Load-time validation when individual entries must be checked at their consumption boundary. */
+	validateConfigured?: (raw: unknown) => void;
 	/**
 	 * Canonicalizes a value on its way in — text parsed by {@link Setting.parse} and every
 	 * `set`/`override` — e.g. flooring request limits. May throw like `validate`.
@@ -692,11 +694,11 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 	/**
 	 * Registry plumbing run by `Settings` on every load/reload for the value `settings` configures.
 	 *
-	 * @throws Error when `raw` fails `validate`. Unknown {@link ArrayDefinition.items} entries only warn,
-	 * once each per instance.
+	 * @throws Error when `raw` fails load-time validation. Unknown {@link ArrayDefinition.items}
+	 * entries only warn, once each per instance.
 	 */
 	checkConfigured(settings: Settings, raw: unknown): void {
-		this.definition.validate?.(raw);
+		(this.definition.validateConfigured ?? this.definition.validate)?.(raw);
 		const unknown = this.#unknownItems(raw);
 		const items = settings.warnState.items;
 		let warned = items.get(this.id);

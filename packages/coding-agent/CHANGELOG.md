@@ -103,6 +103,7 @@
 - Prompt unpacking and validation include live submitted-message routing, environment/model lookup guidance, and current subagent model, effort and fast-mode fields ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
 
 - Unmodified prompt unpacks now check clean, including MOA envelope partials and canned live identity ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
+- Invalid effort and context rules block only matching models; unknown saved effort names are dropped without lifting limits or preventing unrelated task spawns ([#539](https://github.com/PsychedelicShayna/neopi/issues/539)).
 - CI checks no longer depend on workstation-only test paths or outdated fixtures; fork releases retain Linux, macOS and Windows smoke checks without upstream package publishers ([#536](https://github.com/PsychedelicShayna/neopi/issues/536)).
 - Nightly Rust formatting checks pass for native live-audio controls ([#541](https://github.com/PsychedelicShayna/neopi/issues/541)).
 - CI formatting checks pass for native RPC model configuration, telemetry, themes and hosted stats sources ([#543](https://github.com/PsychedelicShayna/neopi/issues/543), [#548](https://github.com/PsychedelicShayna/neopi/issues/548)).
