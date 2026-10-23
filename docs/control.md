@@ -62,6 +62,14 @@ control publication by the session file's resolved real path. Roles can also be
 attached; do not open it as another writer.
 An invalid creation timestamp falls back to the file's modification time.
 
+`messageCount` counts persisted message entries across the complete journal,
+including tool results and alternate branches. It is not the length of the
+visible transcript returned by `sessions read`. Counting streams the journal
+without loading image blobs or changing the resume picker's session selection.
+Counts are cached separately from journals and reused while file size and
+timestamps match. The first listing scans uncached journals; later listings
+recount only changed files. An unavailable cache does not prevent counting.
+
 `sessions read` returns `{ "version": 1, "session": { "path": "...", "id": "...",
 "cwd": "...", "title": null }, "messages": [...], "truncated": false }`. Each
 message has `role` (`user` or `assistant`), visible `text`, and an ISO-8601
@@ -135,4 +143,3 @@ documents with a nonzero exit status.
 The [tmux agent monitor](./monitor.md) uses narrower connections. A full (token) connection sends `monitor_grant` with an `agentId` and gets back a capability for one subagent or advisor of this session's root. A pane says `hello` with `monitor: { capability }` and `protocolVersion: 2` instead of the token. Its hello reply carries the grant's scope (`agentId`, `kind`, `canChat`) and no session snapshot.
 
 A monitor connection can send only `monitor_subscribe` (agent snapshot, owner title and cwd, and the initial unsaved state), `monitor_transcript` (`fromByte`, returns complete JSONL lines), and `monitor_chat` (`text`, subagents only, not aborted ones). Anything else returns `monitor_only`. The owner pushes `monitor_live`, `monitor_agent`, `monitor_notice`, and `monitor_gone`. A grant ends when its agent is removed or replaced, when the root session changes, or when the owner revokes it, and the connection then gets `monitor_gone` with the reason.
-
