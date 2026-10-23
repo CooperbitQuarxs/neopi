@@ -111,6 +111,19 @@ export const cfgSpeechSpeed = register({
 	},
 });
 
+export const cfgTtsPacingThreads = register({
+	id: "tts.pacingThreads",
+	type: "number",
+	default: 0,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Paced Kokoro: CPU threads",
+		description:
+			"ONNX intra-op threads for the paced engine. 0 keeps the runtime default; try 2 to reduce contention. Changes reload its model",
+	},
+});
+
 export const cfgTtsPacing = register({
 	id: "tts.pacing",
 	type: "boolean",
@@ -256,4 +269,8 @@ export function speechSegmentOptions(settings: Settings): SpeechSegmentOptions {
 
 export function speechPacingMargin(settings: Settings): number {
 	return bounded(cfgTtsPacingMargin.get(settings), 350, 0, 10000);
+}
+
+export function speechPacingThreads(settings: Settings): number {
+	return bounded(cfgTtsPacingThreads.get(settings), 0, 0, 64);
 }

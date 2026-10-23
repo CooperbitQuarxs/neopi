@@ -16,6 +16,7 @@ test("selected paced engine segments and serializes complete utterances into the
 	const settings = Settings.isolated({
 		"speech.enabled": true,
 		"tts.pacing": false,
+		"tts.pacingThreads": 2,
 		modelRoles: { speech: "local/kokoro-paced" },
 	});
 	const registry = new ModelRegistry(auth, undefined, { settings });
@@ -42,6 +43,7 @@ test("selected paced engine segments and serializes complete utterances into the
 	expect(old).not.toHaveBeenCalled();
 	expect(synth.mock.calls.length).toBeGreaterThan(2);
 	expect(synth.mock.calls.every(call => call[0] === "kokoro-paced" && call[1].length <= 240)).toBe(true);
+	expect(synth.mock.calls.every(call => call[2]?.threads === 2)).toBe(true);
 	expect(written).toEqual(Array.from({ length: count }, (_, i) => i + 1));
 	expect(vocalizer.isSpeaking()).toBe(false);
 });

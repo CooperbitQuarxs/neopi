@@ -56,6 +56,7 @@ import {
 	cfgSpeechVoice,
 	cfgTtsPacing,
 	speechPacingMargin,
+	speechPacingThreads,
 	speechSegmentOptions,
 } from "./settings";
 
@@ -401,10 +402,12 @@ export class Vocalizer {
 		const sessionSettings = source?.settings ?? settings;
 		const voice = cfgSpeechVoice.get(sessionSettings) || DEFAULT_TTS_VOICE;
 		const speed = cfgSpeechSpeed.get(sessionSettings);
+		const threads = speechPacingThreads(sessionSettings);
 		const handle =
 			modelKey === "kokoro-paced"
 				? createPacedSpeechStream({
-						synthesize: text => ttsClient.synthesize(modelKey, text, { voice, speed, signal: abort.signal }),
+						synthesize: text =>
+							ttsClient.synthesize(modelKey, text, { voice, speed, threads, signal: abort.signal }),
 						pacer: new SpeechPacer(speechTimingEstimate, speechPacingMargin(sessionSettings)),
 						enabled: cfgTtsPacing.get(sessionSettings),
 						signal: abort.signal,

@@ -29,6 +29,7 @@ import {
 	cfgTtsLocalVoice,
 	cfgTtsPacing,
 	speechPacingMargin,
+	speechPacingThreads,
 	speechSegmentOptions,
 } from "../tts/settings";
 
@@ -93,7 +94,8 @@ export default class Say extends Command {
 			const stream =
 				model === "kokoro-paced"
 					? createPacedSpeechStream({
-							synthesize: text => ttsClient.synthesize(model, text, { voice, speed }),
+							synthesize: text =>
+								ttsClient.synthesize(model, text, { voice, speed, threads: speechPacingThreads(settings) }),
 							pacer: new SpeechPacer(speechTimingEstimate, speechPacingMargin(settings)),
 							enabled: !flags.out && cfgTtsPacing.get(settings),
 						})

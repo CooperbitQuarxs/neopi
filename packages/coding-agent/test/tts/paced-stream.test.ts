@@ -33,6 +33,35 @@ describe("paced speech deadlines", () => {
 		expect(pacer.delay(100)).toBeCloseTo(5060);
 	});
 
+	test("favorable synthesis idles without underrunning the playback horizon", async () => {
+		const clock = new FakeClock();
+		const stream = createPacedSpeechStream({
+			enabled: true,
+			pacer: new SpeechPacer({ synthesisMsPerChar: 10, audioMsPerChar: 100 }, 100, clock),
+			async synthesize() {
+				clock.time += 100;
+				return { pcm: new Float32Array(1000), sampleRate: 1000 };
+			},
+		});
+		for (let i = 0; i < 20; i++) stream.push("0123456789");
+		stream.end();
+		let horizon = 0;
+		let gaps = 0;
+		for await (const chunk of stream.chunks) {
+			if (chunk.index > 0 && clock.now() > horizon) gaps++;
+			horizon = Math.max(clock.now(), horizon) + 1000;
+		}
+		expect(gaps).toBe(0);
+		expect(clock.waits).toHaveLength(19);
+		expect(clock.waits.every(ms => ms >= 800)).toBe(true);
+	});
+
+	test("an unfavorable synthesis estimate never inserts extra delay", () => {
+		const pacer = new SpeechPacer({ synthesisMsPerChar: 100, audioMsPerChar: 20 }, 350, new FakeClock());
+		pacer.buffer(2000);
+		expect(pacer.delay(100)).toBe(0);
+	});
+
 	test("idle intervals preserve FIFO and never overlap synthesis despite underprediction", async () => {
 		const clock = new FakeClock();
 		const starts: number[] = [];

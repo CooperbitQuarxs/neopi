@@ -89,6 +89,7 @@ Settings appear under Providers / Services:
 |---|---|---|
 | `tts.pacing` | `true` | Enable idle intervals for the explicitly selected paced engine. |
 | `tts.pacingMarginMs` | `350` | Extra time before the next playback deadline. Increase for a busy machine. |
+| `tts.pacingThreads` | `0` | ONNX intra-op threads for the paced engine. Zero preserves the runtime default; try two to reduce contention. |
 | `tts.segmentMinChars` | `80` | Preferred minimum after the first segment. |
 | `tts.segmentMaxChars` | `240` | Later segment target, clamped to 40–280 characters. |
 | `tts.segmentFirstChars` | `80` | Short first segment target. |

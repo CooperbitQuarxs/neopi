@@ -50,6 +50,7 @@ interface KokoroTtsInstance {
 /** `KokoroTTS` static surface used to load a model from the Hugging Face Hub. */
 interface KokoroRuntime {
 	KokoroTTS: {
+		new (model: unknown, tokenizer: unknown): KokoroTtsInstance;
 		from_pretrained(
 			repo: string,
 			options: {
@@ -59,13 +60,28 @@ interface KokoroRuntime {
 			},
 		): Promise<KokoroTtsInstance>;
 	};
+	transformers: TransformersEnv;
 }
 
 /**
- * The `@huggingface/transformers` instance `kokoro-js` runs on. We only touch its
- * `env` (cache dir + log level) and `LogLevel`; inference goes through Kokoro.
+ * The transformers instance used by Kokoro. Explicit thread counts require
+ * loading the same model/tokenizer with session options before wrapping them.
  */
 interface TransformersEnv {
+	StyleTextToSpeech2Model: {
+		from_pretrained(
+			repo: string,
+			options: {
+				dtype: TinyModelDtype;
+				device: KokoroDevice;
+				progress_callback: (info: ProgressInfo) => void;
+				session_options: { intraOpNumThreads: number };
+			},
+		): Promise<unknown>;
+	};
+	AutoTokenizer: {
+		from_pretrained(repo: string, options: { progress_callback: (info: ProgressInfo) => void }): Promise<unknown>;
+	};
 	env: {
 		cacheDir?: string;
 		allowLocalModels?: boolean;
@@ -82,6 +98,7 @@ interface TransformersEnv {
 }
 
 const models = new Map<TtsLocalModelKey, Promise<KokoroTtsInstance>>();
+const modelThreads = new Map<TtsLocalModelKey, number>();
 let synthesizeQueue = Promise.resolve();
 const kokoroRuntime = new MemoizedRuntime<KokoroRuntime>();
 
@@ -160,8 +177,10 @@ function loadKokoroRuntime(
 		const transformersEntry = resolveRuntimeModule(nodeModules, TRANSFORMERS_PACKAGE);
 		if (!transformersEntry) throw new Error(`Unable to resolve ${TRANSFORMERS_PACKAGE} in runtime at ${nodeModules}`);
 		const runtimeRequire = createRequire(kokoroEntry);
-		configureTransformers(runtimeRequire(transformersEntry) as TransformersEnv);
-		return runtimeRequire(kokoroEntry) as KokoroRuntime;
+		const transformers = runtimeRequire(transformersEntry) as TransformersEnv;
+		configureTransformers(transformers);
+		const runtime = runtimeRequire(kokoroEntry) as Pick<KokoroRuntime, "KokoroTTS">;
+		return { KokoroTTS: runtime.KokoroTTS, transformers };
 	});
 }
 
@@ -172,7 +191,21 @@ async function loadModelOnDevice(
 	transport: TtsTransport,
 	requestId: string,
 	device: KokoroDevice,
+	threads: number,
 ): Promise<KokoroTtsInstance> {
+	if (threads > 0 && device === "cpu") {
+		const progress_callback = (info: ProgressInfo) => sendProgress(transport, requestId, modelKey, info);
+		const [model, tokenizer] = await Promise.all([
+			runtime.transformers.StyleTextToSpeech2Model.from_pretrained(spec.repo, {
+				device,
+				dtype: ttsDtypeOverride ?? spec.dtype,
+				progress_callback,
+				session_options: { intraOpNumThreads: threads },
+			}),
+			runtime.transformers.AutoTokenizer.from_pretrained(spec.repo, { progress_callback }),
+		]);
+		return new runtime.KokoroTTS(model, tokenizer);
+	}
 	return runtime.KokoroTTS.from_pretrained(spec.repo, {
 		device,
 		dtype: ttsDtypeOverride ?? spec.dtype,
@@ -186,6 +219,7 @@ async function loadModelWithDeviceFallback(
 	modelKey: TtsLocalModelKey,
 	transport: TtsTransport,
 	requestId: string,
+	threads: number,
 ): Promise<{ model: KokoroTtsInstance; device: KokoroDevice }> {
 	const order = tinyModelDeviceLoadOrder(ttsDevicePreference);
 	if (order[0] !== ttsDevicePreference.device) {
@@ -204,7 +238,10 @@ async function loadModelWithDeviceFallback(
 	for (let i = 0; i < devices.length; i += 1) {
 		const device = devices[i]!;
 		try {
-			return { model: await loadModelOnDevice(runtime, spec, modelKey, transport, requestId, device), device };
+			return {
+				model: await loadModelOnDevice(runtime, spec, modelKey, transport, requestId, device, threads),
+				device,
+			};
 		} catch (error) {
 			if (i === devices.length - 1) throw error;
 			const fallbackDevice = devices[i + 1]!;
@@ -224,15 +261,22 @@ async function loadModel(
 	modelKey: TtsLocalModelKey,
 	transport: TtsTransport,
 	requestId: string,
+	requestedThreads = 0,
 ): Promise<KokoroTtsInstance> {
 	const spec = getTtsLocalModelSpec(modelKey);
 	if (!spec) throw new Error(`Unknown local TTS model: ${modelKey}`);
+	const threads =
+		modelKey === "kokoro-paced" && Number.isFinite(requestedThreads)
+			? Math.max(0, Math.min(64, Math.floor(requestedThreads)))
+			: 0;
+	if ((modelThreads.get(modelKey) ?? 0) !== threads) models.delete(modelKey);
+	modelThreads.set(modelKey, threads);
 	const cached = replayCachedReady(models, modelKey, transport, requestId, TTS_TASK, spec.repo);
 	if (cached) return cached;
 
 	const runtime = await loadKokoroRuntime(transport, requestId, modelKey);
 	const startedAt = performance.now();
-	const loaded = loadModelWithDeviceFallback(runtime, spec, modelKey, transport, requestId).then(
+	const loaded = loadModelWithDeviceFallback(runtime, spec, modelKey, transport, requestId, threads).then(
 		({ model, device }) => {
 			sendLog(transport, "debug", "tts: local model loaded", {
 				modelKey,
@@ -265,8 +309,9 @@ async function synthesize(
 	text: string,
 	voice: string | undefined,
 	speed: number | undefined,
+	threads: number | undefined,
 ): Promise<{ pcm: Float32Array; sampleRate: number }> {
-	const synthesizer = await loadModel(modelKey, transport, requestId);
+	const synthesizer = await loadModel(modelKey, transport, requestId, threads);
 	const output = await synthesizer.generate(text, {
 		voice: resolveTtsVoice(modelKey, voice),
 		speed: resolveTtsSpeed(speed),
@@ -308,6 +353,7 @@ async function handleQueuedRequest(
 			request.text,
 			request.voice,
 			request.speed,
+			request.threads,
 		);
 		transport.send({ type: "audio", id: request.id, pcm, sampleRate });
 	} catch (error) {

@@ -19,7 +19,7 @@ import { ttsClient } from "../tts/tts-client";
 import { encodeWav } from "../tts/wav";
 import { formatPathRelativeToCwd, resolveToCwd } from "./path-utils";
 
-import { cfgTtsLocalSpeed, cfgTtsLocalVoice, speechSegmentOptions } from "../tts/settings";
+import { cfgTtsLocalSpeed, cfgTtsLocalVoice, speechPacingThreads, speechSegmentOptions } from "../tts/settings";
 
 // Built-in voices per xAI Tier-1 docs (2026-05-16). xAI also accepts custom voice IDs,
 // so the schema does NOT enum-restrict voice_id; this constant only drives the description.
@@ -146,7 +146,13 @@ async function synthesizeLocal(
 	const audio = await synthesizeSegments(
 		params.text,
 		speechSegmentOptions(settingsInstance),
-		segment => ttsClient.synthesize(model.id, segment, { voice, speed, signal }),
+		segment =>
+			ttsClient.synthesize(model.id, segment, {
+				voice,
+				speed,
+				signal,
+				...(model.id === "kokoro-paced" ? { threads: speechPacingThreads(settingsInstance) } : {}),
+			}),
 		signal,
 	);
 	if (!audio) {
