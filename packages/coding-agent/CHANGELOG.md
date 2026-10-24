@@ -9,6 +9,7 @@
 
 ### Added
 
+- Tune wake request speech sensitivity independently of the silence timeout in Settings → Interaction → Speech. Low, Normal, and High presets control whether quieter speech keeps a request open; Normal preserves existing detection, and wake-word detection and manual dictation are unchanged ([#571](https://github.com/PsychedelicShayna/neopi/pull/571), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 - Hear configurable continuation and end sounds when a wake-word request finishes recording and when its transcription returns, in addition to the activation chirp ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
 
 - Turn off `stt.wake.suppressWhileSpeaking` to interrupt spoken replies by saying "computer" with headphones or echo cancellation. Speaker-safe suppression stays on by default ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
