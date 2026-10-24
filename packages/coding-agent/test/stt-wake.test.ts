@@ -1,7 +1,16 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Settings, settings } from "../src/config/settings";
 import { FloatRing } from "../src/stt/endpointer";
-import { cfgWakeEnabled, cfgWakeSuppressWhileSpeaking } from "../src/stt/settings";
+import {
+	cfgWakeChirpPath,
+	cfgWakeContinueChirpPath,
+	cfgWakeEnabled,
+	cfgWakeEndChirpPath,
+	cfgWakeSuppressWhileSpeaking,
+} from "../src/stt/settings";
 import type { AudioSink } from "../src/stt/shared-audio-capture";
 import { STTController } from "../src/stt/stt-controller";
 import { stripWakeWords, WakeListener } from "../src/stt/wake-listener";
@@ -11,6 +20,7 @@ import { StreamingAudioPlayer } from "../src/tts/streaming-player";
 import { vocalizer } from "../src/tts/vocalizer";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
+const acquireTestLease = () => ({ release() {} });
 // Generated with espeak-ng -v en-us -s 145, resampled to 16 kHz PCM16 with ffmpeg.
 const fixture = async (name: string) =>
 	decodePcm16Wav(new Uint8Array(await Bun.file(`${import.meta.dir}/fixtures/wake-word/${name}.wav`).arrayBuffer()))
@@ -273,6 +283,7 @@ describe("wake microphone ownership", () => {
 		const capture = vi.fn(() => ({ stop() {} }));
 		const listener = new WakeListener({
 			settings,
+			acquireLease: acquireTestLease,
 			controller: new STTController(),
 			capture,
 			prepare: () => loading.promise,
@@ -293,6 +304,7 @@ describe("wake microphone ownership", () => {
 		const capture = vi.fn(() => ({ stop }));
 		const listener = new WakeListener({
 			settings,
+			acquireLease: acquireTestLease,
 			controller: new STTController(),
 			capture,
 			prepare: async () => {},
@@ -325,6 +337,7 @@ describe("wake microphone ownership", () => {
 		const warning = vi.fn();
 		const listener = new WakeListener({
 			settings,
+			acquireLease: acquireTestLease,
 			controller: new STTController(),
 			capture: (_rate, callback) => {
 				onAudio = callback;
@@ -369,6 +382,7 @@ describe("wake microphone ownership", () => {
 		const detect = vi.fn(async () => ({ matched: false, trailingSpeech: false }));
 		const listener = new WakeListener({
 			settings,
+			acquireLease: acquireTestLease,
 			controller: new STTController(),
 			capture: (_rate, callback) => {
 				onAudio = callback;
@@ -397,5 +411,69 @@ describe("wake microphone ownership", () => {
 		await settle();
 		expect(detect).toHaveBeenCalledTimes(1);
 		listener.stop();
+	});
+	it("plays start, capture-end and transcription-ready cues in order without delaying transcription", async () => {
+		cfgWakeEnabled.set(settings, true);
+		const directory = await mkdtemp(join(tmpdir(), "npi-wake-cues-"));
+		let onAudio: AudioSink | undefined;
+		const transcript = Promise.withResolvers<string>();
+		const events: string[] = [];
+		const controller = new STTController();
+		vi.spyOn(controller, "transcribeRecording").mockImplementation(async () => {
+			events.push("transcribe");
+			return transcript.promise;
+		});
+		vi.spyOn(StreamingAudioPlayer.prototype, "start").mockImplementation(() => {});
+		vi.spyOn(StreamingAudioPlayer.prototype, "write").mockImplementation(samples => {
+			events.push(["start", "continue", "end"][Math.round(samples[0]! * 10) - 1]!);
+		});
+		vi.spyOn(StreamingAudioPlayer.prototype, "end").mockResolvedValue();
+		vi.spyOn(StreamingAudioPlayer.prototype, "stop").mockImplementation(() => {});
+		const listener = new WakeListener({
+			settings,
+			acquireLease: acquireTestLease,
+			controller,
+			capture: (_rate, callback) => {
+				onAudio = callback;
+				return { stop() {} };
+			},
+			prepare: async () => {},
+			detector: { detect: async () => match },
+			submit: async text => {
+				events.push(`submit:${text}`);
+			},
+			status: () => {},
+			warning: error => {
+				throw new Error(error);
+			},
+		});
+		try {
+			const paths = await Promise.all(
+				[0.1, 0.2, 0.3].map(async (amplitude, index) => {
+					const path = join(directory, `${index}.wav`);
+					await Bun.write(path, encodePcm16Wav([Float32Array.of(amplitude)], 16000));
+					return path;
+				}),
+			);
+			cfgWakeChirpPath.set(settings, paths[0]!);
+			cfgWakeContinueChirpPath.set(settings, paths[1]!);
+			cfgWakeEndChirpPath.set(settings, paths[2]!);
+			expect(await listener.start()).toBe(true);
+			onAudio?.(null, await fixture("computer"));
+			onAudio?.(null, silence(1000));
+			await settle();
+			expect(events).toEqual(["start"]);
+			onAudio?.(null, await fixture("request"));
+			onAudio?.(null, silence(2200));
+			await settle();
+			expect(events).toEqual(["start", "continue", "transcribe"]);
+			transcript.resolve("Computer, open logs.");
+			await settle();
+			expect(events).toEqual(["start", "continue", "transcribe", "end", "submit:open logs."]);
+		} finally {
+			transcript.resolve("");
+			listener.stop();
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 });
