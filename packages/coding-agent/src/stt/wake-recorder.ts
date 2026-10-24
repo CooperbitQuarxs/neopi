@@ -73,11 +73,19 @@ export class WakeRecorder {
 	) {
 		// Only utterance finalization changes; wake-word detection and dictation keep their existing gates.
 		const sensitivity = options.speechSensitivity;
-		this.#utteranceLevel = sensitivity === "normal" ? this.#level : new SpeechLevelGate({
-			...DEFAULT_ENDPOINTER_CONFIG,
-			minThreshold: sensitivity === "high" ? 0.004 : 0.012,
-			energyRatio: sensitivity === "high" ? 1.75 : 3.5,
-		});
+		this.#utteranceLevel =
+			sensitivity === "normal"
+				? this.#level
+				: new SpeechLevelGate({
+						...DEFAULT_ENDPOINTER_CONFIG,
+						minThreshold: sensitivity === "high" ? 0.004 : 0.012,
+						energyRatio: sensitivity === "high" ? 1.75 : 3.5,
+					});
+	}
+
+	/** Includes capture-end/transcription handoff, so notifications cannot cover native wake cues. */
+	get capturing(): boolean {
+		return this.#recording || this.#chirping || this.#submitting;
 	}
 
 	push(samples: Float32Array, speechPlaying = false): void {

@@ -248,6 +248,12 @@ export interface AsyncJobFilter {
 	ownerId: string | undefined;
 }
 
+/** Actual manager transitions, distinct from eventual async-result message delivery. */
+export interface AsyncJobEvent {
+	type: "register" | "background" | "progress" | "complete" | "failed" | "cancelled";
+	job: AsyncJob;
+}
+
 export class AsyncJobManager {
 	readonly #jobs = new Map<string, AsyncJob>();
 	readonly #deliveries: AsyncJobDelivery[] = [];
@@ -268,6 +274,24 @@ export class AsyncJobManager {
 	#deliveryLoop: Promise<void> | undefined;
 	#deliveryQueueChanged = Promise.withResolvers<void>();
 	#disposed = false;
+	readonly #observers = new Set<(event: AsyncJobEvent) => void>();
+
+	subscribe(listener: (event: AsyncJobEvent) => void): () => void {
+		this.#observers.add(listener);
+		return () => {
+			this.#observers.delete(listener);
+		};
+	}
+
+	#emit(type: AsyncJobEvent["type"], job: AsyncJob): void {
+		for (const listener of this.#observers) {
+			try {
+				listener({ type, job });
+			} catch (error) {
+				logger.warn("Async job observer failed", { error: String(error) });
+			}
+		}
+	}
 
 	#filterJobs(jobs: Iterable<AsyncJob>, filter?: AsyncJobFilter): AsyncJob[] {
 		if (!filter) return Array.from(jobs);
@@ -372,6 +396,7 @@ export class AsyncJobManager {
 		const reportProgress = async (text: string, details?: AsyncJobDetails): Promise<void> => {
 			job.progressText = text;
 			if (details) job.latestDetails = details;
+			this.#emit("progress", job);
 			if (!options?.onProgress) return;
 			try {
 				await options.onProgress(text, details);
@@ -382,6 +407,7 @@ export class AsyncJobManager {
 				});
 			}
 		};
+		this.#emit("register", job);
 		job.promise = (async () => {
 			try {
 				const outcome = await run({
@@ -401,6 +427,7 @@ export class AsyncJobManager {
 				} else {
 					job.status = "completed";
 					job.resultText = text;
+					this.#emit("complete", job);
 					this.#enqueueDelivery(id, text);
 				}
 			} catch (error) {
@@ -410,6 +437,7 @@ export class AsyncJobManager {
 				job.errorText = errorText;
 				if (job.status !== "cancelled") {
 					job.status = "failed";
+					this.#emit("failed", job);
 					this.#enqueueDelivery(id, errorText);
 				}
 			}
@@ -433,6 +461,7 @@ export class AsyncJobManager {
 		if (filter && job.ownerId !== filter.ownerId) return false;
 		if (job.status !== "running") return false;
 		job.status = "cancelled";
+		this.#emit("cancelled", job);
 		job.abortController.abort(reason);
 		return true;
 	}
@@ -469,6 +498,7 @@ export class AsyncJobManager {
 		if (!job) return false;
 		if (!job.foreground) return true;
 		job.foreground = undefined;
+		this.#emit("background", job);
 		this.#suppressedDeliveries.delete(jobId);
 		if (job.status === "completed" || job.status === "failed") {
 			this.#enqueueDelivery(jobId, job.status === "completed" ? (job.resultText ?? "") : (job.errorText ?? ""));
@@ -597,6 +627,7 @@ export class AsyncJobManager {
 		for (const job of this.#filterJobs(this.#jobs.values(), filter)) {
 			if (job.status !== "running") continue;
 			job.status = "cancelled";
+			this.#emit("cancelled", job);
 			job.abortController.abort(reason);
 		}
 	}
@@ -840,6 +871,7 @@ export class AsyncJobManager {
 		this.#consumedJobResults.clear();
 		this.#releasedForegroundJobs.clear();
 		this.#deliverySinks.clear();
+		this.#observers.clear();
 		return jobsSettled && drained;
 	}
 

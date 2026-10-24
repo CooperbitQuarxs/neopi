@@ -6,6 +6,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { resolveRoleChain } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { type Settings, settings } from "../config/settings";
+import { preemptEventAudio } from "../event-audio/activity";
 import { resolveXAIHttpTransport, type XAIHttpProvider, type XAIHttpTransportRegistry } from "../lib/xai-http";
 import { type SttStreamHandle, sttClient } from "./asr-client";
 import { downloadSttModel, isSttModelCached } from "./downloader";
@@ -107,6 +108,7 @@ export class STTController {
 
 	#setState(state: SttState, options: SttCallbacks): void {
 		this.#state = state;
+		if (state !== "idle") preemptEventAudio();
 		options.onStateChange(state);
 	}
 

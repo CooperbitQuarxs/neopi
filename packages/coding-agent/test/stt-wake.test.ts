@@ -14,7 +14,12 @@ import {
 import type { AudioSink } from "../src/stt/shared-audio-capture";
 import { STTController } from "../src/stt/stt-controller";
 import { stripWakeWords, WakeListener } from "../src/stt/wake-listener";
-import { type KeywordDetector, speechBandAccepts, WakeRecorder, type WakeSpeechSensitivity } from "../src/stt/wake-recorder";
+import {
+	type KeywordDetector,
+	speechBandAccepts,
+	WakeRecorder,
+	type WakeSpeechSensitivity,
+} from "../src/stt/wake-recorder";
 import { decodePcm16Wav, encodePcm16Wav } from "../src/stt/wav";
 import { StreamingAudioPlayer } from "../src/tts/streaming-player";
 import { vocalizer } from "../src/tts/vocalizer";
@@ -141,14 +146,17 @@ describe("wake recorder", () => {
 		high.recorder.dispose();
 	});
 
-	it.each(["low", "normal", "high"] as const)("still cancels empty activation with %s sensitivity", async sensitivity => {
-		const { recorder, cancel, submit } = setup(undefined, 400, "", sensitivity);
-		await activate(recorder);
-		recorder.push(silence(3000));
-		expect(cancel).toHaveBeenCalledTimes(1);
-		expect(submit).not.toHaveBeenCalled();
-		recorder.dispose();
-	});
+	it.each(["low", "normal", "high"] as const)(
+		"still cancels empty activation with %s sensitivity",
+		async sensitivity => {
+			const { recorder, cancel, submit } = setup(undefined, 400, "", sensitivity);
+			await activate(recorder);
+			recorder.push(silence(3000));
+			expect(cancel).toHaveBeenCalledTimes(1);
+			expect(submit).not.toHaveBeenCalled();
+			recorder.dispose();
+		},
+	);
 
 	it("preserves the first request word across a detector slower than the pre-roll window", async () => {
 		const pending = Promise.withResolvers<{ matched: boolean; trailingSpeech: boolean }>();
@@ -462,6 +470,7 @@ describe("wake microphone ownership", () => {
 		const directory = await mkdtemp(join(tmpdir(), "npi-wake-cues-"));
 		let onAudio: AudioSink | undefined;
 		const transcript = Promise.withResolvers<string>();
+		const endCue = Promise.withResolvers<void>();
 		const events: string[] = [];
 		const controller = new STTController();
 		vi.spyOn(controller, "transcribeRecording").mockImplementation(async () => {
@@ -472,7 +481,9 @@ describe("wake microphone ownership", () => {
 		vi.spyOn(StreamingAudioPlayer.prototype, "write").mockImplementation(samples => {
 			events.push(["start", "continue", "end"][Math.round(samples[0]! * 10) - 1]!);
 		});
-		vi.spyOn(StreamingAudioPlayer.prototype, "end").mockResolvedValue();
+		vi.spyOn(StreamingAudioPlayer.prototype, "end").mockImplementation(() =>
+			events.at(-1) === "end" ? endCue.promise : Promise.resolve(),
+		);
 		vi.spyOn(StreamingAudioPlayer.prototype, "stop").mockImplementation(() => {});
 		const listener = new WakeListener({
 			settings,
@@ -515,8 +526,13 @@ describe("wake microphone ownership", () => {
 			transcript.resolve("Computer, open logs.");
 			await settle();
 			expect(events).toEqual(["start", "continue", "transcribe", "end", "submit:open logs."]);
+			expect(listener.capturing).toBe(true);
+			endCue.resolve();
+			await settle();
+			expect(listener.capturing).toBe(false);
 		} finally {
 			transcript.resolve("");
+			endCue.resolve();
 			listener.stop();
 			await rm(directory, { recursive: true, force: true });
 		}

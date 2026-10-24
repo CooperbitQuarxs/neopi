@@ -173,6 +173,8 @@ import { transcribeXaiAudio } from "../stt/xai-stt";
 import { XaiSTTController } from "../stt/xai-stt-controller";
 import { WakeListener } from "../stt/wake-listener";
 import { LocalVoiceMode } from "../stt/local-voice";
+import { EventAudioObserver } from "../event-audio/observer";
+import { preemptEventAudio } from "../event-audio/activity";
 import { SpeechEnhancer } from "../tts/speech-enhancer";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
@@ -1881,6 +1883,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#xaiSttController: XaiSTTController | undefined;
 	#wakeListener: WakeListener | undefined;
 	#localVoice: LocalVoiceMode | undefined;
+	#eventAudio: EventAudioObserver | undefined;
 	#syncWakeListener: (() => void) | undefined;
 	#micCursor: MicCursor | undefined;
 	// Fork: the main-composer destination outlives extension editor replacements.
@@ -2585,6 +2588,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Restore mode from session (e.g. plan mode on resume)
 		this.session.setSessionBeforeSwitchReconciler?.(async () => {
+			await this.#eventAudio?.command("off");
 			await this.#liveCommandController.stop();
 			await this.#quiesceVibeForSessionSwitch();
 		});
@@ -2624,6 +2628,16 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Subscribe to agent events
 		this.#subscribeToAgent();
+		this.#eventAudio = new EventAudioObserver(this.session, this.#subagentEventBus ?? this.#eventBus, {
+			warning: message => this.showWarning(message),
+			blocked: () =>
+				this.liveCallActive ||
+				vocalizer.isSpeaking() ||
+				(this.#sttController?.state ?? "idle") !== "idle" ||
+				this.#xaiComposerMicState !== "idle" ||
+				(this.#wakeListener?.capturing ?? false) ||
+				(this.#localVoice?.capturing ?? false),
+		});
 		this.#localVoice = new LocalVoiceMode({
 			settings: this.settings,
 			controller: new STTController({
@@ -7044,6 +7058,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#cancelGoalContinuation();
 		clearInterval(this.#jobsSheetTimer);
 		this.#jobsSheetTimer = undefined;
+		this.#eventAudio?.dispose();
+		this.#eventAudio = undefined;
 		this.#wakeListener?.stop();
 		this.#wakeListener = undefined;
 		this.#localVoice?.disable();
@@ -8206,6 +8222,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			showWarning: (msg: string) => this.showWarning(msg),
 			showStatus: (msg: string) => this.showStatus(msg),
 			onStateChange: (state: SttState) => {
+				if (state !== "idle") preemptEventAudio();
 				const target = typeof destination === "function" ? destination() : destination;
 				if (typeof destination === "function") this.#xaiComposerMicState = state;
 				// Duck assistant speech while the user is talking (push-to-talk); restore after.
