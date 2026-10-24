@@ -9,6 +9,8 @@
 
 ### Added
 
+- Hear configurable continuation and end sounds when a wake-word request finishes recording and when its transcription returns, in addition to the activation chirp ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
+
 - Turn off `stt.wake.suppressWhileSpeaking` to interrupt spoken replies by saying "computer" with headphones or echo cancellation. Speaker-safe suppression stays on by default ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
 - Choose 14 additional live voices, including Aube and Viola. The default remains Sol.
 - Use `/voice on` for session-local wake-word requests and spoken replies, optionally rewritten before speech; `/voice off` restores saved speech preferences ([#554](https://github.com/PsychedelicShayna/neopi/issues/554)).
