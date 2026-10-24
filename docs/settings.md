@@ -1170,6 +1170,14 @@ searxng:
 | `task.agentAccountPools`            | record  | `{}`      | Exact-name task/eval agent → provider id → OAuth identity keys (the `identityKey` values of [client account pools](./auth-broker-gateway.md#client-account-pools-routing-not-authorization), e.g. `email:<address>\|org:<id>` for Anthropic; `omp usage accounts` lists them). The agent authenticates for each listed provider only with those accounts, never another account or an API key, and fails when none can serve; an empty list allows no account. A malformed entry fails settings load. See [Task agent discovery](./task-agent-discovery.md#model-and-structured-output-precedence). |
 | `secrets.enabled`                   | boolean | `false`   | Enable configured secret obfuscation and built-in credential-shaped token redaction before provider requests. See [Secret obfuscation](./secrets.md).                                                                                                                                                                                                                                                                                  |
 
+The `tts` tool exports an audio file; it does not play that file as an
+assistant reply. `omp say` plays audio unless given `--out`, which saves a WAV.
+Both use `tts.localVoice` and `tts.localSpeed`. `speech.enabled` instead speaks
+assistant output as it streams, using `speech.voice` and `speech.speed`.
+Calling `tts` just to read the same reply generates a second waveform before
+the tool returns, while streaming speech handles the reply independently.
+Use the file-export tool only when a recording is needed.
+
 Provider credentials and custom model definitions are configured separately — see [Providers](./providers.md) and [Models](./models.md).
 
 Wake listening uses the existing local Parakeet downloader and worker. It first checks
@@ -1208,11 +1216,14 @@ immediately, discarding any in-progress request; tune between requests. With
 session-local `/voice on`, apply saved changes using `/voice off` then `/voice on`.
 No application restart is required. Return sensitivity to Normal to undo tuning.
 
-`/voice on` enables the wake → request → agent → spoken reply flow for this
-session only. It does not edit saved settings or the composer. `/voice off`
-stops it, and switching sessions turns it off. Only one wake listener can own
-the microphone; another session receives an ownership notice rather than
-opening a second capture.
+`/voice on` enables this session's own wake → request → agent → spoken reply
+loop. It speaks replies only to requests captured by that loop; it does not
+enable spoken playback of typed or manually submitted prompts. `speech.enabled`
+controls playback of ordinary assistant messages independently. `/voice off`
+stops the session-local loop without editing saved settings or the composer.
+Switching sessions turns it off. Only one wake listener can own the
+microphone; another session receives an ownership notice rather than opening
+a second capture.
 
 Voice mode works with saved `stt.wake.enabled` and `speech.enabled` both off.
 Turning it off restores their ordinary behavior. Choose request recognition

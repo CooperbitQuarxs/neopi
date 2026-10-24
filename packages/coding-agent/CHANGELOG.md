@@ -183,6 +183,8 @@
 
 ### Changed
 
+- The `tts` tool now tells agents it exports a file rather than speaking the reply; using it for a conversation already covered by `speech.enabled` wastes a second synthesis. Speech documentation distinguishes this path from `omp say` playback and session-local `/voice` ([#573](https://github.com/PsychedelicShayna/neopi/issues/573)).
+
 - Tool-output expansion (`app.tools.expand`) defaults to `Alt+E`; `Ctrl+O` is now menu history back. A `keybindings.yml` that binds the action keeps its keys ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - `/statusline` autosaves an unapplied draft to `neopi-statusline-draft.json` and restores it on reopen or restart; `s` applies usage-bar templates, widgets, and composer without closing, and Escape asks before applying ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 - Fork extensions now use NeoPi names and migrate existing persona, loadout, REPL, and live-persona state on first read.
