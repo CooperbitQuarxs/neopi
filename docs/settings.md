@@ -1143,7 +1143,7 @@ searxng:
 | `stt.wake.enabled` | boolean | `false` | Listen locally for "computer", chirp, record a complete request, then submit through the dictation role. Toggle under `/settings` → Interaction → Speech. Independent of manual `stt.enabled`; off never opens the wake microphone. |
 | `stt.wake.silenceMs` | number | `2000` | Silence ending a request, clamped to 200–30000 ms. |
 | `stt.wake.speechSensitivity` | enum | `normal` | Request speech detection after the chirp: `low`, `normal`, or `high`. High counts quieter speech toward keeping the request open; Low rejects more background noise. Does not change wake-word detection or manual dictation. |
-| `stt.wake.cancelMs` | number | `3000` | Cancel if no speech follows activation, clamped to 2000–5000 ms. |
+| `stt.wake.cancelMs` | number | `3000` | Cancel if no speech follows activation, clamped to 2000–5000 ms. Cancellation plays a short lower-pitched tone, separate from the activation and transcription-ready cues. |
 | `stt.wake.endWord` | string | `""` | Optional single word ending a request, removed from the submitted text. Empty uses silence only. May be "computer". |
 | `stt.wake.chirpPath` | string | `""` | Custom PCM16 mono WAV, at most two seconds. Empty uses a generated tone. |
 | `stt.wake.continueChirpPath` | string | `""` | PCM16 mono WAV, at most two seconds, played when your speech ends and transcription begins. Empty is silent. |

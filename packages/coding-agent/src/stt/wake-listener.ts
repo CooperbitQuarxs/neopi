@@ -102,16 +102,18 @@ export class WakeListener {
 				if (sound.samples.length / sound.sampleRate > 2) throw new Error("Wake chirp must be at most two seconds");
 				return sound;
 			};
-			let chirp = await loadChirp(cfgWakeChirpPath.get(this.deps.settings).trim());
-			if (!chirp) {
+			const tone = (frequency: number) => {
 				const samples = new Float32Array(1600);
 				for (let i = 0; i < samples.length; i++)
-					samples[i] = 0.1 * Math.sin((2 * Math.PI * 880 * i) / 16000) * Math.sin((Math.PI * i) / samples.length);
-				chirp = { samples, sampleRate: 16000 };
-			}
+					samples[i] =
+						0.1 * Math.sin((2 * Math.PI * frequency * i) / 16000) * Math.sin((Math.PI * i) / samples.length);
+				return { samples, sampleRate: 16000 };
+			};
+			const chirp = (await loadChirp(cfgWakeChirpPath.get(this.deps.settings).trim())) ?? tone(880);
 			if (abort.signal.aborted) return false;
 			const continueChirp = await loadChirp(cfgWakeContinueChirpPath.get(this.deps.settings).trim());
 			const endChirp = await loadChirp(cfgWakeEndChirpPath.get(this.deps.settings).trim());
+			const cancelChirp = tone(440);
 			if (abort.signal.aborted) return false;
 			const endWord = cfgWakeEndWord.get(this.deps.settings).trim();
 			if (endWord && words(endWord).length !== 1) throw new Error("Wake end word must be one word");
@@ -134,7 +136,10 @@ export class WakeListener {
 						this.deps.status("Wake word heard; recording request");
 						await this.#playChirp(chirp, abort.signal);
 					},
-					cancel: () => this.deps.status("Wake activation cancelled; listening for computer"),
+					cancel: () => {
+						this.deps.status("Wake activation cancelled; listening for computer");
+						void this.#playChirp(cancelChirp, abort.signal);
+					},
 					error: error => this.#warn(error),
 					submit: async audio => {
 						void this.#playChirp(continueChirp, abort.signal);

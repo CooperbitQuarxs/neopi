@@ -98,6 +98,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Hear a distinct cancellation chirp when a wake activation times out without a spoken request ([#575](https://github.com/PsychedelicShayna/neopi/issues/575)).
 - Wake-word interruption now rearms during `/voice` replies, cancels stale speech and rewrites, and keeps interrupted streaming speech silent until the next turn ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
 - Session catalogs report complete message counts instead of zero or a partial count when headers or early messages exceed the listing preview ([#555](https://github.com/PsychedelicShayna/neopi/issues/555)).
 - Extension package discovery now honors user and project main-settings TOML overrides and explicit clears ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
