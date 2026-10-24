@@ -1146,6 +1146,8 @@ searxng:
 | `stt.wake.cancelMs` | number | `3000` | Cancel if no speech follows activation, clamped to 2000–5000 ms. |
 | `stt.wake.endWord` | string | `""` | Optional single word ending a request, removed from the submitted text. Empty uses silence only. May be "computer". |
 | `stt.wake.chirpPath` | string | `""` | Custom PCM16 mono WAV, at most two seconds. Empty uses a generated tone. |
+| `stt.wake.continueChirpPath` | string | `""` | PCM16 mono WAV, at most two seconds, played when your speech ends and transcription begins. Empty is silent. |
+| `stt.wake.endChirpPath` | string | `""` | PCM16 mono WAV, at most two seconds, played when transcription returns successfully, before the request is submitted. Empty is silent. |
 | `stt.wake.playbackTailMs` | number | `300` | Ignore microphone frames during assistant speech and for this many milliseconds afterward, clamped to 0–3000. The readiness chirp has no tail delay. |
 | `voice.enabled` | boolean | `false` | Session-private runtime setting controlled by `/voice [on|off|status]`. Saved values never opt another session in. |
 | `voice.postprocess` | string | `""` | Optional instruction for rewriting the complete spoken reply through the existing tiny/smol role. Empty speaks the reply verbatim; failures fall back to verbatim. |
@@ -1183,6 +1185,11 @@ configurable echo tail prevents a spoken reply from waking the listener again.
 The readiness chirp is excluded from recording and speech activity; request
 capture and its silence/misactivation clocks start as soon as the chirp finishes,
 without discarding the first syllable behind an echo-tail delay.
+Optional continuation and end cues mark the next two stages: the silence or end
+word closes capture and starts transcription, then the transcription result
+arrives and is handed to the agent. These sounds do not delay transcription;
+if it returns before the continuation finishes, the end cue takes over. Failed
+or cancelled transcription and empty wake activations do not play an end cue.
 
 Under `/settings` → Interaction → Speech, **Wake silence timeout** controls how
 long a pause may last before submission (`stt.wake.silenceMs`, 200–30000 ms).

@@ -445,6 +445,8 @@ import {
 	cfgWakeCancelMs,
 	cfgWakeEndWord,
 	cfgWakeChirpPath,
+	cfgWakeContinueChirpPath,
+	cfgWakeEndChirpPath,
 	cfgWakePlaybackTailMs,
 } from "../stt/settings";
 import { combine, type SettingValueOf } from "../config/registry";
@@ -2693,6 +2695,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			cfgWakeCancelMs.listen(this.settings, syncWakeListener),
 			cfgWakeEndWord.listen(this.settings, syncWakeListener),
 			cfgWakeChirpPath.listen(this.settings, syncWakeListener),
+			cfgWakeContinueChirpPath.listen(this.settings, syncWakeListener),
+			cfgWakeEndChirpPath.listen(this.settings, syncWakeListener),
 			cfgWakePlaybackTailMs.listen(this.settings, syncWakeListener),
 		);
 		syncWakeListener();

@@ -183,6 +183,7 @@ export class WakeRecorder {
 	}
 
 	async #finish(): Promise<void> {
+		if (!this.#recording || !this.#speech || this.#submitting || this.#abort.signal.aborted) return;
 		const audio = this.#audio.take();
 		this.#reset();
 		this.#submitting = true;

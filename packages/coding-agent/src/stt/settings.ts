@@ -121,6 +121,30 @@ export const cfgWakeChirpPath = register({
 			"Path to a PCM16 mono WAV activation sound. Empty plays a generated short tone; no recording is bundled.",
 	},
 });
+export const cfgWakeContinueChirpPath = register({
+	id: "stt.wake.continueChirpPath",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Wake continuation sound",
+		description:
+			"Path to a PCM16 mono WAV, at most two seconds, played when speech capture ends and transcription starts. Empty is silent.",
+	},
+});
+export const cfgWakeEndChirpPath = register({
+	id: "stt.wake.endChirpPath",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Wake end sound",
+		description:
+			"Path to a PCM16 mono WAV, at most two seconds, played when transcription succeeds, before submitting the transcript. Empty is silent.",
+	},
+});
 
 export const cfgWakeSuppressWhileSpeaking = register({
 	id: "stt.wake.suppressWhileSpeaking",
