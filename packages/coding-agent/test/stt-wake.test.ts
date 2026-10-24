@@ -465,6 +465,79 @@ describe("wake microphone ownership", () => {
 		expect(detect).toHaveBeenCalledTimes(1);
 		listener.stop();
 	});
+	it.each([false, true])(
+		"audibly cancels an empty activation and resumes listening (custom stop cue: %s)",
+		async custom => {
+			cfgWakeEnabled.set(settings, true);
+			cfgWakeChirpPath.set(settings, "");
+			cfgWakeEndChirpPath.set(settings, custom ? `${import.meta.dir}/fixtures/wake-word/computer.wav` : "");
+			let onAudio: AudioSink | undefined;
+			const cancelled = Promise.withResolvers<void>();
+			const sounds: Float32Array[] = [];
+			const controller = new STTController();
+			const transcribe = vi.spyOn(controller, "transcribeRecording");
+			const submit = vi.fn(async () => {});
+			const detect = vi.fn(async () => match);
+			vi.spyOn(StreamingAudioPlayer.prototype, "start").mockImplementation(() => {});
+			vi.spyOn(StreamingAudioPlayer.prototype, "write").mockImplementation(samples => {
+				sounds.push(samples);
+			});
+			vi.spyOn(StreamingAudioPlayer.prototype, "end").mockImplementation(() =>
+				sounds.length === 2 ? cancelled.promise : Promise.resolve(),
+			);
+			vi.spyOn(StreamingAudioPlayer.prototype, "stop").mockImplementation(() => {});
+			const listener = new WakeListener({
+				settings,
+				acquireLease: acquireTestLease,
+				controller,
+				capture: (_rate, callback) => {
+					onAudio = callback;
+					return { stop() {} };
+				},
+				prepare: async () => {},
+				detector: { detect },
+				isSpeechPlaying: () => false,
+				submit,
+				status: () => {},
+				warning: error => {
+					throw new Error(error);
+				},
+			});
+			try {
+				const activation = await fixture("computer");
+				await listener.start();
+				onAudio?.(null, activation);
+				onAudio?.(null, silence(1000));
+				await settle();
+				onAudio?.(null, silence(3200));
+				await settle();
+				expect(sounds).toHaveLength(2);
+				expect(sounds[1]).not.toEqual(sounds[0]);
+				expect(sounds[1]!.some(sample => sample !== 0)).toBe(true);
+				if (custom) expect(sounds[1]).not.toEqual(activation);
+				expect(transcribe).not.toHaveBeenCalled();
+				expect(submit).not.toHaveBeenCalled();
+				expect(listener.capturing).toBe(true);
+				// The cancellation cue cannot activate the listener through the microphone.
+				onAudio?.(null, activation);
+				onAudio?.(null, silence(5000));
+				await settle();
+				expect(detect).toHaveBeenCalledTimes(1);
+				cancelled.resolve();
+				await settle();
+				expect(listener.capturing).toBe(false);
+				onAudio?.(null, activation);
+				onAudio?.(null, silence(1000));
+				await settle();
+				expect(detect).toHaveBeenCalledTimes(2);
+				expect(sounds).toHaveLength(3);
+			} finally {
+				cancelled.resolve();
+				listener.stop();
+			}
+		},
+	);
+
 	it("plays start, capture-end and transcription-ready cues in order without delaying transcription", async () => {
 		cfgWakeEnabled.set(settings, true);
 		const directory = await mkdtemp(join(tmpdir(), "npi-wake-cues-"));
