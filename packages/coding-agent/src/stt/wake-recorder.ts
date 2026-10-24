@@ -68,6 +68,9 @@ export class WakeRecorder {
 		},
 	) {}
 
+	/** Includes capture-end/transcription handoff, so notifications cannot cover native wake cues. */
+	get capturing(): boolean { return this.#recording || this.#chirping || this.#submitting; }
+
 	push(samples: Float32Array, speechPlaying = false): void {
 		if (this.#abort.signal.aborted) return;
 		if (speechPlaying) {

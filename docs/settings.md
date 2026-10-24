@@ -1203,6 +1203,99 @@ mode cannot run together. Named addressing such as "computer alpha" is not
 implemented; it needs one microphone owner routing to sessions over the
 control socket.
 
+#### Owner-assigned event sounds
+
+`/sounds on` enables notification sounds for this interactive session only.
+`/sounds off` immediately stops playback and unsubscribes the observer.
+`/sounds reload` rereads assignments and changed audio without restarting;
+it does not enable a disabled observer. `/sounds status` reports loaded event
+assignments, decoded clips, played cues and dropped frames. New processes
+always start off. No sounds are bundled or selected automatically.
+
+| Key | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `eventAudio.mappingPath` | string | `~/.omp/sounds/trekcore/curation.json` | Curated version-1 mapping. Clip keys must be relative `audio/...` paths under this file's archive directory; absolute paths, traversal and escaping symlinks are rejected. |
+| `eventAudio.gain` | number | `0.35` | Native playback gain, clamped to 0–1. |
+| `eventAudio.minIntervalMs` | number | `250` | Global minimum spacing between cues, clamped to 100–10000 ms. |
+| `eventAudio.streamIntervalMs` | number | `1200` | Additional shared spacing for deltas, progress, previews and raw child events, at least the global minimum and at most 60000 ms. |
+
+The mapping has shape
+`{version:1, clips:{"audio/computer/file.mp3":{status:"assigned",events:["event.id"],note:"..."}}}`.
+Only `assigned` entries are active. An empty mapping or an unmapped event is
+silent. One clip may serve several events; an event assigned to multiple
+different clips is disabled with a warning, never silently resolved by file
+order. Unsupported IDs are skipped with a warning. Edit the curated mapping,
+then use `/sounds reload` to apply it. The harness never writes assignments.
+
+Selected local files decode serially through `ffmpeg` to 24 kHz mono float PCM,
+once per unchanged selected file, and play through the existing native
+`StreamingAudioPlayer`. `ffmpeg` must be installed. Limits are 128 selected
+files, ten seconds per clip, a 2 MiB mapping and 32 MiB cached PCM. Missing,
+corrupt or over-limit clips warn and stay silent; malformed/missing mappings
+clear active assignments without ending the session. Unselected files are
+never decoded. Playback never queues: cues arriving while another is playing,
+during voice/capture, or within throttles are dropped. Wake activation and
+manual recording preempt notification playback; assistant speech and live
+voice take priority. Notification output is excluded from keyword detection.
+The existing native wake stage cues keep their separate settings and are
+not replayed through this observer.
+
+Events come from `AgentSession.subscribe`, the subagent lifecycle/progress/raw
+EventBus channels, and actual `AsyncJobManager.subscribe` transitions, not
+screen scraping. Specific candidates precede generic fallbacks; at most one
+assigned cue plays per source frame. For example, an observed Python cell
+error can use `eval.python.error`, otherwise `error.tool`; an edit completion
+can use `edit.complete`, otherwise `tool.success`. A failed edit result,
+including `perFileResults[].isError`, is never classified as tool success.
+Child raw events retain their real identities, with `subagent.event` as a
+fallback; lifecycle frames independently distinguish spawn, wake, follow-up
+and terminal outcomes. Background registration/progress excludes jobs still
+backing foreground calls; promotion is `async.background`. Tool return
+(`bash.end`/`eval.end`), job settlement and eventual `async.result` delivery
+are separate stages. Phase/log/todo status snapshots are deduplicated.
+
+Supported IDs (the runtime authority is `src/event-audio/events.ts`):
+
+- Session: `agent.start`, `agent.complete`, `agent.pause`, `turn.start`,
+  `turn.end`, `message.start`, `message.end`.
+- Provider stream: `stream.start`, `stream.done`, `thinking.start`,
+  `thinking.delta`, `thinking.end`, `text.start`, `text.delta`, `text.end`,
+  `image.end`, `toolcall.start`, `toolcall.delta`, `toolcall.end`.
+- Tools/edits: `tool.start`, `tool.progress`, `tool.preview`, `tool.success`,
+  `edit.start`, `edit.complete`. Edit results are observed at tool completion,
+  not as fabricated line-by-line application progress.
+- Shell/eval: `bash.start`, `bash.progress`, `bash.end`, `eval.start`,
+  `eval.progress`, `eval.end`, `eval.phase`, `eval.log`;
+  `eval.python.start`, `eval.python.progress`, `eval.python.end`,
+  `eval.python.error`, `eval.js.start`, `eval.js.progress`, `eval.js.end`,
+  `eval.js.error`. Language errors require real language-tagged cell errors;
+  generic tool failures are not guessed to be Python failures.
+- Jobs: `async.register`, `async.background`, `async.progress`,
+  `async.complete`, `async.failed`, `async.cancelled`, `async.result`.
+- Subagents: `subagent.start`, `subagent.wake`, `subagent.follow_up`,
+  `subagent.progress`, `subagent.event`, `subagent.complete`,
+  `subagent.failed`, `subagent.aborted`.
+- IRC/reminders: `irc.incoming`, `irc.relay`, `todo.changed`,
+  `todo.reminder`, `todo.auto_clear`, `reminder.rule`.
+- Errors/recovery: `error.provider`, `error.tool`, `error.harness`,
+  `error.interrupt`, `error.silent_abort`, `retry.start`, `retry.success`,
+  `retry.exhausted`, `fallback.applied`, `fallback.succeeded`.
+- Notices/configuration: `notice.info`, `notice.warning`, `config.warnings`,
+  `compaction.start`, `compaction.end`, `cache.start`, `cache.end`,
+  `model.changed`, `thinking_level.changed`, `goal.updated`,
+  `chat_mode.changed`, `queue.updated`, `owners.joined`, `owners.skipped`.
+- Advisor/mixture: `advisor.cost`, `advisor.yield`, `advisor.message`,
+  `mixture.hop_end`, `mixture.decision`, `mixture.limit`,
+  `mixture.checkpoint`, `mixture.run_end`.
+
+Catalogue gaps remain explicitly unsupported: `edit.apply_progress`,
+`thinking.progress_percent`, `reminder.injected`, `shell.os_background`,
+`subagent.idle`, `subagent.parked`, `wake.transcription_complete`, and
+presentation-only `ui.argument_reveal`, `ui.text_reveal`, `ui.working_loader`,
+`ui.error_banner`, `ui.desktop_notification`. Native `wake.start`,
+`wake.continue` and `wake.end` belong to the separate wake-cue consumer.
+The event observer does not claim that those are session-bus signals.
+
 #### Saved reset auto-consumption
 
 `codexResets.autoRedeem` and `claudeResets.autoRedeem` independently control saved-reset consumption: `yes` enables automatic spending, `no` disables it, and `unset` requires consent before the first spend. A session with no prompt UI to ask (such as `omp -p`) spends a reset under `unset` only when that reset expires within 5 minutes and would otherwise be lost; everything else waits for consent, with a notice pointing at `/usage reset`.

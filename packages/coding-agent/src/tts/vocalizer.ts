@@ -47,6 +47,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { resolveRoleChain } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { type Settings, settings } from "../config/settings";
+import { preemptEventAudio } from "../event-audio/activity";
 import { DEFAULT_TTS_VOICE, TTS_LOCAL_MODELS } from "./models";
 import { createPacedSpeechStream, SpeechPacer, speechTimingEstimate } from "./paced-stream";
 import { SpeakableStream } from "./speakable";
@@ -479,6 +480,7 @@ export class Vocalizer {
 	}
 
 	#queuePlayback(chunks: AsyncIterableIterator<TtsAudioChunk>, abort: AbortController): void {
+		preemptEventAudio();
 		const player = this.#createPlayer();
 		player.setGain(this.#ducked ? DUCK_GAIN : 1);
 		this.#liveAborts.add(abort);

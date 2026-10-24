@@ -9,6 +9,7 @@
 
 ### Added
 
+- Use `/sounds on|off|reload|status` for session-local, owner-assigned event sounds. Real session, tool/edit, shell/eval, subagent, IRC and background-job events drive bounded native playback; unmapped events stay silent and speech/capture takes priority.
 - Turn off `stt.wake.suppressWhileSpeaking` to interrupt spoken replies by saying "computer" with headphones or echo cancellation. Speaker-safe suppression stays on by default ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
 - Choose 14 additional live voices, including Aube and Viola. The default remains Sol.
 - Use `/voice on` for session-local wake-word requests and spoken replies, optionally rewritten before speech; `/voice off` restores saved speech preferences ([#554](https://github.com/PsychedelicShayna/neopi/issues/554)).

@@ -1,5 +1,6 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
+import { eventAudioPlaying, preemptEventAudio } from "../event-audio/activity";
 import { createStreamingPlayer, type StreamingAudioPlayer } from "../tts/streaming-player";
 import { vocalizer } from "../tts/vocalizer";
 import { sttClient } from "./asr-client";
@@ -77,6 +78,8 @@ export class WakeListener {
 
 	constructor(readonly deps: WakeListenerDependencies) {}
 
+	get capturing(): boolean { return this.#recorder?.capturing ?? false; }
+
 	async start(): Promise<boolean> {
 		if (!cfgWakeEnabled.get(this.deps.settings) || this.#abort) return false;
 		const abort = new AbortController();
@@ -112,6 +115,7 @@ export class WakeListener {
 				},
 				{
 					chirp: async () => {
+						preemptEventAudio();
 						this.deps.activated?.();
 						vocalizer.interruptTurn();
 						this.deps.status("Wake word heard; recording request");
@@ -145,7 +149,7 @@ export class WakeListener {
 					this.stop();
 				} else {
 					const suppress = cfgWakeSuppressWhileSpeaking.get(this.deps.settings);
-					recorder.push(samples, suppress && (this.deps.isSpeechPlaying?.() ?? vocalizer.isSpeaking()));
+					recorder.push(samples, eventAudioPlaying() || (suppress && (this.deps.isSpeechPlaying?.() ?? vocalizer.isSpeaking())));
 				}
 			});
 			this.deps.status("Listening for computer");
