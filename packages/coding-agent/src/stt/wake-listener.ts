@@ -10,9 +10,12 @@ import { DEFAULT_STT_MODEL_KEY } from "./models";
 import {
 	cfgWakeCancelMs,
 	cfgWakeChirpPath,
+	cfgWakeContinueChirpPath,
+	cfgWakeEndChirpPath,
 	cfgWakeEnabled,
 	cfgWakeEndWord,
 	cfgWakeSilenceMs,
+	cfgWakeSpeechSensitivity,
 	cfgWakePlaybackTailMs,
 	cfgWakeSuppressWhileSpeaking,
 } from "./settings";
@@ -59,6 +62,8 @@ export interface WakeListenerDependencies {
 	warning(text: string): void;
 	/** Hardware seam: disabled listeners must never call this. */
 	capture?: typeof sharedAudioCapture;
+	/** Test seam for a listener without claiming another session's microphone. */
+	acquireLease?: typeof acquireMicrophoneLease;
 	detector?: KeywordDetector;
 	prepare?: (signal: AbortSignal) => Promise<void>;
 	/** Runs on activation before the readiness chirp. */
@@ -78,28 +83,35 @@ export class WakeListener {
 
 	constructor(readonly deps: WakeListenerDependencies) {}
 
-	get capturing(): boolean { return this.#recorder?.capturing ?? false; }
+	get capturing(): boolean {
+		return !!this.#player || (this.#recorder?.capturing ?? false);
+	}
 
 	async start(): Promise<boolean> {
 		if (!cfgWakeEnabled.get(this.deps.settings) || this.#abort) return false;
 		const abort = new AbortController();
 		this.#abort = abort;
 		try {
-			this.#lease = acquireMicrophoneLease();
+			this.#lease = (this.deps.acquireLease ?? acquireMicrophoneLease)();
 			await (this.deps.prepare?.(abort.signal) ??
 				downloadSttModel(DEFAULT_STT_MODEL_KEY, undefined, { signal: abort.signal }));
 			if (abort.signal.aborted) return false;
-			const soundPath = cfgWakeChirpPath.get(this.deps.settings).trim();
-			let chirp: { samples: Float32Array; sampleRate: number };
-			if (soundPath) {
-				chirp = decodePcm16Wav(new Uint8Array(await Bun.file(soundPath).arrayBuffer()));
-				if (chirp.samples.length / chirp.sampleRate > 2) throw new Error("Wake chirp must be at most two seconds");
-			} else {
+			const loadChirp = async (path: string) => {
+				if (!path) return undefined;
+				const sound = decodePcm16Wav(new Uint8Array(await Bun.file(path).arrayBuffer()));
+				if (sound.samples.length / sound.sampleRate > 2) throw new Error("Wake chirp must be at most two seconds");
+				return sound;
+			};
+			let chirp = await loadChirp(cfgWakeChirpPath.get(this.deps.settings).trim());
+			if (!chirp) {
 				const samples = new Float32Array(1600);
 				for (let i = 0; i < samples.length; i++)
 					samples[i] = 0.1 * Math.sin((2 * Math.PI * 880 * i) / 16000) * Math.sin((Math.PI * i) / samples.length);
 				chirp = { samples, sampleRate: 16000 };
 			}
+			if (abort.signal.aborted) return false;
+			const continueChirp = await loadChirp(cfgWakeContinueChirpPath.get(this.deps.settings).trim());
+			const endChirp = await loadChirp(cfgWakeEndChirpPath.get(this.deps.settings).trim());
 			if (abort.signal.aborted) return false;
 			const endWord = cfgWakeEndWord.get(this.deps.settings).trim();
 			if (endWord && words(endWord).length !== 1) throw new Error("Wake end word must be one word");
@@ -109,6 +121,7 @@ export class WakeListener {
 				this.deps.detector ?? new ParakeetKeywordDetector(),
 				{
 					silenceMs: bounded(cfgWakeSilenceMs.get(this.deps.settings), 200, 30000, 2000),
+					speechSensitivity: cfgWakeSpeechSensitivity.get(this.deps.settings),
 					cancelMs: bounded(cfgWakeCancelMs.get(this.deps.settings), 2000, 5000, 3000),
 					endWord,
 					playbackTailMs: bounded(cfgWakePlaybackTailMs.get(this.deps.settings), 0, 3000, 300),
@@ -119,25 +132,17 @@ export class WakeListener {
 						this.deps.activated?.();
 						vocalizer.interruptTurn();
 						this.deps.status("Wake word heard; recording request");
-						this.#player?.stop();
-						const player = createStreamingPlayer();
-						this.#player = player;
-						try {
-							player.start(chirp.sampleRate);
-							player.write(chirp.samples);
-							await player.end();
-						} catch (error) {
-							this.#warn(error);
-						}
+						await this.#playChirp(chirp, abort.signal);
 					},
 					cancel: () => this.deps.status("Wake activation cancelled; listening for computer"),
 					error: error => this.#warn(error),
 					submit: async audio => {
-						const text = stripWakeWords(
-							await this.deps.controller.transcribeRecording(audio, abort.signal),
-							endWord,
-						);
-						if (!abort.signal.aborted && text) await this.deps.submit(text);
+						void this.#playChirp(continueChirp, abort.signal);
+						const transcript = await this.deps.controller.transcribeRecording(audio, abort.signal);
+						if (abort.signal.aborted) return;
+						void this.#playChirp(endChirp, abort.signal);
+						const text = stripWakeWords(transcript, endWord);
+						if (text) await this.deps.submit(text);
 					},
 				},
 			);
@@ -147,9 +152,12 @@ export class WakeListener {
 				if (error) {
 					this.#warn(error);
 					this.stop();
-				} else {
+				} else if (!this.#player) {
 					const suppress = cfgWakeSuppressWhileSpeaking.get(this.deps.settings);
-					recorder.push(samples, eventAudioPlaying() || (suppress && (this.deps.isSpeechPlaying?.() ?? vocalizer.isSpeaking())));
+					recorder.push(
+						samples,
+						eventAudioPlaying() || (suppress && (this.deps.isSpeechPlaying?.() ?? vocalizer.isSpeaking())),
+					);
 				}
 			});
 			this.deps.status("Listening for computer");
@@ -161,6 +169,27 @@ export class WakeListener {
 			}
 		}
 		return false;
+	}
+
+	async #playChirp(
+		chirp: { samples: Float32Array; sampleRate: number } | undefined,
+		signal: AbortSignal,
+	): Promise<void> {
+		if (!chirp || signal.aborted) return;
+		preemptEventAudio();
+		this.#player?.stop();
+		const player = createStreamingPlayer();
+		this.#player = player;
+		try {
+			player.start(chirp.sampleRate);
+			player.write(chirp.samples);
+			await player.end();
+		} catch (error) {
+			if (!signal.aborted && this.#player === player) this.#warn(error);
+		} finally {
+			player.stop();
+			if (this.#player === player) this.#player = undefined;
+		}
 	}
 
 	#warn(error: unknown): void {

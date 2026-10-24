@@ -63,6 +63,24 @@ export const cfgWakeSilenceMs = register({
 		],
 	},
 });
+export const cfgWakeSpeechSensitivity = register({
+	id: "stt.wake.speechSensitivity",
+	type: "enum",
+	values: ["low", "normal", "high"] as const,
+	default: "normal",
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Wake request speech sensitivity",
+		description:
+			"After the chirp, High keeps quieter speech from counting as silence, but background noise may delay submission. Low rejects more noise. Normal preserves the existing threshold. Does not change wake-word detection or manual dictation.",
+		options: [
+			{ value: "low", label: "Low (less sensitive)" },
+			{ value: "normal", label: "Normal (default)" },
+			{ value: "high", label: "High (quieter speech)" },
+		],
+	},
+});
 export const cfgWakeCancelMs = register({
 	id: "stt.wake.cancelMs",
 	type: "number",
@@ -101,6 +119,30 @@ export const cfgWakeChirpPath = register({
 		label: "Wake chirp sound",
 		description:
 			"Path to a PCM16 mono WAV activation sound. Empty plays a generated short tone; no recording is bundled.",
+	},
+});
+export const cfgWakeContinueChirpPath = register({
+	id: "stt.wake.continueChirpPath",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Wake continuation sound",
+		description:
+			"Path to a PCM16 mono WAV, at most two seconds, played when speech capture ends and transcription starts. Empty is silent.",
+	},
+});
+export const cfgWakeEndChirpPath = register({
+	id: "stt.wake.endChirpPath",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Wake end sound",
+		description:
+			"Path to a PCM16 mono WAV, at most two seconds, played when transcription succeeds, before submitting the transcript. Empty is silent.",
 	},
 });
 

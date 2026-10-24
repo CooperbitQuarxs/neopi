@@ -27,7 +27,9 @@ export class LocalVoiceMode {
 		return cfgVoiceEnabled.get(this.settings);
 	}
 
-	get capturing(): boolean { return this.#listener?.capturing ?? false; }
+	get capturing(): boolean {
+		return this.#listener?.capturing ?? false;
+	}
 
 	async enable(): Promise<boolean> {
 		if (this.enabled) return true;

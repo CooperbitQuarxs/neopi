@@ -278,13 +278,18 @@ export class AsyncJobManager {
 
 	subscribe(listener: (event: AsyncJobEvent) => void): () => void {
 		this.#observers.add(listener);
-		return () => { this.#observers.delete(listener); };
+		return () => {
+			this.#observers.delete(listener);
+		};
 	}
 
 	#emit(type: AsyncJobEvent["type"], job: AsyncJob): void {
 		for (const listener of this.#observers) {
-			try { listener({ type, job }); }
-			catch (error) { logger.warn("Async job observer failed", { error: String(error) }); }
+			try {
+				listener({ type, job });
+			} catch (error) {
+				logger.warn("Async job observer failed", { error: String(error) });
+			}
 		}
 	}
 

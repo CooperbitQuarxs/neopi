@@ -9,7 +9,12 @@ import { TASK_SUBAGENT_EVENT_CHANNEL, type SubagentEventPayload } from "../task/
 import type { EventBus } from "../utils/event-bus";
 import { sessionAudioEvents, record } from "./events";
 import { EventSoundPlayer } from "./player";
-import { cfgEventAudioGain, cfgEventAudioInterval, cfgEventAudioMappingPath, cfgEventAudioStreamInterval } from "./settings";
+import {
+	cfgEventAudioGain,
+	cfgEventAudioInterval,
+	cfgEventAudioMappingPath,
+	cfgEventAudioStreamInterval,
+} from "./settings";
 
 const observers = new WeakMap<AgentSession, EventAudioObserver>();
 
@@ -36,7 +41,9 @@ export class EventAudioObserver {
 		observers.set(session, this);
 	}
 
-	status(): string { return `Event sounds ${this.#player.status()} · ${cfgEventAudioMappingPath.get(this.session.settings)}`; }
+	status(): string {
+		return `Event sounds ${this.#player.status()} · ${cfgEventAudioMappingPath.get(this.session.settings)}`;
+	}
 
 	async command(args: string): Promise<string> {
 		const action = args.trim() || "status";
@@ -52,25 +59,38 @@ export class EventAudioObserver {
 			this.#player.setEnabled(true);
 			this.#subscriptions.push(this.session.subscribe(event => this.#observe(event, "main")));
 			const manager = this.session.asyncJobManager;
-			if (manager) this.#subscriptions.push(manager.subscribe(event => {
-				// Foreground-backed jobs remain tool events until explicitly promoted.
-				if (!event.job.foreground) this.#player.play([`async.${event.type}`]);
-			}));
-			if (this.bus) this.#subscriptions.push(
-				this.bus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, value => {
-					const payload = value as SubagentLifecyclePayload;
-					const id = payload.status === "started"
-						? payload.runKind === "wake" ? "subagent.wake" : payload.runKind === "followUp" ? "subagent.follow_up" : "subagent.start"
-						: payload.status === "completed" ? "subagent.complete" : payload.status === "failed" ? "subagent.failed" : "subagent.aborted";
-					this.#player.play([id]);
-					if (payload.status !== "started") this.#clearOrigin(payload.runToken);
-				}),
-				this.bus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, () => this.#player.play(["subagent.progress"])),
-				this.bus.on(TASK_SUBAGENT_EVENT_CHANNEL, value => {
-					const payload = value as SubagentEventPayload;
-					this.#observe(payload.event, payload.runToken, true);
-				}),
-			);
+			if (manager)
+				this.#subscriptions.push(
+					manager.subscribe(event => {
+						// Foreground-backed jobs remain tool events until explicitly promoted.
+						if (!event.job.foreground) this.#player.play([`async.${event.type}`]);
+					}),
+				);
+			if (this.bus)
+				this.#subscriptions.push(
+					this.bus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, value => {
+						const payload = value as SubagentLifecyclePayload;
+						const id =
+							payload.status === "started"
+								? payload.runKind === "wake"
+									? "subagent.wake"
+									: payload.runKind === "followUp"
+										? "subagent.follow_up"
+										: "subagent.start"
+								: payload.status === "completed"
+									? "subagent.complete"
+									: payload.status === "failed"
+										? "subagent.failed"
+										: "subagent.aborted";
+						this.#player.play([id]);
+						if (payload.status !== "started") this.#clearOrigin(payload.runToken);
+					}),
+					this.bus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, () => this.#player.play(["subagent.progress"])),
+					this.bus.on(TASK_SUBAGENT_EVENT_CHANNEL, value => {
+						const payload = value as SubagentEventPayload;
+						this.#observe(payload.event, payload.runToken, true);
+					}),
+				);
 		}
 		await this.#player.reload(cfgEventAudioMappingPath.get(this.session.settings));
 		return this.status();
@@ -79,7 +99,11 @@ export class EventAudioObserver {
 	#observe(event: AgentSessionEvent, origin: string, child = false): void {
 		if (!this.#enabled) return;
 		let candidates: string[];
-		if (event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end") {
+		if (
+			event.type === "tool_execution_start" ||
+			event.type === "tool_execution_update" ||
+			event.type === "tool_execution_end"
+		) {
 			const key = `${origin}:${event.toolCallId}`;
 			if (event.type === "tool_execution_start") {
 				// Broken producers must not retain unlimited tool arguments for a long session.
@@ -88,7 +112,13 @@ export class EventAudioObserver {
 			}
 			candidates = sessionAudioEvents(event, this.#args.get(key));
 			if (event.toolName === "eval") {
-				const result = record(event.type === "tool_execution_update" ? event.partialResult : event.type === "tool_execution_end" ? event.result : undefined);
+				const result = record(
+					event.type === "tool_execution_update"
+						? event.partialResult
+						: event.type === "tool_execution_end"
+							? event.result
+							: undefined,
+				);
 				const details = record(result?.details);
 				const cells = Array.isArray(details?.cells) ? details.cells : [];
 				// statusEvents are cumulative bounded snapshots, not fresh events on every tool update.
@@ -100,7 +130,8 @@ export class EventAudioObserver {
 			}
 			if (event.type === "tool_execution_end") {
 				this.#args.delete(key);
-				for (const position of this.#evalPositions.keys()) if (position.startsWith(`${key}:`)) this.#evalPositions.delete(position);
+				for (const position of this.#evalPositions.keys())
+					if (position.startsWith(`${key}:`)) this.#evalPositions.delete(position);
 			}
 		} else {
 			if (event.type === "agent_start") this.#clearOrigin(origin);
@@ -123,7 +154,8 @@ export class EventAudioObserver {
 				if (status?.op === "todo" && status.committed === true) candidates.unshift("todo.changed");
 			}
 		}
-		if (this.#evalPositions.size >= 1024 && !this.#evalPositions.has(key)) this.#evalPositions.delete(this.#evalPositions.keys().next().value!);
+		if (this.#evalPositions.size >= 1024 && !this.#evalPositions.has(key))
+			this.#evalPositions.delete(this.#evalPositions.keys().next().value!);
 		this.#evalPositions.set(key, elided + details.statusEvents.length);
 	}
 

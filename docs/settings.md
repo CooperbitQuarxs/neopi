@@ -1142,9 +1142,12 @@ searxng:
 | `stt.submitTrigger`                 | enum    | `never`   | When completed dictation auto-submits: `never`, `release`, `release-complete`, or `say-submit`.                                                                                                                                                                                                                                                                                                                                        |
 | `stt.wake.enabled` | boolean | `false` | Listen locally for "computer", chirp, record a complete request, then submit through the dictation role. Toggle under `/settings` → Interaction → Speech. Independent of manual `stt.enabled`; off never opens the wake microphone. |
 | `stt.wake.silenceMs` | number | `2000` | Silence ending a request, clamped to 200–30000 ms. |
+| `stt.wake.speechSensitivity` | enum | `normal` | Request speech detection after the chirp: `low`, `normal`, or `high`. High counts quieter speech toward keeping the request open; Low rejects more background noise. Does not change wake-word detection or manual dictation. |
 | `stt.wake.cancelMs` | number | `3000` | Cancel if no speech follows activation, clamped to 2000–5000 ms. |
 | `stt.wake.endWord` | string | `""` | Optional single word ending a request, removed from the submitted text. Empty uses silence only. May be "computer". |
 | `stt.wake.chirpPath` | string | `""` | Custom PCM16 mono WAV, at most two seconds. Empty uses a generated tone. |
+| `stt.wake.continueChirpPath` | string | `""` | PCM16 mono WAV, at most two seconds, played when your speech ends and transcription begins. Empty is silent. |
+| `stt.wake.endChirpPath` | string | `""` | PCM16 mono WAV, at most two seconds, played when transcription returns successfully, before the request is submitted. Empty is silent. |
 | `stt.wake.playbackTailMs` | number | `300` | Ignore microphone frames during assistant speech and for this many milliseconds afterward, clamped to 0–3000. The readiness chirp has no tail delay. |
 | `voice.enabled` | boolean | `false` | Session-private runtime setting controlled by `/voice [on|off|status]`. Saved values never opt another session in. |
 | `voice.postprocess` | string | `""` | Optional instruction for rewriting the complete spoken reply through the existing tiny/smol role. Empty speaks the reply verbatim; failures fall back to verbatim. |
@@ -1182,6 +1185,28 @@ configurable echo tail prevents a spoken reply from waking the listener again.
 The readiness chirp is excluded from recording and speech activity; request
 capture and its silence/misactivation clocks start as soon as the chirp finishes,
 without discarding the first syllable behind an echo-tail delay.
+Optional continuation and end cues mark the next two stages: the silence or end
+word closes capture and starts transcription, then the transcription result
+arrives and is handed to the agent. These sounds do not delay transcription;
+if it returns before the continuation finishes, the end cue takes over. Failed
+or cancelled transcription and empty wake activations do not play an end cue.
+
+Under `/settings` → Interaction → Speech, **Wake silence timeout** controls how
+long a pause may last before submission (`stt.wake.silenceMs`, 200–30000 ms).
+**Wake request speech sensitivity** controls what counts as speech during that
+pause, rather than changing the timeout. Choose High if quieter words are being
+counted as silence; choose Low if room noise keeps requests open. Normal preserves
+the original thresholds. High lowers the absolute RMS floor from 0.008 to 0.004
+and the adaptive noise-floor multiplier from 2.5 to 1.75; Low uses 0.012 and 3.5.
+All three retain the same speech-band filter. These are energy-based presets, not
+a guarantee of speech/noise separation: High can delay completion in a noisy room.
+Longer silence timeouts also allow longer thinking pauses, at the cost of waiting
+longer to submit. No default or saved timeout is changed.
+
+Changing either control in ordinary wake listening restarts that listener
+immediately, discarding any in-progress request; tune between requests. With
+session-local `/voice on`, apply saved changes using `/voice off` then `/voice on`.
+No application restart is required. Return sensitivity to Normal to undo tuning.
 
 `/voice on` enables the wake → request → agent → spoken reply flow for this
 session only. It does not edit saved settings or the composer. `/voice off`

@@ -9,7 +9,8 @@ export const cfgEventAudioMappingPath = register({
 		tab: "interaction",
 		group: "Speech",
 		label: "Event sound mapping",
-		description: "Owner-curated version-1 sound assignments. /sounds on enables this session; /sounds reload rereads it.",
+		description:
+			"Owner-curated version-1 sound assignments. /sounds on enables this session; /sounds reload rereads it.",
 	},
 });
 

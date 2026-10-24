@@ -11,10 +11,17 @@ const MAX_FILES = 128;
 const MAX_PCM_BYTES = 32 * 1024 * 1024;
 
 export function expandAudioPath(value: string): string {
-	return value === "~" ? os.homedir() : value.startsWith("~/") ? path.join(os.homedir(), value.slice(2)) : path.resolve(value);
+	return value === "~"
+		? os.homedir()
+		: value.startsWith("~/")
+			? path.join(os.homedir(), value.slice(2))
+			: path.resolve(value);
 }
 
-interface Clip { samples: Float32Array; stamp: string; }
+interface Clip {
+	samples: Float32Array;
+	stamp: string;
+}
 export interface EventSoundOptions {
 	warning(message: string): void;
 	blocked(): boolean;
@@ -73,12 +80,16 @@ export class EventSoundPlayer {
 		this.#loadingGeneration = generation;
 		this.#stop();
 		this.#warningKeys.clear();
-		this.#loading = this.#load(expandAudioPath(mappingPath), generation).catch(error => {
-			if (generation !== this.#generation) return;
-			this.#mapping.clear();
-			this.#cache.clear();
-			this.#warn("mapping", `cannot load ${mappingPath}: ${String(error)}`);
-		}).finally(() => { this.#loading = undefined; });
+		this.#loading = this.#load(expandAudioPath(mappingPath), generation)
+			.catch(error => {
+				if (generation !== this.#generation) return;
+				this.#mapping.clear();
+				this.#cache.clear();
+				this.#warn("mapping", `cannot load ${mappingPath}: ${String(error)}`);
+			})
+			.finally(() => {
+				this.#loading = undefined;
+			});
 		return this.#loading;
 	}
 
@@ -98,8 +109,15 @@ export class EventSoundPlayer {
 				this.#warn(`schema:${relative}`, `invalid events for ${relative}; skipped`);
 				continue;
 			}
-			if (!relative.startsWith("audio/") || relative.split("/").some(part => part === "..") || path.isAbsolute(relative)) {
-				this.#warn(`path:${relative}`, `clip path must stay under this archive's audio/ directory; skipped ${relative}`);
+			if (
+				!relative.startsWith("audio/") ||
+				relative.split("/").some(part => part === "..") ||
+				path.isAbsolute(relative)
+			) {
+				this.#warn(
+					`path:${relative}`,
+					`clip path must stay under this archive's audio/ directory; skipped ${relative}`,
+				);
 				continue;
 			}
 			const absolute = path.resolve(archiveRoot, relative);
@@ -126,23 +144,45 @@ export class EventSoundPlayer {
 			try {
 				const real = await fs.realpath(filename);
 				const contained = path.relative(archiveRoot, real);
-				if (!contained.startsWith(`audio${path.sep}`) || path.isAbsolute(contained)) throw new Error("clip resolves outside archive audio/");
+				if (!contained.startsWith(`audio${path.sep}`) || path.isAbsolute(contained))
+					throw new Error("clip resolves outside archive audio/");
 				const source = Bun.file(real);
 				const stat = await source.stat();
 				if (!stat.isFile()) throw new Error("not a regular file");
 				const stamp = `${stat.size}:${stat.mtimeMs}`;
 				let clip = this.#cache.get(filename);
 				if (clip?.stamp !== stamp) {
-					const process = Bun.spawn(["ffmpeg", "-nostdin", "-v", "error", "-i", real,
-						"-t", String(MAX_SECONDS + 0.01), "-f", "f32le", "-ac", "1", "-ar", String(SAMPLE_RATE), "pipe:1"],
-						{ stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+					const process = Bun.spawn(
+						[
+							"ffmpeg",
+							"-nostdin",
+							"-v",
+							"error",
+							"-i",
+							real,
+							"-t",
+							String(MAX_SECONDS + 0.01),
+							"-f",
+							"f32le",
+							"-ac",
+							"1",
+							"-ar",
+							String(SAMPLE_RATE),
+							"pipe:1",
+						],
+						{ stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+					);
 					this.#decoder = process;
 					const timeout = setTimeout(() => process.kill(), 15_000);
 					try {
-						const [buffer, exit] = await Promise.all([new Response(process.stdout).arrayBuffer(), process.exited]);
+						const [buffer, exit] = await Promise.all([
+							new Response(process.stdout).arrayBuffer(),
+							process.exited,
+						]);
 						if (exit !== 0) throw new Error(`ffmpeg exited ${exit}`);
 						if (buffer.byteLength === 0 || buffer.byteLength % 4 !== 0) throw new Error("empty or corrupt audio");
-						if (buffer.byteLength / 4 > SAMPLE_RATE * MAX_SECONDS) throw new Error(`clip exceeds ${MAX_SECONDS} seconds`);
+						if (buffer.byteLength / 4 > SAMPLE_RATE * MAX_SECONDS)
+							throw new Error(`clip exceeds ${MAX_SECONDS} seconds`);
 						clip = { samples: new Float32Array(buffer), stamp };
 					} finally {
 						clearTimeout(timeout);
@@ -174,8 +214,13 @@ export class EventSoundPlayer {
 		const stream = isStreamingCue(id);
 		const interval = Math.max(100, Math.min(10_000, this.options.interval() || 250));
 		const streamInterval = Math.max(interval, Math.min(60_000, this.options.streamInterval() || 1200));
-		if (this.#active || this.options.blocked() || now - this.#last < interval ||
-			(stream && now - this.#lastStream < streamInterval) || now - (this.#lastById.get(id) ?? -Infinity) < (stream ? streamInterval : interval)) {
+		if (
+			this.#active ||
+			this.options.blocked() ||
+			now - this.#last < interval ||
+			(stream && now - this.#lastStream < streamInterval) ||
+			now - (this.#lastById.get(id) ?? -Infinity) < (stream ? streamInterval : interval)
+		) {
 			this.#dropped++;
 			return;
 		}
@@ -186,16 +231,21 @@ export class EventSoundPlayer {
 		this.#active = player;
 		this.#played++;
 		// Voice starts preempt notification playback, including already queued native samples.
-		this.#priorityTimer = setInterval(() => { if (this.options.blocked()) this.#stop(); }, 20);
+		this.#priorityTimer = setInterval(() => {
+			if (this.options.blocked()) this.#stop();
+		}, 20);
 		this.#priorityTimer.unref();
 		this.#releaseAudio = ownEventAudio(() => this.#stop());
 		const gain = this.options.gain();
 		player.setGain(Number.isFinite(gain) ? Math.max(0, Math.min(1, gain)) : 0.35);
 		player.start(SAMPLE_RATE);
 		player.write(this.#mapping.get(id)!.samples);
-		void player.end().catch(error => this.#warn("playback", `playback failed: ${String(error)}`)).finally(() => {
-			if (this.#active === player) this.#stop();
-		});
+		void player
+			.end()
+			.catch(error => this.#warn("playback", `playback failed: ${String(error)}`))
+			.finally(() => {
+				if (this.#active === player) this.#stop();
+			});
 	}
 
 	#stop(): void {

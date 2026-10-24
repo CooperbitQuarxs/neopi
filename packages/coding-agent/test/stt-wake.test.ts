@@ -1,16 +1,31 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Settings, settings } from "../src/config/settings";
 import { FloatRing } from "../src/stt/endpointer";
-import { cfgWakeEnabled, cfgWakeSuppressWhileSpeaking } from "../src/stt/settings";
+import {
+	cfgWakeChirpPath,
+	cfgWakeContinueChirpPath,
+	cfgWakeEnabled,
+	cfgWakeEndChirpPath,
+	cfgWakeSuppressWhileSpeaking,
+} from "../src/stt/settings";
 import type { AudioSink } from "../src/stt/shared-audio-capture";
 import { STTController } from "../src/stt/stt-controller";
 import { stripWakeWords, WakeListener } from "../src/stt/wake-listener";
-import { type KeywordDetector, speechBandAccepts, WakeRecorder } from "../src/stt/wake-recorder";
+import {
+	type KeywordDetector,
+	speechBandAccepts,
+	WakeRecorder,
+	type WakeSpeechSensitivity,
+} from "../src/stt/wake-recorder";
 import { decodePcm16Wav, encodePcm16Wav } from "../src/stt/wav";
 import { StreamingAudioPlayer } from "../src/tts/streaming-player";
 import { vocalizer } from "../src/tts/vocalizer";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
+const acquireTestLease = () => ({ release() {} });
 // Generated with espeak-ng -v en-us -s 145, resampled to 16 kHz PCM16 with ffmpeg.
 const fixture = async (name: string) =>
 	decodePcm16Wav(new Uint8Array(await Bun.file(`${import.meta.dir}/fixtures/wake-word/${name}.wav`).arrayBuffer()))
@@ -20,14 +35,23 @@ const settle = async () => {
 	for (let i = 0; i < 8; i++) await Promise.resolve();
 };
 const match = { matched: true, trailingSpeech: false };
-function setup(detector: KeywordDetector = { detect: async () => match }, silenceMs = 2000, endWord = "") {
+function setup(
+	detector: KeywordDetector = { detect: async () => match },
+	silenceMs = 2000,
+	endWord = "",
+	speechSensitivity: WakeSpeechSensitivity = "normal",
+) {
 	const callbacks = {
 		chirp: vi.fn(),
 		submit: vi.fn(async (_audio: Float32Array) => {}),
 		cancel: vi.fn(),
 		error: vi.fn(),
 	};
-	const recorder = new WakeRecorder(detector, { silenceMs, cancelMs: 3000, endWord, playbackTailMs: 0 }, callbacks);
+	const recorder = new WakeRecorder(
+		detector,
+		{ silenceMs, cancelMs: 3000, endWord, playbackTailMs: 0, speechSensitivity },
+		callbacks,
+	);
 	return { recorder, ...callbacks };
 }
 async function activate(recorder: WakeRecorder) {
@@ -95,6 +119,45 @@ describe("wake recorder", () => {
 		recorder.dispose();
 	});
 
+	it("high sensitivity lets quiet speech delay completion, then still ends on silence", async () => {
+		const normal = setup(undefined, 400);
+		const high = setup(undefined, 400, "", "high");
+		await activate(normal.recorder);
+		await activate(high.recorder);
+		const voiced = Float32Array.from({ length: 320 }, (_, i) => 0.1 * Math.sin((2 * Math.PI * 1000 * i) / 16000));
+		// RMS ~0.0078: below Normal's absolute floor (0.008), above High's initial threshold (0.007).
+		const quiet = Float32Array.from({ length: 6400 }, (_, i) => 0.011 * Math.sin((2 * Math.PI * 1000 * i) / 16000));
+		for (const { recorder } of [normal, high]) {
+			recorder.push(voiced);
+			recorder.push(quiet);
+		}
+		await settle();
+		expect(normal.submit).toHaveBeenCalledTimes(1);
+		expect(high.submit).not.toHaveBeenCalled();
+		high.recorder.push(silence(380));
+		expect(high.submit).not.toHaveBeenCalled();
+		high.recorder.push(silence(20));
+		await settle();
+		expect(high.submit).toHaveBeenCalledTimes(1);
+		high.recorder.push(silence(1000));
+		await settle();
+		expect(high.submit).toHaveBeenCalledTimes(1);
+		normal.recorder.dispose();
+		high.recorder.dispose();
+	});
+
+	it.each(["low", "normal", "high"] as const)(
+		"still cancels empty activation with %s sensitivity",
+		async sensitivity => {
+			const { recorder, cancel, submit } = setup(undefined, 400, "", sensitivity);
+			await activate(recorder);
+			recorder.push(silence(3000));
+			expect(cancel).toHaveBeenCalledTimes(1);
+			expect(submit).not.toHaveBeenCalled();
+			recorder.dispose();
+		},
+	);
+
 	it("preserves the first request word across a detector slower than the pre-roll window", async () => {
 		const pending = Promise.withResolvers<{ matched: boolean; trailingSpeech: boolean }>();
 		const { recorder, submit } = setup({ detect: () => pending.promise });
@@ -146,7 +209,7 @@ describe("wake recorder", () => {
 		};
 		const recorder = new WakeRecorder(
 			{ detect: async () => match },
-			{ silenceMs: 2000, cancelMs: 3000, endWord: "", playbackTailMs: 300 },
+			{ silenceMs: 2000, cancelMs: 3000, endWord: "", playbackTailMs: 300, speechSensitivity: "normal" },
 			callbacks,
 		);
 		await activate(recorder);
@@ -171,7 +234,7 @@ describe("wake recorder", () => {
 		const submitted: Float32Array[] = [];
 		const recorder = new WakeRecorder(
 			{ detect: async () => match },
-			{ silenceMs: 2000, cancelMs: 3000, endWord: "", playbackTailMs: 300 },
+			{ silenceMs: 2000, cancelMs: 3000, endWord: "", playbackTailMs: 300, speechSensitivity: "normal" },
 			{
 				chirp: () => played.promise,
 				submit: async audio => {
@@ -273,6 +336,7 @@ describe("wake microphone ownership", () => {
 		const capture = vi.fn(() => ({ stop() {} }));
 		const listener = new WakeListener({
 			settings,
+			acquireLease: acquireTestLease,
 			controller: new STTController(),
 			capture,
 			prepare: () => loading.promise,
@@ -293,6 +357,7 @@ describe("wake microphone ownership", () => {
 		const capture = vi.fn(() => ({ stop }));
 		const listener = new WakeListener({
 			settings,
+			acquireLease: acquireTestLease,
 			controller: new STTController(),
 			capture,
 			prepare: async () => {},
@@ -325,6 +390,7 @@ describe("wake microphone ownership", () => {
 		const warning = vi.fn();
 		const listener = new WakeListener({
 			settings,
+			acquireLease: acquireTestLease,
 			controller: new STTController(),
 			capture: (_rate, callback) => {
 				onAudio = callback;
@@ -369,6 +435,7 @@ describe("wake microphone ownership", () => {
 		const detect = vi.fn(async () => ({ matched: false, trailingSpeech: false }));
 		const listener = new WakeListener({
 			settings,
+			acquireLease: acquireTestLease,
 			controller: new STTController(),
 			capture: (_rate, callback) => {
 				onAudio = callback;
@@ -397,5 +464,77 @@ describe("wake microphone ownership", () => {
 		await settle();
 		expect(detect).toHaveBeenCalledTimes(1);
 		listener.stop();
+	});
+	it("plays start, capture-end and transcription-ready cues in order without delaying transcription", async () => {
+		cfgWakeEnabled.set(settings, true);
+		const directory = await mkdtemp(join(tmpdir(), "npi-wake-cues-"));
+		let onAudio: AudioSink | undefined;
+		const transcript = Promise.withResolvers<string>();
+		const endCue = Promise.withResolvers<void>();
+		const events: string[] = [];
+		const controller = new STTController();
+		vi.spyOn(controller, "transcribeRecording").mockImplementation(async () => {
+			events.push("transcribe");
+			return transcript.promise;
+		});
+		vi.spyOn(StreamingAudioPlayer.prototype, "start").mockImplementation(() => {});
+		vi.spyOn(StreamingAudioPlayer.prototype, "write").mockImplementation(samples => {
+			events.push(["start", "continue", "end"][Math.round(samples[0]! * 10) - 1]!);
+		});
+		vi.spyOn(StreamingAudioPlayer.prototype, "end").mockImplementation(() =>
+			events.at(-1) === "end" ? endCue.promise : Promise.resolve(),
+		);
+		vi.spyOn(StreamingAudioPlayer.prototype, "stop").mockImplementation(() => {});
+		const listener = new WakeListener({
+			settings,
+			acquireLease: acquireTestLease,
+			controller,
+			capture: (_rate, callback) => {
+				onAudio = callback;
+				return { stop() {} };
+			},
+			prepare: async () => {},
+			detector: { detect: async () => match },
+			submit: async text => {
+				events.push(`submit:${text}`);
+			},
+			status: () => {},
+			warning: error => {
+				throw new Error(error);
+			},
+		});
+		try {
+			const paths = await Promise.all(
+				[0.1, 0.2, 0.3].map(async (amplitude, index) => {
+					const path = join(directory, `${index}.wav`);
+					await Bun.write(path, encodePcm16Wav([Float32Array.of(amplitude)], 16000));
+					return path;
+				}),
+			);
+			cfgWakeChirpPath.set(settings, paths[0]!);
+			cfgWakeContinueChirpPath.set(settings, paths[1]!);
+			cfgWakeEndChirpPath.set(settings, paths[2]!);
+			expect(await listener.start()).toBe(true);
+			onAudio?.(null, await fixture("computer"));
+			onAudio?.(null, silence(1000));
+			await settle();
+			expect(events).toEqual(["start"]);
+			onAudio?.(null, await fixture("request"));
+			onAudio?.(null, silence(2200));
+			await settle();
+			expect(events).toEqual(["start", "continue", "transcribe"]);
+			transcript.resolve("Computer, open logs.");
+			await settle();
+			expect(events).toEqual(["start", "continue", "transcribe", "end", "submit:open logs."]);
+			expect(listener.capturing).toBe(true);
+			endCue.resolve();
+			await settle();
+			expect(listener.capturing).toBe(false);
+		} finally {
+			transcript.resolve("");
+			endCue.resolve();
+			listener.stop();
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 });

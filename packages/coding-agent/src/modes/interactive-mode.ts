@@ -443,9 +443,12 @@ import {
 	cfgSttLanguage,
 	cfgWakeEnabled,
 	cfgWakeSilenceMs,
+	cfgWakeSpeechSensitivity,
 	cfgWakeCancelMs,
 	cfgWakeEndWord,
 	cfgWakeChirpPath,
+	cfgWakeContinueChirpPath,
+	cfgWakeEndChirpPath,
 	cfgWakePlaybackTailMs,
 } from "../stt/settings";
 import { combine, type SettingValueOf } from "../config/registry";
@@ -2627,9 +2630,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#subscribeToAgent();
 		this.#eventAudio = new EventAudioObserver(this.session, this.#subagentEventBus ?? this.#eventBus, {
 			warning: message => this.showWarning(message),
-			blocked: () => this.liveCallActive || vocalizer.isSpeaking() ||
-				(this.#sttController?.state ?? "idle") !== "idle" || this.#xaiComposerMicState !== "idle" ||
-				(this.#wakeListener?.capturing ?? false) || (this.#localVoice?.capturing ?? false),
+			blocked: () =>
+				this.liveCallActive ||
+				vocalizer.isSpeaking() ||
+				(this.#sttController?.state ?? "idle") !== "idle" ||
+				this.#xaiComposerMicState !== "idle" ||
+				(this.#wakeListener?.capturing ?? false) ||
+				(this.#localVoice?.capturing ?? false),
 		});
 		this.#localVoice = new LocalVoiceMode({
 			settings: this.settings,
@@ -2698,9 +2705,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventBusUnsubscribers.push(
 			cfgWakeEnabled.listen(this.settings, syncWakeListener),
 			cfgWakeSilenceMs.listen(this.settings, syncWakeListener),
+			cfgWakeSpeechSensitivity.listen(this.settings, syncWakeListener),
 			cfgWakeCancelMs.listen(this.settings, syncWakeListener),
 			cfgWakeEndWord.listen(this.settings, syncWakeListener),
 			cfgWakeChirpPath.listen(this.settings, syncWakeListener),
+			cfgWakeContinueChirpPath.listen(this.settings, syncWakeListener),
+			cfgWakeEndChirpPath.listen(this.settings, syncWakeListener),
 			cfgWakePlaybackTailMs.listen(this.settings, syncWakeListener),
 		);
 		syncWakeListener();
