@@ -12,6 +12,7 @@ import {
 	cfgWakeEnabled,
 	cfgWakeEndWord,
 	cfgWakeSilenceMs,
+	cfgWakeSpeechSensitivity,
 	cfgWakePlaybackTailMs,
 	cfgWakeSuppressWhileSpeaking,
 } from "./settings";
@@ -106,6 +107,7 @@ export class WakeListener {
 				this.deps.detector ?? new ParakeetKeywordDetector(),
 				{
 					silenceMs: bounded(cfgWakeSilenceMs.get(this.deps.settings), 200, 30000, 2000),
+					speechSensitivity: cfgWakeSpeechSensitivity.get(this.deps.settings),
 					cancelMs: bounded(cfgWakeCancelMs.get(this.deps.settings), 2000, 5000, 3000),
 					endWord,
 					playbackTailMs: bounded(cfgWakePlaybackTailMs.get(this.deps.settings), 0, 3000, 300),

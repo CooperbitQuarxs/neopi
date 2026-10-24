@@ -441,6 +441,7 @@ import {
 	cfgSttLanguage,
 	cfgWakeEnabled,
 	cfgWakeSilenceMs,
+	cfgWakeSpeechSensitivity,
 	cfgWakeCancelMs,
 	cfgWakeEndWord,
 	cfgWakeChirpPath,
@@ -2688,6 +2689,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventBusUnsubscribers.push(
 			cfgWakeEnabled.listen(this.settings, syncWakeListener),
 			cfgWakeSilenceMs.listen(this.settings, syncWakeListener),
+			cfgWakeSpeechSensitivity.listen(this.settings, syncWakeListener),
 			cfgWakeCancelMs.listen(this.settings, syncWakeListener),
 			cfgWakeEndWord.listen(this.settings, syncWakeListener),
 			cfgWakeChirpPath.listen(this.settings, syncWakeListener),

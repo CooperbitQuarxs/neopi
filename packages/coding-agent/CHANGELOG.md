@@ -9,6 +9,7 @@
 
 ### Added
 
+- Tune wake request speech sensitivity independently of the silence timeout in Settings → Interaction → Speech. Low, Normal, and High presets control whether quieter speech keeps a request open; Normal preserves existing detection, and wake-word detection and manual dictation are unchanged.
 - Turn off `stt.wake.suppressWhileSpeaking` to interrupt spoken replies by saying "computer" with headphones or echo cancellation. Speaker-safe suppression stays on by default ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
 - Choose 14 additional live voices, including Aube and Viola. The default remains Sol.
 - Use `/voice on` for session-local wake-word requests and spoken replies, optionally rewritten before speech; `/voice off` restores saved speech preferences ([#554](https://github.com/PsychedelicShayna/neopi/issues/554)).

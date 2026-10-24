@@ -1,4 +1,4 @@
-import { FloatBuffer, FloatRing, SpeechLevelGate } from "./endpointer";
+import { DEFAULT_ENDPOINTER_CONFIG, FloatBuffer, FloatRing, SpeechLevelGate } from "./endpointer";
 
 export interface KeywordDetector {
 	detect(
@@ -8,11 +8,14 @@ export interface KeywordDetector {
 	): Promise<{ matched: boolean; trailingSpeech: boolean }>;
 }
 
+export type WakeSpeechSensitivity = "low" | "normal" | "high";
+
 export interface WakeRecorderOptions {
 	silenceMs: number;
 	cancelMs: number;
 	endWord: string;
 	playbackTailMs: number;
+	speechSensitivity: WakeSpeechSensitivity;
 }
 
 /** Spectral energy estimate using a 300–3400 Hz bandpass, after the level gate. */
@@ -38,6 +41,7 @@ export function speechBandAccepts(samples: Float32Array): boolean {
 export class WakeRecorder {
 	readonly #ring = new FloatRing(16000 * 4);
 	readonly #level = new SpeechLevelGate();
+	readonly #utteranceLevel: SpeechLevelGate;
 	readonly #abort = new AbortController();
 	readonly #frame = new Float32Array(320);
 	#filled = 0;
@@ -66,7 +70,15 @@ export class WakeRecorder {
 			cancel(): void;
 			error(error: unknown): void;
 		},
-	) {}
+	) {
+		// Only utterance finalization changes; wake-word detection and dictation keep their existing gates.
+		const sensitivity = options.speechSensitivity;
+		this.#utteranceLevel = sensitivity === "normal" ? this.#level : new SpeechLevelGate({
+			...DEFAULT_ENDPOINTER_CONFIG,
+			minThreshold: sensitivity === "high" ? 0.004 : 0.012,
+			energyRatio: sensitivity === "high" ? 1.75 : 3.5,
+		});
+	}
 
 	push(samples: Float32Array, speechPlaying = false): void {
 		if (this.#abort.signal.aborted) return;
@@ -76,6 +88,7 @@ export class WakeRecorder {
 			this.#tailSamples = Math.round(this.options.playbackTailMs * 16);
 			this.#filled = 0;
 			this.#level.reset();
+			this.#utteranceLevel.reset();
 			return;
 		}
 		this.#playbackSuppressed = false;
@@ -97,7 +110,8 @@ export class WakeRecorder {
 	#process(frame: Float32Array): void {
 		if (this.#submitting) return;
 		this.#ring.push(frame);
-		const voiced = this.#level.accept(frame) && speechBandAccepts(frame);
+		const level = this.#recording ? this.#utteranceLevel : this.#level;
+		const voiced = level.accept(frame) && speechBandAccepts(frame);
 		if (this.#busy && !this.#recording) {
 			this.#candidate.push(frame);
 			this.#pendingSpeech ||= voiced;
@@ -155,6 +169,7 @@ export class WakeRecorder {
 					this.#gated = false;
 					this.#filled = 0;
 					this.#level.reset();
+					this.#utteranceLevel.reset();
 					this.#ring.reset();
 				}
 			})

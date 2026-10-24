@@ -5,7 +5,7 @@ import { cfgWakeEnabled, cfgWakeSuppressWhileSpeaking } from "../src/stt/setting
 import type { AudioSink } from "../src/stt/shared-audio-capture";
 import { STTController } from "../src/stt/stt-controller";
 import { stripWakeWords, WakeListener } from "../src/stt/wake-listener";
-import { type KeywordDetector, speechBandAccepts, WakeRecorder } from "../src/stt/wake-recorder";
+import { type KeywordDetector, speechBandAccepts, WakeRecorder, type WakeSpeechSensitivity } from "../src/stt/wake-recorder";
 import { decodePcm16Wav, encodePcm16Wav } from "../src/stt/wav";
 import { StreamingAudioPlayer } from "../src/tts/streaming-player";
 import { vocalizer } from "../src/tts/vocalizer";
@@ -20,14 +20,23 @@ const settle = async () => {
 	for (let i = 0; i < 8; i++) await Promise.resolve();
 };
 const match = { matched: true, trailingSpeech: false };
-function setup(detector: KeywordDetector = { detect: async () => match }, silenceMs = 2000, endWord = "") {
+function setup(
+	detector: KeywordDetector = { detect: async () => match },
+	silenceMs = 2000,
+	endWord = "",
+	speechSensitivity: WakeSpeechSensitivity = "normal",
+) {
 	const callbacks = {
 		chirp: vi.fn(),
 		submit: vi.fn(async (_audio: Float32Array) => {}),
 		cancel: vi.fn(),
 		error: vi.fn(),
 	};
-	const recorder = new WakeRecorder(detector, { silenceMs, cancelMs: 3000, endWord, playbackTailMs: 0 }, callbacks);
+	const recorder = new WakeRecorder(
+		detector,
+		{ silenceMs, cancelMs: 3000, endWord, playbackTailMs: 0, speechSensitivity },
+		callbacks,
+	);
 	return { recorder, ...callbacks };
 }
 async function activate(recorder: WakeRecorder) {
@@ -95,6 +104,42 @@ describe("wake recorder", () => {
 		recorder.dispose();
 	});
 
+	it("high sensitivity lets quiet speech delay completion, then still ends on silence", async () => {
+		const normal = setup(undefined, 400);
+		const high = setup(undefined, 400, "", "high");
+		await activate(normal.recorder);
+		await activate(high.recorder);
+		const voiced = Float32Array.from({ length: 320 }, (_, i) => 0.1 * Math.sin((2 * Math.PI * 1000 * i) / 16000));
+		// RMS ~0.0078: below Normal's absolute floor (0.008), above High's initial threshold (0.007).
+		const quiet = Float32Array.from({ length: 6400 }, (_, i) => 0.011 * Math.sin((2 * Math.PI * 1000 * i) / 16000));
+		for (const { recorder } of [normal, high]) {
+			recorder.push(voiced);
+			recorder.push(quiet);
+		}
+		await settle();
+		expect(normal.submit).toHaveBeenCalledTimes(1);
+		expect(high.submit).not.toHaveBeenCalled();
+		high.recorder.push(silence(380));
+		expect(high.submit).not.toHaveBeenCalled();
+		high.recorder.push(silence(20));
+		await settle();
+		expect(high.submit).toHaveBeenCalledTimes(1);
+		high.recorder.push(silence(1000));
+		await settle();
+		expect(high.submit).toHaveBeenCalledTimes(1);
+		normal.recorder.dispose();
+		high.recorder.dispose();
+	});
+
+	it.each(["low", "normal", "high"] as const)("still cancels empty activation with %s sensitivity", async sensitivity => {
+		const { recorder, cancel, submit } = setup(undefined, 400, "", sensitivity);
+		await activate(recorder);
+		recorder.push(silence(3000));
+		expect(cancel).toHaveBeenCalledTimes(1);
+		expect(submit).not.toHaveBeenCalled();
+		recorder.dispose();
+	});
+
 	it("preserves the first request word across a detector slower than the pre-roll window", async () => {
 		const pending = Promise.withResolvers<{ matched: boolean; trailingSpeech: boolean }>();
 		const { recorder, submit } = setup({ detect: () => pending.promise });
@@ -146,7 +191,7 @@ describe("wake recorder", () => {
 		};
 		const recorder = new WakeRecorder(
 			{ detect: async () => match },
-			{ silenceMs: 2000, cancelMs: 3000, endWord: "", playbackTailMs: 300 },
+			{ silenceMs: 2000, cancelMs: 3000, endWord: "", playbackTailMs: 300, speechSensitivity: "normal" },
 			callbacks,
 		);
 		await activate(recorder);
@@ -171,7 +216,7 @@ describe("wake recorder", () => {
 		const submitted: Float32Array[] = [];
 		const recorder = new WakeRecorder(
 			{ detect: async () => match },
-			{ silenceMs: 2000, cancelMs: 3000, endWord: "", playbackTailMs: 300 },
+			{ silenceMs: 2000, cancelMs: 3000, endWord: "", playbackTailMs: 300, speechSensitivity: "normal" },
 			{
 				chirp: () => played.promise,
 				submit: async audio => {

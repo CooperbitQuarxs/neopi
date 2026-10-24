@@ -63,6 +63,24 @@ export const cfgWakeSilenceMs = register({
 		],
 	},
 });
+export const cfgWakeSpeechSensitivity = register({
+	id: "stt.wake.speechSensitivity",
+	type: "enum",
+	values: ["low", "normal", "high"] as const,
+	default: "normal",
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Wake request speech sensitivity",
+		description:
+			"After the chirp, High keeps quieter speech from counting as silence, but background noise may delay submission. Low rejects more noise. Normal preserves the existing threshold. Does not change wake-word detection or manual dictation.",
+		options: [
+			{ value: "low", label: "Low (less sensitive)" },
+			{ value: "normal", label: "Normal (default)" },
+			{ value: "high", label: "High (quieter speech)" },
+		],
+	},
+});
 export const cfgWakeCancelMs = register({
 	id: "stt.wake.cancelMs",
 	type: "number",
