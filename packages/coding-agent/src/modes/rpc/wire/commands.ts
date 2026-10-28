@@ -114,11 +114,26 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	},
 	{ name: "select_mixture", doc: "Select a registered mixture.", params: { name: "string" }, result: "ModelInfo" },
 	{ name: "get_roles", doc: "List model roles.", result: "RolesResult" },
-	{ name: "get_themes_configuration", doc: "Read native theme discovery and scoped selections.", result: "ThemesConfiguration" },
+	{
+		name: "get_themes_configuration",
+		doc: "Read native theme discovery and scoped selections.",
+		result: "ThemesConfiguration",
+	},
+	{
+		name: "get_theme",
+		doc: "Read the resolved colors of one installed native theme without selecting it.",
+		params: { name: "string" },
+		result: "ThemePalette",
+	},
 	{
 		name: "update_theme",
 		doc: "Set or inherit one native theme slot with an expected scoped value.",
-		params: { appearance: "'dark' | 'light'", scope: "'global' | 'project'", name: "string | null", expected: "string | null" },
+		params: {
+			appearance: "'dark' | 'light'",
+			scope: "'global' | 'project'",
+			name: "string | null",
+			expected: "string | null",
+		},
 		result: "ThemesConfiguration",
 	},
 	{

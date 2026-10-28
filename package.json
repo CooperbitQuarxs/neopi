@@ -7,7 +7,10 @@
 	"workspaces": {
 		"packages": [
 			"packages/*",
-			"python/robomp/web"
+			"python/robomp/web",
+			"deck/apps/*",
+			"deck/apps/bridges/*",
+			"deck/packages/*"
 		],
 		"catalog": {
 			"@babel/generator": "^7.29.7",

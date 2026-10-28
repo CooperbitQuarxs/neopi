@@ -41,6 +41,7 @@ Behavior notes:
 | `get_usage` | The `get_usage` command returns account-level provider usage reports. See [Session](#session). |
 | `get_roles` | `get_roles` / `set_role` commands and `get_state.activeRole` ([payloads](#get_roles-and-set_role-payloads)) |
 | `themes_configuration` | `get_themes_configuration`, scoped `update_theme`, and `themes_configuration_changed`. |
+| `theme_palette` | Read any installed theme's resolved palette by name with `get_theme`, without changing the selected theme. |
 | `model_selector` | Read-only `query_model_selector` returns native `/switch` matches, ordering, role aliases and row facts. |
 | `models_configuration` | Native provider/model catalog and scoped role/effort configuration, with expected-value write conflicts. |
 | `cancellable_login` | Login prompts can request secret input; `cancel_login` cancels only a login owned by the same connection. |
@@ -752,6 +753,12 @@ pick records.
 `get_themes_configuration` discovers installed native theme names and returns
 `selection.dark` and `selection.light`. Each has its effective name, the explicit
 `global` and `project` values or `null`, and resolved semantic `colors`.
+
+To preview a discovered theme without selecting it, send
+`{"type":"get_theme","name":"dark"}`. With the `theme_palette` capability, RPC
+and terminal control return `{ "name": "dark", "colors": { ... } }`, including
+the native theme's resolved semantic and exported colors. Unknown names return
+an error; the active theme and persisted configuration are unchanged.
 
 Send `update_theme` with `appearance: "dark" | "light"`, `scope: "global" | "project"`,
 `name` and `expected`. Both names are strings or `null`. `expected` must match the

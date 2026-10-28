@@ -113,7 +113,11 @@ describe("control snapshot queue", () => {
 			stopReason: "stop",
 			timestamp: 2,
 			usage: {
-				input: 25, output: 5, cacheRead: 75, cacheWrite: 0, totalTokens: 105,
+				input: 25,
+				output: 5,
+				cacheRead: 75,
+				cacheWrite: 0,
+				totalTokens: 105,
 				cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 },
 			},
 		};
@@ -123,7 +127,11 @@ describe("control snapshot queue", () => {
 		expect(session!.messages).toHaveLength(0);
 		const state = (await client.request({ type: "state" })).data as ControlSnapshot;
 		expect(state.session!.sessionUsage).toMatchObject({
-			input: 25, cacheRead: 75, cost: 6, advisorCost: 0, advisorCostState: "ready",
+			input: 25,
+			cacheRead: 75,
+			cost: 6,
+			advisorCost: 0,
+			advisorCostState: "ready",
 		});
 		expect(state.session!.approvalMode).toBe("always-ask");
 	});

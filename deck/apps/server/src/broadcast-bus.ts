@@ -1,0 +1,55 @@
+import type { ServerFrame } from "@npi-deck/protocol";
+
+/**
+ * Singleton fan-out for non-session-scoped events the deck wants every
+ * connected WebSocket client to see. Producers (route handlers, deck slash
+ * dispatcher, routine runner) call `broadcast(frame)`; the WS hub subscribes
+ * once and relays to every open connection.
+ *
+ * This decouples mutation sites from transport — `routes-tasks.ts` does not
+ * import the hub, and the hub does not import every route module.
+ */
+export type BroadcastFrame = Extract<
+	ServerFrame,
+	| { type: "tasks_changed" }
+	| { type: "skills_changed" }
+	| { type: "kb_changed" }
+	| { type: "oauth_consent" }
+	| { type: "oauth_progress" }
+	| { type: "oauth_prompt" }
+	| { type: "oauth_complete" }
+	| { type: "oauth_failed" }
+	| { type: "models_changed" }
+	| { type: "routine_run_started" }
+	| { type: "routine_step_event" }
+	| { type: "routine_run_finished" }
+	| { type: "heartbeat" }
+	| { type: "notification" }
+	/** Relayed by the WS hub only to the connections subscribed to that session. */
+	| { type: "session_disposed" }
+>;
+
+type Listener = (frame: BroadcastFrame) => void;
+
+class BroadcastBus {
+	private listeners = new Set<Listener>();
+
+	broadcast(frame: BroadcastFrame): void {
+		for (const l of this.listeners) {
+			try {
+				l(frame);
+			} catch {
+				// One bad listener must not block the others.
+			}
+		}
+	}
+
+	subscribe(listener: Listener): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+}
+
+export const broadcastBus = new BroadcastBus();

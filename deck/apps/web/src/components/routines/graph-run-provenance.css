@@ -1,0 +1,25 @@
+.graph-provenance { min-width: 0; color: rgb(var(--ink)); font-family: var(--font-sans); font-size: 12px; line-height: 1.55; }
+.graph-provenance p { margin: 7px 0; }
+.graph-provenance-note { color: rgb(var(--ink-2)); font-size: 12px; overflow-wrap: anywhere; }
+.graph-provenance-error { color: rgb(var(--danger)); white-space: pre-wrap; overflow-wrap: anywhere; }
+.graph-provenance-outcome { font-weight: 600; }
+.graph-provenance-outcome[data-status="failed"] { color: rgb(var(--danger)); }
+.graph-provenance-outcome[data-status="aborted"] { color: rgb(var(--warn)); }
+.graph-provenance-branch { min-width: 0; margin: 5px 0; }
+.graph-provenance-toggle { display: flex; align-items: baseline; gap: 6px; width: 100%; border: 0; border-radius: 4px; padding: 5px 3px; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
+.graph-provenance-toggle:hover { background: rgb(var(--paper-3)); }
+.graph-provenance-toggle:focus-visible { outline: 2px solid var(--neo-focus, rgb(var(--accent))); outline-offset: 2px; }
+.graph-provenance-toggle > span:first-child { flex: 0 0 10px; color: rgb(var(--ink-2)); }
+.graph-provenance-toggle > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.graph-provenance-children { margin: 2px 0 7px 8px; border-left: 1px solid rgb(var(--line-strong)); padding-left: 10px; }
+.graph-provenance strong { font-weight: 500; }
+.graph-provenance small { margin-left: 5px; color: rgb(var(--ink-2)); font-size: 11px; }
+.graph-provenance code { font-family: var(--font-mono); font-size: 11px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.graph-provenance-value { padding: 4px 3px; overflow-wrap: anywhere; }
+.graph-provenance-value > code, .graph-provenance-toggle code { margin-left: 5px; }
+.graph-provenance-input { margin: 9px 0; }
+.graph-provenance-status { display: inline-block; height: 6px; width: 6px; margin: 0 6px 1px 0; border-radius: 50%; background: rgb(var(--ink-3)); }
+.graph-provenance-status[data-status="success"] { background: rgb(var(--success)); }
+.graph-provenance-status[data-status="failed"] { background: rgb(var(--danger)); }
+.graph-provenance-status[data-status="aborted"] { background: rgb(var(--warn)); }
+@media (max-width: 600px) { .graph-provenance-children { margin-left: 3px; padding-left: 7px; } }

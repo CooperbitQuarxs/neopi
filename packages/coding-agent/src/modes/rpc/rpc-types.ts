@@ -46,7 +46,7 @@ import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { BtwHistoryRecord } from "../../session/btw-history";
 import type { SessionJournalEvent, SessionJournalIdentity } from "../../session/session-journal-events";
-import type { RpcThemesCommand, RpcThemesConfiguration } from "./rpc-themes-configuration";
+import type { RpcThemePalette, RpcThemesCommand, RpcThemesConfiguration } from "./rpc-themes-configuration";
 import type { UsageStatistics } from "../../session/session-entries";
 
 // ============================================================================
@@ -543,6 +543,7 @@ export interface RpcSubagentMessagesResult {
 // Success responses with data
 export type RpcResponse =
 	| { id?: string; type: "response"; command: "get_themes_configuration"; success: true; data: RpcThemesConfiguration }
+	| { id?: string; type: "response"; command: "get_theme"; success: true; data: RpcThemePalette }
 	| { id?: string; type: "response"; command: "update_theme"; success: true; data: RpcThemesConfiguration }
 	// Protocol
 	| {
@@ -938,7 +939,10 @@ export type RpcAgentSessionEventFrame =
 	| RpcMessageEventFrame;
 
 /** Every session event shape RPC mode can write, including the opt-in `messageUpdates: "delta"` projection. */
-export type RpcProjectedSessionEventFrame = RpcAgentSessionEventFrame | RpcDeltaMessageUpdateFrame | RpcJournalEventFrame;
+export type RpcProjectedSessionEventFrame =
+	| RpcAgentSessionEventFrame
+	| RpcDeltaMessageUpdateFrame
+	| RpcJournalEventFrame;
 
 export type RpcSessionEventFrame = RpcAgentSessionEventFrame | RpcSubagentFrame | RpcJournalEventFrame;
 

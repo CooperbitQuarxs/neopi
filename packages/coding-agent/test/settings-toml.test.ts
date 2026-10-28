@@ -81,18 +81,19 @@ describe("settings.toml", () => {
 		await Bun.write(path.join(cwd, ".omp/settings.toml"), "broken = [");
 		await expect(Settings.loadReadOnly({ agentDir, cwd })).rejects.toThrow("settings.toml");
 	});
-	it("keeps TOML out of YAML saves and reloads or removes overlays atomically", async () => {
+	it("saves to legacy TOML and reloads or removes overlays atomically", async () => {
 		const tomlPath = path.join(agentDir, "settings.toml");
 		await Bun.write(tomlPath, "[compaction]\nenabled = true\n");
 		const loaded = await Settings.init({ agentDir, cwd });
 		expect(cfgCompactionEnabled.get(loaded)).toBe(true);
 		cfgCompactionEnabled.set(loaded, false);
 		await loaded.flush();
-		expect(cfgCompactionEnabled.get(loaded)).toBe(true);
-		expect(await Bun.file(tomlPath).text()).toBe("[compaction]\nenabled = true\n");
+		expect(cfgCompactionEnabled.get(loaded)).toBe(false);
+		expect(Bun.TOML.parse(await Bun.file(tomlPath).text())).toEqual({ compaction: { enabled: false } });
+		expect(await Bun.file(path.join(agentDir, "config.yml")).text()).toBe(yaml);
 		await Bun.write(tomlPath, "broken = [");
 		await expect(loaded.reloadFromDisk()).rejects.toThrow("settings.toml");
-		expect(cfgCompactionEnabled.get(loaded)).toBe(true);
+		expect(cfgCompactionEnabled.get(loaded)).toBe(false);
 		await fs.rm(tomlPath);
 		await loaded.reloadFromDisk();
 		expect(cfgCompactionEnabled.get(loaded)).toBe(false);

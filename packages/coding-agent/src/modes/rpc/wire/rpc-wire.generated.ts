@@ -397,6 +397,11 @@ export interface ThemesConfiguration {
 	selection: ThemeSelections;
 }
 
+export interface ThemePalette {
+	name: string;
+	colors: Record<string, string>;
+}
+
 export type ApprovalHandler = "host" | "ui";
 
 export type ApprovalMode = "always-ask" | "write" | "yolo";
@@ -2191,6 +2196,10 @@ export interface SelectMixtureParams {
 	name: string;
 }
 
+export interface GetThemeParams {
+	name: string;
+}
+
 export interface UpdateThemeParams {
 	appearance: "dark" | "light";
 	scope: "global" | "project";
@@ -2626,6 +2635,7 @@ export interface RpcWireCommands {
 	select_mixture: { params: SelectMixtureParams; result: ModelInfo };
 	get_roles: { params: undefined; result: RolesResult };
 	get_themes_configuration: { params: undefined; result: ThemesConfiguration };
+	get_theme: { params: GetThemeParams; result: ThemePalette };
 	update_theme: { params: UpdateThemeParams; result: ThemesConfiguration };
 	query_model_selector: { params: QueryModelSelectorParams; result: ModelSelectorResult };
 	set_role: { params: SetRoleParams; result: SetRoleResult };

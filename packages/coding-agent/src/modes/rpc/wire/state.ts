@@ -21,6 +21,7 @@ export const stateDefs = {
 		themes: "string[]",
 		selection: "ThemeSelections",
 	},
+	ThemePalette: { name: "string", colors: "Record<string, string>" },
 	ApprovalHandler: "'host' | 'ui'",
 	ApprovalMode: "'always-ask' | 'write' | 'yolo'",
 	SessionUsage: {

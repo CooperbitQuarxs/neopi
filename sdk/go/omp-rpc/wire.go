@@ -1986,6 +1986,27 @@ func (v *ThemesConfiguration) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type ThemePalette struct {
+	Name   string            `json:"name"`
+	Colors map[string]string `json:"colors"`
+}
+
+func (v *ThemePalette) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ThemePalette", v.decodeFrom)
+}
+
+func (v *ThemePalette) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ThemePalette
+	d := fieldDecoder{raw: raw, owner: "ThemePalette"}
+	d.required("name", &out.Name)
+	d.required("colors", &out.Colors)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type ApprovalHandler string
 
 const (
@@ -11071,6 +11092,18 @@ func (c Commands) GetRoles(ctx context.Context) (RolesResult, error) {
 func (c Commands) GetThemesConfiguration(ctx context.Context) (ThemesConfiguration, error) {
 	var out ThemesConfiguration
 	err := c.call(ctx, "get_themes_configuration", nil, 0, &out)
+	return out, err
+}
+
+// GetThemeCommand holds the parameters of "get_theme".
+type GetThemeCommand struct {
+	Name string `json:"name"`
+}
+
+// GetTheme sends "get_theme": Read the resolved colors of one installed native theme without selecting it.
+func (c Commands) GetTheme(ctx context.Context, p GetThemeCommand) (ThemePalette, error) {
+	var out ThemePalette
+	err := c.call(ctx, "get_theme", p, 0, &out)
 	return out, err
 }
 
