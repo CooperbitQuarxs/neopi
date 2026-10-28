@@ -1,10 +1,10 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import chronicleDescription from "../prompts/chronicler/chronicle-tool.md" with { type: "text" };
-import finishDescription from "../prompts/chronicler/finish-tool.md" with { type: "text" };
-import readDescription from "../prompts/chronicler/read-tool.md" with { type: "text" };
+import bundledChronicleDescription from "../prompts/chronicler/chronicle-tool.md" with { type: "text" };
+import bundledFinishDescription from "../prompts/chronicler/finish-tool.md" with { type: "text" };
+import bundledReadDescription from "../prompts/chronicler/read-tool.md" with { type: "text" };
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import { prompt } from "@oh-my-pi/pi-utils";
 import type { ScopeLike } from "../config/registry";
 import {
 	cfgChroniclerCaptureCarryChars,
@@ -45,7 +45,9 @@ const readSchema = createReadSchema(cfgChroniclerCaptureReadPageMax.default);
 
 const chronicleDefinition = {
 	name: "chronicle",
-	description: chronicleDescription,
+	get description() {
+		return resolvePromptAsset("chronicler/chronicle-tool.md", bundledChronicleDescription).text;
+	},
 	parameters: chronicleSchema,
 } as const;
 export function getChroniclerToolSchemas(scope?: ScopeLike) {
@@ -59,12 +61,12 @@ export function getChroniclerToolSchemas(scope?: ScopeLike) {
 		chronicleDefinition,
 		{
 			name: "finish_chronicle",
-			description: prompt.render(finishDescription, { carryChars }),
+			description: renderPromptAsset("chronicler/finish-tool.md", bundledFinishDescription, { carryChars }),
 			parameters: finishSchema,
 		},
 		{
 			name: "read_chronicle",
-			description: prompt.render(readDescription, { pageSize, pageMax }),
+			description: renderPromptAsset("chronicler/read-tool.md", bundledReadDescription, { pageSize, pageMax }),
 			parameters: createReadSchema(pageMax),
 		},
 	] as const;

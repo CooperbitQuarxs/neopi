@@ -5,6 +5,7 @@ import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-se
 import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
 import { createPluginSettingsHost } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/settings-host";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import type { TspPrefsProps } from "@oh-my-pi/pi-wire";
 
 import { cfgHindsightApiToken } from "@oh-my-pi/pi-coding-agent/hindsight/settings";
@@ -111,12 +112,13 @@ describe("SettingsSelectorComponent memory tab", () => {
 
 		comp.handleInput("/");
 		for (const ch of "hindsight api token") comp.handleInput(ch);
+		comp.handleInput("\n"); // Apply the search pattern before inspecting its result.
 		const row = comp.render(120).join("\n");
 		expect(row).toContain("Hindsight API Token");
 		expect(row).toContain("••••••••");
 		expect(row).not.toContain("saved-secret-token");
 
-		comp.handleInput("\n");
+		comp.handleInput("\n"); // Open the row after confirming its search pattern.
 		expect(comp.render(120).join("\n")).not.toContain("saved-secret-token");
 		comp.handleInput("\n");
 		expect(cfgHindsightApiToken.get(settings)).toBe("saved-secret-token");
@@ -158,15 +160,15 @@ describe("SettingsSelectorComponent memory tab", () => {
 			cancelCount++;
 		});
 
-		// Explicit search focus starts cross-tab filtering with a query and match count.
+		// Typing changes the search draft; Enter applies it and Escape discards it.
 		comp.handleInput("/");
 		comp.handleInput("b");
-		expect(comp.navigationSnapshot()).toMatchObject({ query: "b", searchFocused: true });
+		expect(comp.navigationSnapshot()).toMatchObject({ query: "", search: { value: "b" }, searchFocused: true });
 
-		// First Escape leaves the field, retaining the query and filtered results.
+		// First Escape clears the query and returns to the ordinary tab.
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(0);
-		expect(comp.navigationSnapshot()).toMatchObject({ query: "b", searchFocused: false });
+		expect(comp.navigationSnapshot()).toMatchObject({ query: "", searchFocused: false });
 
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(1);
@@ -176,8 +178,9 @@ describe("SettingsSelectorComponent memory tab", () => {
 		const comp = createSelector();
 		comp.handleInput("/");
 		for (const ch of "fetch provider") comp.handleInput(ch);
+		comp.handleInput("\r");
 
-		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
+		const strip = plainText;
 		const rendered = comp.render(120).map(strip).join("\n");
 		const providersIndex = rendered.indexOf("Providers");
 		const appearanceIndex = rendered.indexOf("Appearance");
@@ -198,14 +201,14 @@ describe("SettingsSelectorComponent memory tab", () => {
 		comp.handleInput("/");
 		for (const ch of "image provider") comp.handleInput(ch);
 		comp.handleInput("\x1b\x7f");
-		expect(comp.navigationSnapshot()).toMatchObject({ query: expect.stringMatching(/^image\s*$/) });
+		expect(comp.navigationSnapshot()).toMatchObject({ search: { value: expect.stringMatching(/^image\s*$/) } });
 
 		// Arrow keys move the cursor; typing inserts mid-query instead of appending.
 		comp.handleInput("\x15"); // ctrl+u clears the rest of the query
 		for (const ch of "model") comp.handleInput(ch);
 		for (let i = 0; i < 5; i++) comp.handleInput("\x1b[D");
 		comp.handleInput("x");
-		expect(comp.navigationSnapshot()).toMatchObject({ query: "xmodel", searchCursor: 1 });
+		expect(comp.navigationSnapshot()).toMatchObject({ search: { value: "xmodel" }, searchCursor: 1 });
 	});
 
 	it("delegates Escape to an open settings submenu before closing the selector", () => {

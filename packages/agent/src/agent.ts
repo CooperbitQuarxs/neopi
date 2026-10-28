@@ -31,6 +31,7 @@ import {
 	abortReasonText,
 	agentLoop,
 	agentLoopContinue,
+	agentToolCall,
 	createSyntheticToolResultMessage,
 	normalizeMessagesForProvider,
 	normalizeTools,
@@ -1764,6 +1765,35 @@ export class Agent {
 		}
 	}
 
+	/** Run an enabled operator-selected tool without sampling or continuing a model. */
+	async executeTool(tool: AgentTool, args: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+		if (this.#state.isStreaming) throw new AgentBusyError();
+		const model = this.#state.model;
+		if (!model) throw new Error("No model configured");
+		const message: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "toolCall", id: crypto.randomUUID(), name: tool.name, arguments: args }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+		await this.#runLoop(
+			[{ role: "user", content: `/tool:${tool.name} ${JSON.stringify(args)}`, timestamp: Date.now() }],
+			{ directTool: { tool, message } },
+			signal,
+		);
+	}
+
 	/**
 	 * Run the agent loop.
 	 * If messages are provided, starts a new conversation turn with those messages.
@@ -1771,7 +1801,10 @@ export class Agent {
 	 */
 	async #runLoop(
 		messages?: AgentMessage[],
-		options?: AgentPromptOptions & { skipInitialSteeringPoll?: boolean },
+		options?: AgentPromptOptions & {
+			skipInitialSteeringPoll?: boolean;
+			directTool?: { tool: AgentTool; message: AssistantMessage };
+		},
 		continuationSignal?: AbortSignal,
 		runStateClaimed = false,
 	) {
@@ -1804,7 +1837,7 @@ export class Agent {
 		const context: AgentContext = {
 			systemPrompt: this.#state.systemPrompt,
 			messages: this.#state.messages.slice(),
-			tools: this.#state.tools,
+			tools: options?.directTool ? [options.directTool.tool] : this.#state.tools,
 		};
 
 		// Installed unconditionally. Both `cursorExecHandlers` and
@@ -2004,9 +2037,11 @@ export class Agent {
 		let acceptanceNotified = false;
 
 		try {
-			const stream = messages
-				? agentLoop(messages, context, config, loopSignal, this.streamFn)
-				: agentLoopContinue(context, config, loopSignal, this.streamFn);
+			const stream = options?.directTool
+				? agentToolCall(messages ?? [], options.directTool.message, context, config, loopSignal)
+				: messages
+					? agentLoop(messages, context, config, loopSignal, this.streamFn)
+					: agentLoopContinue(context, config, loopSignal, this.streamFn);
 
 			for await (let event of stream) {
 				if (this.#abortController !== loopAbortController) return;

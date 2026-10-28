@@ -1,3 +1,4 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { directoryIsMissing, PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 /**
  * AgentSession - Core abstraction for agent lifecycle and session management.
@@ -104,7 +105,6 @@ import {
 	isRecord,
 	logger,
 	postmortem,
-	prompt,
 	Snowflake,
 	stringProperty,
 	toError,
@@ -212,8 +212,8 @@ import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import type { PlanModeState } from "../plan-mode/state";
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
-import anthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
-import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
+import bundledAnthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
+import bundledAutoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
@@ -221,7 +221,7 @@ import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" w
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with { type: "text" };
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sessionStopBlockedPrompt from "../prompts/system/session-stop-blocked.md" with { type: "text" };
-import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
+import bundledSideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import titleCardPrompt from "../prompts/system/title-card.md" with { type: "text" };
 import titleForkPrompt from "../prompts/system/title-fork.md" with { type: "text" };
 import skillfulNoticePrompt from "../prompts/system/skillful-notice.md" with { type: "text" };
@@ -247,6 +247,8 @@ import {
 } from "@oh-my-pi/pi-tui/thinking";
 import { isAttachmentOnlyTitleInput, isLowSignalTitleInput } from "../tiny/text";
 import type { ImageAttachmentEntry, ToolSession } from "../tools";
+import { listEnabledTools, type ToolCatalogSession, toolCatalogDocs, toolCatalogListing } from "../tools/tool-catalog";
+import { toolSummary } from "../tools/xdev";
 import { resolveApproval } from "../tools/approval";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { type AskToolInput, recoverAskQuestions } from "../tools/ask";
@@ -379,6 +381,7 @@ import {
 import { recordCredentialPin, seedCredentialPins } from "./credential-pin";
 import { isDateCwdReminderControl } from "./date-cwd-reminder";
 import { EvalRunner, type EvalRunnerHost } from "./eval-runner";
+import { SessionEnvironment, sessionEnvironment } from "./environment";
 import {
 	collectPendingToolCalls,
 	createInterruptedToolResults,
@@ -514,7 +517,7 @@ import { LoopGuards, type StreamGuardsHost, StreamingEditGuard } from "./stream-
 import { TodoTracker, type TodoTrackerHost } from "./todo-tracker";
 import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
 
-import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
+import { cfgAdvisorActivation, cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
 import { cfgBrowserEnabled, cfgBrowserFreezeOnTurnEnd, cfgBrowserIdleCloseSec } from "../tools/browser/settings";
 import {
 	cfgClaudeResets,
@@ -552,6 +555,7 @@ import { cfgFollowUpMode } from "../modes/settings";
 import { cfgSteeringMode } from "../modes/settings";
 import { observeThemesConfiguration } from "../modes/themes-configuration";
 import { cfgDisabledProviders, cfgModelRoles } from "../config/model-settings";
+import { cfgModelFactsEnabled, cfgModelFactsSources, cfgModelFactsOverrides } from "../config/model-facts";
 import { cfgEffortRules, cfgRoleEffortSelections } from "../config/effort-policy";
 import { cfgEvalToolsEnabled } from "../eval/settings";
 import { cfgExtensions, type SkillsSettings } from "../extensibility/settings";
@@ -588,6 +592,7 @@ const cfgAdvisorRuntimeInputs = combine({
 	enabled: cfgAdvisorEnabled,
 	maxNotesPerUpdate: cfgAdvisorMaxNotesPerUpdate,
 	tier: cfgTierAdvisor,
+	activation: cfgAdvisorActivation,
 });
 /** Settings behind the session's extra workspace roots and the auto-QA prompt note. */
 const cfgWorkspacePromptInputs = combine({
@@ -853,6 +858,7 @@ export class AgentSession implements SettingsScope {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
+	readonly environment: SessionEnvironment;
 	#usageNotices = new UsageNotices();
 	/** Serializes receipt-backed preparation through acceptance, not turn completion. */
 	#customMessageReceiptPreparation: Promise<void> = Promise.resolve();
@@ -959,6 +965,7 @@ export class AgentSession implements SettingsScope {
 	#runStartedAt: number | undefined;
 	/** The last `agent_end` that {@link #settleAgentEnd} published; a failed maintenance pass settles any other. */
 	#settledAgentEnd: AgentEndEvent | undefined;
+	#humanToolInvocation = false;
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 	#sessionChangeCallbacks = new Set<(origin: SessionChangeOrigin) => void>();
 	readonly #messagePersistenceListeners = new Set<(message: AgentMessage) => void>();
@@ -1873,6 +1880,8 @@ export class AgentSession implements SettingsScope {
 				modelRegistry: config.modelRegistry,
 				settings: config.settings,
 			};
+		this.environment = sessionEnvironment(evalToolSession);
+		bashHost.environment = this.environment;
 		this.#agentTelemetryHost = {
 			session: this,
 			settings: this.settings,
@@ -2286,7 +2295,7 @@ export class AgentSession implements SettingsScope {
 			}
 			return thunks;
 		});
-		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
+		this.#convertToLlm = config.convertToLlm ?? (messages => convertToLlm(messages, this.sessionManager.getCwd()));
 		this.getXdevToolEntries = config.getXdevToolEntries ?? (() => []);
 		const sessionToolsHost: SessionToolsHost = {
 			agent: this.agent,
@@ -2435,6 +2444,7 @@ export class AgentSession implements SettingsScope {
 		this.#todo.syncFromBranch();
 		this.#modelMentions.syncFromBranch();
 		this.#goalRuntime = new GoalRuntime({
+			getCwd: () => this.sessionManager.getCwd(),
 			getState: () => this.#goalModeState,
 			setState: state => {
 				this.#goalModeState = state;
@@ -2608,7 +2618,8 @@ export class AgentSession implements SettingsScope {
 				this.#experimentalContextNotesReminder = { prompt, generation: this.#promptGeneration };
 			},
 			memoryBackendSession: () => this,
-			chatCompactionPrompt: () => (this.#chatMode ? renderChatCompactionPrompt(this.#chatMode.mode) : undefined),
+			chatCompactionPrompt: () =>
+				this.#chatMode ? renderChatCompactionPrompt(this.#chatMode.mode, this.sessionManager.getCwd()) : undefined,
 			emitSessionEvent: (event, options) => this.#emitSessionEvent(event, options),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
@@ -2737,6 +2748,9 @@ export class AgentSession implements SettingsScope {
 		cfgExtendedContext.listen(this, () => this.#reapplyContextWindowPolicy());
 		cfgCompactionModelThresholds.listen(this, () => this.#reapplyContextWindowPolicy());
 		cfgCompactionModelThresholdsEnabled.listen(this, () => this.#reapplyContextWindowPolicy());
+		cfgModelFactsEnabled.listen(this, () => this.#reapplyContextWindowPolicy(true));
+		cfgModelFactsSources.listen(this, () => this.#reapplyContextWindowPolicy(true));
+		cfgModelFactsOverrides.listen(this, () => this.#reapplyContextWindowPolicy(true));
 		cfgBrowserEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("browser.enabled", enabled));
 		cfgComputerEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("computer.enabled", enabled));
 		cfgRatchetEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("ratchet.enabled", enabled));
@@ -3017,7 +3031,7 @@ export class AgentSession implements SettingsScope {
 				// elsewhere is a detour.
 				toolName: "write",
 				satisfies: isPreviewResolutionToolCall,
-				reminder: [buildResolveReminderMessage(head.sourceToolName)],
+				reminder: [buildResolveReminderMessage(head.sourceToolName, this.sessionManager.getCwd())],
 			};
 		}
 		return undefined;
@@ -3497,7 +3511,7 @@ export class AgentSession implements SettingsScope {
 		if (event.type === "message_start" || event.type === "message_update" || event.type === "message_end")
 			observeLiveMessageId(this.sessionManager, event.message, event.type === "message_end");
 		else if (event.type === "agent_end") clearLiveMessageId(this.sessionManager);
-		if (event.type === "agent_end" && event.isTerminal !== false) {
+		if (event.type === "agent_end" && event.isTerminal !== false && !this.#humanToolInvocation) {
 			const sessionGeneration = this.#sessionGeneration;
 			const promptSequence = this.#promptSequence;
 			this.#advisors.onPrimaryRunEnd();
@@ -4120,7 +4134,12 @@ export class AgentSession implements SettingsScope {
 		return {
 			role: "custom",
 			customType: CHECKPOINT_ACTIVE_REMINDER_TYPE,
-			content: prompt.render(checkpointActiveNoticeTemplate),
+			content: renderPromptAsset(
+				"system/checkpoint-active-notice.md",
+				checkpointActiveNoticeTemplate,
+				{},
+				{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+			),
 			display: false,
 			details: { goal, startedAt },
 			attribution: "agent",
@@ -4203,7 +4222,12 @@ export class AgentSession implements SettingsScope {
 		return {
 			role: "custom",
 			customType: INTERRUPTED_THINKING_MESSAGE_TYPE,
-			content: prompt.render(interruptedThinkingTemplate, { reasoning: demoted.reasoning }),
+			content: renderPromptAsset(
+				"system/interrupted-thinking.md",
+				interruptedThinkingTemplate,
+				{ reasoning: demoted.reasoning },
+				{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+			),
 			display: false,
 			details: {
 				interruptedAt,
@@ -4676,6 +4700,12 @@ export class AgentSession implements SettingsScope {
 
 		// Check auto-retry and auto-compaction after agent completes
 		if (event.type === "agent_end") {
+			if (this.#humanToolInvocation) {
+				this.#lastAssistantMessage = undefined;
+				await this.settleInFlightMessagePersistence();
+				await this.#settleAgentEnd(event, this.agent.state.messages, { hasFinalResponse: false });
+				return;
+			}
 			const settledMessages = event.messages;
 			const activeMessages = this.agent.state.messages;
 			// TTSR retry work runs concurrently and clears the live flag before
@@ -5329,7 +5359,15 @@ export class AgentSession implements SettingsScope {
 			await this.#promptWithMessage(
 				{
 					role: "developer",
-					content: [{ type: "text", text: autoContinuePrompt }],
+					content: [
+						{
+							type: "text",
+							text: resolvePromptAsset("system/auto-continue.md", bundledAutoContinuePrompt, {
+								cwd: this.sessionManager.getCwd(),
+								kind: "notice",
+							}).text,
+						},
+					],
 					attribution: "agent",
 					timestamp: Date.now(),
 					// Distinguishes this run-initiating prompt from same-turn
@@ -5337,7 +5375,10 @@ export class AgentSession implements SettingsScope {
 					// developer messages; replay uses it for the prompt→yield anchor.
 					synthetic: true,
 				},
-				autoContinuePrompt,
+				resolvePromptAsset("system/auto-continue.md", bundledAutoContinuePrompt, {
+					cwd: this.sessionManager.getCwd(),
+					kind: "notice",
+				}).text,
 				{
 					skipPostPromptRecoveryWait: true,
 					prependMessages: eagerNudges.length > 0 ? eagerNudges : undefined,
@@ -5534,7 +5575,16 @@ export class AgentSession implements SettingsScope {
 				: undefined;
 		const reason = typeof result.reason === "string" && result.reason.length > 0 ? result.reason : undefined;
 		if (result.decision === "block") {
-			return reason ?? additionalContext ?? prompt.render(sessionStopBlockedPrompt);
+			return (
+				reason ??
+				additionalContext ??
+				renderPromptAsset(
+					"system/session-stop-blocked.md",
+					sessionStopBlockedPrompt,
+					{},
+					{ cwd: this.sessionManager.getCwd() },
+				)
+			);
 		}
 		if (result.continue === true) {
 			return additionalContext ?? reason;
@@ -6856,6 +6906,51 @@ export class AgentSession implements SettingsScope {
 		return this.#tools.getEnabledToolNames();
 	}
 
+	#toolCatalogSource(): ToolCatalogSession {
+		return {
+			toolRegistry: this.#tools.registry,
+			settings: this.settings,
+			getEnabledToolNames: () => this.getEnabledToolNames(),
+			isToolActive: name => this.getActiveToolNames().includes(name),
+		};
+	}
+
+	/** Slash discovery uses the same enabled instances as tool://. */
+	getToolCatalogEntries(): { name: string; description: string }[] {
+		return listEnabledTools(this.#toolCatalogSource()).map(tool => ({
+			name: tool.name,
+			description: toolSummary(tool),
+		}));
+	}
+
+	getToolCatalogDocs(name?: string): string {
+		const source = this.#toolCatalogSource();
+		return name ? toolCatalogDocs(source, name, "report") : toolCatalogListing(source);
+	}
+
+	/** Live enabled instance, including mounted and Code Mode tools, with permission decoration. */
+	getToolCatalogTool(name: string): AgentTool | undefined {
+		return this.#tools.getToolForEvalBridge(name);
+	}
+
+	/** Human calls use the agent dispatch and journal but never request a model continuation. */
+	async invokeTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+		if (this.#isDisposed) throw new Error("Session is disposed");
+		if (this.#humanToolInvocation || this.isBusyForSnapshot) {
+			throw new Error("Wait for the current operation to finish before invoking a tool.");
+		}
+		const tool = this.getToolCatalogTool(name);
+		if (!tool) throw new Error(`Tool '${name}' is not enabled. Use /tool: to browse enabled tools.`);
+		signal?.throwIfAborted();
+		this.#humanToolInvocation = true;
+		try {
+			await this.agent.executeTool(tool, args, signal);
+			await this.#drainInFlightEventHandlers();
+		} finally {
+			this.#humanToolInvocation = false;
+		}
+	}
+
 	/** Names of dynamic tools mounted under `xd://`. */
 	getMountedXdevToolNames(): string[] {
 		return this.#tools.getMountedXdevToolNames();
@@ -7716,10 +7811,15 @@ export class AgentSession implements SettingsScope {
 		const plan = await loadOverallPlanReference(this.#planReferencePath, this.#localProtocolOptions());
 		if (!plan) return null;
 
-		const content = prompt.render(planModeReferencePrompt, {
-			planFilePath: plan.path,
-			planContent: plan.content,
-		});
+		const content = renderPromptAsset(
+			"system/plan-mode-reference.md",
+			planModeReferencePrompt,
+			{
+				planFilePath: plan.path,
+				planContent: plan.content,
+			},
+			{ cwd: this.sessionManager.getCwd() },
+		);
 
 		return {
 			role: "custom",
@@ -7751,19 +7851,24 @@ export class AgentSession implements SettingsScope {
 		// Capability gates, not the visible surface: a Code Mode partition keeps
 		// `task` and `ask` callable through the eval bridge after demoting them.
 		const capableToolNames = this.getEnabledToolNames();
-		const content = prompt.render(planModeActivePrompt, {
-			planFilePath: displayPlanPath,
-			planExists,
-			askToolName: "ask",
-			writeToolName: "write",
-			editToolName: "edit",
-			askAvailable: capableToolNames.includes("ask"),
-			taskAvailable: capableToolNames.includes("task"),
-			isHashlineEditMode: this.#resolveActiveEditMode() === "hashline",
-			reentry: state.reentry ?? false,
-			iterative: state.workflow === "iterative",
-			scoutAvailable: this.#isScoutAvailable(),
-		});
+		const content = renderPromptAsset(
+			"system/plan-mode-active.md",
+			planModeActivePrompt,
+			{
+				planFilePath: displayPlanPath,
+				planExists,
+				askToolName: "ask",
+				writeToolName: "write",
+				editToolName: "edit",
+				askAvailable: capableToolNames.includes("ask"),
+				taskAvailable: capableToolNames.includes("task"),
+				isHashlineEditMode: this.#resolveActiveEditMode() === "hashline",
+				reentry: state.reentry ?? false,
+				iterative: state.workflow === "iterative",
+				scoutAvailable: this.#isScoutAvailable(),
+			},
+			{ cwd: this.sessionManager.getCwd() },
+		);
 
 		return {
 			role: "custom",
@@ -7782,7 +7887,12 @@ export class AgentSession implements SettingsScope {
 		return {
 			role: "custom",
 			customType: "goal-mode-context",
-			content: prompt.render(goalModeContextPrompt, { goalContext: content, todoContext }),
+			content: renderPromptAsset(
+				"goals/goal-mode-context.md",
+				goalModeContextPrompt,
+				{ goalContext: content, todoContext },
+				{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+			),
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -7794,9 +7904,14 @@ export class AgentSession implements SettingsScope {
 		return {
 			role: "custom",
 			customType: VIBE_MODE_CONTEXT_MESSAGE_TYPE,
-			content: prompt.render(vibeModeActivePrompt, {
-				todoAvailable: this.getActiveToolNames().includes("todo"),
-			}),
+			content: renderPromptAsset(
+				"system/vibe-mode-active.md",
+				vibeModeActivePrompt,
+				{
+					todoAvailable: this.getActiveToolNames().includes("todo"),
+				},
+				{ cwd: this.sessionManager.getCwd() },
+			),
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -7835,13 +7950,18 @@ export class AgentSession implements SettingsScope {
 			}),
 		}));
 
-		return prompt.render(goalTodoContextPrompt, {
-			canCallTodoTool,
-			closed: String(closed),
-			open: String(open),
-			phases: promptPhases,
-			total: String(total),
-		});
+		return renderPromptAsset(
+			"goals/goal-todo-context.md",
+			goalTodoContextPrompt,
+			{
+				canCallTodoTool,
+				closed: String(closed),
+				open: String(open),
+				phases: promptPhases,
+				total: String(total),
+			},
+			{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+		);
 	}
 
 	#normalizeImagesForModel(images: ImageContent[] | undefined): Promise<ImageContent[] | undefined> {
@@ -10348,10 +10468,15 @@ export class AgentSession implements SettingsScope {
 		const started = performance.now();
 		const icons = this.#cardIcons();
 		this.runEphemeralTurn({
-			promptText: prompt.render(titleForkPrompt, {
-				card: icons !== "boring",
-				nerdFonts: icons === "nf+emoji",
-			}),
+			promptText: renderPromptAsset(
+				"system/title-fork.md",
+				titleForkPrompt,
+				{
+					card: icons !== "boring",
+					nerdFonts: icons === "nf+emoji",
+				},
+				{ cwd: this.sessionManager.getCwd() },
+			),
 			signal: AbortSignal.any([signal, AbortSignal.timeout(TITLE_FORK_TIMEOUT_MS)]),
 		})
 			.then(
@@ -10571,7 +10696,12 @@ export class AgentSession implements SettingsScope {
 		const named = context === undefined ? title : await this.#retitle(context, signal);
 		if (stale()) return undefined;
 		if (!named || !needsCard(named)) return named ?? null;
-		const cardPrompt = prompt.render(titleCardPrompt, { nerdFonts: icons === "nf+emoji" });
+		const cardPrompt = renderPromptAsset(
+			"system/title-card.md",
+			titleCardPrompt,
+			{ nerdFonts: icons === "nf+emoji" },
+			{ cwd: this.sessionManager.getCwd() },
+		);
 		const reply = await this.generateTitle(named, cardPrompt, signal);
 		if (stale()) return undefined;
 		const card = reply ? parseCardReply(reply, icons) : undefined;
@@ -11281,7 +11411,10 @@ export class AgentSession implements SettingsScope {
 		this.agent.steer({
 			role: "custom",
 			customType: "anthropic-usage-wrap-up",
-			content: anthropicUsageWrapUpPrompt,
+			content: resolvePromptAsset("system/anthropic-usage-wrap-up.md", bundledAnthropicUsageWrapUpPrompt, {
+				cwd: this.sessionManager.getCwd(),
+				kind: "notice",
+			}).text,
 			attribution: "agent",
 			display: false,
 			timestamp: Date.now(),
@@ -11426,7 +11559,12 @@ export class AgentSession implements SettingsScope {
 				await this.sendCustomMessage(
 					{
 						customType: "skillful-notice",
-						content: prompt.render(skillfulNoticePrompt, { skills: renderedSkills }),
+						content: renderPromptAsset(
+							"system/skillful-notice.md",
+							skillfulNoticePrompt,
+							{ skills: renderedSkills },
+							{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+						),
 						display: false,
 					},
 					{ deliverAs: "nextTurn" },
@@ -11625,7 +11763,12 @@ export class AgentSession implements SettingsScope {
 		const details = { report, startedAt: checkpointState.startedAt, rewoundAt };
 		this.sessionManager.appendCustomMessageEntry(
 			"rewind-report",
-			prompt.render(rewindReportTemplate, { report }),
+			renderPromptAsset(
+				"system/rewind-report.md",
+				rewindReportTemplate,
+				{ report },
+				{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+			),
 			false,
 			details,
 			"agent",
@@ -11724,9 +11867,14 @@ export class AgentSession implements SettingsScope {
 		this.#planModeReminderCount++;
 		this.#planModeReminderAwaitingProgress = true;
 		this.#toolChoiceQueue.pushOnce("required", { label: "plan-mode-decision" });
-		const reminder = prompt.render(planModeToolDecisionReminderPrompt, {
-			askToolName: "ask",
-		});
+		const reminder = renderPromptAsset(
+			"system/plan-mode-tool-decision-reminder.md",
+			planModeToolDecisionReminderPrompt,
+			{
+				askToolName: "ask",
+			},
+			{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+		);
 		const reminderMessage: Message = {
 			role: "developer",
 			content: [{ type: "text", text: reminder }],
@@ -11746,14 +11894,20 @@ export class AgentSession implements SettingsScope {
 		return true;
 	}
 
+	/** Refresh configured fact sources and bind their resolved metadata without changing the selected role. */
+	async refreshModelFacts(): Promise<void> {
+		await this.#modelRegistry.refresh("online-if-uncached");
+		await this.#reapplyContextWindowPolicy(true);
+	}
+
 	/**
 	 * Rebuild the model catalog after an `extendedContext` toggle or a
-	 * `compaction.modelThresholds` edit and rebind the active model when its
-	 * effective context window changed. Same-model rebinds skip provider-session
+	 * `compaction.modelThresholds` edit, or a model-fact setting, and rebind the active model when its
+	 * effective context window changed or its other facts need refreshing. Same-model rebinds skip provider-session
 	 * resets (`modelsAreEqual` sees no change), so this only refreshes metadata
 	 * consumers (compaction thresholds, context display).
 	 */
-	async #reapplyContextWindowPolicy(): Promise<void> {
+	async #reapplyContextWindowPolicy(forceMetadata = false): Promise<void> {
 		// Refit the bound row right away (the agent's model resolver applies this
 		// session's settings to its known tiers), so a prompt started before the
 		// catalog rebuild settles already runs with the new window.
@@ -11768,7 +11922,7 @@ export class AgentSession implements SettingsScope {
 			// Compare against the window bound before the refit so dependent state
 			// still reconciles once even though the refit already moved the row.
 			const baseline = previousModel && modelsAreEqual(previousModel, currentModel) ? previousModel : currentModel;
-			if (updated && updated.contextWindow !== baseline.contextWindow) {
+			if (updated && (forceMetadata || updated.contextWindow !== baseline.contextWindow)) {
 				await this.#setModelWithProviderSessionReset(updated);
 			}
 		} catch (error) {
@@ -12431,7 +12585,14 @@ export class AgentSession implements SettingsScope {
 		}
 		messages.push({
 			role: "developer",
-			content: [{ type: "text", text: sideChannelNoToolsReminder }],
+			content: [
+				{
+					type: "text",
+					text: resolvePromptAsset("system/side-channel-no-tools.md", bundledSideChannelNoToolsReminder, {
+						cwd: this.sessionManager.getCwd(),
+					}).text,
+				},
+			],
 			attribution: "agent",
 			timestamp: Date.now(),
 		});
@@ -13454,6 +13615,7 @@ export class AgentSession implements SettingsScope {
 				throw new Error(`No API key for ${model.provider}`);
 			}
 			const result = await generateBranchSummary(entriesToSummarize, {
+				cwd: this.sessionManager.getCwd(),
 				model,
 				apiKey: this.#modelRegistry.resolver(model, this.sessionId),
 				signal: this.#branchSummaryAbortController.signal,
@@ -14552,6 +14714,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	formatSessionAsText(): string {
 		return formatSessionDumpText({
+			cwd: this.sessionManager.getCwd(),
 			messages: this.messages,
 			systemPrompt: this.agent.state.systemPrompt,
 			model: this.agent.state.model,
@@ -14821,7 +14984,7 @@ export class AgentSession implements SettingsScope {
 	 * @returns the number of advisors active after the rebuild.
 	 */
 	applyAdvisorConfigs(
-		advisors: AdvisorConfig[],
+		advisors: AdvisorConfig[] | undefined,
 		sharedInstructions: string | undefined,
 		sharedMaxNotesPerUpdate?: number,
 	): number {

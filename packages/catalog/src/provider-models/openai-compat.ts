@@ -200,10 +200,15 @@ const CATALOG_USER_AGENT = USER_AGENT;
  * implementation reuse one transport request, while repeat callers send a
  * conditional GET that the server answers with `304`. Each subscriber may stop
  * waiting independently; the shared transport retains its own hard deadline.
- * Transient failures reuse the last in-memory payload for callers that only
- * need best-effort metadata.
+ * Transient failures reuse the last in-memory payload unless `allowStale` is
+ * false, for ordered source chains that must move on when a source is down.
  */
-export function fetchWellKnownModels(fetchImpl?: FetchImpl, signal?: AbortSignal): Promise<unknown> {
+export function fetchWellKnownModels(
+	fetchImpl?: FetchImpl,
+	signal?: AbortSignal,
+	options?: { allowStale?: boolean },
+): Promise<unknown> {
+	if (options?.allowStale === false) return fetchRevalidatedWellKnownModels(fetchImpl, signal);
 	const session = getCatalogSession(fetchImpl);
 	return fetchRevalidatedWellKnownModels(fetchImpl, signal).catch(error => {
 		if (session.hasPayload) return session.payload;

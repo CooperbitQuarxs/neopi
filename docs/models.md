@@ -60,6 +60,89 @@ Legacy behavior still present:
 - If both YAML files are missing and `models.json` exists at the same location, it is migrated to `models.yml`.
 - Explicit `.json` / `.jsonc` config paths are still supported when passed programmatically to `ModelRegistry`.
 
+## Optional model-fact sources and field overrides
+
+Open `/models` and press F6 to edit model facts. The session-only `/model`
+picker does not expose settings edits. Choose a provider and model, or type an
+unlisted model ID under a configured provider. Each field accepts a literal,
+a reference to that field on another `provider/model`, or Automatic. The preview
+shows the resolved value and its source before saving. Esc leaves the current
+field, then closes the editor without saving.
+
+This feature is disabled by default. Its settings live in `config.yml`, not
+`models.yml`:
+
+```yaml
+modelFacts:
+  enabled: true
+  sources: [openrouter, stencil]
+  overrides:
+    xai-oauth/grok-4.7:
+      cost:
+        from: xai/grok-4.7
+      efforts:
+        from: xai/grok-4.7
+    my-provider/unlisted-model:
+      contextWindow: 128000
+      maxTokens: 16384
+      input: [text, image]
+```
+
+`sources` is an ordered, replaceable list. `openrouter` uses its public catalog
+without requiring an API key; `stencil` uses the shared models.dev mirror at
+`catalog.stencil.so`. Other names use the registered provider's existing
+discovery, credentials and cache, including extension-only providers. Failed
+sources contribute no new facts. Offline refreshes do not fetch public catalogs.
+
+For each model, the first matching source with a missing field supplies it.
+Nonzero provider prices and known limits remain unchanged unless a field
+override replaces them. An authoritative effort ladder corrects a provider's
+false "no reasoning" report. A discovery text-only placeholder can receive
+input modalities from a source; explicitly reported text-only input stays put.
+The fields are `cost`, `contextWindow`, `maxTokens`, `input`, `reasoning`, and
+`efforts`. Price literals use rates per million tokens. Borrowing a field does
+not copy another model's endpoint, credentials, other facts or wire-model IDs.
+
+An override entry also registers an unlisted model using its target provider's
+transport. It does not create a provider or copy the referenced provider's route.
+Provider provenance means the registry's existing provider row, including its
+catalog and KDL corrections. Source, literal override and exact-reference
+provenance are reported separately; unavailable facts remain unknown.
+Per-model compatibility and transport policy still belongs in the catalog's KDL
+rules. The agent-facing lookup below consumes this same fact resolution.
+
+## Agent model information
+
+Agents can read `model://` for the active model, or provide an exact model,
+pattern or role selector:
+
+- `model://@task` resolves the current task role, including project overrides.
+- `model://openai/*` queries matching available models.
+- `model://?selector=openai%2F*%3Ahigh` inspects an explicit effort override.
+
+Reserved URL characters belong in the encoded `selector` query. Effort suffixes
+are selector input, not read-tool line selectors. The JSON response reports
+match count and truncation for broad patterns instead of injecting a catalog
+table into every prompt.
+
+Supported model efforts, implicit operator restrictions, role Auto choices and
+explicit caller overrides are separate fields. A supported explicit level can
+bypass an implicit restriction; it cannot make an unsupported level available.
+Role resolution reports which configured selector and project/global source
+applied, along with applicable configured fallback alternatives.
+
+The actual reasoning field describes an observed concrete choice only for the
+active model. Auto remains `pending-auto` until classification has produced a
+concrete result, even though the runtime holds a provisional wire default.
+Queries for models that have not run do not invent a future Auto result.
+
+Technical characteristics and field provenance come from the live registry and
+the configured fact sources above. Identity includes its maintained catalog
+rule location. Technical fields without fact provenance are `null`; unverified
+effort guesses are not reported as supported levels. Missing descriptive or
+quality information is explicitly unknown. The lookup exposes no credentials,
+headers or provider endpoint URLs, and does not spawn an agent or change settings.
+
 ## `models.yml` / `models.yaml` shape
 
 ```yaml
@@ -692,7 +775,7 @@ changing summary quality. Both roles appear in **Roles** and RPC listings.
 
 The `deck-*` namespace belongs to NeoDeck: every role id beginning with `deck-` is a member, including custom roles. The built-in chat role `deck-inbox` classifies inbox items and chooses where they go. Its default is GPT-6 Luna on the ChatGPT subscription provider (`openai-codex/gpt-6-luna`). If that model is unavailable, normal role resolution reports it as unresolved; it does not borrow the active conversation model.
 
-Assign `modelRoles.deck-inbox` globally or per project, or use `/model` → **Roles** → **Deck inbox**. Presentation overrides, provenance, thinking selections, and `retry.fallbackChains.deck-inbox` work like other chat roles. RPC `get_roles` (or in-process `RpcRoles.list()`) includes it even before configuration, with its default in `patterns` and optional available model in `resolved`; all `deck-*` entries carry `namespace: "deck"`.
+Assign `modelRoles.deck-inbox` globally or per project, or use `/models` → **Roles** → **Deck inbox**. Presentation overrides, provenance, thinking selections, and `retry.fallbackChains.deck-inbox` work like other chat roles. RPC `get_roles` (or in-process `RpcRoles.list()`) includes it even before configuration, with its default in `patterns` and optional available model in `resolved`; all `deck-*` entries carry `namespace: "deck"`.
 
 Consumers add another role by registering a `deck-<name>` key through the existing `modelRoles`, `modelTags`, or `cycleOrder` settings. For example, `modelRoles: { deck-triage: "openai-codex/gpt-6-luna" }` makes `@deck-triage` available in the picker and RPC catalog without a NeoPi code change. The namespace alone does not register an unconfigured role or supply it with a default model. To ship a new built-in role visible on fresh installs, add its id to the shared role lists in `packages/tui/src/overlays/model-browser.ts`, metadata to `config/model-roles.ts`, and any default selectors to `src/priority.json`; no namespace-specific resolver or UI changes are needed.
 
@@ -700,7 +783,9 @@ Consumers add another role by registering a `deck-<name>` key through the existi
 
 Assigning a non-default role in `/models` normally saves its selector without switching the active conversation model. A workload uses the role when invoked; assigning `plan` does not itself enter plan mode, and calling `todo` does not itself select the plan model. While plan mode is active, changing the `plan` role reapplies its model. Assigning `default` normally also switches the active model, unless a higher-priority settings layer overrides the edited assignment. The session-only model picker changes the active model without rewriting role assignments.
 
-In `/model` (`/models`), the session-only picker, and agent hubs, lists open in normal navigation. `j`/`k` select, `gg`/`G` jump, `Ctrl-d`/`Ctrl-u` move half a page, and `Ctrl-e`/`Ctrl-y` scroll the view without changing the selected row. `/` focuses the section's search field; Roles search stays in Roles. Text fields keep literal typing and editing keys. Esc leaves the field retaining its query, then returns from a nested page to its parent; Esc at the root closes. `h`/`l` and Left/Right switch model-hub panes except in a focused field or effort chooser, where they edit text or adjust effort. Non-effort chip strips use `j`/`k` to choose and Enter/Space to commit; `h`/`l` leaves without committing and switches panes. Tab/Shift-Tab and Ctrl-N/Ctrl-P switch contexts, not chip values. Roles retains `f` for adding a fallback and `y`/`Y`/`p` for yank/paste. Composer editing and Ctrl-P model cycling are unchanged. See [menu navigation](./keybindings.md#menu-navigation) for history and native viewport limits.
+`/model` opens the rich provider-sidebar picker in current-session-only mode, starting on **Recently used**. Selecting a model uses it for the active conversation without changing the saved default or role mappings. This view has no role chooser or policy editors. Use **All models** or a provider to browse beyond recent selections. `/models` keeps the full role-management hub. `/switch` and Alt+P keep the compact session-only picker.
+
+In `/model`, `/models`, the compact session picker, and agent hubs, lists open in normal navigation. `j`/`k` select, `gg`/`G` jump, `Ctrl-d`/`Ctrl-u` move half a page, and `Ctrl-e`/`Ctrl-y` scroll the view without changing the selected row. `/` focuses the section's search field; Roles search stays in Roles. Text fields keep literal typing and editing keys. Esc leaves the field retaining its query, then returns from a nested page to its parent; Esc at the root closes. `h`/`l` and Left/Right switch model-hub panes except in a focused field or effort chooser, where they edit text or adjust effort. Non-effort chip strips use `j`/`k` to choose and Enter/Space to commit; `h`/`l` leaves without committing and switches panes. Tab/Shift-Tab and Ctrl-N/Ctrl-P switch contexts, not chip values. Roles retains `f` for adding a fallback and `y`/`Y`/`p` for yank/paste. Composer editing and Ctrl-P model cycling are unchanged. See [menu navigation](./keybindings.md#menu-navigation) for history and native viewport limits.
 
 In the Roles view, `y` on a root with configured fallbacks snapshots the primary model followed by its complete fallback chain, preserving fixed and Auto effort metadata. A root without fallbacks and an individual fallback row still yank a single entry; `Y` keeps its existing whole-chain behavior on fallback rows. `p` appends the snapshot to the target chain in order, skips duplicates, and preserves existing target-entry policies. Later source or target edits do not mutate the saved snapshot.
 
@@ -785,7 +870,7 @@ Related settings:
 
 `modelRoles` stores model selectors such as `provider/modelId`; `enabledModels` and CLI `--models`
 accept exact selectors, globs, and fuzzy matches. The resulting scope restricts chat models only
-(Ctrl+P cycling, the startup model, chat roles in `/model`); judge, search, image, and speech
+(Ctrl+P cycling, the startup model, chat roles in `/models`); judge, search, image, and speech
 models stay available for their roles, so entries naming them are accepted but have no effect.
 
 `enabledModels`, `enabledProviders`, and `disabledProviders` entries may also be scoped to a path prefix:
@@ -809,7 +894,7 @@ String entries apply everywhere. Scoped entries apply when the current working d
 
 Both surfaces keep provider-prefixed concrete models visible and selectable.
 
-- `/model` / `/models` opens the model hub with role assignments and provider catalogs; the session-only picker changes the active model without saving a role assignment.
+- `/model` opens the rich session-only picker on recently used models, with provider catalogs and no role chooser. `/models` opens the full role-management hub. `/switch` and Alt+P open the compact session-only picker.
 - `omp models` (default `ls` action) prints provider-grouped tables of available **chat** models; `--kind <kind>` selects another catalog kind and `--kind all` includes every kind.
 - `omp models find <substring>` filters by provider, id, or name; `omp models refresh` forces an online catalog re-fetch ignoring the model cache TTL; a provider name doubles as an `ls` filter (e.g. `omp models openai-codex`).
 - Other flags: `--json`, `-e <path>` / `--extension <path>` (repeatable), `--no-extensions` (skip ambient discovery; explicit `-e` still loads), and `--config <overlay>` (repeatable).

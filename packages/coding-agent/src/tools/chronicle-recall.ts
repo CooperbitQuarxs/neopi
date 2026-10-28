@@ -11,6 +11,8 @@ import {
 } from "../chronicler/temporal/config";
 import { formatRecallResult } from "../chronicler/temporal/format";
 import { recallChronicle } from "../chronicler/temporal/recall";
+import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import chronicleRecallDescription from "../prompts/tools/chronicle-recall.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { throwIfAborted } from "./tool-errors";
@@ -43,7 +45,12 @@ export class ChronicleRecallTool implements AgentTool<typeof chronicleRecallSche
 	readonly name = "chronicle_recall";
 	readonly approval = "read" as const;
 	readonly label = "Chronicle Recall";
-	readonly description = chronicleRecallDescription;
+	get description(): string {
+		const { text } = resolvePromptAsset("tools/chronicle-recall.md", chronicleRecallDescription, {
+			cwd: this.session.cwd,
+		});
+		return text === chronicleRecallDescription ? text : renderPrompt(text);
+	}
 	readonly parameters = chronicleRecallSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";

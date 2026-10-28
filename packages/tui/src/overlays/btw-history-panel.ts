@@ -30,6 +30,7 @@ import { SplitPane } from "../components/layout/split-pane";
 import { contentRowWidth, padLinesToHeight, renderScrollableList } from "../chrome/selector-helpers";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import type { NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
+import { compileMenuRegex } from "../menu-search";
 import { col, md, node, span, text } from "../native/describe";
 import { actionBar, actionButton } from "../native/overlay";
 import {
@@ -287,6 +288,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 	}
 
 	leaveMenu(): void {
+		this.#search.focused = false;
 		this.#composer?.abortController.abort();
 	}
 
@@ -298,12 +300,12 @@ export class BtwHistoryPanel implements Component, Focusable {
 	}
 
 	#visibleRecords(): readonly BtwHistoryRecord[] {
-		if (this.#filtered?.source === this.#records && this.#filtered.query === this.#search.value)
+		if (this.#filtered?.source === this.#records && this.#filtered.query === this.#search.query)
 			return this.#filtered.records;
-		const records = this.#search.value.trim()
-			? fuzzyFilter(this.#records, this.#search.value, record => `${record.question} ${record.answer}`)
+		const records = this.#search.query.trim()
+			? fuzzyFilter(this.#records, this.#search.query, record => `${record.question} ${record.answer}`)
 			: this.#records;
-		this.#filtered = { source: this.#records, query: this.#search.value, records };
+		this.#filtered = { source: this.#records, query: this.#search.query, records };
 		this.#selection.setItems(records, this.#selectedId);
 		this.#rowCounts = records.map(() => 1);
 		return records;
@@ -533,11 +535,11 @@ export class BtwHistoryPanel implements Component, Focusable {
 			this.#options.requestRender();
 			return;
 		}
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const search = this.#search.handleInput(data);
 		if (search !== "pass") {
 			this.#keys.reset();
-			if (this.#search.value !== before) {
+			if (this.#search.query !== before) {
 				this.#visibleRecords();
 				this.#selectedId = this.#selection.selectedKey;
 				this.#listViewport.reveal();
@@ -644,6 +646,8 @@ export class BtwHistoryPanel implements Component, Focusable {
 		// `section`s (Tern draws those as foldable `##` headings). With one side
 		// question the list is noise: the reader alone.
 		const children: NativeChild[] = [this.#search.input];
+		const queryError = compileMenuRegex(this.#search.value)?.error;
+		if (queryError) children.push(text([span(queryError, "error")]));
 		if (record) {
 			const reader: NativeNode = {
 				...node(
@@ -688,7 +692,8 @@ export class BtwHistoryPanel implements Component, Focusable {
 			const record = this.#selected();
 			switch (event.act) {
 				case "close":
-					this.#options.onClose();
+					if (!this.#composer && (this.#search.focused || this.#search.value)) this.handleInput("\x1b");
+					else this.#options.onClose();
 					return;
 				case "copy":
 					if (record && getBtwCopyText(record) !== undefined) this.#options.onCopy(record);
@@ -819,7 +824,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 			"col",
 			{ role: "omp.btw.empty", align: "center", gap: "sm" },
 			[
-				text(this.#search.value ? "No matching side questions" : "No side questions yet", {
+				text(this.#search.query ? "No matching side questions" : "No side questions yet", {
 					role: "omp.btw.empty.title",
 				}),
 				text(
@@ -872,7 +877,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 			return new Text(
 				theme.fg(
 					"muted",
-					this.#search.value
+					this.#search.query
 						? "No matching side questions."
 						: "No side questions yet.\n\nUse /btw QUESTION to start one.",
 				),
@@ -1006,7 +1011,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 					...wrapTextWithAnsi(
 						theme.fg(
 							"muted",
-							this.#search.value
+							this.#search.query
 								? "No matching side questions."
 								: "No side questions yet. Use /btw QUESTION to start one.",
 						),

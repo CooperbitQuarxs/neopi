@@ -3,6 +3,15 @@ import * as prompt from "@oh-my-pi/pi-utils/prompt";
 
 const FULL = { renderPhase: "pre-render", replaceAsciiSymbols: true, normalizeRfc2119: true } as const;
 
+it("keeps per-render partials out of the compiled template cache and global registry", () => {
+	const template = "Hello {{> isolatedPromptPartial}}";
+	expect(prompt.render(template, { name: "Alex" }, { partials: { isolatedPromptPartial: "{{name}}" } })).toBe(
+		"Hello Alex",
+	);
+	expect(prompt.render(template, {}, { partials: { isolatedPromptPartial: "Shayna" } })).toBe("Hello Shayna");
+	expect(() => prompt.render(template)).toThrow("The partial isolatedPromptPartial could not be found");
+});
+
 describe("format: ascii symbol replacement", () => {
 	it("replaces all seven symbols in one line", () => {
 		expect(prompt.format("a -> b <- c <-> d != e <= f >= g ... h", FULL)).toBe("a → b ← c ↔ d ≠ e ≤ f ≥ g … h");

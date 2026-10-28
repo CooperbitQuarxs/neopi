@@ -67,6 +67,7 @@ it.each(["yaml", "toml"])(
 
 		selector.handleInput("/");
 		for (const ch of "searxng endpoint") selector.handleInput(ch);
+		selector.handleInput("\n"); // confirm search
 		selector.handleInput("\n"); // open the text field
 		selector.handleInput("\x15"); // clear it
 		selector.handleInput("\n"); // submit

@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Enhanced speech rewriting (`speech.enhanced`): turn assistant markdown into
  * natural spoken prose with the tiny/smol model before synthesis.
@@ -24,7 +25,6 @@ import type { Settings } from "../config/settings";
 import speechRewritePrompt from "../prompts/system/speech-rewrite.md" with { type: "text" };
 import voicePostprocessPrompt from "../prompts/system/voice-postprocess.md" with { type: "text" };
 
-const SYSTEM_PROMPT = prompt.render(speechRewritePrompt);
 // Rewrite budget: a paragraph in, a spoken paragraph (usually shorter) out.
 // Always reserve enough room to survive backends that ignore `disableReasoning`
 // (e.g. Qwen3 via llama.cpp catalogued `reasoning: false` but still emitting
@@ -70,7 +70,11 @@ export class SpeechEnhancer {
 	 * falls back to mechanical normalization.
 	 */
 	async rewrite(block: string, signal?: AbortSignal): Promise<string | null> {
-		return this.#complete(boundBlock(block), SYSTEM_PROMPT, signal);
+		return this.#complete(
+			boundBlock(block),
+			renderPromptAsset("system/speech-rewrite.md", speechRewritePrompt, {}),
+			signal,
+		);
 	}
 
 	/** Rewrite a complete reply using the configured voice instruction; null requests caller fallback. */

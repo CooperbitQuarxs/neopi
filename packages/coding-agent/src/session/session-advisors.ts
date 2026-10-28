@@ -1,3 +1,4 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { scheduler } from "node:timers/promises";
 import {
 	Agent,
@@ -42,7 +43,7 @@ import { extractProviderRetryHint } from "@oh-my-pi/pi-ai/utils/retry-after";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
-import { extractHttpStatusFromError, logger, prompt } from "@oh-my-pi/pi-utils";
+import { extractHttpStatusFromError, logger } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import {
 	ADVISOR_DEFAULT_TOOL_NAMES,
@@ -131,6 +132,7 @@ import { buildSessionMetadata } from "./session-metadata";
 import type { YieldQueue } from "./yield-queue";
 
 import {
+	cfgAdvisorActivation,
 	cfgAdvisorEvictStaleResults,
 	cfgAdvisorMaxNotesPerUpdate,
 	cfgAdvisorReviewInterval,
@@ -253,7 +255,6 @@ export function planAdvisorUsageLimitWait(args: {
  * {@link ADVISOR_BOUNDARY_GUIDANCE_TURNS} primary turns: strong guidance, not
  * per-delivery noise.
  */
-const ADVISOR_BOUNDARY_GUIDANCE = advisorBoundaryGuidance.trim();
 const ADVISOR_BOUNDARY_GUIDANCE_TURNS = 50;
 
 /**
@@ -1101,13 +1102,30 @@ export class SessionAdvisors {
 	}
 
 	#resolveAdvisorRuntimeDescriptors(emitWarnings: boolean): AdvisorRuntimeDescriptor[] {
-		const legacyRoster = !this.#advisorConfigs?.length;
-		const roster: AdvisorConfig[] = legacyRoster ? [{ name: "default" }] : this.#advisorConfigs!;
+		const legacy = this.#advisorConfigs === undefined;
+		const activation = cfgAdvisorActivation.get(this.#host.settings);
+		const selected = activation.ids === null ? undefined : new Set(activation.ids);
+		const roster: AdvisorConfig[] =
+			legacy && selected === undefined ? [{ name: "default" }] : (this.#advisorConfigs ?? []);
+		if (selected && emitWarnings) {
+			const visibleIds = new Set(
+				roster
+					.filter(config => activation.scope === "project" || config.sourceScope === "user")
+					.map(config => config.id),
+			);
+			const skipped = [...selected].filter(id => !visibleIds.has(id)).length;
+			if (skipped > 0) {
+				this.#host.emitNotice(
+					"warning",
+					`Advisor activation set${activation.role ? ` for role "${activation.role}"` : ""}: skipped ${skipped} missing or out-of-scope reference${skipped === 1 ? "" : "s"}.`,
+				);
+			}
+		}
 		const descriptors: AdvisorRuntimeDescriptor[] = [];
 		const usedSlugs = new Set<string>();
 		for (const config of roster) {
-			const legacy = legacyRoster || config === this.#launcherLegacyConfig;
-			let slug = legacy ? "" : slugifyAdvisorName(config.name);
+			const legacyConfig = legacy || config === this.#launcherLegacyConfig;
+			let slug = legacyConfig ? "" : slugifyAdvisorName(config.name);
 			if (slug) {
 				let candidate = slug;
 				let n = 2;
@@ -1115,21 +1133,24 @@ export class SessionAdvisors {
 				slug = candidate;
 				usedSlugs.add(slug);
 			}
-			// Per-advisor toggle: skip disabled advisors but keep them in the
-			// status map so they show `○` rather than disappearing.
-			if (config.enabled === false) {
+			const active = selected
+				? config.id !== undefined &&
+					selected.has(config.id) &&
+					(activation.scope === "project" || config.sourceScope === "user")
+				: config.enabled !== false;
+			if (!active) {
 				this.#advisorStatuses.set(slug, { name: config.name, status: "paused" });
 				continue;
 			}
 			// Roster entries default to every-turn review; the roster-less default
 			// advisor leaves both unset and follows the cadence settings live.
-			const reviewMode: AdvisorReviewMode | undefined = legacy
+			const reviewMode: AdvisorReviewMode | undefined = legacyConfig
 				? undefined
 				: config.reviewMode === "agent-end"
 					? "agent-end"
 					: "turn";
 			const configuredReviewInterval = config.reviewInterval;
-			const reviewInterval = legacy
+			const reviewInterval = legacyConfig
 				? undefined
 				: typeof configuredReviewInterval === "number" &&
 					  Number.isSafeInteger(configuredReviewInterval) &&
@@ -1395,11 +1416,16 @@ export class SessionAdvisors {
 			const systemPrompt = [
 				config.systemPrompt ??
 					(this.#chatMode
-						? renderChatAdvisorPrompt(this.#chatMode, budgetPerUpdate)
-						: prompt.render(advisorSystemPrompt, {
-								max_notes_per_update: budgetPerUpdate,
-								include_thinking: config.includeThinking !== false,
-							})),
+						? renderChatAdvisorPrompt(this.#chatMode, budgetPerUpdate, this.#host.sessionManager.getCwd())
+						: renderPromptAsset(
+								"advisor/system.md",
+								advisorSystemPrompt,
+								{
+									max_notes_per_update: budgetPerUpdate,
+									include_thinking: config.includeThinking !== false,
+								},
+								{ cwd: this.#host.sessionManager.getCwd() },
+							)),
 			];
 			if (this.#advisorContextPrompt) systemPrompt.push(this.#advisorContextPrompt);
 			if (this.#advisorMemoryPrompt) systemPrompt.push(this.#advisorMemoryPrompt);
@@ -1923,7 +1949,9 @@ export class SessionAdvisors {
 			this.#advisorPrimaryTurnsCompleted - this.#advisorBoundaryGuidanceLastTurn >= ADVISOR_BOUNDARY_GUIDANCE_TURNS;
 		if (showGuidance) this.#advisorBoundaryGuidanceLastTurn = this.#advisorPrimaryTurnsCompleted;
 		const batch = formatAdvisorBatchContent(notes, { currentTurn: this.#advisorPrimaryTurnsCompleted });
-		const content = showGuidance ? `${ADVISOR_BOUNDARY_GUIDANCE}\n${batch}` : batch;
+		const content = showGuidance
+			? `${resolvePromptAsset("advisor/boundary-guidance.md", advisorBoundaryGuidance, { cwd: this.#host.sessionManager.getCwd(), kind: "notice" }).text.trim()}\n${batch}`
+			: batch;
 		// Snapshot the shared policy inputs once: they cannot change while this
 		// synchronous flush runs. `streaming` is forced false — the primary's turn
 		// IS final even though the loop still reports streaming during the
@@ -2680,6 +2708,7 @@ export class SessionAdvisors {
 					undefined,
 					signal,
 					{
+						cwd: this.#host.sessionManager.getCwd(),
 						thinkingLevel: advisorCompactionThinkingLevel,
 						convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
 						isUserAuthored: isUserAuthoredMessage,
@@ -2909,7 +2938,7 @@ export class SessionAdvisors {
 	 * @returns the number of advisors active after the call.
 	 */
 	applyAdvisorConfigs(
-		advisors: AdvisorConfig[],
+		advisors: AdvisorConfig[] | undefined,
 		sharedInstructions: string | undefined,
 		sharedMaxNotesPerUpdate?: number,
 	): number {
@@ -3185,8 +3214,33 @@ export class SessionAdvisors {
 	 * Format a concise advisor status line for ACP/text output.
 	 */
 	formatAdvisorStatus(): string {
+		return `${this.#formatAdvisorActivationStatus()}\n${this.#formatAdvisorRuntimeStatus()}`;
+	}
+
+	#formatAdvisorActivationStatus(): string {
+		const activation = cfgAdvisorActivation.get(this.#host.settings);
+		const precedence = "Advisor precedence: global switch > role activation set > per-advisor enabled flags.";
+		const role = activation.role ? `Role "${activation.role}"` : "No active role";
+		if (!this.#advisorEnabled) return `${precedence}\n${role}: global advisor switch is off, so no advisors run.`;
+		if (activation.ids === null) return `${precedence}\n${role}: no activation set, using per-advisor enabled flags.`;
+		const selectedNames = (this.#advisorConfigs ?? [])
+			.filter(
+				config =>
+					config.id !== undefined &&
+					activation.ids?.includes(config.id) &&
+					(activation.scope === "project" || config.sourceScope === "user"),
+			)
+			.map(config => config.name);
+		return `${precedence}\n${role}: ${activation.scope}-scoped activation set replaces enabled flags. Selected advisors: ${selectedNames.length ? selectedNames.join(", ") : "none"}.`;
+	}
+
+	#formatAdvisorRuntimeStatus(): string {
 		const stats = this.getAdvisorStats();
+		if (!stats.configured) return "Advisor is disabled.";
 		if (!stats.active && stats.advisors.length === 0) {
+			if (stats.configured && cfgAdvisorActivation.get(this.#host.settings).ids !== null) {
+				return "No advisors selected.";
+			}
 			return stats.configured
 				? "Advisor setting is enabled, but no model is assigned to the 'advisor' role."
 				: "Advisor is disabled.";
@@ -3262,9 +3316,15 @@ export class SessionAdvisors {
 						thinkingLevel: a.agent.state.thinkingLevel,
 						tools: a.agent.state.tools,
 					});
-		if (this.#advisors.length === 1) return dump(this.#advisors[0]);
-		return this.#advisors
-			.map(a => `### Advisor: ${a.name} (${a.agent.state.model.provider}/${a.agent.state.model.id})\n\n${dump(a)}`)
-			.join("\n\n");
+		const history =
+			this.#advisors.length === 1
+				? dump(this.#advisors[0])
+				: this.#advisors
+						.map(
+							a =>
+								`### Advisor: ${a.name} (${a.agent.state.model.provider}/${a.agent.state.model.id})\n\n${dump(a)}`,
+						)
+						.join("\n\n");
+		return `${this.#formatAdvisorActivationStatus()}\n\n${history}`;
 	}
 }

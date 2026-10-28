@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * On-demand Auto effort classification. Replacement mode asks the dedicated
  * @effort role to choose directly among the resolved sparse candidates, using
@@ -17,7 +18,7 @@ import { getSupportedEfforts, getSupportedThinkingLevels } from "@oh-my-pi/pi-ca
 import type { ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import type { ModelRegistry } from "../config/model-registry";
 import { cfgEffortPolicyMode, resolveImplicitEffort } from "../config/effort-policy";
-import effortQuestionInstructions from "../prompts/system/auto-thinking-effort-question.md" with { type: "text" };
+import bundledEffortQuestionInstructions from "../prompts/system/auto-thinking-effort-question.md" with { type: "text" };
 import minimalCriterion from "../prompts/system/auto-thinking-minimal-criterion.md" with { type: "text" };
 import type { Settings } from "../config/settings";
 import { type JudgmentUsage, resolveEffortJudge, resolveJudge, sharedJudgmentCache } from "../judgment";
@@ -144,7 +145,9 @@ export async function classifyDifficulty(
 				effort === "off"
 					? QUESTIONS.off.criteria.off
 					: effort === Effort.Minimal
-						? minimalCriterion.trim()
+						? resolvePromptAsset("system/auto-thinking-minimal-criterion.md", minimalCriterion, {
+								cwd: deps.sessionManager?.getCwd?.(),
+							}).text.trim()
 						: QUESTIONS.level.criteria[effort as Level],
 			]),
 		) as Record<ThinkingEffort, string>;
@@ -152,7 +155,9 @@ export async function classifyDifficulty(
 			type: "choice",
 			instructions: solutionSpace
 				? renderQuestion(QUESTIONS.solutionSpace, { withMax: candidates.includes(Effort.Max) }).instructions
-				: effortQuestionInstructions,
+				: resolvePromptAsset("system/auto-thinking-effort-question.md", bundledEffortQuestionInstructions, {
+						cwd: deps.sessionManager?.getCwd?.(),
+					}).text,
 			criteria,
 		};
 		const judge = resolveEffortJudge({

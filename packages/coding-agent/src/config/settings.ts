@@ -996,9 +996,8 @@ export class Settings {
 	 * supplies the default. Read settings through their handles, not this.
 	 *
 	 * A configured `null` is treated as unset: YAML writes `null` for a key left
-	 * without a value (`fallbackChains:`), and no schema entry has a null
-	 * default, so returning it verbatim would hand callers a value the schema
-	 * says is impossible (#13183).
+	 * without a value (`fallbackChains:`). The handle supplies its declared default,
+	 * which can itself be null for an optional selection such as advisor.activationSet.
 	 */
 	rawValue(setting: AnySetting): unknown {
 		const merged = this.#mergedView();
@@ -1126,7 +1125,8 @@ export class Settings {
 	writeMember(setting: AnySetting, item: string, { member }: { member: boolean }): void {
 		if (setting.type !== "array") throw new Error(`Setting ${setting.id} is not a list`);
 		const list = getByPath(this.#global, setting.segments);
-		const base: readonly unknown[] = Array.isArray(list) ? list : (setting.default as readonly unknown[]);
+		const defaultList = setting.default;
+		const base: readonly unknown[] = Array.isArray(list) ? list : Array.isArray(defaultList) ? defaultList : [];
 		const present = base.includes(item);
 		if (present === member && !this.#softPins.has(setting) && !this.#activeReceipt) return;
 		let next = [...base];
@@ -1272,6 +1272,8 @@ export class Settings {
 			const setting = settings[i];
 			if (!settingValuesEqual(setting.get(this), previous[i])) this.#notifyChange(setting);
 		}
+		// Role-setting consumers can also depend on the supplying scope, not just its value.
+		this.#notifyChange(cfgRoleSettings);
 		this.#notifyPersistedLayersChange();
 	}
 
@@ -1977,6 +1979,21 @@ export class Settings {
 		return value === null || value === undefined ? undefined : (value as T);
 	}
 
+	/** Persisted scope supplying a role value. Null restores inheritance and has no source. */
+	getRoleSettingSourceScope<T>(role: string, setting: Setting<T>): "user" | "project" | undefined {
+		if (!setting.roleScoped || this.getRoleSetting(role, setting) === undefined) return undefined;
+		const segments = ["roleSettings", role, setting.id];
+		for (const [layer, scope] of [
+			[this.#overrides, "user"],
+			[this.#configOverlay, "user"],
+			[overlaySettingsToml(this.#project, this.#projectToml), "project"],
+			[overlaySettingsToml(this.#global, this.#globalToml), "user"],
+		] as const) {
+			if (getByPath(layer, segments) !== undefined) return scope;
+		}
+		return this.#parent?.getRoleSettingSourceScope(role, setting);
+	}
+
 	/** Persist one role setting. Undefined restores inheritance, including over a lower layer. */
 	setRoleSetting<T>(role: string, setting: Setting<T>, value: T | undefined): void {
 		if (!role.trim()) throw new Error("Model role must have a name");
@@ -2284,12 +2301,35 @@ export class Settings {
 	}
 
 	/** Validate and persist a fallback chain with all its per-entry effort selections together. */
-	setFallbackChainAndEfforts(role: string, chain: string[], selections: Record<string, EffortSelection>): void {
+	setFallbackChainAndEfforts(
+		role: string,
+		chain: string[],
+		selections: Record<string, EffortSelection>,
+		previousRole?: string,
+	): void {
 		if (!role.trim()) throw new Error("Fallback chain must name a role");
+		if (previousRole && previousRole !== role && Object.hasOwn(cfgRetryFallbackChains.get(this), role)) {
+			throw new Error(`Fallback chain already exists: ${role}`);
+		}
 		const globalChains = getByPath(this.#global, cfgRetryFallbackChains.segments);
 		const chains = isRecord(globalChains) ? { ...globalChains } : {};
 		const globalSelections = getByPath(this.#global, cfgFallbackEffortSelections.segments);
 		const allSelections = isRecord(globalSelections) ? { ...globalSelections } : {};
+		if (previousRole && previousRole !== role) {
+			const segments = [...cfgRetryFallbackChains.segments, previousRole];
+			if (
+				!Object.hasOwn(chains, previousRole) ||
+				[this.#globalToml, this.#project, this.#projectToml, this.#configOverlay, this.#overrides].some(
+					layer => getByPath(layer, segments) !== undefined,
+				)
+			) {
+				throw new Error("Rename this fallback chain in the config file that defines it");
+			}
+		}
+		if (previousRole && previousRole !== role) {
+			delete chains[previousRole];
+			delete allSelections[previousRole];
+		}
 		if (chain.length === 0) {
 			delete chains[role];
 			delete allSelections[role];
@@ -2316,14 +2356,16 @@ export class Settings {
 		);
 		const previousChains = cfgRetryFallbackChains.get(this);
 		const previousEfforts = cfgFallbackEffortSelections.get(this);
-		for (const setting of [cfgRetryFallbackChains, cfgFallbackEffortSelections]) {
-			const segments = [...setting.segments, role];
-			const key = JSON.stringify(segments);
-			this.#captureGlobalMutation(key, this.#modifiedPathMutations, getByPath(this.#global, segments));
-			this.#modified.set(key, segments);
-			this.#releaseSoftPin(setting);
+		for (const changedRole of new Set([role, ...(previousRole ? [previousRole] : [])])) {
+			for (const setting of [cfgRetryFallbackChains, cfgFallbackEffortSelections]) {
+				const segments = [...setting.segments, changedRole];
+				const key = JSON.stringify(segments);
+				this.#captureGlobalMutation(key, this.#modifiedPathMutations, getByPath(this.#global, segments));
+				this.#modified.set(key, segments);
+				this.#releaseSoftPin(setting);
+			}
+			this.#pairedGlobalFallbackMutations.add(changedRole);
 		}
-		this.#pairedGlobalFallbackMutations.add(role);
 		this.#global = staged;
 		this.#persistedMutationGeneration++;
 		this.#rebuildMerged();

@@ -164,21 +164,25 @@ describe("status-line editor list", () => {
 		expect((await h.draft()).selected).toBe(before.selected);
 	});
 
-	it("filters with / using literal text; Esc returns to the list keeping the filter visible", async () => {
+	it("filters with / using literal text; Enter returns to the list keeping the filter visible", async () => {
 		const h = setup();
 		h.press("/", "t", "i", "m", "e");
 		let draft = await h.draft();
 		expect(draft.focus).toBe("search");
-		expect(draft.query).toBe("time");
-		expect(draft.selected).toBe("time");
-		expect(h.text()).not.toContain("Context bar");
-		h.press(ESC);
+		expect(draft.query).toBe("");
+		expect(h.text()).toContain("Context bar");
+		h.press("\r");
 		draft = await h.draft();
 		expect(draft.focus).toBe("list");
 		expect(draft.query).toBe("time");
+		expect(draft.selected).toBe("time");
+		expect(h.text()).not.toContain("Context bar");
 		expect(h.text()).toContain("time");
 		expect(h.closed()).toBe(false);
-		// Nothing is pending, so the next Esc leaves the editor like any menu.
+		// First Esc clears the retained filter; the next closes the menu.
+		h.press(ESC);
+		expect(h.closed()).toBe(false);
+		expect((await h.draft()).query).toBe("");
 		h.press(ESC);
 		expect(h.closed()).toBe(true);
 	});
@@ -234,16 +238,16 @@ describe("status-line editor list", () => {
 		}
 	});
 
-	it("selects the first widget for every edited query, including Composer and Reset origins", () => {
+	it("selects the first widget for each confirmed query, including Composer and Reset origins", () => {
 		for (const origin of ["composer", "reset"]) {
 			const h = setup();
 			if (origin === "reset") h.press("G");
-			h.press("/", "t", "i");
+			h.press("/", "t", "i", "\r");
 			expect(h.drafts.at(-1)?.selected).toBe("time");
-			h.press(BACKSPACE); // Time still matches t, but Context bar is the first match.
+			h.press("/", BACKSPACE, "\r"); // Context bar is the first match for t.
 			expect(h.drafts.at(-1)?.query).toBe("t");
 			expect(h.drafts.at(-1)?.selected).toBe("context_bar");
-			h.press(BACKSPACE);
+			h.press("/", BACKSPACE, "\r");
 			expect(h.drafts.at(-1)?.selected).toBe("model");
 		}
 	});
@@ -388,7 +392,7 @@ describe("status-line editor templates", () => {
 			const literal = "js h/l gg G";
 			const search = setup();
 			search.press("/", ...literal);
-			expect(search.drafts.at(-1)?.query).toBe(literal);
+			expect(search.drafts.at(-1)?.query).toBe("");
 			expect(search.drafts.at(-1)?.focus).toBe("search");
 			expect(search.previews).toHaveLength(1);
 			expect(search.applied).toEqual([]);

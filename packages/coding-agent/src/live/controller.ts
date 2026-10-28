@@ -4,6 +4,8 @@ import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+import { buildLivePromptContext } from "../prompts/contexts";
 import type { AgentSession } from "../session/agent-session";
 import type { CustomMessageDelivery } from "../session/agent-session";
 import type { AgentSessionEvent } from "../session/agent-session-events";
@@ -21,7 +23,9 @@ import { stripLiveKeyword } from "./keywords";
 import { resolveLiveInstructions } from "./personas";
 import agentFinalMessageTemplate from "./prompts/agent-final-message.md" with { type: "text" };
 import operatorSharedMessageTemplate from "./prompts/operator-shared-message.md" with { type: "text" };
+import operatorSubmittedMessageTemplate from "./prompts/operator-submitted-message.md" with { type: "text" };
 import operatorTypedMessageTemplate from "./prompts/operator-typed-message.md" with { type: "text" };
+import sessionInstructionsTemplate from "./prompts/session-instructions.md" with { type: "text" };
 import {
 	buildDelegationContextAppend,
 	buildSessionClose,
@@ -64,6 +68,8 @@ function truncateToChunk(text: string): string {
 interface UserLedgerTurn {
 	turn: number;
 	text: string;
+	/** Visible composer text controls routing; expanded document contents never do. */
+	routingText?: string;
 	final: boolean;
 	claim?: number;
 	blocked?: boolean;
@@ -99,6 +105,8 @@ export interface LiveComposerReceipt {
 
 export interface LiveComposerSubmission {
 	text: string;
+	/** Visible text, before attachment expansion, used only for routing. */
+	routingText?: string;
 	/** Editor-owned exact draft ranges to retire when the primary accepts this submission. */
 	receipt?: LiveComposerReceipt;
 	/** Only unchanged editor-owned turns remain voice-only after explicit composer edits. */
@@ -161,8 +169,10 @@ export interface LiveSessionControllerOptions {
 	blockDelegateKeyword?: string;
 	delegationKeywords?: () => { suppress: string; force: string };
 	holdMode?: () => boolean;
-	/** Headless callers use canonical transcript text instead of an editable composer. */
+	/** Trailing submission controls, shared by interactive and headless callers. */
 	transcriptKeywords?: () => { submit: string; force: string; silenceMs: number };
+	/** The visible composer owns matching; expanded content owns delivery. Undefined means it is locked. */
+	composerText?: (expanded: boolean) => string | undefined;
 	captureComposerExcludingTurns?: (turns: readonly number[]) => LiveComposerSubmission;
 	quietFloorMs?: () => number;
 	/** Test seam: quiet time after operator activity before held context sends; defaults to 10000 ms. */
@@ -206,7 +216,7 @@ function microphoneLevel(samples: Float32Array): number {
 	return clampLevel(Math.sqrt(sumSquares / samples.length));
 }
 
-function currentUser(): { username: string; firstName: string } {
+export function currentUser(): { username: string; firstName: string } {
 	let username = "user";
 	try {
 		const candidate = os.userInfo().username.trim();
@@ -215,7 +225,7 @@ function currentUser(): { username: string; firstName: string } {
 		// Sandboxed runtimes may not expose OS account information.
 	}
 	const firstPart = username.split(/[._\-\s]+/).find(part => part.length > 0);
-	return { username, firstName: firstPart ?? "there" };
+	return buildLivePromptContext(username, firstPart ?? "there");
 }
 
 /** How one `agent_end` settle drives the voice relay. */
@@ -272,6 +282,8 @@ export class LiveSessionController {
 		| undefined;
 	readonly #transcriptKeywords: (() => { submit: string; force: string; silenceMs: number }) | undefined;
 	#transcriptKeywordTimer: NodeJS.Timeout | undefined;
+	readonly #composerText: ((expanded: boolean) => string | undefined) | undefined;
+	#lastKeywordSubmission: string | undefined;
 	readonly #captureComposerExcludingTurns: ((turns: readonly number[]) => LiveComposerSubmission) | undefined;
 	#suppressedResponse = false;
 
@@ -323,6 +335,8 @@ export class LiveSessionController {
 	/** Ledger turns already final and unclaimed when the voice agent began its current response:
 	 *  the turns that response answers. Undefined while no response is under way. */
 	#answeredTurns: number[] | undefined;
+	/** Explicitly submitted turns, excluding any newer held draft arriving before the reply starts. */
+	#releasedReplyTurns: number[] | undefined;
 	/** The transport finished connecting; context sent before then waits in {@link #pendingOperatorText}. */
 	#connected = false;
 	/** Ledger number of a partial turn the operator retired from the composer; the rest of that
@@ -401,6 +415,7 @@ export class LiveSessionController {
 		this.#delegationKeywords = options.delegationKeywords ?? (() => ({ suppress: "", force: "" }));
 		this.#holdMode = options.holdMode ?? (() => false);
 		this.#transcriptKeywords = options.transcriptKeywords;
+		this.#composerText = options.composerText;
 		this.#captureComposerExcludingTurns = options.captureComposerExcludingTurns;
 		this.#quietFloorMs = options.quietFloorMs ?? (() => 0);
 		const speakableIdleMs = options.speakableIdleMs;
@@ -454,10 +469,24 @@ export class LiveSessionController {
 
 		try {
 			const user = currentUser();
-			const instructions = prompt.render(await resolveLiveInstructions(), user);
+			const instructions = renderPromptAsset(
+				"live/session-instructions.md",
+				sessionInstructionsTemplate,
+				{
+					personaInstructions: prompt.render(
+						await resolveLiveInstructions(undefined, this.#session.sessionManager.getCwd()),
+						user,
+					),
+				},
+				{ cwd: this.#session.sessionManager.getCwd() },
+			);
 			const historySettings = await resolveLiveIngestSettings();
 			const history = historySettings.seedHistory
-				? buildLiveHistorySeed(this.#session.messages, historySettings.seedHistoryTokens)
+				? buildLiveHistorySeed(
+						this.#session.messages,
+						historySettings.seedHistoryTokens,
+						this.#session.sessionManager.getCwd(),
+					)
 				: [];
 			const transport = this.#createTransport({
 				authStorage: this.#session.modelRegistry.authStorage,
@@ -641,10 +670,13 @@ export class LiveSessionController {
 			event.type === "output_transcript.added" ||
 			event.type === "output_audio.delta" ||
 			(event.type === "turn.done" && event.turn.role === "assistant");
-		if (this.#voiceTurnBlocked()) {
-			if (event.type === "delegation.created") this.#deferredVoiceDelegation = { event };
-			if (assistantOutput) this.#suppressedResponse = true;
-			if (assistantOutput || event.type === "delegation.created") return;
+		if (event.type === "delegation.created" && this.#voiceTurnBlocked()) {
+			this.#deferredVoiceDelegation = { event };
+			return;
+		}
+		if (assistantOutput && this.#voiceOutputBlocked()) {
+			this.#suppressedResponse = true;
+			return;
 		}
 		switch (event.type) {
 			case "session.started":
@@ -699,7 +731,7 @@ export class LiveSessionController {
 		const latest = this.#latestUtterance;
 		if (
 			latest?.final &&
-			this.#isDirectAddress(latest.text) &&
+			this.#isDirectAddress(latest.routingText ?? latest.text) &&
 			!this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined).length
 		) {
 			this.#rejectDirectDelegation(event.item.id, latest.text);
@@ -930,7 +962,8 @@ export class LiveSessionController {
 			scope === "turns" || this.#userTurns.size > 0 || receipts ? ids : undefined,
 			receipts,
 		);
-		if (forced) this.#queueSend(buildSessionContextAppend("Operator Message Sent To Main Agent", "commentary"));
+		if (forced) void this.sendOperatorText(text, "both");
+		this.#scheduleTranscriptKeyword();
 	}
 
 	#handleSessionEvent(event: AgentSessionEvent): void {
@@ -1033,10 +1066,11 @@ export class LiveSessionController {
 		// The response consumes the context sent before it; context sent during it counts for the next.
 		const fromContext = this.#contextSinceResponse;
 		this.#contextSinceResponse = false;
+		const released = this.#releasedReplyTurns;
+		this.#releasedReplyTurns = undefined;
 		if (this.#answeredTurns || fromContext) return;
-		this.#answeredTurns = this.#turnsWhere(turn => turn.final && !turn.blocked && turn.claim === undefined).map(
-			turn => turn.turn,
-		);
+		this.#answeredTurns = released ??
+			this.#turnsWhere(turn => turn.final && !turn.blocked && turn.claim === undefined).map(turn => turn.turn);
 	}
 
 	/** A main-agent turn the operator started from the composer with the destination `both`:
@@ -1064,10 +1098,16 @@ export class LiveSessionController {
 				const text = this.#extractAssistantText(message).trim();
 				if (!text) continue;
 				this.#lastRelayedResponse = message;
-				const finalContext = prompt.render(agentFinalMessageTemplate, { message: text });
+				const finalContext = renderPromptAsset(
+					"live/agent-final-message.md",
+					agentFinalMessageTemplate,
+					{ message: text },
+					{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+				);
 				// The operator asked for this answer: deliver it now. The speakable hold is for
 				// unsolicited context only; holding a final answer delays it until the next handoff.
 				this.#contextSinceResponse = true;
+				this.refreshTurnGate(false);
 				for (const chunk of chunkLiveContext(finalContext)) {
 					for (const coConsumedId of this.#coConsumedDelegationIds) {
 						this.#queueSend(this.#voiceContext(coConsumedId, chunk));
@@ -1098,10 +1138,28 @@ export class LiveSessionController {
 				message && message !== this.#lastRelayedResponse ? this.#extractAssistantText(message).trim() : "";
 			if (text && message) {
 				this.#lastRelayedResponse = message;
-				const labelBytes = Buffer.byteLength(prompt.render(agentFinalMessageTemplate, { message: "" }), "utf8");
+				const labelBytes = Buffer.byteLength(
+					renderPromptAsset(
+						"live/agent-final-message.md",
+						agentFinalMessageTemplate,
+						{ message: "" },
+						{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+					),
+					"utf8",
+				);
 				this.#contextSinceResponse = true;
+				this.refreshTurnGate(false);
 				for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
-					this.#queueSend(buildSessionContextAppend(prompt.render(agentFinalMessageTemplate, { message: part })));
+					this.#queueSend(
+						buildSessionContextAppend(
+							renderPromptAsset(
+								"live/agent-final-message.md",
+								agentFinalMessageTemplate,
+								{ message: part },
+								{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+							),
+						),
+					);
 				}
 			}
 		}
@@ -1122,15 +1180,35 @@ export class LiveSessionController {
 	sendOperatorText(text: string, audience: "voice" | "both"): Promise<boolean> {
 		const message = text.trim();
 		if (!message || this.#stopped) return Promise.resolve(false);
+		const templateId = audience === "voice" ? "live/operator-typed-message.md" : "live/operator-shared-message.md";
 		const template = audience === "voice" ? operatorTypedMessageTemplate : operatorSharedMessageTemplate;
 		// A typed prompt makes the voice agent answer it, not the speech around it.
-		if (audience === "voice") this.#contextSinceResponse = true;
+		if (audience === "voice") {
+			this.#contextSinceResponse = true;
+			this.refreshTurnGate(false);
+		}
 		const channel = audience === "voice" ? undefined : "commentary";
 		// Every chunk carries the routing label: the voice agent routes each context item by it.
-		const labelBytes = Buffer.byteLength(prompt.render(template, { message: "" }), "utf8");
+		const labelBytes = Buffer.byteLength(
+			renderPromptAsset(
+				templateId,
+				template,
+				{ message: "" },
+				{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+			),
+			"utf8",
+		);
 		const deliveries: Promise<boolean>[] = [];
 		for (const part of chunkLiveContext(message, CONTEXT_CHUNK_BYTES - labelBytes)) {
-			const context = buildSessionContextAppend(prompt.render(template, { message: part }), channel);
+			const context = buildSessionContextAppend(
+				renderPromptAsset(
+					templateId,
+					template,
+					{ message: part },
+					{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+				),
+				channel,
+			);
 			if (this.#connected) {
 				deliveries.push(this.#queueSend(context));
 			} else {
@@ -1153,10 +1231,8 @@ export class LiveSessionController {
 	retireComposerSpeech(preserveTurns?: readonly number[]): boolean {
 		const pending = this.#pendingDelegation;
 		const last = this.#tailTurn();
-		let settled = true;
-		if (pending && !(this.#pendingDelivery?.cancel() ?? true)) {
-			settled = false;
-		} else if (pending) {
+		if (pending && !(this.#pendingDelivery?.cancel() ?? true)) return false;
+		if (pending) {
 			// Supersede the handoff: its in-flight abort/dispatch sees a newer generation and stops.
 			this.#delegationGeneration += 1;
 			this.#pendingDelegation = undefined;
@@ -1171,74 +1247,105 @@ export class LiveSessionController {
 		// A partial turn retired mid-utterance: the rest of it, final included, is already handled.
 		if (last && !last.final && !this.#userTurns.has(last.turn)) this.#retiredPartialTurn = last.turn;
 		this.#answeredTurns = undefined;
-		return settled;
-	}
-
-	/** Force a silent composer draft through the ordinary main-agent handoff, independent
-	 * of the provider's turn boundaries. The composer is authoritative, including typed edits. */
-	forceDelegateComposer(text: string): boolean {
-		const message = text.trim();
-		if (!message || this.#stopped) return false;
-		const block = stripLiveKeyword(message, this.#blockDelegateKeyword);
-		const voiceOnly = this.#turnsWhere(turn => turn.final && !this.#mayDelegateTurn(turn));
-		if (voiceOnly.length) {
-			if (Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
-			const primary: LiveComposerSubmission = this.#captureComposerExcludingTurns?.(
-				voiceOnly.map(turn => turn.turn),
-			) ?? {
-				text: this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined)
-					.map(turn => turn.text)
-					.join("\n\n"),
-			};
-			const preserved = primary.voiceOnlyTurns ?? voiceOnly.map(turn => turn.turn);
-			if (!this.retireComposerSpeech(preserved)) return false;
-			this.#holdReleased = true;
-			this.#suppressedResponse = false;
-			this.#deferredVoiceDelegation = undefined;
-			this.refreshTurnGate(false);
-			for (const turn of voiceOnly) {
-				if (preserved.includes(turn.turn)) this.#deliverBlockedTurn(turn);
-			}
-			if (primary.text.trim()) this.#forcePendingComposer(primary.text.trim(), primary.receipt);
-			return true;
-		}
-		if (block.matched) {
-			if (Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
-			this.#holdReleased = true;
-			this.#suppressedResponse = false;
-			this.#deferredVoiceDelegation = undefined;
-			this.refreshTurnGate(false);
-			const turns = this.#turnsWhere(turn => turn.blocked === true);
-			void this.sendOperatorText(block.text, "voice").then(delivered => {
-				if (!delivered) return;
-				const removed = this.#deleteTurns(turn => turns.includes(turn));
-				if (removed.length)
-					this.#callbacks.onSpeechSent?.(
-						block.text,
-						removed.map(turn => turn.turn),
-					);
-			});
-			return true;
-		}
-		if (!this.retireComposerSpeech()) return false;
-		this.#holdReleased = true;
-		this.#deferredVoiceDelegation = undefined;
-		this.refreshTurnGate();
-		this.#forcePendingComposer(message);
+		this.#releasedReplyTurns = undefined;
 		return true;
 	}
 
-	#forcePendingComposer(text: string, composerReceipt?: LiveComposerReceipt): void {
-		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text, final: true, composerReceipt };
+	/** Explicit primary routing, independent of the voice agent's routing choice. */
+	forceDelegateComposer(text: string): boolean {
+		return this.#submitComposer(text, true);
+	}
+
+	/** Release one complete composer request to Iris; she may answer or delegate it. */
+	submitComposer(text: string): boolean {
+		return this.#submitComposer(text, false);
+	}
+
+	#submitComposer(text: string, forced: boolean): boolean {
+		const message = text.trim();
+		if (!message || this.#stopped) return false;
+		const keywords = this.#transcriptKeywords?.();
+		const visible = this.#composerText?.(false) ?? message;
+		const force = stripLiveKeyword(visible, keywords?.force ?? "", true);
+		const routingText = force.matched ? force.text : stripLiveKeyword(visible, keywords?.submit ?? "", true).text;
+		const block = stripLiveKeyword(routingText, this.#blockDelegateKeyword);
+		const voiceOnly = this.#turnsWhere(turn => turn.final && !this.#mayDelegateTurn(turn));
+		const lastTurn = this.#tailTurn();
+		if ((voiceOnly.length || block.matched) && Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
+		const captured = this.#captureComposerExcludingTurns?.(voiceOnly.map(turn => turn.turn));
+		const preserved = captured?.voiceOnlyTurns ?? voiceOnly.map(turn => turn.turn);
+		const primary = voiceOnly.length
+			? captured?.text.trim() ??
+				this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined)
+					.map(turn => turn.text).join("\n\n").trim()
+			: captured?.text.trim() ?? (block.matched ? block.text : message);
+		if (!this.retireComposerSpeech(preserved)) return false;
+		this.#holdReleased = true;
+		// A pre-submit response/route belongs to the old draft, not this released request.
+		this.#suppressedResponse = false;
+		this.#deferredVoiceDelegation = undefined;
+		this.refreshTurnGate(false);
+		for (const turn of voiceOnly) {
+			if (turn === lastTurn) {
+				const keywords = this.#transcriptKeywords?.();
+				if (keywords) {
+					const force = stripLiveKeyword(turn.text, keywords.force, true);
+					turn.text = force.matched ? force.text : stripLiveKeyword(turn.text, keywords.submit, true).text;
+				}
+			}
+			if (preserved.includes(turn.turn)) this.#deliverBlockedTurn(turn);
+		}
+		if (voiceOnly.length) {
+			if (primary) this.#offerPendingComposer(primary, forced, captured?.receipt, captured?.routingText);
+		} else if (block.matched) {
+			const turn: UserLedgerTurn = {
+				turn: ++this.#userLedgerTurn, text: primary, routingText, final: true, blocked: true, composerReceipt: captured?.receipt,
+			};
+			this.#putTurn(turn);
+			this.#deliverBlockedTurn(turn);
+		} else {
+			this.#offerPendingComposer(primary, forced, captured?.receipt, captured?.routingText ?? routingText);
+		}
+		return true;
+	}
+
+	#offerPendingComposer(text: string, forced: boolean, composerReceipt?: LiveComposerReceipt, routingText?: string): void {
+		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text, routingText, final: true, composerReceipt };
 		this.#putTurn(turn);
 		this.#latestUtterance = turn;
-		void this.#handleDelegation(
-			{
-				type: "delegation.created",
-				item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
-			},
-			true,
-		).catch(cause => this.#reportFailure(errorFrom(cause)));
+		if (forced || stripLiveKeyword(routingText ?? text, this.#delegationKeywords().force).matched) {
+			this.#releasedReplyTurns = [];
+			void this.#handleDelegation(
+				{
+					type: "delegation.created",
+					item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
+				},
+				forced,
+			).catch(cause => this.#reportFailure(errorFrom(cause)));
+			return;
+		}
+		this.#releasedReplyTurns = [turn.turn];
+		// This context is the submitted speech itself, not narration of unrelated context.
+		this.#contextSinceResponse = false;
+		const labelBytes = Buffer.byteLength(
+			renderPromptAsset(
+				"live/operator-submitted-message.md",
+				operatorSubmittedMessageTemplate,
+				{ message: "" },
+				{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+			),
+			"utf8",
+		);
+		for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
+			void this.#queueSend(buildSessionContextAppend(
+				renderPromptAsset(
+					"live/operator-submitted-message.md",
+					operatorSubmittedMessageTemplate,
+					{ message: part },
+					{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+				),
+			));
+		}
 	}
 
 	/** The voice agent finished answering: the turns it answered are its own and must not ride a
@@ -1361,38 +1468,53 @@ export class LiveSessionController {
 		this.#scheduleTranscriptKeyword();
 	}
 
+	#keywordText(expanded = false): string | undefined {
+		return this.#composerText
+			? this.#composerText(expanded)
+			: this.#turnsWhere(turn => turn.claim === undefined).map(turn => turn.text).join("\n\n");
+	}
+
 	#scheduleTranscriptKeyword(): void {
 		clearTimeout(this.#transcriptKeywordTimer);
 		this.#transcriptKeywordTimer = undefined;
 		const keywords = this.#transcriptKeywords?.();
 		if (!keywords || this.#stopped) return;
-		const text = this.#turnsWhere(turn => turn.claim === undefined)
-			.map(turn => turn.text)
-			.join("\n\n");
-		if (
-			!stripLiveKeyword(text, keywords.force, true).matched &&
-			!stripLiveKeyword(text, keywords.submit, true).matched
-		)
-			return;
-		this.#transcriptKeywordTimer = setTimeout(
-			() => {
-				this.#transcriptKeywordTimer = undefined;
-				const current = this.#transcriptKeywords?.();
-				if (!current || this.#stopped) return;
-				const draft = this.#turnsWhere(turn => turn.claim === undefined)
-					.map(turn => turn.text)
-					.join("\n\n");
-				if (draft !== text) return;
-				const force = stripLiveKeyword(draft, current.force, true);
-				const submit = force.matched ? force : stripLiveKeyword(draft, current.submit, true);
-				if (submit.matched && submit.text) this.forceDelegateComposer(submit.text);
-			},
-			Math.max(keywords.silenceMs, this.#quietFloorMs()),
-		);
+		const text = this.#keywordText();
+		if (text !== this.#lastKeywordSubmission) this.#lastKeywordSubmission = undefined;
+		if (!text || text === this.#lastKeywordSubmission || this.#tailTurn()?.final === false) return;
+		if (!stripLiveKeyword(text, keywords.force, true).matched &&
+			!stripLiveKeyword(text, keywords.submit, true).matched) return;
+		const remaining = this.#lastComposerWrite + Math.max(keywords.silenceMs, this.#quietFloorMs()) - Date.now();
+		this.#transcriptKeywordTimer = setTimeout(() => {
+			this.#transcriptKeywordTimer = undefined;
+			const current = this.#transcriptKeywords?.();
+			if (!current || this.#stopped || this.#keywordText() !== text || this.#tailTurn()?.final === false) return;
+			const expanded = this.#keywordText(true);
+			if (!expanded) return;
+			const force = stripLiveKeyword(text, current.force, true);
+			const submit = stripLiveKeyword(text, current.submit, true);
+			const keyword = force.matched ? current.force : current.submit;
+			if (!(force.matched || submit.matched)) return;
+			const message = stripLiveKeyword(expanded, keyword, true).text;
+			if (!message.trim()) return;
+			this.#lastKeywordSubmission = text;
+			const accepted = force.matched ? this.forceDelegateComposer(message) : this.submitComposer(message);
+			if (!accepted) this.#lastKeywordSubmission = undefined;
+		}, Math.max(0, remaining));
 	}
 
 	#voiceTurnBlocked(): boolean {
-		return (this.#holdMode() && !this.#holdReleased) || Date.now() < this.#lastComposerWrite + this.#quietFloorMs();
+		const keywordSubmission = Boolean(this.#transcriptKeywords?.().submit.trim());
+		return (
+			((this.#holdMode() || keywordSubmission) && !this.#holdReleased) ||
+			Date.now() < this.#lastComposerWrite + this.#quietFloorMs()
+		);
+	}
+
+	/** Holding the next input must not close native playback in the middle of an admitted reply. */
+	#voiceOutputBlocked(): boolean {
+		return this.#voiceTurnBlocked() && !this.#responding &&
+			this.#releasedReplyTurns === undefined && !this.#contextSinceResponse && this.#outputLevel <= OUTPUT_ACTIVE_LEVEL;
 	}
 
 	/** Apply settings immediately, including native RTP playback (which bypasses JS transcript events). */
@@ -1400,7 +1522,8 @@ export class LiveSessionController {
 		clearTimeout(this.#voiceFloorTimer);
 		this.#voiceFloorTimer = undefined;
 		if (this.#stopped) return;
-		this.#transport?.setOutputSuppressed?.(this.#voiceTurnBlocked());
+		this.#scheduleTranscriptKeyword();
+		this.#transport?.setOutputSuppressed?.(this.#voiceOutputBlocked());
 		const remaining = this.#lastComposerWrite + this.#quietFloorMs() - Date.now();
 		if (remaining > 0) {
 			this.#voiceFloorTimer = setTimeout(() => this.refreshTurnGate(), remaining);
@@ -1416,7 +1539,7 @@ export class LiveSessionController {
 		this.#deferredVoiceDelegation = undefined;
 		if (delegation?.directAnswerTurn !== undefined) {
 			const turn = this.#userTurns.get(delegation.directAnswerTurn);
-			if (turn?.final && this.#isDirectAddress(turn.text)) {
+			if (turn?.final && this.#isDirectAddress(turn.routingText ?? turn.text)) {
 				this.#rejectDirectDelegation(delegation.event.item.id, turn.text);
 			}
 		} else if (delegation && this.#turnsWhere(turn => !turn.blocked && turn.claim === undefined).length > 0) {
@@ -1487,6 +1610,7 @@ export class LiveSessionController {
 
 	#sendSpeakable(item: string): Promise<boolean> {
 		this.#contextSinceResponse = true;
+		this.refreshTurnGate(false);
 		const delegationId = this.#activeDelegationId;
 		return this.#queueSend(
 			delegationId
@@ -1530,14 +1654,14 @@ export class LiveSessionController {
 	}
 
 	#handleOutputLevel(level: number): void {
-		if (this.#voiceTurnBlocked()) level = 0;
+		if (this.#voiceOutputBlocked()) level = 0;
 		const wasActive = this.#outputLevel > OUTPUT_ACTIVE_LEVEL;
 		this.#outputSilenceDeadline = Date.now() + OUTPUT_SILENCE_MS;
 		this.#outputSilenceTimer ??= setTimeout(() => this.#expireOutputLevel(), OUTPUT_SILENCE_MS);
 		this.#outputLevel = clampLevel(level);
 		this.#emitLevels();
-		if (this.#outputLevel > OUTPUT_ACTIVE_LEVEL && this.#heldContext.length > 0) {
-			// Classify the response now starting before its output releases held context.
+		if (this.#outputLevel > OUTPUT_ACTIVE_LEVEL) {
+			// Pin playback before a subsequent composer update can re-arm input holding.
 			if (!wasActive) this.#noteResponseStart();
 			this.#releaseHeldContext();
 		}
@@ -1554,6 +1678,7 @@ export class LiveSessionController {
 		}
 		this.#outputLevel = 0;
 		this.#emitLevels();
+		this.#transport?.setOutputSuppressed?.(this.#voiceOutputBlocked());
 		if (!this.#activeDelegationId) this.#refreshAudioPhase();
 	}
 
@@ -1565,13 +1690,13 @@ export class LiveSessionController {
 		this.#microphoneFrames += 1;
 		// Until the native audio path has AEC, suppress likely speaker echo
 		// during playback. The speaker level expires when packets stop arriving.
-		const outputActive = !this.#voiceTurnBlocked() && this.#outputLevel > OUTPUT_ACTIVE_LEVEL;
+		const outputActive = !this.#voiceOutputBlocked() && this.#outputLevel > OUTPUT_ACTIVE_LEVEL;
 		const echoThreshold = Math.max(MIN_BARGE_IN_LEVEL, this.#outputLevel * OUTPUT_ECHO_RATIO);
 		if (outputActive && this.#inputLevel < echoThreshold) {
 			this.#framesDroppedAtGate += 1;
 			return;
 		}
-		if (this.#inputLevel >= MIN_BARGE_IN_LEVEL) this.#markUserActivity();
+		if (this.#inputLevel >= MIN_BARGE_IN_LEVEL) this.noteComposerActivity();
 		try {
 			if (this.#transport.pushAudio(samples)) this.#framesSent += 1;
 			else this.#framesDroppedAtNativeQueue += 1;
@@ -1767,18 +1892,33 @@ export class LiveSessionController {
 	}
 
 	#mayDelegateTurn(turn: UserLedgerTurn): boolean {
-		return !turn.blocked && (!turn.final || !this.#isDirectAddress(turn.text));
+		return !turn.blocked && (!turn.final || !this.#isDirectAddress(turn.routingText ?? turn.text));
 	}
 
 	#rejectDirectDelegation(delegationId: string, text: string): void {
 		this.#answeredTurns = this.#turnsWhere(
-			turn => turn.final && this.#isDirectAddress(turn.text) && turn.claim === undefined,
+			turn => turn.final && this.#isDirectAddress(turn.routingText ?? turn.text) && turn.claim === undefined,
 		).map(turn => turn.turn);
-		const template = operatorTypedMessageTemplate;
-		const labelBytes = Buffer.byteLength(prompt.render(template, { message: "", delegationRejected: true }), "utf8");
+		const labelBytes = Buffer.byteLength(
+			renderPromptAsset(
+				"live/operator-typed-message.md",
+				operatorTypedMessageTemplate,
+				{ message: "", delegationRejected: true },
+				{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+			),
+			"utf8",
+		);
 		for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
 			void this.#queueSend(
-				this.#voiceContext(delegationId, prompt.render(template, { message: part, delegationRejected: true })),
+				this.#voiceContext(
+					delegationId,
+					renderPromptAsset(
+						"live/operator-typed-message.md",
+						operatorTypedMessageTemplate,
+						{ message: part, delegationRejected: true },
+						{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+					),
+				),
 			);
 		}
 	}

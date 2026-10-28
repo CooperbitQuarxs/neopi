@@ -226,6 +226,7 @@ export async function fetchOpenAICompatibleModels<TApi extends Api>(
 		if (options.filterModel && !options.filterModel(entry, mapped)) {
 			continue;
 		}
+		if (mapped.input === defaults.input) mapped.discoveryMissingInput = true;
 		deduped.set(mapped.id, mapped);
 	}
 

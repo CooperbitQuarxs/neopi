@@ -1,8 +1,9 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import * as path from "node:path";
 import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
-import { PRODUCT_NAME, prompt } from "@oh-my-pi/pi-utils";
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import {
 	formatModelString,
 	getModelMatchPreferences,
@@ -230,7 +231,10 @@ function prepareRatchet(session: AgentSession, request: string): { kickoff: stri
 		if (!previous) cfgRatchetEnabled.override(session.settings, previous);
 		return { error: "The ratchet eval prelude is unavailable in this session." };
 	}
-	const kickoff = prompt.render(ratchetKickoffPrompt, { request: request.trim() || undefined, tools }).trim();
+	const kickoff = renderPromptAsset("ratchet-kickoff.md", ratchetKickoffPrompt, {
+		request: request.trim() || undefined,
+		tools,
+	}).trim();
 	return { kickoff };
 }
 
@@ -470,8 +474,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			);
 			return commandConsumed();
 		},
-		handleTui: (_command, runtime) => {
-			runtime.ctx.showModelSelector();
+		handleTui: (command, runtime) => {
+			// Fork-local /model scope; the /models alias retains the full role hub.
+			runtime.ctx.showModelSelector(command.name === "model" ? { sessionOnly: true } : undefined);
 			clearSubmittedText(runtime);
 		},
 	},

@@ -12,6 +12,7 @@
 
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { TspPickerAction, TspPickerColumn, TspPickerItem, TspPickerScope, TspSpan } from "@oh-my-pi/pi-wire";
+import { compileMenuRegex } from "../menu-search";
 import {
 	type Component,
 	Editor,
@@ -474,12 +475,10 @@ export class AgentsHubComponent implements Component {
 		const entry = this.#entries.find(candidate => candidate.id === this.#listScopeId) ?? this.#entries[0]!;
 		const scoped =
 			entry.kind === "source" ? this.#allAgents.filter(agent => agent.source === entry.source) : this.#allAgents;
-		const query = this.#search.value;
+		const query = this.#search.query;
 		let filtered = scoped;
 		if (query) {
-			const tokens = query
-				.trim()
-				.split(/\s+/)
+			const tokens = (compileMenuRegex(query) ? [query] : query.trim().split(/\s+/))
 				.map(token => new FuzzyQuery(token));
 			filtered = scoped.filter(agent => matchAgent(agent, tokens));
 		}
@@ -882,11 +881,11 @@ export class AgentsHubComponent implements Component {
 			this.#requestRender();
 			return;
 		}
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
 			this.#keys.reset();
-			if (this.#search.value !== before) {
+			if (this.#search.query !== before) {
 				this.#focus = "list";
 				this.#buildRows();
 				this.#rowIndex = 0;
@@ -1663,7 +1662,7 @@ export class AgentsHubComponent implements Component {
 		return picker(
 			{
 				title: "Agents",
-				subtitle: this.#notice ?? undefined,
+				subtitle: compileMenuRegex(this.#search.value)?.error ?? this.#notice ?? undefined,
 				icon: "users",
 				noun: "agents",
 				size: "lg",
@@ -1846,7 +1845,7 @@ export class AgentsHubComponent implements Component {
 			"list",
 			{
 				selected: selectedRow ? listRowId(selectedRow) : null,
-				filter: this.#search.value || undefined,
+				filter: this.#search.query || undefined,
 				virtual: true,
 				grow: 1,
 				tone: this.#focus === "list" ? "accent" : undefined,
@@ -2087,6 +2086,7 @@ export class AgentsHubComponent implements Component {
 	}
 
 	leaveMenu(): void {
+		this.#search.focused = false;
 		this.#keys.reset();
 	}
 

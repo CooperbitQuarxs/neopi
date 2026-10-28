@@ -174,7 +174,7 @@ describe("AgentsHub layout", () => {
 		expect(rendered).not.toContain("scout");
 	});
 
-	test("/ searches with literal hjkl; Esc returns to the list, then closes without clearing the filter", async () => {
+	test("/ searches with literal hjkl; Esc clears the filter before closing", async () => {
 		const { hub, strip, type, cancelled } = await createHub(new TestSettings());
 		hub.handleInput("h"); // sidebar
 		hub.handleInput("j"); // project scope
@@ -184,13 +184,17 @@ describe("AgentsHub layout", () => {
 		type("sco");
 		let rendered = strip();
 		expect(rendered).toContain("scout");
-		expect(rendered).not.toContain("dev");
+		expect(rendered).toContain("dev");
+		hub.handleInput("\r");
+		expect(strip()).not.toContain("dev");
+		hub.handleInput("/");
 		for (const key of "hjkl") hub.handleInput(key);
 		rendered = strip();
 		expect(rendered).toContain("Search: scohjkl");
 		hub.handleInput("\x1b");
 		expect(cancelled()).toBe(false);
-		expect(strip()).toContain("Search: scohjkl");
+		expect(strip()).not.toContain("Search: scohjkl");
+		expect(strip()).toContain("dev");
 		hub.handleInput("\x1b");
 		expect(cancelled()).toBe(true);
 	});
@@ -469,6 +473,7 @@ describe("AgentsHub picker", () => {
 		const { hub, type } = await createHub(settings);
 		hub.handleInput("/");
 		type("dev");
+		hub.handleInput("\r");
 		hub.handleNativeEvent({ type: "action", key: "", act: "toggle", mods: [] });
 		expect(settings.lists.get("task.disabledAgents")).toEqual(["dev"]);
 		expect(pickerProps(hub).query).toBe("dev");
@@ -865,7 +870,7 @@ describe("AgentsHub navigation history", () => {
 		}
 	});
 
-	test("native close first leaves the search field and retains the query", async () => {
+	test("native close first clears the search field", async () => {
 		const { hub, type, cancelled } = await createHub(new TestSettings());
 		try {
 			hub.handleInput("/");
@@ -874,7 +879,7 @@ describe("AgentsHub navigation history", () => {
 			const close = { type: "action", key: "", act: "close", mods: [] } as const;
 			hub.handleNativeEvent(close);
 			expect(cancelled()).toBe(false);
-			expect(hub.navigationSnapshot().search).toMatchObject({ value: "dev", focused: false });
+			expect(hub.navigationSnapshot().search).toMatchObject({ value: "", focused: false });
 			hub.handleNativeEvent(close);
 			expect(cancelled()).toBe(true);
 		} finally {

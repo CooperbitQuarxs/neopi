@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Serialized session Chronicler runtime.
  *
@@ -18,7 +19,7 @@ import { Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core
 import { estimateTranscriptTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Api, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai";
-import { acquireFileLock, FileLockContentionError, type FileLockHandle, logger, prompt } from "@oh-my-pi/pi-utils";
+import { acquireFileLock, FileLockContentionError, type FileLockHandle, logger } from "@oh-my-pi/pi-utils";
 import { AdvisorTranscriptRecorder, deriveAdvisorTelemetry } from "../advisor";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString, resolveChroniclerRoleSelection } from "../config/model-resolver";
@@ -165,12 +166,17 @@ export function renderChroniclerSystemPrompt(
 	descriptor: { sessionId: string; cwd: string },
 	settings: Settings,
 ): string {
-	return prompt.render(systemTemplate, {
-		...descriptor,
-		materialCriteria: captureSettings.cfgChroniclerCaptureMaterialCriteria.get(settings),
-		minWords: captureSettings.cfgChroniclerCaptureMinWords.get(settings).toLocaleString("en-US"),
-		maxWords: captureSettings.cfgChroniclerCaptureMaxWords.get(settings).toLocaleString("en-US"),
-	});
+	return renderPromptAsset(
+		"chronicler/system.md",
+		systemTemplate,
+		{
+			...descriptor,
+			materialCriteria: captureSettings.cfgChroniclerCaptureMaterialCriteria.get(settings),
+			minWords: captureSettings.cfgChroniclerCaptureMinWords.get(settings).toLocaleString("en-US"),
+			maxWords: captureSettings.cfgChroniclerCaptureMaxWords.get(settings).toLocaleString("en-US"),
+		},
+		{ cwd: descriptor.cwd },
+	);
 }
 
 const chroniclerTimerIO = {
@@ -1011,20 +1017,25 @@ export class SessionChronicler {
 		const message = rendered[0];
 		const block = message?.role === "user" && Array.isArray(message.content) ? message.content[0] : undefined;
 		const delta = block?.type === "text" ? block.text : "";
-		return prompt.render(contextTemplate, {
-			sessionId: binding.descriptor.sessionId,
-			cwd: binding.descriptor.cwd,
-			beatCount: binding.store.beats.length,
-			beats: listing.map(beat => ({
-				id: beat.id,
-				title: beat.title,
-				kind: beat.kind,
-				eventTime: beat.eventTime,
-			})),
-			omitted,
-			carry,
-			delta,
-		});
+		return renderPromptAsset(
+			"chronicler/context.md",
+			contextTemplate,
+			{
+				sessionId: binding.descriptor.sessionId,
+				cwd: binding.descriptor.cwd,
+				beatCount: binding.store.beats.length,
+				beats: listing.map(beat => ({
+					id: beat.id,
+					title: beat.title,
+					kind: beat.kind,
+					eventTime: beat.eventTime,
+				})),
+				omitted,
+				carry,
+				delta,
+			},
+			{ cwd: binding.descriptor.cwd },
+		);
 	}
 
 	#buildKnownSources(binding: ChroniclerBinding, batch: CaptureBatch): ReadonlyMap<string, CaptureSource> {

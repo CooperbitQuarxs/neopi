@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
@@ -16,6 +17,7 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
+import { toolWireSchema } from "@oh-my-pi/pi-ai";
 import { controlHostFor } from "../control/host";
 import { attachTuiPresenter } from "../control/tui-presenter";
 import { trackMountedDialog } from "../control/dialogs";
@@ -68,7 +70,6 @@ import {
 	isEnoent,
 	logger,
 	postmortem,
-	prompt,
 	sanitizeText,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils";
@@ -166,6 +167,7 @@ import {
 import type { ShakeMode } from "../session/shake-types";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
+import { getToolArgumentCompletions, getToolArgumentInlineHint } from "../slash-commands/tool-arguments";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type SttState } from "../stt";
 import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
@@ -611,8 +613,6 @@ const PLAN_SAVE_TITLE_LINE_LIMIT = 6;
 const CFG_APPROVE_SESSION = "Always for this session";
 const CFG_APPROVE_ONCE = "Allow once";
 const CFG_DENY = "Deny";
-
-const PLAN_FILENAME_SYSTEM_PROMPT = prompt.render(planFilenamePrompt);
 
 function planSaveTitleExcerpt(planContent: string): string {
 	return planContent
@@ -2845,6 +2845,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editor.disableSubmit = false;
 		const controlHost = controlHostFor(this.session);
 		if (controlHost) {
+			controlHost.liveBridge = this.#liveCommandController;
 			attachTuiPresenter(controlHost, {
 				session: this.session,
 				editor: this.editor,
@@ -2942,7 +2943,25 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		}
 
-		return [...builtinCommands, ...hookCommands, ...customCommands, ...skillCommandList];
+		const toolCommands: SlashCommand[] = [
+			{ name: "tool:", description: "Browse enabled tools without invoking them" },
+			...this.session.getToolCatalogEntries().map(tool => ({
+				name: `tool:${tool.name}`,
+				description: tool.description,
+				icon: getSlashCommandTypeIcon("tools"),
+				iconName: "tools" as const,
+				getArgumentCompletions: (text: string) => {
+					const liveTool = this.session.getToolCatalogTool(tool.name);
+					return liveTool ? getToolArgumentCompletions(toolWireSchema(liveTool), text) : null;
+				},
+				getInlineHint: (text: string) => {
+					const liveTool = this.session.getToolCatalogTool(tool.name);
+					return liveTool ? getToolArgumentInlineHint(toolWireSchema(liveTool), text) : null;
+				},
+			})),
+		];
+
+		return [...builtinCommands, ...hookCommands, ...customCommands, ...skillCommandList, ...toolCommands];
 	}
 
 	/** Reload session skills and the `/skill:<name>` command list. */
@@ -5705,7 +5724,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		const excerpt = planSaveTitleExcerpt(planContent);
 		if (excerpt) {
 			void this.session
-				.generateTitle(excerpt, PLAN_FILENAME_SYSTEM_PROMPT)
+				.generateTitle(
+					excerpt,
+					renderPromptAsset(
+						"system/plan-filename.md",
+						planFilenamePrompt,
+						{},
+						{ cwd: this.sessionManager.getCwd() },
+					),
+				)
 				.then(generatedTitle => {
 					if (!generatedTitle) return;
 					suggestedPath = planSaveFileName(generatedTitle);
@@ -5776,7 +5803,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #openPlanInExternalEditor(planFilePath: string): Promise<void> {
-		const editorCmd = getEditorCommand();
+		const env = this.session.environment.snapshot();
+		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
 			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
 			return;
@@ -5800,6 +5828,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			const result = await openInEditor(editorCmd, currentText, {
 				extension: path.extname(resolvedPath) || ".md",
 				trimTrailingNewline: false,
+				env,
 			});
 			if (result !== null) {
 				await Bun.write(resolvedPath, result);
@@ -5815,7 +5844,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #openPlanAnnotationInExternalEditor(draft: string, commit: (text: string | null) => void): Promise<void> {
-		const editorCmd = getEditorCommand();
+		const env = this.session.environment.snapshot();
+		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
 			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
 			return;
@@ -5823,7 +5853,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		try {
 			this.ui.stop();
-			const result = await openInEditor(editorCmd, draft, { extension: ".md" });
+			const result = await openInEditor(editorCmd, draft, { extension: ".md", env });
 			if (result !== null) {
 				commit(result);
 			}
@@ -5906,9 +5936,14 @@ export class InteractiveMode implements InteractiveModeContext {
 				// past the cancel guard — see the comment at the cancel branch.
 				// Cancellation skips the synthetic-prompt dispatch (operator's explicit
 				// abort is honored); failure proceeds best-effort — approval intent stands.
-				const compactionPrompt = prompt.render(planModeCompactInstructionsPrompt, {
-					planFilePath: options.planFilePath,
-				});
+				const compactionPrompt = renderPromptAsset(
+					"system/plan-mode-compact-instructions.md",
+					planModeCompactInstructionsPrompt,
+					{
+						planFilePath: options.planFilePath,
+					},
+					{ cwd: this.sessionManager.getCwd() },
+				);
 				// Pin the plan reference path BEFORE compaction so any user messages
 				// queued during the compaction await (which `handleCompactCommand`
 				// flushes via `flushCompactionQueue` before returning) see the
@@ -6006,11 +6041,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		// markPlanReferenceSent fires only on the dispatch path so the synthetic
 		// plan-approved prompt is the source of the reference injection.
 		this.session.markPlanReferenceSent();
-		const planModePrompt = prompt.render(planModeApprovedPrompt, {
-			planFilePath: options.planFilePath,
-			planContent,
-			contextPreserved: options.preserveContext === true,
-		});
+		const planModePrompt = renderPromptAsset(
+			"system/plan-mode-approved.md",
+			planModeApprovedPrompt,
+			{
+				planFilePath: options.planFilePath,
+				planContent,
+				contextPreserved: options.preserveContext === true,
+			},
+			{ cwd: this.sessionManager.getCwd() },
+		);
 		// Close the review overlay only now — after the async title write and plan
 		// prompt are prepared, immediately before the execution turn is queued. The
 		// synthetic prompt below blocks in `session.prompt` for the whole run, so
@@ -6453,9 +6493,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			// hidden developer message, the agent asks its questions as regular
 			// assistant turns, and the user answers in the ordinary editor. Queue
 			// behind an in-flight run instead of aborting it.
-			const kickoff = prompt.render(guidedGoalInterviewPrompt, {
-				initial: rest?.trim() || undefined,
-			});
+			const kickoff = renderPromptAsset(
+				"goals/guided-goal-interview.md",
+				guidedGoalInterviewPrompt,
+				{
+					initial: rest?.trim() || undefined,
+				},
+				{ cwd: this.sessionManager.getCwd() },
+			);
 			const images = input?.images?.length ? input.images : undefined;
 			if (this.session.isStreaming) {
 				await this.session.followUp(kickoff, images, { synthetic: true });
@@ -7050,6 +7095,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Stop the shared tool-spinner ticker: a live block missed by per-component
 		// stopAnimation would otherwise keep an 80ms interval pinning the process.
 		stopSharedSpinnerTicker();
+		const controlHost = controlHostFor(this.session);
+		if (controlHost?.liveBridge === this.#liveCommandController) controlHost.liveBridge = undefined;
 		this.#liveCommandController.dispose();
 		this.#clearJudgmentBatchProgress();
 		this.#downloadActivityHud.dispose();
@@ -8031,6 +8078,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#commandController.handleToolsCommand();
 	}
 
+	handleToolCatalogCommand(name?: string): void {
+		this.#commandController.handleToolCatalogCommand(name);
+	}
+
 	handleContextCommand(): void {
 		this.#commandController.handleContextCommand();
 	}
@@ -8485,7 +8536,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		void this.#selectorController.showGitTui(revision);
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean }): void {
+	showModelSelector(options?: { temporaryOnly?: boolean; sessionOnly?: boolean }): void {
 		this.#selectorController.showModelSelector(options);
 	}
 
