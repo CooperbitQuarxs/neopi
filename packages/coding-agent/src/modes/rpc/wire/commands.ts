@@ -120,6 +120,12 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		result: "ThemesConfiguration",
 	},
 	{
+		name: "get_theme",
+		doc: "Read the resolved colors of one installed native theme without selecting it.",
+		params: { name: "string" },
+		result: "ThemePalette",
+	},
+	{
 		name: "update_theme",
 		doc: "Set or inherit one native theme slot with an expected scoped value.",
 		params: {

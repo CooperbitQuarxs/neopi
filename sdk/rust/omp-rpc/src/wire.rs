@@ -2717,6 +2717,12 @@ pub struct ThemesConfiguration {
 	pub selection: ThemeSelections,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemePalette {
+	pub name: String,
+	pub colors: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ApprovalHandler {
 	#[serde(rename = "host")]
@@ -6488,6 +6494,11 @@ pub struct SelectMixtureParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetThemeParams {
+	pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateThemeParams {
 	pub appearance: UpdateThemeParamsAppearance,
 	pub scope: UpdateThemeParamsScope,
@@ -8603,6 +8614,22 @@ impl Command for GetThemesConfigurationCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<ThemesConfiguration>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Read the resolved colors of one installed native theme without selecting it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetThemeCommand {
+	pub name: String,
+}
+
+impl Command for GetThemeCommand {
+	const NAME: &'static str = "get_theme";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ThemePalette;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<ThemePalette>(data.unwrap_or_else(|| Value::Object(Map::new())))
 	}
 }
 

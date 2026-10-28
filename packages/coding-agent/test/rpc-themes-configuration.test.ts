@@ -10,6 +10,19 @@ import { cfgThemeDark, cfgThemeLight } from "../src/modes/settings";
 import { getThemesConfiguration, RpcThemeConflict, updateTheme } from "../src/modes/rpc/rpc-themes-configuration";
 
 describe("native theme configuration", () => {
+	test("reads inactive built-in and custom palettes without changing active or persisted themes", async () => {
+		const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures/rpc-theme-palette-read.ts")], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		expect({ exitCode, stdout, stderr }).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+	});
+
 	test("project selection wins and removing it reveals the untouched user selection", async () => {
 		const settings = Settings.isolated({});
 		cfgThemeDark.set(settings, "dark");

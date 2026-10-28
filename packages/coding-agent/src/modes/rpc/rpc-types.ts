@@ -45,7 +45,7 @@ import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { BtwHistoryRecord } from "../../session/btw-history";
-import type { RpcThemesCommand, RpcThemesConfiguration } from "./rpc-themes-configuration";
+import type { RpcThemePalette, RpcThemesCommand, RpcThemesConfiguration } from "./rpc-themes-configuration";
 import type { UsageStatistics } from "../../session/session-entries";
 
 // ============================================================================
@@ -541,6 +541,7 @@ export interface RpcSubagentMessagesResult {
 // Success responses with data
 export type RpcResponse =
 	| { id?: string; type: "response"; command: "get_themes_configuration"; success: true; data: RpcThemesConfiguration }
+	| { id?: string; type: "response"; command: "get_theme"; success: true; data: RpcThemePalette }
 	| { id?: string; type: "response"; command: "update_theme"; success: true; data: RpcThemesConfiguration }
 	// Protocol
 	| {

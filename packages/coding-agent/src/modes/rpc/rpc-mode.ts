@@ -100,7 +100,7 @@ import {
 	resolveOwnedLiveSubagent,
 } from "./rpc-subagents";
 import { getRpcUsage, RpcUsageUnavailableError } from "./rpc-usage";
-import { getThemesConfiguration, updateTheme, RpcThemeConflict } from "./rpc-themes-configuration";
+import { getThemePalette, getThemesConfiguration, updateTheme, RpcThemeConflict } from "./rpc-themes-configuration";
 import { isRpcApprovalHandler, isRpcToolApprovalResponse, RpcToolApprovalBridge } from "./rpc-tool-approval";
 import type {
 	RpcAbortAndRestoreQueueResult,
@@ -2248,6 +2248,8 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 
 			case "get_themes_configuration":
 				return success(id, command.type, await getThemesConfiguration(session.settings));
+			case "get_theme":
+				return success(id, command.type, await getThemePalette(command.name));
 			case "update_theme":
 				try {
 					return success(id, command.type, await updateTheme(session.settings, command));

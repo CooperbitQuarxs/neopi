@@ -9,6 +9,7 @@
 
 ### Added
 
+- Preview any installed native theme's full palette over RPC or terminal control without changing your active theme or saved preferences ([#526](https://github.com/PsychedelicShayna/neopi/issues/526)).
 - Use `/sounds on|off|reload|status` for session-local, owner-assigned event sounds. Real session, tool/edit, shell/eval, subagent, IRC and background-job events drive bounded native playback; unmapped events stay silent and speech/capture takes priority.
 - Tune wake request speech sensitivity independently of the silence timeout in Settings → Interaction → Speech. Low, Normal, and High presets control whether quieter speech keeps a request open; Normal preserves existing detection, and wake-word detection and manual dictation are unchanged ([#571](https://github.com/PsychedelicShayna/neopi/pull/571), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 - Hear configurable continuation and end sounds when a wake-word request finishes recording and when its transcription returns, in addition to the activation chirp ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
@@ -96,6 +97,7 @@
 - Added `tui.titleSpinner` (`braille` | `dots` | `line`, default `braille`) to pick the terminal-title working-state spinner glyphs alongside the existing `tui.titleState` on/off toggle.
 - Added post-processing chains: named, ordered model steps in `CHAINS.yml` (user and project) that rewrite composer text before it is sent. Alt+C sends one prompt through the active chain; `/chaining on|off|use|status|configure` manages automatic mode, the active chain, and a fullscreen editor. Steps without a model use the new Prose role, which falls back to the configured `smol` role.
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
+
 ### Fixed
 
 - Hear a distinct cancellation chirp when a wake activation times out without a spoken request ([#575](https://github.com/PsychedelicShayna/neopi/issues/575)).
@@ -2480,7 +2482,7 @@
 
 ### Fixed
 
-   - Fixed GPT-6 Astra extended-context support and preserved maximum context windows reported by OpenAI Codex discovery ([#10980](https://github.com/can1357/oh-my-pi/pull/10980) by [@H4vC](https://github.com/H4vC)).
+- Fixed GPT-6 Astra extended-context support and preserved maximum context windows reported by OpenAI Codex discovery ([#10980](https://github.com/can1357/oh-my-pi/pull/10980) by [@H4vC](https://github.com/H4vC)).
 - Subagent `yield` no longer rejects a valid `data` payload because a non-strict OpenAI-compatible backend filled the optional `error` field with `""`; previously the worker retried the identical call until the invalid-yield cap and the parent received nothing.
 - Fixed fullscreen `/copy` outlining only a lazily created grouped Read card, so Enter copies the assistant yield instead of tool output.
 - `memory://` now resolves against the session that issued it: a caller's own memory backend answers `memory://<id>`, so co-located sessions no longer read each other's memory rows, and a caller whose session is no longer live fails closed instead of being answered by a peer. Prompt completion binds to the same caller, so `memory://<memory-id>` stays on offer while a subagent shares the working directory. Advisors retain their owning session's memory access even without a session file.
@@ -2717,7 +2719,7 @@
 - Fixed vibe mode becoming un-exitable after branching a session (including via `/btw`), which previously failed with "Vibe parent session changed before mode exit could be persisted." ([#10468](https://github.com/can1357/oh-my-pi/issues/10468)).
 - Fixed HTML session exports reordering interleaved assistant text, thinking, images, and tool calls in the transcript, and split matching text/tool sidebar rows with block-accurate navigation. ([#10253](https://github.com/can1357/oh-my-pi/pull/10253) by [@realcoderandom](https://github.com/realcoderandom))
 - Fixed the built-in `grep` and `sed` treating a basic regular expression as an extended one: a bare `+` is now the literal and `\+` the operator, patterns like `^+` or `s/^\+/` no longer match every line, `^` anchors inside `\(…\)` and after `\|`, and a repetition operator with nothing to repeat is reported instead of silently selecting the whole file ([#10298](https://github.com/can1357/oh-my-pi/pull/10298) by [@mruangutai](https://github.com/mruangutai)).
-- Fixed RPC `prompt` responses for `/skill:*` commands arriving only after the entire prompt-dispatch pipeline finished (usage preflight, compaction, provider calls): under provider stress that outlasts any client prompt timeout, so hosts reported the prompt as rejected while the turn was in fact running. The skill branch now builds the skill prompt eagerly (preserving the immediate error for an unreadable skill file) and dispatches the expensive pipeline asynchronously after answering, matching plain prompts; when the dispatch is cancelled before a turn starts (e.g. an abort overtakes usage preflight), the session now reports it through the non-invoked completion frame instead of leaving hosts waiting for an  that never comes ([#10249](https://github.com/can1357/oh-my-pi/pull/10249) by [@cwr250](https://github.com/cwr250)).
+- Fixed RPC `prompt` responses for `/skill:*` commands arriving only after the entire prompt-dispatch pipeline finished (usage preflight, compaction, provider calls): under provider stress that outlasts any client prompt timeout, so hosts reported the prompt as rejected while the turn was in fact running. The skill branch now builds the skill prompt eagerly (preserving the immediate error for an unreadable skill file) and dispatches the expensive pipeline asynchronously after answering, matching plain prompts; when the dispatch is cancelled before a turn starts (e.g. an abort overtakes usage preflight), the session now reports it through the non-invoked completion frame instead of leaving hosts waiting for an that never comes ([#10249](https://github.com/can1357/oh-my-pi/pull/10249) by [@cwr250](https://github.com/cwr250)).
 - Fixed stale `omp-plugins.lock.json` entries loading leftover `node_modules` trees for plugins no longer declared in an existing `package.json` — the orphaned copy double-loaded its extensions. Lockfile-only plugins remain supported for manifest-less roots and symlinked packages (`omp plugin link`, marketplace runtime packages); stale entries are skipped with a warning.
 
 ## [18.1.2] - 2026-09-01
@@ -3135,7 +3137,9 @@
 
 - Added the `/pin` slash command to pin and unpin sessions so they stay at the top of the `--resume` picker UI.
 - Added live personas: named instruction sets for the live voice model with an immutable bundled `default`, clone-based creation, and a `resolveLiveInstructions()` seam that falls back to the bundled template when the store is missing or corrupt (`src/live/personas.ts`, managed via the `omomp-live-persona` extension's `/live-persona` command).
+
 ### Changed
+
 - Added opt-in edit auto-repair (`edit.autoRepair.enabled`): when an edit breaks a file's AST parse, the smol model repairs the broken region in place — validated by re-parse, revert-rejected, and surfaced as a diff in the tool result — instead of only warning.
 
 ### Fixed
