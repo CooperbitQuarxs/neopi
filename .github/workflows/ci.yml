@@ -7,6 +7,7 @@ on:
       branches: [neopi, nightly, "nightly/**"]
       paths:
          - "packages/**"
+         - "deck/**"
          - "crates/**"
          - "scripts/**"
          - "bazel/**"
@@ -126,6 +127,193 @@ jobs:
            run: bun run ci:check:full
          - name: Build collab web
            run: bun run collab:web:build
+
+   deck:
+      name: Deck typecheck, web build & tests
+      runs-on: ubuntu-24.04
+      needs: [native_addons]
+      if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
+      timeout-minutes: 25
+      env:
+         NPI_DECK_BACKEND: ${{ github.workspace }}
+         NODE_OPTIONS: --max-old-space-size=4096
+      steps:
+         - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+           with:
+              fetch-depth: 0
+              persist-credentials: false
+         - name: Set deck state paths
+           run: |
+              # The runner context is not available in job-level env, so the
+              # path that lives under runner.temp is exported here instead.
+              echo "NPI_DECK_HOME=$RUNNER_TEMP/deck-home" >> "$GITHUB_ENV"
+         - name: Select deck and backend changes
+           id: changes
+           shell: bash
+           env:
+              EVENT: ${{ github.event_name }}
+              BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+              HEAD: ${{ github.sha }}
+           run: |
+              set -euo pipefail
+              selected=false
+              if [[ "$EVENT" == workflow_dispatch || -z "$BASE" || "$BASE" =~ ^0+$ ]]; then
+                selected=true
+              else
+                git diff --name-only -z "$BASE" "$HEAD" > "$RUNNER_TEMP/deck-changes"
+                while IFS= read -r -d '' file; do
+                  case "$file" in
+                    deck/*|packages/coding-agent/*|packages/ai/*|packages/utils/*|packages/catalog/*|packages/agent/*|packages/tui/*|package.json|bun.lock|.github/workflows/ci.yml|.github/actions/*|.github/scripts/deck-*)
+                      selected=true
+                      ;;
+                  esac
+                done < "$RUNNER_TEMP/deck-changes"
+              fi
+              echo "selected=$selected" >> "$GITHUB_OUTPUT"
+              if [[ "$selected" != true ]]; then
+                echo "Deck checks skipped: no deck, imported backend, dependency or deck-CI changes." >> "$GITHUB_STEP_SUMMARY"
+              fi
+         - uses: ./.github/actions/bun-install
+           if: steps.changes.outputs.selected == 'true'
+         - uses: ./.github/actions/native-artifacts
+           if: steps.changes.outputs.selected == 'true'
+           with:
+              targets: linux-x64-baseline linux-x64-modern
+              stash: ${{ needs.native_addons.outputs.stash }}
+         - name: Record and load the staged workspace native addon
+           id: native
+           if: steps.changes.outputs.selected == 'true'
+           shell: bash
+           run: |
+              set -euo pipefail
+              bun deck/scripts/native-addon.ts --built
+              bun -e 'import "./packages/natives/native/index.js";'
+         - name: Prepare and prove the Linux read-only sandbox
+           id: sandbox
+           if: steps.changes.outputs.selected == 'true'
+           shell: bash
+           run: |
+              set -euo pipefail
+              sudo apt-get update
+              sudo apt-get install --yes bubblewrap
+              bwrap --version
+              id
+              sysctl kernel.apparmor_restrict_unprivileged_userns || true
+              sysctl kernel.unprivileged_userns_clone || true
+              sysctl user.max_user_namespaces || true
+              if [[ -r /sys/module/apparmor/parameters/enabled ]]; then cat /sys/module/apparmor/parameters/enabled; fi
+              if [[ -r /proc/self/attr/current ]]; then cat /proc/self/attr/current; fi
+              grep -E '^(Uid|Gid|CapEff|NoNewPrivs|Seccomp):' /proc/self/status || true
+              # Ubuntu 24.04 restricts unprivileged user namespaces by default.
+              # Relax runner policy, never the production sandbox command.
+              sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || \
+                echo "::warning::Could not relax AppArmor userns policy; the sandbox startup probe will report whether namespaces work."
+              since="$(date --iso-8601=seconds)"
+              status=0
+              bun .github/scripts/deck-sandbox.ts || status=$?
+              # A denial is not by itself proof of AppArmor. Keep kernel/audit
+              # evidence on successful and failed startups, without filtering stderr.
+              sudo journalctl --kernel --since "$since" --no-pager -n 100 || true
+              if [[ "$status" != 0 ]]; then
+                echo "Deck sandbox setup failed before tests. Inspect raw bwrap stderr and the namespace/security evidence above." >> "$GITHUB_STEP_SUMMARY"
+              fi
+              exit "$status"
+         - name: Typecheck deck server, Telegram, protocol and web
+           if: steps.changes.outputs.selected == 'true'
+           run: bun deck/.github/scripts/typecheck.ts
+         - name: Build deck web
+           if: ${{ !cancelled() && steps.native.outcome == 'success' && steps.sandbox.outcome == 'success' }}
+           working-directory: deck/apps/web
+           run: bun run build
+         - name: Test deck workspaces
+           id: tests
+           # Independent evidence after compiler/build failures, but not after
+           # an install, native artifact or sandbox setup failure.
+           if: ${{ !cancelled() && steps.native.outcome == 'success' && steps.sandbox.outcome == 'success' }}
+           continue-on-error: true
+           working-directory: deck
+           env:
+              FORCE_COLOR: "0"
+              NO_COLOR: "1"
+           shell: bash
+           run: |
+              set -euo pipefail
+              bun test . ./.github/scripts 2>&1 | tee "$RUNNER_TEMP/deck-tests.log"
+         - name: Report informational deck test counts and failing names
+           if: ${{ !cancelled() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
+           run: bun .github/scripts/deck-test-summary.ts "${{ runner.temp }}/deck-tests.log" "${{ steps.tests.outcome }}"
+
+   # native-artifacts rejects macOS/Windows targets on PRs; their producer only
+   # publishes on non-PR runs. Keep these consumers nightly-only rather than
+   # expanding native build cost and runner exposure for deck PRs.
+   deck_platforms:
+      name: "Deck checks: ${{ matrix.os }}"
+      if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/nightly' && needs.native_addons_cross.result == 'success' }}
+      needs: [native_addons_cross]
+      strategy:
+         fail-fast: false
+         matrix:
+            include:
+               - { os: macos-15, native_targets: darwin-arm64 }
+               - { os: windows-2025, native_targets: win32-x64-baseline }
+      runs-on: ${{ matrix.os }}
+      timeout-minutes: 40
+      defaults:
+         run:
+            shell: bash
+      env:
+         NPI_DECK_BACKEND: ${{ github.workspace }}
+         NODE_OPTIONS: --max-old-space-size=4096
+      steps:
+         - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+           with:
+              persist-credentials: false
+         - name: Set deck state paths
+           run: |
+              # The runner context is not available in job-level env, so the
+              # paths that live under runner.temp are exported here instead.
+              echo "NPI_DECK_HOME=$RUNNER_TEMP/deck-home" >> "$GITHUB_ENV"
+              echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/deck-agent" >> "$GITHUB_ENV"
+         - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+         - name: Restore bun store
+           uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+              restore-keys: |
+                 bun-${{ runner.os }}-
+         - name: Install frozen workspace dependencies
+           run: bun install --frozen-lockfile
+         - name: Install the existing cross-platform native artifact
+           uses: ./.github/actions/native-artifacts
+           with:
+              targets: ${{ matrix.native_targets }}
+         - name: Record and load the staged workspace native addon
+           id: native
+           run: |
+              set -euo pipefail
+              bun deck/scripts/native-addon.ts --built
+              bun -e 'import "./packages/natives/native/index.js";'
+         - name: Typecheck deck server, Telegram, protocol and web
+           run: bun deck/.github/scripts/typecheck.ts
+         - name: Build deck web
+           if: ${{ !cancelled() && steps.native.outcome == 'success' }}
+           working-directory: deck/apps/web
+           run: bun run build
+         - name: Test deck workspaces
+           id: tests
+           if: ${{ !cancelled() && steps.native.outcome == 'success' }}
+           continue-on-error: true
+           working-directory: deck
+           env:
+              FORCE_COLOR: "0"
+              NO_COLOR: "1"
+           run: |
+              set -euo pipefail
+              bun test . ./.github/scripts 2>&1 | tee "$RUNNER_TEMP/deck-tests.log"
+         - name: Report informational deck test counts and failing names
+           if: ${{ !cancelled() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
+           run: bun .github/scripts/deck-test-summary.ts "${{ runner.temp }}/deck-tests.log" "${{ steps.tests.outcome }}"
 
    # MODULE.bazel.lock caches the crate_universe (@crates) extension result,
    # keyed by Cargo.toml/Cargo.lock/member-manifest hashes. While current, a

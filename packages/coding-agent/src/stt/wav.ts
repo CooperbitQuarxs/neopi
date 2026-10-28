@@ -49,3 +49,34 @@ export function encodePcm16Wav(chunks: readonly (Float32Array | Int16Array)[], s
 function writeAscii(target: Uint8Array, offset: number, text: string): void {
 	for (let index = 0; index < text.length; index++) target[offset + index] = text.charCodeAt(index);
 }
+
+/** Decode a PCM16 mono WAV, including files with ancillary RIFF chunks. */
+export function decodePcm16Wav(bytes: Uint8Array): { samples: Float32Array; sampleRate: number } {
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	const text = (offset: number) => String.fromCharCode(...bytes.subarray(offset, offset + 4));
+	if (bytes.length < 12 || text(0) !== "RIFF" || text(8) !== "WAVE") throw new Error("Expected a PCM16 mono WAV");
+	let sampleRate = 0;
+	let data: Uint8Array | undefined;
+	for (let offset = 12; offset + 8 <= bytes.length;) {
+		const size = view.getUint32(offset + 4, true);
+		const start = offset + 8;
+		if (start + size > bytes.length) throw new Error("Truncated WAV chunk");
+		if (text(offset) === "fmt ") {
+			if (
+				size < 16 ||
+				view.getUint16(start, true) !== 1 ||
+				view.getUint16(start + 2, true) !== 1 ||
+				view.getUint16(start + 14, true) !== 16
+			)
+				throw new Error("Expected a PCM16 mono WAV");
+			sampleRate = view.getUint32(start + 4, true);
+		}
+		if (text(offset) === "data") data = bytes.subarray(start, start + size);
+		offset = start + size + (size % 2);
+	}
+	if (!sampleRate || !data || data.length % 2) throw new Error("Invalid WAV audio");
+	const pcm = new DataView(data.buffer, data.byteOffset, data.byteLength);
+	const samples = new Float32Array(data.length / 2);
+	for (let i = 0; i < samples.length; i++) samples[i] = pcm.getInt16(i * 2, true) / 32768;
+	return { samples, sampleRate };
+}

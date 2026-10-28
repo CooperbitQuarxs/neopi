@@ -65,7 +65,14 @@ import {
 } from "./effort-policy";
 import { cfgRetryFallbackChains } from "../session/settings";
 import { cfgShellPath } from "../exec/settings";
-import { CONFIG_TOML, overlaySettingsToml, readSettingsToml, SETTINGS_TOML } from "./settings-toml";
+import {
+	CONFIG_TOML,
+	overlaySettingsToml,
+	parseSettingsToml,
+	patchSettingsToml,
+	settingsTomlSource,
+	SETTINGS_TOML,
+} from "./settings-toml";
 
 export interface RuntimeModelOverrides {
 	modelRoles: Record<string, string>;
@@ -210,12 +217,14 @@ type MainYamlReadResult = {
 	settings: RawSettings | null;
 	configPath: string | null;
 	toml?: RawSettings;
+	tomlPath?: string;
 };
 
 type ProjectSettingsReadResult = {
 	settings: RawSettings;
 	fileSettings: RawSettings;
 	toml: RawSettings;
+	tomlPath?: string;
 	shellPathSource: string | undefined;
 	/** Files that supplied merged project-level settings items. */
 	sourcePaths: string[];
@@ -747,6 +756,8 @@ export class Settings {
 	#modifiedProjectValues = new Map<string, readonly string[]>();
 	/** Native-file values observed before pending project writes, checked again under its write lock. */
 	#modifiedProjectMutations = new Map<string, { segments: readonly string[]; baseValue: unknown }>();
+	#globalTomlPath?: string;
+	#projectTomlPath?: string;
 	#pairedProjectRoleMutations = new Set<string>();
 	#activeReceipt?: PendingSettingsReceipt;
 	#globalReceipts = new Map<string, PendingSettingsReceipt>();
@@ -1022,11 +1033,8 @@ export class Settings {
 		)
 			return "role";
 		if (getByPath(this.#configOverlay, segments) !== undefined) return "overlay";
-		if (
-			getByPath(projectLayerForMerge(overlaySettingsToml(this.#project, this.#projectToml)), segments) !== undefined
-		)
-			return "project";
-		if (getByPath(overlaySettingsToml(this.#global, this.#globalToml), segments) !== undefined) return "global";
+		if (getByPath(projectLayerForMerge(this.#project), segments) !== undefined) return "project";
+		if (getByPath(this.#global, segments) !== undefined) return "global";
 		return this.#parent?.getProvenance(setting) ?? "default";
 	}
 
@@ -1600,6 +1608,8 @@ export class Settings {
 		}
 		cloned.#global = structuredClone(this.#global);
 		cloned.#globalToml = structuredClone(this.#globalToml);
+		cloned.#globalTomlPath = this.#globalTomlPath;
+		cloned.#projectTomlPath = this.#projectTomlPath;
 		cloned.#configOverlay = structuredClone(this.#configOverlay);
 		// A soft-pinned default yields to a value the clone's own scope configures.
 		cloned.#softPins = new Set(this.#softPins);
@@ -1692,6 +1702,7 @@ export class Settings {
 					source: configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]),
 					commit: () => {
 						this.#configPath = configPath;
+						this.#globalTomlPath = globalResult.value.tomlPath;
 					},
 				});
 			}
@@ -1880,7 +1891,7 @@ export class Settings {
 	 * reports its parent's layer with the overlay's own writes merged on top.
 	 */
 	getGlobalSettings(): RawSettings {
-		const own = structuredClone(overlaySettingsToml(this.#global, this.#globalToml));
+		const own = structuredClone(this.#global);
 		return this.#parent ? this.#deepMerge(this.#parent.getGlobalSettings(), own) : own;
 	}
 
@@ -1891,7 +1902,7 @@ export class Settings {
 	 * likewise reports its parent's layer under its own.
 	 */
 	getProjectSettings(): RawSettings {
-		const own = structuredClone(overlaySettingsToml(this.#project, this.#projectToml));
+		const own = structuredClone(this.#project);
 		return this.#parent ? this.#deepMerge(this.#parent.getProjectSettings(), own) : own;
 	}
 
@@ -2282,10 +2293,7 @@ export class Settings {
 
 	/** Get one role's persisted fallback effort metadata without including config overlays. */
 	getGlobalFallbackEffortSelections(role: string): Record<string, EffortSelection> | undefined {
-		const entries = getByPath(
-			overlaySettingsToml(this.#global, this.#globalToml),
-			cfgFallbackEffortSelections.segments,
-		);
+		const entries = getByPath(this.#global, cfgFallbackEffortSelections.segments);
 		return (
 			((isRecord(entries) ? entries[role] : undefined) as Record<string, EffortSelection> | undefined) ??
 			this.#parent?.getGlobalFallbackEffortSelections(role)
@@ -2419,7 +2427,7 @@ export class Settings {
 	}
 
 	getProjectRoleEffortSelection(role: string): EffortSelection | undefined {
-		const values = getByPath(overlaySettingsToml(this.#project, this.#projectToml), ["roleEffortSelections"]);
+		const values = getByPath(this.#project, ["roleEffortSelections"]);
 		return (
 			((isRecord(values) ? values[role] : undefined) as EffortSelection | undefined) ??
 			this.#parent?.getProjectRoleEffortSelection(role)
@@ -2427,7 +2435,7 @@ export class Settings {
 	}
 
 	getGlobalRoleEffortSelection(role: string): EffortSelection | undefined {
-		const values = getByPath(overlaySettingsToml(this.#global, this.#globalToml), ["roleEffortSelections"]);
+		const values = getByPath(this.#global, ["roleEffortSelections"]);
 		return (
 			((isRecord(values) ? values[role] : undefined) as EffortSelection | undefined) ??
 			this.#parent?.getGlobalRoleEffortSelection(role)
@@ -2446,7 +2454,7 @@ export class Settings {
 	 * Get a model role from only the global settings layer (an {@link overlay}'s own, else its parent's).
 	 */
 	getGlobalModelRole(role: ModelRole | string): string | undefined {
-		const modelId = this.#modelRolesFromLayer(overlaySettingsToml(this.#global, this.#globalToml))[role];
+		const modelId = this.#modelRolesFromLayer(this.#global)[role];
 		return modelId || this.#parent?.getGlobalModelRole(role);
 	}
 
@@ -2454,7 +2462,7 @@ export class Settings {
 	 * Get a model role from only the current project settings layer (an {@link overlay}'s own, else its parent's).
 	 */
 	getProjectModelRole(role: ModelRole | string): string | undefined {
-		const modelId = this.#modelRolesFromLayer(overlaySettingsToml(this.#project, this.#projectToml))[role];
+		const modelId = this.#modelRolesFromLayer(this.#project)[role];
 		return modelId || this.#parent?.getProjectModelRole(role);
 	}
 
@@ -2472,9 +2480,8 @@ export class Settings {
 	getModelRoleProvenance(role: ModelRole | string): SettingProvenance {
 		if (this.#modelRoleLayerOwns(this.#overrides, role)) return "runtime";
 		if (this.#modelRoleLayerOwns(this.#configOverlay, role)) return "overlay";
-		if (this.#modelRoleLayerOwns(projectLayerForMerge(overlaySettingsToml(this.#project, this.#projectToml)), role))
-			return "project";
-		if (this.#modelRoleLayerOwns(overlaySettingsToml(this.#global, this.#globalToml), role)) return "global";
+		if (this.#modelRoleLayerOwns(projectLayerForMerge(this.#project), role)) return "project";
+		if (this.#modelRoleLayerOwns(this.#global, role)) return "global";
 		return this.#parent?.getModelRoleProvenance(role) ?? "default";
 	}
 
@@ -2502,11 +2509,11 @@ export class Settings {
 			{ layer: this.#overrides, source: "runtime", tombstone: true },
 			{ layer: this.#configOverlay, source: "overlay", tombstone: true },
 			{
-				layer: projectLayerForMerge(overlaySettingsToml(this.#project, this.#projectToml)),
+				layer: projectLayerForMerge(this.#project),
 				source: "project",
 				tombstone: false,
 			},
-			{ layer: overlaySettingsToml(this.#global, this.#globalToml), source: "global", tombstone: false },
+			{ layer: this.#global, source: "global", tombstone: false },
 		] as const;
 		for (const { layer, source, tombstone } of layers) {
 			const presets = getByPath(layer, ["modelPresets"]);
@@ -2627,7 +2634,7 @@ export class Settings {
 	#captureGlobalMutation(key: string, mutations: Map<string, PendingYamlMutation>, baseValue: unknown): void {
 		if (!this.#persist || !this.#configPath) return;
 		mutations.set(key, {
-			generation: this.#readYamlGeneration(this.#configPath),
+			generation: this.#readYamlGeneration(this.#globalTomlPath ?? this.#configPath),
 			baseValue: structuredClone(baseValue),
 		});
 	}
@@ -2640,6 +2647,7 @@ export class Settings {
 	#globalWriteIsNoop(segments: readonly string[], value: unknown): boolean {
 		if (!settingValuesEqual(getByPath(this.#global, segments), value)) return false;
 		if (!this.#persist || !this.#configPath) return true;
+		if (this.#globalTomlPath) return false;
 		let source: string;
 		try {
 			source = fs.readFileSync(this.#configPath, "utf8");
@@ -3009,18 +3017,21 @@ export class Settings {
 
 	async #readExistingMainYaml(quarantineInvalid: boolean): Promise<MainYamlReadResult> {
 		if (!this.#configPath) return { settings: null, configPath: null };
-		const toml = await readSettingsToml(this.#agentDir);
+		const source = await settingsTomlSource(this.#agentDir);
+		const toml = source ? parseSettingsToml(source.content, source.filePath) : {};
 		for (const filename of MAIN_CONFIG_FILENAMES) {
 			const configPath = path.join(this.#agentDir, filename);
 			const loaded = quarantineInvalid
 				? await this.#loadYamlIfPresentForStartup(configPath)
 				: this.#unwrapYamlLoadResult(configPath, await this.#loadYamlIfPresent(configPath, false));
-			if (loaded) return { settings: loaded, configPath, toml };
+			if (loaded)
+				return { settings: overlaySettingsToml(loaded, toml), configPath, toml, tomlPath: source?.filePath };
 		}
 		return {
-			settings: null,
-			configPath: path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]),
+			settings: source ? toml : null,
 			toml,
+			configPath: path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]),
+			tomlPath: source?.filePath,
 		};
 	}
 
@@ -3028,6 +3039,7 @@ export class Settings {
 		const result = await this.#readExistingMainYaml(true);
 		this.#configPath = result.configPath;
 		this.#globalToml = result.toml ?? {};
+		this.#globalTomlPath = result.tomlPath;
 		return result.settings;
 	}
 
@@ -3105,10 +3117,13 @@ export class Settings {
 		if (nativeModelRoles !== undefined) {
 			merged = this.#deepMerge(merged, { modelRoles: nativeModelRoles });
 		}
+		const source = await settingsTomlSource(projectConfigDir);
+		const toml = source ? parseSettingsToml(source.content, source.filePath) : {};
 		return {
-			settings: this.#migrateRawSettings(merged, quarantineInvalid),
-			fileSettings: structuredClone(nativeProject),
-			toml: await readSettingsToml(projectConfigDir),
+			settings: overlaySettingsToml(this.#migrateRawSettings(merged, quarantineInvalid), toml),
+			fileSettings: structuredClone(overlaySettingsToml(nativeProject, toml)),
+			toml,
+			tomlPath: source?.filePath,
 			shellPathSource,
 			sourcePaths,
 			warningsSeen,
@@ -3125,6 +3140,7 @@ export class Settings {
 	#commitProjectRead(result: ProjectSettingsReadResult): void {
 		this.#projectFileSettings = result.fileSettings;
 		this.#projectToml = result.toml;
+		this.#projectTomlPath = result.tomlPath;
 		this.#projectShellPathSource = result.shellPathSource;
 		this.#projectSourcePaths = result.sourcePaths;
 		this.#projectSettingsWarningsSeen = result.warningsSeen;
@@ -4218,6 +4234,73 @@ export class Settings {
 		await writeFileAtomically(filePath, content);
 	}
 
+	async #withSettingsWriteLock<T>(configPath: string, fn: (yamlWritePath: string) => Promise<T>): Promise<T> {
+		return this.#withYamlWriteLock(configPath, async yamlWritePath => {
+			const source = await settingsTomlSource(path.dirname(configPath));
+			if (!source) return fn(yamlWritePath);
+			const tomlWritePath = await this.#resolveYamlWritePath(source.filePath);
+			// Distinct scopes may point at the same physical TOML file.
+			if (tomlWritePath === yamlWritePath) throw new Error("TOML and YAML settings must be distinct files");
+			return withFileLock(tomlWritePath, () => fn(yamlWritePath));
+		});
+	}
+
+	/** Keep TOML selection and writes inside the existing logical YAML lock. */
+	async #settingsWriteTarget(
+		configPath: string,
+		yamlWritePath: string,
+		expectedTomlPath: string | undefined,
+	): Promise<{
+		loaded: LockedYamlLoadResult;
+		writePath: string;
+		tomlSource?: string;
+		toml?: RawSettings;
+		sourceMatches: boolean;
+	}> {
+		const yaml = await this.#loadYamlIfPresentForWriteLocked(configPath, yamlWritePath);
+		const source = await settingsTomlSource(path.dirname(configPath));
+		if (!source) return { loaded: yaml, writePath: yamlWritePath, sourceMatches: !expectedTomlPath };
+		const toml = parseSettingsToml(source.content, source.filePath);
+		return {
+			loaded: {
+				settings: overlaySettingsToml(yaml.settings ?? {}, toml),
+				generation: this.#readYamlGeneration(source.filePath),
+			},
+			writePath: await this.#resolveYamlWritePath(source.filePath),
+			tomlSource: source.content,
+			toml,
+			sourceMatches: source.filePath === expectedTomlPath,
+		};
+	}
+
+	async #writeSettingsTarget(
+		target: { writePath: string; tomlSource?: string; toml?: RawSettings },
+		settings: RawSettings,
+		source: string | undefined,
+		mutations: readonly YamlPathMutation[],
+	): Promise<void> {
+		if (target.tomlSource === undefined) {
+			await this.#writeYamlAtomically(
+				target.writePath,
+				settings,
+				source,
+				source === undefined ? undefined : mutations,
+			);
+			return;
+		}
+		const overlay = { ...target.toml };
+		for (const mutation of mutations) {
+			const key = mutation.path[0];
+			if (key === undefined) throw new Error("Cannot replace the TOML document root");
+			// Top-level TOML keys replace YAML wholesale. Copy the effective table
+			// when first editing a nested key, and mask a removed root with null.
+			overlay[key] = structuredClone(settings[key] ?? null);
+		}
+		const content = patchSettingsToml(target.tomlSource, overlay);
+		if (content !== target.tomlSource) await writeFileAtomically(target.writePath, content);
+		target.toml = overlay;
+	}
+
 	#queueSave(): void {
 		if (!this.#persist || !this.#configPath) return;
 
@@ -4285,13 +4368,14 @@ export class Settings {
 		this.#modifiedGlobalRoleEffortMutations.clear();
 
 		try {
-			await this.#withYamlWriteLock(configPath, async writePath => {
+			await this.#withSettingsWriteLock(configPath, async writePath => {
 				// Re-read to preserve external changes. If this instance moved a
 				// malformed file aside, recover from its last in-memory state
 				// rather than recreating the config from only the pending path.
-				const loaded = await this.#loadYamlIfPresentForWriteLocked(configPath, writePath);
+				const target = await this.#settingsWriteTarget(configPath, writePath, this.#globalTomlPath);
+				const { loaded } = target;
 				const migrationMutations =
-					loaded.generation.kind === "missing"
+					target.tomlSource !== undefined || loaded.generation.kind === "missing"
 						? []
 						: loaded.settings !== null && loaded.generation.kind === "content"
 							? yamlMigrationMutations(loaded.generation.source, loaded.settings)
@@ -4311,6 +4395,11 @@ export class Settings {
 					if (
 						paths.some(
 							segments =>
+								(target.tomlSource !== undefined &&
+									!Bun.deepEquals(
+										getByPath(current, segments),
+										modifiedPathMutations.get(JSON.stringify(segments))?.baseValue,
+									)) ||
 								!pendingChangeApplies(
 									modifiedPathMutations.get(JSON.stringify(segments)),
 									segments,
@@ -4328,8 +4417,11 @@ export class Settings {
 				for (const [modKey, segments] of modifiedPaths) {
 					const mutation = modifiedPathMutations.get(modKey);
 					if (
+						!target.sourceMatches ||
 						blockedFallbackPaths.has(modKey) ||
 						(receipts.has(modKey) && !Bun.deepEquals(getByPath(current, segments), mutation?.baseValue)) ||
+						(target.tomlSource !== undefined &&
+							!Bun.deepEquals(getByPath(current, segments), mutation?.baseValue)) ||
 						!pendingChangeApplies(mutation, segments, current, loaded.generation, writtenPaths)
 					) {
 						logger.warn("Settings: skipped stale change after external config edit", {
@@ -4370,6 +4462,8 @@ export class Settings {
 					value: unknown,
 					segments: readonly string[],
 				): boolean =>
+					target.sourceMatches &&
+					(target.tomlSource === undefined || Bun.deepEquals(value, mutation?.baseValue)) &&
 					mutation !== undefined &&
 					mutation.generation.kind !== "unreadable" &&
 					(receipts.has(JSON.stringify(segments))
@@ -4475,12 +4569,7 @@ export class Settings {
 					}
 					const canPatchDocument = canPatchLoadedDocument;
 					const source = loaded.generation.kind === "content" ? loaded.generation.source : "";
-					await this.#writeYamlAtomically(
-						writePath,
-						current,
-						canPatchDocument ? source : undefined,
-						canPatchDocument ? mutations : undefined,
-					);
+					await this.#writeSettingsTarget(target, current, canPatchDocument ? source : undefined, mutations);
 				}
 				this.#quarantinedYamlTargets.delete(configPath);
 				// This write changed the file only at `writtenPaths`. A change staged after this save's snapshot at
@@ -4499,7 +4588,7 @@ export class Settings {
 						this.#modified.delete(modKey);
 						this.#modifiedPathMutations.delete(modKey);
 					} else if (pendingChangeApplies(mutation, segments, current, loaded.generation, writtenPaths)) {
-						writtenGeneration ??= this.#readYamlGeneration(configPath);
+						writtenGeneration ??= this.#readYamlGeneration(target.writePath);
 						this.#modifiedPathMutations.set(modKey, {
 							generation: writtenGeneration,
 							baseValue: structuredClone(written),
@@ -4521,7 +4610,7 @@ export class Settings {
 					for (const segments of paths) {
 						const modKey = JSON.stringify(segments);
 						if (this.#modified.has(modKey)) continue;
-						writtenGeneration ??= this.#readYamlGeneration(configPath);
+						writtenGeneration ??= this.#readYamlGeneration(target.writePath);
 						this.#modified.set(modKey, segments);
 						this.#modifiedPathMutations.set(modKey, {
 							generation: writtenGeneration,
@@ -4529,6 +4618,7 @@ export class Settings {
 						});
 					}
 				}
+				this.#globalToml = target.toml ?? {};
 				this.#adoptSavedGlobal(current, configPath);
 				// These pending roles were included in this write. Remove each
 				// only if no newer local change arrived while the write was in flight.
@@ -4720,10 +4810,11 @@ export class Settings {
 
 		try {
 			await fs.promises.mkdir(path.dirname(projectConfigPath), { recursive: true });
-			await this.#withYamlWriteLock(projectConfigPath, async writePath => {
-				const loaded = await this.#loadYamlIfPresentForWriteLocked(projectConfigPath, writePath);
+			await this.#withSettingsWriteLock(projectConfigPath, async writePath => {
+				const target = await this.#settingsWriteTarget(projectConfigPath, writePath, this.#projectTomlPath);
+				const { loaded } = target;
 				const migrationMutations =
-					loaded.generation.kind === "missing"
+					target.tomlSource !== undefined || loaded.generation.kind === "missing"
 						? []
 						: loaded.settings !== null && loaded.generation.kind === "content"
 							? yamlMigrationMutations(loaded.generation.source, loaded.settings)
@@ -4736,7 +4827,11 @@ export class Settings {
 
 				const applies = (segments: readonly string[]): boolean => {
 					const pending = pendingMutations.get(JSON.stringify(segments));
-					return pending !== undefined && Bun.deepEquals(getByPath(projectSettings, segments), pending.baseValue);
+					return (
+						target.sourceMatches &&
+						pending !== undefined &&
+						Bun.deepEquals(getByPath(projectSettings, segments), pending.baseValue)
+					);
 				};
 				const blockedRoles = new Set(
 					[...pairedRoles].filter(
@@ -4801,13 +4896,9 @@ export class Settings {
 				for (const [key, receipt] of receipts) {
 					if (this.#projectInFlightReceipts.get(key) === receipt) this.#projectInFlightReceipts.delete(key);
 				}
-				await this.#writeYamlAtomically(
-					writePath,
-					projectSettings,
-					canPatchDocument ? source : undefined,
-					canPatchDocument ? mutations : undefined,
-				);
+				await this.#writeSettingsTarget(target, projectSettings, canPatchDocument ? source : undefined, mutations);
 				this.#projectFileSettings = structuredClone(projectSettings);
+				this.#projectToml = target.toml ?? {};
 				for (const [key, pending] of this.#modifiedProjectMutations) {
 					if (appliedPaths.has(key)) {
 						this.#modifiedProjectMutations.set(key, {
@@ -4879,10 +4970,8 @@ export class Settings {
 
 	/** `layers` (global, project, `--config` overlay, runtime) merged in precedence order. */
 	#mergeOwnLayers(layers: OwnLayers): RawSettings {
-		let merged = this.#deepMerge(
-			this.#deepMerge({}, overlaySettingsToml(layers.global, layers.globalToml)),
-			projectLayerForMerge(overlaySettingsToml(layers.project, layers.projectToml)),
-		);
+		// TOML is folded into each mutable scope at read time, before setters run.
+		let merged = this.#deepMerge(this.#deepMerge({}, layers.global), projectLayerForMerge(layers.project));
 		merged = this.#deepMerge(merged, layers.configOverlay);
 		return this.#deepMerge(merged, layers.overrides);
 	}

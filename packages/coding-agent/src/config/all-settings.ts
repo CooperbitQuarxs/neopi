@@ -41,6 +41,7 @@ import * as mcpSettings from "../mcp/settings";
 import * as blobBrokerSettings from "../blob-broker/settings";
 import * as secretsSettings from "../secrets/settings";
 import * as ttsSettings from "../tts/settings";
+import * as eventAudioSettings from "../event-audio/settings";
 import * as sttSettings from "../stt/settings";
 import * as liveSettings from "../live/settings";
 import * as collabSettings from "../collab/settings";
@@ -94,6 +95,7 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	blobBrokerSettings,
 	secretsSettings,
 	sttSettings,
+	eventAudioSettings,
 	collabSettings,
 	controlSettings,
 	monitorSettings,

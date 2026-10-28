@@ -1,0 +1,11 @@
+.neo-route-recovery { min-height: 100%; width: 100%; overflow: auto; background: var(--neo-bg); color: rgb(var(--ink)); padding: clamp(20px, 5vw, 64px); }
+.neo-route-recovery > header { margin-bottom: clamp(32px, 8vh, 88px); }
+.neo-route-recovery-panel { max-width: 640px; margin: 0 auto; padding: clamp(24px, 5vw, 48px); border: 1px solid var(--neo-line-2); border-radius: 16px; background: var(--neo-panel); }
+.neo-route-recovery-panel > svg { color: rgb(var(--warn)); margin-bottom: 20px; }
+.neo-route-recovery-panel h1 { margin: 0 0 12px; font-size: clamp(22px, 4vw, 28px); font-weight: 600; letter-spacing: -.025em; line-height: 1.25; }
+.neo-route-recovery-panel p { max-width: 52ch; margin: 0 0 20px; color: rgb(var(--ink-2)); line-height: 1.65; }
+.neo-route-recovery-panel code { display: block; overflow-wrap: anywhere; color: rgb(var(--ink-3)); font-size: 12px; }
+.neo-route-recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; }
+.neo-route-recovery-panel details { border-top: 1px solid var(--neo-line-2); margin-top: 28px; padding-top: 16px; color: rgb(var(--ink-2)); font-size: 12px; }
+.neo-route-recovery-panel summary { cursor: pointer; }
+.neo-route-recovery-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 12px; }

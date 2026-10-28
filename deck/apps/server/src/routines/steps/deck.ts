@@ -1,0 +1,245 @@
+import { existsSync } from "node:fs";
+
+import type { RoutineStep } from "@npi-deck/protocol";
+
+import { createInbox, getInbox, listInbox, updateInbox } from "../../db/inbox.ts";
+import {
+	createTask,
+	findStateByName,
+	findTaskByDisplayOrId,
+	getDefaultState,
+	getState,
+	getTask,
+	listTasks,
+	moveTask,
+} from "../../db/tasks.ts";
+import { KbService, resolveKbRoot } from "../../kb-service.ts";
+import { renderString, renderDeep } from "../template.ts";
+import { notificationService } from "../../notifications/index.ts";
+import type { RunContext, StepResult } from "../types.ts";
+import { readKb, workflowKb } from "../../kb-workflows.ts";
+
+type DeckStep = Extract<RoutineStep, { type: "deck" }>;
+
+export async function executeDeckStep(
+	step: DeckStep,
+	context: RunContext,
+	_signal: AbortSignal,
+): Promise<StepResult> {
+	const startedMs = Date.now();
+	try {
+		switch (step.action) {
+			case "kb_read": {
+				const note = await readKb(workflowKb(), { operation: "open", path: renderString(step.path, context as unknown as Record<string, unknown>) });
+				return ok(startedMs, JSON.stringify(note), note);
+			}
+			case "create_inbox_item": {
+				const item = createInbox({
+					kind: step.kind,
+					title: renderString(step.title, context as unknown as Record<string, unknown>),
+					body:
+						step.body === undefined
+							? undefined
+							: renderString(step.body, context as unknown as Record<string, unknown>),
+					source:
+						step.source === undefined
+							? undefined
+							: renderString(step.source, context as unknown as Record<string, unknown>),
+				});
+				return ok(
+					startedMs,
+					`created inbox item ${item.id} (${item.kind}): ${item.title}`,
+					item,
+				);
+			}
+			case "create_task": {
+				const stateId =
+					step.state_ref === undefined
+						? undefined
+						: resolveStateRef(renderString(step.state_ref, context as unknown as Record<string, unknown>));
+				const task = createTask({
+					title: renderString(step.title, context as unknown as Record<string, unknown>),
+					body:
+						step.body === undefined
+							? undefined
+							: renderString(step.body, context as unknown as Record<string, unknown>),
+					stateId,
+					properties: step.properties === undefined ? undefined : renderDeep(step.properties, context as unknown as Record<string, unknown>) as Record<string, unknown>,
+					cwd:
+						step.cwd === undefined
+							? undefined
+							: renderString(step.cwd, context as unknown as Record<string, unknown>),
+				});
+				return ok(startedMs, `created task T-${task.displayId}: ${task.title}`, task);
+			}
+			case "move_task": {
+				const taskRef = renderString(step.task_ref, context as unknown as Record<string, unknown>);
+				const stateRef = renderString(step.state_ref, context as unknown as Record<string, unknown>);
+				const task = findTaskByDisplayOrId(taskRef);
+				if (!task) return fail(startedMs, `task not found: ${taskRef}`);
+				const destStateId = resolveStateRef(stateRef);
+				const sourceStateId = task.stateId;
+				const moved = moveTask(task.id, destStateId, step.index ?? 0);
+				if (!moved) return fail(startedMs, `move failed for task: ${taskRef}`);
+				// Notify only on the agent-initiated transition INTO s_done. User
+				// drags + slash-command moves don't reach this code path. We gate
+				// on the actual state flip (sourceStateId != destStateId) so
+				// reordering within done doesn't spam.
+				if (destStateId === "s_done" && sourceStateId !== "s_done") {
+					void notificationService.notify({
+						kind: "task_shipped",
+						level: "info",
+						sound: true,
+						title: `Agent shipped: ${moved.title}`,
+						body: `T-${moved.displayId}`,
+						source: `routine:${context.run.id}/task:${moved.id}`,
+					});
+				}
+				return ok(startedMs, `moved task T-${moved.displayId} -> ${moved.stateId} @${step.index ?? 0}`, moved);
+			}
+			case "promote_inbox_item_to_task": {
+				const inboxRef = renderString(step.inbox_ref, context as unknown as Record<string, unknown>);
+				const item = getInbox(inboxRef);
+				if (!item) return fail(startedMs, `inbox item not found: ${inboxRef}`);
+				const stateId =
+					step.state_ref === undefined
+						? getDefaultState().id
+						: resolveStateRef(renderString(step.state_ref, context as unknown as Record<string, unknown>));
+				const stamp = new Date(item.createdAt).toISOString().slice(0, 10);
+				const provenance = `_Promoted from inbox · ${item.kind} · ${stamp} · ${item.id}_`;
+				const content = step.body === undefined ? item.body : renderString(step.body, context as unknown as Record<string, unknown>);
+				const taskBody = content.trim().length > 0 ? `${content}\n\n---\n${provenance}` : provenance;
+				const task = createTask({
+					title: item.title, body: taskBody, stateId,
+					properties: step.properties === undefined ? undefined : renderDeep(step.properties, context as unknown as Record<string, unknown>) as Record<string, unknown>,
+					cwd: step.cwd === undefined ? undefined : renderString(step.cwd, context as unknown as Record<string, unknown>),
+				});
+				const shouldMark = step.mark_processed !== false;
+				const inbox = shouldMark ? updateInbox(item.id, { processed: true }) ?? item : item;
+				return ok(startedMs, `promoted inbox ${item.id} -> T-${task.displayId}`, { task, inbox });
+			}
+			case "list_tasks": {
+				const stateFilterId =
+					step.state_ref === undefined
+						? undefined
+						: resolveStateRef(
+								renderString(
+									step.state_ref,
+									context as unknown as Record<string, unknown>,
+								),
+						  );
+				const cutoffMs =
+					step.since_hours === undefined ? undefined : Date.now() - step.since_hours * 3_600_000;
+				let tasks = listTasks({ includeArchived: step.include_archived === true });
+				if (stateFilterId !== undefined) {
+					tasks = tasks.filter((t) => t.stateId === stateFilterId);
+				}
+				if (cutoffMs !== undefined) {
+					tasks = tasks.filter((t) => new Date(t.updatedAt).getTime() >= cutoffMs);
+				}
+				if (step.limit !== undefined) tasks = tasks.slice(0, step.limit);
+				const summaries = tasks.map((t) => ({
+					id: t.id,
+					displayId: t.displayId,
+					ref: `T-${t.displayId}`,
+					title: t.title,
+					stateId: t.stateId,
+					updatedAt: t.updatedAt,
+					createdAt: t.createdAt,
+				}));
+				return ok(startedMs, `listed ${summaries.length} task(s)`, summaries);
+			}
+			case "list_inbox": {
+				const cutoffMs =
+					step.since_hours === undefined ? undefined : Date.now() - step.since_hours * 3_600_000;
+				const opts: { kind?: typeof step.kind; includeProcessed?: boolean } = {
+					includeProcessed: step.include_processed === true,
+				};
+				if (step.kind !== undefined) opts.kind = step.kind;
+				let items = listInbox(opts);
+				if (cutoffMs !== undefined) {
+					items = items.filter((i) => new Date(i.createdAt).getTime() >= cutoffMs);
+				}
+				if (step.limit !== undefined) items = items.slice(0, step.limit);
+				const summaries = items.map((i) => ({
+					id: i.id,
+					kind: i.kind,
+					title: i.title,
+					source: i.source,
+					createdAt: i.createdAt,
+					processedAt: i.processedAt,
+				}));
+				return ok(startedMs, `listed ${summaries.length} inbox item(s)`, summaries);
+			}
+			case "get_task": {
+				const ref = renderString(
+					step.task_ref,
+					context as unknown as Record<string, unknown>,
+				);
+				const task = findTaskByDisplayOrId(ref) ?? getTask(ref);
+				if (!task) return fail(startedMs, `task not found: ${ref}`);
+				return ok(startedMs, `fetched task T-${task.displayId}: ${task.title}`, task);
+			}
+			case "get_inbox_item": {
+				const ref = renderString(
+					step.inbox_ref,
+					context as unknown as Record<string, unknown>,
+				);
+				const item = getInbox(ref);
+				if (!item) return fail(startedMs, `inbox item not found: ${ref}`);
+				return ok(startedMs, `fetched inbox ${item.id}: ${item.title}`, item);
+			}
+			case "kb_orphan_census": {
+				// A fresh index per run reads the tree and `.kbignore` as they are
+				// now, and leaves the cockpit's cached index alone.
+				const kb = new KbService({ root: resolveKbRoot() });
+				if (!existsSync(kb.root)) return fail(startedMs, `kb root does not exist: ${kb.root}`);
+				const census = await kb.getOrphanCensus();
+				const orphans = step.limit === undefined ? census.orphans : census.orphans.slice(0, step.limit);
+				return ok(
+					startedMs,
+					`${census.orphans.length} orphan(s) among ${census.notes} note(s) under ${census.root}`,
+					{
+						root: census.root,
+						notes: census.notes,
+						orphanCount: census.orphans.length,
+						isolatedCount: census.orphans.filter((o) => o.outbound === 0).length,
+						unresolvedLinks: census.unresolvedLinks,
+						orphans,
+						truncated: orphans.length < census.orphans.length,
+					},
+				);
+			}
+		}
+	} catch (err) {
+		return fail(startedMs, String(err));
+	}
+}
+
+function resolveStateRef(ref: string): string {
+	const exact = getState(ref);
+	if (exact) return exact.id;
+	const byName = findStateByName(ref);
+	if (byName) return byName.id;
+	throw new Error(`unknown state_ref: ${ref}`);
+}
+
+function ok(startedMs: number, stdoutExcerpt: string, json: unknown): StepResult {
+	return {
+		status: "success",
+		stdoutExcerpt,
+		stderrExcerpt: "",
+		json,
+		durationMs: Date.now() - startedMs,
+	};
+}
+
+function fail(startedMs: number, error: string): StepResult {
+	return {
+		status: "failed",
+		stdoutExcerpt: "",
+		stderrExcerpt: "",
+		error,
+		durationMs: Date.now() - startedMs,
+	};
+}

@@ -37,18 +37,34 @@
  * questions); the event controller wires the per-session model source and
  * enhancer via {@link Vocalizer.setModelSource} and {@link Vocalizer.setEnhancer}.
  */
+import { synthesizeSpeech } from "@oh-my-pi/pi-ai/speech";
+import type { ModelRegistry } from "../config/model-registry";
+import { resolveSpeechCandidates } from "../tools/tts";
+import { decodePcm16Wav } from "../stt/wav";
+import { splitSpeechText } from "./segmenter";
 import type { ModelBrowserRegistry } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import { logger } from "@oh-my-pi/pi-utils";
 import { resolveRoleChain } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { type Settings, settings } from "../config/settings";
+import { preemptEventAudio } from "../event-audio/activity";
 import { DEFAULT_TTS_VOICE, TTS_LOCAL_MODELS } from "./models";
+import { createPacedSpeechStream, SpeechPacer, speechTimingEstimate } from "./paced-stream";
 import { SpeakableStream } from "./speakable";
 import { BlockAccumulator, type SpeechEnhancer } from "./speech-enhancer";
 import { createStreamingPlayer, DUCK_GAIN } from "./streaming-player";
-import { type TtsStreamHandle, ttsClient } from "./tts-client";
+import { type TtsAudioChunk, type TtsStreamHandle, ttsClient } from "./tts-client";
 
-import { cfgSpeechEnabled, cfgSpeechEnhanced, cfgSpeechSpeed, cfgSpeechVoice } from "./settings";
+import {
+	cfgSpeechEnabled,
+	cfgSpeechEnhanced,
+	cfgSpeechSpeed,
+	cfgSpeechVoice,
+	cfgTtsPacing,
+	speechPacingMargin,
+	speechPacingThreads,
+	speechSegmentOptions,
+} from "./settings";
 
 /** Quiet time on the delta stream before the buffered partial is spoken. */
 const IDLE_FLUSH_MS = 1000;
@@ -123,6 +139,7 @@ export class Vocalizer {
 	#ducked = false;
 	/** Active scopes that suppress local TTS while another speech surface owns audio. */
 	#suspensions = 0;
+	#turnInterrupted = false;
 	/** Available rewrite slots; blocks queue when exhausted. */
 	#rewriteSlots = MAX_REWRITES_IN_FLIGHT;
 	#slotWaiters: Array<() => void> = [];
@@ -157,6 +174,17 @@ export class Vocalizer {
 		};
 	}
 
+	/** Silence this turn, including text deltas that have not arrived yet. */
+	interruptTurn(): void {
+		this.#turnInterrupted = true;
+		this.clear();
+	}
+
+	/** The session calls this at the next agent turn boundary. */
+	beginTurn(): void {
+		this.#turnInterrupted = false;
+	}
+
 	/**
 	 * Stream a delta of assistant text into the pipeline. No-op when
 	 * vocalization is disabled. The synthesis session (worker, player) is only
@@ -167,13 +195,13 @@ export class Vocalizer {
 	 */
 	pushDelta(text: string): void {
 		const speechSettings = this.#modelSource?.settings ?? settings;
-		if (this.#suspensions > 0 || !cfgSpeechEnabled.get(speechSettings)) return;
+		if (this.#turnInterrupted || this.#suspensions > 0 || !cfgSpeechEnabled.get(speechSettings)) return;
 		if (!text) return;
 		if (this.#enhanced || (!this.#speakable && this.#enhancer && cfgSpeechEnhanced.get(speechSettings))) {
 			this.#pushEnhanced(text);
 			return;
 		}
-		this.#speakable ??= new SpeakableStream();
+		this.#speakable ??= this.#createSpeakable();
 		const speakable = this.#speakable;
 		this.#pushSegments(speakable.push(text));
 		this.#armIdle(() => {
@@ -222,6 +250,49 @@ export class Vocalizer {
 	speak(text: string): void {
 		this.pushDelta(text);
 		this.flush();
+	}
+
+	/** Explicit session voice reply. Preserve text and bypass streaming speech preferences. */
+	async speakReply(
+		text: string,
+		source: { settings: Settings; registry: ModelRegistry; sessionId: string },
+		signal: AbortSignal,
+	): Promise<void> {
+		if (!text || signal.aborted || this.#suspensions > 0) return;
+		const candidate = resolveSpeechCandidates(source.settings, source.registry, false)[0];
+		if (!candidate) throw new Error("No speech model configured");
+		const abort = new AbortController();
+		const cancel = () => {
+			abort.abort();
+			this.clear();
+		};
+		signal.addEventListener("abort", cancel, { once: true });
+		try {
+			const { model } = candidate;
+			const segments = splitSpeechText(text, speechSegmentOptions(source.settings));
+			if (model.api === "local-inference") {
+				const handle = this.#openSession(abort, model.id, source.settings);
+				for (const segment of segments) handle.push(segment);
+				handle.end();
+			} else {
+				const chunks = async function* () {
+					for (let index = 0; index < segments.length; index++) {
+						const segment = segments[index]!;
+						const result = await synthesizeSpeech(
+							model,
+							{ text: segment, format: "wav", speed: cfgSpeechSpeed.get(source.settings) },
+							{ apiKey: source.registry.resolver(model, source.sessionId), signal: abort.signal },
+						);
+						const decoded = decodePcm16Wav(result.audio);
+						yield { pcm: decoded.samples, sampleRate: decoded.sampleRate, index, text: segment };
+					}
+				};
+				this.#queuePlayback(chunks(), abort);
+			}
+			await this.#chain;
+		} finally {
+			signal.removeEventListener("abort", cancel);
+		}
 	}
 
 	/**
@@ -295,7 +366,7 @@ export class Vocalizer {
 		this.#liveAborts.add(abort);
 		return {
 			blocks: new BlockAccumulator(),
-			speakable: new SpeakableStream(),
+			speakable: this.#createSpeakable(),
 			pending: [],
 			pendingChars: 0,
 			dispatchedFirst: false,
@@ -362,6 +433,15 @@ export class Vocalizer {
 
 	// --- Shared synthesis/playback tail --------------------------------------
 
+	#createSpeakable(): SpeakableStream {
+		const source = this.#modelSource;
+		return new SpeakableStream(
+			source && resolveLocalSpeechModelId(source) === "kokoro-paced"
+				? speechSegmentOptions(source.settings)
+				: undefined,
+		);
+	}
+
 	/** Mechanical mode: feed ready segments, opening the session lazily. */
 	#pushSegments(segments: string[]): void {
 		if (segments.length === 0) return;
@@ -377,26 +457,42 @@ export class Vocalizer {
 	 * Open a streaming-synthesis session and chain its playback after any
 	 * prior utterance's, so sequential utterances never overlap.
 	 */
-	#openSession(abort: AbortController): TtsStreamHandle {
-		const source = this.#modelSource;
-		const modelKey = source ? resolveLocalSpeechModelId(source) : TTS_LOCAL_MODELS[0].key;
-		const sessionSettings = source?.settings ?? settings;
+	#openSession(
+		abort: AbortController,
+		modelKey = this.#modelSource ? resolveLocalSpeechModelId(this.#modelSource) : TTS_LOCAL_MODELS[0].key,
+		sessionSettings = this.#modelSource?.settings ?? settings,
+	): TtsStreamHandle {
 		const voice = cfgSpeechVoice.get(sessionSettings) || DEFAULT_TTS_VOICE;
 		const speed = cfgSpeechSpeed.get(sessionSettings);
-		const handle = ttsClient.synthesizeStream(modelKey, { voice, speed, signal: abort.signal });
+		const threads = speechPacingThreads(sessionSettings);
+		const handle =
+			modelKey === "kokoro-paced"
+				? createPacedSpeechStream({
+						synthesize: text =>
+							ttsClient.synthesize(modelKey, text, { voice, speed, threads, signal: abort.signal }),
+						pacer: new SpeechPacer(speechTimingEstimate, speechPacingMargin(sessionSettings)),
+						enabled: cfgTtsPacing.get(sessionSettings),
+						signal: abort.signal,
+					})
+				: ttsClient.synthesizeStream(modelKey, { voice, speed, signal: abort.signal });
+		this.#queuePlayback(handle.chunks, abort);
+		return handle;
+	}
+
+	#queuePlayback(chunks: AsyncIterableIterator<TtsAudioChunk>, abort: AbortController): void {
+		preemptEventAudio();
 		const player = this.#createPlayer();
 		player.setGain(this.#ducked ? DUCK_GAIN : 1);
 		this.#liveAborts.add(abort);
 		this.#livePlayers.add(player);
 		this.#chain = this.#chain.then(async () => {
 			try {
-				await this.#play(handle, player, abort.signal);
+				await this.#play(chunks, player, abort.signal);
 			} finally {
 				this.#liveAborts.delete(abort);
 				this.#livePlayers.delete(player);
 			}
 		});
-		return handle;
 	}
 
 	/**
@@ -421,10 +517,14 @@ export class Vocalizer {
 	}
 
 	/** Feed each synthesized segment into the player in arrival order; abort stops it. */
-	async #play(handle: TtsStreamHandle, player: VocalizerPlayer, signal: AbortSignal): Promise<void> {
+	async #play(
+		chunks: AsyncIterableIterator<TtsAudioChunk>,
+		player: VocalizerPlayer,
+		signal: AbortSignal,
+	): Promise<void> {
 		let started = false;
 		try {
-			for await (const chunk of handle.chunks) {
+			for await (const chunk of chunks) {
 				if (signal.aborted) break;
 				if (!started) {
 					player.start(chunk.sampleRate);

@@ -1,6 +1,7 @@
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { runPauseScreen } from "@oh-my-pi/pi-tui/overlays/pause-screen";
 import { cfgLiveModel } from "../live/settings";
+import { eventAudioCommand } from "../event-audio/observer";
 import { clearSubmittedText } from "./helpers/draft";
 import { shutdownHandlerTui } from "./builtin-lifecycle";
 import { configureAgentMonitor } from "../monitor/configure";
@@ -9,6 +10,27 @@ import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers
 import type { SlashCommandSpec } from "./types";
 
 export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
+	{
+		name: "sounds",
+		icon: "voice",
+		description: "Enable, silence or reload owner-assigned event sounds for this session",
+		allowArgs: true,
+		inlineHint: "[on|off|reload|status]",
+		subcommands: [
+			{ name: "on", description: "Enable assigned event sounds for this session" },
+			{ name: "off", description: "Stop event sounds immediately" },
+			{ name: "reload", description: "Reread curated assignments and changed audio" },
+			{ name: "status", description: "Show mappings, playback and dropped events" },
+		],
+		handleTui: async (command, runtime) => {
+			clearSubmittedText(runtime);
+			try {
+				runtime.ctx.showStatus(await eventAudioCommand(runtime.ctx.session, command.args));
+			} catch (error) {
+				runtime.ctx.showError(errorMessage(error));
+			}
+		},
+	},
 	{
 		name: "force",
 		icon: "hammer",

@@ -251,6 +251,8 @@ describe("ModelPicker", () => {
 
 		picker.handleInput("/");
 		picker.handleInput("@");
+		picker.handleInput("\n"); // confirm the draft before switching to quick roles
+		expect(onPickRole).not.toHaveBeenCalled();
 		const rendered = picker.render(220);
 		const frame = rendered.join("\n");
 		expect(normalize(rendered)).toContain("@smol");
@@ -259,8 +261,6 @@ describe("ModelPicker", () => {
 		expect(frame).toContain(`${theme.getFgAnsi(palette[0])}@smol`);
 		expect(frame).toContain(`${theme.getFgAnsi(palette[1])}@slow`);
 
-		picker.handleInput("\n");
-		expect(onPickRole).not.toHaveBeenCalled();
 		picker.handleInput("\n");
 		expect(onPickRole).toHaveBeenCalledWith(quickRoles[1]);
 		expect(onPick).not.toHaveBeenCalled();
@@ -294,13 +294,14 @@ describe("ModelPicker", () => {
 			const rendered = normalize(picker.render(220));
 			expect(rendered).toContain("test/live");
 			expect(rendered).toContain("test/voice");
-			expect(rendered).not.toContain("lively");
-			expect(rendered).not.toContain("voicemail");
+			expect(rendered).toContain("lively"); // draft search leaves the committed list intact
+			expect(rendered).toContain("voicemail");
 			for (const key of ["\x1b[B", "\x1b[A", "\x1b[5~", "\x1b[6~", "\t"]) picker.handleInput(key);
 			expect(onPick).not.toHaveBeenCalled();
 			picker.handleInput("\n");
 			expect(onPick).not.toHaveBeenCalled();
 			expect(normalize(picker.render(220))).not.toContain("lively");
+			expect(normalize(picker.render(220))).not.toContain("voicemail");
 			picker.handleInput("\n");
 			expect(onPick.mock.calls[0]?.[0]).toBe(live);
 		},
@@ -312,7 +313,7 @@ describe("ModelPicker", () => {
 		for (const ch of query) picker.handleInput(ch);
 		const rendered = normalize(picker.render(220));
 		expect(rendered).toMatch(/invalid.*(?:regex|pattern)|(?:regex|pattern).*error/i);
-		expect(rendered).not.toContain("test/live");
+		expect(rendered).toContain("test/live"); // an invalid draft does not replace the committed list
 		picker.handleInput("\n");
 		picker.handleInput("\n");
 		expect(onPick).not.toHaveBeenCalled();

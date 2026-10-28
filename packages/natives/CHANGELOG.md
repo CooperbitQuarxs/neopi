@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added read-only `countSessionMessages` for complete journal counts without constructing message bodies or acquiring writer leases ([#555](https://github.com/PsychedelicShayna/neopi/issues/555)).
+
 ## [18.10.2] - 2026-10-12
 
 ### Added

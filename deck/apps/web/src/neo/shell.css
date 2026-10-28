@@ -1,0 +1,107 @@
+/* NeoProxy's 52 / 224 chassis, with one quiet inset work panel. */
+.neo-shell {
+	--topbar-h: 52px;
+	--sidebar-w: 224px;
+}
+
+.neo-shell .neo-topbar {
+	gap: 12px;
+	padding: 0 16px;
+	border-bottom: 1px solid var(--neo-line-1);
+}
+
+.neo-shell .neo-topbar-actions { gap: 6px; }
+.neo-shell .neo-topbar-actions .neo-chip {
+	background: transparent;
+	border-color: transparent;
+	border-radius: var(--r-control);
+}
+.neo-engine-location {
+	max-width: 180px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	color: rgb(var(--ink-3));
+}
+
+.neo-shell .neo-sidebar {
+	padding: 18px 12px 12px;
+	gap: 20px;
+	z-index: var(--neo-layer-chrome, 20);
+}
+
+.neo-shell .neo-sidebar[hidden] { display: none; }
+.neo-shell .neo-nav-heading { padding-bottom: 6px; font-size: 11.5px; }
+.neo-shell .neo-nav-row { height: 32px; }
+.neo-shell .neo-sidebar-foot {
+	border: 0;
+	border-top: 1px solid var(--neo-line-1);
+	border-radius: 0;
+	background: transparent;
+	padding: 14px 10px 2px;
+	gap: 9px;
+}
+
+.neo-shell .neo-panel {
+	margin: 12px 12px 12px 0;
+	box-shadow: none;
+}
+.neo-shell[data-collapsed="true"] main.neo-panel { margin-left: 12px; }
+.neo-shell .neo-dock {
+	width: 360px;
+	flex: none;
+	flex-direction: column;
+	overflow: auto;
+}
+.neo-shell .neo-dock:empty { display: none; }
+.neo-mobile-nav-heading { display: none; }
+
+.neo-account-button {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 5px 7px;
+	border-radius: var(--r-control);
+	font-size: 12px;
+	color: rgb(var(--ink-2));
+}
+.neo-account-button:hover { background: var(--neo-hover); color: rgb(var(--ink)); }
+.neo-shell :is(button, a):focus-visible {
+	outline: 2px solid rgb(var(--accent));
+	outline-offset: 2px;
+}
+
+@media (max-width: 899px) {
+	.neo-workspace { flex-direction: column; }
+	.neo-shell .neo-dock {
+		width: auto;
+		max-height: 45vh;
+	}
+	.neo-shell .neo-topbar { padding: 0 10px; gap: 10px; }
+	.neo-shell .neo-sidebar {
+		position: absolute;
+		inset: 0 auto 0 0;
+		width: min(280px, calc(100vw - 48px));
+		background: var(--neo-bg);
+		box-shadow: var(--neo-shadow-3);
+		z-index: var(--neo-layer-modal, 200);
+		padding-top: 10px;
+	}
+	.neo-mobile-nav-heading { display: flex; align-items: center; justify-content: space-between; }
+	.neo-shell .neo-scrim { z-index: calc(var(--neo-layer-modal, 200) - 1); }
+	.neo-shell .neo-panel,
+	.neo-shell[data-collapsed="true"] main.neo-panel {
+		margin: 0;
+		border-radius: 0;
+		border: 0;
+	}
+	.neo-shell .neo-dock { border-top: 1px solid var(--neo-line-1); }
+}
+
+@media (max-width: 540px) {
+	.neo-account-name { display: none; }
+	.neo-shell .neo-topbar-actions { gap: 2px; }
+	.neo-shell .neo-brand { gap: 6px; }
+	.neo-shell .neo-brand-page { display: none; }
+}

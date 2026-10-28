@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://npi-deck.app/schemas/trigger-event.json",
+  "title": "RoutineTrigger — event",
+  "description": "Legacy generic event declaration. The existing runner.fire(id, 'event', payload) admission does not select or subscribe by source, type, or filter.",
+  "type": "object",
+  "required": ["event"],
+  "properties": {
+    "event": {
+      "type": "object",
+      "required": ["source"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Declared event source id. Metadata only in legacy routine admission."
+        },
+        "type": {
+          "type": "string",
+          "description": "Declared source-specific subtype. Metadata only in legacy routine admission."
+        },
+        "filter": {
+          "type": "string",
+          "description": "Declared filter expression. Legacy routine admission does not evaluate it."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

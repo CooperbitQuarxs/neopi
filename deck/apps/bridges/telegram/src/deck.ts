@@ -1,0 +1,247 @@
+import type { CreateSessionRequest, CreateSessionResponse, ImageAttachment, ServerFrame, InboxItem, ListInboxResponse, ListSessionsResponse, ListModelsResponse, Task, PromoteInboxItemResponse } from "@npi-deck/protocol";
+import type { IntakeCard } from "./commands.ts";
+
+export class SessionNotActiveError extends Error {
+	constructor(sessionId: string) {
+		super(`session not active: ${sessionId}`);
+	}
+}
+
+/** How long a prompt may go without any frame for its session before the
+ *  bridge gives up on it, so one lost completion cannot wedge a chat queue. */
+export const DEFAULT_PROMPT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+
+export class DeckClient {
+	constructor(
+		private readonly apiBase: string,
+		private readonly wsUrl: string,
+		private readonly promptIdleTimeoutMs: number = DEFAULT_PROMPT_IDLE_TIMEOUT_MS,
+	) {}
+
+	async createSession(opts: { cwd: string; resumeFromPath?: string }): Promise<CreateSessionResponse> {
+		const body: CreateSessionRequest = {
+			cwd: opts.cwd,
+			...(opts.resumeFromPath ? { resumeFromPath: opts.resumeFromPath } : {}),
+		};
+		return this.request<CreateSessionResponse>("/api/sessions", {
+			method: "POST",
+			body: JSON.stringify(body),
+		});
+	}
+
+	async listSessions(): Promise<ListSessionsResponse["sessions"]> {
+		return (await this.request<ListSessionsResponse>("/api/sessions", {})).sessions;
+	}
+
+	async listInbox(): Promise<InboxItem[]> {
+		return (await this.request<ListInboxResponse>("/api/inbox", {})).items;
+	}
+
+	capture(title: string, body: string, source: string): Promise<InboxItem> {
+		return this.request("/api/inbox", { method: "POST", headers: { "Idempotency-Key": `${source}:capture` }, body: JSON.stringify({ kind: "capture", title, body, source }) });
+	}
+
+	async fileCards(cards: IntakeCard[], source: string): Promise<Task[]> {
+		const tasks: Task[] = [];
+		for (const [index, card] of cards.entries()) {
+			const headers = { "Idempotency-Key": `${source}:card:${index}` };
+			const item = await this.request<InboxItem>("/api/inbox", { method: "POST", headers,
+				body: JSON.stringify({ kind: "ticket", title: card.title, body: card.body, source }) });
+			const promoted = await this.request<PromoteInboxItemResponse>(`/api/inbox/${encodeURIComponent(item.id)}/promote`, {
+				method: "POST", headers, body: JSON.stringify({ ...(card.cwd ? { cwd: card.cwd } : {}), ...(card.stateId ? { stateId: card.stateId } : {}) }),
+			});
+			tasks.push(promoted.task);
+		}
+		return tasks;
+	}
+
+	sessionAction(sessionId: string, action: "abort" | "compact", body: Record<string, unknown> = {}): Promise<unknown> {
+		return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/${action}`, { method: "POST", body: JSON.stringify(body) });
+	}
+
+	updateSession(sessionId: string, body: Record<string, unknown>): Promise<unknown> {
+		return this.request(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "PATCH", body: JSON.stringify(body) });
+	}
+
+	models(sessionId: string): Promise<ListModelsResponse> {
+		return this.request(`/api/models?sessionId=${encodeURIComponent(sessionId)}`, {});
+	}
+
+	/** One read-only observer for opted-in bindings. It never resumes a stopped session. */
+	watchAttention(sessionIds: () => string[], onFrame: (frame: ServerFrame) => void): () => void {
+		let socket: WebSocket | undefined;
+		let stopped = false;
+		const subscribed = new Set<string>();
+		const sync = () => {
+			if (socket?.readyState !== WebSocket.OPEN) return;
+			const wanted = new Set(sessionIds());
+			for (const id of subscribed) if (!wanted.has(id)) {
+				socket.send(JSON.stringify({ type: "unsubscribe", sessionId: id }));
+				subscribed.delete(id);
+			}
+			for (const id of wanted) if (!subscribed.has(id)) {
+				subscribed.add(id);
+				socket.send(JSON.stringify({ type: "subscribe", sessionId: id }));
+			}
+		};
+		const connect = () => {
+			if (stopped || socket || !sessionIds().length) return;
+			socket = new WebSocket(this.wsUrl);
+			socket.onopen = sync;
+			socket.onmessage = event => {
+				if (stopped) return;
+				let frame: ServerFrame;
+				try { frame = JSON.parse(String(event.data)); } catch { return; }
+				if (frame.type === "error" && frame.sessionId) subscribed.delete(frame.sessionId);
+				if (frame.type === "session_disposed") subscribed.delete(frame.sessionId);
+				if (frame.type === "ext_ui_dialog_open" || frame.type === "plan_proposed") onFrame(frame);
+			};
+			socket.onerror = () => socket?.close();
+			socket.onclose = () => { socket = undefined; subscribed.clear(); };
+		};
+		connect();
+		const timer = setInterval(() => { connect(); sync(); }, 3000);
+		return () => { stopped = true; clearInterval(timer); socket?.close(); };
+	}
+
+	promptSession(args: {
+		sessionId: string;
+		text: string;
+		images?: ImageAttachment[];
+		onText: (text: string) => void;
+		signal?: AbortSignal;
+	}): Promise<string> {
+		if (args.signal?.aborted) return Promise.reject(new Error("Prompt cancelled"));
+		return new Promise((resolve, reject) => {
+			const ws = new WebSocket(this.wsUrl);
+			let promptSent = false;
+			let settled = false;
+			let latestText = "";
+			let sawAssistant = false;
+			let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+			const finish = (err?: Error, output?: string) => {
+				if (settled) return;
+				settled = true;
+				if (idleTimer) clearTimeout(idleTimer);
+				args.signal?.removeEventListener("abort", abort);
+				try {
+					ws.close();
+				} catch {
+					// already closed
+				}
+				if (err) reject(err);
+				else if (output !== undefined) resolve(output.trim() || "Done.");
+				else resolve(latestText.trim() || (sawAssistant ? "" : "Turn complete."));
+			};
+			const abort = () => {
+				if (promptSent && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "abort", sessionId: args.sessionId }));
+				finish(new Error("Prompt cancelled"));
+			};
+			args.signal?.addEventListener("abort", abort, { once: true });
+			if (args.signal?.aborted) { abort(); return; }
+			const armIdleTimer = () => {
+				if (idleTimer) clearTimeout(idleTimer);
+				idleTimer = setTimeout(
+					() => finish(new Error(`deck sent nothing for ${Math.round(this.promptIdleTimeoutMs / 1000)}s; giving up on this prompt`)),
+					this.promptIdleTimeoutMs,
+				);
+			};
+			armIdleTimer();
+
+			ws.onopen = () => {
+				if (settled) return;
+				ws.send(JSON.stringify({ type: "subscribe", sessionId: args.sessionId }));
+			};
+			ws.onerror = () => finish(new Error("deck websocket failed"));
+			ws.onclose = () => {
+				if (!settled) finish(new Error("deck websocket closed before turn ended"));
+			};
+			ws.onmessage = (ev) => {
+				if (settled) return;
+				let frame: ServerFrame;
+				try {
+					frame = JSON.parse(String(ev.data)) as ServerFrame;
+				} catch {
+					finish(new Error("deck websocket sent invalid json"));
+					return;
+				}
+				if (frame.type === "plan_proposed" && frame.sessionId === args.sessionId) {
+					finish(undefined, "Needs you: a plan is ready for review. Open this thread in NeoDeck to approve or revise it.");
+					return;
+				}
+				if (frame.type === "ext_ui_dialog_open" && frame.sessionId === args.sessionId) {
+					args.onText(`Needs you: ${frame.prompt || "your agent has a question"}. Open this thread in NeoDeck to respond.`);
+					armIdleTimer();
+					return;
+				}
+				if (frame.type === "subscribed" && frame.sessionId === args.sessionId && frame.snapshot.pendingPlanApproval) {
+					finish(new Error("Plan review is pending in the deck web UI; respond there before sending another Telegram prompt."));
+					return;
+				}
+				if (frame.type === "subscribed" && frame.sessionId === args.sessionId && !promptSent) {
+					promptSent = true;
+					ws.send(
+						JSON.stringify({
+							type: "prompt",
+							sessionId: args.sessionId,
+							text: args.text,
+							...(args.images && args.images.length > 0 ? { images: args.images } : {}),
+						}),
+					);
+					return;
+				}
+				if (frame.type === "prompt_consumed" && frame.sessionId === args.sessionId) {
+					// A slash command the deck handled itself: no agent run follows.
+					finish(undefined, frame.output);
+					return;
+				}
+				if (frame.type === "error" && (!frame.sessionId || frame.sessionId === args.sessionId)) {
+					const message = frame.error.toLowerCase();
+					finish(message.includes("session not active") ? new SessionNotActiveError(args.sessionId) : new Error(frame.error));
+					return;
+				}
+				if (frame.type !== "session_event" || frame.sessionId !== args.sessionId) return;
+				armIdleTimer();
+				const event = frame.event as Record<string, unknown>;
+				if (event.type === "message_update" || event.type === "message_end" || event.type === "message_start") {
+					const msg = event.message as Record<string, unknown> | undefined;
+					if (msg?.role === "assistant") {
+						sawAssistant = true;
+						const next = extractAssistantText(msg.content);
+						if (next) {
+							latestText = next;
+							args.onText(latestText);
+						}
+					}
+					return;
+				}
+				// `turn_end` fires after every tool turn, and NeoPi may emit a
+				// non-terminal `agent_end` (`isTerminal: false`) as a scheduling
+				// pause. Only a terminal `agent_end` means the answer is complete.
+				if (event.type === "agent_end" && event.isTerminal !== false) finish();
+			};
+		});
+	}
+
+	private async request<T>(path: string, init: RequestInit): Promise<T> {
+		const res = await fetch(`${this.apiBase}${path}`, {
+			...init,
+			headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+		});
+		if (!res.ok) throw new Error(`deck request failed ${path}: HTTP ${res.status} ${await res.text()}`);
+		return (await res.json()) as T;
+	}
+}
+
+function extractAssistantText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	let out = "";
+	for (const item of content) {
+		if (!item || typeof item !== "object") continue;
+		const block = item as Record<string, unknown>;
+		if (block.type === "text" && typeof block.text === "string") out += block.text;
+	}
+	return out;
+}

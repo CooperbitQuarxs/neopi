@@ -509,6 +509,8 @@ export interface InteractiveModeContext {
 	dictationSpaceHold(target: DictationTarget): SpaceHoldHandler;
 	/** True when no speech capture is in flight; gates the space-hold gesture. */
 	readonly sttIdle: boolean;
+	readonly localVoiceActive: boolean;
+	handleLocalVoiceCommand(args?: string): Promise<void>;
 	/** Start or stop the Codex-backed realtime voice session. */
 	handleLiveCommand(): Promise<void>;
 	/** Mute or unmute the live voice session microphone; no-op when live mode is off. */
