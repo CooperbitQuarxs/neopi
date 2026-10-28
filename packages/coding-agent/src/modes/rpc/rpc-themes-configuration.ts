@@ -15,8 +15,13 @@ export interface RpcThemesConfiguration {
 	themes: string[];
 	selection: Record<RpcThemeAppearance, RpcThemeSelection>;
 }
+export interface RpcThemePalette {
+	name: string;
+	colors: Record<string, string>;
+}
 export type RpcThemesCommand =
 	| { id?: string; type: "get_themes_configuration" }
+	| { id?: string; type: "get_theme"; name: string }
 	| {
 			id?: string;
 			type: "update_theme";
@@ -25,6 +30,19 @@ export type RpcThemesCommand =
 			name: string | null;
 			expected: string | null;
 	  };
+
+async function resolvedThemeColors(name: string): Promise<Record<string, string>> {
+	const [colors, exported] = await Promise.all([getResolvedThemeColors(name), getThemeExportColors(name)]);
+	for (const [key, value] of Object.entries(exported)) if (value) colors[key] = value;
+	return colors;
+}
+
+/** Resolve a named theme without consulting or changing the active selection. */
+export async function getThemePalette(name: string): Promise<RpcThemePalette> {
+	if (typeof name !== "string" || !(await getAvailableThemes()).includes(name))
+		throw new Error("Unknown native theme.");
+	return { name, colors: await resolvedThemeColors(name) };
+}
 
 function storedTheme(layer: unknown, appearance: RpcThemeAppearance): string | null {
 	if (!isRecord(layer) || !isRecord(layer.theme)) return null;
@@ -39,8 +57,7 @@ export async function getThemesConfiguration(settings: Settings): Promise<RpcThe
 	const project = settings.getProjectSettings();
 	const selection = async (appearance: RpcThemeAppearance): Promise<RpcThemeSelection> => {
 		const name = (appearance === "dark" ? cfgThemeDark : cfgThemeLight).get(settings);
-		const [colors, exported] = await Promise.all([getResolvedThemeColors(name), getThemeExportColors(name)]);
-		for (const [key, value] of Object.entries(exported)) if (value) colors[key] = value;
+		const colors = await resolvedThemeColors(name);
 		return {
 			effective: name,
 			global: storedTheme(global, appearance),

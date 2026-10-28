@@ -13,6 +13,7 @@ export const RPC_CAPABILITIES: readonly string[] = [
 	"get_usage", // #105
 	"get_roles", // #104
 	"themes_configuration", // #526
+	"theme_palette", // Read a named native palette without selecting it.
 	"model_selector", // Read-only native /switch query and row facts.
 	"models_configuration", // Native model hub configuration and scoped role writes.
 	"cancellable_login", // Native auth prompts and request-scoped cancellation.
@@ -25,6 +26,7 @@ export const RPC_CAPABILITIES: readonly string[] = [
 	"prompt_entry_ids", // #117
 	"session_catalog", // #355
 	"session_history_identity", // Native selected-branch transcript identities.
+	"session_journal_events", // Confirmed journal entries, native leaf and session identity notifications.
 	"session_tree_navigation", // Guarded same-file tree navigation and explicit ask re-answer resume.
 	"session_journal", // Canonical journal paging over RPC, control and the read-only CLI.
 	"control_pipe", // #355

@@ -154,6 +154,7 @@ export class ControlHost {
 	#approvalUiOpen = false;
 	#planMode: RpcPlanModeController | undefined;
 	#settleWatcher: RpcSessionSettleWatcher | undefined;
+	#unsubscribeJournalIdentity: (() => void) | undefined;
 	/** Shared subagent roster, so a fresh connection sees subagents started before it opened. */
 	#subagents: RpcSubagentRegistry | undefined;
 	/** Per-connection `set_subagent_subscription` level; absent means `off`. */
@@ -252,6 +253,7 @@ export class ControlHost {
 				this.#connections.delete(connection);
 				this.#subscribed.delete(connection);
 				this.#handlers.delete(connection);
+				this.#forwarders.get(connection)?.dispose();
 				this.#forwarders.delete(connection);
 				this.#closeBridges(connection);
 				this.#setSubagentLevel(connection, "off");
@@ -289,6 +291,9 @@ export class ControlHost {
 			await this.close("owner_closed");
 			return dispose();
 		};
+		this.#unsubscribeJournalIdentity = session.sessionManager.subscribeJournal(event => {
+			if (event.type === "journal_state") this.#noteSessionIdentity();
+		});
 		session.subscribe(event => {
 			this.#noteSessionIdentity();
 			this.promptResults.observe(event);
@@ -431,6 +436,8 @@ export class ControlHost {
 	async close(reason = "shutdown"): Promise<void> {
 		if (this.#closed) return;
 		this.#closed = true;
+		this.#unsubscribeJournalIdentity?.();
+		this.#unsubscribeJournalIdentity = undefined;
 		for (const connection of this.#connections) {
 			connection.write({ type: "host_shutdown", reason });
 			connection.close(reason);
@@ -521,7 +528,7 @@ export class ControlHost {
 		return { success: false, error: text, code: "conflict" };
 	}
 
-	async #handlerFor(connection: ControlConnection): Promise<(command: RpcCommand) => Promise<RpcResponse>> {
+	async #handlerFor(connection: ControlConnection, subscription?: Record<string, unknown>): Promise<(command: RpcCommand) => Promise<RpcResponse>> {
 		const existing = this.#handlers.get(connection);
 		if (existing) return existing;
 		const session = this.#options.session;
@@ -531,6 +538,8 @@ export class ControlHost {
 		};
 		const forwarder = new RpcSessionEventForwarder(output);
 		this.#forwarders.set(connection, forwarder);
+		if (subscription) this.#applySubscription(connection, subscription);
+		forwarder.observeJournal(session);
 		const hostTools = new RpcHostToolBridge(output);
 		const hostUris = new RpcHostUriBridge(output);
 		const approvals = new RpcToolApprovalBridge({
@@ -662,17 +671,7 @@ export class ControlHost {
 			} as RpcResponse;
 		}
 		const response = await (await this.#handlerFor(connection))(command);
-		if (
-			response.success &&
-			(command.type === "new_session" ||
-				command.type === "open_session" ||
-				command.type === "switch_session" ||
-				command.type === "branch")
-		) {
-			this.#seenSessionId = this.#options.session.sessionId;
-			this.bumpGeneration();
-			this.#refreshIdentity();
-		}
+		this.#noteSessionIdentity();
 		return response;
 	}
 
@@ -694,7 +693,7 @@ export class ControlHost {
 				return;
 			case "subscribe":
 				this.#subscribed.add(connection);
-				await this.#handlerFor(connection);
+				await this.#handlerFor(connection, frame);
 				this.#applySubscription(connection, frame);
 				this.#reply(connection, frame, { success: true, data: { cursor: 0 } });
 				return;
@@ -1104,6 +1103,7 @@ export class ControlHost {
 		const bridges = this.#bridges.get(connection);
 		if (!bridges) return;
 		this.#bridges.delete(connection);
+		bridges.forwarder.dispose();
 		bridges.hostTools.close("control connection closed");
 		bridges.hostUris.clear("control connection closed");
 		bridges.approvals.close("control connection closed");

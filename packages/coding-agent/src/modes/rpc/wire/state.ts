@@ -21,6 +21,7 @@ export const stateDefs = {
 		themes: "string[]",
 		selection: "ThemeSelections",
 	},
+	ThemePalette: { name: "string", colors: "Record<string, string>" },
 	ApprovalHandler: "'host' | 'ui'",
 	ApprovalMode: "'always-ask' | 'write' | 'yolo'",
 	SessionUsage: {
@@ -456,6 +457,7 @@ export const stateDefs = {
 		{ entries: `${JSON_OBJECT}[]`, leafId: "string | null" },
 		"OMP-native session entries in append order.",
 	),
+	JournalIdentity: { sessionId: "string", sessionFile: "string | null", leafId: "string | null" },
 	JournalPage: {
 		entries: `${JSON_OBJECT}[]`,
 		sessionId: "string",

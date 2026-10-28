@@ -120,6 +120,12 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		result: "ThemesConfiguration",
 	},
 	{
+		name: "get_theme",
+		doc: "Read the resolved colors of one installed native theme without selecting it.",
+		params: { name: "string" },
+		result: "ThemePalette",
+	},
+	{
 		name: "update_theme",
 		doc: "Set or inherit one native theme slot with an expected scoped value.",
 		params: {
@@ -249,6 +255,11 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		doc: "Read the append-history; with `since`, only entries strictly after that durable entry id.",
 		params: { "since?": "string" },
 		result: "SessionEntries",
+	},
+	{
+		name: "snapshot_session_journal",
+		doc: "Emit native journal identity and current unsaved assistant before responding, without replacing subscriptions.",
+		result: "JournalIdentity",
 	},
 	{
 		name: "get_entries_page",

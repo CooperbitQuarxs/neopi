@@ -100,7 +100,7 @@ import {
 	resolveOwnedLiveSubagent,
 } from "./rpc-subagents";
 import { getRpcUsage, RpcUsageUnavailableError } from "./rpc-usage";
-import { getThemesConfiguration, updateTheme, RpcThemeConflict } from "./rpc-themes-configuration";
+import { getThemePalette, getThemesConfiguration, updateTheme, RpcThemeConflict } from "./rpc-themes-configuration";
 import { isRpcApprovalHandler, isRpcToolApprovalResponse, RpcToolApprovalBridge } from "./rpc-tool-approval";
 import type {
 	RpcAbortAndRestoreQueueResult,
@@ -1934,6 +1934,12 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				}
 			}
 
+			case "snapshot_session_journal": {
+				if (session.isSessionTransitioning)
+					return error(id, "snapshot_session_journal", "Native session transition is still applying", "session_busy");
+				return success(id, "snapshot_session_journal", sessionEvents.snapshotJournal(session));
+			}
+
 			case "get_entries_page": {
 				if (session.isSessionTransitioning)
 					return error(id, "get_entries_page", "Native session transition is still applying", "session_busy");
@@ -1948,7 +1954,6 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					);
 				}
 			}
-
 			case "get_tree": {
 				return success(id, "get_tree", {
 					tree: session.sessionManager.getTree(),
@@ -2249,6 +2254,8 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 
 			case "get_themes_configuration":
 				return success(id, command.type, await getThemesConfiguration(session.settings));
+			case "get_theme":
+				return success(id, command.type, await getThemePalette(command.name));
 			case "update_theme":
 				try {
 					return success(id, command.type, await updateTheme(session.settings, command));
@@ -2922,6 +2929,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		settleWatcher.observe(event);
 		planMode.observe(event);
 	});
+	sessionEvents.observeJournal(session);
 	await goalController.reconcile();
 	await goalController.settled();
 
