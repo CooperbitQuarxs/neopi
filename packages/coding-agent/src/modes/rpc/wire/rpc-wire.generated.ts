@@ -1001,6 +1001,12 @@ export interface SessionEntries {
 	leafId: string | null;
 }
 
+export interface JournalIdentity {
+	sessionId: string;
+	sessionFile: string | null;
+	leafId: string | null;
+}
+
 export interface JournalPage {
 	entries: Record<string, unknown>[];
 	sessionId: string;
@@ -1169,6 +1175,32 @@ export type CacheWarmingPhase = "streaming" | "idle";
 export type CacheWarmingOutcome = "hit" | "miss" | "error" | "aborted";
 
 export type NotifyType = "info" | "warning" | "error";
+
+export interface JournalStateEvent {
+	type: "journal_state";
+	sessionId: string;
+	sessionFile: string | null;
+	leafId: string | null;
+	reason: "snapshot" | "identity" | "leaf";
+}
+
+export interface JournalEntryEvent {
+	type: "journal_entry";
+	sessionId: string;
+	sessionFile: string | null;
+	leafId: string | null;
+	entry: Record<string, unknown>;
+}
+
+export interface MessagePersistedEvent {
+	type: "message_persisted";
+	sessionId: string;
+	sessionFile: string | null;
+	leafId: string | null;
+	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
+	messageId: string;
+	entryId: string;
+}
 
 export interface AdvisorMessageEvent {
 	type: "advisor_message";
@@ -1380,8 +1412,13 @@ export interface TurnEndEvent {
 export interface MessageStartEvent {
 	type: "message_start";
 	message: AgentMessage;
-	/** Shared by the start, updates, and end of one message; unique per process. */
+	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
 	messageId?: string;
+	/** True for the current unsaved assistant at an ordered native snapshot boundary. */
+	snapshot?: boolean;
+	sessionId?: string;
+	sessionFile?: string | null;
+	leafId?: string | null;
 	requestModelProvider?: string;
 	requestModelId?: string;
 	requestReasoning?: Effort;
@@ -1393,7 +1430,7 @@ export interface MessageUpdateEvent {
 	type: "message_update";
 	message: AgentMessage;
 	assistantMessageEvent: AssistantMessageEvent;
-	/** Shared by the start, updates, and end of one message; unique per process. */
+	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
 	messageId?: string;
 	requestModelProvider?: string;
 	requestModelId?: string;
@@ -1405,7 +1442,7 @@ export interface MessageUpdateEvent {
 export interface MessageEndEvent {
 	type: "message_end";
 	message: AgentMessage;
-	/** Shared by the start, updates, and end of one message; unique per process. */
+	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
 	messageId?: string;
 	requestModelProvider?: string;
 	requestModelId?: string;
@@ -1594,7 +1631,7 @@ export interface QueueUpdateEvent {
 }
 
 /** A session event, discriminated by `type`; `set_event_filter` selects which are sent. */
-export type RpcAgentEvent = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | ApprovalModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ThemesConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
+export type RpcAgentEvent = JournalStateEvent | JournalEntryEvent | MessagePersistedEvent | AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | ApprovalModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ThemesConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
 
 /** First frame after startup; transport fields are absent on servers without protocol v2. */
 export interface ReadyEvent {
@@ -2618,6 +2655,7 @@ export interface RpcWireCommands {
 	set_ask_dialog: { params: SetAskDialogParams; result: SetAskDialogResult };
 	get_available_commands: { params: undefined; result: GetAvailableCommandsResult };
 	get_entries: { params: GetEntriesParams; result: SessionEntries };
+	snapshot_session_journal: { params: undefined; result: JournalIdentity };
 	get_entries_page: { params: GetEntriesPageParams; result: JournalPage };
 	get_tree: { params: undefined; result: SessionTree };
 	navigate_tree: { params: NavigateTreeParams; result: NavigateTreeResult };
