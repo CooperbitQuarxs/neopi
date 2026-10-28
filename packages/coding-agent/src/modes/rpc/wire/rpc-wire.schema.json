@@ -197,6 +197,17 @@
 				"clientOmit": []
 			},
 			{
+				"name": "get_theme",
+				"doc": "Read the resolved colors of one installed native theme without selecting it.",
+				"params": "GetThemeParams",
+				"result": "ThemePalette",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "update_theme",
 				"doc": "Set or inherit one native theme slot with an expected scoped value.",
 				"params": "UpdateThemeParams",
@@ -2526,6 +2537,25 @@
 			"required": [
 				"themes",
 				"selection"
+			]
+		},
+		"ThemePalette": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string"
+				},
+				"colors": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"type": "string"
+					}
+				}
+			},
+			"required": [
+				"name",
+				"colors"
 			]
 		},
 		"ApprovalHandler": {
@@ -8740,6 +8770,17 @@
 			]
 		},
 		"SelectMixtureParams": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"name"
+			]
+		},
+		"GetThemeParams": {
 			"type": "object",
 			"properties": {
 				"name": {

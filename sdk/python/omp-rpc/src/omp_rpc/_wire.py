@@ -653,6 +653,12 @@ class ThemesConfiguration:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ThemePalette:
+    name: str
+    colors: dict[str, str]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class SessionUsage:
     input: float
     output: float
@@ -2654,6 +2660,14 @@ def parse_themes_configuration(value: object, path: str = "ThemesConfiguration")
     return ThemesConfiguration(
         themes=required(payload, "themes", array(decode_str), path),
         selection=required(payload, "selection", parse_theme_selections, path),
+    )
+
+
+def parse_theme_palette(value: object, path: str = "ThemePalette") -> ThemePalette:
+    payload = expect_object(value, path)
+    return ThemePalette(
+        name=required(payload, "name", decode_str, path),
+        colors=required(payload, "colors", record(decode_str), path),
     )
 
 
@@ -4939,6 +4953,12 @@ class WireClient:
         params: dict[str, object] = {}
         return parse_themes_configuration(self._command("get_themes_configuration", params), "get_themes_configuration")
 
+    def get_theme(self, name: str) -> ThemePalette:
+        """Read the resolved colors of one installed native theme without selecting it."""
+        params: dict[str, object] = {}
+        params["name"] = name
+        return parse_theme_palette(self._command("get_theme", params), "get_theme")
+
     def update_theme(self, appearance: Literal["dark", "light"], scope: Literal["global", "project"], name: str | None, expected: str | None) -> ThemesConfiguration:
         """Set or inherit one native theme slot with an expected scoped value."""
         params: dict[str, object] = {}
@@ -5915,6 +5935,7 @@ __all__ = [
     "SubagentStatus",
     "SubagentSubscriptionLevel",
     "TextContent",
+    "ThemePalette",
     "ThemeSelection",
     "ThemeSelections",
     "ThemesConfiguration",
@@ -6160,6 +6181,7 @@ __all__ = [
     "parse_subagent_progress_payload",
     "parse_subagent_snapshot",
     "parse_text_content",
+    "parse_theme_palette",
     "parse_theme_selection",
     "parse_theme_selections",
     "parse_themes_configuration",
