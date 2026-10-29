@@ -142,6 +142,24 @@ describe("control host", () => {
 		return call.promise;
 	}
 
+	test("advertises connection-owned host tools to attached clients", async () => {
+		const { host } = await start();
+		const publication = host.publication;
+		if (!publication) throw new Error("control host did not publish");
+		const ready = Promise.withResolvers<Record<string, unknown>>();
+		const attached = new ControlClient({
+			metadata: publication.metadata(),
+			label: "capability consumer",
+			kind: "cli",
+			onFrame: frame => {
+				if (frame.type === "ready") ready.resolve(frame);
+			},
+		});
+		extraClients.push(attached);
+		await attached.connect();
+		expect((await ready.promise).capabilities).toContain("connection_owned_host_tools");
+	});
+
 	test("host tools remain the union of the stdio owner and two control connections", async () => {
 		const { client } = await start();
 		const second = await connectAnother("second host");

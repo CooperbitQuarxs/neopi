@@ -11,6 +11,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import { toolReadsSkillUris } from "@oh-my-pi/pi-coding-agent/system-prompt";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { RpcChild } from "./helpers/rpc-child";
 
 const tempPaths: string[] = [];
 
@@ -180,6 +181,18 @@ describe("RpcHostToolBridge", () => {
 		expect(installed).toEqual([]);
 		expect(bridge.getToolNames()).toEqual([]);
 	});
+});
+
+describe("RPC host-tool capabilities", () => {
+	it("advertises connection-owned host tools in the runtime ready frame", async () => {
+		const child = await RpcChild.spawn();
+		try {
+			const ready = await child.waitFor(frame => frame.type === "ready");
+			expect(ready.capabilities).toContain("connection_owned_host_tools");
+		} finally {
+			await child.dispose();
+		}
+	}, 60_000);
 });
 
 describe("RpcClient custom tools", () => {
