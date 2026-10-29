@@ -4560,6 +4560,15 @@ impl NotifyType {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MessageEntryIdentity {
+	/// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
+	#[serde(rename = "messageId")]
+	pub message_id: String,
+	#[serde(rename = "entryId")]
+	pub entry_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JournalStateEvent {
 	#[serde(rename = "sessionId")]
 	pub session_id: String,
@@ -4568,6 +4577,9 @@ pub struct JournalStateEvent {
 	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
 	pub leaf_id: Option<String>,
 	pub reason: JournalStateEventReason,
+	/// Snapshot-only durable associations among the last 256 live messages assigned entry IDs by this native owner. Retained across observer reconnects, cleared on session identity change or process restart; absence is not evidence a message was not persisted.
+	#[serde(rename = "messageEntryIds", default, skip_serializing_if = "Option::is_none")]
+	pub message_entry_ids: Option<Vec<MessageEntryIdentity>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -9058,7 +9070,7 @@ impl Command for GetEntriesCommand {
 	}
 }
 
-/// Emit native journal identity and current unsaved assistant before responding, without replacing subscriptions.
+/// Emit native journal identity, retained durable message associations and current unsaved assistant before responding, without replacing subscriptions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SnapshotSessionJournalCommand {}
 

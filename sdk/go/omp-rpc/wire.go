@@ -5482,11 +5482,35 @@ func (v *NotifyType) UnmarshalJSON(data []byte) error {
 	return unknownValue("NotifyType", s)
 }
 
+type MessageEntryIdentity struct {
+	// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
+	MessageID string `json:"messageId"`
+	EntryID   string `json:"entryId"`
+}
+
+func (v *MessageEntryIdentity) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "MessageEntryIdentity", v.decodeFrom)
+}
+
+func (v *MessageEntryIdentity) decodeFrom(raw map[string]json.RawMessage) error {
+	var out MessageEntryIdentity
+	d := fieldDecoder{raw: raw, owner: "MessageEntryIdentity"}
+	d.required("messageId", &out.MessageID)
+	d.required("entryId", &out.EntryID)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type JournalStateEvent struct {
 	SessionID   string                  `json:"sessionId"`
 	SessionFile *string                 `json:"sessionFile"`
 	LeafID      *string                 `json:"leafId"`
 	Reason      JournalStateEventReason `json:"reason"`
+	// Snapshot-only durable associations among the last 256 live messages assigned entry IDs by this native owner. Retained across observer reconnects, cleared on session identity change or process restart; absence is not evidence a message was not persisted.
+	MessageEntryIds []MessageEntryIdentity `json:"messageEntryIds,omitempty"`
 }
 
 func (v *JournalStateEvent) UnmarshalJSON(data []byte) error {
@@ -5501,6 +5525,7 @@ func (v *JournalStateEvent) decodeFrom(raw map[string]json.RawMessage) error {
 	d.nullable("sessionFile", &out.SessionFile)
 	d.nullable("leafId", &out.LeafID)
 	d.required("reason", &out.Reason)
+	d.optional("messageEntryIds", &out.MessageEntryIds)
 	if d.err != nil {
 		return d.err
 	}
@@ -11486,7 +11511,7 @@ func (c Commands) GetEntries(ctx context.Context, p GetEntriesCommand) (SessionE
 	return out, err
 }
 
-// SnapshotSessionJournal sends "snapshot_session_journal": Emit native journal identity and current unsaved assistant before responding, without replacing subscriptions.
+// SnapshotSessionJournal sends "snapshot_session_journal": Emit native journal identity, retained durable message associations and current unsaved assistant before responding, without replacing subscriptions.
 func (c Commands) SnapshotSessionJournal(ctx context.Context) (JournalIdentity, error) {
 	var out JournalIdentity
 	err := c.call(ctx, "snapshot_session_journal", nil, 0, &out)

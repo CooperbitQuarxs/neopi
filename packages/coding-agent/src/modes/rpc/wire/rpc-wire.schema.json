@@ -418,7 +418,7 @@
 			},
 			{
 				"name": "snapshot_session_journal",
-				"doc": "Emit native journal identity and current unsaved assistant before responding, without replacing subscriptions.",
+				"doc": "Emit native journal identity, retained durable message associations and current unsaved assistant before responding, without replacing subscriptions.",
 				"params": null,
 				"result": "JournalIdentity",
 				"nullable": false,
@@ -5440,6 +5440,22 @@
 			],
 			"type": "string"
 		},
+		"MessageEntryIdentity": {
+			"type": "object",
+			"properties": {
+				"messageId": {
+					"type": "string",
+					"description": "Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."
+				},
+				"entryId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"messageId",
+				"entryId"
+			]
+		},
 		"JournalStateEvent": {
 			"type": "object",
 			"properties": {
@@ -5476,6 +5492,13 @@
 						"leaf"
 					],
 					"type": "string"
+				},
+				"messageEntryIds": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/MessageEntryIdentity"
+					},
+					"description": "Snapshot-only durable associations among the last 256 live messages assigned entry IDs by this native owner. Retained across observer reconnects, cleared on session identity change or process restart; absence is not evidence a message was not persisted."
 				}
 			},
 			"required": [

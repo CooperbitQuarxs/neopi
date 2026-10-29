@@ -1443,12 +1443,21 @@ class PromptAck:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class MessageEntryIdentity:
+    message_id: str
+    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
+    entry_id: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class JournalStateEvent:
     type: Literal["journal_state"] = "journal_state"
     session_id: str
     session_file: str | None
     leaf_id: str | None
     reason: Literal["snapshot", "identity", "leaf"]
+    message_entry_ids: tuple[MessageEntryIdentity, ...] | None = None
+    """Snapshot-only durable associations among the last 256 live messages assigned entry IDs by this native owner. Retained across observer reconnects, cleared on session identity change or process restart; absence is not evidence a message was not persisted."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -3619,6 +3628,14 @@ def parse_prompt_ack(value: object, path: str = "PromptAck") -> PromptAck:
     )
 
 
+def parse_message_entry_identity(value: object, path: str = "MessageEntryIdentity") -> MessageEntryIdentity:
+    payload = expect_object(value, path)
+    return MessageEntryIdentity(
+        message_id=required(payload, "messageId", decode_str, path),
+        entry_id=required(payload, "entryId", decode_str, path),
+    )
+
+
 def parse_journal_state_event(value: object, path: str = "JournalStateEvent") -> JournalStateEvent:
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["journal_state"]]', literal(frozenset({"journal_state"}))), path)
@@ -3627,6 +3644,7 @@ def parse_journal_state_event(value: object, path: str = "JournalStateEvent") ->
         session_file=required(payload, "sessionFile", nullable(decode_str), path),
         leaf_id=required(payload, "leafId", nullable(decode_str), path),
         reason=required(payload, "reason", cast('Decoder[Literal["snapshot", "identity", "leaf"]]', literal(frozenset({"snapshot", "identity", "leaf"}))), path),
+        message_entry_ids=optional(payload, "messageEntryIds", array(parse_message_entry_identity), path),
     )
 
 
@@ -5194,7 +5212,7 @@ class WireClient:
         return parse_session_entries(self._command("get_entries", params), "get_entries")
 
     def snapshot_session_journal(self) -> JournalIdentity:
-        """Emit native journal identity and current unsaved assistant before responding, without replacing subscriptions."""
+        """Emit native journal identity, retained durable message associations and current unsaved assistant before responding, without replacing subscriptions."""
         params: dict[str, object] = {}
         return parse_journal_identity(self._command("snapshot_session_journal", params), "snapshot_session_journal")
 
@@ -5919,6 +5937,7 @@ __all__ = [
     "LogoutResult",
     "MessageContent",
     "MessageEndEvent",
+    "MessageEntryIdentity",
     "MessagePersistedEvent",
     "MessageStartEvent",
     "MessageUpdateEvent",
@@ -6188,6 +6207,7 @@ __all__ = [
     "parse_logout_account",
     "parse_logout_result",
     "parse_message_end_event",
+    "parse_message_entry_identity",
     "parse_message_persisted_event",
     "parse_message_start_event",
     "parse_message_update_event",

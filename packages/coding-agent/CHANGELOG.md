@@ -9,6 +9,7 @@
 
 ### Added
 
+- Reconnecting RPC observers can reconcile streamed messages with durable journal entries even when they missed the persistence notification ([#587](https://github.com/PsychedelicShayna/neopi/issues/587)).
 - Attached graphical clients can observe native journal commits, tree-leaf and session changes without polling, immediately recover an in-flight reply on reconnect, and match streamed replies to durable journal IDs ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
 - Preview any installed native theme's full palette over RPC or terminal control without changing your active theme or saved preferences ([#526](https://github.com/PsychedelicShayna/neopi/issues/526)).
 - Use `/sounds on|off|reload|status` for session-local, owner-assigned event sounds. Real session, tool/edit, shell/eval, subagent, IRC and background-job events drive bounded native playback; unmapped events stay silent and speech/capture takes priority.

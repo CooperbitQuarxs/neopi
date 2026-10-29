@@ -6,7 +6,13 @@ import type { AssistantMessageEvent } from "@oh-my-pi/pi-ai";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import { deobfuscateAssistantContent } from "../../secrets/message-transform";
-import { getMessageEntryId, getMessageEntrySource, liveMessageId, observeLiveMessageId } from "../../session/message-entry-ids";
+import {
+	getMessageEntryId,
+	getDurableMessageEntryIdentities,
+	getMessageEntrySource,
+	liveMessageId,
+	observeLiveMessageId,
+} from "../../session/message-entry-ids";
 import type { SessionManager } from "../../session/session-manager";
 import type { SessionJournalEvent, SessionJournalIdentity } from "../../session/session-journal-events";
 import type {
@@ -80,7 +86,8 @@ export class RpcSessionEventForwarder {
 		const generation = this.#bindingGeneration;
 		const revision = this.#messageRevision;
 		const streamMessage = session.isSessionTransitioning ? null : session.agent.state.streamMessage;
-		this.#emit({ type: "journal_state", reason: "snapshot", ...identity });
+		const messageEntryIds = getDurableMessageEntryIdentities(manager);
+		this.#emit({ type: "journal_state", reason: "snapshot", ...identity, messageEntryIds });
 		const current = manager.getJournalIdentity();
 		if (streamMessage?.role !== "assistant" || session.isSessionTransitioning ||
 			generation !== this.#bindingGeneration || revision !== this.#messageRevision ||
