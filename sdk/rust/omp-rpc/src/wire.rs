@@ -2680,6 +2680,8 @@ pub struct ModelInfo {
 	#[serde(rename = "maxTokens", deserialize_with = "Deserialize::deserialize")]
 	pub max_tokens: Option<i64>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub headers: Option<BTreeMap<String, String>>,
 	#[serde(rename = "premiumMultiplier", default, skip_serializing_if = "Option::is_none")]
 	pub premium_multiplier: Option<f64>,
@@ -4416,6 +4418,14 @@ pub struct LoginProvider {
 	pub name: String,
 	pub available: bool,
 	pub authenticated: bool,
+	#[serde(rename = "acceptsKeys")]
+	pub accepts_keys: bool,
+	#[serde(rename = "loginKind")]
+	pub login_kind: LoginProviderLoginKind,
+	#[serde(rename = "deviceCode")]
+	pub device_code: bool,
+	#[serde(rename = "storeCredentialsAs", default, skip_serializing_if = "Option::is_none")]
+	pub store_credentials_as: Option<String>,
 }
 
 /// A stored credential `logout` can remove; `active` marks credentials the session may be using.
@@ -5884,6 +5894,9 @@ pub struct OpenUrlUiRequest {
 	pub launch_url: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub instructions: Option<String>,
+	/// User-facing device verification code, never the private polling device_code.
+	#[serde(rename = "userCode", default, skip_serializing_if = "Option::is_none")]
+	pub user_code: Option<String>,
 	#[serde(rename = "loginId", default, skip_serializing_if = "Option::is_none")]
 	pub login_id: Option<String>,
 }
@@ -7098,6 +7111,14 @@ pub struct GetLogoutAccountsResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActivateAccountParams {
+	#[serde(rename = "providerId")]
+	pub provider_id: String,
+	#[serde(rename = "credentialId")]
+	pub credential_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogoutParams {
 	#[serde(rename = "providerId")]
 	pub provider_id: String,
@@ -7728,6 +7749,30 @@ impl NavigateTreeResultOutcome {
 			Self::Unchanged => "unchanged",
 			Self::Cancelled => "cancelled",
 			Self::AskReopen => "ask_reopen",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LoginProviderLoginKind {
+	#[serde(rename = "api-key")]
+	ApiKey,
+	#[serde(rename = "oauth-code")]
+	OauthCode,
+	#[serde(rename = "device-code")]
+	DeviceCode,
+	#[serde(rename = "custom")]
+	Custom,
+}
+
+impl LoginProviderLoginKind {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::ApiKey => "api-key",
+			Self::OauthCode => "oauth-code",
+			Self::DeviceCode => "device-code",
+			Self::Custom => "custom",
 		}
 	}
 }
@@ -9905,6 +9950,26 @@ impl Command for GetLogoutAccountsCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<GetLogoutAccountsResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.accounts)
+	}
+}
+
+/// Activate a stored OAuth account for this session through native credential affinity and journal pins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActivateAccountCommand {
+	#[serde(rename = "providerId")]
+	pub provider_id: String,
+	#[serde(rename = "credentialId")]
+	pub credential_id: i64,
+}
+
+impl Command for ActivateAccountCommand {
+	const NAME: &'static str = "activate_account";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
 	}
 }
 

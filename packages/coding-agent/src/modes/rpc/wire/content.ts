@@ -303,6 +303,7 @@ export const modelDefs = {
 		{
 			id: "string",
 			name: "string",
+			"description?": "string",
 			api: "string",
 			provider: "string",
 			baseUrl: "string",

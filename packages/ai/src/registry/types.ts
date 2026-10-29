@@ -13,7 +13,7 @@
  */
 
 import type { Api, FetchImpl, Model, SimpleStreamOptions, StreamOptions } from "../types";
-import type { OAuthController, OAuthCredentials } from "./oauth/types";
+import type { OAuthController, OAuthCredentials, OAuthLoginKind } from "./oauth/types";
 
 /**
  * API-key environment fallback: either a single env var name (e.g.
@@ -81,6 +81,8 @@ export interface ProviderDefinition {
 	readonly prepareModelDiscovery?: ProviderModelDiscoveryPreparer;
 	// --- interactive login (OAuthProviderInterface-compatible) ---
 	/** Interactive login; flows that need `onPrompt`/`onAuth` reject a bare controller at runtime. */
+	readonly loginKind?: OAuthLoginKind;
+	readonly deviceCode?: boolean;
 	readonly login?: (callbacks: OAuthController) => Promise<OAuthCredentials | string>;
 	/** Refresh a stored grant; the signal bounds provider network work to refresh ownership. */
 	readonly refreshToken?: (credentials: OAuthCredentials, signal?: AbortSignal) => Promise<OAuthCredentials>;

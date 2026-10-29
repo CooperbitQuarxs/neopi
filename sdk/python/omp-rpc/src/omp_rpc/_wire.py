@@ -623,6 +623,7 @@ class ModelInfo:
     """Null when the provider does not report a limit."""
     max_tokens: int | None
     """Null when the provider does not report a limit."""
+    description: str | None = None
     headers: dict[str, str] | None = None
     premium_multiplier: float | None = None
     prefer_websockets: bool | None = None
@@ -1417,6 +1418,10 @@ class LoginProvider:
     name: str
     available: bool
     authenticated: bool
+    accepts_keys: bool
+    login_kind: Literal["api-key", "oauth-code", "device-code", "custom"]
+    device_code: bool
+    store_credentials_as: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2296,6 +2301,8 @@ class OpenUrlUiRequest:
     launch_url: str | None = None
     """Short loopback redirect to `url`; the truncation-safe copy target."""
     instructions: str | None = None
+    user_code: str | None = None
+    """User-facing device verification code, never the private polling device_code."""
     login_id: str | None = None
 
 
@@ -2328,6 +2335,8 @@ class ExtensionUiRequest(ExtensionUiRequestMixin):
     launch_url: str | None = None
     """Short loopback redirect to `url`; the truncation-safe copy target."""
     instructions: str | None = None
+    user_code: str | None = None
+    """User-facing device verification code, never the private polling device_code."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2677,6 +2686,7 @@ def parse_model_info(value: object, path: str = "ModelInfo") -> ModelInfo:
         cost=required(payload, "cost", parse_model_cost, path),
         context_window=required(payload, "contextWindow", nullable(decode_int), path),
         max_tokens=required(payload, "maxTokens", nullable(decode_int), path),
+        description=optional(payload, "description", decode_str, path),
         headers=optional(payload, "headers", record(decode_str), path),
         premium_multiplier=optional(payload, "premiumMultiplier", decode_float, path),
         prefer_websockets=optional(payload, "preferWebsockets", decode_bool, path),
@@ -3598,6 +3608,10 @@ def parse_login_provider(value: object, path: str = "LoginProvider") -> LoginPro
         name=required(payload, "name", decode_str, path),
         available=required(payload, "available", decode_bool, path),
         authenticated=required(payload, "authenticated", decode_bool, path),
+        accepts_keys=required(payload, "acceptsKeys", decode_bool, path),
+        login_kind=required(payload, "loginKind", cast('Decoder[Literal["api-key", "oauth-code", "device-code", "custom"]]', literal(frozenset({"api-key", "oauth-code", "device-code", "custom"}))), path),
+        device_code=required(payload, "deviceCode", decode_bool, path),
+        store_credentials_as=optional(payload, "storeCredentialsAs", decode_str, path),
     )
 
 
@@ -4619,6 +4633,7 @@ def parse_open_url_ui_request(value: object, path: str = "OpenUrlUiRequest") -> 
         url=required(payload, "url", decode_str, path),
         launch_url=optional(payload, "launchUrl", decode_str, path),
         instructions=optional(payload, "instructions", decode_str, path),
+        user_code=optional(payload, "userCode", decode_str, path),
         login_id=optional(payload, "loginId", decode_str, path),
     )
 
@@ -4651,6 +4666,7 @@ def parse_extension_ui_request(value: object, path: str = "ExtensionUiRequest") 
         url=optional(payload, "url", decode_str, path),
         launch_url=optional(payload, "launchUrl", decode_str, path),
         instructions=optional(payload, "instructions", decode_str, path),
+        user_code=optional(payload, "userCode", decode_str, path),
     )
 
 
@@ -5514,6 +5530,13 @@ class WireClient:
         params: dict[str, object] = {}
         params["providerId"] = provider_id
         return required(expect_object(self._command("get_logout_accounts", params), "get_logout_accounts"), "accounts", array(parse_logout_account), "get_logout_accounts")
+
+    def activate_account(self, provider_id: str, credential_id: int) -> None:
+        """Activate a stored OAuth account for this session through native credential affinity and journal pins."""
+        params: dict[str, object] = {}
+        params["providerId"] = provider_id
+        params["credentialId"] = credential_id
+        self._command("activate_account", params)
 
     def logout(self, provider_id: str, credential_id: int) -> LogoutResult:
         """Remove one stored credential; fails when it is no longer stored. `remainingSource` names auth that still applies."""

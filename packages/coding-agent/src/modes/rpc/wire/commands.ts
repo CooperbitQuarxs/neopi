@@ -516,6 +516,11 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		unwrap: "accounts",
 	},
 	{
+		name: "activate_account",
+		doc: "Activate a stored OAuth account for this session through native credential affinity and journal pins.",
+		params: { providerId: "string", credentialId: "number.integer" },
+	},
+	{
 		name: "logout",
 		doc: "Remove one stored credential; fails when it is no longer stored. `remainingSource` names auth that still applies.",
 		params: { providerId: "string", credentialId: "number.integer" },
