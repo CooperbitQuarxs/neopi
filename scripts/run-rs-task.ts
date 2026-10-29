@@ -53,49 +53,57 @@ const TASK_COMMANDS = {
 	],
 	"fmt:rs": [["cargo", "fmt", "--all"]],
 	"lint:rs": [["cargo", "clippy", "--workspace", ...VENDORED_FORK_EXCLUDES, "--no-deps", "--", "-D", "warnings"]],
-	"test:rs": [
-		[
-			"cargo",
-			"nextest",
-			"run",
-			"--workspace",
-			...VENDORED_FORK_EXCLUDES,
-			"--status-level=fail",
-			"--final-status-level=fail",
-		],
-		// nextest cannot run doctests (no stable libtest-json interface for
-		// them), so they need their own libtest pass. It runs every runnable
-		// doctest in the workspace's lib crates; today that is tree-sitter-go's
-		// one example, since pi-natives is a `cdylib`, which rustdoc refuses to
-		// collect doctests from, and pi-builtins' 16 examples are `ignore`d
-		// vendored uutils docs. `--doc` overrides a crate's own
-		// `doctest = false`, so a vendored crate whose examples do not compile
-		// (napi-rs's) has to be in VENDORED_FORK_EXCLUDES.
-		["cargo", "test", "--doc", "--workspace", ...VENDORED_FORK_EXCLUDES],
-	],
+	"test:rs": rustTestCommands([]),
 } as const satisfies Record<string, readonly (readonly string[])[]>;
 
 type RustTaskName = keyof typeof TASK_COMMANDS;
 
 const repoRoot = path.join(import.meta.dir, "..");
-const cargoBinary = await resolveCargoBinary();
 const taskName = process.argv[2];
 
-if (!isRustTaskName(taskName)) {
-	console.error(`Unknown Rust task: ${taskName ?? "(missing)"}`);
-	process.exit(1);
-}
-
-if (taskName !== "fmt:rs" && !(isCI() || (await hasRustAffectingChanges()))) {
-	console.log(`Skipping ${taskName} (not in CI and no Rust-affecting changes were found).`);
-	process.exit(0);
-}
-
-for (const command of TASK_COMMANDS[taskName]) {
-	const exitCode = await runCommand(command);
-	if (exitCode !== 0) {
-		process.exit(exitCode);
+if (import.meta.main) {
+	if (!isRustTaskName(taskName)) {
+		console.error(`Unknown Rust task: ${taskName ?? "(missing)"}`);
+		process.exit(1);
 	}
+
+	const commands = taskName === "test:rs" ? rustTestCommands(process.argv.slice(3)) : TASK_COMMANDS[taskName];
+	if (taskName !== "fmt:rs" && !(isCI() || (await hasRustAffectingChanges()))) {
+		console.log(`Skipping ${taskName} (not in CI and no Rust-affecting changes were found).`);
+		process.exit(0);
+	}
+
+	for (const command of commands) {
+		const exitCode = await runCommand(command);
+		if (exitCode !== 0) {
+			process.exit(exitCode);
+		}
+	}
+}
+
+/** Scope both test passes together; remaining options belong to nextest only. */
+export function rustTestCommands(args: readonly string[]): readonly (readonly string[])[] {
+	let packageName: string | undefined;
+	const nextestArgs: string[] = [];
+	for (let index = 0; index < args.length; index += 1) {
+		const arg = args[index];
+		if (arg === "--package") {
+			const value = args[++index];
+			if (packageName || !value || value.startsWith("-")) {
+				throw new Error("test:rs accepts one --package <crate>");
+			}
+			packageName = value;
+		} else {
+			nextestArgs.push(arg);
+		}
+	}
+	const scope = packageName ? ["--package", packageName] : ["--workspace", ...VENDORED_FORK_EXCLUDES];
+	return [
+		["cargo", "nextest", "run", ...scope, "--status-level=fail", "--final-status-level=fail", ...nextestArgs],
+		// nextest cannot run doctests. Keep the libtest pass on the same package
+		// scope, without nextest-only filters/options; cdylib crates have none.
+		["cargo", "test", "--doc", ...scope],
+	];
 }
 
 function isRustTaskName(value: string | undefined): value is RustTaskName {
@@ -173,6 +181,7 @@ async function resolveCargoBinary(): Promise<string> {
 
 async function runCommand(command: readonly string[]): Promise<number> {
 	const [head, ...rest] = command;
+	const cargoBinary = head === "cargo" ? await resolveCargoBinary() : head;
 	const isCargo = head === "cargo";
 	const argv = isCargo ? [cargoBinary, ...rest] : [head, ...rest];
 	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
