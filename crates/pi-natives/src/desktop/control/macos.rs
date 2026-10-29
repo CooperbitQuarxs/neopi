@@ -75,7 +75,9 @@ unsafe extern "C" fn observe(_proxy: Ref, kind: u32, event: Ref, user: Ref) -> R
 	// invalidation.
 	let context = unsafe { &*(user.cast::<TapContext>()) };
 	if kind == u32::MAX || kind == u32::MAX - 1 {
-		context.stop.cancel();
+		context
+			.stop
+			.cancel(super::CancellationReason::MonitorFailed);
 		// SAFETY: the event tap remains alive until this callback returns.
 		unsafe {
 			CGEventTapEnable(context.tap, true);
@@ -95,7 +97,9 @@ unsafe extern "C" fn observe(_proxy: Ref, kind: u32, event: Ref, user: Ref) -> R
 			super::USER_ACTIVITY.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
 		}
 		if physical_escape(kind, key, pid, tag) {
-			context.stop.cancel();
+			context
+				.stop
+				.cancel(super::CancellationReason::PhysicalEscape);
 		}
 	}
 	event
