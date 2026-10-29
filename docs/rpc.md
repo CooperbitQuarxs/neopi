@@ -1183,9 +1183,22 @@ The response payload is:
 
 These tools are registered before the next model call. New non-hidden tools
 are enabled automatically; new hidden tools are registered without being enabled.
-Re-sending `set_host_tools` replaces the previous host-owned set, preserving the
-enabled state of surviving host tools. Names must be unique and cannot conflict
-with an existing non-host tool.
+Re-sending `set_host_tools` replaces only the registering connection's previous
+set, preserving the enabled state of its surviving tools. The session exposes
+the union of the stdio owner's and all control connections' tools. Names must
+be unique within a registration and cannot conflict with a non-host tool or a
+tool owned by another connection. A collision rejects the entire replacement:
+the first successful registrant retains the name, and neither owner's tools,
+enabled state, nor pending calls change.
+
+Sending an empty set, control `unserve`, or disconnect removes only that
+connection's tools. A successful replacement cancels pending calls to removed
+tools and revokes its previous adapters; calls to surviving names can finish.
+A rejected replacement changes neither registrations nor pending calls.
+Control session-generation changes also revoke control registrations:
+clients must register again for the new canonical generation. Requests, updates,
+results, and cancellation stay on the registering connection; another connection
+cannot complete its calls, and replies after revocation are ignored.
 
 Definitions also accept `hidden?: boolean`,
 `loadMode?: "essential" | "discoverable"`, and `readsSkillUris?: boolean`.

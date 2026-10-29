@@ -28,6 +28,22 @@ Control snapshots and subscribed `queue_update` events include an exact oldest p
 
 `get_subagents`, `get_subagent_messages`, `cancel_subagent`, `steer_subagent`, `set_subagent_thinking_level`, `set_subagent_fast`, and `set_subagent_subscription` use the process's live subagent registry. Every connection sees the same roster, including subagents that started before it connected. `set_subagent_subscription` is per connection: lifecycle and progress frames (and, at `events`, raw subagent events) go only to connections that asked for them. Thinking-level and fast-mode changes apply to the selected running subagent's next provider request and persist across restart without changing the parent or global defaults. `get_subagents` reports the live model, effort and fast enabled/active state, including edits made from the focused Agent Hub view.
 
+Host tools contributed by `serve` or RPC `set_host_tools` belong to that
+authenticated connection, not to the terminal session as a whole. The effective
+tool set is the union of the terminal/stdio owner's tools and all attachments.
+Replacing, unserving, disconnecting, or rolling back a failed service removes
+only that attachment's definitions. A name already registered by another
+connection (or a non-host tool) rejects the complete registration without
+changing either tool set. Surviving tools retain their enabled state.
+
+Host-tool requests and cancellation go only to the registering connection.
+Successful replacement revokes old adapters and cancels calls to removed names;
+calls to surviving names can finish. `unserve`, disconnect, and canonical
+generation changes cancel that connection's outstanding calls. Late replies
+cannot complete revoked calls. After a generation change, an attachment must
+register its tools again. None of this transfers the session's writer lease or
+approval ownership.
+
 Disable publishing with `--no-control-socket` or `control.enabled=false`.
 
 ## Host session discovery and attachment

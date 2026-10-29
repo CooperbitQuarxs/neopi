@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
+import type { AgentEvent, AgentTool } from "@oh-my-pi/pi-agent-core";
 import { defineRpcClientTool, RpcClient } from "@oh-my-pi/pi-coding-agent/modes";
 import { RpcHostToolBridge } from "@oh-my-pi/pi-coding-agent/modes/rpc/host-tools";
 import type {
@@ -127,6 +127,58 @@ describe("RpcHostToolBridge", () => {
 		]);
 
 		expect(toolReadsSkillUris(tool)).toBe(true);
+	});
+	it("replacing one registration cancels removed calls but lets surviving calls finish", async () => {
+		const frames: Array<RpcHostToolCallRequest | RpcHostToolCancelRequest> = [];
+		const bridge = new RpcHostToolBridge(frame => frames.push(frame));
+		const kept = { name: "kept", description: "kept", parameters: { type: "object", properties: {} } };
+		const removed = { ...kept, name: "removed" };
+		const [keptTool, removedTool] = bridge.setTools([kept, removed]);
+		const keptExecution = keptTool.execute("kept-call", {});
+		const removedExecution = removedTool.execute("removed-call", {}).catch(error => error as Error);
+		const [keptRequest, removedRequest] = frames;
+		if (keptRequest.type !== "host_tool_call" || removedRequest.type !== "host_tool_call") {
+			throw new Error("Expected tool call frames");
+		}
+		await bridge.refreshTools([{ ...kept }], async () => {});
+		expect(await removedExecution).toBeInstanceOf(Error);
+		expect(frames.filter(frame => frame.type === "host_tool_cancel")).toMatchObject([
+			{ targetId: removedRequest.id },
+		]);
+		expect(bridge.handleResult({ type: "host_tool_result", id: removedRequest.id, result: { content: [] } })).toBe(
+			false,
+		);
+		expect(bridge.handleResult({ type: "host_tool_result", id: keptRequest.id, result: { content: [] } })).toBe(true);
+		await expect(keptExecution).resolves.toEqual({ content: [] });
+		await expect(keptTool.execute("old-adapter", {})).rejects.toThrow("registration revoked");
+	});
+
+	it("disconnect during registration cannot leave tools installed after cleanup", async () => {
+		const bridge = new RpcHostToolBridge(() => {});
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let installed: string[] = [];
+		const refresh = async (tools: AgentTool[]) => {
+			if (tools.length) {
+				started.resolve();
+				await release.promise;
+			}
+			installed = tools.map(tool => tool.name);
+		};
+		const registering = bridge
+			.refreshTools(
+				[{ name: "racing", description: "racing", parameters: { type: "object", properties: {} } }],
+				refresh,
+			)
+			.catch(error => error as Error);
+		await started.promise;
+		bridge.close("disconnected");
+		const removing = bridge.revokeTools("disconnected", refresh);
+		release.resolve();
+		expect(await registering).toBeInstanceOf(Error);
+		await removing;
+		expect(installed).toEqual([]);
+		expect(bridge.getToolNames()).toEqual([]);
 	});
 });
 
