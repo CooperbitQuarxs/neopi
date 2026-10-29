@@ -7214,10 +7214,19 @@ export class AgentSession implements SettingsScope {
 		this.#pendingMCPDiscovery = pending;
 	}
 
-	/** Replaces host-owned RPC tools before the next model call. */
-	async refreshRpcHostTools(rpcTools: AgentTool[]): Promise<void> {
+	/** Replaces this connection's RPC tools without disturbing other owners. */
+	refreshRpcHostTools(rpcTools: AgentTool[], owner: object = this): Promise<void> {
+		const snapshot = [...rpcTools];
+		const refresh = this.#rpcHostToolRefreshTail.then(() => this.#refreshRpcHostTools(snapshot, owner));
+		this.#rpcHostToolRefreshTail = refresh.catch(() => {});
+		return refresh;
+	}
+
+	#rpcHostToolRefreshTail: Promise<void> = Promise.resolve();
+
+	async #refreshRpcHostTools(rpcTools: AgentTool[], owner: object): Promise<void> {
 		const stash = this.#chatModeStashedTools;
-		const previousHostNames = new Set(stash?.enabled.filter(name => this.#tools.hasRpcHostTool(name)));
+		const previousHostNames = new Set(stash?.enabled.filter(name => this.#tools.hasRpcHostTool(name, owner)));
 		const previouslyMountable = stash
 			? new Set(
 					[...previousHostNames].filter(name => {
@@ -7227,7 +7236,7 @@ export class AgentSession implements SettingsScope {
 				)
 			: undefined;
 		const previouslyMounted = stash ? new Set(stash.mounted) : undefined;
-		await this.#tools.refreshRpcHostTools(rpcTools, !this.#chatMode);
+		await this.#tools.refreshRpcHostTools(rpcTools, !this.#chatMode, owner);
 		if (this.#chatMode && stash && this.#chatModeStashedTools === stash) {
 			const registered = new Set(rpcTools.map(tool => tool.name));
 			const mountable = new Set(rpcTools.filter(isMountableUnderXdev).map(tool => tool.name));

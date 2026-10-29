@@ -1985,8 +1985,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 
 			case "set_host_tools": {
 				const tools = normalizeHostToolDefinitions(command.tools);
-				const rpcTools = hostToolBridge.setTools(tools);
-				await session.refreshRpcHostTools(rpcTools);
+				await hostToolBridge.refreshTools(tools, rpcTools => session.refreshRpcHostTools(rpcTools, hostToolBridge));
 				return success(id, "set_host_tools", { toolNames: tools.map(tool => tool.name) });
 			}
 
@@ -3091,6 +3090,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	pendingExtensionRequests.rejectAll("RPC client disconnected before extension UI response completed");
 	planMode.close();
 	hostToolBridge.close("RPC client disconnected before host tool execution completed");
+	await hostToolBridge.revokeTools("RPC client disconnected", rpcTools =>
+		session.refreshRpcHostTools(rpcTools, hostToolBridge),
+	);
 	hostUriBridge.clear("RPC client disconnected before host URI request completed");
 	toolApprovalBridge.close("RPC client disconnected before tool approval response completed");
 	if (controlHost?.liveBridge === liveBridge) controlHost.liveBridge = undefined;

@@ -315,6 +315,7 @@ export class SessionTools {
 	#installedVibeToolNames = new Set<string>();
 	#builtInToolNames: Set<string>;
 	#rpcHostToolNames = new Set<string>();
+	readonly #rpcHostToolOwners = new Map<string, object>();
 	#mcpManagerToolNames = new Set<string>();
 	#extensionMcpTools = new Map<string, AgentTool>();
 	#xdev: XdevState | undefined;
@@ -719,8 +720,8 @@ export class SessionTools {
 	}
 
 	/** Whether the live registry entry is owned by the RPC host. */
-	hasRpcHostTool(name: string): boolean {
-		return this.#rpcHostToolNames.has(name);
+	hasRpcHostTool(name: string, owner?: object): boolean {
+		return this.#rpcHostToolNames.has(name) && (owner === undefined || this.#rpcHostToolOwners.get(name) === owner);
 	}
 
 	/** Whether the current MCP entry came from the manager snapshot. */
@@ -2449,13 +2450,16 @@ export class SessionTools {
 		}
 	}
 
-	/** Replaces host tools; chat mode registers them without exposing them to the model. */
-	refreshRpcHostTools(rpcTools: AgentTool[], activateNewTools = true): Promise<void> {
-		const snapshot = [...rpcTools];
-		return this.runToolRegistryMutation(() => this.#applyRpcHostToolRefresh(snapshot, activateNewTools));
+	/** Replaces only this owner's host tools; chat mode keeps new tools disabled. */
+	refreshRpcHostTools(rpcTools: readonly AgentTool[], activateNewTools = true, owner: object = this): Promise<void> {
+		return this.runToolRegistryMutation(() => this.#applyRpcHostToolRefresh(rpcTools, activateNewTools, owner));
 	}
 
-	async #applyRpcHostToolRefresh(rpcTools: AgentTool[], activateNewTools: boolean): Promise<void> {
+	async #applyRpcHostToolRefresh(
+		rpcTools: readonly AgentTool[],
+		activateNewTools: boolean,
+		owner: object,
+	): Promise<void> {
 		const nextToolNames = rpcTools.map(tool => tool.name);
 		const uniqueToolNames = new Set(nextToolNames);
 		if (uniqueToolNames.size !== nextToolNames.length) {
@@ -2463,12 +2467,14 @@ export class SessionTools {
 		}
 
 		for (const name of uniqueToolNames) {
-			if (this.#toolRegistry.has(name) && !this.#rpcHostToolNames.has(name)) {
+			if (this.#toolRegistry.has(name) && this.#rpcHostToolOwners.get(name) !== owner) {
 				throw new Error(`RPC host tool "${name}" conflicts with an existing tool`);
 			}
 		}
 
-		const previousRpcHostToolNames = new Set(this.#rpcHostToolNames);
+		const previousRpcHostToolNames = new Set(
+			[...this.#rpcHostToolNames].filter(name => this.#rpcHostToolOwners.get(name) === owner),
+		);
 		const previousActiveToolNames = this.getEnabledToolNames();
 		const previousRpcHostTools = new Map(
 			[...previousRpcHostToolNames].flatMap(name => {
@@ -2479,7 +2485,7 @@ export class SessionTools {
 		for (const name of previousRpcHostToolNames) {
 			this.#toolRegistry.delete(name);
 		}
-		this.#rpcHostToolNames.clear();
+		for (const name of previousRpcHostToolNames) this.#rpcHostToolNames.delete(name);
 
 		const extensionRunner = this.#host.extensionRunner();
 		for (const tool of rpcTools) {
@@ -2503,11 +2509,16 @@ export class SessionTools {
 				Array.from(new Set([...activeNonRpcToolNames, ...preservedRpcToolNames, ...autoActivatedRpcToolNames])),
 			);
 		} catch (error) {
-			for (const name of this.#rpcHostToolNames) this.#toolRegistry.delete(name);
-			this.#rpcHostToolNames = previousRpcHostToolNames;
+			for (const name of uniqueToolNames) {
+				this.#toolRegistry.delete(name);
+				this.#rpcHostToolNames.delete(name);
+			}
+			for (const name of previousRpcHostToolNames) this.#rpcHostToolNames.add(name);
 			for (const [name, tool] of previousRpcHostTools) this.#toolRegistry.set(name, tool);
 			throw error;
 		}
+		for (const name of previousRpcHostToolNames) this.#rpcHostToolOwners.delete(name);
+		for (const name of uniqueToolNames) this.#rpcHostToolOwners.set(name, owner);
 	}
 }
 

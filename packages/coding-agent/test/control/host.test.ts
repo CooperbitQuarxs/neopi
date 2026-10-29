@@ -19,6 +19,7 @@ import { InputController } from "../../src/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "../../src/modes/types";
 import type { RpcSubagentSnapshot } from "../../src/modes/rpc/rpc-types";
 import { RpcSessionEventForwarder } from "../../src/modes/rpc/rpc-session-events";
+import { RpcHostToolBridge } from "../../src/modes/rpc/host-tools";
 import type { RpcProjectedSessionEventFrame } from "../../src/modes/rpc/rpc-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
@@ -120,6 +121,199 @@ describe("control host", () => {
 		await extra.connect();
 		return extra;
 	}
+
+	function hostDefinition(name: string) {
+		return { name, description: name, parameters: { type: "object", properties: {} } };
+	}
+
+	async function waitForToolRemoval(name: string): Promise<void> {
+		const deadline = Date.now() + 2_000;
+		while (session!.hasRpcHostTool(name) && Date.now() < deadline) await Bun.sleep(5);
+		expect(session!.getToolByName(name)).toBeUndefined();
+	}
+
+	function nextHostCall(connection: ControlClient): Promise<Record<string, unknown>> {
+		const call = Promise.withResolvers<Record<string, unknown>>();
+		const unsubscribe = connection.onEvent(frame => {
+			if (frame.type !== "host_tool_call") return;
+			unsubscribe();
+			call.resolve(frame);
+		});
+		return call.promise;
+	}
+
+	test("host tools remain the union of the stdio owner and two control connections", async () => {
+		const { client } = await start();
+		const second = await connectAnother("second host");
+		const owner = new RpcHostToolBridge(() => {});
+		const ownerTools = owner.setTools([hostDefinition("owner_tool")]);
+		await session!.refreshRpcHostTools(ownerTools);
+		expect((await client.request({ type: "set_host_tools", tools: [hostDefinition("first_tool")] })).success).toBe(
+			true,
+		);
+		expect((await second.request({ type: "serve", tools: [hostDefinition("second_tool")] })).success).toBe(true);
+		expect(session!.getEnabledToolNames().sort()).toEqual(["first_tool", "owner_tool", "second_tool"]);
+
+		await session!.setActiveToolsByName(["first_tool", "owner_tool"]);
+		expect((await client.request({ type: "set_host_tools", tools: [hostDefinition("replacement")] })).success).toBe(
+			true,
+		);
+		expect(session!.getToolByName("first_tool")).toBeUndefined();
+		expect(session!.hasRpcHostTool("second_tool")).toBe(true);
+		expect(session!.getEnabledToolNames().sort()).toEqual(["owner_tool", "replacement"]);
+
+		// Refreshing the terminal/stdio owner's ordinary set also preserves attachments.
+		await session!.refreshRpcHostTools(ownerTools);
+		expect(session!.hasRpcHostTool("replacement")).toBe(true);
+		second.close();
+		await waitForToolRemoval("second_tool");
+		expect(session!.getEnabledToolNames().sort()).toEqual(["owner_tool", "replacement"]);
+		expect((await client.request({ type: "unserve" })).success).toBe(true);
+		expect(session!.getEnabledToolNames()).toEqual(["owner_tool"]);
+		await session!.prompt("The terminal owner can still write after attachments detach.");
+		expect(session!.messages.some(message => message.role === "user")).toBe(true);
+	});
+
+	test("host tool collisions reject the complete replacement and leave existing adapters usable", async () => {
+		const { client } = await start();
+		const second = await connectAnother("colliding host");
+		expect((await client.request({ type: "serve", tools: [hostDefinition("first_tool")] })).success).toBe(true);
+		expect((await second.request({ type: "set_host_tools", tools: [hostDefinition("second_tool")] })).success).toBe(
+			true,
+		);
+		const original = session!.getToolByName("second_tool")!;
+		const rejected = await second.request({
+			type: "set_host_tools",
+			tools: [hostDefinition("new_tool"), hostDefinition("first_tool")],
+		});
+		expect(rejected).toMatchObject({
+			success: false,
+			error: 'RPC host tool "first_tool" conflicts with an existing tool',
+		});
+		expect(session!.getToolByName("new_tool")).toBeUndefined();
+		expect(session!.getToolByName("second_tool")).toBe(original);
+		expect(session!.getEnabledToolNames().sort()).toEqual(["first_tool", "second_tool"]);
+		const requested = nextHostCall(second);
+		const execution = original.execute("after-collision", {});
+		const request = await requested;
+		second.sendRaw({
+			type: "host_tool_result",
+			id: request.id,
+			result: { content: [{ type: "text", text: "still mine" }] },
+		});
+		await expect(execution).resolves.toMatchObject({ content: [{ type: "text", text: "still mine" }] });
+
+		const failedService = await second.request({
+			type: "serve",
+			tools: [hostDefinition("temporary")],
+			schemes: [{ scheme: "not a scheme" }],
+		});
+		expect(failedService.success).toBe(false);
+		expect(session!.hasRpcHostTool("temporary")).toBe(false);
+		expect(session!.getEnabledToolNames()).toEqual(["first_tool"]);
+	});
+
+	test("host tool revocation cancels only its connection and ignores cross-connection and late replies", async () => {
+		const { client } = await start();
+		const second = await connectAnother("other executor");
+		await client.request({ type: "serve", tools: [hostDefinition("first_tool")] });
+		await second.request({ type: "serve", tools: [hostDefinition("second_tool")] });
+		const firstCall = nextHostCall(client);
+		const secondCall = nextHostCall(second);
+		const firstTool = session!.getToolByName("first_tool")!;
+		const firstExecution = firstTool.execute("first-call", {}).then(
+			result => result,
+			error => error as Error,
+		);
+		let secondSettled = false;
+		const secondExecution = session!
+			.getToolByName("second_tool")!
+			.execute("second-call", {})
+			.then(result => {
+				secondSettled = true;
+				return result;
+			});
+		const [firstRequest, secondRequest] = await Promise.all([firstCall, secondCall]);
+		const result = { content: [{ type: "text" as const, text: "correct executor" }] };
+		client.sendRaw({ type: "host_tool_result", id: secondRequest.id, result });
+		await client.request({ type: "get_state" });
+		expect(secondSettled).toBe(false);
+		const canceled: Record<string, unknown>[] = [];
+		client.onEvent(frame => {
+			if (frame.type === "host_tool_cancel") canceled.push(frame);
+		});
+		expect((await client.request({ type: "unserve" })).success).toBe(true);
+		expect(await firstExecution).toBeInstanceOf(Error);
+		expect(canceled).toMatchObject([{ targetId: firstRequest.id }]);
+		await expect(firstTool.execute("stale-adapter", {})).rejects.toThrow("registration revoked");
+		client.sendRaw({ type: "host_tool_result", id: firstRequest.id, result });
+		second.sendRaw({ type: "host_tool_result", id: secondRequest.id, result });
+		await expect(secondExecution).resolves.toEqual(result);
+		expect(session!.hasRpcHostTool("second_tool")).toBe(true);
+
+		await client.request({ type: "serve", tools: [hostDefinition("first_tool")] });
+		const survivingCall = nextHostCall(client);
+		const disconnectingCall = nextHostCall(second);
+		const survivingExecution = session!.getToolByName("first_tool")!.execute("survivor", {});
+		const disconnectedExecution = session!
+			.getToolByName("second_tool")!
+			.execute("disconnecting", {})
+			.catch(error => error as Error);
+		const [survivingRequest] = await Promise.all([survivingCall, disconnectingCall]);
+		second.close();
+		expect(await disconnectedExecution).toBeInstanceOf(Error);
+		await waitForToolRemoval("second_tool");
+		client.sendRaw({ type: "host_tool_result", id: survivingRequest.id, result });
+		await expect(survivingExecution).resolves.toEqual(result);
+		expect(session!.hasRpcHostTool("first_tool")).toBe(true);
+	});
+
+	test("canonical generation changes revoke control tools and calls until that connection registers again", async () => {
+		const { host, client } = await start();
+		await client.request({ type: "serve", tools: [hostDefinition("generation_tool")] });
+		const requested = nextHostCall(client);
+		const tool = session!.getToolByName("generation_tool")!;
+		const execution = tool.execute("old-generation", {}).catch(error => error as Error);
+		const request = await requested;
+		await session!.newSession();
+		expect(host.revisions.generation).toBe(2);
+		expect(await execution).toBeInstanceOf(Error);
+		await waitForToolRemoval("generation_tool");
+		client.sendRaw({ type: "host_tool_result", id: request.id, result: { content: [] } });
+		await expect(tool.execute("old-adapter", {})).rejects.toThrow("registration revoked");
+		expect(
+			(await client.request({ type: "set_host_tools", tools: [hostDefinition("generation_tool")] })).success,
+		).toBe(true);
+		expect(session!.hasRpcHostTool("generation_tool")).toBe(true);
+	});
+
+	test("chat-mode restoration preserves tools from concurrent control owners", async () => {
+		const { client } = await start();
+		const second = await connectAnother("chat host");
+		await session!.setChatMode({ mode: "chat" });
+		const responses = await Promise.all([
+			client.request({ type: "set_host_tools", tools: [hostDefinition("first_tool")] }),
+			second.request({ type: "set_host_tools", tools: [hostDefinition("second_tool")] }),
+		]);
+		expect(responses.every(response => response.success)).toBe(true);
+		expect(session!.getEnabledToolNames()).toEqual([]);
+		await client.request({ type: "set_host_tools", tools: [hostDefinition("replacement")] });
+		await session!.setChatMode({ mode: "off" });
+		expect(session!.getEnabledToolNames().sort()).toEqual(["replacement", "second_tool"]);
+	});
+
+	test("pipelined registrations on one fresh connection share one ownership slot", async () => {
+		const { client } = await start();
+		const responses = await Promise.all([
+			client.request({ type: "set_host_tools", tools: [hostDefinition("earlier")] }),
+			client.request({ type: "set_host_tools", tools: [hostDefinition("later")] }),
+		]);
+		expect(responses.every(response => response.success)).toBe(true);
+		expect(session!.getToolByName("earlier")).toBeUndefined();
+		expect(session!.getEnabledToolNames()).toEqual(["later"]);
+		client.close();
+		await waitForToolRemoval("later");
+	});
 
 	function emitStarted(bus: EventBus, id: string): void {
 		const sessionFile = join(tempDir.path(), `${id}.jsonl`);
