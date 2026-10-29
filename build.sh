@@ -269,6 +269,13 @@ if $cache_enabled; then
 fi
 trap - EXIT
 
+# The deck refuses a native addon without a fingerprint record, and `bun install` or a clean
+# deletes node_modules/.npi-deck. The addon was just built or verified current for this tree, so
+# this is the one step that can attest to it. Non-fatal: the deck is optional for the binary.
+if [[ -f deck/scripts/native-addon.ts ]]; then
+	bun deck/scripts/native-addon.ts --built || say "could not record the native addon for the deck; the deck will start without a backend"
+fi
+
 # install.sh refuses a binary built from other sources than the checkout holds,
 # so record the tree this build starts from; a failed build leaves no record.
 binary=packages/coding-agent/dist/npi

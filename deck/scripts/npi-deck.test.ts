@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { acquireLock, releaseLock, signalWorkerGroup } from "./npi-deck.ts";
+import { CONFIG_EXIT_CODE, acquireLock, missingNativeRecordProblem, releaseLock, signalWorkerGroup, unresolvedDependencies } from "./npi-deck.ts";
 import { processStartTime } from "../apps/server/src/owned/launcher.ts";
 
 function lockPath(): string {
@@ -37,6 +37,64 @@ describe.skipIf(process.platform !== "linux")("launcher lock", () => {
 		expect(acquireLock(file, "npi-deck")).toBeUndefined();
 		releaseLock(file);
 		expect(fs.existsSync(file)).toBe(false);
+	});
+});
+
+describe("dependency check", () => {
+	function workspace(dependencies: Record<string, string>): { root: string; pkg: string } {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "npi-deck-deps-"));
+		const pkg = path.join(root, "deck", "apps", "server");
+		fs.mkdirSync(pkg, { recursive: true });
+		fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "server", dependencies }));
+		return { root, pkg };
+	}
+	function install(dir: string, name: string): void {
+		const target = path.join(dir, "node_modules", name);
+		fs.mkdirSync(target, { recursive: true });
+		fs.writeFileSync(path.join(target, "package.json"), JSON.stringify({ name, main: "index.js" }));
+		fs.writeFileSync(path.join(target, "index.js"), "module.exports = {};");
+	}
+
+	test("dependencies hoisted to the workspace root count as installed", () => {
+		const { root, pkg } = workspace({ hono: "^4", yaml: "^2" });
+		install(root, "hono");
+		install(root, "yaml");
+		expect(fs.existsSync(path.join(root, "deck", "node_modules"))).toBe(false);
+		expect(unresolvedDependencies(pkg)).toEqual([]);
+	});
+
+	test("a dependency that resolves nowhere is reported by name", () => {
+		const { root, pkg } = workspace({ hono: "^4", yaml: "^2" });
+		install(root, "hono");
+		expect(unresolvedDependencies(pkg)).toEqual(["yaml"]);
+	});
+
+	test("a backend tree without a native addon record is refused with the command that fixes it", () => {
+		const tree = fs.mkdtempSync(path.join(os.tmpdir(), "npi-deck-record-"));
+		const problem = missingNativeRecordProblem(tree);
+		expect(problem).toContain("native-addon.ts --built");
+		expect(problem).toContain("--native-dir");
+		expect(problem).toContain(tree);
+	});
+
+	test("a backend tree with a native addon record is accepted", () => {
+		const tree = fs.mkdtempSync(path.join(os.tmpdir(), "npi-deck-record-"));
+		const record = {
+			variant: "modern",
+			inputs: "a".repeat(64),
+			platform: "linux-x64",
+			sha256: "b".repeat(64),
+			packageVersion: "1.0.0",
+			provenance: "built",
+			source: "x.node",
+		};
+		fs.mkdirSync(path.join(tree, "node_modules", ".npi-deck"), { recursive: true });
+		fs.writeFileSync(path.join(tree, "node_modules", ".npi-deck", "native-addon.json"), JSON.stringify(record));
+		expect(missingNativeRecordProblem(tree)).toBeNull();
+	});
+
+	test("configuration failures use a status the supervisor is told not to restart on", () => {
+		expect(CONFIG_EXIT_CODE).toBe(78);
 	});
 });
 

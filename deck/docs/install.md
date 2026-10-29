@@ -155,6 +155,19 @@ What it does:
   old cgroup. It gives up after 5 starts in 60 s. A server started with
   `bun run dev` or `bun run start` has no supervisor, so its restart button
   reports that instead.
+- Configuration problems that a restart cannot fix (a server dependency that
+  does not resolve, a failed web build, a backend whose native addon has no
+  record) exit with status 78 (`EX_CONFIG`) and one message naming the fix. The
+  launcher's unit sets `RestartPreventExitStatus=78`, so systemd stops instead
+  of looping; a hand-written unit needs the same line. Dependencies are checked
+  by resolving them from `apps/server`, so the hoisted root `node_modules` of a
+  NeoPi checkout is enough and `deck/node_modules` is not required.
+- The native addon record (`node_modules/.npi-deck/native-addon.json`) is an
+  attestation the launcher never writes. `./build.sh` writes it after it builds
+  or verifies the addon, and
+  `bun deck/scripts/native-addon.ts --native-dir <checkout>` records an addon
+  reused from another checkout. `bun install` or a clean deletes it; the
+  launcher then refuses to start and names that command.
 
 Without a systemd user manager the launcher refuses to start unless given
 `--no-systemd`. Then the server is a direct child, run under

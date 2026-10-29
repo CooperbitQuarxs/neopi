@@ -27,6 +27,8 @@ import * as path from "node:path";
 import { parseArgs } from "node:util";
 
 import { DEFAULT_PORT } from "../apps/server/src/config.ts";
+import { NATIVE_RECORD, readNativeRecord } from "../apps/server/src/backend/native-addon.ts";
+import { resolveBackendSelection } from "../apps/server/src/backend/runtime.ts";
 import { getDataDir, readManagedEnvFile } from "../apps/server/src/env-store.ts";
 import { GEN_ENV, sweepGenerations } from "../apps/server/src/owned/generations.ts";
 import {
@@ -43,6 +45,11 @@ const WEB_DIR = path.join(DECK_ROOT, "apps", "web");
 const WEB_DIST = path.join(WEB_DIR, "dist");
 const SLICE = "neopi-deck.slice";
 const STOP_TIMEOUT_S = 10;
+/**
+ * Exit status for a configuration problem that retrying cannot fix (sysexits EX_CONFIG).
+ * A supervising unit needs `RestartPreventExitStatus=78` to stop instead of looping on it.
+ */
+export const CONFIG_EXIT_CODE = 78;
 /** Environment the launcher must not hand down: its own markers and systemd's per-unit plumbing. */
 const DROP_ENV = new Set([
 	GEN_ENV,
@@ -77,6 +84,52 @@ function fail(message: string, code = 1): never {
 
 function say(message: string): void {
 	process.stderr.write(`npi-deck: ${message}\n`);
+}
+
+/**
+ * Why the backend tree at `tree` cannot load its native addon for want of a fingerprint record, or null when it has
+ * one. The record is explicit attestation that only a build step or `native-addon.ts` may write, so the launcher
+ * names the command and refuses; it never fabricates one. Without it the server would start backendless and a
+ * supervisor would report a healthy unit that serves nothing.
+ */
+export function missingNativeRecordProblem(tree: string): string | null {
+	if (readNativeRecord(tree)) return null;
+	return (
+		`backend ${tree} has no native addon record (${path.join(tree, NATIVE_RECORD)}). ` +
+		`Run \`bun deck/scripts/native-addon.ts --built\` after ./build.sh, ` +
+		`or \`bun deck/scripts/native-addon.ts --native-dir <checkout with a matching addon>\`, then start the deck again`
+	);
+}
+
+/** Refuse to start when the selected backend has no native addon record; no backend selected is a valid start. */
+function requireNativeRecord(): void {
+	let selection: ReturnType<typeof resolveBackendSelection>;
+	try {
+		selection = resolveBackendSelection();
+	} catch {
+		return; // The server reports an invalid backend configuration itself.
+	}
+	const problem = selection ? missingNativeRecordProblem(selection.path) : null;
+	if (problem) fail(problem, CONFIG_EXIT_CODE);
+}
+
+/**
+ * Runtime dependencies of the package at `dir` that do not resolve from it. Bun workspaces hoist
+ * them into an ancestor `node_modules`, so a `node_modules` next to the package is neither
+ * required nor proof that anything is installed.
+ */
+export function unresolvedDependencies(dir: string): string[] {
+	const manifest = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")) as {
+		dependencies?: Record<string, string>;
+	};
+	return Object.keys(manifest.dependencies ?? {}).filter(name => {
+		try {
+			Bun.resolveSync(name, dir);
+			return false;
+		} catch {
+			return true;
+		}
+	});
 }
 
 // ─── lock ───────────────────────────────────────────────────────────────────
@@ -157,7 +210,9 @@ function ensureWebBundle(force: boolean): void {
 	if (!force && built > 0 && Math.max(...sources.map(newestMtime)) <= built) return;
 	say(built === 0 ? "building the web bundle" : "web bundle is stale; rebuilding");
 	const res = spawnSync({ cmd: [process.execPath, "run", "build"], cwd: WEB_DIR, stdout: "inherit", stderr: "inherit" });
-	if (res.exitCode !== 0) fail(`web build failed (exit ${res.exitCode}); fix it or run \`bun run build\` in ${WEB_DIR}`);
+	if (res.exitCode !== 0) {
+		fail(`web build failed (exit ${res.exitCode}); fix it or run \`bun run build\` in ${WEB_DIR}`, CONFIG_EXIT_CODE);
+	}
 }
 
 // ─── worker environment ─────────────────────────────────────────────────────
@@ -244,6 +299,7 @@ async function runSystemd(opts: RunOpts): Promise<number> {
 			"-p", `EnvironmentFile=${envFile}`,
 			"-p", "KillMode=control-group",
 			"-p", `RestartForceExitStatus=${RESTART_EXIT_CODE}`,
+			"-p", `RestartPreventExitStatus=${CONFIG_EXIT_CODE}`,
 			"-p", "RestartSec=1s",
 			"-p", `TimeoutStopSec=${STOP_TIMEOUT_S}s`,
 			"-p", "StartLimitIntervalSec=60s",
@@ -394,8 +450,13 @@ async function main(): Promise<number> {
 	const unit = values.unit ?? "npi-deck";
 	if (!/^[A-Za-z0-9:_.\\-]+$/.test(unit)) fail(`invalid unit name ${unit}`);
 
-	if (!fs.existsSync(path.join(DECK_ROOT, "node_modules"))) {
-		fail(`dependencies are missing; run \`bun install --frozen-lockfile\` in ${DECK_ROOT}`);
+	const missing = unresolvedDependencies(SERVER_DIR);
+	if (missing.length > 0) {
+		fail(
+			`dependencies are missing (${missing.join(", ")} do not resolve from ${SERVER_DIR}); ` +
+				`run \`bun install --frozen-lockfile\` in the NeoPi checkout root ${path.dirname(DECK_ROOT)}`,
+			CONFIG_EXIT_CODE,
+		);
 	}
 
 	const home = getDataDir();
@@ -414,6 +475,7 @@ async function main(): Promise<number> {
 	// A SIGKILLed systemd launcher leaves its EnvironmentFile (0600, holds the launch env) behind.
 	fs.rmSync(path.join(runDir, `${unit}.env`), { force: true });
 
+	requireNativeRecord();
 	ensureWebBundle(values.rebuild ?? false);
 
 	const managed = readManagedEnvFile(path.join(home, ".env")).values;
