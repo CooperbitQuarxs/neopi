@@ -568,7 +568,16 @@ export const stateDefs = {
 		},
 		"A side-question topic: its first turn's fields plus follow-ups; the latest turn is the last follow-up, else the record.",
 	),
-	LoginProvider: { id: "string", name: "string", available: "boolean", authenticated: "boolean" },
+	LoginProvider: {
+		id: "string",
+		name: "string",
+		available: "boolean",
+		authenticated: "boolean",
+		acceptsKeys: "boolean",
+		loginKind: "'api-key' | 'oauth-code' | 'device-code' | 'custom'",
+		deviceCode: "boolean",
+		"storeCredentialsAs?": "string",
+	},
 	LogoutAccount: doc(
 		{
 			credentialId: "number.integer",

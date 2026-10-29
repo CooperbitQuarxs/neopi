@@ -21,6 +21,7 @@ type ModelsCommand = Extract<
 			| "get_login_providers"
 			| "login"
 			| "get_logout_accounts"
+			| "activate_account"
 			| "logout";
 	}
 >;
@@ -37,6 +38,7 @@ const COMMANDS = new Set([
 	"get_login_providers",
 	"login",
 	"get_logout_accounts",
+	"activate_account",
 	"logout",
 ]);
 
@@ -117,6 +119,10 @@ export class RpcModelsCommands {
 							id: provider.id,
 							name: provider.name,
 							available: provider.available,
+							loginKind: provider.loginKind,
+							deviceCode: provider.deviceCode,
+							...(provider.storeCredentialsAs ? { storeCredentialsAs: provider.storeCredentialsAs } : {}),
+							acceptsKeys: session.modelRegistry.hasProvider(provider.storeCredentialsAs ?? provider.id),
 							authenticated:
 								session.modelRegistry.authStorage.keys.source(provider.storeCredentialsAs ?? provider.id) !==
 								undefined,
@@ -200,6 +206,25 @@ export class RpcModelsCommands {
 							session.sessionId,
 						),
 					});
+				}
+				case "activate_account": {
+					if (
+						typeof command.providerId !== "string" ||
+						!Number.isSafeInteger(command.credentialId) ||
+						command.credentialId <= 0
+					)
+						throw new Error("providerId must be a string and credentialId a positive integer");
+					if (!session.modelRegistry.hasProvider(command.providerId))
+						throw new Error("Unknown native inference provider");
+					await session.modelRegistry.authStorage.credentials.reload();
+					if (session.isStreaming || session.isCompacting)
+						throw new RpcModelsConfigurationError(
+							"session_busy",
+							"Cannot activate an account while the session is busy",
+						);
+					if (!session.pinProviderOAuthAccount(command.providerId, command.credentialId))
+						throw new Error("This OAuth account is unavailable for the provider and session");
+					return success();
 				}
 				case "logout": {
 					if (typeof command.providerId !== "string" || !Number.isInteger(command.credentialId))

@@ -7,6 +7,7 @@
 import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode, ToolTier } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessageEvent, Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
+import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ChatModeSetting, ChatModeState } from "../../chat/chat-mode";
@@ -181,6 +182,7 @@ export type RpcCommand =
 	| { id?: string; type: "login"; providerId: string }
 	| { id?: string; type: "get_logout_accounts"; providerId: string }
 	| { id?: string; type: "logout"; providerId: string; credentialId: number }
+	| { id?: string; type: "activate_account"; providerId: string; credentialId: number }
 
 	// Word prediction (composer ghost text); `cursor` is a UTF-16 offset into `text`
 	| { id?: string; type: "predict_word"; text: string; cursor: number }
@@ -548,6 +550,12 @@ export interface RpcSubagentMessagesResult {
 // ============================================================================
 
 // Success responses with data
+export interface RpcLoginProvider extends OAuthProviderInfo {
+	authenticated: boolean;
+	/** The native set_provider_api_key command accepts this credential provider. */
+	acceptsKeys: boolean;
+}
+
 export type RpcResponse =
 	| { id?: string; type: "response"; command: "get_themes_configuration"; success: true; data: RpcThemesConfiguration }
 	| { id?: string; type: "response"; command: "get_theme"; success: true; data: RpcThemePalette }
@@ -842,7 +850,7 @@ export type RpcResponse =
 			type: "response";
 			command: "get_login_providers";
 			success: true;
-			data: { providers: Array<{ id: string; name: string; available: boolean; authenticated: boolean }> };
+			data: { providers: RpcLoginProvider[] };
 	  }
 	| { id?: string; type: "response"; command: "login"; success: true; data: { providerId: string } }
 	| {
@@ -853,6 +861,7 @@ export type RpcResponse =
 			data: { accounts: LogoutAccount[] };
 	  }
 	| { id?: string; type: "response"; command: "logout"; success: true; data: { remainingSource?: string } }
+	| { id?: string; type: "response"; command: "activate_account"; success: true }
 
 	// Word prediction
 	| { id?: string; type: "response"; command: "predict_word"; success: true; data: { suffix: string | null } }
@@ -1058,6 +1067,8 @@ export type RpcExtensionUIRequest =
 			 */
 			launchUrl?: string;
 			instructions?: string;
+			/** User-facing device verification code; never the private polling device_code. */
+			userCode?: string;
 	  };
 
 // ============================================================================

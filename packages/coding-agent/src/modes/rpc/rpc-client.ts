@@ -59,6 +59,7 @@ import type {
 	RpcPlanProposalRequest,
 	RpcPlanProposalResponse,
 	RpcPromptResultFrame,
+	RpcLoginProvider,
 	RpcRemoveQueuedMessageResult,
 	RpcResponse,
 	RpcSessionSettledFrame,
@@ -251,20 +252,35 @@ function isAgentSessionEvent(value: unknown): value is AgentSessionEvent {
 }
 
 function isRpcJournalEvent(value: unknown): value is RpcJournalEventFrame {
-	if (!isRecord(value) || typeof value.sessionId !== "string" ||
+	if (
+		!isRecord(value) ||
+		typeof value.sessionId !== "string" ||
 		!(value.sessionFile === null || typeof value.sessionFile === "string") ||
-		!(value.leafId === null || typeof value.leafId === "string")) return false;
+		!(value.leafId === null || typeof value.leafId === "string")
+	)
+		return false;
 	if (value.type === "journal_state") {
 		if (value.reason !== "snapshot" && value.reason !== "identity" && value.reason !== "leaf") return false;
-		return value.messageEntryIds === undefined || (Array.isArray(value.messageEntryIds) &&
-			value.messageEntryIds.every(identity => isRecord(identity) &&
-				typeof identity.messageId === "string" && typeof identity.entryId === "string"));
+		return (
+			value.messageEntryIds === undefined ||
+			(Array.isArray(value.messageEntryIds) &&
+				value.messageEntryIds.every(
+					identity =>
+						isRecord(identity) && typeof identity.messageId === "string" && typeof identity.entryId === "string",
+				))
+		);
 	}
 	if (value.type === "journal_entry") return isRecord(value.entry) && typeof value.entry.id === "string";
 	if (value.type === "message_start")
-		return value.snapshot === true && typeof value.messageId === "string" &&
-			isRecord(value.message) && value.message.role === "assistant";
-	return value.type === "message_persisted" && typeof value.messageId === "string" && typeof value.entryId === "string";
+		return (
+			value.snapshot === true &&
+			typeof value.messageId === "string" &&
+			isRecord(value.message) &&
+			value.message.role === "assistant"
+		);
+	return (
+		value.type === "message_persisted" && typeof value.messageId === "string" && typeof value.entryId === "string"
+	);
 }
 
 function isRpcSubagentLifecycleFrame(value: unknown): value is RpcSubagentLifecycleFrame {
@@ -695,7 +711,6 @@ export class RpcClient {
 		this.#journalEventListeners.add(listener);
 		return () => this.#journalEventListeners.delete(listener);
 	}
-
 
 	/**
 	 * Subscribe to subagent lifecycle frames after setSubagentSubscription("progress" | "events").
@@ -1483,11 +1498,9 @@ export class RpcClient {
 	/**
 	 * Get list of OAuth providers available for login, with their current authentication status.
 	 */
-	async getLoginProviders(): Promise<Array<{ id: string; name: string; available: boolean; authenticated: boolean }>> {
+	async getLoginProviders(): Promise<RpcLoginProvider[]> {
 		const response = await this.#send({ type: "get_login_providers" });
-		return this.#getData<{
-			providers: Array<{ id: string; name: string; available: boolean; authenticated: boolean }>;
-		}>(response).providers;
+		return this.#getData<{ providers: RpcLoginProvider[] }>(response).providers;
 	}
 
 	/**
@@ -1507,7 +1520,7 @@ export class RpcClient {
 	async login(
 		providerId: string,
 		options?: {
-			onOpenUrl?: (url: string, instructions?: string, launchUrl?: string) => void;
+			onOpenUrl?: (url: string, instructions?: string, launchUrl?: string, userCode?: string) => void;
 			onManualCodeInput?: (prompt: { title: string; placeholder?: string }) => string | Promise<string>;
 		},
 	): Promise<{ providerId: string }> {
@@ -1516,7 +1529,7 @@ export class RpcClient {
 			onOpenUrl || onManualCodeInput
 				? (req: RpcExtensionUIRequest) => {
 						if (req.method === "open_url") {
-							onOpenUrl?.(req.url, req.instructions, req.launchUrl);
+							onOpenUrl?.(req.url, req.instructions, req.launchUrl, req.userCode);
 							return;
 						}
 						if (req.method !== "input" || !onManualCodeInput) return;
@@ -1547,6 +1560,11 @@ export class RpcClient {
 	async getLogoutAccounts(providerId: string): Promise<LogoutAccount[]> {
 		const response = await this.#send({ type: "get_logout_accounts", providerId });
 		return this.#getData<{ accounts: LogoutAccount[] }>(response).accounts;
+	}
+
+	/** Activate one stored OAuth account for this session, without changing provider-wide credentials. */
+	async activateAccount(providerId: string, credentialId: number): Promise<void> {
+		await this.#send({ type: "activate_account", providerId, credentialId });
 	}
 
 	/**
@@ -1824,7 +1842,6 @@ export class RpcClient {
 			for (const listener of this.#journalEventListeners) listener(data);
 			return;
 		}
-
 
 		if (!isAgentSessionEvent(data)) return;
 

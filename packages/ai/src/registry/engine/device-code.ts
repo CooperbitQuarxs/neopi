@@ -69,6 +69,7 @@ export function createDeviceCodeLogin(
 		}
 		ctrl.onAuth?.({
 			url: verificationUriComplete ?? verificationUri,
+			userCode,
 			instructions: template(rule.instructions, { user_code: userCode }),
 		});
 		ctrl.onProgress?.("Waiting for device authorization...");

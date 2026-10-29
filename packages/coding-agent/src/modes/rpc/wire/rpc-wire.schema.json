@@ -991,6 +991,17 @@
 				"clientOmit": []
 			},
 			{
+				"name": "activate_account",
+				"doc": "Activate a stored OAuth account for this session through native credential affinity and journal pins.",
+				"params": "ActivateAccountParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "logout",
 				"doc": "Remove one stored credential; fails when it is no longer stored. `remainingSource` names auth that still applies.",
 				"params": "LogoutParams",
@@ -2466,6 +2477,9 @@
 						}
 					],
 					"description": "Null when the provider does not report a limit."
+				},
+				"description": {
+					"type": "string"
 				},
 				"headers": {
 					"type": "object",
@@ -5387,13 +5401,34 @@
 				},
 				"authenticated": {
 					"type": "boolean"
+				},
+				"acceptsKeys": {
+					"type": "boolean"
+				},
+				"loginKind": {
+					"enum": [
+						"api-key",
+						"oauth-code",
+						"device-code",
+						"custom"
+					],
+					"type": "string"
+				},
+				"deviceCode": {
+					"type": "boolean"
+				},
+				"storeCredentialsAs": {
+					"type": "string"
 				}
 			},
 			"required": [
 				"id",
 				"name",
 				"available",
-				"authenticated"
+				"authenticated",
+				"acceptsKeys",
+				"loginKind",
+				"deviceCode"
 			]
 		},
 		"LogoutAccount": {
@@ -8223,6 +8258,10 @@
 				"instructions": {
 					"type": "string"
 				},
+				"userCode": {
+					"type": "string",
+					"description": "User-facing device verification code, never the private polling device_code."
+				},
 				"loginId": {
 					"type": "string"
 				}
@@ -10401,6 +10440,21 @@
 			},
 			"required": [
 				"accounts"
+			]
+		},
+		"ActivateAccountParams": {
+			"type": "object",
+			"properties": {
+				"providerId": {
+					"type": "string"
+				},
+				"credentialId": {
+					"type": "integer"
+				}
+			},
+			"required": [
+				"providerId",
+				"credentialId"
 			]
 		},
 		"LogoutParams": {

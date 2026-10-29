@@ -614,9 +614,11 @@ function loginNode(node: KdlNodeView): CompiledLogin {
 		case "device-code":
 			validateProps(node, []);
 			return deviceCodeLogin(node);
-		case "custom":
-			leaf(node, ["hook"]);
-			return { kind: "custom", hook: hookName(node, "hook") };
+		case "custom": {
+			leaf(node, ["hook", "device-code"]);
+			const deviceCode = propBool(node, "device-code");
+			return { kind: "custom", hook: hookName(node, "hook"), ...(deviceCode !== undefined ? { deviceCode } : {}) };
+		}
 		default:
 			return malformed(node, "login");
 	}

@@ -164,11 +164,19 @@ export class RpcModelsConfiguration {
 				authenticated: modelRegistry.authStorage.keys.source(id) !== undefined,
 				authSource: modelRegistry.authStorage.keys.describe(id, this.session.sessionId) ?? null,
 				disabled: disabled.has(id),
+				acceptsKeys: modelRegistry.hasProvider(id),
 				available:
 					!disabled.has(id) && all.some(model => model.provider === id && available.has(`${id}/${model.id}`)),
 				loginProviders: oauth
 					.filter(provider => (provider.storeCredentialsAs ?? provider.id) === id)
-					.map(provider => ({ id: provider.id, name: provider.name, available: provider.available })),
+					.map(provider => ({
+						id: provider.id,
+						name: provider.name,
+						available: provider.available,
+						loginKind: provider.loginKind,
+						deviceCode: provider.deviceCode,
+						...(provider.storeCredentialsAs ? { storeCredentialsAs: provider.storeCredentialsAs } : {}),
+					})),
 				envVars: providerEntry(id)?.envVars ?? [],
 				discovery: modelRegistry.getProviderDiscoveryState(id) ?? null,
 			})),
@@ -180,6 +188,7 @@ export class RpcModelsConfiguration {
 					provider: model.provider,
 					id: model.id,
 					name: model.name,
+					...(model.description !== undefined ? { description: model.description } : {}),
 					kind: modelKind(model),
 					available: !disabled.has(model.provider) && available.has(`${model.provider}/${model.id}`),
 					contextWindow: model.contextWindow,

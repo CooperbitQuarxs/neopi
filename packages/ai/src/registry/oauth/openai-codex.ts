@@ -247,6 +247,7 @@ export async function loginOpenAICodexDevice(ctrl: OAuthController): Promise<OAu
 
 	ctrl.onAuth?.({
 		url: DEVICE_AUTH_URL,
+		userCode,
 		instructions: `Enter code: ${userCode}`,
 	});
 

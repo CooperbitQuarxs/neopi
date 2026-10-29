@@ -25,7 +25,7 @@ describe("native model configuration", () => {
 		const registry = new ModelRegistry(auth);
 		const model = registry.find("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Missing native test model");
-		vi.spyOn(registry, "getAll").mockReturnValue([model]);
+		vi.spyOn(registry, "getAll").mockReturnValue([{ ...model, description: "Native catalog description" }]);
 		vi.spyOn(registry, "getAvailable").mockReturnValue([model]);
 		settings = Settings.isolated({ modelRoles: { default: `${model.provider}/${model.id}` } });
 		cfgModelRoleStorage.set(settings, "project");
@@ -118,10 +118,16 @@ describe("native model configuration", () => {
 
 	test("catalog projects native providers and facts without credential bytes", async () => {
 		const result = await configuration.read();
-		expect(result.models[0]).toMatchObject({ provider: "anthropic", id: "claude-sonnet-4-5", available: true });
+		expect(result.models[0]).toMatchObject({
+			provider: "anthropic",
+			id: "claude-sonnet-4-5",
+			description: "Native catalog description",
+			available: true,
+		});
 		expect(result.providers.find(provider => provider.id === "anthropic")).toMatchObject({
 			authenticated: true,
 			mark: { icon: "provider:anthropic" },
+			acceptsKeys: true,
 		});
 		expect(JSON.stringify(result)).not.toContain("fixture-key-never-returned");
 	});
