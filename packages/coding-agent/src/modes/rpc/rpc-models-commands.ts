@@ -11,6 +11,9 @@ type ModelsCommand = Extract<
 		type:
 			| "get_models_configuration"
 			| "set_model_role_configuration"
+			| "set_model_role_fallbacks"
+			| "set_model_role_description"
+			| "delete_model_role"
 			| "set_model_role_storage"
 			| "set_effort_rules"
 			| "set_provider_api_key"
@@ -25,6 +28,9 @@ type ModelsCommand = Extract<
 const COMMANDS = new Set([
 	"get_models_configuration",
 	"set_model_role_configuration",
+	"set_model_role_fallbacks",
+	"set_model_role_description",
+	"delete_model_role",
 	"set_model_role_storage",
 	"set_effort_rules",
 	"set_provider_api_key",
@@ -77,6 +83,15 @@ export class RpcModelsCommands {
 					return success(await this.#configuration.read());
 				case "set_model_role_configuration":
 					await this.#configuration.setRole(command);
+					return success();
+				case "set_model_role_fallbacks":
+					await this.#configuration.setRoleFallbacks(command);
+					return success();
+				case "set_model_role_description":
+					await this.#configuration.setRoleDescription(command);
+					return success();
+				case "delete_model_role":
+					await this.#configuration.deleteRole(command);
 					return success();
 				case "set_model_role_storage":
 					await this.#configuration.setRoleStorage(command);

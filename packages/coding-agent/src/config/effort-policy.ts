@@ -5,7 +5,7 @@ import { getSupportedThinkingLevels, requireSupportedEffort } from "@oh-my-pi/pi
 import { logger } from "@oh-my-pi/pi-utils";
 import { register } from "./registry";
 import {
-	compileSelectorRegex,
+	assertValidSelectorPattern,
 	isRegexSelectorPattern,
 	matchesSelectorPattern,
 	matchValidatedModelSelectorRule,
@@ -120,11 +120,7 @@ export const cfgEffortRules = register({
 			if (seen.has(rule.selector.toLowerCase())) throw new Error(`Duplicate effort rule ${rule.selector}`);
 			seen.add(rule.selector.toLowerCase());
 			assertEfforts(rule.allowed, `Effort rule ${rule.selector}`);
-			if (isRegexSelectorPattern(rule.selector) && !compileSelectorRegex(rule.selector)) {
-				logger.warn("Settings: skipping invalid effort rule regex", { selector: rule.selector });
-			} else if (isPatternSelector(rule.selector) && !isRegexSelectorPattern(rule.selector)) {
-				new Bun.Glob(rule.selector);
-			}
+			assertValidSelectorPattern(rule.selector);
 		}
 	},
 });
@@ -215,10 +211,6 @@ export class EffortPolicyError extends Error {
 		this.requested = requested;
 		this.origin = origin;
 	}
-}
-
-function isPatternSelector(selector: string): boolean {
-	return /[*?[\]{}]/.test(selector);
 }
 
 /** Exact provider/model identifiers beat regex rules, then globs; patterns retain declaration order within a tier. */

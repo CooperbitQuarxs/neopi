@@ -13,7 +13,7 @@ import {
 import { isValidThemeColor } from "@oh-my-pi/pi-tui/theme";
 import type { Settings } from "./settings";
 
-import { cfgCycleOrder, cfgModelTags } from "./model-settings";
+import { cfgCycleOrder, cfgModelTags, type ModelTagsSettings } from "./model-settings";
 
 /** Canonical prefix for a configured model role selector. */
 export const MODEL_ROLE_ALIAS_PREFIX = "@";
@@ -224,4 +224,30 @@ export function setRoleDescription(role: string, description: string, settings: 
 		name: metadata?.name ?? getRoleInfo(role, settings).name,
 		description,
 	});
+}
+
+/** Remove one custom role's definition in the selected layer; inherited definitions remain intact. */
+export function deleteCustomRole(role: string, scope: "global" | "project", settings: Settings): void {
+	if (isModelRole(role)) throw new Error(`Cannot delete built-in model role: ${role}`);
+	if (!getKnownRoleIds(settings).includes(role)) throw new Error(`Unknown model role: ${role}`);
+	const layer = scope === "global" ? settings.getGlobalSettings() : settings.getProjectSettings();
+	settings.setRoleModelAndEffort(role, undefined, undefined, scope);
+	if (scope === "global") {
+		cfgModelTags.setEntry(settings, role, undefined);
+		if (Array.isArray(layer.cycleOrder) && layer.cycleOrder.includes(role))
+			cfgCycleOrder.setMember(settings, role, { member: false });
+		settings.setFallbackChainAndEfforts(role, [], {});
+	} else {
+		const tags = layer.modelTags as ModelTagsSettings | undefined;
+		if (tags && Object.hasOwn(tags, role)) {
+			const next = { ...tags };
+			delete next[role];
+			settings.writeProjectValue(cfgModelTags, next);
+		}
+		if (Array.isArray(layer.cycleOrder) && layer.cycleOrder.includes(role))
+			settings.writeProjectValue(
+				cfgCycleOrder,
+				layer.cycleOrder.filter(item => item !== role),
+			);
+	}
 }

@@ -165,7 +165,7 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	},
 	{
 		name: "set_model_role_configuration",
-		doc: "Save or clear one scoped role selector and effort atomically, rejecting a stale expected value.",
+		doc: "Save or clear a role selector and effort in the explicit scope, independently of the default role-storage preference.",
 		params: {
 			role: "string",
 			scope: "'global' | 'project'",
@@ -173,6 +173,27 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 			"effort?": "ModelEffortSelection",
 			expected: "ModelRoleConfigurationValue",
 		},
+	},
+	{
+		name: "set_model_role_fallbacks",
+		doc: "Save one role's native global fallback chain and per-entry efforts, rejecting stale values.",
+		params: {
+			role: "string",
+			scope: "'global' | 'project'",
+			chain: "string[]",
+			efforts: "Record<string, ModelEffortSelection>",
+			expected: "ModelRoleFallbacks",
+		},
+	},
+	{
+		name: "set_model_role_description",
+		doc: "Save one known role's global description without replacing its other metadata.",
+		params: { role: "string", scope: "'global' | 'project'", description: "string", expected: "string | null" },
+	},
+	{
+		name: "delete_model_role",
+		doc: "Delete a custom role definition in one scope; refuse built-ins and preserve inherited definitions.",
+		params: { role: "string", scope: "'global' | 'project'", expected: "ModelRoleConfigurationValue" },
 	},
 	{
 		name: "set_model_role_storage",

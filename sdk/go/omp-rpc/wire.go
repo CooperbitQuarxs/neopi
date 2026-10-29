@@ -2576,6 +2576,27 @@ func (v *ModelRoleConfigurationValue) decodeFrom(raw map[string]json.RawMessage)
 	return nil
 }
 
+type ModelRoleFallbacks struct {
+	Chain   []string                        `json:"chain"`
+	Efforts map[string]ModelEffortSelection `json:"efforts"`
+}
+
+func (v *ModelRoleFallbacks) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ModelRoleFallbacks", v.decodeFrom)
+}
+
+func (v *ModelRoleFallbacks) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ModelRoleFallbacks
+	d := fieldDecoder{raw: raw, owner: "ModelRoleFallbacks"}
+	d.required("chain", &out.Chain)
+	d.required("efforts", &out.Efforts)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type ModelEffortRuleScopes struct {
 	Global  []ModelEffortRule `json:"global"`
 	Project []ModelEffortRule `json:"project"`
@@ -11262,7 +11283,7 @@ type SetModelRoleConfigurationCommand struct {
 	Effort   *ModelEffortSelection                 `json:"effort,omitempty"`
 }
 
-// SetModelRoleConfiguration sends "set_model_role_configuration": Save or clear one scoped role selector and effort atomically, rejecting a stale expected value.
+// SetModelRoleConfiguration sends "set_model_role_configuration": Save or clear a role selector and effort in the explicit scope, independently of the default role-storage preference.
 func (c Commands) SetModelRoleConfiguration(ctx context.Context, p SetModelRoleConfigurationCommand) error {
 	return c.call(ctx, "set_model_role_configuration", p, 0, nil)
 }
@@ -11285,6 +11306,105 @@ func (v *SetModelRoleConfigurationCommandScope) UnmarshalJSON(data []byte) error
 		return nil
 	}
 	return unknownValue("SetModelRoleConfigurationCommandScope", s)
+}
+
+// SetModelRoleFallbacksCommand holds the parameters of "set_model_role_fallbacks".
+type SetModelRoleFallbacksCommand struct {
+	Role     string                            `json:"role"`
+	Scope    SetModelRoleFallbacksCommandScope `json:"scope"`
+	Chain    []string                          `json:"chain"`
+	Efforts  map[string]ModelEffortSelection   `json:"efforts"`
+	Expected ModelRoleFallbacks                `json:"expected"`
+}
+
+// SetModelRoleFallbacks sends "set_model_role_fallbacks": Save one role's native global fallback chain and per-entry efforts, rejecting stale values.
+func (c Commands) SetModelRoleFallbacks(ctx context.Context, p SetModelRoleFallbacksCommand) error {
+	return c.call(ctx, "set_model_role_fallbacks", p, 0, nil)
+}
+
+type SetModelRoleFallbacksCommandScope string
+
+const (
+	SetModelRoleFallbacksCommandScopeGlobal  SetModelRoleFallbacksCommandScope = "global"
+	SetModelRoleFallbacksCommandScopeProject SetModelRoleFallbacksCommandScope = "project"
+)
+
+func (v *SetModelRoleFallbacksCommandScope) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SetModelRoleFallbacksCommandScope")
+	if err != nil {
+		return err
+	}
+	switch value := SetModelRoleFallbacksCommandScope(s); value {
+	case SetModelRoleFallbacksCommandScopeGlobal, SetModelRoleFallbacksCommandScopeProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("SetModelRoleFallbacksCommandScope", s)
+}
+
+// SetModelRoleDescriptionCommand holds the parameters of "set_model_role_description".
+type SetModelRoleDescriptionCommand struct {
+	Role        string                              `json:"role"`
+	Scope       SetModelRoleDescriptionCommandScope `json:"scope"`
+	Description string                              `json:"description"`
+	Expected    *string                             `json:"expected"`
+}
+
+// SetModelRoleDescription sends "set_model_role_description": Save one known role's global description without replacing its other metadata.
+func (c Commands) SetModelRoleDescription(ctx context.Context, p SetModelRoleDescriptionCommand) error {
+	return c.call(ctx, "set_model_role_description", p, 0, nil)
+}
+
+type SetModelRoleDescriptionCommandScope string
+
+const (
+	SetModelRoleDescriptionCommandScopeGlobal  SetModelRoleDescriptionCommandScope = "global"
+	SetModelRoleDescriptionCommandScopeProject SetModelRoleDescriptionCommandScope = "project"
+)
+
+func (v *SetModelRoleDescriptionCommandScope) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SetModelRoleDescriptionCommandScope")
+	if err != nil {
+		return err
+	}
+	switch value := SetModelRoleDescriptionCommandScope(s); value {
+	case SetModelRoleDescriptionCommandScopeGlobal, SetModelRoleDescriptionCommandScopeProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("SetModelRoleDescriptionCommandScope", s)
+}
+
+// DeleteModelRoleCommand holds the parameters of "delete_model_role".
+type DeleteModelRoleCommand struct {
+	Role     string                      `json:"role"`
+	Scope    DeleteModelRoleCommandScope `json:"scope"`
+	Expected ModelRoleConfigurationValue `json:"expected"`
+}
+
+// DeleteModelRole sends "delete_model_role": Delete a custom role definition in one scope; refuse built-ins and preserve inherited definitions.
+func (c Commands) DeleteModelRole(ctx context.Context, p DeleteModelRoleCommand) error {
+	return c.call(ctx, "delete_model_role", p, 0, nil)
+}
+
+type DeleteModelRoleCommandScope string
+
+const (
+	DeleteModelRoleCommandScopeGlobal  DeleteModelRoleCommandScope = "global"
+	DeleteModelRoleCommandScopeProject DeleteModelRoleCommandScope = "project"
+)
+
+func (v *DeleteModelRoleCommandScope) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "DeleteModelRoleCommandScope")
+	if err != nil {
+		return err
+	}
+	switch value := DeleteModelRoleCommandScope(s); value {
+	case DeleteModelRoleCommandScopeGlobal, DeleteModelRoleCommandScopeProject:
+		*v = value
+		return nil
+	}
+	return unknownValue("DeleteModelRoleCommandScope", s)
 }
 
 // SetModelRoleStorageCommand holds the parameters of "set_model_role_storage".

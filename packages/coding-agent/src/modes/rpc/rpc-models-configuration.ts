@@ -8,16 +8,24 @@ import { providerMark } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import {
 	cfgEffortPolicyMode,
 	cfgEffortRules,
+	cfgFallbackEffortSelections,
 	matchEffortRule,
 	type EffortRule,
 	type EffortSelection,
 } from "../../config/effort-policy";
 import { cfgDisabledProviders, cfgModelRoleStorage } from "../../config/model-settings";
-import { getRoleInfo } from "../../config/model-roles";
+import {
+	deleteCustomRole,
+	getKnownRoleIds,
+	getRoleInfo,
+	MODEL_ROLE_IDS,
+	setRoleDescription,
+} from "../../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../../config/model-resolver";
 import type { AgentSession } from "../../session/agent-session";
+import { cfgRetryFallbackChains } from "../../session/settings";
 import { resolveEffectiveContextWindow } from "../../session/model-compaction-threshold";
-import { RpcRoles } from "./rpc-roles";
+import { RpcRoles, scopedRoleLookup } from "./rpc-roles";
 import { serializeRpcModel } from "./rpc-model";
 
 export interface RpcRoleConfigurationValue {
@@ -33,6 +41,34 @@ export interface RpcSetModelRoleConfiguration {
 	expected: RpcRoleConfigurationValue;
 }
 
+export interface RpcModelRoleFallbacks {
+	chain: string[];
+	efforts: Record<string, EffortSelection>;
+}
+
+export interface RpcSetModelRoleFallbacks {
+	role: string;
+	/** Native fallback editing currently writes the global settings layer. */
+	scope: "global" | "project";
+	chain: string[];
+	efforts: Record<string, EffortSelection>;
+	expected: RpcModelRoleFallbacks;
+}
+
+export interface RpcSetModelRoleDescription {
+	role: string;
+	/** Native role descriptions are global role metadata. */
+	scope: "global" | "project";
+	description: string;
+	expected: string | null;
+}
+
+export interface RpcDeleteModelRole {
+	role: string;
+	scope: "global" | "project";
+	expected: RpcRoleConfigurationValue;
+}
+
 export interface RpcSetEffortRules {
 	scope: "global" | "project";
 	rules?: EffortRule[];
@@ -41,7 +77,13 @@ export interface RpcSetEffortRules {
 
 export class RpcModelsConfigurationError extends Error {
 	constructor(
-		readonly code: "invalid_value" | "configuration_conflict" | "session_busy",
+		readonly code:
+			| "invalid_value"
+			| "configuration_conflict"
+			| "session_busy"
+			| "unknown_role"
+			| "builtin_role"
+			| "scope_mismatch",
 		message: string,
 	) {
 		super(message);
@@ -73,6 +115,31 @@ export class RpcModelsConfiguration {
 		};
 	}
 
+	#fallbacks(role: string, global = false, globalSettings?: Record<string, unknown>): RpcModelRoleFallbacks {
+		const settings = this.session.settings;
+		const chains = global ? (globalSettings ?? settings.getGlobalSettings()).retry : undefined;
+		return {
+			chain:
+				(global
+					? (chains as { fallbackChains?: Record<string, string[]> } | undefined)?.fallbackChains?.[role]
+					: cfgRetryFallbackChains.get(settings)[role]) ?? [],
+			efforts:
+				(global
+					? settings.getGlobalFallbackEffortSelections(role)
+					: cfgFallbackEffortSelections.get(settings)[role]) ?? {},
+		};
+	}
+
+	#requireRole(role: string): void {
+		if (typeof role !== "string" || !getKnownRoleIds(this.session.settings).includes(role))
+			throw new RpcModelsConfigurationError("unknown_role", `Unknown model role: ${String(role)}`);
+	}
+
+	#requireGlobal(scope: string): void {
+		if (scope !== "global")
+			throw new RpcModelsConfigurationError("scope_mismatch", "This native role metadata is stored globally");
+	}
+
 	async read() {
 		const { settings, modelRegistry } = this.session;
 		await settings.reloadFromDisk();
@@ -82,6 +149,8 @@ export class RpcModelsConfiguration {
 		const all = modelRegistry.getAll("all");
 		const available = new Set(modelRegistry.getAvailable("all").map(model => `${model.provider}/${model.id}`));
 		const oauth = getOAuthProviders();
+		const roles = new RpcRoles(this.session);
+		const globalSettings = settings.getGlobalSettings();
 		const ids = new Set([
 			...all.map(model => model.provider),
 			...modelRegistry.getDiscoverableProviders(),
@@ -132,18 +201,27 @@ export class RpcModelsConfiguration {
 					permittedEfforts: supportedThinkingLevels.filter(level => !rule || rule.allowed.includes(level)),
 				};
 			}),
-			roles: new RpcRoles(this.session).list().roles.map(role => {
+			roles: roles.list().roles.map(role => {
 				const info = getRoleInfo(role.id, settings);
 				return {
 					id: role.id,
 					name: role.name,
 					alias: role.alias,
 					hidden: role.hidden,
+					source: role.source,
+					section: role.section,
+					patterns: role.patterns,
+					fallbacks: this.#fallbacks(role.id),
+					fallbacksGlobal: this.#fallbacks(role.id, true, globalSettings),
 					...("description" in info && typeof info.description === "string"
 						? { description: info.description }
 						: {}),
 					configured: role.configured ?? null,
 					resolved: role.resolved ?? null,
+					scopedResolutions: {
+						global: roles.resolveScope(role.id, "global"),
+						project: roles.resolveScope(role.id, "project"),
+					},
 					provenance: settings.getModelRoleProvenance(role.id),
 					effort: settings.getRoleEffortSelection(role.id) ?? null,
 					global: this.#roleValue(role.id, "global"),
@@ -168,11 +246,7 @@ export class RpcModelsConfiguration {
 		if (input.selector !== undefined && (typeof input.selector !== "string" || !input.selector.trim()))
 			throw new RpcModelsConfigurationError("invalid_value", "A nonempty single model selector is required");
 		await settings.reloadFromDisk();
-		if (input.scope === "project" && cfgModelRoleStorage.get(settings) !== "project")
-			throw new RpcModelsConfigurationError(
-				"invalid_value",
-				"Native model-role storage is global; project assignments are disabled",
-			);
+		// `scope` is the caller's explicit write target, not the model hub's default storage preference.
 		if (!isDeepStrictEqual(input.expected, this.#roleValue(input.role, input.scope)))
 			throw new RpcModelsConfigurationError(
 				"configuration_conflict",
@@ -183,6 +257,7 @@ export class RpcModelsConfiguration {
 			const candidates = modelRegistry.getAll("all").filter(getRoleInfo(input.role, settings).accepts);
 			const result = resolveModelRoleValue(input.selector, candidates, {
 				settings,
+				roleLookup: scopedRoleLookup(settings, input.scope),
 				matchPreferences: getModelMatchPreferences(settings),
 			});
 			if (!result.model)
@@ -203,6 +278,89 @@ export class RpcModelsConfiguration {
 			throw new RpcModelsConfigurationError(
 				"configuration_conflict",
 				"Another native mutation superseded this scoped role. Refresh before saving.",
+			);
+	}
+
+	async setRoleFallbacks(input: RpcSetModelRoleFallbacks): Promise<void> {
+		this.#requireGlobal(input.scope);
+		const { settings } = this.session;
+		await settings.reloadFromDisk();
+		this.#requireRole(input.role);
+		if (!isDeepStrictEqual(input.expected, this.#fallbacks(input.role, true)))
+			throw new RpcModelsConfigurationError(
+				"configuration_conflict",
+				"Role fallbacks changed. Refresh before saving.",
+			);
+		if (!Array.isArray(input.chain) || input.chain.some(selector => typeof selector !== "string" || !selector.trim()))
+			throw new RpcModelsConfigurationError("invalid_value", "Fallbacks must be nonempty model selectors");
+		if (
+			!input.efforts ||
+			typeof input.efforts !== "object" ||
+			Array.isArray(input.efforts) ||
+			Object.keys(input.efforts).some(selector => !input.chain.includes(selector))
+		)
+			throw new RpcModelsConfigurationError("invalid_value", "Fallback efforts must belong to the fallback chain");
+		const receipt = await settings.persistWithReceipt(() =>
+			settings.setFallbackChainAndEfforts(input.role, input.chain, input.efforts),
+		);
+		if (receipt.status === "conflict")
+			throw new RpcModelsConfigurationError(
+				"configuration_conflict",
+				"Role fallbacks changed. Refresh before saving.",
+			);
+	}
+
+	async setRoleDescription(input: RpcSetModelRoleDescription): Promise<void> {
+		this.#requireGlobal(input.scope);
+		const { settings } = this.session;
+		await settings.reloadFromDisk();
+		this.#requireRole(input.role);
+		if (typeof input.description !== "string")
+			throw new RpcModelsConfigurationError("invalid_value", "Role description must be a string");
+		const description = getRoleInfo(input.role, settings).description ?? null;
+		if (input.expected !== description)
+			throw new RpcModelsConfigurationError(
+				"configuration_conflict",
+				"Role description changed. Refresh before saving.",
+			);
+		const receipt = await settings.persistWithReceipt(() =>
+			setRoleDescription(input.role, input.description, settings),
+		);
+		if (receipt.status === "conflict")
+			throw new RpcModelsConfigurationError(
+				"configuration_conflict",
+				"Role description changed. Refresh before saving.",
+			);
+	}
+
+	async deleteRole(input: RpcDeleteModelRole): Promise<void> {
+		if (input.scope !== "global" && input.scope !== "project")
+			throw new RpcModelsConfigurationError("scope_mismatch", "Role scope must be global or project");
+		const { settings } = this.session;
+		await settings.reloadFromDisk();
+		this.#requireRole(input.role);
+		if (MODEL_ROLE_IDS.some(role => role === input.role))
+			throw new RpcModelsConfigurationError("builtin_role", "Built-in model roles cannot be deleted");
+		const layer = input.scope === "global" ? settings.getGlobalSettings() : settings.getProjectSettings();
+		const tags = layer.modelTags as Record<string, unknown> | undefined;
+		const scoped = this.#roleValue(input.role, input.scope);
+		if (
+			scoped.selector === null &&
+			scoped.effort === null &&
+			!tags?.[input.role] &&
+			!(Array.isArray(layer.cycleOrder) && layer.cycleOrder.includes(input.role))
+		)
+			throw new RpcModelsConfigurationError("scope_mismatch", "This role is not defined in the selected scope");
+		if (!isDeepStrictEqual(input.expected, scoped))
+			throw new RpcModelsConfigurationError(
+				"configuration_conflict",
+				"This scoped role changed. Refresh before deleting.",
+			);
+		const receipt = await settings.persistWithReceipt(() => deleteCustomRole(input.role, input.scope, settings));
+		if (receipt.status === "conflict")
+			throw new RpcModelsConfigurationError(
+				"configuration_conflict",
+				"This scoped role changed. Refresh before deleting.",
 			);
 	}
 

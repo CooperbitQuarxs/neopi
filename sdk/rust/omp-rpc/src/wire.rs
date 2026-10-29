@@ -2985,6 +2985,12 @@ pub struct ModelRoleConfigurationValue {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelRoleFallbacks {
+	pub chain: Vec<String>,
+	pub efforts: BTreeMap<String, ModelEffortSelection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelEffortRuleScopes {
 	#[serde(deserialize_with = "Deserialize::deserialize")]
 	pub global: Option<Vec<ModelEffortRule>>,
@@ -6647,6 +6653,31 @@ pub struct SetModelRoleConfigurationParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRoleFallbacksParams {
+	pub role: String,
+	pub scope: SetModelRoleFallbacksParamsScope,
+	pub chain: Vec<String>,
+	pub efforts: BTreeMap<String, ModelEffortSelection>,
+	pub expected: ModelRoleFallbacks,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRoleDescriptionParams {
+	pub role: String,
+	pub scope: SetModelRoleDescriptionParamsScope,
+	pub description: String,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub expected: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeleteModelRoleParams {
+	pub role: String,
+	pub scope: DeleteModelRoleParamsScope,
+	pub expected: ModelRoleConfigurationValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetModelRoleStorageParams {
 	pub value: SetModelRoleStorageParamsValue,
 	pub expected: SetModelRoleStorageParamsExpected,
@@ -8270,6 +8301,60 @@ impl SetModelRoleConfigurationParamsScope {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SetModelRoleFallbacksParamsScope {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl SetModelRoleFallbacksParamsScope {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SetModelRoleDescriptionParamsScope {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl SetModelRoleDescriptionParamsScope {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DeleteModelRoleParamsScope {
+	#[serde(rename = "global")]
+	Global,
+	#[serde(rename = "project")]
+	Project,
+}
+
+impl DeleteModelRoleParamsScope {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Global => "global",
+			Self::Project => "project",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SetModelRoleStorageParamsValue {
 	#[serde(rename = "global")]
 	Global,
@@ -8843,7 +8928,7 @@ impl Command for GetModelsConfigurationCommand {
 	}
 }
 
-/// Save or clear one scoped role selector and effort atomically, rejecting a stale expected value.
+/// Save or clear a role selector and effort in the explicit scope, independently of the default role-storage preference.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetModelRoleConfigurationCommand {
 	pub role: String,
@@ -8857,6 +8942,67 @@ pub struct SetModelRoleConfigurationCommand {
 
 impl Command for SetModelRoleConfigurationCommand {
 	const NAME: &'static str = "set_model_role_configuration";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Save one role's native global fallback chain and per-entry efforts, rejecting stale values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRoleFallbacksCommand {
+	pub role: String,
+	pub scope: SetModelRoleFallbacksParamsScope,
+	pub chain: Vec<String>,
+	pub efforts: BTreeMap<String, ModelEffortSelection>,
+	pub expected: ModelRoleFallbacks,
+}
+
+impl Command for SetModelRoleFallbacksCommand {
+	const NAME: &'static str = "set_model_role_fallbacks";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Save one known role's global description without replacing its other metadata.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetModelRoleDescriptionCommand {
+	pub role: String,
+	pub scope: SetModelRoleDescriptionParamsScope,
+	pub description: String,
+	#[serde(deserialize_with = "Deserialize::deserialize")]
+	pub expected: Option<String>,
+}
+
+impl Command for SetModelRoleDescriptionCommand {
+	const NAME: &'static str = "set_model_role_description";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
+/// Delete a custom role definition in one scope; refuse built-ins and preserve inherited definitions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeleteModelRoleCommand {
+	pub role: String,
+	pub scope: DeleteModelRoleParamsScope,
+	pub expected: ModelRoleConfigurationValue,
+}
+
+impl Command for DeleteModelRoleCommand {
+	const NAME: &'static str = "delete_model_role";
 	const TIMEOUT_MS: Option<u64> = None;
 	type Output = ();
 
