@@ -518,6 +518,11 @@ export interface ModelRoleConfigurationValue {
 	effort: ModelEffortSelection | null;
 }
 
+export interface ModelRoleFallbacks {
+	chain: string[];
+	efforts: Record<string, ModelEffortSelection>;
+}
+
 export interface ModelEffortRuleScopes {
 	global: ModelEffortRule[] | null;
 	project: ModelEffortRule[] | null;
@@ -2249,6 +2254,27 @@ export interface SetModelRoleConfigurationParams {
 	effort?: ModelEffortSelection;
 }
 
+export interface SetModelRoleFallbacksParams {
+	role: string;
+	scope: "global" | "project";
+	chain: string[];
+	efforts: Record<string, ModelEffortSelection>;
+	expected: ModelRoleFallbacks;
+}
+
+export interface SetModelRoleDescriptionParams {
+	role: string;
+	scope: "global" | "project";
+	description: string;
+	expected: string | null;
+}
+
+export interface DeleteModelRoleParams {
+	role: string;
+	scope: "global" | "project";
+	expected: ModelRoleConfigurationValue;
+}
+
 export interface SetModelRoleStorageParams {
 	value: "global" | "project";
 	expected: "global" | "project";
@@ -2649,6 +2675,9 @@ export interface RpcWireCommands {
 	set_role: { params: SetRoleParams; result: SetRoleResult };
 	get_models_configuration: { params: undefined; result: GetModelsConfigurationResult };
 	set_model_role_configuration: { params: SetModelRoleConfigurationParams; result: undefined };
+	set_model_role_fallbacks: { params: SetModelRoleFallbacksParams; result: undefined };
+	set_model_role_description: { params: SetModelRoleDescriptionParams; result: undefined };
+	delete_model_role: { params: DeleteModelRoleParams; result: undefined };
 	set_model_role_storage: { params: SetModelRoleStorageParams; result: undefined };
 	set_effort_rules: { params: SetEffortRulesParams; result: undefined };
 	set_provider_api_key: { params: SetProviderApiKeyParams; result: undefined };

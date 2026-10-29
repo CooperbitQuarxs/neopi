@@ -550,28 +550,33 @@ describe("implicit effort policy resolution", () => {
 		expect(resolveImplicitEffort(regexSettings, model, { mode: "auto" }, "role").candidates).toEqual([Effort.Medium]);
 	});
 
-	it("retains case-insensitive Bun glob matching and skips invalid regex before glob fallback", () => {
-		const settings = Settings.isolated({
-			"effort.rules": [
-				{ selector: "re:[", allowed: [Effort.XHigh] },
-				{ selector: "MOCK/{CLASSIFIER,OTHER}", allowed: [Effort.Low] },
-			],
-		});
-		expect(matchEffortRule(settings, model)?.allowed).toEqual([Effort.Low]);
-		expect(
-			resolveImplicitEffort(settings, model, { mode: "auto", selector: "MOCK/CLASS*" }, "role").candidates,
-		).toEqual([Effort.Low]);
-		expect(
-			resolveImplicitEffort(settings, model, { mode: "auto", selector: "re:^mock/classifier$" }, "role").candidates,
-		).toEqual([Effort.Low]);
-		expect(
-			resolveImplicitEffort(
-				settings,
-				model,
-				{ mode: "auto", selector: "re:^mock/other$", allowed: [Effort.High] },
-				"role",
-			).candidates,
-		).toEqual([Effort.Low]);
+	it("retains case-insensitive Bun glob matching and skips invalid loaded regex before glob fallback", async () => {
+		const temp = TempDir.createSync("@pi-effort-loaded-regex-");
+		try {
+			await Bun.write(
+				path.join(temp.path(), "config.yml"),
+				"effort:\n  rules:\n    - selector: 're:['\n      allowed: [xhigh]\n    - selector: 'MOCK/{CLASSIFIER,OTHER}'\n      allowed: [low]\n",
+			);
+			const settings = await Settings.loadReadOnly({ agentDir: temp.path(), cwd: temp.path() });
+			expect(matchEffortRule(settings, model)?.allowed).toEqual([Effort.Low]);
+			expect(
+				resolveImplicitEffort(settings, model, { mode: "auto", selector: "MOCK/CLASS*" }, "role").candidates,
+			).toEqual([Effort.Low]);
+			expect(
+				resolveImplicitEffort(settings, model, { mode: "auto", selector: "re:^mock/classifier$" }, "role")
+					.candidates,
+			).toEqual([Effort.Low]);
+			expect(
+				resolveImplicitEffort(
+					settings,
+					model,
+					{ mode: "auto", selector: "re:^mock/other$", allowed: [Effort.High] },
+					"role",
+				).candidates,
+			).toEqual([Effort.Low]);
+		} finally {
+			await temp.remove();
+		}
 	});
 
 	it("does not promote a saved role default to an explicit override, even when both request the same level", () => {

@@ -253,8 +253,41 @@
 			},
 			{
 				"name": "set_model_role_configuration",
-				"doc": "Save or clear one scoped role selector and effort atomically, rejecting a stale expected value.",
+				"doc": "Save or clear a role selector and effort in the explicit scope, independently of the default role-storage preference.",
 				"params": "SetModelRoleConfigurationParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_model_role_fallbacks",
+				"doc": "Save one role's native global fallback chain and per-entry efforts, rejecting stale values.",
+				"params": "SetModelRoleFallbacksParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_model_role_description",
+				"doc": "Save one known role's global description without replacing its other metadata.",
+				"params": "SetModelRoleDescriptionParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "delete_model_role",
+				"doc": "Delete a custom role definition in one scope; refuse built-ins and preserve inherited definitions.",
+				"params": "DeleteModelRoleParams",
 				"result": null,
 				"nullable": false,
 				"unwrap": null,
@@ -3086,6 +3119,28 @@
 			"required": [
 				"selector",
 				"effort"
+			]
+		},
+		"ModelRoleFallbacks": {
+			"type": "object",
+			"properties": {
+				"chain": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"efforts": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"$ref": "#/$defs/ModelEffortSelection"
+					}
+				}
+			},
+			"required": [
+				"chain",
+				"efforts"
 			]
 		},
 		"ModelEffortRuleScopes": {
@@ -9207,6 +9262,101 @@
 				},
 				"effort": {
 					"$ref": "#/$defs/ModelEffortSelection"
+				}
+			},
+			"required": [
+				"role",
+				"scope",
+				"expected"
+			]
+		},
+		"SetModelRoleFallbacksParams": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"scope": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"chain": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"efforts": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"$ref": "#/$defs/ModelEffortSelection"
+					}
+				},
+				"expected": {
+					"$ref": "#/$defs/ModelRoleFallbacks"
+				}
+			},
+			"required": [
+				"role",
+				"scope",
+				"chain",
+				"efforts",
+				"expected"
+			]
+		},
+		"SetModelRoleDescriptionParams": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"scope": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"description": {
+					"type": "string"
+				},
+				"expected": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"role",
+				"scope",
+				"description",
+				"expected"
+			]
+		},
+		"DeleteModelRoleParams": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"scope": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"expected": {
+					"$ref": "#/$defs/ModelRoleConfigurationValue"
 				}
 			},
 			"required": [

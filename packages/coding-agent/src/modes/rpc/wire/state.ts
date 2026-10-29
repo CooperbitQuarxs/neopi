@@ -98,6 +98,7 @@ export const stateDefs = {
 	},
 	ModelEffortRule: { selector: "string", allowed: "string[]" },
 	ModelRoleConfigurationValue: { selector: "string | null", effort: "ModelEffortSelection | null" },
+	ModelRoleFallbacks: { chain: "string[]", efforts: "Record<string, ModelEffortSelection>" },
 	ModelEffortRuleScopes: { global: "ModelEffortRule[] | null", project: "ModelEffortRule[] | null" },
 	ProviderUsageReport: {
 		provider: "string",

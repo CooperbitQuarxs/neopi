@@ -778,6 +778,12 @@ class ModelRoleConfigurationValue:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ModelRoleFallbacks:
+    chain: tuple[str, ...]
+    efforts: dict[str, ModelEffortSelection]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class ModelEffortRuleScopes:
     global_: tuple[ModelEffortRule, ...] | None
     project: tuple[ModelEffortRule, ...] | None
@@ -2863,6 +2869,14 @@ def parse_model_role_configuration_value(value: object, path: str = "ModelRoleCo
     return ModelRoleConfigurationValue(
         selector=required(payload, "selector", nullable(decode_str), path),
         effort=required(payload, "effort", nullable(parse_model_effort_selection), path),
+    )
+
+
+def parse_model_role_fallbacks(value: object, path: str = "ModelRoleFallbacks") -> ModelRoleFallbacks:
+    payload = expect_object(value, path)
+    return ModelRoleFallbacks(
+        chain=required(payload, "chain", array(decode_str), path),
+        efforts=required(payload, "efforts", record(parse_model_effort_selection), path),
     )
 
 
@@ -5098,7 +5112,7 @@ class WireClient:
         return parse_get_models_configuration_result(self._command("get_models_configuration", params), "get_models_configuration")
 
     def set_model_role_configuration(self, role: str, scope: Literal["global", "project"], expected: Mapping[str, JsonValue], *, selector: str | None = None, effort: Mapping[str, JsonValue] | None = None) -> None:
-        """Save or clear one scoped role selector and effort atomically, rejecting a stale expected value."""
+        """Save or clear a role selector and effort in the explicit scope, independently of the default role-storage preference."""
         params: dict[str, object] = {}
         params["role"] = role
         params["scope"] = scope
@@ -5108,6 +5122,33 @@ class WireClient:
         if effort is not None:
             params["effort"] = dict(effort)
         self._command("set_model_role_configuration", params)
+
+    def set_model_role_fallbacks(self, role: str, scope: Literal["global", "project"], chain: Sequence[str], efforts: dict[str, ModelEffortSelection], expected: Mapping[str, JsonValue]) -> None:
+        """Save one role's native global fallback chain and per-entry efforts, rejecting stale values."""
+        params: dict[str, object] = {}
+        params["role"] = role
+        params["scope"] = scope
+        params["chain"] = list(chain)
+        params["efforts"] = efforts
+        params["expected"] = dict(expected)
+        self._command("set_model_role_fallbacks", params)
+
+    def set_model_role_description(self, role: str, scope: Literal["global", "project"], description: str, expected: str | None) -> None:
+        """Save one known role's global description without replacing its other metadata."""
+        params: dict[str, object] = {}
+        params["role"] = role
+        params["scope"] = scope
+        params["description"] = description
+        params["expected"] = expected
+        self._command("set_model_role_description", params)
+
+    def delete_model_role(self, role: str, scope: Literal["global", "project"], expected: Mapping[str, JsonValue]) -> None:
+        """Delete a custom role definition in one scope; refuse built-ins and preserve inherited definitions."""
+        params: dict[str, object] = {}
+        params["role"] = role
+        params["scope"] = scope
+        params["expected"] = dict(expected)
+        self._command("delete_model_role", params)
 
     def set_model_role_storage(self, value: Literal["global", "project"], expected: Literal["global", "project"]) -> None:
         """Choose native global or project role storage, rejecting a stale preference."""
@@ -5993,6 +6034,7 @@ __all__ = [
     "ModelEffortSelection",
     "ModelInfo",
     "ModelRoleConfigurationValue",
+    "ModelRoleFallbacks",
     "ModelSelectorFacts",
     "ModelSelectorItem",
     "ModelSelectorPerformanceSource",
@@ -6257,6 +6299,7 @@ __all__ = [
     "parse_model_effort_selection",
     "parse_model_info",
     "parse_model_role_configuration_value",
+    "parse_model_role_fallbacks",
     "parse_model_selector_facts",
     "parse_model_selector_item",
     "parse_model_selector_result",

@@ -41,6 +41,9 @@ import type {
 	RpcModelsConfiguration,
 	RpcSetModelRoleConfiguration,
 	RpcSetEffortRules,
+	RpcSetModelRoleFallbacks,
+	RpcSetModelRoleDescription,
+	RpcDeleteModelRole,
 } from "./rpc-models-configuration";
 import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
@@ -124,6 +127,9 @@ export type RpcCommand =
 	| { id?: string; type: "set_role"; role: string }
 	| { id?: string; type: "get_models_configuration" }
 	| ({ id?: string; type: "set_model_role_configuration" } & RpcSetModelRoleConfiguration)
+	| ({ id?: string; type: "set_model_role_fallbacks" } & RpcSetModelRoleFallbacks)
+	| ({ id?: string; type: "set_model_role_description" } & RpcSetModelRoleDescription)
+	| ({ id?: string; type: "delete_model_role" } & RpcDeleteModelRole)
 	| ({ id?: string; type: "set_effort_rules" } & RpcSetEffortRules)
 	| { id?: string; type: "set_model_role_storage"; value: "global" | "project"; expected: "global" | "project" }
 	| { id?: string; type: "set_provider_api_key"; providerId: string; apiKey: string }
@@ -753,6 +759,9 @@ export type RpcResponse =
 			data: Awaited<ReturnType<RpcModelsConfiguration["read"]>>;
 	  }
 	| { id?: string; type: "response"; command: "set_model_role_configuration"; success: true }
+	| { id?: string; type: "response"; command: "set_model_role_fallbacks"; success: true }
+	| { id?: string; type: "response"; command: "set_model_role_description"; success: true }
+	| { id?: string; type: "response"; command: "delete_model_role"; success: true }
 	| { id?: string; type: "response"; command: "set_model_role_storage"; success: true }
 	| { id?: string; type: "response"; command: "set_effort_rules"; success: true }
 	| { id?: string; type: "response"; command: "set_provider_api_key"; success: true }

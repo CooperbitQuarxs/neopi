@@ -64,6 +64,7 @@ import {
 	validateEffortSelection,
 } from "./effort-policy";
 import { cfgRetryFallbackChains } from "../session/settings";
+import { assertValidSelectorPattern } from "./selector-pattern";
 import { cfgShellPath } from "../exec/settings";
 import {
 	CONFIG_TOML,
@@ -2207,7 +2208,10 @@ export class Settings {
 		scope: "global" | "project",
 	): RawSettings {
 		if (!role.trim()) throw new Error("Model role must have a name");
-		if (selector !== undefined) assertRuntimeSelector(selector, `Model role ${role}`);
+		if (selector !== undefined) {
+			assertRuntimeSelector(selector, `Model role ${role}`);
+			assertValidSelectorPattern(selector);
+		}
 		if (selection !== undefined) validateEffortSelection(selection);
 		const source = scope === "global" ? this.#global : this.#project;
 		const staged: RawSettings = { ...source };
@@ -2308,6 +2312,11 @@ export class Settings {
 		previousRole?: string,
 	): void {
 		if (!role.trim()) throw new Error("Fallback chain must name a role");
+		assertValidSelectorPattern(role);
+		for (const selector of chain) {
+			assertRuntimeSelector(selector, `Fallback chain ${role}`);
+			assertValidSelectorPattern(selector);
+		}
 		if (previousRole && previousRole !== role && Object.hasOwn(cfgRetryFallbackChains.get(this), role)) {
 			throw new Error(`Fallback chain already exists: ${role}`);
 		}

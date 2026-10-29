@@ -25,6 +25,15 @@ export function compileSelectorRegex(pattern: string): RegExp | undefined {
 	}
 }
 
+/** Reject malformed authored patterns before persistence; loaded invalid rules remain read-safe. */
+export function assertValidSelectorPattern(pattern: string): void {
+	if (isRegexSelectorPattern(pattern)) {
+		if (!compileSelectorRegex(pattern)) throw new Error(`Invalid model selector regex: ${pattern}`);
+	} else if (isGlobSelectorPattern(pattern)) {
+		new Bun.Glob(pattern);
+	}
+}
+
 /** Match a selector without changing the existing literal and Bun glob behavior. */
 export function matchesSelectorPattern(pattern: string, selector: string): boolean {
 	if (isRegexSelectorPattern(pattern)) return compileSelectorRegex(pattern)?.test(selector) ?? false;

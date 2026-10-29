@@ -9,6 +9,7 @@
 
 ### Added
 
+- RPC clients can edit role fallbacks and descriptions, delete custom role definitions, and explicitly save project assignments without changing the global storage preference ([#595](https://github.com/PsychedelicShayna/neopi/issues/595)).
 - RPC clients can detect connection-owned host-tool registration through the `connection_owned_host_tools` capability before registering tools ([#593](https://github.com/PsychedelicShayna/neopi/issues/593)).
 - Reconnecting RPC observers can reconcile streamed messages with durable journal entries even when they missed the persistence notification ([#587](https://github.com/PsychedelicShayna/neopi/issues/587)).
 - Attached graphical clients can observe native journal commits, tree-leaf and session changes without polling, immediately recover an in-flight reply on reconnect, and match streamed replies to durable journal IDs ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
