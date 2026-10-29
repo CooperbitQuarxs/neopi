@@ -1177,7 +1177,7 @@ export type CacheWarmingOutcome = "hit" | "miss" | "error" | "aborted";
 export type NotifyType = "info" | "warning" | "error";
 
 export interface MessageEntryIdentity {
-	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
+	/** Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format. */
 	messageId: string;
 	entryId: string;
 }
@@ -1205,7 +1205,7 @@ export interface MessagePersistedEvent {
 	sessionId: string;
 	sessionFile: string | null;
 	leafId: string | null;
-	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
+	/** Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format. */
 	messageId: string;
 	entryId: string;
 }
@@ -1420,7 +1420,7 @@ export interface TurnEndEvent {
 export interface MessageStartEvent {
 	type: "message_start";
 	message: AgentMessage;
-	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
+	/** Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format. */
 	messageId?: string;
 	/** True for the current unsaved assistant at an ordered native snapshot boundary. */
 	snapshot?: boolean;
@@ -1438,7 +1438,7 @@ export interface MessageUpdateEvent {
 	type: "message_update";
 	message: AgentMessage;
 	assistantMessageEvent: AssistantMessageEvent;
-	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
+	/** Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format. */
 	messageId?: string;
 	requestModelProvider?: string;
 	requestModelId?: string;
@@ -1450,7 +1450,7 @@ export interface MessageUpdateEvent {
 export interface MessageEndEvent {
 	type: "message_end";
 	message: AgentMessage;
-	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
+	/** Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format. */
 	messageId?: string;
 	requestModelProvider?: string;
 	requestModelId?: string;

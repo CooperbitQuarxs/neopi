@@ -28,6 +28,7 @@ export interface MessageEntryIdentity {
 /** Bounded, content-free recovery history for one native session owner. */
 export const MESSAGE_ENTRY_IDENTITY_LIMIT = 256;
 interface OwnerLiveMessageIds {
+	incarnation: string;
 	next: number;
 	sessionId: string;
 	sessionFile: string | undefined;
@@ -44,6 +45,7 @@ function ownerLiveMessageIds(owner: LiveMessageOwner): OwnerLiveMessageIds {
 	let ownerIds = liveMessageIds.get(owner);
 	if (!ownerIds || ownerIds.sessionId !== sessionId || ownerIds.sessionFile !== sessionFile) {
 		ownerIds = {
+			incarnation: ownerIds?.incarnation ?? Bun.randomUUIDv7(),
 			next: ownerIds?.next ?? 0,
 			sessionId,
 			sessionFile,
@@ -75,11 +77,11 @@ export function getDurableMessageEntryIdentities(
 	return identities;
 }
 
-/** Share unsaved identity across transports, without retaining content or inventing journal IDs. */
+/** Opaque, incarnation-unique unsaved identity shared across an owner's transports. */
 export function liveMessageId(owner: LiveMessageOwner, message: AgentMessage, existingId?: string): string {
 	const ownerIds = ownerLiveMessageIds(owner);
 	const native = getMessageEntrySource(message);
-	const id = existingId ?? ownerIds.ids.get(native) ?? `msg-${++ownerIds.next}`;
+	const id = existingId ?? ownerIds.ids.get(native) ?? `msg-${ownerIds.incarnation}-${++ownerIds.next}`;
 	ownerIds.ids.set(native, id);
 	const previous = messageLiveIdentities.get(native);
 	if (previous?.ownerIds !== ownerIds || previous.messageId !== id) {
