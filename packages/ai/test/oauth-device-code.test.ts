@@ -78,26 +78,34 @@ describe("OAuth device-code polling", () => {
 		if (policy?.kind !== "device-code") throw new Error("Missing native device-code policy");
 		const controller = new AbortController();
 		const auth: OAuthAuthInfo[] = [];
-		const login = createDeviceCodeLogin({ ...policy, instructions: "Finish signing in at the verification URL" }, "factory-droid");
-		await expect(login({
-			signal: controller.signal,
-			fetch: (async () => Response.json({
-				user_code: "ACTUAL-USER-CODE",
-				device_code: "private-polling-secret",
-				verification_uri: "https://example.com/verify",
-				interval: 0,
-				expires_in: 60,
-			})) as typeof fetch,
-			onAuth: info => {
-				auth.push(info);
-				controller.abort();
+		const login = createDeviceCodeLogin(
+			{ ...policy, instructions: "Finish signing in at the verification URL" },
+			"factory-droid",
+		);
+		await expect(
+			login({
+				signal: controller.signal,
+				fetch: (async () =>
+					Response.json({
+						user_code: "ACTUAL-USER-CODE",
+						device_code: "private-polling-secret",
+						verification_uri: "https://example.com/verify",
+						interval: 0,
+						expires_in: 60,
+					})) as typeof fetch,
+				onAuth: info => {
+					auth.push(info);
+					controller.abort();
+				},
+			}),
+		).rejects.toThrow("Login cancelled");
+		expect(auth).toEqual([
+			{
+				url: "https://example.com/verify",
+				userCode: "ACTUAL-USER-CODE",
+				instructions: "Finish signing in at the verification URL",
 			},
-		})).rejects.toThrow("Login cancelled");
-		expect(auth).toEqual([{
-			url: "https://example.com/verify",
-			userCode: "ACTUAL-USER-CODE",
-			instructions: "Finish signing in at the verification URL",
-		}]);
+		]);
 		expect(JSON.stringify(auth)).not.toContain("private-polling-secret");
 	});
 });

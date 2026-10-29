@@ -50,7 +50,12 @@ describe("native provider and account RPC contracts", () => {
 			accountId,
 			email: `${accountId}@example.com`,
 		});
-		const entry = entries.find(entry => entry.provider === provider && entry.credential.type === "oauth" && entry.credential.accountId === accountId);
+		const entry = entries.find(
+			entry =>
+				entry.provider === provider &&
+				entry.credential.type === "oauth" &&
+				entry.credential.accountId === accountId,
+		);
 		if (!entry) throw new Error("Missing saved test account");
 		return entry.id;
 	}
@@ -59,16 +64,40 @@ describe("native provider and account RPC contracts", () => {
 		auth.keys.setRuntime("openai-codex", "secret-runtime-key");
 		const response = await commands.handle({ type: "get_login_providers" });
 		if (!response.success || response.command !== "get_login_providers") throw new Error("Missing login providers");
-		expect(response.data.providers.find(provider => provider.id === "charm-hyper")).toMatchObject({ loginKind: "api-key", deviceCode: false });
-		expect(response.data.providers.find(provider => provider.id === "anthropic")).toMatchObject({ loginKind: "oauth-code", deviceCode: false, acceptsKeys: true });
-		expect(response.data.providers.find(provider => provider.id === "kimi-code")).toMatchObject({ loginKind: "device-code", deviceCode: true });
-		expect(response.data.providers.find(provider => provider.id === "github-copilot")).toMatchObject({ loginKind: "custom", deviceCode: true });
-		expect(response.data.providers.find(provider => provider.id === "openai-codex-device")).toMatchObject({ loginKind: "custom", deviceCode: true, storeCredentialsAs: "openai-codex", authenticated: true, acceptsKeys: true });
+		expect(response.data.providers.find(provider => provider.id === "charm-hyper")).toMatchObject({
+			loginKind: "api-key",
+			deviceCode: false,
+		});
+		expect(response.data.providers.find(provider => provider.id === "anthropic")).toMatchObject({
+			loginKind: "oauth-code",
+			deviceCode: false,
+			acceptsKeys: true,
+		});
+		expect(response.data.providers.find(provider => provider.id === "kimi-code")).toMatchObject({
+			loginKind: "device-code",
+			deviceCode: true,
+		});
+		expect(response.data.providers.find(provider => provider.id === "github-copilot")).toMatchObject({
+			loginKind: "custom",
+			deviceCode: true,
+		});
+		expect(response.data.providers.find(provider => provider.id === "openai-codex-device")).toMatchObject({
+			loginKind: "custom",
+			deviceCode: true,
+			storeCredentialsAs: "openai-codex",
+			authenticated: true,
+			acceptsKeys: true,
+		});
 		expect(response.data.providers.find(provider => provider.id === "exa")).toMatchObject({ acceptsKeys: false });
 		const configuration = await new RpcModelsConfiguration(session).read();
 		const codex = configuration.providers.find(provider => provider.id === "openai-codex");
-		expect(codex?.loginProviders.find(provider => provider.id === "openai-codex-device")).toMatchObject({ loginKind: "custom", deviceCode: true, storeCredentialsAs: "openai-codex" });
-		for (const provider of configuration.providers) expect(provider.acceptsKeys).toBe(registry.hasProvider(provider.id));
+		expect(codex?.loginProviders.find(provider => provider.id === "openai-codex-device")).toMatchObject({
+			loginKind: "custom",
+			deviceCode: true,
+			storeCredentialsAs: "openai-codex",
+		});
+		for (const provider of configuration.providers)
+			expect(provider.acceptsKeys).toBe(registry.hasProvider(provider.id));
 		expect(JSON.stringify([response, configuration])).not.toContain("secret-runtime-key");
 	});
 
@@ -89,17 +118,20 @@ describe("native provider and account RPC contracts", () => {
 			pending: new Map(),
 			input: async () => undefined,
 		});
-		expect(await login.handle({ type: "login", providerId: "openai-codex-device", id: "device-login" }))
-			.toMatchObject({ success: true, data: { providerId: "openai-codex-device" } });
-		expect(frames).toEqual([{
-			type: "extension_ui_request",
-			id: expect.any(String),
-			method: "open_url",
-			url: "https://example.com/verify",
-			instructions: "Complete verification",
-			userCode: "REAL-CODE",
-			loginId: "device-login",
-		}]);
+		expect(
+			await login.handle({ type: "login", providerId: "openai-codex-device", id: "device-login" }),
+		).toMatchObject({ success: true, data: { providerId: "openai-codex-device" } });
+		expect(frames).toEqual([
+			{
+				type: "extension_ui_request",
+				id: expect.any(String),
+				method: "open_url",
+				url: "https://example.com/verify",
+				instructions: "Complete verification",
+				userCode: "REAL-CODE",
+				loginId: "device-login",
+			},
+		]);
 	});
 
 	test("activation pins a noncurrent provider only for this session and journals its identity hash once", async () => {
@@ -107,15 +139,30 @@ describe("native provider and account RPC contracts", () => {
 		const second = await saveAccount("openai-codex", "second");
 		expect(auth.sessions.pin("openai-codex", "other-session", first)).toBe(true);
 		const before = session.model;
-		const response = await commands.handle({ id: "activate", type: "activate_account", providerId: "openai-codex", credentialId: second });
+		const response = await commands.handle({
+			id: "activate",
+			type: "activate_account",
+			providerId: "openai-codex",
+			credentialId: second,
+		});
 		expect(response).toEqual({ id: "activate", type: "response", command: "activate_account", success: true });
-		expect(auth.oauth.accounts("openai-codex", session.sessionId).find(account => account.active)?.credentialId).toBe(second);
-		expect(auth.oauth.accounts("openai-codex", "other-session").find(account => account.active)?.credentialId).toBe(first);
+		expect(auth.oauth.accounts("openai-codex", session.sessionId).find(account => account.active)?.credentialId).toBe(
+			second,
+		);
+		expect(auth.oauth.accounts("openai-codex", "other-session").find(account => account.active)?.credentialId).toBe(
+			first,
+		);
 		expect(session.model).toBe(before);
-		expect(manager.getCredentialPins().get("openai-codex")?.hash).toBe(credentialPinHash("openai-codex", { accountId: "second", email: "second@example.com" }));
+		expect(manager.getCredentialPins().get("openai-codex")?.hash).toBe(
+			credentialPinHash("openai-codex", { accountId: "second", email: "second@example.com" }),
+		);
 		await commands.handle({ type: "activate_account", providerId: "openai-codex", credentialId: second });
 		expect(manager.getBranch().filter(entry => entry.type === "credential_pin")).toHaveLength(1);
-		const serialized = JSON.stringify([response, manager.getBranch(), await commands.handle({ type: "get_logout_accounts", providerId: "openai-codex" })]);
+		const serialized = JSON.stringify([
+			response,
+			manager.getBranch(),
+			await commands.handle({ type: "get_logout_accounts", providerId: "openai-codex" }),
+		]);
 		expect(serialized).not.toContain("secret-access-");
 		expect(serialized).not.toContain("secret-refresh-");
 	});
@@ -142,18 +189,27 @@ describe("native provider and account RPC contracts", () => {
 			const response = await commands.handle(command);
 			expect(response).toMatchObject({ success: false, code: "invalid_value" });
 			expect(JSON.stringify(response)).not.toContain("secret-");
-			expect(auth.oauth.accounts("openai-codex", session.sessionId).find(account => account.active)?.credentialId).toBe(account);
+			expect(
+				auth.oauth.accounts("openai-codex", session.sessionId).find(account => account.active)?.credentialId,
+			).toBe(account);
 			expect(manager.getCredentialPins().get("openai-codex")).toEqual(pin);
 		}
 	});
 
 	test("busy activation and runtime auth overrides do not create a journal pin", async () => {
 		const account = await saveAccount("openai-codex", "candidate");
-		const streaming = vi.spyOn(session, "isStreaming", "get").mockReturnValue(true);
-		expect(await commands.handle({ type: "activate_account", providerId: "openai-codex", credentialId: account })).toMatchObject({ success: false, code: "session_busy" });
-		streaming.mockRestore();
+		session.agent.state.isStreaming = true;
+		try {
+			expect(
+				await commands.handle({ type: "activate_account", providerId: "openai-codex", credentialId: account }),
+			).toMatchObject({ success: false, code: "session_busy" });
+		} finally {
+			session.agent.state.isStreaming = false;
+		}
 		auth.keys.setRuntime("openai-codex", "secret-override");
-		expect(await commands.handle({ type: "activate_account", providerId: "openai-codex", credentialId: account })).toMatchObject({ success: false, code: "invalid_value" });
+		expect(
+			await commands.handle({ type: "activate_account", providerId: "openai-codex", credentialId: account }),
+		).toMatchObject({ success: false, code: "invalid_value" });
 		expect(manager.getCredentialPins().size).toBe(0);
 	});
 });

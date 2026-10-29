@@ -203,7 +203,10 @@ export class RpcModelsCommands {
 						throw new Error("Unknown native inference provider");
 					await session.modelRegistry.authStorage.credentials.reload();
 					if (session.isStreaming || session.isCompacting)
-						throw new RpcModelsConfigurationError("session_busy", "Cannot activate an account while the session is busy");
+						throw new RpcModelsConfigurationError(
+							"session_busy",
+							"Cannot activate an account while the session is busy",
+						);
 					if (!session.pinProviderOAuthAccount(command.providerId, command.credentialId))
 						throw new Error("This OAuth account is unavailable for the provider and session");
 					return success();

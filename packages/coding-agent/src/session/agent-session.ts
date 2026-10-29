@@ -459,7 +459,13 @@ import {
 	type SessionAdvisorsHost,
 } from "./session-advisors";
 import type { BuildSessionContextOptions, SessionContext } from "./session-context";
-import { clearLiveMessageId, getMessageEntryId, linkMessageEntrySource, observeLiveMessageId, setMessageEntryId } from "./message-entry-ids";
+import {
+	clearLiveMessageId,
+	getMessageEntryId,
+	linkMessageEntrySource,
+	observeLiveMessageId,
+	setMessageEntryId,
+} from "./message-entry-ids";
 import { buildSessionContext, getRestorableSessionModels, isTranscriptEntry } from "./session-context";
 import type { CacheWarmer, CacheWarmingMode, CacheWarmingStatus } from "./cache-warmer";
 import { isUserRequestEntry, transcriptEntryMessage, userTurnDraft } from "@oh-my-pi/pi-tui/chat/transcript-entry";
@@ -5939,7 +5945,6 @@ export class AgentSession implements SettingsScope {
 		this.#messagePersistenceListeners.add(listener);
 		return () => this.#messagePersistenceListeners.delete(listener);
 	}
-
 
 	subscribeCommandMetadataChanged(listener: CommandMetadataChangedListener): () => void {
 		this.#commandMetadataChangedListeners.push(listener);
