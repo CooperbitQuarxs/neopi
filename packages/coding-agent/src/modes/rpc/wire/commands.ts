@@ -258,7 +258,7 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	},
 	{
 		name: "snapshot_session_journal",
-		doc: "Emit native journal identity and current unsaved assistant before responding, without replacing subscriptions.",
+		doc: "Emit native journal identity, retained durable message associations and current unsaved assistant before responding, without replacing subscriptions.",
 		result: "JournalIdentity",
 	},
 	{

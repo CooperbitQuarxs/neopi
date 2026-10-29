@@ -254,8 +254,12 @@ function isRpcJournalEvent(value: unknown): value is RpcJournalEventFrame {
 	if (!isRecord(value) || typeof value.sessionId !== "string" ||
 		!(value.sessionFile === null || typeof value.sessionFile === "string") ||
 		!(value.leafId === null || typeof value.leafId === "string")) return false;
-	if (value.type === "journal_state")
-		return value.reason === "snapshot" || value.reason === "identity" || value.reason === "leaf";
+	if (value.type === "journal_state") {
+		if (value.reason !== "snapshot" && value.reason !== "identity" && value.reason !== "leaf") return false;
+		return value.messageEntryIds === undefined || (Array.isArray(value.messageEntryIds) &&
+			value.messageEntryIds.every(identity => isRecord(identity) &&
+				typeof identity.messageId === "string" && typeof identity.entryId === "string"));
+	}
 	if (value.type === "journal_entry") return isRecord(value.entry) && typeof value.entry.id === "string";
 	if (value.type === "message_start")
 		return value.snapshot === true && typeof value.messageId === "string" &&

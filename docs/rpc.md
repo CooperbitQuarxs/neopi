@@ -477,7 +477,7 @@ Observers subscribe before the initial `journal_state` snapshot. Attach with
 Buffer notifications while fetching the initial pages, deduplicate entries by
 their native IDs and discard the old binding when either session ID or file
 changes. Restart branch paging when the leaf changes. The initial state frame
-contains identity, not a second copy of the journal.
+contains identity and bounded recovery mappings, not a second copy of the journal.
 
 For a new watcher on an already connected runtime, register the local event
 listener, then send `snapshot_session_journal` before reading history pages.
@@ -503,6 +503,28 @@ not a durability receipt. Failed or intentionally skipped persistence produces
 no association. Recovery announces entries only after native persistence succeeds.
 Messages already present in the initial history use their native entry IDs;
 they need no live-message association.
+
+On every attachment and `snapshot_session_journal`, the `journal_state` frame
+with `reason: "snapshot"` also includes `messageEntryIds`:
+
+```json
+{ "type": "journal_state", "reason": "snapshot", "sessionId": "01a0...", "sessionFile": "/srv/session.jsonl", "leafId": "a12bc345", "messageEntryIds": [{ "messageId": "msg-7", "entryId": "a12bc345" }] }
+```
+
+Use these authoritative pairs to reconcile cached live output when a disconnect
+lost its `message_persisted` frame, even if no assistant is currently streaming.
+Connected observers still receive the original one-shot persistence frame.
+Mappings belong to the native session owner, not an observer: disconnecting all
+observers or finishing a run does not clear them. The owner retains only ID
+strings for its last **256 live messages assigned entry IDs**, in association
+order, and snapshots publish only those whose entries are currently durable.
+Queued/failed writes never become durability receipts. Repeated snapshots do not
+consume mappings; ordinary branch navigation retains them. A session ID/file
+change or native process restart clears the recovery window. Older producers
+omit `messageEntryIds`; current producers send an empty array when none qualify.
+Absence of a pair, including eviction from this bounded window, does **not**
+prove that a live message was discarded or not persisted. Do not content-match
+or silently drop unmatched output.
 
 These frames respect `set_event_filter`, including `message_start` for snapshots. Protocol v2 uses the existing
 chunking limits for large entries without truncation. The TypeScript client

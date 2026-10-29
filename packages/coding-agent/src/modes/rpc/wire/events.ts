@@ -24,8 +24,10 @@ export const eventDefs = {
 	CacheWarmingOutcome: "'hit' | 'miss' | 'error' | 'aborted'",
 	NotifyType: "'info' | 'warning' | 'error'",
 
+	MessageEntryIdentity: { messageId: MESSAGE_ID, entryId: "string" },
 	JournalStateEvent: {
 		type: "'journal_state'", ...JOURNAL_IDENTITY, reason: "'snapshot' | 'identity' | 'leaf'",
+		"messageEntryIds?": doc("MessageEntryIdentity[]", "Snapshot-only durable associations among the last 256 live messages assigned entry IDs by this native owner. Retained across observer reconnects, cleared on session identity change or process restart; absence is not evidence a message was not persisted."),
 	},
 	JournalEntryEvent: {
 		type: "'journal_entry'", ...JOURNAL_IDENTITY, entry: JSON_OBJECT,

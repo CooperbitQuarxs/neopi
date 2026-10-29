@@ -6,7 +6,12 @@ import { RpcSessionEventForwarder } from "../src/modes/rpc/rpc-session-events";
 import type { RpcProjectedSessionEventFrame } from "../src/modes/rpc/rpc-types";
 import type { SessionJournalEvent } from "../src/session/session-journal-events";
 import { SessionManager } from "../src/session/session-manager";
-import { linkMessageEntrySource } from "../src/session/message-entry-ids";
+import {
+	linkMessageEntrySource,
+	MESSAGE_ENTRY_IDENTITY_LIMIT,
+	observeLiveMessageId,
+	setMessageEntryId,
+} from "../src/session/message-entry-ids";
 import {
 	MemorySessionStorage,
 	type SessionStorageWriteOptions,
@@ -173,6 +178,8 @@ describe("native journal notifications", () => {
 		live.settle(message);
 		expect(live.frames.some(frame => frame.type === "message_persisted")).toBe(false);
 		storage.refuse = false;
+		live.forwarder.snapshotJournal(live.source);
+		expect(live.frames.at(-1)).toMatchObject({ type: "journal_state", reason: "snapshot", messageEntryIds: [] });
 		await manager.recoverPersistenceFromCurrentState();
 		expect(live.frames.filter(frame => frame.type === "message_persisted")).toEqual([
 			{ type: "message_persisted", ...manager.getJournalIdentity(), messageId: "msg-1", entryId },
@@ -184,6 +191,94 @@ describe("native journal notifications", () => {
 		manager.appendMessage(old);
 		live.settle(old);
 		expect(live.frames.filter(frame => frame.type === "message_persisted")).toHaveLength(1);
+		live.forwarder.dispose();
+		await manager.close();
+	});
+
+	test("a disconnected observer recovers missed persistence from the native snapshot without an active stream", async () => {
+		await using dir = await TempDir.create("@journal-events-reconnect-");
+		const manager = SessionManager.create(dir.path(), dir.path(), new MemorySessionStorage());
+		await manager.ensureOnDisk();
+		const message = makeAssistantMessage();
+		observeLiveMessageId(manager, message);
+		const first = transport(manager, message);
+		const start = first.frames.find(frame => frame.type === "message_start");
+		if (!start || start.type !== "message_start") throw new Error("missing live assistant snapshot");
+		first.forwarder.dispose();
+
+		// The native owner continues while every transport is detached.
+		const completed = { ...message, content: [{ type: "text" as const, text: "completed while disconnected" }] };
+		observeLiveMessageId(manager, completed, true);
+		const entryId = manager.appendMessage(completed);
+		await manager.flush();
+		expect(first.frames.some(frame => frame.type === "message_persisted")).toBe(false);
+		expect(manager.getEntry(entryId)).toMatchObject({ id: entryId, message: completed });
+
+		const reattached = transport(manager);
+		const expected = {
+			type: "journal_state",
+			reason: "snapshot",
+			...manager.getJournalIdentity(),
+			messageEntryIds: [{ messageId: start.messageId, entryId }],
+		} satisfies RpcProjectedSessionEventFrame;
+		expect(reattached.frames).toEqual([expected]);
+		reattached.forwarder.snapshotJournal(reattached.source);
+		expect(reattached.frames).toEqual([expected, expected]);
+		reattached.forwarder.dispose();
+		await manager.close();
+	});
+
+	test("recovery waits for queued durability even when the observer that ended the message is gone", async () => {
+		await using dir = await TempDir.create("@journal-events-reconnect-queued-");
+		const storage = new GatedStorage();
+		const manager = SessionManager.create(dir.path(), dir.path(), storage);
+		await manager.ensureOnDisk();
+		const message = makeAssistantMessage();
+		const first = transport(manager);
+		first.forwarder.forward({ type: "message_start", message });
+		first.forwarder.forward({ type: "message_end", message });
+		first.forwarder.dispose();
+		const entryId = manager.appendMessage(message);
+		const reattached = transport(manager);
+		expect(reattached.frames.at(-1)).toMatchObject({ messageEntryIds: [] });
+		storage.publish.resolve();
+		await manager.flush();
+		reattached.forwarder.snapshotJournal(reattached.source);
+		expect(reattached.frames.at(-1)).toMatchObject({
+			type: "journal_state",
+			reason: "snapshot",
+			messageEntryIds: [{ messageId: "msg-1", entryId }],
+		});
+		reattached.forwarder.dispose();
+		await manager.close();
+	});
+
+	test("recovery bounds ID-only history and clears it on owner replacement but not branch navigation", async () => {
+		await using dir = await TempDir.create("@journal-events-recovery-limit-");
+		const manager = SessionManager.create(dir.path(), dir.path(), new MemorySessionStorage());
+		await manager.ensureOnDisk();
+		const pairs: Array<{ messageId: string; entryId: string }> = [];
+		let oldest: AgentMessage | undefined;
+		for (let index = 0; index < MESSAGE_ENTRY_IDENTITY_LIMIT + 2; index++) {
+			const message = makeAssistantMessage();
+			oldest ??= message;
+			const messageId = observeLiveMessageId(manager, message, true);
+			pairs.push({ messageId, entryId: manager.appendMessage(message) });
+		}
+		await manager.flush();
+		const live = transport(manager);
+		expect(live.frames.at(-1)).toMatchObject({ messageEntryIds: pairs.slice(2) });
+		manager.branch(pairs[0].entryId);
+		live.forwarder.snapshotJournal(live.source);
+		expect(live.frames.at(-1)).toMatchObject({ messageEntryIds: pairs.slice(2) });
+		await manager.newSession();
+		live.forwarder.snapshotJournal(live.source);
+		expect(live.frames.at(-1)).toMatchObject({ messageEntryIds: [] });
+		// A late write belonging to the abandoned owner cannot repopulate its replacement.
+		if (!oldest) throw new Error("missing old message");
+		setMessageEntryId(oldest, pairs[0].entryId);
+		live.forwarder.snapshotJournal(live.source);
+		expect(live.frames.at(-1)).toMatchObject({ messageEntryIds: [] });
 		live.forwarder.dispose();
 		await manager.close();
 	});

@@ -535,7 +535,7 @@ describe("control host", () => {
 		});
 		await client.connect();
 		await client.request({ type: "subscribe", events: "all" });
-		expect(frames.find(frame => frame.type === "journal_state")).toEqual({
+		expect(frames.find(frame => frame.type === "journal_state")).toMatchObject({
 			type: "journal_state",
 			reason: "snapshot",
 			...manager.getJournalIdentity(),
@@ -572,6 +572,11 @@ describe("control host", () => {
 			entryId: receipt.entryId,
 		});
 		expect(manager.isEntryDurable(String(receipt.entryId))).toBe(true);
+		await client.request({ type: "snapshot_session_journal" });
+		expect(frames.findLast(frame => frame.type === "journal_state")).toMatchObject({
+			reason: "snapshot",
+			messageEntryIds: expect.arrayContaining([{ messageId: receipt.messageId, entryId: receipt.entryId }]),
+		});
 		expect(
 			frames.find(frame => frame.type === "journal_entry" && (frame.entry as { id: string }).id === receipt.entryId),
 		).toMatchObject({

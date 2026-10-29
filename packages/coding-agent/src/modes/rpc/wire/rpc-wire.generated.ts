@@ -1176,12 +1176,20 @@ export type CacheWarmingOutcome = "hit" | "miss" | "error" | "aborted";
 
 export type NotifyType = "info" | "warning" | "error";
 
+export interface MessageEntryIdentity {
+	/** Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID. */
+	messageId: string;
+	entryId: string;
+}
+
 export interface JournalStateEvent {
 	type: "journal_state";
 	sessionId: string;
 	sessionFile: string | null;
 	leafId: string | null;
 	reason: "snapshot" | "identity" | "leaf";
+	/** Snapshot-only durable associations among the last 256 live messages assigned entry IDs by this native owner. Retained across observer reconnects, cleared on session identity change or process restart; absence is not evidence a message was not persisted. */
+	messageEntryIds?: MessageEntryIdentity[];
 }
 
 export interface JournalEntryEvent {

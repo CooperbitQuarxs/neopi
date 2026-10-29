@@ -15,6 +15,7 @@ import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
+import type { MessageEntryIdentity } from "../../session/message-entry-ids";
 import type { FileEntry, SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import type { UsageLimitState } from "../../session/usage-limit";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
@@ -931,7 +932,15 @@ export type RpcMessagePersistedFrame = SessionJournalIdentity & {
 	messageId: string;
 	entryId: string;
 };
-export type RpcJournalEventFrame = SessionJournalEvent | RpcMessagePersistedFrame | RpcMessageSnapshotFrame;
+/** Snapshot-only recovery identities; absent on older producers and non-snapshot state changes. */
+export type RpcJournalStateFrame = Extract<SessionJournalEvent, { type: "journal_state" }> & {
+	messageEntryIds?: MessageEntryIdentity[];
+};
+export type RpcJournalEventFrame =
+	| Exclude<SessionJournalEvent, { type: "journal_state" }>
+	| RpcJournalStateFrame
+	| RpcMessagePersistedFrame
+	| RpcMessageSnapshotFrame;
 
 /** Session event as written to stdout by default: message lifecycle events carry a `messageId`. */
 export type RpcAgentSessionEventFrame =

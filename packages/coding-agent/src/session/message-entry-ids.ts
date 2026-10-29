@@ -19,29 +19,60 @@ import type { SessionManager } from "./session-manager";
 const messageEntryIds = new WeakMap<AgentMessage, string>();
 const messageEntrySources = new WeakMap<AgentMessage, AgentMessage>();
 type LiveMessageOwner = Pick<SessionManager, "getSessionId" | "getSessionFile">;
+
+export interface MessageEntryIdentity {
+	messageId: string;
+	entryId: string;
+}
+
+/** Bounded, content-free recovery history for one native session owner. */
+export const MESSAGE_ENTRY_IDENTITY_LIMIT = 256;
 interface OwnerLiveMessageIds {
 	next: number;
 	sessionId: string;
 	sessionFile: string | undefined;
 	ids: WeakMap<AgentMessage, string>;
 	assistantId: string | undefined;
+	entryIds: Map<string, string>;
 }
 const liveMessageIds = new WeakMap<LiveMessageOwner, OwnerLiveMessageIds>();
+const messageLiveIdentities = new WeakMap<AgentMessage, { ownerIds: OwnerLiveMessageIds; messageId: string }>();
 
 function ownerLiveMessageIds(owner: LiveMessageOwner): OwnerLiveMessageIds {
 	const sessionId = owner.getSessionId();
 	const sessionFile = owner.getSessionFile();
 	let ownerIds = liveMessageIds.get(owner);
-	if (!ownerIds) {
-		ownerIds = { next: 0, sessionId, sessionFile, ids: new WeakMap(), assistantId: undefined };
+	if (!ownerIds || ownerIds.sessionId !== sessionId || ownerIds.sessionFile !== sessionFile) {
+		ownerIds = {
+			next: ownerIds?.next ?? 0,
+			sessionId,
+			sessionFile,
+			ids: new WeakMap(),
+			assistantId: undefined,
+			entryIds: new Map(),
+		};
 		liveMessageIds.set(owner, ownerIds);
-	} else if (ownerIds.sessionId !== sessionId || ownerIds.sessionFile !== sessionFile) {
-		ownerIds.sessionId = sessionId;
-		ownerIds.sessionFile = sessionFile;
-		ownerIds.ids = new WeakMap();
-		ownerIds.assistantId = undefined;
 	}
 	return ownerIds;
+}
+
+function retainEntryIdentity(ownerIds: OwnerLiveMessageIds, messageId: string, entryId: string): void {
+	ownerIds.entryIds.set(messageId, entryId);
+	if (ownerIds.entryIds.size > MESSAGE_ENTRY_IDENTITY_LIMIT) {
+		const oldest = ownerIds.entryIds.keys().next().value;
+		if (oldest !== undefined) ownerIds.entryIds.delete(oldest);
+	}
+}
+
+/** Most recent durable associations, oldest first, independent of transport subscriptions. */
+export function getDurableMessageEntryIdentities(
+	owner: LiveMessageOwner & Pick<SessionManager, "isEntryDurable">,
+): MessageEntryIdentity[] {
+	const identities: MessageEntryIdentity[] = [];
+	for (const [messageId, entryId] of ownerLiveMessageIds(owner).entryIds) {
+		if (owner.isEntryDurable(entryId)) identities.push({ messageId, entryId });
+	}
+	return identities;
 }
 
 /** Share unsaved identity across transports, without retaining content or inventing journal IDs. */
@@ -50,6 +81,12 @@ export function liveMessageId(owner: LiveMessageOwner, message: AgentMessage, ex
 	const native = getMessageEntrySource(message);
 	const id = existingId ?? ownerIds.ids.get(native) ?? `msg-${++ownerIds.next}`;
 	ownerIds.ids.set(native, id);
+	const previous = messageLiveIdentities.get(native);
+	if (previous?.ownerIds !== ownerIds || previous.messageId !== id) {
+		messageLiveIdentities.set(native, { ownerIds, messageId: id });
+		const entryId = getMessageEntryId(native);
+		if (entryId !== undefined) retainEntryIdentity(ownerIds, id, entryId);
+	}
 	return id;
 }
 
@@ -77,6 +114,8 @@ export function getMessageEntrySource(message: AgentMessage): AgentMessage {
 /** Record `entryId` as the session entry behind `message`. Returns `entryId`. */
 export function setMessageEntryId(message: AgentMessage, entryId: string): string {
 	messageEntryIds.set(message, entryId);
+	const live = messageLiveIdentities.get(getMessageEntrySource(message));
+	if (live) retainEntryIdentity(live.ownerIds, live.messageId, entryId);
 	return entryId;
 }
 
