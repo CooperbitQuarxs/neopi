@@ -907,7 +907,7 @@ export type RpcMessageEventType = "message_start" | "message_update" | "message_
 /**
  * Message lifecycle frame as written by RPC mode. `messageId` is shared by the
  * `message_start`, every `message_update`, and the `message_end` of one message;
- * it is unique within the RPC process.
+ * native-owner IDs are opaque and remain distinct across owner incarnations.
  */
 export type RpcMessageEventFrame = Extract<AgentSessionEvent, { type: RpcMessageEventType }> & { messageId: string };
 

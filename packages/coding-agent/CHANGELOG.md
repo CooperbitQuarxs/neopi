@@ -113,6 +113,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Reopened native sessions no longer reuse live message IDs that could misassociate cached pre-restart output with a different durable entry ([#589](https://github.com/PsychedelicShayna/neopi/issues/589)).
 - Prompt unpacking and validation include live submitted-message routing, environment/model lookup guidance, and current subagent model, effort and fast-mode fields ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
 
 - Unmodified prompt unpacks now check clean, including MOA envelope partials and canned live identity ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).

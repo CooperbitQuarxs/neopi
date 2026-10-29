@@ -171,6 +171,7 @@ describe("native journal notifications", () => {
 		await manager.ensureOnDisk();
 		const live = transport(manager);
 		const message = makeAssistantMessage();
+		const messageId = observeLiveMessageId(manager, message);
 		live.forwarder.forward({ type: "message_start", message });
 		live.forwarder.forward({ type: "message_end", message });
 		storage.refuse = true;
@@ -182,7 +183,7 @@ describe("native journal notifications", () => {
 		expect(live.frames.at(-1)).toMatchObject({ type: "journal_state", reason: "snapshot", messageEntryIds: [] });
 		await manager.recoverPersistenceFromCurrentState();
 		expect(live.frames.filter(frame => frame.type === "message_persisted")).toEqual([
-			{ type: "message_persisted", ...manager.getJournalIdentity(), messageId: "msg-1", entryId },
+			{ type: "message_persisted", ...manager.getJournalIdentity(), messageId, entryId },
 		]);
 		const old = makeAssistantMessage();
 		live.forwarder.forward({ type: "message_start", message: old });
@@ -228,12 +229,59 @@ describe("native journal notifications", () => {
 		await manager.close();
 	});
 
+	test("reopening the same journal in a new native owner cannot rebind a cached live message ID", async () => {
+		await using dir = await TempDir.create("@journal-events-incarnation-");
+		const storage = new MemorySessionStorage();
+		const before = SessionManager.create(dir.path(), dir.path(), storage);
+		await before.ensureOnDisk();
+		const firstMessage = makeAssistantMessage();
+		const beforeId = observeLiveMessageId(before, firstMessage);
+		const firstObserver = transport(before, firstMessage);
+		const peerObserver = transport(before, firstMessage);
+		for (const observer of [firstObserver, peerObserver]) {
+			expect(observer.frames.find(frame => frame.type === "message_start")).toMatchObject({ messageId: beforeId });
+			observer.forwarder.dispose();
+		}
+		observeLiveMessageId(before, firstMessage, true);
+		const beforeEntry = before.appendMessage(firstMessage);
+		await before.flush();
+		const identity = before.getJournalIdentity();
+		if (!identity.sessionFile) throw new Error("missing durable session file");
+		await before.close();
+
+		const after = await SessionManager.open(identity.sessionFile, dir.path(), storage, { suppressBreadcrumb: true });
+		expect(after.getJournalIdentity()).toEqual(identity);
+		const secondMessage = makeAssistantMessage();
+		secondMessage.content = [{ type: "text", text: "different output after restart" }];
+		const afterId = observeLiveMessageId(after, secondMessage);
+		expect(afterId).not.toBe(beforeId);
+		const observer = transport(after, secondMessage);
+		expect(observer.frames.find(frame => frame.type === "message_start")).toMatchObject({ messageId: afterId });
+		observeLiveMessageId(after, secondMessage, true);
+		observer.source.agent.state.streamMessage = null;
+		observer.forwarder.forward({ type: "message_end", message: secondMessage });
+		const afterEntry = after.appendMessage(secondMessage);
+		observer.settle(secondMessage);
+		await after.flush();
+		expect(afterEntry).not.toBe(beforeEntry);
+		observer.forwarder.snapshotJournal(observer.source);
+		expect(observer.frames.at(-1)).toMatchObject({
+			type: "journal_state",
+			reason: "snapshot",
+			messageEntryIds: [{ messageId: afterId, entryId: afterEntry }],
+		});
+		expect(firstObserver.frames.some(frame => frame.type === "message_persisted")).toBe(false);
+		observer.forwarder.dispose();
+		await after.close();
+	});
+
 	test("recovery waits for queued durability even when the observer that ended the message is gone", async () => {
 		await using dir = await TempDir.create("@journal-events-reconnect-queued-");
 		const storage = new GatedStorage();
 		const manager = SessionManager.create(dir.path(), dir.path(), storage);
 		await manager.ensureOnDisk();
 		const message = makeAssistantMessage();
+		const messageId = observeLiveMessageId(manager, message);
 		const first = transport(manager);
 		first.forwarder.forward({ type: "message_start", message });
 		first.forwarder.forward({ type: "message_end", message });
@@ -247,7 +295,7 @@ describe("native journal notifications", () => {
 		expect(reattached.frames.at(-1)).toMatchObject({
 			type: "journal_state",
 			reason: "snapshot",
-			messageEntryIds: [{ messageId: "msg-1", entryId }],
+			messageEntryIds: [{ messageId, entryId }],
 		});
 		reattached.forwarder.dispose();
 		await manager.close();
@@ -290,6 +338,7 @@ describe("native journal notifications", () => {
 		await manager.ensureOnDisk();
 		const live = transport(manager);
 		const message = makeAssistantMessage();
+		const messageId = observeLiveMessageId(manager, message, true);
 		const display = { ...message, content: [{ type: "text" as const, text: "display-only secret" }] };
 		linkMessageEntrySource(display, message);
 		live.forwarder.forward({ type: "message_end", message: display });
@@ -302,7 +351,7 @@ describe("native journal notifications", () => {
 		storage.publish.resolve();
 		await manager.flush();
 		expect(live.frames.filter(frame => frame.type === "message_persisted")).toEqual([
-			{ type: "message_persisted", ...manager.getJournalIdentity(), messageId: "msg-1", entryId },
+			{ type: "message_persisted", ...manager.getJournalIdentity(), messageId, entryId },
 		]);
 		live.forwarder.dispose();
 		await manager.close();
@@ -316,10 +365,12 @@ describe("native journal notifications", () => {
 		partial.content = [{ type: "text", text: "quiet partial" }];
 		const live = transport(manager, partial);
 		const first = live.frames.find(frame => frame.type === "message_start");
+		if (!first) throw new Error("missing live assistant snapshot");
+		const messageId = first.messageId;
 		expect(first).toMatchObject({
 			type: "message_start",
 			snapshot: true,
-			messageId: "msg-1",
+			messageId: expect.any(String),
 			message: partial,
 			...manager.getJournalIdentity(),
 		});
@@ -350,7 +401,7 @@ describe("native journal notifications", () => {
 						frame.type === "message_persisted",
 				)
 				.map(frame => ("messageId" in frame ? frame.messageId : undefined)),
-		).toEqual(["msg-1", "msg-1", "msg-1", "msg-1", "msg-1"]);
+		).toEqual([messageId, messageId, messageId, messageId, messageId]);
 		expect(live.frames.at(-1)).toMatchObject({ type: "message_persisted", entryId });
 		live.forwarder.dispose();
 		await manager.close();

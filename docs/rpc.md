@@ -486,6 +486,10 @@ its response. Its response data is `{ sessionId, sessionFile, leafId }`.
 It never replaces subscriptions or restarts a stream. Repeated snapshots and
 new control connections reuse the native owner's current `messageId` across
 stdio/control updates, end and persistence receipt.
+Native live IDs are opaque and unique across owner incarnations, including
+reopening the same session ID/file after a restart. Compare the complete string;
+do not parse a counter or derive identity from a journal filename. A new owner
+cannot reuse a cached pre-restart message's ID for different output.
 The snapshot reads the native in-flight assistant directly, so a quiet reply
 appears immediately without waiting for another delta. It is unsaved output,
 not a journal entry. No assistant frame is emitted when none is in flight.
@@ -497,8 +501,8 @@ The client's ordered event stream remains authoritative; a snapshot is never
 published after a newer event with stale content.
 
 Live `message_start`, updates and `message_end` remain unsaved output until a
-`message_persisted` frame associates them with a journal entry. A process-local
-`msg-N`, an accepted prompt's reserved `userEntryId`, or a completed stream is
+`message_persisted` frame associates them with a journal entry. An opaque live
+`messageId`, an accepted prompt's reserved `userEntryId`, or a completed stream is
 not a durability receipt. Failed or intentionally skipped persistence produces
 no association. Recovery announces entries only after native persistence succeeds.
 Messages already present in the initial history use their native entry IDs;
@@ -508,7 +512,7 @@ On every attachment and `snapshot_session_journal`, the `journal_state` frame
 with `reason: "snapshot"` also includes `messageEntryIds`:
 
 ```json
-{ "type": "journal_state", "reason": "snapshot", "sessionId": "01a0...", "sessionFile": "/srv/session.jsonl", "leafId": "a12bc345", "messageEntryIds": [{ "messageId": "msg-7", "entryId": "a12bc345" }] }
+{ "type": "journal_state", "reason": "snapshot", "sessionId": "01a0...", "sessionFile": "/srv/session.jsonl", "leafId": "a12bc345", "messageEntryIds": [{ "messageId": "msg-019ac518-1122-7333-8444-556677889900-7", "entryId": "a12bc345" }] }
 ```
 
 Use these authoritative pairs to reconcile cached live output when a disconnect
@@ -1282,7 +1286,7 @@ Extension runner errors are emitted separately as:
 
 `message_update` includes streaming deltas in `assistantMessageEvent` (text/thinking/toolcall deltas).
 
-`message_start`, `message_update`, and `message_end` carry a live `messageId` string. One message keeps its ID across the native owner's stdio and control observers, including a new attachment's in-flight snapshot. IDs are scoped to that owner process, not journal identities. Records injected mid-stream, such as advisor cards and IRC messages, get their own IDs and do not disturb the reply streaming around them.
+`message_start`, `message_update`, and `message_end` carry an opaque live `messageId` string. One message keeps its ID across the native owner's stdio and control observers, including a new attachment's in-flight snapshot. Native IDs are unique across owner incarnations, even when a new owner opens the same session ID/file; they are not journal entry IDs, and clients must not parse their format. Records injected mid-stream, such as advisor cards and IRC messages, get their own IDs and do not disturb the reply streaming around them.
 
 `set_event_filter` restricts which session event frames are written: pass the event `type` strings to forward, or `null` to forward everything (the default). The response echoes the active selection as `{ events, messageUpdates }`. The filter applies to all events emitted through the session subscription, not just the common types listed above; every other outbound category (responses, `prompt_result`, `session_settled`, extension UI and host tool/URI requests, plan mode frames, `extension_error`, `available_commands_update`, subagent frames, side-question frames, builtin slash-command side channels, and session-persistence and `btw-history` `notice` frames) is unaffected by this filter. Hosts that fail closed on unknown event kinds can pin the set they understand here instead of breaking when NeoPi adds an event.
 
@@ -2232,7 +2236,7 @@ stdout sequence (simplified; message contents omitted):
 ```json
 { "id": "req_1", "type": "response", "command": "prompt", "success": true }
 { "type": "agent_start" }
-{ "type": "message_update", "messageId": "msg-2", "assistantMessageEvent": { "type": "text_delta", "delta": "..." }, "message": { "role": "assistant", "content": [] } }
+{ "type": "message_update", "messageId": "msg-019ac518-1122-7333-8444-556677889900-2", "assistantMessageEvent": { "type": "text_delta", "delta": "..." }, "message": { "role": "assistant", "content": [] } }
 { "type": "agent_end", "messages": [], "isTerminal": true, "yielded": true }
 { "type": "prompt_result", "id": "req_1", "agentInvoked": true, "status": "completed", "sessionSettled": true }
 { "type": "session_settled" }

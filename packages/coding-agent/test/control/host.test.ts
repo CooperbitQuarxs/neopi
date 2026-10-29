@@ -511,6 +511,9 @@ describe("control host", () => {
 		const message = makeAssistantMessage();
 		message.content = [{ type: "text", text: "quiet in-flight output" }];
 		session.agent.emitExternalEvent({ type: "message_start", message });
+		const started = stdioFrames.find(frame => frame.type === "message_start");
+		if (!started) throw new Error("missing native assistant start");
+		const messageId = started.messageId;
 		const aside: CustomMessage = {
 			role: "custom",
 			customType: "snapshot-aside",
@@ -541,15 +544,15 @@ describe("control host", () => {
 			...manager.getJournalIdentity(),
 		});
 		expect(frames.find(frame => frame.type === "message_start" && frame.snapshot === true)).toMatchObject({
-			messageId: "msg-1",
+			messageId,
 			message,
 			...manager.getJournalIdentity(),
 		});
 		const snapshot = await client.request({ type: "snapshot_session_journal" });
 		expect(snapshot).toMatchObject({ success: true, data: manager.getJournalIdentity() });
 		expect(frames.filter(frame => frame.type === "message_start").map(frame => frame.messageId)).toEqual([
-			"msg-1",
-			"msg-1",
+			messageId,
+			messageId,
 		]);
 		message.content = [{ type: "text", text: "quiet in-flight output, completed" }];
 		session.agent.emitExternalEvent({
@@ -563,7 +566,7 @@ describe("control host", () => {
 		expect(session.agent.state.messages).toContain(message);
 		expect(session.agent.state.messages).toContain(aside);
 		const receipt = await persisted.promise;
-		expect(receipt).toMatchObject({ type: "message_persisted", messageId: "msg-1", ...manager.getJournalIdentity() });
+		expect(receipt).toMatchObject({ type: "message_persisted", messageId, ...manager.getJournalIdentity() });
 		expect(stdioFrames.find(frame => frame.type === "message_start")).toMatchObject({ messageId: receipt.messageId });
 		expect(
 			stdioFrames.find(frame => frame.type === "message_persisted" && frame.entryId === receipt.entryId),

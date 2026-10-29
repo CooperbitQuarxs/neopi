@@ -5483,7 +5483,7 @@ func (v *NotifyType) UnmarshalJSON(data []byte) error {
 }
 
 type MessageEntryIdentity struct {
-	// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
+	// Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.
 	MessageID string `json:"messageId"`
 	EntryID   string `json:"entryId"`
 }
@@ -5594,7 +5594,7 @@ type MessagePersistedEvent struct {
 	SessionID   string  `json:"sessionId"`
 	SessionFile *string `json:"sessionFile"`
 	LeafID      *string `json:"leafId"`
-	// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
+	// Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.
 	MessageID string `json:"messageId"`
 	EntryID   string `json:"entryId"`
 }
@@ -6661,7 +6661,7 @@ func (v TurnEndEvent) MarshalJSON() ([]byte, error) {
 
 type MessageStartEvent struct {
 	Message AgentMessage `json:"message"`
-	// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
+	// Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.
 	MessageID *string `json:"messageId,omitempty"`
 	// True for the current unsaved assistant at an ordered native snapshot boundary.
 	Snapshot                      *bool   `json:"snapshot,omitempty"`
@@ -6709,7 +6709,7 @@ func (v MessageStartEvent) MarshalJSON() ([]byte, error) {
 type MessageUpdateEvent struct {
 	Message               AgentMessage          `json:"message"`
 	AssistantMessageEvent AssistantMessageEvent `json:"assistantMessageEvent"`
-	// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
+	// Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.
 	MessageID                     *string `json:"messageId,omitempty"`
 	RequestModelProvider          *string `json:"requestModelProvider,omitempty"`
 	RequestModelID                *string `json:"requestModelId,omitempty"`
@@ -6748,7 +6748,7 @@ func (v MessageUpdateEvent) MarshalJSON() ([]byte, error) {
 
 type MessageEndEvent struct {
 	Message AgentMessage `json:"message"`
-	// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
+	// Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.
 	MessageID                     *string `json:"messageId,omitempty"`
 	RequestModelProvider          *string `json:"requestModelProvider,omitempty"`
 	RequestModelID                *string `json:"requestModelId,omitempty"`

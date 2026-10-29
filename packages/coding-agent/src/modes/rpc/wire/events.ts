@@ -6,7 +6,7 @@
 import { absentAs, doc, type WireDefs } from "./dsl";
 
 const JSON_OBJECT = "Record<string, unknown>";
-const MESSAGE_ID = doc("string", "Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.");
+const MESSAGE_ID = doc("string", "Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.");
 const JOURNAL_IDENTITY = { sessionId: "string", sessionFile: "string | null", leafId: "string | null" };
 const MIXTURE_TRACE_HEADER = {
 	v: "number.integer",

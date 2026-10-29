@@ -4561,7 +4561,7 @@ impl NotifyType {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MessageEntryIdentity {
-	/// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
+	/// Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.
 	#[serde(rename = "messageId")]
 	pub message_id: String,
 	#[serde(rename = "entryId")]
@@ -4601,7 +4601,7 @@ pub struct MessagePersistedEvent {
 	pub session_file: Option<String>,
 	#[serde(rename = "leafId", deserialize_with = "Deserialize::deserialize")]
 	pub leaf_id: Option<String>,
-	/// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
+	/// Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.
 	#[serde(rename = "messageId")]
 	pub message_id: String,
 	#[serde(rename = "entryId")]
@@ -4928,7 +4928,7 @@ pub struct TurnEndEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MessageStartEvent {
 	pub message: AgentMessage,
-	/// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
+	/// Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.
 	#[serde(rename = "messageId", default, skip_serializing_if = "Option::is_none")]
 	pub message_id: Option<String>,
 	/// True for the current unsaved assistant at an ordered native snapshot boundary.
@@ -4957,7 +4957,7 @@ pub struct MessageUpdateEvent {
 	pub message: AgentMessage,
 	#[serde(rename = "assistantMessageEvent")]
 	pub assistant_message_event: AssistantMessageEvent,
-	/// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
+	/// Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.
 	#[serde(rename = "messageId", default, skip_serializing_if = "Option::is_none")]
 	pub message_id: Option<String>,
 	#[serde(rename = "requestModelProvider", default, skip_serializing_if = "Option::is_none")]
@@ -4975,7 +4975,7 @@ pub struct MessageUpdateEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MessageEndEvent {
 	pub message: AgentMessage,
-	/// Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID.
+	/// Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.
 	#[serde(rename = "messageId", default, skip_serializing_if = "Option::is_none")]
 	pub message_id: Option<String>,
 	#[serde(rename = "requestModelProvider", default, skip_serializing_if = "Option::is_none")]

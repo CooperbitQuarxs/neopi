@@ -1445,7 +1445,7 @@ class PromptAck:
 @dataclass(slots=True, frozen=True, kw_only=True)
 class MessageEntryIdentity:
     message_id: str
-    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
+    """Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."""
     entry_id: str
 
 
@@ -1476,7 +1476,7 @@ class MessagePersistedEvent:
     session_file: str | None
     leaf_id: str | None
     message_id: str
-    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
+    """Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."""
     entry_id: str
 
 
@@ -1713,7 +1713,7 @@ class MessageStartEvent:
     type: Literal["message_start"] = "message_start"
     message: AgentMessage
     message_id: str | None = None
-    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
+    """Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."""
     snapshot: bool | None = None
     """True for the current unsaved assistant at an ordered native snapshot boundary."""
     session_id: str | None = None
@@ -1732,7 +1732,7 @@ class MessageUpdateEvent:
     message: AgentMessage
     assistant_message_event: AssistantMessageEvent
     message_id: str | None = None
-    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
+    """Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."""
     request_model_provider: str | None = None
     request_model_id: str | None = None
     request_reasoning: Effort | None = None
@@ -1745,7 +1745,7 @@ class MessageEndEvent:
     type: Literal["message_end"] = "message_end"
     message: AgentMessage
     message_id: str | None = None
-    """Shared by one message's snapshot, updates and end across the native owner's transport observers; not a journal entry ID."""
+    """Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."""
     request_model_provider: str | None = None
     request_model_id: str | None = None
     request_reasoning: Effort | None = None
