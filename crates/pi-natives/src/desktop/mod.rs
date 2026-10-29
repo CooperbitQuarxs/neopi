@@ -30,7 +30,7 @@ use std::{
 pub use applications::{Application, ApplicationOpenOptions, ApplicationQuery};
 use ax::{AxRegistry, register_node};
 use backend::{Backend, DeliveryMode, MouseButton, PointerEvent};
-use control::{CancellationSource, InputLease, OperationToken};
+use control::{CancellationReason, CancellationSource, InputLease, OperationToken};
 use error::{CoreResult, DesktopError};
 use frame::{FrameGeometry, apply_capture_caps, encode_png};
 use keys::{parse_keys, parse_modifiers};
@@ -1156,7 +1156,9 @@ impl SessionCore {
 			.map_err(|_| DesktopError::internal("native desktop worker stopped unexpectedly"))
 			.and_then(|()| {
 				rxr.recv_timeout(OPERATION_TIMEOUT).map_err(|e| {
-					self.cancellation.cancel();
+					self
+						.cancellation
+						.cancel_with_reason(CancellationReason::Timeout);
 					DesktopError::timeout(format!("native desktop operation did not complete: {e}"))
 				})
 			});
@@ -1165,7 +1167,9 @@ impl SessionCore {
 	}
 
 	fn close(&self) -> CoreResult<()> {
-		self.cancellation.cancel();
+		self
+			.cancellation
+			.cancel_with_reason(CancellationReason::Closed);
 		let mut lifecycle = self.lifecycle.lock();
 		lifecycle.closed = true;
 		let Some(tx) = lifecycle.tx.take() else {
@@ -1195,7 +1199,9 @@ impl SessionCore {
 }
 impl Drop for SessionCore {
 	fn drop(&mut self) {
-		self.cancellation.cancel();
+		self
+			.cancellation
+			.cancel_with_reason(CancellationReason::Closed);
 		let lifecycle = self.lifecycle.get_mut();
 		if let Some(tx) = lifecycle.tx.take() {
 			let (reply, _) = flume::bounded(1);
@@ -1226,7 +1232,10 @@ impl Drop for DesktopSession {
 	fn drop(&mut self) {
 		// A running async task can retain SessionCore after its JS wrapper dies.
 		// Cancel that work now rather than waiting for the last Arc to disappear.
-		self.core.cancellation.cancel();
+		self
+			.core
+			.cancellation
+			.cancel_with_reason(CancellationReason::Closed);
 	}
 }
 #[napi]
@@ -1782,7 +1791,10 @@ impl DesktopSession {
 
 	#[napi]
 	pub fn close(&self) -> task::Promise<()> {
-		self.cancel();
+		self
+			.core
+			.cancellation
+			.cancel_with_reason(CancellationReason::Closed);
 		let c = Arc::clone(&self.core);
 		task::blocking("desktop.close", (), move |_| c.close().map_err(Into::into))
 	}

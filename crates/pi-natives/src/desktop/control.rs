@@ -28,6 +28,48 @@ mod windows;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::SYNTHETIC_EVENT_TAG;
 
+/// Stored with the generation in one atomic word so an invalidated token can
+/// never observe a new generation with the previous cancellation's reason.
+#[derive(Clone, Copy)]
+#[repr(u8)]
+pub(super) enum CancellationReason {
+	Requested         = 1,
+	Superseded,
+	ControlReleased,
+	Timeout,
+	Closed,
+	PhysicalEscape,
+	#[cfg(target_os = "linux")]
+	MappingNotify     = 7,
+	#[cfg(target_os = "linux")]
+	DeviceQueryFailed = 8,
+	#[cfg(target_os = "linux")]
+	ReadFailed        = 9,
+	#[cfg(target_os = "linux")]
+	PollFailed        = 10,
+	#[cfg(any(target_os = "macos", windows))]
+	MonitorFailed     = 11,
+}
+
+impl CancellationReason {
+	const fn as_str(value: u64) -> &'static str {
+		match value & 0xff {
+			1 => "requested",
+			2 => "superseded",
+			3 => "control_released",
+			4 => "timeout",
+			5 => "closed",
+			6 => "physical_escape",
+			7 => "mapping_notify",
+			8 => "device_query_failed",
+			9 => "read_failed",
+			10 => "poll_failed",
+			11 => "monitor_failed",
+			_ => unreachable!(),
+		}
+	}
+}
+
 #[derive(Default)]
 struct CancellationState {
 	generation: AtomicU64,
@@ -52,23 +94,34 @@ impl CancellationSource {
 	/// lease.
 	pub(crate) fn retire(&self) {
 		let _state = self.0.state.lock();
-		self.0.generation.fetch_add(1, Ordering::AcqRel);
-		self.0.wake.notify_all();
-		#[cfg(target_os = "linux")]
-		self.0.async_wake.notify_waiters();
+		self.advance(CancellationReason::Superseded);
 	}
 
 	/// Aborts current/queued work and revokes any explicit task ownership.
 	pub(crate) fn cancel(&self) {
+		self.cancel_with_reason(CancellationReason::Requested);
+	}
+
+	pub(super) fn cancel_with_reason(&self, reason: CancellationReason) {
 		let lease = {
 			let mut state = self.0.state.lock();
-			self.0.generation.fetch_add(1, Ordering::AcqRel);
-			self.0.wake.notify_all();
-			#[cfg(target_os = "linux")]
-			self.0.async_wake.notify_waiters();
+			self.advance(reason);
 			state.take()
 		};
 		drop(lease);
+	}
+
+	fn advance(&self, reason: CancellationReason) {
+		self
+			.0
+			.generation
+			.try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+				Some((value & !0xff).wrapping_add(0x100) | reason as u64)
+			})
+			.expect("generation updates always succeed");
+		self.0.wake.notify_all();
+		#[cfg(target_os = "linux")]
+		self.0.async_wake.notify_waiters();
 	}
 
 	pub(crate) fn acquire_control(&self, token: &OperationToken) -> CoreResult<()> {
@@ -86,7 +139,7 @@ impl CancellationSource {
 	pub(crate) fn release_control(&self) {
 		// A release is also a generation boundary: queued work authorized by the
 		// relinquished grant must never execute under a later acquisition.
-		self.cancel();
+		self.cancel_with_reason(CancellationReason::ControlReleased);
 	}
 
 	pub(crate) fn control_active(&self) -> bool {
@@ -99,9 +152,9 @@ impl CancellationSource {
 pub(super) struct EmergencyStop(Weak<CancellationState>);
 
 impl EmergencyStop {
-	fn cancel(&self) {
+	fn cancel(&self, reason: CancellationReason) {
 		if let Some(source) = self.0.upgrade() {
-			CancellationSource(source).cancel();
+			CancellationSource(source).cancel_with_reason(reason);
 		}
 	}
 }
@@ -123,12 +176,15 @@ impl OperationToken {
 	}
 
 	pub(crate) fn check(&self) -> CoreResult<()> {
-		if self.source.0.generation.load(Ordering::Acquire) == self.generation {
+		let generation = self.source.0.generation.load(Ordering::Acquire);
+		if generation == self.generation {
 			Ok(())
 		} else {
-			Err(DesktopError::cancelled(
-				"desktop operation cancelled; input may be partial; inspect before retrying",
-			))
+			Err(DesktopError::cancelled(format!(
+				"desktop operation cancelled (reason: {}); input may be partial; inspect before \
+				 retrying",
+				CancellationReason::as_str(generation),
+			)))
 		}
 	}
 
@@ -271,6 +327,13 @@ pub(crate) fn add_modifiers(
 			keys.push(key);
 		}
 	}
+}
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn monitor_for_test(
+	display: &str,
+	source: &CancellationSource,
+) -> CoreResult<impl Drop> {
+	linux::EscapeMonitor::start_x11(EmergencyStop(Arc::downgrade(&source.0)), Some(display.into()))
 }
 
 #[cfg(test)]
@@ -594,7 +657,12 @@ mod tests {
 		}
 		source.retire();
 		assert!(source.control_active());
-		assert!(old.check().is_err());
+		assert!(
+			old.check()
+				.unwrap_err()
+				.message
+				.contains("reason: superseded")
+		);
 		let fresh = source.token();
 		let running = InputLease::acquire(&fresh).expect("fresh run reuses ownership");
 		source.cancel();
@@ -607,7 +675,13 @@ mod tests {
 		let queued = source.token();
 		source.release_control();
 		assert!(!source.control_active());
-		assert!(queued.check().is_err());
+		assert!(
+			queued
+				.check()
+				.unwrap_err()
+				.message
+				.contains("reason: control_released")
+		);
 		assert!(source.acquire_control(&queued).is_err(), "stale acquisition cannot grant ownership");
 		assert!(!source.control_active());
 		grant_for_test(&source);
@@ -626,9 +700,15 @@ mod tests {
 		let emergency = EmergencyStop(Arc::downgrade(&source.0));
 		source.retire();
 		let fresh = source.token();
-		emergency.cancel();
+		emergency.cancel(CancellationReason::PhysicalEscape);
 		assert!(!source.control_active());
-		assert!(fresh.check().is_err());
+		let error = fresh.check().unwrap_err();
+		assert!(error.message.contains("reason: physical_escape"));
+		assert!(
+			napi::Error::from(error)
+				.reason
+				.contains("reason: physical_escape")
+		);
 		drop(KernelOwner::acquire().expect("idle Escape releases kernel ownership"));
 		remove_test_lock();
 	}
