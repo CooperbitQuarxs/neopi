@@ -106,6 +106,17 @@ export function rustTestCommands(args: readonly string[]): readonly (readonly st
 	];
 }
 
+interface CargoPackage {
+	name: string;
+	targets: { kind: string[] }[];
+}
+
+export function supportsDoctests(pkg: CargoPackage): boolean {
+	return pkg.targets.some(target =>
+		target.kind.some(kind => ["lib", "rlib", "dylib", "staticlib", "proc-macro"].includes(kind)),
+	);
+}
+
 function isRustTaskName(value: string | undefined): value is RustTaskName {
 	return value != null && value in TASK_COMMANDS;
 }
@@ -193,6 +204,27 @@ async function runCommand(command: readonly string[]): Promise<number> {
 		const pathSep = process.platform === "win32" ? ";" : ":";
 		const currentPath = env.PATH ?? env.Path ?? "";
 		env.PATH = currentPath === "" ? toolchainBin : `${toolchainBin}${pathSep}${currentPath}`;
+	}
+	if (isCargo && rest[0] === "test" && rest.includes("--doc")) {
+		const packageIndex = rest.indexOf("--package");
+		if (packageIndex !== -1) {
+			const packageName = rest[packageIndex + 1];
+			const metadata = await $`${cargoBinary} metadata --no-deps --format-version 1`
+				.cwd(repoRoot)
+				.env(env)
+				.quiet()
+				.nothrow();
+			if (metadata.exitCode !== 0) {
+				console.error(metadata.stderr.toString());
+				return metadata.exitCode;
+			}
+			const workspace: { packages: CargoPackage[] } = metadata.json();
+			const pkg = workspace.packages.find(pkg => pkg.name === packageName);
+			if (pkg && !supportsDoctests(pkg)) {
+				console.log(`Skipping doctests for ${packageName}: no doctest-capable library target.`);
+				return 0;
+			}
+		}
 	}
 	const proc = Bun.spawn(argv, {
 		cwd: repoRoot,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { rustTestCommands } from "./run-rs-task";
+import { rustTestCommands, supportsDoctests } from "./run-rs-task";
 
 describe("Rust test task scope", () => {
 	test("scopes nextest and doctests to one package without leaking nextest options", () => {
@@ -33,6 +33,13 @@ describe("Rust test task scope", () => {
 			]);
 			expect(command).toContain("napi");
 		}
+	});
+
+	test("does not run unsupported cdylib-only doctests, but retains library and proc-macro passes", () => {
+		expect(supportsDoctests({ name: "native", targets: [{ kind: ["cdylib"] }] })).toBe(false);
+		expect(supportsDoctests({ name: "cli", targets: [{ kind: ["bin"] }] })).toBe(false);
+		expect(supportsDoctests({ name: "library", targets: [{ kind: ["lib"] }, { kind: ["bin"] }] })).toBe(true);
+		expect(supportsDoctests({ name: "macro", targets: [{ kind: ["proc-macro"] }] })).toBe(true);
 	});
 
 	test("rejects incomplete or repeated package scopes rather than expanding silently", () => {
