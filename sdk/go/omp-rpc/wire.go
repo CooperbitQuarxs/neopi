@@ -1879,6 +1879,7 @@ type ModelInfo struct {
 	ContextWindow *int64 `json:"contextWindow"`
 	// Null when the provider does not report a limit.
 	MaxTokens              *int64                     `json:"maxTokens"`
+	Description            *string                    `json:"description,omitempty"`
 	Headers                map[string]string          `json:"headers,omitempty"`
 	PremiumMultiplier      *float64                   `json:"premiumMultiplier,omitempty"`
 	PreferWebsockets       *bool                      `json:"preferWebsockets,omitempty"`
@@ -1905,6 +1906,7 @@ func (v *ModelInfo) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("cost", &out.Cost)
 	d.nullable("contextWindow", &out.ContextWindow)
 	d.nullable("maxTokens", &out.MaxTokens)
+	d.optional("description", &out.Description)
 	d.optional("headers", &out.Headers)
 	d.optional("premiumMultiplier", &out.PremiumMultiplier)
 	d.optional("preferWebsockets", &out.PreferWebsockets)
@@ -5259,10 +5261,14 @@ func (v *BtwHistoryRecord) decodeFrom(raw map[string]json.RawMessage) error {
 }
 
 type LoginProvider struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Available     bool   `json:"available"`
-	Authenticated bool   `json:"authenticated"`
+	ID                 string                 `json:"id"`
+	Name               string                 `json:"name"`
+	Available          bool                   `json:"available"`
+	Authenticated      bool                   `json:"authenticated"`
+	AcceptsKeys        bool                   `json:"acceptsKeys"`
+	LoginKind          LoginProviderLoginKind `json:"loginKind"`
+	DeviceCode         bool                   `json:"deviceCode"`
+	StoreCredentialsAs *string                `json:"storeCredentialsAs,omitempty"`
 }
 
 func (v *LoginProvider) UnmarshalJSON(data []byte) error {
@@ -5276,11 +5282,37 @@ func (v *LoginProvider) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("name", &out.Name)
 	d.required("available", &out.Available)
 	d.required("authenticated", &out.Authenticated)
+	d.required("acceptsKeys", &out.AcceptsKeys)
+	d.required("loginKind", &out.LoginKind)
+	d.required("deviceCode", &out.DeviceCode)
+	d.optional("storeCredentialsAs", &out.StoreCredentialsAs)
 	if d.err != nil {
 		return d.err
 	}
 	*v = out
 	return nil
+}
+
+type LoginProviderLoginKind string
+
+const (
+	LoginProviderLoginKindAPIKey     LoginProviderLoginKind = "api-key"
+	LoginProviderLoginKindOauthCode  LoginProviderLoginKind = "oauth-code"
+	LoginProviderLoginKindDeviceCode LoginProviderLoginKind = "device-code"
+	LoginProviderLoginKindCustom     LoginProviderLoginKind = "custom"
+)
+
+func (v *LoginProviderLoginKind) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "LoginProviderLoginKind")
+	if err != nil {
+		return err
+	}
+	switch value := LoginProviderLoginKind(s); value {
+	case LoginProviderLoginKindAPIKey, LoginProviderLoginKindOauthCode, LoginProviderLoginKindDeviceCode, LoginProviderLoginKindCustom:
+		*v = value
+		return nil
+	}
+	return unknownValue("LoginProviderLoginKind", s)
 }
 
 // A stored credential `logout` can remove; `active` marks credentials the session may be using.
@@ -8909,7 +8941,9 @@ type OpenUrlUiRequest struct {
 	// Short loopback redirect to `url`; the truncation-safe copy target.
 	LaunchURL    *string `json:"launchUrl,omitempty"`
 	Instructions *string `json:"instructions,omitempty"`
-	LoginID      *string `json:"loginId,omitempty"`
+	// User-facing device verification code, never the private polling device_code.
+	UserCode *string `json:"userCode,omitempty"`
+	LoginID  *string `json:"loginId,omitempty"`
 }
 
 func (v *OpenUrlUiRequest) UnmarshalJSON(data []byte) error {
@@ -8925,6 +8959,7 @@ func (v *OpenUrlUiRequest) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("url", &out.URL)
 	d.optional("launchUrl", &out.LaunchURL)
 	d.optional("instructions", &out.Instructions)
+	d.optional("userCode", &out.UserCode)
 	d.optional("loginId", &out.LoginID)
 	if d.err != nil {
 		return d.err
@@ -12061,6 +12096,17 @@ func (c Commands) GetLogoutAccounts(ctx context.Context, p GetLogoutAccountsComm
 	var out GetLogoutAccountsResult
 	err := c.call(ctx, "get_logout_accounts", p, 0, &out)
 	return out.Accounts, err
+}
+
+// ActivateAccountCommand holds the parameters of "activate_account".
+type ActivateAccountCommand struct {
+	ProviderID   string `json:"providerId"`
+	CredentialID int64  `json:"credentialId"`
+}
+
+// ActivateAccount sends "activate_account": Activate a stored OAuth account for this session through native credential affinity and journal pins.
+func (c Commands) ActivateAccount(ctx context.Context, p ActivateAccountCommand) error {
+	return c.call(ctx, "activate_account", p, 0, nil)
 }
 
 // LogoutCommand holds the parameters of "logout".

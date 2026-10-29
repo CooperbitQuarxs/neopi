@@ -69,6 +69,14 @@ export function buildProviderDefinition(
 		...(policy.callbackPort !== undefined ? { callbackPort: policy.callbackPort } : {}),
 		...(policy.pasteCode ? { pasteCodeFlow: true } : {}),
 		...(login ? { login } : {}),
+		...(policy.login
+			? {
+					loginKind: policy.login.kind,
+					deviceCode:
+						policy.login.kind === "device-code" ||
+						(policy.login.kind === "custom" && policy.login.deviceCode === true),
+				}
+			: {}),
 		...(refreshToken ? { refreshToken } : {}),
 	};
 }

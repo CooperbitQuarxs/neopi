@@ -371,6 +371,7 @@ export interface ModelInfo {
 	contextWindow: number | null;
 	/** Null when the provider does not report a limit. */
 	maxTokens: number | null;
+	description?: string;
 	headers?: Record<string, string>;
 	premiumMultiplier?: number;
 	preferWebsockets?: boolean;
@@ -1144,6 +1145,10 @@ export interface LoginProvider {
 	name: string;
 	available: boolean;
 	authenticated: boolean;
+	acceptsKeys: boolean;
+	loginKind: "api-key" | "oauth-code" | "device-code" | "custom";
+	deviceCode: boolean;
+	storeCredentialsAs?: string;
 }
 
 /** A stored credential `logout` can remove; `active` marks credentials the session may be using. */
@@ -1958,6 +1963,8 @@ export interface OpenUrlUiRequest {
 	/** Short loopback redirect to `url`; the truncation-safe copy target. */
 	launchUrl?: string;
 	instructions?: string;
+	/** User-facing device verification code, never the private polling device_code. */
+	userCode?: string;
 	loginId?: string;
 }
 
@@ -2578,6 +2585,11 @@ export interface GetLogoutAccountsResult {
 	accounts: LogoutAccount[];
 }
 
+export interface ActivateAccountParams {
+	providerId: string;
+	credentialId: number;
+}
+
 export interface LogoutParams {
 	providerId: string;
 	credentialId: number;
@@ -2712,6 +2724,7 @@ export interface RpcWireCommands {
 	get_login_providers: { params: undefined; result: GetLoginProvidersResult };
 	login: { params: LoginParams; result: LoginResult };
 	get_logout_accounts: { params: GetLogoutAccountsParams; result: GetLogoutAccountsResult };
+	activate_account: { params: ActivateAccountParams; result: undefined };
 	logout: { params: LogoutParams; result: LogoutResult };
 	predict_word: { params: PredictWordParams; result: PredictWordResult };
 	predict_word_feedback: { params: PredictWordFeedbackParams; result: undefined };

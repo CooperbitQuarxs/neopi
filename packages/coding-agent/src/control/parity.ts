@@ -96,6 +96,7 @@ export const RPC_COMMAND_TYPES = [
 	"live_mute",
 	"set_slow_mode",
 	"get_logout_accounts",
+	"activate_account",
 	"logout",
 ] as const satisfies readonly RpcCommand["type"][];
 

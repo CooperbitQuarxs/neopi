@@ -14086,8 +14086,16 @@ export class AgentSession implements SettingsScope {
 	 */
 	pinCurrentProviderOAuthAccount(credentialId: number): boolean {
 		const provider = this.model?.provider;
-		if (!provider || this.isStreaming) return false;
-		return this.#modelRegistry.authStorage.sessions.pin(provider, this.sessionId, credentialId);
+		return provider ? this.pinProviderOAuthAccount(provider, credentialId) : false;
+	}
+
+	/** Pin a provider account through the native session affinity and credential journal owners. */
+	pinProviderOAuthAccount(provider: string, credentialId: number): boolean {
+		if (this.isStreaming || this.isCompacting || !this.#modelRegistry.hasProvider(provider)) return false;
+		const authStorage = this.#modelRegistry.authStorage;
+		if (!authStorage.sessions.pin(provider, this.sessionId, credentialId)) return false;
+		recordCredentialPin(authStorage, this.sessionManager, this.sessionId, provider);
+		return true;
 	}
 
 	/**

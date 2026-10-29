@@ -60,6 +60,15 @@ Behavior notes:
 
 `get_models_configuration` returns safe native model facts, inference providers and auth sources, effective role resolutions, persisted `global` and `project` selector/effort pairs, and effective/scoped effort rules. `contextWindow` remains a model capability; `effectiveContextWindow` comes from the native maintenance-budget resolver, including session/role overrides, model limits and context rules. Model secrets, transport headers and raw settings are not included. Provider identity and login methods come from the native registry rather than a host inventory.
 
+Provider `acceptsKeys` reports the native `set_provider_api_key` eligibility gate
+(`ModelRegistry.hasProvider`), not whether an arbitrary platform key will be
+accepted upstream. It does not derive key support from environment-variable names.
+Each `loginProviders` entry includes `loginKind` (`api-key`, `oauth-code`,
+`device-code` or `custom`), `deviceCode`, and optional `storeCredentialsAs`.
+`deviceCode` also covers custom device-code hooks; preserve the alias ID when
+starting login and use `storeCredentialsAs` to identify the credential provider.
+Models include their optional native catalog `description`.
+
 `set_model_role_configuration` takes `role`, `scope`, optional single `selector`, optional native `effort`, and `expected`, the previous scoped `{selector, effort}` pair with unset fields represented as `null`. Omitting the selector clears that scope. It uses the model hub's Settings transaction; project writes are rejected when native role storage is global. `set_effort_rules` takes `scope`, optional ordered `rules`, and the prior scoped list as `expected`, or `null` for an unset layer. Omitting `rules` clears the layer. Both await persistence and reject stale snapshots with `configuration_conflict`. Patterns, `re:` expressions and effort choices, including `off`, retain native semantics. These commands do not edit fallback chains or model facts.
 
 `set_model_role_storage` takes `value` and the previous `expected` preference, each `global` or `project`. It uses the native setting owner and persistence receipt without deleting either scope's saved roles. Configuration writes consume the applied/conflict decision made under the native YAML lock; matching a value after saving is not proof that a stale transaction won.
@@ -353,6 +362,7 @@ The bundled TypeScript `RpcClient.getMessages()` and Python `RpcClient.get_messa
 - `{ id?, type: "login", providerId: string }`
 - `{ id?, type: "get_logout_accounts", providerId: string }` → `data: { accounts: LogoutAccount[] }`
 - `{ id?, type: "logout", providerId: string, credentialId: number }` → `data: { remainingSource?: string }`
+- `{ id?, type: "activate_account", providerId: string, credentialId: number }`
 
 Login forwards ordinary OAuth input prompts only after the provider emits an
 authorization URL. Prompts marked `secret: true` are always rejected with a
@@ -366,6 +376,27 @@ be using), active first. `logout` removes one and refreshes that provider's mode
 it fails when the credential is no longer stored. `remainingSource` names the source
 that still authenticates the provider: another stored credential, an environment
 variable, or a config key.
+
+`get_login_providers` retains `id`, `name`, `available` and `authenticated`, and
+adds `loginKind`, `deviceCode`, optional `storeCredentialsAs`, and `acceptsKeys`
+with the same meanings as model configuration. No saved key, access token or
+refresh token is included.
+
+For a real device-code flow, `extension_ui_request` with `method: "open_url"`
+also carries `userCode`, the user-facing verification code from the provider's
+response. It is not extracted from `instructions`; the private polling
+`device_code` is never sent. The TypeScript login callback receives this as its
+fourth `onOpenUrl` argument; generated SDK frames expose the same `userCode`.
+
+`activate_account` accepts the inference/credential provider ID and the durable
+ID of a stored **OAuth** account from `get_logout_accounts`. It uses the same
+session preference as native account switching and records the account identity
+hash through the session credential-pin journal. It neither changes the current
+model nor another session's account. The native affinity owner retains its
+existing availability, restrictions and runtime/config auth-override checks.
+Unknown providers, missing or foreign accounts, API-key rows and malformed input
+fail with `invalid_value`; streaming or compaction returns `session_busy`.
+Success has no data payload and never returns credential bytes.
 
 ### Word prediction
 
@@ -2356,7 +2387,7 @@ Current helper characteristics:
 - Provider usage via `getUsage({ provider?, refresh?, redact? })`
 - Drives live voice sessions with `liveStart()`, `liveStop()`, `liveMute()`, and delivers live frames through `onLive()`
 - `promptAndWait()` waits for that prompt's result (or synchronous local completion); `waitForSettled()` also waits for session quiescence. `waitForIdle()` and `collectEvents()` stop at the next `agent_end`, including a non-terminal one, and are not settle barriers.
-- Wraps common protocol commands including OAuth `getLoginProviders()` / `login(...)` and `getLogoutAccounts(...)` / `logout(...)`; use raw protocol frames for unwrapped surfaces such as host-URI registration or delta-only message updates.
+- Wraps common protocol commands including OAuth `getLoginProviders()` / `login(...)`, session account selection with `activateAccount(...)`, and `getLogoutAccounts(...)` / `logout(...)`; use raw protocol frames for unwrapped surfaces such as host-URI registration or delta-only message updates.
 
 ### Python package
 

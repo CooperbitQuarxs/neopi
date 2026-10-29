@@ -229,6 +229,7 @@ export const frameDefs = {
 		url: "string",
 		"launchUrl?": doc("string", "Short loopback redirect to `url`; the truncation-safe copy target."),
 		"instructions?": "string",
+		"userCode?": doc("string", "User-facing device verification code, never the private polling device_code."),
 		"loginId?": "string",
 	},
 	ExtensionUiRequest: doc(
