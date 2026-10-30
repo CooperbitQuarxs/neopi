@@ -40,6 +40,13 @@ export interface AskDialogPromptValue {
 	images?: ImageContent[];
 }
 
+/** A note bound to an offered option, independently of whether it was selected. */
+export interface AskDialogOptionNote {
+	option: string;
+	note: string;
+	images?: ImageContent[];
+}
+
 /** Submitted answer to one dialog question. */
 export interface ExtensionAskDialogResultItem {
 	id: string;
@@ -51,6 +58,7 @@ export interface ExtensionAskDialogResultItem {
 	customInputImages?: ImageContent[];
 	note?: string;
 	noteImages?: ImageContent[];
+	optionNotes?: AskDialogOptionNote[];
 	timedOut?: boolean;
 }
 
@@ -169,6 +177,7 @@ interface QuestionState {
 	note: string | undefined;
 	noteImages: ImageContent[] | undefined;
 	noteRowKey: string | undefined;
+	optionNotes: AskDialogOptionNote[];
 	cursorIndex: number;
 	scrollOffset: number;
 	manualScroll: boolean;
@@ -399,7 +408,7 @@ function isAnswered(state: QuestionState): boolean {
 
 /** The answer to one question for the Review tab: the chosen labels (code mono), the custom answer, the note. */
 function describeAnswer(question: ExtensionAskDialogQuestion, state: QuestionState): readonly TspSpan[] {
-	if (!isAnswered(state)) return [span("Unanswered", "warning")];
+	if (!isAnswered(state) && !state.optionNotes.length) return [span("Unanswered", "warning")];
 	const labels = displayOptionLabels(question);
 	const spans: TspSpan[] = [];
 	const push = (parts: readonly TspSpan[]): void => {
@@ -413,6 +422,12 @@ function describeAnswer(question: ExtensionAskDialogQuestion, state: QuestionSta
 	if (state.customInput !== undefined) push([span(`“${normalizedInlineInput(state.customInput)}”`)]);
 	const note = noteForSubmittedAnswer(question, state)?.trim();
 	if (note) spans.push(span("  ✎ ", "dim"), span(normalizedInlineInput(note), "em"));
+	for (const entry of state.optionNotes) {
+		spans.push(
+			span(`  ✎ ${normalizedInlineInput(entry.option)}: `, "dim"),
+			span(normalizedInlineInput(entry.note), "em"),
+		);
+	}
 	return spans;
 }
 
@@ -431,6 +446,11 @@ function describeRowDetail(
 	}
 	if (state.note && state.noteRowKey === rowItem.key) {
 		spans.push(span(`${spans.length > 0 ? "  " : ""}✎ `, "dim"), span(normalizedInlineInput(state.note), "em"));
+	}
+	for (const entry of state.optionNotes) {
+		if (rowItem.kind === "option" && entry.option === question.options[rowItem.optionIndex ?? -1]?.label) {
+			spans.push(span(`${spans.length > 0 ? "  " : ""}✎ `, "dim"), span(normalizedInlineInput(entry.note), "em"));
+		}
 	}
 	return spans.length > 0 ? spans : undefined;
 }
@@ -483,7 +503,11 @@ function renderRowLabel(
 	const marker = `${theme.fg(checked ? "success" : "dim", optionMarker(theme, question.multi, checked))} `;
 	const cursor = selected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
 	const label = renderInlineMarkdown(rowItem.label, mdTheme, t => theme.fg(color, t));
-	const noteMarker = state.note && state.noteRowKey === rowItem.key ? theme.fg("success", "  ✎ note") : "";
+	const hasOptionNotes =
+		rowItem.kind === "option" &&
+		state.optionNotes.some(entry => entry.option === question.options[rowItem.optionIndex ?? -1]?.label);
+	const noteMarker =
+		(state.note && state.noteRowKey === rowItem.key) || hasOptionNotes ? theme.fg("success", "  ✎ note") : "";
 	// `width` is already the inner content width supplied by OverlayPanel; when
 	// a scrollbar is needed, renderRows() calls this again with one less column.
 	// Keep the cursor, option marker, first wrapped label line, and optional
@@ -625,6 +649,7 @@ export class AskDialogComponent implements Component {
 				note: undefined,
 				noteImages: undefined,
 				noteRowKey: undefined,
+				optionNotes: [],
 				cursorIndex: clamp(recommended ?? 0, 0, maxIndex),
 				scrollOffset: 0,
 				manualScroll: false,
@@ -1063,7 +1088,11 @@ export class AskDialogComponent implements Component {
 			title: question?.multi ? `${enterLabel}  enter · Toggle  space` : `${enterLabel}  enter`,
 		});
 		const note = actionButton("Note", "note", { keys: "n", title: "Add a note to the highlighted answer  n" });
-		return actionBar([...lead, null, note, skip, submit]);
+		const optionNote = actionButton("Option note", "option-note", {
+			keys: "a",
+			title: "Add option note  a · Edit latest  A",
+		});
+		return actionBar([...lead, null, optionNote, note, skip, submit]);
 	}
 
 	/**
@@ -1087,6 +1116,7 @@ export class AskDialogComponent implements Component {
 			if (this.#hidden || this.options.inputGuard?.isBlocked()) return;
 			if (event.act === "submit") this.#pressEnter();
 			else if (event.act === "note") this.#pressNote();
+			else if (event.act === "option-note") this.#pressOptionNote(false);
 			return;
 		}
 		if (event.type !== "select" && event.type !== "activate") return;
@@ -1143,6 +1173,16 @@ export class AskDialogComponent implements Component {
 		const rowItem = active ? this.#questionRows(active.question)[active.state.cursorIndex] : undefined;
 		if (!active || !rowItem) return;
 		void this.#promptForNote(active.question, active.state, rowItem);
+	}
+
+	#pressOptionNote(edit: boolean): void {
+		if (this.#isSubmitTab()) return;
+		this.#countdown?.reset();
+		const active = this.#activeQuestionState();
+		if (!active) return;
+		const rowItem = this.#questionRows(active.question)[active.state.cursorIndex];
+		const option = rowItem?.kind === "option" ? active.question.options[rowItem.optionIndex ?? -1] : undefined;
+		if (option) void this.#promptForOptionNote(active.question, active.state, option.label, edit);
 	}
 
 	/** Re-describe once a second while a countdown ring is shown (the ring's value is data, not a terminal clock). */
@@ -1218,7 +1258,8 @@ export class AskDialogComponent implements Component {
 	}
 
 	#titleText(): string {
-		return this.#remainingSeconds === undefined ? "Ask" : `Ask (${this.#remainingSeconds}s)`;
+		const title = this.#remainingSeconds === undefined ? "Ask" : `Ask (${this.#remainingSeconds}s)`;
+		return this.#isSubmitTab() ? title : `${title} · a add option note · A edit latest`;
 	}
 
 	#setHidden(hidden: boolean): void {
@@ -1442,6 +1483,10 @@ export class AskDialogComponent implements Component {
 		}
 		const rowItem = rows[state.cursorIndex];
 		if (!rowItem) return;
+		if (!action && (keyData === "a" || keyData === "A")) {
+			this.#pressOptionNote(keyData === "A");
+			return;
+		}
 		if (!action && (keyData === "n" || keyData === "N")) {
 			if (rowItem.kind === "option" || rowItem.kind === "other") void this.#promptForNote(question, state, rowItem);
 			return;
@@ -1606,6 +1651,39 @@ export class AskDialogComponent implements Component {
 		}
 	}
 
+	async #promptForOptionNote(
+		question: ExtensionAskDialogQuestion,
+		state: QuestionState,
+		option: string,
+		edit: boolean,
+	): Promise<void> {
+		this.#promptActive = true;
+		this.#keys.reset();
+		try {
+			const index = edit ? state.optionNotes.findLastIndex(entry => entry.option === option) : -1;
+			const previous = state.optionNotes[index];
+			const result = await this.#openPrompt(
+				{ title: `Option note for ${option}`, question: question.question },
+				previous ? { text: previous.note, images: previous.images } : undefined,
+			);
+			if (result === undefined || this.#closed) return;
+			const value = splitPromptInput(result);
+			if (value.text.trim() === "" && !value.images?.length) {
+				if (index >= 0) state.optionNotes.splice(index, 1);
+			} else {
+				const entry = { option, note: value.text, images: value.images };
+				if (index >= 0) state.optionNotes[index] = entry;
+				else state.optionNotes.push(entry);
+			}
+		} finally {
+			this.#promptActive = false;
+			this.#questionLayout = undefined;
+			this.#submitLayoutDirty = true;
+			this.#runDeferredTimeout();
+			this.#requestRender();
+		}
+	}
+
 	#renderQuestionBody(width: number, maxRows: number): RenderedList {
 		const active = this.#activeQuestionState();
 		if (!active) return { lines: [], scrollOffset: 0, indicator: "" };
@@ -1710,6 +1788,10 @@ export class AskDialogComponent implements Component {
 				allLines.push(
 					theme.fg("muted", `   Note: ${truncateToWidth(note, Math.max(1, width - 9), Ellipsis.Unicode)}`),
 				);
+			}
+			for (const entry of state.optionNotes) {
+				const note = `${normalizedInlineInput(entry.option)}: ${normalizedInlineInput(entry.note)}`;
+				allLines.push(theme.fg("muted", `   ✎ ${truncateToWidth(note, Math.max(1, width - 5), Ellipsis.Unicode)}`));
 			}
 		}
 		allLines.push("");
@@ -1845,6 +1927,7 @@ export class AskDialogComponent implements Component {
 				customInputImages: state.customInputImages,
 				note,
 				noteImages: note === undefined ? undefined : state.noteImages,
+				...(state.optionNotes.length ? { optionNotes: state.optionNotes.map(entry => ({ ...entry })) } : {}),
 				timedOut: state.timedOut || undefined,
 			});
 		}

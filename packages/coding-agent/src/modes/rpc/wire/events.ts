@@ -6,7 +6,8 @@
 import { absentAs, doc, type WireDefs } from "./dsl";
 
 const JSON_OBJECT = "Record<string, unknown>";
-const MESSAGE_ID = doc("string", "Shared by the start, updates, and end of one message; unique per process.");
+const MESSAGE_ID = doc("string", "Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format.");
+const JOURNAL_IDENTITY = { sessionId: "string", sessionFile: "string | null", leafId: "string | null" };
 const MIXTURE_TRACE_HEADER = {
 	v: "number.integer",
 	runId: "string",
@@ -23,10 +24,22 @@ export const eventDefs = {
 	CacheWarmingOutcome: "'hit' | 'miss' | 'error' | 'aborted'",
 	NotifyType: "'info' | 'warning' | 'error'",
 
+	MessageEntryIdentity: { messageId: MESSAGE_ID, entryId: "string" },
+	JournalStateEvent: {
+		type: "'journal_state'", ...JOURNAL_IDENTITY, reason: "'snapshot' | 'identity' | 'leaf'",
+		"messageEntryIds?": doc("MessageEntryIdentity[]", "Snapshot-only durable associations among the last 256 live messages assigned entry IDs by this native owner. Retained across observer reconnects, cleared on session identity change or process restart; absence is not evidence a message was not persisted."),
+	},
+	JournalEntryEvent: {
+		type: "'journal_entry'", ...JOURNAL_IDENTITY, entry: JSON_OBJECT,
+	},
+	MessagePersistedEvent: {
+		type: "'message_persisted'", ...JOURNAL_IDENTITY, messageId: MESSAGE_ID, entryId: "string",
+	},
 	AdvisorMessageEvent: { type: "'advisor_message'", advisor: "string", slug: "string", message: "AgentMessage" },
 	RunOwnersJoinedEvent: { type: "'run_owners_joined'", owners: "string[]", agentStarts: "number.integer" },
 	RunOwnersSkippedEvent: { type: "'run_owners_skipped'", owners: "string[]", reason: "string" },
 	ChatModeChangedEvent: { type: "'chat_mode_changed'", mode: "ChatModeSetting", include: "string" },
+	ApprovalModeChangedEvent: { type: "'approval_mode_changed'" },
 	MixtureHopEndEvent: { type: "'mixture_hop_end'", details: "MixtureHopTrace" },
 	MixtureDecisionEvent: { type: "'mixture_decision'", details: "MixtureDecisionTrace" },
 	MixtureLimitEvent: { type: "'mixture_limit'", details: "MixtureLimitTrace" },
@@ -128,6 +141,10 @@ export const eventDefs = {
 		type: "'message_start'",
 		message: "AgentMessage",
 		"messageId?": MESSAGE_ID,
+		"snapshot?": doc("boolean", "True for the current unsaved assistant at an ordered native snapshot boundary."),
+		"sessionId?": "string",
+		"sessionFile?": "string | null",
+		"leafId?": "string | null",
 		"requestModelProvider?": "string",
 		"requestModelId?": "string",
 		"requestReasoning?": "Effort",
@@ -239,6 +256,8 @@ export const eventDefs = {
 	},
 	RetryFallbackSucceededEvent: { type: "'retry_fallback_succeeded'", model: "string", role: "string" },
 	ModelChangedEvent: { type: "'model_changed'" },
+	ThemesConfigurationChangedEvent: { type: "'themes_configuration_changed'" },
+	ModelsConfigurationChangedEvent: { type: "'models_configuration_changed'" },
 	ConfigWarningsChangedEvent: { type: "'config_warnings_changed'" },
 	AdvisorCostChangedEvent: { type: "'advisor_cost_changed'" },
 	AdvisorYieldedEvent: { type: "'advisor_yielded'" },
@@ -257,7 +276,7 @@ export const eventDefs = {
 			type: "'thinking_level_changed'",
 			"thinkingLevel?": "ThinkingLevel",
 			"configured?": doc("ConfiguredThinkingLevel", "The user's selector when it differs from the effective level."),
-			"resolved?": doc("Effort", "The level `auto` resolved to this turn, once classified."),
+			"resolved?": doc("ThinkingEffort", "The level `auto` resolved to this turn, once classified."),
 		},
 		"The effective thinking level changed.",
 	),
@@ -283,10 +302,14 @@ export const eventDefs = {
 
 	RpcAgentEvent: doc(
 		[
+			"JournalStateEvent",
+			"JournalEntryEvent",
+			"MessagePersistedEvent",
 			"AdvisorMessageEvent",
 			"RunOwnersJoinedEvent",
 			"RunOwnersSkippedEvent",
 			"ChatModeChangedEvent",
+			"ApprovalModeChangedEvent",
 			"MixtureHopEndEvent",
 			"MixtureDecisionEvent",
 			"MixtureLimitEvent",
@@ -312,6 +335,8 @@ export const eventDefs = {
 			"RetryFallbackAppliedEvent",
 			"RetryFallbackSucceededEvent",
 			"ModelChangedEvent",
+			"ModelsConfigurationChangedEvent",
+			"ThemesConfigurationChangedEvent",
 			"ConfigWarningsChangedEvent",
 			"AdvisorCostChangedEvent",
 			"AdvisorYieldedEvent",

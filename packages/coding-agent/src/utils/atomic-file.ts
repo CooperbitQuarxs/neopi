@@ -17,11 +17,17 @@ export async function replaceFileAtomically(tempPath: string, targetPath: string
 }
 
 /** Write a complete sibling file before publishing it, without exposing truncated contents. */
-export async function writeFileAtomically(filePath: string, content: string): Promise<void> {
-	const targetPath = await fs.promises.realpath(filePath).catch(error => {
-		if (isEnoent(error)) return filePath;
-		throw error;
-	});
+export async function writeFileAtomically(
+	filePath: string,
+	content: string,
+	options: { noReplace?: boolean } = {},
+): Promise<void> {
+	const targetPath = options.noReplace
+		? filePath
+		: await fs.promises.realpath(filePath).catch(error => {
+				if (isEnoent(error)) return filePath;
+				throw error;
+			});
 	const tempPath = `${targetPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
 	let removeTemp = false;
 	try {
@@ -40,7 +46,12 @@ export async function writeFileAtomically(filePath: string, content: string): Pr
 		} finally {
 			await handle.close();
 		}
-		await replaceFileAtomically(tempPath, targetPath);
+		if (options.noReplace) {
+			// A hard link publishes the completed file without clobbering a target
+			// created by another process while this file was staged.
+			await fs.promises.link(tempPath, targetPath);
+			await fs.promises.unlink(tempPath);
+		} else await replaceFileAtomically(tempPath, targetPath);
 		removeTemp = false;
 	} finally {
 		if (removeTemp) await fs.promises.rm(tempPath, { force: true }).catch(() => {});

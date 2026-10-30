@@ -1,8 +1,9 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
-import { formatDuration, isRecord, logger, PRODUCT_NAME, prompt, sanitizeText } from "@oh-my-pi/pi-utils";
+import { formatDuration, isRecord, logger, PRODUCT_NAME, sanitizeText } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { chatModeLabel } from "../../chat/chat-mode";
 import { extractTextContent } from "../../commit/utils";
@@ -361,7 +362,9 @@ export class EventController {
 		this.#handlers = {
 			agent_start: e => this.#handleAgentStart(e),
 			agent_end: e => this.#handleAgentEnd(e),
-			turn_start: async () => {},
+			turn_start: async () => {
+				vocalizer.beginTurn();
+			},
 			turn_end: async e => this.#handleTurnEnd(e),
 			message_start: e => this.#handleMessageStart(e),
 			message_update: e => this.#handleMessageUpdate(e),
@@ -408,6 +411,17 @@ export class EventController {
 			// Header rebuild is owned by InteractiveMode's own session
 			// subscription (mirrors model_changed); nothing to do here.
 			config_warnings_changed: async () => {},
+			approval_mode_changed: async () => {
+				this.ctx.statusLine.invalidate();
+				this.ctx.ui.requestRender();
+			},
+			models_configuration_changed: async () => {
+				this.ctx.statusLine.invalidate();
+				this.ctx.ui.requestRender();
+			},
+			themes_configuration_changed: async () => {
+				this.ctx.ui.requestRender();
+			},
 			advisor_cost_changed: async () => {
 				this.ctx.statusLine.invalidate();
 				this.ctx.ui.requestRender();
@@ -1473,6 +1487,7 @@ export class EventController {
 	 * live (the final message is spoken at turn end).
 	 */
 	#vocalizeDelta(event: Extract<AgentSessionEvent, { type: "message_update" }>): void {
+		if (this.ctx.localVoiceActive) return;
 		if (!cfgSpeechEnabled.get(settings)) return;
 		const mode = cfgSpeechMode.get(settings);
 		const delta = event.assistantMessageEvent;
@@ -1489,6 +1504,7 @@ export class EventController {
 	 * sure the live buffer's trailing partial gets flushed.
 	 */
 	#handleTurnEnd(event: Extract<AgentSessionEvent, { type: "turn_end" }>): void {
+		if (this.ctx.localVoiceActive) return;
 		if (!cfgSpeechEnabled.get(settings)) return;
 		if (cfgSpeechMode.get(settings) !== "yield") {
 			vocalizer.flush();
@@ -2829,10 +2845,15 @@ export class EventController {
 		if (!this.ctx.viewSession.model) return;
 		if (this.ctx.viewSession.messages.length === 0) return;
 
-		const promptText = prompt.render(idleRecapPrompt, {
-			goal: this.#idleRecapGoalText() ?? "",
-			task: nextActionableTask(this.ctx.todoPhases)?.content ?? "",
-		});
+		const promptText = renderPromptAsset(
+			"system/recap-user.md",
+			idleRecapPrompt,
+			{
+				goal: this.#idleRecapGoalText() ?? "",
+				task: nextActionableTask(this.ctx.todoPhases)?.content ?? "",
+			},
+			{ cwd: this.ctx.sessionManager.getCwd() },
+		);
 
 		const abort = new AbortController();
 		this.#idleRecapAbort = abort;

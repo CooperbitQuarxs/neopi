@@ -6,6 +6,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { resolveRoleChain } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { type Settings, settings } from "../config/settings";
+import { preemptEventAudio } from "../event-audio/activity";
 import { resolveXAIHttpTransport, type XAIHttpProvider, type XAIHttpTransportRegistry } from "../lib/xai-http";
 import { type SttStreamHandle, sttClient } from "./asr-client";
 import { downloadSttModel, isSttModelCached } from "./downloader";
@@ -107,12 +108,14 @@ export class STTController {
 
 	#setState(state: SttState, options: SttCallbacks): void {
 		this.#state = state;
+		if (state !== "idle") preemptEventAudio();
 		options.onStateChange(state);
 	}
 
 	/** Start dictating into `editor`, reporting to `options` until the capture ends. A no-op while a
 	 *  capture is starting, recording, or transcribing. */
 	async start(editor: SttTarget, options: SttCallbacks): Promise<void> {
+		if (this.#disposed) return;
 		if (this.#state === "transcribing") options.showStatus("Transcription in progress...");
 		if (this.#toggling || this.#state !== "idle") return;
 		await this.#transition(options, () => this.#start(editor, options));
@@ -140,6 +143,7 @@ export class STTController {
 		this.#toggling = true;
 		try {
 			await step();
+			if (this.#disposed) return;
 			if (this.#stopAfterStart && this.#state === "recording") {
 				this.#stopAfterStart = false;
 				await this.#stop(options);
@@ -173,6 +177,49 @@ export class STTController {
 		return resolveRoleChain("dictation", this.#settings, pool)[0]?.model;
 	}
 
+	/** Transcribe a complete wake recording once, using the same dictation role. */
+	async transcribeRecording(audio: Float32Array, signal: AbortSignal): Promise<string> {
+		const model = this.#resolveModel();
+		if (model?.api === "openai-transcriptions" || model?.api === "xai-stt") {
+			const file = new WavFileRecorder();
+			try {
+				file.append(audio);
+				return await this.#transcribeFile(model, file.finalize(), signal);
+			} finally {
+				file.dispose();
+			}
+		}
+		if (model && model.api !== "local-inference") throw new Error(`Unsupported speech-to-text API: ${model.api}`);
+		const key = this.#resolveModelKey(model);
+		await downloadSttModel(key, undefined, { signal });
+		return sttClient.transcribe(key, audio, { language: cfgSttLanguage.get(this.#settings), signal });
+	}
+
+	async #transcribeFile(model: Model<Api>, recordingPath: string, signal: AbortSignal): Promise<string> {
+		if (!this.#registry) throw new Error("No dictation model registry");
+		const language = cfgSttLanguage.get(this.#settings);
+		let requestModel = model;
+		if (model.api === "xai-stt") {
+			const transport = await resolveXAIHttpTransport(this.#registry, model.provider as XAIHttpProvider, model.id);
+			if (transport.baseURL !== model.baseUrl || transport.headers !== model.headers) {
+				requestModel = { ...model, baseUrl: transport.baseURL, headers: transport.headers };
+			}
+		}
+		signal.throwIfAborted();
+		const result = await transcribeAudio(
+			requestModel,
+			{
+				audio: Bun.file(recordingPath),
+				mimeType: "audio/wav",
+				fileName: "dictation.wav",
+				responseFormat: "json",
+				...(language && { language }),
+			},
+			{ apiKey: this.#registry.resolver(requestModel, this.#getSessionId?.()), signal },
+		);
+		return result.text.trim();
+	}
+
 	#resolveModelKey(model = this.#resolveModel()): SttModelKey {
 		return resolveSttModelSpec(model?.id).key;
 	}
@@ -189,14 +236,18 @@ export class STTController {
 			// (memoized in the worker) and it is hot by the time recording stops.
 			// Only a genuine first-use download blocks (its progress shows in the
 			// download HUD), so we never record silently against missing weights.
-			if (await isSttModelCached(modelKey)) {
+			const cached = await isSttModelCached(modelKey);
+			if (this.#disposed) return null;
+			if (cached) {
 				this.#warmModel(modelKey);
 			} else {
 				await downloadSttModel(modelKey);
 			}
+			if (this.#disposed) return null;
 			this.#resolvedModelKey = modelKey;
 			return modelKey;
 		} catch (err) {
+			if (this.#disposed) return null;
 			const msg = err instanceof Error ? err.message : "Failed to setup STT dependencies";
 			options.showWarning(msg);
 			logger.error("STT dependency setup failed", { error: msg });
@@ -232,7 +283,7 @@ export class STTController {
 		}
 
 		let modelKey = await this.#ensureDeps(options, this.#resolveModelKey(model));
-		if (!modelKey) return;
+		if (this.#disposed || !modelKey) return;
 		model = this.#resolveModel();
 		if (model?.api === "openai-transcriptions" || model?.api === "xai-stt") {
 			this.#startBuffered(editor, options, model);
@@ -245,7 +296,7 @@ export class STTController {
 		const startModelKey = this.#resolveModelKey(model);
 		if (startModelKey !== modelKey) {
 			modelKey = await this.#ensureDeps(options, startModelKey);
-			if (!modelKey) return;
+			if (this.#disposed || !modelKey) return;
 		}
 		await this.#startStreaming(editor, options, modelKey);
 	}
@@ -341,33 +392,7 @@ export class STTController {
 				this.#cloudFile = null;
 				this.#retainedCloudFiles.push(file);
 				if (this.#retainedCloudFiles.length > 5) this.#retainedCloudFiles.shift()?.dispose();
-				const language = cfgSttLanguage.get(this.#settings);
-				let requestModel = model;
-				if (model.api === "xai-stt") {
-					const transport = await resolveXAIHttpTransport(
-						this.#registry,
-						model.provider as XAIHttpProvider,
-						model.id,
-					);
-					if (transport.baseURL !== model.baseUrl || transport.headers !== model.headers) {
-						requestModel = { ...model, baseUrl: transport.baseURL, headers: transport.headers };
-					}
-				}
-				const result = await transcribeAudio(
-					requestModel,
-					{
-						audio: Bun.file(recordingPath),
-						mimeType: "audio/wav",
-						fileName: "dictation.wav",
-						responseFormat: "json",
-						...(language && { language }),
-					},
-					{
-						apiKey: this.#registry.resolver(requestModel, this.#getSessionId?.()),
-						signal: abort.signal,
-					},
-				);
-				finalText = result.text.trim();
+				finalText = await this.#transcribeFile(model, recordingPath, abort.signal);
 			}
 		} catch (err) {
 			failed = true;
@@ -547,17 +572,29 @@ export class STTController {
 	}
 
 	dispose(): void {
+		if (this.#disposed) return;
+		const editor = this.#streamEditor;
+		const callbacks = this.#streamCallbacks;
 		this.#disposed = true;
 		this.#holdOwned = false;
 		if (this.#streamAbort) {
 			this.#streamAbort.abort();
 			this.#streamAbort = null;
 		}
-		this.#stream?.cancel();
+		try {
+			this.#stream?.cancel();
+		} catch {
+			// A failed provider cancel must not leave the microphone or composer owned.
+		}
 		try {
 			this.#streamRecorder?.stop();
 		} catch {
 			// best effort cleanup
+		}
+		try {
+			editor?.clearVolatileText();
+		} catch (error) {
+			logger.debug("stt: retired editor cleanup failed", { error: String(error) });
 		}
 		this.#cleanupStream();
 		this.#cleanupCloud();
@@ -565,5 +602,6 @@ export class STTController {
 		this.#retainedCloudFiles.length = 0;
 		this.#state = "idle";
 		this.#resolvedModelKey = null;
+		callbacks?.onStateChange("idle");
 	}
 }

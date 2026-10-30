@@ -338,7 +338,7 @@ export class ModelPickerComponent implements Component {
 
 		const borderColor: ThemeColor | undefined = this.#taskMode ? "error" : undefined;
 		let footer = footerHint(this.#taskMode ? "task" : this.#roleMode ? "role" : "session");
-		if (this.#browser.filterFocused) footer = "Search · Esc back to list";
+		if (this.#browser.filterFocused) footer = "Search · Enter confirm · Esc clear";
 		if (this.#hasTaskTarget && !this.#roleMode && !this.#browser.filterFocused) footer += " · Tab target";
 		if (this.#taskModeKey !== undefined && !this.#roleMode && !this.#browser.filterFocused) {
 			footer += ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? "session model" : "task model"}`;
@@ -364,6 +364,17 @@ export class ModelPickerComponent implements Component {
 	handleNativeEvent(event: NativeUiEvent): void {
 		const picked = pickerEvent(event);
 		if (!picked) return;
+		if (this.#browser.filterFocused) {
+			if (picked.kind === "action" && picked.act === CLOSE_ACTION.id) this.#browser.handleCancel();
+			else if (
+				picked.kind === "activate" ||
+				(picked.kind === "action" && (picked.act === "searchConfirm" || picked.act === "use"))
+			) {
+				this.#browser.handleInput("\r");
+			}
+			this.#tui.requestRender();
+			return;
+		}
 		if (picked.kind !== "action") {
 			this.#browser.routePickerItem(picked.item, picked.kind === "activate");
 			return;
@@ -396,6 +407,7 @@ export class ModelPickerComponent implements Component {
 	#describePicker(): NativeNode {
 		const mode = this.#taskMode ? "task" : this.#roleMode ? "role" : "session";
 		const query = this.#browser.query;
+		const value = this.#browser.value;
 		const view = this.#browser.pickerOrder({
 			providers: false,
 			rest: mode === "role" ? null : query.trim() ? "Matches" : "All",
@@ -410,7 +422,7 @@ export class ModelPickerComponent implements Component {
 		const preview = this.#browser.pickerPreview("compact", current);
 		const selected = this.#browser.pickerSelected;
 		const cursor = this.#browser.cursor;
-		const memo = `${mode}\0${this.#configError ?? ""}\0${query}\0${cursor}\0${selected ?? ""}\0${this.#browser.filterFocused}`;
+		const memo = `${mode}\0${this.#configError ?? ""}\0${value}\0${cursor}\0${selected ?? ""}\0${this.#browser.filterFocused}`;
 		const cached = this.#pickerRoot;
 		if (
 			cached !== undefined &&
@@ -423,7 +435,7 @@ export class ModelPickerComponent implements Component {
 		}
 		const subtitle: TspPickerProps["subtitle"] = this.#configError
 			? [span(this.#configError, "error")]
-			: `${mode === "task" ? TASK_STATUS_HINT : mode === "role" ? QUICK_ROLE_STATUS_HINT : STATUS_HINT} · ${this.#browser.filterFocused ? "Esc back to list" : `/ search · j/k rows · Ctrl-u/d half${this.#hasTaskTarget && !this.#roleMode ? " · Tab target" : ""}`}`;
+			: `${mode === "task" ? TASK_STATUS_HINT : mode === "role" ? QUICK_ROLE_STATUS_HINT : STATUS_HINT} · ${this.#browser.filterFocused ? "Enter confirm · Esc clear" : `/ search · j/k rows · Ctrl-u/d half${this.#hasTaskTarget && !this.#roleMode ? " · Tab target" : ""}`}`;
 		const cycleKey = editorKey("app.model.cycleForward") || formatKeyHint("ctrl+p");
 		const node = picker(
 			{
@@ -434,7 +446,7 @@ export class ModelPickerComponent implements Component {
 				size: "md",
 				layout: "rows",
 				preview: "below",
-				query,
+				query: value,
 				cursor,
 				placeholder: mode === "task" ? "Search models…" : "Search models, @ for quick roles…",
 				columns: MODEL_PICKER_COLUMNS,
@@ -446,17 +458,19 @@ export class ModelPickerComponent implements Component {
 				total: this.#browser.baseCount,
 				empty: mode === "role" ? `No quick roles in the ${cycleKey} cycle` : "No models available",
 				actions: compact([
-					pickerAction(
-						"use",
-						mode === "role" ? "Apply role" : mode === "task" ? "Use for Task subagents" : "Use for session",
-						"enter",
-						{ primary: true },
-					),
-					this.#taskModeKey !== undefined && mode !== "role"
+					this.#browser.filterFocused
+						? pickerAction("searchConfirm", "Search", "enter", { primary: true })
+						: pickerAction(
+								"use",
+								mode === "role" ? "Apply role" : mode === "task" ? "Use for Task subagents" : "Use for session",
+								"enter",
+								{ primary: true },
+							),
+					!this.#browser.filterFocused && this.#taskModeKey !== undefined && mode !== "role"
 						? pickerAction("task", "Task model", this.#taskModeKey, { on: mode === "task" })
 						: undefined,
-					query.length > 0 ? pickerAction("clear", "Clear search") : undefined,
-					{ ...CLOSE_ACTION, label: this.#browser.filterFocused ? "Back to list" : "Close" },
+					!this.#browser.filterFocused && query.length > 0 ? pickerAction("clear", "Clear search") : undefined,
+					{ ...CLOSE_ACTION, label: this.#browser.filterFocused ? "Clear search" : "Close" },
 				]),
 			},
 			preview,

@@ -19,35 +19,46 @@ describe("literal menu search fields", () => {
 			for (const key of ["k", "x", "l"]) expect(field.handleInput(key)).toBe("edited");
 			expect(field.value).toBe("kxl");
 			expect(field.focused).toBe(true);
+			expect(field.handleInput("\r")).toBe("exited");
+			expect(field.focused).toBe(false);
+			expect(field.value).toBe("kxl");
 		} finally {
 			setKeybindings(previous);
 		}
 	});
 
-	it("takes literal text only while focused and retains it after Escape", () => {
+	it("takes literal text only while focused and confirms it with Enter", () => {
 		const field = new MenuSearchField();
 		expect(field.handleInput("j")).toBe("pass");
 		expect(field.value).toBe("");
 		field.focused = true;
 		for (const key of ["h", "j", "k", "l", "g", "/", " "]) expect(field.handleInput(key)).toBe("edited");
 		expect(field.value).toBe("hjklg/ ");
-		expect(field.handleInput("\x1b")).toBe("exited");
+		expect(field.handleInput("\r")).toBe("exited");
 		expect(field.focused).toBe(false);
 		expect(field.value).toBe("hjklg/ ");
-		expect(field.handleInput("\x1b")).toBe("pass");
+		expect(field.handleInput("\x1b")).toBe("exited");
+		expect(field.value).toBe("");
 	});
 
-	it("keeps caret editing while passing list arrows, pages, and confirmation", () => {
+	it("keeps caret editing and consumes list motions while searching", () => {
 		const field = new MenuSearchField("alpha", true);
 		expect(field.handleInput("\x01")).toBe("edited");
 		expect(field.cursor).toBe(0);
 		expect(field.handleInput("\x05")).toBe("edited");
 		expect(field.cursor).toBe(5);
-		for (const key of ["\x1b[A", "\x1b[B", "\x1b[5~", "\x1b[6~", "\r"]) {
-			expect(field.handleInput(key)).toBe("pass");
+		for (const key of ["\x1b[A", "\x1b[B", "\x1b[5~", "\x1b[6~"]) {
+			expect(field.handleInput(key)).toBe("edited");
 		}
 		expect(field.value).toBe("alpha");
 		expect(field.focused).toBe(true);
+	});
+
+	it("cancels search with Escape and clears the active pattern", () => {
+		const field = new MenuSearchField("voice", true);
+		expect(field.handleInput("\x1b")).toBe("exited");
+		expect(field.value).toBe("");
+		expect(field.focused).toBe(false);
 	});
 
 	it("restores a literal draft at its caret without selecting or submitting", () => {
@@ -60,11 +71,40 @@ describe("literal menu search fields", () => {
 		expect(restored.cursor).toBe(4);
 	});
 
+	it("keeps draft and confirmed patterns separate and discards edits on blur", () => {
+		const field = new MenuSearchField("old");
+		field.focused = true;
+		field.handleInput(" draft");
+		expect(field.value).toBe("old draft");
+		expect(field.query).toBe("old");
+		field.focused = false;
+		expect(field.value).toBe("old");
+		field.focused = true;
+		field.handleInput(" confirmed");
+		field.handleInput("\r");
+		expect(field.query).toBe("old confirmed");
+		field.handleInput("\x1b");
+		expect(field.query).toBe("");
+	});
+
 	it("renders only the search hint when its empty field is not focused", () => {
 		const field = new MenuSearchField();
 		expect(field.render(80, theme)).toBe("/ search");
 		field.focused = true;
 		expect(field.render(80, theme)).toContain("Search:");
+	});
+
+	it("shows normal navigation motions after confirming a pattern", () => {
+		const field = new MenuSearchField("", true);
+		field.handleInput("voice");
+		field.handleInput("\r");
+		const confirmed = field.render(160, theme);
+		expect(confirmed).toContain("Ctrl-d/u");
+		expect(confirmed).toContain("gg/G");
+		expect(confirmed).toContain("j/k");
+		expect(confirmed).not.toContain("Enter confirm");
+		field.focused = true;
+		expect(field.render(160, theme)).toContain("Enter confirm");
 	});
 
 	it("renders bounded search hints without raw tabs", () => {
@@ -76,6 +116,6 @@ describe("literal menu search fields", () => {
 		}
 		expect(field.render(80, theme)).toContain("/ search");
 		field.focused = true;
-		expect(field.render(80, theme)).toContain("Esc back to list");
+		expect(field.render(80, theme)).toContain("Enter confirm");
 	});
 });

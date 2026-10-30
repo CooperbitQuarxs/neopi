@@ -56,6 +56,7 @@ export interface LiveTransportOptions {
 	sessionId: string;
 	instructions: string;
 	voice: string;
+	model: string;
 	callbacks: LiveTransportCallbacks;
 	signal?: AbortSignal;
 }
@@ -121,6 +122,7 @@ export class CodexLiveTransport {
 	#closePromise: Promise<void> | undefined;
 	#sendTail: Promise<void> = Promise.resolve();
 	#muted = false;
+	#outputSuppressed = false;
 	#unexpectedFailureReported = false;
 	readonly #abortListener: () => void;
 
@@ -167,6 +169,9 @@ export class CodexLiveTransport {
 			(error, message) => this.#reportFailure(error?.message ?? message),
 		);
 		this.#peer = peer;
+		(peer as LiveWebRtcPeer & { setOutputSuppressed(suppressed: boolean): void }).setOutputSuppressed(
+			this.#outputSuppressed,
+		);
 		const offer = await peer.createOffer();
 		if (this.#state !== "connecting") throw abortReason(this.#options.signal);
 		const signaling = await this.#signal(offer);
@@ -209,7 +214,7 @@ export class CodexLiveTransport {
 			headers,
 			body: JSON.stringify({
 				sdp: offer,
-				session: buildLiveSessionPayload(this.#options.instructions, this.#options.voice),
+				session: buildLiveSessionPayload(this.#options.instructions, this.#options.voice, this.#options.model),
 			}),
 			signal: this.#options.signal,
 		});
@@ -393,6 +398,14 @@ export class CodexLiveTransport {
 	async setMuted(muted: boolean): Promise<void> {
 		this.#muted = muted;
 		if (this.#state === "connected") this.#peer?.setMuted(muted);
+	}
+
+	/** Gate native RTP playback, independently of transcript/data-channel events. */
+	setOutputSuppressed(suppressed: boolean): void {
+		this.#outputSuppressed = suppressed;
+		(
+			this.#peer as (LiveWebRtcPeer & { setOutputSuppressed(suppressed: boolean): void }) | undefined
+		)?.setOutputSuppressed(suppressed);
 	}
 
 	/** Stop sideband signaling and the native WebRTC media peer. Safe to call repeatedly. */

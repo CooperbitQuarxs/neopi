@@ -90,6 +90,7 @@ function parseUiState(
 	if (!isRecord(value) || !isRecord(value.preferences) || !isRecord(value.theme)) return undefined;
 	const {
 		quiet,
+		startupBranding,
 		composerShape,
 		showHardwareCursor,
 		maxInlineImages,
@@ -102,6 +103,7 @@ function parseUiState(
 	} = value.preferences;
 	if (
 		typeof quiet !== "boolean" ||
+		(startupBranding !== undefined && startupBranding !== "new" && startupBranding !== "classic") ||
 		typeof composerShape !== "string" ||
 		typeof showHardwareCursor !== "boolean" ||
 		typeof maxInlineImages !== "number" ||
@@ -132,6 +134,7 @@ function parseUiState(
 	return {
 		preferences: {
 			quiet,
+			startupBranding: startupBranding ?? "new",
 			composerShape,
 			showHardwareCursor,
 			maxInlineImages,

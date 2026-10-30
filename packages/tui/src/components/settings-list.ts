@@ -1,6 +1,7 @@
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey } from "../chrome/keybinding-hints";
 import { fuzzyFilter } from "../fuzzy";
+import { compileMenuRegex } from "../menu-search";
 import { getKeybindings } from "../keybindings";
 import type { MouseRoutable, SgrMouseEvent } from "../mouse";
 import type { TspPrefsControl, TspPrefsRow, TspPrefsSection, TspProps, TspSpan } from "@oh-my-pi/pi-wire";
@@ -166,6 +167,7 @@ export interface SettingsListNavigationState {
 	filter: string;
 	filterFocused: boolean;
 	filterCursor: number;
+	filterDraft?: string;
 	sectionFocused: boolean;
 	viewportTop: MenuViewportPosition | number | undefined;
 	submenuId: string | null;
@@ -277,6 +279,7 @@ export class SettingsList implements Component {
 			filter: this.#filterQuery,
 			filterFocused: this.#search.focused,
 			filterCursor: this.#search.cursor,
+			...(this.#search.focused ? { filterDraft: this.#search.value } : {}),
 			sectionFocused: this.#sectionFocus,
 			viewportTop: this.#viewport.top,
 			submenuId: this.#submenuItemId,
@@ -287,6 +290,7 @@ export class SettingsList implements Component {
 	}
 
 	leaveMenu(): void {
+		this.#search.focused = false;
 		if (isMenuHistoryLeaver(this.#submenuComponent)) this.#submenuComponent.leaveMenu();
 	}
 
@@ -297,6 +301,7 @@ export class SettingsList implements Component {
 			filter?: string;
 			filterFocused?: boolean;
 			filterCursor?: number;
+			filterDraft?: string;
 			sectionFocused?: boolean;
 			viewportTop?: MenuViewportPosition | number;
 			submenuId?: string;
@@ -313,11 +318,16 @@ export class SettingsList implements Component {
 			this.#syncSelectionState();
 			this.#sectionFocus = state.sectionFocused === true && this.hasSectionFocusTargets();
 			this.#search.restoreNavigation({
-				value: this.#filterQuery,
+				value: state.filterDraft ?? this.#filterQuery,
+				query: this.#filterQuery,
 				focused: state.filterFocused === true && this.#options.typeToSearch !== false,
 				cursor: state.filterCursor,
 			});
-			if (typeof state.submenuId === "string" && this.selectItem(state.submenuId)) {
+			if (
+				typeof state.submenuId === "string" &&
+				this.selectItem(state.submenuId) &&
+				this.getSelectedItem()?.submenu
+			) {
 				this.#activateItem();
 				// #activateItem reassigns the submenu that the reset above narrowed to null.
 				const submenu = this.#submenuComponent as Component | null;
@@ -491,7 +501,7 @@ export class SettingsList implements Component {
 		const item = this.getSelectedItem();
 		if (item?.id === this.#lastNotifiedSelectionId) return;
 		this.#lastNotifiedSelectionId = item?.id;
-		this.onSelectionChange?.(item);
+		if (!this.#restoring) this.onSelectionChange?.(item);
 	}
 
 	/** Resize the visible viewport (fullscreen hosts call this every render). */
@@ -696,13 +706,13 @@ export class SettingsList implements Component {
 	}
 
 	#handleSearchInput(data: string): boolean {
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const result = this.#search.handleInput(data);
 		if (result === "exited") this.#keys.reset();
 		if (result === "pass") return false;
-		if (this.#search.value !== before) {
-			if (this.#search.value.trim()) this.#sectionFocus = false;
-			this.#selection.setQuery(this.#search.value, false);
+		if (this.#search.query !== before) {
+			if (this.#search.query.trim()) this.#sectionFocus = false;
+			this.#selection.setQuery(this.#search.query, false);
 			this.#viewport.reveal();
 			this.#syncSelectionState();
 			this.#notifySelection();
@@ -788,11 +798,14 @@ export class SettingsList implements Component {
 		const items: NativeNode[] = [];
 		for (const item of this.#filteredItems) items.push(this.#describeItem(item));
 		const cachedMax = this.#nativeList?.props.max;
+		const error = compileMenuRegex(this.#filterQuery)?.error;
 		const props: TspProps<"list"> = {
 			selected: this.getSelectedItem()?.id ?? null,
 			filter: this.#filterQuery.trim() || undefined,
 			empty:
-				this.#items.length === 0 ? (this.#options.emptyText ?? "No settings available") : "No matching settings",
+				error
+					? `Invalid regex: ${error}`
+					: this.#items.length === 0 ? (this.#options.emptyText ?? "No settings available") : "No matching settings",
 			max:
 				typeof cachedMax === "object" && cachedMax.lines === this.#maxVisible
 					? cachedMax
@@ -1129,7 +1142,8 @@ export class SettingsList implements Component {
 			return;
 		}
 		if (action.kind === "cancel") {
-			this.#onCancel();
+			if (this.#filterQuery) this.clearSearch();
+			else this.#onCancel();
 			return;
 		}
 		if (action.kind === "context") {

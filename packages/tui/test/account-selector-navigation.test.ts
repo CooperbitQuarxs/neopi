@@ -137,7 +137,7 @@ it.each([
 	const close = { type: "action", key: PICKER_KEY, act: "close", mods: [] } as const;
 	selector.handleNativeEvent(close);
 	expect(closed).toBe(0);
-	expect(selector.navigationSnapshot()).toMatchObject({ search: { value: "hjkl/ g", focused: false } });
+	expect(selector.navigationSnapshot()).toMatchObject({ search: { value: "", query: "", focused: false } });
 	selector.handleNativeEvent(close);
 	expect(closed).toBe(1);
 });

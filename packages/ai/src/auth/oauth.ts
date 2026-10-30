@@ -87,6 +87,7 @@ export class OAuthAccounts implements OAuthApi {
 			signal: ctrl.signal,
 			fetch: ctrl.fetch,
 		});
+		ctrl.signal?.throwIfAborted();
 		if (typeof result === "string") {
 			// Some flows (e.g. ollama) return "" to signal that no key was entered.
 			if (!result) {

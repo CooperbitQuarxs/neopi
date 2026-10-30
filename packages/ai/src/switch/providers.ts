@@ -65,14 +65,14 @@ function thinking(row: ModelRow, api: Api, previous?: ThinkingConfig): ThinkingC
 /** Merge row-declared fields, not decoder defaults, over a discovered/catalog row. */
 function merge(provider: ProviderConfig, row: ModelRow, discovered?: Model<Api>, defaultApi?: Api): PreparedModel {
 	const has = (name: string): boolean => row.declaredFields.includes(name);
-	const api = discovered?.api ?? defaultApi ?? modelApi(provider, row.kind);
-	if (!discovered && provider.kind === "http" && (row.contextWindow === undefined || row.maxOutput === undefined)) {
+	if (!discovered && (!has("upstream_id") || !has("kind") || !has("context_window") || !has("max_output"))) {
 		throw new SwitchError(
 			422,
 			"model_incomplete",
-			`Added model ${provider.id}/${row.id} needs context_window and max_output`,
+			`Added model ${provider.id}/${row.id} needs upstream_id, kind, context_window and max_output`,
 		);
 	}
+	const api = discovered?.api ?? defaultApi ?? modelApi(provider, row.kind);
 	const price = row.cost;
 	const cost = price
 		? { input: price.input, output: price.output, cacheRead: price.input, cacheWrite: price.input }

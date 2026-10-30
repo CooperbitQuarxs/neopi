@@ -1210,3 +1210,148 @@ const fn event_kind(event: &PointerEvent) -> &'static str {
 		PointerEvent::Scroll { .. } => "scroll",
 	}
 }
+
+#[cfg(test)]
+mod cancellation_tests {
+	use std::{
+		io::{BufRead, BufReader},
+		process::{Child, Command, Stdio},
+	};
+
+	use super::*;
+	use crate::desktop::{control::CancellationSource, error::ErrorCode};
+
+	struct PrivateXvfb(Child);
+
+	impl PrivateXvfb {
+		fn start() -> (Self, String) {
+			let mut child = Command::new("Xvfb")
+				.args(["-displayfd", "1", "-screen", "0", "800x600x24", "-nolisten", "tcp", "-noreset"])
+				.stdout(Stdio::piped())
+				.stderr(Stdio::null())
+				.spawn()
+				.expect("this ignored integration test requires Xvfb");
+			let mut number = String::new();
+			BufReader::new(child.stdout.take().unwrap())
+				.read_line(&mut number)
+				.unwrap();
+			assert!(!number.trim().is_empty(), "Xvfb did not allocate a private display");
+			(Self(child), format!(":{}", number.trim()))
+		}
+	}
+
+	impl Drop for PrivateXvfb {
+		fn drop(&mut self) {
+			let _ = self.0.kill();
+			let _ = self.0.wait();
+		}
+	}
+
+	#[test]
+	#[ignore = "starts its own private Xvfb; requires the Xvfb executable"]
+	fn isolated_xvfb_typing_and_external_mapping() {
+		let (_server, display) = PrivateXvfb::start();
+		let (conn, screen) = x11rb::connect(Some(&display)).unwrap();
+		let conn = Arc::new(conn);
+		let root = conn.setup().roots[screen].root;
+		let window = conn.generate_id().unwrap();
+		conn
+			.create_window(
+				x11rb::COPY_DEPTH_FROM_PARENT,
+				window,
+				root,
+				0,
+				0,
+				400,
+				300,
+				0,
+				x11rb::protocol::xproto::WindowClass::INPUT_OUTPUT,
+				0,
+				&x11rb::protocol::xproto::CreateWindowAux::new().event_mask(EventMask::KEY_PRESS),
+			)
+			.unwrap()
+			.check()
+			.unwrap();
+		conn.map_window(window).unwrap().check().unwrap();
+		conn
+			.set_input_focus(InputFocus::PARENT, window, CURRENT_TIME)
+			.unwrap()
+			.check()
+			.unwrap();
+		let mut input = X11Input::new(conn.clone(), root).unwrap();
+		let target = Target::Window(window.to_string());
+		for text in ["/usage", "DRAFT_SHARED_ALPHA", "A🦀"] {
+			let source = CancellationSource::default();
+			let token = source.token();
+			let _monitor = control::monitor_for_test(&display, &source).unwrap();
+			token.wait(Duration::from_millis(100)).unwrap();
+			let result = control::with_token_for_test(&token, || {
+				input.type_text(&target, text, DeliveryMode::Foreground)
+			});
+			let observed = token.wait(Duration::from_millis(100));
+			eprintln!("private Xvfb text={text:?}: input={result:?}; token={observed:?}");
+			let mut presses = 0;
+			let mut replacements = 0;
+			while let Some(event) = conn.poll_for_event().unwrap() {
+				if matches!(event, x11rb::protocol::Event::KeyPress(_)) {
+					presses += 1;
+				}
+				if matches!(event, x11rb::protocol::Event::MappingNotify(_)) {
+					replacements += 1;
+				}
+			}
+			if text == "/usage" {
+				assert!(replacements > 0, "the first XTEST input must exercise legacy map replacement");
+			}
+			if text.contains('🦀') {
+				let error = result.unwrap_err();
+				assert_eq!(error.code, ErrorCode::InputFailed);
+				assert!(error.message.contains("no keycode"));
+				assert_eq!(presses, 0, "unmapped text must fail before sending its mapped prefix");
+			} else {
+				result.unwrap();
+				assert!(
+					presses >= text.chars().count(),
+					"mapped typing must actually deliver key events"
+				);
+			}
+			observed.unwrap();
+		}
+
+		let source = CancellationSource::default();
+		let token = source.token();
+		let monitor = control::monitor_for_test(&display, &source).unwrap();
+		control::with_token_for_test(&token, || {
+			input.key_chord(&target, &[KeyName::Escape], DeliveryMode::Foreground)
+		})
+		.unwrap();
+		token.wait(Duration::from_millis(100)).unwrap();
+		drop(monitor);
+
+		let source = CancellationSource::default();
+		let token = source.token();
+		let _monitor = control::monitor_for_test(&display, &source).unwrap();
+		let (external, _) = x11rb::connect(Some(&display)).unwrap();
+		let keycode = external.setup().max_keycode;
+		let mut row = external
+			.get_keyboard_mapping(keycode, 1)
+			.unwrap()
+			.reply()
+			.unwrap();
+		row.keysyms[0] = 0x0101_f980;
+		external
+			.change_keyboard_mapping(1, keycode, row.keysyms_per_keycode, &row.keysyms)
+			.unwrap()
+			.check()
+			.unwrap();
+		let error = token.wait(Duration::from_secs(2)).unwrap_err();
+		eprintln!("private Xvfb external mapping: {error}");
+		assert_eq!(error.code, ErrorCode::Cancelled);
+		assert!(error.message.contains("reason: mapping_notify"));
+		assert!(
+			napi::Error::from(error)
+				.reason
+				.contains("reason: mapping_notify")
+		);
+	}
+}

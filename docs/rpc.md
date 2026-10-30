@@ -40,6 +40,11 @@ Behavior notes:
 | --- | --- |
 | `get_usage` | The `get_usage` command returns account-level provider usage reports. See [Session](#session). |
 | `get_roles` | `get_roles` / `set_role` commands and `get_state.activeRole` ([payloads](#get_roles-and-set_role-payloads)) |
+| `themes_configuration` | `get_themes_configuration`, scoped `update_theme`, and `themes_configuration_changed`. |
+| `theme_palette` | Read any installed theme's resolved palette by name with `get_theme`, without changing the selected theme. |
+| `model_selector` | Read-only `query_model_selector` returns native `/switch` matches, ordering, role aliases and row facts. |
+| `models_configuration` | Native provider/model catalog and scoped role/effort configuration, with expected-value write conflicts. |
+| `cancellable_login` | Login prompts can request secret input; `cancel_login` cancels only a login owned by the same connection. |
 | `set_chat_mode` | Live chat-mode switching: the `set_chat_mode` command, `get_state.chatMode`, the `chat_mode_changed` event, and the `/chat` builtin in `get_available_commands`. |
 | `tool_approval_request` | `set_approval_handler` and the typed `tool_approval_request` / `tool_approval_response` / `tool_approval_cancel` frames; see [Tool Approval Sub-Protocol](#tool-approval-sub-protocol) |
 | `set_mode` | `set_mode` command, `get_state` `mode`/`planMode`, `mode_changed` event, and the `plan_proposal_request`/`plan_proposal_response` round trip. See [Plan Mode Sub-Protocol](#plan-mode-sub-protocol). |
@@ -47,6 +52,39 @@ Behavior notes:
 | `session_lease` | A process holds an exclusive lifetime lease on every session file it writes, so two processes never append to one transcript. `--session <file>` onto a file another process holds fails at startup with a `startup_error` stderr line; `switch_session` and `branch` onto one fail with `code: "session_in_use"` (see [Session lease](#session-lease)). |
 | `plan_proposal_cancel` | A pending plan proposal that resolves without a host answer is announced with a `plan_proposal_cancel` frame, and a later `plan_proposal_response` for it fails with `code: "proposal_cancelled"`. See [`plan_proposal_cancel`](#plan_proposal_cancel). |
 | `prompt_entry_ids` | `prompt`, `steer`, `follow_up` and `abort_and_prompt` responses carry `data.userEntryId`, the id of the session entry their message is written as, and every `get_messages_page` message carries the `entryId` of its entry. See [Entry ids](#entry-ids). |
+| `session_journal_events` | Native journal commits, active-leaf changes, session identity changes and durable streaming-message associations. See [Native journal events](#native-journal-events). |
+| `session_tree_navigation` | Guarded native same-file `navigate_tree`, restored drafts and images, and explicit `resume_tree` acknowledgement for ask re-answers. See [Native tree navigation](#native-tree-navigation). |
+| `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
+
+### Native models configuration
+
+`get_models_configuration` returns safe native model facts, inference providers and auth sources, effective role resolutions, persisted `global` and `project` selector/effort pairs, and effective/scoped effort rules. `contextWindow` remains a model capability; `effectiveContextWindow` comes from the native maintenance-budget resolver, including session/role overrides, model limits and context rules. Model secrets, transport headers and raw settings are not included. Provider identity and login methods come from the native registry rather than a host inventory.
+
+Provider `acceptsKeys` reports the native `set_provider_api_key` eligibility gate
+(`ModelRegistry.hasProvider`), not whether an arbitrary platform key will be
+accepted upstream. It does not derive key support from environment-variable names.
+Each `loginProviders` entry includes `loginKind` (`api-key`, `oauth-code`,
+`device-code` or `custom`), `deviceCode`, and optional `storeCredentialsAs`.
+`deviceCode` also covers custom device-code hooks; preserve the alias ID when
+starting login and use `storeCredentialsAs` to identify the credential provider.
+Models include their optional native catalog `description`.
+
+`set_model_role_configuration` takes `role`, explicit write-target `scope`, optional single `selector`, optional native `effort`, and `expected`, the previous scoped `{selector, effort}` pair with unset fields represented as `null`. Omitting the selector clears that scope. It uses the model hub's Settings transaction. Both scopes are writable regardless of the `roleStorage` preference; writing a project assignment never changes that preference. Assigning a new role id creates a custom role through the ordinary role registry. `set_effort_rules` takes `scope`, optional ordered `rules`, and the prior scoped list as `expected`, or `null` for an unset layer. Omitting `rules` clears the layer. Both await persistence and reject stale snapshots with `configuration_conflict`. Patterns, `re:` expressions and effort choices, including `off`, retain native semantics.
+
+`set_model_role_storage` takes `value` and the previous `expected` preference, each `global` or `project`. It uses the native setting owner and persistence receipt without deleting either scope's saved roles. Configuration writes consume the applied/conflict decision made under the native YAML lock; matching a value after saving is not proof that a stale transaction won.
+
+Each configuration role includes `source: "builtin" | "configured"`, `section`, and effective `patterns`, the same metadata already available from `get_roles`. `scopedResolutions.global` resolves persisted global aliases without borrowing a project/runtime assignment; `scopedResolutions.project` resolves project aliases with global inheritance. Each is a native `{provider, modelId, thinkingLevel?}` resolution or `null`; the existing `resolved` remains the effective session view. The scoped selector/effort CAS pairs are unchanged. Its `fallbacks` is the effective `{chain, efforts}` pair; `fallbacksGlobal` is the persisted global pair used for expected-value writes. `set_model_role_fallbacks` takes `role`, `scope: "global"`, ordered `chain`, per-selector native `efforts`, and `expected` matching `fallbacksGlobal`. Empty chains clear the global fallback definition. It uses the same paired selector/effort transaction as the model hub. Effort keys must belong to the chain.
+
+`set_model_role_description` takes a known `role`, `scope: "global"`, `description`, and the last effective description as `expected` (`null` when absent). It preserves the role's other display metadata. Fallback and description writes currently use their native global storage; requesting project scope returns `scope_mismatch` rather than changing the storage policy.
+
+`delete_model_role` takes a custom `role`, `scope`, and the prior scoped `{selector, effort}` pair as `expected`. It removes that scope's assignment, effort and role metadata/cycle membership; global deletion also clears that role's global fallback definition. Definitions inherited from another scope remain visible. Unknown roles return `unknown_role`, built-in deletion returns `builtin_role`, and deleting a role not defined in the requested scope returns `scope_mismatch`. These writes reject stale expected values with `configuration_conflict` and do not change the session's explicitly selected model.
+
+Authored role, fallback and effort-rule patterns are validated before persistence. Invalid explicit `re:` expressions return `invalid_value` with the offending pattern instead of saving a rule that would later be skipped. Glob syntax remains Bun's native grammar. Previously loaded invalid regex rules remain safe to read and skip during resolution.
+
+Model-role and effort changes emit `models_configuration_changed`, including adopted raw scope changes hidden by a higher layer and native settings-file notifications from another client. Equal disk reloads do not emit. Hosts should reread configuration instead of resolving patterns themselves. Role definitions change configuration, not another session's explicit current model selection.
+
+`set_provider_api_key` upserts a key through the native credential pool without replacing other accounts. `get_logout_accounts` and `logout` retain account-specific removal. `login` requires a unique request ID and runs without blocking later commands. Its `extension_ui_request` frames include `loginId`; input frames may set `secret: true`. Answer them through `extension_ui_response`. `cancel_login` takes that login request ID, aborts the native flow and cancels its outstanding input. Disconnect also aborts the flow. A cancelled login never reports a saved credential.
+
 
 ### Session lease
 
@@ -188,7 +226,11 @@ Important edge behavior from runtime:
 - `{ id?, type: "set_ask_dialog", enabled: boolean }`
 - `{ id?, type: "get_available_commands" }`
 - `{ id?, type: "get_entries", since?: string }`
+- `{ id?, type: "snapshot_session_journal" }`
+- `{ id?, type: "get_entries_page", scope?: "journal" | "branch", direction?: "forward" | "backward", cursor?: string, limit?: number }`
 - `{ id?, type: "get_tree" }`
+- `{ id?, type: "navigate_tree", targetId: string, expectedSessionId: string, expectedSessionFile: string | null, expectedLeafId: string | null, summarize?: boolean, customInstructions?: string, allowAskReopen?: boolean, reanswerAskResult?: TreeAskReanswer }`
+- `{ id?, type: "resume_tree", resumeToken: string, expectedSessionId: string, expectedSessionFile: string | null, expectedLeafId: string | null }`
 - `{ id?, type: "set_todos", phases: TodoPhase[] }`
 - `{ id?, type: "set_host_tools", tools: RpcHostToolDefinition[] }`
 - `{ id?, type: "set_host_uri_schemes", schemes: RpcHostUriSchemeDefinition[] }`
@@ -328,6 +370,7 @@ The bundled TypeScript `RpcClient.getMessages()` and Python `RpcClient.get_messa
 - `{ id?, type: "login", providerId: string }`
 - `{ id?, type: "get_logout_accounts", providerId: string }` → `data: { accounts: LogoutAccount[] }`
 - `{ id?, type: "logout", providerId: string, credentialId: number }` → `data: { remainingSource?: string }`
+- `{ id?, type: "activate_account", providerId: string, credentialId: number }`
 
 Login forwards ordinary OAuth input prompts only after the provider emits an
 authorization URL. Prompts marked `secret: true` are always rejected with a
@@ -341,6 +384,27 @@ be using), active first. `logout` removes one and refreshes that provider's mode
 it fails when the credential is no longer stored. `remainingSource` names the source
 that still authenticates the provider: another stored credential, an environment
 variable, or a config key.
+
+`get_login_providers` retains `id`, `name`, `available` and `authenticated`, and
+adds `loginKind`, `deviceCode`, optional `storeCredentialsAs`, and `acceptsKeys`
+with the same meanings as model configuration. No saved key, access token or
+refresh token is included.
+
+For a real device-code flow, `extension_ui_request` with `method: "open_url"`
+also carries `userCode`, the user-facing verification code from the provider's
+response. It is not extracted from `instructions`; the private polling
+`device_code` is never sent. The TypeScript login callback receives this as its
+fourth `onOpenUrl` argument; generated SDK frames expose the same `userCode`.
+
+`activate_account` accepts the inference/credential provider ID and the durable
+ID of a stored **OAuth** account from `get_logout_accounts`. It uses the same
+session preference as native account switching and records the account identity
+hash through the session credential-pin journal. It neither changes the current
+model nor another session's account. The native affinity owner retains its
+existing availability, restrictions and runtime/config auth-override checks.
+Unknown providers, missing or foreign accounts, API-key rows and malformed input
+fail with `invalid_value`; streaming or compaction returns `session_busy`.
+Success has no data payload and never returns credential bytes.
 
 ### Word prediction
 
@@ -433,6 +497,84 @@ Local-only slash commands may emit `command_output` frames before completing. Th
 
 Each `get_messages_page` message carries `entryId`, including custom messages (`custom_message` entries), the compaction summary (`compaction` entry) and branch summaries (`branch_summary` entry). Context the session injects per turn without persisting it (for example Vibe-mode context) has no entry and no `entryId`.
 
+### Native journal events
+
+Stdio RPC and control owners advertise `session_journal_events` and emit:
+
+- `journal_state` with `reason: "snapshot" | "identity" | "leaf"`.
+- `journal_entry` with the complete canonical native `entry`, only after storage acknowledges persistence.
+- `message_persisted` with the streaming `messageId` and canonical journal `entryId`.
+- `message_start` with `snapshot: true`, the current unsaved assistant `message` and its streaming `messageId`, when an assistant is already in flight at the snapshot boundary.
+
+Every frame carries `sessionId`, canonical absolute `sessionFile` and `leafId`.
+`sessionFile` is `null` for an in-memory owner. The leaf describes the running
+owner's current branch, including pointer-only tree navigation. A leaf change
+alone does not claim that a new entry or a pointer change was persisted.
+
+Observers subscribe before the initial `journal_state` snapshot. Attach with
+`npi ctl pipe` or control `subscribe` before requesting native journal pages.
+Buffer notifications while fetching the initial pages, deduplicate entries by
+their native IDs and discard the old binding when either session ID or file
+changes. Restart branch paging when the leaf changes. The initial state frame
+contains identity and bounded recovery mappings, not a second copy of the journal.
+
+For a new watcher on an already connected runtime, register the local event
+listener, then send `snapshot_session_journal` before reading history pages.
+The command emits `journal_state` and any current assistant snapshot before
+its response. Its response data is `{ sessionId, sessionFile, leafId }`.
+It never replaces subscriptions or restarts a stream. Repeated snapshots and
+new control connections reuse the native owner's current `messageId` across
+stdio/control updates, end and persistence receipt.
+Native live IDs are opaque and unique across owner incarnations, including
+reopening the same session ID/file after a restart. Compare the complete string;
+do not parse a counter or derive identity from a journal filename. A new owner
+cannot reuse a cached pre-restart message's ID for different output.
+The snapshot reads the native in-flight assistant directly, so a quiet reply
+appears immediately without waiting for another delta. It is unsaved output,
+not a journal entry. No assistant frame is emitted when none is in flight.
+Native session transitions return `session_busy`.
+
+Snapshot frames carry the same canonical identity fields. An intervening
+newer message event or owner/leaf change suppresses an older captured snapshot.
+The client's ordered event stream remains authoritative; a snapshot is never
+published after a newer event with stale content.
+
+Live `message_start`, updates and `message_end` remain unsaved output until a
+`message_persisted` frame associates them with a journal entry. An opaque live
+`messageId`, an accepted prompt's reserved `userEntryId`, or a completed stream is
+not a durability receipt. Failed or intentionally skipped persistence produces
+no association. Recovery announces entries only after native persistence succeeds.
+Messages already present in the initial history use their native entry IDs;
+they need no live-message association.
+
+On every attachment and `snapshot_session_journal`, the `journal_state` frame
+with `reason: "snapshot"` also includes `messageEntryIds`:
+
+```json
+{ "type": "journal_state", "reason": "snapshot", "sessionId": "01a0...", "sessionFile": "/srv/session.jsonl", "leafId": "a12bc345", "messageEntryIds": [{ "messageId": "msg-019ac518-1122-7333-8444-556677889900-7", "entryId": "a12bc345" }] }
+```
+
+Use these authoritative pairs to reconcile cached live output when a disconnect
+lost its `message_persisted` frame, even if no assistant is currently streaming.
+Connected observers still receive the original one-shot persistence frame.
+Mappings belong to the native session owner, not an observer: disconnecting all
+observers or finishing a run does not clear them. The owner retains only ID
+strings for its last **256 live messages assigned entry IDs**, in association
+order, and snapshots publish only those whose entries are currently durable.
+Queued/failed writes never become durability receipts. Repeated snapshots do not
+consume mappings; ordinary branch navigation retains them. A session ID/file
+change or native process restart clears the recovery window. Older producers
+omit `messageEntryIds`; current producers send an empty array when none qualify.
+Absence of a pair, including eviction from this bounded window, does **not**
+prove that a live message was discarded or not persisted. Do not content-match
+or silently drop unmatched output.
+
+These frames respect `set_event_filter`, including `message_start` for snapshots. Protocol v2 uses the existing
+chunking limits for large entries without truncation. The TypeScript client
+exposes journal notifications and assistant snapshots through `onJournalEvent`;
+existing `onEvent` and `onSessionEvent` listeners retain their event types.
+Consumers must ignore unknown event kinds.
+
 ### Yield vs settled
 
 For agent-invoking work, a prompt's `prompt_result` reports the **agent yield**: it finished its turn (`agent_end` with `yielded: true`), or the prompt was aborted before dispatch or by a session transition. Local-only results and pre-dispatch errors do not require an `agent_end`. The **session is done** only when nothing can wake it again — no run is live or admitted, no steer/follow-up is queued, and no background job (auto-backgrounded `bash`, async `task`, `eval`) or pending delivery will inject its result and start a follow-up turn.
@@ -519,6 +661,25 @@ Before aborting, the server withdraws every user-authored steering and follow-up
 The response always succeeds, even when the withdrawn input is too large for one response under the negotiated protocol (1 MiB per frame on v1, 64 MiB reassembled on v2). Instead of failing with a transport-limit error, which would lose the already-withdrawn input, the server first omits every entry's `images` and sets `data.imagesDropped: true`, keeping all texts. If the texts alone still do not fit, it returns only the oldest entries that fit (steering first, then follow-ups) and sets `data.truncated: true`; entries after the last one listed are gone. Neither flag is present when the full result fits.
 
 ### `get_state` payload
+
+Use `{ "type": "get_state", "includeDump": false }` for repeated status reads
+that do not need `systemPrompt` and `dumpTools`. Omitting the option preserves
+the full response.
+
+`sessionUsage` is the native journal index's cumulative usage across all branches,
+including messages before compaction and completed task results. Its `cost` already
+includes `subagentCost`; do not add that field again. `advisorCost` is separate.
+Only combine it with journal cost when `advisorCostState` is `ready`. During
+resume it may be `restoring`, or `unavailable` if restoration failed. These are
+recorded costs, not a bill estimate for unfinished child runs. `get_session_stats`
+continues to describe the active transcript window.
+
+`approvalMode` reports the effective native tool policy, including the
+process-local auto-approve override. Reading it does not change permissions.
+Per-tool policies and safety checks still apply.
+`approval_mode_changed` announces native approval-setting changes, including
+watched file reloads. Re-read state after the event; it is not a policy mutation
+request or confirmation that a GUI preference was applied.
 
 `tokensPerSecond` is a number when output throughput is available and `null`
 otherwise. `fastModeEnabled` reports the session's selected model-family tier
@@ -652,6 +813,53 @@ model is part of the role's chain. A resumed session reports the role recorded
 with its last model change, except `default`, which is also what a direct model
 pick records.
 
+### Shared native themes
+
+`get_themes_configuration` discovers installed native theme names and returns
+`selection.dark` and `selection.light`. Each has its effective name, the explicit
+`global` and `project` values or `null`, and resolved semantic `colors`.
+
+To preview a discovered theme without selecting it, send
+`{"type":"get_theme","name":"dark"}`. With the `theme_palette` capability, RPC
+and terminal control return `{ "name": "dark", "colors": { ... } }`, including
+the native theme's resolved semantic and exported colors. Unknown names return
+an error; the active theme and persisted configuration are unchanged.
+
+Send `update_theme` with `appearance: "dark" | "light"`, `scope: "global" | "project"`,
+`name` and `expected`. Both names are strings or `null`. `expected` must match the
+last read value in that scope. A mismatch returns error code `conflict`; refresh
+and let the user choose again. A null `name` removes that scope's override.
+Project values take precedence over global values. Native configuration overlays
+can still determine the effective value, which is always returned after a write.
+
+Connected terminal and RPC sessions emit `themes_configuration_changed` when an
+effective theme setting changes. Re-read the configuration after that event and
+on reconnection. Themes remain native configuration; a client should not write
+configuration files or substitute a bundled theme inventory.
+
+### Native model selector query
+
+Send `{"type":"query_model_selector","query":"example"}` to read the native
+`/switch` filter without selecting a model or starting a turn. The same command
+is available through terminal control. Check the `model_selector` capability
+before using it.
+
+The result contains `items`, `roles` and `error`. `items` is the native picker's
+ordered concrete model list after applying the session's enabled scope and
+query. `roles` contains visible, resolved chat-role aliases, filtered by the
+same native browser. Each row carries its selectable `selector`, native
+`provider`, `id`, `name`, optional `description`, `resolvedSelector` and `facts`.
+Keep role aliases intact when selecting them so the session follows the role.
+Clients must not apply another text filter or reorder native matches.
+
+Facts include `intelligence`, measured `ttftMs`, `tokensPerSecond`, catalog
+`contextWindow`, native `effectiveContextWindow`, `inputCostPerMillion` and
+`outputCostPerMillion`. Missing values are `null`, not zero. Performance uses
+the session's service tier when measured, then the standard aggregate, then the
+fastest measured tier. Catalog throughput is used only when measured throughput
+is unavailable. `performanceSource` and `serviceTier` identify those values.
+Effective context is the native maintenance budget, not a provider capability.
+`error` reports an unavailable catalog while preserving any usable scoped rows.
 ### `get_roles` and `set_role` payloads
 
 Advertised by the `get_roles` capability. `get_roles` lists every known model
@@ -677,14 +885,19 @@ role:
 }
 ```
 
-- `roles` follows the carousel order: non-hidden built-ins in their fixed
-  order, then roles introduced by `cycleOrder`, `modelRoles` and `modelTags`.
+- `roles` includes every built-in in its fixed order, then roles introduced
+  by `cycleOrder`, `modelRoles` and `modelTags`, including roles marked hidden.
 - `section` is `"chat"`, or `"kind"` for the non-chat model-kind roles
   (`image`, `web`, `speech`, `dictation`, `judge`); hosts that only pick chat
   models filter on it.
 - `source` is `"builtin"` for built-in role ids and `"configured"` for roles
   that exist only through configuration.
+- `namespace` is `"deck"` for every `deck-*` role, built-in or configured, and absent for other roles. The built-in `deck-inbox` chat role defaults to `openai-codex/gpt-6-luna`; consumers can register further `deck-*` roles through the ordinary [role settings](./models.md#neodeck-roles).
 - `tag` is absent for custom roles, which have no built-in tag.
+- `description` is the effective `modelTags.<id>.description` override or the
+  built-in default. Custom roles have no default description. An empty string
+  deliberately clears the description. In `/models`, `D` edits this metadata
+  and the selected role's description appears above its rows.
 - `configured` is the raw `modelRoles` selector (lists joined with `", "`),
   absent when the role is not configured.
 - `patterns` is the effective pattern chain for `@<id>`: nested role aliases
@@ -1009,9 +1222,22 @@ The response payload is:
 
 These tools are registered before the next model call. New non-hidden tools
 are enabled automatically; new hidden tools are registered without being enabled.
-Re-sending `set_host_tools` replaces the previous host-owned set, preserving the
-enabled state of surviving host tools. Names must be unique and cannot conflict
-with an existing non-host tool.
+Re-sending `set_host_tools` replaces only the registering connection's previous
+set, preserving the enabled state of its surviving tools. The session exposes
+the union of the stdio owner's and all control connections' tools. Names must
+be unique within a registration and cannot conflict with a non-host tool or a
+tool owned by another connection. A collision rejects the entire replacement:
+the first successful registrant retains the name, and neither owner's tools,
+enabled state, nor pending calls change.
+
+Sending an empty set, control `unserve`, or disconnect removes only that
+connection's tools. A successful replacement cancels pending calls to removed
+tools and revokes its previous adapters; calls to surviving names can finish.
+A rejected replacement changes neither registrations nor pending calls.
+Control session-generation changes also revoke control registrations:
+clients must register again for the new canonical generation. Requests, updates,
+results, and cancellation stay on the registering connection; another connection
+cannot complete its calls, and replies after revocation are ignored.
 
 Definitions also accept `hidden?: boolean`,
 `loadMode?: "essential" | "discoverable"`, and `readsSkillUris?: boolean`.
@@ -1112,7 +1338,7 @@ Extension runner errors are emitted separately as:
 
 `message_update` includes streaming deltas in `assistantMessageEvent` (text/thinking/toolcall deltas).
 
-`message_start`, `message_update`, and `message_end` carry a `messageId` string assigned by RPC mode. One message keeps the same id from its start through every update to its end; ids are unique within the process. Records injected mid-stream (advisor cards, IRC messages) get their own id and do not disturb the id of the reply streaming around them.
+`message_start`, `message_update`, and `message_end` carry an opaque live `messageId` string. One message keeps its ID across the native owner's stdio and control observers, including a new attachment's in-flight snapshot. Native IDs are unique across owner incarnations, even when a new owner opens the same session ID/file; they are not journal entry IDs, and clients must not parse their format. Records injected mid-stream, such as advisor cards and IRC messages, get their own IDs and do not disturb the reply streaming around them.
 
 `set_event_filter` restricts which session event frames are written: pass the event `type` strings to forward, or `null` to forward everything (the default). The response echoes the active selection as `{ events, messageUpdates }`. The filter applies to all events emitted through the session subscription, not just the common types listed above; every other outbound category (responses, `prompt_result`, `session_settled`, extension UI and host tool/URI requests, plan mode frames, `extension_error`, `available_commands_update`, subagent frames, side-question frames, builtin slash-command side channels, and session-persistence and `btw-history` `notice` frames) is unaffected by this filter. Hosts that fail closed on unknown event kinds can pin the set they understand here instead of breaking when NeoPi adds an event.
 
@@ -1202,6 +1428,114 @@ Command discovery is intentionally an OMP dialect: Pi's `get_commands` (a
 not served because OMP's richer catalog (builtins/custom/MCP/file commands,
 broader `source` enum, no Pi `sourceInfo`) is not wire-compatible with it.
 
+### Native tree navigation
+
+Gate these commands on `session_tree_navigation`. `navigate_tree` runs the same
+native operation as `/tree`, preserving the session file and alternate branches.
+It does not call `branch`, which creates another file.
+
+Every request must supply the native `expectedSessionId`, `expectedSessionFile`
+and `expectedLeafId` it observed. Use `null` for an unsaved session file or a
+root leaf. NeoPi compares the normalized file path as well as the ID, since a
+copied journal can retain its original IDs. It checks these values under native
+mutation admission and again after asynchronous preparation. A busy session or
+transition returns `code: "session_busy"` without interrupting another turn.
+A changed session or leaf returns `session_changed` or `leaf_changed`.
+
+Success returns:
+
+```ts
+{
+  sessionId: string;
+  sessionFile?: string;
+  leafId: string | null;
+  outcome: "navigated" | "unchanged" | "cancelled" | "ask_reopen";
+  cancelled: boolean;
+  aborted?: boolean;
+  editorText?: string;
+  editorImages?: ImageContent[];
+  summaryEntry?: BranchSummaryEntry;
+  reopenAsk?: { toolCallId: string; questions: AskQuestion[] };
+  askReanswerCommitted?: boolean;
+  resumeToken?: string;
+}
+```
+
+Selecting a user request moves to its parent and returns the native draft and
+its ordered images. Selecting another entry normally lands on it. An already
+selected non-user leaf reports `unchanged`. Native extension cancellation
+reports `cancelled`. `summarize` and `customInstructions` use NeoPi's summarizer,
+and a cancelled summary returns `cancelled: true, aborted: true` without moving
+the leaf. The ordinary `abort` command can cancel pending remote navigation,
+including its summary. Navigation starts in input order but settles in the
+background so cancellation remains reachable. No internal `sessionContext` is
+sent on the wire.
+
+For native ask re-answering, send `allowAskReopen: true`. A probe returns
+`outcome: "ask_reopen"` with `reopenAsk`, without moving the leaf or claiming
+navigation happened. Display those questions and submit the fresh answer in
+another `navigate_tree` request to the same target with current preconditions.
+`reanswerAskResult` contains native `content` text/image blocks, optional
+`details: AskToolDetails` and optional `isError`. The original answer remains
+on its branch; NeoPi appends a sibling answer.
+
+A committed re-answer returns `askReanswerCommitted: true` and an opaque
+`resumeToken`, but does not start the agent. First consume this result and
+rebuild the transcript. Then send `resume_tree` with that token and the
+returned session identity and leaf. It calls native `resumeAfterAskReanswer`
+and returns `{ resumed: true }`. Tokens are in-memory, single-use and bound to
+the committed native session file, ID, leaf and prompt generation. A replacement
+or intervening navigation invalidates them. Invalid or consumed tokens return
+`invalid_resume`; stale identity and leaf preconditions retain their named
+errors. Invalid targets return `invalid_target`, and malformed request fields
+return `invalid_request`.
+
+The TypeScript SDK exposes `navigateTree(options)` and `resumeTree(options)`.
+Generated Python, Rust and Go clients carry the same contracts. Control clients
+send the same RPC commands to the existing terminal owner through `npi ctl pipe`;
+no second writer or session file is created.
+
+### Native journal pages
+
+`get_entries_page` returns `{ entries, sessionId, sessionFile, leafId, totalEntries, nextCursor? }`.
+`sessionFile` is the canonical absolute path. `entries` contains native `SessionEntry`
+records, including tool output, custom records, compaction, branch summaries and reset
+boundaries. Nothing is folded into model context or reduced to visible message text.
+The header is not an entry. `totalEntries` counts entries in the selected scope.
+
+The defaults are `scope: "journal"`, `direction: "forward"` and `limit: 100`.
+Limits range from 1 to 256. `branch` selects the current native leaf's ancestry.
+`journal` includes alternate branches in append order. A backward page starts at the
+newest end, but entries within every page remain chronological. Pass `nextCursor`
+with the same scope and direction to continue, and stop when it is absent.
+
+A journal cursor pins the initial prefix and snapshot leaf. Appends and pointer-only
+leaf changes do not extend or invalidate that walk. A branch cursor pins the active
+leaf and fails with `code: "leaf_changed"` if it changes, including after an append.
+Restart branch paging instead of combining pages from different leaves.
+Session/file changes and a missing or replaced prefix boundary fail with
+`stale_cursor`. Invalid cursors or changed scope/direction fail with `invalid_cursor`;
+invalid limits/options fail with `invalid_request`.
+An owner applying or rolling back a session/transcript transition returns
+`session_busy` rather than mixing identities. Ordinary streaming does not block
+journal reads.
+
+Pages use the same 768 KiB soft budget as message paging. Entries are never split
+or truncated. An oversized entry travels alone with negotiated protocol v2 chunking,
+or returns the existing transport-limit failure when it cannot fit. Legacy history
+without persisted IDs fails with `legacy_history_identity_required`, including a
+running owner whose pre-tree migration has not yet persisted. Reading does not
+trigger migration or persistence. An owner without a journal file returns
+`session_unavailable`.
+
+For a stopped session, `npi sessions entries --json --scope branch --direction backward
+--limit 100 /absolute/session.jsonl` uses the same page format and cursor options.
+Its leaf is the last persisted entry, not an unpersisted pointer-only move in a
+running owner. Live owners must be read over RPC/control. CLI failures emit
+`{ "error": { "code": "...", "message": "..." } }` on stdout even with a nonzero exit.
+Unreadable or malformed journals return `session_unavailable`, not partial history.
+Existing `get_entries`, `get_tree`, `get_messages` and `get_messages_page` keep their
+previous semantics.
 ### Pi-compatible history/tree commands with OMP-native entry payloads
 
 The commands and reconciliation semantics below are Pi-compatible, but the
@@ -1306,6 +1640,55 @@ Failure responses:
 - the subagent drops or rejects the message before accepting it (for example
   an abort or a usage-limit preflight denial lands first) →
   `error: "Subagent refused the message: <reason>"`
+
+### Changing a running subagent's thinking level
+
+`set_subagent_thinking_level` selects the level on that subagent's own session,
+without interrupting its current turn or provider request. Its next provider
+request uses the new level, including the next step of the current turn.
+
+```json
+{ "id": "req_2", "type": "set_subagent_thinking_level", "subagentId": "OmpWorker", "level": "high" }
+{ "id": "req_2", "type": "response", "command": "set_subagent_thinking_level", "success": true }
+```
+
+The command accepts `off` and the subagent model's supported effort levels,
+within its existing session effort ceiling. Unsupported levels fail with the
+available choices rather than silently clamping to another level. The same
+ownership and running-state restrictions as `steer_subagent` apply; an unknown or finished id returns
+`Subagent not running: <id>`.
+
+The change appends a `thinking_level_change` entry to the subagent's session
+file. Restart recovery and cold revival resume at that selection. It does not
+change the parent session's level or the global default.
+
+### Changing a running subagent's fast mode
+
+`set_subagent_fast` changes only the selected running subagent's service tier,
+from its next provider request. It does not abort the current request, change
+the parent or siblings, or update a global setting. The tier is recorded as a
+`service_tier_change` entry and survives revival and restart.
+
+```json
+{ "id": "req_3", "type": "set_subagent_fast", "subagentId": "OmpWorker", "enabled": true }
+{ "id": "req_3", "type": "response", "command": "set_subagent_fast", "success": true, "data": { "enabled": true, "active": true } }
+```
+
+`enabled` reports the selected fast preference. `active` reports whether the
+current model/provider can actually honor it, including a provider fallback
+that temporarily disabled fast requests. A provider without a supported fast
+selection returns an error. Invalid ids follow the same rules as the thinking
+command, and `enabled` must be a boolean.
+
+`get_subagents` reads each owned live session's `resolvedModel`,
+`resolvedModelIdentity`, `resolvedThinkingLevel`, `fastModeEnabled` and
+`fastModeActive` when queried. These are current values, not launch snapshots.
+Task/job listings and peer rosters also report current model and effort.
+
+In the Agent Hub, focus a subagent's transcript to cycle its effort with the
+existing Shift+Tab binding or run `/fast [on|ultra|off|status]`. These controls
+target the focused session. Model switching and other mutation commands remain
+unavailable in that view.
 
 ### Side questions (`/btw`)
 
@@ -1905,7 +2288,7 @@ stdout sequence (simplified; message contents omitted):
 ```json
 { "id": "req_1", "type": "response", "command": "prompt", "success": true }
 { "type": "agent_start" }
-{ "type": "message_update", "messageId": "msg-2", "assistantMessageEvent": { "type": "text_delta", "delta": "..." }, "message": { "role": "assistant", "content": [] } }
+{ "type": "message_update", "messageId": "msg-019ac518-1122-7333-8444-556677889900-2", "assistantMessageEvent": { "type": "text_delta", "delta": "..." }, "message": { "role": "assistant", "content": [] } }
 { "type": "agent_end", "messages": [], "isTerminal": true, "yielded": true }
 { "type": "prompt_result", "id": "req_1", "agentInvoked": true, "status": "completed", "sessionSettled": true }
 { "type": "session_settled" }
@@ -2012,7 +2395,7 @@ Current helper characteristics:
 - Provider usage via `getUsage({ provider?, refresh?, redact? })`
 - Drives live voice sessions with `liveStart()`, `liveStop()`, `liveMute()`, and delivers live frames through `onLive()`
 - `promptAndWait()` waits for that prompt's result (or synchronous local completion); `waitForSettled()` also waits for session quiescence. `waitForIdle()` and `collectEvents()` stop at the next `agent_end`, including a non-terminal one, and are not settle barriers.
-- Wraps common protocol commands including OAuth `getLoginProviders()` / `login(...)` and `getLogoutAccounts(...)` / `logout(...)`; use raw protocol frames for unwrapped surfaces such as host-URI registration or delta-only message updates.
+- Wraps common protocol commands including OAuth `getLoginProviders()` / `login(...)`, session account selection with `activateAccount(...)`, and `getLogoutAccounts(...)` / `logout(...)`; use raw protocol frames for unwrapped surfaces such as host-URI registration or delta-only message updates.
 
 ### Python package
 

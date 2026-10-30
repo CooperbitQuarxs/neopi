@@ -22,12 +22,14 @@ export function createExtensionDashboardRuntime(options: {
 	mcpManager?: MCPManager;
 	eventBus?: EventBus;
 	onMcpToolsChanged?: (tools: CustomTool[]) => Promise<void> | void;
+	onRulesChanged?: () => Promise<void>;
 	browserMcpFilterEnabled?: () => boolean;
 }): ExtensionDashboardRuntime {
 	const { cwd, settings, mcpManager, eventBus, onMcpToolsChanged, browserMcpFilterEnabled } = options;
 	return {
 		getDisabledExtensions: () => cfgDisabledExtensions.get(settings),
 		setDisabledExtensions: ids => cfgDisabledExtensions.set(settings, ids),
+		onRulesChanged: options.onRulesChanged,
 		getProviders: () =>
 			getAllProvidersInfo().map(provider => ({
 				...provider,

@@ -155,7 +155,7 @@ export class ExtensionList implements Component {
 
 	#extensions: Extension[];
 	readonly #callbacks: ExtensionListCallbacks;
-	/** Search field; its value is pushed into the menu query whenever it changes. */
+	/** Search field; its confirmed query drives the menu. */
 	readonly #search = new MenuSearchField();
 
 	constructor(extensions: Extension[], callbacks: ExtensionListCallbacks = {}, maxVisible?: number) {
@@ -238,7 +238,7 @@ export class ExtensionList implements Component {
 		if (typeof snapshot !== "object" || snapshot === null) return;
 		const state = snapshot as Partial<ExtensionListNavigation>;
 		this.#search.restoreNavigation(state.search);
-		this.#menu.setQuery(this.#search.value, false);
+		this.#menu.setQuery(this.#search.query, false);
 		if (typeof state.selected === "string") this.#menu.setSelectedKey(state.selected);
 		this.#viewport.setTop(state.top);
 		this.#syncScroll();
@@ -259,7 +259,7 @@ export class ExtensionList implements Component {
 
 	/** Replace the search text (caret to end) and refilter. */
 	setSearchQuery(query: string): void {
-		if (this.#search.value !== query) this.#search.setValue(query);
+		this.#search.setValue(query);
 		this.#menu.setQuery(query, false);
 		this.#viewport.setTop(0);
 		this.#syncScroll();
@@ -920,11 +920,10 @@ export class ExtensionList implements Component {
 
 	/** Hosts route literal field input before their own pane/tab/action reader. */
 	handleFilterInput(data: string): boolean {
-		if (!this.#search.focused) return false;
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const result = this.#search.handleInput(data);
 		if (result === "pass") return false;
-		if (before !== this.#search.value) this.setSearchQuery(this.#search.value);
+		if (before !== this.#search.query) this.setSearchQuery(this.#search.query);
 		this.#keys.reset();
 		return true;
 	}
@@ -942,8 +941,10 @@ export class ExtensionList implements Component {
 			this.#syncScroll();
 			if (motion.selectionChanged) this.#notifySelectionChange();
 		} else if (action.kind === "search") this.focusFilter();
-		else if (action.kind === "cancel") this.focusFilter(false);
-		else if (action.kind === "confirm" || action.kind === "toggle") {
+		else if (action.kind === "cancel") {
+			this.clearSearch();
+			this.focusFilter(false);
+		} else if (action.kind === "confirm" || action.kind === "toggle") {
 			this.focusFilter(false);
 			this.activateSelected();
 		}

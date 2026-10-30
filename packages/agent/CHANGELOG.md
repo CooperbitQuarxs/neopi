@@ -4,10 +4,13 @@
 
 ### Added
 
+- Run an operator-selected tool through the normal validation, hooks, cancellation, and result events with `Agent.executeTool()`, without calling a provider ([#14](https://github.com/PsychedelicShayna/neopi/issues/14)).
+- Compaction prompt templates can be inspected and overridden through the coding agent's `npi prompts` catalog without freezing their dynamic values ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
 - Added per-message steering interruption modes so queued guidance can wait for running tools or interrupt immediately without changing the session preference.
 
 ### Fixed
 
+- External advisor or IRC records no longer erase a quiet primary reply's in-flight snapshot before it finishes ([NeoCode #135](https://github.com/PsychedelicShayna/neocode/issues/135)).
 - Provider-native V2 compaction keeps user-authored custom prompts and operator notices when they serialize as developer messages, without retaining automatic harness notes as user prompts ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
 
 ## [18.10.3] - 2026-10-12

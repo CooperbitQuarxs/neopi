@@ -12,6 +12,7 @@
 
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { TspPickerAction, TspPickerColumn, TspPickerItem, TspPickerScope, TspSpan } from "@oh-my-pi/pi-wire";
+import { compileMenuRegex } from "../menu-search";
 import {
 	type Component,
 	Editor,
@@ -144,6 +145,8 @@ export interface AgentsHubDeps {
 	setAgentOverride: (property: PropertyKind, name: string, value: string | undefined) => void;
 	generateAgent: (description: string, onText: (text: string) => void) => Promise<string>;
 	saveAgent: (scope: "project" | "user", spec: GeneratedAgentSpec) => Promise<string>;
+	/** Open the selected definition in the host's editor; source-less agents are handled by the host. */
+	openConfigFile?: (agent: HubAgent) => Promise<void>;
 }
 
 export interface AgentsHubCallbacks {
@@ -396,15 +399,18 @@ export class AgentsHubComponent implements Component {
 	async #reload(): Promise<void> {
 		this.#loadError = null;
 		try {
-			const selectedName = this.#selectedAgent()?.name;
+			const selected = this.#selectedAgent();
 			this.#allAgents = (await this.#deps.loadAgents()).sort((a, b) => {
 				const sourceCmp = SOURCE_ORDER[a.source] - SOURCE_ORDER[b.source];
 				return sourceCmp !== 0 ? sourceCmp : a.name.localeCompare(b.name);
 			});
 			this.#buildSidebar();
 			this.#buildRows();
-			if (selectedName) {
-				const index = this.#rows.findIndex(r => r.kind === "agent" && r.agent.name === selectedName);
+			if (selected) {
+				let index = this.#rows.findIndex(
+					r => r.kind === "agent" && r.agent.name === selected.name && r.agent.source === selected.source,
+				);
+				if (index < 0) index = this.#rows.findIndex(r => r.kind === "agent" && r.agent.name === selected.name);
 				if (index >= 0) this.#rowIndex = index;
 			}
 			this.#clampRowIndex();
@@ -415,6 +421,21 @@ export class AgentsHubComponent implements Component {
 			this.#loadError = error instanceof Error ? error.message : String(error);
 		}
 		this.#requestRender();
+	}
+
+	async #openConfigFile(): Promise<void> {
+		const agent = this.#selectedAgent();
+		if (!agent || !this.#deps.openConfigFile || this.#pendingOperations > 0) return;
+		this.#pendingOperations++;
+		try {
+			await this.#deps.openConfigFile(agent);
+			await this.#reload();
+		} catch (error) {
+			this.#notice = error instanceof Error ? error.message : String(error);
+		} finally {
+			this.#pendingOperations--;
+			this.#requestRender();
+		}
 	}
 
 	#buildSidebar(): void {
@@ -454,12 +475,10 @@ export class AgentsHubComponent implements Component {
 		const entry = this.#entries.find(candidate => candidate.id === this.#listScopeId) ?? this.#entries[0]!;
 		const scoped =
 			entry.kind === "source" ? this.#allAgents.filter(agent => agent.source === entry.source) : this.#allAgents;
-		const query = this.#search.value;
+		const query = this.#search.query;
 		let filtered = scoped;
 		if (query) {
-			const tokens = query
-				.trim()
-				.split(/\s+/)
+			const tokens = (compileMenuRegex(query) ? [query] : query.trim().split(/\s+/))
 				.map(token => new FuzzyQuery(token));
 			filtered = scoped.filter(agent => matchAgent(agent, tokens));
 		}
@@ -862,11 +881,11 @@ export class AgentsHubComponent implements Component {
 			this.#requestRender();
 			return;
 		}
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
 			this.#keys.reset();
-			if (this.#search.value !== before) {
+			if (this.#search.query !== before) {
 				this.#focus = "list";
 				this.#buildRows();
 				this.#rowIndex = 0;
@@ -885,6 +904,7 @@ export class AgentsHubComponent implements Component {
 			return;
 		}
 		if (!this.#search.focused && matchesKey(data, "ctrl+r")) void this.#reload();
+		if (!this.#search.focused && matchesKey(data, "ctrl+g")) void this.#openConfigFile();
 	}
 
 	#handleMenuAction(action: MenuNavAction): void {
@@ -1405,7 +1425,8 @@ export class AgentsHubComponent implements Component {
 		if (this.#focus === "scope") {
 			return `j/k Pg C-d/u gg/G scopes · C-e/y view · l/Enter agents · / search · ${cancel} close`;
 		}
-		return `${enter} configure · Space enable/disable · j/k Pg C-d/u gg/G move · C-e/y view · h/l panes · / search · Ctrl-R reload · ${cancel} close`;
+		const edit = this.#deps.openConfigFile ? " · Ctrl-G edit file" : "";
+		return `${enter} configure · Space enable/disable · j/k Pg C-d/u gg/G move · C-e/y view · h/l panes · / search · Ctrl-R reload${edit} · ${cancel} close`;
 	}
 
 	#renderFooter(width: number): string {
@@ -1587,6 +1608,9 @@ export class AgentsHubComponent implements Component {
 			case "reload":
 				void this.#reload();
 				return;
+			case "edit-file":
+				void this.#openConfigFile();
+				return;
 		}
 	}
 
@@ -1627,6 +1651,9 @@ export class AgentsHubComponent implements Component {
 				},
 				{ id: "model", label: "Model", disabled: noAgent },
 				{ id: "new", label: "New agent" },
+				...(this.#deps.openConfigFile
+					? [{ id: "edit-file", label: "Edit file", keys: ["ctrl", "g"], disabled: noAgent }]
+					: []),
 				{ id: "reload", label: "Reload", keys: ["ctrl", "r"] },
 				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
 			];
@@ -1635,7 +1662,7 @@ export class AgentsHubComponent implements Component {
 		return picker(
 			{
 				title: "Agents",
-				subtitle: this.#notice ?? undefined,
+				subtitle: compileMenuRegex(this.#search.value)?.error ?? this.#notice ?? undefined,
 				icon: "users",
 				noun: "agents",
 				size: "lg",
@@ -1818,7 +1845,7 @@ export class AgentsHubComponent implements Component {
 			"list",
 			{
 				selected: selectedRow ? listRowId(selectedRow) : null,
-				filter: this.#search.value || undefined,
+				filter: this.#search.query || undefined,
 				virtual: true,
 				grow: 1,
 				tone: this.#focus === "list" ? "accent" : undefined,
@@ -2049,6 +2076,7 @@ export class AgentsHubComponent implements Component {
 			upDown("rows"),
 			{ keys: ["/"], label: "search" },
 			{ keys: ["ctrl+r"], label: "reload" },
+			this.#deps.openConfigFile ? { keys: ["ctrl+g"], label: "edit file" } : undefined,
 			cancel("close"),
 		];
 	}
@@ -2058,6 +2086,7 @@ export class AgentsHubComponent implements Component {
 	}
 
 	leaveMenu(): void {
+		this.#search.focused = false;
 		this.#keys.reset();
 	}
 

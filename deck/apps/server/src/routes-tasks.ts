@@ -1,0 +1,239 @@
+/**
+ * Tasks + task-states REST surface.
+ *
+ * Mounted on the main router at `/api/tasks` and `/api/task-states`. All
+ * payloads use the protocol types verbatim. Validation is intentionally light
+ * — the schema enforces shape (FK, CHECK constraints), we surface DB errors
+ * back as 400/500.
+ */
+
+import { Hono } from "hono";
+import type {
+	CreateTaskRequest,
+	CreateTaskStateRequest,
+	ListTasksResponse,
+	MoveTaskRequest,
+	TaskProject,
+	UpdateTaskRequest,
+	UpdateTaskStateRequest,
+} from "@npi-deck/protocol";
+
+import { logger } from "./log.ts";
+import { deriveLabel } from "./workspace-label.ts";
+import type { CardAgentRunner } from "./card-agents.ts";
+import {
+	createState,
+	createTask,
+	deleteState,
+	deleteTask,
+	getState,
+	getTask,
+	listStates,
+	listTaskProjects,
+	listTasks,
+	moveTask,
+	reorderStates,
+	updateState,
+	updateTask,
+} from "./db/tasks.ts";
+import { appendTaskNote, taskEvents, taskLinks } from "./db/task-evidence.ts";
+
+const log = logger("routes:tasks");
+
+export function buildTasksRouter(cardAgents?: CardAgentRunner): Hono {
+	const app = new Hono();
+
+	// ─── Tasks ─────────────────────────────────────────────────────────────
+
+	app.get("/tasks", (c) => {
+		const includeArchived = c.req.query("includeArchived") === "1";
+		// `?cwd=<path>` scopes to one project and `?cwd=` (present, empty) to
+		// tasks with no cwd; without the param the board holds every project.
+		const cwdParam = c.req.query("cwd");
+		const tasks = listTasks({ includeArchived, cwd: cwdParam === undefined ? undefined : cwdParam || null });
+		const states = listStates();
+		const projects: TaskProject[] = listTaskProjects({ includeArchived })
+			.map((p) => ({ ...p, label: p.cwd === null ? "Unassigned" : deriveLabel(p.cwd) }))
+			// Named projects by label (full path breaks ties between checkouts of
+			// the same repo), then the unassigned bucket last.
+			.sort((a, b) => {
+				if (a.cwd === null) return b.cwd === null ? 0 : 1;
+				if (b.cwd === null) return -1;
+				return a.label.localeCompare(b.label) || a.cwd.localeCompare(b.cwd);
+			});
+		const body: ListTasksResponse = { tasks, states, projects };
+		return c.json(body);
+	});
+
+	app.post("/tasks", async (c) => {
+		let body: CreateTaskRequest;
+		try {
+			body = (await c.req.json()) as CreateTaskRequest;
+		} catch {
+			return c.json({ error: "invalid json" }, 400);
+		}
+		if (!body.title || typeof body.title !== "string") {
+			return c.json({ error: "title is required" }, 400);
+		}
+		try {
+			const task = createTask(body);
+			return c.json(task, 201);
+		} catch (err) {
+			log.error(`createTask failed`, err);
+			return c.json({ error: String(err) }, 400);
+		}
+	});
+
+	app.get("/tasks/:id", (c) => {
+		const task = getTask(c.req.param("id"));
+		if (!task) return c.json({ error: "not found" }, 404);
+		return c.json(task);
+	});
+
+	app.get("/tasks/:id/events", (c) => {
+		const task = getTask(c.req.param("id"));
+		return task ? c.json({ events: taskEvents(task) }) : c.json({ error: "not found" }, 404);
+	});
+
+	app.post("/tasks/:id/events", async (c) => {
+		const task = getTask(c.req.param("id"));
+		if (!task) return c.json({ error: "not found" }, 404);
+		let body: { text?: unknown; actor?: unknown };
+		try { body = await c.req.json(); } catch { return c.json({ error: "invalid json" }, 400); }
+		if (!body || typeof body.text !== "string" || !body.text.trim() || body.text.length > 20_000) return c.json({ error: "text must contain 1 to 20000 characters" }, 400);
+		if (body.actor !== undefined && (typeof body.actor !== "string" || body.actor.length > 200)) return c.json({ error: "actor must be a string up to 200 characters" }, 400);
+		return c.json(appendTaskNote(task.id, body.text.trim(), typeof body.actor === "string" ? body.actor : ""), 201);
+	});
+
+	app.get("/tasks/:id/links", (c) => {
+		const task = getTask(c.req.param("id"));
+		return task ? c.json(taskLinks(task)) : c.json({ error: "not found" }, 404);
+	});
+
+	app.post("/tasks/:id/assign", async (c) => {
+		if (!cardAgents) return c.json({ error: "Card agent runner unavailable" }, 503);
+		if (!getTask(c.req.param("id"))) return c.json({ error: "not found" }, 404);
+		let body: { model?: unknown } = {};
+		try { const text = await c.req.text(); if (text.trim()) body = JSON.parse(text); }
+		catch { return c.json({ error: "invalid json" }, 400); }
+		if (!body || typeof body !== "object" || Array.isArray(body) || body.model !== undefined && (typeof body.model !== "string" || !body.model.trim())) return c.json({ error: "model must be a nonempty selector" }, 400);
+		try { return c.json(cardAgents.assign(c.req.param("id"), body.model as string | undefined), 202); }
+		catch (error) { return c.json({ error: String(error) }, 400); }
+	});
+
+	app.post("/tasks/:id/cancel", async (c) => {
+		if (!cardAgents) return c.json({ error: "Card agent runner unavailable" }, 503);
+		const run = await cardAgents.cancel(c.req.param("id"));
+		return run ? c.json(run) : c.json({ error: "No card assignment" }, 404);
+	});
+
+	app.patch("/tasks/:id", async (c) => {
+		let body: UpdateTaskRequest;
+		try {
+			body = (await c.req.json()) as UpdateTaskRequest;
+		} catch {
+			return c.json({ error: "invalid json" }, 400);
+		}
+		try {
+			const updated = updateTask(c.req.param("id"), body);
+			if (!updated) return c.json({ error: "not found" }, 404);
+			return c.json(updated);
+		} catch (err) {
+			log.error(`updateTask failed`, err);
+			return c.json({ error: String(err) }, 400);
+		}
+	});
+
+	app.delete("/tasks/:id", (c) => {
+		return c.json({ ok: deleteTask(c.req.param("id")) });
+	});
+
+	app.post("/tasks/:id/move", async (c) => {
+		let body: MoveTaskRequest;
+		try {
+			body = (await c.req.json()) as MoveTaskRequest;
+		} catch {
+			return c.json({ error: "invalid json" }, 400);
+		}
+		if (!body.stateId || typeof body.index !== "number") {
+			return c.json({ error: "stateId and numeric index required" }, 400);
+		}
+		try {
+			const moved = moveTask(c.req.param("id"), body.stateId, body.index);
+			if (!moved) return c.json({ error: "task not found" }, 404);
+			return c.json(moved);
+		} catch (err) {
+			log.error(`moveTask failed`, err);
+			return c.json({ error: String(err) }, 400);
+		}
+	});
+
+	// ─── States ────────────────────────────────────────────────────────────
+
+	app.get("/task-states", (c) => c.json({ states: listStates() }));
+
+	app.post("/task-states", async (c) => {
+		let body: CreateTaskStateRequest;
+		try {
+			body = (await c.req.json()) as CreateTaskStateRequest;
+		} catch {
+			return c.json({ error: "invalid json" }, 400);
+		}
+		if (!body.name) return c.json({ error: "name required" }, 400);
+		try {
+			const state = createState(body);
+			return c.json(state, 201);
+		} catch (err) {
+			log.error(`createState failed`, err);
+			return c.json({ error: String(err) }, 400);
+		}
+	});
+
+	app.post("/task-states/reorder", async (c) => {
+		let body: { orderedIds?: unknown };
+		try {
+			body = (await c.req.json()) as { orderedIds?: unknown };
+		} catch {
+			return c.json({ error: "invalid json" }, 400);
+		}
+		if (!Array.isArray(body.orderedIds) || body.orderedIds.some((x) => typeof x !== "string")) {
+			return c.json({ error: "orderedIds must be string[]" }, 400);
+		}
+		try {
+			const states = reorderStates(body.orderedIds as string[]);
+			return c.json({ states });
+		} catch (err) {
+			log.error(`reorderStates failed`, err);
+			return c.json({ error: String(err) }, 400);
+		}
+	});
+
+	app.patch("/task-states/:id", async (c) => {
+		let body: UpdateTaskStateRequest;
+		try {
+			body = (await c.req.json()) as UpdateTaskStateRequest;
+		} catch {
+			return c.json({ error: "invalid json" }, 400);
+		}
+		const updated = updateState(c.req.param("id"), body);
+		if (!updated) return c.json({ error: "not found" }, 404);
+		return c.json(updated);
+	});
+
+	app.delete("/task-states/:id", (c) => {
+		try {
+			const result = deleteState(c.req.param("id"));
+			return c.json(result);
+		} catch (err) {
+			return c.json({ error: String(err) }, 400);
+		}
+	});
+
+	app.get("/task-states/:id", (c) => {
+		const state = getState(c.req.param("id"));
+		if (!state) return c.json({ error: "not found" }, 404);
+		return c.json(state);
+	});
+
+	return app;
+}

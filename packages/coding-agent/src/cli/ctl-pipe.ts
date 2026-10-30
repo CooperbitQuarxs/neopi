@@ -36,6 +36,9 @@ export async function ctlPipe(selector: string, options: CtlPipeOptions = {}): P
 	let relayed = false;
 	let client: ControlClient | undefined;
 	let buffer = "";
+	let inputBlocked = false;
+	let inputEnded = false;
+	let unsubscribeDrain: (() => void) | undefined;
 	const done = Promise.withResolvers<void>();
 	let pendingOutput: Iterator<string> | undefined;
 	let flushed = Promise.withResolvers<void>();
@@ -67,32 +70,48 @@ export async function ctlPipe(selector: string, options: CtlPipeOptions = {}): P
 		done.reject(error);
 	}
 	const onError = (error: Error) => done.reject(error);
-	const forwardLine = (line: string) => {
-		if (!line.trim()) return;
+	const forwardLine = (line: string): boolean => {
+		if (!line.trim()) return true;
 		const frame = decoder.push(JSON.parse(line));
-		if (frame) client!.sendRaw(frame as Record<string, unknown>);
+		return !frame || client!.sendRaw(frame as Record<string, unknown>);
 	};
-	const onData = (chunk: string | Buffer) => {
+	const pumpInput = () => {
 		try {
-			buffer += chunk.toString();
 			let newline = buffer.indexOf("\n");
-			while (newline >= 0) {
-				forwardLine(buffer.slice(0, newline));
+			while (!inputBlocked && newline >= 0) {
+				const line = buffer.slice(0, newline);
 				buffer = buffer.slice(newline + 1);
+				inputBlocked = !forwardLine(line);
 				newline = buffer.indexOf("\n");
+			}
+			if (!inputBlocked && inputEnded && buffer.length > 0) {
+				const line = buffer;
+				buffer = "";
+				inputBlocked = !forwardLine(line);
+			}
+			if (inputBlocked) {
+				input.pause();
+			} else if (inputEnded) {
+				client!.detach();
+				done.resolve();
 			}
 		} catch (error) {
 			onError(error instanceof Error ? error : new Error(String(error)));
 		}
 	};
+	const onData = (chunk: string | Buffer) => {
+		buffer += chunk.toString();
+		pumpInput();
+	};
 	const onEnd = () => {
-		try {
-			forwardLine(buffer);
-			client!.detach();
-			done.resolve();
-		} catch (error) {
-			onError(error instanceof Error ? error : new Error(String(error)));
-		}
+		inputEnded = true;
+		pumpInput();
+	};
+	const onDrain = () => {
+		if (!inputBlocked) return;
+		inputBlocked = false;
+		pumpInput();
+		if (!inputBlocked && !inputEnded) input.resume();
 	};
 	try {
 		client = new ControlClient({
@@ -125,6 +144,7 @@ export async function ctlPipe(selector: string, options: CtlPipeOptions = {}): P
 		subscribing = false;
 		// Install listeners before resuming stdin; a ready frame can precede connect's resolution.
 		input.setEncoding("utf8");
+		unsubscribeDrain = client.onDrain(onDrain);
 		input.on("data", onData);
 		input.once("end", onEnd);
 		input.once("error", onError);
@@ -143,6 +163,7 @@ export async function ctlPipe(selector: string, options: CtlPipeOptions = {}): P
 		input.off("end", onEnd);
 		input.off("error", onError);
 		input.pause();
+		unsubscribeDrain?.();
 		sink?.off("drain", pumpOutput);
 		sink?.off("error", onOutputError);
 		client?.detach();

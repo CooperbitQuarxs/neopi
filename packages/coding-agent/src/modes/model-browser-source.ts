@@ -11,8 +11,9 @@ import {
 	cfgFallbackEffortSelections,
 	matchEffortRule,
 } from "../config/effort-policy";
-import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
-import { describeModelCompactionPoint } from "../session/model-compaction-threshold";
+import { getSupportedThinkingLevels } from "@oh-my-pi/pi-catalog/model-thinking";
+import { describeModelCompactionPoint, resolveEffectiveContextWindow } from "../session/model-compaction-threshold";
+import { cfgContextRules } from "../config/context-policy";
 
 import {
 	cfgCycleOrder,
@@ -88,10 +89,14 @@ export function createModelBrowserSource(
 		get effortRules() {
 			return cfgEffortRules.get(settings);
 		},
+		get contextRules() {
+			return cfgContextRules.get(settings);
+		},
+		effectiveContextWindowFor: model => resolveEffectiveContextWindow(settings, model),
 		permittedEfforts: model => {
 			const rule =
 				cfgEffortPolicyMode.get(settings) === "replacement" ? matchEffortRule(settings, model) : undefined;
-			return getSupportedEfforts(model).filter(effort => !rule || rule.allowed.includes(effort));
+			return getSupportedThinkingLevels(model).filter(effort => !rule || rule.allowed.includes(effort));
 		},
 		getProjectRoleEffortSelection: role => settings.getProjectRoleEffortSelection(role),
 		getGlobalRoleEffortSelection: role => settings.getGlobalRoleEffortSelection(role),

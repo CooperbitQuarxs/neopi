@@ -1,0 +1,77 @@
+/* NeoProxy's quiet charcoal fields and hairline menus, shared by every place. */
+.neo-popover {
+	position: fixed;
+	max-width: calc(100vw - 16px);
+	min-width: 160px;
+	padding: 4px;
+	overflow: auto;
+	overscroll-behavior: contain;
+	border: 1px solid var(--neo-line-3);
+	border-radius: var(--r-control, 8px);
+	background: var(--neo-panel);
+	color: rgb(var(--ink));
+	box-shadow: var(--neo-shadow-3);
+	font-family: var(--font-sans);
+	font-size: 13px;
+	line-height: 1.45;
+	outline: none;
+}
+.neo-dropdown { min-width: 190px; }
+.neo-dropdown-item {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	width: 100%;
+	min-height: 32px;
+	padding: 6px 9px;
+	border: 0;
+	border-radius: 5px;
+	background: transparent;
+	color: rgb(var(--ink-2));
+	text-align: left;
+	font: inherit;
+	cursor: pointer;
+}
+.neo-dropdown-item:not(:disabled):hover,
+.neo-dropdown-item:focus-visible { background: var(--neo-selected); color: rgb(var(--ink)); outline: none; }
+.neo-dropdown-item:focus-visible { box-shadow: inset 0 0 0 1px var(--neo-focus); }
+.neo-dropdown-item[data-danger="true"] { color: rgb(var(--danger)); }
+.neo-dropdown-item:disabled { opacity: .45; cursor: not-allowed; }
+.neo-choice-trigger.neo-input {
+	display: inline-flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	text-align: left;
+	cursor: pointer;
+	background-image: none;
+}
+.neo-choice-trigger > svg { flex-shrink: 0; color: rgb(var(--ink-3)); }
+.neo-choice-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.neo-choice-trigger[data-placeholder="true"] { color: rgb(var(--ink-3)); }
+.neo-choice-trigger:disabled { opacity: .5; cursor: not-allowed; }
+.neo-choice-trigger:focus-visible { outline: none; border-color: var(--neo-focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--neo-focus) 18%, transparent); }
+.neo-choice-list { min-width: min(100vw - 16px, var(--neo-anchor-width, 160px)); max-height: 320px; }
+.neo-choice-list[data-mono="true"] { font-family: var(--font-mono); font-size: 12.5px; }
+.neo-choice { display: flex; align-items: center; gap: 16px; min-height: 32px; padding: 6px 9px; border-radius: 5px; cursor: pointer; }
+.neo-choice[data-active="true"] { background: var(--neo-selected); box-shadow: inset 0 0 0 1px var(--neo-line-2); }
+.neo-choice[data-disabled="true"] { color: rgb(var(--ink-3)); cursor: not-allowed; opacity: .65; }
+.neo-choice-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.neo-choice-copy small { color: rgb(var(--ink-3)); font-size: 11.5px; line-height: 1.5; }
+.neo-choice-check { flex-shrink: 0; color: var(--neo-accent-a); }
+.neo-choice-group { padding: 9px 9px 4px; color: rgb(var(--ink-3)); font-size: 11.5px; }
+.neo-choice-group:not(:first-child) { margin-top: 4px; border-top: 1px solid var(--neo-line-1); }
+.neo-choice-empty { padding: 12px 9px; color: rgb(var(--ink-3)); }
+.neo-combobox { position: relative; display: inline-flex; min-width: 0; }
+.neo-combobox > .neo-input { width: 100%; padding-left: 29px; }
+.neo-combobox-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: rgb(var(--ink-3)); pointer-events: none; }
+.neo-dialog-backdrop { position: fixed; inset: 0; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; padding: 24px; overflow: auto; background: #0008; }
+.neo-dialog { display: flex; flex-direction: column; min-width: 0; max-width: 100%; max-height: calc(100dvh - 48px); border: 1px solid var(--neo-line-3); border-radius: var(--r-panel, 16px); background: var(--neo-panel); color: rgb(var(--ink)); box-shadow: var(--neo-shadow-3); outline: none; }
+.neo-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 18px 20px 14px; border-bottom: 1px solid var(--neo-line-1); }
+.neo-dialog-header h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+.neo-dialog-description { margin-top: 4px; color: rgb(var(--ink-3)); font-size: 12.5px; }
+.neo-dialog-body { min-height: 0; min-width: 0; padding: 20px; overflow: auto; overscroll-behavior: contain; }
+.neo-dialog-footer { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--neo-line-1); }
+.neo-input:disabled, .neo-source:disabled { opacity: .55; cursor: not-allowed; }
+@media (max-width: 600px) { .neo-dialog-backdrop { padding: 12px; } .neo-dialog { max-height: calc(100dvh - 24px); } }
+.neo-drawer.neo-modal-sheet { background: var(--neo-panel); backdrop-filter: none; -webkit-backdrop-filter: none; }

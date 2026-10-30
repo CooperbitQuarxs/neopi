@@ -8,7 +8,7 @@ import { RpcLiveBridge, type RpcLiveSession } from "@oh-my-pi/pi-coding-agent/mo
 import type { RpcLiveFrame } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { readLines, removeWithRetries } from "@oh-my-pi/pi-utils";
-import { cfgLiveDelegationDelivery } from "../src/live/settings";
+import { cfgLiveDelegationDelivery, cfgLiveModel } from "../src/live/settings";
 
 class FakeLiveSession implements RpcLiveSession {
 	muted = false;
@@ -103,6 +103,23 @@ describe("RpcLiveBridge", () => {
 		expect(await starting).toEqual({ voice: "sol" });
 	});
 
+	test("uses the configured model on the next call without changing the active call", async () => {
+		const { bridge, sessions } = harness();
+		const first = bridge.start();
+		const live = sessions[0]!;
+		expect(live.options.model).toBe("gpt-live-1-codex");
+		cfgLiveModel.set(live.options.session.settings, "custom-live-model");
+		expect(live.options.model).toBe("gpt-live-1-codex");
+		live.started.resolve();
+		await first;
+		await bridge.stop();
+		const next = bridge.start();
+		expect(sessions[1]!.options.model).toBe("custom-live-model");
+		sessions[1]!.started.resolve();
+		await next;
+		await bridge.stop();
+	});
+
 	test("a second start fails while connecting, active, or closing", async () => {
 		const { bridge, sessions } = harness();
 		const first = bridge.start();
@@ -175,7 +192,29 @@ describe("RpcLiveBridge", () => {
 	});
 });
 
+async function receiveReady(
+	receive: () => Promise<Record<string, unknown> | undefined>,
+	stderr: Promise<string>,
+): Promise<void> {
+	for (;;) {
+		const frame = await receive();
+		if (!frame) throw new Error(`RPC live fixture exited before ready: ${await stderr}`);
+		if (frame.type === "ready") return;
+	}
+}
+
 describe("live commands over RPC", () => {
+	test("reports fixture startup stderr when stdout ends before ready", async () => {
+		const frames: Array<Record<string, unknown>> = [{ type: "live_phase", phase: "connecting" }];
+		const output = frames.values();
+		await expect(
+			receiveReady(
+				async () => output.next().value,
+				Promise.resolve("Cannot find module './tool-views.generated.js'"),
+			),
+		).rejects.toThrow("RPC live fixture exited before ready: Cannot find module './tool-views.generated.js'");
+	});
+
 	test("start/mute/stop wire shapes; frames bypass set_event_filter; stdin end stops the session", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-rpc-live-"));
 		const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures", "live-rpc-agent.ts")], {
@@ -208,7 +247,7 @@ describe("live commands over RPC", () => {
 			}
 		};
 		try {
-			while ((await receive())?.type !== "ready") {}
+			await receiveReady(receive, stderr);
 			expect(await command({ type: "set_event_filter", events: ["agent_end"] })).toMatchObject({ success: true });
 			expect(await command({ type: "live_mute" })).toMatchObject({
 				type: "response",

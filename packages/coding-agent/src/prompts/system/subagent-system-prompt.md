@@ -29,7 +29,7 @@ You NEVER modify files outside this tree or in the original repository.
 Message peers via `write` with `path: "agent://<id>"` and `content` (broadcast: `agent://all`). Your id is `{{ircSelfId}}`. Currently visible peers:
 {{#if ircPeers}}
 {{#each ircPeers}}
-- `{{this.id}}` — {{this.displayName}} ({{this.kind}}, {{this.status}}){{#if this.activity}}: {{this.activity}}{{/if}}
+- `{{this.id}}` — {{this.displayName}} ({{this.kind}}, {{this.status}}){{#if this.resolvedModelIdentity}} [model={{this.resolvedModelIdentity}}{{#if this.resolvedThinkingLevel}} effort={{this.resolvedThinkingLevel}}{{/if}} fast={{#if this.fastModeEnabled}}on{{else}}off{{/if}} fast-active={{#if this.fastModeActive}}true{{else}}false{{/if}}]{{/if}}{{#if this.activity}}: {{this.activity}}{{/if}}
 {{/each}}
 {{#if ircOmittedCount}}
 {{ircOmittedCount}} more live peer(s) omitted.

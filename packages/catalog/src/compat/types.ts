@@ -537,6 +537,8 @@ export interface CompiledDeviceCodeLogin {
 export interface CompiledCustomLogin {
 	kind: "custom";
 	hook: string;
+	/** Custom hook uses a device-code exchange rather than a browser callback. */
+	deviceCode?: boolean;
 }
 
 export type CompiledLogin =
@@ -648,6 +650,9 @@ export interface CompiledSeed {
 	models: CompiledSeedModel[];
 }
 
+/** Value validation for an optional provider configuration option. */
+export type ProviderOptionSchema = { type: "boolean" | "string" | "strings" } | { type: "enum"; values: string[] };
+
 /**
  * One model provider's catalog entry: the non-code half of what the runtime
  * and generator know about a provider. A `providers/<id>.kdl` file
@@ -672,6 +677,8 @@ export interface CompiledProvider {
 	discovery?: CompiledProviderDiscovery;
 	/** Non-chat model kinds mapped to their runtime transport APIs. */
 	kindApis?: Partial<Record<KindApiKind, Api>>;
+	/** Deployment-owned configuration options, independent of model identity. */
+	configOptions?: Record<string, ProviderOptionSchema>;
 	/** Authored bundled rows, when the provider cannot be discovered at generation time. */
 	seed?: CompiledSeed;
 }

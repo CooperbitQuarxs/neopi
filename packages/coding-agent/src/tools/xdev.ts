@@ -172,7 +172,7 @@ function parseDeviceArgs(
 }
 
 /** One-line catalog summary for a mounted tool: `summary`, else first description line. */
-function toolSummary(inst: Tool): string {
+export function toolSummary(inst: Tool): string {
 	if (inst.summary) return inst.summary;
 	const firstLine = (inst.description ?? "").split("\n").find(line => line.trim().length > 0);
 	return firstLine?.trim() ?? inst.label ?? inst.name;

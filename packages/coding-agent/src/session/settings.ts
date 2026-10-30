@@ -83,7 +83,63 @@ export const cfgPrewalkEnabled = register({
 		group: "Prewalk",
 		label: "Enable Prewalk",
 		description:
-			"Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first edit/write after the plan nudge's todo list exists — the strong model plans, commits the todos, and starts the implementation before handing off. Overridable per session with --prewalk / --no-prewalk.",
+			"Plan with the configured planning crew, then hand off to the execution crew at the first edit/write after the todo list exists. Off by default; --prewalk / --no-prewalk override this session.",
+	},
+});
+
+export const cfgPrewalkPlanner = register({
+	id: "prewalk.planner",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Planning Selector",
+		description:
+			"Role alias or provider/model:effort for planning. Empty keeps the active model. Applies only when prewalk is enabled.",
+	},
+});
+
+export const cfgPrewalkExecution = register({
+	id: "prewalk.execution",
+	type: "string",
+	default: "@smol",
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Execution Selector",
+		description:
+			"Role alias or provider/model:effort for execution. --prewalk-into overrides this selector for one session.",
+	},
+});
+
+export const cfgPrewalkPlannerFallbacks = register({
+	id: "prewalk.plannerFallbacks",
+	type: "array",
+	default: EMPTY_STRING_ARRAY,
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Planning Fallbacks",
+		description:
+			"Ordered role aliases or provider/model:effort selectors tried when the planning selector is unavailable.",
+		editor: "json",
+		ordered: true,
+	},
+});
+
+export const cfgPrewalkExecutionFallbacks = register({
+	id: "prewalk.executionFallbacks",
+	type: "array",
+	default: EMPTY_STRING_ARRAY,
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Execution Fallbacks",
+		description:
+			"Ordered role aliases or provider/model:effort selectors tried when the execution selector is unavailable.",
+		editor: "json",
+		ordered: true,
 	},
 });
 
@@ -248,6 +304,7 @@ export const cfgProseOnlyThinking = register({
 
 export const cfgOmitThinking = register({
 	id: "omitThinking",
+	roleScoped: true,
 	type: "boolean",
 	default: false,
 	ui: {
@@ -444,6 +501,7 @@ export const cfgPersonality = register({
 // Sampling
 export const cfgTemperature = register({
 	id: "temperature",
+	roleScoped: true,
 	type: "number",
 	default: -1,
 	ui: {
@@ -464,6 +522,7 @@ export const cfgTemperature = register({
 
 export const cfgTopP = register({
 	id: "topP",
+	roleScoped: true,
 	type: "number",
 	default: -1,
 	ui: {
@@ -484,6 +543,7 @@ export const cfgTopP = register({
 
 export const cfgTopK = register({
 	id: "topK",
+	roleScoped: true,
 	type: "number",
 	default: -1,
 	ui: {
@@ -504,6 +564,7 @@ export const cfgTopK = register({
 export const cfgMinP = register({
 	id: "minP",
 	type: "number",
+	roleScoped: true,
 	default: -1,
 	ui: {
 		tab: "model",
@@ -521,6 +582,7 @@ export const cfgMinP = register({
 
 export const cfgPresencePenalty = register({
 	id: "presencePenalty",
+	roleScoped: true,
 	type: "number",
 	default: -1,
 	ui: {
@@ -540,6 +602,7 @@ export const cfgPresencePenalty = register({
 
 export const cfgRepetitionPenalty = register({
 	id: "repetitionPenalty",
+	roleScoped: true,
 	type: "number",
 	default: -1,
 	ui: {
@@ -584,6 +647,7 @@ export const cfgSampling = combine(
 
 export const cfgTextVerbosity = register({
 	id: "textVerbosity",
+	roleScoped: true,
 	type: "enum",
 	values: ["low", "medium", "high"] as const,
 	default: "medium",
@@ -602,6 +666,7 @@ export const cfgTextVerbosity = register({
 
 export const cfgTierOpenai = register({
 	id: "tier.openai",
+	roleScoped: true,
 	type: "enum",
 	values: SERVICE_TIER_OPENAI_VALUES,
 	default: "none",
@@ -617,6 +682,7 @@ export const cfgTierOpenai = register({
 
 export const cfgTierAnthropic = register({
 	id: "tier.anthropic",
+	roleScoped: true,
 	type: "enum",
 	values: SERVICE_TIER_ANTHROPIC_VALUES,
 	default: "none",
@@ -632,6 +698,7 @@ export const cfgTierAnthropic = register({
 
 export const cfgTierGoogle = register({
 	id: "tier.google",
+	roleScoped: true,
 	type: "enum",
 	values: SERVICE_TIER_GOOGLE_VALUES,
 	default: "none",

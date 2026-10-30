@@ -1,7 +1,8 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { Agent, AgentMessage, AgentToolResult, AgentTurnEndContext } from "@oh-my-pi/pi-agent-core";
 import { invalidateMessageCache } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model, ToolResultMessage } from "@oh-my-pi/pi-ai";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { resolveApprovedPlan } from "../plan-mode/approved-plan";
@@ -9,9 +10,10 @@ import { autosaveApprovedPlan } from "../plan-mode/plan-autosave";
 import { listPlanFiles, readPlanFile } from "../plan-mode/plan-files";
 import type { PlanModeState } from "../plan-mode/state";
 import planYoloHandoffPrompt from "../prompts/system/plan-yolo-handoff.md" with { type: "text" };
-import prewalkChecklistPrompt from "../prompts/system/prewalk-checklist.md" with { type: "text" };
-import prewalkContinuePrompt from "../prompts/system/prewalk-continue.md" with { type: "text" };
-import prewalkPlanPrompt from "../prompts/system/prewalk-plan.md" with { type: "text" };
+import bundledPrewalkChecklistPrompt from "../prompts/system/prewalk-checklist.md" with { type: "text" };
+import bundledPrewalkContinuePrompt from "../prompts/system/prewalk-continue.md" with { type: "text" };
+import bundledPrewalkPlanPrompt from "../prompts/system/prewalk-plan.md" with { type: "text" };
+import prewalkHandoffPrompt from "../prompts/system/prewalk-handoff.md" with { type: "text" };
 import { type ConfiguredThinkingLevel, prewalkWouldBeNoop } from "@oh-my-pi/pi-tui/thinking";
 import { isMCPToolName } from "../tools/builtin-names";
 import {
@@ -23,7 +25,7 @@ import {
 } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { PlanProposalHandler } from "../tools/resolve";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import type { PlanYolo, Prewalk } from "./agent-session-types";
+import type { PlanYolo, Prewalk, PrewalkPlanHandoff } from "./agent-session-types";
 import { PREWALK_PLAN_MESSAGE_TYPE } from "./messages";
 import type { SessionManager } from "./session-manager";
 const PREWALK_CONTINUE_MESSAGE_TYPE = "prewalk-continue";
@@ -70,6 +72,7 @@ export interface PrewalkCoordinatorHost {
 	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined;
 	restoreThinkingLevel(level: ConfiguredThinkingLevel | undefined): void;
 	resolveDefaultPrewalk(): Prewalk | undefined;
+	resolvePlanningCrew?(): Prewalk | undefined;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 	setModelTemporary(
 		model: Model,
@@ -101,6 +104,7 @@ export interface PrewalkCoordinatorOptions {
 export type PrewalkRestartResult = "armed" | "reset" | "rejected";
 export class PrewalkCoordinator {
 	readonly #host: PrewalkCoordinatorHost;
+	#crewGeneration = 0;
 	#prewalk: Prewalk | undefined;
 	#planInjected = false;
 	#continuePending = false;
@@ -157,6 +161,7 @@ export class PrewalkCoordinator {
 
 	/** Retire the outgoing cycle and prepare a configured prewalk for a fresh main session. */
 	async resetForNewSession(enabled: boolean): Promise<void> {
+		this.#crewGeneration++;
 		const handoff = this.#handoff;
 		const current = this.#host.model();
 		const restoreSource =
@@ -186,6 +191,7 @@ export class PrewalkCoordinator {
 			}
 		}
 		const prewalk = this.#host.resolveDefaultPrewalk();
+		if (prewalk) await this.#selectPlanningCrew(prewalk);
 		if (!prewalk) return;
 		if (this.#isNoop(prewalk)) {
 			this.#disarmNoop(prewalk);
@@ -202,6 +208,49 @@ export class PrewalkCoordinator {
 			`Prewalk: target ${prewalk.target.provider}/${prewalk.target.id} already matches the active model and thinking level; nothing to switch.`,
 			"prewalk",
 		);
+	}
+
+	/** Settings enablement and /new share the configured planning crew. */
+	async #selectPlanningCrew(prewalk: Prewalk): Promise<void> {
+		const planner = this.#host.resolvePlanningCrew?.();
+		if (planner) await this.#host.setModelTemporary(planner.target, planner.thinkingLevel, { ephemeral: true });
+		const source = this.#host.model();
+		if (source) {
+			this.#host.emitNotice(
+				"info",
+				`Prewalk crew: plan ${source.provider}/${source.id} → execute ${prewalk.target.provider}/${prewalk.target.id}.`,
+				"prewalk",
+			);
+		}
+	}
+
+	async armConfigured(prewalk: Prewalk): Promise<boolean> {
+		const generation = ++this.#crewGeneration;
+		await this.#selectPlanningCrew(prewalk);
+		if (generation !== this.#crewGeneration) return false;
+		return this.arm(prewalk.target, prewalk.thinkingLevel);
+	}
+
+	#capturePlan(messages: AgentMessage[], source: Model, prewalk: Prewalk): PrewalkPlanHandoff {
+		const start = messages.findLastIndex(message => message.role === "user");
+		const plan = messages
+			.slice(start + 1)
+			.flatMap(message => {
+				if (
+					message.role !== "assistant" &&
+					!(message.role === "toolResult" && message.toolName === "todo" && !message.isError)
+				)
+					return [];
+				return message.content.flatMap(block => (block.type === "text" ? [block.text] : []));
+			})
+			.join("\n\n");
+		return {
+			version: 1,
+			planner: { provider: source.provider, id: source.id, thinkingLevel: this.#host.configuredThinkingLevel() },
+			execution: { provider: prewalk.target.provider, id: prewalk.target.id, thinkingLevel: prewalk.thinkingLevel },
+			plan,
+			createdAt: Date.now(),
+		};
 	}
 
 	/** Advances the one-way prewalk switch at a completed assistant-turn boundary. */
@@ -223,7 +272,10 @@ export class PrewalkCoordinator {
 			this.#host.agent.steer({
 				role: "custom",
 				customType: PREWALK_CONTINUE_MESSAGE_TYPE,
-				content: prewalkContinuePrompt,
+				content: resolvePromptAsset("system/prewalk-continue.md", bundledPrewalkContinuePrompt, {
+					cwd: this.#host.sessionManager.getCwd(),
+					kind: "notice",
+				}).text,
 				attribution: "agent",
 				display: false,
 				timestamp: Date.now(),
@@ -241,7 +293,10 @@ export class PrewalkCoordinator {
 				this.#host.agent.steer({
 					role: "custom",
 					customType: PREWALK_PLAN_MESSAGE_TYPE,
-					content: prewalkPlanPrompt,
+					content: resolvePromptAsset("system/prewalk-plan.md", bundledPrewalkPlanPrompt, {
+						cwd: this.#host.sessionManager.getCwd(),
+						kind: "notice",
+					}).text,
 					display: false,
 					attribution: "agent",
 					timestamp: Date.now(),
@@ -263,7 +318,9 @@ export class PrewalkCoordinator {
 		}
 		const source = this.#host.model();
 		const sourceThinkingLevel = this.#host.configuredThinkingLevel();
+		const brief = source ? this.#capturePlan(liveMessages, source, prewalk) : undefined;
 		await this.#host.setModelTemporary(target, prewalk.thinkingLevel, { ephemeral: true });
+		if (brief) this.#host.sessionManager.appendCustomEntry("prewalk-handoff", brief);
 		this.#clearPrewalkState();
 		if (source) {
 			this.#handoff = {
@@ -281,7 +338,22 @@ export class PrewalkCoordinator {
 		this.#host.agent.steer({
 			role: "custom",
 			customType: PREWALK_CHECKLIST_MESSAGE_TYPE,
-			content: prewalkChecklistPrompt,
+			content: brief
+				? renderPromptAsset(
+						"system/prewalk-handoff.md",
+						prewalkHandoffPrompt,
+						{
+							plan: brief.plan,
+							checklist: resolvePromptAsset("system/prewalk-checklist.md", bundledPrewalkChecklistPrompt, {
+								cwd: this.#host.sessionManager.getCwd(),
+							}).text,
+						},
+						{ cwd: this.#host.sessionManager.getCwd() },
+					)
+				: resolvePromptAsset("system/prewalk-checklist.md", bundledPrewalkChecklistPrompt, {
+						cwd: this.#host.sessionManager.getCwd(),
+					}).text,
+			details: brief,
 			attribution: "agent",
 			display: false,
 			timestamp: Date.now(),
@@ -290,6 +362,7 @@ export class PrewalkCoordinator {
 
 	/** Drops a pending prewalk hand-off (e.g. `prewalk.enabled` turned off); no-op when none is armed. */
 	disarm(): void {
+		this.#crewGeneration++;
 		const active = this.#prewalk;
 		if (!active) return;
 		this.#scrubPlanNudge(undefined, true);
@@ -328,7 +401,10 @@ export class PrewalkCoordinator {
 		this.#host.agent.steer({
 			role: "custom",
 			customType: PREWALK_PLAN_MESSAGE_TYPE,
-			content: prewalkPlanPrompt,
+			content: resolvePromptAsset("system/prewalk-plan.md", bundledPrewalkPlanPrompt, {
+				cwd: this.#host.sessionManager.getCwd(),
+				kind: "notice",
+			}).text,
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -495,7 +571,12 @@ export class PrewalkCoordinator {
 		this.#host.agent.steer({
 			role: "custom",
 			customType: PLAN_YOLO_HANDOFF_MESSAGE_TYPE,
-			content: prompt.render(planYoloHandoffPrompt, { planFilePath, title: resolvedTitle }),
+			content: renderPromptAsset(
+				"system/plan-yolo-handoff.md",
+				planYoloHandoffPrompt,
+				{ planFilePath, title: resolvedTitle },
+				{ cwd: this.#host.sessionManager.getCwd() },
+			),
 			attribution: "agent",
 			display: false,
 			timestamp: Date.now(),

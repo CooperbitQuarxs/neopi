@@ -16,6 +16,7 @@ import { Image, type ImageBudget } from "../../components/image";
 import { MenuSelection } from "../../components/menu-selection";
 import { ScrollView } from "../../components/scroll-view";
 import { MenuKeyReader, MenuSearchField, type MenuNavAction } from "../../components/menu-navigation";
+import { compileMenuRegex } from "../../menu-search";
 import { fuzzyFilter } from "../../fuzzy";
 import { TreeView } from "../../components/tree-view";
 import { matchesKey } from "../../keys";
@@ -522,12 +523,12 @@ export class Sidebar {
 			cached?.files === files &&
 			cached.style === this.viewStyle &&
 			cached.treeVersion === this.#treeVersion &&
-			cached.query === this.search.value
+			cached.query === this.search.query
 		) {
 			return cached.entries;
 		}
 
-		const visibleFiles = this.search.value.trim() ? fuzzyFilter(files, this.search.value, file => file.path) : files;
+		const visibleFiles = this.search.query.trim() ? fuzzyFilter(files, this.search.query, file => file.path) : files;
 		let entries: SidebarFileEntry[];
 		if (this.viewStyle === "path") {
 			entries = visibleFiles.map(file => ({ target: { kind: "file", file } as const, file }));
@@ -543,7 +544,7 @@ export class Sidebar {
 			files,
 			style: this.viewStyle,
 			treeVersion: this.#treeVersion,
-			query: this.search.value,
+			query: this.search.query,
 			entries,
 			rows: entries.map(entry => ({ entry, target: entry.target })),
 		});
@@ -560,7 +561,7 @@ export class Sidebar {
 			snapshot.headFiles === headFiles &&
 			snapshot.style === this.viewStyle &&
 			snapshot.treeVersion === this.#treeVersion &&
-			snapshot.query === this.search.value
+			snapshot.query === this.search.query
 		) {
 			return;
 		}
@@ -601,7 +602,7 @@ export class Sidebar {
 			headFiles,
 			style: this.viewStyle,
 			treeVersion: this.#treeVersion,
-			query: this.search.value,
+			query: this.search.query,
 		};
 	}
 
@@ -662,11 +663,11 @@ export class Sidebar {
 
 	/** Search is a separate field; commit form controls keep their literal keys. */
 	handleSearchInput(data: string): boolean {
-		const before = this.search.value;
+		const before = this.search.query;
 		const result = this.search.handleInput(data);
 		if (result === "pass") return false;
 		if (result === "exited") this.#keys.reset();
-		if (this.search.value !== before) {
+		if (this.search.query !== before) {
 			this.#treeVersion++;
 			this.#rebuildTargets();
 			this.#followSelection = true;
@@ -1053,9 +1054,11 @@ export class Sidebar {
 		const aiInput = editing === "stage-ai-input" ? this.aiInput.input.describe(cx) : undefined;
 		const descriptionEditor = editing === "description" ? editorNode(this.description.describe(cx)) : undefined;
 		const search = this.search.input.describe(cx);
+		const queryError = compileMenuRegex(this.search.value)?.error;
 		return this.#nativeMemo.get(
 			[
 				search,
+				queryError,
 				this.#model.clean,
 				this.#model.unstaged,
 				this.#model.staged,
@@ -1093,7 +1096,11 @@ export class Sidebar {
 							),
 							this.#describeCommit(on, summaryInput, descriptionEditor),
 						];
-				children.unshift(keyed(col([text([span("Search files", "muted")]), search], { gap: "xs" }), "search"));
+				children.unshift(keyed(col([
+					text([span("Search files", "muted")]),
+					search,
+					...(queryError ? [text([span(queryError, "error")])] : []),
+				], { gap: "xs" }), "search"));
 				return col(children, { role: "omp.app.git.side" });
 			},
 		);

@@ -16,6 +16,7 @@ import {
 	logger,
 	MAIN_CONFIG_FILENAMES,
 } from "@oh-my-pi/pi-utils";
+import { overlaySettingsToml, readSettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { YAML } from "bun";
 import {
 	type AuthAccountPolicies,
@@ -194,7 +195,8 @@ function parseUsageReservePct(value: unknown): number {
 	return reservePct;
 }
 
-async function readConfigYaml(agentDir: string): Promise<ConfigSnapshot> {
+async function readMainConfig(agentDir: string): Promise<ConfigSnapshot> {
+	let yaml: Record<string, unknown> = {};
 	for (const filename of MAIN_CONFIG_FILENAMES) {
 		const configPath = path.join(agentDir, filename);
 		let raw: string;
@@ -212,19 +214,38 @@ async function readConfigYaml(agentDir: string): Promise<ConfigSnapshot> {
 			throw new AIError.ConfigurationError(`${configPath} contains invalid YAML: ${String(error)}`);
 		}
 		// An empty or comment-only file parses to null: no settings, not a malformed config.
-		if (parsed === null || parsed === undefined) return {};
+		if (parsed === null || parsed === undefined) break;
 		if (typeof parsed !== "object" || Array.isArray(parsed)) {
 			throw new AIError.ConfigurationError(`${configPath} must contain a YAML object`);
 		}
-		const record = parsed as Record<string, unknown>;
-		return {
-			url: readDottedString(record, "auth.broker.url"),
-			token: readDottedString(record, "auth.broker.token"),
-			accountPolicies: readDottedValue(record, "auth.accountPolicies"),
-			usageReservePct: readDottedValue(record, "retry.usageReservePct"),
-		};
+		yaml = parsed as Record<string, unknown>;
+		break;
 	}
-	return {};
+	let record: Record<string, unknown>;
+	let toml: Record<string, unknown>;
+	try {
+		toml = await readSettingsToml(agentDir);
+		// Legacy literal-dot YAML keys belong to the same top-level setting.
+		// A replacement TOML table must not fall back to those stale aliases.
+		const base = Object.keys(toml).length
+			? Object.fromEntries(
+					Object.entries(yaml).filter(([key]) => !key.includes(".") || !Object.hasOwn(toml, key.split(".")[0])),
+				)
+			: yaml;
+		record = overlaySettingsToml(base, toml);
+	} catch (error) {
+		throw new AIError.ConfigurationError(String(error));
+	}
+	const policyValue = (key: string) => {
+		const value = readDottedValue(record, key);
+		return value === null && Object.hasOwn(toml, key.split(".")[0]) ? undefined : value;
+	};
+	return {
+		url: readDottedString(record, "auth.broker.url"),
+		token: readDottedString(record, "auth.broker.token"),
+		accountPolicies: policyValue("auth.accountPolicies"),
+		usageReservePct: policyValue("retry.usageReservePct"),
+	};
 }
 
 export interface AuthAccountPolicyConfig {
@@ -244,7 +265,7 @@ export async function loadAuthAccountPolicyConfig(
 ): Promise<AuthAccountPolicyConfig> {
 	const agentDir = options.agentDir ?? getAgentDir();
 	const needsMainConfigFallback = options.accountPolicies === undefined || options.usageReservePct === undefined;
-	const snapshot = needsMainConfigFallback ? await readConfigYaml(agentDir) : undefined;
+	const snapshot = needsMainConfigFallback ? await readMainConfig(agentDir) : undefined;
 	return {
 		accountPolicies: parseAuthAccountPolicies(
 			options.accountPolicies === undefined ? snapshot?.accountPolicies : options.accountPolicies,
@@ -341,7 +362,7 @@ export async function resolveAuthBrokerConfig(
 	let url = envUrl && envUrl.length > 0 ? envUrl : undefined;
 	let configToken: string | undefined;
 	if (!url || !envToken) {
-		const fromConfig = await readConfigYaml(agentDir);
+		const fromConfig = await readMainConfig(agentDir);
 		if (!url && fromConfig.url) {
 			const resolved = await resolveConfig(fromConfig.url);
 			if (resolved && resolved.length > 0) url = resolved;

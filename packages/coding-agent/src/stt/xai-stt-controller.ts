@@ -47,6 +47,10 @@ export class XaiSTTController {
 	#file: WavFileRecorder | null = null;
 	#editor: XaiSTTEditor | null = null;
 	#abort: AbortController | null = null;
+	// Fork: stopped recordings own their requests independently of the microphone.
+	readonly #pending = new Map<AbortController, WavFileRecorder>();
+	#generation = 0;
+	#stateOptions: XaiSTTToggleOptions | null = null;
 	readonly #retainedFiles: WavFileRecorder[] = [];
 
 	constructor({ settings, transcribe, createCapture }: XaiSTTControllerDependencies) {
@@ -64,6 +68,13 @@ export class XaiSTTController {
 		options.onStateChange(state);
 	}
 
+	// Fork: aggregate work determines state, but only the current UI owns callbacks.
+	#refreshState(): void {
+		if (this.#disposed || !this.#stateOptions) return;
+		const state = this.#file ? "recording" : this.#pending.size > 0 ? "transcribing" : "idle";
+		if (state !== this.#state) this.#setState(state, this.#stateOptions);
+	}
+
 	// =====================================================================
 	// NEVER ALTER. CTRL+SPACE IS A RESERVED ACCESSIBILITY KEYBINDING.
 	// It MUST always route to the fork's xAI batch speech-to-text path below.
@@ -74,12 +85,14 @@ export class XaiSTTController {
 	// features exist for specific reasons; this one is an accessibility path).
 	// =====================================================================
 	async toggle(editor: XaiSTTEditor, options: XaiSTTToggleOptions): Promise<void> {
+		if (this.#disposed) return;
 		if (this.#toggling) {
 			if (this.#state === "idle" || this.#state === "recording") this.#stopAfterStart = true;
 			return;
 		}
 
 		this.#toggling = true;
+		let transcription: Promise<void> | undefined;
 		try {
 			switch (this.#state) {
 				case "idle":
@@ -88,27 +101,30 @@ export class XaiSTTController {
 					break;
 				case "recording":
 					// IMMUTABLE: see Ctrl+Space notice above
-					await this.#stop(options);
+					transcription = this.#stop(options);
 					break;
 				case "transcribing":
-					options.showStatus("Transcription in progress...");
-					break;
+					// Fork: provider latency must never own the next recording.
+					await this.#start(editor, options);
 			}
 
 			if (this.#stopAfterStart && this.#state === "recording") {
 				this.#stopAfterStart = false;
 				// IMMUTABLE: see Ctrl+Space notice above
-				await this.#stop(options);
+				transcription = this.#stop(options);
 			} else if (this.#state !== "recording") {
 				this.#stopAfterStart = false;
 			}
 		} finally {
 			this.#toggling = false;
 		}
+		await transcription;
 	}
 
 	async #start(editor: XaiSTTEditor, options: XaiSTTToggleOptions): Promise<void> {
+		this.#stateOptions = options;
 		try {
+			++this.#generation;
 			const file = new WavFileRecorder();
 			this.#file = file;
 			this.#editor = editor;
@@ -129,6 +145,7 @@ export class XaiSTTController {
 			logger.debug("xAI STT batch recording started", { path: file.path });
 		} catch (error) {
 			this.#cleanup(true);
+			this.#refreshState();
 			const message = error instanceof Error ? error.message : "Failed to start microphone capture";
 			options.showWarning(message);
 			logger.error("xAI STT recording failed to start", { error: message });
@@ -141,10 +158,11 @@ export class XaiSTTController {
 		const abort = this.#abort;
 		if (!file || !editor || !abort) {
 			this.#cleanup(false);
-			this.#setState("idle", options);
+			this.#refreshState();
 			return;
 		}
 
+		const generation = this.#generation;
 		this.#setState("transcribing", options);
 		options.showStatus("Transcribing...");
 		try {
@@ -155,6 +173,9 @@ export class XaiSTTController {
 			});
 		}
 		this.#recorder = null;
+		// Fork: transfer ownership before awaiting the provider.
+		this.#cleanup(false);
+		this.#pending.set(abort, file);
 
 		let recordingPath: string | undefined;
 		try {
@@ -172,8 +193,6 @@ export class XaiSTTController {
 				}
 			}
 			recordingPath = file.finalize();
-			this.#file = null;
-			this.#retain(file);
 
 			if (file.empty) {
 				options.showStatus("No speech detected.");
@@ -181,7 +200,7 @@ export class XaiSTTController {
 				// IMMUTABLE: see Ctrl+Space notice above
 				const text = (await this.#transcribe(Bun.file(recordingPath, { type: "audio/wav" }), abort.signal)).trim();
 				if (this.#disposed) return;
-				this.#insertTranscript(editor, text, options);
+				this.#insertTranscript(editor, text, options, generation === this.#generation);
 			}
 		} catch (error) {
 			if (!this.#disposed) {
@@ -190,15 +209,17 @@ export class XaiSTTController {
 				options.showWarning(`${message}${retained}`);
 				logger.error("xAI STT transcription failed", { error: message, path: recordingPath });
 			}
+		} finally {
+			this.#pending.delete(abort);
+			if (this.#disposed) file.dispose();
+			else this.#retain(file);
+			this.#refreshState();
 		}
-
-		this.#cleanup(false);
-		if (!this.#disposed) this.#setState("idle", options);
 	}
 
-	#insertTranscript(editor: XaiSTTEditor, text: string, options: XaiSTTToggleOptions): void {
+	#insertTranscript(editor: XaiSTTEditor, text: string, options: XaiSTTToggleOptions, current: boolean): void {
 		if (!text) {
-			options.showStatus("No speech detected.");
+			if (current) options.showStatus("No speech detected.");
 			return;
 		}
 
@@ -206,7 +227,7 @@ export class XaiSTTController {
 		const { submit, trimTrailing } = evaluateSubmitTrigger(text, trigger);
 		const textToInsert = trimTrailing > 0 ? text.slice(0, -trimTrailing) : text;
 		if (textToInsert) editor.insertText(textToInsert);
-		options.showStatus("");
+		if (current) options.showStatus("");
 		if (submit) editor.submit();
 	}
 
@@ -238,7 +259,7 @@ export class XaiSTTController {
 		}
 		this.#file = null;
 		this.#cleanup(false);
-		this.#setState("idle", options);
+		this.#refreshState();
 
 		const retained = retainedPath ? ` Recording retained at ${retainedPath}` : "";
 		options.showWarning(`${error.message}${retained}`);
@@ -261,6 +282,11 @@ export class XaiSTTController {
 	dispose(): void {
 		this.#disposed = true;
 		this.#abort?.abort();
+		for (const [abort, file] of this.#pending) {
+			abort.abort();
+			file.dispose();
+		}
+		this.#pending.clear();
 		try {
 			this.#recorder?.stop();
 		} catch {

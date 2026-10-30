@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as path from "node:path";
 import {
 	Agent,
@@ -39,11 +40,12 @@ import { $env } from "@oh-my-pi/pi-utils/env";
 import { APP_NAME, getAgentDir, getModelDbPath, getProjectDir } from "@oh-my-pi/pi-utils/dirs";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
-import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { DEFAULT_FRAME_DATA_BYTES_BUDGET, frameDataBytesBudget } from "@oh-my-pi/snapcompact";
+import { type LaunchProfileMemory, renderLaunchProfileMemory, setSessionLaunchProfile } from "./neopi/launch-profile";
 import {
+	advisorRosterForRuntime,
 	discoverAdvisorConfigs,
 	discoverWatchdogFiles,
 	formatActiveRepoWatchdogPrompt,
@@ -54,6 +56,8 @@ import {
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { createAutoresearchExtension } from "./autoresearch";
+import { createWorkContractsExtension } from "./work-contracts";
+import { injectWorkContracts } from "./work-contracts/context";
 import { loadCapability, reset as resetCapabilities } from "./capability";
 import {
 	MAIN_AGENT_RULE_NAME,
@@ -175,8 +179,8 @@ import { resolveMCPToolAlias } from "./mcp/tool-bridge";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import { MEMORY_BACKEND_TOOL_NAMES } from "./memory-backend/tool-names";
 import type { MnemopiSessionState } from "./mnemopi/state";
-import mcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
-import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
+import bundledMcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
+import bundledLateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import { trackLiveAdvisors } from "./registry/live-advisors";
 import {
@@ -214,8 +218,10 @@ import {
 	formatCredentialDisabledNotice,
 } from "./session/credential-disabled-notice";
 import { DateCwdReminderInjector } from "./session/date-cwd-reminder";
+import { SessionEnvironment } from "./session/environment";
 import { createInterruptedToolResults, createInterruptedTurnAbortMessage } from "./session/exit-diagnostics";
 import { recoverInlineSloppyEdit } from "./session/inline-edit-recovery";
+import { describePrewalkCrew, getPrewalkPatterns } from "./session/prewalk-crew";
 import {
 	type CustomMessage,
 	convertToLlm,
@@ -459,6 +465,7 @@ type LateDiagnosticsDetails = {
 
 function buildLateDiagnosticsBatchMessage(
 	entries: DeferredDiagnosticsEntry[],
+	cwd?: string,
 ): CustomMessage<LateDiagnosticsDetails> | null {
 	if (entries.length === 0) return null;
 	const files = entries.map(entry => ({
@@ -478,10 +485,15 @@ function buildLateDiagnosticsBatchMessage(
 	return {
 		role: "custom",
 		customType: LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
-		content: prompt.render(lateDiagnosticTemplate, {
-			multiple: files.length > 1,
-			files,
-		}),
+		content: renderPromptAsset(
+			"tools/lsp-late-diagnostic.md",
+			bundledLateDiagnosticTemplate,
+			{
+				multiple: files.length > 1,
+				files,
+			},
+			{ cwd, kind: "notice" },
+		),
 		display: true,
 		attribution: "agent",
 		details,
@@ -666,6 +678,10 @@ export interface CreateAgentSessionOptions {
 	deferredPrewalk?: { target: string; patterns: string[] };
 	/** Host-owned display sink for non-fatal startup prewalk warnings. */
 	onPrewalkWarning?: (warning: string) => void;
+	/** Fully expanded planning selectors, resolved after extension providers register. */
+	prewalkPlannerPatterns?: string[];
+	/** Host-owned display sink for the resolved planning and execution crew. */
+	onPrewalkCrew?: (message: string) => void;
 	/** Force read-only plan mode at start, auto-approve on the model's first resolve call, then switch to execute. */
 	planYolo?: PlanYolo;
 
@@ -677,6 +693,8 @@ export interface CreateAgentSessionOptions {
 	customSystemPrompt?: string;
 	/** Already-loaded text appended through the bundled system prompt templates. */
 	appendSystemPrompt?: string;
+	/** Explicitly selected persistent memory, snapshotted before the first turn. */
+	launchProfileMemory?: LaunchProfileMemory;
 	/**
 	 * `customSystemPrompt` or `systemPromptTemplate` came from a discovered
 	 * SYSTEM.md / SYSTEM_TEMPLATE.md rather than an explicit flag. Chat mode
@@ -1807,6 +1825,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const agentDir = options.agentDir ?? getAgentDir();
 	const eventBus = options.eventBus ?? new EventBus();
 	const subagentEventBus = options.subagentEventBus ?? new EventBus();
+	const launchProfilePrompt = renderLaunchProfileMemory(options.launchProfileMemory);
 
 	registerSshCleanup();
 	registerEvalCleanup();
@@ -2463,6 +2482,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		};
 		const toolSession: ToolSession = {
+			environment: new SessionEnvironment(),
 			get cwd() {
 				return sessionManager.getCwd();
 			},
@@ -2548,6 +2568,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				return session.getPromptCacheKeyForModel(model) ?? session.agent.sessionId;
 			},
 			getToolByName: name => session?.getToolByName(name),
+			getEnabledToolNames: () =>
+				session?.getEnabledToolNames() ?? [
+					...new Set([...activeToolNames, ...(toolSession.xdev?.mountedNames ?? [])]),
+				],
 			getToolForEvalBridge: name => session?.getToolForEvalBridge(name),
 			getEvalBridgeToolNames: () => session?.getEvalBridgeToolNames() ?? [],
 			getCodeModeDirectToolNames: () => session?.getCodeModeDirectToolNames(),
@@ -2572,6 +2596,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						? startupAutoSelection
 						: undefined,
 			}),
+			getActualThinkingLevel: () => {
+				if (session) return session.isAutoThinking ? session.autoResolvedThinkingLevel() : session.thinkingLevel;
+				return thinkingLevel === AUTO_THINKING ? undefined : agent?.state.thinkingLevel;
+			},
 			onEffortDisclosure: message => session?.emitNotice("warning", message, "effort-policy"),
 			getServiceTierByFamily: () => session?.serviceTierByFamily,
 			getImageAttachments: () => session?.getImageAttachments() ?? [],
@@ -2886,6 +2914,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 			inlineExtensions.push(...(options.extensions ?? []));
 			inlineExtensions.push(createAutoresearchExtension);
+			inlineExtensions.push(createWorkContractsExtension(agentDir));
 			if (customTools.length > 0) {
 				inlineExtensions.push(createCustomToolsExtension(customTools, customToolSourcePaths));
 			}
@@ -3614,6 +3643,37 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		}
 
+		if (prewalk) {
+			const patterns =
+				options.prewalkPlannerPatterns ?? (isSubagentSession ? [] : getPrewalkPatterns(settings, "planner"));
+			if (patterns.length > 0) {
+				const discoveryInFlight = runtimeDiscoveryPromise;
+				const selection = await resolvePrewalkTarget(
+					patterns,
+					"planning crew",
+					modelRegistry,
+					modelMatchPreferences,
+					disabledProviderIds(settings),
+					{ beforeRefresh: discoveryInFlight ? () => discoveryInFlight : undefined },
+				);
+				if (selection.prewalk) {
+					model = selection.prewalk.target;
+					startupThinkingOverride = selection.prewalk.thinkingLevel;
+					startupRoleSelection = undefined;
+					startupAutoSelection = startupThinkingOverride === AUTO_THINKING ? { mode: "auto" } : undefined;
+					thinkingOrigin = "role";
+					initialRetryFallback = undefined;
+					adoptThinkingForModel(model);
+				} else {
+					prewalk = undefined;
+					for (const warning of selection.warnings) {
+						logger.warn("Prewalk planner unavailable", { warning });
+						options.onPrewalkWarning?.(warning);
+					}
+				}
+			}
+		}
+
 		if (model) {
 			const selectedModel = model;
 			const refreshedModel = await logger.time("refreshInitialModelMetadata", () =>
@@ -3623,6 +3683,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				model = refreshedModel;
 				adoptThinkingForModel(refreshedModel);
 			}
+		}
+		if (prewalk && model) {
+			const message = describePrewalkCrew({ target: model, thinkingLevel }, prewalk);
+			logger.info(message);
+			options.onPrewalkCrew?.(message);
 		}
 
 		// A first-turn user tail has no assistant metadata to copy. Once startup
@@ -4160,7 +4225,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					options.rules ??
 					(
 						await logger.time("rediscoverRules", () =>
-							loadCapability<Rule>(ruleCapability.id, { cwd: promptCwd, agentDir }),
+							loadCapability<Rule>(ruleCapability.id, {
+								cwd: promptCwd,
+								agentDir,
+								disabledExtensions: cfgDisabledExtensions.get(settings),
+							}),
 						)
 					).items;
 				const buckets = bucketRules(ruleItems, ttsrManager, {
@@ -4212,8 +4281,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						config: liveChatMode,
 						customPrompt: options.systemPromptDiscovered ? undefined : options.customSystemPrompt,
 						appendPrompt: composeAppendPrompt(
-							memoryInstructions ? [memoryInstructions] : [],
+							[memoryInstructions, launchProfilePrompt].filter((part): part is string => part !== undefined),
 							options.appendSystemPromptDiscovered ? undefined : options.appendSystemPrompt,
+							promptCwd,
 						),
 						contextFiles,
 						cwd: promptCwd,
@@ -4246,6 +4316,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					});
 			const appendParts: string[] = [];
 			if (memoryInstructions) appendParts.push(memoryInstructions);
+			if (launchProfilePrompt) appendParts.push(launchProfilePrompt);
 			if (autoLearnInstructions) appendParts.push(autoLearnInstructions);
 			// List each mounted MCP tool once. A routed tool that the xd:// catalog
 			// would list carries its catalog summary on the route line and gets no
@@ -4267,8 +4338,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			);
 			if (projection.mappings.length > 0 || projection.hasOmittedMappings) {
 				appendParts.push(
-					prompt
-						.render(mcpXdevGuidanceTemplate, {
+					renderPromptAsset(
+						"system/mcp-xdev-guidance.md",
+						bundledMcpXdevGuidanceTemplate,
+						{
 							tools: projection.mappings.map(mapping => ({
 								mcpToolName: mapping.label,
 								path: mapping.path,
@@ -4276,8 +4349,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							})),
 							hasCatalogOnlyTools: routedCatalogNames.size > 0,
 							hasOmittedTools: projection.hasOmittedMappings,
-						})
-						.trim(),
+						},
+						{ cwd: promptCwd },
+					).trim(),
 				);
 			}
 			if (serverInstructions && serverInstructions.size > 0) {
@@ -4292,7 +4366,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					appendParts.push(`### ${srvName}\n${truncated}`);
 				}
 			}
-			const appendPrompt = composeAppendPrompt(appendParts, options.appendSystemPrompt);
+			const appendPrompt = composeAppendPrompt(appendParts, options.appendSystemPrompt, promptCwd);
 			// Owned/in-band tool dialects (non-native) require the full functions-
 			// namespace catalog; native tool calling lets the compact name list suffice.
 			const nativeTools = resolveDialect(cfgToolsFormat.get(settings), agent?.state.model ?? model) === undefined;
@@ -4355,6 +4429,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				settingsApproval: toolSession.settingsApproval === true,
 				evalPreludes: toolSession.getAdvertisedEvalPreludes?.(),
 				model: getActiveModelString(),
+				activeModel: agent?.state.model ?? model,
 				includeModelInPrompt: cfgIncludeModelInPrompt.get(settings),
 				personality: agentKind === "sub" ? "none" : cfgPersonality.get(settings),
 				subagent: agentKind === "sub",
@@ -4520,7 +4595,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// a provider that 400s on them (#5400). Read both dynamically so a `/model`
 		// switch or setting change takes effect on the next turn.
 		const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
-			const converted = convertToLlm(messages);
+			const converted = convertToLlm(messages, sessionManager.getCwd());
 			if (cfgImagesBlockImages.get(settings)) {
 				return replaceLlmImagesWithText(converted, "Image reading is disabled.");
 			}
@@ -4545,7 +4620,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {
 			const withContext = await extensionRunner.emitContext(messages, signal);
 			const wrapped = wrapSteeringForModel(withContext);
-			return session ? session.prepareAgentTelemetry(wrapped) : wrapped;
+			return session ? session.prepareUsageNotices(session.prepareAgentTelemetry(wrapped), signal) : wrapped;
 		};
 		// Per-request provider-context transforms. Obfuscate FIRST so secrets are
 		// redacted from text before snapcompact rasterizes it into PNG frames. Clamp
@@ -4566,6 +4641,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// so `snapcompact.*` changes apply on the next call (a no-op while both are off).
 		const snapcompactInline = new SnapcompactInlineTransformer(
 			{
+				get cwd() {
+					return sessionManager.getCwd();
+				},
 				get renderSystemPrompt() {
 					return cfgSnapcompactSystemPrompt.get(settings);
 				},
@@ -4601,6 +4679,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			transformed = await blobBroker.decorateContext(transformed, transformModel);
 			// Byte budget after decoration: URL/file-referenced images carry no inline bytes.
 			transformed = clampProviderContextImageBytes(transformed, transformModel);
+			transformed = injectWorkContracts(transformed, transformModel, sessionManager, agent.tokenizer, obfuscator);
 			// Keep per-request volatility out of the system prompt: the date/cwd
 			// reminder rides on the first user turn so open-weight providers keep
 			// their tool-schema prefix cache (#7404). Chat mode sends it only when
@@ -5008,7 +5087,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			advisorMemoryPrompt,
 			advisorSharedInstructions: discoveredAdvisors.sharedInstructions,
 			advisorSharedMaxNotesPerUpdate: discoveredAdvisors.sharedMaxNotesPerUpdate,
-			advisorConfigs: discoveredAdvisors.advisors,
+			advisorConfigs: advisorRosterForRuntime(discoveredAdvisors),
 			advisorConfigWarnings: discoveredAdvisors.warnings,
 			agent,
 			thinkingLevel,
@@ -5228,7 +5307,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				watchAdvisorConfigs(cwd, agentDir, discovered => {
 					if (session.isDisposed) return;
 					session.applyAdvisorConfigs(
-						discovered.advisors,
+						advisorRosterForRuntime(discovered),
 						discovered.sharedInstructions,
 						discovered.sharedMaxNotesPerUpdate,
 					);
@@ -5506,7 +5585,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			build: buildMcpNotificationBatchMessage,
 		});
 		session.yieldQueue.register<DeferredDiagnosticsEntry>(LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, {
-			build: buildLateDiagnosticsBatchMessage,
+			build: entries => buildLateDiagnosticsBatchMessage(entries, session.sessionManager.getCwd()),
 			isStale: entry => entry.isStale(),
 		});
 
@@ -5940,6 +6019,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			await session.initializeCodeMode();
 		} catch (error) {
 			logger.warn("Code Mode initialization at session startup failed", { error: String(error) });
+		}
+
+		if (launchProfilePrompt !== undefined) {
+			sessionManager.appendCustomEntry("launch-profile", launchProfilePrompt);
+			setSessionLaunchProfile(session, launchProfilePrompt);
 		}
 
 		startupCleanup.move();

@@ -7,13 +7,15 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { resolveConfiguredModelPatterns } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { resolveConfiguredModelPatterns, resolveRoleChain } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { KIND_ROLE_IDS, MODEL_ROLE_IDS, MODEL_ROLES } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { RpcRoles } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-roles";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { cfgRetryFallbackChains } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ControlClient } from "@oh-my-pi/pi-coding-agent/control/client";
@@ -72,6 +74,100 @@ describe("RpcRoles", () => {
 			expect(role.section).toBe(KIND_ROLE_IDS.some(id => id === role.id) ? "kind" : "chat");
 			expect(role.patterns).toEqual(resolveConfiguredModelPatterns([`@${role.id}`], settings));
 		}
+		expect(roles.find(role => role.id === "agent-author")?.description).toContain("agent definitions");
+		expect(roles.find(role => role.id === "compaction")?.description).toContain("compaction");
+		expect(roles.find(role => role.id === "reviewer")?.description).toBeUndefined();
+	});
+
+	test("recall is listed with its description and follows summaries until assigned", () => {
+		settings.setModelRole("chronicler-summary", "anthropic/claude-haiku-4-5:low");
+		const roles = new RpcRoles(session);
+		expect(roles.list().roles.find(role => role.id === "chronicler-recall")).toMatchObject({
+			tag: "CHRONREC",
+			description: "Ranks Chronicler recall results while you wait.",
+			resolved: { modelId: "claude-haiku-4-5", thinkingLevel: "low" },
+		});
+		settings.setModelRole("chronicler-recall", "anthropic/claude-sonnet-4-5:high");
+		expect(roles.list().roles.find(role => role.id === "chronicler-recall")?.resolved).toMatchObject({
+			modelId: "claude-sonnet-4-5",
+			thinkingLevel: "high",
+		});
+	});
+
+	test("title follows tiny until assigned and advertises the fork-mode exception", () => {
+		settings.setModelRole("tiny", "anthropic/claude-haiku-4-5:low");
+		const roles = new RpcRoles(session);
+		expect(roles.list().roles.find(role => role.id === "title")).toMatchObject({
+			tag: "TITLE",
+			description: "Generates session titles and /rename suggestions; fork mode uses the foreground model instead.",
+			resolved: { modelId: "claude-haiku-4-5", thinkingLevel: "low" },
+		});
+		settings.setModelRole("title", "anthropic/claude-sonnet-4-5");
+		expect(roles.list().roles.find(role => role.id === "title")?.resolved?.modelId).toBe("claude-sonnet-4-5");
+	});
+
+	test("deck-inbox is a built-in chat role with the subscription Luna default", () => {
+		const luna = createMockModel({ provider: "openai-codex", id: "gpt-6-luna" }).model;
+		vi.spyOn(modelRegistry, "getAvailable").mockImplementation(() => [luna]);
+		expect(new RpcRoles(session).list().roles.find(role => role.id === "deck-inbox")).toMatchObject({
+			alias: "@deck-inbox",
+			name: "Deck inbox",
+			section: "chat",
+			source: "builtin",
+			namespace: "deck",
+			patterns: ["openai-codex/gpt-6-luna"],
+			resolved: { provider: "openai-codex", modelId: "gpt-6-luna" },
+			hidden: false,
+		});
+		expect(settings.getModelRoleProvenance("deck-inbox")).toBe("default");
+	});
+
+	test("missing Luna leaves deck-inbox unresolved without borrowing the conversation model", async () => {
+		const roles = new RpcRoles(session);
+		const before = session.model;
+		const inbox = roles.list().roles.find(role => role.id === "deck-inbox");
+		expect(inbox?.patterns).toEqual(["openai-codex/gpt-6-luna"]);
+		expect(inbox?.resolved).toBeUndefined();
+		expect(await roles.setRole("deck-inbox")).toMatchObject({ ok: false, code: "role_unresolved" });
+		expect(session.model).toBe(before);
+	});
+
+	test("deck-inbox uses ordinary global/project overrides, provenance and fallback chains", async () => {
+		const roles = new RpcRoles(session);
+		settings.setModelRole("deck-inbox", "anthropic/claude-sonnet-4-5");
+		expect(settings.getModelRoleProvenance("deck-inbox")).toBe("global");
+		settings.setProjectModelRole("deck-inbox", "anthropic/claude-haiku-4-5:low");
+		expect(settings.getModelRoleProvenance("deck-inbox")).toBe("project");
+		expect(roles.list().roles.find(role => role.id === "deck-inbox")).toMatchObject({
+			configured: "anthropic/claude-haiku-4-5:low",
+			resolved: { provider: "anthropic", modelId: "claude-haiku-4-5", thinkingLevel: "low" },
+		});
+		expect(await roles.setRole("deck-inbox")).toMatchObject({ ok: true, data: { role: "deck-inbox" } });
+		expect(roles.activeRole()).toBe("deck-inbox");
+		cfgRetryFallbackChains.override(settings, { "deck-inbox": ["anthropic/claude-opus-4-5"] });
+		expect(
+			resolveRoleChain("deck-inbox", settings, modelRegistry.getAvailable("chat")).map(entry => entry.model.id),
+		).toEqual(["claude-haiku-4-5", "claude-opus-4-5"]);
+		settings.clearProjectModelRole("deck-inbox");
+		expect(settings.getModelRoleProvenance("deck-inbox")).toBe("global");
+		expect(roles.list().roles.find(role => role.id === "deck-inbox")?.configured).toBe("anthropic/claude-sonnet-4-5");
+	});
+
+	test("consumer deck roles join the namespace through normal catalog settings without changing other roles", async () => {
+		settings.setModelRole("deck-triage", "anthropic/claude-haiku-4-5");
+		const roles = new RpcRoles(session);
+		expect(roles.list().roles.find(role => role.id === "deck-triage")).toMatchObject({
+			alias: "@deck-triage",
+			namespace: "deck",
+			source: "configured",
+			section: "chat",
+			resolved: { provider: "anthropic", modelId: "claude-haiku-4-5" },
+		});
+		for (const role of roles.list().roles.filter(role => !role.id.startsWith("deck-"))) {
+			expect(role.namespace).toBeUndefined();
+		}
+		expect(await roles.setRole("deck-triage")).toMatchObject({ ok: true, data: { role: "deck-triage" } });
+		expect(roles.activeRole()).toBe("deck-triage");
 	});
 
 	test("a configured role reports its raw selector, pattern chain and resolved thinking level", () => {

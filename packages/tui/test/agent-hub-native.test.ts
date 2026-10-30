@@ -251,7 +251,7 @@ test("hub uses visual-line viewport scrolling without moving its selected agent"
 	}
 });
 
-test("hub search is slash-focused literal input and Esc retains its query", () => {
+test("hub search is slash-focused literal input and Esc clears its query", () => {
 	const onDone = vi.fn();
 	const hub = createHub([agent("alpha", 1)], [], undefined, { onDone });
 	try {
@@ -261,7 +261,7 @@ test("hub search is slash-focused literal input and Esc retains its query", () =
 		for (const key of "hjkl/ g") hub.handleInput(key);
 		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "hjkl/ g", focused: true });
 		hub.handleInput("\x1b");
-		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "hjkl/ g", focused: false });
+		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "", query: "", focused: false });
 		expect(onDone).not.toHaveBeenCalled();
 		hub.handleInput("\x1b");
 		expect(onDone).toHaveBeenCalledTimes(1);
@@ -342,7 +342,7 @@ test("hub native close respects focused search before closing its root", () => {
 		expect(pickerProps(hub).actions?.find(action => action.id === "close")?.label).toBe("Back to list");
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(onDone).not.toHaveBeenCalled();
-		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "alpha", focused: false });
+		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "", query: "", focused: false });
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(onDone).toHaveBeenCalledTimes(1);
 	} finally {

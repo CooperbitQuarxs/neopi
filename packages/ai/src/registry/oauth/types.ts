@@ -68,12 +68,20 @@ export type OAuthAuthInfo = {
 	 */
 	launchUrl?: string;
 	instructions?: string;
+	/** User-facing device verification code, never the private polling device_code. */
+	userCode?: string;
 };
+
+/** Declarative login implementation; custom providers may implement their own interaction. */
+export type OAuthLoginKind = "api-key" | "oauth-code" | "device-code" | "custom";
 
 export interface OAuthProviderInfo {
 	id: OAuthProviderId;
 	name: string;
 	available: boolean;
+	loginKind: OAuthLoginKind;
+	/** Includes custom hooks that implement a device-code exchange. */
+	deviceCode: boolean;
 	/**
 	 * Provider id the login stores credentials under, when it differs from `id`
 	 * (e.g. `openai-codex-device` ⇒ `openai-codex`). Lets callers map a login
@@ -110,6 +118,8 @@ export interface OAuthProviderInterface {
 	readonly id: OAuthProviderId;
 	readonly name: string;
 	readonly sourceId?: string;
+	readonly loginKind?: OAuthLoginKind;
+	readonly deviceCode?: boolean;
 	login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;
 	/** Refresh a stored grant; the signal bounds provider network work to refresh ownership. */
 	refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;

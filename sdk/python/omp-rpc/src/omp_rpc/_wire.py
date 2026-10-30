@@ -69,6 +69,11 @@ _EFFORT_VALUES: Final[frozenset[str]] = frozenset({"minimal", "low", "medium", "
 _decode_effort = cast("Decoder[Effort]", literal(_EFFORT_VALUES))
 
 
+ThinkingEffort: TypeAlias = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+_THINKING_EFFORT_VALUES: Final[frozenset[str]] = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max"})
+_decode_thinking_effort = cast("Decoder[ThinkingEffort]", literal(_THINKING_EFFORT_VALUES))
+
+
 ThinkingLevel: TypeAlias = Literal["inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"]
 """Thinking selector; `inherit` defers to a higher-level selector."""
 _THINKING_LEVEL_VALUES: Final[frozenset[str]] = frozenset({"inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"})
@@ -86,6 +91,11 @@ _APPROVAL_HANDLER_VALUES: Final[frozenset[str]] = frozenset({"host", "ui"})
 _decode_approval_handler = cast("Decoder[ApprovalHandler]", literal(_APPROVAL_HANDLER_VALUES))
 
 
+ApprovalMode: TypeAlias = Literal["always-ask", "write", "yolo"]
+_APPROVAL_MODE_VALUES: Final[frozenset[str]] = frozenset({"always-ask", "write", "yolo"})
+_decode_approval_mode = cast("Decoder[ApprovalMode]", literal(_APPROVAL_MODE_VALUES))
+
+
 ChatModeSetting: TypeAlias = Literal["off", "chat", "erp", "raw"]
 _CHAT_MODE_SETTING_VALUES: Final[frozenset[str]] = frozenset({"off", "chat", "erp", "raw"})
 _decode_chat_mode_setting = cast("Decoder[ChatModeSetting]", literal(_CHAT_MODE_SETTING_VALUES))
@@ -94,6 +104,11 @@ _decode_chat_mode_setting = cast("Decoder[ChatModeSetting]", literal(_CHAT_MODE_
 SessionMode: TypeAlias = Literal["default", "plan"]
 _SESSION_MODE_VALUES: Final[frozenset[str]] = frozenset({"default", "plan"})
 _decode_session_mode = cast("Decoder[SessionMode]", literal(_SESSION_MODE_VALUES))
+
+
+ModelSelectorPerformanceSource: TypeAlias = Literal["measured", "catalog"]
+_MODEL_SELECTOR_PERFORMANCE_SOURCE_VALUES: Final[frozenset[str]] = frozenset({"measured", "catalog"})
+_decode_model_selector_performance_source = cast("Decoder[ModelSelectorPerformanceSource]", literal(_MODEL_SELECTOR_PERFORMANCE_SOURCE_VALUES))
 
 
 MixtureConfigScope: TypeAlias = Literal["project", "user"]
@@ -608,6 +623,7 @@ class ModelInfo:
     """Null when the provider does not report a limit."""
     max_tokens: int | None
     """Null when the provider does not report a limit."""
+    description: str | None = None
     headers: dict[str, str] | None = None
     premium_multiplier: float | None = None
     prefer_websockets: bool | None = None
@@ -615,6 +631,49 @@ class ModelInfo:
     priority: int | None = None
     thinking: ThinkingConfig | None = None
     compat: JsonObject | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ThemeSelection:
+    effective: str
+    global_: str | None
+    project: str | None
+    colors: dict[str, str]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ThemeSelections:
+    dark: ThemeSelection
+    light: ThemeSelection
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ThemesConfiguration:
+    themes: tuple[str, ...]
+    selection: ThemeSelections
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ThemePalette:
+    name: str
+    colors: dict[str, str]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SessionUsage:
+    input: float
+    output: float
+    cache_read: float
+    cache_write: float
+    total_tokens: float
+    orchestration_input: float
+    orchestration_output: float
+    orchestration_cache_read: float
+    premium_requests: float
+    cost: float
+    subagent_cost: float
+    advisor_cost: float
+    advisor_cost_state: Literal["ready", "restoring", "unavailable"]
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -656,6 +715,7 @@ class RoleInfo:
     source: Literal["builtin", "configured"]
     patterns: tuple[str, ...]
     hidden: bool
+    description: str | None = None
     tag: str | None = None
     configured: str | None = None
     resolved: RoleResolution | None = None
@@ -665,6 +725,69 @@ class RoleInfo:
 class RolesResult:
     roles: tuple[RoleInfo, ...]
     active_role: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelSelectorFacts:
+    intelligence: float | None
+    ttft_ms: float | None
+    tokens_per_second: float | None
+    context_window: float | None
+    effective_context_window: float | None
+    input_cost_per_million: float | None
+    output_cost_per_million: float | None
+    performance_source: ModelSelectorPerformanceSource | None
+    service_tier: str | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelSelectorItem:
+    selector: str
+    provider: str
+    id: str
+    name: str
+    resolved_selector: str | None
+    facts: ModelSelectorFacts
+    description: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelSelectorResult:
+    items: tuple[ModelSelectorItem, ...]
+    roles: tuple[ModelSelectorItem, ...]
+    error: str | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelEffortSelection:
+    mode: Literal["fixed", "auto", "inherit"]
+    level: ThinkingLevel | None = None
+    allowed: tuple[str, ...] | None = None
+    selector: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelEffortRule:
+    selector: str
+    allowed: tuple[str, ...]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelRoleConfigurationValue:
+    selector: str | None
+    effort: ModelEffortSelection | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelRoleFallbacks:
+    chain: tuple[str, ...]
+    efforts: dict[str, ModelEffortSelection]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelEffortRuleScopes:
+    global_: tuple[ModelEffortRule, ...] | None
+    project: tuple[ModelEffortRule, ...] | None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -942,6 +1065,8 @@ class SessionState:
     interrupt_mode: InterruptMode = "immediate"
     session_file: str | None = None
     session_name: str | None = None
+    approval_mode: ApprovalMode | None = None
+    session_usage: SessionUsage | None = None
     auto_compaction_enabled: bool = False
     fast_mode_enabled: bool = False
     fast_mode_active: bool = False
@@ -1146,10 +1271,91 @@ class SessionEntries:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class JournalIdentity:
+    session_id: str
+    session_file: str | None
+    leaf_id: str | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JournalPage:
+    entries: tuple[JsonObject, ...]
+    session_id: str
+    session_file: str
+    leaf_id: str | None
+    total_entries: int
+    next_cursor: str | None = None
+    """Opaque cursor for the next page; absent on the last page."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class SessionTree:
     """Raw session tree roots."""
     tree: tuple[JsonObject, ...]
     leaf_id: str | None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TreeAskOptionNote:
+    option: str
+    note: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TreeAskQuestionResult:
+    id: str
+    question: str
+    options: tuple[str, ...]
+    multi: bool
+    selected_options: tuple[str, ...]
+    custom_input: str | None = None
+    note: str | None = None
+    option_notes: tuple[TreeAskOptionNote, ...] | None = None
+    timed_out: bool | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TreeAskDetails:
+    question: str | None = None
+    options: tuple[str, ...] | None = None
+    multi: bool | None = None
+    selected_options: tuple[str, ...] | None = None
+    custom_input: str | None = None
+    note: str | None = None
+    option_notes: tuple[TreeAskOptionNote, ...] | None = None
+    timed_out: bool | None = None
+    results: tuple[TreeAskQuestionResult, ...] | None = None
+    chat_redirect: bool | None = None
+    questions: tuple[str, ...] | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TreeAskReanswer:
+    content: tuple[UserContent, ...]
+    details: TreeAskDetails | None = None
+    is_error: bool | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TreeAskReopen:
+    tool_call_id: str
+    questions: tuple[AskQuestion, ...]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class NavigateTreeResult:
+    session_id: str
+    leaf_id: str | None
+    outcome: Literal["navigated", "unchanged", "cancelled", "ask_reopen"]
+    cancelled: bool
+    session_file: str | None = None
+    aborted: bool | None = None
+    editor_text: str | None = None
+    editor_images: tuple[ImageContent, ...] | None = None
+    summary_entry: JsonObject | None = None
+    reopen_ask: TreeAskReopen | None = None
+    ask_reanswer_committed: bool | None = None
+    resume_token: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1167,6 +1373,11 @@ class SubagentSnapshot:
     progress: JsonObject | None = None
     """Raw `AgentProgress` record."""
     parent_tool_call_id: str | None = None
+    resolved_model: str | None = None
+    resolved_model_identity: str | None = None
+    resolved_thinking_level: ConfiguredThinkingLevel | None = None
+    fast_mode_enabled: bool | None = None
+    fast_mode_active: bool | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1213,6 +1424,10 @@ class LoginProvider:
     name: str
     available: bool
     authenticated: bool
+    accepts_keys: bool
+    login_kind: Literal["api-key", "oauth-code", "device-code", "custom"]
+    device_code: bool
+    store_credentials_as: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1236,6 +1451,44 @@ class PromptAck:
     """`agentInvoked: false` means the prompt completed locally and no `prompt_result` follows."""
     agent_invoked: bool | None = None
     user_entry_id: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class MessageEntryIdentity:
+    message_id: str
+    """Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."""
+    entry_id: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JournalStateEvent:
+    type: Literal["journal_state"] = "journal_state"
+    session_id: str
+    session_file: str | None
+    leaf_id: str | None
+    reason: Literal["snapshot", "identity", "leaf"]
+    message_entry_ids: tuple[MessageEntryIdentity, ...] | None = None
+    """Snapshot-only durable associations among the last 256 live messages assigned entry IDs by this native owner. Retained across observer reconnects, cleared on session identity change or process restart; absence is not evidence a message was not persisted."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JournalEntryEvent:
+    type: Literal["journal_entry"] = "journal_entry"
+    session_id: str
+    session_file: str | None
+    leaf_id: str | None
+    entry: JsonObject
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class MessagePersistedEvent:
+    type: Literal["message_persisted"] = "message_persisted"
+    session_id: str
+    session_file: str | None
+    leaf_id: str | None
+    message_id: str
+    """Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."""
+    entry_id: str
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1265,6 +1518,11 @@ class ChatModeChangedEvent:
     type: Literal["chat_mode_changed"] = "chat_mode_changed"
     mode: ChatModeSetting
     include: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ApprovalModeChangedEvent:
+    type: Literal["approval_mode_changed"] = "approval_mode_changed"
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1466,7 +1724,12 @@ class MessageStartEvent:
     type: Literal["message_start"] = "message_start"
     message: AgentMessage
     message_id: str | None = None
-    """Shared by the start, updates, and end of one message; unique per process."""
+    """Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."""
+    snapshot: bool | None = None
+    """True for the current unsaved assistant at an ordered native snapshot boundary."""
+    session_id: str | None = None
+    session_file: str | None = None
+    leaf_id: str | None = None
     request_model_provider: str | None = None
     request_model_id: str | None = None
     request_reasoning: Effort | None = None
@@ -1480,7 +1743,7 @@ class MessageUpdateEvent:
     message: AgentMessage
     assistant_message_event: AssistantMessageEvent
     message_id: str | None = None
-    """Shared by the start, updates, and end of one message; unique per process."""
+    """Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."""
     request_model_provider: str | None = None
     request_model_id: str | None = None
     request_reasoning: Effort | None = None
@@ -1493,7 +1756,7 @@ class MessageEndEvent:
     type: Literal["message_end"] = "message_end"
     message: AgentMessage
     message_id: str | None = None
-    """Shared by the start, updates, and end of one message; unique per process."""
+    """Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."""
     request_model_provider: str | None = None
     request_model_id: str | None = None
     request_reasoning: Effort | None = None
@@ -1620,6 +1883,16 @@ class ModelChangedEvent:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ThemesConfigurationChangedEvent:
+    type: Literal["themes_configuration_changed"] = "themes_configuration_changed"
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ModelsConfigurationChangedEvent:
+    type: Literal["models_configuration_changed"] = "models_configuration_changed"
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class ConfigWarningsChangedEvent:
     type: Literal["config_warnings_changed"] = "config_warnings_changed"
 
@@ -1674,7 +1947,7 @@ class ThinkingLevelChangedEvent:
     thinking_level: ThinkingLevel | None = None
     configured: ConfiguredThinkingLevel | None = None
     """The user's selector when it differs from the effective level."""
-    resolved: Effort | None = None
+    resolved: ThinkingEffort | None = None
     """The level `auto` resolved to this turn, once classified."""
 
 
@@ -1947,6 +2220,8 @@ class InputUiRequest:
     title: str
     placeholder: str | None = None
     timeout: int | None = None
+    secret: bool | None = None
+    login_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1985,6 +2260,7 @@ class NotifyUiRequest:
     method: Literal["notify"] = "notify"
     message: str
     notify_type: NotifyType | None = None
+    login_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2031,6 +2307,9 @@ class OpenUrlUiRequest:
     launch_url: str | None = None
     """Short loopback redirect to `url`; the truncation-safe copy target."""
     instructions: str | None = None
+    user_code: str | None = None
+    """User-facing device verification code, never the private polling device_code."""
+    login_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2045,6 +2324,8 @@ class ExtensionUiRequest(ExtensionUiRequestMixin):
     timeout: int | None = None
     message: str | None = None
     placeholder: str | None = None
+    secret: bool | None = None
+    login_id: str | None = None
     prefill: str | None = None
     prompt_style: bool | None = None
     questions: tuple[AskQuestion, ...] | None = None
@@ -2060,6 +2341,8 @@ class ExtensionUiRequest(ExtensionUiRequestMixin):
     launch_url: str | None = None
     """Short loopback redirect to `url`; the truncation-safe copy target."""
     instructions: str | None = None
+    user_code: str | None = None
+    """User-facing device verification code, never the private polling device_code."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2129,6 +2412,19 @@ class SetRoleResult:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class GetModelsConfigurationResult:
+    providers: tuple[JsonObject, ...]
+    models: tuple[JsonObject, ...]
+    roles: tuple[JsonObject, ...]
+    role_storage: Literal["global", "project"]
+    effort_mode: Literal["replacement", "legacy"]
+    effort_rules: tuple[ModelEffortRule, ...]
+    effort_rules_provenance: str
+    effort_rule_scopes: ModelEffortRuleScopes
+    effort_choices: tuple[str, ...]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class GetUsageResult:
     generated_at: int
     reports: tuple[ProviderUsageReport, ...]
@@ -2143,6 +2439,11 @@ class SetApprovalHandlerResult:
 class SetModeResult:
     mode: SessionMode
     plan_file_path: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ResumeTreeResult:
+    resumed: Literal[True] = True
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2180,7 +2481,7 @@ UsageLimitState: TypeAlias = UsageLimitLowPriority | UsageLimitWrapUp
 MixtureAnswer: TypeAlias = MixtureChoiceAnswer | MixtureNoulAnswer | MixtureScoreAnswer
 
 
-RpcAgentEvent: TypeAlias = AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
+RpcAgentEvent: TypeAlias = JournalStateEvent | JournalEntryEvent | MessagePersistedEvent | AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | ApprovalModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ThemesConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
 """A session event, discriminated by `type`; `set_event_filter` selects which are sent."""
 
 
@@ -2391,6 +2692,7 @@ def parse_model_info(value: object, path: str = "ModelInfo") -> ModelInfo:
         cost=required(payload, "cost", parse_model_cost, path),
         context_window=required(payload, "contextWindow", nullable(decode_int), path),
         max_tokens=required(payload, "maxTokens", nullable(decode_int), path),
+        description=optional(payload, "description", decode_str, path),
         headers=optional(payload, "headers", record(decode_str), path),
         premium_multiplier=optional(payload, "premiumMultiplier", decode_float, path),
         prefer_websockets=optional(payload, "preferWebsockets", decode_bool, path),
@@ -2398,6 +2700,59 @@ def parse_model_info(value: object, path: str = "ModelInfo") -> ModelInfo:
         priority=optional(payload, "priority", decode_int, path),
         thinking=optional(payload, "thinking", parse_thinking_config, path),
         compat=optional(payload, "compat", decode_json_object, path),
+    )
+
+
+def parse_theme_selection(value: object, path: str = "ThemeSelection") -> ThemeSelection:
+    payload = expect_object(value, path)
+    return ThemeSelection(
+        effective=required(payload, "effective", decode_str, path),
+        global_=required(payload, "global", nullable(decode_str), path),
+        project=required(payload, "project", nullable(decode_str), path),
+        colors=required(payload, "colors", record(decode_str), path),
+    )
+
+
+def parse_theme_selections(value: object, path: str = "ThemeSelections") -> ThemeSelections:
+    payload = expect_object(value, path)
+    return ThemeSelections(
+        dark=required(payload, "dark", parse_theme_selection, path),
+        light=required(payload, "light", parse_theme_selection, path),
+    )
+
+
+def parse_themes_configuration(value: object, path: str = "ThemesConfiguration") -> ThemesConfiguration:
+    payload = expect_object(value, path)
+    return ThemesConfiguration(
+        themes=required(payload, "themes", array(decode_str), path),
+        selection=required(payload, "selection", parse_theme_selections, path),
+    )
+
+
+def parse_theme_palette(value: object, path: str = "ThemePalette") -> ThemePalette:
+    payload = expect_object(value, path)
+    return ThemePalette(
+        name=required(payload, "name", decode_str, path),
+        colors=required(payload, "colors", record(decode_str), path),
+    )
+
+
+def parse_session_usage(value: object, path: str = "SessionUsage") -> SessionUsage:
+    payload = expect_object(value, path)
+    return SessionUsage(
+        input=required(payload, "input", decode_float, path),
+        output=required(payload, "output", decode_float, path),
+        cache_read=required(payload, "cacheRead", decode_float, path),
+        cache_write=required(payload, "cacheWrite", decode_float, path),
+        total_tokens=required(payload, "totalTokens", decode_float, path),
+        orchestration_input=required(payload, "orchestrationInput", decode_float, path),
+        orchestration_output=required(payload, "orchestrationOutput", decode_float, path),
+        orchestration_cache_read=required(payload, "orchestrationCacheRead", decode_float, path),
+        premium_requests=required(payload, "premiumRequests", decode_float, path),
+        cost=required(payload, "cost", decode_float, path),
+        subagent_cost=required(payload, "subagentCost", decode_float, path),
+        advisor_cost=required(payload, "advisorCost", decode_float, path),
+        advisor_cost_state=required(payload, "advisorCostState", cast('Decoder[Literal["ready", "restoring", "unavailable"]]', literal(frozenset({"ready", "restoring", "unavailable"}))), path),
     )
 
 
@@ -2449,6 +2804,7 @@ def parse_role_info(value: object, path: str = "RoleInfo") -> RoleInfo:
         source=required(payload, "source", cast('Decoder[Literal["builtin", "configured"]]', literal(frozenset({"builtin", "configured"}))), path),
         patterns=required(payload, "patterns", array(decode_str), path),
         hidden=required(payload, "hidden", decode_bool, path),
+        description=optional(payload, "description", decode_str, path),
         tag=optional(payload, "tag", decode_str, path),
         configured=optional(payload, "configured", decode_str, path),
         resolved=optional(payload, "resolved", parse_role_resolution, path),
@@ -2460,6 +2816,85 @@ def parse_roles_result(value: object, path: str = "RolesResult") -> RolesResult:
     return RolesResult(
         roles=required(payload, "roles", array(parse_role_info), path),
         active_role=optional(payload, "activeRole", decode_str, path),
+    )
+
+
+def parse_model_selector_facts(value: object, path: str = "ModelSelectorFacts") -> ModelSelectorFacts:
+    payload = expect_object(value, path)
+    return ModelSelectorFacts(
+        intelligence=required(payload, "intelligence", nullable(decode_float), path),
+        ttft_ms=required(payload, "ttftMs", nullable(decode_float), path),
+        tokens_per_second=required(payload, "tokensPerSecond", nullable(decode_float), path),
+        context_window=required(payload, "contextWindow", nullable(decode_float), path),
+        effective_context_window=required(payload, "effectiveContextWindow", nullable(decode_float), path),
+        input_cost_per_million=required(payload, "inputCostPerMillion", nullable(decode_float), path),
+        output_cost_per_million=required(payload, "outputCostPerMillion", nullable(decode_float), path),
+        performance_source=required(payload, "performanceSource", nullable(_decode_model_selector_performance_source), path),
+        service_tier=required(payload, "serviceTier", nullable(decode_str), path),
+    )
+
+
+def parse_model_selector_item(value: object, path: str = "ModelSelectorItem") -> ModelSelectorItem:
+    payload = expect_object(value, path)
+    return ModelSelectorItem(
+        selector=required(payload, "selector", decode_str, path),
+        provider=required(payload, "provider", decode_str, path),
+        id=required(payload, "id", decode_str, path),
+        name=required(payload, "name", decode_str, path),
+        resolved_selector=required(payload, "resolvedSelector", nullable(decode_str), path),
+        facts=required(payload, "facts", parse_model_selector_facts, path),
+        description=optional(payload, "description", decode_str, path),
+    )
+
+
+def parse_model_selector_result(value: object, path: str = "ModelSelectorResult") -> ModelSelectorResult:
+    payload = expect_object(value, path)
+    return ModelSelectorResult(
+        items=required(payload, "items", array(parse_model_selector_item), path),
+        roles=required(payload, "roles", array(parse_model_selector_item), path),
+        error=required(payload, "error", nullable(decode_str), path),
+    )
+
+
+def parse_model_effort_selection(value: object, path: str = "ModelEffortSelection") -> ModelEffortSelection:
+    payload = expect_object(value, path)
+    return ModelEffortSelection(
+        mode=required(payload, "mode", cast('Decoder[Literal["fixed", "auto", "inherit"]]', literal(frozenset({"fixed", "auto", "inherit"}))), path),
+        level=optional(payload, "level", _decode_thinking_level, path),
+        allowed=optional(payload, "allowed", array(decode_str), path),
+        selector=optional(payload, "selector", decode_str, path),
+    )
+
+
+def parse_model_effort_rule(value: object, path: str = "ModelEffortRule") -> ModelEffortRule:
+    payload = expect_object(value, path)
+    return ModelEffortRule(
+        selector=required(payload, "selector", decode_str, path),
+        allowed=required(payload, "allowed", array(decode_str), path),
+    )
+
+
+def parse_model_role_configuration_value(value: object, path: str = "ModelRoleConfigurationValue") -> ModelRoleConfigurationValue:
+    payload = expect_object(value, path)
+    return ModelRoleConfigurationValue(
+        selector=required(payload, "selector", nullable(decode_str), path),
+        effort=required(payload, "effort", nullable(parse_model_effort_selection), path),
+    )
+
+
+def parse_model_role_fallbacks(value: object, path: str = "ModelRoleFallbacks") -> ModelRoleFallbacks:
+    payload = expect_object(value, path)
+    return ModelRoleFallbacks(
+        chain=required(payload, "chain", array(decode_str), path),
+        efforts=required(payload, "efforts", record(parse_model_effort_selection), path),
+    )
+
+
+def parse_model_effort_rule_scopes(value: object, path: str = "ModelEffortRuleScopes") -> ModelEffortRuleScopes:
+    payload = expect_object(value, path)
+    return ModelEffortRuleScopes(
+        global_=required(payload, "global", nullable(array(parse_model_effort_rule)), path),
+        project=required(payload, "project", nullable(array(parse_model_effort_rule)), path),
     )
 
 
@@ -2783,6 +3218,8 @@ def parse_session_state(value: object, path: str = "SessionState") -> SessionSta
         interrupt_mode=defaulted(payload, "interruptMode", _decode_interrupt_mode, path, "immediate"),
         session_file=optional(payload, "sessionFile", decode_str, path),
         session_name=optional(payload, "sessionName", decode_str, path),
+        approval_mode=optional(payload, "approvalMode", _decode_approval_mode, path),
+        session_usage=optional(payload, "sessionUsage", parse_session_usage, path),
         auto_compaction_enabled=defaulted(payload, "autoCompactionEnabled", decode_bool, path, False),
         fast_mode_enabled=defaulted(payload, "fastModeEnabled", decode_bool, path, False),
         fast_mode_active=defaulted(payload, "fastModeActive", decode_bool, path, False),
@@ -3012,11 +3449,107 @@ def parse_session_entries(value: object, path: str = "SessionEntries") -> Sessio
     )
 
 
+def parse_journal_identity(value: object, path: str = "JournalIdentity") -> JournalIdentity:
+    payload = expect_object(value, path)
+    return JournalIdentity(
+        session_id=required(payload, "sessionId", decode_str, path),
+        session_file=required(payload, "sessionFile", nullable(decode_str), path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+    )
+
+
+def parse_journal_page(value: object, path: str = "JournalPage") -> JournalPage:
+    payload = expect_object(value, path)
+    return JournalPage(
+        entries=required(payload, "entries", array(decode_json_object), path),
+        session_id=required(payload, "sessionId", decode_str, path),
+        session_file=required(payload, "sessionFile", decode_str, path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        total_entries=required(payload, "totalEntries", decode_int, path),
+        next_cursor=optional(payload, "nextCursor", decode_str, path),
+    )
+
+
 def parse_session_tree(value: object, path: str = "SessionTree") -> SessionTree:
     payload = expect_object(value, path)
     return SessionTree(
         tree=required(payload, "tree", array(decode_json_object), path),
         leaf_id=required(payload, "leafId", nullable(decode_str), path),
+    )
+
+
+def parse_tree_ask_option_note(value: object, path: str = "TreeAskOptionNote") -> TreeAskOptionNote:
+    payload = expect_object(value, path)
+    return TreeAskOptionNote(
+        option=required(payload, "option", decode_str, path),
+        note=required(payload, "note", decode_str, path),
+    )
+
+
+def parse_tree_ask_question_result(value: object, path: str = "TreeAskQuestionResult") -> TreeAskQuestionResult:
+    payload = expect_object(value, path)
+    return TreeAskQuestionResult(
+        id=required(payload, "id", decode_str, path),
+        question=required(payload, "question", decode_str, path),
+        options=required(payload, "options", array(decode_str), path),
+        multi=required(payload, "multi", decode_bool, path),
+        selected_options=required(payload, "selectedOptions", array(decode_str), path),
+        custom_input=optional(payload, "customInput", decode_str, path),
+        note=optional(payload, "note", decode_str, path),
+        option_notes=optional(payload, "optionNotes", array(parse_tree_ask_option_note), path),
+        timed_out=optional(payload, "timedOut", decode_bool, path),
+    )
+
+
+def parse_tree_ask_details(value: object, path: str = "TreeAskDetails") -> TreeAskDetails:
+    payload = expect_object(value, path)
+    return TreeAskDetails(
+        question=optional(payload, "question", decode_str, path),
+        options=optional(payload, "options", array(decode_str), path),
+        multi=optional(payload, "multi", decode_bool, path),
+        selected_options=optional(payload, "selectedOptions", array(decode_str), path),
+        custom_input=optional(payload, "customInput", decode_str, path),
+        note=optional(payload, "note", decode_str, path),
+        option_notes=optional(payload, "optionNotes", array(parse_tree_ask_option_note), path),
+        timed_out=optional(payload, "timedOut", decode_bool, path),
+        results=optional(payload, "results", array(parse_tree_ask_question_result), path),
+        chat_redirect=optional(payload, "chatRedirect", decode_bool, path),
+        questions=optional(payload, "questions", array(decode_str), path),
+    )
+
+
+def parse_tree_ask_reanswer(value: object, path: str = "TreeAskReanswer") -> TreeAskReanswer:
+    payload = expect_object(value, path)
+    return TreeAskReanswer(
+        content=required(payload, "content", array(parse_user_content), path),
+        details=optional(payload, "details", parse_tree_ask_details, path),
+        is_error=optional(payload, "isError", decode_bool, path),
+    )
+
+
+def parse_tree_ask_reopen(value: object, path: str = "TreeAskReopen") -> TreeAskReopen:
+    payload = expect_object(value, path)
+    return TreeAskReopen(
+        tool_call_id=required(payload, "toolCallId", decode_str, path),
+        questions=required(payload, "questions", array(parse_ask_question), path),
+    )
+
+
+def parse_navigate_tree_result(value: object, path: str = "NavigateTreeResult") -> NavigateTreeResult:
+    payload = expect_object(value, path)
+    return NavigateTreeResult(
+        session_id=required(payload, "sessionId", decode_str, path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        outcome=required(payload, "outcome", cast('Decoder[Literal["navigated", "unchanged", "cancelled", "ask_reopen"]]', literal(frozenset({"navigated", "unchanged", "cancelled", "ask_reopen"}))), path),
+        cancelled=required(payload, "cancelled", decode_bool, path),
+        session_file=optional(payload, "sessionFile", decode_str, path),
+        aborted=optional(payload, "aborted", decode_bool, path),
+        editor_text=optional(payload, "editorText", decode_str, path),
+        editor_images=optional(payload, "editorImages", array(parse_image_content), path),
+        summary_entry=optional(payload, "summaryEntry", decode_json_object, path),
+        reopen_ask=optional(payload, "reopenAsk", parse_tree_ask_reopen, path),
+        ask_reanswer_committed=optional(payload, "askReanswerCommitted", decode_bool, path),
+        resume_token=optional(payload, "resumeToken", decode_str, path),
     )
 
 
@@ -3035,6 +3568,11 @@ def parse_subagent_snapshot(value: object, path: str = "SubagentSnapshot") -> Su
         session_file=optional(payload, "sessionFile", decode_str, path),
         progress=optional(payload, "progress", decode_json_object, path),
         parent_tool_call_id=optional(payload, "parentToolCallId", decode_str, path),
+        resolved_model=optional(payload, "resolvedModel", decode_str, path),
+        resolved_model_identity=optional(payload, "resolvedModelIdentity", decode_str, path),
+        resolved_thinking_level=optional(payload, "resolvedThinkingLevel", _decode_configured_thinking_level, path),
+        fast_mode_enabled=optional(payload, "fastModeEnabled", decode_bool, path),
+        fast_mode_active=optional(payload, "fastModeActive", decode_bool, path),
     )
 
 
@@ -3084,6 +3622,10 @@ def parse_login_provider(value: object, path: str = "LoginProvider") -> LoginPro
         name=required(payload, "name", decode_str, path),
         available=required(payload, "available", decode_bool, path),
         authenticated=required(payload, "authenticated", decode_bool, path),
+        accepts_keys=required(payload, "acceptsKeys", decode_bool, path),
+        login_kind=required(payload, "loginKind", cast('Decoder[Literal["api-key", "oauth-code", "device-code", "custom"]]', literal(frozenset({"api-key", "oauth-code", "device-code", "custom"}))), path),
+        device_code=required(payload, "deviceCode", decode_bool, path),
+        store_credentials_as=optional(payload, "storeCredentialsAs", decode_str, path),
     )
 
 
@@ -3111,6 +3653,49 @@ def parse_prompt_ack(value: object, path: str = "PromptAck") -> PromptAck:
     return PromptAck(
         agent_invoked=optional(payload, "agentInvoked", decode_bool, path),
         user_entry_id=optional(payload, "userEntryId", decode_str, path),
+    )
+
+
+def parse_message_entry_identity(value: object, path: str = "MessageEntryIdentity") -> MessageEntryIdentity:
+    payload = expect_object(value, path)
+    return MessageEntryIdentity(
+        message_id=required(payload, "messageId", decode_str, path),
+        entry_id=required(payload, "entryId", decode_str, path),
+    )
+
+
+def parse_journal_state_event(value: object, path: str = "JournalStateEvent") -> JournalStateEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["journal_state"]]', literal(frozenset({"journal_state"}))), path)
+    return JournalStateEvent(
+        session_id=required(payload, "sessionId", decode_str, path),
+        session_file=required(payload, "sessionFile", nullable(decode_str), path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        reason=required(payload, "reason", cast('Decoder[Literal["snapshot", "identity", "leaf"]]', literal(frozenset({"snapshot", "identity", "leaf"}))), path),
+        message_entry_ids=optional(payload, "messageEntryIds", array(parse_message_entry_identity), path),
+    )
+
+
+def parse_journal_entry_event(value: object, path: str = "JournalEntryEvent") -> JournalEntryEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["journal_entry"]]', literal(frozenset({"journal_entry"}))), path)
+    return JournalEntryEvent(
+        session_id=required(payload, "sessionId", decode_str, path),
+        session_file=required(payload, "sessionFile", nullable(decode_str), path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        entry=required(payload, "entry", decode_json_object, path),
+    )
+
+
+def parse_message_persisted_event(value: object, path: str = "MessagePersistedEvent") -> MessagePersistedEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["message_persisted"]]', literal(frozenset({"message_persisted"}))), path)
+    return MessagePersistedEvent(
+        session_id=required(payload, "sessionId", decode_str, path),
+        session_file=required(payload, "sessionFile", nullable(decode_str), path),
+        leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        message_id=required(payload, "messageId", decode_str, path),
+        entry_id=required(payload, "entryId", decode_str, path),
     )
 
 
@@ -3148,6 +3733,13 @@ def parse_chat_mode_changed_event(value: object, path: str = "ChatModeChangedEve
     return ChatModeChangedEvent(
         mode=required(payload, "mode", _decode_chat_mode_setting, path),
         include=required(payload, "include", decode_str, path),
+    )
+
+
+def parse_approval_mode_changed_event(value: object, path: str = "ApprovalModeChangedEvent") -> ApprovalModeChangedEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["approval_mode_changed"]]', literal(frozenset({"approval_mode_changed"}))), path)
+    return ApprovalModeChangedEvent(
     )
 
 
@@ -3386,6 +3978,10 @@ def parse_message_start_event(value: object, path: str = "MessageStartEvent") ->
     return MessageStartEvent(
         message=required(payload, "message", parse_agent_message, path),
         message_id=optional(payload, "messageId", decode_str, path),
+        snapshot=optional(payload, "snapshot", decode_bool, path),
+        session_id=optional(payload, "sessionId", decode_str, path),
+        session_file=optional(payload, "sessionFile", nullable(decode_str), path),
+        leaf_id=optional(payload, "leafId", nullable(decode_str), path),
         request_model_provider=optional(payload, "requestModelProvider", decode_str, path),
         request_model_id=optional(payload, "requestModelId", decode_str, path),
         request_reasoning=optional(payload, "requestReasoning", _decode_effort, path),
@@ -3561,6 +4157,20 @@ def parse_model_changed_event(value: object, path: str = "ModelChangedEvent") ->
     )
 
 
+def parse_themes_configuration_changed_event(value: object, path: str = "ThemesConfigurationChangedEvent") -> ThemesConfigurationChangedEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["themes_configuration_changed"]]', literal(frozenset({"themes_configuration_changed"}))), path)
+    return ThemesConfigurationChangedEvent(
+    )
+
+
+def parse_models_configuration_changed_event(value: object, path: str = "ModelsConfigurationChangedEvent") -> ModelsConfigurationChangedEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["models_configuration_changed"]]', literal(frozenset({"models_configuration_changed"}))), path)
+    return ModelsConfigurationChangedEvent(
+    )
+
+
 def parse_config_warnings_changed_event(value: object, path: str = "ConfigWarningsChangedEvent") -> ConfigWarningsChangedEvent:
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["config_warnings_changed"]]', literal(frozenset({"config_warnings_changed"}))), path)
@@ -3631,7 +4241,7 @@ def parse_thinking_level_changed_event(value: object, path: str = "ThinkingLevel
     return ThinkingLevelChangedEvent(
         thinking_level=optional(payload, "thinkingLevel", _decode_thinking_level, path),
         configured=optional(payload, "configured", _decode_configured_thinking_level, path),
-        resolved=optional(payload, "resolved", _decode_effort, path),
+        resolved=optional(payload, "resolved", _decode_thinking_effort, path),
     )
 
 
@@ -3935,6 +4545,8 @@ def parse_input_ui_request(value: object, path: str = "InputUiRequest") -> Input
         title=required(payload, "title", decode_str, path),
         placeholder=optional(payload, "placeholder", decode_str, path),
         timeout=optional(payload, "timeout", decode_int, path),
+        secret=optional(payload, "secret", decode_bool, path),
+        login_id=optional(payload, "loginId", decode_str, path),
     )
 
 
@@ -3979,6 +4591,7 @@ def parse_notify_ui_request(value: object, path: str = "NotifyUiRequest") -> Not
         id=required(payload, "id", decode_str, path),
         message=required(payload, "message", decode_str, path),
         notify_type=optional(payload, "notifyType", _decode_notify_type, path),
+        login_id=optional(payload, "loginId", decode_str, path),
     )
 
 
@@ -4034,6 +4647,8 @@ def parse_open_url_ui_request(value: object, path: str = "OpenUrlUiRequest") -> 
         url=required(payload, "url", decode_str, path),
         launch_url=optional(payload, "launchUrl", decode_str, path),
         instructions=optional(payload, "instructions", decode_str, path),
+        user_code=optional(payload, "userCode", decode_str, path),
+        login_id=optional(payload, "loginId", decode_str, path),
     )
 
 
@@ -4049,6 +4664,8 @@ def parse_extension_ui_request(value: object, path: str = "ExtensionUiRequest") 
         timeout=optional(payload, "timeout", decode_int, path),
         message=optional(payload, "message", decode_str, path),
         placeholder=optional(payload, "placeholder", decode_str, path),
+        secret=optional(payload, "secret", decode_bool, path),
+        login_id=optional(payload, "loginId", decode_str, path),
         prefill=optional(payload, "prefill", decode_str, path),
         prompt_style=optional(payload, "promptStyle", decode_bool, path),
         questions=optional(payload, "questions", array(parse_ask_question), path),
@@ -4063,6 +4680,7 @@ def parse_extension_ui_request(value: object, path: str = "ExtensionUiRequest") 
         url=optional(payload, "url", decode_str, path),
         launch_url=optional(payload, "launchUrl", decode_str, path),
         instructions=optional(payload, "instructions", decode_str, path),
+        user_code=optional(payload, "userCode", decode_str, path),
     )
 
 
@@ -4151,6 +4769,21 @@ def parse_set_role_result(value: object, path: str = "SetRoleResult") -> SetRole
     )
 
 
+def parse_get_models_configuration_result(value: object, path: str = "GetModelsConfigurationResult") -> GetModelsConfigurationResult:
+    payload = expect_object(value, path)
+    return GetModelsConfigurationResult(
+        providers=required(payload, "providers", array(decode_json_object), path),
+        models=required(payload, "models", array(decode_json_object), path),
+        roles=required(payload, "roles", array(decode_json_object), path),
+        role_storage=required(payload, "roleStorage", cast('Decoder[Literal["global", "project"]]', literal(frozenset({"global", "project"}))), path),
+        effort_mode=required(payload, "effortMode", cast('Decoder[Literal["replacement", "legacy"]]', literal(frozenset({"replacement", "legacy"}))), path),
+        effort_rules=required(payload, "effortRules", array(parse_model_effort_rule), path),
+        effort_rules_provenance=required(payload, "effortRulesProvenance", decode_str, path),
+        effort_rule_scopes=required(payload, "effortRuleScopes", parse_model_effort_rule_scopes, path),
+        effort_choices=required(payload, "effortChoices", array(decode_str), path),
+    )
+
+
 def parse_get_usage_result(value: object, path: str = "GetUsageResult") -> GetUsageResult:
     payload = expect_object(value, path)
     return GetUsageResult(
@@ -4171,6 +4804,13 @@ def parse_set_mode_result(value: object, path: str = "SetModeResult") -> SetMode
     return SetModeResult(
         mode=required(payload, "mode", _decode_session_mode, path),
         plan_file_path=optional(payload, "planFilePath", decode_str, path),
+    )
+
+
+def parse_resume_tree_result(value: object, path: str = "ResumeTreeResult") -> ResumeTreeResult:
+    payload = expect_object(value, path)
+    required(payload, "resumed", cast('Decoder[Literal[True]]', _wire_literal(True)), path)
+    return ResumeTreeResult(
     )
 
 
@@ -4235,10 +4875,14 @@ _MIXTURE_ANSWER_CASES: Final[dict[str, Decoder[MixtureAnswer]]] = {
 
 
 _RPC_AGENT_EVENT_CASES: Final[dict[str, Decoder[RpcAgentEvent]]] = {
+        "journal_state": parse_journal_state_event,
+        "journal_entry": parse_journal_entry_event,
+        "message_persisted": parse_message_persisted_event,
         "advisor_message": parse_advisor_message_event,
         "run_owners_joined": parse_run_owners_joined_event,
         "run_owners_skipped": parse_run_owners_skipped_event,
         "chat_mode_changed": parse_chat_mode_changed_event,
+        "approval_mode_changed": parse_approval_mode_changed_event,
         "mixture_hop_end": parse_mixture_hop_end_event,
         "mixture_decision": parse_mixture_decision_event,
         "mixture_limit": parse_mixture_limit_event,
@@ -4264,6 +4908,8 @@ _RPC_AGENT_EVENT_CASES: Final[dict[str, Decoder[RpcAgentEvent]]] = {
         "retry_fallback_applied": parse_retry_fallback_applied_event,
         "retry_fallback_succeeded": parse_retry_fallback_succeeded_event,
         "model_changed": parse_model_changed_event,
+        "models_configuration_changed": parse_models_configuration_changed_event,
+        "themes_configuration_changed": parse_themes_configuration_changed_event,
         "config_warnings_changed": parse_config_warnings_changed_event,
         "advisor_cost_changed": parse_advisor_cost_changed_event,
         "advisor_yielded": parse_advisor_yielded_event,
@@ -4298,10 +4944,14 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "session_info_update": parse_session_info_update_event,
         "config_update": parse_config_update_event,
         "rpc_frame_error": parse_rpc_frame_error_event,
+        "journal_state": parse_rpc_agent_event,
+        "journal_entry": parse_rpc_agent_event,
+        "message_persisted": parse_rpc_agent_event,
         "advisor_message": parse_rpc_agent_event,
         "run_owners_joined": parse_rpc_agent_event,
         "run_owners_skipped": parse_rpc_agent_event,
         "chat_mode_changed": parse_rpc_agent_event,
+        "approval_mode_changed": parse_rpc_agent_event,
         "mixture_hop_end": parse_rpc_agent_event,
         "mixture_decision": parse_rpc_agent_event,
         "mixture_limit": parse_rpc_agent_event,
@@ -4327,6 +4977,8 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "retry_fallback_applied": parse_rpc_agent_event,
         "retry_fallback_succeeded": parse_rpc_agent_event,
         "model_changed": parse_rpc_agent_event,
+        "models_configuration_changed": parse_rpc_agent_event,
+        "themes_configuration_changed": parse_rpc_agent_event,
         "config_warnings_changed": parse_rpc_agent_event,
         "advisor_cost_changed": parse_rpc_agent_event,
         "advisor_yielded": parse_rpc_agent_event,
@@ -4408,9 +5060,11 @@ class WireClient:
             params["modelId"] = model_id
         return parse_open_session_result(self._command("open_session", params), "open_session")
 
-    def get_state(self) -> SessionState:
+    def get_state(self, include_dump: bool | None = None) -> SessionState:
         """Snapshot the session state."""
         params: dict[str, object] = {}
+        if include_dump is not None:
+            params["includeDump"] = include_dump
         return parse_session_state(self._command("get_state", params), "get_state")
 
     def create_mixture(self, scope: MixtureConfigScope, definition: Mapping[str, JsonValue]) -> CreateMixtureResult:
@@ -4436,11 +5090,110 @@ class WireClient:
         params: dict[str, object] = {}
         return parse_roles_result(self._command("get_roles", params), "get_roles")
 
+    def get_themes_configuration(self) -> ThemesConfiguration:
+        """Read native theme discovery and scoped selections."""
+        params: dict[str, object] = {}
+        return parse_themes_configuration(self._command("get_themes_configuration", params), "get_themes_configuration")
+
+    def get_theme(self, name: str) -> ThemePalette:
+        """Read the resolved colors of one installed native theme without selecting it."""
+        params: dict[str, object] = {}
+        params["name"] = name
+        return parse_theme_palette(self._command("get_theme", params), "get_theme")
+
+    def update_theme(self, appearance: Literal["dark", "light"], scope: Literal["global", "project"], name: str | None, expected: str | None) -> ThemesConfiguration:
+        """Set or inherit one native theme slot with an expected scoped value."""
+        params: dict[str, object] = {}
+        params["appearance"] = appearance
+        params["scope"] = scope
+        params["name"] = name
+        params["expected"] = expected
+        return parse_themes_configuration(self._command("update_theme", params), "update_theme")
+
+    def query_model_selector(self, query: str) -> ModelSelectorResult:
+        """Query native /switch ordering, scoped candidates, role aliases and model facts without selecting."""
+        params: dict[str, object] = {}
+        params["query"] = query
+        return parse_model_selector_result(self._command("query_model_selector", params), "query_model_selector")
+
     def set_role(self, role: str) -> SetRoleResult:
         """Select a model role."""
         params: dict[str, object] = {}
         params["role"] = role
         return parse_set_role_result(self._command("set_role", params), "set_role")
+
+    def get_models_configuration(self) -> GetModelsConfigurationResult:
+        """Read the native provider catalog, scoped model roles, and effort rules."""
+        params: dict[str, object] = {}
+        return parse_get_models_configuration_result(self._command("get_models_configuration", params), "get_models_configuration")
+
+    def set_model_role_configuration(self, role: str, scope: Literal["global", "project"], expected: Mapping[str, JsonValue], *, selector: str | None = None, effort: Mapping[str, JsonValue] | None = None) -> None:
+        """Save or clear a role selector and effort in the explicit scope, independently of the default role-storage preference."""
+        params: dict[str, object] = {}
+        params["role"] = role
+        params["scope"] = scope
+        params["expected"] = dict(expected)
+        if selector is not None:
+            params["selector"] = selector
+        if effort is not None:
+            params["effort"] = dict(effort)
+        self._command("set_model_role_configuration", params)
+
+    def set_model_role_fallbacks(self, role: str, scope: Literal["global", "project"], chain: Sequence[str], efforts: dict[str, ModelEffortSelection], expected: Mapping[str, JsonValue]) -> None:
+        """Save one role's native global fallback chain and per-entry efforts, rejecting stale values."""
+        params: dict[str, object] = {}
+        params["role"] = role
+        params["scope"] = scope
+        params["chain"] = list(chain)
+        params["efforts"] = efforts
+        params["expected"] = dict(expected)
+        self._command("set_model_role_fallbacks", params)
+
+    def set_model_role_description(self, role: str, scope: Literal["global", "project"], description: str, expected: str | None) -> None:
+        """Save one known role's global description without replacing its other metadata."""
+        params: dict[str, object] = {}
+        params["role"] = role
+        params["scope"] = scope
+        params["description"] = description
+        params["expected"] = expected
+        self._command("set_model_role_description", params)
+
+    def delete_model_role(self, role: str, scope: Literal["global", "project"], expected: Mapping[str, JsonValue]) -> None:
+        """Delete a custom role definition in one scope; refuse built-ins and preserve inherited definitions."""
+        params: dict[str, object] = {}
+        params["role"] = role
+        params["scope"] = scope
+        params["expected"] = dict(expected)
+        self._command("delete_model_role", params)
+
+    def set_model_role_storage(self, value: Literal["global", "project"], expected: Literal["global", "project"]) -> None:
+        """Choose native global or project role storage, rejecting a stale preference."""
+        params: dict[str, object] = {}
+        params["value"] = value
+        params["expected"] = expected
+        self._command("set_model_role_storage", params)
+
+    def set_effort_rules(self, scope: Literal["global", "project"], expected: Sequence[Mapping[str, JsonValue]] | None, *, rules: Sequence[Mapping[str, JsonValue]] | None = None) -> None:
+        """Save or clear native implicit effort rules in one scope, rejecting a stale expected value."""
+        params: dict[str, object] = {}
+        params["scope"] = scope
+        params["expected"] = list(expected) if expected is not None else None
+        if rules is not None:
+            params["rules"] = list(rules)
+        self._command("set_effort_rules", params)
+
+    def set_provider_api_key(self, provider_id: str, api_key: str) -> None:
+        """Upsert a key in the native credential store without replacing other accounts."""
+        params: dict[str, object] = {}
+        params["providerId"] = provider_id
+        params["apiKey"] = api_key
+        self._command("set_provider_api_key", params)
+
+    def cancel_login(self, login_id: str) -> None:
+        """Cancel this connection's active login request."""
+        params: dict[str, object] = {}
+        params["loginId"] = login_id
+        self._command("cancel_login", params)
 
     def get_usage(self, *, provider: str | None = None, refresh: bool | None = None, redact: bool | None = None) -> GetUsageResult:
         """Read provider usage reports."""
@@ -4515,10 +5268,54 @@ class WireClient:
             params["since"] = since
         return parse_session_entries(self._command("get_entries", params), "get_entries")
 
+    def snapshot_session_journal(self) -> JournalIdentity:
+        """Emit native journal identity, retained durable message associations and current unsaved assistant before responding, without replacing subscriptions."""
+        params: dict[str, object] = {}
+        return parse_journal_identity(self._command("snapshot_session_journal", params), "snapshot_session_journal")
+
+    def get_entries_page(self, *, scope: Literal["journal", "branch"] | None = None, direction: Literal["forward", "backward"] | None = None, cursor: str | None = None, limit: int | None = None) -> JournalPage:
+        """Read one canonical native journal or selected-branch page."""
+        params: dict[str, object] = {}
+        if scope is not None:
+            params["scope"] = scope
+        if direction is not None:
+            params["direction"] = direction
+        if cursor is not None:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = limit
+        return parse_journal_page(self._command("get_entries_page", params), "get_entries_page")
+
     def get_tree(self) -> SessionTree:
         """Read the raw session tree."""
         params: dict[str, object] = {}
         return parse_session_tree(self._command("get_tree", params), "get_tree")
+
+    def navigate_tree(self, target_id: str, expected_session_id: str, expected_session_file: str | None, expected_leaf_id: str | None, *, summarize: bool | None = None, custom_instructions: str | None = None, allow_ask_reopen: bool | None = None, reanswer_ask_result: Mapping[str, JsonValue] | None = None) -> NavigateTreeResult:
+        """Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken."""
+        params: dict[str, object] = {}
+        params["targetId"] = target_id
+        params["expectedSessionId"] = expected_session_id
+        params["expectedSessionFile"] = expected_session_file
+        params["expectedLeafId"] = expected_leaf_id
+        if summarize is not None:
+            params["summarize"] = summarize
+        if custom_instructions is not None:
+            params["customInstructions"] = custom_instructions
+        if allow_ask_reopen is not None:
+            params["allowAskReopen"] = allow_ask_reopen
+        if reanswer_ask_result is not None:
+            params["reanswerAskResult"] = dict(reanswer_ask_result)
+        return parse_navigate_tree_result(self._command("navigate_tree", params), "navigate_tree")
+
+    def resume_tree(self, resume_token: str, expected_session_id: str, expected_session_file: str | None, expected_leaf_id: str | None) -> ResumeTreeResult:
+        """Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript."""
+        params: dict[str, object] = {}
+        params["resumeToken"] = resume_token
+        params["expectedSessionId"] = expected_session_id
+        params["expectedSessionFile"] = expected_session_file
+        params["expectedLeafId"] = expected_leaf_id
+        return parse_resume_tree_result(self._command("resume_tree", params), "resume_tree")
 
     def set_subagent_subscription(self, level: SubagentSubscriptionLevel) -> SubagentSubscriptionLevel:
         """Select which subagent frames are forwarded."""
@@ -4560,6 +5357,20 @@ class WireClient:
         params["subagentId"] = subagent_id
         params["message"] = message
         self._command("steer_subagent", params)
+
+    def set_subagent_thinking_level(self, subagent_id: str, level: ThinkingLevel) -> None:
+        """Set a running subagent's thinking level from its next request, preserving it across restore."""
+        params: dict[str, object] = {}
+        params["subagentId"] = subagent_id
+        params["level"] = level
+        self._command("set_subagent_thinking_level", params)
+
+    def set_subagent_fast(self, subagent_id: str, *, enabled: bool) -> FastModeResult:
+        """Enable or disable fast mode only for a running subagent, from its next request."""
+        params: dict[str, object] = {}
+        params["subagentId"] = subagent_id
+        params["enabled"] = enabled
+        return parse_fast_mode_result(self._command("set_subagent_fast", params), "set_subagent_fast")
 
     def live_start(self, *, voice: str | None = None, instructions: str | None = None) -> str:
         """Start a live voice session bound to this session; returns the voice in use."""
@@ -4761,6 +5572,13 @@ class WireClient:
         params["providerId"] = provider_id
         return required(expect_object(self._command("get_logout_accounts", params), "get_logout_accounts"), "accounts", array(parse_logout_account), "get_logout_accounts")
 
+    def activate_account(self, provider_id: str, credential_id: int) -> None:
+        """Activate a stored OAuth account for this session through native credential affinity and journal pins."""
+        params: dict[str, object] = {}
+        params["providerId"] = provider_id
+        params["credentialId"] = credential_id
+        self._command("activate_account", params)
+
     def logout(self, provider_id: str, credential_id: int) -> LogoutResult:
         """Remove one stored credential; fails when it is no longer stored. `remainingSource` names auth that still applies."""
         params: dict[str, object] = {}
@@ -4880,6 +5698,18 @@ class WireClient:
         """Subscribe to `rpc_frame_error`: An event could not fit within the transport limits and was dropped."""
         return self._listen("rpc_frame_error", listener)
 
+    def on_journal_state(self, listener: Callable[[JournalStateEvent], None]) -> Callable[[], None]:
+        """Subscribe to `journal_state` frames."""
+        return self._listen("journal_state", listener)
+
+    def on_journal_entry(self, listener: Callable[[JournalEntryEvent], None]) -> Callable[[], None]:
+        """Subscribe to `journal_entry` frames."""
+        return self._listen("journal_entry", listener)
+
+    def on_message_persisted(self, listener: Callable[[MessagePersistedEvent], None]) -> Callable[[], None]:
+        """Subscribe to `message_persisted` frames."""
+        return self._listen("message_persisted", listener)
+
     def on_advisor_message(self, listener: Callable[[AdvisorMessageEvent], None]) -> Callable[[], None]:
         """Subscribe to `advisor_message` frames."""
         return self._listen("advisor_message", listener)
@@ -4895,6 +5725,10 @@ class WireClient:
     def on_chat_mode_changed(self, listener: Callable[[ChatModeChangedEvent], None]) -> Callable[[], None]:
         """Subscribe to `chat_mode_changed` frames."""
         return self._listen("chat_mode_changed", listener)
+
+    def on_approval_mode_changed(self, listener: Callable[[ApprovalModeChangedEvent], None]) -> Callable[[], None]:
+        """Subscribe to `approval_mode_changed` frames."""
+        return self._listen("approval_mode_changed", listener)
 
     def on_mixture_hop_end(self, listener: Callable[[MixtureHopEndEvent], None]) -> Callable[[], None]:
         """Subscribe to `mixture_hop_end` frames."""
@@ -4996,6 +5830,14 @@ class WireClient:
         """Subscribe to `model_changed` frames."""
         return self._listen("model_changed", listener)
 
+    def on_models_configuration_changed(self, listener: Callable[[ModelsConfigurationChangedEvent], None]) -> Callable[[], None]:
+        """Subscribe to `models_configuration_changed` frames."""
+        return self._listen("models_configuration_changed", listener)
+
+    def on_themes_configuration_changed(self, listener: Callable[[ThemesConfigurationChangedEvent], None]) -> Callable[[], None]:
+        """Subscribe to `themes_configuration_changed` frames."""
+        return self._listen("themes_configuration_changed", listener)
+
     def on_config_warnings_changed(self, listener: Callable[[ConfigWarningsChangedEvent], None]) -> Callable[[], None]:
         """Subscribe to `config_warnings_changed` frames."""
         return self._listen("config_warnings_changed", listener)
@@ -5053,6 +5895,8 @@ __all__ = [
     "AgentStartEvent",
     "AnthropicServerToolContent",
     "ApprovalHandler",
+    "ApprovalMode",
+    "ApprovalModeChangedEvent",
     "AskAnswer",
     "AskOption",
     "AskQuestion",
@@ -5125,6 +5969,7 @@ __all__ = [
     "FileMentionItem",
     "FileMentionMessage",
     "FollowUpResult",
+    "GetModelsConfigurationResult",
     "GetUsageResult",
     "Goal",
     "GoalModeState",
@@ -5140,6 +5985,10 @@ __all__ = [
     "InputUiRequest",
     "InterruptMode",
     "IrcMessageEvent",
+    "JournalEntryEvent",
+    "JournalIdentity",
+    "JournalPage",
+    "JournalStateEvent",
     "ListMixturesResult",
     "LiveEndEvent",
     "LiveLevelsEvent",
@@ -5152,6 +6001,8 @@ __all__ = [
     "LogoutResult",
     "MessageContent",
     "MessageEndEvent",
+    "MessageEntryIdentity",
+    "MessagePersistedEvent",
     "MessageStartEvent",
     "MessageUpdateEvent",
     "MessageUpdates",
@@ -5201,7 +6052,18 @@ __all__ = [
     "ModelChangedEvent",
     "ModelCost",
     "ModelCycleResult",
+    "ModelEffortRule",
+    "ModelEffortRuleScopes",
+    "ModelEffortSelection",
     "ModelInfo",
+    "ModelRoleConfigurationValue",
+    "ModelRoleFallbacks",
+    "ModelSelectorFacts",
+    "ModelSelectorItem",
+    "ModelSelectorPerformanceSource",
+    "ModelSelectorResult",
+    "ModelsConfigurationChangedEvent",
+    "NavigateTreeResult",
     "NegotiateProtocolResult",
     "NoticeEvent",
     "NotifyType",
@@ -5224,6 +6086,7 @@ __all__ = [
     "RedactedThinkingContent",
     "RemoveQueuedMessageResult",
     "RestoredQueuedMessage",
+    "ResumeTreeResult",
     "RetryFallbackAppliedEvent",
     "RetryFallbackSucceededEvent",
     "RoleInfo",
@@ -5244,6 +6107,7 @@ __all__ = [
     "SessionState",
     "SessionStats",
     "SessionTree",
+    "SessionUsage",
     "SetApprovalHandlerResult",
     "SetEditorTextUiRequest",
     "SetModeResult",
@@ -5270,8 +6134,14 @@ __all__ = [
     "SubagentStatus",
     "SubagentSubscriptionLevel",
     "TextContent",
+    "ThemePalette",
+    "ThemeSelection",
+    "ThemeSelections",
+    "ThemesConfiguration",
+    "ThemesConfigurationChangedEvent",
     "ThinkingConfig",
     "ThinkingContent",
+    "ThinkingEffort",
     "ThinkingLevel",
     "ThinkingLevelChangedEvent",
     "ThinkingLevelCycleResult",
@@ -5289,6 +6159,11 @@ __all__ = [
     "ToolLoadMode",
     "ToolResultMessage",
     "ToolStreamUpdateEvent",
+    "TreeAskDetails",
+    "TreeAskOptionNote",
+    "TreeAskQuestionResult",
+    "TreeAskReanswer",
+    "TreeAskReopen",
     "TtsrTriggeredEvent",
     "TurnEndEvent",
     "TurnStartEvent",
@@ -5309,6 +6184,7 @@ __all__ = [
     "parse_agent_message",
     "parse_agent_start_event",
     "parse_anthropic_server_tool_content",
+    "parse_approval_mode_changed_event",
     "parse_ask_answer",
     "parse_ask_option",
     "parse_ask_question",
@@ -5370,6 +6246,7 @@ __all__ = [
     "parse_file_mention_item",
     "parse_file_mention_message",
     "parse_follow_up_result",
+    "parse_get_models_configuration_result",
     "parse_get_usage_result",
     "parse_goal",
     "parse_goal_mode_state",
@@ -5382,6 +6259,10 @@ __all__ = [
     "parse_image_content",
     "parse_input_ui_request",
     "parse_irc_message_event",
+    "parse_journal_entry_event",
+    "parse_journal_identity",
+    "parse_journal_page",
+    "parse_journal_state_event",
     "parse_list_mixtures_result",
     "parse_live_end_event",
     "parse_live_levels_event",
@@ -5391,6 +6272,8 @@ __all__ = [
     "parse_logout_account",
     "parse_logout_result",
     "parse_message_end_event",
+    "parse_message_entry_identity",
+    "parse_message_persisted_event",
     "parse_message_start_event",
     "parse_message_update_event",
     "parse_messages_page",
@@ -5434,7 +6317,17 @@ __all__ = [
     "parse_model_changed_event",
     "parse_model_cost",
     "parse_model_cycle_result",
+    "parse_model_effort_rule",
+    "parse_model_effort_rule_scopes",
+    "parse_model_effort_selection",
     "parse_model_info",
+    "parse_model_role_configuration_value",
+    "parse_model_role_fallbacks",
+    "parse_model_selector_facts",
+    "parse_model_selector_item",
+    "parse_model_selector_result",
+    "parse_models_configuration_changed_event",
+    "parse_navigate_tree_result",
     "parse_negotiate_protocol_result",
     "parse_notice_event",
     "parse_notification",
@@ -5454,6 +6347,7 @@ __all__ = [
     "parse_redacted_thinking_content",
     "parse_remove_queued_message_result",
     "parse_restored_queued_message",
+    "parse_resume_tree_result",
     "parse_retry_fallback_applied_event",
     "parse_retry_fallback_succeeded_event",
     "parse_role_info",
@@ -5472,6 +6366,7 @@ __all__ = [
     "parse_session_state",
     "parse_session_stats",
     "parse_session_tree",
+    "parse_session_usage",
     "parse_set_approval_handler_result",
     "parse_set_editor_text_ui_request",
     "parse_set_mode_result",
@@ -5491,6 +6386,11 @@ __all__ = [
     "parse_subagent_progress_payload",
     "parse_subagent_snapshot",
     "parse_text_content",
+    "parse_theme_palette",
+    "parse_theme_selection",
+    "parse_theme_selections",
+    "parse_themes_configuration",
+    "parse_themes_configuration_changed_event",
     "parse_thinking_config",
     "parse_thinking_content",
     "parse_thinking_level_changed_event",
@@ -5507,6 +6407,11 @@ __all__ = [
     "parse_tool_execution_update_event",
     "parse_tool_result_message",
     "parse_tool_stream_update_event",
+    "parse_tree_ask_details",
+    "parse_tree_ask_option_note",
+    "parse_tree_ask_question_result",
+    "parse_tree_ask_reanswer",
+    "parse_tree_ask_reopen",
     "parse_ttsr_triggered_event",
     "parse_turn_end_event",
     "parse_turn_start_event",

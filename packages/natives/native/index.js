@@ -60,6 +60,7 @@ export const astMatch = nativeBindings.astMatch ?? missingNativeExport("astMatch
 export const blockRangeAt = nativeBindings.blockRangeAt ?? missingNativeExport("blockRangeAt");
 export const copyToClipboard = nativeBindings.copyToClipboard ?? missingNativeExport("copyToClipboard");
 export const cosineSimilarityPairs = nativeBindings.cosineSimilarityPairs ?? missingNativeExport("cosineSimilarityPairs");
+export const countSessionMessages = nativeBindings.countSessionMessages ?? missingNativeExport("countSessionMessages");
 export const countTokens = nativeBindings.countTokens ?? missingNativeExport("countTokens");
 export const decodeSixelToPng = nativeBindings.decodeSixelToPng ?? missingNativeExport("decodeSixelToPng");
 export const decodeSixelToPngAsync = nativeBindings.decodeSixelToPngAsync ?? missingNativeExport("decodeSixelToPngAsync");

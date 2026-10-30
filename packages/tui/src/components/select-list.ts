@@ -8,7 +8,7 @@ import {
 	type MenuNavAction,
 	type MenuViewportPosition,
 } from "./menu-navigation";
-import { getKeybindings } from "../keybindings";
+import { compileMenuRegex } from "../menu-search";
 import { type MouseRoutable, routeSelectListMouse, type SgrMouseEvent } from "../mouse";
 import { col, node, span } from "../native/describe";
 import { sameItems, sameProps } from "../native/memo";
@@ -151,6 +151,7 @@ export interface SelectListNavigationState {
 	viewportTop: MenuViewportPosition | number | undefined;
 	filterFocused?: boolean;
 	filterCursor?: number;
+	filterDraft?: string;
 }
 
 type SelectItemLayout =
@@ -247,16 +248,20 @@ export class SelectList implements Component, MouseRoutable {
 			viewportTop: this.#viewport.top,
 			filterFocused: this.#search.focused,
 			filterCursor: this.#search.cursor,
+			...(this.#search.focused ? { filterDraft: this.#search.value } : {}),
 		};
 	}
 
 	/** Reapply selection, field focus/caret, and viewport without activating a row. */
 	restoreNavigationState(state: SelectListNavigationState): void {
-		this.#search.focused = state.filterFocused === true;
 		this.#keys.reset();
-		this.#search.setValue(state.filter);
-		if (state.filterCursor !== undefined) this.#search.input.setCursor(state.filterCursor);
-		this.#setFilter(this.#search.value, false);
+		this.#search.restoreNavigation({
+			value: state.filterDraft ?? state.filter,
+			query: state.filter,
+			focused: state.filterFocused === true,
+			cursor: state.filterCursor ?? state.filter.length,
+		});
+		this.#setFilter(this.#search.query, false);
 		if (state.selectedValue !== undefined) this.#selection.setSelectedKey(state.selectedValue);
 		this.#viewport.setTop(state.viewportTop);
 	}
@@ -276,6 +281,7 @@ export class SelectList implements Component, MouseRoutable {
 			viewportTop: state.viewportTop,
 			filterFocused: state.filterFocused === true,
 			filterCursor: typeof state.filterCursor === "number" ? state.filterCursor : undefined,
+			filterDraft: typeof state.filterDraft === "string" ? state.filterDraft : undefined,
 		});
 	}
 
@@ -287,7 +293,7 @@ export class SelectList implements Component, MouseRoutable {
 	/** Replace the filter text (caret to end) and refilter. */
 	setFilter(filter: string): void {
 		this.#search.setValue(filter);
-		this.#setFilter(this.#search.value, true);
+		this.#setFilter(this.#search.query, true);
 	}
 
 	/** Replace controlled items while retaining the selected value when possible. */
@@ -326,7 +332,7 @@ export class SelectList implements Component, MouseRoutable {
 			items: this.#selection.visibleItems,
 			selected: this.#selection.selectedKey ?? null,
 			pending: this.#selection.pendingKey ?? null,
-			query: this.#selection.query,
+			query: this.#search.value,
 			cursor: this.#search.cursor,
 		};
 	}
@@ -575,7 +581,8 @@ export class SelectList implements Component, MouseRoutable {
 				if (this.#canEditSearch()) this.#search.focused = true;
 				return;
 			case "cancel":
-				if (!this.#selection.cancelConfirmation()) this.onCancel?.();
+				if (this.#selection.query) this.setFilter("");
+				else if (!this.#selection.cancelConfirmation()) this.onCancel?.();
 				return;
 			case "toggle":
 				if (this.layout.activateOnSpace === false) return;
@@ -597,34 +604,11 @@ export class SelectList implements Component, MouseRoutable {
 		}
 	}
 
-	/**
-	 * Keys while the filter holds focus: text and its editing keys go to the
-	 * field, Esc hands focus back to the list (keeping the query), and the
-	 * non-text keys (arrows, PageUp/PageDown, Enter) still drive the list.
-	 */
+	/** Focused search owns every key; Enter confirms the pattern and Esc clears it. */
 	#handleFilterInput(rawData: string): void {
-		const before = this.#search.value;
-		const result = this.#search.handleInput(rawData);
-		if (result !== "pass") {
-			if (this.#search.value !== before) this.#setFilter(this.#search.value, true);
-			return;
-		}
-		const kb = getKeybindings();
-		if (kb.matches(rawData, "tui.select.confirm") || rawData === "\n") {
-			this.#activateSelected();
-			return;
-		}
-		let selectionChanged = false;
-		const wrap = this.layout.wrapNavigation !== false;
-		if (kb.matches(rawData, "tui.select.up")) selectionChanged = this.#selection.move(-1, wrap);
-		else if (kb.matches(rawData, "tui.select.down")) selectionChanged = this.#selection.move(1, wrap);
-		else if (kb.matches(rawData, "tui.select.pageUp"))
-			selectionChanged = this.#selection.move(-this.#viewport.visibleItems);
-		else if (kb.matches(rawData, "tui.select.pageDown"))
-			selectionChanged = this.#selection.move(this.#viewport.visibleItems);
-		else return;
-		this.#viewport.reveal();
-		if (selectionChanged) this.#notifySelectionChange();
+		const before = this.#search.query;
+		this.#search.handleInput(rawData);
+		if (this.#search.query !== before) this.#setFilter(this.#search.query, true);
 	}
 
 	#renderItem(
@@ -831,6 +815,8 @@ export class SelectList implements Component, MouseRoutable {
 	}
 
 	#statusText(): string {
+		const error = compileMenuRegex(this.#selection.query)?.error;
+		if (error) return `Invalid regex: ${error}`;
 		const pendingItem =
 			this.#selection.pendingKey === undefined
 				? undefined
@@ -847,10 +833,10 @@ export class SelectList implements Component, MouseRoutable {
 			? (custom ?? "")
 			: (pendingItem?.confirmation ??
 					(query
-						? `  Search: ${query}${this.#search.focused ? " · Esc back to list" : " · / edit"}`
+						? `  Search: ${query}${this.#search.focused ? " · Enter confirm · Esc clear" : " · / edit · Esc clear"}`
 						: this.#canEditSearch()
 							? this.#search.focused
-								? "  Search: type to narrow · Esc back to list"
+								? "  Search: type to narrow · Enter confirm · Esc clear"
 								: "  / search"
 							: ""));
 	}

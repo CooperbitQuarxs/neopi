@@ -47,6 +47,10 @@ describe("live ingest persona settings", () => {
 		expect(() => normalizeLiveIngestSettings({ rescoreIntervalMs: 30000 })).toThrow(
 			/rescoreIntervalMs: must be 0 or/,
 		);
+		expect(() => normalizeLiveIngestSettings({ seedHistory: "yes" })).toThrow(/seedHistory: must be a boolean/);
+		for (const seedHistoryTokens of [0, 127, 64_001, 1.5, Number.NaN]) {
+			expect(() => normalizeLiveIngestSettings({ seedHistoryTokens })).toThrow(/seedHistoryTokens:/);
+		}
 	});
 	it("resolves the active persona and persists the built-in settings independently of instructions", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "ingest-persona-"));

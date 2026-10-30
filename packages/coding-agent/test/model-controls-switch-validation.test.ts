@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -10,6 +10,8 @@ import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { cfgEffortRules } from "../src/config/effort-policy";
+import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
 
 describe("model switch effort preflight", () => {
 	const source = getBundledModel("anthropic", "claude-opus-4-6");
@@ -91,6 +93,25 @@ describe("model switch effort preflight", () => {
 			await session.setModel(target, "reviewer");
 			expect(session.isAutoThinking).toBe(true);
 			expect(session.autoSelection).toEqual({ mode: "auto", allowed: [Effort.Low, Effort.High] });
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("applies an off-only rule to fixed and Auto role efforts on the agent", async () => {
+		const session = await createSession();
+		try {
+			cfgEffortRules.set(session.settings, [{ selector: `${target.provider}/${target.id}`, allowed: ["off"] }]);
+			session.settings.setRoleEffortSelection("reviewer", { mode: "fixed", level: Effort.High });
+			await session.setModel(target, "reviewer");
+			expect(session.thinkingLevel).toBe(ThinkingLevel.Off);
+			expect(session.agent.state.thinkingLevel).toBeUndefined();
+			expect(session.agent.state.disableReasoning).toBe(true);
+			session.settings.setRoleEffortSelection("reviewer", { mode: "auto", allowed: ["off"] });
+			await session.setModel(target, "reviewer");
+			expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
+			expect(session.thinkingLevel).toBe(ThinkingLevel.Off);
+			expect(session.agent.state.disableReasoning).toBe(true);
 		} finally {
 			await session.dispose();
 		}

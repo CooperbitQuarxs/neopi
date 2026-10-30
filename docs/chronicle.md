@@ -4,6 +4,8 @@ Chronicler capture (`chronicler.enabled`) writes **atoms** — self-contained be
 
 Atoms stay the only source of truth. The view is a cache: deleting it loses nothing, and `npi chronicle index` rebuilds it from the atoms. Nothing from it is injected into sessions.
 
+Capture automatically catches up the current session when enabled, including when a stored session is resumed. Cross-session indexing and stored-session backfill run only when requested through `npi chronicle index` and `npi chronicle backfill`; neither has a periodic scheduler.
+
 ## The hierarchy
 
 ```
@@ -58,7 +60,7 @@ The `chronicle_recall` tool takes the same inputs (without `beam`/`ranker`); see
 Recall descends coarse to fine. At each node it ranks the in-scope children's descriptions against the query, keeps the best `beam` of them (plus near-ties) as alternatives, and expands the most relevant candidate next. When a branch's best child or atom scores far below the branch itself, the branch has collapsed and the search moves to the strongest retained alternative; the trace records both. Terminal buckets rank their atoms directly.
 
 - **Scope**: `from`/`to`, `project` (path substring), and `session` (id prefix) apply to every step, including adjacency and neighbors.
-- **Adjacent event**: `hint` describes something remembered from around the same time. Recall finds that event, then ranks the atoms within `chronicler.recall.neighborhoodMinutes` of it, across sessions, so a poorly described target next to a well described event is still found.
+- **Adjacent event**: `hint` describes something remembered from around the same time. Recall searches for the query and hint concurrently, sharing a limit of two in-flight ranking requests. It then ranks the atoms within `chronicler.recall.neighborhoodMinutes` of the hint's event, across sessions, so a poorly described target next to a well described event is still found.
 - **Step-by-step narrowing**: `--resolution month` returns ranked candidate periods; call again with `--node <key> --resolution week`, and so on down to atoms.
 - **Uncertainty**: when no atom is confident, or when an atom in another period ties the chosen one, the result says so, lists the best candidate periods, and names the follow-up that would discriminate best (a time range or an adjacent event).
 - **Evidence**: returned atoms, hint anchors, and listed neighbors are re-read from their committed batch — body, transcript path, and cited entry ids come from the store. An atom changed since indexing is marked stale and shown as it is now; a deleted one is reported instead of returned.
@@ -66,6 +68,10 @@ Recall descends coarse to fine. At each node it ranks the in-scope children's de
 The `model` ranker (default) uses the `chronicler-summary` role; `lexical` scores word overlap and needs no model, but it cannot match a memory described in different words.
 
 ## Settings
+
+All Chronicler controls are editable in **Settings > Memory > Chronicler**, with descriptions and custom numeric input. The original values remain the defaults. Capture settings control pass size, deferred flush size, context budget, prompt capture criteria and word targets, retries, watchdogs, and shutdown drain. Recall settings control ranking thresholds, search budgets, evidence length, and neighbors. Index settings control summary and routing budgets. Backfill settings control parallel sessions and coverage scans, capture and drain deadlines, and coverage polling.
+
+Backfill command flags override their matching settings. Its `pollMs` setting only controls progress checks during an explicitly requested run; it does not start a backfill or refresh the index. Selection flags such as `--all`, `--force`, and `--dry-run` stay explicit per invocation.
 
 | Setting | Default | Meaning |
 |---|---|---|

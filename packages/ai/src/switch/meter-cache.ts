@@ -30,7 +30,10 @@ function identity(report: UsageReport, limit: UsageLimit, plan: ResolvedPlan): b
 		common++;
 	}
 	const org = limit.scope.orgId ?? source.orgId;
-	if (typeof org === "string" && expected.org_id && org !== expected.org_id) return false;
+	if (typeof org === "string" && expected.org_id) {
+		if (org !== expected.org_id) return false;
+		common++;
+	}
 	return common > 0;
 }
 
@@ -73,7 +76,7 @@ export class SwitchMeterCache {
 	readonly #generation: () => string;
 	readonly #ttlMs: number;
 	readonly #minMs: number;
-	#timer?: ReturnType<typeof setTimeout>;
+	#timer?: Timer;
 	readonly #inFlight = new Map<string, Promise<Map<string, "updated" | "unchanged" | "failed">>>();
 	#stopped = false;
 

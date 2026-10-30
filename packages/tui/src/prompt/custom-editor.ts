@@ -1,5 +1,6 @@
 import * as url from "node:url";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { KeyEventType } from "@oh-my-pi/pi-natives";
 import { BracketedPasteHandler } from "../bracketed-paste";
 import { currentDeferredDraft, currentDetachedDraft } from "../draft-scope";
 import { BRACKETED_PASTE_END, BRACKETED_PASTE_START } from "../stdin-buffer";
@@ -11,7 +12,7 @@ import {
 } from "../components/editor";
 import { addKeyAliases, canonicalKeyId, getKeybindings } from "../keybindings";
 import { type KeyId, matchesKey, parseKey, parseKittySequence } from "../keys";
-import { SpaceHoldGesture } from "../space-hold";
+import { SPACE_HOLD_RELEASE_MS, SpaceHoldGesture } from "../space-hold";
 import { type Component, TUI } from "../tui";
 import type { AppKeybinding } from "../app-keybindings";
 import { formatTooltipKey } from "../key-hint-format";
@@ -1541,6 +1542,8 @@ export class CustomEditor extends Editor {
 	/** Custom key handlers from extensions and non-built-in app actions. */
 	#customKeyHandlers = new Map<KeyId, () => void>();
 	#customMatchKeys = new Map<string, () => void>();
+	/** Last reserved Space chord/repeat; legacy terminals have no explicit key-up event. */
+	#speechSpaceAt: number | undefined;
 	/** Bracketed-paste assembler that runs ahead of the inherited handler so terminals which
 	 *  deliver `\x1b[200~` and `\x1b[201~` in separate stdin chunks still resolve to a single
 	 *  assembled payload here; the empty-paste / image-path branches must see the full content,
@@ -1651,7 +1654,44 @@ export class CustomEditor extends Editor {
 		return false;
 	}
 
+	/** The fork-owned xAI shortcut bypasses normal input locks and focused modal bindings.
+	 *  Called by the app's global listener too, so its target is always the main composer.
+	 *  Enhanced repeats never toggle; modifier-release repeats cannot become a configured hold. */
+	handleSpeechShortcut(data: string): boolean {
+		const handler = this.#customMatchKeys.get("ctrl+space");
+		if (!handler) return false;
+		const chord = matchesKey(data, "ctrl+space");
+		if (!chord && this.#speechSpaceAt === undefined) return false;
+		const kitty = data.charCodeAt(0) === 0x1b ? parseKittySequence(data) : null;
+		if (chord) {
+			this.#speechSpaceAt = performance.now();
+			this.spaceHold.cancel();
+			if (kitty?.eventType !== KeyEventType.Repeat) handler();
+			return true;
+		}
+		if (kitty?.codepoint === 32 && kitty.eventType === KeyEventType.Release) {
+			this.#speechSpaceAt = undefined;
+			return true;
+		}
+		if (!matchesKey(data, "space")) {
+			// Typing/navigation ends the originating Space gesture. Modifier key-up
+			// events alone do not: the still-held Space may now repeat without Ctrl.
+			if (kitty?.eventType !== KeyEventType.Release) this.#speechSpaceAt = undefined;
+			return false;
+		}
+		if (kitty?.eventType !== KeyEventType.Press) {
+			const now = performance.now();
+			if (this.#speechSpaceAt !== undefined && now - this.#speechSpaceAt <= SPACE_HOLD_RELEASE_MS) {
+				this.#speechSpaceAt = now;
+				return true;
+			}
+		}
+		this.#speechSpaceAt = undefined;
+		return false;
+	}
+
 	override handleInput(data: string): void {
+		if (this.handleSpeechShortcut(data)) return;
 		if (this.#chainLock) {
 			if (matchesKey(data, "escape")) {
 				this.#chainLock.onEscape();

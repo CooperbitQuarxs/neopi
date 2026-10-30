@@ -182,9 +182,15 @@ describe("HTML export template", () => {
 		expect(buildExitCode, `${buildStdout}\n${buildStderr}`).toBe(0);
 		expect(await Bun.file(staleAssetPath).exists()).toBe(false);
 
-		const packDir = path.join(tempRoot, "production-package");
+		const packRoot = path.join(tempRoot, "production-workspace");
+		const packDir = path.join(packRoot, "packages", "coding-agent");
+		const workspace: { workspaces: { packages: string[]; catalog: Record<string, string> } } = await Bun.file(
+			path.resolve(packageDir, "../../package.json"),
+		).json();
+		workspace.workspaces.packages = ["packages/coding-agent"];
+		await Bun.write(path.join(packRoot, "package.json"), JSON.stringify(workspace));
+		await Bun.write(path.join(packRoot, "bun.lock"), Bun.file(path.resolve(packageDir, "../../bun.lock")));
 		await Bun.write(path.join(packDir, "package.json"), Bun.file(path.join(packageDir, "package.json")));
-		await Bun.write(path.join(packDir, "bun.lock"), Bun.file(path.resolve(packageDir, "../../bun.lock")));
 		for (const entry of await fs.promises.readdir(productionBundleDir)) {
 			await Bun.write(path.join(packDir, "dist", entry), Bun.file(path.join(productionBundleDir, entry)));
 		}

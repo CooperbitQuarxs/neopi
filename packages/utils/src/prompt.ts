@@ -1,8 +1,8 @@
 import { LRUCache } from "./lru";
-import type { HelperDelegate, Template } from "./template";
+import type { HelperDelegate, RuntimeOptions, Template, TemplateDelegate } from "./template";
 import * as Handlebars from "./template";
 
-export type { HelperDelegate, HelperOptions, Template, TemplateDelegate } from "./template";
+export type { HelperDelegate, HelperOptions, RuntimeOptions, Template, TemplateDelegate } from "./template";
 
 export type PromptRenderPhase = "pre-render" | "post-render";
 
@@ -523,26 +523,29 @@ export function registerHelper(name: string, fn: HelperDelegate): void {
 	handlebars.registerHelper(name, fn);
 }
 
+/** Registered prompt helpers and the template engine's implemented block syntax. */
+export function listPromptHelpers(): string[] {
+	return handlebars.listHelpers();
+}
+
 export function registerPartial(name: string, fn: Template): void {
 	handlebars.registerPartial(name, fn);
 }
 
 // Bounded: some callers compile template text that already embeds user arguments.
-const compiledTemplateCache = new LRUCache<string, (context: TemplateContext) => string>({ max: 256 });
+const compiledTemplateCache = new LRUCache<string, TemplateDelegate<TemplateContext>>({ max: 256 });
 
-export function compile(template: string): (context: TemplateContext) => string {
+export function compile(template: string): TemplateDelegate<TemplateContext> {
 	// Keyed on the raw template so repeat renders skip parsing.
 	const cached = compiledTemplateCache.get(template);
 	if (cached) return cached;
-	const compiled = handlebars.compile(template, { noEscape: true, strict: false }) as (
-		context: TemplateContext,
-	) => string;
+	const compiled = handlebars.compile<TemplateContext>(template, { noEscape: true, strict: false });
 	compiledTemplateCache.set(template, compiled);
 	return compiled;
 }
 
-export function render(template: string, context: TemplateContext = {}): string {
+export function render(template: string, context: TemplateContext = {}, options?: RuntimeOptions): string {
 	const compiled = compile(template);
-	const rendered = compiled(context ?? {});
+	const rendered = compiled(context ?? {}, options);
 	return format(rendered, { renderPhase: "post-render" });
 }

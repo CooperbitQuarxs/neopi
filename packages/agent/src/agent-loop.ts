@@ -55,6 +55,7 @@ import {
 } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { isDsmlLeakRecoveryTarget, removeDsmlToolMarkupLeak } from "@oh-my-pi/pi-ai/utils/dsml-leak";
 import { cloneJsonTree, logger, sanitizeText, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { LiveSteeringChannel } from "./live-steering";
 import { agentPauseGate } from "./pause";
@@ -647,6 +648,52 @@ export function agentLoop(
 		}
 	})();
 
+	return stream;
+}
+
+/** Execute an operator-authored call through the ordinary dispatch, without a provider request. */
+export function agentToolCall(
+	prompts: AgentMessage[],
+	message: AssistantMessage,
+	context: AgentContext,
+	config: AgentLoopConfig,
+	signal?: AbortSignal,
+): EventStream<AgentEvent, AgentMessage[]> {
+	const stream = createAgentStream();
+	void (async () => {
+		try {
+			const currentContext: AgentContext = { ...context, messages: [...context.messages, ...prompts] };
+			// Human calls resolve only against the explicitly supplied enabled tool.
+			const directConfig: AgentLoopConfig = { ...config, resolveFallbackTool: undefined };
+			stream.push({ type: "agent_start" });
+			stream.push({ type: "turn_start" });
+			emitInputMessages(stream, prompts);
+			const prepared = await prepareToolCallDispatch(message, currentContext, directConfig, signal);
+			preparedDispatchByMessage.set(message, prepared);
+			stream.push({ type: "message_start", message });
+			stream.push({ type: "message_end", message });
+			currentContext.messages.push(message);
+			const execution = await executeToolCalls(
+				currentContext,
+				message,
+				signal,
+				stream,
+				directConfig,
+				resolveTelemetry(config.telemetry, config.sessionId),
+				undefined,
+				[],
+			);
+			const newMessages: AgentMessage[] = [...prompts, message, ...execution.toolResults];
+			currentContext.messages.push(...execution.toolResults);
+			injectExecutionAdditionalContext(currentContext, newMessages, stream, execution.additionalContext);
+			// No onTurnEnd/onBeforeYield: those hooks can schedule a model continuation.
+			stream.push({ type: "turn_end", message, toolResults: execution.toolResults });
+			stream.push({ type: "agent_end", messages: newMessages });
+			stream.end(newMessages);
+		} catch (error) {
+			stream.fail(error);
+		}
+	})();
 	return stream;
 }
 
@@ -1726,7 +1773,15 @@ async function runLoopBody(
 						currentContext,
 						newMessages,
 						stream,
-						dsmlToolCallLeakPrompt,
+						renderPromptAsset(
+							"agent/dsml-tool-call-leak.md",
+							dsmlToolCallLeakPrompt,
+							{},
+							{
+								cwd: config.getCwd?.() ?? config.cwd,
+								kind: "notice",
+							},
+						),
 					);
 					if (nudge) additionalMessages.push(nudge);
 					dsmlLeakNudges++;

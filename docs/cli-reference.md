@@ -130,7 +130,7 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | --- | --- |
 | `--prewalk` | Arm a one-shot handoff at the first eligible edit/write turn, gated on a successful todo call when `todo` is active (default off). See [prewalk](./prewalk.md). |
 | `--no-prewalk` | Disable prewalk even if `prewalk.enabled` is set; incompatible with `--prewalk`/`--prewalk-into`. |
-| `--prewalk-into <id-or-role>` | Arm prewalk with this target instead of the `smol` role. |
+| `--prewalk-into <id-or-role>` | Arm prewalk and override the configured execution selector for this startup session. |
 | `--plan-yolo` | Start in read-only plan mode, auto-approve the model's plan proposal, then switch to the execution target to implement it. |
 | `--plan-yolo-into <id-or-role>` | Target model for plan-yolo execution (default the `smol` role); requires `--plan-yolo`. |
 | `--goal <objective>` | Start a fresh interactive session in goal mode and begin working on the objective, without typing `/goal`. Requires `goal.enabled`; interactive only. Bypasses `autoResume`, and is rejected with a positional prompt, `@file` or stdin input, `--resume`/`--continue`/`--fork`/imports, `--plan-yolo`, `--no-tools`, or startup plan mode (`plan.defaultOnStartup`). |

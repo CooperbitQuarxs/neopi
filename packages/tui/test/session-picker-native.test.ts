@@ -111,10 +111,16 @@ describe("session selector picker", () => {
 		expect(props(selector.describe(withPicker)).size).toBe("screen");
 	});
 
-	it("filters session picker results only after focusing search", () => {
+	it("filters session picker results only after confirming search", () => {
 		const selector = make();
 		selector.handleInput("/");
 		type(selector, "gam");
+		const drafting = props(selector.describe(withPicker));
+		expect(drafting.query).toBe("gam");
+		expect(drafting.order).toContain(today.path);
+		expect(drafting.order).toContain(todayToo.path);
+		expect(drafting.hits).toBeUndefined();
+		selector.handleInput("\r");
 		const after = props(selector.describe(withPicker));
 		expect(after.query).toBe("gam");
 		expect(after.order).toEqual([old.path]);
@@ -186,6 +192,8 @@ describe("history search picker", () => {
 			() => {},
 		);
 		type(search, "deploy");
+		expect(props((search.describe(withPicker).c as NativeNode[])[0]!).items).toHaveLength(2);
+		search.handleInput("\r");
 		const root = search.describe(withPicker);
 		expect(root.k).toBe("col");
 		const sheet = (root.c as NativeNode[])[0]!;
@@ -212,7 +220,7 @@ describe("history search picker", () => {
 		expect(props(sheet()).actions?.find(action => action.id === "close")?.label).toBe("Back to list");
 		search.handleNativeEvent({ type: "action", key: "^picker", act: "close", mods: [] });
 		expect(cancelled).toBe(0);
-		expect(search.navigationSnapshot()).toMatchObject({ search: { value: "deploy", focused: false } });
+		expect(search.navigationSnapshot()).toMatchObject({ search: { value: "", query: "", focused: false } });
 		expect(props(sheet()).actions?.find(action => action.id === "close")?.label).toBe("Close");
 		search.handleNativeEvent({ type: "action", key: "^picker", act: "close", mods: [] });
 		expect(cancelled).toBe(1);
