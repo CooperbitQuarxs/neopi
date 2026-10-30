@@ -29,7 +29,7 @@ export async function runLoginCommand(provider: string | undefined, options: { u
 	const rl = createLoginReadline();
 	try {
 		const modelRegistry = new ModelRegistry(authStorage);
-		registerNeoProxyLogin(modelRegistry, options.url);
+		if (options.url) registerNeoProxyLogin(modelRegistry, options.url);
 		// Extensions may register OAuth providers; load them so they are listed.
 		await loadCliExtensionProviders(modelRegistry, settings, cwd);
 

@@ -57,7 +57,6 @@ import { CHAIN_DEFAULT_ROLE, getChainSystemPrompt } from "../../chains/runner";
 import { formatModelRoleAlias } from "../../config/model-roles";
 import { showGitOverlay } from "../../cli/git-tui";
 import { formatLoginIdentity } from "../../cli/oauth-terminal";
-import { registerNeoProxyLogin } from "../../neopi/neoproxy-connect";
 import {
 	acquireModelRoleMutation,
 	applyModelPreset,
@@ -3208,7 +3207,6 @@ export class SelectorController {
 	}
 
 	async showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
-		registerNeoProxyLogin(this.ctx.session.modelRegistry);
 		if (providerId) {
 			if (mode === "login") {
 				await this.#handleOAuthLogin(providerId);
