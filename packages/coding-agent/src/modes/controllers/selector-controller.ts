@@ -57,6 +57,7 @@ import { CHAIN_DEFAULT_ROLE, getChainSystemPrompt } from "../../chains/runner";
 import { formatModelRoleAlias } from "../../config/model-roles";
 import { showGitOverlay } from "../../cli/git-tui";
 import { formatLoginIdentity } from "../../cli/oauth-terminal";
+import { registerNeoProxyLogin } from "../../neopi/neoproxy-connect";
 import {
 	acquireModelRoleMutation,
 	applyModelPreset,
@@ -657,7 +658,8 @@ export class SelectorController {
 				await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
 				const code = await openEditorOnPath(command, filePath, env);
 				await reload?.();
-				if (code !== 0) this.ctx.showWarning(`External editor exited with code ${code}. Saved changes were reloaded.`);
+				if (code !== 0)
+					this.ctx.showWarning(`External editor exited with code ${code}. Saved changes were reloaded.`);
 			},
 			env,
 		);
@@ -3206,6 +3208,7 @@ export class SelectorController {
 	}
 
 	async showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
+		registerNeoProxyLogin(this.ctx.session.modelRegistry);
 		if (providerId) {
 			if (mode === "login") {
 				await this.#handleOAuthLogin(providerId);
