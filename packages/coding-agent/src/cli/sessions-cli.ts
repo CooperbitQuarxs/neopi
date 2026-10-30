@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import { getSessionsDir } from "@oh-my-pi/pi-utils/dirs";
+import { getSessionCatalogCacheDir, getSessionsDir } from "@oh-my-pi/pi-utils/dirs";
 import { readControlEntries, type ControlRegistryOptions } from "../control/registry";
 import { readSessionExit, SESSION_EXIT_CUSTOM_TYPE, type SessionExitData } from "../session/exit-diagnostics";
 import { getMessageEntryId } from "../session/message-entry-ids";
@@ -12,6 +12,7 @@ import { loadSessionBranchReadOnly } from "../session/session-loader";
 import { sessionDirForCwd, worktreeSessionDirs } from "../session/session-paths";
 import { loadPinnedSessionIds } from "../session/session-pins";
 import { FileSessionStorage } from "../session/session-storage";
+import { countSessionCatalogMessages } from "./session-catalog-count";
 
 export interface SessionCatalogOptions {
 	cwd?: string;
@@ -21,6 +22,7 @@ export interface SessionCatalogOptions {
 	sessionsRoot?: string;
 	agentDir?: string;
 	controlRegistry?: ControlRegistryOptions;
+	countCacheDir?: string;
 }
 
 export interface SessionCatalogMessage {
@@ -28,7 +30,8 @@ export interface SessionCatalogMessage {
 	entryId?: string;
 	role: "user" | "assistant";
 	text: string;
-	timestamp: string;
+	/** ISO-8601, or null when the persisted message timestamp is missing or invalid. */
+	timestamp: string | null;
 }
 
 export interface SessionCatalogNativeMessage extends SessionCatalogMessage {
@@ -68,6 +71,7 @@ export async function listSessionCatalog(options: SessionCatalogOptions = {}) {
 	const root = options.sessionsRoot ?? getSessionsDir();
 	const storage = new FileSessionStorage();
 	const pinned = await loadPinnedSessionIds(options.agentDir);
+	const countCacheDir = options.countCacheDir ?? getSessionCatalogCacheDir(options.agentDir);
 	let sessions;
 	if (options.all) {
 		sessions = await listAllSessions(storage, root);
@@ -95,6 +99,7 @@ export async function listSessionCatalog(options: SessionCatalogOptions = {}) {
 		const file = await canonicalPath(session.path);
 		if (seen.has(file)) continue;
 		seen.add(file);
+		const messageCount = await countSessionCatalogMessages(file, countCacheDir);
 		const modified = Number.isFinite(session.modified.getTime()) ? session.modified.toISOString() : null;
 		const created = Number.isFinite(session.created.getTime()) ? session.created.toISOString() : modified;
 		rows.push({
@@ -105,7 +110,7 @@ export async function listSessionCatalog(options: SessionCatalogOptions = {}) {
 			parentSessionPath: session.parentSessionPath ?? null,
 			created,
 			modified,
-			messageCount: session.messageCount,
+			messageCount,
 			status: session.status ?? null,
 			firstMessage: session.firstMessage === "(no messages)" ? "" : session.firstMessage.trim().slice(0, 300),
 			inUse: session.inUse ?? null,
@@ -113,6 +118,12 @@ export async function listSessionCatalog(options: SessionCatalogOptions = {}) {
 		});
 	}
 	return { version: 1 as const, sessions: rows };
+}
+
+function messageTimestamp(value: unknown): string | null {
+	if (typeof value !== "number" && typeof value !== "string") return null;
+	const date = new Date(value);
+	return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
 export async function readSessionCatalog(file: string, maxMessages?: number): Promise<SessionCatalogReadResult> {
@@ -132,7 +143,7 @@ export async function readSessionCatalog(file: string, maxMessages?: number): Pr
 			if (message.role !== "user" && message.role !== "assistant") continue;
 			const text = textContent(message.content, "\n\n");
 			if (!text.trim()) continue;
-			messages.push({ role: message.role, text, timestamp: new Date(message.timestamp).toISOString() });
+			messages.push({ role: message.role, text, timestamp: messageTimestamp(message.timestamp) });
 		}
 		const truncated = maxMessages !== undefined && messages.length > maxMessages;
 		return {
@@ -180,7 +191,7 @@ export async function readSessionCatalog(file: string, maxMessages?: number): Pr
 			entryId: entry.id,
 			role: message.role,
 			text,
-			timestamp: new Date(message.timestamp).toISOString(),
+			timestamp: messageTimestamp(message.timestamp),
 		});
 	}
 	const messages: SessionCatalogNativeMessage[] = [];
@@ -190,7 +201,7 @@ export async function readSessionCatalog(file: string, maxMessages?: number): Pr
 		if (!text.trim()) continue;
 		const entryId = getMessageEntryId(message);
 		if (entryId === undefined) throw new Error("Session transcript message has no native entry identity");
-		messages.push({ entryId, role: message.role, text, timestamp: new Date(message.timestamp).toISOString() });
+		messages.push({ entryId, role: message.role, text, timestamp: messageTimestamp(message.timestamp) });
 	}
 	const truncated = maxMessages !== undefined && messages.length > maxMessages;
 	const branchMessagesTruncated = maxMessages !== undefined && branchMessages.length > maxMessages;

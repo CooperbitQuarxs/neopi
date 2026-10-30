@@ -137,6 +137,16 @@ describe("AgentSession advisor toggle", () => {
 		return advisor;
 	}
 
+	it("adds a named launcher advisor without changing the legacy advisor identity", () => {
+		const legacy = enableAdvisor();
+		session.launchAdvisor({ name: "Spark", model: `${model.provider}/${model.id}:low`, tools: [] });
+		expect(session.getAdvisorAgent()).toBe(legacy);
+		expect(session.getAdvisorStatusOverview().advisors.some(advisor => advisor.name === "Spark")).toBe(true);
+		expect(() => session.launchAdvisor({ name: "Spark", model: `${model.provider}/${model.id}` })).toThrow(
+			"already in use",
+		);
+	});
+
 	/**
 	 * Persist advisor turns beside a session file the same way the recorder does,
 	 * so the fixture stays valid if the transcript format ever moves.
@@ -417,7 +427,7 @@ describe("AgentSession advisor toggle", () => {
 		expect(active).toBe(false);
 		expect(session.isAdvisorActive()).toBe(false);
 		expect(session.isAdvisorEnabled()).toBe(true);
-		expect(session.formatAdvisorStatus()).toBe(
+		expect(session.formatAdvisorStatus()).toContain(
 			"Advisor setting is enabled, but no model is assigned to the 'advisor' role.",
 		);
 	});
@@ -507,7 +517,7 @@ describe("AgentSession advisor toggle", () => {
 
 		expect(sessionB.isAdvisorEnabled()).toBe(false);
 		expect(sessionB.isAdvisorActive()).toBe(false);
-		expect(sessionB.formatAdvisorStatus()).toBe("Advisor is disabled.");
+		expect(sessionB.formatAdvisorStatus()).toContain("Advisor is disabled.");
 
 		const activeB = sessionB.toggleAdvisorEnabled();
 		expect(activeB).toBe(true);
@@ -1020,8 +1030,8 @@ describe("AgentSession advisor toggle", () => {
 		appendAdvisorCost(advisor, 0.5, 1);
 		const previousSessionFile = sessionManager.getSessionFile();
 		const fork = sessionManager.fork.bind(sessionManager);
-		vi.spyOn(sessionManager, "fork").mockImplementation(async () => {
-			const result = await fork();
+		vi.spyOn(sessionManager, "fork").mockImplementation(async options => {
+			const result = await fork(options);
 			// Reproduce the outgoing advisor finalizing after the fork selected its file.
 			appendAdvisorCost(advisor, 9, 2);
 			return result;

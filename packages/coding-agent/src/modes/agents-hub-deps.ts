@@ -1,10 +1,11 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Model, ServiceTier } from "@oh-my-pi/pi-ai";
 import type { AgentsHubDeps } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
-import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import { getConfigDirs } from "../config";
@@ -15,6 +16,7 @@ import {
 	resolveAgentPrewalkPattern,
 	resolveConfiguredModelPatterns,
 	resolveModelOverride,
+	resolveModelRoleValue,
 } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import agentCreationArchitectPrompt from "../prompts/system/agent-creation-architect.md" with { type: "text" };
@@ -146,8 +148,11 @@ export function createAgentsHubDeps(
 				activeModelPattern ?? defaultModelPattern ?? settings.getModelRole("default"),
 				settings,
 			);
+			const author = settings.getModelRole("agent-author")
+				? resolveModelRoleValue("@agent-author", modelRegistry.getAvailable(), { settings })
+				: undefined;
 			const { model } = resolveModelOverride(patterns, modelRegistry, settings);
-			const selectedModel = model ?? modelRegistry.getAvailable()[0];
+			const selectedModel = author ? author.model : (model ?? modelRegistry.getAvailable()[0]);
 			if (!selectedModel) throw new Error("No available model to generate agent specification.");
 			const { session } = await createAgentSession({
 				cwd,
@@ -155,7 +160,8 @@ export function createAgentsHubDeps(
 				modelRegistry,
 				settings,
 				model: selectedModel,
-				systemPrompt: [prompt.render(agentCreationArchitectPrompt, {})],
+				thinkingLevel: author?.thinkingLevel,
+				systemPrompt: [renderPromptAsset("system/agent-creation-architect.md", agentCreationArchitectPrompt, {})],
 				hasUI: false,
 				enableLsp: false,
 				enableMCP: false,
@@ -179,9 +185,12 @@ export function createAgentsHubDeps(
 				}
 			});
 			try {
-				await session.prompt(prompt.render(agentCreationUserPrompt, { request: description }), {
-					expandPromptTemplates: false,
-				});
+				await session.prompt(
+					renderPromptAsset("system/agent-creation-user.md", agentCreationUserPrompt, { request: description }),
+					{
+						expandPromptTemplates: false,
+					},
+				);
 				const raw = extractAssistantText(session.state.messages);
 				if (!raw) throw new Error("No response returned by agent creation architect.");
 				return raw;

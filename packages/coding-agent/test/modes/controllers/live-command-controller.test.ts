@@ -13,13 +13,20 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import {
+	cfgLiveBlockDelegateKeyword,
+	cfgLiveModel,
 	cfgLiveForceDelegateKeyword,
+	cfgLiveForceUtteranceKeyword,
+	cfgLiveSuppressDelegateKeyword,
+	cfgLiveHoldMode,
+	cfgLiveQuietFloorMs,
 	cfgLiveSubmitKeyword,
 	cfgLiveSubmitSilenceMs,
 } from "@oh-my-pi/pi-coding-agent/live/settings";
 import { Container, type Component } from "@oh-my-pi/pi-tui/tui";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { __resetDirsFromEnvForTests } from "@oh-my-pi/pi-utils";
+import type { LiveClientMessage, LiveServerEvent } from "@oh-my-pi/pi-coding-agent/live/protocol";
 
 interface Harness {
 	ctx: InteractiveModeContext;
@@ -28,21 +35,26 @@ interface Harness {
 	/** Callbacks the controller handed to the live session. */
 	callbacks(): LiveSessionCallbacks;
 	voice(): string | undefined;
+	delegationKeywords(): { suppress: string; force: string } | undefined;
+	projectComposer(excludedTurns: readonly number[]): string | undefined;
 	/** Components mounted into or focused away from the composer slot. */
 	layoutChanges: unknown[];
 	/** Latest status-line live state, `null` when hidden. */
 	liveStatus(): unknown;
 	/** Composer text handed to the voice model, with its audience. */
 	sentToVoice: Array<[string, string]>;
+	/** Keyword submissions released for Iris to answer or route. */
+	submitted: string[];
 	/** Components presented into the transcript. */
 	presented: unknown[];
 }
 
-function createHarness(): Harness {
+function createHarness(factory?: (options: LiveSessionControllerOptions) => LiveSessionController): Harness {
 	const editor = new CustomEditor(getEditorTheme());
 	const layoutChanges: unknown[] = [];
 	let liveStatus: unknown = null;
 	const sentToVoice: Array<[string, string]> = [];
+	const submitted: string[] = [];
 	const presented: unknown[] = [];
 	const settings = Settings.isolated({ "live.voice": "vale" });
 	const chatContainer = new TranscriptContainer();
@@ -98,11 +110,17 @@ function createHarness(): Harness {
 	let options: LiveSessionControllerOptions | undefined;
 	const controller = new LiveCommandController(ctx, created => {
 		options = created;
+		if (factory) return factory(created);
 		const session = new LiveSessionController(created);
 		vi.spyOn(session, "start").mockResolvedValue();
-		vi.spyOn(session, "stop").mockResolvedValue();
+		vi.spyOn(session, "stop");
 		vi.spyOn(session, "sendOperatorText").mockImplementation(async (text, audience) => {
 			sentToVoice.push([text, audience]);
+			return true;
+		});
+		vi.spyOn(session, "submitComposer").mockImplementation(text => {
+			submitted.push(text);
+			created.callbacks.onSpeechSent?.(text);
 			return true;
 		});
 		return session;
@@ -117,12 +135,64 @@ function createHarness(): Harness {
 			return options.callbacks;
 		},
 		voice: () => options?.voice,
+		delegationKeywords: () => options?.delegationKeywords?.(),
+		projectComposer: turns => options?.captureComposerExcludingTurns?.(turns).text,
 		layoutChanges,
 		liveStatus: () => liveStatus,
 		sentToVoice,
+		submitted,
 		presented,
 	};
 }
+/** Exercise composer capture through real live routing and primary acceptance. */
+function createHandoffHarness(acceptance?: Promise<void>, voiceDelivery?: Promise<void>) {
+	const prompts: string[] = [];
+	const sent: LiveClientMessage[] = [];
+	let fire: ((event: LiveServerEvent) => void) | undefined;
+	const h = createHarness(options => new LiveSessionController({
+		...options,
+		createTransport: transportOptions => {
+			fire = transportOptions.callbacks.onEvent;
+			return {
+				async connect() {},
+				async send(message: LiveClientMessage) { sent.push(message); await voiceDelivery; },
+				async close() {},
+				async setMuted() {},
+				setOutputSuppressed() {},
+				pushAudio: () => true,
+			};
+		},
+		createRecorder: () => ({ stop() {} }),
+	}));
+	Object.assign(h.ctx.session, {
+		sessionId: "composer-attachment-handoff",
+		modelRegistry: { authStorage: {} },
+		sessionManager: { getCwd: () => process.cwd(), allocateArtifactPath: async () => ({}) },
+		agent: { peekFollowUpQueue: () => [] },
+		sendCustomMessageWithReceipt(message: { content: string }) {
+			prompts.push(message.content);
+			return { accepted: acceptance ?? Promise.resolve(), completed: Promise.resolve(true), cancel: () => false };
+		},
+	});
+	cfgLiveForceDelegateKeyword.set(h.ctx.settings, "send it now");
+	cfgLiveSubmitKeyword.set(h.ctx.settings, "thanks");
+	cfgLiveBlockDelegateKeyword.set(h.ctx.settings, "do not relate");
+	cfgLiveForceUtteranceKeyword.set(h.ctx.settings, "relay");
+	cfgLiveSubmitSilenceMs.set(h.ctx.settings, 5);
+	return {
+		...h, prompts, sent,
+		speech: (text: string) => fire?.({ type: "turn.done", turn: { role: "user", transcript: text } }),
+		delegate: () => fire?.({
+			type: "delegation.created",
+			item: { type: "delegation", target: "client", id: crypto.randomUUID(), content: [] },
+		}),
+		answer: () => {
+			fire?.({ type: "output_transcript.added", item: { text: "Answered" } });
+			fire?.({ type: "turn.done", turn: { role: "assistant", transcript: "Answered" } });
+		},
+	};
+}
+
 
 function speak(h: Harness, turn: number, text: string, final: boolean): void {
 	h.callbacks().onUserSpeech?.({ role: "user", turn, text, final });
@@ -133,11 +203,292 @@ afterEach(() => {
 });
 
 describe("LiveCommandController", () => {
+	it("routes the complete edited composer once after three spoken keyword fragments", async () => {
+		const prompts: string[] = [];
+		const sent: LiveClientMessage[] = [];
+		let fire: ((event: LiveServerEvent) => void) | undefined;
+		const h = createHarness(options => new LiveSessionController({
+			...options,
+			createTransport: transportOptions => {
+				fire = transportOptions.callbacks.onEvent;
+				return {
+					async connect() {},
+					async send(message: LiveClientMessage) { sent.push(message); },
+					async close() {},
+					async setMuted() {},
+					setOutputSuppressed() {},
+					pushAudio: () => true,
+				};
+			},
+			createRecorder: () => ({ stop() {} }),
+		}));
+		cfgLiveHoldMode.set(h.ctx.settings, true);
+		cfgLiveSubmitKeyword.set(h.ctx.settings, "over");
+		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 50);
+		Object.assign(h.ctx.session, {
+			sessionId: "three-keyword-fragments",
+			modelRegistry: { authStorage: {} },
+			sessionManager: { getCwd: () => process.cwd(), allocateArtifactPath: async () => ({}) },
+			agent: { peekFollowUpQueue: () => [] },
+			sendCustomMessageWithReceipt(message: { content: string }) {
+				prompts.push(message.content);
+				return { accepted: Promise.resolve(), completed: Promise.resolve(true), cancel: () => false };
+			},
+		});
+		await h.controller.handleCommand();
+		try {
+			const route = (id: string): LiveServerEvent => ({
+				type: "delegation.created", item: { type: "delegation", target: "client", id, content: [] },
+			});
+			fire?.({ type: "turn.done", turn: { role: "user", transcript: "first part over" } });
+			fire?.(route("premature-first"));
+			fire?.({ type: "turn.done", turn: { role: "user", transcript: "second part over" } });
+			fire?.(route("premature-second"));
+			fire?.({ type: "input_transcript.added", item: { text: "third part over" } });
+			await Bun.sleep(80);
+			expect(prompts).toEqual([]);
+			h.editor.insertText(" with a typed correction");
+			fire?.({ type: "turn.done", turn: { role: "user", transcript: "third part over and the rest over" } });
+			await Bun.sleep(80);
+			expect(prompts).toEqual([]);
+			const submitted = sent.filter(message => message.type === "session.context.append")
+				.flatMap(message => message.content.map(item => item.text)).join("\n");
+			expect(submitted).toContain("first part over");
+			expect(submitted).toContain("second part over");
+			expect(submitted).toContain("typed correction");
+			expect(submitted).toContain("and the rest");
+			fire?.(route("one-final-route"));
+			for (let index = 0; index < 80; index++) await Promise.resolve();
+			expect(prompts).toHaveLength(1);
+			expect(prompts[0]).toContain("first part over");
+			expect(prompts[0]).toContain("second part over");
+			expect(prompts[0]).toContain("third part");
+			expect(prompts[0]).toContain("typed correction");
+			expect(prompts[0]).toContain("and the rest");
+			expect(h.editor.getText().trim()).toBe("");
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	for (const mode of ["edited address", "typed request"] as const) {
+		it(`submits an authoritative ${mode} even without an ordinary speech-ledger turn`, async () => {
+			const prompts: string[] = [];
+			const sent: LiveClientMessage[] = [];
+			let live: LiveSessionController | undefined;
+			let fire: ((event: LiveServerEvent) => void) | undefined;
+			const h = createHarness(options => {
+				live = new LiveSessionController({
+					...options,
+					createTransport: transportOptions => {
+						fire = transportOptions.callbacks.onEvent;
+						return {
+							async connect() {},
+							async send(message: LiveClientMessage) {
+								sent.push(message);
+							},
+							async close() {},
+							async setMuted() {},
+							setOutputSuppressed() {},
+							pushAudio: () => true,
+						};
+					},
+					createRecorder: () => ({ stop() {} }),
+				});
+				return live;
+			});
+			cfgLiveHoldMode.set(h.ctx.settings, true);
+			Object.assign(h.ctx.session, {
+				sessionId: `authoritative-composer-${mode}`,
+				modelRegistry: { authStorage: {} },
+				sessionManager: { getCwd: () => process.cwd(), allocateArtifactPath: async () => ({}) },
+				agent: { peekFollowUpQueue: () => [] },
+				sendCustomMessageWithReceipt(message: { content: string }) {
+					prompts.push(message.content);
+					return { accepted: Promise.resolve(), completed: Promise.resolve(true), cancel: () => false };
+				},
+			});
+			await h.controller.handleCommand();
+			try {
+				const original = mode === "edited address" ? "Iris, fix the parser" : "Iris, tell me a joke";
+				fire?.({ type: "turn.done", turn: { role: "user", transcript: original } });
+				h.editor.setText(mode === "edited address" ? "fix the parser" : `${h.editor.getText()}\n\nfix the parser`);
+				expect(live?.forceDelegateComposer(h.editor.getText())).toBe(true);
+				for (let i = 0; i < 80; i++) await Promise.resolve();
+				expect(prompts).toEqual(["fix the parser"]);
+				expect(h.editor.getText().trim()).toBe("");
+				if (mode === "edited address") {
+					expect(
+						sent
+							.filter(message => "content" in message)
+							.flatMap(message => message.content.map(item => item.text))
+							.join("\n"),
+					).not.toContain(original);
+				}
+				expect(live?.pendingUserTurnCount()).toBe(0);
+			} finally {
+				await h.controller.stop();
+			}
+		});
+	}
+
+	it("forwards configurable per-utterance keywords without restarting the call", async () => {
+		const h = createHarness();
+		await h.controller.handleCommand();
+		try {
+			expect(h.delegationKeywords()).toEqual({ suppress: "Iris", force: "relay" });
+			cfgLiveSuppressDelegateKeyword.set(h.ctx.settings, "Nova");
+			cfgLiveForceUtteranceKeyword.set(h.ctx.settings, "pass along");
+			expect(h.delegationKeywords()).toEqual({ suppress: "Nova", force: "pass along" });
+			cfgLiveSuppressDelegateKeyword.set(h.ctx.settings, "");
+			cfgLiveForceUtteranceKeyword.set(h.ctx.settings, "");
+			expect(h.delegationKeywords()).toEqual({ suppress: "", force: "" });
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("retires accepted edited dictation while a blocked voice delivery is still pending", async () => {
+		const voiceSend = Promise.withResolvers<void>();
+		const prompts: string[] = [];
+		let live: LiveSessionController | undefined;
+		let fire: ((event: { type: "turn.done"; turn: { role: "user"; transcript: string } }) => void) | undefined;
+		const h = createHarness(options => {
+			live = new LiveSessionController({
+				...options,
+				createTransport: transportOptions => {
+					fire = transportOptions.callbacks.onEvent;
+					return {
+						async connect() {},
+						async send() {
+							await voiceSend.promise;
+						},
+						async close() {},
+						async setMuted() {},
+						setOutputSuppressed() {},
+						pushAudio: () => true,
+					};
+				},
+				createRecorder: () => ({ stop() {} }),
+			});
+			return live;
+		});
+		cfgLiveHoldMode.set(h.ctx.settings, true);
+		cfgLiveBlockDelegateKeyword.set(h.ctx.settings, "iris only");
+		Object.assign(h.ctx.session, {
+			sessionId: "accepted-edited-composer",
+			modelRegistry: { authStorage: {} },
+			sessionManager: { getCwd: () => process.cwd(), allocateArtifactPath: async () => ({}) },
+			agent: { peekFollowUpQueue: () => [] },
+			sendCustomMessageWithReceipt(message: { content: string }) {
+				prompts.push(message.content);
+				return { accepted: Promise.resolve(), completed: Promise.resolve(true), cancel: () => false };
+			},
+		});
+		await h.controller.handleCommand();
+		try {
+			fire?.({ type: "turn.done", turn: { role: "user", transcript: "fix the cache" } });
+			h.editor.setText("fix the parser");
+			fire?.({ type: "turn.done", turn: { role: "user", transcript: "tell me a joke iris only" } });
+			expect(live?.forceDelegateComposer(h.editor.getText())).toBe(true);
+			for (let i = 0; i < 20; i++) await Promise.resolve();
+			expect(prompts).toEqual(["fix the parser"]);
+			voiceSend.resolve();
+			for (let i = 0; i < 40; i++) await Promise.resolve();
+			expect(h.editor.getText().trim()).toBe("");
+			fire?.({ type: "turn.done", turn: { role: "user", transcript: "and include tests" } });
+			expect(live?.forceDelegateComposer(h.editor.getText())).toBe(true);
+			for (let i = 0; i < 20; i++) await Promise.resolve();
+			expect(prompts).toEqual(["fix the parser", "and include tests"]);
+		} finally {
+			voiceSend.resolve();
+			await h.controller.stop();
+		}
+	});
+	it("projects a mixed held draft without blocked speech while preserving typed context and the original editor", async () => {
+		const h = createHarness();
+		cfgLiveSubmitKeyword.set(h.ctx.settings, "thanks");
+		await h.controller.handleCommand();
+		try {
+			h.editor.insertText("typed context:");
+			speak(h, 1, "fix the cache", true);
+			speak(h, 2, "tell me a joke thanks", true);
+			const before = h.editor.getText();
+			expect(h.projectComposer([2])?.trim()).toBe("typed context: fix the cache");
+			expect(h.editor.getText()).toBe(before);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+	it("releases a hold-mode submit to Iris after both silence and quiet floor regardless of destination", async () => {
+		const h = createHarness();
+		const forced = vi.spyOn(LiveSessionController.prototype, "forceDelegateComposer").mockReturnValue(true);
+		cfgLiveHoldMode.set(h.ctx.settings, true);
+		cfgLiveSubmitKeyword.set(h.ctx.settings, "thanks");
+		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 10);
+		cfgLiveQuietFloorMs.set(h.ctx.settings, 60);
+		await h.controller.handleCommand();
+		try {
+			h.controller.cycleDestination();
+			speak(h, 1, "fix the cache. THANKS!", true);
+			await Bun.sleep(25);
+			expect(forced).not.toHaveBeenCalled();
+			expect(h.submitted).toEqual([]);
+			await Bun.sleep(55);
+			expect(forced).not.toHaveBeenCalled();
+			expect(h.submitted).toEqual(["fix the cache."]);
+			expect(h.sentToVoice).toEqual([]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("validates quiet floor durations independently of keyword silence", () => {
+		const h = createHarness();
+		expect(() => cfgLiveQuietFloorMs.set(h.ctx.settings, -1)).toThrow("must not be negative");
+		expect(cfgLiveQuietFloorMs.get(h.ctx.settings)).toBe(0);
+	});
 	it("forwards the selected voice across the live-session boundary", async () => {
 		const h = createHarness();
 		try {
 			await h.controller.handleCommand();
 			expect(h.voice()).toBe("vale");
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("forwards the configured model through the controller to the transport", async () => {
+		let model: string | undefined;
+		const h = createHarness(
+			options =>
+				new LiveSessionController({
+					...options,
+					session: {
+						...options.session,
+						modelRegistry: { authStorage: {} },
+						sessionId: "configured-live-model",
+						sessionManager: { getCwd: () => process.cwd() },
+					} as unknown as LiveSessionControllerOptions["session"],
+					createTransport: options => {
+						model = options.model;
+						return {
+							async connect() {},
+							async send() {},
+							async close() {},
+							async setMuted() {},
+							pushAudio: () => true,
+						};
+					},
+					createRecorder: () => ({ stop() {} }),
+				}),
+		);
+		cfgLiveModel.set(h.ctx.settings, "custom-live-model");
+		try {
+			await h.controller.handleCommand();
+			expect(model).toBe("custom-live-model");
+			cfgLiveModel.set(h.ctx.settings, "next-live-model");
+			expect(model).toBe("custom-live-model");
 		} finally {
 			await h.controller.stop();
 		}
@@ -272,10 +623,6 @@ describe("LiveCommandController", () => {
 		const h = createHarness();
 		cfgLiveSubmitKeyword.set(h.ctx.settings, "send off");
 		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 20);
-		const sent: string[] = [];
-		h.editor.onSubmit = text => {
-			sent.push(text);
-		};
 		await h.controller.handleCommand();
 		try {
 			h.editor.pendingImages = [{ type: "image", data: "img", mimeType: "image/png" }];
@@ -287,7 +634,7 @@ describe("LiveCommandController", () => {
 			expect(h.editor.pendingImages).toHaveLength(1);
 			expect(h.editor.pendingImageLinks).toEqual(["file:///tmp/future.png"]);
 			await Bun.sleep(50);
-			expect(sent).toEqual(["[Image #1] next request"]);
+			expect(h.submitted).toEqual(["[Image #1] next request"]);
 		} finally {
 			await h.controller.stop();
 		}
@@ -311,47 +658,33 @@ describe("LiveCommandController", () => {
 	});
 
 	for (const destination of ["primary", "voice", "both"] as const) {
-		it(`submits a composer keyword to the selected ${destination} destination and recalls the sent text`, async () => {
+		it(`lets Iris route a keyword submission independently of Enter's ${destination} destination`, async () => {
 			const h = createHarness();
 			cfgLiveSubmitKeyword.set(h.ctx.settings, "send off");
 			cfgLiveSubmitSilenceMs.set(h.ctx.settings, 20);
 			await h.controller.handleCommand();
 			if (destination !== "primary") h.controller.cycleDestination();
 			if (destination === "both") h.controller.cycleDestination();
-			const sentToMain: string[] = [];
-			h.editor.onSubmit = text => {
-				const route = h.controller.routeSubmit(text, { hasImages: false });
-				if (route === "primary") {
-					sentToMain.push(text);
-					h.controller.shareSubmit(text);
-				}
-				h.editor.addToHistory(text);
-			};
-			speak(h, 1, "ship the corrected code SEND OFF", false);
+			speak(h, 1, "ship the corrected code SEND OFF", true);
 			await Bun.sleep(50);
 			expect(h.editor.getText()).toBe("");
-			expect(sentToMain).toEqual(destination === "voice" ? [] : ["ship the corrected code"]);
-			expect(h.sentToVoice).toEqual(destination === "primary" ? [] : [["ship the corrected code", destination]]);
+			expect(h.submitted).toEqual(["ship the corrected code"]);
+			expect(h.sentToVoice).toEqual([]);
 			h.editor.handleInput("\x1b[A");
 			expect(h.editor.getText()).toBe("ship the corrected code");
 			await h.controller.stop();
 		});
 	}
 
-	it("submits trailing speech after composer silence, not a provider-finalized turn", async () => {
+	it("releases the visible composer through the session submission boundary", async () => {
 		const h = createHarness();
-		const sent: string[] = [];
-		h.editor.onSubmit = text => {
-			sent.push(text);
-			h.editor.addToHistory(text);
-		};
 		cfgLiveSubmitKeyword.set(h.ctx.settings, "send off");
 		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 20);
 		await h.controller.handleCommand();
 		try {
-			speak(h, 1, "Ship this, SEND... OFF!", false);
+			speak(h, 1, "Ship this, SEND... OFF!", true);
 			await Bun.sleep(50);
-			expect(sent).toEqual(["Ship this,"]);
+			expect(h.submitted).toEqual(["Ship this,"]);
 			expect(h.editor.getText()).toBe("");
 			h.editor.handleInput("\x1b[A");
 			expect(h.editor.getText()).toBe("Ship this,");
@@ -368,10 +701,6 @@ describe("LiveCommandController", () => {
 
 	it("restarts silence on new text and cancels a corrected or mid-text keyword", async () => {
 		const h = createHarness();
-		const sent: string[] = [];
-		h.editor.onSubmit = text => {
-			sent.push(text);
-		};
 		cfgLiveSubmitKeyword.set(h.ctx.settings, "send off");
 		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 35);
 		await h.controller.handleCommand();
@@ -380,12 +709,12 @@ describe("LiveCommandController", () => {
 			await Bun.sleep(20);
 			speak(h, 1, "send off tomorrow", false);
 			await Bun.sleep(45);
-			expect(sent).toEqual([]);
+			expect(h.submitted).toEqual([]);
 			speak(h, 1, "fix it send off", false);
 			await Bun.sleep(15);
 			speak(h, 1, "fix it, not yet", true);
 			await Bun.sleep(45);
-			expect(sent).toEqual([]);
+			expect(h.submitted).toEqual([]);
 			expect(h.editor.getText()).toBe("fix it, not yet");
 		} finally {
 			await h.controller.stop();
@@ -394,24 +723,21 @@ describe("LiveCommandController", () => {
 
 	it("uses the current keyword and timeout settings without restarting the call", async () => {
 		const h = createHarness();
-		const sent: string[] = [];
-		h.editor.onSubmit = text => {
-			sent.push(text);
-		};
 		await h.controller.handleCommand();
 		try {
 			cfgLiveSubmitKeyword.set(h.ctx.settings, "send off");
 			cfgLiveSubmitSilenceMs.set(h.ctx.settings, 20);
-			speak(h, 1, "review this sendoff", false);
+			speak(h, 1, "review this sendoff", true);
 			await Bun.sleep(50);
-			expect(sent).toEqual(["review this"]);
+			expect(h.submitted).toEqual(["review this"]);
 			cfgLiveSubmitKeyword.set(h.ctx.settings, "");
-			speak(h, 2, "review again SHIP IT", false);
+			speak(h, 2, "review again SHIP IT", true);
 			await Bun.sleep(30);
-			expect(sent).toEqual(["review this"]);
+			expect(h.submitted).toEqual(["review this"]);
+			expect(h.editor.getText()).toBe("review again SHIP IT");
 			cfgLiveSubmitKeyword.set(h.ctx.settings, "ship it");
 			await Bun.sleep(50);
-			expect(sent).toEqual(["review this", "review again"]);
+			expect(h.submitted).toEqual(["review this", "review again"]);
 		} finally {
 			await h.controller.stop();
 		}
@@ -447,7 +773,7 @@ describe("LiveCommandController", () => {
 			speak(h, 1, "fix the cache send it now later", false);
 			await Bun.sleep(45);
 			expect(forced).not.toHaveBeenCalled();
-			speak(h, 1, "fix the cache SEND... IT, NOW!", false);
+			speak(h, 1, "fix the cache SEND... IT, NOW!", true);
 			await Bun.sleep(50);
 			expect(forced).toHaveBeenCalledTimes(1);
 			expect(forced).toHaveBeenCalledWith("fix the cache");
@@ -456,6 +782,165 @@ describe("LiveCommandController", () => {
 		}
 	});
 
+	for (const hold of [false, true]) {
+		for (const attachment of ["collapsed paste", "text chip"] as const) {
+			for (const content of [
+				"code says do not relate exactly",
+				"Iris, this is quoted document content",
+				"const value = 1;\n\n// send it now\n// thanks",
+				"the quoted force-utterance word is relay",
+			]) {
+				it(`delivers ${attachment} contents verbatim without hidden routing (${hold ? "hold-submit" : "force-keyword"}): ${content}`, async () => {
+					const h = createHandoffHarness();
+					cfgLiveHoldMode.set(h.ctx.settings, hold);
+					await h.controller.handleCommand();
+					try {
+						if (attachment === "collapsed paste") h.editor.insertPaste(content);
+						else h.editor.insertTextAttachment(content);
+						await Bun.sleep(20);
+						expect(h.prompts).toEqual([]);
+						h.editor.insertText(hold ? "\nTHANKS!" : "\nSEND... IT, NOW!");
+						await Bun.sleep(40);
+						if (hold) {
+							expect(h.prompts).toEqual([]);
+							const submitted = h.sent.filter(message => message.type === "session.context.append")
+								.flatMap(message => message.content.map(item => item.text));
+							expect(submitted).toContain(`"Operator Submitted Message":\n\n${content}`);
+							h.delegate();
+							for (let index = 0; index < 80; index++) await Promise.resolve();
+						}
+						expect(h.prompts).toEqual([content]);
+					} finally {
+						await h.controller.stop();
+					}
+				});
+			}
+		}
+	}
+
+	for (const attachment of ["collapsed paste", "text chip"] as const) {
+		it(`expands a protected-turn capture's ${attachment} without changing its receipt coordinates`, async () => {
+			const voiceDelivery = Promise.withResolvers<void>();
+			const h = createHandoffHarness(undefined, voiceDelivery.promise);
+			cfgLiveHoldMode.set(h.ctx.settings, true);
+			await h.controller.handleCommand();
+			try {
+				h.editor.insertText("Review: ");
+				if (attachment === "collapsed paste") h.editor.insertPaste("full attachment payload");
+				else h.editor.insertTextAttachment("full attachment payload");
+				h.speech("Iris, tell me a joke");
+				h.editor.insertText(" send it now");
+				await Bun.sleep(40);
+				expect(h.prompts).toEqual(["Review: full attachment payload"]);
+				expect(h.editor.getExpandedText().trim()).toBe("Iris, tell me a joke");
+			} finally {
+				voiceDelivery.resolve();
+				await h.controller.stop();
+			}
+		});
+	}
+
+	it("retires an accepted text attachment before the next forced handoff", async () => {
+		const h = createHandoffHarness();
+		await h.controller.handleCommand();
+		try {
+			h.editor.insertText("Review: ");
+			h.editor.insertTextAttachment("full attachment payload");
+			h.editor.insertText(" send it now");
+			await Bun.sleep(40);
+			expect(h.prompts).toEqual(["Review: full attachment payload"]);
+			h.editor.insertText("Second task send it now");
+			await Bun.sleep(40);
+			expect(h.prompts).toEqual(["Review: full attachment payload", "Second task"]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("retires only Iris's answered attachment while preserving a newer submitted draft", async () => {
+		const h = createHandoffHarness();
+		cfgLiveHoldMode.set(h.ctx.settings, true);
+		await h.controller.handleCommand();
+		try {
+			h.editor.insertTextAttachment("first attachment for Iris");
+			h.editor.insertText(" thanks");
+			await Bun.sleep(40);
+			expect(h.prompts).toEqual([]);
+			h.editor.insertText("\nNext: ");
+			h.editor.insertTextAttachment("second attachment for primary");
+			h.answer();
+			for (let index = 0; index < 80; index++) await Promise.resolve();
+			expect(h.editor.getExpandedText()).not.toContain("first attachment for Iris");
+			expect(h.editor.getExpandedText()).toContain("Next: second attachment for primary");
+			h.editor.insertText(" thanks");
+			await Bun.sleep(40);
+			expect(h.prompts).toEqual([]);
+			h.delegate();
+			for (let index = 0; index < 80; index++) await Promise.resolve();
+			expect(h.prompts).toEqual(["Next: second attachment for primary"]);
+			expect(h.editor.composerChips()).toEqual([]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("preserves new attachments and unsent image chips while retiring an accepted draft", async () => {
+		const accepted = Promise.withResolvers<void>();
+		const h = createHandoffHarness(accepted.promise);
+		await h.controller.handleCommand();
+		try {
+			h.editor.pendingImages = [{ type: "image", data: "img", mimeType: "image/png" }];
+			h.editor.insertText("[Image #1] Review: ");
+			h.editor.insertTextAttachment("delivered attachment");
+			h.editor.insertText(" send it now");
+			await Bun.sleep(40);
+			h.editor.insertText("\nNew draft: ");
+			h.editor.insertTextAttachment("unsent attachment");
+			accepted.resolve();
+			await Bun.sleep(20);
+			expect(h.editor.getExpandedText()).not.toContain("delivered attachment");
+			expect(h.editor.getExpandedText()).toContain("New draft: unsent attachment");
+			expect(h.editor.composerChips().map(chip => chip.kind)).toEqual(["image", "paste"]);
+			expect(h.editor.pendingImages).toEqual([{ type: "image", data: "img", mimeType: "image/png" }]);
+		} finally {
+			accepted.resolve();
+			await h.controller.stop();
+		}
+	});
+
+	for (const hold of [false, true]) {
+		for (const attachment of ["collapsed paste", "text chip"] as const) {
+			it(`expands a ${attachment} for ${hold ? "hold-submit" : "force-keyword"} without routing attachment text`, async () => {
+				const h = createHarness();
+				const forced = vi.spyOn(LiveSessionController.prototype, "forceDelegateComposer").mockReturnValue(true);
+				cfgLiveHoldMode.set(h.ctx.settings, hold);
+				cfgLiveForceDelegateKeyword.set(h.ctx.settings, "send it now");
+				cfgLiveSubmitKeyword.set(h.ctx.settings, "thanks");
+				cfgLiveSubmitSilenceMs.set(h.ctx.settings, 10);
+				await h.controller.handleCommand();
+				try {
+					const content = "const value = 1;\n\n// send it now\n// thanks";
+					h.editor.insertText("Review:\n");
+					if (attachment === "collapsed paste") h.editor.insertPaste(content);
+					else h.editor.insertTextAttachment(content);
+					await Bun.sleep(30);
+					expect(forced).not.toHaveBeenCalled();
+					expect(h.submitted).toEqual([]);
+					h.editor.insertText(hold ? "\nTHANKS!" : "\nSEND... IT, NOW!");
+					await Bun.sleep(30);
+					if (hold) {
+						expect(h.submitted).toEqual([`Review:\n${content}`]);
+						expect(forced).not.toHaveBeenCalled();
+					} else {
+						expect(forced).toHaveBeenCalledTimes(1);
+						expect(forced).toHaveBeenCalledWith(`Review:\n${content}`);
+					}
+				} finally {
+					await h.controller.stop();
+				}
+			});
+		}
+	}
 	it("keeps an unfinished utterance as draft text when the call ends", async () => {
 		const h = createHarness();
 		await h.controller.handleCommand();

@@ -20,11 +20,12 @@ async function command(cwd: string, args: string[], env = process.env): Promise<
 	return stdout;
 }
 
-test("source installation retires only known managed extension symlinks", async () => {
+test("source installation stages and smoke-tests the native binary", async () => {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "neopi-install-"));
 	temporary.push(dir);
 	await Bun.write(path.join(dir, "install.sh"), Bun.file(path.join(root, "install.sh")));
 	await Bun.write(path.join(dir, "scripts/npi-build-lib.sh"), Bun.file(path.join(root, "scripts/npi-build-lib.sh")));
+	await Bun.write(path.join(dir, "scripts/install-lock.sh"), Bun.file(path.join(root, "scripts/install-lock.sh")));
 	await Bun.write(path.join(dir, "packages/coding-agent/package.json"), '{"version":"1.0.0"}');
 	const binary = path.join(dir, "packages/coding-agent/dist/npi");
 	await Bun.write(binary, '#!/bin/sh\n[ "$1" != --version ] || echo npi/1.0.0\nexit 0\n');
@@ -46,18 +47,6 @@ test("source installation retires only known managed extension symlinks", async 
 		"-m",
 		"fixture",
 	]);
-	const agent = path.join(dir, "agent");
-	const extensions = path.join(agent, "extensions");
-	await fs.mkdir(extensions, { recursive: true });
-	const old = path.join(dir, "old-checkout/extensions");
-	await fs.mkdir(path.join(old, "neopi-persona"), { recursive: true });
-	await fs.symlink(path.join(old, "neopi-persona"), path.join(extensions, "neopi-persona"));
-	await fs.symlink(path.join(old, "neopi-repl"), path.join(extensions, "neopi-repl"));
-	await fs.symlink(path.join(old, "omomp-persona"), path.join(extensions, "omomp-persona"));
-	await fs.symlink(path.join(dir, "custom-loadout"), path.join(extensions, "neopi-loadout"));
-	await fs.symlink(path.join(old, "neopi-live-persona"), path.join(extensions, "unrelated"));
-	await fs.mkdir(path.join(extensions, "neopi-live-persona"));
-	await Bun.write(path.join(extensions, "omomp-repl"), "operator-owned file");
 	// Stamp after fixture setup: source_id includes untracked fixture files.
 	const finalStamp = await command(dir, [
 		"bash",
@@ -68,17 +57,9 @@ test("source installation retires only known managed extension symlinks", async 
 	await command(dir, ["bash", "install.sh"], {
 		...process.env,
 		HOME: dir,
-		PI_CODING_AGENT_DIR: agent,
+		PI_CODING_AGENT_DIR: path.join(dir, "agent"),
 		OMP_PROFILE: "ignored",
 		PI_PROFILE: "ignored",
 		NPI_DEST: path.join(dir, "bin/npi"),
 	});
-	expect((await fs.readdir(extensions)).sort()).toEqual([
-		"neopi-live-persona",
-		"neopi-loadout",
-		"omomp-repl",
-		"unrelated",
-	]);
-	expect(await fs.readlink(path.join(extensions, "neopi-loadout"))).toBe(path.join(dir, "custom-loadout"));
-	expect(await Bun.file(path.join(extensions, "omomp-repl")).text()).toBe("operator-owned file");
 }, 30_000);

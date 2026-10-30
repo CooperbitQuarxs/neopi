@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { countSessionMessages } from "@oh-my-pi/pi-natives";
+import { countSessionCatalogMessages } from "../src/cli/session-catalog-count";
 import {
 	listSessionCatalog,
 	readSessionCatalog,
@@ -95,6 +97,153 @@ describe("read-only session catalog", () => {
 			expect(row.created).toBe(row.id === "valid" ? "2026-06-01T00:00:00.000Z" : row.modified);
 			expect(Number.isFinite(Date.parse(row.created!))).toBe(true);
 		}
+	});
+
+	test("counts the complete journal beyond a large header without changing it", async () => {
+		const f = await fixture();
+		const file = await session(sessionDirForCwd(f.cwd, f.sessionsRoot), "large-header", f.cwd, [
+			{ role: "user", content: "GUI question" },
+			{ role: "assistant", content: "GUI answer" },
+			{ role: "user", content: "terminal question" },
+			{ role: "assistant", content: "terminal answer" },
+			{ role: "user", content: "restored question" },
+			{ role: "assistant", content: "restored answer" },
+		]);
+		const records = (await Bun.file(file).text()).trim().split("\n");
+		records[0] = JSON.stringify({
+			...JSON.parse(records[0]),
+			systemPrompt: "context".repeat(2_000),
+		});
+		const before = `${records.join("\n")}\n`;
+		await Bun.write(file, before);
+
+		const listed = await listSessionCatalog(f);
+		expect(listed.sessions.map(row => ({ id: row.id, count: row.messageCount }))).toEqual([
+			{ id: "large-header", count: 6 },
+		]);
+		expect(await Bun.file(file).text()).toBe(before);
+	});
+
+	test("does not mistake a prefix count for the complete persisted message count", async () => {
+		const f = await fixture();
+		await session(sessionDirForCwd(f.cwd, f.sessionsRoot), "long-message", f.cwd, [
+			{ role: "user", content: "long question ".repeat(500_000) },
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
+			},
+			{ role: "toolResult", content: [{ type: "text", text: "file content" }] },
+			{ role: "assistant", content: "answer" },
+		]);
+
+		const listed = await listSessionCatalog(f);
+		expect(listed.sessions.map(row => ({ id: row.id, count: row.messageCount }))).toEqual([
+			{ id: "long-message", count: 4 },
+		]);
+	});
+
+	test("counts messages across branches but skips malformed and non-message records", async () => {
+		const f = await fixture();
+		const file = await session(sessionDirForCwd(f.cwd, f.sessionsRoot), "branched", f.cwd, [
+			{ role: "user", content: "question" },
+			{ role: "assistant", content: "original answer" },
+		]);
+		const before = [
+			(await Bun.file(file).text()).trimEnd(),
+			"{broken",
+			"null",
+			JSON.stringify({ type: "message", id: "missing-message" }),
+			JSON.stringify({ type: "custom", data: { type: "message", message: { role: "user" } } }),
+			JSON.stringify({
+				type: "message",
+				id: "alternate",
+				parentId: "m0",
+				message: { role: "assistant", content: "alternate answer" },
+			}),
+			JSON.stringify({ type: "compaction", id: "compact", parentId: "m1", summary: "summary" }),
+			JSON.stringify({
+				type: "message",
+				id: "latest",
+				parentId: "compact",
+				message: { role: "user", content: "after compaction" },
+			}),
+		].join("\n");
+		await Bun.write(file, before);
+		expect(await countSessionCatalogMessages(file, path.join(f.root, "count-cache"))).toBe(4);
+		expect(await Bun.file(file).text()).toBe(before);
+	});
+
+	test("counts reordered and escaped fields but rejects invalid message records", async () => {
+		const f = await fixture();
+		const file = path.join(f.root, "records.jsonl");
+		await Bun.write(
+			file,
+			[
+				' { "message": {"role":"user"}, "type": "message" } ',
+				'{"ty\\u0070e":"messa\\u0067e","mess\\u0061ge":{"role":"assistant"}}',
+				'{"type":"ignored","type":"message","message":{}}',
+				'{"type":"message","message":null,"message":{}}',
+				'{"type":"message","type":"ignored","message":{}}',
+				'{"type":"message","message":{},"message":null}',
+				'{"type":"message","message":[]}',
+				'{"type":"custom","data":{"type":"message","message":{}}}',
+				JSON.stringify('{"type":"message","message":{}}'),
+				'{"type":"message","message":{"content":tru}}',
+				'{"type":"message","message":{"content":[1,]}}',
+				'{"type":"message","message":{}} trailing',
+				'{"type":"message","message":{"content":"truncated',
+			].join("\r\n"),
+		);
+		expect(await countSessionCatalogMessages(file, path.join(f.root, "count-cache"))).toBe(4);
+	});
+
+	test("limits counting to the captured file size without counting a partial last record", async () => {
+		const f = await fixture();
+		const file = path.join(f.root, "growing.jsonl");
+		const first = '{"type":"message","message":{"role":"user","content":"question"}}\n';
+		const second = '{"type":"message","message":{"role":"assistant","content":"answer"}}';
+		await Bun.write(file, first + second);
+		expect(await countSessionMessages(file, first.length)).toBe(1);
+		expect(await countSessionMessages(file, first.length + second.length - 1)).toBe(1);
+		expect(await countSessionMessages(file, first.length + second.length)).toBe(2);
+	});
+
+	test("invalidates cached counts after appends and same-size rewrites", async () => {
+		const f = await fixture();
+		const file = await session(sessionDirForCwd(f.cwd, f.sessionsRoot), "cached", f.cwd);
+		const cache = path.join(f.root, "count-cache");
+		expect(await countSessionCatalogMessages(file, cache)).toBe(1);
+		await fs.appendFile(
+			file,
+			`${JSON.stringify({
+				type: "message",
+				id: "reply",
+				parentId: "m0",
+				message: { role: "assistant", content: "answer" },
+			})}\n`,
+		);
+		expect(await countSessionCatalogMessages(file, cache)).toBe(2);
+
+		const before = await fs.stat(file);
+		const rewritten = (await Bun.file(file).text()).replaceAll('"type":"message"', '"type":"ignored"');
+		await Bun.write(file, rewritten);
+		await fs.utimes(file, before.atime, new Date(before.mtimeMs + 2_000));
+		expect((await fs.stat(file)).size).toBe(before.size);
+		expect(await countSessionCatalogMessages(file, cache)).toBe(0);
+	});
+
+	test("ignores corrupt or unavailable count caches without changing the journal", async () => {
+		const f = await fixture();
+		const file = await session(sessionDirForCwd(f.cwd, f.sessionsRoot), "cache-fallback", f.cwd);
+		const before = await Bun.file(file).text();
+		const cache = path.join(f.root, "count-cache");
+		expect(await countSessionCatalogMessages(file, cache)).toBe(1);
+		for (const name of await fs.readdir(cache)) await Bun.write(path.join(cache, name), "{broken");
+		expect(await countSessionCatalogMessages(file, cache)).toBe(1);
+		const unavailable = path.join(f.root, "not-a-directory");
+		await Bun.write(unavailable, "occupied");
+		expect(await countSessionCatalogMessages(file, unavailable)).toBe(1);
+		expect(await Bun.file(file).text()).toBe(before);
 	});
 
 	test("reports a live external lease and matches control publication through a realpath alias", async () => {
@@ -210,6 +359,61 @@ describe("read-only session catalog", () => {
 		expect((await fs.readdir(path.dirname(file))).sort()).toEqual(before);
 		await expect(readSessionCatalog(file, -1)).rejects.toThrow("nonnegative integer");
 	});
+
+	test("read preserves visible messages with missing, malformed, or out-of-range timestamps", async () => {
+		const f = await fixture();
+		const timestamps = [
+			undefined,
+			"not-a-date",
+			null,
+			{},
+			true,
+			8_640_000_000_000_001,
+			0,
+			"2026-06-01T00:00:00.000Z",
+		];
+		const file = await session(
+			path.join(f.root, "isolated"),
+			"bad-message-dates",
+			f.cwd,
+			timestamps.map((timestamp, index) => ({
+				role: "user",
+				content: `message ${index}`,
+				timestamp,
+			})),
+		);
+		const before = await Bun.file(file).text();
+		const result = await readSessionCatalog(file);
+		const expected = timestamps.map((_timestamp, index) => ({
+			entryId: `m${index}`,
+			role: "user" as const,
+			text: `message ${index}`,
+			timestamp: index < 6 ? null : index === 6 ? "1970-01-01T00:00:00.000Z" : "2026-06-01T00:00:00.000Z",
+		}));
+		expect(result.messages).toEqual(expected);
+		expect(result.branchMessages).toEqual(expected);
+		expect(await Bun.file(file).text()).toBe(before);
+	});
+
+	test("pre-tree transcript reads also keep messages with invalid timestamps", async () => {
+		const f = await fixture();
+		const file = path.join(f.root, "legacy.jsonl");
+		await Bun.write(
+			file,
+			[
+				{ type: "session", version: 1, id: "legacy", cwd: f.cwd, timestamp: "2026-06-01T00:00:00.000Z" },
+				{ type: "message", message: { role: "user", content: "missing date" } },
+				{ type: "message", message: { role: "assistant", content: "bad date", timestamp: "not-a-date" } },
+			]
+				.map(record => JSON.stringify(record))
+				.join("\n") + "\n",
+		);
+		expect((await readSessionCatalog(file)).messages).toEqual([
+			{ role: "user", text: "missing date", timestamp: null },
+			{ role: "assistant", text: "bad date", timestamp: null },
+		]);
+	});
+
 	test("read exports complete selected ancestry and native messages across compaction without writing", async () => {
 		const f = await fixture();
 		const file = await session(path.join(f.root, "isolated"), "branched", f.cwd, [

@@ -384,7 +384,7 @@ Login kinds:
 - `login "api-key" { auth-url "…"; instructions "…"; prompt "…" placeholder="…"; empty-fallback "…"; normalize "strip-bearer"; validate … }` — `validate "chat-completions" base-url= model= tolerate-model-denied= max-tokens-field= max-tokens=`, `validate "anthropic-messages" base-url= model=`, or `validate "models-endpoint" url= base-url-env= headers-hook=`; all accept `label=` (error-message label, defaults to `name`), `optional=#true` (only auth failures reject), and `trust-forbidden=#true` (requires `optional=#true`; a 403 no longer rejects, so only a 401 does).
 - `login "oauth-code" { … }` as above; `token`/`refresh` `params` values may use `{code}`, `{state}`, `{redirect_uri}`, `{code_verifier}`, `{client_id}`, `{client_secret}`, `{refresh_token}`, `{scope}`; the standard grant parameters are sent unless `standard=#false`.
 - `login "device-code" { client-id …; base-url "…"; scopes …; headers-hook "…"; device url="{base}/…" body="form" { params {…} headers {…} }; token url="…" url-hook="…"; response user-code= device-code= verification-uri= verification-uri-complete= interval= expires-in=; instructions "Enter code: {user_code}"; credential {…}; userinfo …; after-exchange hook=… }`.
-- `login "custom" hook="name"` — the whole flow is a named `@oh-my-pi/pi-ai` hook (`src/registry/hooks/custom.ts`).
+- `login "custom" hook="name"` — the whole flow is a named `@oh-my-pi/pi-ai` hook (`src/registry/hooks/custom.ts`). Set `device-code=#true` when that hook implements a device-code exchange, so native registry and RPC clients can describe the interaction without guessing from provider IDs.
 
 Hook names are validated against the hook tables in `@oh-my-pi/pi-ai/src/registry/hooks` by that package's `auth-hooks-registry` test. Values marked `encoding="base64"` are public OAuth client ids stored obfuscated to keep secret scanners quiet; they are decoded at runtime.
 
@@ -430,6 +430,19 @@ Only `discovery` enrolls a provider in `generate-models.ts`; providers without i
 `automatic-default #false` keeps a provider available for explicit selection but excludes it from startup fallback and automatic model presets. The default is `#true`; `apple` opts out because its on-device context cannot accommodate the standard coding-agent prompt in many projects.
 
 `kind-apis { <kind> "<api>" }` maps each non-chat kind (`image`, `tts`, `stt`, `embedding`, `rerank`, `video`) to the API discovery assigns rows of that kind. A runner API must sit under the kind it serves (`RUNNER_API_KINDS` in `src/types.ts`); chat APIs, which serve hosted image generation, and multi-kind `local-inference` may back any kind.
+
+`config-options` declares the deployment-owned options accepted by Switch for a catalog provider, including configured aliases that name it with `catalog`. It is a provider entry, not a model-scoped cascade axis:
+
+```kdl
+config-options {
+    boolean "prefer_websockets"
+    string "variant"
+    strings "betas"
+    enum "cache_retention" "none" "short" "long"
+}
+```
+
+Every option is optional. `string` requires a non-empty string; `strings` accepts an array of unique non-empty strings, including an empty array; `enum` accepts exactly one declared value. Option names must be unique and non-empty; enum values must also be unique and non-empty. The compiled `configOptions` schemas are available through `providerEntry()`. Switch validates them generically, keeps the common `headers` option outside deployment policy, and permits additional glue-owned options without bypassing validation of known options.
 
 ### Seed rows
 

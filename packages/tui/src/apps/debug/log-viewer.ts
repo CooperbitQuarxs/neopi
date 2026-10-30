@@ -7,6 +7,7 @@ import type { DescribeContext, NativeNode, NativeUiEvent } from "../../native/no
 import { CLOSE_ACTION, picker, pickerAction, pickerEvent, pickerHits, pickerQuery } from "../../native/picker";
 import { matchesKey } from "../../keys";
 import { MenuKeyReader, MenuSearchField } from "../../components/menu-navigation";
+import { compileMenuRegex } from "../../menu-search";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../../mouse";
 import { padding, truncateToWidth, visibleWidth } from "../../utils";
 import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
@@ -492,13 +493,14 @@ export class DebugLogViewerModel {
 		previousAnchorLogIndex = this.#getAnchorLogIndex(),
 	): void {
 		const query = this.#filterQuery.toLowerCase();
+		const regex = compileMenuRegex(this.#filterQuery);
 		const visible: number[] = [];
 		for (let i = this.#loadedStartIndex; i < this.#entries.length; i++) {
 			const entry = this.#entryAt(i);
 			if (!entry) {
 				continue;
 			}
-			if (this.#matchesFilters(entry, query)) {
+			if (this.#matchesFilters(entry, query, regex)) {
 				visible.push(i);
 			}
 		}
@@ -558,8 +560,10 @@ export class DebugLogViewerModel {
 		}
 	}
 
-	#matchesFilters(entry: LogEntry, query: string): boolean {
-		if (query.length > 0 && !(entry.lowerLine ??= entry.rawLine.toLowerCase()).includes(query)) {
+	#matchesFilters(entry: LogEntry, query: string, regex: { regex?: RegExp } | undefined): boolean {
+		if (regex) {
+			if (!regex.regex?.test(entry.rawLine)) return false;
+		} else if (query.length > 0 && !(entry.lowerLine ??= entry.rawLine.toLowerCase()).includes(query)) {
 			return false;
 		}
 		if (!this.#processFilterEnabled) {
@@ -575,9 +579,10 @@ export class DebugLogViewerModel {
 		if (this.#loadedStartIndex === 0) {
 			return false;
 		}
+		const regex = compileMenuRegex(this.#filterQuery);
 		for (let i = 0; i < this.#loadedStartIndex; i++) {
 			const entry = this.#entryAt(i);
-			if (entry && this.#matchesFilters(entry, query)) {
+			if (entry && this.#matchesFilters(entry, query, regex)) {
 				return true;
 			}
 		}
@@ -685,7 +690,7 @@ interface DebugLogViewerComponentOptions {
 /** Interactive log viewer with host-provided storage and clipboard capabilities. */
 export class DebugLogViewerComponent implements Component {
 	#model: DebugLogViewerModel;
-	/** Filter field; its value is pushed into the model whenever it changes. */
+	/** Filter field; its confirmed query drives the model. */
 	readonly #search = new MenuSearchField();
 	readonly #filter = this.#search.input;
 	#terminalRows: number;
@@ -736,6 +741,7 @@ export class DebugLogViewerComponent implements Component {
 		return {
 			model: this.#model.navigationSnapshot(),
 			viewport: this.#frame.navigationSnapshot(),
+			search: this.#search.navigationSnapshot(),
 			filterFocused: this.#search.focused,
 			filterCursor: this.#search.cursor,
 		};
@@ -743,25 +749,32 @@ export class DebugLogViewerComponent implements Component {
 
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
-		const state = snapshot as { model?: unknown; viewport?: unknown; filterFocused?: boolean; filterCursor?: number };
+		const state = snapshot as {
+			model?: unknown;
+			viewport?: unknown;
+			search?: unknown;
+			filterFocused?: boolean;
+			filterCursor?: number;
+		};
 		this.#model.restoreNavigation(state.model);
-		this.#filter.setValue(this.#model.filterQuery);
+		this.#search.setValue(this.#model.filterQuery);
 		if (typeof state.filterCursor === "number") this.#filter.setCursor(state.filterCursor);
 		this.#search.focused = state.filterFocused === true;
+		if (state.search !== undefined) this.#search.restoreNavigation(state.search);
 		this.#frame.restoreNavigation(state.viewport);
 		this.#keys.reset();
 	}
 
 	handleInput(keyData: string): void {
 		if (routeSgrMouseInput(keyData, event => this.#handleMouse(event))) return;
-		const before = this.#search.value;
+		if (!this.#search.focused && matchesKey(keyData, "ctrl+c")) return this.#copySelected();
+		const before = this.#search.query;
 		const search = this.#search.handleInput(keyData);
 		if (search !== "pass") {
 			if (search === "exited") this.#keys.reset();
-			if (this.#search.value !== before) this.#model.setFilterQuery(this.#search.value);
+			if (this.#search.query !== before) this.#model.setFilterQuery(this.#search.query);
 			return;
 		}
-		if (matchesKey(keyData, "ctrl+c")) return this.#copySelected();
 		if (matchesKey(keyData, "ctrl+p")) {
 			this.#model.toggleProcessFilter();
 			return;
@@ -783,7 +796,7 @@ export class DebugLogViewerComponent implements Component {
 				case "cancel":
 					return this.#onExit();
 				case "search":
-					this.#filter.focused = true;
+					this.#search.focused = true;
 					return;
 				case "move":
 					if (action.delta < 0) void this.#handleMoveUp(false);
@@ -895,6 +908,7 @@ export class DebugLogViewerComponent implements Component {
 				model.isProcessFilterEnabled(),
 				model.canLoadOlder(),
 				query,
+				this.#search.query,
 				cursor,
 				this.#loadingOlder,
 				this.#statusMessage,
@@ -909,7 +923,7 @@ export class DebugLogViewerComponent implements Component {
 				const items: TspPickerItem[] = [];
 				const order: (string | TspPickerGroup)[] = [];
 				const hits: Record<string, [number, number][]> = {};
-				const needle = query.toLowerCase();
+				const needle = compileMenuRegex(this.#search.query) ? "" : this.#search.query.toLowerCase();
 				for (const viewerRow of model.rows) {
 					if (viewerRow.kind === "warning") {
 						order.push({ group: "session", label: "This session" });
@@ -945,7 +959,7 @@ export class DebugLogViewerComponent implements Component {
 				return picker(
 					{
 						title: "Recent logs",
-						subtitle,
+						subtitle: compileMenuRegex(query)?.error ?? subtitle,
 						noun: "entries",
 						size: "lg",
 						layout: "rows",

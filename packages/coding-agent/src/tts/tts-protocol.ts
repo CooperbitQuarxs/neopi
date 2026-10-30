@@ -22,7 +22,15 @@ export interface TtsProgressEvent {
 
 export type TtsWorkerInbound =
 	| { type: "ping"; id: string }
-	| { type: "synthesize"; id: string; modelKey: TtsLocalModelKey; text: string; voice?: string; speed?: number }
+	| {
+			type: "synthesize";
+			id: string;
+			modelKey: TtsLocalModelKey;
+			text: string;
+			voice?: string;
+			speed?: number;
+			threads?: number;
+	  }
 	| { type: "download"; id: string; modelKey: TtsLocalModelKey }
 	// Streaming synthesis: a session is opened with `stream-start`, fed complete
 	// speakable segments with `stream-push` (the parent's SpeakableStream does all

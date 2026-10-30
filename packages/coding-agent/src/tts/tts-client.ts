@@ -31,6 +31,8 @@ export interface TtsSynthesizeOptions {
 	voice?: string;
 	/** Speaking rate (1 = normal); clamped by the worker. Omitted means normal speed. */
 	speed?: number;
+	/** ONNX intra-op threads for paced Kokoro; zero/omitted preserves runtime defaults. */
+	threads?: number;
 	signal?: AbortSignal;
 }
 
@@ -188,6 +190,7 @@ export class TtsClient {
 					text,
 					...(options.voice ? { voice: options.voice } : {}),
 					...(options.speed !== undefined ? { speed: options.speed } : {}),
+					...(options.threads ? { threads: options.threads } : {}),
 				}),
 				resolve => ({ kind: "synthesize", modelKey, resolve }),
 				resolve => resolve(null),

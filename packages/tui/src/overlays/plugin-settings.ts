@@ -71,7 +71,7 @@ function prefsDetailPage(title: string, lead: string, list: SettingsList | undef
 		})),
 		focus: list.prefsFocus().row ?? null,
 		editing: null,
-		query: search?.filter,
+		query: search?.filterDraft ?? search?.filter,
 		cursor: search?.filterCursor,
 		editor: open ? col([open.component], { role: "omp.prefs.editor" }) : undefined,
 	};
@@ -1251,6 +1251,10 @@ export class PluginSettingsComponent extends Container {
 	handleNavigation(action: MenuNavAction): void {
 		this.#keys.reset();
 		const view = this.#viewComponent;
+		if (action.kind === "cancel" && this.prefsPage().query) {
+			view?.handleNavigation(action);
+			return;
+		}
 		if (action.kind === "cancel" || (action.kind === "horizontal" && action.delta < 0)) {
 			if (this.atRoot) {
 				if (action.kind === "cancel") this.callbacks.onClose();

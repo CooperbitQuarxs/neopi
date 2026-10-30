@@ -23,6 +23,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { Browser } from "puppeteer-core";
 import { daemonRuntimeDir } from "../../launch/paths";
 
@@ -48,6 +49,8 @@ interface OwnershipFile {
  * process's very fresh records around briefly in case it is being restarted.
  */
 const DEFAULT_GRACE_MS = 15_000;
+const DEFAULT_TARGET_CLOSE_TIMEOUT_MS = 5_000;
+const TARGET_CLOSE_POLL_INTERVAL_MS = 25;
 
 /** In-process set of shared-browser targets this process created, keyed by registry dir. */
 const ownedByDir = new Map<string, Set<string>>();
@@ -213,30 +216,47 @@ export async function collectOrphanTargets(
 }
 
 /**
- * Close a page target by id through a fresh CDP session. Returns true only
- * when CDP confirms the close or confirms the target no longer exists; a
- * dropped connection or transient protocol failure returns false so durable
- * ownership remains available for a later retry.
+ * Close a page target by id through a fresh CDP session. `Target.closeTarget`
+ * acknowledges the request before Chromium necessarily removes the target, so
+ * only a subsequent enumeration confirming absence completes the close.
+ * Unavailable sessions or rejected close requests return false for later retry.
+ * Once accepted, failure to confirm absence within the budget throws.
  */
-export async function closeCdpTarget(browser: Browser, targetId: string): Promise<boolean> {
+export async function closeCdpTarget(
+	browser: Browser,
+	targetId: string,
+	timeoutMs = DEFAULT_TARGET_CLOSE_TIMEOUT_MS,
+): Promise<boolean> {
+	const deadline = performance.now() + timeoutMs;
 	const session = await browser
 		.target()
 		.createCDPSession()
 		.catch(() => null);
 	if (!session) return false;
 	try {
+		let accepted = false;
 		try {
-			const result = await session.send("Target.closeTarget", { targetId });
-			if (result.success) return true;
+			accepted = (await session.send("Target.closeTarget", { targetId })).success;
 		} catch {
 			// A concurrent reaper or the page itself may already have closed the
 			// target. Confirm absence before treating the cleanup as complete.
 		}
-		try {
-			const { targetInfos } = await session.send("Target.getTargets");
-			return !targetInfos.some(info => info.targetId === targetId);
-		} catch {
-			return false;
+		while (true) {
+			try {
+				const { targetInfos } = await session.send("Target.getTargets");
+				if (!targetInfos.some(info => info.targetId === targetId)) return true;
+			} catch (error) {
+				if (accepted) throw error;
+				return false;
+			}
+			const remainingMs = deadline - performance.now();
+			if (!accepted) return false;
+			if (remainingMs <= 0) {
+				throw new ToolError(
+					`Timed out after ${timeoutMs}ms waiting for CDP target ${JSON.stringify(targetId)} to disappear`,
+				);
+			}
+			await Bun.sleep(Math.min(TARGET_CLOSE_POLL_INTERVAL_MS, remainingMs));
 		}
 	} finally {
 		await session.detach().catch(() => undefined);
@@ -280,7 +300,7 @@ export async function reapOrphanSharedTargets(browser: Browser, scope: SharedTar
 	for (const owner of scan.owners) {
 		const retained: string[] = [];
 		for (const targetId of owner.targetIds) {
-			if (await closeCdpTarget(browser, targetId)) {
+			if (await closeCdpTarget(browser, targetId).catch(() => false)) {
 				closed++;
 			} else {
 				retained.push(targetId);

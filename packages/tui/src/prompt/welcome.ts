@@ -1,4 +1,4 @@
-import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { formatDoubleTap, formatKeyHint, formatKeyHints, type KeyName } from "../app-keybindings";
 import { editorKey } from "../chrome/keybinding-hints";
@@ -13,6 +13,7 @@ import { theme } from "../theme/theme";
 import type { Component } from "../tui";
 import { padding, replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
 import tipsText from "./tips.txt" with { type: "text" };
+import { renderClassicWelcome } from "./classic-welcome";
 
 /** Leading marker for a tip that pitches Tern: shown only while no TSP surface
  *  is live, since a live one means the user is already in Tern. */
@@ -188,12 +189,12 @@ export function renderWelcomeTip(tip: string, width: number, phase = 0): string[
 	return lines;
 }
 
+export type StartupBranding = "new" | "classic";
+
 /**
- * The session's welcome banner. In a terminal: the gradient logo beside the
- * `npi` wordmark with the version under it (the logo alone when the lockup does
- * not fit) and the tip of the session (dropped below {@link TIP_MIN_COLUMNS}
- * columns). Natively: a card with the same logo, wordmark, version and tip
- * ({@link WelcomeComponent.describe}).
+ * The session's welcome banner: the centered NPI lockup by default, or the
+ * classic boxed NeoPi banner. Both share the Pi art, intro animation and tip.
+ * Native cards mirror the selected layout ({@link WelcomeComponent.describe}).
  */
 export class WelcomeComponent implements Component {
 	#animStart: number | null = null;
@@ -213,7 +214,10 @@ export class WelcomeComponent implements Component {
 	#cachedLines: string[] | undefined;
 	#native: { tip: string | undefined; node: NativeNode } | undefined;
 
-	constructor(private version: string) {}
+	constructor(
+		private version: string,
+		private branding: StartupBranding = "new",
+	) {}
 	get tip(): string | undefined {
 		this.#nagRoll ??= Math.random();
 		this.#tipRoll ??= Math.random();
@@ -230,11 +234,9 @@ export class WelcomeComponent implements Component {
 	}
 
 	/**
-	 * A `card` (`omp.welcome`) mirroring the terminal banner: the lockup
-	 * (`omp.welcome.lockup`: the terminal's builtin `omp` mark, which it animates,
-	 * beside the wordmark with the version under it) and the tip of the session.
-	 * Roles carry the look (gradient logo, type scale); a "[NEW]" tip
-	 * carries a terminal-clocked shimmering tag.
+	 * A `card` (`omp.welcome`) mirroring the selected terminal banner. The
+	 * classic grid puts the Pi tower beside shortcuts; the new lockup puts
+	 * the wordmark and version beside the logo. Both share native tips.
 	 */
 	describe(_cx: DescribeContext): NativeNode {
 		const tip = this.tip;
@@ -242,6 +244,32 @@ export class WelcomeComponent implements Component {
 		// Brand lines are short and fixed; never wrap or truncate them.
 		const art = (spans: readonly TspSpan[], role: string): NativeNode =>
 			keyed(text(spans, { wrap: "none", role }), role);
+		if (this.branding === "classic") {
+			const brand = col(
+				[
+					art([span("Welcome back!", "strong")], "omp.welcome.greeting"),
+					...PI_LOGO.map((line, index) => art([span(line, "accent")], `omp.welcome.logo.${index}`)),
+				],
+				{ align: "center", role: "omp.welcome.brand" },
+			);
+			const info = col(
+				[
+					art([span(`${PRODUCT_NAME} v${this.version}`, "dim mono")], "omp.welcome.version"),
+					art([span("Tips", "strong")], "omp.welcome.heading"),
+					...["# for prompt actions", "/ for commands", "! to run bash", "$ to run python"].map(
+						(shortcut, index) => art([span(shortcut, "muted")], `omp.welcome.shortcut.${index}`),
+					),
+				],
+				{ gap: "xs", role: "omp.welcome.info" },
+			);
+			const body: NativeChild[] = [
+				keyed(row([brand, info], { gap: "md", align: "start", wrap: true, role: "omp.welcome.grid" }), "grid"),
+			];
+			this.#appendNativeTip(body, tip);
+			const described = card({ role: "omp.welcome" }, body);
+			this.#native = { tip, node: described };
+			return described;
+		}
 		const lockupRow = keyed(
 			row(
 				[
@@ -249,7 +277,7 @@ export class WelcomeComponent implements Component {
 						"image",
 						{
 							builtin: "omp",
-							alt: APP_NAME,
+							alt: PRODUCT_NAME,
 							w: 128,
 							role: "omp.welcome.logo",
 						},
@@ -259,7 +287,7 @@ export class WelcomeComponent implements Component {
 					keyed(
 						col(
 							[
-								art([span(APP_NAME, "strong")], "omp.welcome.wordmark"),
+								art([span(PRODUCT_NAME, "strong")], "omp.welcome.wordmark"),
 								art([span(`v${this.version}`, "dim mono")], "omp.welcome.version"),
 							],
 							{ role: "omp.welcome.mark" },
@@ -272,20 +300,23 @@ export class WelcomeComponent implements Component {
 			"lockup",
 		);
 		const body: NativeChild[] = [lockupRow];
-		if (tip) {
-			const isNew = NEW_TIP_MARKER.test(tip);
-			const tipText = compactText(tipSpans(expandTipKeys(isNew ? tip.replace(NEW_TIP_MARKER, "") : tip)));
-			const tipRow: NativeChild[] = [
-				node("icon", { name: "lightbulb", role: "omp.welcome.tip-icon" }),
-				text(tipText, { wrap: "word", role: "omp.welcome.tip-text" }),
-			];
-			if (isNew) tipRow.push(node("shimmer", { text: "New", role: "omp.welcome.new" }));
-			body.push(node("row", { gap: "sm", align: "start", role: "omp.welcome.tip" }, tipRow, "tip"));
-		}
+		this.#appendNativeTip(body, tip);
 		// No head row or chevron: the card is the hero; the version sits under the wordmark.
 		const described = card({ role: "omp.welcome" }, body);
 		this.#native = { tip, node: described };
 		return described;
+	}
+
+	#appendNativeTip(body: NativeChild[], tip: string | undefined): void {
+		if (!tip) return;
+		const isNew = NEW_TIP_MARKER.test(tip);
+		const tipText = compactText(tipSpans(expandTipKeys(isNew ? tip.replace(NEW_TIP_MARKER, "") : tip)));
+		const tipRow: NativeChild[] = [
+			node("icon", { name: "lightbulb", role: "omp.welcome.tip-icon" }),
+			text(tipText, { wrap: "word", role: "omp.welcome.tip-text" }),
+		];
+		if (isNew) tipRow.push(node("shimmer", { text: "New", role: "omp.welcome.new" }));
+		body.push(node("row", { gap: "sm", align: "start", role: "omp.welcome.tip" }, tipRow, "tip"));
 	}
 
 	/** The intro keeps the welcome block mutable; settling lets it retire to history. */
@@ -354,6 +385,12 @@ export class WelcomeComponent implements Component {
 		this.invalidate();
 	}
 
+	setBranding(branding: StartupBranding): void {
+		if (branding === this.branding) return;
+		this.branding = branding;
+		this.invalidate();
+	}
+
 	render(termWidth: number): readonly string[] {
 		const animating = this.#animStart != null;
 		if (!animating && this.#cachedLines && this.#cachedWidth === termWidth) {
@@ -371,6 +408,11 @@ export class WelcomeComponent implements Component {
 	}
 
 	#renderLines(termWidth: number): string[] {
+		if (this.branding === "classic") {
+			return renderClassicWelcome(termWidth, this.version, this.#currentLogoFrame(), width =>
+				this.#renderTip(width),
+			);
+		}
 		// Content keeps a column clear on each side; everything centers in the full width.
 		const room = termWidth - 2;
 		if (room < 4) return [];
@@ -415,10 +457,10 @@ export const PI_LOGO = ["████████████", "   ██  █�
 const LOGO_WIDTH = Math.max(...PI_LOGO.map(row => row.length));
 
 /**
- * The `omp` wordmark in half-blocks, set beside {@link PI_LOGO} from its second
+ * The `npi` wordmark in half-blocks, set beside {@link PI_LOGO} from its second
  * row: the `p` descends into the fourth, the version takes the fifth.
  */
-const WORDMARK = ["▄▀▀▄ █▀▄▀▄ █▀▀▄", "▀▄▄▀ █ █ █ █▄▄▀", "           █"];
+const WORDMARK = ["█▀▀▄ █▀▀▄ ▀▀█▀▀", "█  █ █▄▄▀ ▄▄█▄▄", "     █"];
 
 /** Columns of {@link WORDMARK}. */
 const WORDMARK_WIDTH = Math.max(...WORDMARK.map(row => row.length));

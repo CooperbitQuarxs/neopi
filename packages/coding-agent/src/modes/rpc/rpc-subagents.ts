@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type AgentRef, AgentRegistry } from "../../registry/agent-registry";
+import { getLiveSubagentFacts } from "../../registry/subagent-facts";
 import type { AgentSession } from "../../session/agent-session";
 import type { FileEntry, SessionMessageEntry } from "../../session/session-entries";
 import { parseSessionEntries } from "../../session/session-loader";
@@ -169,7 +170,24 @@ export class RpcSubagentRegistry {
 	}
 
 	getSubagents(): RpcSubagentSnapshot[] {
-		return [...this.#subagents.values()].sort((a, b) => a.index - b.index || a.id.localeCompare(b.id));
+		return [...this.#subagents.values()]
+			.map(snapshot => {
+				const owned = resolveLiveSnapshot(snapshot);
+				const retainedFacts = snapshot.progress
+					? {
+							resolvedModel: snapshot.progress.resolvedModel,
+							resolvedModelIdentity: snapshot.progress.resolvedModelIdentity,
+							resolvedThinkingLevel: snapshot.progress.resolvedThinkingLevel,
+						}
+					: undefined;
+				const facts = (owned ? getLiveSubagentFacts(owned.session) : undefined) ?? retainedFacts;
+				return {
+					...snapshot,
+					...facts,
+					...(owned && snapshot.progress ? { progress: { ...snapshot.progress, ...facts } } : {}),
+				};
+			})
+			.sort((a, b) => a.index - b.index || a.id.localeCompare(b.id));
 	}
 
 	#rememberTranscriptSession(subagentId: string, sessionFile: string | undefined): void {
@@ -310,10 +328,13 @@ export function resolveOwnedLiveSubagent(
 	subagentId: string,
 ): RpcOwnedSubagent | undefined {
 	const snapshot = subagentRegistry.getSubagents().find(candidate => candidate.id === subagentId);
-	// Progress can briefly report a terminal status before the terminal
-	// lifecycle frame prunes the snapshot; treat that as not running.
-	if ((snapshot?.status !== "running" && snapshot?.status !== "pending") || !snapshot.sessionFile) return undefined;
-	const ref = AgentRegistry.global().get(subagentId);
+	return snapshot ? resolveLiveSnapshot(snapshot) : undefined;
+}
+
+function resolveLiveSnapshot(snapshot: RpcSubagentSnapshot): RpcOwnedSubagent | undefined {
+	// Progress may become terminal before the lifecycle frame prunes the roster.
+	if ((snapshot.status !== "running" && snapshot.status !== "pending") || !snapshot.sessionFile) return undefined;
+	const ref = AgentRegistry.global().get(snapshot.id);
 	if (ref?.kind !== "sub" || ref.status !== "running" || !ref.session || ref.sessionFile !== snapshot.sessionFile) {
 		return undefined;
 	}

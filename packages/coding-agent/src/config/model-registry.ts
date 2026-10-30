@@ -136,9 +136,19 @@ import {
 	validateProviderConfiguration,
 } from "./models-config";
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
-import { type Settings, settings } from "./settings";
+import { ModelConfigEditor } from "./model-config-editor";
+import { Settings, settings } from "./settings";
 
 import { cfgDisabledProviders } from "./model-settings";
+import {
+	applyModelFacts,
+	DEFAULT_MODEL_FACT_CONFIG,
+	getModelFactConfig as readModelFactConfig,
+	type ModelFactConfig,
+	type ModelFactResolution,
+	type ModelFactSourceSnapshot,
+} from "./model-facts";
+import { loadModelFactSources } from "./model-fact-sources";
 import {
 	cfgCompactionModelThresholds,
 	cfgCompactionModelThresholdsEnabled,
@@ -263,14 +273,13 @@ function contextWindowKey(model: { provider: string; id: string }): string {
 }
 
 /**
- * Provenance a `modifyModels` input row carries into the shallow copies a hook
- * makes from it. An own enumerable symbol key is what `{ ...row }` copies and
- * what `structuredClone`, `JSON.stringify` and `Object.keys` ignore, so a copy
- * with a new provider/id still names its source row; the registry strips it
- * from every returned row before publishing.
+ * Provenance a `modifyModels` input row carries through spreads, structured
+ * clones and JSON round trips, even when the hook renames or reorders rows.
+ * Store only the snapshot index: an object reference would itself be cloned,
+ * losing the WeakMap-backed capacity. Strip the bookkeeping before publishing.
  */
-const MODIFIER_SOURCE: unique symbol = Symbol("modelModifierSource");
-type ModifierRow = Model<Api> & { [MODIFIER_SOURCE]?: Model<Api> };
+const MODIFIER_SOURCE = "__npiModelModifierSource";
+type ModifierRow = Model<Api> & { [MODIFIER_SOURCE]?: number };
 
 /** The context window a model runs with by default, and the larger one extended context opts it into. */
 export interface ContextWindowTiers {
@@ -358,6 +367,11 @@ export class ModelRegistry {
 	#warnedCompatKeys = new Set<string>();
 	#configWarnings: string[] = [];
 	#modelsConfigFile: ConfigFile<ModelsConfig>;
+	#modelConfigEditor?: ModelConfigEditor;
+
+	get modelConfig(): ModelConfigEditor {
+		return (this.#modelConfigEditor ??= new ModelConfigEditor(this.#modelsConfigFile));
+	}
 	#lastStaticLoadMtime: number | null = null;
 	#registeredProviderSources: Set<string> = new Set();
 	#providerDiscoveryStates: Map<string, ProviderDiscoveryState> = new Map();
@@ -409,6 +423,8 @@ export class ModelRegistry {
 	#ignoreLocalModelConfig: boolean;
 	#fetch: FetchImpl;
 	#settings: Settings | undefined;
+	#modelFactSources: ModelFactSourceSnapshot[] = [];
+	#modelFactResolutions = new Map<string, ModelFactResolution>();
 
 	#captureCatalogMetrics(models: readonly Model<Api>[], replace: boolean): void {
 		if (replace) {
@@ -591,6 +607,7 @@ export class ModelRegistry {
 		this.#reloadStaticModelsForRefresh(options);
 		this.#suppressedSelectors.clear();
 		await this.#refreshRuntimeDiscoveries(strategy);
+		await this.#refreshModelFacts(strategy);
 	}
 
 	/**
@@ -619,6 +636,11 @@ export class ModelRegistry {
 				this.#credentialScopedCacheHydration = undefined;
 			}
 		}
+	}
+
+	/** The configured models file, including custom SDK locations. */
+	getConfigFile(): string {
+		return this.#modelsConfigFile.path();
 	}
 
 	/**
@@ -768,6 +790,7 @@ export class ModelRegistry {
 		if (otherRuntimeProviderIds.size > 0) {
 			await this.#refreshRuntimeDiscoveries("online-if-uncached", otherRuntimeProviderIds);
 		}
+		await this.#refreshModelFacts(strategy);
 	}
 
 	/**
@@ -785,6 +808,7 @@ export class ModelRegistry {
 		const filter = new Set(providerIds);
 		if (filter.size === 0) return;
 		await this.#refreshRuntimeDiscoveries(strategy, filter);
+		await this.#refreshModelFacts(strategy);
 	}
 
 	/**
@@ -919,6 +943,7 @@ export class ModelRegistry {
 			return;
 		}
 		await this.#refreshRuntimeDiscoveries(strategy, new Set(this.#runtimeModelManagers.keys()));
+		await this.#refreshModelFacts(strategy);
 	}
 
 	#reloadStaticModels(options?: { force?: boolean; preserveRuntimeDiscovery?: boolean }): void {
@@ -1080,6 +1105,7 @@ export class ModelRegistry {
 		this.#internedStaticModels.clear();
 		this.#providerLookupSnapshots.clear();
 		this.#commandConfigsByProvider.clear();
+		this.#modelFactResolutions.clear();
 	}
 
 	#knownStaticProviders(): string[] {
@@ -1144,7 +1170,7 @@ export class ModelRegistry {
 				);
 				for (let index = 0; index < snapshot.length; index++) {
 					this.#carryStandardWindow(projected[index], snapshot[index]);
-					(snapshot[index] as ModifierRow)[MODIFIER_SOURCE] = snapshot[index];
+					(snapshot[index] as ModifierRow)[MODIFIER_SOURCE] = index;
 					if (projected[index].resolveHeaders) snapshot[index].resolveHeaders = projected[index].resolveHeaders;
 				}
 				const sourcesByKey = new Map(snapshot.map(model => [contextWindowKey(model), model]));
@@ -1159,7 +1185,7 @@ export class ModelRegistry {
 				// Rows of other providers pass through untouched; rebuilding a
 				// full catalog on every projection costs more than it can fix.
 				projected = modifyModels(snapshot, credential).map(returned => {
-					const model = this.#claimModifierRow(returned, sourcesByKey);
+					const model = this.#claimModifierRow(returned, sourcesByKey, snapshot);
 					const withHeaders =
 						model.resolveHeaders && model.headers
 							? {
@@ -1195,14 +1221,19 @@ export class ModelRegistry {
 	 * Resolves the verified capacity of a row a modifier returned and strips the
 	 * provenance it carried in. A snapshot row keeps its stamp even when renamed
 	 * in place; an unstamped row inherits from the snapshot row of the same
-	 * provider/id, else from the row it was spread from so long as the hook left
+	 * provider/id, else from its clone-safe snapshot index so long as the hook left
 	 * that row's `contextWindow` alone. A copy whose capacity the hook rewrote
 	 * declares a fresh capacity, exactly like a synthesized spec, because the
 	 * registry cannot tell a widened standard tier from an extended one.
 	 */
-	#claimModifierRow(row: ModifierRow, sourcesByKey: ReadonlyMap<string, Model<Api>>): Model<Api> {
-		const origin = row[MODIFIER_SOURCE];
-		if (origin !== undefined) delete row[MODIFIER_SOURCE];
+	#claimModifierRow(
+		row: ModifierRow,
+		sourcesByKey: ReadonlyMap<string, Model<Api>>,
+		snapshot: readonly Model<Api>[],
+	): Model<Api> {
+		const sourceIndex = row[MODIFIER_SOURCE];
+		const origin = sourceIndex === undefined ? undefined : snapshot[sourceIndex];
+		if (sourceIndex !== undefined) delete row[MODIFIER_SOURCE];
 		if (this.#standardWindows.has(row)) return row;
 		const source =
 			sourcesByKey.get(contextWindowKey(row)) ?? (origin?.contextWindow === row.contextWindow ? origin : undefined);
@@ -1264,7 +1295,11 @@ export class ModelRegistry {
 	}
 
 	/** Applies custom overlays and every override projection to a `#baseModels` stage. */
-	#projectBaseModels(baseModels: Model<Api>[], providerFilter?: ReadonlySet<string>): Model<Api>[] {
+	#projectBaseModels(
+		baseModels: Model<Api>[],
+		providerFilter?: ReadonlySet<string>,
+		config: ModelFactConfig = this.getModelFactConfig(),
+	): Model<Api>[] {
 		const withConfigModels = this.#mergeCustomModels(
 			baseModels,
 			selectProviderModels(this.#customModelOverlays, providerFilter),
@@ -1275,13 +1310,19 @@ export class ModelRegistry {
 		);
 		const withModelOverrides = this.#applyModelOverrides(collapseBuiltVariants(combined), this.#modelOverrides);
 		const withProviderBedrock = this.#applyProviderBedrockOverrides(withModelOverrides);
-		return this.#applyDiscoveryPolicies(this.#applyRuntimeProviderOverrides(withProviderBedrock));
+		const projected = this.#applyDiscoveryPolicies(this.#applyRuntimeProviderOverrides(withProviderBedrock));
+		if (!config.enabled) return projected;
+		const resolutions = this.#resolveModelFacts(projected, config);
+		for (const result of resolutions) {
+			this.#modelFactResolutions.set(`${result.model.provider}/${result.model.id}`, result);
+		}
+		return resolutions.map(result => result.model);
 	}
 
 	#composeStaticModels(providerFilter?: ReadonlySet<string>): Model<Api>[] {
-		// A modifier is a whole-catalog transform. Build and project the full catalog
-		// before narrowing a lazy lookup, matching getAll() followed by filtering.
-		const projectFullCatalog = providerFilter !== undefined && this.#runtimeModelModifiers.size > 0;
+		// Modifiers and fact references can depend on another provider's rows.
+		const projectFullCatalog =
+			providerFilter !== undefined && (this.#runtimeModelModifiers.size > 0 || this.getModelFactConfig().enabled);
 		const compositionFilter = projectFullCatalog ? undefined : providerFilter;
 		const unprojected = this.#projectBaseModels(this.#composeBaseModels(compositionFilter), compositionFilter);
 		const projected = this.#finalizeModels(this.#applyRuntimeModelModifiers(unprojected));
@@ -1300,6 +1341,137 @@ export class ModelRegistry {
 			this.#providerLookupSnapshots.clear();
 		}
 		return this.#models;
+	}
+
+	getModelFactConfig(): ModelFactConfig {
+		let scope = this.#settings;
+		if (!scope) {
+			try {
+				scope = Settings.instance;
+			} catch {
+				return DEFAULT_MODEL_FACT_CONFIG;
+			}
+		}
+		return readModelFactConfig(scope);
+	}
+
+	/** Current resolved values and per-field provenance, also used by the editor's unsaved preview. */
+	getModelFactResolution(provider: string, id: string, draft?: ModelFactConfig): ModelFactResolution | undefined {
+		this.#ensureFullSnapshot();
+		if (!draft) {
+			const config = this.getModelFactConfig();
+			const model = this.#models.find(entry => entry.provider === provider && entry.id === id);
+			if (!model) return undefined;
+			return config.enabled
+				? this.#modelFactResolutions.get(`${provider}/${id}`)
+				: this.#resolveModelFacts([model], config)[0];
+		}
+		const input = this.#projectBaseModels(this.#baseModels, undefined, { ...draft, enabled: false });
+		return this.#resolveModelFacts(input, draft).find(
+			result => result.model.provider === provider && result.model.id === id,
+		);
+	}
+
+	async previewModelFacts(
+		provider: string,
+		id: string,
+		draft: ModelFactConfig,
+	): Promise<ModelFactResolution | undefined> {
+		this.#ensureFullSnapshot();
+		if (draft.enabled) await this.#loadModelFactReferences(draft, "online-if-uncached");
+		const sources = draft.enabled ? await this.#loadModelFactSources(draft.sources, "online-if-uncached") : [];
+		const input = this.#projectBaseModels(this.#baseModels, undefined, { ...draft, enabled: false });
+		return this.#resolveModelFacts(input, draft, sources).find(
+			result => result.model.provider === provider && result.model.id === id,
+		);
+	}
+
+	#resolveModelFacts(
+		models: Model<Api>[],
+		config: ModelFactConfig,
+		sources: readonly ModelFactSourceSnapshot[] = this.#modelFactSources,
+	): ModelFactResolution[] {
+		return applyModelFacts(models, sources, config, {
+			referenceModels: this.#baseModels,
+			createModel: (provider, id) => {
+				const template = models.find(model => model.provider === provider);
+				const discovery = this.#discoverableProviders.find(entry => entry.provider === provider);
+				const api = template?.api ?? discovery?.api;
+				const baseUrl = template?.baseUrl ?? discovery?.baseUrl;
+				if (!api || !baseUrl) return undefined;
+				const seed = buildModel({
+					id,
+					name: id,
+					provider,
+					api,
+					baseUrl,
+					reasoning: false,
+					input: ["text"],
+					discoveryMissingInput: true,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: null,
+					maxTokens: null,
+					headers: template?.headers,
+					resolveHeaders: template?.resolveHeaders,
+					transport: template?.transport,
+				});
+				if (template) return seed;
+				const projected = mergeDiscoveredModel(seed, undefined, this.#providerOverrides.get(provider));
+				const runtime = this.#runtimeProviderOverrides.get(provider);
+				return runtime ? this.#applyProviderTransportOverrideToModel(projected, runtime) : projected;
+			},
+		});
+	}
+
+	async #refreshModelFacts(strategy: ModelRefreshStrategy): Promise<void> {
+		const config = this.getModelFactConfig();
+		if (!config.enabled) return;
+		this.#ensureFullSnapshot();
+		await this.#loadModelFactReferences(config, strategy);
+		this.#modelFactSources = await this.#loadModelFactSources(config.sources, strategy);
+		this.#modelFactResolutions.clear();
+		this.#internedStaticModels.clear();
+		this.#providerLookupSnapshots.clear();
+		this.#unprojectedModels = this.#projectBaseModels(this.#baseModels);
+		this.#models = this.#finalizeModels(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
+	}
+
+	#loadModelFactSources(
+		sources: readonly string[],
+		strategy: ModelRefreshStrategy,
+	): Promise<ModelFactSourceSnapshot[]> {
+		return loadModelFactSources(
+			sources,
+			strategy,
+			{
+				fetch: this.#fetch,
+				cacheDbPath: this.#cacheDbPath,
+				providerModels: async (provider, sourceStrategy) => {
+					await this.#refreshRuntimeDiscoveries(sourceStrategy, new Set([provider]));
+					const state = this.#providerDiscoveryStates.get(provider);
+					if (
+						sourceStrategy !== "offline" &&
+						state?.stale &&
+						(state.status === "cached" || state.status === "unavailable")
+					)
+						return [];
+					return this.#baseModels.filter(model => model.provider === provider);
+				},
+			},
+			this.#modelFactSources,
+		);
+	}
+
+	async #loadModelFactReferences(config: ModelFactConfig, strategy: ModelRefreshStrategy): Promise<void> {
+		const providers = new Set<string>();
+		for (const override of Object.values(config.overrides)) {
+			for (const value of Object.values(override)) {
+				if (!value || typeof value !== "object" || !("from" in value)) continue;
+				const provider = value.from.slice(0, value.from.indexOf("/"));
+				if (!config.sources.includes(provider)) providers.add(provider);
+			}
+		}
+		if (providers.size > 0) await this.#refreshRuntimeDiscoveries(strategy, providers);
 	}
 
 	/** Load built-in models, applying provider-level overrides only.
@@ -1630,9 +1802,11 @@ export class ModelRegistry {
 
 	#applyProviderCompat(compat: ModelSpec<Api>["compat"] | undefined, models: Model<Api>[]): Model<Api>[] {
 		if (!compat) return models;
-		return models.map(model =>
-			buildModel({ ...model, compat: mergeCompat(model.compatConfig, compat) } as ModelSpec<Api>),
-		);
+		return models.map(model => {
+			const spec = { ...model, compat: mergeCompat(model.compatConfig, compat) };
+			if ("supportsReasoningEffort" in compat) delete spec.discoveryMissingReasoningEffort;
+			return buildModel(spec as ModelSpec<Api>);
+		});
 	}
 
 	#normalizeDiscoverableModels(providerConfig: DiscoveryProviderConfig, models: Model<Api>[]): Model<Api>[] {
@@ -2057,9 +2231,11 @@ export class ModelRegistry {
 			// `injectV1: false` additionally splits off its own namespace: rows
 			// cached from the `/v1`-injected URL can hold a different (smaller)
 			// model set and must never satisfy a bare provider's cache read.
+			// Fact metadata stays opt-in. v2 restores conservative effort defaults in cached rows.
+			const facts = this.getModelFactConfig().enabled ? ":facts-v2" : "";
 			return providerConfig.discovery.injectV1 === false
-				? `${providerConfig.provider}:openai-models-list-bare-context-v3`
-				: `${providerConfig.provider}:openai-models-list-context-v3`;
+				? `${providerConfig.provider}:openai-models-list-bare-context-v3${facts}`
+				: `${providerConfig.provider}:openai-models-list-context-v3${facts}`;
 		}
 		if (providerConfig.discovery.type === "litellm") {
 			// rich-v5 invalidates rows written before discovery filtered known
@@ -2188,6 +2364,7 @@ export class ModelRegistry {
 	#discoveryContext(): DiscoveryContext {
 		return {
 			fetch: this.#fetch,
+			modelFactsEnabled: this.getModelFactConfig().enabled,
 			getBearerApiKeyResolver: async provider => {
 				const apiKey = await this.getApiKeyForProvider(provider);
 				if (!isDiscoveryBearerApiKey(apiKey)) {
@@ -2521,7 +2698,14 @@ export class ModelRegistry {
 				!configuredDiscoveryProviders.has(managerOpts.providerId) &&
 				(!providerFilter || providerFilter.has(managerOpts.providerId))
 			) {
-				options.push(managerOpts);
+				options.push(
+					this.getModelFactConfig().enabled
+						? {
+								...managerOpts,
+								cacheProviderId: `${managerOpts.cacheProviderId ?? managerOpts.providerId}:facts-v1`,
+							}
+						: managerOpts,
+				);
 			}
 		}
 		return options;

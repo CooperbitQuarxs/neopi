@@ -15,7 +15,7 @@ import {
 import * as path from "node:path";
 import { formatBytes, getProjectDir } from "@oh-my-pi/pi-utils";
 import type { TspPickerGroup, TspPickerItem, TspSpan, TspText, TspTone } from "@oh-my-pi/pi-wire";
-import { compact, kv, md, node, span } from "../native/describe";
+import { compact, kv, md, node, span, text } from "../native/describe";
 import {
 	picker,
 	pickerAction,
@@ -28,6 +28,7 @@ import {
 import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { plainText } from "../native/spans";
+import { compileMenuRegex } from "../menu-search";
 import { theme } from "../theme/theme";
 import { contentRowWidth, renderScrollableList } from "../chrome/selector-helpers";
 import { matchesAppInterrupt } from "../keybinding-matchers";
@@ -298,9 +299,11 @@ function sessionSearchText(session: SessionSelectorEntry): string {
  * {@link scoreFuzzySession} callers).
  */
 const kSearchTextLower = Symbol("session.searchTextLower");
+const kSearchTextRaw = Symbol("session.searchTextRaw");
 
 interface SearchableSessionInfo extends SessionSelectorEntry {
 	[kSearchTextLower]?: string;
+	[kSearchTextRaw]?: string;
 }
 
 function sessionTextLower(session: SessionSelectorEntry): string {
@@ -311,6 +314,11 @@ function sessionTextLower(session: SessionSelectorEntry): string {
 		tagged[kSearchTextLower] = textLower;
 	}
 	return textLower;
+}
+
+function sessionTextRaw(session: SessionSelectorEntry): string {
+	const tagged = session as SearchableSessionInfo;
+	return tagged[kSearchTextRaw] ??= sessionSearchText(session);
 }
 
 function tokenizeSessionQuery(query: string): string[] {
@@ -411,6 +419,8 @@ function prioritizeTitleMatches<T extends SessionSelectorEntry>(
  * the same primitives incrementally so huge listings never block a keystroke.
  */
 export function rankSessionSearchMatches<T extends SessionSelectorEntry>(allSessions: T[], query: string): T[] {
+	const regex = compileMenuRegex(query);
+	if (regex) return regex.regex ? allSessions.filter(session => regex.regex!.test(sessionTextRaw(session))) : [];
 	const tokens = tokenizeSessionQuery(query);
 	if (tokens.length === 0) return allSessions;
 
@@ -621,13 +631,6 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		this.#selectCurrentSession();
 		this.#searchInput = this.#search.input;
 
-		// Handle Enter in search input - select current item
-		this.#searchInput.onSubmit = () => {
-			const selected = this.#menu.selectedItem;
-			if (selected) {
-				this.onSelect?.(selected);
-			}
-		};
 	}
 
 	get filterFocused(): boolean {
@@ -654,7 +657,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		this.dispose();
 		this.#search.restoreNavigation(state.search);
 		this.#restoredSelected = typeof state.selected === "string" ? state.selected : undefined;
-		this.#filterSessions(this.#search.value);
+		this.#filterSessions(this.#search.query);
 		if (Array.isArray(state.order)) {
 			const byPath = new Map(this.#allSessions.map(session => [session.path, session]));
 			const ordered: T[] = [];
@@ -672,8 +675,11 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	}
 
 	escape(): void {
-		if (this.#search.focused) this.#search.focused = false;
-		else this.onCancel?.();
+		if (this.#search.focused || this.#search.value) {
+			this.#search.setValue("");
+			this.#search.focused = false;
+			this.#filterSessions("");
+		} else this.onCancel?.();
 		this.#keys.reset();
 	}
 
@@ -711,7 +717,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		this.#showCwd = showCwd;
 		if (pinnedIds !== undefined) this.#pinnedIds = pinnedIds;
 		this.#menu.setSelectedIndex(0);
-		this.#filterSessions(this.#searchInput.getValue());
+		this.#filterSessions(this.#search.query);
 		this.#selectCurrentSession();
 	}
 
@@ -728,6 +734,18 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		this.#literalRanked = [];
 		this.#fuzzyRanked = [];
 
+		const regex = compileMenuRegex(query);
+		if (regex) {
+			const queryChanged = query !== this.#lastFilterQuery;
+			this.#hadFilterQuery = true;
+			this.#lastFilterQuery = query;
+			this.#fuzzyRanked = rankSessionSearchMatches(this.#allSessions, query)
+				.map((session, index) => ({ session, score: 0, index }));
+			this.#composeFiltered();
+			if (queryChanged) this.#menu.setSelectedIndex(0);
+			this.#scheduleHistoryMerge(query);
+			return;
+		}
 		const tokens = tokenizeSessionQuery(query);
 		const hadQuery = this.#hadFilterQuery;
 		const queryChanged = query !== this.#lastFilterQuery;
@@ -820,7 +838,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		for (const match of this.#fuzzyRanked) base.push(match.session);
 		const composed = prioritizeTitleMatches(
 			this.#historyIds.length > 0 ? mergeSessionRanking(this.#allSessions, base, this.#historyIds) : base,
-			tokenizeSessionQuery(this.#searchInput.getValue()),
+			tokenizeSessionQuery(this.#search.query),
 			this.#literalRanked,
 		);
 		// The fuzzy scan and the history merge only clamp the cursor so an arrow
@@ -844,12 +862,12 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		}
 		const matcher = this.#historyMatcher;
 		const trimmed = query.trim();
-		if (!matcher || trimmed.length < HISTORY_MERGE_MIN_QUERY) return;
+		if (!matcher || trimmed.length < HISTORY_MERGE_MIN_QUERY || compileMenuRegex(query)?.error) return;
 		this.#historyMergeTimer = setTimeout(() => {
 			this.#historyMergeTimer = undefined;
-			if (this.#searchInput.getValue() !== query) return;
+			if (this.#search.query !== query) return;
 			if (this.#selectionMoved) return;
-			const historyIds = matcher(trimmed);
+			const historyIds = matcher(compileMenuRegex(query) ? query : trimmed);
 			if (historyIds.length === 0) return;
 			this.#historyIds = historyIds;
 			this.#composeFiltered();
@@ -859,6 +877,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 
 	/** Cancel pending async search work; idempotent, called on every picker exit path. */
 	dispose(): void {
+		this.#search.focused = false;
 		this.#scanGeneration++;
 		if (this.#scanTimer !== undefined) {
 			clearTimeout(this.#scanTimer);
@@ -877,7 +896,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		this.#datasetVersion++;
 		this.#allSessions.splice(index, 1);
 		// Re-filter to update the composed result set
-		this.#filterSessions(this.#searchInput.getValue());
+		this.#filterSessions(this.#search.query);
 		// Adjust selection if we deleted the last item or beyond
 		if (this.#menu.selectedIndex >= this.#menu.visibleItems.length) {
 			this.#menu.setSelectedIndex(Math.max(0, this.#menu.visibleItems.length - 1));
@@ -940,7 +959,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	/** Empty the search query (the empty state's "Clear search"). */
 	clearSearch(): void {
 		this.#restoredSelected = undefined;
-		this.#searchInput.setValue("");
+		this.#search.setValue("");
 		this.#filterSessions("");
 	}
 
@@ -981,7 +1000,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			return view;
 		}
 		const visible = this.#menu.visibleItems;
-		const tokens = tokenizeSessionQuery(query);
+		const tokens = tokenizeSessionQuery(this.#search.query);
 		const order: (string | TspPickerGroup)[] = [];
 		let hits: Record<string, (readonly [number, number])[]> | undefined;
 		if (tokens.length === 0) {
@@ -1004,7 +1023,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			for (const session of visible) {
 				order.push(session.path);
 				const label = catalogue.byPath.get(session.path)?.label;
-				if (typeof label !== "string") continue;
+				if (typeof label !== "string" || compileMenuRegex(this.#search.query)) continue;
 				const ranges = pickerHits(label, tokens);
 				if (ranges.length > 0) (hits ??= {})[session.path] = ranges;
 			}
@@ -1084,7 +1103,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 
 	/** Paths of the visible sessions the prompt-history merge surfaced for the current query. */
 	#historyFlagged(): string {
-		if (this.#historyIds.length === 0 || tokenizeSessionQuery(this.#searchInput.getValue()).length === 0) return "";
+		if (this.#historyIds.length === 0 || tokenizeSessionQuery(this.#search.query).length === 0) return "";
 		const ids = new Set(this.#historyIds);
 		const paths: string[] = [];
 		for (const session of this.#menu.visibleItems) if (ids.has(session.id)) paths.push(session.path);
@@ -1145,7 +1164,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			this.#itemsNative = items;
 		}
 		const selected = this.#menu.selectedKey;
-		const query = this.#searchInput.getValue();
+		const query = this.#search.query;
 		const memo = this.#listNative;
 		if (
 			memo?.items === items.items &&
@@ -1364,20 +1383,20 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			sinceLastErase = now - this.#lastEraseKeyAt;
 			this.#lastEraseKeyAt = now;
 		}
-		const before = this.#search.value;
+		const before = this.#search.query;
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
 			this.#keys.reset();
-			if (this.#search.value !== before) {
+			if (this.#search.query !== before) {
 				this.#restoredSelected = undefined;
-				this.#filterSessions(this.#search.value);
+				this.#filterSessions(this.#search.query);
 			}
 			return;
 		}
 		if (isErase) {
 			// A focused query always owns erasing. Only a fresh Delete in the
 			// list with an empty query may request the destructive confirmation.
-			if (isDelete && !this.#search.value && sinceLastErase >= SESSION_DELETE_REARM_MS) this.requestDelete();
+			if (isDelete && !this.#search.query && sinceLastErase >= SESSION_DELETE_REARM_MS) this.requestDelete();
 			return;
 		}
 		if (matchesKey(data, "ctrl+c")) {
@@ -1882,7 +1901,12 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		if (this.#confirmationDialog) {
 			children.push(this.#confirmationDialog);
 		} else {
-			children.push(this.#sessionList.searchInput, list);
+			const queryError = compileMenuRegex(this.#sessionList.searchInput.getValue())?.error;
+			children.push(
+				this.#sessionList.searchInput,
+				...(queryError ? [text([span(queryError, "error")])] : []),
+				list,
+			);
 		}
 		const hints: (NativeHint | undefined)[] = [
 			{ keys: ["delete"], label: "delete (list)" },
@@ -1963,6 +1987,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		const result = picker(
 			{
 				...(title ? { title, ...(folder ? { subtitle: folder } : {}) } : {}),
+				subtitle: compileMenuRegex(view.query)?.error ?? (title ? folder : undefined),
 				icon: "history",
 				noun: "sessions",
 				size: this.#standalone ? "screen" : "lg",

@@ -9,6 +9,75 @@
 
 ### Added
 
+- RPC clients can edit role fallbacks and descriptions, delete custom role definitions, and explicitly save project assignments without changing the global storage preference ([#595](https://github.com/PsychedelicShayna/neopi/issues/595)).
+- RPC clients can inspect native login-method and device-code metadata, read model descriptions, and activate a stored OAuth account for one session without exposing credentials ([#595](https://github.com/PsychedelicShayna/neopi/issues/595), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
+- RPC clients can detect connection-owned host-tool registration through the `connection_owned_host_tools` capability before registering tools ([#593](https://github.com/PsychedelicShayna/neopi/issues/593)).
+- Reconnecting RPC observers can reconcile streamed messages with durable journal entries even when they missed the persistence notification ([#587](https://github.com/PsychedelicShayna/neopi/issues/587)).
+- Attached graphical clients can observe native journal commits, tree-leaf and session changes without polling, immediately recover an in-flight reply on reconnect, and match streamed replies to durable journal IDs ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
+- Preview any installed native theme's full palette over RPC or terminal control without changing your active theme or saved preferences ([#526](https://github.com/PsychedelicShayna/neopi/issues/526)).
+- Use `/sounds on|off|reload|status` for session-local, owner-assigned event sounds. Real session, tool/edit, shell/eval, subagent, IRC and background-job events drive bounded native playback; unmapped events stay silent and speech/capture takes priority.
+- Tune wake request speech sensitivity independently of the silence timeout in Settings → Interaction → Speech. Low, Normal, and High presets control whether quieter speech keeps a request open; Normal preserves existing detection, and wake-word detection and manual dictation are unchanged ([#571](https://github.com/PsychedelicShayna/neopi/pull/571), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
+- Hear configurable continuation and end sounds when a wake-word request finishes recording and when its transcription returns, in addition to the activation chirp ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
+
+- Turn off `stt.wake.suppressWhileSpeaking` to interrupt spoken replies by saying "computer" with headphones or echo cancellation. Speaker-safe suppression stays on by default ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
+- Choose 14 additional live voices, including Aube and Viola. The default remains Sol.
+- Use `/voice on` for session-local wake-word requests and spoken replies, optionally rewritten before speech; `/voice off` restores saved speech preferences ([#554](https://github.com/PsychedelicShayna/neopi/issues/554)).
+- Say "computer" to start optional local wake-word dictation, hear a configurable chirp, and submit the complete request after silence or an end word. Wake listening is off by default ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
+- Choose `local/kokoro-paced` for local speech with measured synthesis pacing, configurable phrase boundaries, and idle time between segments; local `tts` file generation now segments long input too ([#552](https://github.com/PsychedelicShayna/neopi/issues/552)).
+- RPC clients can discover native themes, read resolved colors and change dark or light selections in user or project scope without replacing the other scope. Theme setting changes emit an invalidation event for connected clients ([#526](https://github.com/PsychedelicShayna/neopi/issues/526)).
+- RPC and control session snapshots report recorded journal-wide spend, advisor restoration state, cache counters and effective approval policy for graphical session status ([NeoCode #141](https://github.com/PsychedelicShayna/neocode/issues/141)).
+- Query native `/switch` matches and measured model facts over RPC or terminal control without changing the selected model ([NeoCode #138](https://github.com/PsychedelicShayna/neocode/issues/138)).
+- Manage native model roles and effort rules from RPC clients with scoped conflict detection, provider catalog discovery and cancellable account login ([#507](https://github.com/PsychedelicShayna/neopi/issues/507)).
+- Hosts can launch a private stats dashboard with `npi stats --headless`, receive JSON readiness, and stop it by closing stdin without opening a browser ([#520](https://github.com/PsychedelicShayna/neopi/issues/520)).
+- Navigate the native session tree over RPC or terminal control without forking its file; receive restored drafts, images and native summary/ask outcomes with guarded branch preconditions ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
+- Inspect, add, edit and delete model overrides and custom models in `/models`, with schema-driven field editors and unknown-field preservation ([#522](https://github.com/PsychedelicShayna/neopi/issues/522)).
+
+- Convert complete user and project main settings to `config.toml` with `npi config to-toml`, preserving unknown keys and explicit clears while reporting unsupported YAML values ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
+- Settings saves now update an existing global or project TOML file, preserve unrelated comments, and reject stale edits; YAML-only settings keep their existing save behavior ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
+- Open the backing file from `/settings`, `/advisor configure`, `/agents`, and `/models` with Ctrl-G, then see saved edits without restarting ([#521](https://github.com/PsychedelicShayna/neopi/issues/521)).
+- Read complete native journal or selected-branch history in bounded RPC/control pages or with `npi sessions entries --json`, preserving tool output, compaction, reset and custom records ([NeoCode #134](https://github.com/PsychedelicShayna/neocode/issues/134)).
+- Set model context limits with exact, glob, or regex rules in `/models`, and see the effective maintenance window separately from catalog capacity ([#511](https://github.com/PsychedelicShayna/neopi/issues/511)).
+
+- Choose a separate `title` model for session titles and `/rename` suggestions; until set it follows `tiny`, and explicit fork-mode titling still uses the foreground model ([#515](https://github.com/PsychedelicShayna/neopi/issues/515)).
+- Configure Chronicler capture thresholds, prompt word targets, recall search limits, indexing budgets, and on-demand backfill timing in Settings > Memory > Chronicler ([#510](https://github.com/PsychedelicShayna/neopi/issues/510)).
+- Assign Chronicler recall its own `chronicler-recall` model, shown as CHRONREC; until set, it follows the summary model and effort ([#509](https://github.com/PsychedelicShayna/neopi/issues/509)).
+- Every model role is visible in `/models`, with editable descriptions on `D` and dedicated agent-creation and compaction roles; RPC clients receive the descriptions too ([#508](https://github.com/PsychedelicShayna/neopi/issues/508)).
+- RPC model lists and session snapshots now report native Fast mode support separately from the requested and active session toggles ([NeoCode #129](https://github.com/PsychedelicShayna/neocode/issues/129)).
+- Linux source builds reuse verified native addons across worktrees through a shared cache; set `NPI_NATIVE_CACHE=off` to disable it.
+- Change a running subagent's reasoning level and fast mode through RPC, `npi ctl`, or its focused Agent Hub view without interrupting its turn; selections survive restart, and agent listings show current model and effort ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
+- Choose the model for the next live call with `live.model` in Settings or `/live model <slug>`; `/live model` shows the configured slug and the default remains `gpt-live-1-codex`.
+- Launch named workers and advisors yourself with `/agent launch`, choose the model, supported effort, tools and orchestration, and confirm the resolved model and cost warning before spawning ([#13](https://github.com/PsychedelicShayna/neopi/issues/13)).
+- Opus 5 now receives an inspectable model-family adapter with scope discipline and effort guidance; customize or disable it independently through `npi prompts` ([#23](https://github.com/PsychedelicShayna/neopi/issues/23)).
+- Inspect, unpack, override and reset embedded prompt templates with `npi prompts`, browse the interpolation lexicon, and validate overrides with file-and-line diagnostics ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
+- Generate live personas with a chosen model and explicitly selected default, persona, or prompt-template references, then edit the result before saving ([#219](https://github.com/PsychedelicShayna/neopi/issues/219)).
+- Live calls can silently load recent primary transcript history with a per-persona toggle and token budget in `/persona live` ([#205](https://github.com/PsychedelicShayna/neopi/issues/205)).
+- Named profiles can preload selected persistent memory files before the first turn through `launch-memory.json`; inspect the loaded snapshot with `/launch-profile` ([#65](https://github.com/PsychedelicShayna/neopi/issues/65)).
+- Agents can read `model://` for live model facts, supported reasoning levels, effort policy and provenance, role Auto choices and fallbacks, with observed active effort kept separate from pending Auto ([#150](https://github.com/PsychedelicShayna/neopi/issues/150)).
+- Fill missing model facts from an optional ordered source chain, pin or borrow individual fields, and add unlisted models with a provenance preview through F6 in `/models`; invalid saved fields show warnings without blocking startup, and unresolved facts preserve discovery's conservative request defaults ([#70](https://github.com/PsychedelicShayna/neopi/issues/70)).
+- `/model` opens the rich provider-sidebar picker on recently used models and switches only the current session; `/models` retains role management and `/switch` and Alt+P keep the compact picker ([#55](https://github.com/PsychedelicShayna/neopi/issues/55)).
+- Create and rename regex or provider-prefix fallback chains directly in the model hub, including regex keys without a slash ([#248](https://github.com/PsychedelicShayna/neopi/issues/248)).
+- Disable an entire advisor file without deleting its entries; the saved file switch survives restart and applies to the live roster ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
+- Bind each role to its own advisor activation set, keep advisor references stable across renames, and show activation precedence in advisor status ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
+- Added optional global and project `settings.toml` overlays with whole-key precedence over YAML, plus `npi config dump-toml` for documented defaults ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
+- Opt-in agent context telemetry now reports checkpoint availability and estimated recent-turn footprint, with pressure-based guidance that respects configured compaction boundaries ([#21](https://github.com/PsychedelicShayna/neopi/issues/21)).
+- Inspect, propose, set, and reset session compaction policy with `/compact control` or `compaction://`, with explicit project/user persistence and propose-only agent access by default ([#28](https://github.com/PsychedelicShayna/neopi/issues/28)).
+- Give each model role its own persistent token budget and type arbitrary global or role token limits in settings while keeping preset quick picks ([#52](https://github.com/PsychedelicShayna/neopi/issues/52)).
+- Inspect and repair the running session's environment through `env://`, including editor preferences, empty values and explicit unsetting, without changing other sessions or unattended editor policy ([#235](https://github.com/PsychedelicShayna/neopi/issues/235)).
+- Added opt-in session work contracts with `/contract`, policy-gated agent edits, durable provenance, explicit rule promotion, and intact reinjection after compaction or resume ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
+- Set per-role sampling, response verbosity, thinking-summary and service-tier overrides without changing global defaults; omitted values inherit and numeric `-1` explicitly requests the provider default ([#53](https://github.com/PsychedelicShayna/neopi/issues/53)).
+- Configure independent prewalk planning and execution crews with ordered fallbacks in settings, see both resolved models before launch, and retain the execution brief across the handoff ([#30](https://github.com/PsychedelicShayna/neopi/issues/30)).
+- Invoke enabled tools directly with `/tool:<name> {"field":"value"}` or `field=value`, with schema field completion, argument hints, ordinary approval prompts and result cards, and Esc cancellation. A name alone still opens docs; use `{}` for a zero-argument call. `/force` still only hints the next model turn ([#14](https://github.com/PsychedelicShayna/neopi/issues/14)).
+- Inspect enabled tools with `/tool:` and `/tool:<name>`, with slash completion and the same live docs and schemas as `tool://`, without invoking them ([#15](https://github.com/PsychedelicShayna/neopi/issues/15)).
+- Choose the centered NPI startup banner or the original boxed NeoPi/Pi-tower banner with Startup Branding in Settings > Appearance; new remains the default.
+- Browse every enabled session tool with `tool://` and read its schema, examples, and restrictions at `tool://<name>` without invoking it ([#15](https://github.com/PsychedelicShayna/neopi/issues/15)).
+- Added opt-in provider quota and context-pressure notice cards with configurable thresholds, cache age, reset times, and separately gated agent delivery ([#27](https://github.com/PsychedelicShayna/neopi/issues/27)).
+- Ask answers can carry several notes on any option, selected or not, alongside the existing answer note ([#321](https://github.com/PsychedelicShayna/neopi/issues/321)).
+- Search `/settings`, `/models`, agent hubs, and selectors with fuzzy text or Vim very-magic regex (`//` / `re:`; `\m` for default-magic); Enter keeps the pattern for navigation and Escape clears it ([#416](https://github.com/PsychedelicShayna/neopi/issues/416)).
+- Added configurable direct-address (`Iris`) and per-utterance force (`relay`) live keywords: leading addresses refuse primary handoffs, mentions elsewhere remain delegable, and forced utterances send the exact operator text once; editing the composer determines the final handoff even when speech originally addressed Iris ([#40](https://github.com/PsychedelicShayna/neopi/issues/40)).
+- Added Live Hold Mode and a configurable quiet floor in settings: keep speech in the composer until a trailing submit phrase releases it for Iris to answer or delegate, and reserve breathing room before voice responses or delegation ([#269](https://github.com/PsychedelicShayna/neopi/issues/269)).
+- Added persistent named routing policies with per-slot model, explicit effort, specialist and role boundary; task and Eval spawns can reference declared slots with a resolved routing preview ([#8](https://github.com/PsychedelicShayna/neopi/issues/8)).
+- GitHub now publishes platform binaries for every stable and nightly push, with manual stable builds available from Actions → CI → Run workflow.
+- Added NeoDeck's `deck-*` role namespace and configurable `deck-inbox` role in the model picker and RPC catalog, defaulting to GPT-6 Luna ([#277](https://github.com/PsychedelicShayna/neopi/issues/277)).
 - Proof sessions can hold destination-specific install locks for up to 60 minutes; installs report active or expired holds and support an explicit force override.
 - Added opt-in agent-visible runtime telemetry, compaction-headroom notices, independent tool-result summaries, and local `runtime.inspect()` in both Eval kernels ([#18](https://github.com/PsychedelicShayna/neopi/issues/18)).
 - Added `/issue <prose>`: a background agent on the new `issues` model role files your words as an issue in the right project's tracker, following that repository's own rules and existing labels, asks in the Agent Hub when the target or scope is unclear, and reports the filed URL, submitted body, and applied labels without interrupting the conversation ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)).
@@ -19,6 +88,7 @@
 - Added `terminal.imageProtocol` in `/settings` and `cfg://` to switch between automatic detection, Kitty, Sixel, iTerm2, or no terminal images without restarting ([#302](https://github.com/PsychedelicShayna/neopi/issues/302)).
 - Added `/notice <text>` to send a literal, operator-authored system notice as a developer message, including editable pending notices that return to the composer when interrupted ([#221](https://github.com/PsychedelicShayna/neopi/issues/221)).
 - Added `/monitor` and `npi monitor attach`: a separate tmux session with one live pane per subagent and advisor that shows unsaved output as it streams; you can message subagents from their panes, and advisor panes are view only ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
+- Added `/monitor configure` and Agent monitor settings for row/column limits, fill order, alternating growth, direction, and dynamic or fixed cell sizes; the default is two rows with infinite columns, and windows overflow only at configured finite limits ([#432](https://github.com/PsychedelicShayna/neopi/issues/432)).
 - The side panel shows one of three views chosen by chord: `Alt+T` `t` Todo, `Alt+T` `a` Agents (click a subagent to view its transcript, click again to return), `Alt+T` `i` IRC; repeating the shown view's chord hides the panel, right-click in the panel cycles views, and the docked view replaces its duplicate todo or pinned-subagents list above the editor ([#342](https://github.com/PsychedelicShayna/neopi/issues/342)).
 - Added `/statusline` to arrange builtin and provider-usage widgets and choose a composer with live previews, plus a flexible `context_bar` widget for every composer ([#227](https://github.com/PsychedelicShayna/neopi/issues/227), [#226](https://github.com/PsychedelicShayna/neopi/issues/226)).
 - Added menu history: `Ctrl+O` returns to the previously visited menu with its state (or the conversation) and `Ctrl+I`/`Alt+O` goes forward; opening a menu from an older position keeps the newer entries ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
@@ -46,6 +116,58 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Attached clients can contribute and replace their own host tools without removing the terminal owner's or another client's tools; conflicting names are rejected without changing either registration ([#591](https://github.com/PsychedelicShayna/neopi/issues/591)).
+- Reopened native sessions no longer reuse live message IDs that could misassociate cached pre-restart output with a different durable entry ([#589](https://github.com/PsychedelicShayna/neopi/issues/589)).
+- Prompt unpacking and validation include live submitted-message routing, environment/model lookup guidance, and current subagent model, effort and fast-mode fields ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
+
+- Unmodified prompt unpacks now check clean, including MOA envelope partials and canned live identity ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
+- Hear a distinct cancellation chirp when a wake activation times out without a spoken request ([#575](https://github.com/PsychedelicShayna/neopi/issues/575)).
+- Wake-word interruption now rearms during `/voice` replies, cancels stale speech and rewrites, and keeps interrupted streaming speech silent until the next turn ([#553](https://github.com/PsychedelicShayna/neopi/issues/553)).
+- Session catalogs report complete message counts instead of zero or a partial count when headers or early messages exceed the listing preview ([#555](https://github.com/PsychedelicShayna/neopi/issues/555)).
+- Extension package discovery now honors user and project main-settings TOML overrides and explicit clears ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
+- Invalid effort and context rules block only matching models; unknown saved effort names are dropped without lifting limits or preventing unrelated task spawns ([#539](https://github.com/PsychedelicShayna/neopi/issues/539)).
+- CI checks no longer depend on workstation-only test paths or outdated fixtures; fork releases retain Linux, macOS and Windows smoke checks without upstream package publishers ([#536](https://github.com/PsychedelicShayna/neopi/issues/536)).
+- Nightly Rust formatting checks pass for native live-audio controls ([#541](https://github.com/PsychedelicShayna/neopi/issues/541)).
+- CI formatting checks pass for native RPC model configuration, telemetry, themes and hosted stats sources ([#543](https://github.com/PsychedelicShayna/neopi/issues/543), [#548](https://github.com/PsychedelicShayna/neopi/issues/548)).
+- CI login coverage follows native secret OAuth prompts and verifies that logging out one account leaves other accounts authenticated ([#545](https://github.com/PsychedelicShayna/neopi/issues/545)).
+- Skill-list CI checks no longer reuse settings from an earlier test ([#349](https://github.com/PsychedelicShayna/neopi/issues/349)).
+- Service-completion CI checks wait for actual delivery before asserting session ownership and acknowledgment ([#300](https://github.com/PsychedelicShayna/neopi/issues/300)).
+- Browser socket CI checks no longer inherit a cmux mock from another test; authenticated socket coverage runs in CI again ([#370](https://github.com/PsychedelicShayna/neopi/issues/370)).
+- Ctrl-G opens the configuration file the view actually loads, ignoring unsupported TOML companions until their loaders support them ([#521](https://github.com/PsychedelicShayna/neopi/issues/521)).
+- Live subagent importance ranking now tries classifier fallbacks after a failed or empty primary response, even when authorization checks have already succeeded ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).
+- Live classifier failures now identify the model and failure reason in the warning and logs instead of silently discarding provider errors ([#512](https://github.com/PsychedelicShayna/neopi/issues/512)).
+- Per-model effort limits now offer `off` when the model supports disabling reasoning and apply allowed off selections to sessions and Auto effort ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).
+- Model settings rows now show configured compaction limits beside the effort summary, preserving token or percentage notation ([#499](https://github.com/PsychedelicShayna/neopi/issues/499)).
+- Native addon cache keys now distinguish compiler, wrapper and Cargo build/profile environment overrides.
+- Stopping a live call while its persona or settings load no longer leaves a transport connected after cancellation ([#482](https://github.com/PsychedelicShayna/neopi/issues/482)).
+- Token-bounded text, including live transcript history, keeps emoji and combining characters intact at truncation boundaries ([#205](https://github.com/PsychedelicShayna/neopi/issues/205)).
+- Control-socket clients can start, mute, and stop the session's existing live voice call without ending it when they disconnect ([#483](https://github.com/PsychedelicShayna/neopi/issues/483)).
+- Advisors with duplicate IDs in one WATCHDOG file now report a warning and keep edits attached to the correct row when saved.
+- Short work contracts no longer block ordinary messages by counting tool runtime state as prompt tokens; genuinely oversized contexts still fail without truncating clauses ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
+- Session work contracts remain intact when a model's context-window size is unknown, without assuming a token budget ([#25](https://github.com/PsychedelicShayna/neopi/issues/25)).
+- Restored clean coding-agent type checks by updating test fixtures to current contracts without changing STT assertions or shipped code ([#458](https://github.com/PsychedelicShayna/neopi/issues/458)).
+- Invalid `/tool:<name>` commands now show a report with nearby enabled names instead of closing the session, and tool completions follow changes to the enabled tools ([#15](https://github.com/PsychedelicShayna/neopi/issues/15)).
+- The centered startup banner now reads NPI instead of OMP.
+- Checkpoint and rewind inventories now describe the context transaction, report replacement, and requirement to rewind before yielding instead of a git-based save point ([#16](https://github.com/PsychedelicShayna/neopi/issues/16)).
+- Startup now retires the old managed persona, loadout, REPL, and live-persona extension links once, without requiring a source install or changing saved state and user extensions ([#75](https://github.com/PsychedelicShayna/neopi/issues/75)).
+- Moving a session during a fork now waits for inherited artifacts to finish copying, so they stay available in the moved session ([#257](https://github.com/PsychedelicShayna/neopi/issues/257)).
+- Releasing a recovered headless browser tab now waits until its page disappears from CDP targets without closing unrelated tabs ([#293](https://github.com/PsychedelicShayna/neopi/issues/293)).
+- Browser crash-cancellation checks no longer mistake work sent before the renderer crashes for an uncancelled continuation ([#290](https://github.com/PsychedelicShayna/neopi/issues/290)).
+- The advisor editor shows the effective roster with enabled states and source files, including ancestor and `.omp` rosters; enabling advisors names the reviewers that started ([#206](https://github.com/PsychedelicShayna/neopi/issues/206)).
+- Host-environment restoration clears runtime-added credentials, and ACP terminal guidance limits the restoration recipe to local PTY commands ([#336](https://github.com/PsychedelicShayna/neopi/issues/336)).
+- Live hold mode no longer cuts off Iris's replies; submit and force-delegate keywords keep distinct routing and wait for one complete, quiet request without overlapping speech deliveries ([#417](https://github.com/PsychedelicShayna/neopi/issues/417)).
+- OAuth model hooks can deep-clone and rename models without losing the verified standard context limit used by live ingest ([#328](https://github.com/PsychedelicShayna/neopi/issues/328)).
+- Forced live handoffs now tell the voice agent the exact composer text already sent to the main agent, without asking it to relay the request again ([#181](https://github.com/PsychedelicShayna/neopi/issues/181)).
+- Live force-keyword and hold-submit handoffs send collapsed pastes and text attachments exactly once as full content, including beside protected voice turns; quoted keywords cannot reroute them, unsent attachments stay in the composer, and ordinary submit still lets Iris answer or delegate ([#182](https://github.com/PsychedelicShayna/neopi/issues/182)).
+- `npi update --check` and other ordinary update invocations now accept upstream binary assets while keeping the installed executable named `npi` ([#327](https://github.com/PsychedelicShayna/neopi/issues/327)).
+- Live microphone admission now counts audio waiting for the encoder, so burst overflow is reported instead of silently discarding accepted speech ([#174](https://github.com/PsychedelicShayna/neopi/issues/174)).
+- Live speaker playback stays open through device priming, and completed delegations no longer replay held tool progress after their final answer ([#175](https://github.com/PsychedelicShayna/neopi/issues/175)).
+- Ctrl+Space xAI speech input cancels configured dictation immediately without losing the draft, and held shortcut repeats no longer activate configured Space dictation ([#225](https://github.com/PsychedelicShayna/neopi/issues/225)).
+- Ctrl+Space can start the next recording while an earlier transcript is pending; speech follows composer replacements and waits safely in the next draft while a post-processing chain runs ([#225](https://github.com/PsychedelicShayna/neopi/issues/225)).
+- `npi ctl` and the `ctl` tool remain reachable when live monitor panes fill their connection budget or rejected clients stop reading ([#404](https://github.com/PsychedelicShayna/neopi/issues/404)).
+- Live session pipes pause stdin when their control socket is blocked, and session transcript reads return null timestamps instead of failing on missing or malformed message dates ([#367](https://github.com/PsychedelicShayna/neopi/issues/367)).
+- Control state labels pending steering and follow-up messages together; the first queued follow-up warns each calling session that steering usually reaches an automated agent sooner ([#333](https://github.com/PsychedelicShayna/neopi/issues/333)).
+- Rule toggles in `/status` immediately update the running session's prompt, rulebook, and TTSR matching without restarting ([#4](https://github.com/PsychedelicShayna/neopi/issues/4)).
 - Standalone updates ignore project and custom Bun dotenv build origins and configuration-directory redirects, retain launch/user overrides and explicit profiles, and show the selected source for binary updates and package-manager takeovers ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).
 - `/issue` never repeats an uncertain create and reports a confirmed URL or an explicit unknown-publication state when GitHub cannot be read ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)).
 - `/issue` checks collaborator repositories' tracker metadata and rejects archived or unverifiable targets before authoring ([#305](https://github.com/PsychedelicShayna/neopi/issues/305)).
@@ -54,10 +176,12 @@
 - Live vocal handoffs steer without cancelling by default, offer queue-for-yield or explicit interrupt delivery, restore queued speech on Esc, and speak the preceding task's answer before a follow-up ([#218](https://github.com/PsychedelicShayna/neopi/issues/218)).
 - Accepted vocal requests stay queued when a typed post-compaction prompt fails, instead of being lost during rollback ([#218](https://github.com/PsychedelicShayna/neopi/issues/218)).
 - Queued vocal steering keeps the current request's reasoning and progress on its original voice route until the new handoff is actually consumed ([#371](https://github.com/PsychedelicShayna/neopi/issues/371)).
+- Rapid vocal handoffs preserve each request's spoken answer and route across yield boundaries, and co-batched requests each receive the combined answer ([#374](https://github.com/PsychedelicShayna/neopi/issues/374)).
 - Session discovery keeps listing files whose creation timestamp is missing or malformed ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
 - Live session attachment now negotiates protocol-v2 chunking and respects slow stdout consumers ([#355](https://github.com/PsychedelicShayna/neopi/issues/355)).
 - Role switches and runtime fallbacks now honor their saved effort policies and admitted task scope, ordered subagent selectors retain the chosen source's explicit effort through role expansion, advisor classification stops on cancellation, and concurrent or in-flight fallback edits retain paired effort settings ([#178](https://github.com/PsychedelicShayna/neopi/issues/178)).
 - Model selector assignments save globally unless project scope is explicitly selected, including when project role storage is enabled ([#244](https://github.com/PsychedelicShayna/neopi/issues/244)).
+- Recall with an adjacent-event hint searches both recollections concurrently, without changing returned evidence or exceeding two in-flight ranking requests per recall ([#268](https://github.com/PsychedelicShayna/neopi/issues/268)).
 - Source installs retire managed legacy persona, loadout, and REPL extension links without deleting operator-owned extensions, preventing old hooks from running alongside built-ins ([#177](https://github.com/PsychedelicShayna/neopi/issues/177)).
 - CI's session/log descriptor-leak check now works with Bun versions that open files close-on-exec by default ([#286](https://github.com/PsychedelicShayna/neopi/issues/286)).
 - Saved images in Agent Hub transcripts of advisors and aborted agents, and in `/monitor` panes, now render as images instead of a wrong-size `[Image: … 800x600]` placeholder ([#345](https://github.com/PsychedelicShayna/neopi/issues/345)).
@@ -89,6 +213,8 @@
 
 ### Changed
 
+- The `tts` tool now tells agents it exports a file rather than speaking the reply; using it for a conversation already covered by `speech.enabled` wastes a second synthesis. Speech documentation distinguishes this path from `omp say` playback and session-local `/voice` ([#573](https://github.com/PsychedelicShayna/neopi/issues/573)).
+
 - Tool-output expansion (`app.tools.expand`) defaults to `Alt+E`; `Ctrl+O` is now menu history back. A `keybindings.yml` that binds the action keeps its keys ([#35](https://github.com/PsychedelicShayna/neopi/issues/35)).
 - `/statusline` autosaves an unapplied draft to `neopi-statusline-draft.json` and restores it on reopen or restart; `s` applies usage-bar templates, widgets, and composer without closing, and Escape asks before applying ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 - Fork extensions now use NeoPi names and migrate existing persona, loadout, REPL, and live-persona state on first read.
@@ -100,8 +226,8 @@
 ### Removed
 
 - Removed the fork Ruby/Julia eval extension to avoid its startup and maintenance overhead; Python and JavaScript eval remain available.
-
 - Removed `advisor.immuneTurns`; each advisor severity now retains its delivery timing without a cooldown downgrade.
+
 ## [18.10.3] - 2026-10-12
 
 ### Added
@@ -2383,7 +2509,7 @@
 
 ### Fixed
 
-	- Fixed GPT-6 Astra extended-context support and preserved maximum context windows reported by OpenAI Codex discovery ([#10980](https://github.com/can1357/oh-my-pi/pull/10980) by [@H4vC](https://github.com/H4vC)).
+   - Fixed GPT-6 Astra extended-context support and preserved maximum context windows reported by OpenAI Codex discovery ([#10980](https://github.com/can1357/oh-my-pi/pull/10980) by [@H4vC](https://github.com/H4vC)).
 - Subagent `yield` no longer rejects a valid `data` payload because a non-strict OpenAI-compatible backend filled the optional `error` field with `""`; previously the worker retried the identical call until the invalid-yield cap and the parent received nothing.
 - Fixed fullscreen `/copy` outlining only a lazily created grouped Read card, so Enter copies the assistant yield instead of tool output.
 - `memory://` now resolves against the session that issued it: a caller's own memory backend answers `memory://<id>`, so co-located sessions no longer read each other's memory rows, and a caller whose session is no longer live fails closed instead of being answered by a peer. Prompt completion binds to the same caller, so `memory://<memory-id>` stays on offer while a subagent shares the working directory. Advisors retain their owning session's memory access even without a session file.
@@ -2620,7 +2746,7 @@
 - Fixed vibe mode becoming un-exitable after branching a session (including via `/btw`), which previously failed with "Vibe parent session changed before mode exit could be persisted." ([#10468](https://github.com/can1357/oh-my-pi/issues/10468)).
 - Fixed HTML session exports reordering interleaved assistant text, thinking, images, and tool calls in the transcript, and split matching text/tool sidebar rows with block-accurate navigation. ([#10253](https://github.com/can1357/oh-my-pi/pull/10253) by [@realcoderandom](https://github.com/realcoderandom))
 - Fixed the built-in `grep` and `sed` treating a basic regular expression as an extended one: a bare `+` is now the literal and `\+` the operator, patterns like `^+` or `s/^\+/` no longer match every line, `^` anchors inside `\(…\)` and after `\|`, and a repetition operator with nothing to repeat is reported instead of silently selecting the whole file ([#10298](https://github.com/can1357/oh-my-pi/pull/10298) by [@mruangutai](https://github.com/mruangutai)).
-- Fixed RPC `prompt` responses for `/skill:*` commands arriving only after the entire prompt-dispatch pipeline finished (usage preflight, compaction, provider calls): under provider stress that outlasts any client prompt timeout, so hosts reported the prompt as rejected while the turn was in fact running. The skill branch now builds the skill prompt eagerly (preserving the immediate error for an unreadable skill file) and dispatches the expensive pipeline asynchronously after answering, matching plain prompts; when the dispatch is cancelled before a turn starts (e.g. an abort overtakes usage preflight), the session now reports it through the non-invoked  completion frame instead of leaving hosts waiting for an  that never comes ([#10249](https://github.com/can1357/oh-my-pi/pull/10249) by [@cwr250](https://github.com/cwr250)).
+- Fixed RPC `prompt` responses for `/skill:*` commands arriving only after the entire prompt-dispatch pipeline finished (usage preflight, compaction, provider calls): under provider stress that outlasts any client prompt timeout, so hosts reported the prompt as rejected while the turn was in fact running. The skill branch now builds the skill prompt eagerly (preserving the immediate error for an unreadable skill file) and dispatches the expensive pipeline asynchronously after answering, matching plain prompts; when the dispatch is cancelled before a turn starts (e.g. an abort overtakes usage preflight), the session now reports it through the non-invoked completion frame instead of leaving hosts waiting for an  that never comes ([#10249](https://github.com/can1357/oh-my-pi/pull/10249) by [@cwr250](https://github.com/cwr250)).
 - Fixed stale `omp-plugins.lock.json` entries loading leftover `node_modules` trees for plugins no longer declared in an existing `package.json` — the orphaned copy double-loaded its extensions. Lockfile-only plugins remain supported for manifest-less roots and symlinked packages (`omp plugin link`, marketplace runtime packages); stale entries are skipped with a warning.
 
 ## [18.1.2] - 2026-09-01

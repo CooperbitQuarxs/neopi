@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+		<meta name="theme-color" content="#0b0810" />
+		<!--
+			Icon links. The SVG carries the canonical artwork; the PNGs are raster
+			fallbacks (legacy Firefox/Safari pre-15, Apple touch icon, OS app icon).
+			Order matters — browsers pick the first supported `link` they
+			understand, so SVG goes first for crisp scaling at any size.
+		-->
+		<link rel="icon" type="image/svg+xml" href="/icon.svg" />
+		<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+		<link rel="shortcut icon" href="/favicon-32.png" />
+		<title>NeoDeck</title>
+		<script>
+			// Apply the theme BEFORE React mounts so there is no flash of the
+			// wrong palette. Kept tiny on purpose; mirrored by `apps/web/src/lib/theme.ts`.
+			(function () {
+				var THEMES = ["neo", "neo-light", "paper", "slate", "horizon"];
+				var stored = null;
+				try {
+					stored = localStorage.getItem("npi-deck:theme");
+				} catch (_) {}
+				var theme;
+				if (stored && THEMES.indexOf(stored) !== -1) {
+					theme = stored;
+				} else if (
+					window.matchMedia &&
+					window.matchMedia("(prefers-color-scheme: light)").matches
+				) {
+					theme = "neo-light";
+				} else {
+					theme = "neo";
+				}
+				document.documentElement.setAttribute("data-theme", theme);
+				var meta = document.querySelector('meta[name="theme-color"]');
+				var metaColors = { neo: "#0b0810", "neo-light": "#f3f1f5", paper: "#f7f4ee", slate: "#0f131a", horizon: "#1c1e26" };
+				if (meta) meta.setAttribute("content", metaColors[theme] || metaColors.neo);
+				var scheme = document.querySelector('meta[name="color-scheme"]');
+				if (!scheme) {
+					scheme = document.createElement("meta");
+					scheme.setAttribute("name", "color-scheme");
+					document.head.appendChild(scheme);
+				}
+				scheme.setAttribute("content", theme === "paper" || theme === "neo-light" ? "light" : "dark");
+			})();
+		</script>
+	</head>
+	<body class="bg-paper text-ink antialiased">
+		<div id="root"></div>
+		<script type="module" src="/src/main.tsx"></script>
+	</body>
+</html>

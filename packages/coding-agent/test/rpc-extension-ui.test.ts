@@ -254,7 +254,7 @@ await runRpcMode(session, {
 		expect(pendingRequests.size).toBe(0);
 	});
 
-	it("rejects secret login input, completes ordinary OAuth input, and logs the stored account out", async () => {
+	it("preserves secret OAuth prompt metadata and logs out only the requested account", async () => {
 		await using temp = await TempDir.create("@rpc-login-");
 		const extensionPath = temp.join("login.mjs");
 		await Bun.write(
@@ -323,7 +323,7 @@ export default function(pi) {
 		const stdout = new Response(child.stdout).body;
 		if (!stdout) throw new Error("RPC login fixture did not expose stdout");
 		const stderr = new Response(child.stderr).text();
-		const inputTitles: string[] = [];
+		const inputs: { title: string; secret: boolean; loginId: unknown }[] = [];
 		let secretResponse: unknown;
 		let ordinaryResponse: unknown;
 		let loggedInProvidersResponse: unknown;
@@ -346,7 +346,7 @@ export default function(pi) {
 					if (typeof frame.id !== "string" || typeof frame.title !== "string") {
 						throw new Error("RPC input request did not carry string id and title");
 					}
-					inputTitles.push(frame.title);
+					inputs.push({ title: frame.title, secret: frame.secret === true, loginId: frame.loginId });
 					await send({ type: "extension_ui_response", id: frame.id, value: crypto.randomUUID() });
 				} else if (frame.type === "response" && frame.id === "secret") {
 					secretResponse = frame;
@@ -398,14 +398,17 @@ export default function(pi) {
 		expect(secretResponse).toMatchObject({
 			type: "response",
 			command: "login",
-			success: false,
-			error: expect.stringContaining("requires secret input"),
+			success: true,
 		});
-		expect(inputTitles).toEqual(["rpc-ordinary"]);
+		expect(inputs).toEqual([
+			{ title: "rpc-secret", secret: true, loginId: "secret" },
+			{ title: "rpc-ordinary", secret: false, loginId: "ordinary" },
+		]);
 		expect(ordinaryResponse).toMatchObject({ type: "response", command: "login", success: true });
 		expect(loggedInProvidersResponse).toMatchObject({
 			data: {
 				providers: expect.arrayContaining([
+					expect.objectContaining({ id: "rpc-secret", authenticated: true }),
 					expect.objectContaining({ id: "rpc-ordinary", authenticated: true }),
 					// The alias stores under rpc-ordinary, so it is authenticated by the same credential.
 					expect.objectContaining({ id: "rpc-alias", authenticated: true }),
@@ -420,14 +423,14 @@ export default function(pi) {
 		expect(staleLogoutResponse).toMatchObject({
 			command: "logout",
 			success: false,
-			error: expect.stringContaining("is not stored for rpc-ordinary"),
+			code: "invalid_value",
 		});
 		expect(noProviderResponse).toMatchObject({ command: "get_logout_accounts", success: false });
 		expect(providersResponse).toMatchObject({
 			success: true,
 			data: {
 				providers: expect.arrayContaining([
-					expect.objectContaining({ id: "rpc-secret", authenticated: false }),
+					expect.objectContaining({ id: "rpc-secret", authenticated: true }),
 					expect.objectContaining({ id: "rpc-ordinary", authenticated: false }),
 					expect.objectContaining({ id: "rpc-alias", authenticated: false }),
 				]),

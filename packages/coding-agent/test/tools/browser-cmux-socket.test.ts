@@ -92,8 +92,7 @@ afterEach(() => {
 });
 
 describe("CmuxSocketClient", () => {
-	// quarantined: flaky in CI, tracked by #370
-	it.skipIf(!!process.env.CI)("authenticates, frames JSON requests, and returns the result", async () => {
+	it("authenticates, frames JSON requests, and returns the result", async () => {
 		const lines: string[] = [];
 		const requests: RequestLine[] = [];
 

@@ -1,5 +1,5 @@
-/** Frameless Bidi model used by Codex Desktop live calls. */
-export const LIVE_MODEL = "gpt-live-1-codex" as const;
+/** Default Frameless Bidi model used by Codex Desktop live calls. */
+export const DEFAULT_LIVE_MODEL = "gpt-live-1-codex";
 
 /** Maximum UTF-8 payload size accepted by each context append. */
 export const CONTEXT_CHUNK_BYTES = 500;
@@ -12,7 +12,7 @@ export type LiveInputTextContent = { type: "input_text"; text: string };
 
 /** Session object posted alongside the SDP when opening a live call. */
 export type LiveSessionPayload = {
-	model: typeof LIVE_MODEL;
+	model: string;
 	instructions: string;
 	audio: { output: { voice: string } };
 	delegation: { type: "client" };
@@ -163,9 +163,9 @@ export function parseLiveServerEvent(payload: unknown): LiveServerEvent | null {
 }
 
 /** Build the session object posted in the multipart WebRTC call request. */
-export function buildLiveSessionPayload(instructions: string, voice: string): LiveSessionPayload {
+export function buildLiveSessionPayload(instructions: string, voice: string, model: string): LiveSessionPayload {
 	return {
-		model: LIVE_MODEL,
+		model,
 		instructions,
 		audio: { output: { voice } },
 		delegation: { type: "client" },

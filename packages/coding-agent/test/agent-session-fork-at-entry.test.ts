@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -81,6 +82,45 @@ describe("AgentSession.fork(entryId)", () => {
 		expect(newId).not.toBe(artifactId);
 		expect(await Bun.file(keptPath!).text()).toBe("kept tool output");
 	});
+
+	it.each(["whole session", "entry"] as const)(
+		"moves inherited artifacts after an in-flight %s fork copy",
+		async forkKind => {
+			const { session, artifactId, forkAt } = await createSeededSession();
+			const sourceRoot = session.sessionFile!.slice(0, -".jsonl".length);
+			await Bun.write(path.join(sourceRoot, "user-note.txt"), "inherited note");
+			const copyStarted = Promise.withResolvers<void>();
+			const releaseCopy = Promise.withResolvers<void>();
+			const copy = nodeFs.promises.cp;
+			let abandonedRoot: string | undefined;
+			vi.spyOn(nodeFs.promises, "cp").mockImplementation(async (source, destination, options) => {
+				if (String(source) === sourceRoot) {
+					abandonedRoot = String(destination);
+					copyStarted.resolve();
+					await releaseCopy.promise;
+				}
+				await copy(source, destination, options);
+			});
+			const fork = session.fork(forkKind === "entry" ? forkAt : undefined);
+			await copyStarted.promise;
+			const target = path.join(tempDir, "moved-sessions");
+			const move = session.moveSession(tempDir, target);
+			try {
+				// Give relocation a chance to finish while the copy remains blocked.
+				await Bun.sleep(50);
+			} finally {
+				releaseCopy.resolve();
+			}
+			expect(await fork).toBe(true);
+			await move;
+			expect(path.dirname(session.sessionFile!)).toBe(target);
+			const activeRoot = session.sessionFile!.slice(0, -".jsonl".length);
+			expect(await Bun.file(path.join(activeRoot, "user-note.txt")).text()).toBe("inherited note");
+			const keptPath = await session.sessionManager.getArtifactPath(artifactId);
+			expect(await Bun.file(keptPath!).text()).toBe("kept tool output");
+			expect(await Bun.file(path.join(abandonedRoot!, "user-note.txt")).exists()).toBe(false);
+		},
+	);
 
 	it("leaves the session file and live messages untouched when session_before_branch vetoes", async () => {
 		const emit = vi.fn(async (event: { type: string }) =>

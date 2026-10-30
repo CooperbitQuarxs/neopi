@@ -5,8 +5,9 @@ import * as path from "node:path";
 import { handleSkillList, runSkillsCommand } from "../../src/cli/skill-list";
 import { resetSettingsForTest } from "../../src/config/settings";
 import { AgentStorage } from "../../src/session/agent-storage";
-import { getAgentDir, removeWithRetries, setAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
+import { removeWithRetries, setAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
 import { CliUsageError } from "@oh-my-pi/pi-utils/cli";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 // Every test below discovers skills through the real capability loader, which
 // walks `os.homedir()` and `getAgentDir()` for user-level providers (native
@@ -15,18 +16,17 @@ import { CliUsageError } from "@oh-my-pi/pi-utils/cli";
 // `handleSkillList` tests below). Without isolating both seams, the developer's
 // or CI runner's real agent config leaks into every assertion here.
 let tempHome: string;
-let originalAgentDir: string;
+let state: SettingsTestState | undefined;
 
 beforeEach(async () => {
-	originalAgentDir = getAgentDir();
+	state = beginSettingsTest();
 	tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "omp-skill-list-home-"));
 	spyOn(os, "homedir").mockReturnValue(tempHome);
 	setAgentDir(path.join(tempHome, ".omp", "agent"));
 });
 
 afterEach(async () => {
-	spyOn(os, "homedir").mockRestore();
-	setAgentDir(originalAgentDir);
+	restoreSettingsTestState(state);
 	await removeWithRetries(tempHome);
 });
 

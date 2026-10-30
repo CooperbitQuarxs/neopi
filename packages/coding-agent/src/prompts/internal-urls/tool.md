@@ -1,0 +1,1 @@
+`tool://`: enabled session tools, including top-level and mounted devices; `tool://<name>` docs, schema, examples, restrictions. Read-only; reading NEVER invokes. Existing invocation paths remain unchanged.

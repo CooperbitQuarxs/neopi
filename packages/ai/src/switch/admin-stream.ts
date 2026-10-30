@@ -21,9 +21,11 @@ export function adminEventsStream(
 	authentication: () => AdminAuthentication,
 ): Response {
 	let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
-	let heartbeat: ReturnType<typeof setInterval> | undefined;
-	let drain: ReturnType<typeof setInterval> | undefined;
+	let heartbeat: Timer | undefined;
+	let drain: Timer | undefined;
 	const queue: StoredChange[] = [];
+	let replay: StoredChange[] = [];
+	let replayIndex = 0;
 	let closed = false;
 	const cleanup = () => {
 		if (closed) return;
@@ -31,6 +33,8 @@ export function adminEventsStream(
 		subscription?.close();
 		if (heartbeat) clearInterval(heartbeat);
 		if (drain) clearInterval(drain);
+		queue.length = 0;
+		replay.length = 0;
 	};
 	const resync = (reason: string) => {
 		if (!controller || closed) return;
@@ -52,7 +56,31 @@ export function adminEventsStream(
 			resync("operator_authority_changed");
 			return;
 		}
-		while (queue.length && (controller.desiredSize ?? 0) > 0) controller.enqueue(frame(queue.shift()!));
+		try {
+			while ((controller.desiredSize ?? 0) > 0) {
+				if (position < highWater) {
+					if (replayIndex === replay.length) {
+						// Keep one bounded page; encode only when the reader has capacity.
+						replay = subscription.replay(position, MAX_BUFFER);
+						replayIndex = 0;
+						if (!replay.length)
+							throw new SwitchError(409, "resync_required", "Replay no longer contains the requested rows");
+					}
+					const change = replay[replayIndex++]!;
+					controller.enqueue(frame(change));
+					position = change.seq;
+					if (position === highWater) {
+						replay.length = 0;
+						replayIndex = 0;
+					}
+				} else {
+					if (!queue.length) break;
+					controller.enqueue(frame(queue.shift()!));
+				}
+			}
+		} catch {
+			resync("replay_expired");
+		}
 	};
 	const onLive = (change: StoredChange) => {
 		if (closed) return;
@@ -69,34 +97,24 @@ export function adminEventsStream(
 	};
 	const subscription = store.subscribe(cursor, onLive);
 	const highWater = subscription.highWater;
-	const initial = subscription;
+	let position = subscription.after;
 	const stream = new ReadableStream<Uint8Array>({
 		start(writable) {
 			controller = writable;
-			let position = initial.after;
-			try {
-				while (position < highWater) {
-					const page = initial.replay(position, MAX_BUFFER);
-					if (!page.length)
-						throw new SwitchError(409, "resync_required", "Replay no longer contains the requested rows");
-					for (const change of page) {
-						writable.enqueue(frame(change));
-						position = change.seq;
-					}
+			flush();
+			if (closed) return;
+			drain = setInterval(flush, 100);
+			heartbeat = setInterval(() => {
+				if (!stillAuthorized()) {
+					resync("operator_authority_changed");
+					return;
 				}
-				flush();
-				drain = setInterval(flush, 100);
-				heartbeat = setInterval(() => {
-					if (!stillAuthorized()) {
-						resync("operator_authority_changed");
-						return;
-					}
-					if ((writable.desiredSize ?? 0) <= 0) return;
-					writable.enqueue(encoder.encode(": heartbeat\n\n"));
-				}, 15_000);
-			} catch {
-				resync("replay_expired");
-			}
+				if (position < highWater || queue.length || (writable.desiredSize ?? 0) <= 0) return;
+				writable.enqueue(encoder.encode(": heartbeat\n\n"));
+			}, 15_000);
+		},
+		pull() {
+			flush();
 		},
 		cancel() {
 			cleanup();

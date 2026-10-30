@@ -7,7 +7,7 @@ import { configHelp as commandHelp } from "../cli/command-help";
 import { type ConfigAction, type ConfigCommandArgs, runConfigCommand } from "../cli/config-cli";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
-const ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg"];
+const ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg", "dump-toml", "to-toml"];
 
 export default class Config extends Command {
 	static description = commandHelp.description;
@@ -30,6 +30,7 @@ export default class Config extends Command {
 
 	static flags = {
 		json: Flags.boolean({ description: "Output JSON" }),
+		force: Flags.boolean({ description: "Allow to-toml to replace existing config.toml files" }),
 	};
 
 	async run(): Promise<void> {
@@ -43,10 +44,11 @@ export default class Config extends Command {
 			value,
 			flags: {
 				json: flags.json,
+				force: flags.force,
 			},
 		};
 
-		await initTheme();
+		if (action !== "dump-toml" && action !== "to-toml") await initTheme();
 		await runConfigCommand(cmd);
 	}
 }

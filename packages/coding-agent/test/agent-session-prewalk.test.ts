@@ -125,6 +125,8 @@ describe("AgentSession prewalk", () => {
 			sessionManager?: SessionManager;
 			target?: Model;
 			startupTarget?: Model;
+			planner?: string;
+			execution?: string;
 		} = {},
 	) {
 		const primary = modelOrThrow("claude-sonnet-4-5");
@@ -132,6 +134,8 @@ describe("AgentSession prewalk", () => {
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
 			"prewalk.enabled": options.enabled ?? true,
+			"prewalk.planner": options.planner ?? "",
+			"prewalk.execution": options.execution ?? "@smol",
 		});
 		// Resolution must honor role fallback lists and the target effort suffix.
 		settings.setModelRole("smol", `anthropic/missing-model,${target.provider}/${target.id}:low`);
@@ -176,6 +180,55 @@ describe("AgentSession prewalk", () => {
 		session = created;
 		return { session: created, primary, target, settings, requested, nudges };
 	}
+
+	it("keeps the written plan as a persisted execution brief across context rebuilds", async () => {
+		const plan = "Change parser.ts parseOptions, then run the option precedence regression.";
+		const manager = SessionManager.inMemory(tempDir.path());
+		const created = createLifecycleSession(
+			[
+				{
+					content: [plan, { type: "toolCall", id: "plan-todo", name: "todo", arguments: {} }],
+					stopReason: "toolUse",
+				},
+				toolCall("implementation-write", "write"),
+				{ content: ["implemented"] },
+			],
+			{ sessionManager: manager },
+		);
+		await created.session.prompt("Implement the parser change");
+		const handoff = manager
+			.getBranch()
+			.find(entry => entry.type === "custom" && entry.customType === "prewalk-handoff");
+		expect(handoff?.type).toBe("custom");
+		if (handoff?.type !== "custom") throw new Error("missing handoff");
+		expect(handoff.data).toMatchObject({
+			version: 1,
+			planner: { provider: created.primary.provider, id: created.primary.id, thinkingLevel: "high" },
+			execution: { provider: created.target.provider, id: created.target.id, thinkingLevel: "low" },
+		});
+		const rebuilt = manager.buildSessionContext().messages;
+		const brief = rebuilt.find(message => message.role === "custom" && message.customType === "prewalk-checklist");
+		expect(brief?.role).toBe("custom");
+		if (brief?.role !== "custom") throw new Error("missing execution brief");
+		expect(brief.content).toContain(plan);
+		expect(brief.details).toEqual(handoff.data);
+	});
+
+	it("/new independently selects the configured planning and execution crews", async () => {
+		const planner = modelOrThrow("claude-opus-4-6");
+		const created = createLifecycleSession(
+			[toolCall("crew-todo", "todo"), toolCall("crew-write", "write"), { content: ["done"] }],
+			{ armed: false, planner: `anthropic/${planner.id}:high`, execution: "anthropic/claude-sonnet-4-6:low" },
+		);
+		expect(await created.session.newSession()).toBe(true);
+		expect(created.session.model?.id).toBe(planner.id);
+		expect(created.session.getPrewalkState()?.target.id).toBe(created.target.id);
+		await created.session.prompt("Implement the change");
+		expect(created.requested).toEqual([planner.id, planner.id, created.target.id]);
+		cfgPrewalkEnabled.override(created.settings, false);
+		expect(await created.session.newSession()).toBe(true);
+		expect(created.session.getPrewalkState()).toBeUndefined();
+	});
 
 	it("/new restores the previous prewalk source and effort, then requires a fresh todo before handoff", async () => {
 		const created = createLifecycleSession([

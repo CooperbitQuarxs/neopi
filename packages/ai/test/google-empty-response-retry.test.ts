@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { streamGoogle } from "@oh-my-pi/pi-ai/providers/google";
 import { streamGoogleGeminiCli } from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import { streamGoogleVertex } from "@oh-my-pi/pi-ai/providers/google-vertex";
 import type { AssistantMessageEvent, Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import * as geminiHeaders from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 
 // A Gemini turn that finishes with `finishReason: STOP` but carries only an empty text part —
 // the well-known "empty response" failure. Delivered as-is, the agent receives a blank message
@@ -268,15 +269,12 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 });
 
 describe("Google empty-response retry (Cloud Code Assist path)", () => {
-	// Endpoint-counting mocks model CCA only; pinning the client version keeps
-	// the Antigravity manifest lookup off the injected fetch.
-	const savedAntigravityVersion = process.env.PI_AI_ANTIGRAVITY_VERSION;
+	// The injected fetch models CCA endpoints, not client-version discovery.
 	beforeEach(() => {
-		process.env.PI_AI_ANTIGRAVITY_VERSION = "2.19.1";
+		vi.spyOn(geminiHeaders, "ensureAntigravityVersion").mockResolvedValue(undefined);
 	});
 	afterEach(() => {
-		if (savedAntigravityVersion === undefined) delete process.env.PI_AI_ANTIGRAVITY_VERSION;
-		else process.env.PI_AI_ANTIGRAVITY_VERSION = savedAntigravityVersion;
+		vi.restoreAllMocks();
 	});
 
 	it("retries a STOP-with-empty-text response (the reported gemini-3-flash hang)", async () => {

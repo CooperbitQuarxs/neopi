@@ -178,6 +178,8 @@ export const frameDefs = {
 		title: "string",
 		"placeholder?": "string",
 		"timeout?": "number.integer",
+		"secret?": "boolean",
+		"loginId?": "string",
 	},
 	EditorUiRequest: {
 		type: UI,
@@ -201,6 +203,7 @@ export const frameDefs = {
 		method: "'notify'",
 		message: "string",
 		"notifyType?": "NotifyType",
+		"loginId?": "string",
 	},
 	SetStatusUiRequest: {
 		type: UI,
@@ -226,6 +229,8 @@ export const frameDefs = {
 		url: "string",
 		"launchUrl?": doc("string", "Short loopback redirect to `url`; the truncation-safe copy target."),
 		"instructions?": "string",
+		"userCode?": doc("string", "User-facing device verification code, never the private polling device_code."),
+		"loginId?": "string",
 	},
 	ExtensionUiRequest: doc(
 		"SelectUiRequest | ConfirmUiRequest | InputUiRequest | EditorUiRequest | AskUiRequest | CancelUiRequest | NotifyUiRequest | SetStatusUiRequest | SetWidgetUiRequest | SetTitleUiRequest | SetEditorTextUiRequest | OpenUrlUiRequest",

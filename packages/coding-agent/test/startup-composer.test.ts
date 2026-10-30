@@ -35,6 +35,7 @@ import {
 	cfgSpellingAutocomplete,
 	cfgSpellingAutocorrect,
 	cfgSpellingTypoDetection,
+	cfgStartupBranding,
 	cfgStartupChangelogMode,
 	cfgStartupCheckUpdate,
 	cfgStartupQuiet,
@@ -280,6 +281,7 @@ describe("Composer prepaint", () => {
 		settings = await Settings.init({ inMemory: true });
 		config = {
 			quiet: cfgStartupQuiet.get(settings),
+			startupBranding: cfgStartupBranding.get(settings),
 			composerShape: cfgComposerShape.get(settings) ?? "box",
 			showHardwareCursor: cfgShowHardwareCursor.get(settings),
 			maxInlineImages: cfgTuiMaxInlineImages.get(settings),
@@ -295,6 +297,33 @@ describe("Composer prepaint", () => {
 	afterEach(() => {
 		stopPendingStartupComposer();
 		resetSettingsForTest();
+	});
+
+	it("applies the resolved startup branding to the prepaint component without replacing it", () => {
+		const terminal = new CountingTerminal(140, 40);
+		beginStartupComposer({ terminal, preferences: config, version: "1.0.0", cache: false });
+		cfgStartupBranding.override(settings, "classic");
+		applyStartupComposerPreferences({ ...config, startupBranding: cfgStartupBranding.get(settings), theme: {} });
+		const lease = takeStartupComposerLease();
+		expect(lease).toBeDefined();
+		if (!lease) return;
+		try {
+			const welcome = lease.composer.welcome;
+			expect(Bun.stripANSI(welcome?.render(140).join("\n") ?? "")).toContain("NeoPi v1.0.0");
+			expect(Bun.stripANSI(welcome?.render(140).join("\n") ?? "")).toContain("Welcome back!");
+			lease.composer.setPreferences({ startupBranding: "new" });
+			expect(lease.composer.welcome).toBe(welcome);
+			expect(Bun.stripANSI(welcome?.render(140).join("\n") ?? "")).not.toContain("Welcome back!");
+		} finally {
+			lease.dispose();
+		}
+	});
+
+	it("rejects an unknown startup branding choice through the settings writer", () => {
+		expect(() => cfgStartupBranding.override(settings, "unknown" as never)).toThrow(
+			"Invalid value for startupBranding",
+		);
+		expect(cfgStartupBranding.get(settings)).toBe("new");
 	});
 
 	it("keeps one live editor and terminal across handoff", () => {
@@ -731,6 +760,7 @@ describe("Composer prepaint", () => {
 
 		applyStartupComposerPreferences({
 			quiet: true,
+			startupBranding: config.startupBranding,
 			composerShape: "box",
 			showHardwareCursor: config.showHardwareCursor,
 			maxInlineImages: config.maxInlineImages,

@@ -1,0 +1,14 @@
+.neo-dock-inspector { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
+.neo-dock-inspector:focus { outline: none; }
+.neo-dock-inspector-head { display: flex; align-items: flex-start; gap: 10px; padding: 12px 10px 12px 14px; border-bottom: 1px solid var(--neo-line-1); }
+.neo-dock-inspector-head > div { flex: 1; min-width: 0; }
+.neo-dock-inspector-head > button { flex: none; }
+.neo-dock-inspector-head h2 { font-size: 13.5px; font-weight: 600; color: rgb(var(--ink)); overflow-wrap: anywhere; }
+.neo-dock-inspector-head p { margin-top: 3px; font-size: 12px; line-height: 1.5; color: rgb(var(--ink-3)); overflow-wrap: anywhere; }
+.neo-dock-inspector-body { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
+.neo-dock-inspector-foot { flex: none; display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--neo-line-1); }
+.neo-dock-inspector .neo-board-detail { padding: 0; }
+.neo-dock-inspector .neo-board-inspector-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; width: 100%; }
+.neo-dock-inspector .neo-board-actions { flex-wrap: wrap; }
+.neo-dock-inspector .neo-github-drawer-content { padding: 0; }
+.neo-board-card[aria-pressed="true"], .neo-github-wheel-open[aria-pressed="true"] { outline: 1px solid rgb(var(--accent)); outline-offset: -1px; }

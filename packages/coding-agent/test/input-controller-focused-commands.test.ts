@@ -1,18 +1,50 @@
 /**
- * Focused subagent views are chat-only, except for viewer-scoped commands: `/btw`
- * asks a side question about the focused transcript, `/export` writes the focused
- * agent's own transcript (with its nested subagents), and `/usage` reports
- * account-wide limits. Everything else still requires returning to main.
+ * Focused subagent views allow chat, viewer-scoped commands, effort cycling, and
+ * session-only /fast. All other mutations still require returning to main.
  *
  * Failure mode if this regresses: these commands silently do nothing (or steer the
  * agent) in a focused view, or `/export` writes the main session instead of the viewed one.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
+import { AgentBusyError, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/command-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { setSubagentFast } from "@oh-my-pi/pi-coding-agent/registry/subagent-controls";
 import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
+
+function createSessionControls() {
+	let thinkingLevel: ThinkingLevel = ThinkingLevel.Low;
+	let fast = false;
+	let ultra = false;
+	const setFastMode = vi.fn((enabled: boolean) => {
+		fast = enabled;
+		ultra = false;
+		return true;
+	});
+	return {
+		get thinkingLevel(): ThinkingLevel {
+			return thinkingLevel;
+		},
+		cycleThinkingLevel: vi.fn<() => ThinkingLevel | undefined>(() => {
+			thinkingLevel = ThinkingLevel.High;
+			return thinkingLevel;
+		}),
+		setFastMode,
+		toggleFastMode: vi.fn(() => {
+			setFastMode(!fast);
+			return fast;
+		}),
+		setUltrafastMode: vi.fn((enabled: boolean) => {
+			fast = enabled;
+			ultra = enabled;
+			return true;
+		}),
+		isFastModeEnabled: vi.fn(() => fast),
+		isFastModeActive: vi.fn(() => false),
+		isUltrafastModeEnabled: vi.fn(() => ultra),
+	};
+}
 
 function createFocusedContext() {
 	let editorText = "";
@@ -36,19 +68,31 @@ function createFocusedContext() {
 		clearDraft: vi.fn(),
 	};
 	const prompt = vi.fn(async () => {});
+	const mainControls = createSessionControls();
+	const childControls = createSessionControls();
+	const siblingControls = createSessionControls();
 	const ctx = {
 		editor,
 		ui: { requestRender: vi.fn() },
-		session: {
+		session: Object.assign(mainControls, {
 			isStreaming: false,
 			isCompacting: false,
 			extensionRunner: undefined,
 			queuedMessageCount: 0,
 			customCommands: [],
 			promptTemplates: [],
-		},
-		viewSession: { isStreaming: false, queuedMessageCount: 0, prompt, abort: vi.fn(async () => {}) },
-		focusedAgentId: "Worker",
+		}),
+		viewSession: Object.assign(childControls, {
+			isStreaming: false,
+			queuedMessageCount: 0,
+			prompt,
+			abort: vi.fn(async () => {}),
+		}),
+		focusedAgentId: "Worker" as string | undefined,
+		statusLine: { invalidate: vi.fn() },
+		updateEditorBorderColor: vi.fn(),
+		settings: { set: vi.fn() },
+		isKnownSlashCommand: vi.fn(() => true),
 		skillCommands: new Map(),
 		fileSlashCommands: new Set<string>(),
 		collabGuest: false,
@@ -63,7 +107,15 @@ function createFocusedContext() {
 		showResetUsageSelector: vi.fn(async () => {}),
 		withLocalSubmission: vi.fn(async <T>(_text: string, fn: () => Promise<T>) => fn()),
 	};
-	return { ctx: ctx as unknown as InteractiveModeContext, raw: ctx, editor, prompt };
+	return {
+		ctx: ctx as unknown as InteractiveModeContext,
+		raw: ctx,
+		editor,
+		prompt,
+		mainControls,
+		childControls,
+		siblingControls,
+	};
 }
 
 async function submit(text: string) {
@@ -122,10 +174,146 @@ describe("focused subagent view slash commands", () => {
 		expect(prompt).not.toHaveBeenCalled();
 	});
 
+	it("cycles only the focused child's effort and refreshes the focused display", () => {
+		const { ctx, raw, childControls, mainControls, siblingControls } = createFocusedContext();
+
+		new InputController(ctx).cycleThinkingLevel();
+
+		expect(childControls.cycleThinkingLevel).toHaveBeenCalledTimes(1);
+		expect(childControls.thinkingLevel).toBe(ThinkingLevel.High);
+		expect(ctx.viewSession.thinkingLevel).toBe(ThinkingLevel.High);
+		expect(mainControls.thinkingLevel).toBe(ThinkingLevel.Low);
+		expect(siblingControls.thinkingLevel).toBe(ThinkingLevel.Low);
+		expect(mainControls.cycleThinkingLevel).not.toHaveBeenCalled();
+		expect(raw.statusLine.invalidate).toHaveBeenCalledTimes(1);
+		expect(raw.updateEditorBorderColor).toHaveBeenCalledTimes(1);
+		expect(raw.settings.set).not.toHaveBeenCalled();
+	});
+
+	it("keeps effort cycling on the main session outside a focused view", () => {
+		const { ctx, raw, mainControls, childControls } = createFocusedContext();
+		raw.focusedAgentId = undefined;
+
+		new InputController(ctx).cycleThinkingLevel();
+
+		expect(mainControls.cycleThinkingLevel).toHaveBeenCalledTimes(1);
+		expect(childControls.cycleThinkingLevel).not.toHaveBeenCalled();
+		expect(raw.statusLine.invalidate).toHaveBeenCalledTimes(1);
+		expect(raw.updateEditorBorderColor).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports unsupported focused effort without changing the main session", () => {
+		const { ctx, raw, mainControls } = createFocusedContext();
+		raw.viewSession.cycleThinkingLevel = vi.fn(() => undefined);
+
+		new InputController(ctx).cycleThinkingLevel();
+
+		expect(raw.showStatus).toHaveBeenCalledWith("Current model does not support thinking");
+		expect(mainControls.cycleThinkingLevel).not.toHaveBeenCalled();
+		expect(raw.statusLine.invalidate).not.toHaveBeenCalled();
+	});
+
+	it("routes every /fast form to the child without changing parent, sibling, or settings", async () => {
+		for (const [command, enabled, ultra, message] of [
+			["/fast", true, false, "Fast mode enabled."],
+			["/fast toggle", true, false, "Fast mode enabled."],
+			["/fast ON", true, false, "Fast mode enabled."],
+			["/fast ultra", true, true, "Ultrafast mode enabled."],
+			["/fast ultrafast", true, true, "Ultrafast mode enabled."],
+			["/fast off", false, false, "Fast mode disabled."],
+			["/fast status", false, false, "Fast mode is off."],
+		] as const) {
+			const { ctx, raw, editor, childControls, mainControls, siblingControls, prompt } = createFocusedContext();
+			new InputController(ctx).setupEditorSubmitHandler();
+			editor.setText(command);
+
+			await ctx.editor.onSubmit?.(command);
+
+			expect(childControls.isFastModeEnabled()).toBe(enabled);
+			expect(childControls.isUltrafastModeEnabled()).toBe(ultra);
+			expect(ctx.viewSession.isFastModeEnabled()).toBe(enabled);
+			expect(mainControls.isFastModeEnabled()).toBe(false);
+			expect(siblingControls.isFastModeEnabled()).toBe(false);
+			expect(mainControls.setFastMode).not.toHaveBeenCalled();
+			expect(mainControls.toggleFastMode).not.toHaveBeenCalled();
+			expect(mainControls.setUltrafastMode).not.toHaveBeenCalled();
+			expect(raw.settings.set).not.toHaveBeenCalled();
+			expect(raw.showStatus).toHaveBeenCalledWith(message);
+			expect(editor.clearDraft).toHaveBeenCalled();
+			expect(raw.statusLine.invalidate).toHaveBeenCalledTimes(1);
+			expect(raw.updateEditorBorderColor).toHaveBeenCalledTimes(1);
+			expect(prompt).not.toHaveBeenCalled();
+		}
+	});
+
+	it("reads shared-control changes in focused status without claiming priority is active", async () => {
+		const { ctx, raw, editor, childControls, mainControls, siblingControls } = createFocusedContext();
+		expect(setSubagentFast(ctx.viewSession, true)).toBe(true);
+		new InputController(ctx).setupEditorSubmitHandler();
+		editor.setText("/fast status");
+
+		await ctx.editor.onSubmit?.("/fast status");
+
+		expect(raw.showStatus).toHaveBeenCalledWith("Fast mode is on.");
+		expect(childControls.isFastModeActive()).toBe(false);
+		expect(childControls.setFastMode).toHaveBeenCalledTimes(1);
+		expect(mainControls.isFastModeEnabled()).toBe(false);
+		expect(siblingControls.isFastModeEnabled()).toBe(false);
+	});
+
+	it("preserves failed /fast drafts and reports invalid arguments or unavailable service", async () => {
+		for (const [command, failure] of [
+			["/fast wrong", "Usage: /fast"],
+			["/fast on", "Fast mode is unavailable"],
+			["/fast ultra", "Ultrafast is unavailable"],
+		] as const) {
+			const { ctx, raw, editor, mainControls, prompt } = createFocusedContext();
+			raw.viewSession.setFastMode = vi.fn(() => false);
+			raw.viewSession.setUltrafastMode = vi.fn(() => false);
+			new InputController(ctx).setupEditorSubmitHandler();
+			editor.setText(command);
+
+			await ctx.editor.onSubmit?.(command);
+
+			expect(raw.showError).toHaveBeenCalledWith(expect.stringContaining(failure));
+			expect(editor.getText()).toBe(command);
+			expect(editor.clearDraft).not.toHaveBeenCalled();
+			expect(mainControls.setFastMode).not.toHaveBeenCalled();
+			expect(mainControls.setUltrafastMode).not.toHaveBeenCalled();
+			expect(prompt).not.toHaveBeenCalled();
+		}
+	});
+
+	it("keeps /fast on the main builtin route when no child is focused", async () => {
+		const { ctx, raw, editor, childControls, mainControls } = createFocusedContext();
+		raw.focusedAgentId = undefined;
+		new InputController(ctx).setupEditorSubmitHandler();
+		editor.setText("/fast on");
+
+		await ctx.editor.onSubmit?.("/fast on");
+
+		expect(mainControls.setFastMode).toHaveBeenCalledWith(true);
+		expect(childControls.setFastMode).not.toHaveBeenCalled();
+		expect(raw.showStatus).toHaveBeenCalledWith("Fast mode enabled.");
+	});
+
+	it("keeps focused model cycling blocked", async () => {
+		const { ctx, raw, mainControls, childControls } = createFocusedContext();
+
+		await new InputController(ctx).cycleRoleModel();
+
+		expect(raw.showStatus).toHaveBeenCalledWith(expect.stringContaining("main session"));
+		expect(mainControls.cycleThinkingLevel).not.toHaveBeenCalled();
+		expect(childControls.cycleThinkingLevel).not.toHaveBeenCalled();
+	});
+
 	it("keeps other commands gated to the main session, draft intact", async () => {
-		const { editor, prompt } = await submit("/compact");
-		expect(editor.getText()).toBe("/compact");
-		expect(prompt).not.toHaveBeenCalled();
+		for (const text of ["/compact", "/model", "/model openai/gpt-5", "/slow on", "!echo unsafe"]) {
+			const { raw, editor, prompt } = await submit(text);
+			expect(editor.getText()).toBe(text);
+			expect(raw.showStatus).toHaveBeenCalledWith(expect.stringContaining("main session"));
+			expect(prompt).not.toHaveBeenCalled();
+		}
 	});
 
 	it("keeps the mutating /usage reset form gated to the main session", async () => {

@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
@@ -16,6 +17,7 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
+import { toolWireSchema } from "@oh-my-pi/pi-ai";
 import { controlHostFor } from "../control/host";
 import { attachTuiPresenter } from "../control/tui-presenter";
 import { trackMountedDialog } from "../control/dialogs";
@@ -48,6 +50,7 @@ import {
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
 import type { TerminalAppearanceRequestToken } from "@oh-my-pi/pi-tui/terminal";
+import { runWithoutDetachedDraft } from "@oh-my-pi/pi-tui/draft-scope";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { col, kbd, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import { sameItems } from "@oh-my-pi/pi-tui/native/memo";
@@ -67,7 +70,6 @@ import {
 	isEnoent,
 	logger,
 	postmortem,
-	prompt,
 	sanitizeText,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils";
@@ -165,11 +167,17 @@ import {
 import type { ShakeMode } from "../session/shake-types";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
+import { getToolArgumentCompletions, getToolArgumentInlineHint } from "../slash-commands/tool-arguments";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type SttState } from "../stt";
 import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
 import { transcribeXaiAudio } from "../stt/xai-stt";
 import { XaiSTTController } from "../stt/xai-stt-controller";
+import { WakeListener } from "../stt/wake-listener";
+import { LocalVoiceMode } from "../stt/local-voice";
+import { EventAudioObserver } from "../event-audio/observer";
+import { preemptEventAudio } from "../event-audio/activity";
+import { SpeechEnhancer } from "../tts/speech-enhancer";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
 import { labelEchoesHandle } from "../task/label";
@@ -391,6 +399,7 @@ import {
 	cfgSpellingAutocomplete,
 	cfgSpellingAutocorrect,
 	cfgSpellingTypoDetection,
+	cfgStartupBranding,
 	cfgStartupChangelogMode,
 	cfgStartupQuiet,
 	cfgStatusLineCompactThinkingLevel,
@@ -431,7 +440,19 @@ import { cfgGoalContinuationModes, cfgGoalEnabled } from "../goals/settings";
 import { goalContinuationActivity, goalFromModeData } from "../goals/state";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../plan-mode/settings";
 import { cfgStreamRedactPatterns } from "../stream/settings";
-import { cfgSttEnabled, cfgSttLanguage } from "../stt/settings";
+import {
+	cfgSttEnabled,
+	cfgSttLanguage,
+	cfgWakeEnabled,
+	cfgWakeSilenceMs,
+	cfgWakeSpeechSensitivity,
+	cfgWakeCancelMs,
+	cfgWakeEndWord,
+	cfgWakeChirpPath,
+	cfgWakeContinueChirpPath,
+	cfgWakeEndChirpPath,
+	cfgWakePlaybackTailMs,
+} from "../stt/settings";
 import { combine, type SettingValueOf } from "../config/registry";
 import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
 import { cfgTierAdvisor } from "../session/settings";
@@ -449,6 +470,7 @@ import {
  */
 const cfgLiveUiSettings = combine({
 	showHardwareCursor: cfgShowHardwareCursor,
+	startupBranding: cfgStartupBranding,
 	"tui.maxInlineImages": cfgTuiMaxInlineImages,
 	"tui.resizeScrollback": cfgTuiResizeScrollback,
 	"tui.imeSafeCursor": cfgTuiImeSafeCursor,
@@ -591,8 +613,6 @@ const PLAN_SAVE_TITLE_LINE_LIMIT = 6;
 const CFG_APPROVE_SESSION = "Always for this session";
 const CFG_APPROVE_ONCE = "Allow once";
 const CFG_DENY = "Deny";
-
-const PLAN_FILENAME_SYSTEM_PROMPT = prompt.render(planFilenamePrompt);
 
 function planSaveTitleExcerpt(planContent: string): string {
 	return planContent
@@ -1861,7 +1881,17 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #uiHelpers: UiHelpers;
 	#sttController: STTController | undefined;
 	#xaiSttController: XaiSTTController | undefined;
+	#wakeListener: WakeListener | undefined;
+	#localVoice: LocalVoiceMode | undefined;
+	#eventAudio: EventAudioObserver | undefined;
+	#syncWakeListener: (() => void) | undefined;
 	#micCursor: MicCursor | undefined;
+	// Fork: the main-composer destination outlives extension editor replacements.
+	readonly #xaiComposerDestination = {
+		insertText: (text: string) => runWithoutDetachedDraft(() => this.#inputController.insertComposerSpeech(text)),
+		submit: () => runWithoutDetachedDraft(() => this.#inputController.submitComposerSpeech()),
+	};
+	#xaiComposerMicState: SttState = "idle";
 	#resizeHandler?: () => void;
 	#observerRegistry: SessionObserverRegistry;
 	/** The operator's IRC id while she is registered as a participant (issue #31). */
@@ -2558,6 +2588,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Restore mode from session (e.g. plan mode on resume)
 		this.session.setSessionBeforeSwitchReconciler?.(async () => {
+			await this.#eventAudio?.command("off");
 			await this.#liveCommandController.stop();
 			await this.#quiesceVibeForSessionSwitch();
 		});
@@ -2597,6 +2628,93 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Subscribe to agent events
 		this.#subscribeToAgent();
+		this.#eventAudio = new EventAudioObserver(this.session, this.#subagentEventBus ?? this.#eventBus, {
+			warning: message => this.showWarning(message),
+			blocked: () =>
+				this.liveCallActive ||
+				vocalizer.isSpeaking() ||
+				(this.#sttController?.state ?? "idle") !== "idle" ||
+				this.#xaiComposerMicState !== "idle" ||
+				(this.#wakeListener?.capturing ?? false) ||
+				(this.#localVoice?.capturing ?? false),
+		});
+		this.#localVoice = new LocalVoiceMode({
+			settings: this.settings,
+			controller: new STTController({
+				settings: this.settings,
+				registry: this.session.modelRegistry,
+				getSessionId: () => this.session.sessionId,
+			}),
+			request: async text => {
+				if (this.liveCallActive) throw new Error("End the live call before using local voice");
+				const sessionId = this.session.sessionId;
+				const previous = this.session.messages.at(-1);
+				await this.session.prompt(text, { throwOnDrop: true, streamingBehavior: "steer" });
+				await this.session.waitForIdle();
+				if (this.session.sessionId !== sessionId) return;
+				const reply = this.session.messages.at(-1);
+				if (!reply || reply === previous || reply.role !== "assistant" || reply.stopReason !== "stop") return;
+				return reply.content
+					.filter(block => block.type === "text")
+					.map(block => block.text)
+					.join("");
+			},
+			speak: (text, signal) =>
+				vocalizer.speakReply(
+					text,
+					{
+						settings: this.settings,
+						registry: this.session.modelRegistry,
+						sessionId: this.session.sessionId,
+					},
+					signal,
+				),
+			postprocess: (text, instruction, signal) =>
+				new SpeechEnhancer({
+					settings: this.settings,
+					registry: this.session.modelRegistry,
+					sessionId: this.session.sessionId,
+					metadataResolver: provider => this.session.agent.metadataForProvider(provider),
+				}).postprocess(text, instruction, signal),
+			isSpeechPlaying: () => vocalizer.isSpeaking(),
+			clearSpeech: () => vocalizer.clear(),
+			status: text => this.showStatus(text),
+			warning: text => this.showWarning(text),
+		});
+		const syncWakeListener = (): void => {
+			this.#wakeListener?.stop();
+			this.#wakeListener = undefined;
+			if (this.localVoiceActive) return;
+			if (!cfgWakeEnabled.get(this.settings)) return;
+			this.#wakeListener = new WakeListener({
+				settings: this.settings,
+				controller: new STTController({
+					settings: this.settings,
+					registry: this.session.modelRegistry,
+					getSessionId: () => this.session.sessionId,
+				}),
+				submit: async text => {
+					this.editor.commitVolatileText(text);
+					this.editor.submit();
+				},
+				status: text => this.showStatus(text),
+				warning: text => this.showWarning(text),
+			});
+			void this.#wakeListener.start();
+		};
+		this.#eventBusUnsubscribers.push(
+			cfgWakeEnabled.listen(this.settings, syncWakeListener),
+			cfgWakeSilenceMs.listen(this.settings, syncWakeListener),
+			cfgWakeSpeechSensitivity.listen(this.settings, syncWakeListener),
+			cfgWakeCancelMs.listen(this.settings, syncWakeListener),
+			cfgWakeEndWord.listen(this.settings, syncWakeListener),
+			cfgWakeChirpPath.listen(this.settings, syncWakeListener),
+			cfgWakeContinueChirpPath.listen(this.settings, syncWakeListener),
+			cfgWakeEndChirpPath.listen(this.settings, syncWakeListener),
+			cfgWakePlaybackTailMs.listen(this.settings, syncWakeListener),
+		);
+		syncWakeListener();
+		this.#syncWakeListener = syncWakeListener;
 
 		this.#eventBusUnsubscribers.push(
 			this.session.subscribe(event => {
@@ -2727,6 +2845,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editor.disableSubmit = false;
 		const controlHost = controlHostFor(this.session);
 		if (controlHost) {
+			controlHost.liveBridge = this.#liveCommandController;
 			attachTuiPresenter(controlHost, {
 				session: this.session,
 				editor: this.editor,
@@ -2824,7 +2943,25 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		}
 
-		return [...builtinCommands, ...hookCommands, ...customCommands, ...skillCommandList];
+		const toolCommands: SlashCommand[] = [
+			{ name: "tool:", description: "Browse enabled tools without invoking them" },
+			...this.session.getToolCatalogEntries().map(tool => ({
+				name: `tool:${tool.name}`,
+				description: tool.description,
+				icon: getSlashCommandTypeIcon("tools"),
+				iconName: "tools" as const,
+				getArgumentCompletions: (text: string) => {
+					const liveTool = this.session.getToolCatalogTool(tool.name);
+					return liveTool ? getToolArgumentCompletions(toolWireSchema(liveTool), text) : null;
+				},
+				getInlineHint: (text: string) => {
+					const liveTool = this.session.getToolCatalogTool(tool.name);
+					return liveTool ? getToolArgumentInlineHint(toolWireSchema(liveTool), text) : null;
+				},
+			})),
+		];
+
+		return [...builtinCommands, ...hookCommands, ...customCommands, ...skillCommandList, ...toolCommands];
 	}
 
 	/** Reload session skills and the `/skill:<name>` command list. */
@@ -3641,6 +3778,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Live-setting composer preferences; `quiet` is startup-only and `composerShape` flows through {@link syncComposerShape}. */
 	#liveComposerPreferences(): Omit<ComposerPreferences, "quiet" | "composerShape"> {
 		return {
+			startupBranding: cfgStartupBranding.get(this.settings),
 			showHardwareCursor: cfgShowHardwareCursor.get(this.settings),
 			maxInlineImages: cfgTuiMaxInlineImages.get(this.settings),
 			resizeScrollback: cfgTuiResizeScrollback.get(this.settings),
@@ -3683,6 +3821,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (
 			any(
 				"showHardwareCursor",
+				"startupBranding",
 				"tui.maxInlineImages",
 				"tui.resizeScrollback",
 				"tui.imeSafeCursor",
@@ -4961,6 +5100,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Reconcile mode state from session entries on resume/switch. */
 	async #reconcileModeFromSession(options?: { preserveActiveGoal?: boolean }): Promise<void> {
+		this.#localVoice?.disable();
+		this.#syncWakeListener?.();
 		const vibeScopeAlreadySuspended = this.#vibeScopeSuspendedForSwitch;
 		this.#vibeScopeSuspendedForSwitch = false;
 		this.#guidedGoalInterviewActive = false;
@@ -5583,7 +5724,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		const excerpt = planSaveTitleExcerpt(planContent);
 		if (excerpt) {
 			void this.session
-				.generateTitle(excerpt, PLAN_FILENAME_SYSTEM_PROMPT)
+				.generateTitle(
+					excerpt,
+					renderPromptAsset(
+						"system/plan-filename.md",
+						planFilenamePrompt,
+						{},
+						{ cwd: this.sessionManager.getCwd() },
+					),
+				)
 				.then(generatedTitle => {
 					if (!generatedTitle) return;
 					suggestedPath = planSaveFileName(generatedTitle);
@@ -5654,7 +5803,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #openPlanInExternalEditor(planFilePath: string): Promise<void> {
-		const editorCmd = getEditorCommand();
+		const env = this.session.environment.snapshot();
+		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
 			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
 			return;
@@ -5678,6 +5828,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			const result = await openInEditor(editorCmd, currentText, {
 				extension: path.extname(resolvedPath) || ".md",
 				trimTrailingNewline: false,
+				env,
 			});
 			if (result !== null) {
 				await Bun.write(resolvedPath, result);
@@ -5693,7 +5844,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #openPlanAnnotationInExternalEditor(draft: string, commit: (text: string | null) => void): Promise<void> {
-		const editorCmd = getEditorCommand();
+		const env = this.session.environment.snapshot();
+		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
 			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
 			return;
@@ -5701,7 +5853,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		try {
 			this.ui.stop();
-			const result = await openInEditor(editorCmd, draft, { extension: ".md" });
+			const result = await openInEditor(editorCmd, draft, { extension: ".md", env });
 			if (result !== null) {
 				commit(result);
 			}
@@ -5784,9 +5936,14 @@ export class InteractiveMode implements InteractiveModeContext {
 				// past the cancel guard — see the comment at the cancel branch.
 				// Cancellation skips the synthetic-prompt dispatch (operator's explicit
 				// abort is honored); failure proceeds best-effort — approval intent stands.
-				const compactionPrompt = prompt.render(planModeCompactInstructionsPrompt, {
-					planFilePath: options.planFilePath,
-				});
+				const compactionPrompt = renderPromptAsset(
+					"system/plan-mode-compact-instructions.md",
+					planModeCompactInstructionsPrompt,
+					{
+						planFilePath: options.planFilePath,
+					},
+					{ cwd: this.sessionManager.getCwd() },
+				);
 				// Pin the plan reference path BEFORE compaction so any user messages
 				// queued during the compaction await (which `handleCompactCommand`
 				// flushes via `flushCompactionQueue` before returning) see the
@@ -5884,11 +6041,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		// markPlanReferenceSent fires only on the dispatch path so the synthetic
 		// plan-approved prompt is the source of the reference injection.
 		this.session.markPlanReferenceSent();
-		const planModePrompt = prompt.render(planModeApprovedPrompt, {
-			planFilePath: options.planFilePath,
-			planContent,
-			contextPreserved: options.preserveContext === true,
-		});
+		const planModePrompt = renderPromptAsset(
+			"system/plan-mode-approved.md",
+			planModeApprovedPrompt,
+			{
+				planFilePath: options.planFilePath,
+				planContent,
+				contextPreserved: options.preserveContext === true,
+			},
+			{ cwd: this.sessionManager.getCwd() },
+		);
 		// Close the review overlay only now — after the async title write and plan
 		// prompt are prepared, immediately before the execution turn is queued. The
 		// synthetic prompt below blocks in `session.prompt` for the whole run, so
@@ -6331,9 +6493,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			// hidden developer message, the agent asks its questions as regular
 			// assistant turns, and the user answers in the ordinary editor. Queue
 			// behind an in-flight run instead of aborting it.
-			const kickoff = prompt.render(guidedGoalInterviewPrompt, {
-				initial: rest?.trim() || undefined,
-			});
+			const kickoff = renderPromptAsset(
+				"goals/guided-goal-interview.md",
+				guidedGoalInterviewPrompt,
+				{
+					initial: rest?.trim() || undefined,
+				},
+				{ cwd: this.sessionManager.getCwd() },
+			);
 			const images = input?.images?.length ? input.images : undefined;
 			if (this.session.isStreaming) {
 				await this.session.followUp(kickoff, images, { synthetic: true });
@@ -6928,6 +7095,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Stop the shared tool-spinner ticker: a live block missed by per-component
 		// stopAnimation would otherwise keep an 80ms interval pinning the process.
 		stopSharedSpinnerTicker();
+		const controlHost = controlHostFor(this.session);
+		if (controlHost?.liveBridge === this.#liveCommandController) controlHost.liveBridge = undefined;
 		this.#liveCommandController.dispose();
 		this.#clearJudgmentBatchProgress();
 		this.#downloadActivityHud.dispose();
@@ -6936,6 +7105,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#cancelGoalContinuation();
 		clearInterval(this.#jobsSheetTimer);
 		this.#jobsSheetTimer = undefined;
+		this.#eventAudio?.dispose();
+		this.#eventAudio = undefined;
+		this.#wakeListener?.stop();
+		this.#wakeListener = undefined;
+		this.#localVoice?.disable();
+		this.#localVoice = undefined;
+		this.#syncWakeListener = undefined;
 		if (this.#sttController) {
 			this.#sttController.dispose();
 			this.#sttController = undefined;
@@ -7263,6 +7439,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
 	): void {
 		const previousEditor = this.editor;
+		if (this.#xaiComposerMicState !== "idle") {
+			this.#micCursor?.dispose();
+			this.#micCursor = undefined;
+		}
 		const previousText = previousEditor.getText();
 		const nextEditor = factory
 			? factory(this.ui, getEditorTheme(), this.keybindings)
@@ -7314,6 +7494,9 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.#inputController.setupKeyHandlers();
 		this.#inputController.setupEditorSubmitHandler();
+		if (this.#xaiComposerMicState !== "idle") {
+			this.#dictationCallbacks(() => this.editor).onStateChange(this.#xaiComposerMicState);
+		}
 
 		void this.refreshSlashCommandState().catch(error => {
 			logger.warn("Failed to refresh slash command state for custom editor", {
@@ -7895,6 +8078,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#commandController.handleToolsCommand();
 	}
 
+	handleToolCatalogCommand(name?: string): void {
+		this.#commandController.handleToolCatalogCommand(name);
+	}
+
 	handleContextCommand(): void {
 		this.#commandController.handleContextCommand();
 	}
@@ -8012,10 +8199,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	// =====================================================================
 	/** Ctrl+Space owns an independent, whole-recording xAI path. */
 	async handleSTTToggle(): Promise<void> {
-		if (this.#sttController && this.#sttController.state !== "idle") {
-			this.showWarning("Finish configured dictation before recording xAI speech input.");
-			return;
+		// Retire the configured controller, even when dependency setup still reports idle.
+		// Its late callbacks must never regain the composer after this handoff.
+		this.editor.spaceHold.cancel();
+		try {
+			this.#sttController?.dispose();
+		} catch (error) {
+			logger.warn("Configured dictation cleanup failed during xAI takeover", { error: String(error) });
 		}
+		this.#sttController = undefined;
 		// IMMUTABLE: see Ctrl+Space notice above
 		this.#xaiSttController ??= new XaiSTTController({
 			settings: this.settings,
@@ -8030,7 +8222,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				}),
 		});
 		// IMMUTABLE: see Ctrl+Space notice above
-		await this.#xaiSttController.toggle(this.editor, this.#dictationCallbacks(this.editor));
+		await this.#xaiSttController.toggle(
+			this.#xaiComposerDestination,
+			this.#dictationCallbacks(() => this.editor),
+		);
 	}
 
 	/** Configured dictation stays on its own shortcut and the Space-hold gesture. */
@@ -8073,11 +8268,14 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Callbacks for a capture dictating into `target`: the mic glyph replaces its cursor while the
 	 *  capture runs. */
-	#dictationCallbacks(target: DictationTarget): SttCallbacks {
+	#dictationCallbacks(destination: DictationTarget | (() => DictationTarget)): SttCallbacks {
 		return {
 			showWarning: (msg: string) => this.showWarning(msg),
 			showStatus: (msg: string) => this.showStatus(msg),
 			onStateChange: (state: SttState) => {
+				if (state !== "idle") preemptEventAudio();
+				const target = typeof destination === "function" ? destination() : destination;
+				if (typeof destination === "function") this.#xaiComposerMicState = state;
 				// Duck assistant speech while the user is talking (push-to-talk); restore after.
 				if (state === "recording") vocalizer.duck();
 				else vocalizer.unduck();
@@ -8085,8 +8283,10 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.#micCursor?.dispose();
 					this.#micCursor = new MicCursor(this.ui, target);
 				} else if (state === "transcribing") {
+					this.#micCursor ??= new MicCursor(this.ui, target);
 					this.#micCursor?.showTranscribing();
 				} else {
+					target.spaceHold?.cancel();
 					this.#micCursor?.dispose();
 					this.#micCursor = undefined;
 				}
@@ -8128,8 +8328,43 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.showStatus(`Recording to ${this.#recorder.path} · /record again to stop`);
 	}
 
+	get localVoiceActive(): boolean {
+		return this.#localVoice?.enabled ?? false;
+	}
+
+	async handleLocalVoiceCommand(args = ""): Promise<void> {
+		const command = args.trim().toLowerCase();
+		if (!["", "on", "off", "status"].includes(command)) {
+			this.showWarning("Usage: /voice [on|off|status]");
+			return;
+		}
+		if (command === "status") {
+			this.showStatus(`Local voice: ${this.localVoiceActive ? "on" : "off"} for this session`);
+			return;
+		}
+		const enable = command === "on" || (command === "" && !this.localVoiceActive);
+		if (enable) {
+			if (this.liveCallActive) {
+				this.showWarning("Stop live mode before enabling local voice");
+				return;
+			}
+			this.#wakeListener?.stop();
+			this.#wakeListener = undefined;
+			vocalizer.clear();
+			await this.#localVoice?.enable();
+		} else {
+			this.#localVoice?.disable();
+		}
+		this.#syncWakeListener?.();
+		this.showStatus(`Local voice: ${this.localVoiceActive ? "on" : "off"} for this session`);
+	}
+
 	/** Start or stop the Codex-backed realtime voice surface. */
 	async handleLiveCommand(): Promise<void> {
+		if (this.localVoiceActive) {
+			this.showWarning("Turn local voice off with /voice off before starting live mode");
+			return;
+		}
 		await this.#liveCommandController.handleCommand();
 	}
 
@@ -8301,7 +8536,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		void this.#selectorController.showGitTui(revision);
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean }): void {
+	showModelSelector(options?: { temporaryOnly?: boolean; sessionOnly?: boolean }): void {
 		this.#selectorController.showModelSelector(options);
 	}
 

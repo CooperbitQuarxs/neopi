@@ -104,6 +104,9 @@
 		"openai-codex/gpt-6-luna:xhigh",
 		"openai-codex/gpt-5.6-luna:xhigh"
 	],
+	"deck-inbox": [
+		"openai-codex/gpt-6-luna"
+	],
 	"judge": [
 		"typesafe/jev-latest",
 		"openrouter/~typesafe/jev-latest",

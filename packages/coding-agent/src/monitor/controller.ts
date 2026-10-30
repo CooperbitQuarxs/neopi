@@ -13,7 +13,7 @@ import { AgentRegistry } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
 import { scopeEnvCommand } from "../subprocess/terminal-launch";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
-import { cfgMonitorIncludeAdvisors, cfgMonitorMaxPanesPerWindow } from "./settings";
+import { cfgMonitorIncludeAdvisors, readMonitorLayout } from "./settings";
 import { TmuxMonitorError, TmuxMonitorManager, type TmuxMonitorStatus } from "./tmux-manager";
 
 const managers = new WeakMap<AgentSession, TmuxMonitorManager>();
@@ -67,7 +67,7 @@ async function startNow(session: AgentSession, settings: Settings): Promise<Tmux
 		paneCommand: file => [...cli, "attach", host.instanceId, "--capability-file", file],
 		placeholderCommand: [...cli, "idle", host.instanceId],
 		includeAdvisors: () => cfgMonitorIncludeAdvisors.get(settings) === true,
-		maxPanesPerWindow: () => Number(cfgMonitorMaxPanesPerWindow.get(settings)) || 6,
+		layout: () => readMonitorLayout(settings),
 	});
 	manager.onEnded(reason => {
 		if (managers.get(session) === manager) managers.delete(session);

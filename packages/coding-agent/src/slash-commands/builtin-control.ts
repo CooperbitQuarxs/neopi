@@ -1,12 +1,36 @@
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { runPauseScreen } from "@oh-my-pi/pi-tui/overlays/pause-screen";
+import { cfgLiveModel } from "../live/settings";
+import { eventAudioCommand } from "../event-audio/observer";
 import { clearSubmittedText } from "./helpers/draft";
 import { shutdownHandlerTui } from "./builtin-lifecycle";
+import { configureAgentMonitor } from "../monitor/configure";
 import { agentMonitorFor, startAgentMonitor, stopAgentMonitor } from "../monitor/controller";
-import { commandConsumed, errorMessage, usage } from "./helpers/parse";
+import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import type { SlashCommandSpec } from "./types";
 
 export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
+	{
+		name: "sounds",
+		icon: "voice",
+		description: "Enable, silence or reload owner-assigned event sounds for this session",
+		allowArgs: true,
+		inlineHint: "[on|off|reload|status]",
+		subcommands: [
+			{ name: "on", description: "Enable assigned event sounds for this session" },
+			{ name: "off", description: "Stop event sounds immediately" },
+			{ name: "reload", description: "Reread curated assignments and changed audio" },
+			{ name: "status", description: "Show mappings, playback and dropped events" },
+		],
+		handleTui: async (command, runtime) => {
+			clearSubmittedText(runtime);
+			try {
+				runtime.ctx.showStatus(await eventAudioCommand(runtime.ctx.session, command.args));
+			} catch (error) {
+				runtime.ctx.showError(errorMessage(error));
+			}
+		},
+	},
 	{
 		name: "force",
 		icon: "hammer",
@@ -60,9 +84,28 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "live",
 		icon: "voice",
-		description: "Start Codex-backed realtime voice mode",
-		handleTui: async (_command, runtime) => {
+		description: "Start Codex-backed realtime voice mode or choose its model",
+		allowArgs: true,
+		inlineHint: "[model [slug]]",
+		subcommands: [{ name: "model", description: "Show or set the model for the next live call", usage: "[slug]" }],
+		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);
+			const { verb, rest } = parseSubcommand(command.args);
+			if (verb === "model") {
+				try {
+					if (rest) cfgLiveModel.set(runtime.ctx.settings, rest);
+					runtime.ctx.showStatus(
+						`Live model: ${cfgLiveModel.get(runtime.ctx.settings)}${rest ? " (applies to the next live call)" : ""}`,
+					);
+				} catch (error) {
+					runtime.ctx.showError(errorMessage(error));
+				}
+				return;
+			}
+			if (verb) {
+				runtime.ctx.showError("Usage: /live [model [slug]]");
+				return;
+			}
 			await runtime.ctx.handleLiveCommand();
 		},
 	},
@@ -88,11 +131,12 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "monitor",
 		icon: "eye",
 		description: "Open a tmux session with one live pane per subagent and advisor",
-		inlineHint: "[on|off|status]",
+		inlineHint: "[on|off|status|configure]",
 		subcommands: [
 			{ name: "on", description: "Start the monitor session (default)" },
 			{ name: "off", description: "Close the monitor session and its panes" },
 			{ name: "status", description: "Show the monitor session and its panes" },
+			{ name: "configure", description: "Configure monitor layout, counts, and pane sizes" },
 		],
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
@@ -100,6 +144,10 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const { ctx } = runtime;
 			const action = command.args.trim() || "on";
 			try {
+				if (action === "configure") {
+					await configureAgentMonitor(ctx);
+					return;
+				}
 				if (action === "off") {
 					const stopped = await stopAgentMonitor(ctx.session);
 					ctx.showStatus(stopped ? "Agent monitor closed." : "The agent monitor is not running.");
@@ -118,7 +166,7 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					return;
 				}
 				if (action !== "on") {
-					ctx.showError("Usage: /monitor [on|off|status]");
+					ctx.showError("Usage: /monitor [on|off|status|configure]");
 					return;
 				}
 				const status = await startAgentMonitor(ctx.session, ctx.settings);

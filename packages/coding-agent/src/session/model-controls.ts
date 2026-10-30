@@ -12,7 +12,7 @@ import {
 	isAnthropicFastModeFallbackDisabled,
 } from "@oh-my-pi/pi-ai/providers/anthropic-state";
 import { isFireworksFastModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
-import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
+import { THINKING_EFFORTS, type ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -84,7 +84,7 @@ export class ModelControls {
 	/** Hard per-session effort ceiling (e.g. a task spawn's `task.maxEffort` cap); recovery paths re-clamp to it. */
 	readonly #thinkingLevelCeiling: Effort | undefined;
 	#autoThinking = false;
-	#autoResolvedLevel: Effort | undefined;
+	#autoResolvedLevel: ThinkingEffort | undefined;
 	#effortOrigin: EffortOrigin;
 	#autoSelection: EffortSelection | undefined;
 	#effortRevision = 0;
@@ -103,6 +103,7 @@ export class ModelControls {
 		},
 	) {
 		this.#host = host;
+		this.restoreActiveRole();
 		this.#scopedModels = options.scopedModels ?? [];
 		this.#serviceTierByFamily = options.serviceTierByFamily ?? {};
 		this.#thinkingLevelCeiling = options.thinkingLevelCeiling;
@@ -187,7 +188,7 @@ export class ModelControls {
 	}
 
 	/** Last concrete effort selected by automatic classification. */
-	get autoResolvedThinkingLevel(): Effort | undefined {
+	get autoResolvedThinkingLevel(): ThinkingEffort | undefined {
 		return this.#autoResolvedLevel;
 	}
 
@@ -258,7 +259,7 @@ export class ModelControls {
 	restoreThinkingSnapshot(
 		level: ThinkingLevel | undefined,
 		auto: boolean,
-		resolved: Effort | undefined,
+		resolved: ThinkingEffort | undefined,
 		origin: EffortOrigin,
 		selection: EffortSelection | undefined,
 		requested: ConfiguredThinkingLevel | undefined,
@@ -278,6 +279,13 @@ export class ModelControls {
 	restoreServiceTiers(tiers: ServiceTierByFamily): void {
 		this.#serviceTierByFamily = tiers;
 	}
+	/** Restore the selected role only when the session is actually running its assigned model. */
+	restoreActiveRole(): void {
+		const role = this.#host.sessionManager.getLastModelChangeRole() ?? "default";
+		const assigned = this.resolveRoleModel(role);
+		this.#host.settings.setActiveRole(assigned && modelsAreEqual(assigned, this.#model) ? role : undefined);
+	}
+
 	resolveRoleModel(role: string): Model | undefined {
 		return resolveRoleModelFull(this.#host.settings, role, this.#host.modelRegistry.getAvailable(), this.#model)
 			.model;
@@ -331,6 +339,7 @@ export class ModelControls {
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
 		await this.#host.setModelWithProviderSessionReset(targetModel);
+		this.#host.settings.setActiveRole(role);
 		this.#host.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
 		if (options?.persist) {
 			this.#host.settings.setModelRole(
@@ -388,6 +397,7 @@ export class ModelControls {
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
 		await this.#host.setModelWithProviderSessionReset(targetModel, selection);
+		if (selection === "explicit") this.#host.settings.setActiveRole(undefined);
 		this.#host.sessionManager.appendModelChange(
 			`${targetModel.provider}/${targetModel.id}`,
 			options?.ephemeral ? EPHEMERAL_MODEL_CHANGE_ROLE : "temporary",
@@ -568,6 +578,7 @@ export class ModelControls {
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(next.model));
 		this.#host.clearActiveRetryFallback();
 		await this.#host.setModelWithProviderSessionReset(next.model);
+		this.#host.settings.setActiveRole(undefined);
 		this.#host.sessionManager.appendModelChange(`${next.model.provider}/${next.model.id}`);
 		this.#host.settings.getStorage()?.recordModelUsage(`${next.model.provider}/${next.model.id}`);
 
@@ -600,6 +611,7 @@ export class ModelControls {
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
 		this.#host.clearActiveRetryFallback();
 		await this.#host.setModelWithProviderSessionReset(nextModel);
+		this.#host.settings.setActiveRole(undefined);
 		this.#host.sessionManager.appendModelChange(`${nextModel.provider}/${nextModel.id}`);
 		this.#host.settings.getStorage()?.recordModelUsage(`${nextModel.provider}/${nextModel.id}`);
 		// Re-apply the current thinking level (or auto) for the newly selected model
@@ -819,7 +831,7 @@ export class ModelControls {
 		const revision = this.#effortRevision;
 
 		let explicitMax = false;
-		let resolved: Effort | undefined;
+		let resolved: ThinkingEffort | undefined;
 		if (this.#host.magicKeywordEnabled("ultrathink") && containsMagicKeyword(promptText, "ultrathink")) {
 			// The user explicitly asked for maximum thinking; bypass the classifier
 			// (and the `providers.autoThinkingMaxEffort` ceiling) and jump straight
@@ -890,7 +902,7 @@ export class ModelControls {
 				: (resolved ?? this.#autoResolvedLevel ?? resolveProvisionalAutoLevel(model)),
 			this.#thinkingLevelCeiling,
 		);
-		if (effort === undefined) return;
+		if (effort === undefined || effort === ThinkingLevel.Inherit) return;
 		const shouldPersistResolution = this.#autoResolvedLevel === undefined || this.#thinkingLevel !== effort;
 		this.#autoResolvedLevel = effort;
 		this.#thinkingLevel = effort;

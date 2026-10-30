@@ -1,9 +1,11 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	type AutocompleteProvider,
 	type Component,
+	Editor,
 	isKeyRelease,
 	type KeyId,
 	matchesKey,
@@ -14,8 +16,9 @@ import {
 import { getAgentDir, isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
 import { formatDoubleTap } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
-import { currentDeferredDraft } from "@oh-my-pi/pi-tui/draft-scope";
+import { currentDeferredDraft, runWithoutDetachedDraft } from "@oh-my-pi/pi-tui/draft-scope";
 import type { ChainConfig } from "@oh-my-pi/pi-tui/overlays/chain-types";
+import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import { discoverChains } from "../../chains/config";
 import { EscapeGesture } from "../../chains/escape-gesture";
 import { ChainControl, enabledChainSteps, runChain } from "../../chains/runner";
@@ -48,8 +51,9 @@ import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/ski
 import type { InteractiveModeContext, SubmittedUserInput } from "../../modes/types";
 import { isDeferredSubmissionActive, waitForDeferredInput } from "../../neopi/defer";
 import type { LiveSubmitRoute } from "./live-command-controller";
-import manualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
+import bundledManualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
 import { AgentRegistry } from "../../registry/agent-registry";
+import { cycleSubagentThinkingLevel, runSubagentFastCommand } from "../../registry/subagent-controls";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { PINNED_HUD_TOGGLE_ID } from "@oh-my-pi/pi-tui/prompt/composer";
@@ -74,7 +78,7 @@ import { EnhancedPasteController } from "../../utils/enhanced-paste";
 import {
 	extractExternalEditorMessage,
 	formatExternalEditorDraft,
-	getEditorCommand,
+	withExternalEditor,
 	openInEditor,
 } from "../../utils/external-editor";
 import { resendProgramStatus } from "../../utils/run-status";
@@ -190,9 +194,7 @@ const FOCUSED_VIEW_COMMANDS: Record<string, (args: string) => boolean> = {
 		return !verb || (verb === "show" && !rest);
 	},
 };
-const FOCUSED_VIEW_COMMAND_LIST = Object.keys(FOCUSED_VIEW_COMMANDS)
-	.map(name => `/${name}`)
-	.join(", ");
+const FOCUSED_VIEW_COMMAND_LIST = ["/fast", ...Object.keys(FOCUSED_VIEW_COMMANDS).map(name => `/${name}`)].join(", ");
 
 /** Wrap pasted text in `<attachment>` tags so the model treats it as one quoted block. */
 function wrapPasteInAttachmentBlock(content: string): string {
@@ -256,24 +258,74 @@ export class InputController {
 	/** Set by `app.repl.execute` so the next submit runs in the REPL kernel. */
 	#replNextSubmit = false;
 
-	/** Resolve the current tiny role at use time so project/session reloads cannot leave a stale model. */
-	#resolveTinyTitleLocalModelKey(): string | undefined {
+	/** Resolve the title role at use time so project/session reloads cannot leave a stale model. */
+	#resolveTitleLocalModelKey(): string | undefined {
 		const model = resolveModelRoleValue(
-			formatModelRoleAlias("tiny"),
-			roleCandidatePool("tiny", this.ctx.settings, this.ctx.session.modelRegistry),
+			formatModelRoleAlias("title"),
+			roleCandidatePool("title", this.ctx.settings, this.ctx.session.modelRegistry),
 			{ settings: this.ctx.settings },
 		).model;
 		return model?.api === "local-inference" && isTinyLocalModelKey(model.id) ? model.id : undefined;
 	}
 
-	/** Prewarm only the local worker selected by the current tiny role. */
+	/** Prewarm only the local worker selected by the current title role. */
 	prewarmTinyTitleModel(): void {
-		const modelKey = this.#resolveTinyTitleLocalModelKey();
+		const modelKey = this.#resolveTitleLocalModelKey();
 		if (modelKey) tinyTitleClient.prewarm(modelKey);
 	}
 
 	#enhancedPaste?: EnhancedPasteController;
 	#draftText: string | undefined;
+	// Fork: chain previews own the composer until their caller finishes restoration.
+	#chainOwnsComposer = false;
+	#chainSpeechDraft: Editor | undefined;
+	#chainSpeechSubmit = false;
+
+	insertComposerSpeech(text: string): void {
+		if (!this.#chainOwnsComposer) {
+			this.ctx.editor.insertText(text);
+			return;
+		}
+		this.#chainSpeechDraft ??= new Editor(getEditorTheme());
+		this.#chainSpeechDraft.insertText(text);
+	}
+
+	submitComposerSpeech(): void {
+		if (this.#chainOwnsComposer) this.#chainSpeechSubmit = true;
+		else this.ctx.editor.submit();
+	}
+
+	#releaseChainComposer(): void {
+		this.#chainOwnsComposer = false;
+		const draft = this.#chainSpeechDraft;
+		const submit = this.#chainSpeechSubmit;
+		this.#chainSpeechDraft = undefined;
+		this.#chainSpeechSubmit = false;
+		if (!draft) return;
+		// On abort/error, retain the restored chain draft separately for Up recall.
+		this.ctx.editor.clearDraftForRecall();
+		this.ctx.editor.setDraft(draft.getText());
+		this.ctx.ui.requestRender();
+		// Let the original submission enter dispatch before the next one can submit.
+		if (submit) queueMicrotask(() => this.ctx.editor.submit());
+	}
+
+	/** Retain a rejected prompt for recall without replacing speech already on the next draft. */
+	#restoreRejectedPrompt(text: string, images?: ImageContent[], links?: (string | undefined)[]): void {
+		const editor = this.ctx.editor;
+		const newerText = editor.getExpandedText();
+		const newerImages = [...editor.pendingImages];
+		const newerLinks = [...editor.pendingImageLinks];
+		const hasNewerDraft = newerText.length > 0 || newerImages.length > 0;
+		editor.setDraft(text, images);
+		editor.pendingImageLinks = links ? [...links] : (images ?? []).map(() => undefined);
+		editor.imageLinks = editor.pendingImageLinks;
+		if (!hasNewerDraft) return;
+		editor.clearDraftForRecall();
+		editor.setDraft(newerText, newerImages);
+		editor.pendingImageLinks = newerLinks;
+		editor.imageLinks = newerLinks;
+	}
 	/** Unknown `/command` text already warned about; submitting it again sends it as a prompt. */
 	#unknownSlashWarned: string | undefined;
 	#focusedLeftTapListenerInstalled = false;
@@ -379,6 +431,8 @@ export class InputController {
 			// These actions target the main transcript/editor rather than the
 			// focused prompt. Keep focused components' own bindings authoritative.
 			this.ctx.ui.addInputListener(data => {
+				// Reserved accessibility input always targets the main composer, even under a modal.
+				if (this.ctx.editor.handleSpeechShortcut?.(data)) return { consume: true };
 				const chordView = this.#takeSidebarChord(data);
 				if (chordView === "cancel") return { consume: true };
 				if (chordView !== undefined) {
@@ -1228,9 +1282,8 @@ export class InputController {
 			const warnedSlashText = deferred ? undefined : this.#unknownSlashWarned;
 			if (!deferred) this.#unknownSlashWarned = undefined;
 
-			// Focused subagent session: the editor is a plain chat box for it.
-			// Everything below (slash/bash/python, loop,
-			// compaction queueing) is main-session-only.
+			// Focused subagent session: route chat and its supported session controls
+			// before main-session slash/bash/python, loop, and compaction handling.
 			if (!deferred && this.ctx.focusedAgentId) {
 				// The composer's speech goes to the focused agent; the voice call must not relay it too.
 				if (this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) {
@@ -1265,7 +1318,10 @@ export class InputController {
 				if (this.ctx.onInputCallback) {
 					this.ctx.editor.clearDraft();
 					this.ctx.onInputCallback({
-						text: manualContinuePrompt,
+						text: resolvePromptAsset("system/manual-continue.md", bundledManualContinuePrompt, {
+							cwd: this.ctx.sessionManager.getCwd(),
+							kind: "notice",
+						}).text,
 						cancelled: false,
 						started: true,
 						synthetic: true,
@@ -1575,33 +1631,38 @@ export class InputController {
 			// stays in history so Up recalls what was written, not the rewrite.
 			const typedText = text;
 			if (forceChain || (isSettingsInitialized() && cfgChainingAuto.get(settings))) {
-				const outcome = await this.#applyPostProcessingChain(text);
-				if (!isDeferredSubmissionActive()) return;
-				if (!outcome.send) {
-					if (inputImages && inputImages.length > 0) {
-						this.ctx.editor.pendingImages = [...inputImages];
-						this.ctx.editor.pendingImageLinks = inputImageLinks
-							? [...inputImageLinks]
-							: inputImages.map(() => undefined);
-						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
-					}
-					if (outcome.text === typedText && this.ctx.editor.restoreSubmittedDraft()) {
-						// An untouched draft comes back as displayed, large pastes still collapsed.
-					} else {
-						// A later step failed: Up still recalls what was typed, and a large rewrite
-						// shows collapsed.
-						this.ctx.editor.addToHistory(typedText);
-						if (outcome.text.length > CHAIN_DISPLAY_COLLAPSE_CHARS) {
-							this.ctx.editor.setText("");
-							this.ctx.editor.insertPaste(outcome.text);
-						} else {
-							this.ctx.editor.setCollapsedText(outcome.text);
+				this.#chainOwnsComposer = true;
+				try {
+					const outcome = await this.#applyPostProcessingChain(text);
+					if (!isDeferredSubmissionActive()) return;
+					if (!outcome.send) {
+						if (inputImages && inputImages.length > 0) {
+							this.ctx.editor.pendingImages = [...inputImages];
+							this.ctx.editor.pendingImageLinks = inputImageLinks
+								? [...inputImageLinks]
+								: inputImages.map(() => undefined);
+							this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
 						}
+						if (outcome.text === typedText && this.ctx.editor.restoreSubmittedDraft()) {
+							// An untouched draft comes back as displayed, large pastes still collapsed.
+						} else {
+							// A later step failed: Up still recalls what was typed, and a large rewrite
+							// shows collapsed.
+							this.ctx.editor.addToHistory(typedText);
+							if (outcome.text.length > CHAIN_DISPLAY_COLLAPSE_CHARS) {
+								this.ctx.editor.setText("");
+								this.ctx.editor.insertPaste(outcome.text);
+							} else {
+								this.ctx.editor.setCollapsedText(outcome.text);
+							}
+						}
+						return;
 					}
+					text = outcome.text;
+				} finally {
 					this.ctx.editor.clearSubmittedDraft();
-					return;
+					runWithoutDetachedDraft(() => this.#releaseChainComposer());
 				}
-				text = outcome.text;
 			}
 			// The submitted-draft snapshot served the live hold and the chain; it holds paste
 			// payloads, so release it once the prompt is on its way.
@@ -1636,16 +1697,7 @@ export class InputController {
 					// state untouched, so the previous body (if any) survives.
 					if (submittedMode === "loop" && forwarded) this.ctx.setLoopPrompt(text);
 				} catch (error) {
-					// Don't lose the queued steer draft: restore images then the collapsed
-					// text so chip tokens (and band cards) survive the retry.
-					if (images && images.length > 0) {
-						this.ctx.editor.pendingImages = [...images];
-						this.ctx.editor.pendingImageLinks = inputImageLinks
-							? [...inputImageLinks]
-							: images.map(() => undefined);
-						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
-					}
-					this.ctx.editor.setCollapsedText(text);
+					this.#restoreRejectedPrompt(text, images, inputImageLinks);
 					this.ctx.showError(error instanceof Error ? error.message : String(error));
 				}
 				this.ctx.updatePendingMessagesDisplay();
@@ -1715,17 +1767,7 @@ export class InputController {
 					// loop instead of resubmitting a local action on next idle.
 					if (!forwarded && this.ctx.loopPrompt === text) this.ctx.pauseLoop();
 				} catch (error) {
-					// Don't lose the message: hand images then collapsed text back to the
-					// editor so the user can retry (e.g. prompt dispatch rejecting an
-					// extension command).
-					if (images && images.length > 0) {
-						this.ctx.editor.pendingImages = [...images];
-						this.ctx.editor.pendingImageLinks = inputImageLinks
-							? [...inputImageLinks]
-							: images.map(() => undefined);
-						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
-					}
-					this.ctx.editor.setCollapsedText(text);
+					this.#restoreRejectedPrompt(text, images, inputImageLinks);
 					this.ctx.showError(error instanceof Error ? error.message : String(error));
 					// Dispatch rejected after the body was armed: park it so the
 					// failed prompt is not resubmitted on next idle.
@@ -1999,7 +2041,7 @@ export class InputController {
 		);
 	}
 
-	/** Submit editor text to the focused subagent session (chat and continue shortcuts only). */
+	/** Submit chat, viewer commands, or session-only /fast to the focused subagent. */
 	async #submitToFocusedSession(text: string, streamingBehavior: "steer" | "followUp"): Promise<void> {
 		const target = this.ctx.viewSession;
 		const images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
@@ -2016,6 +2058,21 @@ export class InputController {
 		}
 		if (text?.startsWith("/")) {
 			const parsed = parseSlashCommand(text);
+			if (parsed?.name === "fast") {
+				try {
+					const message = runSubagentFastCommand(target, parsed.args);
+					this.#recordSlashCommandUsage(text);
+					if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
+					this.ctx.editor.clearDraft(text);
+					this.ctx.statusLine.invalidate();
+					this.ctx.updateEditorBorderColor();
+					this.ctx.showStatus(message);
+					this.ctx.ui.requestRender();
+				} catch (error) {
+					this.ctx.showError(error instanceof Error ? error.message : String(error));
+				}
+				return;
+			}
 			if (parsed && FOCUSED_VIEW_COMMANDS[parsed.name]?.(parsed.args)) {
 				// Viewer-scoped commands: /btw asks about the focused transcript, /export
 				// writes it (with its own subagents), /usage reports account-wide limits.
@@ -2043,7 +2100,13 @@ export class InputController {
 			// Continue shortcuts do not request queueing: keep rejecting them while
 			// busy instead of scheduling another continuation behind the active turn.
 			if (isContinueShortcut) {
-				await target.prompt(manualContinuePrompt, { synthetic: true, userInitiated: true });
+				await target.prompt(
+					resolvePromptAsset("system/manual-continue.md", bundledManualContinuePrompt, {
+						cwd: this.ctx.sessionManager.getCwd(),
+						kind: "notice",
+					}).text,
+					{ synthetic: true, userInitiated: true },
+				);
 			} else {
 				await this.ctx.withLocalSubmission(text, () => target.prompt(text, { streamingBehavior, images }), {
 					imageCount: images?.length ?? 0,
@@ -3269,13 +3332,8 @@ export class InputController {
 	}
 
 	cycleThinkingLevel(): void {
-		if (this.ctx.focusedAgentId) {
-			this.ctx.showStatus(
-				`Model/thinking apply to the main session — press ${formatDoubleTap("left")} to return first`,
-			);
-			return;
-		}
-		const newLevel = this.ctx.session.cycleThinkingLevel();
+		const target = this.ctx.focusedAgentId ? this.ctx.viewSession : this.ctx.session;
+		const newLevel = this.ctx.focusedAgentId ? cycleSubagentThinkingLevel(target) : target.cycleThinkingLevel();
 		if (newLevel === undefined) {
 			this.ctx.showStatus("Current model does not support thinking");
 		} else {
@@ -3403,31 +3461,21 @@ export class InputController {
 	}
 
 	async openExternalEditor(): Promise<void> {
-		const editorCmd = getEditorCommand();
-		if (!editorCmd) {
-			this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
-			return;
-		}
-
-		const currentText = this.ctx.editor.getExpandedText?.() ?? this.ctx.editor.getText();
-		const draft = formatExternalEditorDraft(this.ctx.ui.getVisibleScreenRows(), currentText);
-
-		try {
-			this.ctx.ui.stop();
-			const result = await openInEditor(editorCmd, draft, { extension: ".omp.md" });
-			if (result !== null) {
-				const message = extractExternalEditorMessage(result);
-				if (message === null) this.ctx.showWarning("External editor context marker was removed; draft unchanged.");
-				else this.ctx.editor.setText(message);
-			}
-		} catch (error) {
-			this.ctx.showWarning(
-				`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		} finally {
-			this.ctx.ui.start();
-			this.ctx.ui.requestRender();
-		}
+		const env = this.ctx.session.environment.snapshot();
+		await withExternalEditor(
+			this.ctx,
+			async editorCmd => {
+				const currentText = this.ctx.editor.getExpandedText?.() ?? this.ctx.editor.getText();
+				const draft = formatExternalEditorDraft(this.ctx.ui.getVisibleScreenRows(), currentText);
+				const result = await openInEditor(editorCmd, draft, { extension: ".omp.md", env });
+				if (result !== null) {
+					const message = extractExternalEditorMessage(result);
+					if (message === null) this.ctx.showWarning("External editor context marker was removed; draft unchanged.");
+					else this.ctx.editor.setText(message);
+				}
+			},
+			env,
+		);
 	}
 
 	registerExtensionShortcuts(): void {

@@ -38,7 +38,8 @@ import {
 } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
-import { AgentSelectorError, parseSelectorSuffix, validateAgentModelSelector } from "../task/agent-selector";
+import { AgentSelectorError, validateAgentModelSelector } from "../task/agent-selector";
+import { parseSelectorSuffix } from "../config/model-selector-suffix";
 import { Semaphore } from "../task/parallel";
 import type { ToolSession } from "../tools";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
@@ -491,14 +492,19 @@ async function executeCompletion(
 							? { mode: "fixed" as const, level: "off" as ThinkingLevel }
 							: undefined
 				: (candidate.selection ??
-					(reasoning !== undefined ? { mode: "fixed" as const, level: reasoning } : undefined));
+					(reasoning !== undefined
+						? { mode: "fixed" as const, level: reasoning }
+						: disableReasoning
+							? { mode: "fixed" as const, level: "off" as ThinkingLevel }
+							: undefined));
 			const origin = candidate.inheritsReasoning ? (inherited?.origin ?? candidate.origin) : candidate.origin;
-			if (cfgEffortPolicyMode.get(session.settings) === "replacement" && !disableReasoning && model.reasoning) {
+			if (cfgEffortPolicyMode.get(session.settings) === "replacement" && model.reasoning) {
 				const decision = resolveImplicitEffort(session.settings, model, selection, origin);
 				if (decision.disclosure) disclose(decision.disclosure);
 				if (selection?.mode === "auto") {
+					let classified: ThinkingLevel | undefined;
 					try {
-						reasoning = await classifyDifficulty(
+						classified = await classifyDifficulty(
 							{ request: prompt },
 							{
 								settings: session.settings,
@@ -514,12 +520,14 @@ async function executeCompletion(
 						);
 					} catch (error) {
 						if (signal.aborted) throw error;
-						reasoning = undefined;
+						classified = undefined;
 					}
-					if (!reasoning || !decision.candidates.includes(reasoning)) {
-						reasoning = decision.candidates[0];
-						disclose(`Effort classification failed; using lowest permitted effort ${reasoning}.`);
+					if (!classified || !decision.candidates.includes(classified as Exclude<ThinkingLevel, "inherit">)) {
+						classified = decision.candidates[0];
+						disclose(`Effort classification failed; using lowest permitted effort ${classified}.`);
 					}
+					reasoning = toReasoningEffort(classified);
+					disableReasoning = shouldDisableReasoning(classified);
 				} else {
 					reasoning = toReasoningEffort(decision.level);
 					disableReasoning = shouldDisableReasoning(decision.level);

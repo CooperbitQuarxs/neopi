@@ -185,6 +185,9 @@ async function createContext() {
 		retryEscapeHandler: undefined,
 		session: session as unknown as InteractiveModeContext["session"],
 		viewSession: session as unknown as InteractiveModeContext["viewSession"],
+		sessionManager: {
+			getCwd: () => process.cwd(),
+		},
 		keybindings: {
 			getKeys(action: string) {
 				return keyMap[action] ? [...keyMap[action]] : [];

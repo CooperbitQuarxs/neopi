@@ -17,13 +17,21 @@ import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { discoverAuthStorage } from "../sdk";
 import { TTS_LOCAL_VOICE_VALUES } from "../tts/models";
+import { createPacedSpeechStream, SpeechPacer, speechTimingEstimate } from "../tts/paced-stream";
 import { SpeakableStream } from "../tts/speakable";
 import { StreamingAudioPlayer } from "../tts/streaming-player";
 import { shutdownTtsClient, ttsClient } from "../tts/tts-client";
 import { resolveLocalSpeechModelId } from "../tts/vocalizer";
 import { encodeWav } from "../tts/wav";
 
-import { cfgTtsLocalSpeed, cfgTtsLocalVoice } from "../tts/settings";
+import {
+	cfgTtsLocalSpeed,
+	cfgTtsLocalVoice,
+	cfgTtsPacing,
+	speechPacingMargin,
+	speechPacingThreads,
+	speechSegmentOptions,
+} from "../tts/settings";
 
 export default class Say extends Command {
 	static description = commandHelp.description;
@@ -75,7 +83,7 @@ export default class Say extends Command {
 
 		try {
 			const text = flags.file ? await Bun.file(flags.file).text() : (args.text ?? "");
-			const splitter = new SpeakableStream();
+			const splitter = new SpeakableStream(model === "kokoro-paced" ? speechSegmentOptions(settings) : undefined);
 			const segments = [...splitter.push(text), ...splitter.flush()];
 			if (segments.length === 0) {
 				process.stderr.write(chalk.red("error: nothing speakable in the input\n"));
@@ -83,7 +91,15 @@ export default class Say extends Command {
 				return;
 			}
 
-			const stream = ttsClient.synthesizeStream(model, { voice, speed });
+			const stream =
+				model === "kokoro-paced"
+					? createPacedSpeechStream({
+							synthesize: text =>
+								ttsClient.synthesize(model, text, { voice, speed, threads: speechPacingThreads(settings) }),
+							pacer: new SpeechPacer(speechTimingEstimate, speechPacingMargin(settings)),
+							enabled: !flags.out && cfgTtsPacing.get(settings),
+						})
+					: ttsClient.synthesizeStream(model, { voice, speed });
 			for (const segment of segments) stream.push(segment);
 			stream.end();
 

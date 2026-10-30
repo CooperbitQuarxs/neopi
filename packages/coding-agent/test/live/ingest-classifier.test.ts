@@ -399,6 +399,35 @@ describe("classifier one-shot Agent invocation", () => {
 		expect([...result.alerts!]).toEqual([["A", { authorized: true, reason: "operator explicitly requested max" }]]);
 	});
 
+	it("preserves a provider failure instead of returning an unexplained empty score map", async () => {
+		const { selected, registry, settings } = harness("");
+		const model = createMockModel({
+			responses: [{ stopReason: "error", errorMessage: "provider rejected the classifier model" }],
+		});
+		const result = await classifySubagentImportance(input(), {
+			settings,
+			modelRegistry: registry,
+			selection: { ...selected, model },
+			signal: new AbortController().signal,
+			streamFn: model.stream,
+		});
+		expect(result.scores.size).toBe(0);
+		expect(result.failure).toBe("provider rejected the classifier model");
+	});
+
+	it("reports a malformed reply as the reason no scores were available", async () => {
+		const { model, selected, registry, settings } = harness("not JSON");
+		const result = await classifySubagentImportance(input(), {
+			settings,
+			modelRegistry: registry,
+			selection: selected,
+			signal: new AbortController().signal,
+			streamFn: model.stream,
+		});
+		expect(result.scores.size).toBe(0);
+		expect(result.failure).toBe("classifier reply was not a JSON object");
+	});
+
 	it("delivers the per-attempt timeout to the active stream and waits for noncooperative settlement", async () => {
 		const entered = Promise.withResolvers<AbortSignal>();
 		const release = Promise.withResolvers<void>();
@@ -446,7 +475,9 @@ describe("classifier one-shot Agent invocation", () => {
 		expect(settled).toBe(false);
 		expect(model.calls).toHaveLength(1);
 		release.resolve();
-		expect((await running).scores.size).toBe(0);
+		const result = await running;
+		expect(result.scores.size).toBe(0);
+		expect(result.failure).toBe("classifier attempt timed out");
 		expect(settled).toBe(true);
 	});
 });

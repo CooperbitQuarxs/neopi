@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test, vi } from "bun:test";
 import { streamGoogleGeminiCli } from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import * as geminiHeaders from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 
 const ANTIGRAVITY_DAILY_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_SANDBOX_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
@@ -20,17 +21,14 @@ const antigravityModel: Model<"google-gemini-cli"> = buildModel({
 	maxTokens: 32_000,
 });
 
-// This file exercises endpoint failover; pinning the client version keeps the
-// manifest lookup off the injected fetch, which only models CCA endpoints.
-const savedAntigravityVersion = process.env.PI_AI_ANTIGRAVITY_VERSION;
+// The injected fetch models CCA endpoints, not client-version discovery.
 beforeEach(() => {
-	process.env.PI_AI_ANTIGRAVITY_VERSION = "2.19.1";
+	vi.spyOn(geminiHeaders, "ensureAntigravityVersion").mockResolvedValue(undefined);
 });
 
 afterEach(() => {
 	vi.useRealTimers();
-	if (savedAntigravityVersion === undefined) delete process.env.PI_AI_ANTIGRAVITY_VERSION;
-	else process.env.PI_AI_ANTIGRAVITY_VERSION = savedAntigravityVersion;
+	vi.restoreAllMocks();
 });
 
 function endpointFromInput(input: Parameters<FetchImpl>[0]): string {

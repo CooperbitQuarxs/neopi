@@ -33,6 +33,25 @@ describe("discovery null limits", () => {
 		expect(models![0].contextWindow).toBeNull();
 		expect(models![0].maxTokens).toBeNull();
 	});
+
+	it("distinguishes an unreported input placeholder from an explicit text-only capability", async () => {
+		const fetch = async () => Response.json({ data: [{ id: "fresh-model" }] });
+		const generic = await fetchOpenAICompatibleModels({
+			provider: "custom",
+			api: "openai-completions",
+			baseUrl: "https://example.com/v1",
+			fetch,
+		});
+		const reported = await fetchOpenAICompatibleModels({
+			provider: "custom",
+			api: "openai-completions",
+			baseUrl: "https://example.com/v1",
+			fetch,
+			mapModel: (_entry, defaults) => ({ ...defaults, input: ["text"] }),
+		});
+		expect(generic?.[0].discoveryMissingInput).toBe(true);
+		expect(reported?.[0].discoveryMissingInput).toBeUndefined();
+	});
 });
 
 describe("discovery extra-CA fallback fetch", () => {

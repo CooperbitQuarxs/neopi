@@ -1186,7 +1186,7 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 				tab,
 				timeoutMs,
 				`orphan CDP target ${JSON.stringify(tab.targetId)} (Page.close)`,
-				closeOrphanTarget(tab),
+				closeOrphanTarget(tab, timeoutMs),
 			));
 		} catch (error) {
 			targetCloseFailed = true;
@@ -1856,8 +1856,12 @@ async function forceKillTabTeardown(tab: WorkerTabSession): Promise<void> {
  * wedged during initialization can make Puppeteer's page close wait for the
  * protocol timeout, retaining the cleanup hold for tens of seconds.
  */
-async function closeTargetById(browser: PuppeteerBrowserHandle, targetId: string): Promise<boolean> {
-	return await closeCdpTarget(browser.browser, targetId);
+async function closeTargetById(
+	browser: PuppeteerBrowserHandle,
+	targetId: string,
+	timeoutMs = DEFAULT_TAB_CLOSE_TIMEOUT_MS,
+): Promise<boolean> {
+	return await closeCdpTarget(browser.browser, targetId, timeoutMs);
 }
 
 /**
@@ -1894,8 +1898,8 @@ function recheckSharedBrowser(scope: SharedTargetScope): void {
  * browser is still in the registry; the tab's browser is the only place that
  * page can be, so no targetId guesswork across multiple sessions.
  */
-async function closeOrphanTarget(tab: WorkerTabSession): Promise<boolean> {
-	return await closeTargetById(tab.browser, tab.targetId);
+async function closeOrphanTarget(tab: WorkerTabSession, timeoutMs = DEFAULT_TAB_CLOSE_TIMEOUT_MS): Promise<boolean> {
+	return await closeTargetById(tab.browser, tab.targetId, timeoutMs);
 }
 
 /**

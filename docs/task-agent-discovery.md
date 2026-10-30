@@ -4,6 +4,31 @@ This document describes how the task subsystem discovers agent definitions, merg
 
 It covers runtime behavior as implemented today, including precedence, invalid-definition handling, and spawn/depth constraints that can make an agent effectively unavailable.
 
+## Launch an agent yourself
+
+Run `/agent launch` in the TUI to choose a worker preset or discovered project
+agent, an exact `provider/model` or `@role`, a supported effort, built-in tools,
+orchestration, workspace isolation and a persistent name. The effort picker
+offers only the chosen model's supported values. Both worker presets start a
+managed background task, so a parallel worker does not block the composer.
+Independent workers cannot delegate; `may-delegate` requires the task tool.
+Isolated workers retain their changes without automatically applying them.
+
+The final dialog shows the resolved model and effort, tools, name and API cost
+warning. Cancelling any dialog starts nothing. Initialization and later wake-ups
+can cost money even without useful work; the launcher does not pretend that
+an unknown idle-init price is zero. After launch, `/hub` shows the stable
+identity. Names are fixed; replacing a seat creates a separate identity rather
+than renaming its old transcript. Duplicate worker names receive a numeric suffix
+and require confirmation of that final identity.
+
+The advisor preset creates a session-local advisor with turn or agent-end review
+cadence. It does not replace `/advisor configure`, which still edits saved
+presets. Advisors share their owner's workspace and use advisor-supported tools.
+Routing policies and the persistent-agent lifecycle remain owned by their
+existing subsystems; the launcher does not implement another routing engine.
+
+
 ## Implementation files
 
 - [`src/task/discovery.ts`](../packages/coding-agent/src/task/discovery.ts)
@@ -44,7 +69,7 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 - `thinking-level` / `thinking` selects the agent's configured selector (`auto` or a concrete level). With `task.enableEffort=true` (default `false`), the task item's `effort` overrides it. In the default `effort.mode: replacement`, that field accepts exact `minimal|low|medium|high|xhigh|max`: an explicit supported concrete level bypasses implicit model effort rules. Omit it for the configured agent/role/Auto selection, or request `agent: "@smol:auto"` for explicit constrained Auto. In opt-in `effort.mode: legacy`, the field instead accepts `lo|med|hi`, mapping to the selected model's lowest/middle/highest supported effort and clamping to `task.maxEffort` (default `max`); the ceiling follows retry-fallback switches. Models without a controllable effort surface retain their normal selector for implicit choices. See [Thinking and effort policy](./settings.md#thinking-and-effort-policy).
 - `blocking: true` makes the parent wait for that agent even when async task execution is enabled
 - `autoloadSkills` names skills from the parent session to inject before the first child prompt; unknown names are ignored
-- `prewalk: true` starts the subagent on its resolved model and hands off to the default prewalk target (the `smol` role) at its first edit/write, exactly like the session-level `--prewalk`; a string value (e.g. `prewalk: "@smol"` or `prewalk: "openai/gpt-5-mini"`) picks a custom target. The `task.agentPrewalk` settings record (agent name → `"on"` / `"off"` / pattern, configured per agent from the `/agents` hub via its prewalk strip) overrides the frontmatter. Resolution happens in `runSubprocess` (`src/task/executor.ts`). An unavailable target is skipped instead of failing the spawn. A resolved target is skipped only when both its model identity and its effective thinking mode/level match the starting selection after model clamping; a same-model effort downgrade is a real hand-off and still arms and switches at the first edit/write.
+- `prewalk: true` enables the configured [planning and execution crews](./prewalk.md#configure-the-crews) at the first edit/write. An empty planner preserves normal task model routing; execution defaults to `@smol`. A string such as `prewalk: "@smol"` or `prewalk: "openai/gpt-5-mini"` overrides the execution primary selector. `task.agentPrewalk` entries take precedence over frontmatter. Ordered crew fallbacks skip unavailable or unauthenticated candidates. If a configured crew is unavailable, the spawn keeps normal task routing without prewalk. A target is skipped only when both model identity and effective thinking match; effort-only handoffs still arm.
 - `advisor: true` pairs spawned sessions of the agent with an advisor running the model resolved for the `advisor` role; a string value (e.g. `advisor: "deepseek/deepseek-v4-flash"` or `advisor: "@smol:high"`) sets an explicit advisor model pattern (optional `:level` suffix), applied as the spawned session's `modelRoles.advisor`. The `task.agentAdvisor` settings record (agent name → `"on"` / `"off"` / pattern, configured per agent from the `/agents` hub via its advisor strip) overrides the frontmatter. Resolution happens in `runSubprocess` (`src/task/executor.ts`); subagents default to no advisor, and the effective opt-in is persisted in `session_init` so cold revival restores it.
 
 ## Role-backed custom agents
@@ -91,7 +116,54 @@ With the default batched task schema, supply shared `context` and per-item `task
 }
 ```
 
-`/model`'s Roles view can assign and persist custom role mappings such as `review`, `fast`, and `good`. Changing only the active or default session selection does not remap those roles.
+`/models`' Roles view can assign and persist custom role mappings such as `review`, `fast`, and `good`. Changing only the active session selection in `/model` or `/switch` does not remap those roles.
+
+## Named routing policies
+
+Declare workflow routing once in user `config.yml` or project `.omp/config.yml`:
+
+```yaml
+routingPolicies:
+  issue-funnel:
+    slots:
+      scout:
+        agent: scout
+        model: "@smol:medium"
+        boundary: Investigate and report evidence only; never edit or publish.
+      authority:
+        model: xai-oauth/grok-4.6
+        effort: medium
+        boundary: Own final issue publication; do not implement repository changes.
+      fallback:
+        model: anthropic/claude-sonnet-5
+        effort: medium
+        boundary: Take over publication only when explicitly assigned.
+```
+
+Use `agent: "policy:issue-funnel/scout"` in task items or Eval `agent()`.
+The slot chooses a specialist hull when `agent` is declared, otherwise the
+session's usual default agent. Normal disabled-agent, spawn/depth, plan-mode,
+model availability, and effort checks still apply. Boundaries are copied into
+the child's assignment prompt; they are instructions, not a new filesystem
+sandbox. Use a read-only specialist such as `scout` for tool-level restrictions.
+
+Each slot requires a model selector, an explicit effort (separate `effort` or
+a matching suffix, including `@role:medium`), and a role boundary. Conflicting
+effort declarations are rejected. Multi-slot policies require an explicit
+slot; single-slot policies also accept `policy:<name>`. Unknown names and
+slots fail before dispatch. The task call preview shows expanded model and
+effort separately; declared slots are also listed in the task tool description.
+
+Policies fill missing fields only: `fillRoutingPolicy` preserves explicit
+assignment fields, and per-spawn `effort` wins over the slot's effort.
+Eval `agent()` does not accept a per-call `model` override.
+New assignments receive copies, so editing a policy never changes finished
+work. `fillRoutingPolicy` is the field-filling API for the separate
+persistent assignment-record feature (#7); this does not create or authorize
+assignment lifecycle records. Empty settings declare no policies.
+`modelRoles` remain aliases, and `retry.fallbackChains` remain runtime retry
+routing (#58); a workflow slot named `fallback` does not automatically retry
+or publish. Model-fact source chains and overrides (#70) remain separate.
 
 ## User-tagged model agents
 

@@ -24,7 +24,8 @@ import type {
 	ToolSpeculationPolicy,
 } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { $env, logger, prompt } from "@oh-my-pi/pi-utils";
+import { $env, logger } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { ToolSession } from "..";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
@@ -37,6 +38,8 @@ import taskSpecializationAdvisoryTemplate from "../prompts/tools/task-specializa
 import taskFollowUpTemplate from "../prompts/tools/task-follow-up.md" with { type: "text" };
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { cfgEffortPolicyMode } from "../config/effort-policy";
+import { cfgRoutingPolicies, fillRoutingPolicy, parseRoutingPolicySelector } from "../config/routing-policies";
+import { resolveConfiguredModelPatterns } from "../config/model-resolver";
 import { TASK_EFFORTS, type TaskEffort } from "@oh-my-pi/pi-tui/thinking";
 import { truncateForPrompt } from "../tools/approval";
 import { hasWaitTool } from "../tools/wait";
@@ -86,10 +89,15 @@ import {
 	cfgTaskStructured,
 } from "./settings";
 
-function renderSubagentUserPrompt(assignment: string): string {
-	return prompt.render(subagentUserPromptTemplate, {
-		assignment: assignment.trim(),
-	});
+function renderSubagentUserPrompt(assignment: string, cwd: string): string {
+	return renderPromptAsset(
+		"system/subagent-user-prompt.md",
+		subagentUserPromptTemplate,
+		{
+			assignment: assignment.trim(),
+		},
+		{ cwd },
+	);
 }
 
 function createUsageTotals(): Usage {
@@ -165,6 +173,7 @@ export {
 } from "./types";
 
 interface TaskDescriptionOptions {
+	cwd: string;
 	agents: AgentDefinition[];
 	sessionAgents: readonly AgentDefinition[];
 	isolationEnabled: boolean;
@@ -178,6 +187,7 @@ interface TaskDescriptionOptions {
 	asyncEnabled: boolean;
 	ircEnabled: boolean;
 	parentSpawns: string;
+	routingPolicies?: { selector: string; model: string; effort: string; boundary: string }[];
 }
 
 /** Render the tool description from a cached agent list and current settings. */
@@ -200,23 +210,29 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		blocking: agent.blocking === true,
 	}));
 	const scoutAvailable = isScoutSpawnable(options.disabledAgents, options.parentSpawns);
-	return prompt.render(taskDescriptionTemplate, {
-		agents: renderedAgents,
-		scoutAvailable,
-		spawningDisabled,
-		defaultAgent: spawnPolicy.defaultAgent,
-		isolationEnabled: options.isolationEnabled,
-		applyIsolatedChanges: options.applyIsolatedChanges,
-		batchEnabled: options.batchEnabled,
-		effortEnabled: options.effortEnabled,
-		legacyEffort: options.effortMode === "legacy",
-		evalToolsEnabled: options.evalToolsEnabled,
-		structured: options.structured,
-		asyncEnabled: options.asyncEnabled,
-		hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
-		hasModelMentions: options.sessionAgents.length > 0,
-		ircEnabled: options.ircEnabled,
-	});
+	return renderPromptAsset(
+		"tools/task.md",
+		taskDescriptionTemplate,
+		{
+			agents: renderedAgents,
+			scoutAvailable,
+			spawningDisabled,
+			defaultAgent: spawnPolicy.defaultAgent,
+			isolationEnabled: options.isolationEnabled,
+			applyIsolatedChanges: options.applyIsolatedChanges,
+			batchEnabled: options.batchEnabled,
+			effortEnabled: options.effortEnabled,
+			legacyEffort: options.effortMode === "legacy",
+			evalToolsEnabled: options.evalToolsEnabled,
+			structured: options.structured,
+			asyncEnabled: options.asyncEnabled,
+			hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
+			hasModelMentions: options.sessionAgents.length > 0,
+			ircEnabled: options.ircEnabled,
+			routingPolicies: options.routingPolicies,
+		},
+		{ cwd: options.cwd },
+	);
 }
 
 function createTaskModeError(text: string): AgentToolResult<TaskToolDetails> {
@@ -486,17 +502,21 @@ export function buildSpecializationAdvisory(
 	agentNames: string[],
 	depthCapacity: boolean,
 	scoutAvailable = true,
+	cwd?: string,
 ): string | undefined {
 	if (!depthCapacity) return undefined;
 	const generics = agentNames.filter(name => GENERIC_SPAWN_AGENTS.has(name));
 	if (generics.length < 2) return undefined;
-	return prompt
-		.render(taskSpecializationAdvisoryTemplate, {
+	return renderPromptAsset(
+		"tools/task-specialization-advisory.md",
+		taskSpecializationAdvisoryTemplate,
+		{
 			count: generics.length,
 			agent: generics[0],
 			scoutAvailable,
-		})
-		.trim();
+		},
+		{ cwd, kind: "notice" },
+	).trim();
 }
 
 /**
@@ -509,9 +529,15 @@ export function buildCoordinationAdvisory(
 	items: TaskItem[],
 	depthCapacity: boolean,
 	ircEnabled: boolean,
+	cwd?: string,
 ): string | undefined {
 	if (!depthCapacity || !ircEnabled || items.length < 2) return undefined;
-	return prompt.render(taskCoordinationAdvisoryTemplate, { count: items.length }).trim();
+	return renderPromptAsset(
+		"tools/task-coordination-advisory.md",
+		taskCoordinationAdvisoryTemplate,
+		{ count: items.length },
+		{ cwd, kind: "notice" },
+	).trim();
 }
 
 /**
@@ -530,11 +556,14 @@ export function composeSpawnAdvisory(args: {
 	ircEnabled: boolean;
 	willRunAsync: boolean;
 	scoutAvailable?: boolean;
+	cwd?: string;
 }): string | undefined {
 	return (
 		[
-			buildSpecializationAdvisory(args.agents, args.depthCapacity, args.scoutAvailable),
-			args.willRunAsync ? buildCoordinationAdvisory(args.items, args.depthCapacity, args.ircEnabled) : undefined,
+			buildSpecializationAdvisory(args.agents, args.depthCapacity, args.scoutAvailable, args.cwd),
+			args.willRunAsync
+				? buildCoordinationAdvisory(args.items, args.depthCapacity, args.ircEnabled, args.cwd)
+				: undefined,
 		]
 			.filter(Boolean)
 			.join("\n\n") || undefined
@@ -746,7 +775,20 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	}
 
 	renderCall(args: unknown, options: Parameters<typeof renderTaskCall>[1], theme: Theme) {
-		return renderTaskCall(repairTaskParams(args as TaskParams), options, theme);
+		const params = { ...repairTaskParams(args as TaskParams) };
+		params.routingPreview = [];
+		for (const item of params.tasks ?? [params]) {
+			try {
+				const reference = item.agent ? parseRoutingPolicySelector(item.agent) : undefined;
+				if (!reference) continue;
+				const fields = fillRoutingPolicy(this.session.settings, reference);
+				const model = resolveConfiguredModelPatterns(fields.model, this.session.settings).join(", ");
+				params.routingPreview.push(`${item.agent} · model: ${model} · effort: ${item.effort ?? fields.effort}`);
+			} catch (error) {
+				params.routingPreview.push(error instanceof Error ? error.message : String(error));
+			}
+		}
+		return renderTaskCall(params, options, theme);
 	}
 
 	/** Dynamic description that reflects current task settings. */
@@ -755,6 +797,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const planMode = this.session.getPlanModeState?.()?.enabled === true;
 		const isolationEnabled = cfgTaskIsolationEnabled.get(this.session.settings);
 		return renderDescription({
+			cwd: this.session.cwd,
 			agents:
 				discoverySnapshots.get(discoveryCacheKey(this.session.cwd, this.session.effectiveExtensionRoots?.())) ??
 				this.#discoveredAgents,
@@ -770,6 +813,17 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			asyncEnabled: cfgAsyncEnabled.get(this.session.settings),
 			ircEnabled: isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
 			parentSpawns: this.session.getSessionSpawns() ?? "*",
+			routingPolicies: Object.entries(cfgRoutingPolicies.get(this.session.settings)).flatMap(([name, policy]) =>
+				Object.keys(policy.slots).map(slot => {
+					const fields = fillRoutingPolicy(this.session.settings, { policy: name, slot });
+					return {
+						selector: `policy:${name}/${slot}`,
+						model: resolveConfiguredModelPatterns(fields.model, this.session.settings).join(", "),
+						effort: fields.effort!,
+						boundary: fields.boundary!,
+					};
+				}),
+			),
 		});
 	}
 	private constructor(
@@ -1020,6 +1074,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			const advisory = this.session.suppressSpawnAdvisory
 				? undefined
 				: composeSpawnAdvisory({
+						cwd: this.session.cwd,
 						agents: resolvedAgents,
 						items: asyncItems,
 						depthCapacity,
@@ -1057,6 +1112,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const advisory = this.session.suppressSpawnAdvisory
 			? undefined
 			: composeSpawnAdvisory({
+					cwd: this.session.cwd,
 					agents: resolvedAgents,
 					items: asyncItems,
 					depthCapacity,
@@ -1114,7 +1170,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					agentSource,
 					modelRole: policy.modelRole,
 					status: "pending",
-					task: renderSubagentUserPrompt(assignment),
+					task: renderSubagentUserPrompt(assignment, this.session.cwd),
 					assignment,
 					recentTools: [],
 					recentOutput: [],
@@ -1206,12 +1262,17 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			failedSchedules.length > 0
 				? ` Failed to schedule ${failedSchedules.length} spawn${failedSchedules.length === 1 ? "" : "s"}: ${failedSchedules.join("; ")}.`
 				: "";
-		const guidance = prompt
-			.render(taskAsyncContractTemplate, { ircEnabled, waitTool: hasWaitTool(this.session) })
-			.trim();
+		const guidance = renderPromptAsset(
+			"tools/task-async-contract.md",
+			taskAsyncContractTemplate,
+			{ ircEnabled, waitTool: hasWaitTool(this.session) },
+			{ cwd: this.session.cwd, kind: "notice" },
+		).trim();
 		const renderSpawnFeedback = (mixed: boolean): string =>
-			prompt
-				.render(taskSpawnFeedbackTemplate, {
+			renderPromptAsset(
+				"tools/task-spawn-feedback.md",
+				taskSpawnFeedbackTemplate,
+				{
 					mixed,
 					singular: started.length === 1,
 					singleCall: spawns.length === 1,
@@ -1223,8 +1284,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					started,
 					scheduleFailureSummary,
 					guidance,
-				})
-				.trim();
+				},
+				{ cwd: this.session.cwd, kind: "notice" },
+			).trim();
 
 		if (syncSpawns.length === 0) {
 			if (spawns.length === 1) {
@@ -1368,14 +1430,19 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			// changes could not be written, and names that path in the result.
 			const isolated = spawnParams.isolated === true;
 			const ref = aborted ? AgentRegistry.global().get(agentId) : undefined;
-			return `\n\n${prompt.render(taskFollowUpTemplate, {
-				agentId,
-				aborted,
-				isolated,
-				ircEnabled,
-				resumable: !isolated && (ref?.status === "idle" || ref?.status === "parked"),
-				transcriptAvailable: aborted ? await hasResolvableTranscript(agentId) : true,
-			})}`;
+			return `\n\n${renderPromptAsset(
+				"tools/task-follow-up.md",
+				taskFollowUpTemplate,
+				{
+					agentId,
+					aborted,
+					isolated,
+					ircEnabled,
+					resumable: !isolated && (ref?.status === "idle" || ref?.status === "parked"),
+					transcriptAvailable: aborted ? await hasResolvableTranscript(agentId) : true,
+				},
+				{ cwd: this.session.cwd, kind: "notice" },
+			)}`;
 		};
 		return manager.register(
 			"task",
@@ -1787,7 +1854,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		totalDurationMs: number,
 		mergeSummary: string,
 	): AgentToolResult<TaskToolDetails> {
-		const summary = formatTaskResultSummary(result, { totalDurationMs, mergeSummary });
+		const summary = formatTaskResultSummary(result, { totalDurationMs, mergeSummary, cwd: this.session.cwd });
 
 		return {
 			content: [{ type: "text", text: summary }],

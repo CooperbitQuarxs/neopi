@@ -26,6 +26,12 @@ import { framedToolCard } from "../render/tool-card";
 
 import { formatErrorMessage, formatMeta, formatTitle, sanitizeCarriageReturns } from "../render/render-utils";
 
+/** An annotation on an offered option, selected or not. Repeated options carry separate notes. */
+export interface AskOptionNote {
+	option: string;
+	note: string;
+}
+
 /** Result for a single question */
 export interface QuestionResult {
 	id: string;
@@ -36,6 +42,7 @@ export interface QuestionResult {
 	customInput?: string;
 	/** Optional note attached to the selected answer in the rich ask dialog. */
 	note?: string;
+	optionNotes?: AskOptionNote[];
 	/** True when the answer was auto-selected because the dialog timed out. */
 	timedOut?: boolean;
 }
@@ -49,6 +56,7 @@ export interface AskToolDetails {
 	customInput?: string;
 	/** Optional note attached to the selected answer in the rich ask dialog. */
 	note?: string;
+	optionNotes?: AskOptionNote[];
 	/** True when the answer was auto-selected because the dialog timed out. */
 	timedOut?: boolean;
 	/** Multi-part question mode */
@@ -110,6 +118,13 @@ function normalizeRenderOptions(raw: unknown): AskRenderOption[] | undefined {
  * so transcripts completed before params sanitization still render as prose.
  * Display-only — the persisted payload is untouched.
  */
+function sanitizeOptionNotes(notes: AskOptionNote[] | undefined): AskOptionNote[] | undefined {
+	return notes?.map(entry => ({
+		option: sanitizeCarriageReturns(entry.option),
+		note: sanitizeCarriageReturns(entry.note),
+	}));
+}
+
 function sanitizeAskResultDetails(details: AskToolDetails): AskToolDetails {
 	return {
 		...details,
@@ -120,6 +135,7 @@ function sanitizeAskResultDetails(details: AskToolDetails): AskToolDetails {
 			: {}),
 		...(details.customInput !== undefined ? { customInput: sanitizeCarriageReturns(details.customInput) } : {}),
 		...(details.note !== undefined ? { note: sanitizeCarriageReturns(details.note) } : {}),
+		optionNotes: sanitizeOptionNotes(details.optionNotes),
 		...(details.questions !== undefined ? { questions: details.questions.map(sanitizeCarriageReturns) } : {}),
 		...(details.results !== undefined
 			? {
@@ -133,6 +149,7 @@ function sanitizeAskResultDetails(details: AskToolDetails): AskToolDetails {
 							? { customInput: sanitizeCarriageReturns(entry.customInput) }
 							: {}),
 						...(entry.note !== undefined ? { note: sanitizeCarriageReturns(entry.note) } : {}),
+						optionNotes: sanitizeOptionNotes(entry.optionNotes),
 					})),
 				}
 			: {}),
@@ -261,6 +278,7 @@ function renderAnswerOptionLines(
 	note: string | undefined,
 	width: number,
 	selectedIndices?: ReadonlySet<number>,
+	optionNotes?: AskOptionNote[],
 ): string[] {
 	const selected = new Set(selectedOptions ?? []);
 	// Prefer the full recorded option set; fall back to the selected labels when
@@ -268,7 +286,7 @@ function renderAnswerOptionLines(
 	const list = options && options.length > 0 ? options : (selectedOptions ?? []);
 
 	// Nothing was chosen (and no custom answer) → a lone cancelled marker.
-	if (selected.size === 0 && customInput === undefined && note === undefined) {
+	if (selected.size === 0 && customInput === undefined && note === undefined && !optionNotes?.length) {
 		return [` ${uiTheme.styledSymbol("status.warning", "warning")} ${uiTheme.fg("warning", "Cancelled")}`];
 	}
 
@@ -281,6 +299,9 @@ function renderAnswerOptionLines(
 			isSelected ? uiTheme.fg("toolOutput", t) : uiTheme.fg("muted", t),
 		);
 		out.push(` ${markerStyled} ${labelStyled}`);
+		for (const entry of optionNotes ?? []) {
+			if (entry.option === label) out.push(...renderNoteLines(uiTheme, entry.note, width));
+		}
 	}
 	if (customInput !== undefined) out.push(...renderCustomInputLines(uiTheme, customInput));
 	if (note !== undefined) out.push(...renderNoteLines(uiTheme, note, width));
@@ -315,9 +336,10 @@ function describeAnswers(
 	customInput: string | undefined,
 	note: string | undefined,
 	selectedIndices: ReadonlySet<number> | undefined,
+	optionNotes?: AskOptionNote[],
 ): NativeChild[] {
 	const selected = new Set(selectedOptions ?? []);
-	if (selected.size === 0 && customInput === undefined && note === undefined) {
+	if (selected.size === 0 && customInput === undefined && note === undefined && !optionNotes?.length) {
 		return [text([span("Cancelled", "warning")], { tone: "warning" })];
 	}
 	const labels = options && options.length > 0 ? options : (selectedOptions ?? []);
@@ -330,6 +352,12 @@ function describeAnswers(
 	}
 	return compact([
 		...rows,
+		...(optionNotes ?? []).map(entry =>
+			text([span(`${plainText(entry.option)}: `, "dim"), span(plainText(entry.note), "muted")], {
+				wrap: "word",
+				role: "omp.tool.context",
+			}),
+		),
 		note !== undefined
 			? text([span(plainText(note), "muted")], { wrap: "word", role: "omp.tool.context" })
 			: undefined,
@@ -388,6 +416,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 						r.customInput,
 						r.note,
 						selectedIndicesFor(rawResults[index]?.options, rawResults[index]?.selectedOptions),
+						r.optionNotes,
 					),
 				),
 			),
@@ -401,6 +430,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 	const answered =
 		details.customInput !== undefined ||
 		details.note !== undefined ||
+		(details.optionNotes?.length ?? 0) > 0 ||
 		(details.selectedOptions && details.selectedOptions.length > 0);
 	return {
 		tool: askHead(details.question),
@@ -413,6 +443,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 				details.customInput,
 				details.note,
 				selectedIndicesFor(rawDetails.options, rawDetails.selectedOptions),
+				details.optionNotes,
 			),
 			details.timedOut
 				? text([span("auto-selected after timeout — not a user choice", "muted")], {
@@ -570,6 +601,7 @@ export const askToolRenderer = {
 							r.note,
 							width,
 							selectedIndicesFor(raw?.options, raw?.selectedOptions),
+							r.optionNotes,
 						),
 					];
 					return { label: uiTheme.fg("dim", `[${r.id}]`), content: lines };
@@ -621,6 +653,7 @@ export const askToolRenderer = {
 					dNote,
 					width,
 					selectedIndicesFor(rawDetails.options, rawDetails.selectedOptions),
+					details.optionNotes,
 				),
 			];
 			if (dTimedOut) {

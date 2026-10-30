@@ -5,7 +5,19 @@
  */
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { LiveSessionController, type LiveSessionControllerOptions } from "../../live/controller";
-import { cfgLiveDelegationDelivery, cfgLiveVoice } from "../../live/settings";
+import {
+	cfgLiveBlockDelegateKeyword,
+	cfgLiveDelegationDelivery,
+	cfgLiveForceDelegateKeyword,
+	cfgLiveForceUtteranceKeyword,
+	cfgLiveHoldMode,
+	cfgLiveModel,
+	cfgLiveQuietFloorMs,
+	cfgLiveSubmitKeyword,
+	cfgLiveSubmitSilenceMs,
+	cfgLiveSuppressDelegateKeyword,
+	cfgLiveVoice,
+} from "../../live/settings";
 import { DEFAULT_LIVE_VOICE } from "../../live/voices";
 import type { AgentSession } from "../../session/agent-session";
 import type { RpcLiveFrame } from "./rpc-types";
@@ -23,6 +35,9 @@ export type RpcLiveSessionFactory = (options: LiveSessionControllerOptions) => R
 export interface RpcLiveStartOptions {
 	voice?: string;
 }
+
+/** Commands shared by the session's live owner across stdio, TUI, and control sockets. */
+export type RpcLiveControl = Pick<RpcLiveBridge, "start" | "stop" | "setMuted">;
 
 /** Visible assistant text: text blocks only, no thinking or tool calls. Shared with interactive mode. */
 export function extractVisibleAssistantText(message: AssistantMessage): string {
@@ -73,7 +88,20 @@ export class RpcLiveBridge {
 			session: this.#session,
 			extractAssistantText: extractVisibleAssistantText,
 			voice,
+			model: cfgLiveModel.get(this.#session.settings),
+			blockDelegateKeyword: cfgLiveBlockDelegateKeyword.get(this.#session.settings),
 			delegationDelivery: () => cfgLiveDelegationDelivery.get(this.#session.settings),
+			delegationKeywords: () => ({
+				suppress: cfgLiveSuppressDelegateKeyword.get(this.#session.settings),
+				force: cfgLiveForceUtteranceKeyword.get(this.#session.settings),
+			}),
+			holdMode: () => cfgLiveHoldMode.get(this.#session.settings),
+			quietFloorMs: () => cfgLiveQuietFloorMs.get(this.#session.settings),
+			transcriptKeywords: () => ({
+				submit: cfgLiveSubmitKeyword.get(this.#session.settings),
+				force: cfgLiveForceDelegateKeyword.get(this.#session.settings),
+				silenceMs: cfgLiveSubmitSilenceMs.get(this.#session.settings),
+			}),
 			callbacks: {
 				onPhase: phase => this.#output({ type: "live_phase", phase }),
 				onLevels: (input, output) => {

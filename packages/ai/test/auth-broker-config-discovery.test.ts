@@ -31,6 +31,70 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 		}
 	});
 
+	test.each(["config.toml", "settings.toml"])("reads TOML-only broker and policy settings from %s", async filename => {
+		await Bun.write(
+			path.join(agentDir, filename),
+			[
+				"[auth.broker]",
+				'url = "https://toml-broker.example/v1"',
+				'token = "toml-token"',
+				"[[auth.accountPolicies]]",
+				'provider = "anthropic"',
+				'account = { email = "toml@example.com" }',
+				"[retry]",
+				"usageReservePct = 23",
+				"",
+			].join("\n"),
+		);
+		await withEnv(SUPPRESS_AUTH_BROKER_ENV, async () => {
+			expect(await resolveAuthBrokerConfig({ agentDir })).toEqual({
+				url: "https://toml-broker.example/v1",
+				token: "toml-token",
+			});
+			expect(await loadAuthAccountPolicyConfig({ agentDir })).toEqual({
+				accountPolicies: [{ provider: "anthropic", account: { email: "toml@example.com" } }],
+				defaultReservePct: 23,
+			});
+		});
+	});
+
+	test("TOML clears hide nested and legacy literal-dot YAML broker and policy values", async () => {
+		await Bun.write(
+			path.join(agentDir, "config.yml"),
+			[
+				"auth.broker.url: https://stale.example/v1",
+				"auth:",
+				"  broker:",
+				"    url: https://nested-stale.example/v1",
+				"    token: stale",
+				"  accountPolicies: [{ provider: anthropic, account: { email: stale@example.com } }]",
+				"retry:",
+				"  usageReservePct: 42",
+				"",
+			].join("\n"),
+		);
+		await Bun.write(
+			path.join(agentDir, "config.toml"),
+			'[auth]\n[retry]\n[__npi]\nversion = 1\nnull_paths = ["/auth/broker", "/auth/accountPolicies", "/retry/usageReservePct"]\n',
+		);
+		await withEnv(SUPPRESS_AUTH_BROKER_ENV, async () => {
+			expect(await resolveAuthBrokerConfig({ agentDir })).toBeNull();
+			expect(await loadAuthAccountPolicyConfig({ agentDir })).toEqual({
+				accountPolicies: [],
+				defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+			});
+		});
+	});
+
+	test("invalid TOML fails closed instead of using valid YAML", async () => {
+		await Bun.write(path.join(agentDir, "config.yml"), "auth: { broker: { url: https://stale.example/v1 } }\n");
+		await Bun.write(path.join(agentDir, "config.toml"), "broken = [");
+		await withEnv(SUPPRESS_AUTH_BROKER_ENV, async () => {
+			await expect(resolveAuthBrokerConfig({ agentDir })).rejects.toThrow("config.toml");
+			await expect(loadAuthAccountPolicyConfig({ agentDir })).rejects.toThrow("config.toml");
+		});
+	});
+
 	test("resolves broker URL and token from config.yaml when config.yml is absent", async () => {
 		await Bun.write(
 			path.join(agentDir, "config.yaml"),

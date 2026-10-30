@@ -39,7 +39,7 @@ import {
 	type SettingsDisplayEntry,
 } from "./settings-defs";
 import type { TspPrefsControl, TspPrefsProps } from "@oh-my-pi/pi-wire";
-import { prefsSectionId } from "../components/settings-list";
+import { prefsSectionId, type SettingsListNavigationState } from "../components/settings-list";
 import { getCurrentThemeName, getSelectListTheme, getSettingsListTheme, theme } from "../theme/theme";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../thinking";
 import { getTabBarTheme } from "../chrome/shared";
@@ -67,6 +67,7 @@ import {
 	isMenuHistoryLeaver,
 	isMenuHistoryParticipant,
 } from "../components/menu-navigation";
+import { compileMenuRegex } from "../menu-search";
 import type { KeyName } from "../key-hint-format";
 
 /** The native page id of the plugins tab. */
@@ -184,6 +185,70 @@ function createSettingsTextField(
 		onCancel,
 		requestRender,
 	});
+}
+
+const CUSTOM_NUMBER_OPTION = "__custom_number__";
+
+/** A numeric preset picker with an explicit free-entry choice. */
+class NumericSettingsField extends Container {
+	#field: SelectFormField | TextFormField;
+
+	constructor(
+		def: SettingDef & { type: "submenu" },
+		options: readonly SubmenuOption[],
+		currentValue: string,
+		onSubmit: (value: string) => void,
+		onCancel: () => void,
+		requestRender?: () => void,
+	) {
+		super();
+		this.#field = createSettingsSelectField(
+			def.label,
+			def.description,
+			options,
+			options.some(option => option.value === currentValue) ? currentValue : CUSTOM_NUMBER_OPTION,
+			value => {
+				if (value !== CUSTOM_NUMBER_OPTION) {
+					onSubmit(value);
+					return;
+				}
+				this.#field = createSettingsTextField(
+					def.label,
+					"Enter a token count, such as 120000. Clear the field to inherit the default.",
+					Number(currentValue) > 0 ? currentValue : "",
+					false,
+					input => {
+						if (input.trim() && !Number.isFinite(Number(input))) throw new Error("Enter a finite number.");
+						onSubmit(input.trim());
+					},
+					onCancel,
+					requestRender,
+				);
+				this.clear();
+				this.addChild(this.#field);
+				requestRender?.();
+			},
+			onCancel,
+			undefined,
+			undefined,
+			undefined,
+			requestRender,
+		);
+		this.addChild(this.#field);
+	}
+
+	select(value: string): void {
+		if (this.#field instanceof SelectFormField)
+			this.#field.selectList.handleNativeEvent({ type: "activate", key: "", item: value });
+	}
+
+	handleInput(data: string): void {
+		this.#field.handleInput(data);
+	}
+
+	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
+		if (this.#field instanceof SelectFormField) this.#field.routeMouse(event, line, col);
+	}
 }
 
 /**
@@ -734,6 +799,8 @@ export interface SettingsCallbacks {
 	onPluginsChanged?: () => void | Promise<void>;
 	/** Called when settings panel is closed */
 	onCancel: () => void;
+	/** Edit the persisted settings file, then re-read it before resolving. */
+	onOpenConfigFile?: () => Promise<void>;
 }
 
 /**
@@ -753,6 +820,7 @@ export class SettingsSelectorComponent implements Component {
 	#pendingPluginWrites = 0;
 	#currentTabId: SettingTab | "plugins" = "appearance";
 	#preSearchTabId: SettingTab | "plugins" = "appearance";
+	#preSearchList: SettingsListNavigationState | undefined;
 	#searchQuery = "";
 	/** Single-line editor backing the search banner (cursor, word ops, paste). */
 	readonly #search = new MenuSearchField();
@@ -767,6 +835,7 @@ export class SettingsSelectorComponent implements Component {
 	#searchCorpora: { tab: SettingTab; corpus: FuzzyCorpus<SettingItem> }[] | null = null;
 	#textInputActive = false;
 	#restoringNavigation = false;
+	#externalEditPending = false;
 	readonly #menuKeys = new MenuKeyReader();
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	#hasSectionJump = false;
@@ -840,8 +909,8 @@ export class SettingsSelectorComponent implements Component {
 		const switchTabs = "h/l switch tabs";
 		if (this.#searchList) {
 			return this.#search.focused
-				? `${confirm} to change · ${tab} to jump tabs · ${cancel} back to list`
-				: `j/k select · / search · ${tab} jump tabs · ${cancel} close`;
+				? `${confirm} confirm search · ${cancel} clear search`
+				: `j/k select · Ctrl-u/d half · PgUp/PgDn page · gg/G ends · / search · ${tab} jump tabs · ${cancel} clear search`;
 		}
 		if (this.#currentTabId === "plugins") {
 			return this.#pluginComponent?.atRoot
@@ -852,7 +921,7 @@ export class SettingsSelectorComponent implements Component {
 			return `${editorKeys("tui.select.up", "tui.select.down")} to jump sections · ${tab}/${confirm} to settings · ${switchTabs} · ${cancel} to close`;
 		}
 		const nav = this.#hasSectionJump ? `${tab} to jump sections · ${switchTabs}` : `${tab} to switch tabs`;
-		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · / search · ${cancel} to close`;
+		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · / search · ${cancel} to close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}`;
 	}
 
 	/** Single-line search banner: accent icon, editable query with live cursor, right-aligned match count. */
@@ -1015,12 +1084,15 @@ export class SettingsSelectorComponent implements Component {
 			children.push(memo.prefsPreview.node);
 		}
 
+		const searchError = searching ? compileMenuRegex(this.#searchQuery)?.error : undefined;
 		const props: TspPrefsProps = {
 			title: "omp settings",
 			pages,
 			page: searching ? this.#preSearchTabId : this.#currentTabId,
-			lead: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
-			query: searching ? this.#searchQuery : pluginPage?.query,
+			lead: searchError
+				? `Invalid regex: ${searchError}`
+				: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
+			query: searching ? this.#search.value : pluginPage?.query,
 			cursor: searching ? this.#search.input.getCursor() : pluginPage?.cursor,
 			sections,
 			focus,
@@ -1135,9 +1207,11 @@ export class SettingsSelectorComponent implements Component {
 		if (event.type === "action" && event.act === "close" && event.value === undefined) {
 			const list = this.#searchList ?? this.#currentList;
 			if (
-				(this.#searchList && this.#search.focused) ||
+				(this.#searchList && (this.#search.focused || this.#searchQuery.length > 0)) ||
 				list?.filterFocused ||
-				this.#pluginComponent?.filterFocused
+				list?.hasSearchQuery() ||
+				this.#pluginComponent?.filterFocused ||
+				this.#pluginComponent?.prefsPage()?.query
 			) {
 				this.handleInput(ESCAPE);
 				return;
@@ -1234,6 +1308,8 @@ export class SettingsSelectorComponent implements Component {
 				const field = list.openSubmenuFor(id);
 				if (field instanceof SelectFormField) {
 					field.selectList.handleNativeEvent({ type: "activate", key: "", item: choice });
+				} else if (field instanceof NumericSettingsField) {
+					field.select(choice);
 				}
 				return;
 			}
@@ -1440,15 +1516,16 @@ export class SettingsSelectorComponent implements Component {
 	/** Swap the tab content for the global search result list. */
 	#startSearch(initialQuery: string): void {
 		this.#preSearchTabId = this.#currentTabId;
+		this.#preSearchList = this.#currentList?.navigationSnapshot();
 		this.#searchCorpora = null;
-		this.#search.input.setValue(initialQuery);
+		this.#search.setValue(initialQuery);
 		this.#search.focused = true;
 		const list = new SettingsList(
 			[],
 			10,
 			getSettingsListTheme(),
 			(id, newValue) => this.#onSearchSettingChange(id, newValue),
-			() => this.#callbacks.onCancel(),
+			() => this.#endSearch(false),
 			{
 				layout: "flat",
 				typeToSearch: false,
@@ -1535,14 +1612,19 @@ export class SettingsSelectorComponent implements Component {
 		const selected = jumpToSelection ? this.#searchList.getSelectedItem() : undefined;
 		const selectedDef = selected ? getSettingDef(this.#context.settings.entries, selected.id) : undefined;
 		const targetTab: SettingTab | "plugins" = selectedDef?.tab ?? this.#preSearchTabId;
+		const previousList = this.#preSearchList;
+		this.#preSearchList = undefined;
 
 		this.#searchQuery = "";
+		this.#search.setValue("");
+		this.#search.focused = false;
 		this.#searchCorpora = null;
 		this.#searchFirstMatch.clear();
 		this.#searchMatchCount = 0;
 		this.#tabs = getSettingsTabs();
 		this.#tabBar.setTabs(this.#tabs, targetTab);
 		this.#switchToTab(targetTab);
+		if (!jumpToSelection && previousList) this.#currentList?.restoreNavigation(previousList);
 		if (selectedDef) {
 			this.#currentList?.selectItem(selectedDef.path);
 		}
@@ -1682,12 +1764,14 @@ export class SettingsSelectorComponent implements Component {
 
 	#getSubmenuCurrentValue(path: string, value: unknown): string {
 		const rawValue = String(value ?? "");
-		if (path === "compaction.thresholdPercent" && (rawValue === "-1" || rawValue === "")) {
+		const def = getSettingDef(this.#context.settings.entries, path);
+		if (
+			def?.schemaType === "number" &&
+			def.type === "submenu" &&
+			(rawValue === "-1" || rawValue === "") &&
+			def.options.some(option => option.value === "default")
+		)
 			return "default";
-		}
-		if (path === "compaction.thresholdTokens" && (rawValue === "-1" || rawValue === "")) {
-			return "default";
-		}
 		return rawValue;
 	}
 
@@ -1702,6 +1786,11 @@ export class SettingsSelectorComponent implements Component {
 			return this.#context.availableThemes.map(t => ({ value: t, label: t }));
 		}
 		if (def.path === "composer.shape") return getComposerShapeOptions();
+		if (def.customInput)
+			return [
+				{ value: CUSTOM_NUMBER_OPTION, label: "Custom...", description: "Type an arbitrary number" },
+				...def.options,
+			];
 		return def.options;
 	}
 
@@ -1713,6 +1802,21 @@ export class SettingsSelectorComponent implements Component {
 		currentValue: string,
 		done: (value?: string) => void,
 	): Component {
+		if (def.customInput) {
+			return new NumericSettingsField(
+				def,
+				this.#submenuOptions(def),
+				currentValue,
+				value => {
+					if (value === "") this.#context.settings.unset(def.path);
+					else this.#setSettingValue(def.path, value);
+					this.#callbacks.onChange(def.path, this.#context.settings.get(def.path));
+					done(this.#getSubmenuCurrentValue(def.path, this.#context.settings.get(def.path)));
+				},
+				() => done(),
+				this.#context.requestRender,
+			);
+		}
 		const options = this.#submenuOptions(def);
 		// Preview handlers
 		let onPreview: ((value: string) => void | Promise<void>) | undefined;
@@ -1909,10 +2013,8 @@ export class SettingsSelectorComponent implements Component {
 	#setSettingValue(path: string, value: string): void {
 		const currentValue = this.#context.settings.get(path);
 		const schemaType = getSettingDef(this.#context.settings.entries, path)?.schemaType;
-		if (path === "compaction.thresholdPercent" && value === "default") {
-			this.#context.settings.set(path, -1);
-		} else if (path === "compaction.thresholdTokens" && value === "default") {
-			this.#context.settings.set(path, -1);
+		if (schemaType === "number") {
+			this.#context.settings.set(path, value === "default" ? -1 : Number(value));
 		} else if (schemaType === "array") {
 			let parsed: unknown;
 			try {
@@ -2058,6 +2160,17 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (matchesKey(data, "ctrl+g") && !this.#menuKeys.read(data) && this.#callbacks.onOpenConfigFile) {
+			if (!this.#externalEditPending) {
+				this.#externalEditPending = true;
+				void this.#callbacks.onOpenConfigFile().finally(() => {
+					this.#externalEditPending = false;
+					this.#refreshItems();
+					this.#context.requestRender?.();
+				});
+			}
+			return;
+		}
 		// SGR mouse reports (the fullscreen overlay enables tracking).
 		if (data.startsWith("\x1b[<")) {
 			this.#menuKeys.reset();
@@ -2065,6 +2178,11 @@ export class SettingsSelectorComponent implements Component {
 			return;
 		}
 
+		if (this.#searchList && this.#search.focused) {
+			this.#menuKeys.reset();
+			this.#handleSearchModeInput(data, this.#searchList);
+			return;
+		}
 		// Text-input submenus take every byte: arrow keys must reach the
 		// cursor and Tab must not switch tabs.
 		if (this.#textInputActive) {
@@ -2092,11 +2210,6 @@ export class SettingsSelectorComponent implements Component {
 			return;
 		}
 
-		if (this.#searchList && this.#search.focused) {
-			this.#menuKeys.reset();
-			this.#handleSearchModeInput(data, this.#searchList);
-			return;
-		}
 
 		const action = this.#menuKeys.read(data);
 		if (action === "pending") return;
@@ -2130,7 +2243,11 @@ export class SettingsSelectorComponent implements Component {
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
 			this.#menuKeys.reset();
-			if (this.#search.value !== this.#searchQuery) this.#setSearchQuery(this.#search.value);
+			if (field === "exited" && !this.#search.query) {
+				this.#endSearch(false);
+				return;
+			}
+			if (this.#search.query !== this.#searchQuery) this.#setSearchQuery(this.#search.query);
 			return;
 		}
 		const action = this.#menuKeys.read(data);
@@ -2160,6 +2277,7 @@ export class SettingsSelectorComponent implements Component {
 	get blocksMenuHistory(): boolean {
 		const list = this.#searchList ?? this.#currentList;
 		return (
+			this.#externalEditPending ||
 			list?.blocksMenuHistory === true ||
 			this.#pendingPluginWrites > 0 ||
 			this.#pluginComponent?.blocksMenuHistory === true ||
@@ -2176,8 +2294,10 @@ export class SettingsSelectorComponent implements Component {
 		return {
 			tab: this.#currentTabId,
 			preSearchTab: this.#preSearchTabId,
+			preSearchList: this.#preSearchList,
 			searching: this.#searchList !== null,
 			query: this.#searchQuery,
+			search: this.#search.navigationSnapshot(),
 			searchFocused: this.#search.focused,
 			searchCursor: this.#search.input.getCursor(),
 			list: listSnapshot,
@@ -2188,6 +2308,7 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	leaveMenu(): void {
+		this.#search.focused = false;
 		(this.#searchList ?? this.#currentList)?.leaveMenu();
 		if (isMenuHistoryLeaver(this.#pluginComponent)) this.#pluginComponent.leaveMenu();
 	}
@@ -2198,8 +2319,10 @@ export class SettingsSelectorComponent implements Component {
 		const state = snapshot as {
 			tab?: string;
 			preSearchTab?: string;
+			preSearchList?: SettingsListNavigationState;
 			searching?: boolean;
 			query?: string;
+			search?: unknown;
 			searchFocused?: boolean;
 			searchCursor?: number;
 			list?: unknown;
@@ -2217,8 +2340,10 @@ export class SettingsSelectorComponent implements Component {
 				this.#startSearch(state.query ?? "");
 				if (typeof state.preSearchTab === "string")
 					this.#preSearchTabId = state.preSearchTab as SettingTab | "plugins";
+				if (state.preSearchList !== undefined) this.#preSearchList = state.preSearchList;
 				this.#search.focused = state.searchFocused === true;
 				if (typeof state.searchCursor === "number") this.#search.input.setCursor(state.searchCursor);
+				if (state.search !== undefined) this.#search.restoreNavigation(state.search);
 			}
 			(this.#searchList ?? this.#currentList)?.restoreNavigation(state.list);
 			if (isMenuHistoryParticipant(this.#pluginComponent)) this.#pluginComponent.restoreNavigation(state.plugin);

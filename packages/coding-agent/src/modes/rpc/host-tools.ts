@@ -15,6 +15,7 @@ import type {
 type RpcHostToolOutput = (frame: RpcHostToolCallRequest | RpcHostToolCancelRequest) => void;
 
 type PendingHostToolCall = {
+	toolName: string;
 	resolve: (result: AgentToolResult<unknown>) => void;
 	reject: (error: Error) => void;
 	onUpdate?: AgentToolUpdateCallback<unknown>;
@@ -81,6 +82,8 @@ export class RpcHostToolBridge {
 	#definitions = new Map<string, RpcHostToolDefinition>();
 	#pendingCalls = new Map<string, PendingHostToolCall>();
 	#closedError: Error | undefined;
+	#registration: Promise<void> = Promise.resolve();
+	#revision = 0;
 
 	constructor(output: RpcHostToolOutput) {
 		this.#output = output;
@@ -91,8 +94,39 @@ export class RpcHostToolBridge {
 	}
 
 	setTools(tools: RpcHostToolDefinition[]): AgentTool[] {
-		this.#definitions = new Map(tools.map(tool => [tool.name, tool]));
+		this.#commitTools(tools);
 		return tools.map(tool => new RpcHostToolAdapter(tool, this));
+	}
+
+	#commitTools(tools: RpcHostToolDefinition[]): void {
+		const definitions = new Map(tools.map(tool => [tool.name, tool]));
+		this.#rejectPendingCalls("Host tool registration revoked", definitions);
+		this.#definitions = definitions;
+	}
+
+	/** Publish bridge definitions only after the session accepts the complete set. */
+	refreshTools(tools: RpcHostToolDefinition[], refresh: (tools: AgentTool[]) => Promise<void>): Promise<void> {
+		const revision = this.#revision;
+		const registration = this.#registration.then(async () => {
+			if (this.#closedError) throw this.#closedError;
+			if (revision !== this.#revision) throw new Error("Host tool registration revoked");
+			await refresh(tools.map(tool => new RpcHostToolAdapter(tool, this)));
+			if (this.#closedError) throw this.#closedError;
+			if (revision !== this.#revision) throw new Error("Host tool registration revoked");
+			this.#commitTools(tools);
+		});
+		this.#registration = registration.catch(() => {});
+		return registration;
+	}
+
+	/** Revoke adapters immediately, then remove only this bridge's session tools in order. */
+	revokeTools(message: string, refresh: (tools: AgentTool[]) => Promise<void>): Promise<void> {
+		this.#revision++;
+		this.#definitions.clear();
+		this.#rejectPendingCalls(message);
+		const registration = this.#registration.then(() => refresh([]));
+		this.#registration = registration.catch(() => {});
+		return registration;
 	}
 
 	handleResult(frame: RpcHostToolResult): boolean {
@@ -135,6 +169,9 @@ export class RpcHostToolBridge {
 		if (this.#closedError) {
 			return Promise.reject(this.#closedError);
 		}
+		if (this.#definitions.get(definition.name) !== definition) {
+			return Promise.reject(new Error(`Host tool "${definition.name}" registration revoked`));
+		}
 
 		const id = Snowflake.next() as string;
 		const { promise, resolve, reject } = Promise.withResolvers<AgentToolResult<unknown>>();
@@ -159,6 +196,7 @@ export class RpcHostToolBridge {
 
 		signal?.addEventListener("abort", onAbort, { once: true });
 		this.#pendingCalls.set(id, {
+			toolName: definition.name,
 			resolve: result => {
 				if (settled) return;
 				settled = true;
@@ -185,22 +223,19 @@ export class RpcHostToolBridge {
 		return promise;
 	}
 
-	rejectAllPending(message: string): void {
-		const error = new Error(message);
-		const pendingCalls = Array.from(this.#pendingCalls.values());
-		this.#pendingCalls.clear();
-		for (const pending of pendingCalls) {
-			pending.reject(error);
+	#rejectPendingCalls(message: string, retained?: ReadonlyMap<string, RpcHostToolDefinition>): void {
+		let error: Error | undefined;
+		for (const [id, pending] of this.#pendingCalls) {
+			if (retained?.has(pending.toolName)) continue;
+			this.#output({ type: "host_tool_cancel", id: Snowflake.next() as string, targetId: id });
+			pending.reject((error ??= new Error(message)));
 		}
 	}
 
 	/** Reject active and future host tool requests after the RPC client disconnects. */
 	close(message: string): void {
 		if (!this.#closedError) this.#closedError = new Error(message);
-		const pendingCalls = Array.from(this.#pendingCalls.values());
-		this.#pendingCalls.clear();
-		for (const pending of pendingCalls) {
-			pending.reject(this.#closedError);
-		}
+		this.#definitions.clear();
+		this.#rejectPendingCalls(message);
 	}
 }

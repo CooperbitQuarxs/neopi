@@ -1,4 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { PersonaGenerationDeps, PersonaGenerationRequest } from "../src/overlays/persona-config";
 import type { TUI } from "../src/index";
 import {
 	type PersonaConfigDoc,
@@ -553,4 +555,135 @@ describe("PersonaConfigOverlayComponent", () => {
 			}
 		});
 	}
+});
+
+describe("live persona generation", () => {
+	const model = buildModel({
+		id: "generator",
+		name: "Generator",
+		provider: "test",
+		api: "ollama-chat",
+		baseUrl: "https://example.test",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	});
+	function generator(generate: PersonaGenerationDeps["generate"]): PersonaGenerationDeps {
+		return {
+			getAvailableModels: () => [model],
+			browserSource: {
+				revision: 0,
+				defaultThinkingLevel: "high",
+				modelProviderOrder: [],
+				knownRoleIds: [],
+				mruOrder: [],
+				modelPerf: new Map(),
+				getModelRole: () => undefined,
+				getRoleInfo: role => ({ name: role, section: "chat", accepts: () => true }),
+				defaultRoleChain: () => [],
+				resolveRoleValue: () => ({ model: undefined, explicitThinkingLevel: false }),
+			},
+			references: async () => [
+				{ id: "default", label: "Default live template" },
+				{ id: "custom", label: "A creative existing prompt" },
+			],
+			generate,
+		};
+	}
+
+	it.each([
+		["template only", [0], ["default"]],
+		["existing only", [1], ["custom"]],
+		["combined", [0, 1], ["default", "custom"]],
+	] as const)("generates from %s in generator → references → description order", async (_label, chosen, expected) => {
+		const requests: PersonaGenerationRequest[] = [];
+		const doc = { entries: [entry("default", { builtin: true })] };
+		const h = makeOverlay(doc, "live", {
+			generation: generator(async request => {
+				requests.push(request);
+				return "New spoken instructions.";
+			}),
+			newEntrySources: () => ({
+				fields: [{ key: "irc", label: "IRC", kind: "boolean", value: true }],
+				raw: { irc: true },
+			}),
+		});
+		h.press(DOWN, DOWN, ENTER);
+		expect(h.frame()).toContain("Select Generator Model");
+		expect(h.frame()).not.toContain("Describe Persona");
+		h.press(ENTER);
+		await Bun.sleep(0);
+		expect(h.frame()).toContain("Select Reference Models");
+		expect(requests).toHaveLength(0);
+		for (const index of chosen) {
+			h.press("\x1b[H");
+			for (let i = 0; i < index; i++) h.press(DOWN);
+			h.press(SPACE);
+		}
+		h.press("G", ENTER);
+		expect(h.frame()).toContain("Describe Persona");
+		h.press("A witty navigator", ENTER);
+		await Bun.sleep(0);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.model.id).toBe("generator");
+		expect(requests[0]?.references).toEqual([...expected]);
+		expect(requests[0]?.description).toBe("A witty navigator");
+		expect(doc.entries).toHaveLength(2);
+		expect(h.saved).toHaveLength(0);
+		expect(h.overlay.navigationSnapshot().context.screen).toBe("detail");
+		// Enter immediately edits Name, not Instructions or the active selection.
+		h.press(ENTER, "\x15", "navigator", ENTER, DOWN, DOWN, ENTER);
+		h.press(" Revised.", "\x11", "s");
+		await Bun.sleep(0);
+		expect(h.saved[0]?.entries[1]?.name).toBe("navigator");
+		expect(h.saved[0]?.entries[1]?.content).toContain("Revised.");
+		expect(h.saved[0]?.entries[1]?.sourcesRaw).toEqual({ irc: true });
+		expect(h.saved[0]?.active).toBeUndefined();
+	});
+
+	it("requires a reference and preserves description and choices on back/history", async () => {
+		const h = makeOverlay({ entries: [] }, "live", { generation: generator(async () => "unused") });
+		h.press(DOWN, ENTER, ENTER);
+		await Bun.sleep(0);
+		h.press("G", ENTER);
+		expect(h.frame()).toContain("Select at least one reference");
+		h.press("\x1b[H", SPACE, "G", ENTER, "Keep my words");
+		const snapshot = h.overlay.navigationSnapshot();
+		h.press(ESC);
+		expect(h.frame()).toContain("☑");
+		h.overlay.restoreNavigation(snapshot);
+		expect(h.frame()).toContain("Keep my words");
+	});
+
+	it("cancels in-flight generation without late entries and allows retry after errors", async () => {
+		const pending = Promise.withResolvers<string>();
+		let request: PersonaGenerationRequest | undefined;
+		let attempts = 0;
+		const doc = { entries: [] };
+		const h = makeOverlay(doc, "live", {
+			generation: generator(async value => {
+				request = value;
+				attempts++;
+				if (attempts === 1) return pending.promise;
+				throw new Error("Provider unavailable");
+			}),
+		});
+		h.press(DOWN, ENTER, ENTER);
+		await Bun.sleep(0);
+		h.press(SPACE, "G", ENTER, "Try this", ENTER);
+		expect(h.overlay.blocksMenuHistory).toBe(true);
+		h.press(ESC);
+		expect(request?.signal.aborted).toBe(true);
+		expect(h.overlay.blocksMenuHistory).toBe(false);
+		pending.resolve("late response");
+		await Bun.sleep(0);
+		expect(doc.entries).toHaveLength(0);
+		expect(h.frame()).toContain("Try this");
+		h.press(ENTER);
+		await Bun.sleep(0);
+		expect(h.frame()).toContain("Provider unavailable");
+		expect(doc.entries).toHaveLength(0);
+	});
 });

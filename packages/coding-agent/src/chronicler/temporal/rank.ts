@@ -1,9 +1,10 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Sibling ranking for recall descent. Every ranker returns absolute scores in
  * [0, 1] so relevance is comparable across levels (the backtrack rule compares
  * a node's score with its best child's).
  */
-import { prompt } from "@oh-my-pi/pi-utils";
+
 import rankInputTemplate from "../../prompts/chronicler/temporal/rank-input.md" with { type: "text" };
 import rankSystemTemplate from "../../prompts/chronicler/temporal/rank-system.md" with { type: "text" };
 import { type ChronicleModelClient, parseJsonObject } from "./model";
@@ -68,7 +69,16 @@ export const lexicalRanker: NodeRanker = {
 	},
 };
 
-export function createModelRanker(client: ChronicleModelClient): NodeRanker {
+export interface RankResponsePolicy {
+	minTokens: number;
+	tokensPerCandidate: number;
+	paddingTokens: number;
+}
+
+export function createModelRanker(
+	client: ChronicleModelClient,
+	response: RankResponsePolicy = { minTokens: 256, tokensPerCandidate: 24, paddingTokens: 64 },
+): NodeRanker {
 	return {
 		kind: "model",
 		async score(query, candidates, signal) {
@@ -76,9 +86,12 @@ export function createModelRanker(client: ChronicleModelClient): NodeRanker {
 			try {
 				const reply = parseJsonObject(
 					await client.complete(
-						prompt.render(rankSystemTemplate, {}),
-						prompt.render(rankInputTemplate, { query, candidates }),
-						Math.max(256, candidates.length * 24 + 64),
+						renderPromptAsset("chronicler/temporal/rank-system.md", rankSystemTemplate, {}),
+						renderPromptAsset("chronicler/temporal/rank-input.md", rankInputTemplate, { query, candidates }),
+						Math.max(
+							response.minTokens,
+							candidates.length * response.tokensPerCandidate + response.paddingTokens,
+						),
 						signal,
 					),
 				);

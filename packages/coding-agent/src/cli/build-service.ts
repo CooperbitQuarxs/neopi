@@ -46,6 +46,9 @@ export const DEFAULT_BUILD_URL = "https://build.stencil.so";
 /** The product omp's builds are published under. */
 const PRODUCT = "omp";
 
+/** Non-prompt updates consume upstream assets, not the local executable name. */
+export const UPSTREAM_BINARY_NAME = "omp";
+
 const BUILD_CHECK_TIMEOUT_MS = 30_000;
 
 /** Build origin from launch/user configuration only; project dotenv is never an update authority. */
@@ -95,7 +98,7 @@ export function resolveBuildHost(platform: NodeJS.Platform, arch: string, musl: 
 	}
 	return {
 		target: `${targetOs}-${targetArch}`,
-		fileName: `${APP_NAME}-${fileOs}-${arch}${platform === "win32" ? ".exe" : ""}`,
+		fileName: `${UPSTREAM_BINARY_NAME}-${fileOs}-${arch}${platform === "win32" ? ".exe" : ""}`,
 	};
 }
 

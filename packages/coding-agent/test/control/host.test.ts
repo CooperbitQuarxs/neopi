@@ -5,13 +5,22 @@
  * registry, large commands are accepted, `serve` answers once and leaves no
  * half-installed service, and every declared control-only command routes.
  */
-import { afterEach, beforeAll, afterAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, afterAll, describe, expect, test, vi } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import * as net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { AgentRegistry } from "../../src/registry/agent-registry";
+import { runSubagentFastCommand } from "../../src/registry/subagent-controls";
+import { InputController } from "../../src/modes/controllers/input-controller";
+import type { InteractiveModeContext } from "../../src/modes/types";
+import type { RpcSubagentSnapshot } from "../../src/modes/rpc/rpc-types";
+import { RpcSessionEventForwarder } from "../../src/modes/rpc/rpc-session-events";
+import { RpcHostToolBridge } from "../../src/modes/rpc/host-tools";
+import type { RpcProjectedSessionEventFrame } from "../../src/modes/rpc/rpc-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
@@ -23,12 +32,19 @@ import { ControlHost } from "../../src/control/host";
 import { type ControlMetadata, readControlEntries } from "../../src/control/registry";
 import { InternalUrlRouter } from "../../src/internal-urls/router";
 import { AgentSession } from "../../src/session/agent-session";
+import type { CustomMessage } from "../../src/session/messages";
 import type { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
 import { type SubagentLifecyclePayload, TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "../../src/task/types";
 import { EventBus } from "../../src/utils/event-bus";
 import type { ControlSnapshot } from "../../src/control/types";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
+import { LiveSessionController } from "../../src/live/controller";
+import { LiveCommandController } from "../../src/modes/controllers/live-command-controller";
+import { Container } from "@oh-my-pi/pi-tui/tui";
+import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
+import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
+import { makeAssistantMessage } from "../session-manager/helpers";
 
 describe("control host", () => {
 	let tempDir: TempDir;
@@ -49,6 +65,7 @@ describe("control host", () => {
 
 	afterEach(async () => {
 		for (const extra of extraClients.splice(0)) extra.close();
+		vi.restoreAllMocks();
 		client?.close();
 		client = undefined;
 		await host?.close();
@@ -63,7 +80,10 @@ describe("control host", () => {
 		await tempDir.remove();
 	});
 
-	function createSession(settings: Record<string, unknown> = {}): AgentSession {
+	function createSession(
+		settings: Record<string, unknown> = {},
+		manager = SessionManager.inMemory(tempDir.path()),
+	): AgentSession {
 		const model = createMockModel({ provider: "anthropic", responses: [] });
 		return new AgentSession({
 			agent: new Agent({
@@ -71,7 +91,7 @@ describe("control host", () => {
 				initialState: { model, systemPrompt: [], tools: [] },
 				streamFn: model.stream,
 			}),
-			sessionManager: SessionManager.inMemory(tempDir.path()),
+			sessionManager: manager,
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, ...settings }),
 			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
 		});
@@ -102,6 +122,217 @@ describe("control host", () => {
 		return extra;
 	}
 
+	function hostDefinition(name: string) {
+		return { name, description: name, parameters: { type: "object", properties: {} } };
+	}
+
+	async function waitForToolRemoval(name: string): Promise<void> {
+		const deadline = Date.now() + 2_000;
+		while (session!.hasRpcHostTool(name) && Date.now() < deadline) await Bun.sleep(5);
+		expect(session!.getToolByName(name)).toBeUndefined();
+	}
+
+	function nextHostCall(connection: ControlClient): Promise<Record<string, unknown>> {
+		const call = Promise.withResolvers<Record<string, unknown>>();
+		const unsubscribe = connection.onEvent(frame => {
+			if (frame.type !== "host_tool_call") return;
+			unsubscribe();
+			call.resolve(frame);
+		});
+		return call.promise;
+	}
+
+	test("advertises connection-owned host tools to attached clients", async () => {
+		const { host } = await start();
+		const publication = host.publication;
+		if (!publication) throw new Error("control host did not publish");
+		const ready = Promise.withResolvers<Record<string, unknown>>();
+		const attached = new ControlClient({
+			metadata: publication.metadata(),
+			label: "capability consumer",
+			kind: "cli",
+			onFrame: frame => {
+				if (frame.type === "ready") ready.resolve(frame);
+			},
+		});
+		extraClients.push(attached);
+		await attached.connect();
+		expect((await ready.promise).capabilities).toContain("connection_owned_host_tools");
+	});
+
+	test("host tools remain the union of the stdio owner and two control connections", async () => {
+		const { client } = await start();
+		const second = await connectAnother("second host");
+		const owner = new RpcHostToolBridge(() => {});
+		const ownerTools = owner.setTools([hostDefinition("owner_tool")]);
+		await session!.refreshRpcHostTools(ownerTools);
+		expect((await client.request({ type: "set_host_tools", tools: [hostDefinition("first_tool")] })).success).toBe(
+			true,
+		);
+		expect((await second.request({ type: "serve", tools: [hostDefinition("second_tool")] })).success).toBe(true);
+		expect(session!.getEnabledToolNames().sort()).toEqual(["first_tool", "owner_tool", "second_tool"]);
+
+		await session!.setActiveToolsByName(["first_tool", "owner_tool"]);
+		expect((await client.request({ type: "set_host_tools", tools: [hostDefinition("replacement")] })).success).toBe(
+			true,
+		);
+		expect(session!.getToolByName("first_tool")).toBeUndefined();
+		expect(session!.hasRpcHostTool("second_tool")).toBe(true);
+		expect(session!.getEnabledToolNames().sort()).toEqual(["owner_tool", "replacement"]);
+
+		// Refreshing the terminal/stdio owner's ordinary set also preserves attachments.
+		await session!.refreshRpcHostTools(ownerTools);
+		expect(session!.hasRpcHostTool("replacement")).toBe(true);
+		second.close();
+		await waitForToolRemoval("second_tool");
+		expect(session!.getEnabledToolNames().sort()).toEqual(["owner_tool", "replacement"]);
+		expect((await client.request({ type: "unserve" })).success).toBe(true);
+		expect(session!.getEnabledToolNames()).toEqual(["owner_tool"]);
+		await session!.prompt("The terminal owner can still write after attachments detach.");
+		expect(session!.messages.some(message => message.role === "user")).toBe(true);
+	});
+
+	test("host tool collisions reject the complete replacement and leave existing adapters usable", async () => {
+		const { client } = await start();
+		const second = await connectAnother("colliding host");
+		expect((await client.request({ type: "serve", tools: [hostDefinition("first_tool")] })).success).toBe(true);
+		expect((await second.request({ type: "set_host_tools", tools: [hostDefinition("second_tool")] })).success).toBe(
+			true,
+		);
+		const original = session!.getToolByName("second_tool")!;
+		const rejected = await second.request({
+			type: "set_host_tools",
+			tools: [hostDefinition("new_tool"), hostDefinition("first_tool")],
+		});
+		expect(rejected).toMatchObject({
+			success: false,
+			error: 'RPC host tool "first_tool" conflicts with an existing tool',
+		});
+		expect(session!.getToolByName("new_tool")).toBeUndefined();
+		expect(session!.getToolByName("second_tool")).toBe(original);
+		expect(session!.getEnabledToolNames().sort()).toEqual(["first_tool", "second_tool"]);
+		const requested = nextHostCall(second);
+		const execution = original.execute("after-collision", {});
+		const request = await requested;
+		second.sendRaw({
+			type: "host_tool_result",
+			id: request.id,
+			result: { content: [{ type: "text", text: "still mine" }] },
+		});
+		await expect(execution).resolves.toMatchObject({ content: [{ type: "text", text: "still mine" }] });
+
+		const failedService = await second.request({
+			type: "serve",
+			tools: [hostDefinition("temporary")],
+			schemes: [{ scheme: "not a scheme" }],
+		});
+		expect(failedService.success).toBe(false);
+		expect(session!.hasRpcHostTool("temporary")).toBe(false);
+		expect(session!.getEnabledToolNames()).toEqual(["first_tool"]);
+	});
+
+	test("host tool revocation cancels only its connection and ignores cross-connection and late replies", async () => {
+		const { client } = await start();
+		const second = await connectAnother("other executor");
+		await client.request({ type: "serve", tools: [hostDefinition("first_tool")] });
+		await second.request({ type: "serve", tools: [hostDefinition("second_tool")] });
+		const firstCall = nextHostCall(client);
+		const secondCall = nextHostCall(second);
+		const firstTool = session!.getToolByName("first_tool")!;
+		const firstExecution = firstTool.execute("first-call", {}).then(
+			result => result,
+			error => error as Error,
+		);
+		let secondSettled = false;
+		const secondExecution = session!
+			.getToolByName("second_tool")!
+			.execute("second-call", {})
+			.then(result => {
+				secondSettled = true;
+				return result;
+			});
+		const [firstRequest, secondRequest] = await Promise.all([firstCall, secondCall]);
+		const result = { content: [{ type: "text" as const, text: "correct executor" }] };
+		client.sendRaw({ type: "host_tool_result", id: secondRequest.id, result });
+		await client.request({ type: "get_state" });
+		expect(secondSettled).toBe(false);
+		const canceled: Record<string, unknown>[] = [];
+		client.onEvent(frame => {
+			if (frame.type === "host_tool_cancel") canceled.push(frame);
+		});
+		expect((await client.request({ type: "unserve" })).success).toBe(true);
+		expect(await firstExecution).toBeInstanceOf(Error);
+		expect(canceled).toMatchObject([{ targetId: firstRequest.id }]);
+		await expect(firstTool.execute("stale-adapter", {})).rejects.toThrow("registration revoked");
+		client.sendRaw({ type: "host_tool_result", id: firstRequest.id, result });
+		second.sendRaw({ type: "host_tool_result", id: secondRequest.id, result });
+		await expect(secondExecution).resolves.toEqual(result);
+		expect(session!.hasRpcHostTool("second_tool")).toBe(true);
+
+		await client.request({ type: "serve", tools: [hostDefinition("first_tool")] });
+		const survivingCall = nextHostCall(client);
+		const disconnectingCall = nextHostCall(second);
+		const survivingExecution = session!.getToolByName("first_tool")!.execute("survivor", {});
+		const disconnectedExecution = session!
+			.getToolByName("second_tool")!
+			.execute("disconnecting", {})
+			.catch(error => error as Error);
+		const [survivingRequest] = await Promise.all([survivingCall, disconnectingCall]);
+		second.close();
+		expect(await disconnectedExecution).toBeInstanceOf(Error);
+		await waitForToolRemoval("second_tool");
+		client.sendRaw({ type: "host_tool_result", id: survivingRequest.id, result });
+		await expect(survivingExecution).resolves.toEqual(result);
+		expect(session!.hasRpcHostTool("first_tool")).toBe(true);
+	});
+
+	test("canonical generation changes revoke control tools and calls until that connection registers again", async () => {
+		const { host, client } = await start();
+		await client.request({ type: "serve", tools: [hostDefinition("generation_tool")] });
+		const requested = nextHostCall(client);
+		const tool = session!.getToolByName("generation_tool")!;
+		const execution = tool.execute("old-generation", {}).catch(error => error as Error);
+		const request = await requested;
+		await session!.newSession();
+		expect(host.revisions.generation).toBe(2);
+		expect(await execution).toBeInstanceOf(Error);
+		await waitForToolRemoval("generation_tool");
+		client.sendRaw({ type: "host_tool_result", id: request.id, result: { content: [] } });
+		await expect(tool.execute("old-adapter", {})).rejects.toThrow("registration revoked");
+		expect(
+			(await client.request({ type: "set_host_tools", tools: [hostDefinition("generation_tool")] })).success,
+		).toBe(true);
+		expect(session!.hasRpcHostTool("generation_tool")).toBe(true);
+	});
+
+	test("chat-mode restoration preserves tools from concurrent control owners", async () => {
+		const { client } = await start();
+		const second = await connectAnother("chat host");
+		await session!.setChatMode({ mode: "chat" });
+		const responses = await Promise.all([
+			client.request({ type: "set_host_tools", tools: [hostDefinition("first_tool")] }),
+			second.request({ type: "set_host_tools", tools: [hostDefinition("second_tool")] }),
+		]);
+		expect(responses.every(response => response.success)).toBe(true);
+		expect(session!.getEnabledToolNames()).toEqual([]);
+		await client.request({ type: "set_host_tools", tools: [hostDefinition("replacement")] });
+		await session!.setChatMode({ mode: "off" });
+		expect(session!.getEnabledToolNames().sort()).toEqual(["replacement", "second_tool"]);
+	});
+
+	test("pipelined registrations on one fresh connection share one ownership slot", async () => {
+		const { client } = await start();
+		const responses = await Promise.all([
+			client.request({ type: "set_host_tools", tools: [hostDefinition("earlier")] }),
+			client.request({ type: "set_host_tools", tools: [hostDefinition("later")] }),
+		]);
+		expect(responses.every(response => response.success)).toBe(true);
+		expect(session!.getToolByName("earlier")).toBeUndefined();
+		expect(session!.getEnabledToolNames()).toEqual(["later"]);
+		client.close();
+		await waitForToolRemoval("later");
+	});
+
 	function emitStarted(bus: EventBus, id: string): void {
 		const sessionFile = join(tempDir.path(), `${id}.jsonl`);
 		bus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
@@ -115,6 +346,126 @@ describe("control host", () => {
 		} satisfies SubagentLifecyclePayload);
 	}
 
+	test("real Settings.init accepts a configuration without live settings", async () => {
+		const settingsPath = join(import.meta.dir, "../../src/config/settings.ts");
+		const child = Bun.spawn(
+			[
+				process.execPath,
+				"--eval",
+				`import { Settings } from ${JSON.stringify(settingsPath)}; await Settings.init({ inMemory: true, cwd: ${JSON.stringify(tempDir.path())}, agentDir: ${JSON.stringify(tempDir.path())} });`,
+			],
+			{ cwd: tempDir.path(), stdout: "ignore", stderr: "pipe" },
+		);
+		const stderr = await new Response(child.stderr).text();
+		expect({ exitCode: await child.exited, stderr }).toEqual({ exitCode: 0, stderr: "" });
+	});
+
+	test("control connections share the TUI-owned live call without owning its lifetime", async () => {
+		const { host, client } = await start();
+		let created = 0;
+		const startLive = vi.fn(async () => {});
+		const stopLive = vi.fn(async () => {});
+		const stopRecorder = vi.fn(() => {});
+		const createRecorder = vi.fn(() => ({ stop: stopRecorder }));
+		const voices: Array<string | undefined> = [];
+		const owner = new LiveCommandController(
+			{
+				session: session!,
+				settings: session!.settings,
+				editor: new CustomEditor(getEditorTheme()),
+				liveTranscriptContainer: new Container(),
+				statusLine: { setLiveStatus: () => {} },
+				ui: { requestRender: () => {} },
+				keybindings: { getKeys: () => [] },
+				showError: () => {},
+				showStatus: () => {},
+				extractAssistantText: () => "",
+			} as unknown as InteractiveModeContext,
+			options => {
+				created++;
+				voices.push(options.voice);
+				return new LiveSessionController({
+					...options,
+					createTransport: () => ({
+						connect: startLive,
+						close: stopLive,
+						async send() {},
+						async setMuted() {},
+						setOutputSuppressed() {},
+						pushAudio: () => true,
+					}),
+					createRecorder,
+				});
+			},
+		);
+		try {
+			await owner.handleCommand();
+			// A connection may cache its handler before the TUI finishes attaching.
+			expect((await client.request({ type: "get_state" })).success).toBe(true);
+			host.liveBridge = owner;
+			expect(await client.request({ type: "live_mute", muted: true })).toMatchObject({
+				success: true,
+				data: { muted: true },
+			});
+			expect(await client.request({ type: "live_start" })).toMatchObject({
+				success: false,
+				error: "A live session is already active",
+			});
+			client.close();
+			expect(owner.active).toBe(true);
+			expect(stopLive).not.toHaveBeenCalled();
+			const next = await connectAnother("live reconnect");
+			expect(await next.request({ type: "live_mute", muted: false })).toMatchObject({
+				success: true,
+				data: { muted: false },
+			});
+			expect((await next.request({ type: "live_stop" })).success).toBe(true);
+			expect(owner.active).toBe(false);
+			expect(startLive).toHaveBeenCalledTimes(1);
+			expect(stopLive).toHaveBeenCalledTimes(1);
+			expect(created).toBe(1);
+			expect(createRecorder).toHaveBeenCalledTimes(1);
+			expect(stopRecorder).toHaveBeenCalledTimes(1);
+			expect(await next.request({ type: "live_mute" })).toMatchObject({
+				success: false,
+				error: "No live session is active",
+			});
+			expect(await next.request({ type: "live_start", voice: " cove " })).toMatchObject({
+				success: true,
+				data: { voice: "cove" },
+			});
+			expect(voices.at(-1)).toBe("cove");
+			expect(created).toBe(2);
+			await owner.handleCommand();
+			expect(owner.active).toBe(false);
+			startLive.mockRejectedValueOnce(new Error("transport unavailable"));
+			expect(await next.request({ type: "live_start" })).toMatchObject({
+				success: false,
+				error: "transport unavailable",
+			});
+			expect(owner.active).toBe(false);
+			expect(stopLive).toHaveBeenCalledTimes(3);
+			host.liveBridge = undefined;
+			expect(await next.request({ type: "live_start" })).toMatchObject({
+				success: false,
+				error: "Live voice is unavailable on this transport",
+			});
+		} finally {
+			await owner.stop();
+		}
+	});
+
+	test("live commands stay unavailable when the session has no live owner", async () => {
+		const { client } = await start();
+		for (const type of ["live_start", "live_mute"] as const) {
+			expect(await client.request({ type })).toMatchObject({
+				success: false,
+				error: "Live voice is unavailable on this transport",
+			});
+		}
+		expect((await client.request({ type: "live_stop" })).success).toBe(true);
+	});
+
 	test("hello and state carry the root session's RPC state, without the dump fields", async () => {
 		const { client, hello } = await start();
 		expect(hello.session?.sessionId).toBe(session!.sessionId);
@@ -125,6 +476,65 @@ describe("control host", () => {
 		expect(state.session?.systemPrompt).toBeUndefined();
 		expect(state.session?.dumpTools).toBeUndefined();
 		expect(state.root).toBeUndefined();
+	});
+
+	test("first follow-up warns without dropping the message, then respects each connection's choice", async () => {
+		const { client } = await start();
+		const empty = await client.request({ type: "follow_up", message: "" });
+		expect(empty.success).toBe(true);
+		expect(empty.warning).toBeUndefined();
+		const first = await client.request({ type: "follow_up", message: "first queued message" });
+		expect(first.success).toBe(true);
+		expect(first.warning).toContain("very likely never reach this agent");
+		expect(first.warning).toContain("`steer`");
+		expect(session!.getQueuedMessages().followUp).toEqual(["first queued message"]);
+
+		const second = await client.request({ type: "follow_up", message: "second queued message" });
+		expect(second.success).toBe(true);
+		expect(second.warning).toBeUndefined();
+
+		const other = await connectAnother("another client");
+		const independent = await other.request({ type: "follow_up", message: "other client's message" });
+		expect(independent.success).toBe(true);
+		expect(independent.warning).toBe(first.warning);
+		expect(session!.getQueuedMessages().followUp).toEqual([
+			"first queued message",
+			"second queued message",
+			"other client's message",
+		]);
+	});
+
+	test("a bound calling session keeps its first-use warning across ctl reconnections", async () => {
+		const { host } = await start();
+		const callerSession = createSession();
+		extraSessions.push(callerSession);
+		const callerHost = new ControlHost({ session: callerSession, role: "rpc", dir, tmuxPane: null });
+		await callerHost.start();
+		try {
+			const target = host.publication!.metadata();
+			const caller = callerHost.publication!.metadata();
+			const connect = async () => {
+				const connection = new ControlClient({
+					metadata: target,
+					label: "ctl",
+					kind: "tool",
+					caller: { instanceId: caller.instanceId, token: caller.token },
+				});
+				extraClients.push(connection);
+				await connection.connect();
+				return connection;
+			};
+			const first = await connect();
+			expect((await first.request({ type: "follow_up", message: "first" })).warning).toBeString();
+			first.close();
+			const reconnected = await connect();
+			const second = await reconnected.request({ type: "follow_up", message: "second" });
+			expect(second.success).toBe(true);
+			expect(second.warning).toBeUndefined();
+			expect(session!.getQueuedMessages().followUp).toEqual(["first", "second"]);
+		} finally {
+			await callerHost.close();
+		}
 	});
 
 	test("target view reports the focused subagent's session and names the root; root ignores the focus", async () => {
@@ -162,6 +572,82 @@ describe("control host", () => {
 		expect((reply.data as { subagents: { id: string }[] }).subagents.map(subagent => subagent.id)).toEqual([
 			"EarlySub",
 		]);
+	});
+
+	test("roundtrips selected-agent effort and fast edits between control and focused view", async () => {
+		const bus = new EventBus();
+		const { client } = await start({}, { subagentEventBus: bus });
+		const child = createSession();
+		const sibling = createSession();
+		extraSessions.push(child, sibling);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled test model");
+		await child.setModelTemporary(model, ThinkingLevel.Low);
+		await sibling.setModelTemporary(model, ThinkingLevel.Low);
+		const parentLevel = session!.thinkingLevel;
+		const id = "ThinkingSub";
+		const ref = AgentRegistry.global().register({
+			id,
+			displayName: id,
+			kind: "sub",
+			session: child,
+			sessionFile: join(tempDir.path(), `${id}.jsonl`),
+			status: "running",
+		});
+		try {
+			emitStarted(bus, id);
+			const reply = await client.request({
+				type: "set_subagent_thinking_level",
+				subagentId: id,
+				level: ThinkingLevel.High,
+			});
+			expect(reply.success).toBe(true);
+			expect(child.thinkingLevel).toBe(ThinkingLevel.High);
+			expect(session!.thinkingLevel).toBe(parentLevel);
+			const enabled = await client.request({ type: "set_subagent_fast", subagentId: id, enabled: true });
+			expect(enabled.success).toBe(true);
+			expect(enabled.data).toEqual({ enabled: true, active: child.isFastModeActive() });
+			const list = async () => {
+				const reply = await client.request({ type: "get_subagents" });
+				return (reply.data as { subagents: RpcSubagentSnapshot[] }).subagents.find(agent => agent.id === id);
+			};
+			expect(await list()).toMatchObject({
+				resolvedModelIdentity: `${model.provider}/${model.id}`,
+				resolvedThinkingLevel: ThinkingLevel.High,
+				fastModeEnabled: true,
+				fastModeActive: child.isFastModeActive(),
+			});
+			// The focused view uses these same session controls, not the root session.
+			const focused = {
+				session,
+				viewSession: child,
+				focusedAgentId: id,
+				statusLine: { invalidate() {} },
+				updateEditorBorderColor() {},
+				showStatus() {},
+			} as unknown as InteractiveModeContext;
+			new InputController(focused).cycleThinkingLevel();
+			runSubagentFastCommand(child, "off");
+			expect(child.thinkingLevel).not.toBe(ThinkingLevel.High);
+			expect(await list()).toMatchObject({
+				resolvedThinkingLevel: child.thinkingLevel,
+				fastModeEnabled: false,
+				fastModeActive: false,
+			});
+			expect(session!.thinkingLevel).toBe(parentLevel);
+			expect(session!.isFastModeEnabled()).toBe(false);
+			expect(sibling.thinkingLevel).toBe(ThinkingLevel.Low);
+			expect(sibling.isFastModeEnabled()).toBe(false);
+			const missing = await client.request({
+				type: "set_subagent_thinking_level",
+				subagentId: "Missing",
+				level: ThinkingLevel.High,
+			});
+			expect(missing.success).toBe(false);
+			expect(missing.error).toContain("Subagent not running: Missing");
+		} finally {
+			AgentRegistry.global().unregister(ref.id);
+		}
 	});
 
 	test("subagent frames reach only connections that subscribed, at their own level", async () => {
@@ -215,12 +701,121 @@ describe("control host", () => {
 		const before = session!.sessionId;
 		expect(host.revisions.generation).toBe(1);
 		await session!.newSession();
-		// The first ordinary session event after the transition observes it.
-		session!.emitNotice("info", "after transition");
 		expect(session!.sessionId).not.toBe(before);
 		expect(host.revisions.generation).toBe(2);
 		const [entry] = await readControlEntries({ dir });
 		expect(entry?.meta.sessionId).toBe(session!.sessionId);
+	});
+
+	test("quiet terminal output is snapshotted on attachment and keeps its ID through persistence", async () => {
+		const manager = SessionManager.create(tempDir.path(), tempDir.join("attached-journal"));
+		await manager.ensureOnDisk();
+		session = createSession({}, manager);
+		dir = tempDir.join("attached-control");
+		host = new ControlHost({ session, role: "tui", dir, tmuxPane: null });
+		await host.start();
+		const publication = host.publication;
+		if (!publication) throw new Error("control host did not publish");
+		const stdioFrames: RpcProjectedSessionEventFrame[] = [];
+		const stdio = new RpcSessionEventForwarder(frame => stdioFrames.push(frame));
+		const stopStdio = session.subscribe(event => stdio.forward(event));
+		stdio.observeJournal(session);
+		const message = makeAssistantMessage();
+		message.content = [{ type: "text", text: "quiet in-flight output" }];
+		session.agent.emitExternalEvent({ type: "message_start", message });
+		const started = stdioFrames.find(frame => frame.type === "message_start");
+		if (!started) throw new Error("missing native assistant start");
+		const messageId = started.messageId;
+		const aside: CustomMessage = {
+			role: "custom",
+			customType: "snapshot-aside",
+			content: "external card",
+			display: false,
+			timestamp: Date.now(),
+		};
+		session.agent.emitExternalEvent({ type: "message_start", message: aside });
+		session.agent.emitExternalEvent({ type: "message_end", message: aside });
+		expect(session.agent.state.streamMessage).toBe(message);
+		expect(session.agent.state.messages).toContain(aside);
+		const frames: Record<string, unknown>[] = [];
+		const persisted = Promise.withResolvers<Record<string, unknown>>();
+		client = new ControlClient({
+			metadata: publication.metadata(),
+			label: "journal-reader",
+			kind: "cli",
+			onFrame: frame => {
+				frames.push(frame);
+				if (frame.type === "message_persisted") persisted.resolve(frame);
+			},
+		});
+		await client.connect();
+		await client.request({ type: "subscribe", events: "all" });
+		expect(frames.find(frame => frame.type === "journal_state")).toMatchObject({
+			type: "journal_state",
+			reason: "snapshot",
+			...manager.getJournalIdentity(),
+		});
+		expect(frames.find(frame => frame.type === "message_start" && frame.snapshot === true)).toMatchObject({
+			messageId,
+			message,
+			...manager.getJournalIdentity(),
+		});
+		const snapshot = await client.request({ type: "snapshot_session_journal" });
+		expect(snapshot).toMatchObject({ success: true, data: manager.getJournalIdentity() });
+		expect(frames.filter(frame => frame.type === "message_start").map(frame => frame.messageId)).toEqual([
+			messageId,
+			messageId,
+		]);
+		message.content = [{ type: "text", text: "quiet in-flight output, completed" }];
+		session.agent.emitExternalEvent({
+			type: "message_update",
+			message,
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: ", completed", partial: message },
+		});
+		expect(session.agent.state.streamMessage).toBe(message);
+		session.agent.emitExternalEvent({ type: "message_end", message });
+		expect(session.agent.state.streamMessage).toBeNull();
+		expect(session.agent.state.messages).toContain(message);
+		expect(session.agent.state.messages).toContain(aside);
+		const receipt = await persisted.promise;
+		expect(receipt).toMatchObject({ type: "message_persisted", messageId, ...manager.getJournalIdentity() });
+		expect(stdioFrames.find(frame => frame.type === "message_start")).toMatchObject({ messageId: receipt.messageId });
+		expect(
+			stdioFrames.find(frame => frame.type === "message_persisted" && frame.entryId === receipt.entryId),
+		).toMatchObject({
+			messageId: receipt.messageId,
+			entryId: receipt.entryId,
+		});
+		expect(manager.isEntryDurable(String(receipt.entryId))).toBe(true);
+		await client.request({ type: "snapshot_session_journal" });
+		expect(frames.findLast(frame => frame.type === "journal_state")).toMatchObject({
+			reason: "snapshot",
+			messageEntryIds: expect.arrayContaining([{ messageId: receipt.messageId, entryId: receipt.entryId }]),
+		});
+		expect(
+			frames.find(frame => frame.type === "journal_entry" && (frame.entry as { id: string }).id === receipt.entryId),
+		).toMatchObject({
+			sessionId: manager.getSessionId(),
+			sessionFile: manager.getJournalIdentity().sessionFile,
+			entry: { id: receipt.entryId, type: "message" },
+		});
+		manager.resetLeaf();
+		await client.request({ type: "get_entries" });
+		expect(frames).toContainEqual({ type: "journal_state", reason: "leaf", ...manager.getJournalIdentity() });
+		await session.newSession();
+		await client.request({ type: "get_state" });
+		const identity = manager.getJournalIdentity();
+		expect(frames).toContainEqual(
+			expect.objectContaining({
+				type: "journal_state",
+				reason: "identity",
+				sessionId: identity.sessionId,
+				sessionFile: identity.sessionFile,
+			}),
+		);
+		expect(frames.findLast(frame => frame.type === "journal_state")).toMatchObject(identity);
+		stopStdio();
+		stdio.dispose();
 	});
 
 	test("a command larger than one physical frame is chunked and accepted, not rate limited", async () => {

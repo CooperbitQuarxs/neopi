@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://npi-deck.app/schemas/trigger-manual.json",
+  "title": "RoutineTrigger — manual",
+  "description": "User-invoked trigger. params_schema is authoring metadata; the manual-run admission route does not validate payloads against it.",
+  "type": "object",
+  "required": ["manual"],
+  "properties": {
+    "manual": {
+      "type": "object",
+      "properties": {
+        "params_schema": {
+          "description": "Optional manual-run form declaration. Preserved as metadata and not enforced by routine admission."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
