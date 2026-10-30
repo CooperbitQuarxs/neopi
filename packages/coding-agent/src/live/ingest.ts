@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { CustomMessage } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
+import { sanitizeErrorLine } from "@oh-my-pi/pi-tui/chrome/error-block";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { MAIN_AGENT_ID, type AgentRegistry, type RegistryEvent } from "../registry/agent-registry";
 import {
@@ -1416,19 +1417,30 @@ export class LiveIngest {
 		if (!scoring) this.#alertOnlyAbort = controller;
 		this.#batchInFlight = true;
 		let applied = false;
+		const needsScores = () => scoring && !applied && scoringRevision === this.#scoringRevision && this.#scoring();
 		const remaining = new Map(captured.map(r => [r.token, r]));
+		let firstFailure: string | undefined;
+		const recordFailure = (selection: ClassifierSelection, reason: string) => {
+			const model = `${selection.model.provider}/${selection.model.id}`;
+			firstFailure ??= `${model}: ${reason}`;
+			logger.warn("live ingest: classifier attempt failed", {
+				model,
+				reason,
+				agents: roster.length,
+				alertCandidates: captured.length,
+			});
+		};
 		try {
 			const selections = resolveClassifierSelections(this.#deps.session.settings, this.#deps.session.modelRegistry);
 			let attempts = 0;
 			for (const selection of selections) {
 				if (controller.signal.aborted || sourceEpoch !== this.#sourceEpoch) break;
-				if (!budgetClassifierInput(input, selection)) continue;
+				if (!budgetClassifierInput(input, selection)) {
+					if (needsScores()) recordFailure(selection, "request does not fit the standard context window");
+					continue;
+				}
 				for (let repeat = 0; repeat < (captured.length ? 3 : 1); repeat++) {
-					if (
-						controller.signal.aborted ||
-						sourceEpoch !== this.#sourceEpoch ||
-						(captured.length && !remaining.size)
-					)
+					if (controller.signal.aborted || sourceEpoch !== this.#sourceEpoch || (repeat > 0 && !remaining.size))
 						break;
 					if (attempts++)
 						await new Promise<void>(resolve => {
@@ -1466,17 +1478,13 @@ export class LiveIngest {
 								this.#seedPending = false;
 							},
 						});
-					} catch {
-						continue;
+					} catch (error) {
+						result = { scores: new Map(), failure: error instanceof Error ? error.message : String(error) };
 					}
 					if (sourceEpoch !== this.#sourceEpoch || controller.signal.aborted) break;
-					if (
-						scoring &&
-						!applied &&
-						scoringRevision === this.#scoringRevision &&
-						this.#scoring() &&
-						(result.scores.size > 0 || roster.length === 0)
-					) {
+					if (needsScores() && !result.scores.size)
+						recordFailure(selection, result.failure ?? "response contained no usable importance scores");
+					if (needsScores() && (result.scores.size > 0 || roster.length === 0)) {
 						applied = true;
 						this.#applyScores(result, roster);
 					}
@@ -1490,7 +1498,7 @@ export class LiveIngest {
 							if (!decision.authorized) this.#speakAlert(record, true);
 						}
 				}
-				if (!captured.length) break;
+				if (!remaining.size && !needsScores()) break;
 			}
 			if (alertRevision === this.#alertRevision && this.#alerts())
 				for (const record of remaining.values()) {
@@ -1501,7 +1509,11 @@ export class LiveIngest {
 				}
 			if (scoring && !applied && !this.#oneTimeNotices.has("classifier")) {
 				this.#oneTimeNotices.add("classifier");
-				this.#deps.notify?.("warning", "Live ingest: classifier unavailable; tracking subagents in start order.");
+				const reason = sanitizeErrorLine(firstFailure ?? "no available classifier model");
+				this.#deps.notify?.(
+					"warning",
+					`Live ingest: classifier unavailable; tracking subagents in start order. ${reason}`,
+				);
 			}
 		} finally {
 			this.#abort.signal.removeEventListener("abort", parentAbort);

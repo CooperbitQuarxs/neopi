@@ -17,6 +17,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleChain } from "../config/model-resolver";
 import { LIVE_DELEGATION_MESSAGE_TYPE } from "../session/messages";
 import systemPrompt from "./prompts/subagent-importance.md" with { type: "text" };
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 
 export const LIVE_INGEST_FALLBACK_WINDOW_TOKENS = 128_000;
 const FRAMING_RESERVE = 2_048;
@@ -90,6 +91,8 @@ export interface ClassifierResult {
 	scores: Map<string, number>;
 	depthWeights?: Map<number, number>;
 	alerts?: Map<string, { authorized: boolean; reason: string }>;
+	/** Failed attempt detail retained for the ingestion warning and logs. */
+	failure?: string;
 }
 
 export interface ClassifierProse {
@@ -194,7 +197,7 @@ export function resolveClassifierSelections(settings: Settings, registry: ModelR
 export function budgetClassifierInput(
 	input: ClassifierInput,
 	selection: ClassifierSelection,
-	systemText = systemPrompt,
+	systemText = resolvePromptAsset("live/subagent-importance.md", systemPrompt).text,
 ): string | undefined {
 	const { effectiveOutputAllowance: output, window, tokenizer } = selection;
 	if (
@@ -343,7 +346,7 @@ export async function classifySubagentImportance(
 	const sessionId = Bun.randomUUIDv7();
 	const agent = new Agent({
 		initialState: {
-			systemPrompt: [systemPrompt],
+			systemPrompt: [resolvePromptAsset("live/subagent-importance.md", systemPrompt).text],
 			model: deps.selection.model,
 			thinkingLevel: toReasoningEffort(deps.selection.thinkingLevel),
 			tools: [],
@@ -376,19 +379,22 @@ export async function classifySubagentImportance(
 		if (deps.signal.aborted) return result;
 		deps.onPromptStart?.();
 		await agent.prompt([{ role: "user", content: [{ type: "text", text: finalJson }], timestamp: Date.now() }]);
-		if (deps.signal.aborted || timedOut || agent.state.error) return result;
+		if (deps.signal.aborted) return result;
+		if (timedOut) return { ...result, failure: "classifier attempt timed out" };
+		if (agent.state.error) return { ...result, failure: agent.state.error };
 		const reply = [...agent.state.messages].reverse().find(message => message.role === "assistant");
-		if (!reply || reply.role !== "assistant" || reply.stopReason === "aborted" || reply.stopReason === "error")
-			return result;
+		if (!reply || reply.role !== "assistant") return { ...result, failure: "classifier returned no assistant reply" };
+		if (reply.stopReason === "aborted" || reply.stopReason === "error")
+			return { ...result, failure: reply.errorMessage ?? `classifier response ${reply.stopReason}` };
 		return (
 			parseClassifierReply(
 				textOf(reply.content.filter(block => block.type === "text")),
 				input,
 				JSON.parse(finalJson).authorizationHistoryComplete === true,
-			) ?? result
+			) ?? { ...result, failure: "classifier reply was not a JSON object" }
 		);
-	} catch {
-		return result;
+	} catch (error) {
+		return { ...result, failure: error instanceof Error ? error.message : String(error) };
 	} finally {
 		cancelTimeout();
 		deps.signal.removeEventListener("abort", abort);

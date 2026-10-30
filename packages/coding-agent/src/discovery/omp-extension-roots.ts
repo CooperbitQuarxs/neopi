@@ -10,7 +10,7 @@
  * CLI-provided paths are injected via {@link injectOmpExtensionCliRoots}
  * before discovery runs. Capability loads supply the effective `extensions`
  * setting; direct callers reconstruct its array-replacement precedence from
- * canonical YAML config and legacy `settings.json`.
+ * YAML with its TOML overlay and legacy `settings.json`.
  *
  * @see ./omp-plugins.ts
  * @see ./builtin.ts `loadExtensionModules`
@@ -19,6 +19,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, logger, MAIN_CONFIG_FILENAMES, tryParseJson } from "@oh-my-pi/pi-utils";
+import { overlaySettingsToml, parseSettingsToml, settingsTomlSource } from "@oh-my-pi/pi-utils/settings-toml";
 import { YAML } from "bun";
 import { readDirEntries, readFile } from "../capability/fs";
 import type { ExtensionRootMode, LoadContext } from "../capability/types";
@@ -179,16 +180,20 @@ async function readSettingsExtensions(settingsPath: string): Promise<string[] | 
 /** Project native config filename; matches the single `.omp/config.yml` the settings loader reads. */
 const PROJECT_CONFIG_FILENAMES = ["config.yml"] as const;
 
-interface YamlExtensions {
+interface ConfiguredExtensionLayer {
 	exists: boolean;
 	entries: string[] | null;
 }
 
 /**
  * Read the first present YAML config filename, matching the settings loader's
- * `config.yml` before `config.yaml` selection.
+ * `config.yml` before `config.yaml` selection, then apply its TOML overlay.
  */
-async function readYamlExtensions(scopeDir: string, filenames: readonly string[]): Promise<YamlExtensions> {
+async function readConfiguredLayer(scopeDir: string, filenames: readonly string[]): Promise<ConfiguredExtensionLayer> {
+	const source = await settingsTomlSource(scopeDir);
+	const toml = source ? parseSettingsToml(source.content, source.filePath) : {};
+	const entries = (record: Record<string, unknown>) =>
+		toml.extensions === null ? [] : readExtensionsArray(record.extensions);
 	for (const filename of filenames) {
 		const content = await readFile(path.join(scopeDir, filename));
 		if (content === null) continue;
@@ -198,13 +203,14 @@ async function readYamlExtensions(scopeDir: string, filenames: readonly string[]
 		} catch {
 			return { exists: true, entries: null };
 		}
-		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		if (parsed === null || parsed === undefined) parsed = {};
+		if (typeof parsed !== "object" || Array.isArray(parsed)) {
 			return { exists: true, entries: null };
 		}
-		const raw = "extensions" in parsed ? parsed.extensions : undefined;
-		return { exists: true, entries: readExtensionsArray(raw) };
+		const effective = overlaySettingsToml(parsed as Record<string, unknown>, toml);
+		return { exists: true, entries: entries(effective) };
 	}
-	return { exists: false, entries: null };
+	return { exists: source !== undefined, entries: entries(toml) };
 }
 
 interface ConfiguredExtensions {
@@ -214,22 +220,22 @@ interface ConfiguredExtensions {
 
 /**
  * Select the persisted `extensions` array with the same array-replacement
- * precedence as `Settings`: project YAML, project legacy settings, user YAML,
- * then user legacy settings. A present user YAML config suppresses its legacy
- * migration source even when it omits `extensions`.
+ * precedence as `Settings`: project TOML/YAML, project legacy settings, user
+ * TOML/YAML, then user legacy settings. A present user main config suppresses
+ * its legacy migration source even when it omits `extensions`.
  */
 async function readConfiguredExtensions(ctx: LoadContext): Promise<ConfiguredExtensions | null> {
 	const { project, user } = scopeDirs(ctx);
-	const [projectYaml, projectSettings, userYaml, userSettings] = await Promise.all([
-		readYamlExtensions(project, PROJECT_CONFIG_FILENAMES),
+	const [projectConfig, projectSettings, userConfig, userSettings] = await Promise.all([
+		readConfiguredLayer(project, PROJECT_CONFIG_FILENAMES),
 		readSettingsExtensions(path.join(project, "settings.json")),
-		readYamlExtensions(user, MAIN_CONFIG_FILENAMES),
+		readConfiguredLayer(user, MAIN_CONFIG_FILENAMES),
 		readSettingsExtensions(path.join(user, "settings.json")),
 	]);
-	if (projectYaml.entries !== null) return { entries: projectYaml.entries, level: "project" };
+	if (projectConfig.entries !== null) return { entries: projectConfig.entries, level: "project" };
 	if (projectSettings !== null) return { entries: projectSettings, level: "project" };
-	if (userYaml.entries !== null) return { entries: userYaml.entries, level: "user" };
-	if (userYaml.exists) return null;
+	if (userConfig.entries !== null) return { entries: userConfig.entries, level: "user" };
+	if (userConfig.exists) return null;
 	if (userSettings !== null) return { entries: userSettings, level: "user" };
 	return null;
 }

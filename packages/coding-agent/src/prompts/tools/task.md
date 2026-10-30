@@ -11,6 +11,7 @@ Shared edits need one integration owner{{#if ircEnabled}}; siblings coordinate v
 
 # Inputs
 `agent`: agent type, optionally with an effort suffix (`<agent>:high` keeps that agent's prompt, tools and model at that effort), or a direct model selector `provider/model[:effort]` / `@role[:effort]` (efforts: minimal|low|medium|high|xhigh|max|auto) crewing the generic task agent with exactly that model; registered agent names win; invalid selectors fail loudly.
+Read `model://<selector>` before choosing unfamiliar reasoning levels: resolved identity, supported levels, implicit policy, role Auto choices and fallbacks. `model://` reports the active model and observed effort; pending Auto is not an observed choice.
 {{#if routingPolicies}}`agent: "policy:<name>/<slot>"`: apply a declared routing slot's model, effort, specialist and role boundary; explicit per-spawn effort wins. NEVER invent undeclared policies.
 {{#list routingPolicies join=""}}- `{{selector}}`: model={{model}}, effort={{effort}}; boundary: {{boundary}}
 {{/list}}{{/if}}

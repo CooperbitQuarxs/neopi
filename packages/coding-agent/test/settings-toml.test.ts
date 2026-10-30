@@ -6,14 +6,19 @@ import { orderedSettings } from "../src/config/all-settings";
 import { dumpSettingsToml, overlaySettingsToml } from "../src/config/settings-toml";
 import { parseConfigArgs } from "../src/cli/config-cli";
 import { cfgCompactionEnabled } from "../src/session/context-settings";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
-let root: string;
+let root = "";
 let agentDir: string;
 let cwd: string;
+let state: SettingsTestState | undefined;
 const yaml =
 	"# Preserve this comment\ncompaction:\n  enabled: false\n  reserveTokens: 1234\nmodelRoles:\n  default: example/model\n  slow: example/other\n";
 beforeEach(async () => {
-	root = await fs.mkdtemp(path.join(process.env.HOME!, ".cache/npi-canary/toml-overlay-test-"));
+	state = beginSettingsTest();
+	const cacheDir = path.join(process.env.HOME!, ".cache/npi-canary");
+	await fs.mkdir(cacheDir, { recursive: true });
+	root = await fs.mkdtemp(path.join(cacheDir, "toml-overlay-test-"));
 	agentDir = path.join(root, "agent");
 	cwd = path.join(root, "project");
 	await fs.mkdir(cwd, { recursive: true });
@@ -21,8 +26,8 @@ beforeEach(async () => {
 	resetSettingsForTest();
 });
 afterEach(async () => {
-	resetSettingsForTest();
-	await fs.rm(root, { recursive: true, force: true });
+	restoreSettingsTestState(state);
+	if (root) await fs.rm(root, { recursive: true, force: true });
 });
 function snapshot(settings: Settings): string {
 	return JSON.stringify(orderedSettings().map(setting => [setting.id, setting.get(settings)]));
@@ -76,18 +81,19 @@ describe("settings.toml", () => {
 		await Bun.write(path.join(cwd, ".omp/settings.toml"), "broken = [");
 		await expect(Settings.loadReadOnly({ agentDir, cwd })).rejects.toThrow("settings.toml");
 	});
-	it("keeps TOML out of YAML saves and reloads or removes overlays atomically", async () => {
+	it("saves to legacy TOML and reloads or removes overlays atomically", async () => {
 		const tomlPath = path.join(agentDir, "settings.toml");
 		await Bun.write(tomlPath, "[compaction]\nenabled = true\n");
 		const loaded = await Settings.init({ agentDir, cwd });
 		expect(cfgCompactionEnabled.get(loaded)).toBe(true);
 		cfgCompactionEnabled.set(loaded, false);
 		await loaded.flush();
-		expect(cfgCompactionEnabled.get(loaded)).toBe(true);
-		expect(await Bun.file(tomlPath).text()).toBe("[compaction]\nenabled = true\n");
+		expect(cfgCompactionEnabled.get(loaded)).toBe(false);
+		expect(Bun.TOML.parse(await Bun.file(tomlPath).text())).toEqual({ compaction: { enabled: false } });
+		expect(await Bun.file(path.join(agentDir, "config.yml")).text()).toBe(yaml);
 		await Bun.write(tomlPath, "broken = [");
 		await expect(loaded.reloadFromDisk()).rejects.toThrow("settings.toml");
-		expect(cfgCompactionEnabled.get(loaded)).toBe(true);
+		expect(cfgCompactionEnabled.get(loaded)).toBe(false);
 		await fs.rm(tomlPath);
 		await loaded.reloadFromDisk();
 		expect(cfgCompactionEnabled.get(loaded)).toBe(false);

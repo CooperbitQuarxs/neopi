@@ -2,6 +2,34 @@
 
 This document describes how the coding-agent currently loads models, applies overrides, resolves credentials, and chooses models at runtime.
 
+## Editing models in the TUI
+
+Open `/models` and choose **Model overrides**, beside Effort rules and Context
+rules. This lists every explicit override and custom model in the active models
+config, including entries that are not in the current catalog.
+
+Select an entry to inspect its fields. Enter opens a field, object, array, or
+choice. All fields recognized by the native config schema are editable, including
+compatibility flags, thinking controls, pricing, headers and remote compaction.
+Records have an **Add key** row and arrays an **Add item** row. Use `x` to unset a
+known field or remove an array item, `t` to choose a union or free-value type, and
+`s` or **Save entry** to persist the draft. Esc leaves a field, goes back through
+nested fields, then discards an unsaved entry. `/` searches the current list.
+Unknown fields stay visible as read-only values and survive saves.
+
+Use **New override** or **New custom model** to add an entry. New custom models
+use the selected provider's existing endpoint, authentication and default API
+unless a model field overrides it. The config validator reports missing provider
+requirements without writing an invalid draft. From the entry list, `x` offers
+deletion with confirmation.
+
+Explicit model overrides take precedence over custom model definitions,
+discovery and catalog values. Custom definitions replace matching catalog or
+discovered entries. Saving uses the shared config writer and a local catalog
+refresh, without online discovery. Unrelated edits made on disk are retained;
+overlapping stale edits are rejected rather than overwritten.
+
+
 ## What controls model behavior
 
 Primary implementation files:
@@ -31,6 +59,89 @@ Legacy behavior still present:
 
 - If both YAML files are missing and `models.json` exists at the same location, it is migrated to `models.yml`.
 - Explicit `.json` / `.jsonc` config paths are still supported when passed programmatically to `ModelRegistry`.
+
+## Optional model-fact sources and field overrides
+
+Open `/models` and press F6 to edit model facts. The session-only `/model`
+picker does not expose settings edits. Choose a provider and model, or type an
+unlisted model ID under a configured provider. Each field accepts a literal,
+a reference to that field on another `provider/model`, or Automatic. The preview
+shows the resolved value and its source before saving. Esc leaves the current
+field, then closes the editor without saving.
+
+This feature is disabled by default. Its settings live in `config.yml`, not
+`models.yml`:
+
+```yaml
+modelFacts:
+  enabled: true
+  sources: [openrouter, stencil]
+  overrides:
+    xai-oauth/grok-4.7:
+      cost:
+        from: xai/grok-4.7
+      efforts:
+        from: xai/grok-4.7
+    my-provider/unlisted-model:
+      contextWindow: 128000
+      maxTokens: 16384
+      input: [text, image]
+```
+
+`sources` is an ordered, replaceable list. `openrouter` uses its public catalog
+without requiring an API key; `stencil` uses the shared models.dev mirror at
+`catalog.stencil.so`. Other names use the registered provider's existing
+discovery, credentials and cache, including extension-only providers. Failed
+sources contribute no new facts. Offline refreshes do not fetch public catalogs.
+
+For each model, the first matching source with a missing field supplies it.
+Nonzero provider prices and known limits remain unchanged unless a field
+override replaces them. An authoritative effort ladder corrects a provider's
+false "no reasoning" report. A discovery text-only placeholder can receive
+input modalities from a source; explicitly reported text-only input stays put.
+The fields are `cost`, `contextWindow`, `maxTokens`, `input`, `reasoning`, and
+`efforts`. Price literals use rates per million tokens. Borrowing a field does
+not copy another model's endpoint, credentials, other facts or wire-model IDs.
+
+An override entry also registers an unlisted model using its target provider's
+transport. It does not create a provider or copy the referenced provider's route.
+Provider provenance means the registry's existing provider row, including its
+catalog and KDL corrections. Source, literal override and exact-reference
+provenance are reported separately; unavailable facts remain unknown.
+Per-model compatibility and transport policy still belongs in the catalog's KDL
+rules. The agent-facing lookup below consumes this same fact resolution.
+
+## Agent model information
+
+Agents can read `model://` for the active model, or provide an exact model,
+pattern or role selector:
+
+- `model://@task` resolves the current task role, including project overrides.
+- `model://openai/*` queries matching available models.
+- `model://?selector=openai%2F*%3Ahigh` inspects an explicit effort override.
+
+Reserved URL characters belong in the encoded `selector` query. Effort suffixes
+are selector input, not read-tool line selectors. The JSON response reports
+match count and truncation for broad patterns instead of injecting a catalog
+table into every prompt.
+
+Supported model efforts, implicit operator restrictions, role Auto choices and
+explicit caller overrides are separate fields. A supported explicit level can
+bypass an implicit restriction; it cannot make an unsupported level available.
+Role resolution reports which configured selector and project/global source
+applied, along with applicable configured fallback alternatives.
+
+The actual reasoning field describes an observed concrete choice only for the
+active model. Auto remains `pending-auto` until classification has produced a
+concrete result, even though the runtime holds a provisional wire default.
+Queries for models that have not run do not invent a future Auto result.
+
+Technical characteristics and field provenance come from the live registry and
+the configured fact sources above. Identity includes its maintained catalog
+rule location. Technical fields without fact provenance are `null`; unverified
+effort guesses are not reported as supported levels. Missing descriptive or
+quality information is explicitly unknown. The lookup exposes no credentials,
+headers or provider endpoint URLs, and does not spawn an agent or change settings.
 
 ## `models.yml` / `models.yaml` shape
 
@@ -635,18 +746,36 @@ Model roles assign model selectors to workloads. Configure them under `modelRole
 
 Built-in roles are grouped in the model picker:
 
-- **Chat roles:** `default`, `smol`, `slow`, `vision`, `plan`, `commit`, `tiny`, `memory`, `task`, `advisor`, `chronicler`, `chronicler-summary`, `effort`, `prose`, and `issues`. The `tiny` and `memory` roles accept both ordinary chat models and `tiny` catalog models. The `effort` chat role selects the dedicated replacement-mode Auto classifier. `issues` runs `/issue`; it has no fallback, so `/issue` refuses until it is assigned rather than borrowing the active model.
+- **Chat roles:** `default`, `smol`, `slow`, `vision`, `plan`, `agent-author`, `compaction`, `commit`, `tiny`, `title`, `memory`, `task`, `advisor`, `chronicler`, `chronicler-summary`, `chronicler-recall`, `classifier`, `effort`, `prose`, `issues`, and `deck-inbox`. The `tiny`, `title`, and `memory` roles accept both ordinary chat models and `tiny` catalog models. The `effort` chat role selects the dedicated replacement-mode Auto classifier. `issues` runs `/issue`; it has no fallback, so `/issue` refuses until it is assigned rather than borrowing the active model.
 - **Model-kind roles:** `image`, `web`, `speech`, `dictation`, and `judge`. These select image generation, search/grounded chat, text-to-speech, speech-to-text, and other judgment runners respectively. The `judge` role also accepts tiny and chat models; replacement-mode Auto thinking uses `effort`, not `judge`.
 
 `vision` and `image` are different workloads: `vision` selects a chat model for image analysis, such as `read screenshot.png?q=...`; `image` selects a model with catalog kind `image` for `generate_image`. Assigning a model to `vision` does not give it image-input support: image questions additionally check that the model can send image input to its provider.
 
-The `tiny` role selects lightweight models for background work such as session titles; when unset, it resolves through `@smol`. The `memory` role resolves through `@tiny` when unset. See [model settings](./settings.md#models) for configuration and fallback-chain examples.
+The `tiny` role selects lightweight models for background work; when unset, it resolves through `@smol`. The `memory` and `title` roles resolve through `@tiny` when unset. `title` generates session titles and `/rename` suggestions; assigning it does not change unrelated tiny tasks such as subagent labels. With `title.generator: fork`, automatic titles still use the foreground model, with `title` used only if that fork falls back to the title-model path. Local title prewarming follows the title assignment too. See [model settings](./settings.md#models) for configuration and fallback-chain examples.
+
+Every role is listed in **Roles**, even if its tag metadata says `hidden: true`.
+Built-in roles have short default descriptions; custom roles have none until you
+write one. `D` edits the selected role's description in
+`modelTags.<role>.description`. The top row shows it on one truncated line.
+An empty description hides the text without restoring the default.
+
+The `agent-author` role creates agent definitions in the agents hub. Until assigned,
+agent creation keeps using the foreground model. The `compaction` role overrides
+the summarizer used by soft compaction without switching the foreground model.
+Until assigned, compaction keeps its existing model-specific and active-model
+fallback order.
+
+Chronicler uses `chronicler-summary`, tagged CHRONSUM, for background summaries,
+and `chronicler-recall`, tagged CHRONREC, for interactive recall ranking.
+Until assigned, recall follows the effective summary model and thinking suffix.
+Set `modelRoles.chronicler-recall` independently to make recall faster without
+changing summary quality. Both roles appear in **Roles** and RPC listings.
 
 #### NeoDeck roles
 
 The `deck-*` namespace belongs to NeoDeck: every role id beginning with `deck-` is a member, including custom roles. The built-in chat role `deck-inbox` classifies inbox items and chooses where they go. Its default is GPT-6 Luna on the ChatGPT subscription provider (`openai-codex/gpt-6-luna`). If that model is unavailable, normal role resolution reports it as unresolved; it does not borrow the active conversation model.
 
-Assign `modelRoles.deck-inbox` globally or per project, or use `/model` → **Roles** → **Deck inbox**. Presentation overrides, provenance, thinking selections, and `retry.fallbackChains.deck-inbox` work like other chat roles. RPC `get_roles` (or in-process `RpcRoles.list()`) includes it even before configuration, with its default in `patterns` and optional available model in `resolved`; all `deck-*` entries carry `namespace: "deck"`.
+Assign `modelRoles.deck-inbox` globally or per project, or use `/models` → **Roles** → **Deck inbox**. Presentation overrides, provenance, thinking selections, and `retry.fallbackChains.deck-inbox` work like other chat roles. RPC `get_roles` (or in-process `RpcRoles.list()`) includes it even before configuration, with its default in `patterns` and optional available model in `resolved`; all `deck-*` entries carry `namespace: "deck"`.
 
 Consumers add another role by registering a `deck-<name>` key through the existing `modelRoles`, `modelTags`, or `cycleOrder` settings. For example, `modelRoles: { deck-triage: "openai-codex/gpt-6-luna" }` makes `@deck-triage` available in the picker and RPC catalog without a NeoPi code change. The namespace alone does not register an unconfigured role or supply it with a default model. To ship a new built-in role visible on fresh installs, add its id to the shared role lists in `packages/tui/src/overlays/model-browser.ts`, metadata to `config/model-roles.ts`, and any default selectors to `src/priority.json`; no namespace-specific resolver or UI changes are needed.
 
@@ -654,7 +783,9 @@ Consumers add another role by registering a `deck-<name>` key through the existi
 
 Assigning a non-default role in `/models` normally saves its selector without switching the active conversation model. A workload uses the role when invoked; assigning `plan` does not itself enter plan mode, and calling `todo` does not itself select the plan model. While plan mode is active, changing the `plan` role reapplies its model. Assigning `default` normally also switches the active model, unless a higher-priority settings layer overrides the edited assignment. The session-only model picker changes the active model without rewriting role assignments.
 
-In `/model` (`/models`), the session-only picker, and agent hubs, lists open in normal navigation. `j`/`k` select, `gg`/`G` jump, `Ctrl-d`/`Ctrl-u` move half a page, and `Ctrl-e`/`Ctrl-y` scroll the view without changing the selected row. `/` focuses the section's search field; Roles search stays in Roles. Text fields keep literal typing and editing keys. Esc leaves the field retaining its query, then returns from a nested page to its parent; Esc at the root closes. `h`/`l` and Left/Right switch model-hub panes except in a focused field or effort chooser, where they edit text or adjust effort. Non-effort chip strips use `j`/`k` to choose and Enter/Space to commit; `h`/`l` leaves without committing and switches panes. Tab/Shift-Tab and Ctrl-N/Ctrl-P switch contexts, not chip values. Roles retains `f` for adding a fallback and `y`/`Y`/`p` for yank/paste. Composer editing and Ctrl-P model cycling are unchanged. See [menu navigation](./keybindings.md#menu-navigation) for history and native viewport limits.
+`/model` opens the rich provider-sidebar picker in current-session-only mode, starting on **Recently used**. Selecting a model uses it for the active conversation without changing the saved default or role mappings. This view has no role chooser or policy editors. Use **All models** or a provider to browse beyond recent selections. `/models` keeps the full role-management hub. `/switch` and Alt+P keep the compact session-only picker.
+
+In `/model`, `/models`, the compact session picker, and agent hubs, lists open in normal navigation. `j`/`k` select, `gg`/`G` jump, `Ctrl-d`/`Ctrl-u` move half a page, and `Ctrl-e`/`Ctrl-y` scroll the view without changing the selected row. `/` focuses the section's search field; Roles search stays in Roles. Text fields keep literal typing and editing keys. Esc leaves the field retaining its query, then returns from a nested page to its parent; Esc at the root closes. `h`/`l` and Left/Right switch model-hub panes except in a focused field or effort chooser, where they edit text or adjust effort. Non-effort chip strips use `j`/`k` to choose and Enter/Space to commit; `h`/`l` leaves without committing and switches panes. Tab/Shift-Tab and Ctrl-N/Ctrl-P switch contexts, not chip values. Roles retains `f` for adding a fallback and `y`/`Y`/`p` for yank/paste. Composer editing and Ctrl-P model cycling are unchanged. See [menu navigation](./keybindings.md#menu-navigation) for history and native viewport limits.
 
 In the Roles view, `y` on a root with configured fallbacks snapshots the primary model followed by its complete fallback chain, preserving fixed and Auto effort metadata. A root without fallbacks and an individual fallback row still yank a single entry; `Y` keeps its existing whole-chain behavior on fallback rows. `p` appends the snapshot to the target chain in order, skips duplicates, and preserves existing target-entry policies. Later source or target edits do not mutate the saved snapshot.
 
@@ -673,11 +804,33 @@ If a role points at another role, the target model still inherits normally and a
 
 ### Effort controls in `/models`
 
-The **Effort rules** sidebar edits global `effort.rules`: pick an exact catalog model or enter a `provider/model` glob, then toggle its allowed concrete levels. An exact rule wins over any glob even if listed later; among globs, the first matching row wins and can be reordered. These are implicit-effort restrictions, not model metadata or limits on explicit supported caller/manual levels.
+The **Effort rules** sidebar edits global `effort.rules`: pick an exact catalog model or enter a `provider/model` glob or `re:` regular expression, then toggle its allowed concrete levels. Exact rules win over regexes, then globs. The first matching row within a kind wins; pattern rows can be reordered. These rules apply to implicit effort choices in sessions and subagents, including saved fixed defaults, not only Auto. Explicit supported caller/manual efforts bypass the rules, and legacy mode ignores them. The judge path currently skips the implicit rule resolver when its selection is absent or Inherit.
 
 Assign a role in **Roles** or from a model row and select **Inherit**, **Off**, a fixed supported level, or **Auto**. Auto opens a multi-select of permitted levels and saves its model-bound `{ mode: "auto", allowed, selector }` preference in `roleEffortSelections`; a role's fixed or Inherit selection uses `{ mode: "fixed", level }` or `{ mode: "inherit" }`. When `modelRoleStorage: project`, choose project or global for the role and its effort metadata; otherwise it saves globally. Fallback rows have their own effort strips, including Auto sets, persisted as `retry.fallbackEffortSelections` beside the global chain. The `effort` classifier role itself offers no Auto option: it needs concrete enabled reasoning. Edits to a role model and its effort selection are saved together, and failed saves keep the draft open.
 
 In the default `effort.mode: replacement`, implicit role/fallback choices are intersected with the target model's capabilities and winning global rule. A constrained fixed level adjusts to the nearest permitted level below it or, if necessary, the lowest permitted level, with a warning. An empty permitted intersection yields an actionable error instead of silent promotion. `effort.mode: legacy` restores the old `lo|med|hi` task hints and `task.maxEffort` ceiling; the replacement wire accepts only concrete levels when enabled. See [Thinking and effort policy](./settings.md#thinking-and-effort-policy).
+
+### Context rules in `/models`
+
+The **Context rules** sidebar uses the same exact-model picker, glob/regex editor, search, and pattern ordering as Effort rules. Both editors save global rule arrays; project and `--config` layers can replace those arrays through the usual Settings precedence. Context rules apply to every session model use, including subagents and explicit effort selections. They do not rewrite the provider's catalog capabilities.
+
+Each `context.rules` entry has a `selector` and a `limit`. The limit uses the model row's **N** syntax: `400k` is a context base to which the configured compaction reserve or percentage applies, `f400k` is a fixed compaction trigger, and `80%` scales the model's window. The editor normalizes token shorthand to integers. Empty input removes a rule.
+
+Session compaction controls and active-role or per-agent budgets take priority. Next come the existing N-key `compaction.modelThresholds` entries, then context rules, then global compaction policy. Rules use exact > regex > glob precedence, with listed order breaking ties within a kind. An existing per-model prefix limit also outranks a context rule. Unlike an N edit, a context rule does not opt a model into extended context; bases above its active capacity are capped.
+
+The model column shows the resolved maintenance budget. An accent-colored `*` marks a value different from the catalog context. The preview retains **Context** for catalog capacity and shows **Effective context \*** separately. A token-base limit displays that base; a fixed or percentage limit displays the resolved trigger. The actual compaction point can be lower than a token base because it still reserves space. Disabled compaction displays the full active window.
+
+```yaml
+context:
+  rules:
+    - selector: test/model
+      limit: 100000
+    - selector: 're:^test/large-'
+      limit: f200000
+    - selector: test/*
+      limit: 80%
+```
+
 
 ### Model presets
 
@@ -717,7 +870,7 @@ Related settings:
 
 `modelRoles` stores model selectors such as `provider/modelId`; `enabledModels` and CLI `--models`
 accept exact selectors, globs, and fuzzy matches. The resulting scope restricts chat models only
-(Ctrl+P cycling, the startup model, chat roles in `/model`); judge, search, image, and speech
+(Ctrl+P cycling, the startup model, chat roles in `/models`); judge, search, image, and speech
 models stay available for their roles, so entries naming them are accepted but have no effect.
 
 `enabledModels`, `enabledProviders`, and `disabledProviders` entries may also be scoped to a path prefix:
@@ -741,7 +894,7 @@ String entries apply everywhere. Scoped entries apply when the current working d
 
 Both surfaces keep provider-prefixed concrete models visible and selectable.
 
-- `/model` / `/models` opens the model hub with role assignments and provider catalogs; the session-only picker changes the active model without saving a role assignment.
+- `/model` opens the rich session-only picker on recently used models, with provider catalogs and no role chooser. `/models` opens the full role-management hub. `/switch` and Alt+P open the compact session-only picker.
 - `omp models` (default `ls` action) prints provider-grouped tables of available **chat** models; `--kind <kind>` selects another catalog kind and `--kind all` includes every kind.
 - `omp models find <substring>` filters by provider, id, or name; `omp models refresh` forces an online catalog re-fetch ignoring the model cache TTL; a provider name doubles as an `ls` filter (e.g. `omp models openai-codex`).
 - Other flags: `--json`, `-e <path>` / `--extension <path>` (repeatable), `--no-extensions` (skip ambient discovery; explicit `-e` still loads), and `--config <overlay>` (repeatable).

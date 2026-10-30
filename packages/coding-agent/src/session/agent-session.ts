@@ -1,3 +1,4 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { directoryIsMissing, PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 /**
  * AgentSession - Core abstraction for agent lifecycle and session management.
@@ -83,6 +84,7 @@ import type {
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
 import { type Effort, serviceTierFamily, streamSimple } from "@oh-my-pi/pi-ai";
+import type { ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
@@ -103,7 +105,6 @@ import {
 	isRecord,
 	logger,
 	postmortem,
-	prompt,
 	Snowflake,
 	stringProperty,
 	toError,
@@ -211,8 +212,8 @@ import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import type { PlanModeState } from "../plan-mode/state";
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
-import anthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
-import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
+import bundledAnthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
+import bundledAutoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
@@ -220,7 +221,7 @@ import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" w
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with { type: "text" };
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sessionStopBlockedPrompt from "../prompts/system/session-stop-blocked.md" with { type: "text" };
-import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
+import bundledSideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import titleCardPrompt from "../prompts/system/title-card.md" with { type: "text" };
 import titleForkPrompt from "../prompts/system/title-fork.md" with { type: "text" };
 import skillfulNoticePrompt from "../prompts/system/skillful-notice.md" with { type: "text" };
@@ -246,6 +247,8 @@ import {
 } from "@oh-my-pi/pi-tui/thinking";
 import { isAttachmentOnlyTitleInput, isLowSignalTitleInput } from "../tiny/text";
 import type { ImageAttachmentEntry, ToolSession } from "../tools";
+import { listEnabledTools, type ToolCatalogSession, toolCatalogDocs, toolCatalogListing } from "../tools/tool-catalog";
+import { toolSummary } from "../tools/xdev";
 import { resolveApproval } from "../tools/approval";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { type AskToolInput, recoverAskQuestions } from "../tools/ask";
@@ -378,6 +381,7 @@ import {
 import { recordCredentialPin, seedCredentialPins } from "./credential-pin";
 import { isDateCwdReminderControl } from "./date-cwd-reminder";
 import { EvalRunner, type EvalRunnerHost } from "./eval-runner";
+import { SessionEnvironment, sessionEnvironment } from "./environment";
 import {
 	collectPendingToolCalls,
 	createInterruptedToolResults,
@@ -455,7 +459,13 @@ import {
 	type SessionAdvisorsHost,
 } from "./session-advisors";
 import type { BuildSessionContextOptions, SessionContext } from "./session-context";
-import { getMessageEntryId, setMessageEntryId } from "./message-entry-ids";
+import {
+	clearLiveMessageId,
+	getMessageEntryId,
+	linkMessageEntrySource,
+	observeLiveMessageId,
+	setMessageEntryId,
+} from "./message-entry-ids";
 import { buildSessionContext, getRestorableSessionModels, isTranscriptEntry } from "./session-context";
 import type { CacheWarmer, CacheWarmingMode, CacheWarmingStatus } from "./cache-warmer";
 import { isUserRequestEntry, transcriptEntryMessage, userTurnDraft } from "@oh-my-pi/pi-tui/chat/transcript-entry";
@@ -481,6 +491,12 @@ import {
 	type PersistedSessionInit,
 	type SessionManager,
 } from "./session-manager";
+import {
+	assertTreeNavigationExpected,
+	TreeNavigationError,
+	type TreeNavigationExpected,
+	type TreeNavigationState,
+} from "./tree-navigation";
 import { SessionMemory, type SessionMemoryHost } from "./session-memory";
 import { buildSessionMetadata } from "./session-metadata";
 import { SessionProviderBoundary, type SessionProviderBoundaryHost } from "./session-provider-boundary";
@@ -507,7 +523,7 @@ import { LoopGuards, type StreamGuardsHost, StreamingEditGuard } from "./stream-
 import { TodoTracker, type TodoTrackerHost } from "./todo-tracker";
 import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
 
-import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
+import { cfgAdvisorActivation, cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
 import { cfgBrowserEnabled, cfgBrowserFreezeOnTurnEnd, cfgBrowserIdleCloseSec } from "../tools/browser/settings";
 import {
 	cfgClaudeResets,
@@ -543,7 +559,10 @@ import type { UsageLimitState } from "./usage-limit";
 import { cfgInterruptMode } from "../modes/settings";
 import { cfgFollowUpMode } from "../modes/settings";
 import { cfgSteeringMode } from "../modes/settings";
+import { observeThemesConfiguration } from "../modes/themes-configuration";
 import { cfgDisabledProviders, cfgModelRoles } from "../config/model-settings";
+import { cfgModelFactsEnabled, cfgModelFactsSources, cfgModelFactsOverrides } from "../config/model-facts";
+import { cfgEffortRules, cfgRoleEffortSelections } from "../config/effort-policy";
 import { cfgEvalToolsEnabled } from "../eval/settings";
 import { cfgExtensions, type SkillsSettings } from "../extensibility/settings";
 import {
@@ -570,6 +589,7 @@ import {
 	cfgDevAutoqaConsent,
 	cfgTodoEnabled,
 	cfgToolsApproval,
+	cfgToolsApprovalMode,
 } from "../tools/settings";
 import { cfgTtsrJudge } from "../export/ttsr-settings";
 
@@ -578,6 +598,7 @@ const cfgAdvisorRuntimeInputs = combine({
 	enabled: cfgAdvisorEnabled,
 	maxNotesPerUpdate: cfgAdvisorMaxNotesPerUpdate,
 	tier: cfgTierAdvisor,
+	activation: cfgAdvisorActivation,
 });
 /** Settings behind the session's extra workspace roots and the auto-QA prompt note. */
 const cfgWorkspacePromptInputs = combine({
@@ -843,6 +864,7 @@ export class AgentSession implements SettingsScope {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
+	readonly environment: SessionEnvironment;
 	#usageNotices = new UsageNotices();
 	/** Serializes receipt-backed preparation through acceptance, not turn completion. */
 	#customMessageReceiptPreparation: Promise<void> = Promise.resolve();
@@ -949,8 +971,10 @@ export class AgentSession implements SettingsScope {
 	#runStartedAt: number | undefined;
 	/** The last `agent_end` that {@link #settleAgentEnd} published; a failed maintenance pass settles any other. */
 	#settledAgentEnd: AgentEndEvent | undefined;
+	#humanToolInvocation = false;
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 	#sessionChangeCallbacks = new Set<(origin: SessionChangeOrigin) => void>();
+	readonly #messagePersistenceListeners = new Set<(message: AgentMessage) => void>();
 	#observedSessionId: string | undefined;
 
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
@@ -967,6 +991,7 @@ export class AgentSession implements SettingsScope {
 	readonly #chronicler: SessionChronicler;
 	/** Resolves once the resume-time advisor spend backfill settles. */
 	#advisorCostRestore: Promise<void> = Promise.resolve();
+	#advisorCostRestoreState: "ready" | "restoring" | "unavailable" = "ready";
 	#goalTurnCounter = 0;
 	#planReferenceSent = false;
 	#planReferencePath = "local://PLAN.md";
@@ -1222,6 +1247,10 @@ export class AgentSession implements SettingsScope {
 	#sessionTransitionSettled: Promise<void> | undefined;
 	#resolveSessionTransition: (() => void) | undefined;
 	#sessionTransitionDepth = 0;
+	/** Only remote tree requests reserve admission; ordinary TUI/extension transitions retain their behavior. */
+	#remoteTreeAdmission = false;
+	#remoteTreeCancelled = false;
+	#treeReanswerResume: { token: string; expected: TreeNavigationExpected; generation: number } | undefined;
 	/** Chronicler stays suspended until the outermost transition settles, so a nested transition cannot resume it while an outer one is still pending. */
 	#chroniclerSuspendedByTransition = false;
 	/** Each using declaration disposes one depth, so nested transitions reuse this token. */
@@ -1857,6 +1886,8 @@ export class AgentSession implements SettingsScope {
 				modelRegistry: config.modelRegistry,
 				settings: config.settings,
 			};
+		this.environment = sessionEnvironment(evalToolSession);
+		bashHost.environment = this.environment;
 		this.#agentTelemetryHost = {
 			session: this,
 			settings: this.settings,
@@ -2270,7 +2301,7 @@ export class AgentSession implements SettingsScope {
 			}
 			return thunks;
 		});
-		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
+		this.#convertToLlm = config.convertToLlm ?? (messages => convertToLlm(messages, this.sessionManager.getCwd()));
 		this.getXdevToolEntries = config.getXdevToolEntries ?? (() => []);
 		const sessionToolsHost: SessionToolsHost = {
 			agent: this.agent,
@@ -2419,6 +2450,7 @@ export class AgentSession implements SettingsScope {
 		this.#todo.syncFromBranch();
 		this.#modelMentions.syncFromBranch();
 		this.#goalRuntime = new GoalRuntime({
+			getCwd: () => this.sessionManager.getCwd(),
 			getState: () => this.#goalModeState,
 			setState: state => {
 				this.#goalModeState = state;
@@ -2543,6 +2575,7 @@ export class AgentSession implements SettingsScope {
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			cwd: () => this.sessionManager.getCwd(),
 		});
+		this.subscribeMessagePersistenceSettled(message => this.#chronicler.onPrimaryMessagePersisted(message));
 
 		const maintenanceHost: SessionMaintenanceHost = {
 			agent: this.agent,
@@ -2591,7 +2624,8 @@ export class AgentSession implements SettingsScope {
 				this.#experimentalContextNotesReminder = { prompt, generation: this.#promptGeneration };
 			},
 			memoryBackendSession: () => this,
-			chatCompactionPrompt: () => (this.#chatMode ? renderChatCompactionPrompt(this.#chatMode.mode) : undefined),
+			chatCompactionPrompt: () =>
+				this.#chatMode ? renderChatCompactionPrompt(this.#chatMode.mode, this.sessionManager.getCwd()) : undefined,
 			emitSessionEvent: (event, options) => this.#emitSessionEvent(event, options),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
@@ -2702,6 +2736,16 @@ export class AgentSession implements SettingsScope {
 		// Re-evaluate append-only context mode when the setting changes at runtime.
 		cfgProviderAppendOnlyContext.listen(this, () => this.#syncAppendOnlyContext(this.model));
 		cfgModelRoles.listen(this, () => this.#advisors.reconcileModelRoles());
+		this.addDisposer(
+			observeThemesConfiguration(this.settings, () => this.#emit({ type: "themes_configuration_changed" })),
+		);
+		cfgToolsApprovalMode.listen(this, () => this.#emit({ type: "approval_mode_changed" }));
+		this.addDisposer(
+			this.settings.onPersistedLayersChange(() => this.#emit({ type: "models_configuration_changed" })),
+		);
+		for (const setting of [cfgModelRoles, cfgRoleEffortSelections, cfgEffortRules]) {
+			setting.listen(this, () => this.#emit({ type: "models_configuration_changed" }));
+		}
 		// Re-derive the active model's effective context window when the
 		// extended-context setting flips at runtime, or a per-model compaction
 		// point moves past (or back inside) a standard window or is switched on/off: the registry
@@ -2710,6 +2754,9 @@ export class AgentSession implements SettingsScope {
 		cfgExtendedContext.listen(this, () => this.#reapplyContextWindowPolicy());
 		cfgCompactionModelThresholds.listen(this, () => this.#reapplyContextWindowPolicy());
 		cfgCompactionModelThresholdsEnabled.listen(this, () => this.#reapplyContextWindowPolicy());
+		cfgModelFactsEnabled.listen(this, () => this.#reapplyContextWindowPolicy(true));
+		cfgModelFactsSources.listen(this, () => this.#reapplyContextWindowPolicy(true));
+		cfgModelFactsOverrides.listen(this, () => this.#reapplyContextWindowPolicy(true));
 		cfgBrowserEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("browser.enabled", enabled));
 		cfgComputerEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("computer.enabled", enabled));
 		cfgRatchetEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("ratchet.enabled", enabled));
@@ -2990,7 +3037,7 @@ export class AgentSession implements SettingsScope {
 				// elsewhere is a detour.
 				toolName: "write",
 				satisfies: isPreviewResolutionToolCall,
-				reminder: [buildResolveReminderMessage(head.sourceToolName)],
+				reminder: [buildResolveReminderMessage(head.sourceToolName, this.sessionManager.getCwd())],
 			};
 		}
 		return undefined;
@@ -3290,6 +3337,7 @@ export class AgentSession implements SettingsScope {
 	}
 
 	async #admitSubmission<T>(work: () => Promise<T>): Promise<T> {
+		this.#assertNoRemoteTreeAdmission();
 		this.#admittedSubmissionCount++;
 		try {
 			return await work();
@@ -3466,7 +3514,10 @@ export class AgentSession implements SettingsScope {
 
 	/** Emit an event to all listeners */
 	#emit(event: AgentSessionEvent): void {
-		if (event.type === "agent_end" && event.isTerminal !== false) {
+		if (event.type === "message_start" || event.type === "message_update" || event.type === "message_end")
+			observeLiveMessageId(this.sessionManager, event.message, event.type === "message_end");
+		else if (event.type === "agent_end") clearLiveMessageId(this.sessionManager);
+		if (event.type === "agent_end" && event.isTerminal !== false && !this.#humanToolInvocation) {
 			const sessionGeneration = this.#sessionGeneration;
 			const promptSequence = this.#promptSequence;
 			this.#advisors.onPrimaryRunEnd();
@@ -4089,7 +4140,12 @@ export class AgentSession implements SettingsScope {
 		return {
 			role: "custom",
 			customType: CHECKPOINT_ACTIVE_REMINDER_TYPE,
-			content: prompt.render(checkpointActiveNoticeTemplate),
+			content: renderPromptAsset(
+				"system/checkpoint-active-notice.md",
+				checkpointActiveNoticeTemplate,
+				{},
+				{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+			),
 			display: false,
 			details: { goal, startedAt },
 			attribution: "agent",
@@ -4137,7 +4193,13 @@ export class AgentSession implements SettingsScope {
 			// commit advances the run's reporting watermark and input cursor.
 			if (message.role === "assistant") this.#mixtureHost?.commitPersisted(message);
 		}
-		this.#chronicler.onPrimaryMessagePersisted(message);
+		for (const listener of this.#messagePersistenceListeners) {
+			try {
+				listener(message);
+			} catch (error) {
+				logger.warn("Message persistence observer failed", { error: String(error) });
+			}
+		}
 	}
 
 	/**
@@ -4166,7 +4228,12 @@ export class AgentSession implements SettingsScope {
 		return {
 			role: "custom",
 			customType: INTERRUPTED_THINKING_MESSAGE_TYPE,
-			content: prompt.render(interruptedThinkingTemplate, { reasoning: demoted.reasoning }),
+			content: renderPromptAsset(
+				"system/interrupted-thinking.md",
+				interruptedThinkingTemplate,
+				{ reasoning: demoted.reasoning },
+				{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+			),
 			display: false,
 			details: {
 				interruptedAt,
@@ -4399,7 +4466,9 @@ export class AgentSession implements SettingsScope {
 			const message = event.message;
 			const deobfuscatedContent = deobfuscateAssistantContent(obfuscator, message.content);
 			if (deobfuscatedContent !== message.content) {
-				displayEvent = { ...event, message: { ...message, content: deobfuscatedContent } };
+				const displayMessage = { ...message, content: deobfuscatedContent };
+				linkMessageEntrySource(displayMessage, message);
+				displayEvent = { ...event, message: displayMessage };
 			}
 		}
 		if (runOwners)
@@ -4637,6 +4706,12 @@ export class AgentSession implements SettingsScope {
 
 		// Check auto-retry and auto-compaction after agent completes
 		if (event.type === "agent_end") {
+			if (this.#humanToolInvocation) {
+				this.#lastAssistantMessage = undefined;
+				await this.settleInFlightMessagePersistence();
+				await this.#settleAgentEnd(event, this.agent.state.messages, { hasFinalResponse: false });
+				return;
+			}
 			const settledMessages = event.messages;
 			const activeMessages = this.agent.state.messages;
 			// TTSR retry work runs concurrently and clears the live flag before
@@ -5168,6 +5243,10 @@ export class AgentSession implements SettingsScope {
 		});
 		this.#schedulePostPromptTask(
 			async signal => {
+				if (this.#remoteTreeAdmission) {
+					this.#skipAgentContinue("session-unavailable", request);
+					return;
+				}
 				// Defense in depth: if compaction/handoff slipped onto the post-prompt queue
 				// alongside us (e.g. via a scheduler we don't own), refuse to start a fresh
 				// streaming turn — agent.continue() here would race the handoff's session
@@ -5286,7 +5365,15 @@ export class AgentSession implements SettingsScope {
 			await this.#promptWithMessage(
 				{
 					role: "developer",
-					content: [{ type: "text", text: autoContinuePrompt }],
+					content: [
+						{
+							type: "text",
+							text: resolvePromptAsset("system/auto-continue.md", bundledAutoContinuePrompt, {
+								cwd: this.sessionManager.getCwd(),
+								kind: "notice",
+							}).text,
+						},
+					],
 					attribution: "agent",
 					timestamp: Date.now(),
 					// Distinguishes this run-initiating prompt from same-turn
@@ -5294,7 +5381,10 @@ export class AgentSession implements SettingsScope {
 					// developer messages; replay uses it for the prompt→yield anchor.
 					synthetic: true,
 				},
-				autoContinuePrompt,
+				resolvePromptAsset("system/auto-continue.md", bundledAutoContinuePrompt, {
+					cwd: this.sessionManager.getCwd(),
+					kind: "notice",
+				}).text,
 				{
 					skipPostPromptRecoveryWait: true,
 					prependMessages: eagerNudges.length > 0 ? eagerNudges : undefined,
@@ -5491,7 +5581,16 @@ export class AgentSession implements SettingsScope {
 				: undefined;
 		const reason = typeof result.reason === "string" && result.reason.length > 0 ? result.reason : undefined;
 		if (result.decision === "block") {
-			return reason ?? additionalContext ?? prompt.render(sessionStopBlockedPrompt);
+			return (
+				reason ??
+				additionalContext ??
+				renderPromptAsset(
+					"system/session-stop-blocked.md",
+					sessionStopBlockedPrompt,
+					{},
+					{ cwd: this.sessionManager.getCwd() },
+				)
+			);
 		}
 		if (result.continue === true) {
 			return additionalContext ?? reason;
@@ -5762,6 +5861,10 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#beginSessionTransition(): Disposable {
+		if (this.#remoteTreeAdmission && this.isSessionTransitioning) {
+			throw new TreeNavigationError("session_busy", "A remote tree navigation is in progress");
+		}
+		this.#treeReanswerResume = undefined;
 		if (this.#sessionTransitionDepth++ === 0) {
 			const settled = Promise.withResolvers<void>();
 			this.#sessionTransitionSettled = settled.promise;
@@ -5770,10 +5873,77 @@ export class AgentSession implements SettingsScope {
 		return this.#sessionTransitionScope;
 	}
 
+	#assertNoRemoteTreeAdmission(): void {
+		if (this.#remoteTreeAdmission) {
+			throw new TreeNavigationError("session_busy", "A remote tree navigation is in progress");
+		}
+	}
+
+	#assertTreeNavigationIdle(): void {
+		if (
+			this.isBusyForSnapshot ||
+			this.hasAdmittedSubmission ||
+			this.#abortInProgress ||
+			this.#postPromptTasks.size > 0 ||
+			this.#inFlightEventHandlers.size > 0 ||
+			this.hasPendingAsyncWork()
+		) {
+			throw new TreeNavigationError("session_busy", "The native session still has work in progress");
+		}
+	}
+
+	#admitRemoteTree(expected: TreeNavigationExpected | undefined): Disposable | undefined {
+		if (!expected) return undefined;
+		if (this.isSessionTransitioning || this.#remoteTreeAdmission) {
+			throw new TreeNavigationError("session_busy", "The native session is changing");
+		}
+		this.#assertTreeNavigationIdle();
+		assertTreeNavigationExpected(expected, this.sessionId, this.sessionFile, this.sessionManager.getLeafId());
+		this.#remoteTreeAdmission = true;
+		this.#remoteTreeCancelled = false;
+		return {
+			[Symbol.dispose]: () => {
+				this.#branchSummaryAbortController = undefined;
+				this.#remoteTreeAdmission = false;
+				this.#remoteTreeCancelled = false;
+			},
+		};
+	}
+
+	#treeResumeToken(expected: TreeNavigationExpected | undefined, committed: boolean): string | undefined {
+		if (!expected || !committed) return undefined;
+		const token = crypto.randomUUID();
+		this.#treeReanswerResume = {
+			token,
+			expected: {
+				expectedSessionId: this.sessionId,
+				expectedSessionFile: this.sessionFile ?? null,
+				expectedLeafId: this.sessionManager.getLeafId(),
+			},
+			generation: this.#promptGeneration,
+		};
+		return token;
+	}
+
+	#treeNavigationState(expected: TreeNavigationExpected | undefined): TreeNavigationState | undefined {
+		return expected
+			? {
+					sessionId: this.sessionId,
+					sessionFile: this.sessionFile,
+					leafId: this.sessionManager.getLeafId(),
+				}
+			: undefined;
+	}
+
 	/** Register cleanup on session ID changes, including whether an existing session was loaded. */
 	registerSessionChangeCallback(callback: (origin: SessionChangeOrigin) => void): () => void {
 		this.#sessionChangeCallbacks.add(callback);
 		return () => this.#sessionChangeCallbacks.delete(callback);
+	}
+	/** The native entry association is available now; storage durability is a separate manager acknowledgement. */
+	subscribeMessagePersistenceSettled(listener: (message: AgentMessage) => void): () => void {
+		this.#messagePersistenceListeners.add(listener);
+		return () => this.#messagePersistenceListeners.delete(listener);
 	}
 
 	subscribeCommandMetadataChanged(listener: CommandMetadataChangedListener): () => void {
@@ -6203,6 +6373,7 @@ export class AgentSession implements SettingsScope {
 		this.#eventListeners = [];
 		this.#runStateListeners.clear();
 		this.#sessionChangeCallbacks.clear();
+		this.#messagePersistenceListeners.clear();
 
 		// A dispose triggered mid-turn (Ctrl-C / timeout / hard-killed subagent)
 		// only *signals* the agent loop via the earlier abort(); the loop and the
@@ -6599,7 +6770,7 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/** The level `auto` resolved to for the current turn (undefined until classified). */
-	autoResolvedThinkingLevel(): Effort | undefined {
+	autoResolvedThinkingLevel(): ThinkingEffort | undefined {
 		return this.#models.autoResolvedThinkingLevel;
 	}
 
@@ -6738,6 +6909,51 @@ export class AgentSession implements SettingsScope {
 	/** Enabled top-level and discoverable tool names. */
 	getEnabledToolNames(): string[] {
 		return this.#tools.getEnabledToolNames();
+	}
+
+	#toolCatalogSource(): ToolCatalogSession {
+		return {
+			toolRegistry: this.#tools.registry,
+			settings: this.settings,
+			getEnabledToolNames: () => this.getEnabledToolNames(),
+			isToolActive: name => this.getActiveToolNames().includes(name),
+		};
+	}
+
+	/** Slash discovery uses the same enabled instances as tool://. */
+	getToolCatalogEntries(): { name: string; description: string }[] {
+		return listEnabledTools(this.#toolCatalogSource()).map(tool => ({
+			name: tool.name,
+			description: toolSummary(tool),
+		}));
+	}
+
+	getToolCatalogDocs(name?: string): string {
+		const source = this.#toolCatalogSource();
+		return name ? toolCatalogDocs(source, name, "report") : toolCatalogListing(source);
+	}
+
+	/** Live enabled instance, including mounted and Code Mode tools, with permission decoration. */
+	getToolCatalogTool(name: string): AgentTool | undefined {
+		return this.#tools.getToolForEvalBridge(name);
+	}
+
+	/** Human calls use the agent dispatch and journal but never request a model continuation. */
+	async invokeTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+		if (this.#isDisposed) throw new Error("Session is disposed");
+		if (this.#humanToolInvocation || this.isBusyForSnapshot) {
+			throw new Error("Wait for the current operation to finish before invoking a tool.");
+		}
+		const tool = this.getToolCatalogTool(name);
+		if (!tool) throw new Error(`Tool '${name}' is not enabled. Use /tool: to browse enabled tools.`);
+		signal?.throwIfAborted();
+		this.#humanToolInvocation = true;
+		try {
+			await this.agent.executeTool(tool, args, signal);
+			await this.#drainInFlightEventHandlers();
+		} finally {
+			this.#humanToolInvocation = false;
+		}
 	}
 
 	/** Names of dynamic tools mounted under `xd://`. */
@@ -7003,10 +7219,19 @@ export class AgentSession implements SettingsScope {
 		this.#pendingMCPDiscovery = pending;
 	}
 
-	/** Replaces host-owned RPC tools before the next model call. */
-	async refreshRpcHostTools(rpcTools: AgentTool[]): Promise<void> {
+	/** Replaces this connection's RPC tools without disturbing other owners. */
+	refreshRpcHostTools(rpcTools: AgentTool[], owner: object = this): Promise<void> {
+		const snapshot = [...rpcTools];
+		const refresh = this.#rpcHostToolRefreshTail.then(() => this.#refreshRpcHostTools(snapshot, owner));
+		this.#rpcHostToolRefreshTail = refresh.catch(() => {});
+		return refresh;
+	}
+
+	#rpcHostToolRefreshTail: Promise<void> = Promise.resolve();
+
+	async #refreshRpcHostTools(rpcTools: AgentTool[], owner: object): Promise<void> {
 		const stash = this.#chatModeStashedTools;
-		const previousHostNames = new Set(stash?.enabled.filter(name => this.#tools.hasRpcHostTool(name)));
+		const previousHostNames = new Set(stash?.enabled.filter(name => this.#tools.hasRpcHostTool(name, owner)));
 		const previouslyMountable = stash
 			? new Set(
 					[...previousHostNames].filter(name => {
@@ -7016,7 +7241,7 @@ export class AgentSession implements SettingsScope {
 				)
 			: undefined;
 		const previouslyMounted = stash ? new Set(stash.mounted) : undefined;
-		await this.#tools.refreshRpcHostTools(rpcTools, !this.#chatMode);
+		await this.#tools.refreshRpcHostTools(rpcTools, !this.#chatMode, owner);
 		if (this.#chatMode && stash && this.#chatModeStashedTools === stash) {
 			const registered = new Set(rpcTools.map(tool => tool.name));
 			const mountable = new Set(rpcTools.filter(isMountableUnderXdev).map(tool => tool.name));
@@ -7062,6 +7287,7 @@ export class AgentSession implements SettingsScope {
 
 	/** Compact the active session history. */
 	compact(customInstructions?: string, options?: CompactOptions): Promise<CompactionResult> {
+		this.#assertNoRemoteTreeAdmission();
 		return this.#maintenance.compact(customInstructions, options);
 	}
 
@@ -7599,10 +7825,15 @@ export class AgentSession implements SettingsScope {
 		const plan = await loadOverallPlanReference(this.#planReferencePath, this.#localProtocolOptions());
 		if (!plan) return null;
 
-		const content = prompt.render(planModeReferencePrompt, {
-			planFilePath: plan.path,
-			planContent: plan.content,
-		});
+		const content = renderPromptAsset(
+			"system/plan-mode-reference.md",
+			planModeReferencePrompt,
+			{
+				planFilePath: plan.path,
+				planContent: plan.content,
+			},
+			{ cwd: this.sessionManager.getCwd() },
+		);
 
 		return {
 			role: "custom",
@@ -7634,19 +7865,24 @@ export class AgentSession implements SettingsScope {
 		// Capability gates, not the visible surface: a Code Mode partition keeps
 		// `task` and `ask` callable through the eval bridge after demoting them.
 		const capableToolNames = this.getEnabledToolNames();
-		const content = prompt.render(planModeActivePrompt, {
-			planFilePath: displayPlanPath,
-			planExists,
-			askToolName: "ask",
-			writeToolName: "write",
-			editToolName: "edit",
-			askAvailable: capableToolNames.includes("ask"),
-			taskAvailable: capableToolNames.includes("task"),
-			isHashlineEditMode: this.#resolveActiveEditMode() === "hashline",
-			reentry: state.reentry ?? false,
-			iterative: state.workflow === "iterative",
-			scoutAvailable: this.#isScoutAvailable(),
-		});
+		const content = renderPromptAsset(
+			"system/plan-mode-active.md",
+			planModeActivePrompt,
+			{
+				planFilePath: displayPlanPath,
+				planExists,
+				askToolName: "ask",
+				writeToolName: "write",
+				editToolName: "edit",
+				askAvailable: capableToolNames.includes("ask"),
+				taskAvailable: capableToolNames.includes("task"),
+				isHashlineEditMode: this.#resolveActiveEditMode() === "hashline",
+				reentry: state.reentry ?? false,
+				iterative: state.workflow === "iterative",
+				scoutAvailable: this.#isScoutAvailable(),
+			},
+			{ cwd: this.sessionManager.getCwd() },
+		);
 
 		return {
 			role: "custom",
@@ -7665,7 +7901,12 @@ export class AgentSession implements SettingsScope {
 		return {
 			role: "custom",
 			customType: "goal-mode-context",
-			content: prompt.render(goalModeContextPrompt, { goalContext: content, todoContext }),
+			content: renderPromptAsset(
+				"goals/goal-mode-context.md",
+				goalModeContextPrompt,
+				{ goalContext: content, todoContext },
+				{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+			),
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -7677,9 +7918,14 @@ export class AgentSession implements SettingsScope {
 		return {
 			role: "custom",
 			customType: VIBE_MODE_CONTEXT_MESSAGE_TYPE,
-			content: prompt.render(vibeModeActivePrompt, {
-				todoAvailable: this.getActiveToolNames().includes("todo"),
-			}),
+			content: renderPromptAsset(
+				"system/vibe-mode-active.md",
+				vibeModeActivePrompt,
+				{
+					todoAvailable: this.getActiveToolNames().includes("todo"),
+				},
+				{ cwd: this.sessionManager.getCwd() },
+			),
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -7718,13 +7964,18 @@ export class AgentSession implements SettingsScope {
 			}),
 		}));
 
-		return prompt.render(goalTodoContextPrompt, {
-			canCallTodoTool,
-			closed: String(closed),
-			open: String(open),
-			phases: promptPhases,
-			total: String(total),
-		});
+		return renderPromptAsset(
+			"goals/goal-todo-context.md",
+			goalTodoContextPrompt,
+			{
+				canCallTodoTool,
+				closed: String(closed),
+				open: String(open),
+				phases: promptPhases,
+				total: String(total),
+			},
+			{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+		);
 	}
 
 	#normalizeImagesForModel(images: ImageContent[] | undefined): Promise<ImageContent[] | undefined> {
@@ -10231,10 +10482,15 @@ export class AgentSession implements SettingsScope {
 		const started = performance.now();
 		const icons = this.#cardIcons();
 		this.runEphemeralTurn({
-			promptText: prompt.render(titleForkPrompt, {
-				card: icons !== "boring",
-				nerdFonts: icons === "nf+emoji",
-			}),
+			promptText: renderPromptAsset(
+				"system/title-fork.md",
+				titleForkPrompt,
+				{
+					card: icons !== "boring",
+					nerdFonts: icons === "nf+emoji",
+				},
+				{ cwd: this.sessionManager.getCwd() },
+			),
 			signal: AbortSignal.any([signal, AbortSignal.timeout(TITLE_FORK_TIMEOUT_MS)]),
 		})
 			.then(
@@ -10454,7 +10710,12 @@ export class AgentSession implements SettingsScope {
 		const named = context === undefined ? title : await this.#retitle(context, signal);
 		if (stale()) return undefined;
 		if (!named || !needsCard(named)) return named ?? null;
-		const cardPrompt = prompt.render(titleCardPrompt, { nerdFonts: icons === "nf+emoji" });
+		const cardPrompt = renderPromptAsset(
+			"system/title-card.md",
+			titleCardPrompt,
+			{ nerdFonts: icons === "nf+emoji" },
+			{ cwd: this.sessionManager.getCwd() },
+		);
 		const reply = await this.generateTitle(named, cardPrompt, signal);
 		if (stale()) return undefined;
 		const card = reply ? parseCardReply(reply, icons) : undefined;
@@ -10523,6 +10784,10 @@ export class AgentSession implements SettingsScope {
 		 */
 		drainSubscribers?: boolean;
 	}): Promise<void> {
+		if (this.#remoteTreeAdmission) {
+			this.abortBranchSummary();
+			return;
+		}
 		const userInterrupt = options?.reason === USER_INTERRUPT_LABEL;
 		this.#pendingAbortErrorId = userInterrupt ? AIError.create(AIError.Flag.UserInterrupt) : undefined;
 		if (userInterrupt) this.#advisors.autoResumeSuppressed = true;
@@ -11160,7 +11425,10 @@ export class AgentSession implements SettingsScope {
 		this.agent.steer({
 			role: "custom",
 			customType: "anthropic-usage-wrap-up",
-			content: anthropicUsageWrapUpPrompt,
+			content: resolvePromptAsset("system/anthropic-usage-wrap-up.md", bundledAnthropicUsageWrapUpPrompt, {
+				cwd: this.sessionManager.getCwd(),
+				kind: "notice",
+			}).text,
 			attribution: "agent",
 			display: false,
 			timestamp: Date.now(),
@@ -11305,7 +11573,12 @@ export class AgentSession implements SettingsScope {
 				await this.sendCustomMessage(
 					{
 						customType: "skillful-notice",
-						content: prompt.render(skillfulNoticePrompt, { skills: renderedSkills }),
+						content: renderPromptAsset(
+							"system/skillful-notice.md",
+							skillfulNoticePrompt,
+							{ skills: renderedSkills },
+							{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+						),
 						display: false,
 					},
 					{ deliverAs: "nextTurn" },
@@ -11363,6 +11636,7 @@ export class AgentSession implements SettingsScope {
 	 * Cancel in-progress branch summarization.
 	 */
 	abortBranchSummary(): void {
+		if (this.#remoteTreeAdmission) this.#remoteTreeCancelled = true;
 		this.#branchSummaryAbortController?.abort();
 	}
 
@@ -11390,6 +11664,7 @@ export class AgentSession implements SettingsScope {
 	 * @returns The handoff document text, or undefined if cancelled/failed
 	 */
 	handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
+		this.#assertNoRemoteTreeAdmission();
 		return this.#maintenance.handoff(customInstructions, options);
 	}
 
@@ -11502,7 +11777,12 @@ export class AgentSession implements SettingsScope {
 		const details = { report, startedAt: checkpointState.startedAt, rewoundAt };
 		this.sessionManager.appendCustomMessageEntry(
 			"rewind-report",
-			prompt.render(rewindReportTemplate, { report }),
+			renderPromptAsset(
+				"system/rewind-report.md",
+				rewindReportTemplate,
+				{ report },
+				{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+			),
 			false,
 			details,
 			"agent",
@@ -11601,9 +11881,14 @@ export class AgentSession implements SettingsScope {
 		this.#planModeReminderCount++;
 		this.#planModeReminderAwaitingProgress = true;
 		this.#toolChoiceQueue.pushOnce("required", { label: "plan-mode-decision" });
-		const reminder = prompt.render(planModeToolDecisionReminderPrompt, {
-			askToolName: "ask",
-		});
+		const reminder = renderPromptAsset(
+			"system/plan-mode-tool-decision-reminder.md",
+			planModeToolDecisionReminderPrompt,
+			{
+				askToolName: "ask",
+			},
+			{ cwd: this.sessionManager.getCwd(), kind: "notice" },
+		);
 		const reminderMessage: Message = {
 			role: "developer",
 			content: [{ type: "text", text: reminder }],
@@ -11623,14 +11908,20 @@ export class AgentSession implements SettingsScope {
 		return true;
 	}
 
+	/** Refresh configured fact sources and bind their resolved metadata without changing the selected role. */
+	async refreshModelFacts(): Promise<void> {
+		await this.#modelRegistry.refresh("online-if-uncached");
+		await this.#reapplyContextWindowPolicy(true);
+	}
+
 	/**
 	 * Rebuild the model catalog after an `extendedContext` toggle or a
-	 * `compaction.modelThresholds` edit and rebind the active model when its
-	 * effective context window changed. Same-model rebinds skip provider-session
+	 * `compaction.modelThresholds` edit, or a model-fact setting, and rebind the active model when its
+	 * effective context window changed or its other facts need refreshing. Same-model rebinds skip provider-session
 	 * resets (`modelsAreEqual` sees no change), so this only refreshes metadata
 	 * consumers (compaction thresholds, context display).
 	 */
-	async #reapplyContextWindowPolicy(): Promise<void> {
+	async #reapplyContextWindowPolicy(forceMetadata = false): Promise<void> {
 		// Refit the bound row right away (the agent's model resolver applies this
 		// session's settings to its known tiers), so a prompt started before the
 		// catalog rebuild settles already runs with the new window.
@@ -11645,7 +11936,7 @@ export class AgentSession implements SettingsScope {
 			// Compare against the window bound before the refit so dependent state
 			// still reconciles once even though the refit already moved the row.
 			const baseline = previousModel && modelsAreEqual(previousModel, currentModel) ? previousModel : currentModel;
-			if (updated && updated.contextWindow !== baseline.contextWindow) {
+			if (updated && (forceMetadata || updated.contextWindow !== baseline.contextWindow)) {
 				await this.#setModelWithProviderSessionReset(updated);
 			}
 		} catch (error) {
@@ -11901,6 +12192,7 @@ export class AgentSession implements SettingsScope {
 		onChunk?: (chunk: string) => void,
 		options?: { excludeFromContext?: boolean; useUserShell?: boolean; pty?: BashPtyOptions },
 	): Promise<BashResult> {
+		this.#assertNoRemoteTreeAdmission();
 		return this.#bash.executeBash(command, onChunk, options);
 	}
 
@@ -11941,6 +12233,7 @@ export class AgentSession implements SettingsScope {
 		onChunk?: (chunk: string) => void,
 		options?: { excludeFromContext?: boolean; reset?: boolean; alias?: string },
 	): Promise<ExecutorBackendResult> {
+		this.#assertNoRemoteTreeAdmission();
 		return this.#eval.execute(language, code, onChunk, options);
 	}
 
@@ -12306,7 +12599,14 @@ export class AgentSession implements SettingsScope {
 		}
 		messages.push({
 			role: "developer",
-			content: [{ type: "text", text: sideChannelNoToolsReminder }],
+			content: [
+				{
+					type: "text",
+					text: resolvePromptAsset("system/side-channel-no-tools.md", bundledSideChannelNoToolsReminder, {
+						cwd: this.sessionManager.getCwd(),
+					}).text,
+				},
+			],
 			attribution: "agent",
 			timestamp: Date.now(),
 		});
@@ -13136,6 +13436,8 @@ export class AgentSession implements SettingsScope {
 		targetId: string,
 		options: {
 			summarize?: boolean;
+			/** Remote callers reserve native mutation admission and compare identity under that reservation. */
+			expected?: TreeNavigationExpected;
 			customInstructions?: string;
 			/**
 			 * Opts into the two-phase `ask` toolResult re-answer protocol
@@ -13184,13 +13486,30 @@ export class AgentSession implements SettingsScope {
 		 * pre-rebuild UI (issue #6483).
 		 */
 		askReanswerCommitted?: boolean;
+		resumeToken?: string;
+		navigationState?: TreeNavigationState;
 	}> {
+		using _admission = this.#admitRemoteTree(options.expected);
 		using _transition = this.#beginSessionTransition();
 		await this.#bash.flushPending();
+		if (options.expected) {
+			await this.#suspendChroniclerForTransition();
+			this.#assertTreeNavigationIdle();
+			assertTreeNavigationExpected(
+				options.expected,
+				this.sessionId,
+				this.sessionFile,
+				this.sessionManager.getLeafId(),
+			);
+		}
+		if (this.#remoteTreeCancelled) {
+			return { cancelled: true, aborted: true, navigationState: this.#treeNavigationState(options.expected) };
+		}
 		const oldLeafId = this.sessionManager.getLeafId();
 
 		const targetEntry = this.sessionManager.getEntry(targetId);
 		if (!targetEntry) {
+			if (options.expected) throw new TreeNavigationError("invalid_target", `Entry ${targetId} not found`);
 			throw new Error(`Entry ${targetId} not found`);
 		}
 		const targetIsAskResult =
@@ -13198,6 +13517,9 @@ export class AgentSession implements SettingsScope {
 			targetEntry.message.role === "toolResult" &&
 			targetEntry.message.toolName === "ask";
 		const targetIsUserMessage = targetEntry.type === "message" && targetEntry.message.role === "user";
+		if (options.expected && options.reanswerAskResult && !targetIsAskResult) {
+			throw new TreeNavigationError("invalid_request", "A re-answer requires an ask tool result target");
+		}
 
 		// No-op if already at target — except for a user message, which always
 		// rewinds PAST itself (leaf → parent, text → editor), so a leaf user
@@ -13210,7 +13532,7 @@ export class AgentSession implements SettingsScope {
 		// `reopenAsk` / branch the new answer instead of silently reporting a
 		// no-op (chatgpt-codex review on #5895).
 		if (targetId === oldLeafId && !targetIsUserMessage && !(options.allowAskReopen && targetIsAskResult)) {
-			return { cancelled: false };
+			return { cancelled: false, navigationState: this.#treeNavigationState(options.expected) };
 		}
 
 		// Model required for summarization
@@ -13235,7 +13557,11 @@ export class AgentSession implements SettingsScope {
 			const toolCallId = targetEntry.message.toolCallId;
 			const questions = this.#recoverAskReanswerQuestions(targetEntry.parentId, toolCallId);
 			if (questions) {
-				return { cancelled: false, reopenAsk: { toolCallId, questions } };
+				return {
+					cancelled: false,
+					reopenAsk: { toolCallId, questions },
+					navigationState: this.#treeNavigationState(options.expected),
+				};
 			}
 			// Original arguments couldn't be recovered (corrupted/legacy session
 			// data) — fall through to a plain leaf move so navigation still works.
@@ -13284,7 +13610,7 @@ export class AgentSession implements SettingsScope {
 			})) as SessionBeforeTreeResult | undefined;
 
 			if (result?.cancel) {
-				return { cancelled: true };
+				return { cancelled: true, navigationState: this.#treeNavigationState(options.expected) };
 			}
 
 			if (result?.summary && options.summarize) {
@@ -13303,6 +13629,7 @@ export class AgentSession implements SettingsScope {
 				throw new Error(`No API key for ${model.provider}`);
 			}
 			const result = await generateBranchSummary(entriesToSummarize, {
+				cwd: this.sessionManager.getCwd(),
 				model,
 				apiKey: this.#modelRegistry.resolver(model, this.sessionId),
 				signal: this.#branchSummaryAbortController.signal,
@@ -13320,7 +13647,7 @@ export class AgentSession implements SettingsScope {
 			});
 			this.#branchSummaryAbortController = undefined;
 			if (result.aborted) {
-				return { cancelled: true, aborted: true };
+				return { cancelled: true, aborted: true, navigationState: this.#treeNavigationState(options.expected) };
 			}
 			if (result.error) {
 				throw new Error(result.error);
@@ -13333,6 +13660,19 @@ export class AgentSession implements SettingsScope {
 		} else if (hookSummary) {
 			summaryText = hookSummary.summary;
 			summaryDetails = hookSummary.details;
+		}
+
+		if (this.#remoteTreeCancelled) {
+			return { cancelled: true, aborted: true, navigationState: this.#treeNavigationState(options.expected) };
+		}
+		if (options.expected) {
+			this.#assertTreeNavigationIdle();
+			assertTreeNavigationExpected(
+				options.expected,
+				this.sessionId,
+				this.sessionFile,
+				this.sessionManager.getLeafId(),
+			);
 		}
 
 		// All cancellation/no-op exits are behind us. Invalidate prompt setup
@@ -13470,6 +13810,8 @@ export class AgentSession implements SettingsScope {
 				summaryEntry,
 				sessionContext: rawContext,
 				askReanswerCommitted: isAskReanswerCompletion,
+				resumeToken: this.#treeResumeToken(options.expected, isAskReanswerCompletion),
+				navigationState: this.#treeNavigationState(options.expected),
 			};
 		}
 		return {
@@ -13479,6 +13821,8 @@ export class AgentSession implements SettingsScope {
 			summaryEntry,
 			sessionContext: stateContext,
 			askReanswerCommitted: isAskReanswerCompletion,
+			resumeToken: this.#treeResumeToken(options.expected, isAskReanswerCompletion),
+			navigationState: this.#treeNavigationState(options.expected),
 		};
 	}
 
@@ -13491,8 +13835,34 @@ export class AgentSession implements SettingsScope {
 	 * (issue #6483). The scheduled continue honors the same disposed/compacting
 	 * guards as every other post-prompt continuation.
 	 */
-	resumeAfterAskReanswer(): void {
-		this.#scheduleAgentContinue({ source: "ask-reanswer" });
+	resumeAfterAskReanswer(remote?: { expected: TreeNavigationExpected; resumeToken: string }): void {
+		if (remote) {
+			this.#assertNoRemoteTreeAdmission();
+			if (this.isSessionTransitioning)
+				throw new TreeNavigationError("session_busy", "The native session is changing");
+			this.#assertTreeNavigationIdle();
+			assertTreeNavigationExpected(
+				remote.expected,
+				this.sessionId,
+				this.sessionFile,
+				this.sessionManager.getLeafId(),
+			);
+			const pending = this.#treeReanswerResume;
+			if (!pending || pending.token !== remote.resumeToken || pending.generation !== this.#promptGeneration) {
+				throw new TreeNavigationError("invalid_resume", "No matching committed ask re-answer is awaiting resume");
+			}
+			assertTreeNavigationExpected(
+				pending.expected,
+				this.sessionId,
+				this.sessionFile,
+				this.sessionManager.getLeafId(),
+			);
+			this.#treeReanswerResume = undefined;
+		}
+		this.#scheduleAgentContinue({
+			source: "ask-reanswer",
+			...(remote ? { generation: this.#promptGeneration } : {}),
+		});
 	}
 
 	/**
@@ -13721,8 +14091,16 @@ export class AgentSession implements SettingsScope {
 	 */
 	pinCurrentProviderOAuthAccount(credentialId: number): boolean {
 		const provider = this.model?.provider;
-		if (!provider || this.isStreaming) return false;
-		return this.#modelRegistry.authStorage.sessions.pin(provider, this.sessionId, credentialId);
+		return provider ? this.pinProviderOAuthAccount(provider, credentialId) : false;
+	}
+
+	/** Pin a provider account through the native session affinity and credential journal owners. */
+	pinProviderOAuthAccount(provider: string, credentialId: number): boolean {
+		if (this.isStreaming || this.isCompacting || !this.#modelRegistry.hasProvider(provider)) return false;
+		const authStorage = this.#modelRegistry.authStorage;
+		if (!authStorage.sessions.pin(provider, this.sessionId, credentialId)) return false;
+		recordCredentialPin(authStorage, this.sessionManager, this.sessionId, provider);
+		return true;
 	}
 
 	/**
@@ -14358,6 +14736,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	formatSessionAsText(): string {
 		return formatSessionDumpText({
+			cwd: this.sessionManager.getCwd(),
 			messages: this.messages,
 			systemPrompt: this.agent.state.systemPrompt,
 			model: this.agent.state.model,
@@ -14627,7 +15006,7 @@ export class AgentSession implements SettingsScope {
 	 * @returns the number of advisors active after the rebuild.
 	 */
 	applyAdvisorConfigs(
-		advisors: AdvisorConfig[],
+		advisors: AdvisorConfig[] | undefined,
 		sharedInstructions: string | undefined,
 		sharedMaxNotesPerUpdate?: number,
 	): number {
@@ -14715,6 +15094,15 @@ export class AgentSession implements SettingsScope {
 		return this.#advisors.getAdvisorStatusOverview();
 	}
 
+	/** Effective tool approval policy, including the process-local auto-approve override. */
+	getApprovalMode() {
+		return this.#tools.getApprovalMode();
+	}
+
+	get advisorCostRestoreState() {
+		return this.#advisorCostRestoreState;
+	}
+
 	/** Return cumulative cost recorded for the current session's advisor activity. */
 	getAdvisorCost(): number {
 		return this.#advisors.getAdvisorCost();
@@ -14728,8 +15116,10 @@ export class AgentSession implements SettingsScope {
 	 */
 	beginInitialAdvisorCostRestore(): void {
 		let stale = false;
+		this.#advisorCostRestoreState = "restoring";
 		const unregisterSessionChange = this.registerSessionChangeCallback(() => {
 			stale = true;
+			this.#advisorCostRestoreState = "unavailable";
 		});
 		const snapshot = this.#advisors.beginCostRestoreSnapshot();
 		const providersBySlug = new Map<string, Set<string>>();
@@ -14742,9 +15132,16 @@ export class AgentSession implements SettingsScope {
 			.then(costs => {
 				if (stale || this.isDisposed) return;
 				this.restoreInitialAdvisorCosts(costs, snapshot.costsAtSnapshot, providersBySlug);
+				this.#advisorCostRestoreState = "ready";
 				this.#emit({ type: "advisor_cost_changed" });
 			})
-			.catch(err => logger.debug("advisor cost restore failed", { err: String(err) }))
+			.catch(err => {
+				if (!stale && !this.isDisposed) {
+					this.#advisorCostRestoreState = "unavailable";
+					logger.debug("advisor cost restore failed", { err: String(err) });
+					this.#emit({ type: "advisor_cost_changed" });
+				}
+			})
 			.finally(() => {
 				snapshot.release();
 				unregisterSessionChange();

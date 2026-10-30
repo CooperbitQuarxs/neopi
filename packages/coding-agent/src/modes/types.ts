@@ -465,6 +465,7 @@ export interface InteractiveModeContext {
 	handleChangelogCommand(args?: string): Promise<void>;
 	handleHotkeysCommand(): void;
 	handleToolsCommand(): void;
+	handleToolCatalogCommand(name?: string): void;
 	handleContextCommand(): void;
 	handleDumpCommand(): Promise<void>;
 	handleDumpAllCommand(): Promise<void>;
@@ -508,6 +509,8 @@ export interface InteractiveModeContext {
 	dictationSpaceHold(target: DictationTarget): SpaceHoldHandler;
 	/** True when no speech capture is in flight; gates the space-hold gesture. */
 	readonly sttIdle: boolean;
+	readonly localVoiceActive: boolean;
+	handleLocalVoiceCommand(args?: string): Promise<void>;
 	/** Start or stop the Codex-backed realtime voice session. */
 	handleLiveCommand(): Promise<void>;
 	/** Mute or unmute the live voice session microphone; no-op when live mode is off. */
@@ -558,7 +561,7 @@ export interface InteractiveModeContext {
 	showAgentsDashboard(): void;
 	/** Open the fullscreen git UI, optionally pinned to a revision (`/git <rev>`). */
 	showGitUi(revision?: string): void;
-	showModelSelector(options?: { temporaryOnly?: boolean }): void;
+	showModelSelector(options?: { temporaryOnly?: boolean; sessionOnly?: boolean }): void;
 	/** Session-only switch to an already-resolved model (`/switch <selector>`); compacts first when over context. */
 	switchSessionModel(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<void>;
 	showPluginSelector(mode?: "install" | "uninstall"): void;

@@ -2,12 +2,13 @@
  * Manage configuration settings.
  */
 
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { configHelp as commandHelp } from "../cli/command-help";
 import { type ConfigAction, type ConfigCommandArgs, runConfigCommand } from "../cli/config-cli";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
-const ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg", "dump-toml"];
+const ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg", "dump-toml", "to-toml"];
 
 export default class Config extends Command {
 	static description = commandHelp.description;
@@ -30,7 +31,12 @@ export default class Config extends Command {
 
 	static flags = {
 		json: Flags.boolean({ description: "Output JSON" }),
+		force: Flags.boolean({ description: "Allow to-toml to replace existing config.toml files" }),
 	};
+
+	static examples = [
+		`# NeoProxy accounts use the login command, not a stored password setting\n  ${APP_NAME} login neoproxy --url https://proxy.example.com`,
+	];
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Config);
@@ -43,10 +49,11 @@ export default class Config extends Command {
 			value,
 			flags: {
 				json: flags.json,
+				force: flags.force,
 			},
 		};
 
-		if (action !== "dump-toml") await initTheme();
+		if (action !== "dump-toml" && action !== "to-toml") await initTheme();
 		await runConfigCommand(cmd);
 	}
 }

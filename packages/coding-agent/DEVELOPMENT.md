@@ -26,6 +26,13 @@ Never invoke `tsc`/`npx tsc` directly — `bun run check` is the typecheck gate.
 changing the React tool renderers under `collab-web/src/tool-render/`, rebuild them
 with `bun run gen:tool-views`.
 
+From the repository root, scope native Rust checks with
+`CARGO_BUILD_JOBS=6 bun run test:rs --package pi-natives -E 'test(desktop::)'`.
+`--package` applies to both nextest and the subsequent doctest pass; other
+arguments are forwarded only to nextest. Omitting `--package` retains the
+workspace scope. Xvfb integration tests marked ignored start and stop their own
+private server; include them with `--run-ignored all`.
+
 Scope fake timers to the deadline a test exercises, then restore real timers
 before real socket listeners are started. Bun's mocked clock can defer
 `server.listen` callbacks, leaving registry publication and teardown waiting.

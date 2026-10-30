@@ -174,7 +174,7 @@ describe("AgentsHub layout", () => {
 		expect(rendered).not.toContain("scout");
 	});
 
-	test("/ searches with literal hjkl; Esc returns to the list, then closes without clearing the filter", async () => {
+	test("/ searches with literal hjkl; Esc clears the filter before closing", async () => {
 		const { hub, strip, type, cancelled } = await createHub(new TestSettings());
 		hub.handleInput("h"); // sidebar
 		hub.handleInput("j"); // project scope
@@ -184,13 +184,17 @@ describe("AgentsHub layout", () => {
 		type("sco");
 		let rendered = strip();
 		expect(rendered).toContain("scout");
-		expect(rendered).not.toContain("dev");
+		expect(rendered).toContain("dev");
+		hub.handleInput("\r");
+		expect(strip()).not.toContain("dev");
+		hub.handleInput("/");
 		for (const key of "hjkl") hub.handleInput(key);
 		rendered = strip();
 		expect(rendered).toContain("Search: scohjkl");
 		hub.handleInput("\x1b");
 		expect(cancelled()).toBe(false);
-		expect(strip()).toContain("Search: scohjkl");
+		expect(strip()).not.toContain("Search: scohjkl");
+		expect(strip()).toContain("dev");
 		hub.handleInput("\x1b");
 		expect(cancelled()).toBe(true);
 	});
@@ -313,6 +317,114 @@ function pickerProps(hub: AgentsHubComponent): TspPickerProps {
 	return root.p;
 }
 
+describe("AgentsHub external configuration editing", () => {
+	test("Ctrl-G awaits the host editor, reloads definitions, and preserves the selected source", async () => {
+		const editing = Promise.withResolvers<void>();
+		const agents: HubAgent[] = [
+			{ name: "dev", description: "Project", systemPrompt: "", source: "project", disabled: false },
+			{
+				name: "dev",
+				description: "User",
+				systemPrompt: "",
+				source: "user",
+				filePath: "/agents/dev.md",
+				disabled: false,
+			},
+		];
+		const opened: HubAgent[] = [];
+		let loads = 0;
+		const { hub } = await createHub(new TestSettings(), {
+			loadAgents: async () => {
+				loads++;
+				return agents.map(agent => ({ ...agent }));
+			},
+			openConfigFile: agent => {
+				opened.push(agent);
+				return editing.promise;
+			},
+		});
+		try {
+			hub.handleNativeEvent({ type: "select", key: "", item: "agent:user:dev" });
+			expect(pickerProps(hub).actions?.find(action => action.id === "edit-file")?.keys).toEqual(["ctrl", "g"]);
+			hub.handleInput("\x07");
+			expect(opened.map(agent => agent.filePath)).toEqual(["/agents/dev.md"]);
+			expect(loads).toBe(1);
+			expect(hub.blocksMenuHistory).toBe(true);
+			hub.handleInput("\x07");
+			expect(opened).toHaveLength(1);
+			agents.push({ name: "new", description: "", systemPrompt: "", source: "user", disabled: false });
+			editing.resolve();
+			await Bun.sleep(0);
+			expect(loads).toBe(2);
+			expect(pickerProps(hub).items?.some(item => item.id === "agent:user:new")).toBe(true);
+			expect(pickerProps(hub).selected).toBe("agent:user:dev");
+			expect(hub.blocksMenuHistory).toBe(false);
+		} finally {
+			hub.dispose();
+		}
+	});
+
+	test("native edit-file delegates source-less builtins to the host", async () => {
+		const opened: HubAgent[] = [];
+		const { hub } = await createHub(new TestSettings(), {
+			openConfigFile: async agent => {
+				opened.push(agent);
+			},
+		});
+		try {
+			hub.handleNativeEvent({ type: "select", key: "", item: "agent:bundled:scout" });
+			hub.handleNativeEvent({ type: "action", key: "", act: "edit-file", mods: [] });
+			await Bun.sleep(0);
+			expect(opened).toHaveLength(1);
+			expect(opened[0]?.name).toBe("scout");
+			expect(opened[0]?.filePath).toBeUndefined();
+		} finally {
+			hub.dispose();
+		}
+	});
+
+	test("host editing failures show a notice and leave navigation usable", async () => {
+		const { hub } = await createHub(new TestSettings(), {
+			openConfigFile: async () => {
+				throw new Error("No editor configured");
+			},
+		});
+		try {
+			hub.handleInput("\x07");
+			await Bun.sleep(0);
+			expect(pickerProps(hub).subtitle).toBe("No editor configured");
+			expect(hub.blocksMenuHistory).toBe(false);
+			hub.handleInput("j");
+			expect(pickerProps(hub).selected).toBe("agent:bundled:scout");
+		} finally {
+			hub.dispose();
+		}
+	});
+
+	test("editing is absent without a callback and does not claim search or property input", async () => {
+		const without = await createHub(new TestSettings());
+		let opens = 0;
+		const { hub } = await createHub(new TestSettings(), {
+			openConfigFile: async () => {
+				opens++;
+			},
+		});
+		try {
+			expect(pickerProps(without.hub).actions?.some(action => action.id === "edit-file")).toBe(false);
+			without.hub.handleInput("\x07");
+			hub.handleInput("/");
+			hub.handleInput("\x07");
+			hub.handleInput("\x1b");
+			hub.handleInput("\r");
+			hub.handleInput("\x07");
+			expect(opens).toBe(0);
+		} finally {
+			without.hub.dispose();
+			hub.dispose();
+		}
+	});
+});
+
 /** The described node keyed `key` and its key path (the `key` its native events carry). */
 function findKeyed(root: NativeNode, key: string): { node: NativeNode; path: string } | undefined {
 	const walk = (node: NativeNode, path: string[]): { node: NativeNode; path: string } | undefined => {
@@ -361,6 +473,7 @@ describe("AgentsHub picker", () => {
 		const { hub, type } = await createHub(settings);
 		hub.handleInput("/");
 		type("dev");
+		hub.handleInput("\r");
 		hub.handleNativeEvent({ type: "action", key: "", act: "toggle", mods: [] });
 		expect(settings.lists.get("task.disabledAgents")).toEqual(["dev"]);
 		expect(pickerProps(hub).query).toBe("dev");
@@ -757,7 +870,7 @@ describe("AgentsHub navigation history", () => {
 		}
 	});
 
-	test("native close first leaves the search field and retains the query", async () => {
+	test("native close first clears the search field", async () => {
 		const { hub, type, cancelled } = await createHub(new TestSettings());
 		try {
 			hub.handleInput("/");
@@ -766,7 +879,7 @@ describe("AgentsHub navigation history", () => {
 			const close = { type: "action", key: "", act: "close", mods: [] } as const;
 			hub.handleNativeEvent(close);
 			expect(cancelled()).toBe(false);
-			expect(hub.navigationSnapshot().search).toMatchObject({ value: "dev", focused: false });
+			expect(hub.navigationSnapshot().search).toMatchObject({ value: "", focused: false });
 			hub.handleNativeEvent(close);
 			expect(cancelled()).toBe(true);
 		} finally {

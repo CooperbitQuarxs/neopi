@@ -19,6 +19,7 @@ import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { SessionHeader } from "../session/session-entries";
 import { visitEntriesFromFile } from "../session/session-loader";
 import { artifactsDirectoryFor, SessionManager } from "../session/session-manager";
+import { cfgChroniclerBackfillPollMs } from "./backfill-settings";
 import { type ChroniclerSessionView, SessionChronicler } from "./session-chronicler";
 import { cfgChroniclerEnabled } from "./settings";
 import { readCommittedChroniclerBatches } from "./store";
@@ -84,8 +85,6 @@ export interface HeadlessBackfillResult {
 	readonly before: StoredSessionCoverage;
 	readonly after: BackfillCoverage;
 }
-
-const DEFAULT_POLL_MS = 5_000;
 
 function chroniclerRootFor(sessionFile: string): string {
 	const artifactsDir = artifactsDirectoryFor(sessionFile);
@@ -195,7 +194,7 @@ export async function runHeadlessBackfill(options: HeadlessBackfillOptions): Pro
 		cwd: () => before.cwd,
 	});
 
-	const pollMs = Math.max(1, options.pollMs ?? DEFAULT_POLL_MS);
+	const pollMs = Math.max(1, options.pollMs ?? cfgChroniclerBackfillPollMs.get(options.settings));
 	const deadline = Date.now() + Math.max(0, options.timeoutMs);
 	let settled = chronicler.idle().then(() => true);
 	let reported = before.coveredEntries;

@@ -11,6 +11,7 @@
 import { type ReactNode, useEffect, useSyncExternalStore } from "react";
 import * as api from "../api";
 import type { LiveStatus, LiveSyncStatus } from "../types";
+import { connectHostedEvents, isHostedDashboard } from "../host-transport";
 
 /** Ingest status shown by the chrome. */
 export interface LiveStatusView {
@@ -99,6 +100,17 @@ export function currentLiveVersion(): number {
 /** Owns the `/api/events` stream; mount once at the app root. */
 export function LiveProvider({ children }: { children: ReactNode }) {
 	useEffect(() => {
+		if (isHostedDashboard()) {
+			const close = connectHostedEvents({
+				onopen: () => setConnected(true),
+				onerror: () => setConnected(false),
+				onmessage: data => receive(JSON.parse(data) as LiveStatus),
+			});
+			return () => {
+				close();
+				setConnected(false);
+			};
+		}
 		const source = new EventSource("/api/events");
 		source.onopen = () => setConnected(true);
 		source.onerror = () => setConnected(false);

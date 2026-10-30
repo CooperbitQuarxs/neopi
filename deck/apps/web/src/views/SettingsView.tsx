@@ -1,0 +1,1865 @@
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { Play, RotateCcw, Save, Square, X } from "lucide-react";
+import type {
+	BackendStatusResponse,
+	BridgeInfo,
+	BridgeName,
+	EnvEntry,
+	GateKnob,
+	ListEnvSettingsResponse,
+	MaintenanceGateState,
+	NotificationKind,
+	NotificationLevel,
+	NotificationSettingsResponse,
+	StarterGroup,
+	StarterItem,
+	StartersResponse,
+} from "@npi-deck/protocol";
+import type { ProviderInfo } from "@npi-deck/protocol";
+
+import { Layout } from "@/components/Layout";
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { Modal } from "@/components/ui/Modal";
+import { OAuthFlowModal } from "@/components/settings/OAuthFlowModal";
+import { ModelsConfigSection } from "@/components/settings/ModelsConfigSection";
+import { NpiConfigSection } from "@/components/settings/NpiConfigSection";
+import { ModelRolesSection } from "@/components/settings/ModelRolesSection";
+import { McpServersSection } from "@/components/settings/McpServersSection";
+import { WorkspacesSection } from "@/components/settings/WorkspacesSection";
+import { AboutSection } from "@/components/settings/AboutSection";
+import { apiErrorText } from "@/components/settings/api-error";
+import { bridgesApi } from "@/lib/bridges-api";
+import { settingsApi } from "@/lib/settings-api";
+import { startersApi } from "@/lib/starters-api";
+import { authApi } from "@/lib/auth-api";
+import { playNotificationTone } from "@/lib/audio";
+import { useNotificationPermission } from "@/lib/notifications";
+import { useStore, type NotificationItem } from "@/lib/store";
+import { THEMES, useTheme } from "@/lib/theme";
+import { formatUptime } from "@/lib/time";
+import { cn } from "@/lib/utils";
+
+const SECTIONS = [
+	{ id: "env", label: "Env", description: "Process and deck-managed variables" },
+	{ id: "backend", label: "Backend", description: "Source trees and worker switching" },
+	{ id: "models", label: "Models & providers", description: "Custom providers and models in models.yml" },
+	{ id: "roles", label: "Model roles", description: "Which model NeoPi uses for each role" },
+	{ id: "neopi", label: "NeoPi", description: "Every NeoPi setting in config.yml" },
+	{ id: "mcp", label: "MCP servers", description: "Model Context Protocol servers and scopes" },
+	{ id: "providers", label: "Providers", description: "OAuth sign-in and API-key state" },
+	{ id: "messaging", label: "Messaging", description: "Telegram and future chat bridges" },
+	{ id: "starters", label: "Starters", description: "Skills and extensions the deck bundles" },
+	{ id: "appearance", label: "Appearance", description: "Themes, colors, fonts" },
+	{ id: "workspaces", label: "Workspaces", description: "Folders the session picker offers" },
+	{ id: "notifications", label: "Notifications", description: "What alerts you, and how" },
+	{ id: "about", label: "About", description: "Version, paths, diagnostics" },
+] as const;
+
+type SectionId = (typeof SECTIONS)[number]["id"];
+
+export function SettingsView() {
+	const [params, setParams] = useSearchParams();
+	const selected = normalizeSection(params.get("section"));
+
+	function setSection(section: SectionId): void {
+		const next = new URLSearchParams(params);
+		next.set("section", section);
+		setParams(next, { replace: true });
+	}
+
+	return (
+		<Layout
+			sidebar={<SettingsSideRail />}
+			inspector={<SettingsInspector />}
+			main={
+				<div className="flex h-full min-h-0 flex-col">
+					<div className="flex h-10 shrink-0 items-center gap-2 border-b border-line bg-paper px-3">
+						<div className="meta">Settings</div>
+						<div className="text-xs text-ink-3">Configure this local deck instance</div>
+					</div>
+					<div className="grid min-h-0 flex-1 grid-cols-[220px_1fr] overflow-hidden">
+						<nav className="border-r border-line bg-paper-2/40 p-2">
+							{SECTIONS.map((section) => (
+								<button
+									key={section.id}
+									type="button"
+									onClick={() => setSection(section.id)}
+									className={cn(
+										"mb-1 block w-full rounded-md px-2 py-2 text-left transition-colors",
+										selected === section.id ? "bg-accent-soft text-accent" : "hover:bg-paper-3",
+									)}
+								>
+									<div className="font-mono text-xs font-medium uppercase tracking-meta">
+										{section.label}
+									</div>
+									<div className="mt-0.5 text-xs text-ink-3">{section.description}</div>
+								</button>
+							))}
+						</nav>
+						<section className="min-h-0 overflow-auto p-4">
+							{selected === "env" ? (
+								<EnvSection />
+							) : selected === "backend" ? (
+								<BackendSection />
+							) : selected === "models" ? (
+								<ModelsConfigSection />
+							) : selected === "roles" ? (
+								<ModelRolesSection />
+							) : selected === "neopi" ? (
+								<NpiConfigSection />
+							) : selected === "mcp" ? (
+								<McpServersSection />
+							) : selected === "providers" ? (
+								<ProvidersSection />
+							) : selected === "messaging" ? (
+								<MessagingSection />
+							) : selected === "starters" ? (
+								<StartersSection />
+							) : selected === "appearance" ? (
+								<AppearanceSection />
+							) : selected === "notifications" ? (
+								<NotificationsSection />
+							) : selected === "workspaces" ? (
+								<WorkspacesSection />
+							) : (
+								<AboutSection />
+							)}
+						</section>
+					</div>
+				</div>
+			}
+		/>
+	);
+}
+
+function BackendSection() {
+	const [status, setStatus] = useState<BackendStatusResponse | null>(null);
+	const [selected, setSelected] = useState("");
+	const [report, setReport] = useState("");
+	const [busy, setBusy] = useState(false);
+	const generation = useStore(s => s.workerGeneration);
+	useEffect(() => {
+		void settingsApi.backendStatus().then(data => { setStatus(data); setSelected(current => current || data.desired || data.backends[0]?.id || ""); }).catch(err => setReport(String(err)));
+	}, [generation]);
+	async function run(force: boolean) {
+		if (!selected) return;
+		setBusy(true);
+		try {
+			const probe = await settingsApi.probeBackend(selected);
+			if (!probe.ok) { setReport(`Preflight refused: ${probe.reason}`); return; }
+			const result = await settingsApi.switchBackend(selected, force);
+			setReport(result.message);
+		} catch (err) {
+			const message = String(err);
+			setReport(message.includes("work in progress") ? `${message} — use Force to abort work` : message);
+		} finally { setBusy(false); }
+	}
+	return (
+		<div className="mx-auto max-w-3xl space-y-4">
+			<h1 className="text-xl font-semibold">NeoPi backend</h1>
+			<p className="text-sm text-ink-3">Running: {status?.running ? `${status.running.path} (${status.running.commit?.slice(0, 10) ?? "unknown SHA"}, ${status.running.version ?? "unknown version"})` : "none — SDK-backed routes are unavailable"}</p>
+			{status?.reason ? <p role="alert" className="text-sm text-warn">{status.reason}</p> : null}
+			{status?.pinned ? <p role="alert" className="text-sm text-warn">NPI_DECK_BACKEND pins this launch. Remove it and restart to enable switching.</p> : null}
+			<label className="block text-sm">Backend
+				<select className="mt-1 block w-full rounded border border-line bg-paper p-2" value={selected} onChange={e => setSelected(e.target.value)} disabled={status?.pinned || busy}>
+					{status?.backends.map(b => <option key={b.id} value={b.id}>{b.id} — {b.kind}: {b.path}</option>)}
+				</select>
+			</label>
+			<div className="flex gap-2">
+				<Button disabled={!selected || status?.pinned || busy} onClick={() => void run(false)}>Switch</Button>
+				<Button variant="outline" disabled={!selected || status?.pinned || busy} onClick={() => void run(true)}>Force — abort all work</Button>
+			</div>
+			{report ? <p role="status" className="break-words text-sm text-ink-3">{report}</p> : null}
+		</div>
+	);
+}
+
+function EnvSection() {
+	const [data, setData] = useState<ListEnvSettingsResponse | null>(null);
+	const [loading, setLoading] = useState(true);
+	const [error, setError] = useState<string | undefined>();
+	const [editing, setEditing] = useState<EnvEntry | null>(null);
+	const [restartMessage, setRestartMessage] = useState<string | undefined>();
+
+	async function refresh(): Promise<void> {
+		try {
+			const next = await settingsApi.listEnv();
+			setData(next);
+			setError(undefined);
+		} catch (e) {
+			setError(String(e));
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	useEffect(() => {
+		void refresh();
+	}, []);
+
+	const grouped = useMemo(() => {
+		const entries = data?.entries ?? [];
+		const isDeckKey = (key: string) =>
+			key.startsWith("NPI_DECK_") ||
+			key === "LOG_LEVEL" ||
+			key === "PI_NO_TITLE" ||
+			key === "OMP_MODEL";
+		const isMessagingKey = (key: string) => key.startsWith("TELEGRAM_") || key.startsWith("SLACK_");
+		return {
+			deck: entries.filter((e) => isDeckKey(e.key)),
+			messaging: entries.filter((e) => isMessagingKey(e.key)),
+			sdk: entries.filter((e) => !isDeckKey(e.key) && !isMessagingKey(e.key)),
+		};
+	}, [data]);
+
+	async function restart(): Promise<void> {
+		try {
+			const resp = await settingsApi.restartServer();
+			setRestartMessage(resp.message || "Restart scheduled");
+		} catch (e) {
+			setError(String(e));
+		}
+	}
+
+	return (
+		<div className="mx-auto max-w-6xl space-y-4">
+			<div>
+				<h1 className="text-xl font-semibold tracking-tight">Environment variables</h1>
+				<p className="mt-1 max-w-3xl text-sm text-ink-3">
+					Edits write to the deck-managed env file only. Variables from the launching process stay
+					higher priority until you remove them from that shell/profile.
+				</p>
+			</div>
+
+			{data?.restartRequired ? (
+				<div className="flex items-center gap-3 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-sm text-warn">
+					<div className="min-w-0 flex-1">
+						Restart server to apply one or more restart-required values from the managed .env.
+					</div>
+					<Button variant="outline" size="sm" onClick={() => void restart()}>
+						<RotateCcw className="h-3.5 w-3.5" />
+						Restart
+					</Button>
+				</div>
+			) : null}
+			{restartMessage ? (
+				<div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 font-mono text-xs text-success">
+					{restartMessage}
+				</div>
+			) : null}
+			{error ? (
+				<div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+					{error}
+				</div>
+			) : null}
+
+			<div className="rounded-md border border-line bg-paper-2 px-3 py-2 font-mono text-2xs text-ink-3">
+				<div>dataDir: {data?.dataDir ?? "..."}</div>
+				<div>envFile: {data?.envFilePath ?? "..."}</div>
+			</div>
+
+			{loading ? <div className="text-sm text-ink-3">Loading...</div> : null}
+			{data ? (
+				<>
+					<EnvTable title="npi-deck" entries={grouped.deck} onEdit={setEditing} />
+					<EnvTable title="messaging bridges" entries={grouped.messaging} onEdit={setEditing} />
+					<EnvTable title="omp SDK / providers" entries={grouped.sdk} onEdit={setEditing} />
+				</>
+			) : null}
+
+			<EditEnvModal
+				entry={editing}
+				onClose={() => setEditing(null)}
+				onSaved={(next) => {
+					setData(next);
+					setEditing(null);
+				}}
+			/>
+		</div>
+	);
+}
+
+function MessagingSection() {
+	const [data, setData] = useState<ListEnvSettingsResponse | null>(null);
+	const [bridges, setBridges] = useState<BridgeInfo[]>([]);
+	const [loading, setLoading] = useState(true);
+	const [error, setError] = useState<string | undefined>();
+	const [editing, setEditing] = useState<EnvEntry | null>(null);
+
+	async function refresh(): Promise<void> {
+		try {
+			const [envResp, bridgeResp] = await Promise.all([settingsApi.listEnv(), bridgesApi.list()]);
+			setData(envResp);
+			setBridges(bridgeResp.bridges);
+			setError(undefined);
+		} catch (e) {
+			setError(String(e));
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	useEffect(() => {
+		void refresh();
+		const id = window.setInterval(() => {
+			if (document.visibilityState === "visible") void refresh();
+		}, 4000);
+		return () => window.clearInterval(id);
+	}, []);
+
+	const entries = data?.entries ?? [];
+	const telegramToken = entries.find((entry) => entry.key === "TELEGRAM_BOT_TOKEN");
+	const telegramAllowed = entries.find((entry) => entry.key === "TELEGRAM_ALLOWED_USERS");
+	const telegramDb = entries.find((entry) => entry.key === "TELEGRAM_BRIDGE_DB_PATH");
+	const telegramGroups = entries.find((entry) => entry.key === "TELEGRAM_GROUP_ALLOWED_CHATS");
+	const telegramMention = entries.find((entry) => entry.key === "TELEGRAM_REQUIRE_MENTION");
+	const telegramInfo = bridges.find((b) => b.name === "telegram");
+
+	function applyBridge(next: BridgeInfo): void {
+		setBridges((prev) => {
+			const idx = prev.findIndex((b) => b.name === next.name);
+			if (idx === -1) return [...prev, next];
+			const out = prev.slice();
+			out[idx] = next;
+			return out;
+		});
+	}
+
+	return (
+		<div className="mx-auto max-w-5xl space-y-4">
+			<div>
+				<h1 className="text-xl font-semibold tracking-tight">Messaging bridges</h1>
+				<p className="mt-1 max-w-3xl text-sm text-ink-3">
+					Save credentials, then start the bridge. The deck supervises the process; saving a
+					token alone does not bring the integration online.
+				</p>
+			</div>
+
+			{error ? (
+				<div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+					{error}
+				</div>
+			) : null}
+			{loading ? <div className="text-sm text-ink-3">Loading...</div> : null}
+
+			<BridgeCard
+				title="Telegram"
+				description="Always-on inbox transport: DMs and allowed groups file tasks as kanban cards. Explicit /chat reuses a persistent NeoPi session per chat/topic; the standalone bridge cannot restart NeoPi."
+				info={telegramInfo}
+				credentialRows={[
+					{ label: "Bot token", entry: telegramToken },
+					{ label: "Allowed users", entry: telegramAllowed },
+					{ label: "Allowed group chats", entry: telegramGroups },
+					{ label: "Require group mention", entry: telegramMention },
+					{ label: "Wake patterns", entry: entries.find((entry) => entry.key === "TELEGRAM_MENTION_PATTERNS") },
+					{ label: "Free-response chats", entry: entries.find((entry) => entry.key === "TELEGRAM_FREE_RESPONSE_CHATS") },
+					{ label: "Free-response topics", entry: entries.find((entry) => entry.key === "TELEGRAM_FREE_RESPONSE_TOPICS") },
+					{ label: "Allowed topics", entry: entries.find((entry) => entry.key === "TELEGRAM_ALLOWED_TOPICS") },
+					{ label: "Ignored topics", entry: entries.find((entry) => entry.key === "TELEGRAM_IGNORED_THREADS") },
+					{ label: "Mapping DB path", entry: telegramDb },
+				]}
+				onEdit={setEditing}
+				onApplyBridge={applyBridge}
+				onError={setError}
+			/>
+			<div className="rounded-md border border-line bg-paper-2 p-4 text-sm text-ink-3">
+				<p>Create a separate bot with BotFather, save its token and numeric sender IDs, then Start.
+					Do not reuse a token already polled by Hermes or another receiver. Credentials stay masked; never paste tokens into logs.</p>
+				<p className="mt-2">Groups require both an allowed negative chat ID and an allowed sender.
+					By default commands, mentions and replies to this bot invoke it. Optional regex wake patterns and free-response chats/topics
+					also invoke allowed senders. Allowed/ignored topics filter even commands; ignored topics win. DMs are not topic-filtered.</p>
+				<p className="mt-2">Send task text or a checklist to create one or more cards through the inbox.
+					Use /capture to keep an item unprocessed, /chat for agent conversation, /bind to reuse an existing session,
+					and /sessions search or /resume by title, number or ID for retained chat/topic bindings. /title shows the current title.
+					/new clears only the binding, not the running NeoPi instance.</p>
+				<p className="mt-2">Card properties accept leading YAML front matter or /properties defaults:
+					read-only, worktree, model, role and custom keys are retained on every decomposed card.
+					Card creation does not itself execute the card. /help lists all commands.</p>
+				<p className="mt-2">Unsupported attachments are not downloaded or processed; captions can still become tasks or explicit chat,
+					with a warning first. Photos work in /chat, which shows typing while the bound session works.</p>
+			</div>
+
+			<div className="rounded-md border border-dashed border-line bg-paper-2 p-4">
+				<div className="meta">Slack</div>
+				<p className="mt-1 text-sm text-ink-3">
+					Reserved for the same pattern: product-level setup here, shared managed-env storage underneath.
+				</p>
+			</div>
+
+			<EditEnvModal
+				entry={editing}
+				onClose={() => setEditing(null)}
+				onSaved={(next) => {
+					setData(next);
+					setEditing(null);
+					void refresh();
+				}}
+			/>
+		</div>
+	);
+}
+
+function BridgeCard({
+	title,
+	description,
+	info,
+	credentialRows,
+	onEdit,
+	onApplyBridge,
+	onError,
+}: {
+	title: string;
+	description: string;
+	info: BridgeInfo | undefined;
+	credentialRows: Array<{ label: string; entry: EnvEntry | undefined }>;
+	onEdit: (entry: EnvEntry) => void;
+	onApplyBridge: (next: BridgeInfo) => void;
+	onError: (message: string | undefined) => void;
+}) {
+	const [busy, setBusy] = useState<"start" | "stop" | "restart" | undefined>();
+
+	async function run(action: "start" | "stop" | "restart", name: BridgeName): Promise<void> {
+		setBusy(action);
+		onError(undefined);
+		try {
+			const next = await bridgesApi[action](name);
+			onApplyBridge(next);
+		} catch (e) {
+			onError(String((e as Error).message ?? e));
+		} finally {
+			setBusy(undefined);
+		}
+	}
+
+	const status = info?.status ?? "stopped";
+	const missing = info?.missingEnv ?? [];
+	const canStart = status !== "running" && status !== "starting" && missing.length === 0;
+	const canStop = status === "running" || status === "starting";
+	const canRestart = status === "running";
+
+	return (
+		<div className="overflow-hidden rounded-md border border-line bg-paper">
+			<div className="flex items-center justify-between gap-3 border-b border-line bg-paper-2 px-3 py-2">
+				<div>
+					<div className="meta">{title}</div>
+					<div className="mt-0.5 text-xs text-ink-3">{description}</div>
+				</div>
+				<div className="flex items-center gap-2">
+					<Badge tone={bridgeStatusTone(status)}>{bridgeStatusLabel(status, info)}</Badge>
+				</div>
+			</div>
+			<div className="space-y-3 p-3">
+				{missing.length > 0 ? (
+					<div className="rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
+						Missing required env: <span className="font-mono">{missing.join(", ")}</span>. Set
+						these below before starting the bridge.
+					</div>
+				) : null}
+				{info?.lastError ? (
+					<div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+						{info.lastError}
+					</div>
+				) : null}
+				<div className="flex flex-wrap items-center gap-2">
+					<Button
+						variant="primary"
+						size="sm"
+						disabled={!canStart || busy !== undefined}
+						onClick={() => info && void run("start", info.name)}
+					>
+						<Play className="h-3.5 w-3.5" />
+						{busy === "start" ? "Starting..." : "Start"}
+					</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={!canStop || busy !== undefined}
+						onClick={() => info && void run("stop", info.name)}
+					>
+						<Square className="h-3.5 w-3.5" />
+						{busy === "stop" ? "Stopping..." : "Stop"}
+					</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={!canRestart || busy !== undefined}
+						onClick={() => info && void run("restart", info.name)}
+					>
+						<RotateCcw className="h-3.5 w-3.5" />
+						{busy === "restart" ? "Restarting..." : "Restart"}
+					</Button>
+					{info ? <BridgeMeta info={info} /> : null}
+				</div>
+				<div className="divide-y divide-line rounded-md border border-line">
+					{credentialRows.map((row) => (
+						<MessagingCredentialRow key={row.label} label={row.label} entry={row.entry} onEdit={onEdit} />
+					))}
+				</div>
+				{info ? <BridgeLogsPanel name={info.name} /> : null}
+			</div>
+		</div>
+	);
+}
+
+function BridgeMeta({ info }: { info: BridgeInfo }) {
+	const parts: string[] = [];
+	if (info.status === "running") {
+		if (info.pid !== undefined) parts.push(`pid ${info.pid}`);
+		if (info.startedAt) parts.push(`up ${formatUptime(info.startedAt)}`);
+	} else if (info.exitCode !== undefined) {
+		parts.push(`exit ${info.exitCode}`);
+	}
+	if (info.crashCount > 0) parts.push(`crashes ${info.crashCount}`);
+	if (parts.length === 0) return null;
+	return <div className="font-mono text-2xs text-ink-3">{parts.join(" · ")}</div>;
+}
+
+function BridgeLogsPanel({ name }: { name: BridgeName }) {
+	const [open, setOpen] = useState(false);
+	const [lines, setLines] = useState<Array<{ stream: string; text: string; timestamp: string }>>([]);
+	const [fetching, setFetching] = useState(false);
+
+	async function load(): Promise<void> {
+		setFetching(true);
+		try {
+			const resp = await bridgesApi.logs(name);
+			setLines(resp.lines);
+		} catch (e) {
+			setLines([{ stream: "stderr", text: String(e), timestamp: new Date().toISOString() }]);
+		} finally {
+			setFetching(false);
+		}
+	}
+
+	useEffect(() => {
+		if (!open) return;
+		void load();
+		const id = window.setInterval(() => {
+			if (document.visibilityState === "visible") void load();
+		}, 2500);
+		return () => window.clearInterval(id);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [open, name]);
+
+	return (
+		<div className="rounded-md border border-line bg-paper-2">
+			<button
+				type="button"
+				className="flex w-full items-center justify-between px-3 py-2 text-left text-xs text-ink-2 hover:bg-paper-3"
+				onClick={() => setOpen((v) => !v)}
+			>
+				<span>Bridge logs</span>
+				<span className="font-mono text-2xs text-ink-3">{open ? "hide" : "show"}</span>
+			</button>
+			{open ? (
+				<div className="max-h-64 overflow-auto border-t border-line bg-paper p-2 font-mono text-2xs">
+					{fetching && lines.length === 0 ? <div className="text-ink-3">Loading...</div> : null}
+					{!fetching && lines.length === 0 ? <div className="text-ink-3">No log lines yet.</div> : null}
+					{lines.map((line, idx) => (
+						<div
+							key={`${line.timestamp}-${idx}`}
+							className={cn("whitespace-pre-wrap", line.stream === "stderr" ? "text-danger" : "text-ink-2")}
+						>
+							{line.text}
+						</div>
+					))}
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+function MessagingCredentialRow({
+	label,
+	entry,
+	onEdit,
+}: {
+	label: string;
+	entry: EnvEntry | undefined;
+	onEdit: (entry: EnvEntry) => void;
+}) {
+	return (
+		<div className="grid grid-cols-[160px_1fr_120px] items-center gap-3 px-3 py-2 text-sm">
+			<div>
+				<div className="font-medium text-ink">{label}</div>
+				<div className="font-mono text-2xs text-ink-4">{entry?.key ?? "missing schema"}</div>
+			</div>
+			<div className="min-w-0">
+				<div className="truncate font-mono text-xs text-ink-2">{entry?.masked ?? "unavailable"}</div>
+				<div className="mt-0.5 flex flex-wrap gap-1">
+					{entry ? <Badge tone={sourceTone(entry.source)}>{sourceLabel(entry.source)}</Badge> : null}
+					{entry ? envApplyBadge(entry) : null}
+				</div>
+			</div>
+			<div className="flex justify-end">
+				<Button variant="outline" size="sm" disabled={!entry} onClick={() => entry && onEdit(entry)}>
+					Replace
+				</Button>
+			</div>
+		</div>
+	);
+}
+
+function EnvTable({
+	title,
+	entries,
+	onEdit,
+}: {
+	title: string;
+	entries: EnvEntry[];
+	onEdit: (entry: EnvEntry) => void;
+}) {
+	return (
+		<div className="overflow-hidden rounded-md border border-line bg-paper">
+			<div className="border-b border-line bg-paper-2 px-3 py-2">
+				<div className="meta">{title}</div>
+			</div>
+			<div className="divide-y divide-line">
+				{entries.map((entry) => (
+					<div key={entry.key} className="grid grid-cols-[220px_1fr_120px_100px] gap-3 px-3 py-2 text-sm">
+						<div className="min-w-0">
+							<div className="truncate font-mono text-xs font-medium text-ink">{entry.key}</div>
+							<div className="mt-0.5 text-xs text-ink-4">{entry.valueType}</div>
+						</div>
+						<div className="min-w-0">
+							<div className="truncate font-mono text-xs text-ink-2">{entry.masked}</div>
+							<div className="mt-0.5 truncate text-xs text-ink-3">{entry.description}</div>
+						</div>
+						<div className="flex flex-col items-start gap-1">
+							<Badge tone={sourceTone(entry.source)}>{sourceLabel(entry.source)}</Badge>
+							{envApplyBadge(entry)}
+						</div>
+						<div className="flex justify-end">
+							<Button variant="outline" size="sm" onClick={() => onEdit(entry)}>
+								Replace
+							</Button>
+						</div>
+					</div>
+				))}
+			</div>
+		</div>
+	);
+}
+
+function EditEnvModal({
+	entry,
+	onClose,
+	onSaved,
+}: {
+	entry: EnvEntry | null;
+	onClose: () => void;
+	onSaved: (next: ListEnvSettingsResponse) => void;
+}) {
+	const [value, setValue] = useState("");
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | undefined>();
+
+	useEffect(() => {
+		if (!entry) return;
+		setValue(entry.sensitive ? "" : entry.source === "unset" ? "" : entry.masked);
+		setError(undefined);
+	}, [entry]);
+
+	if (!entry) return null;
+
+	async function save(nextValue: string | null): Promise<void> {
+		if (!entry) return;
+		setSaving(true);
+		try {
+			const next = await settingsApi.patchEnv({ [entry.key]: nextValue });
+			onSaved(next);
+		} catch (e) {
+			setError(String(e));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<Modal open={Boolean(entry)} onClose={onClose} widthClass="max-w-xl">
+			<div className="flex h-11 items-center gap-2 border-b border-line px-3">
+				<div className="min-w-0 flex-1">
+					<div className="truncate font-mono text-xs font-semibold text-ink">{entry.key}</div>
+					<div className="text-xs text-ink-3">Writes to managed .env only</div>
+				</div>
+				<Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
+					<X className="h-4 w-4" />
+				</Button>
+			</div>
+			<div className="space-y-3 overflow-auto p-4">
+				<div className="flex flex-wrap gap-1.5">
+					<Badge tone={sourceTone(entry.source)}>{sourceLabel(entry.source)}</Badge>
+					{entry.sensitive ? <Badge tone="danger">secret</Badge> : null}
+					{entry.restartRequired ? <Badge tone="warn">restart required</Badge> : <Badge tone="success">hot apply</Badge>}
+				</div>
+				<p className="text-sm text-ink-3">{entry.description}</p>
+				{entry.source === "process-env" ? (
+					<div className="rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
+						This key is currently supplied by the launching process. Replacing it here writes the
+						managed env file, but process env remains higher priority until removed upstream.
+					</div>
+				) : null}
+				<label className="block">
+					<div className="meta mb-1">New value</div>
+					<input
+						className="field h-9 w-full px-2 font-mono text-sm"
+						type={entry.sensitive ? "password" : "text"}
+						value={value}
+						onChange={(e) => setValue(e.target.value)}
+						placeholder={entry.sensitive ? "Paste replacement value" : entry.defaultValue ?? "Unset"}
+					/>
+				</label>
+				{entry.options ? (
+					<div className="text-xs text-ink-3">Allowed: {entry.options.join(", ")}</div>
+				) : null}
+				{error ? (
+					<div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+						{error}
+					</div>
+				) : null}
+			</div>
+			<div className="flex items-center justify-between gap-2 border-t border-line px-3 py-3">
+				<Button variant="danger" size="sm" disabled={saving} onClick={() => void save(null)}>
+					Unset
+				</Button>
+				<div className="flex gap-2">
+					<Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>
+						Cancel
+					</Button>
+					<Button variant="primary" size="sm" onClick={() => void save(value)} disabled={saving}>
+						<Save className="h-3.5 w-3.5" />
+						Save
+					</Button>
+				</div>
+			</div>
+		</Modal>
+	);
+}
+
+function AppearanceSection() {
+	const theme = useTheme();
+	return (
+		<div className="mx-auto max-w-5xl space-y-4">
+			<div>
+				<h1 className="text-xl font-semibold tracking-tight">Appearance</h1>
+				<p className="mt-1 max-w-3xl text-sm text-ink-3">
+					Themes swap the entire palette and font stack at runtime. Your choice is stored in this
+					browser; clearing it falls back to the system color preference.
+				</p>
+			</div>
+
+			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+				{THEMES.map((def) => (
+					<ThemeCard
+						key={def.id}
+						definition={def}
+						isActive={theme.active === def.id}
+						isPinned={theme.stored === def.id}
+						onPick={() => theme.set(def.id)}
+					/>
+				))}
+			</div>
+
+			<div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-paper-2 px-3 py-2 text-sm">
+				<div className="min-w-0">
+					<div className="meta">System preference</div>
+					<div className="mt-0.5 text-xs text-ink-3">
+						{theme.usingSystem
+							? `Following the OS: ${theme.systemPreferred}.`
+							: `Pinned to ${theme.stored}. The OS currently prefers ${theme.systemPreferred}.`}
+					</div>
+				</div>
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={theme.usingSystem}
+					onClick={() => theme.clear()}
+				>
+					Match system
+				</Button>
+			</div>
+
+			<div className="overflow-hidden rounded-md border border-line bg-paper">
+				<div className="border-b border-line bg-paper-2 px-3 py-2">
+					<div className="meta">Font preview</div>
+					<div className="mt-0.5 text-xs text-ink-3">Driven by the active theme. v1 ships one font set.</div>
+				</div>
+				<div className="space-y-3 p-4">
+					<div>
+						<div className="meta mb-1">Sans</div>
+						<div className="font-sans text-base text-ink">
+							The agent finished compaction and routed the next prompt back to the original session.
+						</div>
+					</div>
+					<div>
+						<div className="meta mb-1">Mono</div>
+						<div className="rounded-md border border-line bg-paper-code px-3 py-2 font-mono text-xs text-ink-2">
+							{"const status = await bridgesApi.start(\"telegram\");"}
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+/**
+ * Notifications settings: which server events notify (per source, saved on
+ * the server), then how this browser delivers them (OS permission, audio,
+ * the permission banner), then the in-memory log of recent ones.
+ */
+function NotificationsSection() {
+	const {
+		permission,
+		requestPermission,
+		audioEnabled,
+		setAudioEnabled,
+		bannerDismissed,
+	} = useNotificationPermission();
+	const notifications = useStore((s) => s.notifications);
+	const dismissNotification = useStore((s) => s.dismissNotification);
+
+	// Show the freshest notifications first; cap to keep the panel tidy.
+	// We don't filter by `dismissed` here on purpose — the user dismissed
+	// the toast, not the historical record.
+	const recent = useMemo(
+		() => notifications.slice().reverse().slice(0, 20),
+		[notifications],
+	);
+
+	return (
+		<div className="mx-auto max-w-3xl space-y-4">
+			<div>
+				<h1 className="text-xl font-semibold tracking-tight">Notifications</h1>
+				<p className="mt-1 text-sm text-ink-3">
+					The deck server sends a notification when one of the events below happens. It appears as a
+					toast in every open deck tab, as an OS notification once this browser allows them, and with
+					an audio cue for warnings, errors and shipped tasks while audio is on. Switching a source off
+					stops the server sending it to every browser. Permission, audio and the banner below apply to
+					this browser only.
+				</p>
+			</div>
+
+			<NotificationSourcesCard />
+
+			<PermissionCard
+				permission={permission}
+				onRequest={() => void requestPermission()}
+			/>
+
+			<AudioCard
+				audioEnabled={audioEnabled}
+				onToggle={setAudioEnabled}
+			/>
+
+			<BannerResetCard
+				bannerDismissed={bannerDismissed}
+				permission={permission}
+				onReset={() => {
+					try {
+						localStorage.removeItem("npi-deck:notifications:banner-dismissed");
+					} catch {
+						/* quota / private */
+					}
+					// The banner component reads the flag from localStorage on mount;
+					// a reload is the simplest way to re-evaluate it everywhere it's
+					// rendered without threading an extra store action through.
+					window.location.reload();
+				}}
+			/>
+
+			<RecentNotificationsCard
+				items={recent}
+				onDismiss={(id) => dismissNotification(id)}
+			/>
+		</div>
+	);
+}
+
+function PermissionCard({
+	permission,
+	onRequest,
+}: {
+	permission: ReturnType<typeof useNotificationPermission>["permission"];
+	onRequest: () => void;
+}) {
+	const tone =
+		permission === "granted"
+			? "success"
+			: permission === "denied"
+				? "danger"
+				: permission === "unsupported"
+					? "muted"
+					: "warn";
+	const label =
+		permission === "granted"
+			? "Granted"
+			: permission === "denied"
+				? "Denied"
+				: permission === "unsupported"
+					? "Unsupported"
+					: "Not requested";
+
+	return (
+		<div className="rounded-md border border-line bg-paper-2 p-4">
+			<div className="flex flex-wrap items-center justify-between gap-3">
+				<div className="min-w-0">
+					<div className="meta">Browser permission</div>
+					<div className="mt-0.5 text-sm text-ink">
+						OS-level notifications when the deck tab is in the background.
+					</div>
+				</div>
+				<Badge tone={tone}>{label}</Badge>
+			</div>
+			<div className="mt-3 text-xs text-ink-3">
+				{permission === "default" ? (
+					<>
+						Permission has not been requested yet. The deck will only emit OS notifications
+						after you grant access.
+					</>
+				) : permission === "granted" ? (
+					<>
+						The OS shows a notification for every source switched on above, including while
+						the deck tab is in the background.
+					</>
+				) : permission === "denied" ? (
+					<>
+						The browser is blocking notifications for this site. Re-enable from the site
+						settings — usually the lock icon next to the address bar — then reload.
+					</>
+				) : (
+					<>This browser doesn't expose the Notifications API.</>
+				)}
+			</div>
+			{permission === "default" ? (
+				<div className="mt-3">
+					<Button size="sm" variant="primary" onClick={onRequest}>
+						Enable browser notifications
+					</Button>
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+function AudioCard({
+	audioEnabled,
+	onToggle,
+}: {
+	audioEnabled: boolean;
+	onToggle: (enabled: boolean) => void;
+}) {
+	const levels: NotificationLevel[] = ["info", "warn", "error", "critical"];
+	return (
+		<div className="rounded-md border border-line bg-paper-2 p-4">
+			<div className="flex flex-wrap items-center justify-between gap-3">
+				<div className="min-w-0">
+					<div className="meta">Audio cues</div>
+					<div className="mt-0.5 text-sm text-ink">
+						Synthesized tones layered on top of OS notifications. Each level has
+						a distinct sequence — info is short, critical is loud.
+					</div>
+				</div>
+				<label className="flex items-center gap-2 text-xs text-ink-2">
+					<input
+						type="checkbox"
+						checked={audioEnabled}
+						onChange={(e) => onToggle(e.target.checked)}
+					/>
+					<span>{audioEnabled ? "Enabled" : "Muted"}</span>
+				</label>
+			</div>
+			<div className="mt-3 flex flex-wrap gap-2">
+				{levels.map((level) => (
+					<Button
+						key={level}
+						size="sm"
+						variant="outline"
+						disabled={!audioEnabled}
+						onClick={() => void playNotificationTone(level)}
+					>
+						<Play className="mr-1 h-3 w-3" />
+						{level}
+					</Button>
+				))}
+			</div>
+			{!audioEnabled ? (
+				<div className="mt-2 text-xs text-ink-3">Enable audio to preview tones.</div>
+			) : null}
+		</div>
+	);
+}
+
+function BannerResetCard({
+	bannerDismissed,
+	permission,
+	onReset,
+}: {
+	bannerDismissed: boolean;
+	permission: ReturnType<typeof useNotificationPermission>["permission"];
+	onReset: () => void;
+}) {
+	// Banner only ever shows when permission is "default" AND not dismissed,
+	// so the reset is only meaningful in that combination.
+	const canReset = bannerDismissed && permission === "default";
+	return (
+		<div className="rounded-md border border-line bg-paper-2 p-4">
+			<div className="flex flex-wrap items-center justify-between gap-3">
+				<div className="min-w-0">
+					<div className="meta">Permission banner</div>
+					<div className="mt-0.5 text-sm text-ink">
+						The top-of-page nudge that asks you to enable notifications.
+					</div>
+					<div className="mt-1 text-xs text-ink-3">
+						{permission !== "default"
+							? "Banner is suppressed because permission is already decided."
+							: bannerDismissed
+								? "You dismissed the banner. Reset to bring it back."
+								: "Banner is currently visible."}
+					</div>
+				</div>
+				<Button
+					size="sm"
+					variant="outline"
+					disabled={!canReset}
+					onClick={onReset}
+				>
+					<RotateCcw className="mr-1 h-3 w-3" />
+					Reset banner
+				</Button>
+			</div>
+		</div>
+	);
+}
+
+/** Per-source switches for server-emitted notifications, saved as `NPI_DECK_NOTIFICATIONS_DISABLED`. */
+function NotificationSourcesCard() {
+	const [data, setData] = useState<NotificationSettingsResponse | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | undefined>();
+
+	useEffect(() => {
+		settingsApi.getNotifications().then(setData, (err) => setError(apiErrorText(err)));
+	}, []);
+
+	async function toggle(kind: NotificationKind, enabled: boolean): Promise<void> {
+		if (!data) return;
+		const disabled = data.sources
+			.filter((s) => (s.kind === kind ? !enabled : !s.enabled))
+			.map((s) => s.kind);
+		setBusy(true);
+		try {
+			setData(await settingsApi.putNotifications(disabled));
+			setError(undefined);
+		} catch (err) {
+			setError(apiErrorText(err));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<div className="overflow-hidden rounded-md border border-line bg-paper">
+			<div className="border-b border-line bg-paper-2 px-3 py-2">
+				<div className="meta">Sources</div>
+				<div className="mt-0.5 text-xs text-ink-3">
+					Every event the server notifies about. Saved on the server; applies at once.
+				</div>
+			</div>
+			{error ? (
+				<div role="alert" className="border-b border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+					{error}
+				</div>
+			) : null}
+			{data && !data.setting.editable ? (
+				<div role="note" className="border-b border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
+					The shell that launched the deck exports <span className="font-mono">{data.setting.key}</span>, and
+					that value overrides the deck&rsquo;s .env. Unset it there and restart the deck to change these here.
+				</div>
+			) : null}
+			{data ? (
+				<ul className="divide-y divide-line">
+					{data.sources.map((source) => (
+						<li key={source.kind} className="flex items-start gap-3 px-3 py-3">
+							<input
+								id={`notification-source-${source.kind}`}
+								type="checkbox"
+								className="mt-1"
+								checked={source.enabled}
+								disabled={busy || !data.setting.editable}
+								onChange={(e) => void toggle(source.kind, e.target.checked)}
+							/>
+							<label htmlFor={`notification-source-${source.kind}`} className="min-w-0 flex-1">
+								<div className="flex items-center gap-2 text-sm font-medium text-ink">
+									{source.label}
+									<Badge tone={notificationLevelTone(source.level)}>{source.level}</Badge>
+									{!source.enabled ? <Badge tone="muted">off</Badge> : null}
+								</div>
+								<div className="mt-0.5 text-xs text-ink-3">{source.trigger}</div>
+							</label>
+						</li>
+					))}
+				</ul>
+			) : error ? null : (
+				<div className="px-3 py-4 text-xs text-ink-3">Loading...</div>
+			)}
+		</div>
+	);
+}
+
+function RecentNotificationsCard({
+	items,
+	onDismiss,
+}: {
+	items: ReadonlyArray<NotificationItem>;
+	onDismiss: (id: string) => void;
+}) {
+	return (
+		<div className="rounded-md border border-line bg-paper">
+			<div className="border-b border-line bg-paper-2 px-3 py-2">
+				<div className="meta">Recent activity</div>
+				<div className="mt-0.5 text-xs text-ink-3">
+					Notifications this tab has received since it loaded, newest first. The tab keeps
+					the latest 50 and lists 20.
+				</div>
+			</div>
+			{items.length === 0 ? (
+				<div className="px-3 py-6 text-center text-xs text-ink-3">
+					No notifications yet.
+				</div>
+			) : (
+				<ul className="divide-y divide-line">
+					{items.map((item) => (
+						<li
+							key={item.id}
+							className={cn(
+								"flex items-start gap-3 px-3 py-2 text-sm",
+								item.dismissed && "opacity-60",
+							)}
+						>
+							<Badge tone={notificationLevelTone(item.level)}>{item.level}</Badge>
+							<div className="min-w-0 flex-1">
+								<div className="truncate font-medium text-ink">{item.title}</div>
+								{item.body ? (
+									<div className="mt-0.5 text-xs text-ink-2">{item.body}</div>
+								) : null}
+								<div className="mt-1 font-mono text-2xs text-ink-3">
+									{new Date(item.timestamp).toLocaleString()}
+									{` · ${item.kind}`}
+									{item.source ? ` · ${item.source}` : ""}
+								</div>
+							</div>
+							{!item.dismissed ? (
+								<Button
+									size="sm"
+									variant="ghost"
+									onClick={() => onDismiss(item.id)}
+									aria-label="Dismiss"
+									title="Dismiss"
+								>
+									<X className="h-3 w-3" />
+								</Button>
+							) : null}
+						</li>
+					))}
+				</ul>
+			)}
+		</div>
+	);
+}
+
+function notificationLevelTone(
+	level: NotificationLevel,
+): "default" | "accent" | "warn" | "danger" | "success" | "muted" {
+	switch (level) {
+		case "info":
+			return "accent";
+		case "warn":
+			return "warn";
+		case "error":
+			return "danger";
+		case "critical":
+			return "danger";
+		default:
+			return "default";
+	}
+}
+
+function ThemeCard({
+	definition,
+	isActive,
+	isPinned,
+	onPick,
+}: {
+	definition: (typeof THEMES)[number];
+	isActive: boolean;
+	isPinned: boolean;
+	onPick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onPick}
+			data-theme-preview={definition.id}
+			aria-pressed={isActive}
+			className={cn(
+				"group flex flex-col gap-3 rounded-md border bg-paper p-3 text-left transition-colors",
+				isActive ? "border-accent ring-1 ring-accent/40" : "border-line hover:border-ink/30",
+			)}
+		>
+			<div className="flex items-center justify-between gap-2">
+				<div>
+					<div className="text-sm font-semibold text-ink">{definition.label}</div>
+					<div className="mt-0.5 text-xs text-ink-3">{definition.description}</div>
+				</div>
+				<div className="flex shrink-0 flex-col items-end gap-1">
+					{isActive ? <Badge tone="accent">active</Badge> : null}
+					{!isActive && isPinned ? <Badge tone="muted">pinned</Badge> : null}
+				</div>
+			</div>
+			<ThemeSwatchStrip definition={definition} />
+		</button>
+	);
+}
+
+function ThemeSwatchStrip({ definition }: { definition: (typeof THEMES)[number] }) {
+	// Render swatches inside an isolated `data-theme="..."` wrapper so each card
+	// shows its OWN palette regardless of which theme the rest of the UI uses.
+	return (
+		<div
+			data-theme={definition.id}
+			className="grid grid-cols-4 gap-1.5 rounded-md border border-line/60 bg-paper p-1.5"
+		>
+			{definition.swatchTokens.map((s) => (
+				<div key={s.token} className="flex flex-col items-stretch gap-1">
+					<div
+						className="h-8 w-full rounded"
+						style={{ backgroundColor: `rgb(var(--${s.token}))` }}
+					/>
+					<div className="text-center font-mono text-2xs uppercase tracking-meta text-ink-3">
+						{s.label}
+					</div>
+				</div>
+			))}
+		</div>
+	);
+}
+
+/**
+ * Starters section: what starters are, then each bundled skill and extension
+ * with its origin tag, installed state and opt-in switch. The maintenance
+ * gate's settings sit under its own row, the one starter that has any.
+ */
+function StartersSection() {
+	const [data, setData] = useState<StartersResponse | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | undefined>();
+
+	useEffect(() => {
+		startersApi.list().then(setData, (err) => setError(apiErrorText(err)));
+	}, []);
+
+	async function setOptedIn(item: StarterItem, optedIn: boolean): Promise<void> {
+		setBusy(true);
+		try {
+			setData(await startersApi.setOptedIn(item.kind, item.name, optedIn));
+			setError(undefined);
+		} catch (err) {
+			setError(apiErrorText(err));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<div className="mx-auto max-w-5xl space-y-6">
+			<div>
+				<h1 className="text-xl font-semibold tracking-tight">Starters</h1>
+				<div className="mt-1 max-w-3xl space-y-2 text-sm text-ink-3">
+					<p>
+						Starters are skills and extensions that ship with the deck, so NeoPi can have them without a trip
+						to the marketplace. A skill is a set of instructions the agent loads when a task calls for it,
+						or when you ask for it by name, such as <span className="font-mono">/skill:handoff</span>. An
+						extension is code NeoPi runs inside every session, in the deck and in the terminal alike.
+					</p>
+					<p>
+						The deck installs none of them on its own. Opt a starter in and the deck copies it into your
+						NeoPi agent directory right away, and again at launch if it goes missing. It never overwrites a
+						copy that is already there, so once installed, a starter is yours to edit. Opting out stops the
+						copying and leaves an installed copy where it is; delete it yourself to remove it.
+					</p>
+				</div>
+				{data ? (
+					<div className="mt-2 text-xs text-ink-3">
+						{data.setting.editable ? (
+							<>
+								Opt-ins are saved as <span className="font-mono">{data.setting.key}</span> in the deck&rsquo;s .env.
+							</>
+						) : (
+							<>
+								The shell that launched the deck exports <span className="font-mono">{data.setting.key}</span>,
+								which overrides the deck&rsquo;s .env. Change your opt-ins there.
+							</>
+						)}
+					</div>
+				) : null}
+			</div>
+			{error ? (
+				<div role="alert" className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+					{error}
+				</div>
+			) : null}
+			{data ? (
+				<>
+					<StarterGroupCard
+						title="Starter skills"
+						group={data.skills}
+						busy={busy}
+						editable={data.setting.editable}
+						onToggle={(item, optedIn) => void setOptedIn(item, optedIn)}
+					/>
+					<StarterGroupCard
+						title="Starter extensions"
+						group={data.extensions}
+						busy={busy}
+						editable={data.setting.editable}
+						onToggle={(item, optedIn) => void setOptedIn(item, optedIn)}
+					/>
+				</>
+			) : error ? null : (
+				<div className="text-sm text-ink-3">Loading...</div>
+			)}
+		</div>
+	);
+}
+
+function StarterGroupCard({
+	title,
+	group,
+	busy,
+	editable,
+	onToggle,
+}: {
+	title: string;
+	group: StarterGroup;
+	busy: boolean;
+	editable: boolean;
+	onToggle: (item: StarterItem, optedIn: boolean) => void;
+}) {
+	return (
+		<div className="overflow-hidden rounded-md border border-line bg-paper">
+			<div className="border-b border-line bg-paper-2 px-3 py-2">
+				<div className="meta">{title}</div>
+				<div className="mt-1 space-y-0.5 font-mono text-2xs text-ink-3">
+					<div>bundled in: {group.sourceDir ?? "not found; nothing to install"}</div>
+					<div>installs to: {group.targetDir}</div>
+				</div>
+			</div>
+			{group.items.length === 0 ? (
+				<div className="px-3 py-4 text-xs text-ink-3">This deck bundles none.</div>
+			) : (
+				<ul className="divide-y divide-line">
+					{group.items.map((item) => {
+						const inputId = `starter-opt-in-${item.kind}-${item.name}`;
+						return (
+							<li key={item.name} className="px-3 py-2">
+								<div className="flex items-start gap-3">
+									<input
+										id={inputId}
+										type="checkbox"
+										className="mt-1"
+										checked={item.optedIn}
+										disabled={busy || !editable}
+										onChange={(e) => onToggle(item, e.target.checked)}
+									/>
+									<div className="min-w-0 flex-1">
+										<label htmlFor={inputId} className="font-mono text-sm text-ink">
+											{item.name}
+										</label>
+										<div className="mt-0.5 font-mono text-2xs text-ink-3">
+											source: {item.origin ?? "untagged"}
+										</div>
+										{item.description ? <div className="mt-0.5 text-xs text-ink-3">{item.description}</div> : null}
+									</div>
+									{item.installed ? (
+										<Badge tone={item.optedIn ? "success" : "default"} title={item.installedPath}>
+											{item.optedIn ? "installed" : "installed, not opted in"}
+										</Badge>
+									) : (
+										<Badge tone="muted" title={item.installedPath}>not installed</Badge>
+									)}
+								</div>
+								{item.kind === "extensions" && item.name === "maintenance-gate" ? (
+									<div className="mt-3 pl-6">
+										<MaintenanceGateCard starter={item} />
+									</div>
+								) : null}
+							</li>
+						);
+					})}
+				</ul>
+			)}
+		</div>
+	);
+}
+
+/** Settings of the maintenance-gate starter, shown under its row in Starters. */
+function MaintenanceGateCard({ starter }: { starter: StarterItem }) {
+	const [data, setData] = useState<MaintenanceGateState | null>(null);
+	const [draft, setDraft] = useState<{
+		enabled: boolean;
+		minOpMsgs: string;
+		minReleaseAgeMs: string;
+		fireFloorMs: string;
+	} | null>(null);
+	const [previewMode, setPreviewMode] = useState<"deck" | "flat-file">("deck");
+	const [loading, setLoading] = useState(true);
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | undefined>();
+	const [status, setStatus] = useState<string | undefined>();
+
+	async function refresh(): Promise<void> {
+		try {
+			const next = await startersApi.getMaintenanceGate();
+			setData(next);
+			setDraft({
+				enabled: next.enabled,
+				minOpMsgs: String(next.knobs.minOpMsgs.rawValue ?? ""),
+				minReleaseAgeMs: String(next.knobs.minReleaseAgeMs.rawValue ?? ""),
+				fireFloorMs: String(next.knobs.fireFloorMs.rawValue ?? ""),
+			});
+			setError(undefined);
+		} catch (e) {
+			setError(String(e));
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	// Opting in or out moves NPI_DECK_ORG_ROOT: re-read the state then, keeping unsaved knob edits.
+	useEffect(() => {
+		if (!data) void refresh();
+		else startersApi.getMaintenanceGate().then(setData, (e) => setError(String(e)));
+	}, [starter.optedIn]);
+
+	function parseKnob(value: string): number | null {
+		const trimmed = value.trim();
+		if (trimmed === "") return null;
+		const n = Number.parseInt(trimmed, 10);
+		return Number.isFinite(n) && n > 0 ? n : NaN;
+	}
+
+	async function save(): Promise<void> {
+		if (!draft) return;
+		const parsedOp = parseKnob(draft.minOpMsgs);
+		const parsedRel = parseKnob(draft.minReleaseAgeMs);
+		const parsedFire = parseKnob(draft.fireFloorMs);
+		if (Number.isNaN(parsedOp) || Number.isNaN(parsedRel) || Number.isNaN(parsedFire)) {
+			setError("Each knob must be a positive integer or empty (to clear override).");
+			return;
+		}
+		setSaving(true);
+		try {
+			const next = await startersApi.putMaintenanceGate({
+				enabled: draft.enabled,
+				minOpMsgs: parsedOp,
+				minReleaseAgeMs: parsedRel,
+				fireFloorMs: parsedFire,
+			});
+			setData(next);
+			setDraft({
+				enabled: next.enabled,
+				minOpMsgs: String(next.knobs.minOpMsgs.rawValue ?? ""),
+				minReleaseAgeMs: String(next.knobs.minReleaseAgeMs.rawValue ?? ""),
+				fireFloorMs: String(next.knobs.fireFloorMs.rawValue ?? ""),
+			});
+			setStatus("Saved. Gate will use these values on the next evaluation.");
+			setError(undefined);
+			window.setTimeout(() => setStatus(undefined), 3000);
+		} catch (e) {
+			setError(String(e));
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	const profile: "deck" | "flat-file" | "inactive" = !data || !starter.installed || !data.enabled
+		? "inactive"
+		: data.orgRoot
+			? "deck"
+			: "flat-file";
+
+	return (
+		<div className="overflow-hidden rounded-md border border-line bg-paper">
+			<div className="border-b border-line bg-paper-2 px-3 py-2">
+				<div className="flex items-center gap-2">
+					<div className="meta">Maintenance gate</div>
+					{profile === "deck" ? <Badge tone="accent">deck profile</Badge> : null}
+					{profile === "flat-file" ? <Badge tone="default">flat-file profile</Badge> : null}
+					{profile === "inactive" ? <Badge tone="muted">inactive</Badge> : null}
+				</div>
+				<p className="mt-1 text-xs text-ink-3">
+					When the agent finishes a turn, this extension reminds it to save anything worth keeping
+					(an insight, a decision, a task) before the conversation moves on. It reminds at most once
+					until the agent saves something or says nothing needs saving, and only after all three
+					thresholds below have passed. Switching it off silences it in new sessions, even when the
+					extension is installed.
+				</p>
+				<div className="mt-1 space-y-0.5 font-mono text-2xs text-ink-3">
+					<div>NPI_DECK_ORG_ROOT: {data?.orgRoot ?? "(unset)"} ({data?.orgRootSource ?? ""})</div>
+				</div>
+				{!starter.optedIn ? (
+					<p className="mt-1 text-xs text-ink-3">
+						Not opted in, so the deck does not set NPI_DECK_ORG_ROOT for its sessions
+						{starter.installed ? "; the installed copy runs with cwd-based detection only" : " and the extension is not installed"}.
+						These settings apply once it runs.
+					</p>
+				) : null}
+			</div>
+			<div className="space-y-4 p-4">
+				{error ? (
+					<div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+						{error}
+					</div>
+				) : null}
+				{status ? (
+					<div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 font-mono text-xs text-success">
+						{status}
+					</div>
+				) : null}
+				{loading || !draft || !data ? (
+					<div className="text-sm text-ink-3">Loading...</div>
+				) : (
+					<>
+						<label className="flex items-center gap-2 text-sm">
+							<input
+								type="checkbox"
+								checked={draft.enabled}
+								onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
+							/>
+							<span>Enabled</span>
+							<span className="ml-2 font-mono text-2xs text-ink-3">
+								NPI_DECK_MAINTENANCE_GATE_DISABLED = {data.disabledRaw ?? "(unset)"} ({data.disabledSource})
+							</span>
+						</label>
+
+						<div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+							<GateKnobInput
+								label="minOpMsgs"
+								help="Operator messages since last release"
+								knob={data.knobs.minOpMsgs}
+								value={draft.minOpMsgs}
+								onChange={(v) => setDraft({ ...draft, minOpMsgs: v })}
+							/>
+							<GateKnobInput
+								label="minReleaseAgeMs"
+								help="Wall-clock ms since last release"
+								knob={data.knobs.minReleaseAgeMs}
+								value={draft.minReleaseAgeMs}
+								onChange={(v) => setDraft({ ...draft, minReleaseAgeMs: v })}
+							/>
+							<GateKnobInput
+								label="fireFloorMs"
+								help="Wall-clock ms between fires (cross-session)"
+								knob={data.knobs.fireFloorMs}
+								value={draft.fireFloorMs}
+								onChange={(v) => setDraft({ ...draft, fireFloorMs: v })}
+							/>
+						</div>
+
+						<div className="flex flex-wrap items-center gap-2">
+							<Button size="sm" onClick={() => void save()} disabled={saving}>
+								<Save className="h-3.5 w-3.5" />
+								Save
+							</Button>
+							<Button size="sm" variant="outline" onClick={() => void refresh()} disabled={saving}>
+								<RotateCcw className="h-3.5 w-3.5" />
+								Reload
+							</Button>
+						</div>
+
+						<div className="overflow-hidden rounded-md border border-line bg-paper-2">
+							<div className="flex items-center gap-2 border-b border-line px-3 py-2">
+								<div className="meta">Reminder preview</div>
+								<div className="ml-auto flex items-center gap-1">
+									<Button
+										size="sm"
+										variant={previewMode === "deck" ? "primary" : "outline"}
+										onClick={() => setPreviewMode("deck")}
+									>
+										deck
+									</Button>
+									<Button
+										size="sm"
+										variant={previewMode === "flat-file" ? "primary" : "outline"}
+										onClick={() => setPreviewMode("flat-file")}
+									>
+										flat-file
+									</Button>
+								</div>
+							</div>
+							<pre className="overflow-x-auto whitespace-pre-wrap px-3 py-2 font-mono text-2xs leading-relaxed text-ink-2">
+								{previewMode === "deck" ? data.preview.deckMode : data.preview.flatFileMode}
+							</pre>
+						</div>
+					</>
+				)}
+			</div>
+		</div>
+	);
+}
+
+function GateKnobInput({
+	label,
+	help,
+	knob,
+	value,
+	onChange,
+}: {
+	label: string;
+	help: string;
+	knob: GateKnob;
+	value: string;
+	onChange: (v: string) => void;
+}) {
+	return (
+		<label className="block space-y-1">
+			<span className="meta">{label}</span>
+			<input
+				type="text"
+				inputMode="numeric"
+				value={value}
+				onChange={(e) => onChange(e.target.value)}
+				placeholder={String(knob.default)}
+				className="block w-full rounded-md border border-line bg-paper-2 px-2 py-1 font-mono text-xs text-ink"
+			/>
+			<div className="font-mono text-2xs text-ink-3">
+				{help}
+			</div>
+			<div className="font-mono text-2xs text-ink-3">
+				effective {knob.value} · default {knob.default} · source {knob.source}
+			</div>
+		</label>
+	);
+}
+
+function SettingsSideRail() {
+	return <div className="p-3 text-xs text-ink-3">Settings</div>;
+}
+
+function SettingsInspector() {
+	return (
+		<div className="space-y-2 p-3 text-xs text-ink-3">
+			<div className="meta">Settings notes</div>
+			<p>Secrets are masked in list responses. Replace values here; do not reveal unless using the loopback API directly.</p>
+		</div>
+	);
+}
+
+function normalizeSection(raw: string | null): SectionId {
+	return SECTIONS.some((s) => s.id === raw) ? (raw as SectionId) : "env";
+}
+
+function sourceLabel(source: EnvEntry["source"]): string {
+	if (source === "process-env") return "process env";
+	if (source === "env-file") return ".env file";
+	return source;
+}
+
+function sourceTone(source: EnvEntry["source"]): "accent" | "default" | "muted" {
+	if (source === "process-env") return "accent";
+	if (source === "env-file") return "default";
+	return "muted";
+}
+
+function envApplyBadge(entry: EnvEntry) {
+	if (entry.hotApply) return <Badge tone="success">hot</Badge>;
+	if (entry.restartTarget === "telegram-bridge") return <Badge tone="warn">bridge restart</Badge>;
+	if (entry.restartRequired) return <Badge tone="warn">server restart</Badge>;
+	return <Badge tone="muted">manual</Badge>;
+}
+
+function bridgeStatusTone(status: BridgeInfo["status"]): "success" | "muted" | "warn" | "danger" {
+	if (status === "running") return "success";
+	if (status === "starting") return "warn";
+	if (status === "crashed") return "danger";
+	return "muted";
+}
+
+function bridgeStatusLabel(status: BridgeInfo["status"], info: BridgeInfo | undefined): string {
+	if (status === "running") return "running";
+	if (status === "starting") return "starting";
+	if (status === "crashed") return info?.exitSignal ? `crashed (${info.exitSignal})` : "crashed";
+	if (info && info.missingEnv.length > 0) return "missing credentials";
+	return "stopped";
+}
+
+/**
+ * Providers section — list every OAuth-capable provider with its current
+ * auth state. Login opens OAuthFlowModal; Revoke clears credentials and
+ * fires `models_changed` server-side so the picker re-empties without a
+ * deck restart. See docs/oauth-deck-sdk-findings.md for the SDK contract.
+ */
+function ProvidersSection() {
+	const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
+	const [error, setError] = useState<string | undefined>();
+	const [loading, setLoading] = useState(true);
+	const [activeFlow, setActiveFlow] = useState<{ id: string; name: string } | null>(null);
+	const [confirmRevoke, setConfirmRevoke] = useState<{ id: string; name: string } | null>(null);
+	const [revoking, setRevoking] = useState(false);
+
+	async function refresh(): Promise<void> {
+		try {
+			const resp = await authApi.listProviders();
+			setProviders(resp.providers);
+			setError(undefined);
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	useEffect(() => {
+		void refresh();
+	}, []);
+
+	async function revoke(): Promise<void> {
+		if (!confirmRevoke) return;
+		setRevoking(true);
+		try {
+			await authApi.revoke(confirmRevoke.id);
+			setConfirmRevoke(null);
+			await refresh();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setRevoking(false);
+		}
+	}
+
+	if (loading) {
+		return <div className="font-mono text-2xs text-ink-3">Loading providers…</div>;
+	}
+	if (error) {
+		return (
+			<div className="rounded border border-danger/40 bg-danger/5 p-3 text-xs text-danger">
+				{error}
+			</div>
+		);
+	}
+	if (!providers) return null;
+
+	return (
+		<div className="flex flex-col gap-4">
+			<div>
+				<h2 className="meta">Providers</h2>
+				<p className="mt-1 text-xs text-ink-3">
+					OAuth sign-in to subscription providers (Claude Pro/Max, ChatGPT Plus/Pro, etc.).
+					API keys live under <strong>Env</strong> — this surface is for browser-flow auth.
+				</p>
+			</div>
+			<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+				{providers.map((p) => (
+					<ProviderCard
+						key={p.id}
+						info={p}
+						onLogin={() => setActiveFlow({ id: p.id, name: p.name })}
+						onRevoke={() => setConfirmRevoke({ id: p.id, name: p.name })}
+					/>
+				))}
+			</div>
+			<OAuthFlowModal
+				open={activeFlow !== null}
+				provider={activeFlow?.id ?? null}
+				providerName={activeFlow?.name ?? null}
+				onClose={() => setActiveFlow(null)}
+				onComplete={() => {
+					setActiveFlow(null);
+					void refresh();
+				}}
+			/>
+			<Modal open={confirmRevoke !== null} onClose={() => setConfirmRevoke(null)} widthClass="max-w-md">
+				<div className="flex flex-col gap-3 p-5">
+					<h2 className="text-base font-semibold text-ink">
+						Sign out of {confirmRevoke?.name}?
+					</h2>
+					<p className="text-xs text-ink-3">
+						The stored credentials will be deleted from <code>auth.db</code>. Token refresh
+						will fail until you log in again. Other deck instances sharing the same
+						agent dir will lose access too.
+					</p>
+					<div className="flex justify-end gap-2 border-t border-line pt-3">
+						<Button variant="ghost" onClick={() => setConfirmRevoke(null)} disabled={revoking}>
+							Cancel
+						</Button>
+						<Button variant="danger" onClick={revoke} disabled={revoking}>
+							{revoking ? "Signing out…" : "Sign out"}
+						</Button>
+					</div>
+				</div>
+			</Modal>
+		</div>
+	);
+}
+
+function ProviderCard({
+	info,
+	onLogin,
+	onRevoke,
+}: {
+	info: ProviderInfo;
+	onLogin: () => void;
+	onRevoke: () => void;
+}) {
+	const tone =
+		info.state === "oauth"
+			? "border-success/40 bg-success/5"
+			: info.state === "api-key"
+				? "border-accent/30 bg-accent-soft/40"
+				: "border-line bg-paper-2/30";
+	const stateLabel =
+		info.state === "oauth"
+			? "OAuth (subscription)"
+			: info.state === "api-key"
+				? "API key configured"
+				: "Not configured";
+	const stateBadgeTone: "success" | "accent" | "default" =
+		info.state === "oauth" ? "success" : info.state === "api-key" ? "accent" : "default";
+	return (
+		<div className={cn("flex flex-col gap-2 rounded border p-3", tone)}>
+			<div className="flex items-baseline justify-between gap-2">
+				<div className="truncate text-sm font-medium text-ink" title={info.name}>
+					{info.name}
+				</div>
+				<Badge tone={stateBadgeTone}>{stateLabel}</Badge>
+			</div>
+			<div className="font-mono text-2xs text-ink-4">
+				{info.id}
+				{info.count > 1 ? <span className="ml-1.5">· {info.count} credentials</span> : null}
+			</div>
+			<div className="mt-1 flex gap-2">
+				{info.state === "unconfigured" ? (
+					<Button variant="primary" onClick={onLogin} className="flex-1">
+						Login
+					</Button>
+				) : info.state === "oauth" ? (
+					<>
+						<Button variant="outline" onClick={onLogin} className="flex-1">
+							Replace
+						</Button>
+						<Button variant="ghost" onClick={onRevoke}>
+							Sign out
+						</Button>
+					</>
+				) : (
+					<Button variant="outline" onClick={onLogin} className="flex-1">
+						Login (replaces API key)
+					</Button>
+				)}
+			</div>
+		</div>
+	);
+}

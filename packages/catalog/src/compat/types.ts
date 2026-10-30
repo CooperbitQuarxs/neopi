@@ -537,6 +537,8 @@ export interface CompiledDeviceCodeLogin {
 export interface CompiledCustomLogin {
 	kind: "custom";
 	hook: string;
+	/** Custom hook uses a device-code exchange rather than a browser callback. */
+	deviceCode?: boolean;
 }
 
 export type CompiledLogin =

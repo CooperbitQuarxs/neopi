@@ -29,6 +29,7 @@ import {
 	createMCPProxyTools,
 	createSubagentSettings,
 	followMCPTools,
+	restoredSubagentThinkingOptions,
 	subagentRetryFallbackRole,
 } from "./executor";
 import { cfgTaskAgentAccountPools } from "./settings";
@@ -215,6 +216,7 @@ export function createPersistedSubagentReviverFactory(
 					modelRegistry: ctx.modelRegistry,
 					...(persistedModelPattern ? { modelPattern: persistedModelPattern } : {}),
 					modelPatternAuthFallback: init.resolvedModel,
+					...restoredSubagentThinkingOptions(reopened),
 					settings: subagentSettings,
 					sessionManager: reopened,
 					agentId: ref.id,

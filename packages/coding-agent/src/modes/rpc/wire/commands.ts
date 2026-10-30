@@ -95,7 +95,12 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		result: "OpenSessionResult",
 	},
 
-	{ name: "get_state", doc: "Snapshot the session state.", result: "SessionState" },
+	{
+		name: "get_state",
+		doc: "Snapshot the session state.",
+		params: { "includeDump?": "boolean" },
+		result: "SessionState",
+	},
 	{
 		name: "create_mixture",
 		doc: "Save and register a mixture.",
@@ -110,10 +115,105 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	{ name: "select_mixture", doc: "Select a registered mixture.", params: { name: "string" }, result: "ModelInfo" },
 	{ name: "get_roles", doc: "List model roles.", result: "RolesResult" },
 	{
+		name: "get_themes_configuration",
+		doc: "Read native theme discovery and scoped selections.",
+		result: "ThemesConfiguration",
+	},
+	{
+		name: "get_theme",
+		doc: "Read the resolved colors of one installed native theme without selecting it.",
+		params: { name: "string" },
+		result: "ThemePalette",
+	},
+	{
+		name: "update_theme",
+		doc: "Set or inherit one native theme slot with an expected scoped value.",
+		params: {
+			appearance: "'dark' | 'light'",
+			scope: "'global' | 'project'",
+			name: "string | null",
+			expected: "string | null",
+		},
+		result: "ThemesConfiguration",
+	},
+	{
+		name: "query_model_selector",
+		doc: "Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.",
+		params: { query: "string" },
+		result: "ModelSelectorResult",
+	},
+	{
 		name: "set_role",
 		doc: "Select a model role.",
 		params: { role: "string" },
 		result: { role: "string", model: "ModelInfo", "thinkingLevel?": "ThinkingLevel" },
+	},
+	{
+		name: "get_models_configuration",
+		doc: "Read the native provider catalog, scoped model roles, and effort rules.",
+		result: {
+			providers: "Record<string, unknown>[]",
+			models: "Record<string, unknown>[]",
+			roles: "Record<string, unknown>[]",
+			roleStorage: "'global' | 'project'",
+			effortMode: "'replacement' | 'legacy'",
+			effortRules: "ModelEffortRule[]",
+			effortRulesProvenance: "string",
+			effortRuleScopes: "ModelEffortRuleScopes",
+			effortChoices: "string[]",
+		},
+	},
+	{
+		name: "set_model_role_configuration",
+		doc: "Save or clear a role selector and effort in the explicit scope, independently of the default role-storage preference.",
+		params: {
+			role: "string",
+			scope: "'global' | 'project'",
+			"selector?": "string",
+			"effort?": "ModelEffortSelection",
+			expected: "ModelRoleConfigurationValue",
+		},
+	},
+	{
+		name: "set_model_role_fallbacks",
+		doc: "Save one role's native global fallback chain and per-entry efforts, rejecting stale values.",
+		params: {
+			role: "string",
+			scope: "'global' | 'project'",
+			chain: "string[]",
+			efforts: "Record<string, ModelEffortSelection>",
+			expected: "ModelRoleFallbacks",
+		},
+	},
+	{
+		name: "set_model_role_description",
+		doc: "Save one known role's global description without replacing its other metadata.",
+		params: { role: "string", scope: "'global' | 'project'", description: "string", expected: "string | null" },
+	},
+	{
+		name: "delete_model_role",
+		doc: "Delete a custom role definition in one scope; refuse built-ins and preserve inherited definitions.",
+		params: { role: "string", scope: "'global' | 'project'", expected: "ModelRoleConfigurationValue" },
+	},
+	{
+		name: "set_model_role_storage",
+		doc: "Choose native global or project role storage, rejecting a stale preference.",
+		params: { value: "'global' | 'project'", expected: "'global' | 'project'" },
+	},
+	{
+		name: "set_effort_rules",
+		doc: "Save or clear native implicit effort rules in one scope, rejecting a stale expected value.",
+		params: { scope: "'global' | 'project'", "rules?": "ModelEffortRule[]", expected: "ModelEffortRule[] | null" },
+	},
+	{
+		name: "set_provider_api_key",
+		doc: "Upsert a key in the native credential store without replacing other accounts.",
+		params: { providerId: "string", apiKey: "string" },
+	},
+	{
+		name: "cancel_login",
+		doc: "Cancel this connection's active login request.",
+		params: { loginId: "string" },
 	},
 	{
 		name: "get_usage",
@@ -177,7 +277,49 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		params: { "since?": "string" },
 		result: "SessionEntries",
 	},
+	{
+		name: "snapshot_session_journal",
+		doc: "Emit native journal identity, retained durable message associations and current unsaved assistant before responding, without replacing subscriptions.",
+		result: "JournalIdentity",
+	},
+	{
+		name: "get_entries_page",
+		doc: "Read one canonical native journal or selected-branch page.",
+		params: {
+			"scope?": "'journal' | 'branch'",
+			"direction?": "'forward' | 'backward'",
+			"cursor?": "string",
+			"limit?": "number.integer",
+		},
+		result: "JournalPage",
+	},
 	{ name: "get_tree", doc: "Read the raw session tree.", result: "SessionTree" },
+	{
+		name: "navigate_tree",
+		doc: "Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken.",
+		params: {
+			targetId: "string",
+			expectedSessionId: "string",
+			expectedSessionFile: "string | null",
+			expectedLeafId: "string | null",
+			"summarize?": "boolean",
+			"customInstructions?": "string",
+			"allowAskReopen?": "boolean",
+			"reanswerAskResult?": "TreeAskReanswer",
+		},
+		result: "NavigateTreeResult",
+	},
+	{
+		name: "resume_tree",
+		doc: "Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript.",
+		params: {
+			resumeToken: "string",
+			expectedSessionId: "string",
+			expectedSessionFile: "string | null",
+			expectedLeafId: "string | null",
+		},
+		result: { resumed: "true" },
+	},
 	{
 		name: "set_todos",
 		doc: "Replace the session's todo phases.",
@@ -237,6 +379,17 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		name: "steer_subagent",
 		doc: "Send a message to a running subagent as its user.",
 		params: { subagentId: "string", message: "string" },
+	},
+	{
+		name: "set_subagent_thinking_level",
+		doc: "Set a running subagent's thinking level from its next request, preserving it across restore.",
+		params: { subagentId: "string", level: "ThinkingLevel" },
+	},
+	{
+		name: "set_subagent_fast",
+		doc: "Enable or disable fast mode only for a running subagent, from its next request.",
+		params: { subagentId: "string", enabled: "boolean" },
+		result: "FastModeResult",
 	},
 	{
 		name: "live_start",
@@ -382,6 +535,11 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		params: { providerId: "string" },
 		result: { accounts: "LogoutAccount[]" },
 		unwrap: "accounts",
+	},
+	{
+		name: "activate_account",
+		doc: "Activate a stored OAuth account for this session through native credential affinity and journal pins.",
+		params: { providerId: "string", credentialId: "number.integer" },
 	},
 	{
 		name: "logout",

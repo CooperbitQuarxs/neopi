@@ -7,6 +7,11 @@ export const acpHelp = {
 
 export const agentsHelp = { description: "Manage bundled task agents" } satisfies CommandMetadata;
 
+export const promptsHelp = {
+	description:
+		"Unpack, inspect, override, reset and validate built-in prompt templates; inspect their interpolation lexicon",
+} satisfies CommandMetadata;
+
 export const anonymizeHelp = {
 	description:
 		"Write a shareable copy of a session and its subagents: turn contents redacted, metadata kept, paths and literals replaced by consistent mock tokens",
@@ -111,7 +116,7 @@ export const grievancesHelp = {
 } satisfies CommandMetadata;
 
 export const loginHelp = {
-	description: "Log in to a model provider (terminal counterpart of /login)",
+	description: "Log in to a model provider, including NeoProxy username/password accounts (also /login)",
 } satisfies CommandMetadata;
 
 export const imagesHelp = {

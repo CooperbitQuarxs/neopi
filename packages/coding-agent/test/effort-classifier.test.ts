@@ -169,6 +169,21 @@ describe("on-demand effort classification", () => {
 		expect(call).not.toHaveBeenCalled();
 	});
 
+	it("returns an allowed native off singleton without contacting the classifier", async () => {
+		const call = vi.spyOn(ai, "completeSimple");
+		const effort = await classifyDifficulty(
+			{ request: "anything" },
+			{
+				settings: Settings.isolated({}),
+				registry: registry(),
+				model,
+				allowedEfforts: ["off"],
+			},
+		);
+		expect(effort).toBe("off");
+		expect(call).not.toHaveBeenCalled();
+	});
+
 	it("rejects an Auto classifier role rather than recursively classifying", async () => {
 		const settings = Settings.isolated({ modelRoles: { effort: "mock/classifier:auto" } });
 		const call = vi.spyOn(ai, "completeSimple");
@@ -288,6 +303,33 @@ describe("on-demand effort classification", () => {
 		expect(calls).toHaveBeenCalledTimes(2);
 		expect(calls.mock.calls[0]?.[2]?.reasoning).toBe(Effort.High);
 		expect(calls.mock.calls[1]?.[2]?.reasoning).toBe(Effort.High);
+	});
+
+	it("offers off to Auto and disables reasoning on the resulting judgment request", async () => {
+		const settings = Settings.isolated({
+			modelRoles: { judge: "mock/classifier:auto", effort: "mock/classifier:xhigh" },
+			"effort.rules": [{ selector: "mock/classifier", allowed: ["off", Effort.High] }],
+		});
+		const response = {
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+		};
+		const calls = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce({ ...response, content: [{ type: "text", text: "off" }] } as never)
+			.mockResolvedValueOnce({ ...response, content: [{ type: "text", text: "high" }] } as never);
+		await resolveJudge({ settings, registry: registry(), purpose: "off-judgment-test" }).judge({
+			state: "direct lookup",
+			questions: {
+				level: { type: "choice", instructions: "Pick a level", criteria: { low: "easy", high: "hard" } },
+			},
+		});
+		expect(calls).toHaveBeenCalledTimes(2);
+		expect(calls.mock.calls[0]?.[1].systemPrompt?.join("\n")).toContain("No reasoning needed");
+		expect(calls.mock.calls[1]?.[2]?.reasoning).toBeUndefined();
+		expect(calls.mock.calls[1]?.[2]?.disableReasoning).toBe(true);
 	});
 
 	it("discloses failed direct judgment Auto classification and uses its lowest permitted level", async () => {
@@ -450,6 +492,27 @@ describe("committed branch-safe effort context", () => {
 });
 
 describe("implicit effort policy resolution", () => {
+	it("includes native off, excludes mandatory reasoning off, and enforces off rules", () => {
+		const settings = Settings.isolated({});
+		expect(resolveImplicitEffort(settings, model, { mode: "auto" }).candidates).toEqual([
+			"off",
+			Effort.Low,
+			Effort.Medium,
+			Effort.High,
+			Effort.XHigh,
+		]);
+		const mandatory = { ...model, thinking: { ...model.thinking!, requiresEffort: true } };
+		expect(resolveImplicitEffort(settings, mandatory, { mode: "auto" }).candidates).not.toContain("off");
+		const suppressed = { ...mandatory, thinking: { ...mandatory.thinking, suppressWhenOff: true } };
+		expect(resolveImplicitEffort(settings, suppressed, { mode: "auto" }).candidates).toContain("off");
+		cfgEffortRules.set(settings, [{ selector: "mock/classifier", allowed: ["off"] }]);
+		expect(resolveImplicitEffort(settings, model, { mode: "inherit" }, "role").level).toBe("off");
+		expect(resolveImplicitEffort(settings, model, { mode: "fixed", level: Effort.High }, "role").level).toBe("off");
+		expect(() => resolveImplicitEffort(settings, mandatory, { mode: "auto" })).toThrow(EffortPolicyError);
+		cfgEffortRules.set(settings, [{ selector: "mock/classifier", allowed: [Effort.High] }]);
+		expect(resolveImplicitEffort(settings, model, { mode: "fixed", level: "off" }, "role").level).toBe(Effort.High);
+	});
+
 	it("prefers an exact rule over ordered patterns while retaining sparse Auto candidates", () => {
 		const settings = Settings.isolated({
 			"effort.rules": [
@@ -487,28 +550,33 @@ describe("implicit effort policy resolution", () => {
 		expect(resolveImplicitEffort(regexSettings, model, { mode: "auto" }, "role").candidates).toEqual([Effort.Medium]);
 	});
 
-	it("retains case-insensitive Bun glob matching and skips invalid regex before glob fallback", () => {
-		const settings = Settings.isolated({
-			"effort.rules": [
-				{ selector: "re:[", allowed: [Effort.XHigh] },
-				{ selector: "MOCK/{CLASSIFIER,OTHER}", allowed: [Effort.Low] },
-			],
-		});
-		expect(matchEffortRule(settings, model)?.allowed).toEqual([Effort.Low]);
-		expect(
-			resolveImplicitEffort(settings, model, { mode: "auto", selector: "MOCK/CLASS*" }, "role").candidates,
-		).toEqual([Effort.Low]);
-		expect(
-			resolveImplicitEffort(settings, model, { mode: "auto", selector: "re:^mock/classifier$" }, "role").candidates,
-		).toEqual([Effort.Low]);
-		expect(
-			resolveImplicitEffort(
-				settings,
-				model,
-				{ mode: "auto", selector: "re:^mock/other$", allowed: [Effort.High] },
-				"role",
-			).candidates,
-		).toEqual([Effort.Low]);
+	it("retains case-insensitive Bun glob matching and skips invalid loaded regex before glob fallback", async () => {
+		const temp = TempDir.createSync("@pi-effort-loaded-regex-");
+		try {
+			await Bun.write(
+				path.join(temp.path(), "config.yml"),
+				"effort:\n  rules:\n    - selector: 're:['\n      allowed: [xhigh]\n    - selector: 'MOCK/{CLASSIFIER,OTHER}'\n      allowed: [low]\n",
+			);
+			const settings = await Settings.loadReadOnly({ agentDir: temp.path(), cwd: temp.path() });
+			expect(matchEffortRule(settings, model)?.allowed).toEqual([Effort.Low]);
+			expect(
+				resolveImplicitEffort(settings, model, { mode: "auto", selector: "MOCK/CLASS*" }, "role").candidates,
+			).toEqual([Effort.Low]);
+			expect(
+				resolveImplicitEffort(settings, model, { mode: "auto", selector: "re:^mock/classifier$" }, "role")
+					.candidates,
+			).toEqual([Effort.Low]);
+			expect(
+				resolveImplicitEffort(
+					settings,
+					model,
+					{ mode: "auto", selector: "re:^mock/other$", allowed: [Effort.High] },
+					"role",
+				).candidates,
+			).toEqual([Effort.Low]);
+		} finally {
+			await temp.remove();
+		}
 	});
 
 	it("does not promote a saved role default to an explicit override, even when both request the same level", () => {

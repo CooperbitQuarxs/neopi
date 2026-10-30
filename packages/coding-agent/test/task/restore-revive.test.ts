@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
@@ -15,9 +16,10 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import { createPersistedSubagentReviverFactory } from "@oh-my-pi/pi-coding-agent/task/persisted-revive";
 import { restoreSession } from "@oh-my-pi/pi-coding-agent/task/restore";
 import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
@@ -174,3 +176,180 @@ it("revives a subagent a crash cut off mid tool call, runs the call again, and d
 		authStorage.close();
 	}
 }, 20_000);
+
+async function thinkingFixture() {
+	const cwd = path.join(root, "home", "thinking-work");
+	await fs.mkdir(cwd, { recursive: true });
+	const authStorage = createInMemoryAuthStorage();
+	authStorage.keys.setRuntime("openai", "test-key");
+	const modelRegistry = new ModelRegistry(authStorage);
+	const mock = Object.assign(
+		createMockModel({ provider: "openai", reasoning: true, handler: { content: ["continued with saved thinking"] } }),
+		{ thinking: { mode: "effort" as const, efforts: [ThinkingLevel.Low, ThinkingLevel.Medium, ThinkingLevel.High] } },
+	);
+	const catalogAvailable = modelRegistry.getAvailableForProviders.bind(modelRegistry);
+	vi.spyOn(modelRegistry, "getAvailableForProviders").mockImplementation((providers, kind) => [
+		...(providers.has(mock.provider) ? [mock] : []),
+		...catalogAvailable(providers, kind),
+	]);
+	vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([mock]);
+	const catalogFind = modelRegistry.find.bind(modelRegistry);
+	vi.spyOn(modelRegistry, "find").mockImplementation((provider, id) =>
+		provider === mock.provider && id === mock.id ? mock : catalogFind(provider, id),
+	);
+	const settings = Settings.isolated({
+		"task.agentIdleTtlMs": 0,
+		"compaction.enabled": false,
+		"retry.enabled": false,
+		"todo.enabled": false,
+		"todo.reminders": false,
+		"advisor.enabled": false,
+		modelRoles: { default: "openai/mock-model" },
+	});
+	const parent = new AgentSession({
+		agent: new Agent({ initialState: { model: mock, thinkingLevel: ThinkingLevel.Low } }),
+		sessionManager: SessionManager.inMemory(cwd),
+		settings,
+		modelRegistry,
+		thinkingLevel: ThinkingLevel.Low,
+		thinkingOrigin: "caller",
+	});
+	return { cwd, authStorage, modelRegistry, mock, settings, parent };
+}
+
+for (const level of [ThinkingLevel.High, ThinkingLevel.Off]) {
+	it(`restores a cold subagent's ${level} thinking edit and fast mode over its original :low spawn selector`, async () => {
+		const { cwd, authStorage, modelRegistry, mock, settings, parent } = await thinkingFixture();
+		const main = SessionManager.create(cwd, path.join(root, "sessions"));
+		main.appendMessage({ role: "user", content: "fan out", timestamp: Date.now() });
+		const mainFile = main.getSessionFile();
+		if (!mainFile) throw new Error("Expected a persisted parent");
+		await main.close();
+		const child = await SessionManager.open(
+			path.join(mainFile.slice(0, -6), `${AGENT_ID}.jsonl`),
+			undefined,
+			undefined,
+			{ initialCwd: cwd, parentSession: mainFile, suppressBreadcrumb: true },
+		);
+		child.appendSessionInit({
+			systemPrompt: ["test"],
+			task: "continue the interrupted request",
+			tools: [],
+			restrictToolNames: true,
+			agent: "task",
+			resolvedModel: "openai/mock-model:low",
+		});
+		child.appendModelChange("openai/mock-model:low");
+		child.appendThinkingLevelChange(ThinkingLevel.Low, ThinkingLevel.Low, "caller");
+		const original = new AgentSession({
+			agent: new Agent({ initialState: { model: mock, thinkingLevel: ThinkingLevel.Low } }),
+			sessionManager: child,
+			settings,
+			modelRegistry,
+			thinkingLevel: ThinkingLevel.Low,
+			thinkingOrigin: "caller",
+		});
+		// A control edit occurs while a user turn is pending, before the process disappears.
+		child.appendMessage({ role: "user", content: "continue the interrupted request", timestamp: Date.now() });
+		original.setThinkingLevel(level);
+		expect(original.setFastMode(true)).toBe(true);
+		expect(parent.isFastModeEnabled()).toBe(false);
+		await original.dispose();
+		AgentRegistry.resetGlobalForTests();
+		AgentLifecycleManager.resetGlobalForTests();
+
+		const owner = {
+			sessionManager: {
+				getSessionFile: () => mainFile,
+				getCwd: () => cwd,
+				getArtifactManager: () => undefined,
+			},
+			asyncJobManager: manager,
+			settings,
+			effectiveExtensionRoots: { explicit: [], mode: "explicit-only", configured: [], configuredLevel: "user" },
+			preparedExtensions: undefined,
+			restoreInterruptedTurn: async () => false,
+		} as unknown as AgentSession;
+		AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
+			createPersistedSubagentReviverFactory({
+				session: owner,
+				authStorage,
+				modelRegistry,
+				settings,
+				enableLsp: false,
+			}),
+			() => 0,
+		);
+		const delivered = Promise.withResolvers<string>();
+		manager.registerDeliverySink(MAIN_AGENT_ID, (_jobId, text) => delivered.resolve(text));
+		try {
+			expect((await restoreSession(owner)).subagents).toEqual([AGENT_ID]);
+			expect(await delivered.promise).toContain("continued with saved thinking");
+			const revived = AgentRegistry.global().get(AGENT_ID)?.session;
+			expect(revived?.configuredThinkingLevel()).toBe(level);
+			expect(revived?.effortOrigin).toBe("manual");
+			expect(revived?.model?.id).toBe(mock.id);
+			expect(revived?.isFastModeEnabled()).toBe(true);
+			expect(parent.isFastModeEnabled()).toBe(false);
+			const request = mock.calls.at(-1);
+			expect(request).toBeDefined();
+			expect(request?.options?.reasoning).toBe(level === ThinkingLevel.Off ? undefined : ThinkingLevel.High);
+			expect(request?.options?.disableReasoning).toBe(level === ThinkingLevel.Off);
+			expect(request?.options?.serviceTier).toBe("priority");
+		} finally {
+			await AgentLifecycleManager.global().dispose();
+			await parent.dispose();
+			authStorage.close();
+		}
+	}, 20_000);
+
+	it(`keeps a warm subagent's ${level} thinking edit and fast mode after parking and repeated revival`, async () => {
+		const { cwd, authStorage, modelRegistry, mock, settings, parent } = await thinkingFixture();
+		try {
+			const result = await runSubprocess({
+				cwd,
+				agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled", tools: [] },
+				task: "initial request",
+				index: 0,
+				id: AGENT_ID,
+				authStorage,
+				modelRegistry,
+				settings,
+				modelOverride: "openai/mock-model:low",
+				callerModelSelector: "openai/mock-model:low",
+				structured: false,
+				restrictToolNames: true,
+				enableLsp: false,
+				enableMCP: false,
+				enableIrc: false,
+				keepAlive: true,
+				artifactsDir: cwd,
+			});
+			expect(result.exitCode).toBe(0);
+			const original = AgentRegistry.global().get(AGENT_ID)?.session;
+			if (!original) throw new Error("Expected a live subagent");
+			original.setThinkingLevel(level);
+			expect(original.setFastMode(true)).toBe(true);
+			expect(parent.isFastModeEnabled()).toBe(false);
+			for (let revive = 0; revive < 2; revive++) {
+				await AgentLifecycleManager.global().park(AGENT_ID);
+				const session = await AgentLifecycleManager.global().ensureLive(AGENT_ID);
+				expect(session.configuredThinkingLevel()).toBe(level);
+				expect(session.effortOrigin).toBe("manual");
+				expect(session.isFastModeEnabled()).toBe(true);
+				expect(parent.isFastModeEnabled()).toBe(false);
+				await session.prompt("follow up with saved thinking");
+				await session.waitForIdle();
+				expect(mock.calls.at(-1)?.options?.reasoning).toBe(
+					level === ThinkingLevel.Off ? undefined : ThinkingLevel.High,
+				);
+				expect(mock.calls.at(-1)?.options?.disableReasoning).toBe(level === ThinkingLevel.Off);
+				expect(mock.calls.at(-1)?.options?.serviceTier).toBe("priority");
+			}
+		} finally {
+			await AgentLifecycleManager.global().dispose();
+			await parent.dispose();
+			authStorage.close();
+		}
+	}, 20_000);
+}

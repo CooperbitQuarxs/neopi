@@ -13,7 +13,7 @@ import {
 import { isValidThemeColor } from "@oh-my-pi/pi-tui/theme";
 import type { Settings } from "./settings";
 
-import { cfgCycleOrder, cfgModelTags } from "./model-settings";
+import { cfgCycleOrder, cfgModelTags, type ModelTagsSettings } from "./model-settings";
 
 /** Canonical prefix for a configured model role selector. */
 export const MODEL_ROLE_ALIAS_PREFIX = "@";
@@ -64,8 +64,11 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	slow: { tag: "SLOW", name: "Thinking", color: "accent", section: "chat", accepts: acceptsChat },
 	vision: { tag: "VISION", name: "Vision", color: "error", section: "chat", accepts: acceptsChat },
 	plan: { tag: "PLAN", name: "Architect", color: "muted", section: "chat", accepts: acceptsChat },
+	"agent-author": { tag: "AUTHOR", name: "Agent author", color: "muted", section: "chat", accepts: acceptsChat },
+	compaction: { tag: "COMPACT", name: "Compaction", color: "muted", section: "chat", accepts: acceptsChat },
 	commit: { tag: "COMMIT", name: "Commit", color: "dim", section: "chat", accepts: acceptsChat },
 	tiny: { tag: "TINY", name: "Tiny", color: "dim", section: "chat", accepts: acceptsTinyOrChat },
+	title: { tag: "TITLE", name: "Session titles", color: "dim", section: "chat", accepts: acceptsTinyOrChat },
 	memory: { tag: "MEMORY", name: "Memory", color: "dim", section: "chat", accepts: acceptsTinyOrChat },
 	task: { tag: "TASK", name: "Subtask", color: "muted", section: "chat", accepts: acceptsChat },
 	advisor: { tag: "ADVISOR", name: "Advisor", color: "accent", section: "chat", accepts: acceptsChat },
@@ -73,6 +76,13 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	"chronicler-summary": {
 		tag: "CHRONSUM",
 		name: "Chronicle summaries",
+		color: "dim",
+		section: "chat",
+		accepts: acceptsChat,
+	},
+	"chronicler-recall": {
+		tag: "CHRONREC",
+		name: "Chronicle recall",
 		color: "dim",
 		section: "chat",
 		accepts: acceptsChat,
@@ -108,6 +118,38 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	judge: { tag: "JUDGE", name: "Judge", color: "muted", section: "kind", accepts: acceptsJudge },
 };
 
+const ROLE_DESCRIPTIONS: Record<ModelRole, string> = {
+	default: "The main model for conversations and coding.",
+	smol: "Fast model for quick tasks and small background jobs.",
+	slow: "Reasoning model for thorough analysis.",
+	vision: "Reads images when the active model cannot.",
+	plan: "Writes and reviews plans in plan mode.",
+	"agent-author": "Creates agent definitions in the agents hub.",
+	compaction: "Summarizes session history during soft compaction.",
+	commit: "Writes commit messages.",
+	tiny: "Small model for lightweight background jobs.",
+	title: "Generates session titles and /rename suggestions; fork mode uses the foreground model instead.",
+	memory: "Extracts and consolidates persistent memories.",
+	task: "Default model for delegated agent tasks.",
+	advisor: "Reviews the active agent's work and offers a second opinion.",
+	chronicler: "Captures session events for the Chronicler.",
+	"chronicler-summary": "Writes Chronicler summaries in the background.",
+	"chronicler-recall": "Ranks Chronicler recall results while you wait.",
+	classifier:
+		"Ranks live subagents for spoken updates and checks operator authorization for flagged model-and-effort deployments.",
+	effort: "Chooses reasoning effort for adaptive effort selection.",
+	prose: "Default model for prose chains.",
+	issues: "Drafts and files issues through /issue.",
+	"deck-inbox": "Classifies NeoDeck inbox items and chooses their destination.",
+	image: "Generates and edits images.",
+	web: "Searches the web.",
+	speech: "Reads text aloud.",
+	dictation: "Transcribes speech to text.",
+	judge: "Evaluates answers against criteria.",
+};
+
+for (const role of MODEL_ROLE_IDS) MODEL_ROLES[role].description = ROLE_DESCRIPTIONS[role];
+
 export type RoleInfo = ModelRoleInfo;
 
 /** Whether a role belongs to the non-chat model-kind section. */
@@ -132,7 +174,7 @@ export function roleCandidatePool(role: string, settings: Settings, registry: Mo
  * entries across settings.
  */
 export function getKnownRoleIds(settings: Settings): string[] {
-	const roles: string[] = MODEL_ROLE_IDS.filter(role => !MODEL_ROLES[role].hidden);
+	const roles: string[] = [...MODEL_ROLE_IDS];
 	const seen = new Set<string>(roles);
 	const addRole = (role: string) => {
 		if (seen.has(role)) return;
@@ -161,6 +203,7 @@ export function getRoleInfo(role: string, settings: Settings): RoleInfo {
 			tag: builtIn?.tag,
 			name: configured.name || builtIn?.name || role,
 			color: configured.color && isValidThemeColor(configured.color) ? configured.color : builtIn?.color,
+			description: configured.description ?? builtIn?.description,
 			hidden: configured.hidden ?? builtIn?.hidden,
 			accepts: builtIn?.accepts ?? acceptsChat,
 			section: builtIn?.section ?? "chat",
@@ -170,4 +213,41 @@ export function getRoleInfo(role: string, settings: Settings): RoleInfo {
 	if (builtIn) return builtIn;
 
 	return { name: role, color: "muted", accepts: acceptsChat, section: "chat" };
+}
+
+/** Save a description without replacing the role's name, color, or visibility metadata. */
+export function setRoleDescription(role: string, description: string, settings: Settings): void {
+	const tags = cfgModelTags.get(settings);
+	const metadata = Object.hasOwn(tags, role) ? tags[role] : undefined;
+	cfgModelTags.setEntry(settings, role, {
+		...metadata,
+		name: metadata?.name ?? getRoleInfo(role, settings).name,
+		description,
+	});
+}
+
+/** Remove one custom role's definition in the selected layer; inherited definitions remain intact. */
+export function deleteCustomRole(role: string, scope: "global" | "project", settings: Settings): void {
+	if (isModelRole(role)) throw new Error(`Cannot delete built-in model role: ${role}`);
+	if (!getKnownRoleIds(settings).includes(role)) throw new Error(`Unknown model role: ${role}`);
+	const layer = scope === "global" ? settings.getGlobalSettings() : settings.getProjectSettings();
+	settings.setRoleModelAndEffort(role, undefined, undefined, scope);
+	if (scope === "global") {
+		cfgModelTags.setEntry(settings, role, undefined);
+		if (Array.isArray(layer.cycleOrder) && layer.cycleOrder.includes(role))
+			cfgCycleOrder.setMember(settings, role, { member: false });
+		settings.setFallbackChainAndEfforts(role, [], {});
+	} else {
+		const tags = layer.modelTags as ModelTagsSettings | undefined;
+		if (tags && Object.hasOwn(tags, role)) {
+			const next = { ...tags };
+			delete next[role];
+			settings.writeProjectValue(cfgModelTags, next);
+		}
+		if (Array.isArray(layer.cycleOrder) && layer.cycleOrder.includes(role))
+			settings.writeProjectValue(
+				cfgCycleOrder,
+				layer.cycleOrder.filter(item => item !== role),
+			);
+	}
 }

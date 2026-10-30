@@ -1,6 +1,12 @@
 import type { AgentContextTelemetry } from "../session/agent-telemetry";
 
-import type { AgentOptions, AgentTelemetryConfig, AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentOptions,
+	AgentTelemetryConfig,
+	AgentTool,
+	AgentToolContext,
+	ThinkingLevel,
+} from "@oh-my-pi/pi-agent-core";
 import type { EditStore } from "@oh-my-pi/pi-natives";
 import type { FetchImpl, ImageContent, Model, ServiceTierByFamily, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -36,6 +42,7 @@ import type { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import type { AgentRegistry } from "../registry/agent-registry";
 import type { ArtifactManager } from "../session/artifacts";
 import type { ClientBridge } from "../session/client-bridge";
+import type { SessionEnvironment } from "../session/environment";
 import type { CustomMessage } from "../session/messages";
 import type { UsageStatistics } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
@@ -216,6 +223,8 @@ export interface DeferredDiagnosticsEntry {
 
 /** Session context for tool factories */
 export interface ToolSession {
+	/** Live environment owned by this session, separate from process.env and other sessions. */
+	environment?: SessionEnvironment;
 	/** Current agent context telemetry snapshot, when provided by the session. */
 	getAgentTelemetry?: () => AgentContextTelemetry | undefined;
 	/** Current working directory */
@@ -450,6 +459,8 @@ export interface ToolSession {
 		origin: EffortOrigin;
 		selection?: EffortSelection;
 	};
+	/** Concrete active effort; undefined while Auto is pending, never its provisional wire default. */
+	getActualThinkingLevel?: () => ThinkingLevel | undefined;
 	/** Surface direct-call effort adjustments even when an eval helper returns only its answer. */
 	onEffortDisclosure?: (message: string) => void;
 	/** Get the session's live per-family service tiers (undefined = none). Source of truth for subagent `tier.subagent: inherit`. */

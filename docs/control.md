@@ -12,6 +12,8 @@ npi ctl %3 slash "/fast on"
 npi ctl %3 action app.model.select
 npi ctl %3 keys escape
 npi ctl %3 dialog_answer <id> '{"index":0}'
+npi ctl %3 rpc set_subagent_thinking_level '{"subagentId":"Worker","level":"high"}'
+npi ctl %3 rpc set_subagent_fast '{"subagentId":"Worker","enabled":true}'
 ```
 
 Read `state` before a write. Pass `if` revisions on draft and surface commands. A stale revision is `conflict` and the pane shows `⌁ <label> backed off`. Retry only after re-reading state. Do not use `tmux send-keys` on npi panes.
@@ -24,7 +26,23 @@ The `hello`, `get_status`, and `state` snapshots carry `session`: the same RPC s
 
 Control snapshots and subscribed `queue_update` events include an exact oldest prefix of each queue: at most 256 entries and 43,690 text characters per queue. The combined queues reserve at most half of a protocol-v1 frame even with worst-case JSON escaping. They stop before the first entry that would exceed either budget; no returned queue-chip text is shortened, so it remains valid for `remove_queued_message` and `promote_queued_message`. `queuedMessageCount` and `liveSteered` remain exact even when not all entries fit. RPC `get_state` keeps the full queue; `dequeue` can retrieve a full queued message.
 
-`get_subagents`, `get_subagent_messages`, `cancel_subagent`, `steer_subagent`, and `set_subagent_subscription` use the process's live subagent registry. Every connection sees the same roster, including subagents that started before it connected. `set_subagent_subscription` is per connection: lifecycle and progress frames (and, at `events`, raw subagent events) go only to connections that asked for them.
+`get_subagents`, `get_subagent_messages`, `cancel_subagent`, `steer_subagent`, `set_subagent_thinking_level`, `set_subagent_fast`, and `set_subagent_subscription` use the process's live subagent registry. Every connection sees the same roster, including subagents that started before it connected. `set_subagent_subscription` is per connection: lifecycle and progress frames (and, at `events`, raw subagent events) go only to connections that asked for them. Thinking-level and fast-mode changes apply to the selected running subagent's next provider request and persist across restart without changing the parent or global defaults. `get_subagents` reports the live model, effort and fast enabled/active state, including edits made from the focused Agent Hub view.
+
+Host tools contributed by `serve` or RPC `set_host_tools` belong to that
+authenticated connection, not to the terminal session as a whole. The effective
+tool set is the union of the terminal/stdio owner's tools and all attachments.
+Replacing, unserving, disconnecting, or rolling back a failed service removes
+only that attachment's definitions. A name already registered by another
+connection (or a non-host tool) rejects the complete registration without
+changing either tool set. Surviving tools retain their enabled state.
+
+Host-tool requests and cancellation go only to the registering connection.
+Successful replacement revokes old adapters and cancels calls to removed names;
+calls to surviving names can finish. `unserve`, disconnect, and canonical
+generation changes cancel that connection's outstanding calls. Late replies
+cannot complete revoked calls. After a generation change, an attachment must
+register its tools again. None of this transfers the session's writer lease or
+approval ownership.
 
 Disable publishing with `--no-control-socket` or `control.enabled=false`.
 
@@ -38,6 +56,7 @@ npi sessions list --json --cwd /path/to/project
 npi sessions list --json --all
 npi sessions list --json --session-dir /legacy/session-dir
 npi sessions read --json /absolute/session.jsonl --max-messages 200
+npi sessions entries --json --scope branch --direction backward --limit 100 /absolute/session.jsonl
 npi ctl pipe <instance-id> --label neocode
 ```
 
@@ -58,6 +77,14 @@ control publication by the session file's resolved real path. Roles can also be
 `rpc`, `acp`, or `print`. A busy session without a control endpoint cannot be
 attached; do not open it as another writer.
 An invalid creation timestamp falls back to the file's modification time.
+
+`messageCount` counts persisted message entries across the complete journal,
+including tool results and alternate branches. It is not the length of the
+visible transcript returned by `sessions read`. Counting streams the journal
+without loading image blobs or changing the resume picker's session selection.
+Counts are cached separately from journals and reused while file size and
+timestamps match. The first listing scans uncached journals; later listings
+recount only changed files. An unavailable cache does not prevent counting.
 
 `sessions read` returns `{ "version": 1, "session": { "path": "...", "id": "...",
 "cwd": "...", "title": null }, "messages": [...], "truncated": false }`. Each
@@ -101,6 +128,17 @@ pauses owner-frame consumption until the consumer drains. A blocked control sock
 pauses stdin consumption, including frames already buffered in the current chunk,
 until the socket drains.
 
+With `session_journal_events`, attachment also relays native journal commits,
+leaf changes, session identity changes and durable message-ID associations.
+Subscribe before fetching initial native pages and buffer those events while
+reconciling the snapshot. An owner changing session ID or canonical file
+invalidates the old binding. These are notifications from the existing writer,
+not a request to open the journal for writing. See [Native journal events](./rpc.md#native-journal-events).
+On an existing connection, use `snapshot_session_journal` after installing a new
+watcher and before paging. It emits the current native unsaved assistant as
+`message_start` with `snapshot: true` and the same ID future live events use,
+then replies. This does not create another writer or subscription.
+
 Stdin EOF sends `bye` and exits successfully; it detaches without stopping or
 aborting the owner. Owner socket closure also exits successfully. Resolution or
 authentication failure before any relayed frame produces one stderr JSON line
@@ -117,9 +155,18 @@ without a message cap and verify the saved leaf remains in the selected ancestry
 before appending new native entries; changed branches must not silently replace
 an existing host transcript.
 
+`session_journal` advertises canonical journal paging over RPC/control and the
+read-only `sessions entries` command. Prefer it for complete native history:
+`sessions read` remains the existing collapsed transcript export. `sessions entries`
+accepts `--scope journal|branch`, `--direction forward|backward`, `--cursor` and
+`--limit` and returns the [native journal page](./rpc.md#native-journal-pages).
+It never starts an agent, claims a writer lease, or rewrites a journal. Use the live
+owner's `get_entries_page` when attached; a disk reader can only observe the
+persisted leaf. JSON failures are stdout `{ "error": { "code": "...", "message": "..." } }`
+documents with a nonzero exit status.
+
 ## Monitor connections
 
 The [tmux agent monitor](./monitor.md) uses narrower connections. A full (token) connection sends `monitor_grant` with an `agentId` and gets back a capability for one subagent or advisor of this session's root. A pane says `hello` with `monitor: { capability }` and `protocolVersion: 2` instead of the token. Its hello reply carries the grant's scope (`agentId`, `kind`, `canChat`) and no session snapshot.
 
 A monitor connection can send only `monitor_subscribe` (agent snapshot, owner title and cwd, and the initial unsaved state), `monitor_transcript` (`fromByte`, returns complete JSONL lines), and `monitor_chat` (`text`, subagents only, not aborted ones). Anything else returns `monitor_only`. The owner pushes `monitor_live`, `monitor_agent`, `monitor_notice`, and `monitor_gone`. A grant ends when its agent is removed or replaced, when the root session changes, or when the owner revokes it, and the connection then gets `monitor_gone` with the reason.
-

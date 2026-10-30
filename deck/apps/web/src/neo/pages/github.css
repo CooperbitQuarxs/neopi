@@ -1,0 +1,43 @@
+.neo-github-page { --split-w: 240px; }
+.neo-github-page .neo-row { row-gap: 4px; padding: 12px 10px; }
+.neo-github-page .neo-row-title { overflow: hidden; text-overflow: ellipsis; }
+.neo-github-repo-head { min-height: 80px; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--neo-line-2); }
+.neo-github-repo-info { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 18px; font-size: 12px; min-width: 0; }
+.neo-github-repo-info h2 { font-size: 17px; font-weight: 600; width: 100%; overflow-wrap: anywhere; }
+.neo-github-page .neo-tabs { padding: 0 20px; flex-shrink: 0; }
+.neo-github-content { flex: 1; min-height: 0; overflow: auto; }
+.neo-github-content .neo-toolbar { padding: 12px 20px; border-bottom: 1px solid var(--neo-line-1); flex-wrap: wrap; }
+.neo-github-content .neo-search { width: min(300px, 100%); }
+.neo-github-wheel-view { padding: 20px; }
+.neo-wheel { display: flex; gap: 5px; align-items: stretch; overflow-x: auto; padding-bottom: 12px; }
+.neo-github-wheel-stage { min-width: 170px; flex: 1; border: 1px solid var(--neo-line-2); border-radius: var(--r-control); background: var(--neo-panel); overflow: hidden; }
+.neo-github-wheel-stage > header { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-height: 43px; padding: 0 12px; border-bottom: 1px solid var(--neo-line-2); color: rgb(var(--ink-2)); font-size: 12px; font-weight: 600; }
+.neo-github-wheel-stage > header > :last-child { color: rgb(var(--ink-3)); font-variant-numeric: tabular-nums; }
+.neo-github-wheel-stage[data-stage="implementing"] > header { border-top: 2px solid rgb(var(--accent)); }
+.neo-github-wheel-cards { display: flex; flex-direction: column; gap: 8px; padding: 8px; min-height: 280px; max-height: 55vh; overflow-y: auto; }
+.neo-wheel-card { flex-shrink: 0; background: var(--neo-card); border: 1px solid var(--neo-line-3); border-radius: var(--r-control); }
+.neo-github-wheel-open { display: flex; flex-direction: column; width: 100%; text-align: left; padding: 12px 10px; gap: 9px; cursor: pointer; border-radius: var(--r-control); }
+.neo-github-wheel-open:hover { background: var(--neo-hover); }
+.neo-github-wheel-open:focus-visible { outline: 2px solid var(--neo-focus); outline-offset: -2px; }
+.neo-github-wheel-number, .neo-github-wheel-open > .neo-dim { font-size: 11px; color: rgb(var(--ink-3)); }
+.neo-github-wheel-title { font-size: 12.5px; line-height: 1.5; font-weight: 500; overflow-wrap: anywhere; }
+.neo-github-wheel-connector { display: flex; align-items: center; justify-content: center; flex: 0 0 8px; color: rgb(var(--ink-4)); font-size: 16px; }
+.neo-github-stage-empty { color: rgb(var(--ink-4)); font-size: 12px; text-align: center; padding-top: 22px; }
+.neo-github-wheel-summary { border-top: 1px solid var(--neo-line-1); margin-top: 8px; padding-top: 16px; color: rgb(var(--ink-3)); font-size: 12px; line-height: 1.7; max-width: 80ch; }
+.neo-github-snapshot { padding: 10px 20px; border-top: 1px solid var(--neo-line-1); color: rgb(var(--ink-3)); font-size: 11px; line-height: 1.6; }
+.neo-github-issue-title { display: flex; flex-direction: column; gap: 7px; padding: 4px 0; }
+.neo-github-label-text { color: rgb(var(--ink-3)); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.neo-github-check-dots { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.neo-github-drawer-content, .neo-github-form { display: flex; flex-direction: column; gap: 20px; }
+.neo-github-check-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; font-size: 12.5px; }
+.neo-github-comment { padding: 14px 0; border-bottom: 1px solid var(--neo-line-2); display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
+.neo-github-comment header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.neo-github-comment time { font-size: 11px; color: rgb(var(--ink-3)); }
+.neo-github-field { display: flex; flex-direction: column; gap: 8px; color: rgb(var(--ink-2)); font-size: 12.5px; }
+.neo-github-repositories { width: 100%; min-height: 200px; padding: 12px; line-height: 1.8; resize: vertical; }
+.neo-github-repositories:focus-visible { outline: 2px solid var(--neo-focus); outline-offset: 2px; }
+.neo-github-form > .neo-dim { font-size: 12px; line-height: 1.7; }
+.neo-github-loading { padding: 24px; color: rgb(var(--ink-3)); }
+@media (max-width: 1200px) { .neo-github-repo-head { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 900px) { .neo-github-page .neo-split { grid-template-rows: auto minmax(0, 1fr); } .neo-github-page .neo-split-list { max-height: 180px; } .neo-github-page .neo-split-rows { flex-direction: row; overflow-x: auto; } .neo-github-page .neo-row { min-width: 210px; } .neo-github-page .neo-split-group { display: none; } .neo-github-wheel-view { padding: 12px; } }
+.neo-github-detail-section h3 { font-size: 13px; font-weight: 600; margin-bottom: 12px; }

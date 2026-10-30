@@ -133,7 +133,7 @@
 			{
 				"name": "get_state",
 				"doc": "Snapshot the session state.",
-				"params": null,
+				"params": "GetStateParams",
 				"result": "SessionState",
 				"nullable": false,
 				"unwrap": null,
@@ -186,10 +186,153 @@
 				"clientOmit": []
 			},
 			{
+				"name": "get_themes_configuration",
+				"doc": "Read native theme discovery and scoped selections.",
+				"params": null,
+				"result": "ThemesConfiguration",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "get_theme",
+				"doc": "Read the resolved colors of one installed native theme without selecting it.",
+				"params": "GetThemeParams",
+				"result": "ThemePalette",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "update_theme",
+				"doc": "Set or inherit one native theme slot with an expected scoped value.",
+				"params": "UpdateThemeParams",
+				"result": "ThemesConfiguration",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "query_model_selector",
+				"doc": "Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.",
+				"params": "QueryModelSelectorParams",
+				"result": "ModelSelectorResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "set_role",
 				"doc": "Select a model role.",
 				"params": "SetRoleParams",
 				"result": "SetRoleResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "get_models_configuration",
+				"doc": "Read the native provider catalog, scoped model roles, and effort rules.",
+				"params": null,
+				"result": "GetModelsConfigurationResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_model_role_configuration",
+				"doc": "Save or clear a role selector and effort in the explicit scope, independently of the default role-storage preference.",
+				"params": "SetModelRoleConfigurationParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_model_role_fallbacks",
+				"doc": "Save one role's native global fallback chain and per-entry efforts, rejecting stale values.",
+				"params": "SetModelRoleFallbacksParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_model_role_description",
+				"doc": "Save one known role's global description without replacing its other metadata.",
+				"params": "SetModelRoleDescriptionParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "delete_model_role",
+				"doc": "Delete a custom role definition in one scope; refuse built-ins and preserve inherited definitions.",
+				"params": "DeleteModelRoleParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_model_role_storage",
+				"doc": "Choose native global or project role storage, rejecting a stale preference.",
+				"params": "SetModelRoleStorageParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_effort_rules",
+				"doc": "Save or clear native implicit effort rules in one scope, rejecting a stale expected value.",
+				"params": "SetEffortRulesParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_provider_api_key",
+				"doc": "Upsert a key in the native credential store without replacing other accounts.",
+				"params": "SetProviderApiKeyParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "cancel_login",
+				"doc": "Cancel this connection's active login request.",
+				"params": "CancelLoginParams",
+				"result": null,
 				"nullable": false,
 				"unwrap": null,
 				"timeoutMs": null,
@@ -307,10 +450,54 @@
 				"clientOmit": []
 			},
 			{
+				"name": "snapshot_session_journal",
+				"doc": "Emit native journal identity, retained durable message associations and current unsaved assistant before responding, without replacing subscriptions.",
+				"params": null,
+				"result": "JournalIdentity",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "get_entries_page",
+				"doc": "Read one canonical native journal or selected-branch page.",
+				"params": "GetEntriesPageParams",
+				"result": "JournalPage",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "get_tree",
 				"doc": "Read the raw session tree.",
 				"params": null,
 				"result": "SessionTree",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "navigate_tree",
+				"doc": "Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken.",
+				"params": "NavigateTreeParams",
+				"result": "NavigateTreeResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "resume_tree",
+				"doc": "Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript.",
+				"params": "ResumeTreeParams",
+				"result": "ResumeTreeResult",
 				"nullable": false,
 				"unwrap": null,
 				"timeoutMs": null,
@@ -412,6 +599,28 @@
 				"doc": "Send a message to a running subagent as its user.",
 				"params": "SteerSubagentParams",
 				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_subagent_thinking_level",
+				"doc": "Set a running subagent's thinking level from its next request, preserving it across restore.",
+				"params": "SetSubagentThinkingLevelParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_subagent_fast",
+				"doc": "Enable or disable fast mode only for a running subagent, from its next request.",
+				"params": "SetSubagentFastParams",
+				"result": "FastModeResult",
 				"nullable": false,
 				"unwrap": null,
 				"timeoutMs": null,
@@ -777,6 +986,17 @@
 				"result": "GetLogoutAccountsResult",
 				"nullable": false,
 				"unwrap": "accounts",
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "activate_account",
+				"doc": "Activate a stored OAuth account for this session through native credential affinity and journal pins.",
+				"params": "ActivateAccountParams",
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
 				"timeoutMs": null,
 				"completion": null,
 				"clientOmit": []
@@ -2086,6 +2306,18 @@
 			],
 			"type": "string"
 		},
+		"ThinkingEffort": {
+			"enum": [
+				"off",
+				"minimal",
+				"low",
+				"medium",
+				"high",
+				"xhigh",
+				"max"
+			],
+			"type": "string"
+		},
 		"ThinkingLevel": {
 			"enum": [
 				"inherit",
@@ -2246,6 +2478,9 @@
 					],
 					"description": "Null when the provider does not report a limit."
 				},
+				"description": {
+					"type": "string"
+				},
 				"headers": {
 					"type": "object",
 					"properties": {},
@@ -2288,12 +2523,177 @@
 			],
 			"description": "Model descriptor: the client-relevant subset of the server's model record."
 		},
+		"ThemeSelection": {
+			"type": "object",
+			"properties": {
+				"effective": {
+					"type": "string"
+				},
+				"global": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"project": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"colors": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"type": "string"
+					}
+				}
+			},
+			"required": [
+				"effective",
+				"global",
+				"project",
+				"colors"
+			]
+		},
+		"ThemeSelections": {
+			"type": "object",
+			"properties": {
+				"dark": {
+					"$ref": "#/$defs/ThemeSelection"
+				},
+				"light": {
+					"$ref": "#/$defs/ThemeSelection"
+				}
+			},
+			"required": [
+				"dark",
+				"light"
+			]
+		},
+		"ThemesConfiguration": {
+			"type": "object",
+			"properties": {
+				"themes": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"selection": {
+					"$ref": "#/$defs/ThemeSelections"
+				}
+			},
+			"required": [
+				"themes",
+				"selection"
+			]
+		},
+		"ThemePalette": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string"
+				},
+				"colors": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"type": "string"
+					}
+				}
+			},
+			"required": [
+				"name",
+				"colors"
+			]
+		},
 		"ApprovalHandler": {
 			"enum": [
 				"host",
 				"ui"
 			],
 			"type": "string"
+		},
+		"ApprovalMode": {
+			"enum": [
+				"always-ask",
+				"write",
+				"yolo"
+			],
+			"type": "string"
+		},
+		"SessionUsage": {
+			"type": "object",
+			"properties": {
+				"input": {
+					"type": "number"
+				},
+				"output": {
+					"type": "number"
+				},
+				"cacheRead": {
+					"type": "number"
+				},
+				"cacheWrite": {
+					"type": "number"
+				},
+				"totalTokens": {
+					"type": "number"
+				},
+				"orchestrationInput": {
+					"type": "number"
+				},
+				"orchestrationOutput": {
+					"type": "number"
+				},
+				"orchestrationCacheRead": {
+					"type": "number"
+				},
+				"premiumRequests": {
+					"type": "number"
+				},
+				"cost": {
+					"type": "number"
+				},
+				"subagentCost": {
+					"type": "number"
+				},
+				"advisorCost": {
+					"type": "number"
+				},
+				"advisorCostState": {
+					"enum": [
+						"ready",
+						"restoring",
+						"unavailable"
+					],
+					"type": "string"
+				}
+			},
+			"required": [
+				"input",
+				"output",
+				"cacheRead",
+				"cacheWrite",
+				"totalTokens",
+				"orchestrationInput",
+				"orchestrationOutput",
+				"orchestrationCacheRead",
+				"premiumRequests",
+				"cost",
+				"subagentCost",
+				"advisorCost",
+				"advisorCostState"
+			]
 		},
 		"ChatModeSetting": {
 			"enum": [
@@ -2434,6 +2834,9 @@
 				"hidden": {
 					"type": "boolean"
 				},
+				"description": {
+					"type": "string"
+				},
 				"tag": {
 					"type": "string"
 				},
@@ -2469,6 +2872,324 @@
 			},
 			"required": [
 				"roles"
+			]
+		},
+		"ModelSelectorPerformanceSource": {
+			"enum": [
+				"measured",
+				"catalog"
+			],
+			"type": "string"
+		},
+		"ModelSelectorFacts": {
+			"type": "object",
+			"properties": {
+				"intelligence": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"ttftMs": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"tokensPerSecond": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"contextWindow": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"effectiveContextWindow": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"inputCostPerMillion": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"outputCostPerMillion": {
+					"anyOf": [
+						{
+							"type": "number"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"performanceSource": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ModelSelectorPerformanceSource"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"serviceTier": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"intelligence",
+				"ttftMs",
+				"tokensPerSecond",
+				"contextWindow",
+				"effectiveContextWindow",
+				"inputCostPerMillion",
+				"outputCostPerMillion",
+				"performanceSource",
+				"serviceTier"
+			]
+		},
+		"ModelSelectorItem": {
+			"type": "object",
+			"properties": {
+				"selector": {
+					"type": "string"
+				},
+				"provider": {
+					"type": "string"
+				},
+				"id": {
+					"type": "string"
+				},
+				"name": {
+					"type": "string"
+				},
+				"resolvedSelector": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"facts": {
+					"$ref": "#/$defs/ModelSelectorFacts"
+				},
+				"description": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"selector",
+				"provider",
+				"id",
+				"name",
+				"resolvedSelector",
+				"facts"
+			]
+		},
+		"ModelSelectorResult": {
+			"type": "object",
+			"properties": {
+				"items": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/ModelSelectorItem"
+					}
+				},
+				"roles": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/ModelSelectorItem"
+					}
+				},
+				"error": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"items",
+				"roles",
+				"error"
+			]
+		},
+		"ModelEffortSelection": {
+			"type": "object",
+			"properties": {
+				"mode": {
+					"enum": [
+						"fixed",
+						"auto",
+						"inherit"
+					],
+					"type": "string"
+				},
+				"level": {
+					"$ref": "#/$defs/ThinkingLevel"
+				},
+				"allowed": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"selector": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"mode"
+			]
+		},
+		"ModelEffortRule": {
+			"type": "object",
+			"properties": {
+				"selector": {
+					"type": "string"
+				},
+				"allowed": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				}
+			},
+			"required": [
+				"selector",
+				"allowed"
+			]
+		},
+		"ModelRoleConfigurationValue": {
+			"type": "object",
+			"properties": {
+				"selector": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"effort": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ModelEffortSelection"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"selector",
+				"effort"
+			]
+		},
+		"ModelRoleFallbacks": {
+			"type": "object",
+			"properties": {
+				"chain": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"efforts": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"$ref": "#/$defs/ModelEffortSelection"
+					}
+				}
+			},
+			"required": [
+				"chain",
+				"efforts"
+			]
+		},
+		"ModelEffortRuleScopes": {
+			"type": "object",
+			"properties": {
+				"global": {
+					"anyOf": [
+						{
+							"type": "array",
+							"items": {
+								"$ref": "#/$defs/ModelEffortRule"
+							}
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"project": {
+					"anyOf": [
+						{
+							"type": "array",
+							"items": {
+								"$ref": "#/$defs/ModelEffortRule"
+							}
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"global",
+				"project"
 			]
 		},
 		"ProviderUsageReport": {
@@ -3526,6 +4247,12 @@
 				"sessionName": {
 					"type": "string"
 				},
+				"approvalMode": {
+					"$ref": "#/$defs/ApprovalMode"
+				},
+				"sessionUsage": {
+					"$ref": "#/$defs/SessionUsage"
+				},
 				"autoCompactionEnabled": {
 					"type": "boolean",
 					"default": false
@@ -4134,6 +4861,82 @@
 			],
 			"description": "OMP-native session entries in append order."
 		},
+		"JournalIdentity": {
+			"type": "object",
+			"properties": {
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"sessionId",
+				"sessionFile",
+				"leafId"
+			]
+		},
+		"JournalPage": {
+			"type": "object",
+			"properties": {
+				"entries": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {},
+						"additionalProperties": {}
+					}
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"type": "string"
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"totalEntries": {
+					"type": "integer"
+				},
+				"nextCursor": {
+					"type": "string",
+					"description": "Opaque cursor for the next page; absent on the last page."
+				}
+			},
+			"required": [
+				"entries",
+				"sessionId",
+				"sessionFile",
+				"leafId",
+				"totalEntries"
+			]
+		},
 		"SessionTree": {
 			"type": "object",
 			"properties": {
@@ -4161,6 +4964,225 @@
 				"leafId"
 			],
 			"description": "Raw session tree roots."
+		},
+		"TreeAskOptionNote": {
+			"type": "object",
+			"properties": {
+				"option": {
+					"type": "string"
+				},
+				"note": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"option",
+				"note"
+			]
+		},
+		"TreeAskQuestionResult": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"question": {
+					"type": "string"
+				},
+				"options": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"multi": {
+					"type": "boolean"
+				},
+				"selectedOptions": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"customInput": {
+					"type": "string"
+				},
+				"note": {
+					"type": "string"
+				},
+				"optionNotes": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/TreeAskOptionNote"
+					}
+				},
+				"timedOut": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"id",
+				"question",
+				"options",
+				"multi",
+				"selectedOptions"
+			]
+		},
+		"TreeAskDetails": {
+			"type": "object",
+			"properties": {
+				"question": {
+					"type": "string"
+				},
+				"options": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"multi": {
+					"type": "boolean"
+				},
+				"selectedOptions": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"customInput": {
+					"type": "string"
+				},
+				"note": {
+					"type": "string"
+				},
+				"optionNotes": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/TreeAskOptionNote"
+					}
+				},
+				"timedOut": {
+					"type": "boolean"
+				},
+				"results": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/TreeAskQuestionResult"
+					}
+				},
+				"chatRedirect": {
+					"type": "boolean"
+				},
+				"questions": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				}
+			}
+		},
+		"TreeAskReanswer": {
+			"type": "object",
+			"properties": {
+				"content": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/UserContent"
+					}
+				},
+				"details": {
+					"$ref": "#/$defs/TreeAskDetails"
+				},
+				"isError": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"content"
+			]
+		},
+		"TreeAskReopen": {
+			"type": "object",
+			"properties": {
+				"toolCallId": {
+					"type": "string"
+				},
+				"questions": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/AskQuestion"
+					}
+				}
+			},
+			"required": [
+				"toolCallId",
+				"questions"
+			]
+		},
+		"NavigateTreeResult": {
+			"type": "object",
+			"properties": {
+				"sessionId": {
+					"type": "string"
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"outcome": {
+					"enum": [
+						"navigated",
+						"unchanged",
+						"cancelled",
+						"ask_reopen"
+					],
+					"type": "string"
+				},
+				"cancelled": {
+					"type": "boolean"
+				},
+				"sessionFile": {
+					"type": "string"
+				},
+				"aborted": {
+					"type": "boolean"
+				},
+				"editorText": {
+					"type": "string"
+				},
+				"editorImages": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/ImageContent"
+					}
+				},
+				"summaryEntry": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {}
+				},
+				"reopenAsk": {
+					"$ref": "#/$defs/TreeAskReopen"
+				},
+				"askReanswerCommitted": {
+					"type": "boolean"
+				},
+				"resumeToken": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"sessionId",
+				"leafId",
+				"outcome",
+				"cancelled"
+			]
 		},
 		"SubagentSnapshot": {
 			"type": "object",
@@ -4203,6 +5225,21 @@
 				},
 				"parentToolCallId": {
 					"type": "string"
+				},
+				"resolvedModel": {
+					"type": "string"
+				},
+				"resolvedModelIdentity": {
+					"type": "string"
+				},
+				"resolvedThinkingLevel": {
+					"$ref": "#/$defs/ConfiguredThinkingLevel"
+				},
+				"fastModeEnabled": {
+					"type": "boolean"
+				},
+				"fastModeActive": {
+					"type": "boolean"
 				}
 			},
 			"required": [
@@ -4364,13 +5401,34 @@
 				},
 				"authenticated": {
 					"type": "boolean"
+				},
+				"acceptsKeys": {
+					"type": "boolean"
+				},
+				"loginKind": {
+					"enum": [
+						"api-key",
+						"oauth-code",
+						"device-code",
+						"custom"
+					],
+					"type": "string"
+				},
+				"deviceCode": {
+					"type": "boolean"
+				},
+				"storeCredentialsAs": {
+					"type": "string"
 				}
 			},
 			"required": [
 				"id",
 				"name",
 				"available",
-				"authenticated"
+				"authenticated",
+				"acceptsKeys",
+				"loginKind",
+				"deviceCode"
 			]
 		},
 		"LogoutAccount": {
@@ -4472,6 +5530,164 @@
 			],
 			"type": "string"
 		},
+		"MessageEntryIdentity": {
+			"type": "object",
+			"properties": {
+				"messageId": {
+					"type": "string",
+					"description": "Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."
+				},
+				"entryId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"messageId",
+				"entryId"
+			]
+		},
+		"JournalStateEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "journal_state"
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"reason": {
+					"enum": [
+						"snapshot",
+						"identity",
+						"leaf"
+					],
+					"type": "string"
+				},
+				"messageEntryIds": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/MessageEntryIdentity"
+					},
+					"description": "Snapshot-only durable associations among the last 256 live messages assigned entry IDs by this native owner. Retained across observer reconnects, cleared on session identity change or process restart; absence is not evidence a message was not persisted."
+				}
+			},
+			"required": [
+				"type",
+				"sessionId",
+				"sessionFile",
+				"leafId",
+				"reason"
+			]
+		},
+		"JournalEntryEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "journal_entry"
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"entry": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {}
+				}
+			},
+			"required": [
+				"type",
+				"sessionId",
+				"sessionFile",
+				"leafId",
+				"entry"
+			]
+		},
+		"MessagePersistedEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "message_persisted"
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"messageId": {
+					"type": "string",
+					"description": "Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."
+				},
+				"entryId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"type",
+				"sessionId",
+				"sessionFile",
+				"leafId",
+				"messageId",
+				"entryId"
+			]
+		},
 		"AdvisorMessageEvent": {
 			"type": "object",
 			"properties": {
@@ -4556,6 +5772,17 @@
 				"type",
 				"mode",
 				"include"
+			]
+		},
+		"ApprovalModeChangedEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "approval_mode_changed"
+				}
+			},
+			"required": [
+				"type"
 			]
 		},
 		"MixtureHopEndEvent": {
@@ -5240,7 +6467,34 @@
 				},
 				"messageId": {
 					"type": "string",
-					"description": "Shared by the start, updates, and end of one message; unique per process."
+					"description": "Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."
+				},
+				"snapshot": {
+					"type": "boolean",
+					"description": "True for the current unsaved assistant at an ordered native snapshot boundary."
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"sessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"leafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
 				},
 				"requestModelProvider": {
 					"type": "string"
@@ -5277,7 +6531,7 @@
 				},
 				"messageId": {
 					"type": "string",
-					"description": "Shared by the start, updates, and end of one message; unique per process."
+					"description": "Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."
 				},
 				"requestModelProvider": {
 					"type": "string"
@@ -5312,7 +6566,7 @@
 				},
 				"messageId": {
 					"type": "string",
-					"description": "Shared by the start, updates, and end of one message; unique per process."
+					"description": "Opaque live identity shared by one message's snapshot, updates and end across the native owner's transport observers; unique across native owner incarnations, including reopening the same journal after restart. Not a journal entry ID; do not parse its format."
 				},
 				"requestModelProvider": {
 					"type": "string"
@@ -5652,6 +6906,28 @@
 				"type"
 			]
 		},
+		"ThemesConfigurationChangedEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "themes_configuration_changed"
+				}
+			},
+			"required": [
+				"type"
+			]
+		},
+		"ModelsConfigurationChangedEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "models_configuration_changed"
+				}
+			},
+			"required": [
+				"type"
+			]
+		},
 		"ConfigWarningsChangedEvent": {
 			"type": "object",
 			"properties": {
@@ -5793,7 +7069,7 @@
 					"description": "The user's selector when it differs from the effective level."
 				},
 				"resolved": {
-					"$ref": "#/$defs/Effort",
+					"$ref": "#/$defs/ThinkingEffort",
 					"description": "The level `auto` resolved to this turn, once classified."
 				}
 			},
@@ -5862,6 +7138,15 @@
 		"RpcAgentEvent": {
 			"anyOf": [
 				{
+					"$ref": "#/$defs/JournalStateEvent"
+				},
+				{
+					"$ref": "#/$defs/JournalEntryEvent"
+				},
+				{
+					"$ref": "#/$defs/MessagePersistedEvent"
+				},
+				{
 					"$ref": "#/$defs/AdvisorMessageEvent"
 				},
 				{
@@ -5872,6 +7157,9 @@
 				},
 				{
 					"$ref": "#/$defs/ChatModeChangedEvent"
+				},
+				{
+					"$ref": "#/$defs/ApprovalModeChangedEvent"
 				},
 				{
 					"$ref": "#/$defs/MixtureHopEndEvent"
@@ -5947,6 +7235,12 @@
 				},
 				{
 					"$ref": "#/$defs/ModelChangedEvent"
+				},
+				{
+					"$ref": "#/$defs/ModelsConfigurationChangedEvent"
+				},
+				{
+					"$ref": "#/$defs/ThemesConfigurationChangedEvent"
 				},
 				{
 					"$ref": "#/$defs/ConfigWarningsChangedEvent"
@@ -6711,6 +8005,12 @@
 				},
 				"timeout": {
 					"type": "integer"
+				},
+				"secret": {
+					"type": "boolean"
+				},
+				"loginId": {
+					"type": "string"
 				}
 			},
 			"required": [
@@ -6820,6 +8120,9 @@
 				},
 				"notifyType": {
 					"$ref": "#/$defs/NotifyType"
+				},
+				"loginId": {
+					"type": "string"
 				}
 			},
 			"required": [
@@ -6953,6 +8256,13 @@
 					"description": "Short loopback redirect to `url`; the truncation-safe copy target."
 				},
 				"instructions": {
+					"type": "string"
+				},
+				"userCode": {
+					"type": "string",
+					"description": "User-facing device verification code, never the private polling device_code."
+				},
+				"loginId": {
 					"type": "string"
 				}
 			},
@@ -7732,6 +9042,14 @@
 				"sessionDir"
 			]
 		},
+		"GetStateParams": {
+			"type": "object",
+			"properties": {
+				"includeDump": {
+					"type": "boolean"
+				}
+			}
+		},
 		"CreateMixtureParams": {
 			"type": "object",
 			"properties": {
@@ -7794,6 +9112,73 @@
 				"name"
 			]
 		},
+		"GetThemeParams": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"name"
+			]
+		},
+		"UpdateThemeParams": {
+			"type": "object",
+			"properties": {
+				"appearance": {
+					"enum": [
+						"dark",
+						"light"
+					],
+					"type": "string"
+				},
+				"scope": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"name": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"expected": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"appearance",
+				"scope",
+				"name",
+				"expected"
+			]
+		},
+		"QueryModelSelectorParams": {
+			"type": "object",
+			"properties": {
+				"query": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"query"
+			]
+		},
 		"SetRoleParams": {
 			"type": "object",
 			"properties": {
@@ -7821,6 +9206,286 @@
 			"required": [
 				"role",
 				"model"
+			]
+		},
+		"GetModelsConfigurationResult": {
+			"type": "object",
+			"properties": {
+				"providers": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {},
+						"additionalProperties": {}
+					}
+				},
+				"models": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {},
+						"additionalProperties": {}
+					}
+				},
+				"roles": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {},
+						"additionalProperties": {}
+					}
+				},
+				"roleStorage": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"effortMode": {
+					"enum": [
+						"replacement",
+						"legacy"
+					],
+					"type": "string"
+				},
+				"effortRules": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/ModelEffortRule"
+					}
+				},
+				"effortRulesProvenance": {
+					"type": "string"
+				},
+				"effortRuleScopes": {
+					"$ref": "#/$defs/ModelEffortRuleScopes"
+				},
+				"effortChoices": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				}
+			},
+			"required": [
+				"providers",
+				"models",
+				"roles",
+				"roleStorage",
+				"effortMode",
+				"effortRules",
+				"effortRulesProvenance",
+				"effortRuleScopes",
+				"effortChoices"
+			]
+		},
+		"SetModelRoleConfigurationParams": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"scope": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"expected": {
+					"$ref": "#/$defs/ModelRoleConfigurationValue"
+				},
+				"selector": {
+					"type": "string"
+				},
+				"effort": {
+					"$ref": "#/$defs/ModelEffortSelection"
+				}
+			},
+			"required": [
+				"role",
+				"scope",
+				"expected"
+			]
+		},
+		"SetModelRoleFallbacksParams": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"scope": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"chain": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"efforts": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"$ref": "#/$defs/ModelEffortSelection"
+					}
+				},
+				"expected": {
+					"$ref": "#/$defs/ModelRoleFallbacks"
+				}
+			},
+			"required": [
+				"role",
+				"scope",
+				"chain",
+				"efforts",
+				"expected"
+			]
+		},
+		"SetModelRoleDescriptionParams": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"scope": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"description": {
+					"type": "string"
+				},
+				"expected": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"role",
+				"scope",
+				"description",
+				"expected"
+			]
+		},
+		"DeleteModelRoleParams": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"scope": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"expected": {
+					"$ref": "#/$defs/ModelRoleConfigurationValue"
+				}
+			},
+			"required": [
+				"role",
+				"scope",
+				"expected"
+			]
+		},
+		"SetModelRoleStorageParams": {
+			"type": "object",
+			"properties": {
+				"value": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"expected": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				}
+			},
+			"required": [
+				"value",
+				"expected"
+			]
+		},
+		"SetEffortRulesParams": {
+			"type": "object",
+			"properties": {
+				"scope": {
+					"enum": [
+						"global",
+						"project"
+					],
+					"type": "string"
+				},
+				"expected": {
+					"anyOf": [
+						{
+							"type": "array",
+							"items": {
+								"$ref": "#/$defs/ModelEffortRule"
+							}
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"rules": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/ModelEffortRule"
+					}
+				}
+			},
+			"required": [
+				"scope",
+				"expected"
+			]
+		},
+		"SetProviderApiKeyParams": {
+			"type": "object",
+			"properties": {
+				"providerId": {
+					"type": "string"
+				},
+				"apiKey": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"providerId",
+				"apiKey"
+			]
+		},
+		"CancelLoginParams": {
+			"type": "object",
+			"properties": {
+				"loginId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"loginId"
 			]
 		},
 		"GetUsageParams": {
@@ -8022,6 +9687,128 @@
 					"type": "string"
 				}
 			}
+		},
+		"GetEntriesPageParams": {
+			"type": "object",
+			"properties": {
+				"scope": {
+					"enum": [
+						"journal",
+						"branch"
+					],
+					"type": "string"
+				},
+				"direction": {
+					"enum": [
+						"forward",
+						"backward"
+					],
+					"type": "string"
+				},
+				"cursor": {
+					"type": "string"
+				},
+				"limit": {
+					"type": "integer"
+				}
+			}
+		},
+		"NavigateTreeParams": {
+			"type": "object",
+			"properties": {
+				"targetId": {
+					"type": "string"
+				},
+				"expectedSessionId": {
+					"type": "string"
+				},
+				"expectedSessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"expectedLeafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"summarize": {
+					"type": "boolean"
+				},
+				"customInstructions": {
+					"type": "string"
+				},
+				"allowAskReopen": {
+					"type": "boolean"
+				},
+				"reanswerAskResult": {
+					"$ref": "#/$defs/TreeAskReanswer"
+				}
+			},
+			"required": [
+				"targetId",
+				"expectedSessionId",
+				"expectedSessionFile",
+				"expectedLeafId"
+			]
+		},
+		"ResumeTreeParams": {
+			"type": "object",
+			"properties": {
+				"resumeToken": {
+					"type": "string"
+				},
+				"expectedSessionId": {
+					"type": "string"
+				},
+				"expectedSessionFile": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"expectedLeafId": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"resumeToken",
+				"expectedSessionId",
+				"expectedSessionFile",
+				"expectedLeafId"
+			]
+		},
+		"ResumeTreeResult": {
+			"type": "object",
+			"properties": {
+				"resumed": {
+					"const": true
+				}
+			},
+			"required": [
+				"resumed"
+			]
 		},
 		"SetTodosParams": {
 			"type": "object",
@@ -8240,6 +10027,36 @@
 			"required": [
 				"subagentId",
 				"message"
+			]
+		},
+		"SetSubagentThinkingLevelParams": {
+			"type": "object",
+			"properties": {
+				"subagentId": {
+					"type": "string"
+				},
+				"level": {
+					"$ref": "#/$defs/ThinkingLevel"
+				}
+			},
+			"required": [
+				"subagentId",
+				"level"
+			]
+		},
+		"SetSubagentFastParams": {
+			"type": "object",
+			"properties": {
+				"subagentId": {
+					"type": "string"
+				},
+				"enabled": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"subagentId",
+				"enabled"
 			]
 		},
 		"LiveStartParams": {
@@ -8623,6 +10440,21 @@
 			},
 			"required": [
 				"accounts"
+			]
+		},
+		"ActivateAccountParams": {
+			"type": "object",
+			"properties": {
+				"providerId": {
+					"type": "string"
+				},
+				"credentialId": {
+					"type": "integer"
+				}
+			},
+			"required": [
+				"providerId",
+				"credentialId"
 			]
 		},
 		"LogoutParams": {

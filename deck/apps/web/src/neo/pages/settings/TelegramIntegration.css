@@ -1,0 +1,40 @@
+.neo-telegram { min-width: 0; }
+.neo-telegram .neo-card-body { gap: 0; }
+.neo-telegram-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: rgb(var(--ink-2)); }
+.neo-telegram h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.neo-telegram h3 span { color: rgb(var(--ink-3)); font-size: 12px; font-weight: 400; margin-left: 6px; }
+.neo-telegram p { margin: 0; color: rgb(var(--ink-3)); font-size: 12.5px; line-height: 1.6; max-width: 72ch; }
+.neo-telegram a { color: rgb(var(--accent)); text-underline-offset: 3px; }
+.neo-telegram-setup { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+.neo-telegram-section { display: flex; flex-direction: column; align-items: stretch; gap: 14px; padding: 8px 22px 24px 0; min-width: 0; }
+.neo-telegram-section + .neo-telegram-section { padding-left: 24px; padding-right: 0; border-left: 1px solid var(--neo-line-1); }
+.neo-telegram-section > .neo-btn { align-self: flex-start; }
+.neo-telegram label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: rgb(var(--ink-2)); min-width: 0; }
+.neo-telegram label.neo-check { flex-direction: row; gap: 8px; }
+.neo-telegram-access { padding-block: 4px; }
+.neo-telegram-access summary { font-size: 12.5px; cursor: pointer; padding-block: 4px; }
+.neo-telegram-access > :not(summary) { margin-top: 12px; }
+.neo-telegram-invitation { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; border-left: 2px solid var(--neo-accent-a); background: var(--neo-raised); padding: 14px; font-size: 13px; }
+.neo-telegram-invitation code { display: block; overflow-wrap: anywhere; font-size: 11.5px; }
+.neo-telegram-users > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--neo-line-1); font-size: 13px; }
+.neo-telegram small { display: block; color: rgb(var(--ink-3)); font-size: 11px; overflow-wrap: anywhere; line-height: 1.5; }
+.neo-telegram-routing { padding-top: 20px; border-top: 1px solid var(--neo-line-1); display: flex; flex-direction: column; gap: 14px; }
+.neo-telegram-routing-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.neo-telegram-routing-heading h3 { margin-bottom: 5px; }
+.neo-telegram-conversation { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(140px, 1fr) minmax(170px, 1.5fr) 80px; gap: 16px; align-items: center; padding: 14px 0; border-top: 1px solid var(--neo-line-1); }
+.neo-telegram-conversation strong { font-weight: 500; font-size: 13px; overflow-wrap: anywhere; }
+.neo-telegram-notify { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; font-size: 12px; color: rgb(var(--ink-2)); }
+.neo-telegram-logs { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.6; }
+.neo-telegram-mode { border: 0; padding: 0; margin: 0; min-width: 0; }
+.neo-telegram-mode legend { padding: 0 0 6px; font-size: 12px; color: rgb(var(--ink-2)); }
+@media (max-width: 1000px) {
+	.neo-telegram-conversation { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (max-width: 700px) {
+	.neo-telegram-setup { grid-template-columns: minmax(0, 1fr); }
+	.neo-telegram-section { padding-right: 0; }
+	.neo-telegram-section + .neo-telegram-section { border-left: 0; border-top: 1px solid var(--neo-line-1); padding-left: 0; padding-top: 20px; }
+	.neo-telegram-routing-heading { flex-direction: column; gap: 8px; }
+	.neo-telegram-conversation { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+	.neo-telegram-notify { flex-direction: row; align-items: center; }
+}
