@@ -339,6 +339,11 @@ export declare class LiveWebRtcPeer {
    * frames.
    */
   setMuted(muted: boolean): void
+  /**
+   * Silence queued audio and discard new remote audio without muting the
+   * microphone.
+   */
+  setOutputSuppressed(suppressed: boolean): void
   /** Close media, the data channel, the peer connection, and speaker playback. */
   close(): Promise<void>
 }
@@ -1274,6 +1279,13 @@ export declare function copyToClipboard(text: string): void
  * in the same `(i, j)` visit order as the TS nested loop.
  */
 export declare function cosineSimilarityPairs(vectors: Float64Array, count: number, dim: number, threshold: number): Uint32Array
+
+/**
+ * Count valid top-level message entries in a file prefix without loading blobs
+ * or taking a writer lease. Includes tool results and alternate branches.
+ * Malformed records are skipped.
+ */
+export declare function countSessionMessages(path: string, maxBytes: number): Promise<number>
 
 /**
  * Count tokens in `input`.

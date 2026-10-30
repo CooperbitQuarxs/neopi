@@ -227,6 +227,28 @@ process.exit(0);
 }
 
 describe("runEvalCompletion", () => {
+	it.each([false, true])("applies an off-only effort rule to completion with Auto=%s", async auto => {
+		const model = makeReasoningModel("off-capable");
+		const session = makeSession({ available: [model], roles: { smol: "p/off-capable" } });
+		session.settings.setRoleEffortSelection("smol", auto ? { mode: "auto" } : { mode: "fixed", level: Effort.High });
+		cfgEffortRules.set(session.settings, [{ selector: "p/off-capable", allowed: ["off"] }]);
+		const calls = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "answer" }));
+		expect((await runEvalCompletionAndWait({ prompt: "q", model: "smol" }, { session })).text).toBe("answer");
+		expect(calls).toHaveBeenCalledTimes(1);
+		expect(calls.mock.calls[0]?.[2]?.reasoning).toBeUndefined();
+		expect(calls.mock.calls[0]?.[2]?.disableReasoning).toBe(true);
+	});
+
+	it("does not bypass effort rules for an implicit off completion", async () => {
+		const model = makeReasoningModel("off-capable");
+		const session = makeSession({ available: [model], roles: { smol: "p/off-capable:off" } });
+		cfgEffortRules.set(session.settings, [{ selector: "p/off-capable", allowed: [Effort.High] }]);
+		const calls = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "answer" }));
+		await runEvalCompletionAndWait({ prompt: "q", model: "smol" }, { session });
+		expect(calls.mock.calls[0]?.[2]?.reasoning).toBe(Effort.High);
+		expect(calls.mock.calls[0]?.[2]?.disableReasoning).toBe(false);
+	});
+
 	afterEach(() => {
 		vi.restoreAllMocks();
 		releaseCompletionHandles("Main");

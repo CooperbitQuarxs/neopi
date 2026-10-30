@@ -1,0 +1,104 @@
+.neo-settings-integrations-grid {
+	align-items: stretch;
+}
+
+.neo-settings-integrations-grid > .neo-card {
+	min-width: 0;
+}
+
+.neo-settings-integrations-status {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.neo-settings-integrations-count {
+	font-size: 14px;
+	font-weight: 550;
+}
+
+.neo-settings-integration-logs {
+	display: grid;
+	gap: 12px;
+	padding: 12px;
+	border: 1px solid var(--neo-line-2);
+	border-radius: 8px;
+	background: var(--neo-card);
+	font-family: var(--font-mono);
+	font-size: 12px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.neo-settings-integration-logs [data-stream="stderr"] {
+	color: rgb(var(--danger));
+}
+
+.neo-settings-integration-log-time {
+	color: rgb(var(--ink-3));
+	font-size: 11.5px;
+}
+
+.neo-settings-mcp-fields {
+	border: 0;
+	margin: 0;
+	padding: 0;
+	min-width: 0;
+}
+
+.neo-settings-mcp-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+}
+
+.neo-settings-mcp-entry,
+.neo-settings-mcp-pair {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.neo-settings-mcp-entry > .neo-input,
+.neo-settings-mcp-pair > .neo-input {
+	flex: 1;
+	min-width: 0;
+	font-family: var(--font-mono);
+}
+
+.neo-settings-mcp-name {
+	display: grid;
+	justify-items: start;
+	gap: 4px;
+}
+
+.neo-settings-mcp-details {
+	padding: 16px;
+	background: var(--neo-card);
+	overflow-wrap: anywhere;
+}
+
+.neo-settings-mcp-warning {
+	color: rgb(var(--warn));
+	font-size: 12.5px;
+}
+
+@media (max-width: 900px) {
+	.neo-settings-integrations-grid {
+		grid-template-columns: 1fr;
+	}
+}
+
+@media (max-width: 560px) {
+	.neo-settings-mcp-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.neo-settings-mcp-pair {
+		flex-wrap: wrap;
+	}
+
+	.neo-settings-mcp-pair > .neo-input {
+		flex-basis: 100%;
+	}
+}

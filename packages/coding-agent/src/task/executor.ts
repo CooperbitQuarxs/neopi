@@ -16,7 +16,8 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model, ServiceTierByFamily, Usage } from "@oh-my-pi/pi-ai";
 import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
-import { isRecord, logger, popLoopPhase, prompt, pushLoopPhase, sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, popLoopPhase, pushLoopPhase, sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobError, AsyncJobManager, type AsyncJobRunResult } from "../async";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
@@ -95,10 +96,12 @@ import { type ArtifactManager, writeArtifact } from "../session/artifacts";
 import { ASYNC_RESULT_MESSAGE_TYPE } from "../session/async-job-delivery";
 import type { AuthStorage } from "../session/auth-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
+import { getPrewalkPatterns, resolvePrewalkCrewSelection } from "../session/prewalk-crew";
 import { hasConversationalHistory, PendingSessionManager, SessionManager } from "../session/session-manager";
 import { truncateTail } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import {
 	type ConfiguredThinkingLevel,
+	parseConfiguredThinkingLevel,
 	prewalkWouldBeNoop,
 	resolveTaskEffortLevel,
 	type TaskEffort,
@@ -108,6 +111,7 @@ import { resolveEvalBackends } from "../tools/eval-backends";
 import { isIrcEnabled } from "../irc/messaging";
 import { LIST_STATUS_ORDER } from "@oh-my-pi/pi-tui/tools/irc";
 import { DEFAULT_PEER_ROSTER_LIMIT } from "@oh-my-pi/pi-tui/tools/irc";
+import { getLiveSubagentFacts, type LiveSubagentFacts } from "../registry/subagent-facts";
 import { normalizeSchema } from "../tools/jtd-to-json-schema";
 import { buildOutputValidator, summarizeValidationFailure } from "../tools/output-schema-validator";
 import { ToolAbortError } from "../tools/tool-errors";
@@ -378,7 +382,7 @@ function installSubagentRetryFallbackChain(args: {
 	return role;
 }
 
-export interface IrcPeerRosterRow {
+export interface IrcPeerRosterRow extends Partial<LiveSubagentFacts> {
 	id: string;
 	displayName: string;
 	kind: string;
@@ -417,6 +421,7 @@ export function collectIrcPeerRoster(
 		kind: peer.kind,
 		status: peer.status,
 		activity: peer.activity,
+		...(peer.session ? getLiveSubagentFacts(peer.session) : {}),
 	}));
 	let parkedCount = 0;
 	for (const ref of registry.list()) {
@@ -1249,6 +1254,7 @@ const MAX_YIELD_TOOL_ERRORS = 6;
 
 /** Inputs for the run monitor driving one subagent assignment. */
 interface RunMonitorArgs {
+	cwd?: string;
 	index: number;
 	id: string;
 	runToken: string;
@@ -1716,7 +1722,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	// failures just leave the label unset.
 	const labelSource = assignment?.trim();
 	if (!args.description && args.modelRegistry && args.settings && labelSource) {
-		generateTaskLabel(labelSource, args.modelRegistry, args.settings, id, abortSignal)
+		generateTaskLabel(labelSource, args.modelRegistry, args.settings, id, abortSignal, args.cwd)
 			.then(label => {
 				if (!label || abortSignal.aborted || progress.description) return;
 				progress.description = label;
@@ -2646,12 +2652,17 @@ async function driveSessionToResult(
 				if (!budgetStop && session.hasPendingAsyncWork()) break;
 				try {
 					retryCount++;
-					const reminder = prompt.render(submitReminderTemplate, {
-						retryCount,
-						maxRetries: MAX_YIELD_RETRIES,
-						budgetStop,
-						structured,
-					});
+					const reminder = renderPromptAsset(
+						"system/subagent-yield-reminder.md",
+						submitReminderTemplate,
+						{
+							retryCount,
+							maxRetries: MAX_YIELD_RETRIES,
+							budgetStop,
+							structured,
+						},
+						{ cwd: session.sessionManager.getCwd(), kind: "notice" },
+					);
 
 					const isFinalRetry = retryCount >= MAX_YIELD_RETRIES;
 					// Last chance: the next accepted yield ends the run, incremental
@@ -2744,11 +2755,16 @@ async function driveSessionToResult(
 				const running = session.getAsyncJobSnapshot()?.running ?? [];
 				if (running.length > 0) {
 					const jobs = running.map(job => `${job.id}${job.label ? ` (${job.label})` : ""}`).join(", ");
-					const notice = prompt.render(subagentAsyncPendingTemplate, {
-						count: running.length,
-						multiple: running.length > 1,
-						jobs,
-					});
+					const notice = renderPromptAsset(
+						"system/subagent-async-pending.md",
+						subagentAsyncPendingTemplate,
+						{
+							count: running.length,
+							multiple: running.length > 1,
+							jobs,
+						},
+						{ cwd: session.sessionManager.getCwd(), kind: "notice" },
+					);
 					try {
 						await dispatchPrompt(notice, { attribution: "agent", synthetic: true }, "async-pending notice");
 						await awaitAbortable(session.waitForIdle());
@@ -3173,6 +3189,7 @@ function wakeSources(records: AgentMessage[], selfId: string): WakeSource[] {
  * updates the artifact nobody is told to re-read.
  */
 async function relayWakeTurnOutput(args: {
+	cwd: string;
 	id: string;
 	records: AgentMessage[];
 	turnStartTime: number;
@@ -3238,6 +3255,7 @@ function wakeTurnFailed(outcome: { error: string | undefined; aborted: boolean; 
  * branch, which the observer seam cannot drive.
  */
 export function buildWakeRelayBody(args: {
+	cwd?: string;
 	id: string;
 	yielded: boolean;
 	result: SingleResult | undefined;
@@ -3253,7 +3271,7 @@ export function buildWakeRelayBody(args: {
 	// artifact before failing must be reported, never contradicted.
 	const summary =
 		args.yielded && args.result?.outputPath
-			? formatTaskResultSummary(args.result, { totalDurationMs: args.result.durationMs })
+			? formatTaskResultSummary(args.result, { totalDurationMs: args.result.durationMs, cwd: args.cwd })
 			: undefined;
 
 	const headline = args.error
@@ -3373,6 +3391,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 		};
 		const runToken = crypto.randomUUID();
 		const turnMonitor = createSubagentRunMonitor({
+			cwd: session.sessionManager.getCwd(),
 			index,
 			id,
 			runToken,
@@ -3504,7 +3523,10 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					// parent whatever it is: the yield result, or the failure that
 					// superseded it.
 					if (wakeJob && result) {
-						const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
+						const text = formatTaskResultSummary(result, {
+							totalDurationMs: result.durationMs,
+							cwd: session.sessionManager.getCwd(),
+						});
 						const structured = result.structuredOutput;
 						if (result.aborted || result.exitCode !== 0 || result.error !== undefined) {
 							wakeJob.outcome.reject(new AsyncJobError(text, structured));
@@ -3520,6 +3542,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					// waiter mistakes a dead peer for a healthy-but-silent one.
 					try {
 						await relayWakeTurnOutput({
+							cwd: session.sessionManager.getCwd(),
 							id,
 							records,
 							turnStartTime,
@@ -3804,6 +3827,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 
 	const runToken = crypto.randomUUID();
 	const monitor = createSubagentRunMonitor({
+		cwd: session.sessionManager.getCwd(),
 		index,
 		id,
 		runToken,
@@ -3993,27 +4017,32 @@ function buildSubagentSessionOptions(
 			const ircRoster = inputs.ircEnabled
 				? collectIrcPeerRoster(AgentRegistry.global(), inputs.id, inputs.ircRoot.sessionFile)
 				: undefined;
-			const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
-				agent: inputs.agentSystemPrompt,
-				context: inputs.context,
-				planReference: inputs.planReference,
-				planReferencePath: inputs.planReferencePath,
-				worktree: inputs.worktree,
-				structured: inputs.structured,
-				outputSchema: inputs.outputSchema,
-				outputSchemaOverridesAgent: inputs.outputSchemaOverridesAgent,
-				// Read the live item set through the registry instead of capturing the session, which
-				// would pin its whole graph past park. A revive builds while the registry session is
-				// null, so it renders the cleared set rather than the launch-time pooled instructions.
-				workPoolYieldItems:
-					AgentRegistry.global().get(inputs.id)?.session?.getWorkPoolYieldItems?.() ??
-					launch?.workPoolYieldItems ??
-					[],
-				ircPeers: ircRoster?.peers ?? [],
-				ircParkedCount: ircRoster?.parkedCount ?? 0,
-				ircOmittedCount: ircRoster?.omittedCount ?? 0,
-				ircSelfId: inputs.ircEnabled ? inputs.id : "",
-			});
+			const subagentPrompt = renderPromptAsset(
+				"system/subagent-system-prompt.md",
+				subagentSystemPromptTemplate,
+				{
+					agent: inputs.agentSystemPrompt,
+					context: inputs.context,
+					planReference: inputs.planReference,
+					planReferencePath: inputs.planReferencePath,
+					worktree: inputs.worktree,
+					structured: inputs.structured,
+					outputSchema: inputs.outputSchema,
+					outputSchemaOverridesAgent: inputs.outputSchemaOverridesAgent,
+					// Read the live item set through the registry instead of capturing the session, which
+					// would pin its whole graph past park. A revive builds while the registry session is
+					// null, so it renders the cleared set rather than the launch-time pooled instructions.
+					workPoolYieldItems:
+						AgentRegistry.global().get(inputs.id)?.session?.getWorkPoolYieldItems?.() ??
+						launch?.workPoolYieldItems ??
+						[],
+					ircPeers: ircRoster?.peers ?? [],
+					ircParkedCount: ircRoster?.parkedCount ?? 0,
+					ircOmittedCount: ircRoster?.omittedCount ?? 0,
+					ircSelfId: inputs.ircEnabled ? inputs.id : "",
+				},
+				{ cwd: spec.options.cwd },
+			);
 			// Per-spawn text (context, worktree, IRC roster) goes after the trailing
 			// `<project-context>` block so spawns of the same agent share the static
 			// prompt prefix as a cache hit.
@@ -4079,6 +4108,20 @@ function trackSubagentSettings(session: AgentSession, capture: WarmReviveCapture
 	});
 }
 
+/** Persisted control edits outrank the spawn selector's effort suffix on every revival. */
+export function restoredSubagentThinkingOptions(
+	manager: SessionManager,
+): Pick<CreateAgentSessionOptions, "thinkingLevel" | "thinkingOrigin" | "autoSelection"> {
+	const entry = manager.getBranch().findLast(entry => entry.type === "thinking_level_change");
+	if (!entry || entry.type !== "thinking_level_change") return {};
+	return {
+		thinkingLevel:
+			parseConfiguredThinkingLevel(entry.configured) ?? parseConfiguredThinkingLevel(entry.thinkingLevel ?? "off"),
+		thinkingOrigin: entry.effortOrigin,
+		autoSelection: entry.autoSelection,
+	};
+}
+
 /**
  * Lifecycle reviver for a parked subagent: park closed the JSONL writer, so reopening takes the
  * single-writer lock cleanly and restores the full message history (createAgentSession →
@@ -4119,6 +4162,7 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 					reopened,
 					expectedAgentRef,
 				),
+				...restoredSubagentThinkingOptions(reopened),
 				oauthAccountPools: Object.hasOwn(agentAccountPools, capture.agentName)
 					? agentAccountPools[capture.agentName]
 					: undefined,
@@ -4227,6 +4271,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		const externalSignal = signal ? AbortSignal.any([signal, deadlineController.signal]) : deadlineController.signal;
 		const runToken = crypto.randomUUID();
 		const monitor = createSubagentRunMonitor({
+			cwd: worktree ?? cwd,
 			index,
 			id,
 			runToken,
@@ -4444,6 +4489,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const runToken = crypto.randomUUID();
 	let lifecycle: ReturnType<typeof startRunLifecycle> | undefined;
 	const monitor = createSubagentRunMonitor({
+		cwd: worktree ?? cwd,
 		index,
 		id,
 		runToken,
@@ -4571,14 +4617,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				configuredModelPatterns.length === 1
 					? resolveSubagentInheritedRetryFallbackChain(subagentSettings, modelRegistry, inheritedFallbackRole)
 					: undefined;
-			const {
-				model,
-				thinkingLevel: resolvedThinkingLevel,
-				explicitThinkingLevel,
-				authFallbackUsed,
-				warning: modelResolutionWarning,
-				matchedPattern,
-			} = await awaitAbortable(
+			const ordinaryModelResolution = await awaitAbortable(
 				resolveModelOverrideWithAuthFallback(
 					modelPatterns,
 					options.parentActiveModelPattern,
@@ -4587,6 +4626,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					id,
 				),
 			);
+			let model = ordinaryModelResolution.model;
+			const {
+				thinkingLevel: resolvedThinkingLevel,
+				explicitThinkingLevel,
+				authFallbackUsed,
+				warning: modelResolutionWarning,
+				matchedPattern,
+			} = ordinaryModelResolution;
 			if (modelResolutionWarning) {
 				logger.warn("Subagent model resolution warning", {
 					warning: modelResolutionWarning,
@@ -4600,6 +4647,41 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					resolvedProvider: model.provider,
 					resolvedModel: model.id,
 				});
+			}
+			const agentPrewalk = resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(settings));
+			const settingsPrewalk = cfgTaskAgentPrewalk.get(settings)[agent.name]?.trim();
+			const prewalkPattern = resolveAgentPrewalkPattern({
+				settingsOverride: settingsPrewalk,
+				agentPrewalk,
+			});
+			let prewalk: Prewalk | undefined;
+			let planner: Prewalk | undefined;
+			if (prewalkPattern) {
+				await awaitAbortable(modelRegistry.awaitBackgroundRefresh());
+				// Boolean enablement uses the configured crew. Explicit agent/settings
+				// strings replace only its execution selector, keeping its fallbacks.
+				const executionOverride =
+					settingsPrewalk && !["on", "true"].includes(settingsPrewalk.toLowerCase())
+						? settingsPrewalk
+						: typeof agentPrewalk === "string"
+							? agentPrewalk.trim() || undefined
+							: undefined;
+				const execution = resolvePrewalkCrewSelection(settings, modelRegistry, "execution", executionOverride);
+				const plannerConfigured = getPrewalkPatterns(settings, "planner").length > 0;
+				const resolvedPlanner = plannerConfigured
+					? resolvePrewalkCrewSelection(settings, modelRegistry, "planner")
+					: undefined;
+				if (!execution || (plannerConfigured && !resolvedPlanner)) {
+					logger.warn("Subagent prewalk crew unavailable; keeping ordinary task model", {
+						agent: agent.name,
+						phase: !execution ? "execution" : "planner",
+						pattern: prewalkPattern,
+					});
+				} else {
+					prewalk = execution;
+					planner = resolvedPlanner;
+					if (planner) model = planner.target;
+				}
 			}
 			// The exact-name `task.agentServiceTierOverrides` entry dispatch resolved
 			// for this agent. The session evaluates it against its final model —
@@ -4616,19 +4698,20 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 								resolvedModel,
 								inheritedSubagentServiceTiers(settings, options.parentServiceTier),
 							);
+			const retryModelPatterns = planner ? getPrewalkPatterns(settings, "planner") : modelPatterns;
 			const retryFallbackRole = installSubagentRetryFallbackChain({
 				settings: subagentSettings,
 				id,
-				candidates: resolveSubagentRetryFallbackCandidates(modelPatterns, modelRegistry, subagentSettings),
-				inheritedFallbackChain: inheritedRetryFallbackChain,
-				inheritedFallbackRole,
+				candidates: resolveSubagentRetryFallbackCandidates(retryModelPatterns, modelRegistry, subagentSettings),
+				inheritedFallbackChain: planner ? undefined : inheritedRetryFallbackChain,
+				inheritedFallbackRole: planner ? undefined : inheritedFallbackRole,
 				model,
-				authFallbackUsed,
+				authFallbackUsed: planner ? false : authFallbackUsed,
 			});
 			if (retryFallbackRole) {
 				logger.debug("Configured subagent runtime model fallback chain", {
 					role: retryFallbackRole,
-					requested: modelPatterns,
+					requested: retryModelPatterns,
 				});
 			}
 			if (model?.contextWindow && model.contextWindow > 0) {
@@ -4679,23 +4762,31 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					? resolveTaskEffortLevel(model, options.effort as "lo" | "med" | "hi", spawnEffortCeiling)
 					: replacementEffort;
 			const origin: EffortOrigin =
-				effortLevel !== undefined || callerLevel !== undefined ? "caller" : role ? "role" : "default";
+				planner?.thinkingLevel !== undefined || effortLevel !== undefined || callerLevel !== undefined
+					? "caller"
+					: role
+						? "role"
+						: "default";
 			const selection: EffortSelection | undefined =
-				effortLevel !== undefined
-					? { mode: "fixed", level: effortLevel }
-					: callerLevel !== undefined && callerLevel !== "auto"
-						? { mode: "fixed", level: callerLevel }
-						: callerLevel === "auto"
-							? { mode: "auto" }
-							: savedRoleSelection?.mode !== "inherit"
-								? savedRoleSelection
-								: thinkingLevel === "auto" || resolvedThinkingLevel === "auto"
-									? { mode: "auto" }
-									: thinkingLevel !== undefined
-										? { mode: "fixed", level: thinkingLevel }
-										: resolvedThinkingLevel !== undefined
-											? { mode: "fixed", level: resolvedThinkingLevel }
-											: undefined;
+				planner?.thinkingLevel !== undefined
+					? planner.thinkingLevel === "auto"
+						? { mode: "auto" }
+						: { mode: "fixed", level: planner.thinkingLevel }
+					: effortLevel !== undefined
+						? { mode: "fixed", level: effortLevel }
+						: callerLevel !== undefined && callerLevel !== "auto"
+							? { mode: "fixed", level: callerLevel }
+							: callerLevel === "auto"
+								? { mode: "auto" }
+								: savedRoleSelection?.mode !== "inherit"
+									? savedRoleSelection
+									: thinkingLevel === "auto" || resolvedThinkingLevel === "auto"
+										? { mode: "auto" }
+										: thinkingLevel !== undefined
+											? { mode: "fixed", level: thinkingLevel }
+											: resolvedThinkingLevel !== undefined
+												? { mode: "fixed", level: resolvedThinkingLevel }
+												: undefined;
 			let decision: EffortDecision | undefined;
 			if (model && mode === "replacement") {
 				try {
@@ -4740,7 +4831,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					);
 				}
 			}
-			const effectiveThinkingLevel =
+			const ordinaryThinkingLevel =
 				mode === "replacement"
 					? selection?.mode === "auto" || callerLevel === "auto"
 						? "auto"
@@ -4750,6 +4841,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 								(explicitThinkingLevel ? resolvedThinkingLevel : (thinkingLevel ?? resolvedThinkingLevel)))
 					: (effortLevel ??
 						(explicitThinkingLevel ? resolvedThinkingLevel : (thinkingLevel ?? resolvedThinkingLevel)));
+			const effectiveThinkingLevel = planner?.thinkingLevel ?? ordinaryThinkingLevel;
 			const effortDisclosure = decision?.disclosure;
 			if (model) {
 				const displayLevel =
@@ -4776,38 +4868,25 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			closeUnadoptedSessionManager = () => {
 				void sessionManagerPromise.then(manager => manager.close()).catch(() => {});
 			};
-			// Per-agent prewalk: the agent definition's `prewalk` frontmatter or the
-			// `task.agentPrewalk` settings override hands the subagent off to a
-			// fast/cheap target at its first edit/write — the same mechanism as the
-			// session-level --prewalk. The bundled generic `task` agent has no
-			// frontmatter default; the `task.prewalk` toggle (default off) arms it.
-			// Resolution failures skip prewalk instead of failing the spawn.
-			let prewalk: Prewalk | undefined;
-			const prewalkPattern = resolveAgentPrewalkPattern({
-				settingsOverride: cfgTaskAgentPrewalk.get(settings)[agent.name],
-				agentPrewalk: resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(settings)),
-			});
-			if (prewalkPattern) {
-				await awaitAbortable(modelRegistry.awaitBackgroundRefresh());
-				const resolvedPrewalk = resolveModelOverride([prewalkPattern], modelRegistry, settings);
-				const target = resolvedPrewalk.model;
-				if (!target || !modelRegistry.hasConfiguredAuth(target)) {
-					logger.warn("Subagent prewalk target unavailable; skipping prewalk", {
-						agent: agent.name,
-						pattern: prewalkPattern,
-						warning: resolvedPrewalk.warning,
-					});
-				} else if (prewalkWouldBeNoop(model, effectiveThinkingLevel, target, resolvedPrewalk.thinkingLevel)) {
-					// Same model AND same effective thinking level: switching would only
-					// inject the plan/checklist nudges for no gain — skip. An effort-only
-					// delta on the same model still arms (it is a real cheapening hand-off).
-					logger.debug("Subagent prewalk target matches starting model and thinking level; skipping prewalk", {
-						agent: agent.name,
-						pattern: prewalkPattern,
-					});
-				} else {
-					prewalk = { target, thinkingLevel: resolvedPrewalk.thinkingLevel };
-				}
+			if (prewalk && prewalkWouldBeNoop(model, effectiveThinkingLevel, prewalk.target, prewalk.thinkingLevel)) {
+				// Equal model and effort need no planning nudges. An effort-only
+				// handoff on the same model still arms prewalk.
+				logger.debug("Subagent prewalk crew matches starting model and thinking level; skipping prewalk", {
+					agent: agent.name,
+					pattern: prewalkPattern,
+				});
+				prewalk = undefined;
+			}
+			if (prewalk) {
+				const targetIdentity = formatModelStringWithRouting(prewalk.target);
+				const executionTarget =
+					prewalk.thinkingLevel === undefined
+						? targetIdentity
+						: formatModelSelectorValue(targetIdentity, prewalk.thinkingLevel);
+				const note = `Prewalk execution: ${executionTarget}`;
+				progress.resolvedModelRoute = progress.resolvedModelRoute
+					? `${progress.resolvedModelRoute}\n${note}`
+					: note;
 			}
 
 			const restrictToolNames = options.restrictToolNames === true;

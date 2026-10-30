@@ -89,7 +89,7 @@ describe("loginGitHubCopilot", () => {
 			onPrompt: mockOnPrompt(""),
 		});
 
-		expect(onAuth).toHaveBeenCalled();
+		expect(onAuth).toHaveBeenCalledWith("https://github.com/login/device", "Enter code: ABCD-1234", "ABCD-1234");
 		expect(credentials.access).toBe("ghu_test");
 		expect(credentials.refresh).toBe("ghu_test");
 		expect(credentials.expires).toBeGreaterThan(Date.now());

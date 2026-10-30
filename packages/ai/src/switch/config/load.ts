@@ -8,7 +8,7 @@ import { type DecodeContext } from "./context";
 import { decodePlan, decodeSwitchDocument } from "./document";
 import { ConfigFields } from "./fields";
 import { decodeProvider } from "./providers";
-import type { SecretRef, SwitchConfig } from "./types";
+import type { PlanConfig, ProviderConfig, SecretRef, SwitchConfig } from "./types";
 import { validateSwitchConfig, type ValidationContext } from "./validate";
 
 interface CapturedFile {
@@ -135,7 +135,8 @@ export async function loadSwitchConfig(
 			const warnings: Issue[] = [];
 			const context: DecodeContext = { fields, warnings, configDir: root, source: mainPath, secrets: [] };
 			const parsed = parseToml(mainPath, main.bytes);
-			const value = decodeSwitchDocument(context, parsed);
+			const fragmentProviders: ProviderConfig[] = [];
+			const fragmentPlans: PlanConfig[] = [];
 			for (const pathname of providerPaths) {
 				const captured = await file(pathname, files);
 				context.source = pathname;
@@ -147,13 +148,18 @@ export async function loadSwitchConfig(
 				] as const) {
 					const rows = fields.array(part[section], `${pathname}.${section}`, true);
 					if (decoder === "provider")
-						value.providers.push(
+						fragmentProviders.push(
 							...rows.map((row, index) => decodeProvider(context, row, `${pathname}.provider[${index}]`)),
 						);
 					else
-						value.plans.push(...rows.map((row, index) => decodePlan(context, row, `${pathname}.plan[${index}]`)));
+						fragmentPlans.push(
+							...rows.map((row, index) => decodePlan(context, row, `${pathname}.plan[${index}]`)),
+						);
 				}
 			}
+			context.source = mainPath;
+			const value = decodeSwitchDocument(context, parsed, fragmentProviders);
+			value.plans.push(...fragmentPlans);
 			duplicate(
 				fields,
 				value.providers.map(provider => provider.id),
@@ -199,7 +205,7 @@ export async function loadSwitchConfig(
 				}
 			if (JSON.stringify(providerPaths) !== JSON.stringify(await providerSources(root))) throw new SourceChanged();
 			for (const [pathname, captured] of files) {
-				let current: Awaited<ReturnType<typeof fs.stat>>;
+				let current: Stats;
 				try {
 					current = await fs.stat(pathname);
 				} catch (error) {

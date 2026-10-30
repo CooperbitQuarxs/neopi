@@ -1,6 +1,6 @@
 import type { AgentEvent, AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
-import type { Effort } from "@oh-my-pi/pi-ai";
+import type { ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import type { Rule } from "../capability/rule";
 import type { ChatModeSetting } from "../chat/chat-mode";
 import type { RetryErrorUpdate } from "../extensibility/shared-events";
@@ -82,7 +82,10 @@ export type AgentSessionEvent =
 	| { type: "retry_fallback_applied"; from: string; to: string; role: string; reason?: string }
 	| { type: "retry_fallback_succeeded"; model: string; role: string }
 	| { type: "model_changed" }
+	| { type: "themes_configuration_changed" }
+	| { type: "models_configuration_changed" }
 	| { type: "config_warnings_changed" }
+	| { type: "approval_mode_changed" }
 	| { type: "advisor_cost_changed" }
 	| { type: "advisor_yielded" }
 	/** A finalized advisor-agent message (the same data the advisor transcript records). Fork seam for live ingest. */
@@ -103,7 +106,7 @@ export type AgentSessionEvent =
 			/** The user-configured selector when it differs from the effective level. */
 			configured?: ConfiguredThinkingLevel;
 			/** The level `auto` resolved to this turn, once classified. */
-			resolved?: Effort;
+			resolved?: ThinkingEffort;
 	  }
 	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState }
 	/** Live chat-mode change: `mode` is `off` outside chat mode; `include` is comma-joined. */

@@ -162,7 +162,13 @@ export interface ControlSnapshot {
 	/** Root session state, or the viewed session's when `target:"view"`. */
 	session: RpcSessionState | null;
 	root?: { sessionId: string; generation: number };
-	busy: { streaming: boolean; compacting: boolean; queued: number; pendingAsyncWork: boolean; settled: boolean };
+	busy: {
+		streaming: boolean;
+		compacting: boolean;
+		pendingSteerAndFollowUp: number;
+		pendingAsyncWork: boolean;
+		settled: boolean;
+	};
 	revisions: Revisions;
 	/** Focused-surface view: null for headless roles. */
 	view: {
@@ -336,6 +342,8 @@ export interface ControlResponse {
 	data?: unknown;
 	error?: string;
 	code?: string;
+	/** First successful follow-up from this control client carries queue-vs-steer advice. */
+	warning?: string;
 }
 
 /** `challenge` frame sent by the server before authentication. */

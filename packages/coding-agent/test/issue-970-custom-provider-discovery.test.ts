@@ -40,17 +40,20 @@ async function createHub(state: ProviderDiscoveryState): Promise<ModelHubCompone
 		authStorage: { keys: { source: () => undefined } },
 	} as unknown as ModelRegistry;
 	const ui = { requestRender: vi.fn(), terminal: { rows: 40 } } as unknown as TUI;
-	const hub = new ModelHubComponent(ui, createModelBrowserSource(Settings.isolated({})), modelRegistry, [], {
-		onAssign: () => {},
-		onUnassign: () => {},
-		onCancel: () => {},
-	});
+	const hub = new ModelHubComponent(
+		ui,
+		createModelBrowserSource(Settings.isolated({})),
+		modelRegistry,
+		[],
+		{
+			onAssign: () => {},
+			onUnassign: () => {},
+			onCancel: () => {},
+		},
+		{ initialProviderId: state.provider },
+	);
 	await Bun.sleep(0);
 	installTestTheme();
-	// Scope-hop arrows skip separators: All models → Effort rules → sole provider.
-	hub.handleInput("\x1b[B");
-	hub.handleInput("\x1b[B");
-	await Bun.sleep(0);
 	return hub;
 }
 

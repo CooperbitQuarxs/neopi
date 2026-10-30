@@ -3002,9 +3002,15 @@ describe("ModelRegistry", () => {
 		// with a new id, so the copy is neither the stamped snapshot row nor a
 		// known provider/id key: provenance must survive the copy itself.
 		const renameCopy = (model: Model) => ({ ...model, id: `${model.id}-renamed` });
+		// Header resolvers are callable capabilities, not cloneable catalog data.
+		const cloneRows = (models: Model[]) =>
+			structuredClone(models.map(({ resolveHeaders: _resolveHeaders, ...model }) => model));
 		const copyProjections: Record<string, (models: Model[]) => Model[]> = {
 			"copy-rename": models => models.map(renameCopy),
 			"copy-rename-reorder": models => models.toReversed().map(renameCopy),
+			"deep-clone-rename": models => cloneRows(models).map(renameCopy),
+			"deep-clone-rename-reorder": models => cloneRows(models).toReversed().map(renameCopy),
+			"json-clone-rename": models => (JSON.parse(JSON.stringify(models)) as Model[]).map(renameCopy),
 			"copy-rename-reorder-drop": models =>
 				models
 					.filter(model => model.provider !== "unrelated-proxy")
@@ -3021,7 +3027,13 @@ describe("ModelRegistry", () => {
 								baseUrl: "https://example.com/v1",
 								api: "openai-responses",
 								auth: "none",
-								models: [{ id: "luna", contextWindow: 272_000, maxContextWindow: 872_000 }],
+								models: [
+									{
+										id: "luna",
+										contextWindow: provider === "luna-proxy" ? 272_000 : 192_000,
+										maxContextWindow: provider === "luna-proxy" ? 872_000 : 692_000,
+									},
+								],
 							},
 						]),
 					),
@@ -3069,6 +3081,7 @@ describe("ModelRegistry", () => {
 				expect(windowOf(registry, "luna-proxy", "luna-renamed")).toBe(272_000);
 				// Provenance is registry bookkeeping, not a published model field.
 				expect(Object.getOwnPropertySymbols(renamed)).toEqual([]);
+				expect(renamed).not.toHaveProperty("__npiModelModifierSource");
 				if (projection === "copy-rename-reorder-drop") {
 					expect(registry.find("unrelated-proxy", "luna")).toBeUndefined();
 					expect(registry.find("unrelated-proxy", "luna-renamed")).toBeUndefined();
@@ -3076,9 +3089,10 @@ describe("ModelRegistry", () => {
 				}
 				const unrelated = registry.find("unrelated-proxy", "luna-renamed");
 				if (!unrelated) throw new Error("Missing renamed unrelated Luna");
-				expect(unrelated.contextWindow).toBe(872_000);
-				expect(windowOf(registry, "unrelated-proxy", "luna-renamed")).toBe(272_000);
+				expect(unrelated.contextWindow).toBe(692_000);
+				expect(windowOf(registry, "unrelated-proxy", "luna-renamed")).toBe(192_000);
 				expect(Object.getOwnPropertySymbols(unrelated)).toEqual([]);
+				expect(unrelated).not.toHaveProperty("__npiModelModifierSource");
 			});
 		}
 

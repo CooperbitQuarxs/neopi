@@ -26,29 +26,19 @@ import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString, resolveModelOverride } from "../config/model-resolver";
 import { getKnownRoleIds } from "../config/model-roles";
 import type { Settings } from "../config/settings";
+import { parseSelectorSuffix } from "../config/model-selector-suffix";
 import {
 	type ConfiguredThinkingLevel,
 	concreteThinkingLevel,
-	parseConfiguredThinkingLevel,
 	toReasoningEffort,
 } from "@oh-my-pi/pi-tui/thinking";
+import { editDistance } from "../utils/edit-distance";
 
 /** The registry surfaces selector validation needs; tests can stub them. */
 export type AgentSelectorModelRegistry = Pick<ModelRegistry, "getAvailable" | "hasConfiguredAuth">;
 
 /** Loud selector-validation failure; adapters wrap it into their own preflight error surface. */
 export class AgentSelectorError extends Error {}
-
-/**
- * Split a trailing `:<effort>` suffix off a selector when the token parses as
- * a configured thinking level (concrete levels, `max`, or `auto`).
- */
-export function parseSelectorSuffix(value: string): { base: string; level: ConfiguredThinkingLevel } | undefined {
-	const colonIdx = value.lastIndexOf(":");
-	if (colonIdx <= 0 || colonIdx === value.length - 1) return undefined;
-	const level = parseConfiguredThinkingLevel(value.slice(colonIdx + 1));
-	return level === undefined ? undefined : { base: value.slice(0, colonIdx), level };
-}
 
 /**
  * True when an `agent` value is shaped like a model selector rather than an
@@ -216,19 +206,3 @@ function nearestModels(input: string, available: readonly Model<Api>[], limit = 
 		.map(entry => entry.full);
 }
 
-/** Iterative two-row Levenshtein distance. */
-function editDistance(a: string, b: string): number {
-	if (a === b) return 0;
-	const prev: number[] = Array.from({ length: b.length + 1 });
-	for (let j = 0; j <= b.length; j++) prev[j] = j;
-	for (let i = 1; i <= a.length; i++) {
-		let diag = prev[0]!;
-		prev[0] = i;
-		for (let j = 1; j <= b.length; j++) {
-			const tmp = prev[j]!;
-			prev[j] = Math.min(prev[j]! + 1, prev[j - 1]! + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
-			diag = tmp;
-		}
-	}
-	return prev[b.length]!;
-}

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -55,6 +55,8 @@ function fixture(settings = Settings.isolated()) {
 	const toolSession: ToolSession = {
 		cwd: process.cwd(),
 		hasUI: false,
+		getSessionFile: () => manager.getSessionFile() ?? null,
+		getSessionSpawns: () => null,
 		settings,
 		agentRegistry: registry,
 		getAgentId: () => "Root",
@@ -62,7 +64,7 @@ function fixture(settings = Settings.isolated()) {
 	const agent = new Agent({
 		initialState: {
 			model: mock.model,
-			thinkingLevel: "medium",
+			thinkingLevel: ThinkingLevel.Medium,
 			messages: [previous],
 			systemPrompt: ["test"],
 			tools: [],
@@ -74,7 +76,7 @@ function fixture(settings = Settings.isolated()) {
 		sessionManager: manager,
 		settings,
 		modelRegistry: new ModelRegistry(auth),
-		thinkingLevel: "medium",
+		thinkingLevel: ThinkingLevel.Medium,
 		toolSession,
 	});
 	sessions.push(session);
@@ -106,6 +108,7 @@ function telemetryFrom(messages: AgentMessage[]): AgentContextTelemetry {
 	);
 	expect(notices).toHaveLength(1);
 	const notice = notices[0]!;
+	if (notice.role !== "custom") throw new Error("Expected custom notice");
 	if (typeof notice.content !== "string") throw new Error("Expected text notice");
 	const line = notice.content.split("\n").find(value => value.startsWith("{"));
 	if (!line) throw new Error("Missing structured telemetry");
@@ -115,10 +118,7 @@ function telemetryFrom(messages: AgentMessage[]): AgentContextTelemetry {
 function modelText(message: Message): string {
 	return typeof message.content === "string"
 		? message.content
-		: message.content
-				.filter(block => block.type === "text")
-				.map(block => block.text)
-				.join("\n");
+		: message.content.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
 }
 
 describe("agent-visible runtime telemetry", () => {
@@ -144,7 +144,9 @@ describe("agent-visible runtime telemetry", () => {
 		});
 		const messages: AgentMessage[] = [previous, { role: "user", content: "continue", timestamp: 123 }];
 		const record = telemetryFrom(session.prepareAgentTelemetry(messages));
-		expect(record).toEqual(toolSession.getAgentTelemetry?.());
+		const snapshot = toolSession.getAgentTelemetry?.();
+		if (!snapshot) throw new Error("Expected local telemetry snapshot");
+		expect(record).toEqual(snapshot);
 		expect(record.model).toEqual({ provider: session.model!.provider, id: session.model!.id, effort: null });
 		expect(record.context).toEqual({
 			usedTokens: session.getContextUsage()!.tokens,
@@ -172,6 +174,7 @@ describe("agent-visible runtime telemetry", () => {
 		const { session } = fixture(
 			Settings.isolated({
 				"telemetry.threshold_events": true,
+				"compaction.methodOrder": ["soft"],
 				"compaction.thresholdPercent": 85,
 			}),
 		);
@@ -192,6 +195,79 @@ describe("agent-visible runtime telemetry", () => {
 		const { session } = fixture(Settings.isolated({ "telemetry.agent_context": "minimal" }));
 		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 84_000, contextWindow: 100_000, percent: 84 });
 		expect(telemetryFrom(session.prepareAgentTelemetry([])).events).toBeUndefined();
+	});
+
+	it("counts the latest retained user turn, not repeated provider input usage", () => {
+		const { session, previous } = fixture(Settings.isolated({ "telemetry.agent_context": "minimal" }));
+		const user: AgentMessage = { role: "user", content: "inspect the branch", timestamp: 1 };
+		const result: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "read-1",
+			toolName: "read",
+			content: [{ type: "text", text: "large intermediate output ".repeat(500) }],
+			isError: false,
+			timestamp: 2,
+		};
+		session.agent.replaceMessages([previous, user, completedRequest(), result]);
+		const record = telemetryFrom(session.prepareAgentTelemetry(session.messages));
+		expect(record.recentTurnFootprint).toMatchObject({
+			scope: "latest_user_turn",
+			messages: 3,
+			estimated: true,
+		});
+		const footprint = record.recentTurnFootprint!.tokens;
+		expect(footprint).toBeGreaterThan(1_000);
+		expect(footprint).toBeLessThan(record.previousTurn!.input);
+		// Rewind retains the report, not the intermediate tool output.
+		session.agent.replaceMessages([previous, user, createAssistantMessage("retained report")]);
+		expect(session.getAgentTelemetry()!.recentTurnFootprint!.tokens).toBeLessThan(footprint);
+		session.agent.replaceMessages([previous]);
+		expect(session.getAgentTelemetry()!.recentTurnFootprint).toBeNull();
+	});
+
+	it("reports checkpoint availability from the enabled pair, including discoverable tools", () => {
+		const { session } = fixture(Settings.isolated({ "telemetry.agent_context": "minimal" }));
+		const names = vi.spyOn(session, "getEnabledToolNames").mockReturnValue(["write", "checkpoint", "rewind"]);
+		expect(session.getActiveToolNames()).toEqual([]);
+		expect(session.getAgentTelemetry()!.checkpoint).toEqual({ active: false, available: true });
+		session.setCheckpointState({ checkpointEntryId: null, checkpointMessageCount: 1, startedAt: "now" });
+		expect(session.getAgentTelemetry()!.checkpoint).toEqual({ active: true, available: false });
+		session.setCheckpointState(undefined);
+		names.mockReturnValue(["write", "checkpoint"]);
+		expect(session.getAgentTelemetry()!.checkpoint.available).toBe(false);
+		names.mockReturnValue([]);
+		expect(session.getAgentTelemetry()!.checkpoint.available).toBe(false);
+	});
+
+	it.each([
+		{ "compaction.enabled": false },
+		{ "compaction.asyncEnabled": false },
+		{ "compaction.methodOrder": ["shake"] },
+	])("does not advertise nonexistent speculative boundaries for %j", overrides => {
+		const { session } = fixture(Settings.isolated({ "telemetry.agent_context": "minimal", ...overrides }));
+		const record = telemetryFrom(session.prepareAgentTelemetry([]));
+		expect(record.compaction.speculationStartsAtTokens).toBeNull();
+		if (overrides["compaction.enabled"] === false) {
+			expect(record.compaction.enabled).toBe(false);
+			expect(record.compaction.thresholdTokens).toBeNull();
+		} else {
+			expect(record.compaction.thresholdTokens).toBeGreaterThan(0);
+		}
+	});
+
+	it("announces available checkpoints before starting one, never while one is active", () => {
+		const { session } = fixture(
+			Settings.isolated({
+				"telemetry.threshold_events": true,
+				"compaction.thresholdPercent": 85,
+				"compaction.methodOrder": ["soft"],
+			}),
+		);
+		vi.spyOn(session, "getEnabledToolNames").mockReturnValue(["checkpoint", "rewind"]);
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 84_000, contextWindow: 100_000, percent: 84 });
+		expect(session.getAgentTelemetry()!.events?.[0]?.checkpointAvailable).toBe(true);
+		session.setCheckpointState({ checkpointEntryId: null, checkpointMessageCount: 1, startedAt: "now" });
+		expect(session.getAgentTelemetry()!.events?.[0]?.checkpointAvailable).toBe(false);
 	});
 
 	it("adds full shared usage, cache share, cost splits and root-scoped occupancy only when requested", () => {
@@ -243,7 +319,14 @@ describe("agent-visible runtime telemetry", () => {
 		const mock = createMockModel({
 			handler: { content: ["done"], usage: { input: 100, output: 10, totalTokens: 110 } },
 		});
-		const settings = Settings.isolated({ "telemetry.agent_context": "minimal", "compaction.enabled": false });
+		const settings = Settings.isolated({
+			"telemetry.agent_context": "minimal",
+			"telemetry.threshold_events": true,
+			"usageNotices.enabled": true,
+			"compaction.enabled": false,
+			"checkpoint.enabled": true,
+			"tools.xdev": true,
+		});
 		const modelRegistry = new ModelRegistry(auth, path.join(temp.path(), "models.yml"));
 		vi.spyOn(modelRegistry, "getApiKey").mockResolvedValue("test-key");
 		const { session } = await createAgentSession({
@@ -266,11 +349,31 @@ describe("agent-visible runtime telemetry", () => {
 			enableLsp: false,
 			skipPythonPreflight: true,
 			preloadedCustomToolPaths: [],
-			toolNames: [],
 		});
 		sessions.push(session);
+		expect(session.getActiveToolNames()).not.toContain("checkpoint");
+		expect(session.getEnabledToolNames()).toContain("checkpoint");
+		expect(session.getAgentTelemetry()!.checkpoint).toEqual({ active: false, available: true });
 		session.agent.streamFn = mock.stream;
 		session.agent.getApiKey = () => "test-key";
+		const usageRead = vi.spyOn(session, "fetchUsageReports").mockResolvedValue([
+			{
+				provider: mock.model.provider,
+				fetchedAt: Date.now() - 10_000,
+				limits: [
+					{
+						id: "5h",
+						label: "5 hours",
+						scope: { provider: mock.model.provider },
+						amount: { usedFraction: 0.95, unit: "percent" },
+					},
+				],
+			},
+		]);
+		const humanNotices: string[] = [];
+		session.subscribe(event => {
+			if (event.type === "notice" && event.source === "usage") humanNotices.push(event.message);
+		});
 		await session.prompt("first");
 		await session.prompt("second");
 		expect(mock.calls).toHaveLength(2);
@@ -280,6 +383,17 @@ describe("agent-visible runtime telemetry", () => {
 			).toHaveLength(1);
 		}
 		expect(modelText(mock.calls[1]!.context.messages.at(-1)!)).toContain('"output":10');
+		expect(usageRead).toHaveBeenCalledTimes(1);
+		expect(humanNotices).toHaveLength(1);
+		expect(modelText(mock.calls[0]!.context.messages.at(-1)!)).toContain('"type":"usage_threshold_events"');
+		expect(
+			mock.calls[1]!.context.messages.some(message =>
+				modelText(message).includes('"type":"usage_threshold_events"'),
+			),
+		).toBe(false);
+		expect(
+			session.messages.some(message => message.role === "custom" && message.customType === "agent-usage-notices"),
+		).toBe(false);
 		expect(
 			session.messages.some(
 				message => message.role === "custom" && message.customType === "agent-runtime-telemetry",

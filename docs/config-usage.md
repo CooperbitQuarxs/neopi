@@ -85,6 +85,46 @@ On macOS and Linux, an existing `$XDG_DATA_HOME/omp`, `$XDG_STATE_HOME/omp`, or 
 
 The other source bases are not profile-scoped and load identically under every profile: the external-tool bases (`~/.claude`, `~/.codex`, `~/.gemini`) belong to those tools, and the project-level bases (`<cwd>/.omp`, `<cwd>/.claude`, ...) are keyed to the working directory. Throughout this document, read `~/.omp/agent` as shorthand for the active profile's agent directory unless an environment override or XDG path is being discussed.
 
+### Preload selected memory
+
+Save `launch-memory.json` inside a named profile's agent directory to preload
+chosen persistent text files before the first turn. This reuses the existing
+`--profile` selector, including its settings and credential isolation. It does
+not introduce another kind of configuration preset.
+
+For example, save `~/.omp/profiles/work/agent/launch-memory.json`:
+
+```json
+{
+  "sources": ["memory/client-support.md", "/home/me/notes/work-preferences.md"]
+}
+```
+
+Save the memory text in those files, then run `npi --profile work`. Relative
+paths resolve against the directory containing `launch-memory.json`, not the
+working directory. Absolute paths may select existing file-backed memories
+outside the profile. Only the listed files load, in order, without retrieval
+or a model call. Remote memory IDs and `memory://` URLs are not file paths;
+export those entries to text files before selecting them here.
+
+Run `/launch-profile` to inspect the active launch profile, resolved source
+paths, and the exact memory snapshot loaded at startup. Later edits to the
+files do not change that snapshot. The snapshot is also recorded as a
+`launch-profile` custom entry in the session transcript.
+
+Memory preloading is opt-in. Launching without a named profile never reads
+`launch-memory.json`, and an existing profile without that file behaves as
+before. There is no fallback to another profile's memory. Normal context
+discovery and the configured memory backend remain unchanged; this selection
+adds explicit context rather than filtering those existing sources. It also
+applies with explicit prompt flags and chat mode.
+
+A malformed selected manifest or an unreadable listed file fails startup with
+the source path instead of silently omitting requested context. An empty
+`sources` array selects no memory files. Remove the manifest to disable
+preloading for that profile, or use `npi --profile default` for normal startup.
+
+
 ## Important constraint
 
 The generic helpers in `src/config.ts` do **not** include `.pi` in source discovery order.

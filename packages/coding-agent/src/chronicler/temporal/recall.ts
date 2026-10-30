@@ -9,26 +9,32 @@
  * resolved against their canonical committed batch before they are returned.
  */
 import * as path from "node:path";
-import { mapWithConcurrencyLimit } from "../../task/parallel";
+import { mapWithConcurrencyLimit, Semaphore } from "../../task/parallel";
 import { localParts, localStamp, spanWithin, type TimeBound, type TimeSpan } from "./calendar";
 import { type CanonicalAtomResult, type ChronicleAtom, readCanonicalAtom } from "./corpus";
 import type { NodeRanker, RankCandidate } from "./rank";
 import { type AtomEntry, clipText, estimateTokens, type NodeLevel, type Resolution } from "./tree";
 import { nodeDir, readViewManifest, readViewNode, type ViewChildRef, type ViewNode } from "./view";
 
-/** Best child below this fraction of its parent's score (and not confident) marks a collapsed branch. */
-const DROP_RATIO = 0.5;
-/** Absolute score at which an atom is a confident match. */
-export const CONFIDENT = 0.6;
-/** Minimum score for a descent atom to be returned at all. */
-const ATOM_MIN = 0.25;
-/** Children within this margin of the best are retained beyond the beam while the frontier bound allows. */
-const TIE_MARGIN = 0.1;
-const FRONTIER_FACTOR = 4;
-const MAX_HOPS = 32;
-const MAX_EVIDENCE_CHARS = 12_000;
-const MAX_NEIGHBORS = 6;
-const MAX_CANDIDATE_PERIODS = 5;
+export const DEFAULT_RECALL_POLICY = {
+	dropRatio: 0.5,
+	confidence: 0.6,
+	atomMin: 0.25,
+	tieMargin: 0.1,
+	frontierFactor: 4,
+	maxHops: 32,
+	evidenceChars: 12_000,
+	maxNeighbors: 6,
+	candidatePeriods: 5,
+	queryShare: 0.25,
+	labelShare: 0.5,
+	adjacentShare: 0.5,
+	concurrency: 2,
+};
+
+export type RecallPolicy = typeof DEFAULT_RECALL_POLICY;
+/** Default confidence threshold, retained for public callers. */
+export const CONFIDENT = DEFAULT_RECALL_POLICY.confidence;
 
 export interface RecallOptions {
 	root: string;
@@ -48,6 +54,8 @@ export interface RecallOptions {
 	budget: number;
 	beam: number;
 	neighborhoodMinutes: number;
+	/** Optional overrides keep direct API callers on the established defaults. */
+	policy?: Partial<RecallPolicy>;
 	ranker: NodeRanker;
 	signal?: AbortSignal;
 	/** Report lightweight search progress to the owning async job. */
@@ -170,9 +178,6 @@ function rankCandidateTokens(candidate: RankCandidate): number {
 	return estimateTokens(`${candidateHeader(candidate)}${candidate.text}\n\n`);
 }
 
-/** Share of one hop a recollection may take in a rank request; the rest is for candidates. */
-const QUERY_SHARE = 0.25;
-
 /** Clip `text` so that `prefix + text + suffix` estimates to at most `tokens`; marks the cut with `…`. */
 function fitText(prefix: string, text: string, suffix: string, tokens: number): { text: string; clipped: boolean } {
 	if (estimateTokens(`${prefix}${text}${suffix}`) <= tokens) return { text, clipped: false };
@@ -206,6 +211,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 	const resolution = options.resolution ?? "atom";
 	const budget = Math.max(1, Math.floor(options.budget));
 	const beam = Math.max(1, Math.floor(options.beam));
+	const policy = { ...DEFAULT_RECALL_POLICY, ...options.policy };
 
 	const inScopeSpan = (span: TimeSpan): boolean => spanWithin(span, options.from, options.to);
 	const inScopeRef = (ref: ViewChildRef): boolean =>
@@ -261,19 +267,20 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 
 	let rankerFallback = false;
 	const hopTokens = manifest?.config?.hopTokens ?? 1000;
+	const rankSlots = new Semaphore(policy.concurrency);
 	/**
 	 * A recollection (query or hint) longer than its share of one hop is
 	 * clipped for ranking, and the clip is recorded in the trace.
 	 */
 	const boundQuery = (text: string, search: "query" | "hint"): string => {
-		const fitted = fitText("Recollection: ", text, "\n\n", Math.floor(hopTokens * QUERY_SHARE));
+		const fitted = fitText("Recollection: ", text, "\n\n", Math.floor(hopTokens * policy.queryShare));
 		if (fitted.clipped) {
 			trace.push({
 				search,
 				hop: 0,
 				node: "",
 				action: "query-clipped",
-				note: `${search} clipped to ${Math.floor(hopTokens * QUERY_SHARE)} tokens for ranking`,
+				note: `${search} clipped to ${Math.floor(hopTokens * policy.queryShare)} tokens for ranking`,
 			});
 		}
 		return fitted.text;
@@ -290,16 +297,18 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		search: "query" | "hint",
 		hop: number,
 		key: string,
+		signal = options.signal,
 	): Promise<number[]> => {
+		signal?.throwIfAborted();
 		const base = rankQueryTokens(query);
 		const room = hopTokens - base;
 		const bounded = candidates.map(candidate => {
-			// Keep the header to half the room so the text always has space.
+			// Bound labels separately so candidate text always has space.
 			const label = fitText(
 				`### Candidate \`${candidate.key}\` — `,
 				candidate.label,
 				"\n",
-				Math.floor(room / 2),
+				Math.floor(room * policy.labelShare),
 			).text;
 			const header = candidateHeader({ key: candidate.key, label });
 			const text = fitText(header, candidate.text, "\n\n", room).text;
@@ -326,7 +335,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		await options.onProgress?.(`Ranking ${candidates.length} ${search} candidates at ${key || "root"}`);
 		const ranked = await mapWithConcurrencyLimit(
 			pages,
-			2,
+			policy.concurrency,
 			async (indexes, _pageIndex, signal) => {
 				signal.throwIfAborted();
 				const request = indexes.map(index => bounded[index]!);
@@ -336,12 +345,18 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 						`chronicle rank request of ${payload} tokens exceeds the ${hopTokens}-token hop ceiling`,
 					);
 				}
-				const outcome = await options.ranker.score(query, request, signal);
-				return { indexes, outcome };
+				await rankSlots.acquire(signal);
+				try {
+					signal.throwIfAborted();
+					const outcome = await options.ranker.score(query, request, signal);
+					return { indexes, outcome };
+				} finally {
+					rankSlots.release();
+				}
 			},
-			options.signal,
+			signal,
 		);
-		options.signal?.throwIfAborted();
+		signal?.throwIfAborted();
 		for (const result of ranked.results) {
 			if (!result) continue;
 			const { indexes, outcome } = result;
@@ -369,22 +384,22 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		score,
 	});
 
-	const descend = async (query: string, search: "query" | "hint"): Promise<SearchState> => {
+	const descend = async (query: string, search: "query" | "hint", signal: AbortSignal): Promise<SearchState> => {
 		const state: SearchState = { atoms: new Map(), periods: [], pool: new Map() };
 		type Item = { key: string; score: number; parent: string | null; ref?: ViewChildRef };
 		let frontier: Item[] = [{ key: start.key, score: 1, parent: null }];
 		let lastExpanded: string | null = null;
 		let lastCollapsed = false;
 		let hops = 0;
-		while (frontier.length > 0 && hops < MAX_HOPS) {
-			options.signal?.throwIfAborted();
+		while (frontier.length > 0 && hops < policy.maxHops) {
+			signal.throwIfAborted();
 			frontier.sort((a, b) => b.score - a.score);
 			const confident = [...state.atoms.values()]
 				.map(atom => atom.score)
-				.filter(score => score >= CONFIDENT)
+				.filter(score => score >= policy.confidence)
 				.sort((a, b) => b - a);
 			// Enough confident atoms, and no retained branch scores close enough to hide an equal one.
-			if (confident.length >= budget && frontier[0]!.score < confident[budget - 1]! - TIE_MARGIN) break;
+			if (confident.length >= budget && frontier[0]!.score < confident[budget - 1]! - policy.tieMargin) break;
 			const item = frontier.shift()!;
 			await options.onProgress?.(`Exploring ${search} at ${item.key || "root"} (hop ${hops + 1})`);
 			if (lastExpanded !== null && item.parent !== lastExpanded) {
@@ -416,6 +431,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 					search,
 					hops,
 					node.key,
+					signal,
 				);
 				trace.push({
 					search,
@@ -435,7 +451,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 					const previous = state.atoms.get(entry.id);
 					if (!previous || previous.score < score) state.atoms.set(entry.id, { entry, terminal: node.key, score });
 				});
-				if (best < DROP_RATIO * item.score && best < CONFIDENT) {
+				if (best < policy.dropRatio * item.score && best < policy.confidence) {
 					lastCollapsed = true;
 					trace.push({
 						search,
@@ -460,6 +476,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 				search,
 				hops,
 				node.key,
+				signal,
 			);
 			trace.push({
 				search,
@@ -475,7 +492,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 				if (child.level !== "group" && search === "query") state.pool.set(child.key, toPeriod(child, score));
 			}
 			const best = ranked[0]!.score;
-			if (best < DROP_RATIO * item.score && best < CONFIDENT) {
+			if (best < policy.dropRatio * item.score && best < policy.confidence) {
 				lastCollapsed = true;
 				trace.push({
 					search,
@@ -485,10 +502,10 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 					note: `best child ${best.toFixed(2)}`,
 				});
 			}
-			const kept = ranked.filter((entry, index) => index < beam || best - entry.score <= TIE_MARGIN);
+			const kept = ranked.filter((entry, index) => index < beam || best - entry.score <= policy.tieMargin);
 			for (const { child, score } of kept) frontier.push({ key: child.key, score, parent: node.key, ref: child });
 			frontier.sort((a, b) => b.score - a.score);
-			const bound = beam * FRONTIER_FACTOR;
+			const bound = beam * policy.frontierFactor;
 			if (frontier.length > bound) {
 				const evicted = frontier.slice(bound);
 				frontier = frontier.slice(0, bound);
@@ -574,21 +591,32 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		return current;
 	};
 	const query = boundQuery(options.query, "query");
-	const primary = await descend(query, "query");
+	const searches: { query: string; search: "query" | "hint" }[] = [{ query, search: "query" }];
+	if (options.hint?.trim() && resolution === "atom") {
+		searches.push({ query: boundQuery(options.hint, "hint"), search: "hint" });
+	}
+	const descents = await mapWithConcurrencyLimit(
+		searches,
+		policy.concurrency,
+		({ query, search }, _index, signal) => descend(query, search, signal),
+		options.signal,
+	);
+	options.signal?.throwIfAborted();
+	const primary = descents.results[0]!;
+	const hinted = descents.results[1];
 
 	let adjacent: ScoredAtom[] = [];
 	let anchor: ScoredAtom | undefined;
 	let anchorWindowCenter = 0;
-	if (options.hint?.trim() && resolution === "atom") {
-		const hinted = await descend(boundQuery(options.hint, "hint"), "hint");
+	if (hinted) {
 		anchor = [...hinted.atoms.values()].sort((a, b) => b.score - a.score)[0];
 		let anchorTime = anchor ? Date.parse(anchor.entry.eventTime) : 0;
-		if (anchor && anchor.score >= ATOM_MIN) {
+		if (anchor && anchor.score >= policy.atomMin) {
 			const current = await revalidate(anchor.entry, anchor.terminal, "hint");
 			if (current) anchorTime = Date.parse(current.eventTime);
 			else anchor = undefined;
 		}
-		if (anchor && anchor.score >= ATOM_MIN) {
+		if (anchor && anchor.score >= policy.atomMin) {
 			trace.push({
 				search: "hint",
 				hop: 0,
@@ -641,13 +669,13 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 	const selected: { atom: ScoredAtom; via: "descent" | "adjacent" }[] = [];
 	const seen = new Set<string>();
 	if (resolution === "atom") {
-		const reserve = anchor ? Math.ceil(budget / 2) : 0;
+		const reserve = anchor ? Math.ceil(budget * policy.adjacentShare) : 0;
 		for (const candidate of adjacent.slice(0, reserve)) {
 			selected.push({ atom: candidate, via: "adjacent" });
 			seen.add(candidate.entry.id);
 		}
 		const descentAtoms = [...primary.atoms.values()]
-			.filter(atom => atom.score >= ATOM_MIN && !seen.has(atom.entry.id))
+			.filter(atom => atom.score >= policy.atomMin && !seen.has(atom.entry.id))
 			.sort((a, b) => b.score - a.score);
 		for (const atom of descentAtoms) {
 			if (selected.length >= budget) break;
@@ -701,14 +729,14 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 			continue;
 		}
 		const neighbors: RecallNeighbor[] = [];
-		if (atom.score >= CONFIDENT || via === "adjacent") {
+		if (atom.score >= policy.confidence || via === "adjacent") {
 			const nearby = (await collectWindow(at - windowMs, at + windowMs, "query"))
 				.filter(candidate => candidate.entry.id !== current.id)
 				.sort(
 					(a, b) => Math.abs(Date.parse(a.entry.eventTime) - at) - Math.abs(Date.parse(b.entry.eventTime) - at),
 				);
 			for (const candidate of nearby) {
-				if (neighbors.length >= MAX_NEIGHBORS) break;
+				if (neighbors.length >= policy.maxNeighbors) break;
 				const neighbor = await revalidate(candidate.entry, candidate.terminal, "query");
 				if (!neighbor || Math.abs(Date.parse(neighbor.eventTime) - at) > windowMs) continue;
 				neighbors.push({
@@ -720,7 +748,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 				});
 			}
 		}
-		const bodyTruncated = current.body.length > MAX_EVIDENCE_CHARS;
+		const bodyTruncated = current.body.length > policy.evidenceChars;
 		results.push({
 			id: current.id,
 			title: current.title,
@@ -729,13 +757,13 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 			project: current.project,
 			sessionId: current.sessionId,
 			score: atom.score,
-			confident: atom.score >= CONFIDENT,
+			confident: atom.score >= policy.confidence,
 			via,
 			...(via === "adjacent" && anchor ? { anchor: anchor.entry.id } : {}),
 			beat: current.beatFile,
 			stub: path.join(nodeDir(options.root, atom.terminal), entry.stub),
 			transcript: { path: current.transcriptPath, entryIds: [...current.sources] },
-			body: bodyTruncated ? current.body.slice(0, MAX_EVIDENCE_CHARS) : current.body,
+			body: bodyTruncated ? current.body.slice(0, policy.evidenceChars) : current.body,
 			bodyTruncated,
 			stale,
 			neighbors,
@@ -752,13 +780,13 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 			: "adjacent-event";
 	};
 	if (resolution !== "atom") {
-		candidates = primary.periods.sort((a, b) => b.score - a.score).slice(0, MAX_CANDIDATE_PERIODS);
+		candidates = primary.periods.sort((a, b) => b.score - a.score).slice(0, policy.candidatePeriods);
 	} else if (
 		!results.some(result => result.confident) &&
-		!(anchor && anchor.score >= CONFIDENT && results.some(result => result.via === "adjacent"))
+		!(anchor && anchor.score >= policy.confidence && results.some(result => result.via === "adjacent"))
 	) {
 		ambiguous = true;
-		candidates = [...primary.pool.values()].sort((a, b) => b.score - a.score).slice(0, MAX_CANDIDATE_PERIODS);
+		candidates = [...primary.pool.values()].sort((a, b) => b.score - a.score).slice(0, policy.candidatePeriods);
 		ask = askFor(candidates);
 	} else {
 		// High scores do not mean discrimination: atoms just past the budget that
@@ -770,7 +798,9 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 			const chosenTerminals = new Set(chosen.map(atom => atom.terminal));
 			const tied = ranked.filter(
 				atom =>
-					!chosen.includes(atom) && last.score - atom.score <= TIE_MARGIN && !chosenTerminals.has(atom.terminal),
+					!chosen.includes(atom) &&
+					last.score - atom.score <= policy.tieMargin &&
+					!chosenTerminals.has(atom.terminal),
 			);
 			if (tied.length > 0) {
 				ambiguous = true;
@@ -791,7 +821,7 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 						score: atom.score,
 					});
 				}
-				candidates = periods.slice(0, MAX_CANDIDATE_PERIODS);
+				candidates = periods.slice(0, policy.candidatePeriods);
 				ask = askFor(candidates);
 			}
 		}

@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://npi-deck.app/schemas/step-deck.json",
+  "title": "RoutineStep — deck",
+  "description": "First-party npi-deck action. Safer than generic HTTP for deck-owned mutations like creating inbox items or tasks.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "https://npi-deck.app/schemas/step-common.json" },
+    {
+      "type": "object",
+      "required": ["type", "action"],
+      "properties": {
+        "type": { "const": "deck" },
+        "action": {
+          "enum": [
+            "create_inbox_item",
+            "create_task",
+            "move_task",
+            "promote_inbox_item_to_task",
+            "list_tasks",
+            "list_inbox",
+            "get_task",
+            "get_inbox_item",
+            "kb_orphan_census",
+            "kb_read"
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["action", "kind", "title"],
+          "properties": {
+            "action": { "const": "create_inbox_item" },
+            "kind": {
+              "enum": ["email", "ticket", "idea", "decision", "investigation", "capture"]
+            },
+            "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+            "body": { "type": "string" },
+            "source": { "type": "string", "minLength": 1, "maxLength": 200 }
+          }
+        },
+        {
+          "required": ["action", "title"],
+          "properties": {
+            "action": { "const": "create_task" },
+            "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+            "body": { "type": "string" },
+            "properties": { "type": "object", "additionalProperties": true },
+            "state_ref": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "cwd": { "type": "string", "minLength": 1, "maxLength": 1000 }
+          }
+        },
+        {
+          "required": ["action", "task_ref", "state_ref"],
+          "properties": {
+            "action": { "const": "move_task" },
+            "task_ref": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "state_ref": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "index": { "type": "integer", "minimum": 0, "default": 0 }
+          }
+        },
+        {
+          "required": ["action", "inbox_ref"],
+          "properties": {
+            "action": { "const": "promote_inbox_item_to_task" },
+            "inbox_ref": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "state_ref": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "mark_processed": { "type": "boolean", "default": true },
+            "properties": { "type": "object", "additionalProperties": true },
+            "body": { "type": "string" },
+            "cwd": { "type": "string", "minLength": 1, "maxLength": 1000 }
+          }
+        },
+        {
+          "required": ["action"],
+          "properties": {
+            "action": { "const": "list_tasks" },
+            "state_ref": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "since_hours": { "type": "number", "minimum": 0 },
+            "include_archived": { "type": "boolean", "default": false },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 1000 }
+          }
+        },
+        {
+          "required": ["action"],
+          "properties": {
+            "action": { "const": "list_inbox" },
+            "kind": {
+              "enum": ["email", "ticket", "idea", "decision", "investigation", "capture"]
+            },
+            "since_hours": { "type": "number", "minimum": 0 },
+            "include_processed": { "type": "boolean", "default": false },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 1000 }
+          }
+        },
+        {
+          "required": ["action", "task_ref"],
+          "properties": {
+            "action": { "const": "get_task" },
+            "task_ref": { "type": "string", "minLength": 1, "maxLength": 120 }
+          }
+        },
+        {
+          "required": ["action", "inbox_ref"],
+          "properties": {
+            "action": { "const": "get_inbox_item" },
+            "inbox_ref": { "type": "string", "minLength": 1, "maxLength": 120 }
+          }
+        },
+        {
+          "required": ["action", "path"],
+          "properties": {
+            "action": { "const": "kb_read" },
+            "path": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "required": ["action"],
+          "properties": {
+            "action": { "const": "kb_orphan_census" },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 10000 }
+          }
+        }
+      ]
+    }
+  ]
+}

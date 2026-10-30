@@ -85,6 +85,8 @@ export interface PersonaFeature {
 	list(sessionId: string): Promise<string>;
 	show(name: string): Promise<string>;
 	status(sessionId: string): Promise<string>;
+	/** Resolve a stored persona's instructions, including profile-contained files. */
+	instructions(name: string): Promise<string>;
 	use(name: string, host: PersonaHost): Promise<string>;
 	off(host: PersonaHost): Promise<string>;
 	delete(name: string, host: PersonaHost): Promise<string>;
@@ -166,6 +168,11 @@ export function createPersonaFeature(
 		async list(id) {
 			const d = await data(id);
 			return d.items.length ? d.items.map(x => `${x.active ? "*" : "-"} ${x.name}`).join("\n") : "No personas.";
+		},
+		async instructions(name) {
+			const definition = (await store.read()).personas[name];
+			if (!definition) throw new Error(`Unknown persona: ${name}`);
+			return source(definition);
 		},
 		async show(name) {
 			const definition = (await store.read()).personas[name];

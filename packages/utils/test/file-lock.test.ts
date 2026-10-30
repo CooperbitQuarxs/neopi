@@ -8,6 +8,8 @@ import {
 	FileLockContentionError,
 	type FileLockHandle,
 	withFileLock,
+	tryAcquireFileLock,
+	withFileLockSync,
 } from "../src/file-lock";
 import { isEnoent } from "../src/fs-error";
 import { removeWithRetries } from "../src/temp";
@@ -29,6 +31,65 @@ afterAll(async () => {
 });
 
 describe("native file-lock ownership", () => {
+	test.skipIf(process.platform !== "linux")(
+		"cooperative owners exclude every ordinary acquisition entry point until release",
+		async () => {
+			const target = path.join(await mkRoot(), "mixed-cooperative");
+			const owner = await acquireFileLock(target, { retries: 1, takeoverStoppedOwner: true });
+			try {
+				await expect(acquireFileLock(target, { retries: 1 })).rejects.toBeInstanceOf(FileLockContentionError);
+				expect(tryAcquireFileLock(target)).toBeNull();
+				expect(() => withFileLockSync(target, () => {}, { retries: 1 })).toThrow(FileLockContentionError);
+				expect(owner.isOwner?.()).toBe(true);
+			} finally {
+				owner.release();
+			}
+			const successor = tryAcquireFileLock(target);
+			expect(successor).not.toBeNull();
+			successor?.release();
+			withFileLockSync(target, () => {}, { retries: 1 });
+		},
+	);
+
+	test.skipIf(process.platform !== "linux")(
+		"ordinary owners exclude cooperative acquisitions and late releases cannot unlock successors",
+		async () => {
+			const target = path.join(await mkRoot(), "mixed-ordinary");
+			const owner = await acquireFileLock(target, { retries: 1 });
+			try {
+				await expect(acquireFileLock(target, { retries: 1, takeoverStoppedOwner: true })).rejects.toBeInstanceOf(
+					FileLockContentionError,
+				);
+			} finally {
+				owner.release();
+			}
+			const successor = await acquireFileLock(target, { retries: 1, takeoverStoppedOwner: true });
+			try {
+				owner.release();
+				expect(tryAcquireFileLock(target)).toBeNull();
+				expect(successor.isOwner?.()).toBe(true);
+			} finally {
+				successor.release();
+			}
+		},
+	);
+
+	test.skipIf(process.platform !== "linux")("simultaneous mixed-mode attempts have exactly one owner", async () => {
+		const target = path.join(await mkRoot(), "mixed-race");
+		const cooperative = acquireFileLock(target, { retries: 1, takeoverStoppedOwner: true });
+		const ordinary = acquireFileLock(target, { retries: 1 });
+		const results = await Promise.allSettled([cooperative, ordinary]);
+		try {
+			expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+			const rejected = results.find(result => result.status === "rejected");
+			expect(rejected?.status === "rejected" && rejected.reason).toBeInstanceOf(FileLockContentionError);
+		} finally {
+			for (const result of results) {
+				if (result.status === "fulfilled") result.value.release();
+			}
+		}
+	});
+
 	test("a cancelled waiter never enters its critical section or releases the current owner", async () => {
 		const root = await mkRoot();
 		const target = path.join(root, "cancelled.json");
@@ -323,6 +384,8 @@ describe("native file-lock ownership", () => {
 				await expect(acquireFileLock(target, { retries: 1, takeoverStoppedOwner: true })).rejects.toBeInstanceOf(
 					FileLockContentionError,
 				);
+				expect(tryAcquireFileLock(target)).toBeNull();
+				await expect(acquireFileLock(target, { retries: 1 })).rejects.toBeInstanceOf(FileLockContentionError);
 				await fs.cp(path.dirname(target), path.dirname(copiedTarget), { recursive: true });
 				copied = await acquireFileLock(copiedTarget, { retries: 1, takeoverStoppedOwner: true });
 				expect(copied.isOwner?.()).toBe(true);
@@ -332,6 +395,14 @@ describe("native file-lock ownership", () => {
 				);
 				holder.kill();
 				await holder.exited;
+				const ordinary = await acquireFileLock(target, { retries: 1 });
+				try {
+					await expect(acquireFileLock(target, { retries: 1, takeoverStoppedOwner: true })).rejects.toBeInstanceOf(
+						FileLockContentionError,
+					);
+				} finally {
+					ordinary.release();
+				}
 				const recovered = await acquireFileLock(target, { retries: 1, takeoverStoppedOwner: true });
 				try {
 					expect(recovered.isOwner?.()).toBe(true);

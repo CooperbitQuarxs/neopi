@@ -90,7 +90,8 @@ describe("MCP bridge structuredContent", () => {
 			const args = next === undefined ? {} : { cursor: next };
 			const result = await tool.execute("page", args, undefined, {} as CustomToolContext);
 			const value = bridgeValueFromToolResult(tool.name, args, result);
-			if (typeof value !== "object" || !("details" in value)) throw new Error("missing tool details");
+			if (value === null || typeof value !== "object" || !("details" in value))
+				throw new Error("missing tool details");
 			const page = (value.details as MCPToolDetails).structuredContent;
 			if (!page || !Array.isArray(page.items)) throw new Error("missing structured page");
 			items.push(...page.items);
@@ -138,7 +139,8 @@ describe("MCP bridge structuredContent", () => {
 			expect(details.mcpToolName).toBe("list_issues");
 			expect(details.isError).toBe(true);
 			const value = bridgeValueFromToolResult(tool.name, {}, result);
-			if (typeof value !== "object" || !("details" in value)) throw new Error("Expected eval details");
+			if (value === null || typeof value !== "object" || !("details" in value))
+				throw new Error("Expected eval details");
 			expect((value.details as MCPToolDetails).structuredContent).toEqual(structuredContent);
 			expect(value.hasError).toBe(true);
 			expect(value.text).not.toContain(structuredContent.pages[0]!.rows[0]!.body);

@@ -298,6 +298,15 @@ export type OpenAIReasoningDisableMode =
 
 export type OpenAIStreamMarkupHealingPattern = "kimi" | "dsml" | "qwen" | "thinking";
 
+export type SamplingParameter =
+	| "temperature"
+	| "topP"
+	| "topK"
+	| "minP"
+	| "presencePenalty"
+	| "repetitionPenalty"
+	| "frequencyPenalty";
+
 /**
  * Compatibility settings for openai-completions API.
  * Use this to override URL-based auto-detection for custom providers.
@@ -539,6 +548,8 @@ export interface OpenAICompat {
 	 * model id. Default: true. Issue #5606.
 	 */
 	supportsSamplingParams?: boolean;
+	/** Individual sampling options rejected by this endpoint even when sampling is otherwise supported. */
+	unsupportedSamplingParams?: readonly SamplingParameter[];
 	/**
 	 * Whether presence/frequency penalties and stop sequences may be sent.
 	 * First-party xAI `/v1/responses` rejects penalty fields for every model.
@@ -929,6 +940,7 @@ export interface ResolvedOpenAISharedCompat {
 	reasoningEffortMap: Partial<Record<Effort, string>>;
 	supportsReasoningParams: boolean;
 	supportsSamplingParams: boolean;
+	unsupportedSamplingParams?: readonly SamplingParameter[];
 	supportsPenaltyAndStopParams: boolean;
 	thinkingFormat: OpenAIReasoningFormat;
 	/** Kimi Code transport selected by live per-model protocol metadata. */
@@ -1016,6 +1028,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "supportsReasoningSummary"
 			| "statefulResponses"
 			| "supportsSamplingParams"
+			| "unsupportedSamplingParams"
 			| "supportsPenaltyAndStopParams"
 			| "thinkingFormat"
 			| "kimiApiFormat"
@@ -1487,6 +1500,14 @@ export interface CursorModelRoute {
 }
 // Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
+	/** Discovery supplied a text-only placeholder rather than reported input modalities. */
+	discoveryMissingInput?: boolean;
+	/** Discovery used a compatibility default because no context limit was reported. */
+	discoveryMissingContextWindow?: boolean;
+	/** Discovery used a compatibility default because no output limit was reported. */
+	discoveryMissingMaxTokens?: boolean;
+	/** Discovery conservatively disabled effort until optional facts establish reasoning support. */
+	discoveryMissingReasoningEffort?: boolean;
 	id: string;
 	/** Role-specific runner capability; omitted for ordinary chat models. */
 	kind?: ModelKind;

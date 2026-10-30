@@ -32,6 +32,9 @@ type FakeEditor = {
 	pendingImageLinks: (string | undefined)[];
 	setText(text: string): void;
 	getText(): string;
+	getExpandedText(): string;
+	setDraft(text: string, images?: ImageContent[]): void;
+	clearDraftForRecall(): void;
 	setCollapsedText(text: string): void;
 	composerChips(): unknown[];
 	addToHistory(text: string): void;
@@ -60,6 +63,17 @@ function createContext(sessionOverride?: InteractiveModeContext["session"]) {
 		},
 		getText() {
 			return editorText;
+		},
+		getExpandedText() {
+			return editorText;
+		},
+		setDraft(text: string, images?: ImageContent[]) {
+			editorText = text;
+			this.pendingImages = [...(images ?? [])];
+			this.pendingImageLinks = this.pendingImages.map(() => undefined);
+		},
+		clearDraftForRecall() {
+			this.clearDraft();
 		},
 		setCollapsedText(text: string) {
 			editorText = text;

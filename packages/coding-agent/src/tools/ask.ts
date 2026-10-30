@@ -1,5 +1,5 @@
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
-import type { AskToolDetails, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
+import type { AskOptionNote, AskToolDetails, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
 /**
  * Ask Tool - Interactive user prompting during execution
  *
@@ -21,12 +21,13 @@ import { type as arkType } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type ImageContent, type TextContent, type ToolExample, validateToolArguments } from "@oh-my-pi/pi-ai";
 import { replaceTabs, TERMINAL, truncateToWidth } from "@oh-my-pi/pi-tui";
-import { isRecord, logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, untilAborted } from "@oh-my-pi/pi-utils";
 
 import type { ExtensionUISelectItem } from "../extensibility/extensions";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
 import { editorKey, editorKeys } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import askDescription from "../prompts/tools/ask.md" with { type: "text" };
 import { vocalizer } from "../tts/vocalizer";
 
@@ -479,8 +480,23 @@ async function askSingleQuestion(
 	return { selectedOptions, customInput, note, timedOut };
 }
 
+function formatOptionNotes(result: { selectedOptions: string[]; optionNotes?: AskOptionNote[] }): string {
+	return (result.optionNotes ?? [])
+		.map(entry => {
+			const selected = result.selectedOptions.includes(entry.option) ? "selected" : "not selected";
+			const note = entry.note
+				.split("\n")
+				.map(line => `  ${line}`)
+				.join("\n");
+			return `Note on option ${JSON.stringify(entry.option)} (${selected}):\n${note}`;
+		})
+		.join("\n");
+}
+
 function formatQuestionResult(result: QuestionResult): string {
-	const noteSuffix = result.note ? ` (note: ${result.note})` : "";
+	const noteSuffix =
+		(result.note ? ` (note: ${result.note})` : "") +
+		(result.optionNotes?.length ? `\n${formatOptionNotes(result)}` : "");
 	const custom = result.customInput === undefined ? undefined : `"${result.customInput}"`;
 	if (result.selectedOptions.length === 0) {
 		if (custom !== undefined) return `${result.id}: ${custom}${noteSuffix}`;
@@ -496,6 +512,7 @@ function formatSingleQuestionResponse(result: {
 	selectedOptions: string[];
 	customInput?: string;
 	note?: string;
+	optionNotes?: AskOptionNote[];
 	timedOut?: boolean;
 	multi: boolean;
 }): string {
@@ -526,6 +543,7 @@ function formatSingleQuestionResponse(result: {
 				: `User added note: ${result.note}`,
 		);
 	}
+	if (result.optionNotes?.length) responseParts.push(formatOptionNotes(result));
 	if (responseParts.length > 0) return responseParts.join("\n");
 	return result.multi ? "User did not select any options" : "User cancelled the selection";
 }
@@ -547,7 +565,9 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly approval = "read" as const;
 	readonly label = "Ask";
 	readonly summary = "Ask the user a clarifying question";
-	readonly description: string;
+	get description(): string {
+		return renderPromptAsset("tools/ask.md", askDescription, {}, { cwd: this.session.cwd });
+	}
 	readonly parameters = askSchema;
 	readonly strict = true;
 
@@ -574,9 +594,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly concurrency = "exclusive";
 	readonly loadMode = "discoverable";
 
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(askDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): AskTool | null {
 		return (session.canPromptUser ?? session.hasUI) ? new AskTool(session) : null;
@@ -814,6 +832,17 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 					if (result.customInputImages) answerImages.push(...result.customInputImages);
 					const noteOffset = answerImages.length;
 					if (result.noteImages) answerImages.push(...result.noteImages);
+					const optionNotes = result.optionNotes?.map(entry => {
+						if (!question.options.some(option => option.label === entry.option)) {
+							throw new Error("Ask dialog returned a note for an unknown option");
+						}
+						const offset = answerImages.length;
+						if (entry.images) answerImages.push(...entry.images);
+						return {
+							option: entry.option,
+							note: shiftImageMarkers(entry.note, offset, entry.images?.length ?? 0),
+						};
+					});
 					results.push({
 						id: question.id,
 						question: question.question,
@@ -828,6 +857,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 							result.note === undefined
 								? undefined
 								: shiftImageMarkers(result.note, noteOffset, result.noteImages?.length ?? 0),
+						...(optionNotes?.length ? { optionNotes } : {}),
 						timedOut: result.timedOut,
 					});
 				}
@@ -853,6 +883,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						selectedOptions: result.selectedOptions,
 						customInput: result.customInput,
 						note: result.note,
+						...(result.optionNotes?.length ? { optionNotes: result.optionNotes } : {}),
 						timedOut: result.timedOut,
 					};
 					const responseText = formatSingleQuestionResponse(result);

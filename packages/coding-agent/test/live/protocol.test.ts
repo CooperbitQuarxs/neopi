@@ -6,7 +6,7 @@ import {
 	buildSessionContextAppend,
 	CONTEXT_CHUNK_BYTES,
 	chunkLiveContext,
-	LIVE_MODEL,
+	DEFAULT_LIVE_MODEL,
 	parseLiveServerEvent,
 } from "../../src/live/protocol";
 
@@ -73,12 +73,16 @@ describe("Frameless Bidi server events", () => {
 
 describe("Frameless Bidi client payloads", () => {
 	test("builds the exact live call session JSON", () => {
-		const payload = buildLiveSessionPayload("Be concise.", "marin");
+		const payload = buildLiveSessionPayload("Be concise.", "marin", DEFAULT_LIVE_MODEL);
 
-		expect(LIVE_MODEL).toBe("gpt-live-1-codex");
+		expect(DEFAULT_LIVE_MODEL).toBe("gpt-live-1-codex");
 		expect(JSON.stringify(payload)).toBe(
 			'{"model":"gpt-live-1-codex","instructions":"Be concise.","audio":{"output":{"voice":"marin"}},"delegation":{"type":"client"}}',
 		);
+	});
+
+	test("uses the configured model slug without replacing it with the default", () => {
+		expect(buildLiveSessionPayload("Be concise.", "sol", "custom-live-model").model).toBe("custom-live-model");
 	});
 
 	test("builds the exact delegation context JSON", () => {

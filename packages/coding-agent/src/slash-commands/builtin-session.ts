@@ -37,6 +37,7 @@ import { StatsNotice } from "@oh-my-pi/pi-tui/overlays/stats-notice";
 import { handleTodoAcp } from "./helpers/todo";
 import { buildUsageReportText } from "./helpers/usage-report";
 import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
+import { parseHumanToolArguments, parseHumanToolCommand } from "./tool-arguments";
 
 async function handleUsageResetCommand(
 	arg: string,
@@ -505,6 +506,42 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: (_command, runtime) => {
 			runtime.ctx.handleHotkeysCommand();
 			clearSubmittedText(runtime);
+		},
+	},
+	{
+		name: "tool",
+		icon: "tools",
+		description: "Inspect enabled tools, or invoke with JSON or key=value arguments",
+		allowArgs: true,
+		handle: async ({ args }, runtime) => {
+			const { name, argumentsText: rest } = parseHumanToolCommand(args);
+			if (!rest) {
+				await runtime.output(runtime.session.getToolCatalogDocs(name || undefined));
+				return commandConsumed();
+			}
+			const invoke = async (): Promise<void> => {
+				try {
+					await runtime.session.invokeTool(name, parseHumanToolArguments(rest), runtime.signal);
+				} catch (error) {
+					await runtime.output(errorMessage(error));
+				}
+			};
+			if (runtime.runCommandInBackground) runtime.runCommandInBackground(invoke);
+			else await invoke();
+			return commandConsumed();
+		},
+		handleTui: async ({ args }, runtime) => {
+			const { name, argumentsText: rest } = parseHumanToolCommand(args);
+			clearSubmittedText(runtime);
+			if (!rest) {
+				runtime.ctx.handleToolCatalogCommand(name || undefined);
+				return;
+			}
+			try {
+				await runtime.ctx.session.invokeTool(name, parseHumanToolArguments(rest));
+			} catch (error) {
+				runtime.ctx.showError(errorMessage(error));
+			}
 		},
 	},
 	{

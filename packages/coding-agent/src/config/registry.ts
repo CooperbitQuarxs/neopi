@@ -41,6 +41,8 @@ export interface UiEnum<T extends readonly string[]> extends UiBase {
 export interface UiNumber extends UiBase {
 	/** Submenu options. Without options, a numeric setting has no UI representation (intentional hide). */
 	options?: ReadonlyArray<SubmenuOption>;
+	/** Keep preset choices and add a field for arbitrary numeric input. */
+	customInput?: true;
 }
 
 export interface UiString extends UiBase {
@@ -90,6 +92,10 @@ export type ProtocolHost = "rpc" | "acp";
 interface DefinitionBase {
 	/** Dotted setting path as written in config files, e.g. `"lsp.diagnosticsOnWrite"`. */
 	id: string;
+	/** May be overridden by a persistent roleSettings entry while that role is active. */
+	roleScoped?: true;
+	/** Additional constraints for a role value, without rejecting legacy global configuration. */
+	validateRole?: (value: unknown) => void;
 	/**
 	 * Marks a credential: never printed or exported without an explicit request. Drives both CLI
 	 * redaction and settings-panel masking (together with `ui.secret`, see {@link Setting.isCredential}).
@@ -108,10 +114,12 @@ interface DefinitionBase {
 	 */
 	protocolDefault?: readonly ProtocolHost[];
 	/**
-	 * Rejects a malformed configured value with a descriptive error. Runs on every load/reload and
-	 * before every write, so a typo fails loudly instead of silently reading as the default.
+	 * Rejects a malformed configured value with a descriptive error. Runs before every write and
+	 * on load/reload unless `validateConfigured` defers individual entries to their consumer.
 	 */
 	validate?: (raw: unknown) => void;
+	/** Load-time validation when individual entries must be checked at their consumption boundary. */
+	validateConfigured?: (raw: unknown) => void;
 	/**
 	 * Canonicalizes a value on its way in — text parsed by {@link Setting.parse} and every
 	 * `set`/`override` — e.g. flooring request limits. May throw like `validate`.
@@ -150,7 +158,7 @@ export interface EnumDefinition<T extends readonly string[] = readonly string[]>
 
 export interface ArrayDefinition<T = unknown> extends DefinitionBase {
 	type: "array";
-	default: readonly T[];
+	default: readonly T[] | null;
 	env?: SettingEnv<readonly T[]>;
 	/**
 	 * Closed vocabulary for the entries (`label` names one entry in messages, e.g. "status line
@@ -497,6 +505,11 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 		return this.definition.type;
 	}
 
+	/** Whether persistent model-role overrides are supported for this setting. */
+	get roleScoped(): boolean {
+		return this.definition.roleScoped === true;
+	}
+
 	/** Allowed values for enum settings. */
 	get enumValues(): readonly string[] | undefined {
 		return this.definition.type === "enum" ? this.definition.values : undefined;
@@ -617,7 +630,7 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 			case "enum":
 				return typeof value === "string" && this.definition.values.includes(value);
 			case "array":
-				return Array.isArray(value);
+				return Array.isArray(value) || (value === null && this.definition.default === null);
 			case "record":
 				return typeof value === "object" && value !== null && !Array.isArray(value);
 		}
@@ -672,14 +685,20 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 		}
 	}
 
+	/** Validate an explicit role value using its ordinary and role-only constraints. */
+	assertRoleWritable(value: unknown): void {
+		this.assertWritable(value);
+		this.definition.validateRole?.(value);
+	}
+
 	/**
 	 * Registry plumbing run by `Settings` on every load/reload for the value `settings` configures.
 	 *
-	 * @throws Error when `raw` fails `validate`. Unknown {@link ArrayDefinition.items} entries only warn,
-	 * once each per instance.
+	 * @throws Error when `raw` fails load-time validation. Unknown {@link ArrayDefinition.items}
+	 * entries only warn, once each per instance.
 	 */
 	checkConfigured(settings: Settings, raw: unknown): void {
-		this.definition.validate?.(raw);
+		(this.definition.validateConfigured ?? this.definition.validate)?.(raw);
 		const unknown = this.#unknownItems(raw);
 		const items = settings.warnState.items;
 		let warned = items.get(this.id);

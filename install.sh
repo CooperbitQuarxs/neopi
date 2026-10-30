@@ -96,25 +96,6 @@ smoke "$dest"
 installed=1
 say "smoke test passed: $("$dest" --version)"
 
-# Built-ins replace these formerly deployed hooks. Retire only links with the
-# managed extensions/<name> target shape, including links to older checkouts
-# and dangling links. Operator-owned files, directories, and other links stay.
-# An explicit staging agent directory must win over inherited profile names.
-ext_env=()
-((staging)) && ext_env=(env -u OMP_PROFILE -u PI_PROFILE)
-ext_dir=$("${ext_env[@]}" bun -e 'import { getAgentDir } from "@oh-my-pi/pi-utils/dirs"; process.stdout.write(getAgentDir() + "/extensions")')
-for name in neopi-persona neopi-loadout neopi-repl neopi-live-persona \
-	omomp-persona omomp-loadout omomp-repl omomp-live-persona; do
-	entry="$ext_dir/$name"
-	[[ -L $entry ]] || continue
-	target=$(readlink -- "$entry")
-	[[ $target == /* ]] || target="$ext_dir/$target"
-	target=$(realpath -ms -- "$target")
-	[[ $(basename -- "$target") == "$name" && $(basename -- "$(dirname -- "$target")") == extensions ]] || continue
-	rm -- "$entry"
-	say "retired managed extension $entry"
-done
-
 prune_natives() {
 	natives_version=$(bun -p 'require("./packages/natives/package.json").version')
 	# The loader's own resolver: it can differ from pi-utils' cache dir under XDG.

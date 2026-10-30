@@ -4,6 +4,14 @@ provider "openai" {
 	default-model "gpt-5.5"
 	env "OPENAI_API_KEY"
 	image-count-budget 200
+	// First-party endpoints reject these extensions even on non-reasoning
+	// models that accept temperature/top_p. Compatible proxies may support them.
+	on-api "openai-completions" {
+		unsupported-sampling-params "topK" "minP" "repetitionPenalty"
+	}
+	on-api "openai-responses" {
+		unsupported-sampling-params "topK" "minP" "presencePenalty" "repetitionPenalty" "frequencyPenalty"
+	}
 	kind-apis {
 		embedding "openai-embeddings"
 		image "openai-responses"

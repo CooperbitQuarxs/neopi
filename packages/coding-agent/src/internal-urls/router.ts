@@ -21,12 +21,15 @@ import { AgentProtocolHandler } from "./agent-protocol";
 import { ArtifactProtocolHandler } from "./artifact-protocol";
 import { AttachmentProtocolHandler } from "./attachment-protocol";
 import { CfgProtocolHandler } from "./cfg-protocol";
+import { CompactionProtocolHandler } from "./compaction-protocol";
 import { ConflictProtocolHandler } from "./conflict-protocol";
+import { EnvProtocolHandler } from "./env-protocol";
 import { HistoryProtocolHandler } from "./history-protocol";
 import { IssueProtocolHandler, PrProtocolHandler } from "./issue-pr-protocol";
 import { LocalProtocolHandler } from "./local-protocol";
 import { McpProtocolHandler } from "./mcp-protocol";
 import { MemoryProtocolHandler } from "./memory-protocol";
+import { ModelProtocolHandler } from "./model-protocol";
 import { OmpProtocolHandler } from "./omp-protocol";
 import { extractUriScheme, parseInternalUrl } from "./parse";
 import { ProcProtocolHandler } from "./proc-protocol";
@@ -34,6 +37,7 @@ import { RuleProtocolHandler } from "./rule-protocol";
 import { SecurityProtocolHandler } from "./security-protocol";
 import { SkillProtocolHandler } from "./skill-protocol";
 import { SshProtocolHandler } from "./ssh-protocol";
+import { ToolProtocolHandler } from "./tool-protocol";
 import type {
 	InternalResource,
 	InternalUrl,
@@ -112,6 +116,9 @@ export class InternalUrlRouter {
 		this.register(new LocalProtocolHandler());
 		this.register(new ProcProtocolHandler());
 		this.register(new CfgProtocolHandler());
+		this.register(new ModelProtocolHandler());
+		this.register(new CompactionProtocolHandler());
+		this.register(new EnvProtocolHandler());
 		this.register(new SshProtocolHandler());
 		// Reserved NeoPi-owned security-analysis namespace; vendor adapters normalize into its store.
 		this.register(new SecurityProtocolHandler());
@@ -121,6 +128,7 @@ export class InternalUrlRouter {
 		this.register(resourceFallback);
 		this.register(new OmpProtocolHandler());
 		this.register(new XdProtocolHandler());
+		this.register(new ToolProtocolHandler());
 		this.register(new AttachmentProtocolHandler());
 		this.register(new ConflictProtocolHandler());
 		this.#builtinSchemes = new Set(this.#handlers.keys());

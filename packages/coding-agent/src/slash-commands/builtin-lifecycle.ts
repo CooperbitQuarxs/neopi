@@ -6,8 +6,10 @@ import { APP_NAME, logger, setProjectDir } from "@oh-my-pi/pi-utils";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import { rebindMemoryBackendForCwd } from "../hindsight/backend";
 import { memoryStatsUnavailableMessage, resolveMemoryBackend } from "../memory-backend";
+import { getSessionLaunchProfile } from "../neopi/launch-profile";
 import type { FreshSessionResult, HandoffResult } from "../session/agent-session";
 import { COMPACT_MODES, parseCompactArgs } from "../session/compact-modes";
+import { runCompactionControl } from "../session/compaction-controls";
 import { USER_INTERRUPT_LABEL } from "../session/messages";
 import { resolveResumableSession } from "../session/session-listing";
 import { toggleSessionPin } from "../session/session-pins";
@@ -135,6 +137,14 @@ async function relocateHeadlessSession(
 
 export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
+		name: "launch-profile",
+		description: "Show the launch profile and its preloaded memory snapshot",
+		handle: async (_command, runtime) => {
+			await runtime.output(getSessionLaunchProfile(runtime.session) ?? "No launch profile memory was preloaded.");
+			return commandConsumed();
+		},
+	},
+	{
 		name: "ssh",
 		icon: "host",
 		description: "Manage SSH hosts (add, list, remove)",
@@ -213,18 +223,35 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		icon: "compress",
 		description: "Manually compact the session context",
 		acpDescription: "Compact the conversation",
-		subcommands: COMPACT_MODES.map(mode => ({
-			name: mode.name,
-			description: mode.description,
-			usage: mode.rejectsFocus ? undefined : "[focus]",
-		})),
-		acpInputHint: `[${COMPACT_MODES.map(mode => mode.name).join("|")}] [focus]`,
+		subcommands: [
+			{ name: "control", description: "Show or change session compaction policy", usage: "[JSON request]" },
+			...COMPACT_MODES.map(mode => ({
+				name: mode.name,
+				description: mode.description,
+				usage: mode.rejectsFocus ? undefined : "[focus]",
+			})),
+		],
+		acpInputHint: `control [JSON request] | [${COMPACT_MODES.map(mode => mode.name).join("|")}] [focus]`,
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			const usage = runtime.ctx.session.getContextUsage();
 			return usage ? `Compact: context ${Math.round(usage.percent)}% used` : "Compact: context unavailable";
 		},
 		handle: async (command, runtime) => {
+			if (/^control(?:\s|$)/u.test(command.args.trim())) {
+				try {
+					const input = command.args.trim().slice("control".length).trim();
+					await runtime.output(
+						await runCompactionControl(runtime.settings, input ? JSON.parse(input) : {}, {
+							model: runtime.session.model,
+							tokens: runtime.session.getContextUsage()?.tokens,
+						}),
+					);
+				} catch (error) {
+					await runtime.output(errorMessage(error));
+				}
+				return commandConsumed();
+			}
 			const parsed = parseCompactArgs(command.args);
 			if ("error" in parsed) return usage(parsed.error, runtime);
 			const runCompact = async (): Promise<void> => {
@@ -265,6 +292,21 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 			return commandConsumed();
 		},
 		handleTui: async (command, runtime) => {
+			if (/^control(?:\s|$)/u.test(command.args.trim())) {
+				clearSubmittedText(runtime);
+				try {
+					const input = command.args.trim().slice("control".length).trim();
+					runtime.ctx.showStatus(
+						await runCompactionControl(runtime.ctx.session.settings, input ? JSON.parse(input) : {}, {
+							model: runtime.ctx.session.model,
+							tokens: runtime.ctx.session.getContextUsage()?.tokens,
+						}),
+					);
+				} catch (error) {
+					runtime.ctx.showWarning(errorMessage(error));
+				}
+				return;
+			}
 			const parsed = parseCompactArgs(command.args);
 			clearSubmittedText(runtime);
 			if ("error" in parsed) {

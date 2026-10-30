@@ -5,15 +5,19 @@ import * as path from "node:path";
 import type { Subprocess } from "bun";
 
 const tempDirs: string[] = [];
-const children: Array<Subprocess<"ignore", "pipe", "pipe">> = [];
+const children: Array<Subprocess<"pipe", "pipe", "pipe">> = [];
+const HOST_TOKEN = "hosted-stats-test-token-not-a-user-credential";
 const clientFiles = {
-	"index.html": '<!doctype html><html><body><script type="module" src="/index.js"></script></body></html>',
-	"index.js": 'document.documentElement.dataset.loaded = "true";',
+	"index.html":
+		'<!doctype html><html><head><link rel="stylesheet" href="index.css"></head><body><script type="module" src="/index.js"></script></body></html>',
+	"index.js":
+		'document.documentElement.dataset.loaded = "true"; globalThis.fixture = "</script>"; globalThis.replacement = "$&";',
+	"index.css": "body { color: blue; }",
 	"styles.css": "body { color: blue; }",
 	"favicon.ico": await Bun.file(path.resolve(import.meta.dir, "../src/client/favicon.ico")).bytes(),
 };
 
-async function startEmbeddedDashboard(): Promise<{ url: string; tmpDir: string }> {
+async function startEmbeddedDashboard(hosted = false) {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-stats-embedded-"));
 	tempDirs.push(root);
 	const tmpDir = path.join(root, "tmp");
@@ -35,7 +39,10 @@ async function startEmbeddedDashboard(): Promise<{ url: string; tmpDir: string }
 	);
 	await Bun.write(
 		entrypoint,
-		`import { startServer } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/server.ts"))};
+		hosted
+			? `import { runHostedStats } from ${JSON.stringify(path.resolve(import.meta.dir, "../../coding-agent/src/cli/stats-host.ts"))};
+await runHostedStats();`
+			: `import { startServer } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/server.ts"))};
 const server = await startServer(0);
 process.stdout.write(JSON.stringify({ url: "http://" + server.hostname + ":" + server.port }));`,
 	);
@@ -55,8 +62,9 @@ process.stdout.write(JSON.stringify({ url: "http://" + server.hostname + ":" + s
 			XDG_DATA_HOME: path.join(root, "data"),
 			XDG_STATE_HOME: path.join(root, "state"),
 			XDG_CACHE_HOME: path.join(root, "cache"),
+			NEOPI_STATS_HOST_TOKEN: HOST_TOKEN,
 		},
-		stdin: "ignore",
+		stdin: "pipe",
 		stdout: "pipe",
 		stderr: "pipe",
 	});
@@ -67,8 +75,9 @@ process.stdout.write(JSON.stringify({ url: "http://" + server.hostname + ":" + s
 	if (ready.done) {
 		throw new Error(`Dashboard failed to start: ${await new Response(child.stderr).text()}`);
 	}
-	const { url }: { url: string } = JSON.parse(new TextDecoder().decode(ready.value));
-	return { url, tmpDir };
+	const readyMessage = JSON.parse(new TextDecoder().decode(ready.value));
+	const url = hosted ? `http://127.0.0.1:${readyMessage.port}` : (readyMessage.url as string);
+	return { url, tmpDir, child, readyMessage };
 }
 
 afterEach(async () => {
@@ -108,4 +117,34 @@ test("embedded dashboard serves its assets and SPA routes after temporary files 
 			}
 		}),
 	);
+});
+
+test("managed dashboard keeps credentials out of its document and closes only its owned listener on stdin EOF", async () => {
+	const standalone = await startEmbeddedDashboard();
+	const hosted = await startEmbeddedDashboard(true);
+	expect(hosted.readyMessage.type).toBe("neopi_stats_ready");
+	expect(hosted.readyMessage.version).toBe(1);
+	expect(Object.keys(hosted.readyMessage).sort()).toEqual(["port", "type", "version"]);
+	expect((await fetch(`${hosted.url}/embed`)).status).toBe(401);
+	const headers = { Authorization: `Bearer ${HOST_TOKEN}` };
+	const document = await fetch(`${hosted.url}/embed`, { headers });
+	expect(document.status).toBe(200);
+	const html = await document.text();
+	expect(html).toContain('name="neopi-stats-hosted"');
+	expect(html).toContain('<script type="module">document.documentElement.dataset.loaded');
+	expect(html).toContain('globalThis.fixture = "<\\/script>";');
+	expect(html).toContain('globalThis.replacement = "$&";');
+	expect(html).toContain("<style>body { color: blue; }</style>");
+	expect(html).not.toContain("hosted-stats-test-token");
+	// Never send the action header: no paid judge is started by this boundary test.
+	expect((await fetch(`${hosted.url}/api/frustration/judge`, { method: "POST", headers })).status).toBe(403);
+	const abort = new AbortController();
+	const events = await fetch(`${hosted.url}/api/events`, { headers, signal: abort.signal });
+	expect(events.headers.get("content-type")).toBe("text/event-stream");
+	const reader = events.body!.getReader();
+	expect(new TextDecoder().decode((await reader.read()).value)).toContain("data:");
+	abort.abort();
+	hosted.child.stdin.end();
+	expect(await hosted.child.exited).toBe(0);
+	expect((await fetch(standalone.url)).status).toBe(200);
 });

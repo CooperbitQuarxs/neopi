@@ -253,9 +253,11 @@ describe("composer inline shrink (#11007)", () => {
 			// still live, so they refill the screen instead of leaving a band.
 			dialog.handleInput("\x1bh");
 			await h.scheduler.settle(h.terminal);
+			const collapsed = dialog.render(COLUMNS).map(row => Bun.stripANSI(row).trimEnd());
+			expect(collapsed).toHaveLength(1);
 			const view = h.terminal.getViewport().map(row => Bun.stripANSI(row).trimEnd());
-			expect(view[ROWS - 1]).toContain("Ask hidden");
-			expect(blankBand(h.terminal, "Ask hidden")).toBeLessThanOrEqual(1);
+			expect(view[ROWS - 1]).toBe(collapsed[0]);
+			expect(blankBand(h.terminal, collapsed[0])).toBeLessThanOrEqual(1);
 			expect(reachable()).toEqual(Array.from({ length: TRANSCRIPT_ROWS }, (_, i) => i));
 			// Showing it again covers them without writing anything twice.
 			dialog.handleInput("\x1bh");

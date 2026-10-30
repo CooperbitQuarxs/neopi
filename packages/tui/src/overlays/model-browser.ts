@@ -14,8 +14,8 @@ import { getModelPricingStatus, modelsAreEqual } from "@oh-my-pi/pi-catalog/mode
 import { modelKind, type ModelKind, type ModelPricingStatus } from "@oh-my-pi/pi-catalog/types";
 import type { Component } from "../tui";
 import { FuzzyCorpus, fuzzyRank } from "../fuzzy";
+import { compileMenuRegex } from "../menu-search";
 import { ScrollView } from "../components/scroll-view";
-import { extractPrintableText } from "../keys";
 import type { SgrMouseEvent } from "../mouse";
 import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
 import { formatNumber, sanitizeText } from "@oh-my-pi/pi-utils";
@@ -57,17 +57,22 @@ export type ModelRole =
 	| "slow"
 	| "vision"
 	| "plan"
+	| "agent-author"
+	| "compaction"
 	| "commit"
 	| "tiny"
+	| "title"
 	| "memory"
 	| "task"
 	| "advisor"
 	| "chronicler"
 	| "chronicler-summary"
+	| "chronicler-recall"
 	| "classifier"
 	| "effort"
 	| "prose"
 	| "issues"
+	| "deck-inbox"
 	| "image"
 	| "web"
 	| "speech"
@@ -79,17 +84,22 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"slow",
 	"vision",
 	"plan",
+	"agent-author",
+	"compaction",
 	"commit",
 	"tiny",
+	"title",
 	"memory",
 	"task",
 	"advisor",
 	"chronicler",
 	"chronicler-summary",
+	"chronicler-recall",
 	"classifier",
 	"effort",
 	"prose",
 	"issues",
+	"deck-inbox",
 	"image",
 	"web",
 	"speech",
@@ -102,17 +112,22 @@ export const CHAT_MODEL_ROLE_IDS: ModelRole[] = [
 	"slow",
 	"vision",
 	"plan",
+	"agent-author",
+	"compaction",
 	"commit",
 	"tiny",
+	"title",
 	"memory",
 	"task",
 	"advisor",
 	"chronicler",
 	"chronicler-summary",
+	"chronicler-recall",
 	"classifier",
 	"effort",
 	"prose",
 	"issues",
+	"deck-inbox",
 ];
 export const KIND_ROLE_IDS: ModelRole[] = ["image", "web", "speech", "dictation", "judge"];
 
@@ -127,6 +142,7 @@ export interface ModelBrowserPerf {
 export interface ModelBrowserRoleInfo {
 	tag?: string;
 	name: string;
+	description?: string;
 	color?: ThemeColor;
 	hidden?: boolean;
 	section: "chat" | "kind";
@@ -156,6 +172,8 @@ export interface ModelCompactionPoint {
 	source: string;
 	/** The model's own exact entry as editable text (`90k`, `80%`); absent when it has none. */
 	draft?: string;
+	/** Configured per-model limit, independent of temporary overrides or whether it is enabled. */
+	limit?: string;
 }
 
 /** Host-provided preferences and model-role resolution for the browser. */
@@ -181,6 +199,8 @@ export interface ModelBrowserSource extends ModelRoleLookup {
 	resolveRoleValue(value: string | undefined, models: Model[], roleLookup?: ModelRoleLookup): ResolvedModelRoleValue;
 	/** Auto-compaction point for `model`; absent hosts show no compaction row in the preview. */
 	compactionPointFor?(model: Model): ModelCompactionPoint | undefined;
+	/** Resolved maintenance budget; the catalog capability stays available in the preview. */
+	effectiveContextWindowFor?(model: Model): number;
 }
 
 /** Read-only catalog surface consumed by model browsers. */
@@ -674,6 +694,8 @@ export class ModelItemRanker {
 	/** Rank by text relevance, user affinity, and MRU/version order. */
 	rank(query: string): ModelBrowserItem[] {
 		if (!query.trim()) return [...this.items];
+		const pattern = compileMenuRegex(query);
+		if (pattern) return this.items.filter(item => !!pattern.regex && modelMatchesRegex(item, pattern.regex));
 		const queryKey = compactModelSearchText(query);
 		// Exact and contiguous matches stay ahead of fuzzy-only candidates; affinity
 		// breaks ties before fuzzy quality and the normal MRU/version ordering, and
@@ -867,6 +889,11 @@ export function modelSearchText({ provider, id, model }: ModelBrowserItem): stri
 	return isFreeModel(model) ? `${base} free` : base;
 }
 
+/** Regex anchors apply to either the model id or the full searchable selector. */
+export function modelMatchesRegex(item: ModelBrowserItem, regex: RegExp): boolean {
+	return regex.test(item.id) || regex.test(modelSearchText(item));
+}
+
 /** Provider-supplied blurb, flattened to a single renderable detail-line cell. */
 function formatDescription(description: string): string {
 	return replaceTabs(sanitizeText(description))
@@ -880,10 +907,11 @@ function formatDescription(description: string): string {
  * instead of drifting with the number's width. The ascii preset's `ctx:`
  * label is a prefix form — strip the colon for suffix placement.
  */
-function formatContext(model: Model): string {
-	const ctx = model.contextWindow ?? 0;
-	if (ctx <= 0) return "";
-	return `${formatNumber(ctx).toLowerCase()} ${theme.icon.context.replace(/:$/, "")}`;
+function formatContext(model: Model, effective = model.contextWindow ?? 0): string {
+	if (effective <= 0) return "";
+	const changed = effective !== model.contextWindow;
+	const label = `${formatNumber(effective).toLowerCase()}${changed ? "*" : ""} ${theme.icon.context.replace(/:$/, "")}`;
+	return changed ? theme.fg("accent", label) : label;
 }
 
 /** `118t/s` average output speed; one decimal below 10 t/s. */
@@ -951,6 +979,7 @@ export interface ModelBrowserOptions {
 
 export interface ModelBrowserNavigation {
 	query: string;
+	value: string;
 	cursor: number;
 	filterFocused: boolean;
 	selected: string | undefined;
@@ -1149,6 +1178,11 @@ export class ModelBrowser implements Component {
 		this.#perf = perf;
 	}
 
+	/** Raw row performance using the same session-tier fallback as the native preview. */
+	measuredPerformance(item: ModelBrowserItem): { perf: ModelBrowserPerf; tier?: string } | undefined {
+		return this.#perfFor(item);
+	}
+
 	setMaxVisible(rows: number): void {
 		// No selection snap here: hosts call this on every render, and it must
 		// not undo wheel panning. render() re-clamps the window.
@@ -1178,11 +1212,17 @@ export class ModelBrowser implements Component {
 		return LIST_ROW_START + this.#maxVisible + DETAIL_ROWS;
 	}
 
+	/** Confirmed filter, unchanged while its search field is being edited. */
 	get query(): string {
+		return this.#search.query;
+	}
+
+	/** Editable search text, including an unconfirmed draft. */
+	get value(): string {
 		return this.#search.value;
 	}
 
-	/** Caret into {@link query} (UTF-16 offset), for native picker `cursor`. */
+	/** Caret into {@link value} (UTF-16 offset), for native picker `cursor`. */
 	get cursor(): number {
 		return this.#search.cursor;
 	}
@@ -1204,6 +1244,7 @@ export class ModelBrowser implements Component {
 	navigationSnapshot(): ModelBrowserNavigation {
 		return {
 			query: this.query,
+			value: this.value,
 			cursor: this.cursor,
 			filterFocused: this.#search.focused,
 			selected: this.getSelected()?.selector,
@@ -1215,7 +1256,12 @@ export class ModelBrowser implements Component {
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as Partial<ModelBrowserNavigation>;
 		if (typeof state.query !== "string") return;
-		this.#search.restoreNavigation({ value: state.query, cursor: state.cursor, focused: state.filterFocused });
+		this.#search.restoreNavigation({
+			value: state.value ?? state.query,
+			query: state.query,
+			cursor: state.cursor,
+			focused: state.filterFocused,
+		});
 		this.#applyQuery("reset-changed-prefix");
 		this.onQueryChange?.(state.query);
 		if (typeof state.selected === "string") this.#menu.setSelectedKey(state.selected);
@@ -1268,6 +1314,12 @@ export class ModelBrowser implements Component {
 	 */
 	#filterItems(items: readonly ModelBrowserItem[], query: string): readonly ModelBrowserItem[] {
 		if (this.#preserveQueryOrder) {
+			const pattern = compileMenuRegex(query);
+			if (pattern) {
+				return this.#insertSeparator(
+					items.filter(item => !this.#isDisabled(item) && !!pattern.regex && modelMatchesRegex(item, pattern.regex)),
+				);
+			}
 			const base = items.filter(item => !this.#isDisabled(item));
 			return this.#insertSeparator(
 				query.trim() ? fuzzyRank(base, query, modelSearchText).map(result => result.item) : base,
@@ -1378,7 +1430,7 @@ export class ModelBrowser implements Component {
 	}
 
 	#applyQuery(selection: "clamp" | "reset-changed-prefix" = "clamp"): void {
-		const query = this.#search.value;
+		const query = this.#search.query;
 		const previousItems = this.#menu.visibleItems;
 		const previousSelectedIndex = this.#menu.selectedIndex;
 		const previousSelected = previousItems[previousSelectedIndex];
@@ -1410,12 +1462,13 @@ export class ModelBrowser implements Component {
 	handleInput(data: string): void {
 		if (this.#search.focused) {
 			const before = this.query;
-			const result = this.#search.handleInput(data);
+			this.#search.handleInput(data);
 			if (this.query !== before) {
 				this.#applyQuery("reset-changed-prefix");
 				this.onQueryChange?.(this.query);
 			}
-			if (result !== "pass" || extractPrintableText(data) !== undefined) return;
+			this.#keys.reset();
+			return;
 		}
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
@@ -1449,8 +1502,11 @@ export class ModelBrowser implements Component {
 	}
 
 	handleCancel(): void {
-		if (this.#search.focused) this.focusFilter(false);
-		else this.onCancel?.();
+		if (this.query || this.#search.focused) {
+			this.setQuery("");
+			this.focusFilter(false);
+			this.onQueryChange?.("");
+		} else this.onCancel?.();
 	}
 
 	/**
@@ -1540,7 +1596,7 @@ export class ModelBrowser implements Component {
 		const cached = this.#metricCells.get(item);
 		if (cached?.model === item.model && cached.theme === theme) return cached;
 		const intelligence = formatIntelligence(item.model);
-		const ctx = formatContext(item.model);
+		const ctx = formatContext(item.model, this.#settings.effectiveContextWindowFor?.(item.model));
 		const cost = formatCostPair(item.model);
 		const cells: MetricCells = {
 			model: item.model,
@@ -1686,6 +1742,7 @@ export class ModelBrowser implements Component {
 	}
 
 	render(width: number): string[] {
+		this.#syncContextRevision();
 		const lines: string[] = [];
 
 		lines.push(this.#search.render(width, { muted: value => theme.fg("muted", value) }));
@@ -1787,12 +1844,21 @@ export class ModelBrowser implements Component {
 		this.#pickerEpoch++;
 	}
 
+	#contextRevision = -1;
+	#syncContextRevision(): void {
+		if (this.#contextRevision === this.#settings.revision) return;
+		this.#contextRevision = this.#settings.revision;
+		this.#metricCells = new WeakMap();
+		this.#bumpPickerEpoch();
+	}
+
 	/**
 	 * `col[search row, list, detail]`: the query field (the embedded `Input`),
 	 * every visible model as a keyed `item` (the terminal virtualizes and
 	 * scrolls), and the selection's facts and role chips.
 	 */
 	describe(): NativeNode {
+		this.#syncContextRevision();
 		this.#nativeSearch ??= row([text([span(theme.symbol("icon.search"), "muted")]), this.#search.input], {
 			gap: "sm",
 			align: "center",
@@ -1828,11 +1894,14 @@ export class ModelBrowser implements Component {
 		}
 		const selected = this.getSelected()?.selector ?? null;
 		const filter = this.query.trim();
+		const error = compileMenuRegex(this.query)?.error;
 		const empty =
-			items.length > 0
-				? ""
-				: plainText(this.#emptyText?.() ?? "").trim() ||
-					(filter ? "No matching models" : "No models available in this scope");
+			error
+				? `Invalid regex: ${error}`
+				: items.length > 0
+					? ""
+					: plainText(this.#emptyText?.() ?? "").trim() ||
+						(filter ? "No matching models" : "No models available in this scope");
 		const prev = this.#nativeListNode;
 		if (
 			prev?.children === cached.children &&
@@ -1871,7 +1940,7 @@ export class ModelBrowser implements Component {
 		const metrics = [
 			formatIntelligence(item.model),
 			this.#perfCell(item, "full"),
-			formatContext(item.model),
+			formatContext(item.model, this.#settings.effectiveContextWindowFor?.(item.model)),
 			formatCostPair(item.model),
 		].filter(Boolean);
 		const overContext = this.isOverContext(item);
@@ -1983,6 +2052,7 @@ export class ModelBrowser implements Component {
 	 * role moving) keeps the last whole `items` and patches it.
 	 */
 	pickerItems(catalogue: readonly ModelBrowserItem[]): ModelPickerCatalogue {
+		this.#syncContextRevision();
 		const memo = this.#pickerItems;
 		if (memo?.catalogue === catalogue && memo.epoch === this.#pickerEpoch && memo.roles === this.#roles) {
 			return memo.value;
@@ -2041,7 +2111,13 @@ export class ModelBrowser implements Component {
 			.replace(/\s*t\/s\s*/, " ")
 			.trim();
 		if (speed) facts.speed = speed;
-		if (model.contextWindow) facts.ctx = model.contextWindow;
+		const effectiveContext = this.#settings.effectiveContextWindowFor?.(model) ?? model.contextWindow;
+		if (effectiveContext) {
+			facts.ctx =
+				effectiveContext !== model.contextWindow
+					? `${formatNumber(effectiveContext).toLowerCase()}*`
+					: effectiveContext;
+		}
 		facts.price = pickerPrice(model);
 		const badges: { text: string; tone?: "accent" | "warning" | "success"; title?: string }[] = [];
 		if (this.isOverContext(item)) {
@@ -2276,6 +2352,12 @@ export class ModelBrowser implements Component {
 			if (v) facts.push({ k: [span(k, "muted")], v: [span(v, "mono")] });
 		};
 		fact("Context", ctx > 0 ? ctx.toLocaleString("en-US") : undefined);
+		const effectiveContext = this.#settings.effectiveContextWindowFor?.(model);
+		if (effectiveContext !== undefined && effectiveContext !== ctx)
+			fact(
+				"Effective context *",
+				`${effectiveContext.toLocaleString("en-US")} · maintenance budget; Context is catalog`,
+			);
 		const compaction = this.#settings.compactionPointFor?.(model);
 		if (compaction) {
 			const value =

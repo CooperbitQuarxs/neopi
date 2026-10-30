@@ -1,0 +1,13 @@
+/* Page-local layers must stay below portalled controls. Modal children use
+   modal-popover, so a picker stays above its drawer without raising the page. */
+:root {
+	--neo-layer-base: 0;
+	--neo-layer-raised: 1;
+	--neo-layer-sticky: 10;
+	--neo-layer-chrome: 20;
+	--neo-layer-popover: 100;
+	--neo-layer-modal: 200;
+	--neo-layer-modal-popover: 210;
+	--neo-layer-tooltip: 300;
+	--neo-layer-toast: 400;
+}

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -15,9 +15,10 @@ import { MAX_RPC_FRAME_BYTES, RpcFrameDecoder, RpcFrameEncoder } from "../../src
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+	vi.restoreAllMocks();
 });
 
-async function fixture() {
+async function fixture(onCommand?: (connection: ControlConnection, frame: Record<string, unknown>) => void) {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "npi-pipe-"));
 	cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
 	const instanceId = "abcdef1234567890";
@@ -33,7 +34,7 @@ async function fixture() {
 		cwd: dir,
 		title: null,
 		session: null,
-		busy: { streaming: false, compacting: false, queued: 0, pendingAsyncWork: false, settled: true },
+		busy: { streaming: false, compacting: false, pendingSteerAndFollowUp: 0, pendingAsyncWork: false, settled: true },
 		revisions: { generation: 1, human: 0, focus: 0, draft: 0, dialogs: 0, paint: 0, model: null, role: null },
 		view: null,
 		modes: { plan: false, chat: "off", goal: false, vibe: false, live: false, repl: false },
@@ -66,6 +67,7 @@ async function fixture() {
 				return;
 			}
 			commands.push(frame);
+			onCommand?.(connection, frame);
 			connection.respond({
 				type: "response",
 				command: String(frame.type),
@@ -168,6 +170,35 @@ describe("ctl pipe", () => {
 		}
 	});
 
+	test("relays journal notifications and unknown event kinds without disrupting command responses", async () => {
+		const notifications = [
+			{ type: "journal_state", reason: "snapshot", sessionId: "native", sessionFile: "/sessions/native.jsonl", leafId: null },
+			{ type: "future_session_event", payload: { retained: true } },
+		];
+		const f = await fixture((connection, frame) => {
+			if (frame.type === "echo") for (const notification of notifications) connection.write(notification);
+		});
+		const input = new PassThrough();
+		const frames: Record<string, unknown>[] = [];
+		const result = await ctlPipe(f.instanceId, {
+			registry: { dir: f.dir }, input,
+			io: {
+				stderr: () => {},
+				stdout: text => {
+					for (const line of text.trim().split("\n")) {
+						const frame = JSON.parse(line) as Record<string, unknown>;
+						frames.push(frame);
+						if (frame.type === "ready") input.write(`${JSON.stringify({ type: "echo", id: "barrier" })}\n`);
+						if (frame.id === "barrier") input.end();
+					}
+				},
+			},
+		});
+		expect(result).toBe(0);
+		for (const notification of notifications) expect(frames).toContainEqual(notification);
+		expect(frames.find(frame => frame.id === "barrier")).toMatchObject({ type: "response", success: true });
+	});
+
 	test("slow output bounds queued frames until the consumer drains", async () => {
 		const f = await fixture();
 		const input = new PassThrough();
@@ -202,6 +233,59 @@ describe("ctl pipe", () => {
 			"last",
 		]);
 		output.destroy();
+	});
+
+	test("blocked owner bounds stdin forwarding, then drains every buffered frame before EOF", async () => {
+		const blocked = Promise.withResolvers<ControlConnection>();
+		const f = await fixture((connection, frame) => {
+			if (frame.type === "block") {
+				connection.socket.pause();
+				blocked.resolve(connection);
+			}
+		});
+		const input = new PassThrough();
+		const paused = Promise.withResolvers<void>();
+		input.once("pause", () => paused.resolve());
+		const sent = vi.spyOn(ControlClient.prototype, "sendRaw");
+		const payload = "x".repeat(512 * 1024);
+		const count = 16;
+		// One chunk exercises buffered frames; its final frame has no newline.
+		const burst = Array.from({ length: count }, (_, i) =>
+			JSON.stringify({ type: "echo", id: `burst-${i}`, padding: payload }),
+		).join("\n");
+		const result = ctlPipe(f.instanceId, {
+			registry: { dir: f.dir },
+			input,
+			io: {
+				stderr: () => {},
+				stdout: text => {
+					const frame = JSON.parse(text) as Record<string, unknown>;
+					if (frame.type === "ready") input.write('{"type":"block","id":"block"}\n');
+					if (frame.id === "block") input.end(burst);
+				},
+			},
+		});
+		const owner = await blocked.promise;
+		cleanups.push(async () => {
+			owner.socket.resume();
+			input.end();
+			await result;
+		});
+		await paused.promise;
+		await Bun.sleep(50);
+		expect(input.isPaused()).toBe(true);
+		expect(sent.mock.calls.length).toBeGreaterThan(1);
+		expect(sent.mock.calls.length).toBeLessThan(count + 1);
+		const forwardedWhileBlocked = sent.mock.calls.length;
+		await Bun.sleep(50);
+		expect(sent.mock.calls.length).toBe(forwardedWhileBlocked);
+		owner.socket.resume();
+		expect(await result).toBe(0);
+		await f.disconnected.promise;
+		expect(f.commands.filter(frame => frame.type === "echo").map(frame => frame.id)).toEqual(
+			Array.from({ length: count }, (_, i) => `burst-${i}`),
+		);
+		input.destroy();
 	});
 
 	test("owner socket closure ends the pipe even with stdin still open", async () => {

@@ -12,7 +12,8 @@ const telemetry: AgentContextTelemetry = {
 	model: { provider: "test", id: "test-model", effort: null },
 	context: { usedTokens: 42, limitTokens: 100, percent: 42, estimated: true },
 	compaction: { enabled: true, thresholdTokens: 80, speculationStartsAtTokens: 70, state: "idle" },
-	checkpoint: { active: false },
+	checkpoint: { active: false, available: false },
+	recentTurnFootprint: null,
 	previousTurn: null,
 	fleet: { running: 0, idle: 0, parked: 0, aborted: 0 },
 };
@@ -21,6 +22,8 @@ function session(getter: ToolSession["getAgentTelemetry"]): ToolSession {
 	return {
 		cwd: process.cwd(),
 		hasUI: false,
+		getSessionFile: () => null,
+		getSessionSpawns: () => null,
 		getAgentTelemetry: getter,
 		getToolForEvalBridge: () => {
 			throw new ToolError("runtime.inspect must not invoke a provider tool");

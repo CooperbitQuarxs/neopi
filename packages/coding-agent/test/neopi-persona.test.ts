@@ -153,7 +153,7 @@ describe("NeoPi personas", () => {
 			agent,
 			sessionManager,
 			settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
-			modelRegistry: { getApiKey: async () => "test-key" } as never,
+			modelRegistry: { getApiKey: async () => "test-key", getAvailable: () => [model] } as never,
 			extensionRunner: {
 				emitBeforeAgentStart: async (_prompt: string, _images: unknown, systemPrompt: string[]) => {
 					seenByExtension.push(systemPrompt);

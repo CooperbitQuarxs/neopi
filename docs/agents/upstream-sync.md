@@ -87,6 +87,7 @@ Process `git diff --name-only --diff-filter=U` in its printed order:
 1. Read the base, ours, theirs, surrounding owner modules, and relevant tests.
 2. Resolve exactly one file personally. Use `ours` or `theirs` only when the whole file has that ownership; otherwise merge manually.
 3. Preserve the fork's advisor delivery, Chronicler, eval backends, live/STT behavior, portable/flash path, extension installer hooks, and NeoPi identity unless the upstream implementation demonstrably replaces the same contract.
+   The fork-owned Ctrl+Space whole-recording xAI route and its takeover gate in `packages/coding-agent/src/modes/interactive-mode.ts` must always preempt configured dictation; preserve this priority across upstream STT and key-event changes (#225).
 4. Adopt upstream refactors and reseat fork behavior on the new owner rather than restoring obsolete structure.
 5. Append that file's ledger row before staging it.
 6. Stage the file, confirm its conflict markers are gone, then continue to the next path.

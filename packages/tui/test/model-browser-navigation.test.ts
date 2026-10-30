@@ -53,10 +53,12 @@ test("model browser starts in navigation and slash alone focuses literal search"
 	expect(menu.getSelected()?.id).toBe("model-01");
 	menu.handleInput("/");
 	for (const key of "hjklg/G ") menu.handleInput(key);
-	expect(menu.query).toBe("hjklg/G ");
+	expect(menu.value).toBe("hjklg/G ");
+	expect(menu.query).toBe("");
 	menu.handleInput("\x1b");
 	expect(menu.filterFocused).toBe(false);
-	expect(menu.query).toBe("hjklg/G ");
+	expect(menu.value).toBe("");
+	expect(menu.query).toBe("");
 });
 
 test("model browser jumps, half-pages and pages without wrapping", () => {
@@ -111,7 +113,7 @@ test("model navigation restores query, caret, selection, focus and viewport", ()
 	menu.handleInput("/");
 	for (const key of "model") menu.handleInput(key);
 	menu.handleInput("\x1b[D");
-	menu.handleInput("\x1b");
+	menu.handleInput("\r");
 	menu.handleInput("G");
 	menu.render(100);
 	menu.handleInput("\x19");
@@ -119,6 +121,63 @@ test("model navigation restores query, caret, selection, focus and viewport", ()
 	const reopened = browser();
 	reopened.restoreNavigation(saved);
 	expect(reopened.navigationSnapshot()).toEqual(saved);
+});
+
+test("model browser restores an unconfirmed draft without filtering or moving its selection", () => {
+	const menu = browser();
+	menu.setQuery("model-0");
+	menu.handleInput("j");
+	menu.handleInput("/");
+	for (const key of "9") menu.handleInput(key);
+	menu.handleInput("\x1b[D");
+	const saved = menu.navigationSnapshot();
+	const reopened = browser();
+	reopened.restoreNavigation(saved);
+	expect(reopened.navigationSnapshot()).toEqual(saved);
+	expect(reopened.query).toBe("model-0");
+	expect(reopened.value).toBe("model-09");
+	expect(reopened.getSelected()?.selector).toBe(saved.selected);
+	expect(reopened.pickerOrder({ providers: false, rest: null }).count).toBe(10);
+	reopened.handleInput("\r");
+	expect(reopened.filterFocused).toBe(false);
+	expect(reopened.query).toBe("model-09");
+	expect(reopened.getSelected()?.id).toBe("model-09");
+});
+
+test("focused model search owns arrows, Tab and control keys until Enter confirms", () => {
+	const menu = browser();
+	const picked: string[] = [];
+	const queries: string[] = [];
+	menu.onActivate = item => picked.push(item.id);
+	menu.onQueryChange = query => queries.push(query);
+	menu.handleInput("/");
+	for (const key of "model-09") menu.handleInput(key);
+	for (const key of ["\x1b[A", "\x1b[B", "\t", "\x04"]) menu.handleInput(key);
+	expect(menu.filterFocused).toBe(true);
+	expect(menu.value).toBe("model-09");
+	expect(menu.query).toBe("");
+	expect(menu.getSelected()?.id).toBe("model-00");
+	expect(menu.pickerOrder({ providers: false, rest: null }).count).toBe(30);
+	expect(queries).toEqual([]);
+	menu.handleInput("\x1b[D");
+	expect(menu.cursor).toBe(7);
+	menu.handleInput("\x1b[C");
+	expect(menu.cursor).toBe(8);
+	menu.handleInput("\r");
+	expect(menu.filterFocused).toBe(false);
+	expect(menu.query).toBe("model-09");
+	expect(menu.pickerOrder({ providers: false, rest: null }).order).toEqual(["test/model-09"]);
+	expect(queries).toEqual(["model-09"]);
+	expect(picked).toEqual([]);
+	menu.handleInput("\r");
+	expect(picked).toEqual(["model-09"]);
+	menu.handleInput("/");
+	menu.handleInput("x");
+	menu.handleInput("\x1b");
+	expect(menu.filterFocused).toBe(false);
+	expect(menu.value).toBe("");
+	expect(menu.query).toBe("");
+	expect(menu.pickerOrder({ providers: false, rest: null }).count).toBe(30);
 });
 
 test("Space activates a single model without creating preview state", () => {

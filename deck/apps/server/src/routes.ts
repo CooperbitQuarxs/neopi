@@ -1,0 +1,325 @@
+import { Hono } from "hono";
+import type {
+	CreateSessionRequest,
+	CreateSessionResponse,
+	ListModelsResponse,
+	ListSessionsResponse,
+	ListWorkspacesResponse,
+	RestartServerResponse,
+	WorkspaceEntry,
+} from "@npi-deck/protocol";
+
+import type { Config } from "./config.ts";
+import { logger } from "./log.ts";
+import { getBuildInfo, getUptimeSecs } from "./build-info.ts";
+import { deriveLabel } from "./workspace-label.ts";
+import { McpAllowlistError, SessionClosedError, SessionInUseError, type AgentBridge } from "./bridge/types.ts";
+import { listSessionBackends, recordSessionBackend, sessionBackend } from "./backend/session-metadata.ts";
+
+import { FeatureUnavailableError } from "./backend/runtime.ts";
+const log = logger("routes");
+
+import { buildTasksRouter } from "./routes-tasks.ts";
+import { buildSettingsRouter } from "./routes-settings.ts";
+import { buildRoutinesRouter } from "./routes-routines.ts";
+import { buildGraphsRouter } from "./routes-graphs.ts";
+import { buildHooksRouter } from "./routes-hooks.ts";
+import { buildInboxRouter } from "./routes-inbox.ts";
+import { buildUtilityRouter } from "./routes-cron.ts";
+import { buildSlashCommandsRouter } from "./routes-slash-commands.ts";
+import { buildFsRouter } from "./routes-fs.ts";
+import { buildBridgesRouter } from "./routes-bridges.ts";
+import { buildTelegramRouter } from "./routes-telegram.ts";
+import { buildMarketplaceRouter } from "./routes-marketplace.ts";
+import { buildSkillsRouter } from "./routes-skills.ts";
+import { buildKbRouter } from "./routes-kb.ts";
+import { buildUploadsRouter } from "./routes-uploads.ts";
+import { buildStartersRouter } from "./routes-starters.ts";
+import { buildAuthOAuthRouter } from "./routes-auth-oauth.ts";
+import { buildOnboardingRouter } from "./routes-onboarding.ts";
+import { buildSubagentsRouter } from "./routes-subagents.ts";
+import { buildAdvisorsRouter } from "./routes-advisors.ts";
+import { buildAgentsRouter } from "./routes-agents.ts";
+import { buildModelsConfigRouter } from "./routes-models-config.ts";
+import { buildNpiConfigRouter } from "./routes-npi-config.ts";
+import { buildIntegrationsRouter } from "./routes-integrations.ts";
+import { buildMcpServersRouter } from "./routes-mcp-servers.ts";
+import { buildMixturesRouter } from "./routes-mixtures.ts";
+import { buildFallbackChainRouter } from "./routes-fallback-chain.ts";
+import { buildGithubRouter } from "./routes-github.ts";
+import type { RoutinesRunner } from "./routines-runner.ts";
+import type { BridgeSupervisor } from "./bridge-supervisor.ts";
+import type { MarketplaceService } from "./marketplace-service.ts";
+import type { SkillsService } from "./skills-service.ts";
+import type { KbService } from "./kb-service.ts";
+import type { RequestPeerEnv } from "./request-peer.ts";
+import type { CardAgentRunner } from "./card-agents.ts";
+
+export function buildRouter(
+	bridge: AgentBridge,
+	config: Config,
+	runner: RoutinesRunner,
+	supervisor: BridgeSupervisor,
+	marketplace: MarketplaceService,
+	skills: SkillsService,
+	kb: KbService,
+	opts: { restartServer?: () => RestartServerResponse; cardAgents?: CardAgentRunner } = {},
+): Hono<RequestPeerEnv> {
+	const app = new Hono<RequestPeerEnv>();
+
+	app.get("/health", (c) => {
+		const info = getBuildInfo();
+		return c.json({
+			ok: true,
+			pid: info.pid,
+			defaultCwd: config.defaultCwd,
+			extraWorkspaces: config.extraWorkspaces,
+			serverStartedAt: info.serverStartedAt,
+			version: info.version,
+			buildSha: info.buildSha,
+			uptimeSecs: getUptimeSecs(),
+		});
+	});
+
+	app.get("/workspaces", async (c) => {
+		const allSessions = await bridge.listSessions({});
+		const counts = new Map<string, number>();
+		for (const s of allSessions) {
+			if (!s.cwd) continue;
+			counts.set(s.cwd, (counts.get(s.cwd) ?? 0) + 1);
+		}
+
+		// Always include default + extras even if zero sessions.
+		const known = new Set<string>([config.defaultCwd, ...config.extraWorkspaces]);
+		for (const cwd of counts.keys()) known.add(cwd);
+
+		const workspaces: WorkspaceEntry[] = Array.from(known)
+			.map((cwd) => ({
+				cwd,
+				label: deriveLabel(cwd),
+				sessionCount: counts.get(cwd) ?? 0,
+			}))
+			.sort((a, b) => b.sessionCount - a.sessionCount || a.label.localeCompare(b.label));
+
+		const body: ListWorkspacesResponse = {
+			workspaces,
+			defaultCwd: config.defaultCwd,
+		};
+		return c.json(body);
+	});
+
+	app.get("/sessions", async (c) => {
+		const cwd = c.req.query("cwd");
+		try {
+			const metadata = listSessionBackends();
+			const sessions = (await bridge.listSessions(cwd ? { cwd } : {})).map(s => {
+				const backendLastRan = metadata[s.path];
+				return backendLastRan ? { ...s, backendLastRan } : s;
+			});
+			const body: ListSessionsResponse = { sessions };
+			return c.json(body);
+		} catch (err) {
+			log.error(`listSessions failed`, err);
+			return c.json({ error: String(err) }, 500);
+		}
+	});
+
+	// Read-only transcript of a persisted session. Never creates or resumes an
+	// SDK session and spawns nothing: browsing the sidebar must not start MCP
+	// or LSP servers (no-orphans guarantee). 404 unless `path` is a session
+	// NeoPi lists, so this can't read arbitrary files. `limit` sends only the
+	// newest messages; a long session is otherwise tens of megabytes.
+	app.get("/sessions/transcript", async (c) => {
+		const sessionPath = c.req.query("path");
+		if (!sessionPath) return c.json({ error: "path is required" }, 400);
+		const rawLimit = c.req.query("limit");
+		const limit = rawLimit === undefined ? undefined : Number(rawLimit);
+		if (limit !== undefined && !(Number.isSafeInteger(limit) && limit > 0)) {
+			return c.json({ error: "limit must be a positive integer" }, 400);
+		}
+		try {
+			const transcript = await bridge.readTranscript(sessionPath, { limit });
+			if (!transcript) return c.json({ error: "unknown session" }, 404);
+			const backendLastRan = sessionBackend(sessionPath);
+			return c.json(backendLastRan ? { ...transcript, backendLastRan } : transcript);
+		} catch (err) {
+			log.error(`readTranscript failed`, err);
+			return c.json({ error: String(err) }, 500);
+		}
+	});
+
+	app.post("/sessions", async (c) => {
+		let body: CreateSessionRequest;
+		try {
+			body = (await c.req.json()) as CreateSessionRequest;
+		} catch {
+			return c.json({ error: "invalid json body" }, 400);
+		}
+
+		if (body.mcpServersAllowed !== undefined &&
+			(!Array.isArray(body.mcpServersAllowed) || body.mcpServersAllowed.some(name => typeof name !== "string"))) {
+			return c.json({ error: "mcpServersAllowed must be an array of server names" }, 400);
+		}
+		const cwd = body.cwd?.trim() || config.defaultCwd;
+
+		try {
+			const handle = body.resumeFromPath
+				? await bridge.resumeSession({ sessionPath: body.resumeFromPath, mcpServersAllowed: body.mcpServersAllowed })
+				: await bridge.createSession({
+						cwd,
+						...(body.model ? { model: body.model } : {}),
+						mcpServersAllowed: body.mcpServersAllowed,
+					});
+			recordSessionBackend(handle.sessionFile);
+			const resp: CreateSessionResponse = {
+				sessionId: handle.sessionId,
+				sessionFile: handle.sessionFile,
+				cwd: handle.cwd,
+			};
+			return c.json(resp);
+		} catch (err) {
+			if (err instanceof McpAllowlistError) return c.json({ error: err.message }, 400);
+			if (err instanceof SessionClosedError || err instanceof SessionInUseError) return c.json({ error: err.message }, 409);
+			log.error(`createSession failed`, err);
+			return c.json({ error: String(err) }, 500);
+		}
+	});
+
+	app.post("/sessions/:id/abort", async (c) => {
+		const id = c.req.param("id");
+		const handle = bridge.getSession(id);
+		if (!handle) return c.json({ error: "session not found" }, 404);
+		try {
+			await handle.abort();
+			return c.json({ ok: true });
+		} catch (err) {
+			log.error(`abort failed`, err);
+			return c.json({ error: String(err) }, 500);
+		}
+	});
+
+	app.post("/sessions/:id/compact", async (c) => {
+		const id = c.req.param("id");
+		const handle = bridge.getSession(id);
+		if (!handle) return c.json({ error: "session not found" }, 404);
+		// Body is optional — accept missing/empty JSON without bouncing.
+		let body: { focus?: string } = {};
+		try {
+			const raw = await c.req.text();
+			if (raw.trim().length > 0) body = JSON.parse(raw) as { focus?: string };
+		} catch {
+			return c.json({ error: "invalid json" }, 400);
+		}
+		try {
+			await handle.compact(body.focus);
+			return c.json({ ok: true });
+		} catch (err) {
+			log.error(`compact failed`, err);
+			return c.json({ error: String(err) }, 500);
+		}
+	});
+
+	app.patch("/sessions/:id", async (c) => {
+		const id = c.req.param("id");
+		const handle = bridge.getSession(id);
+		if (!handle) return c.json({ error: "session not found or not active" }, 404);
+		let body: { name?: string; selector?: unknown; model?: { provider?: unknown; id?: unknown } };
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "invalid json" }, 400);
+		}
+		try {
+			if (typeof body.name === "string") {
+				await handle.setName(body.name.trim());
+			}
+			if (body.selector !== undefined) {
+				if (typeof body.selector !== "string" || !body.selector.trim()) return c.json({ error: "selector must be a non-empty string" }, 400);
+				if (!handle.setModelSelector) return c.json({ error: "This backend cannot select native roles or effort." }, 501);
+				await handle.setModelSelector(body.selector);
+			}
+			if (body.selector === undefined && body.model && typeof body.model === "object") {
+				const provider = typeof body.model.provider === "string" ? body.model.provider : "";
+				const modelId = typeof body.model.id === "string" ? body.model.id : "";
+				if (!provider || !modelId) {
+					return c.json({ error: "model requires provider and id strings" }, 400);
+				}
+				await handle.setModel({ provider, id: modelId });
+			}
+			return c.json({ ok: true, sessionId: id });
+		} catch (err) {
+			log.error(`patch session failed`, err);
+			return c.json({ error: String((err as Error).message ?? err) }, 500);
+		}
+	});
+
+	app.get("/models/selector", async (c) => {
+		if (!bridge.queryModels) return c.json({ error: "Native model search is unavailable on this backend." }, 501);
+		try {
+			return c.json(await bridge.queryModels(c.req.query("q") ?? "", {
+				...(c.req.query("sessionId") ? { sessionId: c.req.query("sessionId") } : {}),
+				cwd: c.req.query("cwd") ?? config.defaultCwd,
+			}));
+		} catch (error) {
+			if (error instanceof FeatureUnavailableError) return c.json({ error: "Native model search requires a newer NeoPi backend with query_model_selector." }, 501);
+			return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+		}
+	});
+
+	app.get("/models", async (c) => {
+		const sessionId = c.req.query("sessionId");
+		try {
+			const opts: { sessionId?: string; cwd?: string } = { cwd: config.defaultCwd };
+			if (sessionId) opts.sessionId = sessionId;
+			if (c.req.query("cwd")) opts.cwd = c.req.query("cwd");
+			const models = await bridge.listModels(opts);
+			const active = models.find((m) => m.isCurrent);
+			const body: ListModelsResponse = {
+				models,
+				...(active ? { active: { provider: active.provider, id: active.id } } : {}),
+			};
+			return c.json(body);
+		} catch (err) {
+			log.error(`listModels failed`, err);
+			return c.json({ error: String((err as Error).message ?? err) }, 500);
+		}
+	});
+
+	// 202 at once: NeoPi's dispose can outlast Bun's 10 s idle timeout on a large
+	// resumed session. Subscribers get `session_disposed` when it finishes.
+	app.delete("/sessions/:id", (c) => {
+		if (!bridge.closeSession(c.req.param("id"))) return c.json({ error: "session not found" }, 404);
+		return c.json({ ok: true }, 202);
+	});
+
+	app.route("/", buildTasksRouter(opts.cardAgents));
+	app.route("/", buildUploadsRouter({ uploadsRoot: config.uploadsRoot }));
+	app.route("/", buildRoutinesRouter(runner));
+	app.route("/", buildGraphsRouter());
+	app.route("/", buildHooksRouter(runner));
+	app.route("/", buildInboxRouter());
+	app.route("/", buildUtilityRouter());
+	app.route("/", buildSlashCommandsRouter());
+	app.route("/", buildFsRouter());
+	app.route("/", buildSettingsRouter(bridge, config, opts));
+	app.route("/", buildStartersRouter());
+	app.route("/", buildBridgesRouter(supervisor));
+	app.route("/", buildTelegramRouter(bridge, supervisor));
+	app.route("/", buildMarketplaceRouter(marketplace));
+	app.route("/", buildSkillsRouter(skills));
+	app.route("/", buildKbRouter(kb, { resolveAgent: token => opts.cardAgents?.resolveToken(token) }));
+	app.route("/auth/oauth", buildAuthOAuthRouter());
+	app.route("/onboarding", buildOnboardingRouter());
+	app.route("/subagents", buildSubagentsRouter(bridge));
+	app.route("/", buildAdvisorsRouter(bridge, config));
+	app.route("/", buildAgentsRouter(bridge));
+	app.route("/", buildModelsConfigRouter());
+	app.route("/", buildNpiConfigRouter(bridge, config));
+	app.route("/", buildMcpServersRouter(bridge, config));
+	app.route("/", buildIntegrationsRouter(config));
+	app.route("/", buildMixturesRouter(bridge, config));
+	app.route("/", buildFallbackChainRouter(bridge));
+	app.route("/", buildGithubRouter({ workspaces: [config.defaultCwd, ...config.extraWorkspaces] }));
+
+	return app;
+}

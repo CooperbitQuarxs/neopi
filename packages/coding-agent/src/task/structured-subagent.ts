@@ -7,10 +7,12 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
-import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
+import { $env, Snowflake } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset, compilePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { resolveAgentModelSelection, resolveConfiguredModelPatterns } from "../config/model-resolver";
 import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
+import { fillRoutingPolicy, parseRoutingPolicySelector, type RoutingPolicyFields } from "../config/routing-policies";
 import {
 	type CompactionThresholdPair,
 	validateAgentCompactionThresholdOverrides,
@@ -28,7 +30,7 @@ import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.m
 import isolationRecoveryHintTemplate from "../prompts/tools/isolation-recovery-hint.md" with { type: "text" };
 import salvagedChildHintTemplate from "../prompts/tools/salvaged-child-hint.md" with { type: "text" };
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
-import type { ConfiguredThinkingLevel, TaskEffort } from "@oh-my-pi/pi-tui/thinking";
+import { type ConfiguredThinkingLevel, type TaskEffort, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../irc/messaging";
 import { buildOutputValidator } from "../tools/output-schema-validator";
@@ -118,6 +120,11 @@ export interface StructuredSubagentRequest {
 	context?: string;
 	agent?: string;
 	model?: string | string[];
+	/** Operator launcher restrictions, independent of eval-defined custom tools. */
+	tools?: string[];
+	spawns?: string[] | "*";
+	/** Refuse a spawn hook that changes the operator-confirmed model selector. */
+	confirmedModel?: string;
 	/** Presence, rather than truthiness, makes this the highest-priority schema. */
 	outputSchema?: unknown;
 	schemaMode?: StructuredSubagentSchemaMode;
@@ -178,6 +185,8 @@ export interface EffectiveSubagentPolicy {
 	callerModelSelector?: string | string[];
 	/** Explicit level from a `<agent-name>:<effort>` selector; caller-origin, like a model selector suffix. */
 	callerThinkingLevel?: ConfiguredThinkingLevel;
+	/** Copied routing template fields; never a live settings reference. */
+	routing?: RoutingPolicyFields;
 	/** Extension routing note explaining a `before_subagent_spawn` model replacement. */
 	modelRoute?: string;
 	/** Exact-name `task.agentServiceTierOverrides` entry for this agent, applied after model resolution. */
@@ -226,8 +235,13 @@ export class StructuredSubagentError extends Error {
 
 const PLAN_MODE_TOOLS = ["read", "grep", "glob", "web_search"] as const;
 
-function renderSubagentPrompt(assignment: string): string {
-	return prompt.render(subagentUserPromptTemplate, { assignment: assignment.trim() });
+function renderSubagentPrompt(assignment: string, routing?: RoutingPolicyFields, cwd?: string): string {
+	return renderPromptAsset(
+		"system/subagent-user-prompt.md",
+		subagentUserPromptTemplate,
+		{ assignment: assignment.trim(), routing },
+		{ cwd },
+	);
 }
 
 function trimToUndefined(value: string | undefined): string | undefined {
@@ -258,11 +272,11 @@ function resolveSchema(request: StructuredSubagentRequest, agent: AgentDefinitio
 	return { schema: undefined, source: "none", mode, outputSchemaOverridesAgent: false };
 }
 
-function createPlanModeAgent(agent: AgentDefinition): AgentDefinition {
+function createPlanModeAgent(agent: AgentDefinition, cwd: string): AgentDefinition {
 	const tools = [...PLAN_MODE_TOOLS, ...(agent.tools ?? []).filter(tool => tool === "ast_grep")];
 	return {
 		...agent,
-		systemPrompt: `${planModeSubagentPrompt}\n\n${agent.systemPrompt}`,
+		systemPrompt: `${compilePromptAsset("system/plan-mode-subagent.md", planModeSubagentPrompt, { cwd })({})}\n\n${agent.systemPrompt}`,
 		tools,
 		spawns: undefined,
 		prewalk: undefined,
@@ -354,7 +368,26 @@ export async function resolveEffectiveSubagentPolicy(
 ): Promise<EffectiveSubagentPolicy> {
 	await request.session.settings.reloadFromDisk();
 	const spawnPolicy = resolveSpawnPolicy(request.session.getSessionSpawns());
-	const selector = request.agent?.trim() || spawnPolicy.defaultAgent;
+	let selector = request.agent?.trim() || spawnPolicy.defaultAgent;
+	let routing: RoutingPolicyFields | undefined;
+	try {
+		const reference = parseRoutingPolicySelector(selector);
+		if (reference) {
+			routing = fillRoutingPolicy(request.session.settings, {
+				...reference,
+				model: request.model,
+				effort: request.effort,
+			});
+			if (typeof routing.model === "string") {
+				validateAgentModelSelector(routing.model, request.session.modelRegistry, request.session.settings);
+			}
+			selector = routing.agent ?? spawnPolicy.defaultAgent;
+		}
+	} catch (error) {
+		throw new StructuredSubagentError("preflight", error instanceof Error ? error.message : String(error), {
+			cause: error,
+		});
+	}
 	const selectorShaped = isAgentModelSelector(selector);
 	const planMode = request.session.getPlanModeState?.()?.enabled === true;
 	assertPlanControlsAllowed(request, planMode);
@@ -372,6 +405,9 @@ export async function resolveEffectiveSubagentPolicy(
 	let selectorModel: string | undefined;
 	/** Explicit effort from `<agent-name>:<effort>` when the base, not the full value, is registered. */
 	let callerThinkingLevel: ConfiguredThinkingLevel | undefined;
+	if (routing?.effort && request.effort === undefined) {
+		callerThinkingLevel = parseConfiguredThinkingLevel(routing.effort);
+	}
 	const named = agent ? undefined : splitNamedAgentSelector(selector);
 	const namedAgent = named ? getAgent(agents, named.base) : undefined;
 	if (agent && selectorShaped) {
@@ -413,7 +449,15 @@ export async function resolveEffectiveSubagentPolicy(
 		);
 	}
 
-	const effectiveAgent = planMode ? createPlanModeAgent(agent) : agent;
+const selectedAgent = {
+		...agent,
+		...(request.tools !== undefined ? { tools: request.tools } : {}),
+		...(request.spawns !== undefined ? { spawns: request.spawns } : {}),
+	};
+	const effectiveAgent = planMode ? createPlanModeAgent(selectedAgent, request.session.cwd) : selectedAgent;
+	if (planMode && request.tools !== undefined) {
+		effectiveAgent.tools = effectiveAgent.tools?.filter(tool => request.tools!.includes(tool));
+	}
 	try {
 		assertExternalHarnessCapabilities(effectiveAgent);
 	} catch (error) {
@@ -450,7 +494,7 @@ export async function resolveEffectiveSubagentPolicy(
 	const modelResolution = {
 		// A model-selector `agent` value is the most explicit crew choice and
 		// outranks a separately supplied request model.
-		requestModel: selectorModel ?? request.model,
+		requestModel: selectorModel ?? request.model ?? routing?.model,
 		settingsOverride: agentModelOverrides[agentName],
 		agentModel: effectiveAgent.model,
 		settings: request.session.settings,
@@ -493,7 +537,8 @@ export async function resolveEffectiveSubagentPolicy(
 		agent,
 		effectiveAgent,
 		modelOverride,
-		callerModelSelector: selectorModel ?? request.model,
+		routing,
+		callerModelSelector: selectorModel ?? request.model ?? routing?.model,
 		callerThinkingLevel,
 		modelRole,
 		serviceTierOverride,
@@ -607,7 +652,7 @@ function buildExecutorOptions(
 	const { session } = request;
 	const { skills, autoloadSkills } = resolveAutoloadSkills(session, policy.agent);
 	const localProtocolOptions = sessionLocalProtocolOptions(session);
-	const restrictToolNames = policy.planMode || session.restrictToolNames === true;
+	const restrictToolNames = request.tools !== undefined || policy.planMode || session.restrictToolNames === true;
 	const enableMCP = !restrictToolNames && (session.enableMCP ?? true);
 	return {
 		cwd: session.cwd,
@@ -615,7 +660,7 @@ function buildExecutorOptions(
 		getApiKey: session.getApiKey,
 		credentialSourceSessionId: session.getCredentialSourceSessionId?.(),
 		agent: policy.effectiveAgent,
-		task: renderSubagentPrompt(request.assignment),
+		task: renderSubagentPrompt(request.assignment, policy.routing, session.cwd),
 		assignment: request.assignment.trim(),
 		context: request.context?.trim() || undefined,
 		planReference: undefined,
@@ -720,7 +765,7 @@ function buildFailureResult(
 			id,
 			agent: policy.agent.name,
 			agentSource: policy.agent.source,
-			task: renderSubagentPrompt(request.assignment),
+			task: renderSubagentPrompt(request.assignment, undefined, request.session.cwd),
 			assignment: request.assignment.trim(),
 			description: request.invocationKind === "eval" ? trimToUndefined(request.identity?.label) : undefined,
 			exitCode: 1,
@@ -756,14 +801,19 @@ async function resolveNestedPatchPaths(
 }
 
 /** Recovery hint appended to an isolated run's failure: every preserved artifact, and the nested-persist fallback failure when there is one. */
-async function isolationRecoveryHint(result: SingleResult, artifactsDir: string): Promise<string> {
+async function isolationRecoveryHint(result: SingleResult, artifactsDir: string, cwd?: string): Promise<string> {
 	const nested = await resolveNestedPatchPaths(result, artifactsDir);
-	const hint = prompt.render(isolationRecoveryHintTemplate, {
-		patchPath: result.patchPath,
-		nestedPatchPaths: nested.paths,
-		nestedFailure: nested.failure,
-		branchName: result.branchName,
-	});
+	const hint = renderPromptAsset(
+		"tools/isolation-recovery-hint.md",
+		isolationRecoveryHintTemplate,
+		{
+			patchPath: result.patchPath,
+			nestedPatchPaths: nested.paths,
+			nestedFailure: nested.failure,
+			branchName: result.branchName,
+		},
+		{ cwd, kind: "notice" },
+	);
 	return hint ? ` ${hint}` : "";
 }
 
@@ -773,15 +823,18 @@ async function isolationRecoveryHint(result: SingleResult, artifactsDir: string)
  * the root patch only when it holds changes, and each nested-repo patch file,
  * so the parent knows exactly where the work lives.
  */
-function describeCapturedChanges(result: SingleResult): string {
+function describeCapturedChanges(result: SingleResult, cwd: string): string {
 	const nestedPatchPaths = result.nestedPatchPaths ?? [];
-	return renderIsolationSummary({
-		kind: "captured",
-		branchName: result.branchName,
-		rootPatchPath: result.hasRootChanges === false ? undefined : result.patchPath,
-		nestedCount: nestedPatchPaths.length || (result.nestedPatches?.length ?? 0),
-		nestedPatchPaths,
-	});
+	return renderIsolationSummary(
+		{
+			kind: "captured",
+			branchName: result.branchName,
+			rootPatchPath: result.hasRootChanges === false ? undefined : result.patchPath,
+			nestedCount: nestedPatchPaths.length || (result.nestedPatches?.length ?? 0),
+			nestedPatchPaths,
+		},
+		cwd,
+	);
 }
 
 function attachStructuredOutputMetadata(result: SingleResult, schema: StructuredSubagentSchemaResolution): void {
@@ -823,15 +876,20 @@ function attachStructuredOutputMetadata(result: SingleResult, schema: Structured
 }
 
 /** Name a settled child's exit status and artifact for a post-settle failure message. */
-function describeSalvagedWork(result: SingleResult): string {
-	const hint = prompt.render(salvagedChildHintTemplate, {
-		aborted: result.aborted,
-		abortReason: result.abortReason,
-		exitCode: result.exitCode,
-		error: result.error,
-		id: result.id,
-		outputPath: result.outputPath,
-	});
+function describeSalvagedWork(result: SingleResult, cwd: string): string {
+	const hint = renderPromptAsset(
+		"tools/salvaged-child-hint.md",
+		salvagedChildHintTemplate,
+		{
+			aborted: result.aborted,
+			abortReason: result.abortReason,
+			exitCode: result.exitCode,
+			error: result.error,
+			id: result.id,
+			outputPath: result.outputPath,
+		},
+		{ cwd, kind: "notice" },
+	);
 	return `\n${hint.trim()}`;
 }
 
@@ -841,6 +899,15 @@ function describeSalvagedWork(result: SingleResult): string {
  */
 export async function runStructuredSubagent(request: StructuredSubagentRequest): Promise<StructuredSubagentResult> {
 	const policy = await applySpawnHook(request, await resolveEffectiveSubagentPolicy(request));
+	if (
+		request.confirmedModel !== undefined &&
+		(policy.modelOverride?.length !== 1 || policy.modelOverride[0] !== request.confirmedModel)
+	) {
+		throw new StructuredSubagentError(
+			"preflight",
+			"The spawn hook changed the confirmed model. Launch again to review it.",
+		);
+	}
 	const lease = await leaseArtifacts(request.session, request.invocationKind);
 	let changesApplied: boolean | null = null;
 	let mergeSummary = "";
@@ -938,15 +1005,18 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			// The agent finished but the runner could not capture, persist, or
 			// commit its changes. `result.error` names the recovery route (retained
 			// workspace, rescued branch); it is the parent's only way to find it.
-			mergeSummary = renderIsolationSummary({
-				kind: "capture-error",
-				error: result.error,
-				branchName: result.branchName,
-				rootPatchPath: result.hasRootChanges === false ? undefined : result.patchPath,
-				nestedPatchPaths: result.nestedPatchPaths ?? [],
-			});
+			mergeSummary = renderIsolationSummary(
+				{
+					kind: "capture-error",
+					error: result.error,
+					branchName: result.branchName,
+					rootPatchPath: result.hasRootChanges === false ? undefined : result.patchPath,
+					nestedPatchPaths: result.nestedPatchPaths ?? [],
+				},
+				request.session.cwd,
+			);
 		} else if (policy.isIsolated && isolationContext && !policy.applyChanges) {
-			mergeSummary = describeCapturedChanges(result);
+			mergeSummary = describeCapturedChanges(result, request.session.cwd);
 		}
 
 		completedSuccessfully = result.exitCode === 0 && !result.error && !result.aborted;
@@ -965,7 +1035,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		retainSalvagedArtifact = settled?.outputPath !== undefined;
 		throw new StructuredSubagentError(
 			"execution",
-			`Subagent execution failed: ${error instanceof Error ? error.message : String(error)}${settled ? describeSalvagedWork(settled) : ""}`,
+			`Subagent execution failed: ${error instanceof Error ? error.message : String(error)}${settled ? describeSalvagedWork(settled, request.session.cwd) : ""}`,
 			{ cause: error, result: settled },
 		);
 	} finally {
@@ -998,6 +1068,10 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 }
 
 /** Build the recovery suffix used by adapters after an isolated failure. */
-export async function buildStructuredSubagentRecoveryHint(result: SingleResult, artifactsDir: string): Promise<string> {
-	return isolationRecoveryHint(result, artifactsDir);
+export async function buildStructuredSubagentRecoveryHint(
+	result: SingleResult,
+	artifactsDir: string,
+	cwd?: string,
+): Promise<string> {
+	return isolationRecoveryHint(result, artifactsDir, cwd);
 }

@@ -30,7 +30,7 @@ async function createTestSession(
 ) {
 	const sessionManager = SessionManager.inMemory();
 	const settings = Settings.isolated();
-	const modelRegistry = {} as never;
+	const modelRegistry = { getAvailable: () => [TEST_MODEL] } as never;
 	const session = new AgentSession({
 		agent: new Agent({
 			getApiKey: () => "test-key",

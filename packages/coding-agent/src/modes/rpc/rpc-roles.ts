@@ -9,6 +9,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import type { ModelRoleLookup } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import {
 	disabledProviderIds,
 	getModelMatchPreferences,
@@ -16,7 +17,14 @@ import {
 	resolveConfiguredModelPatterns,
 	resolveModelRoleValue,
 } from "../../config/model-resolver";
-import { formatModelRoleAlias, getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS } from "../../config/model-roles";
+import {
+	formatModelRoleAlias,
+	getKnownRoleIds,
+	getRoleInfo,
+	MODEL_ROLE_IDS,
+	modelRoleNamespace,
+} from "../../config/model-roles";
+import type { Settings } from "../../config/settings";
 import type { AgentSession } from "../../session/agent-session";
 import { EPHEMERAL_MODEL_CHANGE_ROLE, type ModelChangeEntry } from "../../session/session-entries";
 
@@ -33,10 +41,13 @@ export interface RpcRoleInfo {
 	/** Selector form, e.g. `@smol`. */
 	alias: string;
 	name: string;
+	description?: string;
 	/** Built-in short tag; absent for custom roles. */
 	tag?: string;
 	section: "chat" | "kind";
 	source: "builtin" | "configured";
+	/** Consumer-owned namespace, independent of whether the role is built-in or configured. */
+	namespace?: "deck";
 	/** Raw `modelRoles` selector; absent when the role is not configured. */
 	configured?: string;
 	/** Effective pattern chain for `@<id>`, thinking suffixes preserved. */
@@ -77,6 +88,16 @@ type RpcRolesSession = Pick<
 	| "setThinkingLevel"
 >;
 
+/** Persisted role aliases visible from an explicit editing scope, excluding runtime/overlay assignments. */
+export function scopedRoleLookup(settings: Settings, scope: "global" | "project"): ModelRoleLookup {
+	return {
+		getModelRole: role =>
+			scope === "project"
+				? (settings.getProjectModelRole(role) ?? settings.getGlobalModelRole(role))
+				: settings.getGlobalModelRole(role),
+	};
+}
+
 interface ResolvedRole {
 	model: Model;
 	thinkingLevel?: ConfiguredThinkingLevel;
@@ -96,10 +117,14 @@ interface RoleSelection {
  * to unauthenticated catalog models, which a live session cannot switch to, so
  * those count as unresolved here.
  */
-function resolveRole(session: RpcRolesSession, role: string): ResolvedRole | undefined {
+function resolveRole(session: RpcRolesSession, role: string, roleLookup?: ModelRoleLookup): ResolvedRole | undefined {
 	const selector = formatModelRoleAlias(role);
 	const disabled = disabledProviderIds(session.settings);
-	const options = { settings: session.settings, matchPreferences: getModelMatchPreferences(session.settings) };
+	const options = {
+		settings: session.settings,
+		roleLookup,
+		matchPreferences: getModelMatchPreferences(session.settings),
+	};
 	for (const kind of ["chat", "all"] as const) {
 		const available = session.modelRegistry.getAvailable(kind).filter(model => !disabled.has(model.provider));
 		const resolved = resolveModelRoleValue(selector, available, options);
@@ -141,13 +166,16 @@ export class RpcRoles {
 			const alias = formatModelRoleAlias(id);
 			const configured = settings.getModelRole(id);
 			const resolved = resolveRole(this.#session, id);
+			const namespace = modelRoleNamespace(id);
 			return {
 				id,
 				alias,
 				name: info.name,
+				...(info.description !== undefined ? { description: info.description } : {}),
 				...(info.tag ? { tag: info.tag } : {}),
 				section: info.section,
 				source: MODEL_ROLE_IDS.some(builtin => builtin === id) ? "builtin" : "configured",
+				...(namespace ? { namespace } : {}),
 				...(configured !== undefined ? { configured } : {}),
 				patterns: resolveConfiguredModelPatterns([alias], settings),
 				...(resolved
@@ -164,6 +192,19 @@ export class RpcRoles {
 		});
 		const activeRole = this.activeRole();
 		return activeRole ? { roles, activeRole } : { roles };
+	}
+
+	/** Resolve the role as authored at this editing scope, without borrowing a higher layer's assignment. */
+	resolveScope(role: string, scope: "global" | "project"): RpcRoleResolution | null {
+		const { settings } = this.#session;
+		const resolved = resolveRole(this.#session, role, scopedRoleLookup(settings, scope));
+		return resolved
+			? {
+					provider: resolved.model.provider,
+					modelId: resolved.model.id,
+					...(resolved.thinkingLevel !== undefined ? { thinkingLevel: resolved.thinkingLevel } : {}),
+				}
+			: null;
 	}
 
 	/** Apply a role to the primary session model, like `--model @<role>` at launch. */

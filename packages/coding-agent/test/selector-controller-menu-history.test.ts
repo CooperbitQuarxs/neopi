@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import {
 	SelectorController,
 	type MenuHost,
@@ -6,6 +6,8 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { SettingsList, type SettingsListTheme } from "@oh-my-pi/pi-tui/components/settings-list";
 import type { Component, OverlayHandle, OverlayOptions, TUI } from "@oh-my-pi/pi-tui";
+import { ModelHubComponent, type ModelHubSource } from "@oh-my-pi/pi-tui/overlays/model-hub";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { createInteractiveModeContext, type SessionOverrides } from "./helpers/interactive-mode-context";
 
 const theme: SettingsListTheme = {
@@ -98,6 +100,95 @@ function harness(session?: SessionOverrides) {
 	};
 	return { controller, ctx, open, menus, closes, shown, status, overlayStack, showOverlay, focused: () => focused };
 }
+
+beforeAll(async () => {
+	await initTheme(false);
+});
+
+it("Ctrl-O/Ctrl-I revisit a saved preset's name field without applying presets", () => {
+	const h = harness();
+	const saved: string[] = [];
+	const switched: string[] = [];
+	let revision = 0;
+	const source: ModelHubSource = {
+		get revision() {
+			return revision;
+		},
+		disabledProviders: [],
+		fallbackChains: {},
+		modelRoleStorage: "global",
+		cycleOrder: [],
+		getProjectModelRole: () => undefined,
+		getGlobalModelRole: () => undefined,
+		getModelRoleSource: () => "default",
+		effortRules: [],
+		permittedEfforts: () => [],
+		getProjectRoleEffortSelection: () => undefined,
+		getGlobalRoleEffortSelection: () => undefined,
+		getRoleEffortSelection: () => undefined,
+		getFallbackEffortSelection: () => undefined,
+		formatModelSelector: model => `${model.provider}/${model.id}`,
+		defaultThinkingLevel: "high",
+		modelProviderOrder: [],
+		knownRoleIds: ["default"],
+		mruOrder: [],
+		modelPerf: new Map(),
+		getModelRole: () => undefined,
+		getRoleInfo: role => ({ name: role, section: "chat", accepts: () => true }),
+		defaultRoleChain: () => [],
+		resolveRoleValue: () => ({ model: undefined, explicitThinkingLevel: false }),
+		getModelPresets: () => ({ names: ["saved"], active: undefined }),
+	};
+	const hub = new ModelHubComponent(
+		h.ctx.ui,
+		source,
+		{
+			getError: () => undefined,
+			getAvailable: () => [],
+			getAll: () => [],
+			authStorage: { keys: { source: () => undefined } },
+			getDiscoverableProviders: () => [],
+			getProviderDiscoveryState: () => undefined,
+			find: () => undefined,
+			refresh: async () => {},
+			refreshProvider: async () => {},
+		},
+		[],
+		{
+			onAssign: () => true,
+			onUnassign: () => {},
+			onCancel: () => {},
+			onSavePreset: name => {
+				saved.push(name);
+				revision++;
+			},
+			onSwitchPreset: name => {
+				switched.push(name);
+				revision++;
+			},
+		},
+	);
+	const host = h.controller.openMenu("model-hub", () => {});
+	if (!host) throw new Error("expected model hub host");
+	host.mount(hub, () => h.showOverlay(hub));
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+	hub.handleInput("s");
+	hub.handleInput("saved");
+	hub.handleInput("\r");
+	expect(saved).toEqual(["saved"]);
+	expect(h.controller.navigateMenuHistory(-1)).toBe(true);
+	const strip = hub.navigationSnapshot().strip;
+	if (strip?.kind !== "name") throw new Error("expected preset-name field");
+	expect(strip.input.getValue()).toBe("saved");
+	hub.handleInput("\x1b[1;5D");
+	hub.handleInput("\x1b[1;5C");
+	expect(switched).toEqual([]);
+	expect(saved).toEqual(["saved"]);
+	expect(h.controller.navigateMenuHistory(1)).toBe(true);
+	expect(hub.navigationSnapshot().strip).toBeNull();
+	expect(switched).toEqual([]);
+	hub.dispose();
+});
 
 describe("controller menu timeline", () => {
 	it("restores a nested page in place and preserves both parent and child selection", () => {

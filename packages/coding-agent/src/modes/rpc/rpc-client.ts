@@ -22,12 +22,21 @@ import type { SessionEntry, SessionTreeNode } from "../../session/session-entrie
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
+import type { RpcModel } from "./rpc-model";
+import type { RpcModelSelectorResult } from "./rpc-model-selector";
 import {
 	RPC_MESSAGES_PAGE_BUSY_ERROR,
 	RPC_MESSAGES_PAGE_STALE_ERROR,
 	type RpcMessagesPage,
 	type RpcMessagesPageOptions,
 } from "./rpc-messages";
+import type {
+	RpcNavigateTreeOptions,
+	RpcNavigateTreeResult,
+	RpcResumeTreeOptions,
+	RpcResumeTreeResult,
+} from "./rpc-tree";
+import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
 import type {
 	RpcAbortAndRestoreQueueResult,
 	RpcAvailableCommandsUpdateFrame,
@@ -50,9 +59,11 @@ import type {
 	RpcPlanProposalRequest,
 	RpcPlanProposalResponse,
 	RpcPromptResultFrame,
+	RpcLoginProvider,
 	RpcRemoveQueuedMessageResult,
 	RpcResponse,
 	RpcSessionSettledFrame,
+	RpcJournalEventFrame,
 	RpcSessionState,
 	RpcSetModeResult,
 	RpcSubagentEventFrame,
@@ -66,6 +77,7 @@ import type {
 	RpcToolApprovalRequest,
 	RpcToolApprovalResponse,
 } from "./rpc-types";
+import type { SessionJournalIdentity } from "../../session/session-journal-events";
 import type { RpcUsageRequest, RpcUsageResult } from "./rpc-usage";
 
 /** Distributive Omit that works with union types */
@@ -133,6 +145,7 @@ export type RpcModeChangedListener = (frame: RpcModeChangedFrame) => void;
 export type RpcToolApprovalRequestListener = (request: RpcToolApprovalRequest) => void;
 export type RpcToolApprovalCancelListener = (cancel: RpcToolApprovalCancel) => void;
 export type RpcLiveListener = (frame: RpcLiveFrame) => void;
+export type RpcJournalEventListener = (event: RpcJournalEventFrame) => void;
 
 export interface RpcClientToolContext<TDetails = unknown> {
 	toolCallId: string;
@@ -236,6 +249,38 @@ function isAgentSessionEvent(value: unknown): value is AgentSessionEvent {
 	const type = value.type;
 	if (typeof type !== "string") return false;
 	return sessionEventTypes.has(type as AgentSessionEvent["type"]);
+}
+
+function isRpcJournalEvent(value: unknown): value is RpcJournalEventFrame {
+	if (
+		!isRecord(value) ||
+		typeof value.sessionId !== "string" ||
+		!(value.sessionFile === null || typeof value.sessionFile === "string") ||
+		!(value.leafId === null || typeof value.leafId === "string")
+	)
+		return false;
+	if (value.type === "journal_state") {
+		if (value.reason !== "snapshot" && value.reason !== "identity" && value.reason !== "leaf") return false;
+		return (
+			value.messageEntryIds === undefined ||
+			(Array.isArray(value.messageEntryIds) &&
+				value.messageEntryIds.every(
+					identity =>
+						isRecord(identity) && typeof identity.messageId === "string" && typeof identity.entryId === "string",
+				))
+		);
+	}
+	if (value.type === "journal_entry") return isRecord(value.entry) && typeof value.entry.id === "string";
+	if (value.type === "message_start")
+		return (
+			value.snapshot === true &&
+			typeof value.messageId === "string" &&
+			isRecord(value.message) &&
+			value.message.role === "assistant"
+		);
+	return (
+		value.type === "message_persisted" && typeof value.messageId === "string" && typeof value.entryId === "string"
+	);
 }
 
 function isRpcSubagentLifecycleFrame(value: unknown): value is RpcSubagentLifecycleFrame {
@@ -381,6 +426,7 @@ export class RpcClient {
 	#reaping: Promise<void> | null = null;
 	#eventListeners: RpcEventListener[] = [];
 	#sessionEventListeners: RpcSessionEventListener[] = [];
+	readonly #journalEventListeners = new Set<RpcJournalEventListener>();
 	#subagentLifecycleListeners = new Set<RpcSubagentLifecycleListener>();
 	#subagentProgressListeners = new Set<RpcSubagentProgressListener>();
 	#subagentEventListeners = new Set<RpcSubagentEventListener>();
@@ -659,6 +705,11 @@ export class RpcClient {
 				this.#sessionEventListeners.splice(index, 1);
 			}
 		};
+	}
+	/** Native journal notifications. Subscribe before fetching the initial journal pages. */
+	onJournalEvent(listener: RpcJournalEventListener): () => void {
+		this.#journalEventListeners.add(listener);
+		return () => this.#journalEventListeners.delete(listener);
 	}
 
 	/**
@@ -1062,6 +1113,16 @@ export class RpcClient {
 		this.#getData(await this.#send({ type: "steer_subagent", subagentId, message }));
 	}
 
+	/** Change a running subagent's thinking level from its next provider request. */
+	async setSubagentThinkingLevel(subagentId: string, level: ThinkingLevel): Promise<void> {
+		this.#getData(await this.#send({ type: "set_subagent_thinking_level", subagentId, level }));
+	}
+
+	/** Enable or disable fast mode only for the selected running subagent. */
+	async setSubagentFast(subagentId: string, enabled: boolean): Promise<{ enabled: boolean; active: boolean }> {
+		return this.#getData(await this.#send({ type: "set_subagent_fast", subagentId, enabled }));
+	}
+
 	/**
 	 * Set model by provider and ID.
 	 */
@@ -1085,9 +1146,9 @@ export class RpcClient {
 	/**
 	 * Get list of available models.
 	 */
-	async getAvailableModels(): Promise<ModelInfo[]> {
+	async getAvailableModels(): Promise<RpcModel[]> {
 		const response = await this.#send({ type: "get_available_models" });
-		return this.#getData<{ models: ModelInfo[] }>(response).models;
+		return this.#getData<{ models: RpcModel[] }>(response).models;
 	}
 
 	/** Create and immediately register a mixture in this RPC session's workspace. */
@@ -1122,6 +1183,12 @@ export class RpcClient {
 		return this.#getData<RpcRolesResult>(response);
 	}
 
+	/** Read the native picker's matches and facts without selecting or starting a turn. */
+	async queryModelSelector(query: string): Promise<RpcModelSelectorResult> {
+		const response = await this.#send({ type: "query_model_selector", query });
+		return this.#getData<RpcModelSelectorResult>(response);
+	}
+
 	/**
 	 * Select a model role for the session, as `--model @<role>` does at launch.
 	 */
@@ -1148,12 +1215,33 @@ export class RpcClient {
 		return this.#getData<{ entries: SessionEntry[]; leafId: string | null }>(response);
 	}
 
+	/** Emit an ordered native identity/current-assistant snapshot to existing observers before resolving. */
+	async snapshotSessionJournal(): Promise<SessionJournalIdentity> {
+		const response = await this.#send({ type: "snapshot_session_journal" });
+		return this.#getData<SessionJournalIdentity>(response);
+	}
+
+	/** Read one complete-entry page without folding compaction or dropping alternate branches. */
+	async getEntriesPage(options: RpcJournalPageOptions = {}): Promise<RpcJournalPage> {
+		const response = await this.#send({ type: "get_entries_page", ...options });
+		return this.#getData<RpcJournalPage>(response);
+	}
 	/**
 	 * Pi-compatible raw session tree plus the current leaf id.
 	 */
 	async getTree(): Promise<{ tree: SessionTreeNode[]; leafId: string | null }> {
 		const response = await this.#send({ type: "get_tree" });
 		return this.#getData<{ tree: SessionTreeNode[]; leafId: string | null }>(response);
+	}
+
+	/** Navigate the native tree in the same file. Rebuild the transcript before acknowledging a returned resumeToken. */
+	async navigateTree(options: RpcNavigateTreeOptions): Promise<RpcNavigateTreeResult> {
+		return this.#getData<RpcNavigateTreeResult>(await this.#send({ ...options, type: "navigate_tree" }));
+	}
+
+	/** Acknowledge a committed ask re-answer after consuming its navigation result. */
+	async resumeTree(options: RpcResumeTreeOptions): Promise<RpcResumeTreeResult> {
+		return this.#getData<RpcResumeTreeResult>(await this.#send({ ...options, type: "resume_tree" }));
 	}
 
 	/**
@@ -1410,11 +1498,9 @@ export class RpcClient {
 	/**
 	 * Get list of OAuth providers available for login, with their current authentication status.
 	 */
-	async getLoginProviders(): Promise<Array<{ id: string; name: string; available: boolean; authenticated: boolean }>> {
+	async getLoginProviders(): Promise<RpcLoginProvider[]> {
 		const response = await this.#send({ type: "get_login_providers" });
-		return this.#getData<{
-			providers: Array<{ id: string; name: string; available: boolean; authenticated: boolean }>;
-		}>(response).providers;
+		return this.#getData<{ providers: RpcLoginProvider[] }>(response).providers;
 	}
 
 	/**
@@ -1434,7 +1520,7 @@ export class RpcClient {
 	async login(
 		providerId: string,
 		options?: {
-			onOpenUrl?: (url: string, instructions?: string, launchUrl?: string) => void;
+			onOpenUrl?: (url: string, instructions?: string, launchUrl?: string, userCode?: string) => void;
 			onManualCodeInput?: (prompt: { title: string; placeholder?: string }) => string | Promise<string>;
 		},
 	): Promise<{ providerId: string }> {
@@ -1443,7 +1529,7 @@ export class RpcClient {
 			onOpenUrl || onManualCodeInput
 				? (req: RpcExtensionUIRequest) => {
 						if (req.method === "open_url") {
-							onOpenUrl?.(req.url, req.instructions, req.launchUrl);
+							onOpenUrl?.(req.url, req.instructions, req.launchUrl, req.userCode);
 							return;
 						}
 						if (req.method !== "input" || !onManualCodeInput) return;
@@ -1474,6 +1560,11 @@ export class RpcClient {
 	async getLogoutAccounts(providerId: string): Promise<LogoutAccount[]> {
 		const response = await this.#send({ type: "get_logout_accounts", providerId });
 		return this.#getData<{ accounts: LogoutAccount[] }>(response).accounts;
+	}
+
+	/** Activate one stored OAuth account for this session, without changing provider-wide credentials. */
+	async activateAccount(providerId: string, credentialId: number): Promise<void> {
+		await this.#send({ type: "activate_account", providerId, credentialId });
 	}
 
 	/**
@@ -1745,6 +1836,10 @@ export class RpcClient {
 
 		if (isRpcBtwRecordFrame(data)) {
 			for (const listener of this.#btwRecordListeners) listener(data.record);
+			return;
+		}
+		if (isRpcJournalEvent(data)) {
+			for (const listener of this.#journalEventListeners) listener(data);
 			return;
 		}
 

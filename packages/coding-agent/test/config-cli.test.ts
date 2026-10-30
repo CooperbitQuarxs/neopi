@@ -16,7 +16,7 @@ interface CliProcessResult {
 	error: string;
 }
 
-async function runCliProcess(args: string[], env: NodeJS.ProcessEnv): Promise<CliProcessResult> {
+async function runCliProcess(args: readonly string[], env: NodeJS.ProcessEnv): Promise<CliProcessResult> {
 	const proc = Bun.spawn([process.execPath, cliEntry, ...args], {
 		stdout: "pipe",
 		stderr: "pipe",
@@ -53,6 +53,44 @@ afterEach(async () => {
 });
 
 describe("config CLI schema coverage", () => {
+	it("dumps defaults as TOML even when user settings are invalid", async () => {
+		const agentDir = testAgentDir!.path();
+		await Bun.write(path.join(agentDir, "settings.toml"), "broken = [");
+		const result = await runCliProcess(["config", "dump-toml"], { PI_CODING_AGENT_DIR: agentDir });
+		expect(result.exitCode).toBe(0);
+		expect(Bun.TOML.parse(result.output)).toMatchObject({ compaction: { enabled: true } });
+		expect(result.output).toContain("# compaction.enabled (boolean)");
+		expect(await Bun.file(path.join(agentDir, "agent.db")).exists()).toBe(false);
+	});
+	it("converts through the real CLI without acknowledgment and still requires force to replace TOML", async () => {
+		const agentDir = testAgentDir!.path();
+		const source = path.join(agentDir, "config.yml");
+		const target = path.join(agentDir, "config.toml");
+		const env = { PI_CODING_AGENT_DIR: agentDir };
+		await Bun.write(source, "unknown: {preserved: yes}\n");
+		const converted = await runCliProcess(["config", "to-toml", source], env);
+		expect(converted.exitCode).toBe(0);
+		expect(converted.error).not.toContain("still write YAML");
+		expect(Bun.TOML.parse(await Bun.file(target).text())).toEqual({ unknown: { preserved: "yes" } });
+		const original = await Bun.file(target).text();
+		await Bun.write(source, "unknown: updated\n");
+		const refused = await runCliProcess(["config", "to-toml", source], env);
+		expect(refused.exitCode).toBe(1);
+		expect(await Bun.file(target).text()).toBe(original);
+		const overwritten = await runCliProcess(["config", "to-toml", source, "--force"], env);
+		expect(overwritten.exitCode).toBe(0);
+		expect(Bun.TOML.parse(await Bun.file(target).text())).toEqual({ unknown: "updated" });
+	});
+	it.each([{ args: ["config", "--help"] }, { args: ["config", "to-toml", "--help"] }])(
+		"omits the obsolete save limitation from real CLI help %j",
+		async ({ args }) => {
+			const result = await runCliProcess(args, { PI_CODING_AGENT_DIR: testAgentDir!.path() });
+			expect(result.exitCode).toBe(0);
+			expect(result.output).not.toContain("still write YAML");
+			expect(result.output).not.toContain("--yes");
+			expect(await Bun.file(path.join(testAgentDir!.path(), "config.toml")).exists()).toBe(false);
+		},
+	);
 	it("renders record settings as JSON and with record type in text output", async () => {
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 

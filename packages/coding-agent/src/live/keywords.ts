@@ -2,7 +2,12 @@ type NormalizedChar = { char: string; start: number; end: number };
 
 /** Find a spoken keyword in finalized speech and remove its original text span.
  * With `endOnly`, punctuation after the phrase is allowed but words are not. */
-export function stripLiveKeyword(speech: string, keyword: string, endOnly = false): { matched: boolean; text: string } {
+export function stripLiveKeyword(
+	speech: string,
+	keyword: string,
+	endOnly = false,
+	startOnly = false,
+): { matched: boolean; text: string } {
 	const normalize = (text: string): NormalizedChar[] => {
 		const chars: NormalizedChar[] = [];
 		for (let index = 0; index < text.length;) {
@@ -47,6 +52,7 @@ export function stripLiveKeyword(speech: string, keyword: string, endOnly = fals
 			if (/[\p{L}\p{N}]$/u.test(speech.slice(0, begin))) continue;
 			const remainder = speech.slice(end);
 			if (/^[\p{L}\p{N}]/u.test(remainder)) continue;
+			if (startOnly && /[^\p{P}\p{S}\s]/u.test(speech.slice(0, begin))) continue;
 			if (endOnly && /[^\p{P}\p{S}\s]/u.test(remainder)) continue;
 			span = { begin, end };
 			if (!endOnly) break;

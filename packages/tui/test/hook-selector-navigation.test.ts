@@ -122,10 +122,33 @@ describe("hook callback prompt navigation", () => {
 		expect(prop(picker(selector), "cursor")).toBe(1);
 		close(selector);
 		expect(cancelled).toBe(0);
-		expect(prop(picker(selector), "query")).toBe("xhjklggG / ");
+		expect(prop(picker(selector), "query")).toBeNull();
 		expect(closeLabel(selector)).toBe("Close");
 		close(selector);
 		expect(cancelled).toBe(1);
+	});
+
+	it("keeps native options unchanged during a draft and confirms without selecting", () => {
+		const picks: string[] = [];
+		const selector = new HookSelectorComponent(
+			"Choose",
+			["Alpha", "Beta", "Gamma", "Delta"],
+			value => picks.push(value),
+			() => {},
+			{ maxVisible: 2 },
+		);
+		selector.handleInput("/");
+		selector.handleInput("Beta");
+		expect(prop(picker(selector), "query")).toBe("Beta");
+		expect(prop(picker(selector), "order")).toBeUndefined();
+		selector.handleInput("\t");
+		selector.handleInput("\x1b[B");
+		expect(prop(picker(selector), "selected")).toBe("0");
+		selector.handleInput("\r");
+		expect(prop(picker(selector), "order")).toEqual(["1"]);
+		expect(picks).toEqual([]);
+		selector.handleInput("\x1b");
+		expect(prop(picker(selector), "order")).toBeUndefined();
 	});
 
 	it("never approves with Space and only aliases existing marked checkbox toggles", () => {

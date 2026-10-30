@@ -28,6 +28,19 @@ function createContext(options?: {
 			getText() {
 				return editorText;
 			},
+			getExpandedText() {
+				return editorText;
+			},
+			setDraft(text: string, images?: ImageContent[]) {
+				editorText = text;
+				this.pendingImages = [...(images ?? [])];
+				this.pendingImageLinks = this.pendingImages.map(() => undefined);
+			},
+			clearDraftForRecall() {
+				editorText = "";
+				this.pendingImages = [];
+				this.pendingImageLinks = [];
+			},
 			addToHistory: vi.fn(),
 			clearSubmittedDraft: vi.fn(),
 			pendingImages: options?.pendingImages ? [...options.pendingImages] : ([] as ImageContent[]),

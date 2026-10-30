@@ -142,6 +142,23 @@ export const cfgSymbolBrandGlyph = register({
 });
 effect(cfgSymbolBrandGlyph, setBrandGlyph);
 
+export const cfgStartupBranding = register({
+	id: "startupBranding",
+	type: "enum",
+	values: ["new", "classic"] as const,
+	default: "new",
+	ui: {
+		tab: "appearance",
+		group: "Theme",
+		label: "Startup Branding",
+		description: "Choose the startup banner's brand layout",
+		options: [
+			{ value: "new", label: "New", description: "Centered NPI logo and wordmark (default)" },
+			{ value: "classic", label: "Classic", description: "Original boxed NeoPi banner with the Pi tower" },
+		],
+	},
+});
+
 export const cfgSymbolEffortGlyphs = register({
 	id: "symbolEffortGlyphs",
 	type: "enum",

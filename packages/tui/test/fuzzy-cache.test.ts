@@ -66,10 +66,8 @@ describe("fuzzyRank empty-normalized query", () => {
 			seen.push(item);
 			return item;
 		});
-		// A non-blank query that normalizes to empty matches everything with score 0,
-		// and must still invoke getText per item (preserving callback side effects).
+		// Punctuation stays literal, but every candidate still reaches getText.
 		expect(seen).toEqual(items);
-		expect(out.map(result => result.item)).toEqual(items);
-		expect(out.every(result => result.score === 0)).toBe(true);
+		expect(out).toEqual([]);
 	});
 });

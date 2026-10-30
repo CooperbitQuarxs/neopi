@@ -18,6 +18,8 @@ import type { BashResult } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import type { RpcGoalResult } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
 import type { RpcMessagesPage } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-messages";
+import type { RpcNavigateTreeResult, RpcTreeAskReanswer } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-tree";
+import type { AskToolDetails, AskOptionNote, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
 import type {
 	RpcAbortAndRestoreQueueResult,
 	RpcAgentSessionEventFrame,
@@ -38,6 +40,7 @@ import type {
 	RpcHostUriRequest,
 	RpcHostUriResult,
 	RpcHostUriSchemeDefinition,
+	RpcJournalEventFrame,
 	RpcLiveEndFrame,
 	RpcLiveLevelsFrame,
 	RpcLivePhaseFrame,
@@ -159,6 +162,12 @@ export type CommandResults = Assert<
 				: Outbound<Exclude<ServerResult<K>, null | undefined>, Exclude<Wire.RpcWireCommands[K]["result"], null>>;
 	}>
 >;
+
+export type TreeNavigationResult = Assert<Outbound<RpcNavigateTreeResult, Wire.NavigateTreeResult>>;
+export type TreeReanswerInput = Assert<Inbound<Wire.TreeAskReanswer, RpcTreeAskReanswer>>;
+export type TreeAskDetailsInput = Assert<Inbound<Wire.TreeAskDetails, AskToolDetails>>;
+export type TreeAskQuestionInput = Assert<Inbound<Wire.TreeAskQuestionResult, QuestionResult>>;
+export type TreeAskOptionNoteInput = Assert<Inbound<Wire.TreeAskOptionNote, AskOptionNote>>;
 /** A nullable result is exactly a server result that can be `null`. */
 export type CommandNullability = Assert<
 	AllTrue<{
@@ -171,12 +180,13 @@ export type CommandNullability = Assert<
 
 // --- Session events and notifications ---------------------------------------
 
-type ServerEventType = RpcAgentSessionEventFrame["type"];
+type ServerEventFrame = RpcAgentSessionEventFrame | RpcJournalEventFrame;
+type ServerEventType = ServerEventFrame["type"];
 export type SessionEventSet = Assert<Same<Wire.RpcAgentEvent["type"], ServerEventType>>;
 export type SessionEvents = Assert<
 	AllTrue<{
 		[K in ServerEventType]: Outbound<
-			Extract<RpcAgentSessionEventFrame, { type: K }>,
+			Extract<ServerEventFrame, { type: K }>,
 			Extract<Wire.RpcAgentEvent, { type: K }>
 		>;
 	}>

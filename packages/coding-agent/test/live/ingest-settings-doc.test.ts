@@ -39,6 +39,8 @@ const FIELD_KEYS = [
 	"relayProgress",
 	"relayFinalAnswers",
 	"includeVoiceNote",
+	"seedHistory",
+	"seedHistoryTokens",
 ];
 
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -84,10 +86,10 @@ describe("live ingest persona documents", () => {
 		const short = doc.entries.find(entry => entry.name === "short");
 		const long = doc.entries.find(entry => entry.name === "long");
 		const legacy = doc.entries.find(entry => entry.name === "legacy");
-		expect(builtin?.sources).toHaveLength(21);
-		expect(short?.sources).toHaveLength(19);
-		expect(long?.sources).toHaveLength(23);
-		expect(legacy?.sources).toHaveLength(21);
+		expect(builtin?.sources).toHaveLength(23);
+		expect(short?.sources).toHaveLength(21);
+		expect(long?.sources).toHaveLength(25);
+		expect(legacy?.sources).toHaveLength(23);
 		expect(builtin?.sources?.map(field => field.key)).toEqual(FIELD_KEYS);
 		expect(short?.sources?.map(field => field.key)).toEqual([...FIELD_KEYS.slice(0, 5), ...FIELD_KEYS.slice(7)]);
 		expect(builtin?.sources?.find(field => field.key === "relayProgress")?.value).toBe(false);
@@ -119,6 +121,11 @@ describe("live ingest persona documents", () => {
 		const irc = alphaEntry?.sources?.find(field => field.key === "ircPeers");
 		const depth2 = alphaEntry?.sources?.find(field => field.key === "voicedSlotsByDepth.1");
 		const defaultRelay = builtin?.sources?.find(field => field.key === "relayFinalAnswers");
+		const seed = alphaEntry?.sources?.find(field => field.key === "seedHistory");
+		const seedBudget = alphaEntry?.sources?.find(field => field.key === "seedHistoryTokens");
+		if (seed?.kind !== "boolean" || seedBudget?.kind !== "choice") throw new Error("missing seed fields");
+		seed.value = true;
+		seedBudget.value = "4000";
 		if (irc?.kind !== "boolean" || depth2?.kind !== "choice" || defaultRelay?.kind !== "boolean") {
 			throw new Error("missing editable fields");
 		}
@@ -132,10 +139,14 @@ describe("live ingest persona documents", () => {
 			...alpha,
 			ircPeers: false,
 			voicedSlotsByDepth: [8, 16, 2, 1, 32],
+			seedHistory: true,
+			seedHistoryTokens: 4000,
 		});
 		expect(state.personas.beta?.ingest).toEqual(beta);
 		expect(state.defaultIngest?.advisorThinking).toBe(true);
 		expect(state.defaultIngest?.relayFinalAnswers).toBe(false);
+		expect(state.defaultIngest?.seedHistory).toBe(false);
+		expect(state.defaultIngest?.seedHistoryTokens).toBe(8000);
 		expect(state.personas.default).toBeUndefined();
 	});
 

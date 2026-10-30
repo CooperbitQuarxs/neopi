@@ -23,6 +23,7 @@ import { type CfgWriteDetails, type CfgWriteOutcome } from "@oh-my-pi/pi-tui/too
 import { CFG_SAVE_SEGMENT, CFG_URL_PREFIX, parseCfgUrl } from "@oh-my-pi/pi-tui/tools/cfg-url";
 import { type AnySetting, all } from "../config/registry";
 import type { SettingProvenance, Settings } from "../config/settings";
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import cfgPromptDoc from "../prompts/internal-urls/cfg.md" with { type: "text" };
 import cfgEnvShadowedTemplate from "../prompts/tools/cfg-env-shadowed.md" with { type: "text" };
 import cfgApprovalTimeoutTemplate from "../prompts/tools/cfg-approval-timeout.md" with { type: "text" };
@@ -66,6 +67,7 @@ const TREE_COMMENT_MAX_CHARS = 120;
 const PROVENANCE_LABELS: Record<SettingProvenance, string> = {
 	env: "environment variable",
 	runtime: "session override",
+	role: "active role",
 	overlay: "--config overlay",
 	project: "project config",
 	global: "global config",
@@ -289,7 +291,7 @@ function saveShadowingLayer(
 /** Only an environment variable outranks a session override. */
 const ABOVE_SESSION: readonly SettingProvenance[] = ["env"];
 /** Every layer that outranks the global config.yml a `/save` writes. */
-const ABOVE_GLOBAL: readonly SettingProvenance[] = ["env", "runtime", "overlay", "project"];
+const ABOVE_GLOBAL: readonly SettingProvenance[] = ["env", "runtime", "role", "overlay", "project"];
 
 function callerSession(context: ResolveContext | WriteContext | undefined): ToolSession {
 	const session = context?.session;
@@ -328,7 +330,9 @@ export class CfgProtocolHandler implements ProtocolHandler {
 
 	/** Advertised only where writes can be approved; subagents and headless sessions never see `cfg://`. */
 	promptDoc(host: SchemeHost): string | undefined {
-		return host.settingsApproval ? cfgPromptDoc.trim() : undefined;
+		if (!host.settingsApproval) return undefined;
+		const { text } = resolvePromptAsset("internal-urls/cfg.md", cfgPromptDoc);
+		return (text === cfgPromptDoc ? text : prompt.render(text)).trim();
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
@@ -380,8 +384,10 @@ export class CfgProtocolHandler implements ProtocolHandler {
 		): InternalWriteResult => {
 			const effective = shadow ? formatValue(leaf, leaf.get(shadow.scope)) : undefined;
 			const details: CfgWriteDetails = { ...request, outcome, ...(effective !== undefined ? { effective } : {}) };
-			const text = prompt
-				.render(cfgWriteResultTemplate, {
+			const text = renderPromptAsset(
+				"tools/cfg-write-result.md",
+				cfgWriteResultTemplate,
+				{
 					...request,
 					url: settingUrl,
 					saveUrl: `${settingUrl}/${CFG_SAVE_SEGMENT}`,
@@ -391,8 +397,9 @@ export class CfgProtocolHandler implements ProtocolHandler {
 					applied: outcome === "applied" && !save,
 					effective,
 					provenance: shadow ? PROVENANCE_LABELS[shadow.layer] : undefined,
-				})
-				.trim();
+				},
+				{ cwd: context?.cwd, kind: "notice" },
+			).trim();
 			return { content: [{ type: "text", text }], details: { cfg: details } };
 		};
 
@@ -401,13 +408,16 @@ export class CfgProtocolHandler implements ProtocolHandler {
 		// A fallback env var yields to the override the write adds, so it does not shadow.
 		if (!save && !leaf.envFallback && shadowingLayer(leaf, settings, value, ABOVE_SESSION)) {
 			throw new Error(
-				prompt
-					.render(cfgEnvShadowedTemplate, {
+				renderPromptAsset(
+					"tools/cfg-env-shadowed.md",
+					cfgEnvShadowedTemplate,
+					{
 						path: leaf.id,
 						effective: formatValue(leaf, previous),
 						env: leaf.envName,
-					})
-					.trim(),
+					},
+					{ cwd: context?.cwd, kind: "notice" },
+				).trim(),
 			);
 		}
 		const host = approvalHost;
@@ -435,7 +445,12 @@ export class CfgProtocolHandler implements ProtocolHandler {
 		const answer = await decision;
 		if (answer === "timeout") {
 			throw new Error(
-				prompt.render(cfgApprovalTimeoutTemplate, { path: leaf.id, previous: request.previous }).trim(),
+				renderPromptAsset(
+					"tools/cfg-approval-timeout.md",
+					cfgApprovalTimeoutTemplate,
+					{ path: leaf.id, previous: request.previous },
+					{ cwd: context?.cwd, kind: "notice" },
+				).trim(),
 			);
 		}
 		if (answer === "deny") return finish("declined");
