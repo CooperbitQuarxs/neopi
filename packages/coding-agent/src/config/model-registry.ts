@@ -137,6 +137,7 @@ import {
 } from "./models-config";
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
 import { ModelConfigEditor } from "./model-config-editor";
+import { registerNeoProxyLogin } from "../neopi/neoproxy-connect";
 import { Settings, settings } from "./settings";
 
 import { cfgDisabledProviders } from "./model-settings";
@@ -592,6 +593,8 @@ export class ModelRegistry {
 		this.authStorage.keys.setResolver(resolveConfigValue);
 		// Load config and cache-backed layers synchronously in the constructor.
 		this.#loadModels();
+		// Setup, /login, RPC hosts and the CLI share one built-in connection hook.
+		registerNeoProxyLogin(this);
 	}
 
 	/**
