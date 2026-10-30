@@ -1,0 +1,417 @@
+/**
+ * Persistence layer for V1 routine_step_runs + routine_webhook_secrets.
+ *
+ * routine_state lives in `apps/server/src/routines/state.ts` because it's
+ * tightly coupled to the runner's set_state semantics; the rest of the V1
+ * tables flow through here.
+ */
+
+import { createHash } from "node:crypto";
+
+import type { RoutineStepRun, RoutineStepStatus } from "@npi-deck/protocol";
+
+import { getDb, id, nowIso } from "./index.ts";
+import { encodeTriggerPayload } from "./trigger-payload.ts";
+
+interface StepRunRow {
+	id: string;
+	run_id: string;
+	step_id: string;
+	step_index: number;
+	step_type: string;
+	started_at: string;
+	ended_at: string | null;
+	status: string;
+	stdout_excerpt: string;
+	stderr_excerpt: string;
+	output_json: string | null;
+	error: string | null;
+	model: string | null;
+	llm_tokens_in: number | null;
+	llm_tokens_out: number | null;
+	llm_cost_micros: number | null;
+	duration_ms: number | null;
+	attempt: number;
+}
+
+function rowToStepRun(r: StepRunRow): RoutineStepRun {
+	const out: RoutineStepRun = {
+		id: r.id,
+		runId: r.run_id,
+		stepId: r.step_id,
+		stepIndex: r.step_index,
+		stepType: r.step_type as RoutineStepRun["stepType"],
+		startedAt: r.started_at,
+		status: r.status as RoutineStepStatus,
+		stdoutExcerpt: r.stdout_excerpt,
+		stderrExcerpt: r.stderr_excerpt,
+		attempt: r.attempt,
+	};
+	if (r.ended_at !== null) out.endedAt = r.ended_at;
+	if (r.output_json !== null) out.outputJson = r.output_json;
+	if (r.error !== null) out.error = r.error;
+	if (r.model !== null) out.model = r.model;
+	if (r.llm_tokens_in !== null) out.llmTokensIn = r.llm_tokens_in;
+	if (r.llm_tokens_out !== null) out.llmTokensOut = r.llm_tokens_out;
+	if (r.llm_cost_micros !== null) out.llmCostMicros = r.llm_cost_micros;
+	if (r.duration_ms !== null) out.durationMs = r.duration_ms;
+	return out;
+}
+
+/** Start a new step run record in status='running'. Returns the row id. */
+export function startStepRun(input: {
+	runId: string;
+	stepId: string;
+	stepIndex: number;
+	stepType: string;
+	attempt?: number;
+}): string {
+	const stepRunId = `srun_${id().toLowerCase().slice(0, 18)}`;
+	const startedAt = nowIso();
+	getDb()
+		.query<unknown, [string, string, string, number, string, string, number]>(
+			`INSERT INTO routine_step_runs (id, run_id, step_id, step_index, step_type, started_at, status, attempt)
+			 VALUES (?, ?, ?, ?, ?, ?, 'running', ?)`,
+		)
+		.run(
+			stepRunId,
+			input.runId,
+			input.stepId,
+			input.stepIndex,
+			input.stepType,
+			startedAt,
+			input.attempt ?? 1,
+		);
+	return stepRunId;
+}
+
+/** Insert a step run that never actually started (e.g. status='skipped' via when:false). */
+export function insertSkippedStepRun(input: {
+	runId: string;
+	stepId: string;
+	stepIndex: number;
+	stepType: string;
+}): string {
+	const stepRunId = `srun_${id().toLowerCase().slice(0, 18)}`;
+	const now = nowIso();
+	getDb()
+		.query<unknown, [string, string, string, number, string, string, string]>(
+			`INSERT INTO routine_step_runs (id, run_id, step_id, step_index, step_type, started_at, ended_at, status, duration_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 'skipped', 0)`,
+		)
+		.run(stepRunId, input.runId, input.stepId, input.stepIndex, input.stepType, now, now);
+	return stepRunId;
+}
+
+/** Finish a step run record. */
+export function finishStepRun(
+	stepRunId: string,
+	patch: {
+		status: RoutineStepStatus;
+		stdoutExcerpt?: string;
+		stderrExcerpt?: string;
+		outputJson?: string | null;
+		error?: string | null;
+		model?: string | null;
+		llmTokensIn?: number | null;
+		llmTokensOut?: number | null;
+		llmCostMicros?: number | null;
+		durationMs?: number | null;
+	},
+): void {
+	getDb()
+		.query<
+			unknown,
+			[
+				string,
+				string,
+				string,
+				string,
+				string | null,
+				string | null,
+				string | null,
+				number | null,
+				number | null,
+				number | null,
+				number | null,
+				string,
+			]
+		>(
+			`UPDATE routine_step_runs
+			   SET ended_at = ?, status = ?, stdout_excerpt = ?, stderr_excerpt = ?,
+			       output_json = ?, error = ?, model = ?, llm_tokens_in = ?,
+			       llm_tokens_out = ?, llm_cost_micros = ?, duration_ms = ?
+			 WHERE id = ?`,
+		)
+		.run(
+			nowIso(),
+			patch.status,
+			patch.stdoutExcerpt ?? "",
+			patch.stderrExcerpt ?? "",
+			patch.outputJson ?? null,
+			patch.error ?? null,
+			patch.model ?? null,
+			patch.llmTokensIn ?? null,
+			patch.llmTokensOut ?? null,
+			patch.llmCostMicros ?? null,
+			patch.durationMs ?? null,
+			stepRunId,
+		);
+}
+
+/** List all step runs for a routine run, in execution order. */
+export function listStepRuns(runId: string): RoutineStepRun[] {
+	const rows = getDb()
+		.query<StepRunRow, [string]>(
+			`SELECT id, run_id, step_id, step_index, step_type, started_at, ended_at,
+			        status, stdout_excerpt, stderr_excerpt, output_json, error,
+			        model, llm_tokens_in, llm_tokens_out, llm_cost_micros, duration_ms, attempt
+			 FROM routine_step_runs WHERE run_id = ? ORDER BY step_index ASC, started_at ASC`,
+		)
+		.all(runId) as StepRunRow[];
+	return rows.map(rowToStepRun);
+}
+
+// ─── routine_webhook_secrets ──────────────────────────────────────────────
+//
+// `signing_key` is the webhook secret itself: the HMAC key that verifies
+// X-Routine-Signature. `secret_hash` (sha256 of the same secret) verifies the
+// bare-secret signatures that registrations from before signed deliveries
+// still accept while `accept_bare_secret` is set. Neither ever leaves the
+// server; `routes-routines.ts` exposes only the booleans and timestamps.
+
+export interface WebhookSecretRow {
+	routine_id: string;
+	path: string;
+	secret_hash: string;
+	/** Null only for a pre-upgrade registration that has not yet seen its bare secret. */
+	signing_key: string | null;
+	accept_bare_secret: 0 | 1;
+	created_at: string;
+	last_used_at: string | null;
+	last_bare_secret_at: string | null;
+}
+
+const WEBHOOK_COLUMNS =
+	"routine_id, path, secret_hash, signing_key, accept_bare_secret, created_at, last_used_at, last_bare_secret_at";
+
+export function hashSecretForStorage(plain: string): string {
+	return createHash("sha256").update(plain).digest("hex");
+}
+
+/**
+ * Register `secret` for the routine's webhook, replacing any previous one.
+ * A fresh secret has never been sent bare, so the bare secret is refused.
+ */
+export function upsertWebhookSecret(input: {
+	routineId: string;
+	path: string;
+	secret: string;
+}): boolean {
+	if (isWebhookPathClaimedByAnotherRoutine(input.path, input.routineId)) return false;
+
+	const now = nowIso();
+	getDb()
+		.query<unknown, [string, string, string, string, string]>(
+			`INSERT INTO routine_webhook_secrets (routine_id, path, secret_hash, signing_key, accept_bare_secret, created_at)
+			 VALUES (?, ?, ?, ?, 0, ?)
+			 ON CONFLICT(routine_id) DO UPDATE SET
+			   path = excluded.path,
+			   secret_hash = excluded.secret_hash,
+			   signing_key = excluded.signing_key,
+			   accept_bare_secret = 0,
+			   last_bare_secret_at = NULL,
+			   created_at = excluded.created_at`,
+		)
+		.run(input.routineId, input.path, hashSecretForStorage(input.secret), input.secret, now);
+	return true;
+}
+
+export function ensureWebhookSecret(input: {
+	routineId: string;
+	path: string;
+	secret: string;
+}): boolean {
+	if (isWebhookPathClaimedByAnotherRoutine(input.path, input.routineId)) return false;
+
+	const existing = getWebhookSecretByRoutine(input.routineId);
+	if (existing) {
+		if (existing.path !== input.path) {
+			getDb()
+				.query<unknown, [string, string]>(
+					"UPDATE routine_webhook_secrets SET path = ? WHERE routine_id = ?",
+				)
+				.run(input.path, input.routineId);
+		}
+		return true;
+	}
+
+	const now = nowIso();
+	getDb()
+		.query<unknown, [string, string, string, string, string]>(
+			`INSERT INTO routine_webhook_secrets (routine_id, path, secret_hash, signing_key, accept_bare_secret, created_at)
+			 VALUES (?, ?, ?, ?, 0, ?)`,
+		)
+		.run(input.routineId, input.path, hashSecretForStorage(input.secret), input.secret, now);
+	return true;
+}
+
+export function deleteWebhookSecret(routineId: string): void {
+	getDb()
+		.query<unknown, [string]>("DELETE FROM routine_webhook_secrets WHERE routine_id = ?")
+		.run(routineId);
+}
+
+export function getWebhookSecretByPath(path: string): WebhookSecretRow | undefined {
+	const row = getDb()
+		.query<WebhookSecretRow, [string]>(
+			`SELECT ${WEBHOOK_COLUMNS} FROM routine_webhook_secrets WHERE path = ?`,
+		)
+		.get(path) as WebhookSecretRow | null;
+	return row ?? undefined;
+}
+
+export function getWebhookSecretByRoutine(routineId: string): WebhookSecretRow | undefined {
+	const row = getDb()
+		.query<WebhookSecretRow, [string]>(
+			`SELECT ${WEBHOOK_COLUMNS} FROM routine_webhook_secrets WHERE routine_id = ?`,
+		)
+		.get(routineId) as WebhookSecretRow | null;
+	return row ?? undefined;
+}
+
+function isWebhookPathClaimedByAnotherRoutine(path: string, routineId: string): boolean {
+	const owner = getWebhookSecretByPath(path);
+	return owner !== undefined && owner.routine_id !== routineId;
+}
+
+/**
+ * Stop accepting the bare secret. One-way: nothing turns it back on, since
+ * only registrations from before signed deliveries ever accept it.
+ */
+export function refuseWebhookBareSecret(routineId: string): void {
+	getDb()
+		.query<unknown, [string]>(
+			"UPDATE routine_webhook_secrets SET accept_bare_secret = 0 WHERE routine_id = ?",
+		)
+		.run(routineId);
+}
+
+/**
+ * Record an accepted delivery. `bareSecret` is the hash-verified secret a
+ * bare-secret delivery presented: it is kept as the signing key when the
+ * registration has none yet, so the same sender can move to signed
+ * deliveries without rotating.
+ */
+export function recordWebhookDelivery(routineId: string, bareSecret?: string): void {
+	const now = nowIso();
+	if (bareSecret === undefined) {
+		getDb()
+			.query<unknown, [string, string]>(
+				"UPDATE routine_webhook_secrets SET last_used_at = ? WHERE routine_id = ?",
+			)
+			.run(now, routineId);
+		return;
+	}
+	getDb()
+		.query<unknown, [string, string, string, string]>(
+			`UPDATE routine_webhook_secrets
+			 SET last_used_at = ?, last_bare_secret_at = ?, signing_key = COALESCE(signing_key, ?)
+			 WHERE routine_id = ?`,
+		)
+		.run(now, now, bareSecret, routineId);
+}
+
+// ─── routine_runs aggregates (V1 columns) ─────────────────────────────────
+
+/** Finalize a routine_runs row with V1 aggregates. */
+export function finalizeRun(
+	runId: string,
+	patch: {
+		endedAt?: string;
+		exitCode?: number | null;
+		error?: string | null;
+		stdoutExcerpt?: string;
+		stderrExcerpt?: string;
+		totalLlmTokens?: number;
+		totalLlmCostMicros?: number;
+		abortedAt?: string | null;
+		abortReason?: string | null;
+		stepCountTotal?: number;
+		stepCountFailed?: number;
+	},
+): void {
+	getDb()
+		.query<
+			unknown,
+			[
+				string,
+				number | null,
+				string,
+				string,
+				string | null,
+				number,
+				number,
+				string | null,
+				string | null,
+				number,
+				number,
+				string,
+			]
+		>(
+			`UPDATE routine_runs
+			   SET ended_at = ?, exit_code = ?, stdout_excerpt = ?, stderr_excerpt = ?, error = ?,
+			       total_llm_tokens = ?, total_llm_cost_micros = ?, aborted_at = ?, abort_reason = ?,
+			       step_count_total = ?, step_count_failed = ?
+			 WHERE id = ?`,
+		)
+		.run(
+			patch.endedAt ?? nowIso(),
+			patch.exitCode ?? null,
+			patch.stdoutExcerpt ?? "",
+			patch.stderrExcerpt ?? "",
+			patch.error ?? null,
+			patch.totalLlmTokens ?? 0,
+			patch.totalLlmCostMicros ?? 0,
+			patch.abortedAt ?? null,
+			patch.abortReason ?? null,
+			patch.stepCountTotal ?? 0,
+			patch.stepCountFailed ?? 0,
+			runId,
+		);
+}
+
+/**
+ * Insert a "stillborn" run (e.g. webhook signature_invalid, concurrency_skipped).
+ * The trigger payload is stored through `encodeTriggerPayload`, like a started run's.
+ */
+export function insertAbortedRun(input: {
+	routineId: string;
+	triggerKind: "cron" | "manual" | "webhook" | "event";
+	triggerPayload?: Record<string, unknown>;
+	abortReason: string;
+	error?: string;
+}): string {
+	const runId = `run_${id().toLowerCase().slice(0, 18)}`;
+	const now = nowIso();
+	getDb()
+		.query<
+			unknown,
+			[string, string, string, string, string | null, string, string, string | null]
+		>(
+			`INSERT INTO routine_runs
+			   (id, routine_id, started_at, trigger, trigger_payload, ended_at, abort_reason, error)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		)
+		.run(
+			runId,
+			input.routineId,
+			now,
+			input.triggerKind,
+			input.triggerPayload === undefined ? null : encodeTriggerPayload(input.triggerPayload),
+			now,
+			input.abortReason,
+			input.error ?? null,
+		);
+	return runId;
+}

@@ -37,7 +37,7 @@ The SDK registers this write-approved custom tool when `speechgen.enabled=true` 
 2. Build the available `tts`-kind model pool and resolve `modelRoles.speech` plus `retry.fallbackChains.speech`. When no explicit configuration is present, the priority list is `local/kokoro`, `xai/grok-tts`, `xai-oauth/grok-tts`.
 3. For MP3, reorder only non-explicit candidates so cloud models precede local models. Explicit primary/fallback slots retain their positions. WAV preserves the resolved chain order.
 4. Try candidates sequentially:
-   - `local-inference` calls the local worker with the selected model id, `tts.localVoice`, and `tts.localSpeed`, encodes PCM16 WAV, and writes it. Per-call voice, language, sample rate, and bit rate are ignored.
+   - `local-inference` splits text with the local boundary ladder, calls the worker for each segment with the selected model id, `tts.localVoice`, and `tts.localSpeed`, joins the PCM in order, and writes PCM16 WAV. File generation has no playback deadline, so it does not insert pacing delays. Per-call voice, language, sample rate, and bit rate are ignored.
    - `xai-tts` calls the selected model's `<baseUrl>/tts` through the model-registry credential resolver. It sends text and voice, and an explicit `output_format` only when WAV or non-default sample/MP3 bit rates require it.
    - `openai-speech` calls the selected model's `<baseUrl>/audio/speech` with `{ model, input, response_format, voice? }`; voice is sent only when explicitly supplied. This includes compatible providers such as DeepInfra, not just OpenAI.
 5. Missing API keys and provider HTTP errors advance to the next candidate. A local `null` response returns its error immediately; other failures do not trigger fallback.
@@ -72,3 +72,43 @@ The SDK registers this write-approved custom tool when `speechgen.enabled=true` 
 ## Notes
 - No local MP3 encoder is bundled. A local request for `speech.mp3` writes `speech.wav` and reports the substitution.
 - There is no per-call model selector. Configure the speech role and fallback chain; local voice selection remains a setting.
+
+## Paced local playback
+
+Choose `local/kokoro-paced` for the speech role, or run
+`npi say --model kokoro-paced --file notes.md`. The original `local/kokoro`
+remains the default and keeps its existing spoken-reply and `say` behavior.
+Paced playback measures synthesis time and PCM duration for every segment.
+It waits until queued audio has only the predicted synthesis time plus the
+safety margin left, then starts the next segment. Estimates learn within the
+process across utterances; they are not persisted across restarts.
+
+Settings appear under Providers / Services:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `tts.pacing` | `true` | Enable idle intervals for the explicitly selected paced engine. |
+| `tts.pacingMarginMs` | `350` | Extra time before the next playback deadline. Increase for a busy machine. |
+| `tts.pacingThreads` | `0` | ONNX intra-op threads for the paced engine. Zero preserves the runtime default; try two to reduce contention. |
+| `tts.segmentMinChars` | `80` | Preferred minimum after the first segment. |
+| `tts.segmentMaxChars` | `240` | Later segment target, clamped to 40–280 characters. |
+| `tts.segmentFirstChars` | `80` | Short first segment target. |
+| `tts.segmentMaxWords` | `40` | Word-count fallback for long clauses. |
+| `tts.segmentSentences` | `true` | Prefer full-stop sentence endings first. |
+| `tts.segmentCommas` | `true` | Prefer commas after sentence endings. |
+| `tts.segmentConjunctions` | `true` | Next prefer a cut before `and`, `or`, or `because`. |
+| `tts.segmentPunctuation` | `true` | Next try `: ; ! ?` and closing quotes/parentheses. |
+| `tts.segmentEllipsis` | `true` | Treat a run of dots as one sentence ending. |
+
+The last fallback is a word boundary. Closed quoted and parenthesized clauses
+stay together, so a long enclosed clause can exceed the length target.
+These segmentation settings also apply to the local `tts` tool's WAV output.
+The old engine's streaming splitter does not use them.
+
+Thinking speech already has an opt-in setting. `speech.mode=all` speaks text
+and thinking blocks; the default `assistant` speaks text only. Speech itself
+remains off until `speech.enabled=true`.
+
+Pacing cannot guarantee uninterrupted output when synthesis takes longer than
+the available audio, the machine stalls unexpectedly, or the model has not
+yet supplied the next text segment. Such delays never reorder or overlap audio.

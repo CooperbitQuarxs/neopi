@@ -59,6 +59,9 @@ export interface JobSnapshot {
 	resolvedModelIdentity?: string;
 	/** Explicit thinking metadata, independent of the model identity. */
 	resolvedThinkingLevel?: ConfiguredThinkingLevel;
+	/** Live session fast preference and whether the current model realizes it. */
+	fastModeEnabled?: boolean;
+	fastModeActive?: boolean;
 	/** True when the task progress reports an attached live advisor. */
 	advisor?: boolean;
 	/** The task agent's latest self-estimated completion (0–100); see `AgentProgress.completionPercent`. */
@@ -98,6 +101,11 @@ export interface CancelOutcome {
 export interface AgentActivitySnapshot {
 	id: string;
 	parentId?: string;
+	resolvedModel?: string;
+	resolvedModelIdentity?: string;
+	resolvedThinkingLevel?: ConfiguredThinkingLevel;
+	fastModeEnabled?: boolean;
+	fastModeActive?: boolean;
 	/** Latest activity gist recorded by the registry (display-only). */
 	activity?: string;
 	/** Time since the agent was registered. */

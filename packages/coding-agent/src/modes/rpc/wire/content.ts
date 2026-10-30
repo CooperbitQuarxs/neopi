@@ -274,6 +274,7 @@ export const messageDefs = {
 /** Model and thinking descriptors. */
 export const modelDefs = {
 	Effort: "'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'",
+	ThinkingEffort: "'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'",
 	ThinkingLevel: doc(
 		"'inherit' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'",
 		"Thinking selector; `inherit` defers to a higher-level selector.",
@@ -302,6 +303,7 @@ export const modelDefs = {
 		{
 			id: "string",
 			name: "string",
+			"description?": "string",
 			api: "string",
 			provider: "string",
 			baseUrl: "string",

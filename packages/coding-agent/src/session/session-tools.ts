@@ -1,8 +1,9 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Agent, AgentMessage, AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { resolveDelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
-import { isRecord, logger, prompt, stringProperty, structuredCloneJSON, untilAborted } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, stringProperty, structuredCloneJSON, untilAborted } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import { shouldInlineToolDescriptors } from "../config/inline-tool-descriptors-mode";
@@ -23,6 +24,7 @@ import { MEMORY_BACKEND_TOOL_NAMES } from "../memory-backend/tool-names";
 import { invalidateToolSchemaMetadata } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { MemoryBackendStartOptions, MemoryPromptPreparation } from "../memory-backend/types";
 import type { AgentDefinition } from "../task/types";
+import { resolveModelPreset } from "../prompts/model-presets";
 import evalPreludeNoticePrompt from "../prompts/system/eval-prelude-notice.md" with { type: "text" };
 import sessionAgentNoticePrompt from "../prompts/system/session-agent-notice.md" with { type: "text" };
 import toolRosterNoticePrompt from "../prompts/system/tool-roster-notice.md" with { type: "text" };
@@ -33,6 +35,7 @@ import { isFilesystemSourcePath } from "../tools/path-utils";
 import { supportsExternalThinking } from "../tools/think";
 import { ToolAbortError } from "../tools/tool-errors";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { resolveApprovalFromContext, type ApprovalMode } from "../tools/approval";
 import { isMountableUnderXdev, listXdevTools, type XdevState, xdevDocsFor, xdevEntries } from "../tools/xdev";
 import { type EditMode } from "@oh-my-pi/pi-tui/tools/edit";
 import { resolveEditMode } from "../utils/edit-mode";
@@ -312,6 +315,7 @@ export class SessionTools {
 	#installedVibeToolNames = new Set<string>();
 	#builtInToolNames: Set<string>;
 	#rpcHostToolNames = new Set<string>();
+	readonly #rpcHostToolOwners = new Map<string, object>();
 	#mcpManagerToolNames = new Set<string>();
 	#extensionMcpTools = new Map<string, AgentTool>();
 	#xdev: XdevState | undefined;
@@ -716,8 +720,8 @@ export class SessionTools {
 	}
 
 	/** Whether the live registry entry is owned by the RPC host. */
-	hasRpcHostTool(name: string): boolean {
-		return this.#rpcHostToolNames.has(name);
+	hasRpcHostTool(name: string, owner?: object): boolean {
+		return this.#rpcHostToolNames.has(name) && (owner === undefined || this.#rpcHostToolOwners.get(name) === owner);
 	}
 
 	/** Whether the current MCP entry came from the manager snapshot. */
@@ -879,7 +883,9 @@ export class SessionTools {
 			cfgInlineToolDescriptors.get(this.#host.settings),
 			activeModel.id,
 		);
-		return `delegation-bias:${resolveDelegationBias(activeModel)}|inline-descriptors:${inlineDescriptors}`;
+		const preset = resolveModelPreset(activeModel);
+		const presetKey = preset ? `${preset.id}:${JSON.stringify(preset.context)}` : "";
+		return `delegation-bias:${resolveDelegationBias(activeModel)}|inline-descriptors:${inlineDescriptors}|model-preset:${presetKey}`;
 	}
 
 	/** Rebuilds model-dependent tool prompts after a model change. */
@@ -1060,6 +1066,13 @@ export class SessionTools {
 				};
 			},
 		}) as T;
+	}
+
+	getApprovalMode(): ApprovalMode {
+		return resolveApprovalFromContext({
+			settings: this.#host.settings,
+			autoApprove: this.#autoApprove,
+		}).approvalMode;
 	}
 
 	#isExplicitAutoApproveMode(): boolean {
@@ -1386,6 +1399,7 @@ export class SessionTools {
 		} finally {
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(false);
 		}
+		this.#host.notifyCommandMetadataChanged();
 	}
 
 	#setMountedNames(names: Iterable<string>): void {
@@ -1673,10 +1687,15 @@ export class SessionTools {
 		return {
 			role: "custom",
 			customType: TOOL_ROSTER_NOTICE_MESSAGE_TYPE,
-			content: prompt.render(toolRosterNoticePrompt, {
-				added: added.length > 0 ? added.join(", ") : undefined,
-				removed: removed.length > 0 ? removed.join(", ") : undefined,
-			}),
+			content: renderPromptAsset(
+				"system/tool-roster-notice.md",
+				toolRosterNoticePrompt,
+				{
+					added: added.length > 0 ? added.join(", ") : undefined,
+					removed: removed.length > 0 ? removed.join(", ") : undefined,
+				},
+				{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+			),
 			details: { added, removed },
 			attribution: "agent",
 			display: false,
@@ -1715,15 +1734,20 @@ export class SessionTools {
 		return {
 			role: "custom",
 			customType: EVAL_PRELUDE_NOTICE_MESSAGE_TYPE,
-			content: prompt.render(evalPreludeNoticePrompt, {
-				added: added.map(definition => ({ name: definition.name, summary: evalPreludeSummary(definition) })),
-				removed,
-				canRead,
-				sections: added.flatMap(definition => [
-					...(canRead ? [] : [definition.documentation.trim()]),
-					...(definition.guidance ? [definition.guidance.trim()] : []),
-				]),
-			}),
+			content: renderPromptAsset(
+				"system/eval-prelude-notice.md",
+				evalPreludeNoticePrompt,
+				{
+					added: added.map(definition => ({ name: definition.name, summary: evalPreludeSummary(definition) })),
+					removed,
+					canRead,
+					sections: added.flatMap(definition => [
+						...(canRead ? [] : [definition.documentation.trim()]),
+						...(definition.guidance ? [definition.guidance.trim()] : []),
+					]),
+				},
+				{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+			),
 			details: { added: added.map(definition => definition.name), removed },
 			attribution: "agent",
 			display: false,
@@ -1757,10 +1781,15 @@ export class SessionTools {
 		return {
 			role: "custom",
 			customType: SESSION_AGENT_NOTICE_MESSAGE_TYPE,
-			content: prompt.render(sessionAgentNoticePrompt, {
-				added: added.map(agent => ({ name: agent.name, description: agent.description })),
-				removed,
-			}),
+			content: renderPromptAsset(
+				"system/session-agent-notice.md",
+				sessionAgentNoticePrompt,
+				{
+					added: added.map(agent => ({ name: agent.name, description: agent.description })),
+					removed,
+				},
+				{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+			),
 			details: { added: added.map(agent => agent.name), removed },
 			attribution: "agent",
 			display: false,
@@ -1876,7 +1905,12 @@ export class SessionTools {
 			notice: {
 				role: "custom",
 				customType: XDEV_MOUNT_NOTICE_MESSAGE_TYPE,
-				content: prompt.render(xdevMountNoticePrompt, { added, removed, docs }),
+				content: renderPromptAsset(
+					"system/xdev-mount-notice.md",
+					xdevMountNoticePrompt,
+					{ added, removed, docs },
+					{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
+				),
 				details: { added: addedNames, removed: removedNames },
 				attribution: "agent",
 				display: false,
@@ -2416,13 +2450,16 @@ export class SessionTools {
 		}
 	}
 
-	/** Replaces host tools; chat mode registers them without exposing them to the model. */
-	refreshRpcHostTools(rpcTools: AgentTool[], activateNewTools = true): Promise<void> {
-		const snapshot = [...rpcTools];
-		return this.runToolRegistryMutation(() => this.#applyRpcHostToolRefresh(snapshot, activateNewTools));
+	/** Replaces only this owner's host tools; chat mode keeps new tools disabled. */
+	refreshRpcHostTools(rpcTools: readonly AgentTool[], activateNewTools = true, owner: object = this): Promise<void> {
+		return this.runToolRegistryMutation(() => this.#applyRpcHostToolRefresh(rpcTools, activateNewTools, owner));
 	}
 
-	async #applyRpcHostToolRefresh(rpcTools: AgentTool[], activateNewTools: boolean): Promise<void> {
+	async #applyRpcHostToolRefresh(
+		rpcTools: readonly AgentTool[],
+		activateNewTools: boolean,
+		owner: object,
+	): Promise<void> {
 		const nextToolNames = rpcTools.map(tool => tool.name);
 		const uniqueToolNames = new Set(nextToolNames);
 		if (uniqueToolNames.size !== nextToolNames.length) {
@@ -2430,12 +2467,14 @@ export class SessionTools {
 		}
 
 		for (const name of uniqueToolNames) {
-			if (this.#toolRegistry.has(name) && !this.#rpcHostToolNames.has(name)) {
+			if (this.#toolRegistry.has(name) && this.#rpcHostToolOwners.get(name) !== owner) {
 				throw new Error(`RPC host tool "${name}" conflicts with an existing tool`);
 			}
 		}
 
-		const previousRpcHostToolNames = new Set(this.#rpcHostToolNames);
+		const previousRpcHostToolNames = new Set(
+			[...this.#rpcHostToolNames].filter(name => this.#rpcHostToolOwners.get(name) === owner),
+		);
 		const previousActiveToolNames = this.getEnabledToolNames();
 		const previousRpcHostTools = new Map(
 			[...previousRpcHostToolNames].flatMap(name => {
@@ -2446,7 +2485,7 @@ export class SessionTools {
 		for (const name of previousRpcHostToolNames) {
 			this.#toolRegistry.delete(name);
 		}
-		this.#rpcHostToolNames.clear();
+		for (const name of previousRpcHostToolNames) this.#rpcHostToolNames.delete(name);
 
 		const extensionRunner = this.#host.extensionRunner();
 		for (const tool of rpcTools) {
@@ -2470,11 +2509,16 @@ export class SessionTools {
 				Array.from(new Set([...activeNonRpcToolNames, ...preservedRpcToolNames, ...autoActivatedRpcToolNames])),
 			);
 		} catch (error) {
-			for (const name of this.#rpcHostToolNames) this.#toolRegistry.delete(name);
-			this.#rpcHostToolNames = previousRpcHostToolNames;
+			for (const name of uniqueToolNames) {
+				this.#toolRegistry.delete(name);
+				this.#rpcHostToolNames.delete(name);
+			}
+			for (const name of previousRpcHostToolNames) this.#rpcHostToolNames.add(name);
 			for (const [name, tool] of previousRpcHostTools) this.#toolRegistry.set(name, tool);
 			throw error;
 		}
+		for (const name of previousRpcHostToolNames) this.#rpcHostToolOwners.delete(name);
+		for (const name of uniqueToolNames) this.#rpcHostToolOwners.set(name, owner);
 	}
 }
 

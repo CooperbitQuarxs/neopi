@@ -7,6 +7,8 @@
 import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode, ToolTier } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessageEvent, Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
+import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ChatModeSetting, ChatModeState } from "../../chat/chat-mode";
 import type { ChroniclerHealth } from "../../chronicler/session-chronicler";
@@ -14,6 +16,7 @@ import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
+import type { MessageEntryIdentity } from "../../session/message-entry-ids";
 import type { FileEntry, SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import type { UsageLimitState } from "../../session/usage-limit";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
@@ -25,11 +28,31 @@ import type { MixtureConfigScope, MixtureDefinition } from "@oh-my-pi/pi-tui/ove
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import type { LivePhase } from "../../live/controller";
 import type { RpcMessagesPage } from "./rpc-messages";
+import type {
+	RpcNavigateTreeOptions,
+	RpcNavigateTreeResult,
+	RpcResumeTreeOptions,
+	RpcResumeTreeResult,
+} from "./rpc-tree";
+import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
+import type { RpcModel } from "./rpc-model";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
+import type { RpcModelSelectorResult } from "./rpc-model-selector";
+import type {
+	RpcModelsConfiguration,
+	RpcSetModelRoleConfiguration,
+	RpcSetEffortRules,
+	RpcSetModelRoleFallbacks,
+	RpcSetModelRoleDescription,
+	RpcDeleteModelRole,
+} from "./rpc-models-configuration";
 import type { RpcUsageResult } from "./rpc-usage";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { BtwHistoryRecord } from "../../session/btw-history";
+import type { SessionJournalEvent, SessionJournalIdentity } from "../../session/session-journal-events";
+import type { RpcThemePalette, RpcThemesCommand, RpcThemesConfiguration } from "./rpc-themes-configuration";
+import type { UsageStatistics } from "../../session/session-entries";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -41,6 +64,7 @@ export type RpcMessageUpdates = "full" | "delta";
 export type RpcCommand =
 	// Protocol
 	| { id?: string; type: "negotiate_protocol"; protocolVersion: number }
+	| RpcThemesCommand
 
 	// Prompting
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
@@ -55,7 +79,7 @@ export type RpcCommand =
 	| { id?: string; type: "open_session"; sessionDir: string; provider?: string; modelId?: string }
 
 	// State
-	| { id?: string; type: "get_state" }
+	| { id?: string; type: "get_state"; includeDump?: boolean }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
 	| RpcSetChatModeCommand
 	| { id?: string; type: "set_mode"; mode: RpcMode; planFilePath?: string }
@@ -70,7 +94,11 @@ export type RpcCommand =
 	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
+	| { id?: string; type: "snapshot_session_journal" }
+	| ({ id?: string; type: "get_entries_page" } & RpcJournalPageOptions)
 	| { id?: string; type: "get_tree" }
+	| ({ id?: string; type: "navigate_tree" } & RpcNavigateTreeOptions)
+	| ({ id?: string; type: "resume_tree" } & RpcResumeTreeOptions)
 	| { id?: string; type: "set_todos"; phases: TodoPhase[] }
 	| { id?: string; type: "set_host_tools"; tools: RpcHostToolDefinition[] }
 	| { id?: string; type: "set_host_uri_schemes"; schemes: RpcHostUriSchemeDefinition[] }
@@ -81,6 +109,8 @@ export type RpcCommand =
 	| { id?: string; type: "get_subagent_messages"; subagentId?: string; sessionFile?: string; fromByte?: number }
 	| { id?: string; type: "cancel_subagent"; subagentId: string }
 	| { id?: string; type: "steer_subagent"; subagentId: string; message: string }
+	| { id?: string; type: "set_subagent_thinking_level"; subagentId: string; level: ThinkingLevel }
+	| { id?: string; type: "set_subagent_fast"; subagentId: string; enabled: boolean }
 	// Live voice (GPT live bound to this session)
 	| { id?: string; type: "live_start"; voice?: string }
 	| { id?: string; type: "live_stop" }
@@ -94,7 +124,17 @@ export type RpcCommand =
 	| { id?: string; type: "list_mixtures" }
 	| { id?: string; type: "select_mixture"; name: string }
 	| { id?: string; type: "get_roles" }
+	| { id?: string; type: "query_model_selector"; query: string }
 	| { id?: string; type: "set_role"; role: string }
+	| { id?: string; type: "get_models_configuration" }
+	| ({ id?: string; type: "set_model_role_configuration" } & RpcSetModelRoleConfiguration)
+	| ({ id?: string; type: "set_model_role_fallbacks" } & RpcSetModelRoleFallbacks)
+	| ({ id?: string; type: "set_model_role_description" } & RpcSetModelRoleDescription)
+	| ({ id?: string; type: "delete_model_role" } & RpcDeleteModelRole)
+	| ({ id?: string; type: "set_effort_rules" } & RpcSetEffortRules)
+	| { id?: string; type: "set_model_role_storage"; value: "global" | "project"; expected: "global" | "project" }
+	| { id?: string; type: "set_provider_api_key"; providerId: string; apiKey: string }
+	| { id?: string; type: "cancel_login"; loginId: string }
 
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
@@ -142,6 +182,7 @@ export type RpcCommand =
 	| { id?: string; type: "login"; providerId: string }
 	| { id?: string; type: "get_logout_accounts"; providerId: string }
 	| { id?: string; type: "logout"; providerId: string; credentialId: number }
+	| { id?: string; type: "activate_account"; providerId: string; credentialId: number }
 
 	// Word prediction (composer ghost text); `cursor` is a UTF-16 offset into `text`
 	| { id?: string; type: "predict_word"; text: string; cursor: number }
@@ -164,7 +205,7 @@ export type RpcCommand =
 // ============================================================================
 
 export interface RpcSessionState {
-	model?: Model;
+	model?: RpcModel;
 	thinkingLevel: ThinkingLevel | undefined;
 	isStreaming: boolean;
 	isCompacting: boolean;
@@ -174,6 +215,13 @@ export interface RpcSessionState {
 	sessionFile?: string;
 	sessionId: string;
 	sessionName?: string;
+	/** Effective tool policy, including the process-local auto-approve override. */
+	approvalMode?: ApprovalMode;
+	/** All journal branches, including compacted history and completed task spend. */
+	sessionUsage?: UsageStatistics & {
+		advisorCost: number;
+		advisorCostState: "ready" | "restoring" | "unavailable";
+	};
 	/** Capture ownership, last committed progress, and automatic recovery diagnostics. */
 	chronicler: ChroniclerHealth;
 	autoCompactionEnabled: boolean;
@@ -481,6 +529,11 @@ export interface RpcSubagentSnapshot {
 	lastUpdate: number;
 	progress?: AgentProgress;
 	parentToolCallId?: string;
+	resolvedModel?: string;
+	resolvedModelIdentity?: string;
+	resolvedThinkingLevel?: ConfiguredThinkingLevel;
+	fastModeEnabled?: boolean;
+	fastModeActive?: boolean;
 }
 
 export interface RpcSubagentMessagesResult {
@@ -497,7 +550,16 @@ export interface RpcSubagentMessagesResult {
 // ============================================================================
 
 // Success responses with data
+export interface RpcLoginProvider extends OAuthProviderInfo {
+	authenticated: boolean;
+	/** The native set_provider_api_key command accepts this credential provider. */
+	acceptsKeys: boolean;
+}
+
 export type RpcResponse =
+	| { id?: string; type: "response"; command: "get_themes_configuration"; success: true; data: RpcThemesConfiguration }
+	| { id?: string; type: "response"; command: "get_theme"; success: true; data: RpcThemePalette }
+	| { id?: string; type: "response"; command: "update_theme"; success: true; data: RpcThemesConfiguration }
 	// Protocol
 	| {
 			id?: string;
@@ -559,6 +621,8 @@ export type RpcResponse =
 			success: true;
 			data: { entries: SessionEntry[]; leafId: string | null };
 	  }
+	| { id?: string; type: "response"; command: "snapshot_session_journal"; success: true; data: SessionJournalIdentity }
+	| { id?: string; type: "response"; command: "get_entries_page"; success: true; data: RpcJournalPage }
 	| {
 			id?: string;
 			type: "response";
@@ -566,6 +630,8 @@ export type RpcResponse =
 			success: true;
 			data: { tree: SessionTreeNode[]; leafId: string | null };
 	  }
+	| { id?: string; type: "response"; command: "navigate_tree"; success: true; data: RpcNavigateTreeResult }
+	| { id?: string; type: "response"; command: "resume_tree"; success: true; data: RpcResumeTreeResult }
 	| { id?: string; type: "response"; command: "set_todos"; success: true; data: { todoPhases: TodoPhase[] } }
 	| { id?: string; type: "response"; command: "set_host_tools"; success: true; data: { toolNames: string[] } }
 	| { id?: string; type: "response"; command: "set_host_uri_schemes"; success: true; data: { schemes: string[] } }
@@ -612,6 +678,14 @@ export type RpcResponse =
 			data: { cancelled: boolean };
 	  }
 	| { id?: string; type: "response"; command: "steer_subagent"; success: true }
+	| { id?: string; type: "response"; command: "set_subagent_thinking_level"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_subagent_fast";
+			success: true;
+			data: { enabled: boolean; active: boolean };
+	  }
 
 	// Model
 	| {
@@ -633,7 +707,7 @@ export type RpcResponse =
 			type: "response";
 			command: "get_available_models";
 			success: true;
-			data: { models: Model[] };
+			data: { models: RpcModel[] };
 	  }
 	| {
 			id?: string;
@@ -674,10 +748,32 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
+			command: "query_model_selector";
+			success: true;
+			data: RpcModelSelectorResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
 			command: "set_role";
 			success: true;
 			data: RpcSetRoleResult;
 	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_models_configuration";
+			success: true;
+			data: Awaited<ReturnType<RpcModelsConfiguration["read"]>>;
+	  }
+	| { id?: string; type: "response"; command: "set_model_role_configuration"; success: true }
+	| { id?: string; type: "response"; command: "set_model_role_fallbacks"; success: true }
+	| { id?: string; type: "response"; command: "set_model_role_description"; success: true }
+	| { id?: string; type: "response"; command: "delete_model_role"; success: true }
+	| { id?: string; type: "response"; command: "set_model_role_storage"; success: true }
+	| { id?: string; type: "response"; command: "set_effort_rules"; success: true }
+	| { id?: string; type: "response"; command: "set_provider_api_key"; success: true }
+	| { id?: string; type: "response"; command: "cancel_login"; success: true }
 
 	// Thinking
 	| { id?: string; type: "response"; command: "set_thinking_level"; success: true }
@@ -754,7 +850,7 @@ export type RpcResponse =
 			type: "response";
 			command: "get_login_providers";
 			success: true;
-			data: { providers: Array<{ id: string; name: string; available: boolean; authenticated: boolean }> };
+			data: { providers: RpcLoginProvider[] };
 	  }
 	| { id?: string; type: "response"; command: "login"; success: true; data: { providerId: string } }
 	| {
@@ -765,6 +861,7 @@ export type RpcResponse =
 			data: { accounts: LogoutAccount[] };
 	  }
 	| { id?: string; type: "response"; command: "logout"; success: true; data: { remainingSource?: string } }
+	| { id?: string; type: "response"; command: "activate_account"; success: true }
 
 	// Word prediction
 	| { id?: string; type: "response"; command: "predict_word"; success: true; data: { suffix: string | null } }
@@ -828,9 +925,13 @@ export type RpcMessageEventType = "message_start" | "message_update" | "message_
 /**
  * Message lifecycle frame as written by RPC mode. `messageId` is shared by the
  * `message_start`, every `message_update`, and the `message_end` of one message;
- * it is unique within the RPC process.
+ * native-owner IDs are opaque and remain distinct across owner incarnations.
  */
 export type RpcMessageEventFrame = Extract<AgentSessionEvent, { type: RpcMessageEventType }> & { messageId: string };
+
+/** Current native unsaved assistant, sent at an ordered subscription/snapshot boundary. */
+export type RpcMessageSnapshotFrame = Extract<RpcMessageEventFrame, { type: "message_start" }> &
+	SessionJournalIdentity & { snapshot: true };
 
 type WithoutPartial<T> = T extends unknown ? Omit<T, "partial"> : never;
 
@@ -843,15 +944,34 @@ export type RpcDeltaMessageUpdateFrame = Omit<
 	assistantMessageEvent: WithoutPartial<AssistantMessageEvent>;
 };
 
+/** Links live output to its canonical journal entry only after successful persistence. */
+export type RpcMessagePersistedFrame = SessionJournalIdentity & {
+	type: "message_persisted";
+	messageId: string;
+	entryId: string;
+};
+/** Snapshot-only recovery identities; absent on older producers and non-snapshot state changes. */
+export type RpcJournalStateFrame = Extract<SessionJournalEvent, { type: "journal_state" }> & {
+	messageEntryIds?: MessageEntryIdentity[];
+};
+export type RpcJournalEventFrame =
+	| Exclude<SessionJournalEvent, { type: "journal_state" }>
+	| RpcJournalStateFrame
+	| RpcMessagePersistedFrame
+	| RpcMessageSnapshotFrame;
+
 /** Session event as written to stdout by default: message lifecycle events carry a `messageId`. */
 export type RpcAgentSessionEventFrame =
 	| Exclude<AgentSessionEvent, { type: RpcMessageEventType }>
 	| RpcMessageEventFrame;
 
 /** Every session event shape RPC mode can write, including the opt-in `messageUpdates: "delta"` projection. */
-export type RpcProjectedSessionEventFrame = RpcAgentSessionEventFrame | RpcDeltaMessageUpdateFrame;
+export type RpcProjectedSessionEventFrame =
+	| RpcAgentSessionEventFrame
+	| RpcDeltaMessageUpdateFrame
+	| RpcJournalEventFrame;
 
-export type RpcSessionEventFrame = RpcAgentSessionEventFrame | RpcSubagentFrame;
+export type RpcSessionEventFrame = RpcAgentSessionEventFrame | RpcSubagentFrame | RpcJournalEventFrame;
 
 // ============================================================================
 // Extension UI Events (stdout)
@@ -890,6 +1010,8 @@ export type RpcExtensionUIRequest =
 			method: "input";
 			title: string;
 			placeholder?: string;
+			secret?: boolean;
+			loginId?: string;
 			timeout?: number;
 	  }
 	| {
@@ -945,6 +1067,8 @@ export type RpcExtensionUIRequest =
 			 */
 			launchUrl?: string;
 			instructions?: string;
+			/** User-facing device verification code; never the private polling device_code. */
+			userCode?: string;
 	  };
 
 // ============================================================================

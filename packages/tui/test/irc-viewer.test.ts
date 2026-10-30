@@ -117,15 +117,16 @@ describe("IrcViewerComponent", () => {
 			entry("0-Delta", "0-Alpha", "delta to alpha"),
 		]);
 		view.type("/alpha");
+		expect(view.screen().join("\n")).toContain("gamma to delta");
 		view.viewer.handleInput("\r");
 		const screen = view.screen().join("\n");
 		expect(screen).toContain("alpha to beta");
 		expect(screen).toContain("delta to alpha");
 		expect(screen).not.toContain("gamma to delta");
-		expect(screen).toContain("filter: alpha");
-		// Esc leaves the literal field without discarding the active query.
+		expect(screen).toContain("Search: alpha");
+		// Enter leaves the literal field without discarding the active query.
 		view.viewer.handleInput("/");
-		view.viewer.handleInput("\x1b");
+		view.viewer.handleInput("\r");
 		expect(view.closed()).toBe(0);
 		expect(view.screen().join("\n")).not.toContain("gamma to delta");
 		expect(view.viewer.navigationSnapshot().filter).toMatchObject({ value: "alpha", focused: false });
@@ -219,7 +220,7 @@ describe("IrcViewerComponent", () => {
 		const field = view.viewer.navigationSnapshot().filter;
 		expect(field.value).toBe("jkl / hg");
 		expect(field.cursor).toBe(field.value.length - 1);
-		view.viewer.handleInput("\x1b");
+		view.viewer.handleInput("\r");
 		view.viewer.handleInput("g");
 		view.viewer.handleInput("g");
 		view.viewer.handleInput("j");
@@ -237,7 +238,7 @@ describe("IrcViewerComponent", () => {
 			selectedIndex: 0,
 			top: saved.top,
 			follow: false,
-			filter: { ...field, focused: false },
+			filter: { ...field, query: field.value, focused: false },
 		});
 		expect(visits).toEqual([]);
 		view.viewer.dispose();
@@ -274,7 +275,7 @@ describe("IrcViewerComponent", () => {
 		expect(view.viewer.navigationSnapshot().draft.focused).toBe(false);
 		view.viewer.handleInput("\x1b");
 		expect(view.viewer.navigationSnapshot().compose).toBeUndefined();
-		expect(view.viewer.navigationSnapshot().draft).toEqual({ ...saved.draft, focused: false });
+		expect(view.viewer.navigationSnapshot().draft).toEqual({ ...saved.draft, query: saved.draft.value, focused: false });
 		expect(visits).toEqual([]);
 		expect(view.closed()).toBe(0);
 		expect(sent).toEqual([]);

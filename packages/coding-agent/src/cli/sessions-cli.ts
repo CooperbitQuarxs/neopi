@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import { getSessionsDir } from "@oh-my-pi/pi-utils/dirs";
+import { getSessionCatalogCacheDir, getSessionsDir } from "@oh-my-pi/pi-utils/dirs";
 import { readControlEntries, type ControlRegistryOptions } from "../control/registry";
 import { readSessionExit, SESSION_EXIT_CUSTOM_TYPE, type SessionExitData } from "../session/exit-diagnostics";
 import { getMessageEntryId } from "../session/message-entry-ids";
@@ -12,6 +12,7 @@ import { loadSessionBranchReadOnly } from "../session/session-loader";
 import { sessionDirForCwd, worktreeSessionDirs } from "../session/session-paths";
 import { loadPinnedSessionIds } from "../session/session-pins";
 import { FileSessionStorage } from "../session/session-storage";
+import { countSessionCatalogMessages } from "./session-catalog-count";
 
 export interface SessionCatalogOptions {
 	cwd?: string;
@@ -21,6 +22,7 @@ export interface SessionCatalogOptions {
 	sessionsRoot?: string;
 	agentDir?: string;
 	controlRegistry?: ControlRegistryOptions;
+	countCacheDir?: string;
 }
 
 export interface SessionCatalogMessage {
@@ -69,6 +71,7 @@ export async function listSessionCatalog(options: SessionCatalogOptions = {}) {
 	const root = options.sessionsRoot ?? getSessionsDir();
 	const storage = new FileSessionStorage();
 	const pinned = await loadPinnedSessionIds(options.agentDir);
+	const countCacheDir = options.countCacheDir ?? getSessionCatalogCacheDir(options.agentDir);
 	let sessions;
 	if (options.all) {
 		sessions = await listAllSessions(storage, root);
@@ -96,6 +99,7 @@ export async function listSessionCatalog(options: SessionCatalogOptions = {}) {
 		const file = await canonicalPath(session.path);
 		if (seen.has(file)) continue;
 		seen.add(file);
+		const messageCount = await countSessionCatalogMessages(file, countCacheDir);
 		const modified = Number.isFinite(session.modified.getTime()) ? session.modified.toISOString() : null;
 		const created = Number.isFinite(session.created.getTime()) ? session.created.toISOString() : modified;
 		rows.push({
@@ -106,7 +110,7 @@ export async function listSessionCatalog(options: SessionCatalogOptions = {}) {
 			parentSessionPath: session.parentSessionPath ?? null,
 			created,
 			modified,
-			messageCount: session.messageCount,
+			messageCount,
 			status: session.status ?? null,
 			firstMessage: session.firstMessage === "(no messages)" ? "" : session.firstMessage.trim().slice(0, 300),
 			inUse: session.inUse ?? null,

@@ -107,7 +107,7 @@ test("with no query the Roles rows hide the search field and keep their letter c
 	hub.dispose();
 });
 
-test("slash filters Roles in place and Esc retains query without stealing letter actions", () => {
+test("Roles search keeps rows unchanged until Enter and retains confirmed letter actions", () => {
 	const hub = createHub({ knownRoleIds: ["default", "smol"] });
 	hub.handleNativeEvent(CLICK_ROLES);
 	hub.handleInput("i");
@@ -117,9 +117,20 @@ test("slash filters Roles in place and Esc retains query without stealing letter
 	let props = pickerProps(hub);
 	expect(props.scope).toBe("roles");
 	expect(props.query).toBe("default");
+	expect(props.order).toContain("role:smol");
+	expect(hub.navigationSnapshot().rolesQuery).toBe("");
+	const selected = props.selected;
+	const tab = props.tab;
+	for (const key of ["\x1b[A", "\x1b[B", "\t", "\x04", "\x1b[1;3C"]) hub.handleInput(key);
+	props = pickerProps(hub);
+	expect(props.scope).toBe("roles");
+	expect(props.selected).toBe(selected);
+	expect(props.tab).toBe(tab);
+	expect(hub.navigationSnapshot().filterFocused).toBe(true);
+	hub.handleInput("\n");
+	props = pickerProps(hub);
 	expect(props.order).toContain("role:default");
 	expect(props.order).not.toContain("role:smol");
-	hub.handleInput("\x1b");
 	hub.handleInput("s");
 	props = pickerProps(hub);
 	expect(props.query).toBe("default");
@@ -135,16 +146,34 @@ test("fallback search retains its parent role and actions target visible rows", 
 	hub.handleNativeEvent(CLICK_ROLES);
 	hub.handleInput("/");
 	for (const ch of "backup") hub.handleInput(ch);
+	hub.handleInput("\n");
 	const props = pickerProps(hub);
 	expect(props.scope).toBe("roles");
 	expect(props.order).toContain("role:smol");
 	expect(props.order).toContain("fallback:smol:0");
 	expect(props.order).not.toContain("role:default");
-	hub.handleInput("\x1b");
 	hub.handleInput("j");
 	expect(pickerProps(hub).selected).toBe("fallback:smol:0");
 	hub.handleInput(" ");
 	expect(pickerProps(hub).strip).not.toBeNull();
+	hub.dispose();
+});
+
+test("Esc clears a confirmed Roles filter and its unconfirmed replacement without leaving Roles", () => {
+	const hub = createHub({ knownRoleIds: ["default", "smol"] });
+	hub.handleNativeEvent(CLICK_ROLES);
+	for (const key of "/default") hub.handleInput(key);
+	hub.handleInput("\r");
+	expect(pickerProps(hub).order).not.toContain("role:smol");
+	hub.handleInput("/");
+	hub.handleInput("x");
+	hub.handleInput("\x1b");
+	const props = pickerProps(hub);
+	expect(props.scope).toBe("roles");
+	expect(props.query).toBeNull();
+	expect(props.order).toContain("role:default");
+	expect(props.order).toContain("role:smol");
+	expect(hub.navigationSnapshot().filterFocused).toBe(false);
 	hub.dispose();
 });
 

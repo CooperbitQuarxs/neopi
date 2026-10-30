@@ -6,6 +6,7 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { LiveSessionController, type LiveSessionControllerOptions } from "../../live/controller";
 import {
+	cfgLiveBlockDelegateKeyword,
 	cfgLiveDelegationDelivery,
 	cfgLiveForceDelegateKeyword,
 	cfgLiveForceUtteranceKeyword,
@@ -34,6 +35,9 @@ export type RpcLiveSessionFactory = (options: LiveSessionControllerOptions) => R
 export interface RpcLiveStartOptions {
 	voice?: string;
 }
+
+/** Commands shared by the session's live owner across stdio, TUI, and control sockets. */
+export type RpcLiveControl = Pick<RpcLiveBridge, "start" | "stop" | "setMuted">;
 
 /** Visible assistant text: text blocks only, no thinking or tool calls. Shared with interactive mode. */
 export function extractVisibleAssistantText(message: AssistantMessage): string {
@@ -85,6 +89,7 @@ export class RpcLiveBridge {
 			extractAssistantText: extractVisibleAssistantText,
 			voice,
 			model: cfgLiveModel.get(this.#session.settings),
+			blockDelegateKeyword: cfgLiveBlockDelegateKeyword.get(this.#session.settings),
 			delegationDelivery: () => cfgLiveDelegationDelivery.get(this.#session.settings),
 			delegationKeywords: () => ({
 				suppress: cfgLiveSuppressDelegateKeyword.get(this.#session.settings),

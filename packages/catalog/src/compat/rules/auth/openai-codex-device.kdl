@@ -1,6 +1,6 @@
 auth "openai-codex-device" {
 	name "ChatGPT Plus/Pro (Codex, headless/device)"
-	login "custom" hook="openai-codex-device"
+	login "custom" hook="openai-codex-device" device-code=#true
 	refresh {
 		token url="https://auth.openai.com/oauth/token" body="form" standard=#false timeout-ms=15000 {
 			params {

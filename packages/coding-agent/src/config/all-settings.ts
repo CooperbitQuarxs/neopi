@@ -10,6 +10,7 @@ import * as chatSettings from "../chat/settings";
 import * as advisorSettings from "../advisor/settings";
 import * as configModelSettings from "./model-settings";
 import * as effortPolicySettings from "./effort-policy";
+import * as modelFactSettings from "./model-facts";
 import * as roleSettings from "./role-settings";
 import * as routingPolicySettings from "./routing-policies";
 import * as sessionContextSettings from "../session/context-settings";
@@ -40,6 +41,7 @@ import * as mcpSettings from "../mcp/settings";
 import * as blobBrokerSettings from "../blob-broker/settings";
 import * as secretsSettings from "../secrets/settings";
 import * as ttsSettings from "../tts/settings";
+import * as eventAudioSettings from "../event-audio/settings";
 import * as sttSettings from "../stt/settings";
 import * as liveSettings from "../live/settings";
 import * as collabSettings from "../collab/settings";
@@ -57,6 +59,7 @@ import * as telemetrySettings from "../telemetry-settings";
 const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	configModelSettings,
 	effortPolicySettings,
+	modelFactSettings,
 	roleSettings,
 	routingPolicySettings,
 	modesSettings,
@@ -92,6 +95,7 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	blobBrokerSettings,
 	secretsSettings,
 	sttSettings,
+	eventAudioSettings,
 	collabSettings,
 	controlSettings,
 	monitorSettings,

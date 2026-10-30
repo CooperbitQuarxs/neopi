@@ -6,7 +6,7 @@
  * generator for bundled entries. Everything here reads baked fields only: no
  * id parsing, no host matching, no compat detection per request.
  */
-import { Effort, THINKING_EFFORTS } from "./effort";
+import { Effort, THINKING_EFFORTS, type ThinkingEffort } from "./effort";
 import type { Api, Model, ModelSpec, ThinkingConfig } from "./types";
 
 /**
@@ -25,6 +25,16 @@ export function getSupportedEfforts<TApi extends Api>(model: ApiModel<TApi>): re
 		return [];
 	}
 	return model.thinking?.efforts ?? [];
+}
+
+/** Native selectable levels, including off only when metadata permits disabling reasoning. */
+export function getSupportedThinkingLevels<TApi extends Api>(model: ApiModel<TApi>): readonly ThinkingEffort[] {
+	const efforts = getSupportedEfforts(model);
+	if (!model.reasoning || !model.thinking || model.thinking.unverified) return efforts;
+	const disabledThinking =
+		model.compat && "disabledThinking" in model.compat ? model.compat.disabledThinking : undefined;
+	if (disabledThinking === "adaptive" || disabledThinking === "between-tools") return efforts;
+	return model.thinking.requiresEffort && !model.thinking.suppressWhenOff ? efforts : ["off", ...efforts];
 }
 
 /**

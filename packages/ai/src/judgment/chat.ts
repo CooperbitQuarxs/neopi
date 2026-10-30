@@ -3,6 +3,7 @@
  * LLM serve {@link TextJudge} when no native judgment provider is configured.
  */
 import { type } from "@oh-my-pi/omptype";
+import type { ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import * as AIError from "../error";
 import { retryTransientCompletion } from "../oneshot-retry";
 import { completeSimple } from "../stream";
@@ -37,7 +38,7 @@ export type ChatTextBackendOptions = Pick<SimpleStreamOptions, "apiKey" | "sessi
 	/** A concrete, policy-resolved candidate effort; omitted for fast ordinary judgments. */
 	reasoning?: Effort;
 	/** On-demand Auto selection for an ordinary judgment's actual request. */
-	resolveReasoning?: (prompt: TextPrompt, judge: JudgeOptions) => Promise<Effort>;
+	resolveReasoning?: (prompt: TextPrompt, judge: JudgeOptions) => Promise<ThinkingEffort>;
 	/** Receives every completed attempt (including transient failures) for usage accounting. */
 	onAttempt?: (message: AssistantMessage) => void;
 };
@@ -50,7 +51,8 @@ export function chatTextBackend(model: Model<Api>, options: ChatTextBackendOptio
 		model: model.id,
 		parseRetries: 2,
 		async complete(prompt: TextPrompt, judge: JudgeOptions): Promise<TextCompletion> {
-			const reasoning = options.resolveReasoning ? await options.resolveReasoning(prompt, judge) : options.reasoning;
+			const level = options.resolveReasoning ? await options.resolveReasoning(prompt, judge) : options.reasoning;
+			const reasoning = level === "off" ? undefined : level;
 			const response = await retryTransientCompletion(
 				() =>
 					completeSimple(

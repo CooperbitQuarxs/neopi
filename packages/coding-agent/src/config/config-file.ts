@@ -1,8 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { OmpErrors, type Type } from "@oh-my-pi/omptype";
-import { getAgentDir, isEnoent, logger, stringifyYamlConfig } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent, isRecord, logger, stringifyYamlConfig } from "@oh-my-pi/pi-utils";
 import { JSONC, YAML } from "bun";
+import { writeFileAtomically } from "../utils/atomic-file";
+import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 
 /** Minimal subset of the AJV ConfigSchemaError shape this module actually relies on. */
 interface ConfigSchemaError {
@@ -125,6 +127,22 @@ export type LoadResult<T> =
 	| { value: T; error?: undefined; status: "ok" }
 	| { value?: null; error?: unknown; status: "not-found" };
 
+/** Three-way merge: preserve disjoint disk edits, reject conflicting replacements. */
+function mergeConfigEdit(current: unknown, expected: unknown, next: unknown, keyPath = "root"): unknown {
+	if (Bun.deepEquals(expected, next)) return current;
+	if (Bun.deepEquals(current, expected) || Bun.deepEquals(current, next)) return next;
+	if (isRecord(current) && isRecord(next) && (expected === undefined || isRecord(expected))) {
+		const merged = { ...current };
+		for (const key of new Set([...Object.keys(expected ?? {}), ...Object.keys(next)])) {
+			const value = mergeConfigEdit(current[key], expected?.[key], next[key], `${keyPath}.${key}`);
+			if (value === undefined) delete merged[key];
+			else Object.defineProperty(merged, key, { value, enumerable: true, writable: true, configurable: true });
+		}
+		return merged;
+	}
+	throw new Error(`Configuration changed on disk at ${keyPath}. Reopen the entry before saving.`);
+}
+
 export class ConfigFile<T> implements IConfigFile<T> {
 	readonly #basePath: string;
 	readonly #yamlFallbackPath: string | null;
@@ -232,7 +250,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		return result;
 	}
 
-	#parseContent(content: string): LoadResult<T> {
+	#parseContent(content: string, preserveInput = false): LoadResult<T> {
 		try {
 			let parsed: unknown;
 			const readPath = this.#resolveReadPath();
@@ -252,7 +270,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 				}));
 				const error = new ConfigError(this.id, schemaErrors);
 				logger.warn("Failed to parse config file", { path: this.path(), error });
-				return this.#storeCache({ error, status: "error" });
+				return { error, status: "error" };
 			}
 			const value = checked as T;
 			try {
@@ -262,20 +280,21 @@ export class ConfigFile<T> implements IConfigFile<T> {
 					error instanceof ConfigError
 						? error
 						: new ConfigError(this.id, undefined, { err: error, stage: "AuxValidate" });
-				return this.#storeCache({ error: wrapped, status: "error" });
+				return { error: wrapped, status: "error" };
 			}
-			return this.#storeCache({ value, status: "ok" });
+			return { value: preserveInput ? (parsed as T) : value, status: "ok" };
 		} catch (error) {
 			logger.warn("Failed to parse config file", { path: this.path(), error });
-			return this.#storeCache({
+			return {
 				error: new ConfigError(this.id, undefined, { err: error, stage: "Unexpected" }),
 				status: "error",
-			});
+			};
 		}
 	}
 
-	tryLoad(): LoadResult<T> {
-		if (this.#cache) return this.#cache;
+	/** Editors request validated input, before schema morphs normalize or remove fields. */
+	tryLoad(preserveInput = false): LoadResult<T> {
+		if (!preserveInput && this.#cache) return this.#cache;
 		this.#ensureMigrated();
 
 		let content: string;
@@ -291,7 +310,8 @@ export class ConfigFile<T> implements IConfigFile<T> {
 				status: "error",
 			});
 		}
-		return this.#parseContent(content);
+		const result = this.#parseContent(content, preserveInput);
+		return preserveInput ? result : this.#storeCache(result);
 	}
 
 	load(): T | null {
@@ -304,6 +324,33 @@ export class ConfigFile<T> implements IConfigFile<T> {
 
 	path(): string {
 		return this.#resolveReadPath();
+	}
+
+	/** Validate and save under the same lock as Settings, preserving disjoint external edits. */
+	async save(value: T, expected: T | null): Promise<void> {
+		await withFileLock(this.path(), async () => {
+			this.invalidate();
+			const result = this.tryLoad(true);
+			if (result.status === "error") throw result.error;
+			const merged = mergeConfigEdit(result.value ?? null, expected, value) as T;
+			const checked = this.schema(merged);
+			if (checked instanceof OmpErrors)
+				throw new ConfigError(
+					this.id,
+					checked.map(error => ({
+						instancePath: error.path.join("."),
+						message: error.problem,
+					})),
+				);
+			this.#auxValidate?.(checked as T);
+			const filePath = this.path();
+			const content =
+				filePath.endsWith(".json") || filePath.endsWith(".jsonc")
+					? `${JSON.stringify(merged, null, 2)}\n`
+					: stringifyYamlConfig(merged);
+			await writeFileAtomically(filePath, content);
+			this.invalidate();
+		});
 	}
 
 	invalidate() {

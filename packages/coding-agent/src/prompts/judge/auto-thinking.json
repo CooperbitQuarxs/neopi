@@ -1,4 +1,10 @@
 {
+	"off": {
+		"instructions": "",
+		"criteria": {
+			"off": "No reasoning needed: direct conversation, lookup, or verbatim mechanical output with no decisions."
+		}
+	},
 	"bucket": {
 		"instructions": "Classify the coding request by how open-ended its problem is. Volume of work never raises it.\n\nExamples:\n<request>rename a local constant and its two uses</request>\ntrivial\n\n<request>make the failing pagination test pass</request>\nmoderate\n\n<request>convert the fixtures in five repos to the new JSON format</request>\ntrivial\n\n<request>diagnose an intermittent deadlock across two services</request>\nhard",
 		"criteria": {

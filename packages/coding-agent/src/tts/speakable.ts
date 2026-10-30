@@ -23,6 +23,7 @@
  * Pure and synchronous — the vocalizer owns timers (idle flush) and the
  * session lifecycle, so this class stays trivially unit-testable.
  */
+import { type SpeechSegmentOptions, speechSegmentCut } from "./segmenter";
 
 /** Minimum length before the very first segment may cut at a sentence boundary. */
 const FIRST_SEGMENT_MIN = 12;
@@ -199,6 +200,8 @@ export class SpeakableStream {
 	/** Whether anything has been emitted yet (enables the fast first segment). */
 	#spoke = false;
 
+	constructor(readonly segmentOptions?: SpeechSegmentOptions) {}
+
 	/** Consume a raw delta; returns segments now ready to speak, in order. */
 	push(delta: string): string[] {
 		const out: string[] = [];
@@ -329,14 +332,21 @@ export class SpeakableStream {
 	 * trailing segment.
 	 */
 	#drain(out: string[]): void {
-		this.#extract(out);
+		this.#extract(out, true);
 		const text = this.#buf;
 		this.#buf = "";
 		this.#emit(text, out);
 	}
 
 	/** Cut ready segments off the front of the buffer (streaming path). */
-	#extract(out: string[]): void {
+	#extract(out: string[], final = false): void {
+		if (this.segmentOptions) {
+			for (;;) {
+				const cut = speechSegmentCut(this.#buf, !this.#spoke, this.segmentOptions, final);
+				if (cut <= 0) return;
+				this.#cut(cut, out);
+			}
+		}
 		for (;;) {
 			const buf = this.#buf;
 			const min = this.#spoke ? MIN_SEGMENT : FIRST_SEGMENT_MIN;

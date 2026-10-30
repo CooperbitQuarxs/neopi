@@ -1060,6 +1060,11 @@ export function getTinyModelsCacheDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, path.join("cache", "tiny-models"), "cache");
 }
 
+/** Get the session catalog count cache directory, separate from the journal files. */
+export function getSessionCatalogCacheDir(agentDir?: string): string {
+	return dirs.agentSubdir(agentDir, path.join("cache", "session-catalog"), "cache");
+}
+
 /** Get the document conversion cache directory (~/.omp/agent/cache/document-conversions; XDG default: $XDG_CACHE_HOME/omp/cache/document-conversions). */
 export function getDocumentConversionCacheDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, path.join("cache", "document-conversions"), "cache");

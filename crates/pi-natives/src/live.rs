@@ -117,10 +117,14 @@ impl LiveWebRtcPeer {
 			.map_err(napi::Error::from_reason)
 	}
 
-	/// Silence queued audio and discard new remote audio without muting the microphone.
+	/// Silence queued audio and discard new remote audio without muting the
+	/// microphone.
 	#[napi]
 	pub fn set_output_suppressed(&self, suppressed: bool) -> Result<()> {
-		self.inner.set_output_suppressed(suppressed).map_err(napi::Error::from_reason)
+		self
+			.inner
+			.set_output_suppressed(suppressed)
+			.map_err(napi::Error::from_reason)
 	}
 
 	/// Close media, the data channel, the peer connection, and speaker playback.

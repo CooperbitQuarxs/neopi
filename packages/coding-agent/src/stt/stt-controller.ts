@@ -6,6 +6,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { resolveRoleChain } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { type Settings, settings } from "../config/settings";
+import { preemptEventAudio } from "../event-audio/activity";
 import { resolveXAIHttpTransport, type XAIHttpProvider, type XAIHttpTransportRegistry } from "../lib/xai-http";
 import { type SttStreamHandle, sttClient } from "./asr-client";
 import { downloadSttModel, isSttModelCached } from "./downloader";
@@ -107,6 +108,7 @@ export class STTController {
 
 	#setState(state: SttState, options: SttCallbacks): void {
 		this.#state = state;
+		if (state !== "idle") preemptEventAudio();
 		options.onStateChange(state);
 	}
 
@@ -173,6 +175,49 @@ export class STTController {
 		if (!this.#registry) return undefined;
 		const pool = roleCandidatePool("dictation", this.#settings, this.#registry);
 		return resolveRoleChain("dictation", this.#settings, pool)[0]?.model;
+	}
+
+	/** Transcribe a complete wake recording once, using the same dictation role. */
+	async transcribeRecording(audio: Float32Array, signal: AbortSignal): Promise<string> {
+		const model = this.#resolveModel();
+		if (model?.api === "openai-transcriptions" || model?.api === "xai-stt") {
+			const file = new WavFileRecorder();
+			try {
+				file.append(audio);
+				return await this.#transcribeFile(model, file.finalize(), signal);
+			} finally {
+				file.dispose();
+			}
+		}
+		if (model && model.api !== "local-inference") throw new Error(`Unsupported speech-to-text API: ${model.api}`);
+		const key = this.#resolveModelKey(model);
+		await downloadSttModel(key, undefined, { signal });
+		return sttClient.transcribe(key, audio, { language: cfgSttLanguage.get(this.#settings), signal });
+	}
+
+	async #transcribeFile(model: Model<Api>, recordingPath: string, signal: AbortSignal): Promise<string> {
+		if (!this.#registry) throw new Error("No dictation model registry");
+		const language = cfgSttLanguage.get(this.#settings);
+		let requestModel = model;
+		if (model.api === "xai-stt") {
+			const transport = await resolveXAIHttpTransport(this.#registry, model.provider as XAIHttpProvider, model.id);
+			if (transport.baseURL !== model.baseUrl || transport.headers !== model.headers) {
+				requestModel = { ...model, baseUrl: transport.baseURL, headers: transport.headers };
+			}
+		}
+		signal.throwIfAborted();
+		const result = await transcribeAudio(
+			requestModel,
+			{
+				audio: Bun.file(recordingPath),
+				mimeType: "audio/wav",
+				fileName: "dictation.wav",
+				responseFormat: "json",
+				...(language && { language }),
+			},
+			{ apiKey: this.#registry.resolver(requestModel, this.#getSessionId?.()), signal },
+		);
+		return result.text.trim();
 	}
 
 	#resolveModelKey(model = this.#resolveModel()): SttModelKey {
@@ -347,34 +392,7 @@ export class STTController {
 				this.#cloudFile = null;
 				this.#retainedCloudFiles.push(file);
 				if (this.#retainedCloudFiles.length > 5) this.#retainedCloudFiles.shift()?.dispose();
-				const language = cfgSttLanguage.get(this.#settings);
-				let requestModel = model;
-				if (model.api === "xai-stt") {
-					const transport = await resolveXAIHttpTransport(
-						this.#registry,
-						model.provider as XAIHttpProvider,
-						model.id,
-					);
-					if (transport.baseURL !== model.baseUrl || transport.headers !== model.headers) {
-						requestModel = { ...model, baseUrl: transport.baseURL, headers: transport.headers };
-					}
-				}
-				if (this.#disposed) return;
-				const result = await transcribeAudio(
-					requestModel,
-					{
-						audio: Bun.file(recordingPath),
-						mimeType: "audio/wav",
-						fileName: "dictation.wav",
-						responseFormat: "json",
-						...(language && { language }),
-					},
-					{
-						apiKey: this.#registry.resolver(requestModel, this.#getSessionId?.()),
-						signal: abort.signal,
-					},
-				);
-				finalText = result.text.trim();
+				finalText = await this.#transcribeFile(model, recordingPath, abort.signal);
 			}
 		} catch (err) {
 			failed = true;

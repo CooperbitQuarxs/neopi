@@ -15,7 +15,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { MessageOrigin, Model } from "@oh-my-pi/pi-ai";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
@@ -43,6 +42,7 @@ import { type Theme, theme } from "@oh-my-pi/pi-tui/theme";
 import { discoverMixtures, mixturesConfigFilePath } from "../../moa/config";
 import { checkMixture, readMixtureDefinitionFile, saveMixtureDefinition } from "../../moa/registration";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
+import { setSubagentFast, setSubagentThinkingLevel } from "../../registry/subagent-controls";
 import {
 	type WordCompletionEngine,
 	type WordCompletionMethod,
@@ -57,7 +57,6 @@ import { findMostRecentNonEmptySession } from "../../session/session-listing";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
-import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import type { EventBus } from "../../utils/event-bus";
 import { selectRpcEntries } from "./rpc-compat";
@@ -74,15 +73,21 @@ import { RPC_CAPABILITIES } from "./rpc-capabilities";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
+import { navigateRpcTree, resumeRpcTree } from "./rpc-tree";
+import { TreeNavigationError } from "../../session/tree-navigation";
+import { readLiveJournalPage, RpcJournalError } from "./rpc-journal";
 import { RpcBtwController } from "./rpc-btw";
 import { RpcGoalController } from "./rpc-goal";
-import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
+import { RpcLiveBridge, type RpcLiveControl, type RpcLiveSessionFactory } from "./rpc-live";
+import { serializeRpcModel } from "./rpc-model";
 import { RpcOutputWriter } from "./rpc-output";
 import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } from "./rpc-plan-mode";
 import { RpcExtensionUserMessageTracker, RpcPromptResults, watchAndReportPromptResult } from "./rpc-prompt-results";
 import type { RpcPromptTicket } from "./rpc-prompt-results";
 import { controlHostFor } from "../../control/host";
 import { RpcRoles } from "./rpc-roles";
+import { getRpcModelSelector } from "./rpc-model-selector";
+import { RpcModelsCommands } from "./rpc-models-commands";
 import { setRpcChatMode } from "./rpc-chat-mode";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
 import { sessionLeaseErrorCode } from "./rpc-session-lease";
@@ -95,6 +100,7 @@ import {
 	resolveOwnedLiveSubagent,
 } from "./rpc-subagents";
 import { getRpcUsage, RpcUsageUnavailableError } from "./rpc-usage";
+import { getThemePalette, getThemesConfiguration, updateTheme, RpcThemeConflict } from "./rpc-themes-configuration";
 import { isRpcApprovalHandler, isRpcToolApprovalResponse, RpcToolApprovalBridge } from "./rpc-tool-approval";
 import type {
 	RpcAbortAndRestoreQueueResult,
@@ -482,6 +488,7 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
 	"predict_word",
 	"live_start",
 	"btw_cancel",
+	"login",
 ]);
 
 /**
@@ -533,6 +540,7 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 		command.type === "prompt" ||
 		command.type === "steer" ||
 		command.type === "follow_up" ||
+		command.type === "navigate_tree" ||
 		command.type === "steer_subagent"
 	) {
 		const task = (async () => {
@@ -948,6 +956,17 @@ export async function handleRpcSteerSubagent(
 	} finally {
 		unsubscribe();
 	}
+}
+
+/** Change only the owned running subagent; AgentSession persists the next-request selection. */
+export function handleRpcSetSubagentThinkingLevel(
+	subagentRegistry: Pick<RpcSubagentRegistry, "getSubagents">,
+	subagentId: string,
+	level: ThinkingLevel,
+): string | undefined {
+	const owned = resolveOwnedLiveSubagent(subagentRegistry, subagentId);
+	if (!owned) return `Subagent not running: ${subagentId}`;
+	return setSubagentThinkingLevel(owned.session, level);
 }
 
 export async function handleRpcSessionChange(
@@ -1473,7 +1492,7 @@ export interface RpcCommandHandlerContext {
 	/** Side questions (`/btw`) over RPC. */
 	btw?: RpcBtwController;
 	/** GPT live voice over RPC. */
-	liveBridge?: RpcLiveBridge;
+	liveBridge?: RpcLiveControl;
 	/** Response size cap used to fit restored queue payloads into one frame. */
 	maxResponseBytes?: () => number;
 }
@@ -1509,8 +1528,21 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 		goalController,
 		goalTurnScheduled,
 		btw,
-		liveBridge,
 	} = ctx;
+	const modelsCommands = new RpcModelsCommands({
+		session,
+		output,
+		pending: pendingExtensionRequests,
+		input: (title, placeholder, secret, loginId, signal) =>
+			requestRpcDialog(
+				pendingExtensionRequests,
+				frame => output({ ...frame, loginId }),
+				{ signal, timeout: 600_000 },
+				undefined,
+				{ method: "input", title, placeholder, secret, loginId, timeout: 600_000 },
+				response => parseValueDialogResponse(response, undefined),
+			),
+	});
 	// Without a frame encoder (control sockets) no response-size cap applies.
 	const maxResponseBytes = (): number => ctx.maxResponseBytes?.() ?? Number.MAX_SAFE_INTEGER;
 	const wordPredictor = new RpcWordPredictor();
@@ -1631,6 +1663,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 	return async (command: RpcCommand): Promise<RpcResponse> => {
 		const id = command.id;
 		if (!ctx.inputGate) inputGate.accept(command);
+		if (modelsCommands.accepts(command)) return modelsCommands.handle(command);
 
 		switch (command.type) {
 			case "negotiate_protocol":
@@ -1820,7 +1853,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					activeRole: rpcRoles.activeRole(),
 					// A scheduled goal continuation will start a turn: not settled.
 					scheduledTurn: goalTurnScheduled,
-					includeDump: true,
+					includeDump: command.includeDump !== false,
 				});
 				return success(id, "get_state", state);
 			}
@@ -1901,11 +1934,48 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				}
 			}
 
+			case "snapshot_session_journal": {
+				if (session.isSessionTransitioning)
+					return error(id, "snapshot_session_journal", "Native session transition is still applying", "session_busy");
+				return success(id, "snapshot_session_journal", sessionEvents.snapshotJournal(session));
+			}
+
+			case "get_entries_page": {
+				if (session.isSessionTransitioning)
+					return error(id, "get_entries_page", "Native session transition is still applying", "session_busy");
+				try {
+					return success(id, "get_entries_page", readLiveJournalPage(session.sessionManager, command));
+				} catch (err) {
+					return error(
+						id,
+						"get_entries_page",
+						err instanceof Error ? err.message : String(err),
+						err instanceof RpcJournalError ? err.code : "session_unavailable",
+					);
+				}
+			}
 			case "get_tree": {
 				return success(id, "get_tree", {
 					tree: session.sessionManager.getTree(),
 					leafId: session.sessionManager.getLeafId(),
 				});
+			}
+
+			case "navigate_tree":
+			case "resume_tree": {
+				try {
+					const result =
+						command.type === "navigate_tree"
+							? await navigateRpcTree(session, command)
+							: resumeRpcTree(session, command);
+					if (command.type === "navigate_tree" && "outcome" in result && result.outcome === "navigated") {
+						inputGate.commitSessionChange(command);
+					}
+					return success(id, command.type, result);
+				} catch (err) {
+					if (!(err instanceof TreeNavigationError)) throw err;
+					return error(id, command.type, err.message, err.code);
+				}
 			}
 
 			case "set_todos": {
@@ -1915,12 +1985,12 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 
 			case "set_host_tools": {
 				const tools = normalizeHostToolDefinitions(command.tools);
-				const rpcTools = hostToolBridge.setTools(tools);
-				await session.refreshRpcHostTools(rpcTools);
+				await hostToolBridge.refreshTools(tools, rpcTools => session.refreshRpcHostTools(rpcTools, hostToolBridge));
 				return success(id, "set_host_tools", { toolNames: tools.map(tool => tool.name) });
 			}
 
 			case "live_start": {
+				const liveBridge = ctx.liveBridge;
 				if (!liveBridge) return error(id, "live_start", "Live voice is unavailable on this transport");
 				try {
 					return success(id, "live_start", await liveBridge.start({ voice: command.voice }));
@@ -1930,11 +2000,12 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			}
 
 			case "live_stop": {
-				await liveBridge?.stop();
+				await ctx.liveBridge?.stop();
 				return success(id, "live_stop");
 			}
 
 			case "live_mute": {
+				const liveBridge = ctx.liveBridge;
 				if (!liveBridge) return error(id, "live_mute", "Live voice is unavailable on this transport");
 				try {
 					return success(id, "live_mute", liveBridge.setMuted(command.muted));
@@ -2048,6 +2119,38 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				return failure ? error(id, "steer_subagent", failure) : success(id, "steer_subagent");
 			}
 
+			case "set_subagent_thinking_level": {
+				if (!subagentRegistry) {
+					return error(id, command.type, "Subagent event bus is unavailable");
+				}
+				if (typeof command.subagentId !== "string" || command.subagentId.length === 0) {
+					return error(id, command.type, "`subagentId` must be a non-empty string.");
+				}
+				const failure = handleRpcSetSubagentThinkingLevel(subagentRegistry, command.subagentId, command.level);
+				return failure ? error(id, command.type, failure) : success(id, command.type);
+			}
+
+			case "set_subagent_fast": {
+				if (!subagentRegistry) {
+					return error(id, command.type, "Subagent event bus is unavailable");
+				}
+				if (typeof command.subagentId !== "string" || command.subagentId.length === 0) {
+					return error(id, command.type, "`subagentId` must be a non-empty string.");
+				}
+				if (typeof command.enabled !== "boolean") {
+					return error(id, command.type, "`enabled` must be a boolean.");
+				}
+				const owned = resolveOwnedLiveSubagent(subagentRegistry, command.subagentId);
+				if (!owned) return error(id, command.type, `Subagent not running: ${command.subagentId}`);
+				if (!setSubagentFast(owned.session, command.enabled)) {
+					return error(id, command.type, "Fast mode is unavailable for the subagent's current model.");
+				}
+				return success(id, command.type, {
+					enabled: owned.session.isFastModeEnabled(),
+					active: owned.session.isFastModeActive(),
+				});
+			}
+
 			// =================================================================
 			// Model
 			// =================================================================
@@ -2071,7 +2174,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 
 			case "get_available_models": {
 				await session.modelRegistry.awaitBackgroundRefresh();
-				const models = session.getAvailableModels();
+				const models = session.getAvailableModels().map(serializeRpcModel);
 				return success(id, "get_available_models", { models });
 			}
 
@@ -2148,9 +2251,26 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				return success(id, "select_mixture", model);
 			}
 
+			case "get_themes_configuration":
+				return success(id, command.type, await getThemesConfiguration(session.settings));
+			case "get_theme":
+				return success(id, command.type, await getThemePalette(command.name));
+			case "update_theme":
+				try {
+					return success(id, command.type, await updateTheme(session.settings, command));
+				} catch (cause) {
+					if (cause instanceof RpcThemeConflict) return error(id, command.type, cause.message, "conflict");
+					throw cause;
+				}
+
 			case "get_roles": {
 				await session.modelRegistry.awaitBackgroundRefresh();
 				return success(id, "get_roles", rpcRoles.list());
+			}
+
+			case "query_model_selector": {
+				if (typeof command.query !== "string") return error(id, command.type, "A string query is required");
+				return success(id, command.type, await getRpcModelSelector(session, command.query));
 			}
 
 			case "set_role": {
@@ -2359,106 +2479,6 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			// Login
 			// =================================================================
 
-			case "get_login_providers": {
-				const providers = getOAuthProviders().map(provider => ({
-					id: provider.id,
-					name: provider.name,
-					available: provider.available,
-					authenticated:
-						session.modelRegistry.authStorage.keys.source(provider.storeCredentialsAs ?? provider.id) !==
-						undefined,
-				}));
-				return success(id, "get_login_providers", { providers });
-			}
-
-			case "login": {
-				const knownProvider = getOAuthProviders().find(p => p.id === command.providerId);
-				if (!knownProvider) {
-					return error(id, "login", `Unknown OAuth provider: ${command.providerId}`);
-				}
-				const uiCtx = createUiContext(pendingExtensionRequests, output);
-				// Track whether onAuth has fired. Providers that require interactive
-				// input before a browser URL cannot be satisfied headlessly; after
-				// onAuth, prompt input is the pasted OAuth code/redirect URL path.
-				let authEmitted = false;
-				try {
-					await session.modelRegistry.authStorage.oauth.login(command.providerId, {
-						onAuth: info => {
-							authEmitted = true;
-							output({
-								type: "extension_ui_request",
-								id: Snowflake.next() as string,
-								method: "open_url",
-								url: info.url,
-								launchUrl: info.launchUrl,
-								instructions: info.instructions,
-							} as RpcExtensionUIRequest);
-						},
-						onProgress: message => {
-							uiCtx.notify(message, "info");
-						},
-						onPrompt: async prompt => {
-							if (prompt.secret) {
-								throw new Error(
-									`Provider '${command.providerId}' requires secret input, ` +
-										"which is not supported in RPC mode. Use the terminal UI to log in.",
-								);
-							}
-							if (!authEmitted) {
-								// onPrompt called before any auth URL — provider requires
-								// interactive input that cannot be satisfied headlessly.
-								return Promise.reject(
-									new Error(
-										`Provider '${command.providerId}' requires interactive prompts ` +
-											"which are not supported in RPC mode. Use the terminal UI to log in.",
-									),
-								);
-							}
-							return (await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 })) ?? "";
-						},
-					});
-					// Provider-scoped online refresh so the just-persisted credential
-					// re-runs discovery instead of reusing a fresh authoritative cache
-					// row (#5780).
-					await session.modelRegistry.refreshProvider(
-						knownProvider.storeCredentialsAs ?? knownProvider.id,
-						"online",
-					);
-					return success(id, "login", { providerId: command.providerId });
-				} catch (err: unknown) {
-					return error(id, "login", err instanceof Error ? err.message : String(err));
-				}
-			}
-
-			case "get_logout_accounts": {
-				// An absent provider would list every provider's credentials.
-				if (typeof command.providerId !== "string") {
-					return error(id, "get_logout_accounts", "providerId must be a string");
-				}
-				const accounts = await listLogoutAccounts(
-					session.modelRegistry.authStorage,
-					command.providerId,
-					session.sessionId,
-				);
-				return success(id, "get_logout_accounts", { accounts });
-			}
-
-			case "logout": {
-				if (typeof command.providerId !== "string" || !Number.isInteger(command.credentialId)) {
-					return error(id, "logout", "providerId must be a string and credentialId an integer");
-				}
-				const { removed, remainingSource } = await logoutCredential(
-					session.modelRegistry,
-					command.providerId,
-					command.credentialId,
-					session.sessionId,
-				);
-				if (!removed) {
-					return error(id, "logout", `Credential ${command.credentialId} is not stored for ${command.providerId}`);
-				}
-				return success(id, "logout", { remainingSource });
-			}
-
 			// =================================================================
 			// Side questions (/btw)
 			// =================================================================
@@ -2599,6 +2619,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	});
 	// Live frames go straight to `output`, so `set_event_filter` (session events only) never drops them.
 	const liveBridge = new RpcLiveBridge(session, output, createLiveSession);
+	const controlHost = controlHostFor(session);
+	if (controlHost) controlHost.liveBridge = liveBridge;
 	const subagentRegistry = subagentEventBus ? new RpcSubagentRegistry(subagentEventBus, output) : undefined;
 	// One tracker for both surfaces, so control snapshots report the same activeRole as get_state.
 	const rpcRoles = controlHostFor(session)?.roles ?? new RpcRoles(session, launchModel);
@@ -2906,6 +2928,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		settleWatcher.observe(event);
 		planMode.observe(event);
 	});
+	sessionEvents.observeJournal(session);
 	await goalController.reconcile();
 	await goalController.settled();
 
@@ -3067,8 +3090,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	pendingExtensionRequests.rejectAll("RPC client disconnected before extension UI response completed");
 	planMode.close();
 	hostToolBridge.close("RPC client disconnected before host tool execution completed");
+	await hostToolBridge.revokeTools("RPC client disconnected", rpcTools =>
+		session.refreshRpcHostTools(rpcTools, hostToolBridge),
+	);
 	hostUriBridge.clear("RPC client disconnected before host URI request completed");
 	toolApprovalBridge.close("RPC client disconnected before tool approval response completed");
+	if (controlHost?.liveBridge === liveBridge) controlHost.liveBridge = undefined;
 	await liveBridge.stop();
 	await inputDispatcher.drain();
 	await shutdownCoordinator.drain();

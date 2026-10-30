@@ -16,3 +16,8 @@ export const THINKING_EFFORTS: readonly Effort[] = [
 	Effort.XHigh,
 	Effort.Max,
 ];
+
+/** A concrete reasoning selection, including native reasoning disablement. */
+export type ThinkingEffort = Effort | "off";
+
+export const THINKING_CHOICES: readonly ThinkingEffort[] = ["off", ...THINKING_EFFORTS];

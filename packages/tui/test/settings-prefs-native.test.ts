@@ -106,6 +106,7 @@ interface HarnessOptions {
 	onPluginsChanged?: () => void | Promise<void>;
 	onCancel?: () => void;
 	requestRender?: () => void;
+	onOpenConfigFile?: () => Promise<void>;
 }
 
 function pluginHost(installed: InstalledPlugin[] = []): PluginSettingsHost {
@@ -171,6 +172,7 @@ function harness(initial: Record<string, unknown> = {}, options: HarnessOptions 
 			onThemePreview: name => void previews.push(name),
 			onPluginsChanged: options.onPluginsChanged,
 			onCancel: options.onCancel ?? (() => {}),
+			onOpenConfigFile: options.onOpenConfigFile,
 		},
 	);
 	return {
@@ -433,6 +435,7 @@ describe("settings as a native prefs page", () => {
 		selector.handleInput("/");
 		selector.handleInput("t");
 		selector.handleInput("h");
+		selector.handleInput(ENTER);
 		const { props } = prefs(selector);
 		expect(props.query).toBe("th");
 		expect(props.sections.every(s => s.page !== undefined)).toBe(true);
@@ -471,6 +474,7 @@ describe("settings as a native prefs page", () => {
 		selector.handleInput("/");
 		selector.handleInput("color");
 		expect(prefs(selector).props.query).toBe("color");
+		selector.handleInput(ENTER);
 		expect(prefs(selector).props.focus).toBe("display.colorBlind");
 	});
 
@@ -480,7 +484,7 @@ describe("settings as a native prefs page", () => {
 		expect(prefs(selector).props.query).toBeUndefined();
 		selector.handleInput("/");
 		selector.handleInput("theme");
-		selector.handleInput("\x1b");
+		selector.handleInput(ENTER);
 		expect(prefs(selector).props.query).toBe("theme");
 		const snapshot = selector.navigationSnapshot();
 		const restored = harness().selector;
@@ -491,6 +495,166 @@ describe("settings as a native prefs page", () => {
 		restored.handleInput("/");
 		restored.handleInput(" hjkl");
 		expect(prefs(restored).props.query).toBe("theme hjkl");
+	});
+
+	it("keeps regex drafts modal and applies them only after Enter", () => {
+		const { selector, changes } = harness();
+		selector.handleInput("/");
+		const initial = prefs(selector).props;
+		const rows = initial.sections.flatMap(section => section.rows.map(row => row.id));
+		expect(rows.length).toBeGreaterThan(1);
+		for (const key of ".{1000}") selector.handleInput(key);
+		for (const key of ["\x1b[D", "\t", DOWN, "\x1b[A", "\x0e", "\x10"]) selector.handleInput(key);
+		const drafting = prefs(selector).props;
+		expect(drafting.page).toBe(initial.page);
+		expect(drafting.focus).toBe(initial.focus);
+		expect(drafting.query).toBe(".{1000}");
+		expect(drafting.cursor).toBe(6);
+		expect(drafting.sections.flatMap(section => section.rows.map(row => row.id))).toEqual(rows);
+		expect(selector.navigationSnapshot()).toMatchObject({
+			search: { value: ".{1000}", query: "", focused: true, cursor: 6 },
+		});
+		expect(changes).toEqual([]);
+		selector.handleInput(ENTER);
+		expect(prefs(selector).props.sections.flatMap(section => section.rows)).toEqual([]);
+		expect(selector.navigationSnapshot()).toMatchObject({
+			search: { value: ".{1000}", query: ".{1000}", focused: false },
+		});
+		selector.handleInput("\x1b");
+		expect(prefs(selector).props.query).toBeUndefined();
+		expect(prefs(selector).props.page).toBe("appearance");
+		selector.handleInput("/");
+		for (const key of "/^dark/") selector.handleInput(key);
+		expect(prefs(selector).props.sections.flatMap(section => section.rows).length).toBeGreaterThan(1);
+		selector.handleInput(ENTER);
+		expect(prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id))).toEqual(["theme.dark"]);
+		selector.handleInput("\x1b");
+		expect(prefs(selector).props.query).toBeUndefined();
+		expect(row(prefs(selector).props, "display.colorBlind")).toBeDefined();
+	});
+
+	for (const sectionFocused of [false, true]) {
+		for (const { name, keys } of [
+			{ name: "an empty pattern", keys: ["/", "\x1b"] },
+			{ name: "a dotted draft", keys: ["/", ".", ".", ".", "\x1b"] },
+			{ name: "a confirmed pattern", keys: ["/", "c", "o", "l", "o", "r", ENTER, "\x1b"] },
+		]) {
+			it(`restores the original tab, ${sectionFocused ? "section sidebar" : "setting selection"}, and tab cycling after Esc clears ${name}`, () => {
+				let closed = 0;
+				const { selector, changes } = harness(
+					{},
+					{
+						entries: [
+							...ENTRIES,
+							{
+								path: "compaction.enabled",
+								type: "boolean",
+								defaultValue: true,
+								ui: { tab: "context", group: "Compaction", label: "Automatic compaction", description: "" },
+							},
+							{
+								path: "context.keepRecent",
+								type: "boolean",
+								defaultValue: true,
+								ui: { tab: "context", group: "Retention", label: "Keep recent messages", description: "" },
+							},
+						],
+						onCancel: () => {
+							closed++;
+						},
+					},
+				);
+				for (const key of ["l", "l", "l", "j"]) selector.handleInput(key);
+				expect(prefs(selector).props.page).toBe("context");
+				expect(prefs(selector).props.focus).toBe("compaction.enabled");
+				if (sectionFocused) {
+					selector.handleInput("\t");
+					selector.handleInput("j");
+					expect(prefs(selector).props.focus).toBe("retention");
+				}
+				const before = prefs(selector).props;
+				const beforeRender = selector.render(180).map(line => Bun.stripANSI(line));
+				expect(before.sections.map(section => section.id)).toEqual(["compaction", "retention"]);
+				expect(beforeRender.some(line => /Compaction\s+│/.test(line))).toBe(true);
+
+				for (const key of keys) selector.handleInput(key);
+				const after = prefs(selector).props;
+				const afterRender = selector.render(180).map(line => Bun.stripANSI(line));
+				expect(closed).toBe(0);
+				expect(changes).toEqual([]);
+				expect(after.query).toBeUndefined();
+				expect(after.page).toBe("context");
+				expect(after.sections).toEqual(before.sections);
+				expect(after.sections.every(section => section.page === undefined)).toBe(true);
+				expect(afterRender.join("\n")).not.toMatch(/\d+ match/);
+
+				selector.handleInput("l");
+				expect(prefs(selector).props.page).toBe("memory");
+				selector.handleInput("h");
+				expect(prefs(selector).props.page).toBe("context");
+				expect(prefs(selector).props.sections).toEqual(before.sections);
+
+				expect(after.focus).toBe(before.focus);
+				expect(afterRender).toEqual(beforeRender);
+			});
+		}
+	}
+
+	it("confirms a focused search pattern with Enter without activating the matched setting", () => {
+		const { selector, changes, values } = harness();
+		selector.handleInput("/");
+		const initialRows = prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id));
+		for (const key of "/^color/") selector.handleInput(key);
+		expect(prefs(selector).props.query).toBe("/^color/");
+		expect(prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id))).toEqual(initialRows);
+		expect(Bun.stripANSI(selector.render(180).at(-2) ?? "")).toContain("confirm search");
+
+		selector.handleInput(ENTER);
+		const confirmed = prefs(selector).props;
+		expect(confirmed.query).toBe("/^color/");
+		expect(confirmed.sections.flatMap(section => section.rows.map(row => row.id))).toEqual(["display.colorBlind"]);
+		expect(confirmed.focus).toBe("display.colorBlind");
+		expect(confirmed.editing).toBeNull();
+		expect(values.get("display.colorBlind")).toBe(false);
+		expect(changes).toEqual([]);
+		expect(Bun.stripANSI(selector.render(180).at(-2) ?? "")).not.toContain("confirm search");
+
+		selector.handleInput(ENTER);
+		expect(values.get("display.colorBlind")).toBe(true);
+		expect(changes).toEqual([["display.colorBlind", true]]);
+	});
+
+	it("shows Vim half-page, page, and boundary motions in the bottom footer after confirming search", () => {
+		const { selector } = harness();
+		for (const key of ["/", "e", ENTER]) selector.handleInput(key);
+		expect(prefs(selector).props.sections.flatMap(section => section.rows).length).toBeGreaterThan(1);
+		const footer = Bun.stripANSI(selector.render(240).at(-2) ?? "");
+		expect(footer).not.toContain("confirm search");
+		expect(footer).toContain("j/k");
+		expect(footer).toMatch(/Ctrl-(?:u\/d|d\/u) half/);
+		expect(footer).toContain("PgUp/PgDn page");
+		expect(footer).toContain("gg/G");
+	});
+
+	it("discards an unconfirmed global-search draft on leave and restores confirmed results", () => {
+		const { selector } = harness();
+		selector.handleInput("/");
+		selector.handleInput("theme");
+		selector.handleInput(ENTER);
+		const confirmed = prefs(selector).props.sections;
+		selector.handleInput("/");
+		selector.handleInput(" draft");
+		expect(prefs(selector).props.query).toBe("theme draft");
+		expect(prefs(selector).props.sections).toEqual(confirmed);
+		selector.leaveMenu();
+		expect(prefs(selector).props.query).toBe("theme");
+		expect(prefs(selector).props.sections).toEqual(confirmed);
+		expect(selector.navigationSnapshot()).toMatchObject({
+			search: { value: "theme", query: "theme", focused: false },
+		});
+		const restored = harness().selector;
+		restored.restoreNavigation(selector.navigationSnapshot());
+		expect(prefs(restored).props.sections).toEqual(confirmed);
 	});
 
 	it("reports nested settings pages and restores them without a fresh visit", () => {
@@ -543,6 +707,8 @@ describe("settings as a native prefs page", () => {
 		send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
 		await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
 		for (const key of ["/", "h", "j", "\x01", "\x1b[C"]) h.selector.handleInput(key);
+		expect(prefs(h.selector).props.sections.flatMap(section => section.rows)).toHaveLength(2);
+		h.selector.handleInput(ENTER);
 		expect(prefs(h.selector).props).toMatchObject({
 			query: "hj",
 			cursor: 1,
@@ -552,9 +718,9 @@ describe("settings as a native prefs page", () => {
 		send(h.selector, { type: "action", key: "", act: "close", mods: [] });
 		expect(closed).toBe(0);
 		expect(h.selector.navigationSnapshot()).toMatchObject({
-			plugin: { content: { filter: "hj", filterFocused: false, filterCursor: 1 } },
+			plugin: { content: { filter: "", filterFocused: false, filterCursor: 0 } },
 		});
-		expect(prefs(h.selector).props.query).toBe("hj");
+		expect(prefs(h.selector).props.query).toBeUndefined();
 		send(h.selector, { type: "action", key: "", act: "close", mods: [] });
 		expect(closed).toBe(1);
 	});
@@ -564,12 +730,12 @@ describe("settings as a native prefs page", () => {
 		const h = harness({}, { plugins });
 		send(h.selector, { type: "action", key: "", act: "page", value: "plugins", mods: [] });
 		await h.whenRendered(props => props.sections.some(section => section.id === "installed"));
-		for (const key of ["/", "hj", "\x1b"]) h.selector.handleInput(key);
+		for (const key of ["/", "hj", ENTER]) h.selector.handleInput(key);
 		send(h.selector, { type: "activate", key: "", item: "npm:hjkl" });
 		await h.whenRendered(props =>
 			props.sections.some(section => section.rows.some(row => row.id === "config:message")),
 		);
-		for (const key of ["/", "message", "\x01", "\x1b[C", "\x1b[C", "\x1b"]) h.selector.handleInput(key);
+		for (const key of ["/", "message", "\x01", "\x1b[C", "\x1b[C", ENTER]) h.selector.handleInput(key);
 		expect(prefs(h.selector).props).toMatchObject({
 			query: "message",
 			cursor: 2,
@@ -674,7 +840,7 @@ describe("settings as a native prefs page", () => {
 			for (const key of ["/", "b", "e"]) h.selector.handleInput(key);
 			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
 			expect(h.selector.navigationSnapshot()).toMatchObject({
-				plugin: { content: { submenuId: "config:mode", submenu: { filter: "be", filterFocused: false } } },
+				plugin: { content: { submenuId: "config:mode", submenu: { filter: "", filterFocused: false } } },
 			});
 			send(h.selector, { type: "action", key: "", act: "close", value: "config:mode", mods: [] });
 			expect(h.selector.navigationSnapshot()).toMatchObject({ plugin: { content: { submenuId: null } } });
@@ -704,7 +870,7 @@ describe("settings as a native prefs page", () => {
 		const h = harness({}, { entries });
 		send(h.selector, { type: "action", key: "", act: "page", value: "providers", mods: [] });
 		send(h.selector, { type: "activate", key: "", item: order.path });
-		for (const key of ["/", "option", "\x01", "\x1b[C", "\x1b[C", "\x1b", "G"]) h.selector.handleInput(key);
+		for (const key of ["/", "option", "\x01", "\x1b[C", "\x1b[C", ENTER, "G"]) h.selector.handleInput(key);
 		h.selector.render(120);
 		h.selector.handleInput("\x19");
 		h.selector.render(120);
@@ -747,7 +913,7 @@ describe("settings as a native prefs page", () => {
 		};
 		send(h.selector, { type: "action", key: "", act: "page", value: "providers", mods: [] });
 		send(h.selector, { type: "activate", key: "", item: limits.path });
-		for (const key of ["/", "ze", "\x01", "\x1b[C", "\x1b"]) h.selector.handleInput(key);
+		for (const key of ["/", "ze", "\x01", "\x1b[C", ENTER]) h.selector.handleInput(key);
 		const parent = h.selector.navigationSnapshot();
 		h.selector.handleInput("l");
 		expect(h.selector.navigationSnapshot()).toMatchObject({ list: { submenu: { provider: "zeta" } } });
@@ -836,4 +1002,52 @@ describe("settings as a native prefs page", () => {
 		expect(h.selector.blocksMenuHistory).toBe(false);
 		expect(visits).toHaveLength(count);
 	});
+});
+
+it("Ctrl-G reloads the settings rows after editing and ignores repeated launches", async () => {
+	const edited = Promise.withResolvers<void>();
+	let opens = 0;
+	const h = harness(
+		{},
+		{
+			onOpenConfigFile: async () => {
+				opens++;
+				await edited.promise;
+				h.values.set("display.colorBlind", true);
+			},
+		},
+	);
+	const rendered = h.whenRendered(props => row(props, "display.colorBlind").changed === true);
+	h.selector.handleInput("\x07");
+	h.selector.handleInput("\x07");
+	expect(opens).toBe(1);
+	edited.resolve();
+	await rendered;
+	expect(h.changes).toEqual([]);
+	expect(h.values.get("display.colorBlind")).toBe(true);
+});
+
+it("an existing menu Ctrl-G binding wins over opening the settings file", () => {
+	const previous = getKeybindings();
+	let opened = false;
+	let cancelled = false;
+	setKeybindings(new KeybindingsManager({ "tui.select.cancel": ["ctrl+g"] }));
+	try {
+		const h = harness(
+			{},
+			{
+				onOpenConfigFile: async () => {
+					opened = true;
+				},
+				onCancel: () => {
+					cancelled = true;
+				},
+			},
+		);
+		h.selector.handleInput("\x07");
+		expect(opened).toBe(false);
+		expect(cancelled).toBe(true);
+	} finally {
+		setKeybindings(previous);
+	}
 });

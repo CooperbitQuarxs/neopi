@@ -191,6 +191,8 @@ export interface DiscoveryProviderConfig {
 export interface DiscoveryContext {
 	/** Injected fetch implementation (tests stub this). */
 	fetch: FetchImpl;
+	/** Opt-in presence metadata for fact resolution; ordinary discovery keeps its existing shape. */
+	modelFactsEnabled?: boolean;
 	/**
 	 * Resolve a provider's bearer credential for `Authorization: Bearer …`.
 	 * Returns undefined when no key is stored or it is a local/no-auth
@@ -939,9 +941,9 @@ export async function discoverOpenAIModelsList(
 		// headers/baseUrl/cost stay local.
 		const reference = resolveModelReference(id, references) as ModelSpec<Api> | undefined;
 		const referenceCompat = reference?.compat as OpenAICompat | undefined;
-		const input = nativeMetadataForModel?.input ??
-			extractOpenAIModelsListInputCapabilities(item) ??
-			reference?.input ?? ["text"];
+		const reportedInput =
+			nativeMetadataForModel?.input ?? extractOpenAIModelsListInputCapabilities(item) ?? reference?.input;
+		const input = reportedInput ?? ["text"];
 		const limits = isRecord(item.limits) ? item.limits : undefined;
 		const maxInputTokens = toPositiveNumberOrUndefined(limits?.max_input_tokens);
 		const maxOutputTokens = toPositiveNumberOrUndefined(limits?.max_output_tokens);
@@ -1001,6 +1003,16 @@ export async function discoverOpenAIModelsList(
 			reasoning: reference?.reasoning ?? false,
 			thinking: inheritReferenceThinking(undefined, reference, providerConfig.provider),
 			input,
+			...(ctx.modelFactsEnabled
+				? {
+						discoveryMissingInput: reportedInput === undefined,
+						discoveryMissingContextWindow: reportedContextWindow === null,
+						discoveryMissingMaxTokens: reportedMaxTokens === undefined && reference?.maxTokens == null,
+						discoveryMissingReasoningEffort:
+							referenceCompat?.supportsReasoningEffort === undefined &&
+							(!providerConfig.compat || !("supportsReasoningEffort" in providerConfig.compat)),
+					}
+				: {}),
 			...(providerConfig.discovery.type === "lm-studio" ? { imageInputDecoder: "stb" as const } : {}),
 			// Proxy/gateway pricing is provider-specific and rarely matches
 			// upstream bundled catalogs, so keep costs local-unknown even

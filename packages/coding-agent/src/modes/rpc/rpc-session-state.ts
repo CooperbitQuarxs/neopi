@@ -6,9 +6,11 @@ import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import type { AgentSession } from "../../session/agent-session";
 import { calculateTokensPerSecond } from "../../utils/token-rate";
 import { MAX_RPC_FRAME_BYTES } from "./rpc-frame";
+import { serializeRpcModel } from "./rpc-model";
 import { rpcPlanModeState } from "./rpc-plan-mode";
 import { isRpcSessionSettled, type RpcScheduledTurnProbe } from "./rpc-session-settle";
 import type { RpcSessionState } from "./rpc-types";
+import { rpcSessionTelemetry } from "./rpc-session-telemetry";
 
 export interface RpcSessionStateOptions {
 	/** Role the current model was selected through; omit for sessions without RPC roles. */
@@ -60,8 +62,9 @@ export function copyQueue(entries: readonly string[], limit: QueueLimit | undefi
 
 export function buildRpcSessionState(session: AgentSession, options: RpcSessionStateOptions): RpcSessionState {
 	const queuedMessages = session.getQueuedMessages();
+	const model = session.model;
 	return {
-		model: session.model,
+		model: model ? serializeRpcModel(model) : undefined,
 		thinkingLevel: session.thinkingLevel,
 		isStreaming: session.isStreaming,
 		isCompacting: session.isCompacting,
@@ -71,6 +74,7 @@ export function buildRpcSessionState(session: AgentSession, options: RpcSessionS
 		sessionFile: session.sessionFile,
 		sessionId: session.sessionId,
 		sessionName: session.sessionName,
+		...rpcSessionTelemetry(session),
 		chronicler: session.chroniclerHealth,
 		autoCompactionEnabled: session.autoCompactionEnabled,
 		queuedMessageCount: session.queuedMessageCount,

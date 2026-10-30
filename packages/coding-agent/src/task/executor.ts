@@ -16,7 +16,8 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model, ServiceTierByFamily, Usage } from "@oh-my-pi/pi-ai";
 import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
-import { isRecord, logger, popLoopPhase, prompt, pushLoopPhase, sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, popLoopPhase, pushLoopPhase, sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobError, AsyncJobManager, type AsyncJobRunResult } from "../async";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
@@ -100,6 +101,7 @@ import { hasConversationalHistory, PendingSessionManager, SessionManager } from 
 import { truncateTail } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import {
 	type ConfiguredThinkingLevel,
+	parseConfiguredThinkingLevel,
 	prewalkWouldBeNoop,
 	resolveTaskEffortLevel,
 	type TaskEffort,
@@ -109,6 +111,7 @@ import { resolveEvalBackends } from "../tools/eval-backends";
 import { isIrcEnabled } from "../irc/messaging";
 import { LIST_STATUS_ORDER } from "@oh-my-pi/pi-tui/tools/irc";
 import { DEFAULT_PEER_ROSTER_LIMIT } from "@oh-my-pi/pi-tui/tools/irc";
+import { getLiveSubagentFacts, type LiveSubagentFacts } from "../registry/subagent-facts";
 import { normalizeSchema } from "../tools/jtd-to-json-schema";
 import { buildOutputValidator, summarizeValidationFailure } from "../tools/output-schema-validator";
 import { ToolAbortError } from "../tools/tool-errors";
@@ -379,7 +382,7 @@ function installSubagentRetryFallbackChain(args: {
 	return role;
 }
 
-export interface IrcPeerRosterRow {
+export interface IrcPeerRosterRow extends Partial<LiveSubagentFacts> {
 	id: string;
 	displayName: string;
 	kind: string;
@@ -418,6 +421,7 @@ export function collectIrcPeerRoster(
 		kind: peer.kind,
 		status: peer.status,
 		activity: peer.activity,
+		...(peer.session ? getLiveSubagentFacts(peer.session) : {}),
 	}));
 	let parkedCount = 0;
 	for (const ref of registry.list()) {
@@ -1250,6 +1254,7 @@ const MAX_YIELD_TOOL_ERRORS = 6;
 
 /** Inputs for the run monitor driving one subagent assignment. */
 interface RunMonitorArgs {
+	cwd?: string;
 	index: number;
 	id: string;
 	runToken: string;
@@ -1717,7 +1722,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	// failures just leave the label unset.
 	const labelSource = assignment?.trim();
 	if (!args.description && args.modelRegistry && args.settings && labelSource) {
-		generateTaskLabel(labelSource, args.modelRegistry, args.settings, id, abortSignal)
+		generateTaskLabel(labelSource, args.modelRegistry, args.settings, id, abortSignal, args.cwd)
 			.then(label => {
 				if (!label || abortSignal.aborted || progress.description) return;
 				progress.description = label;
@@ -2647,12 +2652,17 @@ async function driveSessionToResult(
 				if (!budgetStop && session.hasPendingAsyncWork()) break;
 				try {
 					retryCount++;
-					const reminder = prompt.render(submitReminderTemplate, {
-						retryCount,
-						maxRetries: MAX_YIELD_RETRIES,
-						budgetStop,
-						structured,
-					});
+					const reminder = renderPromptAsset(
+						"system/subagent-yield-reminder.md",
+						submitReminderTemplate,
+						{
+							retryCount,
+							maxRetries: MAX_YIELD_RETRIES,
+							budgetStop,
+							structured,
+						},
+						{ cwd: session.sessionManager.getCwd(), kind: "notice" },
+					);
 
 					const isFinalRetry = retryCount >= MAX_YIELD_RETRIES;
 					// Last chance: the next accepted yield ends the run, incremental
@@ -2745,11 +2755,16 @@ async function driveSessionToResult(
 				const running = session.getAsyncJobSnapshot()?.running ?? [];
 				if (running.length > 0) {
 					const jobs = running.map(job => `${job.id}${job.label ? ` (${job.label})` : ""}`).join(", ");
-					const notice = prompt.render(subagentAsyncPendingTemplate, {
-						count: running.length,
-						multiple: running.length > 1,
-						jobs,
-					});
+					const notice = renderPromptAsset(
+						"system/subagent-async-pending.md",
+						subagentAsyncPendingTemplate,
+						{
+							count: running.length,
+							multiple: running.length > 1,
+							jobs,
+						},
+						{ cwd: session.sessionManager.getCwd(), kind: "notice" },
+					);
 					try {
 						await dispatchPrompt(notice, { attribution: "agent", synthetic: true }, "async-pending notice");
 						await awaitAbortable(session.waitForIdle());
@@ -3174,6 +3189,7 @@ function wakeSources(records: AgentMessage[], selfId: string): WakeSource[] {
  * updates the artifact nobody is told to re-read.
  */
 async function relayWakeTurnOutput(args: {
+	cwd: string;
 	id: string;
 	records: AgentMessage[];
 	turnStartTime: number;
@@ -3239,6 +3255,7 @@ function wakeTurnFailed(outcome: { error: string | undefined; aborted: boolean; 
  * branch, which the observer seam cannot drive.
  */
 export function buildWakeRelayBody(args: {
+	cwd?: string;
 	id: string;
 	yielded: boolean;
 	result: SingleResult | undefined;
@@ -3254,7 +3271,7 @@ export function buildWakeRelayBody(args: {
 	// artifact before failing must be reported, never contradicted.
 	const summary =
 		args.yielded && args.result?.outputPath
-			? formatTaskResultSummary(args.result, { totalDurationMs: args.result.durationMs })
+			? formatTaskResultSummary(args.result, { totalDurationMs: args.result.durationMs, cwd: args.cwd })
 			: undefined;
 
 	const headline = args.error
@@ -3374,6 +3391,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 		};
 		const runToken = crypto.randomUUID();
 		const turnMonitor = createSubagentRunMonitor({
+			cwd: session.sessionManager.getCwd(),
 			index,
 			id,
 			runToken,
@@ -3505,7 +3523,10 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					// parent whatever it is: the yield result, or the failure that
 					// superseded it.
 					if (wakeJob && result) {
-						const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
+						const text = formatTaskResultSummary(result, {
+							totalDurationMs: result.durationMs,
+							cwd: session.sessionManager.getCwd(),
+						});
 						const structured = result.structuredOutput;
 						if (result.aborted || result.exitCode !== 0 || result.error !== undefined) {
 							wakeJob.outcome.reject(new AsyncJobError(text, structured));
@@ -3521,6 +3542,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					// waiter mistakes a dead peer for a healthy-but-silent one.
 					try {
 						await relayWakeTurnOutput({
+							cwd: session.sessionManager.getCwd(),
 							id,
 							records,
 							turnStartTime,
@@ -3805,6 +3827,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 
 	const runToken = crypto.randomUUID();
 	const monitor = createSubagentRunMonitor({
+		cwd: session.sessionManager.getCwd(),
 		index,
 		id,
 		runToken,
@@ -3994,27 +4017,32 @@ function buildSubagentSessionOptions(
 			const ircRoster = inputs.ircEnabled
 				? collectIrcPeerRoster(AgentRegistry.global(), inputs.id, inputs.ircRoot.sessionFile)
 				: undefined;
-			const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
-				agent: inputs.agentSystemPrompt,
-				context: inputs.context,
-				planReference: inputs.planReference,
-				planReferencePath: inputs.planReferencePath,
-				worktree: inputs.worktree,
-				structured: inputs.structured,
-				outputSchema: inputs.outputSchema,
-				outputSchemaOverridesAgent: inputs.outputSchemaOverridesAgent,
-				// Read the live item set through the registry instead of capturing the session, which
-				// would pin its whole graph past park. A revive builds while the registry session is
-				// null, so it renders the cleared set rather than the launch-time pooled instructions.
-				workPoolYieldItems:
-					AgentRegistry.global().get(inputs.id)?.session?.getWorkPoolYieldItems?.() ??
-					launch?.workPoolYieldItems ??
-					[],
-				ircPeers: ircRoster?.peers ?? [],
-				ircParkedCount: ircRoster?.parkedCount ?? 0,
-				ircOmittedCount: ircRoster?.omittedCount ?? 0,
-				ircSelfId: inputs.ircEnabled ? inputs.id : "",
-			});
+			const subagentPrompt = renderPromptAsset(
+				"system/subagent-system-prompt.md",
+				subagentSystemPromptTemplate,
+				{
+					agent: inputs.agentSystemPrompt,
+					context: inputs.context,
+					planReference: inputs.planReference,
+					planReferencePath: inputs.planReferencePath,
+					worktree: inputs.worktree,
+					structured: inputs.structured,
+					outputSchema: inputs.outputSchema,
+					outputSchemaOverridesAgent: inputs.outputSchemaOverridesAgent,
+					// Read the live item set through the registry instead of capturing the session, which
+					// would pin its whole graph past park. A revive builds while the registry session is
+					// null, so it renders the cleared set rather than the launch-time pooled instructions.
+					workPoolYieldItems:
+						AgentRegistry.global().get(inputs.id)?.session?.getWorkPoolYieldItems?.() ??
+						launch?.workPoolYieldItems ??
+						[],
+					ircPeers: ircRoster?.peers ?? [],
+					ircParkedCount: ircRoster?.parkedCount ?? 0,
+					ircOmittedCount: ircRoster?.omittedCount ?? 0,
+					ircSelfId: inputs.ircEnabled ? inputs.id : "",
+				},
+				{ cwd: spec.options.cwd },
+			);
 			// Per-spawn text (context, worktree, IRC roster) goes after the trailing
 			// `<project-context>` block so spawns of the same agent share the static
 			// prompt prefix as a cache hit.
@@ -4080,6 +4108,20 @@ function trackSubagentSettings(session: AgentSession, capture: WarmReviveCapture
 	});
 }
 
+/** Persisted control edits outrank the spawn selector's effort suffix on every revival. */
+export function restoredSubagentThinkingOptions(
+	manager: SessionManager,
+): Pick<CreateAgentSessionOptions, "thinkingLevel" | "thinkingOrigin" | "autoSelection"> {
+	const entry = manager.getBranch().findLast(entry => entry.type === "thinking_level_change");
+	if (!entry || entry.type !== "thinking_level_change") return {};
+	return {
+		thinkingLevel:
+			parseConfiguredThinkingLevel(entry.configured) ?? parseConfiguredThinkingLevel(entry.thinkingLevel ?? "off"),
+		thinkingOrigin: entry.effortOrigin,
+		autoSelection: entry.autoSelection,
+	};
+}
+
 /**
  * Lifecycle reviver for a parked subagent: park closed the JSONL writer, so reopening takes the
  * single-writer lock cleanly and restores the full message history (createAgentSession →
@@ -4120,6 +4162,7 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 					reopened,
 					expectedAgentRef,
 				),
+				...restoredSubagentThinkingOptions(reopened),
 				oauthAccountPools: Object.hasOwn(agentAccountPools, capture.agentName)
 					? agentAccountPools[capture.agentName]
 					: undefined,
@@ -4228,6 +4271,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		const externalSignal = signal ? AbortSignal.any([signal, deadlineController.signal]) : deadlineController.signal;
 		const runToken = crypto.randomUUID();
 		const monitor = createSubagentRunMonitor({
+			cwd: worktree ?? cwd,
 			index,
 			id,
 			runToken,
@@ -4445,6 +4489,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const runToken = crypto.randomUUID();
 	let lifecycle: ReturnType<typeof startRunLifecycle> | undefined;
 	const monitor = createSubagentRunMonitor({
+		cwd: worktree ?? cwd,
 		index,
 		id,
 		runToken,

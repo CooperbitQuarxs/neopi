@@ -1,3 +1,4 @@
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Resolves the {@link Judge} that answers typed judgments through the `judge`
  * model role. The chain is re-resolved at most every {@link CANDIDATE_TTL_MS}
@@ -23,7 +24,6 @@ import {
 	chatTextBackend,
 	createNativeJudge,
 	Effort,
-	THINKING_EFFORTS,
 	isJudgmentApi,
 	type Judge,
 	type JudgeOptions,
@@ -43,8 +43,9 @@ import {
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import type { ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import { MAX_THINKING_SUFFIX_OPTIONS, splitThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { classifyDifficulty } from "../auto-thinking/classifier";
 import type { EffortContextSession } from "../auto-thinking/context";
@@ -463,7 +464,7 @@ export class ChainJudge implements Judge {
 	):
 		| {
 				reasoning?: Effort;
-				resolveReasoning?: (text: TextPrompt, options: JudgeOptions) => Promise<Effort>;
+				resolveReasoning?: (text: TextPrompt, options: JudgeOptions) => Promise<ThinkingEffort>;
 		  }
 		| undefined {
 		if (cfgEffortPolicyMode.get(this.#deps.settings) === "legacy" || !selection || selection.mode === "inherit")
@@ -496,7 +497,7 @@ export class ChainJudge implements Judge {
 					throw new Error("@effort returned no concrete level");
 				} catch (error) {
 					if (options.signal?.aborted || isAbortOrTimeout(error)) throw error;
-					const lowest = THINKING_EFFORTS.find(effort => decision.candidates.includes(effort));
+					const lowest = decision.candidates[0];
 					if (!lowest) throw error;
 					this.#deps.onEffortDisclosure?.(
 						`@judge Auto classification failed: ${String(error)}. Using lowest permitted effort ${lowest}.`,
@@ -559,7 +560,10 @@ class LocalTextBackend implements TextBackend {
 		// system prompt); one merged turn ending in `Answer:` keeps them classifying.
 		const text = await tinyModelClient.complete(
 			this.model,
-			prompt.render(localPromptTemplate, { system: judgment.system, state: judgment.user }),
+			renderPromptAsset("system/judgment-local.md", localPromptTemplate, {
+				system: judgment.system,
+				state: judgment.user,
+			}),
 			{
 				maxTokens: this.#reasoning ? LOCAL_REASONING_MAX_TOKENS : LOCAL_ANSWER_MAX_TOKENS,
 				signal: options.signal,

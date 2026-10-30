@@ -15,6 +15,7 @@ import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
 export const TREE_FILTER_MODES = ["default", "no-tools", "user-only", "labeled-only", "all"] as const;
 /** Session-tree display filter. */
 export type TreeFilterMode = (typeof TREE_FILTER_MODES)[number];
+import { compileMenuRegex } from "../menu-search";
 import { theme } from "../theme/theme";
 import { matchesAppInterrupt } from "../keybinding-matchers";
 import { isUserRequestEntry, type TranscriptEntryLike } from "../chat/transcript-entry";
@@ -217,7 +218,7 @@ class TreeList implements Component {
 	#nodeById: Map<string, TreeSelectorNode> = new Map();
 	#parentById: Map<string, string | null> = new Map();
 	#filterMode: FilterMode;
-	/** The search field; its value is the fuzzy query. */
+	/** The search field; its confirmed query drives the fuzzy filter. */
 	readonly #search = new MenuSearchField();
 	readonly searchInput = this.#search.input;
 	readonly #keys = new MenuKeyReader();
@@ -364,6 +365,7 @@ class TreeList implements Component {
 	}
 
 	leaveMenu(): void {
+		this.#search.focused = false;
 		this.#keys.reset();
 	}
 
@@ -598,10 +600,8 @@ class TreeList implements Component {
 	#buildFilter(): (node: TreeSelectorNode, row: TreeRow<TreeSelectorNode, string>) => boolean {
 		const filterMode = this.#filterMode;
 		const leafId = this.currentLeafId;
-		const searchTokens = this.getSearchQuery()
-			.toLowerCase()
-			.split(/\s+/)
-			.filter(Boolean)
+		const query = this.getSearchQuery();
+		const searchTokens = (compileMenuRegex(query) ? [query] : query.toLowerCase().split(/\s+/).filter(Boolean))
 			.map(token => new FuzzyQuery(token));
 		return node => {
 			const entry = node.entry;
@@ -785,7 +785,7 @@ class TreeList implements Component {
 	}
 
 	getSearchQuery(): string {
-		return this.searchInput.getValue();
+		return this.#search.query;
 	}
 
 	getFilterMode(): FilterMode {
@@ -851,7 +851,7 @@ class TreeList implements Component {
 			order: this.#pickerOrder.order,
 			selected: this.#tree.selectedKey ?? null,
 			current: this.currentLeafId === null ? [] : [this.currentLeafId],
-			query: this.getSearchQuery(),
+			query: this.#search.value,
 			cursor: this.searchInput.getCursor(),
 			filterMode: this.#filterMode,
 			total: allRows.length,
@@ -1407,15 +1407,18 @@ class TreeList implements Component {
 		if (selected && this.onSelect) this.onSelect(selected.entry.id, { summarize });
 	}
 
-	/** Escape exits filter editing first, then closes the picker. */
+	/** Escape clears search before closing the picker. */
 	escape(): void {
-		if (this.#search.focused) this.#search.focused = false;
-		else this.onCancel?.();
+		if (this.#search.focused || this.#search.value) {
+			this.#search.setValue("");
+			this.#search.focused = false;
+			this.#applyFilter();
+		} else this.onCancel?.();
 		this.#keys.reset();
 	}
 
 	clearSearch(): void {
-		this.searchInput.setValue("");
+		this.#search.setValue("");
 		this.#applyFilter();
 	}
 
@@ -1777,7 +1780,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 		}
 		const props: TspPickerProps = {
 			title: "Session tree",
-			...(this.sessionName ? { subtitle: this.sessionName } : {}),
+			subtitle: compileMenuRegex(view.query)?.error ?? this.sessionName ?? undefined,
 			icon: "git-branch",
 			noun: "entries",
 			size: "lg",
@@ -1880,6 +1883,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 		const children: NativeChild[] = [
 			node("tabs", { items: FILTER_TABS, active: filterMode }, undefined, "filter"),
 			search,
+			...(compileMenuRegex(query)?.error ? [text([span(compileMenuRegex(query)!.error!, "error")])] : []),
 			content,
 			hintsRow([
 				{ keys: ["enter"], label: "switch" },

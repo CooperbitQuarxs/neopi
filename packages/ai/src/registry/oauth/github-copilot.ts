@@ -54,7 +54,7 @@ const INITIAL_POLL_INTERVAL_MULTIPLIER = 1.2;
 const SLOW_DOWN_POLL_INTERVAL_MULTIPLIER = 1.4;
 
 type GitHubCopilotLoginOptions = {
-	onAuth: (url: string, instructions?: string) => void;
+	onAuth: (url: string, instructions?: string, userCode?: string) => void;
 	onPrompt: (prompt: OAuthPrompt) => Promise<string>;
 	onProgress?: (message: string) => void;
 	copilotIntegrationId?: unknown;
@@ -358,7 +358,7 @@ export async function loginGitHubCopilot(options: GitHubCopilotLoginOptions): Pr
 		normalizedDomain && isPublicGitHubHost(normalizedDomain) ? "github.com" : (normalizedDomain ?? "github.com");
 
 	const device = await startDeviceFlow(domain, fetchImpl);
-	options.onAuth(device.verification_uri, `Enter code: ${device.user_code}`);
+	options.onAuth(device.verification_uri, `Enter code: ${device.user_code}`, device.user_code);
 
 	const githubAccessToken = await pollForGitHubAccessToken(
 		domain,
@@ -400,7 +400,7 @@ export async function loginGitHubCopilotHook(callbacks: OAuthController): Promis
 	const onPrompt = callbacks.onPrompt;
 	if (!onPrompt) throw new AIError.OnPromptRequiredError("GitHub Copilot");
 	return loginGitHubCopilot({
-		onAuth: (url, instructions) => callbacks.onAuth?.({ url, instructions }),
+		onAuth: (url, instructions, userCode) => callbacks.onAuth?.({ url, instructions, userCode }),
 		onPrompt,
 		onProgress: callbacks.onProgress,
 		signal: callbacks.signal,

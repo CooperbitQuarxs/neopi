@@ -24,6 +24,8 @@ const builtInOAuthProviders: OAuthProviderInfo[] = PROVIDER_REGISTRY.filter(
 	id: provider.id,
 	name: provider.name,
 	available: provider.available ?? true,
+	loginKind: provider.loginKind ?? "custom",
+	deviceCode: provider.deviceCode ?? false,
 	storeCredentialsAs: provider.storeCredentialsAs,
 }));
 
@@ -162,6 +164,8 @@ export function getOAuthProviders(): OAuthProviderInfo[] {
 		id: provider.id,
 		name: provider.name,
 		available: true,
+		loginKind: provider.loginKind ?? ("custom" as const),
+		deviceCode: provider.deviceCode ?? provider.loginKind === "device-code",
 		storeCredentialsAs: provider.storeCredentialsAs,
 	}));
 	return [...builtInOAuthProviders, ...customProviders];

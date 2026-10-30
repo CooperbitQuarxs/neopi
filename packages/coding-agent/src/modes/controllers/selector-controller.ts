@@ -1,8 +1,10 @@
+import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { trackMountedDialog } from "../../control/dialogs";
 import { cfgControlSecretInput } from "../../control/settings";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
-import liveClientProtocolTemplate from "../../live/prompts/live-client-protocol.md" with { type: "text" };
+import bundledLiveClientProtocolTemplate from "../../live/prompts/live-client-protocol.md" with { type: "text" };
 import { renderChatAdvisorPrompt } from "../../chat/chat-system-prompt";
 import { type AgentMessage, type AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
@@ -24,20 +26,19 @@ import {
 	getProjectDir,
 	logger,
 	normalizePathForComparison,
-	prompt,
 	sanitizeText,
 } from "@oh-my-pi/pi-utils";
 import {
+	advisorRosterForRuntime,
 	ADVISOR_DEFAULT_TOOL_NAMES,
 	discoverAdvisorConfigs,
 	loadWatchdogConfigFile,
 	resolveAdvisorConfigEditPath,
 	resolveAdvisorMaxNotesPerUpdate,
 	saveWatchdogConfigFile,
-	slugifyAdvisorName,
 } from "../../advisor";
 import { reset as resetCapabilities } from "../../capability";
-import type { AdvisorConfigScope, EffectiveAdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { type ChainConfigDeps, ChainConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/chain-config";
 import type { ChainConfigScope } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import {
@@ -52,7 +53,7 @@ import { MixtureCatalog } from "../../moa/provider";
 import { discoverRegistrableMixtures, readMixtureDefinitionFile, saveMixtureDefinition } from "../../moa/registration";
 import { type MixtureConfigDeps, MixtureConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/mixture-config";
 import type { MixtureConfigScope } from "@oh-my-pi/pi-tui/overlays/mixture-types";
-import { CHAIN_DEFAULT_ROLE, CHAIN_SYSTEM_PROMPT } from "../../chains/runner";
+import { CHAIN_DEFAULT_ROLE, getChainSystemPrompt } from "../../chains/runner";
 import { formatModelRoleAlias } from "../../config/model-roles";
 import { showGitOverlay } from "../../cli/git-tui";
 import { formatLoginIdentity } from "../../cli/oauth-terminal";
@@ -66,8 +67,10 @@ import {
 } from "../../config/model-presets";
 import { resolveAdvisorRoleSelection, resolveModelRoleValue } from "../../config/model-resolver";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
-import { getRoleInfo } from "../../config/model-roles";
+import { getRoleInfo, setRoleDescription } from "../../config/model-roles";
 import { settings } from "../../config/settings";
+import { cfgModelFactsEnabled, cfgModelFactsSources, cfgModelFactsOverrides } from "../../config/model-facts";
+import { ModelFactEditorComponent } from "../components/model-fact-editor";
 import type { AnySetting } from "../../config/registry";
 import type { StatusLineSettings } from "@oh-my-pi/pi-tui/status-line/types";
 import { createSettingsHost } from "../../config/settings-ui";
@@ -127,7 +130,8 @@ import { copyToClipboard } from "../../utils/clipboard";
 import { openPath } from "../../utils/open";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { getAssistantMessageLinkTargets } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
-import { type AdvisorConfigDeps, AdvisorConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import type { AdvisorConfigDeps } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import { AdvisorScopeOverlayComponent } from "@oh-my-pi/pi-tui/overlays/advisor-scopes";
 import { PersonaConfigOverlayComponent, type PersonaConfigDoc } from "@oh-my-pi/pi-tui/overlays/persona-config";
 import {
 	loadPersonaConfigDoc,
@@ -139,7 +143,8 @@ import {
 import { LIVE_INGEST_DEFAULTS, liveIngestSourceFields } from "../../live/ingest-settings";
 import { createLivePersonaGeneration } from "../../live/persona-generation";
 import { createAgentsHubDeps } from "../agents-hub-deps";
-import { getEditorCommand, openInEditor } from "../../utils/external-editor";
+import { getEditorCommand, openInEditor, openEditorOnPath, withExternalEditor } from "../../utils/external-editor";
+import { type ConfigViewTarget, resolveConfigViewFile } from "../../config/config-view-file";
 import { collapseSharedUsageReports } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-tui/overlays/agent-hub";
@@ -179,8 +184,10 @@ import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-
 import { cfgAdvisorSyncBacklog } from "../../advisor/settings";
 import { cfgBranchSummaryEnabled } from "../../session/context-settings";
 import { cfgCycleOrder, cfgDisabledProviders, cfgModelRoleStorage } from "../../config/model-settings";
-import { cfgDefaultThinkingLevel } from "../../session/settings";
+import { cfgDefaultThinkingLevel, cfgRetryFallbackChains } from "../../session/settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "../../config/effort-policy";
+import { cfgContextRules } from "../../config/context-policy";
+import { parseCompactionPointInput } from "../../config/compaction-threshold";
 import {
 	cfgComposerShape,
 	cfgStatusLineCompactThinkingLevel,
@@ -239,6 +246,8 @@ export type MenuKind =
 	| "status-line-config"
 	| "model-picker"
 	| "model-hub"
+	| "session-model-hub"
+	| "model-facts"
 	| "agents-dashboard"
 	| "agent-hub"
 	| "irc-viewer"
@@ -631,6 +640,30 @@ export class SelectorController {
 		this.ctx.ui.requestRender();
 	}
 
+	async #openConfigFile(target: ConfigViewTarget, reload?: () => Promise<void>): Promise<void> {
+		const env = this.ctx.session.environment.snapshot();
+		await withExternalEditor(
+			this.ctx,
+			async command => {
+				await this.ctx.settings.flush();
+				const filePath = await resolveConfigViewFile(target, {
+					settings: this.ctx.settings,
+					models: this.ctx.session.modelRegistry,
+				});
+				if (!filePath) {
+					this.ctx.showWarning("This built-in configuration has no backing file.");
+					return;
+				}
+				await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+				const code = await openEditorOnPath(command, filePath, env);
+				await reload?.();
+				if (code !== 0)
+					this.ctx.showWarning(`External editor exited with code ${code}. Saved changes were reloaded.`);
+			},
+			env,
+		);
+	}
+
 	showSettingsSelector(): void {
 		if (this.#focusOpenMenu("settings")) return;
 		const menu = this.#claimMenu("settings", () => this.showSettingsSelector());
@@ -653,7 +686,7 @@ export class SelectorController {
 						providers: [...new Set(this.ctx.session.getAvailableModels().map(model => model.provider))].sort(
 							(a, b) => a.localeCompare(b),
 						),
-						settings: createSettingsHost(),
+						settings: createSettingsHost(this.ctx.settings),
 						plugins: createPluginSettingsHost(getProjectDir()),
 						model: this.ctx.session.model,
 						imageBudget: this.ctx.ui.imageBudget,
@@ -662,6 +695,8 @@ export class SelectorController {
 					},
 					{
 						onChange: (id, value) => this.handleSettingChange(id, value),
+						onOpenConfigFile: () =>
+							this.#openConfigFile({ kind: "settings" }, () => this.ctx.settings.reloadFromDisk()),
 						onThemePreview: async themeName => {
 							const result = await previewTheme(themeName);
 							if (result.success) {
@@ -790,7 +825,6 @@ export class SelectorController {
 		const menu = this.#claimMenu("advisor-config", () => this.showAdvisorConfigure());
 		const cwd = this.ctx.sessionManager.getCwd();
 		const agentDir = getAgentDir() ?? getProjectDir();
-		const initialScope: AdvisorConfigScope = "project";
 		void (async () => {
 			// "Project" scope edits the repo-root WATCHDOG.yml (the project-level file
 			// discovery walks), not the launch subdir — `getProjectDir()` is only cwd.
@@ -800,20 +834,23 @@ export class SelectorController {
 			} catch {
 				projectDir = cwd;
 			}
-			const dirs = { projectDir, agentDir };
-			const initialDoc = await loadWatchdogConfigFile(await resolveAdvisorConfigEditPath(initialScope, dirs));
-			const getEffectiveRoster = async (): Promise<EffectiveAdvisorConfig[]> => {
-				const discovered = await discoverAdvisorConfigs(cwd, agentDir);
-				return discovered.advisors.map(advisor => {
-					const source = discovered.sources.get(slugifyAdvisorName(advisor.name))!;
-					return { name: advisor.name, enabled: advisor.enabled, sourceFile: source.path, scope: source.scope };
-				});
-			};
-			const effectiveRoster = await getEffectiveRoster();
+			const discovered = await discoverAdvisorConfigs(cwd, agentDir);
+			const candidates =
+				discovered.files.length > 0
+					? discovered.files
+					: [
+							{
+								path: await resolveAdvisorConfigEditPath("project", { projectDir, agentDir }),
+								scope: "project" as AdvisorConfigScope,
+							},
+						];
+			const files = await Promise.all(
+				candidates.map(async file => ({
+					...file,
+					doc: await loadWatchdogConfigFile(file.path),
+				})),
+			);
 			if (this.#openMenus.get(menu.kind) !== menu) return;
-			if (initialDoc.warnings?.length) {
-				this.ctx.showWarning(`WATCHDOG.yml: ${sanitizeDisplayWarnings(initialDoc.warnings).join("; ")}`);
-			}
 			// Fullscreen editor on the alternate screen (the /settings idiom): the
 			// overlay holds the alt buffer + mouse tracking; the transcript stays put.
 			const done = () => {
@@ -830,7 +867,6 @@ export class SelectorController {
 			);
 			const defaultAdvisorModel = advisorRoleSel?.model;
 			const deps: AdvisorConfigDeps = {
-				effectiveRoster,
 				getDefaultSystemPrompt: (advisor, doc) => {
 					const maxNotesPerUpdate = resolveAdvisorMaxNotesPerUpdate(
 						advisor.maxNotesPerUpdate,
@@ -839,11 +875,16 @@ export class SelectorController {
 					);
 					const chatMode = this.ctx.session.chatMode;
 					return chatMode
-						? renderChatAdvisorPrompt(chatMode.mode, maxNotesPerUpdate)
-						: prompt.render(advisorSystemPrompt, {
-								max_notes_per_update: maxNotesPerUpdate,
-								include_thinking: advisor.includeThinking !== false,
-							});
+						? renderChatAdvisorPrompt(chatMode.mode, maxNotesPerUpdate, this.ctx.sessionManager.getCwd())
+						: renderPromptAsset(
+								"advisor/system.md",
+								advisorSystemPrompt,
+								{
+									max_notes_per_update: maxNotesPerUpdate,
+									include_thinking: advisor.includeThinking !== false,
+								},
+								{ cwd: this.ctx.sessionManager.getCwd() },
+							);
 				},
 				getAvailableModels: () => this.ctx.session.modelRegistry.getAvailable(),
 				browserSource: createModelBrowserSource(this.ctx.settings, model =>
@@ -851,8 +892,9 @@ export class SelectorController {
 				),
 				defaultToolNames: ADVISOR_DEFAULT_TOOL_NAMES,
 				externalEditor: text => {
-					const command = getEditorCommand();
-					return command ? openInEditor(command, text) : Promise.resolve(null);
+					const env = this.ctx.session.environment.snapshot();
+					const command = getEditorCommand(env);
+					return command ? openInEditor(command, text, { env }) : Promise.resolve(null);
 				},
 				scopedModels: this.ctx.session.scopedModels,
 				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
@@ -861,12 +903,12 @@ export class SelectorController {
 					? `${defaultAdvisorModel.provider}/${defaultAdvisorModel.id}`
 					: undefined,
 			};
-			const overlay = new AdvisorConfigOverlayComponent(this.ctx.ui, deps, initialScope, initialDoc, {
-				getEffectiveRoster,
-				loadDoc: async scope => loadWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs)),
-				save: async (scope, doc) => {
-					await saveWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs), doc);
-					this.ctx.showStatus(`Saved ${scope} WATCHDOG.yml — press a to apply it to the live advisors.`);
+			const overlay = new AdvisorScopeOverlayComponent(this.ctx.ui, deps, files, {
+				openFile: filePath => this.#openConfigFile({ kind: "advisor", filePath }),
+				loadFile: loadWatchdogConfigFile,
+				saveFile: async (filePath, doc) => {
+					await saveWatchdogConfigFile(filePath, doc);
+					this.ctx.showStatus(`Saved ${shortenPath(filePath)}. Press a to apply it to the live advisors.`);
 					this.ctx.ui.requestRender();
 				},
 				apply: async () => {
@@ -875,7 +917,7 @@ export class SelectorController {
 					// advisors whose effective configuration changed restart.
 					const discovered = await discoverAdvisorConfigs(cwd, agentDir);
 					const count = this.ctx.session.applyAdvisorConfigs(
-						discovered.advisors,
+						advisorRosterForRuntime(discovered),
 						discovered.sharedInstructions,
 						discovered.sharedMaxNotesPerUpdate,
 					);
@@ -1079,13 +1121,14 @@ export class SelectorController {
 				getAvailableModels: () => this.ctx.session.modelRegistry.getAvailable(),
 				browserSource: createModelBrowserSource(this.ctx.settings),
 				externalEditor: text => {
-					const command = getEditorCommand();
-					return command ? openInEditor(command, text) : Promise.resolve(null);
+					const env = this.ctx.session.environment.snapshot();
+					const command = getEditorCommand(env);
+					return command ? openInEditor(command, text, { env }) : Promise.resolve(null);
 				},
 				scopedModels: this.ctx.session.scopedModels,
 				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
 				defaultModelLabel: proseModel ? `${proseModel.provider}/${proseModel.id}` : undefined,
-				defaultSystemPrompt: CHAIN_SYSTEM_PROMPT,
+				defaultSystemPrompt: getChainSystemPrompt(this.ctx.session.sessionManager.getCwd()),
 			};
 			const overlay = new ChainConfigOverlayComponent(this.ctx.ui, deps, initialScope, initialDoc, {
 				loadDoc: scope => loadChainsConfigFile(chainsConfigFilePath(scope, dirs)),
@@ -1149,8 +1192,9 @@ export class SelectorController {
 				getAvailableModels: () => this.ctx.session.getAvailableModels(),
 				browserSource: createModelBrowserSource(this.ctx.settings),
 				externalEditor: text => {
-					const command = getEditorCommand();
-					return command ? openInEditor(command, text) : Promise.resolve(null);
+					const env = this.ctx.session.environment.snapshot();
+					const command = getEditorCommand(env);
+					return command ? openInEditor(command, text, { env }) : Promise.resolve(null);
 				},
 				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
 				activeName: () => (this.ctx.session.model?.api === "mixture" ? this.ctx.session.model.id : undefined),
@@ -1246,12 +1290,17 @@ export class SelectorController {
 					newEntryContent: newPersonaContent(scope),
 					...(scope === "live"
 						? {
-								protocolLinesText: liveClientProtocolTemplate,
+								protocolLinesText: resolvePromptAsset(
+									"live/live-client-protocol.md",
+									bundledLiveClientProtocolTemplate,
+									{ cwd: this.ctx.sessionManager.getCwd() },
+								).text,
 								generation: createLivePersonaGeneration({
 									registry: this.ctx.session.modelRegistry,
 									browserSource: createModelBrowserSource(this.ctx.settings),
 									templates: this.ctx.session.promptTemplates,
 									sessionId: this.ctx.session.sessionId,
+									cwd: this.ctx.sessionManager.getCwd(),
 								}),
 								protocolMarker: "<client-protocol>",
 								newEntrySources: () => ({
@@ -1261,8 +1310,9 @@ export class SelectorController {
 							}
 						: {}),
 					externalEditor: text => {
-						const command = getEditorCommand();
-						return command ? openInEditor(command, text) : Promise.resolve(null);
+						const env = this.ctx.session.environment.snapshot();
+						const command = getEditorCommand(env);
+						return command ? openInEditor(command, text, { env }) : Promise.resolve(null);
 					},
 				},
 				doc,
@@ -1386,15 +1436,18 @@ export class SelectorController {
 		try {
 			hub = await AgentsHubComponent.create(
 				this.ctx.ui,
-				createAgentsHubDeps(
-					getProjectDir(),
-					this.ctx.settings,
-					this.ctx.session.modelRegistry,
-					() => this.ctx.session.effectiveExtensionRoots,
-					activeModelPattern,
-					defaultModelPattern,
-					model => this.ctx.session.effectiveServiceTier(model),
-				),
+				{
+					...createAgentsHubDeps(
+						getProjectDir(),
+						this.ctx.settings,
+						this.ctx.session.modelRegistry,
+						() => this.ctx.session.effectiveExtensionRoots,
+						activeModelPattern,
+						defaultModelPattern,
+						model => this.ctx.session.effectiveServiceTier(model),
+					),
+					openConfigFile: agent => this.#openConfigFile({ kind: "agent", filePath: agent.filePath }),
+				},
 				{ onCancel: () => done() },
 			);
 		} catch (error) {
@@ -1419,12 +1472,12 @@ export class SelectorController {
 		this.ctx.session.setThinkingLevel(level);
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean }): void {
+	showModelSelector(options?: { temporaryOnly?: boolean; sessionOnly?: boolean }): void {
 		if (options?.temporaryOnly) {
 			this.#showModelPicker();
 			return;
 		}
-		this.#showModelHub({});
+		this.#showModelHub({ sessionOnly: options?.sessionOnly });
 	}
 
 	/**
@@ -1465,7 +1518,7 @@ export class SelectorController {
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
 			const roleSelectorHint = appKey(this.ctx.keybindings, "app.model.select") || formatKeyHint("alt+m");
-			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /model for roles.`);
+			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /models for roles.`);
 		};
 		if (!compactFirst) {
 			await apply();
@@ -1590,8 +1643,9 @@ export class SelectorController {
 	 * untouched underneath. `initialProviderId` preselects a provider's sidebar
 	 * entry — used when reopening the hub after a /login round-trip.
 	 */
-	#showModelHub(hubOptions: { initialProviderId?: string }): void {
-		if (this.#focusOpenMenu("model-hub")) return;
+	#showModelHub(hubOptions: { initialProviderId?: string; sessionOnly?: boolean }): void {
+		const menuKind = hubOptions.sessionOnly ? "session-model-hub" : "model-hub";
+		if (this.#focusOpenMenu(menuKind)) return;
 		const { ModelHubComponent } = loadModelOverlayComponents();
 		let closed = false;
 		const done = () => {
@@ -1601,7 +1655,7 @@ export class SelectorController {
 			closed = true;
 			hub?.dispose();
 			menu.handle?.hide();
-			this.#releaseMenu("model-hub", menu);
+			this.#releaseMenu(menuKind, menu);
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
@@ -1611,6 +1665,33 @@ export class SelectorController {
 			this.ctx.session.modelRegistry,
 			this.ctx.session.scopedModels,
 			{
+				onPick: async (model, selector) => {
+					const tokens = this.ctx.session.getContextUsage()?.tokens ?? 0;
+					const contextWindow = model.contextWindow ?? 0;
+					const overContext = contextWindow > 0 && tokens > contextWindow;
+					try {
+						if (overContext) done();
+						await this.#applySessionModel(model, selector, undefined, overContext);
+						if (!overContext) done();
+						return true;
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return false;
+					}
+				},
+				onEditFacts: hubOptions.sessionOnly
+					? undefined
+					: (provider, model) => {
+							done();
+							this.#showModelFacts(provider, model?.id);
+						},
+				onOpenConfigFile: hubOptions.sessionOnly
+					? undefined
+					: (section, scope) =>
+							this.#openConfigFile({ kind: "models", section, scope }, async () => {
+								await this.ctx.settings.reloadFromDisk();
+								await this.ctx.session.modelRegistry.refresh("offline");
+							}),
 				onAssign: async (
 					model,
 					role,
@@ -1697,6 +1778,23 @@ export class SelectorController {
 					try {
 						cfgEffortRules.set(this.ctx.settings, rules);
 						this.ctx.showStatus(`Implicit effort rules: ${rules.length}`);
+						hub?.refreshAfterExternalMutation();
+						return true;
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return false;
+					}
+				},
+				onContextRulesChange: rules => {
+					try {
+						cfgContextRules.set(
+							this.ctx.settings,
+							rules.map(rule => ({
+								selector: rule.selector,
+								limit: typeof rule.limit === "number" ? rule.limit : parseCompactionPointInput(rule.limit)!,
+							})),
+						);
+						this.ctx.showStatus(`Context rules: ${rules.length}`);
 						hub?.refreshAfterExternalMutation();
 						return true;
 					} catch (error) {
@@ -1809,6 +1907,32 @@ export class SelectorController {
 						return false;
 					}
 				},
+				onFallbackChainKeyChange: (previousKey, key) => {
+					try {
+						const chain = cfgRetryFallbackChains.get(this.ctx.settings)[previousKey];
+						if (!chain) return false;
+						this.ctx.settings.setFallbackChainAndEfforts(
+							key,
+							chain,
+							this.ctx.settings.getGlobalFallbackEffortSelections(previousKey) ?? {},
+							previousKey,
+						);
+						hub?.refreshAfterExternalMutation();
+						return true;
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return false;
+					}
+				},
+				onRoleDescriptionChange: (role, description) => {
+					try {
+						setRoleDescription(role, description, this.ctx.settings);
+						return true;
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return false;
+					}
+				},
 
 				onDefineMixture: name => {
 					done();
@@ -1816,7 +1940,7 @@ export class SelectorController {
 				},
 				onLoginRequest: providerId => {
 					done();
-					void this.#loginThenReopenModelHub(providerId);
+					void this.#loginThenReopenModelHub(providerId, hubOptions.sessionOnly);
 				},
 				onCycleOrderChange: order => {
 					try {
@@ -1890,34 +2014,88 @@ export class SelectorController {
 				onCancel: () => done(),
 			},
 			{
+				sessionOnly: hubOptions.sessionOnly,
 				initialProviderId: hubOptions.initialProviderId,
 				currentSelector: this.ctx.session.model
 					? `${this.ctx.session.model.provider}/${this.ctx.session.model.id}`
 					: undefined,
-				pinnedProviders: [
-					{
-						id: "mixture",
-						label: "Mixture of Agents",
-						action: {
-							label: "+ Define mixture model…",
-							onSelect: () => {
-								done();
-								this.showMixtureConfigure(undefined, true);
+				pinnedProviders: hubOptions.sessionOnly
+					? []
+					: [
+							{
+								id: "mixture",
+								label: "Mixture of Agents",
+								action: {
+									label: "+ Define mixture model…",
+									onSelect: () => {
+										done();
+										this.showMixtureConfigure(undefined, true);
+									},
+								},
 							},
-						},
-					},
-				],
+						],
 			},
 		);
-		const menu = this.#claimMenu("model-hub", () => this.#showModelHub(hubOptions));
+		const menu = this.#claimMenu(menuKind, () => this.#showModelHub(hubOptions));
 		this.#mountMenu(menu, hub, () => this.#showFullscreenMenu(hub));
 	}
 
+	#showModelFacts(provider?: string, modelId?: string): void {
+		if (this.#focusOpenMenu("model-facts")) return;
+		const registry = this.ctx.session.modelRegistry;
+		const providers = new Map<string, Model[]>();
+		for (const id of registry.getDiscoverableProviders()) providers.set(id, []);
+		for (const model of registry.getAll()) {
+			const models = providers.get(model.provider) ?? [];
+			models.push(model);
+			providers.set(model.provider, models);
+		}
+		let closed = false;
+		const done = () => {
+			if (closed) return;
+			closed = true;
+			editor.dispose();
+			menu.handle?.hide();
+			this.#releaseMenu("model-facts", menu);
+			this.#showModelHub({ initialProviderId: provider });
+		};
+		const editor = new ModelFactEditorComponent({
+			providers: [...providers].map(([id, models]) => ({ id, models })),
+			config: registry.getModelFactConfig(),
+			provider,
+			modelId,
+			rows: this.ctx.ui.terminal.rows,
+			preview: async (draft, targetProvider, targetId) => {
+				const preview = await registry.previewModelFacts(targetProvider, targetId, {
+					...draft,
+					overrides: {
+						...draft.overrides,
+						[`${targetProvider}/${targetId}`]: draft.overrides[`${targetProvider}/${targetId}`] ?? {},
+					},
+				});
+				if (!preview) throw new Error("Choose a configured provider to preview an unlisted model.");
+				return preview;
+			},
+			onSave: async config => {
+				cfgModelFactsSources.set(this.ctx.settings, [...config.sources]);
+				cfgModelFactsOverrides.set(this.ctx.settings, config.overrides);
+				cfgModelFactsEnabled.set(this.ctx.settings, config.enabled);
+				await this.ctx.settings.flush();
+				await this.ctx.session.refreshModelFacts();
+				this.ctx.showStatus("Model facts saved");
+			},
+			onClose: done,
+			requestRender: () => this.ctx.ui.requestRender(),
+		});
+		const menu = this.#claimMenu("model-facts", () => this.#showModelFacts(provider, modelId));
+		this.#mountMenu(menu, editor, () => this.#showFullscreenMenu(editor));
+	}
+
 	/** /login round-trip for a locked provider; reopen the hub on that provider only after a successful login. */
-	async #loginThenReopenModelHub(providerId: string): Promise<void> {
+	async #loginThenReopenModelHub(providerId: string, sessionOnly?: boolean): Promise<void> {
 		const succeeded = await this.#handleOAuthLogin(providerId);
 		if (succeeded) {
-			this.#showModelHub({ initialProviderId: providerId });
+			this.#showModelHub({ initialProviderId: providerId, sessionOnly });
 		}
 	}
 

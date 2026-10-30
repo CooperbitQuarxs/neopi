@@ -305,13 +305,16 @@ describe("DebugLogViewerModel", () => {
 		expect(copied.at(-1)).toBe("entry-1");
 		viewer.handleInput("/");
 		for (const key of "entry-17") viewer.handleInput(key);
-		viewer.handleInput("\x1b");
+		expect(viewer.navigationSnapshot()).toMatchObject({ search: { query: "", focused: true } });
+		viewer.handleInput("\r");
 		expect(closed).toBe(0);
 		const saved = viewer.navigationSnapshot();
 		viewer.handleInput("G");
 		viewer.restoreNavigation(saved);
 		viewer.handleInput("\x03");
 		expect(copied.at(-1)).toBe("entry-17");
+		viewer.handleInput("\x1b");
+		expect(closed).toBe(0);
 		viewer.handleInput("\x1b");
 		expect(closed).toBe(1);
 	});

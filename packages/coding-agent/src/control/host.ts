@@ -1,3 +1,4 @@
+import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * Per-session control host (issue #171).
  *
@@ -14,6 +15,7 @@ import { lookup } from "../config/registry";
 import { readSetting, unsetSetting, writeSetting } from "./settings-adapter";
 import { RpcPromptResults } from "../modes/rpc/rpc-prompt-results";
 import { RpcRoles } from "../modes/rpc/rpc-roles";
+import type { RpcLiveControl } from "../modes/rpc/rpc-live";
 import { RPC_CAPABILITIES } from "../modes/rpc/rpc-capabilities";
 import type { RpcCommand, RpcSubagentSubscriptionLevel } from "../modes/rpc/rpc-types";
 import type { AgentSession } from "../session/agent-session";
@@ -122,6 +124,8 @@ interface ConnectionBridges {
 	pending: RpcPendingExtensionRequests;
 }
 
+type ConnectionRpcHandler = (command: RpcCommand) => Promise<RpcResponse>;
+
 /** The control host for a session, once published. */
 export function controlHostFor(session: AgentSession): ControlHost | undefined {
 	return hosts.get(session);
@@ -136,13 +140,17 @@ export class ControlHost {
 	/** Narrow per-agent capabilities for monitor panes (#345). */
 	readonly monitor: ControlMonitorService;
 	presenter: ControlPresenter | undefined;
+	/** Attached by the session's mode. Control connections never own a separate call. */
+	liveBridge: RpcLiveControl | undefined;
 	publication: ControlPublication | undefined;
 	readonly #options: ControlHostOptions;
 	readonly #connections = new Set<ControlConnection>();
 	readonly #subscribed = new Set<ControlConnection>();
-	readonly #handlers = new Map<ControlConnection, (command: RpcCommand) => Promise<RpcResponse>>();
+	readonly #handlers = new Map<ControlConnection, ConnectionRpcHandler>();
+	readonly #handlerInitializations = new Map<ControlConnection, Promise<ConnectionRpcHandler>>();
 	readonly #forwarders = new Map<ControlConnection, RpcSessionEventForwarder>();
 	readonly #bridges = new Map<ControlConnection, ConnectionBridges>();
+	readonly #hostToolRemovals = new Set<Promise<void>>();
 	readonly #openHandles = new Set<string>();
 	readonly #settledHandles = new Set<string>();
 	readonly #followUpWarnedCallers = new Set<string>();
@@ -150,6 +158,7 @@ export class ControlHost {
 	#approvalUiOpen = false;
 	#planMode: RpcPlanModeController | undefined;
 	#settleWatcher: RpcSessionSettleWatcher | undefined;
+	#unsubscribeJournalIdentity: (() => void) | undefined;
 	/** Shared subagent roster, so a fresh connection sees subagents started before it opened. */
 	#subagents: RpcSubagentRegistry | undefined;
 	/** Per-connection `set_subagent_subscription` level; absent means `off`. */
@@ -201,6 +210,9 @@ export class ControlHost {
 	}
 	bumpGeneration(): void {
 		this.#revisions.generation++;
+		for (const bridges of this.#bridges.values()) {
+			this.#revokeHostTools(bridges.hostTools, "control session generation changed");
+		}
 		this.monitor.recheck();
 	}
 	bumpPaint(): void {
@@ -248,6 +260,7 @@ export class ControlHost {
 				this.#connections.delete(connection);
 				this.#subscribed.delete(connection);
 				this.#handlers.delete(connection);
+				this.#forwarders.get(connection)?.dispose();
 				this.#forwarders.delete(connection);
 				this.#closeBridges(connection);
 				this.#setSubagentLevel(connection, "off");
@@ -285,6 +298,9 @@ export class ControlHost {
 			await this.close("owner_closed");
 			return dispose();
 		};
+		this.#unsubscribeJournalIdentity = session.sessionManager.subscribeJournal(event => {
+			if (event.type === "journal_state") this.#noteSessionIdentity();
+		});
 		session.subscribe(event => {
 			this.#noteSessionIdentity();
 			this.promptResults.observe(event);
@@ -427,13 +443,17 @@ export class ControlHost {
 	async close(reason = "shutdown"): Promise<void> {
 		if (this.#closed) return;
 		this.#closed = true;
+		this.#unsubscribeJournalIdentity?.();
+		this.#unsubscribeJournalIdentity = undefined;
 		for (const connection of this.#connections) {
 			connection.write({ type: "host_shutdown", reason });
+			this.#closeBridges(connection);
 			connection.close(reason);
 		}
 		liveHosts.delete(this);
 		AgentRegistry.global().unregister(this.#mailboxId());
 		await this.publication?.close();
+		await Promise.all(this.#hostToolRemovals);
 		hosts.delete(this.#options.session);
 		this.#subagentLevels.clear();
 		this.monitor.dispose();
@@ -517,9 +537,27 @@ export class ControlHost {
 		return { success: false, error: text, code: "conflict" };
 	}
 
-	async #handlerFor(connection: ControlConnection): Promise<(command: RpcCommand) => Promise<RpcResponse>> {
+	async #handlerFor(
+		connection: ControlConnection,
+		subscription?: Record<string, unknown>,
+	): Promise<ConnectionRpcHandler> {
 		const existing = this.#handlers.get(connection);
 		if (existing) return existing;
+		const pending = this.#handlerInitializations.get(connection);
+		if (pending) return pending;
+		const initialization = this.#createHandlerFor(connection, subscription).finally(() =>
+			this.#handlerInitializations.delete(connection),
+		);
+		this.#handlerInitializations.set(connection, initialization);
+		return initialization;
+	}
+
+	async #createHandlerFor(
+		connection: ControlConnection,
+		subscription?: Record<string, unknown>,
+	): Promise<ConnectionRpcHandler> {
+		const { RpcPendingExtensionRequests, createRpcCommandHandler } = await import("../modes/rpc/rpc-mode");
+		if (!this.#connections.has(connection)) throw new Error("control connection closed");
 		const session = this.#options.session;
 		const output = (frame: object) => {
 			this.#notePromptResult(frame);
@@ -527,6 +565,8 @@ export class ControlHost {
 		};
 		const forwarder = new RpcSessionEventForwarder(output);
 		this.#forwarders.set(connection, forwarder);
+		if (subscription) this.#applySubscription(connection, subscription);
+		forwarder.observeJournal(session);
 		const hostTools = new RpcHostToolBridge(output);
 		const hostUris = new RpcHostUriBridge(output);
 		const approvals = new RpcToolApprovalBridge({
@@ -534,7 +574,6 @@ export class ControlHost {
 			runner: session.extensionRunner,
 			settings: session.settings,
 		});
-		const { RpcPendingExtensionRequests } = await import("../modes/rpc/rpc-mode");
 		const pending = new RpcPendingExtensionRequests();
 		this.#bridges.set(connection, { forwarder, hostTools, hostUris, approvals, pending });
 		if (!this.#planMode)
@@ -562,10 +601,13 @@ export class ControlHost {
 			}) as RpcResponse;
 		const bridges = this.#bridges.get(connection);
 		if (!bridges) throw new Error("control bridges were not installed");
-		const { createRpcCommandHandler } = await import("../modes/rpc/rpc-mode");
+		const host = this;
 		const handler = createRpcCommandHandler({
 			session,
 			output,
+			get liveBridge() {
+				return host.liveBridge;
+			},
 			success,
 			error,
 			promptResults: this.promptResults,
@@ -630,7 +672,7 @@ export class ControlHost {
 			if (!warned) {
 				if (caller) this.#followUpWarnedCallers.add(caller);
 				else this.#followUpWarnedConnections.add(connection);
-				warning = followUpWarning.trim();
+				warning = resolvePromptAsset("control-follow-up-warning.md", followUpWarning).text.trim();
 			}
 		}
 		connection.write({ ...response, requestId: response.id, ...(warning ? { warning } : {}) });
@@ -654,17 +696,7 @@ export class ControlHost {
 			} as RpcResponse;
 		}
 		const response = await (await this.#handlerFor(connection))(command);
-		if (
-			response.success &&
-			(command.type === "new_session" ||
-				command.type === "open_session" ||
-				command.type === "switch_session" ||
-				command.type === "branch")
-		) {
-			this.#seenSessionId = this.#options.session.sessionId;
-			this.bumpGeneration();
-			this.#refreshIdentity();
-		}
+		this.#noteSessionIdentity();
 		return response;
 	}
 
@@ -686,7 +718,7 @@ export class ControlHost {
 				return;
 			case "subscribe":
 				this.#subscribed.add(connection);
-				await this.#handlerFor(connection);
+				await this.#handlerFor(connection, frame);
 				this.#applySubscription(connection, frame);
 				this.#reply(connection, frame, { success: true, data: { cursor: 0 } });
 				return;
@@ -1096,10 +1128,20 @@ export class ControlHost {
 		const bridges = this.#bridges.get(connection);
 		if (!bridges) return;
 		this.#bridges.delete(connection);
+		bridges.forwarder.dispose();
 		bridges.hostTools.close("control connection closed");
+		this.#revokeHostTools(bridges.hostTools, "control connection closed");
 		bridges.hostUris.clear("control connection closed");
 		bridges.approvals.close("control connection closed");
 		bridges.pending.rejectAll("control connection closed");
+	}
+
+	#revokeHostTools(bridge: RpcHostToolBridge, message: string): void {
+		const removal = bridge
+			.revokeTools(message, tools => this.#options.session.refreshRpcHostTools(tools, bridge))
+			.catch(error => logger.warn("control: host tool removal failed", { error: String(error) }));
+		this.#hostToolRemovals.add(removal);
+		void removal.finally(() => this.#hostToolRemovals.delete(removal));
 	}
 
 	async #routeSideChannel(connection: ControlConnection, frame: Record<string, unknown>): Promise<boolean> {
