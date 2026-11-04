@@ -57,7 +57,6 @@ export const cfgContextFilesExtra = register({
 		editor: "json",
 		description:
 			'Extra instruction filenames loaded beside AGENTS.md. Use a JSON list of names, not paths, e.g. ["AGENTS.local.md"]; [] disables extras. Start a new session to load them.',
-		condition: "contextFilesExtraNotProject",
 	},
 	validate: raw => {
 		if (raw === undefined) return;
@@ -82,7 +81,8 @@ export const cfgContextPromotionEnabled = register({
 		tab: "context",
 		group: "General",
 		label: "Auto-Promote Context",
-		description: "Promote to a larger-context model on context overflow instead of compacting",
+		description:
+			"Promote to the model's contextPromotionTarget on context overflow instead of compacting. Retry fallback switches are controlled by Retry Model Fallback",
 	},
 });
 
@@ -362,7 +362,8 @@ export const cfgCompactionIdleTimeoutSeconds = register({
 		tab: "context",
 		group: "Compaction",
 		label: "Idle Compaction Delay",
-		description: "Seconds to wait while idle before compacting",
+		description:
+			"Seconds to wait while idle before compacting; with a 1-hour prompt cache, compaction instead runs just before the cache expires",
 		options: [
 			{ value: "60", label: "1 minute" },
 			{ value: "120", label: "2 minutes" },

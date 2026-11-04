@@ -5,11 +5,11 @@
  * - Table view: every registered agent except Main (Main IS the ambient
  *   chat), live from the global AgentHubRegistry — status, unread irc count,
  *   current/last task, last activity. Navigate with keys, wheel, hover, and
- *   click; `r` revives a parked agent, `x` aborts + releases one.
+ *   click; `r` explicitly revives a parked or killed agent, `x` aborts + releases one.
  * - Chat view: per-agent transcript (incremental session-file tail, absorbed
  *   from the old session observer overlay) plus an input line. Submitting
- *   revives a parked agent, then prompts/steers it; the message lands in the
- *   agent's persisted history via the normal prompt path.
+ *   revives a parked agent, then prompts/steers it; the message
+ *   lands in the agent's persisted history via the normal prompt path.
  *
  * Replaces the old SessionObserverOverlayComponent (ctrl+s observer).
  */
@@ -37,7 +37,14 @@ import {
 import { formatKeyHint, type KeyId } from "../app-keybindings";
 import type { MessageRenderer } from "../chat/extension-types";
 import type { AgentLifecycleLike, IrcBusLike } from "./agent-hub-types";
-import { type AgentRecordLike, type AgentHubRegistry, type AgentStatus, MAIN_AGENT_ID } from "./agent-hub-types";
+import {
+	type AgentRecordLike,
+	type AgentHubRegistry,
+	type AgentStatus,
+	MAIN_AGENT_ID,
+	canReviveAgent,
+	isAgentTranscriptReadOnly,
+} from "./agent-hub-types";
 import { USER_INTERRUPT_LABEL } from "../chat/messages";
 import { shortenPath, truncateToWidth } from "../render/render-utils";
 import { formatLocalDateTimeWithOffset } from "../chrome/local-date";
@@ -88,6 +95,7 @@ import { compileMenuRegex } from "../menu-search";
 import { bottomBorder, divider, dividerSplit, PanelRows, row, topBorder, topBorderSplit } from "../chrome/overlay-box";
 import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { node, span, stableKey, text } from "../native/describe";
 import { type DescribeContext, leafKey, type NativeChild, type NativeNode, type NativeUiEvent } from "../native/node";
 import { hintsRow, type NativeHint, overlayCard } from "../native/overlay";
@@ -197,9 +205,18 @@ const DATA_CHANGE_RENDER_COALESCE_MS = 100;
 /** Double-tap window for the table's left-left "close hub" gesture. */
 const LEFT_TAP_WINDOW_MS = 500;
 
-function compareRosterAgents(a: AgentRecordLike, b: AgentRecordLike): number {
+/** A row's rank, frozen when the hub first saw its generation: the batch it came in, and its status and recency then. */
+interface FrozenRank extends Pick<AgentRecordLike, "id" | "status" | "lastActivity"> {
+	/** 0 for the agents the hub opened with or the saved-agent scan found; each later batch of new generations is one lower. */
+	batch: number;
+}
+
+function compareFrozenRanks(a: FrozenRank, b: FrozenRank): number {
 	return (
-		STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || b.lastActivity - a.lastActivity || a.id.localeCompare(b.id)
+		a.batch - b.batch ||
+		STATUS_ORDER[a.status] - STATUS_ORDER[b.status] ||
+		b.lastActivity - a.lastActivity ||
+		a.id.localeCompare(b.id)
 	);
 }
 
@@ -322,14 +339,16 @@ export interface AgentHubDeps<TRecord extends AgentRecordLike = AgentRecordLike>
 	remote?: AgentHubRemote;
 }
 
-interface AgentHubNavigationSnapshot {
+interface AgentHubNavigationSnapshot<TRecord extends AgentRecordLike = AgentRecordLike> {
 	section: AgentHubSection;
 	selectedAgentId?: string;
 	selectedActivityId?: string;
 	viewMode: HubViewMode;
-	rowOrder?: [string, number][];
+	/** In-memory generations, not ids: a replacement record must receive a new rank. */
+	frozenRanks: [TRecord, FrozenRank][];
+	seenIds: string[];
 	agentFilter: MenuSearchState;
-	nextNewRowOrder: number;
+	spawnBatches: number;
 	activitySearch: MenuSearchState;
 	activityFilter: ActivityFilter;
 	activityScope: ActivityScope;
@@ -387,6 +406,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#rosterTotalRows = 0;
 	readonly #rosterViewport = new MenuViewport();
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	readonly #rosterMotion = {
 		move: (delta: number) => this.#moveRosterSelection(this.#selectedRow + delta),
 		moveToBoundary: (edge: "first" | "last") =>
@@ -399,10 +419,17 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	};
 	#statusCounts: Record<AgentStatus, number> = { running: 0, idle: 0, parked: 0, aborted: 0 };
 	#selectedRow = 0;
-	/** Initial status/recency rank stays fixed while open; new generations
-	 *  prepend without changing the relative order of existing rows. */
-	#rowOrder: Map<TRecord, number> | undefined;
-	#nextNewRowOrder = 0;
+	/**
+	 * Each row keeps the rank it got when the hub first saw its generation, so
+	 * heartbeats and status changes do not move rows. An agent the saved-agent
+	 * scan finds takes its place in the status/recency order; every other new
+	 * generation goes on top.
+	 */
+	#frozenRank = new Map<TRecord, FrozenRank>();
+	/** Every id ranked so far: a new object under a known id is a new generation, not a saved agent. */
+	#seenIds = new Set<string>();
+	#opened = false;
+	#spawnBatches = 0;
 	#hoveredRow: number | null = null;
 	/** Per-render screen-line to agent-row map, shared by click and hover routing. */
 	#hitRows: Array<number | undefined> = [];
@@ -416,7 +443,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#treeLastSiblingById = new Map<string, boolean>();
 	#treeMaxDepth = 0;
 	/** Fuzzy agent filter (`/`), applied to id and display name. */
-	readonly #agentFilter = new MenuSearchField();
+	readonly #agentFilter = new MenuSearchField("", false, "retain");
 	/** Current observer index and summary data, rebuilt on source changes rather than every paint. */
 	#observedById = new Map<string, ObservableSession>();
 	#aggregate: AggregateMetrics = {
@@ -470,7 +497,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			{ content: this.#frameTop, height: 1 },
 			{ content: this.#split, grow: 1 },
 			{ content: this.#frameDivider, height: 1 },
-			{ content: this.#frameFooter, height: 1 },
+			{ content: this.#frameFooter },
 			{ content: this.#frameBottom, height: 1 },
 		],
 	});
@@ -557,13 +584,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 						logger.warn("Failed to register persisted subagents", { error });
 					})
 					.finally(() => {
-						// Clear the loading flag first so this refresh captures the
-						// full status/recency ranking rather than a partial roster.
+						if (this.#disposed) return;
+						// Rank what the scan found before its end turns later arrivals into spawns.
+						this.#refreshRows();
 						this.#loadingPersistedSubagents = false;
-						if (!this.#disposed) {
-							this.#refreshRows();
-							this.#requestRender();
-						}
+						this.#requestRender();
 					});
 		this.#refreshRows();
 	}
@@ -602,13 +627,13 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				? this.#renderActivityTable(width, termHeight)
 				: this.#renderTable(width, termHeight)
 		).map(line => clampHubLine(line, width));
-		if (frame.length <= termHeight) return frame;
+		if (frame.length <= termHeight) return this.#help.render(frame, width);
 
 		// A tiny terminal can leave less room than the fixed chrome needs. Keep
 		// the title and footer visible instead of spilling into scrollback.
-		const footerLines = Math.min(3, frame.length);
+		const footerLines = Math.min(1 + (this.#frameFooter.render(width).length || 1), frame.length);
 		const bodyEnd = Math.max(0, termHeight - footerLines);
-		return [...frame.slice(0, bodyEnd), ...frame.slice(-footerLines)].slice(0, termHeight);
+		return this.#help.render([...frame.slice(0, bodyEnd), ...frame.slice(-footerLines)], width);
 	}
 
 	handleInput(keyData: string): void {
@@ -652,6 +677,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 					this.#rosterViewport.reveal();
 				}
 			}
+			this.#requestRender();
+			return;
+		}
+		if (this.#help.handleInput(keyData)) {
+			this.#keys.reset();
 			this.#requestRender();
 			return;
 		}
@@ -857,6 +887,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 
 	override describe(cx: DescribeContext): NativeNode {
 		if (this.#transcriptViewer) return this.#transcriptViewer.describe(cx);
+		if (this.#help.open) return this.#help.describe();
 		const usePicker = cx.supports("picker");
 		const nativeTree = cx.supports("tree");
 		const meter = cx.supports("meter");
@@ -1053,7 +1084,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 
 	#agentPickerProps(): PickerBody {
 		const selected = this.#rows[this.#selectedRow];
-		const readOnly = selected?.kind === "advisor" ? "Read-only advisor transcript" : undefined;
+		const readOnly = selected && isAgentTranscriptReadOnly(selected) ? "Read-only transcript" : undefined;
 		const actions: TspPickerAction[] = [
 			{
 				id: "open",
@@ -1066,7 +1097,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				id: "revive",
 				label: "Revive",
 				keys: ["r"],
-				disabled: readOnly ?? (selected?.status === "parked" ? undefined : "Only parked agents can be revived"),
+				disabled:
+					readOnly ??
+					(selected && canReviveAgent(selected)
+						? undefined
+						: "Only parked agents or killed agents with transcripts can be revived"),
 			},
 			{ id: "kill", label: "Kill", keys: ["x"], danger: true, disabled: readOnly ?? (selected ? undefined : true) },
 			{ id: "view", label: "By parent", keys: ["t"], on: this.#viewMode === "tree" },
@@ -1702,6 +1737,16 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		this.#requestRender();
 	}
 
+	/** A parked or killed agent with no live session and an unknown id, seen while the saved-agent scan runs, is one the scan found. */
+	#foundOnDisk(ref: TRecord): boolean {
+		return (
+			this.#loadingPersistedSubagents &&
+			ref.session === null &&
+			(ref.status === "parked" || ref.status === "aborted") &&
+			!this.#seenIds.has(ref.id)
+		);
+	}
+
 	#refreshRows(): void {
 		const selectedId = this.#rows[this.#selectedRow]?.id;
 		// Roots are not roster rows: the main session is the view itself, and any
@@ -1712,36 +1757,21 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			.filter(ref => ref.id !== MAIN_AGENT_ID && ref.kind !== "main" && ref.kind !== "operator");
 		this.#observedById = new Map();
 		for (const session of this.#observers.getSessions()) this.#observedById.set(session.id, session);
-		// Capture the status+recency ranking once so keyboard navigation does
-		// not jump on heartbeats. Defer until persisted-subagent discovery
-		// settles so a partial roster is not frozen in readdir order.
-		const rowOrder = this.#rowOrder;
-		let ordered: TRecord[];
-		if (!rowOrder) {
-			ordered = refs.sort(compareRosterAgents);
-			if (!this.#loadingPersistedSubagents && ordered.length > 0) {
-				const rowOrder = new Map<TRecord, number>();
-				for (const [index, ref] of ordered.entries()) rowOrder.set(ref, index);
-				this.#rowOrder = rowOrder;
-			}
-		} else {
-			for (const rankedRef of rowOrder.keys()) {
-				if (!refs.includes(rankedRef)) rowOrder.delete(rankedRef);
-			}
-			// Each batch of newly appearing generations uses the initial sort,
-			// then takes ranks above every agent already on screen.
-			let newcomers: TRecord[] | undefined;
-			for (const ref of refs) {
-				if (!rowOrder.has(ref)) (newcomers ??= []).push(ref);
-			}
-			if (newcomers) {
-				newcomers.sort(compareRosterAgents);
-				for (let i = newcomers.length - 1; i >= 0; i--) {
-					rowOrder.set(newcomers[i]!, --this.#nextNewRowOrder);
-				}
-			}
-			ordered = refs.sort((a, b) => rowOrder.get(a)! - rowOrder.get(b)!);
+		const live = new Set(refs);
+		for (const ref of this.#frozenRank.keys()) if (!live.has(ref)) this.#frozenRank.delete(ref);
+		let spawnBatch: number | undefined;
+		for (const ref of refs) {
+			if (this.#frozenRank.has(ref)) continue;
+			this.#frozenRank.set(ref, {
+				batch: this.#opened && !this.#foundOnDisk(ref) ? (spawnBatch ??= --this.#spawnBatches) : 0,
+				id: ref.id,
+				status: ref.status,
+				lastActivity: ref.lastActivity,
+			});
+			this.#seenIds.add(ref.id);
 		}
+		this.#opened = true;
+		const ordered = refs.sort((a, b) => compareFrozenRanks(this.#frozenRank.get(a)!, this.#frozenRank.get(b)!));
 		const query = this.#agentFilter.query;
 		const rosterRows =
 			query.length > 0
@@ -1749,7 +1779,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				: ordered;
 
 		if (this.#viewMode === "tree") {
-			const tree = projectAgentTree(rosterRows, rowOrder);
+			const tree = projectAgentTree(rosterRows, ref => this.#frozenRank.get(ref)!.batch < 0);
 			this.#rows = tree.rows;
 			this.#treeDepthById = tree.depthById;
 			this.#treeParentById = tree.parentById;
@@ -1892,7 +1922,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#renderActivityTable(width: number, termHeight: number): string[] {
 		this.#hitRows.length = 0;
 		const innerWidth = Math.max(1, width - 4);
-		const contentRows = Math.max(1, termHeight - 4);
+		const hints = menuHintLines(
+			`Tab:section  ${formatKeyHint("enter")}:transcript  Space:follow  f:filter  s:scope  /:search  Esc:close  ?:help`,
+			innerWidth,
+		);
+		const contentRows = Math.max(1, termHeight - 3 - hints.length);
 		const body: string[] = [this.#sectionTabs()];
 		const selectedAgent = this.#rows[this.#selectedRow]?.id;
 		const scope =
@@ -1938,15 +1972,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const lines = [topBorder(width, "Agent Hub")];
 		for (const line of body.slice(0, contentRows)) lines.push(row(line, width));
 		lines.push(divider(width));
-		lines.push(
-			row(
-				theme.fg(
-					"dim",
-					`Tab:section  j/k Pg C-d/u gg/G:move  C-e/y:view  ${formatKeyHint("enter")}:transcript  Space:follow  f:filter  s:scope  /:search  Esc:close`,
-				),
-				width,
-			),
-		);
+		lines.push(...hints.map(line => row(theme.fg("dim", line), width)));
 		lines.push(bottomBorder(width));
 		return lines;
 	}
@@ -1970,7 +1996,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	}
 	#renderTable(width: number, termHeight: number): string[] {
 		this.#hitRows.length = 0;
-		const contentRows = Math.max(1, termHeight - 4);
+		const innerWidth = Math.max(1, width - 4);
+		const hints = this.#footer(this.#narrowDetailsOpen, innerWidth);
+		const contentRows = Math.max(1, termHeight - 3 - hints.length);
 		this.#contentRowsLast = contentRows;
 		this.#paneHitRows = [];
 		const selected = this.#rows[this.#selectedRow];
@@ -1978,7 +2006,6 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		this.#split.setHeight(contentRows);
 		const geometry = this.#split.measure(width);
 		const isSplit = geometry.mode === "split";
-		const innerWidth = Math.max(1, width - 4);
 		let topLine: string;
 		if (isSplit) {
 			topLine = topBorderSplit(width, "Agent Hub", geometry.left?.width ?? 0);
@@ -1990,9 +2017,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const dividerLine = isSplit && geometry.left ? dividerSplit(width, geometry.left.width) : divider(width);
 		this.#frameTop.setLines([topLine]);
 		this.#frameDivider.setLines([dividerLine]);
-		this.#frameFooter.setLines([row(this.#footer(this.#narrowDetailsOpen, innerWidth), width)]);
+		this.#frameFooter.setLines(hints.map(line => row(line, width)));
 		this.#frameBottom.setLines([bottomBorder(width)]);
-		this.#frame.setHeight(contentRows + 4);
+		this.#frame.setHeight(contentRows + 3 + hints.length);
 		const lines = [...this.#frame.render(width)];
 		const bodyRow = this.#frame.childRect(1)?.row ?? 1;
 		for (let i = 0; i < this.#paneHitRows.length; i++) {
@@ -2002,24 +2029,18 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		return lines;
 	}
 
-	#footer(detailsFocused: boolean, availableWidth: number): string {
+	#footer(detailsFocused: boolean, availableWidth: number): string[] {
 		if (this.#agentFilter.focused)
-			return this.#agentFilter.render(availableWidth, { muted: value => theme.fg("muted", value) });
+			return [this.#agentFilter.render(availableWidth, { muted: value => theme.fg("muted", value) })];
 		const filter = this.#agentFilter.value
 			? `${this.#agentFilter.render(Math.min(34, availableWidth), { muted: value => theme.fg("muted", value) })}${theme.sep.dot}`
 			: "";
 		const close = this.#lastLeftTap > 0 && Date.now() - this.#lastLeftTap < LEFT_TAP_WINDOW_MS ? "←:close  " : "";
-		const motion = availableWidth < 96 ? "j/k Pg gg/G:move" : "j/k Pg C-d/u gg/G:move  C-e/y:view";
-		if (detailsFocused)
-			return theme.fg(
-				"dim",
-				`${filter}h/←:roster  ${motion.replace(":move", ":scroll")}  Tab:section  Enter:open  Esc:roster`,
-			);
 		const nextView = this.#viewMode === "roster" ? "tree" : "flat";
-		return theme.fg(
-			"dim",
-			`${filter}${close}${motion}  h/l:panes  /:filter  Enter:open  t:${nextView}  Tab:section  r/x:manage  Esc:close`,
-		);
+		const hint = detailsFocused
+			? `${filter}←:roster  Tab:section  Enter:open  Esc:roster  ?:help`
+			: `${filter}${close}/:filter  Enter:open  t:${nextView}  Tab:section  r/x:manage  Esc:close  ?:help`;
+		return menuHintLines(hint, availableWidth).map(line => theme.fg("dim", line));
 	}
 
 	#renderRosterPanel(width: number, rows: number, observedById: ReadonlyMap<string, ObservableSession>): RosterRender {
@@ -2486,16 +2507,16 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#activateAgent(ref: TRecord): void {
 		this.#notice = undefined;
 		const focusAgent = this.#focusAgent;
-		// Aborted agents and advisor refs are read-only transcripts with no
-		// revivable session; open the in-hub viewer instead of failing ensureLive.
-		if (ref.kind === "advisor" || ref.kind === "mailbox" || ref.status === "aborted" || this.#remote || !focusAgent) {
+		// Opening a killed transcript is observational; only the explicit Revive
+		// action starts a fresh generation. Session-less participants stay read-only.
+		if (isAgentTranscriptReadOnly(ref) || ref.status === "aborted" || this.#remote || !focusAgent) {
 			this.openChat(ref.id);
 			return;
 		}
 		this.#pendingOperations++;
 		void (async () => {
 			try {
-				await focusAgent(ref.id); // ensureLive inside revives parked agents; no parking, no session files
+				await focusAgent(ref.id); // ensureLive inside revives parked agents
 				this.#onDone();
 			} catch (error) {
 				this.#notice = error instanceof Error ? error.message : String(error);
@@ -2509,13 +2530,13 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#reviveSelected(): void {
 		const ref = this.#rows[this.#selectedRow];
 		if (!ref) return;
-		if (ref.kind === "advisor" || ref.kind === "mailbox") {
-			this.#notice = `"${ref.id}" is a read-only advisor transcript — nothing to revive.`;
+		if (isAgentTranscriptReadOnly(ref)) {
+			this.#notice = `"${ref.id}" is a read-only transcript — nothing to revive.`;
 			this.#requestRender();
 			return;
 		}
-		if (ref.status !== "parked") {
-			this.#notice = `Agent "${ref.id}" is ${ref.status} — only parked agents can be revived.`;
+		if (!canReviveAgent(ref)) {
+			this.#notice = `Agent "${ref.id}" is ${ref.status} — revival needs a parked agent or a killed agent with a transcript.`;
 			this.#requestRender();
 			return;
 		}
@@ -2542,8 +2563,8 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#killSelected(): void {
 		const ref = this.#rows[this.#selectedRow];
 		if (!ref) return;
-		if (ref.kind === "advisor" || ref.kind === "mailbox") {
-			this.#notice = `"${ref.id}" is a read-only advisor transcript — cannot be killed.`;
+		if (isAgentTranscriptReadOnly(ref)) {
+			this.#notice = `"${ref.id}" is a read-only transcript — cannot be killed.`;
 			this.#requestRender();
 			return;
 		}
@@ -2583,16 +2604,15 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		this.#disarmCloseTap();
 	}
 
-	navigationSnapshot(): AgentHubNavigationSnapshot {
+	navigationSnapshot(): AgentHubNavigationSnapshot<TRecord> {
 		return {
 			section: this.#section,
 			selectedAgentId: this.#rows[this.#selectedRow]?.id,
 			selectedActivityId: this.#activityRows[this.#selectedActivityRow]?.id,
 			viewMode: this.#viewMode,
-			rowOrder: this.#rowOrder
-				? [...this.#rowOrder].map(([ref, rank]): [string, number] => [ref.id, rank])
-				: undefined,
-			nextNewRowOrder: this.#nextNewRowOrder,
+			frozenRanks: [...this.#frozenRank],
+			seenIds: [...this.#seenIds],
+			spawnBatches: this.#spawnBatches,
 			agentFilter: this.#agentFilter.navigationSnapshot(),
 			activitySearch: this.#activitySearch.navigationSnapshot(),
 			activityFilter: this.#activityFilter,
@@ -2611,7 +2631,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 
 	restoreNavigation(snapshot: unknown): void {
 		if (typeof snapshot !== "object" || snapshot === null) return;
-		const state = snapshot as AgentHubNavigationSnapshot;
+		const state = snapshot as AgentHubNavigationSnapshot<TRecord>;
 		if (state.section !== "agents" && state.section !== "activity") return;
 		this.#keys.reset();
 		this.#disarmCloseTap();
@@ -2625,14 +2645,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			this.#activityFilter = state.activityFilter;
 			this.#activityScope = state.activityScope;
 			this.#activityFollow = state.activityFollow;
-			if (state.rowOrder) {
-				this.#rowOrder = new Map();
-				for (const [id, rank] of state.rowOrder) {
-					const ref = this.#registry.get(id);
-					if (ref) this.#rowOrder.set(ref, rank);
-				}
-				this.#nextNewRowOrder = state.nextNewRowOrder;
-			}
+			this.#frozenRank = new Map(state.frozenRanks);
+			this.#seenIds = new Set(state.seenIds);
+			this.#spawnBatches = state.spawnBatches;
 			this.#refreshRows();
 			const selected = this.#rows.findIndex(ref => ref.id === state.selectedAgentId);
 			if (selected >= 0) this.#selectRow(selected);

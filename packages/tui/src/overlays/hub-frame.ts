@@ -60,6 +60,37 @@ export function moveStripSelection(strip: StripState<StripChip<unknown>>, data: 
 	return false;
 }
 
+/** Shared horizontal selector used by agent property strips and advisor scopes. */
+export function renderHubChips(
+	width: number,
+	prefix: string,
+	strip: StripState<StripChip<unknown>>,
+	ranges: ChipRange[],
+	start = 0,
+): string {
+	ranges.length = 0;
+	let line = prefix;
+	let col = 2 + visibleWidth(prefix);
+	if (start > 0) {
+		line += theme.fg("dim", "… ");
+		col += 2;
+	}
+	for (let i = start; i < strip.chips.length; i++) {
+		const chip = strip.chips[i];
+		if (!chip) continue;
+		const selected = i === strip.index;
+		const body = ` ${chip.styled} `;
+		const rendered = selected
+			? theme.bg("selectedBg", `${theme.fg("accent", "[")}${body}${theme.fg("accent", "]")}`)
+			: body;
+		const w = visibleWidth(body) + (selected ? 2 : 0);
+		ranges.push({ start: col, end: col + w, index: i });
+		line += `${rendered} `;
+		col += w + 1;
+	}
+	return truncateToWidth(line, width);
+}
+
 /**
  * Native sidebar: a `list` whose `item`s are keyed by entry id (the `item` of
  * `select`/`activate` events), separators as `rule`s. Scrolling and clipping
@@ -96,7 +127,8 @@ export function describeHubSidebar<TEntry extends SidebarEntry<string>>(
 			),
 		);
 	}
-	return node("list", { selected: selectedId }, items, key);
+	// The sidebar keeps its width: a body line wider than the pane must not squeeze it.
+	return node("list", { selected: selectedId, shrink: 0 }, items, key);
 }
 
 /**
@@ -184,7 +216,7 @@ export class HubFrame {
 				{ content: this.#top, height: 1 },
 				{ content: this.#split, grow: 1 },
 				{ content: this.#divider, height: 1 },
-				{ content: this.#footer, height: 1 },
+				{ content: this.#footer },
 				{ content: this.#bottom, height: 1 },
 			],
 		});
@@ -283,28 +315,7 @@ export class HubFrame {
 
 	/** Render footer chips from a hub-selected horizontal window and record their hit ranges. */
 	renderChips(width: number, prefix: string, strip: StripState<StripChip<unknown>>, start = 0): string {
-		let line = prefix;
-		let col = 2 + visibleWidth(prefix);
-		if (start > 0) {
-			line += theme.fg("dim", "… ");
-			col += 2;
-		}
-		for (let i = start; i < strip.chips.length; i++) {
-			const chip = strip.chips[i];
-			if (!chip) continue;
-			const selected = i === strip.index;
-			const body = ` ${chip.styled} `;
-			const rendered = selected
-				? theme.bg("selectedBg", `${theme.fg("accent", "[")}${body}${theme.fg("accent", "]")}`)
-				: body;
-			const w = visibleWidth(body) + (selected ? 2 : 0);
-			this.chipRanges.push({ start: col, end: col + w, index: i });
-			line += rendered;
-			col += w;
-			line += " ";
-			col += 1;
-		}
-		return truncateToWidth(line, width);
+		return renderHubChips(width, prefix, strip, this.chipRanges, start);
 	}
 
 	/** Translate a mouse position into footer, sidebar, and body coordinates. */
@@ -336,8 +347,14 @@ export class HubFrame {
 	}
 
 	/** Paint a complete fullscreen hub with its title, width bounds, and contextual footer. */
-	render(width: number, height: number, entries: readonly SidebarEntry<string>[], footer: string): readonly string[] {
-		const contentRows = Math.max(10, height - 4);
+	render(
+		width: number,
+		height: number,
+		entries: readonly SidebarEntry<string>[],
+		footer: string | readonly string[],
+	): readonly string[] {
+		const footerLines = typeof footer === "string" ? [footer] : footer;
+		const contentRows = Math.max(1, height - 3 - footerLines.length);
 		const sidebarWidth = this.sidebarWidth(entries);
 		this.#split.setLeftSize({
 			fixed: sidebarWidth,
@@ -352,9 +369,9 @@ export class HubFrame {
 		const leftWidth = this.#split.measure(width).left?.width ?? 0;
 		this.#top.setLines([topBorderSplit(width, this.#title, leftWidth)]);
 		this.#divider.setLines([dividerSplit(width, leftWidth)]);
-		this.#footer.setLines([row(footer, width)]);
+		this.#footer.setLines(footerLines.map(line => row(line, width)));
 		this.#bottom.setLines([bottomBorder(width)]);
-		this.#stack.setHeight(contentRows + 4);
+		this.#stack.setHeight(contentRows + 3 + footerLines.length);
 		return this.#stack.render(width);
 	}
 }

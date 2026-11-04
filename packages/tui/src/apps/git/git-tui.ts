@@ -7,7 +7,8 @@
  * scrollbar, right sidebar (file management + commit form while dirty, HEAD
  * commit details with author avatar when clean). Submitting an empty commit
  * form generates an llm-git-compatible message; submitting populated fields
- * commits them. A footer shows key hints.
+ * commits them. A footer shows key hints; the staging and discarding ones are
+ * omitted while the tree is clean, where they cannot fire.
  *
  * `tab` moves focus between the diff and the sidebar; both panes take
  * arrows/PgUp/PgDn, vim motions (`j`/`k`/`h`/`l`/`g`/`G`), and mouse
@@ -23,7 +24,8 @@
  * Alt+←/→ fold directories or pan long diff lines.
  * `enter` opens the selected file in the diff pane, `space` stages or
  * unstages the selected row, and `delete` discards it — on a directory,
- * every file underneath it.
+ * every file underneath it. All of the staging and discarding keys are inert
+ * on a clean tree, which shows the HEAD commit instead of a change list.
  */
 
 import type { TspSpan } from "@oh-my-pi/pi-wire";
@@ -31,6 +33,7 @@ import { formatKeyHint, formatKeyHints, formatTooltipKey } from "../../app-keybi
 import { SplitPane } from "../../components/layout/split-pane";
 import { Stack } from "../../components/layout/stack";
 import { MenuKeyReader, menuScrollBy } from "../../components/menu-navigation";
+import { menuHintLines } from "../../components/menu-hints";
 import { matchesKey } from "../../keys";
 import { ProcessTerminal } from "../../terminal";
 import { routeSgrMouseInput } from "../../mouse";
@@ -90,6 +93,22 @@ const REFRESH_MS = 2_000;
 const STATUS_TTL_MS = 6_000;
 
 type Focus = "diff" | "sidebar";
+
+/**
+ * Footer key hints. A clean tree renders the HEAD commit view, where stage
+ * and discard cannot fire: `#patchTargetFor` returns null and
+ * `#discardCurrentFile` returns early for `area: "commit"` rows, and the
+ * sidebar only builds stage/discard actions for the unstaged/staged
+ * sections. `commit` needs the commit form (absent on a clean tree) and
+ * `select` feeds the line-level stage/discard actions (no-ops on commit
+ * rows), so the commit view drops those too and says what it is showing.
+ */
+export function gitFooterHints(clean: boolean, focus: Focus): string {
+	const edit = clean
+		? ""
+		: ` · ${formatKeyHint("space")} stage · s/u stage/unstage${focus === "diff" ? " · Shift-↑/↓ select · x discard" : ""} · ${formatKeyHint("delete")} discard file · c commit`;
+	return `v view · 1–4 views · w wrap · b whitespace · ${focus === "sidebar" ? "t tree · " : ""}[/] files · Alt-↑/↓ hunks · Tab panes · PgUp/PgDn page · Alt-←/→ ${focus === "diff" ? "pan" : "fold"}${edit} · r refresh · / search · ? keys · q quit`;
+}
 
 /** Tone of a status message: its colour in the header and its span token natively. */
 type StatusTone = "success" | "warning" | "error" | "accent" | "dim";
@@ -858,16 +877,19 @@ export class GitTuiComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = Math.max(10, this.#ui.terminal.rows);
+		const footer = menuHintLines(gitFooterHints(this.#model.clean, this.#focus), width).map(line =>
+			theme.fg("dim", line),
+		);
 		const sidebarWidth = Math.max(30, Math.min(48, Math.floor(width * 0.3)));
 		this.#centerWidth = width - sidebarWidth - 1;
-		const contentHeight = height - 2;
+		const contentHeight = Math.max(0, height - 2 - footer.length);
 		this.#contentHeight = contentHeight;
 
 		this.#split.setHeight(contentHeight);
 		this.#split.setLeftSize({ fixed: this.#centerWidth });
 		this.#split.setRightMinWidth(sidebarWidth);
-		this.#stack.setHeight(height);
-		return this.#stack.render(width);
+		this.#stack.setHeight(Math.max(0, height - footer.length));
+		return [...this.#stack.render(width), ...footer];
 	}
 
 	#header(width: number): string {
@@ -897,16 +919,8 @@ export class GitTuiComponent implements Component {
 			right.button(pill(" Unstage File ", theme.getColorHex("warning")), () => this.#stageCurrentFile());
 		right.add(" ").button(softPill(` ${glyphs.close} `), () => this.#done.resolve());
 
-		// The empty middle carries the key hints (or a fresh status message).
-		const status = this.#visibleStatus() ? theme.fg(this.#statusTone, this.#status) : "";
-		const middle =
-			status ||
-			theme.fg(
-				"dim",
-				this.#focus === "diff"
-					? `j/k rows · h/l panes · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Alt-←/→ pan · Space stage · / search · ? keys · q quit`
-					: `j/k rows · h/l panes · Ctrl-u/d half · PgUp/PgDn page · gg/G bounds · Ctrl-e/y scroll · Alt-←/→ fold · Space stage · / search · ? keys · q quit`,
-			);
+		// Keep transient status in the header; wrapped key hints live below the panes.
+		const middle = this.#visibleStatus() ? theme.fg(this.#statusTone, this.#status) : "";
 		const free = width - row.width - right.width - 1;
 		const middleText = free > visibleWidth(middle) + 4 ? middle : truncateToWidth(middle, Math.max(0, free - 4));
 		const leftPad = Math.max(1, Math.floor((free - visibleWidth(middleText)) / 2));

@@ -1,3 +1,4 @@
+import { type EntryProvenance, provenanceSuffix } from "./theme/provenance";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -14,6 +15,11 @@ const PATH_DELIMITERS = new Set([" ", "\t", '"', "'", "="]);
  */
 const AT_PARTIAL_DELAY_MS = 150;
 
+/**
+ * Without a deadline the native walk follows symlinks at unbounded depth and never returns.
+ */
+const AT_FUZZY_TIMEOUT_MS = 1_500;
+
 function buildAutocompleteFuzzyDiscoveryProfile(
 	query: string,
 	basePath: string,
@@ -25,6 +31,7 @@ function buildAutocompleteFuzzyDiscoveryProfile(
 	hidden: boolean;
 	gitignore: boolean;
 	cache: boolean;
+	timeoutMs: number;
 	signal?: AbortSignal;
 } {
 	return {
@@ -34,6 +41,7 @@ function buildAutocompleteFuzzyDiscoveryProfile(
 		hidden: true,
 		gitignore: true,
 		cache: true,
+		timeoutMs: AT_FUZZY_TIMEOUT_MS,
 		...(signal ? { signal } : {}),
 	};
 }
@@ -104,6 +112,18 @@ function extractQuotedPrefix(text: string): string | null {
 	}
 
 	return text.slice(quoteStart);
+}
+
+/** Extract the live whitespace-delimited or double-quoted `@` file token ending at the cursor. */
+export function extractAtFilePrefix(text: string): string | null {
+	const quotedPrefix = extractQuotedPrefix(text);
+	if (quotedPrefix?.startsWith('@"')) {
+		return quotedPrefix;
+	}
+
+	const lastDelimiterIndex = findLastDelimiter(text);
+	const tokenStart = lastDelimiterIndex === -1 ? 0 : lastDelimiterIndex + 1;
+	return text[tokenStart] === "@" ? text.slice(tokenStart) : null;
 }
 
 function parsePathPrefix(prefix: string): { rawPrefix: string; isAtPrefix: boolean; isQuotedPrefix: boolean } {
@@ -201,6 +221,7 @@ export interface AutocompleteItem {
 	icon?: string;
 	/** Named icon for TSP terminals (`folder`, `file`, a slash-command icon name). */
 	iconName?: string;
+	provenance?: EntryProvenance;
 	/** Native detail when it differs from {@link description} (static text, parent dir). */
 	nativeDetail?: string;
 	/** Live state drawn right-aligned natively ("demo/demo", "off"). */
@@ -213,6 +234,12 @@ export interface AutocompleteItem {
 	 * it only apply, and the popup reopens for the next argument.
 	 */
 	submitsCommand?: boolean;
+	/**
+	 * Slash command matched only through its description, not its name or an alias:
+	 * a browse hit, so Enter submits the typed text instead of running it unless the
+	 * user moved the selection onto it.
+	 */
+	descriptionMatch?: boolean;
 }
 
 type Awaitable<T> = T | Promise<T>;
@@ -225,6 +252,7 @@ export interface SlashCommand {
 	icon?: string;
 	/** Named icon for TSP terminals, drawn instead of the {@link icon} glyph. */
 	iconName?: string;
+	provenance?: EntryProvenance;
 	argumentHint?: string;
 	/** Whether the command consumes argument text after the command name. False means the full input stays normal prompt text once args are present. */
 	allowArgs?: boolean;
@@ -417,13 +445,14 @@ function buildSlashCommandCompletions(
 					const fullDesc = resolveFullDesc();
 					best = {
 						value: name,
-						label: "name" in cmd ? cmd.name : cmd.label,
+						label: ("name" in cmd ? cmd.name : cmd.label) + provenanceSuffix(cmd.provenance),
 						score: primaryScore,
 						usage,
 						...(cmd.icon && { icon: cmd.icon }),
 						...(cmd.iconName && { iconName: cmd.iconName }),
 						...(fullDesc && { description: fullDesc }),
 						...nativeTextMemo,
+						...(nameScore === 0 && { descriptionMatch: true }),
 					};
 				}
 
@@ -431,11 +460,15 @@ function buildSlashCommandCompletions(
 					for (const alias of getCommandAliases(cmd)) {
 						if (alias === name) continue;
 						const aliasScore = scoreCommandTextMatch(lowerPrefix, alias.toLowerCase());
-						if (aliasScore === 0 || (best && aliasScore <= best.score)) continue;
+						if (aliasScore === 0) continue;
+						// An alias can match even when the description outranks it; Enter
+						// must still accept the command rather than submit the raw query.
+						if (best?.descriptionMatch) delete best.descriptionMatch;
+						if (best && aliasScore <= best.score) continue;
 						const fullDesc = resolveFullDesc();
 						best = {
 							value: alias,
-							label: alias,
+							label: alias + provenanceSuffix(cmd.provenance),
 							score: aliasScore,
 							usage,
 							...(cmd.icon && { icon: cmd.icon }),
@@ -725,7 +758,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		}
 
 		// Check for @ file reference (fuzzy search) - must be after a delimiter or at start
-		const atPrefix = this.#extractAtPrefix(textBeforeCursor);
+		const atPrefix = extractAtFilePrefix(textBeforeCursor);
 		if (atPrefix) {
 			const { rawPrefix, isQuotedPrefix } = parsePathPrefix(atPrefix);
 			// Recursive fuzzy walks rooted outside the project (e.g. `@../`,
@@ -868,7 +901,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 
 		// Check if we're completing a file attachment (prefix starts with "@")
 		if (prefix.startsWith("@")) {
-			const liveAtPrefix = this.#extractAtPrefix(textBeforeCursor);
+			const liveAtPrefix = extractAtFilePrefix(textBeforeCursor);
 			if (liveAtPrefix) {
 				beforePrefix = currentLine.slice(0, cursorCol - liveAtPrefix.length);
 			}
@@ -900,23 +933,6 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			cursorLine,
 			cursorCol: beforePrefix.length + item.value.length,
 		};
-	}
-
-	// Extract @ prefix for fuzzy file suggestions
-	#extractAtPrefix(text: string): string | null {
-		const quotedPrefix = extractQuotedPrefix(text);
-		if (quotedPrefix?.startsWith('@"')) {
-			return quotedPrefix;
-		}
-
-		const lastDelimiterIndex = findLastDelimiter(text);
-		const tokenStart = lastDelimiterIndex === -1 ? 0 : lastDelimiterIndex + 1;
-
-		if (text[tokenStart] === "@") {
-			return text.slice(tokenStart);
-		}
-
-		return null;
 	}
 
 	// Extract a path-like prefix from the text before cursor

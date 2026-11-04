@@ -170,6 +170,7 @@ invalid and declined dispositions.
 | Review receipts and bot identity | `docs/agents/pr-review-bots.md` |
 | Fork placement and upstream integration | `docs/agents/fork-maintenance.md`, `docs/agents/upstream-sync.md` |
 | Architectural decisions | `docs/agents/adr/` |
+| Agent, role and lifecycle design | `docs/agents/philosophy.md` |
 
 Portable repository skills live in `.agents/skills/`; NeoPi discovers that path
 through its agents provider. Harness-specific commands and tool probes remain in

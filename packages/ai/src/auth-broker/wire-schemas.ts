@@ -33,6 +33,7 @@ import type {
 	CredentialBlockSnapshot,
 	CredentialBlocksDeleteResponse,
 	CredentialDisableResponse,
+	CredentialRefreshRequest,
 	CredentialRefreshResponse,
 	CredentialUploadRequest,
 	CredentialUploadResponse,
@@ -93,6 +94,13 @@ export const apiKeyCredentialSchema: FluentType<ApiKeyCredential> = type({
 	type: "'api_key'",
 	key: type("string").atLeastLength(1),
 	"source?": "'login'",
+	"requestOrigin?": "string",
+	"tlsTrust?": {
+		"+": "reject",
+		origin: "string",
+		caPem: "string",
+		caFingerprint256: "string",
+	},
 });
 
 /** Discriminated union accepted on POST /v1/credential (writes). */
@@ -352,6 +360,11 @@ export const clientUsageSummaryResponseSchema: FluentType<ClientUsageSummaryResp
 
 // ─── Refresh ─────────────────────────────────────────────────────────────────
 
+export const credentialRefreshRequestSchema: FluentType<CredentialRefreshRequest> = type({
+	"+": "reject",
+	"rejectedAccess?": "string",
+});
+
 export const credentialRefreshResponseSchema: FluentType<CredentialRefreshResponse> = type({
 	"+": "reject",
 	entry: credentialSnapshotEntrySchema,
@@ -421,6 +434,7 @@ export const credentialUploadRequestSchema: FluentType<CredentialUploadRequest> 
 	"+": "reject",
 	provider: type("string").atLeastLength(1),
 	credential: writableAuthCredentialSchema,
+	"replaceApiKeys?": "true",
 });
 
 export const credentialUploadResponseSchema: FluentType<CredentialUploadResponse> = type({

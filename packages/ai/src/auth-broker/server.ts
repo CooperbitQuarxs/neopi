@@ -48,11 +48,11 @@ import {
 	credentialBlockDeleteRequestSchema,
 	credentialBlockRequestSchema,
 	credentialDisableRequestSchema,
+	credentialRefreshRequestSchema,
 	credentialUploadRequestSchema,
 } from "./wire-schemas";
 
 const DEFAULT_EXTERNAL_CHANGE_POLL_MS = 250;
-const AUTH_RECOVERY_REFRESH_OPTIONS = { reuseRecentMint: true } as const;
 const TEXT_ENCODER = new TextEncoder();
 const SSE_KEEPALIVE = TEXT_ENCODER.encode(": keepalive\n\n");
 
@@ -860,7 +860,10 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 						// last fetch instead of hitting provider endpoints repeatedly.
 						// `req.signal` propagates HTTP-client disconnects all the way to the
 						// per-caller cancel without touching the shared upstream fetch.
-						const reports = (await opts.storage.usage.reports?.({ signal: req.signal })) ?? [];
+						// Credential selection only needs its own provider. Do not hold
+						// that request behind unrelated providers' cold usage probes.
+						const provider = url.searchParams.get("provider") ?? undefined;
+						const reports = (await opts.storage.usage.reports?.({ provider, signal: req.signal })) ?? [];
 						// Drop the `raw` field — it's the provider-specific upstream body,
 						// large and unstable. Everything UI-relevant lives in `limits` and
 						// `metadata`.
@@ -932,13 +935,16 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 				const refreshMatch = req.method === "POST" ? pathname.match(REFRESH_ROUTE) : null;
 				if (refreshMatch) {
 					const id = Number.parseInt(refreshMatch[1], 10);
-					const authRecovery = url.searchParams.get("reason") === "auth-recovery";
+					const reason = url.searchParams.get("reason");
+					const refreshReason = reason === "auth-recovery" || reason === "expiry" ? reason : undefined;
+					const parsed = await parseBody(req, credentialRefreshRequestSchema, { allowEmpty: true });
+					if (!parsed.ok) return parsed.response;
 					try {
-						const entry = await opts.storage.oauth.refresh(
-							id,
-							req.signal,
-							authRecovery ? AUTH_RECOVERY_REFRESH_OPTIONS : undefined,
-						);
+						const entry = await opts.storage.oauth.refresh(id, req.signal, {
+							reuseRecentMint: refreshReason !== undefined,
+							reason: refreshReason,
+							rejectedAccess: parsed.data.rejectedAccess,
+						});
 						const body: CredentialRefreshResponse = { entry };
 						logger.info("auth-broker credential refreshed", {
 							id,
@@ -1046,9 +1052,13 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 				if (req.method === "POST" && pathname === "/v1/credential") {
 					const parsed = await parseBody(req, credentialUploadRequestSchema);
 					if (!parsed.ok) return parsed.response;
-					const { provider, credential } = parsed.data;
+					const { provider, credential, replaceApiKeys } = parsed.data;
 					try {
-						const entries = await opts.storage.credentials.upsert(provider, credential);
+						const entries = await opts.storage.credentials.upsert(
+							provider,
+							credential,
+							replaceApiKeys ? { replaceApiKeys } : undefined,
+						);
 						const identity =
 							credential.type === "oauth"
 								? (credential.email ?? credential.accountId ?? credential.projectId ?? "(no identity)")

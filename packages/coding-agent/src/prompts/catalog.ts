@@ -99,7 +99,6 @@ import asset89 from "../discovery/builtin-rules/rs-box-leak.md" with { type: "te
 import asset90 from "../discovery/builtin-rules/rs-future-prelude.md" with { type: "text" };
 import asset91 from "../discovery/builtin-rules/rs-lazylock.md" with { type: "text" };
 import asset92 from "../discovery/builtin-rules/rs-match-ergonomics.md" with { type: "text" };
-import asset93 from "../discovery/builtin-rules/rs-parking-lot.md" with { type: "text" };
 import asset94 from "../discovery/builtin-rules/rs-result-type.md" with { type: "text" };
 import asset95 from "../discovery/builtin-rules/ts-bare-catch.md" with { type: "text" };
 import asset96 from "../discovery/builtin-rules/ts-import-type.md" with { type: "text" };
@@ -216,8 +215,8 @@ import asset199 from "./skills/user-invocation.md" with { type: "text" };
 import asset200 from "./steering/parent-irc.md" with { type: "text" };
 import asset201 from "./steering/user-interjection.md" with { type: "text" };
 import asset202 from "./system/active-repo-context.md" with { type: "text" };
-import asset203 from "./system/agent-creation-architect.md" with { type: "text" };
-import asset204 from "./system/agent-creation-user.md" with { type: "text" };
+import asset203 from "./system/agent-fields-system.md" with { type: "text" };
+import asset204 from "./system/agent-fields-user.md" with { type: "text" };
 import asset205 from "./system/agent-telemetry.md" with { type: "text" };
 import asset206 from "./system/anthropic-usage-wrap-up.md" with { type: "text" };
 import asset207 from "./system/auto-continue.md" with { type: "text" };
@@ -343,7 +342,6 @@ import asset326 from "./tools/context-notes.md" with { type: "text" };
 import asset327 from "./tools/ctl.md" with { type: "text" };
 import asset328 from "./tools/debug.md" with { type: "text" };
 import asset329 from "./tools/eval-agents.md" with { type: "text" };
-import asset330 from "./tools/eval-code-mode.md" with { type: "text" };
 import asset331 from "./tools/eval-helpers.md" with { type: "text" };
 import asset332 from "./tools/eval-judge.md" with { type: "text" };
 import asset333 from "./tools/eval.md" with { type: "text" };
@@ -2276,19 +2274,6 @@ export const promptAssets: readonly PromptAsset[] = [
 		fixture: {},
 		consumerHints: [
 			"packages/coding-agent/src/discovery/builtin-rules/rs-match-ergonomics.md",
-			"packages/coding-agent/src/discovery/builtin-rules/index.ts",
-		],
-	},
-	{
-		id: "discovery/builtin-rules/rs-parking-lot.md",
-		relPath: "discovery/builtin-rules/rs-parking-lot.md",
-		bundled: asset93,
-		scope: "feature:discovery/builtin-rules/rs-parking-lot",
-		group: "feature",
-		keys: [],
-		fixture: {},
-		consumerHints: [
-			"packages/coding-agent/src/discovery/builtin-rules/rs-parking-lot.md",
 			"packages/coding-agent/src/discovery/builtin-rules/index.ts",
 		],
 	},
@@ -5051,29 +5036,47 @@ export const promptAssets: readonly PromptAsset[] = [
 		],
 	},
 	{
-		id: "system/agent-creation-architect.md",
-		relPath: "system/agent-creation-architect.md",
+		id: "system/agent-fields-system.md",
+		relPath: "system/agent-fields-system.md",
 		bundled: asset203,
-		scope: "feature:system/agent-creation-architect",
+		scope: "feature:system/agent-fields-system",
 		group: "core",
-		keys: [],
-		fixture: {},
+		keys: [
+			{ path: "fieldSchema", type: "string", required: true, resolution: "runtime-only" },
+			{ path: "tools", type: "array", required: true, resolution: "runtime-only", children: [{ path: "name", type: "string" }, { path: "description", type: "string" }] },
+			{ path: "advisors", type: "array", required: true, resolution: "runtime-only", children: [{ path: "name", type: "string" }, { path: "scope", type: "string" }] },
+		],
+		fixture: {
+			fieldSchema: '{"type":"object","properties":{"name":{"type":"string"}}}',
+			tools: [{ name: "read", description: "Read files" }],
+			advisors: [{ name: "reviewer", scope: "project" }],
+		},
 		consumerHints: [
-			"packages/coding-agent/src/prompts/system/agent-creation-architect.md",
-			"packages/coding-agent/src/modes/agents-hub-deps.ts",
+			"packages/coding-agent/src/prompts/system/agent-fields-system.md",
+			"packages/coding-agent/src/task/agent-generation.ts",
 		],
 	},
 	{
-		id: "system/agent-creation-user.md",
-		relPath: "system/agent-creation-user.md",
+		id: "system/agent-fields-user.md",
+		relPath: "system/agent-fields-user.md",
 		bundled: asset204,
-		scope: "feature:system/agent-creation-user",
+		scope: "feature:system/agent-fields-user",
 		group: "core",
-		keys: [{ path: "request", type: "string", required: true, resolution: "session-dependent" }],
-		fixture: { request: "Example request" },
+		keys: [
+			{ path: "target", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "definition", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "comment", type: "string", resolution: "session-dependent" },
+			{ path: "baseDefinitions", type: "array", resolution: "session-dependent", children: [{ path: "name", type: "string" }, { path: "definition", type: "string" }] },
+		],
+		fixture: {
+			target: "description",
+			definition: '{"name":"reviewer","systemPrompt":"Review changes"}',
+			comment: "Make it more specific",
+			baseDefinitions: [{ name: "base", definition: '{"name":"base","description":"Review code"}' }],
+		},
 		consumerHints: [
-			"packages/coding-agent/src/prompts/system/agent-creation-user.md",
-			"packages/coding-agent/src/modes/agents-hub-deps.ts",
+			"packages/coding-agent/src/prompts/system/agent-fields-user.md",
+			"packages/coding-agent/src/task/agent-generation.ts",
 		],
 	},
 	{
@@ -7279,27 +7282,6 @@ export const promptAssets: readonly PromptAsset[] = [
 		},
 		consumerHints: [
 			"packages/coding-agent/src/prompts/tools/eval-agents.md",
-			"packages/coding-agent/src/tools/eval.ts",
-		],
-	},
-	{
-		id: "tools/eval-code-mode.md",
-		relPath: "tools/eval-code-mode.md",
-		bundled: asset330,
-		scope: "tool:eval-code-mode",
-		group: "core",
-		keys: [
-			{ path: "baseDescription", type: "string", required: true, resolution: "session-dependent" },
-			{ path: "declarations", type: "string", required: true, resolution: "session-dependent" },
-			{ path: "preludeDeclarations", type: "string", required: true, resolution: "session-dependent" },
-		],
-		fixture: {
-			baseDescription: "Example baseDescription",
-			declarations: "Example declarations",
-			preludeDeclarations: "Example preludeDeclarations",
-		},
-		consumerHints: [
-			"packages/coding-agent/src/prompts/tools/eval-code-mode.md",
 			"packages/coding-agent/src/tools/eval.ts",
 		],
 	},
