@@ -72,6 +72,7 @@ import type {
 	RpcSubagentLifecycleFrame,
 	RpcSubagentMessagesResult,
 	RpcSubagentProgressFrame,
+	RpcSetSubagentModelResult,
 	RpcSubagentSnapshot,
 	RpcSubagentSubscriptionLevel,
 	RpcToolApprovalCancel,
@@ -1192,6 +1193,17 @@ export class RpcClient {
 	/** Enable or disable fast mode only for the selected running subagent. */
 	async setSubagentFast(subagentId: string, enabled: boolean): Promise<{ enabled: boolean; active: boolean }> {
 		return this.#getData(await this.#send({ type: "set_subagent_fast", subagentId, enabled }));
+	}
+
+	/**
+	 * Switch a running subagent's model for this session only, from its next provider request. Pass a
+	 * selector (`provider/id`, fuzzy id, `@role`, optional `:level`) or an exact provider and model id.
+	 */
+	async setSubagentModel(
+		subagentId: string,
+		selection: { selector: string } | { provider: string; modelId: string },
+	): Promise<RpcSetSubagentModelResult> {
+		return this.#getData(await this.#send({ type: "set_subagent_model", subagentId, ...selection }));
 	}
 
 	/**

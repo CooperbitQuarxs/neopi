@@ -84,7 +84,7 @@ import { readLiveJournalPage, RpcJournalError } from "./rpc-journal";
 import { RpcBtwController } from "./rpc-btw";
 import { RpcGoalController } from "./rpc-goal";
 import { RpcLiveBridge, type RpcLiveControl, type RpcLiveSessionFactory } from "./rpc-live";
-import { serializeRpcModel } from "./rpc-model";
+import { findRpcModel, type RpcModelLookupSession, serializeRpcModel } from "./rpc-model";
 import { RpcDictationBridge, type RpcDictationControllerFactory } from "./rpc-dictation";
 import { RpcOutputWriter } from "./rpc-output";
 import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } from "./rpc-plan-mode";
@@ -100,6 +100,7 @@ import { sessionLeaseErrorCode } from "./rpc-session-lease";
 import { RpcSessionSettleWatcher, watchedScheduledTurnProbe } from "./rpc-session-settle";
 import { buildRpcSessionState } from "./rpc-session-state";
 import {
+	handleRpcSetSubagentModel,
 	type RpcSubagentBus,
 	RpcSubagentRegistry,
 	readRpcSubagentTranscript,
@@ -1071,23 +1072,6 @@ export async function openRpcSession(
 		sessionId: session.sessionId,
 		sessionFile: session.sessionFile,
 	};
-}
-
-type RpcModelLookupSession = Pick<AgentSession, "getAvailableModels" | "modelRegistry">;
-
-/**
- * The available model with exactly this provider and id. Models missing from
- * the current catalog wait for in-flight background discovery first: on cold
- * start, discovery-backed providers (proxy / ollama / etc.) populate seconds
- * after session ready. Catalog hits skip the wait, so the RPC queue is not
- * stalled behind unrelated discovery.
- */
-async function findRpcModel(session: RpcModelLookupSession, provider: string, modelId: string) {
-	const find = () => session.getAvailableModels().find(m => m.provider === provider && m.id === modelId);
-	const model = find();
-	if (model) return model;
-	await session.modelRegistry.awaitBackgroundRefresh();
-	return find();
 }
 
 /** The optional `provider`/`modelId` pair of `open_session` or `switch_session`, validated like `set_model`. */
@@ -2301,6 +2285,39 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					enabled: owned.session.isFastModeEnabled(),
 					active: owned.session.isFastModeActive(),
 				});
+			}
+
+			case "set_subagent_model": {
+				if (!subagentRegistry) {
+					return error(id, command.type, "Subagent event bus is unavailable");
+				}
+				if (typeof command.subagentId !== "string" || command.subagentId.length === 0) {
+					return error(id, command.type, "`subagentId` must be a non-empty string.");
+				}
+				const { selector, provider, modelId } = command;
+				if (selector !== undefined) {
+					if (
+						typeof selector !== "string" ||
+						!selector.trim() ||
+						provider !== undefined ||
+						modelId !== undefined
+					) {
+						return error(
+							id,
+							command.type,
+							"Give a non-blank `selector`, or `provider` with `modelId`, not both.",
+						);
+					}
+				} else if (typeof provider !== "string" || !provider || typeof modelId !== "string" || !modelId) {
+					return error(id, command.type, "Give a non-blank `selector`, or `provider` with `modelId`.");
+				}
+				const outcome = await handleRpcSetSubagentModel(subagentRegistry, {
+					subagentId: command.subagentId,
+					selector: selector?.trim(),
+					provider,
+					modelId,
+				});
+				return outcome.ok ? success(id, command.type, outcome.data) : error(id, command.type, outcome.message);
 			}
 
 			// =================================================================

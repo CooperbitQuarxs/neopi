@@ -2537,6 +2537,20 @@ export interface SetSubagentFastParams {
 	enabled: boolean;
 }
 
+export interface SetSubagentModelParams {
+	subagentId: string;
+	selector?: string;
+	provider?: string;
+	modelId?: string;
+}
+
+export interface SetSubagentModelResult {
+	provider: string;
+	modelId: string;
+	thinkingLevel?: ThinkingLevel;
+	warning?: string;
+}
+
 export interface LiveStartParams {
 	voice?: string;
 	instructions?: string;
@@ -2809,6 +2823,7 @@ export interface RpcWireCommands {
 	steer_subagent: { params: SteerSubagentParams; result: undefined };
 	set_subagent_thinking_level: { params: SetSubagentThinkingLevelParams; result: undefined };
 	set_subagent_fast: { params: SetSubagentFastParams; result: FastModeResult };
+	set_subagent_model: { params: SetSubagentModelParams; result: SetSubagentModelResult };
 	live_start: { params: LiveStartParams; result: LiveStartResult };
 	live_connect: { params: LiveConnectParams; result: LiveConnectResult };
 	live_stop: { params: undefined; result: undefined };

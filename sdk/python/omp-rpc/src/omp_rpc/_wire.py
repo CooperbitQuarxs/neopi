@@ -2513,6 +2513,14 @@ class ResumeTreeResult:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class SetSubagentModelResult:
+    provider: str
+    model_id: str
+    thinking_level: ThinkingLevel | None = None
+    warning: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class LiveConnectResult:
     voice: str
     sdp_answer: str
@@ -4943,6 +4951,16 @@ def parse_resume_tree_result(value: object, path: str = "ResumeTreeResult") -> R
     )
 
 
+def parse_set_subagent_model_result(value: object, path: str = "SetSubagentModelResult") -> SetSubagentModelResult:
+    payload = expect_object(value, path)
+    return SetSubagentModelResult(
+        provider=required(payload, "provider", decode_str, path),
+        model_id=required(payload, "modelId", decode_str, path),
+        thinking_level=optional(payload, "thinkingLevel", _decode_thinking_level, path),
+        warning=optional(payload, "warning", decode_str, path),
+    )
+
+
 def parse_live_connect_result(value: object, path: str = "LiveConnectResult") -> LiveConnectResult:
     payload = expect_object(value, path)
     return LiveConnectResult(
@@ -5515,6 +5533,18 @@ class WireClient:
         params["subagentId"] = subagent_id
         params["enabled"] = enabled
         return parse_fast_mode_result(self._command("set_subagent_fast", params), "set_subagent_fast")
+
+    def set_subagent_model(self, subagent_id: str, *, selector: str | None = None, provider: str | None = None, model_id: str | None = None) -> SetSubagentModelResult:
+        """Switch a running subagent's model for this session only, from its next request, like the focused `/switch`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`."""
+        params: dict[str, object] = {}
+        params["subagentId"] = subagent_id
+        if selector is not None:
+            params["selector"] = selector
+        if provider is not None:
+            params["provider"] = provider
+        if model_id is not None:
+            params["modelId"] = model_id
+        return parse_set_subagent_model_result(self._command("set_subagent_model", params), "set_subagent_model")
 
     def live_start(self, *, voice: str | None = None, instructions: str | None = None) -> str:
         """Start a live voice session bound to this session; returns the voice in use."""
@@ -6321,6 +6351,7 @@ __all__ = [
     "SetModeResult",
     "SetRoleResult",
     "SetStatusUiRequest",
+    "SetSubagentModelResult",
     "SetTitleUiRequest",
     "SetWidgetUiRequest",
     "SlashCommandInput",
@@ -6586,6 +6617,7 @@ __all__ = [
     "parse_set_mode_result",
     "parse_set_role_result",
     "parse_set_status_ui_request",
+    "parse_set_subagent_model_result",
     "parse_set_title_ui_request",
     "parse_set_widget_ui_request",
     "parse_slash_command_input",

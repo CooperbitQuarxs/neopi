@@ -1,11 +1,15 @@
 import * as fs from "node:fs/promises";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import type { Model } from "@oh-my-pi/pi-ai";
+import { resolveSessionModelSelector } from "../../config/session-model-selector";
 import { type AgentRef, AgentRegistry } from "../../registry/agent-registry";
+import { setSubagentModel } from "../../registry/subagent-controls";
 import { getLiveSubagentFacts } from "../../registry/subagent-facts";
 import type { AgentSession } from "../../session/agent-session";
 import type { FileEntry, SessionMessageEntry } from "../../session/session-entries";
 import { parseSessionEntries } from "../../session/session-loader";
 import { type AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import {
 	type SubagentEventPayload,
 	type SubagentLifecyclePayload,
@@ -15,7 +19,9 @@ import {
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "../../task";
 import type { EventBus } from "../../utils/event-bus";
+import { findRpcModel } from "./rpc-model";
 import type {
+	RpcSetSubagentModelResult,
 	RpcSubagentEventFrame,
 	RpcSubagentFrame,
 	RpcSubagentMessagesResult,
@@ -339,4 +345,63 @@ function resolveLiveSnapshot(snapshot: RpcSubagentSnapshot): RpcOwnedSubagent | 
 		return undefined;
 	}
 	return { ref, session: ref.session };
+}
+
+export type RpcSetSubagentModelOutcome = { ok: true; data: RpcSetSubagentModelResult } | { ok: false; message: string };
+
+type SubagentModelTarget =
+	| { ok: true; model: Model; thinkingLevel?: ConfiguredThinkingLevel; warning?: string }
+	| { ok: false; message: string };
+
+async function resolveSubagentModelTarget(
+	session: AgentSession,
+	selection: { selector?: string; provider?: string; modelId?: string },
+): Promise<SubagentModelTarget> {
+	const { selector, provider, modelId } = selection;
+	if (selector === undefined) {
+		const model = await findRpcModel(session, provider!, modelId!);
+		return model ? { ok: true, model } : { ok: false, message: `Model not found: ${provider}/${modelId}` };
+	}
+	const select = () => resolveSessionModelSelector(selector, session, session.settings);
+	let resolved = select();
+	if (!resolved.model) {
+		// Discovery-backed providers can populate after startup; wait before refusing.
+		await session.modelRegistry.awaitBackgroundRefresh();
+		resolved = select();
+	}
+	if (!resolved.model) return { ok: false, message: resolved.error ?? `Unknown model: ${selector}` };
+	return { ok: true, model: resolved.model, thinkingLevel: resolved.thinkingLevel, warning: resolved.warning };
+}
+
+/**
+ * `set_subagent_model`: the focused `/switch` for one owned running subagent. A `selector`
+ * (`provider/id`, fuzzy id, `@role`, `:level` suffix) resolves like `/switch <selector>` against the
+ * child's own registry and scope; `provider` + `modelId` name one catalog model exactly. The change is
+ * session-only and applies from the child's next request; the parent, siblings and settings are untouched.
+ */
+export async function handleRpcSetSubagentModel(
+	subagentRegistry: Pick<RpcSubagentRegistry, "getSubagents">,
+	command: { subagentId: string; selector?: string; provider?: string; modelId?: string },
+): Promise<RpcSetSubagentModelOutcome> {
+	const owned = resolveOwnedLiveSubagent(subagentRegistry, command.subagentId);
+	if (!owned) return { ok: false, message: `Subagent not running: ${command.subagentId}` };
+	const { session } = owned;
+	const target = await resolveSubagentModelTarget(session, command);
+	if (!target.ok) return target;
+	const { model, thinkingLevel, warning } = target;
+	try {
+		await setSubagentModel(session, model, thinkingLevel);
+	} catch (err) {
+		return { ok: false, message: err instanceof Error ? err.message : String(err) };
+	}
+	const applied = session.model ?? model;
+	return {
+		ok: true,
+		data: {
+			provider: applied.provider,
+			modelId: applied.id,
+			thinkingLevel: session.thinkingLevel,
+			...(warning ? { warning } : {}),
+		},
+	};
 }

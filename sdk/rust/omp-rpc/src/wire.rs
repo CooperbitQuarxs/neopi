@@ -7064,6 +7064,29 @@ pub struct SetSubagentFastParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetSubagentModelParams {
+	#[serde(rename = "subagentId")]
+	pub subagent_id: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub selector: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub provider: Option<String>,
+	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
+	pub model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetSubagentModelResult {
+	pub provider: String,
+	#[serde(rename = "modelId")]
+	pub model_id: String,
+	#[serde(rename = "thinkingLevel", default, skip_serializing_if = "Option::is_none")]
+	pub thinking_level: Option<ThinkingLevel>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveStartParams {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub voice: Option<String>,
@@ -9746,6 +9769,29 @@ impl Command for SetSubagentFastCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<FastModeResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Switch a running subagent's model for this session only, from its next request, like the focused `/switch`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetSubagentModelCommand {
+	#[serde(rename = "subagentId")]
+	pub subagent_id: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub selector: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub provider: Option<String>,
+	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
+	pub model_id: Option<String>,
+}
+
+impl Command for SetSubagentModelCommand {
+	const NAME: &'static str = "set_subagent_model";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = SetSubagentModelResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<SetSubagentModelResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
 	}
 }
 

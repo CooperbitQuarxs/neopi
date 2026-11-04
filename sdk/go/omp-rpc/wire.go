@@ -10917,6 +10917,31 @@ func (v *CancelSubagentResult) decodeFrom(raw map[string]json.RawMessage) error 
 	return nil
 }
 
+type SetSubagentModelResult struct {
+	Provider      string         `json:"provider"`
+	ModelID       string         `json:"modelId"`
+	ThinkingLevel *ThinkingLevel `json:"thinkingLevel,omitempty"`
+	Warning       *string        `json:"warning,omitempty"`
+}
+
+func (v *SetSubagentModelResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SetSubagentModelResult", v.decodeFrom)
+}
+
+func (v *SetSubagentModelResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SetSubagentModelResult
+	d := fieldDecoder{raw: raw, owner: "SetSubagentModelResult"}
+	d.required("provider", &out.Provider)
+	d.required("modelId", &out.ModelID)
+	d.optional("thinkingLevel", &out.ThinkingLevel)
+	d.optional("warning", &out.Warning)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type LiveStartResult struct {
 	Voice string `json:"voice"`
 }
@@ -12192,6 +12217,21 @@ type SetSubagentFastCommand struct {
 func (c Commands) SetSubagentFast(ctx context.Context, p SetSubagentFastCommand) (FastModeResult, error) {
 	var out FastModeResult
 	err := c.call(ctx, "set_subagent_fast", p, 0, &out)
+	return out, err
+}
+
+// SetSubagentModelCommand holds the parameters of "set_subagent_model".
+type SetSubagentModelCommand struct {
+	SubagentID string  `json:"subagentId"`
+	Selector   *string `json:"selector,omitempty"`
+	Provider   *string `json:"provider,omitempty"`
+	ModelID    *string `json:"modelId,omitempty"`
+}
+
+// SetSubagentModel sends "set_subagent_model": Switch a running subagent's model for this session only, from its next request, like the focused `/switch`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.
+func (c Commands) SetSubagentModel(ctx context.Context, p SetSubagentModelCommand) (SetSubagentModelResult, error) {
+	var out SetSubagentModelResult
+	err := c.call(ctx, "set_subagent_model", p, 0, &out)
 	return out, err
 }
 
