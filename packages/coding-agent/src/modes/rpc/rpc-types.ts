@@ -45,6 +45,7 @@ import type {
 } from "./rpc-tree";
 import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
 import type { RpcJobOutputResult, RpcJobsResult } from "./rpc-jobs";
+import type { SlashCommandCompletion } from "../../slash-commands/builtin-registry";
 import type { RpcModel } from "./rpc-model";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcModelSelectorResult } from "./rpc-model-selector";
@@ -106,6 +107,7 @@ export type RpcCommand =
 	  }
 	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
 	| { id?: string; type: "get_available_commands" }
+	| { id?: string; type: "get_command_completions"; command: string; prefix: string }
 	| { id?: string; type: "get_entries"; since?: string }
 	| { id?: string; type: "snapshot_session_journal" }
 	| ({ id?: string; type: "get_entries_page" } & RpcJournalPageOptions)
@@ -690,6 +692,13 @@ export type RpcResponse =
 			command: "get_available_commands";
 			success: true;
 			data: { commands: RpcAvailableSlashCommand[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_command_completions";
+			success: true;
+			data: { items: SlashCommandCompletion[] };
 	  }
 	| {
 			id?: string;

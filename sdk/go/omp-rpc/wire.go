@@ -4803,6 +4803,36 @@ func (v *SlashSubcommand) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type CommandCompletion struct {
+	// Replaces the argument text the host typed.
+	Value       string  `json:"value"`
+	Label       string  `json:"label"`
+	Description *string `json:"description,omitempty"`
+	// Ghost text to show after the cursor.
+	Hint *string `json:"hint,omitempty"`
+	// Accepting it leaves a complete command, so the host may submit at once.
+	SubmitsCommand *bool `json:"submitsCommand,omitempty"`
+}
+
+func (v *CommandCompletion) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "CommandCompletion", v.decodeFrom)
+}
+
+func (v *CommandCompletion) decodeFrom(raw map[string]json.RawMessage) error {
+	var out CommandCompletion
+	d := fieldDecoder{raw: raw, owner: "CommandCompletion"}
+	d.required("value", &out.Value)
+	d.required("label", &out.Label)
+	d.optional("description", &out.Description)
+	d.optional("hint", &out.Hint)
+	d.optional("submitsCommand", &out.SubmitsCommand)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type AvailableSlashCommand struct {
 	Name        string             `json:"name"`
 	Source      SlashCommandSource `json:"source"`
@@ -11217,6 +11247,25 @@ func (v *CancelSubagentResult) decodeFrom(raw map[string]json.RawMessage) error 
 	return nil
 }
 
+type GetCommandCompletionsResult struct {
+	Items []CommandCompletion `json:"items"`
+}
+
+func (v *GetCommandCompletionsResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "GetCommandCompletionsResult", v.decodeFrom)
+}
+
+func (v *GetCommandCompletionsResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out GetCommandCompletionsResult
+	d := fieldDecoder{raw: raw, owner: "GetCommandCompletionsResult"}
+	d.required("items", &out.Items)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type CancelJobResult struct {
 	Cancelled bool `json:"cancelled"`
 }
@@ -12569,6 +12618,19 @@ func (c Commands) SetSubagentFast(ctx context.Context, p SetSubagentFastCommand)
 	var out FastModeResult
 	err := c.call(ctx, "set_subagent_fast", p, 0, &out)
 	return out, err
+}
+
+// GetCommandCompletionsCommand holds the parameters of "get_command_completions".
+type GetCommandCompletionsCommand struct {
+	Command string `json:"command"`
+	Prefix  string `json:"prefix"`
+}
+
+// GetCommandCompletions sends "get_command_completions": Argument completions of a slash command for hosts without a terminal: subcommands and names such as personalities. `prefix` is the argument text typed after the command name; empty when there are none.
+func (c Commands) GetCommandCompletions(ctx context.Context, p GetCommandCompletionsCommand) ([]CommandCompletion, error) {
+	var out GetCommandCompletionsResult
+	err := c.call(ctx, "get_command_completions", p, 0, &out)
+	return out.Items, err
 }
 
 // GetJobsCommand holds the parameters of "get_jobs".

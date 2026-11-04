@@ -231,6 +231,16 @@ function kernelStatus(session: AgentSession): string {
 	].join("\n");
 }
 
+function personalityCompletions(names: readonly string[], prefix: string) {
+	const matches = completePersonalityNames(names, prefix).map(name => ({
+		value: name,
+		label: name,
+		hint: ghostHint(name.slice(prefix.length)),
+		submitsCommand: true,
+	}));
+	return matches.length ? matches : null;
+}
+
 export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "personality",
@@ -238,16 +248,13 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Choose or manage system-prompt personalities",
 		allowArgs: true,
 		inlineHint: "[name]",
-		getTuiArgumentCompletions: (prefix, runtime) => {
-			const names = runtime ? listPersonalityNames(runtime.ctx.settings) : [...BUILTIN_PERSONALITIES];
-			const matches = completePersonalityNames(names, prefix).map(name => ({
-				value: name,
-				label: name,
-				hint: ghostHint(name.slice(prefix.length)),
-				submitsCommand: true,
-			}));
-			return matches.length ? matches : null;
-		},
+		getTuiArgumentCompletions: (prefix, runtime) =>
+			personalityCompletions(
+				runtime ? listPersonalityNames(runtime.ctx.settings) : [...BUILTIN_PERSONALITIES],
+				prefix,
+			),
+		getHeadlessCompletions: (prefix, runtime) =>
+			personalityCompletions(listPersonalityNames(runtime.settings), prefix),
 		handleTui: async (command, runtime) => {
 			const ctx = runtime.ctx;
 			clearSubmittedText(runtime);

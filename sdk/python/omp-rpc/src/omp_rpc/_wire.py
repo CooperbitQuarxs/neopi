@@ -1279,6 +1279,18 @@ class SlashSubcommand:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class CommandCompletion:
+    value: str
+    """Replaces the argument text the host typed."""
+    label: str
+    description: str | None = None
+    hint: str | None = None
+    """Ghost text to show after the cursor."""
+    submits_command: bool | None = None
+    """Accepting it leaves a complete command, so the host may submit at once."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class AvailableSlashCommand:
     name: str
     source: SlashCommandSource
@@ -3612,6 +3624,17 @@ def parse_slash_subcommand(value: object, path: str = "SlashSubcommand") -> Slas
     )
 
 
+def parse_command_completion(value: object, path: str = "CommandCompletion") -> CommandCompletion:
+    payload = expect_object(value, path)
+    return CommandCompletion(
+        value=required(payload, "value", decode_str, path),
+        label=required(payload, "label", decode_str, path),
+        description=optional(payload, "description", decode_str, path),
+        hint=optional(payload, "hint", decode_str, path),
+        submits_command=optional(payload, "submitsCommand", decode_bool, path),
+    )
+
+
 def parse_available_slash_command(value: object, path: str = "AvailableSlashCommand") -> AvailableSlashCommand:
     payload = expect_object(value, path)
     return AvailableSlashCommand(
@@ -5714,6 +5737,13 @@ class WireClient:
         params["enabled"] = enabled
         return parse_fast_mode_result(self._command("set_subagent_fast", params), "set_subagent_fast")
 
+    def get_command_completions(self, command: str, prefix: str) -> tuple[CommandCompletion, ...]:
+        """Argument completions of a slash command for hosts without a terminal: subcommands and names such as personalities. `prefix` is the argument text typed after the command name; empty when there are none."""
+        params: dict[str, object] = {}
+        params["command"] = command
+        params["prefix"] = prefix
+        return required(expect_object(self._command("get_command_completions", params), "get_command_completions"), "items", array(parse_command_completion), "get_command_completions")
+
     def get_jobs(self, recent_limit: int | None = None) -> JobsResult:
         """List the background jobs of this agent and its subagents (the `/jobs` sheet): running jobs and the newest settled ones."""
         params: dict[str, object] = {}
@@ -6384,6 +6414,7 @@ __all__ = [
     "ChatModeSetting",
     "ChatModeState",
     "ChroniclerHealth",
+    "CommandCompletion",
     "CommandOutputEvent",
     "CompactionResult",
     "CompactionSummaryMessage",
@@ -6679,6 +6710,7 @@ __all__ = [
     "parse_chat_mode_changed_event",
     "parse_chat_mode_state",
     "parse_chronicler_health",
+    "parse_command_completion",
     "parse_command_output_event",
     "parse_compaction_result",
     "parse_compaction_summary_message",
