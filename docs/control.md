@@ -78,6 +78,19 @@ control publication by the session file's resolved real path. Roles can also be
 attached; do not open it as another writer.
 An invalid creation timestamp falls back to the file's modification time.
 
+`sessions list --json --live` adds a `live` field to every entry: `null` for a
+session with no live control endpoint, or one that does not answer within about
+750 ms (unreachable is not an error), otherwise
+`{ "state": "busy" | "waiting" | "idle", "isStreaming": true, "pendingDialogs": 0, "branch": "main" }`.
+Each endpoint is probed read-only with the `ctl list` handshake, all at once, so
+a slow process costs one deadline for the whole listing and nothing is sent to any
+session. `waiting` means a pane dialog (ask or approval) is open, `busy` that the
+session is not settled (streaming, compacting, queued input or background work),
+and `idle` that it is settled. `branch` is the VCS branch of the process's
+working directory, `null` outside a repository or on a detached head. Headless
+RPC processes register no pane dialogs, so only terminal sessions report
+`waiting`. Without `--live` the output is unchanged and has no `live` field.
+
 `messageCount` counts persisted message entries across the complete journal,
 including tool results and alternate branches. It is not the length of the
 visible transcript returned by `sessions read`. Counting streams the journal
