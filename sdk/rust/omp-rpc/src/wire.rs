@@ -4189,6 +4189,21 @@ pub struct SlashSubcommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommandCompletion {
+	/// Replaces the argument text the host typed.
+	pub value: String,
+	pub label: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
+	/// Ghost text to show after the cursor.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub hint: Option<String>,
+	/// Accepting it leaves a complete command, so the host may submit at once.
+	#[serde(rename = "submitsCommand", default, skip_serializing_if = "Option::is_none")]
+	pub submits_command: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AvailableSlashCommand {
 	pub name: String,
 	pub source: SlashCommandSource,
@@ -7230,6 +7245,17 @@ pub struct SetSubagentFastParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetCommandCompletionsParams {
+	pub command: String,
+	pub prefix: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetCommandCompletionsResult {
+	pub items: Vec<CommandCompletion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GetJobsParams {
 	#[serde(rename = "recentLimit", default, skip_serializing_if = "Option::is_none")]
 	pub recent_limit: Option<i64>,
@@ -10067,6 +10093,23 @@ impl Command for SetSubagentFastCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<FastModeResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Argument completions of a slash command for hosts without a terminal: subcommands and names such as personalities. `prefix` is the argument text typed after the command name; empty when there are none.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetCommandCompletionsCommand {
+	pub command: String,
+	pub prefix: String,
+}
+
+impl Command for GetCommandCompletionsCommand {
+	const NAME: &'static str = "get_command_completions";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = Vec<CommandCompletion>;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<GetCommandCompletionsResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.items)
 	}
 }
 

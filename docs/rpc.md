@@ -60,6 +60,7 @@ Behavior notes:
 | `status_facts` | `get_state.hostname`, `activeTimeMs` and `runningJobCount`, the TUI status line's facts. See [`get_roles` and `set_role` payloads](#get_roles-and-set_role-payloads). |
 | `background_jobs` | `get_jobs`, `get_job_output`, `cancel_job` and stdio `job_lifecycle` frames. See [Background jobs](#background-jobs). |
 | `command_catalog` | Every slash command in `get_available_commands` / `available_commands_update` with its `availability`, and `command_requires_tui` refusal of terminal-only commands in `prompt`. See [Available commands](#available-commands). |
+| `command_completions` | `get_command_completions { command, prefix }`: slash-command argument completions for hosts without a terminal. See [Available commands](#available-commands). |
 | `cycle_role` | `cycle_role` command (Ctrl+P role cycling) and `get_roles.cycleOrder` ([payloads](#get_roles-and-set_role-payloads)). |
 | `set_subagent_model` | `set_subagent_model` switches an owned running subagent's model for its next request. See [Changing a running subagent's model](#changing-a-running-subagents-model). |
 
@@ -1631,6 +1632,16 @@ is `{ success: false, command: "prompt", error: "/settings needs the terminal UI
 or custom command of the same name runs instead, as in the terminal. Slash text
 that names no command, such as a file path, is still ordinary chat. ACP clients
 keep receiving only the headless commands.
+
+With the `command_completions` capability, `get_command_completions { command, prefix }`
+returns `{ items }`, the argument completions a terminal user would see:
+`command` is a command name or alias (a leading `/` is ignored) and `prefix` is
+the argument text typed after it. Each item is `{ value, label, description?, hint?, submitsCommand? }`:
+`value` replaces the argument text, `hint` is ghost text, and `submitsCommand`
+means accepting it leaves a complete command. Subcommand lists and
+settings-backed names such as `/personality` names are served; completions that
+need terminal state (the model picker, local files) are not, and a command
+with none, or an unknown command, returns no items.
 
 Command discovery is intentionally an OMP dialect: Pi's `get_commands` (a
 `RpcSlashCommand[]` projection over extensions → prompt templates → skills) is

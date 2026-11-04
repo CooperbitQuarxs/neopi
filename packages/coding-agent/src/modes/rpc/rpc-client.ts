@@ -20,6 +20,7 @@ import type { AgentSessionEvent, SessionStats } from "../../session/agent-sessio
 import type { CacheWarmingMode } from "../../session/cache-warmer";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
+import type { SlashCommandCompletion } from "../../slash-commands/builtin-registry";
 import type { RpcJobLifecycleFrame, RpcJobOutputResult, RpcJobsResult } from "./rpc-jobs";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
@@ -1313,6 +1314,15 @@ export class RpcClient {
 	async cycleRole(direction: "forward" | "backward" = "forward"): Promise<RpcSetRoleResult | null> {
 		const response = await this.#send({ type: "cycle_role", direction });
 		return this.#getData<RpcSetRoleResult | null>(response);
+	}
+
+	/**
+	 * Argument completions of a slash command (`command_completions` capability): `prefix` is the argument
+	 * text typed after the command name. Empty when the command offers none.
+	 */
+	async getCommandCompletions(command: string, prefix: string): Promise<SlashCommandCompletion[]> {
+		const response = await this.#send({ type: "get_command_completions", command, prefix });
+		return this.#getData<{ items: SlashCommandCompletion[] }>(response).items;
 	}
 
 	/**

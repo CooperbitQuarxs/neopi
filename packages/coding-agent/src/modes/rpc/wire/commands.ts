@@ -400,6 +400,13 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		result: "FastModeResult",
 	},
 	{
+		name: "get_command_completions",
+		doc: "Argument completions of a slash command for hosts without a terminal: subcommands and names such as personalities. `prefix` is the argument text typed after the command name; empty when there are none.",
+		params: { command: "string", prefix: "string" },
+		result: { items: "CommandCompletion[]" },
+		unwrap: "items",
+	},
+	{
 		name: "get_jobs",
 		doc: "List the background jobs of this agent and its subagents (the `/jobs` sheet): running jobs and the newest settled ones.",
 		params: { "recentLimit?": "number.integer" },

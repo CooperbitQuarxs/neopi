@@ -1007,6 +1007,17 @@ export interface SlashSubcommand {
 	usage?: string;
 }
 
+export interface CommandCompletion {
+	/** Replaces the argument text the host typed. */
+	value: string;
+	label: string;
+	description?: string;
+	/** Ghost text to show after the cursor. */
+	hint?: string;
+	/** Accepting it leaves a complete command, so the host may submit at once. */
+	submitsCommand?: boolean;
+}
+
 export interface AvailableSlashCommand {
 	name: string;
 	source: SlashCommandSource;
@@ -2625,6 +2636,15 @@ export interface SetSubagentFastParams {
 	enabled: boolean;
 }
 
+export interface GetCommandCompletionsParams {
+	command: string;
+	prefix: string;
+}
+
+export interface GetCommandCompletionsResult {
+	items: CommandCompletion[];
+}
+
 export interface GetJobsParams {
 	recentLimit?: number;
 }
@@ -2929,6 +2949,7 @@ export interface RpcWireCommands {
 	steer_subagent: { params: SteerSubagentParams; result: undefined };
 	set_subagent_thinking_level: { params: SetSubagentThinkingLevelParams; result: undefined };
 	set_subagent_fast: { params: SetSubagentFastParams; result: FastModeResult };
+	get_command_completions: { params: GetCommandCompletionsParams; result: GetCommandCompletionsResult };
 	get_jobs: { params: GetJobsParams; result: JobsResult };
 	get_job_output: { params: GetJobOutputParams; result: JobOutput };
 	cancel_job: { params: CancelJobParams; result: CancelJobResult };

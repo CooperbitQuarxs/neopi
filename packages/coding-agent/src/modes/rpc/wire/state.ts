@@ -477,6 +477,13 @@ export const stateDefs = {
 	},
 	SlashCommandInput: { "hint?": "string" },
 	SlashSubcommand: { name: "string", "description?": "string", "usage?": "string" },
+	CommandCompletion: {
+		value: doc("string", "Replaces the argument text the host typed."),
+		label: "string",
+		"description?": "string",
+		"hint?": doc("string", "Ghost text to show after the cursor."),
+		"submitsCommand?": doc("boolean", "Accepting it leaves a complete command, so the host may submit at once."),
+	},
 	AvailableSlashCommand: {
 		name: "string",
 		"aliases?": "string[]",

@@ -91,6 +91,7 @@ import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } fro
 import { RpcExtensionUserMessageTracker, RpcPromptResults, watchAndReportPromptResult } from "./rpc-prompt-results";
 import type { RpcPromptTicket } from "./rpc-prompt-results";
 import { controlHostFor } from "../../control/host";
+import { getBuiltinCommandCompletions } from "../../slash-commands/builtin-registry";
 import { cancelRpcJob, listRpcJobs, readRpcJobOutput, RpcJobEvents } from "./rpc-jobs";
 import { RpcRoles } from "./rpc-roles";
 import { getRpcModelSelector } from "./rpc-model-selector";
@@ -2028,6 +2029,16 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 
 			case "get_available_commands": {
 				return success(id, "get_available_commands", { commands: await getAvailableCommands() });
+			}
+
+			case "get_command_completions": {
+				if (typeof command.command !== "string" || typeof command.prefix !== "string") {
+					return error(id, command.type, "`command` and `prefix` must be strings.");
+				}
+				const items = await getBuiltinCommandCompletions(command.command.replace(/^\//, ""), command.prefix, {
+					settings: session.settings,
+				});
+				return success(id, command.type, { items });
 			}
 
 			case "get_entries": {

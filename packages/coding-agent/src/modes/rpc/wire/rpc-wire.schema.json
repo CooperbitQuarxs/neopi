@@ -639,6 +639,17 @@
 				"clientOmit": []
 			},
 			{
+				"name": "get_command_completions",
+				"doc": "Argument completions of a slash command for hosts without a terminal: subcommands and names such as personalities. `prefix` is the argument text typed after the command name; empty when there are none.",
+				"params": "GetCommandCompletionsParams",
+				"result": "GetCommandCompletionsResult",
+				"nullable": false,
+				"unwrap": "items",
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "get_jobs",
 				"doc": "List the background jobs of this agent and its subagents (the `/jobs` sheet): running jobs and the newest settled ones.",
 				"params": "GetJobsParams",
@@ -4952,6 +4963,33 @@
 			},
 			"required": [
 				"name"
+			]
+		},
+		"CommandCompletion": {
+			"type": "object",
+			"properties": {
+				"value": {
+					"type": "string",
+					"description": "Replaces the argument text the host typed."
+				},
+				"label": {
+					"type": "string"
+				},
+				"description": {
+					"type": "string"
+				},
+				"hint": {
+					"type": "string",
+					"description": "Ghost text to show after the cursor."
+				},
+				"submitsCommand": {
+					"type": "boolean",
+					"description": "Accepting it leaves a complete command, so the host may submit at once."
+				}
+			},
+			"required": [
+				"value",
+				"label"
 			]
 		},
 		"AvailableSlashCommand": {
@@ -10620,6 +10658,35 @@
 			"required": [
 				"subagentId",
 				"enabled"
+			]
+		},
+		"GetCommandCompletionsParams": {
+			"type": "object",
+			"properties": {
+				"command": {
+					"type": "string"
+				},
+				"prefix": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"command",
+				"prefix"
+			]
+		},
+		"GetCommandCompletionsResult": {
+			"type": "object",
+			"properties": {
+				"items": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/CommandCompletion"
+					}
+				}
+			},
+			"required": [
+				"items"
 			]
 		},
 		"GetJobsParams": {

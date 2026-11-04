@@ -21,6 +21,7 @@ export const RPC_COMMAND_TYPES = [
 	"set_chat_mode",
 	"set_mode",
 	"get_available_commands",
+	"get_command_completions",
 	"get_entries",
 	"snapshot_session_journal",
 	"get_entries_page",
