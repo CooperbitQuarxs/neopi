@@ -251,6 +251,11 @@ import {
 } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
+import { ActiveTimeMeter } from "@oh-my-pi/pi-tui/status-line/active-time-meter";
+import {
+	countBackgroundJobsOutsideBadge,
+	getRunningSubagentBadgeAgentIds,
+} from "@oh-my-pi/pi-tui/overlays/running-subagent-badge";
 import { cfgSecretsEnabled } from "../secrets/settings";
 import { releaseSharpshooterSession } from "../sharpshooter/backend";
 import { flushSharpshooterExtraction } from "../sharpshooter/extract";
@@ -1099,6 +1104,8 @@ export class AgentSession implements SettingsScope {
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	/** Epoch ms the current run went `running`; undefined while idle. */
 	#runStartedAt: number | undefined;
+	/** Active-processing time of the loaded conversation (see {@link getActiveTimeMs}). */
+	#activeTime = new ActiveTimeMeter();
 	/** The last `agent_end` that {@link #settleAgentEnd} published; a failed maintenance pass settles any other. */
 	#settledAgentEnd: AgentEndEvent | undefined;
 	#humanToolInvocation = false;
@@ -4171,9 +4178,37 @@ export class AgentSession implements SettingsScope {
 		}
 	}
 
+	/** The meter for the loaded conversation; a real-to-real session-file change starts a fresh one. */
+	#activeTimeMeter(): ActiveTimeMeter {
+		if (!this.#activeTime.follows(this.sessionFile)) this.#activeTime = new ActiveTimeMeter(this.sessionFile);
+		return this.#activeTime;
+	}
+
+	/**
+	 * Accumulated active-processing time of this conversation: the sum of its runs (agent start to settle)
+	 * plus the run in flight, never idle time between turns. Starts over for a new or switched session. The
+	 * TUI status line's `time_spent` segment and RPC `get_state.activeTimeMs` use the same meter arithmetic.
+	 */
+	getActiveTimeMs(): number {
+		return this.#activeTimeMeter().total();
+	}
+
+	/**
+	 * Running background jobs outside the subagent badge, as the TUI jobs pill counts them: a task job stops
+	 * counting once its subagent is itself running.
+	 */
+	getRunningBackgroundJobCount(): number {
+		const running = this.getAsyncJobSnapshot()?.running;
+		if (!running) return 0;
+		const subagents = new Set(getRunningSubagentBadgeAgentIds(AgentRegistry.global()));
+		return countBackgroundJobsOutsideBadge(running, subagents);
+	}
+
 	#emitRunState(state: "running" | "idle"): void {
 		if (state === "idle") this.#runStartedAt = undefined;
 		else this.#runStartedAt ??= Date.now();
+		if (state === "idle") this.#activeTimeMeter().end();
+		else this.#activeTimeMeter().start();
 		for (const listener of this.#runStateListeners) {
 			try {
 				listener(state);
@@ -12506,6 +12541,7 @@ export class AgentSession implements SettingsScope {
 					additionalDirectories: cfgWorkspaceAdditionalDirectories.get(this.settings),
 				});
 				await this.settings.attachSessionFile(this.sessionManager.getSessionFile());
+				this.#activeTime = new ActiveTimeMeter(this.sessionFile);
 				this.#bash.markSessionTransition(bashTransition);
 				// The new session owns the transcript from here, so the previous
 				// conversation's advisor spend is retired with it. Clearing at the commit

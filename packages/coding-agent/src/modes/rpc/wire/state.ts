@@ -354,6 +354,18 @@ export const stateDefs = {
 		tokensPerSecond: absentAs("number | null", null),
 		messageCount: absentAs("number.integer", 0),
 		queuedMessageCount: absentAs("number.integer", 0),
+		hostname: absentAs(doc("string", "Short machine hostname (first DNS label)."), ""),
+		activeTimeMs: absentAs(
+			doc("number", "Accumulated active-processing time, including the run in flight; idle time never counts."),
+			0,
+		),
+		runningJobCount: absentAs(
+			doc(
+				"number.integer",
+				"Running background jobs outside the subagents count, as the TUI jobs pill counts them.",
+			),
+			0,
+		),
 		hasPendingAsyncWork: absentAs(
 			doc("boolean", "Background jobs or deliveries can still inject a follow-up and wake the session."),
 			false,

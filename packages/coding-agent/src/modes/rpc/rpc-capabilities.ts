@@ -33,6 +33,7 @@ export const RPC_CAPABILITIES: readonly string[] = [
 	"connection_owned_host_tools", // #593; set_host_tools is scoped to its registering connection (#592).
 	"set_subagent_model", // #492; set_subagent_model switches an owned running subagent's model for its next request.
 	"cycle_role", // #666; cycle_role is Ctrl+P role cycling, and get_roles reports cycleOrder.
+	"status_facts", // #667; get_state.hostname, activeTimeMs and runningJobCount.
 ];
 
 /**

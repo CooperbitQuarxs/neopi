@@ -845,6 +845,12 @@ export interface SessionState {
 	tokensPerSecond?: number | null;
 	messageCount?: number;
 	queuedMessageCount?: number;
+	/** Short machine hostname (first DNS label). */
+	hostname?: string;
+	/** Accumulated active-processing time, including the run in flight; idle time never counts. */
+	activeTimeMs?: number;
+	/** Running background jobs outside the subagents count, as the TUI jobs pill counts them. */
+	runningJobCount?: number;
 	/** Background jobs or deliveries can still inject a follow-up and wake the session. */
 	hasPendingAsyncWork?: boolean;
 	/** Idle with nothing queued or pending; same predicate as `session_settled`. */

@@ -4397,6 +4397,21 @@
 					"type": "integer",
 					"default": 0
 				},
+				"hostname": {
+					"type": "string",
+					"description": "Short machine hostname (first DNS label).",
+					"default": ""
+				},
+				"activeTimeMs": {
+					"type": "number",
+					"description": "Accumulated active-processing time, including the run in flight; idle time never counts.",
+					"default": 0
+				},
+				"runningJobCount": {
+					"type": "integer",
+					"description": "Running background jobs outside the subagents count, as the TUI jobs pill counts them.",
+					"default": 0
+				},
 				"hasPendingAsyncWork": {
 					"type": "boolean",
 					"description": "Background jobs or deliveries can still inject a follow-up and wake the session.",
