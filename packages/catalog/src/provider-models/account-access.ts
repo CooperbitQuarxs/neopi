@@ -1,18 +1,18 @@
-import type { Api, ModelSpec } from "../types";
+import type { Model } from "../types";
 
 /**
  * Merge per-account discovery catalogs into one list, deduped by model id.
  *
- * The first catalog to list an id supplies its spec; {@link ModelSpec.accountAccess}
+ * The first catalog to list an id supplies its spec; {@link Model.accountAccess}
  * is merged from every catalog listing that id, so credential selection can
  * route account-gated models to the accounts that serve them. Used by
- * multi-account discovery for Codex and Antigravity, whose rosters differ per
- * account.
+ * multi-account discovery for Codex and Antigravity, and per-key discovery for
+ * NeoProxy, whose rosters differ per account or key.
  */
-export function unionAccountCatalogs<TApi extends Api>(
-	catalogs: readonly (readonly ModelSpec<TApi>[])[],
-): ModelSpec<TApi>[] {
-	const byId = new Map<string, ModelSpec<TApi>>();
+export function unionAccountCatalogs<TModel extends Pick<Model, "id" | "accountAccess">>(
+	catalogs: readonly (readonly TModel[])[],
+): TModel[] {
+	const byId = new Map<string, TModel>();
 	for (const catalog of catalogs) {
 		for (const model of catalog) {
 			const existing = byId.get(model.id);

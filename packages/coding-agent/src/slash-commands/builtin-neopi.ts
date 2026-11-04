@@ -1,6 +1,6 @@
 import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
- * NeoPi operator commands: `/notice`, `/persona`, `/loadout`, `/repl`, `/kernel`.
+ * NeoPi operator commands: `/notice`, `/persona`, `/loadout`, `/repl`, `/kernel`, `/neoproxy`.
  */
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import {
@@ -27,6 +27,7 @@ import {
 	runPersonaCommand,
 	sessionPersonaHost,
 } from "../neopi/persona-config";
+import { describeNeoProxy, withNeoProxyLoginUrl } from "../neopi/neoproxy-connect";
 import { parseReplTarget, REPL_TARGETS, type ReplTarget, replTargetLabel } from "../neopi/repl";
 import noticeTemplate from "../prompts/system/operator-notice.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
@@ -51,6 +52,10 @@ const KERNEL_DEFS: SubcommandDef[] = [
 	{ name: "status", description: "Show which kernels are running" },
 	{ name: "reset", description: "Start the next cell in a fresh kernel", usage: "<py|js>" },
 	{ name: "interrupt", description: "Cancel running eval and bash cells" },
+];
+const NEOPROXY_DEFS: SubcommandDef[] = [
+	{ name: "status", description: "Show the server URL, stored keys, and granted models" },
+	{ name: "url", description: "Connect to another NeoProxy server with a key it issued", usage: "<url>" },
 ];
 
 interface NamedArgument {
@@ -129,6 +134,7 @@ function personaInlineHint(argumentText: string): string | null {
 const LOADOUT_USAGE = "Usage: /loadout [set <name>|use <name>|off|list|show <name>|status]";
 const REPL_USAGE = "Usage: /repl [agent|js|py|bash]";
 const KERNEL_USAGE = "Usage: /kernel [status|reset <py|js>|interrupt]";
+const NEOPROXY_USAGE = "Usage: /neoproxy [status|url <url>]";
 
 function tuiPersonaHost(ctx: InteractiveModeContext) {
 	return sessionPersonaHost(ctx.session, {
@@ -546,6 +552,43 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			ctx.showError(KERNEL_USAGE);
+		},
+	},
+	{
+		name: "neoproxy",
+		icon: "signIn",
+		description: "Show or change the NeoProxy server and its stored API keys",
+		acpInputHint: "[status]",
+		subcommands: NEOPROXY_DEFS,
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const { verb } = parseSubcommand(command.args);
+			if (verb === "" || verb === "status") {
+				await runtime.output(describeNeoProxy(runtime.session.modelRegistry));
+				return commandConsumed();
+			}
+			if (verb === "url")
+				return usage(
+					"Changing the NeoProxy server needs a key prompt: run `npi login neoproxy --url <url>`.",
+					runtime,
+				);
+			return usage(NEOPROXY_USAGE, runtime);
+		},
+		handleTui: async (command, runtime) => {
+			const ctx = runtime.ctx;
+			ctx.editor.setText("");
+			const { verb, rest } = parseSubcommand(command.args);
+			if (verb === "" || verb === "status") {
+				ctx.showStatus(describeNeoProxy(ctx.session.modelRegistry));
+				return;
+			}
+			if (verb === "url" && rest.trim()) {
+				await withNeoProxyLoginUrl(ctx.session.modelRegistry, rest.trim(), () =>
+					ctx.showOAuthSelector("login", "neoproxy"),
+				);
+				return;
+			}
+			ctx.showError(NEOPROXY_USAGE);
 		},
 	},
 ];

@@ -27,7 +27,7 @@ export const authBrokerHelp = {
 
 export const authGatewayHelp = {
 	description:
-		"Run an auth-gateway: an HTTP forward proxy backed by the configured broker, or JSON lines on stdio with your own credentials",
+		"Run an auth-gateway: an HTTP forward proxy backed by the configured broker, or JSON lines on stdio with your own credentials; `link` prints one connection link to share it",
 } satisfies CommandMetadata;
 
 export const benchHelp = {

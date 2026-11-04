@@ -9,6 +9,7 @@
 
 ### Added
 
+- `npi auth-gateway link` prints one `neopi-gateway://host:port?token=…&name=…` connection link for the running gateway, so NeoProxy pairs with a single paste; when the gateway is not running it prints the `serve` command that starts it. `serve` records its listener in `<config-dir>/auth-gateway.runtime.json` for `link` and same-host clients.
 - Added a scoped personality manager with prompt previews, custom personalities, and `/personality` switching.
 
 - Changed: `chronicle_recall` searches the current session by default; pass `scope: "all"`, `sessions`, or `keywords` to widen. Added literal boolean transcript prefiltering (AND, OR, parentheses, quoted phrases; case-insensitive by default) before existing recall ranking, with matching session counts and equivalent CLI flags. The standalone CLI keeps its all-session default (implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
@@ -25,6 +26,7 @@
 - Explicitly revive killed subagents from their saved transcripts in the Agent Hub; opening a transcript, focusing an agent, or sending ordinary IRC/chat no longer undoes a kill.
 - Connect to NeoProxy through `npi login neoproxy --url URL`, `/login`, or a fresh RPC client using only the server URL and an existing administrator-assigned API key in a masked prompt; keys stay in the normal credential store and granted models are discovered automatically ([#647](https://github.com/PsychedelicShayna/neopi/pull/647), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 - Confirm NeoProxy server and private-CA fingerprints before entering a key; provider-local trust stays with the credential and is reused for verified discovery and inference without changing global certificate trust ([#647](https://github.com/PsychedelicShayna/neopi/pull/647), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
+- Store several NeoProxy API keys at once: logging in with another key for the same server adds it (or replaces the others on request), the model list is the union of every key's grants, and each request uses a key that grants the selected model. A revoked key drops only its own models, and the cached union keeps roles and fallbacks resolvable while the proxy is offline. `/login neoproxy <url>` supplies the server URL, and `/neoproxy` shows the server, stored keys and granted models or changes the server with `/neoproxy url <url>`.
 
 - RPC clients can edit role fallbacks and descriptions, delete custom role definitions, and explicitly save project assignments without changing the global storage preference ([#595](https://github.com/PsychedelicShayna/neopi/issues/595)).
 - RPC clients can inspect native login-method and device-code metadata, read model descriptions, and activate a stored OAuth account for one session without exposing credentials ([#595](https://github.com/PsychedelicShayna/neopi/issues/595), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
