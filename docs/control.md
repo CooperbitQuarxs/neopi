@@ -20,7 +20,13 @@ Read `state` before a write. Pass `if` revisions on draft and surface commands. 
 
 `app.suspend`, `app.exit` (which would close the socket before replying), external `$EDITOR`, and `/todo edit` are exempt and return an explicit `exempt_*` error. `app.clear` clears the composer without entering the human Ctrl-C double-press shutdown path. Everything else a human can do from the keyboard is reachable by `input`, `keys`, `action`, or a structured twin (`set_model`, `settings_set`, `dialog_answer`).
 
-`commands` includes the pane's TUI-only slash commands and aliases as well as RPC commands. `get_available_models` uses protocol-v2 chunking when its full catalog exceeds one transport frame.
+`commands` lists every registered slash command, each with `availability` (`headless`, or `tui` for commands that need the terminal UI), plus aliases, whatever the target's transport. `get_available_models` uses protocol-v2 chunking when its full catalog exceeds one transport frame.
+
+### Slash commands over control
+
+- On a TUI-owned session, `input` and `slash` do exactly what a human typing and pressing Enter does: the text is placed in the composer and the editor's own submit handler runs, so the same slash dispatcher, extension `input` hooks, deferred-draft handling and queueing apply. Terminal-only commands (`/settings`, `/tree`, `/hotkeys`, ...) therefore open their UI in the pane; the reply is `{ delivery: "started" }`, not the command's result. Read the effect with `state`, `dialogs` or `screen`.
+- A headless session (`rpc`, `print`) has no composer, so `input`/`slash` answer `code: "no_tui"`. Send the text as an RPC `prompt` instead: it runs through the same builtin dispatcher, headless commands run, and a `tui` command answers `code: "command_requires_tui"` without reaching the model.
+- `get_command_completions { command, prefix }` is served over `rpc` for either kind of session; see [Available commands](./rpc.md#available-commands).
 
 The `hello`, `get_status`, and `state` snapshots carry `session`: the same RPC session state `get_state` returns, minus the `systemPrompt` and `dumpTools` dump fields, so a snapshot stays one frame. `state` with `target: "view"` reports the subagent the pane is focused on and adds `root` (the root session id and generation); with nothing focused, or with the default `target: "root"`, it reports the root session.
 
