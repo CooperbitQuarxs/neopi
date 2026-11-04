@@ -151,6 +151,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_roles" }
 	| { id?: string; type: "query_model_selector"; query: string }
 	| { id?: string; type: "set_role"; role: string }
+	| { id?: string; type: "cycle_role"; direction?: "forward" | "backward" }
 	| { id?: string; type: "get_models_configuration" }
 	| ({ id?: string; type: "set_model_role_configuration" } & RpcSetModelRoleConfiguration)
 	| ({ id?: string; type: "set_model_role_fallbacks" } & RpcSetModelRoleFallbacks)
@@ -827,6 +828,13 @@ export type RpcResponse =
 			command: "set_role";
 			success: true;
 			data: RpcSetRoleResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "cycle_role";
+			success: true;
+			data: RpcSetRoleResult | null;
 	  }
 	| {
 			id?: string;

@@ -2432,6 +2432,25 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					throw cause;
 				}
 
+			case "cycle_role": {
+				if (
+					command.direction !== undefined &&
+					command.direction !== "forward" &&
+					command.direction !== "backward"
+				) {
+					return error(id, "cycle_role", '`direction` must be "forward" or "backward".');
+				}
+				try {
+					const result = await rpcRoles.cycle(command.direction ?? "forward");
+					if (result)
+						output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+					return success(id, "cycle_role", result);
+				} catch (cause) {
+					// Ctrl+P surfaces a failed switch (for example a model without credentials) as an error.
+					return error(id, "cycle_role", cause instanceof Error ? cause.message : String(cause));
+				}
+			}
+
 			case "get_roles": {
 				await session.modelRegistry.awaitBackgroundRefresh();
 				return success(id, "get_roles", rpcRoles.list());

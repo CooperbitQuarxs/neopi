@@ -727,6 +727,8 @@ class RoleInfo:
 class RolesResult:
     roles: tuple[RoleInfo, ...]
     active_role: str | None = None
+    cycle_order: tuple[str, ...] = ()
+    """The configured cycle order: the roles `cycle_role` walks. A role without an available model is skipped."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2478,6 +2480,13 @@ class SetRoleResult:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class CycleRoleResult:
+    role: str
+    model: ModelInfo
+    thinking_level: ThinkingLevel | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class GetModelsConfigurationResult:
     providers: tuple[JsonObject, ...]
     models: tuple[JsonObject, ...]
@@ -2896,6 +2905,7 @@ def parse_roles_result(value: object, path: str = "RolesResult") -> RolesResult:
     return RolesResult(
         roles=required(payload, "roles", array(parse_role_info), path),
         active_role=optional(payload, "activeRole", decode_str, path),
+        cycle_order=defaulted(payload, "cycleOrder", array(decode_str), path, ()),
     )
 
 
@@ -4906,6 +4916,15 @@ def parse_set_role_result(value: object, path: str = "SetRoleResult") -> SetRole
     )
 
 
+def parse_cycle_role_result(value: object, path: str = "CycleRoleResult") -> CycleRoleResult:
+    payload = expect_object(value, path)
+    return CycleRoleResult(
+        role=required(payload, "role", decode_str, path),
+        model=required(payload, "model", parse_model_info, path),
+        thinking_level=optional(payload, "thinkingLevel", _decode_thinking_level, path),
+    )
+
+
 def parse_get_models_configuration_result(value: object, path: str = "GetModelsConfigurationResult") -> GetModelsConfigurationResult:
     payload = expect_object(value, path)
     return GetModelsConfigurationResult(
@@ -5283,6 +5302,14 @@ class WireClient:
         params: dict[str, object] = {}
         params["role"] = role
         return parse_set_role_result(self._command("set_role", params), "set_role")
+
+    def cycle_role(self, direction: Literal["forward", "backward"] | None = None) -> CycleRoleResult | None:
+        """Step through the configured role models in `cycleOrder` order like Ctrl+P; null when fewer than two role models are available."""
+        params: dict[str, object] = {}
+        if direction is not None:
+            params["direction"] = direction
+        data = self._command("cycle_role", params)
+        return None if data is None else parse_cycle_role_result(data, "cycle_role")
 
     def get_models_configuration(self) -> GetModelsConfigurationResult:
         """Read the native provider catalog, scoped model roles, and effort rules."""
@@ -6189,6 +6216,7 @@ __all__ = [
     "ContextUsage",
     "CreateMixtureResult",
     "CustomMessage",
+    "CycleRoleResult",
     "DeveloperMessage",
     "DictationEndEvent",
     "DictationStateEvent",
@@ -6475,6 +6503,7 @@ __all__ = [
     "parse_context_usage",
     "parse_create_mixture_result",
     "parse_custom_message",
+    "parse_cycle_role_result",
     "parse_developer_message",
     "parse_dictation_end_event",
     "parse_dictation_state_event",

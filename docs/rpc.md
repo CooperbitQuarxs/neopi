@@ -56,6 +56,7 @@ Behavior notes:
 | `session_journal_events` | Native journal commits, active-leaf changes, session identity changes and durable streaming-message associations. See [Native journal events](#native-journal-events). |
 | `session_tree_navigation` | Guarded native same-file `navigate_tree`, restored drafts and images, and explicit `resume_tree` acknowledgement for ask re-answers. See [Native tree navigation](#native-tree-navigation). |
 | `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
+| `cycle_role` | `cycle_role` command (Ctrl+P role cycling) and `get_roles.cycleOrder` ([payloads](#get_roles-and-set_role-payloads)). |
 | `set_subagent_model` | `set_subagent_model` switches an owned running subagent's model for its next request. See [Changing a running subagent's model](#changing-a-running-subagents-model). |
 
 ### Native models configuration
@@ -986,7 +987,8 @@ role:
       "hidden": false
     }
   ],
-  "activeRole": "smol"
+  "activeRole": "smol",
+  "cycleOrder": ["smol", "default", "slow"]
 }
 ```
 
@@ -1036,6 +1038,23 @@ Failures carry a `code`, and none of them change the model:
 | `unknown_role` | `role` is not an id listed by `get_roles`. |
 | `session_busy` | The session is streaming or compacting. |
 | `role_unresolved` | No pattern in the role's chain matches an available model. |
+
+`cycleOrder` is the configured `cycleOrder` setting: the roles `cycle_role`
+walks, in order. A role in it that has no available model is skipped by the
+cycle, so the track a host draws may show more slots than the cycle visits.
+
+`cycle_role { direction? }` is the TUI's Ctrl+P: it steps `direction`
+(`"forward"`, the default, or `"backward"`) through `cycleOrder` from the slot
+the active model occupies, wrapping at the ends, and applies the next role's
+model with its configured thinking level or effort selection. Like Ctrl+P it
+is not refused while a turn runs; the model applies from the next request, and
+it writes no configuration. Success data is the `set_role` shape, or `null`
+when fewer than two roles in `cycleOrder` have an available model (the TUI's
+"Only one role model available"). The cycled role is reported as
+`get_state.activeRole`, and `config_update { model, thinkingLevel }` precedes
+the response. A failed switch, such as a model without credentials, is an
+ordinary error response, and a `direction` other than the two values is
+rejected. Advertised by the `cycle_role` capability.
 
 `chatMode` is the session's live chat mode; `off` is an ordinary coding session.
 

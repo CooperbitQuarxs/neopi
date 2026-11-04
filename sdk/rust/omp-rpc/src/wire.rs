@@ -2906,6 +2906,9 @@ pub struct RolesResult {
 	pub roles: Vec<RoleInfo>,
 	#[serde(rename = "activeRole", default, skip_serializing_if = "Option::is_none")]
 	pub active_role: Option<String>,
+	/// The configured cycle order: the roles `cycle_role` walks. A role without an available model is skipped.
+	#[serde(rename = "cycleOrder", default = "default_roles_result_cycle_order")]
+	pub cycle_order: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -6731,6 +6734,20 @@ pub struct SetRoleResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CycleRoleParams {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub direction: Option<CycleRoleParamsDirection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CycleRoleResult {
+	pub role: String,
+	pub model: ModelInfo,
+	#[serde(rename = "thinkingLevel", default, skip_serializing_if = "Option::is_none")]
+	pub thinking_level: Option<ThinkingLevel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GetModelsConfigurationResult {
 	pub providers: Vec<Map<String, Value>>,
 	pub models: Vec<Map<String, Value>>,
@@ -8462,6 +8479,24 @@ impl UpdateThemeParamsScope {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CycleRoleParamsDirection {
+	#[serde(rename = "forward")]
+	Forward,
+	#[serde(rename = "backward")]
+	Backward,
+}
+
+impl CycleRoleParamsDirection {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Forward => "forward",
+			Self::Backward => "backward",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GetModelsConfigurationResultRoleStorage {
 	#[serde(rename = "global")]
 	Global,
@@ -8665,6 +8700,10 @@ impl GetEntriesPageParamsDirection {
 			Self::Backward => "backward",
 		}
 	}
+}
+
+fn default_roles_result_cycle_order() -> Vec<String> {
+	serde_json::from_str("[]").expect("valid wire default")
 }
 
 fn default_queued_messages_state_live_steered() -> i64 {
@@ -9126,6 +9165,26 @@ impl Command for SetRoleCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<SetRoleResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Step through the configured role models in `cycleOrder` order like Ctrl+P; null when fewer than two role models are available.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct CycleRoleCommand {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub direction: Option<CycleRoleParamsDirection>,
+}
+
+impl Command for CycleRoleCommand {
+	const NAME: &'static str = "cycle_role";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = Option<CycleRoleResult>;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		match data {
+			None | Some(Value::Null) => Ok(None),
+			Some(value) => serde_json::from_value::<CycleRoleResult>(value).map(Some),
+		}
 	}
 }
 

@@ -9,6 +9,7 @@
 
 ### Added
 
+- RPC and the control socket can cycle role models like Ctrl+P with `cycle_role { direction }`, and `get_roles` reports the configured `cycleOrder`; hosts gate on the `cycle_role` capability ([#666](https://github.com/PsychedelicShayna/neopi/issues/666)).
 - RPC and the control socket can switch a running subagent's model with `set_subagent_model` (selector or provider and model id), from its next request and for that subagent only; hosts gate on the `set_subagent_model` capability ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
 - `npi auth-gateway link` prints one `neopi-gateway://host:port?token=…&name=…` connection link for the running gateway, so NeoProxy pairs with a single paste; when the gateway is not running it prints the `serve` command that starts it. `serve` records its listener in `<config-dir>/auth-gateway.runtime.json` for `link` and same-host clients.
 - Added a scoped personality manager with prompt previews, custom personalities, and `/personality` switching.

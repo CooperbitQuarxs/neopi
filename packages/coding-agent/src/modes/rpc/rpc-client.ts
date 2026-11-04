@@ -1281,6 +1281,15 @@ export class RpcClient {
 	}
 
 	/**
+	 * Cycle through the configured role models like Ctrl+P (`get_roles().cycleOrder`); `null` when
+	 * fewer than two role models are available.
+	 */
+	async cycleRole(direction: "forward" | "backward" = "forward"): Promise<RpcSetRoleResult | null> {
+		const response = await this.#send({ type: "cycle_role", direction });
+		return this.#getData<RpcSetRoleResult | null>(response);
+	}
+
+	/**
 	 * Get list of available slash commands.
 	 */
 	async getAvailableCommands(): Promise<RpcAvailableSlashCommand[]> {

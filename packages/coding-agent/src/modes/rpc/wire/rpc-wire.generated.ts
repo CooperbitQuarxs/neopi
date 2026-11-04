@@ -472,6 +472,8 @@ export interface RoleInfo {
 export interface RolesResult {
 	roles: RoleInfo[];
 	activeRole?: string;
+	/** The configured cycle order: the roles `cycle_role` walks. A role without an available model is skipped. */
+	cycleOrder?: string[];
 }
 
 export type ModelSelectorPerformanceSource = "measured" | "catalog";
@@ -2302,6 +2304,16 @@ export interface SetRoleResult {
 	thinkingLevel?: ThinkingLevel;
 }
 
+export interface CycleRoleParams {
+	direction?: "forward" | "backward";
+}
+
+export interface CycleRoleResult {
+	role: string;
+	model: ModelInfo;
+	thinkingLevel?: ThinkingLevel;
+}
+
 export interface GetModelsConfigurationResult {
 	providers: Record<string, unknown>[];
 	models: Record<string, unknown>[];
@@ -2788,6 +2800,7 @@ export interface RpcWireCommands {
 	update_theme: { params: UpdateThemeParams; result: ThemesConfiguration };
 	query_model_selector: { params: QueryModelSelectorParams; result: ModelSelectorResult };
 	set_role: { params: SetRoleParams; result: SetRoleResult };
+	cycle_role: { params: CycleRoleParams; result: CycleRoleResult | null };
 	get_models_configuration: { params: undefined; result: GetModelsConfigurationResult };
 	set_model_role_configuration: { params: SetModelRoleConfigurationParams; result: undefined };
 	set_model_role_fallbacks: { params: SetModelRoleFallbacksParams; result: undefined };
