@@ -1,49 +1,26 @@
 # NeoPi
 
-> Copia privada en Cooperbit del proyecto **NeoPi** de PsychedelicShayna.
+NeoPi es un motor de agentes con una interfaz de terminal. Te permite conversar sobre un objetivo y, según las herramientas y permisos disponibles, investigar archivos, proponer cambios y ejecutar tareas en tu entorno. No es solamente un chat: el agente puede reunir evidencia y actuar, pero sus resultados necesitan revisión humana.
 
-## Dónde está el trabajo (léelo primero)
+## Empezar con una tarea real
 
-El desarrollo activo **no** está aquí. Está en el repositorio público:
+1. Elegí un proyecto y un objetivo acotado, por ejemplo: «Explicá dónde se valida el ingreso de clientes y mostrame los archivos que lo respaldan. No modifiques nada».
+2. Abrí NeoPi en el directorio del proyecto y planteá el objetivo, el contexto y los límites. Indicá qué evidencia esperás y qué acciones requieren tu aprobación.
+3. Revisá las referencias y resultados; preguntá por lo que falte o no coincida. Recién después pedí un cambio pequeño, acordá cómo comprobarlo y revisá el resultado. No ingreses secretos ni datos que no esté autorizado compartir.
 
-**[https://github.com/PsychedelicShayna/neopi](https://github.com/PsychedelicShayna/neopi)**
+Para usarlo precisás un ejecutable compatible, acceso configurado a un proveedor de modelos y permisos adecuados para el trabajo. Las [publicaciones de NeoPi de Cooperbit](https://github.com/CooperbitQuarxs/neopi/releases) incluyen versiones preliminares; revisá la versión, plataforma y archivos disponibles antes de elegir. La existencia de un archivo publicado no significa que su instalación se haya probado en tu equipo. El acceso y las cuentas de oficina todavía requieren configuración; no supongas que están habilitados.
 
-Ahí conviene mirar:
+## Cómo encaja
 
-- [Todos los pull requests](https://github.com/PsychedelicShayna/neopi/pulls?q=is%3Apr) (abiertos y cerrados)
-- [Todos los issues](https://github.com/PsychedelicShayna/neopi/issues?q=is%3Aissue) (abiertos y cerrados)
+- **NeoPi** conserva el motor y puede ejecutar localmente por sí solo; su interfaz propia es la terminal.
+- **[NeoCode](https://github.com/CooperbitQuarxs/neocode)** ofrece una interfaz gráfica y hoy puede usar una instancia local de NeoPi sin NeoCore.
+- **NeoCore** es una dirección futura: un servicio sin interfaz basado en código del motor, todavía no implementado. La idea es que las interfaces puedan conectarse a trabajo local o a un servicio local/remoto, sin quitarle a NeoPi su ejecución local.
+- **NeoProxy** es la puerta de acceso a modelos; **NeoDeck** apunta a ser un tablero web de equipo. La puesta en marcha de oficina y la conexión entre servicios son futuras, no algo ya configurado por este documento.
 
-Ese es el árbol de desarrollo. PsychedelicShayna trabaja ahí y, cuando una versión de los tres proyectos (NeoPi, NeoCode, NeoDeck) le parezca **suficientemente lista para el equipo**, la publicará en estos repos privados de Cooperbit.
+El [panorama general y guía de primera tarea](./docs/panorama-general.md) explica modelos, agentes, evidencia, permisos y la dirección del sistema con más profundidad.
 
-## Qué es este repositorio
+## Repositorio y licencia
 
-Espejo / destino de **versiones para el equipo**, no el día a día del desarrollo.
+Este repositorio privado es el espejo para Cooperbit. El desarrollo activo, [pull requests](https://github.com/PsychedelicShayna/neopi/pulls?q=is%3Apr) e [issues](https://github.com/PsychedelicShayna/neopi/issues?q=is%3Aissue) están en [PsychedelicShayna/neopi](https://github.com/PsychedelicShayna/neopi); el proyecto deriva de [oh-my-pi](https://github.com/can1357/oh-my-pi). La presencia de código o releases en el espejo no garantiza que cada versión esté aprobada para el equipo.
 
-- Hoy: **marcador de posición** (aún sin el código integrado).
-- Después de cada publicación que ella considere lista: el código usable por Cooperbit vive **aquí**.
-- Issues en Cooperbit: más adelante se podrán abrir **aquí** sobre lo ya publicado / en release para el equipo. El tracker de desarrollo y el ruido de WIP siguen en el repo público.
-
-## Pendiente en este lado (Cooperbit)
-
-Solo puesta en marcha del destino privado — no significa que el proyecto esté parado:
-
-- Integrar el código desde el repo público
-- Traducción al español de textos orientados al equipo
-- Ficha del proyecto (descripción, enlaces, identidad Neo*)
-- Primera publicación (PR o push) a la rama por defecto
-- Protección de ramas y otras políticas del repositorio
-- Automatización del espejo (línea estable / releases)
-- CI / releases en la org, si aplica
-- Uso del issue tracker de este repo para el equipo (cuando haya algo publicado)
-
-## Licencia
-
-El código está bajo licencia **MIT** (ver [LICENSE](./LICENSE)). Se conservan los avisos de copyright del código heredado y de PsychedelicShayna.
-
-## Contacto
-
-Mientras no haya código ni issues activos aquí, el foco y las preguntas de desarrollo van al **repo público** enlazado arriba.
-
----
-
-*CooperbitQuarxs/neopi · origen de trabajo: https://github.com/PsychedelicShayna/neopi*
+El código está bajo licencia **MIT** (ver [LICENSE](./LICENSE)); se conservan los avisos de copyright y de terceros ([THIRD-PARTY-NOTICES.txt](./THIRD-PARTY-NOTICES.txt)).
