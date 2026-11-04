@@ -561,7 +561,13 @@ for (const kind of ["hub", "picker"] as const) {
 		const initial = props(menu.describe(withPicker));
 		for (const key of "/sonnet") menu.handleInput(key);
 		menu.handleNativeEvent({ type: "select", key: "", item: "openai/gpt-5.6" });
-		menu.handleNativeEvent({ type: "action", key: "", act: kind === "hub" ? "scope" : "task", value: "roles", mods: [] });
+		menu.handleNativeEvent({
+			type: "action",
+			key: "",
+			act: kind === "hub" ? "scope" : "task",
+			value: "roles",
+			mods: [],
+		});
 		expect(props(menu.describe(withPicker)).selected).toBe(initial.selected);
 		expect(props(menu.describe(withPicker)).scope).toBe(initial.scope);
 		expect(props(menu.describe(withPicker)).title).toBe(initial.title);
@@ -746,13 +752,34 @@ test("/models confirmed pattern restores working Vim motions and normal footer h
 	expect(props(hub.describe(withPicker)).query).toBe("/^model-/");
 	expect(calls).toEqual({ assign: [], cancel: 0 });
 	for (const hint of hints()) {
-		expect(hint).toContain("j/k");
 		expect(hint).toContain("/ search");
-		expect(hint).toContain("gg/G");
-		expect(hint).toMatch(/Ctrl-(?:u\/d|d\/u)/i);
+		expect(hint).toContain("? help");
 		expect(hint).not.toContain("Enter confirm");
 		expect(hint).not.toContain("Esc clear");
 	}
+	expect(hints()[0]).toContain("hjkl gg/G C-u d e y");
+});
+
+test("a select-only picker never marks models over the live context window", () => {
+	const small = model("demo", "tiny", { contextWindow: 1_000 });
+	const models = [...MODELS, small];
+	const picks: { selector: string; overContext: boolean }[] = [];
+	const picker = new ModelPickerComponent(
+		ui,
+		source({ default: "demo/demo" }, ["demo/demo"]),
+		{ ...registry(models), refreshIfStale: async () => false },
+		models.map(entry => ({ model: entry })),
+		{
+			onPick: (_model, selector, meta) => picks.push({ selector, overContext: meta.overContext }),
+			onCancel: () => {},
+		},
+		{ currentSelector: "demo/tiny", currentContextTokens: 50_000, selectOnly: true },
+	);
+	const rendered = picker.render(120).join("\n");
+	expect(rendered).not.toContain("context>");
+	expect(rendered).not.toContain("compacts with");
+	picker.handleNativeEvent({ type: "activate", key: "", item: "demo/tiny" });
+	expect(picks).toEqual([{ selector: "demo/tiny", overContext: false }]);
 });
 
 test("shows a non-default service tier's own speed aggregate", () => {
@@ -1088,7 +1115,7 @@ test("effort rule search stays in section and destructive actions target the fil
 
 test("provider navigation footer stays concise and counts outside All ignore its retained query", () => {
 	const hub = openHub({ assign: [], cancel: 0 });
-	const hint = "h/l pane · j/k providers · ⏎ models · / search · Alt+←/→ kind · ⎋ close";
+	const hint = "⏎ models · / search · Alt+←/→ kind · ⎋ close";
 	expect(plainText(hub.render(180).join("\n"))).toContain(hint);
 	hub.handleInput("/");
 	for (const key of "sonnet") hub.handleInput(key);

@@ -31,8 +31,8 @@ export const cfgTaskIsolationEnabled = register({
 	ui: {
 		tab: "tasks",
 		group: "Isolation",
-		label: "Isolate Subagents",
-		description: "Run subagents in an isolated copy of the checkout and integrate their changes afterwards",
+		label: "Allow Isolated Subagents",
+		description: "Allow per-task isolation with `isolated: true`; tasks without it run in the shared checkout",
 	},
 });
 
@@ -251,6 +251,19 @@ export const cfgTaskBatch = register({
 	},
 });
 
+export const cfgTaskFile = register({
+	id: "task.file",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Task Instructions from Files",
+		description:
+			"Let the task tool read subagent instructions from a file (taskFile), recording its path and SHA-256.",
+	},
+});
+
 export const cfgTaskStructured = register({
 	id: "task.structured",
 	type: "boolean",
@@ -261,7 +274,7 @@ export const cfgTaskStructured = register({
 		group: "Subagents",
 		label: "Structured Task Results",
 		description:
-			"Expose outputSchema/schemaMode on the task tool and return subagent results through the yield tool, validated against caller or agent output schemas. Off: task subagents have no yield tool and return their final message as plain text. Eval agent()/workpool spawns always keep structured results.",
+			"Expose outputSchema/schemaMode on the task tool and return subagent results through the yield tool, validated against caller or agent output schemas. Off: task subagents have no yield tool and return their final message as plain text, except agents whose definition sets structured: true. Eval agent()/workpool spawns always keep structured results.",
 	},
 });
 
@@ -377,6 +390,29 @@ export const cfgTaskCompletionProbe = register({
 		label: "Subagent Completion Probe",
 		description:
 			"Ask a working subagent, through a cached side request like /btw, to estimate how complete its task is: after 2, 5, 10 and 30 more minutes, then hourly. The estimate shows next to the subagent in wait and task views. Only subagents spawned by the main agent of an interactive session are asked; print, RPC, ACP and SDK runs never probe.",
+	},
+});
+
+export const cfgDefinitionGenerationConversationTtlMs = register({
+	id: "task.definitionGenerationConversationTtlMs",
+	type: "number",
+	default: 3_600_000,
+	validate: value => {
+		if (value === undefined) return;
+		if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > 2_147_483_647)
+			throw new Error("Definition generation retention must be a non-negative duration in milliseconds (at most 2147483647).");
+	},
+	ui: {
+		tab: "tasks",
+		group: "Agent Definitions",
+		label: "Generation Conversation TTL",
+		description:
+			"Keep agent and advisor generation conversations in memory for this many milliseconds after the last generation. Default: 1 hour. 0 disables retention; nothing is saved to disk.",
+		options: [
+			{ value: "0", label: "No retention" },
+			{ value: "300000", label: "5 minutes" },
+			{ value: "3600000", label: "1 hour", description: "Default" },
+		],
 	},
 });
 

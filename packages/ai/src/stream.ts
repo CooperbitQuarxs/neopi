@@ -3,7 +3,6 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
-import { isOfficialAnthropicApiUrl } from "@oh-my-pi/pi-catalog/compat/anthropic";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl, resolveVertexEndpointHost } from "@oh-my-pi/pi-catalog/hosts";
 import {
@@ -14,8 +13,15 @@ import {
 	resolveWireModelId,
 	withoutUnverifiedThinking,
 } from "@oh-my-pi/pi-catalog/model-thinking";
-import { isOfficialCodexApiUrl } from "@oh-my-pi/pi-catalog/wire/codex";
-import { $env, getProviderInFlightRoot, isEnoent, logger, untilAborted } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	getProviderInFlightRoot,
+	isEnoent,
+	logger,
+	type CredentialRequestScope,
+	untilAborted,
+	wrapFetchForCredentialScope,
+} from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
 import { createAuthRetryKeyState, isApiKeyResolver, resolvedApiKeyBearer, resolveNextAuthRetryKey } from "./auth-retry";
 import type { OAuthRequestIdentity } from "./auth/types";
@@ -24,6 +30,7 @@ import * as AIError from "./error";
 import { ProviderHttpError } from "./error";
 import { isConcurrencyCapExclusion, isUsageLimitOutcome } from "./error/rate-limit";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
+import { reachesOfficialEndpoint } from "./providers/anthropic-state";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { AppleFoundationModelsOptions } from "./providers/apple-foundation-models";
 import type { CursorOptions } from "./providers/cursor";
@@ -71,7 +78,6 @@ import type {
 } from "./types";
 import { getHeaderCaseInsensitive, resolveCacheRetention } from "./utils";
 import { AssistantMessageEventStream } from "./utils/event-stream";
-import { isFoundryEnabled } from "./utils/foundry";
 import { applyGlyphCodec } from "./utils/glyph-codec";
 import { wrapLeakedThinkingStream } from "./utils/leaked-thinking-stream";
 import { withThinkingLoopGuard } from "./utils/thinking-loop";
@@ -86,60 +92,12 @@ function isGoogleVertexAuthenticatedModel(model: Model<Api>): boolean {
 }
 
 /**
- * Whether {@link model} is an official first-party endpoint whose stream needs
- * no leaked-thinking healing — the official Anthropic API and the official
- * OpenAI / OpenAI-Codex endpoints return structured thinking blocks and never
- * leak reasoning idioms into the visible text channel.
- *
- * The gate is provider id **and** official endpoint URL: pointing
- * `provider: "anthropic"` (or `openai`) at a custom proxy via `models.yml`
- * still routes through {@link wrapLeakedThinkingStream}, since a third-party
- * gateway may well leak. URL checks are strict (exact origin / path boundary
- * or parsed hostname) — a substring match would accept lookalikes like
- * `https://api.openai.com.evil/`. Anthropic Foundry (`CLAUDE_CODE_USE_FOUNDRY`)
- * redirects an empty `baseUrl` to `FOUNDRY_BASE_URL`, so the check runs against
- * that effective endpoint — exempt only when it resolves to the official host.
- */
-function isLeakedThinkingHealExempt(model: Model<Api>): boolean {
-	switch (model.provider) {
-		case "anthropic": {
-			// Mirror resolveAnthropicBaseUrl's effective endpoint: Foundry redirects
-			// an empty baseUrl to FOUNDRY_BASE_URL; otherwise an explicit non-official
-			// model.baseUrl wins, then the ANTHROPIC_BASE_URL gateway fallback, then
-			// the official default. Exempt only when the effective endpoint is official.
-			if (isFoundryEnabled()) {
-				const foundry = $env.FOUNDRY_BASE_URL?.trim();
-				if (foundry) return isOfficialAnthropicApiUrl(foundry);
-			}
-			if (model.baseUrl && !isOfficialAnthropicApiUrl(model.baseUrl)) return false;
-			return isOfficialAnthropicApiUrl($env.ANTHROPIC_BASE_URL?.trim() || model.baseUrl);
-		}
-		case "openai":
-			return isOfficialOpenAIApiUrl(model.baseUrl);
-		case "openai-codex":
-			return isOfficialCodexApiUrl(model.baseUrl);
-		default:
-			return false;
-	}
-}
-
-/** Strict official-OpenAI endpoint check; missing baseUrl defaults to `api.openai.com`. */
-function isOfficialOpenAIApiUrl(baseUrl: string | undefined): boolean {
-	if (!baseUrl) return true;
-	try {
-		return new URL(baseUrl).hostname === "api.openai.com";
-	} catch {
-		return false;
-	}
-}
-
-/**
- * Apply live leaked-thinking healing unless {@link model} is an official
- * first-party endpoint ({@link isLeakedThinkingHealExempt}), which emits
- * structured thinking and needs no healing.
+ * Apply live leaked-thinking healing unless the request reaches the model's official endpoint
+ * ({@link reachesOfficialEndpoint}): official Anthropic / OpenAI / Codex endpoints return structured
+ * thinking blocks and never leak reasoning idioms into the visible text channel.
  */
 function healLeakedThinking(model: Model<Api>, inner: AssistantMessageEventStream): AssistantMessageEventStream {
-	return isLeakedThinkingHealExempt(model) ? inner : wrapLeakedThinkingStream(inner);
+	return reachesOfficialEndpoint(model) ? inner : wrapLeakedThinkingStream(inner);
 }
 
 type ProviderInFlightLease = {
@@ -1294,6 +1252,7 @@ function streamSimpleRequest<TApi extends Api>(
 			apiKey?: string,
 			credentialId?: number,
 			oauthIdentity?: OAuthRequestIdentity,
+			credentialScope?: CredentialRequestScope,
 		): Promise<AuthRetryFailure | undefined> => {
 			const bufferedEvents: AssistantMessageEvent[] = [];
 			let emittedReplayUnsafeEvent = false;
@@ -1303,7 +1262,13 @@ function streamSimpleRequest<TApi extends Api>(
 			};
 
 			try {
-				const attemptOptions = { ...requestOptions, apiKey, credentialId, oauthIdentity };
+				const attemptOptions = {
+					...requestOptions,
+					apiKey,
+					credentialId,
+					oauthIdentity,
+					fetch: wrapFetchForCredentialScope(requestOptions.fetch ?? fetch, credentialScope),
+				};
 				const inner = streamSimpleRequest(model, context, attemptOptions);
 				for await (const event of inner) {
 					if (credentialId !== undefined) {
@@ -1372,11 +1337,13 @@ function streamSimpleRequest<TApi extends Api>(
 			let lastKey: string | undefined;
 			let credentialId: number | undefined;
 			let oauthIdentity: OAuthRequestIdentity | undefined;
+			let credentialScope: CredentialRequestScope | undefined;
 			try {
 				const resolved = await apiKeyResolver({ lastChance: false, error: undefined, signal });
 				lastKey = resolvedApiKeyBearer(resolved);
 				credentialId = typeof resolved === "string" ? undefined : resolved?.credentialId;
 				oauthIdentity = typeof resolved === "string" ? undefined : resolved?.oauthIdentity;
+				credentialScope = typeof resolved === "object" ? resolved : undefined;
 			} catch (error) {
 				// A thrown resolver is a broker/OAuth/network failure, not a missing
 				// key — surface the cause instead of masking it as "No API key".
@@ -1398,7 +1365,7 @@ function streamSimpleRequest<TApi extends Api>(
 				return;
 			}
 			const retryState = createAuthRetryKeyState(lastKey);
-			let failure = await runAttempt(lastKey, credentialId, oauthIdentity);
+			let failure = await runAttempt(lastKey, credentialId, oauthIdentity, credentialScope);
 			if (!failure) return;
 			while (true) {
 				// Caller aborted between attempts: don't mint a fresh token or fire
@@ -1406,6 +1373,7 @@ function streamSimpleRequest<TApi extends Api>(
 				if (signal?.aborted) break;
 				let nextCredentialId: number | undefined;
 				let nextOAuthIdentity: OAuthRequestIdentity | undefined;
+				let nextScope: CredentialRequestScope | undefined;
 				const nextKey = await resolveNextAuthRetryKey(
 					retryState,
 					apiKeyResolver,
@@ -1414,10 +1382,11 @@ function streamSimpleRequest<TApi extends Api>(
 					resolved => {
 						nextCredentialId = typeof resolved === "string" ? undefined : resolved?.credentialId;
 						nextOAuthIdentity = typeof resolved === "string" ? undefined : resolved?.oauthIdentity;
+						nextScope = typeof resolved === "object" ? resolved : undefined;
 					},
 				);
 				if (nextKey === undefined) break;
-				const next = await runAttempt(nextKey, nextCredentialId, nextOAuthIdentity);
+				const next = await runAttempt(nextKey, nextCredentialId, nextOAuthIdentity, nextScope);
 				if (!next) return;
 				failure = next;
 			}
@@ -1614,6 +1583,34 @@ const GOOGLE_THINKING: Record<Effort, number> = {
 	xhigh: 24575,
 	max: 32768,
 };
+
+/**
+ * Estimated thinking spend for an effort, used to size Google's
+ * `maxOutputTokens` (Gemini counts thinking against it). Level mode and the
+ * dynamic budget (`-1`, from a custom or catalog budget) put no positive
+ * number on the wire, so the effort default stands in for them.
+ */
+function googleThinkingHeadroom(model: Model<Api>, effort: Effort, customBudgets?: ThinkingBudgets): number {
+	const custom = customBudgets?.[effort];
+	if (custom !== undefined && custom > 0) return custom;
+	const catalog = model.thinking?.effortBudgets?.[effort];
+	return catalog !== undefined && catalog > 0 ? catalog : GOOGLE_THINKING[effort];
+}
+
+/**
+ * Google total output cap for a caller answer budget: the budget plus thinking
+ * headroom, bounded by the model cap. `undefined` (no cap sent) when neither
+ * the caller nor the model has one.
+ */
+function googleMaxOutputTokens(
+	baseMaxTokens: number | undefined,
+	model: Model<Api>,
+	headroom: number,
+): number | undefined {
+	return baseMaxTokens === undefined
+		? undefined
+		: maxTokensWithThinkingBudget(baseMaxTokens, model.maxTokens, headroom);
+}
 
 const BEDROCK_CLAUDE_THINKING: Record<Effort, number> = {
 	minimal: 1024,
@@ -1826,6 +1823,7 @@ function mapOptionsForApi<TApi extends Api>(
 		repetitionPenalty: options?.repetitionPenalty,
 		maxTokens: options?.maxTokens ?? model.maxTokens ?? undefined,
 		signal: options?.signal,
+		maxHttpAttempts: options?.maxHttpAttempts,
 		apiKey: apiKey ?? (typeof options?.apiKey === "string" ? options.apiKey : undefined),
 		credentialId: options?.credentialId,
 		oauthIdentity: options?.oauthIdentity,
@@ -1834,6 +1832,7 @@ function mapOptionsForApi<TApi extends Api>(
 		initiatorOverride: options?.initiatorOverride,
 		maxRetryDelayMs: options?.maxRetryDelayMs,
 		metadata: options?.metadata,
+		loopGuard: options?.loopGuard,
 		taskBudget: options?.taskBudget,
 		sessionId: options?.sessionId,
 		promptCacheKey: options?.promptCacheKey,
@@ -1845,7 +1844,6 @@ function mapOptionsForApi<TApi extends Api>(
 		minimizeEffort: options?.minimizeEffort,
 		liveSteering: options?.liveSteering,
 		maxInFlightRequests: options?.maxInFlightRequests,
-		toolNamespacesInfo: options?.toolNamespacesInfo,
 		onPayload: options?.onPayload,
 		onResponse: options?.onResponse,
 		onSseEvent: options?.onSseEvent,
@@ -2121,6 +2119,7 @@ function mapOptionsForApi<TApi extends Api>(
 				codexCompaction: options?.codexCompaction,
 				reasoningSummary: options?.hideThinkingSummary ? null : undefined,
 				textVerbosity: options?.textVerbosity,
+				disableReasoning: options?.disableReasoning,
 				forceReasoningOff: options?.forceReasoningOff,
 			});
 
@@ -2128,14 +2127,16 @@ function mapOptionsForApi<TApi extends Api>(
 			// Explicitly disable thinking when reasoning is absent, unsupported, or
 			// replaced by the caller's external scratchpad. Gemini defaults thinking on.
 			const reasoning = options?.reasoning;
-			if (!reasoning || !model.reasoning || options?.disableReasoning || options?.forceReasoningOff) {
-				return castApi<"google-generative-ai">({
+			const thinkingOff = () =>
+				castApi<"google-generative-ai">({
 					...base,
 					serviceTier: options?.serviceTier,
 					thinking: resolveGoogleThinkingOff(model),
 					toolChoice: mapGoogleToolChoice(options?.toolChoice),
 					cachedContent: options?.cachedContent,
 				});
+			if (!reasoning || !model.reasoning || options?.disableReasoning || options?.forceReasoningOff) {
+				return thinkingOff();
 			}
 
 			const googleModel = model as Model<"google-generative-ai">;
@@ -2146,6 +2147,12 @@ function mapOptionsForApi<TApi extends Api>(
 			if (googleModel.thinking?.mode === "google-level") {
 				return castApi<"google-generative-ai">({
 					...base,
+					// Caller's maxTokens is desired output; Gemini counts thinking against the cap.
+					maxTokens: googleMaxOutputTokens(
+						base.maxTokens,
+						model,
+						googleThinkingHeadroom(model, effort, options?.thinkingBudgets),
+					),
 					serviceTier: options?.serviceTier,
 					thinking: {
 						enabled: true,
@@ -2157,11 +2164,24 @@ function mapOptionsForApi<TApi extends Api>(
 				});
 			}
 
+			const requestedBudget = getGoogleBudget(googleModel, effort, options?.thinkingBudgets);
+			const maxTokens = googleMaxOutputTokens(
+				base.maxTokens,
+				model,
+				requestedBudget > 0 ? requestedBudget : googleThinkingHeadroom(model, effort, options?.thinkingBudgets),
+			);
+			let budgetTokens = requestedBudget;
+			// If not enough room for thinking + output, reduce thinking budget.
+			if (requestedBudget > 0 && maxTokens !== undefined && maxTokens <= requestedBudget) {
+				budgetTokens = maxTokens - MIN_OUTPUT_TOKENS;
+				if (budgetTokens <= 0) return thinkingOff();
+			}
 			return castApi<"google-generative-ai">({
 				...base,
+				maxTokens,
 				thinking: {
 					enabled: true,
-					budgetTokens: getGoogleBudget(googleModel, effort, options?.thinkingBudgets),
+					budgetTokens,
 				},
 				hideThinkingSummary: options?.hideThinkingSummary,
 				toolChoice: mapGoogleToolChoice(options?.toolChoice),
@@ -2179,6 +2199,12 @@ function mapOptionsForApi<TApi extends Api>(
 				if (model.thinking?.mode === "google-level") {
 					return castApi<"google-gemini-cli">({
 						...base,
+						// Caller's maxTokens is desired output; Gemini counts thinking against the cap.
+						maxTokens: googleMaxOutputTokens(
+							base.maxTokens,
+							model,
+							googleThinkingHeadroom(model, effort, options.thinkingBudgets),
+						),
 						requestModelId: resolveWireModelId(model, effort),
 						thinking: {
 							enabled: true,
@@ -2234,14 +2260,16 @@ function mapOptionsForApi<TApi extends Api>(
 			// Explicitly disable thinking when reasoning is absent, unsupported, or
 			// replaced by the caller's external scratchpad.
 			const reasoning = options?.reasoning;
-			if (!reasoning || !model.reasoning || options?.disableReasoning || options?.forceReasoningOff) {
-				return castApi<"google-vertex">({
+			const thinkingOff = () =>
+				castApi<"google-vertex">({
 					...base,
 					serviceTier: options?.serviceTier,
 					thinking: resolveGoogleThinkingOff(model),
 					toolChoice: mapGoogleToolChoice(options?.toolChoice),
 					cachedContent: options?.cachedContent,
 				});
+			if (!reasoning || !model.reasoning || options?.disableReasoning || options?.forceReasoningOff) {
+				return thinkingOff();
 			}
 
 			const vertexModel = model as Model<"google-vertex">;
@@ -2251,6 +2279,12 @@ function mapOptionsForApi<TApi extends Api>(
 			if (geminiModel.thinking?.mode === "google-level") {
 				return castApi<"google-vertex">({
 					...base,
+					// Caller's maxTokens is desired output; Gemini counts thinking against the cap.
+					maxTokens: googleMaxOutputTokens(
+						base.maxTokens,
+						model,
+						googleThinkingHeadroom(model, effort, options?.thinkingBudgets),
+					),
 					serviceTier: options?.serviceTier,
 					thinking: {
 						enabled: true,
@@ -2262,12 +2296,25 @@ function mapOptionsForApi<TApi extends Api>(
 				});
 			}
 
+			const requestedBudget = getGoogleBudget(geminiModel, effort, options?.thinkingBudgets);
+			const maxTokens = googleMaxOutputTokens(
+				base.maxTokens,
+				model,
+				requestedBudget > 0 ? requestedBudget : googleThinkingHeadroom(model, effort, options?.thinkingBudgets),
+			);
+			let budgetTokens = requestedBudget;
+			// If not enough room for thinking + output, reduce thinking budget.
+			if (requestedBudget > 0 && maxTokens !== undefined && maxTokens <= requestedBudget) {
+				budgetTokens = maxTokens - MIN_OUTPUT_TOKENS;
+				if (budgetTokens <= 0) return thinkingOff();
+			}
 			return castApi<"google-vertex">({
 				...base,
+				maxTokens,
 				serviceTier: options?.serviceTier,
 				thinking: {
 					enabled: true,
-					budgetTokens: getGoogleBudget(geminiModel, effort, options?.thinkingBudgets),
+					budgetTokens,
 				},
 				hideThinkingSummary: options?.hideThinkingSummary,
 				toolChoice: mapGoogleToolChoice(options?.toolChoice),

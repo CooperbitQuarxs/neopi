@@ -11,6 +11,7 @@ import type {
 } from "../usage";
 import type {
 	AuthCredential,
+	CredentialUpsertOptions,
 	DisabledCredentialSummary,
 	OAuthCredential,
 	OAuthRefreshReason,
@@ -82,7 +83,11 @@ export interface CredentialRowStore {
 	 * broker. Implementations MUST update their local snapshot before returning
 	 * so subsequent reads see the persisted result.
 	 */
-	upsertAuthCredential(provider: string, credential: AuthCredential): Promise<StoredAuthCredential[]>;
+	upsertAuthCredential(
+		provider: string,
+		credential: AuthCredential,
+		options?: CredentialUpsertOptions,
+	): Promise<StoredAuthCredential[]>;
 	/** Disable all active rows for a provider (logout), forwarding remote writes to the broker before returning. */
 	deleteAuthCredentials(provider: string, disabledCause: string): Promise<void>;
 }
@@ -128,6 +133,20 @@ export interface CredentialRefreshLeaseStore {
 	getCredentialRefreshLeaseExpiresAt(credentialId: number): number | undefined;
 	releaseCredentialRefreshLease(credentialId: number, owner: string): void;
 	renewCredentialRefreshLease(credentialId: number, owner: string, expiresAtMs: number): boolean;
+	/** The lease row as stored, expired or not; `undefined` when no lease row exists. */
+	getCredentialRefreshLeaseHolder?(credentialId: number): CredentialRefreshLeaseHolder | undefined;
+	/**
+	 * Give a lease this owner took back to the holder it replaced, with that
+	 * holder's own expiry, so the holder can still renew it and save the token
+	 * it may have exchanged. Returns false when `owner` no longer holds it.
+	 */
+	handBackCredentialRefreshLease?(credentialId: number, owner: string, holder: CredentialRefreshLeaseHolder): boolean;
+}
+
+/** Owner and expiry of a stored refresh lease row. */
+export interface CredentialRefreshLeaseHolder {
+	owner: string;
+	expiresAtMs: number;
 }
 
 /** Usage history and client-observed request accounting. */
@@ -168,8 +187,9 @@ export interface CredentialUpstream {
 	 * `signal` propagates the agent's cancel (ESC, request abort, …) all the
 	 * way to the broker fetch so a hung connection can't strand the caller
 	 * for `timeoutMs * (maxRetries + 1)`.
-	 * `reason` distinguishes provider-auth recovery from generic/MCP refreshes
-	 * that must always mint a new access token.
+	 * `reason` distinguishes provider-auth recovery and ordinary expiry from
+	 * generic/MCP force-refreshes that must always mint a new access token.
+	 * `rejectedAccess` names the rejected OAuth token, not a provider-wrapped API key.
 	 */
 	refreshOAuthCredential(
 		provider: Provider,
@@ -177,6 +197,7 @@ export interface CredentialUpstream {
 		credential: OAuthCredential,
 		signal?: AbortSignal,
 		reason?: OAuthRefreshReason,
+		rejectedAccess?: string,
 	): Promise<OAuthCredentials>;
 	/**
 	 * Optional async pre-read hook invoked after AuthStorage selects a stored
@@ -195,7 +216,7 @@ export interface CredentialUpstream {
 	 *
 	 * `signal` propagates the agent's cancel down to the broker fetch.
 	 */
-	fetchUsageReports(signal?: AbortSignal): Promise<UsageReport[] | null>;
+	fetchUsageReports(signal?: AbortSignal, provider?: Provider): Promise<UsageReport[] | null>;
 	/**
 	 * Optional store-supplied per-credential usage report lookup. When present,
 	 * `AuthStorage` consults this before its own per-credential upstream fetch

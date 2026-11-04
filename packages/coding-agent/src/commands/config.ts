@@ -2,9 +2,10 @@
  * Manage configuration settings.
  */
 
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { configHelp as commandHelp } from "../cli/command-help";
-import { type ConfigAction, type ConfigCommandArgs, runConfigCommand } from "../cli/config-cli";
+import { type ConfigAction, type ConfigCommandArgs, type ConfigScope, runConfigCommand } from "../cli/config-cli";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
 const ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg", "dump-toml", "to-toml"];
@@ -31,7 +32,16 @@ export default class Config extends Command {
 	static flags = {
 		json: Flags.boolean({ description: "Output JSON" }),
 		force: Flags.boolean({ description: "Allow to-toml to replace existing config.toml files" }),
+		scope: Flags.string({
+			description:
+				'With list: only the keys the "global" (config.yml in the agent dir) or "project" (<cwd>/.omp) layer sets, as written',
+			options: ["global", "project"],
+		}),
 	};
+
+	static examples = [
+		`# Store an administrator-assigned NeoProxy API key through the hidden login prompt\n  ${APP_NAME} login neoproxy --url https://proxy.example.com`,
+	];
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Config);
@@ -45,6 +55,7 @@ export default class Config extends Command {
 			flags: {
 				json: flags.json,
 				force: flags.force,
+				scope: flags.scope as ConfigScope | undefined,
 			},
 		};
 

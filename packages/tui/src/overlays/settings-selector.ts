@@ -1,3 +1,4 @@
+import { provenanceSuffix } from "../theme/provenance";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort } from "@oh-my-pi/pi-ai";
 import {
@@ -20,6 +21,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "../index";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import type { ShapeTarget } from "@oh-my-pi/snapcompact";
 import type {
 	ContextLineMode,
@@ -785,6 +787,11 @@ export interface StatusLinePreviewSettings {
 }
 
 export interface SettingsCallbacks {
+	/** Allow the host to provide a richer personality picker. */
+	createPersonalityManager?: (currentValue: string, done: (value?: string) => void) => Component;
+	/** Effective selection may be a user-defined name outside the built-in enum. */
+	currentPersonality?: () => string;
+	personalityOptions?: () => readonly SubmenuOption[];
 	/** Called when any setting value changes */
 	onChange: (path: string, newValue: unknown) => void;
 	/** Called for theme preview while browsing */
@@ -801,6 +808,8 @@ export interface SettingsCallbacks {
 	onCancel: () => void;
 	/** Edit the persisted settings file, then re-read it before resolving. */
 	onOpenConfigFile?: () => Promise<void>;
+	/** Persist and apply the selected scope to other sessions through the host's reload mechanism. */
+	onApply?: (scope: "global" | "project" | "session") => Promise<string>;
 }
 
 /**
@@ -836,7 +845,12 @@ export class SettingsSelectorComponent implements Component {
 	#textInputActive = false;
 	#restoringNavigation = false;
 	#externalEditPending = false;
+	#applyPending = false;
+	#applyFeedback = "";
+	#stopReload?: () => void;
+	#editingSetting?: { path: string; baseline: string | undefined; changedElsewhere: boolean };
 	readonly #menuKeys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	#hasSectionJump = false;
 	// Frame geometry from the last render, for mouse hit-testing (the
@@ -872,6 +886,48 @@ export class SettingsSelectorComponent implements Component {
 
 		// Initialize with first tab
 		this.#switchToTab("appearance");
+		this.#stopReload = context.settings.onReload?.(() => this.#refreshReloadedSettings());
+	}
+
+	dispose(): void {
+		this.#stopReload?.();
+		this.#stopReload = undefined;
+	}
+
+	/** Refresh existing lists: setItems preserves their cursor, filter, viewport and open editor. */
+	#refreshReloadedSettings(): void {
+		const edit = this.#editingSetting;
+		if (edit && JSON.stringify(this.#context.settings.get(edit.path)) !== edit.baseline) edit.changedElsewhere = true;
+		this.#changedCounts.clear();
+		// An empty global search still displays the underlying tab.
+		if (this.#searchList && this.#currentTabId !== "plugins")
+			this.#refreshCurrentTabItems(getSettingsForTab(this.#context.settings.entries, this.#currentTabId));
+		this.#refreshItems();
+		this.#context.requestRender?.();
+	}
+
+	#editSetting(
+		path: string,
+		done: (value?: string) => void,
+		build: (finish: (value?: string) => void) => Component,
+	): Component {
+		this.#editingSetting = {
+			path,
+			baseline: JSON.stringify(this.#context.settings.get(path)),
+			changedElsewhere: false,
+		};
+		return build(value => {
+			this.#editingSetting = undefined;
+			done(value);
+			this.#refreshItems();
+		});
+	}
+
+	#getReloadConflict(): string | undefined {
+		const edit = this.#editingSetting;
+		if (!edit?.changedElsewhere) return undefined;
+		const label = getSettingDef(this.#context.settings.entries, edit.path)?.label ?? edit.path;
+		return `${label}: changed elsewhere — your edit is preserved`;
 	}
 
 	invalidate(): void {
@@ -879,6 +935,19 @@ export class SettingsSelectorComponent implements Component {
 		this.#currentList?.invalidate();
 		this.#searchList?.invalidate();
 		this.#pluginComponent?.invalidate();
+	}
+
+	/** Open the same personality manager used by the settings row. */
+	openPersonalityManager(): boolean {
+		this.#tabBar.selectTab("model");
+		const opened = this.#currentList?.openSubmenuFor("personality") !== undefined;
+		this.#context.requestRender?.();
+		return opened;
+	}
+
+	refreshValues(): void {
+		this.#refreshItems();
+		this.#context.requestRender?.();
 	}
 
 	/** Swap the active content (per-tab list, search list, or plugins). */
@@ -906,22 +975,33 @@ export class SettingsSelectorComponent implements Component {
 		const confirm = editorKey("tui.select.confirm");
 		const cancel = editorKey("tui.select.cancel");
 		const tab = formatKeyHint("tab");
-		const switchTabs = "h/l switch tabs";
 		if (this.#searchList) {
 			return this.#search.focused
 				? `${confirm} confirm search · ${cancel} clear search`
-				: `j/k select · Ctrl-u/d half · PgUp/PgDn page · gg/G ends · / search · ${tab} jump tabs · ${cancel} clear search`;
+				: `/ search · ${tab} jump tabs · ${cancel} clear search · ? help`;
 		}
 		if (this.#currentTabId === "plugins") {
 			return this.#pluginComponent?.atRoot
-				? `${switchTabs} · ${tab} switch tabs · / search · ${cancel} close`
-				: `h parent / l open · ${tab} switch tabs · / search · ${cancel} back`;
+				? `${tab} tabs · / search · ${cancel} close · ? help`
+				: `${tab} tabs · / search · ${cancel} back · ? help`;
 		}
 		if (this.#currentList?.sectionFocused) {
-			return `${editorKeys("tui.select.up", "tui.select.down")} to jump sections · ${tab}/${confirm} to settings · ${switchTabs} · ${cancel} to close`;
+			return `${tab}/${confirm} settings · ${cancel} close · ? help`;
 		}
-		const nav = this.#hasSectionJump ? `${tab} to jump sections · ${switchTabs}` : `${tab} to switch tabs`;
-		return `${confirm}/${formatKeyHint("space")} to change · ${nav} · / search · ${cancel} to close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""}`;
+		const nav = this.#hasSectionJump ? `${tab} sections` : `${tab} tabs`;
+		return `${confirm}/${formatKeyHint("space")} change · ${nav} · Ctrl+S scope${this.#callbacks.onApply ? " · F6 Apply" : ""} · / search · ${cancel} close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""} · ? help${this.#applyFeedback ? ` · ${this.#applyFeedback}` : ""}`;
+	}
+
+	#scopeTitle(styled = false): string {
+		const active = this.#context.settings.scope ?? "global";
+		const scopes = ["global", "project", "session"].map(scope =>
+			scope === active
+				? styled
+					? theme.bold(theme.fg("accent", `[${scope.toUpperCase()}]`))
+					: `[${scope.toUpperCase()}]`
+				: scope,
+		);
+		return `Settings · ${scopes.join(" / ")} · Ctrl+S cycle scope`;
 	}
 
 	/** Single-line search banner: accent icon, editable query with live cursor, right-aligned match count. */
@@ -937,6 +1017,14 @@ export class SettingsSelectorComponent implements Component {
 		return truncateToWidth(`${prefix}${theme.bold(inputLine)} ${count} `, width);
 	}
 
+	get #hasSearchResults(): boolean {
+		return this.#searchList !== null && this.#searchQuery.length > 0 && this.#search.value.length > 0;
+	}
+
+	get #displayList(): SettingsList | null {
+		return this.#hasSearchResults ? this.#searchList : this.#currentList;
+	}
+
 	/**
 	 * Fullscreen frame: title border, tab row, divider, optional search banner,
 	 * the active content sized to fill the terminal, the appearance preview,
@@ -945,21 +1033,30 @@ export class SettingsSelectorComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = Math.max(14, process.stdout.rows || 40);
 		const innerWidth = Math.max(1, width - 4);
+		const hints = menuHintLines(
+			this.#getReloadConflict() ?? this.#footerHintText(),
+			innerWidth,
+			this.#search.focused || this.#textInputActive ? "" : undefined,
+		);
 
 		const tabLines = this.#tabBar.render(innerWidth);
-		const searching = this.#searchList !== null;
+		const searching = this.#hasSearchResults;
+		const showSearch = searching || this.#search.focused;
 		const showPreview = !searching && this.#currentTabId === "appearance";
 		const previewLines = showPreview ? ["", theme.fg("muted", "Preview:"), this.#getStatusPreviewString()] : [];
 
 		// Fixed chrome: top border, tabs, divider, [search row], divider, hint, bottom border.
-		const fixedRows = 1 + tabLines.length + 1 + (searching ? 1 : 0) + 1 + 1 + 1;
+		const fixedRows = 1 + tabLines.length + 1 + (showSearch ? 1 : 0) + 1 + hints.length + 1;
 		const contentRows = Math.max(7, height - fixedRows - previewLines.length);
 
-		const list = this.#searchList ?? this.#currentList;
+		const list = this.#displayList;
 		let contentLines: readonly string[];
 		if (list) {
 			// SettingsList pads itself to viewport + blank + 3 description rows.
 			list.setMaxVisible(contentRows - 4);
+			const submenu = list.openSubmenu?.component;
+			if (submenu && "setAvailableRows" in submenu && typeof submenu.setAvailableRows === "function")
+				submenu.setAvailableRows(contentRows);
 			contentLines = list.render(innerWidth);
 		} else if (this.#pluginComponent) {
 			contentLines = this.#pluginComponent.render(innerWidth);
@@ -968,14 +1065,14 @@ export class SettingsSelectorComponent implements Component {
 		}
 
 		const out: string[] = [];
-		out.push(topBorder(width, "Settings"));
+		out.push(topBorder(width, this.#scopeTitle(true)));
 		this.#tabRowStart = out.length;
 		this.#tabRowCount = tabLines.length;
 		for (const line of tabLines) {
 			out.push(row(line, width));
 		}
 		out.push(divider(width));
-		if (searching) {
+		if (showSearch) {
 			out.push(row(this.#renderSearchBanner(innerWidth), width));
 		}
 		this.#contentRowStart = out.length;
@@ -987,9 +1084,9 @@ export class SettingsSelectorComponent implements Component {
 			out.push(row(line, width));
 		}
 		out.push(divider(width));
-		out.push(row(theme.fg("dim", this.#footerHintText()), width));
+		for (const hint of hints) out.push(row(theme.fg("dim", hint), width));
 		out.push(bottomBorder(width));
-		return out;
+		return this.#help.render(out, width);
 	}
 
 	/**
@@ -1007,6 +1104,7 @@ export class SettingsSelectorComponent implements Component {
 	 * root card of today's generic composition.
 	 */
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		return cx.supports("prefs") ? this.#describePrefs() : this.#describeCard();
 	}
 
@@ -1019,8 +1117,8 @@ export class SettingsSelectorComponent implements Component {
 	 */
 	#describePrefs(): NativeNode {
 		const memo = this.#native;
-		const searching = this.#searchList !== null;
-		const list = this.#searchList ?? this.#currentList;
+		const searching = this.#hasSearchResults;
+		const list = this.#displayList;
 		const entries = this.#context.settings.entries;
 		const plugins = this.#currentTabId === "plugins" ? this.#pluginComponent : null;
 		const pluginPage = plugins?.prefsPage();
@@ -1086,14 +1184,23 @@ export class SettingsSelectorComponent implements Component {
 
 		const searchError = searching ? compileMenuRegex(this.#searchQuery)?.error : undefined;
 		const props: TspPrefsProps = {
-			title: "omp settings",
+			title: this.#scopeTitle(),
 			pages,
 			page: searching ? this.#preSearchTabId : this.#currentTabId,
-			lead: searchError
-				? `Invalid regex: ${searchError}`
-				: searching ? undefined : (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
-			query: searching ? this.#search.value : pluginPage?.query,
-			cursor: searching ? this.#search.input.getCursor() : pluginPage?.cursor,
+			lead: [
+				searchError
+					? `Invalid regex: ${searchError}`
+					: searching
+						? undefined
+						: (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
+				`Ctrl+S cycle scope${this.#callbacks.onApply ? " · F6 Apply" : ""}`,
+				this.#applyFeedback,
+				this.#getReloadConflict(),
+			]
+				.filter(Boolean)
+				.join(" · "),
+			query: searching || this.#search.focused ? this.#search.value : pluginPage?.query,
+			cursor: searching || this.#search.focused ? this.#search.input.getCursor() : pluginPage?.cursor,
 			sections,
 			focus,
 			editing,
@@ -1122,6 +1229,7 @@ export class SettingsSelectorComponent implements Component {
 
 	/** Whether row `id`'s choices fit its popup menu (else the submenu opens as a picker over the page). */
 	#inlineMenu(id: string): boolean {
+		if (id === "personality" && this.#callbacks.createPersonalityManager) return false;
 		const def = getSettingDef(this.#context.settings.entries, id);
 		return def?.type !== "submenu" || this.#submenuOptions(def).length <= PREFS_MENU_MAX;
 	}
@@ -1282,6 +1390,10 @@ export class SettingsSelectorComponent implements Component {
 	): void {
 		const def = getSettingDef(this.#context.settings.entries, id);
 		if (!def) return;
+		if (id === "personality" && this.#callbacks.createPersonalityManager) {
+			list.openSubmenuFor(id);
+			return;
+		}
 		if (value === null) {
 			if (list.openSubmenu) list.handleInput(ESCAPE);
 			this.#context.settings.unset(def.path);
@@ -1327,6 +1439,9 @@ export class SettingsSelectorComponent implements Component {
 				const open = list.openSubmenu;
 				if (open?.id === id && open.component instanceof MultiSelectSubmenu) {
 					open.component.setValues(value);
+					// The native page applies a chip toggle without closing its
+					// editor, so the row and its tab badge only update here.
+					this.#refreshItems();
 					return;
 				}
 				const next = [...value];
@@ -1357,7 +1472,7 @@ export class SettingsSelectorComponent implements Component {
 	 */
 	#describeCard(): NativeNode {
 		const memo = this.#native;
-		const searching = this.#searchList !== null;
+		const searching = this.#hasSearchResults;
 		const children: NativeChild[] = [];
 
 		const active = this.#tabBar.getActiveTab()?.id;
@@ -1366,7 +1481,7 @@ export class SettingsSelectorComponent implements Component {
 		}
 		children.push(memo.tabs.node);
 
-		if (searching) {
+		if (searching || this.#search.focused) {
 			const count = this.#searchMatchCount;
 			if (memo.search?.input !== this.#search.input || memo.search.count !== count) {
 				const countText = count === 1 ? "1 match" : `${count} matches`;
@@ -1388,7 +1503,7 @@ export class SettingsSelectorComponent implements Component {
 			children.push(memo.search.node);
 		}
 
-		const content = this.#searchList ?? this.#currentList ?? this.#pluginComponent;
+		const content = this.#displayList ?? this.#pluginComponent;
 		if (content) children.push(content);
 
 		if (!searching && this.#currentTabId === "appearance") {
@@ -1457,7 +1572,7 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	#routeMouseEvent(event: SgrMouseEvent): boolean {
-		const list = this.#searchList ?? this.#currentList;
+		const list = this.#displayList;
 		// row() insets content by the border column plus a space.
 		const contentColInset = 2;
 		const innerCol = event.col - contentColInset;
@@ -1535,7 +1650,10 @@ export class SettingsSelectorComponent implements Component {
 		);
 		// Keep the footer tab highlight on the tab owning the selected result.
 		list.onSelectionChange = item => this.#syncTabBarToSelection(item);
+		const currentList = this.#currentList;
 		this.#setContent(() => {
+			// Empty drafts show the original sectioned list, not all global results.
+			this.#currentList = currentList;
 			this.#searchList = list;
 		});
 		this.#setSearchQuery(initialQuery);
@@ -1594,12 +1712,17 @@ export class SettingsSelectorComponent implements Component {
 
 		this.#searchList.setItems(items);
 		this.#searchMatchCount = total;
-		this.#tabs = this.#buildSearchTabs(
-			counts,
-			tabResults.map(result => result.tab),
-		);
-		this.#tabBar.setTabs(this.#tabs);
-		this.#syncTabBarToSelection(this.#searchList.getSelectedItem());
+		if (this.#hasSearchResults) {
+			this.#tabs = this.#buildSearchTabs(
+				counts,
+				tabResults.map(result => result.tab),
+			);
+			this.#tabBar.setTabs(this.#tabs);
+			this.#syncTabBarToSelection(this.#searchList.getSelectedItem());
+		} else {
+			this.#tabs = getSettingsTabs();
+			this.#tabBar.setTabs(this.#tabs, this.#preSearchTabId);
+		}
 	}
 
 	/**
@@ -1660,7 +1783,7 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	#syncTabBarToSelection(item: SettingItem | undefined): void {
-		if (!this.#searchList || !item) return;
+		if (!this.#hasSearchResults || !item) return;
 		const def = getSettingDef(this.#context.settings.entries, item.id);
 		if (def) this.#tabBar.setActiveById(def.tab);
 	}
@@ -1700,9 +1823,14 @@ export class SettingsSelectorComponent implements Component {
 		const changed = this.#isChanged(def, currentValue);
 		const item = {
 			id: def.path,
-			label: def.label,
-			description: def.description,
-			warning: def.warning,
+			label: `${this.#context.settings.details?.(def.path).shadowed ? "󰈉 " : ""}${def.label}${provenanceSuffix(def.provenance)}`,
+			description: [def.description, this.#context.settings.details?.(def.path).description]
+				.filter(Boolean)
+				.join("\n"),
+			warning:
+				[def.warning, this.#editingSetting?.path === def.path ? this.#getReloadConflict() : undefined]
+					.filter(Boolean)
+					.join("\n") || undefined,
 			changed,
 			defaultLabel: changed ? this.#defaultLabel(def) : undefined,
 		};
@@ -1718,28 +1846,31 @@ export class SettingsSelectorComponent implements Component {
 				return {
 					...item,
 					currentValue: this.#getSubmenuCurrentValue(def.path, currentValue),
-					submenu: (cv, done) => this.#createSubmenu(def, cv, done),
+					submenu: (cv, done) => this.#editSetting(def.path, done, finish => this.#createSubmenu(def, cv, finish)),
 				};
 
 			case "text":
 				return {
 					...item,
 					currentValue: this.#formatTextInputValue(def, currentValue),
-					submenu: (cv, done) => this.#createTextInput(def, cv, done),
+					submenu: (cv, done) =>
+						this.#editSetting(def.path, done, finish => this.#createTextInput(def, cv, finish)),
 				};
 
 			case "providerLimits":
 				return {
 					...item,
 					currentValue: this.#formatProviderLimitsValue(currentValue),
-					submenu: (_cv, done) => this.#createProviderLimitsInput(done),
+					submenu: (_cv, done) =>
+						this.#editSetting(def.path, done, finish => this.#createProviderLimitsInput(finish)),
 				};
 
 			case "multiselect":
 				return {
 					...item,
 					currentValue: this.#formatMultiSelectValue(def, currentValue),
-					submenu: (_cv, done) => this.#createMultiSelect(def, done),
+					submenu: (_cv, done) =>
+						this.#editSetting(def.path, done, finish => this.#createMultiSelect(def, finish)),
 				};
 		}
 	}
@@ -1748,6 +1879,7 @@ export class SettingsSelectorComponent implements Component {
 	 * Get the current value for a setting.
 	 */
 	#getCurrentValue(def: SettingDef): unknown {
+		if (def.path === "personality" && this.#callbacks.currentPersonality) return this.#callbacks.currentPersonality();
 		return this.#context.settings.get(def.path);
 	}
 
@@ -1777,6 +1909,7 @@ export class SettingsSelectorComponent implements Component {
 
 	/** A submenu's choices: the declared ones, or the runtime ones (thinking levels, themes, composer shapes). */
 	#submenuOptions(def: SettingDef & { type: "submenu" }): readonly SubmenuOption[] {
+		if (def.path === "personality" && this.#callbacks.personalityOptions) return this.#callbacks.personalityOptions();
 		if (def.path === "defaultThinkingLevel") {
 			// Prepend `auto`; the rest are the model's runtime-supported efforts.
 			const levels: ConfiguredThinkingLevel[] = [AUTO_THINKING, ...this.#context.availableThinkingLevels];
@@ -1802,6 +1935,9 @@ export class SettingsSelectorComponent implements Component {
 		currentValue: string,
 		done: (value?: string) => void,
 	): Component {
+		if (def.path === "personality" && this.#callbacks.createPersonalityManager) {
+			return this.#callbacks.createPersonalityManager(currentValue, done);
+		}
 		if (def.customInput) {
 			return new NumericSettingsField(
 				def,
@@ -1826,7 +1962,7 @@ export class SettingsSelectorComponent implements Component {
 		const activeThemeBeforePreview = getCurrentThemeName() ?? currentValue;
 		if (def.path === "theme.dark" || def.path === "theme.light") {
 			onPreview = value => {
-				return this.#callbacks.onThemePreview?.(value);
+				if (!this.#context.settings.details?.(def.path).shadowed) return this.#callbacks.onThemePreview?.(value);
 			};
 			onPreviewCancel = () => {
 				this.#callbacks.onThemePreview?.(activeThemeBeforePreview);
@@ -2160,6 +2296,32 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		// Nested managers own scope and external-editor shortcuts while open.
+		const nested = (this.#searchList ?? this.#currentList)?.openSubmenu?.component;
+		if (
+			nested &&
+			"managesScope" in nested &&
+			nested.managesScope === true &&
+			(matchesKey(data, "ctrl+s") || matchesKey(data, "ctrl+g"))
+		) {
+			nested.handleInput?.(data);
+			return;
+		}
+		if (
+			(this.#help.open ||
+				(!this.#search.focused &&
+					!this.#textInputActive &&
+					!this.#pluginComponent?.filterFocused &&
+					!this.#displayList?.filterFocused)) &&
+			this.#help.handleInput(data)
+		)
+			return;
+		if (matchesKey(data, "ctrl+s") && !this.#textInputActive) {
+			this.#context.settings.cycleScope?.();
+			this.#refreshItems();
+			this.#context.requestRender?.();
+			return;
+		}
 		if (matchesKey(data, "ctrl+g") && !this.#menuKeys.read(data) && this.#callbacks.onOpenConfigFile) {
 			if (!this.#externalEditPending) {
 				this.#externalEditPending = true;
@@ -2209,7 +2371,26 @@ export class SettingsSelectorComponent implements Component {
 			activeList.handleInput(data);
 			return;
 		}
-
+		if (matchesKey(data, "f6") && this.#callbacks.onApply) {
+			if (!this.#applyPending) {
+				this.#applyPending = true;
+				this.#applyFeedback = "Applying…";
+				void this.#callbacks
+					.onApply(this.#context.settings.scope ?? "global")
+					.then(message => {
+						this.#applyFeedback = message;
+					})
+					.catch((error: unknown) => {
+						this.#applyFeedback = `Apply failed: ${error instanceof Error ? error.message : String(error)}`;
+					})
+					.finally(() => {
+						this.#applyPending = false;
+						this.#refreshReloadedSettings();
+					});
+				this.#context.requestRender?.();
+			}
+			return;
+		}
 
 		const action = this.#menuKeys.read(data);
 		if (action === "pending") return;
@@ -2240,6 +2421,7 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	#handleSearchModeInput(data: string, list: SettingsList): void {
+		const hadPattern = this.#search.value.length > 0;
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
 			this.#menuKeys.reset();
@@ -2247,7 +2429,8 @@ export class SettingsSelectorComponent implements Component {
 				this.#endSearch(false);
 				return;
 			}
-			if (this.#search.query !== this.#searchQuery) this.#setSearchQuery(this.#search.query);
+			if (this.#search.query !== this.#searchQuery || hadPattern !== this.#search.value.length > 0)
+				this.#setSearchQuery(this.#search.query);
 			return;
 		}
 		const action = this.#menuKeys.read(data);
@@ -2309,7 +2492,9 @@ export class SettingsSelectorComponent implements Component {
 
 	leaveMenu(): void {
 		this.#search.focused = false;
+		if (this.#searchList && this.#search.query !== this.#searchQuery) this.#setSearchQuery(this.#search.query);
 		(this.#searchList ?? this.#currentList)?.leaveMenu();
+		this.#editingSetting = undefined;
 		if (isMenuHistoryLeaver(this.#pluginComponent)) this.#pluginComponent.leaveMenu();
 	}
 
