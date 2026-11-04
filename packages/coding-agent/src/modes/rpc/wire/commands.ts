@@ -393,6 +393,17 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		result: "FastModeResult",
 	},
 	{
+		name: "set_subagent_model",
+		doc: "Switch a running subagent's model for this session only, from its next request, like the focused `/switch`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.",
+		params: { subagentId: "string", "selector?": "string", "provider?": "string", "modelId?": "string" },
+		result: {
+			provider: "string",
+			modelId: "string",
+			"thinkingLevel?": "ThinkingLevel",
+			"warning?": "string",
+		},
+	},
+	{
 		name: "live_start",
 		doc: "Start a live voice session bound to this session; returns the voice in use.",
 		params: { "voice?": "string", "instructions?": "string" },

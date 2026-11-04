@@ -31,4 +31,5 @@ export const RPC_CAPABILITIES: readonly string[] = [
 	"session_journal", // Canonical journal paging over RPC, control and the read-only CLI.
 	"control_pipe", // #355
 	"connection_owned_host_tools", // #593; set_host_tools is scoped to its registering connection (#592).
+	"set_subagent_model", // #492; set_subagent_model switches an owned running subagent's model for its next request.
 ];

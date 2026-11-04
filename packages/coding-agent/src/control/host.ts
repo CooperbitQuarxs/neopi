@@ -12,6 +12,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { BUILD_INFO } from "../build-info";
 import followUpWarning from "../prompts/control-follow-up-warning.md" with { type: "text" };
 import { lookup } from "../config/registry";
+import { resolveSessionModelSelector } from "../config/session-model-selector";
 import { readSetting, unsetSetting, writeSetting } from "./settings-adapter";
 import { RpcPromptResults } from "../modes/rpc/rpc-prompt-results";
 import { RpcRoles } from "../modes/rpc/rpc-roles";
@@ -1352,7 +1353,6 @@ export class ControlHost {
 			return;
 		}
 		const selector = typeof frame.thinkingLevel === "string" ? `${base}:${frame.thinkingLevel}` : base;
-		const { resolveSessionModelSelector } = await import("../slash-commands/builtin-modes");
 		const resolved = resolveSessionModelSelector(selector, session, session.settings);
 		if (!resolved.model) {
 			this.#reply(connection, frame, { success: false, error: `Unknown model: ${selector}`, code: "unknown_model" });

@@ -1,4 +1,5 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { Model } from "@oh-my-pi/pi-ai";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { AgentSession } from "../session/agent-session";
 import { FAST_USAGE, runFastCommand } from "../session/fast-command";
@@ -20,6 +21,18 @@ export function setSubagentThinkingLevel(session: AgentSession, level: ThinkingL
 
 export function cycleSubagentThinkingLevel(session: AgentSession): ConfiguredThinkingLevel | undefined {
 	return session.cycleThinkingLevel();
+}
+
+/**
+ * Session-only model switch for one subagent, applied from its next request. Like the focused `/switch`,
+ * a role-configured `:level` for the model wins over the current level when no level is given.
+ */
+export async function setSubagentModel(
+	session: AgentSession,
+	model: Model,
+	thinkingLevel?: ConfiguredThinkingLevel,
+): Promise<void> {
+	await session.setModelTemporary(model, thinkingLevel ?? session.resolveTemporaryModelThinkingLevel(model));
 }
 
 /** Session-only tier mutation; enabled and actually active remain separate session facts. */

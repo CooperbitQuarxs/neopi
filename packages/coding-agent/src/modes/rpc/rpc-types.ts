@@ -123,6 +123,14 @@ export type RpcCommand =
 	| { id?: string; type: "steer_subagent"; subagentId: string; message: string }
 	| { id?: string; type: "set_subagent_thinking_level"; subagentId: string; level: ThinkingLevel }
 	| { id?: string; type: "set_subagent_fast"; subagentId: string; enabled: boolean }
+	| {
+			id?: string;
+			type: "set_subagent_model";
+			subagentId: string;
+			selector?: string;
+			provider?: string;
+			modelId?: string;
+	  }
 	// Live voice (GPT live bound to this session)
 	| { id?: string; type: "live_start"; voice?: string }
 	| { id?: string; type: "live_connect"; sdpOffer: string; voice?: string }
@@ -581,6 +589,15 @@ export interface RpcSubagentSnapshot {
 	fastModeActive?: boolean;
 }
 
+/** `set_subagent_model` result: the model the subagent runs from its next request, and its effort then. */
+export interface RpcSetSubagentModelResult {
+	provider: string;
+	modelId: string;
+	thinkingLevel: ThinkingLevel | undefined;
+	/** Selector resolution note, e.g. a fuzzy match that picked among several models. */
+	warning?: string;
+}
+
 export interface RpcSubagentMessagesResult {
 	sessionFile: string;
 	fromByte: number;
@@ -730,6 +747,13 @@ export type RpcResponse =
 			command: "set_subagent_fast";
 			success: true;
 			data: { enabled: boolean; active: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_subagent_model";
+			success: true;
+			data: RpcSetSubagentModelResult;
 	  }
 
 	// Model

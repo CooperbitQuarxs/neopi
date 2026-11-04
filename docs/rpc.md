@@ -56,6 +56,7 @@ Behavior notes:
 | `session_journal_events` | Native journal commits, active-leaf changes, session identity changes and durable streaming-message associations. See [Native journal events](#native-journal-events). |
 | `session_tree_navigation` | Guarded native same-file `navigate_tree`, restored drafts and images, and explicit `resume_tree` acknowledgement for ask re-answers. See [Native tree navigation](#native-tree-navigation). |
 | `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
+| `set_subagent_model` | `set_subagent_model` switches an owned running subagent's model for its next request. See [Changing a running subagent's model](#changing-a-running-subagents-model). |
 
 ### Native models configuration
 
@@ -1850,6 +1851,33 @@ In the Agent Hub, focus a subagent's transcript to cycle its effort with the
 existing Shift+Tab binding or run `/fast [on|ultra|off|status]`. These controls
 target the focused session. Model switching and other mutation commands remain
 unavailable in that view.
+
+### Changing a running subagent's model
+
+`set_subagent_model` is the focused `/switch` for one owned running subagent: it
+changes that session's model only, from its next provider request, without
+aborting the request in flight. The parent, siblings, saved roles and global
+settings are untouched. Give either a `selector` or an exact `provider` with
+`modelId`.
+
+```json
+{ "id": "req_4", "type": "set_subagent_model", "subagentId": "OmpWorker", "selector": "anthropic/claude-opus-4-5:high" }
+{ "id": "req_4", "type": "response", "command": "set_subagent_model", "success": true, "data": { "provider": "anthropic", "modelId": "claude-opus-4-5", "thinkingLevel": "high" } }
+{ "id": "req_5", "type": "set_subagent_model", "subagentId": "OmpWorker", "provider": "anthropic", "modelId": "claude-haiku-4-5" }
+```
+
+A `selector` resolves exactly like `/switch <selector>` against the subagent's
+own model registry and scope: `provider/id`, a fuzzy id, an `@role` alias, and an
+optional `:level` suffix. Without a suffix the level a role configures for that
+model applies, else the subagent's current level is kept within what the new
+model supports. `data.thinkingLevel` is the level in effect afterwards and
+`data.warning` carries any resolver note. An unknown model, a model without
+credentials, a missing or doubled selection (`selector` together with
+`provider`/`modelId`), and an unknown, finished or foreign subagent id
+return an error and leave the subagent unchanged; `Subagent not running: <id>`
+matches the other `*_subagent` commands. The change appends a session-only
+`model_change` entry (role `temporary`) to the subagent's session file, and
+`get_subagents` reports the new model immediately.
 
 ### Side questions (`/btw`)
 
