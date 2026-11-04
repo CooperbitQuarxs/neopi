@@ -678,6 +678,7 @@ export class Theme {
 		return {
 			action: this.#symbols["cmd.action"],
 			prompt: this.#symbols["cmd.prompt"],
+			personality: this.#symbols["cmd.personality"],
 			extension: this.#symbols["cmd.extension"],
 			settings: this.#symbols["cmd.settings"],
 			gear: this.#symbols["cmd.gear"],
@@ -730,6 +731,7 @@ export class Theme {
 			jobs: this.#symbols["icon.job"],
 			gauge: this.#symbols["icon.throughput"],
 			context: this.#symbols["icon.context"],
+			ghost: this.#symbols["icon.ghost"],
 			agents: this.#symbols["icon.agents"],
 			branch: this.#symbols["icon.branch"],
 			tree: this.#symbols["icon.worktree"],

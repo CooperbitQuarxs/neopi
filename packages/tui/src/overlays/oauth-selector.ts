@@ -5,6 +5,8 @@ import { Container, ScrollView, type SgrMouseEvent, Spacer, TruncatedText } from
 import { theme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { MenuSelection } from "../components/menu-selection";
+import { MenuHelp, MenuHints } from "../components/menu-hints";
+import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import {
 	applyMenuMotion,
 	MenuKeyReader,
@@ -12,7 +14,7 @@ import {
 	MenuViewport,
 	type MenuViewportPosition,
 } from "../components/menu-navigation";
-import type { TspPickerItem, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
+import type { TspPickerAction, TspPickerItem, TspSpan, TspText, TspTone } from "@oh-my-pi/pi-wire";
 import { node, span, text } from "../native/describe";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { CLOSE_ACTION, dockedPicker, PICKER_KEY, pickerAction, pickerEvent, pickerQuery } from "../native/picker";
@@ -25,6 +27,21 @@ const OAUTH_SELECTOR_MAX_VISIBLE = 10;
 export interface OAuthSelectorAuthSource {
 	readonly credentials: Pick<CredentialsApi, "has">;
 	readonly keys: Pick<KeysApi, "source">;
+}
+
+/**
+ * How a host other than `/login` presents the native provider sheet (the
+ * setup wizard): its heading, `role` and size, a status line docked above the
+ * action bar, and the Esc action that leaves in place of Close (the action's
+ * `id` cancels like Esc).
+ */
+export interface OAuthSelectorSheet {
+	readonly title: string;
+	readonly subtitle: TspText;
+	readonly role: string;
+	readonly size: "md" | "lg";
+	readonly status?: TspText;
+	readonly leave: { readonly id: string; readonly label: string };
 }
 
 /**
@@ -51,6 +68,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	#menu: MenuSelection<OAuthProviderInfo>;
 	/** The provider search field; its value drives `#menu`'s query. */
 	readonly #search = new MenuSearchField();
+	readonly #help = new MenuHelp("jk gg/G C-u d e y");
 	#hoveredIndex: number | null = null;
 	/** First provider index of the visible ScrollView window (last #updateList). */
 	#scrollStart = 0;
@@ -78,6 +96,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	/** Picker rows for the whole catalogue; dropped when an auth state changes. */
 	#pickerItems: readonly TspPickerItem[] | undefined;
 	#pickerRoot: NativeNode | undefined;
+	#sheet: OAuthSelectorSheet | undefined;
 	constructor(
 		mode: "login" | "logout",
 		authStorage: OAuthSelectorAuthSource,
@@ -88,6 +107,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			validateAuth?: (providerId: string) => Promise<boolean>;
 			requestRender?: () => void;
 			cancelLabel?: string;
+			sheet?: OAuthSelectorSheet;
 		},
 	) {
 		super(mode === "login" ? "Select provider to login" : "Select provider to logout", "omp.overlay.oauth");
@@ -98,6 +118,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		this.#cancelLabel = options?.cancelLabel ?? "close";
 		this.#validateAuthCallback = options?.validateAuth;
 		this.#requestRenderCallback = options?.requestRender;
+		this.#sheet = options?.sheet;
 		this.#menu = new MenuSelection<OAuthProviderInfo>([], {
 			getKey: provider => provider.id,
 			getSearchText: provider => this.#getProviderSearchText(provider),
@@ -115,6 +136,20 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	stopValidation(): void {
 		this.#validationGeneration += 1;
 		this.#stopSpinner();
+	}
+
+	/** Replace the native sheet's presentation (a new outcome line, a relabelled leave action). */
+	setSheet(sheet: OAuthSelectorSheet): void {
+		this.#sheet = sheet;
+		this.#pickerRoot = undefined;
+	}
+
+	/** Re-read credential state after a sign-in stored one, keeping the query and selection. */
+	refreshAuth(): void {
+		this.#nativeItems = undefined;
+		this.#pickerItems = undefined;
+		this.#menu.setItems(this.#menu.items);
+		this.#updateList();
 	}
 
 	/**
@@ -272,8 +307,6 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	}
 
 	#renderStatusLine(_total: number): string {
-		if (!this.#search.focused && !this.#search.value)
-			return theme.fg("muted", `j/k select · / search · Enter choose · Esc ${this.#cancelLabel}`);
 		return this.#search.render(72, { muted: text => theme.fg("muted", text) });
 	}
 
@@ -329,7 +362,16 @@ export class OAuthSelectorComponent extends OverlayPanel {
 
 		// Search status line (scrollbar covers overflow indication)
 		if (this.#shouldRenderSearchStatus()) {
-			this.#listContainer.addChild(new TruncatedText(this.#renderStatusLine(total), 0, 0));
+			this.#listContainer.addChild(
+				!this.#search.focused && !this.#search.value
+					? new MenuHints(
+							() =>
+								`${editorKeys("tui.select.up", "tui.select.down")} select · / search · Enter choose · ${editorKey("tui.select.cancel")} ${this.#cancelLabel} · ? help`,
+							text => theme.fg("muted", text),
+							"jk gg/G C-u d e y",
+						)
+					: new TruncatedText(this.#renderStatusLine(total), 0, 0),
+			);
 		}
 
 		if (total === 0) {
@@ -398,12 +440,20 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		this.stopValidation();
 	}
 
+	override render(width: number): readonly string[] {
+		return this.#help.render(super.render(width), width);
+	}
+
 	handleInput(data: string): void {
 		const before = this.#search.query;
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
 			if (this.#search.query !== before) this.#syncSearchQuery();
 			else this.#updateList();
+			return;
+		}
+		if (this.#help.handleInput(data)) {
+			this.#requestRenderCallback?.();
 			return;
 		}
 		const action = this.#navigationKeys.read(data);
@@ -507,12 +557,17 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		const query = this.#menu.query;
 		const login = this.#mode === "login";
 		const search = this.#shouldRenderSearchStatus() ? pickerQuery(this.#search.input) : pickerQuery(null);
+		const sheet = this.#sheet;
+		const leave: TspPickerAction = sheet
+			? pickerAction(sheet.leave.id, sheet.leave.label, "escape", { end: true })
+			: CLOSE_ACTION;
 		this.#pickerRoot = dockedPicker({
-			title: login ? "Sign in" : "Sign out",
-			subtitle: login ? "Pick a provider" : "Remove stored credentials",
+			...(sheet ? { role: sheet.role } : {}),
+			title: sheet?.title ?? (login ? "Sign in" : "Sign out"),
+			subtitle: sheet?.subtitle ?? (login ? "Pick a provider" : "Remove stored credentials"),
 			icon: "key-round",
 			noun: "providers",
-			size: "md",
+			size: sheet?.size ?? "md",
 			layout: "cards",
 			preview: "none",
 			...search,
@@ -523,6 +578,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			total: all.length,
 			empty: login ? "No OAuth providers available" : "No stored provider credentials to log out",
 			...(this.#statusMessage ? { message: this.#statusMessage } : {}),
+			...(sheet?.status ? { strip: { label: sheet.status, items: [] } } : {}),
 			actions: [
 				pickerAction(
 					"confirm",
@@ -531,12 +587,14 @@ export class OAuthSelectorComponent extends OverlayPanel {
 					login ? { primary: true } : { primary: true, danger: true },
 				),
 				{
-					...CLOSE_ACTION,
+					...leave,
 					label: this.#search.focused
 						? "Back to list"
-						: this.#cancelLabel === "close"
-							? "Close"
-							: this.#cancelLabel,
+						: sheet
+							? sheet.leave.label
+							: this.#cancelLabel === "close"
+								? "Close"
+								: this.#cancelLabel,
 				},
 			],
 		});
@@ -544,6 +602,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	}
 
 	override describe(cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		if (cx.supports("picker")) return this.#describePicker();
 		if (this.#nativeRoot) return this.#nativeRoot;
 		const items = this.#menu.visibleItems;
@@ -600,13 +659,18 @@ export class OAuthSelectorComponent extends OverlayPanel {
 
 	/** A click (or double-click) on a provider selects and confirms it, like the SGR click in {@link routeMouse}. */
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			this.#requestRenderCallback?.();
+			return;
+		}
 		const ev = pickerEvent(event, PICKER_KEY);
 		if (ev?.kind === "action") {
 			if (ev.act === "confirm") this.#confirmSelection();
 			else if (ev.act === "clear") {
 				this.#search.setValue("");
 				this.#syncSearchQuery();
-			} else if (ev.act === "close" || ev.act === "cancel") {
+			} else if (ev.act === "close" || ev.act === "cancel" || ev.act === this.#sheet?.leave.id) {
 				this.handleInput("\x1b");
 			}
 			return;

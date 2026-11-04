@@ -20,6 +20,8 @@ export type SymbolKey =
 	| "status.shadowed"
 	| "status.aborted"
 	| "status.done"
+	| "provenance.fork"
+	| "provenance.newUpstream"
 	// Navigation
 	| "nav.cursor"
 	| "nav.selected"
@@ -38,6 +40,10 @@ export type SymbolKey =
 	// Context gauge boundaries
 	| "context.speculation"
 	| "context.compaction"
+	| "context.content"
+	| "context.messages"
+	| "context.buffer"
+	| "context.free"
 	// Box Drawing - Rounded
 	| "boxRound.topLeft"
 	| "boxRound.topRight"
@@ -135,6 +141,7 @@ export type SymbolKey =
 	// icon.* equivalent — see SlashCommandIconName for the full vocabulary.
 	| "cmd.action"
 	| "cmd.prompt"
+	| "cmd.personality"
 	| "cmd.extension"
 	| "cmd.settings"
 	| "cmd.gear"
@@ -320,6 +327,7 @@ export type SlashCommandIconName =
 	// Dedicated cmd.* symbols
 	| "action"
 	| "prompt"
+	| "personality"
 	| "extension"
 	| "settings"
 	| "gear"
@@ -373,6 +381,7 @@ export type SlashCommandIconName =
 	| "jobs"
 	| "gauge"
 	| "context"
+	| "ghost"
 	| "agents"
 	| "branch"
 	| "tree"
@@ -402,6 +411,8 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"status.shadowed": "○",
 	"status.aborted": "⏹",
 	"status.done": "•",
+	"provenance.fork": "☾",
+	"provenance.newUpstream": "✦",
 	// Navigation
 	"nav.cursor": "❯",
 	"nav.selected": "➤",
@@ -420,6 +431,10 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	// Context gauge boundaries
 	"context.speculation": "╎",
 	"context.compaction": "┃",
+	"context.content": "⛁",
+	"context.messages": "⛃",
+	"context.buffer": "⛝",
+	"context.free": "⛶",
 	// Box (rounded)
 	"boxRound.topLeft": "╭",
 	"boxRound.topRight": "╮",
@@ -519,6 +534,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	// Slash-command type indicators
 	"cmd.action": "❯",
 	"cmd.prompt": "✎",
+	"cmd.personality": "🎭",
 	"cmd.extension": "🧩",
 	"cmd.settings": "🎛",
 	"cmd.gear": "⚙",
@@ -631,9 +647,11 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"lang.pdf": "📕",
 	"lang.archive": "🗜",
 	"lang.binary": "⚙",
-	// Composer attachment chips
-	"chip.image": "🖼",
-	"chip.video": "🎞",
+	// Composer attachment chips. These sit inside the editable buffer, so the caret column
+	// depends on their width: use Emoji_Presentation glyphs, which every terminal draws 2 cells
+	// wide. Text-presentation pictographs (🖼, 🎞) measure 1 cell but many terminals draw them 2.
+	"chip.image": "📷",
+	"chip.video": "🎬",
 	"chip.paste": "📄",
 	// Settings tabs
 	"tab.appearance": "🎨",
@@ -716,6 +734,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"status.aborted": "\uf04d",
 	// pick: • | alt: ● ·
 	"status.done": "•",
+	"provenance.fork": "\uf186",
+	"provenance.newUpstream": "\uf005",
 	// Navigation
 	// pick:  | alt:  
 	"nav.cursor": "\uf054",
@@ -746,6 +766,10 @@ const NERD_SYMBOLS: SymbolMap = {
 	// Context gauge boundaries — vector intersection starts async speculation; auto-fix applies compaction.
 	"context.speculation": "\u{f055d}",
 	"context.compaction": "\u{f0068}",
+	"context.content": "⛁",
+	"context.messages": "⛃",
+	"context.buffer": "⛝",
+	"context.free": "⛶",
 	// Box Drawing - Rounded (same as unicode)
 	// pick: ╭ | alt: ┌ ┏ ╔
 	"boxRound.topLeft": "╭",
@@ -934,6 +958,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	"cmd.action": "\uea85",
 	// pick: 󰺫 (nf-md-text_box_plus_outline) | alt:  (nf-fa-comment, matches icon.extensionPrompt)
 	"cmd.prompt": "\u{f0eab}",
+	"cmd.personality": "\u{f0d02}",
 	// pick:  (nf-fa-puzzle_piece) | alt: 󰐱 (nf-md-puzzle)
 	"cmd.extension": "\uf12e",
 	// pick:  (nf-fa-sliders) | alt:  (nf-cod-settings)
@@ -1188,6 +1213,8 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"status.shadowed": "[/]",
 	"status.aborted": "[-]",
 	"status.done": "*",
+	"provenance.fork": "[fork]",
+	"provenance.newUpstream": "[new]",
 	// Navigation
 	"nav.cursor": ">",
 	"nav.selected": "->",
@@ -1206,6 +1233,10 @@ const ASCII_SYMBOLS: SymbolMap = {
 	// Context gauge boundaries
 	"context.speculation": ":",
 	"context.compaction": "|",
+	"context.content": "#",
+	"context.messages": "@",
+	"context.buffer": "x",
+	"context.free": ".",
 	// Box Drawing - Rounded (ASCII fallback)
 	"boxRound.topLeft": "+",
 	"boxRound.topRight": "+",
@@ -1304,6 +1335,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	// Slash-command type indicators — unused; the icon column is disabled in ASCII mode
 	"cmd.action": "",
 	"cmd.prompt": "",
+	"cmd.personality": "",
 	"cmd.extension": "",
 	"cmd.settings": "",
 	"cmd.gear": "",

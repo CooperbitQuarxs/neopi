@@ -91,8 +91,8 @@ _APPROVAL_HANDLER_VALUES: Final[frozenset[str]] = frozenset({"host", "ui"})
 _decode_approval_handler = cast("Decoder[ApprovalHandler]", literal(_APPROVAL_HANDLER_VALUES))
 
 
-ApprovalMode: TypeAlias = Literal["always-ask", "write", "yolo"]
-_APPROVAL_MODE_VALUES: Final[frozenset[str]] = frozenset({"always-ask", "write", "yolo"})
+ApprovalMode: TypeAlias = Literal["always-ask", "always-ask-cached", "write", "yolo"]
+_APPROVAL_MODE_VALUES: Final[frozenset[str]] = frozenset({"always-ask", "always-ask-cached", "write", "yolo"})
 _decode_approval_mode = cast("Decoder[ApprovalMode]", literal(_APPROVAL_MODE_VALUES))
 
 
@@ -157,7 +157,7 @@ _decode_cache_warming_mode = cast("Decoder[CacheWarmingMode]", literal(_CACHE_WA
 
 
 MessageUpdates: TypeAlias = Literal["full", "delta"]
-"""`set_event_filter` projection: `delta` drops the accumulated snapshots from `message_update`."""
+"""`set_event_filter` projection: `delta` replaces the accumulated snapshots with the block a start/end event touches."""
 _MESSAGE_UPDATES_VALUES: Final[frozenset[str]] = frozenset({"full", "delta"})
 _decode_message_updates = cast("Decoder[MessageUpdates]", literal(_MESSAGE_UPDATES_VALUES))
 
@@ -286,6 +286,8 @@ class ThinkingContent(TypedDict):
     thinking: str
     thinkingSignature: NotRequired[str]
     itemId: NotRequired[str]
+    narration: NotRequired[bool]
+    """Prose the model addressed to the user, returned by the provider as thinking; present it as answer text."""
 
 
 class RedactedThinkingContent(TypedDict):
@@ -1127,6 +1129,7 @@ class CompactionResult:
     short_summary: str | None = None
     details: JsonValue | None = None
     preserve_data: JsonObject | None = None
+    provider_replay_through_entry_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1230,6 +1233,8 @@ class SessionStats:
     session_file: str | None = None
     credits: SessionCredits | None = None
     routed_models: dict[str, float] | None = None
+    edit_rejections: dict[str, float] | None = None
+    """Failed edits by the engine's `errorKind`."""
     context_usage: ContextUsage | None = None
 
 
@@ -1311,6 +1316,7 @@ class TreeAskQuestionResult:
     custom_input: str | None = None
     note: str | None = None
     option_notes: tuple[TreeAskOptionNote, ...] | None = None
+    note_option: str | None = None
     timed_out: bool | None = None
 
 
@@ -1323,6 +1329,7 @@ class TreeAskDetails:
     custom_input: str | None = None
     note: str | None = None
     option_notes: tuple[TreeAskOptionNote, ...] | None = None
+    note_option: str | None = None
     timed_out: bool | None = None
     results: tuple[TreeAskQuestionResult, ...] | None = None
     chat_redirect: bool | None = None
@@ -1350,7 +1357,9 @@ class NavigateTreeResult:
     cancelled: bool
     session_file: str | None = None
     aborted: bool | None = None
+    """True when abort_branch_summary stopped the summary without moving the leaf."""
     editor_text: str | None = None
+    """The target was a user message: its text, for the editor; the leaf moved to its parent."""
     editor_images: tuple[ImageContent, ...] | None = None
     summary_entry: JsonObject | None = None
     reopen_ask: TreeAskReopen | None = None
@@ -1401,6 +1410,8 @@ class BtwHistoryTurn:
     status: BtwStatus
     created_at: int
     updated_at: int
+    images: tuple[ImageContent, ...] | None = None
+    """Images attached to the question."""
     error: str | None = None
 
 
@@ -1414,6 +1425,8 @@ class BtwHistoryRecord:
     updated_at: int
     id: str
     leaf_id: str | None
+    images: tuple[ImageContent, ...] | None = None
+    """Images attached to the question."""
     error: str | None = None
     follow_ups: tuple[BtwHistoryTurn, ...] | None = None
 
@@ -1687,6 +1700,8 @@ class AgentStartEvent:
     type: Literal["agent_start"] = "agent_start"
     run_owners: tuple[str, ...] | None = None
     agent_starts: int | None = None
+    resumed_tool_call_ids: tuple[str, ...] | None = None
+    """Calls of an unpaired assistant tail a continued run executes before its first model request."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1819,6 +1834,27 @@ class AutoCompactionEndEvent:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class ManualCompactionStartEvent:
+    """A manual compaction (`compact` command, `/compact`, extension `ctx.compact()`) began; the live turn is already aborted."""
+    type: Literal["manual_compaction_start"] = "manual_compaction_start"
+    mode: str | None = None
+    """The `/compact <mode>` subcommand, when one was given."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ManualCompactionEndEvent:
+    """Outcome of the compaction announced by the matching `manual_compaction_start`."""
+    type: Literal["manual_compaction_end"] = "manual_compaction_end"
+    aborted: bool
+    """The compaction was cancelled (abort, or a `session_before_compact` hook)."""
+    result: CompactionResult | None = None
+    """Present when the compaction committed."""
+    skipped: bool | None = None
+    """There was nothing to compact; `errorMessage` says why."""
+    error_message: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class AutoRetryStartEvent:
     type: Literal["auto_retry_start"] = "auto_retry_start"
     attempt: int
@@ -1909,6 +1945,7 @@ class AdvisorYieldedEvent:
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class TtsrTriggeredEvent:
+    """Rule injection: a TTSR rule matched the stream and its text was injected. Each rule carries at least `name`, `path`, and `content`."""
     type: Literal["ttsr_triggered"] = "ttsr_triggered"
     rules: tuple[JsonObject, ...]
 
@@ -1989,6 +2026,8 @@ class PromptError:
     provider: str | None = None
     model: str | None = None
     http_status: int | None = None
+    code: Literal["cost_cap"] | None = None
+    """`cost_cap`: the session reached `session.maxCost` (`--max-cost`) and omp did not send the next request."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2127,6 +2166,31 @@ class LiveEndEvent:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class DictationStateEvent:
+    """State of one draft-only microphone capture."""
+    type: Literal["dictation_state"] = "dictation_state"
+    capture_id: str
+    state: Literal["starting", "recording", "transcribing"]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class DictationTranscriptEvent:
+    """Full accumulated draft preview; replaces the previous preview for this capture."""
+    type: Literal["dictation_transcript"] = "dictation_transcript"
+    capture_id: str
+    text: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class DictationEndEvent:
+    """Exactly one terminal frame per capture; text is the accumulated result."""
+    type: Literal["dictation_end"] = "dictation_end"
+    capture_id: str
+    text: str
+    error: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class BtwDeltaEvent:
     """Text appended to the running side question's latest answer."""
     type: Literal["btw_delta"] = "btw_delta"
@@ -2210,6 +2274,7 @@ class ConfirmUiRequest:
     title: str
     message: str
     timeout: int | None = None
+    login_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2251,6 +2316,7 @@ class CancelUiRequest:
     id: str
     method: Literal["cancel"] = "cancel"
     target_id: str
+    login_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2323,9 +2389,9 @@ class ExtensionUiRequest(ExtensionUiRequestMixin):
     option_details: tuple[SelectOptionDetail, ...] | None = None
     timeout: int | None = None
     message: str | None = None
+    login_id: str | None = None
     placeholder: str | None = None
     secret: bool | None = None
-    login_id: str | None = None
     prefill: str | None = None
     prompt_style: bool | None = None
     questions: tuple[AskQuestion, ...] | None = None
@@ -2447,6 +2513,12 @@ class ResumeTreeResult:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class LiveConnectResult:
+    voice: str
+    sdp_answer: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class LogoutResult:
     remaining_source: str | None = None
 
@@ -2481,11 +2553,11 @@ UsageLimitState: TypeAlias = UsageLimitLowPriority | UsageLimitWrapUp
 MixtureAnswer: TypeAlias = MixtureChoiceAnswer | MixtureNoulAnswer | MixtureScoreAnswer
 
 
-RpcAgentEvent: TypeAlias = JournalStateEvent | JournalEntryEvent | MessagePersistedEvent | AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | ApprovalModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ThemesConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
+RpcAgentEvent: TypeAlias = JournalStateEvent | JournalEntryEvent | MessagePersistedEvent | AdvisorMessageEvent | RunOwnersJoinedEvent | RunOwnersSkippedEvent | ChatModeChangedEvent | ApprovalModeChangedEvent | MixtureHopEndEvent | MixtureDecisionEvent | MixtureLimitEvent | MixtureCheckpointEvent | MixtureRunEndEvent | AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | ManualCompactionStartEvent | ManualCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ModelsConfigurationChangedEvent | ThemesConfigurationChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
 """A session event, discriminated by `type`; `set_event_filter` selects which are sent."""
 
 
-RpcNotification: TypeAlias = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | RpcAgentEvent | UnknownNotification
+RpcNotification: TypeAlias = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | DictationStateEvent | DictationTranscriptEvent | DictationEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | RpcAgentEvent | UnknownNotification
 """Unsolicited outbound frame (everything except responses and host tool/URI requests), discriminated by `type`."""
 
 
@@ -3278,6 +3350,7 @@ def parse_compaction_result(value: object, path: str = "CompactionResult") -> Co
         short_summary=optional(payload, "shortSummary", decode_str, path),
         details=optional(payload, "details", decode_json, path),
         preserve_data=optional(payload, "preserveData", decode_json_object, path),
+        provider_replay_through_entry_id=optional(payload, "providerReplayThroughEntryId", decode_str, path),
     )
 
 
@@ -3400,6 +3473,7 @@ def parse_session_stats(value: object, path: str = "SessionStats") -> SessionSta
         session_file=optional(payload, "sessionFile", decode_str, path),
         credits=optional(payload, "credits", parse_session_credits, path),
         routed_models=optional(payload, "routedModels", record(decode_float), path),
+        edit_rejections=optional(payload, "editRejections", record(decode_float), path),
         context_usage=optional(payload, "contextUsage", parse_context_usage, path),
     )
 
@@ -3497,6 +3571,7 @@ def parse_tree_ask_question_result(value: object, path: str = "TreeAskQuestionRe
         custom_input=optional(payload, "customInput", decode_str, path),
         note=optional(payload, "note", decode_str, path),
         option_notes=optional(payload, "optionNotes", array(parse_tree_ask_option_note), path),
+        note_option=optional(payload, "noteOption", decode_str, path),
         timed_out=optional(payload, "timedOut", decode_bool, path),
     )
 
@@ -3511,6 +3586,7 @@ def parse_tree_ask_details(value: object, path: str = "TreeAskDetails") -> TreeA
         custom_input=optional(payload, "customInput", decode_str, path),
         note=optional(payload, "note", decode_str, path),
         option_notes=optional(payload, "optionNotes", array(parse_tree_ask_option_note), path),
+        note_option=optional(payload, "noteOption", decode_str, path),
         timed_out=optional(payload, "timedOut", decode_bool, path),
         results=optional(payload, "results", array(parse_tree_ask_question_result), path),
         chat_redirect=optional(payload, "chatRedirect", decode_bool, path),
@@ -3596,6 +3672,7 @@ def parse_btw_history_turn(value: object, path: str = "BtwHistoryTurn") -> BtwHi
         status=required(payload, "status", _decode_btw_status, path),
         created_at=required(payload, "createdAt", decode_int, path),
         updated_at=required(payload, "updatedAt", decode_int, path),
+        images=optional(payload, "images", array(parse_image_content), path),
         error=optional(payload, "error", decode_str, path),
     )
 
@@ -3610,6 +3687,7 @@ def parse_btw_history_record(value: object, path: str = "BtwHistoryRecord") -> B
         updated_at=required(payload, "updatedAt", decode_int, path),
         id=required(payload, "id", decode_str, path),
         leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        images=optional(payload, "images", array(parse_image_content), path),
         error=optional(payload, "error", decode_str, path),
         follow_ups=optional(payload, "followUps", array(parse_btw_history_turn), path),
     )
@@ -3938,6 +4016,7 @@ def parse_agent_start_event(value: object, path: str = "AgentStartEvent") -> Age
     return AgentStartEvent(
         run_owners=optional(payload, "runOwners", array(decode_str), path),
         agent_starts=optional(payload, "agentStarts", decode_int, path),
+        resumed_tool_call_ids=optional(payload, "resumedToolCallIds", array(decode_str), path),
     )
 
 
@@ -4081,6 +4160,25 @@ def parse_auto_compaction_end_event(value: object, path: str = "AutoCompactionEn
         result=optional(payload, "result", parse_compaction_result, path),
         error_message=optional(payload, "errorMessage", decode_str, path),
         skipped=optional(payload, "skipped", decode_bool, path),
+    )
+
+
+def parse_manual_compaction_start_event(value: object, path: str = "ManualCompactionStartEvent") -> ManualCompactionStartEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["manual_compaction_start"]]', literal(frozenset({"manual_compaction_start"}))), path)
+    return ManualCompactionStartEvent(
+        mode=optional(payload, "mode", decode_str, path),
+    )
+
+
+def parse_manual_compaction_end_event(value: object, path: str = "ManualCompactionEndEvent") -> ManualCompactionEndEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["manual_compaction_end"]]', literal(frozenset({"manual_compaction_end"}))), path)
+    return ManualCompactionEndEvent(
+        aborted=required(payload, "aborted", decode_bool, path),
+        result=optional(payload, "result", parse_compaction_result, path),
+        skipped=optional(payload, "skipped", decode_bool, path),
+        error_message=optional(payload, "errorMessage", decode_str, path),
     )
 
 
@@ -4284,6 +4382,7 @@ def parse_prompt_error(value: object, path: str = "PromptError") -> PromptError:
         provider=optional(payload, "provider", decode_str, path),
         model=optional(payload, "model", decode_str, path),
         http_status=optional(payload, "httpStatus", decode_int, path),
+        code=optional(payload, "code", cast('Decoder[Literal["cost_cap"]]', literal(frozenset({"cost_cap"}))), path),
     )
 
 
@@ -4438,6 +4537,34 @@ def parse_live_end_event(value: object, path: str = "LiveEndEvent") -> LiveEndEv
     )
 
 
+def parse_dictation_state_event(value: object, path: str = "DictationStateEvent") -> DictationStateEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["dictation_state"]]', literal(frozenset({"dictation_state"}))), path)
+    return DictationStateEvent(
+        capture_id=required(payload, "captureId", decode_str, path),
+        state=required(payload, "state", cast('Decoder[Literal["starting", "recording", "transcribing"]]', literal(frozenset({"starting", "recording", "transcribing"}))), path),
+    )
+
+
+def parse_dictation_transcript_event(value: object, path: str = "DictationTranscriptEvent") -> DictationTranscriptEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["dictation_transcript"]]', literal(frozenset({"dictation_transcript"}))), path)
+    return DictationTranscriptEvent(
+        capture_id=required(payload, "captureId", decode_str, path),
+        text=required(payload, "text", decode_str, path),
+    )
+
+
+def parse_dictation_end_event(value: object, path: str = "DictationEndEvent") -> DictationEndEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["dictation_end"]]', literal(frozenset({"dictation_end"}))), path)
+    return DictationEndEvent(
+        capture_id=required(payload, "captureId", decode_str, path),
+        text=required(payload, "text", decode_str, path),
+        error=optional(payload, "error", decode_str, path),
+    )
+
+
 def parse_btw_delta_event(value: object, path: str = "BtwDeltaEvent") -> BtwDeltaEvent:
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["btw_delta"]]', literal(frozenset({"btw_delta"}))), path)
@@ -4533,6 +4660,7 @@ def parse_confirm_ui_request(value: object, path: str = "ConfirmUiRequest") -> C
         title=required(payload, "title", decode_str, path),
         message=required(payload, "message", decode_str, path),
         timeout=optional(payload, "timeout", decode_int, path),
+        login_id=optional(payload, "loginId", decode_str, path),
     )
 
 
@@ -4580,6 +4708,7 @@ def parse_cancel_ui_request(value: object, path: str = "CancelUiRequest") -> Can
     return CancelUiRequest(
         id=required(payload, "id", decode_str, path),
         target_id=required(payload, "targetId", decode_str, path),
+        login_id=optional(payload, "loginId", decode_str, path),
     )
 
 
@@ -4663,9 +4792,9 @@ def parse_extension_ui_request(value: object, path: str = "ExtensionUiRequest") 
         option_details=optional(payload, "optionDetails", array(parse_select_option_detail), path),
         timeout=optional(payload, "timeout", decode_int, path),
         message=optional(payload, "message", decode_str, path),
+        login_id=optional(payload, "loginId", decode_str, path),
         placeholder=optional(payload, "placeholder", decode_str, path),
         secret=optional(payload, "secret", decode_bool, path),
-        login_id=optional(payload, "loginId", decode_str, path),
         prefill=optional(payload, "prefill", decode_str, path),
         prompt_style=optional(payload, "promptStyle", decode_bool, path),
         questions=optional(payload, "questions", array(parse_ask_question), path),
@@ -4814,6 +4943,14 @@ def parse_resume_tree_result(value: object, path: str = "ResumeTreeResult") -> R
     )
 
 
+def parse_live_connect_result(value: object, path: str = "LiveConnectResult") -> LiveConnectResult:
+    payload = expect_object(value, path)
+    return LiveConnectResult(
+        voice=required(payload, "voice", decode_str, path),
+        sdp_answer=required(payload, "sdpAnswer", decode_str, path),
+    )
+
+
 def parse_logout_result(value: object, path: str = "LogoutResult") -> LogoutResult:
     payload = expect_object(value, path)
     return LogoutResult(
@@ -4901,6 +5038,8 @@ _RPC_AGENT_EVENT_CASES: Final[dict[str, Decoder[RpcAgentEvent]]] = {
         "tool_execution_end": parse_tool_execution_end_event,
         "auto_compaction_start": parse_auto_compaction_start_event,
         "auto_compaction_end": parse_auto_compaction_end_event,
+        "manual_compaction_start": parse_manual_compaction_start_event,
+        "manual_compaction_end": parse_manual_compaction_end_event,
         "auto_retry_start": parse_auto_retry_start_event,
         "auto_retry_end": parse_auto_retry_end_event,
         "cache_warming_start": parse_cache_warming_start_event,
@@ -4938,6 +5077,9 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "live_levels": parse_live_levels_event,
         "live_transcript": parse_live_transcript_event,
         "live_end": parse_live_end_event,
+        "dictation_state": parse_dictation_state_event,
+        "dictation_transcript": parse_dictation_transcript_event,
+        "dictation_end": parse_dictation_end_event,
         "btw_delta": parse_btw_delta_event,
         "btw_record": parse_btw_record_event,
         "command_output": parse_command_output_event,
@@ -4970,6 +5112,8 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "tool_execution_end": parse_rpc_agent_event,
         "auto_compaction_start": parse_rpc_agent_event,
         "auto_compaction_end": parse_rpc_agent_event,
+        "manual_compaction_start": parse_rpc_agent_event,
+        "manual_compaction_end": parse_rpc_agent_event,
         "auto_retry_start": parse_rpc_agent_event,
         "auto_retry_end": parse_rpc_agent_event,
         "cache_warming_start": parse_rpc_agent_event,
@@ -5292,7 +5436,7 @@ class WireClient:
         return parse_session_tree(self._command("get_tree", params), "get_tree")
 
     def navigate_tree(self, target_id: str, expected_session_id: str, expected_session_file: str | None, expected_leaf_id: str | None, *, summarize: bool | None = None, custom_instructions: str | None = None, allow_ask_reopen: bool | None = None, reanswer_ask_result: Mapping[str, JsonValue] | None = None) -> NavigateTreeResult:
-        """Navigate the native tree in the same session file; rebuild the transcript before acknowledging a returned resumeToken."""
+        """Navigate the native tree in the same session file, optionally summarizing the abandoned branch; refused while busy. Rebuild the transcript before acknowledging a returned resumeToken."""
         params: dict[str, object] = {}
         params["targetId"] = target_id
         params["expectedSessionId"] = expected_session_id
@@ -5306,7 +5450,7 @@ class WireClient:
             params["allowAskReopen"] = allow_ask_reopen
         if reanswer_ask_result is not None:
             params["reanswerAskResult"] = dict(reanswer_ask_result)
-        return parse_navigate_tree_result(self._command("navigate_tree", params), "navigate_tree")
+        return parse_navigate_tree_result(self._command("navigate_tree", params, timeout=600), "navigate_tree")
 
     def resume_tree(self, resume_token: str, expected_session_id: str, expected_session_file: str | None, expected_leaf_id: str | None) -> ResumeTreeResult:
         """Acknowledge a committed ask re-answer after consuming its navigation result and rebuilding the transcript."""
@@ -5381,6 +5525,16 @@ class WireClient:
             params["instructions"] = instructions
         return required(expect_object(self._command("live_start", params), "live_start"), "voice", decode_str, "live_start")
 
+    def live_connect(self, sdp_offer: str, *, voice: str | None = None, instructions: str | None = None) -> LiveConnectResult:
+        """Start a live voice session whose audio runs on a caller-owned WebRTC peer: send its SDP offer, apply the returned answer."""
+        params: dict[str, object] = {}
+        params["sdpOffer"] = sdp_offer
+        if voice is not None:
+            params["voice"] = voice
+        if instructions is not None:
+            params["instructions"] = instructions
+        return parse_live_connect_result(self._command("live_connect", params), "live_connect")
+
     def live_stop(self) -> None:
         """Stop the live voice session, if any."""
         params: dict[str, object] = {}
@@ -5392,6 +5546,17 @@ class WireClient:
         if muted is not None:
             params["muted"] = muted
         return required(expect_object(self._command("live_mute", params), "live_mute"), "muted", decode_bool, "live_mute")
+
+    def dictation_start(self, capture_id: str) -> None:
+        """Start draft-only speech-to-text; resolves once the microphone is recording."""
+        params: dict[str, object] = {}
+        params["captureId"] = capture_id
+        self._command("dictation_start", params, timeout=600)
+
+    def dictation_stop(self) -> str:
+        """Stop and flush draft-only dictation, returning the accumulated text."""
+        params: dict[str, object] = {}
+        return required(expect_object(self._command("dictation_stop", params, timeout=600), "dictation_stop"), "text", decode_str, "dictation_stop")
 
     def set_model(self, provider: str, model_id: str) -> ModelInfo:
         """Select a model by provider and id."""
@@ -5522,6 +5687,19 @@ class WireClient:
             params["entryId"] = entry_id
         return parse_cancellation_result(self._command("fork", params), "fork")
 
+    def abort_branch_summary(self) -> None:
+        """Stop a running `navigate_tree` branch summary; the navigation is cancelled."""
+        params: dict[str, object] = {}
+        self._command("abort_branch_summary", params)
+
+    def set_label(self, entry_id: str, *, label: str | None = None) -> None:
+        """Set or clear (omit `label`) an entry's label."""
+        params: dict[str, object] = {}
+        params["entryId"] = entry_id
+        if label is not None:
+            params["label"] = label
+        self._command("set_label", params)
+
     def get_branch_messages(self) -> tuple[BranchMessage, ...]:
         """List user messages that can be branched from."""
         params: dict[str, object] = {}
@@ -5560,10 +5738,14 @@ class WireClient:
         params: dict[str, object] = {}
         return required(expect_object(self._command("get_login_providers", params), "get_login_providers"), "providers", array(parse_login_provider), "get_login_providers")
 
-    def login(self, provider_id: str) -> str:
-        """Run OAuth login; the flow arrives as `open_url` and `input` UI requests."""
+    def login(self, provider_id: str, *, allow_secret_input: bool | None = None, allow_trust_confirmation: bool | None = None) -> str:
+        """Run native login with loginId-scoped UI requests; secret input and trust confirmation require explicit capabilities."""
         params: dict[str, object] = {}
         params["providerId"] = provider_id
+        if allow_secret_input is not None:
+            params["allowSecretInput"] = allow_secret_input
+        if allow_trust_confirmation is not None:
+            params["allowTrustConfirmation"] = allow_trust_confirmation
         return required(expect_object(self._command("login", params, timeout=600), "login"), "providerId", decode_str, "login")
 
     def get_logout_accounts(self, provider_id: str) -> tuple[LogoutAccount, ...]:
@@ -5673,6 +5855,18 @@ class WireClient:
     def on_live_end(self, listener: Callable[[LiveEndEvent], None]) -> Callable[[], None]:
         """Subscribe to `live_end`: Sent exactly once when a live session ends; `error` carries the failure cause."""
         return self._listen("live_end", listener)
+
+    def on_dictation_state(self, listener: Callable[[DictationStateEvent], None]) -> Callable[[], None]:
+        """Subscribe to `dictation_state`: State of one draft-only microphone capture."""
+        return self._listen("dictation_state", listener)
+
+    def on_dictation_transcript(self, listener: Callable[[DictationTranscriptEvent], None]) -> Callable[[], None]:
+        """Subscribe to `dictation_transcript`: Full accumulated draft preview; replaces the previous preview for this capture."""
+        return self._listen("dictation_transcript", listener)
+
+    def on_dictation_end(self, listener: Callable[[DictationEndEvent], None]) -> Callable[[], None]:
+        """Subscribe to `dictation_end`: Exactly one terminal frame per capture; text is the accumulated result."""
+        return self._listen("dictation_end", listener)
 
     def on_btw_delta(self, listener: Callable[[BtwDeltaEvent], None]) -> Callable[[], None]:
         """Subscribe to `btw_delta`: Text appended to the running side question's latest answer."""
@@ -5802,6 +5996,14 @@ class WireClient:
         """Subscribe to `auto_compaction_end` frames."""
         return self._listen("auto_compaction_end", listener)
 
+    def on_manual_compaction_start(self, listener: Callable[[ManualCompactionStartEvent], None]) -> Callable[[], None]:
+        """Subscribe to `manual_compaction_start`: A manual compaction (`compact` command, `/compact`, extension `ctx.compact()`) began; the live turn is already aborted."""
+        return self._listen("manual_compaction_start", listener)
+
+    def on_manual_compaction_end(self, listener: Callable[[ManualCompactionEndEvent], None]) -> Callable[[], None]:
+        """Subscribe to `manual_compaction_end`: Outcome of the compaction announced by the matching `manual_compaction_start`."""
+        return self._listen("manual_compaction_end", listener)
+
     def on_auto_retry_start(self, listener: Callable[[AutoRetryStartEvent], None]) -> Callable[[], None]:
         """Subscribe to `auto_retry_start` frames."""
         return self._listen("auto_retry_start", listener)
@@ -5851,7 +6053,7 @@ class WireClient:
         return self._listen("advisor_yielded", listener)
 
     def on_ttsr_triggered(self, listener: Callable[[TtsrTriggeredEvent], None]) -> Callable[[], None]:
-        """Subscribe to `ttsr_triggered` frames."""
+        """Subscribe to `ttsr_triggered`: Rule injection: a TTSR rule matched the stream and its text was injected. Each rule carries at least `name`, `path`, and `content`."""
         return self._listen("ttsr_triggered", listener)
 
     def on_todo_reminder(self, listener: Callable[[TodoReminderEvent], None]) -> Callable[[], None]:
@@ -5958,6 +6160,9 @@ __all__ = [
     "CreateMixtureResult",
     "CustomMessage",
     "DeveloperMessage",
+    "DictationEndEvent",
+    "DictationStateEvent",
+    "DictationTranscriptEvent",
     "EditorUiRequest",
     "Effort",
     "EvalExecutionMessage",
@@ -5990,6 +6195,7 @@ __all__ = [
     "JournalPage",
     "JournalStateEvent",
     "ListMixturesResult",
+    "LiveConnectResult",
     "LiveEndEvent",
     "LiveLevelsEvent",
     "LivePhase",
@@ -5999,6 +6205,8 @@ __all__ = [
     "LoginProvider",
     "LogoutAccount",
     "LogoutResult",
+    "ManualCompactionEndEvent",
+    "ManualCompactionStartEvent",
     "MessageContent",
     "MessageEndEvent",
     "MessageEntryIdentity",
@@ -6237,6 +6445,9 @@ __all__ = [
     "parse_create_mixture_result",
     "parse_custom_message",
     "parse_developer_message",
+    "parse_dictation_end_event",
+    "parse_dictation_state_event",
+    "parse_dictation_transcript_event",
     "parse_editor_ui_request",
     "parse_eval_execution_message",
     "parse_extension_error",
@@ -6264,6 +6475,7 @@ __all__ = [
     "parse_journal_page",
     "parse_journal_state_event",
     "parse_list_mixtures_result",
+    "parse_live_connect_result",
     "parse_live_end_event",
     "parse_live_levels_event",
     "parse_live_phase_event",
@@ -6271,6 +6483,8 @@ __all__ = [
     "parse_login_provider",
     "parse_logout_account",
     "parse_logout_result",
+    "parse_manual_compaction_end_event",
+    "parse_manual_compaction_start_event",
     "parse_message_end_event",
     "parse_message_entry_identity",
     "parse_message_persisted_event",

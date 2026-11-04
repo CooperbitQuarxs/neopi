@@ -84,7 +84,7 @@ Unified LLM API with automatic model discovery, provider configuration, token an
 - **vLLM** (OpenAI-compatible server; `VLLM_API_KEY` for secured deployments)
 - **GitHub Copilot** (requires OAuth, see below)
 - **Google Gemini CLI** (requires OAuth, see below)
-- **Antigravity** (requires OAuth, see below)
+- **Google Antigravity** (requires OAuth, see below)
 - **Any OpenAI-compatible API**: LM Studio, custom proxies, etc.
 
 ## Installation
@@ -565,6 +565,8 @@ if (message.stopReason === "error" || message.stopReason === "aborted") {
 }
 ```
 
+If the provider discards partial output by returning an error message with empty `content`, the final result remains empty. Leaked-thinking healing does not reconstruct discarded blocks from earlier streaming deltas.
+
 ### Aborting Requests
 
 The abort signal allows you to cancel in-progress requests. Aborted requests have `stopReason === 'aborted'`:
@@ -1029,7 +1031,7 @@ Several providers support OAuth authentication (some also support static API key
 - **OpenAI Codex** (ChatGPT Plus/Pro subscription, access to GPT-5.x Codex models)
 - **GitHub Copilot** (Copilot subscription)
 - **Google Gemini CLI** (Gemini 2.0/2.5 via Google Cloud Code Assist; free tier or paid subscription)
-- **Antigravity** (Free Gemini 3, Claude, GPT-OSS via Google Cloud)
+- **Google Antigravity** (Gemini, Claude, GPT-OSS via Google Cloud)
 - **Qwen Portal** (Qwen OAuth token or API key)
 - **Snowflake Cortex** (Snowflake account OAuth with PKCE and refresh, subject to the account's local-application integration)
 
@@ -1177,16 +1179,22 @@ const response = await complete(
 ```
 
 When an auth-broker client requests recovery after a provider rejects an OAuth
-bearer, the broker may reuse a still-fresh token that it minted in the previous
-five minutes instead of rotating the refresh token again. The process-local
-cache is bound to the credential ID and access token. Scheduled expiry refreshes,
-direct forced refreshes such as MCP recovery, ordinary hard-auth blocks, and
-sibling rotation keep their existing behavior. Cached refresh responses rebind
-by durable credential ID so concurrent row removal cannot switch a pinned
-session to another account.
+bearer, it sends `rejectedAccess` in the refresh request's JSON body, never in
+the URL. The broker may reuse a still-fresh token minted in the previous five
+minutes only if it differs from that rejected access token. Concurrent reports
+of the same rejected token share one refresh; reports of an older token adopt
+the current usable token without another exchange. Delegated refresh hooks
+receive the rejected token after the recovery reason and must preserve it.
+The process-local cache is bound to the credential ID and access token.
+Ordinary expiry refreshes send `reason=expiry`, so a usage refresh and delayed
+gateway consumers reuse the same fresh mint instead of rotating it again.
+Scheduled expiry refreshes, direct forced refreshes such as MCP recovery,
+ordinary hard-auth blocks, and sibling rotation keep their existing behavior.
+Cached refresh responses rebind by durable credential ID so concurrent row
+removal cannot switch a pinned session to another account.
 Generic `forceRefresh: true` requests do not opt into reuse. Provider-401 retry
-paths pass `refreshReason: "auth-recovery"` explicitly; expiry sentinels and
-usage polling do not imply that reason.
+paths pass `refreshReason: "auth-recovery"` explicitly; an expiry sentinel alone
+does not imply provider rejection.
 
 ### Provider Notes
 

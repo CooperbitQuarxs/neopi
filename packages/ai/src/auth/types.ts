@@ -1,3 +1,4 @@
+import type { ProviderTlsTrust } from "@oh-my-pi/pi-utils";
 import type { ApiKeyResolver, ResolvedApiKey } from "../auth-retry";
 import type {
 	OAuthAuthInfo,
@@ -29,7 +30,14 @@ export type ApiKeyCredential = {
 	type: "api_key";
 	key: string;
 	source?: "login";
+	tlsTrust?: ProviderTlsTrust;
+	requestOrigin?: string;
 };
+
+/** Explicit, validated single-endpoint login; prior keys remain recoverable tombstones. */
+export interface CredentialUpsertOptions {
+	replaceApiKeys?: true;
+}
 
 /** Stored OAuth token and provider account identity. */
 export type OAuthCredential = {
@@ -58,10 +66,12 @@ export interface AuthAccountSelector {
 export interface AuthAccountPolicy {
 	readonly provider: string;
 	readonly account: AuthAccountSelector;
-	/** Higher values win after hard, plan, reserve, hot-window, and measured-usage safety checks. */
+	/** Higher values win after hard, plan, reserve and hot-window safety checks, and ahead of a missing usage report. */
 	readonly priority?: number;
 	/** Protected remaining quota percentage for this account. */
 	readonly reservePct?: number;
+	/** Remaining quota percentage, above the reserve, at which this account takes back lower-priority warm pins. */
+	readonly reclaimAbovePct?: number;
 }
 
 /** Read-only set of per-account routing policies. */
@@ -339,7 +349,7 @@ export interface CredentialDisabledEvent {
 }
 
 /** Why a delegated OAuth refresh was requested. */
-export type OAuthRefreshReason = "auth-recovery";
+export type OAuthRefreshReason = "auth-recovery" | "expiry";
 
 /** Configuration supplied when constructing credential storage. */
 export type AuthStorageOptions = {
@@ -370,8 +380,10 @@ export type AuthStorageOptions = {
 	 * per-provider local refresh function. Receives the credential id so the
 	 * implementation can address remote credentials.
 	 *
-	 * `reason` is `"auth-recovery"` only for a provider-auth retry; generic and
-	 * managed MCP force-refresh calls leave it unset.
+	 * `reason` is `"auth-recovery"` for a provider-auth retry or `"expiry"` for
+	 * an expired-token refresh; generic and MCP force-refresh calls leave it unset.
+	 * `rejectedAccess` identifies the OAuth access token the provider rejected,
+	 * so a delegate must not return that same token as a cached recovery.
 	 *
 	 * Must return updated {@link OAuthCredentials} with at least `access` and
 	 * `expires`. `refresh` may be an opaque sentinel (e.g. `"__remote__"`) when
@@ -383,6 +395,7 @@ export type AuthStorageOptions = {
 		credential: OAuthCredential,
 		signal?: AbortSignal,
 		reason?: OAuthRefreshReason,
+		rejectedAccess?: string,
 	) => Promise<OAuthCredentials>;
 	/**
 	 * Set when {@link refreshOAuthCredential} exchanges the refresh token with the
@@ -506,6 +519,13 @@ export type AuthApiKeyOptions = {
 	forceRefresh?: boolean;
 	/** Explicit provider-401 recovery; generic force refreshes leave this unset. */
 	refreshReason?: OAuthRefreshReason;
+	/**
+	 * The access token the provider rejected with a 401, when this resolve is
+	 * that 401's recovery. A refresh adopts a stored token that differs from it
+	 * instead of exchanging the refresh token again: with single-use refresh
+	 * tokens every needless exchange revokes the token its peers are using.
+	 */
+	rejectedAccessToken?: string;
 	/** When false, select as `sessionId` would without recording the choice as that session's sticky credential. */
 	recordAffinity?: boolean;
 };
@@ -634,11 +654,18 @@ export interface StoredOAuthRefreshOptions<T extends OAuthCredential = OAuthCred
 	observedCredential?: T;
 	credentialFromRow: (credential: OAuthCredential) => T | undefined;
 	forceRefresh?: boolean;
+	/**
+	 * The access token a provider just rejected with a 401. A forced refresh
+	 * adopts a still-fresh stored row whose token differs from it: another
+	 * process rotated the row, and its token has not been rejected.
+	 */
+	rejectedAccess?: string;
 	canRefresh?: (credential: T) => boolean;
 	refreshSkewMs?: number;
 	signal?: AbortSignal;
 	keepCredentialOnRefreshFailure?: boolean | ((error: unknown) => boolean);
 	onRefreshFailure?: (error: unknown) => void;
+	/** How long the caller waits (for the lease and the exchange); the exchange itself runs on until its backstop. */
 	refreshTimeoutMs?: number;
 	refresh: (credential: T, signal?: AbortSignal) => Promise<OAuthCredentials>;
 	mergeRefreshedCredential?: (credential: T, refreshed: OAuthCredentials) => T;
@@ -716,6 +743,16 @@ export interface AuthSourceOptions {
 	 * `"none"`: ignore env vars entirely.
 	 */
 	env?: "dedicated" | "aliases" | "none";
+}
+
+/** Options for {@link KeysApi.peek}. */
+export interface AuthPeekOptions {
+	/**
+	 * Fall back to an expired OAuth access token when no stored account holds an
+	 * unexpired one. Only for reads that never send the token, e.g. keying an
+	 * offline model-cache lookup on the account it names.
+	 */
+	includeExpired?: boolean;
 }
 
 /** Where a provider's auth comes from ({@link CredentialOrigin}) plus whether any leg holds a concrete key. */
@@ -883,7 +920,11 @@ export interface CredentialsApi {
 	 * the existing row instead of inserting a duplicate. Resolves after
 	 * persistence and the in-memory snapshot update.
 	 */
-	upsert(provider: string, credential: AuthCredential): Promise<AuthCredentialSnapshotEntry[]>;
+	upsert(
+		provider: string,
+		credential: AuthCredential,
+		options?: CredentialUpsertOptions,
+	): Promise<AuthCredentialSnapshotEntry[]>;
 	/**
 	 * Remove credential for a provider.
 	 */
@@ -935,6 +976,12 @@ export interface KeysApi {
 	 */
 	get(provider: string, sessionId?: string, options?: AuthApiKeyOptions): Promise<string | undefined>;
 	/**
+	 * Warm usage needed by an unpinned OAuth selection without choosing a key,
+	 * advancing round-robin state, or pinning an account. Existing overrides,
+	 * pinned sessions, and pools that do not rank usage do no work.
+	 */
+	prefetchUsage(provider: string, sessionId?: string, options?: AuthApiKeyOptions): Promise<void>;
+	/**
 	 * Resolve a bearer together with its durable stored credential row id, when known.
 	 * Same precedence as {@link KeysApi.get}, but rejects with
 	 * `OAuthRefreshUnavailableError` (transient, retryable) when OAuth refresh failed
@@ -958,15 +1005,18 @@ export interface KeysApi {
 			modelId?: string;
 			signal?: AbortSignal;
 			forceRefresh?: boolean;
+			refreshReason?: OAuthRefreshReason;
+			rejectedAccessToken?: string;
 		},
 	): Promise<string | undefined>;
 	/**
 	 * Peek at API key for a provider without refreshing OAuth tokens.
 	 * Used for model discovery where we only need to know if credentials exist
 	 * and get a best-effort token. For GitHub Copilot we preserve enterprise
-	 * routing metadata so discovery can hit the correct host.
+	 * routing metadata so discovery can hit the correct host. Repeated peeks
+	 * return the same stored credential; they never rotate accounts.
 	 */
-	peek(provider: string): Promise<string | undefined>;
+	peek(provider: string, options?: AuthPeekOptions): Promise<string | undefined>;
 	/** Resolve the first active auth source by precedence without refreshing credentials. */
 	source(provider: string, options?: AuthSourceOptions): AuthSource | undefined;
 	/**
@@ -1054,11 +1104,13 @@ export interface OAuthRefreshByIdOptions {
 	 */
 	reuseRecentMint?: boolean;
 	/**
-	 * Provider-401 recovery intent. Forwarded to a delegated refresh (an auth
-	 * broker), which may then return a token it minted in the last five minutes.
-	 * Local reuse still requires {@link reuseRecentMint}.
+	 * Provider-401 recovery or ordinary expiry intent. Forwarded to a delegated
+	 * refresh (an auth broker), which may return a usable token it minted in the
+	 * last five minutes. Local reuse still requires {@link reuseRecentMint}.
 	 */
 	reason?: OAuthRefreshReason;
+	/** The access token a provider 401 rejected; see {@link AuthApiKeyOptions.rejectedAccessToken}. */
+	rejectedAccess?: string;
 }
 
 /** OAuth login, access, account identity, and refresh operations. */
@@ -1230,8 +1282,15 @@ export interface SessionsApi {
 
 /** Usage reporting, observation, and provider configuration. */
 export interface UsageApi {
-	/** Fetch aggregate usage reports for configured providers. */
+	/** Fetch the best available native report for exactly one stored credential, never a sibling. */
+	report(
+		provider: Provider,
+		credential: AuthCredential,
+		options?: { baseUrl?: string; timeoutMs?: number; signal?: AbortSignal },
+	): Promise<UsageReport | null>;
+	/** Fetch usage reports for configured providers, optionally restricted to one provider. */
 	reports(options?: {
+		provider?: Provider;
 		baseUrlResolver?: (provider: Provider) => string | undefined;
 		signal?: AbortSignal;
 	}): Promise<UsageReport[] | null>;
