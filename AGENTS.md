@@ -46,6 +46,10 @@ Before adding fork behavior, integrating upstream, or rebasing a fork PR, read
 checks. Before synchronizing an upstream release, read and follow
 `docs/agents/upstream-sync.md`.
 
+Before designing agents, sub-agents, advisors, roles, lifecycle or interfaces,
+read `docs/agents/philosophy.md`: one kind of agent, roles as templates,
+restrictions as named properties.
+
 Exact argv `npi update` launches the fork-specific interactive update session
 from `packages/coding-agent/src/prompts/npi-update.md`; the executable basename
 and exact argument list gate that rewrite. `npi update --check`,
