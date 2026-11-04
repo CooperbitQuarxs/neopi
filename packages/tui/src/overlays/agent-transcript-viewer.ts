@@ -18,6 +18,7 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import type { Component, TUI } from "../tui";
 import { Editor, type EditorNavigationState } from "../components/editor";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { extractPrintableText, matchesKey } from "../keys";
 import { routeSgrMouseInput } from "../mouse";
 import { formatDuration, formatNumber, logger } from "@oh-my-pi/pi-utils";
@@ -25,7 +26,7 @@ import { formatKeyHint, type KeyId } from "../app-keybindings";
 import { editorKey } from "../chrome/keybinding-hints";
 import type { MessageRenderer } from "../chat/extension-types";
 import type { AgentLifecycleLike } from "./agent-hub-types";
-import type { AgentHubRegistry, AgentStatus } from "./agent-hub-types";
+import { type AgentHubRegistry, type AgentStatus, isAgentTranscriptReadOnly } from "./agent-hub-types";
 import type { SessionMessageEntryLike } from "../chat/transcript-entry";
 import type { ObservableSession, SessionObserverRegistry } from "./session-observer-registry";
 import { getEditorTheme, theme } from "../theme/theme";
@@ -190,6 +191,7 @@ export class AgentTranscriptViewer implements Component {
 	#notice: string | undefined;
 	#expanded = false;
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp("jk gg/G C-u d e y", "h returns to the agent hub.");
 	#focus: "view" | "editor" = "view";
 	#pendingSends = 0;
 	#scroll: NativeScroll | undefined;
@@ -266,17 +268,10 @@ export class AgentTranscriptViewer implements Component {
 		});
 	}
 
-	/** Advisor and aborted-agent transcripts are read-only. */
+	/** Killed transcripts require explicit revival; passive participants never receive prompts. */
 	get #sendable(): boolean {
 		const ref = this.#deps.registry.get(this.#deps.agentId);
-		if (
-			!ref ||
-			ref.kind === "advisor" ||
-			ref.kind === "mailbox" ||
-			ref.kind === "operator" ||
-			ref.status === "aborted"
-		)
-			return false;
+		if (!ref || isAgentTranscriptReadOnly(ref) || ref.status === "aborted") return false;
 		return Boolean(this.#deps.remote || this.#deps.lifecycle);
 	}
 
@@ -610,6 +605,11 @@ export class AgentTranscriptViewer implements Component {
 			this.#deps.requestRender();
 			return;
 		}
+		if (this.#help.handleInput(data)) {
+			this.#keys.reset();
+			this.#deps.requestRender();
+			return;
+		}
 		for (const key of this.#deps.hubKeys) {
 			if (matchesKey(data, key)) {
 				this.#deps.onHubClose();
@@ -659,7 +659,7 @@ export class AgentTranscriptViewer implements Component {
 	#submit(text: string): void {
 		const trimmed = text.trim();
 		this.#editor?.setText("");
-		if (!trimmed) return;
+		if (!trimmed || !this.#sendable) return;
 		this.#notice = undefined;
 		const id = this.#deps.agentId;
 		if (this.#deps.remote) {
@@ -701,7 +701,7 @@ export class AgentTranscriptViewer implements Component {
 		if (this.#initialEntryId && this.#browser.hasAnchored(this.#initialEntryId)) {
 			this.#initialEntryId = undefined;
 		}
-		return lines;
+		return this.#help.render(lines, width);
 	}
 
 	/** The top-right `esc` runs Esc. */
@@ -721,6 +721,7 @@ export class AgentTranscriptViewer implements Component {
 	 * terminal's, so the j/k/g/G scroll hints are omitted.
 	 */
 	describe(_cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const ref = this.#deps.registry.get(this.#deps.agentId);
 		const notice = this.#notice ?? (this.#remoteError && !this.#builder.isEmpty ? this.#remoteError : undefined);
 		const placeholder = this.#builder.isEmpty ? this.#placeholder(NATIVE_LINE_WIDTH) : undefined;
@@ -847,7 +848,7 @@ export class AgentTranscriptViewer implements Component {
 		const ref = this.#deps.registry.get(this.#deps.agentId);
 
 		const headerLines = this.#headerLines(ref?.status, ref?.kind, ref?.parentId);
-		const footerLines = this.#footerLines();
+		const footerLines = this.#footerLines(chromeWidth);
 		const noticeLine = this.#notice
 			? theme.fg("error", sanitizeErrorLine(this.#notice, chromeWidth))
 			: this.#remoteError && !this.#builder.isEmpty
@@ -890,16 +891,20 @@ export class AgentTranscriptViewer implements Component {
 		return lines;
 	}
 
-	#footerLines(): string[] {
+	#footerLines(width: number): string[] {
 		const lines: string[] = [];
 		const statsLine = this.#statsLine();
 		if (statsLine) lines.push(statsLine);
-		const keys = `${formatKeyHint("escape")}/h:hub  ${formatKeyHint(this.#deps.expandKeys[0] ?? "alt+e")}/Space:expand  j/k:scroll  Ctrl-d/u:half page  gg/G:top/bottom`;
+		const keys = `${formatKeyHint("escape")}/h:hub  ${formatKeyHint(this.#deps.expandKeys[0] ?? "alt+e")}/Space:expand`;
 		const hint =
 			this.#focus === "editor"
 				? `${editorKey("tui.input.submit")}:send · Tab/Esc back to view`
-				: `${keys}${this.#editor ? " · Tab message" : ""}`;
-		lines.push(theme.fg("dim", hint));
+				: `${keys}${this.#editor ? " · Tab message" : ""} · ? help`;
+		lines.push(
+			...menuHintLines(hint, width, this.#focus === "editor" ? "" : "jk gg/G C-u d e y").map(line =>
+				theme.fg("dim", line),
+			),
+		);
 		return lines;
 	}
 

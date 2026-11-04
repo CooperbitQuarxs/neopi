@@ -72,6 +72,11 @@ export interface ClientUsageSummaryResponse {
 	clients: ClientUsageClientSummary[];
 }
 
+/** POST /v1/credential/:id/refresh request body. Token material stays out of URLs. */
+export interface CredentialRefreshRequest {
+	rejectedAccess?: string;
+}
+
 /** POST /v1/credential/:id/refresh response body. */
 export interface CredentialRefreshResponse {
 	entry: AuthCredentialSnapshotEntry;
@@ -121,6 +126,8 @@ export interface UsageStaleResponse {
 export interface CredentialUploadRequest {
 	provider: string;
 	credential: AuthCredential;
+	/** Atomically activate this key and retain previous API-key rows as recoverable tombstones. */
+	replaceApiKeys?: true;
 }
 
 /** POST /v1/credential response body — redacted snapshot of the provider's rows after upsert. */

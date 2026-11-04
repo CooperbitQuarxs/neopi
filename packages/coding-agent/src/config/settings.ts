@@ -15,6 +15,9 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { roleDefaultModels } from "@oh-my-pi/pi-catalog/compat/behavior";
+import { type GeneratedProvider, getBundledModels } from "@oh-my-pi/pi-catalog/models";
+import { type Api, type Model, modelKind } from "@oh-my-pi/pi-catalog/types";
 import {
 	getAgentDbPath,
 	getAgentDir,
@@ -121,7 +124,17 @@ function validateRuntimeModelOverrides(overrides: RuntimeModelOverrides): Runtim
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Settings layer that supplies an effective value; see {@link Settings.getProvenance}. */
-export type SettingProvenance = "env" | "runtime" | "role" | "overlay" | "project" | "global" | "default";
+export type SettingProvenance = "env" | "runtime" | "session" | "role" | "overlay" | "project" | "global" | "default";
+
+export type SettingsScope = "global" | "project" | "session";
+export interface SettingsScopeDetails {
+	global: unknown;
+	project: unknown;
+	session: unknown;
+	effective: unknown;
+	winner: SettingProvenance | "session";
+	shadowed: boolean;
+}
 
 /** Raw settings object as stored in YAML */
 export interface RawSettings {
@@ -406,10 +419,11 @@ interface OwnLayers {
 	projectToml?: RawSettings;
 	configOverlay: RawSettings;
 	overrides: RawSettings;
+	session: RawSettings;
 }
 
 /** The layers an {@link Settings.overlay} child writes locally; see {@link Settings.overlayLayers}. */
-export type OverlayLayers = Readonly<Pick<OwnLayers, "global" | "overrides">>;
+export type OverlayLayers = Readonly<Pick<OwnLayers, "global" | "overrides" | "session">>;
 
 /** A persisted layer re-read from disk: its new value, the file(s) it came from, and the read-side state it commits. */
 interface LayerRefresh {
@@ -709,6 +723,10 @@ export class Settings {
 	#overlayShellPathSource: string | undefined;
 	/** Runtime overrides (not persisted) */
 	#overrides: RawSettings = {};
+	/** User session overrides travel with the transcript's artifact directory, not cwd. */
+	#session: RawSettings = {};
+	#sessionSettingsPath: string | undefined;
+	#sessionDirty = false;
 	/** Session-local role selection. Role defaults never write the global settings layer. */
 	#activeRole: string | null | undefined;
 	/** Active atomic model loadout and the pre-loadout runtime values it shadows. */
@@ -801,9 +819,12 @@ export class Settings {
 	/** Whether {@link startWatching} is active. */
 	#watchingFiles = false;
 	/** Directory watchers for config sources, keyed by directory, with the basenames that trigger a reload. */
-	#fileWatchers = new Map<string, { watcher: fs.FSWatcher; names: Set<string> }>();
+	#fileWatchers = new Map<string, { watcher: fs.FSWatcher; names: Set<string>; dev: number; ino: number }>();
 	/** Debounce timer for watcher-triggered reloads. */
 	#watchReloadTimer?: NodeJS.Timeout;
+	/** Low-frequency safety net for lost events, invalidated directory inodes, and failed watches. */
+	#watchRecoveryTimer?: NodeJS.Timeout;
+	#watchFingerprints = new Map<string, string>();
 
 	/** Whether to persist changes */
 	#persist: boolean;
@@ -940,7 +961,7 @@ export class Settings {
 	 * this plain data instead of the live child with its merged view, memoized values and listeners.
 	 */
 	overlayLayers(): OverlayLayers {
-		return structuredClone({ global: this.#global, overrides: this.#overrides });
+		return structuredClone({ global: this.#global, overrides: this.#overrides, session: this.#session });
 	}
 
 	/** {@link overlay} of this instance whose own layers are `layers` (from {@link overlayLayers}). */
@@ -948,6 +969,7 @@ export class Settings {
 		const child = this.overlay();
 		child.#global = structuredClone(layers.global);
 		child.#overrides = structuredClone(layers.overrides);
+		child.#session = structuredClone(layers.session);
 		child.#rebuildMerged();
 		return child;
 	}
@@ -1002,7 +1024,8 @@ export class Settings {
 	 */
 	rawValue(setting: AnySetting): unknown {
 		const merged = this.#mergedView();
-		if (setting.roleScoped && configuredValue(this.#overrides, setting, this.#cwd) === undefined) {
+		if (setting.roleScoped && configuredValue(this.#overrides, setting, this.#cwd) === undefined &&
+			configuredValue(this.#session, setting, this.#cwd) === undefined) {
 			const roleValue = this.activeRole === undefined ? undefined : this.getRoleSetting(this.activeRole, setting);
 			if (roleValue !== undefined) return roleValue;
 		}
@@ -1027,6 +1050,7 @@ export class Settings {
 		if (!this.isConfigured(setting)) return "default";
 		const segments = setting.segments;
 		if (getByPath(this.#overrides, segments) !== undefined) return "runtime";
+		if (getByPath(this.#session, segments) !== undefined) return "session";
 		if (
 			setting.roleScoped &&
 			this.activeRole !== undefined &&
@@ -1037,6 +1061,113 @@ export class Settings {
 		if (getByPath(projectLayerForMerge(this.#project), segments) !== undefined) return "project";
 		if (getByPath(this.#global, segments) !== undefined) return "global";
 		return this.#parent?.getProvenance(setting) ?? "default";
+	}
+
+	/** Raw value owned by one scope, without copying a higher scope into the editor. */
+	readScopeValue(setting: AnySetting, scope: SettingsScope): unknown {
+		const layer = scope === "session" ? this.#session : scope === "project" ? this.#project : this.#global;
+		return structuredClone(getByPath(layer, setting.segments) ?? this.#parent?.readScopeValue(setting, scope));
+	}
+
+	getScopeDetails(setting: AnySetting, scope: SettingsScope): SettingsScopeDetails {
+		const winner = setting.provenance(this);
+		const rank = { global: 0, project: 1, overlay: 2, session: 3, role: 3, runtime: 4, env: 5, default: -1 };
+		return {
+			global: this.readScopeValue(setting, "global"),
+			project: this.readScopeValue(setting, "project"),
+			session: this.readScopeValue(setting, "session"),
+			effective: setting.get(this),
+			winner,
+			shadowed: rank[winner] > rank[scope],
+		};
+	}
+
+	writeScopeValue(setting: AnySetting, value: unknown, scope: SettingsScope): void {
+		if (scope === "global") {
+			if (value === undefined) setting.unset(this);
+			else setting.set(this, value);
+			return;
+		}
+		if (scope === "project") {
+			this.writeProjectValue(setting, value);
+			return;
+		}
+		if (value !== undefined) setting.assertWritable(value);
+		const previous = setting.get(this);
+		this.#session = structuredClone(this.#session);
+		if (value === undefined) deleteByPath(this.#session, setting.segments);
+		else setByPath(this.#session, setting.segments, structuredClone(value));
+		this.#sessionDirty = true;
+		this.#rebuildMerged();
+		this.#fireIfChanged(setting, previous);
+	}
+
+	async clearScope(scope: "session" | "project"): Promise<void> {
+		if (scope === "project") {
+			for (const setting of allSettings()) {
+				if (this.readScopeValue(setting, scope) !== undefined) this.writeProjectValue(setting, undefined);
+			}
+			await this.flush();
+			return;
+		}
+		const previous = this.#snapshot();
+		this.#session = {};
+		this.#sessionDirty = true;
+		this.#rebuildMerged();
+		this.#fireChangesSince(previous);
+		await this.saveSessionSettings();
+	}
+
+	get hasUnsavedSessionSettings(): boolean {
+		return this.#sessionDirty;
+	}
+
+	/** Bind only at a session identity change; changing cwd must not rebind this path. */
+	async attachSessionFile(sessionFile: string | undefined): Promise<void> {
+		const nextPath = sessionFile?.endsWith(".jsonl") ? path.join(sessionFile.slice(0, -6), "settings.yml") : undefined;
+		if (nextPath === this.#sessionSettingsPath) return;
+		await this.saveSessionSettings();
+		let loaded: RawSettings = {};
+		if (nextPath) {
+			try {
+				const parsed: unknown = YAML.parse(await Bun.file(nextPath).text());
+				if (!isRecord(parsed)) throw new Error(`Session settings must be a mapping: ${nextPath}`);
+				assertKnownSettingPaths(parsed);
+				for (const setting of allSettings()) {
+					const value = getByPath(parsed, setting.segments);
+					if (value !== undefined) setting.assertWritable(value);
+				}
+				loaded = parsed;
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+			}
+		}
+		const previous = this.#snapshot();
+		this.#sessionSettingsPath = nextPath;
+		this.#session = loaded;
+		this.#sessionDirty = false;
+		this.#rebuildMerged();
+		this.#fireChangesSince(previous);
+	}
+
+	async saveSessionSettings(): Promise<void> {
+		if (!this.#sessionDirty || !this.#sessionSettingsPath) return;
+		const snapshot = this.#session;
+		await writeFileAtomically(this.#sessionSettingsPath, stringifyYamlConfig(snapshot));
+		if (snapshot === this.#session) this.#sessionDirty = false;
+	}
+
+	/** Quit decisions share the same scope writers as the menus. */
+	async settleSessionSettings(choice: "session" | "project" | "discard"): Promise<void> {
+		if (choice === "project") {
+			for (const setting of allSettings()) {
+				const value = this.readScopeValue(setting, "session");
+				if (value !== undefined) this.writeProjectValue(setting, value);
+			}
+			await this.flush();
+		}
+		if (choice !== "session") await this.clearScope("session");
+		else await this.saveSessionSettings();
 	}
 
 	/**
@@ -1371,6 +1502,8 @@ export class Settings {
 		if (this.#watchingFiles || !this.#persist || this.#savesCancelled || globalInstance !== this) return;
 		this.#watchingFiles = true;
 		this.#syncFileWatchers();
+		this.#watchRecoveryTimer = setInterval(() => this.#recoverFileWatchers(), 1000);
+		this.#watchRecoveryTimer.unref();
 	}
 
 	/** Stop config-file watching started by {@link startWatching}; idempotent. */
@@ -1378,6 +1511,9 @@ export class Settings {
 		this.#watchingFiles = false;
 		clearTimeout(this.#watchReloadTimer);
 		this.#watchReloadTimer = undefined;
+		clearInterval(this.#watchRecoveryTimer);
+		this.#watchRecoveryTimer = undefined;
+		this.#watchFingerprints.clear();
 		for (const { watcher } of this.#fileWatchers.values()) watcher.close();
 		this.#fileWatchers.clear();
 	}
@@ -1439,6 +1575,29 @@ export class Settings {
 		for (const file of this.#configFiles) addFile(file);
 		return targets;
 	}
+	/** Poll metadata, not config contents: reload only when a source changed or a watch was rearmed. */
+	#recoverFileWatchers(): void {
+		if (!this.#watchingFiles) return;
+		const next = new Map<string, string>();
+		for (const [dir, names] of this.#configWatchTargets()) {
+			for (const name of names) {
+				const file = path.join(dir, name);
+				try {
+					const stat = fs.statSync(file);
+					next.set(file, `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`);
+				} catch {
+					next.set(file, "missing");
+				}
+			}
+		}
+		let changed = next.size !== this.#watchFingerprints.size;
+		for (const [file, fingerprint] of next) {
+			if (this.#watchFingerprints.get(file) !== fingerprint) changed = true;
+		}
+		this.#watchFingerprints = next;
+		this.#syncFileWatchers();
+		if (changed) this.#scheduleWatchReload();
+	}
 
 	/**
 	 * Reconcile directory watchers with the current config sources. Watching
@@ -1449,22 +1608,44 @@ export class Settings {
 		const targets = this.#configWatchTargets();
 		let armed = false;
 		for (const [dir, entry] of this.#fileWatchers) {
-			if (targets.has(dir)) continue;
+			let current: fs.Stats | undefined;
+			try {
+				current = fs.statSync(dir);
+			} catch {
+				// A moved/deleted directory invalidates its watch even if the pathname returns later.
+			}
+			if (targets.has(dir) && current?.dev === entry.dev && current.ino === entry.ino) continue;
 			entry.watcher.close();
 			this.#fileWatchers.delete(dir);
 		}
 		for (const [dir, names] of targets) {
 			const existing = this.#fileWatchers.get(dir);
 			if (existing) {
+				// A newly followed target can share a directory with the old one.
+				// Events for its name were filtered out while the reload was reading
+				// the files, so reconcile once even though no new watch was opened.
+				for (const name of names) {
+					if (!existing.names.has(name)) {
+						armed = true;
+						break;
+					}
+				}
 				existing.names = names;
 				continue;
 			}
 			let watcher: fs.FSWatcher;
+			let stat: fs.Stats;
 			try {
+				stat = fs.statSync(dir);
 				watcher = fs.watch(dir, { persistent: false }, (_event, filename) => {
 					const entry = this.#fileWatchers.get(dir);
 					if (!entry || entry.watcher !== watcher) return;
-					if (filename && !entry.names.has(path.basename(filename.toString()))) return;
+					if (filename && !entry.names.has(path.basename(filename.toString()))) {
+						// Linux reports the watched directory's own rename using its basename.
+						if (_event === "rename" && path.basename(filename.toString()) === path.basename(dir))
+							this.#recoverFileWatchers();
+						return;
+					}
 					this.#scheduleWatchReload();
 				});
 			} catch (error) {
@@ -1477,13 +1658,12 @@ export class Settings {
 				watcher.close();
 				if (this.#fileWatchers.get(dir)?.watcher === watcher) this.#fileWatchers.delete(dir);
 			});
-			this.#fileWatchers.set(dir, { watcher, names });
+			this.#fileWatchers.set(dir, { watcher, names, dev: stat.dev, ino: stat.ino });
 			armed = true;
 		}
-		// The sources were last read before this watch existed, and Bun arms macOS
-		// FSEvents asynchronously, so a write in between raises no event (a write
-		// right after a symlink retarget, or any edit during startup). Re-read once
-		// the watch is live; that reload's own sync arms nothing new, so it settles.
+		// The sources were last read before a watch or name was added. Bun also
+		// arms macOS FSEvents asynchronously, so a write in between may raise no
+		// event. Re-read once; the next sync adds nothing new, so it settles.
 		if (armed) this.#scheduleWatchReload();
 	}
 
@@ -1497,15 +1677,20 @@ export class Settings {
 		this.#watchReloadTimer.unref();
 	}
 
+	/** Shared watcher/explicit-Apply path: adopt each valid durable layer and notify live consumers. */
+	async applySettingsReload(): Promise<void> {
+		if (!this.#persist) return;
+		await this.#exclusive("keep-last-good", () => this.#reloadPersistedLayers("keep-last-good"));
+		this.#syncFileWatchers();
+	}
+
 	async #reloadFromWatch(): Promise<void> {
 		if (!this.#watchingFiles) return;
 		try {
-			await this.#exclusive("keep-last-good", () => this.#reloadPersistedLayers("keep-last-good"));
+			await this.applySettingsReload();
 		} catch (error) {
 			logger.warn("Settings: failed to apply on-disk config change", { error: String(error) });
 		}
-		// Sources may have appeared, moved, or vanished; re-target the watchers.
-		this.#syncFileWatchers();
 	}
 
 	/**
@@ -1612,6 +1797,9 @@ export class Settings {
 		cloned.#globalTomlPath = this.#globalTomlPath;
 		cloned.#projectTomlPath = this.#projectTomlPath;
 		cloned.#configOverlay = structuredClone(this.#configOverlay);
+		cloned.#session = structuredClone(this.#session);
+		cloned.#sessionSettingsPath = this.#sessionSettingsPath;
+		cloned.#sessionDirty = this.#sessionDirty;
 		// A soft-pinned default yields to a value the clone's own scope configures.
 		cloned.#softPins = new Set(this.#softPins);
 		const layers = { ...cloned.#ownLayers(), overrides: this.#buildOriginalOverrides() };
@@ -1817,6 +2005,7 @@ export class Settings {
 				globalToml: this.#globalToml,
 				projectToml: project?.toml ?? this.#projectToml,
 				configOverlay: this.#configOverlay,
+				session: this.#session,
 				overrides:
 					this.#savedRuntimeModelRoleOverrides.size === 0 ? this.#overrides : this.#buildOriginalOverrides(),
 			};
@@ -2196,7 +2385,7 @@ export class Settings {
 		role: string,
 		selector: string | undefined,
 		selection: EffortSelection | undefined,
-		scope: "global" | "project",
+		scope: SettingsScope,
 	): void {
 		this.#stageRoleModelAndEffort(role, selector, selection, scope);
 	}
@@ -2205,7 +2394,7 @@ export class Settings {
 		role: string,
 		selector: string | undefined,
 		selection: EffortSelection | undefined,
-		scope: "global" | "project",
+		scope: SettingsScope,
 	): RawSettings {
 		if (!role.trim()) throw new Error("Model role must have a name");
 		if (selector !== undefined) {
@@ -2213,7 +2402,7 @@ export class Settings {
 			assertValidSelectorPattern(selector);
 		}
 		if (selection !== undefined) validateEffortSelection(selection);
-		const source = scope === "global" ? this.#global : this.#project;
+		const source = scope === "session" ? this.#session : scope === "global" ? this.#global : this.#project;
 		const staged: RawSettings = { ...source };
 		const rawRoles = getByPath(source, ["modelRoles"]);
 		const roles: Record<string, unknown> = isRecord(rawRoles) ? { ...rawRoles } : {};
@@ -2227,6 +2416,10 @@ export class Settings {
 		else selections[role] = selection;
 		cfgRoleEffortSelections.assertWritable(selections);
 		setByPath(staged, ["roleEffortSelections"], selections);
+		if (scope === "session") {
+			this.#validateAll(this.#deepMerge(this.#mergedView(), staged), this.#cwd);
+			return staged;
+		}
 		const layers = this.#ownLayers();
 		this.#validateAll(
 			this.#mergeOverParent(
@@ -2245,11 +2438,19 @@ export class Settings {
 		role: string,
 		selector: string | undefined,
 		selection: EffortSelection | undefined,
-		scope: "global" | "project",
+		scope: SettingsScope,
 	): void {
 		const staged = this.#stageRoleModelAndEffort(role, selector, selection, scope);
 		const previousRoles = cfgModelRoles.get(this);
 		const previousEfforts = cfgRoleEffortSelections.get(this);
+		if (scope === "session") {
+			this.#session = staged;
+			this.#sessionDirty = true;
+			this.#rebuildMerged();
+			this.#fireIfChanged(cfgModelRoles, previousRoles);
+			this.#fireIfChanged(cfgRoleEffortSelections, previousEfforts);
+			return;
+		}
 		if (scope === "project") {
 			this.#captureProjectMutation(["modelRoles", role]);
 			this.#captureProjectMutation(["roleEffortSelections", role]);
@@ -2259,8 +2460,6 @@ export class Settings {
 			this.#modifiedProjectRoleEfforts.add(role);
 			this.#persistedMutationGeneration++;
 			this.#rebuildMerged();
-			this.#captureRuntimeModelRoleOverride(role);
-			this.#updateRuntimeModelRoleOverride(role, selector);
 			this.#fireIfChanged(cfgModelRoles, previousRoles);
 			this.#fireIfChanged(cfgRoleEffortSelections, previousEfforts);
 			this.#queueProjectSave();
@@ -2286,9 +2485,9 @@ export class Settings {
 		this.#releaseSoftPin(cfgRoleEffortSelections);
 		this.#persistedMutationGeneration++;
 		this.#rebuildMerged();
-		if (!this.isProjectModelRoleRuntimeOverrideActive(role)) {
+		if (this.isProjectModelRoleRuntimeOverrideActive(role)) {
 			this.#savedRuntimeModelRoleOverrides.delete(role);
-			this.#updateRuntimeModelRoleOverride(role, selector);
+			this.#updateRuntimeModelRoleOverride(role, undefined);
 		}
 		this.#fireIfChanged(cfgModelRoles, previousRoles);
 		this.#fireIfChanged(cfgRoleEffortSelections, previousEfforts);
@@ -2475,6 +2674,27 @@ export class Settings {
 		return modelId || this.#parent?.getProjectModelRole(role);
 	}
 
+	getSessionModelRole(role: string): string | undefined {
+		const roles = this.readScopeValue(cfgModelRoles, "session");
+		return isRecord(roles) ? modelRoleValueFromUnknown(roles[role]) : undefined;
+	}
+
+	getSessionRoleEffortSelection(role: string): EffortSelection | undefined {
+		const values = this.readScopeValue(cfgRoleEffortSelections, "session");
+		return (isRecord(values) ? values[role] : undefined) as EffortSelection | undefined;
+	}
+
+	getModelRoleScopeDetails(role: string, scope: SettingsScope): SettingsScopeDetails {
+		const value = (scope: SettingsScope) => {
+			const roles = this.readScopeValue(cfgModelRoles, scope);
+			return isRecord(roles) ? roles[role] : undefined;
+		};
+		const winner = this.getModelRoleProvenance(role);
+		const rank = { global: 0, project: 1, overlay: 2, session: 3, role: 3, runtime: 4, env: 5, default: -1 };
+		return { global: value("global"), project: value("project"), session: value("session"),
+			effective: this.getModelRole(role), winner, shadowed: rank[winner] > rank[scope] };
+	}
+
 	/**
 	 * Report which layer actually supplies the effective model role across
 	 * full merge precedence (runtime override → config overlay → project →
@@ -2488,6 +2708,7 @@ export class Settings {
 	 */
 	getModelRoleProvenance(role: ModelRole | string): SettingProvenance {
 		if (this.#modelRoleLayerOwns(this.#overrides, role)) return "runtime";
+		if (this.#modelRoleLayerOwns(this.#session, role)) return "session";
 		if (this.#modelRoleLayerOwns(this.#configOverlay, role)) return "overlay";
 		if (this.#modelRoleLayerOwns(projectLayerForMerge(this.#project), role)) return "project";
 		if (this.#modelRoleLayerOwns(this.#global, role)) return "global";
@@ -3959,6 +4180,23 @@ export class Settings {
 			const legacyWebOrder = legacy(providerSettings, "webSearchOrder", "providers.webSearchOrder");
 			const legacyWebExclude = legacy(providerSettings, "webSearchExclude", "providers.webSearchExclude");
 			const legacyGeminiModel = legacy(providerSettings, "webSearchGeminiModel", "providers.webSearchGeminiModel");
+			// Legacy settings named a provider; its swap target is the catalog's
+			// resolved per-model policy (`web-search-model` / `image-model` / tts
+			// seed kind), uniform across that provider's bundled rows.
+			const bundledSelector = (
+				provider: string,
+				pick: (model: Model<Api>) => string | undefined,
+			): string | undefined => {
+				for (const model of getBundledModels(provider as GeneratedProvider)) {
+					const id = pick(model);
+					if (id) return `${provider}/${id}`;
+				}
+				return undefined;
+			};
+			const webSearchSelector = (provider: string): string[] => {
+				const selector = bundledSelector(provider, model => model.webSearchModel);
+				return selector ? [selector] : [];
+			};
 			const geminiSelectors = (model: string): string[] => [
 				`google-gemini-cli/${model}`,
 				`google-antigravity/${model}`,
@@ -3969,11 +4207,11 @@ export class Settings {
 					case "gemini":
 						return geminiSelectors(geminiModel);
 					case "anthropic":
-						return ["anthropic/claude-haiku-4-5"];
+						return webSearchSelector("anthropic");
 					case "codex":
-						return ["openai-codex/gpt-5.6-luna"];
+						return webSearchSelector("openai-codex");
 					case "xai":
-						return ["xai/grok-4.5"];
+						return webSearchSelector("xai");
 					case "auto":
 						return [];
 					default:
@@ -3983,7 +4221,7 @@ export class Settings {
 			const geminiModel =
 				typeof legacyGeminiModel === "string" && legacyGeminiModel.trim()
 					? legacyGeminiModel.trim()
-					: "gemini-2.5-flash";
+					: (getBundledModels("google").find(model => model.webSearchModel)?.webSearchModel ?? "");
 			const excludedWebProviders = new Set(
 				Array.isArray(legacyWebExclude)
 					? legacyWebExclude.filter(
@@ -4016,31 +4254,28 @@ export class Settings {
 			if (orderedWebSelectors.length > 0 || excludedWebProviders.size > 0) {
 				setRoleChain(
 					"web",
-					dedupe([...orderedWebSelectors, ...MODEL_PRIO.web]).filter(selector => !isWebSelectorExcluded(selector)),
+					dedupe([...orderedWebSelectors, ...roleDefaultModels().web]).filter(
+						selector => !isWebSelectorExcluded(selector),
+					),
 				);
 			}
 
 			const legacyImage = legacy(providerSettings, "image", "providers.image");
 			const legacyImageOrder = legacy(providerSettings, "imageOrder", "providers.imageOrder");
+			const legacyImageProviders: Record<string, string> = {
+				openai: "openai",
+				"openai-codex": "openai-codex",
+				antigravity: "google-antigravity",
+				xai: "xai",
+				gemini: "google",
+				deepinfra: "deepinfra",
+			};
 			const imageSelector = (provider: string): string | undefined => {
-				switch (provider) {
-					case "openai":
-						return "openai/gpt-image-2";
-					case "openai-codex":
-						return "openai-codex/gpt-image-2";
-					case "antigravity":
-						return "google-antigravity/gemini-3-pro-image";
-					case "xai":
-						return "xai/grok-imagine-image";
-					case "openrouter":
-						return "openrouter/google/gemini-3-pro-image";
-					case "gemini":
-						return "google/gemini-3-pro-image";
-					case "deepinfra":
-						return "deepinfra/black-forest-labs/FLUX-2-pro";
-					default:
-						return undefined;
-				}
+				// OpenRouter rows carry no gemini image-model swap (the gemini class
+				// binds to Google transports only), so its legacy target stays literal.
+				if (provider === "openrouter") return "openrouter/google/gemini-3-pro-image";
+				const catalogProvider = legacyImageProviders[provider];
+				return catalogProvider ? bundledSelector(catalogProvider, model => model.imageModel) : undefined;
 			};
 			const orderedImageProviders = Array.isArray(legacyImageOrder)
 				? legacyImageOrder
@@ -4051,18 +4286,14 @@ export class Settings {
 				typeof value === "string" ? (imageSelector(value) ?? []) : [],
 			);
 			if (orderedImageSelectors.length > 0) {
-				setRoleChain("image", dedupe([...orderedImageSelectors, ...MODEL_PRIO.image]));
+				setRoleChain("image", dedupe([...orderedImageSelectors, ...roleDefaultModels().image]));
 			}
 
 			const legacyTtsProvider = legacy(providerSettings, "tts", "providers.tts");
 			const speechSelector =
-				legacyTtsProvider === "local"
-					? "local/kokoro"
-					: legacyTtsProvider === "xai"
-						? "xai/grok-tts"
-						: legacyTtsProvider === "deepinfra"
-							? "deepinfra/hexgrad/Kokoro-82M"
-							: undefined;
+				legacyTtsProvider === "local" || legacyTtsProvider === "xai" || legacyTtsProvider === "deepinfra"
+					? bundledSelector(legacyTtsProvider, model => (modelKind(model) === "tts" ? model.id : undefined))
+					: undefined;
 			if (speechSelector) setRoleChain("speech", [speechSelector]);
 
 			const legacySttModel = legacy(sttSettings, "modelName", "stt.modelName");
@@ -4095,7 +4326,7 @@ export class Settings {
 				(typeof legacyUnexpectedStopModel === "string" && legacyUnexpectedStopModel !== "online");
 			if (nonDefaultJudge) {
 				const judgeCandidates: string[] = [];
-				if (legacyJudgmentProvider !== "llm") judgeCandidates.push("typesafe/jev-latest");
+				if (legacyJudgmentProvider !== "llm") judgeCandidates.push("typesafe/jev-1.14.0");
 				if (typeof legacyAutoThinkingModel === "string" && legacyAutoThinkingModel !== "online") {
 					judgeCandidates.push(`local/${legacyAutoThinkingModel}`);
 				}
@@ -4151,6 +4382,23 @@ export class Settings {
 			if (sttSettings && Object.keys(sttSettings).length === 0) delete raw.stt;
 		}
 		migrateKindRoleSettings();
+
+		// The old web-provider migration persisted this pair of fuzzy defaults.
+		// Qualified selectors are now exact, so replace the pair without changing
+		// independently configured selectors or other role chains.
+		{
+			const retry = isRecord(raw.retry) ? raw.retry : undefined;
+			const chains = retry && isRecord(retry.fallbackChains) ? retry.fallbackChains : undefined;
+			const web = chains?.web;
+			if (chains && Array.isArray(web)) {
+				const index = web.findIndex(
+					(selector, i) => selector === "openai-codex/gpt-5.6" && web[i + 1] === "openai-codex/gpt-5.5",
+				);
+				if (index !== -1) {
+					chains.web = [...web.slice(0, index), "openai-codex/gpt-5.6-sol", ...web.slice(index + 2)];
+				}
+			}
+		}
 
 		// Consolidate the retired Exa suite toggles onto the sole remaining
 		// provider switch. The old runtime required both `enabled` and
@@ -4974,6 +5222,7 @@ export class Settings {
 			projectToml: this.#projectToml,
 			configOverlay: this.#configOverlay,
 			overrides: this.#overrides,
+			session: this.#session,
 		};
 	}
 
@@ -4982,7 +5231,7 @@ export class Settings {
 		// TOML is folded into each mutable scope at read time, before setters run.
 		let merged = this.#deepMerge(this.#deepMerge({}, layers.global), projectLayerForMerge(layers.project));
 		merged = this.#deepMerge(merged, layers.configOverlay);
-		return this.#deepMerge(merged, layers.overrides);
+		return this.#deepMerge(this.#deepMerge(merged, layers.session), layers.overrides);
 	}
 
 	/** `own` merged over an overlay parent's current view (itself for a root instance). */

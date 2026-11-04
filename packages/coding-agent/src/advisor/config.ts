@@ -9,10 +9,11 @@ import { expandAtImports } from "../discovery/at-imports";
 import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/builtin-names";
 import { writeFileAtomically } from "../utils/atomic-file";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE, ADVISOR_MAX_BUDGET_PER_UPDATE } from "./emission-guard";
-import { collectConfigCandidates } from "./watchdog";
+import { collectConfigCandidates, readBoundedText } from "./watchdog";
 import { materializeYamlAlias, parseYamlMappingDocument, yamlDocumentRoot } from "../config/yaml-document";
 
 import {
+	ADVISOR_SESSION_SCOPES,
 	ADVISOR_SYNC_BACKLOG_MODES,
 	type AdvisorConfig,
 	type AdvisorConfigScope,
@@ -23,10 +24,11 @@ import {
 
 export {
 	ADVISOR_REVIEW_MODES,
+	ADVISOR_SESSION_SCOPES,
 	ADVISOR_SYNC_BACKLOG_MODES,
 	slugifyAdvisorName,
 } from "@oh-my-pi/pi-tui/overlays/advisor-config";
-export type { AdvisorReviewMode, AdvisorSyncBacklog } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+export type { AdvisorReviewMode, AdvisorSessionScope, AdvisorSyncBacklog } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
 const WATCHDOG_ADVISOR_KEYS = [
 	"id",
@@ -40,6 +42,7 @@ const WATCHDOG_ADVISOR_KEYS = [
 	"systemPrompt",
 	"enabled",
 	"includeThinking",
+	"scope",
 	"maxNotesPerUpdate",
 ] as const;
 
@@ -61,13 +64,14 @@ interface WatchdogBaseline {
 /** Load snapshots stay out of the public editor shape while saves compute path-level changes. */
 const watchdogBaselines = new WeakMap<WatchdogConfigDoc, WatchdogBaseline>();
 const watchdogRepairDocs = new WeakSet<WatchdogConfigDoc>();
-
 /**
  * Runtime health of a single advisor, surfaced in stats and the status line.
  * - `running` — actively processing primary turns
  * - `paused` — user-toggled off via per-advisor switch (runtime disposed)
- * - `quota_exhausted` — provider returned a quota/rate-limit error; the
- *   runtime auto-retries after a cooldown so it can resume without user action
+ * - `quota_exhausted` — provider returned a quota/usage-limit error that host
+ *   recovery could not absorb; the runtime stays paused, batch retained, until
+ *   it is reset or rebuilt (compaction, image drop, shake, session switch,
+ *   `/advisor` rebuild, config reload, restart). No timer resumes it.
  * - `error` — repeated transient failures; backlog dropped to prevent stall
  * - `no_model` — no model resolved for this advisor's role/explicit model
  */
@@ -106,7 +110,7 @@ export function advisorRosterForRuntime(discovered: DiscoveredAdvisors): Advisor
 
 const reviewIntervalSchema = type("1 <= number.integer <= 9007199254740991");
 const syncBacklogSchema = type.enumerated(...ADVISOR_SYNC_BACKLOG_MODES);
-/** Unquoted `syncBacklog: 3` parses as a number; accept the numeric thresholds alongside the string enum. */
+const sessionScopeSchema = type.enumerated(...ADVISOR_SESSION_SCOPES);
 const syncBacklogEntrySchema = type.enumerated(...ADVISOR_SYNC_BACKLOG_MODES, 1, 3, 5);
 const SYNC_BACKLOG_NUMERIC_THRESHOLDS = { 1: "1", 3: "3", 5: "5" } as const;
 
@@ -134,10 +138,19 @@ const advisorEntrySchema = type({
 	"enabled?": "boolean",
 	"includeThinking?": "boolean",
 	"maxNotesPerUpdate?": "number",
+	"scope?": sessionScopeSchema,
 });
 
 type AdvisorYamlEntry = typeof advisorEntrySchema.infer;
 
+/** Validate inline/generated definitions through the same schema as WATCHDOG entries. */
+export function parseInlineAdvisorConfig(value: unknown): AdvisorConfig {
+	return editableAdvisorConfig(advisorEntrySchema.assert(value));
+}
+
+export function advisorDefinitionJsonSchema(): Record<string, unknown> {
+	return advisorEntrySchema.toJsonSchema();
+}
 function editableAdvisorConfig(entry: AdvisorYamlEntry): AdvisorConfig {
 	const advisor: AdvisorConfig = { name: entry.name };
 	if (entry.id !== undefined) advisor.id = entry.id;
@@ -150,6 +163,7 @@ function editableAdvisorConfig(entry: AdvisorYamlEntry): AdvisorConfig {
 	if (entry.systemPrompt !== undefined) advisor.systemPrompt = entry.systemPrompt;
 	if (entry.enabled !== undefined) advisor.enabled = entry.enabled;
 	if (entry.includeThinking !== undefined) advisor.includeThinking = entry.includeThinking;
+	if (entry.scope !== undefined) advisor.scope = entry.scope;
 	if (
 		typeof entry.maxNotesPerUpdate === "number" &&
 		Number.isFinite(entry.maxNotesPerUpdate) &&
@@ -289,9 +303,13 @@ function filterAdvisorTools(tools: string[] | undefined, sourcePath: string): st
  * Top-level instructions concatenate into the shared baseline. Malformed files
  * are logged and skipped so a bad project config cannot kill the session.
  */
-export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Promise<DiscoveredAdvisors> {
+export async function discoverAdvisorConfigs(
+	cwd: string,
+	agentDir?: string,
+	sessionDir?: string,
+): Promise<DiscoveredAdvisors> {
 	let unsafeToReconcile = false;
-	const items = await collectConfigCandidates(cwd, agentDir, ["WATCHDOG.yml", "WATCHDOG.yaml"], {
+	const candidates = await collectConfigCandidates(cwd, agentDir, ["WATCHDOG.yml", "WATCHDOG.yaml"], {
 		onReadError: () => {
 			unsafeToReconcile = true;
 		},
@@ -300,6 +318,27 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 			logger.warn("Skipped config candidate", { path: filePath, ...rejection });
 		},
 	});
+	const items: { path: string; content: string; level: AdvisorConfigScope }[] = candidates.map(item => ({
+		...item,
+		level: item.level === "project" && path.basename(path.dirname(item.path)) === ".omp" ? "project-omp" : item.level,
+	}));
+	// The transcript artifact directory is also where scoped settings (#622) live.
+	// Session sources are last, so they override project/user legacy names and IDs.
+	if (sessionDir) {
+		for (const filename of ["WATCHDOG.yml", "WATCHDOG.yaml"]) {
+			const filePath = path.join(sessionDir, filename);
+			try {
+				const result = await readBoundedText(filePath, undefined);
+				if ("content" in result) items.push({ path: filePath, content: result.content, level: "session" });
+				else unsafeToReconcile = true;
+			} catch (error) {
+				if (!isEnoent(error)) {
+					unsafeToReconcile = true;
+					logger.warn("Cannot read session advisor configuration", { path: filePath, error: String(error) });
+				}
+			}
+		}
+	}
 	const files: DiscoveredAdvisors["files"] = items.map(item => ({ path: item.path, scope: item.level }));
 	const advisors = new Map<string, AdvisorConfig>();
 	const sources = new Map<string, { path: string; scope: AdvisorConfigScope }>();
@@ -370,6 +409,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 						: undefined,
 				enabled: entry.enabled,
 				includeThinking: entry.includeThinking,
+				scope: entry.scope,
 				instructions: entryInstructions,
 			});
 		}
@@ -386,16 +426,57 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 	};
 }
 
+export interface NamedAdvisor {
+	name: string;
+	scope: AdvisorConfigScope;
+	sourcePath: string;
+	config: AdvisorConfig;
+}
 /**
- * Resolve the `WATCHDOG.yml` path for a scope: `project` → `<projectDir>/WATCHDOG.yml`
- * (discovered by the project-level walk), `user` → `<agentDir>/WATCHDOG.yml` (the
- * user-level candidate).
+ * Every named definition, including disabled and shadowed entries, in discovery
+ * load order (later entries win for references without an exact scope).
+ * Instructions and tools match runtime discovery; sourcePath stays exact for UI labels.
  */
+export async function listNamedAdvisors(
+	cwd: string,
+	agentDir?: string,
+	sessionDir?: string,
+): Promise<NamedAdvisor[]> {
+	const discovered = await discoverAdvisorConfigs(cwd, agentDir, sessionDir);
+	const result: NamedAdvisor[] = [];
+	for (const file of discovered.files) {
+		const doc = await loadWatchdogConfigFile(file.path);
+		for (const config of doc.advisors) {
+			config.sourceScope = file.scope;
+			if (config.instructions?.trim())
+				config.instructions = (await expandAtImports(config.instructions, file.path)).trim() || undefined;
+			config.tools = filterAdvisorTools(config.tools, file.path);
+			result.push({ name: config.name, scope: file.scope, sourcePath: file.path, config });
+		}
+	}
+	return result;
+}
+
+/** Resolve a scope's canonical file beside its user, project, or session configuration. */
 export function advisorConfigFilePath(
 	scope: AdvisorConfigScope,
-	dirs: { projectDir: string; agentDir: string },
+	dirs: { projectDir: string; agentDir: string; sessionDir?: string },
 ): string {
-	return path.join(scope === "user" ? dirs.agentDir : dirs.projectDir, "WATCHDOG.yml");
+	return path.join(advisorConfigDirectory(scope, dirs), "WATCHDOG.yml");
+}
+
+function advisorConfigDirectory(
+	scope: AdvisorConfigScope,
+	dirs: { projectDir: string; agentDir: string; sessionDir?: string },
+): string {
+	switch (scope) {
+		case "user": return dirs.agentDir;
+		case "project": return dirs.projectDir;
+		case "project-omp": return path.join(dirs.projectDir, ".omp");
+		case "session":
+			if (!dirs.sessionDir) throw new Error("This session has no persistent artifact directory");
+			return dirs.sessionDir;
+	}
 }
 
 /**
@@ -406,9 +487,9 @@ export function advisorConfigFilePath(
  */
 export async function resolveAdvisorConfigEditPath(
 	scope: AdvisorConfigScope,
-	dirs: { projectDir: string; agentDir: string },
+	dirs: { projectDir: string; agentDir: string; sessionDir?: string },
 ): Promise<string> {
-	const dir = scope === "user" ? dirs.agentDir : dirs.projectDir;
+	const dir = advisorConfigDirectory(scope, dirs);
 	const yml = path.join(dir, "WATCHDOG.yml");
 	const yaml = path.join(dir, "WATCHDOG.yaml");
 	if (!(await Bun.file(yml).exists()) && (await Bun.file(yaml).exists())) return yaml;
@@ -598,6 +679,10 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 			if (advisor.reviewInterval !== undefined) {
 				lines.push(`    reviewInterval: ${advisor.reviewInterval}`);
 			}
+			if (advisor.scope !== undefined) {
+				sessionScopeSchema.assert(advisor.scope);
+				lines.push(`    scope: ${YAML.stringify(advisor.scope)}`);
+			}
 		}
 	}
 	return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
@@ -616,6 +701,7 @@ function watchdogAdvisorValues(advisor: AdvisorConfig): Record<(typeof WATCHDOG_
 		reviewMode: advisor.reviewMode,
 		reviewInterval: advisor.reviewInterval,
 		syncBacklog: advisor.syncBacklog,
+		scope: advisor.scope,
 		maxNotesPerUpdate:
 			typeof advisor.maxNotesPerUpdate === "number" &&
 			Number.isFinite(advisor.maxNotesPerUpdate) &&

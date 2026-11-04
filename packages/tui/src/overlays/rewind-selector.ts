@@ -44,7 +44,11 @@ import { recentTranscriptEntries, type TranscriptEntryLike as TranscriptEntry } 
 import { theme } from "../theme/theme";
 import { matchesAppToolsExpand } from "../keybinding-matchers";
 import { ChatTranscriptBuilder } from "../chat/chat-transcript-builder";
-import { TranscriptBrowser, type TranscriptBrowserFrame } from "../chat/transcript-browser";
+import {
+	nearestVisibleOutlineTarget,
+	TranscriptBrowser,
+	type TranscriptBrowserFrame,
+} from "../chat/transcript-browser";
 import { padToWidth } from "../render/utils";
 import { expandKeyHint } from "../render/render-utils";
 import { formatKeyHints } from "../app-keybindings";
@@ -53,6 +57,7 @@ import {
 	appendOutlineEntries,
 	type ComposedColumn,
 	composeOutlineColumn,
+	describedVisibility,
 	type OutlineTarget,
 	isUserTurnEntry,
 	outlineVisibility,
@@ -67,6 +72,7 @@ import { isNativeRendering } from "../native/state";
 import { collectBlocks, targetCopy } from "./copy-selector";
 import { compileMenuRegex } from "../menu-search";
 import { MenuKeyReader, MenuSearchField } from "../components/menu-navigation";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 
 /** One alternate branch at a divergence: its root and message path root → most-recent leaf. */
 export interface BranchVariantPath {
@@ -158,11 +164,9 @@ const STRIP_GAP = 2;
 const SLIDE_MS = 160;
 
 const NORMAL_MOTION_HINTS: readonly NativeHint[] = [
-	{ keys: ["ctrl+u", "ctrl+d"], label: "half page" },
-	{ keys: ["pageUp", "pageDown"], label: "page" },
-	{ keys: ["g", "shift+g"], label: "gg/G bounds" },
-	{ keys: ["ctrl+e", "ctrl+y"], label: "view" },
 	{ keys: ["tab", "shift+tab"], label: "context" },
+	{ keys: ["?"], label: "help" },
+	{ keys: [], label: "hjkl gg/G C-u d e y" },
 ];
 
 /** Same length and identical elements (or both undefined). */
@@ -196,6 +200,10 @@ export class RewindSelectorComponent implements Component {
 	#slideTimer: NodeJS.Timeout | undefined;
 	readonly #keys = new MenuKeyReader();
 	readonly #search = new MenuSearchField();
+	readonly #help = new MenuHelp(
+		undefined,
+		"h/l switch branches at a fork, or jump between user turns. Enter rewinds; Space never rewinds.",
+	);
 	#width = 0;
 	#pageStarts: number[] = [];
 	#pageEnds: number[] = [];
@@ -551,6 +559,10 @@ export class RewindSelectorComponent implements Component {
 			} else this.deps.requestRender();
 			return;
 		}
+		if (this.#help.handleInput(data)) {
+			this.deps.requestRender();
+			return;
+		}
 		if (matchesKey(data, "f")) {
 			this.#openFilter();
 			return;
@@ -730,7 +742,11 @@ export class RewindSelectorComponent implements Component {
 			if (!this.#isMainSelectable(index)) continue;
 			const target = this.#targets[index]!;
 			const matched = native
-				? patterns.every(pattern => pattern.test((regex ? this.#nativeTexts?.texts[index]?.raw : this.#nativeTexts?.texts[index]?.lower) ?? ""))
+				? patterns.every(pattern =>
+						pattern.test(
+							(regex ? this.#nativeTexts?.texts[index]?.raw : this.#nativeTexts?.texts[index]?.lower) ?? "",
+						),
+					)
 				: patterns.every(pattern => {
 						for (let child = target.start; child < target.end; child++) {
 							const rows = this.#mainRows[child];
@@ -848,6 +864,21 @@ export class RewindSelectorComponent implements Component {
 		return this.#mainVisible?.[index] ?? true;
 	}
 
+	/**
+	 * Adopt the main path's per-target visibility. A selection on a target
+	 * that shows nothing (the empty turn an interrupt leaves last, a turn the
+	 * expansion toggle collapsed) moves to the nearest one that shows and
+	 * leaves the strip.
+	 */
+	#adoptVisibility(visible: boolean[]): void {
+		this.#mainVisible = visible;
+		const selected = nearestVisibleOutlineTarget(visible, this.#selected);
+		if (selected === this.#selected) return;
+		this.#selected = selected;
+		this.#activeVariant = 0;
+		this.#siblingSelected = 0;
+	}
+
 	// ========================================================================
 	// Native: the transcript as a page
 	// ========================================================================
@@ -860,12 +891,13 @@ export class RewindSelectorComponent implements Component {
 	 * of branch columns, the current path first. The bar is this component's
 	 * own node, docked under the page, so the filter field keeps the caret.
 	 */
-	describeScreen(_cx: DescribeContext): NativeScreen {
-		return { role: "omp.rewind", main: this.#page(), dock: [this] };
+	describeScreen(cx: DescribeContext): NativeScreen {
+		this.#adoptVisibility(describedVisibility(this.#builder.container.children, this.#targets, cx));
+		return { role: "omp.rewind", main: this.#page(cx), dock: [this] };
 	}
 
 	/** The page's blocks, marked for the current outline. */
-	#page(): NativeChild[] {
+	#page(cx: DescribeContext): NativeChild[] {
 		const blocks = this.#builder.container.children;
 		const page: NativeChild[] = [];
 		const filter = this.#filter;
@@ -907,6 +939,9 @@ export class RewindSelectorComponent implements Component {
 		for (let index = 0; index < columns.length; index++) {
 			const column = columns[index]!;
 			const active = this.#activeVariant === index + 1;
+			if (active) {
+				this.#siblingVisible = describedVisibility(column.builder.container.children, column.targets, cx);
+			}
 			const children: NativeChild[] = [this.#columnHead(index + 1, count, column.label)];
 			const picked = active ? this.#siblingSelected : -1;
 			this.#markRun(children, column.builder.container.children, 0, column.targets, picked, column.rootId);
@@ -993,6 +1028,7 @@ export class RewindSelectorComponent implements Component {
 
 	/** The bar docked under the page: position, key hints, Cancel and Rewind; the filter field while filtering. */
 	describe(_cx: DescribeContext): NativeNode {
+		if (this.#help.open) return this.#help.describe();
 		const filter = this.#filter;
 		const columns = filter === undefined ? this.#stripColumns() : [];
 		const memo = `${this.#selected}|${this.#activeVariant}|${this.#siblingSelected}|${this.#truncated}|${columns.length}|${filter ?? "\0"}|${this.#search.focused}|${this.#search.value}|${this.#search.cursor}`;
@@ -1011,7 +1047,7 @@ export class RewindSelectorComponent implements Component {
 				text([span(`${at + 1}/${of}`, "dim")], { wrap: "none" }),
 				hintsRow([
 					upDown,
-					{ keys: ["h", "l", "left", "right"], label: columns.length > 0 ? "branches" : "user turns" },
+					{ keys: ["left", "right"], label: columns.length > 0 ? "branches" : "user turns" },
 					{ keys: ["/", "f"], label: "search" },
 					...NORMAL_MOTION_HINTS,
 					this.#truncated ? { keys: ["a"], label: "earlier turns" } : undefined,
@@ -1024,7 +1060,9 @@ export class RewindSelectorComponent implements Component {
 			children = [
 				title,
 				this.#search.input,
-				...(compileMenuRegex(this.#search.value)?.error ? [text([span(compileMenuRegex(this.#search.value)!.error!, "error")])] : []),
+				...(compileMenuRegex(this.#search.value)?.error
+					? [text([span(compileMenuRegex(this.#search.value)!.error!, "error")])]
+					: []),
 				text(
 					[
 						matches.length === 0
@@ -1035,10 +1073,13 @@ export class RewindSelectorComponent implements Component {
 				),
 				hintsRow(
 					this.#search.focused
-						? [{ keys: ["enter"], label: "confirm search" }, { keys: ["escape"], label: "clear search" }]
+						? [
+								{ keys: ["enter"], label: "confirm search" },
+								{ keys: ["escape"], label: "clear search" },
+							]
 						: [
 								upDown,
-								{ keys: ["h", "l", "left", "right"], label: "user turns" },
+								{ keys: ["left", "right"], label: "user turns" },
 								{ keys: ["/", "f"], label: "search" },
 								...NORMAL_MOTION_HINTS,
 							],
@@ -1057,6 +1098,11 @@ export class RewindSelectorComponent implements Component {
 
 	/** The bar's buttons run their keys' paths; everything else belongs to the blocks. */
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#help.open) {
+			if (event.type === "action") this.#help.handleInput("\x1b");
+			this.deps.requestRender();
+			return;
+		}
 		if (event.type !== "action") return;
 		const filtering = this.#filter !== undefined;
 		if (event.act === "rewind") {
@@ -1088,7 +1134,7 @@ export class RewindSelectorComponent implements Component {
 		this.#geometrySiblingSelected = this.#siblingSelected;
 		this.#geometryExpanded = this.#expanded;
 		this.#geometryFilter = this.#filter;
-		return lines;
+		return this.#help.render(lines, width);
 	}
 
 	#frame(contentWidth: number, chromeWidth: number): TranscriptBrowserFrame {
@@ -1096,15 +1142,8 @@ export class RewindSelectorComponent implements Component {
 		// rows a matching two-column left gutter so blocks never shift while stepping.
 		const children = this.#builder.container.children;
 		const prepared = this.#browser.prepareOutline(children, this.#targets, this.#selected, contentWidth);
-		this.#mainVisible = prepared.visible;
 		this.#mainRows = prepared.childRows;
-		if (prepared.selected !== this.#selected) {
-			// The current target collapsed (e.g. expansion toggle): rest on the
-			// nearest visible one and leave the strip.
-			this.#selected = prepared.selected;
-			this.#activeVariant = 0;
-			this.#siblingSelected = 0;
-		}
+		this.#adoptVisibility(prepared.visible);
 
 		if (this.#filter !== undefined)
 			return this.#filterFrame(this.#filter, prepared.childRows, contentWidth, chromeWidth);
@@ -1125,7 +1164,7 @@ export class RewindSelectorComponent implements Component {
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const leftRight = formatKeyHints(["left", "right"]);
 		const lateral = columns.length > 0 ? `${leftRight} branches` : `${leftRight} user turns`;
-		const keys = `j/k ${upDown} step · h/l ${lateral} · Tab context · / or f search · Ctrl-u/d half · PgUp/Dn · gg/G · Ctrl-e/y view · Enter rewind · ${this.#truncated ? "a earlier turns · " : ""}${expandKeyHint()} expand · ${editorKey("tui.select.cancel")} close`;
+		const keys = `${upDown} step · ${lateral} · Tab context · / or f search · Enter rewind · ${this.#truncated ? "a earlier turns · " : ""}${expandKeyHint()} expand · ${editorKey("tui.select.cancel")} close · ? help`;
 		return {
 			header: [this.#header()],
 			body: {
@@ -1134,7 +1173,7 @@ export class RewindSelectorComponent implements Component {
 			},
 			footer: this.#search.focused
 				? [this.#search.render(chromeWidth, { muted: text => theme.fg("dim", text) })]
-				: [theme.fg("dim", `${position}${keys}`)],
+				: menuHintLines(`${position}${keys}`, chromeWidth).map(line => theme.fg("dim", line)),
 		};
 	}
 
@@ -1169,7 +1208,7 @@ export class RewindSelectorComponent implements Component {
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const keys = this.#search.focused
 			? "Enter confirm search · Esc clear search"
-			: `j/k ${upDown} step · h/l user turns · Ctrl-u/d half · PgUp/Dn · gg/G · Ctrl-e/y view · Enter rewind · Esc close`;
+			: `${upDown} step · ←/→ user turns · / or f search · Enter rewind · ${editorKey("tui.select.cancel")} close · ? help`;
 		return {
 			header: [this.#header()],
 			body: {
@@ -1185,7 +1224,9 @@ export class RewindSelectorComponent implements Component {
 			},
 			footer: [
 				this.#search.render(chromeWidth, { muted: text => theme.fg("dim", text) }),
-				`${count} · ${theme.fg("dim", keys)}`,
+				...menuHintLines(`${count} · ${keys}`, chromeWidth, this.#search.focused ? "" : undefined).map(line =>
+					theme.fg("dim", line),
+				),
 			],
 		};
 	}

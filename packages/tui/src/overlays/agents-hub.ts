@@ -15,7 +15,6 @@ import type { TspPickerAction, TspPickerColumn, TspPickerItem, TspPickerScope, T
 import { compileMenuRegex } from "../menu-search";
 import {
 	type Component,
-	Editor,
 	FuzzyQuery,
 	Input,
 	matchesKey,
@@ -25,20 +24,19 @@ import {
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
-	wrapTextWithAnsi,
 } from "../index";
 import { code, col, md, node, row, span, text } from "../native/describe";
-import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { actionHint, type NativeHint, hintsRow } from "../native/overlay";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerEvent, pickerQuery } from "../native/picker";
 import type { AgentSource } from "../tools/task";
 import { shortenPath } from "../render/render-utils";
 import { sanitizeDisplaySingleLine } from "./extensions/display-text";
-import { getEditorTheme, theme } from "../theme";
-import { matchesAppFollowUp, matchesSelectCancel } from "../keybinding-matchers";
-import { extractPrintableText } from "../keys";
-import { formatKeyHint, formatKeyHints } from "../app-keybindings";
-import { boundKeys, editorKey } from "../chrome/keybinding-hints";
+import { theme } from "../theme";
+import { matchesSelectCancel } from "../keybinding-matchers";
+import { formatKeyHint } from "../app-keybindings";
+import { editorKey } from "../chrome/keybinding-hints";
+import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import {
 	buildBrowserItems,
 	ModelBrowser,
@@ -55,29 +53,21 @@ import {
 	type StripChip as HubStripChip,
 	type StripState as HubStripState,
 } from "./hub-frame";
-import type { EditorNavigationState } from "../components/editor";
-import { ScrollView } from "../components/scroll-view";
 import {
 	applyMenuMotion,
 	MenuKeyReader,
 	MenuSearchField,
 	MenuViewport,
-	menuScrollBy,
 	type MenuNavAction,
 	type MenuSearchState,
 	type MenuViewportPosition,
 } from "../components/menu-navigation";
+import { AgentDefinitionEditor, type AgentDefinitionDraft, type AgentEditorDeps } from "./agent-definition-editor";
 
 /** One agent with its per-agent settings overrides resolved for display. */
-export interface HubAgent {
-	name: string;
-	description: string;
-	systemPrompt: string;
+export interface HubAgent extends AgentDefinitionDraft {
 	source: AgentSource;
 	filePath?: string;
-	model?: string[];
-	prewalk?: boolean | string;
-	advisor?: boolean | string;
 	disabled: boolean;
 	/** `task.agentModelOverrides[name]` as a comma-joined pattern list. */
 	overrideModel?: string;
@@ -124,11 +114,6 @@ type StripState =
 	| (HubStripState<StripChip> & { kind: "chips"; agent: HubAgent; property?: PropertyKind })
 	| { kind: "pattern"; agent: HubAgent; property: PropertyKind; input: Input };
 
-export interface GeneratedAgentSpec {
-	identifier: string;
-	whenToUse: string;
-	systemPrompt: string;
-}
 
 /** Runtime-owned discovery, settings, generation and persistence. */
 export interface AgentsHubDeps {
@@ -143,10 +128,9 @@ export interface AgentsHubDeps {
 	setAgentDisabled: (name: string, options: { disabled: boolean }) => void;
 	/** Persist one agent's override for `property`; `undefined` clears it. Other agents are untouched. */
 	setAgentOverride: (property: PropertyKind, name: string, value: string | undefined) => void;
-	generateAgent: (description: string, onText: (text: string) => void) => Promise<string>;
-	saveAgent: (scope: "project" | "user", spec: GeneratedAgentSpec) => Promise<string>;
-	/** Open the selected definition in the host's editor; source-less agents are handled by the host. */
-	openConfigFile?: (agent: HubAgent) => Promise<void>;
+	editor: Omit<AgentEditorDeps, "existing" | "save">;
+	saveDefinition: (scope: "project" | "user", definition: AgentDefinitionDraft, original?: HubAgent) => Promise<string>;
+	dispose?: () => void;
 }
 
 export interface AgentsHubCallbacks {
@@ -173,67 +157,9 @@ interface AgentsHubNavigationSnapshot {
 		browser: unknown;
 		parent: AgentStripNavigationState | null;
 	};
-	create?: {
-		description: string;
-		scope: "project" | "user";
-		editor?: EditorNavigationState;
-		spec: GeneratedAgentSpec | null;
-		error: string | null;
-		preview: unknown;
-		promptCollapsed: boolean;
-	};
+	create?: { definition: AgentDefinitionDraft; original?: HubAgent };
 }
 
-const IDENTIFIER_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+){1,5}$/;
-
-function extractJsonObject(raw: string): string {
-	// A bare JSON object may legitimately contain code fences inside string values; keep it intact.
-	try {
-		JSON.parse(raw);
-		return raw;
-	} catch {}
-	const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-	if (fenceMatch?.[1]) return fenceMatch[1].trim();
-	const start = raw.indexOf("{");
-	const end = raw.lastIndexOf("}");
-	if (start >= 0 && end >= start) return raw.slice(start, end + 1).trim();
-	return raw.trim();
-}
-
-/**
- * Parse model output into a {@link GeneratedAgentSpec}. Accepts a bare JSON object
- * (tried first) or one wrapped in a code fence. Returns the spec with trimmed fields.
- * Throws if the output is not valid JSON or not an object, if `identifier`, `whenToUse`
- * or `systemPrompt` is missing or not a string, if the identifier is not lowercase
- * kebab-case with 2+ words, if `whenToUse` does not start with "Use this agent when",
- * or if `systemPrompt` is empty.
- */
-export function parseGeneratedAgentSpec(raw: string): GeneratedAgentSpec {
-	const parsed = JSON.parse(extractJsonObject(raw)) as Partial<GeneratedAgentSpec>;
-	if (!parsed || typeof parsed !== "object") {
-		throw new Error("Model output is not a JSON object");
-	}
-	if (
-		typeof parsed.identifier !== "string" ||
-		typeof parsed.whenToUse !== "string" ||
-		typeof parsed.systemPrompt !== "string"
-	) {
-		throw new Error("Model output is missing required fields (identifier, whenToUse, systemPrompt)");
-	}
-	const identifier = parsed.identifier.trim();
-	const whenToUse = parsed.whenToUse.trim();
-	const systemPrompt = parsed.systemPrompt.trim();
-	if (!IDENTIFIER_PATTERN.test(identifier)) {
-		throw new Error("Generated identifier is invalid (must be lowercase kebab-case, 2+ words)");
-	}
-	if (!whenToUse.toLowerCase().startsWith("use this agent when")) {
-		throw new Error("Generated whenToUse must start with 'Use this agent when...'");
-	}
-	if (!systemPrompt) {
-		throw new Error("Generated systemPrompt is empty");
-	}
-	return { identifier, whenToUse, systemPrompt };
-}
 
 /** Stable native list-item id of an agent-list row. */
 function listRowId(rowDef: ListRow): string {
@@ -275,6 +201,7 @@ export class AgentsHubComponent implements Component {
 	readonly #viewport = new MenuViewport();
 	#rowCounts: number[] = [];
 	readonly #keys = new MenuKeyReader();
+	readonly #help = new MenuHelp();
 	readonly #rowMotion = {
 		move: (delta: number) => this.#moveRow(this.#rowIndex + delta),
 		moveToBoundary: (edge: "first" | "last") => this.#moveRow(edge === "first" ? 0 : this.#rows.length - 1),
@@ -295,29 +222,17 @@ export class AgentsHubComponent implements Component {
 	#pendingOperations = 0;
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 
-	// Create flow (AI-generated agent definition).
-	#createInput: Editor | null = null;
-	#createDescription = "";
-	#createScope: "project" | "user" = "project";
-	#createGenerating = false;
-	#createSpec: GeneratedAgentSpec | null = null;
-	#createError: string | null = null;
-	#createStreamingText = "";
-	readonly #createPreview = new ScrollView([], { height: 1 });
-	#createNativeScroll: NativeScroll | undefined;
+	#definitionEditor: AgentDefinitionEditor | null = null;
+	#editingOriginal: HubAgent | undefined;
 
 	/** Bumped on every visible-state change; the described node is rebuilt when it moves. */
 	#nativeVersion = 0;
 	#nativeCache: { version: number; sheet: boolean; node: NativeNode } | undefined;
-	/** Collapsed state of the generated system-prompt card (native only). */
-	#promptCollapsed = true;
 
 	#renderBodyPane = (width: number, height: number | undefined): readonly string[] => {
 		const rows = Math.max(1, Math.floor(height ?? 10));
 		const lines: string[] = [this.#statusRow(width)];
-		if (this.#createActive) {
-			lines.push(...this.#renderCreate(width, rows - 1));
-		} else if (this.#assigning) {
+		if (this.#assigning) {
 			this.#browser.setMaxVisible(rows - 1 - 5);
 			this.#browser.setFocused(true);
 			lines.push(...this.#browser.render(width));
@@ -379,7 +294,8 @@ export class AgentsHubComponent implements Component {
 	}
 
 	dispose(): void {
-		this.#createPreview.dispose();
+		this.#definitionEditor?.dispose();
+		this.#deps.dispose?.();
 	}
 	invalidate(): void {
 		this.#nativeVersion++;
@@ -423,19 +339,9 @@ export class AgentsHubComponent implements Component {
 		this.#requestRender();
 	}
 
-	async #openConfigFile(): Promise<void> {
+	#openConfigFile(): void {
 		const agent = this.#selectedAgent();
-		if (!agent || !this.#deps.openConfigFile || this.#pendingOperations > 0) return;
-		this.#pendingOperations++;
-		try {
-			await this.#deps.openConfigFile(agent);
-			await this.#reload();
-		} catch (error) {
-			this.#notice = error instanceof Error ? error.message : String(error);
-		} finally {
-			this.#pendingOperations--;
-			this.#requestRender();
-		}
+		if (agent) this.#beginCreateFlow(agent);
 	}
 
 	#buildSidebar(): void {
@@ -478,8 +384,9 @@ export class AgentsHubComponent implements Component {
 		const query = this.#search.query;
 		let filtered = scoped;
 		if (query) {
-			const tokens = (compileMenuRegex(query) ? [query] : query.trim().split(/\s+/))
-				.map(token => new FuzzyQuery(token));
+			const tokens = (compileMenuRegex(query) ? [query] : query.trim().split(/\s+/)).map(
+				token => new FuzzyQuery(token),
+			);
 			filtered = scoped.filter(agent => matchAgent(agent, tokens));
 		}
 		this.#rows = [...filtered.map(agent => ({ kind: "agent", agent }) as ListRow), { kind: "new" }];
@@ -756,89 +663,38 @@ export class AgentsHubComponent implements Component {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	get #createActive(): boolean {
-		return this.#createInput !== null || this.#createGenerating || this.#createSpec !== null;
+		return this.#definitionEditor !== null;
 	}
 
-	#beginCreateFlow(): void {
-		if (this.#createGenerating) return;
+	#beginCreateFlow(agent?: HubAgent, draft?: AgentDefinitionDraft): void {
 		const previous = this.#restoringNavigation ? undefined : this.navigationSnapshot();
 		this.#keys.reset();
-		this.#createPreview.scrollToTop();
-		this.#createNativeScroll = undefined;
-		this.#createError = null;
-		this.#createSpec = null;
-		this.#createDescription = "";
-		const editor = new Editor(getEditorTheme());
-		editor.setBorderVisible(false);
-		editor.setPromptGutter("> ");
-		editor.setMaxHeight(Math.max(3, Math.min(8, this.#terminalRows() - 12)));
-		editor.disableSubmit = true;
-		editor.onChange = value => {
-			this.#createDescription = value;
-		};
-		this.#createInput = editor;
-		if (!this.#restoringNavigation) this.onNavigationVisit?.("create", previous);
+		this.#editingOriginal = agent;
+		this.#definitionEditor?.dispose();
+		this.#definitionEditor = new AgentDefinitionEditor(this.#tui, {
+			...this.#deps.editor,
+			existing: this.#allAgents,
+			saveScopeEditable: !agent?.filePath || agent.source === "bundled",
+			save: async (definition, scope) => {
+				const filePath = await this.#deps.saveDefinition(scope, definition, agent);
+				this.#notice = `Saved agent ${definition.name} at ${shortenPath(filePath)}`;
+				await this.#reload();
+			},
+		}, draft ?? agent ?? { name: "", description: "", systemPrompt: "" }, () => {
+			this.#clearCreateFlow();
+			this.#requestRender();
+		}, agent?.source === "user" ? "user" : "project");
+		if (!this.#restoringNavigation) this.onNavigationVisit?.("definition", previous);
 		this.#requestRender();
 	}
 
 	#clearCreateFlow(visit = true): void {
 		const previous = visit && this.#createActive ? this.navigationSnapshot() : undefined;
-		this.#createInput = null;
-		this.#createDescription = "";
-		this.#createGenerating = false;
-		this.#createSpec = null;
-		this.#createError = null;
-		this.#createStreamingText = "";
+		this.#definitionEditor?.dispose();
+		this.#definitionEditor = null;
+		this.#editingOriginal = undefined;
 		this.#keys.reset();
 		if (previous !== undefined && !this.#restoringNavigation) this.onNavigationVisit?.("", previous);
-	}
-
-	async #generateAgentFromDescription(rawDescription: string): Promise<void> {
-		const description = rawDescription.trim();
-		this.#createDescription = description;
-		if (!description) {
-			this.#createError = "Description is required.";
-			this.#requestRender();
-			return;
-		}
-		this.#createGenerating = true;
-		this.#createError = null;
-		this.#createSpec = null;
-		this.#createStreamingText = "";
-		this.#requestRender();
-		try {
-			const spec = await this.#runAgentCreationArchitect(description);
-			this.#createSpec = spec;
-			this.#createPreview.scrollToTop();
-			this.#notice = null;
-		} catch (error) {
-			this.#createError = error instanceof Error ? error.message : String(error);
-		} finally {
-			this.#createGenerating = false;
-			this.#requestRender();
-		}
-	}
-
-	async #runAgentCreationArchitect(description: string): Promise<GeneratedAgentSpec> {
-		const raw = await this.#deps.generateAgent(description, text => {
-			this.#createStreamingText += text;
-			this.#requestRender();
-		});
-		return parseGeneratedAgentSpec(raw);
-	}
-
-	async #saveGeneratedAgent(): Promise<void> {
-		const spec = this.#createSpec;
-		if (!spec) return;
-		this.#pendingOperations++;
-		try {
-			const filePath = await this.#deps.saveAgent(this.#createScope, spec);
-			this.#clearCreateFlow();
-			this.#notice = `Created agent ${spec.identifier} at ${shortenPath(filePath)}`;
-			await this.#reload();
-		} finally {
-			this.#pendingOperations--;
-		}
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -847,6 +703,15 @@ export class AgentsHubComponent implements Component {
 
 	handleInput(data: string): void {
 		this.#nativeVersion++;
+		const textFocused =
+			this.#strip?.kind === "pattern" ||
+			this.#createActive ||
+			(this.#assigning ? this.#browser.filterFocused : !this.#strip && !this.#createActive && this.#search.focused);
+		if (!textFocused && this.#help.handleInput(data)) {
+			this.#keys.reset();
+			this.#requestRender();
+			return;
+		}
 		if (data.startsWith("\x1b[<")) {
 			this.#keys.reset();
 			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
@@ -1047,61 +912,7 @@ export class AgentsHubComponent implements Component {
 	}
 
 	#handleCreateInput(data: string): void {
-		if (this.#pendingOperations > 0) return;
-		if (this.#createSpec) {
-			const action = this.#keys.read(data);
-			if (action === "pending") return;
-			if (action && this.#applyCreatePreviewMotion(action)) return;
-			if (action?.kind === "cancel" || (action?.kind === "horizontal" && action.delta < 0)) this.#clearCreateFlow();
-			else if (action?.kind === "context") this.#createScope = this.#createScope === "project" ? "user" : "project";
-			else if (action?.kind === "confirm") {
-				void this.#saveGeneratedAgent().catch(error => {
-					this.#createError = error instanceof Error ? error.message : String(error);
-					this.#requestRender();
-				});
-			} else if (!action && data.toLowerCase() === "r")
-				void this.#generateAgentFromDescription(this.#createDescription);
-			return;
-		}
-		const editor = this.#createInput;
-		if (editor?.isJumpPending) {
-			editor.handleInput(data);
-			this.#createDescription = editor.getExpandedText();
-			return;
-		}
-		const text = extractPrintableText(data);
-		if (text !== undefined && editor) {
-			editor.typeCharacter(text);
-			this.#createDescription = editor.getExpandedText();
-			return;
-		}
-		if (matchesSelectCancel(data)) {
-			if (!this.#createGenerating) this.#clearCreateFlow();
-			return;
-		}
-		if (this.#createGenerating) return;
-		if (matchesAppFollowUp(data)) {
-			void this.#generateAgentFromDescription(this.#createInput?.getExpandedText() ?? this.#createDescription);
-			return;
-		}
-		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
-			this.#createScope = this.#createScope === "project" ? "user" : "project";
-			return;
-		}
-		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-			this.#createInput?.handleInput("\n");
-			this.#createDescription = this.#createInput?.getExpandedText() ?? "";
-			return;
-		}
-		this.#createInput?.handleInput(data);
-		this.#createDescription = this.#createInput?.getExpandedText() ?? "";
-	}
-
-	#applyCreatePreviewMotion(action: MenuNavAction): boolean {
-		if (!this.#createPreview.handleMenuAction(action)) return false;
-		const by = menuScrollBy(action);
-		if (by !== undefined) this.#createNativeScroll = { by, n: (this.#createNativeScroll?.n ?? 0) + 1 };
-		return true;
+		this.#definitionEditor?.handleInput(data);
 	}
 
 	#moveSidebar(delta: number, wrap = true): void {
@@ -1148,10 +959,6 @@ export class AgentsHubComponent implements Component {
 
 		if (this.#assigning) {
 			if (overBody) this.#browser.routeMouse(event, bodyLine);
-			return true;
-		}
-		if (this.#createSpec && overBody && event.wheel !== null) {
-			this.#applyCreatePreviewMotion({ kind: "scroll", delta: event.wheel });
 			return true;
 		}
 		if (this.#createActive || this.#strip) return true;
@@ -1333,72 +1140,6 @@ export class AgentsHubComponent implements Component {
 		return lines.slice(0, rows);
 	}
 
-	#renderCreate(width: number, rows: number): readonly string[] {
-		const lines: string[] = [];
-		lines.push("");
-		if (this.#createSpec) {
-			const spec = this.#createSpec;
-			lines.push(truncateToWidth(theme.bold(theme.fg("accent", " Review generated agent")), width));
-			lines.push("");
-			lines.push(truncateToWidth(theme.fg("muted", ` Identifier: ${spec.identifier}`), width));
-			lines.push(truncateToWidth(theme.fg("muted", ` Scope: ${this.#createScope}`), width));
-			lines.push("");
-			lines.push(theme.fg("muted", " whenToUse:"));
-			for (const line of wrapTextWithAnsi(replaceTabs(spec.whenToUse), Math.max(20, width - 2))) {
-				lines.push(truncateToWidth(` ${line}`, width));
-			}
-			lines.push("");
-			lines.push(theme.fg("muted", " systemPrompt preview:"));
-			const promptWidth = Math.max(20, width - 4);
-			const wrapped: string[] = [];
-			for (const raw of spec.systemPrompt.split("\n")) {
-				for (const w of wrapTextWithAnsi(replaceTabs(raw), promptWidth)) wrapped.push(w);
-			}
-			for (const line of wrapped) {
-				lines.push(truncateToWidth(`   ${theme.fg("dim", line)}`, width));
-			}
-		} else {
-			lines.push(truncateToWidth(theme.bold(theme.fg("accent", " Create new agent")), width));
-			lines.push("");
-			lines.push(
-				truncateToWidth(
-					theme.fg("muted", " Describe what the agent should do; scope: ") + theme.fg("accent", this.#createScope),
-					width,
-				),
-			);
-			lines.push("");
-			if (this.#createInput && !this.#createGenerating) {
-				for (const line of this.#createInput.render(Math.max(20, width - 2))) {
-					lines.push(truncateToWidth(line, width));
-				}
-			}
-			if (this.#createGenerating) {
-				lines.push(theme.fg("muted", " Generating…"));
-				lines.push("");
-				const contentWidth = Math.max(20, width - 4);
-				const wrapped: string[] = [];
-				for (const raw of this.#createStreamingText.split("\n")) {
-					for (const w of wrapTextWithAnsi(replaceTabs(raw), contentWidth)) wrapped.push(w);
-				}
-				const budget = Math.max(3, rows - lines.length - 2);
-				for (const line of wrapped.slice(-budget)) {
-					lines.push(truncateToWidth(`  ${theme.fg("dim", line)}`, width));
-				}
-			}
-		}
-		if (this.#createError) {
-			lines.push("");
-			lines.push(truncateToWidth(theme.fg("error", ` ${replaceTabs(this.#createError)}`), width));
-		}
-		if (this.#createSpec) {
-			this.#createPreview.setLines(lines);
-			this.#createPreview.setHeight(Math.max(1, rows));
-			return this.#createPreview.render(width);
-		}
-		while (lines.length < rows) lines.push("");
-		return lines.slice(0, rows);
-	}
-
 	#footerHint(): string {
 		const enter = formatKeyHint("enter");
 		const cancel = editorKey("tui.select.cancel");
@@ -1408,34 +1149,33 @@ export class AgentsHubComponent implements Component {
 				const values = property === "model" ? "a model pattern" : '"on", "off", or a model pattern';
 				return `Enter ${values} (role aliases like @smol and :level suffixes work; empty clears) · ${cancel} back`;
 			}
-			return `j/k choose · ${enter}/Space set · h/l pane · Tab context · ${cancel} back`;
+			return `${enter}/Space set · Tab context · ${cancel} back`;
 		}
 		if (this.#search.focused) return "Search · hjkl type literally · Esc back to list";
 		if (this.#assigning) {
-			return `${enter} pick · j/k Pg C-d/u gg/G move · / search · h/${cancel} back`;
+			return `${enter} pick · PgUp/Dn page · / search · ${cancel} back`;
 		}
-		if (this.#createActive) {
-			const tab = formatKeyHint("tab");
-			if (this.#createSpec)
-				return `${enter} save · j/k Pg C-d/u gg/G scroll · ${tab} scope · r regenerate · ${cancel} back`;
-			if (this.#createGenerating) return "Generating…";
-			const generate = formatKeyHints(boundKeys("app.message.followUp", ["ctrl+q", "ctrl+enter"]));
-			return `${generate} generate · ${enter} newline · ${tab} scope · ${cancel} cancel`;
-		}
+		if (this.#createActive) return "Enter edit · r generate field · R / Ctrl-R with comment · Esc back";
 		if (this.#focus === "scope") {
-			return `j/k Pg C-d/u gg/G scopes · C-e/y view · l/Enter agents · / search · ${cancel} close`;
+			return `Enter agents · / search · ${cancel} close`;
 		}
-		const edit = this.#deps.openConfigFile ? " · Ctrl-G edit file" : "";
-		return `${enter} configure · Space enable/disable · j/k Pg C-d/u gg/G move · C-e/y view · h/l panes · / search · Ctrl-R reload${edit} · ${cancel} close`;
+		const edit = " · Ctrl-G edit definition";
+		return `${enter} configure · Space enable/disable · / search · Ctrl-R reload${edit} · ${cancel} close`;
 	}
 
-	#renderFooter(width: number): string {
+	#renderFooter(width: number): string[] {
 		const strip = this.#strip;
-		return this.#frame.renderFooter(
+		const editing =
+			strip?.kind === "pattern" ||
+			this.#createActive ||
+			(this.#assigning ? this.#browser.filterFocused : this.#search.focused);
+		const lines = menuHintLines(
+			`${this.#footerHint()}${editing ? "" : " · ? help"}`,
 			width,
-			this.#footerHint(),
-			strip ? () => this.#renderStrip(width, strip) : undefined,
-		);
+			editing ? "" : undefined,
+		).map(line => theme.fg("dim", line));
+		const stripLine = this.#frame.renderFooter(width, "", strip ? () => this.#renderStrip(width, strip) : undefined);
+		return strip ? [stripLine, ...lines] : lines;
 	}
 
 	#renderStrip(width: number, strip: StripState): string {
@@ -1477,13 +1217,16 @@ export class AgentsHubComponent implements Component {
 
 	/**
 	 * The agent list (and its chip strips) is a `picker` sheet. The pattern
-	 * input, the model browser and the create wizard stay the generic overlay.
+	 * input and model browser stay the generic overlay; the rich definition editor
+	 * chooses its sheet mode according to the currently focused form or text dialog.
 	 */
 	nativeSheet(cx: DescribeContext): boolean {
-		return cx.supports("picker") && !this.#createActive && !this.#assigning && this.#strip?.kind !== "pattern";
+		return this.#definitionEditor ? this.#definitionEditor.nativeSheet(cx) : cx.supports("picker") && !this.#assigning && this.#strip?.kind !== "pattern";
 	}
 
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#definitionEditor) return this.#definitionEditor.describe(cx);
+		if (this.#help.open) return this.#help.describe();
 		const sheet = this.nativeSheet(cx);
 		const cached = this.#nativeCache;
 		if (cached?.version === this.#nativeVersion && cached.sheet === sheet) return cached.node;
@@ -1508,6 +1251,7 @@ export class AgentsHubComponent implements Component {
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#definitionEditor) { this.#definitionEditor.handleNativeEvent(event); return; }
 		const target = event.key.slice(event.key.lastIndexOf("/") + 1);
 		const pick = pickerEvent(event);
 		if (pick) {
@@ -1515,10 +1259,7 @@ export class AgentsHubComponent implements Component {
 			this.#requestRender();
 			return;
 		}
-		if (event.type === "toggle") {
-			if (target !== "prompt") return;
-			this.#promptCollapsed = event.collapsed;
-		} else if (event.type === "select" || event.type === "activate") {
+		if (event.type === "select" || event.type === "activate") {
 			const activate = event.type === "activate";
 			if (target === "strip") {
 				const strip = this.#strip;
@@ -1651,9 +1392,7 @@ export class AgentsHubComponent implements Component {
 				},
 				{ id: "model", label: "Model", disabled: noAgent },
 				{ id: "new", label: "New agent" },
-				...(this.#deps.openConfigFile
-					? [{ id: "edit-file", label: "Edit file", keys: ["ctrl", "g"], disabled: noAgent }]
-					: []),
+				{ id: "edit-file", label: "Edit definition", keys: ["ctrl", "g"], disabled: noAgent },
 				{ id: "reload", label: "Reload", keys: ["ctrl", "r"] },
 				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
 			];
@@ -1739,9 +1478,7 @@ export class AgentsHubComponent implements Component {
 		if (rowDef.kind === "new") {
 			return [
 				text("New agent", { role: "omp.picker.title" }),
-				md(
-					"Describe what the agent should do; the architect drafts its name, when to use it and its system prompt.",
-				),
+				md("Create or mix an agent definition, with rich fields, raw editing and generation in one editor."),
 			];
 		}
 		const agent = rowDef.agent;
@@ -1785,17 +1522,15 @@ export class AgentsHubComponent implements Component {
 		const children: NativeChild[] = [
 			node("text", { spans: this.#statusSpans(), truncate: "end" }, undefined, "status"),
 		];
-		if (this.#createActive) {
-			children.push(...this.#describeCreate());
-		} else if (this.#assigning) {
+		if (this.#assigning) {
 			this.#browser.setFocused(true);
 			children.push(this.#browser);
 		} else {
 			children.push(...this.#describeList());
 		}
+		// Zero basis keeps the body within the space left of the sidebar.
 		return {
-			...node("col", { gap: "sm", grow: 1 }, children, "body"),
-			scroll: this.#createSpec ? this.#createNativeScroll : undefined,
+			...node("col", { gap: "sm", grow: 1, basis: 0, min: { w: 0 } }, children, "body"),
 		};
 	}
 
@@ -1911,56 +1646,6 @@ export class AgentsHubComponent implements Component {
 		return node("section", { head: [span(agent.name, "accent strong")] }, children, "detail");
 	}
 
-	#describeCreate(): NativeChild[] {
-		const nodes: NativeChild[] = [];
-		const spec = this.#createSpec;
-		if (spec) {
-			nodes.push(
-				text([span("Review generated agent", "accent strong")]),
-				node("kv", {
-					items: [
-						{ k: [span("Identifier", "muted")], v: [span(spec.identifier, "code")] },
-						{ k: [span("Scope", "muted")], v: [span(this.#createScope, "accent")] },
-					],
-				}),
-				node("section", { head: [span("whenToUse", "muted")] }, [text(spec.whenToUse, { wrap: "word", lines: 6 })]),
-				node(
-					"card",
-					{
-						head: [span("System prompt", "muted")],
-						collapsible: true,
-						collapsed: this.#promptCollapsed,
-						preview: { lines: 8 },
-					},
-					[md(spec.systemPrompt)],
-					"prompt",
-				),
-			);
-		} else {
-			nodes.push(
-				text([span("Create new agent", "accent strong")]),
-				text([span("Describe what the agent should do; scope: ", "muted"), span(this.#createScope, "accent")], {
-					wrap: "word",
-				}),
-			);
-			if (this.#createInput && !this.#createGenerating) {
-				nodes.push(this.#createInput);
-			}
-			if (this.#createGenerating) {
-				nodes.push(node("spinner", { label: "Generating…" }, undefined, "generating"));
-				if (this.#createStreamingText) {
-					nodes.push(
-						node("code", { text: this.#createStreamingText, lang: "json", wrap: true }, undefined, "stream"),
-					);
-				}
-			}
-		}
-		if (this.#createError) {
-			nodes.push(node("text", { text: this.#createError, tone: "error", wrap: "word" }, undefined, "error"));
-		}
-		return nodes;
-	}
-
 	/** Styled spans of one footer chip, from its action rather than its ANSI label. */
 	#chipSpans(agent: HubAgent, property: PropertyKind | undefined, chip: StripChip): TspSpan[] {
 		const action = chip.action;
@@ -2047,25 +1732,7 @@ export class AgentsHubComponent implements Component {
 				cancel("cancel"),
 			];
 		}
-		if (this.#createActive) {
-			if (this.#createSpec) {
-				return [
-					{ keys: ["enter"], label: "save" },
-					upDown("scroll"),
-					{ keys: ["pageUp", "pageDown"], label: "page" },
-					{ keys: ["tab"], label: "scope" },
-					{ keys: ["r"], label: "regenerate" },
-					cancel("cancel"),
-				];
-			}
-			if (this.#createGenerating) return [];
-			return [
-				{ keys: boundKeys("app.message.followUp", ["ctrl+q", "ctrl+enter"]), label: "generate" },
-				{ keys: ["enter"], label: "newline" },
-				{ keys: ["tab"], label: "scope" },
-				cancel("cancel"),
-			];
-		}
+		if (this.#createActive) return [{ keys: ["r"], label: "generate field" }, { keys: ["shift+r"], label: "generate with comment" }, cancel("back")];
 		if (this.#search.focused) return [cancel("back to list")];
 		if (this.#focus === "scope") {
 			return [upDown("scopes"), { keys: ["right", "enter"], label: "agents" }, cancel("close")];
@@ -2076,13 +1743,13 @@ export class AgentsHubComponent implements Component {
 			upDown("rows"),
 			{ keys: ["/"], label: "search" },
 			{ keys: ["ctrl+r"], label: "reload" },
-			this.#deps.openConfigFile ? { keys: ["ctrl+g"], label: "edit file" } : undefined,
+			{ keys: ["ctrl+g"], label: "edit definition" },
 			cancel("close"),
 		];
 	}
 
 	get blocksMenuHistory(): boolean {
-		return this.#createGenerating || this.#pendingOperations > 0;
+		return this.#definitionEditor?.busy === true || this.#pendingOperations > 0;
 	}
 
 	leaveMenu(): void {
@@ -2151,17 +1818,7 @@ export class AgentsHubComponent implements Component {
 						parent: this.#assignParent,
 					}
 				: undefined,
-			create: this.#createActive
-				? {
-						description: this.#createDescription,
-						scope: this.#createScope,
-						editor: this.#createInput?.getState(),
-						spec: this.#createSpec ? { ...this.#createSpec } : null,
-						error: this.#createError,
-						preview: this.#createPreview.navigationSnapshot(),
-						promptCollapsed: this.#promptCollapsed,
-					}
-				: undefined,
+			create: this.#definitionEditor ? { definition: this.#definitionEditor.definition, original: this.#editingOriginal } : undefined,
 		};
 	}
 
@@ -2195,14 +1852,7 @@ export class AgentsHubComponent implements Component {
 					this.#browser.restoreNavigation(state.assigning.browser);
 				}
 			} else if (state.create) {
-				this.#beginCreateFlow();
-				this.#createScope = state.create.scope;
-				if (state.create.editor) this.#createInput?.setState(state.create.editor);
-				this.#createDescription = this.#createInput?.getExpandedText() ?? state.create.description;
-				this.#createSpec = state.create.spec ? { ...state.create.spec } : null;
-				this.#createError = state.create.error;
-				this.#createPreview.restoreNavigation(state.create.preview);
-				this.#promptCollapsed = state.create.promptCollapsed;
+				this.#beginCreateFlow(state.create.original, state.create.definition);
 			}
 		} finally {
 			this.#restoringNavigation = false;
@@ -2211,6 +1861,10 @@ export class AgentsHubComponent implements Component {
 	}
 
 	render(width: number): readonly string[] {
-		return this.#frame.render(width, this.#terminalRows(), this.#entries, this.#renderFooter(width - 4));
+		if (this.#definitionEditor) return this.#definitionEditor.render(width);
+		return this.#help.render(
+			this.#frame.render(width, this.#terminalRows(), this.#entries, this.#renderFooter(width - 4)),
+			width,
+		);
 	}
 }
