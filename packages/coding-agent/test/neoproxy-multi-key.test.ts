@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { FetchImpl } from "@oh-my-pi/pi-ai";
+import { type FetchImpl, streamSimple } from "@oh-my-pi/pi-ai";
 import { apiKeyAccountKey } from "@oh-my-pi/pi-ai/auth-storage";
 import {
 	getOAuthProvider,
@@ -10,6 +10,7 @@ import {
 	unregisterOAuthProvider,
 } from "@oh-my-pi/pi-ai/oauth";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { formatModelString, resolveModelFromString } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { ModelsConfigFile } from "@oh-my-pi/pi-coding-agent/config/models-config";
 import { OAuthManualInputManager } from "@oh-my-pi/pi-coding-agent/modes/oauth-manual-input";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -20,9 +21,10 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 
 const KEY_A = "test-neoproxy-key-a";
 const KEY_B = "test-neoproxy-key-b";
+// NeoProxy advertises its served names under its own `neoproxy/` prefix.
 const GRANTS: Record<string, string[]> = {
-	[KEY_A]: ["shared-model", "only-a"],
-	[KEY_B]: ["shared-model", "only-b"],
+	[KEY_A]: ["neoproxy/shared-model", "neoproxy/only-a"],
+	[KEY_B]: ["neoproxy/shared-model", "neoproxy/only-b"],
 };
 
 describe("NeoProxy multi-key aggregation", () => {
@@ -35,6 +37,7 @@ describe("NeoProxy multi-key aggregation", () => {
 	let revoked: Set<string>;
 	let offline: boolean;
 	let modelRequests: string[];
+	let inference: { key: string; model: string | undefined }[];
 	let previousProvider: OAuthProviderInterface | undefined;
 	let prompts: OAuthPrompt[];
 
@@ -53,17 +56,30 @@ describe("NeoProxy multi-key aggregation", () => {
 		revoked = new Set();
 		offline = false;
 		modelRequests = [];
+		inference = [];
 		prompts = [];
 		server = Bun.serve({
 			hostname: "127.0.0.1",
 			port: 0,
-			fetch(request) {
+			async fetch(request) {
 				const key = request.headers.get("authorization")?.replace(/^Bearer /, "") ?? "";
 				const grants = GRANTS[key];
 				if (!grants || revoked.has(key)) return new Response("invalid key", { status: 401 });
-				if (new URL(request.url).pathname === "/v1/models") {
+				const pathname = new URL(request.url).pathname;
+				if (pathname === "/v1/models") {
 					modelRequests.push(key);
 					return Response.json({ data: grants.map(id => ({ id, supported_endpoint_types: ["openai"] })) });
+				}
+				if (pathname === "/v1/chat/completions") {
+					const { model } = (await request.json()) as { model?: string };
+					inference.push({ key, model });
+					if (!model || !grants.includes(model)) return new Response("unknown model", { status: 400 });
+					const chunk = (delta: object, finish: string | null) =>
+						`data: ${JSON.stringify({ id: "chatcmpl-neoproxy", object: "chat.completion.chunk", created: 0, model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+					return new Response(
+						`${chunk({ role: "assistant", content: "routed" }, null)}${chunk({}, "stop")}data: [DONE]\n\n`,
+						{ headers: { "content-type": "text/event-stream" } },
+					);
 				}
 				return new Response("not found", { status: 404 });
 			},
@@ -155,6 +171,26 @@ describe("NeoProxy multi-key aggregation", () => {
 		expect([...shared].every(key => key === KEY_A || key === KEY_B)).toBe(true);
 	});
 
+	test("selectors carry one neoproxy/ prefix and requests send the advertised name", async () => {
+		await connectBothKeys();
+		const models = registry.getProviderModels("neoproxy");
+		expect(models.map(formatModelString).sort()).toEqual([
+			"neoproxy/only-a",
+			"neoproxy/only-b",
+			"neoproxy/shared-model",
+		]);
+		const selected = resolveModelFromString("neoproxy/only-b", models);
+		expect(selected?.id).toBe("only-b");
+		expect(selected?.requestModelId).toBe("neoproxy/only-b");
+		const result = await streamSimple(
+			selected!,
+			{ messages: [{ role: "user", content: "Route me.", timestamp: 0 }] },
+			{ apiKey: registry.resolver(selected!), fetch: fetchImpl, maxTokens: 8 },
+		).result();
+		expect(result.stopReason).toBe("stop");
+		expect(inference).toEqual([{ key: KEY_B, model: "neoproxy/only-b" }]);
+	});
+
 	test("a revoked key drops only its own models", async () => {
 		await connectBothKeys();
 		revoked.add(KEY_A);
@@ -183,6 +219,7 @@ describe("NeoProxy multi-key aggregation", () => {
 		expect(restarted.getProviderDiscoveryState("neoproxy")?.status).toBe("cached");
 		const onlyB = restarted.find("neoproxy", "only-b");
 		expect(onlyB?.accountAccess && Object.keys(onlyB.accountAccess)).toEqual([idB()]);
+		expect(onlyB?.requestModelId).toBe("neoproxy/only-b");
 		expect(await restarted.getApiKey(onlyB!)).toBe(KEY_B);
 	});
 

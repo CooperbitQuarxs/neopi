@@ -140,9 +140,9 @@ local use only; that cleartext loopback exception has no TLS certificate or
 fingerprint confirmation and must not be presented as TLS-verified.
 
 Granted models appear under the NeoProxy provider. For a server model named
-`neoproxy/office-cheap`, the complete NeoPi selector is
-`neoproxy/neoproxy/office-cheap`: the first segment is the provider, and the
-remaining server-issued ID is sent unchanged. Select it with `/model`, or use
+`neoproxy/office-cheap`, the complete NeoPi selector is `neoproxy/office-cheap`:
+the provider supplies the one `neoproxy/` prefix, and requests still send the
+server-issued ID unchanged. Select it with `/model`, or use
 `/models` to assign it to an existing model role. A missing grant is an empty
 catalogue, not a fallback to a direct provider account.
 

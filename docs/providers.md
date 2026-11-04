@@ -34,7 +34,7 @@ Factory's native context limits hold even when extended context is disabled. Fac
 
 1. Run `/login neoproxy <url>` in a session, or `npi login neoproxy --url <url>` in a terminal. Without a URL, the login prompts for one and offers the configured server as the default. HTTPS is required except on loopback (`http://127.0.0.1:8318` works for a local proxy). For HTTPS servers, compare the server and CA fingerprints with your administrator before accepting them.
 2. Paste the key at the hidden prompt. NeoPi validates it with `GET /v1/models`, stores it in the normal credential store bound to that server's origin, and writes `providers.neoproxy` (`baseUrl`, `auth: apiKey`, `discovery: proxy`) to `models.yml`.
-3. Pick a model with `/model` or assign it to a role. Model ids are whatever the proxy names them, e.g. `neoproxy/<model>`.
+3. Pick a model with `/model` or assign it to a role. NeoProxy advertises its names with its own `neoproxy/` prefix; NeoPi drops that prefix from the model id so the selector carries it once (`neoproxy/<name>`, or `neoproxy/<provider>/<model>` for direct models), and requests still send the advertised name.
 
 **Several keys.** The proxy decides which models each key may use. Log in again with another key for the same server and NeoPi adds it beside the stored keys (press Enter at the add/replace prompt; type `replace` to remove the others instead). Discovery fetches every key's model list and shows the union. Each request uses a key that grants the selected model; only when no granting key is stored does it fall back to another key. A revoked key (HTTP 401/403) contributes no models, and the other keys keep theirs. Re-entering a stored key only refreshes it. Remove one key with `/logout neoproxy`.
 

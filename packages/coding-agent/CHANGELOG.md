@@ -135,6 +135,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- NeoProxy models are selected as `neoproxy/<name>` with one prefix (for example `neoproxy/anthropic-npi/claude-opus-5-5`) instead of `neoproxy/neoproxy/<name>`; requests still send the name NeoProxy advertises, and per-key routing is unchanged. Selectors saved with the doubled prefix need updating.
 - Reconnecting an existing API key immediately adopts its newly confirmed CA and origin restrictions instead of retaining stale trust until restart.
 - Print mode exits non-zero with the HTTP status, source model, and attempt count after its configured retry budget, without hidden HTTP retries or renewed budgets on fallback ([#627](https://github.com/PsychedelicShayna/neopi/issues/627)).
 - Open Settings views follow settings reloads without losing the selected scope, search, or draft; an edited row changed elsewhere is marked instead of replacing the edit ([#634](https://github.com/PsychedelicShayna/neopi/issues/634)).
