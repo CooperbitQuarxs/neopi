@@ -2365,6 +2365,8 @@ func (v *RoleInfoSource) UnmarshalJSON(data []byte) error {
 type RolesResult struct {
 	Roles      []RoleInfo `json:"roles"`
 	ActiveRole *string    `json:"activeRole,omitempty"`
+	// The configured cycle order: the roles `cycle_role` walks. A role without an available model is skipped.
+	CycleOrder []string `json:"cycleOrder"`
 }
 
 func (v *RolesResult) UnmarshalJSON(data []byte) error {
@@ -2376,6 +2378,7 @@ func (v *RolesResult) decodeFrom(raw map[string]json.RawMessage) error {
 	d := fieldDecoder{raw: raw, owner: "RolesResult"}
 	d.required("roles", &out.Roles)
 	d.optional("activeRole", &out.ActiveRole)
+	d.defaulted("cycleOrder", &out.CycleOrder, `[]`)
 	if d.err != nil {
 		return d.err
 	}
@@ -10567,6 +10570,29 @@ func (v *SetRoleResult) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type CycleRoleResult struct {
+	Role          string         `json:"role"`
+	Model         ModelInfo      `json:"model"`
+	ThinkingLevel *ThinkingLevel `json:"thinkingLevel,omitempty"`
+}
+
+func (v *CycleRoleResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "CycleRoleResult", v.decodeFrom)
+}
+
+func (v *CycleRoleResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out CycleRoleResult
+	d := fieldDecoder{raw: raw, owner: "CycleRoleResult"}
+	d.required("role", &out.Role)
+	d.required("model", &out.Model)
+	d.optional("thinkingLevel", &out.ThinkingLevel)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type GetModelsConfigurationResult struct {
 	Providers             []map[string]json.RawMessage            `json:"providers"`
 	Models                []map[string]json.RawMessage            `json:"models"`
@@ -11586,6 +11612,38 @@ func (c Commands) SetRole(ctx context.Context, p SetRoleCommand) (SetRoleResult,
 	var out SetRoleResult
 	err := c.call(ctx, "set_role", p, 0, &out)
 	return out, err
+}
+
+// CycleRoleCommand holds the parameters of "cycle_role".
+type CycleRoleCommand struct {
+	Direction *CycleRoleCommandDirection `json:"direction,omitempty"`
+}
+
+// CycleRole sends "cycle_role": Step through the configured role models in `cycleOrder` order like Ctrl+P; null when fewer than two role models are available.
+func (c Commands) CycleRole(ctx context.Context, p CycleRoleCommand) (*CycleRoleResult, error) {
+	var out *CycleRoleResult
+	err := c.call(ctx, "cycle_role", p, 0, &out)
+	return out, err
+}
+
+type CycleRoleCommandDirection string
+
+const (
+	CycleRoleCommandDirectionForward  CycleRoleCommandDirection = "forward"
+	CycleRoleCommandDirectionBackward CycleRoleCommandDirection = "backward"
+)
+
+func (v *CycleRoleCommandDirection) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "CycleRoleCommandDirection")
+	if err != nil {
+		return err
+	}
+	switch value := CycleRoleCommandDirection(s); value {
+	case CycleRoleCommandDirectionForward, CycleRoleCommandDirectionBackward:
+		*v = value
+		return nil
+	}
+	return unknownValue("CycleRoleCommandDirection", s)
 }
 
 // GetModelsConfiguration sends "get_models_configuration": Read the native provider catalog, scoped model roles, and effort rules.

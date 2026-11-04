@@ -149,6 +149,13 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		result: { role: "string", model: "ModelInfo", "thinkingLevel?": "ThinkingLevel" },
 	},
 	{
+		name: "cycle_role",
+		doc: "Step through the configured role models in `cycleOrder` order like Ctrl+P; null when fewer than two role models are available.",
+		params: { "direction?": "'forward' | 'backward'" },
+		result: { role: "string", model: "ModelInfo", "thinkingLevel?": "ThinkingLevel" },
+		nullable: true,
+	},
+	{
 		name: "get_models_configuration",
 		doc: "Read the native provider catalog, scoped model roles, and effort rules.",
 		result: {

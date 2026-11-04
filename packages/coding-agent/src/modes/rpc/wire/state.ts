@@ -67,7 +67,17 @@ export const stateDefs = {
 		"resolved?": "RoleResolution",
 		hidden: "boolean",
 	},
-	RolesResult: { roles: "RoleInfo[]", "activeRole?": "string" },
+	RolesResult: {
+		roles: "RoleInfo[]",
+		"activeRole?": "string",
+		cycleOrder: absentAs(
+			doc(
+				"string[]",
+				"The configured cycle order: the roles `cycle_role` walks. A role without an available model is skipped.",
+			),
+			[],
+		),
+	},
 	ModelSelectorPerformanceSource: "'measured' | 'catalog'",
 	ModelSelectorFacts: {
 		intelligence: "number | null",
