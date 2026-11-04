@@ -1,6 +1,7 @@
 import { clearSubmittedText } from "./helpers/draft";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
+import { withNeoProxyLoginUrl } from "../neopi/neoproxy-connect";
 import type { AgentSession } from "../session/agent-session";
 import type { SessionOAuthAccountList } from "../session/agent-session-types";
 import {
@@ -736,7 +737,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "login",
 		icon: "signIn",
 		description: "Login with OAuth provider",
-		inlineHint: "[provider|redirect URL]",
+		inlineHint: "[provider|neoproxy <url>|redirect URL]",
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.oauthManualInput.hasPending()
@@ -746,8 +747,12 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const manualInput = runtime.ctx.oauthManualInput;
 			const args = command.args.trim();
 			if (args.length > 0) {
-				const matchedProvider = getOAuthProviders().find(provider => provider.id === args);
-				if (matchedProvider) {
+				const [requestedProvider = "", ...urlParts] = args.split(/\s+/);
+				const loginUrl = urlParts.join(" ");
+				const matchedProvider = getOAuthProviders().find(provider => provider.id === requestedProvider);
+				// Only NeoProxy takes an argument (its server URL); other providers
+				// followed by text keep the redirect-URL paste path below.
+				if (matchedProvider && (!loginUrl || matchedProvider.id === "neoproxy")) {
 					if (manualInput.hasPending()) {
 						const pendingProvider = manualInput.pendingProviderId;
 						const message = pendingProvider
@@ -757,7 +762,13 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 						clearSubmittedText(runtime);
 						return;
 					}
-					void runtime.ctx.showOAuthSelector("login", matchedProvider.id);
+					if (loginUrl) {
+						void withNeoProxyLoginUrl(runtime.ctx.session.modelRegistry, loginUrl, () =>
+							runtime.ctx.showOAuthSelector("login", "neoproxy"),
+						);
+					} else {
+						void runtime.ctx.showOAuthSelector("login", matchedProvider.id);
+					}
 					clearSubmittedText(runtime);
 					return;
 				}

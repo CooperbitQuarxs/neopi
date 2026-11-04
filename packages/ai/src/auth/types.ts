@@ -502,7 +502,7 @@ export interface ModelUsageHealthOptions {
 export type AuthApiKeyOptions = {
 	baseUrl?: string;
 	modelId?: string;
-	/** {@link oauthAccountKey}s of accounts known to serve `modelId` from multi-account discovery; OAuth selection prefers them and tries other accounts only as a last resort. */
+	/** {@link oauthAccountKey}s or {@link apiKeyAccountKey}s of accounts known to serve `modelId` from multi-account discovery; selection prefers them and tries other accounts only as a last resort. */
 	accountIds?: readonly string[];
 	/**
 	 * Caller's cancel signal. Threaded into any broker-bound OAuth refresh so
@@ -544,6 +544,17 @@ export function oauthAccountKey(identity: {
 	projectId?: string;
 }): string | undefined {
 	return identity.accountId ?? identity.email ?? identity.projectId;
+}
+
+/**
+ * Non-secret identity of one stored API key, recorded in `Model.accountAccess`
+ * by per-key discovery (NeoProxy, whose administrator grants models per key)
+ * and matched by {@link AuthApiKeyOptions.accountIds} selection. The bearer is
+ * hashed with its bound request origin (repo-approved `Bun.hash`, as for the
+ * Copilot and Codex cache keys), so key bytes never reach the model cache.
+ */
+export function apiKeyAccountKey(credential: { key: string; requestOrigin?: string }): string {
+	return `key:${Bun.hash(`${credential.requestOrigin ?? ""}\0${credential.key}`).toString(36)}`;
 }
 
 /** Non-secret identity bound to the OAuth credential selected for one request attempt. */

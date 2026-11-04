@@ -687,7 +687,7 @@ describe("NeoProxy credential-local private CA", () => {
 			expect.objectContaining({ id: priorId }),
 		);
 
-		// Re-entering the old key after fresh certificate/key validation reactivates its original row.
+		// Explicitly replacing with the old key after fresh certificate/key validation reactivates its original row.
 		requests = [];
 		events = [];
 		confirmations = [];
@@ -696,6 +696,7 @@ describe("NeoProxy credential-local private CA", () => {
 		const reconnect = loginCallbacks();
 		const prompt = reconnect.onPrompt;
 		reconnect.onPrompt = async input => {
+			if (input.message.includes("other NeoProxy key")) return "replace";
 			const value = await prompt(input);
 			return input.secret ? acceptedKey : value;
 		};
