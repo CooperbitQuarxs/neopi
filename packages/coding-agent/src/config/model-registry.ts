@@ -1,6 +1,11 @@
 import * as path from "node:path";
 import type { ApiKeyResolver, FetchImpl, ResolvedApiKey, UsageProvider } from "@oh-my-pi/pi-ai";
-import { type AuthApiKeyOptions, type AuthPeekOptions, oauthAccountKey } from "@oh-my-pi/pi-ai/auth-storage";
+import {
+	type AuthApiKeyOptions,
+	type AuthPeekOptions,
+	apiKeyAccountKey,
+	oauthAccountKey,
+} from "@oh-my-pi/pi-ai/auth-storage";
 import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { registerOAuthProvider, unregisterOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
@@ -74,6 +79,7 @@ import {
 } from "./resolve-config-value";
 import {
 	DISCOVERY_DEFAULT_MAX_TOKENS,
+	type DiscoveryApiKeyAccount,
 	type DiscoveryContext,
 	type DiscoveryProviderConfig,
 	discoverLlamaCppModelRuntimeMetadata,
@@ -2456,6 +2462,21 @@ export class ModelRegistry {
 					return undefined;
 				}
 				return this.resolver(provider);
+			},
+			listApiKeyAccounts: async provider => {
+				if (this.authStorage.keys.source(provider, { env: "none" })?.kind !== "api_key") return [];
+				const stored = this.authStorage.credentials.all()[provider];
+				const accounts: DiscoveryApiKeyAccount[] = [];
+				for (const credential of Array.isArray(stored) ? stored : stored ? [stored] : []) {
+					if (credential.type !== "api_key" || !credential.key) continue;
+					accounts.push({
+						accountKey: apiKeyAccountKey(credential),
+						apiKey: credential.key,
+						requestOrigin: credential.requestOrigin,
+						tlsTrust: credential.tlsTrust,
+					});
+				}
+				return accounts;
 			},
 		};
 	}

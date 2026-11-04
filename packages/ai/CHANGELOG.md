@@ -4,6 +4,7 @@
 
 ### Added
 
+- `formatAuthGatewayLink` / `parseAuthGatewayLink` define the `neopi-gateway://` connection-link format, with LAN-address selection for gateways bound to every interface.
 - Share individual broker-backed accounts with NeoProxy through an authenticated, secret-free account catalogue and credential-pinned inference that refreshes the selected account without rotating to siblings.
 
 ### Fixed
