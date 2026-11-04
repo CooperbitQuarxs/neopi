@@ -1506,8 +1506,13 @@ function proxyModelsFromPayload(
 ): Model<Api>[] {
 	const discovered: Model<Api>[] = [];
 	for (const item of items) {
-		const id = item.id;
-		if (!id) continue;
+		const advertisedId = item.id;
+		if (!advertisedId) continue;
+		// NeoProxy advertises its served names under its own `neoproxy/` prefix,
+		// which the provider id already supplies: select `neoproxy/<slug>` and
+		// keep sending the advertised name NeoProxy accepts.
+		const id = neoproxySelectorId(providerConfig.provider, advertisedId);
+		const requestModelId = id === advertisedId ? undefined : advertisedId;
 		const endpoints = item.supported_endpoint_types ?? [];
 		const api: Api | undefined = endpoints.includes("anthropic")
 			? "anthropic-messages"
@@ -1516,7 +1521,7 @@ function proxyModelsFromPayload(
 				: providerConfig.api;
 		if (!api) continue;
 		const isAnthropic = api === "anthropic-messages";
-		const reference = resolveModelReference(id, getBundledModelReferenceIndex());
+		const reference = resolveModelReference(advertisedId, getBundledModelReferenceIndex());
 		// A proxy that dispatches with its own catalog advertises the ladder it
 		// accepts for each row. That ladder is authoritative over the reference
 		// guess: cross-provider references carry no thinking at all, so rows whose
@@ -1525,12 +1530,13 @@ function proxyModelsFromPayload(
 		const advertised = advertisedReasoningEnabled(providerConfig) ? extractAdvertisedReasoning(item) : undefined;
 		const discoveryName = typeof item.name === "string" ? item.name.trim() : "";
 		const displayName =
-			(discoveryName && discoveryName !== id ? discoveryName : undefined) ??
+			(discoveryName && discoveryName !== advertisedId && discoveryName !== id ? discoveryName : undefined) ??
 			reference?.name ??
 			stripBracketedModelIdAffixes(id) ??
 			id;
 		const spec = {
 			id,
+			...(requestModelId !== undefined && { requestModelId }),
 			name: displayName,
 			api,
 			provider: providerConfig.provider,
@@ -1566,6 +1572,15 @@ function proxyModelsFromPayload(
 		discovered.push(buildModel(withAdvertisedEfforts(spec, advertised, isAnthropic)));
 	}
 	return discovered;
+}
+
+const NEOPROXY_SERVED_NAME_PREFIX = `${NEOPROXY_PROVIDER_ID}/`;
+
+/** Selector id for an advertised NeoProxy name: one leading `neoproxy/` removed, since the provider id adds it. */
+function neoproxySelectorId(provider: string, advertisedId: string): string {
+	if (provider !== NEOPROXY_PROVIDER_ID || !advertisedId.startsWith(NEOPROXY_SERVED_NAME_PREFIX)) return advertisedId;
+	const slug = advertisedId.slice(NEOPROXY_SERVED_NAME_PREFIX.length);
+	return slug.length > 0 ? slug : advertisedId;
 }
 
 export function normalizeLlamaCppBaseUrl(baseUrl?: string): string {
