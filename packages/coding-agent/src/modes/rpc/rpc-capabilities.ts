@@ -34,3 +34,16 @@ export const RPC_CAPABILITIES: readonly string[] = [
 	"set_subagent_model", // #492; set_subagent_model switches an owned running subagent's model for its next request.
 	"cycle_role", // #666; cycle_role is Ctrl+P role cycling, and get_roles reports cycleOrder.
 ];
+
+/**
+ * Capabilities only the stdio transport serves. The control socket answers its `hello` from
+ * {@link RPC_CAPABILITIES} alone, so a feature the socket cannot serve never appears there.
+ */
+const RPC_STDIO_CAPABILITIES: readonly string[] = [
+	"dictation", // #668; dictation_start/dictation_stop and their frames, and get_state.dictationEnabled.
+];
+
+/** What the stdio `ready` frame advertises. */
+export function stdioCapabilities(): string[] {
+	return [...RPC_CAPABILITIES, ...RPC_STDIO_CAPABILITIES];
+}

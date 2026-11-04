@@ -3931,6 +3931,9 @@ pub struct SessionState {
 	/// `/slow` is on for the active model; always `false` when `slowModeSupported` is `false`.
 	#[serde(rename = "slowModeEnabled", default = "default_session_state_slow_mode_enabled")]
 	pub slow_mode_enabled: bool,
+	/// Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off.
+	#[serde(rename = "dictationEnabled", default = "default_session_state_dictation_enabled")]
+	pub dictation_enabled: bool,
 	/// Where the active model's `/slow` lives; absent when unsupported.
 	#[serde(rename = "slowModeScope", default, skip_serializing_if = "Option::is_none")]
 	pub slow_mode_scope: Option<SlowModeScope>,
@@ -8747,6 +8750,10 @@ fn default_session_state_slow_mode_supported() -> bool {
 }
 
 fn default_session_state_slow_mode_enabled() -> bool {
+	serde_json::from_str("false").expect("valid wire default")
+}
+
+fn default_session_state_dictation_enabled() -> bool {
 	serde_json::from_str("false").expect("valid wire default")
 }
 

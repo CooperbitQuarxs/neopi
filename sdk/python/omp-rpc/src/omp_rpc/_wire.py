@@ -1078,6 +1078,8 @@ class SessionState:
     """`/slow` applies to the active model."""
     slow_mode_enabled: bool = False
     """`/slow` is on for the active model; always `false` when `slowModeSupported` is `false`."""
+    dictation_enabled: bool = False
+    """Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off."""
     slow_mode_scope: SlowModeScope | None = None
     """Where the active model's `/slow` lives; absent when unsupported."""
     usage_limit: UsageLimitState | None = None
@@ -3315,6 +3317,7 @@ def parse_session_state(value: object, path: str = "SessionState") -> SessionSta
         fast_mode_active=defaulted(payload, "fastModeActive", decode_bool, path, False),
         slow_mode_supported=defaulted(payload, "slowModeSupported", decode_bool, path, False),
         slow_mode_enabled=defaulted(payload, "slowModeEnabled", decode_bool, path, False),
+        dictation_enabled=defaulted(payload, "dictationEnabled", decode_bool, path, False),
         slow_mode_scope=optional(payload, "slowModeScope", _decode_slow_mode_scope, path),
         usage_limit=optional(payload, "usageLimit", parse_usage_limit_state, path),
         tokens_per_second=defaulted(payload, "tokensPerSecond", nullable(decode_float), path, None),

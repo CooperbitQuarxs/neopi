@@ -3,6 +3,7 @@
  * control socket's `hello` / `get_status` / `state` snapshots.
  */
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { cfgSttEnabled } from "../../stt/settings";
 import type { AgentSession } from "../../session/agent-session";
 import { isSessionSettled } from "../../session/session-settle";
 import { calculateTokensPerSecond } from "../../utils/token-rate";
@@ -108,6 +109,7 @@ export function buildRpcSessionState(session: AgentSession, options: RpcSessionS
 			: {}),
 		contextUsage: session.getContextUsage(),
 		activeRole: options.activeRole,
+		dictationEnabled: cfgSttEnabled.get(session.settings),
 		chatMode: session.chatMode?.mode ?? "off",
 		...rpcPlanModeState(session),
 		goal: session.getGoalModeState() ?? null,

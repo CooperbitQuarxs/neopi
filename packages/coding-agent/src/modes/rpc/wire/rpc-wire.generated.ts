@@ -836,6 +836,8 @@ export interface SessionState {
 	slowModeSupported?: boolean;
 	/** `/slow` is on for the active model; always `false` when `slowModeSupported` is `false`. */
 	slowModeEnabled?: boolean;
+	/** Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off. */
+	dictationEnabled?: boolean;
 	/** Where the active model's `/slow` lives; absent when unsupported. */
 	slowModeScope?: SlowModeScope;
 	/** Usage-limit stage of the active model's account; absent outside wrap-up and low priority. */

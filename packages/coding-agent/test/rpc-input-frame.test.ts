@@ -314,6 +314,7 @@ describe("RpcInputDispatcher", () => {
 						isSettled: true,
 						queuedMessages: { steering: [], followUp: [], liveSteered: 0 },
 						todoPhases: [],
+						dictationEnabled: false,
 						chatMode: "off",
 						mode: "default",
 						chronicler: { status: "off" },
