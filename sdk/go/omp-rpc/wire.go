@@ -4810,6 +4810,8 @@ type AvailableSlashCommand struct {
 	Description *string            `json:"description,omitempty"`
 	Input       *SlashCommandInput `json:"input,omitempty"`
 	Subcommands []SlashSubcommand  `json:"subcommands,omitempty"`
+	// `tui` commands need the terminal UI and are refused over RPC with `code: "command_requires_tui"`.
+	Availability AvailableSlashCommandAvailability `json:"availability"`
 }
 
 func (v *AvailableSlashCommand) UnmarshalJSON(data []byte) error {
@@ -4825,11 +4827,32 @@ func (v *AvailableSlashCommand) decodeFrom(raw map[string]json.RawMessage) error
 	d.optional("description", &out.Description)
 	d.optional("input", &out.Input)
 	d.optional("subcommands", &out.Subcommands)
+	d.defaulted("availability", &out.Availability, `"headless"`)
 	if d.err != nil {
 		return d.err
 	}
 	*v = out
 	return nil
+}
+
+type AvailableSlashCommandAvailability string
+
+const (
+	AvailableSlashCommandAvailabilityHeadless AvailableSlashCommandAvailability = "headless"
+	AvailableSlashCommandAvailabilityTui      AvailableSlashCommandAvailability = "tui"
+)
+
+func (v *AvailableSlashCommandAvailability) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "AvailableSlashCommandAvailability")
+	if err != nil {
+		return err
+	}
+	switch value := AvailableSlashCommandAvailability(s); value {
+	case AvailableSlashCommandAvailabilityHeadless, AvailableSlashCommandAvailabilityTui:
+		*v = value
+		return nil
+	}
+	return unknownValue("AvailableSlashCommandAvailability", s)
 }
 
 // OMP-native session entries in append order.

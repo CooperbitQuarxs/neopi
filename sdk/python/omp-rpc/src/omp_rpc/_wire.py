@@ -1286,6 +1286,8 @@ class AvailableSlashCommand:
     description: str | None = None
     input: SlashCommandInput | None = None
     subcommands: tuple[SlashSubcommand, ...] | None = None
+    availability: Literal["headless", "tui"] = "headless"
+    """`tui` commands need the terminal UI and are refused over RPC with `code: "command_requires_tui"`."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -3619,6 +3621,7 @@ def parse_available_slash_command(value: object, path: str = "AvailableSlashComm
         description=optional(payload, "description", decode_str, path),
         input=optional(payload, "input", parse_slash_command_input, path),
         subcommands=optional(payload, "subcommands", array(parse_slash_subcommand), path),
+        availability=defaulted(payload, "availability", cast('Decoder[Literal["headless", "tui"]]', literal(frozenset({"headless", "tui"}))), path, "headless"),
     )
 
 

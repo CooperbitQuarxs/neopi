@@ -383,6 +383,8 @@ export interface RpcAvailableSlashCommand {
 	input?: { hint?: string };
 	subcommands?: Array<{ name: string; description?: string; usage?: string }>;
 	source: AvailableSlashCommandSource;
+	/** `tui` commands need the terminal UI and are refused over RPC with `code: "command_requires_tui"`. */
+	availability: "headless" | "tui";
 }
 
 export interface RpcAvailableCommandsUpdateFrame {

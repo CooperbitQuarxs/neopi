@@ -9,6 +9,7 @@
 
 ### Added
 
+- RPC lists every slash command in `get_available_commands` with its `availability` (`headless` or `tui`), and a `prompt` that names a terminal-only command answers `command_requires_tui` instead of being sent to the model; hosts gate on the `command_catalog` capability ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).
 - `npi sessions list --json --live` adds each live session's state (busy, waiting for an answer, idle), streaming flag, pending dialog count and git branch, so hosts can mark running sessions without opening a control connection per row; default output is unchanged ([#669](https://github.com/PsychedelicShayna/neopi/issues/669)).
 - RPC hosts can list, read and cancel background jobs with `get_jobs`, `get_job_output` and `cancel_job`, and keep a live list with `job_lifecycle` frames; hosts gate on the `background_jobs` capability ([#665](https://github.com/PsychedelicShayna/neopi/issues/665)).
 - `get_state` reports `hostname`, `activeTimeMs` (accumulated active processing time) and `runningJobCount`, the facts the TUI status line shows; hosts gate on the `status_facts` capability ([#667](https://github.com/PsychedelicShayna/neopi/issues/667)).

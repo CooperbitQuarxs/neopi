@@ -59,6 +59,7 @@ Behavior notes:
 | `dictation` | Draft-only `dictation_start` / `dictation_stop`, their frames, and `get_state.dictationEnabled`. Stdio only. See [Dictation Sub-Protocol](#dictation-sub-protocol). |
 | `status_facts` | `get_state.hostname`, `activeTimeMs` and `runningJobCount`, the TUI status line's facts. See [`get_roles` and `set_role` payloads](#get_roles-and-set_role-payloads). |
 | `background_jobs` | `get_jobs`, `get_job_output`, `cancel_job` and stdio `job_lifecycle` frames. See [Background jobs](#background-jobs). |
+| `command_catalog` | Every slash command in `get_available_commands` / `available_commands_update` with its `availability`, and `command_requires_tui` refusal of terminal-only commands in `prompt`. See [Available commands](#available-commands). |
 | `cycle_role` | `cycle_role` command (Ctrl+P role cycling) and `get_roles.cycleOrder` ([payloads](#get_roles-and-set_role-payloads)). |
 | `set_subagent_model` | `set_subagent_model` switches an owned running subagent's model for its next request. See [Changing a running subagent's model](#changing-a-running-subagents-model). |
 
@@ -1612,8 +1613,24 @@ run.
 
 `get_available_commands` returns `{ commands }`, and the same array is pushed
 in `available_commands_update` frames at startup and after command metadata
-changes. Each command has `name`, `source`, and optional `aliases`,
-`description`, `input.hint`, and `subcommands`.
+changes. Each command has `name`, `source`, `availability`, and optional
+`aliases`, `description`, `input.hint`, and `subcommands`.
+
+With the `command_catalog` capability the list holds every registered command,
+not only those a headless host can run. `availability` is `"headless"` for
+commands that work in every host and `"tui"` for commands that need the
+terminal UI (selectors, dashboards, wizards, `/settings`, `/hotkeys`, ...). Hosts
+MUST read it instead of hardcoding a list: a command moves to `headless` the
+release it gains a headless handler, with no host change. Skill, extension,
+custom, MCP and file commands are always `headless`.
+
+`prompt` text that starts with `/` goes through the same builtin dispatcher the
+terminal editor uses. A `tui` command is never sent to the model: the response
+is `{ success: false, command: "prompt", error: "/settings needs the terminal UI", code: "command_requires_tui" }`
+(for `abort_and_prompt`, a `prompt_result` with `status: "error"`). An extension
+or custom command of the same name runs instead, as in the terminal. Slash text
+that names no command, such as a file path, is still ordinary chat. ACP clients
+keep receiving only the headless commands.
 
 Command discovery is intentionally an OMP dialect: Pi's `get_commands` (a
 `RpcSlashCommand[]` projection over extensions → prompt templates → skills) is

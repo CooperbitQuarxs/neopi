@@ -4980,6 +4980,15 @@
 					"items": {
 						"$ref": "#/$defs/SlashSubcommand"
 					}
+				},
+				"availability": {
+					"enum": [
+						"headless",
+						"tui"
+					],
+					"type": "string",
+					"description": "`tui` commands need the terminal UI and are refused over RPC with `code: \"command_requires_tui\"`.",
+					"default": "headless"
 				}
 			},
 			"required": [
