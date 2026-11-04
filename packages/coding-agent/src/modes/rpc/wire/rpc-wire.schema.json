@@ -639,6 +639,39 @@
 				"clientOmit": []
 			},
 			{
+				"name": "get_jobs",
+				"doc": "List the background jobs of this agent and its subagents (the `/jobs` sheet): running jobs and the newest settled ones.",
+				"params": "GetJobsParams",
+				"result": "JobsResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "get_job_output",
+				"doc": "Read a job's output snapshot (a tail while running, the final result or error once settled) by UTF-8 byte offset.",
+				"params": "GetJobOutputParams",
+				"result": "JobOutput",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "cancel_job",
+				"doc": "Cancel a running job the session's own agent owns, like the jobs sheet; false when it is not cancellable.",
+				"params": "CancelJobParams",
+				"result": "CancelJobResult",
+				"nullable": false,
+				"unwrap": "cancelled",
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "set_subagent_model",
 				"doc": "Switch a running subagent's model for this session only, from its next request, like the focused `/switch`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.",
 				"params": "SetSubagentModelParams",
@@ -5380,6 +5413,172 @@
 				"lastUpdate"
 			]
 		},
+		"JobType": {
+			"enum": [
+				"bash",
+				"task",
+				"eval",
+				"chronicle"
+			],
+			"type": "string"
+		},
+		"JobStatus": {
+			"enum": [
+				"running",
+				"completed",
+				"failed",
+				"cancelled"
+			],
+			"type": "string"
+		},
+		"JobInfo": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string",
+					"description": "Stable `bg_N` id."
+				},
+				"type": {
+					"$ref": "#/$defs/JobType"
+				},
+				"label": {
+					"type": "string"
+				},
+				"status": {
+					"$ref": "#/$defs/JobStatus"
+				},
+				"startedAt": {
+					"type": "number",
+					"description": "Epoch milliseconds."
+				},
+				"outputBytes": {
+					"type": "integer",
+					"description": "Size in bytes of the output snapshot `get_job_output` reads."
+				},
+				"command": {
+					"type": "string",
+					"description": "Full command line of a job that runs a process; `label` is cut to 120 characters."
+				},
+				"finishedAt": {
+					"type": "number"
+				},
+				"exitCode": {
+					"type": "integer"
+				},
+				"error": {
+					"type": "string",
+					"description": "Failure text of a failed job, cut to a bounded length."
+				},
+				"ownerId": {
+					"type": "string",
+					"description": "Registry id of the agent that registered the job."
+				},
+				"agentId": {
+					"type": "string",
+					"description": "Registry id of the subagent a task job runs."
+				}
+			},
+			"required": [
+				"id",
+				"type",
+				"label",
+				"status",
+				"startedAt",
+				"outputBytes"
+			],
+			"description": "One background job."
+		},
+		"JobAgent": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"parentId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"id"
+			]
+		},
+		"JobsResult": {
+			"type": "object",
+			"properties": {
+				"running": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/JobInfo"
+					}
+				},
+				"recent": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/JobInfo"
+					},
+					"description": "Settled jobs, newest first, at most `recentLimit`."
+				},
+				"agents": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/JobAgent"
+					},
+					"description": "Subagents owning listed jobs, with the ancestors linking them to the root."
+				},
+				"runningCount": {
+					"type": "integer",
+					"description": "Running jobs by the TUI jobs-pill rule; equals `get_state.runningJobCount`."
+				},
+				"rootId": {
+					"type": "string",
+					"description": "The agent the tree is for; its own jobs are the top level."
+				}
+			},
+			"required": [
+				"running",
+				"recent",
+				"agents",
+				"runningCount"
+			]
+		},
+		"JobOutput": {
+			"type": "object",
+			"properties": {
+				"jobId": {
+					"type": "string"
+				},
+				"status": {
+					"$ref": "#/$defs/JobStatus"
+				},
+				"fromByte": {
+					"type": "integer"
+				},
+				"nextByte": {
+					"type": "integer",
+					"description": "Pass as the next `fromByte` to read on."
+				},
+				"totalBytes": {
+					"type": "integer",
+					"description": "Size in bytes of the whole output snapshot."
+				},
+				"reset": {
+					"type": "boolean",
+					"description": "`fromByte` exceeded the snapshot and reading restarted at zero."
+				},
+				"output": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"jobId",
+				"status",
+				"fromByte",
+				"nextByte",
+				"totalBytes",
+				"reset",
+				"output"
+			]
+		},
 		"SubagentMessages": {
 			"type": "object",
 			"properties": {
@@ -7945,6 +8144,38 @@
 			],
 			"description": "Sent exactly once when a live session ends; `error` carries the failure cause."
 		},
+		"JobLifecycleEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "job_lifecycle"
+				},
+				"event": {
+					"enum": [
+						"registered",
+						"progress",
+						"completed",
+						"failed",
+						"cancelled"
+					],
+					"type": "string"
+				},
+				"job": {
+					"$ref": "#/$defs/JobInfo"
+				},
+				"runningCount": {
+					"type": "integer",
+					"description": "Running jobs by the TUI jobs-pill rule after this transition."
+				}
+			},
+			"required": [
+				"type",
+				"event",
+				"job",
+				"runningCount"
+			],
+			"description": "A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`."
+		},
 		"DictationStateEvent": {
 			"type": "object",
 			"properties": {
@@ -9101,6 +9332,9 @@
 				},
 				{
 					"$ref": "#/$defs/LiveEndEvent"
+				},
+				{
+					"$ref": "#/$defs/JobLifecycleEvent"
 				},
 				{
 					"$ref": "#/$defs/DictationStateEvent"
@@ -10377,6 +10611,50 @@
 			"required": [
 				"subagentId",
 				"enabled"
+			]
+		},
+		"GetJobsParams": {
+			"type": "object",
+			"properties": {
+				"recentLimit": {
+					"type": "integer"
+				}
+			}
+		},
+		"GetJobOutputParams": {
+			"type": "object",
+			"properties": {
+				"jobId": {
+					"type": "string"
+				},
+				"fromByte": {
+					"type": "integer"
+				}
+			},
+			"required": [
+				"jobId"
+			]
+		},
+		"CancelJobParams": {
+			"type": "object",
+			"properties": {
+				"jobId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"jobId"
+			]
+		},
+		"CancelJobResult": {
+			"type": "object",
+			"properties": {
+				"cancelled": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"cancelled"
 			]
 		},
 		"SetSubagentModelParams": {

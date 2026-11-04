@@ -1126,6 +1126,63 @@ export interface SubagentSnapshot {
 	fastModeActive?: boolean;
 }
 
+export type JobType = "bash" | "task" | "eval" | "chronicle";
+
+export type JobStatus = "running" | "completed" | "failed" | "cancelled";
+
+/** One background job. */
+export interface JobInfo {
+	/** Stable `bg_N` id. */
+	id: string;
+	type: JobType;
+	label: string;
+	status: JobStatus;
+	/** Epoch milliseconds. */
+	startedAt: number;
+	/** Size in bytes of the output snapshot `get_job_output` reads. */
+	outputBytes: number;
+	/** Full command line of a job that runs a process; `label` is cut to 120 characters. */
+	command?: string;
+	finishedAt?: number;
+	exitCode?: number;
+	/** Failure text of a failed job, cut to a bounded length. */
+	error?: string;
+	/** Registry id of the agent that registered the job. */
+	ownerId?: string;
+	/** Registry id of the subagent a task job runs. */
+	agentId?: string;
+}
+
+export interface JobAgent {
+	id: string;
+	parentId?: string;
+}
+
+export interface JobsResult {
+	running: JobInfo[];
+	/** Settled jobs, newest first, at most `recentLimit`. */
+	recent: JobInfo[];
+	/** Subagents owning listed jobs, with the ancestors linking them to the root. */
+	agents: JobAgent[];
+	/** Running jobs by the TUI jobs-pill rule; equals `get_state.runningJobCount`. */
+	runningCount: number;
+	/** The agent the tree is for; its own jobs are the top level. */
+	rootId?: string;
+}
+
+export interface JobOutput {
+	jobId: string;
+	status: JobStatus;
+	fromByte: number;
+	/** Pass as the next `fromByte` to read on. */
+	nextByte: number;
+	/** Size in bytes of the whole output snapshot. */
+	totalBytes: number;
+	/** `fromByte` exceeded the snapshot and reading restarted at zero. */
+	reset: boolean;
+	output: string;
+}
+
 /** Incremental subagent transcript read. */
 export interface SubagentMessages {
 	sessionFile: string;
@@ -1847,6 +1904,15 @@ export interface LiveEndEvent {
 	error?: string;
 }
 
+/** A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`. */
+export interface JobLifecycleEvent {
+	type: "job_lifecycle";
+	event: "registered" | "progress" | "completed" | "failed" | "cancelled";
+	job: JobInfo;
+	/** Running jobs by the TUI jobs-pill rule after this transition. */
+	runningCount: number;
+}
+
 /** State of one draft-only microphone capture. */
 export interface DictationStateEvent {
 	type: "dictation_state";
@@ -2195,7 +2261,7 @@ export interface HostUriSchemeDefinition {
 }
 
 /** Unsolicited outbound frame (everything except responses and host tool/URI requests), discriminated by `type`. */
-export type RpcNotification = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | DictationStateEvent | DictationTranscriptEvent | DictationEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | RpcAgentEvent;
+export type RpcNotification = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | JobLifecycleEvent | DictationStateEvent | DictationTranscriptEvent | DictationEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | RpcAgentEvent;
 
 /** Any frame the server writes to stdout (after reassembling `rpc_chunk` sequences), discriminated by `type`. */
 export type RpcServerFrame = RpcResponse | RpcHostRequest | RpcNotification;
@@ -2557,6 +2623,23 @@ export interface SetSubagentFastParams {
 	enabled: boolean;
 }
 
+export interface GetJobsParams {
+	recentLimit?: number;
+}
+
+export interface GetJobOutputParams {
+	jobId: string;
+	fromByte?: number;
+}
+
+export interface CancelJobParams {
+	jobId: string;
+}
+
+export interface CancelJobResult {
+	cancelled: boolean;
+}
+
 export interface SetSubagentModelParams {
 	subagentId: string;
 	selector?: string;
@@ -2844,6 +2927,9 @@ export interface RpcWireCommands {
 	steer_subagent: { params: SteerSubagentParams; result: undefined };
 	set_subagent_thinking_level: { params: SetSubagentThinkingLevelParams; result: undefined };
 	set_subagent_fast: { params: SetSubagentFastParams; result: FastModeResult };
+	get_jobs: { params: GetJobsParams; result: JobsResult };
+	get_job_output: { params: GetJobOutputParams; result: JobOutput };
+	cancel_job: { params: CancelJobParams; result: CancelJobResult };
 	set_subagent_model: { params: SetSubagentModelParams; result: SetSubagentModelResult };
 	live_start: { params: LiveStartParams; result: LiveStartResult };
 	live_connect: { params: LiveConnectParams; result: LiveConnectResult };

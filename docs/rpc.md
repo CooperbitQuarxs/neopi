@@ -58,6 +58,7 @@ Behavior notes:
 | `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
 | `dictation` | Draft-only `dictation_start` / `dictation_stop`, their frames, and `get_state.dictationEnabled`. Stdio only. See [Dictation Sub-Protocol](#dictation-sub-protocol). |
 | `status_facts` | `get_state.hostname`, `activeTimeMs` and `runningJobCount`, the TUI status line's facts. See [`get_roles` and `set_role` payloads](#get_roles-and-set_role-payloads). |
+| `background_jobs` | `get_jobs`, `get_job_output`, `cancel_job` and stdio `job_lifecycle` frames. See [Background jobs](#background-jobs). |
 | `cycle_role` | `cycle_role` command (Ctrl+P role cycling) and `get_roles.cycleOrder` ([payloads](#get_roles-and-set_role-payloads)). |
 | `set_subagent_model` | `set_subagent_model` switches an owned running subagent's model for its next request. See [Changing a running subagent's model](#changing-a-running-subagents-model). |
 
@@ -1909,6 +1910,35 @@ return an error and leave the subagent unchanged; `Subagent not running: <id>`
 matches the other `*_subagent` commands. The change appends a session-only
 `model_change` entry (role `temporary`) to the subagent's session file, and
 `get_subagents` reports the new model immediately.
+
+### Background jobs
+
+Advertised by the `background_jobs` capability. The data is the TUI `/jobs`
+sheet's: this agent's async jobs (bash, task, eval, chronicle) and those of the
+subagents below it, the job inspector's output, and the owner-scoped cancel that
+`proc://<id>/kill` uses. Foreground-backed jobs are hidden until promoted.
+
+```ts
+interface JobInfo {
+  id: string; // "bg_N"
+  type: "bash" | "task" | "eval" | "chronicle";
+  label: string; // cut to 120 characters
+  command?: string; // full command line of a process job
+  status: "running" | "completed" | "failed" | "cancelled";
+  startedAt: number; // epoch ms
+  finishedAt?: number;
+  exitCode?: number;
+  error?: string; // failed jobs, bounded
+  ownerId?: string;
+  agentId?: string; // the subagent a task job runs
+  outputBytes: number; // size of the snapshot get_job_output reads
+}
+```
+
+- `get_jobs { recentLimit? }` returns `{ rootId?, running, recent, agents, runningCount }`. `recent` holds the newest settled jobs, at most `recentLimit` (default 10, at most 50). `agents` links subagents that own listed jobs to the root. `runningCount` is the TUI jobs-pill count, equal to `get_state.runningJobCount`.
+- `get_job_output { jobId, fromByte? }` returns `{ jobId, status, fromByte, nextByte, totalBytes, reset, output }`. `output` is a byte slice of the inspector's snapshot: the tail the sheet shows while the job runs, the final result or error once it settled. Offsets are UTF-8 bytes on character boundaries; pass `nextByte` as the next `fromByte`. A reply carries at most 256 KiB. `reset` is true when `fromByte` exceeded the snapshot, which then restarts at zero. Because a running job's snapshot is a tail, a host that sees `totalBytes` shrink should reread from zero. An id outside the session's tree fails with `Job not found: <id>`.
+- `cancel_job { jobId }` returns `{ cancelled }`: true when it cancelled a running job the session's own agent owns, false for unknown, settled, foreign or subagent-owned jobs.
+- `job_lifecycle { event, job, runningCount }` (stdio only; control clients poll `get_jobs`) reports `registered`, `progress`, `completed`, `failed` and `cancelled`. `progress` is coalesced to at most one frame per job per 250 ms and carries no output (read it with `get_job_output`); a foreground-backed job sends nothing until promoted, then `registered`. The frames bypass `set_event_filter`.
 
 ### Side questions (`/btw`)
 

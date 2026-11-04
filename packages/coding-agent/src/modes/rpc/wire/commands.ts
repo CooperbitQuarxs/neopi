@@ -400,6 +400,25 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		result: "FastModeResult",
 	},
 	{
+		name: "get_jobs",
+		doc: "List the background jobs of this agent and its subagents (the `/jobs` sheet): running jobs and the newest settled ones.",
+		params: { "recentLimit?": "number.integer" },
+		result: "JobsResult",
+	},
+	{
+		name: "get_job_output",
+		doc: "Read a job's output snapshot (a tail while running, the final result or error once settled) by UTF-8 byte offset.",
+		params: { jobId: "string", "fromByte?": "number.integer" },
+		result: "JobOutput",
+	},
+	{
+		name: "cancel_job",
+		doc: "Cancel a running job the session's own agent owns, like the jobs sheet; false when it is not cancellable.",
+		params: { jobId: "string" },
+		result: { cancelled: "boolean" },
+		unwrap: "cancelled",
+	},
+	{
 		name: "set_subagent_model",
 		doc: "Switch a running subagent's model for this session only, from its next request, like the focused `/switch`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.",
 		params: { subagentId: "string", "selector?": "string", "provider?": "string", "modelId?": "string" },

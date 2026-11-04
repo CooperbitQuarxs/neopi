@@ -122,6 +122,15 @@ export const frameDefs = {
 		{ type: "'live_end'", "error?": "string" },
 		"Sent exactly once when a live session ends; `error` carries the failure cause.",
 	),
+	JobLifecycleEvent: doc(
+		{
+			type: "'job_lifecycle'",
+			event: "'registered' | 'progress' | 'completed' | 'failed' | 'cancelled'",
+			job: "JobInfo",
+			runningCount: doc("number.integer", "Running jobs by the TUI jobs-pill rule after this transition."),
+		},
+		"A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`.",
+	),
 	DictationStateEvent: doc(
 		{ type: "'dictation_state'", captureId: "string", state: "'starting' | 'recording' | 'transcribing'" },
 		"State of one draft-only microphone capture.",
