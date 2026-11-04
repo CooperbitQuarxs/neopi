@@ -1087,6 +1087,12 @@ class SessionState:
     tokens_per_second: float | None = None
     message_count: int = 0
     queued_message_count: int = 0
+    hostname: str = ""
+    """Short machine hostname (first DNS label)."""
+    active_time_ms: float = 0
+    """Accumulated active-processing time, including the run in flight; idle time never counts."""
+    running_job_count: int = 0
+    """Running background jobs outside the subagents count, as the TUI jobs pill counts them."""
     has_pending_async_work: bool = False
     """Background jobs or deliveries can still inject a follow-up and wake the session."""
     is_settled: bool = False
@@ -3323,6 +3329,9 @@ def parse_session_state(value: object, path: str = "SessionState") -> SessionSta
         tokens_per_second=defaulted(payload, "tokensPerSecond", nullable(decode_float), path, None),
         message_count=defaulted(payload, "messageCount", decode_int, path, 0),
         queued_message_count=defaulted(payload, "queuedMessageCount", decode_int, path, 0),
+        hostname=defaulted(payload, "hostname", decode_str, path, ""),
+        active_time_ms=defaulted(payload, "activeTimeMs", decode_float, path, 0),
+        running_job_count=defaulted(payload, "runningJobCount", decode_int, path, 0),
         has_pending_async_work=defaulted(payload, "hasPendingAsyncWork", decode_bool, path, False),
         is_settled=defaulted(payload, "isSettled", decode_bool, path, False),
         queued_messages=defaulted(payload, "queuedMessages", parse_queued_messages_state, path, parse_queued_messages_state({"steering": [], "followUp": [], "liveSteered": 0}, path)),

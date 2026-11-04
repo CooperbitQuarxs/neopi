@@ -57,6 +57,7 @@ Behavior notes:
 | `session_tree_navigation` | Guarded native same-file `navigate_tree`, restored drafts and images, and explicit `resume_tree` acknowledgement for ask re-answers. See [Native tree navigation](#native-tree-navigation). |
 | `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
 | `dictation` | Draft-only `dictation_start` / `dictation_stop`, their frames, and `get_state.dictationEnabled`. Stdio only. See [Dictation Sub-Protocol](#dictation-sub-protocol). |
+| `status_facts` | `get_state.hostname`, `activeTimeMs` and `runningJobCount`, the TUI status line's facts. See [`get_roles` and `set_role` payloads](#get_roles-and-set_role-payloads). |
 | `cycle_role` | `cycle_role` command (Ctrl+P role cycling) and `get_roles.cycleOrder` ([payloads](#get_roles-and-set_role-payloads)). |
 | `set_subagent_model` | `set_subagent_model` switches an owned running subagent's model for its next request. See [Changing a running subagent's model](#changing-a-running-subagents-model). |
 
@@ -1057,6 +1058,15 @@ when fewer than two roles in `cycleOrder` have an available model (the TUI's
 the response. A failed switch, such as a model without credentials, is an
 ordinary error response, and a `direction` other than the two values is
 rejected. Advertised by the `cycle_role` capability.
+
+`hostname`, `activeTimeMs` and `runningJobCount` are the TUI status line's facts,
+advertised by the `status_facts` capability. `hostname` is the short machine
+name (first DNS label). `activeTimeMs` is the session's accumulated active
+processing time: the sum of its runs (agent start to settle) plus the run in
+flight, never idle time between turns; it starts over for a new or switched
+session. `runningJobCount` counts running background jobs the way the TUI jobs
+pill does: a task job stops counting once its subagent is itself running.
+Control snapshots carry the same fields.
 
 `chatMode` is the session's live chat mode; `off` is an ordinary coding session.
 

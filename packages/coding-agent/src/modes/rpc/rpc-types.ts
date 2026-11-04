@@ -269,6 +269,12 @@ export interface RpcSessionState {
 	tokensPerSecond: number | null;
 	messageCount: number;
 	queuedMessageCount: number;
+	/** Short machine hostname (first DNS label), as the TUI status line shows it. */
+	hostname: string;
+	/** Accumulated active-processing time of this conversation, including the run in flight; idle time never counts. */
+	activeTimeMs: number;
+	/** Running background jobs outside the subagents count, as the TUI jobs pill counts them. */
+	runningJobCount: number;
 	/** Background jobs or deliveries can still inject a follow-up and wake the session. */
 	hasPendingAsyncWork: boolean;
 	/** Same predicate as `session_settled`: idle with nothing queued or pending. */

@@ -4245,6 +4245,12 @@ type SessionState struct {
 	TokensPerSecond    *float64         `json:"tokensPerSecond"`
 	MessageCount       int64            `json:"messageCount"`
 	QueuedMessageCount int64            `json:"queuedMessageCount"`
+	// Short machine hostname (first DNS label).
+	Hostname string `json:"hostname"`
+	// Accumulated active-processing time, including the run in flight; idle time never counts.
+	ActiveTimeMs float64 `json:"activeTimeMs"`
+	// Running background jobs outside the subagents count, as the TUI jobs pill counts them.
+	RunningJobCount int64 `json:"runningJobCount"`
 	// Background jobs or deliveries can still inject a follow-up and wake the session.
 	HasPendingAsyncWork bool `json:"hasPendingAsyncWork"`
 	// Idle with nothing queued or pending; same predicate as `session_settled`.
@@ -4294,6 +4300,9 @@ func (v *SessionState) decodeFrom(raw map[string]json.RawMessage) error {
 	d.defaulted("tokensPerSecond", &out.TokensPerSecond, `null`)
 	d.defaulted("messageCount", &out.MessageCount, `0`)
 	d.defaulted("queuedMessageCount", &out.QueuedMessageCount, `0`)
+	d.defaulted("hostname", &out.Hostname, `""`)
+	d.defaulted("activeTimeMs", &out.ActiveTimeMs, `0`)
+	d.defaulted("runningJobCount", &out.RunningJobCount, `0`)
 	d.defaulted("hasPendingAsyncWork", &out.HasPendingAsyncWork, `false`)
 	d.defaulted("isSettled", &out.IsSettled, `false`)
 	d.defaulted("queuedMessages", &out.QueuedMessages, `{"steering":[],"followUp":[],"liveSteered":0}`)

@@ -3946,6 +3946,15 @@ pub struct SessionState {
 	pub message_count: i64,
 	#[serde(rename = "queuedMessageCount", default = "default_session_state_queued_message_count")]
 	pub queued_message_count: i64,
+	/// Short machine hostname (first DNS label).
+	#[serde(default = "default_session_state_hostname")]
+	pub hostname: String,
+	/// Accumulated active-processing time, including the run in flight; idle time never counts.
+	#[serde(rename = "activeTimeMs", default = "default_session_state_active_time_ms")]
+	pub active_time_ms: f64,
+	/// Running background jobs outside the subagents count, as the TUI jobs pill counts them.
+	#[serde(rename = "runningJobCount", default = "default_session_state_running_job_count")]
+	pub running_job_count: i64,
 	/// Background jobs or deliveries can still inject a follow-up and wake the session.
 	#[serde(rename = "hasPendingAsyncWork", default = "default_session_state_has_pending_async_work")]
 	pub has_pending_async_work: bool,
@@ -8766,6 +8775,18 @@ fn default_session_state_message_count() -> i64 {
 }
 
 fn default_session_state_queued_message_count() -> i64 {
+	serde_json::from_str("0").expect("valid wire default")
+}
+
+fn default_session_state_hostname() -> String {
+	serde_json::from_str("\"\"").expect("valid wire default")
+}
+
+fn default_session_state_active_time_ms() -> f64 {
+	serde_json::from_str("0").expect("valid wire default")
+}
+
+fn default_session_state_running_job_count() -> i64 {
 	serde_json::from_str("0").expect("valid wire default")
 }
 
