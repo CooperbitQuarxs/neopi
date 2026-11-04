@@ -287,6 +287,8 @@ export interface RpcSessionState {
 	contextUsage?: ContextUsage;
 	/** Role the current model was selected through (`set_role`, `--model @<role>`); absent after a direct model choice. */
 	activeRole?: string;
+	/** Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off. */
+	dictationEnabled: boolean;
 	/** Live chat mode; `off` for an ordinary coding session. */
 	chatMode: ChatModeSetting;
 	/** Session mode; `plan` while plan mode is active, whichever path entered it. */

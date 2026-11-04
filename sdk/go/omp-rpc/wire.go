@@ -4236,6 +4236,8 @@ type SessionState struct {
 	SlowModeSupported bool `json:"slowModeSupported"`
 	// `/slow` is on for the active model; always `false` when `slowModeSupported` is `false`.
 	SlowModeEnabled bool `json:"slowModeEnabled"`
+	// Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off.
+	DictationEnabled bool `json:"dictationEnabled"`
 	// Where the active model's `/slow` lives; absent when unsupported.
 	SlowModeScope *SlowModeScope `json:"slowModeScope,omitempty"`
 	// Usage-limit stage of the active model's account; absent outside wrap-up and low priority.
@@ -4286,6 +4288,7 @@ func (v *SessionState) decodeFrom(raw map[string]json.RawMessage) error {
 	d.defaulted("fastModeActive", &out.FastModeActive, `false`)
 	d.defaulted("slowModeSupported", &out.SlowModeSupported, `false`)
 	d.defaulted("slowModeEnabled", &out.SlowModeEnabled, `false`)
+	d.defaulted("dictationEnabled", &out.DictationEnabled, `false`)
 	d.optional("slowModeScope", &out.SlowModeScope)
 	d.optional("usageLimit", &out.UsageLimit)
 	d.defaulted("tokensPerSecond", &out.TokensPerSecond, `null`)

@@ -56,6 +56,7 @@ Behavior notes:
 | `session_journal_events` | Native journal commits, active-leaf changes, session identity changes and durable streaming-message associations. See [Native journal events](#native-journal-events). |
 | `session_tree_navigation` | Guarded native same-file `navigate_tree`, restored drafts and images, and explicit `resume_tree` acknowledgement for ask re-answers. See [Native tree navigation](#native-tree-navigation). |
 | `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
+| `dictation` | Draft-only `dictation_start` / `dictation_stop`, their frames, and `get_state.dictationEnabled`. Stdio only. See [Dictation Sub-Protocol](#dictation-sub-protocol). |
 | `cycle_role` | `cycle_role` command (Ctrl+P role cycling) and `get_roles.cycleOrder` ([payloads](#get_roles-and-set_role-payloads)). |
 | `set_subagent_model` | `set_subagent_model` switches an owned running subagent's model for its next request. See [Changing a running subagent's model](#changing-a-running-subagents-model). |
 
@@ -874,6 +875,7 @@ field is absent outside both stages. No event carries it, so re-read
     "percent": 0.55
   },
   "activeRole": "smol",
+  "dictationEnabled": false,
   "chatMode": "off|chat|erp|raw",
   "mode": "plan",
   "planMode": {
@@ -2337,6 +2339,11 @@ microphone or initializing a speech model. It does not submit a prompt,
 interpret speech submit triggers, or play audio.
 Live voice and dictation are mutually exclusive, including while either starts
 or stops.
+
+The stdio `ready` frame advertises the `dictation` capability; the control
+socket does not serve dictation and never advertises it. `get_state.dictationEnabled`
+reports `stt.enabled`, so a host can show or disable its control without
+attempting a capture.
 
 - `{ id?, type: "dictation_start", captureId: string }` starts a capture and responds when recording. `captureId` must be a non-blank string of at most 128 UTF-16 code units; the host must choose a unique ID for each capture.
 - `{ id?, type: "dictation_stop" }` stops the microphone and flushes transcription, then responds with `data: { text: string }`. With no capture it succeeds with empty text. A failure returns an error response.

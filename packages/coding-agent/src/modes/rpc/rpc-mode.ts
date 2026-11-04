@@ -74,7 +74,7 @@ import { initializeExtensions } from "../runtime-init";
 import { cfgSpellingAutocomplete } from "../settings";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
-import { RPC_CAPABILITIES } from "./rpc-capabilities";
+import { stdioCapabilities } from "./rpc-capabilities";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
@@ -2767,7 +2767,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		supportedProtocolVersions: [1, 2],
 		maxFrameBytes: MAX_RPC_FRAME_BYTES,
 		maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
-		capabilities: [...RPC_CAPABILITIES],
+		capabilities: stdioCapabilities(),
 	};
 	outputWriter.write(frameEncoder.encodeFrames(readyFrame));
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {

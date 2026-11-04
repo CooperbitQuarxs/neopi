@@ -4365,6 +4365,11 @@
 					"description": "`/slow` is on for the active model; always `false` when `slowModeSupported` is `false`.",
 					"default": false
 				},
+				"dictationEnabled": {
+					"type": "boolean",
+					"description": "Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off.",
+					"default": false
+				},
 				"slowModeScope": {
 					"$ref": "#/$defs/SlowModeScope",
 					"description": "Where the active model's `/slow` lives; absent when unsupported."

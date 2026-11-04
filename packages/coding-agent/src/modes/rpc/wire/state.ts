@@ -339,6 +339,13 @@ export const stateDefs = {
 			doc("boolean", "`/slow` is on for the active model; always `false` when `slowModeSupported` is `false`."),
 			false,
 		),
+		dictationEnabled: absentAs(
+			doc(
+				"boolean",
+				"Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off.",
+			),
+			false,
+		),
 		"slowModeScope?": doc("SlowModeScope", "Where the active model's `/slow` lives; absent when unsupported."),
 		"usageLimit?": doc(
 			"UsageLimitState",
