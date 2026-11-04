@@ -59,6 +59,26 @@ bun install --frozen-lockfile
 ./install.sh   # atomic install to ~/.local/bin/npi (NPI_DEST overrides), smoke test
 ```
 
+Linux builds reuse verified native addons across worktrees on the same host.
+`NPI_NATIVE_CACHE` selects the shared cache directory, defaulting to
+`/mnt/alias/m2/agents/native-cache`. Set `NPI_NATIVE_CACHE=off` to use only the
+checkout's addon and the normal rebuild path. `NPI_FORCE_NATIVE=1` bypasses
+both local freshness and cache restoration, then stores the new addon.
+An unavailable cache falls back to the normal build.
+
+The key hashes native source and build-driver bytes, compiler settings including
+`OMP_NATIVE_FEATURES`, and the host/toolchain fingerprint. It includes `RUSTC`,
+`RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `CARGO_PROFILE_*` and `CARGO_BUILD_*`
+overrides. Compiler fingerprinting uses `RUSTC`, then `CARGO_BUILD_RUSTC`, then
+`rustc` on PATH. `RUSTDOCFLAGS` is excluded because this build does not run rustdoc.
+Cache hits verify SHA-256 and the native release version before writing a
+checkout-local stamp.
+The cache keeps eight recently stored addons, skipping entries in use.
+`ledger.jsonl` records each native build phase as `hit`, `miss`, or `store`,
+with its key, duration in seconds, exit code, and whether it published an addon.
+Failed native builds are recorded too. A current local addon can seed an empty
+cache without compiling Rust.
+
 `build.sh` and `install.sh` support Linux. On macOS, run the same steps by hand:
 
 ```sh
@@ -70,6 +90,85 @@ cp packages/coding-agent/dist/npi ~/.local/bin/npi        # a dedicated npi path
 ```
 
 This repository does not prescribe a remote installer or a global package-manager install. The existing package scope and protocol identifiers remain `@oh-my-pi/*`; configuration remains under `~/.omp` unless `PI_CONFIG_DIR` or the documented profile settings select another location.
+
+## Connect to NeoProxy
+
+NeoProxy keeps provider accounts and routing on the proxy. Connect NeoPi with
+the server URL and an existing inference API key assigned by your administrator:
+
+```sh
+npi login neoproxy --url https://proxy.example.com
+```
+
+On HTTPS connections, NeoPi first inspects the TLS certificate without sending
+HTTP requests or credentials. It shows the requested hostname, canonical origin,
+server certificate SHA-256 fingerprint, and CA SHA-256 fingerprint. Compare both
+fingerprints with your administrator over a trusted channel, then explicitly
+confirm trust. Only then does NeoPi ask for the administrator-assigned inference
+key in a hidden prompt and validate it with authenticated `GET /v1/models`.
+It does not sign in to the dashboard, create keys, or ask you to log in to an
+upstream provider plan. Your administrator controls model grants and routing.
+
+The confirmed CA and fingerprint are saved **beside this provider's key in the
+normal credential store**, even when the inspection connection was already
+trusted through a public, system, or pre-existing extra CA. They never go into
+`models.yml`, the process environment, or the system/global certificate store.
+Reopening the profile reuses that explicit credential-local pin for discovery
+and inference; `NODE_EXTRA_CA_CERTS` is not needed. Trust is bound to the exact
+HTTPS origin, including its port. Authenticated requests verify the hostname,
+certificate validity, and confirmed CA, and refuse redirects. A changed origin
+or CA requires a new explicit connection; a failed pin never falls back to
+ambient trust or insecure TLS.
+
+An untrusted private-CA server must serve its **complete certificate chain,
+including the private root CA**. A leaf-only or incomplete private chain cannot
+supply a CA for confirmation. Public/already-trusted servers need not send a
+redundant root when the runtime's verified chain or CA store supplies it.
+NeoPi never treats a server leaf as a CA or fetches trust from a speculative
+management endpoint.
+
+Only nonsecret endpoint/discovery settings are saved in provider configuration.
+An existing `/v1` suffix is normalized; meaningful reverse-proxy prefixes such
+as `/team/neo` are preserved. No hand-written `models.yml` or copied upstream
+credentials are needed. `/login` → **NeoProxy** (or `/login neoproxy`) uses the
+same flow inside a session. Without `--url`, the server URL is requested first.
+A graphical/control host must explicitly support both native trust confirmation
+and hidden secret input; advertising those capabilities is not user consent.
+There is no command-line key flag, so keys do not enter shell history or process
+arguments. `http://127.0.0.1:PORT` (also `localhost` and `[::1]`) is supported for
+local use only; that cleartext loopback exception has no TLS certificate or
+fingerprint confirmation and must not be presented as TLS-verified.
+
+Granted models appear under the NeoProxy provider. For a server model named
+`neoproxy/office-cheap`, the complete NeoPi selector is
+`neoproxy/neoproxy/office-cheap`: the first segment is the provider, and the
+remaining server-issued ID is sent unchanged. Select it with `/model`, or use
+`/models` to assign it to an existing model role. A missing grant is an empty
+catalogue, not a fallback to a direct provider account.
+
+Before durable credential persistence begins, refusing trust, cancelling
+validation, an invalid key, or an invalid catalogue leaves existing credentials,
+trust, and endpoint configuration unchanged. A valid empty catalogue can still
+connect; ask your administrator to assign models to the key.
+
+Commit stores the validated, origin-bound credential first, then activates
+nonsecret endpoint settings. Once durable persistence starts, activation
+finishes even if cancellation arrives. A credential-store failure cannot publish
+the new endpoint with an old key. If the later settings write fails or conflicts
+with a concurrent edit, login reports that the validated credential was stored
+but the settings save did not complete. The new key cannot be sent to a
+different previous origin, including for cleartext loopback. Check the endpoint
+settings and reconnect after fixing the write conflict or storage problem.
+
+Successful explicit reconnect replaces this profile's active NeoProxy
+connection. Prior API-key rows are soft-disabled, not physically deleted;
+revalidating the same key reuses its stored row identity. No server-issued key
+is revoked.
+
+Use `/logout` → **NeoProxy** to deactivate the locally stored inference key and its private-CA trust. This does
+not revoke the key at the server; ask your NeoProxy administrator to revoke or
+replace an assigned key when needed.
+
 
 ## GitHub releases
 
@@ -93,9 +192,8 @@ Tags derive from `packages/coding-agent/package.json`: stable builds use
 `v<version>-nightly.<short-sha>.<run-id>.<attempt>`. Repeated builds get new tags;
 existing releases and tags are never overwritten or deleted. Release assets
 include all platform binaries, the browser relay extension, legal notices and
-`SHA256SUMS.txt`. Ordinary fork builds publish to GitHub without enabling the
-inherited npm, build.stencil.so or Homebrew publishers; those jobs retain their
-existing pre-tagged-release conditions and validation gate.
+`SHA256SUMS.txt`. The fork publishes only to GitHub; the inherited npm,
+build.stencil.so and upstream Homebrew publishing jobs have been removed.
 
 The workflow must reach the default branch before GitHub exposes its manual
 dispatch controls. After the first merge into `nightly`, watch that push's
@@ -103,6 +201,26 @@ dispatch controls. After the first merge into `nightly`, watch that push's
 After promotion to `neopi`, check that its push publishes a stable release
 marked **Latest**. Builds run in GitHub Actions; a local `./build.sh` does not
 publish a release or change your installed binary automatically.
+
+### CI checks and platform coverage
+
+GitHub's checks summary counts the jobs created by `.github/workflows/ci.yml`,
+including separate matrix jobs. PRs run Linux validation and reuse cached Linux
+native addons. Pushes to `nightly` and `neopi` also validate Rust, build the
+remaining native targets, and cross-compile eight release binaries on Linux:
+Linux glibc and musl on x64 and ARM64, macOS on Intel and Apple Silicon, and
+Windows on x64 and ARM64.
+
+Every release binary then runs `--version` and `--smoke-test` on its target
+platform. macOS uses macOS runners and verifies the code signature; Windows
+uses Windows runners; musl uses Alpine containers. These are startup and worker
+smoke checks, not the full TypeScript test suite on every OS.
+
+The three boxes in `.github/PULL_REQUEST_TEMPLATE.md` are the author's manual
+verification notes, not CI jobs or required status checks. Leave an unchecked
+box with a reason when that check was not run. Keep useful validation red until
+its underlying failure is repaired; an obsolete publisher is different from a
+failing regression test.
 
 ## Updating
 
@@ -123,7 +241,7 @@ Run `npi update` for the fork-aware interactive update path. Maintainers integra
 
 NeoPi is licensed under the [MIT License](LICENSE).
 
-Third-party and vendored code remains under its respective license. See [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) and component-local notices.
+Third-party and vendored code remains under its respective license. Each shipped component carries its own `THIRD-PARTY-NOTICES.txt`: the CLI (`packages/coding-agent`), the native addon (`packages/natives`), and robomp (`python/robomp`). `npi --license` prints the CLI and addon notices.
 
 Copyright notices carried by this repository:
 
