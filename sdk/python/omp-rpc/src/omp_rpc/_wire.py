@@ -204,6 +204,16 @@ _SLOW_MODE_SCOPE_VALUES: Final[frozenset[str]] = frozenset({"session", "global"}
 _decode_slow_mode_scope = cast("Decoder[SlowModeScope]", literal(_SLOW_MODE_SCOPE_VALUES))
 
 
+JobType: TypeAlias = Literal["bash", "task", "eval", "chronicle"]
+_JOB_TYPE_VALUES: Final[frozenset[str]] = frozenset({"bash", "task", "eval", "chronicle"})
+_decode_job_type = cast("Decoder[JobType]", literal(_JOB_TYPE_VALUES))
+
+
+JobStatus: TypeAlias = Literal["running", "completed", "failed", "cancelled"]
+_JOB_STATUS_VALUES: Final[frozenset[str]] = frozenset({"running", "completed", "failed", "cancelled"})
+_decode_job_status = cast("Decoder[JobStatus]", literal(_JOB_STATUS_VALUES))
+
+
 BtwStatus: TypeAlias = Literal["running", "complete", "cancelled", "error", "interrupted"]
 """Side-question turn lifecycle; `interrupted` marks a turn whose process died while it ran."""
 _BTW_STATUS_VALUES: Final[frozenset[str]] = frozenset({"running", "complete", "cancelled", "error", "interrupted"})
@@ -1400,6 +1410,63 @@ class SubagentSnapshot:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class JobInfo:
+    """One background job."""
+    id: str
+    """Stable `bg_N` id."""
+    type: JobType
+    label: str
+    status: JobStatus
+    started_at: float
+    """Epoch milliseconds."""
+    output_bytes: int
+    """Size in bytes of the output snapshot `get_job_output` reads."""
+    command: str | None = None
+    """Full command line of a job that runs a process; `label` is cut to 120 characters."""
+    finished_at: float | None = None
+    exit_code: int | None = None
+    error: str | None = None
+    """Failure text of a failed job, cut to a bounded length."""
+    owner_id: str | None = None
+    """Registry id of the agent that registered the job."""
+    agent_id: str | None = None
+    """Registry id of the subagent a task job runs."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JobAgent:
+    id: str
+    parent_id: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JobsResult:
+    running: tuple[JobInfo, ...]
+    recent: tuple[JobInfo, ...]
+    """Settled jobs, newest first, at most `recentLimit`."""
+    agents: tuple[JobAgent, ...]
+    """Subagents owning listed jobs, with the ancestors linking them to the root."""
+    running_count: int
+    """Running jobs by the TUI jobs-pill rule; equals `get_state.runningJobCount`."""
+    root_id: str | None = None
+    """The agent the tree is for; its own jobs are the top level."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JobOutput:
+    job_id: str
+    status: JobStatus
+    from_byte: int
+    next_byte: int
+    """Pass as the next `fromByte` to read on."""
+    total_bytes: int
+    """Size in bytes of the whole output snapshot."""
+    reset: bool
+    """`fromByte` exceeded the snapshot and reading restarted at zero."""
+    output: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class SubagentMessages:
     """Incremental subagent transcript read."""
     session_file: str
@@ -2176,6 +2243,16 @@ class LiveEndEvent:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class JobLifecycleEvent:
+    """A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`."""
+    type: Literal["job_lifecycle"] = "job_lifecycle"
+    event: Literal["registered", "progress", "completed", "failed", "cancelled"]
+    job: JobInfo
+    running_count: int
+    """Running jobs by the TUI jobs-pill rule after this transition."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class DictationStateEvent:
     """State of one draft-only microphone capture."""
     type: Literal["dictation_state"] = "dictation_state"
@@ -2582,7 +2659,7 @@ RpcAgentEvent: TypeAlias = JournalStateEvent | JournalEntryEvent | MessagePersis
 """A session event, discriminated by `type`; `set_event_filter` selects which are sent."""
 
 
-RpcNotification: TypeAlias = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | DictationStateEvent | DictationTranscriptEvent | DictationEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | RpcAgentEvent | UnknownNotification
+RpcNotification: TypeAlias = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | JobLifecycleEvent | DictationStateEvent | DictationTranscriptEvent | DictationEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | RpcAgentEvent | UnknownNotification
 """Unsolicited outbound frame (everything except responses and host tool/URI requests), discriminated by `type`."""
 
 
@@ -3682,6 +3759,56 @@ def parse_subagent_snapshot(value: object, path: str = "SubagentSnapshot") -> Su
     )
 
 
+def parse_job_info(value: object, path: str = "JobInfo") -> JobInfo:
+    payload = expect_object(value, path)
+    return JobInfo(
+        id=required(payload, "id", decode_str, path),
+        type=required(payload, "type", _decode_job_type, path),
+        label=required(payload, "label", decode_str, path),
+        status=required(payload, "status", _decode_job_status, path),
+        started_at=required(payload, "startedAt", decode_float, path),
+        output_bytes=required(payload, "outputBytes", decode_int, path),
+        command=optional(payload, "command", decode_str, path),
+        finished_at=optional(payload, "finishedAt", decode_float, path),
+        exit_code=optional(payload, "exitCode", decode_int, path),
+        error=optional(payload, "error", decode_str, path),
+        owner_id=optional(payload, "ownerId", decode_str, path),
+        agent_id=optional(payload, "agentId", decode_str, path),
+    )
+
+
+def parse_job_agent(value: object, path: str = "JobAgent") -> JobAgent:
+    payload = expect_object(value, path)
+    return JobAgent(
+        id=required(payload, "id", decode_str, path),
+        parent_id=optional(payload, "parentId", decode_str, path),
+    )
+
+
+def parse_jobs_result(value: object, path: str = "JobsResult") -> JobsResult:
+    payload = expect_object(value, path)
+    return JobsResult(
+        running=required(payload, "running", array(parse_job_info), path),
+        recent=required(payload, "recent", array(parse_job_info), path),
+        agents=required(payload, "agents", array(parse_job_agent), path),
+        running_count=required(payload, "runningCount", decode_int, path),
+        root_id=optional(payload, "rootId", decode_str, path),
+    )
+
+
+def parse_job_output(value: object, path: str = "JobOutput") -> JobOutput:
+    payload = expect_object(value, path)
+    return JobOutput(
+        job_id=required(payload, "jobId", decode_str, path),
+        status=required(payload, "status", _decode_job_status, path),
+        from_byte=required(payload, "fromByte", decode_int, path),
+        next_byte=required(payload, "nextByte", decode_int, path),
+        total_bytes=required(payload, "totalBytes", decode_int, path),
+        reset=required(payload, "reset", decode_bool, path),
+        output=required(payload, "output", decode_str, path),
+    )
+
+
 def parse_subagent_messages(value: object, path: str = "SubagentMessages") -> SubagentMessages:
     payload = expect_object(value, path)
     return SubagentMessages(
@@ -4567,6 +4694,16 @@ def parse_live_end_event(value: object, path: str = "LiveEndEvent") -> LiveEndEv
     )
 
 
+def parse_job_lifecycle_event(value: object, path: str = "JobLifecycleEvent") -> JobLifecycleEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["job_lifecycle"]]', literal(frozenset({"job_lifecycle"}))), path)
+    return JobLifecycleEvent(
+        event=required(payload, "event", cast('Decoder[Literal["registered", "progress", "completed", "failed", "cancelled"]]', literal(frozenset({"registered", "progress", "completed", "failed", "cancelled"}))), path),
+        job=required(payload, "job", parse_job_info, path),
+        running_count=required(payload, "runningCount", decode_int, path),
+    )
+
+
 def parse_dictation_state_event(value: object, path: str = "DictationStateEvent") -> DictationStateEvent:
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["dictation_state"]]', literal(frozenset({"dictation_state"}))), path)
@@ -5126,6 +5263,7 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "live_levels": parse_live_levels_event,
         "live_transcript": parse_live_transcript_event,
         "live_end": parse_live_end_event,
+        "job_lifecycle": parse_job_lifecycle_event,
         "dictation_state": parse_dictation_state_event,
         "dictation_transcript": parse_dictation_transcript_event,
         "dictation_end": parse_dictation_end_event,
@@ -5573,6 +5711,27 @@ class WireClient:
         params["enabled"] = enabled
         return parse_fast_mode_result(self._command("set_subagent_fast", params), "set_subagent_fast")
 
+    def get_jobs(self, recent_limit: int | None = None) -> JobsResult:
+        """List the background jobs of this agent and its subagents (the `/jobs` sheet): running jobs and the newest settled ones."""
+        params: dict[str, object] = {}
+        if recent_limit is not None:
+            params["recentLimit"] = recent_limit
+        return parse_jobs_result(self._command("get_jobs", params), "get_jobs")
+
+    def get_job_output(self, job_id: str, *, from_byte: int | None = None) -> JobOutput:
+        """Read a job's output snapshot (a tail while running, the final result or error once settled) by UTF-8 byte offset."""
+        params: dict[str, object] = {}
+        params["jobId"] = job_id
+        if from_byte is not None:
+            params["fromByte"] = from_byte
+        return parse_job_output(self._command("get_job_output", params), "get_job_output")
+
+    def cancel_job(self, job_id: str) -> bool:
+        """Cancel a running job the session's own agent owns, like the jobs sheet; false when it is not cancellable."""
+        params: dict[str, object] = {}
+        params["jobId"] = job_id
+        return required(expect_object(self._command("cancel_job", params), "cancel_job"), "cancelled", decode_bool, "cancel_job")
+
     def set_subagent_model(self, subagent_id: str, *, selector: str | None = None, provider: str | None = None, model_id: str | None = None) -> SetSubagentModelResult:
         """Switch a running subagent's model for this session only, from its next request, like the focused `/switch`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`."""
         params: dict[str, object] = {}
@@ -5925,6 +6084,10 @@ class WireClient:
         """Subscribe to `live_end`: Sent exactly once when a live session ends; `error` carries the failure cause."""
         return self._listen("live_end", listener)
 
+    def on_job_lifecycle(self, listener: Callable[[JobLifecycleEvent], None]) -> Callable[[], None]:
+        """Subscribe to `job_lifecycle`: A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`."""
+        return self._listen("job_lifecycle", listener)
+
     def on_dictation_state(self, listener: Callable[[DictationStateEvent], None]) -> Callable[[], None]:
         """Subscribe to `dictation_state`: State of one draft-only microphone capture."""
         return self._listen("dictation_state", listener)
@@ -6260,6 +6423,13 @@ __all__ = [
     "InputUiRequest",
     "InterruptMode",
     "IrcMessageEvent",
+    "JobAgent",
+    "JobInfo",
+    "JobLifecycleEvent",
+    "JobOutput",
+    "JobStatus",
+    "JobType",
+    "JobsResult",
     "JournalEntryEvent",
     "JournalIdentity",
     "JournalPage",
@@ -6542,6 +6712,11 @@ __all__ = [
     "parse_image_content",
     "parse_input_ui_request",
     "parse_irc_message_event",
+    "parse_job_agent",
+    "parse_job_info",
+    "parse_job_lifecycle_event",
+    "parse_job_output",
+    "parse_jobs_result",
     "parse_journal_entry_event",
     "parse_journal_identity",
     "parse_journal_page",

@@ -44,6 +44,7 @@ import type {
 	RpcResumeTreeResult,
 } from "./rpc-tree";
 import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
+import type { RpcJobOutputResult, RpcJobsResult } from "./rpc-jobs";
 import type { RpcModel } from "./rpc-model";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcModelSelectorResult } from "./rpc-model-selector";
@@ -123,6 +124,9 @@ export type RpcCommand =
 	| { id?: string; type: "steer_subagent"; subagentId: string; message: string }
 	| { id?: string; type: "set_subagent_thinking_level"; subagentId: string; level: ThinkingLevel }
 	| { id?: string; type: "set_subagent_fast"; subagentId: string; enabled: boolean }
+	| { id?: string; type: "get_jobs"; recentLimit?: number }
+	| { id?: string; type: "get_job_output"; jobId: string; fromByte?: number }
+	| { id?: string; type: "cancel_job"; jobId: string }
 	| {
 			id?: string;
 			type: "set_subagent_model";
@@ -757,6 +761,9 @@ export type RpcResponse =
 			success: true;
 			data: { enabled: boolean; active: boolean };
 	  }
+	| { id?: string; type: "response"; command: "get_jobs"; success: true; data: RpcJobsResult }
+	| { id?: string; type: "response"; command: "get_job_output"; success: true; data: RpcJobOutputResult }
+	| { id?: string; type: "response"; command: "cancel_job"; success: true; data: { cancelled: boolean } }
 	| {
 			id?: string;
 			type: "response";

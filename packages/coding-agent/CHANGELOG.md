@@ -9,6 +9,7 @@
 
 ### Added
 
+- RPC hosts can list, read and cancel background jobs with `get_jobs`, `get_job_output` and `cancel_job`, and keep a live list with `job_lifecycle` frames; hosts gate on the `background_jobs` capability ([#665](https://github.com/PsychedelicShayna/neopi/issues/665)).
 - `get_state` reports `hostname`, `activeTimeMs` (accumulated active processing time) and `runningJobCount`, the facts the TUI status line shows; hosts gate on the `status_facts` capability ([#667](https://github.com/PsychedelicShayna/neopi/issues/667)).
 - The stdio RPC `ready` frame advertises the `dictation` capability, and `get_state.dictationEnabled` reports whether speech-to-text is enabled, so hosts can show or hide dictation controls ([#668](https://github.com/PsychedelicShayna/neopi/issues/668)).
 - RPC and the control socket can cycle role models like Ctrl+P with `cycle_role { direction }`, and `get_roles` reports the configured `cycleOrder`; hosts gate on the `cycle_role` capability ([#666](https://github.com/PsychedelicShayna/neopi/issues/666)).

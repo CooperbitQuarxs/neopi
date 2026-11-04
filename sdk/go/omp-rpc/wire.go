@@ -5189,6 +5189,185 @@ func (v *SubagentSnapshot) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type JobType string
+
+const (
+	JobTypeBash      JobType = "bash"
+	JobTypeTask      JobType = "task"
+	JobTypeEval      JobType = "eval"
+	JobTypeChronicle JobType = "chronicle"
+)
+
+func (v *JobType) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "JobType")
+	if err != nil {
+		return err
+	}
+	switch value := JobType(s); value {
+	case JobTypeBash, JobTypeTask, JobTypeEval, JobTypeChronicle:
+		*v = value
+		return nil
+	}
+	return unknownValue("JobType", s)
+}
+
+type JobStatus string
+
+const (
+	JobStatusRunning   JobStatus = "running"
+	JobStatusCompleted JobStatus = "completed"
+	JobStatusFailed    JobStatus = "failed"
+	JobStatusCancelled JobStatus = "cancelled"
+)
+
+func (v *JobStatus) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "JobStatus")
+	if err != nil {
+		return err
+	}
+	switch value := JobStatus(s); value {
+	case JobStatusRunning, JobStatusCompleted, JobStatusFailed, JobStatusCancelled:
+		*v = value
+		return nil
+	}
+	return unknownValue("JobStatus", s)
+}
+
+// One background job.
+type JobInfo struct {
+	// Stable `bg_N` id.
+	ID     string    `json:"id"`
+	Type   JobType   `json:"type"`
+	Label  string    `json:"label"`
+	Status JobStatus `json:"status"`
+	// Epoch milliseconds.
+	StartedAt float64 `json:"startedAt"`
+	// Size in bytes of the output snapshot `get_job_output` reads.
+	OutputBytes int64 `json:"outputBytes"`
+	// Full command line of a job that runs a process; `label` is cut to 120 characters.
+	Command    *string  `json:"command,omitempty"`
+	FinishedAt *float64 `json:"finishedAt,omitempty"`
+	ExitCode   *int64   `json:"exitCode,omitempty"`
+	// Failure text of a failed job, cut to a bounded length.
+	Error *string `json:"error,omitempty"`
+	// Registry id of the agent that registered the job.
+	OwnerID *string `json:"ownerId,omitempty"`
+	// Registry id of the subagent a task job runs.
+	AgentID *string `json:"agentId,omitempty"`
+}
+
+func (v *JobInfo) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JobInfo", v.decodeFrom)
+}
+
+func (v *JobInfo) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JobInfo
+	d := fieldDecoder{raw: raw, owner: "JobInfo"}
+	d.required("id", &out.ID)
+	d.required("type", &out.Type)
+	d.required("label", &out.Label)
+	d.required("status", &out.Status)
+	d.required("startedAt", &out.StartedAt)
+	d.required("outputBytes", &out.OutputBytes)
+	d.optional("command", &out.Command)
+	d.optional("finishedAt", &out.FinishedAt)
+	d.optional("exitCode", &out.ExitCode)
+	d.optional("error", &out.Error)
+	d.optional("ownerId", &out.OwnerID)
+	d.optional("agentId", &out.AgentID)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type JobAgent struct {
+	ID       string  `json:"id"`
+	ParentID *string `json:"parentId,omitempty"`
+}
+
+func (v *JobAgent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JobAgent", v.decodeFrom)
+}
+
+func (v *JobAgent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JobAgent
+	d := fieldDecoder{raw: raw, owner: "JobAgent"}
+	d.required("id", &out.ID)
+	d.optional("parentId", &out.ParentID)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type JobsResult struct {
+	Running []JobInfo `json:"running"`
+	// Settled jobs, newest first, at most `recentLimit`.
+	Recent []JobInfo `json:"recent"`
+	// Subagents owning listed jobs, with the ancestors linking them to the root.
+	Agents []JobAgent `json:"agents"`
+	// Running jobs by the TUI jobs-pill rule; equals `get_state.runningJobCount`.
+	RunningCount int64 `json:"runningCount"`
+	// The agent the tree is for; its own jobs are the top level.
+	RootID *string `json:"rootId,omitempty"`
+}
+
+func (v *JobsResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JobsResult", v.decodeFrom)
+}
+
+func (v *JobsResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JobsResult
+	d := fieldDecoder{raw: raw, owner: "JobsResult"}
+	d.required("running", &out.Running)
+	d.required("recent", &out.Recent)
+	d.required("agents", &out.Agents)
+	d.required("runningCount", &out.RunningCount)
+	d.optional("rootId", &out.RootID)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type JobOutput struct {
+	JobID    string    `json:"jobId"`
+	Status   JobStatus `json:"status"`
+	FromByte int64     `json:"fromByte"`
+	// Pass as the next `fromByte` to read on.
+	NextByte int64 `json:"nextByte"`
+	// Size in bytes of the whole output snapshot.
+	TotalBytes int64 `json:"totalBytes"`
+	// `fromByte` exceeded the snapshot and reading restarted at zero.
+	Reset  bool   `json:"reset"`
+	Output string `json:"output"`
+}
+
+func (v *JobOutput) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JobOutput", v.decodeFrom)
+}
+
+func (v *JobOutput) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JobOutput
+	d := fieldDecoder{raw: raw, owner: "JobOutput"}
+	d.required("jobId", &out.JobID)
+	d.required("status", &out.Status)
+	d.required("fromByte", &out.FromByte)
+	d.required("nextByte", &out.NextByte)
+	d.required("totalBytes", &out.TotalBytes)
+	d.required("reset", &out.Reset)
+	d.required("output", &out.Output)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 // Incremental subagent transcript read.
 type SubagentMessages struct {
 	SessionFile string `json:"sessionFile"`
@@ -8475,6 +8654,60 @@ func (v LiveEndEvent) MarshalJSON() ([]byte, error) {
 	return encodeObject(plain(v), `"type":"live_end"`, nil)
 }
 
+// A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`.
+type JobLifecycleEvent struct {
+	Event JobLifecycleEventEvent `json:"event"`
+	Job   JobInfo                `json:"job"`
+	// Running jobs by the TUI jobs-pill rule after this transition.
+	RunningCount int64 `json:"runningCount"`
+}
+
+func (v *JobLifecycleEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JobLifecycleEvent", v.decodeFrom)
+}
+
+func (v *JobLifecycleEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JobLifecycleEvent
+	d := fieldDecoder{raw: raw, owner: "JobLifecycleEvent"}
+	d.constant("type", "job_lifecycle")
+	d.required("event", &out.Event)
+	d.required("job", &out.Job)
+	d.required("runningCount", &out.RunningCount)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v JobLifecycleEvent) MarshalJSON() ([]byte, error) {
+	type plain JobLifecycleEvent
+	return encodeObject(plain(v), `"type":"job_lifecycle"`, nil)
+}
+
+type JobLifecycleEventEvent string
+
+const (
+	JobLifecycleEventEventRegistered JobLifecycleEventEvent = "registered"
+	JobLifecycleEventEventProgress   JobLifecycleEventEvent = "progress"
+	JobLifecycleEventEventCompleted  JobLifecycleEventEvent = "completed"
+	JobLifecycleEventEventFailed     JobLifecycleEventEvent = "failed"
+	JobLifecycleEventEventCancelled  JobLifecycleEventEvent = "cancelled"
+)
+
+func (v *JobLifecycleEventEvent) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "JobLifecycleEventEvent")
+	if err != nil {
+		return err
+	}
+	switch value := JobLifecycleEventEvent(s); value {
+	case JobLifecycleEventEventRegistered, JobLifecycleEventEventProgress, JobLifecycleEventEventCompleted, JobLifecycleEventEventFailed, JobLifecycleEventEventCancelled:
+		*v = value
+		return nil
+	}
+	return unknownValue("JobLifecycleEventEvent", s)
+}
+
 // State of one draft-only microphone capture.
 type DictationStateEvent struct {
 	CaptureID string                   `json:"captureId"`
@@ -9960,6 +10193,7 @@ func (LivePhaseEvent) isRpcNotification()                  {}
 func (LiveLevelsEvent) isRpcNotification()                 {}
 func (LiveTranscriptEvent) isRpcNotification()             {}
 func (LiveEndEvent) isRpcNotification()                    {}
+func (JobLifecycleEvent) isRpcNotification()               {}
 func (DictationStateEvent) isRpcNotification()             {}
 func (DictationTranscriptEvent) isRpcNotification()        {}
 func (DictationEndEvent) isRpcNotification()               {}
@@ -10057,6 +10291,8 @@ func (v *RpcNotification) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[LiveTranscriptEvent](raw)
 	case "live_end":
 		value, err = decodeVariant[LiveEndEvent](raw)
+	case "job_lifecycle":
+		value, err = decodeVariant[JobLifecycleEvent](raw)
 	case "dictation_state":
 		value, err = decodeVariant[DictationStateEvent](raw)
 	case "dictation_transcript":
@@ -10210,6 +10446,7 @@ func (LivePhaseEvent) isRpcServerFrame()                  {}
 func (LiveLevelsEvent) isRpcServerFrame()                 {}
 func (LiveTranscriptEvent) isRpcServerFrame()             {}
 func (LiveEndEvent) isRpcServerFrame()                    {}
+func (JobLifecycleEvent) isRpcServerFrame()               {}
 func (DictationStateEvent) isRpcServerFrame()             {}
 func (DictationTranscriptEvent) isRpcServerFrame()        {}
 func (DictationEndEvent) isRpcServerFrame()               {}
@@ -10317,6 +10554,8 @@ func (v *RpcServerFrame) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[LiveTranscriptEvent](raw)
 	case "live_end":
 		value, err = decodeVariant[LiveEndEvent](raw)
+	case "job_lifecycle":
+		value, err = decodeVariant[JobLifecycleEvent](raw)
 	case "dictation_state":
 		value, err = decodeVariant[DictationStateEvent](raw)
 	case "dictation_transcript":
@@ -10947,6 +11186,25 @@ func (v *CancelSubagentResult) UnmarshalJSON(data []byte) error {
 func (v *CancelSubagentResult) decodeFrom(raw map[string]json.RawMessage) error {
 	var out CancelSubagentResult
 	d := fieldDecoder{raw: raw, owner: "CancelSubagentResult"}
+	d.required("cancelled", &out.Cancelled)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type CancelJobResult struct {
+	Cancelled bool `json:"cancelled"`
+}
+
+func (v *CancelJobResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "CancelJobResult", v.decodeFrom)
+}
+
+func (v *CancelJobResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out CancelJobResult
+	d := fieldDecoder{raw: raw, owner: "CancelJobResult"}
 	d.required("cancelled", &out.Cancelled)
 	if d.err != nil {
 		return d.err
@@ -12288,6 +12546,43 @@ func (c Commands) SetSubagentFast(ctx context.Context, p SetSubagentFastCommand)
 	var out FastModeResult
 	err := c.call(ctx, "set_subagent_fast", p, 0, &out)
 	return out, err
+}
+
+// GetJobsCommand holds the parameters of "get_jobs".
+type GetJobsCommand struct {
+	RecentLimit *int64 `json:"recentLimit,omitempty"`
+}
+
+// GetJobs sends "get_jobs": List the background jobs of this agent and its subagents (the `/jobs` sheet): running jobs and the newest settled ones.
+func (c Commands) GetJobs(ctx context.Context, p GetJobsCommand) (JobsResult, error) {
+	var out JobsResult
+	err := c.call(ctx, "get_jobs", p, 0, &out)
+	return out, err
+}
+
+// GetJobOutputCommand holds the parameters of "get_job_output".
+type GetJobOutputCommand struct {
+	JobID    string `json:"jobId"`
+	FromByte *int64 `json:"fromByte,omitempty"`
+}
+
+// GetJobOutput sends "get_job_output": Read a job's output snapshot (a tail while running, the final result or error once settled) by UTF-8 byte offset.
+func (c Commands) GetJobOutput(ctx context.Context, p GetJobOutputCommand) (JobOutput, error) {
+	var out JobOutput
+	err := c.call(ctx, "get_job_output", p, 0, &out)
+	return out, err
+}
+
+// CancelJobCommand holds the parameters of "cancel_job".
+type CancelJobCommand struct {
+	JobID string `json:"jobId"`
+}
+
+// CancelJob sends "cancel_job": Cancel a running job the session's own agent owns, like the jobs sheet; false when it is not cancellable.
+func (c Commands) CancelJob(ctx context.Context, p CancelJobCommand) (bool, error) {
+	var out CancelJobResult
+	err := c.call(ctx, "cancel_job", p, 0, &out)
+	return out.Cancelled, err
 }
 
 // SetSubagentModelCommand holds the parameters of "set_subagent_model".

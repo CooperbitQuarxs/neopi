@@ -20,6 +20,7 @@ import type { AgentSessionEvent, SessionStats } from "../../session/agent-sessio
 import type { CacheWarmingMode } from "../../session/cache-warmer";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
+import type { RpcJobLifecycleFrame, RpcJobOutputResult, RpcJobsResult } from "./rpc-jobs";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { RpcModel } from "./rpc-model";
@@ -150,6 +151,7 @@ export type RpcToolApprovalCancelListener = (cancel: RpcToolApprovalCancel) => v
 export type RpcLiveListener = (frame: RpcLiveFrame) => void;
 export type RpcJournalEventListener = (event: RpcJournalEventFrame) => void;
 export type RpcDictationListener = (frame: RpcDictationFrame) => void;
+export type RpcJobLifecycleListener = (frame: RpcJobLifecycleFrame) => void;
 
 export interface RpcClientToolContext<TDetails = unknown> {
 	toolCallId: string;
@@ -457,6 +459,7 @@ export class RpcClient {
 	#toolApprovalCancelListeners = new Set<RpcToolApprovalCancelListener>();
 	#liveListeners = new Set<RpcLiveListener>();
 	#dictationListeners = new Set<RpcDictationListener>();
+	#jobListeners = new Set<RpcJobLifecycleListener>();
 	/** `promptAndWait` completions keyed by request id; registered before the prompt is sent. */
 	#promptResultWaiters = new Map<string, (result: RpcPromptResultFrame) => void>();
 	/** Same-id failures that arrive after the success ack removed the pending request. */
@@ -810,6 +813,29 @@ export class RpcClient {
 		return () => {
 			this.#liveListeners.delete(listener);
 		};
+	}
+
+	/** Subscribe to `job_lifecycle` frames (capability `background_jobs`) to keep a live job list and count. */
+	onJobLifecycle(listener: RpcJobLifecycleListener): () => void {
+		this.#jobListeners.add(listener);
+		return () => {
+			this.#jobListeners.delete(listener);
+		};
+	}
+
+	/** List background jobs (running and the newest settled) of this agent and its subagents. */
+	async getJobs(recentLimit?: number): Promise<RpcJobsResult> {
+		return this.#getData(await this.#send({ type: "get_jobs", recentLimit }));
+	}
+
+	/** Read a job's output snapshot from `fromByte`; pass `nextByte` back to read on. */
+	async getJobOutput(jobId: string, fromByte?: number): Promise<RpcJobOutputResult> {
+		return this.#getData(await this.#send({ type: "get_job_output", jobId, fromByte }));
+	}
+
+	/** Cancel a running job the session's own agent owns; false when it is not cancellable. */
+	async cancelJob(jobId: string): Promise<boolean> {
+		return this.#getData<{ cancelled: boolean }>(await this.#send({ type: "cancel_job", jobId })).cancelled;
 	}
 
 	/** Subscribe to draft-only dictation state, full preview, and terminal frames. */
@@ -1961,6 +1987,13 @@ export class RpcClient {
 		if (isRpcLiveFrame(data)) {
 			for (const listener of this.#liveListeners) {
 				listener(data);
+			}
+			return;
+		}
+
+		if (isRecord(data) && data.type === "job_lifecycle") {
+			for (const listener of this.#jobListeners) {
+				listener(data as unknown as RpcJobLifecycleFrame);
 			}
 			return;
 		}

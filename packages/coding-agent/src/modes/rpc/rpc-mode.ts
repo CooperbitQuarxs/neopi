@@ -91,6 +91,7 @@ import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } fro
 import { RpcExtensionUserMessageTracker, RpcPromptResults, watchAndReportPromptResult } from "./rpc-prompt-results";
 import type { RpcPromptTicket } from "./rpc-prompt-results";
 import { controlHostFor } from "../../control/host";
+import { cancelRpcJob, listRpcJobs, readRpcJobOutput, RpcJobEvents } from "./rpc-jobs";
 import { RpcRoles } from "./rpc-roles";
 import { getRpcModelSelector } from "./rpc-model-selector";
 import { RpcModelsCommands } from "./rpc-models-commands";
@@ -2287,6 +2288,33 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				});
 			}
 
+			case "get_jobs": {
+				if (command.recentLimit !== undefined && !Number.isFinite(command.recentLimit)) {
+					return error(id, command.type, "`recentLimit` must be a finite number.");
+				}
+				return success(id, command.type, listRpcJobs(session, command.recentLimit));
+			}
+
+			case "get_job_output": {
+				if (typeof command.jobId !== "string" || command.jobId.length === 0) {
+					return error(id, command.type, "`jobId` must be a non-empty string.");
+				}
+				if (command.fromByte !== undefined && !Number.isFinite(command.fromByte)) {
+					return error(id, command.type, "`fromByte` must be a finite number.");
+				}
+				const output = readRpcJobOutput(session, command.jobId, command.fromByte);
+				return output
+					? success(id, command.type, output)
+					: error(id, command.type, `Job not found: ${command.jobId}`);
+			}
+
+			case "cancel_job": {
+				if (typeof command.jobId !== "string" || command.jobId.length === 0) {
+					return error(id, command.type, "`jobId` must be a non-empty string.");
+				}
+				return success(id, command.type, { cancelled: cancelRpcJob(session, command.jobId) });
+			}
+
 			case "set_subagent_model": {
 				if (!subagentRegistry) {
 					return error(id, command.type, "Subagent event bus is unavailable");
@@ -2822,6 +2850,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	const controlHost = controlHostFor(session);
 	if (controlHost) controlHost.liveBridge = liveBridge;
 	let lastDictationError: { message: string } | undefined;
+	// Job frames go straight to `output`, so `set_event_filter` (session events only) never drops them.
+	const jobEvents = new RpcJobEvents(session, output);
 	const sessionDictationBridge = new RpcDictationBridge(
 		session,
 		frame => {
@@ -3147,6 +3177,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		onShutdown: () => {
 			shutdownState.requested = true;
 			sessionDictationBridge.dispose();
+			jobEvents.dispose();
 		},
 		trackAgentInvokingMessage: task => {
 			extensionUserMessageTracker.trackAgentMessageTask(task);
@@ -3197,6 +3228,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			});
 			// Close the realtime call (microphone, socket) before the session it delegates into.
 			sessionDictationBridge.dispose();
+			jobEvents.dispose();
 			await liveBridge.stop();
 			await session.dispose();
 		} catch (error) {
@@ -3350,6 +3382,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	toolApprovalBridge.close("RPC client disconnected before tool approval response completed");
 	if (controlHost?.liveBridge === liveBridge) controlHost.liveBridge = undefined;
 	sessionDictationBridge.dispose();
+	jobEvents.dispose();
 	await liveBridge.stop();
 	await inputDispatcher.drain();
 	// A backgrounded builtin (e.g. a /mcp reauth browser wait) must not park

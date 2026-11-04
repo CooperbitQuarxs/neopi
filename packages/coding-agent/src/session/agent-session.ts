@@ -123,7 +123,7 @@ import type { MixtureSessionEvent, SessionMixtureHost } from "../moa/host";
 import { isMixtureModel } from "../moa/provider";
 import type { MixtureRun, ResolvedMixture } from "../moa/types";
 import { loadAdvisorTranscriptCosts } from "../advisor";
-import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
+import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, type AsyncJobEvent, AsyncJobManager } from "../async";
 import { classifyAutoPrewalk } from "../auto-prewalk/classifier";
 import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
@@ -3749,6 +3749,21 @@ export class AgentSession implements SettingsScope {
 			artifactId: details?.meta?.truncation?.artifactId,
 			widget: this.#asyncJobManager?.widgets?.view(job),
 		};
+	}
+
+	/**
+	 * Observe the transitions of async jobs in this agent's tree (see {@link getAsyncJobTree}). Foreground-backed
+	 * jobs stay silent until promoted, which is reported as `background`. Returns the unsubscribe.
+	 */
+	subscribeAsyncJobs(
+		listener: (event: { type: AsyncJobEvent["type"]; job: AsyncJobSnapshotItem }) => void,
+	): () => void {
+		const manager = this.#asyncJobManager;
+		if (!manager) return () => {};
+		return manager.subscribe(({ type, job }) => {
+			if (job.foreground || !this.#inJobTree(job, this.#jobTreeParents())) return;
+			listener({ type, job: jobSnapshotItem(job) });
+		});
 	}
 
 	/** Cancel a running async job this session owns; false when there is none by that id. */

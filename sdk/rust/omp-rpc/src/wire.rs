@@ -4377,6 +4377,126 @@ pub struct SubagentSnapshot {
 	pub fast_mode_active: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum JobType {
+	#[serde(rename = "bash")]
+	Bash,
+	#[serde(rename = "task")]
+	Task,
+	#[serde(rename = "eval")]
+	Eval,
+	#[serde(rename = "chronicle")]
+	Chronicle,
+}
+
+impl JobType {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Bash => "bash",
+			Self::Task => "task",
+			Self::Eval => "eval",
+			Self::Chronicle => "chronicle",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum JobStatus {
+	#[serde(rename = "running")]
+	Running,
+	#[serde(rename = "completed")]
+	Completed,
+	#[serde(rename = "failed")]
+	Failed,
+	#[serde(rename = "cancelled")]
+	Cancelled,
+}
+
+impl JobStatus {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Running => "running",
+			Self::Completed => "completed",
+			Self::Failed => "failed",
+			Self::Cancelled => "cancelled",
+		}
+	}
+}
+
+/// One background job.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobInfo {
+	/// Stable `bg_N` id.
+	pub id: String,
+	pub r#type: JobType,
+	pub label: String,
+	pub status: JobStatus,
+	/// Epoch milliseconds.
+	#[serde(rename = "startedAt")]
+	pub started_at: f64,
+	/// Size in bytes of the output snapshot `get_job_output` reads.
+	#[serde(rename = "outputBytes")]
+	pub output_bytes: i64,
+	/// Full command line of a job that runs a process; `label` is cut to 120 characters.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub command: Option<String>,
+	#[serde(rename = "finishedAt", default, skip_serializing_if = "Option::is_none")]
+	pub finished_at: Option<f64>,
+	#[serde(rename = "exitCode", default, skip_serializing_if = "Option::is_none")]
+	pub exit_code: Option<i64>,
+	/// Failure text of a failed job, cut to a bounded length.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub error: Option<String>,
+	/// Registry id of the agent that registered the job.
+	#[serde(rename = "ownerId", default, skip_serializing_if = "Option::is_none")]
+	pub owner_id: Option<String>,
+	/// Registry id of the subagent a task job runs.
+	#[serde(rename = "agentId", default, skip_serializing_if = "Option::is_none")]
+	pub agent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobAgent {
+	pub id: String,
+	#[serde(rename = "parentId", default, skip_serializing_if = "Option::is_none")]
+	pub parent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobsResult {
+	pub running: Vec<JobInfo>,
+	/// Settled jobs, newest first, at most `recentLimit`.
+	pub recent: Vec<JobInfo>,
+	/// Subagents owning listed jobs, with the ancestors linking them to the root.
+	pub agents: Vec<JobAgent>,
+	/// Running jobs by the TUI jobs-pill rule; equals `get_state.runningJobCount`.
+	#[serde(rename = "runningCount")]
+	pub running_count: i64,
+	/// The agent the tree is for; its own jobs are the top level.
+	#[serde(rename = "rootId", default, skip_serializing_if = "Option::is_none")]
+	pub root_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobOutput {
+	#[serde(rename = "jobId")]
+	pub job_id: String,
+	pub status: JobStatus,
+	#[serde(rename = "fromByte")]
+	pub from_byte: i64,
+	/// Pass as the next `fromByte` to read on.
+	#[serde(rename = "nextByte")]
+	pub next_byte: i64,
+	/// Size in bytes of the whole output snapshot.
+	#[serde(rename = "totalBytes")]
+	pub total_bytes: i64,
+	/// `fromByte` exceeded the snapshot and reading restarted at zero.
+	pub reset: bool,
+	pub output: String,
+}
+
 /// Incremental subagent transcript read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SubagentMessages {
@@ -5743,6 +5863,16 @@ pub struct LiveEndEvent {
 	pub error: Option<String>,
 }
 
+/// A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobLifecycleEvent {
+	pub event: JobLifecycleEventEvent,
+	pub job: JobInfo,
+	/// Running jobs by the TUI jobs-pill rule after this transition.
+	#[serde(rename = "runningCount")]
+	pub running_count: i64,
+}
+
 /// State of one draft-only microphone capture.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DictationStateEvent {
@@ -6455,6 +6585,8 @@ pub enum RpcNotification {
 	LiveTranscript(LiveTranscriptEvent),
 	/// Sent exactly once when a live session ends; `error` carries the failure cause.
 	LiveEnd(LiveEndEvent),
+	/// A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`.
+	JobLifecycle(JobLifecycleEvent),
 	/// State of one draft-only microphone capture.
 	DictationState(DictationStateEvent),
 	/// Full accumulated draft preview; replaces the previous preview for this capture.
@@ -6496,6 +6628,7 @@ impl RpcNotification {
 			Some("live_levels") => |value| serde_json::from_value(value).map(Self::LiveLevels),
 			Some("live_transcript") => |value| serde_json::from_value(value).map(Self::LiveTranscript),
 			Some("live_end") => |value| serde_json::from_value(value).map(Self::LiveEnd),
+			Some("job_lifecycle") => |value| serde_json::from_value(value).map(Self::JobLifecycle),
 			Some("dictation_state") => |value| serde_json::from_value(value).map(Self::DictationState),
 			Some("dictation_transcript") => |value| serde_json::from_value(value).map(Self::DictationTranscript),
 			Some("dictation_end") => |value| serde_json::from_value(value).map(Self::DictationEnd),
@@ -6528,6 +6661,7 @@ impl Serialize for RpcNotification {
 			Self::LiveLevels(member) => serialize_tagged(member, &[("type", "live_levels")], serializer),
 			Self::LiveTranscript(member) => serialize_tagged(member, &[("type", "live_transcript")], serializer),
 			Self::LiveEnd(member) => serialize_tagged(member, &[("type", "live_end")], serializer),
+			Self::JobLifecycle(member) => serialize_tagged(member, &[("type", "job_lifecycle")], serializer),
 			Self::DictationState(member) => serialize_tagged(member, &[("type", "dictation_state")], serializer),
 			Self::DictationTranscript(member) => serialize_tagged(member, &[("type", "dictation_transcript")], serializer),
 			Self::DictationEnd(member) => serialize_tagged(member, &[("type", "dictation_end")], serializer),
@@ -6568,7 +6702,7 @@ impl RpcServerFrame {
 		let decode: fn(Value) -> Result<Self, serde_json::Error> = match value.get("type").and_then(Value::as_str) {
 			Some("response") => |value| serde_json::from_value(value).map(Self::Response),
 			Some("host_tool_call" | "host_tool_cancel" | "host_uri_request" | "host_uri_cancel") => |value| serde_json::from_value(value).map(Self::RpcHostRequest),
-			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "dictation_state" | "dictation_transcript" | "dictation_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "journal_state" | "journal_entry" | "message_persisted" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "manual_compaction_start" | "manual_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "themes_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
+			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "job_lifecycle" | "dictation_state" | "dictation_transcript" | "dictation_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "journal_state" | "journal_entry" | "message_persisted" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "manual_compaction_start" | "manual_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "themes_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -7090,6 +7224,31 @@ pub struct SetSubagentFastParams {
 	#[serde(rename = "subagentId")]
 	pub subagent_id: String,
 	pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetJobsParams {
+	#[serde(rename = "recentLimit", default, skip_serializing_if = "Option::is_none")]
+	pub recent_limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetJobOutputParams {
+	#[serde(rename = "jobId")]
+	pub job_id: String,
+	#[serde(rename = "fromByte", default, skip_serializing_if = "Option::is_none")]
+	pub from_byte: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelJobParams {
+	#[serde(rename = "jobId")]
+	pub job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelJobResult {
+	pub cancelled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -8408,6 +8567,33 @@ impl SubagentLifecyclePayloadRunKind {
 			Self::Spawn => "spawn",
 			Self::Wake => "wake",
 			Self::FollowUp => "followUp",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum JobLifecycleEventEvent {
+	#[serde(rename = "registered")]
+	Registered,
+	#[serde(rename = "progress")]
+	Progress,
+	#[serde(rename = "completed")]
+	Completed,
+	#[serde(rename = "failed")]
+	Failed,
+	#[serde(rename = "cancelled")]
+	Cancelled,
+}
+
+impl JobLifecycleEventEvent {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Registered => "registered",
+			Self::Progress => "progress",
+			Self::Completed => "completed",
+			Self::Failed => "failed",
+			Self::Cancelled => "cancelled",
 		}
 	}
 }
@@ -9856,6 +10042,59 @@ impl Command for SetSubagentFastCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<FastModeResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// List the background jobs of this agent and its subagents (the `/jobs` sheet): running jobs and the newest settled ones.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GetJobsCommand {
+	#[serde(rename = "recentLimit", default, skip_serializing_if = "Option::is_none")]
+	pub recent_limit: Option<i64>,
+}
+
+impl Command for GetJobsCommand {
+	const NAME: &'static str = "get_jobs";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = JobsResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<JobsResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Read a job's output snapshot (a tail while running, the final result or error once settled) by UTF-8 byte offset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetJobOutputCommand {
+	#[serde(rename = "jobId")]
+	pub job_id: String,
+	#[serde(rename = "fromByte", default, skip_serializing_if = "Option::is_none")]
+	pub from_byte: Option<i64>,
+}
+
+impl Command for GetJobOutputCommand {
+	const NAME: &'static str = "get_job_output";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = JobOutput;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<JobOutput>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Cancel a running job the session's own agent owns, like the jobs sheet; false when it is not cancellable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelJobCommand {
+	#[serde(rename = "jobId")]
+	pub job_id: String,
+}
+
+impl Command for CancelJobCommand {
+	const NAME: &'static str = "cancel_job";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = bool;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<CancelJobResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.cancelled)
 	}
 }
 
