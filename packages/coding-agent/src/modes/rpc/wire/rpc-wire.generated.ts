@@ -1014,6 +1014,8 @@ export interface AvailableSlashCommand {
 	description?: string;
 	input?: SlashCommandInput;
 	subcommands?: SlashSubcommand[];
+	/** `tui` commands need the terminal UI and are refused over RPC with `code: "command_requires_tui"`. */
+	availability?: "headless" | "tui";
 }
 
 /** OMP-native session entries in append order. */

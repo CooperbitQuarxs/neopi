@@ -484,6 +484,13 @@ export const stateDefs = {
 		"input?": "SlashCommandInput",
 		"subcommands?": "SlashSubcommand[]",
 		source: "SlashCommandSource",
+		availability: absentAs(
+			doc(
+				"'headless' | 'tui'",
+				'`tui` commands need the terminal UI and are refused over RPC with `code: "command_requires_tui"`.',
+			),
+			"headless",
+		),
 	},
 	SessionEntries: doc(
 		{ entries: `${JSON_OBJECT}[]`, leafId: "string | null" },

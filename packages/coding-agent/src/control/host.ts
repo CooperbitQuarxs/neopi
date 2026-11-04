@@ -976,19 +976,6 @@ export class ControlHost {
 			case "commands": {
 				const { buildAvailableSlashCommands } = await import("../slash-commands/available-commands");
 				const commands = await buildAvailableSlashCommands(this.#options.session);
-				if (presenter) {
-					const { BUILTIN_SLASH_COMMANDS_INTERNAL } = await import("../slash-commands/builtin-registry");
-					const listed = new Set(commands.map(command => command.name));
-					for (const builtin of BUILTIN_SLASH_COMMANDS_INTERNAL) {
-						if (listed.has(builtin.name)) continue;
-						commands.push({
-							name: builtin.name,
-							aliases: builtin.aliases,
-							description: builtin.description,
-							source: "builtin",
-						});
-					}
-				}
 				this.#reply(connection, frame, { success: true, data: { commands } });
 				return;
 			}

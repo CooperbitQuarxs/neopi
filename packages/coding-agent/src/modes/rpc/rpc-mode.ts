@@ -58,7 +58,7 @@ import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { CACHE_WARMING_MODES } from "../../session/cache-warmer";
 import { findMostRecentNonEmptySession, findRecentSessionContinuation } from "../../session/session-listing";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
-import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
+import { executeAcpBuiltinSlashCommand, lookupTuiOnlyBuiltin } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { cfgSttEnabled } from "../../stt/settings";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
@@ -1622,6 +1622,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 		| { kind: "local" }
 		| { kind: "cancelled" }
 		| { kind: "builtin-agent" }
+		| { kind: "needs-tui"; name: string }
 		| { kind: "admitted"; userEntryId?: string };
 	const dispatchOrderedUserInput = (
 		command: OrderedUserInput,
@@ -1720,6 +1721,17 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 						return { kind: "local" };
 					}
 					text = builtinResult.prompt;
+				} else {
+					// A builtin that needs the terminal UI is refused here, never sent to the model as chat. An
+					// extension or custom command of the same name runs instead, as it does in the TUI.
+					const tuiOnly = lookupTuiOnlyBuiltin(text);
+					if (
+						tuiOnly &&
+						!session.isExtensionCommand(text) &&
+						!session.customCommands.some(loaded => loaded.command.name === tuiOnly.name)
+					) {
+						return { kind: "needs-tui", name: tuiOnly.name };
+					}
 				}
 			}
 			const customCommandResult = await executeCustomPromptCommand(text);
@@ -1771,6 +1783,10 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 						return success(id, "prompt", { agentInvoked: false });
 					}
 					if (outcome.kind === "builtin-agent") return success(id, "prompt", { agentInvoked: true });
+					if (outcome.kind === "needs-tui") {
+						promptResults.discard(ticket);
+						return error(id, "prompt", `/${outcome.name} needs the terminal UI`, "command_requires_tui");
+					}
 					if (outcome.kind === "cancelled") {
 						promptResults.settle(ticket);
 						return success(id, "prompt");
@@ -1847,6 +1863,10 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					outcome => {
 						if (outcome.kind === "cancelled") promptResults.settle(ticket);
 						else if (outcome.kind === "local") promptResults.completeLocal(ticket);
+						else if (outcome.kind === "needs-tui") {
+							onPromptError(id, "abort_and_prompt")(new Error(`/${outcome.name} needs the terminal UI`));
+							promptResults.fail(ticket, `/${outcome.name} needs the terminal UI`);
+						}
 					},
 					(cause: unknown) => {
 						const promptError = cause instanceof Error ? cause : new Error(String(cause));

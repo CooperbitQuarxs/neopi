@@ -4200,6 +4200,9 @@ pub struct AvailableSlashCommand {
 	pub input: Option<SlashCommandInput>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub subcommands: Option<Vec<SlashSubcommand>>,
+	/// `tui` commands need the terminal UI and are refused over RPC with `code: "command_requires_tui"`.
+	#[serde(default = "default_available_slash_command_availability")]
+	pub availability: AvailableSlashCommandAvailability,
 }
 
 /// OMP-native session entries in append order.
@@ -8122,6 +8125,24 @@ impl<'de> Deserialize<'de> for LitCompleted {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AvailableSlashCommandAvailability {
+	#[serde(rename = "headless")]
+	Headless,
+	#[serde(rename = "tui")]
+	Tui,
+}
+
+impl AvailableSlashCommandAvailability {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Headless => "headless",
+			Self::Tui => "tui",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum NavigateTreeResultOutcome {
 	#[serde(rename = "navigated")]
 	Navigated,
@@ -9006,6 +9027,10 @@ fn default_session_state_goal() -> Option<GoalModeState> {
 
 fn default_token_usage_reasoning() -> i64 {
 	serde_json::from_str("0").expect("valid wire default")
+}
+
+fn default_available_slash_command_availability() -> AvailableSlashCommandAvailability {
+	serde_json::from_str("\"headless\"").expect("valid wire default")
 }
 
 fn default_auto_retry_end_event_retry_errors() -> Vec<Map<String, Value>> {
