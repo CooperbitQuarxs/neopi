@@ -9,6 +9,7 @@
 
 ### Added
 
+- `/personality <name>` and `/notice <text>` now run in RPC, ACP and control sessions (bare `/personality` lists the names); the terminal keeps its manager and confirmation ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).
 - RPC `get_command_completions { command, prefix }` returns a slash command's argument completions (subcommands, personality names) to hosts without a terminal; hosts gate on the `command_completions` capability ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).
 - RPC lists every slash command in `get_available_commands` with its `availability` (`headless` or `tui`), and a `prompt` that names a terminal-only command answers `command_requires_tui` instead of being sent to the model; hosts gate on the `command_catalog` capability ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).
 - `npi sessions list --json --live` adds each live session's state (busy, waiting for an answer, idle), streaming flag, pending dialog count and git branch, so hosts can mark running sessions without opening a control connection per row; default output is unchanged ([#669](https://github.com/PsychedelicShayna/neopi/issues/669)).
