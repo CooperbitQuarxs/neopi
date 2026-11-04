@@ -21,6 +21,6 @@ El [panorama general y guía de primera tarea](./docs/panorama-general.md) expli
 
 ## Repositorio y licencia
 
-Este repositorio privado es el espejo para Cooperbit. El desarrollo activo, [pull requests](https://github.com/PsychedelicShayna/neopi/pulls?q=is%3Apr) e [issues](https://github.com/PsychedelicShayna/neopi/issues?q=is%3Aissue) están en [PsychedelicShayna/neopi](https://github.com/PsychedelicShayna/neopi); el proyecto deriva de [oh-my-pi](https://github.com/can1357/oh-my-pi). La presencia de código o releases en el espejo no garantiza que cada versión esté aprobada para el equipo.
+Este repositorio de Cooperbit es el espejo para el equipo. El desarrollo activo, [pull requests](https://github.com/PsychedelicShayna/neopi/pulls?q=is%3Apr) e [issues](https://github.com/PsychedelicShayna/neopi/issues?q=is%3Aissue) están en [PsychedelicShayna/neopi](https://github.com/PsychedelicShayna/neopi); el proyecto deriva de [oh-my-pi](https://github.com/can1357/oh-my-pi). La presencia de código o releases en el espejo no garantiza que cada versión esté aprobada para el equipo.
 
 El código está bajo licencia **MIT** (ver [LICENSE](./LICENSE)); se conservan los avisos de copyright y de terceros ([THIRD-PARTY-NOTICES.txt](./THIRD-PARTY-NOTICES.txt)).
