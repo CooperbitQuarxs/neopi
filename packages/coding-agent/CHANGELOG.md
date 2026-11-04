@@ -9,6 +9,7 @@
 
 ### Added
 
+- `npi auth-gateway link` prints one `neopi-gateway://host:port?token=…&name=…` connection link for the running gateway, so NeoProxy pairs with a single paste; when the gateway is not running it prints the `serve` command that starts it. `serve` records its listener in `<config-dir>/auth-gateway.runtime.json` for `link` and same-host clients.
 - Added a scoped personality manager with prompt previews, custom personalities, and `/personality` switching.
 
 - Changed: `chronicle_recall` searches the current session by default; pass `scope: "all"`, `sessions`, or `keywords` to widen. Added literal boolean transcript prefiltering (AND, OR, parentheses, quoted phrases; case-insensitive by default) before existing recall ranking, with matching session counts and equivalent CLI flags. The standalone CLI keeps its all-session default (implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
