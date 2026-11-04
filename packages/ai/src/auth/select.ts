@@ -32,6 +32,7 @@ import { mergeRefreshedCredential, OAUTH_REFRESH_SKEW_MS, type OAuthRefresher } 
 import type { AuthCredentialStore } from "./store";
 import {
 	type ApiKeyCredential,
+	apiKeyAccountKey,
 	type AuthApiKeyOptions,
 	type AuthCredential,
 	type OAuthCredential,
@@ -304,13 +305,20 @@ export class CredentialSelector {
 		options: AuthApiKeyOptions | undefined,
 		filter?: (credential: ApiKeyCredential) => boolean,
 	): Promise<ApiKeySelection | undefined> {
-		const credentials = this.#deps.pool
+		const filtered = this.#deps.pool
 			.credentials(provider)
 			.map((credential, index) => ({ credential, index }))
 			.filter((entry): entry is ApiKeySelection => {
 				if (entry.credential.type !== "api_key") return false;
 				return filter?.(entry.credential) ?? true;
 			});
+		// Per-key discovery (NeoProxy) records which keys serve the model. Route only
+		// to those keys; another key serves it only when no granting key remains stored.
+		const accountIds = options?.accountIds?.length ? new Set(options.accountIds) : undefined;
+		const granting = accountIds
+			? filtered.filter(({ credential }) => accountIds.has(apiKeyAccountKey(credential)))
+			: [];
+		const credentials = granting.length > 0 ? granting : filtered;
 
 		if (credentials.length === 0) return undefined;
 		if (credentials.length === 1) return credentials[0];

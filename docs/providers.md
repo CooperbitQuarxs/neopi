@@ -28,6 +28,20 @@ If account rotation would narrow the selected model's context window, OMP stops 
 
 Factory's native context limits hold even when extended context is disabled. Factory GPT and Gemini routes omit output-token caps, so bounded ephemeral turns reject a `maxTokens` request instead of silently running uncapped.
 
+## NeoProxy
+
+`neoproxy` connects NeoPi to a NeoProxy server with API keys its administrator assigned. It is always listed in `/login` and `npi login`; its models appear after the first key is stored.
+
+1. Run `/login neoproxy <url>` in a session, or `npi login neoproxy --url <url>` in a terminal. Without a URL, the login prompts for one and offers the configured server as the default. HTTPS is required except on loopback (`http://127.0.0.1:8318` works for a local proxy). For HTTPS servers, compare the server and CA fingerprints with your administrator before accepting them.
+2. Paste the key at the hidden prompt. NeoPi validates it with `GET /v1/models`, stores it in the normal credential store bound to that server's origin, and writes `providers.neoproxy` (`baseUrl`, `auth: apiKey`, `discovery: proxy`) to `models.yml`.
+3. Pick a model with `/model` or assign it to a role. Model ids are whatever the proxy names them, e.g. `neoproxy/<model>`.
+
+**Several keys.** The proxy decides which models each key may use. Log in again with another key for the same server and NeoPi adds it beside the stored keys (press Enter at the add/replace prompt; type `replace` to remove the others instead). Discovery fetches every key's model list and shows the union. Each request uses a key that grants the selected model; only when no granting key is stored does it fall back to another key. A revoked key (HTTP 401/403) contributes no models, and the other keys keep theirs. Re-entering a stored key only refreshes it. Remove one key with `/logout neoproxy`.
+
+**Server URL.** `/neoproxy` (or `/neoproxy status`) shows the configured server, each stored key's non-secret id and how many models it grants, and the discovery state. To move to another server, run `/neoproxy url <url>`, `/login neoproxy <url>`, or `npi login neoproxy --url <url>` with a key that server issued. Keys only work with the server that issued them, so switching servers replaces the keys stored for the previous one. Editing `providers.neoproxy.baseUrl` by hand does not move stored keys: they refuse to send credentials to another origin.
+
+**Offline.** The last discovered union, including which keys grant each model, is cached in `models.db`. When the proxy is unreachable, the cached models stay selectable, so roles and fallback chains that reference them keep resolving; requests fail until the proxy is back. Refresh with `npi models refresh`.
+
 ## How `omp` decides a provider is available
 
 The model registry composes these sources:
@@ -70,7 +84,7 @@ Logins are **provider-scoped**: authenticating `anthropic` does not authenticate
 
 Use the interactive slash commands inside a session:
 
-- `/login` — opens the OAuth/key selector. `/login <provider>` jumps straight to one provider (e.g. `/login anthropic`); for an OAuth flow that needs a pasted callback, run `/login <redirect-url>` to complete it.
+- `/login` — opens the OAuth/key selector. `/login <provider>` jumps straight to one provider (e.g. `/login anthropic`); `/login neoproxy <url>` also supplies the NeoProxy server URL. For an OAuth flow that needs a pasted callback, run `/login <redirect-url>` to complete it.
 - `/logout` — opens the provider selector to remove stored credentials.
 
 Outside a session, `omp login [<provider>]` runs the same login from the terminal, including extension-registered providers: it prints the auth URL (and opens it in your browser), reads any prompts from stdin, and saves to the same store sessions use — local `agent.db`, or the configured auth broker. Without a provider it shows a numbered picker. Successful login refreshes that provider's model catalog online so newly unlocked models are visible.

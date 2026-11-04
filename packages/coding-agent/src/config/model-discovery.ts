@@ -24,6 +24,7 @@ import {
 	OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS,
 	resolveLiteLLMApi,
 } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
+import { unionAccountCatalogs } from "@oh-my-pi/pi-catalog/provider-models/account-access";
 import {
 	type KindApiKind,
 	type ModelKind,
@@ -32,7 +33,12 @@ import {
 	runnerApiKind,
 } from "@oh-my-pi/pi-catalog/types";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { isRecord, wrapFetchForCredentialScope } from "@oh-my-pi/pi-utils";
+import {
+	CredentialScopeError,
+	type CredentialRequestScope,
+	isRecord,
+	wrapFetchForCredentialScope,
+} from "@oh-my-pi/pi-utils";
 import type { ProviderDiscovery } from "./models-config-schema";
 
 // Default cap on `max_tokens` for auto-discovered models that do not advertise
@@ -46,6 +52,16 @@ import type { ProviderDiscovery } from "./models-config-schema";
 // "socket connection was closed unexpectedly").
 export const DISCOVERY_DEFAULT_CONTEXT_WINDOW = OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW;
 export const DISCOVERY_DEFAULT_MAX_TOKENS = OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS;
+
+/** Provider id NeoProxy logins store keys under; its discovery fetches and unions every key's roster. */
+export const NEOPROXY_PROVIDER_ID = "neoproxy";
+
+/** One stored API key for per-key discovery, with its non-secret account key and request scope. */
+export interface DiscoveryApiKeyAccount extends CredentialRequestScope {
+	/** `apiKeyAccountKey` of the credential; recorded in `Model.accountAccess`. */
+	accountKey: string;
+	apiKey: string;
+}
 
 /**
  * A discovery HTTP failure carrying the response status as a structured field
@@ -217,6 +233,12 @@ export interface DiscoveryContext {
 	 * never persists header values and drops rows that had them.
 	 */
 	getBearerApiKeyResolver(provider: string): Promise<ApiKey | undefined>;
+	/**
+	 * Every stored API key of a per-key discovery provider (NeoProxy), with its
+	 * request scope. Empty when a runtime/config override, env var, or OAuth
+	 * credential authenticates the provider instead of stored keys.
+	 */
+	listApiKeyAccounts?(provider: string): Promise<readonly DiscoveryApiKeyAccount[]>;
 }
 
 type OllamaDiscoveredModelMetadata = {
@@ -1419,19 +1441,40 @@ export async function discoverProxyModels(
 			if (!res.ok) {
 				throw new DiscoveryHttpError(res.status, modelsUrl);
 			}
-			return (await res.json()) as {
-				data?: Array<{
-					id?: string;
-					name?: string;
-					supported_endpoint_types?: string[];
-					context_length?: number;
-					metadata?: unknown;
-					supported_reasoning_levels?: unknown;
-					default_reasoning_level?: unknown;
-					reasoning?: unknown;
-				}>;
-			};
+			return (await res.json()) as { data?: ProxyModelEntry[] };
 		});
+	const parse = (payload: { data?: ProxyModelEntry[] }) =>
+		proxyModelsFromPayload(payload.data ?? [], providerConfig, baseUrl, baseHeaders);
+	const keyAccounts =
+		providerConfig.provider === NEOPROXY_PROVIDER_ID
+			? ((await ctx.listApiKeyAccounts?.(providerConfig.provider)) ?? [])
+			: [];
+	if (keyAccounts.length > 0) {
+		// NeoProxy administrators grant models per key: fetch each key's roster and
+		// record which keys serve each model so requests route to a granting key.
+		const catalogs: Model<Api>[][] = [];
+		let rejection: unknown;
+		for (const account of keyAccounts) {
+			let payload: { data?: ProxyModelEntry[] };
+			try {
+				payload = await attempt(
+					{ ...baseHeaders, Authorization: `Bearer ${account.apiKey}` },
+					wrapFetchForCredentialScope(ctx.fetch, account),
+				);
+			} catch (error) {
+				// A revoked key, or one bound to another origin, contributes nothing;
+				// other keys keep their models. Any other failure aborts so the
+				// last-known union stays cached instead of a partial roster.
+				if (!isDiscoveryAuthRejection(error) && !(error instanceof CredentialScopeError)) throw error;
+				rejection ??= error;
+				continue;
+			}
+			const access = { [account.accountKey]: {} };
+			catalogs.push(parse(payload).map(model => ({ ...model, accountAccess: access })));
+		}
+		if (catalogs.length === 0) throw rejection;
+		return unionAccountCatalogs(catalogs);
+	}
 	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
 	const payload = apiKey
 		? await withAuth(apiKey, (key, resolved) =>
@@ -1441,7 +1484,26 @@ export async function discoverProxyModels(
 				),
 			)
 		: await attempt(baseHeaders);
-	const items = payload.data ?? [];
+	return parse(payload);
+}
+
+type ProxyModelEntry = {
+	id?: string;
+	name?: string;
+	supported_endpoint_types?: string[];
+	context_length?: number;
+	metadata?: unknown;
+	supported_reasoning_levels?: unknown;
+	default_reasoning_level?: unknown;
+	reasoning?: unknown;
+};
+
+function proxyModelsFromPayload(
+	items: readonly ProxyModelEntry[],
+	providerConfig: DiscoveryProviderConfig,
+	baseUrl: string,
+	baseHeaders: Record<string, string>,
+): Model<Api>[] {
 	const discovered: Model<Api>[] = [];
 	for (const item of items) {
 		const id = item.id;
