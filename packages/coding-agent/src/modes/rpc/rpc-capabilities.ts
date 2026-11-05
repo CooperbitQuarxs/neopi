@@ -37,6 +37,7 @@ export const RPC_CAPABILITIES: readonly string[] = [
 	"background_jobs", // #665; get_jobs, get_job_output, cancel_job, and stdio job_lifecycle frames.
 	"command_catalog", // Every slash command with its availability; TUI-only commands refused, not sent to the model.
 	"command_completions", // get_command_completions: argument completions for hosts without a terminal.
+	"abort_and_restore_queue", // Atomic Esc: withdraw queued user input and abort in one command, also over control.
 	"subagent_history", // get_subagent_history: the full persisted roster; get_subagent_messages reads persisted children.
 ];
 
