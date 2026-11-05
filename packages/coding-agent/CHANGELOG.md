@@ -9,6 +9,7 @@
 
 ### Added
 
+- `get_job_output` takes and returns a `revision`, so a host reading a running job's rolling output tail resets to a full snapshot when the text was replaced instead of keeping stale or spliced output ([#665](https://github.com/PsychedelicShayna/neopi/issues/665)).
 - Terminal-owned sessions serve `dictation_start` / `dictation_stop` over the control socket (capability `dictation` in the control hello), recording with the terminal's microphone for the controlling connection only and refusing while the terminal's own speech-to-text is active, so GUIs attached to a terminal session can dictate ([#681](https://github.com/PsychedelicShayna/neopi/issues/681)).
 - RPC and the control socket list the whole subagent tree of a session, including finished, parked and aborted children, with `get_subagent_history`, and `get_subagent_messages` reads their persisted transcripts, so a restarted host can rebuild its Agents panel; hosts gate on the `subagent_history` capability ([#680](https://github.com/PsychedelicShayna/neopi/issues/680)).
 - `/personality <name>` and `/notice <text>` now run in RPC, ACP and control sessions (bare `/personality` lists the names); the terminal keeps its manager and confirmation ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).

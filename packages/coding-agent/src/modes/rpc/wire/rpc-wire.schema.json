@@ -5621,10 +5621,15 @@
 				},
 				"reset": {
 					"type": "boolean",
-					"description": "`fromByte` exceeded the snapshot and reading restarted at zero."
+					"description": "`fromByte` exceeded the snapshot, or it no longer starts with what the caller holds (`revision` mismatch), so reading restarted at zero."
 				},
 				"output": {
 					"type": "string"
+				},
+				"revision": {
+					"type": "string",
+					"description": "Identifies the snapshot bytes before `nextByte`; send it back with `fromByte: nextByte`.",
+					"default": ""
 				}
 			},
 			"required": [
@@ -10892,6 +10897,9 @@
 				},
 				"fromByte": {
 					"type": "integer"
+				},
+				"revision": {
+					"type": "string"
 				}
 			},
 			"required": [

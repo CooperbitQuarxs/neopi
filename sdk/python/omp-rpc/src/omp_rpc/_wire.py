@@ -1476,8 +1476,10 @@ class JobOutput:
     total_bytes: int
     """Size in bytes of the whole output snapshot."""
     reset: bool
-    """`fromByte` exceeded the snapshot and reading restarted at zero."""
+    """`fromByte` exceeded the snapshot, or it no longer starts with what the caller holds (`revision` mismatch), so reading restarted at zero."""
     output: str
+    revision: str = ""
+    """Identifies the snapshot bytes before `nextByte`; send it back with `fromByte: nextByte`."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -3890,6 +3892,7 @@ def parse_job_output(value: object, path: str = "JobOutput") -> JobOutput:
         total_bytes=required(payload, "totalBytes", decode_int, path),
         reset=required(payload, "reset", decode_bool, path),
         output=required(payload, "output", decode_str, path),
+        revision=defaulted(payload, "revision", decode_str, path, ""),
     )
 
 
@@ -5871,12 +5874,14 @@ class WireClient:
             params["recentLimit"] = recent_limit
         return parse_jobs_result(self._command("get_jobs", params), "get_jobs")
 
-    def get_job_output(self, job_id: str, *, from_byte: int | None = None) -> JobOutput:
+    def get_job_output(self, job_id: str, *, from_byte: int | None = None, revision: str | None = None) -> JobOutput:
         """Read a job's output snapshot (a tail while running, the final result or error once settled) by UTF-8 byte offset."""
         params: dict[str, object] = {}
         params["jobId"] = job_id
         if from_byte is not None:
             params["fromByte"] = from_byte
+        if revision is not None:
+            params["revision"] = revision
         return parse_job_output(self._command("get_job_output", params), "get_job_output")
 
     def cancel_job(self, job_id: str) -> bool:

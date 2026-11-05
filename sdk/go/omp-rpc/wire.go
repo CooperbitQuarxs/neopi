@@ -5395,9 +5395,11 @@ type JobOutput struct {
 	NextByte int64 `json:"nextByte"`
 	// Size in bytes of the whole output snapshot.
 	TotalBytes int64 `json:"totalBytes"`
-	// `fromByte` exceeded the snapshot and reading restarted at zero.
+	// `fromByte` exceeded the snapshot, or it no longer starts with what the caller holds (`revision` mismatch), so reading restarted at zero.
 	Reset  bool   `json:"reset"`
 	Output string `json:"output"`
+	// Identifies the snapshot bytes before `nextByte`; send it back with `fromByte: nextByte`.
+	Revision string `json:"revision"`
 }
 
 func (v *JobOutput) UnmarshalJSON(data []byte) error {
@@ -5414,6 +5416,7 @@ func (v *JobOutput) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("totalBytes", &out.TotalBytes)
 	d.required("reset", &out.Reset)
 	d.required("output", &out.Output)
+	d.defaulted("revision", &out.Revision, `""`)
 	if d.err != nil {
 		return d.err
 	}
@@ -12835,8 +12838,9 @@ func (c Commands) GetJobs(ctx context.Context, p GetJobsCommand) (JobsResult, er
 
 // GetJobOutputCommand holds the parameters of "get_job_output".
 type GetJobOutputCommand struct {
-	JobID    string `json:"jobId"`
-	FromByte *int64 `json:"fromByte,omitempty"`
+	JobID    string  `json:"jobId"`
+	FromByte *int64  `json:"fromByte,omitempty"`
+	Revision *string `json:"revision,omitempty"`
 }
 
 // GetJobOutput sends "get_job_output": Read a job's output snapshot (a tail while running, the final result or error once settled) by UTF-8 byte offset.

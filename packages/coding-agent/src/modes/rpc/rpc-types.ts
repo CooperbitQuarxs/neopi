@@ -128,7 +128,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_subagent_thinking_level"; subagentId: string; level: ThinkingLevel }
 	| { id?: string; type: "set_subagent_fast"; subagentId: string; enabled: boolean }
 	| { id?: string; type: "get_jobs"; recentLimit?: number }
-	| { id?: string; type: "get_job_output"; jobId: string; fromByte?: number }
+	| { id?: string; type: "get_job_output"; jobId: string; fromByte?: number; revision?: string }
 	| { id?: string; type: "cancel_job"; jobId: string }
 	| {
 			id?: string;

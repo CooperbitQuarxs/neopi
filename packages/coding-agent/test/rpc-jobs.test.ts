@@ -153,6 +153,28 @@ describe("RPC background jobs", () => {
 		expect(overshoot).toMatchObject({ reset: true, fromByte: 0, output: "héllo wörld" });
 	});
 
+	test("a revision tells appended output from a rolling tail that was replaced", async () => {
+		const job = gated("rolling", { text: "AAAA" });
+		await job.progress("AAAA");
+		const first = readRpcJobOutput(session, job.id, undefined);
+		expect(first).toMatchObject({ output: "AAAA", nextByte: 4, reset: false });
+		expect(first?.revision).toBeString();
+		// Same length, different bytes: an offset alone would answer empty and leave the client on "AAAA".
+		await job.progress("BBBB");
+		const replaced = readRpcJobOutput(session, job.id, first!.nextByte, first!.revision);
+		expect(replaced).toMatchObject({ output: "BBBB", fromByte: 0, nextByte: 4, reset: true });
+		// Longer replacement that merely shares a length prefix with the old text is not spliced either.
+		await job.progress("CCCCDDDD");
+		const longer = readRpcJobOutput(session, job.id, replaced!.nextByte, replaced!.revision);
+		expect(longer).toMatchObject({ output: "CCCCDDDD", fromByte: 0, reset: true });
+		// Genuinely appended text still reads incrementally with a matching revision.
+		await job.progress("CCCCDDDDEEEE");
+		const appended = readRpcJobOutput(session, job.id, longer!.nextByte, longer!.revision);
+		expect(appended).toMatchObject({ output: "EEEE", fromByte: 8, nextByte: 12, reset: false });
+		// Without a revision the offset alone is trusted, as for older clients.
+		expect(readRpcJobOutput(session, job.id, 8)?.output).toBe("EEEE");
+	});
+
 	test("cancels only running jobs the session's agent owns", async () => {
 		const running = gated("sleep 100");
 		const foreign = gated("other", { ownerId: "Stranger" });
@@ -269,6 +291,9 @@ describe("RPC background jobs", () => {
 				success: false,
 			});
 			expect(await handle({ id: "6", type: "get_jobs", recentLimit: Number.NaN })).toMatchObject({ success: false });
+			expect(
+				await handle({ id: "6b", type: "get_job_output", jobId: job.id, revision: 7 } as unknown as RpcCommand),
+			).toMatchObject({ success: false });
 			expect(await handle({ id: "7", type: "cancel_job", jobId: job.id })).toMatchObject({
 				success: true,
 				data: { cancelled: true },

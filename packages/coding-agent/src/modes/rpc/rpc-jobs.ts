@@ -57,8 +57,13 @@ export interface RpcJobOutputResult {
 	nextByte: number;
 	/** Size in bytes of the whole output snapshot. */
 	totalBytes: number;
-	/** `fromByte` exceeded the snapshot and reading restarted at zero. */
+	/**
+	 * `fromByte` exceeded the snapshot, or the snapshot no longer starts with what the caller holds
+	 * (`revision` mismatch), so reading restarted at zero.
+	 */
 	reset: boolean;
+	/** Identifies the snapshot bytes before `nextByte`; send it back with `fromByte: nextByte` to read on. */
+	revision: string;
 	output: string;
 }
 
@@ -113,11 +118,16 @@ export function listRpcJobs(session: RpcJobsSession, recentLimit?: number): RpcJ
 	};
 }
 
+function revisionOf(bytes: Uint8Array): string {
+	return `${bytes.length}:${Bun.hash(bytes).toString(16)}`;
+}
+
 /** A byte slice of the job's output snapshot, or undefined when the job is not in this session's tree. */
 export function readRpcJobOutput(
 	session: RpcJobsSession,
 	jobId: string,
 	fromByte: number | undefined,
+	revision?: string,
 ): RpcJobOutputResult | undefined {
 	const inspection = session.inspectAsyncJob(jobId);
 	if (!inspection) return undefined;
@@ -128,6 +138,13 @@ export function readRpcJobOutput(
 	let start = fromByte === undefined ? 0 : Math.max(0, Math.trunc(fromByte));
 	let reset = false;
 	if (start > bytes.length) {
+		start = 0;
+		reset = true;
+	}
+	// A running job's output is a rolling tail the producer replaces, so an offset alone cannot tell
+	// "more text after what I hold" from "different text of the same length": the caller proves what it
+	// holds with the revision of the bytes before `fromByte`.
+	if (revision !== undefined && start > 0 && revisionOf(bytes.subarray(0, start)) !== revision) {
 		start = 0;
 		reset = true;
 	}
@@ -142,6 +159,7 @@ export function readRpcJobOutput(
 		nextByte: end,
 		totalBytes: bytes.length,
 		reset,
+		revision: revisionOf(bytes.subarray(0, end)),
 		output: bytes.subarray(start, end).toString("utf8"),
 	};
 }

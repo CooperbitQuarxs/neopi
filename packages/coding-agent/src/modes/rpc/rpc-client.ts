@@ -830,9 +830,9 @@ export class RpcClient {
 		return this.#getData(await this.#send({ type: "get_jobs", recentLimit }));
 	}
 
-	/** Read a job's output snapshot from `fromByte`; pass `nextByte` back to read on. */
-	async getJobOutput(jobId: string, fromByte?: number): Promise<RpcJobOutputResult> {
-		return this.#getData(await this.#send({ type: "get_job_output", jobId, fromByte }));
+	/** Read a job's output snapshot from `fromByte`; pass `nextByte` and `revision` back to read on. */
+	async getJobOutput(jobId: string, fromByte?: number, revision?: string): Promise<RpcJobOutputResult> {
+		return this.#getData(await this.#send({ type: "get_job_output", jobId, fromByte, revision }));
 	}
 
 	/** Cancel a running job the session's own agent owns; false when it is not cancellable. */

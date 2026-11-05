@@ -2356,7 +2356,10 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				if (command.fromByte !== undefined && !Number.isFinite(command.fromByte)) {
 					return error(id, command.type, "`fromByte` must be a finite number.");
 				}
-				const output = readRpcJobOutput(session, command.jobId, command.fromByte);
+				if (command.revision !== undefined && typeof command.revision !== "string") {
+					return error(id, command.type, "`revision` must be a string.");
+				}
+				const output = readRpcJobOutput(session, command.jobId, command.fromByte, command.revision);
 				return output
 					? success(id, command.type, output)
 					: error(id, command.type, `Job not found: ${command.jobId}`);
