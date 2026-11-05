@@ -421,7 +421,7 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	{
 		name: "get_job_output",
 		doc: "Read a job's output snapshot (a tail while running, the final result or error once settled) by UTF-8 byte offset.",
-		params: { jobId: "string", "fromByte?": "number.integer" },
+		params: { jobId: "string", "fromByte?": "number.integer", "revision?": "string" },
 		result: "JobOutput",
 	},
 	{

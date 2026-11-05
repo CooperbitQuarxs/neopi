@@ -614,7 +614,14 @@ export const stateDefs = {
 		fromByte: "number.integer",
 		nextByte: doc("number.integer", "Pass as the next `fromByte` to read on."),
 		totalBytes: doc("number.integer", "Size in bytes of the whole output snapshot."),
-		reset: doc("boolean", "`fromByte` exceeded the snapshot and reading restarted at zero."),
+		reset: doc(
+			"boolean",
+			"`fromByte` exceeded the snapshot, or it no longer starts with what the caller holds (`revision` mismatch), so reading restarted at zero.",
+		),
+		revision: absentAs(
+			doc("string", "Identifies the snapshot bytes before `nextByte`; send it back with `fromByte: nextByte`."),
+			"",
+		),
 		output: "string",
 	},
 	SubagentHistoryMetrics: {

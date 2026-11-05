@@ -4510,9 +4510,12 @@ pub struct JobOutput {
 	/// Size in bytes of the whole output snapshot.
 	#[serde(rename = "totalBytes")]
 	pub total_bytes: i64,
-	/// `fromByte` exceeded the snapshot and reading restarted at zero.
+	/// `fromByte` exceeded the snapshot, or it no longer starts with what the caller holds (`revision` mismatch), so reading restarted at zero.
 	pub reset: bool,
 	pub output: String,
+	/// Identifies the snapshot bytes before `nextByte`; send it back with `fromByte: nextByte`.
+	#[serde(default = "default_job_output_revision")]
+	pub revision: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -7359,6 +7362,8 @@ pub struct GetJobOutputParams {
 	pub job_id: String,
 	#[serde(rename = "fromByte", default, skip_serializing_if = "Option::is_none")]
 	pub from_byte: Option<i64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub revision: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -9193,6 +9198,10 @@ fn default_available_slash_command_availability() -> AvailableSlashCommandAvaila
 	serde_json::from_str("\"headless\"").expect("valid wire default")
 }
 
+fn default_job_output_revision() -> String {
+	serde_json::from_str("\"\"").expect("valid wire default")
+}
+
 fn default_auto_retry_end_event_retry_errors() -> Vec<Map<String, Value>> {
 	serde_json::from_str("[]").expect("valid wire default")
 }
@@ -10288,6 +10297,8 @@ pub struct GetJobOutputCommand {
 	pub job_id: String,
 	#[serde(rename = "fromByte", default, skip_serializing_if = "Option::is_none")]
 	pub from_byte: Option<i64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub revision: Option<String>,
 }
 
 impl Command for GetJobOutputCommand {

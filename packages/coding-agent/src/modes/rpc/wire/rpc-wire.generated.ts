@@ -1191,9 +1191,11 @@ export interface JobOutput {
 	nextByte: number;
 	/** Size in bytes of the whole output snapshot. */
 	totalBytes: number;
-	/** `fromByte` exceeded the snapshot and reading restarted at zero. */
+	/** `fromByte` exceeded the snapshot, or it no longer starts with what the caller holds (`revision` mismatch), so reading restarted at zero. */
 	reset: boolean;
 	output: string;
+	/** Identifies the snapshot bytes before `nextByte`; send it back with `fromByte: nextByte`. */
+	revision?: string;
 }
 
 export interface SubagentHistoryMetrics {
@@ -2711,6 +2713,7 @@ export interface GetJobsParams {
 export interface GetJobOutputParams {
 	jobId: string;
 	fromByte?: number;
+	revision?: string;
 }
 
 export interface CancelJobParams {
