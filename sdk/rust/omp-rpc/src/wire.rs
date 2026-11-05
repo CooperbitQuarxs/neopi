@@ -4515,6 +4515,92 @@ pub struct JobOutput {
 	pub output: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubagentHistoryMetrics {
+	pub tokens: f64,
+	pub requests: f64,
+	pub tools: f64,
+	pub cost: f64,
+	#[serde(rename = "durationMs")]
+	pub duration_ms: f64,
+	#[serde(rename = "contextTokens", default, skip_serializing_if = "Option::is_none")]
+	pub context_tokens: Option<f64>,
+	#[serde(rename = "contextWindow", default, skip_serializing_if = "Option::is_none")]
+	pub context_window: Option<f64>,
+}
+
+/// One child of the root session's tree.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubagentHistoryEntry {
+	pub id: String,
+	pub kind: SubagentHistoryEntryKind,
+	#[serde(rename = "displayName")]
+	pub display_name: String,
+	/// `parked` children finished and are resumable; `aborted` ones were killed. Failure detail is not persisted.
+	pub status: SubagentHistoryEntryStatus,
+	/// The child's session is in memory (`running` or `idle`).
+	pub live: bool,
+	#[serde(rename = "sessionFile")]
+	pub session_file: String,
+	#[serde(rename = "createdAt")]
+	pub created_at: f64,
+	#[serde(rename = "lastActivity")]
+	pub last_activity: f64,
+	#[serde(rename = "parentId", default, skip_serializing_if = "Option::is_none")]
+	pub parent_id: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub agent: Option<String>,
+	/// Persisted task gist, or the current activity of a live child.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
+	#[serde(rename = "responseAt", default, skip_serializing_if = "Option::is_none")]
+	pub response_at: Option<f64>,
+	#[serde(rename = "acceptedAt", default, skip_serializing_if = "Option::is_none")]
+	pub accepted_at: Option<f64>,
+	#[serde(rename = "terminalAt", default, skip_serializing_if = "Option::is_none")]
+	pub terminal_at: Option<f64>,
+	/// Known only from the live roster.
+	#[serde(rename = "parentToolCallId", default, skip_serializing_if = "Option::is_none")]
+	pub parent_tool_call_id: Option<String>,
+	#[serde(rename = "resolvedModel", default, skip_serializing_if = "Option::is_none")]
+	pub resolved_model: Option<String>,
+	#[serde(rename = "resolvedModelIdentity", default, skip_serializing_if = "Option::is_none")]
+	pub resolved_model_identity: Option<String>,
+	#[serde(rename = "resolvedThinkingLevel", default, skip_serializing_if = "Option::is_none")]
+	pub resolved_thinking_level: Option<ConfiguredThinkingLevel>,
+	/// Live children only.
+	#[serde(rename = "fastModeEnabled", default, skip_serializing_if = "Option::is_none")]
+	pub fast_mode_enabled: Option<bool>,
+	/// Live children only.
+	#[serde(rename = "fastModeActive", default, skip_serializing_if = "Option::is_none")]
+	pub fast_mode_active: Option<bool>,
+	#[serde(rename = "modelRole", default, skip_serializing_if = "Option::is_none")]
+	pub model_role: Option<String>,
+	#[serde(rename = "readOnly", default, skip_serializing_if = "Option::is_none")]
+	pub read_only: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub metrics: Option<SubagentHistoryMetrics>,
+	/// Cumulative cost of the child's own session, excluding nested task results.
+	#[serde(rename = "directCost", default, skip_serializing_if = "Option::is_none")]
+	pub direct_cost: Option<f64>,
+	#[serde(rename = "outputPath", default, skip_serializing_if = "Option::is_none")]
+	pub output_path: Option<String>,
+	#[serde(rename = "patchPath", default, skip_serializing_if = "Option::is_none")]
+	pub patch_path: Option<String>,
+	#[serde(rename = "branchName", default, skip_serializing_if = "Option::is_none")]
+	pub branch_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubagentHistory {
+	/// Oldest first.
+	pub subagents: Vec<SubagentHistoryEntry>,
+	#[serde(rename = "rootSessionFile", default, skip_serializing_if = "Option::is_none")]
+	pub root_session_file: Option<String>,
+	#[serde(rename = "rootAgentId", default, skip_serializing_if = "Option::is_none")]
+	pub root_agent_id: Option<String>,
+}
+
 /// Incremental subagent transcript read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SubagentMessages {
@@ -7203,6 +7289,12 @@ pub struct GetSubagentsResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetSubagentHistoryParams {
+	#[serde(rename = "includeAdvisors", default, skip_serializing_if = "Option::is_none")]
+	pub include_advisors: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GetSubagentMessagesParams {
 	#[serde(rename = "subagentId", default, skip_serializing_if = "Option::is_none")]
 	pub subagent_id: Option<String>,
@@ -8188,6 +8280,48 @@ impl NavigateTreeResultOutcome {
 			Self::Unchanged => "unchanged",
 			Self::Cancelled => "cancelled",
 			Self::AskReopen => "ask_reopen",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SubagentHistoryEntryKind {
+	#[serde(rename = "sub")]
+	Sub,
+	#[serde(rename = "advisor")]
+	Advisor,
+}
+
+impl SubagentHistoryEntryKind {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Sub => "sub",
+			Self::Advisor => "advisor",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SubagentHistoryEntryStatus {
+	#[serde(rename = "running")]
+	Running,
+	#[serde(rename = "idle")]
+	Idle,
+	#[serde(rename = "parked")]
+	Parked,
+	#[serde(rename = "aborted")]
+	Aborted,
+}
+
+impl SubagentHistoryEntryStatus {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Running => "running",
+			Self::Idle => "idle",
+			Self::Parked => "parked",
+			Self::Aborted => "aborted",
 		}
 	}
 }
@@ -10002,7 +10136,24 @@ impl Command for GetSubagentsCommand {
 	}
 }
 
-/// Read a subagent transcript by id or registered session file (`subagentId` wins).
+/// List every child of the root session's tree, live or persisted (finished, parked, aborted), hydrated like the Agent Hub, oldest first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GetSubagentHistoryCommand {
+	#[serde(rename = "includeAdvisors", default, skip_serializing_if = "Option::is_none")]
+	pub include_advisors: Option<bool>,
+}
+
+impl Command for GetSubagentHistoryCommand {
+	const NAME: &'static str = "get_subagent_history";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = SubagentHistory;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<SubagentHistory>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Read a subagent transcript by id or session file (`subagentId` wins); persisted children of the root session's tree resolve too.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct GetSubagentMessagesCommand {
 	#[serde(rename = "subagentId", default, skip_serializing_if = "Option::is_none")]

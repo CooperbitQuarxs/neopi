@@ -371,8 +371,14 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		unwrap: "subagents",
 	},
 	{
+		name: "get_subagent_history",
+		doc: "List every child of the root session's tree, live or persisted (finished, parked, aborted), hydrated like the Agent Hub, oldest first.",
+		params: { "includeAdvisors?": "boolean" },
+		result: "SubagentHistory",
+	},
+	{
 		name: "get_subagent_messages",
-		doc: "Read a subagent transcript by id or registered session file (`subagentId` wins).",
+		doc: "Read a subagent transcript by id or session file (`subagentId` wins); persisted children of the root session's tree resolve too.",
 		params: { "subagentId?": "string", "sessionFile?": "string", "fromByte?": "number.integer" },
 		result: "SubagentMessages",
 	},

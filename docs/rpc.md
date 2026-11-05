@@ -56,6 +56,7 @@ Behavior notes:
 | `session_journal_events` | Native journal commits, active-leaf changes, session identity changes and durable streaming-message associations. See [Native journal events](#native-journal-events). |
 | `session_tree_navigation` | Guarded native same-file `navigate_tree`, restored drafts and images, and explicit `resume_tree` acknowledgement for ask re-answers. See [Native tree navigation](#native-tree-navigation). |
 | `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
+| `subagent_history` | `get_subagent_history` (the full persisted child roster) and persisted-child reads in `get_subagent_messages`. See [Subagent subscriptions](#subagent-subscriptions). |
 | `dictation` | Draft-only `dictation_start` / `dictation_stop`, their frames, and `get_state.dictationEnabled`. Stdio, and control sockets of terminal-owned sessions. See [Dictation Sub-Protocol](#dictation-sub-protocol). |
 | `status_facts` | `get_state.hostname`, `activeTimeMs` and `runningJobCount`, the TUI status line's facts. See [`get_roles` and `set_role` payloads](#get_roles-and-set_role-payloads). |
 | `background_jobs` | `get_jobs`, `get_job_output`, `cancel_job` and stdio `job_lifecycle` frames. See [Background jobs](#background-jobs). |
@@ -1806,6 +1807,30 @@ message entries. Only complete newline-terminated records are consumed; reuse
 `nextByte` on the next request. A missing transcript returns empty arrays.
 If `fromByte` exceeds the current file size, reading restarts at byte zero and
 reports `reset: true`.
+
+With the `subagent_history` capability, `get_subagent_history { includeAdvisors? }`
+returns `{ rootSessionFile?, rootAgentId?, subagents }`: every child of the root
+session's tree, oldest first, live or persisted. It hydrates the session's
+artifacts tree the way the Agent Hub does, so finished and killed children
+survive a host restart, which `get_subagents` (active children only) does not.
+Each entry has `id`, `kind` (`sub`, or `advisor` when `includeAdvisors` is true),
+`parentId`, `displayName`, `agent`, `description` (persisted task gist or live
+activity), `status`, `live`, `sessionFile`, `createdAt`, `lastActivity`,
+`responseAt`/`acceptedAt`/`terminalAt`, `parentToolCallId` (only while the live
+roster knows it), the model facts `resolvedModel`, `resolvedModelIdentity`,
+`resolvedThinkingLevel`, `fastModeEnabled`/`fastModeActive` (live children),
+`modelRole`, `readOnly`, `metrics` (`tokens`, `requests`, `tools`, `cost`,
+`durationMs`, `contextTokens?`, `contextWindow?`), `directCost`, and the
+`outputPath`/`patchPath`/`branchName` artifacts when captured. `status` is the
+registry's: `running`, `idle`, `parked` (finished, resumable) or `aborted`
+(killed). The registry keeps no completed/failed split and failure detail is not
+persisted, so none is reported. Control sockets serve the command for terminal
+sessions too, with no event bus needed.
+
+With the same capability `get_subagent_messages` also reads persisted children of
+the root's artifacts tree by `subagentId` or `sessionFile`, with the same
+incremental result. Files outside the tree, and the root transcript itself, are
+rejected.
 
 ### Cancelling subagents
 
