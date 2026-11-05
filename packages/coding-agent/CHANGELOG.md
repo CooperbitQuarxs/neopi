@@ -9,6 +9,7 @@
 
 ### Added
 
+- RPC and the control socket list the whole subagent tree of a session, including finished, parked and aborted children, with `get_subagent_history`, and `get_subagent_messages` reads their persisted transcripts, so a restarted host can rebuild its Agents panel; hosts gate on the `subagent_history` capability ([#680](https://github.com/PsychedelicShayna/neopi/issues/680)).
 - `/personality <name>` and `/notice <text>` now run in RPC, ACP and control sessions (bare `/personality` lists the names); the terminal keeps its manager and confirmation ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).
 - RPC `get_command_completions { command, prefix }` returns a slash command's argument completions (subcommands, personality names) to hosts without a terminal; hosts gate on the `command_completions` capability ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).
 - RPC lists every slash command in `get_available_commands` with its `availability` (`headless` or `tui`), and a `prompt` that names a terminal-only command answers `command_requires_tui` instead of being sent to the model; hosts gate on the `command_catalog` capability ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).

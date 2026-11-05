@@ -584,8 +584,19 @@
 				"clientOmit": []
 			},
 			{
+				"name": "get_subagent_history",
+				"doc": "List every child of the root session's tree, live or persisted (finished, parked, aborted), hydrated like the Agent Hub, oldest first.",
+				"params": "GetSubagentHistoryParams",
+				"result": "SubagentHistory",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "get_subagent_messages",
-				"doc": "Read a subagent transcript by id or registered session file (`subagentId` wins).",
+				"doc": "Read a subagent transcript by id or session file (`subagentId` wins); persisted children of the root session's tree resolve too.",
 				"params": "GetSubagentMessagesParams",
 				"result": "SubagentMessages",
 				"nullable": false,
@@ -5626,6 +5637,174 @@
 				"output"
 			]
 		},
+		"SubagentHistoryMetrics": {
+			"type": "object",
+			"properties": {
+				"tokens": {
+					"type": "number"
+				},
+				"requests": {
+					"type": "number"
+				},
+				"tools": {
+					"type": "number"
+				},
+				"cost": {
+					"type": "number"
+				},
+				"durationMs": {
+					"type": "number"
+				},
+				"contextTokens": {
+					"type": "number"
+				},
+				"contextWindow": {
+					"type": "number"
+				}
+			},
+			"required": [
+				"tokens",
+				"requests",
+				"tools",
+				"cost",
+				"durationMs"
+			]
+		},
+		"SubagentHistoryEntry": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"kind": {
+					"enum": [
+						"sub",
+						"advisor"
+					],
+					"type": "string"
+				},
+				"displayName": {
+					"type": "string"
+				},
+				"status": {
+					"enum": [
+						"running",
+						"idle",
+						"parked",
+						"aborted"
+					],
+					"type": "string",
+					"description": "`parked` children finished and are resumable; `aborted` ones were killed. Failure detail is not persisted."
+				},
+				"live": {
+					"type": "boolean",
+					"description": "The child's session is in memory (`running` or `idle`)."
+				},
+				"sessionFile": {
+					"type": "string"
+				},
+				"createdAt": {
+					"type": "number"
+				},
+				"lastActivity": {
+					"type": "number"
+				},
+				"parentId": {
+					"type": "string"
+				},
+				"agent": {
+					"type": "string"
+				},
+				"description": {
+					"type": "string",
+					"description": "Persisted task gist, or the current activity of a live child."
+				},
+				"responseAt": {
+					"type": "number"
+				},
+				"acceptedAt": {
+					"type": "number"
+				},
+				"terminalAt": {
+					"type": "number"
+				},
+				"parentToolCallId": {
+					"type": "string",
+					"description": "Known only from the live roster."
+				},
+				"resolvedModel": {
+					"type": "string"
+				},
+				"resolvedModelIdentity": {
+					"type": "string"
+				},
+				"resolvedThinkingLevel": {
+					"$ref": "#/$defs/ConfiguredThinkingLevel"
+				},
+				"fastModeEnabled": {
+					"type": "boolean",
+					"description": "Live children only."
+				},
+				"fastModeActive": {
+					"type": "boolean",
+					"description": "Live children only."
+				},
+				"modelRole": {
+					"type": "string"
+				},
+				"readOnly": {
+					"type": "boolean"
+				},
+				"metrics": {
+					"$ref": "#/$defs/SubagentHistoryMetrics"
+				},
+				"directCost": {
+					"type": "number",
+					"description": "Cumulative cost of the child's own session, excluding nested task results."
+				},
+				"outputPath": {
+					"type": "string"
+				},
+				"patchPath": {
+					"type": "string"
+				},
+				"branchName": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"id",
+				"kind",
+				"displayName",
+				"status",
+				"live",
+				"sessionFile",
+				"createdAt",
+				"lastActivity"
+			],
+			"description": "One child of the root session's tree."
+		},
+		"SubagentHistory": {
+			"type": "object",
+			"properties": {
+				"subagents": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/SubagentHistoryEntry"
+					},
+					"description": "Oldest first."
+				},
+				"rootSessionFile": {
+					"type": "string"
+				},
+				"rootAgentId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"subagents"
+			]
+		},
 		"SubagentMessages": {
 			"type": "object",
 			"properties": {
@@ -10578,6 +10757,14 @@
 			"required": [
 				"subagents"
 			]
+		},
+		"GetSubagentHistoryParams": {
+			"type": "object",
+			"properties": {
+				"includeAdvisors": {
+					"type": "boolean"
+				}
+			}
 		},
 		"GetSubagentMessagesParams": {
 			"type": "object",

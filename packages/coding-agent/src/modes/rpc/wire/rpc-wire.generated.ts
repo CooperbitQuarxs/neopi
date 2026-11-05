@@ -1196,6 +1196,61 @@ export interface JobOutput {
 	output: string;
 }
 
+export interface SubagentHistoryMetrics {
+	tokens: number;
+	requests: number;
+	tools: number;
+	cost: number;
+	durationMs: number;
+	contextTokens?: number;
+	contextWindow?: number;
+}
+
+/** One child of the root session's tree. */
+export interface SubagentHistoryEntry {
+	id: string;
+	kind: "sub" | "advisor";
+	displayName: string;
+	/** `parked` children finished and are resumable; `aborted` ones were killed. Failure detail is not persisted. */
+	status: "running" | "idle" | "parked" | "aborted";
+	/** The child's session is in memory (`running` or `idle`). */
+	live: boolean;
+	sessionFile: string;
+	createdAt: number;
+	lastActivity: number;
+	parentId?: string;
+	agent?: string;
+	/** Persisted task gist, or the current activity of a live child. */
+	description?: string;
+	responseAt?: number;
+	acceptedAt?: number;
+	terminalAt?: number;
+	/** Known only from the live roster. */
+	parentToolCallId?: string;
+	resolvedModel?: string;
+	resolvedModelIdentity?: string;
+	resolvedThinkingLevel?: ConfiguredThinkingLevel;
+	/** Live children only. */
+	fastModeEnabled?: boolean;
+	/** Live children only. */
+	fastModeActive?: boolean;
+	modelRole?: string;
+	readOnly?: boolean;
+	metrics?: SubagentHistoryMetrics;
+	/** Cumulative cost of the child's own session, excluding nested task results. */
+	directCost?: number;
+	outputPath?: string;
+	patchPath?: string;
+	branchName?: string;
+}
+
+export interface SubagentHistory {
+	/** Oldest first. */
+	subagents: SubagentHistoryEntry[];
+	rootSessionFile?: string;
+	rootAgentId?: string;
+}
+
 /** Incremental subagent transcript read. */
 export interface SubagentMessages {
 	sessionFile: string;
@@ -2607,6 +2662,10 @@ export interface GetSubagentsResult {
 	subagents: SubagentSnapshot[];
 }
 
+export interface GetSubagentHistoryParams {
+	includeAdvisors?: boolean;
+}
+
 export interface GetSubagentMessagesParams {
 	subagentId?: string;
 	sessionFile?: string;
@@ -2944,6 +3003,7 @@ export interface RpcWireCommands {
 	set_subagent_subscription: { params: SetSubagentSubscriptionParams; result: SetSubagentSubscriptionResult };
 	set_event_filter: { params: SetEventFilterParams; result: SetEventFilterResult };
 	get_subagents: { params: undefined; result: GetSubagentsResult };
+	get_subagent_history: { params: GetSubagentHistoryParams; result: SubagentHistory };
 	get_subagent_messages: { params: GetSubagentMessagesParams; result: SubagentMessages };
 	cancel_subagent: { params: CancelSubagentParams; result: CancelSubagentResult };
 	steer_subagent: { params: SteerSubagentParams; result: undefined };

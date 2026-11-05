@@ -103,6 +103,8 @@ import { RpcSessionSettleWatcher, watchedScheduledTurnProbe } from "./rpc-sessio
 import { buildRpcSessionState } from "./rpc-session-state";
 import {
 	handleRpcSetSubagentModel,
+	listRpcSubagentHistory,
+	resolvePersistedSubagentFile,
 	type RpcSubagentBus,
 	RpcSubagentRegistry,
 	readRpcSubagentTranscript,
@@ -2242,15 +2244,36 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				return success(id, "get_subagents", { subagents: subagentRegistry.getSubagents() });
 			}
 
-			case "get_subagent_messages": {
-				if (!subagentRegistry) {
-					return error(id, "get_subagent_messages", "Subagent event bus is unavailable");
+			case "get_subagent_history": {
+				if (command.includeAdvisors !== undefined && typeof command.includeAdvisors !== "boolean") {
+					return error(id, command.type, "`includeAdvisors` must be a boolean.");
 				}
+				try {
+					return success(
+						id,
+						command.type,
+						await listRpcSubagentHistory(session, subagentRegistry, { includeAdvisors: command.includeAdvisors }),
+					);
+				} catch (err) {
+					return error(id, command.type, err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_subagent_messages": {
 				try {
 					if (command.fromByte !== undefined && !Number.isFinite(command.fromByte)) {
 						return error(id, "get_subagent_messages", "fromByte must be a finite number");
 					}
-					const sessionFile = subagentRegistry.resolveSessionFile(command);
+					let sessionFile: string;
+					try {
+						if (!subagentRegistry) throw new Error("Subagent event bus is unavailable");
+						sessionFile = subagentRegistry.resolveSessionFile(command);
+					} catch (liveError) {
+						// Not in the live roster: a persisted child of this session's tree still reads.
+						const persisted = await resolvePersistedSubagentFile(session, command);
+						if (!persisted) throw liveError;
+						sessionFile = persisted;
+					}
 					const transcript = await readRpcSubagentTranscript(sessionFile, command.fromByte);
 					return success(id, "get_subagent_messages", transcript);
 				} catch (err) {

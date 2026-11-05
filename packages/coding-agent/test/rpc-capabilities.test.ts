@@ -6,7 +6,10 @@ import { rpcCommands } from "@oh-my-pi/pi-coding-agent/modes/rpc/wire/commands";
 /** Capabilities whose string is the name of the command they advertise. */
 const COMMAND_CAPABILITIES = ["set_subagent_model", "cycle_role"];
 /** Capabilities whose commands carry another name. */
-const NAMED_COMMAND_CAPABILITIES: Record<string, string> = { command_completions: "get_command_completions" };
+const NAMED_COMMAND_CAPABILITIES: Record<string, string> = {
+	command_completions: "get_command_completions",
+	subagent_history: "get_subagent_history",
+};
 
 describe("RPC ready capabilities", () => {
 	test("never repeat a string", () => {
