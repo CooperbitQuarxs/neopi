@@ -122,6 +122,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_approval_handler"; handler: RpcApprovalHandler }
 	| { id?: string; type: "get_subagents" }
 	| { id?: string; type: "get_subagent_messages"; subagentId?: string; sessionFile?: string; fromByte?: number }
+	| { id?: string; type: "get_subagent_history"; includeAdvisors?: boolean }
 	| { id?: string; type: "cancel_subagent"; subagentId: string }
 	| { id?: string; type: "steer_subagent"; subagentId: string; message: string }
 	| { id?: string; type: "set_subagent_thinking_level"; subagentId: string; level: ThinkingLevel }
@@ -615,6 +616,58 @@ export interface RpcSetSubagentModelResult {
 	warning?: string;
 }
 
+/** One child of the root session's tree in the `get_subagent_history` roster. */
+export interface RpcSubagentHistoryEntry {
+	id: string;
+	kind: "sub" | "advisor";
+	parentId?: string;
+	displayName: string;
+	agent?: string;
+	/** Persisted task gist, or the current activity of a live child. */
+	description?: string;
+	/** `parked` children finished and are resumable; `aborted` ones were killed. Failure detail is not persisted. */
+	status: "running" | "idle" | "parked" | "aborted";
+	/** The child's session is in memory (`running` or `idle`). */
+	live: boolean;
+	sessionFile: string;
+	createdAt: number;
+	lastActivity: number;
+	responseAt?: number;
+	acceptedAt?: number;
+	terminalAt?: number;
+	/** Known only from the live roster. */
+	parentToolCallId?: string;
+	resolvedModel?: string;
+	resolvedModelIdentity?: string;
+	resolvedThinkingLevel?: ConfiguredThinkingLevel;
+	/** Live children only. */
+	fastModeEnabled?: boolean;
+	fastModeActive?: boolean;
+	modelRole?: string;
+	readOnly?: boolean;
+	metrics?: {
+		tokens: number;
+		requests: number;
+		tools: number;
+		cost: number;
+		durationMs: number;
+		contextTokens?: number;
+		contextWindow?: number;
+	};
+	/** Cumulative cost of the child's own session, excluding nested task results. */
+	directCost?: number;
+	outputPath?: string;
+	patchPath?: string;
+	branchName?: string;
+}
+
+export interface RpcSubagentHistoryResult {
+	rootSessionFile?: string;
+	rootAgentId?: string;
+	/** Oldest first. */
+	subagents: RpcSubagentHistoryEntry[];
+}
+
 export interface RpcSubagentMessagesResult {
 	sessionFile: string;
 	fromByte: number;
@@ -748,6 +801,13 @@ export type RpcResponse =
 			command: "get_subagents";
 			success: true;
 			data: { subagents: RpcSubagentSnapshot[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_subagent_history";
+			success: true;
+			data: RpcSubagentHistoryResult;
 	  }
 	| {
 			id?: string;

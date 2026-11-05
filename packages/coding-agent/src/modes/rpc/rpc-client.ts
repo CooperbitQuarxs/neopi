@@ -75,6 +75,7 @@ import type {
 	RpcSubagentMessagesResult,
 	RpcSubagentProgressFrame,
 	RpcSetSubagentModelResult,
+	RpcSubagentHistoryResult,
 	RpcSubagentSnapshot,
 	RpcSubagentSubscriptionLevel,
 	RpcToolApprovalCancel,
@@ -1215,6 +1216,14 @@ export class RpcClient {
 	/** Change a running subagent's thinking level from its next provider request. */
 	async setSubagentThinkingLevel(subagentId: string, level: ThinkingLevel): Promise<void> {
 		this.#getData(await this.#send({ type: "set_subagent_thinking_level", subagentId, level }));
+	}
+
+	/**
+	 * Every child of the root session's tree, live or persisted (capability `subagent_history`), oldest
+	 * first. Unlike {@link getSubagents} it survives a restart: finished, parked and aborted children stay.
+	 */
+	async getSubagentHistory(includeAdvisors = false): Promise<RpcSubagentHistoryResult> {
+		return this.#getData(await this.#send({ type: "get_subagent_history", includeAdvisors }));
 	}
 
 	/** Enable or disable fast mode only for the selected running subagent. */

@@ -5421,6 +5421,182 @@ func (v *JobOutput) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type SubagentHistoryMetrics struct {
+	Tokens        float64  `json:"tokens"`
+	Requests      float64  `json:"requests"`
+	Tools         float64  `json:"tools"`
+	Cost          float64  `json:"cost"`
+	DurationMs    float64  `json:"durationMs"`
+	ContextTokens *float64 `json:"contextTokens,omitempty"`
+	ContextWindow *float64 `json:"contextWindow,omitempty"`
+}
+
+func (v *SubagentHistoryMetrics) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SubagentHistoryMetrics", v.decodeFrom)
+}
+
+func (v *SubagentHistoryMetrics) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SubagentHistoryMetrics
+	d := fieldDecoder{raw: raw, owner: "SubagentHistoryMetrics"}
+	d.required("tokens", &out.Tokens)
+	d.required("requests", &out.Requests)
+	d.required("tools", &out.Tools)
+	d.required("cost", &out.Cost)
+	d.required("durationMs", &out.DurationMs)
+	d.optional("contextTokens", &out.ContextTokens)
+	d.optional("contextWindow", &out.ContextWindow)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+// One child of the root session's tree.
+type SubagentHistoryEntry struct {
+	ID          string                   `json:"id"`
+	Kind        SubagentHistoryEntryKind `json:"kind"`
+	DisplayName string                   `json:"displayName"`
+	// `parked` children finished and are resumable; `aborted` ones were killed. Failure detail is not persisted.
+	Status SubagentHistoryEntryStatus `json:"status"`
+	// The child's session is in memory (`running` or `idle`).
+	Live         bool    `json:"live"`
+	SessionFile  string  `json:"sessionFile"`
+	CreatedAt    float64 `json:"createdAt"`
+	LastActivity float64 `json:"lastActivity"`
+	ParentID     *string `json:"parentId,omitempty"`
+	Agent        *string `json:"agent,omitempty"`
+	// Persisted task gist, or the current activity of a live child.
+	Description *string  `json:"description,omitempty"`
+	ResponseAt  *float64 `json:"responseAt,omitempty"`
+	AcceptedAt  *float64 `json:"acceptedAt,omitempty"`
+	TerminalAt  *float64 `json:"terminalAt,omitempty"`
+	// Known only from the live roster.
+	ParentToolCallID      *string                  `json:"parentToolCallId,omitempty"`
+	ResolvedModel         *string                  `json:"resolvedModel,omitempty"`
+	ResolvedModelIdentity *string                  `json:"resolvedModelIdentity,omitempty"`
+	ResolvedThinkingLevel *ConfiguredThinkingLevel `json:"resolvedThinkingLevel,omitempty"`
+	// Live children only.
+	FastModeEnabled *bool `json:"fastModeEnabled,omitempty"`
+	// Live children only.
+	FastModeActive *bool                   `json:"fastModeActive,omitempty"`
+	ModelRole      *string                 `json:"modelRole,omitempty"`
+	ReadOnly       *bool                   `json:"readOnly,omitempty"`
+	Metrics        *SubagentHistoryMetrics `json:"metrics,omitempty"`
+	// Cumulative cost of the child's own session, excluding nested task results.
+	DirectCost *float64 `json:"directCost,omitempty"`
+	OutputPath *string  `json:"outputPath,omitempty"`
+	PatchPath  *string  `json:"patchPath,omitempty"`
+	BranchName *string  `json:"branchName,omitempty"`
+}
+
+func (v *SubagentHistoryEntry) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SubagentHistoryEntry", v.decodeFrom)
+}
+
+func (v *SubagentHistoryEntry) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SubagentHistoryEntry
+	d := fieldDecoder{raw: raw, owner: "SubagentHistoryEntry"}
+	d.required("id", &out.ID)
+	d.required("kind", &out.Kind)
+	d.required("displayName", &out.DisplayName)
+	d.required("status", &out.Status)
+	d.required("live", &out.Live)
+	d.required("sessionFile", &out.SessionFile)
+	d.required("createdAt", &out.CreatedAt)
+	d.required("lastActivity", &out.LastActivity)
+	d.optional("parentId", &out.ParentID)
+	d.optional("agent", &out.Agent)
+	d.optional("description", &out.Description)
+	d.optional("responseAt", &out.ResponseAt)
+	d.optional("acceptedAt", &out.AcceptedAt)
+	d.optional("terminalAt", &out.TerminalAt)
+	d.optional("parentToolCallId", &out.ParentToolCallID)
+	d.optional("resolvedModel", &out.ResolvedModel)
+	d.optional("resolvedModelIdentity", &out.ResolvedModelIdentity)
+	d.optional("resolvedThinkingLevel", &out.ResolvedThinkingLevel)
+	d.optional("fastModeEnabled", &out.FastModeEnabled)
+	d.optional("fastModeActive", &out.FastModeActive)
+	d.optional("modelRole", &out.ModelRole)
+	d.optional("readOnly", &out.ReadOnly)
+	d.optional("metrics", &out.Metrics)
+	d.optional("directCost", &out.DirectCost)
+	d.optional("outputPath", &out.OutputPath)
+	d.optional("patchPath", &out.PatchPath)
+	d.optional("branchName", &out.BranchName)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type SubagentHistoryEntryKind string
+
+const (
+	SubagentHistoryEntryKindSub     SubagentHistoryEntryKind = "sub"
+	SubagentHistoryEntryKindAdvisor SubagentHistoryEntryKind = "advisor"
+)
+
+func (v *SubagentHistoryEntryKind) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SubagentHistoryEntryKind")
+	if err != nil {
+		return err
+	}
+	switch value := SubagentHistoryEntryKind(s); value {
+	case SubagentHistoryEntryKindSub, SubagentHistoryEntryKindAdvisor:
+		*v = value
+		return nil
+	}
+	return unknownValue("SubagentHistoryEntryKind", s)
+}
+
+type SubagentHistoryEntryStatus string
+
+const (
+	SubagentHistoryEntryStatusRunning SubagentHistoryEntryStatus = "running"
+	SubagentHistoryEntryStatusIdle    SubagentHistoryEntryStatus = "idle"
+	SubagentHistoryEntryStatusParked  SubagentHistoryEntryStatus = "parked"
+	SubagentHistoryEntryStatusAborted SubagentHistoryEntryStatus = "aborted"
+)
+
+func (v *SubagentHistoryEntryStatus) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SubagentHistoryEntryStatus")
+	if err != nil {
+		return err
+	}
+	switch value := SubagentHistoryEntryStatus(s); value {
+	case SubagentHistoryEntryStatusRunning, SubagentHistoryEntryStatusIdle, SubagentHistoryEntryStatusParked, SubagentHistoryEntryStatusAborted:
+		*v = value
+		return nil
+	}
+	return unknownValue("SubagentHistoryEntryStatus", s)
+}
+
+type SubagentHistory struct {
+	// Oldest first.
+	Subagents       []SubagentHistoryEntry `json:"subagents"`
+	RootSessionFile *string                `json:"rootSessionFile,omitempty"`
+	RootAgentID     *string                `json:"rootAgentId,omitempty"`
+}
+
+func (v *SubagentHistory) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SubagentHistory", v.decodeFrom)
+}
+
+func (v *SubagentHistory) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SubagentHistory
+	d := fieldDecoder{raw: raw, owner: "SubagentHistory"}
+	d.required("subagents", &out.Subagents)
+	d.optional("rootSessionFile", &out.RootSessionFile)
+	d.optional("rootAgentId", &out.RootAgentID)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 // Incremental subagent transcript read.
 type SubagentMessages struct {
 	SessionFile string `json:"sessionFile"`
@@ -12559,6 +12735,18 @@ func (c Commands) GetSubagents(ctx context.Context) ([]SubagentSnapshot, error) 
 	return out.Subagents, err
 }
 
+// GetSubagentHistoryCommand holds the parameters of "get_subagent_history".
+type GetSubagentHistoryCommand struct {
+	IncludeAdvisors *bool `json:"includeAdvisors,omitempty"`
+}
+
+// GetSubagentHistory sends "get_subagent_history": List every child of the root session's tree, live or persisted (finished, parked, aborted), hydrated like the Agent Hub, oldest first.
+func (c Commands) GetSubagentHistory(ctx context.Context, p GetSubagentHistoryCommand) (SubagentHistory, error) {
+	var out SubagentHistory
+	err := c.call(ctx, "get_subagent_history", p, 0, &out)
+	return out, err
+}
+
 // GetSubagentMessagesCommand holds the parameters of "get_subagent_messages".
 type GetSubagentMessagesCommand struct {
 	SubagentID  *string `json:"subagentId,omitempty"`
@@ -12566,7 +12754,7 @@ type GetSubagentMessagesCommand struct {
 	FromByte    *int64  `json:"fromByte,omitempty"`
 }
 
-// GetSubagentMessages sends "get_subagent_messages": Read a subagent transcript by id or registered session file (`subagentId` wins).
+// GetSubagentMessages sends "get_subagent_messages": Read a subagent transcript by id or session file (`subagentId` wins); persisted children of the root session's tree resolve too.
 func (c Commands) GetSubagentMessages(ctx context.Context, p GetSubagentMessagesCommand) (SubagentMessages, error) {
 	var out SubagentMessages
 	err := c.call(ctx, "get_subagent_messages", p, 0, &out)

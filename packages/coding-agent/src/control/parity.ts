@@ -36,6 +36,7 @@ export const RPC_COMMAND_TYPES = [
 	"set_approval_handler",
 	"get_subagents",
 	"get_subagent_messages",
+	"get_subagent_history",
 	"cancel_subagent",
 	"steer_subagent",
 	"set_subagent_thinking_level",

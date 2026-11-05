@@ -1481,6 +1481,64 @@ class JobOutput:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class SubagentHistoryMetrics:
+    tokens: float
+    requests: float
+    tools: float
+    cost: float
+    duration_ms: float
+    context_tokens: float | None = None
+    context_window: float | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SubagentHistoryEntry:
+    """One child of the root session's tree."""
+    id: str
+    kind: Literal["sub", "advisor"]
+    display_name: str
+    status: Literal["running", "idle", "parked", "aborted"]
+    """`parked` children finished and are resumable; `aborted` ones were killed. Failure detail is not persisted."""
+    live: bool
+    """The child's session is in memory (`running` or `idle`)."""
+    session_file: str
+    created_at: float
+    last_activity: float
+    parent_id: str | None = None
+    agent: str | None = None
+    description: str | None = None
+    """Persisted task gist, or the current activity of a live child."""
+    response_at: float | None = None
+    accepted_at: float | None = None
+    terminal_at: float | None = None
+    parent_tool_call_id: str | None = None
+    """Known only from the live roster."""
+    resolved_model: str | None = None
+    resolved_model_identity: str | None = None
+    resolved_thinking_level: ConfiguredThinkingLevel | None = None
+    fast_mode_enabled: bool | None = None
+    """Live children only."""
+    fast_mode_active: bool | None = None
+    """Live children only."""
+    model_role: str | None = None
+    read_only: bool | None = None
+    metrics: SubagentHistoryMetrics | None = None
+    direct_cost: float | None = None
+    """Cumulative cost of the child's own session, excluding nested task results."""
+    output_path: str | None = None
+    patch_path: str | None = None
+    branch_name: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SubagentHistory:
+    subagents: tuple[SubagentHistoryEntry, ...]
+    """Oldest first."""
+    root_session_file: str | None = None
+    root_agent_id: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class SubagentMessages:
     """Incremental subagent transcript read."""
     session_file: str
@@ -3835,6 +3893,61 @@ def parse_job_output(value: object, path: str = "JobOutput") -> JobOutput:
     )
 
 
+def parse_subagent_history_metrics(value: object, path: str = "SubagentHistoryMetrics") -> SubagentHistoryMetrics:
+    payload = expect_object(value, path)
+    return SubagentHistoryMetrics(
+        tokens=required(payload, "tokens", decode_float, path),
+        requests=required(payload, "requests", decode_float, path),
+        tools=required(payload, "tools", decode_float, path),
+        cost=required(payload, "cost", decode_float, path),
+        duration_ms=required(payload, "durationMs", decode_float, path),
+        context_tokens=optional(payload, "contextTokens", decode_float, path),
+        context_window=optional(payload, "contextWindow", decode_float, path),
+    )
+
+
+def parse_subagent_history_entry(value: object, path: str = "SubagentHistoryEntry") -> SubagentHistoryEntry:
+    payload = expect_object(value, path)
+    return SubagentHistoryEntry(
+        id=required(payload, "id", decode_str, path),
+        kind=required(payload, "kind", cast('Decoder[Literal["sub", "advisor"]]', literal(frozenset({"sub", "advisor"}))), path),
+        display_name=required(payload, "displayName", decode_str, path),
+        status=required(payload, "status", cast('Decoder[Literal["running", "idle", "parked", "aborted"]]', literal(frozenset({"running", "idle", "parked", "aborted"}))), path),
+        live=required(payload, "live", decode_bool, path),
+        session_file=required(payload, "sessionFile", decode_str, path),
+        created_at=required(payload, "createdAt", decode_float, path),
+        last_activity=required(payload, "lastActivity", decode_float, path),
+        parent_id=optional(payload, "parentId", decode_str, path),
+        agent=optional(payload, "agent", decode_str, path),
+        description=optional(payload, "description", decode_str, path),
+        response_at=optional(payload, "responseAt", decode_float, path),
+        accepted_at=optional(payload, "acceptedAt", decode_float, path),
+        terminal_at=optional(payload, "terminalAt", decode_float, path),
+        parent_tool_call_id=optional(payload, "parentToolCallId", decode_str, path),
+        resolved_model=optional(payload, "resolvedModel", decode_str, path),
+        resolved_model_identity=optional(payload, "resolvedModelIdentity", decode_str, path),
+        resolved_thinking_level=optional(payload, "resolvedThinkingLevel", _decode_configured_thinking_level, path),
+        fast_mode_enabled=optional(payload, "fastModeEnabled", decode_bool, path),
+        fast_mode_active=optional(payload, "fastModeActive", decode_bool, path),
+        model_role=optional(payload, "modelRole", decode_str, path),
+        read_only=optional(payload, "readOnly", decode_bool, path),
+        metrics=optional(payload, "metrics", parse_subagent_history_metrics, path),
+        direct_cost=optional(payload, "directCost", decode_float, path),
+        output_path=optional(payload, "outputPath", decode_str, path),
+        patch_path=optional(payload, "patchPath", decode_str, path),
+        branch_name=optional(payload, "branchName", decode_str, path),
+    )
+
+
+def parse_subagent_history(value: object, path: str = "SubagentHistory") -> SubagentHistory:
+    payload = expect_object(value, path)
+    return SubagentHistory(
+        subagents=required(payload, "subagents", array(parse_subagent_history_entry), path),
+        root_session_file=optional(payload, "rootSessionFile", decode_str, path),
+        root_agent_id=optional(payload, "rootAgentId", decode_str, path),
+    )
+
+
 def parse_subagent_messages(value: object, path: str = "SubagentMessages") -> SubagentMessages:
     payload = expect_object(value, path)
     return SubagentMessages(
@@ -5699,8 +5812,15 @@ class WireClient:
         params: dict[str, object] = {}
         return required(expect_object(self._command("get_subagents", params), "get_subagents"), "subagents", array(parse_subagent_snapshot), "get_subagents")
 
+    def get_subagent_history(self, include_advisors: bool | None = None) -> SubagentHistory:
+        """List every child of the root session's tree, live or persisted (finished, parked, aborted), hydrated like the Agent Hub, oldest first."""
+        params: dict[str, object] = {}
+        if include_advisors is not None:
+            params["includeAdvisors"] = include_advisors
+        return parse_subagent_history(self._command("get_subagent_history", params), "get_subagent_history")
+
     def get_subagent_messages(self, *, subagent_id: str | None = None, session_file: str | None = None, from_byte: int | None = None) -> SubagentMessages:
-        """Read a subagent transcript by id or registered session file (`subagentId` wins)."""
+        """Read a subagent transcript by id or session file (`subagentId` wins); persisted children of the root session's tree resolve too."""
         params: dict[str, object] = {}
         if subagent_id is not None:
             params["subagentId"] = subagent_id
@@ -6607,6 +6727,9 @@ __all__ = [
     "StreamingBehavior",
     "SubagentEvent",
     "SubagentEventPayload",
+    "SubagentHistory",
+    "SubagentHistoryEntry",
+    "SubagentHistoryMetrics",
     "SubagentLifecycleEvent",
     "SubagentLifecyclePayload",
     "SubagentLifecycleStatus",
@@ -6876,6 +6999,9 @@ __all__ = [
     "parse_steer_result",
     "parse_subagent_event",
     "parse_subagent_event_payload",
+    "parse_subagent_history",
+    "parse_subagent_history_entry",
+    "parse_subagent_history_metrics",
     "parse_subagent_lifecycle_event",
     "parse_subagent_lifecycle_payload",
     "parse_subagent_messages",
