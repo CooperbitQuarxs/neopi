@@ -85,7 +85,7 @@ import { RpcBtwController } from "./rpc-btw";
 import { RpcGoalController } from "./rpc-goal";
 import { RpcLiveBridge, type RpcLiveControl, type RpcLiveSessionFactory } from "./rpc-live";
 import { findRpcModel, type RpcModelLookupSession, serializeRpcModel } from "./rpc-model";
-import { RpcDictationBridge, type RpcDictationControllerFactory } from "./rpc-dictation";
+import { RpcDictationBridge, type RpcDictationControl, type RpcDictationControllerFactory } from "./rpc-dictation";
 import { RpcOutputWriter } from "./rpc-output";
 import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } from "./rpc-plan-mode";
 import { RpcExtensionUserMessageTracker, RpcPromptResults, watchAndReportPromptResult } from "./rpc-prompt-results";
@@ -1551,7 +1551,7 @@ export interface RpcCommandHandlerContext {
 	btw?: RpcBtwController;
 	/** GPT live voice over RPC. */
 	liveBridge?: RpcLiveControl;
-	dictationBridge?: RpcDictationBridge;
+	dictationBridge?: RpcDictationControl;
 	stopDictationForSessionChange?: () => Promise<void>;
 	sessionChangesInProgress?: () => boolean;
 	mcpManager?: MCPManager;
