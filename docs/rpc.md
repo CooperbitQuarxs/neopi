@@ -56,6 +56,7 @@ Behavior notes:
 | `session_journal_events` | Native journal commits, active-leaf changes, session identity changes and durable streaming-message associations. See [Native journal events](#native-journal-events). |
 | `session_tree_navigation` | Guarded native same-file `navigate_tree`, restored drafts and images, and explicit `resume_tree` acknowledgement for ask re-answers. See [Native tree navigation](#native-tree-navigation). |
 | `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
+| `abort_and_restore_queue` | `abort_and_restore_queue` withdraws queued user input and aborts atomically (the TUI Esc); served over stdio and control. See [`abort_and_restore_queue` payload](#abort_and_restore_queue-payload). Hosts without it fall back to `abort`. |
 | `subagent_history` | `get_subagent_history` (the full persisted child roster) and persisted-child reads in `get_subagent_messages`. See [Subagent subscriptions](#subagent-subscriptions). |
 | `dictation` | Draft-only `dictation_start` / `dictation_stop`, their frames, and `get_state.dictationEnabled`. Stdio, and control sockets of terminal-owned sessions. See [Dictation Sub-Protocol](#dictation-sub-protocol). |
 | `status_facts` | `get_state.hostname`, `activeTimeMs` and `runningJobCount`, the TUI status line's facts. See [`get_roles` and `set_role` payloads](#get_roles-and-set_role-payloads). |
