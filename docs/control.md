@@ -28,6 +28,16 @@ Read `state` before a write. Pass `if` revisions on draft and surface commands. 
 - A headless session (`rpc`, `print`) has no composer, so `input`/`slash` answer `code: "no_tui"`. Send the text as an RPC `prompt` instead: it runs through the same builtin dispatcher, headless commands run, and a `tui` command answers `code: "command_requires_tui"` without reaching the model.
 - `get_command_completions { command, prefix }` is served over `rpc` for either kind of session; see [Available commands](./rpc.md#available-commands).
 
+### Dictation over control
+
+A terminal-owned session (control role `tui`) advertises `dictation` in its `ready`/hello capabilities and serves `dictation_start { captureId }` and `dictation_stop` with the semantics of the [Dictation Sub-Protocol](./rpc.md#dictation-sub-protocol): a draft-only capture from this process's microphone with the session's `stt.*` settings, never submitting a prompt. `session.dictationEnabled` in the `hello`/`state` snapshots reports `stt.enabled`; `dictation_start` is refused while it is off.
+
+- The `dictation_state`, `dictation_transcript` and `dictation_end` frames go only to the connection that sent `dictation_start`, not to other connections. Closing that connection ends the capture and frees the microphone.
+- One capture at a time per process. `dictation_start` fails with `The terminal's own dictation is active` while the terminal's composer microphone, push-to-talk or chord recording is running, `Dictation is already active on another control connection` while another connection records, and `A dictation capture is already active` for a second start on the same connection. Live voice and dictation exclude each other as over stdio.
+- Meanwhile the terminal's own composer microphone, push-to-talk and chord refuse to start (a status line says a control client is recording). The separate Ctrl+Space xAI path is not gated.
+- `dictation_stop` from a connection that is not recording returns empty text and leaves the capture running.
+- A headless control endpoint (`rpc`, `print`) has no terminal microphone owner: it does not advertise `dictation`, and `dictation_start` answers `Dictation is unavailable on this transport`.
+
 The `hello`, `get_status`, and `state` snapshots carry `session`: the same RPC session state `get_state` returns, minus the `systemPrompt` and `dumpTools` dump fields, so a snapshot stays one frame. `state` with `target: "view"` reports the subagent the pane is focused on and adds `root` (the root session id and generation); with nothing focused, or with the default `target: "root"`, it reports the root session.
 
 Control snapshots and subscribed `queue_update` events include an exact oldest prefix of each queue: at most 256 entries and 43,690 text characters per queue. The combined queues reserve at most half of a protocol-v1 frame even with worst-case JSON escaping. They stop before the first entry that would exceed either budget; no returned queue-chip text is shortened, so it remains valid for `remove_queued_message` and `promote_queued_message`. `queuedMessageCount` and `liveSteered` remain exact even when not all entries fit. RPC `get_state` keeps the full queue; `dequeue` can retrieve a full queued message.

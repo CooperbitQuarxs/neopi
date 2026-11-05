@@ -42,6 +42,8 @@ export interface TuiControlSurface {
 	runAction(id: string): boolean;
 	rewind(entryId: string, prefillDraft: boolean): Promise<RewindOutcome>;
 	notify(text: string): void;
+	/** The terminal's own speech-to-text is recording or starting. */
+	dictationBusy(): boolean;
 	/** The focused subagent and its session; undefined while the root session is shown. */
 	viewTarget(): { agentId: string; session: AgentSession } | undefined;
 }
@@ -117,6 +119,7 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 		dialogs(): DialogSummary[] {
 			return registry.list();
 		},
+		dictationBusy: () => surface.dictationBusy(),
 		async answerDialog(dialogId, answer) {
 			return registry.answer(dialogId, answer);
 		},

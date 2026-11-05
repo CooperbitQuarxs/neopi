@@ -9,6 +9,7 @@
 
 ### Added
 
+- Terminal-owned sessions serve `dictation_start` / `dictation_stop` over the control socket (capability `dictation` in the control hello), recording with the terminal's microphone for the controlling connection only and refusing while the terminal's own speech-to-text is active, so GUIs attached to a terminal session can dictate ([#681](https://github.com/PsychedelicShayna/neopi/issues/681)).
 - `/personality <name>` and `/notice <text>` now run in RPC, ACP and control sessions (bare `/personality` lists the names); the terminal keeps its manager and confirmation ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).
 - RPC `get_command_completions { command, prefix }` returns a slash command's argument completions (subcommands, personality names) to hosts without a terminal; hosts gate on the `command_completions` capability ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).
 - RPC lists every slash command in `get_available_commands` with its `availability` (`headless` or `tui`), and a `prompt` that names a terminal-only command answers `command_requires_tui` instead of being sent to the model; hosts gate on the `command_catalog` capability ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).
