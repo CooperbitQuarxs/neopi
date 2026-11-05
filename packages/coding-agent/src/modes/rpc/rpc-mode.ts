@@ -18,7 +18,8 @@ import type { MessageOrigin, Model } from "@oh-my-pi/pi-ai";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { $env, getAgentDir, isRecord, logger, Snowflake, toError } from "@oh-my-pi/pi-utils";
+import { $env, getAgentDir, isRecord, logger, postmortem, Snowflake, toError } from "@oh-my-pi/pi-utils";
+import { EXIT_WITH_PARENT_EXIT_CODE, EXIT_WITH_PARENT_TEARDOWN_MS, tearDownExitTarget } from "../../exit-with-parent";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionAskDialogQuestion,
@@ -1488,6 +1489,9 @@ export function registerRpcPersistenceSurface(
 	};
 }
 
+/** Hard ceiling, after stdin closes in `--exit-with-parent` mode, before the process exits whatever teardown is doing. */
+export const RPC_INPUT_CLOSED_TEARDOWN_MS = 10_000;
+
 /** Startup options for {@link runRpcMode}. */
 export interface RpcModeOptions {
 	/** `--mode rpc-ui`: route tool UI (e.g. ask) over the protocol, independently of headless extensions. */
@@ -1496,6 +1500,12 @@ export interface RpcModeOptions {
 	headless?: boolean;
 	subagentEventBus?: EventBus;
 	input?: ReadableStream<Uint8Array>;
+	/**
+	 * `--exit-with-parent`: a closed stdin means the host is gone, so abort the turn, stop owned work and
+	 * exit within {@link RPC_INPUT_CLOSED_TEARDOWN_MS} instead of draining accepted work (the default, which
+	 * scripted `echo prompt | npi --mode rpc` use relies on).
+	 */
+	exitOnInputClosed?: boolean;
 	/** `--model` selector the process launched with (absent with `--provider`); a role selector seeds `activeRole`. */
 	launchModel?: string;
 	/** Builds `live_start` sessions; defaults to the real {@link LiveSessionController}. */
@@ -3423,6 +3433,25 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		},
 	});
 
+	/** The host is gone: abort, stop owned work, and exit within the budget even if teardown hangs. */
+	const exitAfterInputClosed = async (): Promise<never> => {
+		const hardExit = setTimeout(
+			() => void postmortem.exitProcess(EXIT_WITH_PARENT_EXIT_CODE),
+			RPC_INPUT_CLOSED_TEARDOWN_MS,
+		);
+		try {
+			await tearDownExitTarget(
+				{ session, mcpManager: options.mcpManager },
+				EXIT_WITH_PARENT_TEARDOWN_MS,
+				"RPC host closed its input",
+			);
+			await liveBridge.stop().catch(() => {});
+		} finally {
+			clearTimeout(hardExit);
+		}
+		return disposeAndExit();
+	};
+
 	// Startup is complete: release commands queued behind extension init.
 	startup.resolve();
 	await inputClosed;
@@ -3441,6 +3470,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	sessionDictationBridge.dispose();
 	jobEvents.dispose();
 	await liveBridge.stop();
+	if (options.exitOnInputClosed) {
+		abortBuiltinCommands("RPC client disconnected");
+		return exitAfterInputClosed();
+	}
 	await inputDispatcher.drain();
 	// A backgrounded builtin (e.g. a /mcp reauth browser wait) must not park
 	// the drain: tear it down now that the client is gone.

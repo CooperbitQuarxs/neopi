@@ -2151,7 +2151,8 @@ export async function runRootCommand(
 		// (the terminal, or RPC/ACP stdin EOF). Watch before reading piped stdin:
 		// a writer that outlives the host would otherwise block the read forever.
 		const mayRunHeadless = parsedArgs.print === true || parsedArgs.mode !== undefined || !process.stdin.isTTY;
-		if (!isProtocolMode && mayRunHeadless && !parsedArgs.noExitWithParent) {
+		const rpcOwnedByParent = (mode === "rpc" || mode === "rpc-ui") && parsedArgs.exitWithParent === true;
+		if ((!isProtocolMode && mayRunHeadless && !parsedArgs.noExitWithParent) || rpcOwnedByParent) {
 			parentExit = exitWithParent({ parentPid: LAUNCH_PARENT_PID });
 		}
 		// Protocol modes own stdin; treating it as prompt text would consume JSON-RPC frames before their transports start.
@@ -3106,6 +3107,7 @@ export async function runRootCommand(
 					mcpManager,
 					input: rpcInput,
 					launchModel: parsedArgs.provider ? undefined : parsedArgs.model,
+					exitOnInputClosed: rpcOwnedByParent,
 				});
 			} else if (isInteractive) {
 				const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
