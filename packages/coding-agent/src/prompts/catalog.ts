@@ -398,9 +398,31 @@ import asset383 from "./tools/write.md" with { type: "text" };
 import asset384 from "./tools/yield.md" with { type: "text" };
 import asset385 from "../work-contracts/block.md" with { type: "text" };
 import asset386 from "../work-contracts/tool.md" with { type: "text" };
+import chroniclerStatusNotice from "./chronicler/status-notice.md" with { type: "text" };
 
 /** Static embeds are the release source; agents remain inspectable without changing discovery. */
 export const promptAssets: readonly PromptAsset[] = [
+	{
+		id: "chronicler/status-notice.md",
+		relPath: "chronicler/status-notice.md",
+		bundled: chroniclerStatusNotice,
+		scope: "feature:chronicler/status-notice",
+		group: "core",
+		keys: [
+			{ path: "enabled", type: "boolean", resolution: "session-dependent" },
+			{ path: "disabled", type: "boolean", resolution: "session-dependent" },
+			{ path: "paused", type: "boolean", resolution: "session-dependent" },
+			{ path: "resumed", type: "boolean", resolution: "session-dependent" },
+			{ path: "blinded", type: "boolean", resolution: "session-dependent" },
+			{ path: "unblinded", type: "boolean", resolution: "session-dependent" },
+			{ path: "enabledExtra", type: "string", resolution: "session-dependent" },
+		],
+		fixture: { enabled: true, enabledExtra: "" },
+		consumerHints: [
+			"packages/coding-agent/src/prompts/chronicler/status-notice.md",
+			"packages/coding-agent/src/chronicler/notices.ts",
+		],
+	},
 	{
 		id: "model-families/opus-5.md",
 		relPath: "model-families/opus-5.md",
