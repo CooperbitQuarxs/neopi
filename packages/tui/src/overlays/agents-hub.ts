@@ -1309,7 +1309,10 @@ export class AgentsHubComponent implements Component {
 			return;
 		}
 		if (pick.act === "close") {
-			this.handleInput("\x1b");
+			const searching = this.#assigning
+				? this.#browser.filterFocused
+				: !this.#strip && !this.#createActive && this.#search.focused;
+			this.handleInput(searching ? "\x03" : "\x1b");
 			return;
 		}
 		if (strip?.kind === "chips") {

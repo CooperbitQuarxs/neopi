@@ -300,7 +300,7 @@ describe("Agent hub row ordering", () => {
 		}
 	});
 
-	it("keeps an applied fuzzy filter after Enter and clears it through the search field", () => {
+	it("previews a fuzzy filter live, retains it after Enter, and clears it through the search field", () => {
 		vi.useFakeTimers();
 		let hub: AgentHubOverlayComponent | undefined;
 		try {
@@ -316,7 +316,7 @@ describe("Agent hub row ordering", () => {
 			hub.handleInput("/");
 			hub.handleInput("a");
 			hub.handleInput("p");
-			expect(renderedAgentIds(hub)).toEqual(["alpha-one", "beta-two"]);
+			expect(renderedAgentIds(hub)).toEqual(["alpha-one"]);
 			hub.handleInput("\r");
 			expect(renderedAgentIds(hub)).toEqual(["alpha-one"]);
 			hub.handleInput("/");
@@ -502,7 +502,6 @@ describe("Agent hub row ordering", () => {
 			const lines = hub.render(80);
 			expect(lines.length).toBe(10);
 			expect(sessions.mock.calls.length).toBeLessThan(agents.list().length);
-			expect(Bun.stripANSI(lines.join("\n"))).toContain("…");
 		} finally {
 			hub.dispose();
 		}

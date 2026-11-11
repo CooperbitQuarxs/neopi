@@ -106,6 +106,8 @@ describe("session tree shared menu navigation", () => {
 			selector.handleInput("\x1b[H");
 			expect(state(selector).tree.search).toMatchObject({ value: "jkgG/ ", cursor: 0, focused: true });
 			selector.handleInput("\x1b");
+			expect(state(selector).tree.search).toMatchObject({ value: "jkgG/ ", focused: true });
+			selector.handleInput("\x1b");
 			expect(state(selector).tree.search).toMatchObject({ value: "", focused: false });
 			selector.handleInput("\t");
 			expect(state(selector).tree.filterMode).toBe("no-tools");

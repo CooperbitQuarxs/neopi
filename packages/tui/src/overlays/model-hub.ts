@@ -24,7 +24,7 @@ import type {
 import type { KeysApi, Model } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { getSupportedEfforts, getSupportedThinkingLevels } from "@oh-my-pi/pi-catalog/model-thinking";
-import { Effort, THINKING_CHOICES, THINKING_EFFORTS, type ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
+import { THINKING_CHOICES, THINKING_EFFORTS, type ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { MODEL_KINDS, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { Component, TUI } from "../tui";
@@ -5911,7 +5911,8 @@ export class ModelHubComponent implements Component {
 	/** Picker pointer events, each on the path of the key it stands for. */
 	#handlePickerEvent(event: PickerEvent): void {
 		if (event.kind === "action" && event.act === CLOSE_ACTION.id) {
-			this.#cancel();
+			if (this.#filterEditing) this.#handleInput("\x03");
+			else this.#cancel();
 			return;
 		}
 		// Same gate as the keys: only cancel works while an assignment applies.

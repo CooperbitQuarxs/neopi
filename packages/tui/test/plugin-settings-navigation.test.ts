@@ -54,7 +54,9 @@ it("routes literal plugin search before configure shortcuts and restores it", ()
 	list.handleInput("/");
 	list.handleInput("hjkl");
 	expect(opened).toEqual([]);
-	list.handleInput("\x1b");
+	list.handleInput("\r");
+	expect(opened).toEqual([]);
+	expect(list.navigationSnapshot()).toMatchObject({ filter: "hjkl", filterFocused: false });
 	const snapshot = list.navigationSnapshot();
 	const restored = make();
 	restored.restoreNavigation(snapshot);

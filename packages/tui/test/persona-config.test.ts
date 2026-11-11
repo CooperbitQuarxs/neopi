@@ -316,7 +316,7 @@ describe("PersonaConfigOverlayComponent", () => {
 		overlay.onNavigationVisit = (page, previous) => {
 			visits.push({ page, previous });
 		};
-		press("/", "hjkl", ESC, ENTER);
+		press("/", "hjkl", ENTER, ENTER);
 		expect(visits.at(-1)?.page).toBe("detail:0");
 		const detail = overlay.navigationSnapshot();
 		press("l", "\x15", "draft hjkl");
@@ -348,7 +348,7 @@ describe("PersonaConfigOverlayComponent", () => {
 	});
 	it("preserves a registered multiline prompt draft without submitting it", () => {
 		const original = makeOverlay({ entries: [entry("alpha")] });
-		original.press(ENTER, "/", "Content", ESC, ENTER, " draft hjkl");
+		original.press(ENTER, "/", "Content", ENTER, ENTER, " draft hjkl");
 		const snapshot = original.overlay.navigationSnapshot();
 		expect(snapshot.context.screen).toBe("content");
 		const restored = makeOverlay({ entries: [entry("beta")] });
@@ -420,7 +420,7 @@ describe("PersonaConfigOverlayComponent", () => {
 			),
 		});
 		frame();
-		press("/", "prefix", "\x1b[D", ESC, "G");
+		press("/", "prefix", "\x1b[D", ENTER, "G");
 		frame();
 		press("l", "G");
 		const parent = overlay.navigationSnapshot();
@@ -446,7 +446,7 @@ describe("PersonaConfigOverlayComponent", () => {
 		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "close" });
 		press("g");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "entry:0" });
-		press("G", "g", "/", ESC, "g");
+		press("G", "g", "/", ESC, ESC, "g");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "close" });
 		press("g");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "entry:0" });

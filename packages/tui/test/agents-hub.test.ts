@@ -174,7 +174,7 @@ describe("AgentsHub layout", () => {
 		expect(rendered).not.toContain("scout");
 	});
 
-	test("/ searches with literal hjkl; Esc clears the filter before closing", async () => {
+	test("/ previews a literal filter live, restores its confirmed query on Escape, and clears before closing", async () => {
 		const { hub, strip, type, cancelled } = await createHub(new TestSettings());
 		hub.handleInput("h"); // sidebar
 		hub.handleInput("j"); // project scope
@@ -182,18 +182,24 @@ describe("AgentsHub layout", () => {
 		hub.handleInput("l"); // rows
 		hub.handleInput("/");
 		type("sco");
-		let rendered = strip();
+		const rendered = strip();
 		expect(rendered).toContain("scout");
-		expect(rendered).toContain("dev");
+		expect(rendered).not.toContain("dev");
 		hub.handleInput("\r");
 		expect(strip()).not.toContain("dev");
 		hub.handleInput("/");
 		for (const key of "hjkl") hub.handleInput(key);
-		rendered = strip();
-		expect(rendered).toContain("Search: scohjkl");
+		expect(hub.navigationSnapshot().search).toMatchObject({ value: "scohjkl", query: "sco", focused: true });
 		hub.handleInput("\x1b");
 		expect(cancelled()).toBe(false);
-		expect(strip()).not.toContain("Search: scohjkl");
+		expect(hub.navigationSnapshot().search).toMatchObject({ value: "scohjkl", focused: true });
+		hub.handleInput("\x1b");
+		expect(cancelled()).toBe(false);
+		expect(hub.navigationSnapshot().search).toMatchObject({ value: "sco", query: "sco", focused: false });
+		expect(strip()).toContain("scout");
+		expect(strip()).not.toContain("dev");
+		hub.handleInput("\x1b");
+		expect(cancelled()).toBe(false);
 		expect(strip()).toContain("dev");
 		hub.handleInput("\x1b");
 		expect(cancelled()).toBe(true);
@@ -577,6 +583,8 @@ describe("AgentsHub navigation history", () => {
 			expect(restoredVisits).toEqual([]);
 			restored.hub.handleInput("\x1b");
 			expect(restored.hub.navigationSnapshot().assigning).toBeDefined();
+			restored.hub.handleInput("\x1b");
+			expect(restored.hub.navigationSnapshot().assigning).toBeDefined();
 			restored.hub.handleInput("h");
 			expect(restored.hub.navigationSnapshot()).toMatchObject({
 				assigning: undefined,
@@ -629,7 +637,6 @@ describe("AgentsHub navigation history", () => {
 		try {
 			hub.handleInput("/");
 			type("dev");
-			expect(pickerProps(hub).actions?.find(action => action.id === "close")?.label).toBe("Back to list");
 			const close = { type: "action", key: "", act: "close", mods: [] } as const;
 			hub.handleNativeEvent(close);
 			expect(cancelled()).toBe(false);

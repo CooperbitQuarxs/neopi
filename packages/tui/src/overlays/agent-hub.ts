@@ -1010,9 +1010,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 					this.#setActivityFilter(event.value as ActivityFilter);
 				}
 				return;
-			case "close":
-				this.handleInput("\x1b");
+			case "close": {
+				const search = activity ? this.#activitySearch : this.#agentFilter;
+				this.handleInput(search.focused ? "\x03" : "\x1b");
 				return;
+			}
 			case "filter":
 				if (activity) this.#activitySearch.focused = true;
 				else this.#agentFilter.focused = true;

@@ -161,12 +161,15 @@ describe("SettingsSelectorComponent memory tab", () => {
 			cancelCount++;
 		});
 
-		// Typing changes the search draft; Enter applies it and Escape discards it.
+		// Typing previews results live; Escape leaves Insert before discarding the draft.
 		comp.handleInput("/");
 		comp.handleInput("b");
-		expect(comp.navigationSnapshot()).toMatchObject({ query: "", search: { value: "b" }, searchFocused: true });
+		expect(comp.navigationSnapshot()).toMatchObject({ query: "b", search: { value: "b" }, searchFocused: true });
 
-		// First Escape clears the query and returns to the ordinary tab.
+		// First Escape stays in the search field in Vim Normal mode.
+		comp.handleInput("\x1b");
+		expect(cancelCount).toBe(0);
+		expect(comp.navigationSnapshot()).toMatchObject({ query: "b", searchFocused: true });
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(0);
 		expect(comp.navigationSnapshot()).toMatchObject({ query: "", searchFocused: false });

@@ -37,8 +37,11 @@ describe("form menu history", () => {
 		form.handleInput("literal");
 		form.handleInput("\x1b");
 		expect(cancelled).toBe(0);
+		expect(choices.selectList.filterFocused).toBe(true);
+		form.handleInput("\x1b");
+		expect(cancelled).toBe(0);
 		expect(choices.selectList.filterFocused).toBe(false);
-		expect(choices.selectList.getFilter()).toBe("literal");
+		expect(choices.selectList.getFilter()).toBe("");
 		form.handleInput("\x1b");
 		expect(cancelled).toBe(1);
 	});

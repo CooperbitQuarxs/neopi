@@ -256,6 +256,9 @@ test("Esc restores a confirmed Roles filter before clearing it without leaving R
 	hub.handleInput("/");
 	hub.handleInput("x");
 	hub.handleInput("\x1b");
+	expect(pickerProps(hub).query).toBe("defaultx");
+	expect(hub.navigationSnapshot().filterFocused).toBe(true); // Insert → Normal
+	hub.handleInput("\x1b");
 	expect(pickerProps(hub).query).toBe("default");
 	hub.handleInput("\x1b");
 	const props = pickerProps(hub);

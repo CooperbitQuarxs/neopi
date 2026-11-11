@@ -110,11 +110,11 @@ Native TSP lists and pickers retain selection, filtering, and history. Their ter
 
 ### Menu search
 
-Press `/` to enter pattern mode. Nothing filters until Enter confirms the draft and returns to navigation. Arrows, Tab and Ctrl-keys stay in the field while typing; they cannot switch panes or move results. Esc cancels and clears the search. Leaving the field without Enter discards its edits.
+Press `/` to enter pattern mode. Results preview the last valid draft live; Enter confirms the pattern and returns to navigation without activating a result. Arrows, Tab and Ctrl-keys stay in the field while typing; they cannot switch panes or move results. Esc cancels the draft and restores the confirmed pattern. With Vim enabled, the first Esc leaves Insert mode and the next cancels editing. Ctrl+C clears the search immediately. A native Close action leaves the focused search in one action in either mode. Leaving the field without Enter discards its edits.
 
 In settings, Esc restores the tab, section sidebar focus, selected setting and scroll position from before `/`. After confirmation, the footer shows navigation hints instead of pattern-entry hints; Vim half-page and boundary motions appear only when Vim mode is enabled.
 
-Ordinary patterns use fuzzy matching, but punctuation-bearing words match their literal spelling rather than losing punctuation: `.{1000}` does not search for `1000`. Use `/pattern/` for **Vim search syntax, very-magic by default**. From navigation, type `//^claude/` then Enter: the first slash opens the field, and `/^claude/` is the pattern. The existing `/pattern` and `re:pattern` forms use the same dialect. Invalid or unsupported expressions show an inline error and match nothing.
+Ordinary patterns use fuzzy matching, but punctuation-bearing words match their literal spelling rather than losing punctuation: `.{1000}` does not search for `1000`. Use `/pattern/` for **Vim search syntax, very-magic by default**. From navigation, type `//^claude/` then Enter: the first slash opens the field, and `/^claude/` is the pattern. The existing `/pattern` and `re:pattern` forms use the same dialect. Invalid or unsupported expressions show an inline error, retain the last valid preview, and cannot be confirmed.
 
 | Pattern text | Meaning |
 | --- | --- |

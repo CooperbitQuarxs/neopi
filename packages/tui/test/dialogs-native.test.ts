@@ -523,8 +523,8 @@ describe("dialogs under a native surface", () => {
 		);
 		const body = () => stripVTControlCharacters(dialog.render(60).join("\n")).replace(/[│\s]+/g, "");
 		expect(body()).not.toContain("rm-rf~");
-		// Ctrl+O belongs to the dialog, not the draft that holds the other keys.
-		dialog.handleInput("\x0f");
+		// The tool-expansion binding belongs to the dialog, not the draft.
+		dialog.handleInput("\x1be");
 		expect(routed).toEqual([]);
 		expect(body()).toContain("rm-rf~");
 		expect(body()).toContain("secondline");

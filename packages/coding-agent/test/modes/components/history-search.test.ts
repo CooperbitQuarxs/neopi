@@ -119,6 +119,7 @@ describe("HistorySearchComponent normal navigation and history", () => {
 			() => {},
 		);
 		component.handleInput("\x1b");
+		component.handleInput("\x1b");
 		render(component);
 		component.handleInput("G");
 		component.handleInput("g");

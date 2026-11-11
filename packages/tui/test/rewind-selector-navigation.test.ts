@@ -77,7 +77,7 @@ describe("rewind shared menu navigation and safe history", () => {
 		}
 	});
 
-	it("clears the literal filter after Esc and only closes on the next Esc", () => {
+	it("leaves Vim Insert before discarding the literal filter, then closes from the list", () => {
 		const cancelled = vi.fn();
 		const selector = make(vi.fn(), cancelled);
 		try {
@@ -87,6 +87,9 @@ describe("rewind shared menu navigation and safe history", () => {
 			selector.handleInput("jkgG/ ");
 			selector.handleInput("\x1b[H");
 			expect(state(selector).search).toMatchObject({ value: "jkgG/ ", cursor: 0, focused: true });
+			selector.handleInput("\x1b");
+			expect(state(selector).search).toMatchObject({ value: "jkgG/ ", focused: true });
+			expect(cancelled).not.toHaveBeenCalled();
 			selector.handleInput("\x1b");
 			expect(state(selector).search).toMatchObject({ value: "", focused: false });
 			expect(cancelled).not.toHaveBeenCalled();

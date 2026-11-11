@@ -457,6 +457,13 @@ describe("advisor menu navigation and history", () => {
 			expect(doc.advisors[0]?.enabled).toBeUndefined();
 			h.overlay.handleInput("\x1b");
 			expect(h.closed()).toBe(0);
+			expect(h.overlay.navigationSnapshot().content).toMatchObject({
+				filter: "",
+				filterDraft: "hjkl/ g",
+				filterFocused: true,
+			});
+			h.overlay.handleInput("\x1b");
+			expect(h.closed()).toBe(0);
 			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "", filterFocused: false });
 			h.overlay.handleInput("\x1b");
 			expect(h.closed()).toBe(1);
@@ -736,9 +743,6 @@ describe("advisor menu navigation and history", () => {
 				h.overlay.handleInput("Reviewer");
 				expect(sheet().props.query).toBe("Reviewer");
 				if (mode !== "focused picker") h.overlay.handleInput("\r");
-				expect(sheet().props.actions?.find(action => action.id === "close")?.label).toBe(
-					mode === "focused picker" ? "Back to list" : "Clear search",
-				);
 				if (mode === "confirmed prefs")
 					h.overlay.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 				else sheet().component.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
@@ -773,9 +777,6 @@ describe("advisor menu navigation and history", () => {
 				handleNativeEvent(event: NativeUiEvent): void;
 			};
 			expect(component.describe().k).toBe("picker");
-			expect((component.describe().p as TspPickerProps).actions?.find(action => action.id === "apply")?.label).toBe(
-				"Clear search",
-			);
 			component.handleNativeEvent({ type: "action", key: "", act: "apply", mods: [] });
 			expect(h.overlay.navigationSnapshot()).toMatchObject({
 				context: { screen: "tools" },
@@ -854,6 +855,7 @@ describe("advisor menu navigation and history", () => {
 			expect(doc.advisors).toHaveLength(2);
 			h.overlay.handleInput("\x15"); // Clear the focused filter.
 			h.overlay.handleInput("\x1b");
+			h.overlay.handleInput("\x1b"); // Normal -> list navigation.
 			h.overlay.handleInput("g");
 			h.overlay.handleInput("g");
 			h.overlay.handleInput("c");

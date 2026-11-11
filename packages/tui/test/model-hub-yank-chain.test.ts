@@ -184,36 +184,36 @@ test("individual fallback y and uppercase Y keep their existing meanings", () =>
 	expect(chains.slow).toEqual([FIRST, SECOND]);
 });
 
-test("plain yank and paste are inert with Vim off while Alt shortcuts preserve copying", () => {
+test("plain yank and paste cannot change the register or chains with Vim off", () => {
+	setMenuSearchVimMode(false);
+	for (const key of ["y", "Y", "p"]) {
+		const { hub, chains, focus } = createHub();
+		focus("role:default");
+		hub.handleInput("\x1by");
+		const copied = hub.navigationSnapshot().yankedFallback;
+		focus(key === "p" ? "role:smol" : "fallback:default:0");
+		hub.handleInput(key);
+		expect(hub.navigationSnapshot().yankedFallback).toEqual(copied);
+		expect(chains.smol).toBeUndefined();
+		expect(chains.default).toEqual([FIRST, SECOND]);
+		hub.handleInput("\x1b"); // leave any literal type-to-search draft before selecting the paste target
+		focus("role:smol");
+		hub.handleInput("\x1bp");
+		expect(chains.smol).toEqual([PRIMARY, FIRST, SECOND]);
+	}
+});
+
+test("Alt yank shortcuts copy individual fallbacks and complete chains with Vim off", () => {
 	setMenuSearchVimMode(false);
 	const { hub, chains, focus } = createHub();
-	for (const key of ["y", "Y", "p", "j", "k", "h", "l", "g", "G"]) {
-		focus("role:default");
-		hub.handleInput(key);
-		expect(hub.navigationSnapshot()).toMatchObject({ filterFocused: true, rolesQuery: key });
-		expect(chains.smol).toBeUndefined();
-		hub.handleInput("\x1b");
-	}
-
-	focus("role:default");
+	focus("fallback:default:0");
 	hub.handleInput("\x1by");
 	focus("role:smol");
-	hub.handleInput("p");
-	expect(chains.smol).toBeUndefined();
-	hub.handleInput("\x1b");
 	hub.handleInput("\x1bp");
-	expect(chains.smol).toEqual([PRIMARY, FIRST, SECOND]);
-
-	focus("fallback:default:0");
-	hub.handleInput("Y");
-	hub.handleInput("\x1b");
-	focus("role:slow");
-	hub.handleInput("\x1bp");
-	expect(chains.slow).toEqual([PRIMARY, FIRST, SECOND]);
+	expect(chains.smol).toEqual([FIRST]);
 	focus("fallback:default:0");
 	hub.handleInput("\x1bY");
 	focus("role:slow");
-	chains.slow = [];
 	hub.handleInput("\x1bp");
 	expect(chains.slow).toEqual([FIRST, SECOND]);
 });

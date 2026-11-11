@@ -186,6 +186,9 @@ describe("advisor file scopes", () => {
 		expect(pickerProps(f.overlay.describe(cx)).query).toBe("j ");
 		f.overlay.handleInput("\x1b");
 		expect(f.closes()).toBe(0);
+		expect(pickerProps(f.overlay.describe(cx)).query).toBe("j ");
+		f.overlay.handleInput("\x1b"); // Normal -> navigation, cancelling the draft.
+		expect(pickerProps(f.overlay.describe(cx)).query).toBe("");
 		f.overlay.handleInput("k");
 		f.overlay.handleInput("l");
 		f.overlay.handleInput("j");

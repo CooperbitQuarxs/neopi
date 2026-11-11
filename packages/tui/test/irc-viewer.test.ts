@@ -118,7 +118,7 @@ describe("IrcViewerComponent", () => {
 			entry("0-Delta", "0-Alpha", "delta to alpha"),
 		]);
 		view.type("/alpha");
-		expect(view.screen().join("\n")).toContain("gamma to delta");
+		expect(view.screen().join("\n")).not.toContain("gamma to delta");
 		view.viewer.handleInput("\r");
 		const screen = view.screen().join("\n");
 		expect(screen).toContain("alpha to beta");

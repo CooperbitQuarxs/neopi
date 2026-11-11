@@ -162,6 +162,8 @@ describe("HookSelectorComponent model slider", () => {
 		expect(rendered).toContain("Search: og");
 
 		component.handleInput("\n");
+		expect(selected).toEqual([]);
+		component.handleInput("\n");
 		expect(selected).toEqual(["OpenCode Go"]);
 	});
 });

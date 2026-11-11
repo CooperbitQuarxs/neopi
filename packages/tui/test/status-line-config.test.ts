@@ -176,8 +176,8 @@ describe("status-line editor list", () => {
 		h.press("/", "t", "i", "m", "e");
 		let draft = await h.draft();
 		expect(draft.focus).toBe("search");
-		expect(draft.query).toBe("");
-		expect(h.text()).toContain("Context bar");
+		expect(draft.query).toBe("time");
+		expect(h.text()).not.toContain("Context bar");
 		h.press("\r");
 		draft = await h.draft();
 		expect(draft.focus).toBe("list");
@@ -399,10 +399,12 @@ describe("status-line editor templates", () => {
 			const literal = "js h/l gg G";
 			const search = setup();
 			search.press("/", ...literal);
-			expect(search.drafts.at(-1)?.query).toBe("");
+			expect(search.drafts.at(-1)?.query).toBe(literal);
 			expect(search.drafts.at(-1)?.focus).toBe("search");
 			expect(search.previews).toHaveLength(1);
 			expect(search.applied).toEqual([]);
+			search.press(ESC);
+			expect(search.drafts.at(-1)?.focus).toBe("search");
 			search.press(ESC);
 			expect(search.drafts.at(-1)?.focus).toBe("list");
 			const template = setup({}, { ...ACTIVE, rightSegments: ["usage:acme:5h"] });

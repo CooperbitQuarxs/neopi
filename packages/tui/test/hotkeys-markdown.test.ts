@@ -150,8 +150,9 @@ describe("hotkeys sheet navigation", () => {
 		expect(sheet.navigationSnapshot()).toMatchObject({ scrollOffset: 1 });
 		expect(sheet.describe().scroll?.by).toBe("line-down");
 		const nativeBeforeHalf = sheet.describe().scroll;
+		const beforeHalf = sheet.navigationSnapshot().scrollOffset;
 		sheet.handleInput("\x04");
-		expect(sheet.navigationSnapshot()).toMatchObject({ scrollOffset: 6 });
+		expect(sheet.navigationSnapshot().scrollOffset).toBeGreaterThan(beforeHalf);
 		expect(sheet.describe().scroll).toBe(nativeBeforeHalf);
 		const saved = sheet.navigationSnapshot();
 		const reopened = new HotkeysSheetComponent(

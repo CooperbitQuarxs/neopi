@@ -1143,8 +1143,8 @@ describe("InteractiveMode plan review rendering", () => {
 			'await Bun.write(process.argv[2]!, "- add rollback command\\n- include smoke test\\n");\n',
 		);
 		const editorPath = `"${process.execPath}" "${editorScriptPath}"`;
-		const previousEditor = Bun.env.EDITOR;
-		const previousVisual = Bun.env.VISUAL;
+		const previousEditor = session.environment.get("EDITOR");
+		const previousVisual = session.environment.get("VISUAL");
 		const keybindings = KeybindingsManager.inMemory({
 			"app.editor.external": "ctrl+e",
 			"tui.select.cancel": "ctrl+g",
@@ -1162,8 +1162,8 @@ describe("InteractiveMode plan review rendering", () => {
 		vi.spyOn(mode.ui, "start").mockImplementation(() => markEditorApplied());
 
 		try {
-			Bun.env.EDITOR = editorPath;
-			delete Bun.env.VISUAL;
+			session.environment.set("EDITOR", editorPath);
+			session.environment.set("VISUAL", undefined);
 			const choice = mode.showPlanReview(
 				"# Plan\n\nIntro\n\n## Rollout\n\nSteps\n\n## Verify\n\nChecks\n",
 				"Plan mode - next step",
@@ -1194,10 +1194,8 @@ describe("InteractiveMode plan review rendering", () => {
 			overlay.handleInput("\r");
 			expect(await choice).toBe("Refine plan");
 		} finally {
-			if (previousEditor === undefined) delete Bun.env.EDITOR;
-			else Bun.env.EDITOR = previousEditor;
-			if (previousVisual === undefined) delete Bun.env.VISUAL;
-			else Bun.env.VISUAL = previousVisual;
+			session.environment.set("EDITOR", previousEditor);
+			session.environment.set("VISUAL", previousVisual);
 		}
 	});
 

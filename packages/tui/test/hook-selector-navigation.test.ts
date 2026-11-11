@@ -34,10 +34,6 @@ function visibleItems(selector: HookSelectorComponent): number {
 function close(selector: HookSelectorComponent): void {
 	selector.handleNativeEvent({ type: "action", key: PICKER_KEY, act: "close", mods: [] });
 }
-function closeLabel(selector: HookSelectorComponent): unknown {
-	const actions = prop(picker(selector), "actions");
-	return Array.isArray(actions) ? actions.find(action => action.id === "close")?.label : undefined;
-}
 
 beforeAll(async () => {
 	const dark = await getThemeByName("dark");
@@ -117,19 +113,17 @@ describe("hook callback prompt navigation", () => {
 		expect(prop(picker(selector), "query")).toBe("hjklggG / ");
 		expect(picks).toEqual([]);
 		expect(cancelled).toBe(0);
-		expect(closeLabel(selector)).toBe("Back to list");
 		selector.handleInput("\x1b[H");
 		selector.handleInput("x");
 		expect(prop(picker(selector), "cursor")).toBe(1);
 		close(selector);
 		expect(cancelled).toBe(0);
 		expect(prop(picker(selector), "query")).toBeNull();
-		expect(closeLabel(selector)).toBe("Close");
 		close(selector);
 		expect(cancelled).toBe(1);
 	});
 
-	it("keeps native options unchanged during a draft and confirms without selecting", () => {
+	it("previews native options live and confirms the filter without selecting", () => {
 		const picks: string[] = [];
 		const selector = new HookSelectorComponent(
 			"Choose",
@@ -141,10 +135,10 @@ describe("hook callback prompt navigation", () => {
 		selector.handleInput("/");
 		selector.handleInput("Beta");
 		expect(prop(picker(selector), "query")).toBe("Beta");
-		expect(prop(picker(selector), "order")).toBeUndefined();
+		expect(prop(picker(selector), "order")).toEqual(["1"]);
 		selector.handleInput("\t");
 		selector.handleInput("\x1b[B");
-		expect(prop(picker(selector), "selected")).toBe("0");
+		expect(prop(picker(selector), "selected")).toBe("1");
 		selector.handleInput("\r");
 		expect(prop(picker(selector), "order")).toEqual(["1"]);
 		expect(picks).toEqual([]);

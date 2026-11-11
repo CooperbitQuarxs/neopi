@@ -972,12 +972,12 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const active = this.#active;
 		if (active instanceof ModelBrowser) {
 			if (picked.kind !== "action") active.routePickerItem(picked.item, picked.kind === "activate");
-			else if (picked.act === "close") active.handleInput("\x1b");
+			else if (picked.act === "close") active.handleCancel();
 			else if (picked.act === "use" && active.pickerSelected) active.routePickerItem(active.pickerSelected, true);
 		} else if (active instanceof SelectList) {
 			// The tools list applies on cancel, like its Esc.
 			if (picked.kind === "action" && picked.act === "apply") {
-				if (active.filterFocused || active.getFilter()) active.handleInput("\x1b");
+				if (active.filterFocused || active.getFilter()) active.handleInput(active.filterFocused ? "\x03" : "\x1b");
 				else active.onCancel?.();
 			} else routeSelectListPicker(active, event);
 		}
@@ -1021,7 +1021,9 @@ export class AdvisorConfigOverlayComponent implements Component {
 						("filterFocused" in this.#active && this.#active.filterFocused === true) ||
 						(this.#active instanceof SelectList && this.#active.getFilter().length > 0)
 					)
-						this.handleInput("\x1b");
+						this.handleInput(
+							"filterFocused" in this.#active && this.#active.filterFocused === true ? "\x03" : "\x1b",
+						);
 					else this.#cb.close();
 					return;
 				}

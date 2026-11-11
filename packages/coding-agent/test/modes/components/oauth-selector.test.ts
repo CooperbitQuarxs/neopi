@@ -57,7 +57,7 @@ describe("OAuthSelectorComponent", () => {
 		expect(selected).toEqual([target.id]);
 	});
 
-	it("clears an active filter on the first Esc and closes on the second", () => {
+	it("leaves Vim Insert before discarding the filter, then closes from the list", () => {
 		let cancelled = 0;
 		const component = new OAuthSelectorComponent(
 			"login",
@@ -70,7 +70,10 @@ describe("OAuthSelectorComponent", () => {
 		component.handleInput("j");
 		component.handleInput("\x1b");
 		expect(cancelled).toBe(0);
-		expect(Bun.stripANSI(component.render(80).join("\n"))).not.toContain("Search: hj");
+		expect(component.navigationSnapshot()).toMatchObject({ search: { value: "hj", focused: true } });
+		component.handleInput("\x1b");
+		expect(cancelled).toBe(0);
+		expect(component.navigationSnapshot()).toMatchObject({ search: { value: "", focused: false } });
 		component.handleInput("\x1b");
 		expect(cancelled).toBe(1);
 	});

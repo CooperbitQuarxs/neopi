@@ -35,9 +35,12 @@ describe("plugin picker activation policy", () => {
 		const { list, selected } = make("uninstall");
 		list.handleInput("/");
 		for (const char of "alpha ") list.handleInput(char);
-		expect(list.navigationState().filter).toBe("alpha ");
+		expect(list.navigationState()).toMatchObject({ filterDraft: "alpha ", filterFocused: true });
 		expect(selected).toEqual([]);
 		list.handleInput("\x1b");
+		expect(list.navigationState()).toMatchObject({ filterDraft: "alpha ", filterFocused: true });
+		list.handleInput("\x1b");
+		expect(list.filterFocused).toBe(false);
 		list.handleInput(" ");
 		expect(selected).toEqual([]);
 	});
