@@ -444,9 +444,11 @@ export class AgentDefinitionEditor implements Component {
 		if (this.#busy && !(picked.kind === "action" && picked.act === "close")) return;
 		const page = this.#pages.at(-1)!; const rows = page.rows();
 		if (picked.kind === "select" || picked.kind === "activate") { const index = rows.findIndex(row => row.id === picked.item); if (index >= 0) { page.index = index; if (picked.kind === "activate") rows[index]?.activate(); } }
-		else if (picked.act === "close") this.handleInput("\x1b");
-		else if (picked.act === "generate") this.handleInput("r");
-		else if (picked.act === "comment") this.handleInput("R");
+		else if (picked.kind === "action") {
+			if (picked.act === "close") this.handleInput("\x1b");
+			else if (picked.act === "generate") this.handleInput("r");
+			else if (picked.act === "comment") this.handleInput("R");
+		}
 		this.#render();
 	}
 }
