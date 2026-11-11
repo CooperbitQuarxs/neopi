@@ -426,7 +426,7 @@ export class AgentDefinitionEditor implements Component {
 			lines.push(truncateToWidth(index === page.index ? theme.fg("accent", line) : line, width));
 		}
 		if (this.#error) lines.push(truncateToWidth(theme.fg("error", replaceTabs(this.#error)), width));
-		lines.push(truncateToWidth(theme.fg("muted", this.#busy ? "Working… · Esc leaves / cancels generation" : "Enter / Space edit · ↑↓ / j/k move · r generate · R / Ctrl-R with comment · Esc back"), width));
+		lines.push(truncateToWidth(theme.fg("muted", this.#busy ? "Working… · Esc leaves / cancels generation" : "Enter / Space edit · ↑↓ move · r generate · R / Ctrl-R with comment · Esc back"), width));
 		return lines;
 	}
 	nativeSheet(cx: DescribeContext): boolean { return !this.#dialog && cx.supports("picker"); }

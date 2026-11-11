@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import type { UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { KeybindingsManager } from "../src/app-keybindings";
 import {
@@ -175,8 +176,8 @@ describe("status-line editor list", () => {
 		h.press("/", "t", "i", "m", "e");
 		let draft = await h.draft();
 		expect(draft.focus).toBe("search");
-		expect(draft.query).toBe("");
-		expect(h.text()).toContain("Context bar");
+		expect(draft.query).toBe("time");
+		expect(h.text()).not.toContain("Context bar");
 		h.press("\r");
 		draft = await h.draft();
 		expect(draft.focus).toBe("list");
@@ -398,10 +399,12 @@ describe("status-line editor templates", () => {
 			const literal = "js h/l gg G";
 			const search = setup();
 			search.press("/", ...literal);
-			expect(search.drafts.at(-1)?.query).toBe("");
+			expect(search.drafts.at(-1)?.query).toBe(literal);
 			expect(search.drafts.at(-1)?.focus).toBe("search");
 			expect(search.previews).toHaveLength(1);
 			expect(search.applied).toEqual([]);
+			search.press(ESC);
+			expect(search.drafts.at(-1)?.focus).toBe("search");
 			search.press(ESC);
 			expect(search.drafts.at(-1)?.focus).toBe("list");
 			const template = setup({}, { ...ACTIVE, rightSegments: ["usage:acme:5h"] });
@@ -679,4 +682,13 @@ describe("status-line editor draft", () => {
 		await Bun.sleep(0);
 		expect(h.title()).not.toContain("draft not saved");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

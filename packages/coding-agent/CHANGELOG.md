@@ -5,6 +5,7 @@
 ### Breaking Changes
 
 - Renamed the fork to NeoPi and its executable to `npi`; existing `.omp` configuration and provider compatibility remain unchanged.
+- Vim navigation across menus, pickers and viewers is now opt-in through the existing `tui.vimMode` setting (off by default), alongside modal prompt and search editing; enable **Vim Navigation and Editing** in `/settings`.
 - The Mixture of Agents command is now `/moa`; `/mixture` is no longer a command. Slash-command completion, the command lists sent to ACP and control clients, the usage text, and the pause notice name `/moa`, while `mixture/<name>` model ids, `MIXTURES.toml`, and `moa.*` settings are unchanged ([#366](https://github.com/PsychedelicShayna/neopi/issues/366)).
 
 ### Added
@@ -149,6 +150,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Ask dialogs hide the draft cursor when arrow navigation hands input to the question, without clearing the draft.
 - A speed tier the provider newly advertises for the active model (for example UltraFast) becomes available without re-selecting the model; `/fast ultra` no longer reports it unavailable until restart.
 - NeoProxy models are selected as `neoproxy/<name>` with one prefix (for example `neoproxy/anthropic-npi/claude-opus-5-5`) instead of `neoproxy/neoproxy/<name>`; requests still send the name NeoProxy advertises, and per-key routing is unchanged. Selectors saved with the doubled prefix need updating.
 - Reconnecting an existing API key immediately adopts its newly confirmed CA and origin restrictions instead of retaining stale trust until restart.
