@@ -16,8 +16,8 @@ import {
 	resolveViewRoot,
 	summaryPolicyFromSettings,
 } from "../chronicler/temporal/config";
-import { formatRecallResult } from "../chronicler/temporal/format";
-import { type IndexReport, indexChronicle } from "../chronicler/temporal/indexer";
+import { formatIndexReport, formatRecallResult } from "../chronicler/temporal/format";
+import { indexChronicle } from "../chronicler/temporal/indexer";
 import { resolveChronicleModelClient } from "../chronicler/temporal/model";
 import { recallChronicle } from "../chronicler/temporal/recall";
 import { parseKeywords, type RecallScope, resolveRecallSessions } from "../chronicler/temporal/prefilter";
@@ -75,41 +75,6 @@ async function withRegistry<T>(settings: Settings, agentDir: string, run: (regis
 	} finally {
 		authStorage.close();
 	}
-}
-
-export function formatIndexReport(report: IndexReport, limit = 50): string {
-	const n = report.nodes;
-	const lines = [
-		`Chronicle view ${report.dryRun ? "(dry run) " : ""}at ${report.root}`,
-		`${report.atoms} atoms from ${report.sessions} sessions in ${report.projects} projects (${report.stores} stores)`,
-		`summary model: ${report.summaryModel ?? "unresolved"}`,
-		`nodes: ${n.total} total, ${n.fresh} fresh, ${n.generated} regenerated (${n.enumerated} enumerations, ${n.singleChild} single-child), ${n.stale} stale, ${n.blocked} blocked, ${n.outsideWindow} outside window, ${n.failed} failed, ${n.pruned} pruned`,
-		`complete: ${report.complete ? "yes" : "no"}`,
-	];
-	const pending = report.changes.filter(change => change.outcome !== "generated");
-	if (pending.length > 0) {
-		lines.push("", "Not regenerated:");
-		for (const change of pending.slice(0, limit)) {
-			lines.push(
-				`- ${change.key || "root"} (${change.level}): ${change.outcome}${change.reason ? ` [${change.reason}]` : ""}${change.detail ? ` — ${change.detail}` : ""}`,
-			);
-		}
-		if (pending.length > limit) lines.push(`  … ${pending.length - limit} more (use --json)`);
-	}
-	if (report.canonical.length > 0) {
-		lines.push("", `Canonical diagnostics (${report.canonical.length}; atoms untouched):`);
-		for (const diagnostic of report.canonical.slice(0, limit)) {
-			lines.push(
-				`- ${diagnostic.kind}: ${diagnostic.atomId ? `${diagnostic.atomId} ` : ""}${diagnostic.path} — ${diagnostic.detail}`,
-			);
-		}
-		if (report.canonical.length > limit) lines.push(`  … ${report.canonical.length - limit} more (use --json)`);
-	}
-	if (report.derived.length > 0) {
-		lines.push("", `Derived view problems (${report.derived.length}):`);
-		for (const problem of report.derived) lines.push(`- ${problem.key || "root"}: ${problem.detail}`);
-	}
-	return lines.join("\n");
 }
 
 export async function runChronicleIndex(flags: ChronicleIndexFlags): Promise<number> {
