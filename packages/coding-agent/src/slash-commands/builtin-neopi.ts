@@ -15,7 +15,13 @@ import type { InteractiveModeContext } from "../modes/types";
 import { deferredSubmissionsFor, DEFER_USAGE, isDeferredSubmissionActive, parseDeferredInput } from "../neopi/defer";
 import { type LoadoutHost, loadoutFeature } from "../neopi/loadout";
 import { BUILTIN_PERSONALITIES, completePersonalityNames, isBuiltinPersonality } from "../neopi/personalities";
-import { listCustomPersonalities, listPersonalityNames, selectPersonality } from "../neopi/personality-settings";
+import {
+	currentPersonalityName,
+	listCustomPersonalities,
+	listPersonalityNames,
+	selectPersonality,
+} from "../neopi/personality-settings";
+import type { Settings } from "../config/settings";
 import { describePersonalityCacheImpact, personalityCacheImpact } from "../neopi/personality-cache";
 import { previewBuiltinPersonality } from "../system-prompt";
 import {
@@ -231,6 +237,45 @@ function kernelStatus(session: AgentSession): string {
 	].join("\n");
 }
 
+/** The personality `requested` names: an exact name, else the one case-insensitive match. */
+function resolvePersonalityName(names: readonly string[], requested: string): string | undefined {
+	const matching = names.filter(name => name.toLocaleLowerCase() === requested.toLocaleLowerCase());
+	return names.includes(requested) ? requested : matching.length === 1 ? matching[0] : undefined;
+}
+
+async function personalityPrompt(settings: Settings, name: string, cwd: string): Promise<string | undefined> {
+	return isBuiltinPersonality(name)
+		? await previewBuiltinPersonality(name, cwd)
+		: listCustomPersonalities(settings).find(item => item.name === name)?.prompt;
+}
+
+function operatorNotice(text: string): string {
+	return prompt.compile(
+		resolvePromptAsset("system/operator-notice.md", noticeTemplate, { kind: "notice" }).text.trimEnd(),
+	)({ text });
+}
+
+function noticeOptions(rawText: string) {
+	return {
+		synthetic: true,
+		userInitiated: true,
+		attribution: "user" as const,
+		rawText,
+		expandPromptTemplates: false,
+		streamingBehavior: "steer" as const,
+	};
+}
+
+function personalityCompletions(names: readonly string[], prefix: string) {
+	const matches = completePersonalityNames(names, prefix).map(name => ({
+		value: name,
+		label: name,
+		hint: ghostHint(name.slice(prefix.length)),
+		submitsCommand: true,
+	}));
+	return matches.length ? matches : null;
+}
+
 export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "personality",
@@ -238,15 +283,45 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Choose or manage system-prompt personalities",
 		allowArgs: true,
 		inlineHint: "[name]",
-		getTuiArgumentCompletions: (prefix, runtime) => {
-			const names = runtime ? listPersonalityNames(runtime.ctx.settings) : [...BUILTIN_PERSONALITIES];
-			const matches = completePersonalityNames(names, prefix).map(name => ({
-				value: name,
-				label: name,
-				hint: ghostHint(name.slice(prefix.length)),
-				submitsCommand: true,
-			}));
-			return matches.length ? matches : null;
+		getTuiArgumentCompletions: (prefix, runtime) =>
+			personalityCompletions(
+				runtime ? listPersonalityNames(runtime.ctx.settings) : [...BUILTIN_PERSONALITIES],
+				prefix,
+			),
+		getHeadlessCompletions: (prefix, runtime) =>
+			personalityCompletions(listPersonalityNames(runtime.settings), prefix),
+		// Headless hosts: set by name, or list the names. Choosing is a typed name, so there is no confirmation
+		// dialog; the cache impact the terminal asks about is reported after the change instead.
+		handle: async (command, runtime) => {
+			const requested = command.args.trim();
+			const current = currentPersonalityName(runtime.settings);
+			if (!requested) {
+				const names = listPersonalityNames(runtime.settings);
+				await runtime.output(
+					[
+						`Personality: ${current}`,
+						"Available:",
+						...names.map(name => `  ${name}`),
+						"Usage: /personality <name>",
+					].join("\n"),
+				);
+				return commandConsumed();
+			}
+			try {
+				const name = resolvePersonalityName(listPersonalityNames(runtime.settings), requested);
+				if (!name) return usage(`Unknown or ambiguous personality: ${requested}`, runtime);
+				const prompt = await personalityPrompt(runtime.settings, name, runtime.cwd);
+				if (prompt === undefined) return usage(`Personality not found: ${name}`, runtime);
+				const impact = await personalityCacheImpact(runtime.session, prompt);
+				selectPersonality(runtime.settings, "session", name);
+				await runtime.settings.flush();
+				await runtime.output(
+					`Personality: ${name} (session)${impact ? `\n${describePersonalityCacheImpact(impact).replace(/ Continue\?$/, "")}` : ""}`,
+				);
+				return commandConsumed();
+			} catch (error) {
+				return usage(errorMessage(error), runtime);
+			}
 		},
 		handleTui: async (command, runtime) => {
 			const ctx = runtime.ctx;
@@ -258,15 +333,12 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			}
 			try {
 				const names = listPersonalityNames(ctx.settings);
-				const matching = names.filter(name => name.toLocaleLowerCase() === requested.toLocaleLowerCase());
-				const name = names.includes(requested) ? requested : matching.length === 1 ? matching[0] : undefined;
+				const name = resolvePersonalityName(names, requested);
 				if (!name) {
 					ctx.showError(`Unknown or ambiguous personality: ${requested}`);
 					return;
 				}
-				const prompt = isBuiltinPersonality(name)
-					? await previewBuiltinPersonality(name, ctx.sessionManager.getCwd())
-					: listCustomPersonalities(ctx.settings).find(item => item.name === name)?.prompt;
+				const prompt = await personalityPrompt(ctx.settings, name, ctx.sessionManager.getCwd());
 				if (prompt === undefined) {
 					ctx.showError(`Personality not found: ${name}`);
 					return;
@@ -359,6 +431,17 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Send an operator-authored system notice to this session",
 		inlineHint: "<text>",
 		allowArgs: true,
+		// Headless hosts: the same steering notice, sent through the session.
+		handle: async (command, runtime) => {
+			const text = command.text.slice(command.name.length + 2);
+			if (!text.trim()) return usage("Usage: /notice <text>", runtime);
+			try {
+				await runtime.session.prompt(operatorNotice(text), noticeOptions(command.text));
+			} catch (error) {
+				return usage(errorMessage(error), runtime);
+			}
+			return commandConsumed({ agentInvoked: true });
+		},
 		handleTui: async (command, runtime) => {
 			const { ctx } = runtime;
 			// Discard only the command and its separator; all remaining text is literal.
@@ -368,17 +451,8 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				ctx.showStatus("Usage: /notice <text>");
 				return;
 			}
-			const notice = prompt.compile(
-				resolvePromptAsset("system/operator-notice.md", noticeTemplate, { kind: "notice" }).text.trimEnd(),
-			)({ text });
-			const options = {
-				synthetic: true,
-				userInitiated: true,
-				attribution: "user" as const,
-				rawText: command.text,
-				expandPromptTemplates: false,
-				streamingBehavior: "steer" as const,
-			};
+			const notice = operatorNotice(text);
+			const options = noticeOptions(command.text);
 			ctx.editor.clearSubmittedDraft();
 			if (ctx.onInputCallback && !ctx.session.isStreaming) {
 				ctx.onInputCallback({ text: notice, ...options, cancelled: false, started: true });

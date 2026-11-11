@@ -18,7 +18,8 @@ import type { MessageOrigin, Model } from "@oh-my-pi/pi-ai";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { $env, getAgentDir, isRecord, logger, Snowflake, toError } from "@oh-my-pi/pi-utils";
+import { $env, getAgentDir, isRecord, logger, postmortem, Snowflake, toError } from "@oh-my-pi/pi-utils";
+import { EXIT_WITH_PARENT_EXIT_CODE, EXIT_WITH_PARENT_TEARDOWN_MS, tearDownExitTarget } from "../../exit-with-parent";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionAskDialogQuestion,
@@ -58,7 +59,7 @@ import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { CACHE_WARMING_MODES } from "../../session/cache-warmer";
 import { findMostRecentNonEmptySession, findRecentSessionContinuation } from "../../session/session-listing";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
-import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
+import { executeAcpBuiltinSlashCommand, lookupTuiOnlyBuiltin } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { cfgSttEnabled } from "../../stt/settings";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
@@ -74,7 +75,7 @@ import { initializeExtensions } from "../runtime-init";
 import { cfgSpellingAutocomplete } from "../settings";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
-import { RPC_CAPABILITIES } from "./rpc-capabilities";
+import { stdioCapabilities } from "./rpc-capabilities";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
@@ -84,13 +85,15 @@ import { readLiveJournalPage, RpcJournalError } from "./rpc-journal";
 import { RpcBtwController } from "./rpc-btw";
 import { RpcGoalController } from "./rpc-goal";
 import { RpcLiveBridge, type RpcLiveControl, type RpcLiveSessionFactory } from "./rpc-live";
-import { serializeRpcModel } from "./rpc-model";
-import { RpcDictationBridge, type RpcDictationControllerFactory } from "./rpc-dictation";
+import { findRpcModel, type RpcModelLookupSession, serializeRpcModel } from "./rpc-model";
+import { RpcDictationBridge, type RpcDictationControl, type RpcDictationControllerFactory } from "./rpc-dictation";
 import { RpcOutputWriter } from "./rpc-output";
 import { isRpcPlanProposalResponse, RpcPlanModeController, RpcSetModeError } from "./rpc-plan-mode";
 import { RpcExtensionUserMessageTracker, RpcPromptResults, watchAndReportPromptResult } from "./rpc-prompt-results";
 import type { RpcPromptTicket } from "./rpc-prompt-results";
 import { controlHostFor } from "../../control/host";
+import { getBuiltinCommandCompletions } from "../../slash-commands/builtin-registry";
+import { cancelRpcJob, listRpcJobs, readRpcJobOutput, RpcJobEvents } from "./rpc-jobs";
 import { RpcRoles } from "./rpc-roles";
 import { getRpcModelSelector } from "./rpc-model-selector";
 import { RpcModelsCommands } from "./rpc-models-commands";
@@ -100,6 +103,9 @@ import { sessionLeaseErrorCode } from "./rpc-session-lease";
 import { RpcSessionSettleWatcher, watchedScheduledTurnProbe } from "./rpc-session-settle";
 import { buildRpcSessionState } from "./rpc-session-state";
 import {
+	handleRpcSetSubagentModel,
+	listRpcSubagentHistory,
+	resolvePersistedSubagentFile,
 	type RpcSubagentBus,
 	RpcSubagentRegistry,
 	readRpcSubagentTranscript,
@@ -1073,23 +1079,6 @@ export async function openRpcSession(
 	};
 }
 
-type RpcModelLookupSession = Pick<AgentSession, "getAvailableModels" | "modelRegistry">;
-
-/**
- * The available model with exactly this provider and id. Models missing from
- * the current catalog wait for in-flight background discovery first: on cold
- * start, discovery-backed providers (proxy / ollama / etc.) populate seconds
- * after session ready. Catalog hits skip the wait, so the RPC queue is not
- * stalled behind unrelated discovery.
- */
-async function findRpcModel(session: RpcModelLookupSession, provider: string, modelId: string) {
-	const find = () => session.getAvailableModels().find(m => m.provider === provider && m.id === modelId);
-	const model = find();
-	if (model) return model;
-	await session.modelRegistry.awaitBackgroundRefresh();
-	return find();
-}
-
 /** The optional `provider`/`modelId` pair of `open_session` or `switch_session`, validated like `set_model`. */
 async function resolveRequestedRpcModel(
 	session: RpcModelLookupSession,
@@ -1500,6 +1489,9 @@ export function registerRpcPersistenceSurface(
 	};
 }
 
+/** Hard ceiling, after stdin closes in `--exit-with-parent` mode, before the process exits whatever teardown is doing. */
+export const RPC_INPUT_CLOSED_TEARDOWN_MS = 10_000;
+
 /** Startup options for {@link runRpcMode}. */
 export interface RpcModeOptions {
 	/** `--mode rpc-ui`: route tool UI (e.g. ask) over the protocol, independently of headless extensions. */
@@ -1508,6 +1500,12 @@ export interface RpcModeOptions {
 	headless?: boolean;
 	subagentEventBus?: EventBus;
 	input?: ReadableStream<Uint8Array>;
+	/**
+	 * `--exit-with-parent`: a closed stdin means the host is gone, so abort the turn, stop owned work and
+	 * exit within {@link RPC_INPUT_CLOSED_TEARDOWN_MS} instead of draining accepted work (the default, which
+	 * scripted `echo prompt | npi --mode rpc` use relies on).
+	 */
+	exitOnInputClosed?: boolean;
 	/** `--model` selector the process launched with (absent with `--provider`); a role selector seeds `activeRole`. */
 	launchModel?: string;
 	/** Builds `live_start` sessions; defaults to the real {@link LiveSessionController}. */
@@ -1563,7 +1561,7 @@ export interface RpcCommandHandlerContext {
 	btw?: RpcBtwController;
 	/** GPT live voice over RPC. */
 	liveBridge?: RpcLiveControl;
-	dictationBridge?: RpcDictationBridge;
+	dictationBridge?: RpcDictationControl;
 	stopDictationForSessionChange?: () => Promise<void>;
 	sessionChangesInProgress?: () => boolean;
 	mcpManager?: MCPManager;
@@ -1637,6 +1635,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 		| { kind: "local" }
 		| { kind: "cancelled" }
 		| { kind: "builtin-agent" }
+		| { kind: "needs-tui"; name: string }
 		| { kind: "admitted"; userEntryId?: string };
 	const dispatchOrderedUserInput = (
 		command: OrderedUserInput,
@@ -1735,6 +1734,17 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 						return { kind: "local" };
 					}
 					text = builtinResult.prompt;
+				} else {
+					// A builtin that needs the terminal UI is refused here, never sent to the model as chat. An
+					// extension or custom command of the same name runs instead, as it does in the TUI.
+					const tuiOnly = lookupTuiOnlyBuiltin(text);
+					if (
+						tuiOnly &&
+						!session.isExtensionCommand(text) &&
+						!session.customCommands.some(loaded => loaded.command.name === tuiOnly.name)
+					) {
+						return { kind: "needs-tui", name: tuiOnly.name };
+					}
 				}
 			}
 			const customCommandResult = await executeCustomPromptCommand(text);
@@ -1786,6 +1796,10 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 						return success(id, "prompt", { agentInvoked: false });
 					}
 					if (outcome.kind === "builtin-agent") return success(id, "prompt", { agentInvoked: true });
+					if (outcome.kind === "needs-tui") {
+						promptResults.discard(ticket);
+						return error(id, "prompt", `/${outcome.name} needs the terminal UI`, "command_requires_tui");
+					}
 					if (outcome.kind === "cancelled") {
 						promptResults.settle(ticket);
 						return success(id, "prompt");
@@ -1862,6 +1876,10 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					outcome => {
 						if (outcome.kind === "cancelled") promptResults.settle(ticket);
 						else if (outcome.kind === "local") promptResults.completeLocal(ticket);
+						else if (outcome.kind === "needs-tui") {
+							onPromptError(id, "abort_and_prompt")(new Error(`/${outcome.name} needs the terminal UI`));
+							promptResults.fail(ticket, `/${outcome.name} needs the terminal UI`);
+						}
 					},
 					(cause: unknown) => {
 						const promptError = cause instanceof Error ? cause : new Error(String(cause));
@@ -2023,6 +2041,16 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 
 			case "get_available_commands": {
 				return success(id, "get_available_commands", { commands: await getAvailableCommands() });
+			}
+
+			case "get_command_completions": {
+				if (typeof command.command !== "string" || typeof command.prefix !== "string") {
+					return error(id, command.type, "`command` and `prefix` must be strings.");
+				}
+				const items = await getBuiltinCommandCompletions(command.command.replace(/^\//, ""), command.prefix, {
+					settings: session.settings,
+				});
+				return success(id, command.type, { items });
 			}
 
 			case "get_entries": {
@@ -2226,15 +2254,36 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				return success(id, "get_subagents", { subagents: subagentRegistry.getSubagents() });
 			}
 
-			case "get_subagent_messages": {
-				if (!subagentRegistry) {
-					return error(id, "get_subagent_messages", "Subagent event bus is unavailable");
+			case "get_subagent_history": {
+				if (command.includeAdvisors !== undefined && typeof command.includeAdvisors !== "boolean") {
+					return error(id, command.type, "`includeAdvisors` must be a boolean.");
 				}
+				try {
+					return success(
+						id,
+						command.type,
+						await listRpcSubagentHistory(session, subagentRegistry, { includeAdvisors: command.includeAdvisors }),
+					);
+				} catch (err) {
+					return error(id, command.type, err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_subagent_messages": {
 				try {
 					if (command.fromByte !== undefined && !Number.isFinite(command.fromByte)) {
 						return error(id, "get_subagent_messages", "fromByte must be a finite number");
 					}
-					const sessionFile = subagentRegistry.resolveSessionFile(command);
+					let sessionFile: string;
+					try {
+						if (!subagentRegistry) throw new Error("Subagent event bus is unavailable");
+						sessionFile = subagentRegistry.resolveSessionFile(command);
+					} catch (liveError) {
+						// Not in the live roster: a persisted child of this session's tree still reads.
+						const persisted = await resolvePersistedSubagentFile(session, command);
+						if (!persisted) throw liveError;
+						sessionFile = persisted;
+					}
 					const transcript = await readRpcSubagentTranscript(sessionFile, command.fromByte);
 					return success(id, "get_subagent_messages", transcript);
 				} catch (err) {
@@ -2301,6 +2350,69 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					enabled: owned.session.isFastModeEnabled(),
 					active: owned.session.isFastModeActive(),
 				});
+			}
+
+			case "get_jobs": {
+				if (command.recentLimit !== undefined && !Number.isFinite(command.recentLimit)) {
+					return error(id, command.type, "`recentLimit` must be a finite number.");
+				}
+				return success(id, command.type, listRpcJobs(session, command.recentLimit));
+			}
+
+			case "get_job_output": {
+				if (typeof command.jobId !== "string" || command.jobId.length === 0) {
+					return error(id, command.type, "`jobId` must be a non-empty string.");
+				}
+				if (command.fromByte !== undefined && !Number.isFinite(command.fromByte)) {
+					return error(id, command.type, "`fromByte` must be a finite number.");
+				}
+				if (command.revision !== undefined && typeof command.revision !== "string") {
+					return error(id, command.type, "`revision` must be a string.");
+				}
+				const output = readRpcJobOutput(session, command.jobId, command.fromByte, command.revision);
+				return output
+					? success(id, command.type, output)
+					: error(id, command.type, `Job not found: ${command.jobId}`);
+			}
+
+			case "cancel_job": {
+				if (typeof command.jobId !== "string" || command.jobId.length === 0) {
+					return error(id, command.type, "`jobId` must be a non-empty string.");
+				}
+				return success(id, command.type, { cancelled: cancelRpcJob(session, command.jobId) });
+			}
+
+			case "set_subagent_model": {
+				if (!subagentRegistry) {
+					return error(id, command.type, "Subagent event bus is unavailable");
+				}
+				if (typeof command.subagentId !== "string" || command.subagentId.length === 0) {
+					return error(id, command.type, "`subagentId` must be a non-empty string.");
+				}
+				const { selector, provider, modelId } = command;
+				if (selector !== undefined) {
+					if (
+						typeof selector !== "string" ||
+						!selector.trim() ||
+						provider !== undefined ||
+						modelId !== undefined
+					) {
+						return error(
+							id,
+							command.type,
+							"Give a non-blank `selector`, or `provider` with `modelId`, not both.",
+						);
+					}
+				} else if (typeof provider !== "string" || !provider || typeof modelId !== "string" || !modelId) {
+					return error(id, command.type, "Give a non-blank `selector`, or `provider` with `modelId`.");
+				}
+				const outcome = await handleRpcSetSubagentModel(subagentRegistry, {
+					subagentId: command.subagentId,
+					selector: selector?.trim(),
+					provider,
+					modelId,
+				});
+				return outcome.ok ? success(id, command.type, outcome.data) : error(id, command.type, outcome.message);
 			}
 
 			// =================================================================
@@ -2414,6 +2526,25 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					if (cause instanceof RpcThemeConflict) return error(id, command.type, cause.message, "conflict");
 					throw cause;
 				}
+
+			case "cycle_role": {
+				if (
+					command.direction !== undefined &&
+					command.direction !== "forward" &&
+					command.direction !== "backward"
+				) {
+					return error(id, "cycle_role", '`direction` must be "forward" or "backward".');
+				}
+				try {
+					const result = await rpcRoles.cycle(command.direction ?? "forward");
+					if (result)
+						output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+					return success(id, "cycle_role", result);
+				} catch (cause) {
+					// Ctrl+P surfaces a failed switch (for example a model without credentials) as an error.
+					return error(id, "cycle_role", cause instanceof Error ? cause.message : String(cause));
+				}
+			}
 
 			case "get_roles": {
 				await session.modelRegistry.awaitBackgroundRefresh();
@@ -2731,7 +2862,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		supportedProtocolVersions: [1, 2],
 		maxFrameBytes: MAX_RPC_FRAME_BYTES,
 		maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
-		capabilities: [...RPC_CAPABILITIES],
+		capabilities: stdioCapabilities(),
 	};
 	outputWriter.write(frameEncoder.encodeFrames(readyFrame));
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
@@ -2786,6 +2917,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	const controlHost = controlHostFor(session);
 	if (controlHost) controlHost.liveBridge = liveBridge;
 	let lastDictationError: { message: string } | undefined;
+	// Job frames go straight to `output`, so `set_event_filter` (session events only) never drops them.
+	const jobEvents = new RpcJobEvents(session, output);
 	const sessionDictationBridge = new RpcDictationBridge(
 		session,
 		frame => {
@@ -3111,6 +3244,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		onShutdown: () => {
 			shutdownState.requested = true;
 			sessionDictationBridge.dispose();
+			jobEvents.dispose();
 		},
 		trackAgentInvokingMessage: task => {
 			extensionUserMessageTracker.trackAgentMessageTask(task);
@@ -3161,6 +3295,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			});
 			// Close the realtime call (microphone, socket) before the session it delegates into.
 			sessionDictationBridge.dispose();
+			jobEvents.dispose();
 			await liveBridge.stop();
 			await session.dispose();
 		} catch (error) {
@@ -3298,6 +3433,25 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		},
 	});
 
+	/** The host is gone: abort, stop owned work, and exit within the budget even if teardown hangs. */
+	const exitAfterInputClosed = async (): Promise<never> => {
+		const hardExit = setTimeout(
+			() => void postmortem.exitProcess(EXIT_WITH_PARENT_EXIT_CODE),
+			RPC_INPUT_CLOSED_TEARDOWN_MS,
+		);
+		try {
+			await tearDownExitTarget(
+				{ session, mcpManager: options.mcpManager },
+				EXIT_WITH_PARENT_TEARDOWN_MS,
+				"RPC host closed its input",
+			);
+			await liveBridge.stop().catch(() => {});
+		} finally {
+			clearTimeout(hardExit);
+		}
+		return disposeAndExit();
+	};
+
 	// Startup is complete: release commands queued behind extension init.
 	startup.resolve();
 	await inputClosed;
@@ -3314,7 +3468,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	toolApprovalBridge.close("RPC client disconnected before tool approval response completed");
 	if (controlHost?.liveBridge === liveBridge) controlHost.liveBridge = undefined;
 	sessionDictationBridge.dispose();
+	jobEvents.dispose();
 	await liveBridge.stop();
+	if (options.exitOnInputClosed) {
+		abortBuiltinCommands("RPC client disconnected");
+		return exitAfterInputClosed();
+	}
 	await inputDispatcher.drain();
 	// A backgrounded builtin (e.g. a /mcp reauth browser wait) must not park
 	// the drain: tear it down now that the client is gone.

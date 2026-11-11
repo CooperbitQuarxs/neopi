@@ -5,10 +5,25 @@
 ### Breaking Changes
 
 - Renamed the fork to NeoPi and its executable to `npi`; existing `.omp` configuration and provider compatibility remain unchanged.
+- Vim navigation across menus, pickers and viewers is now opt-in through the existing `tui.vimMode` setting (off by default), alongside modal prompt and search editing; enable **Vim Navigation and Editing** in `/settings`.
 - The Mixture of Agents command is now `/moa`; `/mixture` is no longer a command. Slash-command completion, the command lists sent to ACP and control clients, the usage text, and the pause notice name `/moa`, while `mixture/<name>` model ids, `MIXTURES.toml`, and `moa.*` settings are unchanged ([#366](https://github.com/PsychedelicShayna/neopi/issues/366)).
 
 ### Added
 
+- `--exit-with-parent` now works for `--mode rpc` / `rpc-ui` (capability `exit_with_parent`): a host-owned process aborts and exits within seconds when its host dies or closes stdin, instead of draining accepted work; the default drain is unchanged ([#687](https://github.com/PsychedelicShayna/neopi/issues/687)).
+- The `abort_and_restore_queue` capability is advertised in the RPC and control `ready` frames, so hosts can gate the atomic Esc queue restore and fall back to `abort` on older NeoPi ([#685](https://github.com/PsychedelicShayna/neopi/issues/685)).
+- `get_job_output` takes and returns a `revision`, so a host reading a running job's rolling output tail resets to a full snapshot when the text was replaced instead of keeping stale or spliced output ([#665](https://github.com/PsychedelicShayna/neopi/issues/665)).
+- Terminal-owned sessions serve `dictation_start` / `dictation_stop` over the control socket (capability `dictation` in the control hello), recording with the terminal's microphone for the controlling connection only and refusing while the terminal's own speech-to-text is active, so GUIs attached to a terminal session can dictate ([#681](https://github.com/PsychedelicShayna/neopi/issues/681)).
+- RPC and the control socket list the whole subagent tree of a session, including finished, parked and aborted children, with `get_subagent_history`, and `get_subagent_messages` reads their persisted transcripts, so a restarted host can rebuild its Agents panel; hosts gate on the `subagent_history` capability ([#680](https://github.com/PsychedelicShayna/neopi/issues/680)).
+- `/personality <name>` and `/notice <text>` now run in RPC, ACP and control sessions (bare `/personality` lists the names); the terminal keeps its manager and confirmation ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).
+- RPC `get_command_completions { command, prefix }` returns a slash command's argument completions (subcommands, personality names) to hosts without a terminal; hosts gate on the `command_completions` capability ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).
+- RPC lists every slash command in `get_available_commands` with its `availability` (`headless` or `tui`), and a `prompt` that names a terminal-only command answers `command_requires_tui` instead of being sent to the model; hosts gate on the `command_catalog` capability ([#675](https://github.com/PsychedelicShayna/neopi/issues/675)).
+- `npi sessions list --json --live` adds each live session's state (busy, waiting for an answer, idle), streaming flag, pending dialog count and git branch, so hosts can mark running sessions without opening a control connection per row; default output is unchanged ([#669](https://github.com/PsychedelicShayna/neopi/issues/669)).
+- RPC hosts can list, read and cancel background jobs with `get_jobs`, `get_job_output` and `cancel_job`, and keep a live list with `job_lifecycle` frames; hosts gate on the `background_jobs` capability ([#665](https://github.com/PsychedelicShayna/neopi/issues/665)).
+- `get_state` reports `hostname`, `activeTimeMs` (accumulated active processing time) and `runningJobCount`, the facts the TUI status line shows; hosts gate on the `status_facts` capability ([#667](https://github.com/PsychedelicShayna/neopi/issues/667)).
+- The stdio RPC `ready` frame advertises the `dictation` capability, and `get_state.dictationEnabled` reports whether speech-to-text is enabled, so hosts can show or hide dictation controls ([#668](https://github.com/PsychedelicShayna/neopi/issues/668)).
+- RPC and the control socket can cycle role models like Ctrl+P with `cycle_role { direction }`, and `get_roles` reports the configured `cycleOrder`; hosts gate on the `cycle_role` capability ([#666](https://github.com/PsychedelicShayna/neopi/issues/666)).
+- RPC and the control socket can switch a running subagent's model with `set_subagent_model` (selector or provider and model id), from its next request and for that subagent only; hosts gate on the `set_subagent_model` capability ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
 - `npi auth-gateway link` prints one `neopi-gateway://host:port?token=…&name=…` connection link for the running gateway, so NeoProxy pairs with a single paste; when the gateway is not running it prints the `serve` command that starts it. `serve` records its listener in `<config-dir>/auth-gateway.runtime.json` for `link` and same-host clients.
 - Added a scoped personality manager with prompt previews, custom personalities, and `/personality` switching.
 
@@ -135,6 +150,8 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Ask dialogs hide the draft cursor when arrow navigation hands input to the question, without clearing the draft.
+- A speed tier the provider newly advertises for the active model (for example UltraFast) becomes available without re-selecting the model; `/fast ultra` no longer reports it unavailable until restart.
 - NeoProxy models are selected as `neoproxy/<name>` with one prefix (for example `neoproxy/anthropic-npi/claude-opus-5-5`) instead of `neoproxy/neoproxy/<name>`; requests still send the name NeoProxy advertises, and per-key routing is unchanged. Selectors saved with the doubled prefix need updating.
 - Reconnecting an existing API key immediately adopts its newly confirmed CA and origin restrictions instead of retaining stale trust until restart.
 - Print mode exits non-zero with the HTTP status, source model, and attempt count after its configured retry budget, without hidden HTTP retries or renewed budgets on fallback ([#627](https://github.com/PsychedelicShayna/neopi/issues/627)).

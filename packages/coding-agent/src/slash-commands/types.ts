@@ -49,6 +49,15 @@ export interface BuiltinSlashCommand {
 	) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 	/** TUI inline hint replacing the declarative `subcommands` hint. */
 	getTuiInlineHint?: (argumentText: string) => string | null;
+	/**
+	 * Argument completion for hosts without a terminal (RPC `get_command_completions`), for commands whose
+	 * names come from settings. It takes precedence over the TUI completer; without it, headless hosts get
+	 * the static completer and, failing that, the declarative `subcommands`.
+	 */
+	getHeadlessCompletions?: (
+		argumentPrefix: string,
+		runtime: { settings: Settings },
+	) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 }
 
 /** Parsed slash-command text after stripping the leading "/". */

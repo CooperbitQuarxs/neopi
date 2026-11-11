@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { buildTabBarTabs } from "../src/overlays/extensions/extension-dashboard";
 import { ExtensionList } from "../src/overlays/extensions/extension-list";
 import type { Extension } from "../src/overlays/extensions/types";
@@ -215,4 +216,13 @@ describe("ExtensionList list hints", () => {
 		expect(lines.some(line => line.includes("\n"))).toBe(false);
 		expect(lines.join("\n").split("\n")).toHaveLength(lines.length);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

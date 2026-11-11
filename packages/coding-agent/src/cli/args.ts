@@ -90,6 +90,8 @@ export interface Args {
 	noPty?: boolean;
 	/** Print/json modes: keep running after the parent process dies (`--no-exit-with-parent`). */
 	noExitWithParent?: boolean;
+	/** RPC modes: die with the host (parent death or stdin EOF aborts and exits within seconds; `--exit-with-parent`). */
+	exitWithParent?: boolean;
 	hooks?: string[];
 	extensions?: string[];
 	trustedExtensions?: string[];
@@ -379,6 +381,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.noPty = true;
 		} else if (arg === "--no-exit-with-parent") {
 			result.noExitWithParent = true;
+		} else if (arg === "--exit-with-parent") {
+			result.exitWithParent = true;
 		} else if (arg === "--hide-thinking") {
 			result.hideThinking = true;
 		} else if (arg === "--advisor") {

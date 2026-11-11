@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, describe, expect, it, vi, beforeEach } from "bun:test";
 import type { AgentToolContext, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import { Settings } from "../src/config/settings";
@@ -307,4 +308,13 @@ describe("AskTool timeout", () => {
 		expect(onTimeoutReset).toHaveBeenCalledTimes(1);
 		selector.dispose();
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

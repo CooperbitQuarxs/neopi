@@ -901,6 +901,7 @@ describe("control host", () => {
 			insertDraft: () => {},
 			rewind: async () => ({ status: "rewound" }),
 			notify: () => {},
+			dictationBusy: () => false,
 			draftRevision: () => 0,
 			focusRevision: () => 0,
 			dialogRevision: () => 0,

@@ -61,6 +61,8 @@ The initial viewport centers the selection. Selection motions reveal it when nee
 
 ## Keybindings inside tree selector
 
+Vim motions are opt-in through `tui.vimMode: true` (default `false`; **Vim Navigation and Editing** in `/settings`). In the list below, `j`/`k`, `h`/`l`, `gg`/`G`, `Ctrl+D`/`Ctrl+U` and `Ctrl+E`/`Ctrl+Y` require Vim mode. Their ordinary arrow, Home/End and PageUp/PageDown alternatives, as well as search, activation, filters and menu history, remain available when it is off. Search and label fields keep literal editing unless modal editing is enabled by the same setting.
+
 - `j` / `k`, or `Down` / `Up`: move selection (wraps)
 - `Alt+Up` / `Alt+Down`: jump to previous/next user or assistant turn
 - `app.tree.previousBranch` / `app.tree.nextBranch` (unbound by default; bind them in [`keybindings.yml`](./keybindings.md), e.g. to `Shift+Left` / `Shift+Right`): jump to the previous/next visible branch in rendered order (wraps), across nested forks. A branch whose head is filtered out lands on its first visible descendant.

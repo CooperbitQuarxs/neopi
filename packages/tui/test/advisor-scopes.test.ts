@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import type { TUI } from "../src/tui";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeNode } from "../src/native/node";
@@ -185,6 +186,9 @@ describe("advisor file scopes", () => {
 		expect(pickerProps(f.overlay.describe(cx)).query).toBe("j ");
 		f.overlay.handleInput("\x1b");
 		expect(f.closes()).toBe(0);
+		expect(pickerProps(f.overlay.describe(cx)).query).toBe("j ");
+		f.overlay.handleInput("\x1b"); // Normal -> navigation, cancelling the draft.
+		expect(pickerProps(f.overlay.describe(cx)).query).toBe("");
 		f.overlay.handleInput("k");
 		f.overlay.handleInput("l");
 		f.overlay.handleInput("j");
@@ -318,4 +322,13 @@ describe("advisor file scopes", () => {
 		f.overlay.handleInput("\x1b");
 		expect(f.closes()).toBe(1);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

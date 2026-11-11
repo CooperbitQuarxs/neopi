@@ -104,7 +104,7 @@ export class PsTopComponent implements Component {
 	#statusText = "";
 	readonly #keys = new MenuKeyReader();
 	readonly #search = new MenuSearchField();
-	readonly #help = new MenuHelp(undefined, "h / l or Tab: cycle table, info and logs");
+	readonly #help = new MenuHelp(undefined, "Left / Right or Tab: cycle table, info and logs");
 	#filteredQuery = "";
 	#nativeScroll: NativeScroll | undefined;
 	#viewRequest = 0;

@@ -45,6 +45,7 @@ import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { formatKeyHint, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker";
+import { setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { fetchBuild } from "./cli/build-service";
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { CliUsageError } from "./cli/usage-error";
@@ -202,6 +203,7 @@ import {
 	cfgTuiImeSafeCursor,
 	cfgTuiMaxInlineImages,
 	cfgTuiResizeScrollback,
+	cfgTuiVimMode,
 	cfgUpdateChannel,
 } from "./modes/settings";
 import {
@@ -2151,7 +2153,8 @@ export async function runRootCommand(
 		// (the terminal, or RPC/ACP stdin EOF). Watch before reading piped stdin:
 		// a writer that outlives the host would otherwise block the read forever.
 		const mayRunHeadless = parsedArgs.print === true || parsedArgs.mode !== undefined || !process.stdin.isTTY;
-		if (!isProtocolMode && mayRunHeadless && !parsedArgs.noExitWithParent) {
+		const rpcOwnedByParent = (mode === "rpc" || mode === "rpc-ui") && parsedArgs.exitWithParent === true;
+		if ((!isProtocolMode && mayRunHeadless && !parsedArgs.noExitWithParent) || rpcOwnedByParent) {
 			parentExit = exitWithParent({ parentPid: LAUNCH_PARENT_PID });
 		}
 		// Protocol modes own stdin; treating it as prompt text would consume JSON-RPC frames before their transports start.
@@ -2218,6 +2221,7 @@ export async function runRootCommand(
 		}
 
 		const settingsInstance = await settingsPromise;
+		setMenuSearchVimMode(cfgTuiVimMode.get(settingsInstance));
 		// Process-lifetime: broker/account-policy edits reconfigure the shared credential store.
 		createAuthStorageSettingsSync(settingsInstance, authStorage);
 		if (parsedArgs.approvalMode) {
@@ -3106,6 +3110,7 @@ export async function runRootCommand(
 					mcpManager,
 					input: rpcInput,
 					launchModel: parsedArgs.provider ? undefined : parsedArgs.model,
+					exitOnInputClosed: rpcOwnedByParent,
 				});
 			} else if (isInteractive) {
 				const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);

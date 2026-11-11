@@ -1,7 +1,7 @@
 import type { AvailableCommand } from "@oh-my-pi/pi-utils/acp";
 import { BUILTIN_SLASH_COMMANDS_INTERNAL, lookupBuiltinSlashCommand } from "./builtin-registry";
 import { parseSlashCommand } from "./helpers/parse";
-import type { AcpBuiltinSlashCommandResult, SlashCommandRuntime } from "./types";
+import type { AcpBuiltinSlashCommandResult, SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 export type { AcpBuiltinSlashCommandResult } from "./types";
 
@@ -47,6 +47,17 @@ export const ACP_BUILTIN_SLASH_COMMANDS: AvailableCommand[] = BUILTIN_SLASH_COMM
 		input: hint ? { hint } : undefined,
 	};
 });
+
+/**
+ * The builtin a slash text names when it needs the terminal UI (no text-mode `handle`), else
+ * `undefined`. Hosts without a TUI use it to refuse such text instead of sending it to the model.
+ */
+export function lookupTuiOnlyBuiltin(text: string): SlashCommandSpec | undefined {
+	const parsed = parseSlashCommand(text);
+	if (!parsed) return undefined;
+	const command = lookupBuiltinSlashCommand(parsed.name);
+	return command && !command.handle ? command : undefined;
+}
 
 /**
  * Dispatch a slash command in ACP/text mode. Returns:
