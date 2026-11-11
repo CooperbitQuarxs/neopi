@@ -384,7 +384,7 @@ class MultiSelectSubmenu extends Container {
 		this.#selectList.onCancel = this.#onClose;
 		const back = `${editorKey("tui.select.cancel")} to go back`;
 		const hint = this.#ordered
-			? `  Click to toggle · drag selected items to reorder · h/l move · 1-9 place · / search · ${back}`
+			? `  Click to toggle · drag selected items to reorder · ←/→ move · 1-9 place · / search · ${back}`
 			: `  Click/${editorKey("tui.select.confirm")}/${formatKeyHint("space")} to toggle · ${back}`;
 		this.#field = new FormField(this.#selectList, {
 			theme: formTheme,

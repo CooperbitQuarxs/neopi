@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { PluginSelectorComponent } from "../src/overlays/plugin-selector";
 import { initTheme } from "../src/theme/theme";
 
@@ -72,4 +73,13 @@ describe("plugin picker activation policy", () => {
 		selector.handleNativeEvent({ type: "action", key: "^picker", act: "confirm", mods: [] });
 		expect(selected).toEqual(["alpha"]);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

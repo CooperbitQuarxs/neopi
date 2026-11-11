@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import type { TUI } from "../src/tui";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeNode } from "../src/native/node";
@@ -318,4 +319,13 @@ describe("advisor file scopes", () => {
 		f.overlay.handleInput("\x1b");
 		expect(f.closes()).toBe(1);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

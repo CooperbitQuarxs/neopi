@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
@@ -10,15 +10,22 @@ import {
 } from "../src/overlays/model-hub";
 import { initTheme } from "../src/theme";
 import type { TUI } from "../src/tui";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "../src/components/menu-navigation";
 
 const PRIMARY = "demo/primary";
 const FIRST = "demo/first:low";
 const SECOND = "demo/second";
 const hubs: ModelHubComponent[] = [];
+let previousVimMode = false;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
 beforeAll(async () => {
 	await initTheme(false);
 });
 afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 	for (const hub of hubs.splice(0)) hub.dispose();
 });
 
@@ -174,5 +181,39 @@ test("individual fallback y and uppercase Y keep their existing meanings", () =>
 	hub.handleInput("Y");
 	focus("role:slow");
 	hub.handleInput("p");
+	expect(chains.slow).toEqual([FIRST, SECOND]);
+});
+
+test("plain yank and paste are inert with Vim off while Alt shortcuts preserve copying", () => {
+	setMenuSearchVimMode(false);
+	const { hub, chains, focus } = createHub();
+	for (const key of ["y", "Y", "p", "j", "k", "h", "l", "g", "G"]) {
+		focus("role:default");
+		hub.handleInput(key);
+		expect(hub.navigationSnapshot()).toMatchObject({ filterFocused: true, rolesQuery: key });
+		expect(chains.smol).toBeUndefined();
+		hub.handleInput("\x1b");
+	}
+
+	focus("role:default");
+	hub.handleInput("\x1by");
+	focus("role:smol");
+	hub.handleInput("p");
+	expect(chains.smol).toBeUndefined();
+	hub.handleInput("\x1b");
+	hub.handleInput("\x1bp");
+	expect(chains.smol).toEqual([PRIMARY, FIRST, SECOND]);
+
+	focus("fallback:default:0");
+	hub.handleInput("Y");
+	hub.handleInput("\x1b");
+	focus("role:slow");
+	hub.handleInput("\x1bp");
+	expect(chains.slow).toEqual([PRIMARY, FIRST, SECOND]);
+	focus("fallback:default:0");
+	hub.handleInput("\x1bY");
+	focus("role:slow");
+	chains.slow = [];
+	hub.handleInput("\x1bp");
 	expect(chains.slow).toEqual([FIRST, SECOND]);
 });

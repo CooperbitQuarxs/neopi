@@ -1,4 +1,5 @@
-import { beforeAll, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, expect, it, beforeEach, afterEach } from "bun:test";
 import { initTheme } from "../src/theme/theme";
 import { LogoutAccountSelectorComponent } from "../src/overlays/logout-account-selector";
 import { ResetUsageSelectorComponent, type ResetUsageAccount } from "../src/overlays/reset-usage-selector";
@@ -140,4 +141,13 @@ it.each([
 	expect(selector.navigationSnapshot()).toMatchObject({ search: { value: "", query: "", focused: false } });
 	selector.handleNativeEvent(close);
 	expect(closed).toBe(1);
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

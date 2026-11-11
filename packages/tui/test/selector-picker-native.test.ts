@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import type { TspKind, TspPickerProps } from "@oh-my-pi/pi-wire";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { DescribeContext, NativeNode } from "../src/native/node";
@@ -361,4 +362,13 @@ describe("oauth selector picker", () => {
 		selector.handleInput("\x1b");
 		expect(closed).toBe(true);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, describe, expect, it, vi, beforeEach } from "bun:test";
 import { TreeSelectorComponent, type TreeSelectorNode } from "../src/overlays/tree-selector";
 import { initTheme } from "../src/theme";
 
@@ -161,4 +162,13 @@ describe("session tree shared menu navigation", () => {
 		expect(onCancel).not.toHaveBeenCalled();
 		selector.dispose();
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

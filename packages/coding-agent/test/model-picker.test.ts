@@ -1,5 +1,6 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { createModelBrowserSource } from "../src/modes/model-browser-source";
-import { beforeAll, describe, expect, type Mock, test, vi } from "bun:test";
+import { beforeAll, describe, expect, type Mock, test, vi, beforeEach, afterEach } from "bun:test";
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -318,4 +319,13 @@ describe("ModelPicker", () => {
 		picker.handleInput("\n");
 		expect(onPick).not.toHaveBeenCalled();
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

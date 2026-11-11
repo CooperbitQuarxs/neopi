@@ -1,5 +1,6 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 /** Roles search owns literal text only while slash has focused its field. */
-import { beforeAll, expect, test } from "bun:test";
+import { beforeAll, expect, test, beforeEach, afterEach } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext } from "../src/native/node";
@@ -319,4 +320,13 @@ test("nested Roles editor visits capture the parent and restore drafts silently"
 	expect(restored.input.getCursor()).toBe("draft hjkl/".length);
 	expect(visits).toHaveLength(1);
 	hub.dispose();
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

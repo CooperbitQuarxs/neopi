@@ -482,12 +482,18 @@ settings.updateValue("theme", "light");
 - Arrow keys: Navigate
 - Enter/Space: Activate (cycle value or open submenu)
 - Escape: Cancel
-- `?`: Open the menu's Vim navigation reference; Escape returns to the menu.
+- `?`: Open the menu's navigation reference; Escape returns to the menu. Vim shortcuts appear only when Vim mode is enabled.
 
-Menu footers put menu-specific actions first and reserve the far right for terse
-Vim motions (`hjkl gg/G C-u d e y`). At narrow widths, the motion group disappears
-before any menu action; action hints wrap rather than being cut off. `?` remains
-literal input while a search field or text editor has focus.
+Vim navigation is opt-in: NeoPi's `tui.vimMode` defaults to `false` and also controls
+modal prompt and search editing. Menu consumers follow the live preference exposed
+by `getMenuSearchVimMode()`; ordinary arrows, paging, boundary keys, activation,
+search focus, context switching and menu history do not require Vim mode.
+
+Menu footers put menu-specific actions first and, only with Vim mode enabled,
+reserve the far right for terse Vim motions (`hjkl gg/G C-u d e y`). At narrow
+widths, the motion group disappears before any menu action; action hints wrap
+rather than being cut off. `?` remains literal input while a search field or text
+editor has focus.
 
 Built-in menus share `MenuHints` / `menuHintLines()` for this layout and
 `MenuHelp` for the navigation reference. Hosts route text-field input first,

@@ -42,6 +42,7 @@ import { compileMenuRegex } from "../menu-search";
 import { Input } from "../components/input";
 import {
 	applyMenuMotion,
+	getMenuSearchVimMode,
 	MenuKeyReader,
 	type MenuNavAction,
 	MenuSearchField,
@@ -3193,7 +3194,10 @@ export class ModelHubComponent implements Component {
 		if (this.#activeEntry().kind === "overrides" && this.#assigning === null) {
 			const panel = this.#overrides();
 			if (this.#focus === "list" || panel.editing) {
-				if (!panel.editing && (matchesKey(rawData, "tab") || matchesKey(rawData, "left") || rawData === "h")) {
+				if (
+					!panel.editing &&
+					(matchesKey(rawData, "tab") || matchesKey(rawData, "left") || (getMenuSearchVimMode() && rawData === "h"))
+				) {
 					this.#focus = "scope";
 				} else panel.handleInput(rawData);
 				return;
@@ -3202,7 +3206,7 @@ export class ModelHubComponent implements Component {
 				matchesKey(rawData, "enter") ||
 				matchesKey(rawData, "right") ||
 				matchesKey(rawData, "tab") ||
-				rawData === "l"
+				(getMenuSearchVimMode() && rawData === "l")
 			) {
 				this.#focus = "list";
 				return;
@@ -3246,6 +3250,24 @@ export class ModelHubComponent implements Component {
 		const rolesView = entry.kind === "roles" && this.#assigning === null;
 		const effortView = entry.kind === "effort" && this.#assigning === null;
 		const lockedView = entry.kind === "provider" && entry.locked && this.#assigning === null;
+		const printable = extractPrintableText(data);
+		const actionKey =
+			(rolesView && printable !== undefined && Object.hasOwn(ROLES_ACTION_KEYS, printable)) ||
+			(effortView && (printable === "x" || printable === "[" || printable === "]")) ||
+			(entry.kind === "provider" && printable === "e" && this.#pinnedProviders.some(provider => provider.id === entry.providerId));
+		if (
+			!action &&
+			!getMenuSearchVimMode() &&
+			printable !== undefined &&
+			!actionKey &&
+			(rolesView || effortView || this.#isBrowserView(entry))
+		) {
+			this.#filterEditing = true;
+			this.#focus = "list";
+			if (!rolesView && !effortView) this.#browser.focusFilter();
+			this.#handleInput(data);
+			return;
+		}
 
 		if (action?.kind === "search") {
 			if (rolesView || effortView || this.#isBrowserView(entry)) {
@@ -3642,7 +3664,7 @@ export class ModelHubComponent implements Component {
 		}
 		const row = this.#rolesRows[this.#roleIndex];
 		const printable = extractPrintableText(data);
-		if (printable === "y") {
+		if ((getMenuSearchVimMode() && printable === "y") || matchesKey(data, "alt+y")) {
 			if (row?.kind === "role") {
 				const model = this.#roles[row.role]?.model;
 				if (model) {
@@ -3683,7 +3705,7 @@ export class ModelHubComponent implements Component {
 			}
 			return;
 		}
-		if (printable === "Y") {
+		if ((getMenuSearchVimMode() && printable === "Y") || matchesKey(data, "alt+shift+y")) {
 			if (row?.kind === "fallback") {
 				this.#yankedFallback = (this.#fallbackChains()[row.role] ?? []).map(selector =>
 					this.#snapshotFallback(row.role, selector),
@@ -3691,7 +3713,7 @@ export class ModelHubComponent implements Component {
 			}
 			return;
 		}
-		if (printable === "p") {
+		if ((getMenuSearchVimMode() && printable === "p") || matchesKey(data, "alt+p")) {
 			if (row?.kind === "role" || row?.kind === "fallback" || row?.kind === "chainKey") {
 				this.#pasteFallback(row.role);
 			}
@@ -4420,6 +4442,8 @@ export class ModelHubComponent implements Component {
 				return `${upDown} providers · ${enterRight} roles · ${altLeftRight} tabs${presets} · ${cancel} close`;
 			}
 			const row = this.#rolesRows[this.#roleIndex];
+			const copyKeys = getMenuSearchVimMode() ? ["y", "shift+y"] as const : ["alt+y", "alt+shift+y"] as const;
+			const pasteKey = getMenuSearchVimMode() ? "p" : "alt+p";
 			const compaction =
 				this.#callbacks.onCompactionPointChange && this.#roleRowModel()
 					? ` · ${formatKeyHint("m")} compaction limit`
@@ -4428,10 +4452,10 @@ export class ModelHubComponent implements Component {
 				// Advertise thinking only when the entry resolves to an editable model.
 				const editable = this.#resolveFallbackEntry(row.role, row.chainIndex) !== undefined;
 				const thinking = editable ? ` · ${formatKeyHint("t")} effort` : "";
-				return `${upDown} rows · ${enter} exact/pattern · ${formatKeyHint("f")} add · ${formatKeyHints(["y", "shift+y"])} yank · ${formatKeyHint("p")} append · ${formatKeyHint("x")} remove${thinking}${compaction} · [/] reorder · ${left} scopes`;
+				return `${upDown} rows · ${enter} exact/pattern · ${formatKeyHint("f")} add · ${formatKeyHints(copyKeys)} copy · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} remove${thinking}${compaction} · [/] reorder · ${left} scopes`;
 			}
 			if (row?.kind === "chainKey") {
-				return `${upDown} rows · ${enter} edit key · ${formatKeyHint("f")} add fallback · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear chain · ${left} providers`;
+				return `${upDown} rows · ${enter} edit key · ${formatKeyHint("f")} add fallback · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} clear chain · ${left} providers`;
 			}
 			if (row?.kind === "newFallback") {
 				return `${upDown} rows · ${enter} new exact/pattern fallback chain · ${left} providers`;
@@ -4444,7 +4468,7 @@ export class ModelHubComponent implements Component {
 				this.#presets().names.length > 0 ? ` · ${formatKeyHints(["ctrl+left", "ctrl+right"])} preset` : "";
 			const yank =
 				row?.kind === "role" && (this.#fallbackChains()[row.role]?.length ?? 0) > 0 ? "yank chain" : "yank model";
-			return `${upDown} rows · ${enter} pick · D description · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} ${yank} · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
+			return `${upDown} rows · ${enter} pick · D description · ${formatKeyHint("f")} fallback · ${formatKeyHint(getMenuSearchVimMode() ? "y" : "alt+y")} ${yank} · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth

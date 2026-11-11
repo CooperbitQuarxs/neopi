@@ -1,5 +1,6 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { createModelBrowserSource } from "../src/modes/model-browser-source";
-import { afterEach, beforeAll, describe, expect, type Mock, test, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, type Mock, test, vi, beforeEach } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -3474,4 +3475,13 @@ test("Ctrl-G opens global settings for a project role's per-model compaction edi
 	hub.handleInput("\x07");
 	await Bun.sleep(0);
 	expect(open).toHaveBeenCalledWith("context", "global");
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Vim menu, list and viewer motions now follow the live, default-off Vim preference, alongside modal composer editing; ordinary navigation and surface actions remain available without opting in.
+
 ### Added
 
 - Search composers preview results live, confirm with Enter, share the main composer's Vim editing, restore confirmed patterns on cancel, and support glob patterns alongside slash-prefixed regex ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).

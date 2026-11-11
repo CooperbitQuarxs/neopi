@@ -1,9 +1,10 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { createAgentHubRuntime } from "@oh-my-pi/pi-coding-agent/modes/agent-hub-runtime";
 /**
  * Regression: the agent hub keeps its initial status/recency order while open,
  * regardless of heartbeats; newly spawned agents appear above existing rows.
  */
-import { afterEach, beforeAll, describe, expect, it, setSystemTime, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, setSystemTime, vi, beforeEach } from "bun:test";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
@@ -1317,4 +1318,13 @@ describe("Agent hub row ordering", () => {
 			hub.dispose();
 		}
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

@@ -1,3 +1,4 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { PersonaGenerationDeps, PersonaGenerationRequest } from "../src/overlays/persona-config";
@@ -787,4 +788,13 @@ it("keeps inherited personality deletion in its owning scope", async () => {
 	h.press(DELETE, DELETE);
 	expect(doc.entries).toHaveLength(1);
 	expect(h.frame()).toContain("Inherited from global");
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

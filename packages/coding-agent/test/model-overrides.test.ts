@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, describe, expect, test, beforeEach } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -303,4 +304,13 @@ describe("model override configuration UI", () => {
 		fields.back();
 		expect(values).toEqual({ input: ["image"], unknown: true });
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

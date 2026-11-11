@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, expect, spyOn, test, vi } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, expect, spyOn, test, vi, beforeEach } from "bun:test";
 import * as fs from "node:fs";
 import type { TspKind, TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
@@ -375,4 +376,13 @@ test("hub native close respects focused search before closing its root", () => {
 	} finally {
 		hub.dispose();
 	}
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

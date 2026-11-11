@@ -4,6 +4,14 @@ import { buildHotkeysMarkdown, HotkeysSheetComponent } from "@oh-my-pi/pi-tui/ho
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme/theme";
 import { theme } from "../src/theme/theme";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "../src/components/menu-navigation";
+
+let previousVimMode = false;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => setMenuSearchVimMode(previousVimMode));
 
 /** Exit-row wiring for stubs that only care about display strings: no key claims the
  *  forward-delete role, so the exit row renders its plain "Exit" wording. */
@@ -106,6 +114,18 @@ describe("buildHotkeysMarkdown", () => {
 		expect(markdown).not.toContain("Option+");
 		expect(markdown).not.toContain("Cmd+");
 	});
+});
+
+it("refreshes an open native hotkeys sheet when Vim mode changes", () => {
+	const bindings = { keybindings: { ...noForwardDelete, getDisplayString: () => "Disabled" } };
+	const sheet = new HotkeysSheetComponent(bindings, () => {});
+	expect(JSON.stringify(sheet.describe())).toContain("jk gg/G");
+	setMenuSearchVimMode(false);
+	const off = JSON.stringify(sheet.describe());
+	expect(off).toContain("Forward in the menu history");
+	expect(off).not.toContain("jk gg/G");
+	setMenuSearchVimMode(true);
+	expect(JSON.stringify(sheet.describe())).toContain("jk gg/G");
 });
 
 describe("hotkeys sheet navigation", () => {

@@ -1,3 +1,4 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { SelectList, type SelectListTheme } from "@oh-my-pi/pi-tui/components/select-list";
 import { MenuKeyReader } from "@oh-my-pi/pi-tui/components/menu-navigation";
@@ -725,4 +726,13 @@ describe("SelectList.routeMouse", () => {
 
 		expect(selected).toBe("c");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

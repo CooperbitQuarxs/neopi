@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, describe, expect, it, beforeEach } from "bun:test";
 import { setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { Form, SelectFormField, TextFormField } from "@oh-my-pi/pi-tui/components/form";
@@ -136,4 +137,13 @@ describe("form menu history", () => {
 		secret.restoreNavigation({ value: "stale credential", cursor: 0 });
 		expect(secret.getValue()).toBe("new credential");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

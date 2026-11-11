@@ -1,4 +1,5 @@
-import { beforeAll, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, expect, it, beforeEach, afterEach } from "bun:test";
 import { initTheme } from "../src/theme/theme";
 import {
 	PluginListComponent,
@@ -255,3 +256,12 @@ for (const kind of ["npm", "marketplace"] as const) {
 		expect(visits).toEqual([""]);
 	});
 }
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
+});

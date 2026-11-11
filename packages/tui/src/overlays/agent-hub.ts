@@ -134,7 +134,7 @@ const AGENT_HINTS: Readonly<Record<HubViewMode, readonly NativeHint[]>> = {
 	tree: agentHints("flat"),
 };
 const ACTIVITY_HINTS: readonly NativeHint[] = [
-	{ keys: ["j", "k"], label: "select" },
+	{ keys: ["up", "down"], label: "select" },
 	{ keys: ["enter"], label: "transcript" },
 	{ keys: ["space"], label: "follow" },
 	{ keys: ["f"], label: "filter" },
@@ -184,7 +184,7 @@ const ACTIVITY_KIND_ICON: Readonly<Record<AgentActivityKind, string>> = {
 
 function agentHints(nextView: string): readonly NativeHint[] {
 	return [
-		{ keys: ["j", "k"], label: "select" },
+		{ keys: ["up", "down"], label: "select" },
 		{ keys: ["enter"], label: "open" },
 		{ keys: ["t"], label: nextView },
 		{ keys: ["/"], label: "filter" },

@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, describe, expect, it, vi, beforeEach } from "bun:test";
 import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { HistorySearchComponent } from "@oh-my-pi/pi-tui/overlays/history-search";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
@@ -297,4 +298,13 @@ describe("HistorySearchComponent debounced search", () => {
 		expect(repaint).not.toHaveBeenCalled();
 		component.dispose();
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

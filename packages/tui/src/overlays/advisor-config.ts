@@ -1551,7 +1551,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#active = active;
 		this.#sheetOptions = sheet;
 		const navigation =
-			screen === "list" ? "h/l, Tab panes · C-e/y view" : screen === "thinking" ? "h/l effort" : "h parent · l open";
+			screen === "list" ? "←/→, Tab panes" : screen === "thinking" ? "←/→ effort" : "← parent · → open";
 		this.#footerHint = active instanceof SelectList ? `${footerHint} · ${navigation} · / search` : footerHint;
 		if (this.#cb.openConfigFile && (screen === "list" || screen === "detail"))
 			this.#footerHint += " · Ctrl-G edit config file";

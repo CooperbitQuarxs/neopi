@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import type { UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { KeybindingsManager } from "../src/app-keybindings";
 import {
@@ -679,4 +680,13 @@ describe("status-line editor draft", () => {
 		await Bun.sleep(0);
 		expect(h.title()).not.toContain("draft not saved");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

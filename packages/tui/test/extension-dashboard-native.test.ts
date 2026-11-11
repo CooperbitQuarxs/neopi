@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { TSP_KINDS, type TspNode, type TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext } from "../src/native/node";
 import { ExtensionDashboard, type ExtensionDashboardRuntime } from "../src/overlays/extensions/extension-dashboard";
@@ -302,4 +303,13 @@ describe("ExtensionDashboard menu navigation", () => {
 			dashboard.dispose();
 		}
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

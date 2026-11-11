@@ -1,5 +1,6 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { stripVTControlCharacters } from "node:util";
-import { beforeAll, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { IrcViewerComponent, type IrcViewerOptions } from "@oh-my-pi/pi-tui/overlays/irc-viewer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { IrcLogEntry, IrcLogSource } from "@oh-my-pi/pi-tui/tools/irc";
@@ -430,4 +431,13 @@ describe("IrcViewerComponent", () => {
 			expect(plain.screen().join("\n")).not.toContain("reply to");
 		});
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

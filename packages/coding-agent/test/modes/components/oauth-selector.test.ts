@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, describe, expect, it, beforeEach } from "bun:test";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { OAuthSelectorComponent } from "@oh-my-pi/pi-tui/overlays/oauth-selector";
@@ -230,4 +231,13 @@ describe("OAuthSelectorComponent", () => {
 			expect(rendered).toContain("OpenCode Go");
 		});
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

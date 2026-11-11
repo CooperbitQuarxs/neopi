@@ -73,7 +73,9 @@ app.history.search: []
 
 ## Menu navigation
 
-Menus, pickers, and overlays open in normal navigation; arrows, PageUp/PageDown, Home/End, Enter, and Esc keep working beside the Vim keys.
+Vim navigation is **off by default**. Enable **Vim Navigation and Editing** in `/settings` (Interaction → Input), or set `tui.vimMode: true`, to use the Vim motions below across menus, pickers, lists, overlays and viewers. The same setting enables [modal composer editing](#vim-editing-mode); there is no separate menu toggle. Changes apply to open menus as well as newly opened ones.
+
+Without Vim mode, arrows, PageUp/PageDown, Home/End, Enter, Esc, `/` search focus, context switching and menu history remain available. Printable Vim motion keys are not intercepted as navigation, and Vim-only motion hints are hidden. Surface actions such as Space activation remain available in either mode. Menus normally open in navigation, not a text field; the search-first exceptions below are unchanged.
 
 | Keys | Action |
 | --- | --- |
@@ -88,11 +90,13 @@ Menus, pickers, and overlays open in normal navigation; arrows, PageUp/PageDown,
 
 While a search, rename, or form field has focus, every printable key (including `h`, `j`, `k`, `l`, `g`, `/`, Space) types literally and the field keeps its editing keys. Search fields consume navigation keys while editing: arrows and page keys do not move the list. Enter confirms the pattern and returns to navigation without activating a result; Esc clears the search and returns to the unfiltered list. Press `/` again to edit the retained pattern. Rename and form fields keep their own submit/cancel behavior. Esc on a nested page returns to its parent; Esc at the root closes.
 
-The prompt-history search (`Ctrl+R`) and move-path chooser are search-first exceptions: their text field opens focused. Pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom.
+The prompt-history search (`Ctrl+R`) and move-path chooser are search-first exceptions: their text field opens focused. With Vim mode enabled, pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom. Ordinary arrow, page and boundary navigation does not require Vim mode.
 
-Advisor, chain, and persona roots use `h`/`l` to switch between their list and preview; the preview accepts viewer motions, and Enter on the list opens a detail page. Existing radio-with-editor rows keep Space activation and Enter editing. Inside nested configuration pages, `h` returns to the parent and `l` opens a navigable child, never an action.
+With Vim mode enabled, advisor, chain, and persona roots use `h`/`l` to switch between their list and preview; the preview accepts viewer motions, and Enter on the list opens a detail page. Existing radio-with-editor rows keep Space activation and Enter editing in either mode. Inside nested configuration pages, Vim `h` returns to the parent and `l` opens a navigable child, never an action; ordinary arrow/context keys and Esc remain available without Vim mode.
 
-Ask choices use ordinary list paging unless the selected answer's preview is taller than the viewport. For that oversized preview, PageUp/PageDown keep reading its content; row and half-page motions still change the choice, and `Ctrl+E`/`Ctrl+Y` always scroll the viewport without selecting or submitting an answer.
+In model Roles, Vim `y`/`Y`/`p` copy an entry, copy its fallback chain, or append copied entries. `Alt+Y`, `Alt+Shift+Y` and `Alt+P` provide the same actions in either mode.
+
+Ask choices use ordinary list paging unless the selected answer's preview is taller than the viewport. For that oversized preview, PageUp/PageDown keep reading its content; row motions still change the choice. With Vim mode enabled, half-page motions also change the choice, and `Ctrl+E`/`Ctrl+Y` scroll the viewport without selecting or submitting an answer.
 
 In Ask, `a` adds a separate note to the highlighted offered option without selecting it. Repeat it for more notes, including on options you will not choose. `A` edits that option's latest note; submitting an empty edit removes that note. `n` keeps the existing single answer-level note. Option notes stay attached to their original labels when selections change and are included in review and the agent's answer.
 
@@ -108,7 +112,7 @@ Native TSP lists and pickers retain selection, filtering, and history. Their ter
 
 Press `/` to enter pattern mode. Nothing filters until Enter confirms the draft and returns to navigation. Arrows, Tab and Ctrl-keys stay in the field while typing; they cannot switch panes or move results. Esc cancels and clears the search. Leaving the field without Enter discards its edits.
 
-In settings, Esc restores the tab, section sidebar focus, selected setting and scroll position from before `/`. After confirmation, the footer shows normal navigation, including half-page and boundary motions, instead of pattern-entry hints.
+In settings, Esc restores the tab, section sidebar focus, selected setting and scroll position from before `/`. After confirmation, the footer shows navigation hints instead of pattern-entry hints; Vim half-page and boundary motions appear only when Vim mode is enabled.
 
 Ordinary patterns use fuzzy matching, but punctuation-bearing words match their literal spelling rather than losing punctuation: `.{1000}` does not search for `1000`. Use `/pattern/` for **Vim search syntax, very-magic by default**. From navigation, type `//^claude/` then Enter: the first slash opens the field, and `/^claude/` is the pattern. The existing `/pattern` and `re:pattern` forms use the same dialect. Invalid or unsupported expressions show an inline error and match nothing.
 
@@ -171,7 +175,7 @@ Older unqualified action names are migrated when `keybindings.yml` is loaded, bu
 
 ## Vim editing mode
 
-Off by default. Turn it on with **Vim Editing Mode** in `/settings` (Interaction → Input), or set it directly:
+Off by default. Turn it on with **Vim Navigation and Editing** in `/settings` (Interaction → Input), or set it directly. This single setting also enables the [menu and viewer Vim motions](#menu-navigation) and modal editing in search composers:
 
 ```yaml
 tui.vimMode: true

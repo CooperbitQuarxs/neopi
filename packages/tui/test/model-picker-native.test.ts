@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, expect, test } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, expect, test, beforeEach } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { TspPickerGroup, TspPickerProps } from "@oh-my-pi/pi-wire";
@@ -1247,4 +1248,13 @@ test("model facts opens from full model configuration but never from the session
 		hub.handleInput("\x1b[17~");
 		expect(edits).toHaveLength(sessionOnly ? 0 : 2);
 	}
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

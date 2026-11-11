@@ -1,10 +1,11 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 /**
  * Contracts of the fullscreen /agents hub: frame geometry, scope sidebar
  * filtering, explicit search, the Space enable/disable toggle, and the
  * strip-driven configuration flows (property strips, pattern input, and the
  * model-browser pick) persisting one agent's entry at a time.
  */
-import { beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
@@ -639,4 +640,13 @@ describe("AgentsHub navigation history", () => {
 			hub.dispose();
 		}
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

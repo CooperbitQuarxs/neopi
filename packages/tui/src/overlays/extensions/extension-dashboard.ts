@@ -165,7 +165,7 @@ export class ExtensionDashboard implements Component {
 	#body!: TwoColumnBody;
 	#refreshToken = 0;
 	readonly #keys = new MenuKeyReader();
-	readonly #help = new MenuHelp(undefined, "h/l switch provider tabs; Tab switches list/inspector.");
+	readonly #help = new MenuHelp(undefined, "Left/Right switch provider tabs; Tab switches list/inspector.");
 	#pane: "list" | "inspector" = "list";
 	#pendingOperations = 0;
 	// Persistent fullscreen frame: top, tabs, divider, body, divider, footer,
