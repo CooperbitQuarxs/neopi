@@ -16702,8 +16702,8 @@ export class AgentSession implements SettingsScope {
 	 * discovery; the bundled base entry still carries the full long-context
 	 * window, so a fresh session runs with the 1.05M window that contradicts the
 	 * 400K catalog value until the user re-selects the same model. Re-look-up the
-	 * active selector post-discovery and, when its context window changed, fold
-	 * the refreshed spec into the live model. Same selector, so this is a metadata
+	 * active selector post-discovery and, when its context window or advertised
+	 * service tiers changed, fold the refreshed spec into the live model. Same selector, so this is a metadata
 	 * refresh with no provider-session reset; reconcile model-dependent tools and
 	 * append-only state before `model_changed` notifies the status line and RPC
 	 * subscribers. Issue #10488.
@@ -16720,7 +16720,11 @@ export class AgentSession implements SettingsScope {
 		if (!current || !modelsAreEqual(current, boundAtStartup)) return;
 		const found = this.#modelRegistry.find(current.provider, current.id);
 		const refreshed = found && this.#modelRegistry.fitContextWindow(found, this.settings);
-		if (!refreshed || refreshed.contextWindow === current.contextWindow) return;
+		if (
+			!refreshed ||
+			(refreshed.contextWindow === current.contextWindow &&
+				Bun.deepEquals(refreshed.serviceTiers, current.serviceTiers))
+		) return;
 		this.agent.setModel(refreshed);
 		await this.#reconcileModelDependentState(refreshed);
 		if (this.#isDisposed) return;
